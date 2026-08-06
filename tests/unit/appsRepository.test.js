@@ -244,6 +244,36 @@ describe('appsRepository', () => {
       expect(options).to.deep.equal({ upsert: true });
     });
 
+    // Both are minted once, from the transaction that carried the registration.
+    // Every later write here is a REPLACE and an update carries neither, so
+    // without the carry-forward the app's next deployment would be named from
+    // something other than what its containers and volume already carry.
+    it('upsertGlobalAppInfo carries a stored uuid and identity through an update', async () => {
+      dbHelperStub.findOneInDatabase.resolves({ uuid: 'u'.repeat(64), identity: 'abc123def456' });
+      dbHelperStub.replaceOneInDatabase.resolves({ matchedCount: 1 });
+
+      await appsRepository.upsertGlobalAppInfo({ name: 'app', version: 7, hash: 'h2', height: 2 });
+
+      const doc = dbHelperStub.replaceOneInDatabase.firstCall.args[3];
+      expect(doc.uuid, 'an update must not clear the instance identity').to.equal('u'.repeat(64));
+      expect(doc.identity, 'nor what the containers are named from').to.equal('abc123def456');
+    });
+
+    // A registration states its own, and it must win - this is the one write
+    // that is allowed to set them.
+    it('upsertGlobalAppInfo lets an incoming registration state its own identity', async () => {
+      dbHelperStub.findOneInDatabase.resolves(null);
+      dbHelperStub.replaceOneInDatabase.resolves({ matchedCount: 0 });
+
+      await appsRepository.upsertGlobalAppInfo({
+        name: 'app', version: 9, hash: 'h', height: 1, uuid: 'f'.repeat(64), identity: 'ffffffffffff',
+      });
+
+      const doc = dbHelperStub.replaceOneInDatabase.firstCall.args[3];
+      expect(doc.uuid).to.equal('f'.repeat(64));
+      expect(doc.identity).to.equal('ffffffffffff');
+    });
+
     it('upsertGlobalAppInfo rejects specs without name', async () => {
       try {
         await appsRepository.upsertGlobalAppInfo({ version: 7 });

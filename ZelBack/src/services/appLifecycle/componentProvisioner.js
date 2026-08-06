@@ -134,7 +134,7 @@ async function openHostPorts(ports, appName, status = null) {
 /**
  * Install a single app component (pull image, create volume, create + start container).
  * @param {object} component - DeploymentComponent to install
- * @param {object} options - { owner, onStatus, createVolumes, skipPorts, burstEligible, restartPolicy, extraEnv }
+ * @param {object} options - { owner, uuid, onStatus, createVolumes, skipPorts, burstEligible, restartPolicy, extraEnv }
  * @returns {Promise<void>}
  */
 async function installComponent(component, options = {}) {
@@ -157,6 +157,10 @@ async function installComponent(component, options = {}) {
   // never set this: they have no local copy to trust and defer instead.
   const allowLocalImageFallback = options.allowLocalImageFallback || false;
   const { owner } = options;
+  // Which app INSTANCE this container belongs to. Unlike owner this is NOT
+  // load-bearing yet and is absent for every app registered before identities
+  // were minted, so it is stamped empty rather than refused.
+  const { uuid } = options;
   // App-wide: does any component use a graceful-shutdown feature? Gates the
   // per-container budget labels (identity labels are always stamped). Travels on
   // the same channel as owner — computed once per app by the orchestrator.
@@ -241,7 +245,7 @@ async function installComponent(component, options = {}) {
   // before the container is created so the app finds it at its very first start.
   // This is the single container-creation funnel, so every path that can recreate
   // a container - fresh install, redeploy, spec update, health recreate - reissues
-  // here; a hard redeploy wipes the volume, and this is what puts the cert back.
+  // here; a rebuild wipes the volume, and this is what puts the cert back.
   //
   // A failure here ABORTS the install. Without the cert the app cannot serve the
   // HTTPS its spec promises, and FDM's verify:required fails closed - so starting
@@ -278,6 +282,7 @@ async function installComponent(component, options = {}) {
     restartPolicy,
     extraEnv,
     owner,
+    uuid,
     requiresEncryption,
     measuredImageSizeBytes,
   });

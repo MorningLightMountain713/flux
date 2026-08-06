@@ -4,6 +4,7 @@ const fluxNetworkHelper = require('../fluxNetworkHelper');
 const operationRegistry = require('../utils/operationRegistry');
 const fluxEventBus = require('../utils/fluxEventBus');
 const { appSyncEvents, EVENTS: SYNC_EVENTS } = require('../utils/appSyncEvents');
+const dockerService = require('../dockerService');
 const appsRepository = require('../appDatabase/appsRepository');
 const { getSpecBackend } = require('../utils/specLibs');
 const registryManager = require('../appDatabase/registryManager');
@@ -18,25 +19,6 @@ const appUninstaller = require('./appUninstaller');
 // specReconciler ladder - the janitor never interprets desired state. Its one
 // registry write (dropping expired global rows) executes the chain's verdict.
 
-// Containers that are flux-adjacent but deliberately unlabelled and unowned.
-const EXEMPT_APP_NAMES = ['watchtower'];
-
-/**
- * Resolve which app a container belongs to. Labelled containers carry the app
- * name stamped at the create chokepoint; pre-label containers (created before
- * identity labels shipped and never recreated) fall back to the historical
- * name convention (strip '/flux', app name at segment [1]).
- * @param {object} container - docker list entry (Names, Labels)
- * @param {object} labelKeys - the label schema, resolved by the caller
- * @returns {string} app name
- */
-function containerAppName(container, labelKeys) {
-  const labelled = container.Labels && container.Labels[labelKeys.APP];
-  if (labelled) return labelled;
-  const bare = container.Names[0].slice(5);
-  const name = bare.split('_')[1] || bare;
-  return name;
-}
 
 /**
  * Remove docker containers whose app has no installed-app row: crash debris,
@@ -84,8 +66,10 @@ async function dockerOrphanSweep() {
   const dockerAppNames = [...new Set(
     dockerAppsReported.data
       .filter((container) => !(container.Labels && container.Labels[LABEL_KEYS.PLAYGROUND_SESSION]))
-      .map((container) => containerAppName(container, LABEL_KEYS)),
-  )].filter((appName) => !EXEMPT_APP_NAMES.includes(appName));
+      .map((container) => dockerService.containerAppName(
+        { labels: container.Labels, name: container.Names?.[0] }, LABEL_KEYS,
+      )),
+  )];
 
   const removed = [];
   // eslint-disable-next-line no-restricted-syntax

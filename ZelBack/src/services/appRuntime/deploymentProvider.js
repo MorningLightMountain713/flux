@@ -74,7 +74,17 @@ async function toDeployment(instantiated, opts = {}) {
   if (!resolved) throw new Error(`Could not resolve spec for ${instantiated.name}`);
 
   const { DeploymentSpec } = await getSpecBackend();
-  return DeploymentSpec.fromSpec(resolved, appsFolder, { replica: opts.replica });
+  // The identity is READ off the row, never recomputed from the name. This and
+  // toDeployments are what decide every container name, volume path, network and
+  // syncthing folder id on this node, so an app keeps the identity
+  // it was installed with for as long as it is installed - including across a
+  // spec update, an owner change, or a name someone else later re-registers.
+  // Null (an app installed before identities were stored) falls back to the
+  // name inside fromSpec, which is exactly the identifier it already has.
+  return DeploymentSpec.fromSpec(resolved, appsFolder, {
+    replica: opts.replica,
+    identity: instantiated.identity ?? null,
+  });
 }
 
 /**
@@ -157,7 +167,13 @@ async function toDeployments(instantiated) {
   const { DeploymentSpec } = await getSpecBackend();
   const deployments = [];
   for (const replica of identities) {
-    deployments.push(DeploymentSpec.fromSpec(resolved, appsFolder, { replica }));
+    // Same identity read as toDeployment: every identity of one app shares the
+    // app's, so building the set without it would name the same containers
+    // differently from the single-identity path that created them.
+    deployments.push(DeploymentSpec.fromSpec(resolved, appsFolder, {
+      replica,
+      identity: instantiated.identity ?? null,
+    }));
   }
   return deployments;
 }
@@ -238,7 +254,99 @@ async function getInstalledDeployments(name) {
   }
 }
 
+/**
+ * The app a REQUEST names. A request states names — `<app>`, or one of its
+ * components as `<component>_<app>` — because a name is what an operator and the
+ * UI hold. This is the inverse of that request form, and deliberately NOT of a
+ * container identifier: an identifier's second segment is the app's identity,
+ * which is not a name and does not resolve as one (flux-spec states the same rule
+ * from the other side, DeploymentSpec.appNameFromIdentifier).
+ *
+ * @param {string} appname the request's app or component name
+ * @returns {string} the app name
+ */
+function appNameFromRequest(appname) {
+  return appname.split('_')[1] || appname;
+}
+
+/**
+ * The container identifiers a request names on this node, and the app they
+ * belong to.
+ *
+ * The request holds names; a container identifier is built from the app's stored
+ * IDENTITY, and those differ for every app registered since identity minting. So
+ * the request string is not an identifier and must never be used as one — it is
+ * resolved by lookup instead: the app's row, its deployments, then the component
+ * by NAME. Everything returned therefore belongs to the app that was named, which
+ * is what lets a caller check ownership against that name and act on these ids
+ * without the two disagreeing.
+ *
+ * @param {string} appname the request's app or component name
+ * @param {object} [opts]
+ * @param {string|null} [opts.replica] restrict to one named replica
+ * @returns {Promise<{instantiated: object, deployments: object[], ids: string[]}>}
+ */
+async function resolveRequestTargets(appname, opts = {}) {
+  const { replica = null } = opts;
+  const instantiated = await appsRepository.getGlobalAppInfo(appNameFromRequest(appname));
+  if (!instantiated) {
+    throw new Error('Application not found');
+  }
+  let deployments = await toDeployments(instantiated);
+  if (replica != null) {
+    deployments = deployments.filter((deployment) => deployment.replica === replica);
+    if (deployments.length === 0) {
+      throw new Error(`Replica ${replica} of ${instantiated.name} is not deployed on this node`);
+    }
+  }
+  const separator = appname.indexOf('_');
+  if (separator === -1) {
+    const ids = deployments.flatMap(
+      (deployment) => deployment.componentEntries().map(([, comp]) => comp.identifier),
+    );
+    if (ids.length === 0) {
+      throw new Error(`${instantiated.name} is not deployed on this node`);
+    }
+    return { instantiated, deployments, ids };
+  }
+  const componentName = appname.slice(0, separator);
+  const ids = deployments
+    .map((deployment) => deployment.getComponent(componentName))
+    .filter(Boolean)
+    .map((comp) => comp.identifier);
+  if (ids.length === 0) {
+    throw new Error(`Component ${componentName} of ${instantiated.name} is not deployed on this node`);
+  }
+  return { instantiated, deployments, ids };
+}
+
+/**
+ * The ONE container a request names — for the endpoints that read a single
+ * container (logs, inspect, stats, top, changes, exec). A request naming a whole
+ * composed app, or an app co-located across replicas, names several and must say
+ * which: answering for an arbitrary one would report another container's state as
+ * this one's.
+ *
+ * @param {string} appname the request's app or component name
+ * @param {object} [opts]
+ * @param {string|null} [opts.replica]
+ * @returns {Promise<string>} the container identifier
+ */
+async function resolveRequestContainer(appname, opts = {}) {
+  const { instantiated, ids } = await resolveRequestTargets(appname, opts);
+  if (ids.length > 1) {
+    throw new Error(`${appname} names ${ids.length} containers on this node - specify a component, or a replica with ?replica=`);
+  }
+  if (!instantiated) {
+    throw new Error('Application not found');
+  }
+  return ids[0];
+}
+
 module.exports = {
+  appNameFromRequest,
+  resolveRequestTargets,
+  resolveRequestContainer,
   listInstalledDeployments,
   getInstalledDeployment,
   getInstalledDeployments,

@@ -155,7 +155,7 @@ describe('operationRegistry', () => {
       expect(registry.anyHeldOfType('backup', 'restore')).to.equal(true);
       registry.release('web', token);
       registry.acquire('db', 'install', 'appInstaller');
-      expect(registry.anyHeldOfType('install', 'remove', 'softRedeploy', 'hardRedeploy', 'reconcile')).to.equal(true);
+      expect(registry.anyHeldOfType('install', 'remove', 'redeploy', 'rebuild', 'reconcile')).to.equal(true);
     });
 
     it('listByType returns only the keys of that lease type', () => {

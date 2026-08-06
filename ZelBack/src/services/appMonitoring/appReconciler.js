@@ -21,23 +21,25 @@ const appSwapPoolService = require('../appLifecycle/appSwapPoolService');
 const syncthingMonitorHelpers = require('./syncthingMonitorHelpers');
 const containerHealthMonitor = require('./containerHealthMonitor');
 const appUninstaller = require('../appLifecycle/appUninstaller');
+const pendingTeardownStore = require('../appLifecycle/pendingTeardownStore');
 const appTamperingDetectionService = require('../appTamperingDetectionService');
 const telemetrySinkCache = require('../telemetrySinkCache');
 const reconcilerQueue = require('./reconcilerQueue');
 
-// The lightweight scheduling seam this engine drives: enqueue/scheduleRetry/canonical
+// The lightweight scheduling seam this engine drives: enqueue/scheduleRetry
 // live there, and the engine registers its reconcile + onSettled below. A producer
 // that only needs to enqueue depends on reconcilerQueue directly and never pulls this
 // engine's heavy dependency tree (the import-hub that made every producer a cycle risk).
-const { enqueue, scheduleRetry, canonical, applyIntent } = reconcilerQueue;
+const { enqueue, scheduleRetry, applyIntent } = reconcilerQueue;
 
-// Identifier -> name decoding, from flux-spec's own rule. This used to come
-// through a sync bridge (utils/componentIdentifier -> getSpecBackendSync), which
-// throws unless something has already warmed the loader — the free-riding that
-// left containerHealthMonitor failing 12 of its 16 tests standalone. The single
-// caller that justified a sync path, the lease guard, is reachable only from
-// async callers, so the bridge is gone and this awaits like everything else.
-async function appNameFromIdentifier(identifier) {
+// The APP-IDENTITY SEGMENT of a container identifier, by flux-spec's own rule.
+// This is a string decomposition and nothing more: every segment of
+// `component_identity[_replica]` forbids `_`, so the split is exact — but what
+// it yields is the segment an app's containers are NAMED from, which is only
+// incidentally the app's name and stops resembling one once identities are
+// minted rather than borrowed from the name. Turning it into an app requires
+// asking a store (appFor below); no string rule can do it.
+async function identityFromIdentifier(identifier) {
   const { DeploymentSpec } = await specLibs.getSpecBackend();
   return DeploymentSpec.appNameFromIdentifier(identifier);
 }
@@ -45,6 +47,33 @@ async function appNameFromIdentifier(identifier) {
 async function replicaFromIdentifier(identifier) {
   const { DeploymentSpec } = await specLibs.getSpecBackend();
   return DeploymentSpec.replicaFromIdentifier(identifier);
+}
+
+/**
+ * The app a component identifier belongs to. Resolved ONCE at the top of a
+ * reconcile and handed to everything below, so no two steps of one pass can
+ * disagree about whose container they are acting on.
+ *
+ * Two stores, in the order a component's own lifetime visits them:
+ *   - the installed row, which STATES the identity its containers were named
+ *     from, for as long as the app is installed here;
+ *   - the owed-teardown record, written by the removal prelude BEFORE it
+ *     deletes that row, and therefore the only thing left that still names a
+ *     component the reconciler must drive to gone.
+ *
+ * Neither is a guess. A component in neither belongs to no app this node knows
+ * about: there is nothing to enforce for it and no app-level lease to find,
+ * because a lease is only ever taken by an operation on an app with one of
+ * these two records.
+ *
+ * @returns {Promise<{installed: object|null, name: string|null, owedTeardown: object|null}>}
+ */
+async function appFor(identifier) {
+  const identity = await identityFromIdentifier(identifier);
+  const installed = await appsRepository.getInstalledAppByIdentity(identity);
+  if (installed) return { installed, name: installed.name, owedTeardown: null };
+  const owedTeardown = await pendingTeardownStore.teardownForComponent(identifier);
+  return { installed: null, name: owedTeardown?.name ?? null, owedTeardown };
 }
 
 // The single, level-based actuator for app containers. Every trigger (docker
@@ -337,24 +366,17 @@ function policyAllowsRun(policy, exitCode) {
 // --- desired/actual state ------------------------------------------------
 
 /**
- * Resolves a component identifier to its DeploymentComponent view, or null if
- * the app (or component) is not installed on this node. The deployment layer
- * owns version dispatch, enterprise decryption, and containerData parsing —
- * the reconciler never reads raw spec documents.
+ * Resolves a component identifier to its DeploymentComponent view, given the
+ * installed app it belongs to (already resolved by appFor — this never looks an
+ * app up itself, so one pass cannot act on two different answers). The
+ * deployment layer owns version dispatch, enterprise decryption, and
+ * containerData parsing — the reconciler never reads raw spec documents.
+ *
+ * @param {string} identifier
+ * @param {object} inst - InstantiatedSpec of the app that owns this component
  */
-async function getLocalComponentSpec(identifier) {
-  const mainAppName = await appNameFromIdentifier(identifier);
-  let inst;
-  try {
-    inst = await appsRepository.getInstalledApp(mainAppName);
-  } catch (err) {
-    // A DB read failure is transient, not "not installed". Throw a tagged error so
-    // reconcile defers + retries rather than silently dropping the recovery.
-    const error = new Error(`failed to read local spec for ${identifier}: ${err.message}`);
-    error.transient = true;
-    throw error;
-  }
-  if (!inst) return null;
+async function getLocalComponentSpec(identifier, inst) {
+  const mainAppName = inst.name;
 
   let deployments;
   try {
@@ -569,7 +591,7 @@ async function reconcileNetworkMembership(identifier, spec, actual) {
 // deliberately NOT here — they hold run-state through the transient operationDesired
 // (driven via drive()) and the reconciler keeps actuating; freezing it would force
 // them to reach around it, the very thing the single-actuator invariant forbids.
-const CONSTRUCTION_LEASE_TYPES = new Set(['install', 'remove', 'softRedeploy', 'hardRedeploy', 'reconcile']);
+const CONSTRUCTION_LEASE_TYPES = new Set(['install', 'remove', 'redeploy', 'rebuild', 'reconcile']);
 
 /**
  * Whether a lease blocks the reconciler from actuating this container: a
@@ -579,18 +601,20 @@ const CONSTRUCTION_LEASE_TYPES = new Set(['install', 'remove', 'softRedeploy', '
  * lease is NOT blocking — those drive run-state through operationDesired and the
  * reconciler keeps actuating. Per-app, NOT a node-wide freeze.
  */
-async function hasBlockingLease(identifier) {
+function hasBlockingLease(identifier, appName) {
   // the component's own stop/restart/kill window, keyed on the prefixed docker
   // name exactly as dockerService acquires the 'stopping' lease
   if (operationRegistry.isHeld(dockerService.getAppIdentifier(identifier))) return true;
-  // a container-construction operation on the parent app, keyed on the bare app name
-  const mainAppName = await appNameFromIdentifier(identifier);
-  const appLease = operationRegistry.get(mainAppName);
+  // A container-construction operation on the parent app, keyed on the bare app
+  // name. No app means no app this node has a record of, and an operation only
+  // ever takes a lease on an app it has one for — so there is no lease to miss.
+  if (!appName) return false;
+  const appLease = operationRegistry.get(appName);
   if (appLease && CONSTRUCTION_LEASE_TYPES.has(appLease.type)) return true;
   // an app being removed, including one whose removal is still cleaning up
-  if (globalState.departingApps.has(mainAppName)) return true;
+  if (globalState.departingApps.has(appName)) return true;
   // an app boot has not yet confirmed this node still holds
-  return globalState.unconfirmedApps.has(mainAppName);
+  return globalState.unconfirmedApps.has(appName);
 }
 
 /**
@@ -715,11 +739,10 @@ async function effectiveDesiredRunning(identifier, spec, exitCode) {
  * answer, and reporting one as "not running" would tell an operator their app
  * is held when nothing has decided anything.
  *
- * @param {string} rawIdentifier
+ * @param {string} identifier The bare component identifier.
  * @returns {Promise<{desired: boolean|null, reason: string, force: boolean}>}
  */
-async function desiredRunState(rawIdentifier) {
-  const identifier = canonical(rawIdentifier);
+async function desiredRunState(identifier) {
   const spec = await getLocalComponentSpec(identifier);
   if (!spec) return { desired: false, reason: 'notInstalled', force: false };
   if (spec.invalidSpec) return { desired: false, reason: 'invalidSpec', force: false };
@@ -732,8 +755,8 @@ async function desiredRunState(rawIdentifier) {
  * the tampering signals and falling back to local removal on failure — the
  * behavior previously in containerHealthMonitor.monitorAndRecoverApps.
  */
-async function recreateMissing(identifier) {
-  const mainAppName = await appNameFromIdentifier(identifier);
+async function recreateMissing(identifier, app) {
+  const mainAppName = app.name;
 
   // `container_vanished` is the heaviest tampering signal this node emits and it
   // asserts one thing: a container went away and FluxOS did not take it. FluxOS's
@@ -756,7 +779,7 @@ async function recreateMissing(identifier) {
     const abortController = new AbortController();
     const capTimer = setTimeout(() => abortController.abort(), RECREATE_PROVISION_CAP_MS);
     if (capTimer.unref) capTimer.unref();
-    const provision = containerHealthMonitor.recreateMissingContainers(identifier, { abortSignal: abortController.signal });
+    const provision = containerHealthMonitor.recreateMissingContainers(identifier, app.installed, { abortSignal: abortController.signal });
     // a capped provision keeps running detached; its eventual rejection must land
     // here, not as an unhandledRejection
     provision.catch(() => {});
@@ -862,13 +885,13 @@ async function recreateMissing(identifier) {
  * paces it on the heal ladder. The durable heal-removal flag is NOT cleared
  * here: only seeing the container back proves the heal worked.
  */
-async function recreateForNetworkHeal(identifier) {
-  const mainAppName = await appNameFromIdentifier(identifier);
+async function recreateForNetworkHeal(identifier, app) {
+  const mainAppName = app.name;
   try {
     // allowVolumeCreation: false — creating a volume REFORMATS it (fallocate +
     // mke2fs). We removed a live container whose data was intact, so a recreate
     // that cannot verify the volume must fail and be retried - never wipe it.
-    await containerHealthMonitor.recreateMissingContainers(identifier, { allowVolumeCreation: false });
+    await containerHealthMonitor.recreateMissingContainers(identifier, app.installed, { allowVolumeCreation: false });
     log.info(`appReconciler - recreated ${identifier} to clear a detached network endpoint`);
     fluxEventBus.publish('reconciler:actuated', { identifier, action: 'recreated', reason: 'networkDetached' });
     // The container is provisioned in Docker 'created' state (installComponent
@@ -914,13 +937,15 @@ async function clearNetworkHealState(identifier) {
  * container into a permanently gone one. Returns null when it is safe to proceed,
  * or a reason string.
  */
-async function networkHealBlocker(identifier) {
+async function networkHealBlocker(identifier, installed) {
   // A stateless component (persistentStorage.sizeGb 0) has no volume at all, so
   // "cannot verify a mount" is its permanent normal state — blocking on it would
   // make such a container unhealable forever. Resolve the same domain object the
   // recreate installs from and ask it. A spec that cannot be read is left to the
   // volume check below, which fails closed.
-  const spec = await getLocalComponentSpec(identifier).catch(() => null);
+  const spec = installed
+    ? await getLocalComponentSpec(identifier, installed).catch(() => null)
+    : null;
   if (spec && spec.comp && spec.comp.isStateless) return null;
 
   // The recreate refuses to create/reformat a volume (allowVolumeCreation: false),
@@ -945,7 +970,8 @@ async function networkHealBlocker(identifier) {
  * existing container name; `docker network connect` on a live container does not
  * restore published host ports, so only a recreate fully heals it.
  */
-async function healDetachedNetwork(identifier, mainAppName) {
+async function healDetachedNetwork(identifier, app) {
+  const mainAppName = app.name;
   // Confirm in-pass: a detached read can be transient (dockerd mid-restart, the
   // brief window before an endpoint gets its IP). Settle, then look again, and
   // only destroy on a state that survived the gap.
@@ -1024,7 +1050,7 @@ async function healDetachedNetwork(identifier, mainAppName) {
   }
   networkPrunedNoted.delete(identifier);
 
-  await rebuildOntoNetwork(identifier, {
+  await rebuildOntoNetwork(identifier, app, {
     action: 'networkDetached',
     why: 'running but not attached to its docker network; clearing the stale endpoint',
     blockedWhy: 'runs detached',
@@ -1048,14 +1074,16 @@ async function healDetachedNetwork(identifier, mainAppName) {
  * false, so a transient volume-verify failure can never reformat the app's data.
  *
  * @param {string} identifier component identifier
+ * @param {{installed: object|null, name: string|null}} app the owning app, resolved
+ *   once at reconcile entry and carried here rather than looked up again
  * @param {{action: string, why: string, blockedWhy: string, recordAnomaly?: function}} desc
  */
-async function rebuildOntoNetwork(identifier, {
+async function rebuildOntoNetwork(identifier, app, {
   action, why, blockedWhy, recordAnomaly = null,
 }) {
   // Never destroy what we cannot rebuild: every precondition of the recreate must
   // hold BEFORE the remove, or this turns a half-alive container into a gone one.
-  const blocker = await networkHealBlocker(identifier);
+  const blocker = await networkHealBlocker(identifier, app.installed);
   if (blocker) {
     log.error(`appReconciler - ${identifier} ${blockedWhy} but must NOT be recreated: ${blocker}; leaving the container in place (app NOT touched)`);
     fluxEventBus.publish('reconciler:actuated', { identifier, action: 'networkHealBlocked', reason: blocker });
@@ -1079,7 +1107,7 @@ async function rebuildOntoNetwork(identifier, {
   // container in the meantime, and force-removing it from under them is exactly
   // what the lease check exists to prevent. Re-check at actuation time (the same
   // re-read-before-acting discipline the controller verdict and recreateMissing use).
-  if (await hasBlockingLease(identifier)) {
+  if (hasBlockingLease(identifier, app.name)) {
     log.info(`appReconciler - ${identifier} was taken over by another operation during the heal confirmation; aborting the recreate`);
     scheduleRetry(identifier, MANAGED_RETRY_MS);
     return;
@@ -1126,14 +1154,29 @@ async function rebuildOntoNetwork(identifier, {
     scheduleRetry(identifier, MANAGED_RETRY_MS);
     return;
   }
-  await recreateForNetworkHeal(identifier);
+  await recreateForNetworkHeal(identifier, app);
 }
 
 // --- the reconcile -------------------------------------------------------
 
-async function reconcile(rawIdentifier) {
-  const identifier = canonical(rawIdentifier);
-  if (await hasBlockingLease(identifier)) {
+async function reconcile(identifier) {
+
+  // Whose container is this? Asked ONCE, of the stores that state it, and handed
+  // to every step below. A pass that re-asked per step could get two answers -
+  // the app can be uninstalled underneath it - and act on the wrong one.
+  let app;
+  try {
+    app = await appFor(identifier);
+  } catch (err) {
+    // A DB read failure is transient, not "not installed": defer rather than drop
+    // the component's recovery, or worse, read absence as a vanished container.
+    log.warn(`appReconciler - ${identifier} identity read failed, deferring: ${err.message}`);
+    scheduleRetry(identifier, MANAGED_RETRY_MS);
+    return;
+  }
+  const mainAppName = app.name;
+
+  if (hasBlockingLease(identifier, mainAppName)) {
     fluxEventBus.count('reconciler:deferred', identifier, 'blockingLease');
     scheduleRetry(identifier, MANAGED_RETRY_MS);
     return;
@@ -1141,7 +1184,7 @@ async function reconcile(rawIdentifier) {
 
   let spec;
   try {
-    spec = await getLocalComponentSpec(identifier);
+    spec = app.installed ? await getLocalComponentSpec(identifier, app.installed) : null;
   } catch (err) {
     // transient failure reading the local spec (e.g. a momentary DB blip): defer and
     // retry rather than dropping the component's recovery as if it were uninstalled.
@@ -1157,7 +1200,14 @@ async function reconcile(rawIdentifier) {
     // is fully gone. Drive the (idempotent) teardown to completion here, retrying with
     // backoff on a partial pass. This makes removal a converged desired state rather than
     // a one-shot job re-driven only at the next boot.
-    const removal = await appUninstaller.driveOwedTeardown(await appNameFromIdentifier(identifier));
+    //
+    // Driven by the record's OWN key, which appFor found by this component's
+    // identifier. The key is the app name only for a loose removal; a
+    // replica-targeted one keys `<app>_<replica>`, so a name would silently
+    // match nothing and leave the teardown to the next boot.
+    const removal = app.owedTeardown
+      ? await appUninstaller.driveOwedTeardown(app.owedTeardown.key)
+      : { status: 'none', attempts: 0 };
     if (removal.status === 'removed') {
       silentHoldSince.delete(identifier);
       stoppedReasonAnnounced.delete(identifier);
@@ -1208,8 +1258,6 @@ async function reconcile(rawIdentifier) {
     fluxEventBus.publish('reconciler:actuated', { identifier, action: 'invalidSpec', reason: spec.invalidReason });
     return;
   }
-
-  const mainAppName = identifier.split('_')[1] || identifier;
 
   // The component's data volume is level-based desired state owned HERE, not by
   // a @reboot crontab (unreconciled - its silent loss left volumes unmounted
@@ -1493,7 +1541,7 @@ async function reconcile(rawIdentifier) {
     // fixed by the heal (no restart repairs a stale endpoint, and converging
     // secondary memberships on a container about to be recreated is churn).
     if (dockerService.isContainerDetachedFromNetwork(actual.attachment)) {
-      await healDetachedNetwork(identifier, mainAppName);
+      await healDetachedNetwork(identifier, app);
       return;
     }
     // Steady state is where membership drift surfaces (a recreated linked app,
@@ -1663,7 +1711,7 @@ async function reconcile(rawIdentifier) {
     // A null read is "cannot tell", never "mismatched": this ends in a destructive
     // remove, so no evidence means leave the container alone.
     if (liveNetworkId && liveNetworkId !== actual.networkId) {
-      await rebuildOntoNetwork(identifier, {
+      await rebuildOntoNetwork(identifier, app, {
         action: 'networkRebound',
         why: `bound to a docker network that no longer exists (${actual.networkMode} was rebuilt under a new id); recreating it onto the live one`,
         blockedWhy: 'is bound to a dead docker network',
@@ -1704,10 +1752,10 @@ async function reconcile(rawIdentifier) {
         scheduleRetry(identifier, MANAGED_RETRY_MS);
         return;
       }
-      await recreateForNetworkHeal(identifier);
+      await recreateForNetworkHeal(identifier, app);
       return;
     }
-    await recreateMissing(identifier);
+    await recreateMissing(identifier, app);
     return;
   }
 
@@ -1946,7 +1994,10 @@ async function componentIdsOf(installed) {
     // matches it, rather than refusing every component of an app whose spec
     // will not decrypt. The consumers that canonicalise on ingest cannot tell
     // the two apart, which is why they coexisted unnoticed.
-    dockerNames.filter((name) => name.endsWith(suffix)).forEach((name) => ids.push(canonical(name)));
+    // A docker NAME converted at this boundary, which is where the conversion
+    // belongs: this producer knows it holds one, and the queue it feeds cannot.
+    dockerNames.filter((name) => name.endsWith(suffix))
+      .forEach((name) => ids.push(dockerService.getBaseAppName(name)));
   });
   return ids;
 }
@@ -2004,14 +2055,13 @@ async function failConvergeIfExhausted(identifier, priorState = null) {
  * exhausted the install-window start attempts → caller rolls back), or
  * 'provisional' (the anti-hang backstop — a node issue, never rolls back).
  *
- * @param {string[]} rawIdentifiers component identifiers of the installed app
+ * @param {string[]} ids bare component identifiers of the installed app
  * @param {object} [opts]
  * @param {number} [opts.backstopMs]
  * @returns {Promise<{converged: boolean, failed: string[]}>}
  */
-async function awaitConvergence(rawIdentifiers, opts = {}) {
+async function awaitConvergence(ids, opts = {}) {
   const backstopMs = opts.backstopMs ?? CONVERGE_BACKSTOP_MS;
-  const ids = rawIdentifiers.map(canonical);
   const verdicts = await Promise.all(ids.map((id) => new Promise((resolve) => {
     convergeWaiters.set(id, resolve);
     const timer = setTimeout(() => {
@@ -2039,12 +2089,11 @@ async function awaitConvergence(rawIdentifiers, opts = {}) {
  * stopped app. The hold is transient: a crash drops it so an aborted operation's app
  * recovers rather than staying wrongly held down.
  *
- * @param {string[]} rawIds component identifiers
+ * @param {string[]} ids bare component identifiers
  * @param {'stopped'|'running'} state
  * @returns {Promise<{converged:boolean, failed:string[]}>}
  */
-async function drive(rawIds, state) {
-  const ids = rawIds.map(canonical);
+async function drive(ids, state) {
   ids.forEach((id) => {
     if (state === 'stopped') operationDesired.set(id, 'stopped');
     else operationDesired.delete(id);
@@ -2113,11 +2162,11 @@ async function requestRestartOf(installed, reason, key) {
  * effectiveDesiredRunning, so this only enqueues them; it never decides. dependsOn is a
  * same-app relationship, so the dependents live in the same deployment.
  */
-async function enqueueDependents(rawIdentifier) {
-  const identifier = canonical(rawIdentifier);
+async function enqueueDependents(identifier) {
   let spec;
   try {
-    spec = await getLocalComponentSpec(identifier);
+    const app = await appFor(identifier);
+    spec = app.installed ? await getLocalComponentSpec(identifier, app.installed) : null;
   } catch (err) {
     // transient (DB / decryption): the dependency's next event, the reconnect sweep, or
     // the hourly tick re-evaluates dependents. Nothing to actuate here.
@@ -2139,8 +2188,7 @@ async function enqueueDependents(rawIdentifier) {
  * own synchronous data-safety steps (stop+wipe, permission-fix) first; this
  * only records intent and enqueues.
  */
-function setControllerDesired(rawIdentifier, state, reason) {
-  const identifier = canonical(rawIdentifier);
+function setControllerDesired(identifier, state, reason) {
   // Same-state repeats are no-ops: deciders re-assert their verdict on poll
   // ticks (syncthing ensure-running, every ~3s through a sync window), and only
   // a transition warrants the log/event/enqueue - re-driving stalled work is
@@ -2155,13 +2203,12 @@ function setControllerDesired(rawIdentifier, state, reason) {
 /**
  * setControllerDesired, returning once the reconcile it causes has run, so the
  * caller can act on what was done rather than on what was asked for.
- * @param {string} rawIdentifier Component identifier.
+ * @param {string} identifier The bare component identifier.
  * @param {string} state 'running' | 'stopped'
  * @param {string} reason Why, for the log and the event.
  * @returns {Promise<boolean>} False when nothing has acted on it yet - see applyIntent.
  */
-async function setControllerDesiredAndWait(rawIdentifier, state, reason) {
-  const identifier = canonical(rawIdentifier);
+async function setControllerDesiredAndWait(identifier, state, reason) {
   return applyIntent(identifier, () => {
     controllerDesired.set(identifier, state);
     log.info(`appReconciler - controllerDesired[${identifier}] = ${state} (${reason})`);
@@ -2183,7 +2230,7 @@ const RunRequest = Object.freeze({
 /**
  * Writes a controller opinion decided across awaits, if nothing else decided in
  * the meantime: `writes` is the opinion's write count read before the awaits.
- * @param {string} identifier canonical
+ * @param {string} identifier The bare component identifier.
  * @param {number} writes
  * @param {'running'|'stopped'} state
  * @returns {boolean} whether it was written
@@ -2205,7 +2252,7 @@ function writeIfUnchanged(identifier, writes, state) {
  * A pending data clear, or another writer's opinion written while the lock was
  * read, supersedes it: the clear has to run on a stopped component, and the
  * other writer decided last.
- * @param {string} rawIdentifier Component identifier.
+ * @param {string} identifier The bare component identifier.
  * @param {string} reason Why, for the log and the event.
  * @param {object} [options]
  * @param {() => boolean} [options.unless] Asked once the slot is held and again
@@ -2213,8 +2260,7 @@ function writeIfUnchanged(identifier, writes, state) {
  * @returns {Promise<string>} A RunRequest.
  * @throws When the lock cannot be read: an unread lock is not an absent one.
  */
-async function setRunningUnlessOperatorStopped(rawIdentifier, reason, { unless = () => false } = {}) {
-  const identifier = canonical(rawIdentifier);
+async function setRunningUnlessOperatorStopped(identifier, reason, { unless = () => false } = {}) {
   let outcome = RunRequest.SUPERSEDED;
   await applyIntent(identifier, async () => {
     const writes = controllerDesired.writes(identifier);
@@ -2248,8 +2294,7 @@ async function setRunningUnlessOperatorStopped(rawIdentifier, reason, { unless =
  * so a start can never race the wipe. Replaces the sync layer's prior imperative
  * stop+rm-rf, which ran outside the single-flight (the S1 data-loss window).
  */
-function requestStopAndClearData(rawIdentifier, reason) {
-  const identifier = canonical(rawIdentifier);
+function requestStopAndClearData(identifier, reason) {
   controllerDesired.set(identifier, 'stopped');
   dataDesired.set(identifier, 'clear');
   log.info(`appReconciler - requesting stop + local appdata clear for ${identifier} (${reason})`);
@@ -2270,8 +2315,7 @@ function requestStopAndClearData(rawIdentifier, reason) {
  * ahead of any run decision, so one left standing on a stopped component simply
  * waits.
  */
-function clearControllerDesired(rawIdentifier) {
-  const identifier = canonical(rawIdentifier);
+function clearControllerDesired(identifier) {
   controllerDesired.delete(identifier);
 }
 
@@ -2280,8 +2324,8 @@ function clearControllerDesired(rawIdentifier) {
  * "unknown": no decider has spoken since this process started, or an operator
  * stop retracted what one said.
  */
-function hasControllerOpinion(rawIdentifier) {
-  return controllerDesired.has(canonical(rawIdentifier));
+function hasControllerOpinion(identifier) {
+  return controllerDesired.has(identifier);
 }
 
 /**
@@ -2307,13 +2351,12 @@ function hasControllerOpinion(rawIdentifier) {
  * which carries out anything that was held for want of an opinion: a pending
  * operator restart.
  *
- * @param {string} rawIdentifier
+ * @param {string} identifier The bare component identifier.
  * @param {'running'|'stopped'} state
  * @param {string} reason
  * @returns {Promise<boolean>} true if the verdict was recorded.
  */
-async function adoptControllerDesired(rawIdentifier, state, reason) {
-  const identifier = canonical(rawIdentifier);
+async function adoptControllerDesired(identifier, state, reason) {
   let adopted = false;
   await applyIntent(identifier, async () => {
     const writes = controllerDesired.writes(identifier);
@@ -2348,8 +2391,7 @@ async function adoptControllerDesired(rawIdentifier, state, reason) {
  * is worth acting on. Removal only: for anything short of that, retract the
  * specific opinion.
  */
-function forgetDesiredState(rawIdentifier) {
-  const identifier = canonical(rawIdentifier);
+function forgetDesiredState(identifier) {
   controllerDesired.delete(identifier);
   dataDesired.delete(identifier);
   // A removed component keeps no failure history: these are keyed by identifier

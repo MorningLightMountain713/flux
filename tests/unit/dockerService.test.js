@@ -72,12 +72,15 @@ describe('dockerService tests', () => {
   });
 
   describe('getAppIdentifier tests', () => {
-    it('should return the same name if starts with "flux"', async () => {
-      const appName = 'fluxTesting';
-
-      const result = dockerService.getAppIdentifier(appName);
-
-      expect(result).to.equal(appName);
+    // It used to return an already-flux-prefixed input untouched, so that one
+    // function could serve both a bare identifier and a docker name by sniffing
+    // which it had been handed. That made it non-injective, and two distinct
+    // components collided on one container name and one volume directory.
+    it('is injective - a component named flux* does not collide with its unprefixed twin', async () => {
+      expect(dockerService.getAppIdentifier('proxy_myapp')).to.equal('fluxproxy_myapp');
+      expect(dockerService.getAppIdentifier('fluxproxy_myapp')).to.equal('fluxfluxproxy_myapp');
+      expect(dockerService.getAppIdentifier('fluxproxy_myapp'))
+        .to.not.equal(dockerService.getAppIdentifier('proxy_myapp'));
     });
 
     it('should add "flux" to app identifier with any other name', async () => {
@@ -104,14 +107,53 @@ describe('dockerService tests', () => {
       expect(dockerService.getBaseAppName('fluxdb_App')).to.equal('db_App');
     });
 
-    it('should return a bare identifier unchanged', async () => {
-      expect(dockerService.getBaseAppName('db_App')).to.equal('db_App');
+    it('should strip the legacy "zel" prefix', async () => {
+      // isManagedContainer claims zel containers too, so they reach the same
+      // consumers and their identifiers must come back out intact
+      expect(dockerService.getBaseAppName('zeldb_App')).to.equal('db_App');
     });
 
-    it('should round-trip getAppIdentifier for compose and single-component names', async () => {
-      ['db_App', 'testing1234', 'KadenaChainWebNode'].forEach((bare) => {
+    it('should invert getAppIdentifier for every identifier, flux-named included', async () => {
+      // The round trip is the contract: this is the inverse of getAppIdentifier
+      // and nothing else. It is exact for a component genuinely named `fluxproxy`
+      // (docker name `fluxfluxproxy_App`) precisely because the caller states it
+      // holds a docker name by calling at all — the ambiguity that used to bite
+      // was a CONSUMER handing its own bare identifier through here.
+      ['db_App', 'testing1234', 'KadenaChainWebNode', 'fluxproxy_App', 'zelnode_App'].forEach((bare) => {
         expect(dockerService.getBaseAppName(dockerService.getAppIdentifier(bare))).to.equal(bare);
       });
+    });
+  });
+
+  describe('containerAppName tests', () => {
+    const LABEL_KEYS = { APP: 'io.runonflux.app' };
+
+    it('prefers the app label', () => {
+      expect(dockerService.containerAppName(
+        { labels: { 'io.runonflux.app': 'MyApp' }, name: '/fluxwww_MyApp' }, LABEL_KEYS,
+      )).to.equal('MyApp');
+    });
+
+    it('reads the name for a pre-label composed container', () => {
+      expect(dockerService.containerAppName({ labels: {}, name: '/fluxwww_MyApp' }, LABEL_KEYS)).to.equal('MyApp');
+    });
+
+    it('reads the name for a pre-label flat container', () => {
+      expect(dockerService.containerAppName({ labels: {}, name: '/fluxMyApp' }, LABEL_KEYS)).to.equal('MyApp');
+    });
+
+    it('strips a legacy zel prefix by its own width, not flux width', () => {
+      // `/zel` is three characters plus the slash; stripping five (the width of
+      // `/flux`) ate the first character of a flat app's name, so the container
+      // never matched its installed app and the orphan sweep kept trying to
+      // remove something that does not exist - or, if a truncated name happened
+      // to exist, the wrong app.
+      expect(dockerService.containerAppName({ labels: {}, name: '/zelMyApp' }, LABEL_KEYS)).to.equal('MyApp');
+      expect(dockerService.containerAppName({ labels: {}, name: '/zelwww_MyApp' }, LABEL_KEYS)).to.equal('MyApp');
+    });
+
+    it('returns null when the container states no name and carries no label', () => {
+      expect(dockerService.containerAppName({ labels: {}, name: undefined }, LABEL_KEYS)).to.be.null;
     });
   });
 
@@ -1191,7 +1233,7 @@ describe('dockerService tests', () => {
       const connectStub = sinon.stub().resolves();
       const getNetworkStub = sinon.stub(Dockerode.prototype, 'getNetwork').returns({ connect: connectStub });
 
-      await dockerService.appDockerNetworkConnect('fluxweb_myapp', 'fluxDockerNetwork_dep');
+      await dockerService.appDockerNetworkConnect('web_myapp', 'fluxDockerNetwork_dep');
 
       sinon.assert.calledOnceWithExactly(getNetworkStub, 'fluxDockerNetwork_dep');
       sinon.assert.calledOnceWithExactly(connectStub, { Container: 'fluxweb_myapp' });
@@ -1202,7 +1244,7 @@ describe('dockerService tests', () => {
       const connectStub = sinon.stub().resolves();
       sinon.stub(Dockerode.prototype, 'getNetwork').returns({ connect: connectStub });
 
-      await dockerService.appDockerNetworkConnect('fluxweb_myapp', 'fluxDockerNetwork_dep');
+      await dockerService.appDockerNetworkConnect('web_myapp', 'fluxDockerNetwork_dep');
 
       sinon.assert.notCalled(connectStub);
     });
@@ -1212,7 +1254,7 @@ describe('dockerService tests', () => {
       const connectStub = sinon.stub().resolves();
       sinon.stub(Dockerode.prototype, 'getNetwork').returns({ connect: connectStub });
 
-      await dockerService.appDockerNetworkConnect('fluxweb_myapp', 'fluxDockerNetwork_dep');
+      await dockerService.appDockerNetworkConnect('web_myapp', 'fluxDockerNetwork_dep');
 
       sinon.assert.calledOnceWithExactly(connectStub, { Container: 'fluxweb_myapp' });
     });
@@ -1224,7 +1266,7 @@ describe('dockerService tests', () => {
       const connectStub = sinon.stub().rejects(error);
       sinon.stub(Dockerode.prototype, 'getNetwork').returns({ connect: connectStub });
 
-      await expect(dockerService.appDockerNetworkConnect('fluxweb_myapp', 'fluxDockerNetwork_dep')).to.not.be.rejected;
+      await expect(dockerService.appDockerNetworkConnect('web_myapp', 'fluxDockerNetwork_dep')).to.not.be.rejected;
     });
 
     it('rethrows generic connect errors (no message match)', async () => {
@@ -1234,7 +1276,7 @@ describe('dockerService tests', () => {
       const connectStub = sinon.stub().rejects(error);
       sinon.stub(Dockerode.prototype, 'getNetwork').returns({ connect: connectStub });
 
-      await expect(dockerService.appDockerNetworkConnect('fluxweb_myapp', 'fluxDockerNetwork_dep')).to.be.rejectedWith('not found');
+      await expect(dockerService.appDockerNetworkConnect('web_myapp', 'fluxDockerNetwork_dep')).to.be.rejectedWith('not found');
     });
 
     it('rethrows a generic 403 that is not already-exists', async () => {
@@ -1244,7 +1286,7 @@ describe('dockerService tests', () => {
       const connectStub = sinon.stub().rejects(error);
       sinon.stub(Dockerode.prototype, 'getNetwork').returns({ connect: connectStub });
 
-      await expect(dockerService.appDockerNetworkConnect('fluxweb_myapp', 'fluxDockerNetwork_dep')).to.be.rejectedWith('swarm-scoped');
+      await expect(dockerService.appDockerNetworkConnect('web_myapp', 'fluxDockerNetwork_dep')).to.be.rejectedWith('swarm-scoped');
     });
 
     it('normalises a bare component identifier to the docker name', async () => {
@@ -1289,7 +1331,7 @@ describe('dockerService tests', () => {
       const disconnectStub = sinon.stub().resolves();
       sinon.stub(Dockerode.prototype, 'getNetwork').returns({ disconnect: disconnectStub });
 
-      await dockerService.appDockerNetworkDisconnect('fluxweb_myapp', 'fluxDockerNetwork_dep');
+      await dockerService.appDockerNetworkDisconnect('web_myapp', 'fluxDockerNetwork_dep');
 
       sinon.assert.notCalled(disconnectStub);
     });
@@ -1301,7 +1343,7 @@ describe('dockerService tests', () => {
       const disconnectStub = sinon.stub().resolves();
       sinon.stub(Dockerode.prototype, 'getNetwork').returns({ disconnect: disconnectStub });
 
-      await dockerService.appDockerNetworkDisconnect('fluxweb_myapp', 'fluxDockerNetwork_dep');
+      await dockerService.appDockerNetworkDisconnect('web_myapp', 'fluxDockerNetwork_dep');
 
       sinon.assert.notCalled(disconnectStub);
     });
@@ -1311,7 +1353,7 @@ describe('dockerService tests', () => {
       const disconnectStub = sinon.stub().resolves();
       sinon.stub(Dockerode.prototype, 'getNetwork').returns({ disconnect: disconnectStub });
 
-      await dockerService.appDockerNetworkDisconnect('fluxweb_myapp', 'fluxDockerNetwork_dep');
+      await dockerService.appDockerNetworkDisconnect('web_myapp', 'fluxDockerNetwork_dep');
 
       sinon.assert.calledOnceWithExactly(disconnectStub, { Container: 'fluxweb_myapp' });
     });
@@ -1322,7 +1364,7 @@ describe('dockerService tests', () => {
       error.statusCode = 500;
       sinon.stub(Dockerode.prototype, 'getNetwork').returns({ disconnect: sinon.stub().rejects(error) });
 
-      await expect(dockerService.appDockerNetworkDisconnect('fluxweb_myapp', 'fluxDockerNetwork_dep')).to.not.be.rejected;
+      await expect(dockerService.appDockerNetworkDisconnect('web_myapp', 'fluxDockerNetwork_dep')).to.not.be.rejected;
     });
 
     it('swallows a 404 from disconnect (network vanished in the race window)', async () => {
@@ -1331,7 +1373,7 @@ describe('dockerService tests', () => {
       error.statusCode = 404;
       sinon.stub(Dockerode.prototype, 'getNetwork').returns({ disconnect: sinon.stub().rejects(error) });
 
-      await expect(dockerService.appDockerNetworkDisconnect('fluxweb_myapp', 'fluxDockerNetwork_dep')).to.not.be.rejected;
+      await expect(dockerService.appDockerNetworkDisconnect('web_myapp', 'fluxDockerNetwork_dep')).to.not.be.rejected;
     });
 
     it('rethrows a genuine disconnect failure', async () => {
@@ -1340,7 +1382,7 @@ describe('dockerService tests', () => {
       error.statusCode = 500;
       sinon.stub(Dockerode.prototype, 'getNetwork').returns({ disconnect: sinon.stub().rejects(error) });
 
-      await expect(dockerService.appDockerNetworkDisconnect('fluxweb_myapp', 'fluxDockerNetwork_dep')).to.be.rejectedWith('driver failure');
+      await expect(dockerService.appDockerNetworkDisconnect('web_myapp', 'fluxDockerNetwork_dep')).to.be.rejectedWith('driver failure');
     });
   });
 

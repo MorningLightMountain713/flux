@@ -1,6 +1,5 @@
 const log = require('../../lib/log');
 const globalState = require('../utils/globalState');
-const dockerService = require('../dockerService');
 const fluxEventBus = require('../utils/fluxEventBus');
 const { AsyncGate } = require('../utils/asyncGate');
 
@@ -13,14 +12,17 @@ const { AsyncGate } = require('../utils/asyncGate');
 // tree (uninstaller, volume/query services, …), which is what turned the engine into
 // an import hub and made every new producer a cycle risk.
 //
-// Dependencies are deliberately low-level only (log, globalState, dockerService for
-// identifier canonicalization, asyncGate) — nothing in the app lifecycle/query layer.
+// Dependencies are deliberately low-level only (log, globalState, asyncGate) — nothing
+// in the app lifecycle/query layer.
 
-// The reconciler's canonical id is the bare component identifier (`component_app`).
-// Deciders disagree on the form they pass (masterSlave uses the bare identifier, the
-// syncthing flow passes the flux-prefixed docker name), so normalise every inbound id
-// here at the boundary, the same way dockerService normalises for docker calls.
-const canonical = (id) => dockerService.getBaseAppName(id);
+// The queue's key is the bare component identifier (`component_app`, or the app name
+// for v1-3), and every producer must pass that form. This layer deliberately does NOT
+// normalise: a producer holding a docker name knows it holds one, and this queue
+// cannot know — `fluxproxy_myapp` is both a valid docker name (component `proxy`) and
+// a valid bare identifier (component `fluxproxy`), so stripping here was a guess that
+// silently keyed a different component. Producers holding a docker name read the
+// identity label; producers in the syncthing flow carry the identifier alongside the
+// folder id.
 
 // id -> promise of the pass (or intent write) currently holding this key. A Map
 // rather than a Set so a caller can WAIT for the holder: applyIntent below needs
@@ -162,8 +164,7 @@ function runReconcile(identifier) {
  * identifier is in flight, it re-runs once when that finishes. Held until the boot
  * gate opens so nothing actuates before daemon/DB are ready.
  */
-function enqueue(rawIdentifier) {
-  const identifier = canonical(rawIdentifier);
+function enqueue(identifier) {
   if (!globalState.bootContainerStateSettled) {
     bootPending.add(identifier);
     return null;
@@ -183,13 +184,12 @@ function enqueue(rawIdentifier) {
  * pass to act on it. The key is held across the write so a pass cannot start against
  * state this is about to replace.
  *
- * @param {string} rawIdentifier
+ * @param {string} identifier The bare component identifier, as enqueue() takes it.
  * @param {Function} mutate Writes the intent.
  * @param {{awaitPass?: boolean}} [opts] awaitPass waits for the pass that follows.
  * @returns {Promise<boolean>} whether a pass was scheduled (and, with awaitPass, ran).
  */
-async function applyIntent(rawIdentifier, mutate, { awaitPass = false } = {}) {
-  const identifier = canonical(rawIdentifier);
+async function applyIntent(identifier, mutate, { awaitPass = false } = {}) {
 
   // A loop, not a single await: releasing the key lets a queued pass start
   // before this continues, and that pass would be reading the state we are
@@ -266,7 +266,6 @@ function stopQueue() {
 }
 
 module.exports = {
-  canonical,
   enqueue,
   applyIntent,
   forgetFailures,

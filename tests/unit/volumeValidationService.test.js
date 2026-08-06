@@ -20,9 +20,19 @@ const utilFake = {
 const runCommandStub = sinon.stub();
 
 // Module under test with proxyquire
+const getInstalledAppByIdentityStub = sinon.stub();
 const volumeValidationService = proxyquire('../../ZelBack/src/services/volumeValidationService', {
   util: utilFake,
   './serviceHelper': { runCommand: runCommandStub },
+  './dockerService': { getBaseAppName: (id) => (id.startsWith('flux') ? id.slice(4) : id) },
+  './appDatabase/appsRepository': { getInstalledAppByIdentity: getInstalledAppByIdentityStub },
+  './utils/specLibs': {
+    getSpecBackend: async () => ({
+      DeploymentSpec: {
+        appNameFromIdentifier: (id) => { const p = id.split('_'); return p.length <= 1 ? id : p[1]; },
+      },
+    }),
+  },
 });
 
 describe('volumeValidationService tests', () => {
@@ -91,53 +101,38 @@ describe('volumeValidationService tests', () => {
     });
   });
 
-  describe('extractAppNameFromCrontabCommand tests', () => {
-    it('should extract app name from valid mount command', () => {
-      const command = 'sudo mount -o loop /home/abcapp2TEMP /root/flux/ZelApps/abcapp2';
 
-      const result = volumeValidationService.extractAppNameFromCrontabCommand(command);
+  describe('resolveAppForMountEntry tests', () => {
+    afterEach(() => getInstalledAppByIdentityStub.reset());
 
-      expect(result).to.equal('abcapp2');
+    it('resolves the app from its row, using the crontab comment as the exact app id', async () => {
+      getInstalledAppByIdentityStub.resolves({ name: 'MyApp' });
+
+      const result = await volumeValidationService.resolveAppForMountEntry('fluxmongodb_MyApp');
+
+      expect(result).to.equal('MyApp');
+      expect(getInstalledAppByIdentityStub.calledOnceWith('MyApp')).to.be.true;
     });
 
-    it('should extract app name and remove "flux" prefix', () => {
-      const command = 'sudo mount -o loop /home/testTEMP /root/flux/ZelApps/fluxtestapp';
+    // The caller redeploys with createVolumes, which reformats the volume. An
+    // entry nothing claims must produce no answer at all - the old code sliced
+    // four characters off anything starting with `flux` and handed the result on,
+    // which two different apps can both produce.
+    it('answers null when no installed app claims that identity', async () => {
+      getInstalledAppByIdentityStub.resolves(null);
 
-      const result = volumeValidationService.extractAppNameFromCrontabCommand(command);
-
-      expect(result).to.equal('testapp');
+      expect(await volumeValidationService.resolveAppForMountEntry('fluxweb_ghost')).to.equal(null);
     });
 
-    it('should return app name without prefix if no recognized prefix', () => {
-      const command = 'sudo mount -o loop /home/testTEMP /root/flux/ZelApps/myapp';
+    it('answers null rather than guessing when the lookup fails', async () => {
+      getInstalledAppByIdentityStub.rejects(new Error('db down'));
 
-      const result = volumeValidationService.extractAppNameFromCrontabCommand(command);
-
-      expect(result).to.equal('myapp');
+      expect(await volumeValidationService.resolveAppForMountEntry('fluxweb_myapp')).to.equal(null);
     });
 
-    it('should return null for command with insufficient parts', () => {
-      const command = 'sudo mount -o loop /home/test';
-
-      const result = volumeValidationService.extractAppNameFromCrontabCommand(command);
-
-      expect(result).to.be.null;
-    });
-
-    it('should return null for empty command', () => {
-      const command = '';
-
-      const result = volumeValidationService.extractAppNameFromCrontabCommand(command);
-
-      expect(result).to.be.null;
-    });
-
-    it('should handle errors gracefully and return null', () => {
-      const command = null;
-
-      const result = volumeValidationService.extractAppNameFromCrontabCommand(command);
-
-      expect(result).to.be.null;
+    it('answers null for a missing app id', async () => {
+      expect(await volumeValidationService.resolveAppForMountEntry('')).to.equal(null);
+      expect(getInstalledAppByIdentityStub.called).to.be.false;
     });
   });
 
@@ -150,16 +145,18 @@ describe('volumeValidationService tests', () => {
         save: sinon.stub(),
         remove: sinon.stub(),
       };
+      getInstalledAppByIdentityStub.reset();
+      getInstalledAppByIdentityStub.callsFake(async (identity) => ({ name: identity }));
     });
 
     it('should find apps with incorrect volume mounts', async () => {
       const mockJobs = [
         {
-          comment: () => 'app-id-123',
+          comment: () => 'fluxweb_myapp',
           command: () => 'sudo mount -o loop /home/flux/ZelApps/myappTEMP /root/flux/ZelApps/myapp',
         },
         {
-          comment: () => 'app-id-456',
+          comment: () => 'fluxweb_testapp',
           command: () => 'sudo mount -o loop /home/flux/ZelApps/testappTEMP /root/flux/ZelApps/testapp',
         },
       ];
@@ -174,24 +171,24 @@ describe('volumeValidationService tests', () => {
         appName: 'myapp',
         volumePath: '/home/flux/ZelApps/myappTEMP',
         mountPoint: '/root/flux/ZelApps/myapp',
-        appId: 'app-id-123',
+        appId: 'fluxweb_myapp',
       });
       expect(result[1]).to.deep.include({
         appName: 'testapp',
         volumePath: '/home/flux/ZelApps/testappTEMP',
         mountPoint: '/root/flux/ZelApps/testapp',
-        appId: 'app-id-456',
+        appId: 'fluxweb_testapp',
       });
     });
 
     it('should filter out apps with correct volume mounts', async () => {
       const mockJobs = [
         {
-          comment: () => 'app-id-123',
+          comment: () => 'fluxweb_myapp',
           command: () => 'sudo mount -o loop /home/correctpath/myappTEMP /root/zelflux/ZelApps/myapp',
         },
         {
-          comment: () => 'app-id-456',
+          comment: () => 'fluxweb_badapp',
           command: () => 'sudo mount -o loop /home/flux/ZelApps/badappTEMP /root/flux/ZelApps/badapp',
         },
       ];
@@ -224,11 +221,11 @@ describe('volumeValidationService tests', () => {
     it('should skip jobs without mount command', async () => {
       const mockJobs = [
         {
-          comment: () => 'app-id-123',
+          comment: () => 'fluxweb_myapp',
           command: () => '*/5 * * * * /usr/bin/backup.sh',
         },
         {
-          comment: () => 'app-id-456',
+          comment: () => 'fluxweb_app',
           command: () => 'sudo mount -o loop /home/flux/ZelApps/appTEMP /root/flux/ZelApps/app',
         },
       ];
@@ -245,7 +242,7 @@ describe('volumeValidationService tests', () => {
     it('should handle jobs with malformed commands', async () => {
       const mockJobs = [
         {
-          comment: () => 'app-id-123',
+          comment: () => 'fluxweb_myapp',
           command: () => 'sudo mount -o loop',
         },
       ];
@@ -414,44 +411,10 @@ describe('volumeValidationService tests', () => {
     });
   });
 
-  describe('extractBaseAppName tests', () => {
-    it('should extract app name from component name with underscore', () => {
-      const componentName = 'mongodb_myapp';
-
-      const result = volumeValidationService.extractBaseAppName(componentName);
-
-      expect(result).to.equal('myapp');
-    });
-
-    it('should return original name if no underscore present', () => {
-      const appName = 'simpleapp';
-
-      const result = volumeValidationService.extractBaseAppName(appName);
-
-      expect(result).to.equal('simpleapp');
-    });
-
-    it('should extract app name from component with multiple underscores', () => {
-      const componentName = 'redis_cache_myapp';
-
-      const result = volumeValidationService.extractBaseAppName(componentName);
-
-      // split('_')[1] returns the second element only
-      expect(result).to.equal('cache');
-    });
-
-    it('should handle single character component names', () => {
-      const componentName = 'a_myapp';
-
-      const result = volumeValidationService.extractBaseAppName(componentName);
-
-      expect(result).to.equal('myapp');
-    });
-  });
 
   // Note: checkAndFixIncorrectVolumeMounts is an integration function that orchestrates
   // the other functions which are already tested above. Testing it would require
   // complex mocking of internal function calls which goes against testing best practices.
   // The individual functions (getAppsWithIncorrectVolumeMounts, unmountIncorrectVolume,
-  // removeCrontabEntry, hardRedeployApp, extractBaseAppName) are all tested separately.
+  // removeCrontabEntry, rebuildApp, extractBaseAppName) are all tested separately.
 });

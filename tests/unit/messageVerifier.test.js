@@ -493,10 +493,11 @@ describe('messageVerifier tests', () => {
       });
       stubs['../appDatabase/appsRepository'].storePermanentMessage = storePermanentStub;
       stubs['../appDatabase/registryManager'].insertAppSpecifications = insertStub;
+      const fromEventStub = sinon.stub().returns(mockInstantiated);
       stubs['../utils/specLibs'].getSpecBackend = sinon.stub().resolves({
         AppEventLegacy: { deserialize: sinon.stub().returns(mockConfirmedEvent) },
         ConfirmedAppEvent: { deserialize: sinon.stub().returns(mockConfirmedEvent) },
-        InstantiatedSpec: { fromEvent: sinon.stub().returns(mockInstantiated) },
+        InstantiatedSpec: { fromEvent: fromEventStub },
         deserializeSpec: sinon.stub().returnsArg(0),
       });
 
@@ -505,6 +506,17 @@ describe('messageVerifier tests', () => {
       const result = await mv.checkAndRequestApp('regHash', 'txid', 2000000, 200000000, null, 2);
       expect(result).to.be.true;
       expect(storePermanentStub.calledOnce).to.be.true;
+
+      // A registration is the one moment both halves of an app's instance
+      // identity are in hand: the name being claimed, and the transaction
+      // claiming it. It is minted here or nowhere - an update arrives under a
+      // different txid and must never re-mint against it.
+      const { mintAppUuid, identityFromUuid } = require('../../ZelBack/src/services/utils/appIdentity');
+      const expectedUuid = mintAppUuid('testapp', 'txid');
+      const stored = fromEventStub.getCalls().map((c) => c.args[0]).find((a) => a && a.uuid);
+      expect(stored, 'the registration must carry an instance identity').to.exist;
+      expect(stored.uuid).to.equal(expectedUuid);
+      expect(stored.identity).to.equal(identityFromUuid(expectedUuid));
     });
 
     it('fail-closed: rejects a v9 registration priced at 0 (no PriceMessage in force) without inserting specs', async () => {

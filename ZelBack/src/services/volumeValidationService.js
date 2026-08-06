@@ -2,6 +2,9 @@ const util = require('util');
 const systemcrontab = require('crontab');
 const log = require('../lib/log');
 const serviceHelper = require('./serviceHelper');
+const dockerService = require('./dockerService');
+const appsRepository = require('./appDatabase/appsRepository');
+const { getSpecBackend } = require('./utils/specLibs');
 
 const crontabLoad = util.promisify(systemcrontab.load);
 
@@ -19,28 +22,31 @@ function hasIncorrectFluxPath(volumePath) {
 }
 
 /**
- * Extract app name from crontab command
- * @param {string} command - The crontab command
- * @returns {string|null} - The app name or null if not found
+ * The app a legacy mount entry belongs to, or null when nothing here claims it.
+ *
+ * This ends in a redeploy that RECREATES the volume, so a wrong answer reformats
+ * the wrong app's data. It used to be a guess twice over: the app name was cut
+ * out of the mount path and de-prefixed by slicing four characters off anything
+ * beginning with `flux`, which two different apps can both produce.
+ *
+ * The crontab comment is the docker app id the entry was written for — an exact
+ * value, not one recovered from a path — so this de-prefixes it once and asks
+ * the installed-app row which app states that identity. No row, no answer, and
+ * the caller does nothing.
+ *
+ * @param {string} appId - the crontab comment, a docker app id
+ * @returns {Promise<string|null>} the app name, or null when unresolvable
  */
-function extractAppNameFromCrontabCommand(command) {
+async function resolveAppForMountEntry(appId) {
+  if (!appId) return null;
   try {
-    // Example command: sudo mount -o loop /home/abcapp2TEMP /root/flux/ZelApps/abcapp2
-    const parts = command.split(' ');
-    if (parts.length < 6) {
-      return null;
-    }
-    const mountPoint = parts[5]; // The mount point path
-    const pathParts = mountPoint.split('/');
-    // Get the last part which should be the app name
-    const appName = pathParts[pathParts.length - 1];
-    // Remove flux prefix if present
-    if (appName.startsWith('flux')) {
-      return appName.substring(4);
-    }
-    return appName;
+    const { DeploymentSpec } = await getSpecBackend();
+    const identifier = dockerService.getBaseAppName(appId);
+    const identity = DeploymentSpec.appNameFromIdentifier(identifier);
+    const installed = await appsRepository.getInstalledAppByIdentity(identity);
+    return installed ? installed.name : null;
   } catch (error) {
-    log.error(`Error extracting app name from command: ${error.message}`);
+    log.error(`Could not resolve the app owning mount entry ${appId}: ${error.message}`);
     return null;
   }
 }
@@ -67,7 +73,7 @@ async function getAppsWithIncorrectVolumeMounts() {
     const jobs = crontab.jobs();
     log.info(`Found ${jobs.length} crontab jobs to check`);
 
-    jobs.forEach((job) => {
+    for (const job of jobs) {
       const comment = job.comment();
       const command = job.command();
 
@@ -80,7 +86,8 @@ async function getAppsWithIncorrectVolumeMounts() {
 
           // Check if volume path has incorrect /flux/ pattern
           if (hasIncorrectFluxPath(mountPoint)) {
-            const appName = extractAppNameFromCrontabCommand(command);
+            // eslint-disable-next-line no-await-in-loop
+            const appName = await resolveAppForMountEntry(comment);
             if (appName) {
               log.warn(`Found app with incorrect volume mount: ${appName}`);
               log.warn(`  Volume path: ${volumePath}`);
@@ -91,11 +98,16 @@ async function getAppsWithIncorrectVolumeMounts() {
                 mountPoint,
                 appId: comment,
               });
+            } else {
+              // The repair below redeploys with createVolumes, which REFORMATS the
+              // volume. An entry whose app cannot be named is left exactly as it
+              // is: a stale crontab line is harmless, and acting on a guess is not.
+              log.warn(`Leaving legacy mount entry ${comment} alone - no installed app claims that identity`);
             }
           }
         }
       }
-    });
+    }
 
     log.info(`Found ${appsWithIncorrectMounts.length} apps with incorrect volume mounts`);
   } catch (error) {
@@ -189,14 +201,14 @@ async function removeCrontabEntry(appId, incorrectVolumePath) {
  * @returns {Promise<object|null>} - App specifications or null
  */
 /**
- * Hard redeploy app with incorrect volume mount
+ * Rebuild an app with an incorrect volume mount
  * This removes the app completely and reinstalls it with correct volume paths
  * @param {string} appName - The app name to redeploy
  * @returns {Promise<boolean>} - True if redeploy was successful
  */
-async function hardRedeployApp(appName) {
+async function rebuildApp(appName) {
   try {
-    log.info(`Attempting to hard redeploy app ${appName} due to incorrect volume mount`);
+    log.info(`Attempting to rebuild app ${appName} due to incorrect volume mount`);
 
     // eslint-disable-next-line global-require
     const { redeployApplication } = require('./appLifecycle/appOperations');
@@ -208,17 +220,6 @@ async function hardRedeployApp(appName) {
     log.error(`Error redeploying app ${appName}: ${error.message}`);
     return false;
   }
-}
-
-/**
- * Extract base app name from component name
- * Component names follow the pattern: componentname_appname
- * @param {string} appName - The app or component name
- * @returns {string} - The base app name (second part after underscore, or original if no underscore)
- */
-function extractBaseAppName(appName) {
-  // Use the same pattern as the rest of the codebase
-  return appName.split('_')[1] || appName;
 }
 
 /**
@@ -260,18 +261,18 @@ async function checkAndFixIncorrectVolumeMounts() {
       // eslint-disable-next-line no-await-in-loop
       await removeCrontabEntry(app.appId, app.volumePath);
 
-      // Extract base app name and add to unique set
-      const baseAppName = extractBaseAppName(app.appName);
-      uniqueAppNames.add(baseAppName);
+      // Already the app's own name, resolved from its row rather than cut out
+      // of a path.
+      uniqueAppNames.add(app.appName);
     }
 
-    // Step 3: Hard redeploy each unique app (removes and reinstalls with correct volume paths)
+    // Step 3: Rebuild each unique app (removes and reinstalls with correct volume paths)
     log.info(`Found ${uniqueAppNames.size} unique apps to redeploy`);
     // eslint-disable-next-line no-restricted-syntax
     for (const appName of uniqueAppNames) {
-      log.info(`Hard redeploying app ${appName} with correct volume paths...`);
+      log.info(`Rebuilding app ${appName} with correct volume paths...`);
       // eslint-disable-next-line no-await-in-loop
-      await hardRedeployApp(appName);
+      await rebuildApp(appName);
     }
 
     log.info('=== Volume Validation Service: Completed fixing incorrect volume mounts ===');
@@ -283,10 +284,9 @@ async function checkAndFixIncorrectVolumeMounts() {
 module.exports = {
   checkAndFixIncorrectVolumeMounts,
   hasIncorrectFluxPath,
-  extractAppNameFromCrontabCommand,
+  resolveAppForMountEntry,
   getAppsWithIncorrectVolumeMounts,
   unmountIncorrectVolume,
   removeCrontabEntry,
-  hardRedeployApp,
-  extractBaseAppName,
+  rebuildApp,
 };

@@ -14,6 +14,7 @@ const dockerService = require('../dockerService');
 const serviceHelper = require('../serviceHelper');
 const appsRuntimeState = require('../appManagement/appsRuntimeState');
 const reconcilerQueue = require('../appMonitoring/reconcilerQueue');
+const { getSpecBackend } = require('../utils/specLibs');
 
 /**
  * Check if a container started before its mounts were created
@@ -100,11 +101,12 @@ async function getContainersNeedingRestart() {
       return [];
     }
 
-    // Filter for Flux app containers
-    const fluxContainers = containers.filter((container) => {
-      const name = container.Names && container.Names[0] ? container.Names[0] : '';
-      return name.startsWith('/flux');
-    });
+    // Ours by the identity label, not by the shape of the name: the operator
+    // shares this daemon and a container of theirs called `flux...` is not ours.
+    const { LABEL_KEYS } = await getSpecBackend();
+    const fluxContainers = containers.filter((container) => dockerService.isManagedContainer(
+      { labels: container.Labels, name: container.Names?.[0] }, LABEL_KEYS,
+    ));
 
     log.info(`containerMountRecovery - Found ${fluxContainers.length} running Flux containers, checking which need restart`);
 
@@ -123,6 +125,12 @@ async function getContainersNeedingRestart() {
           containersNeedingRestart.push({
             id: container.Id,
             name: containerName,
+            // The reconciler and appsRuntimeState are keyed by the bare identifier.
+            // Taken from the identity label this sweep already read to claim the
+            // container, falling back to the strip for containers created before
+            // the labels shipped — exact here, on a value known to be a docker name.
+            identifier: container.Labels?.[LABEL_KEYS.IDENTIFIER]
+              ?? dockerService.getBaseAppName(containerName),
           });
           log.info(`containerMountRecovery - Container ${containerName} needs restart (started before mounts)`);
         } else {
@@ -168,8 +176,8 @@ async function restartContainersWithProperMounts(containers) {
       // generation and enqueue, never restart Docker directly. No operatorStopped
       // change — a deliberately-stopped container must stay stopped.
       // eslint-disable-next-line no-await-in-loop
-      await appsRuntimeState.requestRestart(container.name);
-      reconcilerQueue.enqueue(container.name);
+      await appsRuntimeState.requestRestart(container.identifier);
+      reconcilerQueue.enqueue(container.identifier);
       results.restarted.push(container.name);
       log.info(`containerMountRecovery - Successfully restarted ${container.name}`);
 

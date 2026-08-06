@@ -65,6 +65,15 @@ describe('playgroundService', () => {
       isBlocked: sinon.stub().resolves(opts.blocked ?? false),
       wakeIdleLoop: sinon.stub(),
       captureIngress: sinon.stub().resolves({ observed: { ip: '1.2.3.4', port: 5000 }, asserted: {} }),
+      servingSet: sinon.stub().resolves(opts.servingSet ?? []),
+      // The fleet-wide tally seam. Mirrors the real shape: a verdict plus the token
+      // and the node that issued it, because the teardown has to return it there.
+      fleetReserve: sinon.stub().resolves(opts.fleet ?? {
+        allowed: true, token: 'fleet-token-1', at: 'counter', reason: null,
+      }),
+      fleetRelease: sinon.stub().resolves(),
+      fleetAnnounce: sinon.stub().resolves(),
+      windowIndex: sinon.stub().returns(20347),
       validateSpec: sinon.stub().resolves({ name: opts.appName ?? 'demoapp' }),
       fromSpec: sinon.stub().returns({
         resourceTotals: () => (opts.totals ?? totals()),
@@ -85,7 +94,7 @@ describe('playgroundService', () => {
         createDataMessage: (d) => ({ status: 'success', data: d }),
       },
       '../serviceHelper': { ensureObject: (o) => o },
-      '../verificationHelper': { verifyPrivilege: sinon.stub().resolves(true) },
+      '../verificationHelper': { verifyPrivilege: sinon.stub().resolves(opts.authorized ?? true) },
       '../utils/globalState': { isArcane: stubs.isArcane },
       '../generalService': { getNewNodeTier: stubs.tier },
       '../appRequirements/hwRequirements': {
@@ -106,14 +115,27 @@ describe('playgroundService', () => {
         getSpecBackend: async () => ({ DeploymentSpec: { fromSpec: stubs.fromSpec } }),
       },
       '../utils/appConstants': { appsFolder: '/tmp/apps/' },
-      './playgroundLimits': limits,
+      // hourly:false swaps in a limiter that always refuses, so a refusal lands
+      // AFTER the fleet slot has been taken - the window a release has to cover.
+      './playgroundLimits': opts.hourly === false
+        ? { ...limits, consumeSessionSlot: () => ({ allowed: false, scope: 'caller', retryAfterMs: 1000, message: 'over' }) }
+        : limits,
       './playgroundRunner': {
         runSession: stubs.runSession,
         teardownSession: stubs.teardownSession,
         reapOrphans: stubs.reapOrphans,
       },
       './playgroundSessionRegistry': sessionRegistry,
-      './playgroundServingSet': { servesLocalNode: stubs.servesLocalNode },
+      '../utils/limitCounter': {
+        reserve: stubs.fleetReserve,
+        release: stubs.fleetRelease,
+        announce: stubs.fleetAnnounce,
+      },
+      './playgroundServingSet': {
+        servesLocalNode: stubs.servesLocalNode,
+        servingSet: stubs.servingSet,
+        windowIndex: stubs.windowIndex,
+      },
       './playgroundAudit': {
         record: stubs.audit,
         captureIngress: stubs.captureIngress,
@@ -202,7 +224,8 @@ describe('playgroundService', () => {
       await service.submitSession({}, caller).catch((e) => { threw = e; });
 
       expect(threw.kind).to.equal('busy');
-      expect(threw.message).to.include('10.0.0.9:16127');
+      // the refusal names URLs for the same reason the endpoint does
+      expect(threw.message).to.include('https://10-0-0-9-16127.node.api.runonflux.io');
     });
 
     it('decides that before reading anything else about the caller', async () => {
@@ -318,7 +341,16 @@ describe('playgroundService', () => {
         './playgroundLimits': refusing,
         './playgroundRunner': { runSession: stubs.runSession, teardownSession: stubs.teardownSession, reapOrphans: stubs.reapOrphans },
         './playgroundSessionRegistry': sessionRegistry,
-      './playgroundServingSet': { servesLocalNode: stubs.servesLocalNode },
+      '../utils/limitCounter': {
+        reserve: stubs.fleetReserve,
+        release: stubs.fleetRelease,
+        announce: stubs.fleetAnnounce,
+      },
+      './playgroundServingSet': {
+        servesLocalNode: stubs.servesLocalNode,
+        servingSet: stubs.servingSet,
+        windowIndex: stubs.windowIndex,
+      },
         './playgroundAudit': {
           record: stubs.audit,
           captureIngress: stubs.captureIngress,
@@ -585,6 +617,148 @@ describe('playgroundService', () => {
       await service.submitSession({}, caller);
       await settle();
       expect(stubs.audit.firstCall.args[0].verdict).to.equal('failed');
+    });
+  });
+
+  describe('the fleet-wide tally', () => {
+    it('refuses when the caller is already at their fleet allowance', async () => {
+      // The only control that knows what the caller is doing on OTHER nodes.
+      // Everything else caps what this node gives away and is identity-blind
+      // across the fleet.
+      service = load({ fleet: { allowed: false, token: null, at: 'counter', reason: 'concurrent' } });
+      let threw = null;
+      await service.submitSession({}, caller).catch((e) => { threw = e; });
+
+      expect(threw.kind).to.equal('busy');
+      expect(threw.message).to.include('allowance');
+    });
+
+    it('refuses rather than admitting when the tally cannot be reached', async () => {
+      // Letting a caller through because the tally is unreachable would make
+      // taking it down the way to remove the limit.
+      service = load({ fleet: { allowed: false, token: null, at: null, reason: 'counterUnreachable' } });
+      let threw = null;
+      await service.submitSession({}, caller).catch((e) => { threw = e; });
+
+      expect(threw.kind).to.equal('busy');
+      expect(threw.message).to.include('cannot be reached');
+    });
+
+    it('asks before anything is built', async () => {
+      service = load({ fleet: { allowed: false, token: null, at: 'counter', reason: 'concurrent' } });
+      await service.submitSession({}, caller).catch(() => {});
+
+      expect(stubs.runSession.called, 'nothing ran').to.be.false;
+    });
+
+    it('gives the slot back when a later check refuses the session', async () => {
+      // The fleet slot is taken before the per-node hourly window is charged. A
+      // refusal after that point must return it, or the caller loses an allowance
+      // for a session that never ran.
+      service = load({ hourly: false });
+      await service.submitSession({}, caller).catch(() => {});
+
+      sinon.assert.calledOnce(stubs.fleetRelease);
+    });
+
+    it('returns the slot to the node that issued it', async () => {
+      // A release sent to the wrong node frees nothing and leaves the real slot
+      // held until its lease expires, so the issuing node travels with the token.
+      service = load({ fleet: { allowed: true, token: 'tok-9', at: 'deputy', reason: null }, hourly: false });
+      await service.submitSession({}, caller).catch(() => {});
+
+      sinon.assert.calledWithExactly(
+        stubs.fleetRelease, 'playground', 'identity', caller.fluxId, 'tok-9', 'deputy',
+      );
+    });
+  });
+
+  describe('servingSetAPI', () => {
+    function resSpy() {
+      const captured = { code: 200, body: null };
+      return {
+        captured,
+        status(code) { captured.code = code; return this; },
+        json(body) { captured.body = body; return body; },
+      };
+    }
+
+    it('answers for the caller in the auth header, never a parameter', async () => {
+      // No input to validate and no way to ask about another identity: the set is
+      // derived from whoever is authenticated.
+      const svc = load({ servingSet: [{ ip: '1.1.1.1:16127' }, { ip: '2.2.2.2:16127' }] });
+      const res = resSpy();
+
+      // A parameter and a query naming a DIFFERENT identity are both offered, and
+      // both must be ignored: reading either would turn this into an enumeration
+      // of any FluxID's set.
+      await svc.servingSetAPI({
+        headers: { zelidauth: { zelid: '1CallerZelId' } },
+        params: { zelid: '1SomeoneElse' },
+        query: { zelid: '1SomeoneElse' },
+      }, res);
+
+      expect(res.captured.code).to.equal(200);
+      expect(res.captured.body.status).to.equal('success');
+      // URLs, not bare addresses: a node serves its API under a certificate for its
+      // *.node.api.runonflux.io name, so an address is not somewhere a client can go
+      expect(res.captured.body.data.nodes).to.deep.equal([
+        'https://1-1-1-1-16127.node.api.runonflux.io',
+        'https://2-2-2-2-16127.node.api.runonflux.io',
+      ]);
+      sinon.assert.calledOnceWithExactly(stubs.servingSet, '1CallerZelId');
+    });
+
+    it('reports the window the answer belongs to', async () => {
+      // The set rotates, so a cached answer needs to say which window it is from.
+      const svc = load({ servingSet: [{ ip: '1.1.1.1:16127' }] });
+      const res = resSpy();
+
+      await svc.servingSetAPI({ headers: { zelidauth: { zelid: '1CallerZelId' } }, params: {} }, res);
+
+      expect(res.captured.body.data.window).to.equal(20347);
+    });
+
+    it('drops a node the list carries with no address', async () => {
+      const svc = load({ servingSet: [{ ip: '1.1.1.1:16127' }, { ip: null }] });
+      const res = resSpy();
+
+      await svc.servingSetAPI({ headers: { zelidauth: { zelid: '1CallerZelId' } }, params: {} }, res);
+
+      expect(res.captured.body.data.nodes).to.deep.equal(['https://1-1-1-1-16127.node.api.runonflux.io']);
+    });
+
+    it('refuses an unauthenticated caller', async () => {
+      const svc = load({ authorized: false });
+      const res = resSpy();
+
+      await svc.servingSetAPI({ headers: {}, params: {} }, res);
+
+      expect(res.captured.code).to.equal(401);
+      expect(stubs.servingSet.called).to.be.false;
+    });
+
+    it('refuses a caller whose auth header carries no FluxID', async () => {
+      // verifyPrivilege passing but no zelid would otherwise compute a set for
+      // `null` and hand it back as if it meant something.
+      const svc = load({});
+      const res = resSpy();
+
+      await svc.servingSetAPI({ headers: { zelidauth: {} }, params: {} }, res);
+
+      expect(res.captured.code).to.equal(401);
+      expect(stubs.servingSet.called).to.be.false;
+    });
+
+    it('answers 503 rather than throwing when the set cannot be computed', async () => {
+      const svc = load({});
+      stubs.servingSet.rejects(new Error('node list unavailable'));
+      const res = resSpy();
+
+      await svc.servingSetAPI({ headers: { zelidauth: { zelid: '1CallerZelId' } }, params: {} }, res);
+
+      expect(res.captured.code).to.equal(503);
+      expect(res.captured.body.status).to.equal('error');
     });
   });
 

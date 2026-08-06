@@ -91,7 +91,8 @@ const appsRepository = require('./appDatabase/appsRepository');
 const playgroundAudit = require('./appPlayground/playgroundAudit');
 const playgroundService = require('./appPlayground/playgroundService');
 const admissionControl = require('./utils/admissionControl');
-const nodeIdentityMigration = require('./appDatabase/nodeIdentityMigration');
+const migrations = require('./migrations');
+const limitCounterRecords = require('./utils/limitCounterRecords');
 const imageCacheMaintenance = require('./appLifecycle/imageCacheMaintenance');
 const imageReaper = require('./appLifecycle/imageReaper');
 const imageUpdateService = require('./imageUpdateService');
@@ -201,6 +202,7 @@ async function prepareDatabaseSchema() {
   await playgroundAudit.prepareCollection();
   // appPlacements (localzelapps): one record per app
   await appPlacements.prepareCollection();
+  await limitCounterRecords.prepareCollection();
   // The explorer's collections: their indexes are the explorer's to declare.
   await explorerService.prepareCollections();
   log.info('Local database prepared');
@@ -373,12 +375,11 @@ async function startFluxFunctions() {
     // source is unreachable would fall all the way back to the release-time seed.
     await networkPolicyStore.startSync().catch((err) => log.error(`networkPolicyStore start error: ${err.message}`));
 
-    // Adopt node runtime state that older versions kept in config/userconfig.js.
-    // Awaited and placed first: pgpService and the IP monitor both read these from
-    // the database, and a node that generated a fresh keypair because the migration
-    // had not run yet would lose the ability to decrypt its own apps' credentials.
-    await nodeIdentityMigration.migrateNodeIdentity()
-      .catch((error) => log.error(`Node identity migration error: ${error.message}`));
+    // Node-local state migrations, before anything reads it. pgpService and the IP
+    // monitor both read what these adopt; pgpService guards itself (it reads the
+    // config file directly when the database holds no identity), so this is the
+    // tidy path rather than the only one.
+    await migrations.runMigrations(migrations.HOOKS.DEPENDENCIES_READY);
 
     // Check and update CloudUI if needed (for legacy nodes without watchdog; Arcane
     // delegates to the watchdog). Detached: a UI-asset download must never gate boot —
@@ -413,6 +414,9 @@ async function startFluxFunctions() {
     fluxadmService.start();
     log.info('Fluxadm access service initiated');
     await untilSucceeds('Database schema preparation', prepareDatabaseSchema);
+    await appsRepository.backfillGlobalAppUuids().catch((error) => {
+      log.error(`Deriving instance identities failed: ${error.message}`);
+    });
     // Who gives capacity back when paid work cannot otherwise fit. Registered
     // rather than imported: admissionControl is depended on by every resource
     // check, and it must not in turn depend on whichever feature happens to hold

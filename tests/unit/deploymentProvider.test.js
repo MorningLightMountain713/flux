@@ -184,4 +184,78 @@ describe('deploymentProvider tests', () => {
         .to.eventually.be.rejectedWith(/requires an explicit replica/);
     });
   });
+
+  // A container identifier is built from the app's stored IDENTITY, not its name.
+  // Both build paths must read the same one: an app whose set is built without it
+  // is named differently from the single-identity path that created its
+  // containers, so every lookup keyed on the result misses.
+  describe('identity reaches both build paths', () => {
+    let provider;
+
+    async function specFixture() {
+      const { FluxAppSpecV9 } = await import('@runonflux/flux-spec');
+      return FluxAppSpecV9.fromSubmission({
+        version: 9,
+        name: 'myapp',
+        description: 'fixture',
+        owner: '16dNCFf7nR3nx5iwn2RQMBw6KcJXkE3JC1',
+        instances: 3,
+        ttl: 2_592_000,
+        contacts: { email: ['test@example.com'] },
+        components: {
+          web: {
+            name: 'web',
+            image: 'nginx:latest',
+            cpu: 1,
+            memory: 1000,
+            swapGb: 2,
+            rootFsGb: 2,
+            persistentStorage: { sizeGb: 10, mounts: { '/data': { source: 'data', destination: '/data' } } },
+            ports: { tcp_80: { containerPort: 80, hostPort: 31000, protocol: 'tcp' } },
+          },
+        },
+      });
+    }
+
+    beforeEach(async () => {
+      const resolved = await specFixture();
+      // resolveInstantiatedSpec is destructured at module load, so it is replaced
+      // here rather than stubbed on the module object
+      // eslint-disable-next-line global-require
+      const proxyquire = require('proxyquire').noCallThru();
+      provider = proxyquire('../../ZelBack/src/services/appRuntime/deploymentProvider', {
+        '../utils/specCutover': { resolveInstantiatedSpec: async () => resolved },
+      });
+      sinon.stub(fluxNetworkHelper, 'getLocalSocketAddress').resolves('44.55.66.77:16127');
+      sinon.stub(generalService, 'obtainNodeCollateralInformation').resolves({
+        txhash: OUTPOINT_TXID, txindex: 0,
+      });
+    });
+
+    afterEach(() => {
+      sinon.restore();
+    });
+
+    it('builds identifiers from the stored identity, not the app name', async () => {
+      const deployments = await provider.buildDeployments({ name: 'myapp', identity: 'a1b2c3d4e5f6' });
+
+      const ids = deployments.flatMap((d) => d.componentEntries().map(([, c]) => c.identifier));
+      expect(ids).to.deep.equal(['web_a1b2c3d4e5f6']);
+    });
+
+    it('falls back to the name for an app installed before identities were stored', async () => {
+      const deployments = await provider.buildDeployments({ name: 'myapp', identity: null });
+
+      const ids = deployments.flatMap((d) => d.componentEntries().map(([, c]) => c.identifier));
+      expect(ids).to.deep.equal(['web_myapp']);
+    });
+
+    it('agrees with the single-identity path', async () => {
+      const [fromSet] = await provider.buildDeployments({ name: 'myapp', identity: 'a1b2c3d4e5f6' });
+      const single = await provider.buildDeployment({ name: 'myapp', identity: 'a1b2c3d4e5f6' }, { replica: null });
+
+      expect(fromSet.componentEntries().map(([, c]) => c.identifier))
+        .to.deep.equal(single.componentEntries().map(([, c]) => c.identifier));
+    });
+  });
 });

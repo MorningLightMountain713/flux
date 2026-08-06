@@ -54,6 +54,35 @@ async function getTeardown(key) {
 }
 
 /**
+ * The owed-teardown record covering one component, found by the identifier the
+ * record itself stored for it.
+ *
+ * The reconciler reaches a row-deleted component holding nothing but that
+ * identifier, and the record's KEY is not derivable from it: a loose removal
+ * keys on the app name, a replica-targeted one on `<app>_<replica>`. Asking by
+ * identifier sidesteps the key shape entirely, and asks the only store that
+ * still knows anything about the app — the record outlives the row precisely
+ * because the row was deleted.
+ *
+ * @param {string} identifier - bare component identifier
+ * @returns {Promise<object|null>}
+ */
+async function teardownForComponent(identifier) {
+  if (!identifier) return null;
+  try {
+    const database = collection();
+    return await dbHelper.findOneInDatabase(
+      database, pendingAppTeardowns,
+      { 'components.identifier': identifier },
+      { projection: { _id: 0 } },
+    );
+  } catch (err) {
+    log.error(`pendingTeardownStore - failed to read teardown for ${identifier}: ${err.message}`);
+    return null;
+  }
+}
+
+/**
  * Every owed-teardown record — boot recovery re-drives each one.
  * @returns {Promise<object[]>}
  */
@@ -135,6 +164,7 @@ async function prepareCollection() {
 module.exports = {
   writeTeardown,
   getTeardown,
+  teardownForComponent,
   readAllTeardowns,
   clearTeardown,
   bumpAttempts,

@@ -533,6 +533,7 @@ const FLUX_CAPABILITIES = Object.freeze([
   // that cannot come, and announcing to it logs an unrecognised type on its side.
   'policyBundle',
   'appInstallingClaims',
+  'limitCounterRecords',
 ]);
 
 module.exports = { FluxPeerSocket, CLOSE_CODES, PEER_SOURCE, DIRECTION, FLUX_VERSION, FLUX_CAPABILITIES };

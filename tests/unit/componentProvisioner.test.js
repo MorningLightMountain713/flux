@@ -172,13 +172,13 @@ describe('componentProvisioner tests', () => {
       }
     });
 
-    it('still provisions the container substrate (volume + create) on a hard install', async () => {
+    it('still provisions the container substrate (volume + create) when it creates the volume', async () => {
       await installWith('sync', true);
       expect(createAppVolumeStub.calledOnce, 'volume provisioned').to.be.true;
       expect(appDockerStartStub.called, 'but never started by the installer').to.be.false;
     });
 
-    it('builds no volume for a stateless component, even on a hard install', async () => {
+    it('builds no volume for a stateless component, even when asked to create one', async () => {
       // persistentStorage.sizeGb 0: there is nothing to fallocate or format,
       // and verifyAppVolumeMount would fail on a mountpoint deliberately never
       // created — so the whole block is skipped rather than made tolerant.
@@ -210,7 +210,7 @@ describe('componentProvisioner tests', () => {
 
   // installComponent is the only path to appDockerCreate, so writing the managed
   // cert here is what covers every recreate route (install, redeploy, update,
-  // health recreate) - including a hard redeploy that wiped the volume.
+  // health recreate) - including a rebuild that wiped the volume.
   describe('backend-TLS certificate provisioning', () => {
     it('writes the cert into the materialized mount source before the container is created', async () => {
       const provisioner = loadProvisioner();

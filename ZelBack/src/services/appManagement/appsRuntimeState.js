@@ -1,7 +1,6 @@
 const config = require('config');
 const log = require('../../lib/log');
 const dbHelper = require('../dbHelper');
-const dockerService = require('../dockerService');
 
 // Node-local, per-component controller state. Sits between the app spec
 // (desired config, in appsInformation) and Docker (actual state). Holds the
@@ -39,14 +38,12 @@ function collection() {
   return db.db(appsLocalDatabase);
 }
 
-// The collection is keyed by the bare component identifier (`component_app`, or
-// the app name for v1-3). Callers pass that form by convention, but convention
-// across files is not an invariant: a docker-prefixed form would silently key a
-// same-component twin the unique index cannot collapse (different key strings).
-// Normalize at the storage boundary so the namespace is enforced in one place.
-function canonical(identifier) {
-  return dockerService.getBaseAppName(identifier);
-}
+// The collection is keyed by the bare component identifier (`component_app`, or the
+// app name for v1-3), and every caller passes that form. This layer deliberately does
+// NOT normalise: it cannot tell a docker name from a bare identifier — `fluxproxy_myapp`
+// is a legitimate value of both — so a strip here keyed a DIFFERENT component's durable
+// operator intent (operatorStopped, condemned, hasEverStarted). Callers holding a docker
+// name convert at their own boundary, where they know which form they hold.
 
 /**
  * Returns the persisted runtime-state document for a component identifier
@@ -57,8 +54,7 @@ function canonical(identifier) {
  * @param {string} identifier
  * @returns {Promise<object|null>}
  */
-async function getState(rawIdentifier) {
-  const identifier = canonical(rawIdentifier);
+async function getState(identifier) {
   const database = collection();
   return dbHelper.findOneInDatabase(database, appsRuntimeState, { identifier }, { projection: { _id: 0 } });
 }
@@ -89,8 +85,7 @@ async function upsertState(identifier, update) {
   }
 }
 
-async function setFields(rawIdentifier, fields) {
-  const identifier = canonical(rawIdentifier);
+async function setFields(identifier, fields) {
   await upsertState(identifier, { $set: { identifier, ...fields, updatedAt: Date.now() } });
 }
 
@@ -134,7 +129,7 @@ async function setOperatorStopped(identifier, stopped, opts = {}) {
     // the write and the stop cannot quietly downgrade "kill now" to a drain that
     // waits for the app to finish what it is doing.
     fields.operatorStopForce = opts.force === true;
-    const held = opts.asPrimary === true ? null : await readLock(canonical(identifier));
+    const held = opts.asPrimary === true ? null : await readLock(identifier);
     fields.operatorStoppedAsPrimary = opts.asPrimary === true
       || (held?.operatorStopped === true && held.operatorStoppedAsPrimary === true);
   } else {
@@ -162,12 +157,12 @@ function readLock(identifier) {
  * Whether the operator stop lock is on: for a caller about to commit a component
  * to running, an unread lock is not an absent one.
  *
- * @param {string} rawIdentifier
+ * @param {string} identifier The bare component identifier.
  * @returns {Promise<boolean>}
  * @throws When the lock cannot be read.
  */
-async function operatorStoppedOrThrow(rawIdentifier) {
-  return (await readLock(canonical(rawIdentifier)))?.operatorStopped === true;
+async function operatorStoppedOrThrow(identifier) {
+  return (await readLock(identifier))?.operatorStopped === true;
 }
 
 /**
@@ -187,11 +182,10 @@ async function operatorStoppedOrThrow(rawIdentifier) {
  * the lock this marks. Throws on a failed read or write, for setOperatorStopped's
  * reason: an unread lock answered as none would lift it.
  *
- * @param {string} rawIdentifier
+ * @param {string} identifier The bare component identifier.
  * @returns {Promise<boolean>} Whether a lock was found and its start recorded.
  */
-async function requestOperatorStart(rawIdentifier) {
-  const identifier = canonical(rawIdentifier);
+async function requestOperatorStart(identifier) {
   const state = await readLock(identifier);
   if (state?.operatorStopped !== true) return false;
   await setFields(identifier, { operatorStartRequested: true });
@@ -209,11 +203,10 @@ async function requestOperatorStart(rawIdentifier) {
  *
  * Throws on a failed read or write: an unread lock is not a lock to lift.
  *
- * @param {string} rawIdentifier
+ * @param {string} identifier The bare component identifier.
  * @returns {Promise<boolean>} Whether the lock was lifted.
  */
-async function releaseOperatorStart(rawIdentifier) {
-  const identifier = canonical(rawIdentifier);
+async function releaseOperatorStart(identifier) {
   const state = await readLock(identifier);
   if (state?.operatorStopped !== true || state.operatorStartRequested !== true) return false;
   await setOperatorStopped(identifier, false);
@@ -261,11 +254,11 @@ async function setCondemned(identifier, condemned, opts = {}) {
  * key raises nothing, decided in the same write, so a caller that cannot tell
  * whether its request landed asks again safely.
  *
- * @param {string} identifier
+ * @param {string} identifier The bare component identifier.
  * @param {object} [options]
  * @param {string} [options.key] What the restart is for.
  */
-async function requestRestart(rawIdentifier, { key } = {}) {
+async function requestRestart(identifier, { key } = {}) {
   // Incremented by the database, never read and rewritten here. Reading first
   // asked getState for a number and got null for two different answers - "no
   // record yet" and "the read failed" - and treating the second as zero wrote a
@@ -275,7 +268,6 @@ async function requestRestart(rawIdentifier, { key } = {}) {
   // the read was for. It also counts two concurrent requests as two, where
   // read-then-write had both read the same number and one silently overwrite the
   // other.
-  const identifier = canonical(rawIdentifier);
   if (key) {
     await upsertState(identifier, [{
       $set: {
@@ -600,8 +592,7 @@ async function setNetworkHealRemoval(identifier, removed) {
  * @param {string} identifier
  * @returns {Promise<boolean>} - throws if the state cannot be read
  */
-async function isNetworkHealRemoval(rawIdentifier) {
-  const identifier = canonical(rawIdentifier);
+async function isNetworkHealRemoval(identifier) {
   const database = collection();
   const state = await dbHelper.findOneInDatabase(database, appsRuntimeState, { identifier }, { projection: { _id: 0 } });
   return state?.networkHealRemoval === true;
@@ -737,8 +728,7 @@ async function removeControllerState(rawIdentifier) {
  * @param {string} identifier
  * @returns {Promise<boolean>} whether the state was dropped
  */
-async function remove(rawIdentifier) {
-  const identifier = canonical(rawIdentifier);
+async function remove(identifier) {
   try {
     const database = collection();
     await dbHelper.removeDocumentsFromCollection(database, appsRuntimeState, { identifier });

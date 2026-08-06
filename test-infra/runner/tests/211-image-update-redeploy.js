@@ -100,7 +100,7 @@ describe('Non-enterprise image update redeploy', function () {
     expect(app.height).to.be.greaterThan(0);
   });
 
-  it('should preserve height after image update triggers soft redeploy', async function () {
+  it('should preserve height after image update triggers redeploy', async function () {
     this.timeout(180000);
 
     const beforeRes = await env.clients[installedNodeIndex].getInstalledApps();
@@ -201,7 +201,7 @@ describe('Enterprise image update redeploy', function () {
     expect(app.compose, 'compose should be empty for enterprise').to.deep.equal([]);
   });
 
-  it('should preserve height after image update triggers soft redeploy', async function () {
+  it('should preserve height after image update triggers redeploy', async function () {
     this.timeout(180000);
 
     const beforeRes = await env.clients[installedNodeIndex].getInstalledApps();

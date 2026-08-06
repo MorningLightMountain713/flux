@@ -416,7 +416,7 @@ async function submitPreflightAPI(req, res) {
       : null;
 
     const handle = await submitPreflight(req.body ?? {}, { fluxId, sourceIp });
-    return operationsController.accepted(res, handle);
+    return await operationsController.accepted(res, handle);
   } catch (error) {
     if (error.kind === 'busy') {
       return res.status(503).json(messageHelper.createErrorMessage(error.message));
