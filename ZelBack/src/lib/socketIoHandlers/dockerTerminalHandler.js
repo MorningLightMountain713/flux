@@ -1,12 +1,16 @@
 const verificationHelperUtils = require('../../services/verificationHelperUtils');
 const dockerService = require('../../services/dockerService');
 const serviceHelper = require('../../services/serviceHelper');
+const ingressCapture = require('../../services/utils/ingressCapture');
 const { trackTerminalSession } = require('../../services/analyticsService');
 
 const log = require('../log');
 
 async function dockerTerminalHandler(socket) {
-  const clientIp = socket.handshake.headers['x-forwarded-for']?.split(',')[0]?.trim() || socket.handshake.address;
+  const { ip: clientIp } = ingressCapture.resolveClientIp(
+    socket.handshake.address,
+    socket.handshake.headers,
+  );
 
   // Anything that throws in a socket.io listener is unhandled and takes the whole
   // FluxOS process down, so every failure here has to leave through
