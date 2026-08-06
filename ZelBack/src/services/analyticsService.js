@@ -2,6 +2,7 @@ const config = require('config');
 const axios = require('axios');
 const log = require('../lib/log');
 const fluxNetworkHelper = require('./fluxNetworkHelper');
+const ingressCapture = require('./utils/ingressCapture');
 
 // Buffer: Map<zelidauthString, Array<event>>
 let eventBuffer = new Map();
@@ -186,7 +187,10 @@ function analyticsMiddleware(req, res, next) {
 
   res.once('finish', () => {
     try {
-      const clientIp = req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.ip;
+      const { ip: clientIp } = ingressCapture.resolveClientIp(
+        req.socket && req.socket.remoteAddress,
+        req.headers,
+      );
 
       const event = {
         apiEndpoint: req.originalUrl || req.url,

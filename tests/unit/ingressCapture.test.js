@@ -1,21 +1,5 @@
-'use strict';
-
 const { expect } = require('chai');
 const proxyquire = require('proxyquire').noCallThru();
-
-// Answers get() and has() the way node-config does, so a key the stub does not
-// name reads as it would on a node rather than as undefined.
-const production = require('../../ZelBack/config/default');
-
-const asConfig = (obj) => {
-  const step = (root, key) => String(key).split('.')
-    .reduce((acc, part) => (acc == null ? undefined : acc[part]), root);
-  const resolve = (key) => {
-    const own = step(obj, key);
-    return own === undefined ? step(production, key) : own;
-  };
-  return { get: resolve, has: (key) => resolve(key) !== undefined };
-};
 
 // RFC 5737 / RFC 3849 documentation ranges throughout: a fixture that carries a
 // real address invites someone to treat it as one.
@@ -28,7 +12,7 @@ const CALLER_V6 = '2001:db8::103';
 
 function build(fdmAddresses) {
   return proxyquire('../../ZelBack/src/services/utils/ingressCapture', {
-    config: asConfig({ fdmAddresses }),
+    config: { fdmAddresses },
   });
 }
 
