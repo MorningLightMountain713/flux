@@ -187,25 +187,6 @@ describe('appTamperingDetectionService tests', () => {
     });
   });
 
-  describe('deriveMainAppName', () => {
-    it('passes a plain app name through', () => {
-      expect(service.deriveMainAppName('MyApp')).to.equal('MyApp');
-    });
-
-    it('strips the flux docker prefix', () => {
-      expect(service.deriveMainAppName('fluxMyApp')).to.equal('MyApp');
-    });
-
-    it('strips the zel docker prefix', () => {
-      expect(service.deriveMainAppName('zelMyApp')).to.equal('MyApp');
-    });
-
-    it('reduces a component identifier to the main app name', () => {
-      expect(service.deriveMainAppName('fluxweb_MyApp')).to.equal('MyApp');
-      expect(service.deriveMainAppName('web_MyApp')).to.equal('MyApp');
-    });
-  });
-
   describe('recordEvent', () => {
     it('upserts an incident with the full schema on first sight', async () => {
       await service.recordEvent('myapp', 'container_vanished', 'details here');
@@ -302,14 +283,28 @@ describe('appTamperingDetectionService tests', () => {
       expect(ins.appHash).to.equal('spechash1');
     });
 
-    it('attributes a component identifier via the derived main app name', async () => {
+    it('rolls every emitter up under one key for the same app', async () => {
+      // The mount-safety path used to emit the flux-prefixed component id while
+      // the reconciler emitted the app name, so one app wrote incidents under two
+      // keys and a fleet consumer grouping by appName counted two apps.
       installedApps.MyApp = { owner: '1ownerZelid', hash: 'spechash1' };
 
-      await service.recordEvent('fluxweb_MyApp', 'mount_vanished', 'x');
+      await service.recordEvent('MyApp', 'mount_vanished', 'x');
+      await service.recordEvent('MyApp', 'container_vanished', 'y');
 
+      expect(eventUpserts().map((u) => u.query.appName)).to.deep.equal(['MyApp', 'MyApp']);
       const ins = eventUpserts()[0].update.$setOnInsert;
       expect(ins.ownerZelid).to.equal('1ownerZelid');
       expect(ins.appHash).to.equal('spechash1');
+    });
+
+    it('records nothing when the emitter cannot name the app', async () => {
+      // The rollup key IS the app name. An artifact no installed component claims
+      // (an orphan syncthing folder) has no app to attribute to, and inventing a
+      // key would report an app that does not exist.
+      await service.recordEvent(undefined, 'mount_vanished', 'orphan folder');
+
+      expect(eventUpserts()).to.have.lengthOf(0);
     });
 
     it('records null attribution for unknown apps', async () => {

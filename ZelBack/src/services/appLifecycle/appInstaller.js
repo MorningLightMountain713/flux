@@ -329,6 +329,7 @@ async function installApplication(instantiated, options = {}) {
           burstEligible,
           restartPolicy,
           owner: instantiated.owner,
+          uuid: instantiated.uuid,
           requiresEncryption,
           // Abort the in-flight image pull if a concurrent cancel/removal of this app
           // fires (globalState.abortInstall).

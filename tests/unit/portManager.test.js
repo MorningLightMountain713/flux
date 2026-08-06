@@ -27,6 +27,9 @@ function mockDeployment(spec) {
   const ports = extractPorts(spec);
   return {
     appName: spec.name,
+    // Resolved, never null: an app that stated no identity had its identifiers
+    // built from its name, so that is what DeploymentSpec.identity reports.
+    identity: spec.identity ?? spec.name,
     allHostPorts() { return ports; },
   };
 }
@@ -148,6 +151,37 @@ describe('portManager tests', () => {
 
   afterEach(() => {
     sinon.restore();
+  });
+
+  describe('port conflicts across two apps sharing one name', () => {
+    // A name is briefly held by two apps at once - the one expiring and the one
+    // re-registering it. They are different apps with different data, and only
+    // their identity says so.
+    it('refuses the port when a leftover install of the PREVIOUS holder still has it', async () => {
+      stubs.deploymentProviderStub.listInstalledDeployments.resolves([
+        { name: 'myapp', identity: 'myapp', version: 3, ports: [30001] },
+      ].map(mockDeployment));
+
+      const incoming = mockDeployment({ name: 'myapp', identity: 'a1b2c3d4e5f6', version: 3, ports: [30001] });
+
+      let err;
+      try {
+        await portManager.ensureApplicationPortsNotUsed(incoming, []);
+      } catch (e) { err = e; }
+
+      expect(err, 'a name match must not read as "myself"').to.be.an('error');
+      expect(err.message).to.include('port 30001 already used');
+    });
+
+    it('still allows an app to keep its own ports across an update', async () => {
+      stubs.deploymentProviderStub.listInstalledDeployments.resolves([
+        { name: 'myapp', identity: 'a1b2c3d4e5f6', version: 3, ports: [30001] },
+      ].map(mockDeployment));
+
+      const sameApp = mockDeployment({ name: 'myapp', identity: 'a1b2c3d4e5f6', version: 3, ports: [30001] });
+
+      expect(await portManager.ensureApplicationPortsNotUsed(sameApp, [])).to.equal(true);
+    });
   });
 
   describe('assignedPortsInstalledApps tests', () => {
@@ -276,64 +310,7 @@ describe('portManager tests', () => {
     });
   });
 
-  describe('isPortAvailable tests', () => {
-    beforeEach(() => {
-      stubs.deploymentProviderStub.listInstalledDeployments.resolves([
-        { name: 'App1', version: 3, ports: [30001, 30002] },
-        { name: 'App2', version: 3, ports: [30003] },
-      ].map(mockDeployment));
-    });
 
-    it('should return false if port is used', async () => {
-      const result = await portManager.isPortAvailable(30001);
-
-      expect(result).to.be.false;
-    });
-
-    it('should return true if port is not used', async () => {
-      const result = await portManager.isPortAvailable(30100);
-
-      expect(result).to.be.true;
-    });
-
-    it('should exclude specified app from check', async () => {
-      const result = await portManager.isPortAvailable(30001, 'App1');
-
-      expect(result).to.be.true;
-    });
-
-    it('should not exclude different app from check', async () => {
-      const result = await portManager.isPortAvailable(30001, 'App2');
-
-      expect(result).to.be.false;
-    });
-  });
-
-  describe('findNextAvailablePort tests', () => {
-    beforeEach(() => {
-      stubs.deploymentProviderStub.listInstalledDeployments.resolves([
-        { name: 'App1', version: 3, ports: [30001, 30002, 30003] },
-      ].map(mockDeployment));
-    });
-
-    it('should find next available port', async () => {
-      const result = await portManager.findNextAvailablePort(30001, 30010);
-
-      expect(result).to.equal(30004);
-    });
-
-    it('should return null if no available port in range', async () => {
-      const result = await portManager.findNextAvailablePort(30001, 30003);
-
-      expect(result).to.be.null;
-    });
-
-    it('should return first port if available', async () => {
-      const result = await portManager.findNextAvailablePort(30010, 30020);
-
-      expect(result).to.equal(30010);
-    });
-  });
 
   describe('getAllUsedPorts tests', () => {
     it('should return all used ports without duplicates', async () => {

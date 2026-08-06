@@ -52,15 +52,16 @@ const appsFolder = `${appsFolderPath}/`;
  * the actionable response is to mount it, not just to report it).
  * @param {string} appId - Docker app identifier
  * @param {string} appFolder - App folder path
+ * @param {string} appName - the app this component belongs to
  * @returns {Promise<{isSafe: boolean, reason: string}>} Result after any repair
  */
-async function verifyAppFolderMountWithRepair(appId, appFolder) {
-  let mountSafety = await verifyFolderMountSafety(appId, appFolder);
+async function verifyAppFolderMountWithRepair(appId, appFolder, appName) {
+  let mountSafety = await verifyFolderMountSafety(appId, appFolder, appName);
   if (!mountSafety.isSafe && !mountSafety.isMounted) {
     const mountAttempt = await volumeService.ensureAppVolumeMounted(appId);
     if (mountAttempt.mounted) {
       log.info(`checkAppFolderMounts - ${appId} volume was not mounted; mounted it`);
-      mountSafety = await verifyFolderMountSafety(appId, appFolder);
+      mountSafety = await verifyFolderMountSafety(appId, appFolder, appName);
     }
   }
   return mountSafety;
@@ -85,10 +86,14 @@ async function checkAppFolderMounts(deployments) {
       const appId = dockerService.getAppIdentifier(deployComp.identifier);
       const appFolder = `${appsFolder}${appId}`;
       // eslint-disable-next-line no-await-in-loop
-      const mountSafety = await verifyAppFolderMountWithRepair(appId, appFolder);
+      const mountSafety = await verifyAppFolderMountWithRepair(appId, appFolder, deployment.appName);
       if (!mountSafety.isSafe) {
         // Folder exists but mount is not safe (empty and not mounted - likely unmounted loop device)
-        unmountedApps.push({ appId, appName: deployment.appName, reason: mountSafety.reason });
+        // identifier travels alongside appId: the reconciler is keyed by the bare form
+        // and this loop already holds it, so nothing downstream has to recover it.
+        unmountedApps.push({
+          appId, identifier: deployComp.identifier, appName: deployment.appName, reason: mountSafety.reason,
+        });
       }
     }
   }
@@ -201,6 +206,7 @@ async function processContainerData(params) {
     // Use state machine to manage folder sync transitions
     const { syncthingFolder: updatedFolder, cache, skipProcessing } = await manageFolderSyncState({
       appId,
+      identifier,
       syncFolder,
       requiresSyncBeforeStart: deployComp.requiresSyncBeforeStart(),
       syncthingAppsFirstRun: state.syncthingAppsFirstRun,
@@ -321,7 +327,7 @@ async function syncthingAppsCore(state, getGlobalStateFn) {
   // Node-wide for those operation classes (NOT backup/restore - those are handled
   // per-app below so one app's backup never freezes the whole sweep). The
   // updateSyncthingRunning re-entrancy guard is unchanged.
-  if (operationRegistry.anyHeldOfType('install', 'remove', 'softRedeploy', 'hardRedeploy', 'reconcile') || state.updateSyncthingRunning) {
+  if (operationRegistry.anyHeldOfType('install', 'remove', 'redeploy', 'rebuild', 'reconcile') || state.updateSyncthingRunning) {
     return;
   }
 
@@ -363,7 +369,7 @@ async function syncthingAppsCore(state, getGlobalStateFn) {
       const foldersResp = await syncthingService.getConfigFolders();
       const folders = Array.isArray(foldersResp?.data) ? foldersResp.data : [];
       // eslint-disable-next-line no-restricted-syntax
-      for (const { appId, reason } of unmountedApps) {
+      for (const { appId, identifier, reason } of unmountedApps) {
         const folder = folders.find((f) => f.id === appId);
         if (folder && folder.type === 'sendreceive') {
           log.error(`syncthingAppsCore - SAFETY BLOCK: ${appId} folder is sendreceive over an unsafe mount (${reason}); switching to receiveonly and holding the container`);
@@ -371,7 +377,7 @@ async function syncthingAppsCore(state, getGlobalStateFn) {
           await syncthingService.adjustConfigFolders('patch', { type: 'receiveonly' }, appId).catch((err) => {
             log.error(`syncthingAppsCore - Failed to switch ${appId} to receiveonly: ${err.message}`);
           });
-          appReconciler.setControllerDesired(appId, 'stopped', `mount safety block: ${reason}`);
+          appReconciler.setControllerDesired(identifier, 'stopped', `mount safety block: ${reason}`);
         }
       }
       return;
@@ -424,27 +430,37 @@ async function syncthingAppsCore(state, getGlobalStateFn) {
       log.info('syncthingAppsCore - First run detected, performing mount safety verification on existing folders');
       let unsafeFoldersCount = 0;
 
-      // Injected-content paths per folder id: content delivery rewrites these
-      // on every node and .stignore excludes them, so the emptiness walk must
-      // skip them too - a content+sync app always has its delivered files on
-      // disk right after a reboot, which would otherwise mask a wiped dataset.
-      const injectedExcludesByAppId = new Map();
+      // This scan walks syncthing's folders, so a folder id is all it starts with.
+      // Index the installed components by that id up front: injected-content paths
+      // (content delivery rewrites these on every node and .stignore excludes them,
+      // so the emptiness walk must skip them too - a content+sync app always has its
+      // delivered files on disk right after a reboot, which would otherwise mask a
+      // wiped dataset) and the owning app name, which tampering incidents roll up
+      // under. A folder no installed component claims stays unresolved rather than
+      // being attributed to a guess.
+      const componentsByAppId = new Map();
       // eslint-disable-next-line no-restricted-syntax
       for (const deployment of deployments) {
         for (const [, comp] of deployment.componentEntries()) {
-          injectedExcludesByAppId.set(dockerService.getAppIdentifier(comp.identifier), comp.injectedSyncExcludes());
+          componentsByAppId.set(dockerService.getAppIdentifier(comp.identifier), {
+            injectedExcludePaths: comp.injectedSyncExcludes(),
+            appName: deployment.appName,
+          });
         }
       }
 
       // eslint-disable-next-line no-restricted-syntax
       for (const folder of allFoldersResp.data) {
         if (folder.type === 'sendreceive') {
-          // Extract appId from folder.id (e.g., fluxwp_myapp -> fluxwp_myapp)
           const appId = folder.id;
           const folderPath = folder.path;
+          const component = componentsByAppId.get(appId);
 
           // eslint-disable-next-line no-await-in-loop
-          const mountSafety = await verifySendReceiveFolderSafety(appId, folderPath, injectedExcludesByAppId.get(appId) || []);
+          const mountSafety = await verifySendReceiveFolderSafety(appId, folderPath, {
+            injectedExcludePaths: component?.injectedExcludePaths ?? [],
+            appName: component?.appName,
+          });
 
           if (!mountSafety.isSafe) {
             unsafeFoldersCount += 1;

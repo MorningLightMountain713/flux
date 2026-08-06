@@ -30,6 +30,24 @@ describe('appJanitor tests', () => {
   beforeEach(() => {
     logStub = { info: sinon.stub(), warn: sinon.stub(), error: sinon.stub() };
     dockerServiceStub = {
+      isManagedContainer: ({ labels, name }, labelKeys) => {
+        if (labels && labels[labelKeys.IDENTIFIER]) return true;
+        if (!name) return false;
+        const bare = name.startsWith('/') ? name.slice(1) : name;
+        return bare.startsWith('flux') || bare.startsWith('zel');
+      },
+      // mirrors the real helper: the app label is authoritative, the name is read
+      // only for pre-label containers, and BOTH prefixes are stripped by width
+      containerAppName: ({ labels, name }, labelKeys) => {
+        const labelled = labels && labels[labelKeys.APP];
+        if (labelled) return labelled;
+        if (!name) return null;
+        let bare = name.startsWith('/') ? name.slice(1) : name;
+        if (bare.startsWith('flux')) bare = bare.slice(4);
+        else if (bare.startsWith('zel')) bare = bare.slice(3);
+        return bare.split('_')[1] || bare;
+      },
+
       appDockerForceRemove: sinon.stub().resolves(),
     };
     appDockerNetworkStub = {
@@ -122,17 +140,6 @@ describe('appJanitor tests', () => {
 
       expect(appUninstallerStub.uninstallApplication.called).to.be.false;
       expect(result.removed).to.equal(0);
-    });
-
-    it('exempts watchtower', async () => {
-      appQueryServiceStub.listAllApps.resolves({
-        status: 'success',
-        data: [container('/fluxwatchtower')],
-      });
-
-      await appJanitor.sweepDockerOrphans();
-
-      expect(appUninstallerStub.uninstallApplication.called).to.be.false;
     });
 
     it('removes gracefully and backgrounded, broadcasting only with a location row', async () => {

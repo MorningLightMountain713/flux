@@ -261,7 +261,7 @@ async function removeOrphanedInjectedContent(oldComp, newComp) {
 
 /**
  * Ensure every bind-mount source for a component exists before its container is
- * (re)created on the soft/volume-reuse path. The operations are unconditional and
+ * (re)created on the volume-reuse path. The operations are unconditional and
  * idempotent (`mkdir -p` / `touch`), so there is no check-then-act (TOCTOU) window
  * inside this helper. Also regenerates `.stignore` so a volume-keeping redeploy
  * picks up an added/removed injected exclude (decoupled from `createAppVolume`).

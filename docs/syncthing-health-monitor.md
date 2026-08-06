@@ -61,8 +61,8 @@ Every 5 minutes (HEALTH_CHECK_INTERVAL_MS):
 ├─ 1. Check pre-conditions
 │   ├─ Skip if installation in progress
 │   ├─ Skip if removal in progress
-│   ├─ Skip if soft redeploy in progress
-│   ├─ Skip if hard redeploy in progress
+│   ├─ Skip if redeploy in progress
+│   ├─ Skip if rebuild in progress
 │   ├─ Skip if backup in progress
 │   └─ Skip if restore in progress
 │
@@ -318,17 +318,19 @@ Apps are marked ready (`restarted: true`) in `syncthingFolderStateMachine.js` af
 3. **Sync Completion** - Folder reaches 100% synchronization
 4. **Timeout Fallback** - Maximum execution count reached
 
-Also set during soft/hard redeploys in `advancedWorkflows.js`.
+Also set by a redeploy or rebuild in `appLifecycle/appOperations.js`, which
+reinstalls the component.
 
 ### Skip Conditions (Prevents Race Conditions)
 
+The sweep rebuilds the global folder set and prunes folders that no longer back
+an installed app, so it must not run while any app's folder set is changing. The
+operation registry is the single source for that — there are no per-operation
+booleans to keep in step with it:
+
 ```javascript
-if (state.installationInProgress ||
-    state.removalInProgress ||
-    state.softRedeployInProgress ||
-    state.hardRedeployInProgress) {
-  log.info('Skipping health check, other operations in progress');
-  return { checked: false, actions: [] };
+if (operationRegistry.anyHeldOfType('install', 'remove', 'redeploy', 'rebuild', 'reconcile')) {
+  return;
 }
 
 // Skip if backup or restore in progress

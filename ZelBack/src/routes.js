@@ -39,6 +39,7 @@ const contentSlotService = require('./services/appLifecycle/contentSlotService')
 const imageManager = require('./services/appSecurity/imageManager');
 const imagePreflight = require('./services/appSecurity/imagePreflight');
 const playgroundService = require('./services/appPlayground/playgroundService');
+const limitCounterController = require('./services/utils/limitCounterController');
 const operationsController = require('./services/appManagement/operationsController');
 const messageVerifier = require('./services/appMessaging/messageVerifier');
 const appHashSyncService = require('./services/appMessaging/appHashSyncService');
@@ -480,6 +481,24 @@ module.exports = (app) => {
   // Answers 202 + jobId; the run takes minutes, so the client polls.
   app.post('/apps/playground', (req, res) => {
     playgroundService.submitSessionAPI(req, res);
+  });
+  // Which nodes serve the CALLER today. No parameter: the FluxID comes off the
+  // auth header, so the endpoint can only ever answer for whoever asked. Lets a
+  // client go straight to a node that will accept its session instead of finding
+  // the set by being refused.
+  app.get('/apps/playground/servingset', (req, res) => {
+    playgroundService.servingSetAPI(req, res);
+  });
+  // Node-to-node: the tally for one caller lives on one node, and every other node
+  // asks it rather than deciding alone. Unauthenticated by design - the request
+  // carries a hash of the caller and no credential, so a peer can spend someone's
+  // allowance but can never become them. The handler declines any key this node
+  // does not actually hold.
+  app.post('/flux/limitcounter/reserve', (req, res) => {
+    limitCounterController.reserve(req, res);
+  });
+  app.post('/flux/limitcounter/release', (req, res) => {
+    limitCounterController.release(req, res);
   });
   // Every endpoint that answers 202 points here: one status resource, one
   // status enum, one error shape, so a client polls the same way whatever it

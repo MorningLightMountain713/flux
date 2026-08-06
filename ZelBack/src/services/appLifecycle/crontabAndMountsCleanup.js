@@ -17,10 +17,12 @@ const crontabLoad = util.promisify(systemcrontab.load);
  * are derived from the app's FLUXFSVOL images on disk instead. A database
  * failure throws: "could not enumerate" must surface as unknown to callers,
  * never as "nothing is installed".
- * @returns {Promise<Set<string>>} Set of installed app IDs
+ * @returns {Promise<Map<string, string>>} installed app id -> owning app name
  */
 async function getInstalledAppIds() {
-  const installedAppIds = new Set();
+  // appId -> owning app name. The name is carried rather than cut back out of the
+  // id later: tampering incidents roll up per app, and an id is not one.
+  const installedAppIds = new Map();
 
   // listInstalledApps throws on a read failure: "cannot enumerate" must surface as
   // unknown to callers, never as "nothing installed" (which would reap live mounts).
@@ -42,7 +44,7 @@ async function getInstalledAppIds() {
         log.warn(`getInstalledAppIds - could not decrypt ${instantiated.name} (${error.message}); deriving components from volume images on disk`);
         // eslint-disable-next-line no-await-in-loop
         const diskAppIds = await volumeService.getComponentAppIdsFromVolumeFiles(instantiated.name);
-        diskAppIds.forEach((appId) => installedAppIds.add(appId));
+        diskAppIds.forEach((appId) => installedAppIds.set(appId, instantiated.name));
       } else {
         log.warn(`getInstalledAppIds - could not build deployment for ${instantiated.name}: ${error.message}`);
       }
@@ -53,7 +55,7 @@ async function getInstalledAppIds() {
     for (const deployment of deployments) {
       // eslint-disable-next-line no-restricted-syntax
       for (const [, deployComp] of deployment.componentEntries()) {
-        installedAppIds.add(dockerService.getAppIdentifier(deployComp.identifier));
+        installedAppIds.set(dockerService.getAppIdentifier(deployComp.identifier), instantiated.name);
       }
     }
   }
@@ -98,14 +100,14 @@ async function ensureInstalledAppVolumesMounted() {
   log.info(`ensureInstalledAppVolumesMounted - Ensuring volumes of ${installedAppIds.size} installed app component(s) are mounted`);
 
   // eslint-disable-next-line no-restricted-syntax
-  for (const appId of installedAppIds) {
+  for (const [appId, appName] of installedAppIds) {
     // eslint-disable-next-line no-await-in-loop
     const mountResult = await volumeService.ensureAppVolumeMounted(appId);
     if (!mountResult.mounted) {
       log.error(`ensureInstalledAppVolumesMounted - ${appId} volume could not be mounted: ${mountResult.reason}`);
       results.failed.push({ appId, reason: mountResult.reason });
       // eslint-disable-next-line no-await-in-loop
-      await appTamperingDetectionService.recordEvent(appId, 'mount_vanished', `Volume not mountable at startup: ${mountResult.reason}`);
+      await appTamperingDetectionService.recordEvent(appName, 'mount_vanished', `Volume not mountable at startup: ${mountResult.reason}`);
     } else if (mountResult.alreadyMounted) {
       results.alreadyMounted.push(appId);
     } else {

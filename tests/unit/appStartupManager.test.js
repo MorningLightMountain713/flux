@@ -35,6 +35,13 @@ describe('appStartupManager tests', () => {
     };
 
     dockerServiceStub = {
+      isManagedContainer: ({ labels, name }, labelKeys) => {
+        if (labels && labels[labelKeys.IDENTIFIER]) return true;
+        if (!name) return false;
+        const bare = name.startsWith('/') ? name.slice(1) : name;
+        return bare.startsWith('flux') || bare.startsWith('zel');
+      },
+
       dockerListContainers: sinon.stub(),
     };
 

@@ -31,37 +31,107 @@ function getDockerContainerHandle(id) {
 }
 
 /**
- * Generates an app identifier based on app name.
+ * The docker name for a bare component identifier.
  *
- * @param {string} appName
- * @returns {string} app identifier
+ * Unconditional. It used to return the input untouched when it already began
+ * with `flux`, so that one function could serve both callers holding a bare
+ * identifier and callers holding a docker name — deciding which it had been
+ * given by sniffing the string. That made it non-injective: a component named
+ * `proxy` and a component named `fluxproxy` both produced `fluxproxy_<app>`,
+ * so two distinct components claimed one container name and one volume
+ * directory. Prepending a constant cannot collide. Callers that already hold a
+ * docker name keep it rather than passing it back through here.
+ *
+ * The prefix itself decides nothing any more: ownership is the identity label
+ * (isManagedContainer) and identity is read off the app's row. It survives as
+ * part of names that already exist, because changing those means renaming live
+ * volumes.
+ *
+ * @param {string} identifier bare component identifier
+ * @returns {string} docker name
  */
-function getAppIdentifier(appName) {
-  // this id is used for volumes, docker names so we know it really belongs to flux
-  if (appName.startsWith('flux')) {
-    return appName;
-  }
-  return `flux${appName}`;
+function getAppIdentifier(identifier) {
+  return `flux${identifier}`;
 }
 
 /**
- * Inverse of getAppIdentifier: strips the flux namespace prefix to recover
- * the bare component identifier (`{component}_{app}`, or `{app}` for v1-3) used
- * by app/component specs. Idempotent on an already-bare identifier. Consumers
- * whose canonical form is the bare identifier (e.g. the reconciler) normalise
- * inbound ids through this, mirroring how docker callers normalise through
- * getAppIdentifier.
+ * Whether a container is one FluxOS manages.
  *
- * Note: like getAppIdentifier this is not perfectly invertible — a component
- * literally named `flux...` is ambiguous — but that is the existing
- * limitation of the prefix-as-marker convention, not new here.
+ * The identity label is the authority: it is stamped at the single create
+ * chokepoint, so nothing else on the daemon carries it. A name cannot stand in
+ * for that — the operator shares this docker daemon and may name a container of
+ * their own anything at all, including `fluxfoo`, which the name test claimed
+ * as ours.
  *
- * @param {string} idOrName
+ * The name test remains only for containers created before the labels shipped
+ * and not recreated since; those are genuinely ours and must not be abandoned.
+ * It matches `zel` as well as `flux` — the legacy fleet carries that prefix, and
+ * a gate testing only `flux` walks straight past it. Retires with the label
+ * backfill.
+ *
+ * @param {{labels: object|undefined, name: string|undefined}} container
+ * @param {object} labelKeys the label schema
+ * @returns {boolean}
+ */
+function isManagedContainer({ labels, name }, labelKeys) {
+  if (labels && labels[labelKeys.IDENTIFIER]) return true;
+  if (!name) return false;
+  const bare = name.startsWith('/') ? name.slice(1) : name;
+  return bare.startsWith('flux') || bare.startsWith('zel');
+}
+
+/**
+ * The bare component identifier (`{component}_{app}`, or `{app}` for v1-3)
+ * behind a docker name — the exact inverse of getAppIdentifier.
+ *
+ * Unconditional, because getAppIdentifier is: the caller states which form it
+ * holds by choosing to call this at all. It used to strip only when the input
+ * began with `flux`, which made it a guess rather than an inverse — a component
+ * genuinely named `fluxproxy` has the bare identifier `fluxproxy_<app>`, which
+ * begins with those four characters without carrying a prefix, so the strip
+ * yielded `proxy_<app>`: a different component.
+ *
+ * Callers must hold a prefixed form — a docker name, a syncthing folder id or a
+ * volume directory name. A caller that already holds the bare identifier must
+ * not come through here; consumers keyed on the bare form (the reconciler
+ * queue, appsRuntimeState) take it as given rather than normalising, because
+ * `fluxproxy_<app>` is a legitimate value of both forms and no function of that
+ * string alone can tell them apart.
+ *
+ * Both namespaces are handled: the legacy fleet's containers carry `zel`, and
+ * isManagedContainer claims them, so they reach the same consumers. Testing the
+ * two is not the guess the old sniff was — a name cannot begin with both, so on
+ * a value known to be a docker name the branches are disjoint and exact.
+ *
+ * @param {string} dockerName a flux- or zel-prefixed name
  * @returns {string} bare identifier
  */
-function getBaseAppName(idOrName) {
-  if (idOrName.startsWith('flux')) return idOrName.slice(4);
-  return idOrName;
+function getBaseAppName(dockerName) {
+  if (dockerName.startsWith('flux')) return dockerName.slice(4);
+  if (dockerName.startsWith('zel')) return dockerName.slice(3);
+  return dockerName;
+}
+
+/**
+ * The app a container belongs to.
+ *
+ * The app label states it outright and is the authority. The name is the
+ * fallback for containers created before the labels shipped: those predate
+ * identities being minted, so their identifier's second segment IS the app's
+ * name — the one population where reading a name out of an identifier is sound.
+ * A flat (v1-3) identifier carries no segment and is the app name itself.
+ *
+ * @param {{labels: object|undefined, name: string|undefined}} container
+ * @param {object} labelKeys the label schema
+ * @returns {string|null} app name, or null when the container states no name
+ */
+function containerAppName({ labels, name }, labelKeys) {
+  const labelled = labels && labels[labelKeys.APP];
+  if (labelled) return labelled;
+  if (!name) return null;
+  const bare = name.startsWith('/') ? name.slice(1) : name;
+  const identifier = getBaseAppName(bare);
+  return identifier.split('_')[1] || identifier;
 }
 
 /**
@@ -828,7 +898,10 @@ async function appDockerCreate(deployComp, options = {}) {
   // graceful timing) are added only for apps that use a graceful feature; a plain
   // app drains on the daemon's defaults. owner is provenance threaded in from
   // the orchestrator (it is not on DeploymentComponent).
-  const identity = identityLabels(deployComp, { owner: options.owner || null });
+  const identity = identityLabels(deployComp, {
+    owner: options.owner || null,
+    uuid: options.uuid || null,
+  });
   const budgetLabels = options.requiresEncryption
     ? shutdownBudgetLabels(deployComp, shutdownPlan.maxDrainTimeout(deployComp))
     : null;
@@ -1755,7 +1828,7 @@ async function forceRemoveFluxAppDockerNetwork(appname, options = {}) {
  * overloaded by docker for unrelated failure modes (e.g. forbidden swarm-scoped
  * operations) and was silently masking them.
  *
- * @param {string} componentIdentifier - bare component identifier or docker name
+ * @param {string} componentIdentifier - bare component identifier
  * @param {string} networkName - target docker network name
  * @returns {Promise<void>}
  */
@@ -1796,7 +1869,7 @@ async function appDockerNetworkConnect(componentIdentifier, networkName) {
  * race window only ("is not connected" arrives as a 500, indistinguishable
  * by status from a real server error).
  *
- * @param {string} componentIdentifier - bare component identifier or docker name
+ * @param {string} componentIdentifier - bare component identifier
  * @param {string} networkName - docker network name
  * @returns {Promise<void>}
  */
@@ -2061,7 +2134,10 @@ async function migrateContainerRestartPolicies() {
   try {
     const containers = await dockerListContainers(true);
     if (!containers) return;
-    const fluxContainers = containers.filter((c) => c.Names[0].startsWith('/flux'));
+    const { LABEL_KEYS } = await getSpecBackend();
+    const fluxContainers = containers.filter(
+      (c) => isManagedContainer({ labels: c.Labels, name: c.Names?.[0] }, LABEL_KEYS),
+    );
     let migrated = 0;
     for (const c of fluxContainers) {
       try {
@@ -2126,6 +2202,8 @@ module.exports = {
   getAppDockerNameIdentifier,
   getAppIdentifier,
   getBaseAppName,
+  isManagedContainer,
+  containerAppName,
   getDockerContainer,
   getDockerContainerHandle,
   getFluxDockerNetworks,

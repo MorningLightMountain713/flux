@@ -77,6 +77,7 @@ module.exports = {
         appsInformation: 'zelappsinformation', // stores actual state of flux app configuration info - initial state and its overwrites with update messages
         appsTemporaryMessages: 'zelappstemporarymessages', // storages for all flux apps messages that are not yet confirmed on the flux network
         appsInstallingLocations: 'appsinstallinglocations', // stores install location of flux apps as documents containing name, ip, obtainedAt
+        limitCounterRecords: 'limitcounterrecords', // gossiped record of one caller's use of a limited feature, keyed by the counter's hash; self-reaping on its own endsAt
         appsInstallingErrorsLocations: 'appsInstallingErrorsLocations', // stores install errors location of flux apps as documents containing name, hash, ip, obtainedAt
         appStateEvents: 'appstateevents', // event log for running app state (apprunning, sigterm, appremoved, evicted)
         appsInstallingBroadcasts: 'fluxappinstallingbroadcasts', // stores signed appinstalling broadcasts for sync
@@ -402,6 +403,26 @@ module.exports = {
     playgroundNodeSessionsPerHour: 2,
     playgroundCallerSessionsPerHour: 3,
     playgroundWindowMs: 3600000,
+    // Per-caller limits held by ONE node rather than by each node separately.
+    // The per-node windows above cap what a single node gives away; they are
+    // identity-blind across nodes, so they cap one caller across the fleet at
+    // nothing. These are the fleet-wide numbers, and they are read by the node
+    // holding the tally - never proposed by the node asking it.
+    limitCounters: {
+      playground: { maxConcurrent: 2, maxPerWindow: 5, windowMs: 86400000 },
+      // What the DEPUTY may allow while the counter is unreachable. Deliberately
+      // meaner than the real limit: a caller can work out which node holds their
+      // tally, so if losing it bought a bigger allowance they would take it down
+      // on purpose. Smaller means there is nothing to gain.
+      'playground#deputy': { maxConcurrent: 1, maxPerWindow: 2, windowMs: 86400000 },
+    },
+    // A reservation must outlive the work it covers, or it expires under a running
+    // session and a second is admitted beside it. Finite so a submitter that dies
+    // after reserving cannot lock its caller out until the process restarts.
+    limitCounterLeaseMs: 1800000,
+    // How long to wait on the node holding a tally before treating it as silent.
+    limitCounterAskTimeoutMs: 3000,
+    limitCounterPeerAsksPerMinute: 600,
     // How long a container is given to reach a probe verdict, and how long a
     // "stayed up" pass has to stay up for. Both well inside the session TTL, so a
     // verdict is reached and reported rather than cut off by the teardown.

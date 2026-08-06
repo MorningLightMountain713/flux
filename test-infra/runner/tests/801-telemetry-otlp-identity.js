@@ -240,7 +240,7 @@ describe('otlp telemetry: the identity socket carries the resolved agent endpoin
 
     // The update changes the telemetry port AND sets an explicit components
     // list that includes the collector — the customer's deliberate override
-    // of the default exclusion. Update adoption soft-redeploys the app
+    // of the default exclusion. Update adoption redeploys the app
     // (containers are recreated on any spec change), so this pins the
     // pipeline end to end: update door → respec → sink re-seed → fresh
     // resolution → BOTH components announced at the new port, stale cached

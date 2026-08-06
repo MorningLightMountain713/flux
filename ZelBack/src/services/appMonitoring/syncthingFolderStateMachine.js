@@ -211,10 +211,12 @@ async function checkDirectoryHasSyncScopedFiles(dirPath, injectedExcludePaths = 
  * Verify that a Syncthing folder's mount is properly initialized
  * This is CRITICAL to prevent data loss when mounts are not ready after reboot
  * @param {string} appId - App ID (e.g., fluxwp_myapp)
+ * @param {string} appName - the app this component belongs to; the key tampering
+ *        incidents roll up under
  * @param {string} folderPath - Syncthing folder path
  * @returns {Promise<{isSafe: boolean, reason: string, isMounted: boolean, hasContent: boolean}>}
  */
-async function verifyFolderMountSafety(appId, folderPath) {
+async function verifyFolderMountSafety(appId, folderPath, appName) {
   const result = {
     isSafe: true,
     reason: 'ok',
@@ -232,7 +234,7 @@ async function verifyFolderMountSafety(appId, folderPath) {
       result.isSafe = false;
       result.reason = 'base_directory_missing';
       noteSafetyObservation(appId, result.reason, log.warn, `verifyFolderMountSafety - ${appId} base directory does not exist: ${baseDir}`);
-      await appTamperingDetectionService.recordEvent(appId, 'mount_vanished', `Base directory missing: ${baseDir}`);
+      await appTamperingDetectionService.recordEvent(appName, 'mount_vanished', `Base directory missing: ${baseDir}`);
       return result;
     }
 
@@ -254,7 +256,7 @@ async function verifyFolderMountSafety(appId, folderPath) {
       result.reason = result.hasContent ? 'unmounted_with_content' : 'empty_unmounted_directory';
       noteSafetyObservation(appId, result.reason, log.error, `verifyFolderMountSafety - CRITICAL: ${appId} directory is not a mountpoint (${result.fileCount} file(s) present)! Missing loop mount.`);
       if (result.hasContent) {
-        await appTamperingDetectionService.recordEvent(appId, 'mount_vanished', `App dir not mounted but holds ${result.fileCount} file(s) - data leaked onto the host filesystem`);
+        await appTamperingDetectionService.recordEvent(appName, 'mount_vanished', `App dir not mounted but holds ${result.fileCount} file(s) - data leaked onto the host filesystem`);
       }
       return result;
     }
@@ -286,14 +288,18 @@ async function verifyFolderMountSafety(appId, folderPath) {
  * failure mode observed live 2026-07-01). A legitimately empty folder
  * (globalBytes 0, e.g. a cold-start seed) does not trip this.
  * @param {string} appId - App ID (also the syncthing folder id)
+ * @param {object} [opts]
+ * @param {string[]} [opts.injectedExcludePaths]
+ * @param {string} [opts.appName] - the app this component belongs to
  * @param {string} folderPath - Syncthing folder path
  * @param {string[]} [injectedExcludePaths] - absolute injected-content paths
  *   (deployComp.injectedSyncExcludes()) excluded from the disk-emptiness walk,
  *   so a volume holding only delivered content still reads empty
  * @returns {Promise<{isSafe: boolean, reason: string, isMounted: boolean, hasContent: boolean}>}
  */
-async function verifySendReceiveFolderSafety(appId, folderPath, injectedExcludePaths = []) {
-  const result = await verifyFolderMountSafety(appId, folderPath);
+async function verifySendReceiveFolderSafety(appId, folderPath, opts = {}) {
+  const { injectedExcludePaths = [], appName } = opts;
+  const result = await verifyFolderMountSafety(appId, folderPath, appName);
   if (!result.isSafe) return result;
 
   const syncStatus = await getFolderSyncCompletion(appId);
@@ -450,6 +456,7 @@ function isDesignatedLeader(allPeersList, localSocketAddr, deferToRunningPeers =
 async function handleFirstRun(params) {
   const {
     appId,
+    identifier,
     syncFolder,
     syncthingFolder,
     receiveOnlySyncthingAppsCache,
@@ -467,7 +474,7 @@ async function handleFirstRun(params) {
     // Set cache BEFORE requesting the reset to prevent re-processing as "new"
     await appCaches.setSyncedMark(receiveOnlySyncthingAppsCache, appId, cache);
 
-    appReconciler.requestStopAndClearData(appId, 'syncthing first-run clean install');
+    appReconciler.requestStopAndClearData(identifier, 'syncthing first-run clean install');
 
     return { syncthingFolder, cache };
   }
@@ -512,6 +519,7 @@ async function handleFirstRun(params) {
 async function handleSkippedAppSecondEncounter(params) {
   const {
     appId,
+    identifier,
     syncthingFolder,
     receiveOnlySyncthingAppsCache,
   } = params;
@@ -524,7 +532,7 @@ async function handleSkippedAppSecondEncounter(params) {
   await appCaches.setSyncedMark(receiveOnlySyncthingAppsCache, appId, cache);
 
   // stop + local appdata clear is declared to the reconciler (the sole actuator)
-  appReconciler.requestStopAndClearData(appId, 'syncthing skipped-app second encounter');
+  appReconciler.requestStopAndClearData(identifier, 'syncthing skipped-app second encounter');
 
   return { syncthingFolder, cache };
 }
@@ -658,6 +666,8 @@ async function nudgeFolderDevices(folderId) {
 async function handleReceiveOnlyTransition(params) {
   const {
     appId,
+    identifier,
+    installedAppName,
     cache,
     runningAppList,
     localSocketAddr,
@@ -716,7 +726,7 @@ async function handleReceiveOnlyTransition(params) {
     // over an empty disk); an unmounted dir, or a stale index claiming bytes
     // over an empty volume, must never seed: sendreceive would broadcast the
     // missing files as deletions.
-    const seedSafety = await verifySendReceiveFolderSafety(appId, folderPath, injectedExcludePaths);
+    const seedSafety = await verifySendReceiveFolderSafety(appId, folderPath, { injectedExcludePaths, appName: installedAppName });
     if (!seedSafety.isSafe) {
       log.warn(`handleReceiveOnlyTransition - ${appId} elected leader but not safe to seed (${seedSafety.reason}); staying receiveonly`);
       syncthingFolder.type = 'receiveonly';
@@ -730,7 +740,7 @@ async function handleReceiveOnlyTransition(params) {
 
     if (requiresSyncBeforeStart) {
       log.info(`handleReceiveOnlyTransition - requesting start of ${appId} (leader)`);
-      appReconciler.setControllerDesired(appId, 'running', 'syncthing leader start');
+      appReconciler.setControllerDesired(identifier, 'running', 'syncthing leader start');
     }
 
     cache.restarted = true;
@@ -769,7 +779,7 @@ async function handleReceiveOnlyTransition(params) {
       // Same pre-flip verification as the seed above: completion metrics come
       // from the index, and an index can be stale - promotion requires the disk
       // to actually hold the data the index claims.
-      const promoteSafety = await verifySendReceiveFolderSafety(appId, folderPath, injectedExcludePaths);
+      const promoteSafety = await verifySendReceiveFolderSafety(appId, folderPath, { injectedExcludePaths, appName: installedAppName });
       if (!promoteSafety.isSafe) {
         log.warn(`handleReceiveOnlyTransition - ${appId} is synced but not safe to promote (${promoteSafety.reason}); staying receiveonly`);
         return { syncthingFolder, cache };
@@ -779,7 +789,7 @@ async function handleReceiveOnlyTransition(params) {
       syncthingFolder.type = 'sendreceive';
       if (requiresSyncBeforeStart) {
         log.info(`handleReceiveOnlyTransition - requesting start of ${appId} (synced)`);
-        appReconciler.setControllerDesired(appId, 'running', 'syncthing synced start');
+        appReconciler.setControllerDesired(identifier, 'running', 'syncthing synced start');
       }
       cache.restarted = true;
       return { syncthingFolder, cache };
@@ -831,14 +841,15 @@ async function handleReceiveOnlyTransition(params) {
 
     if (nudgeCount >= STALL_REMOVE_MIN_NUDGES && now - cache.evidenceSince >= STALL_REMOVE_MIN_WINDOW_MS) {
       log.error(`handleReceiveOnlyTransition - ${appId}: ${nudgeCount} nudges over ${Math.round((now - cache.evidenceSince) / 60000)}m with zero progress and a connected synced peer; this node cannot ingest the data - removing locally (data preserved on peers)`);
-      // the whole app, by its bare main name: a component identifier here routes
-      // removeAppLocally into a component-scoped removal that leaves the app's
-      // installed-DB row behind (still broadcast as running, never re-evaluated)
-      const mainAppName = appId.split('_')[1] || appId;
+      // The whole app, by the name the caller resolved from the installed row: a
+      // component identifier here routes removeAppLocally into a component-scoped
+      // removal that leaves the app's installed-DB row behind (still broadcast as
+      // running, never re-evaluated). Cutting the name out of the folder id instead
+      // yielded the prefixed id itself for a v1-3 app, which carries no underscore.
       try {
-        await appUninstaller.uninstallApplication(mainAppName, { forceKill: true, broadcastRemoval: true });
+        await appUninstaller.uninstallApplication(installedAppName, { forceKill: true, broadcastRemoval: true });
       } catch (error) {
-        log.error(`handleReceiveOnlyTransition - Failed to remove ${mainAppName}: ${error.message}`);
+        log.error(`handleReceiveOnlyTransition - Failed to remove ${installedAppName}: ${error.message}`);
       }
       cache.restarted = true;
       return { syncthingFolder, cache };
@@ -871,6 +882,7 @@ async function handleReceiveOnlyTransition(params) {
 async function handleNewApp(params) {
   const {
     appId,
+    identifier,
     syncthingFolder,
     receiveOnlySyncthingAppsCache,
   } = params;
@@ -884,7 +896,7 @@ async function handleNewApp(params) {
   await appCaches.setSyncedMark(receiveOnlySyncthingAppsCache, appId, cache);
 
   // stop + local appdata clear is declared to the reconciler (the sole actuator)
-  appReconciler.requestStopAndClearData(appId, 'syncthing new app clean install');
+  appReconciler.requestStopAndClearData(identifier, 'syncthing new app clean install');
 
   return { syncthingFolder, cache };
 }
@@ -895,7 +907,7 @@ async function handleNewApp(params) {
  * @param {boolean} requiresSyncBeforeStart - True if the component must finish syncing before its first start (SyncMode.SYNC_FIRST)
  * @returns {Promise<void>}
  */
-async function ensureContainerRunning(appId, requiresSyncBeforeStart) {
+async function ensureContainerRunning(appId, identifier, requiresSyncBeforeStart) {
   try {
     // null = docker-confirmed absence (the inspect contract): a missing
     // container is the recreate machinery's to rebuild, not ours to start.
@@ -903,7 +915,7 @@ async function ensureContainerRunning(appId, requiresSyncBeforeStart) {
 
     if (containerInspect && !containerInspect.State.Running && requiresSyncBeforeStart) {
       log.info(`ensureContainerRunning - ${appId} is not running, requesting start`);
-      appReconciler.setControllerDesired(appId, 'running', 'syncthing syncFirst: ensure-running');
+      appReconciler.setControllerDesired(identifier, 'running', 'syncthing syncFirst: ensure-running');
     }
   } catch (error) {
     log.error(`ensureContainerRunning - Error checking/starting ${appId}: ${error.message}`);
@@ -920,6 +932,7 @@ async function ensureContainerRunning(appId, requiresSyncBeforeStart) {
 async function manageFolderSyncState(params) {
   const {
     appId,
+    identifier,
     syncFolder,
     requiresSyncBeforeStart,
     syncthingAppsFirstRun,
@@ -943,7 +956,7 @@ async function manageFolderSyncState(params) {
     // caller flags exactly those folders here
     if (mountVerifyNeeded) {
       const folderPath = syncFolder.path || `${appsFolder}${appId}/appdata`;
-      let mountSafety = await verifySendReceiveFolderSafety(appId, folderPath, injectedExcludePaths);
+      let mountSafety = await verifySendReceiveFolderSafety(appId, folderPath, { injectedExcludePaths, appName: installedAppName });
 
       if (!mountSafety.isSafe && !mountSafety.isMounted) {
         // The detection is actionable: the backing image normally still exists,
@@ -953,7 +966,7 @@ async function manageFolderSyncState(params) {
         const mountAttempt = await volumeService.ensureAppVolumeMounted(appId);
         if (mountAttempt.mounted) {
           log.info(`manageFolderSyncState - ${appId} volume was not mounted; mounted it, re-verifying folder safety`);
-          mountSafety = await verifySendReceiveFolderSafety(appId, folderPath, injectedExcludePaths);
+          mountSafety = await verifySendReceiveFolderSafety(appId, folderPath, { injectedExcludePaths, appName: installedAppName });
         }
       }
 
@@ -975,7 +988,7 @@ async function manageFolderSyncState(params) {
         // Hold the container too: its binds point at the same unsafe dir. The
         // reconciler is the actuator; the receiveonly machinery flips the
         // verdict back to running once the folder is verifiably synced.
-        appReconciler.setControllerDesired(appId, 'stopped', `mount safety block: ${mountSafety.reason}`);
+        appReconciler.setControllerDesired(identifier, 'stopped', `mount safety block: ${mountSafety.reason}`);
 
         // Return with skipUpdate=false so the folder config gets updated to receiveonly
         return { syncthingFolder, cache, skipUpdate: false };
@@ -983,7 +996,7 @@ async function manageFolderSyncState(params) {
     }
 
     // Mount is safe, proceed normally
-    await ensureContainerRunning(appId, requiresSyncBeforeStart);
+    await ensureContainerRunning(appId, identifier, requiresSyncBeforeStart);
     // Ensure cache entry exists so health monitor can track this folder
     const existingCache = await appCaches.syncedMark(receiveOnlySyncthingAppsCache, appId);
     const cache = existingCache || { restarted: true };
@@ -994,6 +1007,7 @@ async function manageFolderSyncState(params) {
   if (syncthingAppsFirstRun) {
     const result = await handleFirstRun({
       appId,
+      identifier,
       syncFolder,
       syncthingFolder,
       receiveOnlySyncthingAppsCache,
@@ -1009,6 +1023,7 @@ async function manageFolderSyncState(params) {
   if (cache?.firstEncounterSkipped) {
     const result = await handleSkippedAppSecondEncounter({
       appId,
+      identifier,
       syncthingFolder,
       receiveOnlySyncthingAppsCache,
     });
@@ -1020,6 +1035,8 @@ async function manageFolderSyncState(params) {
     const runningAppList = await appLocation(installedAppName);
     const result = await handleReceiveOnlyTransition({
       appId,
+      identifier,
+      installedAppName,
       cache,
       runningAppList,
       localSocketAddr,
@@ -1038,6 +1055,7 @@ async function manageFolderSyncState(params) {
       log.info(`manageFolderSyncState - ${appId} NOT in cache but syncFolder doesn't exist, treating as new app installation`);
       const result = await handleNewApp({
         appId,
+        identifier,
         syncthingFolder,
         receiveOnlySyncthingAppsCache,
       });
@@ -1055,6 +1073,7 @@ async function manageFolderSyncState(params) {
     // First run and not in cache - clean install
     const result = await handleNewApp({
       appId,
+      identifier,
       syncthingFolder,
       receiveOnlySyncthingAppsCache,
     });
@@ -1062,7 +1081,7 @@ async function manageFolderSyncState(params) {
   }
 
   // Default case - ensure container is running
-  await ensureContainerRunning(appId, requiresSyncBeforeStart);
+  await ensureContainerRunning(appId, identifier, requiresSyncBeforeStart);
   return { syncthingFolder, cache: null };
 }
 

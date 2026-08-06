@@ -15,6 +15,7 @@ const fluxCommunicationUtils = require('./fluxCommunicationUtils');
 const fluxNetworkHelper = require('./fluxNetworkHelper');
 const messageHelper = require('./messageHelper');
 const { peerManager, PEER_SOURCE } = require('./utils/peerState');
+const limitCounter = require('./utils/limitCounter');
 const cacheManager = require('./utils/cacheManager').default;
 const networkStateService = require('./networkStateService');
 const nodeConfirmationService = require('./nodeConfirmationService');
@@ -723,6 +724,8 @@ async function dispatchFluxMessage(msgObj, peerSocket) {
           setImmediate(() => handleAppInstallingMessage(msgObj, peerSocket.ip, peerSocket.port));
         } else if (msgObj.data.type === 'fluxappinstallingerror') {
           setImmediate(() => handleAppInstallingErrorMessage(msgObj, peerSocket.ip, peerSocket.port));
+        } else if (msgObj.data.type === 'fluxlimitcounterrecord') {
+          setImmediate(() => limitCounter.acceptRecord(msgObj.data));
         } else if (msgObj.data.type === 'fluxnodesigterm') {
           setImmediate(() => handleNodeSigtermMessage(msgObj, peerSocket.ip, peerSocket.port));
         } else if (msgObj.data.type === 'fluxappcontentmanifest') {

@@ -14,8 +14,10 @@ const fluxNetworkHelper = require('../fluxNetworkHelper');
 const appReconciler = require('../appMonitoring/appReconciler');
 const appsRepository = require('../appDatabase/appsRepository');
 const nodeDosState = require('../nodeDosState');
+const migrations = require('../migrations');
 const appUninstaller = require('./appUninstaller');
 const appNetworkLinker = require('./appNetworkLinker');
+const { getSpecBackend } = require('../utils/specLibs');
 const contentSlotService = require('./contentSlotService');
 const telemetrySinkCache = require('../telemetrySinkCache');
 const telemetryConfigService = require('../telemetryConfigService');
@@ -57,13 +59,17 @@ async function getStoppedFluxContainers() {
       return [];
     }
 
-    // Filter for Flux app containers that are stopped (not running)
+    // Ours by the identity label, not by the shape of the name. The name test
+    // it replaces also matched only `flux`, walking past every legacy `zel`
+    // container on the node.
+    const { LABEL_KEYS } = await getSpecBackend();
     const stoppedContainers = containers.filter((container) => {
-      const name = container.Names && container.Names[0] ? container.Names[0] : '';
-      const isFluxContainer = name.startsWith('/flux');
+      const managed = dockerService.isManagedContainer(
+        { labels: container.Labels, name: container.Names?.[0] }, LABEL_KEYS,
+      );
       // Check if container is stopped (State is 'exited' or not 'running')
       const isStopped = container.State !== 'running';
-      return isFluxContainer && isStopped;
+      return managed && isStopped;
     });
 
     return stoppedContainers;
@@ -304,6 +310,12 @@ async function manageAppsOnBoot(bootContext) {
       }
       throw error;
     }
+
+    // Anything that would rather act on a container while it is down runs here:
+    // FluxOS keeps every container on RestartPolicy 'no', so after a host reboot
+    // nothing is running until the reconcile below starts it. Never allowed to stop
+    // that reconcile - a node that cannot migrate must still start its apps.
+    await migrations.runMigrations(migrations.HOOKS.APPS_STARTING);
 
     log.info('appStartupManager - Daemon, DB, and node confirmed, reconciling apps');
     await reconcileAppsOnBoot();

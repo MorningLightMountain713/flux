@@ -2,11 +2,39 @@ const messageHelper = require('../messageHelper');
 const serviceHelper = require('../serviceHelper');
 const verificationHelper = require('../verificationHelper');
 const jobRegistry = require('../utils/jobRegistry');
+const fluxNetworkHelper = require('../fluxNetworkHelper');
+const { nodeApiUrl } = require('../utils/socketAddressUtils');
 const log = require('../../lib/log');
 
 // The one status resource for every long-running operation this node accepts.
 // Endpoints that start work answer 202 with a job handle and point here; this
 // owns the polling contract so no endpoint has to invent one.
+
+/**
+ * A status path as the caller must actually use it.
+ *
+ * The registry deals in paths (`/apps/operations/<id>`) because a job does not
+ * know which node it is on. A caller does need to know: an operation is
+ * node-local, so a poll that lands anywhere else answers 404, and the address
+ * the client happened to use may have been the load balancer rather than this
+ * node. Absolute against this node's own DNS name closes both.
+ *
+ * Relative is the fallback when the node cannot resolve its own address — a
+ * caller that already reached this node can still follow it, which is strictly
+ * better than emitting a URL built from an address we could not confirm.
+ *
+ * @param {string} statusPath
+ * @returns {Promise<string>}
+ */
+async function absoluteStatusUrl(statusPath) {
+  try {
+    const base = nodeApiUrl(await fluxNetworkHelper.getLocalSocketAddress());
+    return base ? `${base}${statusPath}` : statusPath;
+  } catch (error) {
+    log.warn(`operationsController: could not resolve this node's address for a status URL: ${error.message}`);
+    return statusPath;
+  }
+}
 
 /**
  * The FluxID a caller is authenticated as, or null. Jobs registered with an
@@ -29,13 +57,14 @@ async function callerFluxId(req) {
  * @param {{jobId: string, statusUrl: string}} handle
  * @param {object} [extra] additional body fields the endpoint wants echoed
  */
-function accepted(res, handle, extra = {}) {
-  res.setHeader('Location', handle.statusUrl);
+async function accepted(res, handle, extra = {}) {
+  const statusUrl = await absoluteStatusUrl(handle.statusUrl);
+  res.setHeader('Location', statusUrl);
   res.setHeader('Operation-Id', handle.jobId);
   res.setHeader('Retry-After', String(jobRegistry.retryAfterSeconds()));
   return res.status(202).json(messageHelper.createDataMessage({
     jobId: handle.jobId,
-    statusUrl: handle.statusUrl,
+    statusUrl,
     status: jobRegistry.JobStatus.RUNNING,
     ...extra,
   }));
@@ -85,6 +114,11 @@ async function getOperation(req, res) {
       res.setHeader('Retry-After', String(jobRegistry.retryAfterSeconds()));
     }
 
+    // The problem-detail `instance` is the same status resource under another
+    // name, so it is absolute for the same reason.
+    if (view.error && view.error.instance) {
+      view.error = { ...view.error, instance: await absoluteStatusUrl(view.error.instance) };
+    }
     return res.json(messageHelper.createDataMessage(view));
   } catch (error) {
     log.error(`operationsController getOperation: ${error.message}`);
@@ -124,6 +158,7 @@ async function cancelOperation(req, res) {
 }
 
 module.exports = {
+  absoluteStatusUrl,
   accepted,
   getOperation,
   cancelOperation,

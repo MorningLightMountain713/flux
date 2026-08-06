@@ -550,7 +550,7 @@ describe('appUninstaller tests', () => {
       appNetworkLinkerStub.isPureFollowerApp.callsFake(async (s) => s.name === 'collector');
       appNetworkLinkerStub.findInstalledWorkloadsRequiring.resolves([spec('workload')]);
       // the requiring workload holds a redeploy lease, so its removal DEFERS
-      operationRegistry.acquire('workload', 'softRedeploy', 'the-redeploy');
+      operationRegistry.acquire('workload', 'redeploy', 'the-redeploy');
       try {
         const result = await appUninstaller.uninstallApplication('collector', { forceKill: false, background: true });
         expect(result.status, 'the follower teardown must defer while its consumer is mid-operation').to.equal(appUninstaller.UninstallStatus.DEFERRED);

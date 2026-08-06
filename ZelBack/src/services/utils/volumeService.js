@@ -5,6 +5,7 @@ const dockerService = require('../dockerService');
 const serviceHelper = require('../serviceHelper');
 const log = require('../../lib/log');
 const { getSpecBackend } = require('./specLibs');
+const appsRepository = require('../appDatabase/appsRepository');
 const { appsFolder, appVolumesPath, legacyAppVolumesPath } = require('./appConstants');
 
 /**
@@ -14,12 +15,12 @@ const { appsFolder, appVolumesPath, legacyAppVolumesPath } = require('./appConst
  * A co-located app mounts one volume per replica, so (app, component) stopped
  * naming a single thing — the replica rides on each row instead of being lost.
  *
- * Each mount is identified by DECODING its identifier through flux-spec's own
- * decoders, never by matching a rebuilt `flux<component>_<app>` pattern:
- * reassembling that rule here is what dropped the replica segment and made a
- * co-located pair look like one volume. The decoders are reached through the
- * async backend, not the sync bridge — this is a request path with no reason to
- * assume someone else has already warmed the loader.
+ * Derived FORWARD: the row states the app-identity its volumes were named from
+ * and which replicas are installed here, so this builds the paths it expects and
+ * looks them up. It used to walk the mount table and decode each directory name
+ * back into an app and component, which asks a filesystem path to answer a
+ * question only the app's row can — and stops working entirely once an identity
+ * is no longer the app's name.
  *
  * @param {string} appName
  * @param {string} componentName - the component, or the app name for the
@@ -30,31 +31,37 @@ const { appsFolder, appVolumesPath, legacyAppVolumesPath } = require('./appConst
  */
 async function listComponentVolumeMounts(appName, componentName) {
   const { DeploymentSpec } = await getSpecBackend();
+  const installed = await appsRepository.getInstalledApp(appName);
+  if (!installed) return [];
+
+  // Null identity is an app installed before identities were stored: its
+  // artifacts are named from the app name, which is exactly what fromSpec falls
+  // back to, so the same expression covers both.
+  const identity = installed.identity ?? appName;
+  const replicas = await appsRepository.listInstalledIdentities(appName);
+
   const filesystems = await deviceHelper.listMountedFilesystems();
+  // Matched on the mount's own directory name, not on its full path: the apps
+  // folder differs between node layouts (Arcane sets FLUX_APPS_FOLDER, a legacy
+  // node does not), and a volume is this component's because of what it is
+  // called, not because of where the layout happens to put it.
+  const byName = new Map(filesystems.map((entry) => [path.basename(entry.target), entry]));
 
-  return filesystems.flatMap((entry) => {
-    const base = path.basename(entry.target);
-    if (!base.startsWith('flux')) return [];
-    const identifier = base.slice('flux'.length);
-
-    // The mount table carries every filesystem on the box; anything that does
-    // not decode as an app identifier simply is not one of ours.
-    let decoded;
-    try {
-      decoded = {
-        app: DeploymentSpec.appNameFromIdentifier(identifier),
-        component: DeploymentSpec.componentNameFromIdentifier(identifier),
-        replica: DeploymentSpec.replicaFromIdentifier(identifier),
-      };
-    } catch (error) {
-      return [];
+  return replicas.flatMap((replica) => {
+    // Two shapes are possible and only one exists on disk. A v4+ component is
+    // `component_identity`; a v1-3 flat app IS its single component, so its
+    // identifier is the bare identity. The two are told apart by looking, not by
+    // guessing from the name — a compose app may legitimately have a component
+    // named after itself, which no rule about the string can distinguish.
+    const candidates = [DeploymentSpec.containerIdentifierFor(componentName, identity, replica)];
+    if (componentName === appName) {
+      candidates.push(replica != null ? `${identity}_${replica}` : identity);
     }
-
-    if (decoded.app !== appName) return [];
-    if (decoded.component !== componentName) return [];
-
+    const identifier = candidates.find((id) => byName.has(dockerService.getAppIdentifier(id)));
+    if (!identifier) return [];
+    const entry = byName.get(dockerService.getAppIdentifier(identifier));
     return [{
-      replica: decoded.replica,
+      replica,
       identifier,
       mount: entry.target,
       filesystem: entry.source,
@@ -158,6 +165,12 @@ async function getVolumeFilePath(appId) {
  * flux<app>FLUXFSVOL). Ground truth for apps whose local spec cannot
  * enumerate components: enterprise specs are stored with compose emptied and
  * decryption needs fluxbenchd, while the images need nothing.
+ *
+ * This one genuinely cannot be derived forward. The row states the app's
+ * identity, but the COMPONENT names live in the sealed spec — so for an app
+ * whose blob cannot be opened, the images on disk are the only record of which
+ * components exist. It stays until the components are recorded locally at
+ * install time, which is a separate change.
  * @param {string} appName Application name.
  * @returns {Promise<string[]>} Docker app identifiers whose images exist on disk.
  */
@@ -179,7 +192,11 @@ async function getComponentAppIdsFromVolumeFiles(appName) {
   }
 
   const escapedName = appName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const componentImage = new RegExp(`^flux\\w+_${escapedName}FLUXFSVOL$`);
+  // `\w` excludes `-` and the trailing anchor excludes a replica segment, so the
+  // pattern this replaces was blind to a hyphenated component name and to every
+  // named replica — and a component it cannot see is a volume nothing mounts at
+  // boot, after which the reconciler defers on it forever.
+  const componentImage = new RegExp(`^flux[a-z0-9-]+_${escapedName}(?:_[a-z0-9-]+)?FLUXFSVOL$`, 'i');
   const legacyImage = `flux${appName}FLUXFSVOL`;
 
   // eslint-disable-next-line no-restricted-syntax

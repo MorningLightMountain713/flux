@@ -281,22 +281,28 @@ describe('appsRuntimeState tests', () => {
     });
   });
 
-  describe('identifier namespace (storage-boundary normalization)', () => {
-    // The collection is keyed by the bare component identifier. All six current
-    // call sites pass that form by convention, but convention across files is not
-    // an invariant: a future caller passing the docker-prefixed form would create
-    // a same-component twin the unique index cannot see (different key strings).
-    // The module therefore normalizes at its own boundary.
-    it('keys a docker-prefixed identifier and its bare form to the same document', async () => {
-      await appsRuntimeState.setOperatorStopped('fluxwww_App', true);
-      expect(await appsRuntimeState.isOperatorStopped('www_App')).to.be.true;
-      expect(store.has('fluxwww_App')).to.be.false;
+  describe('identifier namespace', () => {
+    // The collection is keyed by the bare component identifier, and every caller
+    // passes that form. This module deliberately does not normalize: it cannot
+    // tell a docker name from a bare identifier, because `fluxproxy_App` is a
+    // legitimate value of both. It used to strip a `flux` prefix here, which for
+    // a component genuinely named `fluxproxy` keyed a DIFFERENT component's
+    // operator lock, condemned stamp and crash ladder.
+    it('stores a component named flux* under its own identifier', async () => {
+      await appsRuntimeState.setOperatorStopped('fluxproxy_App', true);
+      expect(store.has('fluxproxy_App')).to.be.true;
+      expect(store.has('proxy_App')).to.be.false;
     });
 
-    it('removes under either form', async () => {
-      await appsRuntimeState.setOperatorStopped('www_App', true);
-      await appsRuntimeState.remove('fluxwww_App');
-      expect(await appsRuntimeState.isOperatorStopped('www_App')).to.be.false;
+    it('does not leak one component\'s operator lock onto another', async () => {
+      await appsRuntimeState.setOperatorStopped('fluxproxy_App', true);
+      expect(await appsRuntimeState.isOperatorStopped('proxy_App')).to.be.false;
+    });
+
+    it('removes under the identifier it was written with', async () => {
+      await appsRuntimeState.setOperatorStopped('fluxproxy_App', true);
+      await appsRuntimeState.remove('fluxproxy_App');
+      expect(await appsRuntimeState.isOperatorStopped('fluxproxy_App')).to.be.false;
     });
   });
 

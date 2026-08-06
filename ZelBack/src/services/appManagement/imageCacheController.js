@@ -57,7 +57,7 @@ async function postImageCache(req, res) {
     }
 
     const handle = await imageCacheService.submitEncrypted(authz.fluxId, encrypted);
-    return operationsController.accepted(res, handle);
+    return await operationsController.accepted(res, handle);
   } catch (err) {
     if (err.kind) return sendError(res, kindToStatus(err.kind), err.message);
     log.error(`imageCacheController postImageCache: ${err.message}`);

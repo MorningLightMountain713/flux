@@ -13,6 +13,7 @@ const { resolveSpec, resolveInstantiatedSpec } = require('../utils/specCutover')
 const { regimeFor } = require('../pricing/pricingRegime');
 const appsRepository = require('../appDatabase/appsRepository');
 const { insertAppSpecifications, updateAppSpecifications } = require('../appDatabase/registryManager');
+const { mintAppUuid, identityFromUuid } = require('../utils/appIdentity');
 const appEventVerifier = require('./appEventVerifier');
 const {
   globalAppsMessages,
@@ -517,7 +518,17 @@ async function checkAndRequestApp(hash, txid, height, valueSat, blockTime = null
         // floor, so this only ever catches the un-bootstrapped v9 case.
         log.warn(`App ${hash} registration rejected: pricing not available at height ${height}`);
       } else if (BigInt(valueSat) >= requiredSats) {
-        await insertAppSpecifications(instantiated.serialize());
+        // The app's instance identity, minted here because this is the one place
+        // that holds both halves: the name being registered and the transaction
+        // registering it. An update never reaches this branch, so it can never
+        // re-mint one against its own txid.
+        const uuid = mintAppUuid(instantiated.name, txid);
+        const registered = InstantiatedSpec.fromEvent({
+          ...confirmedEvent.toInstantiatedSpec(),
+          uuid,
+          identity: identityFromUuid(uuid),
+        });
+        await insertAppSpecifications(registered.serialize());
         await processPendingUpdates(instantiated.name);
       } else {
         log.warn(`App ${hash} registration underpaid: ${valueSat} < ${requiredSats}`);

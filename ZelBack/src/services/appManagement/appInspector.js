@@ -38,7 +38,7 @@ async function appTop(req, res) {
       throw new Error('No Flux App specified');
     }
 
-    const mainAppName = appname.split('_')[1] || appname;
+    const mainAppName = deploymentProvider.appNameFromRequest(appname);
 
     const authorized = await verificationHelper.verifyPrivilege('appownerabove', req, mainAppName);
     if (!authorized) {
@@ -46,7 +46,10 @@ async function appTop(req, res) {
       return res ? res.json(errMessage) : errMessage;
     }
 
-    const appRes = await dockerService.appDockerTop(appname);
+    // The request names a component of an app; the container identifier is built
+    // from the app's stored identity, so it is resolved rather than assumed.
+    const identifier = await deploymentProvider.resolveRequestContainer(appname);
+    const appRes = await dockerService.appDockerTop(identifier);
     const appResponse = messageHelper.createDataMessage(appRes);
     return res ? res.json(appResponse) : appResponse;
   } catch (error) {
@@ -78,11 +81,14 @@ async function appLog(req, res) {
       throw new Error('No Flux App specified');
     }
 
-    const mainAppName = appname.split('_')[1] || appname;
+    const mainAppName = deploymentProvider.appNameFromRequest(appname);
 
     const authorized = await verificationHelper.verifyPrivilege('appownerabove', req, mainAppName);
     if (authorized === true) {
-      let logs = await dockerService.dockerContainerLogs(appname, lines);
+      // The request names a component of an app; the container identifier is built
+      // from the app's stored identity, so it is resolved rather than assumed.
+      const identifier = await deploymentProvider.resolveRequestContainer(appname);
+      let logs = await dockerService.dockerContainerLogs(identifier, lines);
       logs = serviceHelper.dockerBufferToString(logs);
       const dataMessage = messageHelper.createDataMessage(logs);
       res.json(dataMessage);
@@ -116,12 +122,15 @@ async function appLogStream(req, res) {
       throw new Error('No Flux App specified');
     }
 
-    const mainAppName = appname.split('_')[1] || appname;
+    const mainAppName = deploymentProvider.appNameFromRequest(appname);
 
     const authorized = await verificationHelper.verifyPrivilege('appownerabove', req, mainAppName);
     if (authorized === true) {
       res.setHeader('Content-Type', 'application/json');
-      const { stream, stop } = await dockerService.dockerContainerLogsStream(appname);
+      // The request names a component of an app; the container identifier is built
+      // from the app's stored identity, so it is resolved rather than assumed.
+      const identifier = await deploymentProvider.resolveRequestContainer(appname);
+      const { stream, stop } = await dockerService.dockerContainerLogsStream(identifier);
       // A burst, not a subscription: this endpoint answers "what has it said
       // lately" and closes. The window is the caller's to choose, which is why
       // the docker layer no longer bakes it in.
@@ -173,7 +182,7 @@ async function appLogPolling(req, res) {
       throw new Error('No Flux App specified');
     }
 
-    const mainAppName = appname.split('_')[1] || appname;
+    const mainAppName = deploymentProvider.appNameFromRequest(appname);
 
     const authorized = await verificationHelper.verifyPrivilege('appownerabove', req, mainAppName);
     if (authorized === true) {
@@ -184,9 +193,13 @@ async function appLogPolling(req, res) {
         parsedLineCount = parseInt(lines, 10) || 100;
       }
 
+      // The request names a component of an app; the container identifier is built
+      // from the app's stored identity, so it is resolved rather than assumed.
+      const identifier = await deploymentProvider.resolveRequestContainer(appname);
+
       const logs = [];
       await new Promise((resolve, reject) => {
-        dockerService.dockerContainerLogsPolling(appname, parsedLineCount, since, (err, logLine) => {
+        dockerService.dockerContainerLogsPolling(identifier, parsedLineCount, since, (err, logLine) => {
           if (err) {
             reject(err);
           } else if (logLine === 'Stream ended') {
@@ -235,11 +248,14 @@ async function appInspect(req, res) {
       throw new Error('No Flux App specified');
     }
 
-    const mainAppName = appname.split('_')[1] || appname;
+    const mainAppName = deploymentProvider.appNameFromRequest(appname);
 
     const authorized = await verificationHelper.verifyPrivilege('appownerabove', req, mainAppName);
     if (authorized === true) {
-      const response = await dockerService.dockerContainerInspect(appname);
+      // The request names a component of an app; the container identifier is built
+      // from the app's stored identity, so it is resolved rather than assumed.
+      const identifier = await deploymentProvider.resolveRequestContainer(appname);
+      const response = await dockerService.dockerContainerInspect(identifier);
       const appResponse = messageHelper.createDataMessage(response);
       res.json(appResponse);
     } else {
@@ -272,14 +288,17 @@ async function appStats(req, res) {
       throw new Error('No Flux App specified');
     }
 
-    const mainAppName = appname.split('_')[1] || appname;
+    const mainAppName = deploymentProvider.appNameFromRequest(appname);
 
     const authorized = await verificationHelper.verifyPrivilege('appownerabove', req, mainAppName);
     if (authorized === true) {
-      const response = await dockerService.dockerContainerStats(appname);
+      // The request names a component of an app; the container identifier is built
+      // from the app's stored identity, so it is resolved rather than assumed.
+      const identifier = await deploymentProvider.resolveRequestContainer(appname);
+      const response = await dockerService.dockerContainerStats(identifier);
       const containerStorageInfo = await getContainerStorage(appname);
       response.disk_stats = containerStorageInfo;
-      const inspect = await dockerService.dockerContainerInspect(appname);
+      const inspect = await dockerService.dockerContainerInspect(identifier);
       response.nanoCpus = inspect.HostConfig.NanoCpus;
       const appResponse = messageHelper.createDataMessage(response);
       res.json(appResponse);
@@ -322,12 +341,15 @@ async function appMonitor(req, res, appsMonitored) {
       }
     }
 
-    const mainAppName = appname.split('_')[1] || appname;
+    const mainAppName = deploymentProvider.appNameFromRequest(appname);
 
     const authorized = await verificationHelper.verifyPrivilege('appownerabove', req, mainAppName);
     if (authorized === true) {
-      if (appsMonitored[appname]) {
-        let appStatsMonitoring = appsMonitored[appname].statsStore;
+      // The request names a component of an app; the container identifier is built
+      // from the app's stored identity, so it is resolved rather than assumed.
+      const identifier = await deploymentProvider.resolveRequestContainer(appname);
+      if (appsMonitored[identifier]) {
+        let appStatsMonitoring = appsMonitored[identifier].statsStore;
         if (range) {
           const now = Date.now();
           const cutoffTimestamp = now - range;
@@ -372,11 +394,14 @@ async function appMonitorStream(req, res) {
       throw new Error('No Flux App specified');
     }
 
-    const mainAppName = appname.split('_')[1] || appname;
+    const mainAppName = deploymentProvider.appNameFromRequest(appname);
 
     const authorized = await verificationHelper.verifyPrivilege('appownerabove', req, mainAppName);
     if (authorized === true) {
-      await dockerStatsStreamPromise(appname, req, res);
+      // The request names a component of an app; the container identifier is built
+      // from the app's stored identity, so it is resolved rather than assumed.
+      const identifier = await deploymentProvider.resolveRequestContainer(appname);
+      await dockerStatsStreamPromise(identifier, req, res);
       res.end();
     } else {
       const errMessage = messageHelper.errUnauthorizedMessage();
@@ -539,7 +564,7 @@ async function appExec(req, res) {
         throw new Error('No command specified');
       }
 
-      const mainAppName = processedBody.appname.split('_')[1] || processedBody.appname;
+      const mainAppName = deploymentProvider.appNameFromRequest(processedBody.appname);
 
       const authorized = await verificationHelper.verifyPrivilege('appowner', req, mainAppName);
       if (authorized === true) {
@@ -550,7 +575,8 @@ async function appExec(req, res) {
         env = serviceHelper.ensureObject(env);
 
         const containers = await dockerService.dockerListContainers(true);
-        const myContainer = containers.find((container) => (container.Names[0] === dockerService.getAppDockerNameIdentifier(processedBody.appname) || container.Id === processedBody.appname));
+        const identifier = await deploymentProvider.resolveRequestContainer(processedBody.appname);
+        const myContainer = containers.find((container) => (container.Names[0] === dockerService.getAppDockerNameIdentifier(identifier) || container.Id === processedBody.appname));
         const dockerContainer = dockerService.getDockerContainerHandle(myContainer.Id);
 
         res.setHeader('Content-Type', 'application/json');
@@ -600,11 +626,14 @@ async function appChanges(req, res) {
       throw new Error('No Flux App specified');
     }
 
-    const mainAppName = appname.split('_')[1] || appname;
+    const mainAppName = deploymentProvider.appNameFromRequest(appname);
 
     const authorized = await verificationHelper.verifyPrivilege('appownerabove', req, mainAppName);
     if (authorized === true) {
-      const response = await dockerService.dockerContainerChanges(appname);
+      // The request names a component of an app; the container identifier is built
+      // from the app's stored identity, so it is resolved rather than assumed.
+      const identifier = await deploymentProvider.resolveRequestContainer(appname);
+      const response = await dockerService.dockerContainerChanges(identifier);
       const appResponse = messageHelper.createDataMessage(response);
       res.json(appResponse);
     } else {
@@ -846,7 +875,7 @@ async function enforceWritableLayerLimit(appsStorageViolations) {
           // eslint-disable-next-line no-param-reassign
           appsStorageViolations = adjArray;
         } else {
-          log.warn(`Application ${deployment.appName} is using ${totalSize} space which is more than allowed ${maxAllowedSize}. Soft redeploying...`);
+          log.warn(`Application ${deployment.appName} is using ${totalSize} space which is more than allowed ${maxAllowedSize}. Redeploying...`);
           // eslint-disable-next-line no-await-in-loop, global-require
           const { redeployApplication } = require('../../services/appLifecycle/appOperations');
           // eslint-disable-next-line no-await-in-loop

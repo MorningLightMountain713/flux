@@ -27,7 +27,7 @@ const { withHostMutationLock } = require('../utils/hostMutationLock');
 // An app install pulls its image OUTSIDE the host-mutation lock and only afterwards creates
 // the container, so for a moment the image is present with no container — i.e. it looks cold.
 // Every app-image pull path, however, sets a globalState in-progress flag BEFORE pulling and
-// clears it only AFTER the container exists (installation / soft-redeploy / hard-redeploy /
+// clears it only AFTER the container exists (installation / redeploy / rebuild /
 // reinstall-old-apps), and globalState.isOperationInProgress() aggregates all of them. So a
 // `false` read means no install is anywhere in a pull->create span, hence no install depends
 // on the image we are about to delete. The check and the delete run in ONE synchronous tick

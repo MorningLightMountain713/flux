@@ -29,11 +29,13 @@ const upnpMapFailures = new Map();
 const monotonicMs = () => Number(process.hrtime.bigint() / 1000000n);
 /**
  * Get ports assigned by currently installed applications
- * @returns {Promise<Array>} Array of objects with app names and their assigned ports
+ * @returns {Promise<Array>} Array of objects with app identity, name and ports
  */
 async function assignedPortsInstalledApps() {
   const deployments = await deploymentProvider.listInstalledDeployments();
-  return deployments.map((deployment) => ({ name: deployment.appName, ports: deployment.allHostPorts() }));
+  return deployments.map((deployment) => ({
+    identity: deployment.identity, name: deployment.appName, ports: deployment.allHostPorts(),
+  }));
 }
 
 /**
@@ -56,7 +58,7 @@ async function assignedPortsGlobalApps(appNames) {
       const deployments = await deploymentProvider.buildDeployments(inst);
       const ports = deployments.flatMap((deployment) => deployment.allHostPorts());
       if (ports.length > 0) {
-        apps.push({ name: inst.name, ports });
+        apps.push({ identity: deployments[0].identity, name: inst.name, ports });
       }
     } catch (err) {
       log.warn(`assignedPortsGlobalApps: skipping ${inst.name}: ${err.message}`);
@@ -82,7 +84,11 @@ async function ensureApplicationPortsNotUsed(deployment, globalCheckedApps) {
 
   for (const port of deployment.allHostPorts()) {
     const portAssigned = currentAppsPorts.find((app) => app.ports.includes(port));
-    if (portAssigned && portAssigned.name !== deployment.appName) {
+    // Compared on IDENTITY, not name. A name is briefly held by two apps at
+    // once - the one expiring and the one re-registering it - and a leftover
+    // install of the previous holder would otherwise read as "myself", let the
+    // install through, and fail at the docker port bind instead of here.
+    if (portAssigned && portAssigned.identity !== deployment.identity) {
       throw new Error(`Flux App ${deployment.appName} port ${port} already used with different application. Installation aborted.`);
     }
   }
@@ -235,46 +241,6 @@ async function getAllUsedPorts() {
   });
 
   return [...new Set(allPorts)]; // Remove duplicates
-}
-
-/**
- * Check if a specific port is available
- * @param {number} port - Port number to check
- * @param {string} excludeApp - App name to exclude from check (for updates)
- * @returns {Promise<boolean>} True if port is available
- */
-async function isPortAvailable(port, excludeApp = null) {
-  const usedPorts = await assignedPortsInstalledApps();
-
-  // eslint-disable-next-line no-restricted-syntax
-  for (const app of usedPorts) {
-    if (excludeApp && app.name === excludeApp) {
-      continue; // eslint-disable-line no-continue
-    }
-    if (app.ports.includes(Number(port))) {
-      return false;
-    }
-  }
-
-  return true;
-}
-
-/**
- * Find the next available port in a given range
- * @param {number} startPort - Starting port to check
- * @param {number} endPort - Ending port range
- * @param {string} excludeApp - App name to exclude from check
- * @returns {Promise<number|null>} Next available port or null if none found
- */
-async function findNextAvailablePort(startPort, endPort, excludeApp = null) {
-  for (let port = startPort; port <= endPort; port += 1) {
-    // eslint-disable-next-line no-await-in-loop
-    const available = await isPortAvailable(port, excludeApp);
-    if (available) {
-      return port;
-    }
-  }
-  return null;
 }
 
 /**
@@ -630,8 +596,6 @@ module.exports = {
   restoreAppsPortsSupport,
   restorePortsSupport,
   getAllUsedPorts,
-  isPortAvailable,
-  findNextAvailablePort,
   signCheckAppData,
   askPeerPortReachability,
   arePortsReachableViaPeers,

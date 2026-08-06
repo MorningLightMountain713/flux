@@ -101,11 +101,11 @@ describe('crontabAndMountsCleanup tests', () => {
   };
 
   describe('getInstalledAppIds', () => {
-    it('should return an empty set when no apps are installed', async () => {
+    it('should return an empty map when no apps are installed', async () => {
       stubInstalledApps([]);
 
       const result = await crontabAndMountsCleanup.getInstalledAppIds();
-      expect(result).to.be.instanceOf(Set);
+      expect(result).to.be.instanceOf(Map);
       expect(result.size).to.equal(0);
     });
 
@@ -114,7 +114,9 @@ describe('crontabAndMountsCleanup tests', () => {
       dockerServiceMock.getAppIdentifier.withArgs('myapp').returns('fluxmyapp');
 
       const result = await crontabAndMountsCleanup.getInstalledAppIds();
-      expect(result.has('fluxmyapp')).to.be.true;
+      // each id carries the app it belongs to, so nothing downstream has to cut
+      // a name back out of it
+      expect(result.get('fluxmyapp')).to.equal('myapp');
       expect(result.size).to.equal(1);
     });
 
@@ -129,9 +131,9 @@ describe('crontabAndMountsCleanup tests', () => {
       dockerServiceMock.getAppIdentifier.withArgs('operator_wordpress123').returns('fluxoperator_wordpress123');
 
       const result = await crontabAndMountsCleanup.getInstalledAppIds();
-      expect(result.has('fluxwp_wordpress123')).to.be.true;
-      expect(result.has('fluxmysql_wordpress123')).to.be.true;
-      expect(result.has('fluxoperator_wordpress123')).to.be.true;
+      expect(result.get('fluxwp_wordpress123')).to.equal('wordpress123');
+      expect(result.get('fluxmysql_wordpress123')).to.equal('wordpress123');
+      expect(result.get('fluxoperator_wordpress123')).to.equal('wordpress123');
       expect(result.size).to.equal(3);
     });
 
@@ -247,7 +249,9 @@ describe('crontabAndMountsCleanup tests', () => {
       const result = await crontabAndMountsCleanup.ensureInstalledAppVolumesMounted();
 
       expect(result.failed).to.deep.equal([{ appId: 'fluxapp1', reason: 'volume_file_missing' }]);
-      expect(appTamperingDetectionServiceMock.recordEvent.calledWith('fluxapp1', 'mount_vanished')).to.be.true;
+      // the incident is keyed by the APP, not the component's docker id — the
+      // reconciler emits the same app's events under that name
+      expect(appTamperingDetectionServiceMock.recordEvent.calledWith('app1', 'mount_vanished')).to.be.true;
     });
   });
 

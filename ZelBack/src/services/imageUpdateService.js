@@ -2,7 +2,7 @@
  * Image Update Service
  *
  * Native FluxOS service that monitors installed apps for image updates
- * and triggers soft redeploys when newer images are available.
+ * and triggers redeploys when newer images are available.
  * Replaces the external containrrr/watchtower Docker container.
  */
 
@@ -256,7 +256,7 @@ async function checkAppForUpdates(deployment) {
 }
 
 /**
- * Triggers a soft redeploy for an app.
+ * Triggers a redeploy for an app.
  * @param {object} appSpec Application specification
  * @returns {Promise<boolean>} True if redeploy was triggered, false otherwise
  */
@@ -267,7 +267,7 @@ async function triggerAppUpdate(appName) {
       return false;
     }
 
-    log.info(`Triggering soft redeploy for ${appName}`);
+    log.info(`Triggering redeploy for ${appName}`);
     fluxEventBus.publish('imageUpdate:redeployTriggered', { appName });
 
     await appOperations.redeployApplication(appName, { createVolumes: false });

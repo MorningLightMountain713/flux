@@ -70,13 +70,14 @@ async function stopSyncthingAndCleanup(monitoredName, appId) {
   try {
     await syncthingMonitorHelpers.removeSyncthingFolder(monitoredName);
 
-    // Hard removal - delete syncthing cache since data will be deleted
+    // The folder and its data are going, so the cache entry must go with them:
+    // a stale mark would make the next install of this name read as already-synced
     // eslint-disable-next-line no-shadow, global-require
     const globalState = require('../utils/globalState');
     const { receiveOnlySyncthingAppsCache } = globalState;
     if (receiveOnlySyncthingAppsCache && receiveOnlySyncthingAppsCache.has(appId)) {
       receiveOnlySyncthingAppsCache.delete(appId);
-      log.info(`Deleted syncthing cache for ${appId} during hard removal`);
+      log.info(`Deleted syncthing cache for ${appId} during removal`);
     }
   } catch (error) {
     log.error(`Error stopping Syncthing app: ${error.message}`);
@@ -617,11 +618,6 @@ async function uninstallApplication(appName, options = {}) {
   let teardownDoc = null;
   let teardownStarted = false;
   try {
-    // Normalise to the bare app name this function reasons about: a caller may pass a
-    // flux-prefixed docker name (e.g. the syncthing flow); strip the prefix.
-    // eslint-disable-next-line no-param-reassign
-    appName = appName ? dockerService.getBaseAppName(appName) : appName;
-
     // Log removal trigger with stack trace to identify caller
     const { stack } = new Error();
     const callerLine = stack.split('\n')[2]?.trim();
@@ -923,21 +919,26 @@ async function runTeardown(doc, opts = {}) {
  *   'removed'  - the owed record cleared; the app is fully gone (converged).
  *   'deferred' - a teardown is already in flight, or this pass left work owed; the caller
  *                retries with backoff (attempts drives the pacing).
- * @param {string} appName
+ *
+ * Takes the RECORD KEY, which is the app name only for a loose removal — a replica-targeted
+ * one keys its own record `<app>_<replica>` so siblings can be torn down independently. A
+ * caller holding a component rather than a key resolves it with
+ * pendingTeardownStore.teardownForComponent.
+ * @param {string} key
  * @returns {Promise<{ status: 'none'|'removed'|'deferred', attempts: number }>}
  */
-async function driveOwedTeardown(appName) {
-  const doc = await pendingTeardownStore.getTeardown(appName);
+async function driveOwedTeardown(key) {
+  const doc = await pendingTeardownStore.getTeardown(key);
   if (!doc) return { status: 'none', attempts: 0 };
   // A teardown of this app is already running (the removal prelude's initial drive, or a
   // sibling reconcile pass). Let it finish; a quick retry observes its result.
-  if (teardownsInProgress.has(appName)) return { status: 'deferred', attempts: doc.attempts || 0 };
+  if (teardownsInProgress.has(key)) return { status: 'deferred', attempts: doc.attempts || 0 };
   await runTeardown(doc);
   // runTeardown clears the owed record ONLY when the app is fully gone; a surviving record
   // means this pass left work owed (a survivor, a host-cleanup blip) - pace the retry.
-  const remaining = await pendingTeardownStore.getTeardown(appName);
+  const remaining = await pendingTeardownStore.getTeardown(key);
   if (!remaining) return { status: 'removed', attempts: 0 };
-  await pendingTeardownStore.bumpAttempts(appName);
+  await pendingTeardownStore.bumpAttempts(key);
   return { status: 'deferred', attempts: (remaining.attempts || 0) + 1 };
 }
 

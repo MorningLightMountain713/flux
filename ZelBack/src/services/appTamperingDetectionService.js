@@ -169,28 +169,15 @@ function startIdentityBackfill() {
 }
 
 /**
- * Reduce an emitted app name to the main app name used in the installed-apps
- * database. Call sites pass either a spec name ('MyApp') or a docker
- * identifier ('fluxcomponent_MyApp' / 'zelMyApp'); component and app names
- * are alphanumeric, so everything after the first underscore is the app.
- * @param {string} appName
- * @returns {string}
- */
-function deriveMainAppName(appName) {
-  let name = appName;
-  if (name.startsWith('zel')) name = name.slice(3);
-  else if (name.startsWith('flux')) name = name.slice(4);
-  const underscore = name.indexOf('_');
-  if (underscore !== -1) name = name.slice(underscore + 1);
-  return name;
-}
-
-/**
  * Owner/spec-hash attribution for an app from the local installed-apps
- * database, cached per emitted name. Tries the name as passed first (a real
- * app name may itself start with 'flux'), then the derived main app name.
+ * database, cached per name. Emitters pass an app name — the one they resolved
+ * from the installed row or the deployment they already held — so this is an
+ * exact lookup. It used to accept a component identifier too and cut a name out
+ * of it, which is the guess this workstream removes: the emitter knows the app,
+ * and a name recovered by splitting a string is only ever a coincidence away
+ * from a different one.
  * Best-effort: returns null fields when the app cannot be found.
- * @param {string} appName - Name exactly as passed by the emitter
+ * @param {string} appName
  * @returns {Promise<object|null>}
  */
 async function getAppAttribution(appName) {
@@ -198,13 +185,7 @@ async function getAppAttribution(appName) {
   const cached = appAttributionCache.get(appName);
   if (cached && Date.now() - cached.cachedAt < ATTRIBUTION_TTL_MS) return cached;
   try {
-    let app = await appsRepository.getInstalledAppAttribution(appName);
-    if (!app) {
-      const mainName = deriveMainAppName(appName);
-      if (mainName !== appName) {
-        app = await appsRepository.getInstalledAppAttribution(mainName);
-      }
-    }
+    const app = await appsRepository.getInstalledAppAttribution(appName);
     const attribution = {
       ownerZelid: app?.owner ?? null,
       appHash: app?.hash ?? null,
@@ -232,6 +213,16 @@ async function getAppAttribution(appName) {
  * @param {string} details - Free-text context (stored once per incident)
  */
 async function recordEvent(appName, eventType, details) {
+  // The rollup key IS the app name, so an event that cannot name its app has
+  // nothing to roll up under and no owner to attribute to. Recording it under a
+  // blank or component-shaped key would split one app's incidents across two
+  // documents and report a second app to fleet consumers that does not exist.
+  // Only an artifact no installed component claims (an orphan syncthing folder)
+  // reaches this, and its own call site logs the condition.
+  if (!appName) {
+    log.warn(`appTamperingDetection - ${eventType} event has no app name, not recorded: ${details}`);
+    return;
+  }
   try {
     const now = new Date();
     const incidentKey = `${currentBootId ?? 'unknown'}:${Math.floor(now.getTime() / INCIDENT_BUCKET_MS)}`;
@@ -396,7 +387,6 @@ module.exports = {
   isNetworkMissingError,
   checkNodeReboot,
   startIdentityBackfill,
-  deriveMainAppName,
   EVENT_SEVERITY,
   INCIDENT_BUCKET_MS,
   IDENTITY_BACKFILL_INTERVAL_MS,

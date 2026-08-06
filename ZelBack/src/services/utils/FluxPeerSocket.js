@@ -416,6 +416,7 @@ const FLUX_CAPABILITIES = Object.freeze([
   'binaryMessages',
   'appStateSync',
   'appInstallingClaims',
+  'limitCounterRecords',
 ]);
 
 module.exports = { FluxPeerSocket, CLOSE_CODES, PEER_SOURCE, DIRECTION, FLUX_VERSION, FLUX_CAPABILITIES };

@@ -5,7 +5,6 @@ const dockerService = require('../dockerService');
 const appsRuntimeState = require('./appsRuntimeState');
 const reconcilerQueue = require('../appMonitoring/reconcilerQueue');
 const log = require('../../lib/log');
-const appsRepository = require('../appDatabase/appsRepository');
 const deploymentProvider = require('../appRuntime/deploymentProvider');
 const globalCommand = require('./globalCommand');
 
@@ -16,53 +15,25 @@ const globalCommand = require('./globalCommand');
  * @returns {object} Response message
  */
 /**
- * Apply an operator run-state command to every target component THROUGH the
+ * Apply an operator run-state command to the target components THROUGH the
  * reconciler (the sole actuator): record the durable intent, then enqueue so the
- * reconciler converges the container to it. A whole-app command (appname has no
- * '_') fans out across the deployment's components; a component command targets
- * just that component. Intent is recorded BEFORE the enqueue so a crash in between
- * still leaves the reconciler converging to the operator's recorded wish, never the
- * opposite. The reconciler honours election/dependency gates itself, so an operator
- * start of a non-elected activeStandby component is correctly held, not force-started.
+ * reconciler converges the container to it. Intent is recorded BEFORE the enqueue
+ * so a crash in between still leaves the reconciler converging to the operator's
+ * recorded wish, never the opposite. The reconciler honours election/dependency
+ * gates itself, so an operator start of a non-elected activeStandby component is
+ * correctly held, not force-started.
  *
- * @param {string} appname app or component identifier
- * @param {object[]|null} deployments DeploymentSpec per targeted identity (null for a component command)
+ * @param {string[]} ids component identifiers, resolved by the caller
  * @param {(id: string) => Promise<void>} recordIntent records the durable intent for one component
  * @returns {Promise<void>}
  */
-async function driveOperatorCommand(appname, deployments, recordIntent) {
-  const ids = (!appname.includes('_') && deployments)
-    ? deployments.flatMap((deployment) => deployment.componentEntries().map(([, c]) => c.identifier))
-    : [appname];
+async function driveOperatorCommand(ids, recordIntent) {
   // eslint-disable-next-line no-restricted-syntax
   for (const id of ids) {
     // eslint-disable-next-line no-await-in-loop
     await recordIntent(id);
     reconcilerQueue.enqueue(id);
   }
-}
-
-/**
- * The deployments a whole-app operator command targets on this node: every local
- * deployment, or exactly the named identity's when the command is replica-scoped
- * (?replica=). Throws when the app — or the named replica — is not deployed here.
- * @param {string} mainAppName
- * @param {string|null} replica
- * @returns {Promise<{instantiated: object, deployments: object[]}>}
- */
-async function resolveCommandDeployments(mainAppName, replica) {
-  const instantiated = await appsRepository.getGlobalAppInfo(mainAppName);
-  if (!instantiated) {
-    throw new Error('Application not found');
-  }
-  let deployments = await deploymentProvider.buildDeployments(instantiated);
-  if (replica != null) {
-    deployments = deployments.filter((deployment) => deployment.replica === replica);
-    if (deployments.length === 0) {
-      throw new Error(`Replica ${replica} of ${instantiated.name} is not deployed on this node`);
-    }
-  }
-  return { instantiated, deployments };
 }
 
 async function appStart(req, res) {
@@ -77,7 +48,7 @@ async function appStart(req, res) {
       throw new Error('No Flux App specified');
     }
 
-    const mainAppName = appname.split('_')[1] || appname;
+    const mainAppName = deploymentProvider.appNameFromRequest(appname);
 
     // eslint-disable-next-line global-require
     // Use dynamic require to avoid circular dependency
@@ -98,21 +69,19 @@ async function appStart(req, res) {
     }
 
     const isComponent = appname.includes('_');
-    let deployments = null;
     let appRes;
+    const { instantiated, ids } = await deploymentProvider.resolveRequestTargets(appname, { replica });
     if (isComponent) {
       appRes = `Component ${appname} started`;
     } else {
-      const resolved = await resolveCommandDeployments(mainAppName, replica);
-      ({ deployments } = resolved);
       appRes = replica != null
-        ? `Replica ${replica} of ${resolved.instantiated.name} started`
-        : `Application ${resolved.instantiated.name} started`;
+        ? `Replica ${replica} of ${instantiated.name} started`
+        : `Application ${instantiated.name} started`;
     }
     // clear the operator stop lock; the reconciler then (re)starts each component,
     // honouring its own election/dependency gates (a non-elected activeStandby
     // component is held at awaitingController, never force-started).
-    await driveOperatorCommand(appname, deployments, (id) => appsRuntimeState.setOperatorStopped(id, false));
+    await driveOperatorCommand(ids, (id) => appsRuntimeState.setOperatorStopped(id, false));
 
     const appResponse = messageHelper.createDataMessage(appRes);
     return res ? res.json(appResponse) : appResponse;
@@ -146,7 +115,7 @@ async function appStop(req, res) {
     }
     // eslint-disable-next-line global-require
 
-    const mainAppName = appname.split('_')[1] || appname;
+    const mainAppName = deploymentProvider.appNameFromRequest(appname);
 
     // Use dynamic require to avoid circular dependency
     // eslint-disable-next-line global-require
@@ -166,20 +135,18 @@ async function appStop(req, res) {
     }
 
     const isComponent = appname.includes('_'); // it is a component stop
-    let deployments = null;
     let appRes;
+    const { instantiated, ids } = await deploymentProvider.resolveRequestTargets(appname, { replica });
     if (isComponent) {
       appRes = `Component ${appname} stopped`;
     } else {
-      const resolved = await resolveCommandDeployments(mainAppName, replica);
-      ({ deployments } = resolved);
       appRes = replica != null
-        ? `Replica ${replica} of ${resolved.instantiated.name} stopped`
-        : `Application ${resolved.instantiated.name} stopped`;
+        ? `Replica ${replica} of ${instantiated.name} stopped`
+        : `Application ${instantiated.name} stopped`;
     }
     // operator stop persists (the reconciler will not restart a stopped app); the
     // reconciler does the actual stop + stops monitoring on its stop branch.
-    await driveOperatorCommand(appname, deployments, (id) => appsRuntimeState.setOperatorStopped(id, true));
+    await driveOperatorCommand(ids, (id) => appsRuntimeState.setOperatorStopped(id, true));
 
     const appResponse = messageHelper.createDataMessage(appRes);
     return res ? res.json(appResponse) : appResponse;
@@ -213,7 +180,7 @@ async function appRestart(req, res) {
       throw new Error('No Flux App specified');
     }
 
-    const mainAppName = appname.split('_')[1] || appname;
+    const mainAppName = deploymentProvider.appNameFromRequest(appname);
 
     // Use dynamic require to avoid circular dependency
     // eslint-disable-next-line global-require
@@ -233,21 +200,19 @@ async function appRestart(req, res) {
     }
 
     const isComponent = appname.includes('_');
-    let deployments = null;
     let appRes;
+    const { instantiated, ids } = await deploymentProvider.resolveRequestTargets(appname, { replica });
     if (isComponent) {
       appRes = `Component ${appname} restarted`;
     } else {
-      const resolved = await resolveCommandDeployments(mainAppName, replica);
-      ({ deployments } = resolved);
       appRes = replica != null
-        ? `Replica ${replica} of ${resolved.instantiated.name} restarted`
-        : `Application ${resolved.instantiated.name} restarted`;
+        ? `Replica ${replica} of ${instantiated.name} restarted`
+        : `Application ${instantiated.name} restarted`;
     }
     // user-initiated restart = "make it run now": clear the operator stop lock AND
     // bump the durable restart generation, so the reconciler restarts a running
     // container (or starts a stopped one) and honours its election/dependency gates.
-    await driveOperatorCommand(appname, deployments, async (id) => {
+    await driveOperatorCommand(ids, async (id) => {
       await appsRuntimeState.setOperatorStopped(id, false);
       await appsRuntimeState.requestRestart(id);
     });
@@ -281,7 +246,7 @@ async function appKill(req, res) {
       throw new Error('No Flux App specified');
     }
 
-    const mainAppName = appname.split('_')[1] || appname;
+    const mainAppName = deploymentProvider.appNameFromRequest(appname);
 
     // Use dynamic require to avoid circular dependency
     // eslint-disable-next-line global-require
@@ -294,21 +259,19 @@ async function appKill(req, res) {
 
     const replica = req.query.replica || null;
     const isComponent = appname.includes('_');
-    let deployments = null;
     let appRes;
+    const { instantiated, ids } = await deploymentProvider.resolveRequestTargets(appname, { replica });
     if (isComponent) {
       appRes = `Component ${appname} killed`;
     } else {
-      const resolved = await resolveCommandDeployments(mainAppName, replica);
-      ({ deployments } = resolved);
       appRes = replica != null
-        ? `Replica ${replica} of ${resolved.instantiated.name} killed`
-        : `Application ${resolved.instantiated.name} killed`;
+        ? `Replica ${replica} of ${instantiated.name} killed`
+        : `Application ${instantiated.name} killed`;
     }
     // operator kill = force-stop now: durable operatorStopped carrying the force
     // mode (so a crash never downgrades it to the app's graceful window); the
     // reconciler's desired-stopped branch honours force with appDockerKill.
-    await driveOperatorCommand(appname, deployments, (id) => appsRuntimeState.setOperatorStopped(id, true, { force: true }));
+    await driveOperatorCommand(ids, (id) => appsRuntimeState.setOperatorStopped(id, true, { force: true }));
 
     const appResponse = messageHelper.createDataMessage(appRes);
     return res ? res.json(appResponse) : appResponse;
@@ -342,7 +305,7 @@ async function appPause(req, res) {
       throw new Error('No Flux App specified');
     }
 
-    const mainAppName = appname.split('_')[1] || appname;
+    const mainAppName = deploymentProvider.appNameFromRequest(appname);
 
     // Use dynamic require to avoid circular dependency
     // eslint-disable-next-line global-require
@@ -365,9 +328,12 @@ async function appPause(req, res) {
     let appRes;
 
     if (isComponent) {
-      appRes = await dockerService.appDockerPause(appname);
+      // the request names a component of an app; its container identifier is built
+      // from the app's stored identity, so it is resolved rather than assumed
+      const identifier = await deploymentProvider.resolveRequestContainer(appname, { replica });
+      appRes = await dockerService.appDockerPause(identifier);
     } else {
-      const resolved = await resolveCommandDeployments(mainAppName, replica);
+      const resolved = await deploymentProvider.resolveRequestTargets(appname, { replica });
       for (const deployment of resolved.deployments) {
         for (const [, deployComp] of deployment.componentEntries({ reverse: true })) {
           // eslint-disable-next-line no-await-in-loop
@@ -411,7 +377,7 @@ async function appUnpause(req, res) {
       throw new Error('No Flux App specified');
     }
 
-    const mainAppName = appname.split('_')[1] || appname;
+    const mainAppName = deploymentProvider.appNameFromRequest(appname);
 
     // Use dynamic require to avoid circular dependency
     // eslint-disable-next-line global-require
@@ -434,9 +400,12 @@ async function appUnpause(req, res) {
     let appRes;
 
     if (isComponent) {
-      appRes = await dockerService.appDockerUnpause(appname);
+      // the request names a component of an app; its container identifier is built
+      // from the app's stored identity, so it is resolved rather than assumed
+      const identifier = await deploymentProvider.resolveRequestContainer(appname, { replica });
+      appRes = await dockerService.appDockerUnpause(identifier);
     } else {
-      const resolved = await resolveCommandDeployments(mainAppName, replica);
+      const resolved = await deploymentProvider.resolveRequestTargets(appname, { replica });
       for (const deployment of resolved.deployments) {
         for (const [, deployComp] of deployment.componentEntries()) {
           // eslint-disable-next-line no-await-in-loop
@@ -472,12 +441,8 @@ async function appUnpause(req, res) {
  * @returns {Promise<void>}
  */
 async function requestAppRestart(appname) {
-  let deployments = null;
-  if (!appname.includes('_')) {
-    const resolved = await resolveCommandDeployments(appname, null);
-    ({ deployments } = resolved);
-  }
-  await driveOperatorCommand(appname, deployments, (id) => appsRuntimeState.requestRestart(id));
+  const { ids } = await deploymentProvider.resolveRequestTargets(appname);
+  await driveOperatorCommand(ids, (id) => appsRuntimeState.requestRestart(id));
 }
 
 /**

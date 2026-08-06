@@ -59,8 +59,31 @@ function ipsMatch(a, b) {
   return extractIp(a) === extractIp(b);
 }
 
+// The DNS name that reaches ONE node's API through the load balancer. A bare
+// ip:port does not: nodes serve their API over TLS on a certificate issued for
+// this name, so an absolute URL built from the raw address fails to verify.
+const NODE_API_DOMAIN = 'node.api.runonflux.io';
+
+/**
+ * The public base URL of the node at a socket address.
+ *
+ * `185.209.30.228:16127` becomes
+ * `https://185-209-30-228-16127.node.api.runonflux.io` — the form the frontend
+ * already builds to pin a session to one backend.
+ *
+ * @param {string} address ip or ip:port
+ * @returns {string|null} base URL, or null when the address is not resolvable
+ */
+function nodeApiUrl(address) {
+  const parsed = parseSocketAddress(address);
+  if (!parsed) return null;
+  return `https://${parsed.ip.replace(/\./g, '-')}-${parsed.port}.${NODE_API_DOMAIN}`;
+}
+
 module.exports = {
   DEFAULT_API_PORT,
+  NODE_API_DOMAIN,
+  nodeApiUrl,
   normalizeSocketAddress,
   extractIp,
   extractPort,

@@ -7,9 +7,15 @@ const { expect } = chai;
 describe('operationsController tests', () => {
   let verifyPrivilegeStub;
   let jobRegistry;
+  let getLocalSocketAddressStub;
 
-  function build() {
+  function build(opts = {}) {
     verifyPrivilegeStub = sinon.stub().resolves(true);
+    // This node's own address, which the status URL is built against. Stubbed
+    // rather than reached for: unstubbed it asks the benchmark daemon.
+    getLocalSocketAddressStub = sinon.stub().resolves(
+      'address' in opts ? opts.address : '185.209.30.228:16127',
+    );
     // The registry is the real one: the contract under test is how an operation
     // is presented, and stubbing it out would test the stub.
     // eslint-disable-next-line global-require
@@ -17,6 +23,7 @@ describe('operationsController tests', () => {
 
     return proxyquire('../../ZelBack/src/services/appManagement/operationsController', {
       '../verificationHelper': { verifyPrivilege: verifyPrivilegeStub },
+      '../fluxNetworkHelper': { getLocalSocketAddress: getLocalSocketAddressStub },
     });
   }
 
@@ -47,24 +54,52 @@ describe('operationsController tests', () => {
       const controller = build();
       const res = mkRes();
 
-      controller.accepted(res, { jobId: 'op_1', statusUrl: '/apps/operations/op_1' });
+      await controller.accepted(res, { jobId: 'op_1', statusUrl: '/apps/operations/op_1' });
 
+      const absolute = 'https://185-209-30-228-16127.node.api.runonflux.io/apps/operations/op_1';
       expect(res.status.calledWith(202)).to.equal(true);
       // Location/Operation-Id are the long-running-operation spelling; the body
       // repeats them so a client that cannot read headers is not stuck.
-      expect(res.setHeader.calledWith('Location', '/apps/operations/op_1')).to.equal(true);
+      //
+      // Absolute, and against THIS node's own DNS name: an operation is
+      // node-local, so a poll that lands on any other node answers 404 - and the
+      // address the client used to get here may have been the load balancer.
+      expect(res.setHeader.calledWith('Location', absolute)).to.equal(true);
       expect(res.setHeader.calledWith('Operation-Id', 'op_1')).to.equal(true);
       expect(res.setHeader.calledWith('Retry-After', '2')).to.equal(true);
       expect(res.json.firstCall.args[0].data).to.include({
-        jobId: 'op_1', statusUrl: '/apps/operations/op_1', status: 'Running',
+        jobId: 'op_1', statusUrl: absolute, status: 'Running',
       });
+    });
+
+    it('falls back to the relative path when the node cannot resolve its own address', async () => {
+      // A caller that already reached this node can still follow a relative path.
+      // Emitting a URL built from an address we could not confirm cannot.
+      const controller = build({ address: null });
+      const res = mkRes();
+
+      await controller.accepted(res, { jobId: 'op_1', statusUrl: '/apps/operations/op_1' });
+
+      expect(res.setHeader.calledWith('Location', '/apps/operations/op_1')).to.equal(true);
+      expect(res.json.firstCall.args[0].data.statusUrl).to.equal('/apps/operations/op_1');
+    });
+
+    it('falls back rather than throwing when the address lookup fails', async () => {
+      const controller = build();
+      getLocalSocketAddressStub.rejects(new Error('benchmark unavailable'));
+      const res = mkRes();
+
+      await controller.accepted(res, { jobId: 'op_1', statusUrl: '/apps/operations/op_1' });
+
+      expect(res.status.calledWith(202)).to.equal(true);
+      expect(res.json.firstCall.args[0].data.statusUrl).to.equal('/apps/operations/op_1');
     });
 
     it('echoes whatever else the endpoint wants to hand back', async () => {
       const controller = build();
       const res = mkRes();
 
-      controller.accepted(res, { jobId: 'op_1', statusUrl: '/x' }, { messageHash: 'abc' });
+      await controller.accepted(res, { jobId: 'op_1', statusUrl: '/x' }, { messageHash: 'abc' });
 
       expect(res.json.firstCall.args[0].data.messageHash).to.equal('abc');
     });
@@ -95,6 +130,20 @@ describe('operationsController tests', () => {
       expect(res.status.called).to.equal(false);
       expect(res.json.firstCall.args[0].data.status).to.equal('Failed');
       expect(res.json.firstCall.args[0].data.error.detail).to.equal('it broke');
+    });
+
+    it('makes a failure\'s problem-detail instance absolute too', async () => {
+      // `instance` points at the same status resource under the RFC 7807 name, so
+      // it has to be followable from wherever the client is.
+      const controller = build();
+      const handle = jobRegistry.start({ kind: 'test' });
+      jobRegistry.fail(handle.jobId, new Error('it broke'));
+      const res = mkRes();
+
+      await controller.getOperation(mkReq({ params: { jobId: handle.jobId } }), res);
+
+      expect(res.json.firstCall.args[0].data.error.instance)
+        .to.equal(`https://185-209-30-228-16127.node.api.runonflux.io/apps/operations/${handle.jobId}`);
     });
 
     it('stops sending Retry-After once the operation is terminal', async () => {

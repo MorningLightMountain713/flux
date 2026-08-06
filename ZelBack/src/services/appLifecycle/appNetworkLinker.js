@@ -579,7 +579,7 @@ async function isDisconnectEligibleFluxNetwork(networkName) {
  * lock (a linked network's removal runs in its app's teardown under the same
  * lock), failures are collected for the caller to pace a retry.
  *
- * @param {string} componentIdentifier - container (bare identifier or docker name)
+ * @param {string} componentIdentifier - bare component identifier
  * @param {string[]} desiredNetworks - full desired membership (own + linked)
  * @param {string[]} actualNetworks - current memberships from docker inspect
  * @returns {Promise<{connected: string[], disconnected: string[], failed: string[]}>}

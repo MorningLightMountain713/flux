@@ -126,6 +126,47 @@ describe('appController tests', () => {
       const deployment = await deploymentProvider.buildDeployment(instantiated, { replica: null });
       return deployment ? [deployment] : [];
     });
+
+    // The seam the handlers resolve through. It MIRRORS the real rule - look the
+    // app up, then the component by NAME, and answer with the identifier the
+    // deployment states - because a stub that just echoed the request string back
+    // would make every assertion below pass while testing the bug this replaced.
+    // The rule itself is covered against real specs in deploymentProvider.test.js.
+    sinon.stub(deploymentProvider, 'resolveRequestTargets').callsFake(async (appname, opts = {}) => {
+      const instantiated = await appsRepository.getGlobalAppInfo(appname.split('_')[1] || appname);
+      if (!instantiated) throw new Error('Application not found');
+      let deployments = await deploymentProvider.buildDeployments(instantiated);
+      const { replica = null } = opts;
+      if (replica != null) {
+        deployments = deployments.filter((d) => d.replica === replica);
+        if (deployments.length === 0) {
+          throw new Error(`Replica ${replica} of ${instantiated.name} is not deployed on this node`);
+        }
+      }
+      const separator = appname.indexOf('_');
+      if (separator === -1) {
+        return {
+          instantiated,
+          deployments,
+          ids: deployments.flatMap((d) => d.componentEntries().map(([, c]) => c.identifier)),
+        };
+      }
+      const componentName = appname.slice(0, separator);
+      const ids = deployments
+        .map((d) => d.getComponent(componentName))
+        .filter(Boolean)
+        .map((c) => c.identifier);
+      if (ids.length === 0) {
+        throw new Error(`Component ${componentName} of ${instantiated.name} is not deployed on this node`);
+      }
+      return { instantiated, deployments, ids };
+    });
+
+    sinon.stub(deploymentProvider, 'resolveRequestContainer').callsFake(async (appname, opts = {}) => {
+      const { ids } = await deploymentProvider.resolveRequestTargets(appname, opts);
+      if (ids.length > 1) throw new Error(`${appname} names ${ids.length} containers on this node`);
+      return ids[0];
+    });
   });
 
   afterEach(() => {
@@ -198,9 +239,16 @@ describe('appController tests', () => {
       expect(result.data.code).to.equal(401);
     });
 
-    it('enqueues a single component without a spec lookup', async () => {
+    it('drives the identifier the deployment states, not the request string', async () => {
+      // The request names a COMPONENT of an app, by the app's name — which is what
+      // the UI holds. The container identifier is built from the app's minted
+      // identity instead, so the request string is not an identifier and driving it
+      // as one keys a component that does not exist.
       verificationHelperStub.resolves(true);
-      const getInfo = sinon.stub(appsRepository, 'getGlobalAppInfo').resolves(null);
+      sinon.stub(appsRepository, 'getGlobalAppInfo').resolves({ name: 'TestApp' });
+      sinon.stub(deploymentProvider, 'buildDeployment').resolves(stubDeployment([
+        { name: 'Component', identifier: 'Component_a1b2c3d4e5f6' },
+      ]));
 
       const req = { params: { appname: 'Component_TestApp' }, query: {} };
       const res = { json: sinon.fake((param) => param) };
@@ -209,9 +257,25 @@ describe('appController tests', () => {
 
       const result = res.json.firstCall.args[0];
       expect(result.status).to.equal('success');
-      sinon.assert.calledOnceWithExactly(setOperatorStopped, 'Component_TestApp', false);
-      sinon.assert.calledOnceWithExactly(enqueue, 'Component_TestApp');
-      sinon.assert.notCalled(getInfo);
+      sinon.assert.calledOnceWithExactly(setOperatorStopped, 'Component_a1b2c3d4e5f6', false);
+      sinon.assert.calledOnceWithExactly(enqueue, 'Component_a1b2c3d4e5f6');
+    });
+
+    it('refuses a component this node does not hold instead of reporting success', async () => {
+      verificationHelperStub.resolves(true);
+      sinon.stub(appsRepository, 'getGlobalAppInfo').resolves({ name: 'TestApp' });
+      sinon.stub(deploymentProvider, 'buildDeployment').resolves(stubDeployment([
+        { name: 'Component', identifier: 'Component_TestApp' },
+      ]));
+
+      const req = { params: { appname: 'Ghost_TestApp' }, query: {} };
+      const res = { json: sinon.fake((param) => param) };
+
+      await appController.appStart(req, res);
+
+      expect(res.json.firstCall.args[0].status).to.equal('error');
+      sinon.assert.notCalled(enqueue);
+      sinon.assert.notCalled(setOperatorStopped);
     });
 
     it('enqueues every component for a version 4+ app', async () => {
@@ -303,9 +367,12 @@ describe('appController tests', () => {
       sinon.assert.calledTwice(enqueue);
     });
 
-    it('locks and enqueues a single component without a spec lookup', async () => {
+    it('locks the identifier the deployment states, not the request string', async () => {
       verificationHelperStub.resolves(true);
-      const getInfo = sinon.stub(appsRepository, 'getGlobalAppInfo').resolves(null);
+      sinon.stub(appsRepository, 'getGlobalAppInfo').resolves({ name: 'TestApp' });
+      sinon.stub(deploymentProvider, 'buildDeployment').resolves(stubDeployment([
+        { name: 'Component', identifier: 'Component_a1b2c3d4e5f6' },
+      ]));
 
       const req = { params: { appname: 'Component_TestApp' }, query: {} };
       const res = { json: sinon.fake((param) => param) };
@@ -314,15 +381,21 @@ describe('appController tests', () => {
 
       const result = res.json.firstCall.args[0];
       expect(result.status).to.equal('success');
-      sinon.assert.calledOnceWithExactly(setOperatorStopped, 'Component_TestApp', true);
-      sinon.assert.calledOnceWithExactly(enqueue, 'Component_TestApp');
-      sinon.assert.notCalled(getInfo);
+      // the operator lock is durable and nothing ever clears it, so locking a key
+      // no component answers to is a lock that can never be lifted
+      sinon.assert.calledOnceWithExactly(setOperatorStopped, 'Component_a1b2c3d4e5f6', true);
+      sinon.assert.calledOnceWithExactly(enqueue, 'Component_a1b2c3d4e5f6');
     });
 
     it('records the operator lock BEFORE enqueueing (crash-safe ordering)', async () => {
       // lock-after would let a crash between enqueue and the lock write leave a
       // running container the reconciler keeps running against the operator's intent
       verificationHelperStub.resolves(true);
+
+      sinon.stub(appsRepository, 'getGlobalAppInfo').resolves({ name: 'TestApp' });
+      sinon.stub(deploymentProvider, 'buildDeployment').resolves(stubDeployment([
+        { name: 'Component', identifier: 'Component_TestApp' },
+      ]));
 
       const req = { params: { appname: 'Component_TestApp' }, query: {} };
       const res = { json: sinon.fake((param) => param) };
@@ -454,18 +527,21 @@ describe('appController tests', () => {
       expect(result.data.code).to.equal(401);
     });
 
-    it('restarts only the named component on a component restart (no spec lookup)', async () => {
+    it('restarts only the named component, by the identifier it states', async () => {
       verificationHelperStub.resolves(true);
-      const getInfo = sinon.stub(appsRepository, 'getGlobalAppInfo').resolves(null);
+      sinon.stub(appsRepository, 'getGlobalAppInfo').resolves({ name: 'ComposedApp' });
+      sinon.stub(deploymentProvider, 'buildDeployment').resolves(stubDeployment([
+        { name: 'Component1', identifier: 'Component1_a1b2c3d4e5f6' },
+        { name: 'Component2', identifier: 'Component2_a1b2c3d4e5f6' },
+      ]));
 
       const req = { params: { appname: 'Component1_ComposedApp' }, query: {} };
       const res = { json: sinon.fake((param) => param) };
       await appController.appRestart(req, res);
 
-      sinon.assert.calledOnceWithExactly(setOperatorStopped, 'Component1_ComposedApp', false);
-      sinon.assert.calledOnceWithExactly(requestRestart, 'Component1_ComposedApp');
-      sinon.assert.calledOnceWithExactly(enqueue, 'Component1_ComposedApp');
-      sinon.assert.notCalled(getInfo);
+      sinon.assert.calledOnceWithExactly(setOperatorStopped, 'Component1_a1b2c3d4e5f6', false);
+      sinon.assert.calledOnceWithExactly(requestRestart, 'Component1_a1b2c3d4e5f6');
+      sinon.assert.calledOnceWithExactly(enqueue, 'Component1_a1b2c3d4e5f6');
     });
 
     // An activeStandby component restart now routes through the reconciler like any
@@ -473,6 +549,11 @@ describe('appController tests', () => {
     // gate decides whether it actually runs (no caller-side skip, no docker call).
     it('routes an activeStandby component restart through the reconciler (no caller-side skip)', async () => {
       verificationHelperStub.resolves(true);
+
+      sinon.stub(appsRepository, 'getGlobalAppInfo').resolves({ name: 'ComposedApp' });
+      sinon.stub(deploymentProvider, 'buildDeployment').resolves(stubDeployment([
+        { name: 'Gcomp', identifier: 'Gcomp_ComposedApp', activeStandby: true },
+      ]));
 
       const req = { params: { appname: 'Gcomp_ComposedApp' }, query: {} };
       const res = { json: sinon.fake((param) => param) };
@@ -494,6 +575,11 @@ describe('appController tests', () => {
 
     it('sets the durable force-stop lock and enqueues (no direct docker kill)', async () => {
       verificationHelperStub.resolves(true);
+
+      sinon.stub(appsRepository, 'getGlobalAppInfo').resolves({ name: 'TestApp' });
+      sinon.stub(deploymentProvider, 'buildDeployment').resolves(stubDeployment([
+        { name: 'Component', identifier: 'Component_TestApp' },
+      ]));
 
       const req = { params: { appname: 'Component_TestApp' }, query: {} };
       const res = { json: sinon.fake((param) => param) };

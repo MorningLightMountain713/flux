@@ -1418,6 +1418,18 @@ async function getFluxInfo(req, res) {
       throw appsResources.data;
     }
     info.apps.resources = appsResources.data;
+    // How much of this node's container population carries the identity label.
+    // Every consumer that reads identity off a label still carries a name-parsing
+    // fallback for the containers that predate it; those fallbacks can only be
+    // deleted once the whole fleet reports covered, so the figure is published
+    // rather than only logged. Best-effort: a docker read failure must not fail
+    // the whole info payload.
+    // eslint-disable-next-line global-require
+    const containerLabelBackfill = require('./appLifecycle/containerLabelBackfill');
+    info.apps.containerLabels = await containerLabelBackfill.labelCoverage().catch((error) => {
+      log.warn(`getFluxInfo - container label coverage unavailable: ${error.message}`);
+      return null;
+    });
     // eslint-disable-next-line global-require
     const registryManager = require('./appDatabase/registryManager');
     const appHashes = await registryManager.getAppHashes();

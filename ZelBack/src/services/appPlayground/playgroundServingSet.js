@@ -1,8 +1,8 @@
-const crypto = require('crypto');
 const config = require('config');
 const log = require('../../lib/log');
 const fluxCommunicationUtils = require('../fluxCommunicationUtils');
 const generalService = require('../generalService');
+const { rankNodes } = require('../utils/rendezvousRank');
 
 // Which nodes may serve a given caller, decided without asking anyone.
 //
@@ -76,18 +76,11 @@ function windowIndex(nowMs = Date.now()) {
 }
 
 /**
- * One node's weight for one caller in one window.
- *
- * The node's outpoint identifies it, not its address: an address changes with a
- * router and would reshuffle a caller's set for a reason that has nothing to do
- * with the node. `outidx` arrives from the daemon as a STRING despite the
- * typedef, so it is interpolated rather than compared numerically anywhere.
+ * The ranking key for one caller in one window. Everything that should move a
+ * caller's set belongs in it and nothing else does.
  */
-function score(axis, axisValue, window, node) {
-  return crypto
-    .createHash('sha256')
-    .update(`${axis}|${axisValue}|${window}|${node.txhash}|${node.outidx}`)
-    .digest('hex');
+function rankKey(axis, axisValue, window) {
+  return `${axis}|${axisValue}|${window}`;
 }
 
 /**
@@ -115,11 +108,7 @@ async function servingSet(axisValue, options = {}) {
     (node) => node.tier && SERVING_TIERS.includes(String(node.tier).toUpperCase()),
   );
 
-  return eligible
-    .map((node) => ({ node, weight: score(axis, axisValue, window, node) }))
-    .sort((a, b) => (a.weight < b.weight ? 1 : -1))
-    .slice(0, setSize())
-    .map((scored) => scored.node);
+  return rankNodes(eligible, rankKey(axis, axisValue, window)).slice(0, setSize());
 }
 
 /**

@@ -61,6 +61,25 @@ describe('appQueryService tests', () => {
 
     dockerServiceStub = {
       dockerListContainers: sinon.stub(),
+      // mirrors the real ownership test: the identity label is authoritative, the
+      // name test survives only for containers created before labels shipped
+      isManagedContainer: ({ labels, name }, labelKeys) => {
+        if (labels && labels[labelKeys.IDENTIFIER]) return true;
+        if (!name) return false;
+        const bare = name.startsWith('/') ? name.slice(1) : name;
+        return bare.startsWith('flux') || bare.startsWith('zel');
+      },
+      // mirrors the real helper: the app label is authoritative, the name is read
+      // only for pre-label containers, and BOTH prefixes are stripped by width
+      containerAppName: ({ labels, name }, labelKeys) => {
+        const labelled = labels && labels[labelKeys.APP];
+        if (labelled) return labelled;
+        if (!name) return null;
+        let bare = name.startsWith('/') ? name.slice(1) : name;
+        if (bare.startsWith('flux')) bare = bare.slice(4);
+        else if (bare.startsWith('zel')) bare = bare.slice(3);
+        return bare.split('_')[1] || bare;
+      },
     };
 
     registryManagerStub = {
@@ -90,6 +109,11 @@ describe('appQueryService tests', () => {
       '../utils/appConstants': proxyquire('../../ZelBack/src/services/utils/appConstants', {
         config: configStub,
       }),
+      '../utils/specLibs': {
+        getSpecBackend: async () => ({
+          LABEL_KEYS: { IDENTIFIER: 'io.runonflux.identifier', APP: 'io.runonflux.app' },
+        }),
+      },
     });
   });
 
@@ -253,8 +277,15 @@ describe('appQueryService tests', () => {
       // hold a backup lease on the real registry (un-stubbed) and clean up.
       operationRegistry.acquire('App', 'backup', 'test'); // bare main-app name (production format)
       try {
+        // the container states its own app: the identifier segment is the app's
+        // identity, which is not a name and would match no backup lease
         const stoppedContainer = {
-          Names: ['/fluxwww_App'], State: 'exited', HostConfig: {}, NetworkSettings: {}, Mounts: [],
+          Names: ['/fluxwww_a1b2c3d4e5f6'],
+          Labels: { 'io.runonflux.identifier': 'www_a1b2c3d4e5f6', 'io.runonflux.app': 'App' },
+          State: 'exited',
+          HostConfig: {},
+          NetworkSettings: {},
+          Mounts: [],
         };
         dockerServiceStub.dockerListContainers.withArgs(false).resolves([]); // nothing running
         dockerServiceStub.dockerListContainers.withArgs(true).resolves([stoppedContainer]);
@@ -264,7 +295,7 @@ describe('appQueryService tests', () => {
 
         expect(result.status).to.equal('success');
         const names = result.data.map((app) => app.Names[0]);
-        expect(names, 'backed-up app must still be reported as running').to.include('/fluxwww_App');
+        expect(names, 'backed-up app must still be reported as running').to.include('/fluxwww_a1b2c3d4e5f6');
       } finally {
         operationRegistry.release('App');
       }
