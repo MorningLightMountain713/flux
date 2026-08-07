@@ -331,12 +331,12 @@ describe('nodeConfirmationService', () => {
   });
 
   describe('daemon staleness', () => {
-    async function advanceByMinutes(minutes) {
-      // Jump the wall clock forward, then fire a single poll so it observes the
+    async function setPollAgeMinutes(minutes) {
+      // Age the last successful poll, then fire a single poll so it observes the
       // elapsed window. Ticking the full span would fire one poll per 30s
       // interval (252 polls for 126 min, 642 for 321 min); under full-suite
       // load those event-loop turns flake against mocha's 2s timeout.
-      clock.setSystemTime(Date.now() + minutes * 60 * 1000);
+      service.setLastSuccessfulPollAgeMs(minutes * 60 * 1000);
       await clock.tickAsync(30 * 1000);
     }
 
@@ -351,10 +351,28 @@ describe('nodeConfirmationService', () => {
       await service.start();
 
       getFluxNodeStatusStub.rejects(new Error('connection refused'));
-      await advanceByMinutes(126);
+      await setPollAgeMinutes(126);
 
       expect(service.isDaemonStale()).to.be.true;
       expect(service.isConfirmed()).to.be.true;
+    });
+
+    it('should not become stale from a wall clock jump alone', async () => {
+      const callback = sinon.spy();
+      service.onDaemonStale(callback);
+
+      setupConfirmed();
+      await service.start();
+
+      // An NTP correction or a resumed VM moves the wall clock without any real
+      // time passing. The daemon has not actually been unreachable for a moment.
+      getFluxNodeStatusStub.rejects(new Error('connection refused'));
+      clock.setSystemTime(Date.now() + 400 * 60 * 1000);
+      await clock.tickAsync(30 * 1000);
+
+      expect(service.isDaemonStale()).to.be.false;
+      expect(service.isConfirmed()).to.be.true;
+      expect(callback.called).to.be.false;
     });
 
     it('should not be stale after brief RPC failure', async () => {
@@ -362,7 +380,7 @@ describe('nodeConfirmationService', () => {
       await service.start();
 
       getFluxNodeStatusStub.rejects(new Error('connection refused'));
-      await advanceByMinutes(10);
+      await setPollAgeMinutes(10);
 
       expect(service.isDaemonStale()).to.be.false;
       expect(service.isConfirmed()).to.be.true;
@@ -376,10 +394,10 @@ describe('nodeConfirmationService', () => {
       await service.start();
 
       getFluxNodeStatusStub.rejects(new Error('connection refused'));
-      await advanceByMinutes(124);
+      await setPollAgeMinutes(124);
       expect(callback.called).to.be.false;
 
-      await advanceByMinutes(2);
+      await setPollAgeMinutes(126);
       expect(callback.calledOnce).to.be.true;
     });
 
@@ -391,7 +409,7 @@ describe('nodeConfirmationService', () => {
       await service.start();
 
       getFluxNodeStatusStub.rejects(new Error('connection refused'));
-      await advanceByMinutes(10);
+      await setPollAgeMinutes(10);
 
       expect(callback.called).to.be.false;
     });
@@ -402,7 +420,7 @@ describe('nodeConfirmationService', () => {
       expect(service.canSendMessages()).to.be.true;
 
       getFluxNodeStatusStub.rejects(new Error('connection refused'));
-      await advanceByMinutes(126);
+      await setPollAgeMinutes(126);
 
       expect(service.isDaemonStale()).to.be.true;
       expect(service.canSendMessages()).to.be.true;
@@ -417,7 +435,7 @@ describe('nodeConfirmationService', () => {
       expect(confirmCb.calledOnce).to.be.true;
 
       getFluxNodeStatusStub.rejects(new Error('connection refused'));
-      await advanceByMinutes(321);
+      await setPollAgeMinutes(321);
 
       expect(service.isConfirmed()).to.be.false;
       expect(service.canSendMessages()).to.be.false;
@@ -433,7 +451,7 @@ describe('nodeConfirmationService', () => {
       await service.start();
 
       getFluxNodeStatusStub.rejects(new Error('connection refused'));
-      await advanceByMinutes(126);
+      await setPollAgeMinutes(126);
       expect(service.isDaemonStale()).to.be.true;
       expect(staleCb.calledOnce).to.be.true;
 
