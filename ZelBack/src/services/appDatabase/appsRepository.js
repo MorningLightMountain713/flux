@@ -466,6 +466,66 @@ async function prepareInstalledAppsCollection() {
 }
 
 /**
+ * Record the container identifiers on rows written before they were stored.
+ *
+ * A row that predates the field answers nothing to the identifier index, and its
+ * readers fall back to taking a container's name apart. This gives them the fact
+ * instead. Nothing on disk moves: the identifiers are re-derived from the row's
+ * own spec and are exactly the names its containers already carry.
+ *
+ * Idempotent by construction rather than by a marker — the condition IS the
+ * field's absence, so an interrupted pass resumes and a finished node does
+ * nothing. A row whose deployment cannot be built (a sealed spec this node
+ * cannot open) is left alone and picked up whenever that changes; it keeps the
+ * fallback in the meantime, which is what the fallback is for.
+ *
+ * @param {Function} identifiersFor - (name, replica) => Promise<string[]|null>,
+ *   injected because building a deployment needs the resolved spec, and this
+ *   module must not depend on the provider that resolves it.
+ */
+async function backfillComponentIdentifiers(identifiersFor) {
+  if (typeof identifiersFor !== 'function') {
+    throw new Error('appsRepository.backfillComponentIdentifiers: identifiersFor required');
+  }
+  const rows = await dbHelper.findInDatabase(
+    localDb(), localAppsInformation,
+    { componentIdentifiers: { $exists: false } },
+    { projection: { _id: 0, name: 1, replica: 1 } },
+  );
+  if (rows.length === 0) return { backfilled: 0, unresolved: 0 };
+
+  let backfilled = 0;
+  let unresolved = 0;
+  for (const row of rows) {
+    // eslint-disable-next-line no-await-in-loop
+    const identifiers = await identifiersFor(row.name, row.replica ?? null).catch((error) => {
+      log.warn(`appsRepository - could not derive component identifiers for ${row.name}: ${error.message}`);
+      return null;
+    });
+    if (!Array.isArray(identifiers) || identifiers.length === 0) {
+      unresolved += 1;
+      // eslint-disable-next-line no-continue
+      continue;
+    }
+    // eslint-disable-next-line no-await-in-loop
+    await dbHelper.updateOneInDatabase(
+      localDb(), localAppsInformation,
+      { name: nameRegex(row.name), replica: replicaKey(row.replica ?? null) },
+      { $set: { componentIdentifiers: identifiers } },
+      {},
+    );
+    backfilled += 1;
+  }
+  if (unresolved > 0) {
+    log.warn(`appsRepository - ${unresolved} installed row(s) could not state their component identifiers yet`);
+  }
+  if (backfilled > 0) {
+    log.info(`appsRepository - component identifiers recorded for ${backfilled} installed row(s)`);
+  }
+  return { backfilled, unresolved };
+}
+
+/**
  * Give every global app row the instance identity it was always entitled to.
  *
  * An app registered before identities existed has one available retroactively:
@@ -1573,6 +1633,7 @@ module.exports = {
   // installed apps
   prepareInstalledAppsCollection,
   backfillGlobalAppUuids,
+  backfillComponentIdentifiers,
   getInstalledApp,
   getInstalledAppByIdentity,
   getInstalledAppByComponentIdentifier,
