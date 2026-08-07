@@ -2,6 +2,22 @@ const { expect } = require('chai');
 const sinon = require('sinon');
 const proxyquire = require('proxyquire').noCallThru();
 
+// RFC 5737 documentation ranges: a balancer, a customer behind it, and a caller
+// that reaches the node directly.
+const BALANCER = '203.0.113.7';
+const CLIENT = '198.51.100.23';
+const DIRECT = '192.0.2.55';
+
+// The real resolution logic with a controlled balancer list. A factory because
+// every proxyquire map of playgroundService needs it: left out of one, the real
+// module loads and drags its flux-spec loader in with it.
+function resolver(fdmAddresses = [BALANCER]) {
+  return proxyquire.load('../../ZelBack/src/services/utils/ingressCapture', {
+    config: { fdmAddresses },
+    './specLibs': { getSpecBackend: async () => ({}) },
+  });
+}
+
 const CONFIG = {
   fluxapps: {
     playgroundSessionCpu: 2,
@@ -85,6 +101,7 @@ describe('playgroundService', () => {
 
     return proxyquire.load('../../ZelBack/src/services/appPlayground/playgroundService', {
       config: CONFIG,
+      '../utils/ingressCapture': resolver(opts.fdmAddresses),
       '../../lib/log': {
         info: sinon.stub(), warn: sinon.stub(), error: sinon.stub(),
       },
@@ -338,6 +355,7 @@ describe('playgroundService', () => {
           getSpecBackend: async () => ({ DeploymentSpec: { fromSpec: stubs.fromSpec } }),
         },
         '../utils/appConstants': { appsFolder: '/tmp/apps/' },
+        '../utils/ingressCapture': resolver(),
         './playgroundLimits': refusing,
         './playgroundRunner': { runSession: stubs.runSession, teardownSession: stubs.teardownSession, reapOrphans: stubs.reapOrphans },
         './playgroundSessionRegistry': sessionRegistry,
@@ -770,6 +788,76 @@ describe('playgroundService', () => {
       expect(detail.doesNotProve).to.include('syncthing');
       expect(detail.doesNotProve).to.include('load balancing');
       expect(detail.proves).to.include('declares');
+    });
+  });
+
+  // The abuse controls key on `fluxId|sourceIp`. A browser reaches a node
+  // through FDM, so if sourceIp is the socket peer it is the SAME balancer for
+  // every customer, both keys collapse to the FluxID, and the per-address half
+  // of each control stops existing. These assert on what isBlocked is keyed
+  // with, because that is a control rather than a record.
+  describe('submitSessionAPI - the address the controls are keyed on', () => {
+    function fakeReq({ peer, forwardedFor } = {}) {
+      const headers = { zelidauth: { zelid: 'zelid1' } };
+      if (forwardedFor) headers['x-forwarded-for'] = forwardedFor;
+      return { headers, socket: { remoteAddress: peer }, body: {} };
+    }
+
+    function fakeRes() {
+      const res = { statusCode: null, payload: null };
+      res.status = (code) => { res.statusCode = code; return res; };
+      res.json = (payload) => { res.payload = payload; return res; };
+      res.setHeader = () => {};
+      return res;
+    }
+
+    it('keys on the customer behind the balancer, not the balancer', async () => {
+      await service.submitSessionAPI(
+        fakeReq({ peer: BALANCER, forwardedFor: CLIENT }),
+        fakeRes(),
+      );
+      await settle();
+
+      expect(stubs.isBlocked.calledOnce).to.equal(true);
+      expect(stubs.isBlocked.firstCall.args[1]).to.equal(CLIENT);
+    });
+
+    it('gives two customers behind one balancer two different keys', async () => {
+      const other = '198.51.100.24';
+      await service.submitSessionAPI(fakeReq({ peer: BALANCER, forwardedFor: CLIENT }), fakeRes());
+      await settle();
+      await service.submitSessionAPI(fakeReq({ peer: BALANCER, forwardedFor: other }), fakeRes());
+      await settle();
+
+      const keyed = stubs.isBlocked.getCalls().map((call) => call.args[1]);
+      expect(keyed).to.deep.equal([CLIENT, other]);
+    });
+
+    it('ignores the header when the peer is not a balancer', async () => {
+      await service.submitSessionAPI(
+        fakeReq({ peer: DIRECT, forwardedFor: CLIENT }),
+        fakeRes(),
+      );
+      await settle();
+
+      // A direct caller writes whatever it likes into the header; every node is
+      // reachable, so an unrecognised peer's claim is worth nothing.
+      expect(stubs.isBlocked.firstCall.args[1]).to.equal(DIRECT);
+    });
+
+    it('leaves the sealed ingress record unresolved', async () => {
+      await service.submitSessionAPI(
+        fakeReq({ peer: BALANCER, forwardedFor: CLIENT }),
+        fakeRes(),
+      );
+      await settle();
+
+      // The record is signed and gossiped, so a conclusion drawn from this
+      // node's own balancer list must not enter it - two nodes with different
+      // lists would sign different answers for one request.
+      const [session] = stubs.audit.firstCall.args;
+      expect(session.ingress.observed.ip).to.equal('1.2.3.4');
+      expect(session.ingress).to.not.have.property('resolved');
     });
   });
 });

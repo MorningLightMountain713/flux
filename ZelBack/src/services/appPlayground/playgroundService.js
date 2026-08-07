@@ -10,6 +10,7 @@ const hwRequirements = require('../appRequirements/hwRequirements');
 const admissionControl = require('../utils/admissionControl');
 const jobRegistry = require('../utils/jobRegistry');
 const globalState = require('../utils/globalState');
+const ingressCapture = require('../utils/ingressCapture');
 const operationsController = require('../appManagement/operationsController');
 const appSpawner = require('../appLifecycle/appSpawner');
 const { validateSubmissionSpec, getSpecBackend } = require('../utils/specLibs');
@@ -373,7 +374,12 @@ function sessionDetail(session, { sinceSeq = 0 } = {}) {
  * @param {object} body the raw spec, unsigned and unmodified
  * @param {object} caller
  * @param {string} caller.fluxId the authenticated signer
- * @param {string|null} caller.sourceIp the OBSERVED socket peer, never a header
+ * @param {string|null} caller.sourceIp the RESOLVED caller address: the socket
+ *   peer, or the client hop from the forwarding header when the peer is one of
+ *   the balancers in config.fdmAddresses. A browser reaches a node through FDM,
+ *   so the socket peer alone is the balancer for every caller and every key
+ *   built on it collapses to the FluxID. The sealed ingress record keeps
+ *   `observed` and `asserted` unresolved - this is for the controls only.
  * @param {object} [caller.ingress] the ingress capture for the audit record
  * @returns {Promise<{jobId: string, statusUrl: string, sessionId: string}>}
  */
@@ -603,9 +609,14 @@ async function submitSessionAPI(req, res) {
 
     const ingress = await playgroundAudit.captureIngress(req);
 
+    const { ip: sourceIp } = ingressCapture.resolveClientIp(
+      req.socket && req.socket.remoteAddress,
+      req.headers,
+    );
+
     const handle = await submitSession(req.body ?? {}, {
       fluxId,
-      sourceIp: ingress.observed.ip,
+      sourceIp,
       ingress,
     });
 
