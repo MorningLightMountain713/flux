@@ -170,9 +170,6 @@ describe('appUninstaller tests', () => {
         broadcastMessageToIncoming: sinon.stub().resolves(),
         broadcastMessageToAll: sinon.stub().resolves(),
       },
-      '../appDatabase/registryManager': {
-        availableApps: sinon.stub().resolves([]),
-      },
       '../appDatabase/appsRepository': appsRepositoryStub,
       './appNetworkLinker': appNetworkLinkerStub,
       './pendingTeardownStore': pendingTeardownStoreStub,

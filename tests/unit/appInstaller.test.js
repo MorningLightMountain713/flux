@@ -139,9 +139,6 @@ describe('appInstaller tests', () => {
         getCpuBurstAllowance: sinon.stub().returns(0),
       },
       '../appRequirements/hwRequirements': hwRequirementsStub,
-      util: {
-        promisify: (fn) => fn,
-      },
       // Stubbed for the same reason appDockerNetwork above is: proxyquire does
       // not recurse, so a collaborator left real brings its own real
       // dependencies with it. componentProvisioner is the one that matters —
@@ -463,7 +460,6 @@ describe('appInstaller tests', () => {
         '../appRequirements/hwRequirements': hwRequirementsStub,
         '../appQuery/appQueryService': { listRunningApps: sinon.stub().resolves({ status: 'success', data: [] }) },
         '../utils/registryCredentialHelper': { getCredentials: sinon.stub().resolves(null) },
-        util: { promisify: (fn) => fn },
       });
 
       appInstallerFresh.setOnInstallComplete(onInstallComplete);
