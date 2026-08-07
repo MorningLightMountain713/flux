@@ -14,7 +14,14 @@ let daemonConfirmed = null;
 let daemonStale = false;
 let messageCapable = false;
 let started = false;
-let lastSuccessfulPoll = null;
+// Monotonic. A wall clock jump — an NTP correction, a resumed VM — must not be able to
+// age this out, because both windows it gates shed every app on the node.
+let lastSuccessfulPollAt = null;
+
+function elapsedSincePollMs() {
+  if (lastSuccessfulPollAt === null) return null;
+  return Number(process.hrtime.bigint() - lastSuccessfulPollAt) / 1_000_000;
+}
 
 const confirmedGate = new AsyncGate();
 const confirmationStatusGate = new AsyncGate();
@@ -62,7 +69,7 @@ async function poll() {
     const response = await daemonServiceFluxnodeRpcs.getFluxNodeStatus();
     if (response.status === 'success') {
       rpcReachable = true;
-      lastSuccessfulPoll = Date.now();
+      lastSuccessfulPollAt = process.hrtime.bigint();
       daemonStale = false;
       daemonConfirmed = response.data?.status === 'CONFIRMED';
     }
@@ -72,9 +79,8 @@ async function poll() {
 
   // Future: use in-band NAK-based confirmation check instead of timeout.
   // See dev/in-band-confirmation-check.md
-  if (!rpcReachable && lastSuccessfulPoll !== null) {
-    const elapsed = Date.now() - lastSuccessfulPoll;
-
+  const elapsed = elapsedSincePollMs();
+  if (!rpcReachable && elapsed !== null) {
     // 125 min — remove apps, but messageCapable preserved (can still broadcast)
     if (elapsed > DAEMON_STALE_MS && !daemonStale) {
       daemonStale = true;
@@ -171,6 +177,21 @@ async function start() {
   log.info(`nodeConfirmationService - Started (confirmed=${daemonConfirmed}, messageCapable=${messageCapable})`);
 }
 
+/**
+ * Places the last successful poll a given age in the past. Tests express staleness as
+ * an age because the clock behind it is monotonic and has no wall-clock equivalent.
+ * @param {number|null} ageMs Age in milliseconds, or null for "never polled".
+ * @returns {void}
+ */
+function setLastSuccessfulPollAgeMs(ageMs) {
+  if (ageMs === null) {
+    lastSuccessfulPollAt = null;
+    return;
+  }
+
+  lastSuccessfulPollAt = process.hrtime.bigint() - BigInt(Math.round(ageMs * 1_000_000));
+}
+
 module.exports = {
   isConfirmed,
   isDaemonStale,
@@ -181,4 +202,5 @@ module.exports = {
   onDaemonStale,
   onMessageCapabilityChange,
   start,
+  setLastSuccessfulPollAgeMs,
 };
