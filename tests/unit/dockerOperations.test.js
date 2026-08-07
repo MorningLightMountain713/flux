@@ -130,6 +130,11 @@ describe('appOperations application lifecycle tests', () => {
       '../fluxNetworkHelper': { getLocalSocketAddress: sinon.stub().resolves('127.0.0.1:16127') },
       '../upnpService': {},
       '../appDatabase/appsRepository': appsRepositoryStub,
+      // checkNodeResourcesReclaiming runs on three redeploy paths and, left
+      // real, resolves generalService.nodeTier() — two daemon RPCs.
+      '../appRequirements/hwRequirements': {
+        checkNodeResourcesReclaiming: sinon.stub().resolves(),
+      },
       '../appQuery/appQueryService': { listRunningContainers: sinon.stub().resolves([]), listAllApps: sinon.stub().resolves([]), installedApps: sinon.stub().resolves({ data: [] }) },
       '../appRuntime/deploymentProvider': {
         getInstalledDeployment: sinon.stub().resolves(null),
