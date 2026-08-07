@@ -173,20 +173,28 @@ describe('crontabAndMountsCleanup tests', () => {
       expect(result.size).to.equal(1);
     });
 
-    it('should derive enterprise components from volume images when decryption is unavailable', async () => {
+    it('reports an undecryptable app with nothing recorded as unknown, never as empty', async () => {
+      // Nothing can state its components this boot. Saying so is the point: an
+      // app treated as having none gets its live volume left unmounted and its
+      // crontab safety net dropped. The startup backfill is what fills this gap,
+      // and it is the only place that reads components off disk.
       const [inst] = stubInstalledApps([{
         name: 'hermesagent123', version: 8, compose: [], enterprise: 'encryptedblob',
       }]);
       deploymentProviderMock.buildDeployment.withArgs(inst).rejects(new Error('fluxbenchd unavailable'));
-      volumeServiceMock.getComponentAppIdsFromVolumeFiles.withArgs('hermesagent123').resolves(['fluxhermes_hermesagent123']);
+      appsRepositoryMock.listComponentIdentifiers.withArgs('hermesagent123').resolves([]);
 
       const result = await crontabAndMountsCleanup.getInstalledAppIds();
 
-      expect(result.has('fluxhermes_hermesagent123')).to.be.true;
-      expect(logMock.warn.called).to.be.true;
+      expect(result.size).to.equal(0);
+      expect(logMock.error.called, 'an unenumerable app must be loud').to.equal(true);
+      expect(
+        volumeServiceMock.getComponentAppIdsFromVolumeFiles.called,
+        'the runtime path must not derive from disk',
+      ).to.equal(false);
     });
 
-    it('should not disk-derive for a plaintext app whose deployment builds', async () => {
+    it('never derives from disk on the runtime path, for any app', async () => {
       stubInstalledApps([{ name: 'wordpress123', version: 4, compose: [{ name: 'wp' }] }]);
       dockerServiceMock.getAppIdentifier.withArgs('wp_wordpress123').returns('fluxwp_wordpress123');
 
@@ -408,18 +416,21 @@ describe('crontabAndMountsCleanup tests', () => {
       ).to.equal(false);
     });
 
-    it('should mount an enterprise app volume via disk-derived components when decryption fails', async () => {
+    it('mounts nothing for an undecryptable app that states no components', async () => {
+      // The safe answer is to mount nothing rather than guess: a wrong id would
+      // mount a volume that is not this app's. The volume stays unmounted until
+      // the backfill records what the app has, which is the one place that can.
       const [inst] = stubInstalledApps([{
         name: 'hermesagent123', version: 8, compose: [], enterprise: 'encryptedblob',
       }]);
       deploymentProviderMock.buildDeployment.withArgs(inst).rejects(new Error('fluxbenchd unavailable'));
-      volumeServiceMock.getComponentAppIdsFromVolumeFiles.withArgs('hermesagent123').resolves(['fluxhermes_hermesagent123']);
-      volumeServiceMock.ensureAppVolumeMounted.withArgs('fluxhermes_hermesagent123').resolves({ mounted: true, alreadyMounted: false });
+      appsRepositoryMock.listComponentIdentifiers.withArgs('hermesagent123').resolves([]);
 
       const result = await crontabAndMountsCleanup.cleanupCrontabAndMounts();
 
-      expect(result.mounts.mounted).to.include('fluxhermes_hermesagent123');
+      expect(result.mounts.mounted).to.have.lengthOf(0);
       expect(result.mounts.failed).to.have.lengthOf(0);
+      expect(volumeServiceMock.ensureAppVolumeMounted.called).to.equal(false);
     });
 
     it('should mount installed app volumes even when the crontab is empty', async () => {
