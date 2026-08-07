@@ -76,9 +76,9 @@ async function fingerprintSecret() {
 /**
  * A stable, node-local, one-way fingerprint of a caller.
  *
- * Keyed on the same pair the duty cycle uses - the FluxID and the OBSERVED
- * socket peer, never a header - so a block follows the same notion of "caller"
- * the rate limits do.
+ * Keyed on the same pair the duty cycle uses - the FluxID and the caller's
+ * resolved address - so a block follows the same notion of "caller" the rate
+ * limits do.
  *
  * @returns {Promise<string|null>} null when the secret is unavailable, which
  *   reads as "cannot tell" everywhere it is used
