@@ -106,7 +106,7 @@ module.exports = (app) => {
     return daemonServiceBlockchainRpcs.getBestBlockHash(req, res);
   }));
   app.get('/daemon/getblock/:hashheight?/:verbosity?', cache('30 seconds'), asyncRoute((req, res) => {
-    return daemonServiceBlockchainRpcs.getBlock(req, res);
+    return daemonServiceBlockchainRpcs.getBlockApi(req, res);
   }));
   app.get('/daemon/getblockchaininfo', cache('30 seconds'), asyncRoute((req, res) => {
     return daemonServiceBlockchainRpcs.getBlockchainInfo(req, res);

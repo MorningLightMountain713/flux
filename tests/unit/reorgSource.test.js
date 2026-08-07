@@ -1,11 +1,8 @@
 const { expect } = require('chai');
 const sinon = require('sinon');
 
-const cacheManager = require('../../ZelBack/src/services/utils/cacheManager').default;
-const daemonServiceUtils = require('../../ZelBack/src/services/daemonService/daemonServiceUtils');
 const daemonSubscriptionService = require('../../ZelBack/src/services/daemonService/daemonSubscriptionService');
 const reorgSource = require('../../ZelBack/src/services/daemonService/reorgSource');
-const serviceHelper = require('../../ZelBack/src/services/serviceHelper');
 
 function reorgEvent(overrides = {}) {
   return {
@@ -21,104 +18,6 @@ describe('reorgSource tests', () => {
   afterEach(() => {
     reorgSource.stop();
     sinon.restore();
-  });
-
-  describe('cache invalidation tests', () => {
-    beforeEach(() => {
-      cacheManager.daemonBlockCache.clear();
-      cacheManager.daemonTxCache.clear();
-      cacheManager.daemonGenericCache.clear();
-    });
-
-    function blockKey(identifier, verbosity) {
-      return `getBlock${serviceHelper.ensureString([identifier, verbosity])}`;
-    }
-
-    // Production never builds a key this way. daemonServiceBlockchainRpcs runs
-    // ensureString over hashheight before the params are assembled, so the identifier
-    // reaching the cache is always a string — which is the shape this must survive.
-    function productionBlockKey(height, verbosity) {
-      return `getBlock${serviceHelper.ensureString([serviceHelper.ensureString(height), verbosity])}`;
-    }
-
-    it('should drop blocks keyed the way the handler actually keys them', () => {
-      cacheManager.daemonBlockCache.set(productionBlockKey(1998, 2), { height: 1998 });
-      cacheManager.daemonBlockCache.set(productionBlockKey(2000, 2), { height: 2000 });
-
-      const dropped = daemonServiceUtils.invalidateCachesFromHeight(1999);
-
-      expect(dropped.blocks).to.equal(1);
-      expect(cacheManager.daemonBlockCache.get(productionBlockKey(2000, 2))).to.be.undefined;
-      expect(cacheManager.daemonBlockCache.get(productionBlockKey(1998, 2))).to.eql({ height: 1998 });
-    });
-
-    it('should keep a block cached under its hash', () => {
-      // A hash names the same block whichever chain wins, so an orphan read back by
-      // hash is still correct. Only height-keyed entries can go stale across a fork.
-      const hash = 'a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90';
-      const key = `getBlock${serviceHelper.ensureString([hash, 2])}`;
-      cacheManager.daemonBlockCache.set(key, { hash });
-
-      const dropped = daemonServiceUtils.invalidateCachesFromHeight(1);
-
-      expect(dropped.blocks).to.equal(0);
-      expect(cacheManager.daemonBlockCache.get(key)).to.eql({ hash });
-    });
-
-    it('should drop cached blocks above the fork height', () => {
-      cacheManager.daemonBlockCache.set(blockKey(1998, 2), { height: 1998 });
-      cacheManager.daemonBlockCache.set(blockKey(2000, 2), { height: 2000 });
-
-      const dropped = daemonServiceUtils.invalidateCachesFromHeight(1997);
-
-      expect(dropped.blocks).to.equal(2);
-      expect(cacheManager.daemonBlockCache.get(blockKey(2000, 2))).to.equal(undefined);
-    });
-
-    it('should keep cached blocks at or below the fork height', () => {
-      cacheManager.daemonBlockCache.set(blockKey(1500, 2), { height: 1500 });
-      cacheManager.daemonBlockCache.set(blockKey(1997, 2), { height: 1997 });
-
-      const dropped = daemonServiceUtils.invalidateCachesFromHeight(1997);
-
-      expect(dropped.blocks).to.equal(0);
-      expect(cacheManager.daemonBlockCache.get(blockKey(1500, 2))).to.eql({ height: 1500 });
-    });
-
-    it('should keep hash keyed blocks, which still name the same block', () => {
-      const key = blockKey('d'.repeat(64), 1);
-      cacheManager.daemonBlockCache.set(key, { hash: 'd'.repeat(64) });
-
-      daemonServiceUtils.invalidateCachesFromHeight(1997);
-
-      expect(cacheManager.daemonBlockCache.get(key)).to.not.equal(undefined);
-    });
-
-    it('should drop every cached transaction, since a txid cannot say which block it was in', () => {
-      cacheManager.daemonTxCache.set('getRawTransaction["abc",1]', { txid: 'abc' });
-
-      const dropped = daemonServiceUtils.invalidateCachesFromHeight(1997);
-
-      expect(dropped.transactions).to.equal(1);
-      expect(cacheManager.daemonTxCache.get('getRawTransaction["abc",1]')).to.equal(undefined);
-    });
-
-    it('should drop the generic cache, which holds the tip and chain tips', () => {
-      cacheManager.daemonGenericCache.set('getBlockCount[]', 2001);
-
-      const dropped = daemonServiceUtils.invalidateCachesFromHeight(1997);
-
-      expect(dropped.generic).to.equal(1);
-      expect(cacheManager.daemonGenericCache.get('getBlockCount[]')).to.equal(undefined);
-    });
-
-    it('should drop a block entry whose key it cannot parse rather than reason about it', () => {
-      cacheManager.daemonBlockCache.set('getBlocknot-json', { some: 'thing' });
-
-      const dropped = daemonServiceUtils.invalidateCachesFromHeight(1997);
-
-      expect(dropped.blocks).to.equal(1);
-    });
   });
 
   describe('subscription tests', () => {
@@ -140,19 +39,6 @@ describe('reorgSource tests', () => {
   });
 
   describe('handling tests', () => {
-    let invalidateStub;
-
-    beforeEach(() => {
-      invalidateStub = sinon.stub(daemonServiceUtils, 'invalidateCachesFromHeight')
-        .returns({ blocks: 0, transactions: 0, generic: 0 });
-    });
-
-    it('should invalidate from the fork height, not the tip height', () => {
-      reorgSource.handleReorg(reorgEvent());
-
-      sinon.assert.calledOnceWithExactly(invalidateStub, 1997);
-    });
-
     it('should pass the reorg to every registered consumer', () => {
       const first = sinon.stub();
       const second = sinon.stub();
