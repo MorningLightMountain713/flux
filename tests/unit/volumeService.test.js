@@ -12,7 +12,6 @@ describe('volumeService tests', () => {
   const LEGACY_APP_VOLUMES = '/test/fluxappvolumes';
   let dockerServiceStub;
   let serviceHelperStub;
-  let mountParserStub;
   let fsStub;
   let deviceHelperStub;
   let logStub;
@@ -22,18 +21,6 @@ describe('volumeService tests', () => {
     dockerServiceStub = { getAppIdentifier: sinon.stub() };
     // runCommand defaults to success ({ error: null }); tests override as needed
     serviceHelperStub = { runCommand: sinon.stub().resolves({ error: null, stdout: '', stderr: '' }) };
-    mountParserStub = {
-      parseContainerData: sinon.stub(),
-      getRequiredLocalPaths: sinon.stub(),
-      MountType: {
-        PRIMARY: 'primary',
-        DIRECTORY: 'directory',
-        FILE: 'file',
-        COMPONENT_PRIMARY: 'component_primary',
-        COMPONENT_DIRECTORY: 'component_directory',
-        COMPONENT_FILE: 'component_file',
-      },
-    };
     // readFile rejecting drives isPathMounted onto its mountpoint-command
     // fallback, so tests can keep expressing mountedness via runCommand; the
     // isPathMounted describe covers the mountinfo path with real fixtures
@@ -46,7 +33,6 @@ describe('volumeService tests', () => {
     volumeService = proxyquire('../../ZelBack/src/services/utils/volumeService', {
       '../dockerService': dockerServiceStub,
       '../serviceHelper': serviceHelperStub,
-      './mountParser': mountParserStub,
       './appConstants': { appsFolder: APPS_FOLDER, appVolumesPath: APP_VOLUMES, legacyAppVolumesPath: LEGACY_APP_VOLUMES },
       '../../lib/log': logStub,
       '../deviceHelper': deviceHelperStub,
