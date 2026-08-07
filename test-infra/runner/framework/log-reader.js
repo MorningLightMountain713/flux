@@ -15,9 +15,26 @@ export async function getLogs(containerId, { since, tail } = {}) {
   return stdout + stderr;
 }
 
+/**
+ * A regex safe to reuse across many `.test()` calls.
+ *
+ * `g` (and `y`) make a regex stateful: `.test()` resumes from `lastIndex` and resets it
+ * only on a miss, so testing a run of identical lines matches every second one and a
+ * count comes back roughly half of what it should be. Filtering line by line wants a
+ * fresh match each time, so those flags are dropped.
+ *
+ * @param {string|RegExp} pattern Caller's pattern.
+ * @returns {RegExp} The same match, without match position carried between calls.
+ */
+export function statelessRegex(pattern) {
+  if (!(pattern instanceof RegExp)) return new RegExp(pattern);
+  const flags = pattern.flags.replace(/[gy]/g, '');
+  return flags === pattern.flags ? pattern : new RegExp(pattern.source, flags);
+}
+
 export async function grepLogs(containerId, pattern, opts = {}) {
   const logs = await getLogs(containerId, opts);
-  const regex = pattern instanceof RegExp ? pattern : new RegExp(pattern, 'g');
+  const regex = statelessRegex(pattern);
   return logs.split('\n').filter((line) => regex.test(line));
 }
 

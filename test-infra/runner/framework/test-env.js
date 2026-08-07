@@ -26,6 +26,8 @@ import { authenticate } from '../auth.js';
 import { fluxTeamKey, nodeKey } from './keys.js';
 import { assertFluxSpecVendorCurrent, NODE_IMAGE } from './flux-spec-vendor.js';
 import { assertNodeConfigsCurrent } from './node-configs.js';
+import { statelessRegex } from './log-reader.js';
+import { renderFluxdConf, DEFAULT_ZMQ_TOPICS } from './fluxd-conf.js';
 
 function createLogCollector() {
   // Each entry is { t, line }: t is the capture wall-clock (ISO), line is the raw
@@ -49,13 +51,15 @@ function createLogCollector() {
     stream.on('close', () => push('[LOG_STREAM_CLOSED]'));
   }
 
+  // Both match line by line, so the regex must not carry state between lines — see
+  // statelessRegex.
   consumer.hasLine = (pattern) => {
-    const regex = pattern instanceof RegExp ? pattern : new RegExp(pattern);
+    const regex = statelessRegex(pattern);
     return entries.some((e) => regex.test(e.line));
   };
 
   consumer.countPattern = (pattern) => {
-    const regex = pattern instanceof RegExp ? pattern : new RegExp(pattern, 'g');
+    const regex = statelessRegex(pattern);
     return entries.filter((e) => regex.test(e.line)).length;
   };
 
@@ -291,6 +295,7 @@ function makeEnvShell(networkName) {
       await removeNetwork(networkName);
       for (const cfg of nodeConfigs) {
         if (cfg.bootIdDir) rmSync(cfg.bootIdDir, { recursive: true, force: true });
+        if (cfg.fluxdConfDir) rmSync(cfg.fluxdConfDir, { recursive: true, force: true });
       }
       http.globalAgent.destroy();
     },
@@ -439,6 +444,7 @@ export async function createTestEnv({
   rpcFailures = [], bootContext = 'running', arcane = true, shutdowndMock = true,
   telemetrydMock = false, systemdMode = false, telemetrydReal = false,
   shutdowndReal = false, dnsdReal = false,
+  zmqTopics = DEFAULT_ZMQ_TOPICS, nodeZmqTopics = {},
 } = {}) {
   // Before the boot lock, the network, or a single container: a flux-spec
   // vendor lagging the branch surfaces as a product mystery minutes later,
@@ -476,8 +482,12 @@ export async function createTestEnv({
   activeEnvs.add(env);
 
   try {
-    await _buildEnv(env, nodes, deferredNodes, legacyNodes, stubPeers, configOverrides, nodeConfigOverrides, nodeTiers, dataCenter, tickerAutostart, discoveryAutostart, nodeStatusOverrides, rpcFailures, bootContext, arcane, shutdowndMock, telemetrydMock, systemdMode, telemetrydReal,
-      shutdowndReal, dnsdReal);
+    await _buildEnv(
+      env, nodes, deferredNodes, legacyNodes, stubPeers, configOverrides, nodeConfigOverrides,
+      nodeTiers, dataCenter, tickerAutostart, discoveryAutostart, nodeStatusOverrides, rpcFailures,
+      bootContext, arcane, shutdowndMock, telemetrydMock, systemdMode, telemetrydReal,
+      shutdowndReal, dnsdReal, zmqTopics, nodeZmqTopics,
+    );
     return env;
   } catch (err) {
     // Boot failed: the env owns everything started so far. The shared teardown
@@ -524,7 +534,7 @@ async function _buildEnv(
   env, nodes, deferredNodes, legacyNodes, stubPeers, configOverrides, nodeConfigOverrides,
   nodeTiers, dataCenter, tickerAutostart, discoveryAutostart, nodeStatusOverrides, rpcFailures,
   bootContext, arcane, shutdowndMock, telemetrydMock, systemdMode, telemetrydReal, shutdowndReal,
-  dnsdReal,
+  dnsdReal, zmqTopics, nodeZmqTopics,
 ) {
   // Everything built here registers onto the env shell as it comes up, so a
   // boot-phase throw leaves the partial state reachable (see makeEnvShell).
@@ -565,6 +575,8 @@ async function _buildEnv(
       FLUXD_PORT: '16124',
       BENCHD_PORT: '16224',
       CONTROL_PORT: '18232',
+      // The publisher's port, which is what config.daemon.zmqport defaults to.
+      ZMQ_PORT: '16123',
       TICKER_AUTOSTART: tickerAutostart ? 'true' : 'false',
       NODE_COUNT: String(nodes),
     })
@@ -738,10 +750,15 @@ async function _buildEnv(
     const bootIdDir = join(tmpdir(), `flux-bootid-${networkName}-${num}`);
     mkdirSync(bootIdDir, { recursive: true });
     writeFileSync(join(bootIdDir, 'boot-id'), getBootId(i + 1));
+    const fluxdConfDir = join(tmpdir(), `flux-fluxd-conf-${networkName}-${num}`);
+    mkdirSync(fluxdConfDir, { recursive: true });
+    const fluxdConf = renderFluxdConf(num, nodeZmqTopics[i] ?? zmqTopics, fluxdConfDir);
     const bindMounts = [
       { source: volumeNames[i], target: '/mnt/appdata' },
       { source: join(fixturesDir, 'registry-tls', 'ca.pem'), target: '/usr/local/share/ca-certificates/test-registry.crt', mode: 'ro' },
       { source: bootIdDir, target: '/tmp/flux-boot-config' },
+      // Over the fixture baked into the image, so FLUXD_CONFIG_PATH is unchanged.
+      { source: fluxdConf, target: `/flux/test-infra/fixtures/conf/flux-${num}.conf` },
     ];
     // Real flux-telemetryd (systemd mode only): the pinned daemon build from
     // test-infra/flux-telemetryd/dist (binary + its REAL hardened unit),
@@ -922,7 +939,9 @@ async function _buildEnv(
       .withWaitStrategy(nodeReadyWaitStrategy(nodeIp).withStartupTimeout(120000));
     if (systemdMode) builder.withStopSignal('SIGRTMIN+3');
 
-    nodeConfigs.push({ index: i, builder, ip: nodeIp, num: i + 1, logCollector, bootIdDir });
+    nodeConfigs.push({
+      index: i, builder, ip: nodeIp, num: i + 1, logCollector, bootIdDir, fluxdConfDir,
+    });
   }
 
   const startPromises = nodeConfigs

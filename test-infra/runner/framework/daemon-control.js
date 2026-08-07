@@ -133,10 +133,27 @@ export async function disableAllRpcFailure() {
 
 // -- Request journal --
 
-export async function getJournal({ method, sourceIp } = {}) {
+/**
+ * The RPC calls the stub has answered.
+ *
+ * `server` matters whenever the method is one both servers answer — getinfo, help and
+ * stop exist on fluxd and on fluxbenchd, and they share this journal.
+ *
+ * `limit` caps the entries returned, not the count: `total` is always the full number
+ * of matches. Without it the stub returns its own default of 100, so a suite counting
+ * more than that must ask for more.
+ *
+ * @param {{method?: string, sourceIp?: string, server?: 'fluxd'|'benchd', limit?: number}} filter
+ * @returns {Promise<{total: number, entries: Array<object>}>}
+ */
+export async function getJournal({
+  method, sourceIp, server, limit,
+} = {}) {
   const params = new URLSearchParams();
   if (method) params.set('method', method);
   if (sourceIp) params.set('sourceIp', sourceIp);
+  if (server) params.set('server', server);
+  if (limit !== undefined) params.set('limit', String(limit));
   return get(`/journal?${params}`);
 }
 
@@ -166,6 +183,94 @@ export async function clearSeededData() {
 
 export async function resetAll() {
   return post('/reset');
+}
+
+// -- Chain reorganisation --
+
+/**
+ * Rewinds to a fork point and rebuilds above it on a different chain.
+ *
+ * Both channels then tell the same story: chainreorg is pushed with the old tip, the
+ * new tip and the fork, a fluxnodelistdelta flagged as a reorg re-anchors the node
+ * list, and every block RPC above the fork answers with the new chain's hashes.
+ *
+ * @param {{forkHeight?: number, depth?: number, newHeight?: number}} options
+ *   forkHeight - the last block both chains share; defaults to the tip minus `depth`.
+ *   depth      - how far back the fork is when forkHeight is not given. Default 1.
+ *   newHeight  - the new tip's height. Defaults to the old tip's — a same-height reorg;
+ *                a lower value rewinds the chain.
+ * @returns {Promise<{oldTip: object, newTip: object, fork: object}>} What was published.
+ */
+export async function reorgChain(options = {}) {
+  return post('/reorg', options);
+}
+
+// -- ZMQ publisher --
+
+/**
+ * Publishes one message on the daemon's push socket. The generic primitive: a suite
+ * expresses a scenario by what it sends, not by asking the stub for a new endpoint.
+ *
+ * Give it either `fields` — the topic's fields, which the stub encodes the way fluxd
+ * would — or `payload`, a raw payload string for a hand-crafted or deliberately
+ * malformed frame. `seq` stamps a chosen sequence and the topic's counter continues
+ * from there, which is how a replay or a jump is expressed; omit it for the next in
+ * sequence.
+ *
+ * @param {{topic: string, fields?: object, payload?: string, encoding?: 'hex'|'base64',
+ *   seq?: number}} message
+ * @returns {Promise<{topic: string, sent: boolean, seq?: number, bytes?: number, reason?: string}>}
+ */
+export async function publishZmq(message) {
+  return post('/zmq/publish', message);
+}
+
+/**
+ * Burns sequence numbers without sending anything — the gap a dropped message leaves,
+ * which the client should notice at the next message and repair by resyncing.
+ * @param {string} topic Topic name.
+ * @param {number} count How many sequence numbers to skip.
+ * @returns {Promise<{topic: string, skipped: number, nextSeq: number}>}
+ */
+export async function skipZmqSeq(topic, count = 1) {
+  return post('/zmq/skip', { topic, count });
+}
+
+/**
+ * Stops publishing a topic (or everything) while leaving the socket open, so the client
+ * stays connected and simply hears nothing.
+ * @param {string} topic Topic name, or 'all'.
+ * @returns {Promise<{silenced: Array<string>}>}
+ */
+export async function silenceZmq(topic = 'all') {
+  return post('/zmq/silence', { topic });
+}
+
+/**
+ * Resumes publishing — one topic, or everything when called with no argument.
+ * @param {string} [topic] Topic name.
+ * @returns {Promise<{silenced: Array<string>}>}
+ */
+export async function resumeZmq(topic) {
+  return del(topic ? `/zmq/silence?topic=${encodeURIComponent(topic)}` : '/zmq/silence');
+}
+
+/**
+ * Closes and rebinds the publisher: a daemon restart, with every sequence counter back
+ * at zero. The client must read that as a restart rather than as messages it missed.
+ * @returns {Promise<{restarted: boolean, bound: boolean, endpoint: string}>}
+ */
+export async function restartZmqPublisher() {
+  return post('/zmq/restart');
+}
+
+/**
+ * The publisher's state: whether it is bound, the topics it knows, the sequence each
+ * will send next, the last it sent, and which are silenced.
+ * @returns {Promise<object>}
+ */
+export async function getZmqState() {
+  return get('/zmq/state');
 }
 
 // -- Benchmark channel (fluxbenchd stub) --
