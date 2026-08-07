@@ -79,6 +79,7 @@ describe('networkStateManager applyDelta tests', () => {
       const result = await manager.applyDelta(delta(), sinon.stub());
 
       expect(result.applied).to.equal(false);
+      expect(result.code).to.equal('not_anchored');
       expect(result.reason).to.match(/not anchored/);
     });
 
@@ -88,6 +89,7 @@ describe('networkStateManager applyDelta tests', () => {
       const result = await manager.applyDelta(delta({ fromHash: '9'.repeat(64) }), sinon.stub());
 
       expect(result.applied).to.equal(false);
+      expect(result.code).to.equal('chain_mismatch');
       expect(result.reason).to.match(/but state is at/);
     });
 
@@ -271,6 +273,7 @@ describe('networkStateManager applyDelta tests', () => {
       );
 
       expect(result.applied).to.equal(false);
+      expect(result.code).to.equal('unresolved_additions');
       expect(result.reason).to.match(/resolved 0 of 1/);
       // and nothing was half applied
       expect(manager.nodeCount).to.equal(1);

@@ -1,5 +1,6 @@
 const log = require('../../lib/log');
 const daemonSubscriptionService = require('./daemonSubscriptionService');
+const fluxEventBus = require('../utils/fluxEventBus');
 
 /**
  * Turns the daemon's reorg notification into the one thing FluxOS has to do about it.
@@ -35,6 +36,13 @@ function handleReorg(reorg) {
     + `fork at ${reorg.fork.height}`,
   );
 
+  fluxEventBus.publish('daemon:reorg', {
+    oldTipHeight: reorg.oldTip.height,
+    newTipHeight: reorg.newTip.height,
+    forkHeight: reorg.fork.height,
+    depth: reorg.depth,
+  });
+
   listeners.forEach((listener) => {
     try {
       const result = listener(reorg);
@@ -56,6 +64,7 @@ function start() {
 
   if (!daemonSubscriptionService.isTopicAvailable(topic)) {
     log.info('reorgSource - daemon does not publish chainreorg, reorgs stay poll-detected');
+    fluxEventBus.publish('daemon:subscriptionMode', { source: 'reorgSource', mode: 'poll', topic });
     return false;
   }
 
@@ -63,6 +72,7 @@ function start() {
     onMessage: (reorg) => handleReorg(reorg),
   });
 
+  fluxEventBus.publish('daemon:subscriptionMode', { source: 'reorgSource', mode: 'push', topic });
   return true;
 }
 

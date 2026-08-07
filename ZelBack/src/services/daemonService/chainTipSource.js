@@ -3,6 +3,7 @@ const config = require('config');
 const log = require('../../lib/log');
 const daemonServiceMiscRpcs = require('./daemonServiceMiscRpcs');
 const daemonSubscriptionService = require('./daemonSubscriptionService');
+const fluxEventBus = require('../utils/fluxEventBus');
 
 /**
  * Keeps the daemon's chain tip current for `isDaemonSynced` and its 34 readers.
@@ -49,6 +50,7 @@ async function start() {
   if (!daemonSubscriptionService.isTopicAvailable(topic)) {
     log.info('chainTipSource - daemon does not publish hashblockheight, polling instead');
     mode = 'poll';
+    fluxEventBus.publish('daemon:subscriptionMode', { source: 'chainTipSource', mode, topic });
     daemonServiceMiscRpcs.daemonBlockchainInfoService();
     return mode;
   }
@@ -61,6 +63,7 @@ async function start() {
   });
 
   mode = 'push';
+  fluxEventBus.publish('daemon:subscriptionMode', { source: 'chainTipSource', mode, topic });
 
   // Seed before the first block arrives; a node that starts mid-block would otherwise
   // read as never updated for up to a block time.
