@@ -138,14 +138,6 @@ describe('appUninstaller tests', () => {
       crontab: { load: (cb) => cb(null, null) },
       '../../lib/log': logStub,
       '../utils/globalState': globalStateStub,
-      '../utils/appConstants': proxyquire('../../ZelBack/src/services/utils/appConstants', {
-        config: configStub,
-      }),
-      './appOperations': {
-        reindexGlobalAppsInformation: sinon.stub().resolves(),
-        updateAppSpecsForRestoredNode: sinon.stub().resolves(),
-        checkAndNotifyPeersOfRunningApps: sinon.stub().resolves(),
-      },
       '../telemetryConfigService': {
         ensureNode: sinon.stub().resolves(),
         remove: sinon.stub().resolves(),
@@ -181,17 +173,6 @@ describe('appUninstaller tests', () => {
         getInstalledDeployment: sinon.stub().resolves(null),
         buildDeployment: sinon.stub().resolves(null),
         localIdentities: sinon.stub().resolves([null]),
-      },
-      '../providers/FluxOSLegacyCryptoProvider': {
-        create: sinon.stub().resolves({
-          decrypt: sinon.stub().resolves(Buffer.from('{}')),
-        }),
-      },
-      '../utils/specLibs': {
-        getSpec: sinon.stub().resolves({
-          FluxAppSpecBase: { getVersionClass: sinon.stub().returns(null) },
-        }),
-        getSpecBackend: sinon.stub().resolves({ EncryptedSpecBase: class EncryptedSpecBase {}, InstantiatedSpec: class InstantiatedSpec {} }),
       },
       '../appManagement/appInspector': {
         stopAppMonitoring: sinon.stub().resolves(),
