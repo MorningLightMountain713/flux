@@ -402,7 +402,7 @@ async function submitSession(body, caller = {}) {
   //
   // This refusal is the one that can say where to go instead, because the set
   // is the answer to "which node, then".
-  const serving = await playgroundServingSet.servesLocalNode(fluxId);
+  const serving = await playgroundServingSet.servesLocalNode({ fluxId, sourceIp });
   if (!serving.serves) {
     // Named as URLs for the same reason the servingset endpoint answers in them:
     // a bare address is not somewhere a client can send its next request.
@@ -669,7 +669,15 @@ async function servingSetAPI(req, res) {
       return res.status(401).json(messageHelper.errUnauthorizedMessage());
     }
 
-    const set = await playgroundServingSet.servingSet(fluxId);
+    // The same axis admission uses, or this endpoint names nodes that will
+    // then refuse: a caller asking "which node, then" must be answered on the
+    // key their session will actually be judged by.
+    const { ip: sourceIp } = ingressCapture.resolveClientIp(
+      req.socket && req.socket.remoteAddress,
+      req.headers,
+    );
+
+    const set = await playgroundServingSet.servingSet({ fluxId, sourceIp });
     return res.json(messageHelper.createDataMessage({
       // URLs, in set order, not bare ip:port. A node serves its API under a
       // certificate issued for its *.node.api.runonflux.io name, so an address is

@@ -47,17 +47,39 @@ function windowMs() {
 }
 
 /**
- * Whether the address axis is enforced.
+ * Whether the set is keyed on the caller's address.
  *
- * OFF until the node can see who is actually calling it. A browser reaches a
- * node through FDM, so the socket peer is the load balancer - and keying a
- * serving set on that would map EVERY caller arriving through FDM to the same
- * handful of nodes, making the feature unusable for everyone else. It needs
- * FDM to forward the client address and FluxOS to resolve it (the plan's §5a).
- * Turning this on before then is not a weaker control, it is an outage.
+ * A rollout switch rather than a cliff: the set is the same size either way,
+ * only its key changes, so a node with this off still serves every caller.
+ * It requires the resolved caller address (the plan's §5a) - keying on the raw
+ * socket peer would map every caller arriving through FDM to one balancer and
+ * so to one set, which is not a weaker control, it is an outage.
  */
 function addressAxisEnabled() {
   return config.fluxapps.playgroundServingSetAddressAxis === true;
+}
+
+/**
+ * The axis a caller is pinned on, and its value.
+ *
+ * This control bounds the SIMULTANEOUS burst, so it keys on what a burster
+ * cannot cheaply change. A FluxID is free to mint, so an identity-keyed set is
+ * a fresh set per mint and bounds nothing; an address is the scarce thing.
+ *
+ * Volume over time is deliberately NOT this control's job - the gossiped
+ * budgets carry that, per axis and with a limit each, which is where an axis
+ * that over-matches (one office, one carrier-grade NAT) is given the looser
+ * number and identity keeps the tight one. Pinning and counting want different
+ * axes, and asking one mechanism for both is what forces a choice between an
+ * empty intersection and a bound that does not bind.
+ *
+ * Identity is the fallback, so a caller whose address cannot be resolved at all
+ * still has a set.
+ */
+function axisFor(caller = {}) {
+  const { fluxId = null, sourceIp = null } = caller;
+  if (addressAxisEnabled() && sourceIp) return { axis: AXIS.ADDRESS, value: sourceIp };
+  return { axis: AXIS.IDENTITY, value: fluxId };
 }
 
 /**
@@ -93,14 +115,13 @@ function rankKey(axis, axisValue, window) {
  * computed identically everywhere is not a set. Those places are simply spent -
  * which is what the set being larger than the budget pays for.
  *
- * @param {string} axisValue - the FluxID, or the resolved client address
+ * @param {object} caller - {fluxId, sourceIp}; the axis is chosen by axisFor
  * @param {object} [options]
- * @param {string} [options.axis] - AXIS.IDENTITY (default) or AXIS.ADDRESS
  * @param {number} [options.now] - epoch ms, for tests
  * @returns {Promise<Array<object>>} up to setSize() Fluxnodes
  */
-async function servingSet(axisValue, options = {}) {
-  const axis = options.axis ?? AXIS.IDENTITY;
+async function servingSet(caller, options = {}) {
+  const { axis, value } = axisFor(caller);
   const window = windowIndex(options.now);
 
   const nodes = await fluxCommunicationUtils.deterministicFluxList();
@@ -108,7 +129,7 @@ async function servingSet(axisValue, options = {}) {
     (node) => node.tier && SERVING_TIERS.includes(String(node.tier).toUpperCase()),
   );
 
-  return rankNodes(eligible, rankKey(axis, axisValue, window)).slice(0, setSize());
+  return rankNodes(eligible, rankKey(axis, value, window)).slice(0, setSize());
 }
 
 /**
@@ -118,14 +139,14 @@ async function servingSet(axisValue, options = {}) {
  * list, cannot show it belongs in the set - and admitting on an unanswered
  * question is how a bound stops being one.
  *
- * @param {string} axisValue
+ * @param {object} caller - as servingSet
  * @param {object} [options] - as servingSet
  * @returns {Promise<{serves: boolean, candidates: string[]}>} candidates are the
  *   addresses that DO serve, so a refusal can say where to go instead
  */
-async function servesLocalNode(axisValue, options = {}) {
+async function servesLocalNode(caller, options = {}) {
   try {
-    const set = await servingSet(axisValue, options);
+    const set = await servingSet(caller, options);
     if (!set.length) return { serves: false, candidates: [] };
 
     const collateral = await generalService.obtainNodeCollateralInformation();
@@ -145,6 +166,7 @@ module.exports = {
   AXIS,
   SERVING_TIERS,
   addressAxisEnabled,
+  axisFor,
   windowIndex,
   servingSet,
   servesLocalNode,
