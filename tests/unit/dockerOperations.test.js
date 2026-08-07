@@ -119,11 +119,29 @@ describe('appOperations application lifecycle tests', () => {
     appOperations = proxyquire('../../ZelBack/src/services/appLifecycle/appOperations', {
       '../dockerService': dockerServiceStub,
       '../appDatabase/registryManager': registryManagerStub,
-      '../utils/specLibs': { getSpec: sinon.stub() },
+      // appOperations destructures three names from this module. noCallThru means
+      // an omitted key is `undefined`, not the real export, so a partial stub
+      // fails as "x is not a function" on whichever path reaches it first.
+      '../utils/specLibs': {
+        getSpec: sinon.stub(),
+        getSpecBackend: sinon.stub().resolves({}),
+        assertUpdateInvariants: sinon.stub(),
+      },
       './appVolumeService': appVolumeServiceStub,
       '../appMonitoring/appReconciler': appReconcilerStub,
       '../../lib/log': logStub,
-      '../serviceHelper': { delay: sinon.stub().resolves(), ensureString: sinon.stub().returnsArg(0) },
+      // Same: appOperations calls seven of these. runCommand is the one that
+      // matters — left out it reads as a crash, but it is also the real one that
+      // shells out, so it must be present AND stubbed.
+      '../serviceHelper': {
+        delay: sinon.stub().resolves(),
+        ensureString: sinon.stub().returnsArg(0),
+        ensureNumber: sinon.stub().returnsArg(0),
+        ensureBoolean: sinon.stub().returnsArg(0),
+        ensureObject: sinon.stub().returnsArg(0),
+        runCommand: sinon.stub().resolves({ error: null, stdout: '', stderr: '' }),
+        axiosGet: sinon.stub().resolves({ data: null }),
+      },
       '../messageHelper': {},
       '../verificationHelper': {},
       '../daemonService/daemonServiceMiscRpcs': {},
@@ -154,6 +172,101 @@ describe('appOperations application lifecycle tests', () => {
       '../utils/globalState': {},
       '../utils/appConstants': { localAppsInformation: 'test', globalAppsInformation: 'test', globalAppsInstallingErrorsLocations: 'test', globalAppsMessages: 'test', appsFolder: '/tmp/flux/apps/' },
       config: { fluxapps: { minimumInstances: 3, redeploy: { composedDelay: 30000 } }, database: { appsglobal: { database: 'globalapps', collections: {} } } },
+
+      // proxyquire does not recurse: every require absent from this map loads for
+      // real, dragging its own dependency tree in with it. The entries below are
+      // stubbed because the module — or something it requires — reaches the
+      // network, the filesystem, Docker, a child process, a unix socket, Mongo or
+      // a daemon RPC. Defaults describe the inert state (nothing configured,
+      // nothing present) so a path that runs without an override does no work.
+      //
+      // Left real on purpose: node:path and https (builtins; `new https.Agent()`
+      // opens nothing), ../utils/socketAddressUtils and ./shutdownPlan (no
+      // requires at all — pure functions the code under test depends on),
+      // ../utils/operationRegistry (an in-memory lease Map over a logger, TTL
+      // timers unref'd) and ../utils/fluxEventBus (an in-memory ring buffer whose
+      // publish() is inert unless the harness event-stream flag is set).
+      'node:fs/promises': {
+        // The sole read gates the shutdown-plan resync on the flux-shutdownd
+        // socket existing; absent means there is no daemon to talk to.
+        access: sinon.stub().rejects(new Error('ENOENT')),
+      },
+      axios: {
+        get: sinon.stub().resolves({ data: { data: [] } }),
+        CancelToken: { source: () => ({ token: {}, cancel: sinon.stub() }) },
+      },
+      '../IOUtils': {
+        checkFileExists: sinon.stub().resolves(false),
+        createTarGz: sinon.stub().resolves({ status: true }),
+        untarFile: sinon.stub().resolves({ status: true }),
+        downloadFileFromUrl: sinon.stub().resolves(true),
+        removeFile: sinon.stub().resolves(),
+        removeDirectory: sinon.stub().resolves(),
+      },
+      // findmnt via serviceHelper.runCommand. Zero available bytes takes the
+      // "no useable volume" branch, which marks the node OK and allocates nothing.
+      '../deviceHelper': {
+        mountForTarget: sinon.stub().resolves({
+          source: '/dev/stub', target: '/tmp/flux', fstype: 'ext4', uuid: null, availableBytes: 0,
+        }),
+      },
+      '../fluxCommunicationMessagesSender': { broadcastTemporaryAppMessage: sinon.stub().resolves() },
+      '../syncthingService': {
+        getHealth: sinon.stub().resolves({ status: 'success', data: { status: 'OK' } }),
+        getConfigFolders: sinon.stub().resolves({ status: 'success', data: [] }),
+        adjustConfigFolders: sinon.stub().resolves({ status: 'success' }),
+      },
+      '../telemetrySinkCache': { extractSink: sinon.stub().returns(null), setSink: sinon.stub() },
+      '../telemetryConfigService': { ensureNode: sinon.stub().resolves() },
+      '../telemetryIdentityService': { resyncAll: sinon.stub() },
+      '../appManagement/appsRuntimeState': { isOperatorStopped: sinon.stub().resolves(false) },
+      '../appManagement/globalCommand': { executeAppGlobalCommand: sinon.stub().resolves() },
+      '../appMessaging/appEventVerifier': {
+        deserializeTempMessage: sinon.stub().resolves({}),
+        authorize: sinon.stub().resolves(),
+        computeOutboundHash: sinon.stub().resolves('testhash'),
+        requestAttestation: sinon.stub().resolves(null),
+      },
+      '../appMessaging/ingressAttestationService': { emit: sinon.stub().resolves() },
+      '../appMessaging/messageVerifier': { requestAppMessage: sinon.stub().resolves() },
+      '../appMonitoring/syncthingMonitorHelpers': { removeSyncthingFolder: sinon.stub().resolves() },
+      // Destructured at import, so every name the module under test pulls out has
+      // to be present — noCallThru() means an omitted key is undefined, not real.
+      '../appRequirements/appSubmission': {
+        resolveSubmission: sinon.stub().resolves({ spec: null, broadcastBlob: null }),
+        assertSecretsNotConflicting: sinon.stub().resolves(),
+        parseMultipartSubmission: sinon.stub().resolves({ spec: null, content: null, ownerSigs: null }),
+        uploadSealedContent: sinon.stub().resolves(),
+      },
+      '../utils/appCaches': {
+        receiveOnlySyncthingAppsCache: new Map(),
+        // The real write stamps the mark with the volume's filesystem id, which
+        // costs a findmnt; storing it as given keeps the mark readable.
+        setSyncedMark: sinon.stub().resolvesArg(2),
+        syncedMark: sinon.stub().resolves(null),
+      },
+      '../utils/fluxShutdowndClient': {
+        SOCKET_PATH: '/run/flux-shutdownd/daemon.sock',
+        listAppPlans: sinon.stub().resolves([]),
+        upsertAppPlanBestEffort: sinon.stub().resolves(),
+        deleteAppPlanBestEffort: sinon.stub().resolves(),
+      },
+      // Requiring it for real builds the FluxPeerManager singleton, and with it
+      // the websocket stack. Destructured inside the functions that use it.
+      '../utils/peerState': {
+        peerManager: {
+          inboundCount: 0,
+          outboundCount: 0,
+          getRandomPeer: sinon.stub().returns(null),
+        },
+      },
+      '../utils/volumeService': { listComponentVolumeMounts: sinon.stub().resolves([]) },
+      './appNetworkLinker': {
+        checkAppNetworkRequirements: sinon.stub().resolves(),
+        connectComponentToLinkedApps: sinon.stub().resolves(),
+      },
+      './contentBlobService': { serveBlob: sinon.stub().resolves(null) },
+      './pendingTeardownStore': { teardownOwedFor: sinon.stub().resolves(false) },
     });
   });
 
