@@ -22,8 +22,8 @@ let isDaemonInsightExplorer = null;
 // age this out, because a stale reading here is what sheds every app on the node.
 let lastChainUpdateAt = null;
 
-// Ten blocks at ~30s. Long enough that an ordinary slow block is not suspicious.
-const CHAIN_STALE_AFTER_MS = 300_000;
+// Long enough that an ordinary slow block is not suspicious.
+const CHAIN_STALE_AFTER_MS = config.daemon.subscriptions.chainStaleAfterMs;
 
 function elapsedSinceChainUpdateMs() {
   if (lastChainUpdateAt === null) return null;
