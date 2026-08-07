@@ -41,6 +41,8 @@ import { assertCoupledRatios, loadSharedConfig } from './coupled-knobs.js';
 import { startSyncedDataKeeper } from './synced-data-keeper.js';
 import { assertFluxSpecVendorCurrent, NODE_IMAGE } from './flux-spec-vendor.js';
 import { assertNodeConfigsCurrent } from './node-configs.js';
+import { statelessRegex } from './log-reader.js';
+import { renderFluxdConf, DEFAULT_ZMQ_TOPICS } from './fluxd-conf.js';
 
 // How long after a re-attach the collector goes on treating an exact repeat as docker
 // replaying a line it already has. Docker's `since` is whole-second, so the replay is over
@@ -159,13 +161,15 @@ function createLogCollector() {
   // something about the capture itself, so a gap in the log explains itself in the dump.
   consumer.note = (line) => push(line);
 
+  // Both match line by line, so the regex must not carry state between lines — see
+  // statelessRegex.
   consumer.hasLine = (pattern) => {
-    const regex = pattern instanceof RegExp ? pattern : new RegExp(pattern);
+    const regex = statelessRegex(pattern);
     return entries.some((e) => regex.test(e.line));
   };
 
   consumer.countPattern = (pattern) => {
-    const regex = pattern instanceof RegExp ? pattern : new RegExp(pattern, 'g');
+    const regex = statelessRegex(pattern);
     return entries.filter((e) => regex.test(e.line)).length;
   };
 
@@ -817,6 +821,7 @@ function makeEnvShell(networkName) {
       step('journal-chown');
       for (const cfg of nodeConfigs) {
         if (cfg.bootIdDir) rmSync(cfg.bootIdDir, { recursive: true, force: true });
+        if (cfg.fluxdConfDir) rmSync(cfg.fluxdConfDir, { recursive: true, force: true });
       }
       // The nodes are down, so the profile they ran under is no longer needed;
       // unload it rather than leave it in the host kernel after the run.
@@ -1030,6 +1035,11 @@ export async function createTestEnv({
   // Real flux-dnsd from test-infra/flux-dnsd/dist, delivered to systemd-mode
   // nodes as its production unit.
   dnsdReal = false,
+  // Which ZMQ topics the daemon stub publishes: fleet-wide, and per node index for a
+  // mixed push/poll fleet. Defaulted, not bare - nodeZmqTopics[i] is indexed at the
+  // conf render below, so an absent option would throw rather than fall back.
+  zmqTopics = DEFAULT_ZMQ_TOPICS,
+  nodeZmqTopics = {},
 } = {}) {
   // Before the boot lock, the network, or a single container: a flux-spec
   // vendor lagging the branch surfaces as a product mystery minutes later,
@@ -1349,7 +1359,7 @@ export async function createTestEnv({
     // mongo starts, i.e. inside the fleet boot, where the waits at risk are the
     // boot's own.
     await startInfraDeathWatch(env);
-    await _buildEnv(env, nodes, deferredNodes, legacyNodes, unprivilegedNodes, stubPeers, silentSyncPeers, unverifiableSyncPeers, policyUnawarePeers, stubPeerings, configOverrides, mergedNodeOverrides, nodeTiers, dataCenter, tickerAutostart, discoveryAutostart, nodeStatusOverrides, rpcFailures, bootContext, initialHeight, syncthing, aptSeeded, aptBadSource, geolocation, locationTable, staticIp, policy, policySeeds, policyReachable, pm2Nodes, pausedSyncthingNodes, { ...sharedKeys, ...collateralOf }, networkShapes, globalIpv6, dnsRecords, firewall, collateralOf, syncthingFaults, configuredIp, nodeImageTags, freezableDockerRoot, symlinkedAppsFolder, arcane, shutdowndMock, telemetrydMock, fluxosJournal, arcaneHost, telemetrydReal, shutdowndReal, dnsdReal);
+    await _buildEnv(env, nodes, deferredNodes, legacyNodes, unprivilegedNodes, stubPeers, silentSyncPeers, unverifiableSyncPeers, policyUnawarePeers, stubPeerings, configOverrides, mergedNodeOverrides, nodeTiers, dataCenter, tickerAutostart, discoveryAutostart, nodeStatusOverrides, rpcFailures, bootContext, initialHeight, syncthing, aptSeeded, aptBadSource, geolocation, locationTable, staticIp, policy, policySeeds, policyReachable, pm2Nodes, pausedSyncthingNodes, { ...sharedKeys, ...collateralOf }, networkShapes, globalIpv6, dnsRecords, firewall, collateralOf, syncthingFaults, configuredIp, nodeImageTags, freezableDockerRoot, symlinkedAppsFolder, arcane, shutdowndMock, telemetrydMock, fluxosJournal, arcaneHost, telemetrydReal, shutdowndReal, dnsdReal, zmqTopics, nodeZmqTopics);
     return env;
   } catch (err) {
     // Boot failed: the env owns everything started so far. The shared teardown
@@ -1378,7 +1388,7 @@ function mergeConfigs(base, override) {
   return result;
 }
 
-async function _buildEnv(env, nodes, deferredNodes, legacyNodes, unprivilegedNodes, stubPeers, silentSyncPeers, unverifiableSyncPeers, policyUnawarePeers, stubPeerings, configOverrides, nodeConfigOverrides, nodeTiers, dataCenter, tickerAutostart, discoveryAutostart, nodeStatusOverrides, rpcFailures, bootContext, initialHeight, syncthing = 'stub', aptSeeded = true, aptBadSource = false, geolocation, locationTable, staticIp = true, policy = null, policySeeds = null, policyReachable = false, pm2Nodes = {}, pausedSyncthingNodes = [], sharedKeys = {}, networkShapes = {}, globalIpv6 = [], dnsRecords = [], firewall = false, collateralOf = {}, syncthingFaults = {}, configuredIp = {}, nodeImageTags = {}, freezableDockerRoot = [], symlinkedAppsFolder = [], arcane = false, shutdowndMock = false, telemetrydMock = false, fluxosJournal = false, arcaneHost = false, telemetrydReal = false, shutdowndReal = false, dnsdReal = false) {
+async function _buildEnv(env, nodes, deferredNodes, legacyNodes, unprivilegedNodes, stubPeers, silentSyncPeers, unverifiableSyncPeers, policyUnawarePeers, stubPeerings, configOverrides, nodeConfigOverrides, nodeTiers, dataCenter, tickerAutostart, discoveryAutostart, nodeStatusOverrides, rpcFailures, bootContext, initialHeight, syncthing = 'stub', aptSeeded = true, aptBadSource = false, geolocation, locationTable, staticIp = true, policy = null, policySeeds = null, policyReachable = false, pm2Nodes = {}, pausedSyncthingNodes = [], sharedKeys = {}, networkShapes = {}, globalIpv6 = [], dnsRecords = [], firewall = false, collateralOf = {}, syncthingFaults = {}, configuredIp = {}, nodeImageTags = {}, freezableDockerRoot = [], symlinkedAppsFolder = [], arcane = false, shutdowndMock = false, telemetrydMock = false, fluxosJournal = false, arcaneHost = false, telemetrydReal = false, shutdowndReal = false, dnsdReal = false, zmqTopics, nodeZmqTopics) {
   // Everything built here registers onto the env shell as it comes up, so a
   // boot-phase throw leaves the partial state reachable (see makeEnvShell).
   const {
@@ -1431,6 +1441,8 @@ async function _buildEnv(env, nodes, deferredNodes, legacyNodes, unprivilegedNod
       FLUXD_PORT: '16124',
       BENCHD_PORT: '16224',
       CONTROL_PORT: '18232',
+      // The publisher's port, which is what config.daemon.zmqport defaults to.
+      ZMQ_PORT: '16123',
       TICKER_AUTOSTART: tickerAutostart ? 'true' : 'false',
       NODE_COUNT: String(nodes),
       INITIAL_HEIGHT: String(initialHeight),
@@ -1691,10 +1703,15 @@ async function _buildEnv(env, nodes, deferredNodes, legacyNodes, unprivilegedNod
     const bootIdDir = join(tmpdir(), `flux-bootid-${networkName}-${num}`);
     mkdirSync(bootIdDir, { recursive: true });
     writeFileSync(join(bootIdDir, 'boot-id'), getBootId(i + 1));
+    const fluxdConfDir = join(tmpdir(), `flux-fluxd-conf-${networkName}-${num}`);
+    mkdirSync(fluxdConfDir, { recursive: true });
+    const fluxdConf = renderFluxdConf(num, nodeZmqTopics[i] ?? zmqTopics, fluxdConfDir);
     const bindMounts = [
       { source: volumeNames[i], target: '/mnt/appdata' },
       { source: join(fixturesDir, 'registry-tls', 'ca.pem'), target: '/usr/local/share/ca-certificates/test-registry.crt', mode: 'ro' },
       { source: bootIdDir, target: '/tmp/flux-boot-config' },
+      // Over the fixture baked into the image, so FLUXD_CONFIG_PATH is unchanged.
+      { source: fluxdConf, target: `/flux/test-infra/fixtures/conf/flux-${num}.conf` },
     ];
     // A systemd node logs to its journal, which lives inside the container and dies
     // with it — so a node that fails during boot takes its own diagnosis with it
@@ -2033,7 +2050,7 @@ async function _buildEnv(env, nodes, deferredNodes, legacyNodes, unprivilegedNod
     if (nodeAppArmor()) builder.withAppArmorProfile(nodeAppArmor());
 
     nodeConfigs.push({
-      index: i, builder, ip: nodeIp, num: i + 1, logCollector, bootIdDir, journalDir, imageTag,
+      index: i, builder, ip: nodeIp, num: i + 1, logCollector, bootIdDir, journalDir, imageTag, fluxdConfDir,
     });
   }
 
