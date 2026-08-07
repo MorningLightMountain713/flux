@@ -30,6 +30,7 @@ const daemonServiceControlRpcs = require('../../ZelBack/src/services/daemonServi
 // eslint-disable-next-line no-unused-vars
 const daemonServiceBenchmarkRpcs = require('../../ZelBack/src/services/daemonService/daemonServiceBenchmarkRpcs');
 const daemonServiceFluxnodeRpcs = require('../../ZelBack/src/services/daemonService/daemonServiceFluxnodeRpcs');
+const daemonServiceBlockchainRpcs = require('../../ZelBack/src/services/daemonService/daemonServiceBlockchainRpcs');
 const daemonServiceUtils = require('../../ZelBack/src/services/daemonService/daemonServiceUtils');
 const serviceHelper = require('../../ZelBack/src/services/serviceHelper');
 const logLib = require('../../ZelBack/src/lib/log');
@@ -80,6 +81,94 @@ const generateResponse = () => {
 };
 
 describe('fluxService tests', () => {
+  describe('streamChainPreparation maintenance window tests', () => {
+    // A node re-confirms between 500 and 640 blocks after its last confirmation, and
+    // stopping it inside the 30-block run-up risks it missing that. Both bounds come
+    // from fluxd; this guard held 480/600 from before the PON upgrade moved them.
+    const WINDOW_OPENS = 500;
+    const MARGIN = 30;
+    const LAST_CONFIRMED = 1000;
+
+    // prepLock is only released by a 30s timer, so a shared module instance would make
+    // every test after the first bail at the busy guard and never reach the window.
+    function freshService() {
+      return proxyquire.noPreserveCache()(
+        '../../ZelBack/src/services/fluxService',
+        { '../../../config/userconfig': adminConfig, 'node:fs/promises': fsPromisesStubs },
+      );
+    }
+
+    function setup(blocksSinceConfirmed) {
+      sinon.stub(serviceHelper, 'isPrivateAddress').returns(true);
+      sinon.stub(serviceHelper, 'runCommand').resolves({ error: new Error('stopped here') });
+      sinon.stub(daemonServiceBlockchainRpcs, 'getBlockchainInfo').resolves({
+        status: 'success',
+        data: { bestblockhash: 'aa'.repeat(32), blocks: LAST_CONFIRMED + blocksSinceConfirmed },
+      });
+      sinon.stub(daemonServiceBlockchainRpcs, 'getBlock').resolves({
+        status: 'success',
+        data: { time: Math.floor(Date.now() / 1000) },
+      });
+      sinon.stub(daemonServiceFluxnodeRpcs, 'getFluxNodeStatus').resolves({
+        status: 'success',
+        data: { status: 'CONFIRMED', last_confirmed_height: LAST_CONFIRMED },
+      });
+
+      const res = generateResponse();
+      const req = { socket: { remoteAddress: '::ffff:192.168.1.5' } };
+      return { req, res, service: freshService() };
+    }
+
+    // safeSetResponseStatus reports through res.statusMessage and ends the response.
+    // Asserting the exact message matters: every earlier guard also ends the response,
+    // so "not the maintenance message" would pass for a call that never got that far.
+    const MAINTENANCE = 'Error Fluxnode is not in maintenance window.';
+    // What a call that clears the window hits next, since runCommand is stubbed to fail.
+    const PAST_THE_WINDOW = 'Error: unable to stop watchdog';
+
+    afterEach(() => {
+      sinon.restore();
+    });
+
+    it('should refuse to stop a node whose confirmation window is close', async () => {
+      const { req, res, service } = setup(WINDOW_OPENS - MARGIN + 1);
+
+      await service.streamChainPreparation(req, res);
+
+      expect(res.statusMessage).to.equal(MAINTENANCE);
+    });
+
+    it('should allow a stop while the window is still more than the margin away', async () => {
+      const { req, res, service } = setup(WINDOW_OPENS - MARGIN - 1);
+
+      await service.streamChainPreparation(req, res);
+
+      expect(res.statusMessage).to.equal(PAST_THE_WINDOW);
+    });
+
+    it('should measure the run-up from where the window really opens', async () => {
+      // 455 blocks in. Against the old hardcoded 480 this was inside the margin and
+      // refused; the window actually opens at 500, so there are 45 blocks to spare.
+      const { req, res, service } = setup(455);
+
+      await service.streamChainPreparation(req, res);
+
+      expect(res.statusMessage).to.equal(PAST_THE_WINDOW);
+    });
+
+    it('should not consider the window for a node that is not confirmed', async () => {
+      const { req, res, service } = setup(WINDOW_OPENS);
+      daemonServiceFluxnodeRpcs.getFluxNodeStatus.resolves({
+        status: 'success',
+        data: { status: 'STARTED', last_confirmed_height: 0 },
+      });
+
+      await service.streamChainPreparation(req, res);
+
+      expect(res.statusMessage).to.equal(PAST_THE_WINDOW);
+    });
+  });
+
   describe('fluxBackendFolder tests', () => {
     afterEach(() => {
       sinon.restore();

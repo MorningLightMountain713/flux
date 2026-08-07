@@ -4,6 +4,10 @@ const os = require('node:os');
 const { promisify } = require('node:util');
 
 const config = require('config');
+
+// Blocks of headroom before the confirmation window opens. Confirming takes around
+// twelve minutes, so stopping a node inside this margin risks it missing the window.
+const MAINTENANCE_MARGIN_BLOCKS = 30;
 const configDefault = require('../../config/default');
 
 const log = require('../lib/log');
@@ -1710,9 +1714,16 @@ async function streamChainPreparation(req, res) {
       return;
     }
 
-    // check if it is outside maintenance window
-    if (fluxNodeInfo.status === 'CONFIRMED' && fluxNodeInfo.last_confirmed_height > 0 && (480 - (blockCount - fluxNodeInfo.last_confirmed_height)) < 30) {
-      // fluxnodes needs to confirm between 480 and 600 blocks, if it is 30 blocks (15m) remaining to enter confirmation window we already consider outside maintenance window, as this can take around 12 minutes.
+    // A node re-confirms between confirmWindowOpensBlocks and confirmExpirationBlocks
+    // after its last confirmation. Stopping it once that window is close risks missing
+    // it, and confirming takes around twelve minutes, so the margin below buys enough
+    // blocks to finish. Both bounds come from fluxd and are configured rather than
+    // written here, because they moved at the PON upgrade and this check did not.
+    const blocksSinceConfirmed = blockCount - fluxNodeInfo.last_confirmed_height;
+    const opensIn = config.confirmation.confirmWindowOpensBlocks - blocksSinceConfirmed;
+
+    if (fluxNodeInfo.status === 'CONFIRMED' && fluxNodeInfo.last_confirmed_height > 0
+      && opensIn < MAINTENANCE_MARGIN_BLOCKS) {
       safeSetResponseStatus(res, 503, 'Error Fluxnode is not in maintenance window.');
       return;
     }

@@ -21,6 +21,7 @@ module.exports = {
     // FLUXNODE_CONFIRM_UPDATE_EXPIRATION_HEIGHT_V4. Expiry is a height, not a
     // duration; the block interval only estimates it when the chain view is gone.
     confirmExpirationBlocks: 640,
+    confirmWindowOpensBlocks: 500,
     blockIntervalMs: 30000,
   },
   server: {
