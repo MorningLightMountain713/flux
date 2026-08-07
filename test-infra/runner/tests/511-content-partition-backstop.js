@@ -55,7 +55,7 @@ describe('steady-state manifest backstop converges a silently-stale node', funct
       tickerAutostart: false,
       arcane: true,
       configOverrides: {
-        confirmation: { daemonStaleMs: 300000, daemonExpiredMs: 600000 },
+        confirmation: { daemonStaleMs: 300000 },
         // partitionGroups only returns once the cross-group sockets are gone — until then
         // the "missed" gossip is queued in TCP, not lost. That wait IS peer liveness, 45s
         // on production defaults; compressed here like every other cadence in this suite,

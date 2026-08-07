@@ -113,7 +113,7 @@ describe('Daemon stale removes installed apps', function () {
       hookCtx: this,
       nodes: 10,
       tickerAutostart: false,
-      configOverrides: { confirmation: { daemonStaleMs: 10000, daemonExpiredMs: 20000 } },
+      configOverrides: { confirmation: { daemonStaleMs: 10000 } },
     });
     await bootAndPeer(env);
     installedOnIndex = await seedAndWaitForInstall(env, appName);

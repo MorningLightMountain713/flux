@@ -40,7 +40,12 @@ module.exports = {
     // (production is minutes-scale). Suites that exercise the stale/expiry
     // removal flows override these per-env to fast values.
     daemonStaleMs: 300000,
-    daemonExpiredMs: 600000,
+    // Expiry is a block count now. The stub confirms each node 10 blocks back, so a
+    // limit above that leaves the fleet default unexpired; suites that exercise the
+    // flow lower it until those 10 blocks are close to the limit and tune the block
+    // interval, which is what turns the blocks still owed into a deadline.
+    confirmExpirationBlocks: 640,
+    blockIntervalMs: 30000,
   },
   github: {
     apiBaseUrl: 'http://198.18.0.6:3000',
