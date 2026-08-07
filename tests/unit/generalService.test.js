@@ -580,59 +580,6 @@ describe('generalService tests', () => {
     });
   });
 
-  describe('isNodeStatusConfirmed tests', () => {
-    let getFluxNodeStatusStub;
-
-    beforeEach(() => {
-      getFluxNodeStatusStub = sinon.stub(daemonServiceFluxnodeRpcs, 'getFluxNodeStatus');
-    });
-
-    afterEach(() => {
-      sinon.restore();
-    });
-
-    it('should return error if getFluxnodeStatus returns error', async () => {
-      const error = {
-        status: 'error',
-        data: {
-          message: 'This is some error!',
-        },
-      };
-      getFluxNodeStatusStub.returns(error);
-      await expect(generalService.isNodeStatusConfirmed()).to.eventually.be.rejectedWith('This is some error');
-    });
-
-    it('should return true if getFluxnodeStatus returns succcess and confirmed status', async () => {
-      getFluxNodeStatusStub.returns(
-        {
-          status: 'success',
-          data: {
-            status: 'CONFIRMED',
-          },
-        },
-      );
-
-      const result = await generalService.isNodeStatusConfirmed();
-
-      expect(result).to.eql(true);
-    });
-
-    it('should return false if getFluxnodeStatus returns succcess and any other status', async () => {
-      getFluxNodeStatusStub.returns(
-        {
-          status: 'success',
-          data: {
-            status: 'NOT CONFIRMED',
-          },
-        },
-      );
-
-      const result = await generalService.isNodeStatusConfirmed();
-
-      expect(result).to.eql(false);
-    });
-  });
-
   describe('checkSynced tests', () => {
     let isDaemonSyncedStub;
     let dbStub;
