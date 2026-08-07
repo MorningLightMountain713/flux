@@ -55,6 +55,7 @@ const chainTipSource = require('./daemonService/chainTipSource');
 const daemonServiceMiscRpcs = require('./daemonService/daemonServiceMiscRpcs');
 const daemonSubscriptionService = require('./daemonService/daemonSubscriptionService');
 const fluxnodeStatusSource = require('./daemonService/fluxnodeStatusSource');
+const daemonUsageReporter = require('./daemonService/daemonUsageReporter');
 const reorgSource = require('./daemonService/reorgSource');
 const daemonServiceUtils = require('./daemonService/daemonServiceUtils');
 const fluxService = require('./fluxService');
@@ -784,6 +785,7 @@ async function startFluxFunctions() {
     log.info('Flux checks operational');
     fluxCommunication.initializeDiscovery();
     await fluxnodeStatusSource.start();
+    daemonUsageReporter.start();
     if (config.fluxapps.discoveryAutostart !== false) {
       fluxCommunication.startDiscovery();
       log.info('Flux Discovery started');

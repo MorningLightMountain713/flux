@@ -89,6 +89,55 @@ describe('fluxRpc tests', () => {
     expect(res).to.equal('RPC RES HERE');
   });
 
+  describe('call counting', () => {
+    it('should count calls by method and reset when taken', async () => {
+      const rpc = new FluxRpc(goodUrl);
+      postStub.resolves({ status: 200, data: { result: '' } });
+
+      await rpc.run('getblockhash', { params: [1] });
+      await rpc.run('getblockhash', { params: [2] });
+      await rpc.run('getblockcount');
+
+      const first = rpc.takeCallCounts();
+      expect(first.get('getblockhash')).to.equal(2);
+      expect(first.get('getblockcount')).to.equal(1);
+
+      // Taking starts a fresh window, so a reporter never double counts.
+      expect(rpc.takeCallCounts().size).to.equal(0);
+    });
+
+    it('should count a failed call, since it still reached the wire', async () => {
+      const rpc = new FluxRpc(goodUrl);
+      postStub.rejects(new Error('connection refused'));
+
+      await rpc.run('getblockcount').catch(() => null);
+
+      expect(rpc.takeCallCounts().get('getblockcount')).to.equal(1);
+    });
+
+    it('should count every method in a batch', async () => {
+      const rpc = new FluxRpc(goodUrl);
+      postStub.resolves({
+        status: 200,
+        data: [{ id: 0, result: 'a' }, { id: 1, result: 'b' }],
+      });
+
+      await rpc.runBatch([{ method: 'getblockcount' }, { method: 'getblockhash', params: [1] }]);
+
+      const counts = rpc.takeCallCounts();
+      expect(counts.get('getblockcount')).to.equal(1);
+      expect(counts.get('getblockhash')).to.equal(1);
+    });
+
+    it('should not count a method it refuses to send', async () => {
+      const rpc = new FluxRpc(goodUrl);
+
+      await rpc.run('notarealmethod').catch(() => null);
+
+      expect(rpc.takeCallCounts().size).to.equal(0);
+    });
+  });
+
   it('should increment the id and reset at 999', async () => {
     const rpc = new FluxRpc(goodUrl);
 

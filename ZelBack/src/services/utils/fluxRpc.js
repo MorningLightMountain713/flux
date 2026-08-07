@@ -141,6 +141,10 @@ class FluxRpc {
 
   #currentId = 0;
 
+  // Calls that actually reached the wire, by method. Cache hits never get here, which
+  // is the point — this counts what the daemon was asked, not what callers wanted.
+  #callCounts = new Map();
+
   #instance = null;
 
   constructor(uri, options = {}) {
@@ -178,6 +182,22 @@ class FluxRpc {
     this.methods = FluxRpc.#methodMap[this.mode];
   }
 
+  #countCall(method) {
+    this.#callCounts.set(method, (this.#callCounts.get(method) || 0) + 1);
+  }
+
+  /**
+   * Returns the calls made since this was last asked, and starts a fresh count.
+   * Taking rather than reading keeps the reporter's window exact without it having to
+   * remember previous totals.
+   * @returns {Map<string, number>} Method name to call count.
+   */
+  takeCallCounts() {
+    const counts = this.#callCounts;
+    this.#callCounts = new Map();
+    return counts;
+  }
+
   #createPayload(method, params) {
     const id = this.#currentId;
 
@@ -196,6 +216,8 @@ class FluxRpc {
     const method = rawMethod.toLowerCase();
 
     if (!this.methods.has(method)) throw new Error(`Invalid Method: ${method}`);
+
+    this.#countCall(method);
 
     const payload = this.#createPayload(method, params);
     const { signal } = this.controller;
@@ -252,6 +274,7 @@ class FluxRpc {
     const payloads = calls.map((call, i) => {
       const method = call.method.toLowerCase();
       if (!this.methods.has(method)) throw new Error(`Invalid Method: ${method}`);
+      this.#countCall(method);
       return { jsonrpc: '2.0', id: i, method, params: call.params || [] };
     });
 
