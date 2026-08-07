@@ -1,6 +1,7 @@
 const { expect } = require('chai');
 const sinon = require('sinon');
 const proxyquire = require('proxyquire').noCallThru();
+const generalService = require('../../ZelBack/src/services/generalService');
 
 describe('nodeConfirmationService', () => {
   let service;
@@ -26,6 +27,7 @@ describe('nodeConfirmationService', () => {
     service = proxyquire('../../ZelBack/src/services/nodeConfirmationService', {
       './daemonService/daemonServiceFluxnodeRpcs': { getFluxNodeStatus: getFluxNodeStatusStub },
       './daemonService/daemonServiceMiscRpcs': { isDaemonSynced: isDaemonSyncedStub },
+      './daemonService/daemonSubscriptionService': { daemonAlive: () => true },
       './fluxNetworkHelper': {
         getLocalSocketAddress: getLocalSocketAddressStub,
         getFluxNodePublicKey: getFluxNodePublicKeyStub,
@@ -336,12 +338,12 @@ describe('nodeConfirmationService', () => {
   });
 
   describe('daemon staleness', () => {
-    async function setPollAgeMinutes(minutes) {
-      // Age the last successful poll, then fire a single poll so it observes the
+    async function setStatusAgeMinutes(minutes) {
+      // Age the last observed status, then fire a single poll so it observes the
       // elapsed window. Ticking the full span would fire one poll per 30s
       // interval (252 polls for 126 min, 642 for 321 min); under full-suite
       // load those event-loop turns flake against mocha's 2s timeout.
-      service.setLastSuccessfulPollAgeMs(minutes * 60 * 1000);
+      service.setLastStatusAgeMs(minutes * 60 * 1000);
       await clock.tickAsync(30 * 1000);
     }
 
@@ -356,7 +358,7 @@ describe('nodeConfirmationService', () => {
       await service.start();
 
       getFluxNodeStatusStub.rejects(new Error('connection refused'));
-      await setPollAgeMinutes(126);
+      await setStatusAgeMinutes(126);
 
       expect(service.isDaemonStale()).to.be.true;
       expect(service.isConfirmed()).to.be.true;
@@ -385,7 +387,7 @@ describe('nodeConfirmationService', () => {
       await service.start();
 
       getFluxNodeStatusStub.rejects(new Error('connection refused'));
-      await setPollAgeMinutes(10);
+      await setStatusAgeMinutes(10);
 
       expect(service.isDaemonStale()).to.be.false;
       expect(service.isConfirmed()).to.be.true;
@@ -399,10 +401,10 @@ describe('nodeConfirmationService', () => {
       await service.start();
 
       getFluxNodeStatusStub.rejects(new Error('connection refused'));
-      await setPollAgeMinutes(124);
+      await setStatusAgeMinutes(124);
       expect(callback.called).to.be.false;
 
-      await setPollAgeMinutes(126);
+      await setStatusAgeMinutes(126);
       expect(callback.calledOnce).to.be.true;
     });
 
@@ -414,7 +416,7 @@ describe('nodeConfirmationService', () => {
       await service.start();
 
       getFluxNodeStatusStub.rejects(new Error('connection refused'));
-      await setPollAgeMinutes(10);
+      await setStatusAgeMinutes(10);
 
       expect(callback.called).to.be.false;
     });
@@ -425,7 +427,7 @@ describe('nodeConfirmationService', () => {
       expect(service.canSendMessages()).to.be.true;
 
       getFluxNodeStatusStub.rejects(new Error('connection refused'));
-      await setPollAgeMinutes(126);
+      await setStatusAgeMinutes(126);
 
       expect(service.isDaemonStale()).to.be.true;
       expect(service.canSendMessages()).to.be.true;
@@ -445,7 +447,7 @@ describe('nodeConfirmationService', () => {
       // The status RPC is down but the push socket keeps delivering the tip.
       getFluxNodeStatusStub.rejects(new Error('connection refused'));
       isDaemonSyncedStub.returns({ data: { height: 1641, synced: true } });
-      await setPollAgeMinutes(10);
+      await setStatusAgeMinutes(10);
 
       expect(service.isConfirmed()).to.be.false;
       expect(service.canSendMessages()).to.be.false;
@@ -461,7 +463,7 @@ describe('nodeConfirmationService', () => {
       // Hours unreachable, but the chain says we are still inside the window.
       getFluxNodeStatusStub.rejects(new Error('connection refused'));
       isDaemonSyncedStub.returns({ data: { height: 1639, synced: true } });
-      await setPollAgeMinutes(600);
+      await setStatusAgeMinutes(600);
 
       expect(service.isConfirmed()).to.be.true;
     });
@@ -479,10 +481,10 @@ describe('nodeConfirmationService', () => {
       getFluxNodeStatusStub.rejects(new Error('connection refused'));
       isDaemonSyncedStub.returns({ data: { height: 1200, synced: false } });
 
-      await setPollAgeMinutes(219);
+      await setStatusAgeMinutes(219);
       expect(service.isConfirmed()).to.be.true;
 
-      await setPollAgeMinutes(221);
+      await setStatusAgeMinutes(221);
       expect(service.isConfirmed()).to.be.false;
     });
 
@@ -494,7 +496,7 @@ describe('nodeConfirmationService', () => {
       await service.start();
 
       getFluxNodeStatusStub.rejects(new Error('connection refused'));
-      await setPollAgeMinutes(126);
+      await setStatusAgeMinutes(126);
       expect(service.isDaemonStale()).to.be.true;
       expect(staleCb.calledOnce).to.be.true;
 
@@ -503,6 +505,103 @@ describe('nodeConfirmationService', () => {
       expect(service.isDaemonStale()).to.be.false;
       expect(service.isConfirmed()).to.be.true;
       expect(service.canSendMessages()).to.be.true;
+    });
+  });
+
+  describe('applyPushedStatus', () => {
+    // fluxd sends display order on every topic and the decoder does not reverse.
+    // An asymmetric hash is what catches a reversal; 'ab'.repeat(32) would not.
+    const txhash = 'a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90';
+
+    function pushed(overrides = {}) {
+      return {
+        blockHeight: 2000,
+        status: 'CONFIRMED',
+        tier: 'CUMULUS',
+        confirmedHeight: 1500,
+        lastConfirmedHeight: 1000,
+        lastPaidHeight: 1400,
+        txhash,
+        outidx: 0,
+        ip: '1.2.3.4:16127',
+        ...overrides,
+      };
+    }
+
+    it('should compose a collateral the existing parser reads back', async () => {
+      // fluxNetworkMonitor matches on this string and generalService splits it apart,
+      // so the two fields the topic carries have to rebuild exactly what RPC sends.
+      setupConfirmed();
+      await service.start();
+      await service.applyPushedStatus(pushed({ outidx: 3 }));
+
+      const { collateral } = service.getNodeStatus();
+      expect(collateral).to.equal(`COutPoint(${txhash}, 3)`);
+      expect(generalService.getCollateralInfo(collateral)).to.eql({ txhash, txindex: 3 });
+    });
+
+    it('should not reverse the transaction hash', async () => {
+      setupConfirmed();
+      await service.start();
+      await service.applyPushedStatus(pushed());
+
+      expect(service.getNodeStatus().txhash).to.equal(txhash);
+    });
+
+    it('should lose confirmation when the pushed status is no longer CONFIRMED', async () => {
+      const confirmCb = sinon.spy();
+      service.onConfirmationChange(confirmCb);
+
+      setupConfirmed();
+      await service.start();
+      expect(service.isConfirmed()).to.be.true;
+
+      await service.applyPushedStatus(pushed({ status: 'EXPIRED' }));
+
+      expect(service.isConfirmed()).to.be.false;
+      expect(confirmCb.lastCall.calledWith(false)).to.be.true;
+    });
+
+    it('should keep the identity fields RPC supplied and the topic does not carry', async () => {
+      getFluxNodeStatusStub.resolves({
+        status: 'success',
+        data: { status: 'CONFIRMED', last_confirmed_height: 1000, payment_address: 't1abc' },
+      });
+      getFluxNodePublicKeyStub.resolves('04abcdef1234567890');
+      getLocalSocketAddressStub.resolves('1.2.3.4:16127');
+      getFluxnodeBySocketAddressStub.resolves({ pubkey: '04abcdef1234567890' });
+      await service.start();
+
+      await service.applyPushedStatus(pushed());
+
+      expect(service.getNodeStatus().payment_address).to.equal('t1abc');
+    });
+  });
+
+  describe('reevaluate', () => {
+    it('should expire on a block that carries the chain past the deadline', async () => {
+      // No new status arrives — the node simply stopped confirming, and it is the
+      // chain advancing that has to notice.
+      setupConfirmed();
+      isDaemonSyncedStub.returns({ data: { height: 1200, synced: true } });
+      await service.start();
+      expect(service.isConfirmed()).to.be.true;
+
+      isDaemonSyncedStub.returns({ data: { height: 1641, synced: true } });
+      await service.reevaluate();
+
+      expect(service.isConfirmed()).to.be.false;
+    });
+
+    it('should leave a confirmation inside its deadline alone', async () => {
+      setupConfirmed();
+      isDaemonSyncedStub.returns({ data: { height: 1200, synced: true } });
+      await service.start();
+
+      isDaemonSyncedStub.returns({ data: { height: 1639, synced: true } });
+      await service.reevaluate();
+
+      expect(service.isConfirmed()).to.be.true;
     });
   });
 

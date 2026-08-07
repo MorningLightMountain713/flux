@@ -1,6 +1,7 @@
 const config = require('config');
 const daemonServiceFluxnodeRpcs = require('./daemonService/daemonServiceFluxnodeRpcs');
 const daemonServiceMiscRpcs = require('./daemonService/daemonServiceMiscRpcs');
+const daemonSubscriptionService = require('./daemonService/daemonSubscriptionService');
 const fluxNetworkHelper = require('./fluxNetworkHelper');
 const networkStateService = require('./networkStateService');
 const { AsyncGate } = require('./utils/asyncGate');
@@ -19,13 +20,15 @@ let daemonConfirmed = null;
 let daemonStale = false;
 let messageCapable = false;
 let started = false;
+let pushDriven = false;
+let pollTimer = null;
 // Monotonic. A wall clock jump — an NTP correction, a resumed VM — must not be able to
 // age this out, because both windows it gates shed every app on the node.
-let lastSuccessfulPollAt = null;
+let lastStatusObservedAt = null;
 
-function elapsedSincePollMs() {
-  if (lastSuccessfulPollAt === null) return null;
-  return Number(process.hrtime.bigint() - lastSuccessfulPollAt) / 1_000_000;
+function elapsedSinceStatusMs() {
+  if (lastStatusObservedAt === null) return null;
+  return Number(process.hrtime.bigint() - lastStatusObservedAt) / 1_000_000;
 }
 
 const confirmedGate = new AsyncGate();
@@ -56,6 +59,9 @@ function getNodeStatus() {
  * @returns {boolean}
  */
 function isDaemonReachable() {
+  // Nothing is polling in push mode, so there is no failed call to read. Liveness is
+  // the authority there: any message is a heartbeat and only a failed probe says dead.
+  if (pushDriven) return daemonSubscriptionService.daemonAlive();
   return daemonReachable;
 }
 
@@ -135,31 +141,38 @@ function hasConfirmationExpired(elapsedMs) {
   return elapsedMs > blocksRemaining * BLOCK_INTERVAL_MS;
 }
 
-async function poll() {
-  const prevDaemonConfirmed = daemonConfirmed;
-  const prevMessageCapable = messageCapable;
-  let rpcReachable = false;
-  try {
-    const response = await daemonServiceFluxnodeRpcs.getFluxNodeStatus();
-    if (response.status === 'success') {
-      rpcReachable = true;
-      lastSuccessfulPollAt = process.hrtime.bigint();
-      daemonStale = false;
-      nodeStatus = response.data ?? null;
-      daemonConfirmed = nodeStatus?.status === 'CONFIRMED';
-      const blocks = blocksSinceConfirmation();
-      if (blocks !== null) lastKnownBlocksSinceConfirmation = blocks;
-    }
-  } catch (error) {
-    // RPC unreachable — keep previous daemonConfirmed value
-  }
+/**
+ * Records a status this node has just observed, from whichever transport carried it.
+ * @param {object|null} status Status payload in the shape getzelnodestatus returns.
+ * @returns {void}
+ */
+function recordStatus(status) {
+  lastStatusObservedAt = process.hrtime.bigint();
+  daemonStale = false;
+  nodeStatus = status;
+  daemonConfirmed = nodeStatus?.status === 'CONFIRMED';
 
-  daemonReachable = rpcReachable;
+  const blocks = blocksSinceConfirmation();
+  if (blocks !== null) lastKnownBlocksSinceConfirmation = blocks;
+}
+
+/**
+ * Brings the derived state — the gates, the listeners, message capability — into line
+ * with whatever was last observed.
+ *
+ * @param {object} previous Values captured before the observation was applied.
+ * @param {boolean} statusObserved Whether a current status was just seen. False means
+ *   the caller only advanced the clock or the chain, so the windows are re-examined
+ *   against a status that is now older.
+ * @returns {Promise<void>}
+ */
+async function reconcile(previous, statusObserved) {
+  const { daemonConfirmed: prevDaemonConfirmed, messageCapable: prevMessageCapable } = previous;
 
   // Future: use in-band NAK-based confirmation check instead of timeout.
   // See dev/in-band-confirmation-check.md
-  const elapsed = elapsedSincePollMs();
-  if (!rpcReachable && elapsed !== null) {
+  const elapsed = elapsedSinceStatusMs();
+  if (!statusObserved && elapsed !== null) {
     // Remove apps, but messageCapable preserved (can still broadcast)
     if (elapsed > DAEMON_STALE_MS && !daemonStale) {
       daemonStale = true;
@@ -180,7 +193,7 @@ async function poll() {
     }
   }
 
-  if (rpcReachable) {
+  if (statusObserved) {
     if (daemonConfirmed) {
       confirmedGate.open();
     } else {
@@ -239,35 +252,122 @@ async function poll() {
   }
 }
 
+/**
+ * Asks the daemon for this node's status over RPC.
+ * @returns {Promise<boolean>} True when the daemon answered.
+ */
+async function poll() {
+  const previous = { daemonConfirmed, messageCapable };
+  let answered = false;
+
+  try {
+    const response = await daemonServiceFluxnodeRpcs.getFluxNodeStatus();
+    if (response.status === 'success') {
+      answered = true;
+      recordStatus(response.data ?? null);
+    }
+  } catch (error) {
+    // Unreachable — keep the previous status; a timeout says nothing about the chain.
+  }
+
+  daemonReachable = answered;
+  await reconcile(previous, answered);
+  return answered;
+}
+
+/**
+ * Applies a status carried by the fluxnodestatus topic.
+ *
+ * The topic publishes on change, so its arrival is the event; there is nothing to ask
+ * for afterwards. It carries the outpoint in two fields where the RPC carries one
+ * string, so the collateral is composed back into the shape every reader expects.
+ *
+ * @param {object} decoded A decoded fluxnodestatus message.
+ * @returns {Promise<void>}
+ */
+async function applyPushedStatus(decoded) {
+  const previous = { daemonConfirmed, messageCapable };
+
+  recordStatus({
+    ...nodeStatus,
+    status: decoded.status,
+    tier: decoded.tier,
+    collateral: `COutPoint(${decoded.txhash}, ${decoded.outidx})`,
+    txhash: decoded.txhash,
+    outidx: String(decoded.outidx),
+    ip: decoded.ip,
+    confirmed_height: decoded.confirmedHeight,
+    last_confirmed_height: decoded.lastConfirmedHeight,
+    last_paid_height: decoded.lastPaidHeight,
+  });
+
+  daemonReachable = true;
+  await reconcile(previous, true);
+}
+
+/**
+ * Re-examines the windows without a new status — the chain moved, so a confirmation
+ * that was inside its deadline may no longer be.
+ * @returns {Promise<void>}
+ */
+async function reevaluate() {
+  const previous = { daemonConfirmed, messageCapable };
+  await reconcile(previous, false);
+}
+
 function scheduleNext() {
-  setTimeout(async () => {
+  pollTimer = setTimeout(async () => {
     await poll();
     scheduleNext();
   }, config.confirmation.pollIntervalMs);
 }
 
-async function start() {
+/**
+ * Begins tracking this node's status.
+ *
+ * @param {{push?: boolean}} options `push` means a source is feeding statuses in and
+ *   the RPC is needed only to seed the first one, since the topic publishes on change
+ *   and would otherwise leave a freshly started node with nothing until it changed.
+ * @returns {Promise<void>}
+ */
+async function start(options = {}) {
   if (started) return;
   started = true;
+  pushDriven = options.push === true;
+
   await poll();
   confirmationStatusGate.open();
-  scheduleNext();
-  log.info(`nodeConfirmationService - Started (confirmed=${daemonConfirmed}, messageCapable=${messageCapable})`);
+  if (!pushDriven) scheduleNext();
+
+  log.info(`nodeConfirmationService - Started ${pushDriven ? 'on fluxnodestatus' : 'polling'} (confirmed=${daemonConfirmed}, messageCapable=${messageCapable})`);
 }
 
 /**
- * Places the last successful poll a given age in the past. Tests express staleness as
- * an age because the clock behind it is monotonic and has no wall-clock equivalent.
- * @param {number|null} ageMs Age in milliseconds, or null for "never polled".
+ * Stops the polling transport. A push subscription is owned by its source.
  * @returns {void}
  */
-function setLastSuccessfulPollAgeMs(ageMs) {
+function stop() {
+  if (pollTimer) {
+    clearTimeout(pollTimer);
+    pollTimer = null;
+  }
+  started = false;
+  pushDriven = false;
+}
+
+/**
+ * Places the last observed status a given age in the past. Tests express staleness as
+ * an age because the clock behind it is monotonic and has no wall-clock equivalent.
+ * @param {number|null} ageMs Age in milliseconds, or null for "never observed".
+ * @returns {void}
+ */
+function setLastStatusAgeMs(ageMs) {
   if (ageMs === null) {
-    lastSuccessfulPollAt = null;
+    lastStatusObservedAt = null;
     return;
   }
 
-  lastSuccessfulPollAt = process.hrtime.bigint() - BigInt(Math.round(ageMs * 1_000_000));
+  lastStatusObservedAt = process.hrtime.bigint() - BigInt(Math.round(ageMs * 1_000_000));
 }
 
 module.exports = {
@@ -281,6 +381,10 @@ module.exports = {
   onConfirmationChange,
   onDaemonStale,
   onMessageCapabilityChange,
+  applyPushedStatus,
+  poll,
+  reevaluate,
   start,
-  setLastSuccessfulPollAgeMs,
+  stop,
+  setLastStatusAgeMs,
 };
