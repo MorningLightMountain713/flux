@@ -77,7 +77,6 @@ describe('appOperations application lifecycle tests', () => {
   let registryManagerStub;
   let appsRepositoryStub;
   let buildDeploymentStub;
-  let appInspectorStub;
   let appVolumeServiceStub;
   let appReconcilerStub;
   let logStub;
@@ -101,11 +100,6 @@ describe('appOperations application lifecycle tests', () => {
 
     buildDeploymentStub = sinon.stub().resolves(null);
 
-    appInspectorStub = {
-      startAppMonitoring: sinon.stub(),
-      stopAppMonitoring: sinon.stub(),
-    };
-
     appVolumeServiceStub = {
       ensureMountSourcesExist: sinon.stub().resolves(),
     };
@@ -126,17 +120,14 @@ describe('appOperations application lifecycle tests', () => {
       '../dockerService': dockerServiceStub,
       '../appDatabase/registryManager': registryManagerStub,
       '../utils/specLibs': { getSpec: sinon.stub() },
-      '../appManagement/appInspector': appInspectorStub,
       './appVolumeService': appVolumeServiceStub,
       '../appMonitoring/appReconciler': appReconcilerStub,
       '../../lib/log': logStub,
-      '../dbHelper': { databaseConnection: sinon.stub() },
       '../serviceHelper': { delay: sinon.stub().resolves(), ensureString: sinon.stub().returnsArg(0) },
       '../messageHelper': {},
       '../verificationHelper': {},
       '../daemonService/daemonServiceMiscRpcs': {},
       '../fluxNetworkHelper': { getLocalSocketAddress: sinon.stub().resolves('127.0.0.1:16127') },
-      '../generalService': { nodeTier: sinon.stub().resolves('cumulus') },
       '../upnpService': {},
       '../appDatabase/appsRepository': appsRepositoryStub,
       '../appQuery/appQueryService': { listRunningContainers: sinon.stub().resolves([]), listAllApps: sinon.stub().resolves([]), installedApps: sinon.stub().resolves({ data: [] }) },

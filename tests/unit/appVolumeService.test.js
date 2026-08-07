@@ -151,7 +151,6 @@ describe('appVolumeService.createAppVolume (findmnt disk selection + in-lock rec
       '../utils/hostMutationLock': { withHostMutationLock: (fn) => fn() },
       '../appManagement/appsRuntimeState': { isCondemned: sinon.stub().resolves(condemned) },
       './pendingTeardownStore': { teardownOwedFor: sinon.stub().resolves(teardownOwed) },
-      '../syncthingService': {},
       '../messageHelper': { createSuccessMessage: (m) => ({ status: 'success', data: m }) },
       '../../lib/log': { info: sinon.stub(), warn: sinon.stub(), error: sinon.stub() },
     });
