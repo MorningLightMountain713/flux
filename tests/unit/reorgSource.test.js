@@ -34,6 +34,37 @@ describe('reorgSource tests', () => {
       return `getBlock${serviceHelper.ensureString([identifier, verbosity])}`;
     }
 
+    // Production never builds a key this way. daemonServiceBlockchainRpcs runs
+    // ensureString over hashheight before the params are assembled, so the identifier
+    // reaching the cache is always a string — which is the shape this must survive.
+    function productionBlockKey(height, verbosity) {
+      return `getBlock${serviceHelper.ensureString([serviceHelper.ensureString(height), verbosity])}`;
+    }
+
+    it('should drop blocks keyed the way the handler actually keys them', () => {
+      cacheManager.daemonBlockCache.set(productionBlockKey(1998, 2), { height: 1998 });
+      cacheManager.daemonBlockCache.set(productionBlockKey(2000, 2), { height: 2000 });
+
+      const dropped = daemonServiceUtils.invalidateCachesFromHeight(1999);
+
+      expect(dropped.blocks).to.equal(1);
+      expect(cacheManager.daemonBlockCache.get(productionBlockKey(2000, 2))).to.be.undefined;
+      expect(cacheManager.daemonBlockCache.get(productionBlockKey(1998, 2))).to.eql({ height: 1998 });
+    });
+
+    it('should keep a block cached under its hash', () => {
+      // A hash names the same block whichever chain wins, so an orphan read back by
+      // hash is still correct. Only height-keyed entries can go stale across a fork.
+      const hash = 'a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90';
+      const key = `getBlock${serviceHelper.ensureString([hash, 2])}`;
+      cacheManager.daemonBlockCache.set(key, { hash });
+
+      const dropped = daemonServiceUtils.invalidateCachesFromHeight(1);
+
+      expect(dropped.blocks).to.equal(0);
+      expect(cacheManager.daemonBlockCache.get(key)).to.eql({ hash });
+    });
+
     it('should drop cached blocks above the fork height', () => {
       cacheManager.daemonBlockCache.set(blockKey(1998, 2), { height: 1998 });
       cacheManager.daemonBlockCache.set(blockKey(2000, 2), { height: 2000 });
