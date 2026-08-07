@@ -41,10 +41,22 @@ async function getInstalledAppIds() {
       // when decryption is unavailable; derive its component ids from the FLUXFSVOL
       // images on disk so its mounts are not reaped as "not installed".
       if (instantiated.isEncrypted) {
-        log.warn(`getInstalledAppIds - could not decrypt ${instantiated.name} (${error.message}); deriving components from volume images on disk`);
+        // The row wrote its components down at install time, when the blob could
+        // still be opened, so it answers what the sealed spec now cannot. Rows
+        // predating that fall back to the images on disk — a pattern match on
+        // filenames that has already been wrong once, and the reason a component
+        // it cannot see is a volume nothing mounts at boot.
         // eslint-disable-next-line no-await-in-loop
-        const diskAppIds = await volumeService.getComponentAppIdsFromVolumeFiles(instantiated.name);
-        diskAppIds.forEach((appId) => installedAppIds.set(appId, instantiated.name));
+        const recorded = await appsRepository.listComponentIdentifiers(instantiated.name);
+        if (recorded.length > 0) {
+          log.warn(`getInstalledAppIds - could not decrypt ${instantiated.name} (${error.message}); using the components its row recorded`);
+          recorded.forEach((id) => installedAppIds.set(dockerService.getAppIdentifier(id), instantiated.name));
+        } else {
+          log.warn(`getInstalledAppIds - could not decrypt ${instantiated.name} (${error.message}); deriving components from volume images on disk`);
+          // eslint-disable-next-line no-await-in-loop
+          const diskAppIds = await volumeService.getComponentAppIdsFromVolumeFiles(instantiated.name);
+          diskAppIds.forEach((appId) => installedAppIds.set(appId, instantiated.name));
+        }
       } else {
         log.warn(`getInstalledAppIds - could not build deployment for ${instantiated.name}: ${error.message}`);
       }

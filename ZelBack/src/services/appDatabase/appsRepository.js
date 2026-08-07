@@ -466,6 +466,29 @@ async function prepareInstalledAppsCollection() {
 }
 
 /**
+ * Every container identifier this node's rows for an app recorded, across all of
+ * its identities.
+ *
+ * The answer an encrypted app cannot give any other way: its components live in
+ * a sealed blob, so a node that cannot decrypt it cannot enumerate them from the
+ * spec — but the row wrote them down at install time, when it could.
+ *
+ * @param {string} name
+ * @returns {Promise<string[]>} deduped; empty when no row recorded any
+ */
+async function listComponentIdentifiers(name) {
+  if (!name) return [];
+  const docs = await dbHelper.findInDatabase(
+    localDb(), localAppsInformation,
+    { name: nameRegex(name), componentIdentifiers: { $exists: true } },
+    { projection: { _id: 0, componentIdentifiers: 1 } },
+  );
+  const seen = new Set();
+  docs.forEach((doc) => (doc.componentIdentifiers || []).forEach((id) => seen.add(id)));
+  return [...seen];
+}
+
+/**
  * How many installed rows can answer the component-identifier index.
  *
  * Published rather than only logged, because the two derivations this replaces —
@@ -1655,6 +1678,7 @@ module.exports = {
   backfillGlobalAppUuids,
   backfillComponentIdentifiers,
   componentIdentifierCoverage,
+  listComponentIdentifiers,
   getInstalledApp,
   getInstalledAppByIdentity,
   getInstalledAppByComponentIdentifier,

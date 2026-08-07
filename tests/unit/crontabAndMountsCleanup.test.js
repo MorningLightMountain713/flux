@@ -18,6 +18,9 @@ const logMock = {
 
 const appsRepositoryMock = {
   listInstalledApps: sinon.stub(),
+  // Empty by default so the tests below keep driving the disk derivation they
+  // are about; the recorded path has a test of its own.
+  listComponentIdentifiers: sinon.stub().resolves([]),
 };
 
 const deploymentProviderMock = {
@@ -67,6 +70,8 @@ describe('crontabAndMountsCleanup tests', () => {
     logMock.warn.reset();
     logMock.error.reset();
     appsRepositoryMock.listInstalledApps.reset();
+    appsRepositoryMock.listComponentIdentifiers.reset();
+    appsRepositoryMock.listComponentIdentifiers.resolves([]);
     deploymentProviderMock.buildDeployment.reset();
     dockerServiceMock.getAppIdentifier.reset();
     volumeServiceMock.ensureAppVolumeMounted.reset();
@@ -378,6 +383,29 @@ describe('crontabAndMountsCleanup tests', () => {
       expect(result.crontab.removed).to.have.lengthOf(0);
       expect(result.mounts.mounted).to.have.lengthOf(0);
       expect(logMock.error.called).to.be.true;
+    });
+
+    it('uses the components the row recorded rather than scanning disk, when it has them', async () => {
+      // An encrypted app's components live in a sealed blob, so a node that
+      // cannot open it cannot enumerate them from the spec. The row wrote them
+      // down at install time, when it could — a stated fact rather than a
+      // filename pattern that has already been wrong once.
+      const inst = {
+        name: 'hermesagent123', version: 8, compose: [], enterprise: 'encryptedblob', isEncrypted: true,
+      };
+      appsRepositoryMock.listInstalledApps.resolves([inst]);
+      deploymentProviderMock.buildDeployment.withArgs(inst).rejects(new Error('fluxbenchd unavailable'));
+      appsRepositoryMock.listComponentIdentifiers.withArgs('hermesagent123').resolves(['hermes_hermesagent123']);
+      dockerServiceMock.getAppIdentifier.withArgs('hermes_hermesagent123').returns('fluxhermes_hermesagent123');
+      volumeServiceMock.ensureAppVolumeMounted.withArgs('fluxhermes_hermesagent123').resolves({ mounted: true, alreadyMounted: false });
+
+      const result = await crontabAndMountsCleanup.cleanupCrontabAndMounts();
+
+      expect(result.mounts.mounted).to.include('fluxhermes_hermesagent123');
+      expect(
+        volumeServiceMock.getComponentAppIdsFromVolumeFiles.called,
+        'a row that states its components must not be answered from disk',
+      ).to.equal(false);
     });
 
     it('should mount an enterprise app volume via disk-derived components when decryption fails', async () => {
