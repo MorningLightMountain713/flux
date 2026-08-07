@@ -8,7 +8,6 @@ describe('appInstaller tests', () => {
   let appInstaller;
   let verificationHelperStub;
   let messageHelperStub;
-  let dbHelperStub;
   let logStub;
   let configStub;
   let hwRequirementsStub;
@@ -63,13 +62,6 @@ describe('appInstaller tests', () => {
       errUnauthorizedMessage: sinon.stub(),
     };
 
-    dbHelperStub = {
-      databaseConnection: sinon.stub(),
-      findInDatabase: sinon.stub(),
-      findOneInDatabase: sinon.stub(),
-      insertOneToDatabase: sinon.stub(),
-    };
-
     hwRequirementsStub = {
       systemArchitecture: sinon.stub().resolves('amd64'),
       checkPlacement: sinon.stub().resolves(),
@@ -92,27 +84,10 @@ describe('appInstaller tests', () => {
       config: configStub,
       '../verificationHelper': verificationHelperStub,
       '../messageHelper': messageHelperStub,
-      '../dbHelper': dbHelperStub,
       '../serviceHelper': {
         ensureString: sinon.stub().returnsArg(0),
         ensureNumber: sinon.stub().returnsArg(0),
         delay: sinon.stub().resolves(),
-      },
-      '../generalService': {
-        nodeTier: sinon.stub().resolves('cumulus'),
-        checkSynced: sinon.stub().resolves(true),
-      },
-      '../benchmarkService': {
-        getBenchmarks: sinon.stub().resolves({
-          status: 'success',
-          data: { ipaddress: '192.168.1.1' },
-        }),
-      },
-      '../daemonService/daemonServiceMiscRpcs': {
-        isDaemonSynced: sinon.stub().returns({
-          status: 'success',
-          data: { synced: true, height: 2094961 },
-        }),
       },
       '../fluxNetworkHelper': {
         getNumberOfPeers: sinon.stub().returns(15),
@@ -121,27 +96,10 @@ describe('appInstaller tests', () => {
         removeDockerContainerAccessToNonRoutable: sinon.stub().resolves(true),
         getLocalSocketAddress: sinon.stub().resolves('192.168.1.1:16127'),
       },
-      '../geolocationService': {
-        isStaticIP: sinon.stub().returns(true),
-      },
       // Stubbed HERE because proxyquire does not recurse: the install path ensures
       // the app network through this module, and leaving it real resolves the real
       // dockerService + fluxNetworkHelper and drives the actual docker daemon.
       '../appNetwork/appDockerNetwork': { ensureAppDockerNetwork: sinon.stub().resolves('net') },
-      '../dockerService': {
-        dockerListContainers: sinon.stub().resolves([]),
-        pruneContainers: sinon.stub().resolves(),
-        pruneNetworks: sinon.stub().resolves(),
-        pruneVolumes: sinon.stub().resolves(),
-        pruneImages: sinon.stub().resolves(),
-        createFluxAppDockerNetwork: sinon.stub().resolves('network-created'),
-        getFluxDockerNetworkPhysicalInterfaceNames: sinon.stub().resolves([]),
-        appDockerCreate: sinon.stub().resolves(),
-        appDockerImageSize: sinon.stub().resolves(0),
-        appDockerStart: sinon.stub().resolves('container-started'),
-        getAppIdentifier: sinon.stub().returns('testapp'),
-        dockerPullStream: sinon.stub().yields(null, 'pulled'),
-      },
       './appUninstaller': {
         uninstallApplication: sinon.stub().resolves(),
       },
@@ -153,9 +111,6 @@ describe('appInstaller tests', () => {
       '../appMessaging/messageStore': {
         storeAppInstallingErrorMessage: sinon.stub().resolves(),
       },
-      '../appSystem/systemIntegration': {
-        systemArchitecture: sinon.stub().resolves('amd64'),
-      },
       '../appSecurity/imageManager': {
         isImageBlocked: sinon.stub().resolves(false),
         verifyRepository: sinon.stub().resolves({
@@ -163,20 +118,10 @@ describe('appInstaller tests', () => {
           supportedArchitectures: ['amd64', 'arm64'],
         }),
       },
-      '../appManagement/appInspector': {
-        startAppMonitoring: sinon.stub(),
-      },
       '../pgpService': {
         decryptMessage: sinon.stub().resolves('user:token'),
       },
-      '../upnpService': {
-        isUPNP: sinon.stub().returns(false),
-        mapUpnpPort: sinon.stub().resolves(true),
-      },
       '../../lib/log': logStub,
-      '../utils/appConstants': proxyquire('../../ZelBack/src/services/utils/appConstants', {
-        config: configStub,
-      }),
       '../appDatabase/appsRepository': {
         getGlobalAppInfo: sinon.stub().resolves(null),
         existsInstalledApp: sinon.stub().resolves(false),
@@ -187,38 +132,37 @@ describe('appInstaller tests', () => {
         listInstalledDeployments: sinon.stub().resolves([]),
         resolveDeploymentIdentity: sinon.stub().resolves(null),
       },
-      './appVolumeService': {
-        createAppVolume: sinon.stub().resolves(),
-      },
-      '../utils/specLibs': {
-        getSpecBackend: sinon.stub().resolves({
-          PendingSpec: { fromTempMessage: sinon.stub() },
-        }),
-      },
-      '../utils/appUtilities': {
-        findCommonArchitectures: sinon.stub().returns(['amd64']),
-      },
       '../utils/fluxEventBus': {
         publish: sinon.stub(),
       },
       '../utils/cpuBurstHelper': {
         getCpuBurstAllowance: sinon.stub().returns(0),
       },
-      '../utils/volumeService': {
-        verifyAppVolumeMount: sinon.stub().resolves(),
-      },
       '../appRequirements/hwRequirements': hwRequirementsStub,
-      '../appQuery/appQueryService': {
-        installedApps: sinon.stub().resolves({ status: 'success', data: [] }),
-        listRunningApps: sinon.stub().resolves({ status: 'success', data: [] }),
-      },
-      '../utils/registryCredentialHelper': {
-        getCredentials: sinon.stub().resolves(null),
-      },
       util: {
         promisify: (fn) => fn,
       },
-    });
+      // Stubbed for the same reason appDockerNetwork above is: proxyquire does
+      // not recurse, so a collaborator left real brings its own real
+      // dependencies with it. componentProvisioner is the one that matters —
+      // it resolves the real dockerService (which constructs a Docker client at
+      // load) and the real appVolumeService, whose createAppVolume shells
+      // fallocate, mke2fs and mount as root.
+      './componentProvisioner': { installComponent: sinon.stub().resolves() },
+      './appNetworkLinker': {
+        checkAppNetworkRequirements: sinon.stub().resolves(),
+        connectComponentToLinkedApps: sinon.stub().resolves(),
+        reconnectLinkedApps: sinon.stub().resolves(),
+      },
+      './contentBlobService': { provisionContentBlobs: sinon.stub().resolves() },
+      './contentSlotService': { provisionContentSlots: sinon.stub().resolves() },
+      // Reaches generalService's daemon RPCs and writes real files.
+      '../telemetryConfigService': { ensureNode: sinon.stub().resolves() },
+      '../telemetrySinkCache': { extractSink: sinon.stub().returns(null), setSink: sinon.stub() },
+      // Opens a unix socket to the daemon.
+      '../utils/fluxShutdowndClient': { upsertAppPlanBestEffort: sinon.stub().resolves() },
+      'node:fs/promises': { chmod: sinon.stub().resolves(), writeFile: sinon.stub().resolves() },
+});
   });
 
   afterEach(() => {
