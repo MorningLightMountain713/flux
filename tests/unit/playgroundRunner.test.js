@@ -105,10 +105,6 @@ describe('playgroundRunner', () => {
         forceRemoveFluxAppDockerNetwork: stubs.removeNetwork,
         dockerPullStream: sinon.stub(),
       },
-      '../serviceHelper': {
-        delay: stubs.delay,
-        dockerBufferToString: (b) => String(b),
-      },
       '../fluxNetworkHelper': { isPortOpen: stubs.isPortOpen },
       './playgroundNetwork': {
         createSessionNetwork: stubs.createSessionNetwork,
@@ -161,7 +157,6 @@ describe('playgroundRunner', () => {
         forceRemoveFluxAppDockerNetwork: stubs.removeNetwork,
         dockerPullStream: sinon.stub(),
       },
-      '../serviceHelper': { delay: stubs.delay, dockerBufferToString: (b) => String(b) },
       '../fluxNetworkHelper': { isPortOpen: stubs.isPortOpen },
       './playgroundNetwork': {
         createSessionNetwork: stubs.createSessionNetwork,
