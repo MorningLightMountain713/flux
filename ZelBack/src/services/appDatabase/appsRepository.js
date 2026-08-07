@@ -46,11 +46,12 @@ async function hydrate(doc) {
   await getSpec();
   const { InstantiatedSpec } = await getSpecBackend();
 
-  // `replica` is this collection's own key field, not part of the spec's wire
-  // form. The encrypted deserializers reject unknown fields outright, so the
-  // storage key is stripped here rather than leaking into the spec layer.
+  // `replica` is this collection's own key field and `componentIdentifiers` is
+  // this collection's own index, neither part of the spec's wire form. The
+  // encrypted deserializers reject unknown fields outright, so storage fields
+  // are stripped here rather than leaking into the spec layer.
   // eslint-disable-next-line no-unused-vars
-  const { replica, ...specDoc } = doc;
+  const { replica, componentIdentifiers, ...specDoc } = doc;
 
   try {
     return InstantiatedSpec.deserialize(specDoc);
@@ -456,6 +457,12 @@ async function prepareInstalledAppsCollection() {
   // NOT unique: a co-located app holds one row per replica, all sharing the
   // app's single identity.
   await dbHelper.ensureIndex(collection, { identity: 1 }, { name: 'installed apps by app identity' });
+  // The container identifiers each row's components are named by. Sparse in
+  // effect: rows written before the field carry none and simply do not answer,
+  // which costs their caller a fallback rather than a wrong answer. Cannot be
+  // backfilled here — an identifier is built from a RESOLVED deployment, which
+  // can need decryption, so it is not something an update pipeline can compute.
+  await dbHelper.ensureIndex(collection, { componentIdentifiers: 1 }, { name: 'installed apps by component identifier' });
 }
 
 /**
@@ -548,6 +555,23 @@ async function getInstalledApp(name) {
  * @returns {Promise<object|null>} InstantiatedSpec, or null when nothing here
  *   claims that identity
  */
+/**
+ * The installed app one of this node's containers belongs to, found by the
+ * identifier the container is named by rather than by taking that name apart.
+ *
+ * Answers only for rows that recorded their components. A caller that gets null
+ * has not learnt the container is unknown — only that this index cannot answer.
+ */
+async function getInstalledAppByComponentIdentifier(identifier) {
+  if (!identifier) return null;
+  const doc = await dbHelper.findOneInDatabase(
+    localDb(), localAppsInformation,
+    { componentIdentifiers: identifier },
+    { projection: { _id: 0 } },
+  );
+  return hydrate(doc);
+}
+
 async function getInstalledAppByIdentity(identity) {
   if (!identity) return null;
   const doc = await dbHelper.findOneInDatabase(
@@ -723,9 +747,10 @@ async function removeInstalledIdentity(name, replica) {
  * unchanged from a loose install's.
  * @param {string|null} replica
  */
-async function insertInstalledApp(specDoc, replica = null) {
+async function insertInstalledApp(specDoc, replica = null, componentIdentifiers = null) {
   return dbHelper.insertOneToDatabase(
-    localDb(), localAppsInformation, { ...specDoc, replica: replicaKey(replica) },
+    localDb(), localAppsInformation,
+    withComponentIdentifiers({ ...specDoc, replica: replicaKey(replica) }, componentIdentifiers),
   );
 }
 
@@ -759,25 +784,51 @@ function withStoredIdentity(doc, stored) {
 }
 
 /**
+ * The container identifiers this row's components are named by, recorded so that
+ * "which app owns this container?" is a lookup rather than a decomposition of
+ * the container's own name. A name states the segment its containers were built
+ * from, which is only incidentally the app's name and stops resembling one once
+ * identities are minted rather than borrowed.
+ *
+ * Deliberately NOT carried across a replace the way `identity` is. An identity
+ * is minted once and never changes; a spec update can add, drop or rename
+ * components, so a carried list goes stale. Written fresh or not at all: a row
+ * without them costs a caller its fallback, a row with stale ones would hand a
+ * container to the wrong app.
+ */
+function withComponentIdentifiers(doc, identifiers) {
+  if (!Array.isArray(identifiers) || identifiers.length === 0) return doc;
+  return { ...doc, componentIdentifiers: [...identifiers] };
+}
+
+/**
  * Refresh the stored spec for EVERY identity of an app, preserving each row's
  * replica — a spec update applies to every replica this node runs, and one
  * replica's update must not erase a sibling's row. Inserts a loose row when the
  * app is not installed at all.
  */
-async function upsertInstalledApp(name, specDoc) {
+async function upsertInstalledApp(name, specDoc, identifiersFor = null) {
   if (!name) throw new Error('appsRepository.upsertInstalledApp: name required');
   if (!specDoc) throw new Error('appsRepository.upsertInstalledApp: specDoc required');
   const rows = await listInstalledRowKeys(name);
   if (rows.length === 0) {
-    return insertInstalledApp(specDoc, null);
+    // eslint-disable-next-line no-return-await
+    return insertInstalledApp(specDoc, null, identifiersFor ? await identifiersFor(null) : null);
   }
   const results = [];
   for (const row of rows) {
+    // Per row, because each replica names its containers differently — one
+    // list applied to every row would give a sibling's identifiers away.
+    // eslint-disable-next-line no-await-in-loop
+    const identifiers = identifiersFor ? await identifiersFor(row.replica) : null;
     // eslint-disable-next-line no-await-in-loop
     const result = await dbHelper.replaceOneInDatabase(
       localDb(), localAppsInformation,
       { name: nameRegex(name), replica: replicaKey(row.replica) },
-      withStoredIdentity({ ...specDoc, replica: replicaKey(row.replica) }, row.identity),
+      withComponentIdentifiers(
+        withStoredIdentity({ ...specDoc, replica: replicaKey(row.replica) }, row.identity),
+        identifiers,
+      ),
       { upsert: true },
     );
     results.push(result);
@@ -790,7 +841,7 @@ async function upsertInstalledApp(name, specDoc) {
  * @param {string} name
  * @param {string|null} replica
  */
-async function upsertInstalledIdentity(name, replica, specDoc) {
+async function upsertInstalledIdentity(name, replica, specDoc, componentIdentifiers = null) {
   if (!name) throw new Error('appsRepository.upsertInstalledIdentity: name required');
   if (!specDoc) throw new Error('appsRepository.upsertInstalledIdentity: specDoc required');
   const existing = await dbHelper.findOneInDatabase(
@@ -801,7 +852,10 @@ async function upsertInstalledIdentity(name, replica, specDoc) {
   return dbHelper.replaceOneInDatabase(
     localDb(), localAppsInformation,
     { name: nameRegex(name), replica: replicaKey(replica) },
-    withStoredIdentity({ ...specDoc, replica: replicaKey(replica) }, existing?.identity ?? null),
+    withComponentIdentifiers(
+      withStoredIdentity({ ...specDoc, replica: replicaKey(replica) }, existing?.identity ?? null),
+      componentIdentifiers,
+    ),
     { upsert: true },
   );
 }
@@ -1521,6 +1575,7 @@ module.exports = {
   backfillGlobalAppUuids,
   getInstalledApp,
   getInstalledAppByIdentity,
+  getInstalledAppByComponentIdentifier,
   getInstalledAppAttribution,
   countInstalledApps,
   existsInstalledApp,
