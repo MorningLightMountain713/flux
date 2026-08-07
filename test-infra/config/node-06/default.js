@@ -15,6 +15,7 @@ module.exports = {
             "benchmark": "benchmark",
             "appTamperingEvents": "apptamperingevents",
             "nodeStartupTracker": "nodestartuptracker",
+            "nodeIdentity": "nodeidentity",
             "policyDocuments": "policydocuments",
             "ipRanges": "ipranges",
             "nodeLocations": "nodelocations"
@@ -34,7 +35,11 @@ module.exports = {
     "appslocal": {
         "database": "node06_localzelapps",
         "collections": {
-            "appsInformation": "zelappsinformation"
+            "appsInformation": "zelappsinformation",
+            "appsRuntimeState": "zelappsruntimestate",
+            "pendingAppTeardowns": "zelappspendingteardowns",
+            "cachedImages": "cachedimages",
+            "playgroundSessions": "playgroundsessions"
         }
     },
     "appsglobal": {
@@ -44,14 +49,32 @@ module.exports = {
             "appsInformation": "zelappsinformation",
             "appsTemporaryMessages": "zelappstemporarymessages",
             "appsInstallingLocations": "appsinstallinglocations",
+            "limitCounterRecords": "limitcounterrecords",
             "appsInstallingErrorsLocations": "appsInstallingErrorsLocations",
-            "appContentManifests": "appcontentmanifests"
+            "appStateEvents": "appstateevents",
+            "appsInstallingBroadcasts": "fluxappinstallingbroadcasts",
+            "appsInstallingErrorsBroadcasts": "fluxappinstallingerrorsbroadcasts",
+            "appContentManifests": "appcontentmanifests",
+            "appsIngressAttestations": "appingressattestations",
+            "appsIngressAttestationDigests": "appingressattestationdigests"
+        }
+    },
+    "marketplace": {
+        "database": "node06_marketplace",
+        "collections": {
+            "templates": "marketplacetemplates"
         }
     },
     "chainparams": {
         "database": "node06_chainparams",
         "collections": {
-            "chainMessages": "chainmessages"
+            "chainMessages": "chainmessages",
+            "priceMessages": "pricemessages",
+            "rateMessages": "ratemessages",
+            "priceModifierMessages": "pricemodifiermessages",
+            "oracleKeyMessages": "oraclekeymessages",
+            "marketplacePricingMessages": "marketplacepricingmessages",
+            "policyGroupMessages": "policygroupmessages"
         }
     }
 },
