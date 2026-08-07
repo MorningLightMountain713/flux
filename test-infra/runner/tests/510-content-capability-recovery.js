@@ -51,7 +51,7 @@ describe('content manifest recovery through a message-capability round-trip', fu
       tickerAutostart: false,
       arcane: true,
       configOverrides: {
-        confirmation: { daemonStaleMs: 300000, daemonExpiredMs: 600000 },
+        confirmation: { daemonStaleMs: 300000 },
         // 5-node fleet: READY at 3 peers, a degrade floor of 1 so isolating ONE node degrades
         // only it (drops to 0) while the connected four (3 peers each) stay healthy, and the
         // app-submission peer gate (minOutgoing/minIncoming default 8/4) lowered to the mesh.
