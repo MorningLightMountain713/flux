@@ -84,7 +84,13 @@ describe('Confirmation service: RPC failure windows', function () {
       hookCtx: this,
       nodes: 1,
       tickerAutostart: false,
-      configOverrides: { confirmation: { daemonStaleMs: 10000, daemonExpiredMs: 20000 } },
+      configOverrides: {
+        // The stub confirms 10 blocks back, so a limit of 11 leaves one block owed.
+        // With the chain view withdrawn after 5s the deadline is that one block's
+        // worth of time, which is what makes expiry observable inside the timeouts.
+        confirmation: { daemonStaleMs: 10000, confirmExpirationBlocks: 11, blockIntervalMs: 10000 },
+        daemon: { subscriptions: { chainStaleAfterMs: 5000 } },
+      },
     });
     await waitForDaemonReady(env.clients[0]);
     await waitForNodeStatus(env.clients[0], (d) => d.confirmed === true, 30000);

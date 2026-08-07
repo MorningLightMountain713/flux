@@ -67,7 +67,7 @@ describe('content propagation across a multi-node fleet', function () {
       tickerAutostart: false,
       arcane: true,
       configOverrides: {
-        confirmation: { daemonStaleMs: 300000, daemonExpiredMs: 600000 },
+        confirmation: { daemonStaleMs: 300000 },
         fluxapps: { appSyncPeerThreshold: 3 },
       },
     });
