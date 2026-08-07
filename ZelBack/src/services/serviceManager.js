@@ -61,6 +61,7 @@ const appQueryService = require('./appQuery/appQueryService');
 const chainTipSource = require('./daemonService/chainTipSource');
 const daemonServiceMiscRpcs = require('./daemonService/daemonServiceMiscRpcs');
 const daemonSubscriptionService = require('./daemonService/daemonSubscriptionService');
+const fluxnodeStatusSource = require('./daemonService/fluxnodeStatusSource');
 const reorgSource = require('./daemonService/reorgSource');
 const daemonServiceUtils = require('./daemonService/daemonServiceUtils');
 const paymentPositions = require('./migrations/paymentPositions');
@@ -734,7 +735,7 @@ async function startFluxFunctions() {
     uplinkService.start();
     log.info('Flux checks operational');
     fluxCommunication.initializeDiscovery();
-    await nodeConfirmationService.start();
+    await fluxnodeStatusSource.start();
     if (config.fluxapps.discoveryAutostart !== false) {
       fluxCommunication.startDiscovery();
       log.info('Flux Discovery started');
