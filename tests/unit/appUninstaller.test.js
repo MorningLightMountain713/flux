@@ -12,7 +12,6 @@ describe('appUninstaller tests', () => {
   let configStub;
   let globalStateStub;
   let dockerServiceStub;
-  let dbHelperStub;
   let appsRepositoryStub;
   let fluxShutdowndClientStub;
   let appNetworkLinkerStub;
@@ -61,14 +60,6 @@ describe('appUninstaller tests', () => {
       error: sinon.stub(),
       info: sinon.stub(),
       warn: sinon.stub(),
-    };
-
-    dbHelperStub = {
-      databaseConnection: sinon.stub().returns({ db: () => ({}) }),
-      findOneInDatabase: sinon.stub(),
-      findInDatabase: sinon.stub(),
-      findOneAndDeleteInDatabase: sinon.stub().resolves({}),
-      removeDocumentsFromCollection: sinon.stub().resolves(),
     };
 
     globalStateStub = {
@@ -136,8 +127,15 @@ describe('appUninstaller tests', () => {
         ensureNumber: sinon.stub().callsFake((v) => Number(v)),
         delay: sinon.stub().resolves(),
       },
-      '../dbHelper': dbHelperStub,
       '../dockerService': dockerServiceStub,
+      // Required by appUninstaller and previously left real: getVolumeFilePath and
+      // isPathMounted run through the real serviceHelper and spawn processes.
+      '../utils/volumeService': {
+        getVolumeFilePath: sinon.stub().resolves('/tmp/flux-test-volume'),
+        isPathMounted: sinon.stub().resolves(false),
+      },
+      // Left real, this reads the developer's own crontab.
+      crontab: { load: (cb) => cb(null, null) },
       '../../lib/log': logStub,
       '../utils/globalState': globalStateStub,
       '../utils/appConstants': proxyquire('../../ZelBack/src/services/utils/appConstants', {

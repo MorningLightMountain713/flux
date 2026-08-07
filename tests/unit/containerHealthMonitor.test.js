@@ -14,15 +14,9 @@ describe('containerHealthMonitor tests', () => {
   let containerHealthMonitor;
   let deploymentProviderStub;
   let shutdownPlanStub;
-  let dockerServiceStub;
   let componentProvisionerStub;
   let appVolumeServiceStub;
-  let appNetworkLinkerStub;
-  let appUninstallerStub;
-  let appInspectorStub;
-  let tamperingStub;
   let volumeServiceStub;
-  let globalStateStub;
   let appDockerNetworkStub;
   let instantiated;
   let webComp;
@@ -65,18 +59,9 @@ describe('containerHealthMonitor tests', () => {
       },
     };
     shutdownPlanStub = { appRequiresDaemonShutdown: sinon.stub().returns(true) };
-    dockerServiceStub = { getDockerContainer: sinon.stub().resolves(null) };
     componentProvisionerStub = { installComponent: sinon.stub().resolves() };
     appVolumeServiceStub = { ensureMountSourcesExist: sinon.stub().resolves() };
-    appNetworkLinkerStub = {};
-    appUninstallerStub = { uninstallApplication: sinon.stub().resolves() };
-    appInspectorStub = { startAppMonitoring: sinon.stub() };
-    tamperingStub = {
-      recordEvent: sinon.stub().resolves(),
-      isNetworkMissingError: sinon.stub().returns(false),
-    };
     volumeServiceStub = { verifyAppVolumeMount: sinon.stub().resolves(false) };
-    globalStateStub = { appsMonitored: new Map() };
     appDockerNetworkStub = {
       ensureAppDockerNetwork: sinon.stub().resolves('net'),
       ensureAppNetworkPresent: sinon.stub().resolves('net'),
@@ -84,21 +69,16 @@ describe('containerHealthMonitor tests', () => {
 
     containerHealthMonitor = proxyquire('../../ZelBack/src/services/appMonitoring/containerHealthMonitor', {
       '../../lib/log': { info: sinon.stub(), warn: sinon.stub(), error: sinon.stub() },
-      '../dockerService': dockerServiceStub,
-      // The heal path ensures the app network through this module. It must be
-      // stubbed HERE: proxyquire does not recurse, so leaving it real resolves the
-      // real dockerService + fluxNetworkHelper and drives the actual docker daemon.
-      '../appNetwork/appDockerNetwork': appDockerNetworkStub,
+      // Stubbed HERE because proxyquire does not recurse: the heal path
+      // reinstalls a component through this module, and left real it resolves
+      // the real dockerService and appVolumeService and drives the daemon.
       '../appLifecycle/componentProvisioner': componentProvisionerStub,
       '../appLifecycle/appVolumeService': appVolumeServiceStub,
-      '../appLifecycle/appUninstaller': appUninstallerStub,
       '../appRuntime/deploymentProvider': deploymentProviderStub,
-      '../appLifecycle/appNetworkLinker': appNetworkLinkerStub,
       '../appLifecycle/shutdownPlan': shutdownPlanStub,
-      '../appManagement/appInspector': appInspectorStub,
-      '../appTamperingDetectionService': tamperingStub,
-      '../utils/globalState': globalStateStub,
       '../utils/volumeService': volumeServiceStub,
+      // requestFolderScan reaches syncthing over axios and spawns processes.
+      './syncthingMonitorHelpers': { requestFolderScan: sinon.stub().resolves() },
     });
   });
 

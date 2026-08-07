@@ -68,7 +68,6 @@ const fsPromisesStubs = {
 const fluxService = proxyquire(
   '../../ZelBack/src/services/fluxService',
   {
-    '../../../config/userconfig': adminConfig,
     'node:fs/promises': fsPromisesStubs,
   },
 );

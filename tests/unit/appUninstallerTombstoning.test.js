@@ -126,14 +126,12 @@ describe('appUninstaller tombstoning teardown', () => {
       crontab: { load: (cb) => cb(null, fakeCrontab) },
       '../../lib/log': stubs.log,
       '../dockerService': stubs.dockerService,
-      '../dbHelper': stubs.dbHelper,
       '../utils/globalState': stubs.globalState,
       '../upnpService': stubs.upnpService,
       '../fluxNetworkHelper': stubs.fluxNetworkHelper,
       '../fluxCommunicationMessagesSender': stubs.fluxCommunicationMessagesSender,
       '../appDatabase/appsRepository': stubs.appsRepository,
       '../appRuntime/deploymentProvider': stubs.deploymentProvider,
-      './appVolumeService': stubs.appVolumeService,
       '../appMonitoring/syncthingMonitorHelpers': stubs.syncthingMonitorHelpers,
       '../utils/volumeService': stubs.volumeService,
       './appSwapPoolService': stubs.appSwapPoolService,
@@ -146,7 +144,6 @@ describe('appUninstaller tombstoning teardown', () => {
       '../utils/operationRegistry': stubs.operationRegistry,
       '../appMonitoring/reconcilerQueue': stubs.reconcilerQueue,
       '../utils/fluxEventBus': stubs.fluxEventBus,
-      '../utils/appConstants': { localAppsInformation: 'zelappsinformation', globalAppsMessages: 'zelappsmessages', appsFolder: '/tmp/flux/ZelApps/' },
     });
   });
 
