@@ -2,7 +2,6 @@ const { expect } = require('chai');
 const sinon = require('sinon');
 const proxyquire = require('proxyquire').noCallThru();
 
-const MODULE_PATH = '../../ZelBack/src/services/utils/enterpriseConfig';
 
 const OWNER_MAP = {
   nodeA: ['ownerA', 'ownerB'],
@@ -21,7 +20,7 @@ function loadModule(payload = OWNER_MAP) {
   policyStore.get.withArgs('enterpriseNodes').returns(payload);
 
   return {
-    module: proxyquire(MODULE_PATH, {
+    module: proxyquire('../../ZelBack/src/services/utils/enterpriseConfig', {
       '../policy/policyStore': policyStore,
       '../../lib/log': log,
     }),
