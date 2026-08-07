@@ -2,6 +2,7 @@ const config = require('config');
 
 const log = require('../../lib/log');
 const daemonServiceUtils = require('./daemonServiceUtils');
+const fluxEventBus = require('../utils/fluxEventBus');
 const { createFluxdLiveness } = require('../utils/fluxdLiveness');
 const { createFluxdSubscriber } = require('../utils/fluxdSubscriber');
 
@@ -10,6 +11,13 @@ const TOPICS = {
   chainReorg: 'chainreorg',
   fluxnodeListDelta: 'fluxnodelistdelta',
   fluxnodeStatus: 'fluxnodestatus',
+};
+
+// Why a consumer is being asked to rebuild. Stable tokens rather than prose: a
+// consumer logs this, and the harness compares it.
+const RESYNC_REASONS = {
+  messageGap: 'message_gap',
+  reconnected: 'reconnected',
 };
 
 /**
@@ -74,6 +82,8 @@ function requestResync(topic, reason) {
   const handlers = subscribers.get(topic);
   if (!handlers) return;
 
+  fluxEventBus.publish('daemon:resync', { topic, reason });
+
   handlers.forEach((handler) => {
     if (handler.onResync) handler.onResync(reason);
   });
@@ -114,6 +124,7 @@ function start() {
 
   if (!availableTopics.length) {
     log.warn('daemonSubscriptions - daemon publishes no known topics, every consumer will poll');
+    fluxEventBus.publish('daemon:subscriptionsStarted', { endpoint, topics: [] });
     return false;
   }
 
@@ -122,11 +133,11 @@ function start() {
     topics: availableTopics,
     receiveHighWaterMark: settings.receiveHighWaterMark,
     onMessage: dispatch,
-    onGap: (topic, missed) => requestResync(topic, `missed ${missed} message(s)`),
+    onGap: (topic) => requestResync(topic, RESYNC_REASONS.messageGap),
     // Nothing is buffered for us across an outage, so a reconnection means an
     // unknown number of missed transitions, not zero.
     onConnect: ({ reconnected }) => {
-      if (reconnected) resyncAll('reconnected to the daemon');
+      if (reconnected) resyncAll(RESYNC_REASONS.reconnected);
     },
   });
 
@@ -142,6 +153,7 @@ function start() {
   liveness.start();
 
   log.info(`daemonSubscriptions - started on ${endpoint} for ${availableTopics.join(', ')}`);
+  fluxEventBus.publish('daemon:subscriptionsStarted', { endpoint, topics: [...availableTopics] });
   return true;
 }
 
@@ -170,6 +182,7 @@ function daemonAlive() {
 
 module.exports = {
   TOPICS,
+  RESYNC_REASONS,
   daemonAlive,
   isTopicAvailable,
   probeDaemon,

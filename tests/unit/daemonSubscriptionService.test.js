@@ -11,12 +11,18 @@ describe('daemonSubscriptionService tests', () => {
   let capturedSubscriberOptions;
   let capturedLivenessOptions;
   let getConfigValueStub;
+  let publishStub;
 
   const ALL_TOPICS = ['hashblockheight', 'chainreorg', 'fluxnodelistdelta', 'fluxnodestatus'];
+
+  function publishedAs(name) {
+    return publishStub.getCalls().filter((call) => call.args[0] === name).map((call) => call.args[1]);
+  }
 
   function loadService() {
     capturedSubscriberOptions = null;
     capturedLivenessOptions = null;
+    publishStub = sinon.stub();
 
     subscriberStub = {
       start: sinon.stub(),
@@ -49,6 +55,7 @@ describe('daemonSubscriptionService tests', () => {
         },
         '@noCallThru': false,
       },
+      '../utils/fluxEventBus': { publish: publishStub, '@noCallThru': false },
     });
   }
 
@@ -174,6 +181,76 @@ describe('daemonSubscriptionService tests', () => {
       service.start();
 
       expect(() => capturedSubscriberOptions.onGap('fluxnodelistdelta', 1)).to.not.throw();
+    });
+
+    it('should name a gap by its own token, not by the count that caused it', () => {
+      const onResync = sinon.stub();
+      service.subscribe('fluxnodelistdelta', { onMessage: sinon.stub(), onResync });
+      service.start();
+
+      capturedSubscriberOptions.onGap('fluxnodelistdelta', 3);
+
+      expect(onResync.firstCall.args[0]).to.equal(service.RESYNC_REASONS.messageGap);
+    });
+
+    it('should announce a resync with the topic and the reason token', () => {
+      service.subscribe('fluxnodelistdelta', { onMessage: sinon.stub(), onResync: sinon.stub() });
+      service.start();
+
+      capturedSubscriberOptions.onGap('fluxnodelistdelta', 3);
+
+      expect(publishedAs('daemon:resync')).to.eql([
+        { topic: 'fluxnodelistdelta', reason: 'message_gap' },
+      ]);
+    });
+
+    it('should announce a resync for every topic a reconnection touched', () => {
+      service.subscribe('fluxnodelistdelta', { onMessage: sinon.stub(), onResync: sinon.stub() });
+      service.subscribe('hashblockheight', { onMessage: sinon.stub(), onResync: sinon.stub() });
+      service.start();
+
+      capturedSubscriberOptions.onConnect({ reconnected: true });
+
+      expect(publishedAs('daemon:resync')).to.eql([
+        { topic: 'fluxnodelistdelta', reason: 'reconnected' },
+        { topic: 'hashblockheight', reason: 'reconnected' },
+      ]);
+    });
+
+    it('should announce nothing for a topic nobody subscribed to', () => {
+      service.start();
+
+      capturedSubscriberOptions.onGap('chainreorg', 1);
+
+      expect(publishedAs('daemon:resync')).to.eql([]);
+    });
+  });
+
+  describe('observability tests', () => {
+    it('should announce the endpoint and the topics it started on', () => {
+      service.start();
+
+      expect(publishedAs('daemon:subscriptionsStarted')).to.eql([
+        { endpoint: 'tcp://127.0.0.1:16123', topics: ALL_TOPICS },
+      ]);
+    });
+
+    it('should announce a start with no topics rather than stay silent', () => {
+      // A suite has to be able to tell "started with nothing" from "never started".
+      getConfigValueStub.returns(undefined);
+
+      expect(service.start()).to.equal(false);
+
+      expect(publishedAs('daemon:subscriptionsStarted')).to.eql([
+        { endpoint: 'tcp://127.0.0.1:16123', topics: [] },
+      ]);
+    });
+
+    it('should announce the start once however many times it is started', () => {
+      service.start();
+      service.start();
+
+      expect(publishedAs('daemon:subscriptionsStarted')).to.have.lengthOf(1);
     });
   });
 

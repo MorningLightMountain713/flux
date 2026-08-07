@@ -4,6 +4,11 @@ const sinon = require('sinon');
 const chainTipSource = require('../../ZelBack/src/services/daemonService/chainTipSource');
 const daemonServiceMiscRpcs = require('../../ZelBack/src/services/daemonService/daemonServiceMiscRpcs');
 const daemonSubscriptionService = require('../../ZelBack/src/services/daemonService/daemonSubscriptionService');
+const fluxEventBus = require('../../ZelBack/src/services/utils/fluxEventBus');
+
+function publishedAs(spy, name) {
+  return spy.getCalls().filter((call) => call.args[0] === name).map((call) => call.args[1]);
+}
 
 describe('chainTipSource tests', () => {
   let isTopicAvailableStub;
@@ -11,8 +16,10 @@ describe('chainTipSource tests', () => {
   let blockchainInfoStub;
   let recordChainTipStub;
   let pollServiceStub;
+  let publishSpy;
 
   beforeEach(() => {
+    publishSpy = sinon.spy(fluxEventBus, 'publish');
     isTopicAvailableStub = sinon.stub(daemonSubscriptionService, 'isTopicAvailable').returns(true);
     subscribeStub = sinon.stub(daemonSubscriptionService, 'subscribe');
     blockchainInfoStub = sinon.stub(daemonServiceMiscRpcs, 'fluxDaemonBlockchainInfo').resolves(true);
@@ -55,6 +62,33 @@ describe('chainTipSource tests', () => {
       await chainTipSource.start();
 
       sinon.assert.calledOnce(subscribeStub);
+    });
+  });
+
+  describe('observability tests', () => {
+    it('should announce the push mode it took, and the topic carrying it', async () => {
+      await chainTipSource.start();
+
+      expect(publishedAs(publishSpy, 'daemon:subscriptionMode')).to.eql([
+        { source: 'chainTipSource', mode: 'push', topic: 'hashblockheight' },
+      ]);
+    });
+
+    it('should announce the poll mode it fell back to', async () => {
+      isTopicAvailableStub.returns(false);
+
+      await chainTipSource.start();
+
+      expect(publishedAs(publishSpy, 'daemon:subscriptionMode')).to.eql([
+        { source: 'chainTipSource', mode: 'poll', topic: 'hashblockheight' },
+      ]);
+    });
+
+    it('should announce the mode once however many times it is started', async () => {
+      await chainTipSource.start();
+      await chainTipSource.start();
+
+      expect(publishedAs(publishSpy, 'daemon:subscriptionMode')).to.have.lengthOf(1);
     });
   });
 

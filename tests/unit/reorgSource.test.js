@@ -3,6 +3,11 @@ const sinon = require('sinon');
 
 const daemonSubscriptionService = require('../../ZelBack/src/services/daemonService/daemonSubscriptionService');
 const reorgSource = require('../../ZelBack/src/services/daemonService/reorgSource');
+const fluxEventBus = require('../../ZelBack/src/services/utils/fluxEventBus');
+
+function publishedAs(spy, name) {
+  return spy.getCalls().filter((call) => call.args[0] === name).map((call) => call.args[1]);
+}
 
 function reorgEvent(overrides = {}) {
   return {
@@ -66,6 +71,52 @@ describe('reorgSource tests', () => {
 
       expect(() => reorgSource.handleReorg(reorgEvent())).to.not.throw();
       await new Promise((resolve) => { setImmediate(resolve); });
+    });
+  });
+
+  describe('observability tests', () => {
+    it('should announce the reorg with the heights that describe it', () => {
+      const publishSpy = sinon.spy(fluxEventBus, 'publish');
+
+      reorgSource.handleReorg(reorgEvent());
+
+      expect(publishedAs(publishSpy, 'daemon:reorg')).to.eql([
+        {
+          oldTipHeight: 2000, newTipHeight: 2001, forkHeight: 1997, depth: 3,
+        },
+      ]);
+    });
+
+    it('should announce the reorg even when every consumer throws', () => {
+      const publishSpy = sinon.spy(fluxEventBus, 'publish');
+      reorgSource.onReorg(() => { throw new Error('test: consumer blew up'); });
+
+      reorgSource.handleReorg(reorgEvent());
+
+      expect(publishedAs(publishSpy, 'daemon:reorg')).to.have.lengthOf(1);
+    });
+
+    it('should announce the push mode it took, and the topic carrying it', () => {
+      const publishSpy = sinon.spy(fluxEventBus, 'publish');
+      sinon.stub(daemonSubscriptionService, 'isTopicAvailable').returns(true);
+      sinon.stub(daemonSubscriptionService, 'subscribe');
+
+      reorgSource.start();
+
+      expect(publishedAs(publishSpy, 'daemon:subscriptionMode')).to.eql([
+        { source: 'reorgSource', mode: 'push', topic: 'chainreorg' },
+      ]);
+    });
+
+    it('should announce the poll mode it fell back to', () => {
+      const publishSpy = sinon.spy(fluxEventBus, 'publish');
+      sinon.stub(daemonSubscriptionService, 'isTopicAvailable').returns(false);
+
+      reorgSource.start();
+
+      expect(publishedAs(publishSpy, 'daemon:subscriptionMode')).to.eql([
+        { source: 'reorgSource', mode: 'poll', topic: 'chainreorg' },
+      ]);
     });
   });
 });

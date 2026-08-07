@@ -1,6 +1,7 @@
 const log = require('../lib/log');
 const daemonServiceUtils = require('./daemonService/daemonServiceUtils');
 const daemonSubscriptionService = require('./daemonService/daemonSubscriptionService');
+const fluxEventBus = require('./utils/fluxEventBus');
 
 /**
  * Keeps the node list current from fluxnodelistdelta instead of refetching it.
@@ -18,6 +19,13 @@ const daemonSubscriptionService = require('./daemonService/daemonSubscriptionSer
  * at, the delta is refused and the whole list is refetched — there is no partial
  * repair, because a delta stream has no history to replay.
  */
+
+// Why the list is being rebuilt from a snapshot. A resync carries the subscription
+// service's own token through instead of coining a second one for the same cause.
+const BOOTSTRAP_REASONS = {
+  startup: 'startup',
+  deltaRefused: 'delta_refused',
+};
 
 let manager = null;
 let fetchList = null;
@@ -83,6 +91,25 @@ function takeAppliedSummary() {
   return summary;
 }
 
+function publishApplied(delta) {
+  fluxEventBus.publish('daemon:deltaApplied', {
+    fromHeight: delta.fromHeight,
+    toHeight: delta.toHeight,
+    added: delta.added.length,
+    removed: delta.removed.length,
+    updated: delta.updated.length,
+    isReorg: delta.isReorg === true,
+  });
+}
+
+function publishRefused(delta, result) {
+  fluxEventBus.publish('daemon:deltaRefused', {
+    reason: result.code,
+    fromHeight: delta.fromHeight,
+    toHeight: delta.toHeight,
+  });
+}
+
 async function resolveAdded(outpoints) {
   const resolved = await Promise.all(outpoints.map(async (outpoint) => {
     const candidates = await fetchList(outpoint.txhash);
@@ -105,7 +132,7 @@ async function resolveAdded(outpoints) {
 
 /**
  * Takes a snapshot and applies whichever buffered deltas it does not already include.
- * @param {string} reason Why the bootstrap is running, for the log.
+ * @param {string} reason A BOOTSTRAP_REASONS or RESYNC_REASONS token for why.
  * @returns {Promise<boolean>} True when the state is anchored and live.
  */
 async function bootstrap(reason) {
@@ -131,13 +158,21 @@ async function bootstrap(reason) {
       // eslint-disable-next-line no-await-in-loop
       const result = await manager.applyDelta(delta, resolveAdded);
       if (!result.applied) {
+        publishRefused(delta, result);
         log.warn(`nodeListSource - buffered delta did not chain on (${result.reason}), dropping the rest`);
         break;
       }
+      publishApplied(delta);
     }
 
     live = true;
     log.info(`nodeListSource - anchored at ${snapshot.height} (${reason})`);
+    fluxEventBus.publish('daemon:listAnchored', {
+      height: snapshot.height,
+      blockhash: snapshot.blockhash,
+      nodes: snapshot.nodes.length,
+      reason,
+    });
     return true;
   } finally {
     bootstrapping = false;
@@ -160,11 +195,13 @@ async function onDelta(delta) {
     applied.updated += delta.updated.length;
     applied.toHeight = delta.toHeight;
     if (applied.fromHeight === null) applied.fromHeight = delta.fromHeight;
+    publishApplied(delta);
     return;
   }
 
+  publishRefused(delta, result);
   log.warn(`nodeListSource - delta refused (${result.reason}), refetching the list`);
-  await bootstrap('delta did not chain on');
+  await bootstrap(BOOTSTRAP_REASONS.deltaRefused);
 }
 
 /**
@@ -179,6 +216,7 @@ async function start(options) {
 
   if (!daemonSubscriptionService.isTopicAvailable(topic)) {
     log.info('nodeListSource - daemon does not publish fluxnodelistdelta, keeping the fetch path');
+    fluxEventBus.publish('daemon:subscriptionMode', { source: 'nodeListSource', mode: 'poll', topic });
     return false;
   }
 
@@ -193,7 +231,9 @@ async function start(options) {
     onResync: (reason) => bootstrap(reason),
   });
 
-  return bootstrap('startup');
+  fluxEventBus.publish('daemon:subscriptionMode', { source: 'nodeListSource', mode: 'push', topic });
+
+  return bootstrap(BOOTSTRAP_REASONS.startup);
 }
 
 function stop() {

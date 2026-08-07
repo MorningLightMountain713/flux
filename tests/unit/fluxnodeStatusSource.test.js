@@ -12,6 +12,7 @@ describe('fluxnodeStatusSource', () => {
   let reevaluateStub;
   let stopStub;
   let logStub;
+  let publishStub;
 
   const TOPICS = {
     hashBlockHeight: 'hashblockheight',
@@ -29,6 +30,7 @@ describe('fluxnodeStatusSource', () => {
     reevaluateStub = sinon.stub().resolves();
     stopStub = sinon.stub();
     logStub = { info: sinon.stub(), warn: sinon.stub(), error: sinon.stub() };
+    publishStub = sinon.stub();
 
     source = proxyquire('../../ZelBack/src/services/daemonService/fluxnodeStatusSource', {
       './daemonSubscriptionService': {
@@ -43,9 +45,14 @@ describe('fluxnodeStatusSource', () => {
         reevaluate: reevaluateStub,
         stop: stopStub,
       },
+      '../utils/fluxEventBus': { publish: publishStub },
       '../../lib/log': logStub,
     });
   });
+
+  function publishedAs(name) {
+    return publishStub.getCalls().filter((call) => call.args[0] === name).map((call) => call.args[1]);
+  }
 
   afterEach(() => {
     source.stop();
@@ -120,5 +127,32 @@ describe('fluxnodeStatusSource', () => {
 
     expect(mode).to.equal('push');
     expect(subscribeStub.callCount).to.equal(callsAfterFirst);
+  });
+
+  describe('observability', () => {
+    it('should announce the push mode it took, and the status topic carrying it', async () => {
+      await source.start();
+
+      expect(publishedAs('daemon:subscriptionMode')).to.eql([
+        { source: 'fluxnodeStatusSource', mode: 'push', topic: 'fluxnodestatus' },
+      ]);
+    });
+
+    it('should announce the poll mode it fell back to', async () => {
+      isTopicAvailableStub.withArgs(TOPICS.fluxnodeStatus).returns(false);
+
+      await source.start();
+
+      expect(publishedAs('daemon:subscriptionMode')).to.eql([
+        { source: 'fluxnodeStatusSource', mode: 'poll', topic: 'fluxnodestatus' },
+      ]);
+    });
+
+    it('should announce the mode once however many times it is started', async () => {
+      await source.start();
+      await source.start();
+
+      expect(publishedAs('daemon:subscriptionMode')).to.have.lengthOf(1);
+    });
   });
 });
