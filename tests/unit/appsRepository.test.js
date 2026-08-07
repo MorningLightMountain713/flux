@@ -845,4 +845,71 @@ describe('appsRepository', () => {
       expect(reaped).to.equal(0);
     });
   });
+
+  // The row records the identifiers its containers are named by, so ownership is
+  // a lookup rather than a decomposition of a container's own name.
+  describe('backfillComponentIdentifiers', () => {
+    it('records identifiers only for rows that lack them', async () => {
+      dbHelperStub.findInDatabase.resolves([
+        { name: 'alpha', replica: null },
+        { name: 'beta', replica: 'r1' },
+      ]);
+      const identifiersFor = sinon.stub();
+      identifiersFor.withArgs('alpha', null).resolves(['web_alpha']);
+      identifiersFor.withArgs('beta', 'r1').resolves(['web_beta_r1', 'db_beta_r1']);
+
+      const result = await appsRepository.backfillComponentIdentifiers(identifiersFor);
+
+      expect(result).to.deep.equal({ backfilled: 2, unresolved: 0 });
+      // Only rows without the field are looked at — that absence IS the
+      // condition, which is what makes an interrupted pass resume safely.
+      expect(dbHelperStub.findInDatabase.firstCall.args[2])
+        .to.deep.equal({ componentIdentifiers: { $exists: false } });
+      expect(dbHelperStub.updateOneInDatabase.firstCall.args[3])
+        .to.deep.equal({ $set: { componentIdentifiers: ['web_alpha'] } });
+    });
+
+    it('leaves a row whose deployment cannot be built, rather than writing an empty list', async () => {
+      dbHelperStub.findInDatabase.resolves([{ name: 'sealed', replica: null }]);
+      // A spec this node cannot open. An empty list would read as "this app has
+      // no components" and answer the index wrongly for ever.
+      const result = await appsRepository.backfillComponentIdentifiers(
+        sinon.stub().resolves([]),
+      );
+
+      expect(result).to.deep.equal({ backfilled: 0, unresolved: 1 });
+      expect(dbHelperStub.updateOneInDatabase.called).to.equal(false);
+    });
+
+    it('survives a resolver that throws, and counts the row unresolved', async () => {
+      dbHelperStub.findInDatabase.resolves([{ name: 'boom', replica: null }]);
+      const result = await appsRepository.backfillComponentIdentifiers(
+        sinon.stub().rejects(new Error('cannot decrypt')),
+      );
+
+      expect(result).to.deep.equal({ backfilled: 0, unresolved: 1 });
+      expect(dbHelperStub.updateOneInDatabase.called).to.equal(false);
+    });
+
+    it('does nothing at all when every row already states them', async () => {
+      dbHelperStub.findInDatabase.resolves([]);
+      const identifiersFor = sinon.stub();
+
+      const result = await appsRepository.backfillComponentIdentifiers(identifiersFor);
+
+      expect(result).to.deep.equal({ backfilled: 0, unresolved: 0 });
+      expect(identifiersFor.called).to.equal(false);
+    });
+
+    it('refuses to run without a resolver rather than clearing the field', async () => {
+      let thrown = null;
+      try {
+        await appsRepository.backfillComponentIdentifiers();
+      } catch (error) {
+        thrown = error;
+      }
+      expect(thrown).to.be.an('error');
+      expect(thrown.message).to.match(/identifiersFor required/);
+    });
+  });
 });
