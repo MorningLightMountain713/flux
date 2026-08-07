@@ -724,7 +724,9 @@ describe('playgroundService', () => {
         'https://1-1-1-1-16127.node.api.runonflux.io',
         'https://2-2-2-2-16127.node.api.runonflux.io',
       ]);
-      sinon.assert.calledOnceWithExactly(stubs.servingSet, '1CallerZelId');
+      // The caller, not a bare FluxID: the endpoint must answer on the same axis
+      // admission will judge the session by, or it names nodes that then refuse.
+      sinon.assert.calledOnceWithExactly(stubs.servingSet, { fluxId: '1CallerZelId', sourceIp: null });
     });
 
     it('reports the window the answer belongs to', async () => {
