@@ -191,9 +191,11 @@ describe('appSpawner tests', () => {
         delay: delayStub,
         ensureNumber: sinon.stub().returnsArg(0),
       },
+      '../nodeConfirmationService': {
+        isConfirmed: sinon.stub().returns(true),
+      },
       '../generalService': {
         checkSynced: sinon.stub().resolves(true),
-        isNodeStatusConfirmed: sinon.stub().resolves(true),
         nodeTier: sinon.stub().resolves('cumulus'),
         obtainNodeCollateralInformation: sinon.stub().resolves({ txhash: 'aaa', txindex: 0 }),
       },

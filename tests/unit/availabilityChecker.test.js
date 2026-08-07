@@ -10,7 +10,7 @@ const axios = require('axios');
 const config = require('config');
 
 const availabilityChecker = require('../../ZelBack/src/services/appMonitoring/availabilityChecker');
-const generalService = require('../../ZelBack/src/services/generalService');
+const nodeConfirmationService = require('../../ZelBack/src/services/nodeConfirmationService');
 const appsRepository = require('../../ZelBack/src/services/appDatabase/appsRepository');
 const deploymentProvider = require('../../ZelBack/src/services/appRuntime/deploymentProvider');
 const fluxNetworkHelper = require('../../ZelBack/src/services/fluxNetworkHelper');
@@ -103,7 +103,7 @@ describe('availabilityChecker tests', () => {
       sinon.stub(daemonServiceMiscRpcs, 'isDaemonSynced').returns({
         data: { synced: true },
       });
-      sinon.stub(generalService, 'isNodeStatusConfirmed').resolves(false);
+      sinon.stub(nodeConfirmationService, 'isConfirmed').returns(false);
 
       waitMs = await availabilityChecker.runAvailabilityCheckOnce(
         mockDosState,
@@ -118,7 +118,7 @@ describe('availabilityChecker tests', () => {
       sinon.stub(daemonServiceMiscRpcs, 'isDaemonSynced').returns({
         data: { synced: true },
       });
-      sinon.stub(generalService, 'isNodeStatusConfirmed').resolves(true);
+      sinon.stub(nodeConfirmationService, 'isConfirmed').returns(true);
       sinon.stub(fluxNetworkHelper, 'getLocalSocketAddress').resolves(null);
 
       waitMs = await availabilityChecker.runAvailabilityCheckOnce(
@@ -134,7 +134,7 @@ describe('availabilityChecker tests', () => {
       sinon.stub(daemonServiceMiscRpcs, 'isDaemonSynced').returns({
         data: { synced: true },
       });
-      sinon.stub(generalService, 'isNodeStatusConfirmed').resolves(true);
+      sinon.stub(nodeConfirmationService, 'isConfirmed').returns(true);
       sinon.stub(fluxNetworkHelper, 'getLocalSocketAddress').resolves('192.168.1.100:16127');
       listInstalledAppsStub.rejects(new Error('Failed'));
 
@@ -155,7 +155,7 @@ describe('availabilityChecker tests', () => {
       sinon.stub(daemonServiceMiscRpcs, 'isDaemonSynced').returns({
         data: { synced: true },
       });
-      sinon.stub(generalService, 'isNodeStatusConfirmed').resolves(true);
+      sinon.stub(nodeConfirmationService, 'isConfirmed').returns(true);
       sinon.stub(fluxNetworkHelper, 'getLocalSocketAddress').resolves('192.168.1.100:16127');
       sinon.stub(fluxNetworkHelper, 'isPortBanned').returns(false);
       sinon.stub(networkStateService, 'getRandomExternalObserver').resolves(null);
@@ -177,7 +177,7 @@ describe('availabilityChecker tests', () => {
       sinon.stub(daemonServiceMiscRpcs, 'isDaemonSynced').returns({
         data: { synced: true },
       });
-      sinon.stub(generalService, 'isNodeStatusConfirmed').resolves(true);
+      sinon.stub(nodeConfirmationService, 'isConfirmed').returns(true);
       sinon.stub(fluxNetworkHelper, 'getLocalSocketAddress').resolves('192.168.1.100:16127');
       listInstalledAppsStub.resolves(apps);
       sinon.stub(fluxNetworkHelper, 'isPortBanned').returns(true);
@@ -197,7 +197,7 @@ describe('availabilityChecker tests', () => {
       sinon.stub(daemonServiceMiscRpcs, 'isDaemonSynced').returns({
         data: { synced: true },
       });
-      sinon.stub(generalService, 'isNodeStatusConfirmed').resolves(true);
+      sinon.stub(nodeConfirmationService, 'isConfirmed').returns(true);
       sinon.stub(fluxNetworkHelper, 'getLocalSocketAddress').resolves('192.168.1.100:16127');
       listInstalledAppsStub.resolves(apps);
       sinon.stub(upnpService, 'isUPNP').returns(true);
@@ -223,7 +223,7 @@ describe('availabilityChecker tests', () => {
       sinon.stub(daemonServiceMiscRpcs, 'isDaemonSynced').returns({
         data: { synced: true },
       });
-      sinon.stub(generalService, 'isNodeStatusConfirmed').resolves(true);
+      sinon.stub(nodeConfirmationService, 'isConfirmed').returns(true);
       sinon.stub(fluxNetworkHelper, 'getLocalSocketAddress').resolves('192.168.1.100:16127');
       listInstalledAppsStub.resolves(apps);
       sinon.stub(fluxNetworkHelper, 'isPortBanned').returns(false);
@@ -243,7 +243,7 @@ describe('availabilityChecker tests', () => {
       sinon.stub(daemonServiceMiscRpcs, 'isDaemonSynced').returns({
         data: { synced: true },
       });
-      sinon.stub(generalService, 'isNodeStatusConfirmed').resolves(true);
+      sinon.stub(nodeConfirmationService, 'isConfirmed').returns(true);
       sinon.stub(fluxNetworkHelper, 'getLocalSocketAddress').resolves('192.168.1.100:16127');
       listInstalledAppsStub.resolves(apps);
       sinon.stub(fluxNetworkHelper, 'isPortBanned').returns(false);
@@ -265,7 +265,7 @@ describe('availabilityChecker tests', () => {
       sinon.stub(daemonServiceMiscRpcs, 'isDaemonSynced').returns({
         data: { synced: true },
       });
-      sinon.stub(generalService, 'isNodeStatusConfirmed').resolves(true);
+      sinon.stub(nodeConfirmationService, 'isConfirmed').returns(true);
       sinon.stub(fluxNetworkHelper, 'getLocalSocketAddress').resolves('192.168.1.100:16127');
       listInstalledAppsStub.resolves(apps);
       sinon.stub(fluxNetworkHelper, 'isPortBanned').returns(false);
@@ -286,7 +286,7 @@ describe('availabilityChecker tests', () => {
       sinon.stub(daemonServiceMiscRpcs, 'isDaemonSynced').returns({
         data: { synced: true },
       });
-      sinon.stub(generalService, 'isNodeStatusConfirmed').resolves(true);
+      sinon.stub(nodeConfirmationService, 'isConfirmed').returns(true);
       sinon.stub(fluxNetworkHelper, 'getLocalSocketAddress').resolves('192.168.1.100:16127');
       listInstalledAppsStub.resolves(apps);
       sinon.stub(upnpService, 'isUPNP').returns(true);
@@ -318,7 +318,7 @@ describe('availabilityChecker tests', () => {
       sinon.stub(daemonServiceMiscRpcs, 'isDaemonSynced').returns({
         data: { synced: true },
       });
-      sinon.stub(generalService, 'isNodeStatusConfirmed').resolves(true);
+      sinon.stub(nodeConfirmationService, 'isConfirmed').returns(true);
       sinon.stub(fluxNetworkHelper, 'getLocalSocketAddress').resolves('192.168.1.100:16127');
       listInstalledAppsStub.resolves(apps);
       sinon.stub(upnpService, 'isUPNP').returns(true);
@@ -361,7 +361,7 @@ describe('availabilityChecker tests', () => {
       sinon.stub(daemonServiceMiscRpcs, 'isDaemonSynced').returns({
         data: { synced: true },
       });
-      sinon.stub(generalService, 'isNodeStatusConfirmed').resolves(true);
+      sinon.stub(nodeConfirmationService, 'isConfirmed').returns(true);
       sinon.stub(fluxNetworkHelper, 'getLocalSocketAddress').resolves('192.168.1.100:16127');
       listInstalledAppsStub.resolves(apps);
       sinon.stub(fluxNetworkHelper, 'isPortBanned').returns(false);
@@ -385,7 +385,7 @@ describe('availabilityChecker tests', () => {
       sinon.stub(daemonServiceMiscRpcs, 'isDaemonSynced').returns({
         data: { synced: true },
       });
-      sinon.stub(generalService, 'isNodeStatusConfirmed').resolves(true);
+      sinon.stub(nodeConfirmationService, 'isConfirmed').returns(true);
       sinon.stub(fluxNetworkHelper, 'getLocalSocketAddress').resolves('192.168.1.100:16127');
       listInstalledAppsStub.resolves(apps);
       sinon.stub(fluxNetworkHelper, 'isPortBanned').returns(false);

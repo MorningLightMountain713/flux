@@ -6,7 +6,7 @@ const chaiAsPromised = require('chai-as-promised');
 const serviceHelper = require('../../ZelBack/src/services/serviceHelper');
 const daemonServiceMiscRpcs = require('../../ZelBack/src/services/daemonService/daemonServiceMiscRpcs');
 const daemonServiceWalletRpcs = require('../../ZelBack/src/services/daemonService/daemonServiceWalletRpcs');
-const daemonServiceFluxnodeRpcs = require('../../ZelBack/src/services/daemonService/daemonServiceFluxnodeRpcs');
+const nodeConfirmationService = require('../../ZelBack/src/services/nodeConfirmationService');
 const fluxCommunicationUtils = require('../../ZelBack/src/services/fluxCommunicationUtils');
 const benchmarkService = require('../../ZelBack/src/services/benchmarkService');
 const networkStateService = require('../../ZelBack/src/services/networkStateService');
@@ -537,7 +537,7 @@ describe('fluxNetworkMonitor tests', () => {
     let getBenchmarksStub;
     let isDaemonSyncedStub;
     let deterministicFluxListStub;
-    let getFluxNodeStatusStub;
+    let getNodeStatusStub;
     let deterministicFluxnodeListResponse;
 
     beforeEach(() => {
@@ -571,7 +571,7 @@ describe('fluxNetworkMonitor tests', () => {
       getBenchmarksStub = sinon.stub(benchmarkService, 'getBenchmarks');
       isDaemonSyncedStub = sinon.stub(daemonServiceMiscRpcs, 'isDaemonSynced');
       deterministicFluxListStub = sinon.stub(fluxCommunicationUtils, 'deterministicFluxList');
-      getFluxNodeStatusStub = sinon.stub(daemonServiceFluxnodeRpcs, 'getFluxNodeStatus');
+      getNodeStatusStub = sinon.stub(nodeConfirmationService, 'getNodeStatus');
       nodeDosState.setDosMessage(null);
       nodeDosState.setDosStateValue(0);
     });
@@ -594,15 +594,10 @@ describe('fluxNetworkMonitor tests', () => {
       getBenchmarksStub.resolves(getBenchmarkResponseData);
       isDaemonSyncedStub.returns({ data: { synced: true } });
       deterministicFluxListStub.returns(deterministicFluxnodeListResponse);
-      getFluxNodeStatusStub.returns(
-        {
-          status: 'success',
-          data: {
-            status: 'CONFIRMED',
-            collateral: 'COutPoint(38c04da72786b08adb309259cdd6d2128ea9059d0334afca127a5dc4e75bf174, 0)',
-          },
-        },
-      );
+      getNodeStatusStub.returns({
+        status: 'CONFIRMED',
+        collateral: 'COutPoint(38c04da72786b08adb309259cdd6d2128ea9059d0334afca127a5dc4e75bf174, 0)',
+      });
 
       await fluxNetworkMonitor.checkDeterministicNodesCollisions();
 
@@ -620,15 +615,10 @@ describe('fluxNetworkMonitor tests', () => {
       isDaemonSyncedStub.returns({ data: { synced: true } });
       // Node is not in the deterministic list (expired)
       deterministicFluxListStub.returns([]);
-      getFluxNodeStatusStub.returns(
-        {
-          status: 'success',
-          data: {
-            status: 'expired',
-            collateral: 'COutPoint(38c04da72786b08adb309259cdd6d2128ea9059d0334afca127a5dc4e75bf174, 0)',
-          },
-        },
-      );
+      getNodeStatusStub.returns({
+        status: 'expired',
+        collateral: 'COutPoint(38c04da72786b08adb309259cdd6d2128ea9059d0334afca127a5dc4e75bf174, 0)',
+      });
 
       await fluxNetworkMonitor.checkDeterministicNodesCollisions();
 
@@ -646,15 +636,10 @@ describe('fluxNetworkMonitor tests', () => {
       getBenchmarksStub.resolves(getBenchmarkResponseData);
       isDaemonSyncedStub.returns({ data: { synced: true } });
       deterministicFluxListStub.returns(deterministicFluxnodeListResponse);
-      getFluxNodeStatusStub.returns(
-        {
-          status: 'success',
-          data: {
-            status: 'CONFIRMED',
-            collateral: 'COutPoint(38c04da72786b08adb309259cdd6d2128ea9059d0334afca127a5dc4e75bf174, 0)',
-          },
-        },
-      );
+      getNodeStatusStub.returns({
+        status: 'CONFIRMED',
+        collateral: 'COutPoint(38c04da72786b08adb309259cdd6d2128ea9059d0334afca127a5dc4e75bf174, 0)',
+      });
       // Our IP changed and is not in the confirmed list
       fluxCommunicationUtils.socketAddressInFluxList.resolves(false);
 
@@ -696,14 +681,9 @@ describe('fluxNetworkMonitor tests', () => {
       getBenchmarksStub.resolves(getBenchmarkResponseData);
       isDaemonSyncedStub.returns({ data: { synced: true } });
       deterministicFluxListStub.returns(multipleNodesList);
-      getFluxNodeStatusStub.returns(
-        {
-          status: 'success',
-          data: {
-            collateral: 'COutPoint(38c04da72786b08adb309259cdd6d2128ea9059d0334afca127a5dc4e75bf174, 0)',
-          },
-        },
-      );
+      getNodeStatusStub.returns({
+        collateral: 'COutPoint(38c04da72786b08adb309259cdd6d2128ea9059d0334afca127a5dc4e75bf174, 0)',
+      });
 
       await fluxNetworkMonitor.checkDeterministicNodesCollisions();
 
@@ -721,14 +701,9 @@ describe('fluxNetworkMonitor tests', () => {
       getBenchmarksStub.resolves(getBenchmarkResponseData);
       isDaemonSyncedStub.returns({ data: { synced: true } });
       deterministicFluxListStub.returns(deterministicFluxnodeListResponse);
-      getFluxNodeStatusStub.returns(
-        {
-          status: 'success',
-          data: {
-            collateral: 'COutPoint(38c04da72786b08adb309259cdd6d2128ea9059d0334afca127a5dc4e123556, 0)',
-          },
-        },
-      );
+      getNodeStatusStub.returns({
+        collateral: 'COutPoint(38c04da72786b08adb309259cdd6d2128ea9059d0334afca127a5dc4e123556, 0)',
+      });
 
       await fluxNetworkMonitor.checkDeterministicNodesCollisions();
 
@@ -786,12 +761,9 @@ describe('fluxNetworkMonitor tests', () => {
       getBenchmarksStub.resolves(getBenchmarkResponseData);
       isDaemonSyncedStub.returns({ data: { synced: true } });
       deterministicFluxListStub.returns(nodeListWithDifferentIp);
-      getFluxNodeStatusStub.returns({
-        status: 'success',
-        data: {
-          status: 'CONFIRMED',
-          collateral: sharedCollateral,
-        },
+      getNodeStatusStub.returns({
+        status: 'CONFIRMED',
+        collateral: sharedCollateral,
       });
 
       // Mock successful axios call - other node is reachable
@@ -855,12 +827,9 @@ describe('fluxNetworkMonitor tests', () => {
       getBenchmarksStub.resolves(getBenchmarkResponseData);
       isDaemonSyncedStub.returns({ data: { synced: true } });
       deterministicFluxListStub.returns(nodeListWithDifferentIp);
-      getFluxNodeStatusStub.returns({
-        status: 'success',
-        data: {
-          status: 'CONFIRMED',
-          collateral: sharedCollateral,
-        },
+      getNodeStatusStub.returns({
+        status: 'CONFIRMED',
+        collateral: sharedCollateral,
       });
 
       // Mock axios to fail (other node unreachable) on both calls
@@ -923,12 +892,9 @@ describe('fluxNetworkMonitor tests', () => {
       getBenchmarksStub.resolves(getBenchmarkResponseData);
       isDaemonSyncedStub.returns({ data: { synced: true } });
       deterministicFluxListStub.returns(nodeListWithDifferentIp);
-      getFluxNodeStatusStub.returns({
-        status: 'success',
-        data: {
-          status: 'CONFIRMED',
-          collateral: sharedCollateral,
-        },
+      getNodeStatusStub.returns({
+        status: 'CONFIRMED',
+        collateral: sharedCollateral,
       });
 
       // Mock axios to fail first call but succeed on second (node comes back online)
