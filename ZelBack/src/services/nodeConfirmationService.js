@@ -10,6 +10,7 @@ const DAEMON_STALE_MS = config.confirmation.daemonStaleMs;
 const DAEMON_EXPIRED_MS = config.confirmation.daemonExpiredMs;
 
 let ourPubkey = null;
+let nodeStatus = null;
 let daemonConfirmed = null;
 let daemonStale = false;
 let messageCapable = false;
@@ -31,6 +32,17 @@ const messageCapabilityListeners = [];
 
 function isConfirmed() {
   return daemonConfirmed;
+}
+
+/**
+ * The daemon's own-status payload as of the last successful poll, or null if one has
+ * never succeeded. Sticky across an unreachable daemon for the same reason
+ * daemonConfirmed is: the fields callers read are the node's identity and its
+ * on-chain standing, neither of which an RPC timeout says anything about.
+ * @returns {object|null}
+ */
+function getNodeStatus() {
+  return nodeStatus;
 }
 
 function canSendMessages() {
@@ -71,7 +83,8 @@ async function poll() {
       rpcReachable = true;
       lastSuccessfulPollAt = process.hrtime.bigint();
       daemonStale = false;
-      daemonConfirmed = response.data?.status === 'CONFIRMED';
+      nodeStatus = response.data ?? null;
+      daemonConfirmed = nodeStatus?.status === 'CONFIRMED';
     }
   } catch (error) {
     // RPC unreachable — keep previous daemonConfirmed value
@@ -194,6 +207,7 @@ function setLastSuccessfulPollAgeMs(ageMs) {
 
 module.exports = {
   isConfirmed,
+  getNodeStatus,
   isDaemonStale,
   canSendMessages,
   waitForConfirmed,

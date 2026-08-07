@@ -10,7 +10,7 @@ const fluxCommunicationUtils = require('./fluxCommunicationUtils');
 const fluxCommunicationMessagesSender = require('./fluxCommunicationMessagesSender');
 const geolocationService = require('./geolocationService');
 const daemonServiceMiscRpcs = require('./daemonService/daemonServiceMiscRpcs');
-const daemonServiceFluxnodeRpcs = require('./daemonService/daemonServiceFluxnodeRpcs');
+const nodeConfirmationService = require('./nodeConfirmationService');
 const daemonServiceWalletRpcs = require('./daemonService/daemonServiceWalletRpcs');
 const daemonServiceUtils = require('./daemonService/daemonServiceUtils');
 const cacheManager = require('./utils/cacheManager').default;
@@ -347,9 +347,9 @@ async function checkDeterministicNodesCollisions() {
       }
       const nodeList = await fluxCommunicationUtils.deterministicFluxList();
       const result = nodeList.filter((node) => socketAddressesMatch(node.ip, localSocketAddr));
-      const nodeStatus = await daemonServiceFluxnodeRpcs.getFluxNodeStatus();
-      if (nodeStatus.status === 'success') { // different scenario is caught elsewhere
-        const myCollateral = nodeStatus.data.collateral;
+      const nodeStatus = nodeConfirmationService.getNodeStatus();
+      if (nodeStatus) { // different scenario is caught elsewhere
+        const myCollateral = nodeStatus.collateral;
         const myNode = result.find((node) => node.collateral === myCollateral);
         const nodeCollateralDifferentIp = nodeList.find((node) => node.collateral === myCollateral && !socketAddressesMatch(node.ip, localSocketAddr));
         if (result.length > 1) {
@@ -380,7 +380,7 @@ async function checkDeterministicNodesCollisions() {
             return;
           }
         }
-        if (nodeStatus.data.status === 'CONFIRMED' && nodeCollateralDifferentIp) {
+        if (nodeStatus.status === 'CONFIRMED' && nodeCollateralDifferentIp) {
           let errorCall = false;
           const askingIP = extractIp(nodeCollateralDifferentIp.ip);
           const askingIpPort = extractPort(nodeCollateralDifferentIp.ip);
@@ -428,11 +428,11 @@ async function checkDeterministicNodesCollisions() {
       // list (e.g. IP recently changed), remote nodes will reject the availability
       // check via the confirmed-list gate in isFluxAvailable. Skip to avoid
       // spamming the network with requests that will always fail.
-      const isConfirmed = nodeStatus.data?.status === 'CONFIRMED';
+      const isConfirmed = nodeStatus?.status === 'CONFIRMED';
       const inConfirmedList = await fluxCommunicationUtils.socketAddressInFluxList(localSocketAddr);
       if (!isConfirmed || !inConfirmedList) {
         const reason = !isConfirmed
-          ? `Node status is ${nodeStatus.data?.status}`
+          ? `Node status is ${nodeStatus?.status}`
           : `Our IP ${localSocketAddr} is not in the confirmed flux list`;
         log.warn(`${reason}. Skipping remote availability check.`);
         setTimeout(() => {

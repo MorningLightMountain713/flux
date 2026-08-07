@@ -2,6 +2,7 @@
 const config = require('config');
 const serviceHelper = require('../serviceHelper');
 const generalService = require('../generalService');
+const nodeConfirmationService = require('../nodeConfirmationService');
 const benchmarkService = require('../benchmarkService');
 const fluxNetworkHelper = require('../fluxNetworkHelper');
 const fluxCommunicationMessagesSender = require('../fluxCommunicationMessagesSender');
@@ -278,9 +279,7 @@ async function trySpawningGlobalApplication() {
       return installDelay;
     }
 
-    let isNodeConfirmed = false;
-    isNodeConfirmed = await generalService.isNodeStatusConfirmed().catch(() => null);
-    if (!isNodeConfirmed) {
+    if (!nodeConfirmationService.isConfirmed()) {
       log.info('Flux Node not Confirmed. Global applications will not be installed');
       fluxEventBus.publish('spawner:blocked', { reason: 'not_confirmed' });
       globalState.fluxNodeWasNotConfirmedOnLastCheck = true;

@@ -2,7 +2,7 @@
 const axios = require('axios');
 const config = require('config');
 const serviceHelper = require('../serviceHelper');
-const generalService = require('../generalService');
+const nodeConfirmationService = require('../nodeConfirmationService');
 const fluxNetworkHelper = require('../fluxNetworkHelper');
 const verificationHelper = require('../verificationHelper');
 const daemonServiceMiscRpcs = require('../daemonService/daemonServiceMiscRpcs');
@@ -112,10 +112,7 @@ async function runAvailabilityCheckOnce(dosState, portsNotWorking, failedNodesTe
       return timeouts.appError;
     }
 
-    let isNodeConfirmed = false;
-    isNodeConfirmed = await generalService.isNodeStatusConfirmed().catch(() => null);
-
-    if (!isNodeConfirmed) {
+    if (!nodeConfirmationService.isConfirmed()) {
       log.info('Flux Node not Confirmed. Application checks are disabled');
       return timeouts.appError;
     }

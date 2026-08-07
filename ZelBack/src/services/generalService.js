@@ -153,26 +153,6 @@ async function nodeCollateral() {
   throw new Error('Unrecognised Flux Node Collateral');
 }
 
-/**
- * Checks if a node's status is confirmed.
- * @returns {boolean} True if node is confirmed, false if not, throws exception if there is a problem with dameon.
- */
-async function isNodeStatusConfirmed() {
-  try {
-    const response = await daemonServiceFluxnodeRpcs.getFluxNodeStatus();
-    if (response.status === 'error') {
-      throw response.data;
-    }
-    if (response.data.status === 'CONFIRMED') {
-      return true;
-    }
-    return false;
-  } catch (error) {
-    log.error(error);
-    throw error;
-  }
-}
-
 // Last explorer-sync verdict that was logged, so checkSynced only journals
 // transitions between in-sync and behind
 let lastLoggedExplorerSynced = null;
@@ -281,7 +261,6 @@ module.exports = {
   getCollateralInfo,
   nodeTier,
   getNewNodeTier,
-  isNodeStatusConfirmed,
   checkSynced,
   messageHash,
   whitelistedRepositories,
