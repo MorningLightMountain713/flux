@@ -139,12 +139,8 @@ describe('appVolumeService.createAppVolume (findmnt disk selection + in-lock rec
 
   function load({ mount, condemned = false, teardownOwed = false } = {}) {
     const runCommand = sinon.stub().resolves({ error: null });
-    const fakeCrontab = {
-      jobs: () => [], create: () => ({ isValid: () => true }), save: () => {}, remove: () => {},
-    };
     const svc = proxyquire('../../ZelBack/src/services/appLifecycle/appVolumeService', {
       config: { lockedSystemResources: { extrahdd: 5 } },
-      crontab: { load: (cb) => cb(null, fakeCrontab) },
       '../serviceHelper': { ensureString: (x) => x, runCommand },
       '../dockerService': { getAppIdentifier: (id) => id },
       '../deviceHelper': { mountForTarget: sinon.stub().resolves(mount) },
