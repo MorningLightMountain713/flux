@@ -63,7 +63,6 @@ describe('appsRuntimeState tests', () => {
     appsRuntimeState = proxyquire('../../ZelBack/src/services/appManagement/appsRuntimeState', {
       '../../lib/log': logStub,
       '../dbHelper': dbHelperStub,
-      '../dockerService': { getBaseAppName: (id) => id.replace(/^flux/, '').replace(/^zel/, '') },
     });
   });
 
@@ -535,7 +534,6 @@ describe('appsRuntimeState tests', () => {
       const tuned = proxyquire('../../ZelBack/src/services/appManagement/appsRuntimeState', {
         '../../lib/log': logStub,
         '../dbHelper': {},
-        '../dockerService': { getBaseAppName: (id) => id },
         config: {
           database: { appslocal: { database: 'localzelapps', collections: { appsRuntimeState: 'zelappsruntimestate' } } },
           fluxapps: {
@@ -596,7 +594,6 @@ describe('appsRuntimeState tests', () => {
           findOneInDatabase: async () => null,
           updateOneInDatabase: updateStub,
         },
-        '../dockerService': { getBaseAppName: (id) => id },
       });
     });
 
@@ -693,7 +690,6 @@ describe('appsRuntimeState tests', () => {
           updateOneInDatabase: async () => {},
           removeDocumentsFromCollection: async () => {},
         },
-        '../dockerService': { getBaseAppName: (id) => id },
       });
 
       let thrown = null;
@@ -722,7 +718,6 @@ describe('appsRuntimeState tests', () => {
           updateOneInDatabase: async () => {},
           removeDocumentsFromCollection: async () => {},
         },
-        '../dockerService': { getBaseAppName: (id) => id.replace(/^flux/, '').replace(/^zel/, '') },
       });
 
       expect(await restarted.isNetworkHealRemoval('www_App')).to.be.true;
@@ -784,7 +779,6 @@ describe('appsRuntimeState tests', () => {
           removeDocumentsFromCollection: async (_db, _coll, query) => { removed.push(query.identifier); },
           updateOneInDatabase: async (_db, _coll, query, update) => { upserts.push({ query, set: update.$set }); },
         },
-        '../dockerService': { getBaseAppName: (id) => id },
       });
     });
 

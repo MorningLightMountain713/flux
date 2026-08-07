@@ -34,7 +34,7 @@ globalThis.userconfig = adminConfig;
 
 const idService = proxyquire(
   '../../ZelBack/src/services/idService',
-  { '../../../config/userconfig': adminConfig },
+  { },
 );
 
 chai.use(chaiAsPromised);

@@ -201,7 +201,6 @@ describe('appReconciler tests', () => {
     const reconcilerQueue = proxyquire('../../ZelBack/src/services/appMonitoring/reconcilerQueue', {
       '../../lib/log': stubs.log,
       '../utils/globalState': stubs.globalState,
-      '../dockerService': stubs.dockerService,
     });
 
     appReconciler = proxyquire('../../ZelBack/src/services/appMonitoring/appReconciler', {
