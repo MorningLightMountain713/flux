@@ -68,6 +68,10 @@ describe('appReconciler tests', () => {
         getInstalledAppByIdentity: sinon.stub().callsFake(async () => (localSpec
           ? { name: localSpec.name, owner: localSpec.owner ?? 'owner1', isEncrypted: Boolean(localSpec.enterprise) }
           : null)),
+        // Null by default, so every test below drives the fallback that rows
+        // predating the identifier index still need. The index path has its own
+        // test rather than being the silent default here.
+        getInstalledAppByComponentIdentifier: sinon.stub().resolves(null),
       },
       // Nothing owed by default: the owed-teardown record is what still names an
       // app whose row has been deleted, so its absence is "genuinely not here".
@@ -1985,6 +1989,29 @@ describe('appReconciler tests', () => {
       await appReconciler.enqueueAll('test');
       await flush();
       expect(started, 'the resolvable app must still reconcile and start').to.include('www_Plain');
+    });
+
+    // Ownership is a lookup on what the row recorded, not a decomposition of the
+    // container's own name — a name states the segment its containers were built
+    // from, which stops resembling the app's name once identities are minted.
+    it('resolves the app from the recorded identifiers, without taking the name apart', async () => {
+      localSpec = { name: 'Minted', version: 4, compose: [{ name: 'www', containerData: '/data' }] };
+      stubs.appQueryService.installedApps.resolves({ status: 'success', data: [{ name: 'Minted' }] });
+      stubs.appsRepository.getInstalledAppByComponentIdentifier.resolves({
+        name: 'Minted', owner: 'owner1', isEncrypted: false,
+      });
+
+      await appReconciler.enqueueAll('test');
+      await flush();
+
+      expect(
+        stubs.appsRepository.getInstalledAppByComponentIdentifier.called,
+        'the index must be consulted',
+      ).to.equal(true);
+      expect(
+        stubs.appsRepository.getInstalledAppByIdentity.called,
+        'a row that answers the index must not also be looked up by a parsed identity',
+      ).to.equal(false);
     });
 
     it('sweeps a single-component (flat) app under its bare app name', async () => {
