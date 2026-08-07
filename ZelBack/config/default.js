@@ -386,12 +386,23 @@ module.exports = {
     // A day. Its floor is the session TTL — a shorter window would move a
     // caller's set out from under a running session.
     playgroundServingSetWindowMs: 86400000,
-    // OFF, and it must stay off until FDM forwards the client address and
-    // FluxOS resolves it. A browser reaches a node through FDM, so the socket
-    // peer is the load balancer: enforcing this now would map every caller
-    // arriving through FDM onto the same handful of nodes and take the feature
-    // down for everyone else. Not a weaker control — an outage.
-    playgroundServingSetAddressAxis: false,
+    // Pin a caller's set on their resolved address rather than their FluxID.
+    // The set bounds a simultaneous burst, so it keys on the thing a burster
+    // cannot cheaply change: a FluxID is free to mint and each one would be a
+    // fresh set, an address is the scarce resource. Requires the resolved
+    // caller address — keying on the raw socket peer would map every caller
+    // arriving through FDM onto one balancer and so onto one set, which is not
+    // a weaker control but an outage.
+    //
+    // The cost is that a shared address — an office, a carrier-grade NAT —
+    // shares one burst surface. Volume is not bounded here: the gossiped
+    // budgets carry a limit per axis, and that is where an over-matching axis
+    // is given the looser number while identity keeps the tight one.
+    //
+    // Changing it changes the key and never the set size, so a node with it off
+    // still serves every caller and a fleet mid-rollout disagrees about which
+    // 32, not about whether.
+    playgroundServingSetAddressAxis: true,
     // Peak commitment, NOT total donation - the two knobs are independent. Two
     // sessions is 2 x the session ceiling held at once (4 cores, 8 GB); how much
     // a node gives away per hour is playgroundNodeSessionsPerHour below, and
