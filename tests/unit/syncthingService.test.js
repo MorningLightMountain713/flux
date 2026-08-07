@@ -17,12 +17,8 @@ const proxyquire = require('proxyquire');
 const sinon = require('sinon');
 const syncthingFixtures = require('./data/syncthingFixtures');
 
-// Fakes
-const runExecStub = sinon.stub();
-const utilFake = { promisify: () => runExecStub };
-
 // Module under test
-const syncthingService = proxyquire('../../ZelBack/src/services/syncthingService', { 'node:util': utilFake });
+const syncthingService = proxyquire('../../ZelBack/src/services/syncthingService', { });
 
 describe('syncthingService tests', () => {
   describe('getConfigFile tests', () => {

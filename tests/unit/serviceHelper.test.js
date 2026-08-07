@@ -11,20 +11,13 @@ const log = require('../../ZelBack/src/lib/log');
 const dbHelper = require('../../ZelBack/src/services/dbHelper');
 const { requireMongo } = require('./dbTestHelper');
 
-const adminConfig = {
-  initial: {
-    ipaddress: '83.51.212.243',
-    zelid: '1CbErtneaX2QVyUfwU7JGB7VzvPgrgc3uC',
-    testnet: true,
-  },
-};
 
 const runCmdStub = sinon.stub();
 const utilFake = { promisify: () => runCmdStub };
 
 const serviceHelper = proxyquire(
   '../../ZelBack/src/services/serviceHelper',
-  { '../../../config/userconfig': adminConfig, 'node:util': utilFake },
+  { 'node:util': utilFake },
 );
 
 describe('serviceHelper tests', () => {

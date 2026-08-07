@@ -82,7 +82,6 @@ describe('appStartupManager tests', () => {
 
     appStartupManager = proxyquire('../../ZelBack/src/services/appLifecycle/appStartupManager', {
       '../../lib/log': logStub,
-      '../dbHelper': dbHelperStub,
       '../dockerService': dockerServiceStub,
       '../serviceHelper': { delay: sinon.stub().resolves() },
       '../fluxNetworkHelper': fluxNetworkHelperStub,
@@ -163,7 +162,6 @@ describe('appStartupManager tests', () => {
       const flaggedStartupManager = proxyquire('../../ZelBack/src/services/appLifecycle/appStartupManager', {
         config: { ...realConfig, fluxapps: { ...realConfig.fluxapps, manageCollectorLifecycle: true } },
         '../../lib/log': logStub,
-        '../dbHelper': dbHelperStub,
         '../dockerService': dockerServiceStub,
         '../serviceHelper': { delay: sinon.stub().resolves() },
         '../fluxNetworkHelper': fluxNetworkHelperStub,

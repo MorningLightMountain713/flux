@@ -56,19 +56,12 @@ describe('appInspector tests', () => {
       '../dockerService': dockerServiceStub,
       '../messageHelper': messageHelperStub,
       '../../lib/log': logStub,
-      '../appQuery/appQueryService': {      },
       '../serviceHelper': {
         ensureString: sinon.stub().returnsArg(0),
         runCommand: sinon.stub().resolves({ error: null, stdout: 'data', stderr: '' }),
       },
-      '../dbHelper': {
-        databaseConnection: sinon.stub(),
-      },
       '../verificationHelper': {
         verifyPrivilege: sinon.stub().resolves(true),
-      },
-      '../utils/appConstants': {
-        appConstants: {},
       },
       '../utils/appUtilities': {
         getContainerStorage: sinon.stub().returns(0),
@@ -103,11 +96,8 @@ describe('appInspector tests', () => {
         '../../services/appLifecycle/appOperations': { redeployApplication: sinon.stub().resolves() },
         '../messageHelper': messageHelperStub,
         '../../lib/log': logStub,
-        '../appQuery/appQueryService': {},
         '../serviceHelper': { ensureString: sinon.stub().returnsArg(0), delay: sinon.stub().resolves() },
-        '../dbHelper': { databaseConnection: sinon.stub() },
         '../verificationHelper': { verifyPrivilege: sinon.stub().resolves(true) },
-        '../utils/appConstants': { appConstants: {} },
         '../utils/appUtilities': { getContainerStorage: sinon.stub().returns(0) },
       });
     }
@@ -248,18 +238,11 @@ describe('appInspector tests', () => {
         '../dockerService': dockerServiceStub,
         '../messageHelper': messageHelperStub,
         '../../lib/log': logStub,
-        '../appQuery/appQueryService': {        },
         '../serviceHelper': {
           ensureString: sinon.stub().returnsArg(0),
         },
-        '../dbHelper': {
-          databaseConnection: sinon.stub(),
-        },
         '../verificationHelper': {
           verifyPrivilege: sinon.stub().resolves(false),
-        },
-        '../utils/appConstants': {
-          appConstants: {},
         },
         '../utils/appUtilities': {
           getContainerStorage: sinon.stub().returns(0),
@@ -302,15 +285,8 @@ describe('appInspector tests', () => {
         '../serviceHelper': {
           ensureString: sinon.stub().returnsArg(0),
         },
-        '../dbHelper': {
-          databaseConnection: sinon.stub(),
-        },
         '../verificationHelper': {
           verifyPrivilege: sinon.stub().resolves(false),
-        },
-        '../utils/appConstants': {
-          '../appQuery/appQueryService': {          },
-          appConstants: {},
         },
         '../utils/appUtilities': {
           getContainerStorage: sinon.stub().returns(0),
@@ -373,11 +349,8 @@ describe('appInspector tests', () => {
         '../appRuntime/deploymentProvider': deploymentProviderStub({ resolveRequestContainer }),
         '../messageHelper': messageHelperStub,
         '../../lib/log': logStub,
-        '../appQuery/appQueryService': {},
         '../serviceHelper': { ensureString: sinon.stub().returnsArg(0) },
-        '../dbHelper': { databaseConnection: sinon.stub() },
         '../verificationHelper': { verifyPrivilege: sinon.stub().resolves(true) },
-        '../utils/appConstants': { appConstants: {} },
         '../utils/appUtilities': { getContainerStorage: sinon.stub().returns(0) },
       });
 
@@ -456,15 +429,8 @@ describe('appInspector tests', () => {
           ensureString: sinon.stub().returnsArg(0),
           dockerBufferToString: sinon.stub().returnsArg(0),
         },
-        '../dbHelper': {
-          databaseConnection: sinon.stub(),
-        },
         '../verificationHelper': {
           verifyPrivilege: sinon.stub().resolves(false),
-        },
-        '../utils/appConstants': {
-          '../appQuery/appQueryService': {          },
-          appConstants: {},
         },
         '../utils/appUtilities': {
           getContainerStorage: sinon.stub().returns(0),
@@ -511,14 +477,8 @@ describe('appInspector tests', () => {
           ensureString: sinon.stub().returnsArg(0),
           dockerBufferToString: sinon.stub().returns('some data'),
         },
-        '../dbHelper': {
-          databaseConnection: sinon.stub(),
-        },
         '../verificationHelper': {
           verifyPrivilege: sinon.stub().resolves(true),
-        },
-        '../utils/appConstants': {
-          appConstants: {},
         },
         '../utils/appUtilities': {
           getContainerStorage: sinon.stub().returns(0),
@@ -562,14 +522,8 @@ describe('appInspector tests', () => {
           ensureString: sinon.stub().returnsArg(0),
           dockerBufferToString: sinon.stub().returns('some data'),
         },
-        '../dbHelper': {
-          databaseConnection: sinon.stub(),
-        },
         '../verificationHelper': {
           verifyPrivilege: sinon.stub().resolves(true),
-        },
-        '../utils/appConstants': {
-          appConstants: {},
         },
         '../utils/appUtilities': {
           getContainerStorage: sinon.stub().returns(0),
@@ -613,14 +567,8 @@ describe('appInspector tests', () => {
           ensureString: sinon.stub().returnsArg(0),
           dockerBufferToString: sinon.stub().returns('some data'),
         },
-        '../dbHelper': {
-          databaseConnection: sinon.stub(),
-        },
         '../verificationHelper': {
           verifyPrivilege: sinon.stub().resolves(true),
-        },
-        '../utils/appConstants': {
-          appConstants: {},
         },
         '../utils/appUtilities': {
           getContainerStorage: sinon.stub().returns(0),
@@ -689,15 +637,8 @@ describe('appInspector tests', () => {
         '../serviceHelper': {
           ensureString: sinon.stub().returnsArg(0),
         },
-        '../dbHelper': {
-          databaseConnection: sinon.stub(),
-        },
         '../verificationHelper': {
           verifyPrivilege: sinon.stub().resolves(false),
-        },
-        '../utils/appConstants': {
-          '../appQuery/appQueryService': {          },
-          appConstants: {},
         },
         '../utils/appUtilities': {
           getContainerStorage: sinon.stub().returns(0),
@@ -820,15 +761,8 @@ describe('appInspector tests', () => {
         '../serviceHelper': {
           ensureString: sinon.stub().returnsArg(0),
         },
-        '../dbHelper': {
-          databaseConnection: sinon.stub(),
-        },
         '../verificationHelper': {
           verifyPrivilege: sinon.stub().resolves(false),
-        },
-        '../utils/appConstants': {
-          '../appQuery/appQueryService': {          },
-          appConstants: {},
         },
         '../utils/appUtilities': {
           getContainerStorage: sinon.stub().returns(0),
@@ -975,15 +909,8 @@ describe('appInspector tests', () => {
         '../serviceHelper': {
           ensureString: sinon.stub().returnsArg(0),
         },
-        '../dbHelper': {
-          databaseConnection: sinon.stub(),
-        },
         '../verificationHelper': {
           verifyPrivilege: sinon.stub().resolves(false),
-        },
-        '../utils/appConstants': {
-          '../appQuery/appQueryService': {          },
-          appConstants: {},
         },
         '../utils/appUtilities': {
           getContainerStorage: sinon.stub().returns(0),
@@ -1035,14 +962,8 @@ describe('appInspector tests', () => {
         '../serviceHelper': {
           ensureString: sinon.stub().returnsArg(0),
         },
-        '../dbHelper': {
-          databaseConnection: sinon.stub(),
-        },
         '../verificationHelper': {
           verifyPrivilege: sinon.stub().resolves(true),
-        },
-        '../utils/appConstants': {
-          appConstants: {},
         },
         '../utils/appUtilities': {
           getContainerStorage: sinon.stub().returns(0),
@@ -1087,14 +1008,8 @@ describe('appInspector tests', () => {
         '../serviceHelper': {
           ensureString: sinon.stub().returnsArg(0),
         },
-        '../dbHelper': {
-          databaseConnection: sinon.stub(),
-        },
         '../verificationHelper': {
           verifyPrivilege: sinon.stub().resolves(true),
-        },
-        '../utils/appConstants': {
-          appConstants: {},
         },
         '../utils/appUtilities': {
           getContainerStorage: sinon.stub().returns(0),
@@ -1161,15 +1076,8 @@ describe('appInspector tests', () => {
         '../serviceHelper': {
           ensureString: sinon.stub().returnsArg(0),
         },
-        '../dbHelper': {
-          databaseConnection: sinon.stub(),
-        },
         '../verificationHelper': {
           verifyPrivilege: sinon.stub().resolves(false),
-        },
-        '../utils/appConstants': {
-          '../appQuery/appQueryService': {          },
-          appConstants: {},
         },
         '../utils/appUtilities': {
           getContainerStorage: sinon.stub().returns(0),

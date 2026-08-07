@@ -35,7 +35,6 @@ describe('peerNotification tests', () => {
   let listInstalledAppsStub;
   let listInstalledIdentitiesStub;
   let broadcastAllStub;
-  let listRunningAppsStub;
   let drainingAppsMap;
 
   beforeEach(() => {
@@ -56,10 +55,6 @@ describe('peerNotification tests', () => {
     // the installed set is the identity authority - docker is not consulted
     listInstalledIdentitiesStub = sinon.stub().resolves([]);
     broadcastAllStub = sinon.stub().resolves();
-    listRunningAppsStub = sinon.stub().resolves({
-      status: 'success',
-      data: [{ Names: ['/fluxc1_app1'] }],
-    });
     drainingAppsMap = new Map();
 
     peerNotification = proxyquire('../../ZelBack/src/services/appMessaging/peerNotification', {
@@ -187,10 +182,11 @@ describe('peerNotification tests', () => {
       ]);
     });
 
-    it('broadcasts an installed app as present even when no container is running', async () => {
-      // Container is down: nothing running. Presence is assignment, not liveness.
-      listRunningAppsStub.resolves({ status: 'success', data: [] });
-
+    it('broadcasts an installed app as present whatever its containers are doing', async () => {
+      // Presence is assignment, not liveness — so there is nothing to arrange
+      // here: the module has no way to learn a container's state. That it
+      // cannot is enforced by peerNotification.guard.test.js; this asserts the
+      // consequence, that an installed app is announced regardless.
       await peerNotification.checkAndNotifyPeersOfRunningApps();
 
       const message = broadcastAllStub.firstCall.args[0];

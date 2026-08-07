@@ -11,20 +11,10 @@ const generalService = require('../../ZelBack/src/services/generalService');
 const deviceHelper = require('../../ZelBack/src/services/deviceHelper');
 const { requireMongo } = require('./dbTestHelper');
 
-const adminConfig = {
-  fluxTeamFluxID: '1zasdfg',
-  initial: {
-    ipaddress: '83.51.212.243',
-    zelid: '1CbErtneaX2QVyUfwU7JGB7VzvPgrgc3uC',
-    kadena: '1234kadena',
-    apiport: '5550',
-    testnet: true,
-  },
-};
 
 const fluxshareService = proxyquire(
   '../../ZelBack/src/services/fluxshareService',
-  { '../../../config/userconfig': adminConfig },
+  { },
 );
 
 chai.use(chaiAsPromised);
