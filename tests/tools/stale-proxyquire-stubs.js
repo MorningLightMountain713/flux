@@ -20,7 +20,11 @@ const REPO = path.resolve(__dirname, '..', '..');
 const TEST_GLOB_DIR = path.join(REPO, 'tests', 'unit');
 
 const REQUIRE_RE = /require\(\s*['"]([^'"]+)['"]\s*\)/g;
-const PROXYQUIRE_RE = /proxyquire\(\s*[`'"]([^`'"]+)[`'"]\s*,/g;
+// proxyquire is called bare, through .load(), and through any number of chained
+// modifiers — proxyquire.noCallThru()(...) and .noCallThru().load(...) both run.
+const PROXYQUIRE_RE = /\bproxyquire(?![\w$])(?:\s*\.\s*\w+\s*(?:\(\s*\))?)*\s*\(\s*[`'"]([^`'"]+)[`'"]\s*,/g;
+
+const WHITESPACE = ' \t\r\n';
 
 /** Every module string a file requires, top-level or inline. */
 function requiresOf(file) {
@@ -30,58 +34,124 @@ function requiresOf(file) {
   return found;
 }
 
-/** Index of the '}' closing the object literal that opens at src[start]. */
-function matchBrace(src, start) {
-  let depth = 0;
-  let inString = false;
-  let quote = '';
-  let escaped = false;
-  for (let i = start; i < src.length; i += 1) {
+/**
+ * Index of the next character that is neither whitespace nor a comment.
+ *
+ * Comments have to go before anything else looks at the text: an apostrophe in
+ * `// don't` would otherwise open a string that runs to the end of the map.
+ */
+function skipTrivia(src, from) {
+  let i = from;
+  while (i < src.length) {
     const c = src[i];
-    if (inString) {
-      if (escaped) escaped = false;
-      else if (c === '\\') escaped = true;
-      else if (c === quote) inString = false;
-    } else if (c === "'" || c === '"' || c === '`') {
-      inString = true;
-      quote = c;
-    } else if (c === '{') depth += 1;
-    else if (c === '}') {
-      depth -= 1;
-      if (depth === 0) return i;
+    if (WHITESPACE.includes(c)) {
+      i += 1;
+      continue;
     }
+    if (c === '/' && src[i + 1] === '/') {
+      const nl = src.indexOf('\n', i);
+      if (nl === -1) return src.length;
+      i = nl + 1;
+      continue;
+    }
+    if (c === '/' && src[i + 1] === '*') {
+      const end = src.indexOf('*/', i + 2);
+      if (end === -1) return src.length;
+      i = end + 2;
+      continue;
+    }
+    return i;
   }
-  return -1;
+  return src.length;
 }
 
-/** Keys at depth 1 of an object literal — nested objects are not stub keys. */
-function topLevelKeys(block) {
+/** Index just past the string literal opening at src[start]. */
+function skipString(src, start) {
+  const quote = src[start];
+  for (let i = start + 1; i < src.length; i += 1) {
+    if (src[i] === '\\') i += 1;
+    else if (src[i] === quote) return i + 1;
+  }
+  return src.length;
+}
+
+function isIdentifierStart(c) {
+  return c !== undefined && /[A-Za-z_$]/.test(c);
+}
+
+/**
+ * The stub keys and the closing brace of the object literal opening at src[open].
+ *
+ * Only key position is read. A bare identifier names a module to proxyquire just
+ * as much as a quoted one, but identifiers appear all over the values too —
+ * `key: cond ? a : b` puts one right before a colon — so a key is recognised
+ * solely where one can occur: opening the object, or after a top-level comma.
+ */
+function readStubMap(src, open) {
   const keys = [];
   let depth = 0;
-  let inString = false;
-  let quote = '';
-  let escaped = false;
-  let start = -1;
-  for (let i = 0; i < block.length; i += 1) {
-    const c = block[i];
-    if (inString) {
-      if (escaped) { escaped = false; continue; }
-      if (c === '\\') { escaped = true; continue; }
-      if (c !== quote) continue;
-      inString = false;
-      if (depth === 1) {
-        let j = i + 1;
-        while (j < block.length && ' \t\n'.includes(block[j])) j += 1;
-        if (block[j] === ':') keys.push(block.slice(start + 1, i));
+  let expectKey = false;
+  let i = open;
+  while (i < src.length) {
+    i = skipTrivia(src, i);
+    if (i >= src.length) break;
+    const c = src[i];
+
+    if (depth === 1 && expectKey && (isIdentifierStart(c) || c === "'" || c === '"' || c === '`')) {
+      let end;
+      let key;
+      if (isIdentifierStart(c)) {
+        end = i;
+        while (end < src.length && /[\w$]/.test(src[end])) end += 1;
+        key = src.slice(i, end);
+      } else {
+        end = skipString(src, i);
+        key = src.slice(i + 1, end - 1);
       }
-    } else if (c === "'" || c === '"' || c === '`') {
-      inString = true;
-      quote = c;
-      start = i;
-    } else if ('{(['.includes(c)) depth += 1;
-    else if ('})]'.includes(c)) depth -= 1;
+      const next = skipTrivia(src, end);
+      // A shorthand property is a key too; `async foo()` and `get x()` are not.
+      if (src[next] === ':') {
+        keys.push(key);
+        i = next + 1;
+      } else if (src[next] === ',' || src[next] === '}') {
+        keys.push(key);
+        i = next;
+      } else i = next;
+      expectKey = false;
+      continue;
+    }
+    expectKey = false;
+
+    if (c === "'" || c === '"' || c === '`') {
+      i = skipString(src, i);
+      continue;
+    }
+    if ('{(['.includes(c)) {
+      depth += 1;
+      if (depth === 1) expectKey = true;
+      i += 1;
+      continue;
+    }
+    if ('})]'.includes(c)) {
+      depth -= 1;
+      if (depth === 0) return { keys, close: i };
+      i += 1;
+      continue;
+    }
+    if (c === ',' && depth === 1) expectKey = true;
+    i += 1;
   }
-  return keys;
+  return { keys, close: -1 };
+}
+
+/** The `const P = '...'` in scope at src[before], i.e. the nearest one above it. */
+function prefixBefore(src, before) {
+  let value = '${P}';
+  for (const m of src.matchAll(/const P = '([^']+)'/g)) {
+    if (m.index > before) break;
+    value = m[1];
+  }
+  return value;
 }
 
 function testFiles(dir) {
@@ -99,21 +169,27 @@ function scan() {
   for (const testFile of testFiles(TEST_GLOB_DIR)) {
     const src = fs.readFileSync(testFile, 'utf8');
     for (const m of src.matchAll(PROXYQUIRE_RE)) {
-      // Template-literal targets carry a variable prefix; resolve the common one.
-      const target = m[1].replace('${P}', '../../ZelBack/src/services');
+      // Template-literal targets carry a variable prefix. Read it from the
+      // declaration in scope — files disagree on what P points at, and a guess
+      // that resolves to no file leaves the whole map unchecked in silence.
+      const target = m[1].replace('${P}', prefixBefore(src, m.index));
       if (target.includes('${')) continue;
 
-      const brace = src.indexOf('{', m.index + m[0].length);
-      if (brace === -1) continue;
-      const close = matchBrace(src, brace);
+      // A map built elsewhere and passed by name has no keys to read here. The
+      // brace that follows belongs to some later, unrelated object.
+      const open = skipTrivia(src, m.index + m[0].length);
+      if (src[open] !== '{') continue;
+      const { keys, close } = readStubMap(src, open);
       if (close === -1) continue;
 
       let modulePath = path.resolve(path.dirname(testFile), target);
-      if (!modulePath.endsWith('.js')) modulePath += '.js';
+      if (!modulePath.endsWith('.js')) {
+        modulePath = fs.existsSync(`${modulePath}.js`) ? `${modulePath}.js` : path.join(modulePath, 'index.js');
+      }
       if (!fs.existsSync(modulePath)) continue;
 
       const reqs = requiresOf(modulePath);
-      for (const key of topLevelKeys(src.slice(brace, close + 1))) {
+      for (const key of keys) {
         if (key.startsWith('@')) continue; // proxyquire directive, not a module
         if (reqs.has(key)) continue;
         const rel = path.relative(REPO, testFile);
