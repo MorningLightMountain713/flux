@@ -22,7 +22,11 @@ const TEST_GLOB_DIR = path.join(REPO, 'tests', 'unit');
 const REQUIRE_RE = /require\(\s*['"]([^'"]+)['"]\s*\)/g;
 // proxyquire is called bare, through .load(), and through any number of chained
 // modifiers — proxyquire.noCallThru()(...) and .noCallThru().load(...) both run.
-const PROXYQUIRE_RE = /\bproxyquire(?![\w$])(?:\s*\.\s*\w+\s*(?:\(\s*\))?)*\s*\(\s*[`'"]([^`'"]+)[`'"]\s*,/g;
+// Every proxyquire call, whatever its arguments look like. Deliberately not
+// anchored on a quoted first argument: a call this does not match is a call
+// nobody counts, and an uncounted call is the blind spot this tool exists to
+// not have. Matching them all lets each be either checked or reported skipped.
+const PROXYQUIRE_RE = /\bproxyquire(?![\w$])(?:\s*\.\s*\w+\s*(?:\(\s*\))?)*\s*\(/g;
 
 const WHITESPACE = ' \t\r\n';
 
@@ -166,28 +170,45 @@ function testFiles(dir) {
 
 function scan() {
   const findings = new Map();
+  // What was read and what was not. A checker that reports only findings lets a
+  // call it could not parse read as a call with nothing wrong.
+  const seen = { checked: 0, variableMap: 0, unreadableTarget: 0, unbalanced: 0 };
+
   for (const testFile of testFiles(TEST_GLOB_DIR)) {
     const src = fs.readFileSync(testFile, 'utf8');
     for (const m of src.matchAll(PROXYQUIRE_RE)) {
+      let i = skipTrivia(src, m.index + m[0].length);
+
+      // The module under test. Anything but a string literal — a constant, an
+      // expression — cannot be resolved to a file to compare against.
+      if (!'\'"`'.includes(src[i])) { seen.unreadableTarget += 1; continue; }
+      const quote = src[i];
+      const closeQuote = src.indexOf(quote, i + 1);
+      if (closeQuote === -1) { seen.unreadableTarget += 1; continue; }
+
       // Template-literal targets carry a variable prefix. Read it from the
       // declaration in scope — files disagree on what P points at, and a guess
       // that resolves to no file leaves the whole map unchecked in silence.
-      const target = m[1].replace('${P}', prefixBefore(src, m.index));
-      if (target.includes('${')) continue;
+      const target = src.slice(i + 1, closeQuote).replace('${P}', prefixBefore(src, m.index));
+      if (target.includes('${')) { seen.unreadableTarget += 1; continue; }
+
+      i = skipTrivia(src, closeQuote + 1);
+      if (src[i] !== ',') { seen.unreadableTarget += 1; continue; }
 
       // A map built elsewhere and passed by name has no keys to read here. The
       // brace that follows belongs to some later, unrelated object.
-      const open = skipTrivia(src, m.index + m[0].length);
-      if (src[open] !== '{') continue;
+      const open = skipTrivia(src, i + 1);
+      if (src[open] !== '{') { seen.variableMap += 1; continue; }
       const { keys, close } = readStubMap(src, open);
-      if (close === -1) continue;
+      if (close === -1) { seen.unbalanced += 1; continue; }
 
       let modulePath = path.resolve(path.dirname(testFile), target);
       if (!modulePath.endsWith('.js')) {
         modulePath = fs.existsSync(`${modulePath}.js`) ? `${modulePath}.js` : path.join(modulePath, 'index.js');
       }
-      if (!fs.existsSync(modulePath)) continue;
+      if (!fs.existsSync(modulePath)) { seen.unreadableTarget += 1; continue; }
 
+      seen.checked += 1;
       const reqs = requiresOf(modulePath);
       for (const key of keys) {
         if (key.startsWith('@')) continue; // proxyquire directive, not a module
@@ -200,10 +221,10 @@ function scan() {
       }
     }
   }
-  return findings;
+  return { findings, seen };
 }
 
-const findings = scan();
+const { findings, seen } = scan();
 let total = 0;
 for (const [testFile, byTarget] of findings) {
   console.log(testFile);
@@ -216,5 +237,12 @@ for (const [testFile, byTarget] of findings) {
   }
 }
 console.log(`\nfiles: ${findings.size}   stale keys: ${total}`);
+// Say what was NOT read. Zero findings over a fraction of the tree is not a
+// clean tree, and the difference has to be visible or the number gets believed.
+const unread = seen.variableMap + seen.unreadableTarget + seen.unbalanced;
+console.log(`maps checked: ${seen.checked}   not read: ${unread}`
+  + ` (map passed by variable: ${seen.variableMap},`
+  + ` target not a readable literal: ${seen.unreadableTarget},`
+  + ` map did not close: ${seen.unbalanced})`);
 
 if (process.argv.includes('--strict') && total > 0) process.exit(1);
