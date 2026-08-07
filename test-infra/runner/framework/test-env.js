@@ -40,6 +40,7 @@ import chainStart from './chain-start.cjs';
 import { assertCoupledRatios, loadSharedConfig } from './coupled-knobs.js';
 import { startSyncedDataKeeper } from './synced-data-keeper.js';
 import { assertFluxSpecVendorCurrent, NODE_IMAGE } from './flux-spec-vendor.js';
+import { assertNodeConfigsCurrent } from './node-configs.js';
 
 // How long after a re-attach the collector goes on treating an exact repeat as docker
 // replaying a line it already has. Docker's `since` is whole-second, so the replay is over
@@ -1031,6 +1032,10 @@ export async function createTestEnv({
   // vendor lagging the branch surfaces as a product mystery minutes later,
   // and only in suites that install something.
   assertFluxSpecVendorCurrent();
+  // Same reasoning for the fleet's own configs: a collection production
+  // declares and a node config lacks fails as a product mystery, or as a
+  // startup that never finishes.
+  assertNodeConfigsCurrent();
   if (syncthing !== 'stub' && syncthing !== 'binary') {
     throw new Error(`createTestEnv: syncthing must be 'stub' or 'binary', got '${syncthing}'`);
   }

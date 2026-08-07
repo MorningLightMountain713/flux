@@ -16,9 +16,11 @@ module.exports = {
             "benchmark": "benchmark",
             "appTamperingEvents": "apptamperingevents",
             "nodeStartupTracker": "nodestartuptracker",
+            "nodeIdentity": "nodeidentity",
             "policyDocuments": "policydocuments",
             "ipRanges": "ipranges",
-            "nodeLocations": "nodelocations"
+            "nodeLocations": "nodelocations",
+            "ownAddress": "ownaddress"
         }
     },
     "daemon": {
@@ -35,7 +37,12 @@ module.exports = {
     "appslocal": {
         "database": "node12_localzelapps",
         "collections": {
-            "appsInformation": "zelappsinformation"
+            "appsInformation": "zelappsinformation",
+            "appsRuntimeState": "zelappsruntimestate",
+            "appsPlacements": "zelappsplacements",
+            "pendingAppTeardowns": "zelappspendingteardowns",
+            "cachedImages": "cachedimages",
+            "playgroundSessions": "playgroundsessions"
         }
     },
     "appsglobal": {
@@ -45,14 +52,32 @@ module.exports = {
             "appsInformation": "zelappsinformation",
             "appsTemporaryMessages": "zelappstemporarymessages",
             "appsInstallingLocations": "appsinstallinglocations",
+            "limitCounterRecords": "limitcounterrecords",
             "appsInstallingErrorsLocations": "appsInstallingErrorsLocations",
-            "appContentManifests": "appcontentmanifests"
+            "appStateEvents": "appstateevents",
+            "appsInstallingBroadcasts": "fluxappinstallingbroadcasts",
+            "appsInstallingErrorsBroadcasts": "fluxappinstallingerrorsbroadcasts",
+            "appContentManifests": "appcontentmanifests",
+            "appsIngressAttestations": "appingressattestations",
+            "appsIngressAttestationDigests": "appingressattestationdigests"
+        }
+    },
+    "marketplace": {
+        "database": "node12_marketplace",
+        "collections": {
+            "templates": "marketplacetemplates"
         }
     },
     "chainparams": {
         "database": "node12_chainparams",
         "collections": {
-            "chainMessages": "chainmessages"
+            "chainMessages": "chainmessages",
+            "priceMessages": "pricemessages",
+            "rateMessages": "ratemessages",
+            "priceModifierMessages": "pricemodifiermessages",
+            "oracleKeyMessages": "oraclekeymessages",
+            "marketplacePricingMessages": "marketplacepricingmessages",
+            "policyGroupMessages": "policygroupmessages"
         }
     }
 },

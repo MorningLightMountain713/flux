@@ -61,7 +61,7 @@ module.exports = {
     apiBaseUrl: 'http://31.200.0.6:3000',
   },
   policy: {
-    baseUrl: 'http://198.18.0.6:3000/helpers',
+    baseUrl: 'http://31.200.0.6:3000/helpers',
   },
   geolocation: {
     ipApiBaseUrl: 'http://31.200.0.6:3000',
@@ -118,7 +118,7 @@ module.exports = {
   // .8. The prod default.js (blobApiUrl: '') is not on the node config search
   // path, so this default is what default-base runs resolve; non-default bases
   // get the base-derived override from test-env infraOverride.
-  fluxDrive: { blobApiUrl: 'http://198.18.0.8:16140' },
+  fluxDrive: { blobApiUrl: 'http://31.200.0.8:16140' },
   // The network arcane-attestation pubkey the node verifies encrypted-app
   // attestations against. Overrides the production constant in
   // utils/arcaneAttestation.js with the benchmark stub's deterministic test key
