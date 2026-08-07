@@ -47,7 +47,6 @@ describe('daemonHealthMonitor tests', () => {
 
     // Use proxyquire to inject stubs
     daemonHealthMonitor = proxyquire.noCallThru()('../../ZelBack/src/services/appMonitoring/daemonHealthMonitor', {
-      '../serviceHelper': serviceHelperStub,
       '../../lib/log': logStub,
       '../daemonService/daemonServiceMiscRpcs': daemonServiceMiscRpcsStub,
       '../appDatabase/appsRepository': appsRepositoryStub,

@@ -26,9 +26,7 @@ describe('componentProvisioner tests', () => {
     mapUpnpPortStub = sinon.stub().resolves(true);
     provisionCertStub = certError ? sinon.stub().rejects(certError) : sinon.stub().resolves();
     return proxyquire.load('../../ZelBack/src/services/appLifecycle/componentProvisioner', {
-      config: { fluxapps: { maxImageSize: 10000000000 } },
       '../../lib/log': { info: sinon.stub(), warn: sinon.stub(), error: sinon.stub() },
-      '../serviceHelper': { delay: sinon.stub().resolves(), axiosGet: sinon.stub().resolves({ data: {} }) },
       '../dockerService': {
         appDockerCreate: appDockerCreateStub,
         appDockerImageSize: appDockerImageSizeStub,
@@ -45,7 +43,6 @@ describe('componentProvisioner tests', () => {
       './backendTlsService': { provisionCert: provisionCertStub },
       '../utils/volumeService': { verifyAppVolumeMount: sinon.stub().resolves() },
       '../telemetryIdentityService': { onComponentCreated: sinon.stub().resolves() },
-      '../appManagement/appInspector': { startAppMonitoring: sinon.stub() },
       '../appManagement/appsRuntimeState': { isCondemned: isCondemnedStub || sinon.stub().resolves(false) },
       './pendingTeardownStore': { teardownOwedFor: sinon.stub().resolves(teardownOwed) },
       util: { promisify: () => async () => { if (pullError) throw pullError; return 'pulled'; } },
@@ -279,9 +276,7 @@ describe('componentProvisioner tests', () => {
 
     it('throws on an unusable image (so the pre-flight aborts before teardown)', async () => {
       const provisioner = proxyquire.load('../../ZelBack/src/services/appLifecycle/componentProvisioner', {
-        config: { fluxapps: { maxImageSize: 10000000000 } },
         '../../lib/log': { info: sinon.stub(), warn: sinon.stub(), error: sinon.stub() },
-        '../serviceHelper': { delay: sinon.stub().resolves() },
         '../dockerService': {},
         '../fluxNetworkHelper': {},
         '../upnpService': {},
@@ -292,7 +287,6 @@ describe('componentProvisioner tests', () => {
         './appSwapPoolService': {},
         '../utils/volumeService': {},
         '../telemetryIdentityService': {},
-        '../appManagement/appInspector': {},
         '../appManagement/appsRuntimeState': { isCondemned: sinon.stub().resolves(false) },
         './pendingTeardownStore': { teardownOwedFor: sinon.stub().resolves(false) },
         util: { promisify: () => async () => 'pulled' },
