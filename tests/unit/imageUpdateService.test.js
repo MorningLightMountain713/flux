@@ -30,7 +30,6 @@ const imageReaperStub = {
   pruneUnusedImages: sinon.stub(),
 };
 
-const appsRepositoryStub = {};
 
 const appOperationsStub = {
   redeployApplication: sinon.stub(),
@@ -79,7 +78,6 @@ const imageUpdateService = proxyquire('../../ZelBack/src/services/imageUpdateSer
   '../lib/log': logStub,
   './dockerService': dockerServiceStub,
   './appRuntime/deploymentProvider': deploymentProviderStub,
-  './appDatabase/appsRepository': appsRepositoryStub,
   './appLifecycle/appOperations': appOperationsStub,
   './appLifecycle/imageCacheService': imageCacheServiceStub,
   './appLifecycle/imageReaper': imageReaperStub,

@@ -106,9 +106,6 @@ describe('appQueryService tests', () => {
       '../appDatabase/registryManager': registryManagerStub,
       '../appDatabase/appsRepository': appsRepositoryStub,
       '../../lib/log': logStub,
-      '../utils/appConstants': proxyquire('../../ZelBack/src/services/utils/appConstants', {
-        config: configStub,
-      }),
       '../utils/specLibs': {
         getSpecBackend: async () => ({
           LABEL_KEYS: { IDENTIFIER: 'io.runonflux.identifier', APP: 'io.runonflux.app' },

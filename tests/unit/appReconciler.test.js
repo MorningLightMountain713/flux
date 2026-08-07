@@ -199,7 +199,6 @@ describe('appReconciler tests', () => {
       '../appManagement/dockerOperations': stubs.dockerOperations,
       '../serviceHelper': stubs.serviceHelper,
       '../telemetrySinkCache': stubs.telemetrySinkCache,
-      '../utils/appConstants': { localAppsInformation: 'zelappsinformation' },
       // The identifier rule comes from flux-spec itself now, awaited, rather
       // than through the retired sync bridge.
       '../utils/specLibs': {

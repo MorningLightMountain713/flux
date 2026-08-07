@@ -96,9 +96,6 @@ describe('peerNotification tests', () => {
       '../utils/specCutover': {
         resolveInstantiatedSpec: resolveInstantiatedStub,
       },
-      '../appQuery/appQueryService': {
-        listRunningApps: listRunningAppsStub,
-      },
       '../nodeConfirmationService': {
         canSendMessages: sinon.stub().returns(true),
         onMessageCapabilityChange: sinon.stub(),
@@ -264,7 +261,6 @@ describe('peerNotification tests', () => {
         '../utils/fluxEventBus': { publish: sinon.stub() },
         '../../lib/log': logStub,
         // no dockerService stub: noCallThru would throw on any require of it
-        '../dockerService': null,
       });
 
       await dockerless.checkAndNotifyPeersOfRunningApps();

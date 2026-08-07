@@ -130,7 +130,6 @@ describe('appTamperingDetectionService tests', () => {
       '../lib/log': logStub,
       './generalService': generalServiceStub,
       './daemonService/daemonServiceFluxnodeRpcs': fluxnodeRpcsStub,
-      './utils/appConstants': { localAppsInformation: 'zelappsinformation' },
       './messageHelper': {
         createDataMessage: (d) => ({ status: 'success', data: d }),
         createErrorMessage: (m) => ({ status: 'error', data: { message: m } }),

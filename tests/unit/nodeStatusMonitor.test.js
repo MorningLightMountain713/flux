@@ -32,16 +32,8 @@ describe('nodeStatusMonitor tests', () => {
           },
         },
       },
-      '../dbHelper': {
-        databaseConnection: sinon.stub(),
-        distinctDatabase: sinon.stub(),
-        removeDocumentsFromCollection: sinon.stub(),
-      },
       '../serviceHelper': {
         delay: sinon.stub().resolves(),
-      },
-      '../generalService': {
-        isNodeStatusConfirmed: sinon.stub().resolves(true),
       },
       '../nodeDosState': {
         isNodeDos: sinon.stub().returns(false),

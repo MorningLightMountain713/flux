@@ -9,10 +9,6 @@ const proxyquire = require('proxyquire').noCallThru();
 const operationRegistry = require('../../ZelBack/src/services/utils/operationRegistry');
 
 // Create mocks for all dependencies
-const dbHelperMock = {
-  databaseConnection: sinon.stub(),
-  findInDatabase: sinon.stub(),
-};
 
 const serviceHelperMock = {
   delay: sinon.stub().resolves(),
@@ -94,7 +90,6 @@ const appReconcilerMock = {
 
 // Load module with mocked dependencies
 const syncthingMonitor = proxyquire('../../ZelBack/src/services/appMonitoring/syncthingMonitor', {
-  '../dbHelper': dbHelperMock,
   '../serviceHelper': serviceHelperMock,
   '../dockerService': dockerServiceMock,
   '../fluxNetworkHelper': fluxNetworkHelperMock,
