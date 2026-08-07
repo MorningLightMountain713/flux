@@ -224,7 +224,10 @@ async function startFluxNode(req, res) {
 async function viewDeterministicFluxNodeList(req, res) {
   let { filter, useCache } = req.params;
   filter = filter || req.query.filter;
-  useCache = (useCache || req.query.useCache) ?? false;
+  // Query values arrive as strings, and 'false' is truthy — read plainly it switched
+  // the cache on, which is the opposite of what it says and parks a ~7 MB list in a
+  // 50 entry bucket. Uncached unless asked, since that is what this list wants.
+  useCache = serviceHelper.ensureBoolean(useCache ?? req.query.useCache) === true;
 
   const rpccall = 'viewdeterministiczelnodelist'; // viewdeterministicfluxnodelist
   const rpcparameters = [];

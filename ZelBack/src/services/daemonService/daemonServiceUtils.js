@@ -221,7 +221,13 @@ function invalidateCachesFromHeight(forkHeight) {
 
     const identifier = Array.isArray(params) ? params[0] : params;
 
-    if (typeof identifier === 'number' && identifier > forkHeight) {
+    // The handler stringifies hashheight before the params are built, so the identifier
+    // is a string even when it names a height. Comparing on type dropped nothing at all.
+    // A hash is not a number and is deliberately kept: a hash names the same block
+    // whichever chain wins, so only height-keyed entries can go stale across a fork.
+    const height = typeof identifier === 'number' ? identifier : Number(identifier);
+
+    if (Number.isFinite(height) && height > forkHeight) {
       blockCache.delete(key);
       blocks += 1;
     }

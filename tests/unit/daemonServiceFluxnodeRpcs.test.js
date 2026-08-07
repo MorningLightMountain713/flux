@@ -308,6 +308,41 @@ describe('daemonServiceFluxnodeRpcs tests', () => {
       sinon.assert.calledOnceWithExactly(daemonServiceUtilsStub, ...expectedArgs);
     });
 
+    it('should keep the cache off when the query says false', async () => {
+      // Query values are strings and 'false' is truthy, so read plainly this asked
+      // for the cache it was trying to decline.
+      daemonServiceUtilsStub.returns('success');
+      const req = { params: {}, query: { useCache: 'false' } };
+
+      await daemonServiceFluxnodeRpcs.viewDeterministicFluxNodeList(req);
+
+      sinon.assert.calledOnceWithExactly(
+        daemonServiceUtilsStub, 'viewdeterministiczelnodelist', [], { useCache: false },
+      );
+    });
+
+    it('should turn the cache on only when the query says true', async () => {
+      daemonServiceUtilsStub.returns('success');
+      const req = { params: {}, query: { useCache: 'true' } };
+
+      await daemonServiceFluxnodeRpcs.viewDeterministicFluxNodeList(req);
+
+      sinon.assert.calledOnceWithExactly(
+        daemonServiceUtilsStub, 'viewdeterministiczelnodelist', [], { useCache: true },
+      );
+    });
+
+    it('should not cache on an unrecognised value', async () => {
+      daemonServiceUtilsStub.returns('success');
+      const req = { params: {}, query: { useCache: 'yes please' } };
+
+      await daemonServiceFluxnodeRpcs.viewDeterministicFluxNodeList(req);
+
+      sinon.assert.calledOnceWithExactly(
+        daemonServiceUtilsStub, 'viewdeterministiczelnodelist', [], { useCache: false },
+      );
+    });
+
     it('should trigger rpc, response passed', async () => {
       daemonServiceUtilsStub.returns('success');
       const req = {
