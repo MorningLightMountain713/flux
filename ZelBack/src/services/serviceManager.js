@@ -88,6 +88,7 @@ const appsRuntimeState = require('./appManagement/appsRuntimeState');
 const appPlacements = require('./appManagement/appPlacements');
 const imageCacheStore = require('./appLifecycle/imageCacheStore');
 const appsRepository = require('./appDatabase/appsRepository');
+const deploymentProvider = require('./appRuntime/deploymentProvider');
 const playgroundAudit = require('./appPlayground/playgroundAudit');
 const playgroundService = require('./appPlayground/playgroundService');
 const admissionControl = require('./utils/admissionControl');
@@ -416,6 +417,17 @@ async function startFluxFunctions() {
     await untilSucceeds('Database schema preparation', prepareDatabaseSchema);
     await appsRepository.backfillGlobalAppUuids().catch((error) => {
       log.error(`Deriving instance identities failed: ${error.message}`);
+    });
+    // Rows written before the identifier index existed. The resolver lives here
+    // rather than in the repository because building a deployment needs the
+    // resolved spec, and the repository must not depend on what resolves it.
+    await appsRepository.backfillComponentIdentifiers(async (name, replica) => {
+      const installed = await appsRepository.getInstalledApp(name);
+      if (!installed) return null;
+      const deployment = await deploymentProvider.buildDeployment(installed, { replica });
+      return deployment ? deployment.componentEntries().map(([, comp]) => comp.identifier) : null;
+    }).catch((error) => {
+      log.error(`Recording component identifiers failed: ${error.message}`);
     });
     // Who gives capacity back when paid work cannot otherwise fit. Registered
     // rather than imported: admissionControl is depended on by every resource
