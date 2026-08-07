@@ -25,6 +25,7 @@ import { MongoClient } from 'mongodb';
 import { authenticate } from '../auth.js';
 import { fluxTeamKey, nodeKey } from './keys.js';
 import { assertFluxSpecVendorCurrent, NODE_IMAGE } from './flux-spec-vendor.js';
+import { assertNodeConfigsCurrent } from './node-configs.js';
 
 function createLogCollector() {
   // Each entry is { t, line }: t is the capture wall-clock (ISO), line is the raw
@@ -443,6 +444,10 @@ export async function createTestEnv({
   // vendor lagging the branch surfaces as a product mystery minutes later,
   // and only in suites that install something.
   assertFluxSpecVendorCurrent();
+  // Same reasoning for the fleet's own configs: a collection production
+  // declares and a node config lacks fails as a product mystery, or as a
+  // startup that never finishes.
+  assertNodeConfigsCurrent();
   // The boot-lock queue wait must not count against the suite's hook budget.
   // Mocha enforces a hook's timeout twice: the watchdog timer (which would fire
   // MID-QUEUE whenever the queue alone outlasts the budget), and a completion-time
