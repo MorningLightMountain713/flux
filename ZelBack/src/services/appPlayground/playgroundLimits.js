@@ -166,10 +166,15 @@ const NODE_KEY = 'node';
 
 /**
  * The caller a per-identity limit is charged to. Keyed on the FluxID AND the
- * observed socket peer because each is weak alone: FluxIDs are free to mint, and
- * an address is one request from elsewhere away from being a different caller.
- * The address is the socket's, never x-forwarded-for - that header is
- * client-controlled, so keying on it would let a caller reset their own limit.
+ * caller's address because each is weak alone: FluxIDs are free to mint, and an
+ * address is one request from elsewhere away from being a different caller.
+ *
+ * The address is the RESOLVED one (ingressCapture.resolveClientIp), which reads
+ * the forwarding header only when the connection came from one of the balancers
+ * in config.fdmAddresses. A caller still cannot reset their own limit with it:
+ * connecting directly makes the peer unrecognised and the header is ignored
+ * outright, and going through a balancer means the balancer appends what it saw
+ * after anything they wrote, which is the entry this reads.
  */
 function callerKey(fluxId, sourceIp) {
   return `${fluxId}|${sourceIp ?? ''}`;
