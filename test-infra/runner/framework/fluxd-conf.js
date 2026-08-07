@@ -16,12 +16,19 @@ const confFixturesDir = join(__dirname, '..', '..', 'fixtures', 'conf');
 // the rest on a real node, so the default set carries it too.
 export const ZMQ_CONF_TOPICS = ['hashblock', 'hashblockheight', 'chainreorg', 'fluxnodelistdelta', 'fluxnodestatus'];
 
-// fluxnodestatus is left out of the default: it carries ONE node's own
-// deterministic-list state, and the harness runs a single daemon stub for the whole
-// fleet, so publishing it would tell every node it is the same node. A suite that wants
-// that path asks for it — in practice on a one-node fleet — and drives it with
-// daemon-control's publishZmq.
-export const DEFAULT_ZMQ_TOPICS = ['hashblock', 'hashblockheight', 'chainreorg', 'fluxnodelistdelta'];
+// Every topic the stub can publish, and what a suite asks for to put a fleet on push.
+// fluxnodestatus is deliberately absent: it carries ONE node's own deterministic-list
+// state, and the harness runs a single daemon stub for the whole fleet, so publishing it
+// would tell every node it is the same node. A suite that wants that path names it
+// explicitly — in practice on a one-node fleet — and drives it with publishZmq.
+export const ALL_ZMQ_TOPICS = ['hashblock', 'hashblockheight', 'chainreorg', 'fluxnodelistdelta'];
+
+// What a fleet publishes unless a suite asks otherwise: nothing. Every suite written
+// before the stub could publish was validated against the polling path, and turning the
+// whole gate over to push as a side effect of adding a publisher would mean any failure
+// could be the suite or could be the switch. Suites that exercise the subscriptions ask
+// for ALL_ZMQ_TOPICS; the fleet default moves once the gate has run green with it.
+export const DEFAULT_ZMQ_TOPICS = [];
 
 /**
  * Writes one node's fluxd.conf: the committed fixture, with its zmqpub keys replaced by
