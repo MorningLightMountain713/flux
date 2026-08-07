@@ -9,6 +9,7 @@ describe('nodeConfirmationService', () => {
   let getLocalSocketAddressStub;
   let getFluxNodePublicKeyStub;
   let getFluxnodeBySocketAddressStub;
+  let isDaemonSyncedStub;
   let logStub;
 
   beforeEach(() => {
@@ -17,10 +18,14 @@ describe('nodeConfirmationService', () => {
     getLocalSocketAddressStub = sinon.stub();
     getFluxNodePublicKeyStub = sinon.stub();
     getFluxnodeBySocketAddressStub = sinon.stub();
+    // No chain view by default, so the estimate path is what runs unless a test
+    // supplies a tip.
+    isDaemonSyncedStub = sinon.stub().returns({ data: { height: 0, synced: false } });
     logStub = { info: sinon.stub(), warn: sinon.stub(), error: sinon.stub() };
 
     service = proxyquire('../../ZelBack/src/services/nodeConfirmationService', {
       './daemonService/daemonServiceFluxnodeRpcs': { getFluxNodeStatus: getFluxNodeStatusStub },
+      './daemonService/daemonServiceMiscRpcs': { isDaemonSynced: isDaemonSyncedStub },
       './fluxNetworkHelper': {
         getLocalSocketAddress: getLocalSocketAddressStub,
         getFluxNodePublicKey: getFluxNodePublicKeyStub,
@@ -36,7 +41,7 @@ describe('nodeConfirmationService', () => {
   });
 
   function setupConfirmed() {
-    getFluxNodeStatusStub.resolves({ status: 'success', data: { status: 'CONFIRMED' } });
+    getFluxNodeStatusStub.resolves({ status: 'success', data: { status: 'CONFIRMED', last_confirmed_height: 1000 } });
     getFluxNodePublicKeyStub.resolves('04abcdef1234567890');
     getLocalSocketAddressStub.resolves('1.2.3.4:16127');
     getFluxnodeBySocketAddressStub.resolves({ pubkey: '04abcdef1234567890' });
@@ -47,7 +52,7 @@ describe('nodeConfirmationService', () => {
   }
 
   function setupConfirmedButIpMissing() {
-    getFluxNodeStatusStub.resolves({ status: 'success', data: { status: 'CONFIRMED' } });
+    getFluxNodeStatusStub.resolves({ status: 'success', data: { status: 'CONFIRMED', last_confirmed_height: 1000 } });
     getFluxNodePublicKeyStub.resolves('04abcdef1234567890');
     getLocalSocketAddressStub.resolves('1.2.3.4:16127');
     getFluxnodeBySocketAddressStub.resolves(null);
@@ -426,21 +431,59 @@ describe('nodeConfirmationService', () => {
       expect(service.canSendMessages()).to.be.true;
     });
 
-    it('should set daemonConfirmed false after 320 minutes', async () => {
+    // Expiry is a block count. The node was last confirmed at 1000, and fluxd drops it
+    // once the chain is more than 640 blocks past that.
+    it('should lose confirmation once the chain passes the expiration height', async () => {
       const confirmCb = sinon.spy();
       service.onConfirmationChange(confirmCb);
 
       setupConfirmed();
+      isDaemonSyncedStub.returns({ data: { height: 1200, synced: true } });
       await service.start();
       expect(confirmCb.calledOnce).to.be.true;
 
+      // The status RPC is down but the push socket keeps delivering the tip.
       getFluxNodeStatusStub.rejects(new Error('connection refused'));
-      await setPollAgeMinutes(321);
+      isDaemonSyncedStub.returns({ data: { height: 1641, synced: true } });
+      await setPollAgeMinutes(10);
 
       expect(service.isConfirmed()).to.be.false;
       expect(service.canSendMessages()).to.be.false;
       expect(confirmCb.calledTwice).to.be.true;
       expect(confirmCb.secondCall.calledWith(false)).to.be.true;
+    });
+
+    it('should keep confirmation while the chain is short of the expiration height', async () => {
+      setupConfirmed();
+      isDaemonSyncedStub.returns({ data: { height: 1200, synced: true } });
+      await service.start();
+
+      // Hours unreachable, but the chain says we are still inside the window.
+      getFluxNodeStatusStub.rejects(new Error('connection refused'));
+      isDaemonSyncedStub.returns({ data: { height: 1639, synced: true } });
+      await setPollAgeMinutes(600);
+
+      expect(service.isConfirmed()).to.be.true;
+    });
+
+    // The tip is held at 1200 — 200 blocks in, well short of 640. Reading it as
+    // current would say "not expired" for as long as the daemon stayed down, which is
+    // the whole window this has to answer in. Once it is no longer current the
+    // deadline comes from the blocks that were left at last contact: 440 of them,
+    // so ~220 minutes at 30s a block.
+    it('should estimate the deadline from the blocks left when the chain view is gone', async () => {
+      setupConfirmed();
+      isDaemonSyncedStub.returns({ data: { height: 1200, synced: true } });
+      await service.start();
+
+      getFluxNodeStatusStub.rejects(new Error('connection refused'));
+      isDaemonSyncedStub.returns({ data: { height: 1200, synced: false } });
+
+      await setPollAgeMinutes(219);
+      expect(service.isConfirmed()).to.be.true;
+
+      await setPollAgeMinutes(221);
+      expect(service.isConfirmed()).to.be.false;
     });
 
     it('should recover when daemon comes back after staleness', async () => {

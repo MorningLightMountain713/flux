@@ -345,6 +345,15 @@ async function checkDeterministicNodesCollisions() {
         }, 120 * 1000);
         return;
       }
+      // Both halves of this check — the node list and our own status — come from the
+      // daemon. Without a current answer it would only re-derive the conclusion it
+      // reached last time, so there is nothing to gain by running it.
+      if (!nodeConfirmationService.isDaemonReachable()) {
+        setTimeout(() => {
+          checkDeterministicNodesCollisions();
+        }, 60 * 1000);
+        return;
+      }
       const nodeList = await fluxCommunicationUtils.deterministicFluxList();
       const result = nodeList.filter((node) => socketAddressesMatch(node.ip, localSocketAddr));
       const nodeStatus = nodeConfirmationService.getNodeStatus();

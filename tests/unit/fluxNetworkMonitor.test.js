@@ -538,6 +538,7 @@ describe('fluxNetworkMonitor tests', () => {
     let isDaemonSyncedStub;
     let deterministicFluxListStub;
     let getNodeStatusStub;
+    let isDaemonReachableStub;
     let deterministicFluxnodeListResponse;
 
     beforeEach(() => {
@@ -572,6 +573,7 @@ describe('fluxNetworkMonitor tests', () => {
       isDaemonSyncedStub = sinon.stub(daemonServiceMiscRpcs, 'isDaemonSynced');
       deterministicFluxListStub = sinon.stub(fluxCommunicationUtils, 'deterministicFluxList');
       getNodeStatusStub = sinon.stub(nodeConfirmationService, 'getNodeStatus');
+      isDaemonReachableStub = sinon.stub(nodeConfirmationService, 'isDaemonReachable').returns(true);
       nodeDosState.setDosMessage(null);
       nodeDosState.setDosStateValue(0);
     });
@@ -583,6 +585,23 @@ describe('fluxNetworkMonitor tests', () => {
 
     afterEach(() => {
       sinon.restore();
+    });
+
+    it('should skip the check entirely when the daemon is unreachable', async () => {
+      // Every early return here re-arms a 60s retry. Left on the real timer it
+      // outlives the test, fires against unstubbed collaborators and dials the
+      // benchmark RPC for real; sinon.restore() in afterEach takes the clock with it.
+      sinon.useFakeTimers();
+      isDaemonSyncedStub.returns({ data: { synced: true } });
+      isDaemonReachableStub.returns(false);
+
+      await fluxNetworkMonitor.checkDeterministicNodesCollisions();
+
+      // Both inputs come from the daemon; without a current answer the check would
+      // only restate last cycle's conclusion.
+      sinon.assert.notCalled(deterministicFluxListStub);
+      sinon.assert.notCalled(getNodeStatusStub);
+      expect(nodeDosState.getDosMessage()).to.be.null;
     });
 
     it('should not change dosMessage', async () => {

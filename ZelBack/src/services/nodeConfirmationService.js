@@ -1,5 +1,6 @@
 const config = require('config');
 const daemonServiceFluxnodeRpcs = require('./daemonService/daemonServiceFluxnodeRpcs');
+const daemonServiceMiscRpcs = require('./daemonService/daemonServiceMiscRpcs');
 const fluxNetworkHelper = require('./fluxNetworkHelper');
 const networkStateService = require('./networkStateService');
 const { AsyncGate } = require('./utils/asyncGate');
@@ -7,10 +8,13 @@ const fluxEventBus = require('./utils/fluxEventBus');
 const log = require('../lib/log');
 
 const DAEMON_STALE_MS = config.confirmation.daemonStaleMs;
-const DAEMON_EXPIRED_MS = config.confirmation.daemonExpiredMs;
+const CONFIRM_EXPIRATION_BLOCKS = config.confirmation.confirmExpirationBlocks;
+const BLOCK_INTERVAL_MS = config.confirmation.blockIntervalMs;
 
 let ourPubkey = null;
 let nodeStatus = null;
+let daemonReachable = false;
+let lastKnownBlocksSinceConfirmation = null;
 let daemonConfirmed = null;
 let daemonStale = false;
 let messageCapable = false;
@@ -45,6 +49,38 @@ function getNodeStatus() {
   return nodeStatus;
 }
 
+/**
+ * Whether the daemon answered the most recent status poll. Callers whose work is only
+ * meaningful against current daemon data — collision detection reads the node list and
+ * this status together — should skip rather than re-derive last poll's conclusion.
+ * @returns {boolean}
+ */
+function isDaemonReachable() {
+  return daemonReachable;
+}
+
+/**
+ * Blocks the chain has advanced since this node was last confirmed, or null when the
+ * chain view is not current enough to say.
+ *
+ * The tip arrives on the push socket, so it survives the status RPC failing — which is
+ * the window this exists to answer in. A tip that stopped arriving is a different
+ * matter: it would freeze the count wherever it stood when the daemon went quiet and
+ * read as comfortably inside the limit forever. isDaemonSynced already withdraws its
+ * claim once nothing recent has landed, so that is what gates this.
+ *
+ * @returns {number|null}
+ */
+function blocksSinceConfirmation() {
+  const lastConfirmed = nodeStatus?.last_confirmed_height;
+  if (!Number.isFinite(lastConfirmed) || lastConfirmed <= 0) return null;
+
+  const { height, synced } = daemonServiceMiscRpcs.isDaemonSynced().data;
+  if (!synced || !Number.isFinite(height) || height <= 0) return null;
+
+  return height - lastConfirmed;
+}
+
 function canSendMessages() {
   return messageCapable;
 }
@@ -73,6 +109,32 @@ function onMessageCapabilityChange(callback) {
   messageCapabilityListeners.push(callback);
 }
 
+/**
+ * Whether this node's confirmation has passed its on-chain deadline.
+ *
+ * Expiry is a block count, not a duration: fluxd drops a node that has not re-confirmed
+ * within CONFIRM_EXPIRATION_BLOCKS of its last confirmation. While the push socket is
+ * still delivering the tip that count is a fact, so it is preferred outright.
+ *
+ * Only when the chain view is gone too does this fall back to estimating, and it
+ * estimates from the blocks that were left at last contact rather than from a fixed
+ * window — a node already near its deadline when the daemon went silent expires soon
+ * after, not a full window later.
+ *
+ * @param {number} elapsedMs Milliseconds since the last successful poll.
+ * @returns {boolean} True once the deadline has passed.
+ */
+function hasConfirmationExpired(elapsedMs) {
+  const blocks = blocksSinceConfirmation();
+  if (blocks !== null) return blocks > CONFIRM_EXPIRATION_BLOCKS;
+
+  const blocksAtLastContact = lastKnownBlocksSinceConfirmation;
+  if (blocksAtLastContact === null) return false;
+
+  const blocksRemaining = CONFIRM_EXPIRATION_BLOCKS - blocksAtLastContact;
+  return elapsedMs > blocksRemaining * BLOCK_INTERVAL_MS;
+}
+
 async function poll() {
   const prevDaemonConfirmed = daemonConfirmed;
   const prevMessageCapable = messageCapable;
@@ -85,16 +147,20 @@ async function poll() {
       daemonStale = false;
       nodeStatus = response.data ?? null;
       daemonConfirmed = nodeStatus?.status === 'CONFIRMED';
+      const blocks = blocksSinceConfirmation();
+      if (blocks !== null) lastKnownBlocksSinceConfirmation = blocks;
     }
   } catch (error) {
     // RPC unreachable — keep previous daemonConfirmed value
   }
 
+  daemonReachable = rpcReachable;
+
   // Future: use in-band NAK-based confirmation check instead of timeout.
   // See dev/in-band-confirmation-check.md
   const elapsed = elapsedSincePollMs();
   if (!rpcReachable && elapsed !== null) {
-    // 125 min — remove apps, but messageCapable preserved (can still broadcast)
+    // Remove apps, but messageCapable preserved (can still broadcast)
     if (elapsed > DAEMON_STALE_MS && !daemonStale) {
       daemonStale = true;
       log.warn(`nodeConfirmationService - Daemon unreachable for ${Math.round(elapsed / 60000)} minutes, stale`);
@@ -103,11 +169,10 @@ async function poll() {
       }
     }
 
-    // 320 min — definitively expired on-chain, set daemonConfirmed false
-    if (elapsed > DAEMON_EXPIRED_MS && daemonConfirmed) {
+    if (daemonConfirmed && hasConfirmationExpired(elapsed)) {
       daemonConfirmed = false;
       confirmedGate.close();
-      log.warn('nodeConfirmationService - Daemon unreachable for full expiration window, confirmation lost');
+      log.warn('nodeConfirmationService - Confirmation expired on chain while the daemon was unreachable');
       fluxEventBus.publish('confirmation:changed', { confirmed: false });
       for (const cb of confirmationListeners) {
         try { cb(false); } catch (e) { log.error(e); }
@@ -208,6 +273,7 @@ function setLastSuccessfulPollAgeMs(ageMs) {
 module.exports = {
   isConfirmed,
   getNodeStatus,
+  isDaemonReachable,
   isDaemonStale,
   canSendMessages,
   waitForConfirmed,

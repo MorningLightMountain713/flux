@@ -22,7 +22,12 @@ module.exports = {
   confirmation: {
     pollIntervalMs: 30000,
     daemonStaleMs: 7500000,
-    daemonExpiredMs: 19200000,
+    // Post-PON a node must re-confirm between 500 and 640 blocks after its last
+    // confirmation — fluxd's FLUXNODE_CONFIRM_UPDATE_MIN_HEIGHT_V3 and
+    // FLUXNODE_CONFIRM_UPDATE_EXPIRATION_HEIGHT_V4. Expiry is a height, not a
+    // duration; the block interval only estimates it when the chain view is gone.
+    confirmExpirationBlocks: 640,
+    blockIntervalMs: 30000,
   },
   server: {
     allowedPorts: [16127, 16137, 16147, 16157, 16167, 16177, 16187, 16197],
@@ -157,6 +162,9 @@ module.exports = {
       // connection and would otherwise read as synced.
       headerRefreshIntervalMs: 300000,
       livenessCheckIntervalMs: 10000,
+      // Ten blocks at ~30s. Past this nothing recent has arrived from either the
+      // socket or RPC, so the tip we hold is no longer evidence about the chain.
+      chainStaleAfterMs: 300000,
     },
   },
   minimumFluxBenchAllowedVersion: '6.2.0',
