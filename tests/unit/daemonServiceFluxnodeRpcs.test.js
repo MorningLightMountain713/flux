@@ -31,7 +31,7 @@ describe('daemonServiceFluxnodeRpcs tests', () => {
       const result = await daemonServiceFluxnodeRpcs.getFluxNodeStatus();
 
       expect(result).to.equal(expectedResponse);
-      sinon.assert.calledOnceWithExactly(daemonServiceUtilsStub, 'getzelnodestatus', [], { useCache: false });
+      sinon.assert.calledOnceWithExactly(daemonServiceUtilsStub, 'getzelnodestatus', []);
     });
 
     it('should trigger rpc via api handler, response passed', async () => {
@@ -44,7 +44,7 @@ describe('daemonServiceFluxnodeRpcs tests', () => {
 
       expect(result).to.equal(`Response: ${expectedResponse}`);
       sinon.assert.calledOnceWithExactly(res.json, expectedResponse);
-      sinon.assert.calledOnceWithExactly(daemonServiceUtilsStub, 'getzelnodestatus', [], { useCache: false });
+      sinon.assert.calledOnceWithExactly(daemonServiceUtilsStub, 'getzelnodestatus', []);
     });
   });
 
@@ -300,47 +300,12 @@ describe('daemonServiceFluxnodeRpcs tests', () => {
         },
       };
       const expectedResponse = 'success';
-      const expectedArgs = ['viewdeterministiczelnodelist', [], { useCache: false }];
+      const expectedArgs = ['viewdeterministiczelnodelist', []];
 
       const result = await daemonServiceFluxnodeRpcs.viewDeterministicFluxNodeList(req);
 
       expect(result).to.equal(expectedResponse);
       sinon.assert.calledOnceWithExactly(daemonServiceUtilsStub, ...expectedArgs);
-    });
-
-    it('should keep the cache off when the query says false', async () => {
-      // Query values are strings and 'false' is truthy, so read plainly this asked
-      // for the cache it was trying to decline.
-      daemonServiceUtilsStub.returns('success');
-      const req = { params: {}, query: { useCache: 'false' } };
-
-      await daemonServiceFluxnodeRpcs.viewDeterministicFluxNodeList(req);
-
-      sinon.assert.calledOnceWithExactly(
-        daemonServiceUtilsStub, 'viewdeterministiczelnodelist', [], { useCache: false },
-      );
-    });
-
-    it('should turn the cache on only when the query says true', async () => {
-      daemonServiceUtilsStub.returns('success');
-      const req = { params: {}, query: { useCache: 'true' } };
-
-      await daemonServiceFluxnodeRpcs.viewDeterministicFluxNodeList(req);
-
-      sinon.assert.calledOnceWithExactly(
-        daemonServiceUtilsStub, 'viewdeterministiczelnodelist', [], { useCache: true },
-      );
-    });
-
-    it('should not cache on an unrecognised value', async () => {
-      daemonServiceUtilsStub.returns('success');
-      const req = { params: {}, query: { useCache: 'yes please' } };
-
-      await daemonServiceFluxnodeRpcs.viewDeterministicFluxNodeList(req);
-
-      sinon.assert.calledOnceWithExactly(
-        daemonServiceUtilsStub, 'viewdeterministiczelnodelist', [], { useCache: false },
-      );
     });
 
     it('should trigger rpc, response passed', async () => {
@@ -355,7 +320,7 @@ describe('daemonServiceFluxnodeRpcs tests', () => {
       };
       const res = generateResponse();
       const expectedResponse = 'success';
-      const expectedArgs = ['viewdeterministiczelnodelist', [], { useCache: false }];
+      const expectedArgs = ['viewdeterministiczelnodelist', []];
 
       const result = await daemonServiceFluxnodeRpcs.viewDeterministicFluxNodeList(req, res);
 
@@ -375,7 +340,7 @@ describe('daemonServiceFluxnodeRpcs tests', () => {
         },
       };
       const expectedResponse = 'success';
-      const expectedArgs = ['viewdeterministiczelnodelist', [req.params.filter], { useCache: false }];
+      const expectedArgs = ['viewdeterministiczelnodelist', [req.params.filter]];
 
       const result = await daemonServiceFluxnodeRpcs.viewDeterministicFluxNodeList(req);
 
@@ -394,7 +359,7 @@ describe('daemonServiceFluxnodeRpcs tests', () => {
         },
       };
       const expectedResponse = 'success';
-      const expectedArgs = ['viewdeterministiczelnodelist', [req.query.filter], { useCache: false }];
+      const expectedArgs = ['viewdeterministiczelnodelist', [req.query.filter]];
 
       const result = await daemonServiceFluxnodeRpcs.viewDeterministicFluxNodeList(req);
 

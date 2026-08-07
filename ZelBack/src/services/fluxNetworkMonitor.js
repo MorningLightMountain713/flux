@@ -12,7 +12,6 @@ const geolocationService = require('./geolocationService');
 const daemonServiceMiscRpcs = require('./daemonService/daemonServiceMiscRpcs');
 const nodeConfirmationService = require('./nodeConfirmationService');
 const daemonServiceWalletRpcs = require('./daemonService/daemonServiceWalletRpcs');
-const daemonServiceUtils = require('./daemonService/daemonServiceUtils');
 const cacheManager = require('./utils/cacheManager').default;
 const {
   normalizeSocketAddress, extractIp, extractPort, socketAddressesMatch,
@@ -260,7 +259,6 @@ async function checkMyFluxAvailability(retryNumber = 0) {
         log.info(`FluxBench reported public IP: ${benchIpResponse.data}`);
         const benchMyIP = benchIpResponse.data.length > 5 ? benchIpResponse.data : null;
         if (benchMyIP && extractIp(benchMyIP) !== localIp) {
-          daemonServiceUtils.setStandardCache('getbenchmarks[]', null);
           log.info('New IP found... updating network');
           nodeDosState.setDosStateValue(0);
           nodeDosState.setDosMessage(null);
@@ -472,10 +470,6 @@ async function checkDeterministicNodesCollisions() {
           const benchIpResponse = await benchmarkService.getPublicIp();
           if (benchIpResponse.status === 'success') {
             log.info(`FluxBench was previoulsy without ip and now reported public IP: ${benchIpResponse.data}`);
-            const benchMyIP = benchIpResponse.data.length > 5 ? benchIpResponse.data : null;
-            if (benchMyIP) {
-              daemonServiceUtils.setStandardCache('getbenchmarks[]', null);
-            }
           }
         }
       }

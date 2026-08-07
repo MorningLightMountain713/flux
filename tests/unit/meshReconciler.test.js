@@ -92,9 +92,9 @@ describe('meshReconciler', () => {
       chainsEnsured: false,
       attachments: [],
       writeSnapshotCalls: [],
-      getBlock: sinon.stub().callsFake(async (req) => ({
+      getBlock: sinon.stub().callsFake(async (options) => ({
         status: 'success',
-        data: { height: 995, confirmations: 5, hash: req.params.hashheight },
+        data: { height: 995, confirmations: 5, hash: options.hashheight },
       })),
     };
 

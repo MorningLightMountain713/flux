@@ -12,7 +12,7 @@ let response = messageHelper.createErrorMessage();
  * @returns {object} Message.
  */
 async function getFluxNodeStatus() {
-  return daemonServiceUtils.executeCall('getzelnodestatus', [], { useCache: false });
+  return daemonServiceUtils.executeCall('getzelnodestatus', []);
 }
 
 async function getFluxNodeStatusApi(req, res) {
@@ -222,12 +222,8 @@ async function startFluxNode(req, res) {
  * @returns {object} Message.
  */
 async function viewDeterministicFluxNodeList(req, res) {
-  let { filter, useCache } = req.params;
+  let { filter } = req.params;
   filter = filter || req.query.filter;
-  // Query values arrive as strings, and 'false' is truthy — read plainly it switched
-  // the cache on, which is the opposite of what it says and parks a ~7 MB list in a
-  // 50 entry bucket. Uncached unless asked, since that is what this list wants.
-  useCache = serviceHelper.ensureBoolean(useCache ?? req.query.useCache) === true;
 
   const rpccall = 'viewdeterministiczelnodelist'; // viewdeterministicfluxnodelist
   const rpcparameters = [];
@@ -235,7 +231,9 @@ async function viewDeterministicFluxNodeList(req, res) {
     rpcparameters.push(filter);
   }
 
-  response = await daemonServiceUtils.executeCall(rpccall, rpcparameters, { useCache });
+  // Always straight from the daemon. The list is a ~7 MB answer that changes every
+  // block, and the route serving it is already response-cached at the API layer.
+  response = await daemonServiceUtils.executeCall(rpccall, rpcparameters);
 
   return res ? res.json(response) : response;
 }

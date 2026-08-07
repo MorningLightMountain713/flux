@@ -74,5 +74,14 @@ module.exports = {
         'import/extensions': ['error', 'ignorePackages', { js: 'always' }],
       },
     },
+    {
+      // The daemon stub is CommonJS - it has no "type": "module" and runs in its own
+      // container image. require() resolves without the extension, so the ESM rule
+      // above does not apply to it.
+      files: ['test-infra/daemon-stub/**/*.js'],
+      rules: {
+        'import/extensions': ['error', 'ignorePackages', { js: 'never' }],
+      },
+    },
   ],
 };

@@ -1687,7 +1687,7 @@ async function streamChainPreparation(req, res) {
       return;
     }
 
-    const { status: blockStatus, data: bestBlock } = await daemonServiceBlockchainRpcs.getBlock({ params: { hashheight: chainInfo.bestblockhash, verbosity: 1 } });
+    const { status: blockStatus, data: bestBlock } = await daemonServiceBlockchainRpcs.getBlock({ hashheight: chainInfo.bestblockhash, verbosity: 1 });
 
     if (blockStatus !== 'success' || !bestBlock?.time) {
       safeSetResponseStatus(res, 503, 'Error getting best block from local Flux Daemon.');

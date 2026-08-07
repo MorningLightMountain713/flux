@@ -131,16 +131,13 @@ async function getDaemonVersion() {
  * To get the details of a verbose block.
  * @param {(number|string)} heightOrHash Block height or block hash.
  * @param {number} verbosity Verbosity level.
- * @returns {object} Block data from block cache.
+ * @returns {object} Block data straight from the daemon.
  */
 async function getVerboseBlock(heightOrHash, verbosity = 2) {
-  const req = {
-    params: {
-      hashheight: heightOrHash,
-      verbosity,
-    },
-  };
-  const blockInfo = await daemonServiceBlockchainRpcs.getBlock(req);
+  const blockInfo = await daemonServiceBlockchainRpcs.getBlock({
+    hashheight: heightOrHash,
+    verbosity,
+  });
   if (blockInfo.status === 'success') {
     return blockInfo.data;
   }

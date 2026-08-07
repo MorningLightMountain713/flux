@@ -1,12 +1,10 @@
 const asyncLock = require('../utils/asyncLock');
 const fluxRpc = require('../utils/fluxRpc');
 const daemonConfig = require('../utils/daemonConfig');
-const serviceHelper = require('../serviceHelper');
 const messageHelper = require('../messageHelper');
 
 const config = require('config');
 const configManager = require('../utils/configManager');
-const cacheManager = require('../utils/cacheManager').default;
 
 // Helper function to get testnet flag dynamically
 const isTestnet = () => configManager.getConfigValue('initial.testnet') || false;
@@ -21,9 +19,6 @@ let fluxdClient = null;
  */
 const lock = new asyncLock.AsyncLock(5);
 
-const cache = cacheManager.daemonGenericCache;
-const rawTxCache = cacheManager.daemonTxCache;
-const blockCache = cacheManager.daemonBlockCache;
 
 async function readDaemonConfig() {
   fluxdConfig = new daemonConfig.DaemonConfig();
@@ -52,42 +47,33 @@ async function buildFluxdClient() {
 
 /**
  * To execute a remote procedure call (RPC).
+ *
+ * The daemon is asked, never remembered. Nothing it answers is safe to reuse: the
+ * wallet and fluxnode calls act as well as answer, so a repeated `sendToAddress`
+ * served from a cache hands back the earlier txid and never sends; and the read calls
+ * describe live chain state, which is exactly the thing that has moved by the time a
+ * second caller asks. Even a block is only fixed in its serialized form — the verbose
+ * answer carries `confirmations`, which grows every block and reads -1 once the block
+ * is off the main chain.
+ *
+ * Responses that are worth repeating are cached at the HTTP layer instead, where the
+ * key is the URL rather than caller-supplied JSON. Every read route already carries
+ * `cache('30 seconds')` or longer.
+ *
  * @param {string} rpc Remote procedure call.
  * @param {string[]} params RPC parameters.
- * @param {{useCache?: boolean}} options
  * @returns {object} Message.
  */
-async function executeCall(rpc, params, options = {}) {
+async function executeCall(rpc, params) {
   const rpcparameters = params || [];
-  const useCache = options.useCache ?? true;
 
   if (!fluxdClient) await buildFluxdClient();
 
   const release = await lock.acquire({ label: 'daemonRpc' });
 
   try {
-    let data;
-
-    if (useCache && rpc === 'getBlock') {
-      data = blockCache.get(rpc + serviceHelper.ensureString(rpcparameters));
-    } else if (useCache && rpc === 'getRawTransaction') {
-      data = rawTxCache.get(rpc + serviceHelper.ensureString(rpcparameters));
-    } else if (useCache) {
-      data = cache.get(rpc + serviceHelper.ensureString(rpcparameters));
-    }
-
-    if (!data) {
-      data = await fluxdClient.run(rpc, { params: rpcparameters });
-      if (useCache && rpc === 'getBlock') {
-        blockCache.set(rpc + serviceHelper.ensureString(rpcparameters), data);
-      } else if (useCache && rpc === 'getRawTransaction') {
-        rawTxCache.set(rpc + serviceHelper.ensureString(rpcparameters), data);
-      } else if (useCache) {
-        cache.set(rpc + serviceHelper.ensureString(rpcparameters), data);
-      }
-    }
-    const successResponse = messageHelper.createDataMessage(data);
-    return successResponse;
+    const data = await fluxdClient.run(rpc, { params: rpcparameters });
+    return messageHelper.createDataMessage(data);
   } catch (error) {
     const daemonError = messageHelper.createErrorMessage(error.message, error.name, error.code);
     return daemonError;
@@ -113,137 +99,6 @@ async function executeBatchCall(calls) {
 }
 
 /**
- * Sets standard cache data.
- * Created for testing purposes.
- *
- * @param {object} key
- * @param {object} value
- */
-function setStandardCache(key, value) {
-  cache.set(key, value);
-}
-
-/**
- * Gets standard cache data.
- * Created for testing purposes.
- *
- * @param {object} key
- *
- * @returns {object} cached data
- */
-function getStandardCache(key) {
-  return cache.get(key);
-}
-
-/**
- * Sets rawTx cache data.
- * Created for testing purposes.
- *
- * @param {object} key
- * @param {object} value
- */
-function setRawTxCache(key, value) {
-  rawTxCache.set(key, value);
-}
-
-/**
- * Gets rawTxCache data.
- * Created for testing purposes.
- *
- * @param {object} key
- *
- * @returns {object} cached data
- */
-function getRawTxCacheCache(key) {
-  return rawTxCache.get(key);
-}
-
-/**
- * Sets block cache data.
- * Created for testing purposes.
- *
- * @param {object} key
- * @param {object} value
- */
-function setBlockCache(key, value) {
-  blockCache.set(key, value);
-}
-
-/**
- * Gets blockCache data.
- * Created for testing purposes.
- *
- * @param {object} key
- *
- * @returns {object} cached data
- */
-function getBlockCache(key) {
-  return blockCache.get(key);
-}
-
-/**
- * To get a value for a specified key from the configuration file.
- * @param {string} parameter Config key.
- * @returns {string} Config value.
- */
-/**
- * Drops cached daemon results that a reorg has invalidated.
- *
- * Until there was a reorg signal these caches had no invalidation at all — a block
- * rolled off the chain stayed cached under its height for the full hour, and
- * `getVerboseBlock` would serve the orphan back during the re-scan.
- *
- * Blocks are dropped selectively by height. An entry keyed by block *hash* stays: that
- * hash still names the same block, it is merely no longer on the main chain. It is the
- * height keys that now point at a different block.
- *
- * Transactions are dropped wholesale, because a txid gives no way to tell which block
- * carried it, and a transaction from a rolled-back block may no longer be mined at all.
- *
- * @param {number} forkHeight Last height common to both chains.
- * @returns {{blocks: number, transactions: number, generic: number}} Entries dropped.
- */
-function invalidateCachesFromHeight(forkHeight) {
-  let blocks = 0;
-
-  [...blockCache.keys()].forEach((key) => {
-    if (typeof key !== 'string' || !key.startsWith('getBlock')) return;
-
-    let params = null;
-    try {
-      params = JSON.parse(key.slice('getBlock'.length));
-    } catch {
-      // Unrecognised key shape: drop it rather than reason about it.
-      blockCache.delete(key);
-      blocks += 1;
-      return;
-    }
-
-    const identifier = Array.isArray(params) ? params[0] : params;
-
-    // The handler stringifies hashheight before the params are built, so the identifier
-    // is a string even when it names a height. Comparing on type dropped nothing at all.
-    // A hash is not a number and is deliberately kept: a hash names the same block
-    // whichever chain wins, so only height-keyed entries can go stale across a fork.
-    const height = typeof identifier === 'number' ? identifier : Number(identifier);
-
-    if (Number.isFinite(height) && height > forkHeight) {
-      blockCache.delete(key);
-      blocks += 1;
-    }
-  });
-
-  const transactions = rawTxCache.size;
-  rawTxCache.clear();
-
-  // Holds getBlockCount, getChainTips and friends, all of which the reorg changed.
-  const generic = cache.size;
-  cache.clear();
-
-  return { blocks, transactions, generic };
-}
-
-/**
  * The daemon calls made since this was last asked, and resets the count.
  * @returns {Map<string, number>} Method name to call count, empty before the client exists.
  */
@@ -251,6 +106,11 @@ function takeRpcCallCounts() {
   return fluxdClient ? fluxdClient.takeCallCounts() : new Map();
 }
 
+/**
+ * To get a value for a specified key from the configuration file.
+ * @param {string} parameter Config key.
+ * @returns {string} Config value.
+ */
 function getConfigValue(parameter) {
   if (!fluxdConfig) return undefined;
 
@@ -342,7 +202,6 @@ module.exports = {
   executeBatchCall,
   getConfigValue,
   takeRpcCallCounts,
-  invalidateCachesFromHeight,
   getFluxdClient,
   getFluxdConfig,
   getFluxdConfigPath,
@@ -352,11 +211,5 @@ module.exports = {
   writeFluxdConfig,
 
   // exports for testing purposes
-  getBlockCache,
-  getRawTxCacheCache,
-  getStandardCache,
-  setBlockCache,
   setFluxdClient,
-  setRawTxCache,
-  setStandardCache,
 };

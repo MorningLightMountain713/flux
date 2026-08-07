@@ -90,7 +90,7 @@ function resyncAll(reason) {
  * @returns {Promise<boolean>} True when the daemon answered.
  */
 async function probeDaemon() {
-  const response = await daemonServiceUtils.executeCall('getBlockCount', [], { useCache: false });
+  const response = await daemonServiceUtils.executeCall('getBlockCount', []);
   return response.status === 'success';
 }
 

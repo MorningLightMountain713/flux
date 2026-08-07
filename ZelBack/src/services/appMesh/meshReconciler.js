@@ -126,7 +126,7 @@ async function anchorHeightsFor(rows) {
   // eslint-disable-next-line no-restricted-syntax
   for (const hash of hashes) {
     // eslint-disable-next-line no-await-in-loop
-    const response = await daemonServiceBlockchainRpcs.getBlock({ params: { hashheight: hash, verbosity: 1 } });
+    const response = await daemonServiceBlockchainRpcs.getBlock({ hashheight: hash, verbosity: 1 });
     const block = response?.status === 'success' ? response.data : null;
     heights.set(hash, Number.isInteger(block?.height) && block.confirmations !== -1 ? block.height : null);
   }

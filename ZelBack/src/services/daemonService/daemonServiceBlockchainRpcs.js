@@ -5,6 +5,7 @@ const verificationHelper = require('../verificationHelper');
 
 let response = messageHelper.createErrorMessage();
 
+
 /**
  * To get best block hash.
  * @param {import('express').Request} req
@@ -20,22 +21,32 @@ async function getBestBlockHash(req, res) {
 }
 
 /**
- * To get block. Hash height and verbosity required as parameters for RPC call. Verbosity defaults to an integer value of 2.
- * @param {import('express').Request} req
- * @param {import('express').Response} res
- * @returns {object} Message.
+ * To get block. Verbosity defaults to an integer value of 2, the json object.
+ * @param {{hashheight: (string|number), verbosity: (string|number)}} options
+ * @returns {Promise<object>} Message.
  */
-async function getBlock(req, res) {
-  let { hashheight, verbosity } = req.params;
-  hashheight = hashheight || req.query.hashheight;
-  hashheight = serviceHelper.ensureString(hashheight);
-  verbosity = verbosity || req.query.verbosity || 2; // defaults to json object. CORRECT DAEMON verbosity is number, error says its not boolean
-  verbosity = serviceHelper.ensureNumber(verbosity);
+async function getBlock(options = {}) {
+  const hashheight = serviceHelper.ensureString(options.hashheight);
+  // CORRECT DAEMON verbosity is number, error says its not boolean
+  const verbosity = serviceHelper.ensureNumber(options.verbosity ?? 2);
 
   const rpccall = 'getBlock';
   const rpcparameters = [hashheight, verbosity];
 
-  response = await daemonServiceUtils.executeCall(rpccall, rpcparameters);
+  return daemonServiceUtils.executeCall(rpccall, rpcparameters);
+}
+
+/**
+ * To get block, with the hash height and verbosity taken from the request.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
+ * @returns {object} Message.
+ */
+async function getBlockApi(req, res) {
+  const hashheight = req.params.hashheight ?? req.query.hashheight;
+  const verbosity = req.params.verbosity ?? req.query.verbosity;
+
+  response = await getBlock({ hashheight, verbosity });
 
   return res ? res.json(response) : response;
 }
@@ -440,6 +451,7 @@ async function getSpentInfoPost(req, res) {
 module.exports = {
   getBestBlockHash,
   getBlock,
+  getBlockApi,
   getBlockchainInfo,
   getBlockCount,
   getBlockDeltas, // experimental feataure, insight explorer

@@ -51,6 +51,55 @@ describe('daemonServiceBlockchainRpcs tests', () => {
   });
 
   describe('getBlock tests', () => {
+    const blockHash = 'a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90';
+    let daemonServiceUtilsStub;
+
+    beforeEach(() => {
+      daemonServiceUtilsStub = sinon.stub(daemonServiceUtils, 'executeCall');
+    });
+
+    afterEach(() => {
+      sinon.restore();
+    });
+
+    it('should trigger rpc with no identifier and the default verbosity', async () => {
+      daemonServiceUtilsStub.returns('success');
+
+      const result = await daemonServiceBlockchainRpcs.getBlock();
+
+      expect(result).to.equal('success');
+      sinon.assert.calledOnceWithExactly(daemonServiceUtilsStub, 'getBlock', [undefined, 2]);
+    });
+
+    it('should coerce the verbosity it was given', async () => {
+      daemonServiceUtilsStub.returns('success');
+
+      const result = await daemonServiceBlockchainRpcs.getBlock({ hashheight: 'testing', verbosity: '1' });
+
+      expect(result).to.equal('success');
+      sinon.assert.calledOnceWithExactly(daemonServiceUtilsStub, 'getBlock', ['testing', 1]);
+    });
+
+    it('should keep an explicit verbosity of 0 rather than defaulting it', async () => {
+      daemonServiceUtilsStub.returns('success');
+
+      await daemonServiceBlockchainRpcs.getBlock({ hashheight: blockHash, verbosity: 0 });
+
+      // 0 is the serialized block, and it is the one verbosity a truthiness test
+      // cannot tell apart from having been left out.
+      sinon.assert.calledOnceWithExactly(daemonServiceUtilsStub, 'getBlock', [blockHash, 0]);
+    });
+
+    it('should ask for a height as the string the daemon takes', async () => {
+      daemonServiceUtilsStub.returns('success');
+
+      await daemonServiceBlockchainRpcs.getBlock({ hashheight: 1998, verbosity: 1 });
+
+      sinon.assert.calledOnceWithExactly(daemonServiceUtilsStub, 'getBlock', ['1998', 1]);
+    });
+  });
+
+  describe('getBlockApi tests', () => {
     let daemonServiceUtilsStub;
 
     beforeEach(() => {
@@ -73,7 +122,7 @@ describe('daemonServiceBlockchainRpcs tests', () => {
       };
       const expectedResponse = 'success';
 
-      const result = await daemonServiceBlockchainRpcs.getBlock(req);
+      const result = await daemonServiceBlockchainRpcs.getBlockApi(req);
 
       expect(result).to.equal(expectedResponse);
       sinon.assert.calledOnceWithExactly(daemonServiceUtilsStub, 'getBlock', [undefined, 2]);
@@ -92,7 +141,7 @@ describe('daemonServiceBlockchainRpcs tests', () => {
       const res = generateResponse();
       const expectedResponse = 'success';
 
-      const result = await daemonServiceBlockchainRpcs.getBlock(req, res);
+      const result = await daemonServiceBlockchainRpcs.getBlockApi(req, res);
 
       expect(result).to.equal(`Response: ${expectedResponse}`);
       sinon.assert.calledOnceWithExactly(res.json, expectedResponse);
@@ -112,7 +161,7 @@ describe('daemonServiceBlockchainRpcs tests', () => {
       };
       const expectedResponse = 'success';
 
-      const result = await daemonServiceBlockchainRpcs.getBlock(req);
+      const result = await daemonServiceBlockchainRpcs.getBlockApi(req);
 
       expect(result).to.equal(expectedResponse);
       sinon.assert.calledOnceWithExactly(daemonServiceUtilsStub, 'getBlock', [req.params.hashheight, +req.params.verbosity]);
@@ -130,7 +179,7 @@ describe('daemonServiceBlockchainRpcs tests', () => {
       };
       const expectedResponse = 'success';
 
-      const result = await daemonServiceBlockchainRpcs.getBlock(req);
+      const result = await daemonServiceBlockchainRpcs.getBlockApi(req);
 
       expect(result).to.equal(expectedResponse);
       sinon.assert.calledOnceWithExactly(daemonServiceUtilsStub, 'getBlock', [req.params.hashheight, 2]);
@@ -149,10 +198,41 @@ describe('daemonServiceBlockchainRpcs tests', () => {
       };
       const expectedResponse = 'success';
 
-      const result = await daemonServiceBlockchainRpcs.getBlock(req);
+      const result = await daemonServiceBlockchainRpcs.getBlockApi(req);
 
       expect(result).to.equal(expectedResponse);
       sinon.assert.calledOnceWithExactly(daemonServiceUtilsStub, 'getBlock', [req.query.hashheight, +req.query.verbosity]);
+    });
+
+    it('should not default a verbosity of 0 asked for in the route', async () => {
+      daemonServiceUtilsStub.returns('success');
+      const blockHash = 'a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90';
+      const req = { params: { hashheight: blockHash, verbosity: '0' }, query: {} };
+
+      await daemonServiceBlockchainRpcs.getBlockApi(req);
+
+      sinon.assert.calledOnceWithExactly(daemonServiceUtilsStub, 'getBlock', [blockHash, 0]);
+    });
+
+    it('should not default a verbosity of 0 asked for in the query', async () => {
+      daemonServiceUtilsStub.returns('success');
+      const req = { params: {}, query: { hashheight: '1998', verbosity: '0' } };
+
+      await daemonServiceBlockchainRpcs.getBlockApi(req);
+
+      sinon.assert.calledOnceWithExactly(daemonServiceUtilsStub, 'getBlock', ['1998', 0]);
+    });
+
+    it('should prefer the route parameters over the query', async () => {
+      daemonServiceUtilsStub.returns('success');
+      const req = {
+        params: { hashheight: 'fromparams', verbosity: '1' },
+        query: { hashheight: 'fromquery', verbosity: '2' },
+      };
+
+      await daemonServiceBlockchainRpcs.getBlockApi(req);
+
+      sinon.assert.calledOnceWithExactly(daemonServiceUtilsStub, 'getBlock', ['fromparams', 1]);
     });
   });
 

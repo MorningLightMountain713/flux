@@ -156,19 +156,6 @@ class FluxCacheManager {
       max: 100,
       ttl: 15 * FluxCacheManager.oneMinute,
     },
-    // daemonServiceUtils
-    daemonGenericCache: {
-      max: 50,
-      ttl: 20 * FluxCacheManager.oneSecond,
-    },
-    daemonTxCache: {
-      max: 300,
-      ttl: FluxCacheManager.oneHour,
-    },
-    daemonBlockCache: {
-      max: 150,
-      ttl: FluxCacheManager.oneHour,
-    },
     // Pending app updates queue - stores update messages that arrived before registration
     pendingAppUpdatesCache: {
       max: 200,

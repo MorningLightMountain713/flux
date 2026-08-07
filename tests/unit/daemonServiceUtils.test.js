@@ -1,7 +1,7 @@
 const chai = require('chai');
 const sinon = require('sinon');
 
-const { FluxTTLCache } = require('../../ZelBack/src/services/utils/cacheManager');
+const asyncLock = require('../../ZelBack/src/services/utils/asyncLock');
 
 const daemonServiceUtils = require('../../ZelBack/src/services/daemonService/daemonServiceUtils');
 
@@ -9,125 +9,48 @@ const { expect } = chai;
 
 describe('daemonServiceUtils tests', () => {
   describe('executeCall tests', () => {
-    let getSpy;
-    beforeEach(() => {
-      getSpy = sinon.spy(FluxTTLCache.prototype, 'get');
-    });
-
     afterEach(() => {
       daemonServiceUtils.setFluxdClient(null);
       sinon.restore();
     });
 
-    it('should return getBlock from cache if it exists', async () => {
+    it('should reach the daemon twice for two identical calls', async () => {
+      // The whole contract in one assertion: an answer is never reused, however
+      // fixed it looks. A block read back by its own hash is the most cacheable
+      // thing the daemon serves, and even that is asked for again — the verbose
+      // answer carries confirmations, which grows every block and reads -1 once
+      // the block is off the main chain. What is worth repeating is cached at the
+      // HTTP layer, keyed by URL rather than by caller-supplied JSON.
       const rpc = 'getBlock';
-      const params = ['testing1', 'testing2'];
-      const key = rpc + JSON.stringify(params);
-      const data = 'testvalue';
-      const expectedSuccessMessage = {
-        status: 'success',
-        data,
-      };
-      daemonServiceUtils.setBlockCache(key, data);
-
-      const result = await daemonServiceUtils.executeCall(rpc, params);
-
-      expect(result).to.eql(expectedSuccessMessage);
-      sinon.assert.calledOnceWithExactly(getSpy, key);
-    });
-
-    it('should return getRawTransaction from cache if it exists', async () => {
-      const rpc = 'getRawTransaction';
-      const params = ['testing3', 'testing4'];
-      const key = rpc + JSON.stringify(params);
-      const data = 'testvalue';
-      const expectedSuccessMessage = {
-        status: 'success',
-        data,
-      };
-      daemonServiceUtils.setRawTxCache(key, data);
-
-      const result = await daemonServiceUtils.executeCall(rpc, params);
-
-      expect(result).to.eql(expectedSuccessMessage);
-      sinon.assert.calledOnceWithExactly(getSpy, key);
-    });
-
-    it('should return data from cache if it exists', async () => {
-      const rpc = 'getInfo';
-      const params = ['testing3', 'testing4'];
-      const key = rpc + JSON.stringify(params);
-      const data = 'testvalue';
-      const expectedSuccessMessage = {
-        status: 'success',
-        data,
-      };
-      daemonServiceUtils.setStandardCache(key, data);
-
-      const result = await daemonServiceUtils.executeCall(rpc, params);
-
-      expect(result).to.eql(expectedSuccessMessage);
-      sinon.assert.calledOnceWithExactly(getSpy, key);
-    });
-
-    it('should call rpc client if getBlock data is not cached ', async () => {
-      const rpc = 'getBlock';
-      const params = ['getBlockParam'];
-      const key = rpc + JSON.stringify(params);
-      const data = 'testvalue';
-      const expectedSuccessMessage = {
-        status: 'success',
-        data,
-      };
-      const daemonRpcClientStub = sinon.stub().resolves(data);
-
-      daemonServiceUtils.setFluxdClient({ run: daemonRpcClientStub });
-      const result = await daemonServiceUtils.executeCall(rpc, params);
-
-      expect(result).to.eql(expectedSuccessMessage);
-      sinon.assert.calledOnceWithExactly(getSpy, key);
-      sinon.assert.calledOnceWithExactly(daemonRpcClientStub, rpc, { params });
-      expect(daemonServiceUtils.getBlockCache(key)).to.eql(data);
-    });
-
-    it('should call rpc client if getRawTransaction data is not cached ', async () => {
-      const rpc = 'getRawTransaction';
-      const params = ['getRawTransactionParam'];
-      const key = rpc + JSON.stringify(params);
-      const data = 'testvalue';
-      const expectedSuccessMessage = {
-        status: 'success',
-        data,
-      };
-      const daemonRpcClientStub = sinon.stub().resolves(data);
+      const params = ['a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90', 2];
+      const daemonRpcClientStub = sinon.stub();
+      daemonRpcClientStub.onFirstCall().resolves({ confirmations: 1 });
+      daemonRpcClientStub.onSecondCall().resolves({ confirmations: 2 });
       daemonServiceUtils.setFluxdClient({ run: daemonRpcClientStub });
 
-      const result = await daemonServiceUtils.executeCall(rpc, params);
+      const first = await daemonServiceUtils.executeCall(rpc, params);
+      const second = await daemonServiceUtils.executeCall(rpc, params);
 
-      expect(result).to.eql(expectedSuccessMessage);
-      sinon.assert.calledOnceWithExactly(getSpy, key);
-      sinon.assert.calledOnceWithExactly(daemonRpcClientStub, rpc, { params });
-      expect(daemonServiceUtils.getRawTxCacheCache(key)).to.eql(data);
+      sinon.assert.calledTwice(daemonRpcClientStub);
+      sinon.assert.alwaysCalledWithExactly(daemonRpcClientStub, rpc, { params });
+      expect(first).to.eql({ status: 'success', data: { confirmations: 1 } });
+      expect(second).to.eql({ status: 'success', data: { confirmations: 2 } });
     });
 
-    it('should call rpc client if any other rpc call data is not cached ', async () => {
-      const rpc = 'getInfo';
-      const params = ['testingcallParam'];
-      const key = rpc + JSON.stringify(params);
-      const data = 'testvalue';
-      const expectedSuccessMessage = {
-        status: 'success',
-        data,
-      };
-      const daemonRpcClientStub = sinon.stub().resolves(data);
+    it('should ask the daemon every time for a call that acts as well as answers', async () => {
+      const rpc = 'sendToAddress';
+      const params = ['t1address', 1];
+      const daemonRpcClientStub = sinon.stub();
+      daemonRpcClientStub.onFirstCall().resolves('firsttxid');
+      daemonRpcClientStub.onSecondCall().resolves('secondtxid');
       daemonServiceUtils.setFluxdClient({ run: daemonRpcClientStub });
 
-      const result = await daemonServiceUtils.executeCall(rpc, params);
+      const first = await daemonServiceUtils.executeCall(rpc, params);
+      const second = await daemonServiceUtils.executeCall(rpc, params);
 
-      expect(result).to.eql(expectedSuccessMessage);
-      sinon.assert.calledOnceWithExactly(getSpy, key);
-      sinon.assert.calledOnceWithExactly(daemonRpcClientStub, rpc, { params });
-      expect(daemonServiceUtils.getStandardCache(key)).to.eql(data);
+      expect(first).to.eql({ status: 'success', data: 'firsttxid' });
+      expect(second).to.eql({ status: 'success', data: 'secondtxid' });
+      sinon.assert.calledTwice(daemonRpcClientStub);
     });
 
     it('should return an error message if rpc call throws an error', async () => {
@@ -180,15 +103,20 @@ describe('daemonServiceUtils tests', () => {
       expect(result.data.message).to.equal('Connection refused');
     });
 
-    it('should not use cache or lock', async () => {
-      const getSpy = sinon.spy(FluxTTLCache.prototype, 'get');
-      const batchData = [{ id: 0, result: 'ok', error: null }];
-      const runBatchStub = sinon.stub().resolves(batchData);
-      daemonServiceUtils.setFluxdClient({ run: sinon.stub(), runBatch: runBatchStub });
+    it('should bypass the semaphore that executeCall takes', async () => {
+      const acquireSpy = sinon.spy(asyncLock.AsyncLock.prototype, 'acquire');
+      const runBatchStub = sinon.stub().resolves([{ id: 0, result: 'ok', error: null }]);
+      daemonServiceUtils.setFluxdClient({ run: sinon.stub().resolves('ok'), runBatch: runBatchStub });
 
       await daemonServiceUtils.executeBatchCall([{ method: 'getblockcount', params: [] }]);
 
-      sinon.assert.notCalled(getSpy);
+      sinon.assert.notCalled(acquireSpy);
+
+      // The same spy sees the single call the semaphore does guard, so the batch
+      // leaving it untouched above is a fact about the batch path, not about the spy.
+      await daemonServiceUtils.executeCall('getblockcount', []);
+
+      sinon.assert.calledOnce(acquireSpy);
     });
   });
 });

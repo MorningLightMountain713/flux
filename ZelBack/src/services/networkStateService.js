@@ -27,7 +27,7 @@ const DAEMON_CALL_THROTTLE_MS = 30000; // 30 seconds
 const fetcher = async (filter = null) => {
   // this is not how the function is supposed to be used, but it shouldn't take
   // an express req, res pair either. There should be an api function in front of it
-  const rpcOptions = { params: { useCache: false, filter }, query: { filter: null } };
+  const rpcOptions = { params: { filter }, query: { filter: null } };
 
   const res = await daemonServiceFluxnodeRpcs.viewDeterministicFluxNodeList(
     rpcOptions,

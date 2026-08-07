@@ -809,7 +809,7 @@ async function main() {
   const daemonServiceFluxnodeRpcs = require('../daemonService/daemonServiceFluxnodeRpcs');
 
   const fetcher = async (filter = null) => {
-    const options = { params: { useCache: false, filter }, query: { filter: null } };
+    const options = { params: { filter }, query: { filter: null } };
 
     const res = await daemonServiceFluxnodeRpcs.viewDeterministicFluxNodeList(options);
 

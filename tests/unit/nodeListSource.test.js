@@ -84,10 +84,12 @@ describe('nodeListSource tests', () => {
       expect(subscribeStub.calledBefore(executeCallStub)).to.equal(true);
     });
 
-    it('should take the snapshot uncached and from the atomic rpc', async () => {
+    it('should take the snapshot from the atomic rpc', async () => {
       await nodeListSource.start({ stateManager, listFetcher });
 
-      sinon.assert.calledOnceWithExactly(executeCallStub, 'getFluxnodeSnapshot', [], { useCache: false });
+      // One call, so the height, the block hash and the nodes all describe the same
+      // moment. Asking for them separately would let a block land in between.
+      sinon.assert.calledOnceWithExactly(executeCallStub, 'getFluxnodeSnapshot', []);
     });
 
     it('should anchor the state to the snapshot block', async () => {

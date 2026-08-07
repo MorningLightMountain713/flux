@@ -178,13 +178,13 @@ describe('daemonSubscriptionService tests', () => {
   });
 
   describe('liveness tests', () => {
-    it('should probe with an uncached call so a cached answer cannot mask a dead daemon', async () => {
+    it('should probe the daemon with a block count call', async () => {
       const executeCallStub = sinon.stub(daemonServiceUtils, 'executeCall').resolves({ status: 'success', data: 5 });
 
       const result = await service.probeDaemon();
 
       expect(result).to.equal(true);
-      sinon.assert.calledOnceWithExactly(executeCallStub, 'getBlockCount', [], { useCache: false });
+      sinon.assert.calledOnceWithExactly(executeCallStub, 'getBlockCount', []);
     });
 
     it('should report a failed call as not answering', async () => {

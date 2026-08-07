@@ -49,7 +49,7 @@ describe('explorerService tests', () => {
       });
 
       await expect(explorerService.getVerboseBlock(hash)).to.eventually.be.rejectedWith('there was an error');
-      sinon.assert.calledOnceWithExactly(daemonServiceBlockchainRpcsStub, { params: { hashheight: '12345', verbosity: 2 } });
+      sinon.assert.calledOnceWithExactly(daemonServiceBlockchainRpcsStub, { hashheight: '12345', verbosity: 2 });
     });
 
     it('should return data if daemonService returns data', async () => {
@@ -60,7 +60,7 @@ describe('explorerService tests', () => {
 
       const result = await explorerService.getVerboseBlock(hash);
       expect(result).to.eql('test data');
-      sinon.assert.calledOnceWithExactly(daemonServiceBlockchainRpcsStub, { params: { hashheight: '12345', verbosity: 2 } });
+      sinon.assert.calledOnceWithExactly(daemonServiceBlockchainRpcsStub, { hashheight: '12345', verbosity: 2 });
     });
   });
 

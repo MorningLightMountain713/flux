@@ -99,7 +99,7 @@ function isDaemonSynced(req, res) {
  */
 async function fluxDaemonBlockchainInfo() {
   try {
-    const daemonBlockChainInfo = await daemonServiceUtils.executeCall('getBlockchainInfo', [], { useCache: false });
+    const daemonBlockChainInfo = await daemonServiceUtils.executeCall('getBlockchainInfo', []);
     if (daemonBlockChainInfo.status !== 'success') {
       log.error(daemonBlockChainInfo.data.message || daemonBlockChainInfo.data);
       return false;

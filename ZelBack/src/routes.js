@@ -130,7 +130,7 @@ module.exports = (app) => {
     daemonServiceBlockchainRpcs.getBestBlockHash(req, res);
   });
   app.get('/daemon/getblock/:hashheight?/:verbosity?', cache('30 seconds'), (req, res) => {
-    daemonServiceBlockchainRpcs.getBlock(req, res);
+    daemonServiceBlockchainRpcs.getBlockApi(req, res);
   });
   app.get('/daemon/getblockchaininfo', cache('30 seconds'), (req, res) => {
     daemonServiceBlockchainRpcs.getBlockchainInfo(req, res);

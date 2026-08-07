@@ -279,8 +279,7 @@ function getDaemonHeight() {
  * @returns {Promise<number|null>} Block time in seconds, or null if unavailable
  */
 async function lookupBlockTime(height) {
-  const req = { params: { hashheight: String(height), verbosity: 1 } };
-  const blockInfo = await daemonServiceBlockchainRpcs.getBlock(req);
+  const blockInfo = await daemonServiceBlockchainRpcs.getBlock({ hashheight: String(height), verbosity: 1 });
   if (blockInfo.status === 'success' && Number.isFinite(blockInfo.data.time)) {
     return blockInfo.data.time;
   }
