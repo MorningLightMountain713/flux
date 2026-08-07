@@ -33,7 +33,7 @@ let bootstrapping = false;
  * @returns {Promise<{height: number, blockhash: string, nodes: Array}|null>} Snapshot.
  */
 async function fetchSnapshot() {
-  const response = await daemonServiceUtils.executeCall('getFluxnodeSnapshot', [], { useCache: false });
+  const response = await daemonServiceUtils.executeCall('getFluxnodeSnapshot', []);
 
   if (response.status !== 'success') {
     log.error(`nodeListSource - snapshot failed: ${response.data?.message || response.data}`);
