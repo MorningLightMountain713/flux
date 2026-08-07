@@ -23,6 +23,9 @@ let manager = null;
 let fetchList = null;
 let buffered = [];
 let live = false;
+let applied = {
+  deltas: 0, added: 0, removed: 0, updated: 0, fromHeight: null, toHeight: null,
+};
 let bootstrapping = false;
 
 /**
@@ -58,6 +61,28 @@ async function fetchSnapshot() {
  * @param {Array<{txhash: string, outidx: number}>} outpoints Added node outpoints.
  * @returns {Promise<Array<object>>} Full records, in no guaranteed order.
  */
+function emptyApplied() {
+  return {
+    deltas: 0, added: 0, removed: 0, updated: 0, fromHeight: null, toHeight: null,
+  };
+}
+
+/**
+ * What has been applied since this was last asked, and starts a fresh window.
+ *
+ * Deltas arrive every block and almost all of them are unremarkable, so they are
+ * reported in aggregate rather than one line each. Anything that went wrong has already
+ * logged at the moment it happened.
+ *
+ * @returns {{deltas: number, added: number, removed: number, updated: number,
+ *   fromHeight: number|null, toHeight: number|null}}
+ */
+function takeAppliedSummary() {
+  const summary = applied;
+  applied = emptyApplied();
+  return summary;
+}
+
 async function resolveAdded(outpoints) {
   const resolved = await Promise.all(outpoints.map(async (outpoint) => {
     const candidates = await fetchList(outpoint.txhash);
@@ -127,7 +152,16 @@ async function onDelta(delta) {
   }
 
   const result = await manager.applyDelta(delta, resolveAdded);
-  if (result.applied) return;
+
+  if (result.applied) {
+    applied.deltas += 1;
+    applied.added += delta.added.length;
+    applied.removed += delta.removed.length;
+    applied.updated += delta.updated.length;
+    applied.toHeight = delta.toHeight;
+    if (applied.fromHeight === null) applied.fromHeight = delta.fromHeight;
+    return;
+  }
 
   log.warn(`nodeListSource - delta refused (${result.reason}), refetching the list`);
   await bootstrap('delta did not chain on');
@@ -171,6 +205,7 @@ function stop() {
 }
 
 module.exports = {
+  takeAppliedSummary,
   bootstrap,
   resolveAdded,
   start,

@@ -237,6 +237,14 @@ function invalidateCachesFromHeight(forkHeight) {
   return { blocks, transactions, generic };
 }
 
+/**
+ * The daemon calls made since this was last asked, and resets the count.
+ * @returns {Map<string, number>} Method name to call count, empty before the client exists.
+ */
+function takeRpcCallCounts() {
+  return fluxdClient ? fluxdClient.takeCallCounts() : new Map();
+}
+
 function getConfigValue(parameter) {
   if (!fluxdConfig) return undefined;
 
@@ -327,6 +335,7 @@ module.exports = {
   executeCall,
   executeBatchCall,
   getConfigValue,
+  takeRpcCallCounts,
   invalidateCachesFromHeight,
   getFluxdClient,
   getFluxdConfig,

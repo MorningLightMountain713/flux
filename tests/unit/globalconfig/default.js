@@ -128,6 +128,9 @@ module.exports = {
       // connection and would otherwise read as synced.
       headerRefreshIntervalMs: 300000,
       livenessCheckIntervalMs: 10000,
+      // One aggregate line rather than one per block. Long enough that a healthy node is
+      // quiet, short enough that the numbers still mean something when read after the fact.
+      usageReportIntervalMs: 300000,
       // Ten blocks at ~30s. Past this nothing recent has arrived from either the
       // socket or RPC, so the tip we hold is no longer evidence about the chain.
       chainStaleAfterMs: 300000,
