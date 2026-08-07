@@ -283,7 +283,12 @@ async function installApplication(instantiated, options = {}) {
       log.info(`Stale database entry for ${appName} removed. Proceeding with fresh insert.`);
     }
 
-    const insertResult = await appsRepository.insertInstalledApp(dbSpecs, replica ?? null);
+    // Recorded with the row so the reconciler can find this app from a container
+    // identifier without taking the identifier apart.
+    const componentIdentifiers = deployment.componentEntries().map(([, comp]) => comp.identifier);
+    const insertResult = await appsRepository.insertInstalledApp(
+      dbSpecs, replica ?? null, componentIdentifiers,
+    );
     if (!insertResult) {
       throw new Error(`CRITICAL: Failed to create database entry for ${appName}. Database insert returned undefined - likely duplicate key error or database failure. Aborting installation to prevent orphaned Docker containers.`);
     }

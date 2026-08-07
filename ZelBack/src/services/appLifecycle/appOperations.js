@@ -1639,7 +1639,17 @@ async function reconcileComponents(appName, oldDeployment, newDeployment, regist
   }
 
   const wireSpec = registrySpec.serialize();
-  await appsRepository.upsertInstalledApp(appName, wireSpec);
+  // Per row: an update can add, drop or rename components, and each replica
+  // names its own differently, so each row's identifiers are rebuilt from the
+  // spec being written rather than carried over from the one being replaced.
+  await appsRepository.upsertInstalledApp(appName, wireSpec, async (rowReplica) => {
+    const rowDeployment = await deploymentProvider.buildDeployment(
+      registrySpec, { replica: rowReplica },
+    );
+    return rowDeployment
+      ? rowDeployment.componentEntries().map(([, comp]) => comp.identifier)
+      : null;
+  });
   log.info(`Database updated for ${appName}`);
 
   // Rebuild THIS identity's fresh view - handing a co-located sibling's view to
