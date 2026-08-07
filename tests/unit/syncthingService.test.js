@@ -22,12 +22,8 @@ const sinon = require('sinon');
 const config = require('config');
 const syncthingFixtures = require('./data/syncthingFixtures');
 
-// Fakes
-const runExecStub = sinon.stub();
-const utilFake = { promisify: () => runExecStub };
-
 // Module under test
-const syncthingService = proxyquire('../../ZelBack/src/services/syncthingService', { 'node:util': utilFake });
+const syncthingService = proxyquire('../../ZelBack/src/services/syncthingService', { });
 
 /**
  * Move the monotonic clock forward for the duration of a check. Health windows

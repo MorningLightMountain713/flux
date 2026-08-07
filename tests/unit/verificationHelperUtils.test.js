@@ -22,7 +22,7 @@ globalThis.userconfig = adminConfig;
 
 const verificationHelperUtils = proxyquire(
   '../../ZelBack/src/services/verificationHelperUtils',
-  { '../../../config/userconfig': adminConfig },
+  { },
 );
 
 const { signMessage } = require('../../ZelBack/src/services/verificationHelper');
