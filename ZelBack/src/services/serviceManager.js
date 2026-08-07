@@ -55,6 +55,7 @@ const upnpService = require('./upnpService');
 const syncthingService = require('./syncthingService');
 const pgpService = require('./pgpService');
 const dockerService = require('./dockerService');
+const componentIdentifierResolver = require('./appLifecycle/componentIdentifierResolver');
 const backupRestoreService = require('./backupRestoreService');
 const systemService = require('./systemService');
 const fluxNodeService = require('./fluxNodeService');
@@ -67,7 +68,6 @@ const appTamperingDetectionService = require('./appTamperingDetectionService');
 const appsRuntimeState = require('./appManagement/appsRuntimeState');
 const imageCacheStore = require('./appLifecycle/imageCacheStore');
 const appsRepository = require('./appDatabase/appsRepository');
-const deploymentProvider = require('./appRuntime/deploymentProvider');
 const playgroundAudit = require('./appPlayground/playgroundAudit');
 const playgroundService = require('./appPlayground/playgroundService');
 const admissionControl = require('./utils/admissionControl');
@@ -265,12 +265,9 @@ async function startFluxFunctions() {
     // Rows written before the identifier index existed. The resolver lives here
     // rather than in the repository because building a deployment needs the
     // resolved spec, and the repository must not depend on what resolves it.
-    await appsRepository.backfillComponentIdentifiers(async (name, replica) => {
-      const installed = await appsRepository.getInstalledApp(name);
-      if (!installed) return null;
-      const deployment = await deploymentProvider.buildDeployment(installed, { replica });
-      return deployment ? deployment.componentEntries().map(([, comp]) => comp.identifier) : null;
-    }).catch((error) => {
+    await appsRepository.backfillComponentIdentifiers(
+      componentIdentifierResolver.resolveComponentIdentifiers,
+    ).catch((error) => {
       log.error(`Recording component identifiers failed: ${error.message}`);
     });
     // playgroundsessions (localzelapps): the retention TTL the collection's own
