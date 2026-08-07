@@ -14,6 +14,7 @@ const verificationHelperUtils = require('./verificationHelperUtils');
 const messageHelper = require('./messageHelper');
 const dbHelper = require('./dbHelper');
 const nodeIdentityRepository = require('./appDatabase/nodeIdentityRepository');
+const appsRepository = require('./appDatabase/appsRepository');
 const daemonServiceUtils = require('./daemonService/daemonServiceUtils');
 const daemonServiceBlockchainRpcs = require('./daemonService/daemonServiceBlockchainRpcs');
 const daemonServiceFluxnodeRpcs = require('./daemonService/daemonServiceFluxnodeRpcs');
@@ -1602,6 +1603,14 @@ async function getFluxInfo(req, res) {
       log.warn(`getFluxInfo - container label coverage unavailable: ${error.message}`);
       return null;
     });
+    // Same reason: the two derivations that recover an app from a container name
+    // or from image filenames on disk can only be deleted once the fleet reports
+    // every installed row states its components.
+    info.apps.componentIdentifiers = await appsRepository.componentIdentifierCoverage()
+      .catch((error) => {
+        log.warn(`getFluxInfo - component identifier coverage unavailable: ${error.message}`);
+        return null;
+      });
     // eslint-disable-next-line global-require
     const registryManager = require('./appDatabase/registryManager');
     const appHashes = await registryManager.getAppHashes();

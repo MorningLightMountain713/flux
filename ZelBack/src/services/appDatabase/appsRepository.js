@@ -466,6 +466,26 @@ async function prepareInstalledAppsCollection() {
 }
 
 /**
+ * How many installed rows can answer the component-identifier index.
+ *
+ * Published rather than only logged, because the two derivations this replaces —
+ * decomposing a container's name, and matching image filenames on disk — can
+ * only be deleted once the fleet reports every row covered. Until then their
+ * removal would be a guess.
+ *
+ * A node with nothing installed is trivially covered: there is no container for
+ * a consumer to fall back on.
+ */
+async function componentIdentifierCoverage() {
+  const db = localDb();
+  const total = await dbHelper.countInDatabase(db, localAppsInformation, {});
+  const stating = await dbHelper.countInDatabase(
+    db, localAppsInformation, { componentIdentifiers: { $exists: true } },
+  );
+  return { stating, total, covered: stating === total };
+}
+
+/**
  * Record the container identifiers on rows written before they were stored.
  *
  * A row that predates the field answers nothing to the identifier index, and its
@@ -1634,6 +1654,7 @@ module.exports = {
   prepareInstalledAppsCollection,
   backfillGlobalAppUuids,
   backfillComponentIdentifiers,
+  componentIdentifierCoverage,
   getInstalledApp,
   getInstalledAppByIdentity,
   getInstalledAppByComponentIdentifier,

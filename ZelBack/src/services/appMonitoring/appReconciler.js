@@ -68,8 +68,15 @@ async function replicaFromIdentifier(identifier) {
  * @returns {Promise<{installed: object|null, name: string|null, owedTeardown: object|null}>}
  */
 async function appFor(identifier) {
-  const identity = await identityFromIdentifier(identifier);
-  const installed = await appsRepository.getInstalledAppByIdentity(identity);
+  // The row states the identifiers its own containers are named by, so this is a
+  // lookup. Taking the identifier apart is the fallback for rows written before
+  // that was recorded; info.apps.componentIdentifiers counts how many still need
+  // it, and that figure reaching zero fleet-wide is what licenses deleting it.
+  let installed = await appsRepository.getInstalledAppByComponentIdentifier(identifier);
+  if (!installed) {
+    const identity = await identityFromIdentifier(identifier);
+    installed = await appsRepository.getInstalledAppByIdentity(identity);
+  }
   if (installed) return { installed, name: installed.name, owedTeardown: null };
   const owedTeardown = await pendingTeardownStore.teardownForComponent(identifier);
   return { installed: null, name: owedTeardown?.name ?? null, owedTeardown };
