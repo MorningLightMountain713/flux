@@ -303,6 +303,13 @@ async function applyPushedStatus(decoded) {
 
   daemonReachable = true;
   await reconcile(previous, true);
+
+  fluxEventBus.publish('daemon:ownStatus', {
+    status: decoded.status,
+    tier: decoded.tier,
+    lastConfirmedHeight: decoded.lastConfirmedHeight,
+    confirmedHeight: decoded.confirmedHeight,
+  });
 }
 
 /**

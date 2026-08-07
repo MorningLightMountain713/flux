@@ -12,6 +12,11 @@ describe('nodeConfirmationService', () => {
   let getFluxnodeBySocketAddressStub;
   let isDaemonSyncedStub;
   let logStub;
+  let publishStub;
+
+  function publishedAs(name) {
+    return publishStub.getCalls().filter((call) => call.args[0] === name).map((call) => call.args[1]);
+  }
 
   beforeEach(() => {
     clock = sinon.useFakeTimers({ shouldAdvanceTime: false });
@@ -23,6 +28,7 @@ describe('nodeConfirmationService', () => {
     // supplies a tip.
     isDaemonSyncedStub = sinon.stub().returns({ data: { height: 0, synced: false } });
     logStub = { info: sinon.stub(), warn: sinon.stub(), error: sinon.stub() };
+    publishStub = sinon.stub();
 
     service = proxyquire('../../ZelBack/src/services/nodeConfirmationService', {
       './daemonService/daemonServiceFluxnodeRpcs': { getFluxNodeStatus: getFluxNodeStatusStub },
@@ -33,6 +39,7 @@ describe('nodeConfirmationService', () => {
         getFluxNodePublicKey: getFluxNodePublicKeyStub,
       },
       './networkStateService': { getFluxnodeBySocketAddress: getFluxnodeBySocketAddressStub },
+      './utils/fluxEventBus': { publish: publishStub },
       '../lib/log': logStub,
     });
   });
@@ -575,6 +582,46 @@ describe('nodeConfirmationService', () => {
       await service.applyPushedStatus(pushed());
 
       expect(service.getNodeStatus().payment_address).to.equal('t1abc');
+    });
+
+    it('should announce the status the topic carried, and the heights it turns on', async () => {
+      setupConfirmed();
+      await service.start();
+
+      await service.applyPushedStatus(pushed());
+
+      expect(publishedAs('daemon:ownStatus')).to.eql([
+        {
+          status: 'CONFIRMED',
+          tier: 'CUMULUS',
+          lastConfirmedHeight: 1000,
+          confirmedHeight: 1500,
+        },
+      ]);
+    });
+
+    it('should announce a status that costs the node its confirmation', async () => {
+      setupConfirmed();
+      await service.start();
+      publishStub.resetHistory();
+
+      await service.applyPushedStatus(pushed({ status: 'EXPIRED', tier: 'CUMULUS' }));
+
+      expect(publishedAs('daemon:ownStatus')[0].status).to.equal('EXPIRED');
+      // The derived change lands first: a suite that waits on the status then reads
+      // the confirmation must not see the old one.
+      expect(publishedAs('confirmation:changed')).to.eql([{ confirmed: false }]);
+      expect(publishStub.getCall(publishStub.callCount - 1).args[0]).to.equal('daemon:ownStatus');
+    });
+
+    it('should announce nothing from an RPC poll, which carries no topic message', async () => {
+      setupConfirmed();
+      await service.start();
+      publishStub.resetHistory();
+
+      await service.poll();
+
+      expect(publishedAs('daemon:ownStatus')).to.eql([]);
     });
   });
 

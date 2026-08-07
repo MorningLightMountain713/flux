@@ -505,16 +505,18 @@ class NetworkStateManager extends EventEmitter {
    *   with the outpoints of added nodes, returns their full records. Adds carry fewer
    *   fields on the wire than the list exposes — `added_height` and `payment_address`
    *   are not in the delta — and both have consumers.
-   * @returns {Promise<{applied: boolean, reason?: string}>} Outcome.
+   * @returns {Promise<{applied: boolean, code?: string, reason?: string}>} Outcome.
+   *   `code` is the stable token to branch on; `reason` carries the detail for a log.
    */
   async applyDelta(delta, resolveAdded) {
     if (!this.#chainAnchor) {
-      return { applied: false, reason: 'state is not anchored to a block' };
+      return { applied: false, code: 'not_anchored', reason: 'state is not anchored to a block' };
     }
 
     if (delta.fromHash !== this.#chainAnchor.hash) {
       return {
         applied: false,
+        code: 'chain_mismatch',
         reason: `delta starts at ${delta.fromHash.slice(0, 16)} but state is at ${this.#chainAnchor.hash.slice(0, 16)}`,
       };
     }
@@ -526,6 +528,7 @@ class NetworkStateManager extends EventEmitter {
       if (added.length !== delta.added.length) {
         return {
           applied: false,
+          code: 'unresolved_additions',
           reason: `resolved ${added.length} of ${delta.added.length} added nodes`,
         };
       }

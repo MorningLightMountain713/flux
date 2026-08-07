@@ -1,6 +1,7 @@
 const log = require('../../lib/log');
 const daemonSubscriptionService = require('./daemonSubscriptionService');
 const nodeConfirmationService = require('../nodeConfirmationService');
+const fluxEventBus = require('../utils/fluxEventBus');
 
 /**
  * Keeps this node's own deterministic-list status current.
@@ -35,6 +36,7 @@ async function start() {
   if (!daemonSubscriptionService.isTopicAvailable(statusTopic)) {
     log.info('fluxnodeStatusSource - daemon does not publish fluxnodestatus, polling instead');
     mode = 'poll';
+    fluxEventBus.publish('daemon:subscriptionMode', { source: 'fluxnodeStatusSource', mode, topic: statusTopic });
     await nodeConfirmationService.start();
     return mode;
   }
@@ -52,6 +54,7 @@ async function start() {
   });
 
   mode = 'push';
+  fluxEventBus.publish('daemon:subscriptionMode', { source: 'fluxnodeStatusSource', mode, topic: statusTopic });
 
   // Seeds the first status, and opens the gate every startup path waits on.
   await nodeConfirmationService.start({ push: true });

@@ -74,6 +74,41 @@ export async function waitForDaemonRecovered(node, timeout = 30000, opts) {
   return node.waitForEvent('daemon:recovered', () => true, timeout, opts);
 }
 
+// Daemon subscription layer. `source` is the module name a mode belongs to
+// ('chainTipSource', 'nodeListSource', 'reorgSource', 'fluxnodeStatusSource') and
+// `mode` is 'push' or 'poll'. Reasons are stable tokens, never prose.
+export async function waitForSubscriptionsStarted(node, predicate = () => true, timeout = 60000, opts) {
+  return node.waitForEvent('daemon:subscriptionsStarted', predicate, timeout, opts);
+}
+
+export async function waitForSubscriptionMode(node, source, mode, timeout = 60000, opts) {
+  return node.waitForEvent('daemon:subscriptionMode', (d) => d.source === source && d.mode === mode, timeout, opts);
+}
+
+export async function waitForListAnchored(node, predicate = () => true, timeout = 60000, opts) {
+  return node.waitForEvent('daemon:listAnchored', predicate, timeout, opts);
+}
+
+export async function waitForDeltaApplied(node, predicate = () => true, timeout = 60000, opts) {
+  return node.waitForEvent('daemon:deltaApplied', predicate, timeout, opts);
+}
+
+export async function waitForDeltaRefused(node, predicate = () => true, timeout = 30000, opts) {
+  return node.waitForEvent('daemon:deltaRefused', predicate, timeout, opts);
+}
+
+export async function waitForReorg(node, predicate = () => true, timeout = 30000, opts) {
+  return node.waitForEvent('daemon:reorg', predicate, timeout, opts);
+}
+
+export async function waitForResync(node, predicate = () => true, timeout = 30000, opts) {
+  return node.waitForEvent('daemon:resync', predicate, timeout, opts);
+}
+
+export async function waitForOwnStatus(node, predicate = () => true, timeout = 60000, opts) {
+  return node.waitForEvent('daemon:ownStatus', predicate, timeout, opts);
+}
+
 export async function waitForExplorerReady(node, timeout = 120000, opts) {
   return node.waitForEvent('explorer:ready', () => true, timeout, opts);
 }
