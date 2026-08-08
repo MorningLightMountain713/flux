@@ -320,7 +320,6 @@ async function getPathFileList(targetpath, multiplier, decimal, filterKeywords =
         filesArray.push(fileInfo);
       }
     }
-    log.info(filesArray);
     return filesArray;
   } catch (err) {
     log.error('Error reading directory:', err);

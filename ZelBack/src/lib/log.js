@@ -54,7 +54,17 @@ function dispatch(logger, lvl, args) {
   } else if (typeof args === 'string') {
     logger[lvl](args);
   } else if (args && typeof args === 'object') {
-    logger[lvl](args);
+    // An object logged without a message renders as an empty msg in every
+    // viewer. Stringify it (truncated) into msg so the line reads and greps;
+    // the fields still ride the line in full.
+    let msg;
+    try {
+      msg = JSON.stringify(args);
+    } catch {
+      msg = String(args);
+    }
+    if (msg.length > 512) msg = `${msg.slice(0, 512)}...`;
+    logger[lvl](args, msg);
   } else {
     logger[lvl](String(args));
   }

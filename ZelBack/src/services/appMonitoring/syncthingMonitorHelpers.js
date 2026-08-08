@@ -272,7 +272,8 @@ const appsFolderPath = process.env.FLUX_APPS_FOLDER || path.join(fluxDirPath, 'Z
 const appsFolder = `${appsFolderPath}/`;
 
 function emitFolderStatus(res, status) {
-  log.info(status);
+  // the human text goes to the journal; the object shape is the stream's contract
+  log.info(typeof status === 'string' ? status : status.status);
   if (res) {
     res.write(serviceHelper.ensureString(status));
     if (res.flush) res.flush();

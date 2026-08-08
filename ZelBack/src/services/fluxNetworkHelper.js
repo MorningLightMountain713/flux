@@ -710,8 +710,8 @@ async function checkFluxbenchVersionAllowed() {
   try {
     const benchmarkInfoResponse = await benchmarkService.getInfo();
     if (benchmarkInfoResponse.status === 'success') {
-      log.info(benchmarkInfoResponse);
       const benchmarkVersion = benchmarkInfoResponse.data.version;
+      log.info(`Running benchmark version: ${benchmarkVersion}`);
       setStoredFluxBenchAllowed(benchmarkVersion);
       const versionOK = serviceHelper.minVersionSatisfy(benchmarkVersion, config.minimumFluxBenchAllowedVersion);
       if (versionOK) {

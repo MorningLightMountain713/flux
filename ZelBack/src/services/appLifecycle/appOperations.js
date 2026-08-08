@@ -822,11 +822,11 @@ async function appendBackupTask(req, res) {
   let taskToken = null;
   try {
     const processedBody = serviceHelper.ensureObject(req.body);
-    log.info(processedBody);
     // eslint-disable-next-line prefer-destructuring
     appname = processedBody.appname;
     // eslint-disable-next-line prefer-destructuring
     backup = processedBody.backup;
+    log.info(`Backup task requested for app ${appname}`);
     if (!appname || !backup) {
       throw new Error('appname and backup parameters are mandatory');
     }
@@ -956,13 +956,13 @@ async function appendRestoreTask(req, res) {
   let taskToken = null;
   try {
     const processedBody = serviceHelper.ensureObject(req.body);
-    log.info(processedBody);
     // eslint-disable-next-line prefer-destructuring
     appname = processedBody.appname;
     // eslint-disable-next-line prefer-destructuring
     restore = processedBody.restore;
     // eslint-disable-next-line prefer-destructuring
     type = processedBody.type;
+    log.info(`Restore task requested for app ${appname} (${type})`);
     if (!appname || !restore || !type) {
       throw new Error('appname, restore and type parameters are mandatory');
     }

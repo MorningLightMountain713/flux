@@ -503,8 +503,7 @@ async function storeAppRemovedMessage(message) {
     return new Error('Invalid Flux App Removed message appName cannot be empty');
   }
 
-  log.info('New Flux App Removed message received.');
-  log.info(message);
+  log.info(`New Flux App Removed message received for ${message.appName} at ${message.ip}`);
 
   const messageValidityMs = 65 * 60 * 1000; // 3900 seconds
   if (!broadcastedAtUsable(message.broadcastedAt, messageValidityMs)) {
@@ -607,8 +606,7 @@ async function storeIPChangedMessage(message) {
     return new Error(`Invalid Flux IP Changed message oldIP and newIP are the same ${message.newIP}`);
   }
 
-  log.info('New Flux IP Changed message received.');
-  log.info(message);
+  log.info(`New Flux IP Changed message received: ${message.oldIP} -> ${message.newIP}`);
 
   const messageValidityMs = 65 * 60 * 1000; // 3900 seconds
   if (!broadcastedAtUsable(message.broadcastedAt, messageValidityMs)) {
