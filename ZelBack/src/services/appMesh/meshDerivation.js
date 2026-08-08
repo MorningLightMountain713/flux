@@ -2,28 +2,33 @@ const crypto = require('crypto');
 
 // Every value here is derived, never allocated: all nodes hosting an app
 // compute identical prefixes, addresses and names from inputs they already
-// share (the spec's app name, the hosting set's outpoints, the compose
-// ordering), so nothing needs to be agreed, published or stored. Addresses are
-// permanent for the life of a (node, app) pairing — the impersonation detector
-// treats any disagreement between a claimed address and this derivation as a
-// cheat, so these functions must never change behaviour for existing inputs.
-// The golden vectors in tests/unit/meshDerivation.test.js pin them.
+// share (the registration's uuid, the hosting set's outpoints, the spec's
+// component names), so nothing needs to be agreed, published or stored.
+// Addresses are permanent for the life of a (node, app) pairing — the
+// impersonation detector treats any disagreement between a claimed address and
+// this derivation as a cheat, so these functions must never change behaviour
+// for existing inputs. The golden vectors in tests/unit/meshDerivation.test.js
+// pin them.
 //
-// Address layout (DESIGN §5.2), 128 bits:
-//   fd (8) | sha256("flux-mesh-app" ‖ appHash)[0..5] (40)   → the /48 app prefix
-//          | sha256("flux-mesh-node" ‖ appHash ‖ outpoint)[0..8] (64)  → node block
-//          | componentIndex, big-endian (16)
+// Address layout, 128 bits:
+//   fd (8) | sha256("flux-mesh-app" ‖ appUuid)[0..5] (40)     → the /48 app prefix
+//          | sha256("flux-mesh-node" ‖ appUuid ‖ outpoint)[0..6] (48)  → node block
+//          | component slot, big-endian (32)
 //
-// appHash is sha256 over the spec's name bytes, verbatim. The name is the one
-// identifier every node already holds for a mesh app — the voucher, broadcast
-// and accept path are all name-keyed — and a same-name re-registration
-// inheriting a dead app's prefix is harmless because apps never share an
-// overlay: two apps using the same addresses is explicitly tolerated
-// (DESIGN §5.1), so the prefix carries no authority. Identity lives in the
-// certificates and vouchers, never in the address.
+// appUuid is the app's registration identity — mintAppUuid's sha256(name‖txid)
+// hex, read off the app row, fed here as the 64-hex string it is stored as. A
+// name is a lease: the same string re-registered later is a DIFFERENT app, and
+// keying the overlay on the uuid means the two registrations never derive the
+// same addresses, so a stale member of the previous holder can never look
+// address-correct inside the successor's overlay.
+//
+// The component slot comes from flux-spec's `meshComponentSlot` (via the CJS
+// bridge) — the same derivation the spec's collision gate runs at submission.
+// Callers pass it in.
 const APP_PREFIX_DOMAIN = 'flux-mesh-app';
 const NODE_BLOCK_DOMAIN = 'flux-mesh-node';
 
+const APP_UUID_RE = /^[0-9a-f]{64}$/;
 const OUTPOINT_RE = /^[0-9a-f]{64}:\d+$/;
 
 function sha256(...parts) {
@@ -32,9 +37,9 @@ function sha256(...parts) {
   return hash.digest();
 }
 
-function assertAppName(appName) {
-  if (typeof appName !== 'string' || appName === '') {
-    throw new TypeError('appName must be a non-empty string');
+function assertAppUuid(appUuid) {
+  if (typeof appUuid !== 'string' || !APP_UUID_RE.test(appUuid)) {
+    throw new TypeError('appUuid must be the app row\'s 64-hex registration uuid');
   }
 }
 
@@ -105,59 +110,57 @@ function formatIpv6(bytes) {
   return `${hextets.slice(0, bestStart).join(':')}::${hextets.slice(bestStart + bestLen).join(':')}`;
 }
 
-function appPrefixBytes(appName) {
-  const appHash = sha256(Buffer.from(appName, 'utf8'));
-  return Buffer.concat([Buffer.from([0xfd]), sha256(APP_PREFIX_DOMAIN, appHash).subarray(0, 5)]);
+function appPrefixBytes(appUuid) {
+  return Buffer.concat([Buffer.from([0xfd]), sha256(APP_PREFIX_DOMAIN, appUuid).subarray(0, 5)]);
 }
 
-function nodeBlockBytes(appName, outpoint) {
-  const appHash = sha256(Buffer.from(appName, 'utf8'));
-  return sha256(NODE_BLOCK_DOMAIN, appHash, outpoint).subarray(0, 8);
+function nodeBlockBytes(appUuid, outpoint) {
+  return sha256(NODE_BLOCK_DOMAIN, appUuid, outpoint).subarray(0, 6);
 }
 
 /**
- * The app's overlay prefix, identical on every node hosting it.
+ * The app's overlay prefix, identical on every node hosting this registration.
  *
- * @param {string} appName the spec's app name, verbatim
+ * @param {string} appUuid the app row's registration uuid
  * @returns {string} `<prefix>/48` in canonical form
  */
-function appPrefix(appName) {
-  assertAppName(appName);
-  return `${formatIpv6(Buffer.concat([appPrefixBytes(appName), Buffer.alloc(10)]))}/48`;
+function appPrefix(appUuid) {
+  assertAppUuid(appUuid);
+  return `${formatIpv6(Buffer.concat([appPrefixBytes(appUuid), Buffer.alloc(10)]))}/48`;
 }
 
 /**
  * One node's address block within an app's overlay — what the node's host
  * certificate carries as `unsafeNetworks`.
  *
- * @param {string} appName the spec's app name, verbatim
+ * @param {string} appUuid the app row's registration uuid
  * @param {string} outpoint the node's canonical outpoint
- * @returns {string} `<block>/112` in canonical form
+ * @returns {string} `<block>/96` in canonical form
  */
-function nodeBlock(appName, outpoint) {
-  assertAppName(appName);
+function nodeBlock(appUuid, outpoint) {
+  assertAppUuid(appUuid);
   assertOutpoint(outpoint);
-  const bytes = Buffer.concat([appPrefixBytes(appName), nodeBlockBytes(appName, outpoint), Buffer.alloc(2)]);
-  return `${formatIpv6(bytes)}/112`;
+  const bytes = Buffer.concat([appPrefixBytes(appUuid), nodeBlockBytes(appUuid, outpoint), Buffer.alloc(4)]);
+  return `${formatIpv6(bytes)}/96`;
 }
 
 /**
  * The overlay address of one component instance on one node.
  *
- * @param {string} appName the spec's app name, verbatim
+ * @param {string} appUuid the app row's registration uuid
  * @param {string} outpoint the hosting node's canonical outpoint
- * @param {number} componentIndex the component's position in the spec's compose ordering
+ * @param {number} slot the component's slot from flux-spec's meshComponentSlot
  * @returns {string} canonical textual IPv6 address
  */
-function memberAddress(appName, outpoint, componentIndex) {
-  assertAppName(appName);
+function memberAddress(appUuid, outpoint, slot) {
+  assertAppUuid(appUuid);
   assertOutpoint(outpoint);
-  if (!Number.isInteger(componentIndex) || componentIndex < 0 || componentIndex > 0xffff) {
-    throw new TypeError('componentIndex must be an integer in 0..65535');
+  if (!Number.isInteger(slot) || slot < 0 || slot > 0xffffffff) {
+    throw new TypeError('slot must be an integer in 0..4294967295');
   }
-  const index = Buffer.alloc(2);
-  index.writeUInt16BE(componentIndex);
-  return formatIpv6(Buffer.concat([appPrefixBytes(appName), nodeBlockBytes(appName, outpoint), index]));
+  const slotBytes = Buffer.alloc(4);
+  slotBytes.writeUInt32BE(slot);
+  return formatIpv6(Buffer.concat([appPrefixBytes(appUuid), nodeBlockBytes(appUuid, outpoint), slotBytes]));
 }
 
 /**
@@ -173,8 +176,8 @@ function nodeId(outpoint) {
 }
 
 /**
- * The stable DNS label of one member: `<component>-<nodeid>` (DESIGN §8.2),
- * also the container's `FLUX_MESH_SELF`.
+ * The stable DNS label of one member: `<component>-<nodeid>`, also the
+ * container's `FLUX_MESH_SELF`.
  *
  * @param {string} componentName the component's spec name
  * @param {string} outpoint the hosting node's canonical outpoint
@@ -187,32 +190,6 @@ function memberName(componentName, outpoint) {
   return `${componentName}-${nodeId(outpoint)}`;
 }
 
-/**
- * A component's position in the canonical spec ordering — the compose array
- * as registered. The position is derived by every node from the same spec,
- * which is why it needs no publishing.
- *
- * @param {string[]} componentNames the spec's compose component names, in spec order
- * @param {string} componentName the component to locate
- * @returns {number} the component's index
- */
-function componentIndexOf(componentNames, componentName) {
-  if (!Array.isArray(componentNames)) {
-    throw new TypeError('componentNames must be an array');
-  }
-  const matches = componentNames.reduce((found, name, index) => {
-    if (name === componentName) found.push(index);
-    return found;
-  }, []);
-  if (matches.length === 0) {
-    throw new RangeError(`component "${componentName}" is not in the spec`);
-  }
-  if (matches.length > 1) {
-    throw new RangeError(`component "${componentName}" appears ${matches.length} times in the spec`);
-  }
-  return matches[0];
-}
-
 module.exports = {
   canonicalOutpoint,
   formatIpv6,
@@ -221,5 +198,4 @@ module.exports = {
   memberAddress,
   nodeId,
   memberName,
-  componentIndexOf,
 };
