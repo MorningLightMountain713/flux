@@ -23,9 +23,16 @@ const NEBULA_TUN_DEVICE = 'mesh0';
 const TAYGA_TUN_DEVICE = 'siit0';
 // The per-app IPv4 view: local components' presented addresses and remote
 // members' synthetic addresses are both assigned from this range. It is
-// container-local (never on the wire, never agreed between nodes) and clear of
-// Docker's 172.16/12 bridges.
-const MESH_IPV4_RANGE = '10.88.0.0/16';
+// container-local (never on the wire, never agreed between nodes), and the
+// whole range is routed into every mesh container — so it is sized to the
+// need, not the octet: 4,094 addresses covers the 200-member ceiling today
+// (20 instances × 10 components) and the ~100-node cap the design gates
+// behind a future PoC, while shadowing as little as possible of the
+// customer's own 10/8 inside their container. 10.127 echoes the 16127 port
+// family and is clear of the defaults that share hosts with us: Docker
+// (172.16/12), podman (10.88/16), OpenVPN (10.8), k3s (10.42/10.43),
+// Kubernetes services (10.96) and flannel (10.244).
+const MESH_IPV4_RANGE = '10.127.0.0/20';
 // The translator's IPv4 for locally originated ICMP errors: 192.0.0.2 is the
 // address RFC 7335 reserves for exactly this role, unroutable by design.
 const TAYGA_IPV4_ADDR = '192.0.0.2';
