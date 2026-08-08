@@ -21,6 +21,11 @@ const OVERLAY_MTU = 1420;
 const IPV4_FACE_MTU = 1400;
 const NEBULA_TUN_DEVICE = 'mesh0';
 const TAYGA_TUN_DEVICE = 'siit0';
+// The per-app IPv4 view: local components' presented addresses and remote
+// members' synthetic addresses are both assigned from this range. It is
+// container-local (never on the wire, never agreed between nodes) and clear of
+// Docker's 172.16/12 bridges.
+const MESH_IPV4_RANGE = '10.88.0.0/16';
 // The translator's IPv4 for locally originated ICMP errors: 192.0.0.2 is the
 // address RFC 7335 reserves for exactly this role, unroutable by design.
 const TAYGA_IPV4_ADDR = '192.0.0.2';
@@ -212,6 +217,7 @@ function firewallRules({
 }
 
 module.exports = {
+  MESH_IPV4_RANGE,
   OVERLAY_MTU,
   IPV4_FACE_MTU,
   NEBULA_TUN_DEVICE,
