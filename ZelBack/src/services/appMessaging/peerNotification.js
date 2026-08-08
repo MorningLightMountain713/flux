@@ -5,6 +5,7 @@ const fluxNetworkHelper = require('../fluxNetworkHelper');
 const geolocationService = require('../geolocationService');
 const fluxCommunicationMessagesSender = require('../fluxCommunicationMessagesSender');
 const messageStore = require('./messageStore');
+const meshBroadcast = require('../appMesh/meshBroadcast');
 const log = require('../../lib/log');
 const globalState = require('../utils/globalState');
 const appsRepository = require('../appDatabase/appsRepository');
@@ -96,6 +97,7 @@ async function checkAndNotifyPeersOfRunningApps() {
     // (active/draining/stopping) carries the LB lifecycle. Undecryptable specs
     // can't be introspected, so skip them this cycle.
     const applicationsToBroadcast = installedSpecs.filter((inst) => resolvedViews.has(inst.name));
+    const mesh = await meshBroadcast.meshBroadcastFields(applicationsToBroadcast, resolvedViews);
     const apps = [];
     try {
       // eslint-disable-next-line no-restricted-syntax
@@ -128,6 +130,7 @@ async function checkAndNotifyPeersOfRunningApps() {
             runningSince: runningOnMyNodeSince,
             state: globalState.getAppShutdownPipelineState(appName) ?? 'active',
             ...(identity != null ? { replica: identity } : {}),
+            ...(mesh.perApp.get(appName) ?? {}),
           });
         }
       }
@@ -147,6 +150,9 @@ async function checkAndNotifyPeersOfRunningApps() {
         broadcastedAt: Date.now(),
         osUptime: os.uptime(),
         staticIp: geolocationService.isStaticIP(),
+        // The block every mesh voucher in this broadcast commits to; present
+        // only when at least one entry carries mesh fields.
+        ...(mesh.anchor ? { meshAnchor: mesh.anchor } : {}),
       };
       await messageStore.releaseInstallingClaims(appRunningMessage);
       const signed = await fluxCommunicationMessagesSender.broadcastMessageToAll(appRunningMessage);

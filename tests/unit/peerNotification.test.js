@@ -36,6 +36,7 @@ describe('peerNotification tests', () => {
   let listInstalledIdentitiesStub;
   let broadcastAllStub;
   let drainingAppsMap;
+  let meshFieldsStub;
 
   beforeEach(() => {
     logStub = {
@@ -56,6 +57,7 @@ describe('peerNotification tests', () => {
     listInstalledIdentitiesStub = sinon.stub().resolves([]);
     broadcastAllStub = sinon.stub().resolves();
     drainingAppsMap = new Map();
+    meshFieldsStub = sinon.stub().resolves({ anchor: null, perApp: new Map() });
 
     peerNotification = proxyquire('../../ZelBack/src/services/appMessaging/peerNotification', {
       config: {
@@ -88,6 +90,9 @@ describe('peerNotification tests', () => {
         listInstalledIdentities: listInstalledIdentitiesStub,
         appLocationFromEvents: getAppLocationStub,
       },
+      '../appMesh/meshBroadcast': {
+        meshBroadcastFields: meshFieldsStub,
+      },
       '../utils/specCutover': {
         resolveInstantiatedSpec: resolveInstantiatedStub,
       },
@@ -113,6 +118,29 @@ describe('peerNotification tests', () => {
   describe('checkAndNotifyPeersOfRunningApps', () => {
     it('should be exported as a function', () => {
       expect(peerNotification.checkAndNotifyPeersOfRunningApps).to.be.a('function');
+    });
+
+    it('spreads mesh fields onto the app entry and anchors the message', async () => {
+      const anchor = { height: 2843890, hash: 'a'.repeat(64) };
+      meshFieldsStub.resolves({
+        anchor,
+        perApp: new Map([['app1', { meshCa: 'CA-PEM', meshVoucher: 'v-b64', meshPort: 16230 }]]),
+      });
+
+      await peerNotification.checkAndNotifyPeersOfRunningApps();
+
+      const broadcast = broadcastAllStub.firstCall.args[0];
+      expect(broadcast.meshAnchor).to.deep.equal(anchor);
+      expect(broadcast.apps[0]).to.include({
+        name: 'app1', meshCa: 'CA-PEM', meshVoucher: 'v-b64', meshPort: 16230,
+      });
+    });
+
+    it('a broadcast with no mesh apps carries no meshAnchor', async () => {
+      await peerNotification.checkAndNotifyPeersOfRunningApps();
+      const broadcast = broadcastAllStub.firstCall.args[0];
+      expect(broadcast).to.not.have.property('meshAnchor');
+      expect(broadcast.apps[0]).to.not.have.property('meshCa');
     });
 
     it('triggers the hourly reconciler sweep instead of monitor-driven recovery', async () => {

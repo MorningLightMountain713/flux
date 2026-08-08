@@ -1320,7 +1320,7 @@ function buildAppLocationPipeline({
           // outpoint is row-level, not from data: data holds the exact bytes the
           // originator signed and is re-served verbatim on the sync path, so it is
           // never written to. The outpoint is resolved locally at ingest.
-          { $project: { _id: 0, ip: '$data.ip', outpoint: 1, broadcastedAt: 1, apps: '$data.apps', osUptime: '$data.osUptime', staticIp: '$data.staticIp', runningSince: '$data.runningSince' } },
+          { $project: { _id: 0, ip: '$data.ip', outpoint: 1, broadcastedAt: 1, apps: '$data.apps', osUptime: '$data.osUptime', staticIp: '$data.staticIp', runningSince: '$data.runningSince', meshAnchor: '$data.meshAnchor' } },
         ],
         // $max, not $first: these must not depend on an upstream sort that no longer exists.
         removals: [
@@ -1390,6 +1390,14 @@ const RUNNING_ROW_TAIL = [
       // only explicit draining/stopping survive, everything else is active.
       state: { $cond: [{ $in: ['$_v2Filtered.apps.state', ['draining', 'stopping']] }, '$_v2Filtered.apps.state', 'active'] },
       replica: { $ifNull: ['$_v2Filtered.apps.replica', null] },
+      // Mesh membership fields, null-defaulted to one shape: the entry's
+      // authority bundle, its voucher, its transport port, and the broadcast's
+      // anchor block. Absent on non-mesh entries and on announcements that
+      // predate mesh.
+      meshCa: { $ifNull: ['$_v2Filtered.apps.meshCa', null] },
+      meshVoucher: { $ifNull: ['$_v2Filtered.apps.meshVoucher', null] },
+      meshPort: { $ifNull: ['$_v2Filtered.apps.meshPort', null] },
+      meshAnchor: { $ifNull: ['$_v2Filtered.meshAnchor', null] },
       shutdowns: 1,
     },
   },
