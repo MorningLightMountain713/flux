@@ -176,7 +176,7 @@ describe('meshCertificates', () => {
 
     it('issues and deploys the first certificate immediately', async () => {
       const action = await meshCertificates.reconcileHostCertificate(APP);
-      expect(action).to.equal('deployed');
+      expect(action).to.equal(meshCertificates.HostCertificateAction.DEPLOYED);
       const cert = JSON.parse(await realFsp.readFile(appFile('host.crt'), 'utf8'));
       expect(cert.issuer).to.equal('fp-ca-1');
       expect(cert.name).to.equal('6f6437c5');
@@ -188,21 +188,21 @@ describe('meshCertificates', () => {
 
     it('does nothing while the certificate is fresh', async () => {
       await meshCertificates.reconcileHostCertificate(APP);
-      expect(await meshCertificates.reconcileHostCertificate(APP)).to.equal('none');
+      expect(await meshCertificates.reconcileHostCertificate(APP)).to.equal(meshCertificates.HostCertificateAction.NONE);
     });
 
     it('parks a replacement in the renewal window, deploys it only once aged', async () => {
       await meshCertificates.reconcileHostCertificate(APP);
       const seventeenHours = Date.now() + 17 * 3600 * 1000;
-      expect(await meshCertificates.reconcileHostCertificate(APP, seventeenHours)).to.equal('parked');
+      expect(await meshCertificates.reconcileHostCertificate(APP, seventeenHours)).to.equal(meshCertificates.HostCertificateAction.PARKED);
       const parked = await realFsp.readFile(appFile('host-next.crt'), 'utf8');
 
       // Five minutes after signing: younger than the minimum age, stays parked.
       const fiveMinutes = Date.now() + 5 * 60 * 1000;
-      expect(await meshCertificates.reconcileHostCertificate(APP, fiveMinutes)).to.equal('none');
+      expect(await meshCertificates.reconcileHostCertificate(APP, fiveMinutes)).to.equal(meshCertificates.HostCertificateAction.NONE);
 
       const elevenMinutes = Date.now() + 11 * 60 * 1000;
-      expect(await meshCertificates.reconcileHostCertificate(APP, elevenMinutes)).to.equal('deployed');
+      expect(await meshCertificates.reconcileHostCertificate(APP, elevenMinutes)).to.equal(meshCertificates.HostCertificateAction.DEPLOYED);
       expect(await realFsp.readFile(appFile('host.crt'), 'utf8')).to.equal(parked);
       expect(await realFsp.readFile(appFile('host.key'), 'utf8')).to.equal(`KEY-host-${counter}`);
     });
@@ -228,11 +228,11 @@ describe('meshCertificates', () => {
       await meshCertificates.beginAuthorityRotation(APP);
       await meshCertificates.adoptSuccessorAuthority(APP);
       const elevenMinutes = Date.now() + 11 * 60 * 1000;
-      expect(await meshCertificates.reconcileHostCertificate(APP, elevenMinutes)).to.equal('deployed');
+      expect(await meshCertificates.reconcileHostCertificate(APP, elevenMinutes)).to.equal(meshCertificates.HostCertificateAction.DEPLOYED);
 
       // A renewal now must stay under the successor, not fall back.
       const seventeenHours = Date.now() + 17 * 3600 * 1000;
-      expect(await meshCertificates.reconcileHostCertificate(APP, seventeenHours)).to.equal('parked');
+      expect(await meshCertificates.reconcileHostCertificate(APP, seventeenHours)).to.equal(meshCertificates.HostCertificateAction.PARKED);
       const lastSign = nebulaCalls.filter((c) => c.kind === 'sign').pop();
       expect(lastSign.flags['-ca-crt']).to.include('ca-successor.crt');
 

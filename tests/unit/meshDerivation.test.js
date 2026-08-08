@@ -107,6 +107,12 @@ describe('meshDerivation', () => {
     });
   });
 
+  describe('translatorAddress', () => {
+    it('matches the golden vector and sits outside every node block', () => {
+      expect(meshDerivation.translatorAddress(UUID1, `${TX1}:0`)).to.equal('fdb2:8fa9:3450:71e1:203f:b499::');
+    });
+  });
+
   describe('nodeId', () => {
     it('matches the golden vectors', () => {
       expect(meshDerivation.nodeId(`${TX1}:0`)).to.equal('6f6437c5');

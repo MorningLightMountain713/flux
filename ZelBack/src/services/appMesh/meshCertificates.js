@@ -49,6 +49,14 @@ const HOST_CERT_RENEW_BEFORE_MS = 8 * 60 * 60 * 1000;
 const HOST_CERT_MIN_AGE_MS = 10 * 60 * 1000;
 const MESH_GROUP = 'flux-mesh';
 
+// What one sweep step did — 'deployed' means host.crt changed and the caller
+// must reload nebula.
+const HostCertificateAction = Object.freeze({
+  DEPLOYED: 'deployed',
+  PARKED: 'parked',
+  NONE: 'none',
+});
+
 const FILES = {
   caKey: 'ca.key',
   caCert: 'ca.crt',
@@ -236,17 +244,16 @@ async function promoteParkedCertificate(dir) {
 
 /**
  * One sweep step for one app's host certificate. Idempotent; call it
- * periodically. Returns what happened so the caller knows when to reload
- * nebula ('deployed' means host.crt changed):
+ * periodically.
  *
- *   'deployed' — a certificate went into service (first issue, or an aged
- *                replacement was promoted)
- *   'parked'   — a replacement was signed and left to age
- *   'none'     — nothing was due
+ *   DEPLOYED — a certificate went into service (first issue, or an aged
+ *              replacement was promoted)
+ *   PARKED   — a replacement was signed and left to age
+ *   NONE     — nothing was due
  *
  * @param {{instance: string, appUuid: string, outpoint: string}} app
  * @param {number} [nowMs] injectable for tests
- * @returns {Promise<'deployed'|'parked'|'none'>}
+ * @returns {Promise<string>} a HostCertificateAction member
  */
 async function reconcileHostCertificate({ instance, appUuid, outpoint }, nowMs = Date.now()) {
   const dir = meshAppDir(instance);
@@ -262,7 +269,7 @@ async function reconcileHostCertificate({ instance, appUuid, outpoint }, nowMs =
     await signHostCertificate(app);
     await promoteParkedCertificate(dir);
     log.info(`Mesh host certificate issued for ${instance}`);
-    return 'deployed';
+    return HostCertificateAction.DEPLOYED;
   }
 
   let nextStat = null;
@@ -277,9 +284,9 @@ async function reconcileHostCertificate({ instance, appUuid, outpoint }, nowMs =
     if (nowMs - nextStat.mtimeMs >= HOST_CERT_MIN_AGE_MS) {
       await promoteParkedCertificate(dir);
       log.info(`Mesh host certificate renewed for ${instance}`);
-      return 'deployed';
+      return HostCertificateAction.DEPLOYED;
     }
-    return 'none';
+    return HostCertificateAction.NONE;
   }
 
   const details = await certificateDetails(hostCertPath);
@@ -290,9 +297,9 @@ async function reconcileHostCertificate({ instance, appUuid, outpoint }, nowMs =
     const authority = details && successorDetails && details.issuer === successorDetails.fingerprint
       ? 'successor' : 'incumbent';
     await signHostCertificate(app, { authority });
-    return 'parked';
+    return HostCertificateAction.PARKED;
   }
-  return 'none';
+  return HostCertificateAction.NONE;
 }
 
 /**
@@ -366,6 +373,7 @@ async function removeAppMaterial(instance) {
 }
 
 module.exports = {
+  HostCertificateAction,
   MESH_STATE_ROOT,
   HOST_CERT_MIN_AGE_MS,
   HOST_CERT_RENEW_BEFORE_MS,

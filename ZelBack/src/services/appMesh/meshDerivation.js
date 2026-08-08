@@ -27,6 +27,7 @@ const crypto = require('crypto');
 // Callers pass it in.
 const APP_PREFIX_DOMAIN = 'flux-mesh-app';
 const NODE_BLOCK_DOMAIN = 'flux-mesh-node';
+const TRANSLATOR_DOMAIN = 'flux-mesh-siit';
 
 const APP_UUID_RE = /^[0-9a-f]{64}$/;
 const OUTPOINT_RE = /^[0-9a-f]{64}:\d+$/;
@@ -177,6 +178,27 @@ function nodeAddress(appUuid, outpoint) {
 }
 
 /**
+ * The translator's own overlay address inside an app on this node — the source
+ * of the ICMPv6 errors tayga originates. It sits at the base of its own
+ * derived block rather than inside the node's, so it can never land on a
+ * member address.
+ *
+ * @param {string} appUuid the app row's registration uuid
+ * @param {string} outpoint the node's canonical outpoint
+ * @returns {string} canonical textual IPv6 address
+ */
+function translatorAddress(appUuid, outpoint) {
+  assertAppUuid(appUuid);
+  assertOutpoint(outpoint);
+  const bytes = Buffer.concat([
+    appPrefixBytes(appUuid),
+    sha256(TRANSLATOR_DOMAIN, appUuid, outpoint).subarray(0, 6),
+    Buffer.alloc(4),
+  ]);
+  return formatIpv6(bytes);
+}
+
+/**
  * A node's stable short id within mesh names and the resolver snapshot:
  * the first 4 bytes of sha256 over the canonical outpoint, in hex.
  *
@@ -210,6 +232,7 @@ module.exports = {
   nodeBlock,
   memberAddress,
   nodeAddress,
+  translatorAddress,
   nodeId,
   memberName,
 };
