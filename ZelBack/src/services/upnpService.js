@@ -454,6 +454,25 @@ async function getMapApi(req, res) {
 }
 
 /**
+ * The router's current port mappings, for allocators that must pick a free
+ * port and verify ownership rather than map a declared one.
+ * @returns {Promise<Array<object>>}
+ */
+async function getUpnpMappings() {
+  return getClient().getMappings();
+}
+
+/**
+ * This node's own address as seen on the gateway's segment — what a mapping's
+ * private side must point at for the mapping to be ours.
+ * @returns {Promise<string>}
+ */
+async function getLocalGatewayAddress() {
+  const { address } = await getClient().getGateway();
+  return address;
+}
+
+/**
  * To show a message with IP address. Only accessible by admins and Flux team members.
  * @param {import('express').Request} req
  * @param {Promise<object>} res Response.
@@ -514,6 +533,8 @@ module.exports = {
   setupUPNP,
   mapUpnpPort,
   removeMapUpnpPort,
+  getUpnpMappings,
+  getLocalGatewayAddress,
   mapPortApi,
   removeMapPortApi,
   getMapApi,
