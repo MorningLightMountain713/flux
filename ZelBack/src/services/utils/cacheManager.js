@@ -185,14 +185,19 @@ class FluxCacheManager {
   }
 
   logCacheSizes() {
+    // one line for all caches, idle ones (empty and untouched) omitted
+    const parts = [];
     Object.keys(FluxCacheManager.cacheConfigs).forEach(
       (cacheName) => {
         const { get, has, set } = this[cacheName].getHistory();
         this[cacheName].clearHistory();
-        log.info(`Cache: ${cacheName}, Size: ${this[cacheName].size}, `
-          + `getCount: ${get}, hasCount: ${has}, setCount: ${set}`);
+        const { size } = this[cacheName];
+        if (size || get || has || set) {
+          parts.push(`${cacheName} size=${size} get=${get} has=${has} set=${set}`);
+        }
       },
     );
+    if (parts.length) log.info(`Cache stats: ${parts.join(', ')}`);
   }
 
   async logCacheSizesEvery(intervalMs) {

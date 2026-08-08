@@ -1458,8 +1458,7 @@ describe('fluxCommunication tests', () => {
       await new Promise((resolve) => setTimeout(resolve, 1000));
 
       // Verify the expected log calls were made
-      sinon.assert.calledWith(infoSpy, 'Searching for my node on sortedNodeList');
-      sinon.assert.calledWith(infoSpy, 'My node was found on index: 9 of 10 nodes');
+      sinon.assert.calledWith(infoSpy, sinon.match(/Discovery: index 9 of 10 nodes/));
 
       // Verify that connection process started by checking for peer addition logs
       const addPeerCalls = infoSpy.getCalls().filter((call) => call.args[0] && call.args[0].includes('Adding random Flux peer'));

@@ -173,6 +173,10 @@ async function isNodeStatusConfirmed() {
   }
 }
 
+// Last explorer-sync verdict that was logged, so checkSynced only journals
+// transitions between in-sync and behind
+let lastLoggedExplorerSynced = null;
+
 /**
  * Checks if a node's FluxOS database is synced with the node's daemon database.
  * @returns {boolean} True if FluxOS databse height is within 1 of the daemon database height. False if not within 1 of the height or if there is an error.
@@ -200,12 +204,14 @@ async function checkSynced() {
     }
     const explorerHeight = serviceHelper.ensureNumber(result.generalScannedHeight);
 
-    log.info(`Explorer Sync Status check: ${explorerHeight}/${daemonHeight}`);
-    const difference = Math.abs(daemonHeight - explorerHeight);
-    if (difference <= 5) {
-      return true;
+    const synced = Math.abs(daemonHeight - explorerHeight) <= 5;
+    // logged on transition only - this check runs from several periodic loops
+    // and the steady state is not journal material
+    if (synced !== lastLoggedExplorerSynced) {
+      log.info(`Explorer sync ${synced ? 'caught up with' : 'behind'} the daemon: ${explorerHeight}/${daemonHeight}`);
+      lastLoggedExplorerSynced = synced;
     }
-    return false;
+    return synced;
   } catch (e) {
     log.error(e);
     return false;

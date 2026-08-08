@@ -2999,6 +2999,10 @@ async function getSyncthingMetricsHistory(req, res) {
   }
 }
 
+// The last issue set that was warned about, '' while healthy - collectAndSaveMetrics
+// only logs when this changes
+let lastReportedHealthIssues = '';
+
 /**
  * Periodic metrics collection (called by sentinel or scheduler)
  * @returns {Promise<object|void>} Collected metrics or void
@@ -3013,10 +3017,15 @@ async function collectAndSaveMetrics() {
     const metrics = await collectSyncthingMetrics();
     saveMetricsSnapshot(metrics);
 
-    // Log warnings for any issues
-    if (!metrics.overall.healthy) {
-      log.warn(`Syncthing health issues detected: ${metrics.overall.issues.join(', ')}`);
+    // warn when the issue set changes, note recovery once - this runs every
+    // minute and an unchanged unhealthy state must not re-warn each tick
+    const issues = metrics.overall.healthy ? '' : metrics.overall.issues.join(', ');
+    if (issues && issues !== lastReportedHealthIssues) {
+      log.warn(`Syncthing health issues detected: ${issues}`);
+    } else if (!issues && lastReportedHealthIssues) {
+      log.info('Syncthing health issues resolved');
     }
+    lastReportedHealthIssues = issues;
 
     return metrics;
   } catch (error) {

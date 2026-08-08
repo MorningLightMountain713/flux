@@ -1381,6 +1381,10 @@ async function startDiscoveryApi(req, res) {
   }
 }
 
+// The discovery pass's last logged position/peer-count line, so an unchanged
+// pass logs nothing
+let lastDiscoveryStatus = null;
+
 /**
  * To discover and connect to other randomly selected FluxNodes. Maintains connections with 1-2% of nodes on the Flux network. Ensures that FluxNode connections are not duplicated.
  */
@@ -1408,13 +1412,15 @@ async function fluxDiscovery() {
 
     peerManager.numberOfFluxNodes = sortedNodeList.length;
 
-    log.info('Searching for my node on sortedNodeList');
     const fluxNodeIndex = sortedNodeList.findIndex((addr) => socketAddressesMatch(addr, localSocketAddr));
-    log.info(`My node was found on index: ${fluxNodeIndex} of ${sortedNodeList.length} nodes`);
     const minDeterministicOutPeers = Math.min(sortedNodeList.length, config.fluxapps.minOutgoing);
-    // const minIncomingPeers = Math.min(sortedNodeList.length, 1.5 * config.fluxapps.minIncoming);
-    log.info(`Current number of outgoing connections:${peerManager.outboundCount}`);
-    log.info(`Current number of incoming connections:${peerManager.inboundCount}`);
+    // one line per discovery pass, and only when something changed since the
+    // last pass - steady state stays out of the journal
+    const discoveryStatus = `Discovery: index ${fluxNodeIndex} of ${sortedNodeList.length} nodes, ${peerManager.outboundCount} outgoing, ${peerManager.inboundCount} incoming`;
+    if (discoveryStatus !== lastDiscoveryStatus) {
+      log.info(discoveryStatus);
+      lastDiscoveryStatus = discoveryStatus;
+    }
     // always try to connect to deterministic nodes
     // established deterministic outgoing connections
     let deterministicPeerConnections = false;
