@@ -801,6 +801,9 @@ module.exports = (app) => {
   app.get('/flux/restartdaemon', asyncRoute((req, res) => {
     return fluxService.restartDaemon(req, res);
   }));
+  app.get('/flux/loglevel/:loglevel?', asyncRoute((req, res) => {
+    return fluxService.adjustLogLevel(req, res);
+  }));
   // What this node reports it is running, read from the working tree it was deployed
   // from. A diagnostic for whoever switches the branch below, and only that: it is the
   // node's own account of itself, so it answers what is on disk rather than settling
