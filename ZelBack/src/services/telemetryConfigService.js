@@ -73,9 +73,12 @@ async function systemctl(action) {
     runAsRoot: true,
     params: [action, SERVICE_NAME],
     timeout: 30000,
+    logError: false,
   });
   if (result.error) {
-    log.warn(`systemctl ${action} ${SERVICE_NAME}: ${result.error.message}`);
+    // stopping a unit that is not loaded is the desired end state, not a fault
+    const notLoaded = action === 'stop' && /not loaded/i.test(result.error.message);
+    if (!notLoaded) log.warn(`systemctl ${action} ${SERVICE_NAME}: ${result.error.message}`);
   }
   return result;
 }
@@ -126,6 +129,14 @@ async function ensureNode() {
 }
 
 async function remove() {
+  // The same gate as ensureNode: no runtime dir means telemetryd is not
+  // provisioned on this node - nothing to stop, no config to remove.
+  try {
+    await fs.promises.access(RUNTIME_DIR, fs.constants.W_OK);
+  } catch (err) {
+    return;
+  }
+
   await systemctl('stop');
 
   try {

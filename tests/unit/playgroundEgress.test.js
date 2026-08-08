@@ -120,8 +120,16 @@ describe('playgroundEgress', () => {
     });
 
     it('reports failure when the jump cannot be added', async () => {
-      load((bin, params) => ({ error: new Error(params[0] === '-C' ? 'absent' : 'denied') }));
+      load((bin, params) => ({ error: params[0] === '-nL' ? null : new Error(params[0] === '-C' ? 'absent' : 'denied') }));
       expect(await egress.ensureEgressJump()).to.equal(false);
+    });
+
+    // A node that never ran the playground has no chain - and nothing to
+    // confine, so the rebuild's restore is a no-op, not a failure.
+    it('treats a missing chain as nothing to restore', async () => {
+      load((bin, params) => ({ error: params[0] === '-nL' ? new Error('No chain/target/match by that name') : null }));
+      expect(await egress.ensureEgressJump()).to.equal(true);
+      expect(iptablesCalls().some((c) => c[0] === '-I')).to.equal(false);
     });
   });
 

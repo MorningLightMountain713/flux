@@ -173,5 +173,12 @@ describe('telemetryConfigService tests', () => {
       fsStub.promises.unlink.rejects(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }));
       await service.remove(); // should not throw
     });
+
+    it('does nothing on a node without the telemetry runtime dir', async () => {
+      fsStub.promises.access.rejects(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }));
+      await service.remove();
+      expect(serviceHelperStub.runCommand.called).to.be.false;
+      expect(fsStub.promises.unlink.called).to.be.false;
+    });
   });
 });
