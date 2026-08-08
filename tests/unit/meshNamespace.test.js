@@ -88,7 +88,7 @@ describe('meshNamespace', () => {
   describe('attachContainer', () => {
     it('pins the full replumb sequence', async () => {
       await meshNamespace.attachContainer(INSTANCE, {
-        linkId: 'web1', containerPid: 4242, presentedIp: '10.88.1.11',
+        linkId: 'web1', containerPid: 4242, presentedIp: '10.127.1.11',
       });
       expect(calls).to.deep.equal([
         `ip -n ${NS} link delete c-web1`,
@@ -96,24 +96,24 @@ describe('meshNamespace', () => {
         `ip link add fmt-web1 type veth peer name c-web1 netns ${NS}`,
         'ip link set fmt-web1 netns 4242',
         'nsenter -t 4242 -n ip link set fmt-web1 name flux-mesh0',
-        'nsenter -t 4242 -n ip address add 10.88.1.11/32 dev flux-mesh0',
+        'nsenter -t 4242 -n ip address add 10.127.1.11/32 dev flux-mesh0',
         'nsenter -t 4242 -n ip link set flux-mesh0 mtu 1400 up',
-        'nsenter -t 4242 -n ip route replace 10.88.0.0/16 dev flux-mesh0',
+        'nsenter -t 4242 -n ip route replace 10.127.0.0/20 dev flux-mesh0',
         `ip -n ${NS} link set c-web1 mtu 1400 up`,
         `ip netns exec ${NS} sysctl -q -w net.ipv4.conf.c-web1.proxy_arp=1`,
-        `ip -n ${NS} route replace 10.88.1.11/32 dev c-web1`,
+        `ip -n ${NS} route replace 10.127.1.11/32 dev c-web1`,
       ]);
     });
 
     it('rejects a bad pid or link id', async () => {
       try {
-        await meshNamespace.attachContainer(INSTANCE, { linkId: 'web1', containerPid: 0, presentedIp: '10.88.1.11' });
+        await meshNamespace.attachContainer(INSTANCE, { linkId: 'web1', containerPid: 0, presentedIp: '10.127.1.11' });
         expect.fail('should throw');
       } catch (error) {
         expect(error).to.be.instanceOf(TypeError);
       }
       try {
-        await meshNamespace.attachContainer(INSTANCE, { linkId: 'much-too-long-id', containerPid: 4242, presentedIp: '10.88.1.11' });
+        await meshNamespace.attachContainer(INSTANCE, { linkId: 'much-too-long-id', containerPid: 4242, presentedIp: '10.127.1.11' });
         expect.fail('should throw');
       } catch (error) {
         expect(error).to.be.instanceOf(TypeError);
@@ -127,7 +127,7 @@ describe('meshNamespace', () => {
       expect(calls).to.deep.equal([
         `ip -n ${NS} link set siit0 mtu 1400 up`,
         `ip -n ${NS} -6 route replace fdb2:8fa9:3450:76a8:bd32:a312::/96 dev siit0`,
-        `ip -n ${NS} route replace 10.88.0.0/16 dev siit0`,
+        `ip -n ${NS} route replace 10.127.0.0/20 dev siit0`,
       ]);
     });
   });
