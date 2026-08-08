@@ -4,7 +4,6 @@ process.env.NODE_CONFIG_DIR = `${process.cwd()}/tests/unit/globalconfig`;
 const { expect } = require('chai');
 const sinon = require('sinon');
 const appUtilities = require('../../ZelBack/src/services/utils/appUtilities');
-const geolocationService = require('../../ZelBack/src/services/geolocationService');
 const dockerService = require('../../ZelBack/src/services/dockerService');
 const log = require('../../ZelBack/src/lib/log');
 
@@ -41,7 +40,10 @@ describe('appUtilities tests', () => {
       expect(result.used).to.equal(0);
     });
 
-    // Tests that require sudo access removed - should be in integration tests
+    // The mount size cache is keyed by source path and survives across tests,
+    // so each test below uses paths of its own.
+
+
   });
 
   describe('module exports tests', () => {

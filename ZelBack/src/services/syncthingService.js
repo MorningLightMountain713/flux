@@ -1815,9 +1815,12 @@ async function ensureSyncthingRunning(installed) {
 
   // adding old spawn with shell in the interim.
 
+  // this stays a shell string rather than runCommand because the daemon is
+  // backgrounded and must outlive the call
+  const sudoPrefix = serviceHelper.isProcessRoot() ? '' : 'sudo ';
   childProcess.spawn(
     // Quoted: both paths come from SYNCTHING_PATH, and this runs through a shell.
-    `sudo nohup syncthing --logfile '${logFile}' --logflags=3 --log-max-old-files=2 --log-max-size=26214400 --allow-newer-config --no-browser --home '${syncthingHome}' >/dev/null 2>&1 </dev/null &`,
+    `${sudoPrefix}nohup syncthing --logfile '${logFile}' --logflags=3 --log-max-old-files=2 --log-max-size=26214400 --allow-newer-config --no-browser --home '${syncthingHome}' >/dev/null 2>&1 </dev/null &`,
     { shell: true },
   ).unref();
 
