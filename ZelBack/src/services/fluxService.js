@@ -582,6 +582,36 @@ async function startDaemon(req, res) {
  * @returns {Promise<object>} Message.
  */
 // eslint-disable-next-line consistent-return
+/**
+ * Reads or changes the running FluxOS log level. Without a level parameter it
+ * returns the current level; with one it sets it for this process (not
+ * persisted - a restart returns to the configured level). Only accessible by
+ * admins and flux team.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
+ * @returns {Promise<object>} Message.
+ */
+async function adjustLogLevel(req, res) {
+  const authorized = await verificationHelper.verifyPrivilege('adminandfluxteam', req);
+  if (authorized !== true) {
+    const errMessage = messageHelper.errUnauthorizedMessage();
+    return res ? res.json(errMessage) : errMessage;
+  }
+
+  const loglevel = req.params.loglevel || req.query.loglevel;
+  if (!loglevel) {
+    const message = messageHelper.createDataMessage({ logLevel: log.getLevel() });
+    return res ? res.json(message) : message;
+  }
+  if (!log.setLevel(loglevel)) {
+    const errMessage = messageHelper.createErrorMessage(`Invalid log level: ${loglevel}. Valid levels: fatal, error, warn, info, debug, trace`);
+    return res ? res.json(errMessage) : errMessage;
+  }
+  log.info(`Log level set to ${loglevel} via API`);
+  const message = messageHelper.createSuccessMessage(`Log level set to ${loglevel}`);
+  return res ? res.json(message) : message;
+}
+
 async function restartDaemon(req, res) {
   const authorized = await verificationHelper.verifyPrivilege('adminandfluxteam', req);
   if (authorized !== true) {
@@ -2019,6 +2049,7 @@ module.exports = {
   reindexDaemon,
   restartBenchmark,
   restartDaemon,
+  adjustLogLevel,
   restartFluxOS,
   softUpdateFlux,
   softUpdateFluxInstall,

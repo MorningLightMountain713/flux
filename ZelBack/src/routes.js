@@ -1098,6 +1098,9 @@ module.exports = (app) => {
   app.get('/flux/restartdaemon', (req, res) => {
     fluxService.restartDaemon(req, res);
   });
+  app.get('/flux/loglevel/:loglevel?', (req, res) => {
+    fluxService.adjustLogLevel(req, res);
+  });
   app.get('/flux/entermaster', (req, res) => {
     fluxService.enterMaster(req, res);
   });

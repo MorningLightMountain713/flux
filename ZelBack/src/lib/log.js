@@ -15,7 +15,11 @@ const pino = require('pino');
 const underJournald = Boolean(process.env.JOURNAL_STREAM);
 const LEGACY_LOG_PATH = path.join(__dirname, '../../../fluxos.log');
 
-const level = config.logLevel || 'info';
+const LEVELS = ['fatal', 'error', 'warn', 'info', 'debug', 'trace'];
+// FLUX_LOG_LEVEL outranks config so a node can boot straight into debug;
+// an unknown value falls back rather than crashing the logger.
+const configuredLevel = process.env.FLUX_LOG_LEVEL || config.logLevel || 'info';
+const level = LEVELS.includes(configuredLevel) ? configuredLevel : 'info';
 
 function buildLogger() {
   const options = {
@@ -110,4 +114,18 @@ module.exports = {
    * @returns {{journald: boolean, file: string|null}}
    */
   sinkInfo: () => ({ journald: underJournald, file: currentLogFile() }),
+  /**
+   * Changes the root logger's level for this process (not persisted - a restart
+   * returns to the configured level). Loggers minted with child() before the
+   * change keep their own level.
+   * @param {string} newLevel One of fatal, error, warn, info, debug, trace
+   * @returns {boolean} false when newLevel is not a known level
+   */
+  setLevel: (newLevel) => {
+    if (!LEVELS.includes(newLevel)) return false;
+    root.level = newLevel;
+    return true;
+  },
+  /** @returns {string} The root logger's current level. */
+  getLevel: () => root.level,
 };

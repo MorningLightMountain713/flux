@@ -917,6 +917,85 @@ describe('fluxService tests', () => {
     });
   });
 
+  describe('adjustLogLevel tests', () => {
+    let verifyPrivilegeStub;
+    let originalLevel;
+
+    beforeEach(() => {
+      verifyPrivilegeStub = sinon.stub(verificationHelper, 'verifyPrivilege');
+      originalLevel = logLib.getLevel();
+    });
+
+    afterEach(() => {
+      logLib.setLevel(originalLevel);
+      sinon.restore();
+    });
+
+    it('should throw error if user is not an admin or flux team', async () => {
+      verifyPrivilegeStub.returns(false);
+      const res = generateResponse();
+      const expectedResponse = {
+        data: {
+          code: 401,
+          message: 'Unauthorized. Access denied.',
+          name: 'Unauthorized',
+        },
+        status: 'error',
+      };
+
+      const response = await fluxService.adjustLogLevel({ params: {}, query: {} }, res);
+
+      expect(response).to.eql(`Response: ${expectedResponse}`);
+      sinon.assert.calledWithExactly(res.json, expectedResponse);
+    });
+
+    it('should return the current level when no level is passed', async () => {
+      verifyPrivilegeStub.returns(true);
+      const res = generateResponse();
+
+      await fluxService.adjustLogLevel({ params: {}, query: {} }, res);
+
+      sinon.assert.calledOnceWithExactly(res.json, {
+        status: 'success',
+        data: { logLevel: originalLevel },
+      });
+    });
+
+    it('should set a valid level and report it', async () => {
+      verifyPrivilegeStub.returns(true);
+      const res = generateResponse();
+
+      await fluxService.adjustLogLevel({ params: { loglevel: 'debug' }, query: {} }, res);
+
+      expect(logLib.getLevel()).to.equal('debug');
+      sinon.assert.calledOnceWithExactly(res.json, {
+        status: 'success',
+        data: {
+          code: undefined,
+          name: undefined,
+          message: 'Log level set to debug',
+        },
+      });
+    });
+
+    it('should reject an unknown level and keep the current one', async () => {
+      verifyPrivilegeStub.returns(true);
+      const res = generateResponse();
+
+      await fluxService.adjustLogLevel({ params: { loglevel: 'shouty' }, query: {} }, res);
+
+      expect(logLib.getLevel()).to.equal(originalLevel);
+      sinon.assert.calledOnceWithExactly(res.json, {
+        status: 'error',
+        data: {
+          code: undefined,
+          name: undefined,
+          message: 'Invalid log level: shouty. Valid levels: fatal, error, warn, info, debug, trace',
+        },
+      });
+    });
+  });
+
   describe('restartDaemon tests', () => {
     let verifyPrivilegeStub;
     let runCmdStub;
