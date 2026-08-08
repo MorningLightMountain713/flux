@@ -1391,6 +1391,14 @@ describe('appReconciler tests', () => {
       expect(stubs.dockerService.appDockerStart.called).to.be.false;
     });
 
+    it('exposes the controller verdict so the election can see a promotion already in effect', () => {
+      expect(appReconciler.getControllerDesired('db_App')).to.equal(undefined);
+      appReconciler.setControllerDesired('db_App', 'running', 'masterSlave primary (synced)');
+      expect(appReconciler.getControllerDesired('db_App')).to.equal('running');
+      appReconciler.clearControllerDesired('db_App');
+      expect(appReconciler.getControllerDesired('db_App')).to.equal(undefined);
+    });
+
     it('a same-state controller verdict repeat is a no-op; only a transition re-publishes (decider poll ticks)', () => {
       const publishSpy = sinon.spy(fluxEventBus, 'publish');
       const desiredEvents = () => publishSpy.getCalls().filter((c) => c.args[0] === 'reconciler:desiredChanged').length;
