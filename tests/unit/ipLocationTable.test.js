@@ -92,6 +92,13 @@ describe('ipLocationTable tests', () => {
     expect(ipLocationTable.lookup('80.95.213.209').countryCode).to.equal('BH');
   });
 
+  it('accepts a gzipped artifact transparently', () => {
+    // eslint-disable-next-line global-require
+    const zlib = require('node:zlib');
+    ipLocationTable.setArtifact(zlib.gzipSync(Buffer.from(JSON.stringify(fixtureArtifact()))));
+    expect(ipLocationTable.lookup('80.95.213.209').countryCode).to.equal('BH');
+  });
+
   it('returns null for unparseable lookups including socket addresses', () => {
     ipLocationTable.setArtifact(fixtureArtifact());
     expect(ipLocationTable.lookup('80.95.213.209:16127')).to.equal(null);

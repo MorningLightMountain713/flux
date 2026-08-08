@@ -24,6 +24,7 @@
 // }
 // Rows are sorted by start and never overlap; v6 range bounds are IP strings.
 
+const zlib = require('node:zlib');
 const log = require('../../lib/log');
 const cidrUtils = require('../utils/cidrUtils');
 
@@ -128,9 +129,15 @@ function orgAt(i) {
  * @param {object|string|Buffer} rawArtifact Parsed artifact object, or its JSON text
  */
 function setArtifact(rawArtifact) {
-  const artifact = (typeof rawArtifact === 'string' || Buffer.isBuffer(rawArtifact))
-    ? JSON.parse(rawArtifact.toString())
-    : rawArtifact;
+  let raw = rawArtifact;
+  // A multi-MB table travels and gets stored gzipped; accept that transparently
+  // (magic bytes 1f 8b) instead of binding to the transport's compression choices.
+  if (Buffer.isBuffer(raw) && raw.length >= 2 && raw[0] === 0x1f && raw[1] === 0x8b) {
+    raw = zlib.gunzipSync(raw);
+  }
+  const artifact = (typeof raw === 'string' || Buffer.isBuffer(raw))
+    ? JSON.parse(raw.toString())
+    : raw;
   if (!artifact || artifact.format !== SUPPORTED_FORMAT) {
     throw new Error(`iplocation artifact: unsupported format ${artifact?.format}`);
   }

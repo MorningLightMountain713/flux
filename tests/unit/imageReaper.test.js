@@ -10,7 +10,7 @@ describe('imageReaper tests', () => {
       dockerListImages: sinon.stub().resolves([]),
       dockerListContainers: sinon.stub().resolves([]),
       appDockerImageRemove: sinon.stub().resolves('removed'),
-      isOperationInProgress: sinon.stub().returns(false),
+      anyHeldOfType: sinon.stub().returns(false),
       shouldRetainImage: sinon.stub().resolves(false),
       // faithful to the real signature: always returns a promise, runs fn while "holding" the lock
       withHostMutationLock: sinon.stub().callsFake(async (fn) => fn()),
@@ -23,7 +23,7 @@ describe('imageReaper tests', () => {
         dockerListContainers: stubs.dockerListContainers,
         appDockerImageRemove: stubs.appDockerImageRemove,
       },
-      '../utils/globalState': { isOperationInProgress: stubs.isOperationInProgress },
+      '../utils/operationRegistry': { anyHeldOfType: stubs.anyHeldOfType },
       './imageCacheRetention': { shouldRetainImage: stubs.shouldRetainImage },
       '../utils/hostMutationLock': { withHostMutationLock: stubs.withHostMutationLock },
     });
@@ -82,11 +82,13 @@ describe('imageReaper tests', () => {
   it('defers (does not remove) an image while an app operation is in progress', async () => {
     const reaper = build();
     stubs.dockerListImages.resolves([{ Id: 'sha256:cold', RepoTags: ['cold:1'] }]);
-    stubs.isOperationInProgress.returns(true);
+    stubs.anyHeldOfType.returns(true);
     const result = await reaper.pruneUnusedImages();
     // the kill-list still acquires the lock, but the in-progress guard skips the actual remove
     expect(stubs.appDockerImageRemove.called).to.equal(false);
     expect(result).to.deep.equal({ removed: 0, kept: 0, skipped: 1 });
+    // the guard asks about exactly the lease types that pull images
+    expect(stubs.anyHeldOfType.calledWith('install', 'redeploy', 'rebuild')).to.equal(true);
   });
 
   it('checks the in-progress guard for each delete (skip-and-continue, not abort)', async () => {
@@ -96,8 +98,8 @@ describe('imageReaper tests', () => {
       { Id: 'sha256:b', RepoTags: ['b:1'] },
     ]);
     // in progress only while deleting the first image, idle for the second
-    stubs.isOperationInProgress.onFirstCall().returns(true);
-    stubs.isOperationInProgress.returns(false);
+    stubs.anyHeldOfType.onFirstCall().returns(true);
+    stubs.anyHeldOfType.returns(false);
     const result = await reaper.pruneUnusedImages();
     expect(stubs.appDockerImageRemove.calledOnceWith('sha256:b')).to.equal(true);
     expect(result).to.deep.equal({ removed: 1, kept: 0, skipped: 1 });
