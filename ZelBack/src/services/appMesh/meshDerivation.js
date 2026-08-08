@@ -164,6 +164,19 @@ function memberAddress(appUuid, outpoint, slot) {
 }
 
 /**
+ * The node's own overlay address inside an app — the base of its block, held
+ * by the mesh tun. Components sit at name-derived slots; the spec gate keeps
+ * component names off slot 0 so none can land on the tun's address.
+ *
+ * @param {string} appUuid the app row's registration uuid
+ * @param {string} outpoint the node's canonical outpoint
+ * @returns {string} canonical textual IPv6 address
+ */
+function nodeAddress(appUuid, outpoint) {
+  return memberAddress(appUuid, outpoint, 0);
+}
+
+/**
  * A node's stable short id within mesh names and the resolver snapshot:
  * the first 4 bytes of sha256 over the canonical outpoint, in hex.
  *
@@ -196,6 +209,7 @@ module.exports = {
   appPrefix,
   nodeBlock,
   memberAddress,
+  nodeAddress,
   nodeId,
   memberName,
 };
