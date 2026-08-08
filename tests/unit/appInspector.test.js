@@ -610,7 +610,6 @@ describe('appInspector tests', () => {
         '../dockerService': {
           dockerGetUsage: dockerGetUsageStub,
           getAppDockerNameIdentifier: (id) => `/${id}`,
-          dockerContainerStatsStream: (containerId, callback) => callback(null, {}),
         },
         '../appRuntime/deploymentProvider': { listInstalledDeployments: listInstalledDeploymentsStub },
         '../utils/hostStorageCapability': { supportsManagedStorage: supportsManagedStorageStub },
