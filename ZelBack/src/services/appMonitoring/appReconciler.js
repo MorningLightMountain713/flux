@@ -2426,6 +2426,17 @@ function committedIdentifiers() {
   return [...ids];
 }
 
+/**
+ * The run-state a decider has declared for a component, or undefined if none.
+ * Lets the masterSlave election see that a prior pass already promoted a
+ * component, so it leaves the retrying to the reconciler instead of re-electing.
+ * @param {string} identifier
+ * @returns {string|undefined} 'running' | 'stopped' | undefined
+ */
+function getControllerDesired(identifier) {
+  return controllerDesired.get(identifier);
+}
+
 // --- lifecycle -----------------------------------------------------------
 
 let started = false;
@@ -2483,6 +2494,7 @@ module.exports = {
   setControllerDesiredAndWait,
   setRunningUnlessOperatorStopped,
   committedIdentifiers,
+  getControllerDesired,
   requestStopAndClearData,
   setRequestGracefulStop,
   waitForBootDrainSettled: reconcilerQueue.waitForBootDrainSettled,
