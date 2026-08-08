@@ -73,6 +73,9 @@ const scheduledPrimaryStart = new Map();
 // reads it to make a decision - so that the exclusion is stated once on entry (and again
 // after a restart) instead of on every pass.
 const operatorStoppedAnnounced = new Set();
+// Same latch for the no-primary announcement: stated once when an app enters the
+// no-primary state, cleared when FDM reports a primary again.
+const noPrimaryAnnounced = new Set();
 
 const fluxDirPath = process.env.FLUXOS_PATH || path.join(process.env.HOME, 'zelflux');
 
@@ -584,7 +587,7 @@ async function changeSyncthingFolderType(folderId, folderType) {
     // eslint-disable-next-line global-require
     const syncthingService = require('../syncthingService');
 
-    log.info(`Changing syncthing folder ${folderId} to ${folderType} mode`);
+    log.debug(`Changing syncthing folder ${folderId} to ${folderType} mode`);
 
     // Get current folder configuration
     const foldersResponse = await syncthingService.getConfigFolders();
@@ -605,7 +608,7 @@ async function changeSyncthingFolderType(folderId, folderType) {
 
     // Check if already in desired mode
     if (folder.type === folderType) {
-      log.info(`Syncthing folder ${folderId} is already in ${folderType} mode`);
+      log.debug(`Syncthing folder ${folderId} is already in ${folderType} mode`);
       return true;
     }
 
@@ -614,7 +617,7 @@ async function changeSyncthingFolderType(folderId, folderType) {
     const updateResponse = await syncthingService.adjustConfigFolders('patch', patchData, folder.id);
 
     if (updateResponse.status === 'success') {
-      log.info(`Successfully changed syncthing folder ${folderId} to ${folderType} mode`);
+      log.debug(`Successfully changed syncthing folder ${folderId} to ${folderType} mode`);
       return true;
     }
     log.error(`Failed to change syncthing folder type: ${JSON.stringify(updateResponse)}`);
@@ -634,7 +637,7 @@ async function changeSyncthingFolderType(folderId, folderType) {
 async function applyPermissionsFix(appname, appId) {
   try {
     const appPath = `${appsFolder}${appId}`;
-    log.info(`Applying permissions fix for app: ${appname}`);
+    log.debug(`Applying permissions fix for app: ${appname}`);
 
     const deployment = await deploymentProvider.getInstalledDeployment(appname);
     const mounts = deployment
@@ -665,7 +668,7 @@ async function applyPermissionsFix(appname, appId) {
       }
     }
 
-    log.info(`Successfully applied permissions fix for app: ${appname}`);
+    log.debug(`Successfully applied permissions fix for app: ${appname}`);
     return true;
   } catch (error) {
     log.error(`Error applying permissions fix for ${appname}: ${error.message}`);
@@ -736,18 +739,21 @@ async function stopApplication(appname) {
  */
 async function promoteApplicationToPrimary(appname, appId) {
   try {
-    log.info(`Starting app ${appname} with permissions fix workflow (new primary)`);
+    // Idempotence backstop for every promote path: a promotion already in effect
+    // is the reconciler's to enforce; re-running the workflow would only re-chmod
+    // the tree and cycle the syncthing folder mode.
+    if (appReconciler.getControllerDesired(appname) === 'running') return;
+
+    log.info(`Promoting ${appname} to primary (permissions fix + syncthing folder cycle)`);
 
     // Quiesce inbound replication while the fix runs: receiveonly stops syncthing
     // overwriting the data we are about to re-own.
-    log.info(`Moving syncthing folder to receiveonly for ${appname}`);
     const toReceiveOnly = await changeSyncthingFolderType(appId, 'receiveonly');
     if (!toReceiveOnly) {
       log.warn(`Failed to change syncthing folder to receiveonly for ${appname}, continuing anyway...`);
     }
 
     // Re-own the persistent container data before the app starts writing to it.
-    log.info(`Applying permissions fix for ${appname}`);
     const permissionsApplied = await applyPermissionsFix(appname, appId);
     if (!permissionsApplied) {
       log.error(`Failed to apply permissions fix for ${appname}, aborting container start`);
@@ -755,7 +761,6 @@ async function promoteApplicationToPrimary(appname, appId) {
     }
 
     // Restore two-way sync now the data is fixed; a primary must be sendreceive.
-    log.info(`Moving syncthing folder to sendreceive for ${appname}`);
     const toSendReceive = await changeSyncthingFolderType(appId, 'sendreceive');
     if (!toSendReceive) {
       log.error(`Failed to change syncthing folder to sendreceive for ${appname}, aborting container start - cannot become primary without sendreceive mode`);
@@ -763,10 +768,9 @@ async function promoteApplicationToPrimary(appname, appId) {
     }
 
     // Hand the run-state decision to the reconciler (the single container actuator);
-    // permissions are already fixed at this point.
+    // permissions are already fixed at this point. Its desired-state transition
+    // line is the workflow's success marker.
     appReconciler.setControllerDesired(appname, 'running', 'masterSlave primary (synced)');
-
-    log.info(`Successfully completed permissions fix workflow for ${appname}`);
   } catch (error) {
     log.error(`Error in promoteApplicationToPrimary for ${appname}: ${error.message}`);
     // Do not start the app if there was an error in the workflow
@@ -1932,10 +1936,13 @@ async function coordinateActiveStandbyApps() {
       }
     }
 
-    // Silently - the entry is a reporting latch, not state anyone acts on, and an app
+    // Silently - the entries are reporting latches, not state anyone acts on, and an app
     // going away is not itself an election event worth a line.
     for (const identifier of operatorStoppedAnnounced) {
       if (!validIdentifiers.has(identifier)) operatorStoppedAnnounced.delete(identifier);
+    }
+    for (const identifier of noPrimaryAnnounced) {
+      if (!validIdentifiers.has(identifier)) noPrimaryAnnounced.delete(identifier);
     }
 
     const { receiveOnlySyncthingAppsCache } = globalState;
@@ -2012,8 +2019,19 @@ async function coordinateActiveStandbyApps() {
               continue;
             }
             if ((!ip)) {
-              log.info(`activeStandby: app:${appName} has currently no primary set`);
+              if (!noPrimaryAnnounced.has(identifier)) {
+                noPrimaryAnnounced.add(identifier);
+                log.info(`activeStandby: app:${appName} has currently no primary set`);
+              }
               if (!runningAppsNames.includes(identifier)) {
+                // A prior pass already elected this node: desired-running sits with the
+                // reconciler, which owns the retry/backoff for a container that will not
+                // stay up. Re-electing every pass would re-probe every peer and re-run
+                // the permissions workflow to no effect.
+                if (appReconciler.getControllerDesired(identifier) === 'running') {
+                  // eslint-disable-next-line no-continue
+                  continue;
+                }
                 // Check if app is ready (syncthing data is synced) before allowing it to become primary.
                 // syncedMark rejects a mark left behind by a previous incarnation of this
                 // component's volume - promoting on one would serve an empty disk as primary.
@@ -2254,6 +2272,7 @@ async function coordinateActiveStandbyApps() {
                 }
               }
             } else {
+              noPrimaryAnnounced.delete(identifier);
               activePrimaryByIdentifier.set(identifier, ip);
               if (scheduledPrimaryStart.has(identifier)) {
                 log.info(`activeStandby: app:${appName} removed from scheduledPrimaryStart cache, already started on another standby node`);
