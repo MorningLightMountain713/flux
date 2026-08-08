@@ -61,12 +61,12 @@ const legacyPinnedOctets = appsThatMightBeUsingOldGatewayIpAssignment.map((name)
  */
 async function ensureAppDockerNetwork(appName, { onStatus = null } = {}) {
   const checkingStatus = { status: `Checking Flux App network of ${appName}...` };
-  log.info(checkingStatus);
+  log.info(checkingStatus.status);
   if (onStatus) onStatus(checkingStatus);
 
   if (await dockerService.dockerNetworkState(`fluxDockerNetwork_${appName}`) === 'exists') {
     const existsStatus = { status: `Flux App network of ${appName} already exists.` };
-    log.info(existsStatus);
+    log.info(existsStatus.status);
     if (onStatus) onStatus(existsStatus);
     return `Flux App Network of ${appName} already exists.`;
   }
