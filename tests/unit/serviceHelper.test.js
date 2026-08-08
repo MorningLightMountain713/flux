@@ -456,6 +456,23 @@ describe('serviceHelper tests', () => {
       sinon.assert.calledOnceWithExactly(debugSpy, 'Run Cmd: sudo testCmd');
     });
 
+    it('should not prefix sudo for runAsRoot if the process is already root', async () => {
+      const expected = {
+        error: null,
+        stdout: 'test output',
+        stderr: '',
+      };
+
+      sinon.stub(process, 'getuid').returns(0);
+      runCmdStub.resolves({ stdout: 'test output', stderr: '', error: null });
+
+      const response = await serviceHelper.runCommand('testCmd', { runAsRoot: true });
+
+      expect(response).to.be.deep.equal(expected);
+      sinon.assert.calledOnceWithExactly(runCmdStub, 'testCmd', [], { timeout: 900000 });
+      sinon.assert.calledOnceWithExactly(debugSpy, 'Run Cmd: testCmd ');
+    });
+
     it('should set async lock if command is run exclusively', async () => {
       const expected = {
         error: null,

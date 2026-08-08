@@ -1,11 +1,10 @@
 const fs = require('fs').promises;
 const fs2 = require('fs');
-const util = require('util');
 const log = require('../lib/log');
 const axios = require('axios');
 const path = require('path');
 const volumeService = require('./utils/volumeService');
-const exec = util.promisify(require('child_process').exec);
+const serviceHelper = require('./serviceHelper');
 const { URL } = require('url');
 const { validateUrlWithDns } = require('./utils/urlSecurity');
 
@@ -424,15 +423,22 @@ async function downloadFileFromUrl(url, localpath, component, rename = false, re
 async function untarFile(extractPath, tarFilePath) {
   try {
     await fs.mkdir(extractPath, { recursive: true });
-    const unpackCmd = `sudo tar -xvzf ${tarFilePath} -C ${extractPath}`;
-    await exec(unpackCmd, { maxBuffer: 1024 * 1024 * 10 });
-    return { status: true };
   } catch (error) {
-    const stringstderr = error.stderr.replace(/\n/g, ' ');
-    const stringstdout = error.stdout.replace(/\n/g, ' ');
-    log.error('Error during extraction:', error.stderr || error.stdout);
-    return { status: false, error: stringstderr || stringstdout };
+    log.error('Error during extraction:', error.message);
+    return { status: false, error: error.message };
   }
+  const { error, stdout, stderr } = await serviceHelper.runCommand('tar', {
+    runAsRoot: true,
+    logError: false,
+    maxBuffer: 1024 * 1024 * 10,
+    params: ['-xvzf', tarFilePath, '-C', extractPath],
+  });
+  if (error) {
+    log.error('Error during extraction:', stderr || stdout || error.message);
+    const flattened = (stderr || stdout || error.message || '').replace(/\n/g, ' ');
+    return { status: false, error: flattened };
+  }
+  return { status: true };
 }
 
 /**
@@ -446,15 +452,22 @@ async function createTarGz(sourceDirectory, outputFileName) {
   try {
     const outputDirectory = outputFileName.substring(0, outputFileName.lastIndexOf('/'));
     await fs.mkdir(outputDirectory, { recursive: true });
-    const packCmd = `sudo tar -czvf ${outputFileName} -C ${sourceDirectory} .`;
-    await exec(packCmd, { maxBuffer: 1024 * 1024 * 10 });
-    return { status: true };
   } catch (error) {
-    const stringstderr = error.stderr.replace(/\n/g, ' ');
-    const stringstdout = error.stdout.replace(/\n/g, ' ');
-    log.error('Error creating tarball:', error.stderr || error.stdout);
-    return { status: false, error: stringstderr || stringstdout };
+    log.error('Error creating tarball:', error.message);
+    return { status: false, error: error.message };
   }
+  const { error, stdout, stderr } = await serviceHelper.runCommand('tar', {
+    runAsRoot: true,
+    logError: false,
+    maxBuffer: 1024 * 1024 * 10,
+    params: ['-czvf', outputFileName, '-C', sourceDirectory, '.'],
+  });
+  if (error) {
+    log.error('Error creating tarball:', stderr || stdout || error.message);
+    const flattened = (stderr || stdout || error.message || '').replace(/\n/g, ' ');
+    return { status: false, error: flattened };
+  }
+  return { status: true };
 }
 
 /**
@@ -465,19 +478,18 @@ async function createTarGz(sourceDirectory, outputFileName) {
  * @returns {boolean} - True if the directory or its contents are removed successfully, false on failure.
  */
 async function removeDirectory(rpath, directory = false) {
-  try {
-    let execFinal;
-    if (directory === false) {
-      execFinal = `sudo rm -rf "${rpath}"`;
-    } else {
-      execFinal = `sudo find "${rpath}" -mindepth 1 -exec rm -rf {} +`;
-    }
-    await exec(execFinal, { maxBuffer: 1024 * 1024 * 10 });
-    return true;
-  } catch (error) {
-    log.error(error);
-    return false;
-  }
+  // rm removes the directory itself; find empties it but keeps the directory
+  const [cmd, params] = directory === false
+    ? ['rm', ['-rf', rpath]]
+    : ['find', [rpath, '-mindepth', '1', '-exec', 'rm', '-rf', '{}', '+']];
+
+  const { error } = await serviceHelper.runCommand(cmd, {
+    runAsRoot: true,
+    maxBuffer: 1024 * 1024 * 10,
+    params,
+  });
+
+  return !error;
 }
 
 module.exports = {

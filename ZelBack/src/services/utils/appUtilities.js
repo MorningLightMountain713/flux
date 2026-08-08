@@ -84,6 +84,49 @@ async function appPricePerMonth(spec, height, suppliedPrices) {
 }
 
 
+// Measured mount sizes, keyed by mount source path, each with a monotonic
+// freshness deadline. `du -sb` walks the whole mount tree as root, and the
+// monitoring tick re-asks well before sizes meaningfully move, so a fresh
+// measurement is served from here instead of re-walking. A failed measurement
+// is never cached.
+const mountSizeCache = new Map();
+const MOUNT_SIZE_TTL_NS = 15n * 60n * 1_000_000_000n;
+
+/**
+ * Size of a container mount in bytes, served from mountSizeCache while fresh.
+ * @param {string} source - Mount source path on the host
+ * @param {string} mountType - Mount type, for the failure log ('bind' | 'volume')
+ * @returns {Promise<number|null>} Size in bytes, or null if it could not be measured
+ */
+async function getMountSize(source, mountType) {
+  const cached = mountSizeCache.get(source);
+  if (cached && process.hrtime.bigint() < cached.freshUntil) {
+    return cached.size;
+  }
+  const { error, stdout } = await serviceHelper.runCommand('du', {
+    runAsRoot: true,
+    logError: false,
+    params: ['-sb', source],
+  });
+  if (error) {
+    log.warn(`Failed to get size for ${mountType} mount ${source}: ${error.message}`);
+    return null;
+  }
+  if (!stdout) {
+    log.warn(`No mount info returned for source: ${source}`);
+    return null;
+  }
+  const size = serviceHelper.ensureNumber(stdout.split('\t')[0]) || 0;
+  if (mountSizeCache.size > 256) {
+    const now = process.hrtime.bigint();
+    mountSizeCache.forEach((entry, key) => {
+      if (now >= entry.freshUntil) mountSizeCache.delete(key);
+    });
+  }
+  mountSizeCache.set(source, { size, freshUntil: process.hrtime.bigint() + MOUNT_SIZE_TTL_NS });
+  return size;
+}
+
 /**
  * Get container storage usage
  * @param {string} appName - Application name
@@ -120,33 +163,9 @@ async function getContainerStorage(appName) {
         const source = mount.Source;
         const mountType = mount.Type;
         if (mountType === 'bind') {
-          const { error, stdout } = await serviceHelper.runCommand('du', {
-            runAsRoot: true,
-            logError: false,
-            params: ['-sb', source],
-          });
-          if (error) {
-            log.warn(`Failed to get size for bind mount ${source}: ${error.message}`);
-          } else if (stdout) {
-            const sizeNum = serviceHelper.ensureNumber(stdout.split('\t')[0]) || 0;
-            bindMountsSize += sizeNum;
-          } else {
-            log.warn(`No mount info returned for source: ${source}`);
-          }
+          bindMountsSize += (await getMountSize(source, mountType)) ?? 0;
         } else if (mountType === 'volume') {
-          const { error, stdout } = await serviceHelper.runCommand('du', {
-            runAsRoot: true,
-            logError: false,
-            params: ['-sb', source],
-          });
-          if (error) {
-            log.warn(`Failed to get size for volume mount ${source}: ${error.message}`);
-          } else if (stdout) {
-            const sizeNum = serviceHelper.ensureNumber(stdout.split('\t')[0]) || 0;
-            volumeMountsSize += sizeNum;
-          } else {
-            log.warn(`No mount info returned for source: ${source}`);
-          }
+          volumeMountsSize += (await getMountSize(source, mountType)) ?? 0;
         } else {
           log.warn(`Unsupported mount type or source: Type: ${mountType}, Source: ${source}`);
         }

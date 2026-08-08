@@ -1297,6 +1297,7 @@ describe('fluxNetworkHelper tests', () => {
     let runCommandStub;
     beforeEach(() => {
       runCommandStub = sinon.stub(serviceHelper, 'runCommand');
+      fluxNetworkHelper.resetFirewallActiveCache();
     });
 
     afterEach(() => {
@@ -1330,6 +1331,30 @@ describe('fluxNetworkHelper tests', () => {
       expect(isFirewallActive).to.be.false;
       sinon.assert.calledOnceWithMatch(runCommandStub, 'ufw', { runAsRoot: true, params: ['status'] });
     });
+
+    it('should reuse a fresh probed status instead of running ufw again', async () => {
+      runCommandStub.resolves({ error: null, stdout: 'Status: active' });
+
+      const first = await fluxNetworkHelper.isFirewallActive();
+      const second = await fluxNetworkHelper.isFirewallActive();
+
+      expect(first).to.be.true;
+      expect(second).to.be.true;
+      sinon.assert.calledOnce(runCommandStub);
+    });
+
+    it('should not cache a failed probe', async () => {
+      sinon.stub(log, 'error');
+      runCommandStub.onFirstCall().resolves({ error: new Error('ufw: command not found'), stdout: '' });
+      runCommandStub.onSecondCall().resolves({ error: null, stdout: 'Status: active' });
+
+      const first = await fluxNetworkHelper.isFirewallActive();
+      const second = await fluxNetworkHelper.isFirewallActive();
+
+      expect(first).to.be.false;
+      expect(second).to.be.true;
+      sinon.assert.calledTwice(runCommandStub);
+    });
   });
 
   describe('adjustFirewall tests', () => {
@@ -1355,6 +1380,7 @@ describe('fluxNetworkHelper tests', () => {
       runCommandStub = sinon.stub(serviceHelper, 'runCommand')
         .resolves({ error: null, stdout: '' });
       logSpy = sinon.spy(log, 'info');
+      fluxNetworkHelper.resetFirewallActiveCache();
     });
 
     afterEach(() => {

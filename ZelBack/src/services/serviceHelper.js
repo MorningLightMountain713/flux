@@ -527,6 +527,16 @@ function ipInSubnet(ip, subnet) {
  * @param {{params?: string[], runAsRoot?: Boolean, exclusive?: Boolean, logError?: Boolean, cwd?: string, timeout?: number, signal?: AbortSignal, shell?: (Boolean|string)}} options
    @returns {Promise<{error: (Error|null), stdout: (string|null), stderr: (string|null)}>}
  */
+/**
+ * Whether this process is running as root. Arcane runs FluxOS as root; legacy
+ * installs run it as an unprivileged user with sudo rights, which is why
+ * runCommand prefixes sudo only when this is false.
+ * @returns {boolean}
+ */
+function isProcessRoot() {
+  return process.getuid?.() === 0;
+}
+
 async function runCommand(userCmd, options = {}) {
   const res = { error: null, stdout: '', stderr: '' };
   const {
@@ -553,7 +563,9 @@ async function runCommand(userCmd, options = {}) {
   }
 
   let cmd;
-  if (runAsRoot) {
+  // a process that is already root runs the command directly - prefixing sudo
+  // there adds nothing but a PAM session and its journal lines per call
+  if (runAsRoot && !isProcessRoot()) {
     params.unshift(userCmd);
     cmd = 'sudo';
   } else {
@@ -732,6 +744,7 @@ module.exports = {
   parseVersion,
   parseInterval,
   randomDelayMs,
+  isProcessRoot,
   runCommand,
   validIpv4Address,
   validPort,

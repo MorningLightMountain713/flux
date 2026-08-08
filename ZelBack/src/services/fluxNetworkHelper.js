@@ -34,6 +34,15 @@ let localSocketAddress = null;
 let localSocketAddressFreshUntil = 0n;
 const LOCAL_SOCKET_ADDRESS_TTL_NS = 60n * 1_000_000_000n;
 
+// Whether ufw reports "Status: active", with a monotonic freshness deadline. The
+// answer only changes when an operator toggles ufw by hand, yet periodic callers
+// (the availability checker alone asks every couple of minutes) each fork a
+// sudo+ufw probe for it, so one measurement is shared until the deadline passes.
+// A probe failure is never cached.
+let firewallActive = null;
+let firewallActiveFreshUntil = 0n;
+const FIREWALL_ACTIVE_TTL_NS = 15n * 60n * 1_000_000_000n;
+
 /**
  * Converts a hexadecimal IP address (as found in /proc/net/route) to dotted decimal format.
  * The hex format is little-endian, so bytes are reversed.
@@ -1260,18 +1269,29 @@ async function allowPortApi(req, res) {
  * @returns {Promise<boolean>} True if a firewall is active. Otherwise false.
  */
 async function isFirewallActive() {
+  if (firewallActive !== null && process.hrtime.bigint() < firewallActiveFreshUntil) {
+    return firewallActive;
+  }
   try {
     // the status line is picked out of ufw's full status output
     const cmdresA = await runUfw(['status']);
-    if (serviceHelper.ensureString(cmdresA).includes('Status: active')) {
-      return true;
-    }
-    return false;
+    firewallActive = serviceHelper.ensureString(cmdresA).includes('Status: active');
+    firewallActiveFreshUntil = process.hrtime.bigint() + FIREWALL_ACTIVE_TTL_NS;
+    return firewallActive;
   } catch (error) {
     // command ufw not found is the most likely reason
     log.error(error);
     return false;
   }
+}
+
+/**
+ * Discards the cached ufw status so the next isFirewallActive call probes ufw.
+ * Main goal for this is testing.
+ */
+function resetFirewallActiveCache() {
+  firewallActive = null;
+  firewallActiveFreshUntil = 0n;
 }
 
 /**
@@ -1693,6 +1713,7 @@ module.exports = {
   allowPort,
   allowOutPort,
   isFirewallActive,
+  resetFirewallActiveCache,
   // Exports for testing purposes
   resetNtpSource,
   parseChronyOffset,

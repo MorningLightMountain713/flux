@@ -90,3 +90,113 @@ describe('IOUtils getVolumeInfo tests', () => {
     expect(result).to.equal(false);
   });
 });
+
+describe('IOUtils archive and removal tests', () => {
+  const fs = require('fs').promises;
+  const serviceHelper = require('../../ZelBack/src/services/serviceHelper');
+  const log = require('../../ZelBack/src/lib/log');
+
+  let runCommandStub;
+  let mkdirStub;
+
+  beforeEach(() => {
+    runCommandStub = sinon.stub(serviceHelper, 'runCommand');
+    mkdirStub = sinon.stub(fs, 'mkdir').resolves();
+  });
+
+  afterEach(() => {
+    sinon.restore();
+  });
+
+  describe('untarFile tests', () => {
+    it('should extract with tar as root and report success', async () => {
+      runCommandStub.resolves({ error: null, stdout: '', stderr: '' });
+
+      const result = await IOUtils.untarFile('/extract/here', '/backup/file.tar.gz');
+
+      expect(result).to.deep.equal({ status: true });
+      sinon.assert.calledOnceWithExactly(mkdirStub, '/extract/here', { recursive: true });
+      sinon.assert.calledOnceWithMatch(runCommandStub, 'tar', {
+        runAsRoot: true,
+        params: ['-xvzf', '/backup/file.tar.gz', '-C', '/extract/here'],
+      });
+    });
+
+    it('should report tar failure output with newlines flattened', async () => {
+      sinon.stub(log, 'error');
+      runCommandStub.resolves({ error: new Error('exit 2'), stdout: '', stderr: 'tar: broken\ntar: exiting' });
+
+      const result = await IOUtils.untarFile('/extract/here', '/backup/file.tar.gz');
+
+      expect(result).to.deep.equal({ status: false, error: 'tar: broken tar: exiting' });
+    });
+
+    it('should report a mkdir failure without running tar', async () => {
+      sinon.stub(log, 'error');
+      mkdirStub.rejects(new Error('EACCES'));
+
+      const result = await IOUtils.untarFile('/extract/here', '/backup/file.tar.gz');
+
+      expect(result).to.deep.equal({ status: false, error: 'EACCES' });
+      sinon.assert.notCalled(runCommandStub);
+    });
+  });
+
+  describe('createTarGz tests', () => {
+    it('should pack with tar as root and report success', async () => {
+      runCommandStub.resolves({ error: null, stdout: '', stderr: '' });
+
+      const result = await IOUtils.createTarGz('/source/dir', '/backup/out/file.tar.gz');
+
+      expect(result).to.deep.equal({ status: true });
+      sinon.assert.calledOnceWithExactly(mkdirStub, '/backup/out', { recursive: true });
+      sinon.assert.calledOnceWithMatch(runCommandStub, 'tar', {
+        runAsRoot: true,
+        params: ['-czvf', '/backup/out/file.tar.gz', '-C', '/source/dir', '.'],
+      });
+    });
+
+    it('should report tar failure output with newlines flattened', async () => {
+      sinon.stub(log, 'error');
+      runCommandStub.resolves({ error: new Error('exit 2'), stdout: 'tar: disk full\ntar: exiting', stderr: '' });
+
+      const result = await IOUtils.createTarGz('/source/dir', '/backup/out/file.tar.gz');
+
+      expect(result).to.deep.equal({ status: false, error: 'tar: disk full tar: exiting' });
+    });
+  });
+
+  describe('removeDirectory tests', () => {
+    it('should remove the directory itself with rm as root', async () => {
+      runCommandStub.resolves({ error: null, stdout: '', stderr: '' });
+
+      const result = await IOUtils.removeDirectory('/data/gone');
+
+      expect(result).to.equal(true);
+      sinon.assert.calledOnceWithMatch(runCommandStub, 'rm', {
+        runAsRoot: true,
+        params: ['-rf', '/data/gone'],
+      });
+    });
+
+    it('should empty the directory but keep it when directory is true', async () => {
+      runCommandStub.resolves({ error: null, stdout: '', stderr: '' });
+
+      const result = await IOUtils.removeDirectory('/data/kept', true);
+
+      expect(result).to.equal(true);
+      sinon.assert.calledOnceWithMatch(runCommandStub, 'find', {
+        runAsRoot: true,
+        params: ['/data/kept', '-mindepth', '1', '-exec', 'rm', '-rf', '{}', '+'],
+      });
+    });
+
+    it('should return false when the removal fails', async () => {
+      runCommandStub.resolves({ error: new Error('exit 1'), stdout: '', stderr: '' });
+
+      const result = await IOUtils.removeDirectory('/data/gone');
+
+      expect(result).to.equal(false);
+    });
+  });
+});

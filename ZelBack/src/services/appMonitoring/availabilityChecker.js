@@ -21,30 +21,13 @@ async function signCheckAppData(message) {
   return signature;
 }
 
-// Short-TTL memoization of the ufw "is the firewall active" probe, so the
-// availability loop doesn't shell `ufw status` on every iteration. The
-// .catch(() => true) fail-safe treats a transient probe error as active, so a
-// flaky ufw never makes us skip opening (or cleaning up) the test port.
-let firewallActiveCache = { value: null, at: 0 };
-const FIREWALL_ACTIVE_CACHE_MS = 60_000;
-
-async function firewallActiveCached() {
-  const now = Date.now();
-  if (firewallActiveCache.value !== null && now - firewallActiveCache.at < FIREWALL_ACTIVE_CACHE_MS) {
-    return firewallActiveCache.value;
-  }
-  const active = await fluxNetworkHelper.isFirewallActive().catch(() => true);
-  firewallActiveCache = { value: active, at: now };
-  return active;
-}
-
 // Helper function to handle test shutdown
 async function handleTestShutdown(testingPort, testHttpServer, options = {}) {
   const skipFirewall = options.skipFirewall || false;
   const skipUpnp = options.skipUpnp || false;
   const skipHttpServer = options.skipHttpServer || false;
 
-  const updateFirewall = skipFirewall ? false : await firewallActiveCached();
+  const updateFirewall = skipFirewall ? false : await fluxNetworkHelper.isFirewallActive();
 
   if (updateFirewall) {
     await fluxNetworkHelper
@@ -200,7 +183,7 @@ async function runAvailabilityCheckOnce(dosState, portsNotWorking, failedNodesTe
       return timeouts.failure;
     }
 
-    const firewallActive = await firewallActiveCached();
+    const firewallActive = await fluxNetworkHelper.isFirewallActive();
     if (firewallActive) {
       await fluxNetworkHelper.allowPort(dosState.testingPort);
     }
