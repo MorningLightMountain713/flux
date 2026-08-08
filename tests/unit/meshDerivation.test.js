@@ -100,6 +100,13 @@ describe('meshDerivation', () => {
     });
   });
 
+  describe('nodeAddress', () => {
+    it('is the base of the node block', () => {
+      expect(meshDerivation.nodeAddress(UUID1, `${TX1}:0`)).to.equal('fdb2:8fa9:3450:76a8:bd32:a312::');
+      expect(meshDerivation.nodeAddress(UUID1, `${TX1}:0`)).to.equal(meshDerivation.memberAddress(UUID1, `${TX1}:0`, 0));
+    });
+  });
+
   describe('nodeId', () => {
     it('matches the golden vectors', () => {
       expect(meshDerivation.nodeId(`${TX1}:0`)).to.equal('6f6437c5');
