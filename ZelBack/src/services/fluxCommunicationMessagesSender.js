@@ -528,7 +528,7 @@ async function respondWithTempMessages(peer, sinceTimestamp = 0) {
   }
 }
 
-async function streamBatchedSync(peer, { sinceTimestamp, collectionName, validityMs, query, projection, messageType, label }) {
+async function streamBatchedSync(peer, { sinceTimestamp, collectionName, validityMs, query, projection, messageType, label, batchSize = 2000 }) {
   try {
     // A NODE THAT DOES NOT KNOW YET SAYS SO, rather than sending what it
     // happens to hold. An empty response and a complete one are the same three
@@ -562,7 +562,6 @@ async function streamBatchedSync(peer, { sinceTimestamp, collectionName, validit
       .find(finalQuery, { projection: finalProjection })
       .sort({ broadcastedAt: 1 });
 
-    const batchSize = 2000;
     let batch = [];
     let total = 0;
     for await (const doc of cursor) {
@@ -590,6 +589,10 @@ async function respondWithAppRunningMessages(peer, sinceTimestamp = 0) {
     projection: { _id: 0, expireAt: 0 },
     messageType: 'fluxapprunningsync',
     label: 'respondWithAppRunningMessages',
+    // A mesh-enabled entry carries its authority bundle and voucher (~600
+    // bytes), so chunks are a quarter of the old count to keep the frame
+    // size where it was.
+    batchSize: 500,
   });
 }
 
