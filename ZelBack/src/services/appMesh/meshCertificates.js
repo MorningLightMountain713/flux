@@ -98,34 +98,54 @@ async function runNebulaCert(params) {
   return result;
 }
 
+function parsePrintedCertificate(cert) {
+  const notAfter = new Date(cert.details.notAfter);
+  if (Number.isNaN(notAfter.getTime())) return null;
+  return {
+    name: cert.details.name,
+    notAfter,
+    issuer: cert.details.issuer,
+    fingerprint: cert.fingerprint,
+    isCa: cert.details.isCa === true,
+    networks: cert.details.networks ?? [],
+    unsafeNetworks: cert.details.unsafeNetworks ?? [],
+    groups: cert.details.groups ?? [],
+  };
+}
+
 /**
- * Parsed details of a nebula certificate on disk, or null if the file is
- * missing or unreadable as a certificate. `nebula-cert print -json` emits an
- * array (a PEM file can bundle several certificates); a single-cert file is a
- * one-element array.
+ * Every certificate in a PEM file, parsed — `nebula-cert print -json` emits an
+ * array, one element per certificate in the bundle. Null when the file is
+ * missing or any certificate is unreadable: a bundle that cannot be read whole
+ * cannot be judged.
  *
  * @param {string} certPath
- * @returns {Promise<{name: string, notAfter: Date, issuer: string, fingerprint: string}|null>}
+ * @returns {Promise<Array<{name: string, notAfter: Date, issuer: string,
+ *   fingerprint: string, isCa: boolean, networks: string[],
+ *   unsafeNetworks: string[], groups: string[]}>|null>}
  */
-async function certificateDetails(certPath) {
+async function certificateBundleDetails(certPath) {
   try {
     const result = await serviceHelper.runCommand('nebula-cert', {
       runAsRoot: true, params: ['print', '-json', '-path', certPath],
     });
     if (result.error) return null;
     const parsed = JSON.parse(result.stdout);
-    const cert = Array.isArray(parsed) ? parsed[0] : parsed;
-    const notAfter = new Date(cert.details.notAfter);
-    if (Number.isNaN(notAfter.getTime())) return null;
-    return {
-      name: cert.details.name,
-      notAfter,
-      issuer: cert.details.issuer,
-      fingerprint: cert.fingerprint,
-    };
+    const certs = (Array.isArray(parsed) ? parsed : [parsed]).map(parsePrintedCertificate);
+    return certs.every((cert) => cert !== null) ? certs : null;
   } catch (error) {
     return null;
   }
+}
+
+/**
+ * The first certificate of a file, for single-cert reads (host.crt, one CA).
+ * @param {string} certPath
+ * @returns {Promise<object|null>}
+ */
+async function certificateDetails(certPath) {
+  const certs = await certificateBundleDetails(certPath);
+  return certs && certs.length > 0 ? certs[0] : null;
 }
 
 /**
