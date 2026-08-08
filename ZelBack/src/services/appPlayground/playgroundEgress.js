@@ -125,6 +125,12 @@ async function ensureEgressPolicy() {
  * duplicate every time it is asked.
  */
 async function ensureEgressJump() {
+  // A node whose playground has never built the chain (feature unused) has
+  // nothing to point at and no session rules to confine - the jump insert
+  // could only fail. ensureEgressPolicy builds the chain and re-runs this.
+  const { error: chainMissing } = await iptables(['-nL', CHAIN]);
+  if (chainMissing) return true;
+
   const jump = ['DOCKER-USER', '-i', BRIDGE_MATCH, '-j', CHAIN];
 
   const { error: absent } = await iptables(['-C', ...jump]);

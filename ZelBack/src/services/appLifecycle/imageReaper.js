@@ -1,6 +1,6 @@
 const log = require('../../lib/log');
 const dockerService = require('../dockerService');
-const globalState = require('../utils/globalState');
+const operationRegistry = require('../utils/operationRegistry');
 const imageCacheRetention = require('./imageCacheRetention');
 const { withHostMutationLock } = require('../utils/hostMutationLock');
 
@@ -26,16 +26,16 @@ const { withHostMutationLock } = require('../utils/hostMutationLock');
 // ── The install race and why this is correct, not just unlikely ──────────────────────────
 // An app install pulls its image OUTSIDE the host-mutation lock and only afterwards creates
 // the container, so for a moment the image is present with no container — i.e. it looks cold.
-// Every app-image pull path, however, sets a globalState in-progress flag BEFORE pulling and
-// clears it only AFTER the container exists (installation / redeploy / rebuild /
-// reinstall-old-apps), and globalState.isOperationInProgress() aggregates all of them. So a
+// Every app-image pull path, however, acquires an operationRegistry lease BEFORE pulling and
+// releases it only AFTER the container exists (installation / redeploy / rebuild /
+// reinstall-old-apps), and anyHeldOfType('install', 'redeploy', 'rebuild') aggregates them. So a
 // `false` read means no install is anywhere in a pull->create span, hence no install depends
 // on the image we are about to delete. The check and the delete run in ONE synchronous tick
 // (no await between them), so in Node's single-threaded loop no install code can interleave
 // to set its flag and pull in the gap. An install that starts AFTER the check sets its flag
 // and pulls strictly after our delete dispatches, so it simply re-pulls the image.
-// LOAD-BEARING: never insert an await between isOperationInProgress() and appDockerImageRemove,
-// and never add an image-pull path that does not set an in-progress flag before pulling.
+// LOAD-BEARING: never insert an await between the anyHeldOfType check and appDockerImageRemove,
+// and never add an image-pull path that does not acquire a lease before pulling.
 
 /**
  * Reclaim cold, unused, unpinned docker images. Best-effort: a failure to list or to remove
@@ -94,7 +94,7 @@ async function pruneUnusedImages() {
       // synchronous tick — do not insert an await between them. A false read here means no
       // install depends on this image. If an op IS in progress we skip THIS image and let a
       // later run reclaim it (per-image, so non-coinciding images are still reclaimed now).
-      if (globalState.isOperationInProgress()) return 'skipped';
+      if (operationRegistry.anyHeldOfType('install', 'redeploy', 'rebuild')) return 'skipped';
       return dockerService.appDockerImageRemove(image.Id);
     }).catch((err) => {
       // A non-forced remove 409s if the image is still in use — the expected backstop; log and move on.
