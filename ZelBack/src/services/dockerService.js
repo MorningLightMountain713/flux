@@ -308,7 +308,6 @@ async function dockerContainerStatsStream(idOrName, req, res, callback) {
         res.write(serviceHelper.ensureString(event));
         if (res.flush) res.flush();
       }
-      log.info(event);
     }
     if (err) {
       callback(err);
@@ -363,6 +362,8 @@ function dockerPullStream(pullConfig, res, callback) {
     if (settled) return;
     settled = true;
     clearTimeout(stallTimer);
+    // a failed pull is logged by the caller, which knows the install context
+    if (!error) log.info(`Pull of ${repoTag} complete`);
     callback(error, data);
   };
   const armStallTimer = () => {
@@ -411,6 +412,7 @@ function dockerPullStream(pullConfig, res, callback) {
   }
   pullOptions.abortSignal = stallController.signal;
 
+  log.info(`Pulling image ${repoTag}`);
   armStallTimer();
   docker.pull(repoTag, pullOptions, (err, mystream) => {
     function onFinished(error, output) {
@@ -447,7 +449,6 @@ function dockerPullStream(pullConfig, res, callback) {
           log.warn(`dockerPullStream progressTap error: ${tapError.message}`);
         }
       }
-      log.info(event);
     }
     if (err) {
       done(tagIfRegistryUnreachable(err));
@@ -977,7 +978,6 @@ async function appDockerCreate(deployComp, options = {}) {
   // XFS quota: apply StorageOpt if the backing filesystem supports it.
   // eslint-disable-next-line no-use-before-define
   const dockerInfoResp = await dockerInfo();
-  log.info(dockerInfoResp);
   const driverStatus = dockerInfoResp.DriverStatus;
   const backingFs = driverStatus.find((status) => status[0] === 'Backing Filesystem');
   if (backingFs && backingFs[1] === 'xfs') {
