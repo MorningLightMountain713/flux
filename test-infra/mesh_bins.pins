@@ -1,0 +1,7 @@
+# Pinned upstream versions of the mesh data-plane binaries (nebula, tayga).
+# Shell-sourceable: plain VAR=value lines only.
+NEBULA_VERSION=v1.11.0
+NEBULA_SHA256_AMD64=e7cdb240597d0783c9943e9c89aad3c96c59b67e75c644d62f33ae558e69d09e
+NEBULA_SHA256_ARM64=da314d9791185583dddceb14dffe991caa6997eaff8dbe0445331a2fa70c6fd9
+TAYGA_REPO=https://github.com/apalrd/tayga.git
+TAYGA_COMMIT=8a028c787c86389a75dd4ef8cc01c9501133e966

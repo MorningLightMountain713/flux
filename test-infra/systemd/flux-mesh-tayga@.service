@@ -1,0 +1,36 @@
+[Unit]
+Description=Flux mesh IPv4 shim (SIIT translator) for app %i
+Documentation=https://github.com/RunOnFlux/flux
+# Second resident of the app's mesh namespace, beside flux-mesh@%i (Nebula).
+# FluxOS creates the namespace and writes the translator's address map, then
+# starts this unit; all of it is rebuilt after a reboot because /run is a
+# tmpfs and a network namespace cannot survive one. No [Install] section for
+# the same reason as flux-mesh@ — starting at boot would race that
+# reconstruction.
+ConditionPathExists=/run/netns/flux-mesh-%i
+ConditionPathExists=/dat/var/lib/flux-mesh/%i/tayga.conf
+# A namespace that has gone away would otherwise restart forever.
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=exec
+NetworkNamespacePath=/run/netns/flux-mesh-%i
+# Tayga is a stateless translator: its map is fixed 1:1 addressing with no
+# connection state, so a membership change is a config rewrite and a unit
+# restart by FluxOS (there is no reload), and in-flight flows resume across
+# it.
+ExecStart=/usr/bin/tayga --nodetach --config /dat/var/lib/flux-mesh/%i/tayga.conf
+Restart=on-failure
+RestartSec=2
+
+# CAP_NET_ADMIN to create its tun inside the namespace, and nothing else. It
+# reads its configuration and writes no state.
+CapabilityBoundingSet=CAP_NET_ADMIN
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
