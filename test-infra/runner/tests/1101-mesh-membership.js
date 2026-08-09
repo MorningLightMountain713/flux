@@ -17,9 +17,10 @@ import { REGISTRY_REPO_HOST } from '../framework/subnet-config.js';
 // every node hosting a mesh app derives the same member set from the
 // fluxapprunning broadcasts alone. What must hold:
 //   1. ADMISSION — a registered mesh app installs on all three nodes, and every
-//      node's reconciler admits exactly the three hosting outpoints: voucher
-//      verified against the mesh-purpose key, anchor fresh, outpoint in the
-//      hosting set, authority pinned. Same member set on every node, a
+//      node's reconciler admits its two peers: voucher verified against the
+//      mesh-purpose key, anchor fresh, outpoint in the hosting set, authority
+//      pinned. Self is a local fact, never a candidate — it rides the snapshot,
+//      so each node's member set is exactly the other two outpoints. A
 //      transport port from the 16226-16299 pool, real authority + host
 //      certificates on disk.
 //   2. RESOLVER FEED — each node writes the membership snapshot the resolver
@@ -56,10 +57,6 @@ describe('mesh membership across a multi-node fleet', function () {
       body: JSON.stringify(body),
     });
     return res.json();
-  }
-
-  function nodeIp(clientIndex) {
-    return new URL(env.clients[clientIndex].url).hostname;
   }
 
   before(async function () {
@@ -108,24 +105,24 @@ describe('mesh membership across a multi-node fleet', function () {
     await Promise.all(env.clients.map((c) => waitForAppInstalled(c, name, 240000)));
   });
 
-  it('every node admits the same three members, with a pool port and real certificates', async function () {
+  it('every node admits its two peers, with a pool port and real certificates', async function () {
     this.timeout(240000);
 
     await waitFor(async () => {
       const statuses = await Promise.all(env.clients.map((_, i) => meshStatus(i)));
       return statuses.every((s) => s.status === 'success'
         && s.data.meshEnabled === true
-        && s.data.lastPass
-        && !s.data.lastPass.error
-        && (s.data.lastPass.members?.length ?? 0) === 3
+        && (s.data.lastPass?.members?.length ?? 0) === 2
         && (s.data.lastPass.rejected?.length ?? 0) === 0);
-    }, { timeout: 180000, interval: 5000, label: 'all three nodes admit three members' });
+    }, { timeout: 180000, interval: 5000, label: 'every node admits its two peers' });
 
     const statuses = await Promise.all(env.clients.map((_, i) => meshStatus(i)));
     const memberSets = statuses.map((s) => s.data.lastPass.members.map((m) => m.outpoint).sort());
-    expect(memberSets[1]).to.deep.equal(memberSets[0]);
-    expect(memberSets[2]).to.deep.equal(memberSets[0]);
-    expect(new Set(memberSets[0]).size).to.equal(3);
+    // Three pairwise-distinct 2-sets over three outpoints: each node holds
+    // exactly the other two.
+    const keys = memberSets.map((set) => set.join('|'));
+    expect(new Set(keys).size).to.equal(3);
+    expect(new Set(memberSets.flat()).size).to.equal(3);
 
     for (const s of statuses) {
       expect(s.data.port).to.be.within(MESH_PORT_MIN, MESH_PORT_MAX);
@@ -157,8 +154,8 @@ describe('mesh membership across a multi-node fleet', function () {
     this.timeout(240000);
 
     const before0 = await meshStatus(0);
-    const victim = before0.data.lastPass.members.find((m) => !String(m.endpoint).startsWith(nodeIp(0)));
-    expect(victim, 'a member on another node').to.not.equal(undefined);
+    const victim = before0.data.lastPass.members[0];
+    expect(victim, 'an admitted peer').to.not.equal(undefined);
 
     const refused = await meshLever('/apps/mesh/refuse', { appname: name, outpoint: victim.outpoint });
     expect(refused.status, JSON.stringify(refused)).to.equal('success');
@@ -166,12 +163,12 @@ describe('mesh membership across a multi-node fleet', function () {
     await waitFor(async () => {
       const s = await meshStatus(0);
       return s.data.refused.includes(victim.outpoint)
-        && s.data.lastPass.members.length === 2
+        && s.data.lastPass.members.length === 1
         && !s.data.lastPass.members.some((m) => m.outpoint === victim.outpoint);
     }, { timeout: 90000, interval: 5000, label: 'refusing node drops the member' });
 
     const other = await meshStatus(1);
-    expect(other.data.lastPass.members, 'refusal must not propagate').to.have.length(3);
+    expect(other.data.lastPass.members, 'refusal must not propagate').to.have.length(2);
 
     const unrefused = await meshLever('/apps/mesh/unrefuse', { appname: name, outpoint: victim.outpoint });
     expect(unrefused.status, JSON.stringify(unrefused)).to.equal('success');
@@ -179,7 +176,7 @@ describe('mesh membership across a multi-node fleet', function () {
     await waitFor(async () => {
       const s = await meshStatus(0);
       return !s.data.refused.includes(victim.outpoint)
-        && s.data.lastPass.members.length === 3;
+        && s.data.lastPass.members.length === 2;
     }, { timeout: 90000, interval: 5000, label: 'unrefuse re-admits from the stored broadcast' });
   });
 
