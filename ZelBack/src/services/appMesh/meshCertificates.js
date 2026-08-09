@@ -449,6 +449,7 @@ module.exports = {
   HOST_CERT_RENEW_BEFORE_MS,
   meshAppDir,
   certificateDetails,
+  certificateBundleDetails,
   ensureAuthority,
   authorityBundle,
   signHostCertificate,
