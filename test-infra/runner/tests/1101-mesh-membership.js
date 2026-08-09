@@ -69,13 +69,14 @@ describe('mesh membership across a multi-node fleet', function () {
       nodes: 3,
       tickerAutostart: false,
       arcane: true,
-      // Peering sized for a 3-node ring: each node can dial exactly two others,
-      // so the fleet-default thresholds (4 out) are unreachable here.
+      // Peering sized for a 3-node ring (nodes >= 2*minOutgoing+1): the fleet
+      // settles as the 3-cycle 0->1, 1->2, 2->0, one outbound and one inbound
+      // per node, and any higher target churns on deduped redials forever.
       configOverrides: {
-        fluxapps: { meshReconcileIntervalMs: 15000, minOutgoing: 2, minIncoming: 1 },
+        fluxapps: { meshReconcileIntervalMs: 15000, minOutgoing: 1, minIncoming: 1 },
       },
     });
-    await bootAndPeer(env, { minOutbound: 2, minInbound: 1, pricing: true });
+    await bootAndPeer(env, { minOutbound: 1, minInbound: 1, pricing: true });
     ownerAuths = await Promise.all(env.clients.map(async (c) => (await authenticate(c.url, appOwnerKey())).zelidauth));
     teamAuth0 = (await authenticate(env.clients[0].url, fluxTeamKey())).zelidauth;
   });
