@@ -261,10 +261,52 @@ async function verifyAppOwnerOrHigherSession(headers, appName) {
   return false;
 }
 
+/**
+ * Verifies an app-owner or flux-team session — the app's owner and the flux
+ * team, but NOT the node operator (unlike verifyAppOwnerOrHigherSession, which
+ * also admits userconfig.initial.zelid).
+ * @param {object} headers
+ * @param {string} appName
+ *
+ * @returns {Promise<boolean>}
+ */
+async function verifyAppOwnerOrFluxTeamSession(headers, appName) {
+  if (!headers || !headers.zelidauth || !appName) return false;
+  const auth = serviceHelper.ensureObject(headers.zelidauth);
+  if (!auth.zelid || !auth.signature || !auth.loginPhrase) return false;
+  // Use dynamic require to avoid circular dependency
+  // eslint-disable-next-line global-require
+  const registryManager = require('./appDatabase/registryManager');
+  const ownerFluxID = await registryManager.getApplicationOwner(appName);
+  if (auth.zelid !== ownerFluxID && auth.zelid !== config.fluxTeamFluxID && auth.zelid !== config.fluxSupportTeamFluxID) return false;
+
+  const db = dbHelper.databaseConnection();
+  const database = db.db(config.database.local.database);
+  const collection = config.database.local.collections.loggedUsers;
+  const query = { $and: [{ loginPhrase: auth.loginPhrase }, { zelid: auth.zelid }] };
+  const projection = {};
+  const loggedUser = await dbHelper.findOneInDatabase(database, collection, query, projection);
+  // if not logged, check if not older than 2 hours
+  if (!loggedUser) {
+    const maxHours = 2 * 60 * 60 * 1000;
+    if (!loginPhraseWithinWindow(auth.loginPhrase, maxHours)) return false;
+  }
+
+  // check if signature corresponds to message with that zelid
+  let valid = false;
+  try {
+    valid = await signatureVerifier.verifySignature(auth.loginPhrase, auth.zelid, auth.signature);
+  } catch (error) {
+    return false;
+  }
+  return valid === true;
+}
+
 module.exports = {
   loginPhraseWithinWindow,
   verifyAdminAndFluxTeamSession,
   verifyAdminSession,
+  verifyAppOwnerOrFluxTeamSession,
   verifyAppOwnerOrHigherSession,
   verifyAppOwnerSession,
   verifyFluxTeamSession,
