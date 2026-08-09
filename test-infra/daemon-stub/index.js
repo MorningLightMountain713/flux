@@ -1,7 +1,7 @@
 const express = require('express');
 const fs = require('fs');
 const path = require('path');
-const benchCrypto = require('./benchCrypto');
+const benchCrypto = require('./benchCrypto.js');
 
 const app = express();
 app.use(express.json());
@@ -48,6 +48,12 @@ function blockTimeOf(height) {
   if (!blockTimes.has(height)) blockTimes.set(height, Math.floor(Date.now() / 1000));
   return blockTimes.get(height);
 }
+
+// Synthetic block hashes are the height zero-padded to 64 digits: valid hex
+// wherever a consumer validates hash shape, the height reads straight back
+// out, and getblock can answer honestly about any block this stub ever named.
+const heightToHash = (height) => String(height).padStart(64, '0');
+const hashToHeight = (hash) => (typeof hash === 'string' && /^[0-9]{64}$/.test(hash) ? Number(hash) : null);
 
 const nodeStatusOverrides = new Map();
 const rpcFailures = new Map();
@@ -251,7 +257,7 @@ const rpcHandlers = {
     chain: 'main',
     blocks: currentHeight,
     headers: currentHeight,
-    bestblockhash: `000000000000stub${currentHeight}`,
+    bestblockhash: heightToHash(currentHeight),
     difficulty: 1000,
     verificationprogress: 1,
     chainwork: '0000000000000000000000000000000000000000000000000000000000000001',
@@ -288,27 +294,32 @@ const rpcHandlers = {
   getpeerinfo: () => [],
 
   getchaintips: () => [
-    { height: currentHeight, hash: `000000000000stub${currentHeight}`, branchlen: 0, status: 'active' },
+    { height: currentHeight, hash: heightToHash(currentHeight), branchlen: 0, status: 'active' },
   ],
 
-  getbestblockhash: () => `000000000000stub${currentHeight}`,
+  getbestblockhash: () => heightToHash(currentHeight),
 
   getblockhash: (params) => {
     const height = params[0];
-    return `000000000000stub${height}`;
+    return heightToHash(height);
   },
 
   getblock: (params) => {
     const hashOrHeight = params[0];
     const verbosity = params[1] || 1;
-    const asNum = Number(hashOrHeight);
+    const asNum = hashOrHeight === '' ? NaN : Number(hashOrHeight);
 
     const pending = pendingBlocks.find((b) => b.height === asNum || b.height === hashOrHeight || b.hash === hashOrHeight);
     if (pending) return pending;
 
-    const height = !Number.isNaN(asNum) ? asNum : currentHeight;
+    // A synthetic hash carries its height; a bare number is a height. Anything
+    // else was never a block this chain produced.
+    const height = hashToHeight(hashOrHeight) ?? (!Number.isNaN(asNum) ? asNum : null);
+    if (height === null || height < 0 || height > currentHeight) {
+      throw new Error('Block not found');
+    }
     const block = {
-      hash: `000000000000stub${height}`,
+      hash: heightToHash(height),
       confirmations: currentHeight - height + 1,
       size: 1000,
       height,
@@ -318,8 +329,8 @@ const rpcHandlers = {
       time: blockTimeOf(height),
       nonce: 0,
       difficulty: 1000,
-      previousblockhash: height > 0 ? `000000000000stub${height - 1}` : undefined,
-      nextblockhash: height < currentHeight ? `000000000000stub${height + 1}` : undefined,
+      previousblockhash: height > 0 ? heightToHash(height - 1) : undefined,
+      nextblockhash: height < currentHeight ? heightToHash(height + 1) : undefined,
     };
 
     if (verbosity === 2) {
@@ -331,12 +342,19 @@ const rpcHandlers = {
 
   getblockheader: (params) => {
     const hash = params[0];
+    const pending = pendingBlocks.find((b) => b.hash === hash);
+    if (pending) return pending;
+
+    const height = hashToHeight(hash);
+    if (height === null || height > currentHeight) {
+      throw new Error('Block not found');
+    }
     return {
-      hash,
-      confirmations: 1,
-      height: currentHeight,
+      hash: heightToHash(height),
+      confirmations: currentHeight - height + 1,
+      height,
       version: 4,
-      previousblockhash: `000000000000stub${currentHeight - 1}`,
+      previousblockhash: height > 0 ? heightToHash(height - 1) : undefined,
       time: blockTimeOf(currentHeight),
     };
   },
@@ -417,7 +435,7 @@ const rpcHandlers = {
         locktime: 0,
         vin: [],
         vout,
-        blockhash: `000000000000stub${currentHeight}`,
+        blockhash: heightToHash(currentHeight),
         confirmations: 1,
         time: Math.floor(Date.now() / 1000),
         blocktime: Math.floor(Date.now() / 1000),
@@ -544,7 +562,13 @@ const benchHandlers = {
   bloblocator: (params) => JSON.stringify({ status: 'ok', locator: benchCrypto.locatorFor(JSON.parse(params[0])) }),
   contentkey: (params) => JSON.stringify({ status: 'ok', key: benchCrypto.contentKeyFor(JSON.parse(params[0])) }),
   signblobupload: (params) => JSON.stringify({ status: 'ok', signature: benchCrypto.signArcaneUpload(JSON.parse(params[0]).message) }),
-  attest: (params) => JSON.stringify({ status: 'ok', signature: benchCrypto.signAttestation(JSON.parse(params[0]).message) }),
+  attest: (params) => {
+    const { message, purpose } = JSON.parse(params[0]);
+    const signature = purpose === 'mesh'
+      ? benchCrypto.signMeshAttestation(message)
+      : benchCrypto.signAttestation(message);
+    return JSON.stringify({ status: 'ok', signature });
+  },
   appencrypt: (params) => JSON.stringify({ status: 'ok', ...benchCrypto.appEncrypt(JSON.parse(params[0])) }),
   appdecrypt: (params) => JSON.stringify({ status: 'ok', ...benchCrypto.appDecrypt(JSON.parse(params[0])) }),
   transportpublickey: async (params) => {
@@ -667,7 +691,7 @@ function tickBlock() {
   }
   if (txs.length > 0) {
     pendingBlocks.push({
-      hash: `000000000000stub${currentHeight}`,
+      hash: heightToHash(currentHeight),
       confirmations: 1,
       size: 1000,
       height: currentHeight,
@@ -677,7 +701,7 @@ function tickBlock() {
       time: blockTimeOf(currentHeight),
       nonce: 0,
       difficulty: 1000,
-      previousblockhash: `000000000000stub${currentHeight - 1}`,
+      previousblockhash: heightToHash(currentHeight - 1),
     });
     console.log(`Block ${currentHeight}: ${txs.length} app tx(s)`);
   }
@@ -775,7 +799,7 @@ control.post('/advance-block', (req, res) => {
   }
   if (block) {
     block.height = block.height || currentHeight;
-    block.hash = block.hash || `000000000000stub${currentHeight}`;
+    block.hash = block.hash || heightToHash(currentHeight);
     block.time = block.time ?? blockTimeOf(block.height);
     // Computed live, the way a synthesized block computes it at the top of this
     // file. Stamping 1 at push time made a block carrying transactions read as
@@ -788,7 +812,7 @@ control.post('/advance-block', (req, res) => {
     pendingBlocks.push(block);
   } else if (txs.length > 0) {
     pendingBlocks.push({
-      hash: `000000000000stub${currentHeight}`,
+      hash: heightToHash(currentHeight),
       confirmations: 1,
       size: 1000,
       height: currentHeight,
@@ -798,7 +822,7 @@ control.post('/advance-block', (req, res) => {
       time: blockTimeOf(currentHeight),
       nonce: 0,
       difficulty: 1000,
-      previousblockhash: `000000000000stub${currentHeight - 1}`,
+      previousblockhash: heightToHash(currentHeight - 1),
     });
     console.log(`Block ${currentHeight}: ${txs.length} app tx(s) (manual advance)`);
   }
