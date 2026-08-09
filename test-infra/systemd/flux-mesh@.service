@@ -1,0 +1,41 @@
+[Unit]
+Description=Flux mesh overlay for app %i
+Documentation=https://github.com/RunOnFlux/flux
+# FluxOS creates the network namespace, its veth to the host and the mesh
+# firewall rules, then starts this unit. It rebuilds all three after a reboot,
+# because /run is a tmpfs and a network namespace is a kernel object that cannot
+# survive one. The unit therefore has no [Install] section and must never be
+# enabled: starting at boot would race that reconstruction and fail on a
+# namespace path that does not exist yet.
+ConditionPathExists=/run/netns/flux-mesh-%i
+ConditionPathExists=/dat/var/lib/flux-mesh/%i/config.yml
+# A namespace that has gone away would otherwise restart forever.
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+# Nebula signals readiness itself, from cmd/nebula/notify_linux.go, and does it
+# after the tun device is up rather than at process start. So notify reports
+# "the overlay is carrying traffic", which is the point FluxOS may attach the
+# component veths.
+Type=notify
+NotifyAccess=main
+NetworkNamespacePath=/run/netns/flux-mesh-%i
+ExecStart=/usr/bin/nebula -config /dat/var/lib/flux-mesh/%i/config.yml
+# SIGHUP reloads the trust bundle, the firewall rules and the static host map in
+# place. Eviction and certificate renewal both rely on it, and neither drops a
+# healthy tunnel.
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=on-failure
+RestartSec=2
+
+# Nebula needs CAP_NET_ADMIN to create its tun inside the namespace, and nothing
+# else. It reads its configuration and keys and writes no state.
+CapabilityBoundingSet=CAP_NET_ADMIN
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
