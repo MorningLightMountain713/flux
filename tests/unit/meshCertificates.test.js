@@ -251,6 +251,34 @@ describe('meshCertificates', () => {
     });
   });
 
+  describe('writeTrustBundle', () => {
+    it('deploys own authority first, members sorted, and reports change once', async () => {
+      const own = await meshCertificates.ensureAuthority(APP);
+      const changed = await meshCertificates.writeTrustBundle(APP.instance, ['PEM-B\n', 'PEM-A\n']);
+      expect(changed).to.equal(true);
+      const bundle = await realFsp.readFile(appFile('trust-bundle.pem'), 'utf8');
+      expect(bundle).to.equal(`${own}\nPEM-A\nPEM-B\n`);
+      const unchanged = await meshCertificates.writeTrustBundle(APP.instance, ['PEM-A\n', 'PEM-B\n']);
+      expect(unchanged).to.equal(false);
+    });
+
+    it('newline-terminates every part so PEM blocks never merge across the seam', async () => {
+      await meshCertificates.ensureAuthority(APP);
+      await meshCertificates.writeTrustBundle(APP.instance, ['PEM-NO-NEWLINE']);
+      const bundle = await realFsp.readFile(appFile('trust-bundle.pem'), 'utf8');
+      expect(bundle).to.include('PEM-NO-NEWLINE\n');
+    });
+
+    it('carries both authorities during a rotation overlap', async () => {
+      await meshCertificates.ensureAuthority(APP);
+      await meshCertificates.beginAuthorityRotation(APP);
+      await meshCertificates.writeTrustBundle(APP.instance, []);
+      const bundle = await realFsp.readFile(appFile('trust-bundle.pem'), 'utf8');
+      expect(bundle).to.include('fp-ca-1');
+      expect(bundle).to.include('fp-ca-2');
+    });
+  });
+
   describe('removeAppMaterial', () => {
     it('removes everything, keys included', async () => {
       await meshCertificates.ensureAuthority(APP);

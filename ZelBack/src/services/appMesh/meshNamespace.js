@@ -9,13 +9,13 @@
 // rebuilding a virtual cable is cheaper and more honest than diffing one.
 //
 // Traffic plan the routes below implement:
-//   outbound  container → (10.88/16 route) veth → app ns → siit0 (tayga,
+//   outbound  container → (10.127/20 route) veth → app ns → siit0 (tayga,
 //             v4→v6) → mesh0 (nebula) → peer node
 //   inbound   nebula → mesh0, destination in this node's /96 block →
 //             /96 route → siit0 (tayga, v6→v4) → presented /32 route →
 //             veth → container
 // The /96-into-tayga route outranks mesh0's connected /48; each container's
-// presented /32 outranks the 10.88/16 into tayga.
+// presented /32 outranks the 10.127/20 into tayga.
 const log = require('../../lib/log');
 const serviceHelper = require('../serviceHelper');
 const meshRuntimeConfig = require('./meshRuntimeConfig');
@@ -145,6 +145,29 @@ async function attachContainer(instance, { linkId, containerPid, presentedIp }) 
 }
 
 /**
+ * The presented address a container's mesh device currently carries, or null
+ * when the device is absent — the probe that lets the reconciler skip
+ * replumbing a healthy attachment (rebuilding one bounces the app's mesh
+ * traffic, so it is reserved for actual drift).
+ *
+ * @param {number} containerPid
+ * @returns {Promise<string|null>}
+ */
+async function containerAttachment(containerPid) {
+  if (!Number.isInteger(containerPid) || containerPid <= 0) {
+    throw new TypeError('containerPid must be the container\'s init pid');
+  }
+  const result = await serviceHelper.runCommand('nsenter', {
+    runAsRoot: true,
+    logError: false,
+    params: ['-t', String(containerPid), '-n', 'ip', '-o', '-4', 'addr', 'show', CONTAINER_DEVICE],
+  });
+  if (result.error) return null;
+  const match = /inet (\d+\.\d+\.\d+\.\d+)\//.exec(result.stdout);
+  return match ? match[1] : null;
+}
+
+/**
  * Routes that steer traffic into the translator's tun. Callable only after
  * the tayga unit is up (the device exists only while it runs), which is why
  * they are separate from the namespace bring-up.
@@ -222,6 +245,13 @@ const meshUnits = {
       systemctl('start', `flux-mesh-tayga@${instance}`),
     ]);
   },
+  nebulaActive: async (instance) => {
+    assertInstance(instance);
+    const result = await serviceHelper.runCommand('systemctl', {
+      runAsRoot: true, logError: false, params: ['is-active', '--quiet', `flux-mesh@${instance}`],
+    });
+    return !result.error;
+  },
   reloadNebula: (instance) => {
     assertInstance(instance);
     return systemctl('reload', `flux-mesh@${instance}`);
@@ -246,6 +276,7 @@ module.exports = {
   ensureUplink,
   enableForwarding,
   attachContainer,
+  containerAttachment,
   ensureTranslatorRoutes,
   ensureMeshChains,
   setMeshChainRules,
