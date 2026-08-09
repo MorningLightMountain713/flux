@@ -68,6 +68,8 @@ const FILES = {
   nextCert: 'host-next.crt',
 };
 
+const TRUST_BUNDLE_FILE = 'trust-bundle.pem';
+
 // The per-app directory name is the app's deployment identity segment —
 // uuid-derived, so a re-registered name can never pick up a dead app's CA key.
 function meshAppDir(instance) {
@@ -384,6 +386,30 @@ async function concludeAuthorityRotation(instance) {
 }
 
 /**
+ * Deploy the app's trust bundle: this node's own authority bundle followed by
+ * every accepted member's, sorted for byte-stability. Written atomically in
+ * the bundle's own directory (nebula reloads only what a rename lands), and
+ * only when the content actually changed.
+ *
+ * @param {string} instance
+ * @param {string[]} memberBundles accepted members' published authority PEMs
+ * @returns {Promise<boolean>} whether the deployed bundle changed — the
+ *   caller reloads nebula on true
+ */
+async function writeTrustBundle(instance, memberBundles) {
+  const terminated = (pem) => (pem.endsWith('\n') ? pem : `${pem}\n`);
+  const own = await authorityBundle(instance);
+  const content = [own, ...[...memberBundles].sort()].map(terminated).join('');
+  const target = path.join(meshAppDir(instance), TRUST_BUNDLE_FILE);
+  const current = await readIfPresent(target);
+  if (current === content) return false;
+  const tmp = `${target}.tmp`;
+  await fsp.writeFile(tmp, content);
+  await fsp.rename(tmp, target);
+  return true;
+}
+
+/**
  * Remove every mesh artifact of an app on this node — CA keys included.
  * @param {string} instance
  * @returns {Promise<void>}
@@ -395,6 +421,7 @@ async function removeAppMaterial(instance) {
 module.exports = {
   HostCertificateAction,
   MESH_STATE_ROOT,
+  TRUST_BUNDLE_FILE,
   HOST_CERT_MIN_AGE_MS,
   HOST_CERT_RENEW_BEFORE_MS,
   meshAppDir,
@@ -406,5 +433,6 @@ module.exports = {
   beginAuthorityRotation,
   adoptSuccessorAuthority,
   concludeAuthorityRotation,
+  writeTrustBundle,
   removeAppMaterial,
 };
