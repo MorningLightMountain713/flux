@@ -438,7 +438,7 @@ export async function createTestEnv({
   tickerAutostart = false, discoveryAutostart = false, nodeStatusOverrides = {},
   rpcFailures = [], bootContext = 'running', arcane = true, shutdowndMock = true,
   telemetrydMock = false, systemdMode = false, telemetrydReal = false,
-  shutdowndReal = false,
+  shutdowndReal = false, dnsdReal = false,
 } = {}) {
   // Before the boot lock, the network, or a single container: a flux-spec
   // vendor lagging the branch surfaces as a product mystery minutes later,
@@ -476,7 +476,8 @@ export async function createTestEnv({
   activeEnvs.add(env);
 
   try {
-    await _buildEnv(env, nodes, deferredNodes, legacyNodes, stubPeers, configOverrides, nodeConfigOverrides, nodeTiers, dataCenter, tickerAutostart, discoveryAutostart, nodeStatusOverrides, rpcFailures, bootContext, arcane, shutdowndMock, telemetrydMock, systemdMode, telemetrydReal, shutdowndReal);
+    await _buildEnv(env, nodes, deferredNodes, legacyNodes, stubPeers, configOverrides, nodeConfigOverrides, nodeTiers, dataCenter, tickerAutostart, discoveryAutostart, nodeStatusOverrides, rpcFailures, bootContext, arcane, shutdowndMock, telemetrydMock, systemdMode, telemetrydReal,
+      shutdowndReal, dnsdReal);
     return env;
   } catch (err) {
     // Boot failed: the env owns everything started so far. The shared teardown
@@ -523,6 +524,7 @@ async function _buildEnv(
   env, nodes, deferredNodes, legacyNodes, stubPeers, configOverrides, nodeConfigOverrides,
   nodeTiers, dataCenter, tickerAutostart, discoveryAutostart, nodeStatusOverrides, rpcFailures,
   bootContext, arcane, shutdowndMock, telemetrydMock, systemdMode, telemetrydReal, shutdowndReal,
+  dnsdReal,
 ) {
   // Everything built here registers onto the env shell as it comes up, so a
   // boot-phase throw leaves the partial state reachable (see makeEnvShell).
@@ -777,6 +779,33 @@ async function _buildEnv(
         { source: distUnit, target: '/opt/telemetryd-dist/flux-telemetryd.service', mode: 'ro' },
       );
     }
+    // Real flux-dnsd (systemd mode only): the pinned resolver build from
+    // test-infra/flux-dnsd/dist (binary + its REAL hardened unit),
+    // bind-mounted; the entrypoint installs them and — matching the OS —
+    // enables the unit at boot. Same pin discipline as telemetrydReal.
+    if (dnsdReal) {
+      const distDir = join(__dirname, '..', '..', 'flux-dnsd', 'dist');
+      const overridden = Boolean(process.env.DNSD_BINARY);
+      const distBinary = process.env.DNSD_BINARY ?? join(distDir, 'flux-dnsd');
+      const distUnit = process.env.DNSD_UNIT ?? join(distDir, 'flux-dnsd.service');
+      const buildCmd = 'run: bash test-infra/flux-dnsd/build.sh';
+      if (!existsSync(distBinary) || !existsSync(distUnit)) {
+        throw new Error(`dnsdReal: ${distBinary} missing — ${buildCmd}`);
+      }
+      if (!overridden) {
+        const pin = readFileSync(join(__dirname, '..', '..', 'flux-dnsd', 'pin'), 'utf-8').trim();
+        const builtRef = existsSync(join(distDir, '.built-ref'))
+          ? readFileSync(join(distDir, '.built-ref'), 'utf-8').trim()
+          : '(none)';
+        if (builtRef !== pin) {
+          throw new Error(`dnsdReal: dist built from ${builtRef}, pin is ${pin} — ${buildCmd}`);
+        }
+      }
+      bindMounts.push(
+        { source: distBinary, target: '/opt/dnsd-dist/flux-dnsd', mode: 'ro' },
+        { source: distUnit, target: '/opt/dnsd-dist/flux-dnsd.service', mode: 'ro' },
+      );
+    }
     // Real flux-shutdownd: the pinned build from test-infra/flux-shutdownd/dist
     // replaces the mock in-container. It runs under the default entrypoint
     // rather than as a systemd unit — its paths are env-configurable and its
@@ -852,6 +881,7 @@ async function _buildEnv(
     // using them must stay in the default mode.
     if (systemdMode) nodeEnv.FLUX_SYSTEMD_MODE = 'true';
     if (telemetrydReal) nodeEnv.FLUX_TELEMETRYD_REAL = 'true';
+    if (dnsdReal) nodeEnv.FLUX_DNSD_REAL = 'true';
     if (discoveryAutostart) nodeEnv.FLUX_DISCOVERY_AUTOSTART = 'true';
     // Point the node's config at the base-derived infra IPs. The mounted config
     // files (shared.js / node-NN) carry the default 198.18 addresses; NODE_CONFIG

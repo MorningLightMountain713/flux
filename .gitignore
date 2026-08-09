@@ -389,6 +389,7 @@ test-infra/tls-echo/tls-echo
 test-infra/flux-telemetryd/dist/
 # flux-shutdownd built for the harness (test-infra/flux-shutdownd/build.sh; pin declares the commit)
 test-infra/flux-shutdownd/dist/
+test-infra/flux-dnsd/dist/
 
 # per-node logs written by the integration harness on test failure
 test-infra/runner/test-logs/

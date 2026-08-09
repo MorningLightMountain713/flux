@@ -154,6 +154,19 @@ EOF
     cp /opt/telemetryd-dist/flux-telemetryd.service /etc/systemd/system/
   fi
 
+  # ── Real flux-dnsd (opt-in; the mesh DNS e2e suite) ──────────────────
+  # The resolver binary and its REAL hardened unit are bind-mounted from the
+  # runner host. Installed AND enabled — matching the OS, where flux-dnsd
+  # starts at boot and serves whatever membership snapshot exists; FluxOS
+  # never starts it.
+  if [ "$FLUX_DNSD_REAL" = "true" ]; then
+    groupadd -f -r flux-dnsd
+    id -u flux-dnsd >/dev/null 2>&1 || useradd -r -g flux-dnsd -s /usr/sbin/nologin flux-dnsd
+    install -m 0755 /opt/dnsd-dist/flux-dnsd /usr/local/bin/flux-dnsd
+    cp /opt/dnsd-dist/flux-dnsd.service /etc/systemd/system/
+    ln -sf /etc/systemd/system/flux-dnsd.service /etc/systemd/system/multi-user.target.wants/flux-dnsd.service
+  fi
+
   exec /lib/systemd/systemd
 fi
 
