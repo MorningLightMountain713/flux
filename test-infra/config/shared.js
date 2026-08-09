@@ -120,6 +120,7 @@ module.exports = {
     imageComplianceIntervalMs: 60000,
     orphanSweepIntervalMs: 120000,
     dockerDebrisIntervalMs: 21600000,
+    meshReconcileIntervalMs: 120000,
     backendTlsRenewalIntervalMs: 120000,
     installCollisionWaitMs: 5000,
     portTestPeerTimeoutMs: 3000,

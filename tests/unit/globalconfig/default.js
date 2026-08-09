@@ -22,6 +22,7 @@ module.exports = {
     allowedPorts: [11, 13, 16127, 16137, 16147, 16157, 16167, 16177, 16187, 16197],
     apiport: 16127, // homeport is -1, ssl port is +1
     fluxNodeServiceAddress: '169.254.43.43',
+    fluxDnsdServiceAddress: '169.254.43.53',
   },
   database: {
     url: database,
@@ -331,6 +332,7 @@ module.exports = {
     adoptionStaggerWindowMs: 300000,
     orphanSweepIntervalMs: 7200000,
     dockerDebrisIntervalMs: 21600000,
+    meshReconcileIntervalMs: 1800000,
     backendTlsRenewalIntervalMs: 21600000,
     installCollisionWaitMs: 90000,
     portTestPeerTimeoutMs: 5000, // per-peer reachability round-trip timeout

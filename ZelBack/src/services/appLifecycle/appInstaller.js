@@ -10,6 +10,7 @@ const messageHelper = require('../messageHelper');
 const fluxNetworkHelper = require('../fluxNetworkHelper');
 const appUninstaller = require('./appUninstaller');
 const componentProvisioner = require('./componentProvisioner');
+const { NodeCondition, isNodeCondition } = require('./nodeConditions');
 const contentBlobService = require('./contentBlobService');
 const contentSlotService = require('./contentSlotService');
 const appReconciler = require('../appMonitoring/appReconciler');
@@ -260,7 +261,7 @@ async function installApplication(instantiated, options = {}) {
     try {
       await appNetworkLinker.checkAppNetworkRequirements(instantiated);
     } catch (error) {
-      if (error.code === 'NETWORK_DEPENDENCY_NOT_READY') {
+      if (error.code === NodeCondition.NETWORK_DEPENDENCY_NOT_READY) {
         if (onStatus) onStatus(messageHelper.createErrorMessage(error.message));
         return { status: InstallStatus.DEFERRED, reason: error.message };
       }
@@ -414,8 +415,7 @@ async function installApplication(instantiated, options = {}) {
       // the app failing - only a permanent verdict on the image is network knowledge.
       // A managed backend-TLS cert this node could not get signed is the same class:
       // nothing is wrong with the app, this node just cannot serve it right now.
-      if (!cancelInFlight && error.code !== 'NETWORK_DEPENDENCY_NOT_READY'
-        && error.code !== 'BACKEND_TLS_UNAVAILABLE'
+      if (!cancelInFlight && !isNodeCondition(error)
         && error.registryErrorClass !== 'transient') {
         await storeAndBroadcastInstallError(appName, instantiated.hash, error);
       }
@@ -469,7 +469,7 @@ async function installApplication(instantiated, options = {}) {
     // is the same transient class the pre-install readiness check DEFERS on, just
     // detected later - so DEFER, don't FAIL. Returning FAILED would 7-day-poison
     // the hash in the spawner even though the dependency reinstalls minutes later.
-    if (error.code === 'NETWORK_DEPENDENCY_NOT_READY') {
+    if (error.code === NodeCondition.NETWORK_DEPENDENCY_NOT_READY) {
       log.warn(`Install of ${appName} deferred: a linked dependency's network vanished mid-install`);
       return { status: InstallStatus.DEFERRED, reason: error.message };
     }
@@ -486,7 +486,14 @@ async function installApplication(instantiated, options = {}) {
     // without one would leave a container that is up and serving nothing while
     // peers count it as a live instance, so the install aborts - but the app is
     // blameless, so DEFER and let it place on a node that can provision it.
-    if (error.code === 'BACKEND_TLS_UNAVAILABLE') {
+    if (error.code === NodeCondition.BACKEND_TLS_UNAVAILABLE) {
+      log.warn(`Install of ${appName} deferred: ${error.message}`);
+      return { status: InstallStatus.DEFERRED, reason: error.message };
+    }
+
+    // Same class: this node could not ready the app's mesh runtime (transport
+    // port, namespace, address assignment). The app is blameless; defer.
+    if (error.code === NodeCondition.MESH_UNAVAILABLE) {
       log.warn(`Install of ${appName} deferred: ${error.message}`);
       return { status: InstallStatus.DEFERRED, reason: error.message };
     }

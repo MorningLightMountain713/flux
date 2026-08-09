@@ -13,6 +13,7 @@ const appQueryService = require('../appQuery/appQueryService');
 const appsRepository = require('../appDatabase/appsRepository');
 const deploymentProvider = require('../appRuntime/deploymentProvider');
 const appNetworkLinker = require('../appLifecycle/appNetworkLinker');
+const meshReconciler = require('../appMesh/meshReconciler');
 const appDockerNetwork = require('../appNetwork/appDockerNetwork');
 const appVolumeService = require('../appLifecycle/appVolumeService');
 const appSwapPoolService = require('../appLifecycle/appSwapPoolService');
@@ -1671,6 +1672,12 @@ async function reconcile(identifier) {
   if (pendingGen > actuatedGen) await appsRuntimeState.recordRestartGeneration(identifier, pendingGen);
   log.info(`appReconciler - ${identifier} ${firstStart ? 'started (first start)' : 'restarted'}`);
   fluxEventBus.publish('reconciler:actuated', { identifier, action: firstStart ? 'firstStart' : 'restart', exitCode: actual.exitCode });
+  // A mesh component's veth reaches into the container's network namespace,
+  // which exists only once the container runs — so the mesh converge rides
+  // every successful start of a mesh app's container.
+  if (spec.deployment.meshEnabled) {
+    meshReconciler.noteAppRuntimeChange(spec.deployment.appName);
+  }
   // A start is exactly when a container can come up attached to no network (a stale
   // endpoint left by an earlier failed start). The attachment we hold was sampled
   // BEFORE this start, so verify the new one shortly - otherwise a detached-at-boot

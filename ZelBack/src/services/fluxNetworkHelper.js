@@ -92,6 +92,73 @@ function getInterfaceIp(interfaceName) {
 }
 
 /**
+ * The node's default routes from /proc/net/route, best metric first.
+ * @returns {Promise<Array<{iface: string, gateway: string, metric: number}>>}
+ */
+async function listDefaultRoutes() {
+  // Read the routing table from /proc/net/route
+  const routeData = await fs.readFile('/proc/net/route', 'utf8');
+  const lines = routeData.trim().split('\n');
+
+  // Skip header line
+  if (lines.length < 2) {
+    return [];
+  }
+
+  // Find default routes (destination 0.0.0.0)
+  const defaultRoutes = [];
+  for (let i = 1; i < lines.length; i += 1) {
+    const fields = lines[i].split('\t');
+    if (fields.length < 11) {
+      // eslint-disable-next-line no-continue
+      continue;
+    }
+
+    const [iface, destination, gateway, flags, , , metric] = fields;
+
+    // Check if this is a default route (destination is 0.0.0.0)
+    if (destination === '00000000') {
+      // Check if the route is up (flag 0x1) and has a gateway (flag 0x2)
+      // eslint-disable-next-line no-bitwise
+      const flagsNum = parseInt(flags, 16);
+      // eslint-disable-next-line no-bitwise
+      if ((flagsNum & 0x1) && (flagsNum & 0x2)) {
+        defaultRoutes.push({
+          iface,
+          gateway: hexToIp(gateway),
+          metric: parseInt(metric, 10),
+        });
+      }
+    }
+  }
+
+  // Sort by metric (lowest first) so the best default route leads
+  defaultRoutes.sort((a, b) => a.metric - b.metric);
+  return defaultRoutes;
+}
+
+/**
+ * The interface the node's traffic actually leaves through: the best
+ * operationally-up default-route interface, or null when none exists.
+ * @returns {Promise<string|null>}
+ */
+async function getDefaultRouteInterface() {
+  try {
+    const defaultRoutes = await listDefaultRoutes();
+    // eslint-disable-next-line no-restricted-syntax
+    for (const route of defaultRoutes) {
+      // eslint-disable-next-line no-await-in-loop
+      const isUp = await isInterfaceUp(route.iface);
+      if (isUp) return route.iface;
+    }
+    return null;
+  } catch (error) {
+    log.error(`Failed to read default routes: ${error.message}`);
+    return null;
+  }
+}
+
+/**
  * Checks if the node has a public IP directly configured on the default route interface.
  * This is a strong indicator of a static IP (data center/VPS/dedicated server).
  * Uses the Linux routing table to find the default route interface, then checks
@@ -100,48 +167,10 @@ function getInterfaceIp(interfaceName) {
  */
 async function hasPublicIpOnInterface() {
   try {
-    // Read the routing table from /proc/net/route
-    const routeData = await fs.readFile('/proc/net/route', 'utf8');
-    const lines = routeData.trim().split('\n');
-
-    // Skip header line
-    if (lines.length < 2) {
-      return false;
-    }
-
-    // Find default routes (destination 0.0.0.0)
-    const defaultRoutes = [];
-    for (let i = 1; i < lines.length; i += 1) {
-      const fields = lines[i].split('\t');
-      if (fields.length < 11) {
-        // eslint-disable-next-line no-continue
-        continue;
-      }
-
-      const [iface, destination, gateway, flags, , , metric] = fields;
-
-      // Check if this is a default route (destination is 0.0.0.0)
-      if (destination === '00000000') {
-        // Check if the route is up (flag 0x1) and has a gateway (flag 0x2)
-        // eslint-disable-next-line no-bitwise
-        const flagsNum = parseInt(flags, 16);
-        // eslint-disable-next-line no-bitwise
-        if ((flagsNum & 0x1) && (flagsNum & 0x2)) {
-          defaultRoutes.push({
-            iface,
-            gateway: hexToIp(gateway),
-            metric: parseInt(metric, 10),
-          });
-        }
-      }
-    }
-
+    const defaultRoutes = await listDefaultRoutes();
     if (defaultRoutes.length === 0) {
       return false;
     }
-
-    // Sort by metric (lowest first) and pick the best default route
-    defaultRoutes.sort((a, b) => a.metric - b.metric);
 
     // Find the first interface that is operationally up
     for (const route of defaultRoutes) {
@@ -1658,6 +1687,32 @@ async function allowOnlyDockerNetworksToFluxNodeService() {
 /**
  * Adds the 169.254 adddress to the loopback interface for use with the flux node service.
  */
+/**
+ * Allow app containers to reach the mesh resolver (flux-dnsd). Both rules are
+ * DESTINATION-scoped to the resolver's address: adjustFirewall deletes the
+ * blanket inbound "udp to any port 53" allow on every run, and an unscoped
+ * rule here would be eaten with it.
+ * @returns {Promise<void>}
+ */
+async function allowDockerNetworksToFluxDnsd() {
+  const firewallActive = await isFirewallActive();
+  if (!firewallActive) return;
+
+  const fluxAppDockerNetworks = '172.23.0.0/16';
+  const { fluxDnsdServiceAddress } = config.server;
+  // eslint-disable-next-line no-restricted-syntax
+  for (const proto of ['udp', 'tcp']) {
+    // eslint-disable-next-line no-await-in-loop
+    const cmd = await tryUfw(['allow', 'from', fluxAppDockerNetworks, 'proto', proto, 'to', `${fluxDnsdServiceAddress}/32`, 'port', '53']);
+    const out = serviceHelper.ensureString(cmd);
+    if (out.includes('updated') || out.includes('existing') || out.includes('added')) {
+      log.info(`Firewall adjusted for ${proto}/53 from ${fluxAppDockerNetworks} to ${fluxDnsdServiceAddress}`);
+    } else {
+      log.warn(`Failed to adjust firewall for ${proto}/53 from ${fluxAppDockerNetworks} to ${fluxDnsdServiceAddress}`);
+    }
+  }
+}
+
 async function addFluxNodeServiceIpToLoopback() {
   // could also check exists first with:
   //   ip -f inet addr show lo | grep 169.254.43.43/32
@@ -1701,6 +1756,7 @@ module.exports = {
   setDOSStateApi,
   getNumberOfPeers,
   hasPublicIpOnInterface,
+  getDefaultRouteInterface,
   denyPort,
   deleteAllowPortRule,
   deleteAllowOutPortRule,
@@ -1733,6 +1789,7 @@ module.exports = {
   allowNodeToBindPrivilegedPorts,
   removeDockerContainerAccessToNonRoutable,
   allowOnlyDockerNetworksToFluxNodeService,
+  allowDockerNetworksToFluxDnsd,
   addFluxNodeServiceIpToLoopback,
   keepUPNPPortsOpen,
   clockDrift,

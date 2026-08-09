@@ -27,6 +27,7 @@ const deploymentProvider = require('../appRuntime/deploymentProvider');
 const appInstaller = require('./appInstaller');
 const specReconciler = require('./specReconciler');
 const appNetworkLinker = require('./appNetworkLinker');
+const { NodeCondition } = require('./nodeConditions');
 const pendingTeardownStore = require('./pendingTeardownStore');
 const { appSyncEvents, EVENTS: SYNC_EVENTS } = require('../utils/appSyncEvents');
 const fluxEventBus = require('../utils/fluxEventBus');
@@ -568,7 +569,7 @@ async function trySpawningGlobalApplication() {
           } catch (error) {
             // Dependency not ready yet -> skip this cycle. Any other error (e.g.
             // owner mismatch) is a real misconfig handled at install.
-            return error.code !== 'NETWORK_DEPENDENCY_NOT_READY';
+            return error.code !== NodeCondition.NETWORK_DEPENDENCY_NOT_READY;
           }
         }));
         globalAppNamesLocation = globalAppNamesLocation.filter((_, index) => readiness[index]);

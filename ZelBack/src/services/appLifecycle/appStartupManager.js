@@ -17,6 +17,7 @@ const nodeDosState = require('../nodeDosState');
 const migrations = require('../migrations');
 const appUninstaller = require('./appUninstaller');
 const appNetworkLinker = require('./appNetworkLinker');
+const meshReconciler = require('../appMesh/meshReconciler');
 const { getSpecBackend } = require('../utils/specLibs');
 const contentSlotService = require('./contentSlotService');
 const telemetrySinkCache = require('../telemetrySinkCache');
@@ -219,6 +220,14 @@ async function reconcileAppsOnBoot() {
     // Idempotent and best-effort — defensive in case docker did not restore a
     // secondary network membership across the reboot.
     await appNetworkLinker.reconcileAllAppNetworkLinks();
+
+    // Rebuild every mesh app's runtime — namespaces, veths, units, chains and
+    // the resolver snapshot are all boot-volatile (/run is tmpfs, iptables is
+    // not persisted). Level-based and best-effort like the link pass; the
+    // periodic sweep re-drives anything that could not converge here.
+    await meshReconciler.reconcileAllMeshApps().catch((e) => {
+      log.error(`appStartupManager - mesh boot reconcile failed: ${e.message}`);
+    });
 
     // Rebuild per-app telemetry routing from installed apps, (re)start the
     // daemon if any telemetry apps exist, and re-sync connected daemons.

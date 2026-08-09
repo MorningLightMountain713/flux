@@ -28,6 +28,8 @@ module.exports = {
     allowedPorts: [16127, 16137, 16147, 16157, 16167, 16177, 16187, 16197],
     apiport: 16127, // homeport is -1, ssl port is +1
     fluxNodeServiceAddress: '169.254.43.43',
+    fluxDnsdServiceAddress: '169.254.43.53', // the mesh resolver (flux-dnsd), beside the node service on loopback
+
   },
   database: {
     url: '127.0.0.1',
@@ -542,6 +544,7 @@ module.exports = {
     adoptionStaggerWindowMs: 300000, // loose-instance adoption spread window (bounds the fleet-wide restart stagger)
     orphanSweepIntervalMs: 7200000, // docker-orphan janitor cadence (containers with no installed-app row)
     dockerDebrisIntervalMs: 21600000, // docker prune cadence (stopped containers/unused networks/volumes; guarded)
+    meshReconcileIntervalMs: 1800000, // mesh reconcile cadence (membership, certs incl. aged-replacement promotion, detector)
     backendTlsRenewalIntervalMs: 21600000, // managed backend-TLS renewal cadence (6h; the 30-day leaf is re-issued with ~10 days to spare, so the pace only bounds how fast a missing cert heals)
     installCollisionWaitMs: 90000,
     portTestPeerTimeoutMs: 5000, // per-peer reachability round-trip timeout

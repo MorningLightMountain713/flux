@@ -27,6 +27,7 @@ const volumeService = require('../utils/volumeService');
 const fluxEventBus = require('../utils/fluxEventBus');
 const fluxShutdowndClient = require('../utils/fluxShutdowndClient');
 const pendingTeardownStore = require('./pendingTeardownStore');
+const meshReconciler = require('../appMesh/meshReconciler');
 const imageCacheRetention = require('./imageCacheRetention');
 const shutdownPlan = require('./shutdownPlan');
 const reconcilerQueue = require('../appMonitoring/reconcilerQueue');
@@ -762,6 +763,9 @@ async function uninstallApplication(appName, options = {}) {
       forceKill,
       broadcastRemoval,
       owner: spec.owner,
+      // The registration identity, for mesh teardown (a mesh app's namespace,
+      // units and material are keyed on it; null for pre-identity installs).
+      identity: spec.identity ?? null,
       // The stop reason + budget the deferred teardown hands flux-shutdownd. Persisted
       // because the authoritative spec may be gone by teardown time.
       reason,
@@ -967,7 +971,7 @@ async function acquireRemovingLease(dockerName, identifier) {
 
 async function executeTeardown(doc, { onStatus = null } = {}) {
   const {
-    key, name, networkName, forceKill, owner, components, reason, shutdownBudgetSeconds,
+    key, name, networkName, forceKill, owner, components, reason, shutdownBudgetSeconds, identity,
   } = doc;
   // The identity this teardown owns: a replica name scopes the daemon stop to
   // exactly its containers (a scale-down must not drain the sibling); null is
@@ -1120,6 +1124,13 @@ async function executeTeardown(doc, { onStatus = null } = {}) {
     // endpoints"). A linked consumer stops desiring this departed network on its next
     // reconcile, so disconnecting it here is safe regardless of the teardown mode.
     await dockerService.forceRemoveFluxAppDockerNetwork(networkName).catch((e) => log.error(`network removal ${networkName}: ${e.message}`));
+    // Mesh teardown: units, namespace, transport port, material. Keyed on the
+    // registration identity and a no-op for apps with no mesh material; mesh
+    // forbids co-location, so any removal of a mesh identity is the app
+    // leaving this node.
+    if (identity) {
+      await meshReconciler.removeAppMesh(identity).catch((e) => log.error(`mesh removal ${identity}: ${e.message}`));
+    }
   });
 
   // Reclaim now-unneeded swap-pool capacity — self-serializing on its own chain and none

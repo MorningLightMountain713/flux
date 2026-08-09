@@ -814,6 +814,9 @@ async function getNextAvailableIPForApp(appName, networkName = `fluxDockerNetwor
  * @param {object} [options.labels] extra container labels merged over the standard set
  * @param {boolean} [options.publishPorts] bind the component's ports on the host; default true
  * @param {string} [options.cgroupSlice] cgroup parent; default 'flux-apps.slice'
+ * @param {string[]} [options.dns] resolver chain for the container's embedded
+ *   resolver. Omitted, the host's resolvers apply; a mesh component states the
+ *   flux-dnsd chain so mesh names resolve.
  * @param {string} [options.networkName] the docker network to attach to, when it
  *   is not the app's own. Defaults to fluxDockerNetwork_<appName>. A playground
  *   session states it, because its network belongs to the session rather than to
@@ -961,6 +964,7 @@ async function appDockerCreate(deployComp, options = {}) {
       NetworkMode: networkName,
       LogConfig: logConfig,
       ExtraHosts: [`fluxnode.service:${config.server.fluxNodeServiceAddress}`],
+      ...(Array.isArray(options.dns) && options.dns.length > 0 && { Dns: options.dns }),
     },
     ...(autoAssignedIP && {
       NetworkingConfig: {

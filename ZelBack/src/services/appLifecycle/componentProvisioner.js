@@ -23,6 +23,8 @@ const volumeService = require('../utils/volumeService');
 const telemetryIdentityService = require('../telemetryIdentityService');
 const appsRuntimeState = require('../appManagement/appsRuntimeState');
 const pendingTeardownStore = require('./pendingTeardownStore');
+const meshReconciler = require('../appMesh/meshReconciler');
+const { NodeCondition } = require('./nodeConditions');
 
 const dockerPullStreamPromise = util.promisify(dockerService.dockerPullStream);
 
@@ -267,10 +269,29 @@ async function installComponent(component, options = {}) {
     } catch (error) {
       throw Object.assign(
         new Error(`Could not provision the backend-TLS certificate for ${id}: ${error.message}`),
-        { code: 'BACKEND_TLS_UNAVAILABLE' },
+        { code: NodeCondition.BACKEND_TLS_UNAVAILABLE },
       );
     }
   }
+
+  // Mesh components are created with their presented address in the
+  // environment and the mesh resolver chain, both fixed for the container's
+  // lifetime — so the address must be assigned and the app's mesh runtime
+  // ready before the container exists. The veth attach itself happens after
+  // start (a created container has no network namespace yet); the reconciler's
+  // converge pass plumbs it. A node that cannot ready the mesh runtime right
+  // now (port pool contended, daemon catching up) is a NODE condition like
+  // BACKEND_TLS_UNAVAILABLE: defer, never blame the app.
+  let mesh = null;
+  try {
+    mesh = await meshReconciler.prepareComponentMesh(appName, component.name);
+  } catch (error) {
+    throw Object.assign(
+      new Error(`Could not ready the mesh runtime for ${id}: ${error.message}`),
+      { code: NodeCondition.MESH_UNAVAILABLE },
+    );
+  }
+  if (mesh) status(`Mesh runtime ready for ${id} at ${mesh.presentedIp}`);
 
   // Pre-create backstop: re-check immediately before the container is created. A data
   // (r:/g:) app is provisioned only, so for an install this is the
@@ -280,7 +301,8 @@ async function installComponent(component, options = {}) {
   await dockerService.appDockerCreate(component, {
     burstEligible,
     restartPolicy,
-    extraEnv,
+    extraEnv: mesh ? [...extraEnv, ...mesh.env] : extraEnv,
+    ...(mesh && { dns: mesh.dns }),
     owner,
     uuid,
     requiresEncryption,
