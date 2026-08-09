@@ -18,7 +18,24 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     xfsprogs \
     acl \
     dbus \
+    openssh-client \
     && rm -rf /var/lib/apt/lists/*
+
+# The mesh data plane: nebula + nebula-cert at the version FluxOS requires,
+# fetched from the upstream release and verified against the pins the harness
+# shares with the OS image (test-infra/mesh_bins.pins).
+COPY test-infra/mesh_bins.pins /tmp/mesh_bins.pins
+RUN . /tmp/mesh_bins.pins \
+    && ARCH="$(dpkg --print-architecture)" \
+    && case "$ARCH" in \
+         amd64) NEBULA_SHA256="$NEBULA_SHA256_AMD64" ;; \
+         arm64) NEBULA_SHA256="$NEBULA_SHA256_ARM64" ;; \
+         *) echo "no pinned nebula checksum for architecture $ARCH" >&2; exit 1 ;; \
+       esac \
+    && curl -fsSL -o /tmp/nebula.tar.gz "https://github.com/slackhq/nebula/releases/download/${NEBULA_VERSION}/nebula-linux-${ARCH}.tar.gz" \
+    && echo "${NEBULA_SHA256}  /tmp/nebula.tar.gz" | sha256sum --check --status \
+    && tar -xzf /tmp/nebula.tar.gz -C /usr/bin nebula nebula-cert \
+    && rm /tmp/nebula.tar.gz /tmp/mesh_bins.pins
 
 RUN install -m 0755 -d /etc/apt/keyrings \
     && curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc \
