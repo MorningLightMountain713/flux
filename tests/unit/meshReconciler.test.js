@@ -140,7 +140,7 @@ describe('meshReconciler', () => {
         getFluxnodeBySocketAddress: sinon.stub().callsFake(async (addr) => stubs.nodeByAddress?.[addr] ?? null),
         getFluxnodesByPubkey: sinon.stub().callsFake(async (key) => stubs.nodesByPubkey?.[key] ?? null),
       },
-      '../fluxNetworkHelper': { getDefaultRouteInterface: sinon.stub().resolves('eth0') },
+      '../fluxNetworkHelper': { egressDevice: sinon.stub().resolves('eth0') },
       '../utils/specLibs': {
         getSpec: sinon.stub().resolves({ meshComponentSlot: () => SLOT }),
       },

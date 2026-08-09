@@ -2522,6 +2522,29 @@ async function removeDockerContainerAccessToNonRoutable(fluxNetworkInterfaces) {
   return true;
 }
 
+/**
+ * Allow app containers to reach the mesh resolver (flux-dnsd). Both rules are
+ * DESTINATION-scoped to the resolver's address: adjustFirewall deletes the
+ * blanket inbound "udp to any port 53" allow on every run, and an unscoped
+ * rule here would be eaten with it.
+ * @returns {Promise<void>}
+ */
+async function allowDockerNetworksToFluxDnsd() {
+  if (!await ufw.ufwEnabled()) return;
+
+  const { fluxDnsdServiceAddress } = config.server;
+  // eslint-disable-next-line no-restricted-syntax
+  for (const proto of ['udp', 'tcp']) {
+    // eslint-disable-next-line no-await-in-loop
+    const ran = await ufw.runUfw(['allow', 'from', fluxAppDockerNetworks, 'proto', proto, 'to', `${fluxDnsdServiceAddress}/32`, 'port', '53']);
+    const out = `${ran.stdout}${ran.stderr}`;
+    if (!ran.locked && (out.includes('updated') || out.includes('existing') || out.includes('added'))) {
+      log.info(`Firewall adjusted for ${proto}/53 from ${fluxAppDockerNetworks} to ${fluxDnsdServiceAddress}`);
+    } else {
+      log.warn(`Failed to adjust firewall for ${proto}/53 from ${fluxAppDockerNetworks} to ${fluxDnsdServiceAddress}`);
+    }
+  }
+}
 module.exports = {
   isFluxAvailable,
   checkFluxAvailability,
@@ -2594,6 +2617,7 @@ module.exports = {
   containerEgressRules,
   removeDockerContainerAccessToNonRoutable,
   allowOnlyDockerNetworksToFluxNodeService,
+  allowDockerNetworksToFluxDnsd,
   addFluxNodeServiceIpToLoopback,
   keepUPNPPortsOpen,
   clockDrift,

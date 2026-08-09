@@ -454,7 +454,7 @@ async function reconcileAllMeshApps() {
 
     await reconcileSnapshotAndTayga(healthy, ctx);
 
-    const externalInterface = await fluxNetworkHelper.getDefaultRouteInterface();
+    const externalInterface = await fluxNetworkHelper.egressDevice();
     const chainRules = { pre: [], post: [], fwd: [] };
     // eslint-disable-next-line no-restricted-syntax
     for (const app of healthy) {
