@@ -778,6 +778,9 @@ export async function createTestEnv({
   // Real flux-shutdownd from test-infra/flux-shutdownd/dist, replacing the mock
   // in-container (it runs under the default entrypoint, not as a systemd unit).
   shutdowndReal = false,
+  // Real flux-dnsd from test-infra/flux-dnsd/dist, delivered to systemd-mode
+  // nodes as its production unit.
+  dnsdReal = false,
 } = {}) {
   // Before the boot lock, the network, or a single container: a flux-spec
   // vendor lagging the branch surfaces as a product mystery minutes later,
@@ -1034,7 +1037,7 @@ export async function createTestEnv({
     // mongo starts, i.e. inside the fleet boot, where the waits at risk are the
     // boot's own.
     await startInfraDeathWatch(env);
-    await _buildEnv(env, nodes, deferredNodes, legacyNodes, unprivilegedNodes, stubPeers, silentSyncPeers, unverifiableSyncPeers, policyUnawarePeers, stubPeerings, configOverrides, mergedNodeOverrides, nodeTiers, dataCenter, tickerAutostart, discoveryAutostart, nodeStatusOverrides, rpcFailures, bootContext, initialHeight, syncthing, aptSeeded, aptBadSource, geolocation, locationTable, staticIp, policy, policySeeds, policyReachable, arcane, shutdowndMock, telemetrydMock, systemdMode, telemetrydReal, shutdowndReal);
+    await _buildEnv(env, nodes, deferredNodes, legacyNodes, unprivilegedNodes, stubPeers, silentSyncPeers, unverifiableSyncPeers, policyUnawarePeers, stubPeerings, configOverrides, mergedNodeOverrides, nodeTiers, dataCenter, tickerAutostart, discoveryAutostart, nodeStatusOverrides, rpcFailures, bootContext, initialHeight, syncthing, aptSeeded, aptBadSource, geolocation, locationTable, staticIp, policy, policySeeds, policyReachable, arcane, shutdowndMock, telemetrydMock, systemdMode, telemetrydReal, shutdowndReal, dnsdReal);
     return env;
   } catch (err) {
     // Boot failed: the env owns everything started so far. The shared teardown
@@ -1071,7 +1074,7 @@ async function _buildEnv(
   aptSeeded = true, aptBadSource = false, geolocation, locationTable, staticIp = true,
   policy = null, policySeeds = null, policyReachable = false, arcane = false,
   shutdowndMock = false, telemetrydMock = false, systemdMode = false, telemetrydReal = false,
-  shutdowndReal = false,
+  shutdowndReal = false, dnsdReal = false,
 ) {
   // Everything built here registers onto the env shell as it comes up, so a
   // boot-phase throw leaves the partial state reachable (see makeEnvShell).
@@ -1386,6 +1389,33 @@ async function _buildEnv(
         { source: distUnit, target: '/opt/telemetryd-dist/flux-telemetryd.service', mode: 'ro' },
       );
     }
+    // Real flux-dnsd (systemd mode only): the pinned resolver build from
+    // test-infra/flux-dnsd/dist (binary + its REAL hardened unit),
+    // bind-mounted; the entrypoint installs them and — matching the OS —
+    // enables the unit at boot. Same pin discipline as telemetrydReal.
+    if (dnsdReal) {
+      const distDir = join(__dirname, '..', '..', 'flux-dnsd', 'dist');
+      const overridden = Boolean(process.env.DNSD_BINARY);
+      const distBinary = process.env.DNSD_BINARY ?? join(distDir, 'flux-dnsd');
+      const distUnit = process.env.DNSD_UNIT ?? join(distDir, 'flux-dnsd.service');
+      const buildCmd = 'run: bash test-infra/flux-dnsd/build.sh';
+      if (!existsSync(distBinary) || !existsSync(distUnit)) {
+        throw new Error(`dnsdReal: ${distBinary} missing — ${buildCmd}`);
+      }
+      if (!overridden) {
+        const pin = readFileSync(join(__dirname, '..', '..', 'flux-dnsd', 'pin'), 'utf-8').trim();
+        const builtRef = existsSync(join(distDir, '.built-ref'))
+          ? readFileSync(join(distDir, '.built-ref'), 'utf-8').trim()
+          : '(none)';
+        if (builtRef !== pin) {
+          throw new Error(`dnsdReal: dist built from ${builtRef}, pin is ${pin} — ${buildCmd}`);
+        }
+      }
+      bindMounts.push(
+        { source: distBinary, target: '/opt/dnsd-dist/flux-dnsd', mode: 'ro' },
+        { source: distUnit, target: '/opt/dnsd-dist/flux-dnsd.service', mode: 'ro' },
+      );
+    }
     // Real flux-shutdownd: the pinned build from test-infra/flux-shutdownd/dist
     // replaces the mock in-container. It runs under the default entrypoint
     // rather than as a systemd unit — its paths are env-configurable and its
@@ -1494,6 +1524,7 @@ async function _buildEnv(
     // using them must stay in the default mode.
     if (systemdMode) nodeEnv.FLUX_SYSTEMD_MODE = 'true';
     if (telemetrydReal) nodeEnv.FLUX_TELEMETRYD_REAL = 'true';
+    if (dnsdReal) nodeEnv.FLUX_DNSD_REAL = 'true';
     if (discoveryAutostart) nodeEnv.FLUX_DISCOVERY_AUTOSTART = 'true';
     // Point the node's config at the base-derived infra IPs. The mounted config
     // files carry the default 198.18 addresses; this is written into the node's
