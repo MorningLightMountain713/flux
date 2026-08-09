@@ -1,15 +1,9 @@
-// The mesh operator surface: the /apps/mesh/... handlers. The window (status)
-// is readable by the app's owner and above — it is their app's connectivity;
-// the levers (forced renewal, authority rotation, refuse-set edits) mutate
-// the mesh trust surface and are FLUX TEAM ONLY — deliberately NOT the node
-// operator. The operator is the semi-trusted party the whole design contains
-// (the voucher, the attestation and ArcaneOS's no-operator-root all exist
-// because the operator's word is not trusted), so handing them a lever to
-// un-refuse a proven cheat or force certificate operations would defeat §3.5.
-// Handlers parse, authorize and respond; every decision they expose was made
-// elsewhere — the reconciler's retained pass, the certificate files, the
-// refuse set. No lever converges anything itself: each changes an input and
-// pokes the reconciler, which remains the sole actuator.
+// The mesh operator surface: the /apps/mesh/... handlers. Status is readable
+// by the app's owner and above. The levers — forced renewal, authority
+// rotation, refuse-set edits — are flux team only, never the node operator.
+// Handlers parse, authorize and respond; a lever changes an input (a
+// certificate, the refuse set) and pokes the reconciler, which remains the
+// sole actuator.
 const path = require('node:path');
 
 const log = require('../../lib/log');
