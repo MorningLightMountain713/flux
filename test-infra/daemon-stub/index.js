@@ -557,7 +557,8 @@ control.post('/advance-block', (req, res) => {
     txs.push(buildAppRegistrationTx(appHash, currentHeight));
   }
   while (pendingAppTxQueue.length > 0) {
-    txs.push(buildAppRegistrationTx(pendingAppTxQueue.shift(), currentHeight));
+    const { appHash: queuedHash, valueSat } = pendingAppTxQueue.shift();
+    txs.push(buildAppRegistrationTx(queuedHash, currentHeight, valueSat));
   }
   if (block) {
     block.height = block.height || currentHeight;
