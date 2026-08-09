@@ -1,3 +1,16 @@
+# Tayga (the mesh IPv4 shim) builds from source at the pinned commit; the
+# toolchain stays in this throwaway stage.
+FROM ubuntu:26.04 AS tayga-build
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    git ca-certificates make gcc libc6-dev \
+    && rm -rf /var/lib/apt/lists/*
+COPY test-infra/mesh_bins.pins /tmp/mesh_bins.pins
+RUN . /tmp/mesh_bins.pins \
+    && git clone "$TAYGA_REPO" /tmp/tayga \
+    && git -C /tmp/tayga checkout "$TAYGA_COMMIT" \
+    && make -C /tmp/tayga tayga
+
 FROM ubuntu:26.04
 
 ENV DEBIAN_FRONTEND=noninteractive
@@ -36,6 +49,7 @@ RUN . /tmp/mesh_bins.pins \
     && echo "${NEBULA_SHA256}  /tmp/nebula.tar.gz" | sha256sum --check --status \
     && tar -xzf /tmp/nebula.tar.gz -C /usr/bin nebula nebula-cert \
     && rm /tmp/nebula.tar.gz /tmp/mesh_bins.pins
+COPY --from=tayga-build /tmp/tayga/tayga /usr/bin/tayga
 
 RUN install -m 0755 -d /etc/apt/keyrings \
     && curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc \
