@@ -139,6 +139,36 @@ async function anchorHeightsFor(rows) {
  * components). Apps whose spec cannot be resolved or that predate identity
  * minting are skipped loudly — without the uuid there is no derivation.
  */
+// What the last pass decided, per app — the operator surface's read. Members
+// are kept without their PEM bundles (identity facts, not material).
+const lastPassByApp = new Map();
+
+const memberFacts = (member) => ({
+  outpoint: member.outpoint,
+  nodeId: member.nodeId,
+  address: member.address,
+  block: member.block,
+  endpoint: member.endpoint,
+  caShas: member.caShas,
+});
+
+function recordPass(appName, patch) {
+  const prior = lastPassByApp.get(appName) ?? {};
+  lastPassByApp.set(appName, { ...prior, at: Date.now(), ...patch });
+}
+
+/**
+ * The retained outcome of the app's most recent pass, or null before one has
+ * run (or for an app no gather has seen).
+ *
+ * @param {string} appName
+ * @returns {object|null}
+ */
+function lastPassStatus(appName) {
+  const status = lastPassByApp.get(appName);
+  return status ? structuredClone(status) : null;
+}
+
 async function gatherMeshApps() {
   const installed = await appsRepository.listInstalledApps();
   const apps = [];
@@ -380,9 +410,9 @@ async function reconcileAppRuntime(app, ctx) {
  */
 async function runDetector(app, ctx) {
   const active = await meshNamespace.meshUnits.nebulaActive(app.identity);
-  if (!active) return;
+  if (!active) return null;
   const result = await meshDetector.detectImpersonation(app.identity, app.material.members);
-  if (!result.checked) return;
+  if (!result.checked) return { checked: false, evicted: [], foreign: 0 };
 
   if (result.evicted.length === 0 && result.foreign.length > 0) {
     // Tunnels under authorities outside the intended set with nothing newly
@@ -390,9 +420,9 @@ async function runDetector(app, ctx) {
     // kept a stale pool. Reload again and let the next pass judge.
     log.warn(`meshReconciler - ${app.name}: ${result.foreign.length} tunnel(s) cite authorities outside the trust bundle; reloading`);
     await meshNamespace.meshUnits.reloadNebula(app.identity);
-    return;
+    return { checked: true, evicted: [], foreign: result.foreign.length };
   }
-  if (result.evicted.length === 0) return;
+  if (result.evicted.length === 0) return { checked: true, evicted: [], foreign: 0 };
 
   app.material = await reconcileAppMaterial(app, ctx);
   await meshNamespace.meshUnits.reloadNebula(app.identity);
@@ -405,6 +435,12 @@ async function runDetector(app, ctx) {
     log.error(`meshReconciler - ${app.name}: eviction did NOT converge — a tunnel outside the trust bundle persists; `
       + 'nebula may be serving a stale CA pool. Will re-drive next pass.');
   }
+  return {
+    checked: true,
+    evicted: result.evicted.map((cheat) => cheat.outpoint),
+    foreign: result.foreign.length,
+    converged,
+  };
 }
 
 let sweepRunning = false;
@@ -423,6 +459,10 @@ async function reconcileAllMeshApps() {
       return;
     }
     const apps = await gatherMeshApps();
+    const gathered = new Set(apps.map((app) => app.name));
+    [...lastPassByApp.keys()].forEach((name) => {
+      if (!gathered.has(name)) lastPassByApp.delete(name);
+    });
     if (apps.length === 0) return;
 
     const collateral = await generalService.obtainNodeCollateralInformation();
@@ -445,8 +485,16 @@ async function reconcileAllMeshApps() {
         app.material = await reconcileAppMaterial(app, ctx);
         // eslint-disable-next-line no-await-in-loop
         app.containers = await gatherContainers(app);
+        recordPass(app.name, {
+          error: null,
+          meshPort: app.material.meshPort,
+          certAction: app.material.certAction,
+          members: app.material.members.map(memberFacts),
+          rejected: app.material.rejected,
+        });
         healthy.push(app);
       } catch (error) {
+        recordPass(app.name, { error: error.message });
         log.error(`meshReconciler - ${app.name}: material pass failed: ${error.message}`);
       }
     }
@@ -473,6 +521,7 @@ async function reconcileAllMeshApps() {
           chainRules.fwd.push(...rules.fwd);
         }
       } catch (error) {
+        recordPass(app.name, { error: error.message });
         log.error(`meshReconciler - ${app.name}: runtime pass failed: ${error.message}`);
       }
     }
@@ -484,8 +533,14 @@ async function reconcileAllMeshApps() {
     for (const app of healthy) {
       try {
         // eslint-disable-next-line no-await-in-loop
-        await runDetector(app, ctx);
+        const detector = await runDetector(app, ctx);
+        recordPass(app.name, {
+          detector,
+          // An eviction re-ran the material; the retained view keeps up.
+          members: app.material.members.map(memberFacts),
+        });
       } catch (error) {
+        recordPass(app.name, { error: error.message });
         log.error(`meshReconciler - ${app.name}: detector pass failed: ${error.message}`);
       }
     }
@@ -603,6 +658,7 @@ module.exports = {
   reconcileAllMeshApps,
   prepareComponentMesh,
   noteAppRuntimeChange,
+  lastPassStatus,
   removeAppMesh,
   start,
 };

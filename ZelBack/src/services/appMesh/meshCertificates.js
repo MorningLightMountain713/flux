@@ -325,6 +325,29 @@ async function reconcileHostCertificate({ instance, appUuid, outpoint }, nowMs =
 }
 
 /**
+ * The operator's forced renewal: sign a replacement under the authority the
+ * deployed certificate cites and put it into service NOW. Deploying fresh
+ * accepts the skew-rejection window the sweep's ageing exists to avoid — the
+ * lever is for a certificate that is already wrong, where minutes of possible
+ * rejection by a skewed peer beat hours of a bad certificate. The caller
+ * reloads nebula and read-back-verifies.
+ *
+ * @param {{instance: string, appUuid: string, outpoint: string}} app
+ * @returns {Promise<void>}
+ */
+async function forceHostCertificateRenewal({ instance, appUuid, outpoint }) {
+  const dir = meshAppDir(instance);
+  const app = { instance, appUuid, outpoint };
+  const details = await certificateDetails(path.join(dir, FILES.hostCert));
+  const successorDetails = await certificateDetails(path.join(dir, FILES.successorCert));
+  const authority = details && successorDetails && details.issuer === successorDetails.fingerprint
+    ? 'successor' : 'incumbent';
+  await signHostCertificate(app, { authority });
+  await promoteParkedCertificate(dir);
+  log.info(`Mesh host certificate force-renewed for ${instance}`);
+}
+
+/**
  * Start an authority rotation: create the successor CA. From here
  * authorityBundle() publishes both authorities; nothing signs with the
  * successor yet. Idempotent.
@@ -430,6 +453,7 @@ module.exports = {
   authorityBundle,
   signHostCertificate,
   reconcileHostCertificate,
+  forceHostCertificateRenewal,
   beginAuthorityRotation,
   adoptSuccessorAuthority,
   concludeAuthorityRotation,

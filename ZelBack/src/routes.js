@@ -39,6 +39,7 @@ const contentSlotService = require('./services/appLifecycle/contentSlotService')
 const imageManager = require('./services/appSecurity/imageManager');
 const imagePreflight = require('./services/appSecurity/imagePreflight');
 const playgroundService = require('./services/appPlayground/playgroundService');
+const meshOperatorService = require('./services/appMesh/meshOperatorService');
 const limitCounterController = require('./services/utils/limitCounterController');
 const operationsController = require('./services/appManagement/operationsController');
 const messageVerifier = require('./services/appMessaging/messageVerifier');
@@ -477,6 +478,32 @@ module.exports = (app) => {
   });
   // Run an unsigned spec on this node, once, at the resources it declares, so an
   // owner can watch it boot before anything is registered, signed or paid for.
+  // The mesh operator surface. Status is the app's connectivity as THIS node
+  // sees it (owner and above); the levers mutate trust surfaces — forced
+  // certificate renewal, authority rotation, refuse-set edits — and are
+  // admin/fluxteam only, enforced in the handlers.
+  app.get('/apps/mesh/status/:appname?', (req, res) => {
+    meshOperatorService.meshAppStatusAPI(req, res);
+  });
+  app.post('/apps/mesh/renewcertificate', (req, res) => {
+    meshOperatorService.meshRenewCertificateAPI(req, res);
+  });
+  app.post('/apps/mesh/rotationbegin', (req, res) => {
+    meshOperatorService.meshRotationBeginAPI(req, res);
+  });
+  app.post('/apps/mesh/rotationadopt', (req, res) => {
+    meshOperatorService.meshRotationAdoptAPI(req, res);
+  });
+  app.post('/apps/mesh/rotationconclude', (req, res) => {
+    meshOperatorService.meshRotationConcludeAPI(req, res);
+  });
+  app.post('/apps/mesh/refuse', (req, res) => {
+    meshOperatorService.meshRefuseAPI(req, res);
+  });
+  app.post('/apps/mesh/unrefuse', (req, res) => {
+    meshOperatorService.meshUnrefuseAPI(req, res);
+  });
+
   // Nothing touches the chain and no other node is told the session exists.
   // Answers 202 + jobId; the run takes minutes, so the client polls.
   app.post('/apps/playground', (req, res) => {

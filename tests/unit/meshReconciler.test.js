@@ -434,6 +434,36 @@ describe('meshReconciler', () => {
     });
   });
 
+  describe('lastPassStatus', () => {
+    it('is null before any pass, and retains the pass outcome after one', async () => {
+      stubs.nebulaActive = true;
+      expect(meshReconciler.lastPassStatus('myblog')).to.equal(null);
+      await meshReconciler.reconcileAllMeshApps();
+      const status = meshReconciler.lastPassStatus('myblog');
+      expect(status.error).to.equal(null);
+      expect(status.meshPort).to.equal(16230);
+      expect(status.members).to.have.length(1);
+      expect(status.members[0].outpoint).to.equal(PEER_OUTPOINT);
+      expect(status.members[0]).to.not.have.property('meshCa');
+      expect(status.detector).to.deep.equal({ checked: true, evicted: [], foreign: 0 });
+      expect(status.at).to.be.a('number');
+    });
+
+    it('retains the failure when the material pass breaks', async () => {
+      stubs.evaluateCandidates = sinon.stub().rejects(new Error('daemon exploded'));
+      await meshReconciler.reconcileAllMeshApps();
+      expect(meshReconciler.lastPassStatus('myblog').error).to.equal('daemon exploded');
+    });
+
+    it('forgets an app the gather no longer sees', async () => {
+      await meshReconciler.reconcileAllMeshApps();
+      expect(meshReconciler.lastPassStatus('myblog')).to.not.equal(null);
+      stubs.installedApps = [];
+      await meshReconciler.reconcileAllMeshApps();
+      expect(meshReconciler.lastPassStatus('myblog')).to.equal(null);
+    });
+  });
+
   describe('prepareComponentMesh', () => {
     it('is null for a non-mesh app', async () => {
       stubs.installedApps = [makeApp({ view: makeView({ network: { mesh: false } }) })];
