@@ -251,6 +251,37 @@ describe('meshCertificates', () => {
     });
   });
 
+  describe('forceHostCertificateRenewal', () => {
+    it('signs under the incumbent and deploys immediately, no ageing', async () => {
+      await meshCertificates.ensureAuthority(APP);
+      await meshCertificates.reconcileHostCertificate(APP);
+      const before = JSON.parse(await realFsp.readFile(appFile('host.crt'), 'utf8'));
+      await meshCertificates.forceHostCertificateRenewal(APP);
+      const after = JSON.parse(await realFsp.readFile(appFile('host.crt'), 'utf8'));
+      expect(after.fingerprint).to.not.equal(before.fingerprint);
+      // Nothing left parked — the replacement went straight into service.
+      try {
+        await realFsp.stat(appFile('host-next.crt'));
+        expect.fail('should not be parked');
+      } catch (error) {
+        expect(error.code).to.equal('ENOENT');
+      }
+    });
+
+    it('renews under the successor once the deployed certificate cites it', async () => {
+      await meshCertificates.ensureAuthority(APP);
+      await meshCertificates.reconcileHostCertificate(APP);
+      await meshCertificates.beginAuthorityRotation(APP);
+      await meshCertificates.adoptSuccessorAuthority(APP);
+      // A second of margin over the exact age: the parked file's mtime can
+      // round a millisecond ahead of Date.now(), and exactly-at-age is flaky.
+      await meshCertificates.reconcileHostCertificate(APP, Date.now() + meshCertificates.HOST_CERT_MIN_AGE_MS + 1000);
+      await meshCertificates.forceHostCertificateRenewal(APP);
+      const lastSign = nebulaCalls.filter((c) => c.kind === 'sign').pop();
+      expect(lastSign.flags['-ca-crt']).to.include('ca-successor.crt');
+    });
+  });
+
   describe('writeTrustBundle', () => {
     it('deploys own authority first, members sorted, and reports change once', async () => {
       const own = await meshCertificates.ensureAuthority(APP);
