@@ -112,7 +112,8 @@ describe('meshOperatorService', () => {
       expect(data.certificates.host.fingerprint).to.equal('fp:host.crt');
       expect(data.certificates.host.notAfter).to.equal('2027-01-01T00:00:00.000Z');
       expect(data.lastPass).to.deep.equal({ at: 123, members: [], rejected: [] });
-      expect(stubs.privilege.firstCall.args).to.deep.equal(['appownerabove',
+      // Owner + flux team, never the node operator.
+      expect(stubs.privilege.firstCall.args).to.deep.equal(['appownerorfluxteam',
         { params: { appname: APP_NAME }, query: {} }, APP_NAME]);
     });
 

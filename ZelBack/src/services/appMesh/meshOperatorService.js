@@ -1,6 +1,7 @@
 // The mesh operator surface: the /apps/mesh/... handlers. Status is readable
-// by the app's owner and above. The levers — forced renewal, authority
-// rotation, refuse-set edits — are flux team only, never the node operator.
+// by the app's owner and the flux team. The levers — forced renewal, authority
+// rotation, refuse-set edits — are flux team only. Neither admits the node
+// operator.
 // Handlers parse, authorize and respond; a lever changes an input (a
 // certificate, the refuse set) and pokes the reconciler, which remains the
 // sole actuator.
@@ -89,7 +90,8 @@ function rebroadcastSoon(context) {
  * GET /apps/mesh/status/:appname — the app's mesh state on THIS node: the
  * retained outcome of the last reconcile pass (members, rejections with
  * reasons, detector verdict), the refuse set, the transport port, and the
- * certificate lifecycle. App owner and above.
+ * certificate lifecycle. The app owner and the flux team, never the node
+ * operator.
  */
 async function meshAppStatusAPI(req, res) {
   try {
@@ -100,7 +102,7 @@ async function meshAppStatusAPI(req, res) {
     // Authorization first, against the name alone — resolving before the
     // check would let an unauthorized caller probe which apps exist here.
     const appName = deploymentProvider.appNameFromRequest(appname);
-    const authorized = await verificationHelper.verifyPrivilege('appownerabove', req, appName);
+    const authorized = await verificationHelper.verifyPrivilege('appownerorfluxteam', req, appName);
     if (!authorized) {
       const errMessage = messageHelper.errUnauthorizedMessage();
       return res ? res.json(errMessage) : errMessage;

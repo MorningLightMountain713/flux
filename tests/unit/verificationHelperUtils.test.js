@@ -789,6 +789,7 @@ describe('verificationHelperUtils tests', () => {
       expect(withSupportConfig([]).isFluxSupportTeamZelid('')).to.be.false;
     });
   });
+
   describe('loginPhraseWithinWindow tests', () => {
     const digits13 = (ms) => String(ms).padStart(13, '0');
     const pad = (prefix, len = 56) => prefix + 'a'.repeat(len - prefix.length);
