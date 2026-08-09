@@ -125,8 +125,10 @@ describe('meshOperatorService', () => {
   });
 
   describe('levers', () => {
-    it('every lever refuses a non-admin before acting', async () => {
-      stubs.privilege.callsFake(async (tier) => tier !== 'adminandfluxteam');
+    it('every lever is flux-team only — the node operator (admin) is refused', async () => {
+      // The operator's session authorizes at 'admin'/'appownerabove' but must
+      // NOT reach a lever: only 'fluxteam' does.
+      stubs.privilege.callsFake(async (tier) => tier !== 'fluxteam');
       const levers = ['meshRenewCertificateAPI', 'meshRotationBeginAPI', 'meshRotationAdoptAPI',
         'meshRotationConcludeAPI', 'meshRefuseAPI', 'meshUnrefuseAPI'];
       // eslint-disable-next-line no-restricted-syntax

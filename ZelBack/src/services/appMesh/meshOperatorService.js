@@ -1,11 +1,15 @@
 // The mesh operator surface: the /apps/mesh/... handlers. The window (status)
 // is readable by the app's owner and above — it is their app's connectivity;
 // the levers (forced renewal, authority rotation, refuse-set edits) mutate
-// trust surfaces and are admin/fluxteam only. Handlers parse, authorize and
-// respond; every decision they expose was made elsewhere — the reconciler's
-// retained pass, the certificate files, the refuse set. No lever converges
-// anything itself: each changes an input and pokes the reconciler, which
-// remains the sole actuator.
+// the mesh trust surface and are FLUX TEAM ONLY — deliberately NOT the node
+// operator. The operator is the semi-trusted party the whole design contains
+// (the voucher, the attestation and ArcaneOS's no-operator-root all exist
+// because the operator's word is not trusted), so handing them a lever to
+// un-refuse a proven cheat or force certificate operations would defeat §3.5.
+// Handlers parse, authorize and respond; every decision they expose was made
+// elsewhere — the reconciler's retained pass, the certificate files, the
+// refuse set. No lever converges anything itself: each changes an input and
+// pokes the reconciler, which remains the sole actuator.
 const path = require('node:path');
 
 const log = require('../../lib/log');
@@ -139,8 +143,8 @@ async function meshAppStatusAPI(req, res) {
   }
 }
 
-async function authorizedAdminLever(req, res) {
-  const authorized = await verificationHelper.verifyPrivilege('adminandfluxteam', req);
+async function authorizedFluxTeamLever(req, res) {
+  const authorized = await verificationHelper.verifyPrivilege('fluxteam', req);
   if (!authorized) {
     const errMessage = messageHelper.errUnauthorizedMessage();
     if (res) res.json(errMessage);
@@ -156,11 +160,11 @@ async function authorizedAdminLever(req, res) {
 /**
  * POST /apps/mesh/renewcertificate {appname} — sign and deploy a fresh host
  * certificate now, reload a running nebula, and read back which certificate
- * the daemon actually serves. Admin/fluxteam.
+ * the daemon actually serves. Flux team only.
  */
 async function meshRenewCertificateAPI(req, res) {
   try {
-    const resolved = await authorizedAdminLever(req, res);
+    const resolved = await authorizedFluxTeamLever(req, res);
     if (!resolved) return null;
     const { identity, ref } = resolved;
     await meshCertificates.forceHostCertificateRenewal(ref);
@@ -194,11 +198,11 @@ async function meshRenewCertificateAPI(req, res) {
 /**
  * POST /apps/mesh/rotationbegin {appname} — mint the successor authority.
  * From here the bundle and broadcast carry both; peers must hold both before
- * adopt. Admin/fluxteam.
+ * adopt. Flux team only.
  */
 async function meshRotationBeginAPI(req, res) {
   try {
-    const resolved = await authorizedAdminLever(req, res);
+    const resolved = await authorizedFluxTeamLever(req, res);
     if (!resolved) return null;
     await meshCertificates.beginAuthorityRotation(resolved.ref);
     convergeSoon(`rotation begin for ${resolved.appName}`);
@@ -215,11 +219,11 @@ async function meshRotationBeginAPI(req, res) {
 /**
  * POST /apps/mesh/rotationadopt {appname} — re-sign the host certificate
  * under the successor. The replacement ages and deploys through the sweep.
- * Admin/fluxteam.
+ * Flux team only.
  */
 async function meshRotationAdoptAPI(req, res) {
   try {
-    const resolved = await authorizedAdminLever(req, res);
+    const resolved = await authorizedFluxTeamLever(req, res);
     if (!resolved) return null;
     await meshCertificates.adoptSuccessorAuthority(resolved.ref);
     convergeSoon(`rotation adopt for ${resolved.appName}`);
@@ -235,11 +239,11 @@ async function meshRotationAdoptAPI(req, res) {
 /**
  * POST /apps/mesh/rotationconclude {appname} — retire the incumbent. Refused
  * (by the certificate layer) until the deployed host certificate cites the
- * successor. Admin/fluxteam.
+ * successor. Flux team only.
  */
 async function meshRotationConcludeAPI(req, res) {
   try {
-    const resolved = await authorizedAdminLever(req, res);
+    const resolved = await authorizedFluxTeamLever(req, res);
     if (!resolved) return null;
     await meshCertificates.concludeAuthorityRotation(resolved.identity);
     convergeSoon(`rotation conclude for ${resolved.appName}`);
@@ -255,11 +259,11 @@ async function meshRotationConcludeAPI(req, res) {
 
 /**
  * POST /apps/mesh/refuse {appname, outpoint} — manual eviction: refuse the
- * outpoint ahead of (or instead of) the detector. Admin/fluxteam.
+ * outpoint ahead of (or instead of) the detector. Flux team only.
  */
 async function meshRefuseAPI(req, res) {
   try {
-    const resolved = await authorizedAdminLever(req, res);
+    const resolved = await authorizedFluxTeamLever(req, res);
     if (!resolved) return null;
     const outpoint = req.body?.outpoint;
     await meshRefuseSet.refuseOutpoint(resolved.identity, outpoint);
@@ -275,11 +279,11 @@ async function meshRefuseAPI(req, res) {
 
 /**
  * POST /apps/mesh/unrefuse {appname, outpoint} — undo an eviction; the next
- * pass re-admits the outpoint if it still qualifies. Admin/fluxteam.
+ * pass re-admits the outpoint if it still qualifies. Flux team only.
  */
 async function meshUnrefuseAPI(req, res) {
   try {
-    const resolved = await authorizedAdminLever(req, res);
+    const resolved = await authorizedFluxTeamLever(req, res);
     if (!resolved) return null;
     const outpoint = req.body?.outpoint;
     await meshRefuseSet.removeRefusedOutpoint(resolved.identity, outpoint);
