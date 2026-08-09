@@ -340,6 +340,7 @@ async function verifyAppOwnerOrFluxTeamSession(zelidauth, appName) {
   return false;
 }
 
+
 module.exports = {
   loginPhraseWithinWindow,
   fluxSupportTeamZelids,
