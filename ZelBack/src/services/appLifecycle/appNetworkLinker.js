@@ -21,6 +21,7 @@ const { resolveInstantiatedSpec } = require('../utils/specCutover');
 const dockerService = require('../dockerService');
 const { withHostMutationLock } = require('../utils/hostMutationLock');
 const { socketAddressesMatch } = require('../utils/socketAddressUtils');
+const { NodeCondition } = require('./nodeConditions');
 const log = require('../../lib/log');
 
 /**
@@ -62,7 +63,7 @@ async function verifyLinkedApps(appName, owner, linkedApps) {
       // simply not be installed yet. Tagged so callers can defer and retry
       // instead of treating it as a hard install failure.
       const error = new Error(`App '${linkedApp}' that '${appName}' must be networked with is not installed on this node. Installation aborted.`);
-      error.code = 'NETWORK_DEPENDENCY_NOT_READY';
+      error.code = NodeCondition.NETWORK_DEPENDENCY_NOT_READY;
       throw error;
     }
     if (installed.owner !== owner) {
@@ -77,7 +78,7 @@ async function verifyLinkedApps(appName, owner, linkedApps) {
       const running = await isAppRunning(linkedApp);
       if (!running) {
         const error = new Error(`App '${linkedApp}' that '${appName}' must be networked with is installed but not running yet. Installation deferred.`);
-        error.code = 'NETWORK_DEPENDENCY_NOT_READY';
+        error.code = NodeCondition.NETWORK_DEPENDENCY_NOT_READY;
         throw error;
       }
     }
@@ -133,7 +134,7 @@ async function checkAppNetworkRequirements(instantiated) {
     // the links cannot be checked at all, so defer rather than install blind:
     // tagged transient, like a dependency that has not arrived yet.
     const error = new Error(`App '${instantiated.name}' could not be decrypted on this node to check its network links. Installation deferred.`);
-    error.code = 'NETWORK_DEPENDENCY_NOT_READY';
+    error.code = NodeCondition.NETWORK_DEPENDENCY_NOT_READY;
     throw error;
   }
 
@@ -511,7 +512,7 @@ async function connectComponentToLinkedApps(componentContainerName, deployment) 
       // eslint-disable-next-line no-await-in-loop
       if (!(await dockerService.fluxDockerNetworkExists(networkName))) {
         const notReady = new Error(`Linked app network ${networkName} for '${deployment.appName}' disappeared during install; deferring`);
-        notReady.code = 'NETWORK_DEPENDENCY_NOT_READY';
+        notReady.code = NodeCondition.NETWORK_DEPENDENCY_NOT_READY;
         throw notReady;
       }
       throw error;

@@ -11,6 +11,9 @@ const serviceHelper = require('../serviceHelper');
 const messageHelper = require('../messageHelper');
 const fluxHttpTestServer = require('../utils/fluxHttpTestServer');
 const appsRepository = require('../appDatabase/appsRepository');
+const meshPortAllocator = require('../appMesh/meshPortAllocator');
+const meshReconciler = require('../appMesh/meshReconciler');
+const peerNotification = require('../appMessaging/peerNotification');
 const deploymentProvider = require('../appRuntime/deploymentProvider');
 const { localAppsInformation, globalAppsInformation } = require('../utils/appConstants');
 const { extractIp, extractPort } = require('../utils/socketAddressUtils');
@@ -260,6 +263,16 @@ async function restorePortsSupport() {
   try {
     await restoreFluxPortsSupport();
     await restoreAppsPortsSupport();
+    // Mesh transport ports ride the same router-facing cycle: re-assert every
+    // allocation still ours, replace any the router handed away. A changed
+    // port regenerates that app's nebula config and is republished at once —
+    // peers dial the old port until they hear the new one.
+    const changed = await meshPortAllocator.refreshTransportPorts();
+    if (changed.length > 0) {
+      log.warn(`portManager - mesh transport ports changed for: ${changed.join(', ')}`);
+      await meshReconciler.reconcileAllMeshApps().catch((error) => log.error(error));
+      peerNotification.checkAndNotifyPeersOfRunningApps().catch((error) => log.error(error));
+    }
   } catch (error) {
     log.error(error);
   }

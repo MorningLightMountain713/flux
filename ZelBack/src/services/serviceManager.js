@@ -34,6 +34,7 @@ const registryManager = require('./appDatabase/registryManager');
 const { AppSyncOrchestrator } = require('./appMessaging/appSyncOrchestrator');
 const crontabAndMountsCleanup = require('./appLifecycle/crontabAndMountsCleanup');
 const appJanitor = require('./appLifecycle/appJanitor');
+const meshReconciler = require('./appMesh/meshReconciler');
 const backendTlsRenewal = require('./appLifecycle/backendTlsRenewal');
 const containerMountRecovery = require('./appLifecycle/containerMountRecovery');
 const fileOperationRecovery = require('./appSystem/fileOperationRecovery');
@@ -338,6 +339,7 @@ async function startFluxFunctions() {
     }
     await fluxNetworkHelper.addFluxNodeServiceIpToLoopback();
     await fluxNetworkHelper.allowOnlyDockerNetworksToFluxNodeService();
+    await fluxNetworkHelper.allowDockerNetworksToFluxDnsd();
     fluxNodeService.start();
     log.info('Checking docker log for corruption...');
     await dockerService.dockerLogsFix();
@@ -987,6 +989,10 @@ async function startFluxFunctions() {
       }, imageReaperIntervalMs);
     }, bootDelay(10 * 60 * 1000));
     appJanitor.start();
+    // The mesh sweep: membership, certificates (aged-replacement promotion
+    // rides it), the impersonation detector. Dormant on a node running no
+    // mesh app.
+    meshReconciler.start();
     // Re-issue managed backend-TLS leaves before their 30-day life runs out
     // (dormant on a node running no verify:required app).
     backendTlsRenewal.start();

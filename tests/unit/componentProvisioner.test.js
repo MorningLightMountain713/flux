@@ -16,7 +16,7 @@ describe('componentProvisioner tests', () => {
   function loadProvisioner(opts = {}) {
     const {
       teardownOwed = false, isCondemnedStub = null, firewallActive = false, isUPNP = false, pullError = null,
-      certError = null,
+      certError = null, meshPrepareStub = null,
     } = opts;
     appDockerStartStub = sinon.stub().resolves('ok');
     appDockerCreateStub = sinon.stub().resolves();
@@ -45,6 +45,7 @@ describe('componentProvisioner tests', () => {
       '../telemetryIdentityService': { onComponentCreated: sinon.stub().resolves() },
       '../appManagement/appsRuntimeState': { isCondemned: isCondemnedStub || sinon.stub().resolves(false) },
       './pendingTeardownStore': { teardownOwedFor: sinon.stub().resolves(teardownOwed) },
+      '../appMesh/meshReconciler': { prepareComponentMesh: meshPrepareStub || sinon.stub().resolves(null) },
       util: { promisify: () => async () => { if (pullError) throw pullError; return 'pulled'; } },
     });
   }
@@ -289,6 +290,7 @@ describe('componentProvisioner tests', () => {
         '../telemetryIdentityService': {},
         '../appManagement/appsRuntimeState': { isCondemned: sinon.stub().resolves(false) },
         './pendingTeardownStore': { teardownOwedFor: sinon.stub().resolves(false) },
+        '../appMesh/meshReconciler': {},
         util: { promisify: () => async () => 'pulled' },
       });
       let threw = false;
@@ -385,6 +387,46 @@ describe('componentProvisioner tests', () => {
       expect(mapUpnpPortStub.called, 'skipPorts must not touch UPnP').to.be.false;
       // The container is still created — only the ufw/UPnP open is skipped.
       expect(appDockerCreateStub.called, 'the container is still provisioned').to.be.true;
+    });
+  });
+
+  describe('mesh provisioning', () => {
+    it('a mesh component is created with its presented env and the resolver chain', async () => {
+      const provisioner = loadProvisioner({
+        meshPrepareStub: sinon.stub().resolves({
+          presentedIp: '10.127.0.1',
+          env: ['FLUX_MESH_APP=syncholdapp', 'FLUX_MESH_SELF=web-aaaa1111', 'FLUX_MESH_SELF_IP=10.127.0.1'],
+          dns: ['169.254.43.53', '8.8.8.8', '1.1.1.1'],
+        }),
+      });
+      await provisioner.installComponent(makeComponent(null), { owner: 'owner1', extraEnv: ['X=1'] });
+      const options = appDockerCreateStub.firstCall.args[1];
+      expect(options.extraEnv).to.deep.equal([
+        'X=1', 'FLUX_MESH_APP=syncholdapp', 'FLUX_MESH_SELF=web-aaaa1111', 'FLUX_MESH_SELF_IP=10.127.0.1',
+      ]);
+      expect(options.dns).to.deep.equal(['169.254.43.53', '8.8.8.8', '1.1.1.1']);
+    });
+
+    it('a non-mesh component is created without a dns override', async () => {
+      const provisioner = loadProvisioner();
+      await provisioner.installComponent(makeComponent(null), { owner: 'owner1' });
+      const options = appDockerCreateStub.firstCall.args[1];
+      expect(options).to.not.have.property('dns');
+    });
+
+    it('a mesh runtime that cannot be readied defers as a node condition', async () => {
+      const provisioner = loadProvisioner({
+        meshPrepareStub: sinon.stub().rejects(new Error('no transport port could be secured')),
+      });
+      let threw = null;
+      try {
+        await provisioner.installComponent(makeComponent(null), { owner: 'owner1' });
+      } catch (error) {
+        threw = error;
+      }
+      expect(threw).to.be.an('error');
+      expect(threw.code).to.equal('MESH_UNAVAILABLE');
+      expect(appDockerCreateStub.called, 'no container is created without the mesh runtime').to.be.false;
     });
   });
 });
