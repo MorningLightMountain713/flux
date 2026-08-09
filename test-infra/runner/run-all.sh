@@ -22,6 +22,8 @@
 #   7xx networking, TLS, ingress
 #   8xx telemetry and logging
 #   9xx replicas and colocation
+#   10xx playground
+#   11xx app mesh overlay
 # The number says WHAT a suite covers and nothing about how long it takes - each suite
 # declares that itself with `// weight: heavy|light`, which is what orders a parallel run.
 
