@@ -164,7 +164,9 @@ describe('mesh SRV discovery and membership-not-liveness', function () {
       '/bin/busybox sh -c "/bin/busybox env | /bin/busybox grep FLUX_MESH_SELF"');
     const fqdn = envOut.stdout.match(/FLUX_MESH_SELF_FQDN=(\S+)/)?.[1];
     const selfIp = envOut.stdout.match(/FLUX_MESH_SELF_IP=([0-9.]+)/)?.[1];
-    expect(fqdn, 'FLUX_MESH_SELF_FQDN present').to.match(new RegExp(`^web-[0-9a-f]{8}\\.${name}\\.mesh\\.flux$`));
+    // Three instances, three slots: every member is a slot-holder, so the
+    // identity is the ordinal form (1106 covers the slot mechanics).
+    expect(fqdn, 'FLUX_MESH_SELF_FQDN present').to.match(new RegExp(`^web-[0-2]\\.${name}\\.mesh\\.flux$`));
     expect(selfIp, 'FLUX_MESH_SELF_IP present').to.be.a('string');
     await waitFor(async () => {
       const out = await inApp(0, 'web', `/bin/busybox nslookup ${fqdn} ${RESOLVER_ADDR}`);
@@ -183,10 +185,11 @@ describe('mesh SRV discovery and membership-not-liveness', function () {
     const { rows } = await srvQuery(0, 'web', `_db-client._tcp.db.${name}.mesh.flux`);
     expect(rows, '_db-client answers the sibling port').to.have.length(3);
     rows.forEach((r) => expect(r.port).to.equal(7002));
-    // Targets are member FQDNs, one per member, all distinct.
+    // Targets are ordinal member FQDNs — the named cluster set, one per
+    // slot-holder, all distinct.
     const targets = new Set(rows.map((r) => r.target));
     expect(targets.size, 'three distinct member targets').to.equal(3);
-    targets.forEach((t) => expect(t).to.match(new RegExp(`^db-[0-9a-f]{8}\\.${name}\\.mesh\\.flux$`)));
+    targets.forEach((t) => expect(t).to.match(new RegExp(`^db-[0-2]\\.${name}\\.mesh\\.flux$`)));
   });
 
   it('a single-mesh-port component answers any service label', async function () {

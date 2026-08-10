@@ -104,6 +104,8 @@ describe('meshReconciler', () => {
       transitInstances: [],
       portInstances: [],
       getDefaultRouteInterface: sinon.stub().resolves('eth0'),
+      slotView: null,
+      slotClaims: [],
     };
 
     const record = (name) => sinon.stub().callsFake(async (...args) => {
@@ -150,6 +152,14 @@ describe('meshReconciler', () => {
         getFluxnodesByPubkey: sinon.stub().callsFake(async (key) => stubs.nodesByPubkey?.[key] ?? null),
       },
       '../fluxNetworkHelper': { getDefaultRouteInterface: (...args) => stubs.getDefaultRouteInterface(...args) },
+      // The slot store/gossip reads are stubbed; the pure arbitration runs real.
+      './meshSlots': {
+        arbitrate: require('../../ZelBack/src/services/appMesh/meshSlots').arbitrate,
+        appSlotView: sinon.stub().callsFake(async () => stubs.slotView
+          ?? { ownSlot: null, ownSince: null, winners: new Map() }),
+        resolveOwnSlot: sinon.stub().callsFake(async () => (stubs.slotView?.ownSlot ?? null)),
+        publishClaimSlot: sinon.stub().callsFake(async (...args) => { stubs.slotClaims.push(args); }),
+      },
       '../utils/specLibs': {
         getSpec: sinon.stub().resolves({ meshComponentSlot: () => SLOT }),
       },
@@ -627,6 +637,51 @@ describe('meshReconciler', () => {
         `FLUX_MESH_SELF_IP=${ownIp}`,
       ]);
       expect(result.dns).to.deep.equal(['169.254.43.53', '8.8.8.8', '1.1.1.1']);
+      // A slot-less member keeps the component-name hostname convention via
+      // the member-name hostname + component alias pair all mesh containers get.
+      expect(result.hostname).to.equal(`web-${OWN_NODE_ID}`);
+      expect(result.aliases).to.deep.equal(['web']);
+    });
+
+    it('a slot-holder is created under its ordinal identity', async () => {
+      stubs.slotView = { ownSlot: 1, ownSince: null, winners: new Map() };
+      const addresses = realSnapshot.assignMemberAddresses(null, [{
+        name: 'myblog',
+        members: [{ component: 'web', nodeId: OWN_NODE_ID }],
+      }]);
+      const ownIp = addresses.get(`myblog|${OWN_NODE_ID}|web`);
+      let passRan = false;
+      const origWrite = stubs.snapshotOnDisk;
+      Object.defineProperty(stubs, 'snapshotOnDisk', {
+        get() {
+          if (!passRan) return origWrite;
+          return {
+            apps: [{
+              name: 'myblog',
+              members: [{ component: 'web', nodeId: OWN_NODE_ID, ip: ownIp }],
+            }],
+          };
+        },
+        set() {},
+        configurable: true,
+      });
+      const result = await (async () => {
+        const out = meshReconciler.reconcileAllMeshApps().then(() => { passRan = true; });
+        await out;
+        return meshReconciler.prepareComponentMesh('myblog', 'web');
+      })();
+      expect(result.env).to.deep.equal([
+        'FLUX_MESH_APP=myblog',
+        'FLUX_MESH_SELF=web-1',
+        'FLUX_MESH_SELF_FQDN=web-1.myblog.mesh.flux',
+        'FLUX_MESH_ORDINAL=1',
+        `FLUX_MESH_SELF_IP=${ownIp}`,
+      ]);
+      expect(result.hostname).to.equal('web-1');
+      expect(result.aliases).to.deep.equal(['web']);
+      // The chosen slot was published onto the standing install claim so
+      // concurrent installers split vacancies.
+      expect(stubs.slotClaims).to.deep.include(['myblog', 1]);
     });
   });
 
@@ -672,6 +727,75 @@ describe('meshReconciler', () => {
       };
       const snapApp = meshReconciler.buildSnapshotApp(app, { ownNodeId: OWN_NODE_ID });
       expect(snapApp.components).to.deep.equal({});
+    });
+
+    it('assigns ordinals from the arbitrated slot assertions', () => {
+      const app = {
+        name: 'myblog',
+        view: { componentNames: () => ['web'], instances: 3 },
+        material: {
+          slotView: { ownSlot: 0, ownSince: '2026-08-10T08:00:00.000Z' },
+          members: [
+            {
+              nodeId: PEER_NODE_ID, outpoint: PEER_OUTPOINT, slot: 1, runningSince: '2026-08-10T09:00:00.000Z',
+            },
+            // A standby peer: admitted, listed, no ordinal.
+            {
+              nodeId: 'aaaa1111', outpoint: 'aaaa:0', slot: null, runningSince: '2026-08-10T10:00:00.000Z',
+            },
+          ],
+        },
+        containers: [],
+      };
+      const snapApp = meshReconciler.buildSnapshotApp(app, {
+        ownNodeId: OWN_NODE_ID, ownOutpoint: OWN_OUTPOINT,
+      });
+      const byNode = new Map(snapApp.members.map((m) => [m.nodeId, m.ordinal]));
+      expect(byNode.get(OWN_NODE_ID)).to.equal(0);
+      expect(byNode.get(PEER_NODE_ID)).to.equal(1);
+      expect(snapApp.members.find((m) => m.nodeId === 'aaaa1111')).to.not.have.property('ordinal');
+    });
+
+    it('a double-claimed slot names only the arbitration winner', () => {
+      const app = {
+        name: 'myblog',
+        view: { componentNames: () => ['web'], instances: 3 },
+        material: {
+          slotView: { ownSlot: 1, ownSince: '2026-08-10T10:00:00.000Z' },
+          members: [
+            // Same slot, earlier runningSince: the peer wins, this node is
+            // slot-less this pass (its own resolver re-picks on the next).
+            {
+              nodeId: PEER_NODE_ID, outpoint: PEER_OUTPOINT, slot: 1, runningSince: '2026-08-10T09:00:00.000Z',
+            },
+          ],
+        },
+        containers: [],
+      };
+      const snapApp = meshReconciler.buildSnapshotApp(app, {
+        ownNodeId: OWN_NODE_ID, ownOutpoint: OWN_OUTPOINT,
+      });
+      const byNode = new Map(snapApp.members.map((m) => [m.nodeId, m.ordinal]));
+      expect(byNode.get(PEER_NODE_ID)).to.equal(1);
+      expect(snapApp.members.find((m) => m.nodeId === OWN_NODE_ID)).to.not.have.property('ordinal');
+    });
+
+    it('ignores slots at or beyond the instance cap', () => {
+      const app = {
+        name: 'myblog',
+        view: { componentNames: () => ['web'], instances: 2 },
+        material: {
+          slotView: { ownSlot: null, ownSince: null },
+          members: [{
+            nodeId: PEER_NODE_ID, outpoint: PEER_OUTPOINT, slot: 5, runningSince: '2026-08-10T09:00:00.000Z',
+          }],
+        },
+        containers: [],
+      };
+      const snapApp = meshReconciler.buildSnapshotApp(app, {
+        ownNodeId: OWN_NODE_ID, ownOutpoint: OWN_OUTPOINT,
+      });
+      expect(snapApp.members.find((m) => m.nodeId === PEER_NODE_ID)).to.not.have.property('ordinal');
     });
   });
 

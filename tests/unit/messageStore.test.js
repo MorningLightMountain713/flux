@@ -730,6 +730,36 @@ describe('messageStore tests', () => {
       expect(setDoc.announcedAt).to.deep.equal(new Date(announcedAt));
       expect(setDoc.broadcastedAt).to.deep.equal(new Date(broadcastedAt));
       expect(setDoc.expireAt).to.deep.equal(new Date(broadcastedAt + 15 * 60 * 1000));
+      // No slot on the message: the $set must not name the field, so a
+      // slotless renewal never strips a slot already on the standing claim.
+      expect(setDoc).to.not.have.property('meshSlot');
+    });
+
+    it('persists a valid v2 meshSlot and drops a malformed one', async () => {
+      const mockDb = { db: sinon.stub().returns('database') };
+      dbHelperStub.databaseConnection.returns(mockDb);
+      dbHelperStub.findOneInDatabase.resolves(null);
+      dbHelperStub.updateOneInDatabase.resolves();
+
+      const base = {
+        type: 'fluxappinstalling',
+        version: 2,
+        name: 'testapp',
+        announcedAt: Date.now() - 1000,
+        broadcastedAt: Date.now(),
+        ip: '192.168.1.1',
+      };
+      await messageStore.storeAppInstallingMessage({ ...base, meshSlot: 2 });
+      expect(dbHelperStub.updateOneInDatabase.firstCall.args[3].$set.meshSlot).to.equal(2);
+
+      // Peer input is normalized tolerantly: a malformed slot degrades to
+      // absent rather than rejecting the seat claim it rides on.
+      for (const bad of [-1, 1.5, '2', 1000]) {
+        dbHelperStub.updateOneInDatabase.resetHistory();
+        // eslint-disable-next-line no-await-in-loop
+        await messageStore.storeAppInstallingMessage({ ...base, broadcastedAt: Date.now(), meshSlot: bad });
+        expect(dbHelperStub.updateOneInDatabase.firstCall.args[3].$set, String(bad)).to.not.have.property('meshSlot');
+      }
     });
 
     it('keys the claim row by replica: a tagged claim upserts (name, ip, replica)', async () => {

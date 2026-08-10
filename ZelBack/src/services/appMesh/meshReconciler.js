@@ -43,6 +43,7 @@ const meshNamespace = require('./meshNamespace');
 const meshTransit = require('./meshTransit');
 const meshSsh = require('./meshSsh');
 const meshSnapshot = require('./meshSnapshot');
+const meshSlots = require('./meshSlots');
 const meshPortAllocator = require('./meshPortAllocator');
 const meshDetector = require('./meshDetector');
 
@@ -161,6 +162,7 @@ const memberFacts = (member) => ({
   block: member.block,
   endpoint: member.endpoint,
   caShas: member.caShas,
+  slot: member.slot ?? null,
 });
 
 function recordPass(appName, patch) {
@@ -226,6 +228,10 @@ async function reconcileAppMaterial(app, ctx) {
     refused: await meshRefuseSet.refusedOutpoints(app.identity),
   });
 
+  // This node's own ordinal slot for the app (meshSlots.js) — resolved once
+  // per pass beside the membership it is arbitrated against.
+  const slotView = await meshSlots.appSlotView(app.name, app.view.instances);
+
   const bundleChanged = await meshCertificates.writeTrustBundle(
     app.identity,
     members.map((member) => member.meshCa),
@@ -246,6 +252,7 @@ async function reconcileAppMaterial(app, ctx) {
     rejected,
     meshPort,
     certAction,
+    slotView,
     needsReload: bundleChanged || configChanged || certAction === HostCertificateAction.DEPLOYED,
   };
 }
@@ -274,10 +281,50 @@ async function gatherContainers(app) {
         identifier: component.identifier,
         pid,
         sourceIp: bridge?.IPAddress || null,
+        // The identity the container was created with — read back for the
+        // slot-drift check (a promoted standby's env is stale until recreate).
+        meshSelf: (info?.Config?.Env ?? [])
+          .find((entry) => entry.startsWith('FLUX_MESH_SELF='))
+          ?.slice('FLUX_MESH_SELF='.length) ?? null,
       });
     }
   }
   return containers;
+}
+
+/**
+ * Ordinal slots per node for the snapshot: this node's own resolved slot plus
+ * every ADMITTED peer's self-asserted one, arbitrated deterministically
+ * (meshSlots.arbitrate — earliest runningSince wins, outpoint tiebreak), so a
+ * transient double-claim never puts one ordinal on two members. Arbitrated
+ * over admitted members only: raw rows would let an unadmitted announcement
+ * shadow a real member's name.
+ */
+function slotsByNode(app, ctx) {
+  const cap = app.view.instances ?? 0;
+  const contenders = [];
+  const ownSlot = app.material.slotView?.ownSlot;
+  if (Number.isInteger(ownSlot) && ownSlot < cap) {
+    contenders.push({
+      nodeId: ctx.ownNodeId,
+      slot: ownSlot,
+      since: app.material.slotView.ownSince ?? null,
+      tiebreak: ctx.ownOutpoint,
+    });
+  }
+  app.material.members.forEach((member) => {
+    if (Number.isInteger(member.slot) && member.slot >= 0 && member.slot < cap) {
+      contenders.push({
+        nodeId: member.nodeId,
+        slot: member.slot,
+        since: member.runningSince ?? null,
+        tiebreak: member.outpoint,
+      });
+    }
+  });
+  const byNode = new Map();
+  meshSlots.arbitrate(contenders).forEach((winner, slot) => byNode.set(winner.nodeId, slot));
+  return byNode;
 }
 
 /**
@@ -286,15 +333,26 @@ async function gatherContainers(app) {
  * scoping table of local containers and the SRV feed — each component's
  * mesh-advertised ports from the spec, name → {port, proto}. The port name is
  * the SRV service label: flux-dnsd answers
- * `_<name>._<proto>.<component>.<app>.mesh.flux` from this map.
+ * `_<name>._<proto>.<component>.<app>.mesh.flux` from this map. Members that
+ * hold an ordinal slot carry it — the resolver serves the `<component>-<N>`
+ * names and the slot-holder SRV answers from it.
  */
 function buildSnapshotApp(app, ctx) {
+  const ordinals = slotsByNode(app, ctx);
   const members = [];
   const componentNames = app.view.componentNames();
   componentNames.forEach((component) => {
-    members.push({ component, nodeId: ctx.ownNodeId });
+    members.push({
+      component,
+      nodeId: ctx.ownNodeId,
+      ...(ordinals.has(ctx.ownNodeId) ? { ordinal: ordinals.get(ctx.ownNodeId) } : {}),
+    });
     app.material.members.forEach((member) => {
-      members.push({ component, nodeId: member.nodeId });
+      members.push({
+        component,
+        nodeId: member.nodeId,
+        ...(ordinals.has(member.nodeId) ? { ordinal: ordinals.get(member.nodeId) } : {}),
+      });
     });
   });
   members.sort((a, b) => (a.component === b.component
@@ -609,6 +667,23 @@ async function runReconcilePass() {
     try {
       // eslint-disable-next-line no-await-in-loop
       const detector = await runDetector(app, ctx);
+      // Slot-identity drift: a container whose baked FLUX_MESH_SELF no longer
+      // matches the slot this pass resolved (a standby promoted after boot,
+      // or a lost double-claim arbitration). Identity is fixed for a
+      // container's lifetime, so the cure is recreation — which must ride the
+      // app reconciler's no-tamper heal path (a follow-up workstream); until
+      // then the drift is surfaced here and the container keeps acting on its
+      // boot identity, which is safe: it self-identifies as what it was.
+      const ownSlot = app.material.slotView?.ownSlot;
+      const expectedSelf = (component) => (ownSlot != null
+        ? `${component}-${ownSlot}`
+        : meshDerivation.memberName(component, ctx.ownOutpoint));
+      const identityDrift = app.containers
+        .filter((c) => c.meshSelf && c.meshSelf !== expectedSelf(c.component))
+        .map((c) => ({ component: c.component, is: c.meshSelf, wants: expectedSelf(c.component) }));
+      if (identityDrift.length > 0) {
+        log.warn(`meshReconciler - ${app.name}: slot identity drift: ${identityDrift.map((d) => `${d.is} -> ${d.wants}`).join(', ')} (container recreation pending)`);
+      }
       recordPass(app.name, {
         detector,
         // The interface the firewall was scoped to, or null when none was found
@@ -616,6 +691,8 @@ async function runReconcilePass() {
         externalInterface: externalInterface ?? null,
         // An eviction re-ran the material; the retained view keeps up.
         members: app.material.members.map(memberFacts),
+        ownSlot: ownSlot ?? null,
+        ...(identityDrift.length > 0 ? { identityDrift } : {}),
       });
     } catch (error) {
       recordPass(app.name, { error: error.message });
@@ -684,19 +761,41 @@ async function prepareComponentMesh(appName, componentName) {
   if (!member?.ip) {
     throw new Error(`No presented address is assigned yet for ${componentName} of ${appName}`);
   }
+  // The member's ordinal slot (meshSlots.js): resolved before the container
+  // exists, because identity is fixed for the container's lifetime. Slot-
+  // holders are named by ordinal — the predictable identity consensus
+  // software configures against — and a standby keeps the nodeid form until
+  // a vacancy opens (its promotion is a NEW identity: a recreated container).
+  const slot = await meshSlots.resolveOwnSlot(appName, view.instances);
+  if (slot != null) {
+    // Make the choice visible to concurrent installers before either side
+    // reaches its first running broadcast. Best-effort — the slot converges
+    // through running-assertion arbitration regardless.
+    await meshSlots.publishClaimSlot(appName, slot)
+      .catch((error) => log.warn(`meshReconciler - ${appName}: slot claim publish failed: ${error.message}`));
+  }
   // The FQDN is the member's one stable mesh-wide identifier — the presented
   // IPv4 is node-local, so cluster software must advertise this name, never
   // the address (etcd --initial-advertise-peer-urls, Mongo replica hosts).
-  const selfName = meshDerivation.memberName(componentName, ownOutpoint);
+  const selfName = slot != null
+    ? `${componentName}-${slot}`
+    : meshDerivation.memberName(componentName, ownOutpoint);
   return {
     presentedIp: member.ip,
     env: [
       `FLUX_MESH_APP=${appName}`,
       `FLUX_MESH_SELF=${selfName}`,
       `FLUX_MESH_SELF_FQDN=${selfName}.${appName}.${MESH_DNS_ZONE}`,
+      ...(slot != null ? [`FLUX_MESH_ORDINAL=${slot}`] : []),
       `FLUX_MESH_SELF_IP=${member.ip}`,
     ],
     dns: [...MESH_DNS_SERVERS],
+    // The docker Hostname: the member name, the Kubernetes StatefulSet
+    // convention (images derive their ordinal from their own hostname). The
+    // component name rides as a network alias so sibling components keep
+    // reaching this container as plain `<component>`, exactly as before.
+    hostname: selfName,
+    aliases: [componentName],
   };
 }
 

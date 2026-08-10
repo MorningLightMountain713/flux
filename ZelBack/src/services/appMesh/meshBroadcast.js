@@ -17,6 +17,7 @@ const meshCertificates = require('./meshCertificates');
 const meshDerivation = require('./meshDerivation');
 const meshVoucher = require('./meshVoucher');
 const meshPorts = require('./meshPorts');
+const meshSlots = require('./meshSlots');
 
 /**
  * The mesh fields for one broadcast cycle.
@@ -62,7 +63,17 @@ async function meshBroadcastFields(installedSpecs, resolvedViews) {
       const voucher = await meshVoucher.mintVoucher({
         meshCa, appUuid: inst.uuid, outpoint, blockHash: anchor.hash,
       });
-      perApp.set(inst.name, { meshCa, meshVoucher: voucher, meshPort });
+      // The ordinal slot assertion (meshSlots.js): re-resolved every cycle so
+      // a settled slot is echoed unchanged (the resolver's first rule is the
+      // node's own prior assertion) and a standby claims a vacancy the moment
+      // one opens. Absent when every slot is held.
+      // eslint-disable-next-line no-await-in-loop
+      const meshSlot = await meshSlots.resolveOwnSlot(
+        inst.name, resolvedViews.get(inst.name)?.instances,
+      );
+      perApp.set(inst.name, {
+        meshCa, meshVoucher: voucher, meshPort, ...(meshSlot != null ? { meshSlot } : {}),
+      });
     } catch (error) {
       log.warn(`meshBroadcast - ${inst.name} announced without mesh fields: ${error.message}`);
     }
