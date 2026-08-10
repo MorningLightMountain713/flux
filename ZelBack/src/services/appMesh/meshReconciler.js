@@ -44,6 +44,8 @@ const meshTransit = require('./meshTransit');
 const meshSsh = require('./meshSsh');
 const meshSnapshot = require('./meshSnapshot');
 const meshSlots = require('./meshSlots');
+const meshIdentityDrift = require('./meshIdentityDrift');
+const reconcilerQueue = require('../appMonitoring/reconcilerQueue');
 const meshPortAllocator = require('./meshPortAllocator');
 const meshDetector = require('./meshDetector');
 
@@ -662,27 +664,35 @@ async function runReconcilePass() {
   await meshNamespace.ensureMeshChains();
   await meshNamespace.setMeshChainRules(chainRules);
 
+  // Slot-identity drift across the whole pass: containers whose baked
+  // FLUX_MESH_SELF no longer matches the slot this pass resolved (a standby
+  // promoted after boot, or a lost double-claim arbitration). Identity is
+  // fixed for a container's lifetime, so the cure is a deliberate
+  // remove-and-recreate — owned by the APP reconciler, which reads the drift
+  // registry in its running branch and rebuilds with the network-heal
+  // discipline (preconditions before the remove, durable removed-on-purpose
+  // flag, no-uninstall recreate). The registry confirms a drift across two
+  // passes before serving it, so a mid-convergence read never destroys.
+  const passDrifts = new Map();
   // eslint-disable-next-line no-restricted-syntax
   for (const app of healthy) {
     try {
       // eslint-disable-next-line no-await-in-loop
       const detector = await runDetector(app, ctx);
-      // Slot-identity drift: a container whose baked FLUX_MESH_SELF no longer
-      // matches the slot this pass resolved (a standby promoted after boot,
-      // or a lost double-claim arbitration). Identity is fixed for a
-      // container's lifetime, so the cure is recreation — which must ride the
-      // app reconciler's no-tamper heal path (a follow-up workstream); until
-      // then the drift is surfaced here and the container keeps acting on its
-      // boot identity, which is safe: it self-identifies as what it was.
       const ownSlot = app.material.slotView?.ownSlot;
       const expectedSelf = (component) => (ownSlot != null
         ? `${component}-${ownSlot}`
         : meshDerivation.memberName(component, ctx.ownOutpoint));
       const identityDrift = app.containers
         .filter((c) => c.meshSelf && c.meshSelf !== expectedSelf(c.component))
-        .map((c) => ({ component: c.component, is: c.meshSelf, wants: expectedSelf(c.component) }));
+        .map((c) => ({
+          identifier: c.identifier, component: c.component, is: c.meshSelf, wants: expectedSelf(c.component),
+        }));
+      identityDrift.forEach((drift) => passDrifts.set(drift.identifier, {
+        component: drift.component, is: drift.is, wants: drift.wants,
+      }));
       if (identityDrift.length > 0) {
-        log.warn(`meshReconciler - ${app.name}: slot identity drift: ${identityDrift.map((d) => `${d.is} -> ${d.wants}`).join(', ')} (container recreation pending)`);
+        log.warn(`meshReconciler - ${app.name}: slot identity drift: ${identityDrift.map((d) => `${d.is} -> ${d.wants}`).join(', ')}`);
       }
       recordPass(app.name, {
         detector,
@@ -692,13 +702,19 @@ async function runReconcilePass() {
         // An eviction re-ran the material; the retained view keeps up.
         members: app.material.members.map(memberFacts),
         ownSlot: ownSlot ?? null,
-        ...(identityDrift.length > 0 ? { identityDrift } : {}),
+        // Always set (empty = none): recordPass merges patches, and a stale
+        // drift surviving its own resolution would mislead the operator.
+        identityDrift,
       });
     } catch (error) {
       recordPass(app.name, { error: error.message });
       log.error(`meshReconciler - ${app.name}: detector pass failed: ${error.message}`);
     }
   }
+  meshIdentityDrift.recordPassDrifts(passDrifts).forEach((identifier) => {
+    log.warn(`meshReconciler - ${identifier}: identity drift confirmed across two passes; enqueueing for rebuild`);
+    reconcilerQueue.enqueue(identifier);
+  });
 }
 
 let currentPass = null;
