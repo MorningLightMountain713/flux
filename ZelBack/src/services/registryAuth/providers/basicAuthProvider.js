@@ -1,3 +1,5 @@
+'use strict';
+
 /**
  * BasicAuthProvider - Wrapper for traditional username/password authentication
  *

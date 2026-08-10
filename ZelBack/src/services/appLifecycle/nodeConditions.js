@@ -1,3 +1,5 @@
+'use strict';
+
 // Node-condition install failures: this node cannot serve the app right now
 // and the app is blameless, so the installer DEFERS (the app places elsewhere
 // or retries here) and never broadcasts a verdict on the app itself. Carried

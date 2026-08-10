@@ -1,3 +1,5 @@
+'use strict';
+
 // The harness-only telemetry surface: an event stream, a set of counters and a
 // set of state snapshots, all dead in production (`testEventStream` is false
 // there, and every entry point below returns before doing any work).

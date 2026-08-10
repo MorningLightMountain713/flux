@@ -1,3 +1,5 @@
+'use strict';
+
 // The transit subnet allocator: the /30 each mesh app's uplink veth carries
 // between the host and the app's namespace. Assignments are node-local and
 // nothing durable references them — every consumer (veth addresses, DNAT,

@@ -1,3 +1,5 @@
+'use strict';
+
 // Syncthing Events Consumer - the EDGE half of the level-triggered architecture.
 //
 // The periodic monitor poll is the ground truth (level); this consumer holds one

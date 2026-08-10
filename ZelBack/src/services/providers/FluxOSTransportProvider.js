@@ -1,3 +1,5 @@
+'use strict';
+
 /**
  * FluxOSTransportProvider — the node-side TransportCryptoProvider (both
  * directions) for v9.

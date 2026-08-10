@@ -1,3 +1,5 @@
+'use strict';
+
 const WebSocket = require('ws');
 const log = require('../../lib/log');
 const { CLOSE_CODES } = require('./FluxPeerSocket');

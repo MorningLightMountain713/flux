@@ -1,3 +1,5 @@
+'use strict';
+
 // Availability Checker - Checks apps availability by testing ports from external nodes
 const axios = require('axios');
 const config = require('config');

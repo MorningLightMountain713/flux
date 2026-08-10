@@ -1,3 +1,5 @@
+'use strict';
+
 const serviceHelper = require('../serviceHelper');
 const { guardedRequestOptions, BLOCKED_ADDRESS_CODE } = require('./urlSecurity');
 const registryGovernor = require('./registryGovernor');

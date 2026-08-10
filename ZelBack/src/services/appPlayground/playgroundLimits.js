@@ -1,3 +1,5 @@
+'use strict';
+
 const config = require('config');
 
 // The playground's own admission arithmetic, kept separate from the session

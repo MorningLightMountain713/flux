@@ -1,3 +1,5 @@
+'use strict';
+
 const { AsyncLock } = require('./asyncLock');
 
 // Node-wide serial lock guarding the cross-app-unsafe HOST mutations that several FluxOS

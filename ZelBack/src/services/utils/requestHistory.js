@@ -1,3 +1,5 @@
+'use strict';
+
 const { randomUUID } = require('node:crypto');
 
 const { EventEmitter } = require('node:events');

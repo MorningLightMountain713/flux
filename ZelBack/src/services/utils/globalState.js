@@ -1,3 +1,5 @@
+'use strict';
+
 const { AsyncGate } = require('./asyncGate');
 const { AsyncLock } = require('./asyncLock');
 

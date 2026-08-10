@@ -1,3 +1,5 @@
+'use strict';
+
 const zlib = require('zlib');
 const { StringDecoder } = require('string_decoder');
 const config = require('config');

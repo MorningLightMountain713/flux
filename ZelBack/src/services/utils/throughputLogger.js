@@ -1,3 +1,5 @@
+'use strict';
+
 /* eslint max-classes-per-file: ["error", 3] */
 
 const { createReadStream } = require('node:fs');

@@ -1,3 +1,5 @@
+'use strict';
+
 const config = require('config');
 const EventEmitter = require('node:events');
 const secp256k1 = require('secp256k1');

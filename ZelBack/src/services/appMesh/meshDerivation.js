@@ -1,3 +1,5 @@
+'use strict';
+
 const crypto = require('crypto');
 
 // Every value here is derived, never allocated: all nodes hosting an app

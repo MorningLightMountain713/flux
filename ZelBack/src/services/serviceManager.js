@@ -1,3 +1,5 @@
+'use strict';
+
 const config = require('config');
 
 // we import this first so the caches are instantiated before any other modules

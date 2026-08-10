@@ -1,3 +1,5 @@
+'use strict';
+
 // The mesh membership voucher: proof that this node's per-app authority was
 // presented by a genuine Arcane node, for this registration, on this
 // collateral, recently.

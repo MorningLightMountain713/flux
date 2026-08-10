@@ -1,3 +1,5 @@
+'use strict';
+
 const generalService = require('./generalService');
 const workerRunner = require('./utils/workerRunner');
 const nodeIdentityRepository = require('./appDatabase/nodeIdentityRepository');

@@ -1,3 +1,5 @@
+'use strict';
+
 // Renewal sweep for platform-managed backend-TLS certificates.
 //
 // The leaf an app serves lives for 30 days, so it has to be replaced on a TIMER

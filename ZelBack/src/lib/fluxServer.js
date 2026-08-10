@@ -1,3 +1,5 @@
+'use strict';
+
 const nodeHttp = require('node:http');
 const nodeHttps = require('node:https');
 

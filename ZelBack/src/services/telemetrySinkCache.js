@@ -1,3 +1,5 @@
+'use strict';
+
 const deploymentProvider = require('./appRuntime/deploymentProvider');
 const log = require('../lib/log');
 

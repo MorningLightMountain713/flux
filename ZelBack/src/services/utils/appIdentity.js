@@ -1,3 +1,5 @@
+'use strict';
+
 const crypto = require('crypto');
 const signatureVerifier = require('../signatureVerifier');
 const { APP_NAME_REGEX, MAX_APP_NAME_LENGTH } = require('./appConstants');

@@ -1,3 +1,5 @@
+'use strict';
+
 /**
  * AwsEcrAuthProvider - Authentication provider for Amazon ECR (Elastic Container Registry)
  *

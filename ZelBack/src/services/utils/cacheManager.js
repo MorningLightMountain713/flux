@@ -1,3 +1,5 @@
+'use strict';
+
 /* eslint max-classes-per-file: ["error", 2] */
 
 const TTLCache = require('@isaacs/ttlcache');

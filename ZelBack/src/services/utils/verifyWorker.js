@@ -1,3 +1,5 @@
+'use strict';
+
 const { parentPort } = require('worker_threads');
 const bitcoinMessage = require('bitcoinjs-message');
 const { pubKeyToAddr } = require('./fluxCryptoUtils');

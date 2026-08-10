@@ -1,3 +1,5 @@
+'use strict';
+
 // these are known old invalid messages on the blockchain. Do not request them.
 const invalidMessages = [
   {

@@ -1,3 +1,5 @@
+'use strict';
+
 const { EventEmitter } = require('node:events');
 const config = require('config');
 const natUpnp = require('@runonflux/nat-upnp');

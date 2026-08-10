@@ -1,3 +1,5 @@
+'use strict';
+
 const WebSocket = require('ws');
 
 let currentId = 0;

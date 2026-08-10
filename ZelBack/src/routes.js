@@ -1,3 +1,5 @@
+'use strict';
+
 const daemonServiceAddressRpcs = require('./services/daemonService/daemonServiceAddressRpcs');
 const fluxEventBus = require('./services/utils/fluxEventBus');
 const daemonServiceTransactionRpcs = require('./services/daemonService/daemonServiceTransactionRpcs');

@@ -1,3 +1,5 @@
+'use strict';
+
 const config = require('config');
 const os = require('os');
 const fs = require('fs').promises;

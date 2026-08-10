@@ -1,3 +1,5 @@
+'use strict';
+
 const config = require('config');
 const axios = require('axios');
 const serviceHelper = require('../serviceHelper');

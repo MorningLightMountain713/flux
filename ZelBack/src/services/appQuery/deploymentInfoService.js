@@ -1,3 +1,5 @@
+'use strict';
+
 // Deployment Info Service - Query functions for app deployment information
 const config = require('config');
 const messageHelper = require('../messageHelper');

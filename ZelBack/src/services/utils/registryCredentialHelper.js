@@ -1,3 +1,5 @@
+'use strict';
+
 /**
  * Registry Credential Helper
  *

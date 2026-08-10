@@ -1,3 +1,5 @@
+'use strict';
+
 const util = require('util');
 const path = require('path');
 const systemcrontab = require('crontab');

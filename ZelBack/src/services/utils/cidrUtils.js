@@ -1,3 +1,5 @@
+'use strict';
+
 // IP address arithmetic for placement fault domains.
 //
 // All values are carried as BigInt (IPv4 fits, IPv6 needs it) so ranges and

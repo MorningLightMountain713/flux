@@ -1,3 +1,5 @@
+'use strict';
+
 // Operations on one mesh app's network namespace: the bind-mounted netns, the
 // uplink into the host, the veth into each component container, the FLUX-MESH
 // iptables chains, and the systemd units that live inside the namespace.

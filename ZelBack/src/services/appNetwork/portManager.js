@@ -1,3 +1,5 @@
+'use strict';
+
 const config = require('config');
 const crypto = require('node:crypto');
 const axios = require('axios');

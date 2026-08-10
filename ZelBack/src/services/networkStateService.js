@@ -1,3 +1,5 @@
+'use strict';
+
 const { EventEmitter } = require('node:events');
 const daemonServiceFluxnodeRpcs = require('./daemonService/daemonServiceFluxnodeRpcs');
 const nodeListSource = require('./nodeListSource');

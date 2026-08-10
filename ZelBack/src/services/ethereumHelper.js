@@ -1,3 +1,5 @@
+'use strict';
+
 const nanoEthSigner = require('nano-ethereum-signer');
 
 /**

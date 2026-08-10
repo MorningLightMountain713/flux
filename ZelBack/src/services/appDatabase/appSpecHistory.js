@@ -1,3 +1,5 @@
+'use strict';
+
 const appsRepository = require('./appsRepository');
 const { resolveSpec } = require('../utils/specCutover');
 const { getSpecBackend } = require('../utils/specLibs');

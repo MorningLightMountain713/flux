@@ -1,3 +1,5 @@
+'use strict';
+
 // The node's allocated mesh transport ports, one per mesh app. The allocator
 // (UPnP enumerate → pick free → map → verify ownership) writes here; the
 // broadcast reads here. Persisted so a FluxOS restart re-publishes the same

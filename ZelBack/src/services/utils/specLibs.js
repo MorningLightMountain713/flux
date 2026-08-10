@@ -1,3 +1,5 @@
+'use strict';
+
 const config = require('config');
 const { load, CONTRACT_VERSION } = require('@runonflux/flux-spec-cjs');
 

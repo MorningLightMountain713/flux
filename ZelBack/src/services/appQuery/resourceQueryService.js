@@ -1,3 +1,5 @@
+'use strict';
+
 // Resource Query Service - Query functions for app and node resource usage
 const messageHelper = require('../messageHelper');
 const appsRepository = require('../appDatabase/appsRepository');

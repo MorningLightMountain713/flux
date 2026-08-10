@@ -1,3 +1,5 @@
+'use strict';
+
 /**
  * Service that will be available to all docker apps on the network to get Host information
  * Host Public IP

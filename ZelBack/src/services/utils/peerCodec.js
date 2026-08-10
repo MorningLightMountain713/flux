@@ -1,3 +1,5 @@
+'use strict';
+
 /**
  * Binary codec for unsigned peer-level messages.
  *

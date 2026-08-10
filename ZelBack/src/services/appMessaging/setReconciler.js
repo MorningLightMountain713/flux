@@ -1,3 +1,5 @@
+'use strict';
+
 const crypto = require('crypto');
 
 // Bucketed-digest set reconciliation — the scalable core shared by the content-manifest

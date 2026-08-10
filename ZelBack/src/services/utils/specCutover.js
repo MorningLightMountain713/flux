@@ -1,3 +1,5 @@
+'use strict';
+
 const { getSpec, getSpecBackend } = require('./specLibs');
 const legacyCryptoProvider = require('../providers/FluxOSLegacyCryptoProvider');
 const cryptoProvider = require('../providers/FluxOSCryptoProvider');

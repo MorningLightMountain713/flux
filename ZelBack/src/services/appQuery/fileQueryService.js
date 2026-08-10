@@ -1,3 +1,5 @@
+'use strict';
+
 // File Query Service - Query functions for app file and folder operations
 const fs = require('fs').promises;
 const messageHelper = require('../messageHelper');

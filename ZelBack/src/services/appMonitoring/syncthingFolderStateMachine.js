@@ -1,3 +1,5 @@
+'use strict';
+
 // Syncthing Folder State Machine - Manages folder sync transitions
 const fs = require('node:fs');
 const path = require('node:path');

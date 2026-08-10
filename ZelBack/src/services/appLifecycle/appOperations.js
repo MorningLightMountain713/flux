@@ -1,3 +1,5 @@
+'use strict';
+
 /*
  * appOperations — operations performed on an already-deployed app: redeploy,
  * global update broadcast, start/stop/restart, reconcile, force-removal,

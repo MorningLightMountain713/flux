@@ -1,3 +1,5 @@
+'use strict';
+
 const verificationHelper = require('../../services/verificationHelper');
 const log = require('../log');
 const { Privilege } = require('../../services/utils/privileges');

@@ -1,3 +1,5 @@
+'use strict';
+
 const serviceHelper = require('../serviceHelper');
 // Removed verificationHelper to avoid circular dependency - will use dynamic require where needed
 const messageHelper = require('../messageHelper');
