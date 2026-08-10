@@ -122,6 +122,18 @@ module.exports = {
     zmqport: 16123,
     subscriptions: {
       receiveHighWaterMark: 400,
+      // fluxd answers ZMTP heartbeats but never initiates them, so this side decides
+      // how quickly a socket that is open but dead gets noticed. Worst case is the
+      // interval plus the timeout, because a peer can die immediately after the last
+      // reply and nothing arms the timer until the next ping. 25s keeps that inside
+      // one block, so a dead stream costs at most one delta, which the gap path
+      // recovers. Lower still would start to be within reach of a badly loaded host,
+      // and a teardown is not free: it resyncs from a full snapshot.
+      heartbeatIntervalMs: 5000,
+      heartbeatTimeoutMs: 20000,
+      reconnectIntervalMs: 500,
+      reconnectMaxIntervalMs: 15000,
+      connectTimeoutMs: 3000,
       silenceThresholdMs: 90000,
       probeIntervalMs: 30000,
       // Push carries the tip every block; this only keeps `headers` honest, which push

@@ -183,6 +183,22 @@ async function removeNetwork(networkName) {
 // and event snapshots that outlive the containers. A module singleton is safe
 // because run-all gives each suite file its own mocha process.
 const activeEnvs = new Set();
+/**
+ * Node-list entries as the harness itself builds them: identity from the committed
+ * fixture, addresses from subnet-config. A suite that seeds its own list needs these
+ * rather than bare addresses, because the delta wire format identifies a node by its
+ * outpoint — a list of `{ ip }` collapses to one entry under the diff and publishes
+ * nothing at all when one is removed.
+ * @param {number} count How many entries, up to the fixture's size.
+ * @returns {Array<object>} Entries carrying txhash, outidx, pubkeys and this run's IPs.
+ */
+export function deterministicNodes(count) {
+  if (count > deterministicList.length) {
+    throw new Error(`only ${deterministicList.length} fixture nodes exist, asked for ${count}`);
+  }
+  return deterministicList.slice(0, count).map((n, idx) => ({ ...n, ip: subnet.nodeIp(idx + 1) }));
+}
+
 export function activeTestEnvs() {
   return [...activeEnvs];
 }
@@ -600,7 +616,7 @@ async function _buildEnv(
   // fixture, addresses from subnet-config (the single source of truth for node IPs).
   // POST before any node boots; /set-node-list also resets the stub's restore/reset
   // baseline. A no-op-equivalent when base === '198.18'.
-  const runNodeList = deterministicList.slice(0, nodes).map((n, idx) => ({ ...n, ip: subnet.nodeIp(idx + 1) }));
+  const runNodeList = deterministicNodes(nodes);
   await fetch(`http://${DAEMON_IP}:18232/set-node-list`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },

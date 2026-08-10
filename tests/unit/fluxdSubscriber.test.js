@@ -1,4 +1,5 @@
 const { expect } = require('chai');
+const proxyquire = require('proxyquire');
 const zmq = require('zeromq');
 
 const { createFluxdSubscriber } = require('../../ZelBack/src/services/utils/fluxdSubscriber');
@@ -227,5 +228,71 @@ describe('fluxdSubscriber tests', () => {
   it('should require a message handler', () => {
     expect(() => createFluxdSubscriber({ endpoint, topics: ['hashblockheight'] }))
       .to.throw('An onMessage handler is mandatory');
+  });
+
+  describe('socket tuning tests', () => {
+    // The one place a stub is the right tool: these are values handed to libzmq and
+    // never read back, so the only way to prove the configured ones arrive rather
+    // than the defaults is to look at what the constructor was given.
+    function optionsFrom(overrides) {
+      let seen = null;
+      class FakeSubscriber {
+        constructor(options) {
+          seen = options;
+        }
+
+        // eslint-disable-next-line class-methods-use-this
+        connect() { /* the socket is never driven in this test */ }
+
+        // eslint-disable-next-line class-methods-use-this
+        subscribe() { /* as above */ }
+
+        // eslint-disable-next-line class-methods-use-this
+        close() { /* as above */ }
+
+        get events() { return (async function* noEvents() { /* nothing */ }()); }
+
+        [Symbol.asyncIterator]() { return (async function* noMessages() { /* nothing */ }()); }
+      }
+
+      const { createFluxdSubscriber: create } = proxyquire('../../ZelBack/src/services/utils/fluxdSubscriber', {
+        zeromq: { Subscriber: FakeSubscriber, '@noCallThru': true },
+      });
+
+      const sub = create({
+        endpoint: 'tcp://127.0.0.1:1', topics: ['hashblockheight'], onMessage: () => {}, ...overrides,
+      });
+      sub.start();
+      sub.stop();
+      return seen;
+    }
+
+    it('should hand libzmq the configured heartbeat and reconnect values', () => {
+      const seen = optionsFrom({
+        heartbeatIntervalMs: 250,
+        heartbeatTimeoutMs: 750,
+        reconnectIntervalMs: 10,
+        reconnectMaxIntervalMs: 40,
+        connectTimeoutMs: 100,
+        receiveHighWaterMark: 7,
+      });
+
+      expect(seen.heartbeatInterval).to.equal(250);
+      expect(seen.heartbeatTimeout).to.equal(750);
+      expect(seen.reconnectInterval).to.equal(10);
+      expect(seen.reconnectMaxInterval).to.equal(40);
+      expect(seen.connectTimeout).to.equal(100);
+      expect(seen.receiveHighWaterMark).to.equal(7);
+    });
+
+    it('should fall back to the defaults for anything not configured', () => {
+      const seen = optionsFrom({ heartbeatIntervalMs: 250 });
+
+      expect(seen.heartbeatInterval, 'the configured value still wins').to.equal(250);
+      expect(seen.heartbeatTimeout, 'and the rest are defaults').to.equal(20_000);
+      expect(seen.reconnectInterval).to.equal(500);
+      expect(seen.reconnectMaxInterval).to.equal(15_000);
+      expect(seen.connectTimeout).to.equal(3_000);
+    });
   });
 });

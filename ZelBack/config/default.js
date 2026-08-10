@@ -155,6 +155,18 @@ module.exports = {
       // Shallow on purpose: falling behind becomes a sequence gap, and the gap
       // handlers resync from one RPC call. A deep queue would hide the stall.
       receiveHighWaterMark: 400,
+      // fluxd answers ZMTP heartbeats but never initiates them, so this side decides
+      // how quickly a socket that is open but dead gets noticed. Worst case is the
+      // interval plus the timeout, because a peer can die immediately after the last
+      // reply and nothing arms the timer until the next ping. 25s keeps that inside
+      // one block, so a dead stream costs at most one delta, which the gap path
+      // recovers. Lower still would start to be within reach of a badly loaded host,
+      // and a teardown is not free: it resyncs from a full snapshot.
+      heartbeatIntervalMs: 5000,
+      heartbeatTimeoutMs: 20000,
+      reconnectIntervalMs: 500,
+      reconnectMaxIntervalMs: 15000,
+      connectTimeoutMs: 3000,
       // Blocks are ~30s, so this is three missed in a row before we spend an RPC.
       silenceThresholdMs: 90000,
       probeIntervalMs: 30000,
