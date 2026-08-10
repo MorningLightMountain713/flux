@@ -327,20 +327,20 @@ describe('appSpawner tests', () => {
           };
         },
       },
-      './appNetworkLinker': {
-        // Default: every candidate's network links are satisfied and no candidate
-        // is a pure follower (matches the real module's behaviour for apps with no
-        // shareWith/activation). Tests that exercise the readiness filter or the
-        // follower suppression override these stubs.
+      './relationshipResolver': {
+        // Default: every candidate's dependencies are satisfied and no candidate
+        // is a pure follower (matches the real module's behaviour for apps with
+        // no dependencies/activation). Tests that exercise the readiness filter
+        // or the follower suppression override these stubs.
         // The readiness filter picks one of these per candidate: the resolving
         // gate for a pinned app, the sealed check for the general pool. Tests
         // state the intent once and both are wired from it, so a candidate
         // answers the same either way regardless of how it is targeted.
-        checkAppNetworkRequirements: opts.checkAppNetworkRequirements ?? sinon.stub().resolves(true),
-        linksReadyForSelection: opts.linksReadyForSelection
-          ?? opts.checkAppNetworkRequirements ?? sinon.stub().resolves(true),
+        checkAppDependencyRequirements: opts.checkAppDependencyRequirements ?? sinon.stub().resolves(true),
+        dependenciesReadyForSelection: opts.dependenciesReadyForSelection
+          ?? opts.checkAppDependencyRequirements ?? sinon.stub().resolves(true),
         // Answering "is this a follower" means resolving the app's spec, so the
-        // linker exposes an async predicate and a batch form for the candidate
+        // resolver exposes an async predicate and a batch form for the candidate
         // filter. Tests still state intent as one `isPureFollower` stub; both
         // are derived from it so they cannot disagree.
         isPureFollowerApp: sinon.stub().callsFake(async (app) => isFollowerStub(app)),
@@ -541,7 +541,7 @@ describe('appSpawner tests', () => {
     it('drops a candidate whose shareWith dependency is not ready', async () => {
       buildModule({
         candidates: [makeCandidate()],
-        checkAppNetworkRequirements: sinon.stub().rejects(notReadyError()),
+        checkAppDependencyRequirements: sinon.stub().rejects(notReadyError()),
       });
       await appSpawner.trySpawningGlobalApplication().catch(() => {});
       expect(logStub.info.args.some((a) => a[0]?.includes?.('No app currently to be processed'))).to.be.true;
@@ -561,8 +561,8 @@ describe('appSpawner tests', () => {
           makeCandidate({ name: 'pinnedApp', hash: 'pin1', placement: { targetIps: ['7.7.7.7:16127'] } }),
           makeCandidate({ name: 'generalApp', hash: 'gen1' }),
         ],
-        checkAppNetworkRequirements: gate,
-        linksReadyForSelection: cheap,
+        checkAppDependencyRequirements: gate,
+        dependenciesReadyForSelection: cheap,
       });
       await appSpawner.trySpawningGlobalApplication().catch(() => {});
 
@@ -581,8 +581,8 @@ describe('appSpawner tests', () => {
           makeCandidate({ name: 'byOperator', hash: 'r1', placement: { targetOperators: ['opkey'] } }),
           makeCandidate({ name: 'generalApp', hash: 'g1' }),
         ],
-        checkAppNetworkRequirements: gate,
-        linksReadyForSelection: cheap,
+        checkAppDependencyRequirements: gate,
+        dependenciesReadyForSelection: cheap,
       });
       await appSpawner.trySpawningGlobalApplication().catch(() => {});
 
@@ -593,7 +593,7 @@ describe('appSpawner tests', () => {
     it('does not error-cache a dropped candidate — it is reconsidered once the dependency appears', async () => {
       buildModule({
         candidates: [makeCandidate()],
-        checkAppNetworkRequirements: sinon.stub().rejects(notReadyError()),
+        checkAppDependencyRequirements: sinon.stub().rejects(notReadyError()),
       });
       await appSpawner.trySpawningGlobalApplication().catch(() => {});
       expect(globalStateStub.spawnErrorsLongerAppCache.has('abc123')).to.be.false;
@@ -604,7 +604,7 @@ describe('appSpawner tests', () => {
     it('keeps a candidate whose shareWith dependencies are ready', async () => {
       buildModule({
         candidates: [makeCandidate()],
-        checkAppNetworkRequirements: sinon.stub().resolves(true),
+        checkAppDependencyRequirements: sinon.stub().resolves(true),
       });
       await appSpawner.trySpawningGlobalApplication().catch(() => {});
       expect(logStub.info.args.some((a) => a[0]?.includes?.('selected to try to spawn'))).to.be.true;
@@ -613,7 +613,7 @@ describe('appSpawner tests', () => {
     it('keeps a candidate on a non-NOT_READY error — a real misconfig is handled at install', async () => {
       buildModule({
         candidates: [makeCandidate()],
-        checkAppNetworkRequirements: sinon.stub().rejects(new Error('owned by a different owner')),
+        checkAppDependencyRequirements: sinon.stub().rejects(new Error('owned by a different owner')),
       });
       await appSpawner.trySpawningGlobalApplication().catch(() => {});
       expect(logStub.info.args.some((a) => a[0]?.includes?.('selected to try to spawn'))).to.be.true;

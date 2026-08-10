@@ -57,6 +57,7 @@ const pendingTeardownStore = require('./pendingTeardownStore');
 const shutdownPlan = require('./shutdownPlan');
 const fluxShutdowndClient = require('../utils/fluxShutdowndClient');
 const appNetworkLinker = require('./appNetworkLinker');
+const relationshipResolver = require('./relationshipResolver');
 const telemetrySinkCache = require('../telemetrySinkCache');
 const telemetryConfigService = require('../telemetryConfigService');
 const telemetryIdentityService = require('../telemetryIdentityService');
@@ -339,7 +340,7 @@ async function redeployApplication(appName, options = {}) {
     if (!preTeardownSpec) {
       throw new Error(`Application ${appName} not found in database`);
     }
-    await appNetworkLinker.checkAppNetworkRequirements(preTeardownSpec);
+    await relationshipResolver.checkAppDependencyRequirements(preTeardownSpec);
 
     // Roll ONE identity at a time: tear down and rebuild its components while a
     // co-located sibling keeps serving — the whole-app redeploy is a rolling
@@ -384,9 +385,9 @@ async function redeployApplication(appName, options = {}) {
       // redeploy carries a rotated sink (or dropped telemetry entirely).
       telemetrySinkCache.setSink(appName, telemetrySinkCache.extractSink(freshDeployment));
 
-      // Re-verify shared-network links before recreating containers.
+      // Re-verify the dependency edges before recreating containers.
       // eslint-disable-next-line no-await-in-loop
-      await appNetworkLinker.checkAppNetworkRequirements(instantiated);
+      await relationshipResolver.checkAppDependencyRequirements(instantiated);
 
       const requiresEncryption = shutdownPlan.appRequiresDaemonShutdown(freshDeployment);
       for (const [, deployComp] of freshDeployment.componentEntries()) {
