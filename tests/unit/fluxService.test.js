@@ -38,23 +38,13 @@ const syncthingService = require('../../ZelBack/src/services/syncthingService');
 const geolocationService = require('../../ZelBack/src/services/geolocationService');
 const enterpriseConfig = require('../../ZelBack/src/services/utils/enterpriseConfig');
 const packageJson = require('../../package.json');
+const { testUserconfig } = require('../fixtures/userconfig');
 
-// Mock adminConfig for consistent testing
-const adminConfig = {
-  initial: {
-    ipaddress: '127.0.0.1',
-    zelid: '1K6nyw2VjV6jEN1f1CkbKn9htWnYkQabbR',
-    kadena: 'kadena:k:b3d922d1a57793651a1e0d951ef1671a10833e170810d3520388628cdc082fce?chainid=0',
-    testnet: false,
-    development: false,
-    apiport: 16127,
-    routerIP: '',
-    pgpPrivateKey: '',
-    pgpPublicKey: '',
-    blockedPorts: [],
-    blockedRepositories: [],
-  },
-};
+// The same userconfig tests/init.js put on globalThis. Built from the shared
+// fixture rather than restated here: fluxService reads globalThis, so a private
+// copy that drifts from it would be config this file appears to set and the
+// code never sees.
+const adminConfig = testUserconfig();
 
 // Create shared fs promises stubs for proxyquire
 const fsPromisesStubs = {
@@ -94,7 +84,7 @@ describe('fluxService tests', () => {
     function freshService() {
       return proxyquire.noPreserveCache()(
         '../../ZelBack/src/services/fluxService',
-        { '../../../config/userconfig': adminConfig, 'node:fs/promises': fsPromisesStubs },
+        { 'node:fs/promises': fsPromisesStubs },
       );
     }
 
@@ -2322,16 +2312,27 @@ describe('fluxService tests', () => {
   });
 
   describe('apiport tests', () => {
+    let originalUserConfig;
+
+    beforeEach(() => {
+      originalUserConfig = globalThis.userconfig;
+    });
+
     afterEach(() => {
+      globalThis.userconfig = originalUserConfig;
       sinon.restore();
     });
 
+    // Reads globalThis, so the port has to be set there to be governed by this
+    // test at all. A port distinct from the fixture default, because asserting
+    // the default would pass whether or not the value was ever read.
     it('should read back the configured api port', () => {
+      globalThis.userconfig = testUserconfig({ apiport: 26127 });
       const res = generateResponse();
 
       fluxService.getAPIPort(undefined, res);
 
-      sinon.assert.calledOnceWithMatch(res.json, { status: 'success' });
+      sinon.assert.calledOnceWithMatch(res.json, { status: 'success', data: 26127 });
     });
 
     // The port also lives in fluxbench's own config, which FluxOS cannot write, and
