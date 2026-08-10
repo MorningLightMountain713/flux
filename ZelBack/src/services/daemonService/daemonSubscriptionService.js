@@ -89,8 +89,44 @@ function requestResync(topic, reason) {
   });
 }
 
+// A reconnect asks every consumer to rebuild, and rebuilding means a full snapshot
+// — the fetch this whole path exists to avoid. libzmq reconnects from half a second,
+// so a link that flaps would pay that repeatedly and end up costing more than the
+// polling it replaced.
+//
+// Throttling it is safe because a rebuild on reconnect is an optimisation, not a
+// correctness requirement: a delta that arrives against a stale view does not chain
+// onto it, and a delta that does not chain is refused and forces the rebuild anyway.
+// Skipping one costs at most a delay until the next block; taking one every flap
+// costs a snapshot per flap.
+let lastReconnectResyncAt = null;
+
+function reconnectResyncElapsedMs() {
+  if (lastReconnectResyncAt === null) return Infinity;
+  return Number(process.hrtime.bigint() - lastReconnectResyncAt) / 1_000_000;
+}
+
 function resyncAll(reason) {
   [...subscribers.keys()].forEach((topic) => requestResync(topic, reason));
+}
+
+/**
+ * Rebuilds every consumer after a reconnection, unless one was already rebuilt
+ * recently enough that a second would be answering the same question twice.
+ * @param {number} minIntervalMs Shortest gap between two reconnect rebuilds.
+ * @returns {boolean} True when the rebuild was asked for.
+ */
+function resyncAllOnReconnect(minIntervalMs) {
+  const elapsed = reconnectResyncElapsedMs();
+  if (elapsed < minIntervalMs) {
+    log.info(`daemonSubscriptions - reconnect ${Math.round(elapsed)}ms after the last rebuild, skipped`);
+    fluxEventBus.publish('daemon:resyncSkipped', { reason: RESYNC_REASONS.reconnected, elapsedMs: Math.round(elapsed) });
+    return false;
+  }
+
+  lastReconnectResyncAt = process.hrtime.bigint();
+  resyncAll(RESYNC_REASONS.reconnected);
+  return true;
 }
 
 /**
@@ -142,7 +178,7 @@ function start() {
     // Nothing is buffered for us across an outage, so a reconnection means an
     // unknown number of missed transitions, not zero.
     onConnect: ({ reconnected }) => {
-      if (reconnected) resyncAll(RESYNC_REASONS.reconnected);
+      if (reconnected) resyncAllOnReconnect(settings.reconnectResyncMinIntervalMs ?? 30_000);
     },
     // A drop is not a loss of state: libzmq reconnects on its own and the reconnect
     // above is what asks consumers to rebuild. Observed, never acted on.
@@ -167,6 +203,8 @@ function start() {
     probeIntervalMs: settings.probeIntervalMs,
     checkIntervalMs: settings.livenessCheckIntervalMs,
   });
+
+  lastReconnectResyncAt = null;
 
   subscriber.start();
   liveness.start();
