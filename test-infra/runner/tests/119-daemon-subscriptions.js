@@ -9,7 +9,7 @@ import {
   restartZmqPublisher, getZmqState, reorgChain, getState,
 } from '../framework/daemon-control.js';
 import {
-  waitForDaemonReady, waitForSubscriptionsStarted, waitForSubscriptionMode,
+  waitForDaemonReady, waitForSubscriptionsStarted, waitForSubscriptionMode, waitForBlockProcessed,
   waitForListAnchored, waitForDeltaApplied, waitForDeltaRefused, waitForReorg,
   waitForResync, waitFor, assertNoEvent,
 } from '../framework/wait.js';
@@ -255,8 +255,14 @@ describe('Daemon subscriptions: recovering from loss', function () {
     // Silencing consumes no sequence, so nothing announces the blocks that passed
     // while the stream was quiet. The first delta after it therefore starts above
     // the height this node holds and cannot be applied over good state.
-    const refused = waitForDeltaRefused(client, (d) => d.reason === 'chain_mismatch');
-    const anchored = waitForListAnchored(client, (d) => d.reason === 'delta_refused');
+    //
+    // Both waits are pinned above the current height, not just to their reason. The
+    // previous test in this fleet refuses a delta and re-anchors for the same two
+    // reasons, and those events are still in the stream's buffer — matching them
+    // would satisfy this test before it has done anything.
+    const from = (await getState()).currentHeight;
+    const refused = waitForDeltaRefused(client, (d) => d.reason === 'chain_mismatch' && d.toHeight > from);
+    const anchored = waitForListAnchored(client, (d) => d.reason === 'delta_refused' && d.height > from);
 
     await silenceZmq('all');
     await advanceBlocks(2);
@@ -384,6 +390,50 @@ describe('Daemon subscriptions: silence is not death', function () {
     const applied = waitForDeltaApplied(client, (d) => d.toHeight === target);
     await advanceBlock();
     await applied;
+  });
+});
+
+describe('Daemon subscriptions: the scan on a daemon with no block events', function () {
+  let env;
+  let client;
+
+  before(async function () {
+    this.timeout(180000);
+    env = await createTestEnv({
+      hookCtx: this,
+      nodes: 1,
+      tickerAutostart: false,
+      // Publishes nothing at all, so the scan has no block event to wake it and falls
+      // back to its own timer. That timer is the only thing keeping this node's view
+      // of the chain moving.
+      zmqTopics: [],
+    });
+    client = env.clients[0];
+    await waitForDaemonReady(client);
+  });
+
+  after(async function () {
+    this.timeout(30000);
+    await env?.teardown();
+  });
+
+  it('should keep scanning after a drain that had work to do', async function () {
+    this.timeout(120000);
+
+    const first = (await getState()).currentHeight + 1;
+    const seenFirst = waitForBlockProcessed(client, (d) => d.height >= first, 60000);
+    await advanceBlock();
+    await seenFirst;
+
+    // The second block is the assertion; the first only proves the scan ran once.
+    // Arming the fallback timer solely on the exit where a drain found nothing to do
+    // left a node that scanned a backlog and then slept while the chain moved on —
+    // and it logged nothing, because a scanner doing no work is indistinguishable
+    // from a scanner with no work.
+    const second = (await getState()).currentHeight + 1;
+    const seenSecond = waitForBlockProcessed(client, (d) => d.height >= second, 60000);
+    await advanceBlock();
+    await seenSecond;
   });
 });
 
