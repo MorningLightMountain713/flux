@@ -38,20 +38,19 @@ const PEERS = [
 }));
 const CLIENT_PUBKEY = 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFixture0000000000000000000000000000000000000 flux-mesh-client';
 
-// static_host_map: every peer's base plus each container address, all keyed to
-// the peer's endpoint, sorted by address.
-const HOST_MAP_LINES = PEERS
-  .flatMap((p) => [
-    p.address,
-    ...COMPONENT_SLOTS.map((s) => meshDerivation.memberAddress(APP.appUuid, p.outpoint, s)),
-  ].map((addr) => ({ addr, endpoint: p.endpoint })))
-  .sort((a, b) => (a.addr < b.addr ? -1 : 1))
-  .map((e) => `  "${e.addr}": ["${e.endpoint}"]`);
+const PEERS_BY_ADDR = [...PEERS].sort((a, b) => (a.address < b.address ? -1 : 1));
+
+// static_host_map: each peer's block base keyed to its endpoint, sorted by
+// address; unsafe_routes send each peer's block via that base.
+const HOST_MAP_LINES = PEERS_BY_ADDR.map((p) => `  "${p.address}": ["${p.endpoint}"]`);
+const UNSAFE_ROUTE_LINES = ['  unsafe_routes:'].concat(
+  PEERS_BY_ADDR.flatMap((p) => [`    - route: "${p.block}"`, `      via: "${p.address}"`]),
+);
 
 // Firewall: peers sorted by address, one rule per (peer, authority), both
 // directions, every rule scoped by local_cidr.
 const firewallLines = (direction) => [`  ${direction}:`].concat(
-  [...PEERS].sort((a, b) => (a.address < b.address ? -1 : 1)).flatMap((p) => p.caShas.flatMap((caSha) => [
+  PEERS_BY_ADDR.flatMap((p) => p.caShas.flatMap((caSha) => [
     '    - port: any',
     '      proto: any',
     `      ca_sha: "${caSha}"`,
@@ -98,6 +97,7 @@ const GOLDEN_NEBULA = `${[
   'tun:',
   '  dev: mesh0',
   '  mtu: 1420',
+  ...UNSAFE_ROUTE_LINES,
   'firewall:',
   ...firewallLines('outbound'),
   ...firewallLines('inbound'),
@@ -116,26 +116,28 @@ describe('meshRuntimeConfig', () => {
   describe('nebulaConfig', () => {
     it('matches the golden config, members sorted by address, one rule pair per authority', () => {
       const text = meshRuntimeConfig.nebulaConfig({
-        ...APP, listenPort: 16230, members: PEERS, componentSlots: COMPONENT_SLOTS, sshClientPublicKey: CLIENT_PUBKEY,
+        ...APP, listenPort: 16230, members: PEERS, sshClientPublicKey: CLIENT_PUBKEY,
       });
       expect(text).to.equal(GOLDEN_NEBULA);
     });
 
-    it('static_host_map carries each peer base plus its container addresses', () => {
+    it('static_host_map keys each peer base, and unsafe_routes send its block via that base', () => {
       const text = meshRuntimeConfig.nebulaConfig({
-        ...APP, listenPort: 16230, members: PEERS, componentSlots: COMPONENT_SLOTS, sshClientPublicKey: CLIENT_PUBKEY,
+        ...APP, listenPort: 16230, members: PEERS, sshClientPublicKey: CLIENT_PUBKEY,
       });
       for (const p of PEERS) {
         expect(text).to.include(`"${p.address}": ["${p.endpoint}"]`);
+        // A peer's container addresses are NOT static hosts; they are routed.
         const container = meshDerivation.memberAddress(APP.appUuid, p.outpoint, COMPONENT_SLOTS[0]);
-        expect(text).to.include(`"${container}": ["${p.endpoint}"]`);
+        expect(text).to.not.include(`"${container}":`);
+        expect(text).to.include(`- route: "${p.block}"`);
+        expect(text).to.include(`via: "${p.address}"`);
       }
-      expect(text).to.not.include('unsafe_routes');
     });
 
     it('every firewall rule in both directions carries local_cidr', () => {
       const text = meshRuntimeConfig.nebulaConfig({
-        ...APP, listenPort: 16230, members: PEERS, componentSlots: COMPONENT_SLOTS, sshClientPublicKey: CLIENT_PUBKEY,
+        ...APP, listenPort: 16230, members: PEERS, sshClientPublicKey: CLIENT_PUBKEY,
       });
       const rules = text.split('\n').filter((l) => l.includes('ca_sha:')).length;
       const localCidrs = text.split('\n').filter((l) => l.includes('local_cidr:')).length;
@@ -145,38 +147,35 @@ describe('meshRuntimeConfig', () => {
 
     it('emits empty lists for a member with no peers yet, sshd still on', () => {
       const text = meshRuntimeConfig.nebulaConfig({
-        ...APP, listenPort: 16230, members: [], componentSlots: COMPONENT_SLOTS, sshClientPublicKey: CLIENT_PUBKEY,
+        ...APP, listenPort: 16230, members: [], sshClientPublicKey: CLIENT_PUBKEY,
       });
-      expect(text).to.not.include('unsafe_routes');
+      expect(text).to.include('unsafe_routes: []');
       expect(text).to.include('outbound: []');
       expect(text).to.include('inbound: []');
       expect(text).to.include('disconnect_invalid: true');
       expect(text).to.include('sshd:\n  enabled: true');
     });
 
-    it('rejects malformed members, ports, slots and client keys', () => {
+    it('rejects malformed members, ports and client keys', () => {
       expect(() => meshRuntimeConfig.nebulaConfig({
-        ...APP, listenPort: 0, members: [], componentSlots: COMPONENT_SLOTS, sshClientPublicKey: CLIENT_PUBKEY,
+        ...APP, listenPort: 0, members: [], sshClientPublicKey: CLIENT_PUBKEY,
       })).to.throw(TypeError);
       expect(() => meshRuntimeConfig.nebulaConfig({
-        ...APP, listenPort: 16230, members: [{}], componentSlots: COMPONENT_SLOTS, sshClientPublicKey: CLIENT_PUBKEY,
+        ...APP, listenPort: 16230, members: [{}], sshClientPublicKey: CLIENT_PUBKEY,
       })).to.throw(TypeError);
       const singular = { ...PEERS[1], caShas: undefined, caSha: 'aaaa' };
       expect(() => meshRuntimeConfig.nebulaConfig({
-        ...APP, listenPort: 16230, members: [singular], componentSlots: COMPONENT_SLOTS, sshClientPublicKey: CLIENT_PUBKEY,
+        ...APP, listenPort: 16230, members: [singular], sshClientPublicKey: CLIENT_PUBKEY,
       })).to.throw(TypeError);
       const emptyShas = { ...PEERS[1], caShas: [] };
       expect(() => meshRuntimeConfig.nebulaConfig({
-        ...APP, listenPort: 16230, members: [emptyShas], componentSlots: COMPONENT_SLOTS, sshClientPublicKey: CLIENT_PUBKEY,
+        ...APP, listenPort: 16230, members: [emptyShas], sshClientPublicKey: CLIENT_PUBKEY,
       })).to.throw(TypeError);
       expect(() => meshRuntimeConfig.nebulaConfig({
-        ...APP, listenPort: 16230, members: [], componentSlots: 'nope', sshClientPublicKey: CLIENT_PUBKEY,
+        ...APP, listenPort: 16230, members: [], sshClientPublicKey: 'a\nb',
       })).to.throw(TypeError);
       expect(() => meshRuntimeConfig.nebulaConfig({
-        ...APP, listenPort: 16230, members: [], componentSlots: COMPONENT_SLOTS, sshClientPublicKey: 'a\nb',
-      })).to.throw(TypeError);
-      expect(() => meshRuntimeConfig.nebulaConfig({
-        ...APP, listenPort: 16230, members: [], componentSlots: COMPONENT_SLOTS,
+        ...APP, listenPort: 16230, members: [],
       })).to.throw(TypeError);
     });
   });
