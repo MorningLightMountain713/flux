@@ -147,6 +147,11 @@ module.exports = {
       // Ten blocks at ~30s. Past this nothing recent has arrived from either the
       // socket or RPC, so the tip we hold is no longer evidence about the chain.
       chainStaleAfterMs: 300000,
+      // Shortest gap between two rebuilds caused by reconnecting. A rebuild is a full
+      // snapshot, and libzmq reconnects from half a second, so a flapping link would
+      // otherwise pay for one per flap. Safe to skip: a delta against a stale view
+      // does not chain, and one that does not chain forces the rebuild anyway.
+      reconnectResyncMinIntervalMs: 30000,
     },
   },
   minimumFluxBenchAllowedVersion: '6.2.0',
