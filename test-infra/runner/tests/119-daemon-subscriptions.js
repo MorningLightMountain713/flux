@@ -230,38 +230,53 @@ describe('Daemon subscriptions: recovering from loss', function () {
     this.timeout(90000);
 
     // Sequence counters live in the daemon's memory, so a restart rewinds them to zero.
-    // Read as a gap that would resync on every daemon bounce.
+    // A rewind must read as a restart and never as messages lost.
+    const anchored = waitForListAnchored(client, (d) => d.reason === 'reconnected');
+    const noLoss = assertNoEvent(client, 'daemon:resync', (d) => d.reason === 'message_gap', 20000);
+
     await restartZmqPublisher();
     const state = await getZmqState();
     expect(state.nextSeq.hashblockheight ?? 0).to.equal(0);
 
-    const target = (await getState()).currentHeight + 2;
-    const applied = waitForDeltaApplied(client, (d) => d.toHeight === target);
+    // Sequence continuity cannot survive the bounce, so the repair is a fresh
+    // snapshot rather than the deltas for whatever moved meanwhile. Asking for
+    // deltaApplied here would be asking the node to replay what it deliberately
+    // does not keep.
     await advanceBlocks(2);
-    await applied;
+    expect((await anchored).data.nodes).to.be.greaterThan(0);
+    await noLoss;
 
-    // Which side failed, if this test ever does: the stub stamps a sequence per
-    // message it sends, so a counter that moved says the frames went out and the
-    // node did not act on them, rather than the publisher having gone quiet.
-    const after = await getZmqState();
-    expect(after.nextSeq.fluxnodelistdelta ?? 0, 'the stub published nothing after the restart').to.be.greaterThan(0);
+    // And the stream is live afterwards: the next block chains onto the new anchor.
+    const target = (await getState()).currentHeight + 1;
+    const applied = waitForDeltaApplied(client, (d) => d.toHeight === target);
+    await advanceBlock();
+    await applied;
   });
 
   it('should keep applying deltas after the socket comes back', async function () {
     this.timeout(120000);
 
+    // Silencing consumes no sequence, so nothing announces the blocks that passed
+    // while the stream was quiet. The first delta after it therefore starts above
+    // the height this node holds and cannot be applied over good state.
+    const refused = waitForDeltaRefused(client, (d) => d.reason === 'chain_mismatch');
+    const anchored = waitForListAnchored(client, (d) => d.reason === 'delta_refused');
+
     await silenceZmq('all');
     await advanceBlocks(2);
     await resumeZmq();
+    await advanceBlock();
 
-    // Pinned to the height this test is about to produce. An unpinned wait matches
-    // the first delta in the stream's buffer, which is the one applied at startup.
+    await refused;
+    await anchored;
+
+    // Recovered, not merely reconnected: the block after the re-anchor chains onto
+    // it and applies, which is the half that proves the stream is carrying state
+    // again rather than just being open.
     const target = (await getState()).currentHeight + 1;
     const applied = waitForDeltaApplied(client, (d) => d.toHeight === target);
     await advanceBlock();
-    const delta = (await applied).data;
-
-    expect(delta.toHeight).to.equal(target);
+    expect((await applied).data.toHeight).to.equal(target);
   });
 });
 
