@@ -132,6 +132,11 @@ function start() {
     endpoint,
     topics: availableTopics,
     receiveHighWaterMark: settings.receiveHighWaterMark,
+    reconnectIntervalMs: settings.reconnectIntervalMs,
+    reconnectMaxIntervalMs: settings.reconnectMaxIntervalMs,
+    heartbeatIntervalMs: settings.heartbeatIntervalMs,
+    heartbeatTimeoutMs: settings.heartbeatTimeoutMs,
+    connectTimeoutMs: settings.connectTimeoutMs,
     onMessage: dispatch,
     onGap: (topic) => requestResync(topic, RESYNC_REASONS.messageGap),
     // Nothing is buffered for us across an outage, so a reconnection means an
