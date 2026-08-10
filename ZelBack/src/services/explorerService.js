@@ -1072,12 +1072,6 @@ async function drainToTip() {
       await checkAndHandleReorgs(database, next - 1);
     }
 
-    // Nothing to wake us on a daemon without block events, so that case keeps a timer.
-    // On the push path this returns with nothing scheduled at all.
-    if (scanFallbackPolling) {
-      scheduleScan(config.fluxapps.explorerIdlePollMs ?? 5000, 'fallback poll');
-    }
-
     return;
   }
 
@@ -1148,6 +1142,19 @@ async function requestScan(reason = 'requested') {
     } finally {
       scanDraining = false;
       scanDrainPromise = null;
+
+      // A daemon that publishes no block events has nothing to wake the next scan,
+      // so the timer is re-armed here: after every drain, not only after one that
+      // found nothing to do. Arming it only on the idle path meant a node that had
+      // blocks to process at startup scanned them, returned, and then slept forever
+      // while the chain moved on — with nothing logged, because doing no work is
+      // indistinguishable from having no work.
+      //
+      // Skipped when a timer already exists so the error backoff above, which is
+      // deliberately much longer, is not replaced by the short idle interval.
+      if (scanFallbackPolling && !scanStopped && !scanTimer) {
+        scheduleScan(config.fluxapps.explorerIdlePollMs ?? 5000, 'fallback poll');
+      }
     }
   })();
 
