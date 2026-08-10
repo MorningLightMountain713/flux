@@ -1,3 +1,5 @@
+'use strict';
+
 const config = require('config');
 const dns = require('node:dns').promises;
 const log = require('../lib/log');
