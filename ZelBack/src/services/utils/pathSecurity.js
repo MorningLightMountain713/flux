@@ -1,3 +1,5 @@
+'use strict';
+
 /**
  * Path Security Module
  *
@@ -317,8 +319,7 @@ async function verifyRealPathOfExistingPath(targetPath, basePath) {
   // Walk up until we find an existing ancestor (or reach the base). Bounded by
   // the walk itself: every iteration either breaks or moves one level towards
   // the base, and reaching the base breaks.
-  // eslint-disable-next-line no-constant-condition
-  while (true) {
+  for (;;) {
     const relativePath = path.relative(normalizedBase, currentPath);
     if (relativePath.startsWith('..') || path.isAbsolute(relativePath)) {
       throw new Error('Invalid path: access outside allowed directory denied');

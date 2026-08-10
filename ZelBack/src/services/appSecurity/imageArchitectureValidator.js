@@ -1,3 +1,5 @@
+'use strict';
+
 const { supportedArchitectures, arcaneRequiredArchitectures } = require('../utils/appConstants');
 const { findCommonArchitectures } = require('../utils/appUtilities');
 const imageManager = require('./imageManager');
@@ -15,12 +17,8 @@ async function verifyImageRegistryAndArchitectures(spec, options = {}) {
   // before it. Kept exactly: the earlier components are still verified, and one
   // of them failing still fails the spec.
   const components = [];
-  let stoppedAtV7Auth = false;
   for (const [, comp] of spec.componentEntries()) {
-    if (spec.version === 7 && comp.imageAuth) {
-      stoppedAtV7Auth = true;
-      break;
-    }
+    if (spec.version === 7 && comp.imageAuth) break;
     components.push(comp);
   }
 
