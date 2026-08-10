@@ -1400,6 +1400,9 @@ const RUNNING_ROW_TAIL = [
       meshVoucher: { $ifNull: ['$_v2Filtered.apps.meshVoucher', null] },
       meshPort: { $ifNull: ['$_v2Filtered.apps.meshPort', null] },
       meshAnchor: { $ifNull: ['$_v2Filtered.meshAnchor', null] },
+      // The member's self-asserted ordinal slot (meshSlots.js). Null when the
+      // member holds none — a standby — or the announcement predates slots.
+      meshSlot: { $ifNull: ['$_v2Filtered.apps.meshSlot', null] },
       shutdowns: 1,
     },
   },
