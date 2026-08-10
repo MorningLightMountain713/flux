@@ -413,6 +413,7 @@ describe('meshReconciler', () => {
         nodeId: OWN_NODE_ID,
         apps: snapApps.map((app) => ({
           name: app.name,
+          components: app.components,
           members: app.members.map((member) => ({
             ...member,
             ip: addresses.get(`${app.name}|${member.nodeId}|${member.component}`),
@@ -622,9 +623,55 @@ describe('meshReconciler', () => {
       expect(result.env).to.deep.equal([
         'FLUX_MESH_APP=myblog',
         `FLUX_MESH_SELF=web-${OWN_NODE_ID}`,
+        `FLUX_MESH_SELF_FQDN=web-${OWN_NODE_ID}.myblog.mesh.flux`,
         `FLUX_MESH_SELF_IP=${ownIp}`,
       ]);
       expect(result.dns).to.deep.equal(['169.254.43.53', '8.8.8.8', '1.1.1.1']);
+    });
+  });
+
+  describe('buildSnapshotApp', () => {
+    it('feeds each component\'s mesh ports into the snapshot as the SRV map', () => {
+      const app = {
+        name: 'myblog',
+        view: {
+          componentNames: () => ['web', 'mysql'],
+          components: {
+            web: { meshPorts: {} },
+            mysql: {
+              meshPorts: {
+                galera: { containerPort: 4567, protocol: 'tcp' },
+                sst: { containerPort: 4444 },
+              },
+            },
+          },
+        },
+        material: { members: [{ nodeId: PEER_NODE_ID }] },
+        containers: [],
+      };
+      const snapApp = meshReconciler.buildSnapshotApp(app, { ownNodeId: OWN_NODE_ID });
+      // Only components that declare mesh ports appear; the protocol falls
+      // back to tcp; keys are deterministically ordered.
+      expect(snapApp.components).to.deep.equal({
+        mysql: {
+          ports: {
+            galera: { port: 4567, proto: 'tcp' },
+            sst: { port: 4444, proto: 'tcp' },
+          },
+        },
+      });
+      expect(snapApp.members).to.have.length(4);
+    });
+
+    it('emits an empty components map for a view carrying no meshPorts', () => {
+      const app = {
+        name: 'myblog',
+        view: { componentNames: () => ['web'] },
+        material: { members: [] },
+        containers: [],
+      };
+      const snapApp = meshReconciler.buildSnapshotApp(app, { ownNodeId: OWN_NODE_ID });
+      expect(snapApp.components).to.deep.equal({});
     });
   });
 

@@ -39,6 +39,9 @@ describe('meshSnapshot', () => {
 
   const APPS = [{
     name: 'myblog',
+    components: {
+      mysql: { ports: { galera: { port: 4567, proto: 'tcp' } } },
+    },
     members: [
       { component: 'web', nodeId: '6f6437c5' },
       { component: 'web', nodeId: '57eac747' },
@@ -61,6 +64,7 @@ describe('meshSnapshot', () => {
     expect(new Set(ips).size).to.equal(3);
     ips.forEach((ip) => expect(ip).to.match(/^10\.127\./));
     expect(onDisk.apps[0].members[2].ordinal).to.equal(0);
+    expect(onDisk.apps[0].components).to.deep.equal(APPS[0].components);
     expect(onDisk.apps[0].containers).to.deep.equal(APPS[0].containers);
     // No temp file left behind.
     const files = await realFsp.readdir(tmpDir);
@@ -101,17 +105,30 @@ describe('meshSnapshot', () => {
     expect(survivor.ip).to.equal(second.snapshot.apps[0].members[0].ip);
   });
 
-  it('healthy false survives; healthy true stays implicit', async () => {
+  it('liveness never enters the snapshot — DNS carries membership only', async () => {
+    // A caller that still marks a member unhealthy gets it silently dropped:
+    // whether a member is up is the cluster software's own protocol to
+    // decide, and hiding a member from discovery breaks bootstrap/rejoin.
     const apps = [{
       name: 'myblog',
       members: [
         { component: 'web', nodeId: '6f6437c5', healthy: false },
-        { component: 'web', nodeId: '57eac747', healthy: true },
+        { component: 'web', nodeId: '57eac747' },
       ],
       containers: [],
     }];
     const { snapshot } = await meshSnapshot.writeSnapshot('6f6437c5', apps);
-    expect(snapshot.apps[0].members[0].healthy).to.equal(false);
+    expect(snapshot.apps[0].members[0]).to.not.have.property('healthy');
     expect(snapshot.apps[0].members[1]).to.not.have.property('healthy');
+  });
+
+  it('components defaults to an empty map when the caller carries none', async () => {
+    const apps = [{
+      name: 'myblog',
+      members: [{ component: 'web', nodeId: '6f6437c5' }],
+      containers: [],
+    }];
+    const { snapshot } = await meshSnapshot.writeSnapshot('6f6437c5', apps);
+    expect(snapshot.apps[0].components).to.deep.equal({});
   });
 });
