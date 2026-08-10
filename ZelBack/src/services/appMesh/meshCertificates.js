@@ -238,17 +238,20 @@ async function signHostCertificate({ instance, appUuid, outpoint }, { authority 
   const certPath = path.join(dir, FILES.nextCert);
   const tmpKey = `${keyPath}.tmp`;
   const tmpCert = `${certPath}.tmp`;
+  const prefixLength = meshDerivation.appPrefix(appUuid).split('/')[1];
   await runNebulaCert([
     'sign',
     '-ca-key', caKey,
     '-ca-crt', caCert,
     '-name', meshDerivation.nodeId(outpoint),
-    // networks is this node's own /96 block: the addresses it terminates.
-    // Nebula routes to a peer only for destinations outside the sender's own
-    // networks — a peer's block, being another node's, resolves through the
-    // tun.unsafe_routes gateway to that peer. unsafeNetworks is the same block,
-    // naming the containers behind this node so peers route to them through it.
-    '-networks', meshDerivation.nodeBlock(appUuid, outpoint),
+    // networks carries this node's own address at the app-overlay prefix length.
+    // Nebula reads the sender's own networks for BOTH tunnel eligibility (two
+    // members tunnel only when their addresses share an overlay prefix) and send
+    // routing. A member's specific container addresses fall inside this shared
+    // prefix, so nebula dials them directly and static_host_map carries their
+    // endpoints. unsafeNetworks is this node's block — the containers behind it,
+    // which peers route to through it.
+    '-networks', `${meshDerivation.nodeAddress(appUuid, outpoint)}/${prefixLength}`,
     '-unsafe-networks', meshDerivation.nodeBlock(appUuid, outpoint),
     '-groups', MESH_GROUP,
     '-duration', HOST_CERT_VALIDITY,
