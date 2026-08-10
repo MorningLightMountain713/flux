@@ -1,3 +1,5 @@
+'use strict';
+
 // The impersonation detector: compares nebula's live peer table against the
 // derivation. Every tunnel carries the peer's presented certificate, and the
 // derivation says exactly which addresses the authority that signed it is

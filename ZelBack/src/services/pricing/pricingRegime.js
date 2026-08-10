@@ -1,3 +1,5 @@
+'use strict';
+
 const { getSpec } = require('../utils/specLibs');
 const legacyPricingRegime = require('./legacyPricingRegime');
 const v9PricingRegime = require('./v9PricingRegime');

@@ -1,3 +1,5 @@
+'use strict';
+
 /**
  * @module
  * Contains utility functions to be used only by verificationHelper.

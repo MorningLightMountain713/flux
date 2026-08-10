@@ -1,3 +1,5 @@
+'use strict';
+
 const openpgp = require('openpgp');
 const generalService = require('./generalService');
 const nodeIdentityRepository = require('./appDatabase/nodeIdentityRepository');

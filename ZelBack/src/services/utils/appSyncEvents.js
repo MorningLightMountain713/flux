@@ -1,3 +1,5 @@
+'use strict';
+
 const { EventEmitter } = require('events');
 
 const appSyncEvents = new EventEmitter();

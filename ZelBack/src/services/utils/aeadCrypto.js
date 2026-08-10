@@ -1,3 +1,5 @@
+'use strict';
+
 const crypto = require('node:crypto');
 
 // Local AES-256-GCM for content blobs and transport specs. The symmetric key is

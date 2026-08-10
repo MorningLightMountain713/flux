@@ -1,3 +1,5 @@
+'use strict';
+
 /**
  * RegistryAuthService - Clean integration interface for FluxOS services
  *

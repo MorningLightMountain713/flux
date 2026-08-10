@@ -1,3 +1,5 @@
+'use strict';
+
 // The mesh operator surface: the /apps/mesh/... handlers. Status is readable
 // by the app's owner and the flux team. The levers — forced renewal, authority
 // rotation, refuse-set edits — are flux team only. Neither admits the node

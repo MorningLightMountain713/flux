@@ -1,3 +1,5 @@
+'use strict';
+
 const config = require('config');
 const stream = require('stream');
 const Docker = require('dockerode');

@@ -1,3 +1,5 @@
+'use strict';
+
 const fluxEventBus = require('./utils/fluxEventBus');
 
 // Node DOS (denial-of-service) state: this FluxNode's aggregate health/eligibility

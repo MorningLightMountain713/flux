@@ -1,3 +1,5 @@
+'use strict';
+
 const operationRegistry = require('../utils/operationRegistry');
 const log = require('../../lib/log');
 const daemonServiceMiscRpcs = require('../daemonService/daemonServiceMiscRpcs');

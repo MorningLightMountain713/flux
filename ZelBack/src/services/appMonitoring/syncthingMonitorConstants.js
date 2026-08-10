@@ -1,3 +1,5 @@
+'use strict';
+
 // Syncthing Monitor - Constants
 
 const config = require('config');

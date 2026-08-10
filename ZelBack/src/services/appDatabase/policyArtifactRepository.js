@@ -1,3 +1,5 @@
+'use strict';
+
 const config = require('config');
 const { GridFSBucket } = require('mongodb');
 const dbHelper = require('../dbHelper');

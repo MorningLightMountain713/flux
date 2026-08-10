@@ -1,3 +1,5 @@
+'use strict';
+
 const { pubKeyToAddr, WIFToPrivKey } = require('./utils/fluxCryptoUtils');
 const bitcoinMessage = require('bitcoinjs-message');
 const { randomBytes } = require('crypto');

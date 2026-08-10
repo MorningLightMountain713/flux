@@ -1,3 +1,5 @@
+'use strict';
+
 const log = require('../../lib/log');
 
 // A slot held longer than this is a bug, not a slow dependency: the longest

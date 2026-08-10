@@ -1,3 +1,5 @@
+'use strict';
+
 const log = require('../../lib/log');
 const benchmarkService = require('../benchmarkService');
 const globalState = require('./globalState');

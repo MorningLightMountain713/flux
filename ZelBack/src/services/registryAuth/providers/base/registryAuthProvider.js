@@ -1,3 +1,5 @@
+'use strict';
+
 /**
  * RegistryAuthProvider - Abstract base class for Docker registry authentication providers
  *

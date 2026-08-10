@@ -1,3 +1,5 @@
+'use strict';
+
 const net = require('node:net');
 const fs = require('node:fs');
 const nodePath = require('node:path');

@@ -1,3 +1,5 @@
+'use strict';
+
 const fs = require('fs').promises;
 const path = require('node:path');
 const deviceHelper = require('../deviceHelper');

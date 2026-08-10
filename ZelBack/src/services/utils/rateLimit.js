@@ -1,3 +1,5 @@
+'use strict';
+
 const cacheManager = require('./cacheManager').default;
 const log = require('../../lib/log');
 

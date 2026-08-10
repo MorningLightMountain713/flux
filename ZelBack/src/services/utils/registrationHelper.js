@@ -1,3 +1,5 @@
+'use strict';
+
 const messageHelper = require('../messageHelper');
 // eslint-disable-next-line no-unused-vars
 const serviceHelper = require('../serviceHelper');

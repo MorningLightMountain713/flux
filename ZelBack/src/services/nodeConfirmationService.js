@@ -1,3 +1,5 @@
+'use strict';
+
 const config = require('config');
 const daemonServiceFluxnodeRpcs = require('./daemonService/daemonServiceFluxnodeRpcs');
 const daemonServiceMiscRpcs = require('./daemonService/daemonServiceMiscRpcs');

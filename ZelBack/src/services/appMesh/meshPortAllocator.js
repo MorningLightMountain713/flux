@@ -1,3 +1,5 @@
+'use strict';
+
 // The transport-port allocator: one host UDP port per mesh app per node, from
 // 16226–16299 — inside the existing bannedPorts reservation, so apps cannot
 // request these and no bannedPorts change is needed.

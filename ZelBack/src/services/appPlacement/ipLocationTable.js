@@ -1,3 +1,5 @@
+'use strict';
+
 // In-memory reader for the IP location table published in
 // RunOnFlux/fluxos-network-policy (iplocation.json, format 1).
 //

@@ -1,3 +1,5 @@
+'use strict';
+
 const fs = require('fs').promises;
 const config = require('config');
 const log = require('../../lib/log');

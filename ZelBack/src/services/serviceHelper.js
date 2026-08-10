@@ -1,3 +1,5 @@
+'use strict';
+
 /* eslint no-bitwise: 0 */
 
 const util = require('node:util');

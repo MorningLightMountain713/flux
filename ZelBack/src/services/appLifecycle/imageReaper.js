@@ -1,3 +1,5 @@
+'use strict';
+
 const log = require('../../lib/log');
 const dockerService = require('../dockerService');
 const operationRegistry = require('../utils/operationRegistry');

@@ -1,3 +1,5 @@
+'use strict';
+
 const fs = require('node:fs/promises');
 const log = require('../../lib/log');
 const serviceHelper = require('../serviceHelper');

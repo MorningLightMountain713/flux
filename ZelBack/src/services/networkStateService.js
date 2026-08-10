@@ -1,3 +1,5 @@
+'use strict';
+
 const daemonServiceFluxnodeRpcs = require('./daemonService/daemonServiceFluxnodeRpcs');
 const nodeListSource = require('./nodeListSource');
 const networkStateManager = require('./utils/networkStateManager');

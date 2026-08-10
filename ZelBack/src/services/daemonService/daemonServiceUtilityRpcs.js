@@ -1,3 +1,5 @@
+'use strict';
+
 const messageHelper = require('../messageHelper');
 const daemonServiceUtils = require('./daemonServiceUtils');
 const serviceHelper = require('../serviceHelper');

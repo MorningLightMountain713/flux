@@ -1,3 +1,5 @@
+'use strict';
+
 const querystring = require('node:querystring');
 
 const verificationHelper = require('../../services/verificationHelper');

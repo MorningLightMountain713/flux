@@ -1,3 +1,5 @@
+'use strict';
+
 /**
  * AzureAcrAuthProvider - Authentication provider for Azure Container Registry (ACR)
  *

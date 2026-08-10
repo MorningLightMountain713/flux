@@ -1,3 +1,5 @@
+'use strict';
+
 // FluxOS's channel into nebula's embedded SSH interface — the daemon's only
 // query surface, read by the impersonation detector (list-hostmap) and the
 // renewal read-back (print-cert). One node-wide client keypair authenticates

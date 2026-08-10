@@ -1,3 +1,5 @@
+'use strict';
+
 const { pubKeyToAddr } = require('./utils/fluxCryptoUtils');
 const bitcoinMessage = require('bitcoinjs-message');
 const { getSpecBackend } = require('./utils/specLibs');

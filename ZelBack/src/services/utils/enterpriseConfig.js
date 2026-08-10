@@ -1,3 +1,5 @@
+'use strict';
+
 const log = require('../../lib/log');
 const policyStore = require('../policy/policyStore');
 

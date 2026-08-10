@@ -1,3 +1,5 @@
+'use strict';
+
 const log = require('../lib/log');
 const serviceHelper = require('./serviceHelper');
 const verificationHelper = require('./verificationHelper');

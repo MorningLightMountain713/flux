@@ -1,3 +1,5 @@
+'use strict';
+
 /**
  * Drives the reconciler's stop-but-keep decisions through flux-shutdownd, off the
  * reconciler's hot path. The reconciler decides an app should be stopped; this asks

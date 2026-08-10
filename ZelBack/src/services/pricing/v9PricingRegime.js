@@ -1,3 +1,5 @@
+'use strict';
+
 const daemonServiceMiscRpcs = require('../daemonService/daemonServiceMiscRpcs');
 const appsRepository = require('../appDatabase/appsRepository');
 const { resolveInstantiatedSpec } = require('../utils/specCutover');

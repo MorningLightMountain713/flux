@@ -1,3 +1,5 @@
+'use strict';
+
 // Monitoring Orchestrator - Functions to start/stop monitoring and handle API endpoints
 const messageHelper = require('../messageHelper');
 const serviceHelper = require('../serviceHelper');

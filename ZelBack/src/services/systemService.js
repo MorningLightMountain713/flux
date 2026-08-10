@@ -1,3 +1,5 @@
+'use strict';
+
 const fs = require('node:fs/promises');
 // we do this for node 14.18.1... it doesn't have constants on fs/promises
 const { constants: fsConstants } = require('node:fs');

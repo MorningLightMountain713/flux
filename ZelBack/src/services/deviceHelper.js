@@ -1,3 +1,5 @@
+'use strict';
+
 const serviceHelper = require('./serviceHelper');
 
 /**

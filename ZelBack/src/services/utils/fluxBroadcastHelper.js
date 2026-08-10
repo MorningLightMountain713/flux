@@ -1,3 +1,5 @@
+'use strict';
+
 const fluxNetworkHelper = require('../fluxNetworkHelper');
 const verificationHelper = require('../verificationHelper');
 const serviceHelper = require('../serviceHelper');

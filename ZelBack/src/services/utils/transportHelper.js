@@ -1,3 +1,5 @@
+'use strict';
+
 const { getSpec } = require('./specLibs');
 const transportCryptoProvider = require('../providers/FluxOSTransportProvider');
 

@@ -1,3 +1,5 @@
+'use strict';
+
 const crypto = require('node:crypto');
 const axios = require('axios');
 const benchmarkService = require('../benchmarkService');

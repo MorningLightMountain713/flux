@@ -1,3 +1,5 @@
+'use strict';
+
 const util = require('util');
 const systemcrontab = require('crontab');
 const log = require('../../lib/log');

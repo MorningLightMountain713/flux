@@ -1,3 +1,5 @@
+'use strict';
+
 const config = require('config');
 const natUpnp = require('@runonflux/nat-upnp');
 const { Device } = require('@runonflux/nat-upnp/build/src/nat-upnp/device');

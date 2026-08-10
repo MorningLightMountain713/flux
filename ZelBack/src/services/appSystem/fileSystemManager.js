@@ -1,3 +1,5 @@
+'use strict';
+
 // File System Manager - Manages filesystem operations for FluxOS applications
 const archiver = require('archiver');
 const { PassThrough } = require('stream');

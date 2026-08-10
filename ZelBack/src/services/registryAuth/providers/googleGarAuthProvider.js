@@ -1,3 +1,5 @@
+'use strict';
+
 /**
  * GoogleGarAuthProvider - Authentication provider for Google Artifact Registry (GAR)
  *

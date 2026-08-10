@@ -1,3 +1,5 @@
+'use strict';
+
 const config = require('config');
 const dbHelper = require('../dbHelper');
 const appsMaintenance = require('./appsMaintenance');

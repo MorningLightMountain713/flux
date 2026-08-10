@@ -1,3 +1,5 @@
+'use strict';
+
 const { AsyncLock } = require('./asyncLock');
 
 class FluxController {

@@ -1,3 +1,5 @@
+'use strict';
+
 /* eslint-disable no-underscore-dangle */
 const config = require('config');
 const { WIFToPrivKey, privKeyToPubKey } = require('./utils/fluxCryptoUtils');

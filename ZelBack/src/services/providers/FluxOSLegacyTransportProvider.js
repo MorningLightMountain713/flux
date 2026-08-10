@@ -1,3 +1,5 @@
+'use strict';
+
 const crypto = require('crypto');
 const benchmarkService = require('../benchmarkService');
 const { getSpecBackend } = require('../utils/specLibs');

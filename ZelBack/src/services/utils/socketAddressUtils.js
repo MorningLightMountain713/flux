@@ -1,3 +1,5 @@
+'use strict';
+
 // Socket address utility functions for consistent ip:port handling.
 //
 // TODO: Once all nodes run fluxbench with always-attached port,

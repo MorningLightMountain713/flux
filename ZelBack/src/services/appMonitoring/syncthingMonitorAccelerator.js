@@ -1,3 +1,5 @@
+'use strict';
+
 // Edge accelerator for the syncthing monitor. Folder-activity events request
 // an early run of the same monitoring pass the interval drives - events never
 // carry decisions. Two guards keep a continuous event stream (a large install

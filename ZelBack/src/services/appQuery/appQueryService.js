@@ -1,3 +1,5 @@
+'use strict';
+
 // App Query Service - Query and information functions for installed apps
 const config = require('config');
 const dbHelper = require('../dbHelper');

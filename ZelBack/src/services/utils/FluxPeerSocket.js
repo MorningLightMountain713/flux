@@ -1,3 +1,5 @@
+'use strict';
+
 const config = require('config');
 const WebSocket = require('ws');
 const log = require('../../lib/log');

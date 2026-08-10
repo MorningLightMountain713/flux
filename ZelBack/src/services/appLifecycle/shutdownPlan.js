@@ -1,3 +1,5 @@
+'use strict';
+
 /**
  * Builds the per-app shutdown plan handed to flux-shutdownd, joining provenance
  * (InstantiatedSpec: owner, message hash) with operational data

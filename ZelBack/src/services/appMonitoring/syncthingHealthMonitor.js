@@ -1,3 +1,5 @@
+'use strict';
+
 // Syncthing Health Monitor - observes steady-state cluster sync health.
 // It is a WATCHDOG, not an actuator: it alerts, and at most nudges a folder's
 // devices (pause/resume forces a reconnect + index re-exchange, re-arming a

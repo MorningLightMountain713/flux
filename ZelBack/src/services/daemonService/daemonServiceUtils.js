@@ -1,3 +1,5 @@
+'use strict';
+
 const asyncLock = require('../utils/asyncLock');
 const fluxRpc = require('../utils/fluxRpc');
 const daemonConfig = require('../utils/daemonConfig');

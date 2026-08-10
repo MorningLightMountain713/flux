@@ -1,3 +1,5 @@
+'use strict';
+
 const { AsyncLock } = require('./asyncLock');
 
 // In-memory pending-admission accounting for the resource-admission race.

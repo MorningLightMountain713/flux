@@ -1,3 +1,5 @@
+'use strict';
+
 const { AsyncGate } = require('./asyncGate');
 
 // Global state variables for apps service

@@ -1,3 +1,5 @@
+'use strict';
+
 const idService = require('../services/idService');
 const paymentService = require('../services/paymentService');
 const { peerManager } = require('../services/utils/peerState');

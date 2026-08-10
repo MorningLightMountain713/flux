@@ -1,3 +1,5 @@
+'use strict';
+
 /**
  * FluxOS Docker Registry Authentication Integration Layer
  *

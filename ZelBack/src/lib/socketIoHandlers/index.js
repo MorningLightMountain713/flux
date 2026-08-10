@@ -1,3 +1,5 @@
+'use strict';
+
 const debugHandler = require('./debugHandler');
 const dockerTerminalHandler = require('./dockerTerminalHandler');
 
