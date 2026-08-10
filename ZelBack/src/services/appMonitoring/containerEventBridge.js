@@ -96,9 +96,11 @@ async function handleContainerDie(event, labelKeys) {
   // from Docker, so a failure here (e.g. DB not ready during boot) is harmless
   await appsRuntimeState.recordExit(identifier, exitCode);
   appReconciler.enqueue(identifier);
-  // a clean exit can satisfy a dependsOn 'completed' (run-once init/migration) -
-  // wake the dependents so they re-evaluate their gate.
-  if (exitCode === 0) wakeDependents(identifier);
+  // a clean exit can satisfy a dependsOn 'completed' (run-once init/migration),
+  // and ANY genuine death must reach cross-app dependents: a boundTo requirer
+  // is stopped while its target is down, so the death itself is the milestone.
+  // For intra-app dependents a crash is at most one no-op re-check.
+  wakeDependents(identifier);
 }
 
 function handleContainerDestroy(event, labelKeys) {

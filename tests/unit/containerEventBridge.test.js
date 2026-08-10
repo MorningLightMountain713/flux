@@ -103,9 +103,12 @@ describe('containerEventBridge', () => {
       expect(stubs.appReconciler.enqueue.calledOnceWith('www_app')).to.be.true;
     });
 
-    it('does not wake dependents on a non-zero exit (only a clean exit satisfies completed)', async () => {
+    it('wakes dependents on a crash too — a boundTo requirer must learn of its target\'s death', async () => {
+      // A clean exit satisfies a dependsOn 'completed'; a crash is the milestone
+      // that stops a cross-app boundTo requirer. Either way the death fans out;
+      // for an intra-app dependent a crash is at most one no-op re-check.
       await containerEventBridge.handleContainerDie(dieEvent('fluxinit_app', 1), LABEL_KEYS);
-      expect(stubs.appReconciler.enqueueDependents.called).to.be.false;
+      expect(stubs.appReconciler.enqueueDependents.calledOnceWith('init_app')).to.be.true;
     });
 
     it('wakes dependents on a clean exit (a completed run-once target)', async () => {

@@ -15,6 +15,7 @@ const appQueryService = require('../appQuery/appQueryService');
 const appsRepository = require('../appDatabase/appsRepository');
 const deploymentProvider = require('../appRuntime/deploymentProvider');
 const appNetworkLinker = require('../appLifecycle/appNetworkLinker');
+const relationshipResolver = require('../appLifecycle/relationshipResolver');
 const meshReconciler = require('../appMesh/meshReconciler');
 const appDockerNetwork = require('../appNetwork/appDockerNetwork');
 const appVolumeService = require('../appLifecycle/appVolumeService');
@@ -303,9 +304,9 @@ function trackSilentHold(identifier, reason) {
   const heldMs = Date.now() - entry.since;
   if (!entry.warned && heldMs > SILENT_HOLD_WARN_MS) {
     entry.warned = true;
-    const detail = reason === 'awaitingDependency'
-      ? 'a dependsOn target has not reached its condition'
-      : 'no masterSlave/syncthing decider has declared a desired state for it';
+    let detail = 'no masterSlave/syncthing decider has declared a desired state for it';
+    if (reason === 'awaitingDependency') detail = 'a dependsOn target has not reached its condition';
+    if (reason === 'awaitingAppDependency') detail = 'a dependency app has not reached its edge condition on this node';
     log.warn(`appReconciler - ${identifier} held at ${reason} for ${Math.round(heldMs / 60000)}m - ${detail}`);
     fluxEventBus.publish('reconciler:actuated', { identifier, action: 'silentHoldWarned', reason, heldMs });
   }
@@ -598,6 +599,35 @@ async function dependencyConditionMet(condition, identifier, actual) {
   return actual.running; // 'started'
 }
 
+/**
+ * Whether a same-node target APP has reached an app-level edge's condition,
+ * read from its containers' live state. `started` = every container running;
+ * `healthy` = every container running and every probe-bearing one reporting
+ * healthy. A target that is not installed here, has no containers yet, or
+ * whose deployment cannot be resolved answers unmet — the gate holds, and the
+ * presence axis (install gate / cascade / reap in relationshipResolver) is
+ * what decides whether it will ever arrive.
+ */
+async function appDependencyConditionMet(targetAppName, condition) {
+  let deployment;
+  try {
+    deployment = await deploymentProvider.getInstalledDeployment(targetAppName);
+  } catch (err) {
+    log.warn(`appReconciler - could not resolve deployment of dependency ${targetAppName}: ${err.message}`);
+    return false;
+  }
+  if (!deployment) return false;
+  const entries = deployment.componentEntries();
+  if (!entries.length) return false;
+  for (const [, comp] of entries) {
+    // eslint-disable-next-line no-await-in-loop
+    const actual = await dockerActual(comp.identifier);
+    if (!actual.running) return false;
+    if (condition === 'healthy' && actual.health !== null && actual.health !== 'healthy') return false;
+  }
+  return true;
+}
+
 async function effectiveDesiredRunning(identifier, spec, exitCode) {
   // condemned wins over everything: a being-torn-down component must stay stopped
   // (the deferred teardown worker removes it once the reconciler has stopped it) and
@@ -658,6 +688,31 @@ async function effectiveDesiredRunning(identifier, spec, exitCode) {
         const settled = depComp.hasActiveStandbySyncthing() && !depActual.running;
         return { desired: null, reason: settled ? 'awaitingElectedPeer' : 'awaitingDependency' };
       }
+    }
+  }
+  // App-level dependency edges (the dependencies field, via the resolved
+  // deployment view). Two couplings, per edge:
+  //  - boundTo: a runtime kill-switch — the requirer is STOPPED while its
+  //    target is not at condition, and restarts (per its own restartPolicy)
+  //    when the target returns. desired:false, not null: this is the one
+  //    edge strength whose author opted into being taken down by a
+  //    dependency's death.
+  //  - after: a startup gate exactly like component dependsOn — desired:null
+  //    leaves a running requirer alone if the target later flaps; only a
+  //    start is held. (boundTo edges are always after:true by schema, so the
+  //    kill branch above subsumes their gate.)
+  // Same-node reads only; the target's container events re-enqueue this app
+  // through enqueueDependents' cross-app fan-out, so holds lift event-driven.
+  const appEdges = spec.deployment.appDependencies || [];
+  for (const [targetApp, edge] of appEdges) {
+    if (edge.strength === 'boundTo') {
+      // eslint-disable-next-line no-await-in-loop
+      const met = await appDependencyConditionMet(targetApp, edge.condition);
+      if (!met) return { desired: false, reason: 'boundToDependencyDown' };
+    } else if (edge.after === true) {
+      // eslint-disable-next-line no-await-in-loop
+      const met = await appDependencyConditionMet(targetApp, edge.condition);
+      if (!met) return { desired: null, reason: 'awaitingAppDependency' };
     }
   }
   const desired = policyAllowsRun(getRestartPolicy(spec), exitCode);
@@ -1277,7 +1332,7 @@ async function reconcile(identifier) {
     // awaitingElectedPeer is deliberate and permanent on a non-elected node, so it is
     // announced once like any settled state rather than warned about by age.
     if (reason === 'awaitingElectedPeer') announceSettledStop(identifier, reason);
-    if (reason === 'awaitingController' || reason === 'awaitingDependency') trackSilentHold(identifier, reason);
+    if (reason === 'awaitingController' || reason === 'awaitingDependency' || reason === 'awaitingAppDependency') trackSilentHold(identifier, reason);
     return;
   }
   silentHoldSince.delete(identifier);
@@ -1829,6 +1884,36 @@ async function enqueueDependents(identifier) {
   for (const depName of spec.deployment.dependentsOf(spec.comp.name)) {
     const dependent = spec.deployment.getComponent(depName);
     if (dependent) enqueue(dependent.identifier);
+  }
+  await enqueueAppDependents(spec.deployment.appName);
+}
+
+/**
+ * Enqueue every installed app whose gating edges (after: true, or boundTo)
+ * name the given app — the cross-app counterpart of dependentsOf, called when
+ * one of the target's containers reaches a milestone (start, health, die).
+ * Each requirer re-checks its own edges in effectiveDesiredRunning; this only
+ * enqueues, it never decides. Cleartext requirers answer without a decrypt;
+ * an installed encrypted one resolves through the same view read the graph
+ * functions use.
+ */
+async function enqueueAppDependents(appName) {
+  let installed;
+  try {
+    installed = await appsRepository.listInstalledApps();
+  } catch (err) {
+    log.warn(`appReconciler - enqueueAppDependents ${appName} read failed: ${err.message}`);
+    return;
+  }
+  if (!installed || !installed.length) return;
+  const lower = appName.toLowerCase();
+  const { viewsByName } = await relationshipResolver.buildViewsByName(installed);
+  for (const app of installed) {
+    if (!app || !app.name || app.name.toLowerCase() === lower) continue;
+    const gated = relationshipResolver.edgesOf(viewsByName, app.name.toLowerCase())
+      .some(([target, edge]) => target.toLowerCase() === lower
+        && (edge.after === true || edge.strength === 'boundTo'));
+    if (gated) enqueue(app.name);
   }
 }
 

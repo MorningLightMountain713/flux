@@ -47,6 +47,7 @@ describe('appReconciler tests', () => {
     return {
       appName: spec.name,
       linkedApps: spec.linkedApps || [],
+      appDependencies: spec.appDependencies || [],
       getComponent: (n) => comps.find((c) => c.name === n) || null,
       componentForIdentifier: (id) => comps.find((c) => c.identifier === id) || null,
       componentEntries: () => comps.map((c) => [c.name, c]),
@@ -74,6 +75,9 @@ describe('appReconciler tests', () => {
         // predating the identifier index still need. The index path has its own
         // test rather than being the silent default here.
         getInstalledAppByComponentIdentifier: sinon.stub().resolves(null),
+        // Nothing else installed by default, so the cross-app dependent fan-out
+        // is inert unless a test states requirers.
+        listInstalledApps: sinon.stub().resolves([]),
       },
       // Nothing owed by default: the owed-teardown record is what still names an
       // app whose row has been deleted, so its absence is "genuinely not here".
@@ -97,6 +101,9 @@ describe('appReconciler tests', () => {
           const single = this.buildDeployment;
           return async (inst) => [await single(inst)];
         },
+        // The app-level edge gate resolves its TARGET app through this. Null by
+        // default — no dependency app is installed unless a test says so.
+        getInstalledDeployment: sinon.stub().resolves(null),
       },
       appVolumeService: { ensureMountSourcesExist: sinon.stub().resolves() },
       volumeService: {
@@ -165,6 +172,12 @@ describe('appReconciler tests', () => {
         // A membership test that drops a link overrides this for a specific name.
         resolveActiveLinkedNetworks: sinon.stub().callsFake(async (owner, names) => (names || []).map((n) => `fluxDockerNetwork_${n}`)),
       },
+      relationshipResolver: {
+        // The cross-app fan-out reads installed apps' edges through these. Empty
+        // by default; the fan-out test states a requirer's edges.
+        buildViewsByName: sinon.stub().resolves({ viewsByName: new Map(), complete: true }),
+        edgesOf: sinon.stub().returns([]),
+      },
       appUninstaller: {
         UninstallStatus,
         uninstallApplication: sinon.stub().resolves({ status: UninstallStatus.REMOVED, reason: null }),
@@ -198,6 +211,7 @@ describe('appReconciler tests', () => {
       './containerHealthMonitor': stubs.containerHealthMonitor,
       '../appNetwork/appDockerNetwork': stubs.appDockerNetwork,
       '../appLifecycle/appNetworkLinker': stubs.appNetworkLinker,
+      '../appLifecycle/relationshipResolver': stubs.relationshipResolver,
       '../appLifecycle/appUninstaller': stubs.appUninstaller,
       '../appLifecycle/pendingTeardownStore': stubs.pendingTeardownStore,
       '../appTamperingDetectionService': stubs.appTamperingDetectionService,
@@ -512,6 +526,99 @@ describe('appReconciler tests', () => {
       await appReconciler.reconcile('www_App'); // must not throw
       const loggedFailure = stubs.log.error.getCalls().some((c) => /failed to restart unhealthy/.test(c.args[0]));
       expect(loggedFailure).to.be.true;
+    });
+  });
+
+  describe('app-level dependency gating (dependencies edges)', () => {
+    const flush = async () => {
+      for (let i = 0; i < 6; i += 1) {
+        // eslint-disable-next-line no-await-in-loop
+        await new Promise((resolve) => { setImmediate(resolve); });
+      }
+    };
+
+    const edge = (over = {}) => ({
+      strength: 'requires', after: true, condition: 'started', network: false, onRemove: 'detach', ...over,
+    });
+    const appWithEdge = (e) => ({
+      name: 'App',
+      version: 9,
+      compose: [{ name: 'www', containerData: '/data' }],
+      appDependencies: [['collector', e]],
+    });
+    // The TARGET app's resolved deployment — one container, driven per-identifier.
+    const targetDeployment = { componentEntries: () => [['main', { identifier: 'main_collector' }]] };
+    const wwwCreated = { State: { Running: false, Status: 'created', ExitCode: 0 } };
+    const running = { State: { Running: true, Status: 'running', ExitCode: 0 } };
+
+    it('holds a gated start while the dependency app is not installed here', async () => {
+      localSpec = appWithEdge(edge());
+      stubs.dockerService.dockerContainerInspect.withArgs('www_App').resolves(wwwCreated);
+      await appReconciler.reconcile('www_App');
+      expect(stubs.dockerService.appDockerStart.called).to.be.false;
+    });
+
+    it('holds while the dependency app is not running, starts once it is', async () => {
+      localSpec = appWithEdge(edge());
+      stubs.deploymentProvider.getInstalledDeployment.withArgs('collector').resolves(targetDeployment);
+      stubs.dockerService.dockerContainerInspect.withArgs('www_App').resolves(wwwCreated);
+      stubs.dockerService.dockerContainerInspect.withArgs('main_collector').resolves({ State: { Running: false, Status: 'exited', ExitCode: 0 } });
+      await appReconciler.reconcile('www_App');
+      expect(stubs.dockerService.appDockerStart.called, 'held while the target app is down').to.be.false;
+
+      stubs.dockerService.dockerContainerInspect.withArgs('main_collector').resolves(running);
+      await appReconciler.reconcile('www_App');
+      expect(stubs.dockerService.appDockerStart.calledWith('www_App'), 'starts once the target app runs').to.be.true;
+    });
+
+    it('a healthy condition waits for every probe-bearing container of the target', async () => {
+      localSpec = appWithEdge(edge({ condition: 'healthy' }));
+      stubs.deploymentProvider.getInstalledDeployment.withArgs('collector').resolves(targetDeployment);
+      stubs.dockerService.dockerContainerInspect.withArgs('www_App').resolves(wwwCreated);
+      stubs.dockerService.dockerContainerInspect.withArgs('main_collector').resolves({ State: { Running: true, Status: 'running', ExitCode: 0, Health: { Status: 'starting' } } });
+      await appReconciler.reconcile('www_App');
+      expect(stubs.dockerService.appDockerStart.called, 'held while the target is only starting').to.be.false;
+
+      stubs.dockerService.dockerContainerInspect.withArgs('main_collector').resolves({ State: { Running: true, Status: 'running', ExitCode: 0, Health: { Status: 'healthy' } } });
+      await appReconciler.reconcile('www_App');
+      expect(stubs.dockerService.appDockerStart.calledWith('www_App'), 'starts once the target reads healthy').to.be.true;
+    });
+
+    it('boundTo stops a running requirer while its target is down, leaves it once back', async () => {
+      localSpec = appWithEdge(edge({ strength: 'boundTo', onRemove: 'cascade' }));
+      stubs.deploymentProvider.getInstalledDeployment.withArgs('collector').resolves(targetDeployment);
+      stubs.dockerService.dockerContainerInspect.withArgs('www_App').resolves(running);
+      stubs.dockerService.dockerContainerInspect.withArgs('main_collector').resolves({ State: { Running: false, Status: 'exited', ExitCode: 1 } });
+      await appReconciler.reconcile('www_App');
+      expect(stubs.dockerService.appDockerStop.calledWith('www_App'), 'a boundTo requirer is stopped while its target is down').to.be.true;
+
+      stubs.dockerService.appDockerStop.resetHistory();
+      stubs.dockerService.dockerContainerInspect.withArgs('main_collector').resolves(running);
+      await appReconciler.reconcile('www_App');
+      expect(stubs.dockerService.appDockerStop.called, 'a running requirer with its target back is left alone').to.be.false;
+    });
+
+    it('an unordered edge (after: false) never gates a start', async () => {
+      // No installed target at all — the presence axis owns that; the running
+      // axis only gates where the author asked for ordering.
+      localSpec = appWithEdge(edge({ after: false }));
+      stubs.dockerService.dockerContainerInspect.withArgs('www_App').resolves(wwwCreated);
+      await appReconciler.reconcile('www_App');
+      expect(stubs.dockerService.appDockerStart.calledWith('www_App')).to.be.true;
+    });
+
+    it('a container milestone in a dependency app re-enqueues its requirers (cross-app fan-out)', async () => {
+      localSpec = { name: 'App', version: 9, compose: [{ name: 'www', containerData: '/data' }] };
+      stubs.dockerService.dockerContainerInspect.resolves(running);
+      stubs.appsRepository.listInstalledApps.resolves([{ name: 'requirer', owner: 'owner1' }]);
+      stubs.relationshipResolver.edgesOf.callsFake((views, nameLower) => (nameLower === 'requirer'
+        ? [['App', edge()]] : []));
+
+      await appReconciler.enqueueDependents('www_App');
+      await flush();
+
+      const enqueued = stubs.appsRepository.getInstalledAppByIdentity.getCalls().some((c) => c.args[0] === 'requirer');
+      expect(enqueued, 'the requirer app was enqueued and expanded by the queue').to.be.true;
     });
   });
 
