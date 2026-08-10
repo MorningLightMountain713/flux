@@ -236,16 +236,17 @@ async function signHostCertificate({ instance, appUuid, outpoint }, { authority 
   const certPath = path.join(dir, FILES.nextCert);
   const tmpKey = `${keyPath}.tmp`;
   const tmpCert = `${certPath}.tmp`;
-  const prefixLength = meshDerivation.appPrefix(appUuid).split('/')[1];
   await runNebulaCert([
     'sign',
     '-ca-key', caKey,
     '-ca-crt', caCert,
     '-name', meshDerivation.nodeId(outpoint),
-    // The address carries the overlay prefix length, not /128: nebula tests a
-    // packet's destination against the sender's own networks, so a narrower
-    // prefix would leave this node an overlay of one.
-    '-networks', `${meshDerivation.nodeAddress(appUuid, outpoint)}/${prefixLength}`,
+    // networks is this node's own /96 block: the addresses it terminates.
+    // Nebula routes to a peer only for destinations outside the sender's own
+    // networks — a peer's block, being another node's, resolves through the
+    // tun.unsafe_routes gateway to that peer. unsafeNetworks is the same block,
+    // naming the containers behind this node so peers route to them through it.
+    '-networks', meshDerivation.nodeBlock(appUuid, outpoint),
     '-unsafe-networks', meshDerivation.nodeBlock(appUuid, outpoint),
     '-groups', MESH_GROUP,
     '-duration', HOST_CERT_VALIDITY,
