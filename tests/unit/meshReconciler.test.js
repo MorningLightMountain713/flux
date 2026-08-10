@@ -97,11 +97,16 @@ describe('meshReconciler', () => {
         status: 'success',
         data: { height: 995, confirmations: 5, hash: options.hashheight },
       })),
+      materialInstances: [IDENTITY],
+      namespaces: [],
+      transitInstances: [],
+      portInstances: [],
     };
 
     const record = (name) => sinon.stub().callsFake(async (...args) => {
       stubs.namespaceCalls.push([name, ...args]);
     });
+    stubs.destroyNamespace = record('destroyNamespace');
 
     meshReconciler = proxyquire('../../ZelBack/src/services/appMesh/meshReconciler', {
       '../../lib/log': {
@@ -158,6 +163,7 @@ describe('meshReconciler', () => {
         certificateDetails: sinon.stub().resolves({ fingerprint: 'fp-live' }),
         certificateBundleDetails: sinon.stub().resolves([{ fingerprint: 'fp-own' }, { fingerprint: 'fp-peer' }]),
         removeAppMaterial: record('removeAppMaterial'),
+        listMaterialInstances: sinon.stub().callsFake(async () => stubs.materialInstances),
       },
       './meshMembership': {
         evaluateCandidates: (...args) => stubs.evaluateCandidates(...args),
@@ -167,7 +173,8 @@ describe('meshReconciler', () => {
       },
       './meshNamespace': {
         ensureNamespace: record('ensureNamespace'),
-        destroyNamespace: record('destroyNamespace'),
+        destroyNamespace: (...args) => stubs.destroyNamespace(...args),
+        listNamespaces: sinon.stub().callsFake(async () => stubs.namespaces),
         ensureUplink: record('ensureUplink'),
         enableForwarding: record('enableForwarding'),
         ensureTranslatorRoutes: record('ensureTranslatorRoutes'),
@@ -189,6 +196,7 @@ describe('meshReconciler', () => {
         ensureTransit: sinon.stub().resolves(TRANSIT),
         observedSlot: sinon.stub().callsFake(async () => stubs.liveSlot ?? null),
         releaseTransit: record('releaseTransit'),
+        assignedInstances: sinon.stub().callsFake(() => stubs.transitInstances),
       },
       './meshSsh': {
         ensureClientKeypair: sinon.stub().resolves('ssh-ed25519 AAAAtest flux-mesh'),
@@ -206,6 +214,7 @@ describe('meshReconciler', () => {
       './meshPortAllocator': {
         ensureTransportPort: sinon.stub().resolves(16230),
         releaseTransportPort: record('releaseTransportPort'),
+        allocatedInstances: sinon.stub().callsFake(async () => stubs.portInstances),
       },
       './meshDetector': {
         detectImpersonation: sinon.stub().callsFake(async () => stubs.detectResult),
@@ -290,6 +299,7 @@ describe('meshReconciler', () => {
 
     it('skips a mesh app with no registration uuid, loudly', async () => {
       stubs.installedApps = [makeApp({ uuid: null, identity: null })];
+      stubs.materialInstances = [];
       await meshReconciler.reconcileAllMeshApps();
       expect(logLines.warn.some((m) => m.includes('no registration uuid'))).to.equal(true);
       expect(stubs.writeSnapshotCalls).to.have.length(0);
@@ -456,6 +466,71 @@ describe('meshReconciler', () => {
       await second;
       expect(stubs.writeSnapshotCalls).to.have.length(1);
     });
+
+    it('collects mesh state no installed app claims', async () => {
+      stubs.materialInstances = [IDENTITY, 'deadbeef0123'];
+      await meshReconciler.reconcileAllMeshApps();
+      expect(stubs.unitCalls).to.deep.include(['stopAll', 'deadbeef0123']);
+      expect(stubs.namespaceCalls).to.deep.include(['destroyNamespace', 'deadbeef0123']);
+      expect(stubs.namespaceCalls).to.deep.include(['releaseTransportPort', 'deadbeef0123']);
+      expect(stubs.namespaceCalls).to.deep.include(['releaseTransit', 'deadbeef0123']);
+      expect(stubs.namespaceCalls).to.deep.include(['removeAppMaterial', 'deadbeef0123']);
+      expect(stubs.namespaceCalls).to.not.deep.include(['removeAppMaterial', IDENTITY]);
+      expect(logLines.warn.some((m) => m.includes('stray mesh state for deadbeef0123'))).to.equal(true);
+    });
+
+    it('a namespace alone is enough to be collected', async () => {
+      stubs.namespaces = ['deadbeef0123'];
+      await meshReconciler.reconcileAllMeshApps();
+      expect(stubs.namespaceCalls).to.deep.include(['destroyNamespace', 'deadbeef0123']);
+      expect(stubs.namespaceCalls).to.deep.include(['removeAppMaterial', 'deadbeef0123']);
+    });
+
+    it('one stray failing to collect does not block another, or the pass', async () => {
+      stubs.materialInstances = [IDENTITY, 'aaaa11112222', 'bbbb33334444'];
+      stubs.destroyNamespace = sinon.stub().callsFake(async (instance) => {
+        stubs.namespaceCalls.push(['destroyNamespace', instance]);
+        if (instance === 'aaaa11112222') throw new Error('netns busy');
+      });
+      await meshReconciler.reconcileAllMeshApps();
+      expect(stubs.namespaceCalls).to.deep.include(['removeAppMaterial', 'bbbb33334444']);
+      expect(stubs.namespaceCalls).to.not.deep.include(['removeAppMaterial', 'aaaa11112222']);
+      expect(logLines.error.some((m) => m.includes('aaaa11112222'))).to.equal(true);
+      expect(stubs.writeSnapshotCalls).to.have.length(1);
+    });
+
+    it('the last app leaving sheds the snapshot and the chains', async () => {
+      stubs.installedApps = [];
+      stubs.materialInstances = [IDENTITY];
+      stubs.snapshotOnDisk = {
+        schemaVersion: 1,
+        generation: 3,
+        nodeId: OWN_NODE_ID,
+        apps: [{ name: 'myblog', members: [], containers: [] }],
+      };
+      await meshReconciler.reconcileAllMeshApps();
+      expect(stubs.namespaceCalls).to.deep.include(['removeAppMaterial', IDENTITY]);
+      expect(stubs.writeSnapshotCalls).to.deep.equal([{ ownNodeId: OWN_NODE_ID, apps: [] }]);
+      expect(stubs.chainsEnsured).to.equal(true);
+      expect(stubs.chainRules).to.deep.equal({ pre: [], post: [], fwd: [] });
+    });
+
+    it('a node that never ran mesh executes nothing on an empty pass', async () => {
+      stubs.installedApps = [];
+      stubs.materialInstances = [];
+      await meshReconciler.reconcileAllMeshApps();
+      expect(stubs.namespaceCalls).to.have.length(0);
+      expect(stubs.unitCalls).to.have.length(0);
+      expect(stubs.writeSnapshotCalls).to.have.length(0);
+      expect(stubs.chainsEnsured).to.equal(false);
+    });
+
+    it('an installed app keeps its material even when its view is not mesh', async () => {
+      stubs.installedApps = [makeApp({ view: makeView({ network: { mesh: false } }) })];
+      stubs.materialInstances = [IDENTITY];
+      await meshReconciler.reconcileAllMeshApps();
+      expect(stubs.namespaceCalls.map(([name]) => name)).to.not.include('removeAppMaterial');
+    });
   });
 
   describe('lastPassStatus', () => {
@@ -546,6 +621,21 @@ describe('meshReconciler', () => {
       // coalesced call resolves only after a pass that began at or after it
       // has completed, so no write is still in flight past this await.
       await meshReconciler.reconcileAllMeshApps();
+    });
+
+    it('tears down when only the namespace remains', async () => {
+      stubs.namespaces = ['ghost0123'];
+      await meshReconciler.removeAppMesh('ghost0123');
+      expect(stubs.unitCalls).to.deep.include(['stopAll', 'ghost0123']);
+      expect(stubs.namespaceCalls).to.deep.include(['destroyNamespace', 'ghost0123']);
+      expect(stubs.namespaceCalls).to.deep.include(['removeAppMaterial', 'ghost0123']);
+      await meshReconciler.reconcileAllMeshApps();
+    });
+
+    it('is a no-op when the app holds no artifact', async () => {
+      await meshReconciler.removeAppMesh('ghost0123');
+      expect(stubs.unitCalls).to.have.length(0);
+      expect(stubs.namespaceCalls).to.have.length(0);
     });
   });
 });

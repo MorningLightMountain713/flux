@@ -121,6 +121,15 @@ describe('meshTransit', () => {
       expect(calls.filter((c) => c.includes('link show')).length).to.equal(1);
     });
 
+    it('assignedInstances tracks the live assignments', async () => {
+      responses.set('addr show uplink0', { error: new Error('exit 1'), stdout: '', stderr: 'No such file or directory' });
+      expect(meshTransit.assignedInstances()).to.deep.equal([]);
+      await meshTransit.ensureTransit(INSTANCE);
+      expect(meshTransit.assignedInstances()).to.deep.equal([INSTANCE]);
+      meshTransit.releaseTransit(INSTANCE);
+      expect(meshTransit.assignedInstances()).to.deep.equal([]);
+    });
+
     it('never hands two apps the same slot, even racing', async () => {
       responses.set('addr show uplink0', { error: new Error('exit 1'), stdout: '', stderr: 'No such file' });
       const [a, b] = await Promise.all([

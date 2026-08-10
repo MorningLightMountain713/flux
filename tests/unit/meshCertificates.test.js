@@ -96,7 +96,7 @@ describe('meshCertificates', () => {
     nebulaCalls = [];
     counter = 0;
     const fspShim = {};
-    for (const method of ['readFile', 'writeFile', 'rm', 'mkdir', 'chmod', 'stat']) {
+    for (const method of ['readFile', 'writeFile', 'rm', 'mkdir', 'chmod', 'stat', 'readdir']) {
       fspShim[method] = (p, ...args) => realFsp[method](rebase(p), ...args);
     }
     fspShim.rename = (a, b) => realFsp.rename(rebase(a), rebase(b));
@@ -320,6 +320,22 @@ describe('meshCertificates', () => {
       } catch (error) {
         expect(error.code).to.equal('ENOENT');
       }
+    });
+  });
+
+  describe('listMaterialInstances', () => {
+    it('is empty when the state root does not exist', async () => {
+      await realFsp.rm(tmpRoot, { recursive: true, force: true });
+      expect(await meshCertificates.listMaterialInstances()).to.deep.equal([]);
+    });
+
+    it('lists instance directories and ignores node-wide files', async () => {
+      await realFsp.mkdir(path.join(tmpRoot, APP.instance), { recursive: true });
+      await realFsp.mkdir(path.join(tmpRoot, 'ffeeddccbbaa'), { recursive: true });
+      await realFsp.writeFile(path.join(tmpRoot, 'ssh_client_ed25519'), 'key');
+      await realFsp.writeFile(path.join(tmpRoot, 'ports.json'), '{}\n');
+      expect((await meshCertificates.listMaterialInstances()).sort())
+        .to.deep.equal([APP.instance, 'ffeeddccbbaa'].sort());
     });
   });
 });

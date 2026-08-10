@@ -11,11 +11,24 @@ describe('meshNamespace', () => {
   let meshNamespace;
   let calls;
   let failures;
+  let netnsEntries;
 
   beforeEach(() => {
     calls = [];
     failures = new Map();
+    netnsEntries = null;
     meshNamespace = proxyquire('../../ZelBack/src/services/appMesh/meshNamespace', {
+      'node:fs/promises': {
+        readdir: sinon.stub().callsFake(async (dir) => {
+          expect(dir).to.equal('/run/netns');
+          if (netnsEntries === null) {
+            const error = new Error('ENOENT: no such file or directory');
+            error.code = 'ENOENT';
+            throw error;
+          }
+          return netnsEntries;
+        }),
+      },
       '../serviceHelper': {
         runCommand: sinon.stub().callsFake(async (cmd, options) => {
           const line = `${cmd} ${options.params.join(' ')}`;
@@ -48,6 +61,23 @@ describe('meshNamespace', () => {
 
     it('rejects a malformed instance', () => {
       expect(() => meshNamespace.netnsName('../oops')).to.throw(TypeError);
+    });
+  });
+
+  describe('listNamespaces', () => {
+    it('is empty when the netns dir does not exist', async () => {
+      expect(await meshNamespace.listNamespaces()).to.deep.equal([]);
+    });
+
+    it('lists only well-formed mesh namespaces', async () => {
+      netnsEntries = [
+        'flux-mesh-ab12cd34ef56',
+        'flux-mesh-ffee00112233',
+        'flux-mesh-../oops',
+        'other-ns',
+        'flux-mesh-',
+      ];
+      expect(await meshNamespace.listNamespaces()).to.deep.equal(['ab12cd34ef56', 'ffee00112233']);
     });
   });
 
