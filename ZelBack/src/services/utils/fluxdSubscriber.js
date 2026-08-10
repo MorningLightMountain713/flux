@@ -7,18 +7,23 @@ const DEFAULT_ENDPOINT = 'tcp://127.0.0.1:16123';
 
 // Reconnect and heartbeat are library-level; libzmq re-establishes a dropped
 // connection on its own and tells us nothing, so the socket's own event stream is
-// the only way to know it happened.
-const SOCKET_OPTIONS = {
+// the only way to know it happened. Defaults only — the caller passes the
+// configured values, and the harness compresses them to assert the teardown.
+const DEFAULT_SOCKET_OPTIONS = {
   reconnectInterval: 500,
   reconnectMaxInterval: 15_000,
-  heartbeatInterval: 20_000,
-  heartbeatTimeout: 60_000,
+  heartbeatInterval: 5_000,
+  heartbeatTimeout: 20_000,
   connectTimeout: 3_000,
 };
 
-// Deliberately shallow. Falling far behind converts into a sequence gap, and the
-// consumers' gap handling resyncs from one RPC call — a bounded recovery we test.
-// A deep queue would instead hide the stall and then replay a long backlog.
+// One block's worth of deltas is a single message, so this holds hours of them and
+// is generous rather than shallow. The number that decides whether messages are lost
+// is fluxd's, not ours: it sets no send-side high water mark, so libzmq's default of
+// 1000 applies, shared across every topic bound to the one endpoint, and a PUB socket
+// with no XPUB_NODROP discards silently when that fills. Gap detection and resync are
+// therefore the only recovery for a dropped delta, which is why they carry the weight
+// they do here.
 const DEFAULT_RECEIVE_HIGH_WATER_MARK = 400;
 
 /**
@@ -51,6 +56,11 @@ function createFluxdSubscriber(options) {
     onConnect = null,
     onDisconnect = null,
     receiveHighWaterMark = DEFAULT_RECEIVE_HIGH_WATER_MARK,
+    reconnectIntervalMs,
+    reconnectMaxIntervalMs,
+    heartbeatIntervalMs,
+    heartbeatTimeoutMs,
+    connectTimeoutMs,
   } = options;
 
   if (!Array.isArray(topics) || !topics.length) {
@@ -60,6 +70,15 @@ function createFluxdSubscriber(options) {
   if (typeof onMessage !== 'function') {
     throw new Error('An onMessage handler is mandatory');
   }
+
+  const socketOptions = {
+    ...DEFAULT_SOCKET_OPTIONS,
+    ...(reconnectIntervalMs === undefined ? {} : { reconnectInterval: reconnectIntervalMs }),
+    ...(reconnectMaxIntervalMs === undefined ? {} : { reconnectMaxInterval: reconnectMaxIntervalMs }),
+    ...(heartbeatIntervalMs === undefined ? {} : { heartbeatInterval: heartbeatIntervalMs }),
+    ...(heartbeatTimeoutMs === undefined ? {} : { heartbeatTimeout: heartbeatTimeoutMs }),
+    ...(connectTimeoutMs === undefined ? {} : { connectTimeout: connectTimeoutMs }),
+  };
 
   let socket = null;
   let stopped = false;
@@ -173,7 +192,7 @@ function createFluxdSubscriber(options) {
   function start() {
     if (socket || stopped) return;
 
-    socket = new zmq.Subscriber({ ...SOCKET_OPTIONS, receiveHighWaterMark });
+    socket = new zmq.Subscriber({ ...socketOptions, receiveHighWaterMark });
     socket.connect(endpoint);
     topics.forEach((topic) => socket.subscribe(topic));
 
