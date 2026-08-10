@@ -144,11 +144,25 @@ function start() {
     onConnect: ({ reconnected }) => {
       if (reconnected) resyncAll(RESYNC_REASONS.reconnected);
     },
+    // A drop is not a loss of state: libzmq reconnects on its own and the reconnect
+    // above is what asks consumers to rebuild. Observed, never acted on.
+    onDisconnect: () => {
+      fluxEventBus.publish('daemon:socketDropped', { endpoint });
+    },
   });
 
   liveness = createFluxdLiveness({
     elapsedSinceMessageMs: subscriber.elapsedSinceMessageMs,
     probe: probeDaemon,
+    // The verdict was being computed and discarded. Silence carries no information
+    // on this transport, so a node that has gone quiet is only distinguishable from
+    // one that has gone away by this transition — and nothing could see it.
+    // The verdict was being computed and discarded. Silence carries no information
+    // on this transport, so a node that has gone quiet is only distinguishable from
+    // one that has gone away by this transition — and nothing could see it.
+    onChange: (alive) => {
+      fluxEventBus.publish(alive ? 'daemon:recovered' : 'daemon:unreachable', {});
+    },
     silenceThresholdMs: settings.silenceThresholdMs,
     probeIntervalMs: settings.probeIntervalMs,
     checkIntervalMs: settings.livenessCheckIntervalMs,
