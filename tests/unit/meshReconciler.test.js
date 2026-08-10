@@ -103,6 +103,7 @@ describe('meshReconciler', () => {
       namespaces: [],
       transitInstances: [],
       portInstances: [],
+      getDefaultRouteInterface: sinon.stub().resolves('eth0'),
     };
 
     const record = (name) => sinon.stub().callsFake(async (...args) => {
@@ -148,7 +149,7 @@ describe('meshReconciler', () => {
         getFluxnodeBySocketAddress: sinon.stub().callsFake(async (addr) => stubs.nodeByAddress?.[addr] ?? null),
         getFluxnodesByPubkey: sinon.stub().callsFake(async (key) => stubs.nodesByPubkey?.[key] ?? null),
       },
-      '../fluxNetworkHelper': { getDefaultRouteInterface: sinon.stub().resolves('eth0') },
+      '../fluxNetworkHelper': { getDefaultRouteInterface: (...args) => stubs.getDefaultRouteInterface(...args) },
       '../utils/specLibs': {
         getSpec: sinon.stub().resolves({ meshComponentSlot: () => SLOT }),
       },
@@ -362,6 +363,20 @@ describe('meshReconciler', () => {
         '-i', 'eth0', '-p', 'udp', '--dport', '16230',
         '-j', 'DNAT', '--to-destination', `${TRANSIT.namespaceIp}:16230`,
       ]]);
+      expect(meshReconciler.lastPassStatus('myblog').externalInterface).to.equal('eth0');
+    });
+
+    it('with no default-route interface: converges locally, chains empty, degradation loud and visible', async () => {
+      stubs.getDefaultRouteInterface = sinon.stub().resolves(null);
+      await meshReconciler.reconcileAllMeshApps();
+      // The local overlay still came up — material, snapshot, units.
+      expect(stubs.writeSnapshotCalls).to.have.length(1);
+      expect(stubs.unitCalls).to.deep.include(['startAll', IDENTITY]);
+      // But no reachability rules could be scoped, and it is NOT reported healthy-silent.
+      expect(stubs.chainsEnsured).to.equal(true);
+      expect(stubs.chainRules).to.deep.equal({ pre: [], post: [], fwd: [] });
+      expect(logLines.error.some((m) => m.includes('no default-route interface'))).to.equal(true);
+      expect(meshReconciler.lastPassStatus('myblog').externalInterface).to.equal(null);
     });
 
     it('leaves a healthy uplink alone', async () => {

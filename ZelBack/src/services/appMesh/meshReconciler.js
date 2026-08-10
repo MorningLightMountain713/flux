@@ -1,3 +1,5 @@
+'use strict';
+
 // The mesh reconciler: the one place the appMesh libraries compose into a
 // running overlay. Level-based like the container reconciler — every pass
 // reads what exists (rows, files, interfaces, units, the peer table), writes
@@ -543,6 +545,17 @@ async function runReconcilePass() {
   await reconcileSnapshotAndTayga(healthy, ctx);
 
   const externalInterface = await fluxNetworkHelper.getDefaultRouteInterface();
+  // The DNAT that carries a peer's transport in must be scoped to the interface
+  // that traffic arrives on, and MASQUERADE to the interface it leaves by — both
+  // the node's default-route interface. Without one the firewall cannot be
+  // scoped, so the overlay converges locally (certs, members, units) but is
+  // unreachable across nodes. A confirmed node always has a default route; this
+  // is recorded loudly rather than left as a healthy-looking silent gap, and the
+  // next pass builds the chains the moment a route appears.
+  if (!externalInterface && healthy.length > 0) {
+    log.error('meshReconciler - no default-route interface; the mesh firewall cannot be '
+      + 'scoped and cross-node reachability is unavailable on this node until one appears');
+  }
   const chainRules = { pre: [], post: [], fwd: [] };
   // eslint-disable-next-line no-restricted-syntax
   for (const app of healthy) {
@@ -576,6 +589,9 @@ async function runReconcilePass() {
       const detector = await runDetector(app, ctx);
       recordPass(app.name, {
         detector,
+        // The interface the firewall was scoped to, or null when none was found
+        // and the overlay is locally up but unreachable — the operator's read.
+        externalInterface: externalInterface ?? null,
         // An eviction re-ran the material; the retained view keeps up.
         members: app.material.members.map(memberFacts),
       });

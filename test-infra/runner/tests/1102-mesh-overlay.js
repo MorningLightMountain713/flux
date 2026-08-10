@@ -11,7 +11,9 @@ import { appOwnerKey } from '../framework/keys.js';
 import { execInContainer } from '../framework/container.js';
 import { unitState } from '../framework/systemd-control.js';
 import { pushBusybox } from '../framework/registry-helper.js';
-import { REGISTRY_REPO_HOST } from '../framework/subnet-config.js';
+import { REGISTRY_REPO_HOST, getSubnetConfig } from '../framework/subnet-config.js';
+
+const { gateway: GATEWAY } = getSubnetConfig();
 
 // The mesh data plane, driven end to end by FluxOS on a real 3-node systemd
 // fleet: suite 1101 proved every node derives the same overlay; this proves
@@ -88,6 +90,14 @@ describe('mesh overlay across a real systemd fleet', function () {
       },
     });
     await bootAndPeer(env, { minOutbound: 1, minInbound: 1, pricing: true });
+    // The harness network is Internal, so docker installs no default route; a
+    // real Flux node always has one, and the mesh reconciler scopes its DNAT and
+    // MASQUERADE to the default-route interface. Give each node the route it
+    // would have in production (peers stay directly reachable on the /24; the
+    // gateway does not forward off-net, so hermeticity holds).
+    await Promise.all(env.clients.map((c) => execInContainer(
+      c.container, `ip route replace default via ${GATEWAY} dev eth0`,
+    )));
     ownerAuths = await Promise.all(env.clients.map(async (c) => (await authenticate(c.url, appOwnerKey())).zelidauth));
   });
 
