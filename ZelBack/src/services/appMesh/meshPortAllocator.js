@@ -181,10 +181,19 @@ async function refreshTransportPorts() {
   return changed;
 }
 
+/**
+ * Every instance currently holding a port allocation on this node.
+ * @returns {Promise<string[]>}
+ */
+async function allocatedInstances() {
+  return Object.keys(await meshPorts.allPorts());
+}
+
 module.exports = {
   MESH_PORT_START,
   MESH_PORT_END,
   ensureTransportPort,
   releaseTransportPort,
   refreshTransportPorts,
+  allocatedInstances,
 };

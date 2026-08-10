@@ -145,4 +145,12 @@ describe('meshPortAllocator', () => {
     await allocator.releaseTransportPort('other');
     expect(upnp.removeMapUpnpPort.calledWith(16250)).to.equal(true);
   });
+
+  it('allocatedInstances lists every instance holding a port', async () => {
+    expect(await allocator.allocatedInstances()).to.deep.equal([]);
+    ports.registry.set('ab12cd34ef56', 16230);
+    ports.registry.set('ffeeddccbbaa', 16240);
+    expect((await allocator.allocatedInstances()).sort())
+      .to.deep.equal(['ab12cd34ef56', 'ffeeddccbbaa']);
+  });
 });

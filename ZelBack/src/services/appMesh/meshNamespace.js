@@ -16,10 +16,15 @@
 //             veth → container
 // The /96-into-tayga route outranks mesh0's connected /48; each container's
 // presented /32 outranks the 10.127/20 into tayga.
+const fsp = require('node:fs/promises');
+
 const log = require('../../lib/log');
 const serviceHelper = require('../serviceHelper');
 const meshRuntimeConfig = require('./meshRuntimeConfig');
 
+// Where `ip netns add` bind-mounts namespaces — also what the systemd units'
+// NetworkNamespacePath points into.
+const NETNS_DIR = '/run/netns';
 const NETNS_PREFIX = 'flux-mesh-';
 // Interface names are capped at 15 chars, so link ids stay short. The
 // container-side device is always flux-mesh0 — it lives in the container's own
@@ -68,6 +73,25 @@ async function ensureNamespace(instance) {
  */
 async function destroyNamespace(instance) {
   await ip(['netns', 'delete', netnsName(instance)], { tolerate: 'No such file' });
+}
+
+/**
+ * The identity segments of every mesh namespace present on the host. Empty
+ * on a node with none — including one whose netns dir does not exist at all.
+ * @returns {Promise<string[]>}
+ */
+async function listNamespaces() {
+  let entries;
+  try {
+    entries = await fsp.readdir(NETNS_DIR);
+  } catch (error) {
+    if (error.code === 'ENOENT') return [];
+    throw error;
+  }
+  return entries
+    .filter((name) => name.startsWith(NETNS_PREFIX))
+    .map((name) => name.slice(NETNS_PREFIX.length))
+    .filter((instance) => INSTANCE_RE.test(instance));
 }
 
 /**
@@ -273,6 +297,7 @@ module.exports = {
   netnsName,
   ensureNamespace,
   destroyNamespace,
+  listNamespaces,
   ensureUplink,
   enableForwarding,
   attachContainer,

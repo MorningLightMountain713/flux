@@ -138,6 +138,10 @@ async function anchorHeightsFor(rows) {
  * needs: the registration identity and the cleartext view (placement,
  * components). Apps whose spec cannot be resolved or that predate identity
  * minting are skipped loudly — without the uuid there is no derivation.
+ * Alongside rides the claimed-identity set — every installed identity, mesh
+ * or not, from the same read — which is what the stray collector judges
+ * against: one read, so the gather and the collector can never disagree
+ * about an app uninstalled between two of them.
  */
 // What the last pass decided, per app — the operator surface's read. Members
 // are kept without their PEM bundles (identity facts, not material).
@@ -171,6 +175,7 @@ function lastPassStatus(appName) {
 
 async function gatherMeshApps() {
   const installed = await appsRepository.listInstalledApps();
+  const claimedIdentities = new Set(installed.map((inst) => inst.identity).filter(Boolean));
   const apps = [];
   // eslint-disable-next-line no-restricted-syntax
   for (const inst of installed) {
@@ -188,7 +193,7 @@ async function gatherMeshApps() {
       view,
     });
   }
-  return apps;
+  return { apps, claimedIdentities };
 }
 
 /**
@@ -443,18 +448,62 @@ async function runDetector(app, ctx) {
   };
 }
 
+/**
+ * Converge absence: tear down mesh state that no installed app claims. The
+ * claimed set is every installed identity — mesh or not — so only state
+ * owned by NO installed app is ever collected, and it is derived from a
+ * successful gather: a failed read can never present as "everything was
+ * removed". One stray failing to collect is retried next pass and never
+ * blocks another.
+ *
+ * @param {Set<string>} claimedIdentities
+ */
+async function collectStrayMesh(claimedIdentities) {
+  const actual = new Set([
+    ...await meshCertificates.listMaterialInstances(),
+    ...await meshNamespace.listNamespaces(),
+    ...meshTransit.assignedInstances(),
+    ...await meshPortAllocator.allocatedInstances(),
+  ]);
+  // eslint-disable-next-line no-restricted-syntax
+  for (const instance of actual) {
+    if (claimedIdentities.has(instance)) continue; // eslint-disable-line no-continue
+    log.warn(`meshReconciler - collecting stray mesh state for ${instance}: no installed app claims it`);
+    try {
+      // eslint-disable-next-line no-await-in-loop
+      await teardownInstance(instance);
+    } catch (error) {
+      log.error(`meshReconciler - collecting ${instance} failed: ${error.message}`);
+    }
+  }
+}
+
 async function runReconcilePass() {
   const synced = daemonServiceMiscRpcs.isDaemonSynced();
   if (synced?.data?.synced !== true) {
     log.info('meshReconciler - daemon not synced; membership judgments deferred');
     return;
   }
-  const apps = await gatherMeshApps();
+  const { apps, claimedIdentities } = await gatherMeshApps();
   const gathered = new Set(apps.map((app) => app.name));
   [...lastPassByApp.keys()].forEach((name) => {
     if (!gathered.has(name)) lastPassByApp.delete(name);
   });
-  if (apps.length === 0) return;
+  await collectStrayMesh(claimedIdentities);
+  if (apps.length === 0) {
+    // The last mesh app leaving must still shed the node-wide state: an
+    // empty resolver snapshot and empty chains. Gated on the snapshot
+    // naming apps, so a node that never ran mesh executes nothing here.
+    const previous = await meshSnapshot.readCurrentSnapshot();
+    if (previous?.apps?.length) {
+      const shedCollateral = await generalService.obtainNodeCollateralInformation();
+      const shedOutpoint = meshDerivation.canonicalOutpoint(shedCollateral.txhash, shedCollateral.txindex);
+      await meshSnapshot.writeSnapshot(meshDerivation.nodeId(shedOutpoint), []);
+      await meshNamespace.ensureMeshChains();
+      await meshNamespace.setMeshChainRules({ pre: [], post: [], fwd: [] });
+    }
+    return;
+  }
 
   const collateral = await generalService.obtainNodeCollateralInformation();
   const ownOutpoint = meshDerivation.canonicalOutpoint(collateral.txhash, collateral.txindex);
@@ -609,15 +658,13 @@ async function prepareComponentMesh(appName, componentName) {
 }
 
 /**
- * Tear down an app's mesh runtime and material on uninstall. The snapshot
- * and chains shed the app on the pass this triggers. A no-op when the app
- * left no mesh material — every uninstall may call it unconditionally.
+ * Tear down every mesh artifact of one instance — units, namespace,
+ * transport port, transit, the /dat material. Shared by the uninstall path
+ * and the stray collector; safe to re-run.
  *
  * @param {string} instance the app's identity segment
  */
-async function removeAppMesh(instance) {
-  const present = await fsp.stat(meshCertificates.meshAppDir(instance)).then(() => true, () => false);
-  if (!present) return;
+async function teardownInstance(instance) {
   try {
     await meshNamespace.meshUnits.stopAll(instance);
   } catch (error) {
@@ -627,6 +674,24 @@ async function removeAppMesh(instance) {
   await meshPortAllocator.releaseTransportPort(instance);
   meshTransit.releaseTransit(instance);
   await meshCertificates.removeAppMaterial(instance);
+}
+
+/**
+ * Tear down an app's mesh state on uninstall. The snapshot and chains shed
+ * the app on the pass this triggers. A no-op when the app holds no mesh
+ * artifact at all — every uninstall may call it unconditionally — and any
+ * one artifact (a namespace without its material dir) is enough to run the
+ * full teardown.
+ *
+ * @param {string} instance the app's identity segment
+ */
+async function removeAppMesh(instance) {
+  const present = await fsp.stat(meshCertificates.meshAppDir(instance)).then(() => true, () => false)
+    || (await meshNamespace.listNamespaces()).includes(instance)
+    || meshTransit.assignedInstances().includes(instance)
+    || (await meshPortAllocator.allocatedInstances()).includes(instance);
+  if (!present) return;
+  await teardownInstance(instance);
   reconcileAllMeshApps().catch((error) => {
     log.error(`meshReconciler - post-removal pass failed: ${error.message}`);
   });
