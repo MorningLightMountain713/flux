@@ -443,110 +443,127 @@ async function runDetector(app, ctx) {
   };
 }
 
-let sweepRunning = false;
+async function runReconcilePass() {
+  const synced = daemonServiceMiscRpcs.isDaemonSynced();
+  if (synced?.data?.synced !== true) {
+    log.info('meshReconciler - daemon not synced; membership judgments deferred');
+    return;
+  }
+  const apps = await gatherMeshApps();
+  const gathered = new Set(apps.map((app) => app.name));
+  [...lastPassByApp.keys()].forEach((name) => {
+    if (!gathered.has(name)) lastPassByApp.delete(name);
+  });
+  if (apps.length === 0) return;
+
+  const collateral = await generalService.obtainNodeCollateralInformation();
+  const ownOutpoint = meshDerivation.canonicalOutpoint(collateral.txhash, collateral.txindex);
+  const ctx = {
+    ownOutpoint,
+    ownNodeId: meshDerivation.nodeId(ownOutpoint),
+    tipHeight: synced.data.height,
+    sshClientPublicKey: await meshSsh.ensureClientKeypair(),
+  };
+
+  const { meshComponentSlot } = await getSpec();
+  const healthy = [];
+  // eslint-disable-next-line no-restricted-syntax
+  for (const app of apps) {
+    try {
+      app.slots = new Map(app.view.componentNames()
+        .map((component) => [component, meshComponentSlot(app.name, component)]));
+      // eslint-disable-next-line no-await-in-loop
+      app.material = await reconcileAppMaterial(app, ctx);
+      // eslint-disable-next-line no-await-in-loop
+      app.containers = await gatherContainers(app);
+      recordPass(app.name, {
+        error: null,
+        meshPort: app.material.meshPort,
+        certAction: app.material.certAction,
+        members: app.material.members.map(memberFacts),
+        rejected: app.material.rejected,
+      });
+      healthy.push(app);
+    } catch (error) {
+      recordPass(app.name, { error: error.message });
+      log.error(`meshReconciler - ${app.name}: material pass failed: ${error.message}`);
+    }
+  }
+  if (healthy.length === 0) return;
+
+  await reconcileSnapshotAndTayga(healthy, ctx);
+
+  const externalInterface = await fluxNetworkHelper.getDefaultRouteInterface();
+  const chainRules = { pre: [], post: [], fwd: [] };
+  // eslint-disable-next-line no-restricted-syntax
+  for (const app of healthy) {
+    try {
+      // eslint-disable-next-line no-await-in-loop
+      await reconcileAppRuntime(app, ctx);
+      if (externalInterface) {
+        const rules = meshRuntimeConfig.firewallRules({
+          externalInterface,
+          meshPort: app.material.meshPort,
+          transitSubnet: app.transit.subnet,
+          transitNamespaceIp: app.transit.namespaceIp,
+        });
+        chainRules.pre.push(...rules.pre);
+        chainRules.post.push(...rules.post);
+        chainRules.fwd.push(...rules.fwd);
+      }
+    } catch (error) {
+      recordPass(app.name, { error: error.message });
+      log.error(`meshReconciler - ${app.name}: runtime pass failed: ${error.message}`);
+    }
+  }
+
+  await meshNamespace.ensureMeshChains();
+  await meshNamespace.setMeshChainRules(chainRules);
+
+  // eslint-disable-next-line no-restricted-syntax
+  for (const app of healthy) {
+    try {
+      // eslint-disable-next-line no-await-in-loop
+      const detector = await runDetector(app, ctx);
+      recordPass(app.name, {
+        detector,
+        // An eviction re-ran the material; the retained view keeps up.
+        members: app.material.members.map(memberFacts),
+      });
+    } catch (error) {
+      recordPass(app.name, { error: error.message });
+      log.error(`meshReconciler - ${app.name}: detector pass failed: ${error.message}`);
+    }
+  }
+}
+
+let currentPass = null;
+let followUpPass = null;
 
 /**
- * One full pass over every mesh app. Single-flight; safe to call from the
- * sweep, the install path, boot, and the UPnP refresh alike.
+ * One full pass over every mesh app. Single-flight with one coalesced
+ * follow-up: a call made while a pass is running resolves only after a pass
+ * that began at or after the call has completed, so every caller — the sweep,
+ * the install path, boot, the UPnP refresh, an uninstall — gets a pass that
+ * observed its changes. Concurrent callers share the follow-up.
+ *
+ * @returns {Promise<void>}
  */
-async function reconcileAllMeshApps() {
-  if (sweepRunning) return;
-  sweepRunning = true;
-  try {
-    const synced = daemonServiceMiscRpcs.isDaemonSynced();
-    if (synced?.data?.synced !== true) {
-      log.info('meshReconciler - daemon not synced; membership judgments deferred');
-      return;
-    }
-    const apps = await gatherMeshApps();
-    const gathered = new Set(apps.map((app) => app.name));
-    [...lastPassByApp.keys()].forEach((name) => {
-      if (!gathered.has(name)) lastPassByApp.delete(name);
-    });
-    if (apps.length === 0) return;
-
-    const collateral = await generalService.obtainNodeCollateralInformation();
-    const ownOutpoint = meshDerivation.canonicalOutpoint(collateral.txhash, collateral.txindex);
-    const ctx = {
-      ownOutpoint,
-      ownNodeId: meshDerivation.nodeId(ownOutpoint),
-      tipHeight: synced.data.height,
-      sshClientPublicKey: await meshSsh.ensureClientKeypair(),
-    };
-
-    const { meshComponentSlot } = await getSpec();
-    const healthy = [];
-    // eslint-disable-next-line no-restricted-syntax
-    for (const app of apps) {
-      try {
-        app.slots = new Map(app.view.componentNames()
-          .map((component) => [component, meshComponentSlot(app.name, component)]));
-        // eslint-disable-next-line no-await-in-loop
-        app.material = await reconcileAppMaterial(app, ctx);
-        // eslint-disable-next-line no-await-in-loop
-        app.containers = await gatherContainers(app);
-        recordPass(app.name, {
-          error: null,
-          meshPort: app.material.meshPort,
-          certAction: app.material.certAction,
-          members: app.material.members.map(memberFacts),
-          rejected: app.material.rejected,
-        });
-        healthy.push(app);
-      } catch (error) {
-        recordPass(app.name, { error: error.message });
-        log.error(`meshReconciler - ${app.name}: material pass failed: ${error.message}`);
-      }
-    }
-    if (healthy.length === 0) return;
-
-    await reconcileSnapshotAndTayga(healthy, ctx);
-
-    const externalInterface = await fluxNetworkHelper.getDefaultRouteInterface();
-    const chainRules = { pre: [], post: [], fwd: [] };
-    // eslint-disable-next-line no-restricted-syntax
-    for (const app of healthy) {
-      try {
-        // eslint-disable-next-line no-await-in-loop
-        await reconcileAppRuntime(app, ctx);
-        if (externalInterface) {
-          const rules = meshRuntimeConfig.firewallRules({
-            externalInterface,
-            meshPort: app.material.meshPort,
-            transitSubnet: app.transit.subnet,
-            transitNamespaceIp: app.transit.namespaceIp,
-          });
-          chainRules.pre.push(...rules.pre);
-          chainRules.post.push(...rules.post);
-          chainRules.fwd.push(...rules.fwd);
-        }
-      } catch (error) {
-        recordPass(app.name, { error: error.message });
-        log.error(`meshReconciler - ${app.name}: runtime pass failed: ${error.message}`);
-      }
-    }
-
-    await meshNamespace.ensureMeshChains();
-    await meshNamespace.setMeshChainRules(chainRules);
-
-    // eslint-disable-next-line no-restricted-syntax
-    for (const app of healthy) {
-      try {
-        // eslint-disable-next-line no-await-in-loop
-        const detector = await runDetector(app, ctx);
-        recordPass(app.name, {
-          detector,
-          // An eviction re-ran the material; the retained view keeps up.
-          members: app.material.members.map(memberFacts),
-        });
-      } catch (error) {
-        recordPass(app.name, { error: error.message });
-        log.error(`meshReconciler - ${app.name}: detector pass failed: ${error.message}`);
-      }
-    }
-  } finally {
-    sweepRunning = false;
+function reconcileAllMeshApps() {
+  if (!currentPass) {
+    currentPass = runReconcilePass().finally(() => { currentPass = null; });
+    return currentPass;
   }
+  if (!followUpPass) {
+    // The shared follow-up must run even when the current pass fails, and it
+    // re-enters rather than starting a pass directly — another caller may
+    // have begun one already, and single-flight must hold.
+    followUpPass = currentPass.catch(() => {}).then(() => {
+      followUpPass = null;
+      return reconcileAllMeshApps();
+    });
+  }
+  return followUpPass;
 }
 
 /**
