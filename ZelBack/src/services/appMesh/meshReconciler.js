@@ -231,6 +231,7 @@ async function reconcileAppMaterial(app, ctx) {
     outpoint: ctx.ownOutpoint,
     listenPort: meshPort,
     members,
+    componentSlots: [...app.slots.values()],
     sshClientPublicKey: ctx.sshClientPublicKey,
   });
   const configPath = path.join(meshCertificates.meshAppDir(app.identity), NEBULA_CONFIG_FILE);
