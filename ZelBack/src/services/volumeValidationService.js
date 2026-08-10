@@ -25,14 +25,14 @@ function hasIncorrectFluxPath(volumePath) {
  * The app a legacy mount entry belongs to, or null when nothing here claims it.
  *
  * This ends in a redeploy that RECREATES the volume, so a wrong answer reformats
- * the wrong app's data. It used to be a guess twice over: the app name was cut
- * out of the mount path and de-prefixed by slicing four characters off anything
- * beginning with `flux`, which two different apps can both produce.
+ * the wrong app's data. The crontab comment is the docker app id the entry was
+ * written for — an exact value, not one recovered from a path — so this
+ * de-prefixes it once and asks which installed row states that identifier as one
+ * of its own components. No row, no answer, and the caller does nothing.
  *
- * The crontab comment is the docker app id the entry was written for — an exact
- * value, not one recovered from a path — so this de-prefixes it once and asks
- * the installed-app row which app states that identity. No row, no answer, and
- * the caller does nothing.
+ * Taking the identifier apart is the fallback for rows written before their
+ * components were recorded; info.apps.componentIdentifiers counts how many still
+ * need it, and that figure reaching zero fleet-wide is what licenses deleting it.
  *
  * @param {string} appId - the crontab comment, a docker app id
  * @returns {Promise<string|null>} the app name, or null when unresolvable
@@ -40,8 +40,10 @@ function hasIncorrectFluxPath(volumePath) {
 async function resolveAppForMountEntry(appId) {
   if (!appId) return null;
   try {
-    const { DeploymentSpec } = await getSpecBackend();
     const identifier = dockerService.getBaseAppName(appId);
+    const stated = await appsRepository.getInstalledAppByComponentIdentifier(identifier);
+    if (stated) return stated.name;
+    const { DeploymentSpec } = await getSpecBackend();
     const identity = DeploymentSpec.appNameFromIdentifier(identifier);
     const installed = await appsRepository.getInstalledAppByIdentity(identity);
     return installed ? installed.name : null;
