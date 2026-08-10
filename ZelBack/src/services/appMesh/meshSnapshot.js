@@ -135,7 +135,49 @@ async function writeSnapshot(ownNodeId, apps) {
   const tmp = path.join(RESOLVER_DIR, `.${SNAPSHOT_FILE}.tmp`);
   await fsp.writeFile(tmp, `${JSON.stringify(snapshot, null, 2)}\n`);
   await fsp.rename(tmp, target);
+  notifyWaiters();
   return { generation: snapshot.generation, snapshot, addresses };
+}
+
+// The membership level API's wake-up: long-polls park here until the next
+// snapshot write. Purely in-process — nothing to persist, because the LEVEL
+// is what is durable (the snapshot on disk); a waiter lost to a FluxOS
+// restart simply reconnects and re-reads.
+const generationWaiters = new Set();
+
+function notifyWaiters() {
+  const waiters = [...generationWaiters];
+  generationWaiters.clear();
+  waiters.forEach((wake) => wake());
+}
+
+/**
+ * Wait until the snapshot generation differs from `after`, or `timeoutMs`
+ * passes; returns the generation current at that moment. Resolves immediately
+ * when the generation already differs — including when `after` is AHEAD of
+ * the current one (a lost ledger file restarts generations; a reactor must
+ * never hang on a stale cursor). Subscribes before reading, so a write
+ * landing between the read and the park is never missed.
+ *
+ * @param {number} after the generation the caller last saw
+ * @param {number} timeoutMs
+ * @returns {Promise<number>}
+ */
+async function waitForGeneration(after, timeoutMs) {
+  let wake;
+  const woken = new Promise((resolve) => { wake = resolve; });
+  generationWaiters.add(wake);
+  try {
+    const current = (await readCurrentSnapshot())?.generation ?? 0;
+    if (current !== after) return current;
+    const timer = setTimeout(wake, timeoutMs);
+    if (timer.unref) timer.unref();
+    await woken;
+    clearTimeout(timer);
+    return (await readCurrentSnapshot())?.generation ?? 0;
+  } finally {
+    generationWaiters.delete(wake);
+  }
 }
 
 module.exports = {
@@ -143,4 +185,5 @@ module.exports = {
   readCurrentSnapshot,
   assignMemberAddresses,
   writeSnapshot,
+  waitForGeneration,
 };

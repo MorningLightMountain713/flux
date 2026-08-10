@@ -131,4 +131,30 @@ describe('meshSnapshot', () => {
     const { snapshot } = await meshSnapshot.writeSnapshot('6f6437c5', apps);
     expect(snapshot.apps[0].components).to.deep.equal({});
   });
+
+  describe('waitForGeneration — the membership long-poll park', () => {
+    it('answers immediately when the generation already differs, in either direction', async () => {
+      await meshSnapshot.writeSnapshot('6f6437c5', APPS); // generation 1
+      // Behind: the level moved since the caller's read.
+      expect(await meshSnapshot.waitForGeneration(0, 5000)).to.equal(1);
+      // Ahead: a lost ledger restarts generations; a stale cursor must never wedge.
+      expect(await meshSnapshot.waitForGeneration(7, 5000)).to.equal(1);
+    });
+
+    it('parks on the current generation and wakes on the next write', async () => {
+      await meshSnapshot.writeSnapshot('6f6437c5', APPS);
+      const woken = meshSnapshot.waitForGeneration(1, 30000);
+      // Give the waiter its subscribe-then-read beat, then land a write.
+      await new Promise((resolve) => { setTimeout(resolve, 50); });
+      await meshSnapshot.writeSnapshot('6f6437c5', APPS.map((app) => ({
+        ...app, members: app.members.slice(0, 1),
+      })));
+      expect(await woken).to.equal(2);
+    });
+
+    it('times out to the unchanged generation — itself the answer "nothing happened"', async () => {
+      await meshSnapshot.writeSnapshot('6f6437c5', APPS);
+      expect(await meshSnapshot.waitForGeneration(1, 100)).to.equal(1);
+    });
+  });
 });

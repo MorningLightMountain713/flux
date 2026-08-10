@@ -1,0 +1,214 @@
+// weight: heavy
+import { describe, it, before, after } from 'mocha';
+import { expect } from 'chai';
+import { createTestEnv } from '../framework/test-env.js';
+import { bootAndPeer } from '../framework/reconciler-suite.js';
+import { registerEncryptedV9App } from '../framework/content-helper.js';
+import { queueAppTx, advanceBlocks } from '../framework/daemon-control.js';
+import { waitFor, waitForAppInstalled } from '../framework/wait.js';
+import { authenticate } from '../auth.js';
+import { appOwnerKey } from '../framework/keys.js';
+import { execInContainer } from '../framework/container.js';
+import { pushBusybox } from '../framework/registry-helper.js';
+import { REGISTRY_REPO_HOST, getSubnetConfig } from '../framework/subnet-config.js';
+
+const { gateway: GATEWAY } = getSubnetConfig();
+
+// The membership LEVEL API (DNS_SERVICE_DISCOVERY_SRV.md §12): the piece that
+// lets a consensus app react to membership changes with a six-line loop and
+// no orchestrator. The contract is a level, never an event stream — a reactor
+// reads the membership, converges its cluster to it, and long-polls for the
+// generation to move; join/leave is its own set-difference, so no transition
+// can be lost (there is nothing in flight to lose). What must hold:
+//   1. From inside an app container, GET fluxnode.service:16101/mesh/membership
+//      answers the caller's own app: a generation, self matching
+//      FLUX_MESH_SELF, every member under its canonical (ordinal) name and
+//      ready-made FQDN — and NO addresses (identity here, addressing in DNS).
+//   2. A long-poll behind the current generation answers immediately; one AT
+//      the current generation parks, and WAKES when membership changes (an
+//      uninstall on another node), answering the shrunken level.
+//   3. The node itself — any non-app-container caller — is refused: the
+//      containers table is the tenant boundary, exactly as it is for DNS.
+
+const MEMBERSHIP_URL = 'http://fluxnode.service:16101/mesh/membership';
+
+describe('mesh membership level API', function () {
+  let env;
+  let name;
+  let ownerAuths;
+
+  async function meshStatus(clientIndex) {
+    const res = await fetch(`${env.clients[clientIndex].url}/apps/mesh/status/${name}`, {
+      headers: { zelidauth: ownerAuths[clientIndex] },
+    }).catch(() => null);
+    if (!res) return { status: 'error' };
+    return res.json().catch(() => ({ status: 'error' }));
+  }
+
+  async function appContainerName(clientIndex) {
+    const status = await meshStatus(clientIndex);
+    const identity = status?.data?.identity;
+    expect(identity, `mesh identity on node ${clientIndex}`).to.be.a('string');
+    return `fluxdb_${identity}`;
+  }
+
+  async function inApp(clientIndex, command) {
+    const containerName = await appContainerName(clientIndex);
+    return execInContainer(env.clients[clientIndex].container, `docker exec ${containerName} ${command}`);
+  }
+
+  async function readLevel(clientIndex, query = '') {
+    const out = await inApp(clientIndex, `/bin/busybox wget -qO- "${MEMBERSHIP_URL}${query}"`);
+    return JSON.parse(out.stdout);
+  }
+
+  before(async function () {
+    this.timeout(900000);
+    env = await createTestEnv({
+      hookCtx: this,
+      nodes: 3,
+      tickerAutostart: false,
+      systemdMode: true,
+      shutdowndMock: false,
+      dnsdReal: true,
+      arcane: true,
+      configOverrides: {
+        fluxapps: { meshReconcileIntervalMs: 15000, minOutgoing: 1, minIncoming: 1 },
+      },
+    });
+    await bootAndPeer(env, { minOutbound: 1, minInbound: 1, pricing: true });
+    await Promise.all(env.clients.map((c) => execInContainer(
+      c.container, `ip route replace default via ${GATEWAY} dev eth0`,
+    )));
+    ownerAuths = await Promise.all(env.clients.map(async (c) => (await authenticate(c.url, appOwnerKey())).zelidauth));
+  });
+
+  after(async function () {
+    this.timeout(60000);
+    await env?.teardown();
+  });
+
+  it('installs a mesh app and the overlay comes up', async function () {
+    this.timeout(480000);
+    name = `e2emeshlvl${Date.now()}`;
+    await pushBusybox(name);
+
+    const reg = await registerEncryptedV9App(env.clients[0].url, {
+      name,
+      instances: 3,
+      specOverrides: { network: { mesh: true } },
+      components: {
+        db: {
+          name: 'db',
+          description: 'membership level consumer',
+          image: `${REGISTRY_REPO_HOST}/${name}:v1`,
+          cpu: 0.5,
+          memory: 300,
+          rootFsGb: 2,
+          entrypoint: ['/bin/busybox', 'sh', '-c',
+            'while true; do /bin/busybox nc -l -p 7001 -e /bin/busybox echo LVL-OK; done'],
+          ports: { echo: { containerPort: 7001, hostPort: 31284 } },
+          meshPorts: { 'db-server': { containerPort: 7001 } },
+        },
+      },
+    });
+    expect(reg.status, JSON.stringify(reg)).to.equal('success');
+    await queueAppTx(reg.data);
+    await advanceBlocks(3);
+
+    await waitFor(async () => {
+      const rows = await Promise.all(env.clients.map((c) => c.getAppSpecs(name).catch(() => null)));
+      return rows.every((r) => r && r.status === 'success' && r.data && r.data.name === name);
+    }, { timeout: 120000, interval: 3000, label: `global spec for ${name} on all nodes` });
+
+    await Promise.all(env.clients.map((c) => waitForAppInstalled(c, name, 300000)));
+
+    await waitFor(async () => {
+      const statuses = await Promise.all(env.clients.map((_, i) => meshStatus(i)));
+      return statuses.every((s) => s.status === 'success'
+        && s.data.unitActive === true
+        && (s.data.lastPass?.members?.length ?? 0) === 2
+        && !s.data.lastPass.error);
+    }, { timeout: 240000, interval: 5000, label: 'overlay live on all three nodes' });
+  });
+
+  it('a container reads its own level: generation, self, canonical names, no addresses', async function () {
+    this.timeout(240000);
+    // Wait for every member to hold a slot, so the canonical names are the
+    // ordinal forms and the level is in its steady state.
+    await waitFor(async () => {
+      const level = await readLevel(0).catch(() => null);
+      return level?.status === 'success'
+        && level.data.members.length === 3
+        && level.data.members.every((m) => Number.isInteger(m.ordinal));
+    }, { timeout: 180000, interval: 5000, label: 'the level shows three slot-holders' });
+
+    const level = await readLevel(0);
+    const { data } = level;
+    expect(data.app).to.equal(name);
+    expect(data.generation).to.be.a('number');
+
+    const envOut = await inApp(0, '/bin/busybox sh -c "/bin/busybox env | /bin/busybox grep FLUX_MESH_SELF="');
+    const selfName = envOut.stdout.match(/FLUX_MESH_SELF=(\S+)/)?.[1];
+    expect(data.self.member, 'self matches the container identity').to.equal(selfName);
+    expect(data.self.fqdn).to.equal(`${selfName}.${name}.mesh.flux`);
+
+    const ordinals = data.members.map((m) => m.ordinal);
+    expect(new Set(ordinals)).to.deep.equal(new Set([0, 1, 2]));
+    data.members.forEach((m) => {
+      expect(m.member).to.equal(`db-${m.ordinal}`);
+      expect(m.fqdn).to.equal(`db-${m.ordinal}.${name}.mesh.flux`);
+    });
+    // Identity only: addressing belongs to DNS, and the presented IPv4 is
+    // node-local — the level must never hand out something to persist.
+    expect(JSON.stringify(data)).to.not.match(/10\.127\./);
+  });
+
+  it('a long-poll behind the current generation answers immediately', async function () {
+    this.timeout(120000);
+    const before = Date.now();
+    const level = await readLevel(0, '?waitAfter=0&timeoutS=120');
+    expect(level.status).to.equal('success');
+    expect(Date.now() - before, 'no park on a stale cursor').to.be.below(30000);
+  });
+
+  it('a parked long-poll WAKES on a membership change and answers the shrunken level', async function () {
+    this.timeout(420000);
+    const current = (await readLevel(0)).data.generation;
+
+    // Park a poll inside node 0's container, writing its answer to a file.
+    const containerName = await appContainerName(0);
+    await execInContainer(env.clients[0].container,
+      `docker exec ${containerName} /bin/busybox sh -c '`
+      + `rm -f /tmp/woken.json && (/bin/busybox wget -qO /tmp/woken.json `
+      + `"${MEMBERSHIP_URL}?waitAfter=${current}&timeoutS=300" && `
+      + `echo done > /tmp/woken.flag) &'`);
+
+    // The membership change: the app leaves node 2 (a graceful leave — the
+    // appremoved broadcast pulls the member out on the next mesh pass).
+    const removeRes = await fetch(`${env.clients[2].url}/apps/appremove/${name}`, {
+      headers: { zelidauth: ownerAuths[2] },
+    });
+    expect(removeRes.ok, 'appremove accepted').to.equal(true);
+
+    await waitFor(async () => {
+      const out = await inApp(0, '/bin/busybox cat /tmp/woken.flag').catch(() => null);
+      return out?.stdout?.includes('done');
+    }, { timeout: 240000, interval: 5000, label: 'the parked poll woke' });
+
+    const out = await inApp(0, '/bin/busybox cat /tmp/woken.json');
+    const woken = JSON.parse(out.stdout);
+    expect(woken.status).to.equal('success');
+    expect(woken.data.generation, 'the level moved').to.be.greaterThan(current);
+    expect(woken.data.members, 'the departed member is gone').to.have.length(2);
+  });
+
+  it('the node itself is refused — the containers table is the tenant boundary', async function () {
+    this.timeout(120000);
+    const probe = 'node -e "fetch(\'http://169.254.43.43:16101/mesh/membership\')'
+      + '.then((r)=>r.json()).then((b)=>console.log(JSON.stringify(b)))'
+      + '.catch((e)=>console.log(String(e)))"';
+    const { stdout } = await execInContainer(env.clients[0].container, probe);
+    expect(stdout, 'no membership for a non-app caller').to.not.include('"generation"');
+  });
+});

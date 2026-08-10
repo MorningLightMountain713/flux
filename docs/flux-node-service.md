@@ -40,6 +40,57 @@ Returns comprehensive information about the host node.
 
 ---
 
+### GET /mesh/membership
+
+The mesh membership LEVEL for the calling app, with a long-poll that makes waiting for change cheap. Only answers containers of mesh-enabled apps (`network.mesh: true`), scoped by source address exactly as mesh DNS is: a container only ever sees its own app's membership.
+
+**URL:** `http://fluxnode.service:16101/mesh/membership`
+
+**Method:** `GET`
+
+**Query parameters:**
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `waitAfter` | integer (optional) | The generation the caller last saw. The request parks until the generation differs, then answers the current level. A `waitAfter` *ahead* of the current generation answers immediately (generations restart if the node's ledger is lost — a reactor must never wedge on a stale cursor). Absent: answer immediately. |
+| `timeoutS` | integer (optional) | Caps the park (default 60, max 600). A timed-out poll still answers `200` with the current level — an unchanged `generation` is itself the answer "nothing happened". |
+
+**Response:**
+
+```json
+{
+  "status": "success",
+  "data": {
+    "generation": 42,
+    "app": "myblog",
+    "self":    { "component": "db", "member": "db-1", "ordinal": 1,
+                 "fqdn": "db-1.myblog.mesh.flux" },
+    "members": [
+      { "component": "db", "member": "db-0", "ordinal": 0, "fqdn": "db-0.myblog.mesh.flux" },
+      { "component": "db", "member": "db-1", "ordinal": 1, "fqdn": "db-1.myblog.mesh.flux" },
+      { "component": "db", "member": "db-8f3a21c7", "ordinal": null, "fqdn": "db-8f3a21c7.myblog.mesh.flux" }
+    ]
+  }
+}
+```
+
+- `member` is the canonical mesh name: the ordinal form for a slot-holder, the nodeid form (with `ordinal: null`) for a standby.
+- **Members carry identity only, never addresses.** Addressing is mesh DNS's job (`fqdn` resolves there), and the presented IPv4 is node-local — nothing here is safe to persist except the names.
+- The contract is a **level, not an event stream**: read the membership, converge your cluster to it, long-poll for the next generation, repeat. Join/leave is your own set-difference against what you last acted on, so no transition can be lost — across FluxOS restarts included.
+
+The reactor loop this enables (see `examples/mesh-etcd-reactor/` for a complete consensus app):
+
+```sh
+gen=0
+while true; do
+  level=$(wget -qO- "http://fluxnode.service:16101/mesh/membership?waitAfter=$gen&timeoutS=300")
+  gen=$(echo "$level" | jq .data.generation)
+  # diff .data.members against your cluster's own member list and converge
+done
+```
+
+---
+
 ## Authentication
 
 This service uses **IP-based authentication**. Only requests originating from Docker containers running Flux applications can access this endpoint.

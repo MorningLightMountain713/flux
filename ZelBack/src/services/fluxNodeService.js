@@ -16,10 +16,17 @@ const { extractIp } = require('./utils/socketAddressUtils');
 const generalService = require('./generalService');
 const dockerService = require('./dockerService');
 const benchmarkService = require('./benchmarkService');
+const meshSnapshot = require('./appMesh/meshSnapshot');
 
 const express = require('express');
 
 let server = null;
+
+// Long-poll bounds for /mesh/membership: the hang is capped so a dead client
+// cannot park a request forever, and a timed-out poll still answers the
+// current level (generation unchanged = "nothing happened", itself an answer).
+const MEMBERSHIP_WAIT_DEFAULT_S = 60;
+const MEMBERSHIP_WAIT_MAX_S = 600;
 
 async function getHostInfo(req, res) {
   try {
@@ -93,6 +100,102 @@ async function getHostInfo(req, res) {
   }
 }
 
+/**
+ * The canonical member name: the ordinal form for a slot-holder (its
+ * advertised identity), the nodeid form for a standby. Mirrors the resolver.
+ */
+function memberName(member) {
+  return Number.isInteger(member.ordinal)
+    ? `${member.component}-${member.ordinal}`
+    : `${member.component}-${member.nodeId}`;
+}
+
+/**
+ * The caller's app entry in the snapshot, scoped by source address exactly as
+ * flux-dnsd scopes DNS: the containers table maps a container's bridge
+ * address to (app, component), and that is the tenant boundary — one app can
+ * never read another's membership. Null when the caller is not a mesh app
+ * container this node knows.
+ */
+function scopeByCaller(snapshot, remoteAddress) {
+  // Express hands v4-mapped addresses as ::ffff:172.23.0.2.
+  const callerIp = (remoteAddress ?? '').replace(/^::ffff:/, '');
+  for (const app of snapshot?.apps ?? []) {
+    const container = (app.containers ?? []).find((c) => c.sourceIp === callerIp);
+    if (container) return { app, component: container.component };
+  }
+  return null;
+}
+
+/**
+ * GET /mesh/membership — the mesh membership LEVEL for the calling app, and
+ * the long-poll that makes polling it cheap.
+ *
+ * The contract is level-based, never an event stream: membership is the
+ * snapshot (durable, strictly-increasing generation), and a reactor
+ * converges its cluster to the level, then waits for the generation to move.
+ * Join/leave is the reactor's own set-difference against what it last acted
+ * on — transitions are not carried, so none can be lost, across FluxOS
+ * restarts included.
+ *
+ * Query: waitAfter — the generation the caller last saw; the request parks
+ * until the generation differs (a generation AHEAD of current answers
+ * immediately: a lost ledger restarts generations and a reactor must never
+ * wedge on a stale cursor). timeoutS caps the park; a timed-out poll answers
+ * the current level with the generation unchanged.
+ *
+ * Members carry identity only — the canonical name and its FQDN, never an
+ * address: addressing is DNS's job, and the presented IPv4 is node-local, so
+ * handing it out here would invite an app to persist exactly the thing it
+ * must never persist.
+ */
+async function getMeshMembership(req, res) {
+  try {
+    let snapshot = await meshSnapshot.readCurrentSnapshot();
+    let scoped = scopeByCaller(snapshot, req.socket.remoteAddress);
+    if (!scoped) {
+      res.json(messageHelper.errUnauthorizedMessage());
+      return;
+    }
+
+    const waitAfter = Number.parseInt(req.query.waitAfter, 10);
+    if (Number.isInteger(waitAfter) && waitAfter >= 0) {
+      const timeoutS = Math.min(
+        Math.max(Number.parseInt(req.query.timeoutS, 10) || MEMBERSHIP_WAIT_DEFAULT_S, 1),
+        MEMBERSHIP_WAIT_MAX_S,
+      );
+      await meshSnapshot.waitForGeneration(waitAfter, timeoutS * 1000);
+      snapshot = await meshSnapshot.readCurrentSnapshot();
+      scoped = scopeByCaller(snapshot, req.socket.remoteAddress);
+      if (!scoped) {
+        // The caller's app left the mesh while it waited.
+        res.json(messageHelper.errUnauthorizedMessage());
+        return;
+      }
+    }
+
+    const { app, component } = scoped;
+    const withNames = (member) => ({
+      component: member.component,
+      member: memberName(member),
+      ordinal: Number.isInteger(member.ordinal) ? member.ordinal : null,
+      fqdn: `${memberName(member)}.${app.name}.mesh.flux`,
+    });
+    const self = (app.members ?? [])
+      .find((m) => m.nodeId === snapshot.nodeId && m.component === component);
+    const message = messageHelper.createDataMessage({
+      generation: snapshot.generation,
+      app: app.name,
+      self: self ? withNames(self) : null,
+      members: (app.members ?? []).map(withNames),
+    });
+    res.json(message);
+  } catch (error) {
+    log.error(`getMeshMembership: ${error}`);
+    res.json(messageHelper.createErrorMessage(error.message || error, error.name, error.code));
+  }
+}
+
 function handleError(middleware, req, res, next) {
   // eslint-disable-next-line consistent-return
   middleware(req, res, (err) => {
@@ -117,6 +220,7 @@ function start() {
     handleError(express.json(), req, res, next);
   });
   app.get('/hostinfo', getHostInfo);
+  app.get('/mesh/membership', getMeshMembership);
   app.all('*', (_, res) => res.status(404).end());
 
   const bindAddress = config.server.fluxNodeServiceAddress;
@@ -135,4 +239,6 @@ function stop() {
 module.exports = {
   start,
   stop,
+  // exposed for tests
+  getMeshMembership,
 };
