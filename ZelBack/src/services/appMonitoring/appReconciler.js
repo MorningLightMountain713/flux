@@ -34,6 +34,10 @@ const reconcilerQueue = require('./reconcilerQueue');
 // that only needs to enqueue depends on reconcilerQueue directly and never pulls this
 // engine's heavy dependency tree (the import-hub that made every producer a cycle risk).
 const { enqueue, scheduleRetry } = reconcilerQueue;
+// The mesh identity-drift registry: dependency-free by design, so reading it
+// here closes no cycle with the mesh tree (which sits downstream of this one
+// via the provisioner).
+const meshIdentityDrift = require('../appMesh/meshIdentityDrift');
 
 // The APP-IDENTITY SEGMENT of a container identifier, by flux-spec's own rule.
 // This is a string decomposition and nothing more: every segment of
@@ -1405,6 +1409,24 @@ async function reconcile(identifier) {
     // an update that dropped a link, an external disconnect) - converge before
     // the run-state decisions below.
     await reconcileNetworkMembership(identifier, spec, actual);
+    // A mesh component whose container was created under one ordinal identity
+    // but whose resolved slot now names another (a standby promoted after
+    // boot, or a lost double-claim arbitration). Identity is fixed for a
+    // container's lifetime, so the cure is a deliberate rebuild under the
+    // current identity — the same remove-then-recreate discipline as the
+    // network heals, with all of their preconditions (never destroy what
+    // cannot be rebuilt, durable removed-on-purpose flag, no-uninstall
+    // recreate, own pacing ladder). The registry only serves drifts the mesh
+    // pass confirmed across two runs.
+    const meshDrift = meshIdentityDrift.driftFor(identifier);
+    if (meshDrift) {
+      await rebuildOntoNetwork(identifier, app, {
+        action: 'meshIdentityRebuild',
+        why: `carries mesh identity ${meshDrift.is} but its resolved slot names it ${meshDrift.wants}; recreating under the current identity`,
+        blockedWhy: 'carries a stale mesh identity',
+      });
+      return;
+    }
     // A durable restart request (operator restart / mount or network repair) bounces
     // a running container when the desired generation exceeds the one we last
     // actuated, then records it. Level-based + idempotent (re-running won't re-bounce);

@@ -106,6 +106,7 @@ describe('meshReconciler', () => {
       getDefaultRouteInterface: sinon.stub().resolves('eth0'),
       slotView: null,
       slotClaims: [],
+      enqueued: [],
     };
 
     const record = (name) => sinon.stub().callsFake(async (...args) => {
@@ -132,7 +133,7 @@ describe('meshReconciler', () => {
         ]),
       },
       '../dockerService': {
-        dockerContainerInspect: sinon.stub().resolves({
+        dockerContainerInspect: sinon.stub().callsFake(async () => stubs.containerInspect ?? {
           State: { Pid: 4242 },
           NetworkSettings: { Networks: { fluxDockerNetwork_myblog: { IPAddress: '172.23.4.5' } } },
         }),
@@ -152,6 +153,9 @@ describe('meshReconciler', () => {
         getFluxnodesByPubkey: sinon.stub().callsFake(async (key) => stubs.nodesByPubkey?.[key] ?? null),
       },
       '../fluxNetworkHelper': { getDefaultRouteInterface: (...args) => stubs.getDefaultRouteInterface(...args) },
+      '../appMonitoring/reconcilerQueue': {
+        enqueue: sinon.stub().callsFake((identifier) => stubs.enqueued.push(identifier)),
+      },
       // The slot store/gossip reads are stubbed; the pure arbitration runs real.
       './meshSlots': {
         arbitrate: require('../../ZelBack/src/services/appMesh/meshSlots').arbitrate,
@@ -239,6 +243,8 @@ describe('meshReconciler', () => {
   afterEach(async () => {
     await realFsp.rm(tmpRoot, { recursive: true, force: true });
     sinon.restore();
+    // The pass writes the real (dependency-free) drift registry singleton.
+    require('../../ZelBack/src/services/appMesh/meshIdentityDrift').reset();
   });
 
   describe('hostingOutpointsFor', () => {
@@ -588,6 +594,29 @@ describe('meshReconciler', () => {
       stubs.installedApps = [];
       await meshReconciler.reconcileAllMeshApps();
       expect(meshReconciler.lastPassStatus('myblog')).to.equal(null);
+    });
+
+    it('surfaces slot-identity drift, and enqueues the rebuild only once confirmed', async () => {
+      // The container was created as a standby (nodeid identity); the passes
+      // resolve slot 1 — drift. One pass records it, the second confirms and
+      // hands the identifier to the app reconciler's queue.
+      stubs.slotView = { ownSlot: 1, ownSince: null, winners: new Map() };
+      stubs.containerInspect = {
+        State: { Pid: 4242 },
+        Config: { Env: [`FLUX_MESH_SELF=web-${OWN_NODE_ID}`] },
+        NetworkSettings: { Networks: { fluxDockerNetwork_myblog: { IPAddress: '172.23.4.5' } } },
+      };
+      await meshReconciler.reconcileAllMeshApps();
+      expect(meshReconciler.lastPassStatus('myblog').identityDrift).to.deep.equal([{
+        identifier: 'web_ab12cd34ef56', component: 'web', is: `web-${OWN_NODE_ID}`, wants: 'web-1',
+      }]);
+      expect(stubs.enqueued).to.deep.equal([]);
+      await meshReconciler.reconcileAllMeshApps();
+      expect(stubs.enqueued).to.deep.equal(['web_ab12cd34ef56']);
+      // A container matching its resolved slot records no drift at all.
+      stubs.containerInspect.Config.Env = ['FLUX_MESH_SELF=web-1'];
+      await meshReconciler.reconcileAllMeshApps();
+      expect(meshReconciler.lastPassStatus('myblog').identityDrift).to.deep.equal([]);
     });
   });
 

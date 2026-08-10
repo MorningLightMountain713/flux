@@ -7,6 +7,9 @@ const proxyquire = require('proxyquire').noCallThru();
 // proxyquire (un-stubbed dep) gives the reconciler this same instance.
 const operationRegistry = require('../../ZelBack/src/services/utils/operationRegistry');
 const fluxEventBus = require('../../ZelBack/src/services/utils/fluxEventBus');
+// The real registry (dependency-free singleton): the engine under test reads
+// it directly, so the drift tests write it and every test resets it.
+const meshIdentityDrift = require('../../ZelBack/src/services/appMesh/meshIdentityDrift');
 
 // Mirrors appUninstaller.UninstallStatus (proxyquire.noCallThru stubs the real module out).
 const UninstallStatus = Object.freeze({
@@ -232,7 +235,9 @@ describe('appReconciler tests', () => {
     });
   });
 
-  afterEach(() => { appReconciler.stop(); operationRegistry.clear(); sinon.restore(); });
+  afterEach(() => {
+    appReconciler.stop(); operationRegistry.clear(); sinon.restore(); meshIdentityDrift.reset();
+  });
 
   // Stub-fidelity guard: a stubbed dockerService method that does not exist on the
   // real module keeps every test green while production throws "not a function"
@@ -1201,6 +1206,30 @@ describe('appReconciler tests', () => {
       await appReconciler.reconcile('www_App');
       expect(stubs.dockerService.appDockerStop.calledOnceWith('www_App')).to.be.true;
       expect(stubs.dockerService.appDockerKill.called).to.be.false;
+    });
+
+    it('rebuilds a running mesh component whose slot identity drifted (confirmed across two passes)', async () => {
+      stubs.dockerService.dockerContainerInspect.resolves({ State: { Running: true, Status: 'running', ExitCode: 0 } });
+      localSpec.compose[0].isStateless = true;
+      const drifts = new Map([['www_App', { component: 'www', is: 'www-aaaa1111', wants: 'www-1' }]]);
+      meshIdentityDrift.recordPassDrifts(drifts);
+      meshIdentityDrift.recordPassDrifts(drifts);
+      await appReconciler.reconcile('www_App');
+      // The full network-heal discipline: durably marked ours BEFORE the
+      // remove, then the no-uninstall recreate.
+      expect(stubs.appsRuntimeState.setNetworkHealRemoval.calledWith('www_App', true)).to.be.true;
+      expect(stubs.dockerService.appDockerForceRemove.calledWith('www_App')).to.be.true;
+      expect(stubs.containerHealthMonitor.recreateMissingContainers.calledWith('www_App')).to.be.true;
+      expect(stubs.appUninstaller.uninstallApplication.called).to.be.false;
+    });
+
+    it('a drift seen on only ONE mesh pass rebuilds nothing', async () => {
+      stubs.dockerService.dockerContainerInspect.resolves({ State: { Running: true, Status: 'running', ExitCode: 0 } });
+      localSpec.compose[0].isStateless = true;
+      meshIdentityDrift.recordPassDrifts(new Map([['www_App', { component: 'www', is: 'www-aaaa1111', wants: 'www-1' }]]));
+      await appReconciler.reconcile('www_App');
+      expect(stubs.dockerService.appDockerForceRemove.called).to.be.false;
+      expect(stubs.containerHealthMonitor.recreateMissingContainers.called).to.be.false;
     });
 
     it('bounces a running component when a restart is requested (desired generation > actuated)', async () => {
