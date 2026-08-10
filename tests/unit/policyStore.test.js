@@ -1,3 +1,5 @@
+'use strict';
+
 const { expect } = require('chai');
 const crypto = require('crypto');
 const sinon = require('sinon');

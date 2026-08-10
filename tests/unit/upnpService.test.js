@@ -1,3 +1,5 @@
+'use strict';
+
 /* eslint-disable class-methods-use-this */
 /* eslint-disable no-restricted-syntax */
 const chai = require('chai');

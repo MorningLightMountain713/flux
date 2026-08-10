@@ -1,3 +1,5 @@
+'use strict';
+
 /**
  * Real domain objects for tests, built from the same spec library production
  * loads (@runonflux/flux-spec-cjs, the bridge specLibs.getSpecBackend uses).

@@ -1,3 +1,5 @@
+'use strict';
+
 /* eslint-disable no-restricted-syntax */
 const chai = require('chai');
 const sinon = require('sinon');

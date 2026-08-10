@@ -1,3 +1,5 @@
+'use strict';
+
 const configFile = `<configuration version="37">
     <device id="AEYDK6D-2U3U5AI-MEDDSIE-5WC7F0K-FDLAOJQ-24AFG44-Z2B749L-BOUX3QM" name="chud" compression="metadata" introducer="false" skipIntroductionRemovals="false" introducedBy="">
         <address>dynamic</address>

@@ -1,3 +1,5 @@
+'use strict';
+
 const sinon = require('sinon');
 const { PassThrough } = require('stream');
 const { expect } = require('chai');

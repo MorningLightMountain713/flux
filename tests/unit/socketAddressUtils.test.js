@@ -1,3 +1,5 @@
+'use strict';
+
 const { expect } = require('chai');
 const {
   DEFAULT_API_PORT,

@@ -1,3 +1,5 @@
+'use strict';
+
 const net = require('net');
 const http = require('node:http');
 const { expect } = require('chai');

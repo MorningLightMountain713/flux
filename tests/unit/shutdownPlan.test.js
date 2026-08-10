@@ -1,3 +1,5 @@
+'use strict';
+
 const { expect } = require('chai');
 
 const shutdownPlan = require('../../ZelBack/src/services/appLifecycle/shutdownPlan');

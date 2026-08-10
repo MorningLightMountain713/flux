@@ -1,3 +1,5 @@
+'use strict';
+
 const childProcess = require('node:child_process');
 const fs = require('node:fs/promises');
 const os = require('node:os');
