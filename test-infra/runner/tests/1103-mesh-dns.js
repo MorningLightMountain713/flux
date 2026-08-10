@@ -149,11 +149,20 @@ describe('mesh DNS through the real resolver', function () {
     }, { timeout: 240000, interval: 5000, label: 'overlay live on all three nodes' });
   });
 
-  it('containers query the resolver first', async function () {
+  it('the container is configured with the resolver first, public fallbacks after', async function () {
     this.timeout(120000);
-    const { stdout } = await inApp(0, '/bin/busybox cat /etc/resolv.conf');
-    const first = stdout.split('\n').find((l) => l.startsWith('nameserver'));
-    expect(first, 'first nameserver').to.include(RESOLVER_ADDR);
+    // Mesh apps run on a user-defined docker network, so the container's
+    // resolv.conf points at docker's embedded resolver (127.0.0.11), which
+    // forwards to the configured --dns servers. The contract FluxOS sets is the
+    // --dns chain itself: the mesh resolver first, then the public fallbacks.
+    const containerName = await appContainerName(0);
+    const { stdout } = await execInContainer(
+      env.clients[0].container,
+      `docker inspect ${containerName} --format '{{json .HostConfig.Dns}}'`,
+    );
+    const dns = JSON.parse(stdout.trim());
+    expect(dns[0], 'mesh resolver is first').to.equal(RESOLVER_ADDR);
+    expect(dns, 'public fallbacks follow').to.include('8.8.8.8');
   });
 
   it('mesh names resolve: the group, one member, and self', async function () {
