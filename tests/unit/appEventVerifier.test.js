@@ -2,6 +2,7 @@ const chai = require('chai');
 const chaiAsPromised = require('chai-as-promised');
 const sinon = require('sinon');
 const proxyquire = require('proxyquire').noCallThru();
+const domain = require('./fixtures/appDomain');
 
 chai.use(chaiAsPromised);
 const { expect } = chai;
@@ -14,6 +15,11 @@ describe('appEventVerifier', () => {
   let benchmarkServiceStub;
   let arcaneAttestationStub;
   let appEventVerifier;
+  let realBackend;
+
+  before(async () => {
+    realBackend = await require('@runonflux/flux-spec-cjs').load();
+  });
 
   // Minimal AppEvent class double — just enough surface for authorize() to
   // exercise the FluxOS authority logic without needing a real spec class.
@@ -53,12 +59,6 @@ describe('appEventVerifier', () => {
     }
   }
 
-  class FakeAppEventLegacy {
-    static deserialize(doc) { return { kind: 'v1', doc }; }
-  }
-  class FakeConfirmedAppEvent {
-    static deserialize(doc) { return { kind: 'v2', doc }; }
-  }
 
   // Minimal spec-backend registry double. Supports getVersionClass lookups.
   const registeredVersionClasses = {};
@@ -81,9 +81,14 @@ describe('appEventVerifier', () => {
         FluxAppSpecBase: FakeFluxAppSpecBase,
         UpdatePolicy: fakeUpdatePolicy,
       }),
+      // The real event classes, because which one a message is dispatched to is
+      // only worth asserting on a message that class would actually accept — a
+      // marker double accepts anything, including documents neither class could
+      // ever deserialize. Hashing and attestation stay stubbed: those reach the
+      // crypto and benchmark surfaces, which do leave the process.
       getSpecBackend: sinon.stub().resolves({
-        AppEventLegacy: FakeAppEventLegacy,
-        ConfirmedAppEvent: FakeConfirmedAppEvent,
+        AppEventLegacy: realBackend.AppEventLegacy,
+        ConfirmedAppEvent: realBackend.ConfirmedAppEvent,
         computeMessageHash: sinon.stub().returns('v1-hash-abc'),
         computeMessageHashV2: sinon.stub().returns('v2-hash-xyz'),
         buildArcaneAttestMessage: sinon.stub().callsFake((h) => `FLUX_ARCANE_ATTEST_v1${h}`),
@@ -131,24 +136,28 @@ describe('appEventVerifier', () => {
   });
 
   describe('deserializeMessage', () => {
+    // Asserted on the type that comes back rather than on a marker, and over
+    // messages each class will really accept: a v1 envelope carries a v8 spec,
+    // a v2 envelope a v9 one. A marker double answers for any document at all,
+    // so it can show a message routed somewhere that would have refused it.
     it('dispatches envelope version 1 to AppEventLegacy', async () => {
-      const msg = { version: 1, type: 'fluxappregister' };
+      const msg = await domain.tempMessage({ version: 1 });
       const result = await appEventVerifier.deserializeMessage(msg);
-      expect(result).to.deep.equal({ kind: 'v1', doc: msg });
+      expect(result).to.be.instanceOf(realBackend.AppEventLegacy);
     });
 
     it('dispatches envelope version 2 to ConfirmedAppEvent', async () => {
-      const msg = { version: 2, type: 'fluxappregister' };
+      const msg = await domain.tempMessage({ version: 2 });
       const result = await appEventVerifier.deserializeMessage(msg);
-      expect(result).to.deep.equal({ kind: 'v2', doc: msg });
+      expect(result).to.be.instanceOf(realBackend.ConfirmedAppEvent);
     });
 
     it('falls back to AppEventLegacy for any other/legacy envelope version', async () => {
       // Wire history has some zel*register messages with non-integer version
       // fields. AppEventLegacy is the compatibility path.
-      const msg = { version: 0, type: 'zelappregister' };
+      const msg = await domain.tempMessage({ version: 0, type: 'zelappregister' });
       const result = await appEventVerifier.deserializeMessage(msg);
-      expect(result.kind).to.equal('v1');
+      expect(result).to.be.instanceOf(realBackend.AppEventLegacy);
     });
   });
 
