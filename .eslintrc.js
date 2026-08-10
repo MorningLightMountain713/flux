@@ -40,7 +40,14 @@ module.exports = {
   parserOptions: {
     requireConfigFile: false,
     ecmaVersion: 2020,
-    sourceType: 'module',
+    // The package has no "type": "module", so everything here is CommonJS
+    // unless a subtree says otherwise — ZelBack and tests are require() end to
+    // end. Declaring 'module' told eslint these files were already strict, which
+    // silenced the `strict` rule across the whole repo and made the linter
+    // assert something Node does not do: a CommonJS module is sloppy, so
+    // `delete` on a frozen object silently does nothing rather than throwing.
+    // test-infra and the e2e support file are genuinely ESM and say so below.
+    sourceType: 'script',
   },
   settings: {
     'import/resolver': {
@@ -73,6 +80,14 @@ module.exports = {
       rules: {
         'import/extensions': ['error', 'ignorePackages', { js: 'always' }],
       },
+    },
+    {
+      // test-infra's runner declares "type": "module", so these really are ES
+      // modules — parsed as such, and strict by definition. It is the only ESM
+      // subtree eslint sees; tests/e2e/support/index.js is also ESM but sits
+      // under an ignore pattern, so it never reaches the parser.
+      files: ['test-infra/**/*.js'],
+      parserOptions: { sourceType: 'module' },
     },
     {
       // The daemon stub is CommonJS - it has no "type": "module" and runs in its own
