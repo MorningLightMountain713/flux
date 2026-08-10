@@ -43,13 +43,20 @@ describe('mesh DNS through the real resolver', function () {
     return res.json();
   }
 
+  // The app's component container on a node. v9 names containers by the
+  // component identifier — flux{component}_{identity} — so the app NAME never
+  // appears in docker ps; the identity comes from the mesh status this suite
+  // already reads.
   async function appContainerName(clientIndex) {
+    const status = await meshStatus(clientIndex);
+    const identity = status?.data?.identity;
+    expect(identity, `mesh identity on node ${clientIndex}`).to.be.a('string');
+    const containerName = `fluxweb_${identity}`;
     const { stdout } = await execInContainer(
       env.clients[clientIndex].container,
-      `docker ps --format '{{.Names}}' | grep ${name} | head -1`,
+      `docker ps --format '{{.Names}}' --filter name=${containerName}`,
     );
-    const containerName = stdout.trim();
-    expect(containerName, `app container on node ${clientIndex}`).to.not.equal('');
+    expect(stdout.trim(), `container ${containerName} on node ${clientIndex}`).to.include(containerName);
     return containerName;
   }
 
