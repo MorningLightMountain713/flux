@@ -154,16 +154,17 @@ describe('mesh isolation between two apps on one host', function () {
     this.timeout(120000);
     // flux-dnsd is one node-wide process, so its source-scoping is the DNS
     // tenant boundary. From an app A container, NONE of app B's name forms may
-    // answer — the component group, a specific member, or the whole-app name —
-    // and the same holds from B toward A. The per-member name needs B's node id,
-    // read from B's own status.
+    // answer — the component group, a specific member, the retired whole-app
+    // name, or an SRV name — and the same holds from B toward A. The
+    // per-member name needs B's node id, read from B's own status.
     const forms = async (foreign) => {
       const status = await meshStatus(0, foreign);
       const peerNodeId = status.data.lastPass.members[0].nodeId;
       return [
-        `web.${foreign}.mesh.flux`,
-        `web-${peerNodeId}.${foreign}.mesh.flux`,
-        `${foreign}.mesh.flux`,
+        [`web.${foreign}.mesh.flux`, ''],
+        [`web-${peerNodeId}.${foreign}.mesh.flux`, ''],
+        [`${foreign}.mesh.flux`, ''],
+        [`_echo._tcp.web.${foreign}.mesh.flux`, '-type=srv '],
       ];
     };
     // eslint-disable-next-line no-restricted-syntax
@@ -171,10 +172,11 @@ describe('mesh isolation between two apps on one host', function () {
       // eslint-disable-next-line no-await-in-loop
       const names = await forms(foreign);
       // eslint-disable-next-line no-restricted-syntax
-      for (const name of names) {
+      for (const [name, typeFlag] of names) {
         // eslint-disable-next-line no-await-in-loop
-        const out = await inApp(0, caller, `/bin/busybox nslookup ${name} ${RESOLVER_ADDR}`);
+        const out = await inApp(0, caller, `/bin/busybox nslookup ${typeFlag}${name} ${RESOLVER_ADDR}`);
         expect(out.stdout, `${caller} must not resolve ${name}`).to.not.match(/10\.127\./);
+        expect(out.stdout, `${caller} must get no SRV rows for ${name}`).to.not.match(/service = /i);
       }
     }
   });
