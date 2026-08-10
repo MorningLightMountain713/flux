@@ -4,6 +4,7 @@ const path = require('path');
 // Real network I/O from a unit test makes its outcome depend on what else is
 // listening on the machine. Loud failure instead of a lucky ECONNREFUSED.
 const noRealNetwork = require('./noRealNetwork');
+const { testUserconfig } = require('./fixtures/userconfig');
 
 // adjustExternalIP rewrites config/userconfig.js — the node's real identity and
 // IP. A unit test that reaches it without stubbing writeFile replaces the
@@ -31,13 +32,27 @@ fsPromises.writeFile = async function guardedWriteFile(file, ...rest) {
   return realWriteFile.call(this, file, ...rest);
 };
 
+// Every suite gets a globalState in its default state. It is a singleton shared
+// by the whole process, and a suite that sets a flag or fills a cache used to
+// leave it for whichever suite ran next - which is how a reconciler test came to
+// depend on a redeploy test's leftovers, and why one added test could turn four
+// unrelated ones red.
+// eslint-disable-next-line global-require
+const { resetGlobalState } = require('./unit/fixtures/globalState');
+
 // Root hooks: name the test that opened each connection, and fail the run at
 // the end if any did. Reported after the fact because these call paths all
 // swallow connection errors — see noRealNetwork.js.
+//
+// ONE hooks object: mocha reads `exports.mochaHooks` once, so a second assignment
+// does not add hooks, it replaces them. Development's globalState reset and v9's
+// network/userconfig guards arrived as two separate assignments and the second
+// silently won, which left the guards below dead.
 exports.mochaHooks = {
   beforeEach() {
     currentTest = this.currentTest ? this.currentTest.fullTitle() : '(unknown)';
     noRealNetwork.setCurrentTest(currentTest);
+    resetGlobalState();
   },
   afterAll() {
     if (userconfigWrites.length) {
@@ -60,30 +75,4 @@ for (const name of ['error.log', 'debug.log', 'warn.log']) {
   if (!fs.existsSync(p)) fs.writeFileSync(p, '');
 }
 
-globalThis.userconfig = {
-  initial: {
-    ipaddress: '127.0.0.1',
-    zelid: '1CbErtneaX2QVyUfwU7JGB7VzvPgrgc3uC',
-    kadena: 'kadena:3a2e6166907d0c2fb28a16cd6966a705de129e8358b9872d9cefe694e910d5b2?chainid=0',
-    testnet: false,
-    development: false,
-    apiport: 16127,
-    routerIP: '',
-    pgpPrivateKey: '',
-    pgpPublicKey: '',
-  },
-};
-
-// Every suite gets a globalState in its default state. It is a singleton shared
-// by the whole process, and a suite that sets a flag or fills a cache used to
-// leave it for whichever suite ran next - which is how a reconciler test came to
-// depend on a redeploy test's leftovers, and why one added test could turn four
-// unrelated ones red.
-// eslint-disable-next-line global-require
-const { resetGlobalState } = require('./unit/fixtures/globalState');
-
-exports.mochaHooks = {
-  beforeEach() {
-    resetGlobalState();
-  },
-};
+globalThis.userconfig = testUserconfig();
