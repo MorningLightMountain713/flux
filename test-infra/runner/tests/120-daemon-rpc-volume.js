@@ -52,13 +52,22 @@ describe('Daemon RPC: nothing is cached', function () {
   it('should ask the daemon again for a repeated read', async function () {
     this.timeout(60000);
 
-    // Two identical requests inside what used to be a 20 second cache window.
-    // noCache defeats the route's own apicache, so both requests reach the service and
-    // the only thing that could collapse them into one wire call is an RPC cache.
-    await client.get('/daemon/getblockcount', { noCache: true });
-    await client.get('/daemon/getblockcount', { noCache: true });
+    // Identical requests inside what used to be a 20 second cache window. noCache
+    // defeats the route's own apicache, so each request reaches the service and the
+    // only thing that could collapse them is an RPC cache.
+    const requests = 5;
+    for (let i = 0; i < requests; i += 1) {
+      // eslint-disable-next-line no-await-in-loop
+      await client.get('/daemon/getblockcount', { noCache: true });
+    }
 
-    expect(await callsTo('getblockcount', nodeIp)).to.equal(2);
+    // Not an exact count: FluxOS asks for the block count itself — waitForDaemonRpc
+    // polls it every five seconds until the daemon answers, and the explorer reads it
+    // — so the node's own traffic lands in the same journal and an equality assertion
+    // fails on timing rather than on caching. A cache is what CAPS the total: it would
+    // serve every one of these from a single wire call, so the node would have to
+    // supply the other four itself within the same second to reach this number.
+    expect(await callsTo('getblockcount', nodeIp)).to.be.at.least(requests);
   });
 
   it('should ask the daemon again for a call that acts as well as answers', async function () {
