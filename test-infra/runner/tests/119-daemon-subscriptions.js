@@ -4,7 +4,7 @@ import { expect } from 'chai';
 import { createTestEnv } from '../framework/test-env.js';
 import { ALL_ZMQ_TOPICS } from '../framework/fluxd-conf.js';
 import {
-  advanceBlock, advanceBlocks, removeFromNodeList, restoreToNodeList, resetNodeList,
+  advanceBlock, advanceBlocks, setNodeList, removeFromNodeList, restoreToNodeList, resetNodeList,
   getJournal, clearJournal, publishZmq, skipZmqSeq, silenceZmq, resumeZmq,
   restartZmqPublisher, getZmqState, reorgChain, getState,
 } from '../framework/daemon-control.js';
@@ -71,14 +71,14 @@ describe('Daemon subscriptions: the push path', function () {
 
     expect(anchored.data.reason).to.equal('startup');
     expect(anchored.data.nodes).to.be.greaterThan(0);
-    expect(anchored.data.height).to.be.at.most(chain.height);
+    expect(anchored.data.height).to.be.at.most(chain.currentHeight);
   });
 
   it('should track the chain by delta, never refetching the whole list', async function () {
     this.timeout(120000);
 
     await clearJournal();
-    const start = (await getState()).height;
+    const start = (await getState()).currentHeight;
 
     const applied = [];
     for (let i = 0; i < 5; i += 1) {
@@ -104,6 +104,17 @@ describe('Daemon subscriptions: the push path', function () {
 
   it('should resolve an added node without refetching the list', async function () {
     this.timeout(90000);
+
+    // A one-node fleet leaves the stub holding a single entry, so removing any other
+    // node is a no-op that publishes no delta and times out looking like a dead
+    // subscription. Seed a list the removal can actually take a node out of, keeping
+    // this node in it so its own confirmed state is unaffected.
+    await setNodeList([
+      { ip: subnet.nodeIp(1) },
+      { ip: subnet.nodeIp(2) },
+      { ip: subnet.nodeIp(3) },
+      { ip: subnet.nodeIp(4) },
+    ]);
 
     const removedIp = subnet.nodeIp(4);
     await removeFromNodeList(removedIp);
@@ -174,8 +185,8 @@ describe('Daemon subscriptions: recovering from loss', function () {
     await publishZmq({
       topic: 'fluxnodelistdelta',
       fields: {
-        fromHeight: chain.height,
-        toHeight: chain.height + 1,
+        fromHeight: chain.currentHeight,
+        toHeight: chain.currentHeight + 1,
         fromHash: FOREIGN_HASH,
         toHash: FOREIGN_HASH,
         added: [],
@@ -214,7 +225,7 @@ describe('Daemon subscriptions: recovering from loss', function () {
     const delta = (await applied).data;
 
     const chain = await getState();
-    expect(delta.toHeight).to.equal(chain.height);
+    expect(delta.toHeight).to.equal(chain.currentHeight);
   });
 });
 
@@ -247,7 +258,7 @@ describe('Daemon subscriptions: reorgs', function () {
 
     const event = (await seen).data;
     expect(event.forkHeight).to.equal(reorg.fork.height);
-    expect(event.oldTipHeight).to.equal(before.height);
+    expect(event.oldTipHeight).to.equal(before.currentHeight);
     expect(event.depth).to.be.greaterThan(0);
   });
 
@@ -256,7 +267,7 @@ describe('Daemon subscriptions: reorgs', function () {
 
     const before = await getState();
     const seen = waitForReorg(client);
-    await reorgChain({ depth: 1, newHeight: before.height });
+    await reorgChain({ depth: 1, newHeight: before.currentHeight });
 
     const event = (await seen).data;
     expect(event.newTipHeight).to.equal(event.oldTipHeight);
@@ -271,7 +282,7 @@ describe('Daemon subscriptions: reorgs', function () {
 
     const before = await getState();
     const seen = waitForReorg(client);
-    await reorgChain({ depth: 4, newHeight: before.height - 2 });
+    await reorgChain({ depth: 4, newHeight: before.currentHeight - 2 });
 
     const event = (await seen).data;
     expect(event.newTipHeight).to.be.lessThan(event.oldTipHeight);
