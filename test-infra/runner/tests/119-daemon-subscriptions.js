@@ -1,7 +1,7 @@
 // weight: heavy
 import { describe, it, before, after, afterEach } from 'mocha';
 import { expect } from 'chai';
-import { createTestEnv } from '../framework/test-env.js';
+import { createTestEnv, deterministicNodes } from '../framework/test-env.js';
 import { ALL_ZMQ_TOPICS } from '../framework/fluxd-conf.js';
 import {
   advanceBlock, advanceBlocks, setNodeList, removeFromNodeList, restoreToNodeList, resetNodeList,
@@ -107,14 +107,10 @@ describe('Daemon subscriptions: the push path', function () {
 
     // A one-node fleet leaves the stub holding a single entry, so removing any other
     // node is a no-op that publishes no delta and times out looking like a dead
-    // subscription. Seed a list the removal can actually take a node out of, keeping
-    // this node in it so its own confirmed state is unaffected.
-    await setNodeList([
-      { ip: subnet.nodeIp(1) },
-      { ip: subnet.nodeIp(2) },
-      { ip: subnet.nodeIp(3) },
-      { ip: subnet.nodeIp(4) },
-    ]);
+    // subscription. These carry outpoints because that, not the address, is what
+    // identifies a node on the wire: entries without one collapse together under the
+    // diff and a removal among them publishes nothing.
+    await setNodeList(deterministicNodes(4));
 
     // Seeding re-bases what the next delta is measured against without publishing
     // anything, so the node is still holding the list it anchored at startup. Bounce
