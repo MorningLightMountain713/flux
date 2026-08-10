@@ -1,3 +1,5 @@
+'use strict';
+
 const { expect } = require('chai');
 const ipLocationTable = require('../../ZelBack/src/services/appPlacement/ipLocationTable');
 const cidrUtils = require('../../ZelBack/src/services/utils/cidrUtils');

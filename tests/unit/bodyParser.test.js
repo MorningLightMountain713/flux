@@ -1,3 +1,5 @@
+'use strict';
+
 const { expect } = require('chai');
 const express = require('express');
 const request = require('supertest');

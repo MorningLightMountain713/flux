@@ -1,3 +1,5 @@
+'use strict';
+
 // So you can set host.docker.internal (mac) or container name
 const database = process.env.FLUX_DATABASE || '127.0.0.1';
 

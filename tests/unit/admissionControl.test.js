@@ -1,3 +1,5 @@
+'use strict';
+
 const { expect } = require('chai');
 const admissionControl = require('../../ZelBack/src/services/utils/admissionControl');
 

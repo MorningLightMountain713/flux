@@ -1,3 +1,5 @@
+'use strict';
+
 const { expect } = require('chai');
 const sinon = require('sinon');
 // eslint-disable-next-line import/no-unresolved

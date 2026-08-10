@@ -1,3 +1,5 @@
+'use strict';
+
 process.env.NODE_CONFIG_DIR = `${process.cwd()}/tests/unit/globalconfig`;
 
 const fs = require('fs');

@@ -1,3 +1,5 @@
+'use strict';
+
 /* eslint-disable func-names */
 const { expect } = require('chai');
 const sinon = require('sinon');

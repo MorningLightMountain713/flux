@@ -1,3 +1,5 @@
+'use strict';
+
 /**
  * The userconfig every test runs against.
  *

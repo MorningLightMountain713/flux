@@ -1,3 +1,5 @@
+'use strict';
+
 // mysql:latest
 const ociIndex = {
   manifests: [

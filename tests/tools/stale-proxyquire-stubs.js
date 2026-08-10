@@ -1,3 +1,5 @@
+'use strict';
+
 /*
  * Find proxyquire stub keys naming a module the target never requires.
  *

@@ -1,3 +1,5 @@
+'use strict';
+
 const { expect } = require('chai');
 const { ImageProgress } = require('../../ZelBack/src/services/appLifecycle/imageCacheProgress');
 

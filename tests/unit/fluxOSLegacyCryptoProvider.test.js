@@ -1,3 +1,5 @@
+'use strict';
+
 const crypto = require('crypto');
 const chai = require('chai');
 const chaiAsPromised = require('chai-as-promised');

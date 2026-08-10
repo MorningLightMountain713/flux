@@ -1,3 +1,5 @@
+'use strict';
+
 /* eslint-disable no-underscore-dangle */
 const sinon = require('sinon');
 const WebSocket = require('ws');

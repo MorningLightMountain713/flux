@@ -1,3 +1,5 @@
+'use strict';
+
 const { expect } = require('chai');
 const {
   uploadBlob, fetchBlobByLocator, blobExists, putManifest, reconcile, fetchManifest,

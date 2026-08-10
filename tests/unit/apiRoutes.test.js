@@ -1,3 +1,5 @@
+'use strict';
+
 // The one end-to-end smoke test of the real API: it boots FluxServer over both
 // http and https and drives actual routes, which no other test here does (the
 // rest build throwaway express apps). Moved from the retired tests/ZelBack tier
