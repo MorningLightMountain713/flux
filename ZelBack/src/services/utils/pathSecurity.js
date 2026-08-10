@@ -1,3 +1,5 @@
+'use strict';
+
 /**
  * Path Security Module
  *
@@ -292,7 +294,7 @@ async function verifyRealPathOfExistingPath(targetPath, basePath) {
   let currentPath = path.resolve(targetPath);
 
   // Walk up until we find an existing ancestor (or reach the base)
-  while (true) {
+  for (;;) {
     const relativePath = path.relative(normalizedBase, currentPath);
     if (relativePath.startsWith('..') || path.isAbsolute(relativePath)) {
       throw new Error('Invalid path: access outside allowed directory denied');

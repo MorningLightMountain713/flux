@@ -1,11 +1,10 @@
+'use strict';
+
 const config = require('config');
 const fluxCommunicationUtils = require('./fluxCommunicationUtils');
 const messageHelper = require('./messageHelper');
-const dbHelper = require('./dbHelper');
 const appsRepository = require('./appDatabase/appsRepository');
 const log = require('../lib/log');
-
-const globalAppsInformation = config.database.appsglobal.collections.appsInformation;
 
 /**
  * To get enterprise nodes list

@@ -1,3 +1,5 @@
+'use strict';
+
 const config = require('config');
 const dbHelper = require('../dbHelper');
 const log = require('../../lib/log');
@@ -44,7 +46,6 @@ async function rebuildPriceOracleState() {
   const db = dbHelper.databaseConnection();
   const database = db.db(config.database.chainparams.database);
 
-  const sort = { height: 1 };
   const projection = { projection: { _id: 0 } };
 
   // OracleKeyHistory must rebuild BEFORE RateMessageHistory
