@@ -165,16 +165,21 @@ describe('mesh overlay across a real systemd fleet', function () {
     this.timeout(180000);
 
     for (let i = 0; i < env.clients.length; i += 1) {
-      // eslint-disable-next-line no-await-in-loop
-      const iface = await inApp(i, '/bin/busybox ip -o -4 addr show flux-mesh0');
-      expect(iface.stdout, `flux-mesh0 on node ${i}`).to.match(/flux-mesh0/);
+      // The FLUX_MESH_* env is fixed at container creation, so it is stable.
       // eslint-disable-next-line no-await-in-loop
       const envOut = await inApp(i, '/bin/busybox sh -c "/bin/busybox env | /bin/busybox grep FLUX_MESH_"');
       expect(envOut.stdout).to.include(`FLUX_MESH_APP=${name}`);
       expect(envOut.stdout).to.match(/FLUX_MESH_SELF=web-[0-9a-f]+/);
       const selfIp = envOut.stdout.match(/FLUX_MESH_SELF_IP=([0-9.]+)/)?.[1];
       expect(selfIp, `presented address on node ${i}`).to.be.a('string');
-      expect(iface.stdout, 'the veth carries the presented address').to.include(selfIp);
+      // The flux-mesh0 veth is attached by the reconciler AFTER the container
+      // starts (mesh recreates it), so it is eventually-consistent — poll until
+      // the interface carries the presented address, as the dial test polls.
+      // eslint-disable-next-line no-await-in-loop
+      await waitFor(async () => {
+        const iface = await inApp(i, '/bin/busybox ip -o -4 addr show flux-mesh0');
+        return iface.stdout.includes(selfIp);
+      }, { timeout: 120000, interval: 5000, label: `flux-mesh0 carries ${selfIp} on node ${i}` });
     }
   });
 
