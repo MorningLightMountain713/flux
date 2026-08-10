@@ -99,9 +99,15 @@ function assignMemberAddresses(previous, apps) {
  * including every member's assigned address (the same assignment the caller
  * feeds into the tayga map).
  *
+ * Members carry no liveness: DNS answers the membership set (admitted to the
+ * overlay), and whether a member is up right now is the cluster software's
+ * own protocol to decide. `components` is the SRV feed — each component's
+ * mesh-advertised ports by name.
+ *
  * @param {string} ownNodeId this node's member id
  * @param {Array<{name: string,
- *   members: Array<{component: string, nodeId: string, healthy?: boolean, ordinal?: number}>,
+ *   components: Object<string, {ports: Object<string, {port: number, proto: string}>}>,
+ *   members: Array<{component: string, nodeId: string, ordinal?: number}>,
  *   containers: Array<{component: string, sourceIp: string}>}>} apps
  * @returns {Promise<{generation: number, snapshot: object, addresses: Map<string, string>}>}
  */
@@ -114,11 +120,11 @@ async function writeSnapshot(ownNodeId, apps) {
     nodeId: ownNodeId,
     apps: apps.map((app) => ({
       name: app.name,
+      components: app.components ?? {},
       members: app.members.map((member) => ({
         component: member.component,
         nodeId: member.nodeId,
         ip: addresses.get(`${app.name}|${member.nodeId}|${member.component}`),
-        ...(member.healthy === false ? { healthy: false } : {}),
         ...(Number.isInteger(member.ordinal) ? { ordinal: member.ordinal } : {}),
       })),
       containers: app.containers,

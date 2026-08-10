@@ -57,6 +57,11 @@ const MESH_DNS_SERVERS = Object.freeze([
   config.server.fluxDnsdServiceAddress ?? '169.254.43.53', '8.8.8.8', '1.1.1.1',
 ]);
 
+// The mesh DNS zone flux-dnsd serves. Member FQDNs are
+// <component>-<nodeid>.<app>.<zone>; SRV names prefix the mesh port name and
+// protocol onto the component group name.
+const MESH_DNS_ZONE = 'mesh.flux';
+
 const NEBULA_CONFIG_FILE = 'config.yml';
 const TAYGA_CONFIG_FILE = 'tayga.conf';
 
@@ -278,7 +283,10 @@ async function gatherContainers(app) {
 /**
  * The snapshot's per-app entry: every member of the overlay (this node's
  * components and every accepted peer's), deterministically ordered, plus the
- * scoping table of local containers.
+ * scoping table of local containers and the SRV feed — each component's
+ * mesh-advertised ports from the spec, name → {port, proto}. The port name is
+ * the SRV service label: flux-dnsd answers
+ * `_<name>._<proto>.<component>.<app>.mesh.flux` from this map.
  */
 function buildSnapshotApp(app, ctx) {
   const members = [];
@@ -296,7 +304,21 @@ function buildSnapshotApp(app, ctx) {
     .filter((container) => container.sourceIp)
     .map((container) => ({ component: container.component, sourceIp: container.sourceIp }))
     .sort((a, b) => (a.component < b.component ? -1 : 1));
-  return { name: app.name, members, containers };
+  const components = {};
+  [...componentNames].sort().forEach((component) => {
+    const meshPorts = app.view.components?.[component]?.meshPorts ?? {};
+    const portNames = Object.keys(meshPorts).sort();
+    if (portNames.length === 0) return;
+    components[component] = {
+      ports: Object.fromEntries(portNames.map((portName) => [portName, {
+        port: meshPorts[portName].containerPort,
+        proto: meshPorts[portName].protocol ?? 'tcp',
+      }])),
+    };
+  });
+  return {
+    name: app.name, components, members, containers,
+  };
 }
 
 /**
@@ -317,7 +339,7 @@ async function reconcileSnapshotAndTayga(apps, ctx) {
   }));
   const unchanged = previous
     && JSON.stringify(previous.apps) === JSON.stringify(withIps.map((a) => ({
-      name: a.name, members: a.members, containers: a.containers,
+      name: a.name, components: a.components, members: a.members, containers: a.containers,
     })));
   if (!unchanged) {
     await meshSnapshot.writeSnapshot(ctx.ownNodeId, snapApps);
@@ -662,11 +684,16 @@ async function prepareComponentMesh(appName, componentName) {
   if (!member?.ip) {
     throw new Error(`No presented address is assigned yet for ${componentName} of ${appName}`);
   }
+  // The FQDN is the member's one stable mesh-wide identifier — the presented
+  // IPv4 is node-local, so cluster software must advertise this name, never
+  // the address (etcd --initial-advertise-peer-urls, Mongo replica hosts).
+  const selfName = meshDerivation.memberName(componentName, ownOutpoint);
   return {
     presentedIp: member.ip,
     env: [
       `FLUX_MESH_APP=${appName}`,
-      `FLUX_MESH_SELF=${meshDerivation.memberName(componentName, ownOutpoint)}`,
+      `FLUX_MESH_SELF=${selfName}`,
+      `FLUX_MESH_SELF_FQDN=${selfName}.${appName}.${MESH_DNS_ZONE}`,
       `FLUX_MESH_SELF_IP=${member.ip}`,
     ],
     dns: [...MESH_DNS_SERVERS],
@@ -749,6 +776,7 @@ function start() {
 
 module.exports = {
   MESH_DNS_SERVERS,
+  MESH_DNS_ZONE,
   hostingOutpointsFor,
   anchorHeightsFor,
   gatherMeshApps,
