@@ -169,9 +169,20 @@ describe('Daemon subscriptions: recovering from loss', function () {
   it('should resync when messages were missed rather than apply the next one', async function () {
     this.timeout(90000);
 
+    const before = await getZmqState();
     const gap = waitForResync(client, (d) => d.reason === 'message_gap');
     await skipZmqSeq('fluxnodelistdelta', 3);
+    const skipped = await getZmqState();
     await advanceBlock();
+    const after = await getZmqState();
+
+    // Which side to look at if this fails. The skip has to move the counter, and the
+    // block after it has to consume one more: a stub that published nothing leaves
+    // this unchanged, and a gap the node never acted on leaves it advanced.
+    expect(skipped.nextSeq.fluxnodelistdelta, 'the skip did not move the counter')
+      .to.be.greaterThan(before.nextSeq.fluxnodelistdelta ?? 0);
+    expect(after.nextSeq.fluxnodelistdelta, 'the block published no delta')
+      .to.be.greaterThan(skipped.nextSeq.fluxnodelistdelta);
 
     const resync = await gap;
     expect(resync.data.topic).to.equal('fluxnodelistdelta');
