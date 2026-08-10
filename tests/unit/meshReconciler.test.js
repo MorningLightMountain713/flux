@@ -70,6 +70,7 @@ describe('meshReconciler', () => {
 
     stubs = {
       installedApps: [makeApp()],
+      listInstalledApps: sinon.stub().callsFake(async () => stubs.installedApps),
       rows: [{
         ip: '203.0.113.7:16240',
         outpoint: PEER_OUTPOINT,
@@ -110,7 +111,7 @@ describe('meshReconciler', () => {
         debug: sinon.stub(),
       },
       '../appDatabase/appsRepository': {
-        listInstalledApps: sinon.stub().callsFake(async () => stubs.installedApps),
+        listInstalledApps: (...args) => stubs.listInstalledApps(...args),
         appLocationFromEvents: sinon.stub().callsFake(async () => stubs.rows),
         getInstalledApp: sinon.stub().callsFake(async (name) => stubs.installedApps
           .find((app) => app.name === name) ?? null),
@@ -432,6 +433,29 @@ describe('meshReconciler', () => {
       expect(stubs.unitCalls).to.deep.include(['reloadNebula', IDENTITY]);
       expect(logLines.warn.some((m) => m.includes('outside the trust bundle'))).to.equal(true);
     });
+
+    it('calls during a running pass share one follow-up that sees their changes', async () => {
+      const first = meshReconciler.reconcileAllMeshApps();
+      const second = meshReconciler.reconcileAllMeshApps();
+      const third = meshReconciler.reconcileAllMeshApps();
+      stubs.installedApps = [];
+      await Promise.all([first, second, third]);
+      // The first pass converged the app it gathered before the change...
+      const configText = await realFsp.readFile(path.join(tmpRoot, IDENTITY, 'config.yml'), 'utf8');
+      expect(configText).to.include('ca_sha: "fp-peer"');
+      // ...and the one shared follow-up gathered again and saw it gone.
+      expect(stubs.listInstalledApps.callCount).to.equal(2);
+      expect(meshReconciler.lastPassStatus('myblog')).to.equal(null);
+    });
+
+    it('a follow-up still runs after a pass that failed', async () => {
+      stubs.listInstalledApps.onFirstCall().rejects(new Error('db exploded'));
+      const first = meshReconciler.reconcileAllMeshApps().then(() => null, (e) => e.message);
+      const second = meshReconciler.reconcileAllMeshApps();
+      expect(await first).to.equal('db exploded');
+      await second;
+      expect(stubs.writeSnapshotCalls).to.have.length(1);
+    });
   });
 
   describe('lastPassStatus', () => {
@@ -518,11 +542,10 @@ describe('meshReconciler', () => {
       expect(stubs.unitCalls).to.deep.include(['stopAll', IDENTITY]);
       const names = stubs.namespaceCalls.map(([name]) => name);
       expect(names).to.include.members(['destroyNamespace', 'releaseTransportPort', 'releaseTransit', 'removeAppMaterial']);
-      // The detached post-removal pass must finish before the temp dir goes.
-      for (let i = 0; i < 25; i += 1) {
-        // eslint-disable-next-line no-await-in-loop
-        await new Promise((resolve) => { setImmediate(resolve); });
-      }
+      // Join the detached post-removal pass before the temp dir goes: a
+      // coalesced call resolves only after a pass that began at or after it
+      // has completed, so no write is still in flight past this await.
+      await meshReconciler.reconcileAllMeshApps();
     });
   });
 });
