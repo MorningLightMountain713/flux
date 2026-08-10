@@ -21,11 +21,15 @@ const runCommandStub = sinon.stub();
 
 // Module under test with proxyquire
 const getInstalledAppByIdentityStub = sinon.stub();
+const getInstalledAppByComponentIdentifierStub = sinon.stub();
 const volumeValidationService = proxyquire('../../ZelBack/src/services/volumeValidationService', {
   util: utilFake,
   './serviceHelper': { runCommand: runCommandStub },
   './dockerService': { getBaseAppName: (id) => (id.startsWith('flux') ? id.slice(4) : id) },
-  './appDatabase/appsRepository': { getInstalledAppByIdentity: getInstalledAppByIdentityStub },
+  './appDatabase/appsRepository': {
+    getInstalledAppByIdentity: getInstalledAppByIdentityStub,
+    getInstalledAppByComponentIdentifier: getInstalledAppByComponentIdentifierStub,
+  },
   './utils/specLibs': {
     getSpecBackend: async () => ({
       DeploymentSpec: {
@@ -103,9 +107,25 @@ describe('volumeValidationService tests', () => {
 
 
   describe('resolveAppForMountEntry tests', () => {
-    afterEach(() => getInstalledAppByIdentityStub.reset());
+    beforeEach(() => getInstalledAppByComponentIdentifierStub.resolves(null));
 
-    it('resolves the app from its row, using the crontab comment as the exact app id', async () => {
+    afterEach(() => {
+      getInstalledAppByIdentityStub.reset();
+      getInstalledAppByComponentIdentifierStub.reset();
+    });
+
+    it('resolves the app from the components its row recorded, without taking the id apart', async () => {
+      getInstalledAppByComponentIdentifierStub.withArgs('mongodb_MyApp').resolves({ name: 'MyApp' });
+
+      const result = await volumeValidationService.resolveAppForMountEntry('fluxmongodb_MyApp');
+
+      expect(result).to.equal('MyApp');
+      expect(getInstalledAppByIdentityStub.called, 'the parse must not run when the row states it').to.be.false;
+    });
+
+    // Rows written before componentIdentifiers existed state nothing to the index,
+    // so the parse stays until coverage reports covered fleet-wide.
+    it('falls back to the parse for a row that records no components', async () => {
       getInstalledAppByIdentityStub.resolves({ name: 'MyApp' });
 
       const result = await volumeValidationService.resolveAppForMountEntry('fluxmongodb_MyApp');
@@ -133,6 +153,7 @@ describe('volumeValidationService tests', () => {
     it('answers null for a missing app id', async () => {
       expect(await volumeValidationService.resolveAppForMountEntry('')).to.equal(null);
       expect(getInstalledAppByIdentityStub.called).to.be.false;
+      expect(getInstalledAppByComponentIdentifierStub.called).to.be.false;
     });
   });
 
@@ -146,6 +167,8 @@ describe('volumeValidationService tests', () => {
         remove: sinon.stub(),
       };
       getInstalledAppByIdentityStub.reset();
+      getInstalledAppByComponentIdentifierStub.reset();
+      getInstalledAppByComponentIdentifierStub.resolves(null);
       getInstalledAppByIdentityStub.callsFake(async (identity) => ({ name: identity }));
     });
 
