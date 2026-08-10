@@ -169,6 +169,15 @@ describe('Daemon subscriptions: recovering from loss', function () {
   it('should resync when messages were missed rather than apply the next one', async function () {
     this.timeout(90000);
 
+    // A gap is the distance from the last sequence this node held, so it needs to
+    // hold one first. Straight after anchoring there is no baseline and the first
+    // delta to arrive cannot be short of anything, however far the counter was
+    // moved — the snapshot already covers everything before it.
+    const baseline = (await getState()).currentHeight + 1;
+    const settled = waitForDeltaApplied(client, (d) => d.toHeight === baseline);
+    await advanceBlock();
+    await settled;
+
     const before = await getZmqState();
     const gap = waitForResync(client, (d) => d.reason === 'message_gap');
     await skipZmqSeq('fluxnodelistdelta', 3);
