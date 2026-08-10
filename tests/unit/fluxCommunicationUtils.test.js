@@ -1,3 +1,5 @@
+'use strict';
+
 const chai = require('chai');
 const cacheManager = require('../../ZelBack/src/services/utils/cacheManager').default;
 const networkStateService = require('../../ZelBack/src/services/networkStateService');

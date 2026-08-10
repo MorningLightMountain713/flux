@@ -1,3 +1,5 @@
+'use strict';
+
 const { expect } = require('chai');
 
 const decoders = require('../../ZelBack/src/services/utils/fluxdZmqDecoders');

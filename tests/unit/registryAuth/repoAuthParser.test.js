@@ -1,3 +1,5 @@
+'use strict';
+
 const { expect } = require('chai');
 const sinon = require('sinon');
 const { RepoAuthParser } = require('../../../ZelBack/src/services/registryAuth/utils/repoAuthParser');

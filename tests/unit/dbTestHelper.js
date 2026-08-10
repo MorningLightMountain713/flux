@@ -1,3 +1,5 @@
+'use strict';
+
 const net = require('net');
 const config = require('config');
 const dbHelper = require('../../ZelBack/src/services/dbHelper');

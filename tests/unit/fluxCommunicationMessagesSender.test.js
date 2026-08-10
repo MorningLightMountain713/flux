@@ -1,3 +1,5 @@
+'use strict';
+
 /* eslint-disable no-underscore-dangle */
 const chai = require('chai');
 const chaiAsPromised = require('chai-as-promised');

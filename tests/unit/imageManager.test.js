@@ -1,3 +1,5 @@
+'use strict';
+
 const { expect } = require('chai');
 const sinon = require('sinon');
 const serviceHelper = require('../../ZelBack/src/services/serviceHelper');

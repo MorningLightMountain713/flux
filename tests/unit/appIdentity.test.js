@@ -1,3 +1,5 @@
+'use strict';
+
 const { expect } = require('chai');
 
 const appIdentity = require('../../ZelBack/src/services/utils/appIdentity');

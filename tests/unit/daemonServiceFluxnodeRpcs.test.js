@@ -1,3 +1,5 @@
+'use strict';
+
 const sinon = require('sinon');
 const { expect } = require('chai');
 const daemonServiceUtils = require('../../ZelBack/src/services/daemonService/daemonServiceUtils');

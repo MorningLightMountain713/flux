@@ -1,3 +1,5 @@
+'use strict';
+
 const standard = `rpcuser=testuser
 rpcpassword=testpassword12345
 rpcallowip=127.0.0.1

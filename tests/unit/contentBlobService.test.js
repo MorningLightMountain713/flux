@@ -1,3 +1,5 @@
+'use strict';
+
 const { expect } = require('chai');
 const crypto = require('node:crypto');
 const contentBlobService = require('../../ZelBack/src/services/appLifecycle/contentBlobService');

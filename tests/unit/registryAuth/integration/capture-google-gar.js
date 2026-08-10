@@ -1,5 +1,7 @@
 #!/usr/bin/env node
 
+'use strict';
+
 /**
  * Google Artifact Registry API Response Capture Script
  *

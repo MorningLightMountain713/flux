@@ -1,3 +1,5 @@
+'use strict';
+
 const { expect } = require('chai');
 const setReconciler = require('../../ZelBack/src/services/appMessaging/setReconciler');
 

@@ -1,3 +1,5 @@
+'use strict';
+
 const { expect } = require('chai');
 const crypto = require('node:crypto');
 const { aeadEncrypt, aeadDecrypt, NONCE_BYTES, TAG_BYTES, KEY_BYTES } = require('../../ZelBack/src/services/utils/aeadCrypto');

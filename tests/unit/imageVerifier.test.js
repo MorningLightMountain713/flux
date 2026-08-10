@@ -1,3 +1,5 @@
+'use strict';
+
 const http = require('node:http');
 const { expect } = require('chai');
 const sinon = require('sinon');

@@ -1,3 +1,5 @@
+'use strict';
+
 const sinon = require('sinon');
 const explorerService = require('../../ZelBack/src/services/explorerService');
 const serviceHelper = require('../../ZelBack/src/services/serviceHelper');

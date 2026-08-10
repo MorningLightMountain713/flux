@@ -1,3 +1,5 @@
+'use strict';
+
 const { expect } = require('chai');
 
 const meshRuntimeConfig = require('../../ZelBack/src/services/appMesh/meshRuntimeConfig');

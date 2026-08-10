@@ -1,3 +1,5 @@
+'use strict';
+
 const { expect } = require('chai');
 const fs = require('node:fs');
 const path = require('node:path');

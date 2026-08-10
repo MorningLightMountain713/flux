@@ -1,3 +1,5 @@
+'use strict';
+
 const { expect } = require('chai');
 
 const meshDerivation = require('../../ZelBack/src/services/appMesh/meshDerivation');

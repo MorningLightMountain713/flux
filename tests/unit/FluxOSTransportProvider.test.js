@@ -1,3 +1,5 @@
+'use strict';
+
 const { expect } = require('chai');
 const transportProvider = require('../../ZelBack/src/services/providers/FluxOSTransportProvider');
 
