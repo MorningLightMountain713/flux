@@ -176,6 +176,34 @@ describe('daemonSubscriptionService tests', () => {
       sinon.assert.notCalled(onResync);
     });
 
+    it('should not ask anything to rebuild when the socket merely drops', () => {
+      // A drop is not a loss of state. libzmq reconnects on its own and the
+      // reconnect asks for the rebuild; treating the drop itself as a reason would
+      // discard a list that is still correct and pay for a snapshot to get it back.
+      const onResync = sinon.stub();
+      service.subscribe('fluxnodelistdelta', { onMessage: sinon.stub(), onResync });
+      service.start();
+
+      if (capturedSubscriberOptions.onDisconnect) capturedSubscriberOptions.onDisconnect();
+
+      sinon.assert.notCalled(onResync);
+      expect(publishedAs('daemon:resync')).to.have.lengthOf(0);
+    });
+
+    it('should keep what it holds across a drop and rebuild only on the reconnect', () => {
+      const onResync = sinon.stub();
+      service.subscribe('fluxnodelistdelta', { onMessage: sinon.stub(), onResync });
+      service.start();
+
+      if (capturedSubscriberOptions.onDisconnect) capturedSubscriberOptions.onDisconnect();
+      sinon.assert.notCalled(onResync);
+
+      capturedSubscriberOptions.onConnect({ reconnected: true });
+
+      sinon.assert.calledOnce(onResync);
+      expect(onResync.firstCall.args[0]).to.equal(service.RESYNC_REASONS.reconnected);
+    });
+
     it('should tolerate a handler that registered no resync callback', () => {
       service.subscribe('fluxnodelistdelta', { onMessage: sinon.stub() });
       service.start();
