@@ -238,20 +238,19 @@ async function signHostCertificate({ instance, appUuid, outpoint }, { authority 
   const certPath = path.join(dir, FILES.nextCert);
   const tmpKey = `${keyPath}.tmp`;
   const tmpCert = `${certPath}.tmp`;
-  const prefixLength = meshDerivation.appPrefix(appUuid).split('/')[1];
   await runNebulaCert([
     'sign',
     '-ca-key', caKey,
     '-ca-crt', caCert,
     '-name', meshDerivation.nodeId(outpoint),
-    // networks carries this node's own address at the app-overlay prefix length.
-    // Nebula reads the sender's own networks for BOTH tunnel eligibility (two
-    // members tunnel only when their addresses share an overlay prefix) and send
-    // routing. A member's specific container addresses fall inside this shared
-    // prefix, so nebula dials them directly and static_host_map carries their
-    // endpoints. unsafeNetworks is this node's block — the containers behind it,
-    // which peers route to through it.
-    '-networks', `${meshDerivation.nodeAddress(appUuid, outpoint)}/${prefixLength}`,
+    // networks is this node's own tun address as a single /128 — its nebula
+    // identity, nothing more. Everything else in the overlay is elsewhere: a
+    // peer's addresses fall outside this, so nebula routes them to the owning
+    // peer through tun.unsafe_routes rather than dialing them as local hosts; and
+    // this node's own container block falls outside it too, so those addresses
+    // route to the translator, never onto the overlay. unsafeNetworks is the
+    // node's block — the containers behind it, which peers route to through it.
+    '-networks', `${meshDerivation.nodeAddress(appUuid, outpoint)}/128`,
     '-unsafe-networks', meshDerivation.nodeBlock(appUuid, outpoint),
     '-groups', MESH_GROUP,
     '-duration', HOST_CERT_VALIDITY,
