@@ -316,6 +316,30 @@ describe('daemonSubscriptionService tests', () => {
     });
   });
 
+  describe('liveness announcement tests', () => {
+    it('should announce the daemon going unreachable and coming back', () => {
+      service.start();
+
+      capturedLivenessOptions.onChange(false);
+      expect(publishedAs('daemon:unreachable')).to.have.lengthOf(1);
+      expect(publishedAs('daemon:recovered')).to.have.lengthOf(0);
+
+      capturedLivenessOptions.onChange(true);
+      expect(publishedAs('daemon:recovered')).to.have.lengthOf(1);
+    });
+
+    it('should announce a dropped socket without calling it unreachable', () => {
+      service.start();
+
+      capturedSubscriberOptions.onDisconnect();
+
+      expect(publishedAs('daemon:socketDropped')).to.have.lengthOf(1);
+      // A drop is a transport event; whether the daemon is reachable is the
+      // liveness verdict's to make, and it has not been asked.
+      expect(publishedAs('daemon:unreachable')).to.have.lengthOf(0);
+    });
+  });
+
   describe('lifecycle tests', () => {
     it('should start the subscriber and liveness together', () => {
       service.start();
