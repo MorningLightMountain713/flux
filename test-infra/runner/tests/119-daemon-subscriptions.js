@@ -116,6 +116,13 @@ describe('Daemon subscriptions: the push path', function () {
       { ip: subnet.nodeIp(4) },
     ]);
 
+    // Seeding re-bases what the next delta is measured against without publishing
+    // anything, so the node is still holding the list it anchored at startup. Bounce
+    // the publisher to make it take a fresh snapshot, otherwise the removal below
+    // announces a node this one never had and applies as no change at all.
+    await restartZmqPublisher();
+    await waitForListAnchored(client, (d) => d.reason !== 'startup');
+
     const removedIp = subnet.nodeIp(4);
     await removeFromNodeList(removedIp);
     await waitForDeltaApplied(client, (d) => d.removed > 0);
@@ -220,12 +227,14 @@ describe('Daemon subscriptions: recovering from loss', function () {
     await advanceBlocks(2);
     await resumeZmq();
 
-    const applied = waitForDeltaApplied(client);
+    // Pinned to the height this test is about to produce. An unpinned wait matches
+    // the first delta in the stream's buffer, which is the one applied at startup.
+    const target = (await getState()).currentHeight + 1;
+    const applied = waitForDeltaApplied(client, (d) => d.toHeight === target);
     await advanceBlock();
     const delta = (await applied).data;
 
-    const chain = await getState();
-    expect(delta.toHeight).to.equal(chain.currentHeight);
+    expect(delta.toHeight).to.equal(target);
   });
 });
 
@@ -266,11 +275,14 @@ describe('Daemon subscriptions: reorgs', function () {
     this.timeout(90000);
 
     const before = await getState();
-    const seen = waitForReorg(client);
-    await reorgChain({ depth: 1, newHeight: before.currentHeight });
+    // The reorg is driven first and its own fork height identifies the event. The
+    // previous test's reorg also left the tip where it found it, so an unpinned wait
+    // is satisfied by that one and this test proves nothing.
+    const reorg = await reorgChain({ depth: 1, newHeight: before.currentHeight });
+    const event = (await waitForReorg(client, (d) => d.forkHeight === reorg.fork.height)).data;
 
-    const event = (await seen).data;
     expect(event.newTipHeight).to.equal(event.oldTipHeight);
+    expect(event.newTipHeight).to.equal(before.currentHeight);
 
     // Same height, different block — identity is the hash, never the number.
     const after = await getState();
@@ -281,10 +293,9 @@ describe('Daemon subscriptions: reorgs', function () {
     this.timeout(90000);
 
     const before = await getState();
-    const seen = waitForReorg(client);
-    await reorgChain({ depth: 4, newHeight: before.currentHeight - 2 });
+    const reorg = await reorgChain({ depth: 4, newHeight: before.currentHeight - 2 });
+    const event = (await waitForReorg(client, (d) => d.forkHeight === reorg.fork.height)).data;
 
-    const event = (await seen).data;
     expect(event.newTipHeight).to.be.lessThan(event.oldTipHeight);
 
     // The list has to keep tracking a tip that moved backwards.
