@@ -2,6 +2,8 @@
 import { describe, it, before, after, beforeEach } from 'mocha';
 import { expect } from 'chai';
 import { createTestEnv } from '../framework/test-env.js';
+import { nodeKey } from '../framework/keys.js';
+import { authenticate } from '../auth.js';
 import { ALL_ZMQ_TOPICS } from '../framework/fluxd-conf.js';
 import {
   advanceBlocks, getJournal, clearJournal, resetNodeList,
@@ -24,6 +26,7 @@ describe('Daemon RPC: nothing is cached', function () {
   let env;
   let client;
   let nodeIp;
+  let adminAuth;
 
   before(async function () {
     this.timeout(180000);
@@ -31,6 +34,9 @@ describe('Daemon RPC: nothing is cached', function () {
     [client] = env.clients;
     nodeIp = subnet.nodeIp(1);
     await waitForDaemonReady(client);
+    // getnewaddress is admin-only and returns before it reaches the daemon without
+    // this, which counts as zero wire calls and reads exactly like a cache hit.
+    adminAuth = await authenticate(client.url, nodeKey(1));
   });
 
   after(async function () {
@@ -60,8 +66,15 @@ describe('Daemon RPC: nothing is cached', function () {
 
     // getnewaddress takes no parameters, so a cache keyed on the method name alone
     // returned the SAME address twice — fund both and you have funded one.
-    await client.get('/daemon/getnewaddress', { noCache: true }).catch(() => null);
-    await client.get('/daemon/getnewaddress', { noCache: true }).catch(() => null);
+    const first = await client.getAuthed('/daemon/getnewaddress', adminAuth.zelidauth, { noCache: true });
+    const second = await client.getAuthed('/daemon/getnewaddress', adminAuth.zelidauth, { noCache: true });
+
+    // Assert the addresses before the count. An unauthorized reply never reaches the
+    // daemon either, so a count of zero alone cannot tell a rejected call from a
+    // cached one.
+    expect(first.status, JSON.stringify(first.data)).to.equal('success');
+    expect(second.status, JSON.stringify(second.data)).to.equal('success');
+    expect(second.data, 'the wallet handed out the same address twice').to.not.equal(first.data);
 
     expect(await callsTo('getnewaddress', nodeIp)).to.equal(2);
   });
