@@ -29,7 +29,7 @@ const { FluxCacheManager } = require('../utils/cacheManager');
 const deploymentProvider = require('../appRuntime/deploymentProvider');
 const appInstaller = require('./appInstaller');
 const specReconciler = require('./specReconciler');
-const appNetworkLinker = require('./appNetworkLinker');
+const relationshipResolver = require('./relationshipResolver');
 const { NodeCondition } = require('./nodeConditions');
 const pendingTeardownStore = require('./pendingTeardownStore');
 const { appSyncEvents, EVENTS: SYNC_EVENTS } = require('../utils/appSyncEvents');
@@ -464,13 +464,14 @@ async function trySpawningGlobalApplication() {
 
       // Suppress pure-follower apps (activation.standalone false — shared
       // collectors) that no app assigned to this node requires: they only
-      // install while a workload here shareWith-links to them, and must not be
-      // respawned after a teardown. Best-effort: on a registry-read failure,
-      // fall back to not suppressing rather than aborting. Gated off in
-      // production: the flux console owns the collector lifecycle.
+      // install while a workload here declares a dependency edge to them, and
+      // must not be respawned after a teardown. Best-effort: on a
+      // registry-read failure, fall back to not suppressing rather than
+      // aborting. Gated off in production: the flux console owns the
+      // collector lifecycle.
       if (config.fluxapps.manageCollectorLifecycle) {
         try {
-          const requiredDependencyNames = await appNetworkLinker.getRequiredDependencyNamesForNode({
+          const requiredDependencyNames = await relationshipResolver.getRequiredDependencyNamesForNode({
             ip: localSocketAddr, outpoint: nodeOutpoint, operator: nodeOperator,
           });
           // Resolved in one pass up front: reading activation means resolving
@@ -479,7 +480,7 @@ async function trySpawningGlobalApplication() {
           // filter below. Everything else is read sealed, which still answers
           // fully for a cleartext app; an encrypted app in the general pool
           // keeps its activation sealed and is treated as standalone.
-          const followerNames = await appNetworkLinker.pureFollowerNames(
+          const followerNames = await relationshipResolver.pureFollowerNames(
             globalAppNamesLocation.map((c) => c.instantiated),
             (app) => pinnedHere.has(app.name),
           );
@@ -537,8 +538,8 @@ async function trySpawningGlobalApplication() {
         }
       }
 
-      // Readiness-ordered selection: drop candidates whose shareWith dependencies
-      // are not ready, so a linked group installs root-first (a dependency before
+      // Readiness-ordered selection: drop candidates whose dependencies are
+      // not ready, so a linked group installs root-first (a dependency before
       // its consumers) instead of a consumer being selected first and deferring
       // its install. A not-ready app is simply skipped this cycle and reconsidered
       // once its deps come up — no deferral-queue entry and no error cache, so it
@@ -564,8 +565,8 @@ async function trySpawningGlobalApplication() {
             // placement metadata is for. An encrypted app there reports no links
             // and is treated as ready; the install-time gate does the real check.
             await (targetsThisNode(c)
-              ? appNetworkLinker.checkAppNetworkRequirements(c.instantiated)
-              : appNetworkLinker.linksReadyForSelection(c.instantiated));
+              ? relationshipResolver.checkAppDependencyRequirements(c.instantiated)
+              : relationshipResolver.dependenciesReadyForSelection(c.instantiated));
             return true;
           } catch (error) {
             // Dependency not ready yet -> skip this cycle. Any other error (e.g.
@@ -675,16 +676,17 @@ async function trySpawningGlobalApplication() {
       return shortDelayTime;
     }
 
-    // A pure-follower app (shared collector) installs only while an app assigned
-    // to this node shareWith-links to it. Re-check here so the deferred selection
-    // path is covered too, and clear the spawn throttle set above so it is
-    // reconsidered promptly once a workload that needs it arrives. Best-effort: a
-    // registry-read failure falls back to allowing the spawn.
+    // A pure-follower app (shared collector) installs only while an app
+    // assigned to this node declares a dependency edge to it. Re-check here so
+    // the deferred selection path is covered too, and clear the spawn throttle
+    // set above so it is reconsidered promptly once a workload that needs it
+    // arrives. Best-effort: a registry-read failure falls back to allowing the
+    // spawn.
     if (config.fluxapps.manageCollectorLifecycle
-      && await appNetworkLinker.isPureFollowerApp(instantiated)) {
+      && await relationshipResolver.isPureFollowerApp(instantiated)) {
       let requiredDeps = null;
       try {
-        requiredDeps = await appNetworkLinker.getRequiredDependencyNamesForNode({
+        requiredDeps = await relationshipResolver.getRequiredDependencyNamesForNode({
           ip: localSocketAddr, outpoint: nodeOutpoint, operator: nodeOperator,
         });
       } catch (error) {

@@ -149,9 +149,11 @@ describe('appInstaller tests', () => {
       // fallocate, mke2fs and mount as root.
       './componentProvisioner': { installComponent: sinon.stub().resolves() },
       './appNetworkLinker': {
-        checkAppNetworkRequirements: sinon.stub().resolves(),
         connectComponentToLinkedApps: sinon.stub().resolves(),
         reconnectLinkedApps: sinon.stub().resolves(),
+      },
+      './relationshipResolver': {
+        checkAppDependencyRequirements: sinon.stub().resolves(),
       },
       './contentBlobService': { provisionContentBlobs: sinon.stub().resolves() },
       './contentSlotService': { provisionContentSlots: sinon.stub().resolves() },
@@ -346,7 +348,7 @@ describe('appInstaller tests', () => {
         teardownOwed = false,
         installComponentError = null,
         components = [],
-        checkAppNetworkRequirements = sinon.stub().resolves(),
+        checkAppDependencyRequirements = sinon.stub().resolves(),
         connectComponentToLinkedApps = sinon.stub().resolves(),
       } = opts;
 
@@ -399,8 +401,10 @@ describe('appInstaller tests', () => {
         // the rebase); without this stub the install throws before reaching the broadcast.
         './appNetworkLinker': {
           reconnectLinkedApps: sinon.stub().resolves(),
-          checkAppNetworkRequirements,
           connectComponentToLinkedApps,
+        },
+        './relationshipResolver': {
+          checkAppDependencyRequirements,
         },
         '../fluxCommunicationMessagesSender': { broadcastMessageToOutgoing: sinon.stub().resolves(), broadcastMessageToIncoming: sinon.stub().resolves(), broadcastMessageToAll },
         '../appMessaging/messageStore': { storeAppInstallingErrorMessage, storeAppRunningMessage: sinon.stub().resolves() },
@@ -653,12 +657,12 @@ describe('appInstaller tests', () => {
         });
       });
 
-      it('defers (not fails) when a shareWith dependency is not installed yet — no mutation, no rollback', async () => {
-        const notReady = Object.assign(new Error("App 'collector' that 'newapp' must be networked with is not installed on this node. Installation aborted."), { code: 'NETWORK_DEPENDENCY_NOT_READY' });
+      it('defers (not fails) when a dependency is not installed yet — no mutation, no rollback', async () => {
+        const notReady = Object.assign(new Error("App 'collector' that 'newapp' depends on is not installed on this node. Installation aborted."), { code: 'NETWORK_DEPENDENCY_NOT_READY' });
         const {
           installer, installComponent, uninstallApplication, broadcastMessageToAll,
         } = loadFresh({
-          checkAppNetworkRequirements: sinon.stub().rejects(notReady),
+          checkAppDependencyRequirements: sinon.stub().rejects(notReady),
           components: [['web', mockComponent]],
         });
 
@@ -673,7 +677,7 @@ describe('appInstaller tests', () => {
 
       it('a code-less network-requirement error (owner mismatch) still fails hard', async () => {
         const { installer, installComponent } = loadFresh({
-          checkAppNetworkRequirements: sinon.stub().rejects(new Error("App 'collector' that 'newapp' must be networked with is owned by a different owner. Installation aborted.")),
+          checkAppDependencyRequirements: sinon.stub().rejects(new Error("App 'collector' that 'newapp' depends on is owned by a different owner. Installation aborted.")),
           components: [['web', mockComponent]],
         });
 

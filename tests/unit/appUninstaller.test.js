@@ -16,7 +16,7 @@ describe('appUninstaller tests', () => {
   let dockerServiceStub;
   let appsRepositoryStub;
   let fluxShutdowndClientStub;
-  let appNetworkLinkerStub;
+  let relationshipResolverStub;
   let pendingTeardownStoreStub;
 
   beforeEach(() => {
@@ -106,9 +106,9 @@ describe('appUninstaller tests', () => {
       removeGlobalAppInfo: sinon.stub().resolves(),
     };
 
-    appNetworkLinkerStub = {
+    relationshipResolverStub = {
       isPureFollowerApp: sinon.stub().resolves(false),
-      findInstalledWorkloadsRequiring: sinon.stub().resolves([]),
+      findCascadeWorkloadsRequiring: sinon.stub().resolves([]),
       findUnrequiredInstalledDependencies: sinon.stub().resolves([]),
     };
 
@@ -158,6 +158,10 @@ describe('appUninstaller tests', () => {
         isFirewallActive: sinon.stub().resolves(false),
         allowPort: sinon.stub().resolves(true),
         getLocalSocketAddress: sinon.stub().resolves('7.7.7.7:16127'),
+        getFluxNodePublicKey: sinon.stub().resolves('nodepubkey'),
+      },
+      '../generalService': {
+        obtainNodeCollateralInformation: sinon.stub().resolves({ txhash: 'txh', txindex: 0 }),
       },
       '../fluxCommunicationMessagesSender': {
         broadcastMessageToOutgoing: sinon.stub().resolves(),
@@ -165,7 +169,7 @@ describe('appUninstaller tests', () => {
         broadcastMessageToAll: sinon.stub().resolves(),
       },
       '../appDatabase/appsRepository': appsRepositoryStub,
-      './appNetworkLinker': appNetworkLinkerStub,
+      './relationshipResolver': relationshipResolverStub,
       './pendingTeardownStore': pendingTeardownStoreStub,
       '../appManagement/appsRuntimeState': {
         setCondemned: sinon.stub().resolves(),
@@ -509,8 +513,7 @@ describe('appUninstaller tests', () => {
     it('graceful removal of a follower uninstalls its requiring workload FIRST (teardown record order proves it)', async () => {
       configStub.fluxapps.manageCollectorLifecycle = true;
       appsRepositoryStub.getInstalledApp.callsFake(async (name) => spec(name));
-      appNetworkLinkerStub.isPureFollowerApp.callsFake(async (s) => s.name === 'collector');
-      appNetworkLinkerStub.findInstalledWorkloadsRequiring.resolves([spec('workload')]);
+      relationshipResolverStub.findCascadeWorkloadsRequiring.withArgs('collector').resolves([spec('workload')]);
 
       await appUninstaller.uninstallApplication('collector', { forceKill: false, background: true });
 
@@ -525,8 +528,7 @@ describe('appUninstaller tests', () => {
     it('defers the follower teardown when a requiring workload is mid-operation (DEFERRED)', async () => {
       configStub.fluxapps.manageCollectorLifecycle = true;
       appsRepositoryStub.getInstalledApp.callsFake(async (name) => spec(name));
-      appNetworkLinkerStub.isPureFollowerApp.callsFake(async (s) => s.name === 'collector');
-      appNetworkLinkerStub.findInstalledWorkloadsRequiring.resolves([spec('workload')]);
+      relationshipResolverStub.findCascadeWorkloadsRequiring.withArgs('collector').resolves([spec('workload')]);
       // the requiring workload holds a redeploy lease, so its removal DEFERS
       operationRegistry.acquire('workload', 'redeploy', 'the-redeploy');
       try {
@@ -539,57 +541,55 @@ describe('appUninstaller tests', () => {
       }
     });
 
-    it('a force-kill of a follower does NOT cascade', async () => {
+    it('a force-kill does NOT cascade', async () => {
       configStub.fluxapps.manageCollectorLifecycle = true;
       appsRepositoryStub.getInstalledApp.callsFake(async (name) => spec(name));
-      appNetworkLinkerStub.isPureFollowerApp.resolves(true);
 
       await appUninstaller.uninstallApplication('collector', { forceKill: true, background: true });
 
-      expect(appNetworkLinkerStub.findInstalledWorkloadsRequiring.called).to.equal(false);
+      expect(relationshipResolverStub.findCascadeWorkloadsRequiring.called).to.equal(false);
     });
 
     it('does not cascade with the lifecycle toggle off (default)', async () => {
       appsRepositoryStub.getInstalledApp.callsFake(async (name) => spec(name));
-      appNetworkLinkerStub.isPureFollowerApp.resolves(true);
 
       await appUninstaller.uninstallApplication('collector', { forceKill: false, background: true });
 
-      expect(appNetworkLinkerStub.findInstalledWorkloadsRequiring.called).to.equal(false);
+      expect(relationshipResolverStub.findCascadeWorkloadsRequiring.called).to.equal(false);
     });
 
     it('a graceful workload removal triggers the deferred orphan sweep', async () => {
       configStub.fluxapps.manageCollectorLifecycle = true;
       appsRepositoryStub.getInstalledApp.callsFake(async (name) => spec(name));
-      appNetworkLinkerStub.isPureFollowerApp.resolves(false);
+      relationshipResolverStub.isPureFollowerApp.resolves(false);
 
       const result = await appUninstaller.uninstallApplication('workload', { forceKill: false, background: true });
       expect(result.status).to.equal(appUninstaller.UninstallStatus.REMOVED);
       await tick();
 
-      expect(appNetworkLinkerStub.findUnrequiredInstalledDependencies.called, 'sweep ran after the removal settled').to.equal(true);
+      expect(relationshipResolverStub.findUnrequiredInstalledDependencies.called, 'sweep ran after the removal settled').to.equal(true);
     });
 
     it('a force-kill of a follower does NOT trigger the sweep', async () => {
       configStub.fluxapps.manageCollectorLifecycle = true;
       appsRepositoryStub.getInstalledApp.callsFake(async (name) => spec(name));
-      appNetworkLinkerStub.isPureFollowerApp.resolves(true);
+      relationshipResolverStub.isPureFollowerApp.resolves(true);
 
       await appUninstaller.uninstallApplication('collector', { forceKill: true, skipGuard: true, background: true });
       await tick();
 
-      expect(appNetworkLinkerStub.findUnrequiredInstalledDependencies.called).to.equal(false);
+      expect(relationshipResolverStub.findUnrequiredInstalledDependencies.called).to.equal(false);
     });
 
     it('removeUnrequiredDependencies unwinds a chain until no orphans remain, consumer-first', async () => {
       const datadog = spec('datadog');
       const alloy = spec('alloy');
-      // The linker returns orphans already ordered consumer-first — it holds the
-      // resolved views the ordering depends on. This exercises the unwind loop;
-      // the ordering itself is covered in the linker's own suite.
-      appNetworkLinkerStub.findUnrequiredInstalledDependencies.onCall(0).resolves([datadog, alloy]);
-      appNetworkLinkerStub.findUnrequiredInstalledDependencies.onCall(1).resolves([alloy]);
-      appNetworkLinkerStub.findUnrequiredInstalledDependencies.onCall(2).resolves([]);
+      // The resolver returns orphans already ordered consumer-first — it holds
+      // the resolved views the ordering depends on. This exercises the unwind
+      // loop; the ordering itself is covered in the resolver's own suite.
+      relationshipResolverStub.findUnrequiredInstalledDependencies.onCall(0).resolves([datadog, alloy]);
+      relationshipResolverStub.findUnrequiredInstalledDependencies.onCall(1).resolves([alloy]);
+      relationshipResolverStub.findUnrequiredInstalledDependencies.onCall(2).resolves([]);
 
       await appUninstaller.removeUnrequiredDependencies();
 
@@ -602,17 +602,27 @@ describe('appUninstaller tests', () => {
 
     it('re-runs the sweep when a trigger arrives mid-pass (dirty flag), never dropping it', async () => {
       let releaseFind;
-      appNetworkLinkerStub.findUnrequiredInstalledDependencies.returns(new Promise((resolve) => { releaseFind = resolve; }));
+      relationshipResolverStub.findUnrequiredInstalledDependencies.returns(new Promise((resolve) => { releaseFind = resolve; }));
 
       const first = appUninstaller.removeUnrequiredDependencies();
+      await tick(); // past the identity reads, parked inside the first find pass
       const second = appUninstaller.removeUnrequiredDependencies();
       await second; // the concurrent trigger returns immediately, marking the running sweep dirty
-      expect(appNetworkLinkerStub.findUnrequiredInstalledDependencies.callCount).to.equal(1);
+      expect(relationshipResolverStub.findUnrequiredInstalledDependencies.callCount).to.equal(1);
 
       releaseFind([]); // first pass finds nothing to remove...
       await first;
       // ...but the dirty flag forces one more pass instead of dropping the concurrent trigger.
-      expect(appNetworkLinkerStub.findUnrequiredInstalledDependencies.callCount).to.equal(2);
+      expect(relationshipResolverStub.findUnrequiredInstalledDependencies.callCount).to.equal(2);
+    });
+
+    it('the sweep passes this node\'s identity so a standalone self-hold can be judged', async () => {
+      relationshipResolverStub.findUnrequiredInstalledDependencies.resolves([]);
+
+      await appUninstaller.removeUnrequiredDependencies();
+
+      const { nodeIdentity } = relationshipResolverStub.findUnrequiredInstalledDependencies.firstCall.args[0];
+      expect(nodeIdentity).to.eql({ ip: '7.7.7.7:16127', outpoint: 'txh:0', operator: 'nodepubkey' });
     });
   });
 

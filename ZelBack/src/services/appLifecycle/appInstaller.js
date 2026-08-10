@@ -7,6 +7,7 @@ const fsPromises = require('node:fs/promises');
 const serviceHelper = require('../serviceHelper');
 const verificationHelper = require('../verificationHelper');
 const appNetworkLinker = require('./appNetworkLinker');
+const relationshipResolver = require('./relationshipResolver');
 const appDockerNetwork = require('../appNetwork/appDockerNetwork');
 const messageHelper = require('../messageHelper');
 const fluxNetworkHelper = require('../fluxNetworkHelper');
@@ -261,7 +262,7 @@ async function installApplication(instantiated, options = {}) {
     // a failure would bury this app in the spawner's 7-day error cache and keep
     // it locked out long after the dependency arrives.
     try {
-      await appNetworkLinker.checkAppNetworkRequirements(instantiated);
+      await relationshipResolver.checkAppDependencyRequirements(instantiated);
     } catch (error) {
       if (error.code === NodeCondition.NETWORK_DEPENDENCY_NOT_READY) {
         if (onStatus) onStatus(messageHelper.createErrorMessage(error.message));
