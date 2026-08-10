@@ -92,6 +92,7 @@ export function nodeClient(nodeNum) {
         'daemon:recovered',
         'daemon:reorg',
         'daemon:resync',
+        'daemon:resyncSkipped',
         'daemon:socketDropped',
         'daemon:subscriptionMode',
         'daemon:subscriptionsStarted',
