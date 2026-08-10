@@ -419,6 +419,11 @@ async function storeAppInstallingMessage(message) {
   // Peer input: normalize the identity tag tolerantly (a malformed tag degrades to
   // the untagged row) - the local writer's store (registryManager) is the strict one.
   const replica = message.version === 2 && typeof message.replica === 'string' ? message.replica : null;
+  // The intended ordinal slot (meshSlots.js), normalized the same tolerant way.
+  // Bounded loosely here (the instance cap is 100); the semantic cap — the
+  // app's own instance count — is enforced where slots are consumed.
+  const meshSlot = message.version === 2 && Number.isInteger(message.meshSlot)
+    && message.meshSlot >= 0 && message.meshSlot < 1000 ? message.meshSlot : null;
 
   if (cleared) {
     // A replica-tagged clear releases exactly its own claim; untagged releases
@@ -454,6 +459,11 @@ async function storeAppInstallingMessage(message) {
   };
   if (message.version === 2) {
     newAppInstallingMessage.announcedAt = new Date(message.announcedAt);
+  }
+  // $set only when carried: the spawner's slotless renewals must not strip a
+  // slot the mesh provision path published onto the standing claim.
+  if (meshSlot !== null) {
+    newAppInstallingMessage.meshSlot = meshSlot;
   }
 
   const queryFind = { name: message.name, ip: message.ip, replica };

@@ -167,6 +167,9 @@ async function appInstallingLocation(appname) {
       announcedAt: 1,
       broadcastedAt: 1,
       expireAt: 1,
+      // The ordinal slot the installer intends to take (meshSlots.js) — what
+      // lets two concurrent installers split vacancies before either runs.
+      meshSlot: 1,
     },
   };
   const results = await dbHelper.findInDatabase(database, globalAppsInstallingLocations, query, projection);

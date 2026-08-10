@@ -930,7 +930,9 @@ async function appDockerCreate(deployComp, options = {}) {
   const containerConfig = {
     Image: deployComp.image,
     name: getAppIdentifier(identifier),
-    Hostname: deployComp.name,
+    // The component name, unless the caller states an identity hostname (a
+    // mesh member name — the app reads its own hostname to learn who it is).
+    Hostname: options.hostname ?? deployComp.name,
     AttachStdin: true,
     AttachStdout: true,
     AttachStderr: true,
@@ -968,13 +970,21 @@ async function appDockerCreate(deployComp, options = {}) {
       ExtraHosts: [`fluxnode.service:${config.server.fluxNodeServiceAddress}`],
       ...(Array.isArray(options.dns) && options.dns.length > 0 && { Dns: options.dns }),
     },
-    ...(autoAssignedIP && {
+    ...((autoAssignedIP || (Array.isArray(options.networkAliases) && options.networkAliases.length > 0)) && {
       NetworkingConfig: {
         EndpointsConfig: {
           [networkName]: {
-            IPAMConfig: {
-              IPv4Address: autoAssignedIP,
-            },
+            ...(autoAssignedIP && {
+              IPAMConfig: {
+                IPv4Address: autoAssignedIP,
+              },
+            }),
+            // Extra resolvable names on the app's network beside the container
+            // name and hostname — how a mesh container whose hostname is its
+            // member name stays reachable as plain `<component>`.
+            ...(Array.isArray(options.networkAliases) && options.networkAliases.length > 0 && {
+              Aliases: options.networkAliases,
+            }),
           },
         },
       },
