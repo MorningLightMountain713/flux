@@ -34,6 +34,8 @@ let currentHeight = Number(process.env.INITIAL_HEIGHT) || 2100000;
 let deterministicNodeList = [];
 let originalNodeList = [];
 let pendingBlocks = [];
+// Serial behind the wallet addresses, so every getnewaddress differs from the last.
+let walletAddressSerial = 0;
 
 const nodeStatusOverrides = new Map();
 const rpcFailures = new Map();
@@ -331,6 +333,18 @@ const rpcHandlers = {
   },
 
   createconfirmationtransaction: () => ({ hex: 'stub-confirmation-tx-hex' }),
+
+  // Wallet calls that act as well as answer: each one must yield an address the
+  // wallet has not handed out before, so a caller given the same address twice has
+  // been served a cached answer rather than a second call.
+  getnewaddress: () => {
+    walletAddressSerial += 1;
+    return `t1stubnew${String(walletAddressSerial).padStart(26, '0')}`;
+  },
+  getrawchangeaddress: () => {
+    walletAddressSerial += 1;
+    return `t1stubchg${String(walletAddressSerial).padStart(26, '0')}`;
+  },
 
   getaddressbalance: () => ({ balance: 0, received: 0 }),
   getaddressutxos: () => [],
