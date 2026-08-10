@@ -183,7 +183,7 @@ describe('meshCertificates', () => {
       expect(cert.issuer).to.equal('fp-ca-1');
       expect(cert.name).to.equal('6f6437c5');
       const sign = nebulaCalls.find((c) => c.kind === 'sign');
-      expect(sign.flags['-networks']).to.equal('fdb2:8fa9:3450:76a8:bd32:a312::/96');
+      expect(sign.flags['-networks']).to.equal('fdb2:8fa9:3450:76a8:bd32:a312::/48');
       expect(sign.flags['-unsafe-networks']).to.equal('fdb2:8fa9:3450:76a8:bd32:a312::/96');
       expect(sign.flags['-duration']).to.equal('24h');
     });
