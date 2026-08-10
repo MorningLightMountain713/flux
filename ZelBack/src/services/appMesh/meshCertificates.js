@@ -441,6 +441,27 @@ async function removeAppMaterial(instance) {
   await fsp.rm(meshAppDir(instance), { recursive: true, force: true });
 }
 
+/**
+ * The identity segments holding material under the mesh state root.
+ * Directories only — the root also carries node-wide files (the ssh client
+ * keypair, ports.json), which are never an instance. Empty on a node that
+ * never ran mesh.
+ * @returns {Promise<string[]>}
+ */
+async function listMaterialInstances() {
+  let entries;
+  try {
+    entries = await fsp.readdir(MESH_STATE_ROOT, { withFileTypes: true });
+  } catch (error) {
+    if (error.code === 'ENOENT') return [];
+    throw error;
+  }
+  return entries
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => entry.name)
+    .filter((name) => /^[a-z0-9][a-z0-9-]*$/.test(name));
+}
+
 module.exports = {
   HostCertificateAction,
   MESH_STATE_ROOT,
@@ -460,4 +481,5 @@ module.exports = {
   concludeAuthorityRotation,
   writeTrustBundle,
   removeAppMaterial,
+  listMaterialInstances,
 };

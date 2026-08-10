@@ -168,6 +168,14 @@ function releaseTransit(instance) {
   assignments.delete(instance);
 }
 
+/**
+ * Every instance currently holding a transit assignment.
+ * @returns {string[]}
+ */
+function assignedInstances() {
+  return [...assignments.keys()];
+}
+
 module.exports = {
   TRANSIT_RANGE,
   transitForSlot,
@@ -176,4 +184,5 @@ module.exports = {
   observedSlot,
   ensureTransit,
   releaseTransit,
+  assignedInstances,
 };
