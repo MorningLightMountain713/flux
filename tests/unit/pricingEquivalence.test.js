@@ -19,6 +19,18 @@ describe('pricing equivalence — BigInt comparison produces same result as floa
 
   before(function () {
     if (allSpecs.length === 0) {
+      // Say so. This file generates one test per fixture spec, so an absent
+      // fixture is not one skipped test - it is several hundred that never
+      // existed, on a run that still reports 0 failing. A fresh worktree does
+      // not have the file (it is deliberately gitignored: 883 KB of historical
+      // specs does not belong in the repo), and a silent skip there reads as a
+      // clean tier against a full one.
+      console.warn(
+        `\n  pricing equivalence: SKIPPED ENTIRELY - no fixture at ${FIXTURE_PATH}\n`
+        + '  This run therefore exercises NONE of the historical-spec pricing checks.\n'
+        + '  Fetch it with tests/unit/fixtures/download-specs.sh before comparing\n'
+        + '  this run\'s totals against another checkout\'s.\n',
+      );
       this.skip();
       return;
     }
