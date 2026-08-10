@@ -1,162 +1,136 @@
+'use strict';
+
 const { expect } = require('chai');
 const sinon = require('sinon');
 const proxyquire = require('proxyquire');
 
-describe('fluxNodeService tests', () => {
-  describe('getHostInfo', () => {
-    let fluxNodeService;
-    let geolocationService;
-    let dbHelperStub;
+describe('fluxNodeService — /mesh/membership', () => {
+  let fluxNodeService;
+  let stubs;
 
-    // What ip-api fills the record with. The two the reply drops are here, so a
-    // reply carrying either is a failure rather than an absence of fixture.
-    const storedRecord = {
-      ip: '185.199.108.1',
-      continent: 'Europe',
-      continentCode: 'EU',
-      country: 'Germany',
-      countryCode: 'DE',
-      region: 'HE',
-      regionName: 'Hesse',
-      lat: 50.1109,
-      lon: 8.6821,
-      org: 'Hetzner Online GmbH',
-      isp: 'Hetzner Online GmbH',
-      asn: 'AS24940 Hetzner Online GmbH',
-      static: true,
-      dataCenter: true,
+  const SNAPSHOT = {
+    schemaVersion: 1,
+    generation: 42,
+    nodeId: 'a1b2c3d4',
+    apps: [
+      {
+        name: 'myblog',
+        members: [
+          { component: 'db', nodeId: 'a1b2c3d4', ip: '10.127.0.5', ordinal: 1 },
+          { component: 'db', nodeId: '9f21c377', ip: '10.127.0.7', ordinal: 0 },
+          { component: 'db', nodeId: '77aa88bb', ip: '10.127.0.9' },
+        ],
+        containers: [{ component: 'db', sourceIp: '172.23.0.2' }],
+      },
+      {
+        name: 'other',
+        members: [{ component: 'api', nodeId: 'a1b2c3d4', ip: '10.90.1.4', ordinal: 0 }],
+        containers: [{ component: 'api', sourceIp: '172.24.0.2' }],
+      },
+    ],
+  };
+
+  beforeEach(() => {
+    stubs = {
+      snapshot: SNAPSHOT,
+      readCurrentSnapshot: sinon.stub().callsFake(async () => stubs.snapshot),
+      waitForGeneration: sinon.stub().callsFake(async () => stubs.snapshot?.generation ?? 0),
     };
+    fluxNodeService = proxyquire('../../ZelBack/src/services/fluxNodeService', {
+      './appMesh/meshSnapshot': {
+        readCurrentSnapshot: stubs.readCurrentSnapshot,
+        waitForGeneration: stubs.waitForGeneration,
+      },
+    });
+  });
 
-    function replyFrom(res) {
-      return res.json.firstCall.args[0];
+  afterEach(() => sinon.restore());
+
+  function request(remoteAddress, query = {}) {
+    const res = { json: sinon.stub() };
+    return {
+      req: { socket: { remoteAddress }, query },
+      res,
+      body: () => res.json.firstCall.args[0],
+    };
+  }
+
+  it('answers the caller its own app level: generation, self, canonical names, no addresses', async () => {
+    const { req, res, body } = request('::ffff:172.23.0.2');
+    await fluxNodeService.getMeshMembership(req, res);
+    const { status, data } = body();
+    expect(status).to.equal('success');
+    expect(data.generation).to.equal(42);
+    expect(data.app).to.equal('myblog');
+    expect(data.self).to.deep.equal({
+      component: 'db', member: 'db-1', ordinal: 1, fqdn: 'db-1.myblog.mesh.flux',
+    });
+    expect(data.members).to.deep.equal([
+      {
+        component: 'db', member: 'db-1', ordinal: 1, fqdn: 'db-1.myblog.mesh.flux',
+      },
+      {
+        component: 'db', member: 'db-0', ordinal: 0, fqdn: 'db-0.myblog.mesh.flux',
+      },
+      // The standby: present in the membership, nodeid name, no ordinal.
+      {
+        component: 'db', member: 'db-77aa88bb', ordinal: null, fqdn: 'db-77aa88bb.myblog.mesh.flux',
+      },
+    ]);
+    // Identity only — the presented addresses stay in DNS where they belong.
+    expect(JSON.stringify(data)).to.not.include('10.127');
+  });
+
+  it('scopes by source address: another app sees only its own membership', async () => {
+    const { req, res, body } = request('172.24.0.2');
+    await fluxNodeService.getMeshMembership(req, res);
+    expect(body().data.app).to.equal('other');
+    expect(body().data.members).to.have.length(1);
+  });
+
+  it('refuses a caller the snapshot does not scope', async () => {
+    const { req, res, body } = request('172.99.0.9');
+    await fluxNodeService.getMeshMembership(req, res);
+    expect(body().status).to.equal('error');
+    expect(stubs.waitForGeneration.called).to.equal(false);
+  });
+
+  it('refuses everything when no snapshot exists yet', async () => {
+    stubs.snapshot = null;
+    const { req, res, body } = request('172.23.0.2');
+    await fluxNodeService.getMeshMembership(req, res);
+    expect(body().status).to.equal('error');
+  });
+
+  it('long-polls via waitForGeneration with the clamped timeout, then answers the fresh level', async () => {
+    stubs.waitForGeneration.callsFake(async () => {
+      stubs.snapshot = { ...SNAPSHOT, generation: 43 };
+      return 43;
+    });
+    const { req, res, body } = request('172.23.0.2', { waitAfter: '42', timeoutS: '9999' });
+    await fluxNodeService.getMeshMembership(req, res);
+    expect(stubs.waitForGeneration.calledOnceWith(42, 600 * 1000)).to.equal(true);
+    expect(body().data.generation).to.equal(43);
+  });
+
+  it('a plain read never parks, and a malformed waitAfter reads as plain', async () => {
+    for (const query of [{}, { waitAfter: 'soon' }, { waitAfter: '-3' }]) {
+      stubs.waitForGeneration.resetHistory();
+      const { req, res, body } = request('172.23.0.2', query);
+      // eslint-disable-next-line no-await-in-loop
+      await fluxNodeService.getMeshMembership(req, res);
+      expect(stubs.waitForGeneration.called, JSON.stringify(query)).to.equal(false);
+      expect(body().data.generation).to.equal(42);
     }
+  });
 
-    beforeEach(() => {
-      const logStub = { info: sinon.stub(), warn: sinon.stub(), error: sinon.stub() };
-
-      // The REAL accessor, over a stubbed database. getHostInfo reaching past
-      // the copy and the accessor handing out the record itself are two
-      // different defects with one symptom, and a stubbed accessor can only see
-      // the first.
-      dbHelperStub = {
-        databaseConnection: sinon.stub().returns({ db: sinon.stub().returns({}) }),
-        updateOneInDatabase: sinon.stub().resolves(),
-        findOneInDatabase: sinon.stub().resolves({
-          _id: 'nodeGeolocation',
-          geolocation: { ...storedRecord },
-          staticIp: true,
-          dataCenter: true,
-        }),
-      };
-      geolocationService = proxyquire('../../ZelBack/src/services/geolocationService', {
-        'node:dns': { promises: { reverse: sinon.stub().rejects(new Error('ENOTFOUND')) } },
-        '../lib/log': logStub,
-        './dbHelper': dbHelperStub,
-        './serviceHelper': { axiosGet: sinon.stub() },
-        './fluxNetworkHelper': {
-          getLocalSocketAddress: sinon.stub().resolves('185.199.108.1:16127'),
-          hasPublicIpOnInterface: sinon.stub().resolves(true),
-        },
-      });
-
-      fluxNodeService = proxyquire('../../ZelBack/src/services/fluxNodeService', {
-        '../lib/log': logStub,
-        './geolocationService': geolocationService,
-        './fluxNetworkHelper': { getLocalSocketAddress: sinon.stub().resolves('185.199.108.1:16127') },
-        './generalService': {
-          obtainNodeCollateralInformation: sinon.stub().resolves({ txhash: 'abc123', txindex: 0 }),
-        },
-        './dockerService': {
-          getAppNameByContainerIp: sinon.stub().resolves('myapp'),
-        },
-        './benchmarkService': {
-          getBenchmarks: sinon.stub().resolves({
-            status: 'success',
-            data: {
-              status: 'CUMULUS',
-              cores: 8,
-              ram: 7.1,
-              disk: 220,
-              diskwritespeed: 540.25,
-              eps: 489.2,
-              download_speed: 150.45,
-              upload_speed: 50.21,
-            },
-          }),
-        },
-      });
+  it('refuses after the wait when the app left the mesh meanwhile', async () => {
+    stubs.waitForGeneration.callsFake(async () => {
+      stubs.snapshot = { ...SNAPSHOT, apps: [] };
+      return 43;
     });
-
-    afterEach(() => {
-      sinon.restore();
-    });
-
-    function callerInsideTheDockerNetwork() {
-      return { socket: { remoteAddress: '172.23.0.2' } };
-    }
-
-    it('answers without the address and operator fields', async () => {
-      const res = { json: sinon.stub() };
-
-      await fluxNodeService.getHostInfo(callerInsideTheDockerNetwork(), res);
-
-      const { data } = replyFrom(res);
-      expect(data.geo).to.not.have.property('ip');
-      expect(data.geo).to.not.have.property('org');
-    });
-
-    it('answers with the rest of the record, so the trim is two fields and not a rebuild', async () => {
-      const res = { json: sinon.stub() };
-
-      await fluxNodeService.getHostInfo(callerInsideTheDockerNetwork(), res);
-
-      const { data } = replyFrom(res);
-      const sent = Object.keys(data.geo).sort();
-      const expected = Object.keys(storedRecord).filter((k) => k !== 'ip' && k !== 'org').sort();
-      expect(sent).to.eql(expected);
-      expect(data.geo.regionName).to.equal('Hesse');
-    });
-
-    it('carries the node address once, at the top level and live', async () => {
-      const res = { json: sinon.stub() };
-
-      await fluxNodeService.getHostInfo(callerInsideTheDockerNetwork(), res);
-
-      expect(replyFrom(res).data.ip).to.equal('185.199.108.1');
-    });
-
-    it('leaves the node still knowing where it is', async () => {
-      // The defect this endpoint carried: the removals above landed on the
-      // node's own record, so it could no longer resolve itself in the
-      // published location table and refused every region-pinned app.
-      const res = { json: sinon.stub() };
-
-      await fluxNodeService.getHostInfo(callerInsideTheDockerNetwork(), res);
-
-      const known = await geolocationService.getNodeGeolocation();
-      expect(known.ip).to.equal('185.199.108.1');
-      expect(known.org).to.equal('Hetzner Online GmbH');
-    });
-
-    it('still knows where it is after a second container asks', async () => {
-      await fluxNodeService.getHostInfo(callerInsideTheDockerNetwork(), { json: sinon.stub() });
-      await fluxNodeService.getHostInfo(callerInsideTheDockerNetwork(), { json: sinon.stub() });
-
-      const known = await geolocationService.getNodeGeolocation();
-      expect(known.ip).to.equal('185.199.108.1');
-      expect(known.org).to.equal('Hetzner Online GmbH');
-    });
-
-    it('refuses a caller it cannot match to a container', async () => {
-      const service = proxyquire('../../ZelBack/src/services/fluxNodeService', {
-        '../lib/log': { info: sinon.stub(), warn: sinon.stub(), error: sinon.stub() },
-        './dockerService': { getAppNameByContainerIp: sinon.stub().resolves(null) },
-      });
-      const res = { json: sinon.stub() };
-
-      await service.getHostInfo({ socket: { remoteAddress: '10.0.0.9' } }, res);
-
-      expect(replyFrom(res).status).to.equal('error');
-    });
+    const { req, res, body } = request('172.23.0.2', { waitAfter: '42' });
+    await fluxNodeService.getMeshMembership(req, res);
+    expect(body().status).to.equal('error');
   });
 });

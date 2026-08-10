@@ -4,6 +4,9 @@ node_modules/
 /docs/*
 # Allow markdown documentation files in docs/
 !/docs/*.md
+# Allow committed example apps in docs/examples/
+!/docs/examples/
+!/docs/examples/**
 certs/
 npm-debug.log*
 yarn-debug.log*
