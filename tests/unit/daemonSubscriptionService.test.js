@@ -166,6 +166,48 @@ describe('daemonSubscriptionService tests', () => {
       sinon.assert.calledOnce(second);
     });
 
+    it('should rebuild once for a flapping link, not once per reconnect', () => {
+      const onResync = sinon.stub();
+      service.subscribe('fluxnodelistdelta', { onMessage: sinon.stub(), onResync });
+      service.start();
+
+      capturedSubscriberOptions.onConnect({ reconnected: true });
+      capturedSubscriberOptions.onConnect({ reconnected: true });
+      capturedSubscriberOptions.onConnect({ reconnected: true });
+
+      // Every rebuild is a full snapshot, so the second and third would be paying
+      // again for an answer the first already has.
+      sinon.assert.calledOnce(onResync);
+      expect(publishedAs('daemon:resyncSkipped')).to.have.lengthOf(2);
+    });
+
+    it('should say which reconnects it declined to rebuild for', () => {
+      service.subscribe('fluxnodelistdelta', { onMessage: sinon.stub(), onResync: sinon.stub() });
+      service.start();
+
+      capturedSubscriberOptions.onConnect({ reconnected: true });
+      capturedSubscriberOptions.onConnect({ reconnected: true });
+
+      const [skipped] = publishedAs('daemon:resyncSkipped');
+      expect(skipped.reason).to.equal(service.RESYNC_REASONS.reconnected);
+      expect(skipped.elapsedMs).to.be.a('number');
+    });
+
+    it('should still rebuild on a gap while a reconnect rebuild is throttled', () => {
+      const onResync = sinon.stub();
+      service.subscribe('fluxnodelistdelta', { onMessage: sinon.stub(), onResync });
+      service.start();
+
+      capturedSubscriberOptions.onConnect({ reconnected: true });
+      capturedSubscriberOptions.onConnect({ reconnected: true });
+      capturedSubscriberOptions.onGap('fluxnodelistdelta', 2);
+
+      // The throttle is about repeated answers to the same question. A gap is a
+      // different question and must not be swallowed by it.
+      expect(onResync.callCount).to.equal(2);
+      expect(onResync.secondCall.args[0]).to.equal(service.RESYNC_REASONS.messageGap);
+    });
+
     it('should not ask for a resync on the first connection', () => {
       const onResync = sinon.stub();
       service.subscribe('fluxnodelistdelta', { onMessage: sinon.stub(), onResync });
