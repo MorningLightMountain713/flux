@@ -1,3 +1,5 @@
+'use strict';
+
 const appsRepository = require('../appDatabase/appsRepository');
 const dockerService = require('../dockerService');
 const { appsFolder } = require('../utils/appConstants');

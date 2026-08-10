@@ -1,3 +1,5 @@
+'use strict';
+
 /**
  * Apps-domain maintenance operations. These are the heavy, schema-aware
  * tasks that used to live in dbHelper.js — reindex, validate, repair —

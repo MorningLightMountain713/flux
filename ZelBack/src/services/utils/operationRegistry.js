@@ -1,3 +1,5 @@
+'use strict';
+
 const log = require('../../lib/log');
 
 // In-memory per-app + per-component operation lease registry. The structural

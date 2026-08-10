@@ -1,3 +1,5 @@
+'use strict';
+
 // Syncthing Monitor - Helper Functions
 const axios = require('axios');
 const fs = require('node:fs/promises');

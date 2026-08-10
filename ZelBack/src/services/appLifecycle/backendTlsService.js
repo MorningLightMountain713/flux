@@ -1,3 +1,5 @@
+'use strict';
+
 // Platform-managed backend-TLS certificates.
 //
 // For a component whose loadBalancing declares backendTls.verify === 'required',

@@ -1,3 +1,5 @@
+'use strict';
+
 // The accept path: which announced members enter this node's overlay for one
 // app. Everything is checkable locally — the voucher against the pinned
 // mesh-purpose key, the anchor against my own tip, the outpoint against the

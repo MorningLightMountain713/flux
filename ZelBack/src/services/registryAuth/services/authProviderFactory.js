@@ -1,3 +1,5 @@
+'use strict';
+
 /**
  * AuthProviderFactory - Factory for creating and managing authentication providers
  *

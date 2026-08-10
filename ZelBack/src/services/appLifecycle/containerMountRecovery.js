@@ -1,3 +1,5 @@
+'use strict';
+
 /**
  * Container Mount Recovery Service
  *

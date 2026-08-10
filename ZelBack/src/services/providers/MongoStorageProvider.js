@@ -1,3 +1,5 @@
+'use strict';
+
 const dbHelper = require('../dbHelper');
 const { getSpecBackend } = require('../utils/specLibs');
 

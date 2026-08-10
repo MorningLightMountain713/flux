@@ -1,3 +1,5 @@
+'use strict';
+
 // Node Status Monitor - Monitors node status and uninstalls apps if node is not confirmed
 const axios = require('axios');
 const config = require('config');

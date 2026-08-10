@@ -1,3 +1,5 @@
+'use strict';
+
 // Per-image docker-pull progress aggregation for the image cache's async download
 // job. Sums per-layer downloaded bytes from the raw dockerode progress events. A
 // layer is frozen once it reports complete, so a later "Extracting" event — whose

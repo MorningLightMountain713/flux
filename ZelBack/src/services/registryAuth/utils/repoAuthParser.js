@@ -1,3 +1,5 @@
+'use strict';
+
 /**
  * RepoAuthParser - Parses FluxOS repoauth string format into authentication configuration
  *

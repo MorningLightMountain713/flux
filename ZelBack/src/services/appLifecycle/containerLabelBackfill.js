@@ -1,3 +1,5 @@
+'use strict';
+
 const dockerService = require('../dockerService');
 const appsRepository = require('../appDatabase/appsRepository');
 const deploymentProvider = require('../appRuntime/deploymentProvider');

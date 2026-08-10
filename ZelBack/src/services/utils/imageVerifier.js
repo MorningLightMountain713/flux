@@ -1,3 +1,5 @@
+'use strict';
+
 const https = require('node:https');
 const serviceHelper = require('../serviceHelper');
 const registryGovernor = require('./registryGovernor');

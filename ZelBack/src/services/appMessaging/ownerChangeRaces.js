@@ -1,3 +1,5 @@
+'use strict';
+
 /**
  * The updates on chain that the ownership rule cannot verify.
  *

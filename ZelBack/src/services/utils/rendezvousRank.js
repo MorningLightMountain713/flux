@@ -1,3 +1,5 @@
+'use strict';
+
 const crypto = require('crypto');
 
 // Rendezvous (highest-random-weight) node selection.

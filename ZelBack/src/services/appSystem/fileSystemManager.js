@@ -1,3 +1,5 @@
+'use strict';
+
 // File System Manager - Manages filesystem operations for FluxOS applications
 //
 // Every mutating endpoint here runs its work in a throwaway container with only

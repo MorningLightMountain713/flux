@@ -1,3 +1,5 @@
+'use strict';
+
 // App Spawner - Handles automatic spawning of global applications
 const config = require('config');
 const serviceHelper = require('../serviceHelper');

@@ -1,3 +1,5 @@
+'use strict';
+
 // Cryptographic Keys Service - Manages public keys for application encryption
 const messageHelper = require('../messageHelper');
 const verificationHelper = require('../verificationHelper');

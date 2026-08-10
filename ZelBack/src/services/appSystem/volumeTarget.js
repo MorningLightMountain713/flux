@@ -1,3 +1,5 @@
+'use strict';
+
 const volumeService = require('../utils/volumeService');
 
 /**

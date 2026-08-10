@@ -1,3 +1,5 @@
+'use strict';
+
 // Syncthing Monitor - Manages syncthing configuration for apps
 const path = require('node:path');
 // eslint-disable-next-line no-unused-vars

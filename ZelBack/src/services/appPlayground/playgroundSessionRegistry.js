@@ -1,3 +1,5 @@
+'use strict';
+
 // The sessions this node currently owns.
 //
 // Its own module because two unrelated subsystems have to agree on it and

@@ -1,3 +1,5 @@
+'use strict';
+
 const { getSpecPolicy } = require('../utils/specLibs');
 const priceOracleState = require('./priceOracleState');
 const { FluxosDiscounter } = require('./FluxosDiscounter');

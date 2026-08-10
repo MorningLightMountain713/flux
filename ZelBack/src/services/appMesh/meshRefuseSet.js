@@ -1,3 +1,5 @@
+'use strict';
+
 // The persisted refuse set: outpoints the impersonation detector has evicted
 // from an app's overlay on this node. Read by the accept path — a refused
 // outpoint is never admitted again, whatever it broadcasts — and written only

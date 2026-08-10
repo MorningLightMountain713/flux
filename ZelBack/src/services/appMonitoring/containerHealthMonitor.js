@@ -1,3 +1,5 @@
+'use strict';
+
 const log = require('../../lib/log');
 const componentProvisioner = require('../appLifecycle/componentProvisioner');
 const appVolumeService = require('../appLifecycle/appVolumeService');

@@ -1,3 +1,5 @@
+'use strict';
+
 const log = require('../lib/log');
 const daemonServiceUtils = require('./daemonService/daemonServiceUtils');
 const daemonSubscriptionService = require('./daemonService/daemonSubscriptionService');

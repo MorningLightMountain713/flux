@@ -1,3 +1,5 @@
+'use strict';
+
 // Which layer answers, and with what.
 //
 // A request that REACHED a handler is answered in the body, at HTTP 200, in the

@@ -1,3 +1,5 @@
+'use strict';
+
 // Generators for every runtime artifact a mesh app needs on one node: the
 // nebula config, the tayga translator config, and the iptables rules for the
 // FLUX-MESH chains. All pure — membership in, text/rules out — because the

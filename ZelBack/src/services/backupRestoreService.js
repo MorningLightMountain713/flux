@@ -1,3 +1,5 @@
+'use strict';
+
 const log = require('../lib/log');
 const path = require('path');
 const messageHelper = require('./messageHelper');

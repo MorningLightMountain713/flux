@@ -1,3 +1,5 @@
+'use strict';
+
 const config = require('config');
 const { AsyncLock } = require('./asyncLock');
 const log = require('../../lib/log');

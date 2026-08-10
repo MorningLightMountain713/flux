@@ -1,3 +1,5 @@
+'use strict';
+
 const config = require('config');
 const { performance } = require('perf_hooks');
 const WebSocket = require('ws');

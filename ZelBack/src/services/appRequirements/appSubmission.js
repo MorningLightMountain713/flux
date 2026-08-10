@@ -1,3 +1,5 @@
+'use strict';
+
 const fs = require('node:fs');
 const { formidable } = require('formidable');
 const config = require('config');

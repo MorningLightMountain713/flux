@@ -1,3 +1,5 @@
+'use strict';
+
 const zmq = require('zeromq');
 
 const log = require('../../lib/log');

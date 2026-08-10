@@ -1,3 +1,5 @@
+'use strict';
+
 // The resolver feed: one node-wide membership.json, written to the contract
 // flux-dnsd pins in its README. The writer must land a temp file in the SAME
 // directory and rename it over the target (the daemon reloads only on that

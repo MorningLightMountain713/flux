@@ -1,3 +1,5 @@
+'use strict';
+
 // Per-component provisioner: builds one component's container substrate — ports,
 // image verify/pull, volumes, swap pool, image-size measurement, appDockerCreate,
 // telemetry identity — and leaves it in Docker `created` for the reconciler to

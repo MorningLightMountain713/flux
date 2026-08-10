@@ -1,3 +1,5 @@
+'use strict';
+
 const dockerService = require('../dockerService');
 const fluxNetworkHelper = require('../fluxNetworkHelper');
 const serviceHelper = require('../serviceHelper');

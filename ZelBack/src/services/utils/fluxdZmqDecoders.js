@@ -1,3 +1,5 @@
+'use strict';
+
 /**
  * Binary decoders for the fluxd ZMQ topics.
  *

@@ -1,3 +1,5 @@
+'use strict';
+
 // Per-(node, app) mesh certificate authority and host certificate management.
 //
 // Each node is its own authority for each mesh app it hosts: it generates an

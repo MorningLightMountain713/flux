@@ -1,3 +1,5 @@
+'use strict';
+
 const config = require('config');
 const fs = require('fs').promises;
 const stream = require('stream');

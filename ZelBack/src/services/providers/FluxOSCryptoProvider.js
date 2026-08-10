@@ -1,3 +1,5 @@
+'use strict';
+
 const benchmarkService = require('../benchmarkService');
 const { getSpecBackend } = require('../utils/specLibs');
 

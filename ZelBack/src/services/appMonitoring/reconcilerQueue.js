@@ -1,3 +1,5 @@
+'use strict';
+
 const log = require('../../lib/log');
 const globalState = require('../utils/globalState');
 const fluxEventBus = require('../utils/fluxEventBus');

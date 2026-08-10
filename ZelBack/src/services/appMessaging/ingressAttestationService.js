@@ -1,3 +1,5 @@
+'use strict';
+
 const log = require('../../lib/log');
 const fluxNetworkHelper = require('../fluxNetworkHelper');
 const fluxBroadcastHelper = require('../utils/fluxBroadcastHelper');

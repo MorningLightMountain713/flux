@@ -1,3 +1,5 @@
+'use strict';
+
 // The mesh half of the running-apps broadcast: for every installed
 // mesh-enabled app whose material is ready, the fields peers need to admit
 // this node into that app's overlay — the authority bundle, a voucher freshly

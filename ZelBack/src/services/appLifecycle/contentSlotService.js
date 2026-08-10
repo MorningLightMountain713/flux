@@ -1,3 +1,5 @@
+'use strict';
+
 const fs = require('node:fs/promises');
 const { formidable } = require('formidable');
 const axios = require('axios');

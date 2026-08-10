@@ -1,3 +1,5 @@
+'use strict';
+
 const log = require('../../lib/log');
 
 // Blocks are ~30s. Three missed in a row is enough to be worth a question, and not so

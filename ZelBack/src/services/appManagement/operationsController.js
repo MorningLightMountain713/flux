@@ -1,3 +1,5 @@
+'use strict';
+
 const messageHelper = require('../messageHelper');
 const serviceHelper = require('../serviceHelper');
 const verificationHelper = require('../verificationHelper');

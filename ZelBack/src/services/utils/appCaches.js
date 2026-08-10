@@ -1,3 +1,5 @@
+'use strict';
+
 // Re-export cache from globalState for convenience
 // This provides a cleaner API for accessing syncthing caches
 const globalState = require('./globalState');

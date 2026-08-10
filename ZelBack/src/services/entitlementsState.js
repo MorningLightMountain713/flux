@@ -1,3 +1,5 @@
+'use strict';
+
 const config = require('config');
 const bs58check = require('bs58check');
 const dbHelper = require('./dbHelper');

@@ -1,3 +1,5 @@
+'use strict';
+
 const os = require('os');
 const nodeConfirmationService = require('../nodeConfirmationService');
 const fluxNetworkHelper = require('../fluxNetworkHelper');

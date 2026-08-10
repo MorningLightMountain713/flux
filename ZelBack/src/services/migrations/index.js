@@ -1,3 +1,5 @@
+'use strict';
+
 const log = require('../../lib/log');
 const nodeIdentityMigration = require('../appDatabase/nodeIdentityMigration');
 const containerLabelBackfill = require('../appLifecycle/containerLabelBackfill');
