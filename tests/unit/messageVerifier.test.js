@@ -1,6 +1,7 @@
 const { expect } = require('chai');
 const sinon = require('sinon');
 const proxyquire = require('proxyquire').noCallThru();
+const domain = require('./fixtures/appDomain');
 
 // Shared stubs used by every proxyquire call
 function makeBaseStubs(overrides = {}) {
@@ -32,15 +33,26 @@ function makeBaseStubs(overrides = {}) {
     broadcastMessageToRandomOutgoing: sinon.stub().resolves(),
   };
 
-  // messageVerifier asks a pricing regime for a fee and does not know how one is
-  // computed, so this is the whole pricing surface it can see.
-  const regimeStub = {
+  // The five questions every regime answers. A regime reaches the daemon, the
+  // database and the network, so each generation's implementation is a double —
+  // but which one answers is NOT. That dispatch is pure, it routes on the spec's
+  // own declared pricingModel, and it refuses to fall back when a model has no
+  // implementation. Stubbing regimeFor away would test none of it.
+  const regimeSurface = () => ({
     onChainDisplayPrice: sinon.stub().resolves(1),
     fiatAndFluxDisplayPrice: sinon.stub().resolves({ usd: 1, flux: 1, fluxDiscount: 0 }),
     registrationFee: sinon.stub().resolves(100000000n),
     supersededMessage: sinon.stub().resolves(null),
     updateFee: sinon.stub().resolves(100000000n),
-  };
+  });
+  // chainFloor, the model a v8 spec declares
+  const legacyRegime = regimeSurface();
+  // unified, the model a v9 spec declares
+  const v9Regime = regimeSurface();
+  const pricingRegime = proxyquire('../../ZelBack/src/services/pricing/pricingRegime', {
+    './legacyPricingRegime': legacyRegime,
+    './v9PricingRegime': v9Regime,
+  });
 
   const stubs = {
     config: {
@@ -82,21 +94,12 @@ function makeBaseStubs(overrides = {}) {
     '../daemonService/daemonServiceBlockchainRpcs': {
       getBlock: sinon.stub().resolves({ status: 'success', data: { time: 1750000000 } }),
     },
-    '../pricing/pricingRegime': { regimeFor: sinon.stub().returns(regimeStub) },
-    '../utils/specLibs': {
-      getSpec: sinon.stub().resolves({}),
-      getSpecBackend: sinon.stub().resolves({
-        AppEventLegacy: { deserialize: sinon.stub().returns({}) },
-        ConfirmedAppEvent: { deserialize: sinon.stub().returns({}) },
-        InstantiatedSpec: { fromEvent: sinon.stub().returns({}) },
-        deserializeSpec: sinon.stub().returnsArg(0),
-      }),
-    },
-    '../utils/specCutover': {
-      resolveSpec: sinon.stub().resolvesArg(0),
-      // cleartext seam behaviour: a non-encrypted instance resolves to its own spec
-      resolveInstantiatedSpec: sinon.stub().callsFake(async (inst) => inst.spec),
-    },
+    // The real dispatcher, over doubled regimes.
+    '../pricing/pricingRegime': pricingRegime,
+    // specLibs and specCutover are NOT stubbed. They are pure domain code — no
+    // database, no network, no filesystem — so a double buys nothing and can
+    // drift from the classes it stands in for. Sealed specs are the one part of
+    // specCutover that reaches outside; a test covering those stubs it there.
     '../appDatabase/appsRepository': {
       getPermanentMessage: sinon.stub().resolves(null),
       getTempMessage: sinon.stub().resolves(null),
@@ -144,7 +147,9 @@ function makeBaseStubs(overrides = {}) {
     }
   }
 
-  return { stubs, dbStub, logStub, messageHelperStub, broadcastStub, regimeStub };
+  return {
+    stubs, dbStub, logStub, messageHelperStub, broadcastStub, legacyRegime, v9Regime,
+  };
 }
 
 describe('messageVerifier tests', () => {
@@ -463,43 +468,12 @@ describe('messageVerifier tests', () => {
     it('should store permanent message and insert specs for a registration with sufficient payment', async () => {
       const insertStub = sinon.stub().resolves();
       const storePermanentStub = sinon.stub().resolves();
-      const serializedEvent = {
-        type: 'fluxappregister',
-        appSpecifications: { name: 'testapp', version: 8, owner: 'owner1' },
-        hash: 'regHash',
-      };
-      const mockConfirmedEvent = {
-        isRegistration: true,
-        isUpdate: false,
-        spec: { name: 'testapp', version: 8 },
-        serialize: sinon.stub().returns(serializedEvent),
-        toInstantiatedSpec: sinon.stub().returns({}),
-      };
-      const mockInstantiated = {
-        name: 'testapp',
-        spec: { name: 'testapp', version: 8 },
-        isExpired: sinon.stub().returns(false),
-        serialize: sinon.stub().returns(serializedEvent),
-      };
-
       const { stubs } = makeBaseStubs();
-      stubs['../appDatabase/appsRepository'].getTempMessage = sinon.stub().resolves({
-        type: 'fluxappregister',
-        version: 1,
-        appSpecifications: { name: 'testapp', version: 8, owner: 'owner1' },
-        hash: 'regHash',
-        timestamp: Date.now(),
-        signature: 'sig',
-      });
+      stubs['../appDatabase/appsRepository'].getTempMessage = sinon.stub().resolves(
+        await domain.tempMessage({ version: 1, hash: 'regHash' }),
+      );
       stubs['../appDatabase/appsRepository'].storePermanentMessage = storePermanentStub;
       stubs['../appDatabase/registryManager'].insertAppSpecifications = insertStub;
-      const fromEventStub = sinon.stub().returns(mockInstantiated);
-      stubs['../utils/specLibs'].getSpecBackend = sinon.stub().resolves({
-        AppEventLegacy: { deserialize: sinon.stub().returns(mockConfirmedEvent) },
-        ConfirmedAppEvent: { deserialize: sinon.stub().returns(mockConfirmedEvent) },
-        InstantiatedSpec: { fromEvent: fromEventStub },
-        deserializeSpec: sinon.stub().returnsArg(0),
-      });
 
       const mv = proxyquire('../../ZelBack/src/services/appMessaging/messageVerifier', stubs);
 
@@ -511,114 +485,69 @@ describe('messageVerifier tests', () => {
       // identity are in hand: the name being claimed, and the transaction
       // claiming it. It is minted here or nowhere - an update arrives under a
       // different txid and must never re-mint against it.
+      //
+      // Asserted on the row that reached storage rather than on the call that
+      // built it: what matters is that the identity is durable, and a real
+      // InstantiatedSpec is what decides whether it survives serialization.
       const { mintAppUuid, identityFromUuid } = require('../../ZelBack/src/services/utils/appIdentity');
       const expectedUuid = mintAppUuid('testapp', 'txid');
-      const stored = fromEventStub.getCalls().map((c) => c.args[0]).find((a) => a && a.uuid);
-      expect(stored, 'the registration must carry an instance identity').to.exist;
+      expect(insertStub.calledOnce, 'the registration must be stored').to.be.true;
+      const stored = insertStub.firstCall.args[0];
       expect(stored.uuid).to.equal(expectedUuid);
       expect(stored.identity).to.equal(identityFromUuid(expectedUuid));
     });
 
     it('fail-closed: rejects a v9 registration priced at 0 (no PriceMessage in force) without inserting specs', async () => {
       const insertStub = sinon.stub().resolves();
-      const serializedEvent = {
-        type: 'fluxappregister',
-        appSpecifications: { name: 'v9app', version: 9, owner: 'owner1' },
-        hash: 'v9reg',
-      };
-      const mockConfirmedEvent = {
-        isRegistration: true,
-        isUpdate: false,
-        spec: { name: 'v9app', version: 9 },
-        serialize: sinon.stub().returns(serializedEvent),
-        toInstantiatedSpec: sinon.stub().returns({}),
-      };
-      const mockInstantiated = {
-        name: 'v9app',
-        spec: { name: 'v9app', version: 9 },
-        isExpired: sinon.stub().returns(false),
-        serialize: sinon.stub().returns(serializedEvent),
-      };
-
-      const { stubs, regimeStub } = makeBaseStubs();
-      stubs['../appDatabase/appsRepository'].getTempMessage = sinon.stub().resolves({
-        type: 'fluxappregister',
-        version: 2,
-        appSpecifications: { name: 'v9app', version: 9, owner: 'owner1' },
-        hash: 'v9reg',
-        timestamp: Date.now(),
-        signature: 'sig',
-      });
+      const { stubs, v9Regime } = makeBaseStubs();
+      stubs['../appDatabase/appsRepository'].getTempMessage = sinon.stub().resolves(
+        await domain.tempMessage({ version: 2, hash: 'v9reg' }),
+      );
       stubs['../appDatabase/registryManager'].insertAppSpecifications = insertStub;
-      stubs['../utils/specLibs'].getSpecBackend = sinon.stub().resolves({
-        AppEventLegacy: { deserialize: sinon.stub().returns(mockConfirmedEvent) },
-        ConfirmedAppEvent: { deserialize: sinon.stub().returns(mockConfirmedEvent) },
-        InstantiatedSpec: { fromEvent: sinon.stub().returns(mockInstantiated) },
-        deserializeSpec: sinon.stub().returnsArg(0),
-      });
 
       const mv = proxyquire('../../ZelBack/src/services/appMessaging/messageVerifier', stubs);
 
       // A zero fee means pricing is not in force yet, not that the app is free.
-      regimeStub.registrationFee = sinon.stub().resolves(0n);
+      // The v9 regime, because a v9 spec declares the unified model.
+      v9Regime.registrationFee = sinon.stub().resolves(0n);
 
       // valueSat 0 would satisfy the old `valueSat >= 0` check and mint a free app.
-      const result = await mv.checkAndRequestApp('v9reg', 'txid', 2000000, 0, null, 2);
+      const result = await mv.checkAndRequestApp('v9reg', 'txid', 2000000, 0, 1760000000, 2);
       expect(result).to.be.true;
       expect(insertStub.called).to.be.false;
     });
 
     // registeredAt anchors v9 time-based expiry: a wrong value (0, or a stray
     // retry counter) stores an app every liveness query reads as long-dead.
-    function makeV9Fixture(stubs) {
-      const mockConfirmedEvent = {
-        isRegistration: true,
-        isUpdate: false,
-        spec: { name: 'v9app', version: 9 },
-        serialize: sinon.stub().returns({}),
-        toInstantiatedSpec: sinon.stub().returns({}),
-      };
-      const mockInstantiated = {
-        name: 'v9app',
-        spec: { name: 'v9app', version: 9 },
-        isExpired: sinon.stub().returns(false),
-        serialize: sinon.stub().returns({}),
-      };
-      const confirmedDeserialize = sinon.stub().returns(mockConfirmedEvent);
-      stubs['../appDatabase/appsRepository'].getTempMessage = sinon.stub().resolves({
-        type: 'fluxappregister',
-        version: 2,
-        appSpecifications: { name: 'v9app', version: 9, owner: 'owner1' },
-        hash: 'v9reg',
-        timestamp: Date.now(),
-        signature: 'sig',
-      });
-      stubs['../utils/specLibs'].getSpecBackend = sinon.stub().resolves({
-        AppEventLegacy: { deserialize: sinon.stub().returns(mockConfirmedEvent) },
-        ConfirmedAppEvent: { deserialize: confirmedDeserialize },
-        InstantiatedSpec: { fromEvent: sinon.stub().returns(mockInstantiated) },
-        deserializeSpec: sinon.stub().returnsArg(0),
-      });
-      return { confirmedDeserialize };
+    async function makeV9Fixture(stubs) {
+      stubs['../appDatabase/appsRepository'].getTempMessage = sinon.stub().resolves(
+        await domain.tempMessage({ version: 2, hash: 'v9reg' }),
+      );
+      const insertStub = sinon.stub().resolves();
+      stubs['../appDatabase/registryManager'].insertAppSpecifications = insertStub;
+      // The row that reached storage, because a term start only matters if it is
+      // durable — asserting on the argument handed to deserialize would pass
+      // just as well if the value were dropped on the way to the database.
+      return { insertStub };
     }
 
     it('uses the confirming block time as the v9 registeredAt', async () => {
       const { stubs } = makeBaseStubs();
-      const { confirmedDeserialize } = makeV9Fixture(stubs);
+      const { insertStub } = await makeV9Fixture(stubs);
       const getBlockStub = stubs['../daemonService/daemonServiceBlockchainRpcs'].getBlock;
       const mv = proxyquire('../../ZelBack/src/services/appMessaging/messageVerifier', stubs);
 
       const result = await mv.checkAndRequestApp('v9reg', 'txid', 2000000, 200000000, 1751234567, 2);
 
       expect(result).to.be.true;
-      expect(confirmedDeserialize.firstCall.args[0].registeredAt).to.equal(1751234567);
+      expect(insertStub.firstCall.args[0].registeredAt).to.equal(1751234567);
       // block time was supplied — no daemon round-trip
       expect(getBlockStub.called).to.be.false;
     });
 
     it('recovers the block time from the daemon when the hash row predates it', async () => {
       const { stubs } = makeBaseStubs();
-      const { confirmedDeserialize } = makeV9Fixture(stubs);
+      const { insertStub } = await makeV9Fixture(stubs);
       const getBlockStub = stubs['../daemonService/daemonServiceBlockchainRpcs'].getBlock;
       const mv = proxyquire('../../ZelBack/src/services/appMessaging/messageVerifier', stubs);
 
@@ -626,13 +555,13 @@ describe('messageVerifier tests', () => {
 
       expect(result).to.be.true;
       expect(getBlockStub.calledOnce).to.be.true;
-      expect(confirmedDeserialize.firstCall.args[0].registeredAt).to.equal(1750000000);
+      expect(insertStub.firstCall.args[0].registeredAt).to.equal(1750000000);
     });
 
     it('leaves the hash unresolved rather than storing a v9 app without a block time', async () => {
       const storePermanentStub = sinon.stub().resolves();
       const { stubs } = makeBaseStubs();
-      makeV9Fixture(stubs);
+      await makeV9Fixture(stubs);
       stubs['../appDatabase/appsRepository'].storePermanentMessage = storePermanentStub;
       stubs['../daemonService/daemonServiceBlockchainRpcs'].getBlock = sinon.stub().resolves({ status: 'error', data: { message: 'no block' } });
       const mv = proxyquire('../../ZelBack/src/services/appMessaging/messageVerifier', stubs);
@@ -647,63 +576,30 @@ describe('messageVerifier tests', () => {
       // The confirming block's time, which is the term start a paid update takes.
       const BLOCK_TIME = 1760000000;
 
-      function updateStubs(activeRow) {
-        const serializedEvent = {
-          type: 'fluxappupdate',
-          appSpecifications: { name: 'testapp', version: 8, owner: 'owner1' },
-          hash: 'updHash',
-        };
-        const mockConfirmedEvent = {
-          isRegistration: false,
-          isUpdate: true,
-          spec: { name: 'testapp', version: 8 },
-          serialize: sinon.stub().returns(serializedEvent),
-          // mirrors ConfirmedAppEvent: the projection carries the confirming
-          // block's time as this version's term start
-          toInstantiatedSpec: sinon.stub().returns({
-            spec: { name: 'testapp', version: 8 },
-            hash: 'updHash',
-            height: 2000000,
-            registeredAt: BLOCK_TIME,
-          }),
-        };
-        // mirrors InstantiatedSpec: whatever term start it is built with is the
-        // one it serializes for storage
-        const fromEvent = sinon.stub().callsFake((projection) => ({
-          name: 'testapp',
-          spec: { name: 'testapp', version: 8 },
-          isExpired: sinon.stub().returns(false),
-          serialize: sinon.stub().returns({
-            ...serializedEvent, registeredAt: projection.registeredAt,
-          }),
-        }));
-
+      // These tests assert v9 term semantics — a term start carried on the
+      // projection, and an update that either renews it or inherits it. Only
+      // ConfirmedAppEvent projects registeredAt; AppEventLegacy projects
+      // { spec, hash, height } and nothing else. So the message is version 2
+      // over a v9 spec, which is the pairing that can actually carry what these
+      // tests are about.
+      async function updateStubs(activeRow) {
         const made = makeBaseStubs();
         const { stubs } = made;
-        stubs['../appDatabase/appsRepository'].getTempMessage = sinon.stub().resolves({
-          type: 'fluxappupdate',
-          version: 1,
-          appSpecifications: { name: 'testapp', version: 8, owner: 'owner1' },
-          hash: 'updHash',
-          timestamp: Date.now(),
-          signature: 'sig',
-        });
+        stubs['../appDatabase/appsRepository'].getTempMessage = sinon.stub().resolves(
+          await domain.tempMessage({
+            version: 2, type: 'fluxappupdate', hash: 'updHash', registeredAt: BLOCK_TIME,
+          }),
+        );
         stubs['../appDatabase/appsRepository'].getGlobalAppInfo = sinon.stub().resolves(activeRow);
-        stubs['../utils/specLibs'].getSpecBackend = sinon.stub().resolves({
-          AppEventLegacy: { deserialize: sinon.stub().returns(mockConfirmedEvent) },
-          ConfirmedAppEvent: { deserialize: sinon.stub().returns(mockConfirmedEvent) },
-          InstantiatedSpec: { fromEvent },
-          deserializeSpec: sinon.stub().returnsArg(0),
-        });
         return made;
       }
 
       it('authorizes against the app active on this node, not the name history', async () => {
         const activeRow = { name: 'testapp', owner: 'currentOwner' };
-        const { stubs } = updateStubs(activeRow);
+        const { stubs } = await updateStubs(activeRow);
         const mv = proxyquire('../../ZelBack/src/services/appMessaging/messageVerifier', stubs);
 
-        await mv.checkAndRequestApp('updHash', 'txid', 2000000, 200000000, null, 2);
+        await mv.checkAndRequestApp('updHash', 'txid', 2000000, 200000000, BLOCK_TIME, 2);
 
         const { authorize } = stubs['./appEventVerifier'];
         sinon.assert.calledOnce(authorize);
@@ -714,14 +610,14 @@ describe('messageVerifier tests', () => {
       // update to a name with no app on this node authorized against nothing.
       it('refuses to promote an update the verifier will not authorize', async () => {
         const storePermanentStub = sinon.stub().resolves();
-        const { stubs, logStub } = updateStubs(null);
+        const { stubs, logStub } = await updateStubs(null);
         stubs['../appDatabase/appsRepository'].storePermanentMessage = storePermanentStub;
         stubs['./appEventVerifier'].authorize = sinon.stub().rejects(
           new Error('Flux App testapp update cannot be authorized: no registration to update'),
         );
         const mv = proxyquire('../../ZelBack/src/services/appMessaging/messageVerifier', stubs);
 
-        const result = await mv.checkAndRequestApp('updHash', 'txid', 2000000, 200000000, null, 2);
+        const result = await mv.checkAndRequestApp('updHash', 'txid', 2000000, 200000000, BLOCK_TIME, 2);
 
         expect(result).to.be.false;
         expect(storePermanentStub.called).to.be.false;
@@ -731,31 +627,43 @@ describe('messageVerifier tests', () => {
       // The seam the free-update collapse lived in: the fee is computed from a
       // message somebody else selected, and nothing used to check which one.
       describe('what the fee is computed against', () => {
-        const predecessor = {
-          hash: 'prevHash',
-          height: 1999000,
-          registeredAt: 1750000000,
-          appSpecifications: { name: 'testapp', version: 8, owner: 'owner1' },
-        };
+        // A real superseded message. Its spec differs from the one being
+        // promoted on `instances`, which is what makes "priced against the
+        // predecessor, not against itself" an assertion with something behind
+        // it: resolveSpec now really deserializes this, so a blob the spec
+        // library would reject cannot stand in for it.
+        let predecessor;
 
-        function pricedUpdate(overrides = {}) {
-          const { stubs, regimeStub } = updateStubs({ name: 'testapp', owner: 'owner1' });
-          regimeStub.supersededMessage = sinon.stub().resolves(
+        before(async () => {
+          predecessor = {
+            hash: 'prevHash',
+            height: 1999000,
+            registeredAt: 1750000000,
+            appSpecifications: (await domain.v9Spec({ instances: 5 })).serialize(),
+          };
+        });
+
+        // v9Regime and not legacyRegime because the spec is v9 — the real
+        // dispatcher routes on the model the spec itself declares, so naming the
+        // wrong one here would fail rather than silently answer anyway.
+        async function pricedUpdate(overrides = {}) {
+          const { stubs, v9Regime } = await updateStubs({ name: 'testapp', owner: 'owner1' });
+          v9Regime.supersededMessage = sinon.stub().resolves(
             'superseded' in overrides ? overrides.superseded : predecessor,
           );
-          regimeStub.updateFee = sinon.stub().resolves(overrides.fee ?? 100000000n);
+          v9Regime.updateFee = sinon.stub().resolves(overrides.fee ?? 100000000n);
           stubs['../appDatabase/registryManager'].updateAppSpecifications = sinon.stub().resolves();
-          return { stubs, regimeStub };
+          return { stubs, v9Regime };
         }
 
         it('asks the regime which message this update supersedes, by height and timestamp', async () => {
-          const { stubs, regimeStub } = pricedUpdate();
+          const { stubs, v9Regime } = await pricedUpdate();
           const mv = proxyquire('../../ZelBack/src/services/appMessaging/messageVerifier', stubs);
 
-          await mv.checkAndRequestApp('updHash', 'txid', 2000000, 200000000, null, 2);
+          await mv.checkAndRequestApp('updHash', 'txid', 2000000, 200000000, BLOCK_TIME, 2);
 
-          sinon.assert.calledOnce(regimeStub.supersededMessage);
-          const [name, confirming] = regimeStub.supersededMessage.firstCall.args;
+          sinon.assert.calledOnce(v9Regime.supersededMessage);
+          const [name, confirming] = v9Regime.supersededMessage.firstCall.args;
           expect(name).to.equal('testapp');
           expect(confirming.height).to.equal(2000000);
           expect(confirming.timestamp).to.be.a('number');
@@ -765,14 +673,17 @@ describe('messageVerifier tests', () => {
         // free-update policy tests, so the update costs nothing. The fee must
         // see the superseded message's spec and its height, never this one's.
         it('prices against the superseded message, not the message being promoted', async () => {
-          const { stubs, regimeStub } = pricedUpdate();
+          const { stubs, v9Regime } = await pricedUpdate();
           const mv = proxyquire('../../ZelBack/src/services/appMessaging/messageVerifier', stubs);
 
-          await mv.checkAndRequestApp('updHash', 'txid', 2000000, 200000000, null, 2);
+          await mv.checkAndRequestApp('updHash', 'txid', 2000000, 200000000, BLOCK_TIME, 2);
 
-          sinon.assert.calledOnce(regimeStub.updateFee);
-          const [, prevSpec, height, prevHeight, prevRegisteredAt] = regimeStub.updateFee.firstCall.args;
-          expect(prevSpec).to.deep.equal(predecessor.appSpecifications);
+          sinon.assert.calledOnce(v9Regime.updateFee);
+          const [thisSpec, prevSpec, height, prevHeight, prevRegisteredAt] = v9Regime.updateFee.firstCall.args;
+          // the resolved predecessor, not the message being promoted - they are
+          // the same app and differ only on instances, so that is the tell
+          expect(prevSpec.instances).to.equal(5);
+          expect(thisSpec.instances).to.equal(3);
           expect(height).to.equal(2000000);
           expect(prevHeight).to.equal(predecessor.height);
           expect(prevRegisteredAt).to.equal(predecessor.registeredAt);
@@ -780,28 +691,28 @@ describe('messageVerifier tests', () => {
         });
 
         it('applies an update that pays the fee its regime asks for', async () => {
-          const { stubs } = pricedUpdate({ fee: 100000000n });
+          const { stubs } = await pricedUpdate({ fee: 100000000n });
           const mv = proxyquire('../../ZelBack/src/services/appMessaging/messageVerifier', stubs);
 
-          await mv.checkAndRequestApp('updHash', 'txid', 2000000, 100000000, null, 2);
+          await mv.checkAndRequestApp('updHash', 'txid', 2000000, 100000000, BLOCK_TIME, 2);
 
           sinon.assert.calledOnce(stubs['../appDatabase/registryManager'].updateAppSpecifications);
         });
 
         it('does not apply an underpaid update', async () => {
-          const { stubs } = pricedUpdate({ fee: 100000000n });
+          const { stubs } = await pricedUpdate({ fee: 100000000n });
           const mv = proxyquire('../../ZelBack/src/services/appMessaging/messageVerifier', stubs);
 
-          await mv.checkAndRequestApp('updHash', 'txid', 2000000, 99999999, null, 2);
+          await mv.checkAndRequestApp('updHash', 'txid', 2000000, 99999999, BLOCK_TIME, 2);
 
           sinon.assert.notCalled(stubs['../appDatabase/registryManager'].updateAppSpecifications);
         });
 
         it('applies a free update, which is a fee of zero and not a missing fee', async () => {
-          const { stubs } = pricedUpdate({ fee: 0n });
+          const { stubs } = await pricedUpdate({ fee: 0n });
           const mv = proxyquire('../../ZelBack/src/services/appMessaging/messageVerifier', stubs);
 
-          await mv.checkAndRequestApp('updHash', 'txid', 2000000, 0, null, 2);
+          await mv.checkAndRequestApp('updHash', 'txid', 2000000, 0, BLOCK_TIME, 2);
 
           sinon.assert.calledOnce(stubs['../appDatabase/registryManager'].updateAppSpecifications);
         });
@@ -860,7 +771,7 @@ describe('messageVerifier tests', () => {
           }
 
           it('starts a new term when the update paid for one', async () => {
-            const { stubs } = pricedUpdate({ fee: 100000000n });
+            const { stubs } = await pricedUpdate({ fee: 100000000n });
             const mv = proxyquire('../../ZelBack/src/services/appMessaging/messageVerifier', stubs);
 
             await mv.checkAndRequestApp('updHash', 'txid', 2000000, 100000000, 1760000000, 2);
@@ -872,7 +783,7 @@ describe('messageVerifier tests', () => {
           // nothing because nothing grew, and walks away with a fresh full term
           // — for as long as they like.
           it('keeps the superseded term start when the update was free', async () => {
-            const { stubs } = pricedUpdate({ fee: 0n });
+            const { stubs } = await pricedUpdate({ fee: 0n });
             const mv = proxyquire('../../ZelBack/src/services/appMessaging/messageVerifier', stubs);
 
             await mv.checkAndRequestApp('updHash', 'txid', 2000000, 0, 1760000000, 2);
@@ -881,7 +792,7 @@ describe('messageVerifier tests', () => {
           });
 
           it('starts a new term when the superseded message records none', async () => {
-            const { stubs } = pricedUpdate({
+            const { stubs } = await pricedUpdate({
               fee: 0n,
               superseded: { ...predecessor, registeredAt: undefined },
             });
@@ -894,12 +805,12 @@ describe('messageVerifier tests', () => {
         });
 
         it('does not apply an update with nothing to supersede', async () => {
-          const { stubs, regimeStub } = pricedUpdate({ superseded: null });
+          const { stubs, v9Regime } = await pricedUpdate({ superseded: null });
           const mv = proxyquire('../../ZelBack/src/services/appMessaging/messageVerifier', stubs);
 
-          await mv.checkAndRequestApp('updHash', 'txid', 2000000, 200000000, null, 2);
+          await mv.checkAndRequestApp('updHash', 'txid', 2000000, 200000000, BLOCK_TIME, 2);
 
-          sinon.assert.notCalled(regimeStub.updateFee);
+          sinon.assert.notCalled(v9Regime.updateFee);
           sinon.assert.notCalled(stubs['../appDatabase/registryManager'].updateAppSpecifications);
         });
       });
@@ -916,53 +827,31 @@ describe('messageVerifier tests', () => {
     });
 
     it('decrypts an encrypted registration spec before pricing it', async () => {
-      const serializedEvent = {
-        type: 'fluxappregister',
-        appSpecifications: { name: 'encapp', version: 8, owner: 'owner1', enterprise: 'base64blob' },
-        hash: 'encReg',
-      };
-      const mockConfirmedEvent = {
-        isRegistration: true,
-        isUpdate: false,
-        spec: { name: 'encapp', version: 8 },
-        serialize: sinon.stub().returns(serializedEvent),
-        toInstantiatedSpec: sinon.stub().returns({}),
-      };
-      // Encrypted installed spec: spec is the encrypted wrapper (no components).
-      // resolveInstantiatedSpec decrypts the held instance — never serialized.
-      const wireForm = { name: 'encapp', version: 8, enterprise: 'base64blob' };
-      const mockInstantiated = {
-        name: 'encapp',
-        isEncrypted: true,
-        spec: { name: 'encapp', version: 8 },
-        isExpired: sinon.stub().returns(false),
-        serialize: sinon.stub().returns(wireForm),
-      };
-      // The decrypted view the pricing regime can price.
-      const decryptedSpec = { name: 'encapp', version: 8, expire: 88000 };
+      // A genuinely encrypted spec — the enterprise blob stays sealed, so this
+      // is a real EncryptedSpecV8 and isEncrypted is the class's own answer.
+      const encrypted = await domain.encryptedV8Spec();
+      // Opening the blob is the one thing here that leaves the process (it needs
+      // the benchmark channel), so it is the one thing stubbed. What the pricer
+      // is handed is a cleartext view it can read.
+      const decryptedSpec = await domain.v8Spec({ name: 'encapp', expire: 88000 });
 
-      const { stubs, regimeStub } = makeBaseStubs();
+      const { stubs, legacyRegime } = makeBaseStubs();
       const resolveInstantiatedStub = sinon.stub().resolves(decryptedSpec);
-      stubs['../utils/specCutover'].resolveInstantiatedSpec = resolveInstantiatedStub;
-      stubs['../appDatabase/appsRepository'].getTempMessage = sinon.stub().resolves({
-        type: 'fluxappregister', version: 1, appSpecifications: wireForm,
-        hash: 'encReg', timestamp: Date.now(), signature: 'sig',
-      });
-      stubs['../utils/specLibs'].getSpecBackend = sinon.stub().resolves({
-        AppEventLegacy: { deserialize: sinon.stub().returns(mockConfirmedEvent) },
-        ConfirmedAppEvent: { deserialize: sinon.stub().returns(mockConfirmedEvent) },
-        InstantiatedSpec: { fromEvent: sinon.stub().returns(mockInstantiated) },
-        deserializeSpec: sinon.stub().returnsArg(0),
-      });
+      stubs['../utils/specCutover'] = { resolveInstantiatedSpec: resolveInstantiatedStub };
+      stubs['../appDatabase/appsRepository'].getTempMessage = sinon.stub().resolves(
+        await domain.tempMessage({ version: 1, hash: 'encReg', spec: encrypted }),
+      );
+
       const mv = proxyquire('../../ZelBack/src/services/appMessaging/messageVerifier', stubs);
       const result = await mv.checkAndRequestApp('encReg', 'txid', 2000000, 200000000, null, 2);
 
       expect(result).to.be.true;
-      // the held encrypted instance is decrypted to its cleartext pricing view
-      expect(resolveInstantiatedStub.calledOnceWith(mockInstantiated)).to.be.true;
-      // pricing ran against the decrypted spec, never the encrypted wrapper
-      expect(regimeStub.registrationFee.calledOnce).to.be.true;
-      expect(regimeStub.registrationFee.firstCall.args[0]).to.equal(decryptedSpec);
+      // the held instance really is encrypted, and it is what gets decrypted
+      sinon.assert.calledOnce(resolveInstantiatedStub);
+      expect(resolveInstantiatedStub.firstCall.args[0].isEncrypted).to.be.true;
+      // pricing ran against the decrypted view, never the sealed wrapper
+      expect(legacyRegime.registrationFee.calledOnce).to.be.true;
+      expect(legacyRegime.registrationFee.firstCall.args[0]).to.equal(decryptedSpec);
     });
   });
 
