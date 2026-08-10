@@ -215,9 +215,16 @@ describe('Daemon subscriptions: recovering from loss', function () {
     const state = await getZmqState();
     expect(state.nextSeq.hashblockheight ?? 0).to.equal(0);
 
-    const applied = waitForDeltaApplied(client);
+    const target = (await getState()).currentHeight + 2;
+    const applied = waitForDeltaApplied(client, (d) => d.toHeight === target);
     await advanceBlocks(2);
     await applied;
+
+    // Which side failed, if this test ever does: the stub stamps a sequence per
+    // message it sends, so a counter that moved says the frames went out and the
+    // node did not act on them, rather than the publisher having gone quiet.
+    const after = await getZmqState();
+    expect(after.nextSeq.fluxnodelistdelta ?? 0, 'the stub published nothing after the restart').to.be.greaterThan(0);
   });
 
   it('should keep applying deltas after the socket comes back', async function () {
@@ -299,7 +306,8 @@ describe('Daemon subscriptions: reorgs', function () {
     expect(event.newTipHeight).to.be.lessThan(event.oldTipHeight);
 
     // The list has to keep tracking a tip that moved backwards.
-    const applied = waitForDeltaApplied(client);
+    const target = (await getState()).currentHeight + 1;
+    const applied = waitForDeltaApplied(client, (d) => d.toHeight === target);
     await advanceBlock();
     expect((await applied).data.toHeight).to.be.greaterThan(event.newTipHeight);
   });
@@ -341,7 +349,8 @@ describe('Daemon subscriptions: silence is not death', function () {
     await assertNoEvent(client, 'daemon:unreachable', () => true, 20000);
 
     await resumeZmq();
-    const applied = waitForDeltaApplied(client);
+    const target = (await getState()).currentHeight + 1;
+    const applied = waitForDeltaApplied(client, (d) => d.toHeight === target);
     await advanceBlock();
     await applied;
   });
