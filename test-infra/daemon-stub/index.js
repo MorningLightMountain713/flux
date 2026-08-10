@@ -558,6 +558,11 @@ const silencedTopics = new Set();
 // Sends are chained rather than fired concurrently: a delta that overtook the block it
 // belongs to would be refused by the client for not chaining on.
 let sendChain = Promise.resolve();
+// Sequences are taken synchronously but the write is queued, so a stalled chain
+// advances the counter while nothing reaches the wire. Counting completions
+// separates "the stub never sent it" from "the subscriber ignored it".
+const sendsCompleted = new Map();
+const sendsFailed = new Map();
 
 function sleep(ms) {
   return new Promise((resolve) => { setTimeout(resolve, ms); });
@@ -603,7 +608,14 @@ function publish(topic, payload, explicitSeq) {
   const frames = [Buffer.from(topic, 'utf8'), payload, sequenceFrame(seq)];
   sendChain = sendChain
     .then(() => publisher.send(frames))
-    .catch((e) => console.error(`ZMQ publish of ${topic} failed: ${e.message}`));
+    .then(() => {
+      sendsCompleted.set(topic, (sendsCompleted.get(topic) ?? 0) + 1);
+      console.log(`ZMQ sent ${topic} seq ${seq} (${payload.length}B)`);
+    })
+    .catch((e) => {
+      sendsFailed.set(topic, (sendsFailed.get(topic) ?? 0) + 1);
+      console.error(`ZMQ publish of ${topic} failed: ${e.message}`);
+    });
 
   return { sent: true, seq, bytes: payload.length };
 }
@@ -1301,10 +1313,14 @@ control.post('/zmq/restart', async (req, res) => {
 control.get('/zmq/state', (req, res) => {
   const nextSeq = {};
   const lastSeq = {};
+  const sent = {};
+  const failed = {};
   const topics = [...new Set([...ZMQ_TOPICS, ...nextSequence.keys()])];
   topics.forEach((topic) => {
     nextSeq[topic] = nextSequence.get(topic) ?? 0;
     lastSeq[topic] = lastSequence.has(topic) ? lastSequence.get(topic) : null;
+    sent[topic] = sendsCompleted.get(topic) ?? 0;
+    failed[topic] = sendsFailed.get(topic) ?? 0;
   });
   res.json({
     bound: publisherBound,
@@ -1312,6 +1328,8 @@ control.get('/zmq/state', (req, res) => {
     topics,
     nextSeq,
     lastSeq,
+    sent,
+    failed,
     silenced: [...silencedTopics],
   });
 });
