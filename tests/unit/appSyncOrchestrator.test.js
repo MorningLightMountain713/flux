@@ -558,6 +558,34 @@ describe('AppSyncOrchestrator', () => {
       expect(orchestrator.state).to.equal(STATES.READY);
     });
 
+    it('retries an unlatched round on the next block, with no edge left to wait for', async () => {
+      const peers = makeEligiblePeers(3);
+      getEligibleSyncPeersStub.returns(peers);
+      // A round that reaches peers and gets no index back: it consumed its wake-up
+      // without changing anything, so nothing is coming to retry it.
+      reconcileStub.resolves({ peers: 3, indexesReceived: 0, fetched: 0 });
+
+      const orchestrator = makeOrchestrator({ isEnterprise: () => true });
+      orchestrator.start(defaultBootContext);
+      blockEmitter.emit('blocksProcessed', 2555000);
+      await clock.tickAsync(0);
+      peerEmitter.emit('peerThresholdReached', 12);
+      await clock.tickAsync(0);
+      completeEphemeral();
+      await clock.tickAsync(0);
+      expect(orchestrator.state, 'still short of READY').to.equal(STATES.SYNCING);
+
+      // The peer set never changes again — only the chain moves.
+      reconcileStub.resetHistory();
+      reconcileStub.resolves({ peers: 3, indexesReceived: 3, fetched: 1 });
+      blockEmitter.emit('blocksProcessed', 2555001);
+      await clock.tickAsync(0);
+      await clock.tickAsync(0);
+
+      expect(reconcileStub.called, 'the block re-drove the unlatched round').to.equal(true);
+      expect(orchestrator.state).to.equal(STATES.READY);
+    });
+
     it('resumes a recovery reconcile once peers become askable, after the threshold edge is spent', async () => {
       const peers = makeEligiblePeers(3);
       getEligibleSyncPeersStub.returns(peers);
