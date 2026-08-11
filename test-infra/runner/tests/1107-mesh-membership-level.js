@@ -133,15 +133,32 @@ describe('mesh membership level API', function () {
   });
 
   it('a container reads its own level: generation, self, canonical names, no addresses', async function () {
-    this.timeout(240000);
-    // Wait for every member to hold a slot, so the canonical names are the
-    // ordinal forms and the level is in its steady state.
+    this.timeout(360000);
+    // Wait for CONVERGED identity, not just a full slot set. Simultaneous
+    // installs can bake colliding provision-time picks (claim-and-go:
+    // publishClaimSlot is best-effort and arbitration converges the losers
+    // through the drift-rebuild), so the arbitrated set can be complete
+    // while a container still carries a losing identity — and a pending
+    // rebuild would also recreate the container under the next test's
+    // parked poll. Settled means: every node's own pass resolved a slot,
+    // the slots are distinct, and identityDrift is empty — a completed
+    // pass always writes both keys, and drift empty on the same pass as a
+    // settled slot proves the running container matches it.
+    await waitFor(async () => {
+      const statuses = await Promise.all(env.clients.map((_, i) => meshStatus(i)));
+      if (!statuses.every((s) => s.status === 'success' && s.data?.lastPass && !s.data.lastPass.error)) return false;
+      const slots = statuses.map((s) => s.data.lastPass.ownSlot);
+      if (!slots.every((slot) => Number.isInteger(slot))) return false;
+      if (new Set(slots).size !== slots.length) return false;
+      return statuses.every((s) => (s.data.lastPass.identityDrift ?? []).length === 0);
+    }, { timeout: 300000, interval: 5000, label: 'slots settled and every container identity converged' });
+
     await waitFor(async () => {
       const level = await readLevel(0).catch(() => null);
       return level?.status === 'success'
         && level.data.members.length === 3
         && level.data.members.every((m) => Number.isInteger(m.ordinal));
-    }, { timeout: 180000, interval: 5000, label: 'the level shows three slot-holders' });
+    }, { timeout: 60000, interval: 5000, label: 'the level shows three slot-holders' });
 
     const level = await readLevel(0);
     const { data } = level;
