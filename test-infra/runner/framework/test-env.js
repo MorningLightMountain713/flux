@@ -39,7 +39,9 @@ import { assertCoupledRatios, loadSharedConfig } from './coupled-knobs.js';
 import { assertFluxSpecVendorCurrent, NODE_IMAGE } from './flux-spec-vendor.js';
 import { assertNodeConfigsCurrent } from './node-configs.js';
 import { statelessRegex } from './log-reader.js';
-import { renderFluxdConf, DEFAULT_ZMQ_TOPICS } from './fluxd-conf.js';
+import {
+  renderFluxdConf, DEFAULT_ZMQ_TOPICS, ZMQ_NODE_PORT_BASE, zmqNodePort,
+} from './fluxd-conf.js';
 
 // How long after a re-attach the collector goes on treating an exact repeat as docker
 // replaying a line it already has. Docker's `since` is whole-second, so the replay is over
@@ -807,6 +809,9 @@ export async function createTestEnv({
   // conf render below, so an absent option would throw rather than fall back.
   zmqTopics = DEFAULT_ZMQ_TOPICS,
   nodeZmqTopics = {},
+  // Own-status is about the RECEIVER, so a fleet that wants it reads from its own
+  // socket rather than the shared one every node hears.
+  perNodeZmq = false,
 } = {}) {
   // Before the boot lock, the network, or a single container: a flux-spec
   // vendor lagging the branch surfaces as a product mystery minutes later,
@@ -1063,7 +1068,7 @@ export async function createTestEnv({
     // mongo starts, i.e. inside the fleet boot, where the waits at risk are the
     // boot's own.
     await startInfraDeathWatch(env);
-    await _buildEnv(env, nodes, deferredNodes, legacyNodes, unprivilegedNodes, stubPeers, silentSyncPeers, unverifiableSyncPeers, policyUnawarePeers, stubPeerings, configOverrides, mergedNodeOverrides, nodeTiers, dataCenter, tickerAutostart, discoveryAutostart, nodeStatusOverrides, rpcFailures, bootContext, initialHeight, syncthing, aptSeeded, aptBadSource, geolocation, locationTable, staticIp, policy, policySeeds, policyReachable, arcane, shutdowndMock, telemetrydMock, systemdMode, telemetrydReal, shutdowndReal, dnsdReal, zmqTopics, nodeZmqTopics);
+    await _buildEnv(env, nodes, deferredNodes, legacyNodes, unprivilegedNodes, stubPeers, silentSyncPeers, unverifiableSyncPeers, policyUnawarePeers, stubPeerings, configOverrides, mergedNodeOverrides, nodeTiers, dataCenter, tickerAutostart, discoveryAutostart, nodeStatusOverrides, rpcFailures, bootContext, initialHeight, syncthing, aptSeeded, aptBadSource, geolocation, locationTable, staticIp, policy, policySeeds, policyReachable, arcane, shutdowndMock, telemetrydMock, systemdMode, telemetrydReal, shutdowndReal, dnsdReal, zmqTopics, nodeZmqTopics, { perNodeZmq });
     return env;
   } catch (err) {
     // Boot failed: the env owns everything started so far. The shared teardown
@@ -1100,8 +1105,9 @@ async function _buildEnv(
   aptSeeded = true, aptBadSource = false, geolocation, locationTable, staticIp = true,
   policy = null, policySeeds = null, policyReachable = false, arcane = false,
   shutdowndMock = false, telemetrydMock = false, systemdMode = false, telemetrydReal = false,
-  shutdowndReal = false, dnsdReal = false, zmqTopics, nodeZmqTopics,
+  shutdowndReal = false, dnsdReal = false, zmqTopics, nodeZmqTopics, zmqOptions = {},
 ) {
+  const { perNodeZmq = false } = zmqOptions;
   // Everything built here registers onto the env shell as it comes up, so a
   // boot-phase throw leaves the partial state reachable (see makeEnvShell).
   const {
@@ -1151,6 +1157,7 @@ async function _buildEnv(
       CONTROL_PORT: '18232',
       // The publisher's port, which is what config.daemon.zmqport defaults to.
       ZMQ_PORT: '16123',
+      ZMQ_NODE_PORT_BASE: String(ZMQ_NODE_PORT_BASE),
       TICKER_AUTOSTART: tickerAutostart ? 'true' : 'false',
       NODE_COUNT: String(nodes),
       INITIAL_HEIGHT: String(initialHeight),
@@ -1378,7 +1385,10 @@ async function _buildEnv(
     writeFileSync(join(bootIdDir, 'boot-id'), getBootId(i + 1));
     const fluxdConfDir = join(tmpdir(), `flux-fluxd-conf-${networkName}-${num}`);
     mkdirSync(fluxdConfDir, { recursive: true });
-    const fluxdConf = renderFluxdConf(num, nodeZmqTopics[i] ?? zmqTopics, fluxdConfDir);
+    // Own-status is about the receiver, so a fleet that wants it reads from its own
+    // socket rather than the shared one every node hears.
+    const nodeZmqPort = perNodeZmq ? zmqNodePort(i + 1) : 16123;
+    const fluxdConf = renderFluxdConf(num, nodeZmqTopics[i] ?? zmqTopics, fluxdConfDir, nodeZmqPort);
     const bindMounts = [
       { source: volumeNames[i], target: '/mnt/appdata' },
       { source: join(fixturesDir, 'registry-tls', 'ca.pem'), target: '/usr/local/share/ca-certificates/test-registry.crt', mode: 'ro' },
@@ -1566,7 +1576,7 @@ async function _buildEnv(
     // base === '198.18'). Explicit test overrides still win (merged on top of this).
     const infraOverride = {
       database: { url: MONGO_IP },
-      daemon: { host: DAEMON_IP },
+      daemon: perNodeZmq ? { host: DAEMON_IP, zmqport: nodeZmqPort } : { host: DAEMON_IP },
       benchmark: { host: DAEMON_IP },
       // FluxOS builds its syncthing API base from config at module load, so in
       // binary mode the node has to be pointed at its own daemon. local.js is

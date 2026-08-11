@@ -17,11 +17,23 @@ const confFixturesDir = join(__dirname, '..', '..', 'fixtures', 'conf');
 export const ZMQ_CONF_TOPICS = ['hashblock', 'hashblockheight', 'chainreorg', 'fluxnodelistdelta', 'fluxnodestatus'];
 
 // Every topic the stub can publish, and what a suite asks for to put a fleet on push.
-// fluxnodestatus is deliberately absent: it carries ONE node's own deterministic-list
-// state, and the harness runs a single daemon stub for the whole fleet, so publishing it
-// would tell every node it is the same node. A suite that wants that path names it
-// explicitly — in practice on a one-node fleet — and drives it with publishZmq.
+// fluxnodestatus is absent: it carries ONE node's own deterministic-list state, and on
+// the shared publisher every node would be told it is the same node. Ask for
+// ALL_ZMQ_TOPICS_WITH_STATUS instead, which pairs it with the per-node publishers.
 export const ALL_ZMQ_TOPICS = ['hashblock', 'hashblockheight', 'chainreorg', 'fluxnodelistdelta'];
+
+// The whole set, own-status included. Requires perNodeZmq: a node addressed on its own
+// socket is the only way this topic means anything, since its payload is about the
+// receiver rather than about the chain.
+export const ALL_ZMQ_TOPICS_WITH_STATUS = [...ALL_ZMQ_TOPICS, 'fluxnodestatus'];
+
+// Per-node publisher ports. The shared publisher on 16123 stays exactly as it is — every
+// suite that does not ask for per-node sockets is untouched — and node N additionally
+// gets its own socket here, clear of the stub's RPC ports (16124/16224) and its control
+// port (18232). Fleet-wide topics are fanned out to every socket, so a node dialling its
+// own port still sees the whole chain; only own-status is addressed to one.
+export const ZMQ_NODE_PORT_BASE = 17123;
+export const zmqNodePort = (num) => ZMQ_NODE_PORT_BASE + Number(num);
 
 // What a fleet publishes unless a suite asks otherwise: nothing. Every suite written
 // before the stub could publish was validated against the polling path, and turning the
@@ -39,7 +51,7 @@ export const DEFAULT_ZMQ_TOPICS = [];
  * @param {string} dir Directory to render into.
  * @returns {string} Path to the rendered file.
  */
-export function renderFluxdConf(num, topics, dir) {
+export function renderFluxdConf(num, topics, dir, port = 16123) {
   const unknown = topics.filter((topic) => !ZMQ_CONF_TOPICS.includes(topic));
   if (unknown.length) {
     throw new Error(`Unknown zmq topic(s) ${unknown.join(', ')} — expected from ${ZMQ_CONF_TOPICS.join(', ')}`);
@@ -55,7 +67,7 @@ export function renderFluxdConf(num, topics, dir) {
   // stub's container. The address a node dials comes from its own config
   // (daemon.host + daemon.zmqport), not from here — this file only says which topics
   // exist.
-  const published = topics.map((topic) => `zmqpub${topic}=tcp://0.0.0.0:16123`).join('\n');
+  const published = topics.map((topic) => `zmqpub${topic}=tcp://0.0.0.0:${port}`).join('\n');
 
   const rendered = join(dir, `flux-${num}.conf`);
   writeFileSync(rendered, `${base}\n${published}${published ? '\n' : ''}`);

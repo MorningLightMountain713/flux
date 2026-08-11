@@ -2,7 +2,7 @@
 import { describe, it, before, after, afterEach } from 'mocha';
 import { expect } from 'chai';
 import { createTestEnv, deterministicNodes } from '../framework/test-env.js';
-import { ALL_ZMQ_TOPICS } from '../framework/fluxd-conf.js';
+import { ALL_ZMQ_TOPICS, ALL_ZMQ_TOPICS_WITH_STATUS } from '../framework/fluxd-conf.js';
 import {
   advanceBlock, advanceBlocks, setNodeList, removeFromNodeList, restoreToNodeList, resetNodeList,
   getJournal, clearJournal, publishZmq, skipZmqSeq, silenceZmq, resumeZmq,
@@ -11,7 +11,7 @@ import {
 import {
   waitForDaemonReady, waitForSubscriptionsStarted, waitForSubscriptionMode, waitForBlockProcessed,
   waitForListAnchored, waitForDeltaApplied, waitForDeltaRefused, waitForReorg,
-  waitForResync, waitFor, assertNoEvent,
+  waitForResync, waitFor, assertNoEvent, waitForOwnStatus,
 } from '../framework/wait.js';
 import { getSubnetConfig } from '../framework/subnet-config.js';
 
@@ -434,6 +434,93 @@ describe('Daemon subscriptions: the scan on a daemon with no block events', func
     const seenSecond = waitForBlockProcessed(client, (d) => d.height >= second, 60000);
     await advanceBlock();
     await seenSecond;
+  });
+});
+
+describe('Daemon subscriptions: own status on a per-node socket', function () {
+  let env;
+
+  before(async function () {
+    this.timeout(240000);
+    env = await createTestEnv({
+      hookCtx: this,
+      nodes: 2,
+      tickerAutostart: false,
+      // Own status is about the receiver, not the chain, so it only means anything
+      // addressed. Each node reads from its own publisher; the fleet-wide topics are
+      // fanned out to those same sockets, which the second test here pins.
+      zmqTopics: ALL_ZMQ_TOPICS_WITH_STATUS,
+      perNodeZmq: true,
+    });
+    await Promise.all(env.clients.map((c) => waitForDaemonReady(c)));
+    await Promise.all(env.clients.map((c) => waitForSubscriptionsStarted(c)));
+  });
+
+  after(async function () {
+    this.timeout(60000);
+    await env?.teardown();
+  });
+
+  it('should put own status on push when the daemon publishes the topic', async function () {
+    this.timeout(60000);
+    await Promise.all(env.clients.map((c) => waitForSubscriptionMode(c, 'fluxnodeStatusSource', 'push')));
+  });
+
+  it('should deliver a status to the node it names, and to no other', async function () {
+    this.timeout(120000);
+    const chain = await getState();
+    const targetNum = 2;
+    const target = env.clients[targetNum - 1];
+    const other = env.clients[0];
+
+    // The other node's cursor is taken BEFORE the publish. assertNoEvent takes its own
+    // cursor when it is called, which here would be after the delivery it is meant to
+    // rule out — a window that opens too late cannot see what it is looking for, and
+    // would pass for that reason rather than because nothing arrived.
+    const otherBefore = other.getLastEventId();
+    const seen = waitForOwnStatus(
+      target,
+      (d) => d.lastConfirmedHeight === chain.currentHeight,
+      60000,
+      { afterId: target.getLastEventId() },
+    );
+
+    await publishZmq({
+      topic: 'fluxnodestatus',
+      node: targetNum,
+      fields: {
+        blockHeight: chain.currentHeight,
+        status: 'CONFIRMED',
+        tier: 'CUMULUS',
+        confirmedHeight: chain.currentHeight - 100,
+        lastConfirmedHeight: chain.currentHeight,
+        lastPaidHeight: chain.currentHeight - 50,
+        txhash: '0'.repeat(64),
+        outidx: 0,
+        ip: env.clients[targetNum - 1].ip,
+      },
+    });
+
+    await seen;
+
+    // The whole point of the per-node socket: on the shared publisher this same message
+    // would have told BOTH nodes they were the confirmed one.
+    const leaked = other.getEventBuffer().find(
+      (e) => e.event === 'daemon:ownStatus' && e.id > otherBefore
+        && e.data.lastConfirmedHeight === chain.currentHeight,
+    );
+    expect(leaked, `node 1 must not receive node ${targetNum}'s status`).to.equal(undefined);
+  });
+
+  it('should still see the fleet-wide chain on its own socket', async function () {
+    this.timeout(90000);
+    // A node dialling its own port must not end up on a private, quieter chain: the
+    // fleet-wide topics are fanned out to every per-node socket, and a block is the
+    // cheapest proof that fan-out reaches both of them.
+    const next = (await getState()).currentHeight + 1;
+    const seen = env.clients.map((c) => waitForBlockProcessed(c, (d) => d.height >= next, 60000));
+    await advanceBlock();
+    await Promise.all(seen);
   });
 });
 
