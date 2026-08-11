@@ -8,7 +8,7 @@ import { queueAppTx, advanceBlocks } from '../framework/daemon-control.js';
 import { waitFor, waitForAppInstalled } from '../framework/wait.js';
 import { authenticate } from '../auth.js';
 import { appOwnerKey } from '../framework/keys.js';
-import { execInContainer } from '../framework/container.js';
+import { execInContainer, isAppFullyGone } from '../framework/container.js';
 import { pushBusybox } from '../framework/registry-helper.js';
 import { REGISTRY_REPO_HOST, getSubnetConfig } from '../framework/subnet-config.js';
 
@@ -252,10 +252,14 @@ describe('mesh ordinal slots — claim, identity, replacement inheritance', func
     const victimSlot = await ownSlotOf(victim);
     expect(victimSlot, 'the victim holds a slot').to.be.a('number');
 
-    // Stop the victim's FluxOS outright. Its rows age out on the lowered
-    // TTLs — the ungraceful-death path — vacating its slot network-wide,
-    // and the spawner replaces the missing instance onto the spare node.
-    await execInContainer(env.clients[victim].container, 'systemctl stop fluxos');
+    // Kill the victim's FluxOS ungracefully: mask first so Restart=always
+    // cannot respawn it, SIGKILL so no shutdown handler runs and no leave
+    // broadcast goes out (systemctl stop is a SIGTERM — the graceful path,
+    // which vacates early on sigtermTtlS). The rows age out network-wide
+    // on locationTtlS, vacating the slot, and the spawner replaces the
+    // missing instance onto the spare node.
+    await execInContainer(env.clients[victim].container,
+      'systemctl mask --runtime fluxos && systemctl kill --signal=SIGKILL fluxos');
 
     await waitFor(async () => {
       const status = await meshStatus(spare);
@@ -288,18 +292,24 @@ describe('mesh ordinal slots — claim, identity, replacement inheritance', func
     const spareSlots = await Promise.all(holders.map((i) => ownSlotOf(i)));
     const victim = env.clients.findIndex((_, i) => !holders.includes(i));
     expect(victim, 'the stopped node is identifiable').to.be.at.least(0);
-    await execInContainer(env.clients[victim].container, 'systemctl start fluxos');
+    await execInContainer(env.clients[victim].container,
+      'systemctl unmask --runtime fluxos && systemctl start fluxos');
 
-    // Give the returned node time to re-announce and run mesh passes, then
-    // hold the invariant across a further pass.
+    // Settled means the returned node COMPLETED a mesh pass in this process
+    // lifetime and resolved itself without a stolen slot. lastPass is
+    // in-memory and a completed pass always writes the ownSlot key, so the
+    // key's presence is the completion signal — a mid-boot or erroring node
+    // keeps the poll waiting rather than reading as settled. The reaper
+    // removing the app from the victim entirely also settles it.
     await waitFor(async () => {
+      const gone = await isAppFullyGone(env.clients[victim].container, name).catch(() => false);
+      if (gone) return true;
       const status = await meshStatus(victim);
-      // Either it still holds the app (over-target member: it must NOT hold
-      // a slot another member owns) or the reaper already removed it.
-      if (status.status !== 'success' || !status.data?.identity) return true;
+      if (status.status !== 'success' || !status.data?.identity) return false;
       const slot = status.data.lastPass?.ownSlot;
-      return slot === null || slot === undefined || !spareSlots.includes(slot);
-    }, { timeout: 300000, interval: 10000, label: 'the returned node settles without stealing a slot' });
+      if (slot === undefined) return false;
+      return slot === null || !spareSlots.includes(slot);
+    }, { timeout: 300000, interval: 10000, label: 'the returned node completes a post-restart pass without stealing a slot' });
 
     const targets = await srvTargets(holders[0]);
     expect(targets, 'the named set is still exactly the three ordinals').to.deep.equal(FULL_SET());
