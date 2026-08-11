@@ -494,6 +494,7 @@ class AppSyncOrchestrator {
   #onBlocksProcessed(blockHeight) {
     const count = this.#lastBlockHeight > 0 ? blockHeight - this.#lastBlockHeight : 1;
     this.#lastBlockHeight = blockHeight;
+    let advanced = false;
     if (!this.#explorerSynced) {
       this.#explorerSynced = true;
       log.info(`AppSyncOrchestrator - Explorer synced at block ${blockHeight}`);
@@ -501,6 +502,7 @@ class AppSyncOrchestrator {
         this.#setState(STATES.SYNCING);
         this.#ensureBlockThreshold();
         this.#advanceSync();
+        advanced = true;
       }
     }
     if (this.#state === STATES.SYNCING || this.#state === STATES.READY || this.#state === STATES.RESYNCING) {
@@ -510,6 +512,20 @@ class AppSyncOrchestrator {
       this.#checkHashRetry(blockHeight);
       this.#checkManifestRefresh(blockHeight);
       this.#checkIngressRefresh(blockHeight);
+      // A permanent-plane step that has not latched gets another go on the next
+      // block. Its own wake-ups are edges — peers crossing the threshold, peers
+      // becoming askable — and a round that reached peers and simply got no index
+      // back consumes one without changing anything, so there may be no further
+      // edge to wait for. Readiness is 250 blocks away, and the steady-state
+      // refresh cannot help because it only runs once READY, which is the state
+      // this node cannot reach. Retrying per block bounds that stall to one block
+      // instead of hours; the rounds themselves are cheap and idempotent, and a
+      // step that has latched is skipped.
+      if (!advanced
+        && (this.#state === STATES.SYNCING || this.#state === STATES.RESYNCING)
+        && (!this.#hashSyncComplete || !this.#manifestSyncComplete)) {
+        this.#advanceSync();
+      }
     }
   }
 
