@@ -87,6 +87,49 @@ function appDecrypt({ appName, fluxID, ciphertext, nonce, tag, aad }) {
   return { message: pt.toString('base64') };
 }
 
+// --- Arcane blob signatures (wire contract v2) ---
+// The channel builds the signed bytes itself: a per-shape domain prefix over the
+// hex digest of that shape's fields. Callers send typed fields, never a message.
+function sha256Hex(value) {
+  return crypto.createHash('sha256').update(value).digest('hex');
+}
+
+const BLOB_SIGNATURE_DOMAINS = {
+  upload: 'FLUX_BLOB_UPLOAD_v1:',
+  manifest: 'FLUX_BLOB_MANIFEST_v1:',
+  reconcile: 'FLUX_BLOB_RECONCILE_v1:',
+};
+
+// Upload and manifest carry a timestamp and are refused outside this window.
+// Reconcile carries none: the verifier's per-(appName, source) monotonic version
+// floor bounds replay there instead.
+const BLOB_FRESHNESS_WINDOW_MS = 300 * 1000;
+
+function blobSignedDigest(fields) {
+  switch (fields.kind) {
+    case 'upload':
+      return sha256Hex(`${fields.locator}:${fields.appName}:${fields.timestamp}`);
+    case 'manifest':
+      return sha256Hex(`${fields.appName}:${fields.version}:${fields.timestamp}`);
+    case 'reconcile':
+      return sha256Hex(`${fields.appName}:${fields.source}:${fields.version}`);
+    default:
+      throw new Error(`signblobupload: unknown kind ${fields.kind}`);
+  }
+}
+
+function signBlobUpload(fields) {
+  const domain = BLOB_SIGNATURE_DOMAINS[fields.kind];
+  if (!domain) throw new Error(`signblobupload: unknown kind ${fields.kind}`);
+  if (fields.kind !== 'reconcile') {
+    const skewMs = Math.abs(Date.now() - Number(fields.timestamp));
+    if (!Number.isFinite(skewMs) || skewMs > BLOB_FRESHNESS_WINDOW_MS) {
+      throw new Error('signblobupload: timestamp outside the freshness window');
+    }
+  }
+  return signEd25519(blobUploadKey.privateKey, Buffer.from(domain + blobSignedDigest(fields)));
+}
+
 // --- X25519 HPKE transport (real, via @hpke/core — the lib the node uses) ---
 let hpkeCache;
 async function getHpke() {
@@ -293,7 +336,7 @@ module.exports = {
   transportDecap,
   caCertificate,
   signCertificate,
-  signArcaneUpload: (message) => signEd25519(blobUploadKey.privateKey, Buffer.from(message)),
+  signBlobUpload,
   signAttestation: (message) => signEd25519(attestationKey.privateKey, Buffer.from(message)),
   signMeshAttestation: (message) => signEd25519(meshAttestationKey.privateKey, Buffer.from(MESH_VOUCHER_DOMAIN + message)),
   attestationPubkeyB64: attestationKey.rawPubB64,
