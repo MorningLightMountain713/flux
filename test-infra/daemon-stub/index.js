@@ -441,7 +441,7 @@ const benchHandlers = {
   // mirror decryptrsamessage's { status:'ok', <field> } string convention.
   bloblocator: (params) => JSON.stringify({ status: 'ok', locator: benchCrypto.locatorFor(JSON.parse(params[0])) }),
   contentkey: (params) => JSON.stringify({ status: 'ok', key: benchCrypto.contentKeyFor(JSON.parse(params[0])) }),
-  signblobupload: (params) => JSON.stringify({ status: 'ok', signature: benchCrypto.signArcaneUpload(JSON.parse(params[0]).message) }),
+  signblobupload: (params) => JSON.stringify({ status: 'ok', signature: benchCrypto.signBlobUpload(JSON.parse(params[0])) }),
   attest: (params) => {
     const { message, purpose } = JSON.parse(params[0]);
     const signature = purpose === 'mesh'
