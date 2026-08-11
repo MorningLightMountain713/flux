@@ -415,7 +415,22 @@ const BOOT_LOCK_DIR = process.env.E2E_BOOT_LOCK_DIR ?? join(tmpdir(), 'e2e-boot-
 
 const sleep = (ms) => new Promise((resolve) => { setTimeout(resolve, ms); });
 
-async function acquireBootLock() {
+// A claimer writes its pid in the same breath as the mkdir, so a lock directory
+// without one is either that microsecond-wide window or a run that was killed
+// inside it. Treating the second as a live claimer waits forever, and because the
+// wait logs nothing it presents as a suite that simply hangs — every later run on
+// the box wedged by a directory nobody owns. A pid that never arrives is therefore
+// taken as abandoned after a few polls, which is orders of magnitude longer than
+// the window it protects.
+const BOOT_LOCK_PIDLESS_GRACE_POLLS = 5;
+// Waiting past this means the queue is wedged rather than busy. Failing here says
+// so, instead of sleeping until the runner's wall-clock kills the suite with a
+// SIGKILL that explains nothing.
+const BOOT_LOCK_MAX_WAIT_MS = Number(process.env.E2E_BOOT_LOCK_MAX_WAIT_MS ?? 600000);
+
+export async function acquireBootLock() {
+  const startedAt = process.hrtime.bigint();
+  let pidlessPolls = 0;
   for (;;) {
     try {
       mkdirSync(BOOT_LOCK_DIR);
@@ -428,9 +443,10 @@ async function acquireBootLock() {
     try {
       owner = Number(readFileSync(join(BOOT_LOCK_DIR, 'pid'), 'utf-8'));
     } catch {
-      // claimer is between mkdir and pid write — treat as live and wait
+      // claimer is between mkdir and pid write, or died in it — the grace below decides
     }
     if (owner) {
+      pidlessPolls = 0;
       try {
         process.kill(owner, 0);
       } catch {
@@ -439,12 +455,26 @@ async function acquireBootLock() {
         rmSync(BOOT_LOCK_DIR, { recursive: true, force: true });
         continue;
       }
+    } else {
+      pidlessPolls += 1;
+      if (pidlessPolls >= BOOT_LOCK_PIDLESS_GRACE_POLLS) {
+        rmSync(BOOT_LOCK_DIR, { recursive: true, force: true });
+        pidlessPolls = 0;
+        continue;
+      }
+    }
+    const waitedMs = Number((process.hrtime.bigint() - startedAt) / 1000000n);
+    if (waitedMs > BOOT_LOCK_MAX_WAIT_MS) {
+      throw new Error(
+        `boot lock: waited ${Math.round(waitedMs / 1000)}s for ${BOOT_LOCK_DIR} `
+        + `(holder pid ${owner || 'none'}). The queue is wedged, not merely busy.`,
+      );
     }
     await sleep(1000);
   }
 }
 
-function releaseBootLock() {
+export function releaseBootLock() {
   try {
     const owner = Number(readFileSync(join(BOOT_LOCK_DIR, 'pid'), 'utf-8'));
     if (owner === process.pid) rmSync(BOOT_LOCK_DIR, { recursive: true, force: true });
