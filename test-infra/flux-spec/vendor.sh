@@ -38,14 +38,32 @@ if [ ! -d "$src/.git" ]; then
 fi
 git -C "$src" fetch origin
 
+# Resolve the pin BEFORE touching what is already vendored. A pin that has not
+# been pushed is the likely reason this fails, and the old order deleted a
+# working vendor and only then discovered it had nothing to replace it with —
+# leaving the checkout unable to build a fleet at all, which is a worse state
+# than the stale one it started in.
+if ! git -C "$src" rev-parse -q --verify "$pin^{commit}" >/dev/null 2>&1; then
+  echo "flux-spec: pin ${pin:0:12} is not in $repo." >&2
+  echo "  It is almost certainly unpushed — push the commit the pin names, then re-run." >&2
+  echo "  The existing vendor at $(cat "$vendor/.vendored-ref" 2>/dev/null || echo 'none') is untouched." >&2
+  exit 1
+fi
+
 # git archive exports exactly the tracked tree at the pin — the vendor is
 # rebuilt from scratch so a shrinking package set cannot leave orphans behind,
 # and stale transitive deps (the skew class this machinery exists to kill)
-# cannot survive a re-vendor.
+# cannot survive a re-vendor. It is staged beside the vendor and swapped in only
+# once the export succeeds, so a failure mid-extract cannot leave a half-tree
+# wearing a stamp that says it is complete.
+staged="$vendor.staging.$$"
+trap 'rm -rf "$staged"' EXIT
+rm -rf "$staged"
+mkdir -p "$staged"
+git -C "$src" archive "$pin" | tar -x -C "$staged"
+echo "$pin" > "$staged/.vendored-ref"
 rm -rf "$vendor"
-mkdir -p "$vendor"
-git -C "$src" archive "$pin" | tar -x -C "$vendor"
-echo "$pin" > "$vendor/.vendored-ref"
+mv "$staged" "$vendor"
 
 # Workspace install: the runner imports @runonflux/* from this tree on the
 # host, and the image repeats the install for the node containers.
