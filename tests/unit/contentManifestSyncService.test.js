@@ -77,6 +77,25 @@ describe('contentManifestSyncService', () => {
       expect(result).to.deep.equal({ peers: 0, indexesReceived: 0, fetched: 0 });
     });
 
+    it('hands a concurrent caller the real outcome of the round in flight', async () => {
+      const svc = load();
+      const store = new Map([['a', 4]]);
+      const getLocalVersions = sinon.stub().callsFake(async () => [...store].map(([appName, version]) => ({ appName, version })));
+      const p1 = makePeer(svc, 'p1', [{ appName: 'a', version: 4 }], store);
+
+      // Two triggers land together - a partition heal produces exactly this, with
+      // peers recovering and a block arriving in the same turn.
+      const first = svc.reconcile([p1], { getLocalVersions, sign: async () => ({ type: 'fluxappcontentmanifestindexrequest' }), delay: async () => {}, indexTimeoutMs: 5, fetchSettleMs: 0 });
+      const second = svc.reconcile([p1], { getLocalVersions, sign: async () => ({ type: 'fluxappcontentmanifestindexrequest' }), delay: async () => {}, indexTimeoutMs: 5, fetchSettleMs: 0 });
+
+      const [a, b] = await Promise.all([first, second]);
+
+      // The late caller must not be handed a peerless-looking result: that reads as
+      // "nobody answered", leaves its step unlatched, and nothing retries it.
+      expect(b.indexesReceived, 'joined round reports the real index count').to.be.greaterThan(0);
+      expect(b).to.deep.equal(a);
+    });
+
     it('runs the two-step exchange: index from all peers, fetch only the missing/stale', async () => {
       const svc = load();
       const store = new Map([['a', 4]]); // locally current on a, missing b and c

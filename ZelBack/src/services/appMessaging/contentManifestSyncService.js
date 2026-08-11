@@ -31,7 +31,12 @@ const FETCH_SETTLE_MS = config.fluxapps.manifestFetchSettleMs ?? 8000;
 const INDEX_REQUEST = 'fluxappcontentmanifestindexrequest';
 const FETCH_REQUEST = 'fluxappcontentmanifestrequest';
 
-let reconcileRunning = false;
+// The round in flight, if any. A second caller joins it rather than being turned
+// away: the old single-flight returned peers:0, which is indistinguishable from
+// "nobody answered", so the caller treated a collision as a vacuous round, left
+// its step unlatched, and had nothing to retry it. Joining hands back the real
+// outcome of a round that did compare against peers.
+let reconcileInFlight = null;
 // The in-flight round: the peers we asked (so their index/body responses are accepted)
 // and the indexes collected so far. Null between rounds.
 let activeRound = null;
@@ -79,16 +84,22 @@ function computeNeeded(target, local) {
  * Run one reconcile round against the given peers (objects with `.key` and `.send`).
  * Best-effort and bounded: completes after the index wait + the per-peer fetch settles,
  * so it can gate boot readiness (the spawner waits on the manifest view converging) while
- * still releasing if peers are slow/absent. Single-flight.
+ * still releasing if peers are slow/absent. One round at a time: a caller arriving
+ * mid-round joins it and receives that round's real outcome.
  *
  * @param {Array<{key: string, send: Function}>} peers
  * @param {object} deps - { getLocalVersions?, sign?, delay?, now?, indexTimeoutMs?, fetchSettleMs? }
  * @returns {Promise<{peers: number, indexesReceived: number, fetched: number}>}
  */
 async function reconcile(peers, deps = {}) {
-  if (reconcileRunning) return { peers: 0, indexesReceived: 0, fetched: 0, skipped: true };
+  if (reconcileInFlight) return reconcileInFlight;
   if (!Array.isArray(peers) || peers.length === 0) return { peers: 0, indexesReceived: 0, fetched: 0 };
 
+  reconcileInFlight = runReconcile(peers, deps).finally(() => { reconcileInFlight = null; });
+  return reconcileInFlight;
+}
+
+async function runReconcile(peers, deps = {}) {
   const {
     getLocalVersions = appsRepository.listContentManifestVersions,
     sign = serialiseAndSignFluxBroadcast,
@@ -98,7 +109,6 @@ async function reconcile(peers, deps = {}) {
     fetchSettleMs = FETCH_SETTLE_MS,
   } = deps;
 
-  reconcileRunning = true;
   try {
     let resolveIndexes;
     const indexesReady = new Promise((resolve) => { resolveIndexes = resolve; });
@@ -153,7 +163,6 @@ async function reconcile(peers, deps = {}) {
     return { peers: peers.length, indexesReceived, fetched };
   } finally {
     activeRound = null;
-    reconcileRunning = false;
   }
 }
 
