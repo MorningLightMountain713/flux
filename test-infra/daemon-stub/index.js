@@ -19,6 +19,9 @@ const CONTROL_PORT = Number(process.env.CONTROL_PORT) || 18232;
 // The publisher's port. FluxOS dials tcp://<config.daemon.host>:<config.daemon.zmqport>,
 // which defaults to 16123 — the same default fluxd publishes on.
 const ZMQ_PORT = Number(process.env.ZMQ_PORT) || 16123;
+// Base for the per-node publishers; node N binds BASE+N. Clear of the RPC ports above
+// and of the control port, and matched by framework/fluxd-conf.js.
+const ZMQ_NODE_PORT_BASE = Number(process.env.ZMQ_NODE_PORT_BASE) || 17123;
 
 // Reported software versions — single source of truth so every RPC stays consistent
 // and a version bump is a one-line change. BENCH_VERSION must satisfy FluxOS's
@@ -552,6 +555,15 @@ const ZMQ_TOPICS = zmqEncoders.TOPICS;
 
 let publisher = null;
 let publisherBound = false;
+// One socket per node, so a topic whose payload is about the RECEIVER can be addressed
+// to it. The shared publisher above still carries the fleet-wide topics, and every
+// fleet-wide send is fanned out to these too — a node dialling its own port must still
+// see the whole chain, or it would be a node with a private and much quieter blockchain.
+const nodePublishers = new Map();
+// Own-status is addressed, so its per-topic sequence has to be counted per node:
+// a shared counter would advance on a message a node never received and read to it as
+// a gap, which is the one thing that makes a client throw its state away and resync.
+const nodeSequence = new Map();
 const nextSequence = new Map();
 const lastSequence = new Map();
 const silencedTopics = new Set();
@@ -598,9 +610,31 @@ function takeSequence(topic, explicit) {
  * @param {number} [explicitSeq] Sequence to stamp instead of the counter's next.
  * @returns {{sent: boolean, seq?: number, bytes?: number, reason?: string}} Outcome.
  */
-function publish(topic, payload, explicitSeq) {
+function publish(topic, payload, explicitSeq, targetNode) {
   if (!publisherBound) return { sent: false, reason: 'publisher is not bound' };
   if (isSilenced(topic)) return { sent: false, reason: 'topic is silenced' };
+
+  // Addressed to one node: its own socket, and its own sequence for this topic.
+  if (targetNode !== undefined && targetNode !== null) {
+    const num = Number(targetNode);
+    const socket = nodePublishers.get(num);
+    if (!socket) return { sent: false, reason: `no per-node publisher for node ${targetNode}` };
+    const key = `${num}:${topic}`;
+    const nodeSeq = explicitSeq ?? (nodeSequence.get(key) ?? 0);
+    nodeSequence.set(key, nodeSeq + 1);
+    const addressed = [Buffer.from(topic, 'utf8'), payload, sequenceFrame(nodeSeq)];
+    sendChain = sendChain
+      .then(() => socket.send(addressed))
+      .then(() => {
+        sendsCompleted.set(topic, (sendsCompleted.get(topic) ?? 0) + 1);
+        console.log(`ZMQ sent ${topic} seq ${nodeSeq} to node ${num} (${payload.length}B)`);
+      })
+      .catch((e) => {
+        sendsFailed.set(topic, (sendsFailed.get(topic) ?? 0) + 1);
+        console.error(`ZMQ publish of ${topic} to node ${num} failed: ${e.message}`);
+      });
+    return { sent: true, seq: nodeSeq, bytes: payload.length, node: num };
+  }
 
   const seq = takeSequence(topic, explicitSeq);
   lastSequence.set(topic, seq);
@@ -608,6 +642,9 @@ function publish(topic, payload, explicitSeq) {
   const frames = [Buffer.from(topic, 'utf8'), payload, sequenceFrame(seq)];
   sendChain = sendChain
     .then(() => publisher.send(frames))
+    // Same frames, same sequence, to every node socket: a node on its own port is
+    // reading the same chain as the fleet, not a private one.
+    .then(() => Promise.all([...nodePublishers.values()].map((socket) => socket.send(frames))))
     .then(() => {
       sendsCompleted.set(topic, (sendsCompleted.get(topic) ?? 0) + 1);
       console.log(`ZMQ sent ${topic} seq ${seq} (${payload.length}B)`);
@@ -618,6 +655,23 @@ function publish(topic, payload, explicitSeq) {
     });
 
   return { sent: true, seq, bytes: payload.length };
+}
+
+async function bindNodePublishers() {
+  for (let num = 1; num <= NODE_COUNT; num += 1) {
+    const port = ZMQ_NODE_PORT_BASE + num;
+    const socket = new zmq.Publisher();
+    try {
+      // eslint-disable-next-line no-await-in-loop
+      await socket.bind(`tcp://0.0.0.0:${port}`);
+      nodePublishers.set(num, socket);
+    } catch (e) {
+      console.error(`ZMQ per-node publisher for node ${num} failed to bind on ${port}: ${e.message}`);
+    }
+  }
+  if (nodePublishers.size) {
+    console.log(`ZMQ per-node publishers bound for ${nodePublishers.size} node(s) from ${ZMQ_NODE_PORT_BASE + 1}`);
+  }
 }
 
 async function bindPublisher() {
@@ -655,6 +709,7 @@ async function restartPublisher() {
   lastSequence.clear();
   sendChain = Promise.resolve();
   await bindPublisher();
+  await bindNodePublishers();
 }
 
 // -- What a block connect publishes --
@@ -842,6 +897,9 @@ publishedNodeList = snapshotForDiff(deterministicNodeList);
 
 // A publisher that cannot bind is fatal: the nodes' config says this daemon publishes,
 // so they would wait on a socket that never opens rather than fall back to polling.
+bindNodePublishers().catch((e) => {
+  console.error(`ZMQ per-node publishers failed to bind: ${e.message}`);
+});
 bindPublisher().catch((e) => {
   console.error(`ZMQ publisher failed to bind on ${ZMQ_PORT}: ${e.message}`);
   process.exit(1);
@@ -1233,11 +1291,14 @@ function normaliseTopic(topic, { allowUnknown = false } = {}) {
 //             continues from whatever is given.
 control.post('/zmq/publish', (req, res) => {
   const {
-    topic, payload, encoding = 'hex', fields, seq,
+    topic, payload, encoding = 'hex', fields, seq, node,
   } = req.body || {};
 
   if ((payload === undefined) === (fields === undefined)) {
     return res.status(400).json({ error: 'exactly one of payload or fields is required' });
+  }
+  if (node !== undefined && !Number.isInteger(Number(node))) {
+    return res.status(400).json({ error: 'node must be a node number' });
   }
   if (seq !== undefined && (!Number.isInteger(seq) || seq < 0 || seq > 0xffffffff)) {
     return res.status(400).json({ error: 'seq must be a uint32' });
@@ -1257,7 +1318,7 @@ control.post('/zmq/publish', (req, res) => {
     return res.status(400).json({ error: e.message });
   }
 
-  const result = publish(topic, frame, seq);
+  const result = publish(topic, frame, seq, node);
   return res.json({ topic, ...result });
 });
 
