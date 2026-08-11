@@ -17,7 +17,7 @@
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-repo="${DNSD_REPO:-https://github.com/RunOnFlux/flux-dnsd.git}"
+repo="${DNSD_REPO:-git@github.com:RunOnFlux/flux-dnsd.git}"
 pin="$(tr -d '[:space:]' < "$here/pin")"
 src="${DNSD_SRC:-$HOME/.cache/flux-e2e/flux-dnsd}"
 dist="$here/dist"
