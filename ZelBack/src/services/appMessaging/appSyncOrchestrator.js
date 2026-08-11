@@ -108,6 +108,7 @@ class AppSyncOrchestrator {
   #stateSyncComplete = false;
   #syncRoundAbandoned = false;
   #syncPeerLostHandler = null;
+  #syncPeersAvailableHandler = null;
   #hashSyncAttempts = 0;
   #hashSyncRetryTimer = null;
   #nextHashRetryHeight = 0;
@@ -173,9 +174,11 @@ class AppSyncOrchestrator {
       this.#onPeersDegraded();
     };
     this.#syncPeerLostHandler = (key) => this.#onSyncPeerLost(key);
+    this.#syncPeersAvailableHandler = () => this.#onSyncPeersAvailable();
     this.#onPeerEvent('peerThresholdReached', this.#peerThresholdHandler);
     this.#onPeerEvent('peersBelowThreshold', this.#peersBelowHandler);
     this.#onPeerEvent('syncPeerLost', this.#syncPeerLostHandler);
+    this.#onPeerEvent('syncPeersAvailable', this.#syncPeersAvailableHandler);
 
     // peerThresholdReached is edge-triggered and latched in FluxPeerManager:
     // if peers connected fast enough that the threshold was crossed BEFORE the
@@ -247,6 +250,17 @@ class AppSyncOrchestrator {
       });
       this.#checkReadiness();
     }
+  }
+
+  // A permanent-plane round that found no askable peer leaves its step incomplete
+  // and has already consumed the peer-threshold edge, which is latched and does not
+  // re-fire. Peers becoming askable is the level that round actually waited on, so
+  // it is what resumes the work - no timer, and a step that has latched complete is
+  // never re-run.
+  #onSyncPeersAvailable() {
+    if (this.#hashSyncComplete && this.#manifestSyncComplete) return;
+    if (this.#state !== STATES.SYNCING && this.#state !== STATES.RESYNCING) return;
+    this.#advanceSync();
   }
 
   /**
@@ -925,6 +939,9 @@ class AppSyncOrchestrator {
     }
     if (this.#syncPeerLostHandler) {
       this.#offPeerEvent('syncPeerLost', this.#syncPeerLostHandler);
+    }
+    if (this.#syncPeersAvailableHandler) {
+      this.#offPeerEvent('syncPeersAvailable', this.#syncPeersAvailableHandler);
     }
     peerNotification.stopBroadcastInterval();
     this.#broadcastStarted = null;

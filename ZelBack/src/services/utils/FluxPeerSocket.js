@@ -144,11 +144,15 @@ class FluxPeerSocket {
   }
 
   onPongReceived() {
+    const wasUnanswered = this.missedPongs !== 0;
     this.missedPongs = 0;
     this.lastPongTime = Date.now();
     if (this.lastPingTime) {
       this.latency = Math.ceil((this.lastPongTime - this.lastPingTime) / 2);
     }
+    // An outstanding ping takes this peer out of sync candidacy, so the pong that
+    // clears it can be the moment the fleet becomes askable again.
+    if (wasUnanswered) this.manager?.refreshSyncAvailability?.();
   }
 
   /**

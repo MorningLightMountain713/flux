@@ -61,6 +61,8 @@ class FluxPeerManager extends EventEmitter {
   #syncDegradedThreshold;
   /** @type {boolean} true when peer count is above syncPeerThreshold */
   #aboveThreshold;
+  /** @type {boolean} true while at least one peer can actually serve a sync */
+  #syncPeersAvailable = false;
   /** @type {Map<string, Set<string>>} reporter key → their peer keys */
   #peerTopology = new Map();
   /** @type {Array<function>} topology change listeners */
@@ -200,6 +202,7 @@ class FluxPeerManager extends EventEmitter {
       this.emit('peerThresholdReached', this.#peers.size);
       fluxEventBus.publish('peers:thresholdReached', { count: this.#peers.size, threshold: this.#syncPeerThreshold });
     }
+    this.refreshSyncAvailability();
     return peer;
   }
 
@@ -265,6 +268,7 @@ class FluxPeerManager extends EventEmitter {
     if (syncWasInFlight) {
       this.emit('syncPeerLost', key);
     }
+    this.refreshSyncAvailability();
     return peer;
   }
 
@@ -457,13 +461,43 @@ class FluxPeerManager extends EventEmitter {
     return peer.remoteFluxUptime + (Date.now() - peer.connectedAt) / 1000;
   }
 
+  // Can this peer serve a sync request at all: it speaks the protocol, it is
+  // answering us, and it has told us its uptime so a caller can apply its own
+  // floor. The uptime FLOOR stays the caller's, but candidacy is decided here so
+  // selection and the availability signal below can never drift apart.
+  #isSyncCandidate(peer) {
+    if (peer.missedPongs !== 0) return false;
+    if (!peer.remoteCapabilities.has('appStateSync')) return false;
+    return this.getPeerFluxUptime(peer.key) !== null;
+  }
+
+  hasSyncCandidate() {
+    for (const peer of this.#peers.values()) {
+      if (this.#isSyncCandidate(peer)) return true;
+    }
+    return false;
+  }
+
+  // Announce the 0 -> at-least-one edge for peers that can serve a sync.
+  //
+  // A consumer needs a peer it can ASK, and peer count crossing a threshold is
+  // not that: a freshly reconnected peer is counted immediately but is not a
+  // candidate until it has reported its uptime, and pingAll() takes every peer
+  // out of candidacy at once until its pong returns. A sync round landing in
+  // either window contacts nobody, and peerThresholdReached is latched, so it
+  // does not fire again to retry. This edge is the signal that gap needs.
+  refreshSyncAvailability() {
+    const available = this.hasSyncCandidate();
+    if (available === this.#syncPeersAvailable) return;
+    this.#syncPeersAvailable = available;
+    if (available) this.emit('syncPeersAvailable');
+  }
+
   getEligibleSyncPeers(minUptimeSeconds, count) {
     const eligible = [];
     for (const peer of this.#peers.values()) {
-      if (peer.missedPongs !== 0) continue;
-      if (!peer.remoteCapabilities.has('appStateSync')) continue;
-      const uptime = this.getPeerFluxUptime(peer.key);
-      if (uptime === null || uptime < minUptimeSeconds) continue;
+      if (!this.#isSyncCandidate(peer)) continue;
+      if (this.getPeerFluxUptime(peer.key) < minUptimeSeconds) continue;
       eligible.push(peer);
     }
     for (let i = eligible.length - 1; i > 0; i -= 1) {

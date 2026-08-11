@@ -2478,3 +2478,102 @@ describe('FluxPeerManager tests', () => {
     });
   });
 });
+
+describe('sync peer availability', () => {
+  let manager;
+
+  // A peer the manager can actually ask: it speaks appStateSync and has reported
+  // its uptime. Both arrive at handshake, so this mirrors a completed handshake.
+  function addAskablePeer(mgr, ip, uptime = 9000) {
+    return mgr.add(createMockWs(ip), ip, '16127', {
+      source: PEER_SOURCE.RANDOM,
+      remoteCapabilities: ['appStateSync'],
+      remoteFluxUptime: uptime,
+    });
+  }
+
+  beforeEach(() => {
+    manager = new FluxPeerManager();
+    manager.messageDispatcher = sinon.stub().resolves();
+    manager.syncResponseDispatcher = sinon.stub().resolves();
+  });
+
+  afterEach(() => {
+    sinon.restore();
+    manager.reset();
+  });
+
+  it('announces the edge when the first askable peer arrives', () => {
+    const spy = sinon.spy();
+    manager.on('syncPeersAvailable', spy);
+
+    addAskablePeer(manager, '10.0.0.1');
+
+    expect(spy.calledOnce).to.equal(true);
+  });
+
+  it('does not re-announce while a peer is still askable', () => {
+    addAskablePeer(manager, '10.0.0.1');
+    const spy = sinon.spy();
+    manager.on('syncPeersAvailable', spy);
+
+    addAskablePeer(manager, '10.0.0.2');
+
+    expect(manager.hasSyncCandidate()).to.equal(true);
+    expect(spy.called, 'level already high, no new edge').to.equal(false);
+  });
+
+  it('does not count a peer that has not reported its uptime', () => {
+    const spy = sinon.spy();
+    manager.on('syncPeersAvailable', spy);
+
+    manager.add(createMockWs('10.0.0.1'), '10.0.0.1', '16127', {
+      source: PEER_SOURCE.RANDOM,
+      remoteCapabilities: ['appStateSync'],
+    });
+
+    expect(manager.hasSyncCandidate(), 'uptime unknown, cannot be asked').to.equal(false);
+    expect(spy.called).to.equal(false);
+    expect(manager.getEligibleSyncPeers(0)).to.have.lengthOf(0);
+  });
+
+  it('does not count a peer that cannot serve app state sync', () => {
+    const spy = sinon.spy();
+    manager.on('syncPeersAvailable', spy);
+
+    manager.add(createMockWs('10.0.0.1'), '10.0.0.1', '16127', {
+      source: PEER_SOURCE.RANDOM,
+      remoteCapabilities: ['peerExchange'],
+      remoteFluxUptime: 9000,
+    });
+
+    expect(manager.hasSyncCandidate()).to.equal(false);
+    expect(spy.called).to.equal(false);
+  });
+
+  it('re-announces after an unanswered ping drops the fleet out of candidacy', () => {
+    const peer = addAskablePeer(manager, '10.0.0.1');
+    const spy = sinon.spy();
+    manager.on('syncPeersAvailable', spy);
+
+    // pingAll takes every peer out of candidacy at once - this is the window a
+    // sync round can land in and find nobody to ask.
+    peer.onPingSent();
+    manager.refreshSyncAvailability();
+    expect(manager.hasSyncCandidate(), 'unanswered ping is not askable').to.equal(false);
+    expect(spy.called, 'falling is not an edge').to.equal(false);
+
+    peer.onPongReceived();
+
+    expect(manager.hasSyncCandidate()).to.equal(true);
+    expect(spy.calledOnce, 'the pong that restores candidacy is the edge').to.equal(true);
+  });
+
+  it('keeps the uptime floor a caller decision, not part of candidacy', () => {
+    addAskablePeer(manager, '10.0.0.1', 100);
+
+    expect(manager.hasSyncCandidate(), 'candidacy is structural').to.equal(true);
+    expect(manager.getEligibleSyncPeers(0), 'no floor: selectable').to.have.lengthOf(1);
+    expect(manager.getEligibleSyncPeers(7500), 'floor above its uptime: not selectable').to.have.lengthOf(0);
+  });
+});

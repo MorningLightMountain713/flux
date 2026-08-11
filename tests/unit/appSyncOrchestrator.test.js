@@ -558,6 +558,101 @@ describe('AppSyncOrchestrator', () => {
       expect(orchestrator.state).to.equal(STATES.READY);
     });
 
+    it('resumes a recovery reconcile once peers become askable, after the threshold edge is spent', async () => {
+      const peers = makeEligiblePeers(3);
+      getEligibleSyncPeersStub.returns(peers);
+      const orchestrator = makeOrchestrator({ isEnterprise: () => true });
+      orchestrator.start(defaultBootContext);
+
+      blockEmitter.emit('blocksProcessed', 2555000);
+      await clock.tickAsync(0);
+      peerEmitter.emit('peerThresholdReached', 12);
+      await clock.tickAsync(0);
+      completeEphemeral();
+      await clock.tickAsync(0);
+      expect(orchestrator.state).to.equal(STATES.READY);
+
+      // Full isolation, then heal. This is the case the peer-threshold edge cannot
+      // cover: the peers are BACK and counted, so the edge fires and is spent, but
+      // none of them is askable yet - a reconnected peer has not reported its uptime,
+      // and pingAll takes every peer out of candidacy at once until its pong lands.
+      peerEmitter.emit('peersBelowThreshold', 0);
+      expect(orchestrator.state).to.equal(STATES.DEGRADED);
+      reconcileStub.resetHistory();
+      getEligibleSyncPeersStub.returns([]);
+
+      peerEmitter.emit('peerThresholdReached', 8);
+      await clock.tickAsync(0);
+      completeEphemeral();
+      await clock.tickAsync(0);
+
+      // The round asked nobody, so it correctly did not latch - and the only edge
+      // that would have retried it has now been consumed.
+      expect(orchestrator.state).to.equal(STATES.RESYNCING);
+      const roundsBefore = reconcileStub.callCount;
+
+      // The peers become askable. That is the level the vacuous round was waiting
+      // on, and it is what resumes the work.
+      getEligibleSyncPeersStub.returns(peers);
+      peerEmitter.emit('syncPeersAvailable');
+      await clock.tickAsync(0);
+      completeEphemeral();
+      await clock.tickAsync(0);
+
+      expect(reconcileStub.callCount, 'reconcile re-driven by availability').to.be.greaterThan(roundsBefore);
+      expect(orchestrator.state).to.equal(STATES.READY);
+    });
+
+    it('ignores the availability edge once the permanent-plane steps have latched', async () => {
+      const peers = makeEligiblePeers(3);
+      getEligibleSyncPeersStub.returns(peers);
+      const orchestrator = makeOrchestrator({ isEnterprise: () => true });
+      orchestrator.start(defaultBootContext);
+
+      blockEmitter.emit('blocksProcessed', 2555000);
+      await clock.tickAsync(0);
+      peerEmitter.emit('peerThresholdReached', 12);
+      await clock.tickAsync(0);
+      completeEphemeral();
+      await clock.tickAsync(0);
+      expect(orchestrator.state).to.equal(STATES.READY);
+
+      // Candidacy churns with every ping cycle, so this edge repeats in steady
+      // state. A converged node must not re-run a round for it.
+      reconcileStub.resetHistory();
+      peerEmitter.emit('syncPeersAvailable');
+      await clock.tickAsync(0);
+
+      expect(reconcileStub.called, 'no redundant reconcile once latched').to.be.false;
+    });
+
+    it('stops listening for the availability edge after stop()', async () => {
+      getEligibleSyncPeersStub.returns([]);
+      const orchestrator = makeOrchestrator({ isEnterprise: () => true });
+      orchestrator.start(defaultBootContext);
+
+      blockEmitter.emit('blocksProcessed', 2555000);
+      await clock.tickAsync(0);
+      expect(orchestrator.state).to.equal(STATES.SYNCING);
+
+      // Prove the edge drives work BEFORE stopping, so this cannot pass merely
+      // because nothing was ever listening. History is cleared first so the boot
+      // round's own (peerless) reconcile cannot stand in for the edge's effect.
+      reconcileStub.resetHistory();
+      getEligibleSyncPeersStub.returns(makeEligiblePeers(3));
+      peerEmitter.emit('syncPeersAvailable');
+      await clock.tickAsync(0);
+      expect(reconcileStub.called, 'edge drives work while running').to.be.true;
+
+      await orchestrator.stop();
+      reconcileStub.resetHistory();
+
+      peerEmitter.emit('syncPeersAvailable');
+      await clock.tickAsync(0);
+
+      expect(reconcileStub.called, 'no work driven after stop').to.be.false;
+    });
+
     it('reconciles the manifest after a peers-first recovery once capability returns (F2)', async () => {
       const peers = makeEligiblePeers(3);
       getEligibleSyncPeersStub.returns(peers);
