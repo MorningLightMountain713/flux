@@ -2527,3 +2527,121 @@ describe('FluxPeerManager tests', () => {
     });
   });
 });
+
+describe('sync peer availability', () => {
+  let manager;
+
+  // A peer the manager can actually ask: it speaks appStateSync and has reported
+  // its uptime. Both arrive at handshake, so this mirrors a completed handshake.
+  function addAskablePeer(mgr, ip, uptime = 9000) {
+    return mgr.add(createMockWs(ip), ip, '16127', {
+      source: PEER_SOURCE.RANDOM,
+      remoteCapabilities: ['appStateSync'],
+      remoteFluxUptime: uptime,
+    });
+  }
+
+  beforeEach(() => {
+    manager = new FluxPeerManager();
+    manager.messageDispatcher = sinon.stub().resolves();
+    manager.syncResponseDispatcher = sinon.stub().resolves();
+  });
+
+  afterEach(() => {
+    sinon.restore();
+    manager.reset();
+  });
+
+  it('announces the edge when the first askable peer arrives', () => {
+    const spy = sinon.spy();
+    manager.on('syncPeersAvailable', spy);
+
+    addAskablePeer(manager, '10.0.0.1');
+
+    expect(spy.calledOnce).to.equal(true);
+  });
+
+  it('does not re-announce while a peer is still askable', () => {
+    addAskablePeer(manager, '10.0.0.1');
+    const spy = sinon.spy();
+    manager.on('syncPeersAvailable', spy);
+
+    addAskablePeer(manager, '10.0.0.2');
+
+    expect(manager.hasSyncCandidate()).to.equal(true);
+    expect(spy.called, 'level already high, no new edge').to.equal(false);
+  });
+
+  it('does not count a peer that has not reported its uptime', () => {
+    const spy = sinon.spy();
+    manager.on('syncPeersAvailable', spy);
+
+    manager.add(createMockWs('10.0.0.1'), '10.0.0.1', '16127', {
+      source: PEER_SOURCE.RANDOM,
+      remoteCapabilities: ['appStateSync'],
+    });
+
+    expect(manager.hasSyncCandidate(), 'uptime unknown, cannot be asked').to.equal(false);
+    expect(spy.called).to.equal(false);
+    expect(manager.getEligibleSyncPeers(0)).to.have.lengthOf(0);
+  });
+
+  it('does not count a peer that cannot serve app state sync', () => {
+    const spy = sinon.spy();
+    manager.on('syncPeersAvailable', spy);
+
+    manager.add(createMockWs('10.0.0.1'), '10.0.0.1', '16127', {
+      source: PEER_SOURCE.RANDOM,
+      remoteCapabilities: ['peerExchange'],
+      remoteFluxUptime: 9000,
+    });
+
+    expect(manager.hasSyncCandidate()).to.equal(false);
+    expect(spy.called).to.equal(false);
+  });
+
+  it('re-announces after an unanswered ping drops the fleet out of candidacy', () => {
+    const peer = addAskablePeer(manager, '10.0.0.1');
+    const spy = sinon.spy();
+    manager.on('syncPeersAvailable', spy);
+
+    // pingAll takes every peer out of candidacy at once - this is the window a
+    // sync round can land in and find nobody to ask.
+    peer.onPingSent();
+    manager.refreshSyncAvailability();
+    expect(manager.hasSyncCandidate(), 'unanswered ping is not askable').to.equal(false);
+    expect(spy.called, 'falling is not an edge').to.equal(false);
+
+    peer.onPongReceived();
+
+    expect(manager.hasSyncCandidate()).to.equal(true);
+    expect(spy.calledOnce, 'the pong that restores candidacy is the edge').to.equal(true);
+  });
+
+  // Rewritten at the rebase, not deleted, because its premise was retired rather
+  // than its subject. It asserted that the uptime floor is a caller decision and
+  // candidacy is purely structural; development's #1797 removed the floor
+  // parameter entirely (its serviceManager wiring passes none) and replaced it
+  // with a capability test, so there is no caller floor left to keep out of
+  // candidacy. The rule below is what is now true, and candidacy has to carry it:
+  // announcing syncPeersAvailable for a peer that selection will reject is
+  // exactly the vacuous round this edge exists to prevent.
+  it('admits a peer that can refuse whatever its uptime, and holds the bar for one that cannot', () => {
+    // Cannot refuse and below the legacy bar: an older build answers a request it
+    // cannot serve with an empty batch, indistinguishable from a complete survey
+    // of an empty network - so it is not askable.
+    addAskablePeer(manager, '10.0.0.1', 100);
+    expect(manager.hasSyncCandidate(), 'young, cannot refuse: not askable').to.equal(false);
+    expect(manager.getEligibleSyncPeers(), 'and not selectable').to.have.lengthOf(0);
+
+    // Can refuse: asked whatever its uptime, because refusing answers the
+    // question the uptime was standing in for.
+    manager.add(createMockWs('10.0.0.2'), '10.0.0.2', '16127', {
+      source: PEER_SOURCE.RANDOM,
+      remoteCapabilities: ['appStateSync', 'appStateSyncRefusal'],
+      remoteFluxUptime: 100,
+    });
+    expect(manager.hasSyncCandidate(), 'young, can refuse: askable').to.equal(true);
+    expect(manager.getEligibleSyncPeers(), 'and selectable').to.have.lengthOf(1);
+  });
+});
