@@ -54,7 +54,7 @@ function linkedNamesOf(viewsByName, nameLower) {
  * @param {object} deployment - DeploymentSpec of the parent app
  * @returns {Promise<void>}
  */
-async function connectComponentToLinkedApps(componentContainerName, deployment) {
+async function connectComponentToLinkedApps(componentContainerName, deployment, aliases = []) {
   const linkedApps = deployment ? deployment.linkedApps : [];
   if (!linkedApps || !linkedApps.length) {
     return;
@@ -71,7 +71,9 @@ async function connectComponentToLinkedApps(componentContainerName, deployment) 
       // half-removed network. Per-call (leaf) granularity, matching the install
       // port-open loop; the connect is a single bounded docker call.
       // eslint-disable-next-line no-await-in-loop
-      await withHostMutationLock(() => dockerService.appDockerNetworkConnect(componentContainerName, networkName));
+      await withHostMutationLock(
+        () => dockerService.appDockerNetworkConnect(componentContainerName, networkName, aliases),
+      );
       log.info(`Connected ${componentContainerName} to linked app network ${networkName}`);
     } catch (error) {
       // A dependency can vanish between the pre-install readiness check and this

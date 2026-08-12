@@ -403,7 +403,9 @@ async function redeployApplication(appName, options = {}) {
         });
         // Re-attach the recreated container to every linked app's network.
         // eslint-disable-next-line no-await-in-loop
-        await appNetworkLinker.connectComponentToLinkedApps(deployComp.identifier, freshDeployment);
+        await appNetworkLinker.connectComponentToLinkedApps(
+          deployComp.identifier, freshDeployment, deployComp.qualifiedNetworkAliases,
+        );
         // eslint-disable-next-line no-await-in-loop
         await serviceHelper.delay(config.fluxapps.redeploy.composedDelay * 1000);
       }

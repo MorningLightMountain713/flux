@@ -930,9 +930,10 @@ async function appDockerCreate(deployComp, options = {}) {
   const containerConfig = {
     Image: deployComp.image,
     name: getAppIdentifier(identifier),
-    // The component name, unless the caller states an identity hostname (a
-    // mesh member name — the app reads its own hostname to learn who it is).
-    Hostname: options.hostname ?? deployComp.name,
+    // What the container calls itself: `<replica>_<component>`, or the bare component
+    // name when unreplicated — unless the caller states an identity hostname (a mesh
+    // member name, which the app reads to learn which member it is).
+    Hostname: options.hostname ?? deployComp.hostname ?? deployComp.name,
     AttachStdin: true,
     AttachStdout: true,
     AttachStderr: true,
@@ -1848,12 +1849,41 @@ async function forceRemoveFluxAppDockerNetwork(appname, options = {}) {
  * @param {string} networkName - target docker network name
  * @returns {Promise<void>}
  */
-async function appDockerNetworkConnect(componentIdentifier, networkName) {
+/**
+ * The names a container should answer to on one network, from its identity labels.
+ *
+ * Its OWN app network gets the short forms as well; anyone else's gets the
+ * app-qualified ones only, so an attached stranger cannot shadow the host app's bare
+ * component names. A container without the labels (created before they shipped) gets
+ * none, which is what it has today.
+ *
+ * @param {object} labels container labels as inspected
+ * @param {string} networkName
+ * @returns {Promise<string[]>}
+ */
+async function networkAliasesFromLabels(labels, networkName) {
+  const { LABEL_KEYS, networkAliasesFor, qualifiedNetworkAliasesFor } = await getSpecBackend();
+  const component = labels[LABEL_KEYS.COMPONENT];
+  const appName = labels[LABEL_KEYS.APP];
+  if (!component || !appName) return [];
+  const replica = labels[LABEL_KEYS.REPLICA] || null;
+  const parts = { component, appName, replica };
+  return networkName === `fluxDockerNetwork_${appName}`
+    ? networkAliasesFor(parts)
+    : qualifiedNetworkAliasesFor(parts);
+}
+
+async function appDockerNetworkConnect(componentIdentifier, networkName, aliases = null) {
   // Docker callers normalise through getAppIdentifier: accept the bare
   // component identifier (web_myapp) as well as the docker name (fluxweb_myapp).
   const appId = getAppIdentifier(componentIdentifier);
+  // One inspect answers both questions: is it already attached, and what should it be
+  // called there. The labels are the identity of record, so the names are derived from
+  // the container itself rather than threaded through every convergence sweep.
+  let labels = {};
   try {
     const containerInfo = await docker.getContainer(appId).inspect();
+    labels = containerInfo?.Config?.Labels || {};
     const attached = containerInfo && containerInfo.NetworkSettings && containerInfo.NetworkSettings.Networks;
     if (attached && Object.prototype.hasOwnProperty.call(attached, networkName)) {
       return;
@@ -1864,8 +1894,23 @@ async function appDockerNetworkConnect(componentIdentifier, networkName) {
   }
 
   const network = docker.getNetwork(networkName);
+  // Aliases are per-endpoint and are NOT remembered across a disconnect, so every
+  // reattach has to state them again or the container silently loses the names other
+  // apps address it by. Derived from the container's own identity labels rather than
+  // threaded through each caller: reconnect runs from convergence sweeps that hold a
+  // container name and nothing else.
+  // Never fail an attach over addressing: a container connected without its aliases is
+  // still reachable by its docker name, which is how it behaved before.
+  const resolved = aliases ?? await networkAliasesFromLabels(labels, networkName)
+    .catch((error) => {
+      log.warn(`appDockerNetworkConnect: aliases for ${appId} on ${networkName}: ${error.message}`);
+      return [];
+    });
   try {
-    await network.connect({ Container: appId });
+    await network.connect({
+      Container: appId,
+      ...(resolved.length > 0 && { EndpointConfig: { Aliases: resolved } }),
+    });
   } catch (error) {
     if (/already exists in network|already connected/i.test(error.message || '')) {
       return;

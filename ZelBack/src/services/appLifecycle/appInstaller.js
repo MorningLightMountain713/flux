@@ -346,7 +346,9 @@ async function installApplication(instantiated, options = {}) {
         });
         // Attach the freshly created container to every linked app's network.
         // eslint-disable-next-line no-await-in-loop
-        await appNetworkLinker.connectComponentToLinkedApps(component.identifier, deployment);
+        await appNetworkLinker.connectComponentToLinkedApps(
+          component.identifier, deployment, component.qualifiedNetworkAliases,
+        );
       }
 
       // Provision declared content — blobs and slots — onto the now-created mount
