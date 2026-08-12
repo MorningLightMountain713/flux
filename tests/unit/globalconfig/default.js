@@ -45,6 +45,7 @@ module.exports = {
         policyDocuments: 'policydocuments', // last-known-good network policy documents, so an unreachable source does not drop enforcement
         benchmark: 'benchmark',
         nodeIdentity: 'nodeidentity',
+        quorumGrants: 'quorumgrants',
       },
     },
     daemon: {

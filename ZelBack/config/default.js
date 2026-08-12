@@ -55,6 +55,7 @@ module.exports = {
         policyDocuments: 'policydocuments', // last-known-good network policy documents, so an unreachable source does not drop enforcement
         ipRanges: 'ipranges', // the IP location baseline, one document per allocated range, rebuilt and swapped in whole
         nodeLocations: 'nodelocations', // per-node view derived from the baseline, invalidated when a new baseline lands
+        quorumGrants: 'quorumgrants', // the grantor's per-key register: promised epochs and accepted grants, journaled before any reply
       },
     },
     daemon: {
