@@ -1004,6 +1004,27 @@ async function manageFolderSyncState(params) {
       }
     }
 
+    // The cooperative self-fence: a sendreceive folder on a node the grant
+    // plane says is NOT the master demotes itself — receiveonly, then revert,
+    // so every local change gets FlagLocalReceiveOnly and an empty version
+    // vector and can never win against the true master's data. This is the
+    // deposed node doing its own fencing; the container stop rides the
+    // reconciler's grant veto, which outranks everything below operator
+    // intent. The leader answering true (or the plane being closed) changes
+    // nothing on this path.
+    const grantSaysLeader = await mastershipGrantGate.leaderIsSelf(identifier, installedAppName, isActiveStandby);
+    if (grantSaysLeader === false) {
+      log.warn(`manageFolderSyncState - ${appId} holds a sendreceive folder without the grant; demoting to receiveonly and reverting local changes`);
+      syncthingFolder.type = 'receiveonly';
+      await syncthingService.dbRevert(appId).catch((error) => {
+        log.warn(`manageFolderSyncState - ${appId} revert after demotion failed: ${error.message}`);
+      });
+      mastershipGrantGate.noteFolderDemoted(installedAppName);
+      const cache = { numberOfExecutions: 0, grantDemoted: true, demotedAt: Date.now() };
+      await appCaches.setSyncedMark(receiveOnlySyncthingAppsCache, appId, cache);
+      return { syncthingFolder, cache, skipUpdate: false };
+    }
+
     // Mount is safe, proceed normally
     await ensureContainerRunning(appId, identifier, requiresSyncBeforeStart);
     // Ensure cache entry exists so health monitor can track this folder
