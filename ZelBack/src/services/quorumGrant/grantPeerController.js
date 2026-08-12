@@ -9,6 +9,7 @@ const registryManager = require('../appDatabase/registryManager');
 const { extractIp } = require('../utils/socketAddressUtils');
 const signedEnvelope = require('./signedEnvelope');
 const grantClient = require('./grantClient');
+const mastershipGrantGate = require('./mastershipGrantGate');
 const log = require('../../lib/log');
 
 // The holder-to-holder face of the grant plane: the witness poll and the
@@ -94,6 +95,11 @@ async function witness(req, res) {
     }
 
     const answer = await grantClient.witnessAnswer(key);
+    // The self-fence attestation rides the same answer: "my folder for this
+    // app is demoted and reverted, as of my time T" — what a fencing master
+    // waits for before re-admitting this node's device.
+    const appName = key.slice(0, key.indexOf('/'));
+    answer.folderDemotedAt = mastershipGrantGate.folderDemotedAt(appName);
     return res.json(messageHelper.createDataMessage(answer));
   } catch (error) {
     log.error(`quorumGrant witness: ${error.message}`);

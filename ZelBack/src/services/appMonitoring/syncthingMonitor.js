@@ -30,6 +30,8 @@ const {
   folderNeedsUpdate,
 } = require('./syncthingMonitorHelpers');
 const volumeService = require('../utils/volumeService');
+const mastershipGrantGate = require('../quorumGrant/mastershipGrantGate');
+const { extractIp } = require('../utils/socketAddressUtils');
 const appReconciler = require('./appReconciler');
 const {
   manageFolderSyncState,
@@ -136,6 +138,42 @@ async function appLocation(appName) {
 }
 
 /**
+ * Hold a fenced device's autoAcceptFolders at false, and restore it once no
+ * fence stands. Both directions are read-check-patch against what syncthing
+ * actually holds, so the state self-heals whatever pass was missed: FluxOS
+ * sets autoAcceptFolders true universally, which makes false unambiguously
+ * a fence artifact, safe to restore the moment the app is unfenced.
+ *
+ * @param {string} appName
+ * @param {Array} locations app locations (hosts the app's devices belong to)
+ * @param {object} allDevicesResp syncthing's current device configs
+ * @param {{host: string}|null} fence the standing fence, if any
+ */
+async function reconcileFenceAutoAccept(appName, locations, allDevicesResp, fence) {
+  const rows = Array.isArray(allDevicesResp?.data) ? allDevicesResp.data : [];
+  const appHosts = new Set((locations || []).map((row) => extractIp(row.ip)));
+  const patches = [];
+  rows.forEach((device) => {
+    const host = extractIp(device.name);
+    if (!appHosts.has(host)) return;
+    if (fence && host === fence.host && device.autoAcceptFolders !== false) {
+      patches.push({ deviceID: device.deviceID, autoAcceptFolders: false });
+    } else if (!fence && device.autoAcceptFolders === false) {
+      patches.push({ deviceID: device.deviceID, autoAcceptFolders: true });
+    }
+  });
+  const applied = patches.map(async (patch) => {
+    try {
+      await syncthingService.adjustConfigDevices('patch', { autoAcceptFolders: patch.autoAcceptFolders }, patch.deviceID);
+      log.info(`syncthingMonitor - ${appName}: autoAcceptFolders ${patch.autoAcceptFolders} for device ${patch.deviceID.slice(0, 12)}`);
+    } catch (error) {
+      log.warn(`syncthingMonitor - ${appName}: autoAccept patch failed for ${patch.deviceID.slice(0, 12)}: ${error.message}`);
+    }
+  });
+  await Promise.all(applied);
+}
+
+/**
  * Process container data for an app component
  * This function handles both legacy apps (version <= 3) and newer apps (version > 3)
  *
@@ -186,6 +224,18 @@ async function processContainerData(params) {
   let locations = await appLocation(installedAppName);
   locations = sortAndFilterLocations(locations, localSocketAddr);
 
+  // The peer fence, reconciled declaratively every pass: a deposed master
+  // that has not attested demote-and-revert is kept OFF this folder's device
+  // list, and its device entry's autoAcceptFolders is held false so
+  // syncthing's auto-accept cannot silently re-share the folder when it
+  // announces (the reversal trap the lease design found in the source).
+  // Consulting the fence also advances its lift poll; when the fence drops,
+  // the same reconciliation re-adds the device and restores auto-accept.
+  const fence = deployComp.hasActiveStandbySyncthing()
+    ? mastershipGrantGate.fenceFor(installedAppName)
+    : null;
+  await reconcileFenceAutoAccept(installedAppName, locations, allDevicesResp, fence);
+
   // Build device configuration (parallelized internally)
   const devices = await buildDeviceConfiguration(
     locations,
@@ -195,6 +245,7 @@ async function processContainerData(params) {
     devicesConfiguration,
     devicesIds,
     allDevicesResp,
+    fence?.host ?? null,
   );
 
   // Create base folder configuration

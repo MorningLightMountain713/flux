@@ -118,6 +118,7 @@ async function buildDeviceConfiguration(
   devicesConfiguration,
   devicesIds,
   allDevicesResp,
+  fencedHost = null,
 ) {
   const devices = [{ deviceID: myDeviceId }];
 
@@ -152,8 +153,13 @@ async function buildDeviceConfiguration(
 
     const { deviceID, name, addresses } = deviceInfo;
 
-    // Add to folder devices if not already present and not my ID
-    if (deviceID !== myDeviceId) {
+    // Add to folder devices if not already present and not my ID. A FENCED
+    // device is deliberately left off the folder's list: it belongs to a
+    // deposed master that has not yet attested demote-and-revert, and a
+    // folder that still names it would keep accepting its writes. Its global
+    // device entry stays — the fence is per-folder, never per-device.
+    const fenced = fencedHost && extractIp(deviceInfo.ip) === fencedHost;
+    if (deviceID !== myDeviceId && !fenced) {
       const folderDeviceExists = devices.find((device) => device.deviceID === deviceID);
       if (!folderDeviceExists) {
         devices.push({ deviceID });

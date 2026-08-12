@@ -331,7 +331,13 @@ async function acquireOnce(key, mode, ttlMs, identity, committee, options) {
   held.set(key, holder);
   await holder.publishRecord();
   holder.start();
-  return { granted: true, holder };
+  // Who this grant superseded, when it superseded anyone: the recorded
+  // grantee the prepare round taught. The consumer's peer fence is built
+  // from exactly this name — never from a guess about who used to run.
+  const deposed = prepared.adopt && prepared.adopt.grantee !== identity.outpoint
+    ? prepared.adopt.grantee
+    : null;
+  return { granted: true, holder, deposed };
 }
 
 // ---------------------------------------------------------------------------

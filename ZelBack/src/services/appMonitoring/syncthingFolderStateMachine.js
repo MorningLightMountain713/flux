@@ -712,6 +712,14 @@ async function handleReceiveOnlyTransition(params) {
   cache.leaderStreak = electedLeader ? (cache.leaderStreak || 0) + 1 : 0;
   const isLeader = grantLeader ?? (electedLeader && cache.leaderStreak >= LEADER_CONFIRM_COUNT);
 
+  // A grant-plane standby on this path holds a receiveonly folder by
+  // construction — that IS the demoted state, so attest it: a master fencing
+  // this node re-admits its device on exactly this word, including after a
+  // reboot that landed the folder already-receiveonly (nothing to revert).
+  if (grantLeader === false) {
+    mastershipGrantGate.noteFolderDemoted(installedAppName);
+  }
+
   // RESIDUAL LIMITATION (legacy election only - the grant path above is the
   // consensus-grounded redesign this note called for, and closes it where the
   // grant plane is open): a confirmed leader is the cold-start seed and flips
