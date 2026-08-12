@@ -48,6 +48,7 @@ const playgroundService = require('./services/appPlayground/playgroundService');
 const meshOperatorService = require('./services/appMesh/meshOperatorService');
 const limitCounterController = require('./services/utils/limitCounterController');
 const grantorController = require('./services/quorumGrant/grantorController');
+const grantPeerController = require('./services/quorumGrant/grantPeerController');
 const messageVerifier = require('./services/appMessaging/messageVerifier');
 const appHashSyncService = require('./services/appMessaging/appHashSyncService');
 const monitoringOrchestrator = require('./services/appMonitoring/monitoringOrchestrator');
@@ -600,6 +601,16 @@ module.exports = (app) => {
   // served even during the grantor's rejoin drain.
   app.get('/flux/quorumgrant/record', asyncRoute((req, res) => {
     return grantorController.record(req, res);
+  }));
+  // Holder-to-holder: the witness poll (what is this node doing about a key,
+  // can it reach the committee) and the relay (carry an end-to-end signed ask
+  // for an app this node holds). A master's safety never depends on its own
+  // committee path because of these two.
+  app.post('/flux/quorumgrant/witness', asyncRoute((req, res) => {
+    return grantPeerController.witness(req, res);
+  }));
+  app.post('/flux/quorumgrant/relay', asyncRoute((req, res) => {
+    return grantPeerController.relay(req, res);
   }));
   app.post('/apps/placementfeasibility', asyncRoute((req, res) => { // fault domains and per-domain instance share for a prospective spec
     return placementFeasibility.placementFeasibilityAPI(req, res);
