@@ -11,6 +11,7 @@ const serviceHelper = require('./serviceHelper');
 const geolocationService = require('./geolocationService');
 const telemetrySinkCache = require('./telemetrySinkCache');
 const telemetryConfigService = require('./telemetryConfigService');
+const { getSpecBackend } = require('./utils/specLibs');
 
 const SOCKET_DIR = '/run/flux/telemetry';
 const SOCKET_PATH = path.join(SOCKET_DIR, 'identity.sock');
@@ -110,13 +111,21 @@ function wireSink(appName, sink) {
  * collector key. Returns true when the cached address changed — callers
  * resync so every consumer re-announces with the new endpoint.
  */
-function refreshAgentEndpoint(rawName, networks) {
+async function refreshAgentEndpoint(rawName, networks, labels = null) {
   if (!rawName) return false;
   const dockerName = rawName.startsWith('/') ? rawName.slice(1) : rawName;
   const parsed = parseContainerName(dockerName);
   if (!parsed || !parsed.componentName) return false;
 
-  const thisKey = `${String(parsed.appName).toLowerCase()}/${parsed.componentName.toLowerCase()}`;
+  // The collector key is in the APP NAME domain - a sink names the app hosting its
+  // collector, and a spec can only ever name one, since the identity is minted at
+  // registration. The container name carries the IDENTITY in that position, so the
+  // key has to come off the label; keyed from the name segment it matches no cached
+  // sink at all and every otlp consumer stays unannounced. A container predating the
+  // labels has no identity either, so its segment IS its app name.
+  const { LABEL_KEYS, readLabel } = await getSpecBackend();
+  const appName = readLabel(labels, LABEL_KEYS.APP) ?? parsed.appName;
+  const thisKey = `${String(appName).toLowerCase()}/${parsed.componentName.toLowerCase()}`;
   let referenced = false;
   for (const [consumerKey, sink] of telemetrySinkCache.entries()) {
     if (sink.provider === 'otlp' && collectorKey(consumerKey, sink) === thisKey) {
@@ -126,6 +135,8 @@ function refreshAgentEndpoint(rawName, networks) {
   }
   if (!referenced) return false;
 
+  // The network IS named from the identity, which is exactly what the container
+  // name's middle segment holds - so this one stays on `parsed`, not on the label.
   const nets = networks || {};
   const appNet = nets[`fluxDockerNetwork_${parsed.appName}`];
   const ip = (appNet && appNet.IPAddress)
@@ -172,13 +183,20 @@ function inSendSet(componentName, sink) {
  * resolved endpoint yet — the scoping gate that keeps non-telemetry (and
  * not-yet-routable) containers off the wire entirely.
  */
-function buildIdentity(rawName, image, region) {
+async function buildIdentity(rawName, image, region, labels = null) {
   if (!rawName) return null;
   const dockerName = rawName.startsWith('/') ? rawName.slice(1) : rawName;
   const parsed = parseContainerName(dockerName);
   if (!parsed) return null;
 
-  const { appName, componentName } = parsed;
+  // Off the label, for the same reason as the collector key: the sink cache is keyed
+  // by the app's NAME, and the container name carries its minted IDENTITY in that
+  // position. Read from the name segment, getSink misses for every app that has an
+  // identity and the container is never announced at all. `app_name` on the wire is
+  // the name too - it is what an operator reads and what the sink was declared under.
+  const { LABEL_KEYS, readLabel } = await getSpecBackend();
+  const { componentName } = parsed;
+  const appName = readLabel(labels, LABEL_KEYS.APP) ?? parsed.appName;
   const cached = telemetrySinkCache.getSink(appName);
   if (!cached) return null;
   if (!inSendSet(componentName, cached)) return null;
@@ -199,7 +217,7 @@ async function resolveIdentity(containerId) {
   if (!inspect) return null;
   const region = await nodeRegion();
   const image = inspect.Config && inspect.Config.Image;
-  return buildIdentity(inspect.Name, image, region);
+  return buildIdentity(inspect.Name, image, region, inspect.Config && inspect.Config.Labels);
 }
 
 function writeMessage(socket, obj) {
@@ -238,7 +256,10 @@ async function sendSync(socket) {
   // replayed) routes otlp apps without waiting for a collector event.
   for (const container of containers) {
     const rawName = container.Names && container.Names[0];
-    refreshAgentEndpoint(rawName, container.NetworkSettings && container.NetworkSettings.Networks);
+    // eslint-disable-next-line no-await-in-loop
+    await refreshAgentEndpoint(
+      rawName, container.NetworkSettings && container.NetworkSettings.Networks, container.Labels,
+    );
   }
 
   // A consumer whose collector never resolved stays unannounced — say so
@@ -263,7 +284,8 @@ async function sendSync(socket) {
   const entries = [];
   for (const container of containers) {
     const rawName = container.Names && container.Names[0];
-    const identity = buildIdentity(rawName, container.Image, region);
+    // eslint-disable-next-line no-await-in-loop
+    const identity = await buildIdentity(rawName, container.Image, region, container.Labels);
     if (!identity) continue;
     // eslint-disable-next-line no-await-in-loop
     const granted = await setContainerAcls(container.Id);
@@ -370,11 +392,12 @@ async function announce(idOrName, { identifierType = 'name' } = {}) {
   // what makes its consumer apps routable — resolve its address and resync
   // so every consumer's containers re-announce with the fresh endpoint.
   const networks = inspect.NetworkSettings && inspect.NetworkSettings.Networks;
-  if (refreshAgentEndpoint(inspect.Name, networks)) scheduleSinkResync();
+  const inspectLabels = inspect.Config && inspect.Config.Labels;
+  if (await refreshAgentEndpoint(inspect.Name, networks, inspectLabels)) scheduleSinkResync();
 
   const region = await nodeRegion();
   const image = inspect.Config && inspect.Config.Image;
-  const identity = buildIdentity(inspect.Name, image, region);
+  const identity = await buildIdentity(inspect.Name, image, region, inspectLabels);
   if (!identity) return;
 
   // Announcing a container the daemon cannot read is worse than not
