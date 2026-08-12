@@ -337,7 +337,7 @@ async function handleAppRunningSyncResponse(message, peerSocket) {
     // indifferent to seeing them last. An eviction's time is createdAt, when the
     // evicting node made it.
     for (const event of [...evictions, ...stateEvents]) {
-      if (event.type === 'sigterm' || event.type === 'appremoved' || event.type === 'ipchanged' || event.type === 'masterlease') {
+      if (event.type === 'sigterm' || event.type === 'appremoved' || event.type === 'ipchanged' || event.type === 'masterlease' || event.type === 'grantgeneration') {
         await messageStore.storeAppStateEvent(event.type, { message: event.data, envelope: event.envelope });
       } else if (event.type === 'evicted') {
         await messageStore.applyEviction(event.ip, Date.parse(event.createdAt));
@@ -962,6 +962,43 @@ async function handleNodeSigtermMessage(message, fromIP, port) {
 }
 
 /**
+ * The owner generation record: the app owner's signed word that a grant
+ * key's world is retired and the next one draws from the named height. The
+ * store verifies the inner OWNER signature against its own copy of the
+ * spec; the outer envelope only had to be a valid node broadcast.
+ * @param {object} message Signed broadcast whose data is the generation record.
+ * @param {string} fromIP Sender's node ip.
+ * @param {string} port Sender's node Api port.
+ */
+async function handleGrantGenerationMessage(message, fromIP, port) {
+  try {
+    const currentTimeStamp = Date.now();
+    const timestampOK = fluxCommunicationUtils.verifyTimestampInFluxBroadcast(message, currentTimeStamp, 240000);
+    if (!timestampOK) {
+      return;
+    }
+
+    const envelope = {
+      version: message.version, timestamp: message.timestamp, pubKey: message.pubKey, signature: message.signature,
+    };
+    await messageStore.storeAppStateEvent(
+      messageStore.APP_STATE_EVENT_TYPES.GRANTGENERATION,
+      { message: message.data, envelope },
+    );
+
+    const syncStatus = daemonServiceMiscRpcs.isDaemonSynced();
+    const daemonHeight = syncStatus.data.height || 0;
+    if (daemonHeight >= config.messagesBroadcastRefactorStart) {
+      peerManager.broadcastHash(hash(message.data), `${fromIP}:${port}`);
+    } else {
+      fluxCommunicationMessagesSender.relay(serviceHelper.ensureString(message), `${fromIP}:${port}`);
+    }
+  } catch (error) {
+    log.error(error);
+  }
+}
+
+/**
  * The published grant record (doc §9): who holds an app role, at what epoch.
  * The store is epoch-newer-wins, so relaying an already-superseded record is
  * harmless and dropping a fresher one only delays the peers one flood.
@@ -1324,6 +1361,7 @@ register('fluxappinstalling', (msg, peer) => handleAppInstallingMessage(msg, pee
 register('fluxappinstallingerror', (msg, peer) => handleAppInstallingErrorMessage(msg, peer.ip, peer.port), ROUTE.GOSSIP, INTENT.ANNOUNCE);
 register('fluxnodesigterm', (msg, peer) => handleNodeSigtermMessage(msg, peer.ip, peer.port), ROUTE.GOSSIP, INTENT.ANNOUNCE);
 register('fluxmasterlease', (msg, peer, announcer) => handleMasterleaseMessage(msg, peer.ip, peer.port, announcer), ROUTE.GOSSIP, INTENT.ANNOUNCE);
+register('fluxgrantgeneration', (msg, peer) => handleGrantGenerationMessage(msg, peer.ip, peer.port), ROUTE.GOSSIP, INTENT.ANNOUNCE);
 register('fluxlimitcounterrecord', (msg) => limitCounter.acceptRecord(msg.data), ROUTE.GOSSIP, INTENT.ANNOUNCE);
 register('fluxappcontentmanifest', (msg) => contentSlotService.handleIncomingManifest(msg), ROUTE.GOSSIP, INTENT.ANNOUNCE);
 register('fluxappingress', (msg, peer) => handleIngressAttestation(msg, peer.ip, peer.port), ROUTE.GOSSIP, INTENT.ANNOUNCE);
