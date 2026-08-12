@@ -20,6 +20,7 @@ const { socketAddressesMatch } = require('../utils/socketAddressUtils');
 const appsRepository = require('../appDatabase/appsRepository');
 const deploymentProvider = require('../appRuntime/deploymentProvider');
 const generalService = require('../generalService');
+const mastershipGrantGate = require('../quorumGrant/mastershipGrantGate');
 const relationshipResolver = require('./relationshipResolver');
 const contentStore = require('./contentStore');
 const appSwapPoolService = require('./appSwapPoolService');
@@ -367,6 +368,14 @@ async function uninstallComponent(component, options = {}) {
   }
 
   status(`Flux App ${label} stopped`);
+
+  // Release any held mastership grant now that the container is stopped —
+  // never before: a grant released under a still-writing container is the
+  // overlap the whole plane exists to prevent. This is the one teardown
+  // seam every removal path reaches at component granularity (soft
+  // redeploys never see the app-level removedIdentifiers loop), so a grant
+  // cannot leak through a redeploy and shield a master that no longer exists.
+  await mastershipGrantGate.onComponentTeardown(component.identifier, component);
 
   if (removeVolumes) {
     await stopSyncthingAndCleanup(component.identifier, appId);

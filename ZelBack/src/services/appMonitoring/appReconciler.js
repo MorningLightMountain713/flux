@@ -28,6 +28,7 @@ const pendingTeardownStore = require('../appLifecycle/pendingTeardownStore');
 const appTamperingDetectionService = require('../appTamperingDetectionService');
 const telemetrySinkCache = require('../telemetrySinkCache');
 const reconcilerQueue = require('./reconcilerQueue');
+const mastershipGrantGate = require('../quorumGrant/mastershipGrantGate');
 
 // The lightweight scheduling seam this engine drives: enqueue/scheduleRetry
 // live there, and the engine registers its reconcile + onSettled below. A producer
@@ -644,6 +645,17 @@ async function effectiveDesiredRunning(identifier, spec, exitCode) {
   // reconcile, so recovery resumes the moment the pipeline ends.
   const { appName } = spec.comp;
   if (globalState.getAppShutdownPipelineState(appName)) return { desired: null, reason: 'shutdownPipeline' };
+  // The quorum-grant veto (mastership by grant): for activeStandby components
+  // with the grant plane active, WHO runs is the grant's decision — veto-only.
+  // A lost grant returns desired:false, an unknown one defers bounded while a
+  // re-acquire runs, and a held one answers nothing at all: the data gates
+  // below still decide readiness, exactly as today. Sits above the
+  // controllerDesired block so grant loss outranks a standing 'running' from
+  // a decider that has not re-run, and below operatorStopped so an
+  // operator-stopped app can never restart on the strength of a grant.
+  // Inert unless the feature gate and per-app holder unanimity both open.
+  const grantVeto = await mastershipGrantGate.grantVerdict(identifier, spec.comp);
+  if (grantVeto) return grantVeto;
   // Only decider-owned components hold for a controller opinion: activeStandby
   // (the election decides which instance runs) and sync-before-start (the sync
   // readiness decider starts it once its data is complete). Plain-sync
@@ -1211,13 +1223,17 @@ async function reconcile(identifier) {
     // container running over a missing volume with the mount-safety hold
     // unenforceable - the incident's app kept running through the gutted
     // window exactly this way. Honor a pending stop; defer everything else.
-    if (controllerDesired.get(identifier) === 'stopped') {
+    // A LOST grant is a pending stop too (desired:false only — a bounded
+    // grant-unknown defer is not), or a deposed master would keep writing
+    // over a missing volume exactly like the incident's app did.
+    const grantLost = (await mastershipGrantGate.grantVerdict(identifier, spec.comp))?.desired === false;
+    if (controllerDesired.get(identifier) === 'stopped' || grantLost) {
       try {
         const actualNow = await dockerActual(identifier);
         if (actualNow.reachable && !actualNow.indeterminate && actualNow.running) {
           log.info(`appReconciler - ${identifier} data volume unavailable but a stop is desired; stopping the container`);
           await dockerService.appDockerStop(identifier);
-          fluxEventBus.publish('reconciler:actuated', { identifier, action: 'stopped', reason: 'controllerDesired' });
+          fluxEventBus.publish('reconciler:actuated', { identifier, action: 'stopped', reason: grantLost ? 'grantLost' : 'controllerDesired' });
         }
       } catch (err) {
         log.error(`appReconciler - ${identifier} stop under unavailable volume failed: ${err.message}`);
@@ -1670,6 +1686,14 @@ async function reconcile(identifier) {
   // enqueue drives the follow-up reconcile, so aborting here needs no retry.
   if ((spec.comp.hasActiveStandbySyncthing() || spec.comp.requiresSyncBeforeStart()) && controllerDesired.get(identifier) !== 'running') {
     log.info(`appReconciler - ${identifier} controller verdict changed during reconcile, aborting start`);
+    return;
+  }
+
+  // The grant verdict can flip the same way during the awaits above — a
+  // demotion mid-reconcile must not be outrun by a start already in flight.
+  // Both a veto and a bounded defer abort here: neither is permission.
+  if (await mastershipGrantGate.blocksStart(identifier, spec.comp)) {
+    log.info(`appReconciler - ${identifier} grant verdict changed during reconcile, aborting start`);
     return;
   }
 
