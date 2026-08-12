@@ -19,6 +19,7 @@ const axios = require('axios');
 const log = require('../../lib/log');
 const serviceHelper = require('../serviceHelper');
 const messageHelper = require('../messageHelper');
+const mastershipGrantGate = require('../quorumGrant/mastershipGrantGate');
 const deviceHelper = require('../deviceHelper');
 const dockerService = require('../dockerService');
 const verificationHelper = require('../verificationHelper');
@@ -1958,6 +1959,7 @@ async function coordinateActiveStandbyApps() {
       let identifier;
       let needsToBeChecked = false;
       let appId;
+      let activeStandbyComp = null;
       if (operationRegistry.isHeld(appName)) {
         log.info(`activeStandby: operation in progress for ${appName}, skipping`);
         // eslint-disable-next-line no-continue
@@ -1968,6 +1970,7 @@ async function coordinateActiveStandbyApps() {
           ({ identifier } = deployComp);
           appId = dockerService.getAppIdentifier(identifier);
           needsToBeChecked = true;
+          activeStandbyComp = deployComp;
           break;
         }
       }
@@ -1992,9 +1995,25 @@ async function coordinateActiveStandbyApps() {
         if (operatorStoppedAnnounced.delete(identifier)) {
           fluxEventBus.publish('activeStandby:decided', { identifier, action: 'operatorStopCleared' });
         }
+        // The grant plane, when open for this app, IS the intent source: the
+        // published masterlease record replaces the FDM read (FDM itself is
+        // unchanged and keeps routing to what runs). No record yet means no
+        // primary exists — becoming one goes through grant acquisition, which
+        // the gate is pursuing, never through the no-primary self-election
+        // branch below.
+        // eslint-disable-next-line no-await-in-loop
+        const grantIntent = await mastershipGrantGate.masterIntent(identifier, activeStandbyComp);
+        if (grantIntent && !grantIntent.ip) {
+          if (!noPrimaryAnnounced.has(identifier)) {
+            noPrimaryAnnounced.add(identifier);
+            log.info(`activeStandby: app:${appName} has no granted primary yet, awaiting acquisition`);
+          }
+          // eslint-disable-next-line no-continue
+          continue;
+        }
         // Get master IP from FDM using the new /appips endpoint
         // eslint-disable-next-line no-await-in-loop
-        const fdmResult = await getMasterIpFromFdm(appName, axiosOptions);
+        const fdmResult = grantIntent ?? await getMasterIpFromFdm(appName, axiosOptions);
         const { ip } = fdmResult;
         ({ fdmOk } = fdmResult);
 
