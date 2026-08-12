@@ -1218,11 +1218,60 @@ describe('dockerService tests', () => {
       sinon.restore();
     });
 
-    function stubInspectWithNetworks(networks) {
-      const inspectStub = sinon.stub().resolves({ NetworkSettings: { Networks: networks } });
+    function stubInspectWithNetworks(networks, labels = undefined) {
+      const inspectStub = sinon.stub().resolves({
+        NetworkSettings: { Networks: networks },
+        ...(labels !== undefined && { Config: { Labels: labels } }),
+      });
       sinon.stub(Dockerode.prototype, 'getContainer').returns({ inspect: inspectStub });
       return inspectStub;
     }
+
+    // Aliases are per-endpoint and are not remembered across a disconnect, so every
+    // attach must restate them or the container loses the names other apps reach it by.
+    // They come off the container's own identity labels: convergence sweeps reconnect
+    // holding a container name and nothing else.
+    const identityLabelsFor = (app, component, replica = null) => ({
+      'io.runonflux.app': app,
+      'io.runonflux.component': component,
+      ...(replica ? { 'io.runonflux.replica': replica } : {}),
+    });
+
+    it('attaching to its OWN app network claims the short names too', async () => {
+      stubInspectWithNetworks({ bridge: {} }, identityLabelsFor('myapp', 'web', 's1'));
+      const connectStub = sinon.stub().resolves();
+      sinon.stub(Dockerode.prototype, 'getNetwork').returns({ connect: connectStub });
+
+      await dockerService.appDockerNetworkConnect('web_myapp_s1', 'fluxDockerNetwork_myapp');
+
+      const { EndpointConfig } = connectStub.firstCall.args[0];
+      expect(EndpointConfig.Aliases).to.deep.equal([
+        'web', 's1.web', 'web.myapp', 's1.web.myapp',
+      ]);
+    });
+
+    it('attaching to ANOTHER app network claims only the qualified names', async () => {
+      stubInspectWithNetworks({ bridge: {} }, identityLabelsFor('myapp', 'web', 's1'));
+      const connectStub = sinon.stub().resolves();
+      sinon.stub(Dockerode.prototype, 'getNetwork').returns({ connect: connectStub });
+
+      await dockerService.appDockerNetworkConnect('web_myapp_s1', 'fluxDockerNetwork_theirapp');
+
+      const { EndpointConfig } = connectStub.firstCall.args[0];
+      // NOT `web`: the host app has its own, and a stranger must not shadow it
+      expect(EndpointConfig.Aliases).to.deep.equal(['web.myapp', 's1.web.myapp']);
+    });
+
+    it('claims nothing for a container created before the identity labels', async () => {
+      stubInspectWithNetworks({ bridge: {} }, {});
+      const connectStub = sinon.stub().resolves();
+      sinon.stub(Dockerode.prototype, 'getNetwork').returns({ connect: connectStub });
+
+      await dockerService.appDockerNetworkConnect('web_myapp', 'fluxDockerNetwork_myapp');
+
+      // reachable by its docker name, exactly as before
+      expect(connectStub.firstCall.args[0]).to.not.have.property('EndpointConfig');
+    });
 
     function stubInspectThrows(error) {
       const inspectStub = sinon.stub().rejects(error);

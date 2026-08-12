@@ -305,11 +305,14 @@ async function installComponent(component, options = {}) {
     restartPolicy,
     extraEnv: mesh ? [...extraEnv, ...mesh.env] : extraEnv,
     ...(mesh && { dns: mesh.dns }),
-    // Mesh identity: the docker Hostname is the member name (what the app
-    // reads to learn who it is), and the component name rides as a network
-    // alias so sibling components keep resolving plain `<component>`.
+    // Mesh identity: the docker Hostname is the member name (what the app reads to
+    // learn who it is). Its aliases ride alongside the component's own so a mesh
+    // member keeps every ordinary name as well as its member one.
     ...(mesh?.hostname && { hostname: mesh.hostname }),
-    ...(mesh?.aliases && { networkAliases: mesh.aliases }),
+    networkAliases: [...new Set([
+      ...(component.networkAliases ?? []),
+      ...(mesh?.aliases ?? []),
+    ])],
     owner,
     uuid,
     requiresEncryption,
