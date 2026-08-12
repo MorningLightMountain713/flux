@@ -214,6 +214,40 @@ async function getFluxnodeBySocketAddress(socketAddress) {
   return node;
 }
 
+/**
+ * The fingerprint of the membership held now, or null before the first
+ * snapshot lands.
+ * @returns {string|null}
+ */
+function membershipFingerprint() {
+  if (!stateManager) return null;
+  return stateManager.membershipHistory.currentFingerprint();
+}
+
+/**
+ * The membership at a fingerprint — the (txhash, outidx, pubkey, ip) triples
+ * the committee walk consumes — or null when the fingerprint falls outside
+ * the retained window. Exact or absent, never approximate.
+ * @param {string} fingerprint
+ * @returns {Array<object>|null}
+ */
+function membershipAt(fingerprint) {
+  if (!stateManager) return null;
+  return stateManager.membershipHistory.membershipAt(fingerprint);
+}
+
+/**
+ * The fingerprint that was current at a height, or null when the window does
+ * not reach back that far — how a founding ask resolves its registration
+ * height to a committee basis.
+ * @param {number} height
+ * @returns {string|null}
+ */
+function membershipFingerprintAt(height) {
+  if (!stateManager) return null;
+  return stateManager.membershipHistory.fingerprintAt(height);
+}
+
 async function main() {
   start();
 
@@ -235,6 +269,9 @@ module.exports = {
   getFluxnodesByPubkey,
   getRandomSocketAddress,
   getRandomSocketAddressSample,
+  membershipAt,
+  membershipFingerprint,
+  membershipFingerprintAt,
   networkState,
   nodeCount,
   pubkeyInNetworkState,

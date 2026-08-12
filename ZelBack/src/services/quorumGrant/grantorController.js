@@ -5,6 +5,7 @@ const messageHelper = require('../messageHelper');
 const serviceHelper = require('../serviceHelper');
 const generalService = require('../generalService');
 const fluxCommunicationUtils = require('../fluxCommunicationUtils');
+const networkStateService = require('../networkStateService');
 const registryManager = require('../appDatabase/registryManager');
 const { extractIp } = require('../utils/socketAddressUtils');
 const { selectCommittee } = require('../utils/committeeSelector');
@@ -39,6 +40,7 @@ const log = require('../../lib/log');
 
 const KEY_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,199}\/[a-z0-9-]{1,64}$/;
 const OUTPOINT_PATTERN = /^[0-9a-f]{64}:\d{1,6}$/;
+const FINGERPRINT_PATTERN = /^[0-9a-f]{64}$/;
 
 // Per-peer ceiling on asks, the limit counter's discipline: the checks above
 // bound what a peer can do; this bounds how fast it can try.
@@ -111,7 +113,7 @@ async function readAsk(req, type) {
   if (needsTtl && (!Number.isSafeInteger(ttlMs) || ttlMs < 1)) {
     return bad(400, 'malformed ttl');
   }
-  if (fingerprint !== undefined && typeof fingerprint !== 'string') {
+  if (typeof fingerprint !== 'string' || !FINGERPRINT_PATTERN.test(fingerprint)) {
     return bad(400, 'malformed fingerprint');
   }
   if (!Number.isSafeInteger(at) || Math.abs(Date.now() - at) > askFreshnessMs()) {
@@ -140,26 +142,37 @@ async function readAsk(req, type) {
     return bad(403, 'signature does not verify');
   }
 
-  return {
-    ok: true, ask, askerNode, nodes,
-  };
+  return { ok: true, ask, askerNode };
 }
 
 /**
- * Whether THIS node sits on the committee for the key. Fails closed: a node
- * that cannot identify itself cannot show it belongs, and answering anyway
- * would be answering for a committee it cannot prove it is on.
+ * Whether THIS node sits on the committee for the key, computed against the
+ * membership the ask NAMES — the pinning rule (§5). The fingerprint decides
+ * WHICH list; a fingerprint this node cannot rebuild is a committee this
+ * node cannot verify membership of, and it says so rather than substituting
+ * the current list — tolerance matching is how quorum overlap quietly stops
+ * being an intersection. Fails closed throughout: a node that cannot
+ * identify itself cannot show it belongs.
  */
-async function selfOnCommittee(nodes, key, mode) {
-  const committee = selectCommittee(nodes, `quorumgrant|${key}`, { size: committeeSize(mode) });
-  if (committee.refusal) return { member: false, reason: committee.refusal };
+async function selfOnCommittee(key, mode, fingerprint) {
+  const membership = networkStateService.membershipAt(fingerprint);
+  if (!membership) {
+    return { member: false, code: 409, reason: 'unknown membership fingerprint' };
+  }
+
+  const committee = selectCommittee(membership, `quorumgrant|${key}`, { size: committeeSize(mode) });
+  if (committee.refusal) {
+    return { member: false, code: 409, reason: committee.refusal };
+  }
 
   const collateral = await generalService.obtainNodeCollateralInformation();
   const member = committee.members.some(
     (node) => node.txhash === collateral.txhash
       && String(node.outidx) === String(collateral.txindex),
   );
-  return { member, quorum: committee.quorum, rung: committee.rung };
+  return {
+    member, code: member ? 200 : 409, reason: member ? null : 'this node is not on that committee', quorum: committee.quorum, rung: committee.rung,
+  };
 }
 
 /**
@@ -207,11 +220,11 @@ async function serve(req, res, type, operate) {
     if (!read.ok) {
       return res.status(read.code).json(messageHelper.createErrorMessage(read.message));
     }
-    const { ask, askerNode, nodes } = read;
+    const { ask, askerNode } = read;
 
-    const committee = await selfOnCommittee(nodes, ask.key, ask.mode ?? 'held');
+    const committee = await selfOnCommittee(ask.key, ask.mode ?? 'held', ask.fingerprint);
     if (!committee.member) {
-      return res.status(409).json(messageHelper.createErrorMessage('this node is not on that committee'));
+      return res.status(committee.code).json(messageHelper.createErrorMessage(committee.reason));
     }
 
     if (type !== 'probe') {
