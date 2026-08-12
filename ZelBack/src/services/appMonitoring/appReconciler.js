@@ -29,6 +29,7 @@ const pendingTeardownStore = require('../appLifecycle/pendingTeardownStore');
 const appTamperingDetectionService = require('../appTamperingDetectionService');
 const telemetrySinkCache = require('../telemetrySinkCache');
 const reconcilerQueue = require('./reconcilerQueue');
+const mastershipGrantGate = require('../quorumGrant/mastershipGrantGate');
 
 // The lightweight scheduling seam this engine drives: enqueue/scheduleRetry
 // live there, and the engine registers its reconcile + onSettled below. A producer
@@ -716,6 +717,17 @@ async function effectiveDesiredRunning(identifier, spec, exitCode) {
   // reconcile, so recovery resumes the moment the pipeline ends.
   const { appName } = spec.comp;
   if (globalState.getAppShutdownPipelineState(appName)) return { desired: null, reason: 'shutdownPipeline' };
+  // The quorum-grant veto (mastership by grant): for activeStandby components
+  // with the grant plane active, WHO runs is the grant's decision — veto-only.
+  // A lost grant returns desired:false, an unknown one defers bounded while a
+  // re-acquire runs, and a held one answers nothing at all: the data gates
+  // below still decide readiness, exactly as today. Sits above the
+  // controllerDesired block so grant loss outranks a standing 'running' from
+  // a decider that has not re-run, and below operatorStopped so an
+  // operator-stopped app can never restart on the strength of a grant.
+  // Inert unless the feature gate and per-app holder unanimity both open.
+  const grantVeto = await mastershipGrantGate.grantVerdict(identifier, spec.comp);
+  if (grantVeto) return grantVeto;
   // Only decider-owned components hold for a controller opinion: activeStandby
   // (the election decides which instance runs) and sync-before-start (the sync
   // readiness decider starts it once its data is complete). Plain-sync
@@ -1346,7 +1358,11 @@ async function reconcile(identifier) {
     // controller everywhere else in this pass (see effectiveDesiredRunning) and
     // reading only the controller here was the one place it did not.
     const operatorStop = await appsRuntimeState.operatorStopState(identifier);
-    if (operatorStop.stopped || controllerDesired.get(identifier) === 'stopped') {
+    // A LOST grant is a pending stop too (desired:false only — a bounded
+    // grant-unknown defer is not), or a deposed master would keep writing
+    // over a missing volume exactly like the incident's app did.
+    const grantLost = (await mastershipGrantGate.grantVerdict(identifier, spec.comp))?.desired === false;
+    if (operatorStop.stopped || controllerDesired.get(identifier) === 'stopped' || grantLost) {
       try {
         const actualNow = await dockerActual(identifier);
         if (actualNow.reachable && !actualNow.indeterminate && (actualNow.running || actualNow.paused)) {
@@ -1354,7 +1370,11 @@ async function reconcile(identifier) {
           // drain. Carried through here too, or an appkill against an unmounted
           // volume quietly becomes a graceful stop.
           const forceKill = operatorStop.stopped && operatorStop.force === true;
-          const reason = operatorStop.stopped ? 'operatorStopped' : 'controllerDesired';
+          // Precedence follows the guard above: the operator outranks the
+          // controller, which outranks a lost grant.
+          let reason = 'grantLost';
+          if (operatorStop.stopped) reason = 'operatorStopped';
+          else if (controllerDesired.get(identifier) === 'stopped') reason = 'controllerDesired';
           log.info(`appReconciler - ${identifier} data volume unavailable but a stop is desired; ${forceKill ? 'killing' : 'stopping'} the container`);
           if (forceKill) {
             await dockerService.appDockerKill(identifier);
@@ -1919,6 +1939,14 @@ async function reconcile(identifier) {
   const startingState = await appsRuntimeState.getState(identifier);
   const pendingGeneration = (startingState && startingState.restartGeneration) || 0;
   const satisfiesRestart = pendingGeneration > ((startingState && startingState.actuatedRestartGeneration) || 0);
+
+  // The grant verdict can flip the same way during the awaits above — a
+  // demotion mid-reconcile must not be outrun by a start already in flight.
+  // Both a veto and a bounded defer abort here: neither is permission.
+  if (await mastershipGrantGate.blocksStart(identifier, spec.comp)) {
+    log.info(`appReconciler - ${identifier} grant verdict changed during reconcile, aborting start`);
+    return;
+  }
 
   await fluxEventBus.checkpoint(fluxEventBus.Checkpoint.RECONCILER_BEFORE_START, identifier);
   // condemned can also land during the awaits above (a cancel/expiry between this
