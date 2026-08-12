@@ -66,8 +66,11 @@ describe('app network naming: what one app calls another', function () {
 
   async function registerApp(name, { components, assignment, specOverrides }) {
     await pushBusybox(name);
+    // No `instances`: both apps here are pinned by targetIps, so the count is derived
+    // from the declared replicas. Stating it invites the two to disagree — the host
+    // declares s1 and s2, and a hardcoded 1 is an INSTANCES_REPLICA_MISMATCH.
     const res = await registerEncryptedV9App(env.clients[0].url, {
-      name, instances: 1, assignment, specOverrides, components,
+      name, assignment, specOverrides, components,
     });
     expect(res.status, `register ${name}: ${JSON.stringify(res)}`).to.equal('success');
     await queueAppTx(res.data);
