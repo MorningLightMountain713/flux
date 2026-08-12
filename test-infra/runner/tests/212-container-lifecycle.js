@@ -5,6 +5,7 @@ import { createTestEnv } from '../framework/test-env.js';
 import { pushImage } from '../framework/registry-helper.js';
 import {
   execInContainer, killAppContainer, getAppContainerStatus,
+  requireAppContainerName,
 } from '../framework/container.js';
 import { startTicker, advanceBlock } from '../framework/daemon-control.js';
 import { dbClient } from '../framework/db-client.js';
@@ -179,7 +180,9 @@ describe('containerHealthMonitor restarts stopped container', function () {
   it('should restart container after docker stop', async function () {
     this.timeout(180000);
     const client = env.clients[installedOnIndex];
-    const containerName = `flux${appName}_${appName}`;
+    // Resolved from the container's own labels: its name carries the app's minted
+    // identity, which this suite has no way to spell.
+    const containerName = await requireAppContainerName(client.container, appName, appName);
 
     await execInContainer(client.container, `docker stop ${containerName}`);
 

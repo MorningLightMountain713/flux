@@ -15,6 +15,7 @@ import { bootAndPeer, installOnNodes } from '../framework/reconciler-suite.js';
 import { syncthingSeedIndex } from '../framework/g-app-placement.js';
 import { buildSeedableSyncthingApp } from '../framework/seed-helper.js';
 import { pushImage } from '../framework/registry-helper.js';
+import { dbClient } from '../framework/db-client.js';
 
 // COLD START: a sync app placed on several nodes AT ONCE, with NO node holding the
 // data and NO connected peer that holds it. This is the one shape the forceNonLeader
@@ -90,12 +91,15 @@ describe('reconciler cold start - fresh multi-node placement, no seeded source',
     await pushImage(claimApp, 'v1');
     const claimSpec = await buildSeedableSyncthingApp({ name: claimApp, mode: 'r' });
 
-    await pinColdStart(holders, `flux${rApp}_${rApp}`);
-    await pinColdStart(holders, `flux${gApp}_${gApp}`);
-    await pinColdStart(holders, `flux${claimApp}_${claimApp}`);
+    // The folder id carries the app's minted identity, which only the registration
+    // row states — and this runs before install, so there is no container to ask.
+    const claimFolder = await dbClient(1).appFolderId(claimApp, claimApp);
+    await pinColdStart(holders, await dbClient(1).appFolderId(rApp, rApp));
+    await pinColdStart(holders, await dbClient(1).appFolderId(gApp, gApp));
+    await pinColdStart(holders, claimFolder);
     // Declared BEFORE install, like the cold start itself, so the first election
     // evaluation already has a field where one candidate holds the owner's data.
-    await pinHolding(claimHolder, `flux${claimApp}_${claimApp}`, claimBytes);
+    await pinHolding(claimHolder, claimFolder, claimBytes);
 
     // place both apps on every holder AT ONCE (installOnNodes installs in parallel) so
     // they all broadcast placement before any confirms leadership - the standoff shape
@@ -146,13 +150,13 @@ describe('reconciler cold start - fresh multi-node placement, no seeded source',
   // measures the folder, which is the window an install opens on every holder.
   it('r: nobody seeds while a holder has not yet measured what it holds, and then the holder seeds', async function () {
     this.timeout(300000);
-    const folder = `flux${waitApp}_${waitApp}`;
     const unmeasured = holders.find((i) => i !== seedIndex && i !== claimHolder);
     expect(unmeasured, 'no holder is left between the address-order winner and the data holder').to.not.equal(undefined);
-    const passes = () => env.clients[seedIndex].getDecisionCount('syncthing:folderPass', folder, 'evaluated');
 
     await pushImage(waitApp, 'v1');
     const spec = await buildSeedableSyncthingApp({ name: waitApp, mode: 'r' });
+    const folder = await dbClient(1).appFolderId(waitApp, waitApp);
+    const passes = () => env.clients[seedIndex].getDecisionCount('syncthing:folderPass', folder, 'evaluated');
     await pinColdStart(holders, folder);
     await pinHolding(claimHolder, folder, claimBytes);
     await env.clients[unmeasured].holdCheckpoint(BEFORE_HOLDINGS, folder);
@@ -223,7 +227,6 @@ describe('reconciler cold start - fresh multi-node placement, no seeded source',
   // claim it needs to reach it.
   it('r: elects one seed even when a candidate is silent to only one node', async function () {
     this.timeout(300000);
-    const folder = `flux${splitApp}_${splitApp}`;
     // The candidate to silence is neither the address-order winner nor the holder: it
     // has to be a claim whose ABSENCE changes which rule the winner applies, without
     // changing what the ranking would answer for anyone who can see the whole field.
@@ -232,6 +235,7 @@ describe('reconciler cold start - fresh multi-node placement, no seeded source',
 
     await pushImage(splitApp, 'v1');
     const splitSpec = await buildSeedableSyncthingApp({ name: splitApp, mode: 'r' });
+    const folder = await dbClient(1).appFolderId(splitApp, splitApp);
     await pinColdStart(holders, folder);
     await pinHolding(claimHolder, folder, claimBytes);
 
