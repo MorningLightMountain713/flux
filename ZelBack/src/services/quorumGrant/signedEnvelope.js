@@ -95,11 +95,40 @@ function verify(type, fields, signature, pubkey) {
   return outcome === true;
 }
 
+/**
+ * The one field-order contract for every rpc type. Signer and verifier both
+ * derive the ordered fields from a parsed ask THROUGH THIS FUNCTION — the
+ * order lives here or the signature stops meaning what the verifier checks.
+ *
+ * `candidate` is the asker's collateral outpoint (`txhash:outidx`) in every
+ * type: the proposer in prepare/probe, the grantee in accept/renew/release.
+ *
+ * @param {string} type one of TYPES
+ * @param {object} ask parsed ask fields
+ * @returns {Array<string|number>|null}
+ */
+function fieldsFor(type, ask) {
+  switch (type) {
+    case 'probe':
+    case 'prepare':
+      return [ask.key, ask.mode, ask.epoch, ask.candidate, ask.at];
+    case 'accept':
+      return [ask.key, ask.mode, ask.epoch, ask.candidate, ask.ttlMs ?? 0, ask.fingerprint ?? '', ask.at];
+    case 'renew':
+      return [ask.key, ask.epoch, ask.candidate, ask.ttlMs, ask.at];
+    case 'release':
+      return [ask.key, ask.epoch, ask.candidate, ask.at];
+    default:
+      return null;
+  }
+}
+
 module.exports = {
   DOMAIN_PREFIX,
   FIELD_SEPARATOR,
   TYPES,
   canonical,
+  fieldsFor,
   sign,
   verify,
 };
