@@ -54,6 +54,7 @@ module.exports = {
         nodeStartupTracker: 'nodestartuptracker',
         nodeIdentity: 'nodeidentity', // node runtime state generated/discovered by FluxOS: the PGP keypair and the last-known external IP
         policyDocuments: 'policydocuments', // last-known-good network policy documents, so an unreachable source does not drop enforcement
+        quorumGrants: 'quorumgrants', // the grantor's per-key register: promised epochs and accepted grants, journaled before any reply
       },
     },
     daemon: {

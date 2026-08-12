@@ -47,6 +47,7 @@ module.exports = {
         benchmark: 'benchmark',
         nodeIdentity: 'nodeidentity',
         policyDocuments: 'policydocuments',
+        quorumGrants: 'quorumgrants',
       },
     },
     daemon: {
