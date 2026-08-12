@@ -1231,9 +1231,14 @@ describe('dockerService tests', () => {
     // attach must restate them or the container loses the names other apps reach it by.
     // They come off the container's own identity labels: convergence sweeps reconnect
     // holding a container name and nothing else.
-    const identityLabelsFor = (app, component, replica = null) => ({
+    // Mirrors identityLabels(): the app label is the LEASE, and the identity reaches
+    // the container only through the identifier. A fixture without the identifier is
+    // an app whose identity equals its name, which is the one shape that cannot expose
+    // a name-vs-identity confusion.
+    const identityLabelsFor = (app, component, replica = null, identity = null) => ({
       'io.runonflux.app': app,
       'io.runonflux.component': component,
+      'io.runonflux.identifier': [component, identity ?? app, ...(replica ? [replica] : [])].join('_'),
       ...(replica ? { 'io.runonflux.replica': replica } : {}),
     });
 
@@ -1260,6 +1265,24 @@ describe('dockerService tests', () => {
       const { EndpointConfig } = connectStub.firstCall.args[0];
       // NOT `web`: the host app has its own, and a stranger must not shadow it
       expect(EndpointConfig.Aliases).to.deep.equal(['web.myapp', 's1.web.myapp']);
+    });
+
+    it('claims the short names on its own network when the identity is not the name', async () => {
+      // The own-network test must resolve the network's IDENTITY spelling. Comparing
+      // against the app LABEL sends a container its qualified-only aliases on its own
+      // network, so it stops answering to `web` for its own siblings.
+      stubInspectWithNetworks(
+        { bridge: {} }, identityLabelsFor('myapp', 'web', 's1', 'a1b2c3d4e5f6'),
+      );
+      const connectStub = sinon.stub().resolves();
+      sinon.stub(Dockerode.prototype, 'getNetwork').returns({ connect: connectStub });
+
+      await dockerService.appDockerNetworkConnect('web_a1b2c3d4e5f6_s1', 'fluxDockerNetwork_a1b2c3d4e5f6');
+
+      const { EndpointConfig } = connectStub.firstCall.args[0];
+      expect(EndpointConfig.Aliases).to.deep.equal([
+        'web', 's1.web', 'web.myapp', 's1.web.myapp',
+      ]);
     });
 
     it('claims nothing for a container created before the identity labels', async () => {

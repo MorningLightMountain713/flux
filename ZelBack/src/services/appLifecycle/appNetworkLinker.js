@@ -228,13 +228,17 @@ async function reconnectLinkedApps(appName) {
     return;
   }
 
-  const networkName = `fluxDockerNetwork_${appName}`;
   const lowerAppName = appName.toLowerCase();
   // The owner of the just-(re)created app. Only same-owner consumers may attach:
   // if this name changed hands (re-registered by a different owner after the
   // original expired), a foreign consumer's declared link must NOT bridge it in.
   const depApp = (installedApps || []).find((a) => a && a.name === appName);
   const depOwner = depApp ? depApp.owner : null;
+  // Named from the identity of the app whose network this is, off its own installed
+  // row - the same source resolveActiveLinkedNetworks uses. Spelled from the name,
+  // this reattaches consumers to a network that does not exist, and the failure is
+  // collected rather than thrown, so the link is simply never restored.
+  const networkName = `fluxDockerNetwork_${depApp?.identity ?? appName}`;
 
   // Resolved views, not the sealed accessor: an encrypted consumer declares its
   // edges inside the ciphertext and would otherwise never be reattached.
