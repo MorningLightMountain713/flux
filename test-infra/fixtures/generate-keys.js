@@ -1,5 +1,4 @@
 import { randomBytes } from 'node:crypto';
-import { createHash } from 'node:crypto';
 import * as secp256k1 from '@noble/secp256k1';
 import { sha256 } from '@noble/hashes/sha2.js';
 import { ripemd160 } from '@noble/hashes/ripemd160.js';

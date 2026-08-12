@@ -36,7 +36,7 @@ export function buildNodeConfigs() {
     return {
       dir,
       path: join(dir, 'default.js'),
-      content: `const shared = require('../shared');
+      content: `const shared = require('../shared.js');
 
 module.exports = {
   ...shared,

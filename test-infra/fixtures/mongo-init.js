@@ -1,3 +1,6 @@
+// Runs inside mongosh, whose `db` and `print` are shell globals - there is no import
+// for them and eslint cannot know that from the file alone.
+/* global db, print */
 // Pre-seed explorer scanned height for all 16 nodes so the explorer
 // starts near the daemon tip instead of scanning from block 694000.
 // Mounted into /docker-entrypoint-initdb.d/ — runs once on first boot.
