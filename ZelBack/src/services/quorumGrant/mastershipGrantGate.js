@@ -149,6 +149,7 @@ function pursue(identifier, appName) {
   }).then((outcome) => {
     if (outcome.granted) {
       log.info(`mastershipGrantGate - ${identifier} holds ${key} (epoch ${outcome.holder.epoch})`);
+      if (outcome.deposed) raiseFence(appName, outcome.deposed);
       reconcilerQueue.enqueueComponent(identifier);
     }
     return outcome;
@@ -277,8 +278,8 @@ async function masterIntent(identifier, comp) {
 
 // app -> monotonic ms of the last cooperative self-demotion (folder set
 // receiveonly + local changes reverted). The deposed node's own attestation
-// that its data can no longer win — what a future master consults before
-// re-adding a fenced device.
+// that its data can no longer win — what a fencing master consults before
+// re-adding the device.
 const folderDemotions = new Map();
 
 /** The syncthing state machine reports its cooperative self-fence here. */
@@ -289,6 +290,72 @@ function noteFolderDemoted(appName) {
 /** Monotonic ms of the app's last self-demotion, or null. */
 function folderDemotedAt(appName) {
   return folderDemotions.get(appName) ?? null;
+}
+
+// The peer fence (the wedged-deposed case): app -> {outpoint, host, since}.
+// Declarative — the syncthing monitor consults fenceFor() every pass and
+// keeps the folder's device list and the device's autoAcceptFolders in
+// agreement with it, so the fence cannot be forgotten by a missed pass or
+// silently reversed by syncthing's auto-accept (the trap the lease design
+// found in the source). Lifting is event-driven and comes from the one
+// party that knows: the deposed node's own witness attestation that it has
+// demoted and reverted. A node too dead to answer stays fenced.
+const fences = new Map();
+
+// app -> monotonic ms of the last lift poll, so a standing fence costs one
+// ask per interval, not one per monitor pass
+const liftPolls = new Map();
+
+/**
+ * Raise the fence against a superseded grantee. Resolved to a host now —
+ * the fence outlives the deposed node's list entry, and a fence that could
+ * no longer name its target would lift by accident.
+ */
+function raiseFence(appName, deposedOutpoint) {
+  const membership = networkStateService.membershipAt(networkStateService.membershipFingerprint()) ?? [];
+  const node = membership.find((entry) => `${entry.txhash}:${entry.outidx}` === deposedOutpoint);
+  if (!node) {
+    log.warn(`mastershipGrantGate - deposed ${deposedOutpoint} of ${appName} is not listed; nothing to fence`);
+    return;
+  }
+  fences.set(appName, {
+    outpoint: deposedOutpoint, host: extractIp(node.ip), address: node.ip, since: nowMs(),
+  });
+  log.warn(`mastershipGrantGate - fencing ${extractIp(node.ip)} out of ${appName}'s folder until it attests demotion`);
+}
+
+function liftFence(appName, reason) {
+  if (fences.delete(appName)) {
+    log.info(`mastershipGrantGate - fence on ${appName} lifted: ${reason}`);
+  }
+}
+
+/**
+ * The standing fence for an app, or null. Consulting it also advances the
+ * lift poll: while a fence stands, the deposed node's witness endpoint is
+ * asked (throttled) whether it has demoted and reverted, and its own
+ * attestation is what re-admits it.
+ */
+function fenceFor(appName) {
+  const fence = fences.get(appName) ?? null;
+  if (fence) pollFenceLift(appName, fence);
+  return fence;
+}
+
+async function pollFenceLift(appName, fence) {
+  const last = liftPolls.get(appName) ?? 0;
+  if (nowMs() - last < pursuitIntervalMs()) return;
+  liftPolls.set(appName, nowMs());
+  try {
+    const url = `http://${extractIp(fence.address)}:${extractPort(fence.address)}/flux/quorumgrant/witness`;
+    const response = await serviceHelper.axiosPost(url, { key: keyFor(appName) }, { timeout: 5_000 });
+    const answer = response?.data?.data;
+    if (answer && answer.folderDemotedAt !== null && answer.folderDemotedAt !== undefined && !answer.holding) {
+      liftFence(appName, 'the deposed node attests it demoted and reverted');
+    }
+  } catch (error) {
+    // silence keeps the fence — exactly right for a node still down
+  }
 }
 
 /**
@@ -319,6 +386,8 @@ function resetForTests(options = {}) {
   pursuits.clear();
   unknownSince.clear();
   folderDemotions.clear();
+  fences.clear();
+  liftPolls.clear();
 }
 
 module.exports = {
@@ -328,6 +397,9 @@ module.exports = {
   masterIntent,
   noteFolderDemoted,
   folderDemotedAt,
+  fenceFor,
+  raiseFence,
+  liftFence,
   onComponentTeardown,
   holdersUnanimous,
   resetForTests,
