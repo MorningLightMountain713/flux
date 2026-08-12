@@ -76,7 +76,9 @@ describe('appDockerNetwork tests', () => {
 
     await appDockerNetwork.ensureAppDockerNetwork('myapp');
 
-    expect(dockerServiceStub.createFluxAppDockerNetwork.calledOnceWithExactly('myapp', 7)).to.be.true;
+    expect(dockerServiceStub.createFluxAppDockerNetwork.calledOnceWithExactly(
+      'myapp', 7, { networkName: 'fluxDockerNetwork_myapp' },
+    )).to.be.true;
     expect(removeAccessStub.calledOnce).to.be.true;
   });
 
@@ -88,10 +90,24 @@ describe('appDockerNetwork tests', () => {
 
     await appDockerNetwork.ensureAppDockerNetwork('myapp');
 
-    expect(dockerServiceStub.createFluxAppDockerNetwork.getCall(0).args).to.deep.equal(['myapp', 7]);
-    expect(dockerServiceStub.createFluxAppDockerNetwork.getCall(1).args).to.deep.equal(['myapp', 8]);
+    const net = { networkName: 'fluxDockerNetwork_myapp' };
+    expect(dockerServiceStub.createFluxAppDockerNetwork.getCall(0).args).to.deep.equal(['myapp', 7, net]);
+    expect(dockerServiceStub.createFluxAppDockerNetwork.getCall(1).args).to.deep.equal(['myapp', 8, net]);
     // the lost octet is excluded from the next allocation so it never re-picks it
     expect([...dockerServiceStub.getFreeFluxAppNetworkOctet.secondCall.args[0]]).to.include(7);
+  });
+
+  // The network is named from the app's IDENTITY, resolved by the caller that holds
+  // the deployment - a network is durable state and a name is a lease.
+  it('creates under the identity-derived name the caller resolved', async () => {
+    dockerServiceStub.getFreeFluxAppNetworkOctet.resolves(7);
+
+    await appDockerNetwork.ensureAppDockerNetwork('myapp', { networkName: 'fluxDockerNetwork_a1b2c3d4e5f6' });
+
+    expect(dockerServiceStub.dockerNetworkState.calledWith('fluxDockerNetwork_a1b2c3d4e5f6')).to.be.true;
+    expect(dockerServiceStub.createFluxAppDockerNetwork.calledOnceWithExactly(
+      'myapp', 7, { networkName: 'fluxDockerNetwork_a1b2c3d4e5f6' },
+    )).to.be.true;
   });
 
   it('throws a clear error when no free subnet is available', async () => {
@@ -111,7 +127,9 @@ describe('appDockerNetwork tests', () => {
     await appDockerNetwork.ensureAppDockerNetwork('fdm');
 
     expect(dockerServiceStub.getFreeFluxAppNetworkOctet.called).to.be.false;
-    expect(dockerServiceStub.createFluxAppDockerNetwork.calledOnceWithExactly('fdm', 'm'.charCodeAt(0))).to.be.true;
+    expect(dockerServiceStub.createFluxAppDockerNetwork.calledOnceWithExactly(
+      'fdm', 'm'.charCodeAt(0), { networkName: 'fluxDockerNetwork_fdm' },
+    )).to.be.true;
   });
 
   it('advances through EVERY free octet and gives up only on exhaustion, not a fixed count', async () => {
@@ -149,7 +167,9 @@ describe('appDockerNetwork tests', () => {
 
     await appDockerNetwork.ensureAppDockerNetwork('myapp');
 
-    expect(dockerServiceStub.createFluxAppDockerNetwork.calledOnceWithExactly('myapp', 7)).to.be.true;
+    expect(dockerServiceStub.createFluxAppDockerNetwork.calledOnceWithExactly(
+      'myapp', 7, { networkName: 'fluxDockerNetwork_myapp' },
+    )).to.be.true;
   });
 
   it('legacy app throws if its pinned octet cannot be created', async () => {

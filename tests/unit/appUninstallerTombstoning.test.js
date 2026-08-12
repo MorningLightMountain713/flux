@@ -155,7 +155,7 @@ describe('appUninstaller tombstoning teardown', () => {
     const doc = () => ({
       key: 'app',
       name: 'app',
-      networkName: 'app',
+      networkName: 'fluxDockerNetwork_app',
       forceKill: false,
       owner: 'owner1',
       components: [{
@@ -181,7 +181,11 @@ describe('appUninstaller tombstoning teardown', () => {
       await appUninstaller.runTeardown(doc());
       // Even a graceful teardown force-removes: any endpoints left are foreign linked
       // consumers, and a plain removal would leak the network on "active endpoints".
-      expect(stubs.dockerService.forceRemoveFluxAppDockerNetwork.calledOnceWith('app')).to.be.true;
+      // the record carries the resolved network name; removal takes it as the option,
+      // so a teardown that outlives the row still takes the right network with it
+      expect(stubs.dockerService.forceRemoveFluxAppDockerNetwork.calledOnceWith(
+        null, { networkName: 'fluxDockerNetwork_app' },
+      )).to.be.true;
       expect(stubs.dockerService.removeFluxAppDockerNetwork.called).to.be.false;
     });
 
@@ -305,7 +309,7 @@ describe('appUninstaller tombstoning teardown', () => {
 
   describe('recoverOwedTeardowns (boot recovery)', () => {
     const owedDoc = {
-      key: 'app', name: 'app', networkName: 'app', forceKill: false, owner: 'o', components: [{ identifier: 'web_app', appId: 'web_app', label: 'app', ports: [], image: null }],
+      key: 'app', name: 'app', networkName: 'fluxDockerNetwork_app', forceKill: false, owner: 'o', components: [{ identifier: 'web_app', appId: 'web_app', label: 'app', ports: [], image: null }],
     };
 
     it('re-condemns owed components then hands them to the reconciler to converge (not a one-shot boot drive)', async () => {
@@ -343,7 +347,7 @@ describe('appUninstaller tombstoning teardown', () => {
 
   describe('driveOwedTeardown (the reconciler converge-to-gone actuator)', () => {
     const owedDoc = () => ({
-      key: 'app', name: 'app', networkName: 'app', forceKill: false, owner: 'o', attempts: 0, components: [{ identifier: 'web_app', appId: 'web_app', label: 'app', ports: [], image: null }],
+      key: 'app', name: 'app', networkName: 'fluxDockerNetwork_app', forceKill: false, owner: 'o', attempts: 0, components: [{ identifier: 'web_app', appId: 'web_app', label: 'app', ports: [], image: null }],
     });
 
     it('returns none when nothing is owed (the component is genuinely uninstalled)', async () => {

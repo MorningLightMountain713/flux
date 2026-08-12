@@ -61,12 +61,17 @@ const legacyPinnedOctets = appsThatMightBeUsingOldGatewayIpAssignment.map((name)
  * @param {{onStatus?: function}} [options] install-status sink; the heal path passes none
  * @returns {Promise<object|string>} the created-or-existing network response
  */
-async function ensureAppDockerNetwork(appName, { onStatus = null } = {}) {
+async function ensureAppDockerNetwork(appName, { onStatus = null, networkName = null } = {}) {
+  // The app's network is named from its IDENTITY (a network is durable state and a
+  // name is a lease), resolved by the caller which holds the deployment. Absent one —
+  // a legacy caller, or an app with no identity — the name-derived spelling is what
+  // that app already has on disk.
+  const netName = networkName ?? `fluxDockerNetwork_${appName}`;
   const checkingStatus = { status: `Checking Flux App network of ${appName}...` };
   log.info(checkingStatus.status);
   if (onStatus) onStatus(checkingStatus);
 
-  if (await dockerService.dockerNetworkState(`fluxDockerNetwork_${appName}`) === 'exists') {
+  if (await dockerService.dockerNetworkState(netName) === 'exists') {
     const existsStatus = { status: `Flux App network of ${appName} already exists.` };
     log.info(existsStatus.status);
     if (onStatus) onStatus(existsStatus);
@@ -77,7 +82,7 @@ async function ensureAppDockerNetwork(appName, { onStatus = null } = {}) {
   if (appsThatMightBeUsingOldGatewayIpAssignment.includes(appName)) {
     // legacy apps pinned their gateway octet by name (it was baked into their
     // config); they must keep it rather than take the next free one.
-    fluxNet = await dockerService.createFluxAppDockerNetwork(appName, appName.charCodeAt(appName.length - 1)).catch((error) => log.error(error));
+    fluxNet = await dockerService.createFluxAppDockerNetwork(appName, appName.charCodeAt(appName.length - 1), { networkName: netName }).catch((error) => log.error(error));
   } else {
     const tried = new Set(legacyPinnedOctets);
     while (!fluxNet) {
@@ -87,7 +92,7 @@ async function ensureAppDockerNetwork(appName, { onStatus = null } = {}) {
         throw new Error(`Flux App network of ${appName} failed to initiate. No free 172.23.x.0/24 subnet available on this node.`);
       }
       // eslint-disable-next-line no-await-in-loop
-      fluxNet = await dockerService.createFluxAppDockerNetwork(appName, octet).catch((error) => log.error(error));
+      fluxNet = await dockerService.createFluxAppDockerNetwork(appName, octet, { networkName: netName }).catch((error) => log.error(error));
       if (!fluxNet) tried.add(octet);
     }
   }
@@ -122,13 +127,13 @@ const ensuresInFlight = new Map();
  * @param {string} appName bare app name
  * @returns {Promise<object|string>} the created-or-existing network response
  */
-async function ensureAppNetworkPresent(appName) {
+async function ensureAppNetworkPresent(appName, networkName = null) {
   const inFlight = ensuresInFlight.get(appName);
   if (inFlight) return inFlight;
 
   // Settle clears the entry on BOTH outcomes: a retained rejected promise would
   // hand every later caller the same stale failure and wedge the app's repair.
-  const pending = ensureAppDockerNetwork(appName)
+  const pending = ensureAppDockerNetwork(appName, { networkName })
     .finally(() => ensuresInFlight.delete(appName));
   ensuresInFlight.set(appName, pending);
   return pending;
