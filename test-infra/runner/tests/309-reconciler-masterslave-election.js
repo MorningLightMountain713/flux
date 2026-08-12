@@ -14,6 +14,7 @@ import {
   waitFor, waitForReconcileActuated, waitForReconcilerDesiredChanged, assertNoEvent,
 } from '../framework/wait.js';
 import { bootAndPeer, installOnNodes, seedSyncScopedData } from '../framework/reconciler-suite.js';
+import { dbClient } from '../framework/db-client.js';
 
 const subnet = getSubnetConfig();
 
@@ -60,7 +61,8 @@ describe('reconciler enforces masterSlave g: election', function () {
     // sourceless cold-start path is covered separately by suite 51. A synced index
     // also requires matching data on disk (the promote gate refuses a claimed-bytes
     // index over an empty volume), written after each holder's first-run reset.
-    const folder = `flux${appName}_${appName}`;
+    // Resolved, not spelled: the folder id carries the app's minted identity.
+    const folder = await dbClient(1).appFolderId(appName, appName);
     await Promise.all(holders.map(async (i, k) => {
       await waitForReconcileActuated(env.clients[i], identifier, 'dataCleared', 60000, { afterId: installAfters[k] });
       await seedSyncScopedData(env, appName, i);

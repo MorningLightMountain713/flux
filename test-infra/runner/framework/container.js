@@ -117,6 +117,27 @@ export async function requireAppContainerName(container, appName, componentName,
 // `flux<identifier>`, which since minting contains no trace of the app's name. A
 // teardown assertion therefore has to capture these WHILE the app is alive and check
 // they are gone afterwards; nothing on a torn-down node can still say what to look for.
+/**
+ * The identifier ONE component's artifacts are named from —
+ * `<component>_<identity>[_<replica>]` — read off the container's own label.
+ *
+ * Everything physical on the node is built from it: the container name is `flux` +
+ * this, and so are the appdata directory and the syncthing folder id. None of it can
+ * be spelled from the app's name, because the identity is minted at registration.
+ */
+export async function appComponentIdentifier(container, appName, componentName, replica = null) {
+  const containers = await listAppContainers(container, { all: true });
+  const match = containers.find((c) => isAppContainer(c, appName, replica)
+    && (componentName == null || c.component === componentName));
+  return match?.identifier ?? null;
+}
+
+/** The syncthing folder id for one component: `flux<identifier>`. */
+export async function appSyncthingFolderId(container, appName, componentName, replica = null) {
+  const identifier = await appComponentIdentifier(container, appName, componentName, replica);
+  return identifier ? `flux${identifier}` : null;
+}
+
 export async function appComponentIdentifiers(container, appName) {
   const containers = await listAppContainers(container, { all: true });
   return containers.filter((c) => isAppContainer(c, appName, null))

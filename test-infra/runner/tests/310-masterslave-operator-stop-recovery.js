@@ -12,6 +12,7 @@ import { setSynced, resetSyncState } from '../framework/syncthing-control.js';
 import { getSubnetConfig } from '../framework/subnet-config.js';
 import { waitFor, waitForReconcileActuated } from '../framework/wait.js';
 import { bootAndPeer, installOnNodes, seedSyncScopedData } from '../framework/reconciler-suite.js';
+import { dbClient } from '../framework/db-client.js';
 
 const subnet = getSubnetConfig();
 
@@ -69,7 +70,8 @@ describe('masterSlave recovery after an operator stop', function () {
     // both holders need a genuinely synced folder to be election-eligible: an
     // empty global is not treated as synced, so without this neither would ever
     // be a candidate and the suite would pass for the wrong reason.
-    const folder = `flux${appName}_${appName}`;
+    // Resolved, not spelled: the folder id carries the app's minted identity.
+    const folder = await dbClient(1).appFolderId(appName, appName);
     await Promise.all(holders.map(async (i, k) => {
       await waitForReconcileActuated(env.clients[i], identifier, 'dataCleared', 60000, { afterId: installAfters[k] });
       await seedSyncScopedData(env, appName, i);
