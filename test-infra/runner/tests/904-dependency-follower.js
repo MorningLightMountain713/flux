@@ -189,6 +189,9 @@ describe('app dependencies: follower pull-in, strength split, cascade and reap',
     // docker network and reaches it by docker DNS — what shareWith folded into.
     const [gameContainer] = await containersOn(HOST_IDX, apps.game);
     const collectorNetwork = `fluxDockerNetwork_${apps.collector}`;
+    // The address an author can actually write: a container's docker name carries the
+    // app's minted identity, which does not exist when the spec does. APP_NETWORK_NAMING.md
+    const collectorDnsName = `web.${apps.collector}`;
     const { stdout: networks } = await execInContainer(
       env.clients[HOST_IDX].container,
       `docker inspect --format '{{range $k, $v := .NetworkSettings.Networks}}{{$k}} {{end}}' ${gameContainer.name}`,
@@ -197,10 +200,10 @@ describe('app dependencies: follower pull-in, strength split, cascade and reap',
     await waitFor(async () => {
       const out = await execInContainer(
         env.clients[HOST_IDX].container,
-        `docker exec ${gameContainer.name} /bin/busybox nc -w 5 fluxweb_${apps.collector}_s1 8080`,
+        `docker exec ${gameContainer.name} /bin/busybox nc -w 5 ${collectorDnsName} 8080`,
       );
       return out.stdout.includes('DEP-OK');
-    }, { timeout: 120000, interval: 5000, label: 'game reaches the collector by docker DNS' });
+    }, { timeout: 120000, interval: 5000, label: `game reaches the collector at ${collectorDnsName}` });
 
     // Suppression: the follower exists exactly where its requirer is, nowhere else.
     for (const idx of [1, 2]) {
