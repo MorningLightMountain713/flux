@@ -1,0 +1,189 @@
+'use strict';
+
+const { expect } = require('chai');
+const sinon = require('sinon');
+
+const serviceHelper = require('../../ZelBack/src/services/serviceHelper');
+const generalService = require('../../ZelBack/src/services/generalService');
+const registryManager = require('../../ZelBack/src/services/appDatabase/registryManager');
+const messageStore = require('../../ZelBack/src/services/appMessaging/messageStore');
+const reconcilerQueue = require('../../ZelBack/src/services/appMonitoring/reconcilerQueue');
+const grantClient = require('../../ZelBack/src/services/quorumGrant/grantClient');
+const mastershipGrantGate = require('../../ZelBack/src/services/quorumGrant/mastershipGrantGate');
+
+// The reconciler's one question — "does the grant veto this component?" —
+// answered veto-only. What matters most here is what the gate does NOT do:
+// answer when the feature is off, answer for a mixed fleet, or ever return
+// a verdict that starts something.
+
+const SELF_TXHASH = 'a'.repeat(64);
+const SELF = `${SELF_TXHASH}:0`;
+const IDENTIFIER = 'fluxmyapp_component';
+
+function activeStandbyComp() {
+  return { appName: 'myapp', hasActiveStandbySyncthing: () => true };
+}
+
+function plainComp() {
+  return { appName: 'myapp', hasActiveStandbySyncthing: () => false };
+}
+
+describe('quorumGrant mastershipGrantGate', () => {
+  beforeEach(() => {
+    mastershipGrantGate.resetForTests({ enabled: true });
+    sinon.stub(registryManager, 'appLocation').resolves([
+      { ip: '203.0.113.5:16127', txhash: SELF_TXHASH, outidx: 0 },
+      { ip: '10.1.0.1:16127', txhash: '1'.repeat(64), outidx: 0 },
+    ]);
+    sinon.stub(generalService, 'obtainNodeCollateralInformation').resolves({
+      txhash: SELF_TXHASH, txindex: 0,
+    });
+    sinon.stub(serviceHelper, 'axiosGet').resolves({ data: { status: 'success', data: {} } });
+    sinon.stub(messageStore, 'getMasterleaseRecord').resolves(null);
+    sinon.stub(grantClient, 'holderFor').returns(null);
+    sinon.stub(grantClient, 'isAcquiring').returns(false);
+    sinon.stub(grantClient, 'acquire').resolves({ granted: false, reason: 'test' });
+    sinon.stub(reconcilerQueue, 'enqueueComponent');
+  });
+
+  afterEach(() => {
+    mastershipGrantGate.resetForTests();
+    sinon.restore();
+  });
+
+  describe('staying out of the way', () => {
+    it('answers nothing while the feature is off — the default', async () => {
+      mastershipGrantGate.resetForTests(); // no override: config default, off
+      const verdict = await mastershipGrantGate.grantVerdict(IDENTIFIER, activeStandbyComp());
+      expect(verdict).to.equal(null);
+      expect(serviceHelper.axiosGet.called).to.equal(false);
+      expect(grantClient.acquire.called).to.equal(false);
+    });
+
+    it('answers nothing for components without activeStandby semantics', async () => {
+      const verdict = await mastershipGrantGate.grantVerdict(IDENTIFIER, plainComp());
+      expect(verdict).to.equal(null);
+      expect(serviceHelper.axiosGet.called).to.equal(false);
+    });
+
+    it('a mixed fleet puts the whole app on the legacy path', async () => {
+      serviceHelper.axiosGet.rejects(new Error('404 not there'));
+      const verdict = await mastershipGrantGate.grantVerdict(IDENTIFIER, activeStandbyComp());
+      expect(verdict).to.equal(null);
+      expect(grantClient.acquire.called).to.equal(false);
+    });
+
+    it('the unanimity probe skips this node and is cached', async () => {
+      await mastershipGrantGate.grantVerdict(IDENTIFIER, activeStandbyComp());
+      expect(serviceHelper.axiosGet.callCount).to.equal(1); // one other holder
+      expect(serviceHelper.axiosGet.firstCall.args[0]).to.contain('10.1.0.1');
+
+      await mastershipGrantGate.grantVerdict(IDENTIFIER, activeStandbyComp());
+      expect(serviceHelper.axiosGet.callCount).to.equal(1); // cached, not re-probed
+    });
+  });
+
+  describe('the veto-only verdicts', () => {
+    it('held answers nothing — the data gates still decide', async () => {
+      grantClient.holderFor.returns({ state: 'held' });
+      const verdict = await mastershipGrantGate.grantVerdict(IDENTIFIER, activeStandbyComp());
+      expect(verdict).to.equal(null);
+    });
+
+    it('a peer on the published record makes this node a standby, settled', async () => {
+      messageStore.getMasterleaseRecord.resolves({ data: { grantee: 'other:0' } });
+      const verdict = await mastershipGrantGate.grantVerdict(IDENTIFIER, activeStandbyComp());
+      expect(verdict).to.deep.equal({ desired: false, reason: 'peerHoldsGrant' });
+    });
+
+    it('a record naming THIS node is not a peer verdict — the defer path runs', async () => {
+      messageStore.getMasterleaseRecord.resolves({ data: { grantee: SELF } });
+      const verdict = await mastershipGrantGate.grantVerdict(IDENTIFIER, activeStandbyComp());
+      expect(verdict).to.deep.equal({ desired: null, reason: 'grantUnknown' });
+    });
+
+    it('unknown defers within the grace, then fails closed past it', async () => {
+      mastershipGrantGate.resetForTests({ enabled: true, unknownGraceMs: 0 });
+      const first = await mastershipGrantGate.grantVerdict(IDENTIFIER, activeStandbyComp());
+      expect(first.desired).to.equal(null);
+
+      await new Promise((resolve) => { setTimeout(resolve, 10); });
+      const second = await mastershipGrantGate.grantVerdict(IDENTIFIER, activeStandbyComp());
+      expect(second).to.deep.equal({ desired: false, reason: 'grantNotHeld' });
+    });
+
+    it('never returns desired true, whatever the state', async () => {
+      const states = [
+        () => grantClient.holderFor.returns({ state: 'held' }),
+        () => messageStore.getMasterleaseRecord.resolves({ data: { grantee: 'other:0' } }),
+        () => {},
+      ];
+      const verdicts = [];
+      for (const arrange of states) {
+        arrange();
+        // eslint-disable-next-line no-await-in-loop
+        verdicts.push(await mastershipGrantGate.grantVerdict(IDENTIFIER, activeStandbyComp()));
+      }
+      verdicts.forEach((verdict) => {
+        expect(verdict?.desired ?? null).to.not.equal(true);
+      });
+    });
+  });
+
+  describe('pursuit and demotion', () => {
+    it('kicks one acquisition and re-enqueues on demotion', async () => {
+      let demotion = null;
+      grantClient.acquire.callsFake(async (key, options) => {
+        demotion = options.onDemoted;
+        return { granted: false };
+      });
+      await mastershipGrantGate.grantVerdict(IDENTIFIER, activeStandbyComp());
+      expect(grantClient.acquire.calledOnce).to.equal(true);
+      expect(grantClient.acquire.firstCall.args[0]).to.equal('myapp/master');
+
+      demotion('a test deposition');
+      expect(reconcilerQueue.enqueueComponent.calledOnceWith(IDENTIFIER)).to.equal(true);
+    });
+
+    it('does not stack pursuits while one is in flight', async () => {
+      grantClient.isAcquiring.returns(true);
+      await mastershipGrantGate.grantVerdict(IDENTIFIER, activeStandbyComp());
+      expect(grantClient.acquire.called).to.equal(false);
+    });
+
+    it('a win re-enqueues the component so the reconciler acts on it', async () => {
+      grantClient.acquire.resolves({ granted: true, holder: { epoch: 2 } });
+      await mastershipGrantGate.grantVerdict(IDENTIFIER, activeStandbyComp());
+      await new Promise((resolve) => { setImmediate(resolve); });
+      expect(reconcilerQueue.enqueueComponent.calledWith(IDENTIFIER)).to.equal(true);
+    });
+  });
+
+  describe('blocksStart', () => {
+    it('blocks on veto and on defer alike, and never when held or off', async () => {
+      expect(await mastershipGrantGate.blocksStart(IDENTIFIER, activeStandbyComp())).to.equal(true);
+
+      grantClient.holderFor.returns({ state: 'held' });
+      expect(await mastershipGrantGate.blocksStart(IDENTIFIER, activeStandbyComp())).to.equal(false);
+
+      grantClient.holderFor.returns(null);
+      mastershipGrantGate.resetForTests();
+      expect(await mastershipGrantGate.blocksStart(IDENTIFIER, activeStandbyComp())).to.equal(false);
+    });
+  });
+
+  describe('teardown', () => {
+    it('releases a held grant once the container is stopped', async () => {
+      const release = sinon.stub().resolves();
+      grantClient.holderFor.returns({ release });
+      await mastershipGrantGate.onComponentTeardown(IDENTIFIER, activeStandbyComp());
+      expect(release.calledOnce).to.equal(true);
+    });
+
+    it('is a no-op for other components and for non-holders', async () => {
+      await mastershipGrantGate.onComponentTeardown(IDENTIFIER, plainComp());
+      await mastershipGrantGate.onComponentTeardown(IDENTIFIER, activeStandbyComp());
+      expect(grantClient.holderFor.callCount).to.equal(1);
+    });
+  });
+});

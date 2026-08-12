@@ -657,8 +657,20 @@ async function pollWitnesses(standbys, key) {
   return replies;
 }
 
+/** The live Holder for a key on this node, or null. */
+function holderFor(key) {
+  return held.get(key) ?? null;
+}
+
+/** Whether an acquisition for the key is currently in flight. */
+function isAcquiring(key) {
+  return acquiring.has(key);
+}
+
 module.exports = {
   acquire,
+  holderFor,
+  isAcquiring,
   witnessAnswer,
   carryAsk,
   Holder,
