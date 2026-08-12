@@ -3,6 +3,7 @@
 const config = require('config');
 const serviceHelper = require('../serviceHelper');
 const generalService = require('../generalService');
+const networkStateService = require('../networkStateService');
 const registryManager = require('../appDatabase/registryManager');
 const messageStore = require('../appMessaging/messageStore');
 const reconcilerQueue = require('../appMonitoring/reconcilerQueue');
@@ -219,6 +220,62 @@ async function blocksStart(identifier, comp) {
 }
 
 /**
+ * The seed/leader answer for the syncthing state machine's cold-start
+ * election. null = not applicable (feature off, not activeStandby, mixed
+ * fleet) and the lowest-IP election stands; otherwise a boolean naming
+ * whether THIS node is the leader — the grant holder, and nobody else. A
+ * non-holder answering false still kicks the pursuit: becoming leader goes
+ * through acquisition, never through winning an address sort.
+ *
+ * @param {string} identifier component identifier
+ * @param {string} appName
+ * @param {boolean} isActiveStandby
+ * @returns {Promise<boolean|null>}
+ */
+async function leaderIsSelf(identifier, appName, isActiveStandby) {
+  if (!featureEnabled() || !isActiveStandby) return null;
+  if (!(await holdersUnanimous(appName))) return null;
+  if (grantClient.holderFor(keyFor(appName))) return true;
+  pursue(identifier, appName);
+  return false;
+}
+
+/**
+ * The coordinator's intent source under the grant (the stamped FDM decision,
+ * (a) form): the published record's grantee, resolved to its current listed
+ * address, in the same shape the FDM read answers — so the coordinator's
+ * downstream actuation does not change at all. null = not applicable and the
+ * FDM read stands. `ip: null` = the plane is on but nothing is granted yet:
+ * no primary exists, and becoming one goes through acquisition, never
+ * through the no-primary self-election branch.
+ *
+ * @param {string} identifier component identifier
+ * @param {object} comp the activeStandby deployment component
+ * @returns {Promise<{ip: string|null, fdmOk: true}|null>}
+ */
+async function masterIntent(identifier, comp) {
+  if (!featureEnabled()) return null;
+  if (!comp?.hasActiveStandbySyncthing?.()) return null;
+  if (!(await holdersUnanimous(comp.appName))) return null;
+
+  pursue(identifier, comp.appName);
+
+  try {
+    const record = await messageStore.getMasterleaseRecord(comp.appName, ROLE);
+    const grantee = record?.data?.grantee ?? null;
+    if (!grantee) return { ip: null, fdmOk: true };
+    const membership = networkStateService.membershipAt(networkStateService.membershipFingerprint()) ?? [];
+    const node = membership.find((entry) => `${entry.txhash}:${entry.outidx}` === grantee);
+    // a grantee that has left the list resolves to no primary rather than to
+    // a stale address; its term expires on its own and the record with it
+    return { ip: node?.ip ?? null, fdmOk: true };
+  } catch (error) {
+    log.warn(`mastershipGrantGate - intent read for ${comp.appName} failed: ${error.message}`);
+    return { ip: null, fdmOk: true };
+  }
+}
+
+/**
  * Teardown hook, called from hard/softUninstallComponent — the two paths
  * every removal reaches at component granularity (the removedIdentifiers
  * loop does NOT: soft redeploys never get there, and a grant leaked through
@@ -250,6 +307,8 @@ function resetForTests(options = {}) {
 module.exports = {
   grantVerdict,
   blocksStart,
+  leaderIsSelf,
+  masterIntent,
   onComponentTeardown,
   holdersUnanimous,
   resetForTests,

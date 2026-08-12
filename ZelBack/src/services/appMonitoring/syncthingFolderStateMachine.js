@@ -13,6 +13,7 @@ const serviceHelper = require('../serviceHelper');
 const appCaches = require('../utils/appCaches');
 const { appsFolder } = require('../utils/appConstants');
 const appTamperingDetectionService = require('../appTamperingDetectionService');
+const mastershipGrantGate = require('../quorumGrant/mastershipGrantGate');
 const { socketAddressesMatch, extractIp } = require('../utils/socketAddressUtils');
 const fluxEventBus = require('../utils/fluxEventBus');
 const { silenceVerdict, SilenceVerdict } = require('./peerFolderLiveness');
@@ -918,6 +919,7 @@ async function handleReceiveOnlyTransition(params) {
     runningAppList,
     localSocketAddr,
     requiresSyncBeforeStart,
+    isActiveStandby = false,
     syncthingFolder,
     liveness,
     injectedExcludePaths = [],
@@ -940,25 +942,33 @@ async function handleReceiveOnlyTransition(params) {
   const syncStatus = await getFolderSyncCompletion(appId);
   const folderIsEmpty = !!syncStatus && syncStatus.globalBytes === 0
     && syncStatus.inSyncBytes === 0 && (syncStatus.receiveOnlyChangedFiles || 0) === 0;
-  // Designated-leader election, debounced: require leadership to hold for
-  // LEADER_CONFIRM_COUNT consecutive cycles, so a single transient peer-visibility blip
-  // doesn't flip a follower to leader. Defer to a running peer UNLESS this is a true,
-  // safe cold start (no peer serving AND this node holds no data) - then elect one seed.
-  // The election picks by identity and carries no liveness, so a holder that dies
-  // keeps winning and every survivor defers to it until its location broadcast
-  // expires - 125 minutes with the app down. Dropped from the list here, before the
-  // pick, when this node can show the holder is gone rather than merely silent to it.
+  // Who leads. When the quorum-grant plane is open for this app (activeStandby
+  // only, feature-gated, holder-unanimous), the leader IS the grant holder —
+  // quorum-backed local state, no debounce needed, and a non-holder never
+  // seeds however its address sorts. Otherwise the legacy path stands:
+  // deterministic lowest-IP election, debounced over LEADER_CONFIRM_COUNT
+  // consecutive cycles so a transient peer-visibility blip doesn't flip a
+  // follower to leader, deferring to a running peer UNLESS this is a true,
+  // safe cold start (no peer serving AND this node holds no data).
+  //
+  // The legacy election picks by identity and carries no liveness, so a holder
+  // that dies keeps winning and every survivor defers to it until its location
+  // broadcast expires - 125 minutes with the app down. Dropped from the list
+  // here, before the pick, when this node can show the holder is gone rather
+  // than merely silent to it.
+  const grantLeader = await mastershipGrantGate.leaderIsSelf(identifier, installedAppName, isActiveStandby);
   const electionList = await holderListExcludingDead(appId, runningAppList, localSocketAddr, liveness);
-  const electedLeader = isDesignatedLeader(electionList, localSocketAddr, aPeerHasData || !folderIsEmpty);
+  const electedLeader = grantLeader ?? isDesignatedLeader(electionList, localSocketAddr, aPeerHasData || !folderIsEmpty);
   // The floor holderIsGone asks of a silent holder, asked of this node before
   // its own win can count: a node whose peers have gone quiet is the one that
   // fell over, and a win it confirms in that state seeds the app on a
   // partition's minority side while the majority defers to its IP. Isolation
   // resets the streak rather than pausing it, so a heal is followed by
-  // LEADER_CONFIRM_COUNT clean passes like any other blip.
+  // LEADER_CONFIRM_COUNT clean passes like any other blip. The grant path does
+  // not need it - a grant IS the quorum - and short-circuits below.
   const { connected } = liveness.localConnectivity();
   cache.leaderStreak = electedLeader && connected ? (cache.leaderStreak || 0) + 1 : 0;
-  const isLeader = electedLeader && cache.leaderStreak >= LEADER_CONFIRM_COUNT;
+  const isLeader = grantLeader ?? (electedLeader && cache.leaderStreak >= LEADER_CONFIRM_COUNT);
   // Withdrawn on every unpromoted pass, so a lost election drops the claim
   // and the intent behind it. It is raised again only where the promotion is
   // APPLIED - the state machine records intent at the last gate, and the
@@ -969,21 +979,21 @@ async function handleReceiveOnlyTransition(params) {
   cache.designatedLeader = false;
   cache.designationPending = false;
 
-  // RESIDUAL LIMITATION (architectural - this election is a heuristic, not consensus):
-  // a confirmed leader is the cold-start seed and flips to sendreceive WITHOUT a sync
-  // check - it cannot verify against a source because it IS the source. The
-  // "hold data -> don't seed" protection is enforced ONLY through the running-peer proxy:
-  // deferToRunningPeers makes us defer just when a peer carries runningSince (broadcast on
-  // placement). So with NO running peer, a node holding data can still win the IP election
-  // and seed; and a peer holding NEWER data while DISCONNECTED is not "serving" and an
-  // empty local folder cannot know of it, so a fresh seed can win over that peer's data
-  // when it returns. The root cause is that electing by gossip + lowest-IP guarantees
-  // neither a single master under partition (split-brain - the reason this path is now
-  // IP-only) nor that the seed holds the newest data. Reachability is low - every running
-  // node broadcasts runningSince, so an empty runningPeers means this node is effectively
-  // alone. Properly closing it needs a consensus-grounded election (a deterministic
-  // candidate over the on-chain confirmed node set + a data-aware quorum lease that
-  // subsumes the data-version check) - a separate, proposed redesign, out of scope here.
+
+  // RESIDUAL LIMITATION (legacy election only - the grant path above is the
+  // consensus-grounded redesign this note called for, and closes it where the
+  // grant plane is open): a confirmed leader is the cold-start seed and flips
+  // to sendreceive WITHOUT a sync check - it cannot verify against a source
+  // because it IS the source. The "hold data -> don't seed" protection is
+  // enforced ONLY through the running-peer proxy: deferToRunningPeers makes us
+  // defer just when a peer carries runningSince (broadcast on placement). So
+  // with NO running peer, a node holding data can still win the IP election
+  // and seed; and a peer holding NEWER data while DISCONNECTED is not
+  // "serving" and an empty local folder cannot know of it, so a fresh seed can
+  // win over that peer's data when it returns. The root cause is that electing
+  // by gossip + lowest-IP guarantees neither a single master under partition
+  // (split-brain - the reason this path is IP-only) nor that the seed holds
+  // the newest data.
   if (isLeader) {
     // The seed flip below runs WITHOUT a sync check, and that is only sound when
     // there is nothing to lose: an empty folder (the cold start this election
@@ -1285,6 +1295,7 @@ async function manageFolderSyncState(params) {
     identifier,
     syncFolder,
     requiresSyncBeforeStart,
+    isActiveStandby = false,
     syncthingAppsFirstRun,
     mountVerifyNeeded = true,
     receiveOnlySyncthingAppsCache,
@@ -1392,6 +1403,7 @@ async function manageFolderSyncState(params) {
       runningAppList,
       localSocketAddr,
       requiresSyncBeforeStart,
+      isActiveStandby,
       syncthingFolder,
       liveness,
       injectedExcludePaths,
