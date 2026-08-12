@@ -10,6 +10,7 @@ const fluxNetworkHelper = require('../../ZelBack/src/services/fluxNetworkHelper'
 const networkStateService = require('../../ZelBack/src/services/networkStateService');
 const generalService = require('../../ZelBack/src/services/generalService');
 const registryManager = require('../../ZelBack/src/services/appDatabase/registryManager');
+const messageStore = require('../../ZelBack/src/services/appMessaging/messageStore');
 const grantRegister = require('../../ZelBack/src/services/quorumGrant/grantRegister');
 const grantorController = require('../../ZelBack/src/services/quorumGrant/grantorController');
 const signedEnvelope = require('../../ZelBack/src/services/quorumGrant/signedEnvelope');
@@ -56,6 +57,7 @@ function signedAsk(type, overrides = {}) {
     epoch: 3,
     candidate: ASKER,
     ttlMs: 60_000,
+    generation: 0,
     fingerprint: FINGERPRINT,
     at: Date.now(),
     ...overrides,
@@ -94,6 +96,7 @@ describe('quorumGrant grantorController', () => {
       { ip: `${ASKER_HOST}:16127`, runningSince: Date.now() - 24 * 60 * 60 * 1000 },
       { ip: '10.1.0.1:16127', runningSince: Date.now() - 24 * 60 * 60 * 1000 },
     ]);
+    sinon.stub(messageStore, 'getGrantGenerationRecord').resolves(null);
     sinon.stub(grantRegister, 'read').resolves(null);
     sinon.stub(grantRegister, 'probe').resolves({ ok: true, probe: true });
     sinon.stub(grantRegister, 'prepare').resolves({ ok: true, promised: true, promisedEpoch: 3 });
@@ -121,12 +124,12 @@ describe('quorumGrant grantorController', () => {
       })).to.equal(true);
     });
 
-    it('accept carries mode, ttl, and fingerprint through', async () => {
+    it('accept carries mode, ttl, generation, and fingerprint through', async () => {
       const res = fakeRes();
       await grantorController.accept(fakeReq(signedAsk('accept')), res);
       expect(res.statusCode).to.equal(200);
       expect(grantRegister.accept.calledOnceWith('myapp/master', {
-        epoch: 3, grantee: ASKER, mode: 'held', ttlMs: 60_000, fingerprint: FINGERPRINT,
+        epoch: 3, grantee: ASKER, mode: 'held', ttlMs: 60_000, generation: 0, fingerprint: FINGERPRINT,
       })).to.equal(true);
     });
 
@@ -229,6 +232,15 @@ describe('quorumGrant grantorController', () => {
       expect(grantRegister.prepare.called).to.equal(false);
     });
 
+    it('409 when the ask names a retired generation, teaching the current one', async () => {
+      messageStore.getGrantGenerationRecord.resolves({ data: { generation: 2 } });
+      const res = fakeRes();
+      await grantorController.prepare(fakeReq(signedAsk('prepare')), res);
+      expect(res.statusCode).to.equal(409);
+      expect(res.body.data.message).to.contain('current is 2');
+      expect(grantRegister.prepare.called).to.equal(false);
+    });
+
     it('refuses an ask without a well-formed fingerprint outright', async () => {
       const res = fakeRes();
       await grantorController.prepare(fakeReq(signedAsk('prepare', { fingerprint: 'fp-1' })), res);
@@ -328,7 +340,7 @@ describe('quorumGrant grantorController', () => {
       const { acceptance } = res.body.data;
       expect(acceptance.grantor).to.equal(ASKER);
       const fields = signedEnvelope.fieldsFor('rosteraccept', {
-        key: 'myapp/master', fingerprint: FINGERPRINT, seq: 1, remove: REMOVE, add: ADD,
+        key: 'myapp/master', fingerprint: FINGERPRINT, generation: 0, seq: 1, remove: REMOVE, add: ADD,
       });
       expect(signedEnvelope.verify('rosteraccept', fields, acceptance.signature, PUBKEY)).to.equal(true);
     });
@@ -410,12 +422,12 @@ describe('quorumGrant grantorController', () => {
       ]),
     ]);
 
-    const base = selectCommittee(realFleet, 'quorumgrant|myapp/master', { size: 9 });
+    const base = selectCommittee(realFleet, rosterOverlay.walkKeyFor('myapp/master', 0), { size: 9 });
     const outpointOf = (node) => `${node.txhash}:${node.outidx}`;
     const removed = base.members[0];
     const survivors = base.members.filter((node) => node !== removed);
     const added = rosterOverlay.nextReplacement(
-      realFleet, 'quorumgrant|myapp/master', survivors, new Set([outpointOf(removed)]),
+      realFleet, rosterOverlay.walkKeyFor('myapp/master', 0), survivors, new Set([outpointOf(removed)]),
     );
 
     const bare = {
@@ -425,7 +437,7 @@ describe('quorumGrant grantorController', () => {
       ...bare,
       acceptances: base.members.slice(0, base.quorum).map((signer) => {
         const fields = signedEnvelope.fieldsFor('rosteraccept', {
-          key: 'myapp/master', fingerprint: FINGERPRINT, seq: 1, remove: bare.remove, add: bare.add,
+          key: 'myapp/master', fingerprint: FINGERPRINT, generation: 0, seq: 1, remove: bare.remove, add: bare.add,
         });
         const signed = signedEnvelope.sign('rosteraccept', fields, wifOf.get(outpointOf(signer)));
         return { grantor: outpointOf(signer), signature: signed.signature };

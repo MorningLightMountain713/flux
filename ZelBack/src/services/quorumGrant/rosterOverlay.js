@@ -43,6 +43,24 @@ function outpointOf(node) {
 }
 
 /**
+ * The walk key a held committee derives from — always generation-salted,
+ * generation 0 included. The generation is the owner's re-roll counter: a
+ * new number re-deals the seats from the very same membership, which is the
+ * whole escape when the standing committee is dark on a list that has not
+ * changed. One unconditional spelling, so every derivation site runs the
+ * same path and a site that failed to resolve the generation produces a key
+ * nobody else agrees with, loudly, instead of quietly deriving yesterday's
+ * committee.
+ *
+ * @param {string} key resource key (`<app>/<role>`)
+ * @param {number} generation the owner's current generation for the key
+ * @returns {string}
+ */
+function walkKeyFor(key, generation) {
+  return `quorumgrant|${key}@${generation}`;
+}
+
+/**
  * The chain length past which extension refuses: one full committee's worth
  * of seats. A chain that has replaced as many seats as the base ever had is
  * describing a world the base no longer resembles — re-acquisition at the
@@ -186,15 +204,18 @@ function rosterAfter(baseMembers, membership, chain) {
  *
  * @param {object[]} membership the membership the fingerprint names
  * @param {string} key resource key (`<app>/<role>`)
- * @param {string} fingerprint the basis the signatures bind to
+ * @param {string} fingerprint the membership basis the signatures bind to
+ * @param {number} generation the generation the chain overlays — signatures
+ *   bind it beside the fingerprint, so a retired world's chain can never
+ *   reshape a re-rolled committee
  * @param {number} committeeSize the mode's configured size
  * @param {object[]} chain carried entries, seq order
  * @returns {{members: object[], quorum: number}|null} the effective roster,
  *   or null when anything fails to verify
  */
-function verifyChain(membership, key, fingerprint, committeeSize, chain) {
+function verifyChain(membership, key, fingerprint, generation, committeeSize, chain) {
   if (!Array.isArray(chain)) return null;
-  const walkKey = `quorumgrant|${key}`;
+  const walkKey = walkKeyFor(key, generation);
   const base = selectCommittee(membership, walkKey, { size: committeeSize });
   if (base.refusal) return null;
   if (chain.length > chainCap(base.members.length)) return null;
@@ -221,7 +242,7 @@ function verifyChain(membership, key, fingerprint, committeeSize, chain) {
       const signer = preChange.get(acceptance.grantor);
       if (!signer || signers.has(acceptance.grantor)) continue;
       const fields = signedEnvelope.fieldsFor('rosteraccept', {
-        key, fingerprint, seq: entry.seq, remove: entry.remove, add: entry.add,
+        key, fingerprint, generation, seq: entry.seq, remove: entry.remove, add: entry.add,
       });
       if (signedEnvelope.verify('rosteraccept', fields, acceptance.signature, signer.pubkey)) {
         signers.add(acceptance.grantor);
@@ -263,6 +284,7 @@ module.exports = {
   chainCap,
   entryWellFormed,
   chainWellFormed,
+  walkKeyFor,
   nextReplacement,
   rosterAfter,
   verifyChain,

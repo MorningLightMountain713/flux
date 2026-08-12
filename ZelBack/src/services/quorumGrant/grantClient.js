@@ -101,17 +101,25 @@ async function selfIdentity() {
  * The committee for a key at a fingerprint — the same walk the grantors run,
  * over the same named membership, or null when this node cannot rebuild it.
  *
- * Held committees are read through the roster overlay: the published record
- * for the key may carry a chain of quorum-signed seat changes, and after
- * full verification against the named membership it reshapes the walk's
- * answer. This is how a challenger that never held the grant still asks the
- * HEALED committee rather than the dark seats the base walk would hand it.
- * The chain rides along in the return so every ask can carry it.
+ * Held committees are one deal of a generation-salted walk — the generation
+ * is the owner's re-roll counter, resolved from the newest owner-signed
+ * record this node has synced — read through the roster overlay: the
+ * published record for the key may carry a chain of quorum-signed seat
+ * changes, and after full verification against the named membership it
+ * reshapes the walk's answer. This is how a challenger that never held the
+ * grant still asks the HEALED committee rather than the dark seats the base
+ * walk would hand it. The generation and chain ride along in the return so
+ * every ask can carry them.
  */
 async function committeeFor(key, mode, fingerprint) {
   const membership = networkStateService.membershipAt(fingerprint);
   if (!membership) return null;
-  const committee = selectCommittee(membership, `quorumgrant|${key}`, { size: committeeSizeFor(mode) });
+
+  const generation = mode === 'held' ? await currentGeneration(key) : 0;
+  const walkKey = mode === 'held'
+    ? rosterOverlay.walkKeyFor(key, generation)
+    : `quorumgrant|${key}`;
+  const committee = selectCommittee(membership, walkKey, { size: committeeSizeFor(mode) });
   if (committee.refusal) return null;
 
   let { members } = committee;
@@ -120,9 +128,12 @@ async function committeeFor(key, mode, fingerprint) {
     const appName = key.slice(0, key.indexOf('/'));
     const role = key.slice(key.indexOf('/') + 1);
     const published = await readMasterleaseRoster(appName, role);
-    if (published && published.fingerprint === fingerprint && published.chain.length) {
+    if (published
+      && published.fingerprint === fingerprint
+      && published.generation === generation
+      && published.chain.length) {
       const verified = rosterOverlay.verifyChain(
-        membership, key, fingerprint, committeeSizeFor(mode), published.chain,
+        membership, key, fingerprint, generation, committeeSizeFor(mode), published.chain,
       );
       if (verified) {
         ({ members } = verified);
@@ -132,8 +143,22 @@ async function committeeFor(key, mode, fingerprint) {
   }
 
   return {
-    members, quorum: committee.quorum, fingerprint, chain,
+    members, quorum: committee.quorum, fingerprint, generation, chain,
   };
+}
+
+/**
+ * The current generation for a key: the newest owner-signed record on the
+ * event plane as this node has synced it, 0 when the owner never re-rolled.
+ */
+async function currentGeneration(key) {
+  try {
+    const slash = key.indexOf('/');
+    const record = await messageStore.getGrantGenerationRecord(key.slice(0, slash), key.slice(slash + 1));
+    return record?.data?.generation ?? 0;
+  } catch (error) {
+    return 0;
+  }
 }
 
 /**
@@ -147,7 +172,11 @@ async function readMasterleaseRoster(appName, role) {
     const data = record?.data;
     if (!data || typeof data.fingerprint !== 'string') return null;
     if (!Array.isArray(data.roster?.chain)) return null;
-    return { fingerprint: data.fingerprint, chain: data.roster.chain };
+    return {
+      fingerprint: data.fingerprint,
+      generation: data.generation ?? 0,
+      chain: data.roster.chain,
+    };
   } catch (error) {
     return null;
   }
@@ -244,13 +273,14 @@ async function relayThroughStandbys(standbys, members, type, ask, signature, hav
   return replies;
 }
 
-async function signedAskFor(type, key, mode, epoch, identity, fingerprint, extras = {}) {
+async function signedAskFor(type, key, mode, epoch, identity, basis, extras = {}) {
   const ask = {
     key,
     mode,
     epoch,
     candidate: identity.outpoint,
-    fingerprint,
+    generation: basis.generation ?? 0,
+    fingerprint: basis.fingerprint,
     at: Date.now(),
     ...extras,
   };
@@ -307,14 +337,14 @@ async function acquire(key, options = {}) {
 }
 
 async function acquireOnce(key, mode, ttlMs, identity, committee, options) {
-  const { members, quorum, fingerprint } = committee;
+  const { members, quorum } = committee;
   // a healed committee's chain rides every ask, so a grantor seated by it —
   // whose register may be empty — can prove to itself that it belongs
   const chainExtras = committee.chain?.length ? { chain: committee.chain } : {};
 
   // Pre-vote: learn without burning an epoch. A live incumbent means the
   // answer is "not you, not now" and a correct challenger walks away.
-  const probeSigned = await signedAskFor('probe', key, mode, 1, identity, fingerprint, chainExtras);
+  const probeSigned = await signedAskFor('probe', key, mode, 1, identity, committee, chainExtras);
   if (!probeSigned) return { granted: false, reason: 'could not sign ask' };
   const probeReplies = await askCommittee(members, 'probe', probeSigned.ask, probeSigned.signature);
 
@@ -332,7 +362,7 @@ async function acquireOnce(key, mode, ttlMs, identity, committee, options) {
 
   // Prepare at one past everything the probe taught.
   const epoch = core.nextEpoch(probeOutcome.highestEpoch);
-  const prepareSigned = await signedAskFor('prepare', key, mode, epoch, identity, fingerprint, chainExtras);
+  const prepareSigned = await signedAskFor('prepare', key, mode, epoch, identity, committee, chainExtras);
   const prepareReplies = await askCommittee(members, 'prepare', prepareSigned.ask, prepareSigned.signature);
   const prepared = core.prepareOutcome([...prepareReplies.values()], quorum);
 
@@ -349,7 +379,7 @@ async function acquireOnce(key, mode, ttlMs, identity, committee, options) {
     // our own earlier founding, learned again — fall through and re-accept
   }
 
-  const acceptSigned = await signedAskFor('accept', key, mode, epoch, identity, fingerprint, {
+  const acceptSigned = await signedAskFor('accept', key, mode, epoch, identity, committee, {
     ttlMs: mode === 'held' ? ttlMs : undefined,
     ...chainExtras,
   });
@@ -365,7 +395,12 @@ async function acquireOnce(key, mode, ttlMs, identity, committee, options) {
     // §4 step 4: the winner publishes. For a founding this record is what a
     // re-pinned committee adopts months later — durable, no expiry.
     await masterleasePublisher.publishMasterlease({
-      key, grantee: identity.outpoint, epoch, mode, fingerprint,
+      key,
+      grantee: identity.outpoint,
+      epoch,
+      mode,
+      fingerprint: committee.fingerprint,
+      generation: committee.generation,
     });
     return { granted: true, founder: identity.outpoint };
   }
@@ -440,6 +475,7 @@ class Holder {
     this.#identity = options.identity;
     this.#committee = options.committee;
     this.#committee.chain = this.#committee.chain ?? [];
+    this.#committee.generation = this.#committee.generation ?? 0;
     this.#onDemoted = options.onDemoted ?? null;
     this.#clock = options.clock ?? nowMs;
     this.#schedule = options.schedule ?? ((fn, ms) => setTimeout(fn, ms));
@@ -493,6 +529,7 @@ class Holder {
       epoch: this.#epoch,
       mode: 'held',
       fingerprint: this.#committee.fingerprint,
+      generation: this.#committee.generation,
       ttlMs: this.#ttlMs,
       ...(this.#committee.chain.length ? { roster: { chain: this.#committee.chain } } : {}),
     });
@@ -528,7 +565,7 @@ class Holder {
       'held',
       this.#epoch,
       this.#identity,
-      this.#committee.fingerprint,
+      this.#committee,
       {
         ttlMs: this.#ttlMs,
         ...(this.#committee.chain.length ? { chain: this.#committee.chain } : {}),
@@ -613,7 +650,7 @@ class Holder {
     const excluded = new Set(this.#committee.chain.map((entry) => entry.remove));
     excluded.add(targetOutpoint);
     const expected = rosterOverlay.nextReplacement(
-      membership, `quorumgrant|${this.#key}`, survivors, excluded,
+      membership, rosterOverlay.walkKeyFor(this.#key, this.#committee.generation), survivors, excluded,
     );
     if (!expected) return;
 
@@ -624,7 +661,7 @@ class Holder {
       'held',
       this.#epoch,
       this.#identity,
-      this.#committee.fingerprint,
+      this.#committee,
       {
         remove: targetOutpoint,
         add: outpointOf(expected),
@@ -658,6 +695,7 @@ class Holder {
       const fields = signedEnvelope.fieldsFor('rosteraccept', {
         key: this.#key,
         fingerprint: this.#committee.fingerprint,
+        generation: this.#committee.generation,
         seq,
         remove: entry.remove,
         add: entry.add,
@@ -691,7 +729,7 @@ class Holder {
       'held',
       this.#epoch,
       this.#identity,
-      this.#committee.fingerprint,
+      this.#committee,
       { ttlMs: this.#ttlMs, chain: this.#committee.chain },
     );
     if (!signed) return;
@@ -764,7 +802,7 @@ class Holder {
       'held',
       this.#epoch,
       this.#identity,
-      this.#committee.fingerprint,
+      this.#committee,
     );
     if (signed) {
       await askCommittee(this.#committee.members, 'release', signed.ask, signed.signature);
@@ -829,7 +867,7 @@ async function carryAsk(type, ask, signature) {
     const membership = networkStateService.membershipAt(ask.fingerprint);
     const verified = membership
       ? rosterOverlay.verifyChain(
-        membership, ask.key, ask.fingerprint, committeeSizeFor(ask.mode ?? 'held'), ask.chain,
+        membership, ask.key, ask.fingerprint, ask.generation ?? 0, committeeSizeFor(ask.mode ?? 'held'), ask.chain,
       )
       : null;
     if (verified) ({ members } = verified);
