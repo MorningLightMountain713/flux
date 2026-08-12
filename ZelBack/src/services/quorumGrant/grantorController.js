@@ -5,11 +5,13 @@ const messageHelper = require('../messageHelper');
 const serviceHelper = require('../serviceHelper');
 const generalService = require('../generalService');
 const fluxCommunicationUtils = require('../fluxCommunicationUtils');
+const fluxNetworkHelper = require('../fluxNetworkHelper');
 const networkStateService = require('../networkStateService');
 const registryManager = require('../appDatabase/registryManager');
 const { extractIp } = require('../utils/socketAddressUtils');
 const { selectCommittee } = require('../utils/committeeSelector');
 const signedEnvelope = require('./signedEnvelope');
+const rosterOverlay = require('./rosterOverlay');
 const grantRegister = require('./grantRegister');
 const log = require('../../lib/log');
 
@@ -57,7 +59,9 @@ function askFreshnessMs() {
 
 function committeeSize(mode) {
   if (mode === 'oneshot') return config.fluxapps.quorumGrantOneshotCommitteeSize ?? 9;
-  return config.fluxapps.quorumGrantHeldCommitteeSize ?? 5;
+  // nine referees, majority five: with self-healing rosters reclaiming dark
+  // seats, the wider committee prices nothing and cuts static dark exposure
+  return config.fluxapps.quorumGrantHeldCommitteeSize ?? 9;
 }
 
 function minHolderAgeMs() {
@@ -94,6 +98,7 @@ async function readAsk(req, type) {
   const body = serviceHelper.ensureObject(req.body) ?? {};
   const {
     key, mode, epoch, candidate, ttlMs, fingerprint, at, signature,
+    remove, add, seq, chain,
   } = body;
 
   if (typeof key !== 'string' || !KEY_PATTERN.test(key)) {
@@ -116,6 +121,23 @@ async function readAsk(req, type) {
   if (typeof fingerprint !== 'string' || !FINGERPRINT_PATTERN.test(fingerprint)) {
     return bad(400, 'malformed fingerprint');
   }
+  if (type === 'roster') {
+    if (typeof remove !== 'string' || !OUTPOINT_PATTERN.test(remove)) {
+      return bad(400, 'malformed remove');
+    }
+    if (typeof add !== 'string' || !OUTPOINT_PATTERN.test(add)) {
+      return bad(400, 'malformed add');
+    }
+    if (!Number.isSafeInteger(seq) || seq < 1) {
+      return bad(400, 'malformed seq');
+    }
+  }
+  // Any held ask may carry the holder's roster chain — self-verifying on its
+  // own signatures and outside the ask's signature, so a carrier stripping
+  // it costs liveness, never safety. Shape-gated here; verified where used.
+  if (chain !== undefined && !rosterOverlay.chainWellFormed(chain)) {
+    return bad(400, 'malformed chain');
+  }
   if (!Number.isSafeInteger(at) || Math.abs(Date.now() - at) > askFreshnessMs()) {
     return bad(400, 'stale ask');
   }
@@ -135,7 +157,7 @@ async function readAsk(req, type) {
   }
 
   const ask = {
-    key, mode, epoch, candidate, ttlMs, fingerprint, at,
+    key, mode, epoch, candidate, ttlMs, fingerprint, at, remove, add, seq, chain,
   };
   const fields = signedEnvelope.fieldsFor(type, ask);
   if (!fields || !signedEnvelope.verify(type, fields, signature, askerNode.pubkey)) {
@@ -153,8 +175,14 @@ async function readAsk(req, type) {
  * the current list — tolerance matching is how quorum overlap quietly stops
  * being an intersection. Fails closed throughout: a node that cannot
  * identify itself cannot show it belongs.
+ *
+ * For held keys the base committee is read THROUGH the roster overlay:
+ * this grantor's own journaled chain applies as written, and a longer
+ * chain carried on the ask applies after full verification against the
+ * same membership — which is how a freshly seated replacement, whose
+ * register has never heard of the key, knows to answer for it.
  */
-async function selfOnCommittee(key, mode, fingerprint) {
+async function selfOnCommittee(key, mode, fingerprint, carriedChain) {
   const membership = networkStateService.membershipAt(fingerprint);
   if (!membership) {
     return { member: false, code: 409, reason: 'unknown membership fingerprint' };
@@ -165,8 +193,23 @@ async function selfOnCommittee(key, mode, fingerprint) {
     return { member: false, code: 409, reason: committee.refusal };
   }
 
+  let { members } = committee;
+  if (mode === 'held') {
+    const stored = await grantRegister.read(key);
+    const journaled = stored?.roster?.fingerprint === fingerprint ? stored.roster.chain : [];
+    if (journaled.length) {
+      members = rosterOverlay.rosterAfter(committee.members, membership, journaled) ?? members;
+    }
+    if (Array.isArray(carriedChain) && carriedChain.length > journaled.length) {
+      const verified = rosterOverlay.verifyChain(
+        membership, key, fingerprint, committeeSize(mode), carriedChain,
+      );
+      if (verified) ({ members } = verified);
+    }
+  }
+
   const collateral = await generalService.obtainNodeCollateralInformation();
-  const member = committee.members.some(
+  const member = members.some(
     (node) => node.txhash === collateral.txhash
       && String(node.outidx) === String(collateral.txindex),
   );
@@ -222,7 +265,7 @@ async function serve(req, res, type, operate) {
     }
     const { ask, askerNode } = read;
 
-    const committee = await selfOnCommittee(ask.key, ask.mode ?? 'held', ask.fingerprint);
+    const committee = await selfOnCommittee(ask.key, ask.mode ?? 'held', ask.fingerprint, ask.chain);
     if (!committee.member) {
       return res.status(committee.code).json(messageHelper.createErrorMessage(committee.reason));
     }
@@ -277,6 +320,72 @@ async function release(req, res) {
 }
 
 /**
+ * The register half of one roster proposal: resolve the membership the ask
+ * names, verify any carried chain against it, let the core judge, and —
+ * only after the journal write inside the register — sign this grantor's
+ * acceptance over the exact entry recorded. The signature is the one thing
+ * an unsigned reply channel cannot give the holder: a quorum of these makes
+ * the entry a self-verifying object.
+ */
+async function operateRoster(ask) {
+  const membership = networkStateService.membershipAt(ask.fingerprint);
+  if (!membership) {
+    return { ok: false, code: 'unknown_fingerprint' };
+  }
+
+  let verifiedCarriedChain;
+  if (Array.isArray(ask.chain) && ask.chain.length) {
+    const verified = rosterOverlay.verifyChain(
+      membership, ask.key, ask.fingerprint, committeeSize('held'), ask.chain,
+    );
+    if (!verified) {
+      return { ok: false, code: 'bad_chain' };
+    }
+    verifiedCarriedChain = ask.chain;
+  }
+
+  const reply = await grantRegister.roster(ask.key, {
+    epoch: ask.epoch,
+    candidate: ask.candidate,
+    remove: ask.remove,
+    add: ask.add,
+    seq: ask.seq,
+    fingerprint: ask.fingerprint,
+    at: ask.at,
+  }, {
+    key: ask.key,
+    membership,
+    committeeSize: committeeSize('held'),
+    verifiedCarriedChain,
+  });
+
+  if (!reply.ok) return reply;
+
+  const collateral = await generalService.obtainNodeCollateralInformation();
+  const wif = await fluxNetworkHelper.getFluxNodePrivateKey();
+  const fields = signedEnvelope.fieldsFor('rosteraccept', {
+    key: ask.key, fingerprint: ask.fingerprint, seq: ask.seq, remove: ask.remove, add: ask.add,
+  });
+  const signed = wif ? signedEnvelope.sign('rosteraccept', fields, wif) : null;
+  if (!signed) {
+    // journaled but unable to attest: answer as a refusal so the holder
+    // counts this grantor's silence, not a half-acceptance
+    return { ok: false, code: 'unavailable' };
+  }
+  return {
+    ...reply,
+    acceptance: {
+      grantor: `${collateral.txhash}:${collateral.txindex}`,
+      signature: signed.signature,
+    },
+  };
+}
+
+async function roster(req, res) {
+  return serve(req, res, 'roster', operateRoster);
+}
+
+/**
  * The recorded register state for a key — public facts (epoch, grantee),
  * unauthenticated like every other node-to-node read, and served during the
  * drain. What the harness asserts against and catch-up paths consult.
@@ -292,6 +401,7 @@ async function record(req, res) {
       key,
       promisedEpoch: stored?.promisedEpoch ?? 0,
       accepted: stored?.accepted ?? null,
+      roster: stored?.roster ?? null,
     }));
   } catch (error) {
     log.error(`quorumGrant grantorController record: ${error.message}`);
@@ -309,6 +419,7 @@ module.exports = {
   prepare,
   accept,
   renew,
+  roster,
   release,
   record,
   reset,

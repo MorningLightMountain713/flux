@@ -2,14 +2,19 @@
 
 const { expect } = require('chai');
 const sinon = require('sinon');
+const secp256k1 = require('secp256k1');
+const bs58check = require('bs58check');
 
 const fluxCommunicationUtils = require('../../ZelBack/src/services/fluxCommunicationUtils');
+const fluxNetworkHelper = require('../../ZelBack/src/services/fluxNetworkHelper');
 const networkStateService = require('../../ZelBack/src/services/networkStateService');
 const generalService = require('../../ZelBack/src/services/generalService');
 const registryManager = require('../../ZelBack/src/services/appDatabase/registryManager');
 const grantRegister = require('../../ZelBack/src/services/quorumGrant/grantRegister');
 const grantorController = require('../../ZelBack/src/services/quorumGrant/grantorController');
 const signedEnvelope = require('../../ZelBack/src/services/quorumGrant/signedEnvelope');
+const rosterOverlay = require('../../ZelBack/src/services/quorumGrant/rosterOverlay');
+const { selectCommittee } = require('../../ZelBack/src/services/utils/committeeSelector');
 
 // The controller's job is the gauntlet: identity, signature, committee
 // membership, holdership. The register behind it is stubbed — its rules have
@@ -94,7 +99,11 @@ describe('quorumGrant grantorController', () => {
     sinon.stub(grantRegister, 'prepare').resolves({ ok: true, promised: true, promisedEpoch: 3 });
     sinon.stub(grantRegister, 'accept').resolves({ ok: true });
     sinon.stub(grantRegister, 'renew').resolves({ ok: true, renewed: true });
+    sinon.stub(grantRegister, 'roster').resolves({
+      ok: true, seq: 1, remove: `${'1'.repeat(64)}:0`, add: `${'6'.repeat(64)}:0`,
+    });
     sinon.stub(grantRegister, 'release').resolves({ ok: true, released: true });
+    sinon.stub(fluxNetworkHelper, 'getFluxNodePrivateKey').resolves(WIF);
   });
 
   afterEach(() => {
@@ -293,9 +302,196 @@ describe('quorumGrant grantorController', () => {
     });
   });
 
+  describe('the roster proposal', () => {
+    const REMOVE = `${'1'.repeat(64)}:0`;
+    const ADD = `${'6'.repeat(64)}:0`;
+
+    function rosterAsk(overrides = {}) {
+      return signedAsk('roster', {
+        remove: REMOVE, add: ADD, seq: 1, ...overrides,
+      });
+    }
+
+    it('a well-formed proposal reaches the register with the resolved membership, and the reply carries a verifiable acceptance', async () => {
+      const res = fakeRes();
+      await grantorController.roster(fakeReq(rosterAsk()), res);
+      expect(res.statusCode).to.equal(200);
+
+      const [key, request, context] = grantRegister.roster.firstCall.args;
+      expect(key).to.equal('myapp/master');
+      expect(request.remove).to.equal(REMOVE);
+      expect(request.add).to.equal(ADD);
+      expect(request.seq).to.equal(1);
+      expect(context.membership).to.be.an('array');
+      expect(context.committeeSize).to.be.a('number');
+
+      const { acceptance } = res.body.data;
+      expect(acceptance.grantor).to.equal(ASKER);
+      const fields = signedEnvelope.fieldsFor('rosteraccept', {
+        key: 'myapp/master', fingerprint: FINGERPRINT, seq: 1, remove: REMOVE, add: ADD,
+      });
+      expect(signedEnvelope.verify('rosteraccept', fields, acceptance.signature, PUBKEY)).to.equal(true);
+    });
+
+    it('refuses malformed seats and seqs outright', async () => {
+      const cases = [
+        rosterAsk({ remove: 'not-an-outpoint' }),
+        rosterAsk({ add: 'not-an-outpoint' }),
+        rosterAsk({ seq: 0 }),
+        rosterAsk({ seq: 1.5 }),
+      ];
+      const results = await Promise.all(cases.map(async (body) => {
+        const res = fakeRes();
+        await grantorController.roster(fakeReq(body), res);
+        return res.statusCode;
+      }));
+      expect(results).to.deep.equal([400, 400, 400, 400]);
+    });
+
+    it('a register refusal carries no acceptance — silence, not a half-signature', async () => {
+      grantRegister.roster.resolves({ ok: false, code: 'not_grantee' });
+      const res = fakeRes();
+      await grantorController.roster(fakeReq(rosterAsk()), res);
+      expect(res.statusCode).to.equal(200);
+      expect(res.body.data.code).to.equal('not_grantee');
+      expect(res.body.data.acceptance).to.equal(undefined);
+    });
+
+    it('a carried chain that does not verify stops the proposal before the register', async () => {
+      const bogusChain = [{
+        seq: 1,
+        remove: REMOVE,
+        add: ADD,
+        at: Date.now(),
+        acceptances: [{ grantor: REMOVE, signature: 'AAAA' }],
+      }];
+      const res = fakeRes();
+      await grantorController.roster(fakeReq(rosterAsk({ chain: bogusChain })), res);
+      expect(res.statusCode).to.equal(200);
+      expect(res.body.data.code).to.equal('bad_chain');
+      expect(grantRegister.roster.called).to.equal(false);
+    });
+
+    it('refuses a chain that fails even the shape gate', async () => {
+      const res = fakeRes();
+      await grantorController.roster(fakeReq(rosterAsk({ chain: [{ seq: 1 }] })), res);
+      expect(res.statusCode).to.equal(400);
+    });
+  });
+
+  describe('the roster overlay on committee membership', () => {
+    // A fleet with real keypairs: the chain that reshapes the committee is
+    // verified against these registered keys, so the entries are signed by
+    // a real quorum of the base committee — never a fixture waved through.
+        function keypairFor(index) {
+      const priv = Buffer.alloc(32);
+      priv.writeUInt32BE(index + 1, 28);
+      return {
+        wif: bs58check.encode(Buffer.concat([Buffer.from([0x80]), priv])),
+        pubkey: Buffer.from(secp256k1.publicKeyCreate(priv, false)).toString('hex'),
+      };
+    }
+
+    const realFleet = [
+      {
+        txhash: ASKER_TXHASH, outidx: 0, pubkey: PUBKEY, ip: `${ASKER_HOST}:16127`,
+      },
+      ...Array.from({ length: 12 }, (unused, i) => ({
+        txhash: String(i + 1).repeat(64).slice(0, 64),
+        outidx: 0,
+        pubkey: keypairFor(i + 1).pubkey,
+        ip: `10.${i + 1}.0.1:16127`,
+      })),
+    ];
+    const wifOf = new Map([
+      [ASKER, WIF],
+      ...Array.from({ length: 12 }, (unused, i) => [
+        `${String(i + 1).repeat(64).slice(0, 64)}:0`, keypairFor(i + 1).wif,
+      ]),
+    ]);
+
+    const base = selectCommittee(realFleet, 'quorumgrant|myapp/master', { size: 9 });
+    const outpointOf = (node) => `${node.txhash}:${node.outidx}`;
+    const removed = base.members[0];
+    const survivors = base.members.filter((node) => node !== removed);
+    const added = rosterOverlay.nextReplacement(
+      realFleet, 'quorumgrant|myapp/master', survivors, new Set([outpointOf(removed)]),
+    );
+
+    const bare = {
+      seq: 1, remove: outpointOf(removed), add: outpointOf(added), at: 1000,
+    };
+    const chain = [{
+      ...bare,
+      acceptances: base.members.slice(0, base.quorum).map((signer) => {
+        const fields = signedEnvelope.fieldsFor('rosteraccept', {
+          key: 'myapp/master', fingerprint: FINGERPRINT, seq: 1, remove: bare.remove, add: bare.add,
+        });
+        const signed = signedEnvelope.sign('rosteraccept', fields, wifOf.get(outpointOf(signer)));
+        return { grantor: outpointOf(signer), signature: signed.signature };
+      }),
+    }];
+
+    beforeEach(() => {
+      fluxCommunicationUtils.deterministicFluxList.resolves(realFleet);
+      networkStateService.membershipAt.returns(realFleet);
+    });
+
+    it('fixture: the walk seats a full nine and a replacement exists off it', () => {
+      expect(base.members).to.have.length(9);
+      expect(added).to.not.equal(null);
+    });
+
+    it('a freshly seated replacement answers once the ask carries the chain that seats it', async () => {
+      generalService.obtainNodeCollateralInformation.resolves({
+        txhash: added.txhash, txindex: added.outidx,
+      });
+
+      const bareRes = fakeRes();
+      await grantorController.renew(fakeReq(signedAsk('renew')), bareRes);
+      expect(bareRes.statusCode).to.equal(409);
+
+      const chainRes = fakeRes();
+      await grantorController.renew(fakeReq(signedAsk('renew', { chain })), chainRes);
+      expect(chainRes.statusCode).to.equal(200);
+      expect(grantRegister.renew.calledOnce).to.equal(true);
+    });
+
+    it('a displaced seat stops answering the moment the chain reaches it', async () => {
+      generalService.obtainNodeCollateralInformation.resolves({
+        txhash: removed.txhash, txindex: removed.outidx,
+      });
+
+      const bareRes = fakeRes();
+      await grantorController.renew(fakeReq(signedAsk('renew')), bareRes);
+      expect(bareRes.statusCode).to.equal(200);
+
+      const chainRes = fakeRes();
+      await grantorController.renew(fakeReq(signedAsk('renew', { chain })), chainRes);
+      expect(chainRes.statusCode).to.equal(409);
+    });
+
+    it('the journaled chain reshapes membership with no carry at all', async () => {
+      grantRegister.read.resolves({
+        accepted: { epoch: 3, grantee: ASKER, mode: 'held' },
+        roster: { fingerprint: FINGERPRINT, changedAt: 1, chain },
+      });
+      generalService.obtainNodeCollateralInformation.resolves({
+        txhash: added.txhash, txindex: added.outidx,
+      });
+      const res = fakeRes();
+      await grantorController.renew(fakeReq(signedAsk('renew')), res);
+      expect(res.statusCode).to.equal(200);
+    });
+  });
+
   describe('the record read', () => {
-    it('answers the register state for a key', async () => {
-      grantRegister.read.resolves({ promisedEpoch: 5, accepted: { epoch: 5, grantee: ASKER } });
+    it('answers the register state for a key, roster and all', async () => {
+      grantRegister.read.resolves({
+        promisedEpoch: 5,
+        accepted: { epoch: 5, grantee: ASKER },
+        roster: { fingerprint: FINGERPRINT, changedAt: 1, chain: [] },
+      });
       const req = fakeReq({});
       req.query.key = 'myapp/master';
       const res = fakeRes();
@@ -303,6 +499,7 @@ describe('quorumGrant grantorController', () => {
       expect(res.statusCode).to.equal(200);
       expect(res.body.data.promisedEpoch).to.equal(5);
       expect(res.body.data.accepted.grantee).to.equal(ASKER);
+      expect(res.body.data.roster.fingerprint).to.equal(FINGERPRINT);
     });
 
     it('refuses a malformed key and answers emptiness honestly', async () => {

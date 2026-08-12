@@ -5,6 +5,8 @@ const sinon = require('sinon');
 
 const dbHelper = require('../../ZelBack/src/services/dbHelper');
 const grantRegister = require('../../ZelBack/src/services/quorumGrant/grantRegister');
+const rosterOverlay = require('../../ZelBack/src/services/quorumGrant/rosterOverlay');
+const { selectCommittee } = require('../../ZelBack/src/services/utils/committeeSelector');
 
 // The shell's own obligations, distinct from the core's: refuse while
 // draining, journal before replying, serialize per key, fail closed when the
@@ -192,6 +194,42 @@ describe('quorumGrant grantRegister', () => {
 
       const zero = await grantRegister.renew('app/master', { epoch: 1, grantee: 'a:0', ttlMs: 0 });
       expect(zero.code).to.equal('bad_ttl');
+    });
+
+    it('a roster change journals the chain beside the grant it heals', async () => {
+      const membership = Array.from({ length: 8 }, (unused, i) => ({
+        txhash: String(i + 1).padStart(2, '0').repeat(32),
+        outidx: 0,
+        pubkey: `owner-${i + 1}`,
+        ip: `10.${i + 1}.0.1:16127`,
+      }));
+      const base = selectCommittee(membership, 'quorumgrant|app/master', { size: 5 });
+      const remove = base.members[0];
+      const survivors = base.members.filter((node) => node !== remove);
+      const removedOutpoint = `${remove.txhash}:${remove.outidx}`;
+      const added = rosterOverlay.nextReplacement(
+        membership, 'quorumgrant|app/master', survivors, new Set([removedOutpoint]),
+      );
+
+      await grantRegister.prepare('app/master', { epoch: 1, candidate: 'a:0' });
+      await grantRegister.accept('app/master', {
+        epoch: 1, grantee: 'a:0', mode: 'held', ttlMs: TTL, fingerprint: 'fp',
+      });
+      const reply = await grantRegister.roster('app/master', {
+        epoch: 1,
+        candidate: 'a:0',
+        remove: removedOutpoint,
+        add: `${added.txhash}:${added.outidx}`,
+        seq: 1,
+        fingerprint: 'fp',
+        at: 12345,
+      }, { key: 'app/master', membership, committeeSize: 5 });
+
+      expect(reply.ok).to.equal(true);
+      const stored = store.get('app/master');
+      expect(stored.roster.fingerprint).to.equal('fp');
+      expect(stored.roster.chain).to.have.length(1);
+      expect(stored.roster.chain[0].remove).to.equal(removedOutpoint);
     });
   });
 });

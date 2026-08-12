@@ -1,5 +1,8 @@
 'use strict';
 
+const { selectCommittee } = require('../utils/committeeSelector');
+const rosterOverlay = require('./rosterOverlay');
+
 // The grantor's decision rules, pure. One record in, one request in, one
 // verdict and possibly one changed record out — no clock reads, no I/O, so
 // every rule is testable byte-for-byte and the persistence shell around it
@@ -174,9 +177,19 @@ function onAccept(record, request, nowMs, tunables) {
     released: false,
   };
 
+  // The roster chain is bound to its committee basis. A grant accepted at a
+  // different fingerprint draws a fresh base committee, and an overlay from
+  // the old world must not survive to reshape it.
+  const rosterStale = record?.roster && record.roster.fingerprint !== accepted.fingerprint;
+
   return {
     reply: { ok: true, accepted },
-    record: { ...(record ?? {}), promisedEpoch: Math.max(promisedEpoch, epoch), accepted },
+    record: {
+      ...(record ?? {}),
+      promisedEpoch: Math.max(promisedEpoch, epoch),
+      accepted,
+      ...(rosterStale ? { roster: null } : {}),
+    },
   };
 }
 
@@ -215,6 +228,127 @@ function onRenew(record, request, nowMs) {
 }
 
 /**
+ * A single-seat roster change: the recorded grantee proposes remove-X-add-Y
+ * against the committee its grant is pinned to. Everything checkable is
+ * checked here, from state the grantor holds:
+ *
+ *   - only the recorded grantee of the LIVE held term proposes — a lapsed
+ *     or deposed holder reshapes nothing;
+ *   - the proposal extends this grantor's journaled chain exactly; carried
+ *     entries this grantor missed are adopted only when the shell has
+ *     verified their quorum signatures AND they extend the journal without
+ *     conflict (a fork at any seq is corruption, refused, never chosen);
+ *   - at most one seat changes per TTL, stamped per grantor — pacing is a
+ *     quorum property: consecutive changes need overlapping quorums, and
+ *     the overlap always contains a fresh stamp;
+ *   - the removed seat is on the roster; the added seat is the recomputed
+ *     walk replacement, never the proposer's word.
+ *
+ * The reply names the entry; the SIGNED acceptance over it is the
+ * controller's job, sequenced after the journal write like every reply.
+ *
+ * @param {object} context {key, membership, committeeSize,
+ *   verifiedCarriedChain} — membership is the list the ask's fingerprint
+ *   names, resolved by the caller; the carried chain arrives only after
+ *   signature verification against that same membership
+ */
+function onRoster(record, request, nowMs, knobs, context) {
+  const {
+    epoch, candidate, remove, add, seq, fingerprint,
+  } = request;
+  const state = grantState(record, nowMs);
+
+  if (state === 'none' || state === 'released') {
+    return { reply: refusal('no_grant', record), record: null };
+  }
+  if (record.accepted.mode !== 'held') {
+    return { reply: refusal('bad_mode', record), record: null };
+  }
+  if (!isGrantee(record.accepted, candidate) || record.accepted.epoch !== epoch) {
+    return { reply: refusal('not_grantee', record), record: null };
+  }
+  if (state === 'lapsed') {
+    return { reply: refusal('lapsed', record), record: null };
+  }
+  if ((record.accepted.fingerprint ?? null) !== fingerprint) {
+    return { reply: refusal('wrong_fingerprint', record), record: null };
+  }
+
+  const journaled = record.roster?.fingerprint === fingerprint ? record.roster.chain : [];
+
+  let chain = journaled;
+  const carried = context.verifiedCarriedChain;
+  if (carried && carried.length > journaled.length) {
+    if (!rosterOverlay.extendsChain(journaled, carried)) {
+      return { reply: refusal('roster_conflict', record, { rosterSeq: journaled.length }), record: null };
+    }
+    chain = carried;
+  }
+
+  if (seq !== chain.length + 1) {
+    return { reply: refusal('roster_seq', record, { rosterSeq: chain.length }), record: null };
+  }
+
+  const changedAt = record.roster?.fingerprint === fingerprint ? record.roster.changedAt : undefined;
+  if (changedAt !== undefined && nowMs - changedAt < knobs.maxTtlMs) {
+    return {
+      reply: refusal('roster_rate', record, {
+        retryAfterMs: knobs.maxTtlMs - (nowMs - changedAt),
+        rosterSeq: chain.length,
+      }),
+      record: null,
+    };
+  }
+
+  const walkKey = `quorumgrant|${context.key}`;
+  const base = selectCommittee(context.membership, walkKey, { size: context.committeeSize });
+  if (base.refusal) {
+    return { reply: refusal('no_committee', record), record: null };
+  }
+  if (chain.length >= rosterOverlay.chainCap(base.members.length)) {
+    return { reply: refusal('roster_exhausted', record, { rosterSeq: chain.length }), record: null };
+  }
+
+  const roster = rosterOverlay.rosterAfter(base.members, context.membership, chain);
+  if (!roster) {
+    return { reply: refusal('roster_conflict', record, { rosterSeq: chain.length }), record: null };
+  }
+  if (!roster.some((node) => `${node.txhash}:${node.outidx}` === remove)) {
+    return { reply: refusal('roster_remove', record, { rosterSeq: chain.length }), record: null };
+  }
+
+  const survivors = roster.filter((node) => `${node.txhash}:${node.outidx}` !== remove);
+  const excluded = new Set(chain.map((entry) => entry.remove));
+  excluded.add(remove);
+  const expected = rosterOverlay.nextReplacement(context.membership, walkKey, survivors, excluded);
+  if (!expected) {
+    return { reply: refusal('roster_exhausted', record, { rosterSeq: chain.length }), record: null };
+  }
+  if (`${expected.txhash}:${expected.outidx}` !== add) {
+    return {
+      reply: refusal('roster_add', record, {
+        expected: `${expected.txhash}:${expected.outidx}`,
+        rosterSeq: chain.length,
+      }),
+      record: null,
+    };
+  }
+
+  const entry = {
+    seq, remove, add, at: request.at ?? nowMs,
+  };
+  return {
+    reply: {
+      ok: true, seq, remove, add,
+    },
+    record: {
+      ...record,
+      roster: { fingerprint, changedAt: nowMs, chain: [...chain, entry] },
+    },
+  };
+}
+
+/**
  * Voluntary release by the grantee: ends the term with no lock-delay. A
  * release for a grant this grantor never recorded is a no-op success — the
  * caller cannot tell the difference and has no correct use for it.
@@ -248,5 +382,6 @@ module.exports = {
   onPrepare,
   onAccept,
   onRenew,
+  onRoster,
   onRelease,
 };

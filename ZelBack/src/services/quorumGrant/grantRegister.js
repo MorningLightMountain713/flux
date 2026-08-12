@@ -133,6 +133,9 @@ async function transact(key, decide) {
           $set: {
             promisedEpoch: outcome.record.promisedEpoch,
             accepted: outcome.record.accepted ?? null,
+            // the roster overlay rides the same journal: absent stays
+            // absent, null clears (a basis change), an object replaces
+            ...(outcome.record.roster !== undefined ? { roster: outcome.record.roster } : {}),
             updatedAt: Date.now(),
           },
         },
@@ -199,6 +202,18 @@ async function release(key, request) {
 }
 
 /**
+ * The roster-change op. The context carries what the pure core cannot
+ * fetch: the membership the ask's fingerprint names, the mode's committee
+ * size, and the carried chain AFTER the controller verified its quorum
+ * signatures. Journaled before the reply like every other decision — the
+ * acceptance the controller signs afterwards must never attest to an entry
+ * the journal could still forget.
+ */
+async function roster(key, request, context) {
+  return transact(key, (record, nowMs, knobs) => core.onRoster(record, request, nowMs, knobs, context));
+}
+
+/**
  * The recorded state for a key, read-only — what the published record and
  * catch-up paths consume. Served during the drain: reading what the journal
  * holds contradicts nothing.
@@ -221,6 +236,7 @@ module.exports = {
   prepare,
   accept,
   renew,
+  roster,
   release,
   read,
   resetForTests,
