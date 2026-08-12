@@ -277,7 +277,15 @@ async function gatherContainers(app) {
       const pid = info?.State?.Pid;
       if (!Number.isInteger(pid) || pid <= 0) continue; // eslint-disable-line no-continue
       const networks = info?.NetworkSettings?.Networks ?? {};
-      const bridge = networks[`fluxDockerNetwork_${app.name}`] ?? Object.values(networks)[0];
+      // The app's own network is identity-derived (deployment.networkName);
+      // the name-spelled form is kept only for containers created before the
+      // rename and not yet reattached. NEVER "whichever network is first" — a
+      // linked app's container carries other apps' networks, and a foreign
+      // bridge IP here would feed the membership API's source-IP scoping a
+      // wrong tenant. No match means not attached yet: null, not a guess.
+      const bridge = networks[deployment.networkName]
+        ?? networks[`fluxDockerNetwork_${app.name}`]
+        ?? null;
       containers.push({
         component: componentName,
         identifier: component.identifier,
