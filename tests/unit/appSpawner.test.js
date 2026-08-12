@@ -25,6 +25,7 @@ describe('appSpawner tests', () => {
   let configStub;
   let globalStateStub;
   let registryManagerStub;
+  let deploymentFromSpecStub;
   let findUnderProvisionedStub;
   let delayStub;
   let daemonSyncStub;
@@ -122,6 +123,9 @@ describe('appSpawner tests', () => {
       version: spec.version,
       owner: spec.owner,
       hash: overrides.hash || 'abc123',
+      // The app-identity segment its containers are named from — minted at
+      // registration and carried on the real InstantiatedSpec.
+      identity: overrides.identity ?? 'a1b2c3d4e5f6',
       spec,
       isEncrypted: !!overrides.encrypted,
       // Mirrors InstantiatedSpec.requiresArcane(): every encrypted spec
@@ -166,6 +170,14 @@ describe('appSpawner tests', () => {
     }
 
     logStub = { error: sinon.stub(), info: sinon.stub(), warn: sinon.stub() };
+    deploymentFromSpecStub = sinon.stub().callsFake((spec, folder, options = {}) => ({
+      identity: options.identity ?? spec.name,
+      replica: options.replica ?? null,
+      allHostPorts: sinon.stub().returns([]),
+      allImages: sinon.stub().returns([]),
+      componentEntries: sinon.stub().returns([]),
+      resourceTotals: sinon.stub().returns({ cpu: 1, memoryMb: 1000, storageGb: 10 }),
+    }));
     findUnderProvisionedStub = sinon.stub().resolves(opts.candidates || []);
     delayStub = sinon.stub();
     delayStub.onFirstCall().resolves();
@@ -232,12 +244,10 @@ describe('appSpawner tests', () => {
       '../utils/specLibs': {
         getSpecBackend: sinon.stub().resolves({
           DeploymentSpec: {
-            fromSpec: sinon.stub().returns({
-              allHostPorts: sinon.stub().returns([]),
-              allImages: sinon.stub().returns([]),
-              componentEntries: sinon.stub().returns([]),
-              resourceTotals: sinon.stub().returns({ cpu: 1, memoryMb: 1000, storageGb: 10 }),
-            }),
+            // Mirrors DeploymentSpec.fromSpec: `identity ?? appName`, so a caller
+            // that omits the identity produces a view named from the app's NAME —
+            // which is what every port/ownership comparison then reads.
+            fromSpec: deploymentFromSpecStub,
           },
           // notifySpecStored hydrates the raw stored doc into an InstantiatedSpec at
           // the perimeter; the test doc carries a placement object the stub passes through.
@@ -864,6 +874,25 @@ describe('appSpawner tests', () => {
       });
       await appSpawner.trySpawningGlobalApplication().catch(() => {});
       expect(globalStateStub.spawnErrorsLongerAppCache.has('abc123')).to.be.false;
+    });
+
+    // Every ownership question downstream — the port guard first — compares the
+    // app's IDENTITY. A view built without it reports the app's name instead, so
+    // the app meets itself in the port map as a stranger and refuses its own port.
+    it('builds its deployment views with the app identity, never falling back to the name', async () => {
+      buildModule({
+        candidates: [makeCandidate({ identity: 'a1b2c3d4e5f6' })],
+        errorCount: 0,
+        installStub: sinon.stub().resolves({ status: InstallStatus.INSTALLED, reason: null }),
+      });
+
+      await appSpawner.trySpawningGlobalApplication().catch(() => {});
+
+      const calls = deploymentFromSpecStub.getCalls();
+      expect(calls, 'the spawner built at least one deployment view').to.not.have.length(0);
+      for (const call of calls) {
+        expect(call.args[2], 'fromSpec options').to.include({ identity: 'a1b2c3d4e5f6' });
+      }
     });
 
     it('retracts its own installing record when the install DEFERS (so the next cycle is not self-locked)', async () => {

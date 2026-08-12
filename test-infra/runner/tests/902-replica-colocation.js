@@ -234,11 +234,15 @@ describe('replica co-location: two named replicas of one app on one node, separa
       { timeout: 360000, interval: 3000, label: `${appName} s1+s2 both running on node ${HOST_NODE}` },
     );
 
-    // Container names carry the replica segment, so the two identities cannot
-    // collide on the docker daemon.
+    // Container names carry the replica segment, so the two identities cannot collide
+    // on the docker daemon. Asserted as a shape: the segment before the replica is the
+    // app's minted identity, which a suite cannot derive and must not spell out.
     const conts = await appContainersFor(host.container, appName);
     const names = conts.map((c) => c.name).sort();
-    expect(names).to.deep.equal([`fluxweb_${appName}_s1`, `fluxweb_${appName}_s2`]);
+    expect(new Set(names).size, 'two distinct container names, one per identity').to.equal(2);
+    expect(conts.map((c) => c.replica).sort(), 'one container per named replica').to.deep.equal(['s1', 's2']);
+    const appSegments = new Set(conts.map((c) => c.identifier.split('_')[1]));
+    expect([...appSegments], 'both replicas name the same app identity').to.have.length(1);
 
     // Labels are the identity of record — the shutdown daemon groups containers
     // by runonflux.replica, so a missing label silently merges the siblings.
