@@ -56,6 +56,7 @@ module.exports = {
         ipRanges: 'ipranges', // the IP location baseline, one document per allocated range, rebuilt and swapped in whole
         nodeLocations: 'nodelocations', // per-node view derived from the baseline, invalidated when a new baseline lands
         quorumGrants: 'quorumgrants', // the grantor's per-key register: promised epochs and accepted grants, journaled before any reply
+        foundingCommittees: 'foundingcommittees', // the materialized founding committee per mesh app: the photo, not the album
       },
     },
     daemon: {
