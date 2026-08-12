@@ -9,7 +9,9 @@ const registryManager = require('../appDatabase/registryManager');
 const { selectCommittee } = require('../utils/committeeSelector');
 const { extractIp, extractPort } = require('../utils/socketAddressUtils');
 const { nowMs } = require('../utils/monotonicClock');
+const messageStore = require('../appMessaging/messageStore');
 const signedEnvelope = require('./signedEnvelope');
+const rosterOverlay = require('./rosterOverlay');
 const core = require('./grantClientCore');
 const masterleasePublisher = require('./masterleasePublisher');
 const log = require('../../lib/log');
@@ -62,9 +64,14 @@ function askTimeoutMs() {
   return config.fluxapps.quorumGrantAskTimeoutMs ?? 5_000;
 }
 
+function maxTtlMs() {
+  return config.fluxapps.quorumGrantMaxTtlMs ?? 300_000;
+}
+
 function committeeSizeFor(mode) {
   if (mode === 'oneshot') return config.fluxapps.quorumGrantOneshotCommitteeSize ?? 9;
-  return config.fluxapps.quorumGrantHeldCommitteeSize ?? 5;
+  // nine referees, majority five — the grantor side derives the same size
+  return config.fluxapps.quorumGrantHeldCommitteeSize ?? 9;
 }
 
 /** Full jitter, the §7 mandate: dueling proposers are the expected case. */
@@ -93,13 +100,57 @@ async function selfIdentity() {
 /**
  * The committee for a key at a fingerprint — the same walk the grantors run,
  * over the same named membership, or null when this node cannot rebuild it.
+ *
+ * Held committees are read through the roster overlay: the published record
+ * for the key may carry a chain of quorum-signed seat changes, and after
+ * full verification against the named membership it reshapes the walk's
+ * answer. This is how a challenger that never held the grant still asks the
+ * HEALED committee rather than the dark seats the base walk would hand it.
+ * The chain rides along in the return so every ask can carry it.
  */
-function committeeFor(key, mode, fingerprint) {
+async function committeeFor(key, mode, fingerprint) {
   const membership = networkStateService.membershipAt(fingerprint);
   if (!membership) return null;
   const committee = selectCommittee(membership, `quorumgrant|${key}`, { size: committeeSizeFor(mode) });
   if (committee.refusal) return null;
-  return { members: committee.members, quorum: committee.quorum, fingerprint };
+
+  let { members } = committee;
+  let chain = [];
+  if (mode === 'held') {
+    const appName = key.slice(0, key.indexOf('/'));
+    const role = key.slice(key.indexOf('/') + 1);
+    const published = await readMasterleaseRoster(appName, role);
+    if (published && published.fingerprint === fingerprint && published.chain.length) {
+      const verified = rosterOverlay.verifyChain(
+        membership, key, fingerprint, committeeSizeFor(mode), published.chain,
+      );
+      if (verified) {
+        ({ members } = verified);
+        ({ chain } = published);
+      }
+    }
+  }
+
+  return {
+    members, quorum: committee.quorum, fingerprint, chain,
+  };
+}
+
+/**
+ * The roster chain the published record carries for a key, with the basis it
+ * binds to — or null. A read, never a verification: the caller verifies
+ * against the membership it resolved.
+ */
+async function readMasterleaseRoster(appName, role) {
+  try {
+    const record = await messageStore.getMasterleaseRecord(appName, role);
+    const data = record?.data;
+    if (!data || typeof data.fingerprint !== 'string') return null;
+    if (!Array.isArray(data.roster?.chain)) return null;
+    return { fingerprint: data.fingerprint, chain: data.roster.chain };
+  } catch (error) {
+    return null;
+  }
 }
 
 /**
@@ -244,7 +295,7 @@ async function acquire(key, options = {}) {
   if (!identity) return { granted: false, reason: 'node identity unavailable' };
 
   const fingerprint = options.fingerprint ?? networkStateService.membershipFingerprint();
-  const committee = committeeFor(key, mode, fingerprint);
+  const committee = await committeeFor(key, mode, fingerprint);
   if (!committee) return { granted: false, reason: 'committee unavailable for fingerprint' };
 
   acquiring.add(key);
@@ -257,10 +308,13 @@ async function acquire(key, options = {}) {
 
 async function acquireOnce(key, mode, ttlMs, identity, committee, options) {
   const { members, quorum, fingerprint } = committee;
+  // a healed committee's chain rides every ask, so a grantor seated by it —
+  // whose register may be empty — can prove to itself that it belongs
+  const chainExtras = committee.chain?.length ? { chain: committee.chain } : {};
 
   // Pre-vote: learn without burning an epoch. A live incumbent means the
   // answer is "not you, not now" and a correct challenger walks away.
-  const probeSigned = await signedAskFor('probe', key, mode, 1, identity, fingerprint);
+  const probeSigned = await signedAskFor('probe', key, mode, 1, identity, fingerprint, chainExtras);
   if (!probeSigned) return { granted: false, reason: 'could not sign ask' };
   const probeReplies = await askCommittee(members, 'probe', probeSigned.ask, probeSigned.signature);
 
@@ -278,7 +332,7 @@ async function acquireOnce(key, mode, ttlMs, identity, committee, options) {
 
   // Prepare at one past everything the probe taught.
   const epoch = core.nextEpoch(probeOutcome.highestEpoch);
-  const prepareSigned = await signedAskFor('prepare', key, mode, epoch, identity, fingerprint);
+  const prepareSigned = await signedAskFor('prepare', key, mode, epoch, identity, fingerprint, chainExtras);
   const prepareReplies = await askCommittee(members, 'prepare', prepareSigned.ask, prepareSigned.signature);
   const prepared = core.prepareOutcome([...prepareReplies.values()], quorum);
 
@@ -297,6 +351,7 @@ async function acquireOnce(key, mode, ttlMs, identity, committee, options) {
 
   const acceptSigned = await signedAskFor('accept', key, mode, epoch, identity, fingerprint, {
     ttlMs: mode === 'held' ? ttlMs : undefined,
+    ...chainExtras,
   });
   const sentMs = (options.clock ?? nowMs)();
   const acceptReplies = await askCommittee(members, 'accept', acceptSigned.ask, acceptSigned.signature);
@@ -356,6 +411,10 @@ class Holder {
 
   #acks = new Map(); // grantor outpoint -> sentMs of its latest ack
 
+  #lastAnswerMs = new Map(); // grantor outpoint -> last instant it answered anything
+
+  #lastHealMs = null;
+
   #state = 'held';
 
   #coasting = false;
@@ -380,10 +439,16 @@ class Holder {
     this.#ttlMs = options.ttlMs;
     this.#identity = options.identity;
     this.#committee = options.committee;
+    this.#committee.chain = this.#committee.chain ?? [];
     this.#onDemoted = options.onDemoted ?? null;
     this.#clock = options.clock ?? nowMs;
     this.#schedule = options.schedule ?? ((fn, ms) => setTimeout(fn, ms));
     this.#cancel = options.cancel ?? ((handle) => clearTimeout(handle));
+    // every referee starts with a full term of grace before it can be judged
+    // dark — a committee is never reshaped on the strength of a fresh start
+    this.#committee.members.forEach(
+      (member) => this.#lastAnswerMs.set(outpointOf(member), this.#clock()),
+    );
   }
 
   get key() {
@@ -415,7 +480,10 @@ class Holder {
   /**
    * Publish this term's record. The row expires at the grant duration, so a
    * live holder re-publishes at half of it — an abandoned term's record ages
-   * out on its own, and readers never see a master nobody is renewing.
+   * out on its own, and readers never see a master nobody is renewing. The
+   * roster chain rides the record: it is how everyone who never saw a heal
+   * happen — challengers, standbys, freshly seated grantors — learns the
+   * committee as it now stands.
    */
   async publishRecord() {
     this.#lastPublishMs = this.#clock();
@@ -426,6 +494,7 @@ class Holder {
       mode: 'held',
       fingerprint: this.#committee.fingerprint,
       ttlMs: this.#ttlMs,
+      ...(this.#committee.chain.length ? { roster: { chain: this.#committee.chain } } : {}),
     });
   }
 
@@ -460,7 +529,10 @@ class Holder {
       this.#epoch,
       this.#identity,
       this.#committee.fingerprint,
-      { ttlMs: this.#ttlMs },
+      {
+        ttlMs: this.#ttlMs,
+        ...(this.#committee.chain.length ? { chain: this.#committee.chain } : {}),
+      },
     );
     if (!signed) return;
 
@@ -482,6 +554,9 @@ class Holder {
 
     let renewed = 0;
     replies.forEach((reply, outpoint) => {
+      // any reply at all — a grant, a refusal — is a referee that answers;
+      // dark means answering nobody, directly or through any carrier
+      this.#lastAnswerMs.set(outpoint, sentMs);
       if (reply?.ok && reply.renewed) {
         this.recordAck(outpoint, sentMs);
         renewed += 1;
@@ -505,6 +580,124 @@ class Holder {
     if (this.#state === 'held' && this.#clock() - this.#lastPublishMs > this.#ttlMs / 2) {
       await this.publishRecord();
     }
+
+    await this.#maybeHeal();
+  }
+
+  /**
+   * One heal attempt per rate window: when a referee has answered nothing —
+   * grant or refusal, direct or relayed — for a full term, propose replacing
+   * it with the walk's forced next seat, to the committee as it stands. A
+   * quorum of signed acceptances installs the entry; anything less changes
+   * nothing and waits out the window. Healing runs only from a held,
+   * non-coasting term: reshaping a committee is a healthy holder's chore,
+   * never a crisis measure.
+   */
+  async #maybeHeal() {
+    if (this.#stopped || this.#state !== 'held' || this.#coasting) return;
+    const now = this.#clock();
+    if (this.#lastHealMs !== null && now - this.#lastHealMs < maxTtlMs()) return;
+
+    const dark = this.#committee.members.filter(
+      (member) => now - (this.#lastAnswerMs.get(outpointOf(member)) ?? now) > this.#ttlMs,
+    );
+    if (!dark.length) return;
+    this.#lastHealMs = now;
+
+    const membership = networkStateService.membershipAt(this.#committee.fingerprint);
+    if (!membership) return;
+
+    const target = dark[0];
+    const targetOutpoint = outpointOf(target);
+    const survivors = this.#committee.members.filter((member) => member !== target);
+    const excluded = new Set(this.#committee.chain.map((entry) => entry.remove));
+    excluded.add(targetOutpoint);
+    const expected = rosterOverlay.nextReplacement(
+      membership, `quorumgrant|${this.#key}`, survivors, excluded,
+    );
+    if (!expected) return;
+
+    const seq = this.#committee.chain.length + 1;
+    const signed = await signedAskFor(
+      'roster',
+      this.#key,
+      'held',
+      this.#epoch,
+      this.#identity,
+      this.#committee.fingerprint,
+      {
+        remove: targetOutpoint,
+        add: outpointOf(expected),
+        seq,
+        ...(this.#committee.chain.length ? { chain: this.#committee.chain } : {}),
+      },
+    );
+    if (!signed) return;
+
+    const direct = await askCommittee(this.#committee.members, 'roster', signed.ask, signed.signature);
+    let replies = direct;
+    if (direct.size < this.#committee.members.length) {
+      const standbys = await standbysFor(this.#key, this.#identity.outpoint);
+      replies = await relayThroughStandbys(
+        standbys, this.#committee.members, 'roster', signed.ask, signed.signature, direct,
+      );
+    }
+
+    // Count only acceptances that verify against the signer's registered
+    // key and come from the committee being asked — the assembled entry is
+    // published as proof, and proof assembled from unchecked claims is not.
+    const entry = {
+      seq, remove: targetOutpoint, add: outpointOf(expected), at: signed.ask.at, acceptances: [],
+    };
+    const preChange = new Map(this.#committee.members.map((member) => [outpointOf(member), member]));
+    replies.forEach((reply, outpoint) => {
+      const acceptance = reply?.ok ? reply.acceptance : null;
+      if (!acceptance || acceptance.grantor !== outpoint) return;
+      const signer = preChange.get(acceptance.grantor);
+      if (!signer) return;
+      const fields = signedEnvelope.fieldsFor('rosteraccept', {
+        key: this.#key,
+        fingerprint: this.#committee.fingerprint,
+        seq,
+        remove: entry.remove,
+        add: entry.add,
+      });
+      if (!signedEnvelope.verify('rosteraccept', fields, acceptance.signature, signer.pubkey)) return;
+      entry.acceptances.push({ grantor: acceptance.grantor, signature: acceptance.signature });
+    });
+    if (entry.acceptances.length < this.#committee.quorum) return;
+
+    this.#committee.chain.push(entry);
+    this.#committee.members = [...survivors, expected];
+    this.#acks.delete(targetOutpoint);
+    this.#lastAnswerMs.delete(targetOutpoint);
+    this.#lastAnswerMs.set(entry.add, now);
+    log.info(`quorumGrant holder ${this.#key}: roster healed — ${targetOutpoint} out, ${entry.add} in`);
+
+    await this.publishRecord();
+    await this.#seedAddedGrantor(expected);
+  }
+
+  /**
+   * Hand the freshly seated grantor the grant it now referees: an accept at
+   * the current epoch, carrying the chain that seats it. Until this lands
+   * (or a later renewal does the same job) the new seat answers refusals,
+   * which the safety arithmetic already treats as absence.
+   */
+  async #seedAddedGrantor(added) {
+    const signed = await signedAskFor(
+      'accept',
+      this.#key,
+      'held',
+      this.#epoch,
+      this.#identity,
+      this.#committee.fingerprint,
+      { ttlMs: this.#ttlMs, chain: this.#committee.chain },
+    );
+    if (!signed) return;
+    const sentMs = this.#clock();
+    const reply = await askGrantor(added, 'accept', signed.ask, signed.signature);
+    if (reply?.ok && reply.accepted) this.recordAck(outpointOf(added), sentMs);
   }
 
   async #assess(quorumRenewed) {
@@ -594,7 +787,7 @@ async function witnessAnswer(key, mode = 'held') {
 
   let quorumReachable = false;
   const fingerprint = networkStateService.membershipFingerprint();
-  const committee = fingerprint ? committeeFor(key, mode, fingerprint) : null;
+  const committee = fingerprint ? await committeeFor(key, mode, fingerprint) : null;
   if (committee) {
     const probes = committee.members.map(async (member) => {
       try {
@@ -622,10 +815,27 @@ async function witnessAnswer(key, mode = 'held') {
  */
 async function carryAsk(type, ask, signature) {
   if (!signedEnvelope.TYPES.includes(type)) return { replies: [] };
-  const committee = committeeFor(ask.key, ask.mode ?? 'held', ask.fingerprint);
+  const committee = await committeeFor(ask.key, ask.mode ?? 'held', ask.fingerprint);
   if (!committee) return { replies: [] };
 
-  const replies = await askCommittee(committee.members, type, ask, signature);
+  // The ask may carry a chain newer than anything this carrier has seen
+  // published — a heal that just happened. It is self-verifying, so honor
+  // it: otherwise a freshly seated grantor reachable only through relays
+  // would never hear a word.
+  let { members } = committee;
+  if (Array.isArray(ask.chain)
+    && ask.chain.length > committee.chain.length
+    && rosterOverlay.chainWellFormed(ask.chain)) {
+    const membership = networkStateService.membershipAt(ask.fingerprint);
+    const verified = membership
+      ? rosterOverlay.verifyChain(
+        membership, ask.key, ask.fingerprint, committeeSizeFor(ask.mode ?? 'held'), ask.chain,
+      )
+      : null;
+    if (verified) ({ members } = verified);
+  }
+
+  const replies = await askCommittee(members, type, ask, signature);
   const carried = [];
   replies.forEach((reply, member) => carried.push({ member, reply }));
   return { replies: carried };

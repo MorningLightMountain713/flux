@@ -10,6 +10,7 @@ const appEventVerifier = require('./appEventVerifier');
 const registryManager = require('../appDatabase/registryManager');
 const foundingCommittee = require('../appMesh/foundingCommittee');
 const ownerGenerationRecord = require('../quorumGrant/ownerGenerationRecord');
+const rosterOverlay = require('../quorumGrant/rosterOverlay');
 const { getSpec, validateGossipSpec } = require('../utils/specLibs');
 const { getStateBeforeHeight } = require('../appDatabase/appSpecHistory');
 const globalState = require('../utils/globalState');
@@ -807,6 +808,12 @@ async function handleMasterleaseEvent({ message, envelope, announcer }) {
   if (message.mode !== 'held' && message.mode !== 'oneshot') return;
   if (!Number.isSafeInteger(message.broadcastedAt)) return;
   if (message.mode === 'held' && (!Number.isSafeInteger(message.ttlMs) || message.ttlMs < 1)) return;
+  // The roster is optional and shape-gated only: its signatures verify at
+  // read time against the membership the fingerprint names, which a late
+  // reader may resolve when this node cannot. A record wearing a malformed
+  // roster is dropped whole — a half-trusted record is worse than none.
+  if (message.roster !== undefined
+    && (!message.roster || !rosterOverlay.chainWellFormed(message.roster.chain))) return;
   try {
     const db = dbHelper.databaseConnection();
     const database = db.db(config.database.appsglobal.database);

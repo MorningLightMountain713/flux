@@ -24,6 +24,9 @@ const log = require('../../lib/log');
  * @param {'held'|'oneshot'} grant.mode
  * @param {string} grant.fingerprint committee basis
  * @param {number} [grant.ttlMs] held term duration; drives the record's expiry
+ * @param {{chain: object[]}} [grant.roster] the committee's quorum-signed
+ *   seat changes atop the fingerprint's base — self-verifying, so the record
+ *   is proof enough for any reader
  * @returns {Promise<boolean>} whether the record went out
  */
 async function publishMasterlease(grant) {
@@ -46,6 +49,7 @@ async function publishMasterlease(grant) {
       mode: grant.mode,
       fingerprint: grant.fingerprint,
       ...(grant.mode === 'held' ? { ttlMs: grant.ttlMs } : {}),
+      ...(grant.roster ? { roster: grant.roster } : {}),
       broadcastedAt: Date.now(),
     };
 
