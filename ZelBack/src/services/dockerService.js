@@ -846,7 +846,7 @@ async function appDockerCreate(deployComp, options = {}) {
 
   const { appName } = deployComp;
   const { identifier } = deployComp;
-  const networkName = options.networkName ?? `fluxDockerNetwork_${appName}`;
+  const networkName = options.networkName ?? deployComp.networkName ?? `fluxDockerNetwork_${appName}`;
 
   const effectiveCpu = deployComp.cpu;
 

@@ -6,7 +6,9 @@ import { bootAndPeer } from '../framework/reconciler-suite.js';
 import { registerEncryptedV9App, updateEncryptedV9App } from '../framework/content-helper.js';
 import { queueAppTx, advanceBlocks } from '../framework/daemon-control.js';
 import { waitFor, waitForAppInstalled } from '../framework/wait.js';
-import { appContainersFor, getAppContainerStatus, execInContainer } from '../framework/container.js';
+import {
+  appContainersFor, getAppContainerStatus, execInContainer, fluxAppNetworkName,
+} from '../framework/container.js';
 import { authenticate } from '../auth.js';
 import { appOwnerKey } from '../framework/keys.js';
 import { pushBusybox } from '../framework/registry-helper.js';
@@ -188,7 +190,10 @@ describe('app dependencies: follower pull-in, strength split, cascade and reap',
     // The network dial: the game container sits on the collector's private
     // docker network and reaches it by docker DNS — what shareWith folded into.
     const [gameContainer] = await containersOn(HOST_IDX, apps.game);
-    const collectorNetwork = `fluxDockerNetwork_${apps.collector}`;
+    // Resolved, not spelled: the network is named from the collector's identity, which
+    // this suite has no way to derive.
+    const collectorNetwork = await fluxAppNetworkName(env.clients[HOST_IDX].container, apps.collector);
+    expect(collectorNetwork, 'the collector has a docker network on the host node').to.be.a('string');
     // The address an author can actually write: a container's docker name carries the
     // app's minted identity, which does not exist when the spec does. APP_NETWORK_NAMING.md
     const collectorDnsName = `web.${apps.collector}`;

@@ -243,9 +243,15 @@ export async function restartFluxos(container, { apiPort = 16127, readyTimeoutMs
 // also removes the app's cross-app docker network and umount+rm's its loop-mounted
 // appdata. These inspect the real in-node state so a suite can prove FULL removal.
 
-// The per-app docker network FluxOS creates and (only after all components detach) removes.
-export function fluxAppNetworkName(appName) {
-  return `fluxDockerNetwork_${appName}`;
+// The per-app docker network FluxOS creates and (only after all components detach)
+// removes. Its NAME is built from the app's minted identity, which a suite cannot
+// derive — so it is found by the label FluxOS stamps on it, and returns null when the
+// app has no network on this node.
+export async function fluxAppNetworkName(container, appName) {
+  const { stdout } = await execInContainer(container,
+    `docker network ls --filter label=io.runonflux.app-network=${appName} --format '{{.Name}}' 2>/dev/null || echo ""`);
+  const [name] = stdout.trim().split('\n').map((s2) => s2.trim()).filter(Boolean);
+  return name ?? null;
 }
 
 // Whether a docker network of this exact name exists on the node. Takes the raw
@@ -260,8 +266,7 @@ export async function networkExists(container, networkName) {
 
 // The app's docker network if it still exists on this node, else null.
 export async function getAppNetwork(container, appName) {
-  const name = fluxAppNetworkName(appName);
-  return (await networkExists(container, name)) ? name : null;
+  return fluxAppNetworkName(container, appName);
 }
 
 // ── Network-detach synthesis (the network-heal suite) ─────────────────
@@ -271,26 +276,29 @@ export async function getAppNetwork(container, appName) {
 
 export async function disconnectAppNetwork(container, appName, componentName) {
   const name = await requireAppContainerName(container, appName, componentName);
-  return execInContainer(container,
-    `docker network disconnect ${fluxAppNetworkName(appName)} ${name}`);
+  const network = await fluxAppNetworkName(container, appName);
+  return execInContainer(container, `docker network disconnect ${network} ${name}`);
 }
 
 export async function connectAppNetwork(container, appName, componentName) {
   const name = await requireAppContainerName(container, appName, componentName);
-  return execInContainer(container,
-    `docker network connect ${fluxAppNetworkName(appName)} ${name}`);
+  const network = await fluxAppNetworkName(container, appName);
+  return execInContainer(container, `docker network connect ${network} ${name}`);
 }
 
 // The subnet of the app's docker network - capture BEFORE pruning it, so a
 // restore recreates the network the recreated container's static IP fits into.
 export async function getAppNetworkSubnet(container, appName) {
+  const network = await fluxAppNetworkName(container, appName);
+  if (!network) return null;
   const { stdout } = await execInContainer(container,
-    `docker network inspect --format '{{(index .IPAM.Config 0).Subnet}}' ${fluxAppNetworkName(appName)} 2>/dev/null || echo ""`);
+    `docker network inspect --format '{{(index .IPAM.Config 0).Subnet}}' ${network} 2>/dev/null || echo ""`);
   return stdout.trim() || null;
 }
 
 export async function removeAppNetworkRaw(container, appName) {
-  return execInContainer(container, `docker network rm ${fluxAppNetworkName(appName)}`);
+  const network = await fluxAppNetworkName(container, appName);
+  return execInContainer(container, `docker network rm ${network}`);
 }
 
 // Create a network under an exact name - for the networks a suite needs docker to
@@ -300,8 +308,11 @@ export async function createNetworkNamed(container, networkName, subnet) {
   return execInContainer(container, `docker network create${subnetFlag} ${networkName}`);
 }
 
-export async function createAppNetworkRaw(container, appName, subnet) {
-  return createNetworkNamed(container, fluxAppNetworkName(appName), subnet);
+// Recreates the network a suite just destroyed, under the SAME name it had — the
+// caller captured it while the app was alive, because the name is built from the
+// app's identity and nothing on the node can restate it once the network is gone.
+export async function createAppNetworkRaw(container, networkName, subnet) {
+  return createNetworkNamed(container, networkName, subnet);
 }
 
 // Docker's container ID: survives nothing - a recreate mints a new one - so ID
@@ -317,7 +328,8 @@ export async function getAppContainerId(container, appName, componentName) {
 // Whether the container holds an endpoint (with an IP) on its OWN app network -
 // the same fact dockerService.classifyContainerNetworkAttachment reads.
 export async function getAppContainerAttachment(container, appName, componentName) {
-  const net = fluxAppNetworkName(appName);
+  const net = await fluxAppNetworkName(container, appName);
+  if (!net) return { attached: false, ip: null };
   const name = await appContainerName(container, appName, componentName);
   if (!name) return { attached: false, ip: null };
   const { stdout } = await execInContainer(container,

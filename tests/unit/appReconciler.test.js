@@ -337,7 +337,7 @@ describe('appReconciler tests', () => {
 
       await appReconciler.reconcile('www_App');
 
-      sinon.assert.calledOnceWithExactly(stubs.appDockerNetwork.ensureAppNetworkPresent, 'App');
+      sinon.assert.calledOnceWithExactly(stubs.appDockerNetwork.ensureAppNetworkPresent, 'App', null);
       sinon.assert.callOrder(stubs.appDockerNetwork.ensureAppNetworkPresent, stubs.dockerService.appDockerStart);
     });
 
@@ -346,7 +346,7 @@ describe('appReconciler tests', () => {
 
       await appReconciler.reconcile('www_App');
 
-      sinon.assert.calledOnceWithExactly(stubs.appDockerNetwork.ensureAppNetworkPresent, 'App');
+      sinon.assert.calledOnceWithExactly(stubs.appDockerNetwork.ensureAppNetworkPresent, 'App', null);
       sinon.assert.callOrder(
         stubs.appDockerNetwork.ensureAppNetworkPresent,
         stubs.containerHealthMonitor.recreateMissingContainers,
@@ -2597,7 +2597,7 @@ describe('appReconciler tests', () => {
 
       await healPasses();
 
-      sinon.assert.calledWith(stubs.appDockerNetwork.ensureAppNetworkPresent, 'App');
+      sinon.assert.calledWith(stubs.appDockerNetwork.ensureAppNetworkPresent, 'App', null);
       sinon.assert.callOrder(
         stubs.appDockerNetwork.ensureAppNetworkPresent,
         stubs.dockerService.appDockerForceRemove,

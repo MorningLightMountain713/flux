@@ -331,7 +331,7 @@ describe('appUninstaller tests', () => {
     const doc = () => ({
       key: 'myapp',
       name: 'myapp',
-      networkName: 'myapp',
+      networkName: 'fluxDockerNetwork_myapp',
       forceKill: false,
       owner: '1own',
       reason: 'user-cancel',
@@ -388,7 +388,11 @@ describe('appUninstaller tests', () => {
     it('force-disconnects endpoints and removes the network even on a graceful teardown (no leak)', async () => {
       fluxShutdowndClientStub.beginAppStop.resolves({ outcome: 'complete' });
       await appUninstaller.runTeardown(doc()).catch(() => {});
-      expect(dockerServiceStub.forceRemoveFluxAppDockerNetwork.calledWith('myapp')).to.equal(true);
+      // the teardown record carries the resolved network name; removal takes it as the
+      // option, so a record that outlives the row still names the right network
+      expect(dockerServiceStub.forceRemoveFluxAppDockerNetwork.calledWith(
+        null, { networkName: 'fluxDockerNetwork_myapp' },
+      )).to.equal(true);
       expect(dockerServiceStub.removeFluxAppDockerNetwork.called).to.equal(false);
     });
 

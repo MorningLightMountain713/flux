@@ -779,7 +779,9 @@ async function uninstallApplication(appName, options = {}) {
       key: replica != null ? `${appName}_${replica}` : appName,
       name: appName,
       replica: replica ?? null,
-      networkName: appName,
+      // Named from the identity, like the network itself. Recorded on the teardown so a
+      // removal that outlives the row still knows which network to take with it.
+      networkName: `fluxDockerNetwork_${spec.identity ?? appName}`,
       forceKill,
       broadcastRemoval,
       owner: spec.owner,
@@ -1143,7 +1145,7 @@ async function executeTeardown(doc, { onStatus = null } = {}) {
     // consumers that linked to this app, and a plain removal fails on them ("active
     // endpoints"). A linked consumer stops desiring this departed network on its next
     // reconcile, so disconnecting it here is safe regardless of the teardown mode.
-    await dockerService.forceRemoveFluxAppDockerNetwork(networkName).catch((e) => log.error(`network removal ${networkName}: ${e.message}`));
+    await dockerService.forceRemoveFluxAppDockerNetwork(null, { networkName }).catch((e) => log.error(`network removal ${networkName}: ${e.message}`));
     // Mesh teardown: units, namespace, transport port, material. Keyed on the
     // registration identity and a no-op for apps with no mesh material; mesh
     // forbids co-location, so any removal of a mesh identity is the app

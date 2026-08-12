@@ -271,7 +271,7 @@ async function installApplication(instantiated, options = {}) {
       throw error;
     }
 
-    await appDockerNetwork.ensureAppDockerNetwork(appName, { onStatus });
+    await appDockerNetwork.ensureAppDockerNetwork(appName, { onStatus, networkName: deployment.networkName });
 
     log.info(`Initiating Flux App ${appName} installation...`);
     if (onStatus) onStatus({ status: `Initiating Flux App ${appName} installation...` });

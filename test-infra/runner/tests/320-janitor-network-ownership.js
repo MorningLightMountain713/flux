@@ -133,16 +133,20 @@ describe('janitor reaps app networks by ownership, not by docker "unused"', func
     // A leftover from an app this node does not have installed: what an
     // interrupted uninstall leaves, or what a restored node comes back with.
     const orphanName = `e2eorphan${Date.now()}`;
-    const mk = await createAppNetworkRaw(client.container, orphanName, '172.23.199.0/24');
+    // Named by hand, not resolved: this network belongs to no installed app, so there
+    // is no identity to build it from and no label to find it by — which is exactly
+    // what the janitor has to recognise as debris.
+    const orphanNetwork = `fluxDockerNetwork_${orphanName}`;
+    const mk = await createAppNetworkRaw(client.container, orphanNetwork, '172.23.199.0/24');
     expect(mk.exitCode, `could not create the orphan network: ${mk.output}`).to.equal(0);
-    expect(await getAppNetwork(client.container, orphanName), 'orphan network is there to begin with').to.not.equal(null);
+    expect(await networkExists(client.container, orphanNetwork), 'orphan network is there to begin with').to.equal(true);
 
     const afterId = client.getLastEventId();
     await waitForDebrisSweep(client, 60000, afterId);
     // The reap runs inside the sweep, so give the removal itself a moment rather
     // than racing the event that announces the sweep completed.
     await waitFor(
-      async () => (await getAppNetwork(client.container, orphanName)) === null,
+      async () => (await networkExists(client.container, orphanNetwork)) === false,
       { timeout: 60000, interval: 2000, label: 'orphan network reaped' },
     );
 

@@ -908,7 +908,7 @@ async function networkHealBlocker(identifier, installed) {
  * existing container name; `docker network connect` on a live container does not
  * restore published host ports, so only a recreate fully heals it.
  */
-async function healDetachedNetwork(identifier, app) {
+async function healDetachedNetwork(identifier, app, networkName = null) {
   const mainAppName = app.name;
   // Confirm in-pass: a detached read can be transient (dockerd mid-restart, the
   // brief window before an endpoint gets its IP). Settle, then look again, and
@@ -979,7 +979,7 @@ async function healDetachedNetwork(identifier, app) {
     // park here, since a remove it could not follow with a recreate would take
     // the container from partially-alive to gone.
     try {
-      await appDockerNetwork.ensureAppNetworkPresent(mainAppName);
+      await appDockerNetwork.ensureAppNetworkPresent(mainAppName, networkName);
     } catch (err) {
       log.error(`appReconciler - cannot rebuild ${networkMode} for ${identifier} (${err.message}); leaving the container in place`);
       scheduleRetry(identifier, NETWORK_PRUNED_RETRY_MS);
@@ -1383,7 +1383,7 @@ async function reconcile(identifier) {
     // fixed by the heal (no restart repairs a stale endpoint, and converging
     // secondary memberships on a container about to be recreated is churn).
     if (dockerService.isContainerDetachedFromNetwork(actual.attachment)) {
-      await healDetachedNetwork(identifier, app);
+      await healDetachedNetwork(identifier, app, spec.comp?.networkName ?? null);
       return;
     }
     // Steady state is where membership drift surfaces (a recreated linked app,
@@ -1541,7 +1541,7 @@ async function reconcile(identifier) {
   // inherits it. Costs one network state read on a pass that was about to
   // actuate anyway, and nothing at all in steady state - a running container
   // returns above this.
-  await appDockerNetwork.ensureAppNetworkPresent(mainAppName);
+  await appDockerNetwork.ensureAppNetworkPresent(mainAppName, spec.comp?.networkName ?? null);
 
   // Having the network back is not the same as the container being able to reach
   // it. Docker binds a container to the network's ID, so a network rebuilt under
