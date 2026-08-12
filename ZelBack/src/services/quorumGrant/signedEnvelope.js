@@ -1,0 +1,105 @@
+'use strict';
+
+const verificationHelper = require('../verificationHelper');
+
+// The signing discipline for every quorum-grant rpc, in one place.
+//
+// Every message is signed with the NODE OPERATOR key — the key the node list
+// registers as `pubkey` — on the existing secp256k1 path. One scheme, one
+// verify path, no new crypto: the same decision the node-down certificates
+// design reached (§6.3), inherited whole. The vote belongs to the owner, so an
+// owner-key signature proves exactly what the quorum arithmetic asks.
+//
+// Payloads are canonical and domain-separated: a fixed field order under a
+// per-type prefix, so a signature over a prepare can never be replayed as an
+// accept, and a signature over one field split can never be re-read as
+// another. No field may contain the separator — checked, not assumed, because
+// a payload is composed by whoever sends it, and a value carrying the
+// separator would shift the meaning of every field after it.
+
+const DOMAIN_PREFIX = 'fluxquorumgrant';
+const FIELD_SEPARATOR = '|';
+
+/**
+ * The rpc types with a signature over them. Renewals are signed so they can be
+ * carried by ANY holder — the messenger is irrelevant precisely because the
+ * envelope is end-to-end (§7's relay rule); the re-found record is owner-signed
+ * at the consumer layer and is not one of these.
+ */
+const TYPES = Object.freeze([
+  'prepare',
+  'accept',
+  'renew',
+  'release',
+  'probe',
+]);
+
+/**
+ * The exact string a sender signs, or null when any field would corrupt the
+ * encoding. Numbers are welcome; objects are the caller holding it wrong.
+ *
+ * @param {string} type one of TYPES
+ * @param {Array<string|number>} fields fixed-order rpc fields
+ * @returns {string|null}
+ */
+function canonical(type, fields) {
+  if (!TYPES.includes(type)) return null;
+  if (!Array.isArray(fields) || fields.length === 0) return null;
+  const parts = [];
+  for (let i = 0; i < fields.length; i += 1) {
+    const field = fields[i];
+    if (typeof field !== 'string' && typeof field !== 'number') return null;
+    const text = String(field);
+    if (text.includes(FIELD_SEPARATOR)) return null;
+    parts.push(text);
+  }
+  return `${DOMAIN_PREFIX}-${type}:${parts.join(FIELD_SEPARATOR)}`;
+}
+
+/**
+ * Sign one rpc.
+ *
+ * @param {string} type one of TYPES
+ * @param {Array<string|number>} fields fixed-order rpc fields
+ * @param {string} wifPrivateKey the node operator key, WIF form
+ * @returns {{payload: string, signature: string}|null} null when the payload
+ *   cannot be canonically encoded or signing fails
+ */
+function sign(type, fields, wifPrivateKey) {
+  const payload = canonical(type, fields);
+  if (!payload) return null;
+  const signature = verificationHelper.signMessage(payload, wifPrivateKey);
+  if (!signature || typeof signature !== 'string') return null;
+  return { payload, signature };
+}
+
+/**
+ * Whether a signature stands for these exact fields under this exact type.
+ *
+ * The verifier reconstructs the payload from the fields IT parsed rather than
+ * trusting a payload string off the wire — a signature over "whatever the
+ * sender said the fields were" verifies the sender's framing, not the
+ * request being served.
+ *
+ * @param {string} type one of TYPES
+ * @param {Array<string|number>} fields fixed-order rpc fields as the VERIFIER read them
+ * @param {string} signature base64 signature
+ * @param {string} pubkey the sender's registered node key (from the verifier's
+ *   own list view, never from the request)
+ * @returns {boolean}
+ */
+function verify(type, fields, signature, pubkey) {
+  const payload = canonical(type, fields);
+  if (!payload || !signature || !pubkey) return false;
+  const outcome = verificationHelper.verifyMessage(payload, pubkey, signature);
+  return outcome === true;
+}
+
+module.exports = {
+  DOMAIN_PREFIX,
+  FIELD_SEPARATOR,
+  TYPES,
+  canonical,
+  sign,
+  verify,
+};
