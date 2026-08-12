@@ -407,6 +407,8 @@ describe('watchdogService tests', () => {
         // createDefaultConfig - config doesn't exist
         statStub.withArgs('/home/testuser/watchdog/config.js').rejects(new Error('ENOENT'));
 
+        // stubbed so the install path cannot write a real config; this test asserts
+        // the log trail, not the write
         sinon.stub(fs, 'writeFile').resolves();
         runCommandStub.resolves({ error: null, stdout: '[]' });
 
