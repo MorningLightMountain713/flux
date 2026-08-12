@@ -211,6 +211,7 @@ async function processContainerData(params) {
       identifier,
       syncFolder,
       requiresSyncBeforeStart: deployComp.requiresSyncBeforeStart(),
+      isActiveStandby: deployComp.hasActiveStandbySyncthing(),
       syncthingAppsFirstRun: state.syncthingAppsFirstRun,
       receiveOnlySyncthingAppsCache: state.receiveOnlySyncthingAppsCache,
       appLocation,

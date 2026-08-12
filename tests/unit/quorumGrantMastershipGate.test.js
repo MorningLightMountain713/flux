@@ -5,6 +5,7 @@ const sinon = require('sinon');
 
 const serviceHelper = require('../../ZelBack/src/services/serviceHelper');
 const generalService = require('../../ZelBack/src/services/generalService');
+const networkStateService = require('../../ZelBack/src/services/networkStateService');
 const registryManager = require('../../ZelBack/src/services/appDatabase/registryManager');
 const messageStore = require('../../ZelBack/src/services/appMessaging/messageStore');
 const reconcilerQueue = require('../../ZelBack/src/services/appMonitoring/reconcilerQueue');
@@ -169,6 +170,54 @@ describe('quorumGrant mastershipGrantGate', () => {
       grantClient.holderFor.returns(null);
       mastershipGrantGate.resetForTests();
       expect(await mastershipGrantGate.blocksStart(IDENTIFIER, activeStandbyComp())).to.equal(false);
+    });
+  });
+
+  describe('the decider intent surfaces', () => {
+    it('leaderIsSelf answers null when not applicable, boolean when it is', async () => {
+      mastershipGrantGate.resetForTests();
+      expect(await mastershipGrantGate.leaderIsSelf(IDENTIFIER, 'myapp', true)).to.equal(null);
+
+      mastershipGrantGate.resetForTests({ enabled: true });
+      expect(await mastershipGrantGate.leaderIsSelf(IDENTIFIER, 'myapp', false)).to.equal(null);
+      expect(await mastershipGrantGate.leaderIsSelf(IDENTIFIER, 'myapp', true)).to.equal(false);
+      expect(grantClient.acquire.calledOnce).to.equal(true);
+
+      grantClient.holderFor.returns({ state: 'held' });
+      expect(await mastershipGrantGate.leaderIsSelf(IDENTIFIER, 'myapp', true)).to.equal(true);
+    });
+
+    it('masterIntent resolves the record grantee to its listed address, FDM-shaped', async () => {
+
+      sinon.stub(networkStateService, 'membershipFingerprint').returns('f'.repeat(64));
+      sinon.stub(networkStateService, 'membershipAt').returns([
+        { txhash: '9'.repeat(64), outidx: 0, pubkey: 'owner-9', ip: '10.9.0.9:16127' },
+      ]);
+      messageStore.getMasterleaseRecord.resolves({ data: { grantee: `${'9'.repeat(64)}:0` } });
+
+      const intent = await mastershipGrantGate.masterIntent(IDENTIFIER, activeStandbyComp());
+      expect(intent).to.deep.equal({ ip: '10.9.0.9:16127', fdmOk: true });
+    });
+
+    it('masterIntent with no record answers no-primary, never a guess', async () => {
+      const intent = await mastershipGrantGate.masterIntent(IDENTIFIER, activeStandbyComp());
+      expect(intent).to.deep.equal({ ip: null, fdmOk: true });
+    });
+
+    it('masterIntent answers null entirely when the plane is not applicable', async () => {
+      mastershipGrantGate.resetForTests();
+      expect(await mastershipGrantGate.masterIntent(IDENTIFIER, activeStandbyComp())).to.equal(null);
+      mastershipGrantGate.resetForTests({ enabled: true });
+      expect(await mastershipGrantGate.masterIntent(IDENTIFIER, plainComp())).to.equal(null);
+    });
+
+    it('a grantee no longer on the list resolves to no primary, not a stale address', async () => {
+
+      sinon.stub(networkStateService, 'membershipFingerprint').returns('f'.repeat(64));
+      sinon.stub(networkStateService, 'membershipAt').returns([]);
+      messageStore.getMasterleaseRecord.resolves({ data: { grantee: `${'9'.repeat(64)}:0` } });
+      const intent = await mastershipGrantGate.masterIntent(IDENTIFIER, activeStandbyComp());
+      expect(intent).to.deep.equal({ ip: null, fdmOk: true });
     });
   });
 
