@@ -138,7 +138,7 @@ app.post('/api/v1/blob/reconcile', express.json(), (req, res) => {
 // floor and stores unconfirmed (the register-window self-assert); a live update
 // is confirmed via the control /promote, and strict GET serves confirmed-only.
 app.put('/api/v1/manifest/:appName', express.json(), (req, res) => {
-  const appName = req.params.appName;
+  const { appName } = req.params;
   // Fail ONLY the backstop manifest PUT — before the version check, so it's
   // independent of strict mode and leaves the slot-blob upload path intact.
   if (mode.failManifestPut) {

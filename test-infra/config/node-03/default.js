@@ -1,4 +1,4 @@
-const shared = require('../shared');
+const shared = require('../shared.js');
 
 module.exports = {
   ...shared,

@@ -7,7 +7,6 @@ const sinon = require('sinon');
 const os = require('os');
 const fs = require('fs');
 const proxyquire = require('proxyquire');
-const config = require('config');
 
 const { expect } = chai;
 

@@ -657,7 +657,7 @@ control.post('/peer-completion', (req, res) => {
 // Device pause/resume calls observed for a node ip - how suites assert that the
 // stall ladder NUDGED (and did not restart syncthing or stop the container).
 control.get('/nudges', (req, res) => {
-  const ip = req.query.ip;
+  const { ip } = req.query;
   if (ip) return res.json({ nudges: nudgeLogs.get(ip) || [] });
   return res.json({ nudges: Object.fromEntries(Array.from(nudgeLogs.entries())) });
 });

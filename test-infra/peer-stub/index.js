@@ -10,9 +10,7 @@ if (process.env.FLUX_TEST_HARNESS !== 'true') {
 
 const WS_PORT = Number(process.env.WS_PORT) || 16127;
 const CONTROL_PORT = Number(process.env.CONTROL_PORT) || 16128;
-const PRIVATE_KEY = process.env.PRIVATE_KEY;
-const PUBLIC_KEY = process.env.PUBLIC_KEY;
-const NODE_IP = process.env.NODE_IP;
+const { PRIVATE_KEY, PUBLIC_KEY, NODE_IP } = process.env;
 
 if (!PRIVATE_KEY || !PUBLIC_KEY) {
   console.error('PRIVATE_KEY and PUBLIC_KEY env vars are required');
@@ -78,7 +76,7 @@ async function handleMessage(ws, rawData) {
 
     let hashes = [];
     if (data.version === 2 && Array.isArray(data.hashes)) {
-      hashes = data.hashes;
+      ({ hashes } = data);
     } else if (data.version === 1 && typeof data.hash === 'string') {
       hashes = [data.hash];
     }

@@ -385,7 +385,7 @@ describe('cloudUIUpdateService tests', () => {
           },
         });
         // exec callback throws error
-        execStub.callsFake((cmd, opts, callback) => {
+        execStub.callsFake(() => {
           throw new Error('Unexpected exec error');
         });
 
