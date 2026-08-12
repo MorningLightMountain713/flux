@@ -75,18 +75,18 @@ describe('telemetryIdentityService tests', () => {
   });
 
   describe('buildIdentity (telemetry scoping gate)', () => {
-    it('returns null for a non-flux container name', () => {
+    it('returns null for a non-flux container name', async () => {
       sinkCacheStub.seed('nginx', datadogSink);
-      expect(service.buildIdentity('/nginx', 'nginx:1', 'NA')).to.be.null;
+      expect(await service.buildIdentity('/nginx', 'nginx:1', 'NA')).to.be.null;
     });
 
-    it('returns null when the app has no cached sink (not a telemetry app)', () => {
-      expect(service.buildIdentity('/fluxMyApp', 'nginx:1', 'NA')).to.be.null;
+    it('returns null when the app has no cached sink (not a telemetry app)', async () => {
+      expect(await service.buildIdentity('/fluxMyApp', 'nginx:1', 'NA')).to.be.null;
     });
 
-    it('builds identity with sink and tags for a telemetry app', () => {
+    it('builds identity with sink and tags for a telemetry app', async () => {
       sinkCacheStub.seed('MyApp', datadogSink);
-      const id = service.buildIdentity('/frontend_MyApp', 'nginx:1.25', 'NA');
+      const id = await service.buildIdentity('/frontend_MyApp', 'nginx:1.25', 'NA');
       expect(id.app_name).to.equal('MyApp');
       expect(id.sink).to.deep.equal(datadogSink);
       expect(id.tags).to.deep.equal({
@@ -98,9 +98,9 @@ describe('telemetryIdentityService tests', () => {
       expect(sinkCacheStub.getSink.calledWith('MyApp')).to.equal(true);
     });
 
-    it('omits region when none is available', () => {
+    it('omits region when none is available', async () => {
       sinkCacheStub.seed('MyApp', datadogSink);
-      const id = service.buildIdentity('/fluxMyApp', 'nginx:1', null);
+      const id = await service.buildIdentity('/fluxMyApp', 'nginx:1', null);
       expect(id.tags).to.not.have.property('region');
     });
   });
@@ -109,46 +109,65 @@ describe('telemetryIdentityService tests', () => {
     const otlpSink = { provider: 'otlp', component: 'otelagent', port: 4318 };
     const agentNetworks = { fluxDockerNetwork_MyApp: { IPAddress: '172.23.11.3' } };
 
-    it('an otlp container stays unannounced until the agent endpoint resolves', () => {
+    it('an otlp container stays unannounced until the agent endpoint resolves', async () => {
       sinkCacheStub.seed('MyApp', otlpSink);
-      expect(service.buildIdentity('/fluxweb_MyApp', 'nginx:1', 'NA')).to.be.null;
+      expect(await service.buildIdentity('/fluxweb_MyApp', 'nginx:1', 'NA')).to.be.null;
     });
 
-    it('resolves the endpoint from the agent container and projects the wire sink', () => {
+    it('resolves the endpoint from the agent container and projects the wire sink', async () => {
       sinkCacheStub.seed('MyApp', otlpSink);
-      expect(service.refreshAgentEndpoint('/fluxotelagent_MyApp', agentNetworks)).to.equal(true);
-      const id = service.buildIdentity('/fluxweb_MyApp', 'nginx:1', 'NA');
+      expect(await service.refreshAgentEndpoint('/fluxotelagent_MyApp', agentNetworks)).to.equal(true);
+      const id = await service.buildIdentity('/fluxweb_MyApp', 'nginx:1', 'NA');
       // The wire carries only provider + endpoint — never the declared
       // component/port shape the cache holds.
       expect(id.sink).to.deep.equal({ provider: 'otlp', endpoint: 'http://172.23.11.3:4318' });
     });
 
-    it('ignores containers that are not the declared agent component', () => {
+    it('ignores containers that are not the declared agent component', async () => {
       sinkCacheStub.seed('MyApp', otlpSink);
-      expect(service.refreshAgentEndpoint('/fluxweb_MyApp', agentNetworks)).to.equal(false);
+      expect(await service.refreshAgentEndpoint('/fluxweb_MyApp', agentNetworks)).to.equal(false);
     });
 
-    it('ignores containers of non-otlp apps', () => {
+    it('ignores containers of non-otlp apps', async () => {
       sinkCacheStub.seed('MyApp', datadogSink);
-      expect(service.refreshAgentEndpoint('/fluxotelagent_MyApp', agentNetworks)).to.equal(false);
+      expect(await service.refreshAgentEndpoint('/fluxotelagent_MyApp', agentNetworks)).to.equal(false);
     });
 
-    it('reports unchanged endpoints as false and a moved agent as true', () => {
+    it('reports unchanged endpoints as false and a moved agent as true', async () => {
       sinkCacheStub.seed('MyApp', otlpSink);
-      expect(service.refreshAgentEndpoint('/fluxotelagent_MyApp', agentNetworks)).to.equal(true);
-      expect(service.refreshAgentEndpoint('/fluxotelagent_MyApp', agentNetworks)).to.equal(false);
+      expect(await service.refreshAgentEndpoint('/fluxotelagent_MyApp', agentNetworks)).to.equal(true);
+      expect(await service.refreshAgentEndpoint('/fluxotelagent_MyApp', agentNetworks)).to.equal(false);
       const moved = { fluxDockerNetwork_MyApp: { IPAddress: '172.23.11.9' } };
-      expect(service.refreshAgentEndpoint('/fluxotelagent_MyApp', moved)).to.equal(true);
-      const id = service.buildIdentity('/fluxweb_MyApp', 'nginx:1', 'NA');
+      expect(await service.refreshAgentEndpoint('/fluxotelagent_MyApp', moved)).to.equal(true);
+      const id = await service.buildIdentity('/fluxweb_MyApp', 'nginx:1', 'NA');
       expect(id.sink.endpoint).to.equal('http://172.23.11.9:4318');
     });
 
-    it('prefers the app network address, falling back to any attached network', () => {
+    it('prefers the app network address, falling back to any attached network', async () => {
       sinkCacheStub.seed('MyApp', otlpSink);
       const foreignOnly = { fluxDockerNetwork_OtherApp: { IPAddress: '172.23.77.2' } };
-      expect(service.refreshAgentEndpoint('/fluxotelagent_MyApp', foreignOnly)).to.equal(true);
-      expect(service.buildIdentity('/fluxweb_MyApp', 'nginx:1', 'NA').sink.endpoint)
+      expect(await service.refreshAgentEndpoint('/fluxotelagent_MyApp', foreignOnly)).to.equal(true);
+      expect((await service.buildIdentity('/fluxweb_MyApp', 'nginx:1', 'NA')).sink.endpoint)
         .to.equal('http://172.23.77.2:4318');
+    });
+
+    it('resolves an app whose identity is not its name, off the labels', async () => {
+      // Every fixture above is an app whose identity EQUALS its name, which is the one
+      // shape that cannot catch a name-vs-identity confusion. A minted identity puts a
+      // string in the container name that the sink cache has never heard of: keyed from
+      // there, the collector resolves to nothing and the consumer is never announced.
+      const labels = { 'io.runonflux.app': 'MyApp' };
+      const net = { fluxDockerNetwork_a1b2c3d4e5f6: { IPAddress: '172.23.11.3' } };
+      sinkCacheStub.seed('MyApp', otlpSink);
+
+      expect(await service.refreshAgentEndpoint('/fluxotelagent_a1b2c3d4e5f6', net, labels))
+        .to.equal(true);
+
+      const id = await service.buildIdentity('/fluxweb_a1b2c3d4e5f6', 'nginx:1', 'NA', labels);
+      expect(id, 'the consumer resolves an identity at all').to.not.be.null;
+      expect(id.sink).to.deep.equal({ provider: 'otlp', endpoint: 'http://172.23.11.3:4318' });
+      // The wire carries the NAME an operator declared the sink under, not the identity.
+      expect(id.app_name).to.equal('MyApp');
     });
 
     it('sendSync resolves agent endpoints from the live container list', async () => {
@@ -182,65 +201,65 @@ describe('telemetryIdentityService tests', () => {
   describe('otlp log-shipping routing (cross-app collectors + send set)', () => {
     const collectorNet = { fluxDockerNetwork_logstack: { IPAddress: '172.23.40.2' } };
 
-    it('default send set excludes the same-app collector (feedback-loop gate)', () => {
+    it('default send set excludes the same-app collector (feedback-loop gate)', async () => {
       sinkCacheStub.seed('MyApp', { provider: 'otlp', component: 'otelagent', port: 4318 });
-      service.refreshAgentEndpoint('/fluxotelagent_MyApp', { fluxDockerNetwork_MyApp: { IPAddress: '172.23.11.3' } });
-      expect(service.buildIdentity('/fluxweb_MyApp', 'nginx:1', 'NA')).to.not.be.null;
-      expect(service.buildIdentity('/fluxotelagent_MyApp', 'otel:1', 'NA'), 'a collector ingesting its own stream amplifies').to.be.null;
+      await service.refreshAgentEndpoint('/fluxotelagent_MyApp', { fluxDockerNetwork_MyApp: { IPAddress: '172.23.11.3' } });
+      expect(await service.buildIdentity('/fluxweb_MyApp', 'nginx:1', 'NA')).to.not.be.null;
+      expect(await service.buildIdentity('/fluxotelagent_MyApp', 'otel:1', 'NA'), 'a collector ingesting its own stream amplifies').to.be.null;
     });
 
-    it('an explicit components list overrides the default and may include the collector', () => {
+    it('an explicit components list overrides the default and may include the collector', async () => {
       sinkCacheStub.seed('MyApp', {
         provider: 'otlp', component: 'otelagent', port: 4318, components: ['web', 'otelagent'],
       });
-      service.refreshAgentEndpoint('/fluxotelagent_MyApp', { fluxDockerNetwork_MyApp: { IPAddress: '172.23.11.3' } });
-      expect(service.buildIdentity('/fluxweb_MyApp', 'nginx:1', 'NA')).to.not.be.null;
-      expect(service.buildIdentity('/fluxotelagent_MyApp', 'otel:1', 'NA')).to.not.be.null;
+      await service.refreshAgentEndpoint('/fluxotelagent_MyApp', { fluxDockerNetwork_MyApp: { IPAddress: '172.23.11.3' } });
+      expect(await service.buildIdentity('/fluxweb_MyApp', 'nginx:1', 'NA')).to.not.be.null;
+      expect(await service.buildIdentity('/fluxotelagent_MyApp', 'otel:1', 'NA')).to.not.be.null;
     });
 
-    it('a component outside the explicit list is never announced', () => {
+    it('a component outside the explicit list is never announced', async () => {
       sinkCacheStub.seed('MyApp', {
         provider: 'otlp', component: 'otelagent', port: 4318, components: ['web'],
       });
-      service.refreshAgentEndpoint('/fluxotelagent_MyApp', { fluxDockerNetwork_MyApp: { IPAddress: '172.23.11.3' } });
-      expect(service.buildIdentity('/fluxweb_MyApp', 'nginx:1', 'NA')).to.not.be.null;
-      expect(service.buildIdentity('/fluxworker_MyApp', 'img:1', 'NA')).to.be.null;
+      await service.refreshAgentEndpoint('/fluxotelagent_MyApp', { fluxDockerNetwork_MyApp: { IPAddress: '172.23.11.3' } });
+      expect(await service.buildIdentity('/fluxweb_MyApp', 'nginx:1', 'NA')).to.not.be.null;
+      expect(await service.buildIdentity('/fluxworker_MyApp', 'img:1', 'NA')).to.be.null;
     });
 
-    it('routes to a shareWith-linked collector and rotates every consumer when it moves', () => {
+    it('routes to a shareWith-linked collector and rotates every consumer when it moves', async () => {
       sinkCacheStub.seed('shipper', { provider: 'otlp', app: 'logstack', component: 'collector', port: 4318 });
-      expect(service.refreshAgentEndpoint('/fluxcollector_logstack', collectorNet)).to.equal(true);
-      expect(service.buildIdentity('/fluxweb_shipper', 'img:1', 'NA').sink)
+      expect(await service.refreshAgentEndpoint('/fluxcollector_logstack', collectorNet)).to.equal(true);
+      expect((await service.buildIdentity('/fluxweb_shipper', 'img:1', 'NA')).sink)
         .to.deep.equal({ provider: 'otlp', endpoint: 'http://172.23.40.2:4318' });
 
       const moved = { fluxDockerNetwork_logstack: { IPAddress: '172.23.40.9' } };
-      expect(service.refreshAgentEndpoint('/fluxcollector_logstack', moved)).to.equal(true);
-      expect(service.buildIdentity('/fluxweb_shipper', 'img:1', 'NA').sink.endpoint)
+      expect(await service.refreshAgentEndpoint('/fluxcollector_logstack', moved)).to.equal(true);
+      expect((await service.buildIdentity('/fluxweb_shipper', 'img:1', 'NA')).sink.endpoint)
         .to.equal('http://172.23.40.9:4318');
     });
 
-    it('one shared collector serves each consumer at its own declared port', () => {
+    it('one shared collector serves each consumer at its own declared port', async () => {
       sinkCacheStub.seed('shipper', { provider: 'otlp', app: 'logstack', component: 'collector', port: 4318 });
       sinkCacheStub.seed('other', { provider: 'otlp', app: 'logstack', component: 'collector', port: 4317 });
-      expect(service.refreshAgentEndpoint('/fluxcollector_logstack', collectorNet)).to.equal(true);
-      expect(service.buildIdentity('/fluxweb_shipper', 'img:1', 'NA').sink.endpoint)
+      expect(await service.refreshAgentEndpoint('/fluxcollector_logstack', collectorNet)).to.equal(true);
+      expect((await service.buildIdentity('/fluxweb_shipper', 'img:1', 'NA')).sink.endpoint)
         .to.equal('http://172.23.40.2:4318');
-      expect(service.buildIdentity('/fluxweb_other', 'img:1', 'NA').sink.endpoint)
+      expect((await service.buildIdentity('/fluxweb_other', 'img:1', 'NA')).sink.endpoint)
         .to.equal('http://172.23.40.2:4317');
     });
 
-    it('inter-app consumers default to shipping every component — the collector lives elsewhere', () => {
+    it('inter-app consumers default to shipping every component — the collector lives elsewhere', async () => {
       sinkCacheStub.seed('shipper', { provider: 'otlp', app: 'logstack', component: 'collector', port: 4318 });
-      service.refreshAgentEndpoint('/fluxcollector_logstack', collectorNet);
+      await service.refreshAgentEndpoint('/fluxcollector_logstack', collectorNet);
       // Even a local component that happens to share the collector's name
       // ships: the sink's collector is the linked app's component.
-      expect(service.buildIdentity('/fluxcollector_shipper', 'img:1', 'NA')).to.not.be.null;
+      expect(await service.buildIdentity('/fluxcollector_shipper', 'img:1', 'NA')).to.not.be.null;
     });
 
-    it('the collector app itself ships nothing unless it declares its own telemetry', () => {
+    it('the collector app itself ships nothing unless it declares its own telemetry', async () => {
       sinkCacheStub.seed('shipper', { provider: 'otlp', app: 'logstack', component: 'collector', port: 4318 });
-      service.refreshAgentEndpoint('/fluxcollector_logstack', collectorNet);
-      expect(service.buildIdentity('/fluxcollector_logstack', 'img:1', 'NA')).to.be.null;
+      await service.refreshAgentEndpoint('/fluxcollector_logstack', collectorNet);
+      expect(await service.buildIdentity('/fluxcollector_logstack', 'img:1', 'NA')).to.be.null;
     });
 
     it('sendSync warns loudly for a consumer whose collector never resolved', async () => {
