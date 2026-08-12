@@ -102,6 +102,9 @@ function verify(type, fields, signature, pubkey) {
  *
  * `candidate` is the asker's collateral outpoint (`txhash:outidx`) in every
  * type: the proposer in prepare/probe, the grantee in accept/renew/release.
+ * `fingerprint` is the membership fingerprint the ask's committee was
+ * computed against — every type carries it, because every type is answered
+ * by a committee and a committee without an agreed basis is not one set.
  *
  * @param {string} type one of TYPES
  * @param {object} ask parsed ask fields
@@ -111,13 +114,13 @@ function fieldsFor(type, ask) {
   switch (type) {
     case 'probe':
     case 'prepare':
-      return [ask.key, ask.mode, ask.epoch, ask.candidate, ask.at];
+      return [ask.key, ask.mode, ask.epoch, ask.candidate, ask.fingerprint, ask.at];
     case 'accept':
-      return [ask.key, ask.mode, ask.epoch, ask.candidate, ask.ttlMs ?? 0, ask.fingerprint ?? '', ask.at];
+      return [ask.key, ask.mode, ask.epoch, ask.candidate, ask.ttlMs ?? 0, ask.fingerprint, ask.at];
     case 'renew':
-      return [ask.key, ask.epoch, ask.candidate, ask.ttlMs, ask.at];
+      return [ask.key, ask.epoch, ask.candidate, ask.ttlMs, ask.fingerprint, ask.at];
     case 'release':
-      return [ask.key, ask.epoch, ask.candidate, ask.at];
+      return [ask.key, ask.epoch, ask.candidate, ask.fingerprint, ask.at];
     default:
       return null;
   }

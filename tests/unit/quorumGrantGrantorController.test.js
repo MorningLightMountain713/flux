@@ -4,6 +4,7 @@ const { expect } = require('chai');
 const sinon = require('sinon');
 
 const fluxCommunicationUtils = require('../../ZelBack/src/services/fluxCommunicationUtils');
+const networkStateService = require('../../ZelBack/src/services/networkStateService');
 const generalService = require('../../ZelBack/src/services/generalService');
 const registryManager = require('../../ZelBack/src/services/appDatabase/registryManager');
 const grantRegister = require('../../ZelBack/src/services/quorumGrant/grantRegister');
@@ -24,6 +25,7 @@ const PUBKEY = '0474eb4690689bb408139249eda7f361b7881c4254ccbe303d3b4d58c2b48897
 const ASKER_HOST = '203.0.113.5';
 const ASKER_TXHASH = 'a'.repeat(64);
 const ASKER = `${ASKER_TXHASH}:0`;
+const FINGERPRINT = 'c'.repeat(64);
 
 // Five distinct owners across five /16s: a 5-committee seats all of them, so
 // committee membership is decided by whose collateral generalService reports.
@@ -49,7 +51,7 @@ function signedAsk(type, overrides = {}) {
     epoch: 3,
     candidate: ASKER,
     ttlMs: 60_000,
-    fingerprint: 'fp-1',
+    fingerprint: FINGERPRINT,
     at: Date.now(),
     ...overrides,
   };
@@ -79,6 +81,7 @@ describe('quorumGrant grantorController', () => {
     grantorController.reset();
 
     sinon.stub(fluxCommunicationUtils, 'deterministicFluxList').resolves(fixtureFleet());
+    sinon.stub(networkStateService, 'membershipAt').returns(fixtureFleet());
     sinon.stub(generalService, 'obtainNodeCollateralInformation').resolves({
       txhash: ASKER_TXHASH, txindex: 0,
     });
@@ -114,7 +117,7 @@ describe('quorumGrant grantorController', () => {
       await grantorController.accept(fakeReq(signedAsk('accept')), res);
       expect(res.statusCode).to.equal(200);
       expect(grantRegister.accept.calledOnceWith('myapp/master', {
-        epoch: 3, grantee: ASKER, mode: 'held', ttlMs: 60_000, fingerprint: 'fp-1',
+        epoch: 3, grantee: ASKER, mode: 'held', ttlMs: 60_000, fingerprint: FINGERPRINT,
       })).to.equal(true);
     });
 
@@ -200,6 +203,27 @@ describe('quorumGrant grantorController', () => {
       await grantorController.prepare(fakeReq(signedAsk('prepare')), res);
       expect(res.statusCode).to.equal(409);
       expect(grantRegister.prepare.called).to.equal(false);
+    });
+
+    it('the committee is computed against the membership the ask NAMES', async () => {
+      const res = fakeRes();
+      await grantorController.prepare(fakeReq(signedAsk('prepare')), res);
+      expect(networkStateService.membershipAt.calledOnceWith(FINGERPRINT)).to.equal(true);
+    });
+
+    it('409 unknown fingerprint — never a substitution of the current list', async () => {
+      networkStateService.membershipAt.returns(null);
+      const res = fakeRes();
+      await grantorController.prepare(fakeReq(signedAsk('prepare')), res);
+      expect(res.statusCode).to.equal(409);
+      expect(res.body.data.message).to.contain('fingerprint');
+      expect(grantRegister.prepare.called).to.equal(false);
+    });
+
+    it('refuses an ask without a well-formed fingerprint outright', async () => {
+      const res = fakeRes();
+      await grantorController.prepare(fakeReq(signedAsk('prepare', { fingerprint: 'fp-1' })), res);
+      expect(res.statusCode).to.equal(400);
     });
   });
 

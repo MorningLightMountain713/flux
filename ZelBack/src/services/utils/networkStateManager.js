@@ -3,6 +3,7 @@
 const { EventEmitter } = require('node:events');
 const config = require('config');
 const { FluxController } = require('./fluxController');
+const { MembershipHistory } = require('./membershipHistory');
 const { normalizeSocketAddress, ipsMatch } = require('./socketAddressUtils');
 
 const log = require('../../lib/log');
@@ -48,6 +49,11 @@ class NetworkStateManager extends EventEmitter {
   // Keyed `txhash:outidx`. A delta identifies nodes by outpoint, so without this an
   // apply would be a linear scan of ~13k entries per changed node.
   #outpointIndex = new Map();
+
+  // What the list WAS, provable for a bounded window — the committee-pinning
+  // basis the quorum-grant plane verifies against. Fed on every state
+  // transition, snapshot and delta alike.
+  #membershipHistory = new MembershipHistory();
 
   /**
    * The transition this state was last brought to, as {height, hash}. Deltas chain by
@@ -574,6 +580,7 @@ class NetworkStateManager extends EventEmitter {
     this.#state = nodes;
     await this.#buildIndexes(this.#state);
     this.#chainAnchor = { height, hash };
+    this.#membershipHistory.record(this.#state, this.#chainAnchor);
 
     log.info(`Network state snapshot applied at ${height}: ${nodes.length} nodes`);
 
@@ -698,6 +705,7 @@ class NetworkStateManager extends EventEmitter {
     });
 
     this.#chainAnchor = { height: delta.toHeight, hash: delta.toHash };
+    this.#membershipHistory.record(this.#state, this.#chainAnchor);
 
     log.info(
       `Network state delta ${delta.fromHeight}->${delta.toHeight}: `
@@ -706,6 +714,16 @@ class NetworkStateManager extends EventEmitter {
 
     this.emit('updated');
     return { applied: true };
+  }
+
+  /**
+   * The membership history the state transitions have fed — fingerprints,
+   * reconstruction, and the height resolver, for the committee-pinning
+   * consumers.
+   * @returns {MembershipHistory}
+   */
+  get membershipHistory() {
+    return this.#membershipHistory;
   }
 
   reset() {
@@ -728,6 +746,7 @@ class NetworkStateManager extends EventEmitter {
       };
     });
     this.#started = false;
+    this.#membershipHistory.reset();
   }
 
   /**
