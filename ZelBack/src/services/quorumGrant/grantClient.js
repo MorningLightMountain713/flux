@@ -11,6 +11,7 @@ const { extractIp, extractPort } = require('../utils/socketAddressUtils');
 const { nowMs } = require('../utils/monotonicClock');
 const signedEnvelope = require('./signedEnvelope');
 const core = require('./grantClientCore');
+const masterleasePublisher = require('./masterleasePublisher');
 const log = require('../../lib/log');
 
 // The candidate's half of the grant plane: acquire a grant, hold it by
@@ -306,6 +307,11 @@ async function acquireOnce(key, mode, ttlMs, identity, committee, options) {
   }
 
   if (mode === 'oneshot') {
+    // §4 step 4: the winner publishes. For a founding this record is what a
+    // re-pinned committee adopts months later — durable, no expiry.
+    await masterleasePublisher.publishMasterlease({
+      key, grantee: identity.outpoint, epoch, mode, fingerprint,
+    });
     return { granted: true, founder: identity.outpoint };
   }
 
@@ -323,6 +329,7 @@ async function acquireOnce(key, mode, ttlMs, identity, committee, options) {
     if (reply?.ok) holder.recordAck(outpoint, sentMs);
   });
   held.set(key, holder);
+  await holder.publishRecord();
   holder.start();
   return { granted: true, holder };
 }
@@ -358,6 +365,8 @@ class Holder {
   #schedule;
 
   #cancel;
+
+  #lastPublishMs = null;
 
   constructor(options) {
     this.#key = options.key;
@@ -395,6 +404,23 @@ class Holder {
   safeUntil() {
     const acks = [...this.#acks.values()].map((sentMs) => ({ sentMs, ttlMs: this.#ttlMs }));
     return core.safeUntilMs(acks, this.#committee.quorum);
+  }
+
+  /**
+   * Publish this term's record. The row expires at the grant duration, so a
+   * live holder re-publishes at half of it — an abandoned term's record ages
+   * out on its own, and readers never see a master nobody is renewing.
+   */
+  async publishRecord() {
+    this.#lastPublishMs = this.#clock();
+    await masterleasePublisher.publishMasterlease({
+      key: this.#key,
+      grantee: this.#identity.outpoint,
+      epoch: this.#epoch,
+      mode: 'held',
+      fingerprint: this.#committee.fingerprint,
+      ttlMs: this.#ttlMs,
+    });
   }
 
   start() {
@@ -469,6 +495,10 @@ class Holder {
     }
 
     await this.#assess(renewed >= this.#committee.quorum);
+
+    if (this.#state === 'held' && this.#clock() - this.#lastPublishMs > this.#ttlMs / 2) {
+      await this.publishRecord();
+    }
   }
 
   async #assess(quorumRenewed) {
