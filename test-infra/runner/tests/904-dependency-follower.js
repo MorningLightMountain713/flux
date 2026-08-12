@@ -4,7 +4,7 @@ import { expect } from 'chai';
 import { createTestEnv } from '../framework/test-env.js';
 import { bootAndPeer } from '../framework/reconciler-suite.js';
 import { registerEncryptedV9App, updateEncryptedV9App } from '../framework/content-helper.js';
-import { queueAppTx, advanceBlocks } from '../framework/daemon-control.js';
+import { queueAppTx, advanceBlock, advanceBlocks } from '../framework/daemon-control.js';
 import { waitFor, waitForAppInstalled } from '../framework/wait.js';
 import {
   appContainersFor, getAppContainerStatus, execInContainer, fluxAppNetworkName,
@@ -126,9 +126,22 @@ describe('app dependencies: follower pull-in, strength split, cascade and reap',
     return appContainersFor(env.clients[idx].container, name, { all: true });
   }
 
-  async function waitGone(idx, name, label, timeout = 240000) {
-    await waitFor(async () => (await containersOn(idx, name)).length === 0,
-      { timeout, interval: 5000, label });
+  // Removal on expiry/cancel is driven by the specReconciler's convergence, which runs
+  // at every TIP BLOCK — and the ticker is off here, so the chain only moves when this
+  // suite moves it. Waiting on wall-clock waits for something that cannot happen: each
+  // round advances one block and re-checks.
+  async function waitGone(idx, name, label, rounds = 40) {
+    for (let i = 0; i < rounds; i += 1) {
+      // eslint-disable-next-line no-await-in-loop
+      const { currentHeight } = await advanceBlock();
+      // eslint-disable-next-line no-await-in-loop
+      await Promise.all(env.clients.map((c) => c.waitForEvent(
+        'block:processed', (d) => d.height >= currentHeight, 60000,
+      ).catch(() => {})));
+      // eslint-disable-next-line no-await-in-loop
+      if ((await containersOn(idx, name)).length === 0) return;
+    }
+    throw new Error(`${label} not reached within ${rounds} block-advancing rounds`);
   }
 
   async function waitRunning(idx, name, label, timeout = 240000) {
