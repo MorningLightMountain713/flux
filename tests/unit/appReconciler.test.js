@@ -2192,12 +2192,10 @@ describe('appReconciler tests', () => {
       expect(started).to.deep.equal(['Legacy']);
     });
 
-    // Every app registered since identities were minted has an identity that is
-    // NOT its name (sha256(name‖txid) truncated), so the row answers to neither
-    // an identity lookup keyed on the name nor the component-identifier index -
-    // only to its name. The stubs above model pre-minting apps, where the
-    // identity segment happened to be the name; this one models what the fleet
-    // actually stores now, which is why an unfaithful stub hid it.
+    // A minted identity is NOT the app's name (a sha256(name‖txid) prefix), so the row
+    // answers to neither an identity lookup keyed on the name nor the component-identifier
+    // index — only to a name lookup. The stubs above model an app whose identity is its
+    // name; this one models what the fleet stores.
     it('sweeps an app whose identity was MINTED, not borrowed from its name', async () => {
       localSpec = {
         name: 'Minted', identity: '933b4b9a0af3', version: 4, compose: [{ name: 'www', containerData: '/data' }],

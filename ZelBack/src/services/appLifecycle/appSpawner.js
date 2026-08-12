@@ -719,8 +719,16 @@ async function trySpawningGlobalApplication() {
     // install they are gating, because the port is held by the app itself.
     // Identities already installed are excluded for the same reason.
     const identitiesToInstall = assigned.filter((identity) => !installed.has(identity ?? null));
+    // The app identity comes from the row, exactly as deploymentProvider builds its
+    // views: it is what names the containers, and what every ownership comparison
+    // downstream reads. Built without it, a view reports the app's NAME as its
+    // identity, and the port guard below then sees this app's own reserved port as
+    // another application's and refuses the install.
     const deployments = (identitiesToInstall.length ? identitiesToInstall : [null])
-      .map((replica) => DeploymentSpec.fromSpec(spec, appsFolder, { replica }));
+      .map((replica) => DeploymentSpec.fromSpec(spec, appsFolder, {
+        replica,
+        identity: instantiated.identity ?? null,
+      }));
     // Images are spec-level — identical across identities — so any view answers
     // for the blocklist.
     const deployment = deployments[0];

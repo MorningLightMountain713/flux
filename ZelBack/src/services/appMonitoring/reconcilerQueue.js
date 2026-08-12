@@ -20,10 +20,9 @@ const { AsyncGate } = require('../utils/asyncGate');
 // or the app name for a flat v1-3 app), because a component is the only thing the
 // reconciler actuates. A producer holding an app name does not enqueue it here — it calls
 // appReconciler.enqueueApp(), which resolves the app's component identifiers and enqueues
-// each. Keeping app names out of this keyspace is what stops the two ever being confused:
-// they were once told apart by whether the string contained an `_`, and when identities
-// stopped being borrowed from app names that guess quietly turned every sweep into a no-op
-// that logged like a healthy one.
+// each. Keeping app names out of this keyspace is what stops the two being confused: they
+// are not reliably distinguishable as strings once identities are minted rather than
+// borrowed from app names.
 //
 // This layer deliberately does NOT normalise: a producer holding a docker name knows it
 // holds one, and this queue cannot know — `fluxproxy_myapp` is both a valid docker name

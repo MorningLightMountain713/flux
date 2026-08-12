@@ -303,8 +303,8 @@ describe('mesh ordinal slots — claim, identity, replacement inheritance', func
     await waitFor(async () => {
       // "the reaper took the app off this node" — its containers and its network are
       // gone. Deliberately not the appdata check: that is keyed on the identifiers the
-      // app was named from, which nothing on a reaped node can still state, and a
-      // settle signal must not be able to answer "yes" for want of somewhere to look.
+      // app was named from, which only a live app can supply, and a settle signal must
+      // never be able to answer "yes" for want of somewhere to look.
       const gone = await appContainersFor(env.clients[victim].container, name)
         .then(async (cs) => cs.length === 0 && !(await getAppNetwork(env.clients[victim].container, name)))
         .catch(() => false);

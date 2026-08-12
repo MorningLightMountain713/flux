@@ -175,6 +175,25 @@ describe('portManager tests', () => {
       expect(err.message).to.include('port 30001 already used');
     });
 
+    // The co-located case: one replica installed here, a second assigned to the
+    // same node with its own hostPort override. The app's GLOBAL spec carries
+    // every replica's port, so the incoming replica meets its own app in the
+    // port map — a match on the app it IS, not a different one.
+    it('allows a second co-located replica whose port its own global spec already lists', async () => {
+      stubs.deploymentProviderStub.listInstalledDeployments.resolves([
+        { name: 'myapp', identity: 'a1b2c3d4e5f6', version: 3, ports: [36020] },
+      ].map(mockDeployment));
+      stubs.appsRepositoryStub.listGlobalAppInfo.resolves([
+        { name: 'myapp', identity: 'a1b2c3d4e5f6', version: 3, ports: [36020, 36021] },
+      ]);
+
+      const incomingReplica = mockDeployment({
+        name: 'myapp', identity: 'a1b2c3d4e5f6', version: 3, ports: [36021],
+      });
+
+      expect(await portManager.ensureApplicationPortsNotUsed(incomingReplica, ['myapp'])).to.equal(true);
+    });
+
     it('still allows an app to keep its own ports across an update', async () => {
       stubs.deploymentProviderStub.listInstalledDeployments.resolves([
         { name: 'myapp', identity: 'a1b2c3d4e5f6', version: 3, ports: [30001] },

@@ -92,8 +92,8 @@ export async function getAppContainerStatus(container, appName, { all = false, r
 }
 
 // The REAL docker name of one component's container, resolved through the labels.
-// It cannot be constructed: `flux<component>_<app>` was only ever right while an app's
-// identity was borrowed from its name. Returns null when no such container exists.
+// Container names are built from the app's minted identity, which nothing a suite holds
+// can derive, so this is a lookup. Returns null when no such container exists.
 async function appContainerName(container, appName, componentName, replica = null) {
   const containers = await listAppContainers(container, { all: true });
   const match = containers.find((c) => isAppContainer(c, appName, replica)
@@ -334,11 +334,10 @@ const APPDATA_ROOT = '/mnt/appdata/flux-apps';
 // directories under the appdata root. Both empty => the volume is fully torn down
 // (unmounted AND removed).
 //
-// Keyed on the app's component IDENTIFIERS, which the caller must have captured while
-// the app was alive (appComponentIdentifiers). The directories are named `flux<identifier>`
-// and an identifier is built from the app's minted identity, so searching for the app's
-// NAME finds nothing whether or not the teardown worked — a check that answers "all
-// clear" for a node still holding every byte.
+// Keyed on the app's component IDENTIFIERS, which the caller captures while the app is
+// alive (appComponentIdentifiers). The directories are named `flux<identifier>`, built
+// from the app's minted identity, so only an identifier finds them; the app's name
+// appears nowhere in the path.
 export async function getAppVolumeArtifacts(container, appName, { identifiers } = {}) {
   if (!Array.isArray(identifiers)) {
     throw new Error(`getAppVolumeArtifacts(${appName}) needs the app's component identifiers, `
@@ -384,8 +383,8 @@ export { appContainerName };
 
 export async function readFileInContainer(container, appName, componentName, path) {
   const name = await appContainerName(container, appName, componentName);
-  // Absent container: the same shape the docker error used to produce, so a suite
-  // asserting on exitCode still reads a failure rather than an exception.
+  // An absent container reads as a failed exec, so a suite asserting on exitCode gets a
+  // failure rather than an exception.
   if (!name) return { content: '', exitCode: 1 };
   const { stdout, exitCode } = await execInContainer(container, `docker exec ${name} /bin/busybox cat ${path}`);
   return { content: stdout, exitCode };
