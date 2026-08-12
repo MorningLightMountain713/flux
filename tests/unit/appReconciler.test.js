@@ -51,6 +51,10 @@ describe('appReconciler tests', () => {
     });
     return {
       appName: spec.name,
+      // Named from the identity, exactly as DeploymentSpec.networkName: the network is
+      // durable state and a name is a lease. A fake without it reads undefined and the
+      // desired-membership set silently loses the app's own network.
+      networkName: `fluxDockerNetwork_${spec.identity ?? spec.name}`,
       linkedApps: spec.linkedApps || [],
       appDependencies: spec.appDependencies || [],
       getComponent: (n) => comps.find((c) => c.name === n) || null,
@@ -290,6 +294,30 @@ describe('appReconciler tests', () => {
         'www_App',
         ['fluxDockerNetwork_App', 'fluxDockerNetwork_collector'],
         ['fluxDockerNetwork_App'],
+      );
+    });
+
+    it('desires the IDENTITY-named own network, never the app-name spelling', async () => {
+      // The regression this pins: an app whose identity was minted installs onto
+      // fluxDockerNetwork_<identity>, so a desired set spelled from the app NAME
+      // disconnects the container from the only network it is on and attaches it to
+      // one that does not exist - the container then cannot start at all.
+      localSpec = {
+        name: 'App', version: 4, identity: 'c32de812b2ff', owner: 'owner1', compose: [{ name: 'www', containerData: '/data' }], linkedApps: [],
+      };
+      stubs.appNetworkLinker.resolveActiveLinkedNetworks.resolves([]);
+      stubs.dockerService.dockerContainerInspect.resolves({
+        State: { Running: true, Status: 'running' },
+        NetworkSettings: { Networks: { fluxDockerNetwork_c32de812b2ff: {} } },
+      });
+
+      await appReconciler.reconcile('www_c32de812b2ff');
+
+      sinon.assert.calledOnceWithExactly(
+        stubs.appNetworkLinker.ensureContainerNetworkMembership,
+        'www_c32de812b2ff',
+        ['fluxDockerNetwork_c32de812b2ff'],
+        ['fluxDockerNetwork_c32de812b2ff'],
       );
     });
 

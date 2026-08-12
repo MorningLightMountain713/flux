@@ -1862,13 +1862,23 @@ async function forceRemoveFluxAppDockerNetwork(appname, options = {}) {
  * @returns {Promise<string[]>}
  */
 async function networkAliasesFromLabels(labels, networkName) {
-  const { LABEL_KEYS, networkAliasesFor, qualifiedNetworkAliasesFor } = await getSpecBackend();
+  const {
+    LABEL_KEYS, networkAliasesFor, qualifiedNetworkAliasesFor, appNetworkNameFor,
+  } = await getSpecBackend();
   const component = labels[LABEL_KEYS.COMPONENT];
   const appName = labels[LABEL_KEYS.APP];
   if (!component || !appName) return [];
   const replica = labels[LABEL_KEYS.REPLICA] || null;
   const parts = { component, appName, replica };
-  return networkName === `fluxDockerNetwork_${appName}`
+  // The own-network test compares against the network's IDENTITY spelling. The app
+  // label is the lease; the identity reaches a container only through the identifier
+  // (`<component>_<identity>[_<replica>]`), so the middle segment is what names the
+  // network. For an app with no minted identity that segment is the app name, which
+  // is what appNetworkNameFor yields for a null identity - one comparison, both
+  // shapes. Spelling this from the app label alone sends a container its QUALIFIED
+  // aliases on its own network, where it must answer to the short ones.
+  const identity = labels[LABEL_KEYS.IDENTIFIER]?.split('_')[1] ?? null;
+  return networkName === appNetworkNameFor({ identity, appName })
     ? networkAliasesFor(parts)
     : qualifiedNetworkAliasesFor(parts);
 }

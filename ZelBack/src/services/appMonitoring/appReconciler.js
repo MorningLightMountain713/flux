@@ -518,13 +518,17 @@ async function dockerActual(identifier) {
  */
 async function reconcileNetworkMembership(identifier, spec, actual) {
   if (!Array.isArray(actual.networks)) return;
-  const { appName } = spec.deployment;
   // Desired = own network + only the links that resolve to a currently-installed
   // same-owner app. A link that is gone or has changed hands drops out here, so
   // convergence disconnects it (never maintains a dangling or cross-tenant bridge)
   // instead of trusting the static spec forever.
+  //
+  // The own network is named from the app's IDENTITY, so it is taken from the
+  // deployment rather than spelled from the name here: a name-spelled desired set
+  // disconnects the container from the network it is actually on and attaches it
+  // to one that does not exist.
   const desired = [
-    `fluxDockerNetwork_${appName}`,
+    spec.deployment.networkName,
     ...(await appNetworkLinker.resolveActiveLinkedNetworks(spec.owner, spec.deployment.linkedApps)),
   ];
   const result = await appNetworkLinker.ensureContainerNetworkMembership(identifier, desired, actual.networks);
