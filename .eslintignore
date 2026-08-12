@@ -1,7 +1,6 @@
 /CloudUI/
-# Pinned build artifacts the harness clones and builds from other repos - not this
-# repo's source. flux-spec's is a whole JS package, so linting it buried the repo's
-# own findings 9:1.
+# Pinned build artifacts the harness clones and builds from other repos. Not this
+# repo's source, and flux-spec's is a whole JS package of it.
 test-infra/*/dist/
 /config/userconfig.js
 /lib/daemonrpc/
