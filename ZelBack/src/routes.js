@@ -44,6 +44,7 @@ const playgroundService = require('./services/appPlayground/playgroundService');
 const meshOperatorService = require('./services/appMesh/meshOperatorService');
 const limitCounterController = require('./services/utils/limitCounterController');
 const grantorController = require('./services/quorumGrant/grantorController');
+const grantPeerController = require('./services/quorumGrant/grantPeerController');
 const operationsController = require('./services/appManagement/operationsController');
 const messageVerifier = require('./services/appMessaging/messageVerifier');
 const appHashSyncService = require('./services/appMessaging/appHashSyncService');
@@ -555,6 +556,16 @@ module.exports = (app) => {
   // served even during the grantor's rejoin drain.
   app.get('/flux/quorumgrant/record', (req, res) => {
     grantorController.record(req, res);
+  });
+  // Holder-to-holder: the witness poll (what is this node doing about a key,
+  // can it reach the committee) and the relay (carry an end-to-end signed ask
+  // for an app this node holds). A master's safety never depends on its own
+  // committee path because of these two.
+  app.post('/flux/quorumgrant/witness', (req, res) => {
+    grantPeerController.witness(req, res);
+  });
+  app.post('/flux/quorumgrant/relay', (req, res) => {
+    grantPeerController.relay(req, res);
   });
   // Every endpoint that answers 202 points here: one status resource, one
   // status enum, one error shape, so a client polls the same way whatever it
