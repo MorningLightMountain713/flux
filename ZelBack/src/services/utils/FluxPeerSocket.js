@@ -423,6 +423,7 @@ const FLUX_CAPABILITIES = Object.freeze([
   'appStateSync',
   'appInstallingClaims',
   'limitCounterRecords',
+  'masterlease',
 ]);
 
 module.exports = { FluxPeerSocket, CLOSE_CODES, PEER_SOURCE, DIRECTION, FLUX_VERSION, FLUX_CAPABILITIES };

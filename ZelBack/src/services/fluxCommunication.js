@@ -262,7 +262,7 @@ async function handleAppRunningSyncResponse(message, peerKey) {
       fluxEventBus.publish('sync:chunkVerified', { syncType: 'apprunning', peer: peerKey, verified: verifiedAppRunning.length, stored });
     }
     for (const event of otherEvents) {
-      if (event.type === 'sigterm' || event.type === 'appremoved' || event.type === 'ipchanged') {
+      if (event.type === 'sigterm' || event.type === 'appremoved' || event.type === 'ipchanged' || event.type === 'masterlease') {
         await messageStore.storeAppStateEvent(event.type, { message: event.data, envelope: event.envelope });
       } else if (event.type === 'evicted') {
         await messageStore.storeAppStateEvent(event.type, { ip: event.ip });
@@ -633,6 +633,43 @@ async function handleNodeSigtermMessage(message, fromIP, port) {
 }
 
 /**
+ * The published grant record (doc §9): who holds an app role, at what epoch.
+ * The store is epoch-newer-wins, so relaying an already-superseded record is
+ * harmless and dropping a fresher one only delays the peers one flood.
+ * @param {object} message Signed broadcast whose data is the masterlease record.
+ * @param {string} fromIP Sender's node ip.
+ * @param {string} port Sender's node Api port.
+ * @param {object|null} announcer Resolved list entry for the announcing node.
+ */
+async function handleMasterleaseMessage(message, fromIP, port, announcer) {
+  try {
+    const currentTimeStamp = Date.now();
+    const timestampOK = fluxCommunicationUtils.verifyTimestampInFluxBroadcast(message, currentTimeStamp, 240000);
+    if (!timestampOK) {
+      return;
+    }
+
+    const envelope = {
+      version: message.version, timestamp: message.timestamp, pubKey: message.pubKey, signature: message.signature,
+    };
+    await messageStore.storeAppStateEvent(
+      messageStore.APP_STATE_EVENT_TYPES.MASTERLEASE,
+      { message: message.data, envelope, announcer },
+    );
+
+    const syncStatus = daemonServiceMiscRpcs.isDaemonSynced();
+    const daemonHeight = syncStatus.data.height || 0;
+    if (daemonHeight >= config.messagesBroadcastRefactorStart) {
+      peerManager.broadcastHash(hash(message.data), `${fromIP}:${port}`);
+    } else {
+      fluxCommunicationMessagesSender.relay(serviceHelper.ensureString(message), `${fromIP}:${port}`);
+    }
+  } catch (error) {
+    log.error(error);
+  }
+}
+
+/**
  * Unified message dispatcher for both inbound and outbound peer connections.
  * Handles message validation, cache checking, signature verification, and message type dispatch.
  * Registered as peerManager.messageDispatcher to break circular dependencies.
@@ -730,6 +767,8 @@ async function dispatchFluxMessage(msgObj, peerSocket) {
           setImmediate(() => limitCounter.acceptRecord(msgObj.data));
         } else if (msgObj.data.type === 'fluxnodesigterm') {
           setImmediate(() => handleNodeSigtermMessage(msgObj, peerSocket.ip, peerSocket.port));
+        } else if (msgObj.data.type === 'fluxmasterlease') {
+          setImmediate(() => handleMasterleaseMessage(msgObj, peerSocket.ip, peerSocket.port, announcer));
         } else if (msgObj.data.type === 'fluxappcontentmanifest') {
           setImmediate(() => contentSlotService.handleIncomingManifest(msgObj));
         } else if (msgObj.data.type === 'fluxappcontentmanifestindexrequest') {

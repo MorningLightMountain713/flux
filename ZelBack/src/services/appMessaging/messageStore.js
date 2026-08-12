@@ -38,6 +38,7 @@ const APP_STATE_EVENT_TYPES = Object.freeze({
   APPREMOVED: 'appremoved',
   EVICTED: 'evicted',
   IPCHANGED: 'ipchanged',
+  MASTERLEASE: 'masterlease',
 });
 
 /**
@@ -767,6 +768,84 @@ async function handleIPChangedEvent({ message, envelope }) {
   }
 }
 
+/**
+ * Newer-wins on EPOCH, with the broadcast time only breaking ties. The
+ * masterlease record's authority is its epoch — a successor at a higher
+ * epoch replaces the old master's record however their clocks compare, and
+ * a republish of the SAME term (same epoch, later broadcast) refreshes the
+ * row without ever letting a stale clock un-seat a successor.
+ */
+function buildEpochConditionalUpsert(epoch, broadcastedAt, conditionalFields, options = {}) {
+  const alwaysSetFields = options.alwaysSetFields ?? {};
+  const incomingDate = new Date(broadcastedAt);
+  const storedEpoch = { $ifNull: ['$data.epoch', -1] };
+  const isNewer = {
+    $or: [
+      { $gt: [epoch, storedEpoch] },
+      {
+        $and: [
+          { $eq: [epoch, storedEpoch] },
+          { $gt: [incomingDate, { $ifNull: ['$broadcastedAt', new Date(0)] }] },
+        ],
+      },
+    ],
+  };
+  const set = Object.fromEntries(
+    Object.entries(conditionalFields).map(([k, v]) => [k, { $cond: [isNewer, v, { $ifNull: [`$${k}`, v] }] }]),
+  );
+  Object.assign(set, alwaysSetFields);
+  return [{ $set: set }];
+}
+
+async function handleMasterleaseEvent({ message, envelope, announcer }) {
+  if (!message || !message.ip || !message.appName || !message.role || !message.grantee) return;
+  if (!Number.isSafeInteger(message.epoch) || message.epoch < 1) return;
+  if (message.mode !== 'held' && message.mode !== 'oneshot') return;
+  if (!Number.isSafeInteger(message.broadcastedAt)) return;
+  if (message.mode === 'held' && (!Number.isSafeInteger(message.ttlMs) || message.ttlMs < 1)) return;
+  try {
+    const db = dbHelper.databaseConnection();
+    const database = db.db(config.database.appsglobal.database);
+    const dedupKey = `masterlease:${message.appName}/${message.role}`;
+    // One row per app/role — the record names the MASTER, not a node, so the
+    // query carries no ip: a successor's record replaces the deposed
+    // master's rather than accumulating beside it. Held records ride the
+    // grant duration and vanish with an abandoned term; a founding record
+    // carries no expiry at all — the register it mirrors is write-once.
+    await database.collection(globalAppStateEvents).updateOne(
+      { type: APP_STATE_EVENT_TYPES.MASTERLEASE, dedupKey },
+      buildEpochConditionalUpsert(message.epoch, message.broadcastedAt, {
+        ip: message.ip,
+        outpoint: outpointOf(announcer),
+        type: APP_STATE_EVENT_TYPES.MASTERLEASE,
+        dedupKey,
+        broadcastedAt: new Date(message.broadcastedAt),
+        ...(message.mode === 'held'
+          ? { expireAt: new Date(message.broadcastedAt + message.ttlMs) }
+          : {}),
+        envelope: envelope ?? null,
+        data: message,
+      }, { alwaysSetFields: { receivedAt: new Date() } }),
+      { upsert: true },
+    );
+  } catch (err) {
+    log.error(`storeAppStateEvent(masterlease): ${err.message}`);
+  }
+}
+
+/**
+ * The published grant record for one app role, or null. What standbys, FDM
+ * and re-pinned committees consult — public fact, one row, newest epoch.
+ */
+async function getMasterleaseRecord(appName, role) {
+  const db = dbHelper.databaseConnection();
+  const database = db.db(config.database.appsglobal.database);
+  return database.collection(globalAppStateEvents).findOne(
+    { type: APP_STATE_EVENT_TYPES.MASTERLEASE, dedupKey: `masterlease:${appName}/${role}` },
+    { projection: { _id: 0 } },
+  );
+}
+
 function storeAppStateEvent(type, payload) {
   switch (type) {
     case APP_STATE_EVENT_TYPES.APPRUNNING: return handleAppRunningEvent(payload);
@@ -774,6 +853,7 @@ function storeAppStateEvent(type, payload) {
     case APP_STATE_EVENT_TYPES.APPREMOVED: return handleAppRemovedStateEvent(payload);
     case APP_STATE_EVENT_TYPES.EVICTED: return handleEvictedEvent(payload);
     case APP_STATE_EVENT_TYPES.IPCHANGED: return handleIPChangedEvent(payload);
+    case APP_STATE_EVENT_TYPES.MASTERLEASE: return handleMasterleaseEvent(payload);
     default: log.error(`storeAppStateEvent: unknown type ${type}`); return undefined;
   }
 }
@@ -1036,4 +1116,5 @@ module.exports = {
   storeSignedAppInstallingErrorBroadcast,
   storeBatchAppInstallingErrorMessages,
   storeIPChangedMessage,
+  getMasterleaseRecord,
 };
