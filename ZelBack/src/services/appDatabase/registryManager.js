@@ -4,6 +4,7 @@ const config = require('config');
 const dbHelper = require('../dbHelper');
 const appsMaintenance = require('./appsMaintenance');
 const appsRepository = require('./appsRepository');
+const foundingCommittee = require('../appMesh/foundingCommittee');
 const log = require('../../lib/log');
 const messageHelper = require('../messageHelper');
 const serviceHelper = require('../serviceHelper');
@@ -70,6 +71,11 @@ function emitSpecStored(specDoc) {
  */
 async function storeGlobalSpec(specDoc, options) {
   await appsRepository.upsertGlobalAppInfo(specDoc, options);
+  // A mesh app's founding committee is computed the moment the fleet shares
+  // the list the spec arrived under, and never re-derived from a stale one.
+  // Absent-only and no-throw inside; a failed materialization never fails
+  // the spec store.
+  await foundingCommittee.materializeFor(specDoc);
   emitSpecStored(specDoc);
 }
 

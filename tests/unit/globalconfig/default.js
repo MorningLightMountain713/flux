@@ -48,6 +48,7 @@ module.exports = {
         nodeIdentity: 'nodeidentity',
         policyDocuments: 'policydocuments',
         quorumGrants: 'quorumgrants',
+        foundingCommittees: 'foundingcommittees',
       },
     },
     daemon: {
