@@ -47,6 +47,7 @@ const imagePreflight = require('./services/appSecurity/imagePreflight');
 const playgroundService = require('./services/appPlayground/playgroundService');
 const meshOperatorService = require('./services/appMesh/meshOperatorService');
 const limitCounterController = require('./services/utils/limitCounterController');
+const grantorController = require('./services/quorumGrant/grantorController');
 const messageVerifier = require('./services/appMessaging/messageVerifier');
 const appHashSyncService = require('./services/appMessaging/appHashSyncService');
 const monitoringOrchestrator = require('./services/appMonitoring/monitoringOrchestrator');
@@ -574,6 +575,31 @@ module.exports = (app) => {
   }));
   app.post('/flux/limitcounter/release', asyncRoute((req, res) => {
     return limitCounterController.release(req, res);
+  }));
+  // Node-to-node: the quorum-grant plane. A grant is a WRITE, unlike the tally
+  // above, so every ask is signed with the asker's node operator key and must
+  // originate from the asker's registered address; the handler declines any
+  // committee this node does not sit on. Nothing consumes grants yet — the
+  // surface ships inert ahead of its consumers, per the unified plan.
+  app.post('/flux/quorumgrant/probe', asyncRoute((req, res) => {
+    return grantorController.probe(req, res);
+  }));
+  app.post('/flux/quorumgrant/prepare', asyncRoute((req, res) => {
+    return grantorController.prepare(req, res);
+  }));
+  app.post('/flux/quorumgrant/accept', asyncRoute((req, res) => {
+    return grantorController.accept(req, res);
+  }));
+  app.post('/flux/quorumgrant/renew', asyncRoute((req, res) => {
+    return grantorController.renew(req, res);
+  }));
+  app.post('/flux/quorumgrant/release', asyncRoute((req, res) => {
+    return grantorController.release(req, res);
+  }));
+  // The register is public fact (epoch, grantee) — an unauthenticated read,
+  // served even during the grantor's rejoin drain.
+  app.get('/flux/quorumgrant/record', asyncRoute((req, res) => {
+    return grantorController.record(req, res);
   }));
   app.post('/apps/placementfeasibility', asyncRoute((req, res) => { // fault domains and per-domain instance share for a prospective spec
     return placementFeasibility.placementFeasibilityAPI(req, res);
