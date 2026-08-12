@@ -337,7 +337,7 @@ async function handleAppRunningSyncResponse(message, peerSocket) {
     // indifferent to seeing them last. An eviction's time is createdAt, when the
     // evicting node made it.
     for (const event of [...evictions, ...stateEvents]) {
-      if (event.type === 'sigterm' || event.type === 'appremoved' || event.type === 'ipchanged') {
+      if (event.type === 'sigterm' || event.type === 'appremoved' || event.type === 'ipchanged' || event.type === 'masterlease') {
         await messageStore.storeAppStateEvent(event.type, { message: event.data, envelope: event.envelope });
       } else if (event.type === 'evicted') {
         await messageStore.applyEviction(event.ip, Date.parse(event.createdAt));
@@ -962,6 +962,43 @@ async function handleNodeSigtermMessage(message, fromIP, port) {
 }
 
 /**
+ * The published grant record (doc §9): who holds an app role, at what epoch.
+ * The store is epoch-newer-wins, so relaying an already-superseded record is
+ * harmless and dropping a fresher one only delays the peers one flood.
+ * @param {object} message Signed broadcast whose data is the masterlease record.
+ * @param {string} fromIP Sender's node ip.
+ * @param {string} port Sender's node Api port.
+ * @param {object|null} announcer Resolved list entry for the announcing node.
+ */
+async function handleMasterleaseMessage(message, fromIP, port, announcer) {
+  try {
+    const currentTimeStamp = Date.now();
+    const timestampOK = fluxCommunicationUtils.verifyTimestampInFluxBroadcast(message, currentTimeStamp, 240000);
+    if (!timestampOK) {
+      return;
+    }
+
+    const envelope = {
+      version: message.version, timestamp: message.timestamp, pubKey: message.pubKey, signature: message.signature,
+    };
+    await messageStore.storeAppStateEvent(
+      messageStore.APP_STATE_EVENT_TYPES.MASTERLEASE,
+      { message: message.data, envelope, announcer },
+    );
+
+    const syncStatus = daemonServiceMiscRpcs.isDaemonSynced();
+    const daemonHeight = syncStatus.data.height || 0;
+    if (daemonHeight >= config.messagesBroadcastRefactorStart) {
+      peerManager.broadcastHash(hash(message.data), `${fromIP}:${port}`);
+    } else {
+      fluxCommunicationMessagesSender.relay(serviceHelper.ensureString(message), `${fromIP}:${port}`);
+    }
+  } catch (error) {
+    log.error(error);
+  }
+}
+
+/**
  * Unified message dispatcher for both inbound and outbound peer connections.
  * Handles message validation, cache checking, signature verification, and message type dispatch.
  * Registered as peerManager.messageDispatcher to break circular dependencies.
@@ -1094,42 +1131,21 @@ async function dispatchFluxMessage(msgObj, peerSocket) {
   } else if (verifyResult === VerifyResult.OK) {
     const timestampOK = fluxCommunicationUtils.verifyTimestampInFluxBroadcast(msgObj, currentTimeStamp);
     if (timestampOK === true) {
-      try {
-        if (msgObj.data.type === 'zelappregister' || msgObj.data.type === 'zelappupdate' || msgObj.data.type === 'fluxappregister' || msgObj.data.type === 'fluxappupdate') {
-          setImmediate(() => handleAppMessages(msgObj, peerSocket.ip, peerSocket.port));
-        } else if (msgObj.data.type === 'fluxapprequest') {
-          setImmediate(() => fluxCommunicationMessagesSender.respondWithAppMessage(msgObj, peerSocket));
-        } else if (msgObj.data.type === 'fluxapprunning') {
-          setImmediate(() => handleAppRunningMessage(msgObj, peerSocket.ip, peerSocket.port, announcer));
-        } else if (msgObj.data.type === 'fluxipchanged') {
-          setImmediate(() => handleIPChangedMessage(msgObj, peerSocket.ip, peerSocket.port));
-        } else if (msgObj.data.type === 'fluxappremoved') {
-          setImmediate(() => handleAppRemovedMessage(msgObj, peerSocket.ip, peerSocket.port));
-        } else if (msgObj.data.type === 'fluxappinstalling') {
-          setImmediate(() => handleAppInstallingMessage(msgObj, peerSocket.ip, peerSocket.port));
-        } else if (msgObj.data.type === 'fluxappinstallingerror') {
-          setImmediate(() => handleAppInstallingErrorMessage(msgObj, peerSocket.ip, peerSocket.port));
-        } else if (msgObj.data.type === 'fluxlimitcounterrecord') {
-          setImmediate(() => limitCounter.acceptRecord(msgObj.data));
-        } else if (msgObj.data.type === 'fluxnodesigterm') {
-          setImmediate(() => handleNodeSigtermMessage(msgObj, peerSocket.ip, peerSocket.port));
-        } else if (msgObj.data.type === 'fluxappcontentmanifest') {
-          setImmediate(() => contentSlotService.handleIncomingManifest(msgObj));
-        } else if (msgObj.data.type === 'fluxappcontentmanifestindexrequest') {
-          setImmediate(() => fluxCommunicationMessagesSender.respondWithManifestIndex(peerSocket));
-        } else if (msgObj.data.type === 'fluxappcontentmanifestrequest') {
-          setImmediate(() => fluxCommunicationMessagesSender.respondWithContentManifests(msgObj, peerSocket));
-        } else if (msgObj.data.type === 'fluxappingress') {
-          setImmediate(() => handleIngressAttestation(msgObj, peerSocket.ip, peerSocket.port));
-        } else if (msgObj.data.type === 'fluxappingressindexrequest') {
-          setImmediate(() => fluxCommunicationMessagesSender.respondWithIngressIndex(peerSocket));
-        } else if (msgObj.data.type === 'fluxappingressrequest') {
-          setImmediate(() => fluxCommunicationMessagesSender.respondWithIngressAttestations(msgObj, peerSocket));
-        } else {
-          log.warn(`Unrecognised message type of ${msgObj.data.type}`);
-        }
-      } catch (e) {
-        log.error(e);
+      const handler = handlerFor(msgObj.data.type);
+      if (!handler) {
+        log.warn(`Unrecognised message type of ${msgObj.data.type}`);
+      } else if (isOrdered(msgObj.data.type)) {
+        // It reached the wrong pipeline: the socket routes these to the per-peer queue
+        // when they are wanted, so arriving here means nobody asked for it.
+        log.warn(`Unsolicited ${msgObj.data.type} from ${peerSocket.direction} peer ${peerSocket.key}`);
+      } else {
+        setImmediate(() => {
+          try {
+            handler(msgObj, peerSocket, announcer);
+          } catch (e) {
+            log.error(e);
+          }
+        });
       }
     } else {
       // Signed by a real node and outside the window, which is what a replay looks like.
@@ -1174,35 +1190,12 @@ const syncChunkQueues = new Map();
 // a peer signed what it sent is a statement about the peer and the deadline
 // waiting on it needs the answer at arrival, not at the back of a queue.
 async function processSyncChunk(msgObj, peerSocket) {
-  const { type } = msgObj.data;
-  switch (type) {
-    case 'fluxapptempsync':
-      await handleTempSyncResponse(msgObj, peerSocket);
-      break;
-    case 'fluxapprunningsync':
-      await handleAppRunningSyncResponse(msgObj, peerSocket);
-      break;
-    case 'fluxappinstallingsync':
-      await handleAppInstallingSyncResponse(msgObj, peerSocket);
-      break;
-    case 'fluxappinstallingerrorssync':
-      await handleAppInstallingErrorsSyncResponse(msgObj, peerSocket);
-      break;
-    case 'fluxappcontentmanifestindex':
-      await handleContentManifestIndexResponse(msgObj, peerSocket.key);
-      break;
-    case 'fluxappcontentmanifestsync':
-      await handleContentManifestSyncResponse(msgObj, peerSocket.key);
-      break;
-    case 'fluxappingressindex':
-      await handleIngressIndexResponse(msgObj, peerSocket.key);
-      break;
-    case 'fluxappingresssync':
-      await handleIngressSyncResponse(msgObj, peerSocket.key);
-      break;
-    default:
-      log.warn(`Unknown sync response type: ${type}`);
+  const handler = handlerFor(msgObj.data.type);
+  if (!handler) {
+    log.warn(`Unknown sync response type: ${msgObj.data.type}`);
+    return;
   }
+  await handler(msgObj, peerSocket);
 }
 
 /**
@@ -1324,15 +1317,23 @@ async function dispatchSyncResponse(msgObj, peerSocket) {
 // reaching us by many routes is one fact, and a relayed type must be deduplicated.
 register(['zelappregister', 'zelappupdate', 'fluxappregister', 'fluxappupdate'],
   (msg, peer) => handleAppMessages(msg, peer.ip, peer.port), ROUTE.GOSSIP, INTENT.ANNOUNCE);
-register('fluxapprunning', (msg, peer) => handleAppRunningMessage(msg, peer.ip, peer.port), ROUTE.GOSSIP, INTENT.ANNOUNCE);
+register('fluxapprunning', (msg, peer, announcer) => handleAppRunningMessage(msg, peer.ip, peer.port, announcer), ROUTE.GOSSIP, INTENT.ANNOUNCE);
 register('fluxipchanged', (msg, peer) => handleIPChangedMessage(msg, peer.ip, peer.port), ROUTE.GOSSIP, INTENT.ANNOUNCE);
 register('fluxappremoved', (msg, peer) => handleAppRemovedMessage(msg, peer.ip, peer.port), ROUTE.GOSSIP, INTENT.ANNOUNCE);
 register('fluxappinstalling', (msg, peer) => handleAppInstallingMessage(msg, peer.ip, peer.port), ROUTE.GOSSIP, INTENT.ANNOUNCE);
 register('fluxappinstallingerror', (msg, peer) => handleAppInstallingErrorMessage(msg, peer.ip, peer.port), ROUTE.GOSSIP, INTENT.ANNOUNCE);
 register('fluxnodesigterm', (msg, peer) => handleNodeSigtermMessage(msg, peer.ip, peer.port), ROUTE.GOSSIP, INTENT.ANNOUNCE);
+register('fluxmasterlease', (msg, peer, announcer) => handleMasterleaseMessage(msg, peer.ip, peer.port, announcer), ROUTE.GOSSIP, INTENT.ANNOUNCE);
+register('fluxlimitcounterrecord', (msg) => limitCounter.acceptRecord(msg.data), ROUTE.GOSSIP, INTENT.ANNOUNCE);
+register('fluxappcontentmanifest', (msg) => contentSlotService.handleIncomingManifest(msg), ROUTE.GOSSIP, INTENT.ANNOUNCE);
+register('fluxappingress', (msg, peer) => handleIngressAttestation(msg, peer.ip, peer.port), ROUTE.GOSSIP, INTENT.ANNOUNCE);
 // An ask delivered by broadcast. Delivery is not the classifier: it goes to every peer,
 // and it is still a question from one node that each of them answers separately.
 register('fluxapprequest', (msg, peer) => fluxCommunicationMessagesSender.respondWithAppMessage(msg, peer), ROUTE.GOSSIP, INTENT.ASK);
+register('fluxappcontentmanifestindexrequest', (msg, peer) => fluxCommunicationMessagesSender.respondWithManifestIndex(peer), ROUTE.GOSSIP, INTENT.ASK);
+register('fluxappcontentmanifestrequest', (msg, peer) => fluxCommunicationMessagesSender.respondWithContentManifests(msg, peer), ROUTE.GOSSIP, INTENT.ASK);
+register('fluxappingressindexrequest', (msg, peer) => fluxCommunicationMessagesSender.respondWithIngressIndex(peer), ROUTE.GOSSIP, INTENT.ASK);
+register('fluxappingressrequest', (msg, peer) => fluxCommunicationMessagesSender.respondWithIngressAttestations(msg, peer), ROUTE.GOSSIP, INTENT.ASK);
 register('fluxpolicyrequest', (msg, peer) => fluxCommunicationMessagesSender.respondWithPolicy(msg, peer), ROUTE.GOSSIP, INTENT.ASK);
 // The one type sent both ways: news when a node announces what it adopted, an answer when
 // it settles a peer's ask. Nothing relays it, which is what makes the marker safe to trust.
@@ -1351,6 +1352,11 @@ register('fluxapptempsync', handleTempSyncResponse, ROUTE.ORDERED, INTENT.ANSWER
 register('fluxapprunningsync', handleAppRunningSyncResponse, ROUTE.ORDERED, INTENT.ANSWER);
 register('fluxappinstallingsync', handleAppInstallingSyncResponse, ROUTE.ORDERED, INTENT.ANSWER);
 register('fluxappinstallingerrorssync', handleAppInstallingErrorsSyncResponse, ROUTE.ORDERED, INTENT.ANSWER);
+// Reconcile answers, gated by their service's active round rather than a state sync.
+register('fluxappcontentmanifestindex', (msg, peer) => handleContentManifestIndexResponse(msg, peer.key), ROUTE.ORDERED, INTENT.ANSWER);
+register('fluxappcontentmanifestsync', (msg, peer) => handleContentManifestSyncResponse(msg, peer.key), ROUTE.ORDERED, INTENT.ANSWER);
+register('fluxappingressindex', (msg, peer) => handleIngressIndexResponse(msg, peer.key), ROUTE.ORDERED, INTENT.ANSWER);
+register('fluxappingresssync', (msg, peer) => handleIngressSyncResponse(msg, peer.key), ROUTE.ORDERED, INTENT.ANSWER);
 
 peerManager.messageDispatcher = dispatchFluxMessage;
 peerManager.syncResponseDispatcher = dispatchSyncResponse;

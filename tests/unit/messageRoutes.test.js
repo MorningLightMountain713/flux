@@ -22,11 +22,15 @@ const GOSSIP_TYPES = [
   'fluxapprunning', 'fluxipchanged', 'fluxappremoved', 'fluxappinstalling',
   'fluxappinstallingerror', 'fluxnodesigterm', 'fluxapprequest',
   'fluxpolicyrequest', 'fluxpolicyseq', 'fluxpolicy',
+  'fluxmasterlease', 'fluxlimitcounterrecord', 'fluxappcontentmanifest', 'fluxappingress',
+  'fluxappcontentmanifestindexrequest', 'fluxappcontentmanifestrequest',
+  'fluxappingressindexrequest', 'fluxappingressrequest',
 ];
 
 const ORDERED_TYPES = [
   'fluxapptempsync', 'fluxapprunningsync', 'fluxappinstallingsync',
   'fluxappinstallingerrorssync',
+  'fluxappcontentmanifestindex', 'fluxappcontentmanifestsync', 'fluxappingressindex', 'fluxappingresssync',
 ];
 
 describe('messageRoutes tests', () => {

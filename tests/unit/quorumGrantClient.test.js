@@ -10,6 +10,7 @@ const networkStateService = require('../../ZelBack/src/services/networkStateServ
 const registryManager = require('../../ZelBack/src/services/appDatabase/registryManager');
 const grantClient = require('../../ZelBack/src/services/quorumGrant/grantClient');
 const registerCore = require('../../ZelBack/src/services/quorumGrant/grantRegisterCore');
+const masterleasePublisher = require('../../ZelBack/src/services/quorumGrant/masterleasePublisher');
 const { selectCommittee } = require('../../ZelBack/src/services/utils/committeeSelector');
 
 // The client against a fake fleet whose grantors run the REAL register core —
@@ -138,6 +139,7 @@ describe('quorumGrant grantClient', () => {
       { ip: `${SELF_HOST}:16127` },
       { ip: `${STANDBY_HOST}:16127` },
     ]);
+    sinon.stub(masterleasePublisher, 'publishMasterlease').resolves(true);
   });
 
   afterEach(() => {
@@ -173,6 +175,14 @@ describe('quorumGrant grantClient', () => {
         .filter((record) => record?.accepted?.grantee === SELF);
       expect(recorded.length).to.equal(5);
       expect(outcome.holder.safeUntil()).to.equal(clockNow + TTL);
+
+      // §4 step 4: the winner published
+      expect(masterleasePublisher.publishMasterlease.calledOnce).to.equal(true);
+      const published = masterleasePublisher.publishMasterlease.firstCall.args[0];
+      expect(published.key).to.equal(KEY);
+      expect(published.grantee).to.equal(SELF);
+      expect(published.mode).to.equal('held');
+      expect(published.ttlMs).to.equal(TTL);
     });
 
     it('walks away from a live incumbent without burning an epoch', async () => {
@@ -206,6 +216,9 @@ describe('quorumGrant grantClient', () => {
       const founding = await grantClient.acquire('myapp/founder', holderOptions({ mode: 'oneshot' }));
       expect(founding.granted).to.equal(true);
       expect(founding.founder).to.equal(SELF);
+      const published = masterleasePublisher.publishMasterlease.firstCall.args[0];
+      expect(published.mode).to.equal('oneshot');
+      expect(published.ttlMs).to.equal(undefined);
 
       // the same node re-asking converges on its own record
       const again = await grantClient.acquire('myapp/founder', holderOptions({ mode: 'oneshot' }));
@@ -242,6 +255,19 @@ describe('quorumGrant grantClient', () => {
       await holder.renewOnce();
       expect(holder.state).to.equal('held');
       expect(holder.safeUntil()).to.equal(clockNow + TTL);
+    });
+
+    it('republishes the record at half the grant duration, not every pass', async () => {
+      const holder = await acquireHolder();
+      expect(masterleasePublisher.publishMasterlease.callCount).to.equal(1);
+
+      clockNow += 20_000; // under ttl/2 since the acquisition publish
+      await holder.renewOnce();
+      expect(masterleasePublisher.publishMasterlease.callCount).to.equal(1);
+
+      clockNow += 20_000; // now past ttl/2 (40s > 30s)
+      await holder.renewOnce();
+      expect(masterleasePublisher.publishMasterlease.callCount).to.equal(2);
     });
 
     it('renews THROUGH a standby when the committee is unreachable directly', async () => {

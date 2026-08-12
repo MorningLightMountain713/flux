@@ -491,28 +491,11 @@ class FluxPeerSocket {
         return;
       }
 
-      // Route sync responses directly — bypass the gossip pipeline
-      const syncType = msgObj.data?.type;
-      // Reconcile responses (content-manifest and ingress-attestation) ride their own
-      // request/response and are gated by the reconcile service's active round downstream,
-      // not the ephemeral isSyncRequested flag.
-      if (syncType === 'fluxappcontentmanifestindex'
-        || syncType === 'fluxappcontentmanifestsync'
-        || syncType === 'fluxappingressindex'
-        || syncType === 'fluxappingresssync') {
-        if (manager.syncResponseDispatcher) {
-          setImmediate(() => manager.syncResponseDispatcher(msgObj, this));
-          return;
-        }
-      }
-      if (syncType === 'fluxapptempsync'
-        || syncType === 'fluxapprunningsync'
-        || syncType === 'fluxappinstallingsync'
-        || syncType === 'fluxappinstallingerrorssync') {
-        if (manager.syncResponseDispatcher && manager.isSyncRequested(this.key)) {
-          setImmediate(() => manager.syncResponseDispatcher(msgObj, this));
-          return;
-        }
+      // Around the gossip pipeline: these keep their arrival order. Whether one was
+      // wanted is the sync dispatcher's to decide, per type.
+      if (isOrdered(msgObj.data?.type) && manager.syncResponseDispatcher) {
+        setImmediate(() => manager.syncResponseDispatcher(msgObj, this));
+        return;
       }
 
       // Dispatch to the manager's message handler (gossip pipeline)
@@ -540,6 +523,7 @@ const FLUX_CAPABILITIES = Object.freeze([
   'policyBundle',
   'appInstallingClaims',
   'limitCounterRecords',
+  'masterlease',
 ]);
 
 module.exports = { FluxPeerSocket, CLOSE_CODES, PEER_SOURCE, DIRECTION, FLUX_VERSION, FLUX_CAPABILITIES };

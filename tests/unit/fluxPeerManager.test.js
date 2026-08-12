@@ -17,6 +17,11 @@ const log = require('../../ZelBack/src/lib/log');
 const rateLimit = require('../../ZelBack/src/services/utils/rateLimit');
 const { NetworkHealthMonitor } = require('../../ZelBack/src/services/utils/NetworkHealthMonitor');
 
+// Loaded for its side effect: the transport declares the routing table as it loads, and the
+// ordered-route tests below read it. Declared here rather than relied on - without it this
+// file passes only when another spec file in the same run happened to load it first.
+require('../../ZelBack/src/services/fluxCommunication');
+
 /**
  * Creates a mock WebSocket object suitable for FluxPeerSocket tests.
  * Extends EventEmitter so on/removeListener/emit work natively.
@@ -505,7 +510,6 @@ describe('FluxPeerSocket tests', () => {
     it('should route sync responses to syncResponseDispatcher', async () => {
       const ws = createMockWs();
       sinon.stub(rateLimit, 'lruRateLimit').returns(true);
-      sinon.stub(manager, 'isSyncRequested').returns(true);
 
       const peer = new FluxPeerSocket(ws, '10.0.0.1', '16127', manager);
       peer.source = PEER_SOURCE.RANDOM;
@@ -521,10 +525,13 @@ describe('FluxPeerSocket tests', () => {
       sinon.assert.notCalled(manager.messageDispatcher);
     });
 
-    it('should fall through to messageDispatcher when isSyncRequested is false', async () => {
+    // Whether an ordered response was wanted depends on its type - a state-sync chunk
+    // needs a sync in progress with this peer, a reconcile answer its service's round -
+    // so the socket routes every one and the sync dispatcher decides.
+    it('should route an ordered response no sync asked for to syncResponseDispatcher, which decides', async () => {
       const ws = createMockWs();
       sinon.stub(rateLimit, 'lruRateLimit').returns(true);
-      sinon.stub(manager, 'isSyncRequested').returns(false);
+      sinon.stub(manager, 'isSyncResponseWanted').returns(false);
 
       const peer = new FluxPeerSocket(ws, '10.0.0.1', '16127', manager);
       peer.source = PEER_SOURCE.RANDOM;
@@ -536,19 +543,21 @@ describe('FluxPeerSocket tests', () => {
       ws.onmessage({ data: syncMsg });
       await new Promise(setImmediate);
 
-      sinon.assert.notCalled(manager.syncResponseDispatcher);
-      sinon.assert.calledOnce(manager.messageDispatcher);
+      sinon.assert.calledOnce(manager.syncResponseDispatcher);
+      sinon.assert.notCalled(manager.messageDispatcher);
     });
 
-    it('should route all four sync response types to syncResponseDispatcher', async () => {
+    it('should route every ordered response type to syncResponseDispatcher', async () => {
       const ws = createMockWs();
       sinon.stub(rateLimit, 'lruRateLimit').returns(true);
-      sinon.stub(manager, 'isSyncRequested').returns(true);
 
       const peer = new FluxPeerSocket(ws, '10.0.0.1', '16127', manager);
       peer.source = PEER_SOURCE.RANDOM;
 
-      const types = ['fluxapptempsync', 'fluxapprunningsync', 'fluxappinstallingsync', 'fluxappinstallingerrorssync'];
+      const types = [
+        'fluxapptempsync', 'fluxapprunningsync', 'fluxappinstallingsync', 'fluxappinstallingerrorssync',
+        'fluxappcontentmanifestindex', 'fluxappcontentmanifestsync', 'fluxappingressindex', 'fluxappingresssync',
+      ];
       for (const type of types) {
         manager.syncResponseDispatcher.resetHistory();
         manager.messageDispatcher.resetHistory();
