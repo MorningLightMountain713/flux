@@ -62,7 +62,11 @@ async function connectComponentToLinkedApps(componentContainerName, deployment, 
 
   // eslint-disable-next-line no-restricted-syntax
   for (const linkedApp of linkedApps) {
-    const networkName = `fluxDockerNetwork_${linkedApp}`;
+    // The target's network is named from ITS identity: read it off the target's row
+    // rather than spelling it from the name this consumer happens to hold.
+    // eslint-disable-next-line no-await-in-loop
+    const target = await appsRepository.getInstalledApp(linkedApp);
+    const networkName = `fluxDockerNetwork_${target?.identity ?? linkedApp}`;
     try {
       // The linked app's network is a CROSS-APP host resource: its removal runs in
       // the linked app's teardown worker under the node-wide hostMutationLock. Take
@@ -119,7 +123,9 @@ async function resolveActiveLinkedNetworks(ownerId, linkedNames) {
     // eslint-disable-next-line no-await-in-loop
     const installed = await appsRepository.getInstalledApp(name);
     if (installed && installed.owner === ownerId) {
-      networks.push(`fluxDockerNetwork_${installed.name}`);
+      // The target's network is named from ITS identity, read off its own row - the
+      // consumer cannot derive it, and must not assume the name spelling.
+      networks.push(`fluxDockerNetwork_${installed.identity ?? installed.name}`);
     }
   }
   return networks;
