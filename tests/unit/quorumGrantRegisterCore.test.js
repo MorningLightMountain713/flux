@@ -8,13 +8,16 @@ const {
   onPrepare,
   onAccept,
   onRenew,
+  onRoster,
   onRelease,
 } = require('../../ZelBack/src/services/quorumGrant/grantRegisterCore');
+const rosterOverlay = require('../../ZelBack/src/services/quorumGrant/rosterOverlay');
+const { selectCommittee } = require('../../ZelBack/src/services/utils/committeeSelector');
 
 // Fixed clocks: every scenario is arithmetic over these, no Date.now anywhere.
 const T0 = 1_000_000;
 const TTL = 60_000;
-const TUNABLES = { lockDelayMs: 30_000 };
+const TUNABLES = { lockDelayMs: 30_000, maxTtlMs: 300_000 };
 
 function heldRecord(overrides = {}) {
   return {
@@ -318,6 +321,185 @@ describe('quorumGrant grantRegisterCore', () => {
         highWater = record.promisedEpoch;
       });
       expect(highWater).to.equal(9);
+    });
+  });
+
+  describe('roster', () => {
+    // A fleet whose committee the tests derive with the same walk the code
+    // runs; signatures never reach the core (the shell verifies carried
+    // chains first), so plain distinct pubkeys are enough here.
+    const KEY = 'myapp/master';
+    const WALK_KEY = `quorumgrant|${KEY}`;
+    const SIZE = 5;
+    const membership = Array.from({ length: 10 }, (unused, i) => ({
+      txhash: String(i + 1).padStart(2, '0').repeat(32),
+      outidx: 0,
+      pubkey: `owner-${i + 1}`,
+      ip: `10.${i + 1}.0.1:16127`,
+    }));
+    const base = selectCommittee(membership, WALK_KEY, { size: SIZE });
+
+    const outpoint = (node) => `${node.txhash}:${node.outidx}`;
+
+    function linkAtop(seq, roster, excluded) {
+      const remove = roster[0];
+      const survivors = roster.filter((node) => node !== remove);
+      const nextExcluded = new Set([...excluded, outpoint(remove)]);
+      const added = rosterOverlay.nextReplacement(membership, WALK_KEY, survivors, nextExcluded);
+      return {
+        entry: {
+          seq, remove: outpoint(remove), add: outpoint(added), at: T0 - 500_000,
+        },
+        roster: [...survivors, added],
+        excluded: nextExcluded,
+      };
+    }
+
+    const first = linkAtop(1, base.members, new Set());
+    const second = linkAtop(2, first.roster, first.excluded);
+
+    function context(overrides = {}) {
+      return {
+        key: KEY, membership, committeeSize: SIZE, ...overrides,
+      };
+    }
+
+    function rosterRequest(overrides = {}) {
+      return {
+        epoch: 5,
+        candidate: 'aaaa:0',
+        remove: first.entry.remove,
+        add: first.entry.add,
+        seq: 1,
+        fingerprint: 'fp-1',
+        at: T0 - 10,
+        ...overrides,
+      };
+    }
+
+    it('records a valid proposal: entry journaled, stamp taken, reply names the seat', () => {
+      const { reply, record } = onRoster(heldRecord(), rosterRequest(), T0, TUNABLES, context());
+      expect(reply.ok).to.equal(true);
+      expect(reply.seq).to.equal(1);
+      expect(reply.remove).to.equal(first.entry.remove);
+      expect(reply.add).to.equal(first.entry.add);
+      expect(record.roster.fingerprint).to.equal('fp-1');
+      expect(record.roster.changedAt).to.equal(T0);
+      expect(record.roster.chain).to.have.length(1);
+      expect(record.roster.chain[0].at).to.equal(T0 - 10);
+    });
+
+    it('only the recorded grantee of the live term, at its own epoch, proposes', () => {
+      const wrongNode = onRoster(heldRecord(), rosterRequest({ candidate: 'bbbb:0' }), T0, TUNABLES, context());
+      expect(wrongNode.reply.code).to.equal('not_grantee');
+      const wrongEpoch = onRoster(heldRecord(), rosterRequest({ epoch: 4 }), T0, TUNABLES, context());
+      expect(wrongEpoch.reply.code).to.equal('not_grantee');
+      const lapsed = onRoster(heldRecord(), rosterRequest(), T0 + TTL + 1, TUNABLES, context());
+      expect(lapsed.reply.code).to.equal('lapsed');
+      const none = onRoster(null, rosterRequest(), T0, TUNABLES, context());
+      expect(none.reply.code).to.equal('no_grant');
+      const released = onRoster(heldRecord({ accepted: { released: true } }), rosterRequest(), T0, TUNABLES, context());
+      expect(released.reply.code).to.equal('no_grant');
+      const oneshot = onRoster(oneshotRecord(), rosterRequest({ epoch: 2, candidate: 'ffff:1' }), T0, TUNABLES, context());
+      expect(oneshot.reply.code).to.equal('bad_mode');
+    });
+
+    it('the proposal must name the basis the grant is pinned to', () => {
+      const { reply } = onRoster(heldRecord(), rosterRequest({ fingerprint: 'fp-2' }), T0, TUNABLES, context());
+      expect(reply.code).to.equal('wrong_fingerprint');
+    });
+
+    it('a seq that does not extend the journal teaches the journal length', () => {
+      const { reply } = onRoster(heldRecord(), rosterRequest({ seq: 2 }), T0, TUNABLES, context());
+      expect(reply.code).to.equal('roster_seq');
+      expect(reply.rosterSeq).to.equal(0);
+    });
+
+    it('one seat per TTL: a second change inside the window is refused with the wait', () => {
+      const record = heldRecord();
+      record.roster = { fingerprint: 'fp-1', changedAt: T0 - 100, chain: [first.entry] };
+      const inside = onRoster(record, rosterRequest({
+        seq: 2, remove: second.entry.remove, add: second.entry.add,
+      }), T0, TUNABLES, context());
+      expect(inside.reply.code).to.equal('roster_rate');
+      expect(inside.reply.retryAfterMs).to.equal(TUNABLES.maxTtlMs - 100);
+
+      record.roster.changedAt = T0 - TUNABLES.maxTtlMs;
+      const outside = onRoster(record, rosterRequest({
+        seq: 2, remove: second.entry.remove, add: second.entry.add,
+      }), T0, TUNABLES, context());
+      expect(outside.reply.ok).to.equal(true);
+      expect(outside.record.roster.chain).to.have.length(2);
+    });
+
+    it('the removed seat must sit on the current roster', () => {
+      const offRoster = membership.find(
+        (node) => !base.members.some((member) => outpoint(member) === outpoint(node)),
+      );
+      const { reply } = onRoster(heldRecord(), rosterRequest({ remove: outpoint(offRoster) }), T0, TUNABLES, context());
+      expect(reply.code).to.equal('roster_remove');
+    });
+
+    it('a hand-picked replacement is refused and the refusal teaches the walk answer', () => {
+      const offWalk = membership.find(
+        (node) => !base.members.some((member) => outpoint(member) === outpoint(node))
+          && outpoint(node) !== first.entry.add,
+      );
+      const { reply } = onRoster(heldRecord(), rosterRequest({ add: outpoint(offWalk) }), T0, TUNABLES, context());
+      expect(reply.code).to.equal('roster_add');
+      expect(reply.expected).to.equal(first.entry.add);
+    });
+
+    it('a chain that has replaced a full committee is exhausted, not extended', () => {
+      const record = heldRecord();
+      let roster = base.members;
+      let excluded = new Set();
+      const chain = [];
+      for (let seq = 1; seq <= SIZE; seq += 1) {
+        const link = linkAtop(seq, roster, excluded);
+        chain.push(link.entry);
+        ({ roster, excluded } = link);
+      }
+      record.roster = { fingerprint: 'fp-1', changedAt: T0 - TUNABLES.maxTtlMs, chain };
+      // the cap refuses before any seat is judged, so the named seats need
+      // not resolve — on this fleet no valid sixth link even exists
+      const { reply } = onRoster(record, rosterRequest({ seq: SIZE + 1 }), T0, TUNABLES, context());
+      expect(reply.code).to.equal('roster_exhausted');
+    });
+
+    it('adopts verified carried entries it missed, then judges the proposal atop them', () => {
+      const { reply, record } = onRoster(heldRecord(), rosterRequest({
+        seq: 2, remove: second.entry.remove, add: second.entry.add,
+      }), T0, TUNABLES, context({ verifiedCarriedChain: [first.entry] }));
+      expect(reply.ok).to.equal(true);
+      expect(record.roster.chain).to.have.length(2);
+      expect(record.roster.chain[0].add).to.equal(first.entry.add);
+    });
+
+    it('a carried chain conflicting with the journal is refused, never chosen over it', () => {
+      const record = heldRecord();
+      record.roster = { fingerprint: 'fp-1', changedAt: T0 - TUNABLES.maxTtlMs, chain: [first.entry] };
+      const fork = [{ ...first.entry, add: second.entry.add }, second.entry];
+      const { reply } = onRoster(record, rosterRequest({
+        seq: 3, remove: second.entry.remove, add: second.entry.add,
+      }), T0, TUNABLES, context({ verifiedCarriedChain: fork }));
+      expect(reply.code).to.equal('roster_conflict');
+    });
+
+    it('accepting a grant at a new basis clears the old chain; at the same basis it survives', () => {
+      const record = heldRecord();
+      record.roster = { fingerprint: 'fp-1', changedAt: T0 - 100, chain: [first.entry] };
+
+      const sameBasis = onAccept(record, {
+        epoch: 6, grantee: 'aaaa:0', mode: 'held', ttlMs: TTL, fingerprint: 'fp-1',
+      }, T0, TUNABLES);
+      expect(sameBasis.record.roster.chain).to.have.length(1);
+
+      const lapsedAt = T0 + TTL + TUNABLES.lockDelayMs + 1;
+      const newBasis = onAccept(record, {
+        epoch: 7, grantee: 'bbbb:0', mode: 'held', ttlMs: TTL, fingerprint: 'fp-2',
+      }, lapsedAt, TUNABLES);
+      expect(newBasis.record.roster).to.equal(null);
     });
   });
 });

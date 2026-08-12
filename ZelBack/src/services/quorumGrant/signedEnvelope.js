@@ -25,6 +25,12 @@ const FIELD_SEPARATOR = '|';
  * carried by ANY holder — the messenger is irrelevant precisely because the
  * envelope is end-to-end (§7's relay rule); the re-found record is owner-signed
  * at the consumer layer and is not one of these.
+ *
+ * `roster` is the holder's single-seat committee-change proposal, and
+ * `rosteraccept` is a grantor's signed acceptance of one — the one place a
+ * GRANTOR signs anything. A quorum of rosteraccept signatures over identical
+ * fields is what makes a roster entry a self-verifying object any third party
+ * can check against the membership the fingerprint names.
  */
 const TYPES = Object.freeze([
   'prepare',
@@ -32,6 +38,8 @@ const TYPES = Object.freeze([
   'renew',
   'release',
   'probe',
+  'roster',
+  'rosteraccept',
 ]);
 
 /**
@@ -121,6 +129,18 @@ function fieldsFor(type, ask) {
       return [ask.key, ask.epoch, ask.candidate, ask.ttlMs, ask.fingerprint, ask.at];
     case 'release':
       return [ask.key, ask.epoch, ask.candidate, ask.fingerprint, ask.at];
+    case 'roster':
+      // the proposal: candidate is the proposing grantee; seq pins where in
+      // the chain this entry lands. The carried chain rides OUTSIDE these
+      // fields — it is self-verifying on its own signatures, and binding it
+      // here would stop one signature serving every member.
+      return [ask.key, ask.epoch, ask.candidate, ask.remove, ask.add, ask.seq, ask.fingerprint, ask.at];
+    case 'rosteraccept':
+      // the acceptance a grantor signs: no epoch and no timestamp, because
+      // the entry outlives the term that proposed it (the roster belongs to
+      // the COMMITTEE, not the grant) and replaying an identical entry is a
+      // no-op by construction.
+      return [ask.key, ask.fingerprint, ask.seq, ask.remove, ask.add];
     default:
       return null;
   }
