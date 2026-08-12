@@ -351,11 +351,13 @@ describe('replica placement (v9): assignment + placement, overrides, platform en
       async () => (await appContainersFor(env.clients[4].container, nameColoc)).length === 3,
       { timeout: 120000, interval: 3000, label: `${nameColoc} three co-located containers on node 5` },
     );
-    const names = (await appContainersFor(env.clients[4].container, nameColoc))
-      .map((c) => c.name).sort();
-    expect(names).to.deep.equal([
-      `fluxweb_${nameColoc}_d1`, `fluxweb_${nameColoc}_d2`, `fluxweb_${nameColoc}_d3`,
-    ]);
+    // Asserted as a shape: a container's name carries the app's minted identity, which
+    // this suite cannot spell — what matters is three distinct names, one per replica,
+    // all naming the same app.
+    const conts = await appContainersFor(env.clients[4].container, nameColoc);
+    expect(new Set(conts.map((c) => c.name)).size, 'three distinct container names').to.equal(3);
+    expect(conts.map((c) => c.replica).sort(), 'one per named replica').to.deep.equal(['d1', 'd2', 'd3']);
+    expect(new Set(conts.map((c) => c.identifier.split('_')[1])).size, 'all one app identity').to.equal(1);
     expect(await runningIndexes(nameColoc), 'a named set installs only on its targeted node').to.deep.equal([4]);
   });
 

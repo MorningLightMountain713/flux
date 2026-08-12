@@ -12,6 +12,7 @@ import {
 } from '../framework/wait.js';
 import { bootAndPeer, seedSyncthingApp, seedSyncScopedData } from '../framework/reconciler-suite.js';
 import { getSubnetConfig } from '../framework/subnet-config.js';
+import { dbClient } from '../framework/db-client.js';
 
 // The syncthing mount-safety guard gates on the MOUNTPOINT, not on content
 // (the deletion-propagation incident regressions):
@@ -37,7 +38,23 @@ import { getSubnetConfig } from '../framework/subnet-config.js';
 
 const subnet = getSubnetConfig();
 
-const appId = (name) => `flux${name}_${name}`;
+// `flux<component>_<identity>` — the identity is minted at registration and cannot be
+// spelled from the app's name, so it is resolved once (resolveAppIds) and read from
+// here afterwards, leaving every call site synchronous.
+const resolvedAppIds = new Map();
+const appId = (name) => {
+  const id = resolvedAppIds.get(name);
+  if (!id) throw new Error(`appId(${name}) before resolveAppIds() - nothing can be named yet`);
+  return id;
+};
+async function resolveAppIds(names) {
+  for (const name of names) {
+    // eslint-disable-next-line no-await-in-loop
+    const id = await dbClient(1).appFolderId(name, name);
+    if (!id) throw new Error(`no registration row for ${name}; cannot resolve its identifier`);
+    resolvedAppIds.set(name, id);
+  }
+}
 const appDir = (name) => `/mnt/appdata/flux-apps/${appId(name)}`;
 const volFile = (name) => `/mnt/appdata/${appId(name)}FLUXFSVOL`;
 
@@ -59,10 +76,12 @@ describe('syncthing mount-safety guard demotes unsafe sendreceive folders', func
   const ts = Date.now();
   const leakName = `e2eleak${ts}`; // node 0: unmounted dir with leaked content
   const phantomName = `e2ephantom${ts}`; // node 1: phantom index over empty volume
-  const leakFolder = appId(leakName);
-  const phantomFolder = appId(phantomName);
-  const leakIdentifier = `${leakName}_${leakName}`;
-  const phantomIdentifier = `${phantomName}_${phantomName}`;
+  // Everything named from the app's identity, which only exists once the registration
+  // is on chain — resolved in before(), never spelled.
+  let leakFolder;
+  let phantomFolder;
+  let leakIdentifier;
+  let phantomIdentifier;
   const ip0 = subnet.nodeIp(1);
   const ip1 = subnet.nodeIp(2);
 
@@ -71,6 +90,11 @@ describe('syncthing mount-safety guard demotes unsafe sendreceive folders', func
     env = await createTestEnv({ hookCtx: this, nodes: 10, tickerAutostart: false });
     await bootAndPeer(env);
     await resetSyncState();
+    await resolveAppIds([leakName, phantomName]);
+    leakFolder = appId(leakName);
+    phantomFolder = appId(phantomName);
+    leakIdentifier = leakFolder.replace(/^flux/, '');
+    phantomIdentifier = phantomFolder.replace(/^flux/, '');
 
     // both apps are r: leaders on their own nodes: they seed, promote to
     // sendreceive and start - the state every test here begins from.

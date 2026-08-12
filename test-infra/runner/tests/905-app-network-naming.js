@@ -56,7 +56,7 @@ describe('app network naming: what one app calls another', function () {
     return {
       image: `${REGISTRY_REPO_HOST}/${imageApp}:v1`,
       cpu: 0.4,
-      memory: 250,
+      memory: 300,
       rootFsGb: 2,
       entrypoint: ['/bin/busybox', 'sh', '-c',
         'while true; do /bin/busybox nc -l -p 8080 -e /bin/busybox hostname; done'],

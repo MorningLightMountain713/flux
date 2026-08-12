@@ -119,8 +119,11 @@ describe('app dependencies: follower pull-in, strength split, cascade and reap',
     await registerApp(name, shape);
   }
 
+  // all:true throughout: "gone" has to mean removed, not merely stopped. Docker ps
+  // lists running containers by default, so a stopped one reads as absent and every
+  // waitGone below would pass on an app that is still sitting there.
   async function containersOn(idx, name) {
-    return appContainersFor(env.clients[idx].container, name);
+    return appContainersFor(env.clients[idx].container, name, { all: true });
   }
 
   async function waitGone(idx, name, label, timeout = 240000) {
@@ -245,7 +248,11 @@ describe('app dependencies: follower pull-in, strength split, cascade and reap',
     expect(stopRes.status, `appstop ${apps.collector}`).to.equal('success');
 
     await waitFor(async () => {
-      const status = await getAppContainerStatus(env.clients[HOST_IDX].container, apps.bound);
+      // all:true — a STOPPED container is what this asserts, and docker ps lists only
+      // running ones by default, so the stop it is waiting for would read as absent.
+      const status = await getAppContainerStatus(
+        env.clients[HOST_IDX].container, apps.bound, { all: true },
+      );
       return status !== null && status.status?.startsWith('Up') !== true;
     }, { timeout: 240000, interval: 5000, label: 'boundTo workload stopped while its target is down' });
     const gameStatus = await getAppContainerStatus(env.clients[HOST_IDX].container, apps.game);

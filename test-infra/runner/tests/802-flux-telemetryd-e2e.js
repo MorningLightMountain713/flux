@@ -13,7 +13,7 @@ import { REGISTRY_REPO_HOST } from '../framework/subnet-config.js';
 import { readFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { execInContainer } from '../framework/container.js';
+import { execInContainer, requireAppContainerName } from '../framework/container.js';
 import {
   stopFluxos, startFluxos, unitState, journalGrep, journalCount,
 } from '../framework/systemd-control.js';
@@ -69,8 +69,10 @@ const LOG_MARKER = 'RELOAD SIGUSR1';
 // so REJECT_SUBSTR is inert everywhere else.
 const POISON_MARKER = 'RELOAD SIGUSR2';
 
-const webContainer = `fluxweb_${APP}`;
-const collectorContainer = `fluxcollector_${APP}`;
+// Container names carry the app's minted identity; resolved from the labels once the
+// containers exist, never spelled from the app name.
+let webContainer;
+let collectorContainer;
 
 const buildComponents = ({
   appRepo, recvRepo, webPort, receiverPort = 4318,
@@ -179,6 +181,10 @@ describe('flux-telemetryd e2e: the real daemon against real FluxOS on an Arcane-
       return i;
     }));
     client = env.clients[installedIndex];
+    // Now that the containers exist, ask them what they are called: the names carry the
+    // app's minted identity and cannot be derived from APP.
+    webContainer = await requireAppContainerName(client.container, APP, 'web');
+    collectorContainer = await requireAppContainerName(client.container, APP, 'collector');
   });
 
   after(async function () {

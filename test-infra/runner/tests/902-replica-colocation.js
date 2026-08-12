@@ -244,14 +244,16 @@ describe('replica co-location: two named replicas of one app on one node, separa
     const appSegments = new Set(conts.map((c) => c.identifier.split('_')[1]));
     expect([...appSegments], 'both replicas name the same app identity').to.have.length(1);
 
-    // Labels are the identity of record — the shutdown daemon groups containers
-    // by runonflux.replica, so a missing label silently merges the siblings.
+    // Labels are the identity of record — the shutdown daemon groups containers by
+    // io.runonflux.replica, so a missing label silently merges the siblings. The keys
+    // are the io.runonflux.* namespace every label was unified onto; a bare
+    // `runonflux.*` read returns undefined and asserts nothing.
     const s1Labels = await replicaLabels(appName, 's1');
     const s2Labels = await replicaLabels(appName, 's2');
-    expect(s1Labels['runonflux.app']).to.equal(appName);
-    expect(s1Labels['runonflux.replica']).to.equal('s1');
-    expect(s2Labels['runonflux.replica']).to.equal('s2');
-    expect(s1Labels['runonflux.component']).to.equal('web');
+    expect(s1Labels['io.runonflux.app']).to.equal(appName);
+    expect(s1Labels['io.runonflux.replica']).to.equal('s1');
+    expect(s2Labels['io.runonflux.replica']).to.equal('s2');
+    expect(s1Labels['io.runonflux.component']).to.equal('web');
   });
 
   it('gives each identity its own effective ports and platform env', async function () {

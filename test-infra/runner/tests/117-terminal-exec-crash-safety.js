@@ -5,7 +5,8 @@ import { io } from 'socket.io-client';
 import { createTestEnv } from '../framework/test-env.js';
 import { authenticate } from '../auth.js';
 import { appOwnerKey } from '../framework/keys.js';
-import { execInContainer, getAppContainerStatus } from '../framework/container.js';
+import { execInContainer, getAppContainerStatus, appComponentIdentifier,
+} from '../framework/container.js';
 import { waitFor } from '../framework/wait.js';
 import { bootAndPeer, seedSimpleApp } from '../framework/reconciler-suite.js';
 
@@ -91,7 +92,9 @@ describe('docker terminal fails cleanly and never crashes the node', function ()
   let client;
   let zelidauth;
   const appName = `e2eterm${Date.now()}`;
-  const identifier = `${appName}_${appName}`;
+  // `<component>_<identity>`: the identity is minted at registration, so this is read
+  // off the running container in before() rather than spelled from the app name.
+  let identifier;
 
   before(async function () {
     this.timeout(300000);
@@ -105,6 +108,7 @@ describe('docker terminal fails cleanly and never crashes the node', function ()
       const status = await getAppContainerStatus(client.container, appName);
       return !!(status && status.status.startsWith('Up'));
     }, { timeout: 90000, interval: 3000, label: 'app container running before terminal tests' });
+    identifier = await appComponentIdentifier(client.container, appName, appName);
   });
 
   after(async function () {

@@ -7,7 +7,8 @@ import { registerEncryptedV9App } from '../framework/content-helper.js';
 import { queueAppTx, advanceBlocks } from '../framework/daemon-control.js';
 import { waitFor, waitForAppInstalled, assertNoEvent } from '../framework/wait.js';
 import { pushImage } from '../framework/registry-helper.js';
-import { execInContainer, getAppContainerStatus } from '../framework/container.js';
+import { execInContainer, getAppContainerStatus, requireAppContainerName,
+} from '../framework/container.js';
 import { REGISTRY_REPO_HOST } from '../framework/subnet-config.js';
 import { authenticate } from '../auth.js';
 import { appOwnerKey } from '../framework/keys.js';
@@ -45,7 +46,15 @@ const WEB_PORT = 38010;
 const STATEFUL = 'keeper'; // control: a real persistent volume
 const STATELESS = 'agent'; // the component under test
 
-const containerName = (comp) => `flux${comp}_${APP}`;
+// A container's name carries the app's minted identity, so it is resolved from the
+// labels once the containers exist and read from here afterwards — every call site
+// below stays synchronous.
+const resolvedNames = new Map();
+const containerName = (comp) => {
+  const name = resolvedNames.get(comp);
+  if (!name) throw new Error(`containerName(${comp}) before the names were resolved`);
+  return name;
+};
 const appDir = (comp) => `/mnt/appdata/flux-apps/${containerName(comp)}`;
 const volFile = (comp) => `/mnt/appdata/${containerName(comp)}FLUXFSVOL`;
 
@@ -110,6 +119,12 @@ describe('stateless components: a v9 component with no persistent volume', funct
       return i;
     }));
     client = env.clients[installedIndex];
+    // The containers exist now, so ask them their names — they carry the app's minted
+    // identity and cannot be spelled from APP.
+    for (const comp of [STATEFUL, STATELESS]) {
+      // eslint-disable-next-line no-await-in-loop
+      resolvedNames.set(comp, await requireAppContainerName(client.container, APP, comp));
+    }
   });
 
   after(async function () {
