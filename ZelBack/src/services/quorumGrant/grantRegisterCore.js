@@ -173,14 +173,18 @@ function onAccept(record, request, nowMs, tunables) {
     grantee,
     mode,
     fingerprint: fingerprint ?? null,
+    generation: request.generation ?? 0,
     expiresAt: mode === 'held' ? nowMs + ttlMs : null,
     released: false,
   };
 
-  // The roster chain is bound to its committee basis. A grant accepted at a
-  // different fingerprint draws a fresh base committee, and an overlay from
+  // The roster chain is bound to its committee basis — the membership AND
+  // the generation. A grant accepted at either a different fingerprint or a
+  // re-rolled generation draws a fresh base committee, and an overlay from
   // the old world must not survive to reshape it.
-  const rosterStale = record?.roster && record.roster.fingerprint !== accepted.fingerprint;
+  const rosterStale = record?.roster
+    && (record.roster.fingerprint !== accepted.fingerprint
+      || (record.roster.generation ?? 0) !== accepted.generation);
 
   return {
     reply: { ok: true, accepted },
@@ -256,6 +260,7 @@ function onRoster(record, request, nowMs, knobs, context) {
   const {
     epoch, candidate, remove, add, seq, fingerprint,
   } = request;
+  const generation = request.generation ?? 0;
   const state = grantState(record, nowMs);
 
   if (state === 'none' || state === 'released') {
@@ -273,8 +278,13 @@ function onRoster(record, request, nowMs, knobs, context) {
   if ((record.accepted.fingerprint ?? null) !== fingerprint) {
     return { reply: refusal('wrong_fingerprint', record), record: null };
   }
+  if ((record.accepted.generation ?? 0) !== generation) {
+    return { reply: refusal('wrong_generation', record), record: null };
+  }
 
-  const journaled = record.roster?.fingerprint === fingerprint ? record.roster.chain : [];
+  const journaled = record.roster?.fingerprint === fingerprint
+    && (record.roster.generation ?? 0) === generation
+    ? record.roster.chain : [];
 
   let chain = journaled;
   const carried = context.verifiedCarriedChain;
@@ -289,7 +299,9 @@ function onRoster(record, request, nowMs, knobs, context) {
     return { reply: refusal('roster_seq', record, { rosterSeq: chain.length }), record: null };
   }
 
-  const changedAt = record.roster?.fingerprint === fingerprint ? record.roster.changedAt : undefined;
+  const changedAt = record.roster?.fingerprint === fingerprint
+    && (record.roster.generation ?? 0) === generation
+    ? record.roster.changedAt : undefined;
   if (changedAt !== undefined && nowMs - changedAt < knobs.maxTtlMs) {
     return {
       reply: refusal('roster_rate', record, {
@@ -300,7 +312,7 @@ function onRoster(record, request, nowMs, knobs, context) {
     };
   }
 
-  const walkKey = `quorumgrant|${context.key}`;
+  const walkKey = rosterOverlay.walkKeyFor(context.key, generation);
   const base = selectCommittee(context.membership, walkKey, { size: context.committeeSize });
   if (base.refusal) {
     return { reply: refusal('no_committee', record), record: null };
@@ -343,7 +355,9 @@ function onRoster(record, request, nowMs, knobs, context) {
     },
     record: {
       ...record,
-      roster: { fingerprint, changedAt: nowMs, chain: [...chain, entry] },
+      roster: {
+        fingerprint, generation, changedAt: nowMs, chain: [...chain, entry],
+      },
     },
   };
 }

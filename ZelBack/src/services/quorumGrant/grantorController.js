@@ -8,6 +8,7 @@ const fluxCommunicationUtils = require('../fluxCommunicationUtils');
 const fluxNetworkHelper = require('../fluxNetworkHelper');
 const networkStateService = require('../networkStateService');
 const registryManager = require('../appDatabase/registryManager');
+const messageStore = require('../appMessaging/messageStore');
 const { extractIp } = require('../utils/socketAddressUtils');
 const { selectCommittee } = require('../utils/committeeSelector');
 const signedEnvelope = require('./signedEnvelope');
@@ -85,6 +86,17 @@ function callerHost(req) {
   return raw.startsWith('::ffff:') ? raw.slice(7) : raw;
 }
 
+/**
+ * The current generation for a held key: the newest owner-signed record on
+ * the event plane as this node has synced it, 0 when the owner has never
+ * re-rolled. What every held ask's named generation is judged against.
+ */
+async function heldGeneration(key) {
+  const slash = key.indexOf('/');
+  const record = await messageStore.getGrantGenerationRecord(key.slice(0, slash), key.slice(slash + 1));
+  return record?.data?.generation ?? 0;
+}
+
 function bad(code, message) {
   return { ok: false, code, message };
 }
@@ -97,7 +109,7 @@ function bad(code, message) {
 async function readAsk(req, type) {
   const body = serviceHelper.ensureObject(req.body) ?? {};
   const {
-    key, mode, epoch, candidate, ttlMs, fingerprint, at, signature,
+    key, mode, epoch, candidate, ttlMs, generation, fingerprint, at, signature,
     remove, add, seq, chain,
   } = body;
 
@@ -120,6 +132,9 @@ async function readAsk(req, type) {
   }
   if (typeof fingerprint !== 'string' || !FINGERPRINT_PATTERN.test(fingerprint)) {
     return bad(400, 'malformed fingerprint');
+  }
+  if (!Number.isSafeInteger(generation) || generation < 0) {
+    return bad(400, 'malformed generation');
   }
   if (type === 'roster') {
     if (typeof remove !== 'string' || !OUTPOINT_PATTERN.test(remove)) {
@@ -157,7 +172,7 @@ async function readAsk(req, type) {
   }
 
   const ask = {
-    key, mode, epoch, candidate, ttlMs, fingerprint, at, remove, add, seq, chain,
+    key, mode, epoch, candidate, ttlMs, generation, fingerprint, at, remove, add, seq, chain,
   };
   const fields = signedEnvelope.fieldsFor(type, ask);
   if (!fields || !signedEnvelope.verify(type, fields, signature, askerNode.pubkey)) {
@@ -176,19 +191,34 @@ async function readAsk(req, type) {
  * being an intersection. Fails closed throughout: a node that cannot
  * identify itself cannot show it belongs.
  *
- * For held keys the base committee is read THROUGH the roster overlay:
- * this grantor's own journaled chain applies as written, and a longer
- * chain carried on the ask applies after full verification against the
- * same membership — which is how a freshly seated replacement, whose
- * register has never heard of the key, knows to answer for it.
+ * For held keys the committee is one deal of a generation-salted walk: the
+ * ask names the generation, and it must be the newest one the owner has
+ * signed as this grantor knows it — an ask under a retired generation is
+ * refused with the current number, because grants written by two
+ * generations' committees against one register are two masters. The base
+ * is then read THROUGH the roster overlay: this grantor's own journaled
+ * chain applies as written, and a longer chain carried on the ask applies
+ * after full verification against the same membership — which is how a
+ * freshly seated replacement, whose register has never heard of the key,
+ * knows to answer for it.
  */
-async function selfOnCommittee(key, mode, fingerprint, carriedChain) {
+async function selfOnCommittee(key, mode, fingerprint, generation, carriedChain) {
   const membership = networkStateService.membershipAt(fingerprint);
   if (!membership) {
     return { member: false, code: 409, reason: 'unknown membership fingerprint' };
   }
 
-  const committee = selectCommittee(membership, `quorumgrant|${key}`, { size: committeeSize(mode) });
+  if (mode === 'held') {
+    const current = await heldGeneration(key);
+    if (generation !== current) {
+      return { member: false, code: 409, reason: `ask names generation ${generation}, current is ${current}` };
+    }
+  }
+
+  const walkKey = mode === 'held'
+    ? rosterOverlay.walkKeyFor(key, generation)
+    : `quorumgrant|${key}`;
+  const committee = selectCommittee(membership, walkKey, { size: committeeSize(mode) });
   if (committee.refusal) {
     return { member: false, code: 409, reason: committee.refusal };
   }
@@ -196,13 +226,15 @@ async function selfOnCommittee(key, mode, fingerprint, carriedChain) {
   let { members } = committee;
   if (mode === 'held') {
     const stored = await grantRegister.read(key);
-    const journaled = stored?.roster?.fingerprint === fingerprint ? stored.roster.chain : [];
+    const journaled = stored?.roster?.fingerprint === fingerprint
+      && (stored.roster.generation ?? 0) === generation
+      ? stored.roster.chain : [];
     if (journaled.length) {
       members = rosterOverlay.rosterAfter(committee.members, membership, journaled) ?? members;
     }
     if (Array.isArray(carriedChain) && carriedChain.length > journaled.length) {
       const verified = rosterOverlay.verifyChain(
-        membership, key, fingerprint, committeeSize(mode), carriedChain,
+        membership, key, fingerprint, generation, committeeSize(mode), carriedChain,
       );
       if (verified) ({ members } = verified);
     }
@@ -265,7 +297,7 @@ async function serve(req, res, type, operate) {
     }
     const { ask, askerNode } = read;
 
-    const committee = await selfOnCommittee(ask.key, ask.mode ?? 'held', ask.fingerprint, ask.chain);
+    const committee = await selfOnCommittee(ask.key, ask.mode ?? 'held', ask.fingerprint, ask.generation, ask.chain);
     if (!committee.member) {
       return res.status(committee.code).json(messageHelper.createErrorMessage(committee.reason));
     }
@@ -303,6 +335,7 @@ async function accept(req, res) {
     grantee: ask.candidate,
     mode: ask.mode,
     ttlMs: ask.ttlMs,
+    generation: ask.generation,
     fingerprint: ask.fingerprint ?? null,
   }));
 }
@@ -336,7 +369,7 @@ async function operateRoster(ask) {
   let verifiedCarriedChain;
   if (Array.isArray(ask.chain) && ask.chain.length) {
     const verified = rosterOverlay.verifyChain(
-      membership, ask.key, ask.fingerprint, committeeSize('held'), ask.chain,
+      membership, ask.key, ask.fingerprint, ask.generation, committeeSize('held'), ask.chain,
     );
     if (!verified) {
       return { ok: false, code: 'bad_chain' };
@@ -350,6 +383,7 @@ async function operateRoster(ask) {
     remove: ask.remove,
     add: ask.add,
     seq: ask.seq,
+    generation: ask.generation,
     fingerprint: ask.fingerprint,
     at: ask.at,
   }, {
@@ -364,7 +398,12 @@ async function operateRoster(ask) {
   const collateral = await generalService.obtainNodeCollateralInformation();
   const wif = await fluxNetworkHelper.getFluxNodePrivateKey();
   const fields = signedEnvelope.fieldsFor('rosteraccept', {
-    key: ask.key, fingerprint: ask.fingerprint, seq: ask.seq, remove: ask.remove, add: ask.add,
+    key: ask.key,
+    fingerprint: ask.fingerprint,
+    generation: ask.generation,
+    seq: ask.seq,
+    remove: ask.remove,
+    add: ask.add,
   });
   const signed = wif ? signedEnvelope.sign('rosteraccept', fields, wif) : null;
   if (!signed) {

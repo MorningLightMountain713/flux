@@ -22,10 +22,13 @@ const log = require('../../lib/log');
  * @param {string} grant.grantee grantee outpoint
  * @param {number} grant.epoch
  * @param {'held'|'oneshot'} grant.mode
- * @param {string} grant.fingerprint committee basis
+ * @param {string} grant.fingerprint committee membership basis
+ * @param {number} [grant.generation] the owner's re-roll counter the grant
+ *   was written under; orders ahead of the epoch, so a re-rolled world's
+ *   record replaces the retired one whatever epoch the old world reached
  * @param {number} [grant.ttlMs] held term duration; drives the record's expiry
  * @param {{chain: object[]}} [grant.roster] the committee's quorum-signed
- *   seat changes atop the fingerprint's base — self-verifying, so the record
+ *   seat changes atop the generation's base — self-verifying, so the record
  *   is proof enough for any reader
  * @returns {Promise<boolean>} whether the record went out
  */
@@ -47,6 +50,7 @@ async function publishMasterlease(grant) {
       grantee: grant.grantee,
       epoch: grant.epoch,
       mode: grant.mode,
+      generation: grant.generation ?? 0,
       fingerprint: grant.fingerprint,
       ...(grant.mode === 'held' ? { ttlMs: grant.ttlMs } : {}),
       ...(grant.roster ? { roster: grant.roster } : {}),

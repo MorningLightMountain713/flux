@@ -110,9 +110,10 @@ function verify(type, fields, signature, pubkey) {
  *
  * `candidate` is the asker's collateral outpoint (`txhash:outidx`) in every
  * type: the proposer in prepare/probe, the grantee in accept/renew/release.
- * `fingerprint` is the membership fingerprint the ask's committee was
- * computed against — every type carries it, because every type is answered
- * by a committee and a committee without an agreed basis is not one set.
+ * `generation` and `fingerprint` are the committee basis pair — which deal
+ * of the seats, over which membership. Every type carries both, because
+ * every type is answered by a committee and a committee without an agreed
+ * basis is not one set.
  *
  * @param {string} type one of TYPES
  * @param {object} ask parsed ask fields
@@ -122,25 +123,25 @@ function fieldsFor(type, ask) {
   switch (type) {
     case 'probe':
     case 'prepare':
-      return [ask.key, ask.mode, ask.epoch, ask.candidate, ask.fingerprint, ask.at];
+      return [ask.key, ask.mode, ask.epoch, ask.candidate, ask.generation, ask.fingerprint, ask.at];
     case 'accept':
-      return [ask.key, ask.mode, ask.epoch, ask.candidate, ask.ttlMs ?? 0, ask.fingerprint, ask.at];
+      return [ask.key, ask.mode, ask.epoch, ask.candidate, ask.ttlMs ?? 0, ask.generation, ask.fingerprint, ask.at];
     case 'renew':
-      return [ask.key, ask.epoch, ask.candidate, ask.ttlMs, ask.fingerprint, ask.at];
+      return [ask.key, ask.epoch, ask.candidate, ask.ttlMs, ask.generation, ask.fingerprint, ask.at];
     case 'release':
-      return [ask.key, ask.epoch, ask.candidate, ask.fingerprint, ask.at];
+      return [ask.key, ask.epoch, ask.candidate, ask.generation, ask.fingerprint, ask.at];
     case 'roster':
       // the proposal: candidate is the proposing grantee; seq pins where in
       // the chain this entry lands. The carried chain rides OUTSIDE these
       // fields — it is self-verifying on its own signatures, and binding it
       // here would stop one signature serving every member.
-      return [ask.key, ask.epoch, ask.candidate, ask.remove, ask.add, ask.seq, ask.fingerprint, ask.at];
+      return [ask.key, ask.epoch, ask.candidate, ask.remove, ask.add, ask.seq, ask.generation, ask.fingerprint, ask.at];
     case 'rosteraccept':
       // the acceptance a grantor signs: no epoch and no timestamp, because
       // the entry outlives the term that proposed it (the roster belongs to
       // the COMMITTEE, not the grant) and replaying an identical entry is a
       // no-op by construction.
-      return [ask.key, ask.fingerprint, ask.seq, ask.remove, ask.add];
+      return [ask.key, ask.fingerprint, ask.generation, ask.seq, ask.remove, ask.add];
     default:
       return null;
   }

@@ -10,10 +10,11 @@ const fluxCommunicationMessagesSender = require('../../ZelBack/src/services/flux
 const masterleasePublisher = require('../../ZelBack/src/services/quorumGrant/masterleasePublisher');
 
 // The published grant record on the app-state event plane: one row per app
-// role, newer-wins on EPOCH, expiring with a held term and durable for a
-// founding. The store's writes are captured rather than executed — what is
-// asserted is the row identity, the comparator, and the expiry policy, which
-// are exactly the three ways a published record could quietly become wrong.
+// role, newer-wins on GENERATION then EPOCH, expiring with a held term and
+// durable for a founding. The store's writes are captured rather than
+// executed — what is asserted is the row identity, the comparator, and the
+// expiry policy, which are exactly the three ways a published record could
+// quietly become wrong.
 
 function baseMessage(overrides = {}) {
   return {
@@ -63,16 +64,30 @@ describe('quorumGrant masterlease', () => {
       expect(updates[0].options.upsert).to.equal(true);
     });
 
-    it('compares on epoch first, broadcast time only as the tiebreak', async () => {
+    it('compares generation ahead of epoch, broadcast time only as the full tiebreak', async () => {
       await messageStore.storeAppStateEvent('masterlease', {
-        message: baseMessage({ epoch: 7 }), envelope: null, announcer: null,
+        message: baseMessage({ epoch: 7, generation: 3 }), envelope: null, announcer: null,
       });
       const pipeline = updates[0].update;
       const condition = JSON.stringify(pipeline);
+      expect(condition).to.contain('$data.generation');
       expect(condition).to.contain('$data.epoch');
       expect(condition).to.contain('"$or"');
-      // the incoming epoch sits in the comparator, not just the payload
-      expect(JSON.stringify(pipeline[0].$set.data.$cond[0])).to.contain('7');
+      // both incoming ordinals sit in the comparator, not just the payload,
+      // and the generation branch stands alone — ahead of any epoch talk
+      const branches = pipeline[0].$set.data.$cond[0].$or;
+      expect(JSON.stringify(branches[0])).to.contain('$data.generation');
+      expect(JSON.stringify(branches[0])).to.not.contain('$data.epoch');
+      expect(JSON.stringify(branches[0])).to.contain('3');
+      expect(JSON.stringify(branches[1])).to.contain('7');
+    });
+
+    it('a record without a generation compares as generation zero, never as brand new', async () => {
+      await messageStore.storeAppStateEvent('masterlease', {
+        message: baseMessage(), envelope: null, announcer: null,
+      });
+      const condition = JSON.stringify(updates[0].update);
+      expect(condition).to.contain('"$ifNull":["$data.generation",0]');
     });
 
     it('a held record expires with its term; a founding record never does', async () => {
@@ -101,6 +116,8 @@ describe('quorumGrant masterlease', () => {
         baseMessage({ grantee: undefined }),
         baseMessage({ mode: 'held', ttlMs: undefined }),
         baseMessage({ broadcastedAt: 'yesterday' }),
+        baseMessage({ generation: -1 }),
+        baseMessage({ generation: 1.5 }),
       ];
       await Promise.all(garbage.map(async (message) => messageStore.storeAppStateEvent('masterlease', {
         message, envelope: null, announcer: null,
@@ -174,6 +191,7 @@ describe('quorumGrant masterlease', () => {
       expect(broadcast.appName).to.equal('myapp');
       expect(broadcast.role).to.equal('master');
       expect(broadcast.epoch).to.equal(4);
+      expect(broadcast.generation).to.equal(0);
       expect(broadcast.ttlMs).to.equal(150_000);
       expect(broadcast.ip).to.equal('203.0.113.5:16127');
 
@@ -192,13 +210,14 @@ describe('quorumGrant masterlease', () => {
       expect(broadcast.ttlMs).to.equal(undefined);
     });
 
-    it('the roster chain rides the broadcast when the holder carries one', async () => {
+    it('the roster chain and the generation ride the broadcast when the holder carries them', async () => {
       const roster = { chain: [{ seq: 1, remove: 'x', add: 'y', acceptances: [] }] };
       await masterleasePublisher.publishMasterlease({
-        key: 'myapp/master', grantee: 'a:0', epoch: 4, mode: 'held', ttlMs: 150_000, fingerprint: 'fp', roster,
+        key: 'myapp/master', grantee: 'a:0', epoch: 4, mode: 'held', ttlMs: 150_000, fingerprint: 'fp', generation: 5, roster,
       });
       const broadcast = fluxCommunicationMessagesSender.broadcastMessageToAll.firstCall.args[0];
       expect(broadcast.roster).to.equal(roster);
+      expect(broadcast.generation).to.equal(5);
 
       await masterleasePublisher.publishMasterlease({
         key: 'myapp/master', grantee: 'a:0', epoch: 4, mode: 'held', ttlMs: 150_000, fingerprint: 'fp',
