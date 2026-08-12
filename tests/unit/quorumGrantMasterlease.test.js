@@ -108,6 +108,31 @@ describe('quorumGrant masterlease', () => {
       expect(updates).to.have.length(0);
     });
 
+    it('a roster rides the record when it holds its shape, and sinks it when it does not', async () => {
+      const entry = {
+        seq: 1,
+        remove: `${'b'.repeat(64)}:0`,
+        add: `${'c'.repeat(64)}:0`,
+        at: 1_750_000_000_000,
+        acceptances: [{ grantor: `${'d'.repeat(64)}:0`, signature: 'c2ln' }],
+      };
+      await messageStore.storeAppStateEvent('masterlease', {
+        message: baseMessage({ roster: { chain: [entry] } }), envelope: null, announcer: null,
+      });
+      expect(updates).to.have.length(1);
+
+      const malformed = [
+        baseMessage({ roster: null }),
+        baseMessage({ roster: {} }),
+        baseMessage({ roster: { chain: 'not-a-chain' } }),
+        baseMessage({ roster: { chain: [{ seq: 1 }] } }),
+      ];
+      await Promise.all(malformed.map(async (message) => messageStore.storeAppStateEvent('masterlease', {
+        message, envelope: null, announcer: null,
+      })));
+      expect(updates).to.have.length(1);
+    });
+
     it('reads back by app and role', async () => {
       const row = { type: 'masterlease', data: baseMessage() };
       dbHelper.databaseConnection.returns({
@@ -165,6 +190,21 @@ describe('quorumGrant masterlease', () => {
       const broadcast = fluxCommunicationMessagesSender.broadcastMessageToAll.firstCall.args[0];
       expect(broadcast.role).to.equal('founder');
       expect(broadcast.ttlMs).to.equal(undefined);
+    });
+
+    it('the roster chain rides the broadcast when the holder carries one', async () => {
+      const roster = { chain: [{ seq: 1, remove: 'x', add: 'y', acceptances: [] }] };
+      await masterleasePublisher.publishMasterlease({
+        key: 'myapp/master', grantee: 'a:0', epoch: 4, mode: 'held', ttlMs: 150_000, fingerprint: 'fp', roster,
+      });
+      const broadcast = fluxCommunicationMessagesSender.broadcastMessageToAll.firstCall.args[0];
+      expect(broadcast.roster).to.equal(roster);
+
+      await masterleasePublisher.publishMasterlease({
+        key: 'myapp/master', grantee: 'a:0', epoch: 4, mode: 'held', ttlMs: 150_000, fingerprint: 'fp',
+      });
+      const bare = fluxCommunicationMessagesSender.broadcastMessageToAll.secondCall.args[0];
+      expect(bare.roster).to.equal(undefined);
     });
 
     it('does not publish what it cannot address', async () => {
