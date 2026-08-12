@@ -8,7 +8,7 @@ import { queueAppTx, advanceBlocks } from '../framework/daemon-control.js';
 import { waitFor, waitForAppInstalled } from '../framework/wait.js';
 import { authenticate } from '../auth.js';
 import { appOwnerKey } from '../framework/keys.js';
-import { execInContainer } from '../framework/container.js';
+import { execInContainer, requireAppContainerName } from '../framework/container.js';
 import { unitState } from '../framework/systemd-control.js';
 import { pushBusybox } from '../framework/registry-helper.js';
 import { REGISTRY_REPO_HOST, getSubnetConfig } from '../framework/subnet-config.js';
@@ -48,17 +48,10 @@ describe('mesh overlay across a real systemd fleet', function () {
   // component identifier — flux{component}_{identity} — so the app NAME never
   // appears in docker ps; the identity comes from the mesh status this suite
   // already reads.
+  // Container names are built from the app's minted identity, so they are RESOLVED
+  // through the labels FluxOS stamps rather than reconstructed here.
   async function appContainerName(clientIndex) {
-    const status = await meshStatus(clientIndex);
-    const identity = status?.data?.identity;
-    expect(identity, `mesh identity on node ${clientIndex}`).to.be.a('string');
-    const containerName = `fluxweb_${identity}`;
-    const { stdout } = await execInContainer(
-      env.clients[clientIndex].container,
-      `docker ps --format '{{.Names}}' --filter name=${containerName}`,
-    );
-    expect(stdout.trim(), `container ${containerName} on node ${clientIndex}`).to.include(containerName);
-    return containerName;
+    return requireAppContainerName(env.clients[clientIndex].container, name, 'web');
   }
 
   async function inApp(clientIndex, command) {

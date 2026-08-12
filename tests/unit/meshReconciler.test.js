@@ -154,7 +154,7 @@ describe('meshReconciler', () => {
       },
       '../fluxNetworkHelper': { getDefaultRouteInterface: (...args) => stubs.getDefaultRouteInterface(...args) },
       '../appMonitoring/reconcilerQueue': {
-        enqueue: sinon.stub().callsFake((identifier) => stubs.enqueued.push(identifier)),
+        enqueueComponent: sinon.stub().callsFake((identifier) => stubs.enqueued.push(identifier)),
       },
       // The slot store/gossip reads are stubbed; the pure arbitration runs real.
       './meshSlots': {

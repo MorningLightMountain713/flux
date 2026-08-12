@@ -179,7 +179,7 @@ async function restartContainersWithProperMounts(containers) {
       // change — a deliberately-stopped container must stay stopped.
       // eslint-disable-next-line no-await-in-loop
       await appsRuntimeState.requestRestart(container.identifier);
-      reconcilerQueue.enqueue(container.identifier);
+      reconcilerQueue.enqueueComponent(container.identifier);
       results.restarted.push(container.name);
       log.info(`containerMountRecovery - Successfully restarted ${container.name}`);
 

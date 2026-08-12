@@ -544,6 +544,13 @@ describe('fluxNetworkMonitor tests', () => {
     let deterministicFluxnodeListResponse;
 
     beforeEach(() => {
+      // EVERY path through this check re-arms itself on a timer (60s / 120s / 240s).
+      // Left on the real clock those outlive the test, fire once sinon.restore() has
+      // put the real collaborators back, and dial the benchmark RPC for real - which
+      // the no-real-network guard reports against whichever unrelated test happened to
+      // be running minutes later. Faking the clock for the whole block is what stops a
+      // re-arm ever escaping; sinon.restore() in afterEach takes it away again.
+      sinon.useFakeTimers();
       fluxNetworkHelper.setStoredFluxBenchAllowed('6.2.0');
       fluxNetworkHelper.setLocalSocketAddress('129.3.3.3');
       sinon.stub(daemonServiceWalletRpcs, 'createConfirmationTransaction').returns(true);
@@ -590,10 +597,6 @@ describe('fluxNetworkMonitor tests', () => {
     });
 
     it('should skip the check entirely when the daemon is unreachable', async () => {
-      // Every early return here re-arms a 60s retry. Left on the real timer it
-      // outlives the test, fires against unstubbed collaborators and dials the
-      // benchmark RPC for real; sinon.restore() in afterEach takes the clock with it.
-      sinon.useFakeTimers();
       isDaemonSyncedStub.returns({ data: { synced: true } });
       isDaemonReachableStub.returns(false);
 

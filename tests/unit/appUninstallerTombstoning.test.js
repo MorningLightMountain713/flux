@@ -114,7 +114,7 @@ describe('appUninstaller tombstoning teardown', () => {
         runningAppsCache: new Map(), receiveOnlySyncthingAppsCache: new Map(), abortInstall: sinon.stub().returns(false),
       },
       fluxEventBus: { publish: sinon.stub() },
-      reconcilerQueue: { enqueue: sinon.stub() },
+      reconcilerQueue: { enqueueComponent: sinon.stub() },
     };
 
     appUninstaller = proxyquire('../../ZelBack/src/services/appLifecycle/appUninstaller', {
@@ -248,7 +248,7 @@ describe('appUninstaller tombstoning teardown', () => {
       expect(stubs.pendingTeardownStore.clearTeardown.called, 'kept owed for boot recovery').to.be.false;
       // and it hands the still-owed teardown to the reconciler to converge (retry with
       // backoff), rather than abandoning it until the next boot.
-      expect(stubs.reconcilerQueue.enqueue.calledWith('web_app'), 'enqueued the survivor for the reconciler to re-drive').to.be.true;
+      expect(stubs.reconcilerQueue.enqueueComponent.calledWith('web_app'), 'enqueued the survivor for the reconciler to re-drive').to.be.true;
     });
   });
 
@@ -315,7 +315,7 @@ describe('appUninstaller tombstoning teardown', () => {
       expect(stubs.appsRuntimeState.setCondemned.calledWith('web_app', true)).to.be.true;
       // Boot recovery no longer drives the teardown directly (a partial would be abandoned
       // until the NEXT boot); it enqueues the components so the reconciler converges them.
-      expect(stubs.reconcilerQueue.enqueue.calledWith('web_app'), 'enqueued for the reconciler to drive').to.be.true;
+      expect(stubs.reconcilerQueue.enqueueComponent.calledWith('web_app'), 'enqueued for the reconciler to drive').to.be.true;
       await new Promise((r) => { setImmediate(r); });
       expect(stubs.dockerService.appDockerStop.called, 'no direct boot-time teardown drive').to.be.false;
     });

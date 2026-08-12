@@ -176,10 +176,10 @@ describe('appController tests', () => {
   });
 
   describe('appStart tests', () => {
-    let enqueue;
+    let enqueueComponent;
     let setOperatorStopped;
     beforeEach(() => {
-      enqueue = sinon.stub(reconcilerQueue, 'enqueue');
+      enqueueComponent = sinon.stub(reconcilerQueue, 'enqueueComponent');
       setOperatorStopped = sinon.stub(appsRuntimeState, 'setOperatorStopped').resolves();
     });
 
@@ -201,8 +201,8 @@ describe('appController tests', () => {
       const result = res.json.firstCall.args[0];
       expect(result.status).to.equal('success');
       sinon.assert.calledOnceWithExactly(setOperatorStopped, 'TestApp', false);
-      sinon.assert.calledOnceWithExactly(enqueue, 'TestApp');
-      sinon.assert.callOrder(setOperatorStopped, enqueue);
+      sinon.assert.calledOnceWithExactly(enqueueComponent, 'TestApp');
+      sinon.assert.callOrder(setOperatorStopped, enqueueComponent);
     });
 
     it('should return error if no app name provided', async () => {
@@ -260,7 +260,7 @@ describe('appController tests', () => {
       const result = res.json.firstCall.args[0];
       expect(result.status).to.equal('success');
       sinon.assert.calledOnceWithExactly(setOperatorStopped, 'Component_a1b2c3d4e5f6', false);
-      sinon.assert.calledOnceWithExactly(enqueue, 'Component_a1b2c3d4e5f6');
+      sinon.assert.calledOnceWithExactly(enqueueComponent, 'Component_a1b2c3d4e5f6');
     });
 
     it('refuses a component this node does not hold instead of reporting success', async () => {
@@ -276,7 +276,7 @@ describe('appController tests', () => {
       await appController.appStart(req, res);
 
       expect(res.json.firstCall.args[0].status).to.equal('error');
-      sinon.assert.notCalled(enqueue);
+      sinon.assert.notCalled(enqueueComponent);
       sinon.assert.notCalled(setOperatorStopped);
     });
 
@@ -295,8 +295,8 @@ describe('appController tests', () => {
 
       const result = res.json.firstCall.args[0];
       expect(result.status).to.equal('success');
-      sinon.assert.calledWithExactly(enqueue, 'Component1_ComposedApp');
-      sinon.assert.calledWithExactly(enqueue, 'Component2_ComposedApp');
+      sinon.assert.calledWithExactly(enqueueComponent, 'Component1_ComposedApp');
+      sinon.assert.calledWithExactly(enqueueComponent, 'Component2_ComposedApp');
       sinon.assert.calledWithExactly(setOperatorStopped, 'Component1_ComposedApp', false);
       sinon.assert.calledWithExactly(setOperatorStopped, 'Component2_ComposedApp', false);
     });
@@ -324,10 +324,10 @@ describe('appController tests', () => {
   });
 
   describe('appStop tests', () => {
-    let enqueue;
+    let enqueueComponent;
     let setOperatorStopped;
     beforeEach(() => {
-      enqueue = sinon.stub(reconcilerQueue, 'enqueue');
+      enqueueComponent = sinon.stub(reconcilerQueue, 'enqueueComponent');
       setOperatorStopped = sinon.stub(appsRuntimeState, 'setOperatorStopped').resolves();
     });
 
@@ -346,7 +346,7 @@ describe('appController tests', () => {
       const result = res.json.firstCall.args[0];
       expect(result.status).to.equal('success');
       sinon.assert.calledOnceWithExactly(setOperatorStopped, 'TestApp', true);
-      sinon.assert.calledOnceWithExactly(enqueue, 'TestApp');
+      sinon.assert.calledOnceWithExactly(enqueueComponent, 'TestApp');
     });
 
     it('locks and enqueues every component for a version 4+ app', async () => {
@@ -366,7 +366,7 @@ describe('appController tests', () => {
       expect(result.status).to.equal('success');
       sinon.assert.calledWithExactly(setOperatorStopped, 'Component1_ComposedApp', true);
       sinon.assert.calledWithExactly(setOperatorStopped, 'Component2_ComposedApp', true);
-      sinon.assert.calledTwice(enqueue);
+      sinon.assert.calledTwice(enqueueComponent);
     });
 
     it('locks the identifier the deployment states, not the request string', async () => {
@@ -386,7 +386,7 @@ describe('appController tests', () => {
       // the operator lock is durable and nothing ever clears it, so locking a key
       // no component answers to is a lock that can never be lifted
       sinon.assert.calledOnceWithExactly(setOperatorStopped, 'Component_a1b2c3d4e5f6', true);
-      sinon.assert.calledOnceWithExactly(enqueue, 'Component_a1b2c3d4e5f6');
+      sinon.assert.calledOnceWithExactly(enqueueComponent, 'Component_a1b2c3d4e5f6');
     });
 
     it('records the operator lock BEFORE enqueueing (crash-safe ordering)', async () => {
@@ -404,16 +404,16 @@ describe('appController tests', () => {
       await appController.appStop(req, res);
 
       sinon.assert.calledOnceWithExactly(setOperatorStopped, 'Component_TestApp', true);
-      sinon.assert.callOrder(setOperatorStopped, enqueue);
+      sinon.assert.callOrder(setOperatorStopped, enqueueComponent);
     });
   });
 
   describe('appRestart tests', () => {
-    let enqueue;
+    let enqueueComponent;
     let setOperatorStopped;
     let requestRestart;
     beforeEach(() => {
-      enqueue = sinon.stub(reconcilerQueue, 'enqueue');
+      enqueueComponent = sinon.stub(reconcilerQueue, 'enqueueComponent');
       setOperatorStopped = sinon.stub(appsRuntimeState, 'setOperatorStopped').resolves();
       requestRestart = sinon.stub(appsRuntimeState, 'requestRestart').resolves();
     });
@@ -434,8 +434,8 @@ describe('appController tests', () => {
       expect(result.status).to.equal('success');
       sinon.assert.calledOnceWithExactly(setOperatorStopped, 'TestApp', false);
       sinon.assert.calledOnceWithExactly(requestRestart, 'TestApp');
-      sinon.assert.calledOnceWithExactly(enqueue, 'TestApp');
-      sinon.assert.callOrder(setOperatorStopped, enqueue);
+      sinon.assert.calledOnceWithExactly(enqueueComponent, 'TestApp');
+      sinon.assert.callOrder(setOperatorStopped, enqueueComponent);
     });
 
     it('restarts every component of a composed app through the reconciler', async () => {
@@ -454,7 +454,7 @@ describe('appController tests', () => {
       expect(result.status).to.equal('success');
       sinon.assert.calledWithExactly(requestRestart, 'Component1_ComposedApp');
       sinon.assert.calledWithExactly(requestRestart, 'Component2_ComposedApp');
-      sinon.assert.calledTwice(enqueue);
+      sinon.assert.calledTwice(enqueueComponent);
     });
 
     it('a whole-app restart of a co-located app covers every local identity', async () => {
@@ -543,7 +543,7 @@ describe('appController tests', () => {
 
       sinon.assert.calledOnceWithExactly(setOperatorStopped, 'Component1_a1b2c3d4e5f6', false);
       sinon.assert.calledOnceWithExactly(requestRestart, 'Component1_a1b2c3d4e5f6');
-      sinon.assert.calledOnceWithExactly(enqueue, 'Component1_a1b2c3d4e5f6');
+      sinon.assert.calledOnceWithExactly(enqueueComponent, 'Component1_a1b2c3d4e5f6');
     });
 
     // An activeStandby component restart now routes through the reconciler like any
@@ -563,15 +563,15 @@ describe('appController tests', () => {
 
       sinon.assert.calledOnceWithExactly(setOperatorStopped, 'Gcomp_ComposedApp', false);
       sinon.assert.calledOnceWithExactly(requestRestart, 'Gcomp_ComposedApp');
-      sinon.assert.calledOnceWithExactly(enqueue, 'Gcomp_ComposedApp');
+      sinon.assert.calledOnceWithExactly(enqueueComponent, 'Gcomp_ComposedApp');
     });
   });
 
   describe('appKill tests', () => {
-    let enqueue;
+    let enqueueComponent;
     let setOperatorStopped;
     beforeEach(() => {
-      enqueue = sinon.stub(reconcilerQueue, 'enqueue');
+      enqueueComponent = sinon.stub(reconcilerQueue, 'enqueueComponent');
       setOperatorStopped = sinon.stub(appsRuntimeState, 'setOperatorStopped').resolves();
     });
 
@@ -588,8 +588,8 @@ describe('appController tests', () => {
       await appController.appKill(req, res);
 
       sinon.assert.calledOnceWithExactly(setOperatorStopped, 'Component_TestApp', true, { force: true });
-      sinon.assert.calledOnceWithExactly(enqueue, 'Component_TestApp');
-      sinon.assert.callOrder(setOperatorStopped, enqueue);
+      sinon.assert.calledOnceWithExactly(enqueueComponent, 'Component_TestApp');
+      sinon.assert.callOrder(setOperatorStopped, enqueueComponent);
     });
 
     it('should kill app and return success message', async () => {
@@ -607,7 +607,7 @@ describe('appController tests', () => {
       const result = res.json.firstCall.args[0];
       expect(result.status).to.equal('success');
       sinon.assert.calledOnceWithExactly(setOperatorStopped, 'TestApp', true, { force: true });
-      sinon.assert.calledOnceWithExactly(enqueue, 'TestApp');
+      sinon.assert.calledOnceWithExactly(enqueueComponent, 'TestApp');
     });
 
     it('force-stops every component for a version 4+ app', async () => {
@@ -627,7 +627,7 @@ describe('appController tests', () => {
       expect(result.status).to.equal('success');
       sinon.assert.calledWithExactly(setOperatorStopped, 'Component1_ComposedApp', true, { force: true });
       sinon.assert.calledWithExactly(setOperatorStopped, 'Component2_ComposedApp', true, { force: true });
-      sinon.assert.calledTwice(enqueue);
+      sinon.assert.calledTwice(enqueueComponent);
     });
 
     it('should return error if app not found', async () => {
@@ -647,7 +647,7 @@ describe('appController tests', () => {
       const result = res.json.firstCall.args[0];
       expect(result.status).to.equal('error');
       expect(result.data.message).to.include('Application not found');
-      sinon.assert.notCalled(enqueue);
+      sinon.assert.notCalled(enqueueComponent);
     });
   });
 

@@ -101,6 +101,17 @@ export async function unblockPeerAccess(container, peerIps, apiPort) {
   }
 }
 
+// FluxOS stamps every container it manages with the app it belongs to, the component
+// it is, and (for a named placement) its replica. Those labels are the identity of
+// record — the same ones the shutdown daemon groups by — and they are the ONLY way a
+// suite can find a container from an app name: container names are built from the
+// app's minted identity (sha256(name‖txid) truncated), which carries no trace of the
+// name and cannot be derived from anything a suite holds.
+const LABEL_APP = 'io.runonflux.app';
+const LABEL_COMPONENT = 'io.runonflux.component';
+const LABEL_REPLICA = 'io.runonflux.replica';
+const LABEL_IDENTIFIER = 'io.runonflux.identifier';
+
 // THE READ CAN FAIL, AND SAYS SO. `2>/dev/null || echo ""` gave a broken docker
 // exec the same answer as a node with no containers on it - an empty list - so
 // every caller read "the app is not running" and every wait built on one spent
@@ -110,8 +121,11 @@ export async function unblockPeerAccess(container, peerIps, apiPort) {
 // never took.
 export async function listAppContainers(container, { all = false } = {}) {
   const flag = all ? ' -a' : '';
+  const fields = ['{{.Names}}', '{{.Status}}', '{{.Image}}',
+    `{{.Label "${LABEL_APP}"}}`, `{{.Label "${LABEL_COMPONENT}"}}`,
+    `{{.Label "${LABEL_REPLICA}"}}`, `{{.Label "${LABEL_IDENTIFIER}"}}`].join('\t');
   const { stdout, stderr, exitCode } = await execInContainer(container,
-    `docker ps${flag} --format "{{.Names}}\t{{.Status}}\t{{.Image}}"`,
+    `docker ps${flag} --format '${fields}'`,
   );
   if (exitCode !== 0) {
     throw new Error(`docker ps in the node container failed (exit ${exitCode}): ${(stderr || stdout || '').trim()}`);
@@ -119,35 +133,37 @@ export async function listAppContainers(container, { all = false } = {}) {
   return stdout.trim().split('\n')
     .filter((line) => line && !line.includes('NAMES'))
     .map((line) => {
-      const [name, status, image] = line.split('\t');
-      return { name, status, image };
+      const [name, status, image, app, component, replica, identifier] = line.split('\t');
+      return {
+        name, status, image, app: app || null, component: component || null,
+        replica: replica || null, identifier: identifier || null,
+      };
     })
     .filter((c) => c.name);
 }
 
-// A container name encodes its identity as flux<comp>_<app>[_<replica>]. A bare
-// app name matches every identity of that app; naming a replica narrows to
-// exactly one, which is what co-located siblings need — they share the app
-// segment and differ only in the trailing one.
-function matchesAppIdentity(name, appName, replica) {
-  if (!name.includes(appName)) return false;
-  return replica == null || name.endsWith(`_${appName}_${replica}`);
+// A bare app name matches every identity of that app; naming a replica narrows to
+// exactly one, which is what co-located siblings need — they share the app label and
+// differ only in the replica one.
+function isAppContainer(c, appName, replica) {
+  if (c.app !== appName) return false;
+  return replica == null || c.replica === replica;
 }
 
 export async function isAppContainerRunning(container, appName, { replica = null } = {}) {
   const containers = await listAppContainers(container);
-  return containers.some((c) => matchesAppIdentity(c.name, appName, replica) && c.status?.startsWith('Up'));
+  return containers.some((c) => isAppContainer(c, appName, replica) && c.status?.startsWith('Up'));
 }
 
 // Every container belonging to the app on this node, across identities — the
 // co-located count, which a single-container lookup cannot express.
 export async function appContainersFor(container, appName, { all = false } = {}) {
   const containers = await listAppContainers(container, { all });
-  return containers.filter((c) => matchesAppIdentity(c.name, appName, null));
+  return containers.filter((c) => isAppContainer(c, appName, null));
 }
 
 export async function killAppContainer(container, appName, componentName, replica = null) {
-  const name = appContainerName(appName, componentName, replica);
+  const name = await requireAppContainerName(container, appName, componentName, replica);
   return execInContainer(container, `docker rm -f ${name}`);
 }
 
@@ -161,43 +177,62 @@ export async function removeAppImage(container, imageRef) {
 
 export async function getAppContainerStatus(container, appName, { all = false, replica = null } = {}) {
   const containers = await listAppContainers(container, { all });
-  return containers.find((c) => matchesAppIdentity(c.name, appName, replica)) ?? null;
+  return containers.find((c) => isAppContainer(c, appName, replica)) ?? null;
 }
 
-function appContainerName(appName, componentName, replica = null) {
-  const base = `flux${componentName ?? appName}_${appName}`;
-  return replica != null ? `${base}_${replica}` : base;
+// The REAL docker name of one component's container, resolved through the labels.
+// It cannot be constructed: `flux<component>_<app>` was only ever right while an app's
+// identity was borrowed from its name. Returns null when no such container exists.
+async function appContainerName(container, appName, componentName, replica = null) {
+  const containers = await listAppContainers(container, { all: true });
+  const match = containers.find((c) => isAppContainer(c, appName, replica)
+    && (componentName == null || c.component === componentName));
+  return match ? match.name : null;
+}
+
+// Same, for the helpers that ACT on a container (kill, stop, exec into). Acting on an
+// app that is not there is a broken assertion, not a no-op to swallow: say so.
+export async function requireAppContainerName(container, appName, componentName, replica = null) {
+  const name = await appContainerName(container, appName, componentName, replica);
+  if (!name) {
+    throw new Error(`no container on this node for app ${appName}`
+      + `${componentName ? ` component ${componentName}` : ''}${replica ? ` replica ${replica}` : ''}`);
+  }
+  return name;
+}
+
+// The identifiers this app's containers are named from, read off the containers
+// themselves. Physical artifacts — the appdata directory and its loop mount — are named
+// `flux<identifier>`, which since minting contains no trace of the app's name. A
+// teardown assertion therefore has to capture these WHILE the app is alive and check
+// they are gone afterwards; nothing on a torn-down node can still say what to look for.
+export async function appComponentIdentifiers(container, appName) {
+  const containers = await listAppContainers(container, { all: true });
+  return containers.filter((c) => isAppContainer(c, appName, null))
+    .map((c) => c.identifier).filter(Boolean);
 }
 
 // graceful stop -> the container exits 0 and stays present (not removed). Use to
 // exercise restart-on-clean-exit, as opposed to killAppContainer (docker rm -f,
 // which removes it -> the missing-container/recreate path).
 export async function stopAppContainer(container, appName, componentName) {
-  return execInContainer(container, `docker stop ${appContainerName(appName, componentName)}`);
+  const name = await requireAppContainerName(container, appName, componentName);
+  return execInContainer(container, `docker stop ${name}`);
 }
 
 // SIGKILL -> the container exits non-zero (137) and stays present. Use to
 // exercise crash recovery / restart-on-failure.
 export async function crashAppContainer(container, appName, componentName) {
-  return execInContainer(container, `docker kill ${appContainerName(appName, componentName)}`);
-}
-
-// The container's docker id, which is what distinguishes a container that was
-// REPLACED from one that was merely restarted: a redeploy removes and recreates,
-// so the id changes, while a restart keeps it. Status and image name are equal
-// either way, so neither can tell the two apart. null if the container is absent.
-export async function getAppContainerId(container, appName, componentName) {
-  const { stdout } = await execInContainer(container,
-    `docker inspect --format '{{.Id}}' ${appContainerName(appName, componentName)} 2>/dev/null || echo ""`,
-  );
-  const id = stdout.trim();
-  return id === '' ? null : id;
+  const name = await requireAppContainerName(container, appName, componentName);
+  return execInContainer(container, `docker kill ${name}`);
 }
 
 // the actual exit code the reconciler reads from Docker (null if container absent)
 export async function getAppContainerExitCode(container, appName, componentName) {
+  const name = await appContainerName(container, appName, componentName);
+  if (!name) return null;
   const { stdout } = await execInContainer(container,
-    `docker inspect --format '{{.State.ExitCode}}' ${appContainerName(appName, componentName)} 2>/dev/null || echo ""`,
+    `docker inspect --format '{{.State.ExitCode}}' ${name} 2>/dev/null || echo ""`,
   );
   const v = stdout.trim();
   return v === '' ? null : Number(v);
@@ -328,13 +363,15 @@ export async function getAppNetwork(container, appName) {
 // endpoint state the reconciler's network-detach heal exists for.
 
 export async function disconnectAppNetwork(container, appName, componentName) {
+  const name = await requireAppContainerName(container, appName, componentName);
   return execInContainer(container,
-    `docker network disconnect ${fluxAppNetworkName(appName)} ${appContainerName(appName, componentName)}`);
+    `docker network disconnect ${fluxAppNetworkName(appName)} ${name}`);
 }
 
 export async function connectAppNetwork(container, appName, componentName) {
+  const name = await requireAppContainerName(container, appName, componentName);
   return execInContainer(container,
-    `docker network connect ${fluxAppNetworkName(appName)} ${appContainerName(appName, componentName)}`);
+    `docker network connect ${fluxAppNetworkName(appName)} ${name}`);
 }
 
 // The subnet of the app's docker network - capture BEFORE pruning it, so a
@@ -362,39 +399,75 @@ export async function createAppNetworkRaw(container, appName, subnet) {
 
 // Docker's container ID: survives nothing - a recreate mints a new one - so ID
 // equality across a window proves the container was never touched.
+// The container's docker id, which is what distinguishes a container that was
+// REPLACED from one that was merely restarted: a redeploy removes and recreates,
+// so the id changes, while a restart keeps it. Status and image name are equal
+// either way, so neither can tell the two apart. null if the container is absent.
+export async function getAppContainerId(container, appName, componentName) {
+  const name = await appContainerName(container, appName, componentName);
+  if (!name) return null;
+  const { stdout } = await execInContainer(container,
+    `docker inspect --format '{{.Id}}' ${name} 2>/dev/null || echo ""`);
+  return stdout.trim() || null;
+}
 
 // Whether the container holds an endpoint (with an IP) on its OWN app network -
 // the same fact dockerService.classifyContainerNetworkAttachment reads.
 export async function getAppContainerAttachment(container, appName, componentName) {
   const net = fluxAppNetworkName(appName);
+  const name = await appContainerName(container, appName, componentName);
+  if (!name) return { attached: false, ip: null };
   const { stdout } = await execInContainer(container,
-    `docker inspect --format '{{with index .NetworkSettings.Networks "${net}"}}{{.IPAddress}}{{end}}' ${appContainerName(appName, componentName)} 2>/dev/null || echo ""`);
+    `docker inspect --format '{{with index .NetworkSettings.Networks "${net}"}}{{.IPAddress}}{{end}}' ${name} 2>/dev/null || echo ""`);
   const ip = stdout.trim();
   return { attached: !!ip, ip: ip || null };
 }
 
 // The node's flux appdata root (harness FLUX_APPS_FOLDER). Per-component appdata lives at
-// <root>/flux<component>_<app>, loop-mounted then umount+rm -rf'd by the teardown.
+// <root>/flux<identifier>, loop-mounted then umount+rm -rf'd by the teardown.
 const APPDATA_ROOT = '/mnt/appdata/flux-apps';
 
-// Still-present appdata artifacts for an app: live loop mounts and/or leftover directories
-// under the appdata root carrying the app name. Both empty => the volume is fully torn
-// down (unmounted AND removed).
-export async function getAppVolumeArtifacts(container, appName) {
-  const { stdout: mounts } = await execInContainer(container,
-    `mount 2>/dev/null | grep -F '${APPDATA_ROOT}/' | grep -F '${appName}' || true`);
-  const { stdout: dirs } = await execInContainer(container,
-    `ls -1 ${APPDATA_ROOT} 2>/dev/null | grep -F '${appName}' || true`);
-  const lines = (s) => s.trim().split('\n').map((x) => x.trim()).filter(Boolean);
-  return { mounts: lines(mounts), dirs: lines(dirs) };
+// Still-present appdata artifacts for an app: live loop mounts and/or leftover
+// directories under the appdata root. Both empty => the volume is fully torn down
+// (unmounted AND removed).
+//
+// Keyed on the app's component IDENTIFIERS, which the caller must have captured while
+// the app was alive (appComponentIdentifiers). The directories are named `flux<identifier>`
+// and an identifier is built from the app's minted identity, so searching for the app's
+// NAME finds nothing whether or not the teardown worked — a check that answers "all
+// clear" for a node still holding every byte.
+export async function getAppVolumeArtifacts(container, appName, { identifiers } = {}) {
+  if (!Array.isArray(identifiers)) {
+    throw new Error(`getAppVolumeArtifacts(${appName}) needs the app's component identifiers, `
+      + 'captured with appComponentIdentifiers() while the app was still installed: appdata '
+      + 'directories are named from the app identity and never from its name');
+  }
+  const lines = (out) => out.trim().split('\n').map((x) => x.trim()).filter(Boolean);
+  const mounts = [];
+  const dirs = [];
+  // eslint-disable-next-line no-restricted-syntax
+  for (const identifier of identifiers) {
+    // eslint-disable-next-line no-await-in-loop
+    const { stdout: m } = await execInContainer(container,
+      `mount 2>/dev/null | grep -F '${APPDATA_ROOT}/' | grep -F 'flux${identifier}' || true`);
+    // eslint-disable-next-line no-await-in-loop
+    const { stdout: d } = await execInContainer(container,
+      `ls -1 ${APPDATA_ROOT} 2>/dev/null | grep -F 'flux${identifier}' || true`);
+    mounts.push(...lines(m));
+    dirs.push(...lines(d));
+  }
+  return { mounts, dirs };
 }
 
 // True when NOTHING of the app remains on this node: no container, no docker network,
 // no appdata mount or directory. The single "fully torn down" predicate.
-export async function isAppFullyGone(container, appName) {
+//
+// The identifiers are what make the volume half real, so they are required — see
+// getAppVolumeArtifacts. Capture them before the teardown that is under test.
+export async function isAppFullyGone(container, appName, { identifiers } = {}) {
   if (await getAppContainerStatus(container, appName, { all: true })) return false;
   if (await getAppNetwork(container, appName)) return false;
-  const { mounts, dirs } = await getAppVolumeArtifacts(container, appName);
+  const { mounts, dirs } = await getAppVolumeArtifacts(container, appName, { identifiers });
   return mounts.length === 0 && dirs.length === 0;
 }
 
@@ -407,7 +480,10 @@ export async function isAppFullyGone(container, appName) {
 export { appContainerName };
 
 export async function readFileInContainer(container, appName, componentName, path) {
-  const name = appContainerName(appName, componentName);
+  const name = await appContainerName(container, appName, componentName);
+  // Absent container: the same shape the docker error used to produce, so a suite
+  // asserting on exitCode still reads a failure rather than an exception.
+  if (!name) return { content: '', exitCode: 1 };
   const { stdout, exitCode } = await execInContainer(container, `docker exec ${name} /bin/busybox cat ${path}`);
   return { content: stdout, exitCode };
 }
@@ -415,7 +491,7 @@ export async function readFileInContainer(container, appName, componentName, pat
 // Owner/perms of an injected file as the node wrote them. Injected content defaults
 // to root:root 0444; data/appdata/component dirs stay 777.
 export async function statFileInContainer(container, appName, componentName, path) {
-  const name = appContainerName(appName, componentName);
+  const name = await requireAppContainerName(container, appName, componentName);
   const { stdout, exitCode } = await execInContainer(container, `docker exec ${name} /bin/busybox stat -c '%u %g %a' ${path}`);
   const [uid, gid, mode] = stdout.trim().split(/\s+/);
   return { uid, gid, mode, exitCode };
@@ -425,7 +501,8 @@ export async function statFileInContainer(container, appName, componentName, pat
 // atomic delivery changes the inode under /io.runonflux/; an in-place single-file
 // bind keeps the same inode). Returns null when absent.
 export async function inodeInContainer(container, appName, componentName, path) {
-  const name = appContainerName(appName, componentName);
+  const name = await appContainerName(container, appName, componentName);
+  if (!name) return null;
   const { stdout, exitCode } = await execInContainer(container, `docker exec ${name} /bin/busybox stat -c '%i' ${path} 2>/dev/null || echo ""`);
   const v = stdout.trim();
   return exitCode === 0 && v !== '' ? Number(v) : null;
@@ -442,7 +519,8 @@ export async function assertNodeRunsAsRoot(container) {
 }
 
 export async function getContainerImageDigest(container, appName, componentName) {
-  const containerName = `flux${componentName}_${appName}`;
+  const containerName = await appContainerName(container, appName, componentName);
+  if (!containerName) return null;
   const { stdout } = await execInContainer(container,
     `docker image inspect $(docker inspect --format '{{.Image}}' ${containerName}) --format '{{index .RepoDigests 0}}'`,
   );

@@ -58,7 +58,6 @@ const fsMock = {
 const appReconcilerMock = {
   setControllerDesired: sinon.stub(),
   requestStopAndClearData: sinon.stub(),
-  enqueue: sinon.stub(),
 };
 const appTamperingDetectionServiceMock = {
   recordEvent: sinon.stub().resolves(),
@@ -172,7 +171,8 @@ describe('syncthingFolderStateMachine tests', () => {
     appUninstallerMock.uninstallApplication.resolves();
     appReconcilerMock.setControllerDesired.reset();
     appReconcilerMock.requestStopAndClearData.reset();
-    appReconcilerMock.enqueue.reset();
+    appTamperingDetectionServiceMock.recordEvent.reset();
+    appTamperingDetectionServiceMock.recordEvent.resolves();
   });
 
   describe('isDesignatedLeader', () => {

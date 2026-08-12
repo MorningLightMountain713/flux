@@ -45,7 +45,7 @@ describe('appShutdownCoordinator', () => {
         beginAppStop: sinon.stub().resolves({ outcome: 'complete' }),
       },
       shutdownPlan: { appShutdownBudgetSeconds: sinon.stub().returns(30) },
-      appReconciler: { enqueue: sinon.stub() },
+      appReconciler: { enqueueComponent: sinon.stub() },
     };
     coordinator = proxyquire('../../ZelBack/src/services/appLifecycle/appShutdownCoordinator', {
       '../../lib/log': stubs.log,
@@ -119,7 +119,7 @@ describe('appShutdownCoordinator', () => {
     expect(first).to.equal(true);
     await flush();
     expect(stubs.globalState.clearAppShutdownPipelineState.calledWith('myapp')).to.equal(true);
-    expect(stubs.appReconciler.enqueue.calledWith('web_myapp')).to.equal(true);
+    expect(stubs.appReconciler.enqueueComponent.calledWith('web_myapp')).to.equal(true);
 
     // the re-driven pass falls back to a local stop (returns false), then re-allows the daemon
     const second = await coordinator.requestGracefulStop('web_myapp', 'condemned');
@@ -135,7 +135,7 @@ describe('appShutdownCoordinator', () => {
     // reconciles stay suppressed for the rest of the budget window and a restart
     // issued during the drain leaves the app down, broadcasting 'stopping'.
     expect(stubs.globalState.clearAppShutdownPipelineState.calledWith('myapp')).to.equal(true);
-    expect(stubs.appReconciler.enqueue.calledWith('web_myapp')).to.equal(true);
+    expect(stubs.appReconciler.enqueueComponent.calledWith('web_myapp')).to.equal(true);
   });
 
   it('rejected_pipeline_active keeps the gate - the node-wide pipeline owns the stop', async () => {
@@ -144,6 +144,6 @@ describe('appShutdownCoordinator', () => {
     expect(res).to.equal(true);
     await flush();
     expect(stubs.globalState.clearAppShutdownPipelineState.called).to.equal(false);
-    expect(stubs.appReconciler.enqueue.called).to.equal(false);
+    expect(stubs.appReconciler.enqueueComponent.called).to.equal(false);
   });
 });

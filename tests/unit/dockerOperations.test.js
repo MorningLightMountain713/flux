@@ -108,7 +108,6 @@ describe('appOperations application lifecycle tests', () => {
 
     appReconcilerStub = {
       drive: sinon.stub().resolves({ converged: true, failed: [] }),
-      enqueue: sinon.stub(),
       setControllerDesired: sinon.stub(),
     };
 

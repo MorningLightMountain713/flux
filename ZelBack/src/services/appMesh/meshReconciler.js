@@ -713,7 +713,7 @@ async function runReconcilePass() {
   }
   meshIdentityDrift.recordPassDrifts(passDrifts).forEach((identifier) => {
     log.warn(`meshReconciler - ${identifier}: identity drift confirmed across two passes; enqueueing for rebuild`);
-    reconcilerQueue.enqueue(identifier);
+    reconcilerQueue.enqueueComponent(identifier);
   });
 }
 

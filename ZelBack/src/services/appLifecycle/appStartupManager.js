@@ -227,7 +227,7 @@ async function reconcileAppsOnBoot() {
       // replicated components hold at awaitingController until a decider
       // speaks.
       log.info(`appStartupManager - App ${appName} has valid location, queued for reconcile`);
-      appReconciler.enqueue(appName);
+      appReconciler.enqueueApp(appName);
       results.appsEnqueued.push(appName);
     }
 
