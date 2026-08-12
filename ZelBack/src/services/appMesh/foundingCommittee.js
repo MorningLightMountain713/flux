@@ -4,6 +4,7 @@ const config = require('config');
 const dbHelper = require('../dbHelper');
 const networkStateService = require('../networkStateService');
 const { selectCommittee } = require('../utils/committeeSelector');
+const { globalAppStateEvents } = require('../utils/appConstants');
 const log = require('../../lib/log');
 
 // The founding committee, materialized: the photo, not the album. A founding
@@ -86,6 +87,7 @@ async function materializeFor(specDoc) {
       { _id: specDoc.name },
       {
         $setOnInsert: {
+          generation: 0,
           fingerprint,
           height: specDoc.height,
           quorum: committee.quorum,
@@ -107,6 +109,82 @@ async function materializeFor(specDoc) {
 }
 
 /**
+ * Re-materialize the committee at an owner generation record's named height —
+ * the §8.3 re-found and the §7.1 tier-2 re-roll, both landing here. Only a
+ * node whose window covers the named height may act; anyone else keeps its
+ * older record and answers honestly until sync or a fresh record helps it.
+ * The write is generation-guarded: a lower generation never overwrites a
+ * higher one, whatever order records arrive in.
+ *
+ * @param {{appName: string, generation: number, height: number}} record
+ *   an ALREADY OWNER-VERIFIED generation record (the store verifies)
+ * @returns {Promise<boolean>} whether this node now holds the generation
+ */
+async function materializeGeneration(record) {
+  try {
+    const database = db();
+    if (!database) return false;
+
+    const fingerprint = networkStateService.membershipFingerprintAt(record.height);
+    if (!fingerprint) return false;
+    const membership = networkStateService.membershipAt(fingerprint);
+    if (!membership) return false;
+
+    const committee = selectCommittee(membership, `quorumgrant|${record.appName}/founder`, {
+      size: ONESHOT_COMMITTEE_SIZE(),
+    });
+    if (committee.refusal) {
+      log.warn(`foundingCommittee - generation ${record.generation} for ${record.appName}: ${committee.refusal}`);
+      return false;
+    }
+
+    await dbHelper.updateOneInDatabase(
+      database,
+      collection(),
+      { _id: record.appName, $or: [{ generation: { $lt: record.generation } }, { generation: { $exists: false } }] },
+      {
+        $set: {
+          generation: record.generation,
+          fingerprint,
+          height: record.height,
+          quorum: committee.quorum,
+          members: committee.members.map((member) => ({
+            txhash: member.txhash,
+            outidx: String(member.outidx),
+            pubkey: member.pubkey,
+            ip: member.ip,
+          })),
+          computedAt: Date.now(),
+        },
+      },
+      { upsert: false, writeConcern: { w: 1, j: true } },
+    );
+    log.info(`foundingCommittee - ${record.appName} re-rolled to generation ${record.generation} at height ${record.height}`);
+    return true;
+  } catch (error) {
+    log.warn(`foundingCommittee - generation materialization for ${record?.appName} failed: ${error.message}`);
+    return false;
+  }
+}
+
+/**
+ * The newest owner generation record for the app's founder plane, read
+ * directly from the synced event store (never through messageStore — that
+ * module consumes this one).
+ */
+async function newestGenerationRecord(appName) {
+  const connection = dbHelper.databaseConnection();
+  if (!connection) return null;
+  const database = connection.db(config.database.appsglobal.database);
+  const row = await dbHelper.findOneInDatabase(
+    database,
+    globalAppStateEvents,
+    { type: 'grantgeneration', dedupKey: `grantgeneration:${appName}/founder` },
+  );
+  return row?.data ?? null;
+}
+
+/**
  * The committee a founding ask should use right now, and the basis it must
  * name. Three answers:
  *
@@ -124,41 +202,59 @@ async function materializeFor(specDoc) {
 async function effectiveCommittee(appName) {
   const database = db();
   if (!database) return null;
-  const record = await dbHelper.findOneInDatabase(database, collection(), { _id: appName });
+  let record = await dbHelper.findOneInDatabase(database, collection(), { _id: appName });
+
+  // An owner generation record outranks whatever is stored: try to catch up
+  // in place, and when this node's window cannot reach the named height,
+  // answer nothing rather than serve a retired generation — a stale
+  // committee served confidently is the two-bases hazard.
+  const generationRecord = await newestGenerationRecord(appName);
+  if (generationRecord && generationRecord.generation > (record?.generation ?? 0)) {
+    const caughtUp = await materializeGeneration(generationRecord);
+    if (!caughtUp) return null;
+    record = await dbHelper.findOneInDatabase(database, collection(), { _id: appName });
+  }
+
+  // No record is an honest "I never witnessed this app's photo": the answer
+  // is wait, never a freshly-minted basis — a young node deriving from ITS
+  // current list while in-window nodes hold the true photo is exactly the
+  // two-photos split. The §5 exit below re-derives only FROM the shared
+  // record, which every participant holds identically.
+  if (!record) return null;
 
   const currentFingerprint = networkStateService.membershipFingerprint();
   const current = currentFingerprint ? networkStateService.membershipAt(currentFingerprint) : null;
   if (!current) return null;
   const listedByOutpoint = new Map(current.map((node) => [`${node.txhash}:${node.outidx}`, node]));
 
-  if (record) {
-    const listedOwners = new Set();
-    record.members.forEach((member) => {
-      if (listedByOutpoint.has(outpointOf(member))) listedOwners.add(member.pubkey);
-    });
-    if (listedOwners.size >= record.quorum) {
-      return {
-        repinned: false,
-        fingerprint: record.fingerprint,
-        quorum: record.quorum,
-        members: record.members.map((member) => ({
-          ...member,
-          ip: listedByOutpoint.get(outpointOf(member))?.ip ?? null,
-        })),
-      };
-    }
+  const listedOwners = new Set();
+  record.members.forEach((member) => {
+    if (listedByOutpoint.has(outpointOf(member))) listedOwners.add(member.pubkey);
+  });
+  if (listedOwners.size >= record.quorum) {
+    return {
+      repinned: false,
+      generation: record.generation ?? 0,
+      fingerprint: record.fingerprint,
+      quorum: record.quorum,
+      members: record.members.map((member) => ({
+        ...member,
+        ip: listedByOutpoint.get(outpointOf(member))?.ip ?? null,
+      })),
+    };
   }
 
-  // No usable photo — either the recorded owners have churned below quorum
-  // (the §5 months-later exit) or this node never held the record. Both
-  // re-derive from the current list: deterministic over shared facts, and
-  // the acquire path's adoption rule does the rest.
+  // The §5 exit: the recorded owners have churned below quorum — a fact
+  // every reader computes identically from the same record and the same
+  // chain — so the committee re-derives from the current list, behind the
+  // adoption gate, with the boundary-overlap argument carrying the seam.
   const committee = selectCommittee(current, `quorumgrant|${appName}/founder`, {
     size: ONESHOT_COMMITTEE_SIZE(),
   });
   if (committee.refusal) return null;
   return {
     repinned: true,
+    generation: record.generation ?? 0,
     fingerprint: currentFingerprint,
     quorum: committee.quorum,
     members: committee.members.map((member) => ({
@@ -199,6 +295,7 @@ async function selfOnFoundingCommittee(appName, askFingerprint, collateral) {
 
 module.exports = {
   materializeFor,
+  materializeGeneration,
   effectiveCommittee,
   selfOnFoundingCommittee,
 };

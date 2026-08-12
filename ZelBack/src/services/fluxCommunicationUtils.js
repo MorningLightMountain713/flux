@@ -141,6 +141,7 @@ async function resolveBroadcastAnnouncer(payload, pubKey) {
     case 'fluxappremoved':
     case 'fluxnodesigterm':
     case 'fluxmasterlease':
+    case 'fluxgrantgeneration':
       target = payload.ip;
       break;
 
