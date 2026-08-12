@@ -30,7 +30,8 @@ function keypairFor(index) {
 }
 
 const KEY = 'rosterapp/master';
-const WALK_KEY = `quorumgrant|${KEY}`;
+const GENERATION = 0;
+const WALK_KEY = rosterOverlay.walkKeyFor(KEY, GENERATION);
 const FINGERPRINT = 'e'.repeat(64);
 const SIZE = 5;
 
@@ -55,7 +56,12 @@ function wifByOutpoint(membership) {
 
 function signAcceptance(entry, grantorNode, wif) {
   const fields = signedEnvelope.fieldsFor('rosteraccept', {
-    key: KEY, fingerprint: FINGERPRINT, seq: entry.seq, remove: entry.remove, add: entry.add,
+    key: KEY,
+    fingerprint: FINGERPRINT,
+    generation: GENERATION,
+    seq: entry.seq,
+    remove: entry.remove,
+    add: entry.add,
   });
   const signed = signedEnvelope.sign('rosteraccept', fields, wif);
   return { grantor: outpointOf(grantorNode), signature: signed.signature };
@@ -170,7 +176,7 @@ describe('quorumGrant rosterOverlay', () => {
   describe('verifyChain', () => {
     it('accepts a quorum-signed chain and returns the effective roster', () => {
       const { entry, added } = buildEntry(1, base.members, new Set());
-      const verified = rosterOverlay.verifyChain(membership, KEY, FINGERPRINT, SIZE, [entry]);
+      const verified = rosterOverlay.verifyChain(membership, KEY, FINGERPRINT, GENERATION, SIZE, [entry]);
       expect(verified).to.not.equal(null);
       expect(verified.quorum).to.equal(base.quorum);
       expect(verified.members.map(outpointOf)).to.include(outpointOf(added));
@@ -191,7 +197,7 @@ describe('quorumGrant rosterOverlay', () => {
         },
         base.members.slice(0, base.quorum),
       );
-      expect(rosterOverlay.verifyChain(membership, KEY, FINGERPRINT, SIZE, [entry])).to.equal(null);
+      expect(rosterOverlay.verifyChain(membership, KEY, FINGERPRINT, GENERATION, SIZE, [entry])).to.equal(null);
     });
 
     it('refuses below quorum, and counts one signer once however many times it signs', () => {
@@ -205,7 +211,7 @@ describe('quorumGrant rosterOverlay', () => {
       };
 
       const short = signedEntry(bare, base.members.slice(0, base.quorum - 1));
-      expect(rosterOverlay.verifyChain(membership, KEY, FINGERPRINT, SIZE, [short])).to.equal(null);
+      expect(rosterOverlay.verifyChain(membership, KEY, FINGERPRINT, GENERATION, SIZE, [short])).to.equal(null);
 
       const repeated = {
         ...bare,
@@ -213,7 +219,7 @@ describe('quorumGrant rosterOverlay', () => {
           bare, base.members[0], wifs.get(outpointOf(base.members[0])),
         )),
       };
-      expect(rosterOverlay.verifyChain(membership, KEY, FINGERPRINT, SIZE, [repeated])).to.equal(null);
+      expect(rosterOverlay.verifyChain(membership, KEY, FINGERPRINT, GENERATION, SIZE, [repeated])).to.equal(null);
     });
 
     it('ignores signatures from outside the pre-change roster', () => {
@@ -235,7 +241,7 @@ describe('quorumGrant rosterOverlay', () => {
           signAcceptance(bare, outsiders[0], wifs.get(outpointOf(outsiders[0]))),
         ],
       };
-      expect(rosterOverlay.verifyChain(membership, KEY, FINGERPRINT, SIZE, [entry])).to.equal(null);
+      expect(rosterOverlay.verifyChain(membership, KEY, FINGERPRINT, GENERATION, SIZE, [entry])).to.equal(null);
     });
 
     it('a second link is judged against the healed roster — its new member counts, its removed member does not', () => {
@@ -256,7 +262,7 @@ describe('quorumGrant rosterOverlay', () => {
       const entry2 = signedEntry(bare2, signers2);
 
       const verified = rosterOverlay.verifyChain(
-        membership, KEY, FINGERPRINT, SIZE, [first.entry, entry2],
+        membership, KEY, FINGERPRINT, GENERATION, SIZE, [first.entry, entry2],
       );
       expect(verified).to.not.equal(null);
       expect(verified.members.map(outpointOf)).to.include(outpointOf(added2));
@@ -276,25 +282,36 @@ describe('quorumGrant rosterOverlay', () => {
         ],
       };
       expect(rosterOverlay.verifyChain(
-        membership, KEY, FINGERPRINT, SIZE, [first.entry, entry2ByGhost],
+        membership, KEY, FINGERPRINT, GENERATION, SIZE, [first.entry, entry2ByGhost],
       )).to.equal(null);
     });
 
     it('refuses out-of-order seqs and chains past the cap', () => {
       const { entry } = buildEntry(1, base.members, new Set());
       expect(rosterOverlay.verifyChain(
-        membership, KEY, FINGERPRINT, SIZE, [{ ...entry, seq: 2 }],
+        membership, KEY, FINGERPRINT, GENERATION, SIZE, [{ ...entry, seq: 2 }],
       )).to.equal(null);
 
       const overlong = Array.from({ length: SIZE + 1 }, (unused, i) => ({ ...entry, seq: i + 1 }));
-      expect(rosterOverlay.verifyChain(membership, KEY, FINGERPRINT, SIZE, overlong)).to.equal(null);
+      expect(rosterOverlay.verifyChain(membership, KEY, FINGERPRINT, GENERATION, SIZE, overlong)).to.equal(null);
     });
 
-    it('a signature over one fingerprint never verifies a chain claimed at another', () => {
+    it('a signature over one basis never verifies a chain claimed at another fingerprint or generation', () => {
       const { entry } = buildEntry(1, base.members, new Set());
       expect(rosterOverlay.verifyChain(
-        membership, KEY, 'f'.repeat(64), SIZE, [entry],
+        membership, KEY, 'f'.repeat(64), GENERATION, SIZE, [entry],
       )).to.equal(null);
+      expect(rosterOverlay.verifyChain(
+        membership, KEY, FINGERPRINT, GENERATION + 1, SIZE, [entry],
+      )).to.equal(null);
+    });
+
+    it('the walk key is generation-salted unconditionally, and each generation deals its own committee', () => {
+      expect(rosterOverlay.walkKeyFor(KEY, 0)).to.equal(`quorumgrant|${KEY}@0`);
+      expect(rosterOverlay.walkKeyFor(KEY, 3)).to.equal(`quorumgrant|${KEY}@3`);
+      const dealZero = selectCommittee(membership, rosterOverlay.walkKeyFor(KEY, 0), { size: SIZE });
+      const dealOne = selectCommittee(membership, rosterOverlay.walkKeyFor(KEY, 1), { size: SIZE });
+      expect(dealZero.members.map(outpointOf)).to.not.deep.equal(dealOne.members.map(outpointOf));
     });
   });
 

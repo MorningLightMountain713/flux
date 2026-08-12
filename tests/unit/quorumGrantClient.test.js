@@ -52,7 +52,10 @@ function keypairFor(index) {
 
 function membershipFixture() {
   const peers = Array.from({ length: 13 }, (unused, i) => ({
-    txhash: String(i + 1).repeat(64).slice(0, 64),
+    // zero-padded so every outpoint is distinct — repeat-and-slice spells
+    // the same txhash for peers 1 and 11, and two seats sharing an outpoint
+    // collapse into one reply
+    txhash: String(i + 1).padStart(2, '0').repeat(32),
     outidx: 0,
     pubkey: keypairFor(i + 1).pubkey,
     ip: `10.${i + 1}.0.1:16127`,
@@ -70,7 +73,7 @@ describe('quorumGrant grantClient', () => {
   // the same walk the client runs, so the test always knows who the referees
   // are — and the standby is picked OFF the committee by construction, so
   // "the committee is unreachable" never silently cuts the standby too
-  const committee = selectCommittee(membership, `quorumgrant|${KEY}`, { size: COMMITTEE_SIZE });
+  const committee = selectCommittee(membership, rosterOverlay.walkKeyFor(KEY, 0), { size: COMMITTEE_SIZE });
   const committeeHosts = committee.members.map((node) => node.ip.split(':')[0]);
   const standbyNode = membership.find(
     (node) => !committeeHosts.includes(node.ip.split(':')[0]) && node.txhash !== SELF_TXHASH,
@@ -110,6 +113,7 @@ describe('quorumGrant grantClient', () => {
       grantee: ask.candidate,
       mode: ask.mode,
       ttlMs: ask.ttlMs,
+      generation: ask.generation,
       fingerprint: ask.fingerprint,
     };
 
@@ -121,7 +125,7 @@ describe('quorumGrant grantClient', () => {
       let verifiedCarriedChain;
       if (Array.isArray(ask.chain) && ask.chain.length) {
         const verified = rosterOverlay.verifyChain(
-          membership, ask.key, ask.fingerprint, COMMITTEE_SIZE, ask.chain,
+          membership, ask.key, ask.fingerprint, ask.generation, COMMITTEE_SIZE, ask.chain,
         );
         if (!verified) return { ok: false, code: 'bad_chain' };
         verifiedCarriedChain = ask.chain;
@@ -132,6 +136,7 @@ describe('quorumGrant grantClient', () => {
         remove: ask.remove,
         add: ask.add,
         seq: ask.seq,
+        generation: ask.generation,
         fingerprint: ask.fingerprint,
         at: ask.at,
       }, clockNow, REGISTER_TUNABLES, {
@@ -141,7 +146,12 @@ describe('quorumGrant grantClient', () => {
       if (!outcome.reply.ok) return outcome.reply;
       const node = hostNodes.get(host);
       const fields = signedEnvelope.fieldsFor('rosteraccept', {
-        key: ask.key, fingerprint: ask.fingerprint, seq: ask.seq, remove: ask.remove, add: ask.add,
+        key: ask.key,
+        fingerprint: ask.fingerprint,
+        generation: ask.generation,
+        seq: ask.seq,
+        remove: ask.remove,
+        add: ask.add,
       });
       const signed = signedEnvelope.sign('rosteraccept', fields, hostWifs.get(host));
       return {
@@ -220,6 +230,7 @@ describe('quorumGrant grantClient', () => {
     ]);
     sinon.stub(masterleasePublisher, 'publishMasterlease').resolves(true);
     sinon.stub(messageStore, 'getMasterleaseRecord').resolves(null);
+    sinon.stub(messageStore, 'getGrantGenerationRecord').resolves(null);
   });
 
   afterEach(() => {
@@ -455,7 +466,7 @@ describe('quorumGrant grantClient', () => {
     const DARK_HOST = darkMember.ip.split(':')[0];
     const survivors = committee.members.filter((node) => node !== darkMember);
     const replacement = rosterOverlay.nextReplacement(
-      membership, `quorumgrant|${KEY}`, survivors, new Set([outpoint(darkMember)]),
+      membership, rosterOverlay.walkKeyFor(KEY, 0), survivors, new Set([outpoint(darkMember)]),
     );
 
     it('fixture: the walk can seat a replacement for the first dark referee', () => {
@@ -546,6 +557,28 @@ describe('quorumGrant grantClient', () => {
       const published = masterleasePublisher.publishMasterlease.lastCall.args[0];
       expect(published.roster).to.equal(undefined);
       expect(registers.get(committeeHosts[5]).get(KEY).roster).to.equal(undefined);
+    });
+
+    it('a newer owner generation deals a fresh committee, and the grant is written by it', async () => {
+      messageStore.getGrantGenerationRecord.resolves({ data: { generation: 2 } });
+      const rolled = selectCommittee(membership, rosterOverlay.walkKeyFor(KEY, 2), { size: COMMITTEE_SIZE });
+      const rolledHosts = rolled.members.map((node) => node.ip.split(':')[0]);
+      expect([...rolledHosts].sort()).to.not.deep.equal([...committeeHosts].sort());
+      expect(rolledHosts).to.not.include(SELF_HOST);
+
+      const outcome = await grantClient.acquire(KEY, holderOptions());
+      expect(outcome.granted).to.equal(true);
+
+      const written = rolledHosts.filter(
+        (host) => registers.get(host).get(KEY)?.accepted?.grantee === SELF,
+      );
+      expect(written).to.have.length(COMMITTEE_SIZE);
+      expect(registers.get(rolledHosts[0]).get(KEY).accepted.generation).to.equal(2);
+      expect(masterleasePublisher.publishMasterlease.lastCall.args[0].generation).to.equal(2);
+
+      // the retired deal's seats that lost their chair heard nothing at all
+      const retiredOnly = committeeHosts.filter((host) => !rolledHosts.includes(host));
+      retiredOnly.forEach((host) => expect(registers.get(host).get(KEY)).to.equal(undefined));
     });
 
     it('a challenger acquires from the healed committee through the published record', async () => {

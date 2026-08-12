@@ -203,12 +203,12 @@ describe('quorumGrant grantRegister', () => {
         pubkey: `owner-${i + 1}`,
         ip: `10.${i + 1}.0.1:16127`,
       }));
-      const base = selectCommittee(membership, 'quorumgrant|app/master', { size: 5 });
+      const base = selectCommittee(membership, rosterOverlay.walkKeyFor('app/master', 0), { size: 5 });
       const remove = base.members[0];
       const survivors = base.members.filter((node) => node !== remove);
       const removedOutpoint = `${remove.txhash}:${remove.outidx}`;
       const added = rosterOverlay.nextReplacement(
-        membership, 'quorumgrant|app/master', survivors, new Set([removedOutpoint]),
+        membership, rosterOverlay.walkKeyFor('app/master', 0), survivors, new Set([removedOutpoint]),
       );
 
       await grantRegister.prepare('app/master', { epoch: 1, candidate: 'a:0' });

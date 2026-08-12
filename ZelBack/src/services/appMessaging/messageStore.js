@@ -773,28 +773,35 @@ async function handleIPChangedEvent({ message, envelope }) {
 }
 
 /**
- * Newer-wins on an ORDINAL FIELD, with the broadcast time only breaking
- * ties. The record's authority is its ordinal — a masterlease's epoch, a
- * generation record's generation — so a successor at a higher ordinal
+ * Newer-wins on ORDINAL FIELDS, most significant first, with the broadcast
+ * time only breaking full ties. The record's authority is its ordinals — a
+ * masterlease's (generation, epoch), a generation record's generation — so
+ * a successor that is ahead on any ordinal (with everything above it equal)
  * replaces the old record however their clocks compare, and a republish of
- * the SAME ordinal (later broadcast) refreshes the row without ever letting
- * a stale clock un-seat a successor.
+ * the SAME ordinals (later broadcast) refreshes the row without ever
+ * letting a stale clock un-seat a successor. Each ordinal names what an
+ * ABSENT stored value counts as, so a field added later compares against
+ * old rows as the value they implicitly carried.
+ *
+ * @param {Array<{field: string, value: number, absent: number}>} ordinals
  */
-function buildOrdinalConditionalUpsert(ordinalField, ordinal, broadcastedAt, conditionalFields, options = {}) {
+function buildOrdinalConditionalUpsert(ordinals, broadcastedAt, conditionalFields, options = {}) {
   const alwaysSetFields = options.alwaysSetFields ?? {};
   const incomingDate = new Date(broadcastedAt);
-  const storedOrdinal = { $ifNull: [`$data.${ordinalField}`, -1] };
-  const isNewer = {
-    $or: [
-      { $gt: [ordinal, storedOrdinal] },
-      {
-        $and: [
-          { $eq: [ordinal, storedOrdinal] },
-          { $gt: [incomingDate, { $ifNull: ['$broadcastedAt', new Date(0)] }] },
-        ],
-      },
+  const stored = ordinals.map(({ field, absent }) => ({ $ifNull: [`$data.${field}`, absent] }));
+  const equalThrough = (count) => ordinals
+    .slice(0, count)
+    .map(({ value }, i) => ({ $eq: [value, stored[i]] }));
+  const branches = ordinals.map(({ value }, i) => ({
+    $and: [...equalThrough(i), { $gt: [value, stored[i]] }],
+  }));
+  branches.push({
+    $and: [
+      ...equalThrough(ordinals.length),
+      { $gt: [incomingDate, { $ifNull: ['$broadcastedAt', new Date(0)] }] },
     ],
-  };
+  });
+  const isNewer = { $or: branches };
   const set = Object.fromEntries(
     Object.entries(conditionalFields).map(([k, v]) => [k, { $cond: [isNewer, v, { $ifNull: [`$${k}`, v] }] }]),
   );
@@ -808,6 +815,8 @@ async function handleMasterleaseEvent({ message, envelope, announcer }) {
   if (message.mode !== 'held' && message.mode !== 'oneshot') return;
   if (!Number.isSafeInteger(message.broadcastedAt)) return;
   if (message.mode === 'held' && (!Number.isSafeInteger(message.ttlMs) || message.ttlMs < 1)) return;
+  if (message.generation !== undefined
+    && (!Number.isSafeInteger(message.generation) || message.generation < 0)) return;
   // The roster is optional and shape-gated only: its signatures verify at
   // read time against the membership the fingerprint names, which a late
   // reader may resolve when this node cannot. A record wearing a malformed
@@ -823,9 +832,14 @@ async function handleMasterleaseEvent({ message, envelope, announcer }) {
     // master's rather than accumulating beside it. Held records ride the
     // grant duration and vanish with an abandoned term; a founding record
     // carries no expiry at all — the register it mirrors is write-once.
+    // Generation orders ahead of epoch: a re-rolled world's first grant
+    // replaces the retired world's record however high its epoch climbed.
     await database.collection(globalAppStateEvents).updateOne(
       { type: APP_STATE_EVENT_TYPES.MASTERLEASE, dedupKey },
-      buildOrdinalConditionalUpsert('epoch', message.epoch, message.broadcastedAt, {
+      buildOrdinalConditionalUpsert([
+        { field: 'generation', value: message.generation ?? 0, absent: 0 },
+        { field: 'epoch', value: message.epoch, absent: -1 },
+      ], message.broadcastedAt, {
         ip: message.ip,
         outpoint: outpointOf(announcer),
         type: APP_STATE_EVENT_TYPES.MASTERLEASE,
@@ -863,7 +877,9 @@ async function handleGrantGenerationEvent({ message, envelope }) {
     // months later must still find the newest generation standing.
     await database.collection(globalAppStateEvents).updateOne(
       { type: APP_STATE_EVENT_TYPES.GRANTGENERATION, dedupKey },
-      buildOrdinalConditionalUpsert('generation', message.generation, message.broadcastedAt, {
+      buildOrdinalConditionalUpsert([
+        { field: 'generation', value: message.generation, absent: -1 },
+      ], message.broadcastedAt, {
         type: APP_STATE_EVENT_TYPES.GRANTGENERATION,
         dedupKey,
         broadcastedAt: new Date(message.broadcastedAt),

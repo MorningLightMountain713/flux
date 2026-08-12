@@ -329,7 +329,7 @@ describe('quorumGrant grantRegisterCore', () => {
     // runs; signatures never reach the core (the shell verifies carried
     // chains first), so plain distinct pubkeys are enough here.
     const KEY = 'myapp/master';
-    const WALK_KEY = `quorumgrant|${KEY}`;
+    const WALK_KEY = rosterOverlay.walkKeyFor(KEY, 0);
     const SIZE = 5;
     const membership = Array.from({ length: 10 }, (unused, i) => ({
       txhash: String(i + 1).padStart(2, '0').repeat(32),
@@ -404,9 +404,11 @@ describe('quorumGrant grantRegisterCore', () => {
       expect(oneshot.reply.code).to.equal('bad_mode');
     });
 
-    it('the proposal must name the basis the grant is pinned to', () => {
+    it('the proposal must name the basis the grant is pinned to — membership and generation both', () => {
       const { reply } = onRoster(heldRecord(), rosterRequest({ fingerprint: 'fp-2' }), T0, TUNABLES, context());
       expect(reply.code).to.equal('wrong_fingerprint');
+      const rolled = onRoster(heldRecord(), rosterRequest({ generation: 2 }), T0, TUNABLES, context());
+      expect(rolled.reply.code).to.equal('wrong_generation');
     });
 
     it('a seq that does not extend the journal teaches the journal length', () => {
@@ -500,6 +502,12 @@ describe('quorumGrant grantRegisterCore', () => {
         epoch: 7, grantee: 'bbbb:0', mode: 'held', ttlMs: TTL, fingerprint: 'fp-2',
       }, lapsedAt, TUNABLES);
       expect(newBasis.record.roster).to.equal(null);
+
+      const reRolled = onAccept(record, {
+        epoch: 7, grantee: 'bbbb:0', mode: 'held', ttlMs: TTL, fingerprint: 'fp-1', generation: 1,
+      }, lapsedAt, TUNABLES);
+      expect(reRolled.record.accepted.generation).to.equal(1);
+      expect(reRolled.record.roster).to.equal(null);
     });
   });
 });
