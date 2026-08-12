@@ -552,6 +552,12 @@ module.exports = (app) => {
   app.post('/flux/quorumgrant/release', (req, res) => {
     grantorController.release(req, res);
   });
+  // The holder's single-seat committee heal: the recorded grantee proposes
+  // remove-dark-add-next-in-walk; the reply carries this grantor's SIGNED
+  // acceptance, and a quorum of those is the roster.
+  app.post('/flux/quorumgrant/roster', (req, res) => {
+    grantorController.roster(req, res);
+  });
   // The register is public fact (epoch, grantee) — an unauthenticated read,
   // served even during the grantor's rejoin drain.
   app.get('/flux/quorumgrant/record', (req, res) => {

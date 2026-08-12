@@ -1,0 +1,330 @@
+'use strict';
+
+const { expect } = require('chai');
+const secp256k1 = require('secp256k1');
+const bs58check = require('bs58check');
+
+const rosterOverlay = require('../../ZelBack/src/services/quorumGrant/rosterOverlay');
+const signedEnvelope = require('../../ZelBack/src/services/quorumGrant/signedEnvelope');
+const { selectCommittee } = require('../../ZelBack/src/services/utils/committeeSelector');
+const { rankNodes } = require('../../ZelBack/src/services/utils/rendezvousRank');
+
+// The overlay against real cryptography: every acceptance in these chains is
+// signed with a real secp256k1 key whose public half sits in the membership,
+// exactly what a verifier resolves in production. Committees and replacements
+// are derived IN the test with the same walk the code runs — the fixtures
+// assert relationships, never hash-lucky seatings.
+
+const keypairs = new Map();
+
+function keypairFor(index) {
+  if (!keypairs.has(index)) {
+    const priv = Buffer.alloc(32);
+    priv.writeUInt32BE(index + 1, 28);
+    keypairs.set(index, {
+      wif: bs58check.encode(Buffer.concat([Buffer.from([0x80]), priv])),
+      pubkey: Buffer.from(secp256k1.publicKeyCreate(priv, false)).toString('hex'),
+    });
+  }
+  return keypairs.get(index);
+}
+
+const KEY = 'rosterapp/master';
+const WALK_KEY = `quorumgrant|${KEY}`;
+const FINGERPRINT = 'e'.repeat(64);
+const SIZE = 5;
+
+function outpointOf(node) {
+  return `${node.txhash}:${node.outidx}`;
+}
+
+function fleet(count) {
+  return Array.from({ length: count }, (unused, i) => ({
+    txhash: String(i + 1).padStart(2, '0').repeat(32),
+    outidx: 0,
+    pubkey: keypairFor(i).pubkey,
+    ip: `10.${i + 1}.0.1:16127`,
+  }));
+}
+
+function wifByOutpoint(membership) {
+  const map = new Map();
+  membership.forEach((node, i) => map.set(outpointOf(node), keypairFor(i).wif));
+  return map;
+}
+
+function signAcceptance(entry, grantorNode, wif) {
+  const fields = signedEnvelope.fieldsFor('rosteraccept', {
+    key: KEY, fingerprint: FINGERPRINT, seq: entry.seq, remove: entry.remove, add: entry.add,
+  });
+  const signed = signedEnvelope.sign('rosteraccept', fields, wif);
+  return { grantor: outpointOf(grantorNode), signature: signed.signature };
+}
+
+describe('quorumGrant rosterOverlay', () => {
+  const membership = fleet(12);
+  const wifs = wifByOutpoint(membership);
+  const base = selectCommittee(membership, WALK_KEY, { size: SIZE });
+
+  function signedEntry(entry, signers) {
+    return {
+      ...entry,
+      acceptances: signers.map((node) => signAcceptance(entry, node, wifs.get(outpointOf(node)))),
+    };
+  }
+
+  /** One valid chain link atop the given roster, quorum-signed by its members. */
+  function buildEntry(seq, roster, excluded, removeIndex = 0) {
+    const remove = roster[removeIndex];
+    const survivors = roster.filter((node) => node !== remove);
+    const nextExcluded = new Set([...excluded, outpointOf(remove)]);
+    const added = rosterOverlay.nextReplacement(membership, WALK_KEY, survivors, nextExcluded);
+    const entry = signedEntry(
+      { seq, remove: outpointOf(remove), add: outpointOf(added), at: 1000 },
+      roster.slice(0, base.quorum),
+    );
+    return {
+      entry, added, survivors, nextExcluded,
+    };
+  }
+
+  describe('nextReplacement', () => {
+    it('is deterministic and never seats a sitting, removed, owner-colliding or host-colliding node', () => {
+      const removed = base.members[2];
+      const survivors = base.members.filter((node) => node !== removed);
+      const excluded = new Set([outpointOf(removed)]);
+
+      const first = rosterOverlay.nextReplacement(membership, WALK_KEY, survivors, excluded);
+      const second = rosterOverlay.nextReplacement(membership, WALK_KEY, survivors, excluded);
+      expect(first).to.equal(second);
+      expect(first).to.not.equal(null);
+      expect(survivors.map(outpointOf)).to.not.include(outpointOf(first));
+      expect(outpointOf(first)).to.not.equal(outpointOf(removed));
+      expect(survivors.map((node) => node.pubkey)).to.not.include(first.pubkey);
+      expect(survivors.map((node) => node.ip)).to.not.include(first.ip);
+    });
+
+    it('skips a candidate sharing an owner with a survivor, however well it ranks', () => {
+      const removed = base.members[0];
+      const survivors = base.members.filter((node) => node !== removed);
+      const excluded = new Set([outpointOf(removed)]);
+      const wouldSeat = rosterOverlay.nextReplacement(membership, WALK_KEY, survivors, excluded);
+
+      const collided = membership.map((node) => (node === wouldSeat
+        ? { ...node, pubkey: survivors[0].pubkey }
+        : node));
+      const instead = rosterOverlay.nextReplacement(collided, WALK_KEY, survivors, excluded);
+      expect(instead).to.not.equal(null);
+      expect(outpointOf(instead)).to.not.equal(outpointOf(wouldSeat));
+      expect(survivors.map((node) => node.pubkey)).to.not.include(instead.pubkey);
+    });
+
+    it('skips a candidate on a survivor address, and falls down the rung ladder rather than refuse', () => {
+      const removed = base.members[0];
+      const survivors = base.members.filter((node) => node !== removed);
+      const excluded = new Set([outpointOf(removed)]);
+      const survivorHost = survivors[0].ip.split(':')[0];
+
+      // every off-roster candidate crowded into one survivor's /24: the two
+      // prefix rungs admit nobody, the address rung still seats the best-
+      // ranked candidate — a replacement that exists beats a spread that
+      // refuses
+      let spare = 0;
+      const crowded = membership.map((node) => {
+        if (base.members.includes(node)) return node;
+        spare += 1;
+        return { ...node, ip: `${survivorHost.split('.').slice(0, 3).join('.')}.${100 + spare}:16127` };
+      });
+      const instead = rosterOverlay.nextReplacement(crowded, WALK_KEY, survivors, excluded);
+      expect(instead).to.not.equal(null);
+      const ranked = rankNodes(crowded, WALK_KEY);
+      const firstEligible = ranked.find(
+        (node) => !survivors.includes(node) && !excluded.has(outpointOf(node))
+          && !base.members.some((member) => member.txhash === node.txhash),
+      );
+      expect(outpointOf(instead)).to.equal(outpointOf(firstEligible));
+    });
+
+    it('answers null when no eligible node remains', () => {
+      const survivors = membership.slice(0, membership.length - 1);
+      const excluded = new Set([outpointOf(membership[membership.length - 1])]);
+      expect(rosterOverlay.nextReplacement(membership, WALK_KEY, survivors, excluded)).to.equal(null);
+    });
+  });
+
+  describe('rosterAfter', () => {
+    it('applies entries in order and answers null for a chain from another world', () => {
+      const { entry, added } = buildEntry(1, base.members, new Set());
+      const roster = rosterOverlay.rosterAfter(base.members, membership, [entry]);
+      expect(roster.map(outpointOf)).to.include(outpointOf(added));
+      expect(roster.map(outpointOf)).to.not.include(entry.remove);
+      expect(roster).to.have.length(SIZE);
+
+      const foreign = [{ ...entry, add: `${'f'.repeat(64)}:0` }];
+      expect(rosterOverlay.rosterAfter(base.members, membership, foreign)).to.equal(null);
+      const doubled = [entry, entry];
+      expect(rosterOverlay.rosterAfter(base.members, membership, doubled)).to.equal(null);
+    });
+  });
+
+  describe('verifyChain', () => {
+    it('accepts a quorum-signed chain and returns the effective roster', () => {
+      const { entry, added } = buildEntry(1, base.members, new Set());
+      const verified = rosterOverlay.verifyChain(membership, KEY, FINGERPRINT, SIZE, [entry]);
+      expect(verified).to.not.equal(null);
+      expect(verified.quorum).to.equal(base.quorum);
+      expect(verified.members.map(outpointOf)).to.include(outpointOf(added));
+      expect(verified.members.map(outpointOf)).to.not.include(entry.remove);
+    });
+
+    it('refuses a hand-picked replacement even when a quorum signed it', () => {
+      const removed = base.members[0];
+      const survivors = base.members.filter((node) => node !== removed);
+      const excluded = new Set([outpointOf(removed)]);
+      const forced = rosterOverlay.nextReplacement(membership, WALK_KEY, survivors, excluded);
+      const offWalk = membership.find(
+        (node) => !base.members.includes(node) && outpointOf(node) !== outpointOf(forced),
+      );
+      const entry = signedEntry(
+        {
+          seq: 1, remove: outpointOf(removed), add: outpointOf(offWalk), at: 1000,
+        },
+        base.members.slice(0, base.quorum),
+      );
+      expect(rosterOverlay.verifyChain(membership, KEY, FINGERPRINT, SIZE, [entry])).to.equal(null);
+    });
+
+    it('refuses below quorum, and counts one signer once however many times it signs', () => {
+      const removed = base.members[0];
+      const survivors = base.members.filter((node) => node !== removed);
+      const added = rosterOverlay.nextReplacement(
+        membership, WALK_KEY, survivors, new Set([outpointOf(removed)]),
+      );
+      const bare = {
+        seq: 1, remove: outpointOf(removed), add: outpointOf(added), at: 1000,
+      };
+
+      const short = signedEntry(bare, base.members.slice(0, base.quorum - 1));
+      expect(rosterOverlay.verifyChain(membership, KEY, FINGERPRINT, SIZE, [short])).to.equal(null);
+
+      const repeated = {
+        ...bare,
+        acceptances: Array.from({ length: base.quorum }, () => signAcceptance(
+          bare, base.members[0], wifs.get(outpointOf(base.members[0])),
+        )),
+      };
+      expect(rosterOverlay.verifyChain(membership, KEY, FINGERPRINT, SIZE, [repeated])).to.equal(null);
+    });
+
+    it('ignores signatures from outside the pre-change roster', () => {
+      const removed = base.members[0];
+      const survivors = base.members.filter((node) => node !== removed);
+      const added = rosterOverlay.nextReplacement(
+        membership, WALK_KEY, survivors, new Set([outpointOf(removed)]),
+      );
+      const bare = {
+        seq: 1, remove: outpointOf(removed), add: outpointOf(added), at: 1000,
+      };
+      const outsiders = membership.filter((node) => !base.members.includes(node));
+      const entry = {
+        ...bare,
+        acceptances: [
+          ...base.members.slice(0, base.quorum - 1).map(
+            (node) => signAcceptance(bare, node, wifs.get(outpointOf(node))),
+          ),
+          signAcceptance(bare, outsiders[0], wifs.get(outpointOf(outsiders[0]))),
+        ],
+      };
+      expect(rosterOverlay.verifyChain(membership, KEY, FINGERPRINT, SIZE, [entry])).to.equal(null);
+    });
+
+    it('a second link is judged against the healed roster — its new member counts, its removed member does not', () => {
+      const first = buildEntry(1, base.members, new Set());
+      const healed = [...first.survivors, first.added];
+
+      // second entry removes another original seat; signers drawn from the
+      // healed roster INCLUDING the freshly added member
+      const remove2 = first.survivors[0];
+      const survivors2 = healed.filter((node) => node !== remove2);
+      const excluded2 = new Set([...first.nextExcluded, outpointOf(remove2)]);
+      const added2 = rosterOverlay.nextReplacement(membership, WALK_KEY, survivors2, excluded2);
+      const bare2 = {
+        seq: 2, remove: outpointOf(remove2), add: outpointOf(added2), at: 2000,
+      };
+      const signers2 = [first.added, ...survivors2.filter((node) => node !== first.added)]
+        .slice(0, base.quorum);
+      const entry2 = signedEntry(bare2, signers2);
+
+      const verified = rosterOverlay.verifyChain(
+        membership, KEY, FINGERPRINT, SIZE, [first.entry, entry2],
+      );
+      expect(verified).to.not.equal(null);
+      expect(verified.members.map(outpointOf)).to.include(outpointOf(added2));
+
+      // the seat removed by the first link cannot help sign the second
+      const entry2ByGhost = {
+        ...bare2,
+        acceptances: [
+          ...survivors2.slice(0, base.quorum - 1).map(
+            (node) => signAcceptance(bare2, node, wifs.get(outpointOf(node))),
+          ),
+          signAcceptance(
+            bare2,
+            base.members.find((node) => outpointOf(node) === first.entry.remove),
+            wifs.get(first.entry.remove),
+          ),
+        ],
+      };
+      expect(rosterOverlay.verifyChain(
+        membership, KEY, FINGERPRINT, SIZE, [first.entry, entry2ByGhost],
+      )).to.equal(null);
+    });
+
+    it('refuses out-of-order seqs and chains past the cap', () => {
+      const { entry } = buildEntry(1, base.members, new Set());
+      expect(rosterOverlay.verifyChain(
+        membership, KEY, FINGERPRINT, SIZE, [{ ...entry, seq: 2 }],
+      )).to.equal(null);
+
+      const overlong = Array.from({ length: SIZE + 1 }, (unused, i) => ({ ...entry, seq: i + 1 }));
+      expect(rosterOverlay.verifyChain(membership, KEY, FINGERPRINT, SIZE, overlong)).to.equal(null);
+    });
+
+    it('a signature over one fingerprint never verifies a chain claimed at another', () => {
+      const { entry } = buildEntry(1, base.members, new Set());
+      expect(rosterOverlay.verifyChain(
+        membership, KEY, 'f'.repeat(64), SIZE, [entry],
+      )).to.equal(null);
+    });
+  });
+
+  describe('extendsChain', () => {
+    it('accepts an extension, refuses a fork and a truncation', () => {
+      const first = buildEntry(1, base.members, new Set());
+      const healed = [...first.survivors, first.added];
+      const second = buildEntry(2, healed, first.nextExcluded, 1);
+
+      const journaled = [first.entry];
+      expect(rosterOverlay.extendsChain(journaled, [first.entry, second.entry])).to.equal(true);
+      expect(rosterOverlay.extendsChain(journaled, [])).to.equal(false);
+      const fork = [{ ...first.entry, add: second.entry.add }, second.entry];
+      expect(rosterOverlay.extendsChain(journaled, fork)).to.equal(false);
+    });
+  });
+
+  describe('chainWellFormed', () => {
+    it('bounds entries and acceptances before any cryptography runs', () => {
+      const { entry } = buildEntry(1, base.members, new Set());
+      expect(rosterOverlay.chainWellFormed([entry])).to.equal(true);
+      expect(rosterOverlay.chainWellFormed('chain')).to.equal(false);
+      expect(rosterOverlay.chainWellFormed([{ ...entry, remove: 'not-an-outpoint' }])).to.equal(false);
+      const packed = {
+        ...entry,
+        acceptances: Array.from({ length: 17 }, () => entry.acceptances[0]),
+      };
+      expect(rosterOverlay.chainWellFormed([packed])).to.equal(false);
+      const long = Array.from({ length: 33 }, (unused, i) => ({ ...entry, seq: i + 1 }));
+      expect(rosterOverlay.chainWellFormed(long)).to.equal(false);
+    });
+  });
+});
