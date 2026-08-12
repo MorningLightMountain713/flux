@@ -34,7 +34,7 @@ async function driveOperatorCommand(ids, recordIntent) {
   for (const id of ids) {
     // eslint-disable-next-line no-await-in-loop
     await recordIntent(id);
-    reconcilerQueue.enqueue(id);
+    reconcilerQueue.enqueueComponent(id);
   }
 }
 

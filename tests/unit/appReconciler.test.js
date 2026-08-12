@@ -36,7 +36,9 @@ describe('appReconciler tests', () => {
       return {
         name: c.name,
         appName: spec.name,
-        identifier: (spec.version >= 4) ? `${c.name}_${spec.name}` : spec.name,
+        // segment = identity ?? appName, exactly as AppComponentBase.containerIdentifier:
+        // an app whose identity was minted names its containers from the identity.
+        identifier: (spec.version >= 4) ? `${c.name}_${spec.identity ?? spec.name}` : spec.name,
         hasActiveStandbySyncthing: () => isG,
         requiresSyncBeforeStart: () => isR,
         hasSyncthing: () => isSync,
@@ -78,6 +80,15 @@ describe('appReconciler tests', () => {
         // predating the identifier index still need. The index path has its own
         // test rather than being the silent default here.
         getInstalledAppByComponentIdentifier: sinon.stub().resolves(null),
+        // The identifier index the app fan-out reads first: empty by default, so the
+        // fixtures drive the deployment-layer fallback that rows predating it need.
+        listComponentIdentifiers: sinon.stub().resolves([]),
+        // The by-NAME lookup, which is the only thing an app-level key can be
+        // resolved by: an app name is neither a component identifier nor an
+        // identity, so a sweep of a minted app answers here or nowhere.
+        getInstalledApp: sinon.stub().callsFake(async () => (localSpec
+          ? { name: localSpec.name, owner: localSpec.owner ?? 'owner1', isEncrypted: Boolean(localSpec.enterprise) }
+          : null)),
         // Nothing else installed by default, so the cross-app dependent fan-out
         // is inert unless a test states requirers.
         listInstalledApps: sinon.stub().resolves([]),
@@ -622,8 +633,15 @@ describe('appReconciler tests', () => {
       await appReconciler.enqueueDependents('www_App');
       await flush();
 
-      const enqueued = stubs.appsRepository.getInstalledAppByIdentity.getCalls().some((c) => c.args[0] === 'requirer');
-      expect(enqueued, 'the requirer app was enqueued and expanded by the queue').to.be.true;
+      // The requirer is held as an APP name, so the fan-out resolves it by name and
+      // by the identifier index — never by asking whether a name is an identity.
+      const fannedOut = stubs.appsRepository.listComponentIdentifiers.getCalls()
+        .some((c) => c.args[0] === 'requirer');
+      expect(fannedOut, 'the requirer app was fanned out to its components').to.be.true;
+      expect(
+        stubs.appsRepository.getInstalledAppByIdentity.getCalls().some((c) => c.args[0] === 'requirer'),
+        'an app name must never be looked up as an identity',
+      ).to.be.false;
     });
   });
 
@@ -1111,11 +1129,11 @@ describe('appReconciler tests', () => {
       // each start "succeeds", then the container is found dead again; the enqueues
       // stand in for the die-event bridge
       await waitFor(() => stubs.appsRuntimeState.setEverStarted.callCount >= 1);
-      appReconciler.enqueue('www_App');
+      appReconciler.enqueueComponent('www_App');
       await waitFor(() => stubs.appsRuntimeState.recordRestart.callCount >= 1);
-      appReconciler.enqueue('www_App');
+      appReconciler.enqueueComponent('www_App');
       await waitFor(() => stubs.appsRuntimeState.recordRestart.callCount >= 2);
-      appReconciler.enqueue('www_App');
+      appReconciler.enqueueComponent('www_App');
       const result = await convergePromise;
       expect(result.converged).to.be.false;
       expect(result.failed).to.deep.equal(['www_App']);
@@ -1129,9 +1147,9 @@ describe('appReconciler tests', () => {
       stubs.dockerService.dockerContainerInspect.resolves({ State: { Running: false, Status: 'created', ExitCode: 0 } });
       const convergePromise = appReconciler.awaitConvergence(['www_App']);
       await waitFor(() => stubs.appsRuntimeState.recordRestart.callCount >= 1);
-      appReconciler.enqueue('www_App');
+      appReconciler.enqueueComponent('www_App');
       await waitFor(() => stubs.appsRuntimeState.recordRestart.callCount >= 2);
-      appReconciler.enqueue('www_App');
+      appReconciler.enqueueComponent('www_App');
       const result = await convergePromise;
       expect(result.converged).to.be.false;
       expect(result.failed).to.deep.equal(['www_App']);
@@ -2173,6 +2191,43 @@ describe('appReconciler tests', () => {
       // resolves it directly (no expansion stutter)
       expect(started).to.deep.equal(['Legacy']);
     });
+
+    // Every app registered since identities were minted has an identity that is
+    // NOT its name (sha256(name‖txid) truncated), so the row answers to neither
+    // an identity lookup keyed on the name nor the component-identifier index -
+    // only to its name. The stubs above model pre-minting apps, where the
+    // identity segment happened to be the name; this one models what the fleet
+    // actually stores now, which is why an unfaithful stub hid it.
+    it('sweeps an app whose identity was MINTED, not borrowed from its name', async () => {
+      localSpec = {
+        name: 'Minted', identity: '933b4b9a0af3', version: 4, compose: [{ name: 'www', containerData: '/data' }],
+      };
+      const row = { name: 'Minted', owner: 'owner1', isEncrypted: false };
+      stubs.appQueryService.installedApps.resolves({ status: 'success', data: [{ name: 'Minted' }] });
+      // What the row actually records for an app installed today.
+      stubs.appsRepository.listComponentIdentifiers.callsFake(
+        async (name) => (name === 'Minted' ? ['www_933b4b9a0af3'] : []),
+      );
+      // The identity lookup answers an IDENTITY - never a name. This is the fidelity
+      // that matters: while it answered to a name too, the sweep looked like it worked.
+      stubs.appsRepository.getInstalledAppByIdentity.callsFake(
+        async (identity) => (identity === '933b4b9a0af3' ? row : null),
+      );
+      stubs.appsRepository.getInstalledAppByComponentIdentifier.callsFake(
+        async (identifier) => (identifier === 'www_933b4b9a0af3' ? row : null),
+      );
+      stubs.appsRepository.getInstalledApp.callsFake(
+        async (name) => (name === 'Minted' ? row : null),
+      );
+
+      const started = [];
+      stubs.dockerService.appDockerStart.callsFake(async (id) => { started.push(id); });
+
+      await appReconciler.enqueueAll('test');
+      await flush();
+
+      expect(started, 'the swept app must reach its components').to.deep.equal(['www_933b4b9a0af3']);
+    });
   });
 
   // The boot-drain gate: the first apprunning broadcast must not race the boot
@@ -2196,7 +2251,7 @@ describe('appReconciler tests', () => {
         finishInspect = () => resolve({ State: { Running: false, Status: 'exited', ExitCode: 1 } });
       }));
 
-      appReconciler.enqueue('www_App'); // held in bootPending
+      appReconciler.enqueueComponent('www_App'); // held in bootPending
       const startPromise = appReconciler.start();
       let drainSettled = false;
       appReconciler.waitForBootDrainSettled().then(() => { drainSettled = true; });
@@ -2220,7 +2275,7 @@ describe('appReconciler tests', () => {
         stubs.globalState.waitForBootContainerStateSettled = () => new Promise((resolve) => { openBootGate = resolve; });
         stubs.dockerService.dockerContainerInspect = sinon.stub().callsFake(() => new Promise(() => {})); // wedged forever
 
-        appReconciler.enqueue('www_App');
+        appReconciler.enqueueComponent('www_App');
         const startPromise = appReconciler.start();
         let drainSettled = false;
         appReconciler.waitForBootDrainSettled().then(() => { drainSettled = true; });
@@ -2245,7 +2300,7 @@ describe('appReconciler tests', () => {
       // startAppMonitoring is the last step of a start-path reconcile
       const done = deferred();
       stubs.appInspector.startAppMonitoring = sinon.stub().callsFake(() => done.resolve());
-      appReconciler.enqueue('www_App');
+      appReconciler.enqueueComponent('www_App');
       await done.promise;
       expect(stubs.dockerService.appDockerStart.calledOnceWith('www_App')).to.be.true;
     });
@@ -2255,7 +2310,7 @@ describe('appReconciler tests', () => {
       stubs.globalState.bootContainerStateSettled = false;
       stubs.globalState.waitForBootContainerStateSettled = () => new Promise((res) => { openGate = res; });
 
-      appReconciler.enqueue('www_App');
+      appReconciler.enqueueComponent('www_App');
       // enqueue is synchronous while the gate is closed, so this is a real assertion
       expect(stubs.dockerService.dockerContainerInspect.called).to.be.false; // held
 
@@ -2287,7 +2342,7 @@ describe('appReconciler tests', () => {
         started.push(id);
         if (started.length === 2) done.resolve();
       });
-      appReconciler.enqueue('App'); // bare app name - no component identifier matches
+      appReconciler.enqueueApp('App'); // bare app name - no component identifier matches
       await done.promise;
       expect(started.sort()).to.deep.equal(['cache_App', 'web_App']);
     });
@@ -2303,14 +2358,14 @@ describe('appReconciler tests', () => {
       };
       const done = deferred();
       stubs.dockerService.appDockerStart = sinon.stub().callsFake(async (id) => done.resolve(id));
-      appReconciler.enqueue('App');
+      appReconciler.enqueueApp('App');
       expect(await done.promise).to.equal('App_App');
     });
 
     it('surfaces a component identifier that matches nothing instead of dropping it', async () => {
       const done = deferred();
       stubs.log.error = sinon.stub().callsFake(() => done.resolve());
-      appReconciler.enqueue('gone_App'); // component "gone" does not exist
+      appReconciler.enqueueComponent('gone_App'); // component "gone" does not exist
       await done.promise;
       expect(stubs.log.error.firstCall.args[0]).to.include('does not match any component');
       expect(stubs.dockerService.appDockerStart.called).to.be.false;
@@ -2325,12 +2380,12 @@ describe('appReconciler tests', () => {
         if (d) d.resolve();
       }));
 
-      appReconciler.enqueue('www_App'); // reconcile #1 -> blocks at inspect
+      appReconciler.enqueueComponent('www_App'); // reconcile #1 -> blocks at inspect
       await reachedInspect[0].promise;
       expect(resolvers).to.have.lengthOf(1);
 
-      appReconciler.enqueue('www_App'); // in-flight -> mark dirty
-      appReconciler.enqueue('www_App'); // still dirty (coalesced, not a separate run)
+      appReconciler.enqueueComponent('www_App'); // in-flight -> mark dirty
+      appReconciler.enqueueComponent('www_App'); // still dirty (coalesced, not a separate run)
       resolvers[0](); // finish #1 -> exactly one coalesced re-run
       await reachedInspect[1].promise;
       expect(resolvers).to.have.lengthOf(2); // one re-run, not two

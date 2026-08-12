@@ -1,5 +1,5 @@
 // flux-spec is consumed as a VENDORED tree (`file:../flux-spec/packages/*`)
-// until it publishes to npm: <repo>/flux-spec on the host for the runner, and
+// until it publishes to npm: test-infra/flux-spec/dist on the host for the runner, and
 // a copy baked into the node image at build time. Nothing about that tree
 // declares which commit it is, so a vendor lagging the branch fails as a
 // product mystery — the reconciler spams "<X> is not a function", defers every
@@ -9,7 +9,7 @@
 // `test-infra/flux-spec/pin` makes the pairing an explicit fact and this guard
 // enforces it across both copies before any suite spends minutes on a fleet:
 //
-//   pin (committed)  ==  <repo>/flux-spec/.vendored-ref  ==  the same file in the image
+//   pin (committed)  ==  test-infra/flux-spec/dist/.vendored-ref  ==  the same file in the image
 //
 // Vendor drift means someone bumped the pin without re-vendoring; image drift
 // means someone re-vendored without rebuilding (the second half of the fix
@@ -25,14 +25,14 @@ const repoRoot = join(__dirname, '..', '..', '..');
 export const NODE_IMAGE = 'flux-e2e-fluxos-01';
 
 const PIN_PATH = join(repoRoot, 'test-infra', 'flux-spec', 'pin');
-const VENDOR_REF_PATH = join(repoRoot, 'flux-spec', '.vendored-ref');
+const VENDOR_REF_PATH = join(repoRoot, 'test-infra', 'flux-spec', 'dist', '.vendored-ref');
 const VENDOR_CMD = 'bash test-infra/flux-spec/vendor.sh';
 const IMAGE_CMD = `docker build -f test-infra/Dockerfile.fluxos -t ${NODE_IMAGE} .`;
 
 const readRef = (path) => (existsSync(path) ? readFileSync(path, 'utf-8').trim() : null);
 
 function imageVendorRef() {
-  // The stamp rides inside the vendor directory, so `COPY flux-spec /flux-spec`
+  // The stamp rides inside the vendor directory, so the image's COPY of it
   // carries it into the image with no build-arg or label to remember.
   try {
     return execFileSync(

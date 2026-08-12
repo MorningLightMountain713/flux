@@ -82,7 +82,7 @@ describe('appInstaller tests', () => {
 
     // Proxy require
     appInstaller = proxyquire('../../ZelBack/src/services/appLifecycle/appInstaller', {
-      '../appMonitoring/appReconciler': { enqueue: sinon.stub(), awaitConvergence: sinon.stub().resolves({ converged: true, failed: [] }) },
+      '../appMonitoring/appReconciler': { awaitConvergence: sinon.stub().resolves({ converged: true, failed: [] }) },
       config: configStub,
       '../verificationHelper': verificationHelperStub,
       '../messageHelper': messageHelperStub,
@@ -354,7 +354,6 @@ describe('appInstaller tests', () => {
 
       const onInstallComplete = sinon.stub().resolves();
       const fluxEventBusPublish = sinon.stub();
-      const appReconcilerEnqueue = sinon.stub();
       const appReconcilerAwaitConvergence = sinon.stub().resolves(converge);
       const uninstallApplication = sinon.stub().resolves();
       const broadcastMessageToAll = sinon.stub().resolves();
@@ -432,7 +431,7 @@ describe('appInstaller tests', () => {
           resolveDeploymentIdentity: sinon.stub().resolves(null),
         },
         '../utils/fluxEventBus': { publish: fluxEventBusPublish },
-        '../appMonitoring/appReconciler': { enqueue: appReconcilerEnqueue, awaitConvergence: appReconcilerAwaitConvergence },
+        '../appMonitoring/appReconciler': { awaitConvergence: appReconcilerAwaitConvergence },
         '../utils/cpuBurstHelper': { getCpuBurstAllowance: sinon.stub().returns(0), isEnterpriseOwner: sinon.stub().returns(false), isCpuBurstSupported: sinon.stub().resolves(false) },
         '../appRequirements/hwRequirements': hwRequirementsStub,
       });

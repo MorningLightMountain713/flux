@@ -52,7 +52,7 @@ describe('appStartupManager tests', () => {
     };
 
     appReconcilerStub = {
-      enqueue: sinon.stub(),
+      enqueueApp: sinon.stub(),
     };
 
     appUninstallerStub = {
@@ -222,7 +222,7 @@ describe('appStartupManager tests', () => {
 
       expect(results.appsEnqueued).to.deep.equal(['AppA']);
       expect(results.appsRemoved).to.deep.equal([]);
-      expect(appReconcilerStub.enqueue.calledWith('AppA')).to.equal(true);
+      expect(appReconcilerStub.enqueueApp.calledWith('AppA')).to.equal(true);
     });
 
     it('should remove app when location record has expired', async () => {
@@ -239,7 +239,7 @@ describe('appStartupManager tests', () => {
       expect(results.appsRemoved).to.deep.equal(['AppA']);
       expect(results.appsEnqueued).to.deep.equal([]);
       expect(appUninstallerStub.uninstallApplication.calledWith('AppA', { forceKill: true, skipGuard: true })).to.equal(true);
-      expect(appReconcilerStub.enqueue.called).to.equal(false);
+      expect(appReconcilerStub.enqueueApp.called).to.equal(false);
     });
 
     it('should remove app when location record is missing', async () => {
@@ -340,7 +340,7 @@ describe('appStartupManager tests', () => {
 
       expect(results.appsEnqueued).to.deep.equal(['SyncApp']);
       expect(results.appsRemoved).to.deep.equal(['NormalApp']);
-      expect(appReconcilerStub.enqueue.calledOnceWith('SyncApp')).to.equal(true);
+      expect(appReconcilerStub.enqueueApp.calledOnceWith('SyncApp')).to.equal(true);
     });
 
     it('enqueues a multi-component app once, by app name (the reconciler expands components)', async () => {
@@ -357,7 +357,7 @@ describe('appStartupManager tests', () => {
       const results = await appStartupManager.reconcileAppsOnBoot();
 
       expect(results.appsEnqueued).to.deep.equal(['MixedApp']);
-      expect(appReconcilerStub.enqueue.calledOnceWith('MixedApp')).to.equal(true);
+      expect(appReconcilerStub.enqueueApp.calledOnceWith('MixedApp')).to.equal(true);
     });
   });
 

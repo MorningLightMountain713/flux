@@ -27,8 +27,9 @@ export async function waitForDown(client, appName, label, { timeout = 60000, int
 // Proof of FULL teardown on a node: no container, no docker network, no appdata mount or
 // directory. Use instead of a bare container-gone check to assert an app is really gone
 // (a removal that converged), not merely stopped/removed-container-but-leaked-volume.
-export async function waitForAppFullyGone(client, appName, { timeout = 120000, interval = 2000 } = {}) {
-  await waitFor(() => isAppFullyGone(client.container, appName), { timeout, interval, label: `${appName} fully torn down` });
+export async function waitForAppFullyGone(client, appName, { identifiers, timeout = 120000, interval = 2000 } = {}) {
+  await waitFor(() => isAppFullyGone(client.container, appName, { identifiers }),
+    { timeout, interval, label: `${appName} fully torn down` });
 }
 
 // Event-based wait helpers (use SSE event stream)

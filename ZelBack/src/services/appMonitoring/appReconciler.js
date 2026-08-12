@@ -33,7 +33,7 @@ const reconcilerQueue = require('./reconcilerQueue');
 // live there, and the engine registers its reconcile + onSettled below. A producer
 // that only needs to enqueue depends on reconcilerQueue directly and never pulls this
 // engine's heavy dependency tree (the import-hub that made every producer a cycle risk).
-const { enqueue, scheduleRetry } = reconcilerQueue;
+const { enqueueComponent, scheduleRetry } = reconcilerQueue;
 // The mesh identity-drift registry: dependency-free by design, so reading it
 // here closes no cycle with the mesh tree (which sits downstream of this one
 // via the provisioner).
@@ -410,17 +410,7 @@ async function getLocalComponentSpec(identifier, inst) {
     if (comp) { deployment = d; break; }
   }
   if (!comp) {
-    // An app-level identifier: callers that hold only an app name (boot
-    // recovery, the hourly sweep) cannot derive component identifiers - the
-    // deployment owns them, sometimes behind encryption - so the reconciler
-    // expands the identifier itself, across every local replica of a
-    // co-located app. Replicated components are safe to include: they hold
-    // at awaitingController until a decider speaks.
-    if (!identifier.includes('_')) {
-      const expandTo = deployments.flatMap((d) => d.componentEntries().map(([, c]) => c.identifier));
-      if (expandTo.length > 0) return { expandTo };
-    }
-    // A component-style identifier that resolves to nothing is a real
+    // A component identifier that resolves to nothing is a real
     // mismatch (renamed component, stale enqueue, or a pre-qualification
     // container awaiting its requalifying adoption) - surface it instead of
     // dropping the recovery as if the app were uninstalled.
@@ -756,7 +746,7 @@ async function recreateMissing(identifier, app) {
     // longer starts) — enqueue so the reconciler's start branch starts it,
     // registers monitoring, and emits firstStart. Coalesces into this in-flight
     // reconcile via dirty, so the start runs on the immediate follow-up pass.
-    enqueue(identifier);
+    enqueueComponent(identifier);
   } catch (err) {
     // Removal must be justified by the state of the world NOW, not at
     // classification time: a whole recreate attempt (image pull - up to
@@ -846,7 +836,7 @@ async function recreateForNetworkHeal(identifier, app) {
     // never starts) — enqueue so the reconciler's start branch starts it,
     // registers monitoring, notifies the network, and arms the post-start
     // attachment verify.
-    enqueue(identifier);
+    enqueueComponent(identifier);
   } catch (err) {
     // Same diagnostics the vanished path emits - minus the uninstall escalation.
     // Without these a heal-removed container whose recreate keeps failing (e.g. its
@@ -1177,15 +1167,6 @@ async function reconcile(identifier) {
     networkPrunedNoted.delete(identifier);
     detachedSince.delete(identifier);
     log.info(`appReconciler - ${identifier} not installed here, nothing to enforce`);
-    return;
-  }
-
-  // App-level identifier expanded by the spec layer (component identifiers
-  // live inside the deployment, sometimes behind encryption): reconcile each
-  // component individually.
-  if (spec.expandTo) {
-    log.info(`appReconciler - ${identifier} expanded to components: ${spec.expandTo.join(', ')}`);
-    spec.expandTo.forEach((id) => enqueue(id));
     return;
   }
 
@@ -1838,7 +1819,7 @@ async function awaitConvergence(ids, opts = {}) {
     }, backstopMs);
     if (timer.unref) timer.unref();
     convergeBackstops.set(id, timer);
-    enqueue(id);
+    enqueueComponent(id);
   })));
   const failed = ids.filter((id, i) => verdicts[i] === 'failed');
   return { converged: failed.length === 0, failed };
@@ -1869,16 +1850,57 @@ async function drive(ids, state) {
 }
 
 /**
- * Enqueue every installed app (hourly tick / reconnect / boot drift). Apps are
- * enqueued by name; reconcile expands each to its component identifiers
- * through the deployment layer, which owns version dispatch and decryption.
+ * Enqueue one APP's components, by app name — for callers that hold a name and
+ * nothing else (the hourly sweep, boot recovery, reconnect, redeploy recovery).
+ *
+ * The app is resolved to its component identifiers HERE rather than inside the
+ * reconcile pass, so the workqueue only ever holds components — the single thing
+ * the reconciler actuates. The identifiers come off the installed rows, which
+ * record them exactly so this is a lookup: no spec build, no decryption, and
+ * therefore nothing to defer. Rows written before that index existed fall back to
+ * the deployment layer, which is the only other place that knows them.
+ *
+ * Never rejects: producers fire this without awaiting, and one app that cannot be
+ * resolved must not take a sweep — or an unhandled rejection — with it.
+ *
+ * @param {string} name
+ */
+async function enqueueApp(name) {
+  let identifiers = [];
+  try {
+    identifiers = await appsRepository.listComponentIdentifiers(name);
+    if (identifiers.length === 0) {
+      const inst = await appsRepository.getInstalledApp(name);
+      // Not installed here: nothing to converge. A row-deleted app mid-removal is
+      // driven per component by the uninstaller and replayed at boot from the owed
+      // records, neither of which needs this path.
+      if (!inst) return;
+      const installedViews = await deploymentProvider.installedDeployments(inst);
+      const deployments = installedViews.length > 0
+        ? installedViews
+        : [await deploymentProvider.buildDeployment(inst, { replica: null })];
+      identifiers = deployments.flatMap((d) => d.componentEntries().map(([, c]) => c.identifier));
+    }
+  } catch (err) {
+    // Transient (DB blip, or an enterprise spec whose key isn't loaded yet): the next
+    // tick re-drives it. Never act on, nor expand onto, a spec that would not resolve.
+    log.warn(`appReconciler - enqueueApp ${name} could not resolve its components: ${err.message}`);
+    return;
+  }
+  identifiers.forEach((id) => enqueueComponent(id));
+}
+
+/**
+ * Enqueue every installed app (hourly tick / reconnect / boot drift), each fanned
+ * out to its own components by enqueueApp.
  */
 async function enqueueAll(reason = 'resync') {
   const res = await appQueryService.installedApps();
   if (!res || res.status !== 'success') return;
   let count = 0;
   for (const app of res.data) {
-    enqueue(app.name);
+    // eslint-disable-next-line no-await-in-loop
+    await enqueueApp(app.name);
     count += 1;
   }
   fluxEventBus.publish('reconciler:swept', { reason, count });
@@ -1905,7 +1927,7 @@ async function enqueueDependents(identifier) {
   if (!spec || !spec.deployment || !spec.comp) return;
   for (const depName of spec.deployment.dependentsOf(spec.comp.name)) {
     const dependent = spec.deployment.getComponent(depName);
-    if (dependent) enqueue(dependent.identifier);
+    if (dependent) enqueueComponent(dependent.identifier);
   }
   await enqueueAppDependents(spec.deployment.appName);
 }
@@ -1935,7 +1957,7 @@ async function enqueueAppDependents(appName) {
     const gated = relationshipResolver.edgesOf(viewsByName, app.name.toLowerCase())
       .some(([target, edge]) => target.toLowerCase() === lower
         && (edge.after === true || edge.strength === 'boundTo'));
-    if (gated) enqueue(app.name);
+    if (gated) enqueueApp(app.name);
   }
 }
 
@@ -1956,7 +1978,7 @@ function setControllerDesired(identifier, state, reason) {
   controllerDesired.set(identifier, state);
   log.info(`appReconciler - controllerDesired[${identifier}] = ${state} (${reason})`);
   fluxEventBus.publish('reconciler:desiredChanged', { identifier, state, reason });
-  enqueue(identifier);
+  enqueueComponent(identifier);
 }
 
 /**
@@ -1973,7 +1995,7 @@ function requestStopAndClearData(identifier, reason) {
   log.info(`appReconciler - requesting stop + local appdata clear for ${identifier} (${reason})`);
   fluxEventBus.publish('reconciler:desiredChanged', { identifier, state: 'stopped', reason });
   fluxEventBus.publish('reconciler:dataClearRequested', { identifier, reason });
-  enqueue(identifier);
+  enqueueComponent(identifier);
 }
 
 function clearControllerDesired(identifier) {
@@ -2033,7 +2055,9 @@ reconcilerQueue.setReconcile(reconcile);
 reconcilerQueue.setOnSettled(onSettled);
 
 module.exports = {
-  enqueue,
+  // Producers say which they hold: a component identifier, or an app name.
+  enqueueComponent,
+  enqueueApp,
   enqueueAll,
   enqueueDependents,
   awaitConvergence,

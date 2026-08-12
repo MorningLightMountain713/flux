@@ -397,6 +397,6 @@ test-infra/flux-dnsd/dist/
 # per-node logs written by the integration harness on test failure
 test-infra/runner/test-logs/
 
-# flux-spec sibling checkout vendored at the repo root for harness image
-# builds (package.json file:../flux-spec deps) - never commit it
-/flux-spec/
+# flux-spec vendored for harness image builds, beside the other pinned build
+# artifacts above - never commit it
+test-infra/flux-spec/dist/

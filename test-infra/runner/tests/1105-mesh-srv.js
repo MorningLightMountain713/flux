@@ -8,7 +8,7 @@ import { queueAppTx, advanceBlocks } from '../framework/daemon-control.js';
 import { waitFor, waitForAppInstalled } from '../framework/wait.js';
 import { authenticate } from '../auth.js';
 import { appOwnerKey } from '../framework/keys.js';
-import { execInContainer } from '../framework/container.js';
+import { execInContainer, requireAppContainerName } from '../framework/container.js';
 import { pushBusybox } from '../framework/registry-helper.js';
 import { REGISTRY_REPO_HOST, getSubnetConfig } from '../framework/subnet-config.js';
 
@@ -44,11 +44,10 @@ describe('mesh SRV discovery and membership-not-liveness', function () {
     return res.json();
   }
 
+  // Container names are built from the app's minted identity, so they are RESOLVED
+  // through the labels FluxOS stamps rather than reconstructed here.
   async function appContainerName(clientIndex, component) {
-    const status = await meshStatus(clientIndex);
-    const identity = status?.data?.identity;
-    expect(identity, `mesh identity on node ${clientIndex}`).to.be.a('string');
-    return `flux${component}_${identity}`;
+    return requireAppContainerName(env.clients[clientIndex].container, name, component);
   }
 
   async function inApp(clientIndex, component, command) {

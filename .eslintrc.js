@@ -13,7 +13,10 @@ module.exports = {
   extends: [
     'eslint:recommended',
   ],
-  plugins: [],
+  // The rules below include import/* ones, which only exist while this plugin is
+  // registered — without it every file fails with "Definition for rule ... was not
+  // found" before a single real rule runs.
+  plugins: ['import'],
   rules: {
     'max-len': [
       'error',

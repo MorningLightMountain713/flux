@@ -1200,7 +1200,7 @@ async function executeTeardown(doc, { onStatus = null } = {}) {
     // the idempotent teardown make the fan-out safe.
     // eslint-disable-next-line no-restricted-syntax
     for (const c of list) {
-      reconcilerQueue.enqueue(c.identifier);
+      reconcilerQueue.enqueueComponent(c.identifier);
     }
   }
 }
@@ -1269,7 +1269,7 @@ async function recoverOwedTeardowns() {
   // the run-state path off these components until the boot gate opens and these enqueues
   // (held in bootPending until then) drain into the reconciler's owed-teardown path.
   toDrain.forEach((doc) => {
-    (doc.components || []).forEach((c) => reconcilerQueue.enqueue(c.identifier));
+    (doc.components || []).forEach((c) => reconcilerQueue.enqueueComponent(c.identifier));
   });
 }
 

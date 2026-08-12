@@ -94,7 +94,7 @@ async function requestGracefulStop(identifier, reconcilerReason) {
         log.warn(`appShutdownCoordinator: ${appName} daemon stop ${res.outcome}; falling back to local`);
         localFallback.add(appName);
         globalState.clearAppShutdownPipelineState(appName);
-        appReconciler.enqueue(identifier);
+        appReconciler.enqueueComponent(identifier);
         return;
       }
       // rejected_pipeline_active: the node-wide pipeline owns the stop and the gate
@@ -105,7 +105,7 @@ async function requestGracefulStop(identifier, reconcilerReason) {
       // the drain already ran its (suppressed) reconcile, and without this the app
       // sits wedged 'stopping' for the remainder of the budget window.
       globalState.clearAppShutdownPipelineState(appName);
-      appReconciler.enqueue(identifier);
+      appReconciler.enqueueComponent(identifier);
     })
     .catch((e) => {
       inFlight.delete(appName);

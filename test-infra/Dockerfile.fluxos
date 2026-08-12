@@ -67,11 +67,12 @@ WORKDIR /flux
 
 COPY package.json ./
 # package.json declares @runonflux/flux-spec* as file:../flux-spec/packages/*
-# (the same sibling-checkout layout the test nodes use). npm creates those
-# links without verifying the target, so a missing /flux-spec surfaces only at
-# runtime as "Cannot find module". Provide a flux-spec checkout at the repo
-# root (gitignored) before building.
-COPY flux-spec /flux-spec
+# (the same sibling-checkout layout the test nodes use), so the tree has to land
+# as a SIBLING of /flux whatever it is called in the build context. npm creates
+# those links without verifying the target, so a missing /flux-spec surfaces only
+# at runtime as "Cannot find module". Vendor it first:
+#   bash test-infra/flux-spec/vendor.sh
+COPY test-infra/flux-spec/dist /flux-spec
 # The file: deps are symlinks, and Node resolves their imports from the REAL
 # path (/flux-spec/...), never reaching /flux/node_modules - flux-spec needs
 # its own workspace install, same as the sibling checkout has on a dev box.

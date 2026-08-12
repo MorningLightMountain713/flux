@@ -13,6 +13,7 @@ import {
   pauseDockerd, resumeDockerd, restartFluxos,
 } from '../framework/container.js';
 import { waitForUp, waitForAppFullyGone } from '../framework/wait.js';
+import { appComponentIdentifiers } from '../framework/container.js';
 
 // Removal is a converged reconciler desired state ("gone"), not a one-shot job. Every
 // permanent removal writes a durable owed-teardown record before deleting the local row;
@@ -62,11 +63,12 @@ describe('app removal converges to fully gone via the reconciler', function () {
   }
 
   const ownerAuth = () => authenticate(client.url, appOwnerKey());
-  // reconciler:actuated events carry the component identifier; match on the app substring
-  // so the exact component-id shape (flat vs composed) doesn't matter.
-  const removalEvent = (name, action, afterId, timeout = 120000) => client.waitForEvent(
+  // reconciler:actuated events carry the COMPONENT identifier, which is built from the
+  // app's minted identity and contains no trace of its name — so the match is against the
+  // identifiers captured off the running app, not a substring of the name.
+  const removalEvent = (identifiers, action, afterId, timeout = 120000) => client.waitForEvent(
     'reconciler:actuated',
-    (d) => typeof d.identifier === 'string' && d.identifier.includes(name) && d.action === action,
+    (d) => typeof d.identifier === 'string' && identifiers.includes(d.identifier) && d.action === action,
     timeout,
     { afterId },
   );
@@ -75,6 +77,9 @@ describe('app removal converges to fully gone via the reconciler', function () {
     this.timeout(300000);
     const name = `rmconv${Date.now()}`;
     await installLocalOnly(name);
+    // Captured while the app is installed: both the removal events and the appdata
+    // artifacts are keyed on these, and nothing after teardown can still name them.
+    const identifiers = await appComponentIdentifiers(client.container, name);
     // grab auth BEFORE the outage: the node's login-phrase endpoint needs docker
     const auth = await ownerAuth();
     const afterId = client.getLastEventId();
@@ -85,19 +90,22 @@ describe('app removal converges to fully gone via the reconciler', function () {
     await client.removeApp(name, { zelidauth: auth.zelidauth }).catch(() => {});
 
     // the reconciler owns the owed teardown now and keeps re-driving it while docker is down
-    await removalEvent(name, 'removalDeferred', afterId, 90000);
+    await removalEvent(identifiers, 'removalDeferred', afterId, 90000);
 
     // restore docker; the reconciler's next re-drive converges to FULLY gone - no restart,
     // no waiting for the next boot.
     await resumeDockerd(client.container);
-    await removalEvent(name, 'removed', afterId, 150000);
-    await waitForAppFullyGone(client, name);
+    await removalEvent(identifiers, 'removed', afterId, 150000);
+    await waitForAppFullyGone(client, name, { identifiers });
   });
 
   it('boot recovery hands an interrupted teardown to the reconciler, converging to fully gone', async function () {
     this.timeout(300000);
     const name = `rmboot${Date.now()}`;
     await installLocalOnly(name);
+    // Captured while the app is installed: both the removal events and the appdata
+    // artifacts are keyed on these, and nothing after teardown can still name them.
+    const identifiers = await appComponentIdentifiers(client.container, name);
     // grab auth BEFORE the outage: the node's login-phrase endpoint needs docker
     const auth = await ownerAuth();
     const afterId = client.getLastEventId();
@@ -106,7 +114,7 @@ describe('app removal converges to fully gone via the reconciler', function () {
     // persists past the removal call.
     await pauseDockerd(client.container);
     await client.removeApp(name, { zelidauth: auth.zelidauth }).catch(() => {});
-    await removalEvent(name, 'removalDeferred', afterId, 90000);
+    await removalEvent(identifiers, 'removalDeferred', afterId, 90000);
 
     // restart FluxOS (in-memory state wiped) while the teardown is still owed AND docker is
     // still down: boot recovery must re-enqueue the owed teardown for the reconciler rather
@@ -116,6 +124,6 @@ describe('app removal converges to fully gone via the reconciler', function () {
 
     // proven by the real end state - the event id space resets across a restart, so assert
     // the outcome, not an event: nothing of the app remains on the node.
-    await waitForAppFullyGone(client, name, { timeout: 180000 });
+    await waitForAppFullyGone(client, name, { identifiers, timeout: 180000 });
   });
 });

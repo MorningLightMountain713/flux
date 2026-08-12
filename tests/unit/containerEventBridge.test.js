@@ -40,7 +40,7 @@ describe('containerEventBridge', () => {
       globalState: { bootContainerStateSettled: true },
       appsRuntimeState: { recordExit: sinon.stub().resolves() },
       appReconciler: {
-        enqueue: sinon.stub(),
+        enqueueComponent: sinon.stub(),
         enqueueAll: sinon.stub().resolves(),
         enqueueDependents: sinon.stub().resolves(),
       },
@@ -69,7 +69,7 @@ describe('containerEventBridge', () => {
       await containerEventBridge.handleContainerDie(dieEvent('fluxwww_app', 137), LABEL_KEYS);
       // the bridge holds a docker name and converts at its own boundary: the
       // reconciler and appsRuntimeState are keyed by the bare component id
-      expect(stubs.appReconciler.enqueue.calledOnceWith('www_app')).to.be.true;
+      expect(stubs.appReconciler.enqueueComponent.calledOnceWith('www_app')).to.be.true;
       expect(stubs.appsRuntimeState.recordExit.calledOnceWith('www_app', 137)).to.be.true;
     });
 
@@ -79,7 +79,7 @@ describe('containerEventBridge', () => {
         Actor: { Attributes: { name: 'fluxwww_app', exitCode: '137', 'io.runonflux.identifier': 'www_app' } },
       };
       await containerEventBridge.handleContainerDie(event, LABEL_KEYS);
-      expect(stubs.appReconciler.enqueue.calledOnceWith('www_app')).to.be.true;
+      expect(stubs.appReconciler.enqueueComponent.calledOnceWith('www_app')).to.be.true;
     });
 
     it('keys a component named flux* by its own identifier, not one four characters short', async () => {
@@ -93,14 +93,14 @@ describe('containerEventBridge', () => {
         Actor: { Attributes: { name: 'fluxfluxproxy_app', exitCode: '137' } },
       };
       await containerEventBridge.handleContainerDie(event, LABEL_KEYS);
-      expect(stubs.appReconciler.enqueue.calledOnceWith('fluxproxy_app')).to.be.true;
+      expect(stubs.appReconciler.enqueueComponent.calledOnceWith('fluxproxy_app')).to.be.true;
       expect(stubs.appsRuntimeState.recordExit.calledOnceWith('fluxproxy_app', 137)).to.be.true;
     });
 
     it('recovers the identifier of a legacy zel container, which carries no label', async () => {
       const event = { Action: 'die', Actor: { Attributes: { name: 'zelwww_app', exitCode: '1' } } };
       await containerEventBridge.handleContainerDie(event, LABEL_KEYS);
-      expect(stubs.appReconciler.enqueue.calledOnceWith('www_app')).to.be.true;
+      expect(stubs.appReconciler.enqueueComponent.calledOnceWith('www_app')).to.be.true;
     });
 
     it('wakes dependents on a crash too — a boundTo requirer must learn of its target\'s death', async () => {
@@ -113,14 +113,14 @@ describe('containerEventBridge', () => {
 
     it('wakes dependents on a clean exit (a completed run-once target)', async () => {
       await containerEventBridge.handleContainerDie(dieEvent('fluxinit_app', 0), LABEL_KEYS);
-      expect(stubs.appReconciler.enqueue.calledOnceWith('init_app')).to.be.true;
+      expect(stubs.appReconciler.enqueueComponent.calledOnceWith('init_app')).to.be.true;
       expect(stubs.appReconciler.enqueueDependents.calledOnceWith('init_app')).to.be.true;
     });
 
     it('does NOT reconcile a deliberate-stop die while the stop operation holds the lease', async () => {
       operationRegistry.acquire('fluxwww_app', 'stopping', 'test'); // held by an in-flight appDockerStop
       await containerEventBridge.handleContainerDie(dieEvent('fluxwww_app', 0), LABEL_KEYS);
-      expect(stubs.appReconciler.enqueue.called).to.be.false;
+      expect(stubs.appReconciler.enqueueComponent.called).to.be.false;
       expect(stubs.appReconciler.enqueueDependents.called).to.be.false;
       expect(stubs.appsRuntimeState.recordExit.called).to.be.false;
       // the lease is OWNED by the stop operation (released in its finally), not by
@@ -131,7 +131,7 @@ describe('containerEventBridge', () => {
     it('does NOT reconcile a die while a teardown holds the removing lease (also stop-aligned)', async () => {
       operationRegistry.acquire('fluxwww_app', 'removing', 'test'); // held by an in-flight teardown
       await containerEventBridge.handleContainerDie(dieEvent('fluxwww_app', 0), LABEL_KEYS);
-      expect(stubs.appReconciler.enqueue.called).to.be.false;
+      expect(stubs.appReconciler.enqueueComponent.called).to.be.false;
       expect(stubs.appsRuntimeState.recordExit.called).to.be.false;
     });
 
@@ -142,13 +142,13 @@ describe('containerEventBridge', () => {
     it('DOES reconcile a die while an actuating (start) lease is held — a crash-on-start is real', async () => {
       operationRegistry.acquire('fluxwww_app', 'actuating', 'test'); // held by an in-flight appDockerStart
       await containerEventBridge.handleContainerDie(dieEvent('fluxwww_app', 137), LABEL_KEYS);
-      expect(stubs.appReconciler.enqueue.calledOnceWith('www_app')).to.be.true;
+      expect(stubs.appReconciler.enqueueComponent.calledOnceWith('www_app')).to.be.true;
       expect(stubs.appsRuntimeState.recordExit.calledOnceWith('www_app', 137)).to.be.true;
     });
 
     it('ignores non-flux containers', async () => {
       await containerEventBridge.handleContainerDie(dieEvent('some_other_container'), LABEL_KEYS);
-      expect(stubs.appReconciler.enqueue.called).to.be.false;
+      expect(stubs.appReconciler.enqueueComponent.called).to.be.false;
       expect(stubs.appsRuntimeState.recordExit.called).to.be.false;
     });
   });
@@ -163,19 +163,19 @@ describe('containerEventBridge', () => {
 
     it('enqueues a reconcile for an out-of-band removal of a flux container', async () => {
       containerEventBridge.handleContainerDestroy(destroyEvent('fluxwww_app'), LABEL_KEYS);
-      expect(stubs.appReconciler.enqueue.calledOnceWith('www_app')).to.be.true;
+      expect(stubs.appReconciler.enqueueComponent.calledOnceWith('www_app')).to.be.true;
     });
 
     it('does NOT reconcile a teardown-owned destroy while the removing lease is held', async () => {
       operationRegistry.acquire('fluxwww_app', 'removing', 'test'); // an in-flight uninstall
       containerEventBridge.handleContainerDestroy(destroyEvent('fluxwww_app'), LABEL_KEYS);
-      expect(stubs.appReconciler.enqueue.called).to.be.false;
+      expect(stubs.appReconciler.enqueueComponent.called).to.be.false;
       expect(operationRegistry.isHeld('fluxwww_app')).to.be.true;
     });
 
     it('ignores non-flux containers', async () => {
       containerEventBridge.handleContainerDestroy(destroyEvent('some_other_container'), LABEL_KEYS);
-      expect(stubs.appReconciler.enqueue.called).to.be.false;
+      expect(stubs.appReconciler.enqueueComponent.called).to.be.false;
     });
   });
 
@@ -185,7 +185,7 @@ describe('containerEventBridge', () => {
       expect(stubs.appReconciler.enqueueDependents.calledOnceWith('db_app')).to.be.true;
       // a start event for the container itself is a no-op for the container - the
       // reconciler is level-based and only dependents need re-evaluating
-      expect(stubs.appReconciler.enqueue.called).to.be.false;
+      expect(stubs.appReconciler.enqueueComponent.called).to.be.false;
     });
 
     it('ignores non-flux containers', async () => {
@@ -203,19 +203,19 @@ describe('containerEventBridge', () => {
     // reads healthy).
     it('re-reconciles the container and re-evaluates its dependents on any health event', async () => {
       containerEventBridge.handleContainerHealth(healthEvent('fluxweb_app', 'unhealthy'), LABEL_KEYS);
-      expect(stubs.appReconciler.enqueue.calledOnceWith('web_app')).to.be.true;
+      expect(stubs.appReconciler.enqueueComponent.calledOnceWith('web_app')).to.be.true;
       expect(stubs.appReconciler.enqueueDependents.calledOnceWith('web_app')).to.be.true;
     });
 
     it('behaves identically for a free-form health Action (which the old colon-parse would mangle)', async () => {
       await containerEventBridge.handleContainerEvent({ Action: 'health_status: probe failed: connection refused', Actor: { Attributes: { name: 'fluxdb_app' } } });
-      expect(stubs.appReconciler.enqueue.calledOnceWith('db_app')).to.be.true;
+      expect(stubs.appReconciler.enqueueComponent.calledOnceWith('db_app')).to.be.true;
       expect(stubs.appReconciler.enqueueDependents.calledOnceWith('db_app')).to.be.true;
     });
 
     it('ignores non-flux containers', async () => {
       containerEventBridge.handleContainerHealth(healthEvent('redis', 'unhealthy'), LABEL_KEYS);
-      expect(stubs.appReconciler.enqueue.called).to.be.false;
+      expect(stubs.appReconciler.enqueueComponent.called).to.be.false;
       expect(stubs.appReconciler.enqueueDependents.called).to.be.false;
     });
   });
@@ -223,16 +223,16 @@ describe('containerEventBridge', () => {
   describe('handleContainerEvent dispatch', () => {
     it('routes die / destroy / start / health_status to the right handler by Action', async () => {
       await containerEventBridge.handleContainerEvent(dieEvent('fluxa_app', 5));
-      expect(stubs.appReconciler.enqueue.calledWith('a_app'), 'die -> enqueue self').to.be.true;
+      expect(stubs.appReconciler.enqueueComponent.calledWith('a_app'), 'die -> enqueue self').to.be.true;
 
       await containerEventBridge.handleContainerEvent({ Action: 'destroy', Actor: { Attributes: { name: 'fluxd_app' } } });
-      expect(stubs.appReconciler.enqueue.calledWith('d_app'), 'destroy -> enqueue self').to.be.true;
+      expect(stubs.appReconciler.enqueueComponent.calledWith('d_app'), 'destroy -> enqueue self').to.be.true;
 
       await containerEventBridge.handleContainerEvent(startEvent('fluxb_app'));
       expect(stubs.appReconciler.enqueueDependents.calledWith('b_app'), 'start -> wake dependents').to.be.true;
 
       await containerEventBridge.handleContainerEvent(healthEvent('fluxc_app', 'unhealthy'));
-      expect(stubs.appReconciler.enqueue.calledWith('c_app'), 'unhealthy -> enqueue self').to.be.true;
+      expect(stubs.appReconciler.enqueueComponent.calledWith('c_app'), 'unhealthy -> enqueue self').to.be.true;
     });
   });
 
@@ -261,7 +261,7 @@ describe('containerEventBridge', () => {
       // restart policy applied to it would report a pass for an app that crashes.
       await containerEventBridge.handleContainerEvent(sessionEvent('die', 'fluxmyapp'));
 
-      expect(stubs.appReconciler.enqueue.called).to.be.false;
+      expect(stubs.appReconciler.enqueueComponent.called).to.be.false;
     });
 
     it('drops destroy, start and health_status for a session container too', async () => {
@@ -269,7 +269,7 @@ describe('containerEventBridge', () => {
       await containerEventBridge.handleContainerEvent(sessionEvent('start', 'fluxmyapp'));
       await containerEventBridge.handleContainerEvent(sessionEvent('health_status: healthy', 'fluxmyapp'));
 
-      expect(stubs.appReconciler.enqueue.called).to.be.false;
+      expect(stubs.appReconciler.enqueueComponent.called).to.be.false;
       expect(stubs.appReconciler.enqueueDependents.called).to.be.false;
     });
 
@@ -281,13 +281,13 @@ describe('containerEventBridge', () => {
       });
 
       expect(stubs.dockerService.dockerListContainers.called).to.be.false;
-      expect(stubs.appReconciler.enqueue.called).to.be.false;
+      expect(stubs.appReconciler.enqueueComponent.called).to.be.false;
     });
 
     it('still handles an ordinary flux container - the drop is label-scoped', async () => {
       await containerEventBridge.handleContainerEvent(dieEvent('fluxwww_app', 137));
 
-      expect(stubs.appReconciler.enqueue.calledOnceWith('www_app')).to.be.true;
+      expect(stubs.appReconciler.enqueueComponent.calledOnceWith('www_app')).to.be.true;
       expect(stubs.appsRuntimeState.recordExit.calledOnceWith('www_app', 137)).to.be.true;
     });
   });
@@ -307,7 +307,7 @@ describe('containerEventBridge', () => {
 
       await stubs.subscriptionOptions.onEvent(dieEvent('fluxwww_app', 137));
 
-      expect(stubs.appReconciler.enqueue.calledOnceWith('www_app')).to.be.true;
+      expect(stubs.appReconciler.enqueueComponent.calledOnceWith('www_app')).to.be.true;
       containerEventBridge.stop();
     });
 
@@ -357,41 +357,41 @@ describe('containerEventBridge', () => {
 
     it('enqueues a reconcile when a flux container is disconnected from its flux network', async () => {
       await containerEventBridge.handleNetworkDisconnect(disconnectEvent('fluxDockerNetwork_app', 'abc123'), LABEL_KEYS);
-      expect(stubs.appReconciler.enqueue.calledOnceWith('www_app')).to.be.true;
+      expect(stubs.appReconciler.enqueueComponent.calledOnceWith('www_app')).to.be.true;
     });
 
     it('ignores disconnects on networks flux does not own', async () => {
       await containerEventBridge.handleNetworkDisconnect(disconnectEvent('bridge', 'abc123'), LABEL_KEYS);
-      expect(stubs.appReconciler.enqueue.called).to.be.false;
+      expect(stubs.appReconciler.enqueueComponent.called).to.be.false;
       expect(stubs.dockerService.dockerListContainers.called, 'must not even resolve the container').to.be.false;
     });
 
     it('ignores a disconnect whose container is already gone (the destroy handler owns absence)', async () => {
       stubs.dockerService.dockerListContainers.resolves([]);
       await containerEventBridge.handleNetworkDisconnect(disconnectEvent('fluxDockerNetwork_app', 'abc123'), LABEL_KEYS);
-      expect(stubs.appReconciler.enqueue.called).to.be.false;
+      expect(stubs.appReconciler.enqueueComponent.called).to.be.false;
       expect(stubs.log.error.called, 'a trailing disconnect after removal is normal, never an error').to.be.false;
     });
 
     it('ignores a disconnect of a non-flux container from a flux network', async () => {
       stubs.dockerService.dockerListContainers.resolves([{ Id: 'abc123', Names: ['/interloper'] }]);
       await containerEventBridge.handleNetworkDisconnect(disconnectEvent('fluxDockerNetwork_app', 'abc123'), LABEL_KEYS);
-      expect(stubs.appReconciler.enqueue.called).to.be.false;
+      expect(stubs.appReconciler.enqueueComponent.called).to.be.false;
     });
 
     it('does NOT reconcile a deliberate teardown disconnect while its stop-aligned lease is held', async () => {
       operationRegistry.acquire('fluxwww_app', 'stopping', 'test');
       await containerEventBridge.handleNetworkDisconnect(disconnectEvent('fluxDockerNetwork_app', 'abc123'), LABEL_KEYS);
-      expect(stubs.appReconciler.enqueue.called).to.be.false;
+      expect(stubs.appReconciler.enqueueComponent.called).to.be.false;
       expect(operationRegistry.isHeld('fluxwww_app'), 'the lease belongs to the operation, never released here').to.be.true;
     });
 
     it('routes Type network/disconnect through the dispatcher and ignores other network actions', async () => {
       await containerEventBridge.handleContainerEvent(disconnectEvent('fluxDockerNetwork_app', 'abc123'));
-      expect(stubs.appReconciler.enqueue.calledOnceWith('www_app')).to.be.true;
-      stubs.appReconciler.enqueue.resetHistory();
+      expect(stubs.appReconciler.enqueueComponent.calledOnceWith('www_app')).to.be.true;
+      stubs.appReconciler.enqueueComponent.resetHistory();
       await containerEventBridge.handleContainerEvent({ Type: 'network', Action: 'connect', Actor: { Attributes: { name: 'fluxDockerNetwork_app', container: 'abc123' } } });
-      expect(stubs.appReconciler.enqueue.called).to.be.false;
+      expect(stubs.appReconciler.enqueueComponent.called).to.be.false;
     });
   });
 });

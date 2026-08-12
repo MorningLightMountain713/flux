@@ -8,7 +8,7 @@ import { queueAppTx, advanceBlocks } from '../framework/daemon-control.js';
 import { waitFor, waitForAppInstalled } from '../framework/wait.js';
 import { authenticate } from '../auth.js';
 import { appOwnerKey } from '../framework/keys.js';
-import { execInContainer } from '../framework/container.js';
+import { execInContainer, requireAppContainerName } from '../framework/container.js';
 import { pushBusybox } from '../framework/registry-helper.js';
 import { REGISTRY_REPO_HOST, getSubnetConfig } from '../framework/subnet-config.js';
 
@@ -39,17 +39,10 @@ describe('mesh isolation between two apps on one host', function () {
 
   // A component container is named flux{component}_{identity}; the identity
   // comes from that app's mesh status on that node.
+  // Container names are built from the app's minted identity, so they are RESOLVED
+  // through the labels FluxOS stamps rather than reconstructed here.
   async function appContainerName(clientIndex, appName) {
-    const status = await meshStatus(clientIndex, appName);
-    const identity = status?.data?.identity;
-    expect(identity, `${appName} identity on node ${clientIndex}`).to.be.a('string');
-    const containerName = `fluxweb_${identity}`;
-    const { stdout } = await execInContainer(
-      env.clients[clientIndex].container,
-      `docker ps --format '{{.Names}}' --filter name=${containerName}`,
-    );
-    expect(stdout.trim(), `container ${containerName} on node ${clientIndex}`).to.include(containerName);
-    return containerName;
+    return requireAppContainerName(env.clients[clientIndex].container, appName, 'web');
   }
 
   async function inApp(clientIndex, appName, command) {
