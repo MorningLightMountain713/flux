@@ -33,14 +33,27 @@ function meshSpec(overrides = {}) {
 describe('foundingCommittee', () => {
   let store;
 
+  let generationRows; // dedupKey -> event row for the grantgeneration reads
+
   beforeEach(() => {
     store = new Map();
+    generationRows = new Map();
     sinon.stub(dbHelper, 'databaseConnection').returns({ db: () => ({}) });
-    sinon.stub(dbHelper, 'findOneInDatabase').callsFake(async (d, coll, query) => store.get(query._id) ?? null);
+    sinon.stub(dbHelper, 'findOneInDatabase').callsFake(async (d, coll, query) => {
+      if (query.type === 'grantgeneration') return generationRows.get(query.dedupKey) ?? null;
+      return store.get(query._id) ?? null;
+    });
     sinon.stub(dbHelper, 'findOneAndUpdateInDatabase').callsFake(async (d, coll, query, update, options) => {
       expect(options.writeConcern).to.deep.equal({ w: 1, j: true });
       if (!store.has(query._id)) store.set(query._id, { _id: query._id, ...update.$setOnInsert });
       return { value: store.get(query._id) };
+    });
+    sinon.stub(dbHelper, 'updateOneInDatabase').callsFake(async (d, coll, query, update, options) => {
+      expect(options.writeConcern).to.deep.equal({ w: 1, j: true });
+      const existing = store.get(query._id);
+      const guard = query.$or ? ((existing?.generation ?? null) === null || (existing?.generation ?? 0) < update.$set.generation) : true;
+      if (existing && guard) store.set(query._id, { ...existing, ...update.$set });
+      return { acknowledged: true };
     });
     sinon.stub(networkStateService, 'membershipFingerprintAt').returns(FP);
     sinon.stub(networkStateService, 'membershipAt').callsFake((fp) => (fp === FP || fp === CURRENT_FP ? fleet(12) : null));
@@ -117,10 +130,65 @@ describe('foundingCommittee', () => {
       expect(committee.members).to.have.length(9);
     });
 
-    it('answers null, never a guess, when it holds no record and no basis', async () => {
-      networkStateService.membershipFingerprint.returns(null);
+    it('no record means wait — a young node never mints a basis of its own', async () => {
       const committee = await foundingCommittee.effectiveCommittee('ghost');
       expect(committee).to.equal(null);
+    });
+
+    it('answers null when it cannot even read the current list', async () => {
+      await foundingCommittee.materializeFor(meshSpec());
+      networkStateService.membershipFingerprint.returns(null);
+      const committee = await foundingCommittee.effectiveCommittee('myapp');
+      expect(committee).to.equal(null);
+    });
+  });
+
+  describe('owner generations', () => {
+    function generationRow(generation, height) {
+      return {
+        data: {
+          appName: 'myapp', role: 'founder', generation, height, at: 1,
+        },
+      };
+    }
+
+    it('a newer generation record re-rolls the committee at its named height', async () => {
+      await foundingCommittee.materializeFor(meshSpec());
+      const before = await foundingCommittee.effectiveCommittee('myapp');
+      expect(before.generation).to.equal(0);
+
+      // the named height's list shares the fleet with today's (the owner
+      // names a RECENT height, so its nodes are current nodes), differing
+      // only in the fingerprint that names it
+      const ROLL_FP = 'e'.repeat(64);
+      networkStateService.membershipFingerprintAt.withArgs(600_000).returns(ROLL_FP);
+      networkStateService.membershipAt.callsFake((fp) => (fp === ROLL_FP || fp === CURRENT_FP || fp === FP ? fleet(12) : null));
+      generationRows.set('grantgeneration:myapp/founder', generationRow(2, 600_000));
+
+      const after = await foundingCommittee.effectiveCommittee('myapp');
+      expect(after.generation).to.equal(2);
+      expect(after.fingerprint).to.equal(ROLL_FP);
+      expect(after.repinned).to.equal(false);
+      expect(after.members).to.have.length(9);
+    });
+
+    it('a node whose window misses the named height answers null, not a stale generation', async () => {
+      await foundingCommittee.materializeFor(meshSpec());
+      networkStateService.membershipFingerprintAt.withArgs(600_000).returns(null);
+      generationRows.set('grantgeneration:myapp/founder', generationRow(2, 600_000));
+
+      const committee = await foundingCommittee.effectiveCommittee('myapp');
+      expect(committee).to.equal(null);
+    });
+
+    it('a lower generation never overwrites a higher one', async () => {
+      await foundingCommittee.materializeFor(meshSpec());
+      store.get('myapp').generation = 3;
+      const applied = await foundingCommittee.materializeGeneration({
+        appName: 'myapp', generation: 2, height: 500_050,
+      });
+      expect(applied).to.equal(true); // the call succeeds; the guarded write is a no-op
+      expect(store.get('myapp').generation).to.equal(3);
     });
   });
 

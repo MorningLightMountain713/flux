@@ -8,6 +8,8 @@ const benchmarkService = require('../benchmarkService');
 const appsRepository = require('../appDatabase/appsRepository');
 const appEventVerifier = require('./appEventVerifier');
 const registryManager = require('../appDatabase/registryManager');
+const foundingCommittee = require('../appMesh/foundingCommittee');
+const ownerGenerationRecord = require('../quorumGrant/ownerGenerationRecord');
 const { getSpec, validateGossipSpec } = require('../utils/specLibs');
 const { getStateBeforeHeight } = require('../appDatabase/appSpecHistory');
 const globalState = require('../utils/globalState');
@@ -39,6 +41,7 @@ const APP_STATE_EVENT_TYPES = Object.freeze({
   EVICTED: 'evicted',
   IPCHANGED: 'ipchanged',
   MASTERLEASE: 'masterlease',
+  GRANTGENERATION: 'grantgeneration',
 });
 
 /**
@@ -769,22 +772,23 @@ async function handleIPChangedEvent({ message, envelope }) {
 }
 
 /**
- * Newer-wins on EPOCH, with the broadcast time only breaking ties. The
- * masterlease record's authority is its epoch — a successor at a higher
- * epoch replaces the old master's record however their clocks compare, and
- * a republish of the SAME term (same epoch, later broadcast) refreshes the
- * row without ever letting a stale clock un-seat a successor.
+ * Newer-wins on an ORDINAL FIELD, with the broadcast time only breaking
+ * ties. The record's authority is its ordinal — a masterlease's epoch, a
+ * generation record's generation — so a successor at a higher ordinal
+ * replaces the old record however their clocks compare, and a republish of
+ * the SAME ordinal (later broadcast) refreshes the row without ever letting
+ * a stale clock un-seat a successor.
  */
-function buildEpochConditionalUpsert(epoch, broadcastedAt, conditionalFields, options = {}) {
+function buildOrdinalConditionalUpsert(ordinalField, ordinal, broadcastedAt, conditionalFields, options = {}) {
   const alwaysSetFields = options.alwaysSetFields ?? {};
   const incomingDate = new Date(broadcastedAt);
-  const storedEpoch = { $ifNull: ['$data.epoch', -1] };
+  const storedOrdinal = { $ifNull: [`$data.${ordinalField}`, -1] };
   const isNewer = {
     $or: [
-      { $gt: [epoch, storedEpoch] },
+      { $gt: [ordinal, storedOrdinal] },
       {
         $and: [
-          { $eq: [epoch, storedEpoch] },
+          { $eq: [ordinal, storedOrdinal] },
           { $gt: [incomingDate, { $ifNull: ['$broadcastedAt', new Date(0)] }] },
         ],
       },
@@ -814,7 +818,7 @@ async function handleMasterleaseEvent({ message, envelope, announcer }) {
     // carries no expiry at all — the register it mirrors is write-once.
     await database.collection(globalAppStateEvents).updateOne(
       { type: APP_STATE_EVENT_TYPES.MASTERLEASE, dedupKey },
-      buildEpochConditionalUpsert(message.epoch, message.broadcastedAt, {
+      buildOrdinalConditionalUpsert('epoch', message.epoch, message.broadcastedAt, {
         ip: message.ip,
         outpoint: outpointOf(announcer),
         type: APP_STATE_EVENT_TYPES.MASTERLEASE,
@@ -831,6 +835,58 @@ async function handleMasterleaseEvent({ message, envelope, announcer }) {
   } catch (err) {
     log.error(`storeAppStateEvent(masterlease): ${err.message}`);
   }
+}
+
+async function handleGrantGenerationEvent({ message, envelope }) {
+  if (!ownerGenerationRecord.wellFormed(message)) return;
+  if (!Number.isSafeInteger(message.broadcastedAt)) return;
+  try {
+    // The signer is the app's OWNER, and the owner comes from this node's own
+    // copy of the spec — never from the record. No spec here means nothing to
+    // verify against: drop, and sync delivers the spec before the record
+    // matters.
+    const owner = await appsRepository.getGlobalAppOwner(message.appName);
+    if (!owner || !ownerGenerationRecord.verify(message, owner)) return;
+
+    const db = dbHelper.databaseConnection();
+    const database = db.db(config.database.appsglobal.database);
+    const dedupKey = `grantgeneration:${message.appName}/${message.role}`;
+    // Durable and generation-newer-wins: a lower generation can never un-seat
+    // a higher one, a replay refreshes nothing, and a re-pinned committee
+    // months later must still find the newest generation standing.
+    await database.collection(globalAppStateEvents).updateOne(
+      { type: APP_STATE_EVENT_TYPES.GRANTGENERATION, dedupKey },
+      buildOrdinalConditionalUpsert('generation', message.generation, message.broadcastedAt, {
+        type: APP_STATE_EVENT_TYPES.GRANTGENERATION,
+        dedupKey,
+        broadcastedAt: new Date(message.broadcastedAt),
+        envelope: envelope ?? null,
+        data: message,
+      }, { alwaysSetFields: { receivedAt: new Date() } }),
+      { upsert: true },
+    );
+
+    // In-window processors re-materialize the founding committee at the
+    // record's named height; late ones store the record and answer honestly
+    // until they can.
+    if (message.role === 'founder') {
+      await foundingCommittee.materializeGeneration(message);
+    }
+  } catch (err) {
+    log.error(`storeAppStateEvent(grantgeneration): ${err.message}`);
+  }
+}
+
+/**
+ * The newest owner generation record for one app role, or null.
+ */
+async function getGrantGenerationRecord(appName, role) {
+  const db = dbHelper.databaseConnection();
+  const database = db.db(config.database.appsglobal.database);
+  return database.collection(globalAppStateEvents).findOne(
+    { type: APP_STATE_EVENT_TYPES.GRANTGENERATION, dedupKey: `grantgeneration:${appName}/${role}` },
+    { projection: { _id: 0 } },
+  );
 }
 
 /**
@@ -854,6 +910,7 @@ function storeAppStateEvent(type, payload) {
     case APP_STATE_EVENT_TYPES.EVICTED: return handleEvictedEvent(payload);
     case APP_STATE_EVENT_TYPES.IPCHANGED: return handleIPChangedEvent(payload);
     case APP_STATE_EVENT_TYPES.MASTERLEASE: return handleMasterleaseEvent(payload);
+    case APP_STATE_EVENT_TYPES.GRANTGENERATION: return handleGrantGenerationEvent(payload);
     default: log.error(`storeAppStateEvent: unknown type ${type}`); return undefined;
   }
 }
@@ -1117,4 +1174,5 @@ module.exports = {
   storeBatchAppInstallingErrorMessages,
   storeIPChangedMessage,
   getMasterleaseRecord,
+  getGrantGenerationRecord,
 };
