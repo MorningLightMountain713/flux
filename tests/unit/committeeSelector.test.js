@@ -242,6 +242,27 @@ describe('committeeSelector', () => {
       expect(result.rung).to.equal('slash16');
       expect(result.members).to.have.length(5);
     });
+
+    it('accepts the location-table shape: mixed org/net keys, null for unkeyed', () => {
+      // The placement-diversity domain function answers per address: org for
+      // table hits, a net:/16 key as its own fallback, null when the address
+      // cannot be keyed at all. All three must coexist in one walk.
+      const table = new Map([
+        ['10.0.0.1', 'org:alpha'],
+        ['10.1.0.1', 'org:alpha'],
+        ['10.2.0.1', 'org:beta'],
+        ['10.3.0.1', 'net:10.3'],
+      ]);
+      const fleet = spreadFleet(8);
+      const domainOf = (node, host) => table.get(host) ?? null;
+      const result = selectCommittee(fleet, 'table-shape', { domainOf });
+      expect(result.refusal).to.equal(null);
+      expect(result.members).to.have.length(5);
+      expect(result.rung).to.equal('custom');
+      const orgAlphaSeats = result.members
+        .filter((node) => domainOf(node, node.ip.split(':')[0]) === 'org:alpha');
+      expect(orgAlphaSeats.length).to.be.at.most(1);
+    });
   });
 
   describe('sizing and the floor', () => {
