@@ -27,9 +27,15 @@ const { extractIp } = require('./socketAddressUtils');
 // small or clustered fleets cannot always fill a committee at the tightest
 // spread, and a committee that exists beats a spread that refuses — so the walk
 // fills at the tightest rung that seats the full committee, and the chosen rung
-// is reported. The org/ASN rung slots in ahead of the prefixes via `domainOf`
-// once a shared, chain-distributable org table exists; today the prefixes are
-// what every node can compute about every other.
+// is reported. The org rung slots in ahead of the prefixes via `domainOf`: the
+// placement-diversity lineage ships a fleet-shared location table whose
+// per-address domain function (placementFeasibility.domainFunction over
+// ipLocationStore.nodeLocationSnapshot().byIp — org, else allocation block,
+// else net:/16) is exactly this hook's shape, one line at the call site once
+// v9 rebases onto it. Until then the prefixes are what every node can compute
+// about every other. A domainOf answering null (address the table cannot key)
+// exempts that node from the rung, never fails it — the hard rules still bind,
+// and such a node is bounded by them alone at that rung.
 //
 // "Nothing lowers the denominator": on fleets with fewer distinct owners than
 // the requested size, the committee shrinks to what exists — but below the
