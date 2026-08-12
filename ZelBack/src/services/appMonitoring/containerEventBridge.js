@@ -95,7 +95,7 @@ async function handleContainerDie(event, labelKeys) {
   // best-effort diagnostics; the reconciler reads the authoritative exit code
   // from Docker, so a failure here (e.g. DB not ready during boot) is harmless
   await appsRuntimeState.recordExit(identifier, exitCode);
-  appReconciler.enqueue(identifier);
+  appReconciler.enqueueComponent(identifier);
   // a clean exit can satisfy a dependsOn 'completed' (run-once init/migration),
   // and ANY genuine death must reach cross-app dependents: a boundTo requirer
   // is stopped while its target is down, so the death itself is the milestone.
@@ -114,7 +114,7 @@ function handleContainerDestroy(event, labelKeys) {
   if (lease && operationRegistry.isStopAligned(lease.type)) {
     return;
   }
-  appReconciler.enqueue(identifier);
+  appReconciler.enqueueComponent(identifier);
 }
 
 function handleContainerStart(event, labelKeys) {
@@ -136,7 +136,7 @@ function handleContainerHealth(event, labelKeys) {
   // hasOperationLease guard) and its dependents (a dependsOn 'healthy' dependent starts
   // once the target reads healthy). Health events are transition-only, so this is at most
   // one no-op reconcile per transition.
-  appReconciler.enqueue(identifier);
+  appReconciler.enqueueComponent(identifier);
   wakeDependents(identifier);
 }
 
@@ -162,7 +162,7 @@ async function handleNetworkDisconnect(event, labelKeys) {
   if (lease && operationRegistry.isStopAligned(lease.type)) {
     return;
   }
-  appReconciler.enqueue(identifier);
+  appReconciler.enqueueComponent(identifier);
 }
 
 async function handleContainerEvent(event) {

@@ -7,7 +7,7 @@ const { AsyncGate } = require('../utils/asyncGate');
 
 // The reconciler's scheduling seam: a per-key single-flight, boot-gated workqueue.
 // Producers (operator commands, mount/network repair, the deciders, the event
-// bridge, install) push a component identifier here with enqueue(); the reconcile
+// bridge, install) push a component identifier here with enqueueComponent(); the reconcile
 // ENGINE (appReconciler) registers its reconcile function via setReconcile and is
 // the consumer. Splitting this out keeps the producer-facing surface lightweight —
 // a producer that only needs to enqueue does NOT pull the engine's heavy dependency
@@ -17,14 +17,21 @@ const { AsyncGate } = require('../utils/asyncGate');
 // Dependencies are deliberately low-level only (log, globalState, asyncGate) — nothing
 // in the app lifecycle/query layer.
 
-// The queue's key is the bare component identifier (`component_app`, or the app name
-// for v1-3), and every producer must pass that form. This layer deliberately does NOT
-// normalise: a producer holding a docker name knows it holds one, and this queue
-// cannot know — `fluxproxy_myapp` is both a valid docker name (component `proxy`) and
-// a valid bare identifier (component `fluxproxy`), so stripping here was a guess that
-// silently keyed a different component. Producers holding a docker name read the
-// identity label; producers in the syncthing flow carry the identifier alongside the
-// folder id.
+// The queue's key is ALWAYS a bare component identifier (`component_identity[_replica]`,
+// or the app name for a flat v1-3 app), because a component is the only thing the
+// reconciler actuates. A producer holding an app name does not enqueue it here — it calls
+// appReconciler.enqueueApp(), which resolves the app's component identifiers and enqueues
+// each. Keeping app names out of this keyspace is what stops the two ever being confused:
+// they were once told apart by whether the string contained an `_`, and when identities
+// stopped being borrowed from app names that guess quietly turned every sweep into a no-op
+// that logged like a healthy one.
+//
+// This layer deliberately does NOT normalise: a producer holding a docker name knows it
+// holds one, and this queue cannot know — `fluxproxy_myapp` is both a valid docker name
+// (component `proxy`) and a valid bare identifier (component `fluxproxy`), so stripping
+// here was a guess that silently keyed a different component. Producers holding a docker
+// name read the identity label; producers in the syncthing flow carry the identifier
+// alongside the folder id.
 
 // id -> promise of the pass (or intent write) currently holding this key. A Map
 // rather than a Set so a caller can WAIT for the holder: applyIntent below needs
@@ -106,7 +113,7 @@ function scheduleRetry(identifier, delayMs, { holdsSettle = true } = {}) {
   const timer = setTimeout(() => {
     backoffTimers.delete(identifier);
     nonSettleHolding.delete(identifier);
-    enqueue(identifier);
+    enqueueComponent(identifier);
   }, delayMs);
   if (timer.unref) timer.unref();
   backoffTimers.set(identifier, timer);
@@ -144,7 +151,7 @@ function runReconcile(identifier) {
       }
       if (dirty.has(identifier)) {
         dirty.delete(identifier);
-        setImmediate(() => enqueue(identifier));
+        setImmediate(() => enqueueComponent(identifier));
         return;
       }
       // Final pass for this id (no work-holding retry armed): hand to the engine so
@@ -162,11 +169,12 @@ function runReconcile(identifier) {
 }
 
 /**
- * Schedule a reconcile of one component. Coalesces: if a reconcile for the same
- * identifier is in flight, it re-runs once when that finishes. Held until the boot
- * gate opens so nothing actuates before daemon/DB are ready.
+ * Schedule a reconcile of one COMPONENT, by its bare container identifier. Coalesces:
+ * if a reconcile for the same identifier is in flight, it re-runs once when that
+ * finishes. Held until the boot gate opens so nothing actuates before daemon/DB are
+ * ready. Callers holding an app name use appReconciler.enqueueApp instead.
  */
-function enqueue(identifier) {
+function enqueueComponent(identifier) {
   if (!globalState.bootContainerStateSettled) {
     bootPending.add(identifier);
     return null;
@@ -186,7 +194,7 @@ function enqueue(identifier) {
  * pass to act on it. The key is held across the write so a pass cannot start against
  * state this is about to replace.
  *
- * @param {string} identifier The bare component identifier, as enqueue() takes it.
+ * @param {string} identifier The bare component identifier, as enqueueComponent() takes it.
  * @param {Function} mutate Writes the intent.
  * @param {{awaitPass?: boolean}} [opts] awaitPass waits for the pass that follows.
  * @returns {Promise<boolean>} whether a pass was scheduled (and, with awaitPass, ran).
@@ -209,7 +217,7 @@ async function applyIntent(identifier, mutate, { awaitPass = false } = {}) {
     release();
   }
 
-  const pass = enqueue(identifier);
+  const pass = enqueueComponent(identifier);
   if (!awaitPass) return Boolean(pass);
   if (!pass) return false;
   await pass;
@@ -245,7 +253,7 @@ function beginBootDrain() {
     settleBootDrain('cap reached');
   }, BOOT_DRAIN_SETTLE_CAP_MS);
   if (bootDrainCapTimer.unref) bootDrainCapTimer.unref();
-  pending.forEach((id) => enqueue(id));
+  pending.forEach((id) => enqueueComponent(id));
 }
 
 /**
@@ -268,7 +276,7 @@ function stopQueue() {
 }
 
 module.exports = {
-  enqueue,
+  enqueueComponent,
   applyIntent,
   forgetFailures,
   MANAGED_RETRY_MS,

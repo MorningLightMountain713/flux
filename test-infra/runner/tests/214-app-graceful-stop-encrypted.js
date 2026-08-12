@@ -12,7 +12,7 @@ import { pushTestApp } from '../framework/registry-helper.js';
 import { queueAppTx, advanceBlocks } from '../framework/daemon-control.js';
 import { dbClient } from '../framework/db-client.js';
 import { waitForAppInstalled, waitForDown, waitForAppFullyGone } from '../framework/wait.js';
-import { isAppFullyGone } from '../framework/container.js';
+import { isAppFullyGone, appComponentIdentifiers } from '../framework/container.js';
 import { REGISTRY_REPO_HOST } from '../framework/subnet-config.js';
 import { shutdowndControl, waitForShutdowndCall } from '../framework/shutdownd-control.js';
 
@@ -99,6 +99,12 @@ describe('per-app graceful stop routes through flux-shutdownd on Arcane (encrypt
     const { idx, client } = await deployGracefulV9(name);
     const control = shutdowndControl(idx + 1);
 
+    // Capture what the appdata directories are named from while the app is still here:
+    // they carry the app's minted identity, not its name, so after teardown there is
+    // nothing left on the node that could tell us what to look for.
+    const identifiers = await appComponentIdentifiers(client.container, name);
+    expect(identifiers, `${name} component identifiers while installed`).to.not.be.empty;
+
     // decrypt → shutdown field → plan pushed at install time
     const state = await control.getState();
     expect(state.plans).to.include(`${owner}:${name}`);
@@ -125,11 +131,11 @@ describe('per-app graceful stop routes through flux-shutdownd on Arcane (encrypt
 
     // FULLY torn down on the winner: container + docker network + appdata volume all gone
     // (not just the container) - the removal converged.
-    await waitForAppFullyGone(client, name);
+    await waitForAppFullyGone(client, name, { identifiers });
 
     // and it STAYS gone: the global spec is gone fleet-wide, so the spawner never respawns it.
     await advanceBlocks(9);
-    expect(await isAppFullyGone(client.container, name), 'no respawn once the global spec is gone').to.equal(true);
+    expect(await isAppFullyGone(client.container, name, { identifiers }), 'no respawn once the global spec is gone').to.equal(true);
   });
 
   it('encrypted-v9 reconciler stop-but-keep routes to the daemon without removing', async function () {

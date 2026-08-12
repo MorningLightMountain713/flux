@@ -166,7 +166,7 @@ function startAtBoot(componentsToStart) {
   // desired-state + restart policy
   // eslint-disable-next-line no-restricted-syntax
   for (const identifier of componentsToStart) {
-    appReconciler.enqueue(identifier);
+    appReconciler.enqueueComponent(identifier);
     log.info(`appStartupManager - Queued ${identifier} for reconcile`);
   }
 }
@@ -362,7 +362,7 @@ async function reconcileAppsOnBoot() {
       // replicated components hold at awaitingController until a decider
       // speaks.
       log.info(`appStartupManager - App ${appName} has valid location, queued for reconcile`);
-      appReconciler.enqueue(appName);
+      appReconciler.enqueueApp(appName);
       results.appsEnqueued.push(appName);
     }
 

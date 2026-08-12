@@ -269,7 +269,7 @@ async function redeployComponent(appName, componentName, options = {}) {
       status(`Component ${deployComp.identifier} ${operation} complete`);
     }
     operationRegistry.release(appName, redeployToken);
-    appReconciler.enqueue(appName);
+    appReconciler.enqueueApp(appName);
   } catch (error) {
     log.error(error);
     // A redeploy failure must NOT destroy the app: the old version is already torn
@@ -279,7 +279,7 @@ async function redeployComponent(appName, componentName, options = {}) {
     // direct uninstall, no fleet-wide removal broadcast over a bad update.
     log.warn(`${operation} of ${appName} failed (${error.message}); releasing and handing recovery to the reconciler`);
     operationRegistry.release(appName, redeployToken);
-    appReconciler.enqueue(appName);
+    appReconciler.enqueueApp(appName);
   }
 }
 
@@ -426,14 +426,14 @@ async function redeployApplication(appName, options = {}) {
 
     status(`Application ${appName} ${operation} complete`);
     operationRegistry.release(appName, redeployToken);
-    appReconciler.enqueue(appName);
+    appReconciler.enqueueApp(appName);
   } catch (error) {
     log.error(error);
     // See redeployComponent: never destroy on a redeploy failure — hand recovery to
     // the reconciler (the §14.5 gate decides down-vs-remove on the rebuild attempt).
     log.warn(`${operation} of ${appName} failed (${error.message}); releasing and handing recovery to the reconciler`);
     operationRegistry.release(appName, redeployToken);
-    appReconciler.enqueue(appName);
+    appReconciler.enqueueApp(appName);
   }
 }
 
@@ -1775,7 +1775,7 @@ async function reconcileApp(installed, registrySpec) {
     log.warn(`Reconcile of ${installed.name} failed (${error.message}); handing recovery to the reconciler`);
   } finally {
     operationRegistry.release(installed.name, reconcileToken);
-    appReconciler.enqueue(installed.name);
+    appReconciler.enqueueApp(installed.name);
   }
 }
 

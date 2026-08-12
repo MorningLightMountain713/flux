@@ -8,7 +8,7 @@ import { queueAppTx, advanceBlocks } from '../framework/daemon-control.js';
 import { waitFor, waitForAppInstalled } from '../framework/wait.js';
 import { authenticate } from '../auth.js';
 import { appOwnerKey } from '../framework/keys.js';
-import { execInContainer, isAppFullyGone } from '../framework/container.js';
+import { execInContainer, appContainersFor, getAppNetwork, requireAppContainerName } from '../framework/container.js';
 import { pushBusybox } from '../framework/registry-helper.js';
 import { REGISTRY_REPO_HOST, getSubnetConfig } from '../framework/subnet-config.js';
 
@@ -72,11 +72,10 @@ describe('mesh ordinal slots — claim, identity, replacement inheritance', func
     return status?.data?.lastPass?.ownSlot ?? null;
   }
 
+  // Container names are built from the app's minted identity, so they are RESOLVED
+  // through the labels FluxOS stamps rather than reconstructed here.
   async function appContainerName(clientIndex) {
-    const status = await meshStatus(clientIndex);
-    const identity = status?.data?.identity;
-    expect(identity, `mesh identity on node ${clientIndex}`).to.be.a('string');
-    return `fluxweb_${identity}`;
+    return requireAppContainerName(env.clients[clientIndex].container, name, 'web');
   }
 
   async function inApp(clientIndex, command) {
@@ -302,7 +301,13 @@ describe('mesh ordinal slots — claim, identity, replacement inheritance', func
     // keeps the poll waiting rather than reading as settled. The reaper
     // removing the app from the victim entirely also settles it.
     await waitFor(async () => {
-      const gone = await isAppFullyGone(env.clients[victim].container, name).catch(() => false);
+      // "the reaper took the app off this node" — its containers and its network are
+      // gone. Deliberately not the appdata check: that is keyed on the identifiers the
+      // app was named from, which nothing on a reaped node can still state, and a
+      // settle signal must not be able to answer "yes" for want of somewhere to look.
+      const gone = await appContainersFor(env.clients[victim].container, name)
+        .then(async (cs) => cs.length === 0 && !(await getAppNetwork(env.clients[victim].container, name)))
+        .catch(() => false);
       if (gone) return true;
       const status = await meshStatus(victim);
       if (status.status !== 'success' || !status.data?.identity) return false;

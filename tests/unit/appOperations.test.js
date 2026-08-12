@@ -224,7 +224,7 @@ describe('appOperations tests', () => {
         leaseTypeDuring = operationRegistry.get('myapp')?.type ?? null;
         return null;
       });
-      sinon.stub(appReconciler, 'enqueue');
+      sinon.stub(appReconciler, 'enqueueApp');
 
       await appOperations.redeployComponent('myapp', 'frontend', { onStatus: () => {} });
 
@@ -235,7 +235,7 @@ describe('appOperations tests', () => {
     it('hands recovery to the reconciler (no destroy) when application not found', async () => {
       sinon.stub(deploymentProvider, 'getInstalledDeployment').resolves(null);
       const uninstall = sinon.stub(appUninstaller, 'uninstallApplication').resolves();
-      const enqueue = sinon.stub(appReconciler, 'enqueue');
+      const enqueue = sinon.stub(appReconciler, 'enqueueApp');
 
       await appOperations.redeployComponent('myapp', 'frontend', { onStatus: () => {} });
 
@@ -249,7 +249,7 @@ describe('appOperations tests', () => {
         getComponent: () => null,
       });
       const uninstall = sinon.stub(appUninstaller, 'uninstallApplication').resolves();
-      const enqueue = sinon.stub(appReconciler, 'enqueue');
+      const enqueue = sinon.stub(appReconciler, 'enqueueApp');
 
       await appOperations.redeployComponent('myapp', 'frontend', { onStatus: () => {} });
 
@@ -266,7 +266,7 @@ describe('appOperations tests', () => {
       sinon.stub(componentProvisioner, 'verifyComponentImage').rejects(new Error('image not found in registry'));
       const uninstallComponent = sinon.stub(appUninstaller, 'uninstallComponent').resolves();
       const uninstallApplication = sinon.stub(appUninstaller, 'uninstallApplication').resolves();
-      const enqueue = sinon.stub(appReconciler, 'enqueue');
+      const enqueue = sinon.stub(appReconciler, 'enqueueApp');
 
       await appOperations.redeployComponent('myapp', 'frontend', { onStatus: () => {} });
 
@@ -296,7 +296,7 @@ describe('appOperations tests', () => {
       sinon.stub(hwRequirements, 'checkNodeResourcesReclaiming').resolves();
       const uninstallComponent = sinon.stub(appUninstaller, 'uninstallComponent').resolves();
       const installComponent = sinon.stub(componentProvisioner, 'installComponent').resolves();
-      sinon.stub(appReconciler, 'enqueue');
+      sinon.stub(appReconciler, 'enqueueApp');
 
       await appOperations.redeployComponent('myapp', 'frontend', { onStatus: () => {} });
 
@@ -326,7 +326,7 @@ describe('appOperations tests', () => {
       );
       const uninstallComponent = sinon.stub(appUninstaller, 'uninstallComponent').resolves();
       const uninstallApplication = sinon.stub(appUninstaller, 'uninstallApplication').resolves();
-      const enqueue = sinon.stub(appReconciler, 'enqueue');
+      const enqueue = sinon.stub(appReconciler, 'enqueueApp');
 
       await appOperations.redeployApplication('myapp', { onStatus: () => {} });
 
@@ -348,7 +348,7 @@ describe('appOperations tests', () => {
       getInstalledApp.onSecondCall().resolves(null);
       sinon.stub(relationshipResolver, 'checkAppDependencyRequirements').resolves(true);
       const uninstallComponent = sinon.stub(appUninstaller, 'uninstallComponent').resolves();
-      sinon.stub(appReconciler, 'enqueue');
+      sinon.stub(appReconciler, 'enqueueApp');
 
       await appOperations.redeployApplication('myapp', { onStatus: () => {} });
 
@@ -376,7 +376,7 @@ describe('appOperations tests', () => {
         leaseTypeDuring = operationRegistry.get('myapp')?.type ?? null;
         return null;
       });
-      sinon.stub(appReconciler, 'enqueue');
+      sinon.stub(appReconciler, 'enqueueApp');
 
       await appOperations.redeployComponent('myapp', 'frontend', { createVolumes: true, onStatus: () => {} });
 
@@ -388,7 +388,7 @@ describe('appOperations tests', () => {
     it('hands recovery to the reconciler (no destroy) when application not found', async () => {
       sinon.stub(deploymentProvider, 'getInstalledDeployment').resolves(null);
       const uninstall = sinon.stub(appUninstaller, 'uninstallApplication').resolves();
-      const enqueue = sinon.stub(appReconciler, 'enqueue');
+      const enqueue = sinon.stub(appReconciler, 'enqueueApp');
 
       await appOperations.redeployComponent('myapp', 'frontend', { createVolumes: true, onStatus: () => {} });
 
@@ -402,7 +402,7 @@ describe('appOperations tests', () => {
         getComponent: () => null,
       });
       const uninstall = sinon.stub(appUninstaller, 'uninstallApplication').resolves();
-      const enqueue = sinon.stub(appReconciler, 'enqueue');
+      const enqueue = sinon.stub(appReconciler, 'enqueueApp');
 
       await appOperations.redeployComponent('myapp', 'frontend', { createVolumes: true, onStatus: () => {} });
 
@@ -413,7 +413,7 @@ describe('appOperations tests', () => {
 
     it('should release the rebuild lease on error', async () => {
       sinon.stub(deploymentProvider, 'getInstalledDeployment').resolves(null);
-      sinon.stub(appReconciler, 'enqueue');
+      sinon.stub(appReconciler, 'enqueueApp');
 
       await appOperations.redeployComponent('myapp', 'frontend', { createVolumes: true, onStatus: () => {} });
 

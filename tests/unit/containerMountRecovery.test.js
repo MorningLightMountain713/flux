@@ -57,7 +57,7 @@ describe('containerMountRecovery tests', () => {
       requestRestart: sinon.stub().resolves(),
     };
     reconcilerQueueStub = {
-      enqueue: sinon.stub(),
+      enqueueComponent: sinon.stub(),
     };
 
     // Load module with stubs
@@ -470,13 +470,13 @@ describe('containerMountRecovery tests', () => {
       expect(result.restarted).to.include('fluxApp2');
       expect(result.failed).to.have.length(0);
       expect(appsRuntimeStateStub.requestRestart.callCount).to.equal(2);
-      expect(reconcilerQueueStub.enqueue.callCount).to.equal(2);
+      expect(reconcilerQueueStub.enqueueComponent.callCount).to.equal(2);
       expect(serviceHelperStub.delay.callCount).to.equal(2);
       // the durable restart generation and the queue are keyed by the bare
       // identifier — bumping the docker name's key restarts nothing and leaves
       // an orphan runtime-state document behind
       expect(appsRuntimeStateStub.requestRestart.getCall(0).args[0]).to.equal('App1');
-      expect(reconcilerQueueStub.enqueue.getCall(0).args[0]).to.equal('App1');
+      expect(reconcilerQueueStub.enqueueComponent.getCall(0).args[0]).to.equal('App1');
     });
 
     it('should handle restart failures', async () => {
@@ -519,7 +519,7 @@ describe('containerMountRecovery tests', () => {
         containersNeedingRestart: 0,
         restartResults: null,
       });
-      expect(reconcilerQueueStub.enqueue.called).to.equal(false);
+      expect(reconcilerQueueStub.enqueueComponent.called).to.equal(false);
     });
 
     it('should restart containers that need it and return results', async () => {
