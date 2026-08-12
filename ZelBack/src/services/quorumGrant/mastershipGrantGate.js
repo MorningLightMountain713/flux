@@ -275,6 +275,22 @@ async function masterIntent(identifier, comp) {
   }
 }
 
+// app -> monotonic ms of the last cooperative self-demotion (folder set
+// receiveonly + local changes reverted). The deposed node's own attestation
+// that its data can no longer win — what a future master consults before
+// re-adding a fenced device.
+const folderDemotions = new Map();
+
+/** The syncthing state machine reports its cooperative self-fence here. */
+function noteFolderDemoted(appName) {
+  folderDemotions.set(appName, nowMs());
+}
+
+/** Monotonic ms of the app's last self-demotion, or null. */
+function folderDemotedAt(appName) {
+  return folderDemotions.get(appName) ?? null;
+}
+
 /**
  * Teardown hook, called from hard/softUninstallComponent — the two paths
  * every removal reaches at component granularity (the removedIdentifiers
@@ -302,6 +318,7 @@ function resetForTests(options = {}) {
   unanimity.clear();
   pursuits.clear();
   unknownSince.clear();
+  folderDemotions.clear();
 }
 
 module.exports = {
@@ -309,6 +326,8 @@ module.exports = {
   blocksStart,
   leaderIsSelf,
   masterIntent,
+  noteFolderDemoted,
+  folderDemotedAt,
   onComponentTeardown,
   holdersUnanimous,
   resetForTests,

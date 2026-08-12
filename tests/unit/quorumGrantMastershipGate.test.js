@@ -221,6 +221,14 @@ describe('quorumGrant mastershipGrantGate', () => {
     });
   });
 
+  describe('the self-demotion note', () => {
+    it('records and answers the cooperative fence attestation', () => {
+      expect(mastershipGrantGate.folderDemotedAt('myapp')).to.equal(null);
+      mastershipGrantGate.noteFolderDemoted('myapp');
+      expect(mastershipGrantGate.folderDemotedAt('myapp')).to.be.a('number');
+    });
+  });
+
   describe('teardown', () => {
     it('releases a held grant once the container is stopped', async () => {
       const release = sinon.stub().resolves();
