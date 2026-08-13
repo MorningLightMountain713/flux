@@ -34,6 +34,7 @@ describe('the mastership grant on a multi-node fleet', function () {
   let env;
   let name;
   let holderOutpoints; // node index -> outpoint string, for the three holders
+  let pausedIndex;
 
   async function readCell(clientIndex) {
     try {
@@ -117,7 +118,6 @@ describe('the mastership grant on a multi-node fleet', function () {
     }, { timeout: 240000, interval: 10000, label: 'a grant quorum forms' });
 
     expect(Object.values(holderOutpoints), `grantee ${verdict.grantee}`).to.include(verdict.grantee);
-    this.test.ctx.first = verdict;
   });
 
   it('a dead master is bridged, the survivors re-acquire, and the term moves strictly forward', async function () {
@@ -129,7 +129,7 @@ describe('the mastership grant on a multi-node fleet', function () {
     expect(Number.isInteger(masterIndex), `master ${first.grantee} maps to a node`).to.equal(true);
 
     await pauseHostContainer(env.clients[masterIndex].container);
-    this.test.ctx.pausedIndex = masterIndex;
+    pausedIndex = masterIndex;
 
     // The decided sequence: term lapses unrenewed, the legacy election
     // bridges the app, the dead node's location row ages out of the
@@ -144,13 +144,11 @@ describe('the mastership grant on a multi-node fleet', function () {
 
     expect(second.epoch, 'epochs never move backwards').to.be.greaterThan(first.epoch);
     expect(Object.values(holderOutpoints)).to.include(second.grantee);
-    this.test.ctx.second = second;
   });
 
   it('the returning corpse does not reclaim, and the epoch never regresses', async function () {
     this.timeout(300000);
 
-    const { pausedIndex } = this.test.ctx;
     const before = await quorumVerdict();
     await unpauseHostContainer(env.clients[pausedIndex].container);
 
