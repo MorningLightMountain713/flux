@@ -4,11 +4,11 @@
 # Requires in the image: etcd, etcdctl, jq, wget (busybox wget is fine).
 set -eu
 
-APP="$FLUX_MESH_APP"
 SELF="$FLUX_MESH_SELF"                 # e.g. etcd-1 — the member's etcd name
 SELF_FQDN="$FLUX_MESH_SELF_FQDN"       # the ONLY thing we ever advertise
 DATA_DIR="${ETCD_DATA_DIR:-/dat/etcd}"
 MEMBERSHIP="http://fluxnode.service:16101/mesh/membership"
+FOUNDER="http://fluxnode.service:16101/mesh/founder"
 PEER_URL="http://$SELF_FQDN:2380"
 CLIENT_URL="http://$SELF_FQDN:2379"
 
@@ -25,6 +25,21 @@ client_endpoints() {
   wget -qO- "$MEMBERSHIP" \
     | jq -r '.data.members[] | select(.ordinal != null) | .fqdn' \
     | sed 's/.*/http:\/\/&:2379/' | paste -sd, -
+}
+
+# Whether any OTHER named member's etcd answers. Decision support for the
+# founder branch below, run only by the one member holding the founder
+# grant — never the arbiter of who founds.
+peers_alive() {
+  wget -qO- "$MEMBERSHIP" \
+    | jq -r --arg self "$SELF" \
+        '.data.members[] | select(.ordinal != null and .member != $self) | .fqdn' \
+    | while read -r peer; do
+        if wget -qO- -T 3 "http://$peer:2379/version" >/dev/null 2>&1; then
+          echo up
+          break
+        fi
+      done | grep -q up
 }
 
 start_etcd() {
@@ -44,25 +59,36 @@ start_etcd() {
 if [ -d "$DATA_DIR/member" ]; then
   # Restart with data: the data dir carries the raft identity — just rejoin.
   start_etcd existing "$SELF=$PEER_URL"
-elif [ "$FLUX_MESH_ORDINAL" = "0" ] && ! wget -qO- "http://etcd-1.$APP.mesh.flux:2379/version" >/dev/null 2>&1; then
-  # Ordinal 0, no cluster answering: found it. Exactly one member can take
-  # this branch — the ordinal-0 convention is what makes bootstrap a non-race.
-  start_etcd new "$SELF=$PEER_URL"
 else
-  # Fresh member (first boot, or a replacement that inherited this ordinal
-  # with an empty disk): join SELF-SERVICE as a LEARNER through the existing
-  # quorum — non-voting, so a failed join can never cost quorum. If the old
-  # holder of this name is still on the member list (we replaced a dead
-  # node), remove it first: same name, but its raft identity died with its
-  # disk. Retry until the quorum answers.
-  until endpoints=$(client_endpoints) && [ -n "$endpoints" ]; do sleep 5; done
-  until out=$(etcdctl --endpoints "$endpoints" member list -w json 2>/dev/null); do sleep 5; done
-  stale=$(echo "$out" | jq -r ".members[] | select(.name == \"$SELF\") | .ID")
-  [ -n "$stale" ] && etcdctl --endpoints "$endpoints" member remove "$(printf '%x' "$stale")"
-  until add=$(etcdctl --endpoints "$endpoints" member add "$SELF" --learner --peer-urls "$PEER_URL" -w json); do sleep 5; done
-  # The add answers the initial cluster the newcomer must start with.
-  initial=$(echo "$add" | jq -r '[.members[] | "\(.name // "'"$SELF"'")=\(.peerURLs[0])"] | join(",")')
-  start_etcd existing "$initial"
+  # Empty disk: ask the node whether THIS member founds. The answer comes
+  # from a quorum-arbitrated, write-once founding grant — at most one yes
+  # per component, ever — so creating the cluster cannot race, whatever the
+  # slot gossip transiently believes. wait means not knowable yet; keep
+  # asking. etcd's cluster creation is NOT idempotent, which is exactly why
+  # this branch gates on the grant and not on the ordinal alone.
+  until answer=$(wget -qO- --post-data='' "$FOUNDER" | jq -r '.data.answer') \
+    && { [ "$answer" = yes ] || [ "$answer" = no ]; }; do sleep 5; done
+
+  if [ "$answer" = yes ] && ! peers_alive; then
+    # Told yes with nothing answering anywhere: the world's first boot.
+    start_etcd new "$SELF=$PEER_URL"
+  else
+    # Join SELF-SERVICE as a LEARNER through the existing quorum —
+    # non-voting, so a failed join can never cost quorum. This is the no
+    # branch, and ALSO the wiped founder: yes with living peers means we
+    # founded once and lost the disk, and a wiped member rejoins, never
+    # re-founds. If the old holder of this name is still on the member list
+    # (we replaced a dead node), remove it first: same name, but its raft
+    # identity died with its disk. Retry until the quorum answers.
+    until endpoints=$(client_endpoints) && [ -n "$endpoints" ]; do sleep 5; done
+    until out=$(etcdctl --endpoints "$endpoints" member list -w json 2>/dev/null); do sleep 5; done
+    stale=$(echo "$out" | jq -r ".members[] | select(.name == \"$SELF\") | .ID")
+    [ -n "$stale" ] && etcdctl --endpoints "$endpoints" member remove "$(printf '%x' "$stale")"
+    until add=$(etcdctl --endpoints "$endpoints" member add "$SELF" --learner --peer-urls "$PEER_URL" -w json); do sleep 5; done
+    # The add answers the initial cluster the newcomer must start with.
+    initial=$(echo "$add" | jq -r '[.members[] | "\(.name // "'"$SELF"'")=\(.peerURLs[0])"] | join(",")')
+    start_etcd existing "$initial"
+  fi
 fi
 
 # ── The reactor ──────────────────────────────────────────────────────────

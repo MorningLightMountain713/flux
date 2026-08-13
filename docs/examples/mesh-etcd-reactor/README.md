@@ -35,15 +35,18 @@ The full API this example programs against: [`docs/mesh.md`](../../mesh.md).
 |---|---|
 | `FLUX_MESH_SELF` (`etcd-1`) | `--name` — the member's etcd name IS its mesh name |
 | `FLUX_MESH_SELF_FQDN` | `--initial-advertise-peer-urls` / `--advertise-client-urls` — always the name, never an address |
-| `FLUX_MESH_ORDINAL = 0` | who bootstraps: ordinal 0 founds the cluster, everyone else joins |
+| `POST /mesh/founder` | who bootstraps: the member told `yes` founds the cluster, everyone else joins — quorum-arbitrated, so creation cannot race |
 | SRV `_etcd-client._tcp.etcd.<app>.mesh.flux` | finding live client endpoints to join through |
 | `/mesh/membership` long-poll | the reactor: remove departed members, promote caught-up learners |
 
 ## Lifecycle walkthrough
 
-1. **First boot, ordinal 0**: founds a one-member cluster
-   (`--initial-cluster-state new`, initial cluster = itself).
-2. **First boot, other ordinals**: ask an existing member to add them as a
+1. **First boot, told `yes` by the founder ask**: founds a one-member
+   cluster (`--initial-cluster-state new`, initial cluster = itself).
+   Cluster creation is not idempotent, so this branch gates on the
+   quorum-arbitrated founding grant — never on the ordinal alone, which
+   slot gossip can transiently answer twice.
+2. **First boot, told `no`**: ask an existing member to add them as a
    **learner** (non-voting — a failed join can never cost quorum), start with
    the member list that call returns, and get promoted by the reactor once
    caught up.
@@ -54,6 +57,10 @@ The full API this example programs against: [`docs/mesh.md`](../../mesh.md).
    disk. The reactor on a surviving member removes the dead etcd member id;
    the replacement then joins as a learner under the same name and catches
    up via the protocol. No human, no operator.
+   A **wiped founder** takes the same join branch: the founder ask still
+   answers it `yes`, but with peers alive the entrypoint rejoins — a wiped
+   member never re-founds, because a second creation is a fork, not a
+   recovery.
 5. **Ungraceful departure with no replacement**: the reactor's next level
    read no longer lists the member; the lowest live ordinal removes it.
    The cluster keeps quorum throughout — the removal restores fault
@@ -65,4 +72,9 @@ This is an example, not a hardened image: no TLS between members (the
 overlay is already encrypted node-to-node, but etcd peer TLS is still good
 practice), no backup schedule, and `jq` + `etcdctl` are assumed present in
 the image. Quorum loss (majority permanently gone) is restore-from-snapshot
-territory — see the rules section of `docs/mesh.md`.
+territory — see the rules section of `docs/mesh.md`. One narrow edge
+remains open by construction: a wiped founder booting while **every**
+surviving peer is unreachable sees `yes` and silence, and will found a
+second world — the same judgment call every operator makes restoring a
+cluster, which is why wipe-plus-total-partition recovery belongs to the
+operator, not the entrypoint.
