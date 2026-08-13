@@ -10,7 +10,7 @@ import { queueAppTx, advanceBlocks, getState } from '../framework/daemon-control
 import { waitFor, waitForAppInstalled } from '../framework/wait.js';
 import { authenticate, signBtcMessage } from '../auth.js';
 import { appOwnerKey } from '../framework/keys.js';
-import { execInContainer, requireAppContainerName } from '../framework/container.js';
+import { execInContainer, requireAppContainerName, appContainersFor } from '../framework/container.js';
 import { REGISTRY_REPO_HOST } from '../framework/subnet-config.js';
 
 // The founding grant across a real 3-node fleet: a container asks its own
@@ -89,14 +89,19 @@ describe('the founding grant on a multi-node fleet', function () {
   }
 
   async function waitForComponentContainers(component, present) {
+    // RUNNING containers decide presence: a stopped corpse docker still
+    // lists is not a member, and counting it as present would wedge the
+    // gone-check behind whatever remains in the --all listing.
     await waitFor(async () => {
-      const names = await Promise.all(env.clients.map((c) => requireAppContainerName(c.container, name, component)
-        .catch(() => null)));
-      return present ? names.every((n) => n) : names.every((n) => !n);
+      const states = await Promise.all(env.clients.map(async (c) => {
+        const containers = await appContainersFor(c.container, name).catch(() => []);
+        return containers.some((entry) => entry.component === component && entry.status.startsWith('Up'));
+      }));
+      return present ? states.every(Boolean) : states.every((up) => !up);
     }, {
       timeout: 240000,
       interval: 5000,
-      label: `${component} containers ${present ? 'present' : 'gone'} on all nodes`,
+      label: `${component} containers ${present ? 'running' : 'gone'} on all nodes`,
     });
   }
 

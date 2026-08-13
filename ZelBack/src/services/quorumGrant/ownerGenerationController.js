@@ -3,6 +3,7 @@
 const messageHelper = require('../messageHelper');
 const serviceHelper = require('../serviceHelper');
 const verificationHelper = require('../verificationHelper');
+const fluxNetworkHelper = require('../fluxNetworkHelper');
 const appsRepository = require('../appDatabase/appsRepository');
 const fluxCommunicationMessagesSender = require('../fluxCommunicationMessagesSender');
 const messageStore = require('../appMessaging/messageStore');
@@ -72,9 +73,19 @@ async function submit(req, res) {
       ));
     }
 
+    // The broadcast names this node's own address: peer verification
+    // resolves the announcer BY IP against the deterministic list and
+    // checks the envelope key against that node's registered key - a
+    // record without it is dropped by every receiver.
+    const ip = await fluxNetworkHelper.getLocalSocketAddress();
+    if (!ip) {
+      return res.status(503).json(messageHelper.createErrorMessage('node address unavailable'));
+    }
+
     const message = {
       type: 'fluxgrantgeneration',
       version: 1,
+      ip,
       appName: record.appName,
       role: record.role,
       generation: record.generation,

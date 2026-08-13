@@ -4,6 +4,7 @@ const { expect } = require('chai');
 const sinon = require('sinon');
 
 const verificationHelper = require('../../ZelBack/src/services/verificationHelper');
+const fluxNetworkHelper = require('../../ZelBack/src/services/fluxNetworkHelper');
 const appsRepository = require('../../ZelBack/src/services/appDatabase/appsRepository');
 const fluxCommunicationMessagesSender = require('../../ZelBack/src/services/fluxCommunicationMessagesSender');
 const messageStore = require('../../ZelBack/src/services/appMessaging/messageStore');
@@ -52,6 +53,7 @@ function fakeRes() {
 describe('quorumGrant ownerGenerationController', () => {
   beforeEach(() => {
     sinon.stub(verificationHelper, 'verifyPrivilege').resolves(true);
+    sinon.stub(fluxNetworkHelper, 'getLocalSocketAddress').resolves('203.0.113.5:16127');
     sinon.stub(appsRepository, 'getGlobalAppOwner').resolves(OWNER);
     sinon.stub(messageStore, 'getGrantGenerationRecord').resolves(null);
     sinon.stub(messageStore, 'storeAppStateEvent').resolves();
@@ -73,6 +75,7 @@ describe('quorumGrant ownerGenerationController', () => {
 
       const broadcast = fluxCommunicationMessagesSender.broadcastMessageToAll.firstCall.args[0];
       expect(broadcast.type).to.equal('fluxgrantgeneration');
+      expect(broadcast.ip, 'receivers resolve the announcer by ip').to.equal('203.0.113.5:16127');
       expect(broadcast.generation).to.equal(1);
       expect(broadcast.signature).to.be.a('string');
 
