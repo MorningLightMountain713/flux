@@ -91,6 +91,33 @@ done
 
 ---
 
+### POST /mesh/founder
+
+One component's "may I found?", for bootstrap actions that must happen at most once ever (creating an etcd cluster, minting a KRaft cluster id). Scoped by source address exactly as `/mesh/membership` is: the calling container decides which app and component ask. The node acquires a quorum-arbitrated, write-once founding grant on the container's behalf — the container never sees a committee or an epoch.
+
+**URL:** `http://fluxnode.service:16101/mesh/founder`
+
+**Method:** `POST` (no body)
+
+**Response:**
+
+```json
+{
+  "status": "success",
+  "data": { "answer": "yes" }
+}
+```
+
+| `answer` | Meaning |
+|----------|---------|
+| `yes` | This member founds — recorded durably, by a quorum of nodes. Idempotent for the recorded founder: a crash between the ask and the bootstrap action gets `yes` again on the next boot. |
+| `no` | Another member founded; join it. |
+| `wait` | Not knowable yet (founding record still syncing, no quorum reachable). Ask again; an optional `retryAfterMs` hints when. |
+
+At most one member is ever told `yes` per component. The full semantics — including the wipe-and-rejoin rule that bounds what `yes` means — live in [`mesh.md`](mesh.md#the-founder-ask--founding-exactly-once).
+
+---
+
 ## Authentication
 
 This service uses **IP-based authentication**. Only requests originating from Docker containers running Flux applications can access this endpoint.
