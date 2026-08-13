@@ -21,7 +21,8 @@ module.exports = {
             "ipRanges": "ipranges",
             "nodeLocations": "nodelocations",
             "ownAddress": "ownaddress",
-            "quorumGrants": "quorumgrants"
+            "quorumGrants": "quorumgrants",
+            "foundingCommittees": "foundingcommittees"
         }
     },
     "daemon": {
