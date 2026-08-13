@@ -269,20 +269,27 @@ async function effectiveCommittee(appName) {
 /**
  * Whether THIS node sits on the app's effective founding committee — the
  * grantor-side check for founder roles, answered from the same record and
- * the same arithmetic the candidates use.
+ * the same arithmetic the candidates use. The ask must name the committee's
+ * basis whole: the fingerprint AND the generation. A retired generation is
+ * refused with the current number — rounds run by two generations'
+ * committees against one founder register would be two answers.
  *
  * @param {string} appName
  * @param {string} askFingerprint the basis the ask names
+ * @param {number} askGeneration the generation the ask names
  * @param {{txhash: string, txindex: number|string}} collateral this node's outpoint
  * @returns {Promise<{member: boolean, reason: string|null, quorum?: number}>}
  */
-async function selfOnFoundingCommittee(appName, askFingerprint, collateral) {
+async function selfOnFoundingCommittee(appName, askFingerprint, askGeneration, collateral) {
   const committee = await effectiveCommittee(appName);
   if (!committee) {
     return { member: false, reason: 'no honest committee basis on this node' };
   }
   if (committee.fingerprint !== askFingerprint) {
     return { member: false, reason: 'ask names a different committee basis' };
+  }
+  if (committee.generation !== askGeneration) {
+    return { member: false, reason: `ask names generation ${askGeneration}, current is ${committee.generation}` };
   }
   const self = `${collateral.txhash}:${collateral.txindex}`;
   const member = committee.members.some((entry) => outpointOf(entry) === self);
