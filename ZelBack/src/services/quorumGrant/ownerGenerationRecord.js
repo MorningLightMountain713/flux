@@ -66,7 +66,7 @@ function wellFormed(record) {
   return Boolean(
     record
     && typeof record.appName === 'string' && record.appName.length > 0
-    && typeof record.role === 'string' && /^[a-z0-9-]{1,64}$/.test(record.role)
+    && typeof record.role === 'string' && /^[a-zA-Z0-9-]{1,64}$/.test(record.role)
     && Number.isSafeInteger(record.generation) && record.generation >= 1
     && Number.isSafeInteger(record.height) && record.height >= 1
     && Number.isSafeInteger(record.at),

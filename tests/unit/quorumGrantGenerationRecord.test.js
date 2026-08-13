@@ -49,7 +49,7 @@ describe('quorumGrant ownerGenerationRecord', () => {
       expect(ownerGenerationRecord.wellFormed(signedRecord())).to.equal(true);
       expect(ownerGenerationRecord.wellFormed(signedRecord({ generation: 0 }))).to.equal(false);
       expect(ownerGenerationRecord.wellFormed(signedRecord({ generation: 1.5 }))).to.equal(false);
-      expect(ownerGenerationRecord.wellFormed(signedRecord({ role: 'FOUNDER' }))).to.equal(false);
+      expect(ownerGenerationRecord.wellFormed(signedRecord({ role: 'foun_der' }))).to.equal(false);
       expect(ownerGenerationRecord.wellFormed(signedRecord({ height: -1 }))).to.equal(false);
       expect(ownerGenerationRecord.wellFormed(null)).to.equal(false);
     });

@@ -149,7 +149,7 @@ describe('quorumGrant grantorController', () => {
     it('refuses malformed keys, modes, epochs, and candidates', async () => {
       const cases = [
         signedAsk('prepare', { key: 'no-role' }),
-        signedAsk('prepare', { key: 'app/UPPER' }),
+        signedAsk('prepare', { key: 'app/under_score' }),
         signedAsk('prepare', { mode: 'lease' }),
         signedAsk('prepare', { epoch: 0 }),
         signedAsk('prepare', { epoch: 1.5 }),
