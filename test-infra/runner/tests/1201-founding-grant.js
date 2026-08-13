@@ -4,6 +4,7 @@ import { expect } from 'chai';
 import { createTestEnv } from '../framework/test-env.js';
 import { bootAndPeer } from '../framework/reconciler-suite.js';
 import { registerEncryptedV9App, updateEncryptedV9App } from '../framework/content-helper.js';
+import { pushBusybox } from '../framework/registry-helper.js';
 import { queueAppTx, advanceBlocks, getState } from '../framework/daemon-control.js';
 import { waitFor, waitForAppInstalled } from '../framework/wait.js';
 import { authenticate, signBtcMessage } from '../auth.js';
@@ -33,11 +34,17 @@ import { REGISTRY_REPO_HOST } from '../framework/subnet-config.js';
 
 const COMPONENT = 'web';
 
+// The app image is the harness's static-busybox (entrypoint sleeps): the
+// founder asks run as `docker exec ... /bin/busybox wget` inside the app
+// container, and the freestanding pause image has no binaries at all — an
+// exec into it fails before any packet moves.
+let appImage;
+
 function componentSpec(name, hostPort) {
   return {
     name,
     description: 'founding grant test component',
-    image: `${REGISTRY_REPO_HOST}/e2e-pause:v1`,
+    image: appImage,
     cpu: 0.5,
     memory: 300,
     rootFsGb: 2,
@@ -134,6 +141,8 @@ describe('the founding grant on a multi-node fleet', function () {
   it('registers a mesh app and the spawner installs it on all three nodes', async function () {
     this.timeout(360000);
     name = `e2efound${Date.now()}`;
+    await pushBusybox(name);
+    appImage = `${REGISTRY_REPO_HOST}/${name}:v1`;
 
     const reg = await registerEncryptedV9App(env.clients[0].url, {
       name,
