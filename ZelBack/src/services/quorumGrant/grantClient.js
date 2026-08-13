@@ -10,6 +10,7 @@ const { selectCommittee } = require('../utils/committeeSelector');
 const { extractIp, extractPort } = require('../utils/socketAddressUtils');
 const { nowMs } = require('../utils/monotonicClock');
 const messageStore = require('../appMessaging/messageStore');
+const foundingCommittee = require('../appMesh/foundingCommittee');
 const signedEnvelope = require('./signedEnvelope');
 const rosterOverlay = require('./rosterOverlay');
 const core = require('./grantClientCore');
@@ -98,8 +99,15 @@ async function selfIdentity() {
 }
 
 /**
- * The committee for a key at a fingerprint — the same walk the grantors run,
- * over the same named membership, or null when this node cannot rebuild it.
+ * The committee for a key at a fingerprint, or null when this node cannot
+ * honestly resolve one at that basis.
+ *
+ * Oneshot keys are founder registers: their committee is the app's founding
+ * committee, read from the materialized record with the same arithmetic the
+ * grantors run — never a fresh walk over a membership list. The record is
+ * the basis authority there, so the caller's fingerprint pins nothing: the
+ * return names the basis the asks must carry, which is usually older than
+ * the current list — the photo, not the album.
  *
  * Held committees are one deal of a generation-salted walk — the generation
  * is the owner's re-roll counter, resolved from the newest owner-signed
@@ -112,33 +120,41 @@ async function selfIdentity() {
  * every ask can carry them.
  */
 async function committeeFor(key, mode, fingerprint) {
+  if (mode === 'oneshot') {
+    const founding = await foundingCommittee.effectiveCommittee(key.slice(0, key.indexOf('/')));
+    if (!founding) return null;
+    return {
+      members: founding.members,
+      quorum: founding.quorum,
+      fingerprint: founding.fingerprint,
+      generation: founding.generation,
+      chain: [],
+    };
+  }
+
   const membership = networkStateService.membershipAt(fingerprint);
   if (!membership) return null;
 
-  const generation = mode === 'held' ? await currentGeneration(key) : 0;
-  const walkKey = mode === 'held'
-    ? rosterOverlay.walkKeyFor(key, generation)
-    : `quorumgrant|${key}`;
-  const committee = selectCommittee(membership, walkKey, { size: committeeSizeFor(mode) });
+  const generation = await currentGeneration(key);
+  const walkKey = rosterOverlay.walkKeyFor(key, generation);
+  const committee = selectCommittee(membership, walkKey, { size: committeeSizeFor('held') });
   if (committee.refusal) return null;
 
   let { members } = committee;
   let chain = [];
-  if (mode === 'held') {
-    const appName = key.slice(0, key.indexOf('/'));
-    const role = key.slice(key.indexOf('/') + 1);
-    const published = await readMasterleaseRoster(appName, role);
-    if (published
-      && published.fingerprint === fingerprint
-      && published.generation === generation
-      && published.chain.length) {
-      const verified = rosterOverlay.verifyChain(
-        membership, key, fingerprint, generation, committeeSizeFor(mode), published.chain,
-      );
-      if (verified) {
-        ({ members } = verified);
-        ({ chain } = published);
-      }
+  const appName = key.slice(0, key.indexOf('/'));
+  const role = key.slice(key.indexOf('/') + 1);
+  const published = await readMasterleaseRoster(appName, role);
+  if (published
+    && published.fingerprint === fingerprint
+    && published.generation === generation
+    && published.chain.length) {
+    const verified = rosterOverlay.verifyChain(
+      membership, key, fingerprint, generation, committeeSizeFor('held'), published.chain,
+    );
+    if (verified) {
+      ({ members } = verified);
+      ({ chain } = published);
     }
   }
 
@@ -305,7 +321,13 @@ const acquiring = new Set(); // keys with an acquisition in flight
  * loops on its own, so a caller cannot be surprised by how long it took.
  *
  * @param {string} key resource key
- * @param {object} options {mode, ttlMs, fingerprint, onDemoted, clock, schedule}
+ * @param {object} options {mode, ttlMs, fingerprint, committee, onDemoted,
+ *   clock, schedule} — `committee` is an already-resolved
+ *   {members, quorum, fingerprint, generation} basis used as given: the
+ *   founding service resolves the committee ONCE to decide whether to ask
+ *   at all, and handing that resolution in keeps the decision basis and the
+ *   ask basis the same object — resolving twice could straddle an arriving
+ *   generation record and ask a committee the decision never saw
  * @returns {Promise<object>} one of:
  *   {granted: true, holder}                       — held and renewing (held mode)
  *   {granted: true, founder}                      — this node founded (oneshot)
@@ -324,8 +346,8 @@ async function acquire(key, options = {}) {
   const identity = await selfIdentity();
   if (!identity) return { granted: false, reason: 'node identity unavailable' };
 
-  const fingerprint = options.fingerprint ?? networkStateService.membershipFingerprint();
-  const committee = await committeeFor(key, mode, fingerprint);
+  const committee = options.committee
+    ?? await committeeFor(key, mode, options.fingerprint ?? networkStateService.membershipFingerprint());
   if (!committee) return { granted: false, reason: 'committee unavailable for fingerprint' };
 
   acquiring.add(key);
