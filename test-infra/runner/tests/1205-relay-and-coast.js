@@ -6,7 +6,7 @@ import { bootAndPeer, installOnNodes } from '../framework/reconciler-suite.js';
 import { buildSeedableSyncthingApp } from '../framework/seed-helper.js';
 import { pushImage } from '../framework/registry-helper.js';
 import { getAppContainerStatus } from '../framework/container.js';
-import { waitFor, waitForAppInstalled } from '../framework/wait.js';
+import { waitFor, waitForAppInstalled, assertNoEvent } from '../framework/wait.js';
 
 // The two rules that keep a master's safety independent of its own network
 // path, on a real partitioned fleet:
@@ -126,12 +126,15 @@ describe('relay renewal and the partitioned app island', function () {
 
     // The master alone versus every non-holder: its direct committee reach
     // is at most itself and the two standbys — below quorum — so from here
-    // on, only renewals CARRIED by the standbys keep the term alive.
+    // on, only renewals CARRIED by the standbys keep the term alive. The
+    // master's own bus must stay silent: no demotion, no re-grant.
     await env.partitionGroups([masterIndex], OUTSIDERS);
     try {
       // Hold through four full terms: a term that lapses anywhere in the
       // window would seat a successor at a higher epoch and fail the check.
-      await new Promise((resolve) => { setTimeout(resolve, 180000); });
+      await new Promise((resolve) => { setTimeout(resolve, 175000); });
+      await assertNoEvent(env.clients[masterIndex], 'quorumGrant:demoted',
+        (d) => d.key === `${name}/master`, 5000);
       const during = await quorumVerdict();
       expect(during, 'the quorum view survives the partition').to.not.equal(null);
       expect(during.grantee, 'the master never changed').to.equal(first.grantee);
@@ -153,11 +156,15 @@ describe('relay renewal and the partitioned app island', function () {
     const masterIndex = Number(Object.keys(holderOutpoints).find((i) => holderOutpoints[i] === before.grantee));
 
     // Every holder versus the rest of the fleet: no renewal quorum exists
-    // for anyone. The settled standbys rest, their coast vouch holds, and
-    // the master keeps running — sampled through three full terms, well
-    // past where a denied coast would have stopped it.
+    // for anyone. The settled standbys rest, their coast vouch holds — the
+    // master SAYS SO with its coasting event — and the container keeps
+    // running, sampled through three full terms, well past where a denied
+    // coast would have stopped it.
     await env.partitionGroups(HOLDERS, OUTSIDERS);
     try {
+      await env.clients[masterIndex].waitForEvent(
+        'quorumGrant:coasting', (d) => d.key === `${name}/master`, 120000,
+      );
       const deadline = Date.now() + 150000;
       while (Date.now() < deadline) {
         const status = await getAppContainerStatus(env.clients[masterIndex].container, name);

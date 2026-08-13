@@ -111,11 +111,17 @@ describe('the mastership grant on a multi-node fleet', function () {
   it('a quorum of register cells names exactly one master, and it is a holder', async function () {
     this.timeout(300000);
 
+    // The grant plane says when; the registers say what. One holder wins
+    // the race and publishes the granted event; the quorum view then reads
+    // back the term it seated.
+    await Promise.any(HOLDERS.map((i) => env.clients[i].waitForEvent(
+      'quorumGrant:granted', (d) => d.key === `${name}/master`, 240000,
+    )));
     let verdict = null;
     await waitFor(async () => {
       verdict = await quorumVerdict();
       return verdict !== null;
-    }, { timeout: 240000, interval: 10000, label: 'a grant quorum forms' });
+    }, { timeout: 60000, interval: 5000, label: 'a grant quorum forms' });
 
     expect(Object.values(holderOutpoints), `grantee ${verdict.grantee}`).to.include(verdict.grantee);
   });
@@ -128,19 +134,24 @@ describe('the mastership grant on a multi-node fleet', function () {
     const masterIndex = Number(Object.keys(holderOutpoints).find((i) => holderOutpoints[i] === first.grantee));
     expect(Number.isInteger(masterIndex), `master ${first.grantee} maps to a node`).to.equal(true);
 
+    const survivors = HOLDERS.filter((i) => i !== masterIndex);
     await pauseHostContainer(env.clients[masterIndex].container);
     pausedIndex = masterIndex;
 
     // The decided sequence: term lapses unrenewed, the legacy election
     // bridges the app, the dead node's location row ages out of the
     // survivors' unanimity probe, and the bridge's winner acquires the
-    // grant. What the plane must show for it: a NEW grantee at a HIGHER
-    // epoch, agreed by a quorum that no longer includes the corpse.
+    // grant — announced by the successor's own granted event, then read
+    // back from the registers: a NEW grantee at a HIGHER epoch, agreed by
+    // a quorum that no longer includes the corpse.
+    await Promise.any(survivors.map((i) => env.clients[i].waitForEvent(
+      'quorumGrant:granted', (d) => d.key === `${name}/master`, 720000,
+    )));
     let second = null;
     await waitFor(async () => {
       second = await quorumVerdict();
       return second !== null && second.grantee !== first.grantee;
-    }, { timeout: 720000, interval: 15000, label: 'a successor holds the grant' });
+    }, { timeout: 120000, interval: 10000, label: 'a successor holds the grant' });
 
     expect(second.epoch, 'epochs never move backwards').to.be.greaterThan(first.epoch);
     expect(Object.values(holderOutpoints)).to.include(second.grantee);
