@@ -9,11 +9,13 @@ const fluxNetworkHelper = require('../fluxNetworkHelper');
 const networkStateService = require('../networkStateService');
 const registryManager = require('../appDatabase/registryManager');
 const messageStore = require('../appMessaging/messageStore');
+const foundingCommittee = require('../appMesh/foundingCommittee');
 const { extractIp } = require('../utils/socketAddressUtils');
 const { selectCommittee } = require('../utils/committeeSelector');
 const signedEnvelope = require('./signedEnvelope');
 const rosterOverlay = require('./rosterOverlay');
 const grantRegister = require('./grantRegister');
+const { MODES } = require('./grantRegisterCore');
 const log = require('../../lib/log');
 
 // The node-to-node face of the grantor. A grant is a WRITE, unlike almost
@@ -117,7 +119,7 @@ async function readAsk(req, type) {
     return bad(400, 'malformed key');
   }
   const needsMode = type === 'probe' || type === 'prepare' || type === 'accept';
-  if (needsMode && mode !== 'held' && mode !== 'oneshot') {
+  if (needsMode && !MODES.includes(mode)) {
     return bad(400, 'malformed mode');
   }
   if (!Number.isSafeInteger(epoch) || epoch < 1) {
@@ -183,15 +185,26 @@ async function readAsk(req, type) {
 }
 
 /**
- * Whether THIS node sits on the committee for the key, computed against the
- * membership the ask NAMES — the pinning rule (§5). The fingerprint decides
+ * Whether THIS node sits on the committee for the key. The mode names the
+ * plane, and the two planes answer from different state.
+ *
+ * Oneshot keys are founder registers, and their committee is the app's
+ * founding committee: the record every node materialized when it processed
+ * the registration, read back with the same exit arithmetic the candidates
+ * run. Answering from the record instead of rebuilding the walk is what
+ * lets a grantor whose own membership window never covered the ask's basis
+ * still answer — the photo outlives the album — and it is what makes the
+ * committee per-app: one founding committee referees every component's
+ * founder register.
+ *
+ * Held keys pin to the membership the ask NAMES. The fingerprint decides
  * WHICH list; a fingerprint this node cannot rebuild is a committee this
  * node cannot verify membership of, and it says so rather than substituting
  * the current list — tolerance matching is how quorum overlap quietly stops
  * being an intersection. Fails closed throughout: a node that cannot
  * identify itself cannot show it belongs.
  *
- * For held keys the committee is one deal of a generation-salted walk: the
+ * The held committee is one deal of a generation-salted walk: the
  * ask names the generation, and it must be the newest one the owner has
  * signed as this grantor knows it — an ask under a retired generation is
  * refused with the current number, because grants written by two
@@ -203,41 +216,48 @@ async function readAsk(req, type) {
  * knows to answer for it.
  */
 async function selfOnCommittee(key, mode, fingerprint, generation, carriedChain) {
+  if (mode === 'oneshot') {
+    const collateral = await generalService.obtainNodeCollateralInformation();
+    const founding = await foundingCommittee.selfOnFoundingCommittee(
+      key.slice(0, key.indexOf('/')), fingerprint, collateral,
+    );
+    return {
+      member: founding.member,
+      code: founding.member ? 200 : 409,
+      reason: founding.reason,
+      quorum: founding.quorum,
+    };
+  }
+
   const membership = networkStateService.membershipAt(fingerprint);
   if (!membership) {
     return { member: false, code: 409, reason: 'unknown membership fingerprint' };
   }
 
-  if (mode === 'held') {
-    const current = await heldGeneration(key);
-    if (generation !== current) {
-      return { member: false, code: 409, reason: `ask names generation ${generation}, current is ${current}` };
-    }
+  const current = await heldGeneration(key);
+  if (generation !== current) {
+    return { member: false, code: 409, reason: `ask names generation ${generation}, current is ${current}` };
   }
 
-  const walkKey = mode === 'held'
-    ? rosterOverlay.walkKeyFor(key, generation)
-    : `quorumgrant|${key}`;
-  const committee = selectCommittee(membership, walkKey, { size: committeeSize(mode) });
+  const walkKey = rosterOverlay.walkKeyFor(key, generation);
+  const committee = selectCommittee(membership, walkKey, { size: committeeSize('held') });
   if (committee.refusal) {
     return { member: false, code: 409, reason: committee.refusal };
   }
 
   let { members } = committee;
-  if (mode === 'held') {
-    const stored = await grantRegister.read(key);
-    const journaled = stored?.roster?.fingerprint === fingerprint
-      && (stored.roster.generation ?? 0) === generation
-      ? stored.roster.chain : [];
-    if (journaled.length) {
-      members = rosterOverlay.rosterAfter(committee.members, membership, journaled) ?? members;
-    }
-    if (Array.isArray(carriedChain) && carriedChain.length > journaled.length) {
-      const verified = rosterOverlay.verifyChain(
-        membership, key, fingerprint, generation, committeeSize(mode), carriedChain,
-      );
-      if (verified) ({ members } = verified);
-    }
+  const stored = await grantRegister.read(key);
+  const journaled = stored?.roster?.fingerprint === fingerprint
+    && (stored.roster.generation ?? 0) === generation
+    ? stored.roster.chain : [];
+  if (journaled.length) {
+    members = rosterOverlay.rosterAfter(committee.members, membership, journaled) ?? members;
+  }
+  if (Array.isArray(carriedChain) && carriedChain.length > journaled.length) {
+    const verified = rosterOverlay.verifyChain(
+      membership, key, fingerprint, generation, committeeSize('held'), carriedChain,
+    );
+    if (verified) ({ members } = verified);
   }
 
   const collateral = await generalService.obtainNodeCollateralInformation();
