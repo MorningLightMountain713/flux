@@ -3,6 +3,7 @@
 const generalService = require('../generalService');
 const messageStore = require('../appMessaging/messageStore');
 const grantClient = require('../quorumGrant/grantClient');
+const fluxEventBus = require('../utils/fluxEventBus');
 const foundingCommittee = require('./foundingCommittee');
 const log = require('../../lib/log');
 
@@ -52,20 +53,29 @@ async function founderAsk(appName, component) {
   if (recorded) {
     const collateral = await generalService.obtainNodeCollateralInformation();
     const self = `${collateral.txhash}:${collateral.txindex}`;
-    return { answer: recorded === self ? 'yes' : 'no' };
+    return settled(appName, component, recorded === self ? 'yes' : 'no');
   }
 
   const outcome = await grantClient.acquire(`${appName}/${role}`, {
     mode: 'oneshot',
     committee,
   });
-  if (outcome.granted) return { answer: 'yes' };
-  if (outcome.founder) return { answer: 'no' };
+  if (outcome.granted) return settled(appName, component, 'yes');
+  if (outcome.founder) return settled(appName, component, 'no');
   log.info(`foundingService - ${appName}/${component}: wait (${outcome.reason ?? `retry in ${outcome.retryAfterMs}ms`})`);
   return {
     answer: 'wait',
     ...(outcome.retryAfterMs ? { retryAfterMs: outcome.retryAfterMs } : {}),
   };
+}
+
+/**
+ * A settled founder answer — yes or no, never wait — published to the
+ * event bus so the harness can await the verdict instead of inferring it.
+ */
+function settled(appName, component, answer) {
+  fluxEventBus.publish('quorumGrant:founderAnswer', { appName, component, answer });
+  return { answer };
 }
 
 /**

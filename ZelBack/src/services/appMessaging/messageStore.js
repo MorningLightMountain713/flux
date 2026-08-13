@@ -9,6 +9,7 @@ const appsRepository = require('../appDatabase/appsRepository');
 const appEventVerifier = require('./appEventVerifier');
 const registryManager = require('../appDatabase/registryManager');
 const foundingCommittee = require('../appMesh/foundingCommittee');
+const fluxEventBus = require('../utils/fluxEventBus');
 const ownerGenerationRecord = require('../quorumGrant/ownerGenerationRecord');
 const rosterOverlay = require('../quorumGrant/rosterOverlay');
 const { getSpec, validateGossipSpec } = require('../utils/specLibs');
@@ -888,6 +889,10 @@ async function handleGrantGenerationEvent({ message, envelope }) {
       }, { alwaysSetFields: { receivedAt: new Date() } }),
       { upsert: true },
     );
+
+    fluxEventBus.publish('quorumGrant:generationRecord', {
+      appName: message.appName, role: message.role, generation: message.generation,
+    });
 
     // In-window processors re-materialize the founding committee at the
     // record's named height; late ones store the record and answer honestly

@@ -9,6 +9,7 @@ const registryManager = require('../appDatabase/registryManager');
 const { selectCommittee } = require('../utils/committeeSelector');
 const { extractIp, extractPort } = require('../utils/socketAddressUtils');
 const { nowMs } = require('../utils/monotonicClock');
+const fluxEventBus = require('../utils/fluxEventBus');
 const messageStore = require('../appMessaging/messageStore');
 const foundingCommittee = require('../appMesh/foundingCommittee');
 const signedEnvelope = require('./signedEnvelope');
@@ -433,6 +434,7 @@ async function acquireOnce(key, mode, ttlMs, identity, committee, options) {
       fingerprint: committee.fingerprint,
       generation: committee.generation,
     });
+    fluxEventBus.publish('quorumGrant:founded', { key, founder: identity.outpoint });
     return { granted: true, founder: identity.outpoint };
   }
 
@@ -452,6 +454,7 @@ async function acquireOnce(key, mode, ttlMs, identity, committee, options) {
   held.set(key, holder);
   await holder.publishRecord();
   holder.start();
+  fluxEventBus.publish('quorumGrant:granted', { key, epoch, generation: committee.generation ?? 0 });
   // Who this grant superseded, when it superseded anyone: the recorded
   // grantee the prepare round taught. The consumer's peer fence is built
   // from exactly this name — never from a guess about who used to run.
@@ -742,6 +745,9 @@ class Holder {
     this.#lastAnswerMs.delete(targetOutpoint);
     this.#lastAnswerMs.set(entry.add, now);
     log.info(`quorumGrant holder ${this.#key}: roster healed — ${targetOutpoint} out, ${entry.add} in`);
+    fluxEventBus.publish('quorumGrant:healed', {
+      key: this.#key, remove: targetOutpoint, add: entry.add, seq,
+    });
 
     await this.publishRecord();
     await this.#seedAddedGrantor(expected);
@@ -792,6 +798,7 @@ class Holder {
 
     if (verdict.coast) {
       this.#state = 'jeopardy';
+      if (!this.#coasting) fluxEventBus.publish('quorumGrant:coasting', { key: this.#key });
       this.#coasting = true;
       return;
     }
@@ -813,6 +820,7 @@ class Holder {
     if (this.#timer !== null) this.#cancel(this.#timer);
     held.delete(this.#key);
     log.warn(`quorumGrant holder ${this.#key}: demoted — ${reason}`);
+    fluxEventBus.publish('quorumGrant:demoted', { key: this.#key, reason });
     if (this.#onDemoted) this.#onDemoted(reason);
   }
 
