@@ -17,18 +17,15 @@ import { waitFor, waitForAppInstalled } from '../framework/wait.js';
 //   wobbles: same grantee, same epoch, for term after term.
 //
 //   THE APP ISLAND — cut ALL the holders off from the rest of the fleet.
-//   No renewal path exists at all; the witness rule decides between
-//   coasting and a clean stop, and its every outcome must satisfy one
-//   invariant: AT MOST ONE master container runs, anywhere, at every
-//   instant — the standbys cannot acquire (no quorum reachable), and the
-//   nodes outside the island hold nothing to promote. On heal, exactly one
-//   master stands and the epoch never regressed.
-//
-// The island assertion is deliberately the union of the safe outcomes
-// (coast through, or demote with no successor until heal): the coast
-// verdict requires witnesses that are not mid-pursuit, and the consumer
-// kicks pursuit even for a settled standby, so which safe outcome occurs
-// is timing. The invariant is not.
+//   No renewal path exists at all, and the master COASTS: its standbys —
+//   settled by the published record, resting rather than pursuing — vouch
+//   unanimously that no takeover is possible, and the container keeps
+//   running through the whole outage. The invariant rides along: at most
+//   one master container anywhere at every instant, and on heal the same
+//   master stands at the same epoch — a term that coasted was never
+//   re-fought. The settled-standby rest is what makes this deterministic:
+//   a standby that knows another node holds a live grant does not pursue,
+//   so the coast vouch never trips over a mid-flight futile acquisition.
 
 const HOLDERS = [0, 1, 2];
 const OUTSIDERS = [3, 4, 5, 6, 7, 8, 9];
@@ -148,36 +145,39 @@ describe('relay renewal and the partitioned app island', function () {
     });
   });
 
-  it('the app island keeps at most one master at every instant, and heals to exactly one', async function () {
+  it('the app island coasts: the master runs through the outage and its term is never re-fought', async function () {
     this.timeout(900000);
 
     const before = await quorumVerdict();
     expect(before, 'a standing grant before the island forms').to.not.equal(null);
+    const masterIndex = Number(Object.keys(holderOutpoints).find((i) => holderOutpoints[i] === before.grantee));
 
     // Every holder versus the rest of the fleet: no renewal quorum exists
-    // for anyone, no successor can be seated anywhere, and the witness rule
-    // decides between coasting and a clean stop. Sample the invariant
-    // through three full terms: never two masters.
+    // for anyone. The settled standbys rest, their coast vouch holds, and
+    // the master keeps running — sampled through three full terms, well
+    // past where a denied coast would have stopped it.
     await env.partitionGroups(HOLDERS, OUTSIDERS);
     try {
       const deadline = Date.now() + 150000;
       while (Date.now() < deadline) {
-        const running = await runningMasters();
-        expect(running, 'at most one master container fleet-wide').to.be.at.most(1);
+        const status = await getAppContainerStatus(env.clients[masterIndex].container, name);
+        expect(status && status.status.startsWith('Up'), 'the master coasts through the outage').to.equal(true);
+        expect(await runningMasters(), 'at most one master container fleet-wide').to.be.at.most(1);
         await new Promise((resolve) => { setTimeout(resolve, 10000); });
       }
     } finally {
       await env.healPartition(HOLDERS, OUTSIDERS);
     }
 
-    // Healed: exactly one master stands — coasted through, or re-seated
-    // after the stop — and the epoch never moved backwards.
+    // Healed: the SAME master at the SAME epoch — a coasted term resumes
+    // renewing; it was never lost, so it was never re-fought.
     let after = null;
     await waitFor(async () => {
       after = await quorumVerdict();
-      return after !== null && (await runningMasters()) === 1;
-    }, { timeout: 360000, interval: 10000, label: 'exactly one master after the heal' });
-    expect(after.epoch).to.be.at.least(before.epoch);
-    expect(Object.values(holderOutpoints)).to.include(after.grantee);
+      return after !== null;
+    }, { timeout: 240000, interval: 10000, label: 'the quorum view returns after the heal' });
+    expect(after.grantee, 'the master never changed').to.equal(before.grantee);
+    expect(after.epoch, 'the coasted term was never re-fought').to.equal(before.epoch);
+    expect(await runningMasters()).to.equal(1);
   });
 });
