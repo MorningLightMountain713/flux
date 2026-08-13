@@ -18,7 +18,9 @@ module.exports = {
             "appTamperingEvents": "apptamperingevents",
             "nodeStartupTracker": "nodestartuptracker",
             "nodeIdentity": "nodeidentity",
-            "policyDocuments": "policydocuments"
+            "policyDocuments": "policydocuments",
+            "quorumGrants": "quorumgrants",
+            "foundingCommittees": "foundingcommittees"
         }
     },
     "daemon": {
