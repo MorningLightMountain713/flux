@@ -128,18 +128,24 @@ describe('the committee heals its dark seat, and the owner re-deals the walk', f
       .filter(({ cell, i }) => !HOLDERS.includes(i) && i !== refereeIndex && !cell?.accepted)
       .map(({ i }) => i);
 
+    const masterIndex = Number(Object.keys(outpoints).find((i) => outpoints[i] === first.grantee));
     await pauseHostContainer(env.clients[refereeIndex].container);
 
-    // The heal: some surviving cell's roster chain names the dark seat
-    // out. The proposal fires after a full unanswered term, the quorum is
-    // five signatures, and the entry rides every journal that accepted it.
+    // The heal announces itself: the holder publishes the healed event
+    // with the entry it installed, and the registers read back the chain
+    // with its quorum of signatures.
+    await env.clients[masterIndex].waitForEvent(
+      'quorumGrant:healed',
+      (d) => d.key === `${name}/master` && d.remove === outpoints[refereeIndex],
+      480000,
+    );
     let healed = null;
     await waitFor(async () => {
       const now = await Promise.all(env.clients.map((_, i) => readCell(i)));
       healed = now.find((cell) => (cell?.roster?.chain ?? [])
         .some((entry) => entry.remove === outpoints[refereeIndex]));
       return Boolean(healed);
-    }, { timeout: 480000, interval: 15000, label: 'the roster chain names the dark seat out' });
+    }, { timeout: 60000, interval: 5000, label: 'the roster chain names the dark seat out' });
 
     const entry = healed.roster.chain.find((e) => e.remove === outpoints[refereeIndex]);
     expect(entry.acceptances.length, 'a quorum signed the seat change').to.be.at.least(5);
@@ -176,14 +182,26 @@ describe('the committee heals its dark seat, and the owner re-deals the walk', f
     });
     expect(res.status, await res.text().catch(() => '')).to.equal(200);
 
-    // The salted walk deals a fresh committee; the old world's grantors
-    // refuse renewals teaching generation 1; the master re-acquires there
-    // without the app changing hands: same grantee, generation 1 on a
+    // The record reaches every holder (its own event on each node), the
+    // salted walk deals a fresh committee, the old world's grantors refuse
+    // renewals teaching generation 1, and the master re-acquires there
+    // without the app changing hands — its granted event under the new
+    // generation, then the registers: same grantee, generation 1 on a
     // quorum of cells.
+    await Promise.all(HOLDERS.map((i) => env.clients[i].waitForEvent(
+      'quorumGrant:generationRecord',
+      (d) => d.appName === name && d.role === 'master' && d.generation === 1,
+      120000,
+    )));
+    await Promise.any(HOLDERS.map((i) => env.clients[i].waitForEvent(
+      'quorumGrant:granted',
+      (d) => d.key === `${name}/master` && d.generation === 1,
+      360000,
+    )));
     await waitFor(async () => {
       const verdict = await quorumVerdict();
       return verdict !== null && verdict.generation === 1;
-    }, { timeout: 360000, interval: 15000, label: 'a generation-1 quorum forms' });
+    }, { timeout: 60000, interval: 5000, label: 'a generation-1 quorum forms' });
 
     const after = await quorumVerdict();
     expect(after.grantee, 'the master survives its own re-deal').to.equal(before.grantee);

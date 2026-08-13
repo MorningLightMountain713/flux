@@ -6,7 +6,7 @@ import { bootAndPeer, installOnNodes } from '../framework/reconciler-suite.js';
 import { buildSeedableSyncthingApp } from '../framework/seed-helper.js';
 import { pushImage } from '../framework/registry-helper.js';
 import { restartFluxos } from '../framework/container.js';
-import { waitFor, waitForAppInstalled } from '../framework/wait.js';
+import { waitFor, waitForAppInstalled, assertNoEvent } from '../framework/wait.js';
 
 // A grantor that restarts must come back as the SAME grantor: its promises
 // were journaled before every reply, so the record survives the process —
@@ -127,9 +127,11 @@ describe('a grantor restarts, and its promises outlive the process', function ()
     expect(afterCell.promisedEpoch, 'the journaled promise survived').to.equal(beforeCell.promisedEpoch);
 
     // Through the drain and past it, the term itself never wobbles: eight
-    // referees renew it, and no epoch bump — which would mean a re-fight —
-    // ever appears. Hold through the full drain plus two terms.
-    const deadline = Date.now() + 150000;
+    // referees renew it, no demotion fires on the master, and no epoch
+    // bump — which would mean a re-fight — ever appears. Hold through the
+    // full drain plus two terms.
+    const masterIndex = Number(Object.keys(holderOutpoints).find((i) => holderOutpoints[i] === first.grantee));
+    const deadline = Date.now() + 145000;
     while (Date.now() < deadline) {
       const verdict = await quorumVerdict();
       expect(verdict, 'the quorum view holds throughout').to.not.equal(null);
@@ -137,6 +139,8 @@ describe('a grantor restarts, and its promises outlive the process', function ()
       expect(verdict.epoch, 'the term was renewed, never re-fought').to.equal(first.epoch);
       await new Promise((resolve) => { setTimeout(resolve, 15000); });
     }
+    await assertNoEvent(env.clients[masterIndex], 'quorumGrant:demoted',
+      (d) => d.key === `${name}/master`, 5000);
 
     // The drained referee rejoins the quorum: after the drain window its
     // cell's expiry advances again — proof it is granting renewals, at the
