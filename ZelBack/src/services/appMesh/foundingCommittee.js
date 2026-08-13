@@ -2,6 +2,7 @@
 
 const config = require('config');
 const dbHelper = require('../dbHelper');
+const appsRepository = require('../appDatabase/appsRepository');
 const networkStateService = require('../networkStateService');
 const { selectCommittee } = require('../utils/committeeSelector');
 const { globalAppStateEvents } = require('../utils/appConstants');
@@ -110,10 +111,14 @@ async function materializeFor(specDoc) {
 
 /**
  * Re-materialize the committee at an owner generation record's named height —
- * the §8.3 re-found and the §7.1 tier-2 re-roll, both landing here. Only a
- * node whose window covers the named height may act; anyone else keeps its
- * older record and answers honestly until sync or a fresh record helps it.
- * The write is generation-guarded: a lower generation never overwrites a
+ * the re-found for founding and the tier-2 referee re-roll, both landing
+ * here. Only a node whose window covers the named height may act; anyone
+ * else keeps what it has and answers honestly until sync or a fresh record
+ * helps it. A node with NO photo at all MINTS one from the record: the
+ * record is owner-signed and names the height, so the derivation is the
+ * same shared arithmetic as the registration photo — and the re-roll is
+ * the designed rescue for exactly the nodes that never witnessed one. The
+ * write stays generation-guarded: a lower generation never overwrites a
  * higher one, whatever order records arrive in.
  *
  * @param {{appName: string, generation: number, height: number}} record
@@ -138,25 +143,42 @@ async function materializeGeneration(record) {
       return false;
     }
 
+    const row = {
+      generation: record.generation,
+      fingerprint,
+      height: record.height,
+      quorum: committee.quorum,
+      members: committee.members.map((member) => ({
+        txhash: member.txhash,
+        outidx: String(member.outidx),
+        pubkey: member.pubkey,
+        ip: member.ip,
+      })),
+      computedAt: Date.now(),
+    };
+
+    const existing = await dbHelper.findOneInDatabase(database, collection(), { _id: record.appName });
+    if (!existing) {
+      // the mesh gate is the registration path's, applied here from the
+      // stored spec — a record for a non-mesh app mints nothing
+      const spec = await appsRepository.getGlobalAppInfo(record.appName);
+      if (!isMeshSpec(spec)) return false;
+      await dbHelper.findOneAndUpdateInDatabase(
+        database,
+        collection(),
+        { _id: record.appName },
+        { $setOnInsert: row },
+        { upsert: true, writeConcern: { w: 1, j: true } },
+      );
+    }
+
+    // Settles the was-existing case and any insert race just lost, under
+    // the same guard either way.
     await dbHelper.updateOneInDatabase(
       database,
       collection(),
       { _id: record.appName, $or: [{ generation: { $lt: record.generation } }, { generation: { $exists: false } }] },
-      {
-        $set: {
-          generation: record.generation,
-          fingerprint,
-          height: record.height,
-          quorum: committee.quorum,
-          members: committee.members.map((member) => ({
-            txhash: member.txhash,
-            outidx: String(member.outidx),
-            pubkey: member.pubkey,
-            ip: member.ip,
-          })),
-          computedAt: Date.now(),
-        },
-      },
+      { $set: row },
       { upsert: false, writeConcern: { w: 1, j: true } },
     );
     log.info(`foundingCommittee - ${record.appName} re-rolled to generation ${record.generation} at height ${record.height}`);

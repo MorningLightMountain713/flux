@@ -4,6 +4,7 @@ const { expect } = require('chai');
 const sinon = require('sinon');
 
 const dbHelper = require('../../ZelBack/src/services/dbHelper');
+const appsRepository = require('../../ZelBack/src/services/appDatabase/appsRepository');
 const networkStateService = require('../../ZelBack/src/services/networkStateService');
 const foundingCommittee = require('../../ZelBack/src/services/appMesh/foundingCommittee');
 
@@ -58,6 +59,7 @@ describe('foundingCommittee', () => {
     sinon.stub(networkStateService, 'membershipFingerprintAt').returns(FP);
     sinon.stub(networkStateService, 'membershipAt').callsFake((fp) => (fp === FP || fp === CURRENT_FP ? fleet(12) : null));
     sinon.stub(networkStateService, 'membershipFingerprint').returns(CURRENT_FP);
+    sinon.stub(appsRepository, 'getGlobalAppInfo').resolves(meshSpec());
   });
 
   afterEach(() => {
@@ -189,6 +191,34 @@ describe('foundingCommittee', () => {
       });
       expect(applied).to.equal(true); // the call succeeds; the guarded write is a no-op
       expect(store.get('myapp').generation).to.equal(3);
+    });
+
+    it('the re-roll MINTS the photo on a node that never held one', async () => {
+      const applied = await foundingCommittee.materializeGeneration({
+        appName: 'myapp', generation: 1, height: 500_050,
+      });
+      expect(applied).to.equal(true);
+      const record = store.get('myapp');
+      expect(record.generation).to.equal(1);
+      expect(record.quorum).to.equal(5);
+      expect(record.members).to.have.length(9);
+    });
+
+    it('a record for a non-mesh app mints nothing', async () => {
+      appsRepository.getGlobalAppInfo.resolves({ name: 'myapp', network: {} });
+      const applied = await foundingCommittee.materializeGeneration({
+        appName: 'myapp', generation: 1, height: 500_050,
+      });
+      expect(applied).to.equal(false);
+      expect(store.has('myapp')).to.equal(false);
+    });
+
+    it('an owner record rescues a photo-less reader end to end', async () => {
+      generationRows.set('grantgeneration:myapp/founder', generationRow(1, 500_050));
+      const committee = await foundingCommittee.effectiveCommittee('myapp');
+      expect(committee).to.not.equal(null);
+      expect(committee.generation).to.equal(1);
+      expect(committee.members).to.have.length(9);
     });
   });
 
