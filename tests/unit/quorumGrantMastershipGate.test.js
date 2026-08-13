@@ -139,11 +139,37 @@ describe('quorumGrant mastershipGrantGate', () => {
         return { granted: false };
       });
       await mastershipGrantGate.grantVerdict(IDENTIFIER, activeStandbyComp());
+      await new Promise((resolve) => { setImmediate(resolve); });
       expect(grantClient.acquire.calledOnce).to.equal(true);
       expect(grantClient.acquire.firstCall.args[0]).to.equal('myapp/master');
 
       demotion('a test deposition');
       expect(reconcilerQueue.enqueueComponent.calledOnceWith(IDENTIFIER)).to.equal(true);
+    });
+
+    it('a settled standby RESTS — no pursuit while the record names another live held master', async () => {
+      messageStore.getMasterleaseRecord.resolves({
+        data: { grantee: 'other:0', mode: 'held' },
+      });
+      await mastershipGrantGate.grantVerdict(IDENTIFIER, activeStandbyComp());
+      await new Promise((resolve) => { setImmediate(resolve); });
+      expect(grantClient.acquire.called).to.equal(false);
+    });
+
+    it('a record naming THIS node never suppresses pursuit — the restart re-acquire stays immediate', async () => {
+      messageStore.getMasterleaseRecord.resolves({
+        data: { grantee: SELF, mode: 'held' },
+      });
+      await mastershipGrantGate.grantVerdict(IDENTIFIER, activeStandbyComp());
+      await new Promise((resolve) => { setImmediate(resolve); });
+      expect(grantClient.acquire.calledOnce).to.equal(true);
+    });
+
+    it('an unreadable record never stops a pursuit — the grantors decide', async () => {
+      messageStore.getMasterleaseRecord.rejects(new Error('db down'));
+      await mastershipGrantGate.grantVerdict(IDENTIFIER, activeStandbyComp());
+      await new Promise((resolve) => { setImmediate(resolve); });
+      expect(grantClient.acquire.calledOnce).to.equal(true);
     });
 
     it('does not stack pursuits while one is in flight', async () => {

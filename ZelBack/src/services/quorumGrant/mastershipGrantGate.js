@@ -124,10 +124,17 @@ async function holdersUnanimous(appName) {
 }
 
 /**
- * Kick an acquisition if none is running and the last kick is stale. The
- * grantor-side incumbent shield turns standbys away while a master renews,
- * so pursuit is cheap; when the master dies, whoever's jitter fires first
- * wins and the rest adopt. Demotion re-enters the reconciler through the
+ * Kick an acquisition if none is running and the last kick is stale. A
+ * settled standby RESTS: while the published record names another node as
+ * a live held master, pursuing adds nothing — the incumbent shield would
+ * turn it away — and it costs exactly the thing the coast rule needs,
+ * witnesses that are acquiring nothing. A dead master's record stops
+ * being republished and its row ages out, and pursuit resumes on the row's
+ * absence — freshness judged by the store's own expiry, never by this
+ * node's clock against another's, and never by reachability. A record
+ * naming THIS node never suppresses anything: the restart re-acquire must
+ * stay immediate. When the master dies, whoever's jitter fires first wins
+ * and the rest adopt. Demotion re-enters the reconciler through the
  * queue — the veto on the next pass is what stops the container.
  */
 function pursue(identifier, appName) {
@@ -138,6 +145,21 @@ function pursue(identifier, appName) {
   const jittered = interval / 2 + Math.random() * interval;
   if (nowMs() - last < jittered) return;
   pursuits.set(key, nowMs());
+  acquireUnlessSettled(identifier, appName, key);
+}
+
+async function acquireUnlessSettled(identifier, appName, key) {
+  try {
+    const record = await messageStore.getMasterleaseRecord(appName, ROLE);
+    const data = record?.data;
+    if (data?.grantee && data.mode === 'held') {
+      const self = await generalService.obtainNodeCollateralInformation();
+      if (data.grantee !== `${self.txhash}:${self.txindex}`) return;
+    }
+  } catch (error) {
+    // an unreadable record must not stop a pursuit — the grantors decide
+    log.warn(`mastershipGrantGate - record read before pursuing ${key} failed: ${error.message}`);
+  }
 
   grantClient.acquire(key, {
     mode: 'held',
