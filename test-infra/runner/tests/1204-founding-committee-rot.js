@@ -60,7 +60,16 @@ describe('the founding committee rots, and the exit re-deals it from the survivo
       zmqTopics: ALL_ZMQ_TOPICS,
       arcane: true,
       configOverrides: {
-        fluxapps: { meshReconcileIntervalMs: 15000 },
+        fluxapps: {
+          meshReconcileIntervalMs: 15000,
+          // Grant timings compressed like every decider cadence the harness
+          // overlays - production values are minutes, and the boot drain
+          // alone (maxTtl) would eat the whole settle window.
+          quorumGrantMaxTtlMs: 30000,
+          quorumGrantDrainMs: 20000,
+          quorumGrantLockDelayMs: 10000,
+          quorumGrantAskTimeoutMs: 3000,
+        },
       },
     });
     await bootAndPeer(env, { pricing: true });
