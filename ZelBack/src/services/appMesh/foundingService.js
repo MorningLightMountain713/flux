@@ -41,14 +41,15 @@ const log = require('../../lib/log');
  * @returns {Promise<{answer: 'yes'|'no'|'wait', retryAfterMs?: number}>}
  */
 async function founderAsk(appName, component) {
-  const committee = await foundingCommittee.effectiveCommittee(appName, component);
-  if (!committee) {
-    // No committee basis is an honest "not yet" — never a no, and never a
-    // freshly minted basis. Sync will bring the record.
-    return { answer: 'wait' };
-  }
+  // The anchor is host-side knowledge (this node runs the container, so it
+  // resolves the view); the committee is public-facts knowledge. Missing
+  // either is an honest "not yet" — never a no, never a minted basis.
+  const anchor = await foundingCommittee.componentAnchor(appName, component);
+  if (anchor === null) return { answer: 'wait' };
+  const committee = await foundingCommittee.refereeCommittee(appName, anchor);
+  if (!committee) return { answer: 'wait' };
 
-  const role = `founder-${component}@${committee.anchor}`;
+  const role = `founder-${foundingCommittee.founderToken(appName, component)}@${anchor}`;
   const recorded = await recordedFounder(appName, role, committee.generation);
   if (recorded) {
     const collateral = await generalService.obtainNodeCollateralInformation();
