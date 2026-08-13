@@ -4,6 +4,7 @@ import { expect } from 'chai';
 import { createTestEnv } from '../framework/test-env.js';
 import { bootAndPeer } from '../framework/reconciler-suite.js';
 import { registerEncryptedV9App } from '../framework/content-helper.js';
+import { pushBusybox } from '../framework/registry-helper.js';
 import {
   queueAppTx, advanceBlocks, removeFromNodeList, restoreToNodeList,
 } from '../framework/daemon-control.js';
@@ -70,11 +71,13 @@ describe('the founding committee rots, and the exit re-deals it from the survivo
   it('registers a mesh app on the full fleet and installs it on three nodes', async function () {
     this.timeout(480000);
     name = `e2erot${Date.now()}`;
+    // static busybox, not pause: the founder asks exec wget in-container
+    await pushBusybox(name);
 
     const reg = await registerEncryptedV9App(env.clients[0].url, {
       name,
       instances: 3,
-      image: `${REGISTRY_REPO_HOST}/e2e-pause:v1`,
+      image: `${REGISTRY_REPO_HOST}/${name}:v1`,
       specOverrides: { network: { mesh: true } },
     });
     expect(reg.status, JSON.stringify(reg)).to.equal('success');
