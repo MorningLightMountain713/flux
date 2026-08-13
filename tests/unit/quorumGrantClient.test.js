@@ -238,6 +238,7 @@ describe('quorumGrant grantClient', () => {
     sinon.stub(foundingCommittee, 'effectiveCommittee').resolves({
       repinned: false,
       generation: 0,
+      anchor: 500000,
       fingerprint,
       quorum: founderCommittee.quorum,
       members: founderCommittee.members,
@@ -315,7 +316,7 @@ describe('quorumGrant grantClient', () => {
     });
 
     it('founds once, and the second founder learns who was first', async () => {
-      const founding = await grantClient.acquire('myapp/founder', holderOptions({ mode: 'oneshot' }));
+      const founding = await grantClient.acquire('myapp/founder-db@500000', holderOptions({ mode: 'oneshot' }));
       expect(founding.granted).to.equal(true);
       expect(founding.founder).to.equal(SELF);
       const published = masterleasePublisher.publishMasterlease.firstCall.args[0];
@@ -323,7 +324,7 @@ describe('quorumGrant grantClient', () => {
       expect(published.ttlMs).to.equal(undefined);
 
       // the same node re-asking converges on its own record
-      const again = await grantClient.acquire('myapp/founder', holderOptions({ mode: 'oneshot' }));
+      const again = await grantClient.acquire('myapp/founder-db@500000', holderOptions({ mode: 'oneshot' }));
       expect(again.granted).to.equal(true);
       expect(again.founder).to.equal(SELF);
     });
@@ -331,14 +332,14 @@ describe('quorumGrant grantClient', () => {
     it('adopts a foreign founding record instead of contesting it', async () => {
       const foreignCommittee = selectCommittee(membership, 'quorumgrant|myapp/founder', { size: 9 });
       foreignCommittee.members.forEach((member) => {
-        registers.get(member.ip.split(':')[0]).set('myapp/founder', {
+        registers.get(member.ip.split(':')[0]).set('myapp/founder-db@500000', {
           promisedEpoch: 1,
           accepted: {
             epoch: 1, grantee: 'other:0', mode: 'oneshot', expiresAt: null, released: false,
           },
         });
       });
-      const outcome = await grantClient.acquire('myapp/founder', holderOptions({ mode: 'oneshot' }));
+      const outcome = await grantClient.acquire('myapp/founder-db@500000', holderOptions({ mode: 'oneshot' }));
       expect(outcome.granted).to.equal(false);
       expect(outcome.founder).to.equal('other:0');
     });
@@ -348,13 +349,14 @@ describe('quorumGrant grantClient', () => {
       foundingCommittee.effectiveCommittee.resolves({
         repinned: false,
         generation: 2,
+        anchor: 500000,
         fingerprint: photoFp,
         quorum: founderCommittee.quorum,
         members: founderCommittee.members,
       });
-      const outcome = await grantClient.acquire('myapp/founder', holderOptions({ mode: 'oneshot' }));
+      const outcome = await grantClient.acquire('myapp/founder-db@500000', holderOptions({ mode: 'oneshot' }));
       expect(outcome.granted).to.equal(true);
-      expect(foundingCommittee.effectiveCommittee.calledWith('myapp')).to.equal(true);
+      expect(foundingCommittee.effectiveCommittee.calledWith('myapp', 'db')).to.equal(true);
       const published = masterleasePublisher.publishMasterlease.firstCall.args[0];
       expect(published.fingerprint).to.equal(photoFp);
       expect(published.generation).to.equal(2);
@@ -362,7 +364,7 @@ describe('quorumGrant grantClient', () => {
 
     it('no founding record means no committee — wait, never a minted basis', async () => {
       foundingCommittee.effectiveCommittee.resolves(null);
-      const outcome = await grantClient.acquire('myapp/founder', holderOptions({ mode: 'oneshot' }));
+      const outcome = await grantClient.acquire('myapp/founder-db@500000', holderOptions({ mode: 'oneshot' }));
       expect(outcome.granted).to.equal(false);
       expect(outcome.reason).to.contain('committee unavailable');
     });
@@ -374,7 +376,7 @@ describe('quorumGrant grantClient', () => {
         fingerprint: 'f'.repeat(64),
         generation: 3,
       };
-      const outcome = await grantClient.acquire('myapp/founder', holderOptions({ mode: 'oneshot', committee: override }));
+      const outcome = await grantClient.acquire('myapp/founder-db@500000', holderOptions({ mode: 'oneshot', committee: override }));
       expect(outcome.granted).to.equal(true);
       expect(foundingCommittee.effectiveCommittee.called).to.equal(false);
       const published = masterleasePublisher.publishMasterlease.firstCall.args[0];

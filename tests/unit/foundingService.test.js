@@ -19,6 +19,7 @@ const SELF = `${SELF_TXHASH}:0`;
 const COMMITTEE = {
   repinned: false,
   generation: 2,
+  anchor: 500_000,
   fingerprint: 'c'.repeat(64),
   quorum: 5,
   members: [],
@@ -48,7 +49,7 @@ describe('foundingService', () => {
   it('a granted founding answers yes, asked under the committee as resolved', async () => {
     const reply = await foundingService.founderAsk('myapp', 'DB');
     expect(reply).to.deep.equal({ answer: 'yes' });
-    expect(grantClient.acquire.calledOnceWith('myapp/founder-DB', {
+    expect(grantClient.acquire.calledOnceWith('myapp/founder-DB@500000', {
       mode: 'oneshot', committee: COMMITTEE,
     })).to.equal(true);
   });
@@ -80,7 +81,7 @@ describe('foundingService', () => {
     });
     expect(await foundingService.founderAsk('myapp', 'db')).to.deep.equal({ answer: 'no' });
 
-    expect(messageStore.getMasterleaseRecord.alwaysCalledWith('myapp', 'founder-db')).to.equal(true);
+    expect(messageStore.getMasterleaseRecord.alwaysCalledWith('myapp', 'founder-db@500000')).to.equal(true);
     expect(grantClient.acquire.called).to.equal(false);
   });
 
