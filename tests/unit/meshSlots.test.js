@@ -128,6 +128,48 @@ describe('meshSlots', () => {
       expect(await meshSlots.resolveOwnSlot('myblog', 3)).to.equal(1);
     });
 
+    it('the EARLIER claimant keeps a contested slot — no mutual deference', async () => {
+      stubs.claims = [
+        { ip: OWN_ADDR, meshSlot: 0, announcedAt: new Date(1) },
+        { ip: PEER_ADDR, meshSlot: 0, announcedAt: new Date(2) },
+      ];
+      expect(await meshSlots.resolveOwnSlot('myblog', 3)).to.equal(0);
+    });
+
+    it('the later claimant of a contested slot re-picks the next vacancy', async () => {
+      stubs.claims = [
+        { ip: OWN_ADDR, meshSlot: 0, announcedAt: new Date(2) },
+        { ip: PEER_ADDR, meshSlot: 0, announcedAt: new Date(1) },
+      ];
+      expect(await meshSlots.resolveOwnSlot('myblog', 3)).to.equal(1);
+    });
+
+    it('a claim tie breaks on the ip, and both sides reach the same verdict', async () => {
+      stubs.claims = [
+        { ip: OWN_ADDR, meshSlot: 0, announcedAt: new Date(5) },
+        { ip: PEER_ADDR, meshSlot: 0, announcedAt: new Date(5) },
+      ];
+      // OWN_ADDR (203.0.113.5) sorts below PEER_ADDR (203.0.113.7): ours.
+      expect(await meshSlots.resolveOwnSlot('myblog', 3)).to.equal(0);
+
+      stubs.localAddr = PEER_ADDR;
+      stubs.claims = [
+        { ip: OWN_ADDR, meshSlot: 0, announcedAt: new Date(5) },
+        { ip: PEER_ADDR, meshSlot: 0, announcedAt: new Date(5) },
+      ];
+      expect(await meshSlots.resolveOwnSlot('myblog', 3)).to.equal(1);
+    });
+
+    it('claim arbitration ranks on announcedAt, falling back to broadcastedAt', async () => {
+      // The peer's v1 row carries only broadcastedAt, and it is earlier than
+      // this node's announce: the peer keeps the slot.
+      stubs.claims = [
+        { ip: OWN_ADDR, meshSlot: 0, announcedAt: new Date(10) },
+        { ip: PEER_ADDR, meshSlot: 0, broadcastedAt: new Date(3) },
+      ];
+      expect(await meshSlots.resolveOwnSlot('myblog', 3)).to.equal(1);
+    });
+
     it('is a standby when every slot is held', async () => {
       stubs.rows = [
         {
