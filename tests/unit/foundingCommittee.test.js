@@ -196,13 +196,13 @@ describe('foundingCommittee', () => {
     it('membership is answered from the same record the candidates use', async () => {
       await foundingCommittee.materializeFor(meshSpec());
       const member = store.get('myapp').members[2];
-      const yes = await foundingCommittee.selfOnFoundingCommittee('myapp', FP, {
+      const yes = await foundingCommittee.selfOnFoundingCommittee('myapp', FP, 0, {
         txhash: member.txhash, txindex: member.outidx,
       });
       expect(yes.member).to.equal(true);
       expect(yes.quorum).to.equal(5);
 
-      const no = await foundingCommittee.selfOnFoundingCommittee('myapp', FP, {
+      const no = await foundingCommittee.selfOnFoundingCommittee('myapp', FP, 0, {
         txhash: 'f'.repeat(64), txindex: 0,
       });
       expect(no.member).to.equal(false);
@@ -211,11 +211,21 @@ describe('foundingCommittee', () => {
     it('refuses an ask naming a basis this node does not agree with', async () => {
       await foundingCommittee.materializeFor(meshSpec());
       const member = store.get('myapp').members[0];
-      const outcome = await foundingCommittee.selfOnFoundingCommittee('myapp', 'd'.repeat(64), {
+      const outcome = await foundingCommittee.selfOnFoundingCommittee('myapp', 'd'.repeat(64), 0, {
         txhash: member.txhash, txindex: member.outidx,
       });
       expect(outcome.member).to.equal(false);
       expect(outcome.reason).to.contain('different committee basis');
+    });
+
+    it('refuses a retired generation, teaching the current one', async () => {
+      await foundingCommittee.materializeFor(meshSpec());
+      const member = store.get('myapp').members[0];
+      const outcome = await foundingCommittee.selfOnFoundingCommittee('myapp', FP, 1, {
+        txhash: member.txhash, txindex: member.outidx,
+      });
+      expect(outcome.member).to.equal(false);
+      expect(outcome.reason).to.contain('current is 0');
     });
   });
 });

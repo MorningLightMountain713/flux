@@ -257,7 +257,7 @@ describe('quorumGrant grantorController', () => {
       const res = fakeRes();
       await grantorController.prepare(fakeReq(signedAsk('prepare', { mode: 'oneshot' })), res);
       expect(res.statusCode).to.equal(200);
-      expect(foundingCommittee.selfOnFoundingCommittee.calledOnceWith('myapp', FINGERPRINT)).to.equal(true);
+      expect(foundingCommittee.selfOnFoundingCommittee.calledOnceWith('myapp', FINGERPRINT, 0)).to.equal(true);
       expect(networkStateService.membershipAt.called).to.equal(false);
       expect(messageStore.getGrantGenerationRecord.called).to.equal(false);
     });
@@ -268,6 +268,27 @@ describe('quorumGrant grantorController', () => {
       await grantorController.accept(fakeReq(signedAsk('accept', { mode: 'oneshot', ttlMs: undefined })), res);
       expect(res.statusCode).to.equal(200);
       expect(grantRegister.accept.calledOnce).to.equal(true);
+    });
+
+    it('a founder round addresses one register cell per generation', async () => {
+      await grantorController.prepare(fakeReq(signedAsk('prepare', { mode: 'oneshot' })), fakeRes());
+      expect(grantRegister.prepare.firstCall.args[0]).to.equal('myapp/master@0');
+
+      await grantorController.accept(fakeReq(signedAsk('accept', { mode: 'oneshot', ttlMs: undefined, generation: 2 })), fakeRes());
+      expect(grantRegister.accept.firstCall.args[0]).to.equal('myapp/master@2');
+
+      await grantorController.prepare(fakeReq(signedAsk('prepare')), fakeRes());
+      expect(grantRegister.prepare.secondCall.args[0]).to.equal('myapp/master');
+    });
+
+    it('the record read serves a founder round cell by its salted key', async () => {
+      grantRegister.read.resolves({ promisedEpoch: 1, accepted: { epoch: 1, grantee: ASKER, mode: 'oneshot' } });
+      const req = fakeReq({});
+      req.query.key = 'myapp/master@2';
+      const res = fakeRes();
+      await grantorController.record(req, res);
+      expect(res.statusCode).to.equal(200);
+      expect(grantRegister.read.calledOnceWith('myapp/master@2')).to.equal(true);
     });
 
     it('409 naming the reason when the founding committee refuses this node', async () => {
