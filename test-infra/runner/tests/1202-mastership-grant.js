@@ -98,7 +98,7 @@ describe('the mastership grant on a multi-node fleet', function () {
     holderOutpoints = {};
     for (const i of HOLDERS) {
       const status = await env.clients[i].getNodeStatus();
-      holderOutpoints[i] = `${status.data.collateralHash ?? status.data.txhash}:${status.data.collateralIndex ?? status.data.txindex ?? 0}`;
+      holderOutpoints[i] = `${status.data.txhash}:${status.data.outidx}`;
     }
   });
 
