@@ -17,6 +17,7 @@ const generalService = require('./generalService');
 const dockerService = require('./dockerService');
 const benchmarkService = require('./benchmarkService');
 const meshSnapshot = require('./appMesh/meshSnapshot');
+const foundingService = require('./appMesh/foundingService');
 
 const express = require('express');
 
@@ -196,6 +197,30 @@ async function getMeshMembership(req, res) {
   }
 }
 
+/**
+ * POST /mesh/founder — one component's "may I found?", answered
+ * yes-once/no/wait. Scoped by source address exactly as membership is: the
+ * caller's container decides which app and component ask, so one app can
+ * never found — or probe — another's registers. The node acquires the
+ * founding grant on the container's behalf; the container never sees a
+ * committee, an epoch, or a basis.
+ */
+async function postMeshFounder(req, res) {
+  try {
+    const snapshot = await meshSnapshot.readCurrentSnapshot();
+    const scoped = scopeByCaller(snapshot, req.socket.remoteAddress);
+    if (!scoped) {
+      res.json(messageHelper.errUnauthorizedMessage());
+      return;
+    }
+    const reply = await foundingService.founderAsk(scoped.app.name, scoped.component);
+    res.json(messageHelper.createDataMessage(reply));
+  } catch (error) {
+    log.error(`postMeshFounder: ${error}`);
+    res.json(messageHelper.createErrorMessage(error.message || error, error.name, error.code));
+  }
+}
+
 function handleError(middleware, req, res, next) {
   // eslint-disable-next-line consistent-return
   middleware(req, res, (err) => {
@@ -221,6 +246,7 @@ function start() {
   });
   app.get('/hostinfo', getHostInfo);
   app.get('/mesh/membership', getMeshMembership);
+  app.post('/mesh/founder', postMeshFounder);
   app.all('*', (_, res) => res.status(404).end());
 
   const bindAddress = config.server.fluxNodeServiceAddress;
@@ -241,4 +267,5 @@ module.exports = {
   stop,
   // exposed for tests
   getMeshMembership,
+  postMeshFounder,
 };
