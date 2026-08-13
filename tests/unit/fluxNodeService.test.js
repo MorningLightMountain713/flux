@@ -4,7 +4,7 @@ const { expect } = require('chai');
 const sinon = require('sinon');
 const proxyquire = require('proxyquire');
 
-describe('fluxNodeService — /mesh/membership', () => {
+describe('fluxNodeService — the mesh surface', () => {
   let fluxNodeService;
   let stubs;
 
@@ -35,11 +35,15 @@ describe('fluxNodeService — /mesh/membership', () => {
       snapshot: SNAPSHOT,
       readCurrentSnapshot: sinon.stub().callsFake(async () => stubs.snapshot),
       waitForGeneration: sinon.stub().callsFake(async () => stubs.snapshot?.generation ?? 0),
+      founderAsk: sinon.stub().resolves({ answer: 'wait' }),
     };
     fluxNodeService = proxyquire('../../ZelBack/src/services/fluxNodeService', {
       './appMesh/meshSnapshot': {
         readCurrentSnapshot: stubs.readCurrentSnapshot,
         waitForGeneration: stubs.waitForGeneration,
+      },
+      './appMesh/foundingService': {
+        founderAsk: stubs.founderAsk,
       },
     });
   });
@@ -132,5 +136,30 @@ describe('fluxNodeService — /mesh/membership', () => {
     const { req, res, body } = request('172.23.0.2', { waitAfter: '42' });
     await fluxNodeService.getMeshMembership(req, res);
     expect(body().status).to.equal('error');
+  });
+
+  describe('/mesh/founder', () => {
+    it('asks for the caller app and component, and relays the answer verbatim', async () => {
+      stubs.founderAsk.resolves({ answer: 'yes' });
+      const { req, res, body } = request('::ffff:172.23.0.2');
+      await fluxNodeService.postMeshFounder(req, res);
+      expect(stubs.founderAsk.calledOnceWith('myblog', 'db')).to.equal(true);
+      expect(body().status).to.equal('success');
+      expect(body().data).to.deep.equal({ answer: 'yes' });
+    });
+
+    it('refuses a caller the snapshot does not scope — founding is never probed across tenants', async () => {
+      const { req, res, body } = request('172.99.0.9');
+      await fluxNodeService.postMeshFounder(req, res);
+      expect(body().status).to.equal('error');
+      expect(stubs.founderAsk.called).to.equal(false);
+    });
+
+    it('a thrown ask answers an error, never a hang', async () => {
+      stubs.founderAsk.rejects(new Error('register unavailable'));
+      const { req, res, body } = request('172.23.0.2');
+      await fluxNodeService.postMeshFounder(req, res);
+      expect(body().status).to.equal('error');
+    });
   });
 });

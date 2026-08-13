@@ -29,7 +29,7 @@ const log = require('../../lib/log');
 // for the relay this node must itself hold the app whose ask it carries —
 // a node has no business relaying for apps it is not part of.
 
-const KEY_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,199}\/[a-z0-9-]{1,64}$/;
+const KEY_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,199}\/[a-zA-Z0-9-]{1,64}$/;
 
 const PEER_WINDOW_MS = 60 * 1000;
 const peerAsks = new Map(); // host -> { windowStart, count }

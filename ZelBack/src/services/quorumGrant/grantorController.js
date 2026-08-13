@@ -43,9 +43,9 @@ const log = require('../../lib/log');
 // state — never from a decision queued earlier (the Jepsen etcd 3.4.3
 // lesson). What the register then decides is grantRegisterCore's job.
 
-const KEY_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,199}\/[a-z0-9-]{1,64}$/;
+const KEY_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,199}\/[a-zA-Z0-9-]{1,64}$/;
 // register rows may carry a founder round's generation suffix
-const ROW_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,199}\/[a-z0-9-]{1,64}(@\d{1,16})?$/;
+const ROW_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,199}\/[a-zA-Z0-9-]{1,64}(@\d{1,16})?$/;
 const OUTPOINT_PATTERN = /^[0-9a-f]{64}:\d{1,6}$/;
 const FINGERPRINT_PATTERN = /^[0-9a-f]{64}$/;
 
