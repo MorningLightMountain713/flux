@@ -47,7 +47,7 @@ const log = require('../../lib/log');
 const KEY_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,199}\/[a-zA-Z0-9-]{1,64}(@\d{1,10})?$/;
 // register rows additionally carry a founder round's generation suffix
 const ROW_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,199}\/[a-zA-Z0-9-]{1,64}(@\d{1,16}){0,2}$/;
-const FOUNDER_ROLE_PATTERN = /^founder-([a-zA-Z0-9-]+)@(\d{1,10})$/;
+const FOUNDER_ROLE_PATTERN = /^founder-([a-f0-9]{16})@(\d{1,10})$/;
 const OUTPOINT_PATTERN = /^[0-9a-f]{64}:\d{1,6}$/;
 const FINGERPRINT_PATTERN = /^[0-9a-f]{64}$/;
 
@@ -226,18 +226,13 @@ async function selfOnCommittee(key, mode, fingerprint, generation, carriedChain)
     if (!founderRole) {
       return { member: false, code: 409, reason: 'not a founder register' };
     }
+    // Component-blind: the token is opaque to a referee, and the anchor is
+    // served iff this node photographed that spec height — which components
+    // exist is knowledge only the hosts hold, and a referee never needs it.
     const collateral = await generalService.obtainNodeCollateralInformation();
     const founding = await foundingCommittee.selfOnFoundingCommittee(
-      key.slice(0, key.indexOf('/')), founderRole[1], fingerprint, generation, collateral,
+      key.slice(0, key.indexOf('/')), Number(founderRole[2]), fingerprint, generation, collateral,
     );
-    if (founding.member && founding.anchor !== Number(founderRole[2])) {
-      // A different anchor is a different world for this component — the
-      // remove-and-re-add case. Refusing with the current anchor teaches a
-      // stale asker where the living world is.
-      return {
-        member: false, code: 409, reason: `ask names anchor ${founderRole[2]}, current is ${founding.anchor}`,
-      };
-    }
     return {
       member: founding.member,
       code: founding.member ? 200 : 409,

@@ -11,6 +11,7 @@ const serviceHelper = require('../serviceHelper');
 const verificationHelper = require('../verificationHelper');
 const daemonServiceMiscRpcs = require('../daemonService/daemonServiceMiscRpcs');
 const { getSpec, getSpecBackend } = require('../utils/specLibs');
+const specCutover = require('../utils/specCutover');
 const legacyTransportProvider = require('../providers/FluxOSLegacyTransportProvider');
 const transportCryptoProvider = require('../providers/FluxOSTransportProvider');
 const { resolveStorageRefs } = require('../utils/fluxStorageRefs');
@@ -71,12 +72,37 @@ function emitSpecStored(specDoc) {
  */
 async function storeGlobalSpec(specDoc, options) {
   await appsRepository.upsertGlobalAppInfo(specDoc, options);
-  // A mesh app's founding committee is computed the moment the fleet shares
-  // the list the spec arrived under, and never re-derived from a stale one.
-  // Absent-only and no-throw inside; a failed materialization never fails
-  // the spec store.
-  await foundingCommittee.materializeFor(specDoc);
+  // Referee-side founding state derives from public metadata alone (name,
+  // height, version), so every node records the anchor, encrypted specs
+  // included; the component mapping is host-side and follows below.
+  await foundingCommittee.recordAnchor(specDoc);
+  await materializeFoundingView(specDoc);
   emitSpecStored(specDoc);
+}
+
+/**
+ * Maintain the host-side component mapping from the CLEARTEXT view of the
+ * spec just stored. Decryption is local, with this node's own provider —
+ * the same resolution every mesh consumer already performs — and a node
+ * that cannot decrypt maintains no mapping, which is the component-blind
+ * design and not a gap: only hosts answer founder asks, and only hosts
+ * can. No-throw — a failed resolution never fails a spec store.
+ */
+async function materializeFoundingView(specDoc) {
+  try {
+    const instantiated = await appsRepository.getGlobalAppInfo(specDoc.name);
+    if (!instantiated) return;
+    const view = await specCutover.resolveInstantiatedSpec(instantiated);
+    if (!view) return;
+    await foundingCommittee.applyComponentView({
+      name: specDoc.name,
+      height: specDoc.height,
+      network: view.network,
+      components: view.components,
+    });
+  } catch (error) {
+    log.warn(`materializeFoundingView - ${specDoc?.name}: ${error.message}`);
+  }
 }
 
 /**

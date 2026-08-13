@@ -19,15 +19,18 @@ const SELF = `${SELF_TXHASH}:0`;
 const COMMITTEE = {
   repinned: false,
   generation: 2,
-  anchor: 500_000,
+  anchor: 500000,
   fingerprint: 'c'.repeat(64),
   quorum: 5,
   members: [],
 };
+const TOKEN_DB = foundingCommittee.founderToken('myapp', 'db');
+const TOKEN_DB_UPPER = foundingCommittee.founderToken('myapp', 'DB');
 
 describe('foundingService', () => {
   beforeEach(() => {
-    sinon.stub(foundingCommittee, 'effectiveCommittee').resolves(COMMITTEE);
+    sinon.stub(foundingCommittee, 'componentAnchor').resolves(500000);
+    sinon.stub(foundingCommittee, 'refereeCommittee').resolves(COMMITTEE);
     sinon.stub(messageStore, 'getMasterleaseRecord').resolves(null);
     sinon.stub(grantClient, 'acquire').resolves({ granted: true, founder: SELF });
     sinon.stub(generalService, 'obtainNodeCollateralInformation').resolves({
@@ -39,17 +42,20 @@ describe('foundingService', () => {
     sinon.restore();
   });
 
-  it('no committee basis answers wait — never no, never a minted basis', async () => {
-    foundingCommittee.effectiveCommittee.resolves(null);
-    const reply = await foundingService.founderAsk('myapp', 'db');
-    expect(reply).to.deep.equal({ answer: 'wait' });
+  it('no anchor or no committee basis answers wait — never no, never a minted basis', async () => {
+    foundingCommittee.componentAnchor.resolves(null);
+    expect(await foundingService.founderAsk('myapp', 'db')).to.deep.equal({ answer: 'wait' });
+
+    foundingCommittee.componentAnchor.resolves(500000);
+    foundingCommittee.refereeCommittee.resolves(null);
+    expect(await foundingService.founderAsk('myapp', 'db')).to.deep.equal({ answer: 'wait' });
     expect(grantClient.acquire.called).to.equal(false);
   });
 
   it('a granted founding answers yes, asked under the committee as resolved', async () => {
     const reply = await foundingService.founderAsk('myapp', 'DB');
     expect(reply).to.deep.equal({ answer: 'yes' });
-    expect(grantClient.acquire.calledOnceWith('myapp/founder-DB@500000', {
+    expect(grantClient.acquire.calledOnceWith(`myapp/founder-${TOKEN_DB_UPPER}@500000`, {
       mode: 'oneshot', committee: COMMITTEE,
     })).to.equal(true);
   });
@@ -81,7 +87,7 @@ describe('foundingService', () => {
     });
     expect(await foundingService.founderAsk('myapp', 'db')).to.deep.equal({ answer: 'no' });
 
-    expect(messageStore.getMasterleaseRecord.alwaysCalledWith('myapp', 'founder-db@500000')).to.equal(true);
+    expect(messageStore.getMasterleaseRecord.alwaysCalledWith('myapp', `founder-${TOKEN_DB}@500000`)).to.equal(true);
     expect(grantClient.acquire.called).to.equal(false);
   });
 
