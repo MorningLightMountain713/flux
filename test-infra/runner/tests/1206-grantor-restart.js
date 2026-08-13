@@ -2,6 +2,7 @@
 import { describe, it, before, after } from 'mocha';
 import { expect } from 'chai';
 import { createTestEnv } from '../framework/test-env.js';
+import { ALL_ZMQ_TOPICS } from '../framework/fluxd-conf.js';
 import { bootAndPeer, installOnNodes } from '../framework/reconciler-suite.js';
 import { buildSeedableSyncthingApp } from '../framework/seed-helper.js';
 import { pushImage } from '../framework/registry-helper.js';
@@ -57,6 +58,11 @@ describe('a grantor restarts, and its promises outlive the process', function ()
       hookCtx: this,
       nodes: 10,
       tickerAutostart: false,
+      // The founding photos pin committees at spec anchor heights, which
+      // needs the ANCHORED membership history — the ZMQ delta machinery
+      // production runs. The harness default is the polling path, whose
+      // history carries no chain anchors and can never answer at-height.
+      zmqTopics: ALL_ZMQ_TOPICS,
       configOverrides: {
         fluxapps: {
           quorumGrantMastership: true,
