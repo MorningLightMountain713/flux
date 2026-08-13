@@ -11,6 +11,7 @@ const networkStateService = require('../../ZelBack/src/services/networkStateServ
 const generalService = require('../../ZelBack/src/services/generalService');
 const registryManager = require('../../ZelBack/src/services/appDatabase/registryManager');
 const messageStore = require('../../ZelBack/src/services/appMessaging/messageStore');
+const foundingCommittee = require('../../ZelBack/src/services/appMesh/foundingCommittee');
 const grantRegister = require('../../ZelBack/src/services/quorumGrant/grantRegister');
 const grantorController = require('../../ZelBack/src/services/quorumGrant/grantorController');
 const signedEnvelope = require('../../ZelBack/src/services/quorumGrant/signedEnvelope');
@@ -97,6 +98,9 @@ describe('quorumGrant grantorController', () => {
       { ip: '10.1.0.1:16127', runningSince: Date.now() - 24 * 60 * 60 * 1000 },
     ]);
     sinon.stub(messageStore, 'getGrantGenerationRecord').resolves(null);
+    sinon.stub(foundingCommittee, 'selfOnFoundingCommittee').resolves({
+      member: true, reason: null, quorum: 5,
+    });
     sinon.stub(grantRegister, 'read').resolves(null);
     sinon.stub(grantRegister, 'probe').resolves({ ok: true, probe: true });
     sinon.stub(grantRegister, 'prepare').resolves({ ok: true, promised: true, promisedEpoch: 3 });
@@ -245,6 +249,43 @@ describe('quorumGrant grantorController', () => {
       const res = fakeRes();
       await grantorController.prepare(fakeReq(signedAsk('prepare', { fingerprint: 'fp-1' })), res);
       expect(res.statusCode).to.equal(400);
+    });
+  });
+
+  describe('the founder plane — oneshot membership answers from the founding record', () => {
+    it('an oneshot ask consults the founding committee, never the walk', async () => {
+      const res = fakeRes();
+      await grantorController.prepare(fakeReq(signedAsk('prepare', { mode: 'oneshot' })), res);
+      expect(res.statusCode).to.equal(200);
+      expect(foundingCommittee.selfOnFoundingCommittee.calledOnceWith('myapp', FINGERPRINT)).to.equal(true);
+      expect(networkStateService.membershipAt.called).to.equal(false);
+      expect(messageStore.getGrantGenerationRecord.called).to.equal(false);
+    });
+
+    it('answers a basis its own window never covered — the record outlives the album', async () => {
+      networkStateService.membershipAt.returns(null);
+      const res = fakeRes();
+      await grantorController.accept(fakeReq(signedAsk('accept', { mode: 'oneshot', ttlMs: undefined })), res);
+      expect(res.statusCode).to.equal(200);
+      expect(grantRegister.accept.calledOnce).to.equal(true);
+    });
+
+    it('409 naming the reason when the founding committee refuses this node', async () => {
+      foundingCommittee.selfOnFoundingCommittee.resolves({
+        member: false, reason: 'ask names a different committee basis',
+      });
+      const res = fakeRes();
+      await grantorController.prepare(fakeReq(signedAsk('prepare', { mode: 'oneshot' })), res);
+      expect(res.statusCode).to.equal(409);
+      expect(res.body.data.message).to.contain('basis');
+      expect(grantRegister.prepare.called).to.equal(false);
+    });
+
+    it('held asks never consult the founding committee', async () => {
+      const res = fakeRes();
+      await grantorController.prepare(fakeReq(signedAsk('prepare')), res);
+      expect(res.statusCode).to.equal(200);
+      expect(foundingCommittee.selfOnFoundingCommittee.called).to.equal(false);
     });
   });
 
