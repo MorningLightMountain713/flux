@@ -148,6 +148,12 @@ describe('the founding grant on a multi-node fleet', function () {
           quorumGrantDrainMs: 20000,
           quorumGrantLockDelayMs: 10000,
           quorumGrantAskTimeoutMs: 3000,
+          // Spec updates adopt inside a stagger window (production: 5 min,
+          // a fleet-wide restart spread) - the remove/re-add test pushes
+          // two updates and waits on their effects, so the window must be
+          // shorter than the waits, not the other way around.
+          adoptionStaggerStepMs: 5000,
+          adoptionStaggerWindowMs: 10000,
         },
       },
     });
