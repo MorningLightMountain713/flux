@@ -121,13 +121,22 @@ async function selfIdentity() {
  */
 async function committeeFor(key, mode, fingerprint) {
   if (mode === 'oneshot') {
-    const founding = await foundingCommittee.effectiveCommittee(key.slice(0, key.indexOf('/')));
-    if (!founding) return null;
+    const role = key.slice(key.indexOf('/') + 1);
+    const founderRole = /^founder-([a-zA-Z0-9-]+)@(\d{1,10})$/.exec(role);
+    if (!founderRole) return null;
+    const founding = await foundingCommittee.effectiveCommittee(
+      key.slice(0, key.indexOf('/')), founderRole[1],
+    );
+    // A key naming a different anchor names a world this node does not
+    // recognize — the removed-and-re-added case — and a carrier or witness
+    // must not aim it at the living world's committee.
+    if (!founding || founding.anchor !== Number(founderRole[2])) return null;
     return {
       members: founding.members,
       quorum: founding.quorum,
       fingerprint: founding.fingerprint,
       generation: founding.generation,
+      anchor: founding.anchor,
       chain: [],
     };
   }

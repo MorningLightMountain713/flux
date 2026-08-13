@@ -43,9 +43,11 @@ const log = require('../../lib/log');
 // state — never from a decision queued earlier (the Jepsen etcd 3.4.3
 // lesson). What the register then decides is grantRegisterCore's job.
 
-const KEY_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,199}\/[a-zA-Z0-9-]{1,64}$/;
-// register rows may carry a founder round's generation suffix
-const ROW_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,199}\/[a-zA-Z0-9-]{1,64}(@\d{1,16})?$/;
+// A founder key's role carries its world anchor (`founder-<component>@<height>`)
+const KEY_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,199}\/[a-zA-Z0-9-]{1,64}(@\d{1,10})?$/;
+// register rows additionally carry a founder round's generation suffix
+const ROW_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,199}\/[a-zA-Z0-9-]{1,64}(@\d{1,16}){0,2}$/;
+const FOUNDER_ROLE_PATTERN = /^founder-([a-zA-Z0-9-]+)@(\d{1,10})$/;
 const OUTPOINT_PATTERN = /^[0-9a-f]{64}:\d{1,6}$/;
 const FINGERPRINT_PATTERN = /^[0-9a-f]{64}$/;
 
@@ -219,10 +221,23 @@ async function readAsk(req, type) {
  */
 async function selfOnCommittee(key, mode, fingerprint, generation, carriedChain) {
   if (mode === 'oneshot') {
+    const role = key.slice(key.indexOf('/') + 1);
+    const founderRole = FOUNDER_ROLE_PATTERN.exec(role);
+    if (!founderRole) {
+      return { member: false, code: 409, reason: 'not a founder register' };
+    }
     const collateral = await generalService.obtainNodeCollateralInformation();
     const founding = await foundingCommittee.selfOnFoundingCommittee(
-      key.slice(0, key.indexOf('/')), fingerprint, generation, collateral,
+      key.slice(0, key.indexOf('/')), founderRole[1], fingerprint, generation, collateral,
     );
+    if (founding.member && founding.anchor !== Number(founderRole[2])) {
+      // A different anchor is a different world for this component — the
+      // remove-and-re-add case. Refusing with the current anchor teaches a
+      // stale asker where the living world is.
+      return {
+        member: false, code: 409, reason: `ask names anchor ${founderRole[2]}, current is ${founding.anchor}`,
+      };
+    }
     return {
       member: founding.member,
       code: founding.member ? 200 : 409,

@@ -23,9 +23,14 @@ const log = require('../../lib/log');
 //          quorum reachable, a lock-delay running). Asking again is the
 //          only correct move, and retryAfterMs hints when.
 //
-// Each component founds its own register: the ask is scoped to the calling
-// container, so the key names the caller's component and one committee —
-// the app's founding committee — referees them all.
+// Each component founds its own register, and the register's key carries
+// the component's WORLD: the block anchor of the owner-signed spec act that
+// introduced it (`<app>/founder-<component>@<anchor>`). A component removed
+// and re-added under the same name is a new world with a new anchor, so
+// nothing the dead world recorded — register cells, the published record —
+// can ever answer for it. The anchor rides the key because the key is
+// signed in every ask and names the register everywhere at once: cells,
+// the published record's role, the refusals that teach.
 
 /**
  * Answer one component's founding ask.
@@ -35,21 +40,22 @@ const log = require('../../lib/log');
  * @returns {Promise<{answer: 'yes'|'no'|'wait', retryAfterMs?: number}>}
  */
 async function founderAsk(appName, component) {
-  const committee = await foundingCommittee.effectiveCommittee(appName);
+  const committee = await foundingCommittee.effectiveCommittee(appName, component);
   if (!committee) {
     // No committee basis is an honest "not yet" — never a no, and never a
     // freshly minted basis. Sync will bring the record.
     return { answer: 'wait' };
   }
 
-  const recorded = await recordedFounder(appName, component, committee.generation);
+  const role = `founder-${component}@${committee.anchor}`;
+  const recorded = await recordedFounder(appName, role, committee.generation);
   if (recorded) {
     const collateral = await generalService.obtainNodeCollateralInformation();
     const self = `${collateral.txhash}:${collateral.txindex}`;
     return { answer: recorded === self ? 'yes' : 'no' };
   }
 
-  const outcome = await grantClient.acquire(`${appName}/founder-${component}`, {
+  const outcome = await grantClient.acquire(`${appName}/${role}`, {
     mode: 'oneshot',
     committee,
   });
@@ -63,15 +69,15 @@ async function founderAsk(appName, component) {
 }
 
 /**
- * The founder the published record names for this component under the
- * current generation, or null. Answering from the record spares the
- * committee a wire round per ask — a founding is durable, so once the
- * record has synced, every later ask is a local read. A record from a
- * retired generation is the dead world's and answers nothing.
+ * The founder the published record names for this world, or null. Answering
+ * from the record spares the committee a wire round per ask — a founding is
+ * durable, so once the record has synced, every later ask is a local read.
+ * The role already names the world's anchor; the generation check keeps a
+ * retired generation's record from answering for the re-rolled one.
  */
-async function recordedFounder(appName, component, generation) {
+async function recordedFounder(appName, role, generation) {
   try {
-    const record = await messageStore.getMasterleaseRecord(appName, `founder-${component}`);
+    const record = await messageStore.getMasterleaseRecord(appName, role);
     const data = record?.data;
     if (!data || data.mode !== 'oneshot' || typeof data.grantee !== 'string') return null;
     if ((data.generation ?? 0) !== generation) return null;

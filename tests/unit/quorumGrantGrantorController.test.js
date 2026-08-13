@@ -99,7 +99,7 @@ describe('quorumGrant grantorController', () => {
     ]);
     sinon.stub(messageStore, 'getGrantGenerationRecord').resolves(null);
     sinon.stub(foundingCommittee, 'selfOnFoundingCommittee').resolves({
-      member: true, reason: null, quorum: 5,
+      member: true, reason: null, quorum: 5, anchor: 500000,
     });
     sinon.stub(grantRegister, 'read').resolves(null);
     sinon.stub(grantRegister, 'probe').resolves({ ok: true, probe: true });
@@ -255,27 +255,45 @@ describe('quorumGrant grantorController', () => {
   describe('the founder plane — oneshot membership answers from the founding record', () => {
     it('an oneshot ask consults the founding committee, never the walk', async () => {
       const res = fakeRes();
-      await grantorController.prepare(fakeReq(signedAsk('prepare', { mode: 'oneshot' })), res);
+      await grantorController.prepare(fakeReq(signedAsk('prepare', { mode: 'oneshot', key: 'myapp/founder-db@500000' })), res);
       expect(res.statusCode).to.equal(200);
-      expect(foundingCommittee.selfOnFoundingCommittee.calledOnceWith('myapp', FINGERPRINT, 0)).to.equal(true);
+      expect(foundingCommittee.selfOnFoundingCommittee.calledOnceWith('myapp', 'db', FINGERPRINT, 0)).to.equal(true);
       expect(networkStateService.membershipAt.called).to.equal(false);
       expect(messageStore.getGrantGenerationRecord.called).to.equal(false);
+    });
+
+    it('refuses an oneshot ask that is not a founder register, and one from another world', async () => {
+      const plain = fakeRes();
+      await grantorController.prepare(fakeReq(signedAsk('prepare', { mode: 'oneshot' })), plain);
+      expect(plain.statusCode).to.equal(409);
+      expect(plain.body.data.message).to.contain('not a founder register');
+
+      const stale = fakeRes();
+      await grantorController.prepare(fakeReq(signedAsk('prepare', { mode: 'oneshot', key: 'myapp/founder-db@400000' })), stale);
+      expect(stale.statusCode).to.equal(409);
+      expect(stale.body.data.message).to.contain('current is 500000');
+      expect(grantRegister.prepare.called).to.equal(false);
     });
 
     it('answers a basis its own window never covered — the record outlives the album', async () => {
       networkStateService.membershipAt.returns(null);
       const res = fakeRes();
-      await grantorController.accept(fakeReq(signedAsk('accept', { mode: 'oneshot', ttlMs: undefined })), res);
+      await grantorController.accept(fakeReq(signedAsk('accept', { mode: 'oneshot', ttlMs: undefined, key: 'myapp/founder-db@500000' })), res);
       expect(res.statusCode).to.equal(200);
       expect(grantRegister.accept.calledOnce).to.equal(true);
     });
 
-    it('a founder round addresses one register cell per generation', async () => {
-      await grantorController.prepare(fakeReq(signedAsk('prepare', { mode: 'oneshot' })), fakeRes());
-      expect(grantRegister.prepare.firstCall.args[0]).to.equal('myapp/master@0');
+    it('a founder round addresses one register cell per world and generation', async () => {
+      await grantorController.prepare(fakeReq(signedAsk('prepare', { mode: 'oneshot', key: 'myapp/founder-db@500000' })), fakeRes());
+      expect(grantRegister.prepare.firstCall.args[0]).to.equal('myapp/founder-db@500000@0');
 
-      await grantorController.accept(fakeReq(signedAsk('accept', { mode: 'oneshot', ttlMs: undefined, generation: 2 })), fakeRes());
-      expect(grantRegister.accept.firstCall.args[0]).to.equal('myapp/master@2');
+      foundingCommittee.selfOnFoundingCommittee.resolves({
+        member: true, reason: null, quorum: 5, anchor: 700000,
+      });
+      await grantorController.accept(fakeReq(signedAsk('accept', {
+        mode: 'oneshot', ttlMs: undefined, generation: 2, key: 'myapp/founder-db@700000',
+      })), fakeRes());
+      expect(grantRegister.accept.firstCall.args[0]).to.equal('myapp/founder-db@700000@2');
 
       await grantorController.prepare(fakeReq(signedAsk('prepare')), fakeRes());
       expect(grantRegister.prepare.secondCall.args[0]).to.equal('myapp/master');
@@ -296,7 +314,7 @@ describe('quorumGrant grantorController', () => {
         member: false, reason: 'ask names a different committee basis',
       });
       const res = fakeRes();
-      await grantorController.prepare(fakeReq(signedAsk('prepare', { mode: 'oneshot' })), res);
+      await grantorController.prepare(fakeReq(signedAsk('prepare', { mode: 'oneshot', key: 'myapp/founder-db@500000' })), res);
       expect(res.statusCode).to.equal(409);
       expect(res.body.data.message).to.contain('basis');
       expect(grantRegister.prepare.called).to.equal(false);
@@ -314,7 +332,7 @@ describe('quorumGrant grantorController', () => {
     it('refuses an asker that does not hold the app', async () => {
       registryManager.appLocation.resolves([]);
       const res = fakeRes();
-      await grantorController.accept(fakeReq(signedAsk('accept', { mode: 'oneshot', ttlMs: undefined })), res);
+      await grantorController.accept(fakeReq(signedAsk('accept', { mode: 'oneshot', ttlMs: undefined, key: 'myapp/founder-db@500000' })), res);
       expect(res.statusCode).to.equal(403);
       expect(res.body.data.message).to.contain('holder');
       expect(grantRegister.accept.called).to.equal(false);
@@ -354,7 +372,7 @@ describe('quorumGrant grantorController', () => {
         { ip: `${ASKER_HOST}:16127`, runningSince: Date.now() - 60_000 },
       ]);
       const res = fakeRes();
-      await grantorController.accept(fakeReq(signedAsk('accept', { mode: 'oneshot', ttlMs: undefined })), res);
+      await grantorController.accept(fakeReq(signedAsk('accept', { mode: 'oneshot', ttlMs: undefined, key: 'myapp/founder-db@500000' })), res);
       expect(res.statusCode).to.equal(200);
     });
   });
