@@ -123,15 +123,14 @@ async function selfIdentity() {
 async function committeeFor(key, mode, fingerprint) {
   if (mode === 'oneshot') {
     const role = key.slice(key.indexOf('/') + 1);
-    const founderRole = /^founder-([a-zA-Z0-9-]+)@(\d{1,10})$/.exec(role);
+    const founderRole = /^founder-([a-f0-9]{16})@(\d{1,10})$/.exec(role);
     if (!founderRole) return null;
-    const founding = await foundingCommittee.effectiveCommittee(
-      key.slice(0, key.indexOf('/')), founderRole[1],
+    // Component-blind, like the grantors: the committee keys on the anchor
+    // the register names, and the token stays opaque.
+    const founding = await foundingCommittee.refereeCommittee(
+      key.slice(0, key.indexOf('/')), Number(founderRole[2]),
     );
-    // A key naming a different anchor names a world this node does not
-    // recognize — the removed-and-re-added case — and a carrier or witness
-    // must not aim it at the living world's committee.
-    if (!founding || founding.anchor !== Number(founderRole[2])) return null;
+    if (!founding) return null;
     return {
       members: founding.members,
       quorum: founding.quorum,
