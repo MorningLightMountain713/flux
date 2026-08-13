@@ -44,6 +44,8 @@ const log = require('../../lib/log');
 // lesson). What the register then decides is grantRegisterCore's job.
 
 const KEY_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,199}\/[a-z0-9-]{1,64}$/;
+// register rows may carry a founder round's generation suffix
+const ROW_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,199}\/[a-z0-9-]{1,64}(@\d{1,16})?$/;
 const OUTPOINT_PATTERN = /^[0-9a-f]{64}:\d{1,6}$/;
 const FINGERPRINT_PATTERN = /^[0-9a-f]{64}$/;
 
@@ -219,7 +221,7 @@ async function selfOnCommittee(key, mode, fingerprint, generation, carriedChain)
   if (mode === 'oneshot') {
     const collateral = await generalService.obtainNodeCollateralInformation();
     const founding = await foundingCommittee.selfOnFoundingCommittee(
-      key.slice(0, key.indexOf('/')), fingerprint, collateral,
+      key.slice(0, key.indexOf('/')), fingerprint, generation, collateral,
     );
     return {
       member: founding.member,
@@ -337,20 +339,33 @@ async function serve(req, res, type, operate) {
   }
 }
 
+/**
+ * The register row an ask addresses. A founder register is one write-once
+ * cell PER GENERATION — `<key>@<generation>`, generation 0 included — so a
+ * re-found runs a fresh round instead of adopting the retired world's
+ * founder from a surviving grantor's old cell, which a durable oneshot row
+ * would otherwise teach forever. Held rows stay bare: one row is shared
+ * across generations by design, epochs continuing monotonically through it
+ * while the committee changes around it.
+ */
+function registerRowFor(ask) {
+  return ask.mode === 'oneshot' ? `${ask.key}@${ask.generation}` : ask.key;
+}
+
 async function probe(req, res) {
-  return serve(req, res, 'probe', (ask) => grantRegister.probe(ask.key, {
+  return serve(req, res, 'probe', (ask) => grantRegister.probe(registerRowFor(ask), {
     epoch: ask.epoch, candidate: ask.candidate,
   }));
 }
 
 async function prepare(req, res) {
-  return serve(req, res, 'prepare', (ask) => grantRegister.prepare(ask.key, {
+  return serve(req, res, 'prepare', (ask) => grantRegister.prepare(registerRowFor(ask), {
     epoch: ask.epoch, candidate: ask.candidate,
   }));
 }
 
 async function accept(req, res) {
-  return serve(req, res, 'accept', (ask) => grantRegister.accept(ask.key, {
+  return serve(req, res, 'accept', (ask) => grantRegister.accept(registerRowFor(ask), {
     epoch: ask.epoch,
     grantee: ask.candidate,
     mode: ask.mode,
@@ -452,7 +467,7 @@ async function roster(req, res) {
 async function record(req, res) {
   try {
     const key = req.params.key ?? req.query.key;
-    if (typeof key !== 'string' || !KEY_PATTERN.test(key)) {
+    if (typeof key !== 'string' || !ROW_PATTERN.test(key)) {
       return res.status(400).json(messageHelper.createErrorMessage('malformed key'));
     }
     const stored = await grantRegister.read(key);
