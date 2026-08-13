@@ -19,7 +19,8 @@ module.exports = {
             "policyDocuments": "policydocuments",
             "ipRanges": "ipranges",
             "nodeLocations": "nodelocations",
-            "quorumGrants": "quorumgrants"
+            "quorumGrants": "quorumgrants",
+            "foundingCommittees": "foundingcommittees"
         }
     },
     "daemon": {
