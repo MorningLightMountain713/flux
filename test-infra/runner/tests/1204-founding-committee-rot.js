@@ -2,6 +2,7 @@
 import { describe, it, before, after } from 'mocha';
 import { expect } from 'chai';
 import { createTestEnv } from '../framework/test-env.js';
+import { ALL_ZMQ_TOPICS } from '../framework/fluxd-conf.js';
 import { bootAndPeer } from '../framework/reconciler-suite.js';
 import { registerEncryptedV9App } from '../framework/content-helper.js';
 import { pushBusybox } from '../framework/registry-helper.js';
@@ -52,6 +53,11 @@ describe('the founding committee rots, and the exit re-deals it from the survivo
       hookCtx: this,
       nodes: 10,
       tickerAutostart: false,
+      // The founding photos pin committees at spec anchor heights, which
+      // needs the ANCHORED membership history — the ZMQ delta machinery
+      // production runs. The harness default is the polling path, whose
+      // history carries no chain anchors and can never answer at-height.
+      zmqTopics: ALL_ZMQ_TOPICS,
       arcane: true,
       configOverrides: {
         fluxapps: { meshReconcileIntervalMs: 15000 },
