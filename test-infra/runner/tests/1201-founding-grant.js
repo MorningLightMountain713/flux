@@ -132,7 +132,18 @@ describe('the founding grant on a multi-node fleet', function () {
       // Peering sized for a 3-node ring (nodes >= 2*minOutgoing+1), as the
       // mesh suites size it.
       configOverrides: {
-        fluxapps: { meshReconcileIntervalMs: 15000, minOutgoing: 1, minIncoming: 1 },
+        fluxapps: {
+          meshReconcileIntervalMs: 15000,
+          minOutgoing: 1,
+          minIncoming: 1,
+          // Grant timings compressed like every decider cadence the harness
+          // overlays - production values are minutes, and the boot drain
+          // alone (maxTtl) would eat the whole settle window.
+          quorumGrantMaxTtlMs: 30000,
+          quorumGrantDrainMs: 20000,
+          quorumGrantLockDelayMs: 10000,
+          quorumGrantAskTimeoutMs: 3000,
+        },
       },
     });
     await bootAndPeer(env, { minOutbound: 1, minInbound: 1, pricing: true });
