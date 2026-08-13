@@ -45,6 +45,7 @@ const meshOperatorService = require('./services/appMesh/meshOperatorService');
 const limitCounterController = require('./services/utils/limitCounterController');
 const grantorController = require('./services/quorumGrant/grantorController');
 const grantPeerController = require('./services/quorumGrant/grantPeerController');
+const ownerGenerationController = require('./services/quorumGrant/ownerGenerationController');
 const operationsController = require('./services/appManagement/operationsController');
 const messageVerifier = require('./services/appMessaging/messageVerifier');
 const appHashSyncService = require('./services/appMessaging/appHashSyncService');
@@ -562,6 +563,17 @@ module.exports = (app) => {
   // served even during the grantor's rejoin drain.
   app.get('/flux/quorumgrant/record', (req, res) => {
     grantorController.record(req, res);
+  });
+  // Owner-facing: the generation re-roll. The read tells the owner the
+  // standing generation; the submission takes an owner-signed record for
+  // exactly the next one, broadcasts it, and stores it here first. The
+  // zelidauth session authorizes the submission; the record's inner owner
+  // signature is what every node verifies for itself.
+  app.get('/apps/grantgeneration/:appname/:role', (req, res) => {
+    ownerGenerationController.current(req, res);
+  });
+  app.post('/apps/grantgeneration', (req, res) => {
+    ownerGenerationController.submit(req, res);
   });
   // Holder-to-holder: the witness poll (what is this node doing about a key,
   // can it reach the committee) and the relay (carry an end-to-end signed ask
