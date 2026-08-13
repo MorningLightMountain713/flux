@@ -49,6 +49,7 @@ const meshOperatorService = require('./services/appMesh/meshOperatorService');
 const limitCounterController = require('./services/utils/limitCounterController');
 const grantorController = require('./services/quorumGrant/grantorController');
 const grantPeerController = require('./services/quorumGrant/grantPeerController');
+const ownerGenerationController = require('./services/quorumGrant/ownerGenerationController');
 const messageVerifier = require('./services/appMessaging/messageVerifier');
 const appHashSyncService = require('./services/appMessaging/appHashSyncService');
 const monitoringOrchestrator = require('./services/appMonitoring/monitoringOrchestrator');
@@ -609,6 +610,18 @@ module.exports = (app) => {
   app.get('/flux/quorumgrant/record', asyncRoute((req, res) => {
     return grantorController.record(req, res);
   }));
+  // Owner-facing: the generation re-roll. The read tells the owner the
+  // standing generation; the submission takes an owner-signed record for
+  // exactly the next one, broadcasts it, and stores it here first. The
+  // zelidauth session authorizes the submission; the record's inner owner
+  // signature is what every node verifies for itself.
+  app.get('/apps/grantgeneration/:appname/:role', asyncRoute((req, res) => {
+    return ownerGenerationController.current(req, res);
+  }));
+  app.post('/apps/grantgeneration', asyncRoute((req, res) => {
+    return ownerGenerationController.submit(req, res);
+  }));
+
   // Holder-to-holder: the witness poll (what is this node doing about a key,
   // can it reach the committee) and the relay (carry an end-to-end signed ask
   // for an app this node holds). A master's safety never depends on its own
