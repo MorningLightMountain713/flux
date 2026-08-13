@@ -11,6 +11,7 @@ const fluxNetworkHelper = require('../../ZelBack/src/services/fluxNetworkHelper'
 const networkStateService = require('../../ZelBack/src/services/networkStateService');
 const registryManager = require('../../ZelBack/src/services/appDatabase/registryManager');
 const messageStore = require('../../ZelBack/src/services/appMessaging/messageStore');
+const foundingCommittee = require('../../ZelBack/src/services/appMesh/foundingCommittee');
 const grantClient = require('../../ZelBack/src/services/quorumGrant/grantClient');
 const registerCore = require('../../ZelBack/src/services/quorumGrant/grantRegisterCore');
 const rosterOverlay = require('../../ZelBack/src/services/quorumGrant/rosterOverlay');
@@ -75,6 +76,7 @@ describe('quorumGrant grantClient', () => {
   // "the committee is unreachable" never silently cuts the standby too
   const committee = selectCommittee(membership, rosterOverlay.walkKeyFor(KEY, 0), { size: COMMITTEE_SIZE });
   const committeeHosts = committee.members.map((node) => node.ip.split(':')[0]);
+  const founderCommittee = selectCommittee(membership, 'quorumgrant|myapp/founder', { size: COMMITTEE_SIZE });
   const standbyNode = membership.find(
     (node) => !committeeHosts.includes(node.ip.split(':')[0]) && node.txhash !== SELF_TXHASH,
   );
@@ -231,6 +233,15 @@ describe('quorumGrant grantClient', () => {
     sinon.stub(masterleasePublisher, 'publishMasterlease').resolves(true);
     sinon.stub(messageStore, 'getMasterleaseRecord').resolves(null);
     sinon.stub(messageStore, 'getGrantGenerationRecord').resolves(null);
+    // the founding record's committee happens to sit at the current basis in
+    // this fixture; the basis-divergence case asserts its own fingerprint
+    sinon.stub(foundingCommittee, 'effectiveCommittee').resolves({
+      repinned: false,
+      generation: 0,
+      fingerprint,
+      quorum: founderCommittee.quorum,
+      members: founderCommittee.members,
+    });
   });
 
   afterEach(() => {
@@ -330,6 +341,45 @@ describe('quorumGrant grantClient', () => {
       const outcome = await grantClient.acquire('myapp/founder', holderOptions({ mode: 'oneshot' }));
       expect(outcome.granted).to.equal(false);
       expect(outcome.founder).to.equal('other:0');
+    });
+
+    it('oneshot asks carry the founding record basis, not the current list', async () => {
+      const photoFp = 'a'.repeat(64);
+      foundingCommittee.effectiveCommittee.resolves({
+        repinned: false,
+        generation: 2,
+        fingerprint: photoFp,
+        quorum: founderCommittee.quorum,
+        members: founderCommittee.members,
+      });
+      const outcome = await grantClient.acquire('myapp/founder', holderOptions({ mode: 'oneshot' }));
+      expect(outcome.granted).to.equal(true);
+      expect(foundingCommittee.effectiveCommittee.calledWith('myapp')).to.equal(true);
+      const published = masterleasePublisher.publishMasterlease.firstCall.args[0];
+      expect(published.fingerprint).to.equal(photoFp);
+      expect(published.generation).to.equal(2);
+    });
+
+    it('no founding record means no committee — wait, never a minted basis', async () => {
+      foundingCommittee.effectiveCommittee.resolves(null);
+      const outcome = await grantClient.acquire('myapp/founder', holderOptions({ mode: 'oneshot' }));
+      expect(outcome.granted).to.equal(false);
+      expect(outcome.reason).to.contain('committee unavailable');
+    });
+
+    it('an already-resolved committee is used as given, and its basis rides the asks', async () => {
+      const override = {
+        members: founderCommittee.members,
+        quorum: founderCommittee.quorum,
+        fingerprint: 'f'.repeat(64),
+        generation: 3,
+      };
+      const outcome = await grantClient.acquire('myapp/founder', holderOptions({ mode: 'oneshot', committee: override }));
+      expect(outcome.granted).to.equal(true);
+      expect(foundingCommittee.effectiveCommittee.called).to.equal(false);
+      const published = masterleasePublisher.publishMasterlease.firstCall.args[0];
+      expect(published.fingerprint).to.equal('f'.repeat(64));
+      expect(published.generation).to.equal(3);
     });
   });
 
