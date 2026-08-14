@@ -6,21 +6,22 @@ import { ALL_ZMQ_TOPICS } from '../framework/fluxd-conf.js';
 import { bootAndPeer, installOnNodes } from '../framework/reconciler-suite.js';
 import { buildSeedableSyncthingApp } from '../framework/seed-helper.js';
 import { pushImage } from '../framework/registry-helper.js';
-import { pauseHostContainer, unpauseHostContainer } from '../framework/container.js';
+import { pauseHostContainer, unpauseHostContainer, getAppContainerStatus } from '../framework/container.js';
 import { waitFor, waitForAppInstalled } from '../framework/wait.js';
 
-// The held mastership grant on a 10-node fleet — the DECIDED transition
-// story (David, 2026-08-13): the grant plane is strictly additive. While
-// every holder of an app provably speaks it, the grant names the one
-// master and shields it; ANY doubt — a legacy holder, a dead one, a
-// partition — resolves identically everywhere to today's behavior, because
-// a dead node and a non-speaking node are the same silence and telling
-// them apart would be a per-node reachability opinion, the thing this
-// plane bans. The cost is deliberate and self-healing: a dead master's
-// failover is bridged by the legacy election, the dead node's location row
-// ages out, holder unanimity is restored among the survivors, and whoever
-// the bridge promoted acquires the grant properly — back under the shield
-// with no operator and no reclaim by the returning corpse.
+// The held mastership grant on a 10-node fleet, governing on its own.
+//
+// The plane never runs beside the legacy election - two elections over one
+// app is the split brain it exists to prevent - and what guarantees that is
+// SEQUENCING, not detection: the code ships everywhere inert, the network's
+// enforced version floor rises to the release carrying it, and only then
+// does the flag mean anything. So there is no runtime probe of who speaks
+// the plane, and nothing stands the plane down when a node goes quiet.
+//
+// Which makes a dead master the plane's own problem, and this suite pins
+// that: the term simply stops being renewed, a standby takes it at a higher
+// epoch, and at no instant do two masters run. No bridge, no fallback, no
+// waiting on a holder's row to age out of a probe that no longer exists.
 //
 // Fleet sizing: 10 nodes at the default peering (nodes >= 2*minOutgoing+1,
 // forward and backward ring sets disjoint), the TARGETED install path so
@@ -67,6 +68,15 @@ describe('the mastership grant on a multi-node fleet', function () {
     return null;
   }
 
+  // The safety property the plane exists for: never two writers. Standbys of a
+  // g: app run no container, so a healthy fleet reads exactly one.
+  async function runningMasters() {
+    const statuses = await Promise.all(env.clients.map(
+      (c) => getAppContainerStatus(c.container, name).catch(() => null),
+    ));
+    return statuses.filter((st) => st && st.status.startsWith('Up')).length;
+  }
+
   before(async function () {
     this.timeout(900000);
     env = await createTestEnv({
@@ -90,7 +100,11 @@ describe('the mastership grant on a multi-node fleet', function () {
           quorumGrantMinHolderAgeMs: 0,
           quorumGrantPursuitIntervalMs: 10000,
           quorumGrantUnknownGraceMs: 30000,
-          quorumGrantUnanimityCacheMs: 15000,
+          // The plane governs only once the network's enforced floor guarantees
+          // every node carries it. The harness pins the requirement to the floor
+          // already in force so the gate is live under test; production pins it
+          // to the release that actually ships the plane.
+          quorumGrantMinFluxOSVersion: '8.13.1',
         },
       },
     });
@@ -144,15 +158,24 @@ describe('the mastership grant on a multi-node fleet', function () {
     await pauseHostContainer(env.clients[masterIndex].container);
     pausedIndex = masterIndex;
 
-    // The decided sequence: term lapses unrenewed, the legacy election
-    // bridges the app, the dead node's location row ages out of the
-    // survivors' unanimity probe, and the bridge's winner acquires the
-    // grant — announced by the successor's own granted event, then read
-    // back from the registers: a NEW grantee at a HIGHER epoch, agreed by
-    // a quorum that no longer includes the corpse.
+    // Nothing bridges this. The term lapses unrenewed, the dead master's
+    // published record stops being republished and expires, the settled
+    // standbys stop resting and pursue, and one of them takes the grant at
+    // a higher epoch - announced by its own granted event, then read back
+    // from a quorum of registers that no longer includes the corpse.
+    //
+    // Budget: term (45s) + the record's own expiry and sweep + lock delay
+    // (15s) + pursuit jitter, with room to spare. It no longer waits on the
+    // holder's location row, which is what made this minutes long before.
     await Promise.any(survivors.map((i) => env.clients[i].waitForEvent(
-      'quorumGrant:granted', (d) => d.key === `${name}/master`, 720000,
-    )));
+      'quorumGrant:granted', (d) => d.key === `${name}/master`, 300000,
+    ))).catch(() => {
+      throw new Error(
+        `no survivor acquired ${name}/master after the master died - with no `
+        + 'legacy election to bridge it, the plane is the only thing that can '
+        + 'fail this app over',
+      );
+    });
     let second = null;
     await waitFor(async () => {
       second = await quorumVerdict();
@@ -161,6 +184,7 @@ describe('the mastership grant on a multi-node fleet', function () {
 
     expect(second.epoch, 'epochs never move backwards').to.be.greaterThan(first.epoch);
     expect(Object.values(holderOutpoints)).to.include(second.grantee);
+    expect(await runningMasters(), 'at most one master container fleet-wide').to.be.at.most(1);
   });
 
   it('the returning corpse does not reclaim, and the epoch never regresses', async function () {
@@ -170,12 +194,15 @@ describe('the mastership grant on a multi-node fleet', function () {
     await unpauseHostContainer(env.clients[pausedIndex].container);
 
     // The old master wakes holding a lapsed term and a register full of a
-    // successor's epoch: it must adopt, never contest. Hold the assertion
-    // through two full terms so a late reclaim cannot hide.
+    // successor's epoch: it must adopt, never contest - and with no legacy
+    // election running underneath, adopting is the only thing that can stop
+    // it starting its container again. Hold through two full terms so a late
+    // reclaim cannot hide.
     await new Promise((resolve) => { setTimeout(resolve, 100000); });
     const after = await quorumVerdict();
     expect(after, 'the grant quorum survives the return').to.not.equal(null);
     expect(after.grantee).to.equal(before.grantee);
     expect(after.epoch).to.be.at.least(before.epoch);
+    expect(await runningMasters(), 'the corpse did not start a second master').to.equal(1);
   });
 });
