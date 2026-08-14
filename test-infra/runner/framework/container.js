@@ -22,6 +22,43 @@ export async function execInContainer(container, command) {
   return { stdout: result.stdout, stderr: result.stderr, exitCode: result.exitCode, output: result.output };
 }
 
+// Make a node blind to its OWN listed address: NAT without hairpinning, which
+// is ordinary on the fleet and cannot be modelled by partitioning, because the
+// unreachable address belongs to the node doing the reaching. Only
+// self-directed traffic to the API port is dropped - packets from other nodes
+// arrive with a different source and never match - so the node stays fully
+// reachable from outside while being unable to call itself by name.
+//
+// The block is PROVEN before returning. A rule that silently failed to install
+// would let a suite pass for the wrong reason, and a node that stopped serving
+// its own API would fail one for the wrong reason; neither is distinguishable
+// from the real outcome after the fact.
+export async function blockOwnAddress(container, address, { apiPort = 16127 } = {}) {
+  const ip = address.split(':')[0];
+  const rule = `OUTPUT -d ${ip} -p tcp --dport ${apiPort} -j DROP`;
+  const applied = await execInContainer(container, `iptables -I ${rule}`);
+  if (applied.exitCode !== 0) {
+    throw new Error(`blockOwnAddress: installing the rule on ${ip} failed (exit ${applied.exitCode}): ${applied.output}`);
+  }
+  const viaOwnAddress = await execInContainer(
+    container, `curl -sf -m 5 -o /dev/null http://${ip}:${apiPort}/flux/version`,
+  );
+  if (viaOwnAddress.exitCode === 0) {
+    throw new Error(`blockOwnAddress: ${ip}:${apiPort} still answers itself - the rule did not take`);
+  }
+  const viaLoopback = await execInContainer(
+    container, `curl -sf -m 5 -o /dev/null http://127.0.0.1:${apiPort}/flux/version`,
+  );
+  if (viaLoopback.exitCode !== 0) {
+    throw new Error(`blockOwnAddress: ${ip} stopped serving its own API entirely - the block took more than its own address`);
+  }
+}
+
+export async function unblockOwnAddress(container, address, { apiPort = 16127 } = {}) {
+  const ip = address.split(':')[0];
+  await execInContainer(container, `iptables -D OUTPUT -d ${ip} -p tcp --dport ${apiPort} -j DROP || true`);
+}
+
 // FluxOS stamps every container it manages with the app it belongs to, the component
 // it is, and (for a named placement) its replica. Those labels are the identity of
 // record — the same ones the shutdown daemon groups by — and they are the ONLY way a
