@@ -26,11 +26,19 @@ import { REGISTRY_REPO_HOST, getSubnetConfig } from '../framework/subnet-config.
 // never wedge a register.
 
 const COMPONENT = 'web';
-const DELISTED = [3, 4, 5, 6, 7, 8]; // never the holders (0,1,2), never node 9
+// Six seats leave. The photo seats nine of the ten nodes, so delisting six
+// drops the survivors to four however the seats fell — below the photo's
+// quorum of five, which is the exit's trigger. WHICH six is a run-time
+// decision: the spawner places the app, so the hosting nodes are not known
+// until it has, and delisting a host would take the ASKING side down with
+// the referees rather than testing them.
+const DELIST_COUNT = 6;
 
 describe('the founding committee rots, and the exit re-deals it from the survivors', function () {
   let env;
   let name;
+  let hosts = []; // node indexes the spawner placed the app on
+  let delisted = []; // node indexes taken off the list, restored on teardown
 
   async function askFounder(clientIndex) {
     try {
@@ -77,7 +85,7 @@ describe('the founding committee rots, and the exit re-deals it from the survivo
 
   after(async function () {
     this.timeout(60000);
-    for (const i of DELISTED) {
+    for (const i of delisted) {
       await restoreToNodeList(getSubnetConfig().nodeIp(i + 1)).catch(() => {});
     }
     await env?.teardown();
@@ -104,14 +112,23 @@ describe('the founding committee rots, and the exit re-deals it from the survivo
       return rows.every((r) => r && r.status === 'success' && r.data && r.data.name === name);
     }, { timeout: 180000, interval: 5000, label: `global spec for ${name} on all nodes` });
 
-    // The spawner picks three; the founder asks below come from whichever
-    // nodes ended up hosting, resolved per ask.
+    // The spawner picks three. Which three decides everything below: the
+    // founder asks come from these containers, and the seats that leave are
+    // drawn from the rest.
     await waitFor(async () => {
       const installed = await Promise.all(env.clients.map(
         (c) => waitForAppInstalled(c, name, 1).then(() => true).catch(() => false),
       ));
       return installed.filter(Boolean).length >= 3;
     }, { timeout: 360000, interval: 10000, label: 'three nodes host the app' });
+
+    hosts = [];
+    for (let i = 0; i < env.clients.length; i += 1) {
+      const found = await requireAppContainerName(env.clients[i].container, name, COMPONENT)
+        .then(() => true).catch(() => false);
+      if (found) hosts.push(i);
+    }
+    expect(hosts.length, `hosting nodes: ${hosts}`).to.be.at.least(3);
   });
 
   it('six referees leave the list, and founding still gets its one yes from the re-dealt committee', async function () {
@@ -120,24 +137,28 @@ describe('the founding committee rots, and the exit re-deals it from the survivo
     // NOBODY asks to found before the rot: the register stays empty, so the
     // answer below can only come through the exit re-derivation — a photo
     // committee below quorum cannot grant anything.
-    for (const i of DELISTED) {
+    const nonHosts = env.clients.map((_, i) => i).filter((i) => !hosts.includes(i));
+    expect(nonHosts.length, `non-hosting nodes: ${nonHosts}`).to.be.at.least(DELIST_COUNT);
+    delisted = nonHosts.slice(0, DELIST_COUNT);
+    for (const i of delisted) {
       await removeFromNodeList(getSubnetConfig().nodeIp(i + 1));
     }
     await advanceBlocks(2);
 
+    // The rot took referees only, so the asking side is untouched — confirm
+    // that before asking, or a missing container would read as the register
+    // refusing to answer.
+    await waitFor(async () => {
+      const present = await Promise.all(hosts.map(
+        (i) => requireAppContainerName(env.clients[i].container, name, COMPONENT)
+          .then(() => true).catch(() => false),
+      ));
+      return present.every(Boolean);
+    }, { timeout: 120000, interval: 5000, label: 'the hosting nodes still hold their containers' });
+
     // Ask from every hosting node's container until the verdicts settle:
     // exactly one yes, everyone else no — referees drawn from the four
     // survivors, or this waits forever and the exit is broken.
-    const hosts = [];
-    await waitFor(async () => {
-      hosts.length = 0;
-      for (let i = 0; i < env.clients.length; i += 1) {
-        const found = await requireAppContainerName(env.clients[i].container, name, COMPONENT)
-          .then(() => true).catch(() => false);
-        if (found) hosts.push(i);
-      }
-      return hosts.length >= 3;
-    }, { timeout: 120000, interval: 5000, label: 'the hosting nodes are identified' });
 
     let answers = [];
     await waitFor(async () => {
