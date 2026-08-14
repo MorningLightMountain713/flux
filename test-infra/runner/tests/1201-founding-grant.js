@@ -91,18 +91,38 @@ describe('the founding grant on a multi-node fleet', function () {
   async function waitForComponentContainers(component, present) {
     // RUNNING containers decide presence: a stopped corpse docker still
     // lists is not a member, and counting it as present would wedge the
-    // gone-check behind whatever remains in the --all listing.
-    await waitFor(async () => {
-      const states = await Promise.all(env.clients.map(async (c) => {
-        const containers = await appContainersFor(c.container, name).catch(() => []);
-        return containers.some((entry) => entry.component === component && entry.status.startsWith('Up'));
-      }));
-      return present ? states.every(Boolean) : states.every((up) => !up);
-    }, {
-      timeout: 240000,
-      interval: 5000,
-      label: `${component} containers ${present ? 'running' : 'gone'} on all nodes`,
-    });
+    // gone-check behind whatever remains in the --all listing. The listing
+    // is taken with --all and filtered on Up here, so a corpse is VISIBLE to
+    // the diagnostic below while still counting as absent to the check.
+    let seen = [];
+    try {
+      await waitFor(async () => {
+        seen = await Promise.all(env.clients.map(
+          (c, i) => appContainersFor(c.container, name, { all: true })
+            .catch((err) => [{ name: `<listing failed: ${err.message}>`, component: null, status: null }])
+            .then((containers) => ({ index: i, containers })),
+        ));
+        const states = seen.map(({ containers }) => containers.some(
+          (entry) => entry.component === component && (entry.status ?? '').startsWith('Up'),
+        ));
+        return present ? states.every(Boolean) : states.every((up) => !up);
+      }, {
+        timeout: 240000,
+        interval: 5000,
+        label: `${component} containers ${present ? 'running' : 'gone'} on all nodes`,
+      });
+    } catch (error) {
+      // A timeout that does not say what it SAW cannot be diagnosed once the
+      // fleet is reaped, and the node logs answer a different question - what
+      // FluxOS believes it did, not what docker still lists. Carry the last
+      // observation into the failure.
+      const dump = seen.map(({ index, containers }) => {
+        const label = `node-${String(index).padStart(2, '0')}`;
+        if (!containers.length) return `${label}: no containers for ${name}`;
+        return `${label}: ${containers.map((e) => `${e.name} component=${e.component} status=${e.status}`).join(' | ')}`;
+      }).join('\n    ');
+      throw new Error(`${error.message}\n    last observed:\n    ${dump || '(never sampled)'}`);
+    }
   }
 
   async function pushUpdate(components) {
