@@ -6,7 +6,7 @@ import { ALL_ZMQ_TOPICS } from '../framework/fluxd-conf.js';
 import { bootAndPeer, installOnNodes } from '../framework/reconciler-suite.js';
 import { buildSeedableSyncthingApp } from '../framework/seed-helper.js';
 import { pushImage } from '../framework/registry-helper.js';
-import { restartFluxos } from '../framework/container.js';
+import { restartFluxos, getAppContainerStatus } from '../framework/container.js';
 import { waitFor, waitForAppInstalled, assertNoEvent } from '../framework/wait.js';
 
 // A grantor that restarts must come back as the SAME grantor: its promises
@@ -50,6 +50,13 @@ describe('a grantor restarts, and its promises outlive the process', function ()
       }
     }
     return null;
+  }
+
+  async function runningMasters() {
+    const statuses = await Promise.all(env.clients.map(
+      (c) => getAppContainerStatus(c.container, name).catch(() => null),
+    ));
+    return statuses.filter((st) => st && st.status.startsWith('Up')).length;
   }
 
   before(async function () {
@@ -162,4 +169,52 @@ describe('a grantor restarts, and its promises outlive the process', function ()
         && cell.accepted.epoch === first.epoch;
     }, { timeout: 180000, interval: 10000, label: 'the drained referee grants renewals again' });
   });
+  it('the MASTER survives its own FluxOS restart without a second writer', async function () {
+    this.timeout(600000);
+
+    const first = await quorumVerdict();
+    expect(first, 'a standing grant before the restart').to.not.equal(null);
+    const masterIndex = Number(Object.keys(holderOutpoints).find((i) => holderOutpoints[i] === first.grantee));
+
+    // The production case this consumer exists for: a release restarts every
+    // node within a few hours, and a six-second FluxOS restart once produced a
+    // second writer in-harness. The restart wipes the in-memory holder while
+    // the app container keeps running, so the seam must DEFER rather than
+    // conclude the grant was lost - stopping a healthy master because its own
+    // process rebooted is self-inflicted failover - and re-acquire as the
+    // incumbent before the grace runs out.
+    //
+    // Untestable until the unanimity probe was deleted: a restarting node
+    // answers nothing, so its silence used to put the whole app on the legacy
+    // path for exactly the window under test.
+    // Sampled ACROSS the restart, not after it: the window where a second
+    // writer could appear is precisely while the node is down, and a check
+    // that begins once it is back would step over the thing being tested.
+    // The app container and the inner dockerd are untouched by the restart,
+    // so container state stays readable the whole way through.
+    let restartError = null;
+    const restart = restartFluxos(env.clients[masterIndex].container)
+      .catch((error) => { restartError = error; });
+
+    // Through the restart and two full terms after it: the master's container
+    // never goes down and no second one ever comes up.
+    const deadline = Date.now() + 150000;
+    while (Date.now() < deadline) {
+      const status = await getAppContainerStatus(env.clients[masterIndex].container, name)
+        .catch(() => null);
+      expect(status && status.status.startsWith('Up'), 'the master never stopped its own container').to.equal(true);
+      expect(await runningMasters(), 'never two masters, at any instant').to.equal(1);
+      await new Promise((resolve) => { setTimeout(resolve, 10000); });
+    }
+
+    await restart;
+    expect(restartError, `the restart itself failed: ${restartError && restartError.message}`).to.equal(null);
+
+    // And it is still the same master: re-acquired as incumbent, never handed on.
+    const after = await quorumVerdict();
+    expect(after, 'the quorum view survives the restart').to.not.equal(null);
+    expect(after.grantee, 'the incumbent kept the grant').to.equal(first.grantee);
+    expect(after.epoch, 'epochs never move backwards').to.be.at.least(first.epoch);
+  });
+
 });
