@@ -107,7 +107,10 @@ describe('the founding grant on a multi-node fleet', function () {
         ));
         return present ? states.every(Boolean) : states.every((up) => !up);
       }, {
-        timeout: 240000,
+        // Sized against THIS suite's compressed adoption stagger (10s window),
+        // not the production 300s one the original 240s was chosen for:
+        // measured removal across all three nodes is 5-12s.
+        timeout: 120000,
         interval: 5000,
         label: `${component} containers ${present ? 'running' : 'gone'} on all nodes`,
       });
@@ -119,7 +122,7 @@ describe('the founding grant on a multi-node fleet', function () {
       const dump = seen.map(({ index, containers }) => {
         const label = `node-${String(index).padStart(2, '0')}`;
         if (!containers.length) return `${label}: no containers for ${name}`;
-        return `${label}: ${containers.map((e) => `${e.name} component=${e.component} status=${e.status}`).join(' | ')}`;
+        return `${label}: ${containers.map((e) => `${e.name} component=${e.component} identifier=${e.identifier} status=${e.status}`).join(' | ')}`;
       }).join('\n    ');
       throw new Error(`${error.message}\n    last observed:\n    ${dump || '(never sampled)'}`);
     }
