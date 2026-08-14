@@ -13,7 +13,7 @@ import { authenticate } from '../auth.js';
 import { fluxTeamKey } from './keys.js';
 import {
   waitForDaemonReady, waitForNodeStatus, waitForBlockProcessed, waitForAppInstalled, waitFor,
-  waitForReconcileActuated,
+  waitForReconcileActuated, waitForDeltaApplied,
 } from './wait.js';
 import { REGISTRY_REPO_HOST, getSubnetConfig } from './subnet-config.js';
 import { setSynced } from './syncthing-control.js';
@@ -94,8 +94,25 @@ export async function bootAndPeer(env, { minOutbound = 4, minInbound = 2, pricin
     (c) => waitForNodeStatus(c, (d) => d.confirmed === true, 30000),
   ));
   await advanceBlock();
+  // Both events prove the same thing here - this node has moved past the seed
+  // height - and which one a node emits depends on the network-state path it
+  // is running. Under polling every node processes the block and announces
+  // block:processed. Under ZMQ the same block can arrive as a node-list delta,
+  // and that node announces deltaApplied and never block:processed, so waiting
+  // on one specific event hangs on whichever node took the other path (a race:
+  // nodes of the same fleet split across the two). Nothing weaker is accepted
+  // by the polling suites, which still satisfy the first arm exactly as before,
+  // and no app message exists this early for the distinction to matter.
   for (const client of fluxClients) {
-    await waitForBlockProcessed(client, (d) => d.height > 2100000, 50000);
+    await Promise.any([
+      waitForBlockProcessed(client, (d) => d.height > 2100000, 50000),
+      waitForDeltaApplied(client, (d) => d.toHeight > 2100000, 50000),
+    ]).catch(() => {
+      throw new Error(
+        `bootAndPeer: node never moved past the seed height - neither block:processed `
+        + `nor deltaApplied arrived within 50000ms`,
+      );
+    });
   }
   await env.startDiscovery();
   await fluxClients[0].waitForEvent('peers:added', (d) => d.outbound >= minOutbound, 120000);
