@@ -215,15 +215,33 @@ describe('relay renewal and the partitioned app island', function () {
     //
     // The runner reaches every node over the gateway and inspects containers
     // by exec, so the isolated node stays observable throughout.
+    // Control probe: prove the instrument can SEE this container before any
+    // conclusion is drawn from not seeing it. `docker ps` failures degrade to an
+    // empty listing inside the helper, so absence is only evidence once presence
+    // has been observed through the same path on the same node.
+    const beforeIsolation = await getAppContainerStatus(env.clients[masterIndex].container, name);
+    expect(beforeIsolation && beforeIsolation.status.startsWith('Up'),
+      'the master is running, and visible, before it is isolated').to.equal(true);
+    expect(await runningMasters(), 'exactly one master before the isolation').to.equal(1);
+
     await env.partitionGroups([masterIndex], everyoneElse);
     try {
       let masterFenced = false;
       let successor = null;
       const deadline = Date.now() + 300000;
       while (Date.now() < deadline && !(masterFenced && successor)) {
-        const status = await getAppContainerStatus(env.clients[masterIndex].container, name)
-          .catch(() => null);
-        if (!status || !status.status.startsWith('Up')) masterFenced = true;
+        // A failed LOOK is not evidence the container went away. getAppContainerStatus
+        // answers null when the container is definitively absent and throws when the
+        // inspection itself could not run; only the first is fencing. Treating the
+        // second as fencing would let a transient exec error pass this test.
+        let status;
+        let looked = true;
+        try {
+          status = await getAppContainerStatus(env.clients[masterIndex].container, name);
+        } catch (error) {
+          looked = false;
+        }
+        if (looked && (!status || !status.status.startsWith('Up'))) masterFenced = true;
 
         // Sampled at every step, not just at the end: two masters for even one
         // interval is the failure, and a check only at the end would miss it.
