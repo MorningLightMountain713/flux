@@ -197,4 +197,58 @@ describe('relay renewal and the partitioned app island', function () {
     expect(after.epoch, 'the coasted term was never re-fought').to.equal(before.epoch);
     expect(await runningMasters()).to.equal(1);
   });
+  it('a master cut off from EVERYONE fences itself before any successor starts', async function () {
+    this.timeout(900000);
+
+    const before = await quorumVerdict();
+    expect(before, 'a standing grant before the isolation').to.not.equal(null);
+    const masterIndex = Number(Object.keys(holderOutpoints).find((i) => holderOutpoints[i] === before.grantee));
+    const everyoneElse = env.clients.map((_, i) => i).filter((i) => i !== masterIndex);
+
+    // The property the whole plane exists for, and the one the deleted
+    // unanimity probe made untestable: with the probe in place BOTH sides
+    // stood the plane down here and both ran the legacy election, so this
+    // scenario produced two masters and the plane had nothing to say about
+    // it. Now the isolated master has no renewal path of any kind - not even
+    // a relay, since its standbys are on the other side - so its term lapses
+    // and it must take ITSELF down. A successor may only start after that.
+    //
+    // The runner reaches every node over the gateway and inspects containers
+    // by exec, so the isolated node stays observable throughout.
+    await env.partitionGroups([masterIndex], everyoneElse);
+    try {
+      let masterFenced = false;
+      let successor = null;
+      const deadline = Date.now() + 300000;
+      while (Date.now() < deadline && !(masterFenced && successor)) {
+        const status = await getAppContainerStatus(env.clients[masterIndex].container, name)
+          .catch(() => null);
+        if (!status || !status.status.startsWith('Up')) masterFenced = true;
+
+        // Sampled at every step, not just at the end: two masters for even one
+        // interval is the failure, and a check only at the end would miss it.
+        expect(await runningMasters(), 'never two masters, at any instant').to.be.at.most(1);
+
+        const verdict = await quorumVerdict();
+        if (verdict && verdict.grantee !== before.grantee) successor = verdict;
+        await new Promise((resolve) => { setTimeout(resolve, 5000); });
+      }
+
+      expect(masterFenced, 'the isolated master stopped its own container').to.equal(true);
+      expect(successor, 'a survivor took the grant').to.not.equal(null);
+      expect(successor.epoch, 'the successor holds a strictly later term').to.be.greaterThan(before.epoch);
+    } finally {
+      await env.healPartition([masterIndex], everyoneElse);
+    }
+
+    // Healed: the old master must adopt, not reclaim, and exactly one
+    // container runs fleet-wide once the dust settles.
+    await waitFor(async () => (await runningMasters()) === 1, {
+      timeout: 240000, interval: 10000, label: 'exactly one master after the heal',
+    });
+    const after = await quorumVerdict();
+    expect(after, 'the quorum view returns after the heal').to.not.equal(null);
+    expect(after.grantee, 'the returning master did not reclaim').to.not.equal(before.grantee);
+  });
+
 });
