@@ -146,8 +146,35 @@ describe('the mastership grant on a multi-node fleet', function () {
     expect(Object.values(holderOutpoints), `grantee ${verdict.grantee}`).to.include(verdict.grantee);
   });
 
-  it('a dead master is bridged, the survivors re-acquire, and the term moves strictly forward', async function () {
-    this.timeout(900000);
+  it('a standby going quiet is a non-event, and the term does not move', async function () {
+    this.timeout(300000);
+
+    const before = await quorumVerdict();
+    expect(before, 'a standing grant before the silence').to.not.equal(null);
+    const masterIndex = Number(Object.keys(holderOutpoints).find((i) => holderOutpoints[i] === before.grantee));
+    const standby = HOLDERS.find((i) => i !== masterIndex);
+
+    // One holder stops answering anything. Under the deleted unanimity probe
+    // this single silence put the WHOLE app back on the legacy election, on
+    // every node at once. Now it is one absent standby and nothing else: the
+    // master renews through it, the term does not move, and the app runs on.
+    await pauseHostContainer(env.clients[standby].container);
+    try {
+      await new Promise((resolve) => { setTimeout(resolve, 100000); });
+      const after = await quorumVerdict();
+      expect(after, 'the quorum view survives a silent standby').to.not.equal(null);
+      expect(after.grantee, 'the master never changed').to.equal(before.grantee);
+      expect(after.epoch, 'the term was renewed, never re-fought').to.equal(before.epoch);
+      expect(await runningMasters(), 'the master kept running').to.equal(1);
+    } finally {
+      await unpauseHostContainer(env.clients[standby].container);
+    }
+  });
+
+  it('a dead master is failed over by the plane itself, and the term moves strictly forward', async function () {
+    // Sized to the plane's own clocks now - term, record expiry, lock delay,
+    // jitter - not to the holder location TTL the deleted probe waited on.
+    this.timeout(600000);
 
     const first = await quorumVerdict();
     expect(first, 'a standing grant before the failure').to.not.equal(null);
