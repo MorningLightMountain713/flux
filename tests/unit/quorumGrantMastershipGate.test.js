@@ -32,13 +32,22 @@ function plainComp() {
 describe('quorumGrant mastershipGrantGate', () => {
   beforeEach(() => {
     mastershipGrantGate.resetForTests({ enabled: true });
+    // The shape appLocation actually returns (appsRepository RUNNING_ROW_TAIL):
+    // an address, and an outpoint that is NULL on this node's own row - a node
+    // stores its own announcement with no announcer to resolve it from. Neither
+    // txhash nor outidx is ever projected onto a location row; those belong to
+    // a list entry, which is where this node's own address is resolved.
     sinon.stub(registryManager, 'appLocation').resolves([
-      { ip: '203.0.113.5:16127', txhash: SELF_TXHASH, outidx: 0 },
-      { ip: '10.1.0.1:16127', txhash: '1'.repeat(64), outidx: 0 },
+      { ip: '203.0.113.5:16127', outpoint: null },
+      { ip: '10.1.0.1:16127', outpoint: `${'1'.repeat(64)}:0` },
     ]);
     sinon.stub(generalService, 'obtainNodeCollateralInformation').resolves({
       txhash: SELF_TXHASH, txindex: 0,
     });
+    sinon.stub(networkStateService, 'membershipFingerprint').returns('f'.repeat(64));
+    sinon.stub(networkStateService, 'membershipAt').returns([
+      { txhash: SELF_TXHASH, outidx: 0, pubkey: 'owner-self', ip: '203.0.113.5:16127' },
+    ]);
     sinon.stub(serviceHelper, 'axiosGet').resolves({ data: { status: 'success', data: {} } });
     sinon.stub(messageStore, 'getMasterleaseRecord').resolves(null);
     sinon.stub(grantClient, 'holderFor').returns(null);
@@ -81,6 +90,25 @@ describe('quorumGrant mastershipGrantGate', () => {
 
       await mastershipGrantGate.grantVerdict(IDENTIFIER, activeStandbyComp());
       expect(serviceHelper.axiosGet.callCount).to.equal(1); // cached, not re-probed
+    });
+
+    it('an app placed on this node alone has nobody to ask and is unanimous', async () => {
+      registryManager.appLocation.resolves([{ ip: '203.0.113.5:16127', outpoint: null }]);
+
+      const verdict = await mastershipGrantGate.grantVerdict(IDENTIFIER, activeStandbyComp());
+      expect(serviceHelper.axiosGet.called).to.equal(false);
+      // the plane engaged rather than falling out: nobody to probe is not the
+      // same as somebody who did not answer
+      expect(grantClient.acquire.called).to.equal(true);
+      expect(verdict).to.not.equal(null);
+    });
+
+    it('an app this node cannot place at all is not unanimity', async () => {
+      registryManager.appLocation.resolves([]);
+
+      const verdict = await mastershipGrantGate.grantVerdict(IDENTIFIER, activeStandbyComp());
+      expect(verdict).to.equal(null);
+      expect(grantClient.acquire.called).to.equal(false);
     });
   });
 
@@ -215,8 +243,7 @@ describe('quorumGrant mastershipGrantGate', () => {
 
     it('masterIntent resolves the record grantee to its listed address, FDM-shaped', async () => {
 
-      sinon.stub(networkStateService, 'membershipFingerprint').returns('f'.repeat(64));
-      sinon.stub(networkStateService, 'membershipAt').returns([
+      networkStateService.membershipAt.returns([
         { txhash: '9'.repeat(64), outidx: 0, pubkey: 'owner-9', ip: '10.9.0.9:16127' },
       ]);
       messageStore.getMasterleaseRecord.resolves({ data: { grantee: `${'9'.repeat(64)}:0` } });
@@ -239,8 +266,7 @@ describe('quorumGrant mastershipGrantGate', () => {
 
     it('a grantee no longer on the list resolves to no primary, not a stale address', async () => {
 
-      sinon.stub(networkStateService, 'membershipFingerprint').returns('f'.repeat(64));
-      sinon.stub(networkStateService, 'membershipAt').returns([]);
+      networkStateService.membershipAt.returns([]);
       messageStore.getMasterleaseRecord.resolves({ data: { grantee: `${'9'.repeat(64)}:0` } });
       const intent = await mastershipGrantGate.masterIntent(IDENTIFIER, activeStandbyComp());
       expect(intent).to.deep.equal({ ip: null, fdmOk: true });

@@ -92,28 +92,41 @@ async function holdersUnanimous(appName) {
 
   let unanimous = false;
   try {
-    const rows = await registryManager.appLocation(appName);
+    const locations = (await registryManager.appLocation(appName)) || [];
+    // The node's own row is never probed. This module IS the support the probe
+    // asks about, and a node cannot always reach its own listed address from
+    // inside itself — NAT without hairpinning is ordinary on the fleet — so
+    // asking would fail on exactly those nodes and drop them alone onto the
+    // legacy path while their peers, which reach them from outside, stayed on
+    // grants. That asymmetry is the hole holder unanimity exists to close.
+    //
+    // Location rows carry addresses and nothing else that identifies the
+    // announcer: a node's own row has no outpoint at all, because it stores
+    // its own announcement with no announcer to resolve one from. So the match
+    // is by address, resolved from collateral through the list.
     const self = await generalService.obtainNodeCollateralInformation();
-    const selfHosts = new Set();
-    // the node's own row is not probed — this module IS the support it would
-    // be probing for; collateral resolves which row is ours
-    const nodes = rows || [];
+    const membership = networkStateService.membershipAt(networkStateService.membershipFingerprint()) ?? [];
+    const selfNode = membership.find(
+      (entry) => `${entry.txhash}:${entry.outidx}` === `${self.txhash}:${self.txindex}`,
+    );
+    const selfHost = selfNode ? extractIp(selfNode.ip) : null;
     const key = keyFor(appName);
-    const probes = nodes.map(async (row) => {
-      if (row.txhash === self.txhash && String(row.outidx ?? row.txindex ?? '') === String(self.txindex)) {
-        selfHosts.add(extractIp(row.ip));
-        return true;
-      }
-      try {
-        const url = `http://${extractIp(row.ip)}:${extractPort(row.ip)}/flux/quorumgrant/record?key=${encodeURIComponent(key)}`;
-        const response = await serviceHelper.axiosGet(url, { timeout: 5_000 });
-        return response?.data?.status === 'success';
-      } catch (error) {
-        return false;
-      }
-    });
+    const probes = locations
+      .filter((row) => extractIp(row.ip) !== selfHost)
+      .map(async (row) => {
+        try {
+          const url = `http://${extractIp(row.ip)}:${extractPort(row.ip)}/flux/quorumgrant/record?key=${encodeURIComponent(key)}`;
+          const response = await serviceHelper.axiosGet(url, { timeout: 5_000 });
+          return response?.data?.status === 'success';
+        } catch (error) {
+          return false;
+        }
+      });
     const answers = await Promise.all(probes);
-    unanimous = answers.length > 0 && answers.every(Boolean);
+    // Counted over the ROWS, not the answers: an app placed on this node alone
+    // has no peer to ask and is unanimous by definition. The emptiness that
+    // must not pass is "this node cannot see where the app runs".
+    unanimous = locations.length > 0 && answers.every(Boolean);
   } catch (error) {
     log.warn(`mastershipGrantGate - unanimity probe for ${appName} failed: ${error.message}`);
     unanimous = false;
