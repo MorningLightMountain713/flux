@@ -2,6 +2,7 @@
 
 const { expect } = require('chai');
 const sinon = require('sinon');
+const proxyquire = require('proxyquire');
 
 const serviceHelper = require('../../ZelBack/src/services/serviceHelper');
 const generalService = require('../../ZelBack/src/services/generalService');
@@ -76,39 +77,70 @@ describe('quorumGrant mastershipGrantGate', () => {
       expect(serviceHelper.axiosGet.called).to.equal(false);
     });
 
-    it('a mixed fleet puts the whole app on the legacy path', async () => {
-      serviceHelper.axiosGet.rejects(new Error('404 not there'));
-      const verdict = await mastershipGrantGate.grantVerdict(IDENTIFIER, activeStandbyComp());
-      expect(verdict).to.equal(null);
-      expect(grantClient.acquire.called).to.equal(false);
-    });
-
-    it('the unanimity probe skips this node and is cached', async () => {
+    it('never probes the fleet for its version - it cannot be asked', async () => {
+      // A node without this code cannot report that it lacks it: it can only
+      // fail to answer, and so can a dead one. The plane therefore asks nobody.
       await mastershipGrantGate.grantVerdict(IDENTIFIER, activeStandbyComp());
-      expect(serviceHelper.axiosGet.callCount).to.equal(1); // one other holder
-      expect(serviceHelper.axiosGet.firstCall.args[0]).to.contain('10.1.0.1');
-
-      await mastershipGrantGate.grantVerdict(IDENTIFIER, activeStandbyComp());
-      expect(serviceHelper.axiosGet.callCount).to.equal(1); // cached, not re-probed
+      expect(serviceHelper.axiosGet.called, 'no holder was probed').to.equal(false);
+      expect(registryManager.appLocation.called, 'no holder set was read').to.equal(false);
     });
+  });
 
-    it('an app placed on this node alone has nobody to ask and is unanimous', async () => {
-      registryManager.appLocation.resolves([{ ip: '203.0.113.5:16127', outpoint: null }]);
+  describe('sequencing: the version floor decides, not a probe', () => {
+    // The real wiring, config included - node-config is frozen once read, so the
+    // config module is injected rather than mutated. Every key the gate reads is
+    // supplied: proxyquire replaces the module wholesale and a missing key would
+    // read as undefined rather than fail.
+    function gateWith({ flag, required, floor }) {
+      return proxyquire('../../ZelBack/src/services/quorumGrant/mastershipGrantGate', {
+        config: {
+          minimumFluxOSAllowedVersion: floor,
+          fluxapps: {
+            quorumGrantMastership: flag,
+            quorumGrantMinFluxOSVersion: required,
+            quorumGrantUnknownGraceMs: 120000,
+            quorumGrantPursuitIntervalMs: 30000,
+            quorumGrantHeldTtlMs: 150000,
+          },
+        },
+      });
+    }
 
-      const verdict = await mastershipGrantGate.grantVerdict(IDENTIFIER, activeStandbyComp());
-      expect(serviceHelper.axiosGet.called).to.equal(false);
-      // the plane engaged rather than falling out: nobody to probe is not the
-      // same as somebody who did not answer
+    it('governs once the enforced floor reaches the release that carries it', async () => {
+      const gate = gateWith({ flag: true, required: '8.17.0', floor: '8.17.0' });
+      const verdict = await gate.grantVerdict(IDENTIFIER, activeStandbyComp());
+      expect(verdict, 'the plane engaged').to.not.equal(null);
       expect(grantClient.acquire.called).to.equal(true);
-      expect(verdict).to.not.equal(null);
     });
 
-    it('an app this node cannot place at all is not unanimity', async () => {
-      registryManager.appLocation.resolves([]);
-
-      const verdict = await mastershipGrantGate.grantVerdict(IDENTIFIER, activeStandbyComp());
-      expect(verdict).to.equal(null);
+    it('stays inert while the floor is below it, however the flag is set', async () => {
+      const gate = gateWith({ flag: true, required: '8.17.0', floor: '8.13.1' });
+      const verdict = await gate.grantVerdict(IDENTIFIER, activeStandbyComp());
+      expect(verdict, 'a mixed fleet is still possible, so the plane sits out').to.equal(null);
       expect(grantClient.acquire.called).to.equal(false);
+    });
+
+    it('stays inert while no release carries it yet', async () => {
+      const gate = gateWith({ flag: true, required: null, floor: '9.9.9' });
+      expect(await gate.grantVerdict(IDENTIFIER, activeStandbyComp())).to.equal(null);
+      expect(grantClient.acquire.called).to.equal(false);
+    });
+
+    it('stays inert while the flag is off, however high the floor', async () => {
+      const gate = gateWith({ flag: false, required: '8.17.0', floor: '9.9.9' });
+      expect(await gate.grantVerdict(IDENTIFIER, activeStandbyComp())).to.equal(null);
+      expect(grantClient.acquire.called).to.equal(false);
+    });
+
+    it('compares the floor against the requirement, not the other way round', async () => {
+      // The arg-order mistake this guards: a floor ABOVE the requirement must
+      // engage, and one below must not. Reversing them inverts both.
+      const ahead = gateWith({ flag: true, required: '8.17.0', floor: '9.1.0' });
+      expect(await ahead.grantVerdict(IDENTIFIER, activeStandbyComp())).to.not.equal(null);
+
+      grantClient.acquire.resetHistory();
+      const behind = gateWith({ flag: true, required: '9.1.0', floor: '8.17.0' });
+      expect(await behind.grantVerdict(IDENTIFIER, activeStandbyComp())).to.equal(null);
     });
   });
 
