@@ -346,6 +346,11 @@ async function uninstallComponent(component, options = {}) {
 
   const { appName } = component;
   const componentName = component.name;
+  // The PHYSICAL name, `flux{identifier}`: the volume dir, the appdata path, the
+  // crontab comment, the syncthing folder id - and the container's docker name.
+  // It is never what dockerService takes: those calls own the physical naming and
+  // prefix the BARE identifier themselves, so passing this back in asks docker for
+  // `fluxflux...` and quietly matches nothing.
   const appId = dockerService.getAppIdentifier(component.identifier);
   const label = componentName === appName ? appName : `component ${componentName} of ${appName}`;
 
@@ -356,18 +361,21 @@ async function uninstallComponent(component, options = {}) {
 
   status(`Stopping Flux App ${label}...`);
   stopAppMonitoring(component.identifier, removeVolumes);
+  let stopFailed = false;
 
   if (forceKill) {
-    await dockerService.appDockerKill(appId).catch((error) => {
+    await dockerService.appDockerKill(component.identifier).catch((error) => {
+      stopFailed = true;
       log.warn(`Failed to kill container ${appId}: ${error.message}`);
     });
   } else {
-    await dockerService.appDockerStop(appId).catch((error) => {
+    await dockerService.appDockerStop(component.identifier).catch((error) => {
+      stopFailed = true;
       log.warn(`Failed to stop container ${appId}: ${error.message}`);
     });
   }
 
-  status(`Flux App ${label} stopped`);
+  status(stopFailed ? `Flux App ${label} could not be stopped` : `Flux App ${label} stopped`);
 
   // Release any held mastership grant now that the container is stopped —
   // never before: a grant released under a still-writing container is the
@@ -385,17 +393,29 @@ async function uninstallComponent(component, options = {}) {
 
   let containerRemoved = false;
   if (forceKill) {
-    await dockerService.appDockerForceRemove(appId).then(() => {
+    await dockerService.appDockerForceRemove(component.identifier).then(() => {
       containerRemoved = true;
     }).catch((error) => {
       log.error(`Force remove failed for ${appId}: ${error.message}`);
     });
   } else {
-    await dockerService.appDockerRemove(appId).then(() => {
+    await dockerService.appDockerRemove(component.identifier).then(() => {
       containerRemoved = true;
     }).catch((error) => {
       log.error(`Container remove failed for ${appId}: ${error.message}`);
     });
+  }
+
+  // Decide on the container's ACTUAL presence, never on the error: an already-absent
+  // container is a completed teardown and a remove that failed with the container
+  // still running is not, and both arrive as the same rejection. The same rule the
+  // app-level teardown states before it reclaims host storage.
+  if (!containerRemoved) {
+    try {
+      containerRemoved = !await dockerService.getDockerContainer(component.identifier);
+    } catch (probeError) {
+      log.warn(`Could not confirm whether ${appId} is gone: ${probeError.message}`);
+    }
   }
 
   if (containerRemoved) {
@@ -420,7 +440,9 @@ async function uninstallComponent(component, options = {}) {
     await appSwapPoolService.reconcile();
   }
 
-  status(`Flux App ${label} was successfully removed`);
+  status(containerRemoved
+    ? `Flux App ${label} was successfully removed`
+    : `Flux App ${label} teardown finished, but container ${appId} is still present`);
 }
 
 /**
@@ -1051,10 +1073,10 @@ async function executeTeardown(doc, { onStatus = null } = {}) {
     if (daemonStopped) continue; // flux-shutdownd already stopped it on Arcane
     if (forceKill) {
       // eslint-disable-next-line no-await-in-loop
-      await dockerService.appDockerKill(c.appId).catch((e) => log.warn(`kill ${c.appId}: ${e.message}`));
+      await dockerService.appDockerKill(c.identifier).catch((e) => log.warn(`kill ${c.appId}: ${e.message}`));
     } else {
       // eslint-disable-next-line no-await-in-loop
-      await dockerService.appDockerStop(c.appId).catch((e) => log.warn(`stop ${c.appId}: ${e.message}`));
+      await dockerService.appDockerStop(c.identifier).catch((e) => log.warn(`stop ${c.appId}: ${e.message}`));
     }
   }
 
@@ -1087,10 +1109,10 @@ async function executeTeardown(doc, { onStatus = null } = {}) {
       try {
         if (forceKill) {
           // eslint-disable-next-line no-await-in-loop
-          await dockerService.appDockerForceRemove(c.appId).catch((e) => log.warn(`force remove ${c.appId}: ${e.message}`));
+          await dockerService.appDockerForceRemove(c.identifier).catch((e) => log.warn(`force remove ${c.appId}: ${e.message}`));
         } else {
           // eslint-disable-next-line no-await-in-loop
-          await dockerService.appDockerRemove(c.appId).catch((e) => log.warn(`remove ${c.appId}: ${e.message}`));
+          await dockerService.appDockerRemove(c.identifier).catch((e) => log.warn(`remove ${c.appId}: ${e.message}`));
         }
         // NEVER reclaim a component's host storage while its container still exists — a
         // failed remove would otherwise strand a live container with its volume unmounted
@@ -1100,7 +1122,7 @@ async function executeTeardown(doc, { onStatus = null } = {}) {
         let stillPresent;
         try {
           // eslint-disable-next-line no-await-in-loop
-          stillPresent = Boolean(await dockerService.getDockerContainer(c.appId));
+          stillPresent = Boolean(await dockerService.getDockerContainer(c.identifier));
         } catch (probeErr) {
           stillPresent = true;
           log.warn(`Teardown of ${c.identifier}: could not confirm the container was removed (${probeErr.message}); keeping it owed`);
@@ -1112,10 +1134,10 @@ async function executeTeardown(doc, { onStatus = null } = {}) {
         // phase) rather than 409-looping to boot recovery.
         if (stillPresent && !forceKill) {
           // eslint-disable-next-line no-await-in-loop
-          await dockerService.appDockerForceRemove(c.appId).catch((e) => log.warn(`force remove (escalated) ${c.appId}: ${e.message}`));
+          await dockerService.appDockerForceRemove(c.identifier).catch((e) => log.warn(`force remove (escalated) ${c.appId}: ${e.message}`));
           try {
             // eslint-disable-next-line no-await-in-loop
-            stillPresent = Boolean(await dockerService.getDockerContainer(c.appId));
+            stillPresent = Boolean(await dockerService.getDockerContainer(c.identifier));
           } catch (probeErr) {
             stillPresent = true;
             log.warn(`Teardown of ${c.identifier}: could not confirm the escalated removal (${probeErr.message}); keeping it owed`);

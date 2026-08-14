@@ -374,7 +374,9 @@ describe('appUninstaller tests', () => {
       fluxShutdowndClientStub.beginAppStop.resolves({ outcome: 'not_arcane' });
       // the host teardown after the stop loop touches unmocked deps; the stop loop runs first.
       await appUninstaller.runTeardown(doc()).catch(() => {});
-      expect(dockerServiceStub.appDockerStop.calledWith('fluxweb_myapp')).to.equal(true);
+      // The BARE identifier: dockerService owns physical naming and prefixes it
+      // itself, so handing it the already-prefixed appId asks for fluxfluxweb_myapp.
+      expect(dockerServiceStub.appDockerStop.calledWith('web_myapp')).to.equal(true);
       expect(dockerServiceStub.appDockerKill.called).to.equal(false);
     });
 
@@ -383,6 +385,26 @@ describe('appUninstaller tests', () => {
       await appUninstaller.runTeardown(doc()).catch(() => {});
       expect(dockerServiceStub.appDockerStop.called).to.equal(false);
       expect(dockerServiceStub.appDockerKill.called).to.equal(false);
+    });
+
+    // The identity work made getAppIdentifier always-prefix (it used to return an
+    // already-prefixed value unchanged), so handing a docker call the physical name
+    // now asks for `fluxflux...` and silently matches nothing: the container is left
+    // running, the remove is reported as success, and - worst - the presence probe
+    // that gates reclaiming host storage also answers "gone" and the volume is
+    // unmounted and the appdata deleted under a live container. Both call sites take
+    // the BARE identifier, and this pins that contract on the docker seam itself.
+    it('hands docker the bare identifier, never the flux-prefixed physical name', async () => {
+      fluxShutdowndClientStub.beginAppStop.resolves({ outcome: 'not_arcane' });
+      await appUninstaller.runTeardown(doc()).catch(() => {});
+
+      const passed = []
+        .concat(dockerServiceStub.appDockerStop.args.map((a) => a[0]))
+        .concat(dockerServiceStub.appDockerRemove.args.map((a) => a[0]))
+        .concat(dockerServiceStub.getDockerContainer.args.map((a) => a[0]));
+      expect(passed.length, 'the teardown reached the docker seam').to.be.greaterThan(0);
+      const prefixed = passed.filter((v) => typeof v === 'string' && v.startsWith('flux'));
+      expect(prefixed, `physical names passed to dockerService: ${prefixed}`).to.deep.equal([]);
     });
 
     it('force-disconnects endpoints and removes the network even on a graceful teardown (no leak)', async () => {
