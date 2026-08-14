@@ -14,7 +14,7 @@ import { fluxTeamKey } from './keys.js';
 import {
   waitForDaemonReady, waitForNodeStatus, waitForBlockProcessed, waitForAppInstalled, waitFor,
   waitForInstallSettled,
-  waitForReconcileActuated, waitForBootSettled,
+  waitForReconcileActuated, waitForBootSettled, waitForDeltaApplied,
 } from './wait.js';
 import { throwIfInfraDead, sleepUnlessInfraDead } from './infra-death.js';
 import { REGISTRY_REPO_HOST, getSubnetConfig } from './subnet-config.js';
@@ -302,8 +302,25 @@ export async function bootAndPeer(env, { minOutbound, minInbound, pricing = fals
     (c) => waitForNodeStatus(c, (d) => d.confirmed === true, 30000),
   ));
   await advanceBlock();
+  // Both events prove the same thing here - this node has moved past the seed
+  // height - and which one a node emits depends on the network-state path it
+  // is running. Under polling every node processes the block and announces
+  // block:processed. Under ZMQ the same block can arrive as a node-list delta,
+  // and that node announces deltaApplied and never block:processed, so waiting
+  // on one specific event hangs on whichever node took the other path (a race:
+  // nodes of the same fleet split across the two). Nothing weaker is accepted
+  // by the polling suites, which still satisfy the first arm exactly as before,
+  // and no app message exists this early for the distinction to matter.
   for (const client of nodes) {
-    await waitForBlockProcessed(client, (d) => d.height > env.initialHeight, 50000);
+    await Promise.any([
+      waitForBlockProcessed(client, (d) => d.height > env.initialHeight, 50000),
+      waitForDeltaApplied(client, (d) => d.toHeight > env.initialHeight, 50000),
+    ]).catch(() => {
+      throw new Error(
+        `bootAndPeer: node never moved past the seed height ${env.initialHeight} - neither `
+        + `block:processed nor deltaApplied arrived within 50000ms`,
+      );
+    });
   }
   await env.startDiscovery();
   // Peering is a property of the fleet, not a literal. The ring's two halves are
