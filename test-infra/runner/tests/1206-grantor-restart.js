@@ -75,7 +75,11 @@ describe('a grantor restarts, and its promises outlive the process', function ()
           quorumGrantMinHolderAgeMs: 0,
           quorumGrantPursuitIntervalMs: 10000,
           quorumGrantUnknownGraceMs: 30000,
-          quorumGrantUnanimityCacheMs: 15000,
+          // The plane governs only once the network's enforced floor guarantees
+          // every node carries it. The harness pins the requirement to the floor
+          // already in force so the gate is live under test; production pins it
+          // to the release that actually ships the plane.
+          quorumGrantMinFluxOSVersion: '8.13.1',
         },
       },
     });

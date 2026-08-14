@@ -4,7 +4,6 @@ const config = require('config');
 const serviceHelper = require('../serviceHelper');
 const generalService = require('../generalService');
 const networkStateService = require('../networkStateService');
-const registryManager = require('../appDatabase/registryManager');
 const messageStore = require('../appMessaging/messageStore');
 const reconcilerQueue = require('../appMonitoring/reconcilerQueue');
 const { extractIp, extractPort } = require('../utils/socketAddressUtils');
@@ -20,15 +19,15 @@ const log = require('../../lib/log');
 // controllerDesired data gates exactly as today. It can never answer
 // desired:true — the grant decides WHO may run, never THAT something runs.
 //
-// INERT BY DEFAULT. Two gates sit in front of everything, and both must
-// open: the config switch (quorumGrantMastership, default off — flipped in
-// the harness, and in production only after the mixed-fleet suites and the
-// dark-nodes confirmation-gap work land), and per-app HOLDER UNANIMITY —
-// every other holder of the app must answer the grant-record endpoint. One
-// holder that does not speak the grant plane puts the WHOLE app on the
-// legacy path, on every node, which is the symmetric fallback the lease doc
-// demands: the naive per-node fallback leaves one node believing a quorum
-// protects it while another node's legacy election promotes anyway.
+// INERT BY DEFAULT, behind the config switch and the network's own version
+// floor (see featureEnabled). The plane must never run beside the legacy
+// election - two elections over one app is the split brain it exists to
+// prevent - and the way that is guaranteed is SEQUENCING, not detection: the
+// code ships everywhere inert, the enforced floor rises to the release that
+// carries it, and only then does the flag mean anything. There is no runtime
+// probe of what the fleet is running, because a node without this code cannot
+// report that it lacks it: it can only fail to answer, exactly as a dead node
+// does, and no probe can separate those two.
 //
 // The FluxOS-restart case shapes the unknown state: a restart wipes the
 // in-memory holder while the container keeps running. Stopping a healthy
@@ -42,9 +41,37 @@ const log = require('../../lib/log');
 
 const ROLE = 'master';
 
+// The release that carries the grant plane, as a version the NETWORK enforces.
+// Absent means the plane has not been pinned to a release yet and stays inert:
+// there is no version to compare a floor against, so nothing can guarantee the
+// code is everywhere.
+function requiredFluxOSVersion() {
+  return config.fluxapps.quorumGrantMinFluxOSVersion ?? null;
+}
+
+/**
+ * Sequencing, not detection.
+ *
+ * A node that does not carry this code cannot say so - it can only fail to
+ * answer, and so can a node that is dead, and so can a node behind a broken
+ * path. No probe can tell those apart, which is why asking the fleet its
+ * version at runtime cannot be made correct.
+ *
+ * So the plane does not ask. It governs only once `minimumFluxOSAllowedVersion`
+ * - the floor the network already enforces on every node it will peer with -
+ * has been raised to the release that carries it. At that point "every holder
+ * speaks the plane" is enforced by the network rather than guessed by a probe,
+ * and there is no mixed fleet left to detect.
+ *
+ * The flag may therefore be flipped at any time: it cannot engage the plane
+ * before the floor makes it safe.
+ */
 function featureEnabled() {
   if (testOverrides.enabled !== null) return testOverrides.enabled;
-  return config.fluxapps.quorumGrantMastership === true;
+  if (config.fluxapps.quorumGrantMastership !== true) return false;
+  const required = requiredFluxOSVersion();
+  if (!required) return false;
+  return serviceHelper.minVersionSatisfy(config.minimumFluxOSAllowedVersion, required);
 }
 
 function unknownGraceMs() {
@@ -56,18 +83,11 @@ function pursuitIntervalMs() {
   return config.fluxapps.quorumGrantPursuitIntervalMs ?? 30_000;
 }
 
-function unanimityCacheMs() {
-  return config.fluxapps.quorumGrantUnanimityCacheMs ?? 60_000;
-}
-
 function heldTtlMs() {
   return config.fluxapps.quorumGrantHeldTtlMs ?? 150_000;
 }
 
 const testOverrides = { enabled: null, unknownGraceMs: null };
-
-// app -> { atMs, unanimous } — the holder-set probe, cached one minute
-const unanimity = new Map();
 
 // key -> monotonic ms of the last pursuit kick, jitter-spread
 const pursuits = new Map();
@@ -79,62 +99,6 @@ function keyFor(appName) {
   return `${appName}/${ROLE}`;
 }
 
-/**
- * Whether every OTHER holder of the app answers the grant plane — shape
- * detection on the record read, the established fallback pattern, so no
- * version constant has to be guessed at build time. Anyone missing or
- * refusing puts the app on the legacy path everywhere; the probe is cached
- * because holder sets move on placement timescales, not reconcile ones.
- */
-async function holdersUnanimous(appName) {
-  const cached = unanimity.get(appName);
-  if (cached && nowMs() - cached.atMs < unanimityCacheMs()) return cached.unanimous;
-
-  let unanimous = false;
-  try {
-    const locations = (await registryManager.appLocation(appName)) || [];
-    // The node's own row is never probed. This module IS the support the probe
-    // asks about, and a node cannot always reach its own listed address from
-    // inside itself — NAT without hairpinning is ordinary on the fleet — so
-    // asking would fail on exactly those nodes and drop them alone onto the
-    // legacy path while their peers, which reach them from outside, stayed on
-    // grants. That asymmetry is the hole holder unanimity exists to close.
-    //
-    // Location rows carry addresses and nothing else that identifies the
-    // announcer: a node's own row has no outpoint at all, because it stores
-    // its own announcement with no announcer to resolve one from. So the match
-    // is by address, resolved from collateral through the list.
-    const self = await generalService.obtainNodeCollateralInformation();
-    const membership = networkStateService.membershipAt(networkStateService.membershipFingerprint()) ?? [];
-    const selfNode = membership.find(
-      (entry) => `${entry.txhash}:${entry.outidx}` === `${self.txhash}:${self.txindex}`,
-    );
-    const selfHost = selfNode ? extractIp(selfNode.ip) : null;
-    const key = keyFor(appName);
-    const probes = locations
-      .filter((row) => extractIp(row.ip) !== selfHost)
-      .map(async (row) => {
-        try {
-          const url = `http://${extractIp(row.ip)}:${extractPort(row.ip)}/flux/quorumgrant/record?key=${encodeURIComponent(key)}`;
-          const response = await serviceHelper.axiosGet(url, { timeout: 5_000 });
-          return response?.data?.status === 'success';
-        } catch (error) {
-          return false;
-        }
-      });
-    const answers = await Promise.all(probes);
-    // Counted over the ROWS, not the answers: an app placed on this node alone
-    // has no peer to ask and is unanimous by definition. The emptiness that
-    // must not pass is "this node cannot see where the app runs".
-    unanimous = locations.length > 0 && answers.every(Boolean);
-  } catch (error) {
-    log.warn(`mastershipGrantGate - unanimity probe for ${appName} failed: ${error.message}`);
-    unanimous = false;
-  }
-
-  unanimity.set(appName, { atMs: nowMs(), unanimous });
-  return unanimous;
-}
 
 /**
  * Kick an acquisition if none is running and the last kick is stale. A
@@ -212,7 +176,6 @@ async function grantVerdict(identifier, comp) {
   if (!comp?.hasActiveStandbySyncthing?.()) return null;
 
   const { appName } = comp;
-  if (!(await holdersUnanimous(appName))) return null;
 
   const key = keyFor(appName);
   if (grantClient.holderFor(key)) {
@@ -270,7 +233,6 @@ async function blocksStart(identifier, comp) {
  */
 async function leaderIsSelf(identifier, appName, isActiveStandby) {
   if (!featureEnabled() || !isActiveStandby) return null;
-  if (!(await holdersUnanimous(appName))) return null;
   if (grantClient.holderFor(keyFor(appName))) return true;
   pursue(identifier, appName);
   return false;
@@ -292,7 +254,6 @@ async function leaderIsSelf(identifier, appName, isActiveStandby) {
 async function masterIntent(identifier, comp) {
   if (!featureEnabled()) return null;
   if (!comp?.hasActiveStandbySyncthing?.()) return null;
-  if (!(await holdersUnanimous(comp.appName))) return null;
 
   pursue(identifier, comp.appName);
 
@@ -417,7 +378,6 @@ async function onComponentTeardown(identifier, comp) {
 function resetForTests(options = {}) {
   testOverrides.enabled = options.enabled ?? null;
   testOverrides.unknownGraceMs = options.unknownGraceMs ?? null;
-  unanimity.clear();
   pursuits.clear();
   unknownSince.clear();
   folderDemotions.clear();
@@ -436,6 +396,5 @@ module.exports = {
   raiseFence,
   liftFence,
   onComponentTeardown,
-  holdersUnanimous,
   resetForTests,
 };
