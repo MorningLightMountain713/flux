@@ -970,6 +970,19 @@ async function appDockerCreate(deployComp, options = {}) {
       LogConfig: logConfig,
       ExtraHosts: [`fluxnode.service:${config.server.fluxNodeServiceAddress}`],
       ...(Array.isArray(options.dns) && options.dns.length > 0 && { Dns: options.dns }),
+      // A bare `web` is resolved against EVERY network the container is attached to,
+      // and docker walks them in network-name order — which is identity-derived, so
+      // between two linked apps that both declare a `web` the winner would be settled
+      // by whichever identity happened to sort first, and re-rolled on
+      // re-registration. Searching the app's own name first makes a short name mean
+      // this app's OWN component wherever it is attached: `web` is tried as
+      // `web.<appname>`, which only this app publishes. ndots:1 is what sends a
+      // single-label name through the search list at all — docker defaults to 0,
+      // which tries it verbatim first and is the ordering-dependent lookup being
+      // avoided. A qualified name carries a dot and still resolves directly, so
+      // `<component>.<appname>` remains how one app addresses another.
+      DnsSearch: [deployComp.appName],
+      DnsOptions: ['ndots:1'],
     },
     ...((autoAssignedIP || (Array.isArray(options.networkAliases) && options.networkAliases.length > 0)) && {
       NetworkingConfig: {

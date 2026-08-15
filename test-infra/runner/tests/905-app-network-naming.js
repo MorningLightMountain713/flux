@@ -24,11 +24,14 @@ const nodeIp = (num) => subnet.nodeIp(num);
 //   <component>.<appname>            any instance, from another app
 //   <replica>.<component>.<appname>  one replica, from another app
 //
-// The rule the whole scheme rests on is that a container attached to ANOTHER app's
-// network claims only the qualified forms there — so linking two apps that both have
-// a `web` cannot make either one's short name ambiguous. Unit tests cannot prove
-// that: it is a property of docker's resolver, of alias scoping, and of which network
-// a container was created on. Hence a fleet.
+// The scheme rests on two mechanisms, and needs both. A container attached to ANOTHER
+// app's network claims only the qualified forms there, so it cannot capture that
+// app's short names. And it is created with its own app name as a DNS search domain
+// (ndots:1), so the short names IT asks for resolve to its own components — docker
+// otherwise resolves a bare name against every attached network in network-name
+// order, which is identity-derived and therefore arbitrary between two linked apps.
+// Unit tests cannot prove either: they are properties of docker's resolver. Hence a
+// fleet.
 //
 // Every reply is the answering container's HOSTNAME, so an assertion names the
 // container that actually answered rather than merely proving something did.
@@ -189,7 +192,9 @@ describe('app network naming: what one app calls another', function () {
   it('and the host does not shadow the linked app\'s bare component name', async function () {
     this.timeout(300000);
     // The guest is attached to the host's network, where two containers claim `web`.
-    // Its own network is its primary attachment, so its own component still wins.
+    // Its search domain makes `web` mean `web.<its own app>` first, so its own
+    // component wins wherever it is attached. Without that, the answer is settled by
+    // which minted identity sorts first and this assertion is a coin toss.
     const answered = await dialFrom(apps.guest, 'web', 'g1', 'web');
     expect(answered, 'the guest\'s own web answers `web`, not the host\'s').to.equal('g1_web');
   });

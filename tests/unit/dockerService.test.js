@@ -1601,6 +1601,36 @@ describe('dockerService tests', () => {
       expect(actualConfig.HostConfig.Init).to.equal(false);
     });
 
+    // A container resolves a bare component name against every network it is
+    // attached to, and docker walks them in network-name order. The network name is
+    // derived from the minted identity, so for two linked apps that both declare a
+    // `web` the winner is whichever identity sorts first — settled at registration
+    // and re-rolled on re-registration. Searching the app's own name first makes the
+    // short name resolve to the app's OWN component wherever it is attached.
+    it('searches the app own name first, so a short name is never won by a linked app', async () => {
+      const deployComp = makeDeployComp();
+
+      await dockerService.appDockerCreate(deployComp);
+
+      const actualConfig = dockerStub.firstCall.args[0];
+      expect(actualConfig.HostConfig.DnsSearch).to.deep.equal(['fluxwebsite']);
+      // Docker defaults to ndots:0, which tries a single-label name verbatim before
+      // the search list — the ordering-dependent lookup this exists to avoid.
+      expect(actualConfig.HostConfig.DnsOptions).to.deep.equal(['ndots:1']);
+    });
+
+    it('keeps the search domain when the caller states its own resolvers', async () => {
+      const deployComp = makeDeployComp();
+
+      // A mesh component is created with the mesh resolvers; its own component names
+      // must still win, so the two settings are independent.
+      await dockerService.appDockerCreate(deployComp, { dns: ['10.127.0.53'] });
+
+      const actualConfig = dockerStub.firstCall.args[0];
+      expect(actualConfig.HostConfig.Dns).to.deep.equal(['10.127.0.53']);
+      expect(actualConfig.HostConfig.DnsSearch).to.deep.equal(['fluxwebsite']);
+    });
+
     it('wires a v9 livenessProbe into a docker Healthcheck, seconds to nanoseconds', async () => {
       const deployComp = makeDeployComp({
         livenessProbe: {
