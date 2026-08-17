@@ -6,6 +6,7 @@ import { ALL_ZMQ_TOPICS } from '../framework/fluxd-conf.js';
 import { bootAndPeer, installOnNodes } from '../framework/reconciler-suite.js';
 import { buildSeedableSyncthingApp } from '../framework/seed-helper.js';
 import { pushImage } from '../framework/registry-helper.js';
+import { setSynced } from '../framework/syncthing-control.js';
 import { pauseHostContainer, unpauseHostContainer } from '../framework/container.js';
 import { waitFor, waitForAppInstalled } from '../framework/wait.js';
 import { getState } from '../framework/daemon-control.js';
@@ -109,6 +110,13 @@ describe('the committee heals its dark seat, and the owner re-deals the walk', f
     const app = await buildSeedableSyncthingApp({ name, mode: 'g' });
     await installOnNodes(env, app, HOLDERS);
     await Promise.all(HOLDERS.map((i) => waitForAppInstalled(env.clients[i], name, 240000)));
+    // Pin the app's folder fully synced on every node's stub view. The stub
+    // never moves bytes, and a receive-only standby showing zero ingested
+    // bytes beside a peer that holds data walks the stall ladder to LOCAL
+    // APP REMOVAL (broadcastRemoval: true), which erases the standby's
+    // location row fleet-wide - and with it the witness set, the relay
+    // carriers and the spawner's instance count.
+    await setSynced({ folder: `flux${name}_${name}` });
 
     outpoints = {};
     for (let i = 0; i < env.clients.length; i += 1) {
