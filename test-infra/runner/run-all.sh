@@ -165,7 +165,9 @@ for f in "${SUITES[@]}"; do
   #     (not npx) so the TERM lands on the mocha node process, not a wrapper;
   #     -k escalates to KILL if the event loop is wedged. A timed-out suite
   #     reports a nonzero rc in SUITE-END.
-  timeout -k 30s "${E2E_SUITE_WALL_SEC:-1800}s" node_modules/.bin/mocha "$f" --reporter tap --timeout "$SUITE_TIMEOUT_MS" --exit --require ./framework/open-handle-report.js 2>&1 | tee "$LOG_DIR/$name.tap"
+  # E2E_MOCHA_GREP narrows a suite to matching tests (mocha --grep) for a
+  # targeted diagnostic run; empty means the whole file, exactly as before.
+  timeout -k 30s "${E2E_SUITE_WALL_SEC:-1800}s" node_modules/.bin/mocha "$f" --reporter tap --timeout "$SUITE_TIMEOUT_MS" --exit --require ./framework/open-handle-report.js ${E2E_MOCHA_GREP:+--grep} ${E2E_MOCHA_GREP:+"$E2E_MOCHA_GREP"} 2>&1 | tee "$LOG_DIR/$name.tap"
   rc=${PIPESTATUS[0]}
 
   if grep -q '###OPEN-HANDLES' "$LOG_DIR/$name.tap" 2>/dev/null; then
