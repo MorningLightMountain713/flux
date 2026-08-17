@@ -106,6 +106,7 @@ export function nodeClient(nodeNum) {
         'app:removed',
         'app:specStored',
         'app:running',
+        'quorumGrant:assess',
         'quorumGrant:founded',
         'quorumGrant:founderAnswer',
         'quorumGrant:granted',
