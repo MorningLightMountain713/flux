@@ -604,7 +604,13 @@ class Holder {
         ...(this.#committee.chain.length ? { chain: this.#committee.chain } : {}),
       },
     );
-    if (!signed) return;
+    if (!signed) {
+      // Without this, a signing failure is indistinguishable from a dead
+      // renewal loop: both leave no assess events. publish() is a no-op
+      // outside the harness.
+      fluxEventBus.publish('quorumGrant:assess', { key: this.#key, outcome: 'askUnsigned' });
+      return;
+    }
 
     const sentMs = this.#clock();
     const direct = await askCommittee(this.#committee.members, 'renew', signed.ask, signed.signature);
@@ -778,9 +784,21 @@ class Holder {
     const now = this.#clock();
     const safeUntil = this.safeUntil();
 
+    // Every branch reports what this pass SAW, not just what it decided: the
+    // holder's safety arithmetic is otherwise silent in jeopardy, and a master
+    // that held when it should have demoted leaves no trace to diagnose.
+    // publish() is a no-op outside the harness.
+    const seen = {
+      key: this.#key,
+      quorumRenewed,
+      coasting: this.#coasting,
+      safeForMs: safeUntil === null ? null : Math.round(safeUntil - now),
+    };
+
     if (quorumRenewed) {
       this.#state = 'held';
       this.#coasting = false;
+      fluxEventBus.publish('quorumGrant:assess', { ...seen, outcome: 'held' });
       return;
     }
 
@@ -788,26 +806,39 @@ class Holder {
     // witness rule decides.
     if (safeUntil !== null && now <= safeUntil) {
       this.#state = 'jeopardy';
+      fluxEventBus.publish('quorumGrant:assess', { ...seen, outcome: 'jeopardy' });
       return;
     }
 
     const standbys = await standbysFor(this.#key, this.#identity.outpoint);
     const witnessReplies = await pollWitnesses(standbys, this.#key);
     const verdict = core.coastVerdict(standbys.map(outpointOf), witnessReplies);
+    seen.standbys = standbys.length;
+    seen.witnessReplies = witnessReplies.size;
 
     if (verdict.coast) {
       this.#state = 'jeopardy';
       if (!this.#coasting) fluxEventBus.publish('quorumGrant:coasting', { key: this.#key });
       this.#coasting = true;
+      fluxEventBus.publish('quorumGrant:assess', { ...seen, outcome: 'coast' });
       return;
     }
 
     const demotionAt = (safeUntil ?? now) + demotionSlackMs();
     if (now > demotionAt) {
+      fluxEventBus.publish('quorumGrant:assess', {
+        ...seen, outcome: 'demote', reason: verdict.reason ?? null,
+      });
       this.#demote(verdict.reason ?? 'renewal quorum lost past the deadline');
     } else {
       this.#state = 'jeopardy';
       this.#coasting = false;
+      fluxEventBus.publish('quorumGrant:assess', {
+        ...seen,
+        outcome: 'awaitingDeadline',
+        demotionInMs: Math.round(demotionAt - now),
+        reason: verdict.reason ?? null,
+      });
     }
   }
 
