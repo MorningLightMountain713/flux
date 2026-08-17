@@ -395,6 +395,34 @@ async function acquire(key, options = {}) {
   }
 }
 
+/**
+ * Whether a held term has PROVABLY lapsed — how a resting standby decides to
+ * pursue. The published record is durable and only says who last held the
+ * term; whether they still stand is asked of the referees. Deliberately not
+ * an acquisition: no acquiring state is entered, because the witness vouch
+ * must keep seeing a resting standby as pursuing nothing. Positive evidence
+ * only — a live incumbent shield from any referee keeps the rest, and so
+ * does total silence: pursuing on silence is what denied the coast vouch by
+ * coin flip, and a standby that cannot reach the committee could not win an
+ * acquisition anyway.
+ */
+async function termLapsed(key) {
+  const identity = await selfIdentity();
+  if (!identity) return false;
+  const committee = await committeeFor(key, 'held', networkStateService.membershipFingerprint());
+  if (!committee) return false;
+  const chainExtras = committee.chain?.length ? { chain: committee.chain } : {};
+  const signed = await signedAskFor('probe', key, 'held', 1, identity, committee, chainExtras);
+  if (!signed) return false;
+  const replies = await askCommittee(committee.members, 'probe', signed.ask, signed.signature);
+  const shielded = [...replies.values()].some(
+    (reply) => reply?.code === 'incumbent_active' && reply?.accepted?.grantee !== identity.outpoint,
+  );
+  const lapsed = replies.size > 0 && !shielded;
+  fluxEventBus.publish('quorumGrant:restCheck', { key, replies: replies.size, lapsed });
+  return lapsed;
+}
+
 async function acquireOnce(key, mode, ttlMs, identity, committee, options) {
   const { members, quorum } = committee;
   // a healed committee's chain rides every ask, so a grantor seated by it —
@@ -527,8 +555,6 @@ class Holder {
 
   #cancel;
 
-  #lastPublishMs = null;
-
   constructor(options) {
     this.#key = options.key;
     this.#epoch = options.epoch;
@@ -575,15 +601,15 @@ class Holder {
   }
 
   /**
-   * Publish this term's record. The row expires at the grant duration, so a
-   * live holder re-publishes at half of it — an abandoned term's record ages
-   * out on its own, and readers never see a master nobody is renewing. The
-   * roster chain rides the record: it is how everyone who never saw a heal
-   * happen — challengers, standbys, freshly seated grantors — learns the
-   * committee as it now stands.
+   * Publish this term's record. Change-driven and durable until superseded:
+   * it says WHO holds the term, never whether they still stand — liveness is
+   * asked of the referees, not inferred from this row's age — so it is
+   * published on acquisition and on a roster heal, and no timer republishes
+   * it. The roster chain rides the record: it is how everyone who never saw
+   * a heal happen — challengers, standbys, freshly seated grantors — learns
+   * the committee as it now stands.
    */
   async publishRecord() {
-    this.#lastPublishMs = this.#clock();
     await masterleasePublisher.publishMasterlease({
       key: this.#key,
       grantee: this.#identity.outpoint,
@@ -680,10 +706,6 @@ class Holder {
     }
 
     await this.#assess(renewed >= this.#committee.quorum);
-
-    if (this.#state === 'held' && this.#clock() - this.#lastPublishMs > this.#ttlMs / 2) {
-      await this.publishRecord();
-    }
 
     await this.#maybeHeal();
   }
@@ -839,8 +861,14 @@ class Holder {
     }
 
     const standbys = await standbysFor(this.#key, this.#identity.outpoint);
-    const witnessReplies = await pollWitnesses(standbys, this.#key);
-    const verdict = core.coastVerdict(standbys.map(outpointOf), witnessReplies);
+    // Zero resolvable witnesses is maximal doubt, and doubt never coasts: a
+    // global app always has other instances by spec floor, so an empty set
+    // means nobody can vouch that no takeover is possible - unanimity over
+    // nobody proved nothing, and it kept an isolated master running.
+    const witnessReplies = standbys.length ? await pollWitnesses(standbys, this.#key) : new Map();
+    const verdict = standbys.length
+      ? core.coastVerdict(standbys.map(outpointOf), witnessReplies)
+      : { coast: false, reason: 'no witnesses resolvable' };
     seen.standbys = standbys.length;
     seen.witnessReplies = witnessReplies.size;
 
@@ -1020,6 +1048,7 @@ function isAcquiring(key) {
 
 module.exports = {
   acquire,
+  termLapsed,
   holderFor,
   isAcquiring,
   witnessAnswer,
