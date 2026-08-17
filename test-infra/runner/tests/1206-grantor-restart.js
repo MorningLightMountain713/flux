@@ -26,8 +26,13 @@ describe('a grantor restarts, and its promises outlive the process', function ()
 
   async function readCell(clientIndex) {
     try {
+      // A restarting node may accept the TCP connect and never answer, so an
+      // unbounded read hangs for undici's ~300s default and stalls the whole
+      // verdict on one silent node. Silence is a non-answer; the quorum
+      // arithmetic already tolerates missing cells.
       const res = await fetch(
         `${env.clients[clientIndex].url}/flux/quorumgrant/record?key=${encodeURIComponent(`${name}/master`)}`,
+        { signal: AbortSignal.timeout(5000) },
       );
       const body = await res.json();
       return body?.data ?? null;

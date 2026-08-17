@@ -40,8 +40,13 @@ describe('the mastership grant on a multi-node fleet', function () {
 
   async function readCell(clientIndex) {
     try {
+      // A paused node still accepts the TCP connect and then never answers, so
+      // an unbounded read hangs for undici's ~300s default and stalls the whole
+      // verdict on one frozen node. Silence is a non-answer; the quorum
+      // arithmetic already tolerates missing cells.
       const res = await fetch(
         `${env.clients[clientIndex].url}/flux/quorumgrant/record?key=${encodeURIComponent(`${name}/master`)}`,
+        { signal: AbortSignal.timeout(5000) },
       );
       const body = await res.json();
       return body?.data?.accepted ?? null;
