@@ -228,7 +228,14 @@ function onRenew(record, request, nowMs) {
   if (!isGrantee(record.accepted, grantee) || record.accepted.epoch !== epoch) {
     return { reply: refusal('not_grantee', record), record: null };
   }
-  if (state === 'lapsed') {
+  // The recorded grantee may revive its own lapsed, unsuperseded term -
+  // this is how a restarted referee's cell rejoins the renewal quorum: its
+  // record lapsed while the process was down, though the term lived on the
+  // other cells. Safe by intersection arithmetic - any successor needed a
+  // quorum that did not include this sleeping cell, and this cell adopts
+  // the higher epoch at its next prepare. A promise above the recorded
+  // epoch means a takeover is in flight, and the revival yields to it.
+  if (state === 'lapsed' && (record.promisedEpoch ?? 0) > record.accepted.epoch) {
     return { reply: refusal('lapsed', record), record: null };
   }
 
