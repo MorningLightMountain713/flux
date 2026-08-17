@@ -1018,10 +1018,15 @@ function stopHolder(holder) {
 async function pollWitnesses(standbys, key) {
   const polls = standbys.map(async (standby) => {
     try {
+      // Double budget, like the relay call: the witness answers only after
+      // its own committee probes, which burn a full askTimeout exactly when
+      // the committee is unreachable - the one moment this poll matters. A
+      // single budget times out on every witness by construction there, and
+      // an unaccounted-for witness fails the coast closed.
       const response = await serviceHelper.axiosPost(
         grantorUrl(standby, '/flux/quorumgrant/witness'),
         { key },
-        { timeout: askTimeoutMs(), httpAgent: askAgent },
+        { timeout: askTimeoutMs() * 2, httpAgent: askAgent },
       );
       return { outpoint: outpointOf(standby), reply: response?.data?.data ?? null };
     } catch (error) {
