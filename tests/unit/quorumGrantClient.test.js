@@ -480,6 +480,29 @@ describe('quorumGrant grantClient', () => {
       expect(demotedReason).to.contain('can reach quorum');
     });
 
+    it('the demotion deadline is anchored — a collapsed ack set cannot slide it forever', async () => {
+      let demotedReason = null;
+      const outcome = await grantClient.acquire(KEY, holderOptions({
+        onDemoted: (reason) => { demotedReason = reason; },
+      }));
+      const { holder } = outcome;
+      // every grantor's term has lapsed: renewals come back refused, each
+      // refusal deletes an ack, and safeUntil collapses to null
+      committeeHosts.forEach((host) => {
+        const record = registers.get(host).get(KEY);
+        record.accepted.expiresAt = Date.now() - TTL;
+      });
+      witnessReplies.set(STANDBY_HOST, { quorumReachable: true, holding: false, acquiring: false });
+
+      clockNow += TTL + 30_000;
+      await holder.renewOnce();
+      clockNow += 30_000; // far past any slack measured from the first unsafe pass
+      await holder.renewOnce();
+
+      expect(holder.state).to.equal('lost');
+      expect(demotedReason).to.not.equal(null);
+    });
+
     it('an empty witness set never coasts — no resolvable witnesses is doubt, and doubt demotes', async () => {
       let demotedReason = null;
       const outcome = await grantClient.acquire(KEY, holderOptions({
