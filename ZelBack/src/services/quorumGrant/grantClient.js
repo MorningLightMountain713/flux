@@ -559,6 +559,13 @@ class Holder {
   // or a coast stands
   #deadlineArmedAtMs = null;
 
+  // the timer that fires the demotion AT the deadline. The renew loop also
+  // checks the deadline, but its pass cadence collapses exactly when it
+  // matters - under total isolation every ask burns its full timeout - and a
+  // demotion noticed a pass late is a second master: slack-below-lock-delay
+  // only holds if the stop happens ON the deadline.
+  #demotionTimer = null;
+
   constructor(options) {
     this.#key = options.key;
     this.#epoch = options.epoch;
@@ -852,7 +859,7 @@ class Holder {
     if (quorumRenewed) {
       this.#state = 'held';
       this.#coasting = false;
-      this.#deadlineArmedAtMs = null;
+      this.#disarmDemotion();
       fluxEventBus.publish('quorumGrant:assess', { ...seen, outcome: 'held' });
       return;
     }
@@ -881,7 +888,7 @@ class Holder {
       this.#state = 'jeopardy';
       if (!this.#coasting) fluxEventBus.publish('quorumGrant:coasting', { key: this.#key });
       this.#coasting = true;
-      this.#deadlineArmedAtMs = null;
+      this.#disarmDemotion();
       fluxEventBus.publish('quorumGrant:assess', { ...seen, outcome: 'coast' });
       return;
     }
@@ -892,7 +899,16 @@ class Holder {
     // set, every ack deleted by lapsed refusals - where a deadline recomputed
     // from the current pass slides forward forever and the demotion never
     // fires.
-    if (this.#deadlineArmedAtMs === null) this.#deadlineArmedAtMs = safeUntil ?? now;
+    if (this.#deadlineArmedAtMs === null) {
+      this.#deadlineArmedAtMs = safeUntil ?? now;
+      const reason = verdict.reason ?? 'renewal quorum lost past the deadline';
+      const dueInMs = Math.max(0, this.#deadlineArmedAtMs + demotionSlackMs() - now);
+      this.#demotionTimer = this.#schedule(() => {
+        this.#demotionTimer = null;
+        if (this.#stopped || this.#deadlineArmedAtMs === null) return;
+        this.#demote(reason);
+      }, dueInMs);
+    }
     const demotionAt = this.#deadlineArmedAtMs + demotionSlackMs();
     if (now > demotionAt) {
       fluxEventBus.publish('quorumGrant:assess', {
@@ -911,11 +927,20 @@ class Holder {
     }
   }
 
+  #disarmDemotion() {
+    this.#deadlineArmedAtMs = null;
+    if (this.#demotionTimer !== null) {
+      this.#cancel(this.#demotionTimer);
+      this.#demotionTimer = null;
+    }
+  }
+
   #demote(reason) {
     if (this.#stopped) return;
     this.#stopped = true;
     this.#state = 'lost';
     this.#coasting = false;
+    this.#disarmDemotion();
     if (this.#timer !== null) this.#cancel(this.#timer);
     held.delete(this.#key);
     log.warn(`quorumGrant holder ${this.#key}: demoted — ${reason}`);
@@ -926,6 +951,7 @@ class Holder {
   /** Stop locally: end the loop and the registry entry, no wire traffic. */
   stop() {
     this.#stopped = true;
+    this.#disarmDemotion();
     if (this.#timer !== null) this.#cancel(this.#timer);
     held.delete(this.#key);
     this.#state = 'lost';
