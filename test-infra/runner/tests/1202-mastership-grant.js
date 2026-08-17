@@ -105,6 +105,12 @@ describe('the mastership grant on a multi-node fleet', function () {
           quorumGrantDrainMs: 45000,
           quorumGrantMinHolderAgeMs: 0,
           quorumGrantPursuitIntervalMs: 10000,
+          // Compressed like every other cadence: a failed pass burns ask
+          // timeouts serially (direct round, relay carriers, witness poll),
+          // and at the production 5s default one bad round outlives the
+          // compressed 45s term - the standing alarm then demotes a master
+          // that one more round would have renewed.
+          quorumGrantAskTimeoutMs: 2000,
           quorumGrantUnknownGraceMs: 30000,
           // The plane governs only once the network's enforced floor guarantees
           // every node carries it. The harness pins the requirement to the floor

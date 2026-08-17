@@ -99,6 +99,12 @@ describe('relay renewal and the partitioned app island', function () {
           quorumGrantDrainMs: 45000,
           quorumGrantMinHolderAgeMs: 0,
           quorumGrantPursuitIntervalMs: 10000,
+          // Compressed like every other cadence: a failed pass burns ask
+          // timeouts serially (direct round, relay carriers, witness poll),
+          // and at the production 5s default one bad round outlives the
+          // compressed 45s term - the standing alarm then demotes a master
+          // that one more round would have renewed.
+          quorumGrantAskTimeoutMs: 2000,
           quorumGrantUnknownGraceMs: 30000,
           // The plane governs only once the network's enforced floor guarantees
           // every node carries it. The harness pins the requirement to the floor
@@ -259,9 +265,11 @@ describe('relay renewal and the partitioned app island', function () {
       const winner = survivors.find((i) => env.clients[i].getEventBuffer()
         .some((e) => e.event === 'quorumGrant:granted' && e.data.key === `${name}/master`));
       expect(winner, 'a survivor holds the granted event').to.not.equal(undefined);
-      expect(env.clients[winner].getEventBuffer()
-        .some((e) => e.event === 'quorumGrant:fenceRaised' && e.data.app === name),
-      'the fence against the deposed master stands from the moment of the grant').to.equal(true);
+      await env.clients[winner].waitForEvent(
+        'quorumGrant:fenceRaised', (d) => d.app === name, 15000,
+      ).catch(() => {
+        throw new Error('the fence against the deposed master did not stand with the grant');
+      });
 
       // BOUNDED: the deposed master's container is gone within the overlap
       // bound of the successor's grant. A failed LOOK is not evidence the
