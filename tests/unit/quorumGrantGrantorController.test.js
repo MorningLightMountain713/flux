@@ -194,6 +194,29 @@ describe('quorumGrant grantorController', () => {
       expect(res.body.data.message).to.contain('originate');
     });
 
+    it('serves a renew carried by another listed node — the one carrier-independent ask', async () => {
+      const res = fakeRes();
+      await grantorController.renew(fakeReq(signedAsk('renew'), '10.2.0.1'), res);
+      expect(res.statusCode).to.equal(200);
+      expect(grantRegister.renew.calledOnce).to.equal(true);
+    });
+
+    it('refuses a renew carried by an address the list does not carry', async () => {
+      const res = fakeRes();
+      await grantorController.renew(fakeReq(signedAsk('renew'), '198.51.100.99'), res);
+      expect(res.statusCode).to.equal(403);
+      expect(res.body.data.message).to.contain('caller is not a listed node');
+      expect(grantRegister.renew.called).to.equal(false);
+    });
+
+    it('a carried prepare stays refused — only renew is carrier-independent', async () => {
+      const res = fakeRes();
+      await grantorController.prepare(fakeReq(signedAsk('prepare'), '10.2.0.1'), res);
+      expect(res.statusCode).to.equal(403);
+      expect(res.body.data.message).to.contain('originate');
+      expect(grantRegister.prepare.called).to.equal(false);
+    });
+
     it('refuses a signature that does not verify against the registered key', async () => {
       const body = signedAsk('prepare');
       body.epoch = 4; // resign nothing: the signature now covers different fields

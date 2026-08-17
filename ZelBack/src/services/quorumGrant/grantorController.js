@@ -174,7 +174,18 @@ async function readAsk(req, type) {
   if (!askerNode) {
     return bad(403, 'candidate is not a listed node');
   }
-  if (extractIp(askerNode.ip) !== callerHost(req)) {
+  if (type === 'renew') {
+    // The one carrier-independent ask: any holder may deliver a renewal, so
+    // the caller is not required to BE the candidate — authenticity is the
+    // candidate's signature verified below, and replay is bounded by the
+    // freshness window and can only extend the named incumbent's term. The
+    // carrier must still be a listed node. Every term-changing ask below
+    // keeps the stricter source binding.
+    const caller = callerHost(req);
+    if (!(nodes || []).some((node) => extractIp(node.ip) === caller)) {
+      return bad(403, 'caller is not a listed node');
+    }
+  } else if (extractIp(askerNode.ip) !== callerHost(req)) {
     // Both sides named, or the refusal cannot be diagnosed from the caller's
     // side: it only ever learns this message.
     return bad(403, `ask does not originate from the candidate (listed ${extractIp(askerNode.ip)}, caller ${callerHost(req)})`);
