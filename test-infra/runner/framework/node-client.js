@@ -261,6 +261,7 @@ export function nodeClient(nodeNum) {
         'quorumGrant:demoted',
         'quorumGrant:coasting',
         'quorumGrant:healed',
+        'quorumGrant:served',
         'quorumGrant:generationRecord',
         'imageUpdate:checked',
         'imageUpdate:redeployTriggered',

@@ -12,6 +12,7 @@ const messageStore = require('../appMessaging/messageStore');
 const foundingCommittee = require('../appMesh/foundingCommittee');
 const { extractIp } = require('../utils/socketAddressUtils');
 const { selectCommittee } = require('../utils/committeeSelector');
+const fluxEventBus = require('../utils/fluxEventBus');
 const signedEnvelope = require('./signedEnvelope');
 const rosterOverlay = require('./rosterOverlay');
 const grantRegister = require('./grantRegister');
@@ -319,33 +320,53 @@ async function askerHolds(ask, askerNode, type) {
  * client sees one protocol, not five endpoints with opinions.
  */
 async function serve(req, res, type, operate) {
+  // Stage timings, published win or lose: the caller's 5s budget dies
+  // SOMEWHERE in this gauntlet and nothing else says where. publish() is a
+  // no-op outside the harness.
+  const t0 = Date.now();
+  const ms = {};
+  function report(outcome) {
+    fluxEventBus.publish('quorumGrant:served', {
+      type, outcome, total: Date.now() - t0, ...ms,
+    });
+  }
   try {
     const host = callerHost(req);
     if (!peerAllowed(host)) {
+      report('rateLimited');
       return res.status(429).json(messageHelper.createErrorMessage('too many grant asks'));
     }
 
     const read = await readAsk(req, type);
+    ms.read = Date.now() - t0;
     if (!read.ok) {
+      report('refusedRead');
       return res.status(read.code).json(messageHelper.createErrorMessage(read.message));
     }
     const { ask, askerNode } = read;
 
     const committee = await selfOnCommittee(ask.key, ask.mode ?? 'held', ask.fingerprint, ask.generation, ask.chain);
+    ms.committee = Date.now() - t0 - ms.read;
     if (!committee.member) {
+      report('refusedCommittee');
       return res.status(committee.code).json(messageHelper.createErrorMessage(committee.reason));
     }
 
     if (type !== 'probe') {
       const holding = await askerHolds(ask, askerNode, type);
+      ms.holds = Date.now() - t0 - ms.read - ms.committee;
       if (!holding.holds) {
+        report('refusedHolder');
         return res.status(403).json(messageHelper.createErrorMessage(holding.reason));
       }
     }
 
     const reply = await operate(ask);
+    ms.operate = Date.now() - t0 - ms.read - ms.committee - (ms.holds ?? 0);
+    report('served');
     return res.json(messageHelper.createDataMessage(reply));
   } catch (error) {
+    report('errored');
     log.error(`quorumGrant grantorController ${type}: ${error.message}`);
     return res.status(500).json(messageHelper.createErrorMessage(error.message));
   }
