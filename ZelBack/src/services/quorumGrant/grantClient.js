@@ -223,6 +223,16 @@ async function standbysFor(key, selfOutpoint) {
     const node = byHost.get(extractIp(row.ip));
     if (node && outpointOf(node) !== selfOutpoint) standbys.push(node);
   });
+  // An empty answer has three distinct causes - no rows, no membership, or a
+  // join that matched nothing - and the witness rule treats them all as "no
+  // standbys", so say which one this was. publish() is a no-op outside the
+  // harness.
+  fluxEventBus.publish('quorumGrant:standbys', {
+    key,
+    rows: rows ? rows.length : null,
+    membership: membership.length,
+    matched: standbys.length,
+  });
   return standbys;
 }
 
