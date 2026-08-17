@@ -84,10 +84,19 @@ class FluxServer {
     );
 
     // Node's default requestTimeout is 5 min, which kills large file uploads
-    // (app backups, fluxshare) on slow connections. headersTimeout (60s default)
+    // (app backups, fluxshare) on slow connections. headersTimeout
     // still defends against slowloris on the request line/headers, and
     // formidable caps body size at 10GB.
     server.requestTimeout = 2 * 60 * 60 * 1000;
+    // Warm sockets for node-to-node control traffic: the default 5s
+    // keepAliveTimeout closed every idle socket between grant renewals (20s
+    // apart), so each round paid a fresh TCP handshake to every referee.
+    // Client agents drop their free sockets at 60s — strictly below this —
+    // which is the ordering that stops a client reusing a socket this side
+    // already closed. headersTimeout must stay above keepAliveTimeout, and
+    // 66s still bounds the header phase.
+    server.keepAliveTimeout = 65 * 1000;
+    server.headersTimeout = 66 * 1000;
 
     this.socketServer = new FluxWebsocketServer({
       routes: socketHandlers,

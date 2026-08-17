@@ -1,6 +1,7 @@
 'use strict';
 
 const config = require('config');
+const http = require('http');
 const serviceHelper = require('../serviceHelper');
 const generalService = require('../generalService');
 const fluxNetworkHelper = require('../fluxNetworkHelper');
@@ -88,6 +89,13 @@ function outpointOf(node) {
 function grantorUrl(node, path) {
   return `http://${extractIp(node.ip)}:${extractPort(node.ip)}${path}`;
 }
+
+// One warm socket per referee, shared by every ask type and every app on this
+// node, lifecycle owned entirely by the HTTP layer. Free sockets are dropped
+// at 60s idle — strictly below the API server's 65s keepAliveTimeout — so this
+// side never reuses a socket the far side already closed. Renewals then cost a
+// request/response on an open socket instead of a TCP handshake per round.
+const askAgent = new http.Agent({ keepAlive: true, timeout: 60_000, maxFreeSockets: 64 });
 
 // ---------------------------------------------------------------------------
 // identity and committee resolution
@@ -248,7 +256,7 @@ async function askGrantor(member, type, ask, signature) {
     const response = await serviceHelper.axiosPost(
       grantorUrl(member, `/flux/quorumgrant/${type}`),
       { ...ask, signature },
-      { timeout: askTimeoutMs() },
+      { timeout: askTimeoutMs(), httpAgent: askAgent },
     );
     return response?.data?.data ?? null;
   } catch (error) {
@@ -303,7 +311,7 @@ async function relayThroughStandbys(standbys, members, type, ask, signature, hav
       const response = await serviceHelper.axiosPost(
         grantorUrl(standbys[i], '/flux/quorumgrant/relay'),
         { type, ask, signature },
-        { timeout: askTimeoutMs() * 2 },
+        { timeout: askTimeoutMs() * 2, httpAgent: askAgent },
       );
       const carried = response?.data?.data?.replies ?? [];
       carried.forEach((entry) => {
@@ -985,7 +993,7 @@ async function pollWitnesses(standbys, key) {
       const response = await serviceHelper.axiosPost(
         grantorUrl(standby, '/flux/quorumgrant/witness'),
         { key },
-        { timeout: askTimeoutMs() },
+        { timeout: askTimeoutMs(), httpAgent: askAgent },
       );
       return { outpoint: outpointOf(standby), reply: response?.data?.data ?? null };
     } catch (error) {
