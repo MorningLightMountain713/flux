@@ -555,6 +555,10 @@ class Holder {
 
   #cancel;
 
+  // monotonic ms the demotion deadline was armed at, null while safety holds
+  // or a coast stands
+  #deadlineArmedAtMs = null;
+
   constructor(options) {
     this.#key = options.key;
     this.#epoch = options.epoch;
@@ -848,6 +852,7 @@ class Holder {
     if (quorumRenewed) {
       this.#state = 'held';
       this.#coasting = false;
+      this.#deadlineArmedAtMs = null;
       fluxEventBus.publish('quorumGrant:assess', { ...seen, outcome: 'held' });
       return;
     }
@@ -876,11 +881,19 @@ class Holder {
       this.#state = 'jeopardy';
       if (!this.#coasting) fluxEventBus.publish('quorumGrant:coasting', { key: this.#key });
       this.#coasting = true;
+      this.#deadlineArmedAtMs = null;
       fluxEventBus.publish('quorumGrant:assess', { ...seen, outcome: 'coast' });
       return;
     }
 
-    const demotionAt = (safeUntil ?? now) + demotionSlackMs();
+    // The deadline is ANCHORED at the moment safety first ran out on a pass
+    // the witnesses would not cover, and holds until a renewal or a coast
+    // clears it. Anchoring matters when safeUntil is null - a collapsed ack
+    // set, every ack deleted by lapsed refusals - where a deadline recomputed
+    // from the current pass slides forward forever and the demotion never
+    // fires.
+    if (this.#deadlineArmedAtMs === null) this.#deadlineArmedAtMs = safeUntil ?? now;
+    const demotionAt = this.#deadlineArmedAtMs + demotionSlackMs();
     if (now > demotionAt) {
       fluxEventBus.publish('quorumGrant:assess', {
         ...seen, outcome: 'demote', reason: verdict.reason ?? null,
