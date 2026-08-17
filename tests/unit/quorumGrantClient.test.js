@@ -486,11 +486,13 @@ describe('quorumGrant grantClient', () => {
         onDemoted: (reason) => { demotedReason = reason; },
       }));
       const { holder } = outcome;
-      // every grantor's term has lapsed: renewals come back refused, each
-      // refusal deletes an ack, and safeUntil collapses to null
+      // every cell lapsed AND a challenger's prepares landed while we slept:
+      // revival yields to the in-flight takeover, so renewals come back
+      // refused, each refusal deletes an ack, and safeUntil collapses to null
       committeeHosts.forEach((host) => {
         const record = registers.get(host).get(KEY);
         record.accepted.expiresAt = Date.now() - TTL;
+        record.promisedEpoch = 6;
       });
       witnessReplies.set(STANDBY_HOST, { quorumReachable: true, holding: false, acquiring: false });
 
