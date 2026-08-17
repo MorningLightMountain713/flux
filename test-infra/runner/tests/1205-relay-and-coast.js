@@ -91,20 +91,21 @@ describe('relay renewal and the partitioned app island', function () {
       configOverrides: {
         fluxapps: {
           quorumGrantMastership: true,
-          quorumGrantHeldTtlMs: 45000,
+          // The term must outlive a full FAILED pass cycle: direct round,
+          // relay carriers and the witness poll each burn a whole ask
+          // timeout serially under a partition (~35s at the 5s default), and
+          // a term shorter than two such cycles lets one bad round demote a
+          // master the next round would have renewed. Squeezing the ask
+          // timeout instead starves healthy-load tails into the same
+          // spurious demotions - so the term carries the compression.
+          quorumGrantHeldTtlMs: 90000,
           quorumGrantRenewIntervalMs: 10000,
           quorumGrantLockDelayMs: 15000,
           quorumGrantDemotionSlackMs: 5000,
-          quorumGrantMaxTtlMs: 60000,
-          quorumGrantDrainMs: 45000,
+          quorumGrantMaxTtlMs: 120000,
+          quorumGrantDrainMs: 90000,
           quorumGrantMinHolderAgeMs: 0,
           quorumGrantPursuitIntervalMs: 10000,
-          // Compressed like every other cadence: a failed pass burns ask
-          // timeouts serially (direct round, relay carriers, witness poll),
-          // and at the production 5s default one bad round outlives the
-          // compressed 45s term - the standing alarm then demotes a master
-          // that one more round would have renewed.
-          quorumGrantAskTimeoutMs: 2000,
           quorumGrantUnknownGraceMs: 30000,
           // The plane governs only once the network's enforced floor guarantees
           // every node carries it. The harness pins the requirement to the floor
