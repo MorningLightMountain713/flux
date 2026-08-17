@@ -3,12 +3,12 @@ import { describe, it, before, after } from 'mocha';
 import { expect } from 'chai';
 import { createTestEnv } from '../framework/test-env.js';
 import { ALL_ZMQ_TOPICS } from '../framework/fluxd-conf.js';
-import { bootAndPeer, installOnNodes } from '../framework/reconciler-suite.js';
+import { bootAndPeer, installOnNodes, seedSyncScopedData } from '../framework/reconciler-suite.js';
 import { buildSeedableSyncthingApp } from '../framework/seed-helper.js';
 import { pushImage } from '../framework/registry-helper.js';
 import { setSynced } from '../framework/syncthing-control.js';
 import { pauseHostContainer, unpauseHostContainer } from '../framework/container.js';
-import { waitFor, waitForAppInstalled } from '../framework/wait.js';
+import { waitFor, waitForAppInstalled, waitForReconcileActuated } from '../framework/wait.js';
 import { getState } from '../framework/daemon-control.js';
 import { authenticate, signBtcMessage } from '../auth.js';
 import { appOwnerKey } from '../framework/keys.js';
@@ -108,14 +108,20 @@ describe('the committee heals its dark seat, and the owner re-deals the walk', f
     name = `e2eheal${Date.now()}`;
     await pushImage(name, 'v1');
     const app = await buildSeedableSyncthingApp({ name, mode: 'g' });
+    const installAfters = HOLDERS.map((i) => env.clients[i].getLastEventId());
     await installOnNodes(env, app, HOLDERS);
     await Promise.all(HOLDERS.map((i) => waitForAppInstalled(env.clients[i], name, 240000)));
-    // Pin the app's folder fully synced on every node's stub view. The stub
-    // never moves bytes, and a receive-only standby showing zero ingested
-    // bytes beside a peer that holds data walks the stall ladder to LOCAL
-    // APP REMOVAL (broadcastRemoval: true), which erases the standby's
-    // location row fleet-wide - and with it the witness set, the relay
-    // carriers and the spawner's instance count.
+    // The folder must read fully synced on every holder or the stall ladder
+    // eventually removes the app from the standbys (broadcastRemoval erases
+    // their location rows fleet-wide - the witness set, the relay carriers
+    // and the spawner's count all ride those rows). And a synced index must
+    // be backed by real bytes on disk - the promote gate refuses a
+    // claimed-bytes index over an empty volume - written only AFTER each
+    // holder's first-run reset, which clears anything seeded earlier.
+    await Promise.all(HOLDERS.map(async (i, k) => {
+      await waitForReconcileActuated(env.clients[i], `${name}_${name}`, 'dataCleared', 60000, { afterId: installAfters[k] });
+      await seedSyncScopedData(env, name, i);
+    }));
     await setSynced({ folder: `flux${name}_${name}` });
 
     outpoints = {};
