@@ -242,6 +242,16 @@ async function askGrantor(member, type, ask, signature) {
     );
     return response?.data?.data ?? null;
   } catch (error) {
+    // The grantor names why it refused and the reason dies in this catch —
+    // outside the harness nothing observes it (publish() is a no-op), and a
+    // refused ask and an unreachable grantor both come back null on purpose:
+    // the quorum arithmetic treats silence as silence either way.
+    fluxEventBus.publish('quorumGrant:askRefused', {
+      type,
+      member: outpointOf(member),
+      status: error.response?.status ?? null,
+      reason: error.response?.data?.data?.message ?? error.message ?? null,
+    });
     return null;
   }
 }
