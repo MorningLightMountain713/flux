@@ -174,7 +174,9 @@ async function readAsk(req, type) {
     return bad(403, 'candidate is not a listed node');
   }
   if (extractIp(askerNode.ip) !== callerHost(req)) {
-    return bad(403, 'ask does not originate from the candidate');
+    // Both sides named, or the refusal cannot be diagnosed from the caller's
+    // side: it only ever learns this message.
+    return bad(403, `ask does not originate from the candidate (listed ${extractIp(askerNode.ip)}, caller ${callerHost(req)})`);
   }
 
   const ask = {
