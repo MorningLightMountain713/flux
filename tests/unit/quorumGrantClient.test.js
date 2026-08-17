@@ -269,6 +269,33 @@ describe('quorumGrant grantClient', () => {
     });
   }
 
+  describe('the rest check', () => {
+    it('a live incumbent anywhere keeps the rest', async () => {
+      seedRecord({
+        promisedEpoch: 2,
+        accepted: {
+          epoch: 2, grantee: 'other:0', mode: 'held', expiresAt: Date.now() + TTL, released: false,
+        },
+      });
+      expect(await grantClient.termLapsed(KEY)).to.equal(false);
+    });
+
+    it('a provably lapsed term opens the pursuit', async () => {
+      seedRecord({
+        promisedEpoch: 2,
+        accepted: {
+          epoch: 2, grantee: 'other:0', mode: 'held', expiresAt: Date.now() - TTL, released: false,
+        },
+      });
+      expect(await grantClient.termLapsed(KEY)).to.equal(true);
+    });
+
+    it('total silence keeps the rest — pursuing on silence is what broke the coast vouch', async () => {
+      committeeHosts.forEach((host) => unreachable.add(host));
+      expect(await grantClient.termLapsed(KEY)).to.equal(false);
+    });
+  });
+
   describe('acquisition', () => {
     it('acquires a held grant: probe, prepare, accept, quorum recorded on the registers', async () => {
       const outcome = await grantClient.acquire(KEY, holderOptions());
@@ -402,17 +429,15 @@ describe('quorumGrant grantClient', () => {
       expect(holder.safeUntil()).to.equal(clockNow + TTL);
     });
 
-    it('republishes the record at half the grant duration, not every pass', async () => {
+    it('publishes the record on acquisition only — no timer ever republishes it', async () => {
       const holder = await acquireHolder();
       expect(masterleasePublisher.publishMasterlease.callCount).to.equal(1);
 
-      clockNow += 20_000; // under ttl/2 since the acquisition publish
+      clockNow += 20_000;
+      await holder.renewOnce();
+      clockNow += 60_000; // far past what the old half-term cadence would republish at
       await holder.renewOnce();
       expect(masterleasePublisher.publishMasterlease.callCount).to.equal(1);
-
-      clockNow += 20_000; // now past ttl/2 (40s > 30s)
-      await holder.renewOnce();
-      expect(masterleasePublisher.publishMasterlease.callCount).to.equal(2);
     });
 
     it('renews THROUGH a standby when the committee is unreachable directly', async () => {
@@ -453,6 +478,25 @@ describe('quorumGrant grantClient', () => {
 
       expect(holder.state).to.equal('lost');
       expect(demotedReason).to.contain('can reach quorum');
+    });
+
+    it('an empty witness set never coasts — no resolvable witnesses is doubt, and doubt demotes', async () => {
+      let demotedReason = null;
+      const outcome = await grantClient.acquire(KEY, holderOptions({
+        onDemoted: (reason) => { demotedReason = reason; },
+      }));
+      const { holder } = outcome;
+      committeeHosts.forEach((host) => unreachable.add(host));
+      relayDelivers = false;
+      // every standby's location row is gone: nobody resolves as a witness,
+      // so nobody can vouch that no takeover is possible
+      registryManager.appLocation.resolves([{ ip: `${SELF_HOST}:16127` }]);
+
+      clockNow += TTL + 30_000;
+      await holder.renewOnce();
+
+      expect(holder.state).to.equal('lost');
+      expect(demotedReason).to.contain('witness');
     });
 
     it('a higher epoch in any reply is a deposition, not a jeopardy', async () => {

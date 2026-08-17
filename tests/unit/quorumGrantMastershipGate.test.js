@@ -54,6 +54,7 @@ describe('quorumGrant mastershipGrantGate', () => {
     sinon.stub(grantClient, 'holderFor').returns(null);
     sinon.stub(grantClient, 'isAcquiring').returns(false);
     sinon.stub(grantClient, 'acquire').resolves({ granted: false, reason: 'test' });
+    sinon.stub(grantClient, 'termLapsed').resolves(false);
     sinon.stub(reconcilerQueue, 'enqueueComponent');
   });
 
@@ -207,13 +208,25 @@ describe('quorumGrant mastershipGrantGate', () => {
       expect(reconcilerQueue.enqueueComponent.calledOnceWith(IDENTIFIER)).to.equal(true);
     });
 
-    it('a settled standby RESTS — no pursuit while the record names another live held master', async () => {
+    it('a settled standby RESTS — the record names another and the referees still shield it', async () => {
       messageStore.getMasterleaseRecord.resolves({
         data: { grantee: 'other:0', mode: 'held' },
       });
+      grantClient.termLapsed.resolves(false);
       await mastershipGrantGate.grantVerdict(IDENTIFIER, activeStandbyComp());
       await new Promise((resolve) => { setImmediate(resolve); });
+      expect(grantClient.termLapsed.calledOnce).to.equal(true);
       expect(grantClient.acquire.called).to.equal(false);
+    });
+
+    it('a provably lapsed term opens the pursuit — the record alone never decides', async () => {
+      messageStore.getMasterleaseRecord.resolves({
+        data: { grantee: 'other:0', mode: 'held' },
+      });
+      grantClient.termLapsed.resolves(true);
+      await mastershipGrantGate.grantVerdict(IDENTIFIER, activeStandbyComp());
+      await new Promise((resolve) => { setImmediate(resolve); });
+      expect(grantClient.acquire.calledOnce).to.equal(true);
     });
 
     it('a record naming THIS node never suppresses pursuit — the restart re-acquire stays immediate', async () => {
@@ -222,6 +235,7 @@ describe('quorumGrant mastershipGrantGate', () => {
       });
       await mastershipGrantGate.grantVerdict(IDENTIFIER, activeStandbyComp());
       await new Promise((resolve) => { setImmediate(resolve); });
+      expect(grantClient.termLapsed.called).to.equal(false);
       expect(grantClient.acquire.calledOnce).to.equal(true);
     });
 

@@ -90,12 +90,16 @@ describe('quorumGrant masterlease', () => {
       expect(condition).to.contain('"$ifNull":["$data.generation",0]');
     });
 
-    it('a held record expires with its term; a founding record never does', async () => {
+    it('no record carries an expiry — durable until superseded, held and founding alike', async () => {
       await messageStore.storeAppStateEvent('masterlease', {
         message: baseMessage(), envelope: null, announcer: null,
       });
       const heldSet = updates[0].update[0].$set;
-      expect(heldSet.expireAt).to.be.an('object'); // conditional wrapper around the date
+      // explicitly null, never a date: the row says WHO holds the term, and
+      // a null also neutralizes the TTL index on rows written before records
+      // became durable. The ordinal wrapper conditionalizes every field, so
+      // the assertion reads the winning branch.
+      expect(heldSet.expireAt.$cond[1]).to.equal(null);
 
       await messageStore.storeAppStateEvent('masterlease', {
         message: baseMessage({ role: 'founder', mode: 'oneshot', ttlMs: undefined }),
@@ -103,7 +107,7 @@ describe('quorumGrant masterlease', () => {
         announcer: null,
       });
       const oneshotSet = updates[1].update[0].$set;
-      expect(oneshotSet.expireAt).to.equal(undefined);
+      expect(oneshotSet.expireAt.$cond[1]).to.equal(null);
       expect(updates[1].filter.dedupKey).to.equal('masterlease:myapp/founder');
     });
 
