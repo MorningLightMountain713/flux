@@ -247,8 +247,22 @@ describe('quorumGrant grantRegisterCore', () => {
       expect(record.accepted.expiresAt).to.equal(T0 + 20_000 + TTL);
     });
 
-    it('a lapsed term renews nothing — the full acquisition path is the way back', () => {
+    it('the recorded grantee revives its own lapsed, unsuperseded term', () => {
+      // How a restarted referee's cell rejoins the renewal quorum: its record
+      // lapsed while the process was down, though the term lived on the other
+      // cells. Safe by intersection - any successor needed a quorum that did
+      // not include this sleeping cell.
+      const at = T0 + TTL + 1;
       const { reply, record } = onRenew(heldRecord(), {
+        epoch: 5, grantee: 'aaaa:0', ttlMs: TTL,
+      }, at);
+      expect(reply.ok).to.equal(true);
+      expect(record.accepted.expiresAt).to.equal(at + TTL);
+    });
+
+    it('a lapsed term with a takeover in flight renews nothing - the revival yields', () => {
+      const contested = heldRecord({ promisedEpoch: 6 });
+      const { reply, record } = onRenew(contested, {
         epoch: 5, grantee: 'aaaa:0', ttlMs: TTL,
       }, T0 + TTL + 1);
       expect(reply.code).to.equal('lapsed');
