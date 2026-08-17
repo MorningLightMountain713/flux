@@ -15,6 +15,14 @@ const rosterOverlay = require('./rosterOverlay');
 // (adopt, back off, retry higher) is always computed FROM that knowledge.
 // Silence teaches nothing and absence authorizes nothing.
 //
+// The epoch is this plane's FENCING TOKEN in the classical sense (Chubby's
+// sequencer, Kleppmann's token): monotonic, carried with every grant, and
+// only as strong as the resources that CHECK it. The register guarantees
+// exactly one HOLDER per term; exactly one EFFECT is each consumer's half
+// of the contract, enforced where its writes land — no coordination
+// primitive can stop a stale process from running, only a resource can
+// refuse its writes.
+//
 // HELD terms add the machinery epochs alone do not give (§7): expiry, the
 // incumbent shield while a grant is live, lock-delay after an involuntary
 // lapse — binding CHALLENGERS only, never the recorded grantee, so the

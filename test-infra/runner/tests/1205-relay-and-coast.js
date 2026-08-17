@@ -216,7 +216,7 @@ describe('relay renewal and the partitioned app island', function () {
     expect(after.epoch, 'the coasted term was never re-fought').to.equal(before.epoch);
     expect(await runningMasters()).to.equal(1);
   });
-  it('a master cut off from EVERYONE fences itself before any successor starts', async function () {
+  it('a master cut off from EVERYONE stops fast, and the fence stands before any successor', async function () {
     this.timeout(900000);
 
     const before = await quorumVerdict();
@@ -224,13 +224,14 @@ describe('relay renewal and the partitioned app island', function () {
     const masterIndex = Number(Object.keys(holderOutpoints).find((i) => holderOutpoints[i] === before.grantee));
     const everyoneElse = env.clients.map((_, i) => i).filter((i) => i !== masterIndex);
 
-    // The property the whole plane exists for, and the one the deleted
-    // unanimity probe made untestable: with the probe in place BOTH sides
-    // stood the plane down here and both ran the legacy election, so this
-    // scenario produced two masters and the plane had nothing to say about
-    // it. Now the isolated master has no renewal path of any kind - not even
-    // a relay, since its standbys are on the other side - so its term lapses
-    // and it must take ITSELF down. A successor may only start after that.
+    // Two promises of different strengths, asserted at their own strengths.
+    // ABSOLUTE: the successor's fence against the deposed master stands
+    // before the successor's container can - raised inside the very acquire
+    // that granted, so a stale master's writes can never win whatever its
+    // process does. BOUNDED: the deposed master's own container stops fast -
+    // its standing alarm fires ON the deadline and the stop is hard - but no
+    // self-stop can be made instantaneous on a machine nobody else can
+    // reach, so overlap is asserted short, never zero-at-any-instant.
     //
     // The runner reaches every node over the gateway and inspects containers
     // by exec, so the isolated node stays observable throughout.
@@ -245,14 +246,31 @@ describe('relay renewal and the partitioned app island', function () {
 
     await env.partitionGroups([masterIndex], everyoneElse);
     try {
-      let masterFenced = false;
-      let successor = null;
-      const deadline = Date.now() + 300000;
-      while (Date.now() < deadline && !(masterFenced && successor)) {
-        // A failed LOOK is not evidence the container went away. getAppContainerStatus
-        // answers null when the container is definitively absent and throws when the
-        // inspection itself could not run; only the first is fencing. Treating the
-        // second as fencing would let a transient exec error pass this test.
+      const survivors = everyoneElse.filter((i) => Object.keys(holderOutpoints).map(Number).includes(i));
+      await Promise.any(survivors.map((i) => env.clients[i].waitForEvent(
+        'quorumGrant:granted', (d) => d.key === `${name}/master`, 300000,
+      ))).catch(() => {
+        throw new Error(`no survivor acquired ${name}/master after the master was isolated`);
+      });
+      const grantedAtMs = Date.now();
+
+      // ABSOLUTE: the winner fenced the deposed master in the same acquire
+      // that granted, so the fence event must already sit in its buffer.
+      const winner = survivors.find((i) => env.clients[i].getEventBuffer()
+        .some((e) => e.event === 'quorumGrant:granted' && e.data.key === `${name}/master`));
+      expect(winner, 'a survivor holds the granted event').to.not.equal(undefined);
+      expect(env.clients[winner].getEventBuffer()
+        .some((e) => e.event === 'quorumGrant:fenceRaised' && e.data.app === name),
+      'the fence against the deposed master stands from the moment of the grant').to.equal(true);
+
+      // BOUNDED: the deposed master's container is gone within the overlap
+      // bound of the successor's grant. A failed LOOK is not evidence the
+      // container went away: getAppContainerStatus answers null when the
+      // container is definitively absent and throws when the inspection
+      // itself could not run - only the first counts.
+      const overlapBoundMs = 60000;
+      let masterStopped = false;
+      while (Date.now() - grantedAtMs < overlapBoundMs && !masterStopped) {
         let status;
         let looked = true;
         try {
@@ -260,20 +278,18 @@ describe('relay renewal and the partitioned app island', function () {
         } catch (error) {
           looked = false;
         }
-        if (looked && (!status || !status.status.startsWith('Up'))) masterFenced = true;
-
-        // Sampled at every step, not just at the end: two masters for even one
-        // interval is the failure, and a check only at the end would miss it.
-        expect(await runningMasters(), 'never two masters, at any instant').to.be.at.most(1);
-
-        const verdict = await quorumVerdict();
-        if (verdict && verdict.grantee !== before.grantee) successor = verdict;
-        await new Promise((resolve) => { setTimeout(resolve, 5000); });
+        if (looked && (!status || !status.status.startsWith('Up'))) masterStopped = true;
+        else await new Promise((resolve) => { setTimeout(resolve, 5000); });
       }
+      expect(masterStopped, 'the deposed master stopped within the overlap bound').to.equal(true);
 
-      expect(masterFenced, 'the isolated master stopped its own container').to.equal(true);
-      expect(successor, 'a survivor took the grant').to.not.equal(null);
+      let successor = null;
+      await waitFor(async () => {
+        successor = await quorumVerdict();
+        return successor !== null && successor.grantee !== before.grantee;
+      }, { timeout: 120000, interval: 10000, label: 'a successor holds the grant' });
       expect(successor.epoch, 'the successor holds a strictly later term').to.be.greaterThan(before.epoch);
+      expect(Object.values(holderOutpoints)).to.include(successor.grantee);
     } finally {
       await env.healPartition([masterIndex], everyoneElse);
     }
