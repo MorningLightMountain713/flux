@@ -121,6 +121,16 @@ export async function bootAndPeer(env, { minOutbound = 4, minInbound = 2, pricin
   if (pricing) {
     await bootstrapPricing(pricing === true ? {} : pricing);
   }
+  // "Chain is up" is not "node is up": boot recovery is still deciding which
+  // installed apps this node keeps, and an install landing while it deliberates
+  // gets judged by it - the app's own location row does not exist yet, which
+  // reads as "reassigned elsewhere" and removes the app underneath the suite.
+  // boot:settled is the node's own end-of-boot signal (published even when
+  // recovery errors), and waitForEvent replays it from the buffer, so a node
+  // that settled before this line is a hit, not a hang.
+  for (const client of fluxClients) {
+    await client.waitForEvent('boot:settled', () => true, 120000);
+  }
 }
 
 // Seed a pre-built app (buildSeedableApp / buildSeedableSyncthingApp) into every
