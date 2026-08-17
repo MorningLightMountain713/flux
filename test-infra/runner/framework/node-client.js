@@ -259,6 +259,7 @@ export function nodeClient(nodeNum) {
         'quorumGrant:founderAnswer',
         'quorumGrant:granted',
         'quorumGrant:demoted',
+        'quorumGrant:fenceRaised',
         'quorumGrant:coasting',
         'quorumGrant:healed',
         'quorumGrant:restCheck',

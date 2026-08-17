@@ -555,16 +555,19 @@ class Holder {
 
   #cancel;
 
-  // monotonic ms the demotion deadline was armed at, null while safety holds
-  // or a coast stands
-  #deadlineArmedAtMs = null;
+  // monotonic ms the standing demotion alarm fires at, null while a coast
+  // stands. Armed from every successful renewal - the holder always KNOWS
+  // its deadline in advance (last quorum of acks + ttl + slack) - so the
+  // stop lands ON the deadline even when the pass cadence collapses, which
+  // is exactly what a total isolation does to passes. A demotion noticed a
+  // pass late is a second master: slack-below-lock-delay only holds if the
+  // stop happens on time.
+  #deadlineTargetMs = null;
 
-  // the timer that fires the demotion AT the deadline. The renew loop also
-  // checks the deadline, but its pass cadence collapses exactly when it
-  // matters - under total isolation every ask burns its full timeout - and a
-  // demotion noticed a pass late is a second master: slack-below-lock-delay
-  // only holds if the stop happens ON the deadline.
   #demotionTimer = null;
+
+  // the last coast-refusing reason, for the alarm's demotion message
+  #lastDoubt = null;
 
   constructor(options) {
     this.#key = options.key;
@@ -859,19 +862,15 @@ class Holder {
     if (quorumRenewed) {
       this.#state = 'held';
       this.#coasting = false;
-      this.#disarmDemotion();
+      this.#armDemotion(safeUntil + demotionSlackMs());
       fluxEventBus.publish('quorumGrant:assess', { ...seen, outcome: 'held' });
       return;
     }
 
-    // No quorum this pass. Safe while the median says so; past it, the
-    // witness rule decides.
-    if (safeUntil !== null && now <= safeUntil) {
-      this.#state = 'jeopardy';
-      fluxEventBus.publish('quorumGrant:assess', { ...seen, outcome: 'jeopardy' });
-      return;
-    }
-
+    // The witness rule decides FROM THE FIRST failed renewal, never only
+    // past safety: a legitimate coast must already stand when the standing
+    // alarm fires, because the alarm no longer waits for a pass to notice
+    // the deadline.
     const standbys = await standbysFor(this.#key, this.#identity.outpoint);
     // Zero resolvable witnesses is maximal doubt, and doubt never coasts: a
     // global app always has other instances by spec floor, so an empty set
@@ -893,42 +892,53 @@ class Holder {
       return;
     }
 
-    // The deadline is ANCHORED at the moment safety first ran out on a pass
-    // the witnesses would not cover, and holds until a renewal or a coast
-    // clears it. Anchoring matters when safeUntil is null - a collapsed ack
-    // set, every ack deleted by lapsed refusals - where a deadline recomputed
-    // from the current pass slides forward forever and the demotion never
-    // fires.
-    if (this.#deadlineArmedAtMs === null) {
-      this.#deadlineArmedAtMs = safeUntil ?? now;
-      const reason = verdict.reason ?? 'renewal quorum lost past the deadline';
-      const dueInMs = Math.max(0, this.#deadlineArmedAtMs + demotionSlackMs() - now);
-      this.#demotionTimer = this.#schedule(() => {
-        this.#demotionTimer = null;
-        if (this.#stopped || this.#deadlineArmedAtMs === null) return;
-        this.#demote(reason);
-      }, dueInMs);
+    this.#lastDoubt = verdict.reason ?? 'renewal quorum lost past the deadline';
+    // The alarm target follows safeUntil while it is known - partial rounds
+    // legitimately move it - and stays ANCHORED where it last stood when
+    // safeUntil is null (a collapsed ack set, every ack deleted by lapsed
+    // refusals): a deadline recomputed from the current pass slides forward
+    // forever and the demotion never fires.
+    if (safeUntil !== null) {
+      this.#armDemotion(safeUntil + demotionSlackMs());
+    } else if (this.#deadlineTargetMs === null) {
+      this.#armDemotion(now + demotionSlackMs());
     }
-    const demotionAt = this.#deadlineArmedAtMs + demotionSlackMs();
-    if (now > demotionAt) {
+    if (now > this.#deadlineTargetMs) {
       fluxEventBus.publish('quorumGrant:assess', {
         ...seen, outcome: 'demote', reason: verdict.reason ?? null,
       });
-      this.#demote(verdict.reason ?? 'renewal quorum lost past the deadline');
+      this.#demote(this.#lastDoubt);
     } else {
       this.#state = 'jeopardy';
       this.#coasting = false;
       fluxEventBus.publish('quorumGrant:assess', {
         ...seen,
         outcome: 'awaitingDeadline',
-        demotionInMs: Math.round(demotionAt - now),
+        demotionInMs: Math.round(this.#deadlineTargetMs - now),
         reason: verdict.reason ?? null,
       });
     }
   }
 
+  #armDemotion(targetMs) {
+    if (this.#deadlineTargetMs === targetMs && this.#demotionTimer !== null) return;
+    if (this.#demotionTimer !== null) this.#cancel(this.#demotionTimer);
+    this.#deadlineTargetMs = targetMs;
+    this.#demotionTimer = this.#schedule(() => {
+      this.#demotionTimer = null;
+      if (this.#stopped || this.#coasting || this.#deadlineTargetMs === null) return;
+      if (this.#clock() < this.#deadlineTargetMs) {
+        // a renewal moved the deadline after this timer was set - stand the
+        // alarm at the newer target
+        this.#armDemotion(this.#deadlineTargetMs);
+        return;
+      }
+      this.#demote(this.#lastDoubt ?? 'renewal quorum lost past the deadline');
+    }, Math.max(0, targetMs - this.#clock()));
+  }
+
   #disarmDemotion() {
-    this.#deadlineArmedAtMs = null;
+    this.#deadlineTargetMs = null;
     if (this.#demotionTimer !== null) {
       this.#cancel(this.#demotionTimer);
       this.#demotionTimer = null;

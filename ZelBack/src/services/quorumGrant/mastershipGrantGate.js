@@ -2,10 +2,12 @@
 
 const config = require('config');
 const serviceHelper = require('../serviceHelper');
+const dockerService = require('../dockerService');
 const generalService = require('../generalService');
 const networkStateService = require('../networkStateService');
 const messageStore = require('../appMessaging/messageStore');
 const reconcilerQueue = require('../appMonitoring/reconcilerQueue');
+const fluxEventBus = require('../utils/fluxEventBus');
 const { extractIp, extractPort } = require('../utils/socketAddressUtils');
 const { nowMs } = require('../utils/monotonicClock');
 const grantClient = require('./grantClient');
@@ -151,6 +153,15 @@ async function acquireUnlessSettled(identifier, appName, key) {
     ttlMs: heldTtlMs(),
     onDemoted: (reason) => {
       log.warn(`mastershipGrantGate - ${identifier} demoted: ${reason}`);
+      // A deposed master stops HARD and NOW, straight at docker: it has lost
+      // the right to write, and every second it runs politely is a second
+      // beside a legitimately started successor. The reconciler queue then
+      // converges the durable state, but its pass latency plus a graceful
+      // drain measured over a minute on the fleet - the demotion slack only
+      // undercuts the grantors' lock-delay if the stop is immediate.
+      dockerService.appDockerStop(identifier, 2).catch((error) => {
+        log.warn(`mastershipGrantGate - hard stop of ${identifier} failed: ${error.message}`);
+      });
       reconcilerQueue.enqueueComponent(identifier);
     },
   }).then((outcome) => {
@@ -326,6 +337,9 @@ function raiseFence(appName, deposedOutpoint) {
     outpoint: deposedOutpoint, host: extractIp(node.ip), address: node.ip, since: nowMs(),
   });
   log.warn(`mastershipGrantGate - fencing ${extractIp(node.ip)} out of ${appName}'s folder until it attests demotion`);
+  fluxEventBus.publish('quorumGrant:fenceRaised', {
+    app: appName, deposed: deposedOutpoint, host: extractIp(node.ip),
+  });
 }
 
 function liftFence(appName, reason) {
