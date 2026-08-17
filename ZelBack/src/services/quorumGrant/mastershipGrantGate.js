@@ -131,7 +131,15 @@ async function acquireUnlessSettled(identifier, appName, key) {
     const data = record?.data;
     if (data?.grantee && data.mode === 'held') {
       const self = await generalService.obtainNodeCollateralInformation();
-      if (data.grantee !== `${self.txhash}:${self.txindex}`) return;
+      if (data.grantee !== `${self.txhash}:${self.txindex}`) {
+        // The record is durable and names the last known master; whether it
+        // still stands is asked of the referees, never inferred from the
+        // row's age. Only a positive lapse answer opens a pursuit — a live
+        // incumbent shield anywhere, or plain silence, keeps this standby
+        // resting, which keeps an islanded app's witness vouch clean.
+        const lapsed = await grantClient.termLapsed(key);
+        if (!lapsed) return;
+      }
     }
   } catch (error) {
     // an unreadable record must not stop a pursuit — the grantors decide

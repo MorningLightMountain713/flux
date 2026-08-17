@@ -830,9 +830,10 @@ async function handleMasterleaseEvent({ message, envelope, announcer }) {
     const dedupKey = `masterlease:${message.appName}/${message.role}`;
     // One row per app/role — the record names the MASTER, not a node, so the
     // query carries no ip: a successor's record replaces the deposed
-    // master's rather than accumulating beside it. Held records ride the
-    // grant duration and vanish with an abandoned term; a founding record
-    // carries no expiry at all — the register it mirrors is write-once.
+    // master's rather than accumulating beside it. Durable until superseded,
+    // held and founding alike: the record says WHO holds the term, never
+    // whether they still stand — liveness is asked of the referees, so the
+    // row carries no expiry and nothing depends on a sweeper reaping it.
     // Generation orders ahead of epoch: a re-rolled world's first grant
     // replaces the retired world's record however high its epoch climbed.
     await database.collection(globalAppStateEvents).updateOne(
@@ -846,9 +847,10 @@ async function handleMasterleaseEvent({ message, envelope, announcer }) {
         type: APP_STATE_EVENT_TYPES.MASTERLEASE,
         dedupKey,
         broadcastedAt: new Date(message.broadcastedAt),
-        ...(message.mode === 'held'
-          ? { expireAt: new Date(message.broadcastedAt + message.ttlMs) }
-          : {}),
+        // Explicitly null, not merely absent: a row written before records
+        // became durable carries a Date here, and the collection's TTL index
+        // would go on reaping it. The TTL monitor skips non-date values.
+        expireAt: null,
         envelope: envelope ?? null,
         data: message,
       }, { alwaysSetFields: { receivedAt: new Date() } }),
