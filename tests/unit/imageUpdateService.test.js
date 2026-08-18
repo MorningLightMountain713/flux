@@ -388,6 +388,25 @@ describe('imageUpdateService tests', () => {
       expect(result.components).to.have.lengthOf(0);
     });
 
+    it('inspects by the bare identifier - dockerContainerInspect prefixes internally', async () => {
+      // A pre-prefixed name makes the inspect look up fluxflux<identifier>,
+      // which no container has ever been called: every component then skips as
+      // digest-unreadable and auto-update is silently dead for the whole app.
+      const deployment = mockDeployment('ComposedApp', [
+        { name: 'web', identifier: 'web_ComposedApp', image: 'nginx:latest' },
+      ]);
+      const digest = 'sha256:abc123def456abc123def456abc123def456abc123def456abc123def456abcd';
+      dockerServiceStub.dockerContainerInspect.resolves({ Image: 'sha256:webImage' });
+      dockerServiceStub.dockerListImages.resolves([
+        { Id: 'sha256:webImage', RepoDigests: [`nginx@${digest}`] },
+      ]);
+      mockDigestToReturn = digest;
+
+      await imageUpdateService.checkAppForUpdates(deployment);
+
+      sinon.assert.calledWith(dockerServiceStub.dockerContainerInspect, 'web_ComposedApp');
+    });
+
     it('should check all components for v4+ compose app', async () => {
       const deployment = mockDeployment('ComposedApp', [
         { name: 'web', identifier: 'web_ComposedApp', image: 'nginx:latest' },

@@ -206,10 +206,11 @@ async function checkAppForUpdates(deployment) {
         continue;
       }
 
-      const containerName = dockerService.getAppIdentifier(deployComp.identifier);
-
+      // dockerContainerInspect takes the bare identifier and prefixes it
+      // itself - a pre-prefixed name looks up fluxflux<identifier>, which no
+      // container has ever been called.
       // eslint-disable-next-line no-await-in-loop
-      const localDigest = await getLocalImageDigest(containerName);
+      const localDigest = await getLocalImageDigest(deployComp.identifier);
 
       if (!localDigest) {
         log.debug(`Could not get local digest for ${deployment.appName}/${name}, skipping component`);
