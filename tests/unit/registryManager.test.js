@@ -205,6 +205,38 @@ describe('registryManager tests', () => {
     });
   });
 
+  describe('installingCountsByApp tests', () => {
+    beforeEach(async () => {
+      const collection = config.database.appsglobal.collections.appsInstallingLocations;
+      try {
+        await database.collection(collection).drop();
+      } catch (err) {
+        // Collection doesn't exist
+      }
+    });
+
+    it('groups live claims by lowercased app name', async () => {
+      const collection = config.database.appsglobal.collections.appsInstallingLocations;
+      const row = (name, ip) => ({
+        name, ip, broadcastedAt: new Date(), expireAt: new Date(Date.now() + 300000),
+      });
+      await dbHelper.insertOneToDatabase(database, collection, row('ClaimedApp', '192.168.1.2:16127'));
+      await dbHelper.insertOneToDatabase(database, collection, row('claimedapp', '192.168.1.3:16127'));
+      await dbHelper.insertOneToDatabase(database, collection, row('OtherApp', '192.168.1.4:16127'));
+
+      const counts = await registryManager.installingCountsByApp();
+
+      expect(counts.get('claimedapp')).to.equal(2);
+      expect(counts.get('otherapp')).to.equal(1);
+    });
+
+    it('returns an empty map when nothing is installing', async () => {
+      const counts = await registryManager.installingCountsByApp();
+
+      expect(counts.size).to.equal(0);
+    });
+  });
+
   describe('storeAppInstallingMessage tests', () => {
     const validMessage = {
       type: 'fluxappinstalling',

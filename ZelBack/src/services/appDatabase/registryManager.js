@@ -209,6 +209,21 @@ async function appInstallingLocation(appname) {
 }
 
 /**
+ * Live installing claims grouped by app, one read for the spawner's selection
+ * sieve. The per-app appInstallingLocation read at claim time stays the authority;
+ * this only spares the draw candidates it would have turned away.
+ * @returns {Promise<Map<string, number>>} lowercased app name -> claim count
+ */
+async function installingCountsByApp() {
+  const dbopen = dbHelper.databaseConnection();
+  const database = dbopen.db(config.database.appsglobal.database);
+  const rows = await dbHelper.aggregateInDatabase(database, globalAppsInstallingLocations, [
+    { $group: { _id: { $toLower: '$name' }, count: { $sum: 1 } } },
+  ]);
+  return new Map(rows.map((row) => [row._id, row.count]));
+}
+
+/**
  * Get app installing errors locations for a specific app or all apps
  * @param {string} appname - Application name (optional)
  * @returns {Promise<Array>} Array of app installing error locations
@@ -1332,6 +1347,7 @@ module.exports = {
   getAppHashes,
   appLocation,
   appInstallingLocation,
+  installingCountsByApp,
   appInstallingErrorsLocation,
   storeAppInstallingMessage,
   removeAppInstallingMessage,
