@@ -170,29 +170,32 @@ describe('a grantor restarts, and its promises outlive the process', function ()
     expect(afterCell.promisedEpoch, 'the journaled promise survived').to.equal(beforeCell.promisedEpoch);
 
     // Through the drain and past it, the term itself never wobbles: eight
-    // referees renew it, no demotion fires on the master, and no epoch
-    // bump — which would mean a re-fight — ever appears. Hold through the
-    // full drain plus two terms.
+    // referees renew it, no demotion fires on the master, and the grantee
+    // never changes. The repair chore may refresh the incumbent's own term
+    // to a higher epoch (clearing a founding-scramble residue) — same
+    // grantee, higher epoch is maintenance; only a DIFFERENT grantee is a
+    // re-fight. Hold through the full drain plus two terms.
     const masterIndex = Number(Object.keys(holderOutpoints).find((i) => holderOutpoints[i] === first.grantee));
     const deadline = Date.now() + 145000;
     while (Date.now() < deadline) {
       const verdict = await quorumVerdict();
       expect(verdict, 'the quorum view holds throughout').to.not.equal(null);
       expect(verdict.grantee, 'the master never changed').to.equal(first.grantee);
-      expect(verdict.epoch, 'the term was renewed, never re-fought').to.equal(first.epoch);
+      expect(verdict.epoch, 'the epoch never regresses').to.be.at.least(first.epoch);
       await new Promise((resolve) => { setTimeout(resolve, 15000); });
     }
     await assertNoEvent(env.clients[masterIndex], 'quorumGrant:demoted',
       (d) => d.key === `${name}/master`, 5000);
 
     // The drained referee rejoins the quorum: after the drain window its
-    // cell's expiry advances again — proof it is granting renewals, at the
-    // same epoch it journaled before the restart.
+    // cell's expiry advances again — proof it is granting renewals, at (or,
+    // after a repair refresh, above) the epoch it journaled before the
+    // restart.
     const rejoinBaseline = (await readCell(refereeIndex))?.accepted?.expiresAt;
     await waitFor(async () => {
       const cell = await readCell(refereeIndex);
       return cell?.accepted?.expiresAt && cell.accepted.expiresAt !== rejoinBaseline
-        && cell.accepted.epoch === first.epoch;
+        && cell.accepted.epoch >= first.epoch;
     }, { timeout: 180000, interval: 10000, label: 'the drained referee grants renewals again' });
   });
   it('the MASTER survives its own FluxOS restart without a second writer', async function () {
