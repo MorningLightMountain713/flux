@@ -336,6 +336,35 @@ describe('appOperations tests', () => {
       expect(operationRegistry.isHeld('myapp')).to.be.false;
     });
 
+    it('routes the identity stop through flux-shutdownd before teardown (reason: redeploy)', async () => {
+      // eslint-disable-next-line global-require
+      const fluxShutdowndClient = require('../../ZelBack/src/services/utils/fluxShutdowndClient');
+      // eslint-disable-next-line global-require
+      const shutdownPlan = require('../../ZelBack/src/services/appLifecycle/shutdownPlan');
+      const deployComp = { identifier: 'frontend_myapp', image: 'myrepo/app:v1' };
+      sinon.stub(deploymentProvider, 'getInstalledDeployment').resolves({ replica: null, componentEntries: () => [['frontend', deployComp]] });
+      sinon.stub(componentProvisioner, 'verifyComponentImage').resolves();
+      sinon.stub(serviceHelper, 'delay').resolves();
+      const getInstalledApp = sinon.stub(appsRepository, 'getInstalledApp');
+      getInstalledApp.onFirstCall().resolves({ name: 'myapp', owner: 'owner1' });
+      getInstalledApp.onSecondCall().resolves(null);
+      sinon.stub(relationshipResolver, 'checkAppDependencyRequirements').resolves(true);
+      const beginAppStop = sinon.stub(fluxShutdowndClient, 'beginAppStop').resolves({ outcome: 'complete' });
+      sinon.stub(shutdownPlan, 'appShutdownBudgetSeconds').returns(30);
+      const uninstallComponent = sinon.stub(appUninstaller, 'uninstallComponent').resolves();
+      sinon.stub(appReconciler, 'enqueueApp');
+
+      await appOperations.redeployApplication('myapp', { onStatus: () => {} });
+
+      expect(beginAppStop.calledOnce, 'the daemon owns the stop').to.be.true;
+      const [owner, name, reason, opts] = beginAppStop.firstCall.args;
+      expect(owner).to.equal('owner1');
+      expect(name).to.equal('myapp');
+      expect(reason).to.equal(fluxShutdowndClient.SHUTDOWN_REASON.REDEPLOY);
+      expect(opts.replica).to.equal(null);
+      expect(uninstallComponent.calledWith(deployComp, sinon.match({ stopHandled: true })), 'the component teardown must not stop again').to.be.true;
+    });
+
     it('proceeds to teardown when every dependency is satisfied', async () => {
       const deployComp = { identifier: 'frontend_myapp', image: 'myrepo/app:v1' };
       sinon.stub(deploymentProvider, 'getInstalledDeployment').resolves({ componentEntries: () => [['frontend', deployComp]] });

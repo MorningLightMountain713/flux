@@ -53,12 +53,15 @@ describe('reconciler run-authority guard', () => {
     // run-state mutation there is.
     const owners = {
       // The sole authority, all ten enumerated so a new one has to be justified here:
-      // network-detach heal force-remove (1082); volume-unavailable pending stop, which
-      // is TWO calls, kill and stop, on the forceKill branch (1221, 1223); paused-container
-      // stop (1293); data-clear stop (1332); force kill (1393); graceful stop (1398);
-      // restart-generation bounce (1463); unhealthy restart (1511); start (1768).
+      // network-detach heal force-remove (1186); volume-unavailable pending stop, which
+      // is TWO calls, kill and stop, on the forceKill branch (1344, 1346); paused-container
+      // stop (1416); data-clear stop (1455); force kill (1516); graceful stop (1521);
+      // restart-generation bounce (1606); unhealthy restart (1654); start (1919).
       'appMonitoring/appReconciler.js': 10,
-      'appLifecycle/appUninstaller.js': 7, // terminal teardown: uninstallComponent (redeploy) kill+stop+force-remove, runTeardown worker kill+stop + 2 paced force-removes
+      // Terminal teardown, one per component since c585afdcd: the shared core's
+      // kill+stop fallback (368, 370), its force-remove (396) and escalated
+      // force-remove (416), and runTeardown's pre-lock kill+stop fallback (1141, 1144).
+      'appLifecycle/appUninstaller.js': 6,
       'appManagement/appController.js': 1, // stopAllNonFluxRunningApps janitor (foreign, non-Flux containers)
       // Boot recovery of file-operation containers left by a PREVIOUS process. Not an
       // app container and never one: the executor creates its own throwaway container
@@ -66,6 +69,12 @@ describe('reconciler run-authority guard', () => {
       // nothing to arbitrate here. Same class of exception as the watchtower cleanup
       // in the second test.
       'appSystem/volumeExecutor.js': 1, // recoverOrphaned: force-remove a previous process's executor container
+      // The deposition fence: a deposed master must be down within the grant's
+      // fencing window (lock-delay), not at reconcile cadence — the gate stops
+      // it HARD the moment it learns of a higher accepted term. Routing through
+      // the reconciler would add a pass of latency exactly where the plane's
+      // exactly-one promise is enforced.
+      'appLifecycle/mastershipGrantGate.js': 1,
       // Owner-declared reload reactions. Both take the primitive as an injected
       // dependency rather than calling it inline, so each shows up as one
       // reference, not one call. Restarting is the owner's own choice of reaction
