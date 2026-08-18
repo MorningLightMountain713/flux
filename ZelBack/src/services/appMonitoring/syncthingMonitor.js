@@ -40,7 +40,7 @@ const {
 const { ensureStignoreCovers } = require('../appSystem/syncthingIgnorePolicy');
 const volumeService = require('../utils/volumeService');
 const appTamperingDetectionService = require('../appTamperingDetectionService');
-const mastershipGrantGate = require('../quorumGrant/mastershipGrantGate');
+const mastershipGrantGate = require('../appLifecycle/mastershipGrantGate');
 const { extractIp } = require('../utils/socketAddressUtils');
 const appReconciler = require('./appReconciler');
 const {

@@ -1063,6 +1063,9 @@ module.exports = (app) => {
   app.get('/apps/appstop/:appname?/:global?', alwaysRespond, requireBootSettled, asyncRoute((req, res) => {
     return appController.appStop(req, res);
   }));
+  app.get('/apps/appyield/:appname?/:global?', alwaysRespond, requireBootSettled, asyncRoute((req, res) => {
+    return appController.appYieldApi(req, res);
+  }));
   app.get('/apps/apprestart/:appname?/:global?', alwaysRespond, requireBootSettled, asyncRoute((req, res) => {
     return appController.appRestart(req, res);
   }));
