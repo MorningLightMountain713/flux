@@ -542,6 +542,23 @@ async function trySpawningGlobalApplication() {
       survivors.afterNodePin = globalAppNamesLocation.length;
       stages.push(['afterNodePin', nameSet()]);
 
+      // Drop candidates whose remaining slots are already claimed, before one is
+      // picked at random. The sieve counts running instances only, so an app that
+      // other nodes are already installing still reads as short - and selection
+      // is a lottery, so such a candidate does not merely waste its own cycle:
+      // it can win the draw ahead of one this node could have installed, and the
+      // node then spawns nothing for a whole pass. Counting every candidate's
+      // claims costs one grouped read of a collection that holds only live
+      // claims. The re-read before claiming still runs and is the authority;
+      // this only spares the draw candidates it would have turned away.
+      // An app kept above because this node still owes an assigned identity is
+      // exempt: nobody else can fill that seat, whatever the global count says.
+      const claimsByApp = await registryManager.installingCountsByApp();
+      globalAppNamesLocation = globalAppNamesLocation.filter(
+        (c) => owesAnIdentity.get(c.instantiated.name)
+          || c.actual + (claimsByApp.get(c.instantiated.name.toLowerCase()) ?? 0) < c.required,
+      );
+
       // Whether a candidate is PINNED to this node, decided from cleartext
       // placement metadata — readable on a sealed spec, so knowing this costs
       // nothing and can be established before deciding whether to decrypt
@@ -964,7 +981,7 @@ async function trySpawningGlobalApplication() {
     // contenders and installs the winner). This blunt over-instance return would
     // otherwise pre-empt it - installing counts every contender's record - and the
     // app would place nowhere for 12h. Fresh passes still bail early here.
-    if (!collisionWindowElapsed && runningAppList.length + installingAppList.length > minInstances) {
+    if (!collisionWindowElapsed && runningAppList.length + installingAppList.length >= minInstances) {
       // KEPT when the running copies alone meet the count, CLEARED when the
       // claims were needed to reach it.
       //
@@ -1224,7 +1241,7 @@ async function trySpawningGlobalApplication() {
     installingAppList = await registryManager.appInstallingLocation(appToRun);
     // Same as the double check: the collision-window return pass must reach the
     // election below, not bail on the raw over-instance count.
-    if (!collisionWindowElapsed && runningAppList.length + installingAppList.length > minInstances) {
+    if (!collisionWindowElapsed && runningAppList.length + installingAppList.length >= minInstances) {
       // KEPT when the running copies alone meet the count, CLEARED when the
       // claims were needed to reach it.
       //
