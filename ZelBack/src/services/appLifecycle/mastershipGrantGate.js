@@ -5,6 +5,7 @@ const serviceHelper = require('../serviceHelper');
 const dockerService = require('../dockerService');
 const generalService = require('../generalService');
 const networkStateService = require('../networkStateService');
+const appsRuntimeState = require('../appManagement/appsRuntimeState');
 const messageStore = require('../appMessaging/messageStore');
 const reconcilerQueue = require('../appMonitoring/reconcilerQueue');
 const fluxEventBus = require('../utils/fluxEventBus');
@@ -128,6 +129,18 @@ function pursue(identifier, appName) {
 }
 
 async function acquireUnlessSettled(identifier, appName, key) {
+  // The operator stop lock silences EVERY pursue trigger — the reconciler
+  // seam, the syncthing decider, and the coordinate path alike. A stopped
+  // component that wins a term parks it on a node that will not run the
+  // container (the 1209 fleet measured a yielded master re-taking its own
+  // released term through exactly the decider paths, which never used to
+  // ask). Unknown operator state pursues — the lock refuses only when it is
+  // readable and true, so a state-read hiccup costs nothing but this pass.
+  try {
+    if (await appsRuntimeState.isOperatorStopped(identifier)) return;
+  } catch (error) {
+    log.warn(`mastershipGrantGate - operator-state read before pursuing ${key} failed: ${error.message}`);
+  }
   try {
     const record = await messageStore.getMasterleaseRecord(appName, ROLE);
     const data = record?.data;
