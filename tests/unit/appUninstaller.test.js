@@ -18,6 +18,7 @@ describe('appUninstaller tests', () => {
   let fluxShutdowndClientStub;
   let relationshipResolverStub;
   let pendingTeardownStoreStub;
+  let mastershipGrantGateStub;
 
   beforeEach(() => {
     configStub = {
@@ -119,6 +120,10 @@ describe('appUninstaller tests', () => {
       listTeardowns: sinon.stub().resolves([]),
     };
 
+    mastershipGrantGateStub = {
+      onComponentTeardown: sinon.stub().resolves(),
+    };
+
     appUninstaller = proxyquire('../../ZelBack/src/services/appLifecycle/appUninstaller', {
       config: configStub,
       '../verificationHelper': verificationHelperStub,
@@ -184,6 +189,7 @@ describe('appUninstaller tests', () => {
         stopAppMonitoring: sinon.stub().resolves(),
       },
       '../utils/fluxShutdowndClient': fluxShutdowndClientStub,
+      './mastershipGrantGate': mastershipGrantGateStub,
     });
   });
 
@@ -225,6 +231,27 @@ describe('appUninstaller tests', () => {
 
       expect(res.json.calledOnce).to.be.true;
       expect(logStub.error.called).to.be.true;
+    });
+  });
+
+  describe('uninstallComponent: the grant release keys on the data', () => {
+    const component = () => ({
+      identifier: 'web_TestApp',
+      appName: 'TestApp',
+      name: 'web',
+      hasActiveStandbySyncthing: () => true,
+    });
+
+    it('a volume-preserving teardown (rebuild-in-place) holds the term', async () => {
+      await appUninstaller.uninstallComponent(component(), { removeVolumes: false }).catch(() => {});
+      sinon.assert.notCalled(mastershipGrantGateStub.onComponentTeardown);
+    });
+
+    it('a volume-destroying teardown releases the grant', async () => {
+      await appUninstaller.uninstallComponent(component(), { removeVolumes: true }).catch(() => {});
+      sinon.assert.calledOnceWithExactly(
+        mastershipGrantGateStub.onComponentTeardown, 'web_TestApp', sinon.match.object,
+      );
     });
   });
 

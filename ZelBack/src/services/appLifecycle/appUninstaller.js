@@ -377,13 +377,15 @@ async function uninstallComponent(component, options = {}) {
 
   status(stopFailed ? `Flux App ${label} could not be stopped` : `Flux App ${label} stopped`);
 
-  // Release any held mastership grant now that the container is stopped —
-  // never before: a grant released under a still-writing container is the
-  // overlap the whole plane exists to prevent. This is the one teardown
-  // seam every removal path reaches at component granularity (soft
-  // redeploys never see the app-level removedIdentifiers loop), so a grant
-  // cannot leak through a redeploy and shield a master that no longer exists.
-  await mastershipGrantGate.onComponentTeardown(component.identifier, component);
+  // The grant follows the data: a volume-preserving teardown is a
+  // rebuild-in-place (redeploy, spec update) and the term holds through it —
+  // the master returns with its data and its Holder never stopped renewing.
+  // Destroying the volume ends this instance's authority, so release — after
+  // the stop, never before: a grant released under a still-writing container
+  // is the overlap the whole plane exists to prevent.
+  if (removeVolumes) {
+    await mastershipGrantGate.onComponentTeardown(component.identifier, component);
+  }
 
   if (removeVolumes) {
     await stopSyncthingAndCleanup(component.identifier, appId);
