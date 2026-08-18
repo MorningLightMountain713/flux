@@ -58,6 +58,15 @@ export function dbClient(nodeNum) {
       return doc?.generalScannedHeight ?? 0;
     },
 
+    // Wipe one register cell's journal row — the wiped-journal referee: it
+    // still ANSWERS asks (no_grant) but holds no accepted grant, which is
+    // exactly the answering-empty shape the repair chore re-seats.
+    async wipeQuorumGrantRegister(key) {
+      const localDb = await db('local');
+      const res = await localDb.collection('quorumgrants').deleteOne({ _id: key });
+      return res.deletedCount;
+    },
+
     async permanentMessageCount() {
       const globalDb = await db('appsGlobal');
       return globalDb.collection('zelappsmessages').countDocuments({});

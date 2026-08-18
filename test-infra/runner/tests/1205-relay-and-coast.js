@@ -174,7 +174,10 @@ describe('relay renewal and the partitioned app island', function () {
       const during = await quorumVerdict();
       expect(during, 'the quorum view survives the partition').to.not.equal(null);
       expect(during.grantee, 'the master never changed').to.equal(first.grantee);
-      expect(during.epoch, 'the term was renewed, never re-fought').to.equal(first.epoch);
+      // the repair chore may refresh the incumbent's own term to a higher
+      // epoch (clearing a scramble residue) — the same grantee at a higher
+      // epoch is maintenance; only a DIFFERENT grantee is a re-fight
+      expect(during.epoch, 'the epoch never regresses').to.be.at.least(first.epoch);
     } finally {
       await env.healPartition([masterIndex], OUTSIDERS);
     }
@@ -220,7 +223,10 @@ describe('relay renewal and the partitioned app island', function () {
       return after !== null;
     }, { timeout: 240000, interval: 10000, label: 'the quorum view returns after the heal' });
     expect(after.grantee, 'the master never changed').to.equal(before.grantee);
-    expect(after.epoch, 'the coasted term was never re-fought').to.equal(before.epoch);
+    // a coasted term resumes renewing under the SAME grantee; a post-heal
+    // repair refresh may raise the epoch, but only a different grantee
+    // would mean the term was lost and re-fought
+    expect(after.epoch, 'the epoch never regresses').to.be.at.least(before.epoch);
     expect(await runningMasters()).to.equal(1);
   });
   it('a master cut off from EVERYONE stops fast, and the fence stands before any successor', async function () {
@@ -251,11 +257,18 @@ describe('relay renewal and the partitioned app island', function () {
       'the master is running, and visible, before it is isolated').to.equal(true);
     expect(await runningMasters(), 'exactly one master before the isolation').to.equal(1);
 
+    // Event waits below are AFTER-ID disciplined: an earlier test's fight can
+    // leave a granted event in a survivor's since-boot buffer, and a wait
+    // that scans history then "finds" a winner that never won THIS term —
+    // which is exactly how this test went red at 0243ee860 while the product
+    // behaved correctly.
+    const survivors = everyoneElse.filter((i) => Object.keys(holderOutpoints).map(Number).includes(i));
+    const survivorAfters = new Map(survivors.map((i) => [i, env.clients[i].getLastEventId()]));
+
     await env.partitionGroups([masterIndex], everyoneElse);
     try {
-      const survivors = everyoneElse.filter((i) => Object.keys(holderOutpoints).map(Number).includes(i));
       await Promise.any(survivors.map((i) => env.clients[i].waitForEvent(
-        'quorumGrant:granted', (d) => d.key === `${name}/master`, 300000,
+        'quorumGrant:granted', (d) => d.key === `${name}/master`, 300000, { afterId: survivorAfters.get(i) },
       ))).catch(() => {
         throw new Error(`no survivor acquired ${name}/master after the master was isolated`);
       });
@@ -264,10 +277,11 @@ describe('relay renewal and the partitioned app island', function () {
       // ABSOLUTE: the winner fenced the deposed master in the same acquire
       // that granted, so the fence event must already sit in its buffer.
       const winner = survivors.find((i) => env.clients[i].getEventBuffer()
-        .some((e) => e.event === 'quorumGrant:granted' && e.data.key === `${name}/master`));
+        .some((e) => e.event === 'quorumGrant:granted' && e.id > survivorAfters.get(i)
+          && e.data.key === `${name}/master`));
       expect(winner, 'a survivor holds the granted event').to.not.equal(undefined);
       await env.clients[winner].waitForEvent(
-        'quorumGrant:fenceRaised', (d) => d.app === name, 15000,
+        'quorumGrant:fenceRaised', (d) => d.app === name, 15000, { afterId: survivorAfters.get(winner) },
       ).catch(() => {
         throw new Error('the fence against the deposed master did not stand with the grant');
       });

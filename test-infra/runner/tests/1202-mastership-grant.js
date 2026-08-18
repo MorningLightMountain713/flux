@@ -190,7 +190,10 @@ describe('the mastership grant on a multi-node fleet', function () {
       const after = await quorumVerdict();
       expect(after, 'the quorum view survives a silent standby').to.not.equal(null);
       expect(after.grantee, 'the master never changed').to.equal(before.grantee);
-      expect(after.epoch, 'the term was renewed, never re-fought').to.equal(before.epoch);
+      // the repair chore may refresh the incumbent's own term to a higher
+      // epoch (clearing a founding-scramble residue) — same grantee, higher
+      // epoch is maintenance; only a different grantee is a re-fight
+      expect(after.epoch, 'the epoch never regresses').to.be.at.least(before.epoch);
       expect(await runningMasters(), 'the master kept running').to.equal(1);
     } finally {
       await unpauseHostContainer(env.clients[standby].container);
@@ -208,6 +211,10 @@ describe('the mastership grant on a multi-node fleet', function () {
     expect(Number.isInteger(masterIndex), `master ${first.grantee} maps to a node`).to.equal(true);
 
     const survivors = HOLDERS.filter((i) => i !== masterIndex);
+    // after-id discipline: a scramble in an earlier test can leave a granted
+    // event in a survivor's since-boot buffer, and an undisciplined wait
+    // would "find" that stale win instantly
+    const survivorAfters = new Map(survivors.map((i) => [i, env.clients[i].getLastEventId()]));
     await pauseHostContainer(env.clients[masterIndex].container);
     pausedIndex = masterIndex;
 
@@ -221,7 +228,7 @@ describe('the mastership grant on a multi-node fleet', function () {
     // (15s) + pursuit jitter, with room to spare. It no longer waits on the
     // holder's location row, which is what made this minutes long before.
     await Promise.any(survivors.map((i) => env.clients[i].waitForEvent(
-      'quorumGrant:granted', (d) => d.key === `${name}/master`, 300000,
+      'quorumGrant:granted', (d) => d.key === `${name}/master`, 300000, { afterId: survivorAfters.get(i) },
     ))).catch(() => {
       throw new Error(
         `no survivor acquired ${name}/master after the master died - with no `
