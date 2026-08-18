@@ -395,10 +395,9 @@ async function pollFenceLift(appName, fence) {
 }
 
 /**
- * Teardown hook, called from hard/softUninstallComponent — the two paths
- * every removal reaches at component granularity (the removedIdentifiers
- * loop does NOT: soft redeploys never get there, and a grant leaked through
- * a redeploy would shield a master that no longer exists). Voluntary
+ * Teardown hook for a component whose data is being destroyed (true removal,
+ * storage recreate). Volume-preserving teardowns must not call this: the
+ * grant follows the data, and a rebuild-in-place holds the term. Voluntary
  * release, so successors pay no lock-delay.
  */
 async function onComponentTeardown(identifier, comp) {
