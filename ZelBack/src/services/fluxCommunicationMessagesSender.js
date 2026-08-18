@@ -412,7 +412,19 @@ async function respondWithAppRunningMessages(peer, sinceTimestamp = 0) {
     sinceTimestamp,
     collectionName: config.database.appsglobal.collections.appStateEvents,
     validityMs: 125 * 60 * 1000,
-    query: (min) => ({ $or: [{ broadcastedAt: { $gt: min } }, { createdAt: { $gt: min } }] }),
+    // The freshness floor fits the hourly apprunning gossip; masterlease and
+    // grantgeneration records are DURABLE and published once (change-driven),
+    // so a floor that ages them out would silently exclude exactly the rows a
+    // rejoining node can never re-receive any other way — the record of any
+    // term older than two hours would be unsyncable forever. One row per
+    // app/role bounds the unconditional stream.
+    query: (min) => ({
+      $or: [
+        { broadcastedAt: { $gt: min } },
+        { createdAt: { $gt: min } },
+        { type: { $in: ['masterlease', 'grantgeneration'] } },
+      ],
+    }),
     projection: { _id: 0, expireAt: 0 },
     messageType: 'fluxapprunningsync',
     label: 'respondWithAppRunningMessages',

@@ -219,8 +219,8 @@ describe('operator commands against a held mastership', function () {
     // failover.
     await Promise.any(standbys.map((i) => env.clients[i].waitForEvent(
       'quorumGrant:granted', (d) => d.key === `${name}/master`, 120000, { afterId: standbyAfters.get(i) },
-    ))).catch(() => {
-      throw new Error('no standby was seated after the yield');
+    ))).catch((err) => {
+      throw new Error(`no standby was seated after the yield (${err.errors?.[0]?.message ?? err.message})`);
     });
     let second = null;
     await waitFor(async () => {

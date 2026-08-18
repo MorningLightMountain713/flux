@@ -8,6 +8,7 @@ const WebSocket = require('ws');
 const { FluxTTLCache } = require('../../ZelBack/src/services/utils/cacheManager');
 const { PassThrough } = require('stream');
 const fluxCommunicationMessagesSender = require('../../ZelBack/src/services/fluxCommunicationMessagesSender');
+const dbHelper = require('../../ZelBack/src/services/dbHelper');
 const fluxNetworkHelper = require('../../ZelBack/src/services/fluxNetworkHelper');
 const daemonServiceUtils = require('../../ZelBack/src/services/daemonService/daemonServiceUtils');
 const appsRepository = require('../../ZelBack/src/services/appDatabase/appsRepository');
@@ -1975,6 +1976,41 @@ describe('fluxCommunicationMessagesSender tests', () => {
 
       sinon.assert.notCalled(websocketIn.send);
       sinon.assert.notCalled(websocketOut.send);
+    });
+  });
+
+  describe('app-state sync responder — the durable-record escape', () => {
+    // apprunning gossip re-broadcasts hourly, so the sync's freshness floor
+    // (validityMs) is correct for it. Masterlease and grantgeneration records
+    // are DURABLE and published once (D1: change-driven) — a floor that fits
+    // the gossip silently excludes exactly the records a rejoining node can
+    // never re-receive any other way. The query must carry them regardless
+    // of age; one row per app/role bounds the stream.
+    afterEach(() => sinon.restore());
+
+    it('serves durable grant records regardless of the freshness floor', async () => {
+      let capturedQuery = null;
+      const cursor = {
+        sort: () => ({ [Symbol.asyncIterator]: async function* iterate() {} }),
+      };
+      const fakeDb = {
+        db: () => ({
+          collection: () => ({
+            find: (query) => { capturedQuery = query; return cursor; },
+          }),
+        }),
+      };
+      sinon.stub(dbHelper, 'databaseConnection').returns(fakeDb);
+      const peer = { key: 'p:1', readyState: 3, send: sinon.stub(), remoteClockOffsetMs: 0 };
+
+      await fluxCommunicationMessagesSender.respondWithAppRunningMessages(peer, Date.now());
+
+      expect(capturedQuery).to.not.equal(null);
+      const branches = capturedQuery.$or ?? [];
+      const durable = branches.find((b) => b.type && b.type.$in);
+      expect(durable, 'the query carries a durable-type branch no freshness floor applies to').to.not.equal(undefined);
+      expect(durable.type.$in).to.include('masterlease');
+      expect(durable.type.$in).to.include('grantgeneration');
     });
   });
 

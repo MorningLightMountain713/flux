@@ -121,6 +121,7 @@ export function nodeClient(nodeNum) {
         'quorumGrant:generationRecord',
         'quorumGrant:generationRecordDropped',
         'quorumGrant:yielded',
+        'quorumGrant:fenceLifted',
         'quorumGrant:repair',
         'quorumGrant:termRefreshed',
         'quorumGrant:relayFailed',
