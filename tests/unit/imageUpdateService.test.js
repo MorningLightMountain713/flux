@@ -389,9 +389,6 @@ describe('imageUpdateService tests', () => {
     });
 
     it('inspects by the bare identifier - dockerContainerInspect prefixes internally', async () => {
-      // A pre-prefixed name makes the inspect look up fluxflux<identifier>,
-      // which no container has ever been called: every component then skips as
-      // digest-unreadable and auto-update is silently dead for the whole app.
       const deployment = mockDeployment('ComposedApp', [
         { name: 'web', identifier: 'web_ComposedApp', image: 'nginx:latest' },
       ]);

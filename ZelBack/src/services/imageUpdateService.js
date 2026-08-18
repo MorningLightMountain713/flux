@@ -206,9 +206,7 @@ async function checkAppForUpdates(deployment) {
         continue;
       }
 
-      // dockerContainerInspect takes the bare identifier and prefixes it
-      // itself - a pre-prefixed name looks up fluxflux<identifier>, which no
-      // container has ever been called.
+      // dockerContainerInspect prefixes its argument itself - pass the bare identifier.
       // eslint-disable-next-line no-await-in-loop
       const localDigest = await getLocalImageDigest(deployComp.identifier);
 
