@@ -190,6 +190,7 @@ describe('appSpawner tests', () => {
     registryManagerStub = {
       appLocation: sinon.stub().resolves([]),
       appInstallingLocation: sinon.stub().resolves([]),
+      installingCountsByApp: sinon.stub().resolves(opts.installingCounts ?? new Map()),
       storeAppInstallingMessage: sinon.stub().resolves(),
       removeAppInstallingMessage: sinon.stub().resolves(),
       getRunningAppIpList: sinon.stub().resolves([]),
@@ -474,6 +475,43 @@ describe('appSpawner tests', () => {
       await appSpawner.trySpawningGlobalApplication().catch(() => {});
       expect(logStub.info.args.some((a) => a[0]?.includes?.('No app currently to be processed'))).to.be.true;
       expect(logStub.info.args.some((a) => a[0]?.includes?.('selected to try to spawn'))).to.be.false;
+    });
+  });
+
+  describe('claimed slots count toward coverage', () => {
+    // The sieve counts running instances only, so an app other nodes are already
+    // installing still reads as short. Selection is a lottery: such a candidate can
+    // win the draw ahead of one this node could actually have installed.
+    it('drops a candidate whose remaining slots are already claimed by installers', async () => {
+      buildModule({
+        candidates: [makeCandidate({ actual: 1, required: 3 })],
+        installingCounts: new Map([['testapp', 2]]),
+      });
+      await appSpawner.trySpawningGlobalApplication().catch(() => {});
+      expect(logStub.info.args.some((a) => a[0]?.includes?.('No app currently to be processed'))).to.be.true;
+      expect(logStub.info.args.some((a) => a[0]?.includes?.('selected to try to spawn'))).to.be.false;
+    });
+
+    it('keeps a candidate whose claims still leave a slot open', async () => {
+      buildModule({
+        candidates: [makeCandidate({ actual: 1, required: 3 })],
+        installingCounts: new Map([['testapp', 1]]),
+      });
+      await appSpawner.trySpawningGlobalApplication().catch(() => {});
+      expect(logStub.info.args.some((a) => a[0]?.includes?.('selected to try to spawn'))).to.be.true;
+    });
+
+    // A network covered exactly is covered: 3 required and 3 running-plus-installing
+    // means no seat is open, and proceeding installs a fourth instance.
+    it('bails when running plus installing exactly meets the requirement', async () => {
+      buildModule({ candidates: [makeCandidate({ actual: 0, required: 3 })] });
+      registryManagerStub.appLocation.resolves([{ ip: '192.168.1.5:16127' }]);
+      registryManagerStub.appInstallingLocation.resolves([
+        { ip: '192.168.1.6:16127' }, { ip: '192.168.1.7:16127' },
+      ]);
+      await appSpawner.trySpawningGlobalApplication().catch(() => {});
+      expect(logStub.info.args.some((a) => a[0]?.includes?.('already spawned or being installed on 3 instances'))).to.be.true;
+      expect(registryManagerStub.storeAppInstallingMessage.called, 'never announces a claim').to.be.false;
     });
   });
 

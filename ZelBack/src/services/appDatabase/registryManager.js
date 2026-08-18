@@ -220,6 +220,9 @@ async function appInstallingLocation(appname) {
  * Names are lowercased because an app is addressed case-insensitively
  * everywhere else here, so a caller must not have to know which case the
  * claiming node happened to send.
+ *
+ * The per-app appInstallingLocation read at claim time stays the authority; this
+ * only spares the draw candidates it would have turned away.
  * @returns {Promise<Map<string, number>>} Lowercased app name to claim count.
  */
 async function installingCountsByApp() {
