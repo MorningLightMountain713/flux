@@ -74,6 +74,12 @@ describe('quorumGrant grantRegisterCore', () => {
       expect(record.promisedEpoch).to.equal(1);
     });
 
+    it('stamps every promise with its instant — freshness is what revival yields to', () => {
+      const { record } = onPrepare(null, { epoch: 3, candidate: 'bbbb:0' }, T0, TUNABLES);
+      expect(record.promisedEpoch).to.equal(3);
+      expect(record.promisedAt).to.equal(T0);
+    });
+
     it('refuses an epoch at or below the promise, teaching the promised epoch', () => {
       const base = { promisedEpoch: 7, accepted: null };
       const at = onPrepare(base, { epoch: 7, candidate: 'bbbb:0' }, T0, TUNABLES);
@@ -261,12 +267,38 @@ describe('quorumGrant grantRegisterCore', () => {
     });
 
     it('a lapsed term with a takeover in flight renews nothing - the revival yields', () => {
-      const contested = heldRecord({ promisedEpoch: 6 });
+      // in flight = the promise is FRESH: stamped within the lock-delay of
+      // this renewal's receipt
+      const contested = { ...heldRecord({ promisedEpoch: 6 }), promisedAt: T0 + TTL - 1_000 };
       const { reply, record } = onRenew(contested, {
         epoch: 5, grantee: 'aaaa:0', ttlMs: TTL,
-      }, T0 + TTL + 1);
+      }, T0 + TTL + 1, TUNABLES);
       expect(reply.code).to.equal('lapsed');
       expect(record).to.equal(null);
+    });
+
+    it('a stale promise cannot block revival — the ratchet unwinds past the lock-delay', () => {
+      // The 1205 fight's other half: a promise nothing ever completed used to
+      // block the recorded grantee's revival FOREVER. A pursuit that was going
+      // to win completed inside the lock-delay; past it, the promise is a
+      // residue, not a takeover.
+      const at = T0 + TTL + 1;
+      const residue = { ...heldRecord({ promisedEpoch: 6 }), promisedAt: at - TUNABLES.lockDelayMs - 1 };
+      const { reply, record } = onRenew(residue, {
+        epoch: 5, grantee: 'aaaa:0', ttlMs: TTL,
+      }, at, TUNABLES);
+      expect(reply.ok).to.equal(true);
+      expect(record.accepted.expiresAt).to.equal(at + TTL);
+    });
+
+    it('a promise of unknown age does not block revival', () => {
+      // pre-stamp journals: an unstamped promise cannot prove a takeover is
+      // in flight, and permanent refusal is the ratchet being guarded against
+      const unstamped = heldRecord({ promisedEpoch: 6 });
+      const { reply } = onRenew(unstamped, {
+        epoch: 5, grantee: 'aaaa:0', ttlMs: TTL,
+      }, T0 + TTL + 1, TUNABLES);
+      expect(reply.ok).to.equal(true);
     });
 
     it('refuses the wrong grantee and the wrong epoch alike', () => {

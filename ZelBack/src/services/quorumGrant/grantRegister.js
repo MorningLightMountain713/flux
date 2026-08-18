@@ -132,6 +132,9 @@ async function transact(key, decide) {
         {
           $set: {
             promisedEpoch: outcome.record.promisedEpoch,
+            // the promise's freshness stamp — absent stays absent (an
+            // unstamped promise reads as stale, never as fresh)
+            ...(outcome.record.promisedAt !== undefined ? { promisedAt: outcome.record.promisedAt } : {}),
             accepted: outcome.record.accepted ?? null,
             // the roster overlay rides the same journal: absent stays
             // absent, null clears (a basis change), an object replaces
@@ -193,7 +196,7 @@ async function renew(key, request) {
         record: null,
       };
     }
-    return core.onRenew(record, request, nowMs);
+    return core.onRenew(record, request, nowMs, knobs);
   });
 }
 
