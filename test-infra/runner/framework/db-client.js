@@ -67,6 +67,17 @@ export function dbClient(nodeNum) {
       return res.deletedCount;
     },
 
+    // The published masterlease record's roster, as THIS node has synced it.
+    // The self-verifying heal proof (quorum-signed acceptances) rides here —
+    // a register's own journaled chain is trusted and deliberately bare.
+    async getMasterleaseRoster(appName, role) {
+      const globalDb = await db('appsGlobal');
+      const row = await globalDb.collection('appstateevents').findOne(
+        { type: 'masterlease', dedupKey: `masterlease:${appName}/${role}` },
+      );
+      return row?.data?.roster ?? null;
+    },
+
     async permanentMessageCount() {
       const globalDb = await db('appsGlobal');
       return globalDb.collection('zelappsmessages').countDocuments({});
