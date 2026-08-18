@@ -3,7 +3,7 @@ import { describe, it, before, after } from 'mocha';
 import { expect } from 'chai';
 import { createTestEnv } from '../framework/test-env.js';
 import { ALL_ZMQ_TOPICS } from '../framework/fluxd-conf.js';
-import { bootAndPeer, installOnNodes, seedSyncScopedData } from '../framework/reconciler-suite.js';
+import { bootAndPeer, installOnNodes, seedGlobalSpec, seedSyncScopedData } from '../framework/reconciler-suite.js';
 import { buildSeedableSyncthingApp } from '../framework/seed-helper.js';
 import { pushImage } from '../framework/registry-helper.js';
 import { setSynced } from '../framework/syncthing-control.js';
@@ -118,6 +118,13 @@ describe('the committee heals its dark seat, and the owner re-deals the walk', f
     const app = await buildSeedableSyncthingApp({ name, mode: 'g' });
     const installAfters = HOLDERS.map((i) => env.clients[i].getLastEventId());
     await installOnNodes(env, app, HOLDERS);
+    // Every node must know the app, not just its holders: the outsider
+    // GRANTORS verify the owner-generation record against their own copy of
+    // the spec and silently drop it otherwise — which held the re-roll at
+    // generation 0 on a quorum of specless cells for two full runs. On
+    // production the message sync gives every node every spec; the targeted
+    // install shortcut skips that, so the suite restores the parity.
+    await seedGlobalSpec(env, app, env.clients.map((_, i) => i).filter((i) => !HOLDERS.includes(i)));
     await Promise.all(HOLDERS.map((i) => waitForAppInstalled(env.clients[i], name, 240000)));
     // The folder must read fully synced on every holder or the stall ladder
     // eventually removes the app from the standbys (broadcastRemoval erases

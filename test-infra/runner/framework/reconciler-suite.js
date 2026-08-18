@@ -91,7 +91,11 @@ function assertAliveOnThisChain(env, app) {
   }
 }
 
-async function seedGlobalSpec(env, app, indices) {
+// Exported for suites whose scenario needs NON-holder nodes to know the app too:
+// production nodes hold every global spec via message sync, and anything verified
+// against the spec (the owner-generation record) is silently dropped by a node the
+// targeted-install shortcut left specless.
+export async function seedGlobalSpec(env, app, indices) {
   assertAliveOnThisChain(env, app);
   await Promise.all(indices.map(async (i) => {
     const dc = dbClient(i + 1);
@@ -377,7 +381,7 @@ export async function bootAndPeer(env, { minOutbound, minInbound, pricing = fals
   // boot:settled is the node's own end-of-boot signal (published even when
   // recovery errors), and waitForEvent replays it from the buffer, so a node
   // that settled before this line is a hit, not a hang.
-  for (const client of fluxClients) {
+  for (const client of nodes) {
     await client.waitForEvent('boot:settled', () => true, 120000);
   }
 }
