@@ -24,10 +24,11 @@ import { appOwnerKey } from '../framework/keys.js';
 //   happens behind the operator's back. The app is down because the
 //   operator said down. apprestart resumes the same master.
 //
-//   APPYIELD — failover. The grant is voluntarily RELEASED before the
-//   stop, so a standby is seated with no lock-delay; the deposed node
-//   stays operator-stopped (its gate is unconsulted, so it cannot
-//   re-acquire behind the successor) and returns as a STANDBY on restart.
+//   APPYIELD — failover. The operator stop LOCK lands first, then the
+//   grant is voluntarily released, so a standby is seated with no
+//   lock-delay; the deposed node's gate is unconsulted (it must never
+//   re-acquire its own yield — the first run measured exactly that race)
+//   and it returns as a STANDBY on restart.
 //
 //   SOFT REDEPLOY — neither. An image update recreates the master's
 //   container and the grant must never move: a release here would churn

@@ -421,7 +421,12 @@ describe('appController tests', () => {
 
     // The logic function takes plain arguments — express objects never leave
     // the Api wrapper.
-    it('releases mastership BEFORE the operator stop lock — the successor pays no lock-delay', async () => {
+    it('locks the operator stop BEFORE releasing — the gate must never re-acquire its own yield', async () => {
+      // Fleet-proven ordering: release-then-lock left a window where this
+      // node's own gate re-acquired the freshly released term (no lock-delay
+      // on a released grant, and the ex-master is fastest to its registers).
+      // With the lock first, an in-flight pursuit still sees the held key
+      // and the gate is unconsulted afterwards.
       sinon.stub(appsRepository, 'getGlobalAppInfo').resolves({ name: 'TestApp' });
       sinon.stub(deploymentProvider, 'buildDeployment').resolves(stubDeployment([
         { name: 'TestApp', identifier: 'TestApp' },
@@ -432,7 +437,7 @@ describe('appController tests', () => {
       expect(outcome.held).to.equal(true);
       sinon.assert.calledOnceWithExactly(yieldMastership, 'TestApp');
       sinon.assert.calledOnceWithExactly(setOperatorStopped, 'TestApp', true);
-      sinon.assert.callOrder(yieldMastership, setOperatorStopped);
+      sinon.assert.callOrder(setOperatorStopped, yieldMastership);
       sinon.assert.calledOnceWithExactly(enqueueComponent, 'TestApp');
     });
 
