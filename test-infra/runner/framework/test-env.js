@@ -36,7 +36,7 @@ import { fluxTeamKey, nodeKey } from './keys.js';
 import policySigning from '../../external-http-stub/policy-signing.js';
 import chainStart from './chain-start.cjs';
 import { assertCoupledRatios, loadSharedConfig } from './coupled-knobs.js';
-import { assertFluxSpecVendorCurrent, NODE_IMAGE, OLD_NODE_IMAGE } from './flux-spec-vendor.js';
+import { assertFluxSpecVendorCurrent, NODE_IMAGE } from './flux-spec-vendor.js';
 import { assertNodeConfigsCurrent } from './node-configs.js';
 import { statelessRegex } from './log-reader.js';
 import {
@@ -774,7 +774,7 @@ function nodeReadyWaitStrategy(nodeIp) {
 // correspondingly slower. A suite that asserts on transfers has to ask for it;
 // nothing else should.
 export async function createTestEnv({
-  hookCtx = null, nodes = 1, deferredNodes = 0, legacyNodes = [], oldNodes = [], unprivilegedNodes = [], stubPeers = [], syncedNodes = null, silentSyncPeers = [],
+  hookCtx = null, nodes = 1, deferredNodes = 0, legacyNodes = [], unprivilegedNodes = [], stubPeers = [], syncedNodes = null, silentSyncPeers = [],
   unverifiableSyncPeers = [], policyUnawarePeers = [], stubPeeredWith = null,
   configOverrides = null, nodeConfigOverrides = {}, nodeTiers = null, dataCenter = true,
   tickerAutostart = false, discoveryAutostart = false, nodeStatusOverrides = {},
@@ -1068,7 +1068,7 @@ export async function createTestEnv({
     // mongo starts, i.e. inside the fleet boot, where the waits at risk are the
     // boot's own.
     await startInfraDeathWatch(env);
-    await _buildEnv(env, nodes, deferredNodes, legacyNodes, unprivilegedNodes, stubPeers, silentSyncPeers, unverifiableSyncPeers, policyUnawarePeers, stubPeerings, configOverrides, mergedNodeOverrides, nodeTiers, dataCenter, tickerAutostart, discoveryAutostart, nodeStatusOverrides, rpcFailures, bootContext, initialHeight, syncthing, aptSeeded, aptBadSource, geolocation, locationTable, staticIp, policy, policySeeds, policyReachable, arcane, shutdowndMock, telemetrydMock, systemdMode, telemetrydReal, shutdowndReal, dnsdReal, zmqTopics, nodeZmqTopics, { perNodeZmq }, oldNodes);
+    await _buildEnv(env, nodes, deferredNodes, legacyNodes, unprivilegedNodes, stubPeers, silentSyncPeers, unverifiableSyncPeers, policyUnawarePeers, stubPeerings, configOverrides, mergedNodeOverrides, nodeTiers, dataCenter, tickerAutostart, discoveryAutostart, nodeStatusOverrides, rpcFailures, bootContext, initialHeight, syncthing, aptSeeded, aptBadSource, geolocation, locationTable, staticIp, policy, policySeeds, policyReachable, arcane, shutdowndMock, telemetrydMock, systemdMode, telemetrydReal, shutdowndReal, dnsdReal, zmqTopics, nodeZmqTopics, { perNodeZmq });
     return env;
   } catch (err) {
     // Boot failed: the env owns everything started so far. The shared teardown
@@ -1106,7 +1106,6 @@ async function _buildEnv(
   policy = null, policySeeds = null, policyReachable = false, arcane = false,
   shutdowndMock = false, telemetrydMock = false, systemdMode = false, telemetrydReal = false,
   shutdowndReal = false, dnsdReal = false, zmqTopics, nodeZmqTopics, zmqOptions = {},
-  oldNodes = [],
 ) {
   const { perNodeZmq = false } = zmqOptions;
   // Everything built here registers onto the env shell as it comes up, so a
@@ -1677,10 +1676,7 @@ async function _buildEnv(
     // machine: under a contended 10-node fleet boot, Wait.forHealthCheck() tears
     // the fleet down on a transient "unhealthy" even when FluxOS is up. See
     // http-wait-strategy.js for the full rationale.
-    // Mixed-version fleets: an oldNodes index boots the pre-grant-plane image.
-    // Its baked flux-spec is historic by design (the vendor guard checks only
-    // the default image).
-    const builder = new StaticIpContainer(image(oldNodes.includes(i) ? OLD_NODE_IMAGE : NODE_IMAGE))
+    const builder = new StaticIpContainer(image(NODE_IMAGE))
       .withPrivilegedMode()
       .withStaticIp(networkName, nodeIp)
       // Nodes resolve through the stub, which answers fleet names by relaying to
