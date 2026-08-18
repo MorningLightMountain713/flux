@@ -168,9 +168,15 @@ describe('the committee heals its dark seat, and the owner re-deals the walk', f
       (cell, i) => !HOLDERS.includes(i) && cell?.accepted?.grantee === first.grantee,
     );
     expect(refereeIndex, 'a non-holder committee member exists').to.be.greaterThan(-1);
+    // Spare seats are every node OFF the current committee — holders
+    // included: the walk seats grantors by HRW and a holder is as walkable
+    // as anyone (1208's five-instance overlap is built on exactly that).
+    // With 9 seats over 10 nodes the single spare is often a holder, and a
+    // holder-excluding filter reads as an empty spare list the moment the
+    // replacement lands there.
     const spareIndexes = cells
       .map((cell, i) => ({ cell, i }))
-      .filter(({ cell, i }) => !HOLDERS.includes(i) && i !== refereeIndex && !cell?.accepted)
+      .filter(({ cell, i }) => i !== refereeIndex && !cell?.accepted)
       .map(({ i }) => i);
 
     const masterIndex = Number(Object.keys(outpoints).find((i) => outpoints[i] === first.grantee));
