@@ -9,6 +9,7 @@ import { pushImage } from '../framework/registry-helper.js';
 import { setSynced } from '../framework/syncthing-control.js';
 import { restartFluxos, getAppContainerStatus } from '../framework/container.js';
 import { waitFor, waitForAppInstalled, assertNoEvent, waitForReconcileActuated } from '../framework/wait.js';
+import { dbClient } from '../framework/db-client.js';
 
 // A grantor that restarts must come back as the SAME grantor: its promises
 // were journaled before every reply, so the record survives the process —
@@ -254,6 +255,38 @@ describe('a grantor restarts, and its promises outlive the process', function ()
     expect(after, 'the quorum view survives the restart').to.not.equal(null);
     expect(after.grantee, 'the incumbent kept the grant').to.equal(first.grantee);
     expect(after.epoch, 'epochs never move backwards').to.be.at.least(first.epoch);
+  });
+
+  it('a standby that missed the published record converges through the app-state sync', async function () {
+    this.timeout(600000);
+
+    // The record is change-driven and published ONCE (D1): a node that
+    // missed the gossip has nothing until the app-state sync backfills it.
+    // Stage the miss directly — delete the standby's synced copy — then
+    // reboot its FluxOS: the boot sync must bring the record back, or every
+    // settled-standby read on this node falls to the record-absent path
+    // forever. (The sync responder's freshness floor would have silently
+    // excluded any record older than ~2h; the durable-type escape is what
+    // makes this converge for a term of ANY age — pinned at unit level.)
+    const verdict = await quorumVerdict();
+    expect(verdict, 'a standing grant before the miss').to.not.equal(null);
+    const masterIndex = Number(Object.keys(holderOutpoints).find((i) => holderOutpoints[i] === verdict.grantee));
+    const standby = HOLDERS.find((i) => i !== masterIndex);
+
+    const wiped = await dbClient(standby + 1).wipeMasterleaseRecord(name, 'master');
+    expect(wiped, 'the staged miss removed the row').to.equal(1);
+
+    await restartFluxos(env.clients[standby].container);
+
+    await waitFor(async () => {
+      const record = await dbClient(standby + 1).getMasterleaseRecord(name, 'master');
+      return record !== null && record.grantee === verdict.grantee;
+    }, { timeout: 300000, interval: 10000, label: 'the restarted standby re-syncs the published record' });
+
+    // and the term never moved while it was gone
+    const after = await quorumVerdict();
+    expect(after, 'the quorum view stands').to.not.equal(null);
+    expect(after.grantee, 'the master never changed').to.equal(verdict.grantee);
   });
 
 });
