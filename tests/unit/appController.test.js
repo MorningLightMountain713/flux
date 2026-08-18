@@ -16,6 +16,7 @@ const appsRepository = require('../../ZelBack/src/services/appDatabase/appsRepos
 const appsRuntimeState = require('../../ZelBack/src/services/appManagement/appsRuntimeState');
 const reconcilerQueue = require('../../ZelBack/src/services/appMonitoring/reconcilerQueue');
 const deploymentProvider = require('../../ZelBack/src/services/appRuntime/deploymentProvider');
+const mastershipGrantGate = require('../../ZelBack/src/services/appLifecycle/mastershipGrantGate');
 const { deserializeSpec } = require('../../ZelBack/src/services/utils/specCutover');
 
 const fluxNetworkHelper = require('../../ZelBack/src/services/fluxNetworkHelper');
@@ -405,6 +406,87 @@ describe('appController tests', () => {
 
       sinon.assert.calledOnceWithExactly(setOperatorStopped, 'Component_TestApp', true);
       sinon.assert.callOrder(setOperatorStopped, enqueueComponent);
+    });
+  });
+
+  describe('appYield tests', () => {
+    let enqueueComponent;
+    let setOperatorStopped;
+    let yieldMastership;
+    beforeEach(() => {
+      enqueueComponent = sinon.stub(reconcilerQueue, 'enqueueComponent');
+      setOperatorStopped = sinon.stub(appsRuntimeState, 'setOperatorStopped').resolves();
+      yieldMastership = sinon.stub(mastershipGrantGate, 'yieldMastership').resolves({ held: true });
+    });
+
+    // The logic function takes plain arguments — express objects never leave
+    // the Api wrapper.
+    it('releases mastership BEFORE the operator stop lock — the successor pays no lock-delay', async () => {
+      sinon.stub(appsRepository, 'getGlobalAppInfo').resolves({ name: 'TestApp' });
+      sinon.stub(deploymentProvider, 'buildDeployment').resolves(stubDeployment([
+        { name: 'TestApp', identifier: 'TestApp' },
+      ]));
+
+      const outcome = await appController.appYield('TestApp');
+
+      expect(outcome.held).to.equal(true);
+      sinon.assert.calledOnceWithExactly(yieldMastership, 'TestApp');
+      sinon.assert.calledOnceWithExactly(setOperatorStopped, 'TestApp', true);
+      sinon.assert.callOrder(yieldMastership, setOperatorStopped);
+      sinon.assert.calledOnceWithExactly(enqueueComponent, 'TestApp');
+    });
+
+    it('still stops when this node holds nothing — the global fan-out stays idempotent', async () => {
+      yieldMastership.resolves({ held: false });
+      sinon.stub(appsRepository, 'getGlobalAppInfo').resolves({ name: 'TestApp' });
+      sinon.stub(deploymentProvider, 'buildDeployment').resolves(stubDeployment([
+        { name: 'TestApp', identifier: 'TestApp' },
+      ]));
+
+      const outcome = await appController.appYield('TestApp');
+
+      expect(outcome.held).to.equal(false);
+      sinon.assert.calledOnceWithExactly(setOperatorStopped, 'TestApp', true);
+    });
+
+    it('yields the APP mastership even when a component is named — grants are app-scoped', async () => {
+      sinon.stub(appsRepository, 'getGlobalAppInfo').resolves({ name: 'TestApp' });
+      sinon.stub(deploymentProvider, 'buildDeployment').resolves(stubDeployment([
+        { name: 'Component', identifier: 'Component_TestApp' },
+      ]));
+
+      await appController.appYield('Component_TestApp');
+
+      sinon.assert.calledOnceWithExactly(yieldMastership, 'TestApp');
+      sinon.assert.calledOnceWithExactly(setOperatorStopped, 'Component_TestApp', true);
+    });
+
+    it('Api wrapper: refuses the unauthorized and never touches the logic', async () => {
+      verificationHelperStub.resolves(false);
+
+      const req = { params: { appname: 'TestApp' }, query: {} };
+      const res = { json: sinon.fake((param) => param) };
+      await appController.appYieldApi(req, res);
+
+      const result = res.json.firstCall.args[0];
+      expect(result.status).to.equal('error');
+      sinon.assert.notCalled(yieldMastership);
+      sinon.assert.notCalled(setOperatorStopped);
+    });
+
+    it('Api wrapper: global fans out the appyield verb and does not run locally', async () => {
+      verificationHelperStub.resolves(true);
+      const fanout = sinon.stub(globalCommand, 'executeAppGlobalCommand');
+
+      const req = { params: { appname: 'TestApp', global: 'true' }, query: {}, headers: { zelidauth: 'auth' } };
+      const res = { json: sinon.fake((param) => param) };
+      await appController.appYieldApi(req, res);
+
+      const result = res.json.firstCall.args[0];
+      expect(result.status).to.equal('success');
+      sinon.assert.calledOnce(fanout);
+      expect(fanout.firstCall.args[1]).to.equal('appyield');
+      sinon.assert.notCalled(yieldMastership);
     });
   });
 
