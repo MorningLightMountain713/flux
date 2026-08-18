@@ -360,5 +360,25 @@ describe('quorumGrant mastershipGrantGate', () => {
       const outcome = await mastershipGrantGate.yieldMastership('myapp');
       expect(outcome.held).to.equal(false);
     });
+
+    it('waits out an acquisition in flight and releases what it won — no stopped-container master', async () => {
+      // The fast-succession interleave: a yield can land while this node's
+      // own gate is mid-pursuit (e.g. it was already chasing a term another
+      // node just yielded). The acquire completes milliseconds later and
+      // would seat a master whose container the operator just stopped. The
+      // yield must therefore settle the in-flight acquisition and release
+      // whatever it won.
+      const release = sinon.stub().resolves();
+      grantClient.isAcquiring.returns(true);
+      setTimeout(() => {
+        grantClient.isAcquiring.returns(false);
+        grantClient.holderFor.returns({ release });
+      }, 300);
+
+      const outcome = await mastershipGrantGate.yieldMastership('myapp');
+
+      expect(outcome.held).to.equal(true);
+      sinon.assert.calledOnce(release);
+    });
   });
 });
