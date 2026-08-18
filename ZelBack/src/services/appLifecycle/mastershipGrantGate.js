@@ -403,15 +403,17 @@ async function onComponentTeardown(identifier, comp) {
 
 /**
  * The operator's grant-layer verb (`appyield`): voluntarily release this
- * node's held mastership grant so a standby can be seated with NO lock-delay,
- * before the caller applies the ordinary operator stop. Intent must arrive as
- * a command — the plane never infers grant intent from container state,
- * because a stopped container cannot say whether the operator wanted
- * maintenance (`appstop`: the grant holds, no failover behind their back) or
- * failover (this). On a non-holder it is a no-op, so the global fan-out stays
- * idempotent: every instance stops, only the master releases. The operator
- * stop lock then keeps this node's gate unconsulted, so it cannot re-acquire
- * behind the successor.
+ * node's held mastership grant so a standby can be seated with NO lock-delay.
+ * The caller MUST have applied the durable operator stop first — a released
+ * grant is free for anyone including this node's own gate, and the first
+ * fleet run measured exactly that: released before locking, the ex-master's
+ * gate re-acquired within one pass and the standbys rested against it
+ * forever. Intent must arrive as a command — the plane never infers grant
+ * intent from container state, because a stopped container cannot say
+ * whether the operator wanted maintenance (`appstop`: the grant holds, no
+ * failover behind their back) or failover (this). On a non-holder it is a
+ * no-op, so the global fan-out stays idempotent: every instance stops, only
+ * the master releases.
  */
 async function yieldMastership(appName) {
   const key = keyFor(appName);
