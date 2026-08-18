@@ -15,7 +15,7 @@ import {
 } from '../framework/container.js';
 import { waitFor, waitForAppInstalled } from '../framework/wait.js';
 import { authenticate } from '../auth.js';
-import { appOwnerKey } from '../framework/keys.js';
+import { fluxTeamKey } from '../framework/keys.js';
 
 // The encrypted referee (owed since 13C): a SEALED spec as the grant consumer.
 // Everything the plane reads must come off the encrypted path's cleartext
@@ -130,8 +130,9 @@ describe('encrypted mastership: a sealed spec holds and fails over a term', func
     // install endpoint reads the propagated sealed spec and runs the real
     // decrypt+install path on each chosen node.
     hosts = [0, 1, 2];
+    const teamKey = fluxTeamKey();
     for (const i of hosts) {
-      const auth = await authenticate(env.clients[i].url, appOwnerKey());
+      const auth = await authenticate(env.clients[i].url, teamKey);
       const body = await env.clients[i].installAppLocally(name, auth.zelidauth);
       if (/error/i.test(body) && !/success/i.test(body.slice(-300))) {
         throw new Error(`installapplocally failed on node ${i}: ${body.slice(-600)}`);
