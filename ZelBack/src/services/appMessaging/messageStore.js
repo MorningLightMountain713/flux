@@ -868,9 +868,19 @@ async function handleGrantGenerationEvent({ message, envelope }) {
     // The signer is the app's OWNER, and the owner comes from this node's own
     // copy of the spec — never from the record. No spec here means nothing to
     // verify against: drop, and sync delivers the spec before the record
-    // matters.
+    // matters. Say WHICH drop this was — a record that never arrived and one
+    // dropped for a missing spec are indistinguishable from outside, and the
+    // ambiguity cost two fleet runs. publish() is a no-op outside the harness.
     const owner = await appsRepository.getGlobalAppOwner(message.appName);
-    if (!owner || !ownerGenerationRecord.verify(message, owner)) return;
+    if (!owner || !ownerGenerationRecord.verify(message, owner)) {
+      fluxEventBus.publish('quorumGrant:generationRecordDropped', {
+        appName: message.appName,
+        role: message.role,
+        generation: message.generation,
+        reason: owner ? 'owner signature does not verify' : 'no spec to resolve the owner against',
+      });
+      return;
+    }
 
     const db = dbHelper.databaseConnection();
     const database = db.db(config.database.appsglobal.database);

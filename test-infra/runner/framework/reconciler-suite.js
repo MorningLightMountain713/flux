@@ -42,8 +42,11 @@ export async function seedSyncScopedData(env, name, index) {
 }
 
 // Seed a pre-built app's global spec into the given nodes' DBs (so a local install
-// can resolve it).
-async function seedGlobalSpec(env, app, indices) {
+// can resolve it). Exported for suites whose scenario needs NON-holder nodes to
+// know the app too: production nodes hold every global spec via message sync, and
+// anything verified against the spec (the owner-generation record) is silently
+// dropped by a node the targeted-install shortcut left specless.
+export async function seedGlobalSpec(env, app, indices) {
   await Promise.all(indices.map(async (i) => {
     const dc = dbClient(i + 1);
     await dc.seedGlobalAppSpec(app.spec);
