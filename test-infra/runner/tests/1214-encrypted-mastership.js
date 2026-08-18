@@ -102,9 +102,12 @@ describe('encrypted mastership: a sealed spec holds and fails over a term', func
           cpu: 0.5,
           memory: 300,
           rootFsGb: 2,
-          persistentStorage: { sizeGb: 10, mounts: { '/appdata': { source: 'appdata', destination: '/appdata' } } },
+          persistentStorage: {
+            sizeGb: 10,
+            mounts: { '/appdata': { source: 'appdata', destination: '/appdata' } },
+            sync: { mode: 'activeStandby' },
+          },
           ports: { http: { containerPort: 80, hostPort: 31200 } },
-          sync: { mode: 'activeStandby' },
         },
       },
     });
