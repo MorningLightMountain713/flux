@@ -374,6 +374,20 @@ describe('quorumGrant grantorController', () => {
       expect(res.body.data.message).to.contain('young');
     });
 
+    it('the recorded grantee is never held to the age floor — repairing its own term is not a challenge', async () => {
+      // the repair chore re-accepts (and, past a residue promise, re-acquires)
+      // the incumbent's own term; the floor binds challengers only, the same
+      // principle as lock-delay
+      grantRegister.read.resolves({ accepted: { epoch: 2, grantee: ASKER, mode: 'held' } });
+      registryManager.appLocation.resolves([
+        { ip: `${ASKER_HOST}:16127`, runningSince: Date.now() - 60_000 },
+      ]);
+      const res = fakeRes();
+      await grantorController.prepare(fakeReq(signedAsk('prepare')), res);
+      expect(res.statusCode).to.equal(200);
+      expect(grantRegister.prepare.calledOnce).to.equal(true);
+    });
+
     it('a young holder may make a FIRST acquisition — a fresh app seats its first master', async () => {
       registryManager.appLocation.resolves([
         { ip: `${ASKER_HOST}:16127`, runningSince: Date.now() - 60_000 },
