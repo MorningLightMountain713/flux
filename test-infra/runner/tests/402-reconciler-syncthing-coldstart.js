@@ -74,8 +74,8 @@ describe('reconciler cold start - fresh multi-node placement, no seeded source',
     // already allocated") - the second app then crash-ladders instead of
     // seeding. Election placement varies with the timestamped app names, so
     // any run can draw the colliding placement.
-    const rSpec = await buildSeedableSyncthingApp({ name: rApp, mode: 'r', ports: [31111] });
-    const gSpec = await buildSeedableSyncthingApp({ name: gApp, mode: 'g', ports: [31112] });
+    const rSpec = await buildSeedableSyncthingApp({ name: rApp, syncMode: 'syncFirst', ports: [31111] });
+    const gSpec = await buildSeedableSyncthingApp({ name: gApp, syncMode: 'activeStandby', ports: [31112] });
 
     // The folder id carries the app's minted identity, which only the registration
     // row states — and this runs before install, so there is no container to ask.

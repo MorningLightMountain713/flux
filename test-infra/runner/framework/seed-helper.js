@@ -97,16 +97,22 @@ export async function buildSeedableApp({
   return { spec: specWithMeta, permanentMessage, hashEntry, hash, txid };
 }
 
+// The v9 sync-mode names, mapped to the legacy containerData letter flags
+// flux-spec still parses on the wire. The names are the product vocabulary;
+// the letters exist only here, at the wire boundary.
+const CONTAINER_DATA_FLAG = { activeStandby: 'g', syncFirst: 'r', sync: 's' };
+
 /**
- * A seedable app whose primary component carries a syncthing containerData flag
- * (`g:` masterSlave gateway, `r:` receive-only, `s:` shared). Drive its sync
- * state with framework/syncthing-control and its election with framework/fdm-control.
- * Pass `sibling: true` to add a plain (non-synced) component so a test can prove
- * the decider only acts on the g:/r: component and leaves siblings running.
+ * A seedable app whose primary component carries a syncthing sync mode
+ * (`activeStandby`, `syncFirst`, or `sync`), encoded into the spec's legacy
+ * containerData flag. Drive its sync state with framework/syncthing-control
+ * and its election with framework/fdm-control. Pass `sibling: true` to add a
+ * plain (non-synced) component so a test can prove the decider only acts on
+ * the synced component and leaves siblings running.
  */
 export async function buildSeedableSyncthingApp({
   name,
-  mode = 'g',
+  syncMode = 'activeStandby',
   repotag = `${REGISTRY_REPO_HOST}/${name}:v1`,
   ports = [31111],
   containerPorts = [80],
@@ -114,9 +120,11 @@ export async function buildSeedableSyncthingApp({
   hdd = 1,
   ...rest
 }) {
+  const mode = CONTAINER_DATA_FLAG[syncMode];
+  if (!mode) throw new Error(`buildSeedableSyncthingApp: unknown syncMode '${syncMode}'`);
   const compose = [{
     name,
-    description: `${mode}: sync component`,
+    description: `${syncMode} sync component`,
     repotag,
     ports: [ports[0]],
     domains: [''],

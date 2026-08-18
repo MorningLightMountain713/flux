@@ -34,6 +34,7 @@ describe('the committee heals its dark seat, and the owner re-deals the walk', f
   let outpoints; // node index -> outpoint, all ten
   let ownerAuth0;
   let refereeIndex;
+  let addedIndex; // the healed replacement seat, found by test 1
 
   async function readCell(clientIndex) {
     try {
@@ -115,7 +116,7 @@ describe('the committee heals its dark seat, and the owner re-deals the walk', f
 
     name = `e2eheal${Date.now()}`;
     await pushImage(name, 'v1');
-    const app = await buildSeedableSyncthingApp({ name, mode: 'g' });
+    const app = await buildSeedableSyncthingApp({ name, syncMode: 'activeStandby' });
     const installAfters = HOLDERS.map((i) => env.clients[i].getLastEventId());
     await installOnNodes(env, app, HOLDERS);
     // Every node must know the app, not just its holders: the outsider
@@ -192,7 +193,7 @@ describe('the committee heals its dark seat, and the owner re-deals the walk', f
 
       const entry = healed.roster.chain.find((e) => e.remove === outpoints[refereeIndex]);
       expect(entry.add, 'the replacement is a real node').to.not.equal(undefined);
-      const addedIndex = Number(Object.keys(outpoints).find((i) => outpoints[i] === entry.add));
+      addedIndex = Number(Object.keys(outpoints).find((i) => outpoints[i] === entry.add));
       expect(spareIndexes, `replacement ${entry.add} came off the walk's spare seats`).to.include(addedIndex);
 
       // A register's own journaled chain is trusted and deliberately BARE —
@@ -220,6 +221,52 @@ describe('the committee heals its dark seat, and the owner re-deals the walk', f
       // through the whole re-roll test and its SSE stream died with it.
       await unpauseHostContainer(env.clients[refereeIndex].container);
     }
+  });
+
+  it('a dead master fails over THROUGH the healed committee', async function () {
+    this.timeout(600000);
+
+    // The heal reshaped the committee; the next election must run on the
+    // RESHAPED one: the challenger's asks carry the roster chain, the
+    // replacement seat verifies it and answers for a register it never
+    // originally sat on, and the successor's quorum includes that seat.
+    // Heal proven but never exercised by an election would be a committee
+    // that exists only on paper.
+    const before = await quorumVerdict();
+    expect(before, 'a standing grant before the failure').to.not.equal(null);
+    const masterIndex = Number(Object.keys(outpoints).find((i) => outpoints[i] === before.grantee));
+    expect(HOLDERS, `master ${before.grantee} maps to a holder`).to.include(masterIndex);
+    const survivors = HOLDERS.filter((i) => i !== masterIndex);
+    const survivorAfters = new Map(survivors.map((i) => [i, env.clients[i].getLastEventId()]));
+
+    await pauseHostContainer(env.clients[masterIndex].container);
+    try {
+      await Promise.any(survivors.map((i) => env.clients[i].waitForEvent(
+        'quorumGrant:granted', (d) => d.key === `${name}/master`, 300000, { afterId: survivorAfters.get(i) },
+      ))).catch((err) => {
+        throw new Error(`no survivor acquired through the healed committee (${err.errors?.[0]?.message ?? err.message})`);
+      });
+      let second = null;
+      await waitFor(async () => {
+        second = await quorumVerdict();
+        return second !== null && second.grantee !== before.grantee;
+      }, { timeout: 120000, interval: 10000, label: 'a successor holds the grant' });
+      expect(second.epoch, 'epochs never move backwards').to.be.greaterThan(before.epoch);
+
+      // the healed seat took part: the replacement's cell holds the NEW term
+      await waitFor(async () => {
+        const cell = await readCell(addedIndex);
+        return cell?.accepted?.grantee === second.grantee;
+      }, { timeout: 60000, interval: 5000, label: 'the replacement seat holds the successor grant' });
+    } finally {
+      await unpauseHostContainer(env.clients[masterIndex].container);
+    }
+
+    // the corpse adopts on return, and the app settles at one master
+    await waitFor(async () => {
+      const verdict = await quorumVerdict();
+      return verdict !== null && verdict.grantee !== before.grantee;
+    }, { timeout: 120000, interval: 10000, label: 'the returning corpse adopted' });
   });
 
   it('the owner re-deals the walk, and the master re-acquires under the new generation', async function () {
