@@ -220,4 +220,29 @@ describe('per-app graceful stop routes through flux-shutdownd on Arcane (v8)', f
     await draining.catch(() => {}); // the hung begin_app_stop resolves 'forced'
     expect(await isRemoved(name)).to.equal(true);
   });
+
+  it('a component redeploy drains component-scoped: the ask names the component', async function () {
+    this.timeout(240000);
+    const name = `gscompswap${Date.now()}`;
+    await installGraceful(name, 31118);
+    await control.reset();
+
+    // v8 flat app: the single component carries the app's name.
+    const auth = await ownerAuth();
+    const res = await fetch(`${client.url}/apps/redeploycomponent/${name}/${name}`, {
+      headers: { zelidauth: auth.zelidauth }, signal: AbortSignal.timeout(60000),
+    });
+    expect(res.ok, 'redeploycomponent accepted').to.equal(true);
+
+    // The declared contract routes the stop through the daemon at COMPONENT
+    // scope with the redeploy reason — never a bare docker stop, never a
+    // whole-identity drain.
+    const call = await waitForShutdowndCall(control, (c) => c.method === 'begin_app_stop' && c.app === name);
+    expect(call.component).to.equal(name);
+    expect(call.reason).to.equal('redeploy');
+    expect(call.force).to.equal(false);
+
+    // The swap completes: the rebuilt component comes back up.
+    await waitForUp(client, name, `${name} running after the component redeploy`);
+  });
 });
