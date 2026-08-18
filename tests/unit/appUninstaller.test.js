@@ -179,6 +179,7 @@ describe('appUninstaller tests', () => {
       '../appManagement/appsRuntimeState': {
         setCondemned: sinon.stub().resolves(),
         removeComponentState: sinon.stub().resolves(),
+        remove: sinon.stub().resolves(true),
       },
       '../appRuntime/deploymentProvider': {
         getInstalledDeployment: sinon.stub().resolves(null),
@@ -250,7 +251,26 @@ describe('appUninstaller tests', () => {
     it('a volume-destroying teardown releases the grant', async () => {
       await appUninstaller.uninstallComponent(component(), { removeVolumes: true }).catch(() => {});
       sinon.assert.calledOnceWithExactly(
-        mastershipGrantGateStub.onComponentTeardown, 'web_TestApp', sinon.match.object,
+        mastershipGrantGateStub.onComponentTeardown, 'web_TestApp', 'TestApp',
+      );
+    });
+
+    it('a true removal releases the grant - a removed app must not shield its term', async () => {
+      fluxShutdowndClientStub.beginAppStop.resolves({ outcome: 'complete' });
+      await appUninstaller.runTeardown({
+        key: 'myapp',
+        name: 'myapp',
+        networkName: 'myapp',
+        forceKill: false,
+        owner: '1own',
+        reason: 'user-cancel',
+        shutdownBudgetSeconds: 30,
+        components: [{
+          identifier: 'web_myapp', appId: 'fluxweb_myapp', label: 'web', ports: [],
+        }],
+      });
+      sinon.assert.calledOnceWithExactly(
+        mastershipGrantGateStub.onComponentTeardown, 'web_myapp', 'myapp',
       );
     });
   });

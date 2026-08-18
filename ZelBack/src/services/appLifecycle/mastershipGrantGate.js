@@ -399,15 +399,19 @@ async function pollFenceLift(appName, fence) {
  * storage recreate). Volume-preserving teardowns must not call this: the
  * grant follows the data, and a rebuild-in-place holds the term. Voluntary
  * release, so successors pay no lock-delay.
+ *
+ * Keyed on the held grant alone — never the spec, which a crash-recovered
+ * teardown may no longer be able to read. Only activeStandby apps ever hold
+ * a grant, so a held grant IS the eligibility.
  */
-async function onComponentTeardown(identifier, comp) {
-  if (!comp?.hasActiveStandbySyncthing?.()) return;
+async function onComponentTeardown(identifier, appName) {
+  if (!appName) return;
   unknownSince.delete(identifier);
-  const holder = grantClient.holderFor(keyFor(comp.appName));
+  const holder = grantClient.holderFor(keyFor(appName));
   if (!holder) return;
   try {
     await holder.release();
-    log.info(`mastershipGrantGate - released ${keyFor(comp.appName)} on teardown of ${identifier}`);
+    log.info(`mastershipGrantGate - released ${keyFor(appName)} on teardown of ${identifier}`);
   } catch (error) {
     log.warn(`mastershipGrantGate - release on teardown of ${identifier} failed: ${error.message}`);
   }

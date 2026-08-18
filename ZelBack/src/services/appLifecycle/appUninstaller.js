@@ -322,26 +322,144 @@ async function reclaimUnusedImages(images, status) {
 }
 
 /**
- * Uninstall a single component: stop (or kill) and remove its container, deny
- * its ports, optionally tear down volumes/syncthing/crontab. Image cleanup is
- * app-level and reference-gated (see reclaimUnusedImages, called by
- * uninstallApplication). Driven off the normalized DeploymentSpec component.
+ * The ONE per-component teardown core: every path that takes a component's
+ * container down — true removal, storage recreate, rebuild-in-place — runs
+ * through here. The grant release keys on the data: removeVolumes destroys
+ * this instance's authority and releases the term; a volume-preserving
+ * teardown holds it.
+ *
+ * `c` is a plain descriptor rather than a DeploymentComponent so the
+ * crash-recovered removal path (whose spec may be gone) and the live rebuild
+ * flows share it: { identifier, appId, appName, label, ports }.
+ *
+ * Returns { removed }. When the container survives the remove (or a
+ * transition never settles), destructive cleanup is SKIPPED — a volume rm
+ * under a live container corrupts it — and the caller keeps the teardown
+ * owed. A cleanup error after the container is confirmed gone still counts
+ * as removed: the host residue is retried by the owed record, never by
+ * holding the component hostage.
+ *
+ * @param {{identifier: string, appId: string, appName: string, label: string, ports: number[]}} c
+ * @param {object} [opts]
+ * @param {boolean} [opts.forceKill=false] - docker kill + force-remove instead of stop + remove
+ * @param {boolean} [opts.removeVolumes=false] - tear down volumes, syncthing, crontab (and release the grant)
+ * @param {boolean} [opts.skipPorts=false] - leave ufw/UPnP rules in place
+ * @param {boolean} [opts.stopHandled=false] - the stop already landed (flux-shutdownd, or the caller's own stop phase)
+ * @param {Function|null} [opts.onStatus] - progress callback
+ * @returns {Promise<{removed: boolean}>}
+ */
+async function teardownComponentCore(c, opts = {}) {
+  const forceKill = opts.forceKill || false;
+  const removeVolumes = opts.removeVolumes || false;
+  const skipPorts = opts.skipPorts || false;
+  const stopHandled = opts.stopHandled || false;
+  const onStatus = opts.onStatus || null;
+  const status = (msg) => { log.info(msg); if (onStatus) onStatus(msg); };
+
+  stopAppMonitoring(c.identifier, removeVolumes);
+
+  // Local stop is the fallback executor only: a component with a declared
+  // graceful contract is stopped by flux-shutdownd (the caller passes
+  // stopHandled), and docker's SIGTERM+grace IS the contract for the rest.
+  if (!stopHandled) {
+    status(`Stopping Flux App ${c.label}...`);
+    if (forceKill) {
+      await dockerService.appDockerKill(c.identifier).catch((error) => log.warn(`Failed to kill container ${c.appId}: ${error.message}`));
+    } else {
+      await dockerService.appDockerStop(c.identifier).catch((error) => log.warn(`Failed to stop container ${c.appId}: ${error.message}`));
+    }
+  }
+
+  // The grant follows the data: a volume-preserving teardown is a
+  // rebuild-in-place and the term holds through it — the master returns with
+  // its data and its Holder never stopped renewing. Destroying the volume
+  // ends this instance's authority, so release — after the stop, never
+  // before: a grant released under a still-writing container is the overlap
+  // the whole plane exists to prevent.
+  if (removeVolumes) {
+    await mastershipGrantGate.onComponentTeardown(c.identifier, c.appName);
+  }
+
+  // Hold the component's 'removing' lease across remove + host cleanup so a
+  // reconcile start can't (re)create the container mid-teardown; wait bounded
+  // for an in-flight start to settle rather than racing it.
+  const removingToken = await acquireRemovingLease(c.appId, c.identifier);
+  if (!removingToken) {
+    log.error(`Teardown of ${c.identifier}: a container transition did not settle within ${REMOVING_LEASE_WAIT_MS}ms — deferring`);
+    return { removed: false };
+  }
+  let removed = false;
+  try {
+    status(`Removing Flux App ${c.label} container...`);
+    if (forceKill) {
+      await dockerService.appDockerForceRemove(c.identifier).catch((e) => log.warn(`force remove ${c.appId}: ${e.message}`));
+    } else {
+      await dockerService.appDockerRemove(c.identifier).catch((e) => log.warn(`remove ${c.appId}: ${e.message}`));
+    }
+    // NEVER reclaim a component's host storage while its container still exists.
+    // Decide on the container's ACTUAL presence (getDockerContainer returns null
+    // when gone), not on the remove error; a presence check that itself fails is
+    // treated as "still there" (never delete on uncertainty).
+    let stillPresent;
+    try {
+      stillPresent = Boolean(await dockerService.getDockerContainer(c.identifier));
+    } catch (probeErr) {
+      stillPresent = true;
+      log.warn(`Teardown of ${c.identifier}: could not confirm the container was removed (${probeErr.message}); keeping it owed`);
+    }
+    // A non-force teardown found the container still present: a reconcile start
+    // completed between the stop and our 'removing' lease, leaving it running.
+    // We hold the lease now, so no further start can intervene — escalate to a
+    // force remove (its graceful window already elapsed in the stop phase).
+    if (stillPresent && !forceKill) {
+      await dockerService.appDockerForceRemove(c.identifier).catch((e) => log.warn(`force remove (escalated) ${c.appId}: ${e.message}`));
+      try {
+        stillPresent = Boolean(await dockerService.getDockerContainer(c.identifier));
+      } catch (probeErr) {
+        stillPresent = true;
+        log.warn(`Teardown of ${c.identifier}: could not confirm the escalated removal (${probeErr.message}); keeping it owed`);
+      }
+    }
+    if (stillPresent) {
+      log.error(`Teardown of ${c.identifier}: container still present after remove — skipping destructive cleanup, keeping the teardown owed`);
+      return { removed: false };
+    }
+    removed = true;
+    if (!skipPorts) {
+      await denyPorts(c.ports, c.appName, { entityName: c.label, onStatus });
+    }
+    if (removeVolumes) {
+      await stopSyncthingAndCleanup(c.identifier, c.appId);
+      await unmountVolume(c.appId, { entityName: c.label, onStatus });
+      await cleanupAppData(c.appId, { entityName: c.label, onStatus });
+      await cleanupCrontab(c.appId, { onStatus });
+      const volumepath = await volumeService.getVolumeFilePath(c.appId);
+      await cleanupVolumePath(volumepath, { entityName: c.label, onStatus });
+    }
+  } catch (err) {
+    log.error(`Host teardown of ${c.identifier} failed (continuing): ${err.message}`);
+  } finally {
+    operationRegistry.release(c.appId, removingToken);
+  }
+  return { removed };
+}
+
+/**
+ * Uninstall a single component: the rebuild flows' entry to the shared
+ * teardown core. Image cleanup is app-level and reference-gated (see
+ * reclaimUnusedImages, called by uninstallApplication). Driven off the
+ * normalized DeploymentSpec component.
  *
  * @param {import('@runonflux/flux-spec-backend').DeploymentComponent} component
  * @param {object} [options]
  * @param {boolean} [options.removeVolumes=false] - tear down volumes, syncthing, crontab
  * @param {boolean} [options.forceKill=false] - docker kill + force-remove instead of stop + remove
  * @param {boolean} [options.skipPorts=false] - leave ufw/UPnP rules in place (a redeploy reconciles the port delta itself)
+ * @param {boolean} [options.stopHandled=false] - flux-shutdownd already drained and stopped this identity
  * @param {Function|null} [options.onStatus] - progress callback
  */
 async function uninstallComponent(component, options = {}) {
   const removeVolumes = options.removeVolumes || false;
-  const forceKill = options.forceKill || false;
-  // skipPorts: a redeploy keeps the app's ufw/UPnP rules and moves only the port delta
-  // itself, so the teardown half must not deny this component's ports (an unchanged port
-  // set would otherwise flap every rule, ~1s/port of UPnP router pacing). Normal removal
-  // leaves it false and denies all ports as before.
-  const skipPorts = options.skipPorts || false;
   const onStatus = options.onStatus || null;
 
   const { appName } = component;
@@ -354,95 +472,31 @@ async function uninstallComponent(component, options = {}) {
   const appId = dockerService.getAppIdentifier(component.identifier);
   const label = componentName === appName ? appName : `component ${componentName} of ${appName}`;
 
-  const status = (msg) => {
-    log.info(msg);
-    if (onStatus) onStatus(msg);
-  };
+  const { removed } = await teardownComponentCore(
+    {
+      identifier: component.identifier, appId, appName, label, ports: component.hostPorts || [],
+    },
+    {
+      forceKill: options.forceKill || false,
+      removeVolumes,
+      skipPorts: options.skipPorts || false,
+      stopHandled: options.stopHandled || false,
+      onStatus,
+    },
+  );
 
-  status(`Stopping Flux App ${label}...`);
-  stopAppMonitoring(component.identifier, removeVolumes);
-  let stopFailed = false;
-
-  if (forceKill) {
-    await dockerService.appDockerKill(component.identifier).catch((error) => {
-      stopFailed = true;
-      log.warn(`Failed to kill container ${appId}: ${error.message}`);
-    });
-  } else {
-    await dockerService.appDockerStop(component.identifier).catch((error) => {
-      stopFailed = true;
-      log.warn(`Failed to stop container ${appId}: ${error.message}`);
-    });
-  }
-
-  status(stopFailed ? `Flux App ${label} could not be stopped` : `Flux App ${label} stopped`);
-
-  // The grant follows the data: a volume-preserving teardown is a
-  // rebuild-in-place (redeploy, spec update) and the term holds through it —
-  // the master returns with its data and its Holder never stopped renewing.
-  // Destroying the volume ends this instance's authority, so release — after
-  // the stop, never before: a grant released under a still-writing container
-  // is the overlap the whole plane exists to prevent.
-  if (removeVolumes) {
-    await mastershipGrantGate.onComponentTeardown(component.identifier, component);
-  }
-
-  if (removeVolumes) {
-    await stopSyncthingAndCleanup(component.identifier, appId);
-  }
-
-  status(`Removing Flux App ${label} container...`);
-
-  let containerRemoved = false;
-  if (forceKill) {
-    await dockerService.appDockerForceRemove(component.identifier).then(() => {
-      containerRemoved = true;
-    }).catch((error) => {
-      log.error(`Force remove failed for ${appId}: ${error.message}`);
-    });
-  } else {
-    await dockerService.appDockerRemove(component.identifier).then(() => {
-      containerRemoved = true;
-    }).catch((error) => {
-      log.error(`Container remove failed for ${appId}: ${error.message}`);
-    });
-  }
-
-  // Decide on the container's ACTUAL presence, never on the error: an already-absent
-  // container is a completed teardown and a remove that failed with the container
-  // still running is not, and both arrive as the same rejection. The same rule the
-  // app-level teardown states before it reclaims host storage.
-  if (!containerRemoved) {
-    try {
-      containerRemoved = !await dockerService.getDockerContainer(component.identifier);
-    } catch (probeError) {
-      log.warn(`Could not confirm whether ${appId} is gone: ${probeError.message}`);
-    }
-  }
-
-  if (containerRemoved) {
-    status(`Flux App ${label} container removed`);
-  } else {
-    log.warn(`WARNING: Container ${appId} may not have been fully removed`);
-  }
-
-  if (!skipPorts) {
-    await cleanupDeploymentPorts(component, { entityName: label, onStatus });
-  }
-
-  if (removeVolumes) {
-    await unmountVolume(appId, { entityName: label, onStatus });
-    await cleanupAppData(appId, { entityName: label, onStatus });
-    await cleanupCrontab(appId, { onStatus });
-    const volumepath = await volumeService.getVolumeFilePath(appId);
-    await cleanupVolumePath(volumepath, { entityName: label, onStatus });
+  if (removed && removeVolumes) {
     // Reclaim now-unneeded app-swap pool capacity (idempotent; no-op without the
     // new-mechanism host config). The container is already gone, so its swap pages
     // are freed and an emptied chunk can be swapped off + removed.
     await appSwapPoolService.reconcile();
   }
 
-  status(containerRemoved
+  const status = (msg) => {
+    log.info(msg);
+    if (onStatus) onStatus(msg);
+  };
+  status(removed
     ? `Flux App ${label} was successfully removed`
     : `Flux App ${label} teardown finished, but container ${appId} is still present`);
 }
@@ -1068,106 +1122,47 @@ async function executeTeardown(doc, { onStatus = null } = {}) {
   // Stop OUTSIDE the lock (skipped when the daemon already did it): the container is
   // removed below, so stopping it first makes the remove a clean (non-SIGKILL) teardown
   // and releases its volume before the unmount.
-  status(`Stopping ${name} container(s)...`);
-  // eslint-disable-next-line no-restricted-syntax
-  for (const c of list) {
-    stopAppMonitoring(c.identifier, true);
-    if (daemonStopped) continue; // flux-shutdownd already stopped it on Arcane
-    if (forceKill) {
-      // eslint-disable-next-line no-await-in-loop
-      await dockerService.appDockerKill(c.identifier).catch((e) => log.warn(`kill ${c.appId}: ${e.message}`));
-    } else {
-      // eslint-disable-next-line no-await-in-loop
-      await dockerService.appDockerStop(c.identifier).catch((e) => log.warn(`stop ${c.appId}: ${e.message}`));
+  if (!daemonStopped) {
+    status(`Stopping ${name} container(s)...`);
+    // eslint-disable-next-line no-restricted-syntax
+    for (const c of list) {
+      if (forceKill) {
+        // eslint-disable-next-line no-await-in-loop
+        await dockerService.appDockerKill(c.identifier).catch((e) => log.warn(`kill ${c.appId}: ${e.message}`));
+      } else {
+        // eslint-disable-next-line no-await-in-loop
+        await dockerService.appDockerStop(c.identifier).catch((e) => log.warn(`stop ${c.appId}: ${e.message}`));
+      }
     }
   }
 
-  // Destructive host teardown under ONE node-wide lock for the whole app. Each component
-  // is isolated (a throw in one never skips the others); the cross-app docker network
-  // removal (networkWith consumers attach it) is serialized inside the same lock. Only the
-  // lock's own resources (ufw / UPnP / image store / network) run under it — the swap-pool
-  // reconcile runs after release.
+  // Destructive host teardown under ONE node-wide lock for the whole app, each
+  // component through the shared teardown core (stopHandled: the stop landed
+  // above, by the daemon or the local loop). The cross-app docker network
+  // removal (networkWith consumers attach it) is serialized inside the same
+  // lock. Only the lock's own resources (ufw / UPnP / image store / network)
+  // run under it — the swap-pool reconcile runs after release.
   status(`Removing ${name} container(s) and host state...`);
   // A component whose container is still present after the remove blocks clearing the owed
-  // record: destroying its volume under a live container would corrupt it, so we skip the
-  // cleanup and leave the teardown for boot recovery (which re-checks the container is gone).
+  // record: destroying its volume under a live container would corrupt it, so the core skips
+  // the cleanup and we leave the teardown for boot recovery (which re-checks the container is gone).
   let containerSurvived = false;
   const survivedComponents = new Set();
   await withHostMutationLock(async () => {
     // eslint-disable-next-line no-restricted-syntax
     for (const c of list) {
-      // Hold the component's 'removing' lease across remove + host cleanup so a reconcile
-      // start can't (re)create the container mid-teardown; wait bounded for an in-flight
-      // start to settle rather than racing it.
       // eslint-disable-next-line no-await-in-loop
-      const removingToken = await acquireRemovingLease(c.appId, c.identifier);
-      if (!removingToken) {
+      const { removed } = await teardownComponentCore(
+        {
+          identifier: c.identifier, appId: c.appId, appName: name, label: c.label, ports: c.ports,
+        },
+        {
+          forceKill, removeVolumes: true, stopHandled: true, onStatus,
+        },
+      );
+      if (!removed) {
         containerSurvived = true;
         survivedComponents.add(c.identifier);
-        log.error(`Teardown of ${c.identifier}: a container transition did not settle within ${REMOVING_LEASE_WAIT_MS}ms — deferring, keeping it owed and condemned for boot recovery`);
-        // eslint-disable-next-line no-continue
-        continue;
-      }
-      try {
-        if (forceKill) {
-          // eslint-disable-next-line no-await-in-loop
-          await dockerService.appDockerForceRemove(c.identifier).catch((e) => log.warn(`force remove ${c.appId}: ${e.message}`));
-        } else {
-          // eslint-disable-next-line no-await-in-loop
-          await dockerService.appDockerRemove(c.identifier).catch((e) => log.warn(`remove ${c.appId}: ${e.message}`));
-        }
-        // NEVER reclaim a component's host storage while its container still exists — a
-        // failed remove would otherwise strand a live container with its volume unmounted
-        // and data deleted. Decide on the container's ACTUAL presence (getDockerContainer
-        // returns null when gone), not on the remove error; a presence check that itself
-        // fails is treated as "still there" (never delete on uncertainty).
-        let stillPresent;
-        try {
-          // eslint-disable-next-line no-await-in-loop
-          stillPresent = Boolean(await dockerService.getDockerContainer(c.identifier));
-        } catch (probeErr) {
-          stillPresent = true;
-          log.warn(`Teardown of ${c.identifier}: could not confirm the container was removed (${probeErr.message}); keeping it owed`);
-        }
-        // A non-force teardown found the container still present: a reconcile start
-        // completed after our pre-lock stop and before we took the 'removing' lease,
-        // leaving it running. We hold the lease now, so no further start can intervene —
-        // escalate to a force remove (its graceful window already elapsed in the stop
-        // phase) rather than 409-looping to boot recovery.
-        if (stillPresent && !forceKill) {
-          // eslint-disable-next-line no-await-in-loop
-          await dockerService.appDockerForceRemove(c.identifier).catch((e) => log.warn(`force remove (escalated) ${c.appId}: ${e.message}`));
-          try {
-            // eslint-disable-next-line no-await-in-loop
-            stillPresent = Boolean(await dockerService.getDockerContainer(c.identifier));
-          } catch (probeErr) {
-            stillPresent = true;
-            log.warn(`Teardown of ${c.identifier}: could not confirm the escalated removal (${probeErr.message}); keeping it owed`);
-          }
-        }
-        if (stillPresent) {
-          containerSurvived = true;
-          survivedComponents.add(c.identifier);
-          log.error(`Teardown of ${c.identifier}: container still present after remove — skipping destructive cleanup, keeping the teardown owed and condemned for retry`);
-          // eslint-disable-next-line no-continue
-          continue;
-        }
-        // eslint-disable-next-line no-await-in-loop
-        await denyPorts(c.ports, name, { entityName: c.label });
-        // eslint-disable-next-line no-await-in-loop
-        await unmountVolume(c.appId, { entityName: c.label });
-        // eslint-disable-next-line no-await-in-loop
-        await cleanupAppData(c.appId, { entityName: c.label });
-        // eslint-disable-next-line no-await-in-loop
-        await cleanupCrontab(c.appId);
-        // eslint-disable-next-line no-await-in-loop
-        const volumepath = await volumeService.getVolumeFilePath(c.appId);
-        // eslint-disable-next-line no-await-in-loop
-        await cleanupVolumePath(volumepath, { entityName: c.label });
-      } catch (err) {
-        log.error(`Host teardown of ${c.identifier} failed (continuing): ${err.message}`);
-      } finally {
-        operationRegistry.release(c.appId, removingToken);
       }
     }
     // Reclaim the app's images (reference-gated) — an image-store mutation, so under the lock.

@@ -53,8 +53,14 @@ describe('reconciler run-authority guard', () => {
     // run-state mutation there is.
     const owners = {
       'appMonitoring/appReconciler.js': 8, // the sole authority: volume-unavailable pending stop, data-clear stop, force kill, graceful stop, restart-gen bounce, unhealthy restart, start, network-detach heal force-remove
-      'appLifecycle/appUninstaller.js': 7, // terminal teardown: uninstallComponent (redeploy) kill+stop+force-remove, runTeardown worker kill+stop + 2 paced force-removes
+      'appLifecycle/appUninstaller.js': 6, // terminal teardown: the shared core's kill+stop fallback + force-remove + escalated force-remove, runTeardown's pre-lock kill+stop fallback
       'appManagement/appController.js': 1, // stopAllNonFluxRunningApps janitor (foreign, non-Flux containers)
+      // The deposition fence: a deposed master must be down within the grant's
+      // fencing window (lock-delay), not at reconcile cadence — the gate stops
+      // it HARD the moment it learns of a higher accepted term. Routing through
+      // the reconciler would add a pass of latency exactly where the plane's
+      // exactly-one promise is enforced.
+      'appLifecycle/mastershipGrantGate.js': 1,
       // Owner-declared reload reactions. Both take the primitive as an injected
       // dependency rather than calling it inline, so each shows up as one
       // reference, not one call. Restarting is the owner's own choice of reaction

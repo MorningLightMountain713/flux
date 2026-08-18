@@ -336,13 +336,14 @@ describe('quorumGrant mastershipGrantGate', () => {
     it('releases a held grant once the container is stopped', async () => {
       const release = sinon.stub().resolves();
       grantClient.holderFor.returns({ release });
-      await mastershipGrantGate.onComponentTeardown(IDENTIFIER, activeStandbyComp());
+      await mastershipGrantGate.onComponentTeardown(IDENTIFIER, 'myapp');
       expect(release.calledOnce).to.equal(true);
     });
 
-    it('is a no-op for other components and for non-holders', async () => {
-      await mastershipGrantGate.onComponentTeardown(IDENTIFIER, plainComp());
-      await mastershipGrantGate.onComponentTeardown(IDENTIFIER, activeStandbyComp());
+    it('is a no-op for non-holders and for a missing app name', async () => {
+      grantClient.holderFor.returns(null);
+      await mastershipGrantGate.onComponentTeardown(IDENTIFIER, 'myapp');
+      await mastershipGrantGate.onComponentTeardown(IDENTIFIER, undefined);
       expect(grantClient.holderFor.callCount).to.equal(1);
     });
   });

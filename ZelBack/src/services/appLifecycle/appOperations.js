@@ -348,6 +348,28 @@ async function redeployApplication(appName, options = {}) {
     // rebuild, never a simultaneous outage of every replica.
     for (const deployment of deployments) {
       const unitLabel = deployment.replica != null ? `Replica ${deployment.replica} of ${appName}` : `Application ${appName}`;
+      // Route the identity's stop through flux-shutdownd first: the daemon is the
+      // sole executor of declared graceful contracts (drain → preStop → window),
+      // and a redeploy's teardown must honor them like any other stop. Terminal
+      // outcomes mean the containers are already down; a daemon that cannot take
+      // the stop (legacy, unreachable) leaves it to the component teardown's
+      // local fallback.
+      const budgetSeconds = shutdownPlan.appShutdownBudgetSeconds(deployment);
+      // eslint-disable-next-line no-await-in-loop
+      const stop = await fluxShutdowndClient.beginAppStop(
+        preTeardownSpec.owner,
+        appName,
+        fluxShutdowndClient.SHUTDOWN_REASON.REDEPLOY,
+        { force: false, deadline: Math.floor(Date.now() / 1000) + budgetSeconds, replica: deployment.replica ?? null },
+      );
+      if (stop.outcome === 'rejected_pipeline_active') {
+        status(`${unitLabel} ${operation} deferred: a node-wide shutdown owns the stop`);
+        operationRegistry.release(appName, redeployToken);
+        appReconciler.enqueueApp(appName);
+        return;
+      }
+      const stopHandled = stop.outcome === 'complete' || stop.outcome === 'deadline'
+        || stop.outcome === 'superseded' || stop.outcome === 'forced';
       // Same-spec redeploy: every component's port set is unchanged, so leave the app's
       // ufw/UPnP rules in place across the teardown+reinstall (no firewall flap, no UPnP
       // re-map churn). skipPorts on both the teardown and the reinstall below.
@@ -359,11 +381,16 @@ async function redeployApplication(appName, options = {}) {
         await appUninstaller.uninstallComponent(deployComp, {
           removeVolumes: createVolumes,
           skipPorts: true,
+          stopHandled,
           onStatus,
         });
         // eslint-disable-next-line no-await-in-loop
         await serviceHelper.delay(config.fluxapps.redeploy.composedDelay * 1000);
       }
+      // The drain is over and the identity is about to be reinstalled: clear the
+      // 'stopping' LB gate beginAppStop seeded so the reconciler can start the
+      // new containers immediately.
+      globalState.clearAppShutdownPipelineState(appName);
 
       status(`${unitLabel} removed. Awaiting installation...`);
       // eslint-disable-next-line no-await-in-loop
