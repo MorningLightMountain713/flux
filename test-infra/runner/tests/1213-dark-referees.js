@@ -144,7 +144,7 @@ describe('dark referees: the list lies, the plane must not', function () {
     });
   });
 
-  it('deconfirmation steers the heal: the reclaimed seat lands on a live node', async function () {
+  it('deconfirmation steers the heal: the reclaimed seat lands on a live listed node', async function () {
     this.timeout(600000);
 
     // The held term's cells name the committee. Find a NON-HOLDER cell to
@@ -158,6 +158,14 @@ describe('dark referees: the list lies, the plane must not', function () {
       return true;
     }, { timeout: 120000, interval: 5000, label: 'a held term with a live quorum' });
 
+    const outpoints = {};
+    for (let i = 0; i < env.clients.length; i += 1) {
+      const status = await env.clients[i].getNodeStatus();
+      outpoints[i] = `${status.data.txhash}:${status.data.outidx}`;
+    }
+    const masterIndex = Number(Object.keys(outpoints).find((i) => outpoints[i] === verdictGrantee));
+    expect(Number.isInteger(masterIndex), 'the grantee maps to a node').to.equal(true);
+
     const cells = await Promise.all(env.clients.map((_, i) => readCell(i)));
     const refereeIndex = cells.findIndex(
       (c, i) => c && !HOLDERS.includes(i) && i !== SPARE && c.grantee === verdictGrantee,
@@ -170,13 +178,31 @@ describe('dark referees: the list lies, the plane must not', function () {
     await removeFromNodeList(`${env.clients[refereeIndex].ip}:16127`);
     await advanceBlock();
 
-    // The heal reclaims the seat onto a LIVE listed node: the quorum returns
-    // to full strength (a paused, delisted node answers nothing, so the
-    // count can only recover through a live replacement) and the master
-    // never churns through it.
-    await waitFor(async () => (await liveQuorumFor(verdictGrantee)) >= 5, {
-      timeout: 300000, interval: 10000, label: 'the heal reseats a live quorum',
-    });
+    // THE HEAL ITSELF must run — a single dark seat leaves 8 of 9 cells
+    // answering, so a bare quorum count recovers without any heal and proves
+    // nothing. The holder announces the heal naming the removed seat; the
+    // roster entry's replacement must be a live node the list still carries —
+    // never the delisted one, which the walk can no longer see.
+    await env.clients[masterIndex].waitForEvent(
+      'quorumGrant:healed',
+      (d) => d.key === `${name}/master` && d.remove === outpoints[refereeIndex],
+      480000,
+    );
+    let healedEntry = null;
+    await waitFor(async () => {
+      const now = await Promise.all(env.clients.map((_, i) => readCell(i)));
+      const withChain = now.find((cell) => (cell?.roster?.chain ?? [])
+        .some((entry) => entry.remove === outpoints[refereeIndex]));
+      healedEntry = withChain?.roster?.chain?.find((e) => e.remove === outpoints[refereeIndex]) ?? null;
+      return Boolean(healedEntry);
+    }, { timeout: 60000, interval: 5000, label: 'the roster chain names the dark seat out' });
+    expect(healedEntry.add, 'a replacement was seated').to.not.equal(undefined);
+    expect(healedEntry.add, 'the replacement is not the delisted node').to.not.equal(outpoints[refereeIndex]);
+    const liveOutpoints = Object.entries(outpoints)
+      .filter(([i]) => Number(i) !== refereeIndex)
+      .map(([, op]) => op);
+    expect(liveOutpoints, 'the replacement is a live listed node').to.include(healedEntry.add);
+
     expect(await runningMasters(), 'the master never churned').to.equal(1);
   });
 });
