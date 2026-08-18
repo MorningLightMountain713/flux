@@ -345,6 +345,11 @@ function raiseFence(appName, deposedOutpoint) {
 function liftFence(appName, reason) {
   if (fences.delete(appName)) {
     log.info(`mastershipGrantGate - fence on ${appName} lifted: ${reason}`);
+    // the lift can only happen through the deposed node's own attestation
+    // (or a fresh grant superseding the fence) — publishing it is what lets
+    // the harness assert the raise→attest→lift cycle end to end. publish()
+    // is a no-op outside the harness.
+    fluxEventBus.publish('quorumGrant:fenceLifted', { app: appName, reason });
   }
 }
 

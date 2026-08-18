@@ -78,6 +78,27 @@ export function dbClient(nodeNum) {
       return row?.data?.roster ?? null;
     },
 
+    // The whole published record as THIS node has synced it — how a suite
+    // asserts a node CONVERGED on the change-driven record (published once;
+    // a node that missed it must be backfilled by the app-state sync).
+    async getMasterleaseRecord(appName, role) {
+      const globalDb = await db('appsGlobal');
+      const row = await globalDb.collection('appstateevents').findOne(
+        { type: 'masterlease', dedupKey: `masterlease:${appName}/${role}` },
+      );
+      return row?.data ?? null;
+    },
+
+    // Delete this node's synced copy of the record — stages "the node missed
+    // the one-time gossip" without any partition timing.
+    async wipeMasterleaseRecord(appName, role) {
+      const globalDb = await db('appsGlobal');
+      const res = await globalDb.collection('appstateevents').deleteOne(
+        { type: 'masterlease', dedupKey: `masterlease:${appName}/${role}` },
+      );
+      return res.deletedCount;
+    },
+
     async permanentMessageCount() {
       const globalDb = await db('appsGlobal');
       return globalDb.collection('zelappsmessages').countDocuments({});

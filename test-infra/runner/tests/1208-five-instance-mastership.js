@@ -240,8 +240,8 @@ describe('the mastership grant with five instances', function () {
       // serialize them into exactly one successor at a higher epoch.
       await Promise.any(survivors.map((i) => env.clients[i].waitForEvent(
         'quorumGrant:granted', (d) => d.key === `${name}/master`, 300000, { afterId: survivorAfters.get(i) },
-      ))).catch(() => {
-        throw new Error(`no survivor acquired ${name}/master after the master died`);
+      ))).catch((err) => {
+        throw new Error(`no survivor acquired ${name}/master after the master died (${err.errors?.[0]?.message ?? err.message})`);
       });
       let second = null;
       await waitFor(async () => {

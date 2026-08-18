@@ -264,6 +264,7 @@ describe('relay renewal and the partitioned app island', function () {
     // behaved correctly.
     const survivors = everyoneElse.filter((i) => Object.keys(holderOutpoints).map(Number).includes(i));
     const survivorAfters = new Map(survivors.map((i) => [i, env.clients[i].getLastEventId()]));
+    let winner = null;
 
     await env.partitionGroups([masterIndex], everyoneElse);
     try {
@@ -276,7 +277,7 @@ describe('relay renewal and the partitioned app island', function () {
 
       // ABSOLUTE: the winner fenced the deposed master in the same acquire
       // that granted, so the fence event must already sit in its buffer.
-      const winner = survivors.find((i) => env.clients[i].getEventBuffer()
+      winner = survivors.find((i) => env.clients[i].getEventBuffer()
         .some((e) => e.event === 'quorumGrant:granted' && e.id > survivorAfters.get(i)
           && e.data.key === `${name}/master`));
       expect(winner, 'a survivor holds the granted event').to.not.equal(undefined);
@@ -325,6 +326,21 @@ describe('relay renewal and the partitioned app island', function () {
     const after = await quorumVerdict();
     expect(after, 'the quorum view returns after the heal').to.not.equal(null);
     expect(after.grantee, 'the returning master did not reclaim').to.not.equal(before.grantee);
+
+    // THE FENCE LIFTS: the deposed node demotes its folder cooperatively
+    // (receiveonly + revert), its witness endpoint attests it, and the
+    // winner's throttled lift poll re-admits its device. A fence that never
+    // lifts silently costs the app a replica — the ex-master would stop
+    // replicating forever. The event can only fire through the attestation
+    // path, so it proves the whole raise→attest→lift cycle.
+    await env.clients[winner].waitForEvent(
+      'quorumGrant:fenceLifted', (d) => d.app === name, 240000, { afterId: survivorAfters.get(winner) },
+    ).catch((err) => {
+      // rethrown with the verdict the timeout MEANS, keeping the wait's own
+      // diagnostics (stream state) — a dead event stream and a fence that
+      // truly never lifted are different failures
+      throw new Error(`the fence against the healed ex-master never lifted — a permanently fenced standby stops replicating (${err.message})`);
+    });
   });
 
   it('the term rides partition FLAPS without churning — hysteresis, not twitchiness', async function () {
