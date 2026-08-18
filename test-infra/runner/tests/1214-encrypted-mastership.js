@@ -14,6 +14,8 @@ import {
   pauseHostContainer, unpauseHostContainer,
 } from '../framework/container.js';
 import { waitFor, waitForAppInstalled } from '../framework/wait.js';
+import { authenticate } from '../auth.js';
+import { appOwnerKey } from '../framework/keys.js';
 
 // The encrypted referee (owed since 13C): a SEALED spec as the grant consumer.
 // Everything the plane reads must come off the encrypted path's cleartext
@@ -122,25 +124,29 @@ describe('encrypted mastership: a sealed spec holds and fails over a term', func
       return rows.every((r) => r && r.status === 'success' && r.data && r.data.name === name);
     }, { timeout: 180000, interval: 5000, label: `global spec for ${name} on all nodes` });
 
-    // The spawner places three. Identity-minted identifiers are opaque, so the
-    // physical names are read OFF the containers — never derived from the name.
-    await waitFor(async () => {
-      const installed = await Promise.all(env.clients.map(
-        (c) => waitForAppInstalled(c, name, 1).then(() => true).catch(() => false),
-      ));
-      return installed.filter(Boolean).length >= 3;
-    }, { timeout: 360000, interval: 10000, label: 'three nodes host the sealed app' });
-
-    hosts = [];
-    identifiers = new Map();
-    for (let i = 0; i < env.clients.length; i += 1) {
-      const ids = await appComponentIdentifiers(env.clients[i].container, name).catch(() => []);
-      if (ids.length > 0) {
-        hosts.push(i);
-        identifiers.set(i, ids[0]);
+    // Targeted installs: the spawner's same-ip-range guard refuses to
+    // co-place a syncthing app twice inside one /24, and the whole harness
+    // fleet IS one /24 — production spread semantics, unreachable here. The
+    // install endpoint reads the propagated sealed spec and runs the real
+    // decrypt+install path on each chosen node.
+    hosts = [0, 1, 2];
+    for (const i of hosts) {
+      const auth = await authenticate(env.clients[i].url, appOwnerKey());
+      const body = await env.clients[i].installAppLocally(name, auth.zelidauth);
+      if (/error/i.test(body) && !/success/i.test(body.slice(-300))) {
+        throw new Error(`installapplocally failed on node ${i}: ${body.slice(-600)}`);
       }
     }
-    expect(hosts.length, 'three hosts resolved').to.be.at.least(3);
+    await Promise.all(hosts.map((i) => waitForAppInstalled(env.clients[i], name, 240000)));
+
+    // Identity-minted identifiers are opaque, so the physical names are read
+    // OFF the containers — never derived from the name.
+    identifiers = new Map();
+    for (const i of hosts) {
+      const ids = await appComponentIdentifiers(env.clients[i].container, name).catch(() => []);
+      expect(ids.length, `an identifier resolved on node ${i}`).to.be.greaterThan(0);
+      identifiers.set(i, ids[0]);
+    }
 
     // Synced-on-every-holder before the term forms, by IDENTIFIER — the stall
     // ladder otherwise removes the standbys mid-test (see 1209's before).
