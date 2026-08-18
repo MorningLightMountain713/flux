@@ -156,6 +156,40 @@ describe('fluxShutdowndClient', () => {
       expect(await p).to.deep.equal({ outcome: 'rejected_pipeline_active' });
     });
 
+    it('always sends component on the wire: null for a whole-identity stop, the name for one component', async () => {
+      for (const [opts, wire] of [[{}, null], [{ component: 'web' }, 'web']]) {
+        const { client, sockets } = load();
+        // eslint-disable-next-line no-await-in-loop
+        const p = client.beginAppStop('1own', 'app', 'redeploy', { deadline: futureDeadline(), ...opts });
+        sockets[0].emit('connect');
+        const request = JSON.parse(sockets[0].write.firstCall.args[0]);
+        expect(request.params.component).to.equal(wire);
+        sockets[0].emit('data', Buffer.from(okLine({ end_state: 'complete' })));
+        // eslint-disable-next-line no-await-in-loop
+        await p;
+      }
+    });
+
+    it('a component-scoped stop never touches the app-wide stopping gate', async () => {
+      // The gate exists to hold the reconciler off a whole app mid-drain; on a
+      // component swap the app keeps running and the update flow owns the
+      // component through its operation lease.
+      const { client, globalStateStub, sockets } = load();
+      const p = client.beginAppStop('1own', 'app', 'redeploy', { deadline: futureDeadline(), component: 'web' });
+      sockets[0].emit('connect');
+      sockets[0].emit('data', Buffer.from(okLine({ end_state: 'complete' })));
+      await p;
+      expect(globalStateStub.setAppShutdownPipelineState.called).to.equal(false);
+    });
+
+    it('maps a component-stop-busy reject to component_busy', async () => {
+      const { client, sockets } = load();
+      const p = client.beginAppStop('1own', 'app', 'redeploy', { deadline: futureDeadline(), component: 'web' });
+      sockets[0].emit('connect');
+      sockets[0].emit('data', Buffer.from(errLine(-32011, 'component-stop-busy')));
+      expect(await p).to.deep.equal({ outcome: 'component_busy' });
+    });
+
     it('maps a socket error to unreachable', async () => {
       const { client, sockets } = load();
       const p = client.beginAppStop('1own', 'app', 'user-cancel', { deadline: futureDeadline() });
