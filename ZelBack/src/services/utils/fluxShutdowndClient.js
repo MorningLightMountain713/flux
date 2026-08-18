@@ -32,6 +32,9 @@ const COMPLETION_SLACK_MS = 120000;
 // JSON-RPC error code the daemon returns from begin_app_stop when a node-wide
 // pipeline owns the node (mirrors shutdownd's socket reject).
 const RPC_NODE_PIPELINE_ACTIVE = -32010;
+// ...and when a component-scoped run of the same identity is in flight that does
+// not cover the ask — the caller retries once the in-flight drain resolves.
+const RPC_COMPONENT_STOP_BUSY = -32011;
 
 /**
  * The reasons FluxOS emits for a PER-APP stop, as kebab wire strings the daemon's
@@ -166,6 +169,10 @@ function isNodePipelineActive(err) {
   return Boolean(err) && err.rpcCode === RPC_NODE_PIPELINE_ACTIVE;
 }
 
+function isComponentStopBusy(err) {
+  return Boolean(err) && err.rpcCode === RPC_COMPONENT_STOP_BUSY;
+}
+
 function isTimeout(err) {
   return Boolean(err) && err.isTimeout === true;
 }
@@ -176,6 +183,8 @@ function isTimeout(err) {
  * Never throws — returns a discriminated `{ outcome }`:
  *   complete | deadline | superseded  — the daemon's end-state;
  *   rejected_pipeline_active          — a node-wide shutdown owns the node;
+ *   component_busy                    — an uncovered component-scoped run of the
+ *                                       same identity is in flight; retry shortly;
  *   unreachable | timeout             — daemon absent/down, or no reply in time;
  *   not_arcane                        — no daemon here (short-circuit, no socket).
  *
@@ -193,27 +202,35 @@ function isTimeout(err) {
  *   whole app (loose, and every whole-app path)
  * @returns {Promise<{outcome: string}>}
  */
-async function beginAppStop(ownerFluxId, appName, reason, { force = false, deadline, replica = null } = {}) {
+async function beginAppStop(ownerFluxId, appName, reason, {
+  force = false, deadline, replica = null, component = null,
+} = {}) {
   // Non-Arcane nodes have no daemon socket: short-circuit before opening anything
   // or arming a timeout, and without touching the LB gate.
   if (!globalState.isArcane()) return { outcome: 'not_arcane' };
 
-  // epoch ms, matching the gate's Date.now() expiry; deadline is absolute unix-seconds.
-  const expiresAt = (deadline * 1000) + COMPLETION_SLACK_MS;
-  globalState.setAppShutdownPipelineState(appName, 'stopping', expiresAt);
+  // The app-wide 'stopping' gate holds the reconciler off a whole app mid-drain.
+  // A component-scoped stop leaves it untouched: the app keeps running and the
+  // update flow owns the component through its operation lease.
+  if (component == null) {
+    // epoch ms, matching the gate's Date.now() expiry; deadline is absolute unix-seconds.
+    const expiresAt = (deadline * 1000) + COMPLETION_SLACK_MS;
+    globalState.setAppShutdownPipelineState(appName, 'stopping', expiresAt);
+  }
 
   const timeoutMs = Math.max((deadline * 1000) - Date.now(), 0) + COMPLETION_SLACK_MS;
   try {
     const res = await callRpc(
       'begin_app_stop',
       {
-        owner_flux_id: ownerFluxId, app_name: appName, replica, reason, force, deadline,
+        owner_flux_id: ownerFluxId, app_name: appName, replica, component, reason, force, deadline,
       },
       { timeoutMs },
     );
     return { outcome: res.end_state };
   } catch (error) {
     if (isNodePipelineActive(error)) return { outcome: 'rejected_pipeline_active' };
+    if (isComponentStopBusy(error)) return { outcome: 'component_busy' };
     if (isTimeout(error)) return { outcome: 'timeout' };
     return { outcome: 'unreachable' };
   }

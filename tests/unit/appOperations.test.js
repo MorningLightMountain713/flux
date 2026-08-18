@@ -283,7 +283,9 @@ describe('appOperations tests', () => {
     it('leaves ufw/UPnP untouched: teardown and reinstall both run with skipPorts', async () => {
       // eslint-disable-next-line global-require
       const hwRequirements = require('../../ZelBack/src/services/appRequirements/hwRequirements');
-      const deployComp = { identifier: 'frontend_myapp', image: 'myrepo/app:v1' };
+      const deployComp = {
+        identifier: 'frontend_myapp', image: 'myrepo/app:v1', name: 'frontend', requiresDaemonShutdown: () => false, shutdownBudgetSeconds: () => 10,
+      };
       sinon.stub(deploymentProvider, 'getInstalledDeployment').resolves({ getComponent: () => deployComp });
       sinon.stub(componentProvisioner, 'verifyComponentImage').resolves();
       sinon.stub(serviceHelper, 'delay').resolves();
@@ -302,6 +304,38 @@ describe('appOperations tests', () => {
 
       expect(uninstallComponent.calledOnceWith(deployComp, sinon.match({ skipPorts: true })), 'teardown must skip ports').to.be.true;
       expect(installComponent.calledOnceWith(deployComp, sinon.match({ skipPorts: true })), 'reinstall must skip ports').to.be.true;
+    });
+
+    it('routes a graceful component redeploy through flux-shutdownd, component-scoped', async () => {
+      // eslint-disable-next-line global-require
+      const hwRequirements = require('../../ZelBack/src/services/appRequirements/hwRequirements');
+      // eslint-disable-next-line global-require
+      const fluxShutdowndClient = require('../../ZelBack/src/services/utils/fluxShutdowndClient');
+      const deployComp = {
+        identifier: 'frontend_myapp',
+        image: 'myrepo/app:v1',
+        name: 'frontend',
+        requiresDaemonShutdown: () => true,
+        shutdownBudgetSeconds: () => 300,
+      };
+      sinon.stub(deploymentProvider, 'getInstalledDeployment').resolves({ replica: null, getComponent: () => deployComp });
+      sinon.stub(componentProvisioner, 'verifyComponentImage').resolves();
+      sinon.stub(serviceHelper, 'delay').resolves();
+      sinon.stub(appsRepository, 'getInstalledApp').resolves({ version: 8, owner: 'owner1' });
+      sinon.stub(deploymentProvider, 'buildDeployment').resolves({ marker: 'fresh', componentEntries: () => [] });
+      sinon.stub(hwRequirements, 'checkNodeResources').resolves();
+      sinon.stub(hwRequirements, 'checkNodeResourcesReclaiming').resolves();
+      const beginAppStop = sinon.stub(fluxShutdowndClient, 'beginAppStop').resolves({ outcome: 'complete' });
+      const uninstallComponent = sinon.stub(appUninstaller, 'uninstallComponent').resolves();
+      sinon.stub(componentProvisioner, 'installComponent').resolves();
+      sinon.stub(appReconciler, 'enqueueApp');
+
+      await appOperations.redeployComponent('myapp', 'frontend', { onStatus: () => {} });
+
+      expect(beginAppStop.calledOnce, 'the daemon owns the graceful stop').to.be.true;
+      const opts = beginAppStop.firstCall.args[3];
+      expect(opts.component).to.equal('frontend');
+      expect(uninstallComponent.calledWith(deployComp, sinon.match({ stopHandled: true })), 'the teardown must not stop again').to.be.true;
     });
   });
 
@@ -977,9 +1011,15 @@ describe('appOperations tests', () => {
     const makeComp = (hostPorts, storage) => ({
       hostPorts,
       storage,
+      name: 'web',
       identifier: `web_myapp`,
       image: 'nginx:latest',
       equals: () => false, // changed component
+      // The domain-class contract methods (DeploymentComponent): default fixtures
+      // declare nothing, so the local stop is their contract.
+      requiresDaemonShutdown: () => false,
+      shutdownBudgetSeconds: () => 10,
+      injectedContentFiles: () => [],
     });
     const makeDeployment = (components) => ({
       components,
@@ -1028,6 +1068,52 @@ describe('appOperations tests', () => {
       expect(uninstallComponentStub.calledWith(sinon.match.any, sinon.match({ skipPorts: true })), 'teardown skips ports').to.be.true;
       expect(denyPortsStub.calledOnceWith([80], 'myapp'), 'closes only the dropped port').to.be.true;
       expect(openHostPortsStub.calledOnceWith([8080], 'myapp'), 'opens only the added port').to.be.true;
+    });
+
+    it('routes a graceful component teardown through flux-shutdownd, component-scoped', async () => {
+      // eslint-disable-next-line global-require
+      const fluxShutdowndClient = require('../../ZelBack/src/services/utils/fluxShutdowndClient');
+      setup();
+      const beginAppStop = sinon.stub(fluxShutdowndClient, 'beginAppStop').resolves({ outcome: 'complete' });
+      const graceful = {
+        ...makeComp([80], 5),
+        name: 'web',
+        requiresDaemonShutdown: () => true,
+        shutdownBudgetSeconds: () => 300,
+      };
+      const oldDeployment = { ...makeDeployment({ web: graceful }), replica: null };
+      const newDeployment = makeDeployment({ web: { ...graceful, storage: 5 } });
+
+      await appOperations.reconcileComponents('myapp', oldDeployment, newDeployment, registrySpec);
+
+      expect(beginAppStop.calledOnce, 'the daemon owns the graceful stop').to.be.true;
+      const [owner, app, reason, opts] = beginAppStop.firstCall.args;
+      expect(owner).to.equal('owner1');
+      expect(app).to.equal('myapp');
+      expect(reason).to.equal(fluxShutdowndClient.SHUTDOWN_REASON.REDEPLOY);
+      expect(opts.component).to.equal('web');
+      expect(opts.replica).to.equal(null);
+      expect(uninstallComponentStub.calledWith(sinon.match.any, sinon.match({ stopHandled: true })), 'the teardown must not stop again').to.be.true;
+    });
+
+    it('a component with no declared contract keeps the local stop', async () => {
+      // eslint-disable-next-line global-require
+      const fluxShutdowndClient = require('../../ZelBack/src/services/utils/fluxShutdowndClient');
+      setup();
+      const beginAppStop = sinon.stub(fluxShutdowndClient, 'beginAppStop').resolves({ outcome: 'complete' });
+      const plain = {
+        ...makeComp([80], 5),
+        name: 'web',
+        requiresDaemonShutdown: () => false,
+        shutdownBudgetSeconds: () => 10,
+      };
+      const oldDeployment = { ...makeDeployment({ web: plain }), replica: null };
+      const newDeployment = makeDeployment({ web: { ...plain, storage: 5 } });
+
+      await appOperations.reconcileComponents('myapp', oldDeployment, newDeployment, registrySpec);
+
+      expect(beginAppStop.called, 'docker SIGTERM+grace IS this component contract').to.be.false;
+      expect(uninstallComponentStub.calledWith(sinon.match.any, sinon.match({ stopHandled: true }))).to.be.false;
     });
 
     it('skips the port-open (but still closes) when a cancel teardown is owed', async () => {
