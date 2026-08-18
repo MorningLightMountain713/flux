@@ -187,6 +187,51 @@ let dosMountMessage = '';
  * @param {boolean} [options.createVolumes=false] - true = recreate volumes, false = keep
  * @param {Function|null} [options.onStatus] - progress callback
  */
+// component_busy retry pacing: an uncovered stop of the same identity is in
+// flight (bounded — the flows here are sequential, so this is a guard rail,
+// not a hot path).
+const COMPONENT_STOP_BUSY_RETRIES = 3;
+const COMPONENT_STOP_BUSY_DELAY_MS = 5000;
+
+/**
+ * Route one component's teardown stop through flux-shutdownd when the
+ * component declares a graceful contract (drain, preStop, shutdown) — the
+ * daemon is the contract's sole executor, whatever flow tears the component
+ * down. Returns true when the daemon's drain is over (the teardown must not
+ * stop again); false leaves the stop to the teardown's local fallback, which
+ * IS the contract for a component declaring nothing — and the only executor
+ * on legacy nodes, where declared-contract components cannot be placed.
+ *
+ * @param {string} owner
+ * @param {string} appName
+ * @param {string|null} replica
+ * @param {object} deployComp - a DeploymentComponent
+ * @returns {Promise<boolean>} the stop already landed
+ */
+async function requestComponentDaemonStop(owner, appName, replica, deployComp) {
+  if (!deployComp.requiresDaemonShutdown()) return false;
+  for (let attempt = 0; attempt < COMPONENT_STOP_BUSY_RETRIES; attempt += 1) {
+    const deadline = Math.floor(Date.now() / 1000) + deployComp.shutdownBudgetSeconds();
+    // eslint-disable-next-line no-await-in-loop
+    const stop = await fluxShutdowndClient.beginAppStop(
+      owner,
+      appName,
+      fluxShutdowndClient.SHUTDOWN_REASON.REDEPLOY,
+      {
+        force: false, deadline, replica, component: deployComp.name,
+      },
+    );
+    if (stop.outcome !== 'component_busy') {
+      return stop.outcome === 'complete' || stop.outcome === 'deadline'
+        || stop.outcome === 'superseded' || stop.outcome === 'forced';
+    }
+    // eslint-disable-next-line no-await-in-loop
+    await serviceHelper.delay(COMPONENT_STOP_BUSY_DELAY_MS);
+  }
+  log.warn(`component stop for ${deployComp.identifier} stayed busy; falling back to a local stop`);
+  return false;
+}
+
 async function redeployComponent(appName, componentName, options = {}) {
   const createVolumes = options.createVolumes || false;
   const onStatus = options.onStatus || null;
@@ -232,16 +277,25 @@ async function redeployComponent(appName, componentName, options = {}) {
     // Manifest check only, no pull, no disk cost.
     await componentProvisioner.verifyComponentImage(targets[0]);
 
+    const installedForStop = await appsRepository.getInstalledApp(appName);
+
     for (const deployComp of targets) {
       if (createVolumes) {
         log.warn(`REMOVAL REASON: ${operation} initiated - ${deployComp.identifier} (redeployComponent)`);
       }
+      // A declared graceful contract routes the stop through flux-shutdownd,
+      // component-scoped; everything else takes the teardown's local stop.
+      // eslint-disable-next-line no-await-in-loop
+      const stopHandled = await requestComponentDaemonStop(
+        installedForStop?.owner, appName, deployComp.replica ?? null, deployComp,
+      );
       // Same-spec redeploy: the port set is identical, so leave the app's ufw/UPnP rules
       // in place across the teardown+reinstall (no firewall flap, no ~1s/port UPnP re-map).
       // eslint-disable-next-line no-await-in-loop
       await appUninstaller.uninstallComponent(deployComp, {
         removeVolumes: createVolumes,
         skipPorts: true,
+        stopHandled,
         onStatus,
       });
 
@@ -1647,8 +1701,15 @@ async function reconcileComponents(appName, oldDeployment, newDeployment, regist
       if (removeVolumes) {
         log.warn(`REMOVAL REASON: Reconciliation - ${deployComp.identifier} ${removed.includes(name) ? 'removed from spec' : 'storage changed'}`);
       }
+      // A declared graceful contract routes the stop through flux-shutdownd,
+      // component-scoped — siblings keep serving; everything else takes the
+      // teardown's local stop.
       // eslint-disable-next-line no-await-in-loop
-      await appUninstaller.uninstallComponent(deployComp, { removeVolumes, skipPorts: true });
+      const stopHandled = await requestComponentDaemonStop(
+        registrySpec.owner, appName, oldDeployment.replica ?? null, deployComp,
+      );
+      // eslint-disable-next-line no-await-in-loop
+      await appUninstaller.uninstallComponent(deployComp, { removeVolumes, skipPorts: true, stopHandled });
       // eslint-disable-next-line no-await-in-loop
       await serviceHelper.delay(config.fluxapps.redeploy.composedDelay * 1000);
     }

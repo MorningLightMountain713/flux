@@ -71,15 +71,16 @@ const logCall = (entry) => { callLog.push({ ...entry, ts: Date.now(), seq: seq +
 // already-stopped container is not fatal — but say so, because a selector that
 // silently matches nothing while replying 'complete' reads as a product mystery
 // from the FluxOS side.
-function dockerStopApp(app, replica) {
+function dockerStopApp(app, replica, component) {
   return new Promise((resolve) => {
     const filters = ['--filter', `label=io.runonflux.app=${app}`];
     if (replica != null) filters.push('--filter', `label=io.runonflux.replica=${replica}`);
+    if (component != null) filters.push('--filter', `label=io.runonflux.component=${component}`);
     execFile('docker', ['ps', '-q', ...filters], (err, stdout) => {
       if (err) { resolve(0); return; }
       const ids = stdout.split('\n').map((s) => s.trim()).filter(Boolean);
       if (ids.length === 0) {
-        console.log(`shutdownd-mock: stop ${app}${replica == null ? '' : `/${replica}`} matched 0 running containers`);
+        console.log(`shutdownd-mock: stop ${app}${replica == null ? '' : `/${replica}`}${component == null ? '' : ` component ${component}`} matched 0 running containers`);
         resolve(0);
         return;
       }
@@ -106,10 +107,10 @@ function replyError(socket, id, code, message) {
 
 async function handleBeginAppStop(socket, id, params) {
   const {
-    owner_flux_id: owner, app_name: app, replica = null, reason, force, deadline,
+    owner_flux_id: owner, app_name: app, replica = null, component = null, reason, force, deadline,
   } = params || {};
   logCall({
-    method: 'begin_app_stop', owner, app, replica, reason, force: Boolean(force), deadline,
+    method: 'begin_app_stop', owner, app, replica, component, reason, force: Boolean(force), deadline,
   });
   if (!owner || !app) { replyError(socket, id, RPC_INVALID_PARAMS, 'invalid params: missing owner/app'); return; }
   if (!VALID_REASONS.has(reason)) { replyError(socket, id, RPC_INVALID_PARAMS, `invalid reason: ${reason}`); return; }
@@ -117,7 +118,7 @@ async function handleBeginAppStop(socket, id, params) {
   // A forceful stop (operator force teardown) is a zero-budget kill: always stop and
   // report complete, regardless of the configured drain behaviour.
   if (force) {
-    await dockerStopApp(app, replica);
+    await dockerStopApp(app, replica, component);
     reply(socket, id, { end_state: 'complete' });
     return;
   }
@@ -132,7 +133,7 @@ async function handleBeginAppStop(socket, id, params) {
     return;
   }
   const endState = STOP_END_STATES[mode] || 'complete';
-  await dockerStopApp(app, replica);
+  await dockerStopApp(app, replica, component);
   reply(socket, id, { end_state: endState });
 }
 
