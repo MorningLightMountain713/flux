@@ -48,7 +48,8 @@ describe('dark referees: the list lies, the plane must not', function () {
         { signal: AbortSignal.timeout(5000) },
       );
       const body = await res.json();
-      return body?.data?.accepted ?? null;
+      // The RECORD, not just the accepted row: the roster chain rides beside it.
+      return body?.data ?? null;
     } catch {
       return null;
     }
@@ -147,9 +148,9 @@ describe('dark referees: the list lies, the plane must not', function () {
     let verdictGrantee = null;
     await waitFor(async () => {
       const cells = await Promise.all(env.clients.map((_, i) => readCell(i)));
-      const live = cells.filter((c) => c && c.grantee && !c.released);
+      const live = cells.filter((c) => c?.accepted?.grantee && !c.accepted.released);
       if (live.length < 5) return false;
-      verdictGrantee = live[0].grantee;
+      verdictGrantee = live[0].accepted.grantee;
       return true;
     }, { timeout: 120000, interval: 5000, label: 'a held term with a live quorum' });
 
@@ -163,7 +164,7 @@ describe('dark referees: the list lies, the plane must not', function () {
 
     const cells = await Promise.all(env.clients.map((_, i) => readCell(i)));
     const refereeIndex = cells.findIndex(
-      (c, i) => c && !HOLDERS.includes(i) && i !== SPARE && c.grantee === verdictGrantee,
+      (c, i) => !HOLDERS.includes(i) && i !== SPARE && c?.accepted?.grantee === verdictGrantee,
     );
     expect(refereeIndex, 'a non-holder referee cell exists').to.be.greaterThan(-1);
 
