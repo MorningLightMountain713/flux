@@ -10,6 +10,7 @@ const networkStateService = require('../../ZelBack/src/services/networkStateServ
 const registryManager = require('../../ZelBack/src/services/appDatabase/registryManager');
 const messageStore = require('../../ZelBack/src/services/appMessaging/messageStore');
 const reconcilerQueue = require('../../ZelBack/src/services/appMonitoring/reconcilerQueue');
+const appsRuntimeState = require('../../ZelBack/src/services/appManagement/appsRuntimeState');
 const grantClient = require('../../ZelBack/src/services/quorumGrant/grantClient');
 const mastershipGrantGate = require('../../ZelBack/src/services/appLifecycle/mastershipGrantGate');
 
@@ -53,6 +54,7 @@ describe('quorumGrant mastershipGrantGate', () => {
     sinon.stub(messageStore, 'getMasterleaseRecord').resolves(null);
     sinon.stub(grantClient, 'holderFor').returns(null);
     sinon.stub(grantClient, 'isAcquiring').returns(false);
+    sinon.stub(appsRuntimeState, 'isOperatorStopped').resolves(false);
     sinon.stub(grantClient, 'acquire').resolves({ granted: false, reason: 'test' });
     sinon.stub(grantClient, 'termLapsed').resolves(false);
     sinon.stub(reconcilerQueue, 'enqueueComponent');
@@ -281,6 +283,9 @@ describe('quorumGrant mastershipGrantGate', () => {
       mastershipGrantGate.resetForTests({ enabled: true });
       expect(await mastershipGrantGate.leaderIsSelf(IDENTIFIER, 'myapp', false)).to.equal(null);
       expect(await mastershipGrantGate.leaderIsSelf(IDENTIFIER, 'myapp', true)).to.equal(false);
+      // the pursuit is fire-and-forget; let its await chain (operator-state
+      // read, record read) settle before asserting it reached acquire
+      await new Promise((resolve) => { setTimeout(resolve, 25); });
       expect(grantClient.acquire.calledOnce).to.equal(true);
 
       grantClient.holderFor.returns({ state: 'held' });
@@ -359,6 +364,20 @@ describe('quorumGrant mastershipGrantGate', () => {
     it('is a no-op on a non-holder — stop-regardless keeps the global fan-out idempotent', async () => {
       const outcome = await mastershipGrantGate.yieldMastership('myapp');
       expect(outcome.held).to.equal(false);
+    });
+
+    it('an operator-stopped component never pursues — winning would park the term on a non-runner', async () => {
+      // The 1209 fleet runs measured this twice: the yielded master re-took
+      // its own released term through the syncthing/coordinate deciders'
+      // pursue paths, which never consulted operator state — and the
+      // record-names-self fast path skips even the lapse probe. The stop
+      // lock must silence EVERY pursue trigger.
+      appsRuntimeState.isOperatorStopped.resolves(true);
+
+      await mastershipGrantGate.grantVerdict(IDENTIFIER, activeStandbyComp());
+      await new Promise((resolve) => { setTimeout(resolve, 50); });
+
+      sinon.assert.notCalled(grantClient.acquire);
     });
 
     it('waits out an acquisition in flight and releases what it won — no stopped-container master', async () => {
