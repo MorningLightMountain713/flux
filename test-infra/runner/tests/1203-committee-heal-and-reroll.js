@@ -9,6 +9,7 @@ import { pushImage } from '../framework/registry-helper.js';
 import { setSynced } from '../framework/syncthing-control.js';
 import { pauseHostContainer, unpauseHostContainer } from '../framework/container.js';
 import { waitFor, waitForAppInstalled, waitForReconcileActuated } from '../framework/wait.js';
+import { dbClient } from '../framework/db-client.js';
 import { getState } from '../framework/daemon-control.js';
 import { authenticate, signBtcMessage } from '../auth.js';
 import { appOwnerKey } from '../framework/keys.js';
@@ -166,35 +167,52 @@ describe('the committee heals its dark seat, and the owner re-deals the walk', f
 
     const masterIndex = Number(Object.keys(outpoints).find((i) => outpoints[i] === first.grantee));
     await pauseHostContainer(env.clients[refereeIndex].container);
+    try {
+      // The heal announces itself: the holder publishes the healed event
+      // with the entry it installed, and the registers read back the chain.
+      await env.clients[masterIndex].waitForEvent(
+        'quorumGrant:healed',
+        (d) => d.key === `${name}/master` && d.remove === outpoints[refereeIndex],
+        480000,
+      );
+      let healed = null;
+      await waitFor(async () => {
+        const now = await Promise.all(env.clients.map((_, i) => readCell(i)));
+        healed = now.find((cell) => (cell?.roster?.chain ?? [])
+          .some((entry) => entry.remove === outpoints[refereeIndex]));
+        return Boolean(healed);
+      }, { timeout: 60000, interval: 5000, label: 'the roster chain names the dark seat out' });
 
-    // The heal announces itself: the holder publishes the healed event
-    // with the entry it installed, and the registers read back the chain
-    // with its quorum of signatures.
-    await env.clients[masterIndex].waitForEvent(
-      'quorumGrant:healed',
-      (d) => d.key === `${name}/master` && d.remove === outpoints[refereeIndex],
-      480000,
-    );
-    let healed = null;
-    await waitFor(async () => {
-      const now = await Promise.all(env.clients.map((_, i) => readCell(i)));
-      healed = now.find((cell) => (cell?.roster?.chain ?? [])
-        .some((entry) => entry.remove === outpoints[refereeIndex]));
-      return Boolean(healed);
-    }, { timeout: 60000, interval: 5000, label: 'the roster chain names the dark seat out' });
+      const entry = healed.roster.chain.find((e) => e.remove === outpoints[refereeIndex]);
+      expect(entry.add, 'the replacement is a real node').to.not.equal(undefined);
+      const addedIndex = Number(Object.keys(outpoints).find((i) => outpoints[i] === entry.add));
+      expect(spareIndexes, `replacement ${entry.add} came off the walk's spare seats`).to.include(addedIndex);
 
-    const entry = healed.roster.chain.find((e) => e.remove === outpoints[refereeIndex]);
-    expect(entry.acceptances.length, 'a quorum signed the seat change').to.be.at.least(5);
-    expect(entry.add, 'the replacement is a real node').to.not.equal(undefined);
-    const addedIndex = Number(Object.keys(outpoints).find((i) => outpoints[i] === entry.add));
-    expect(spareIndexes, `replacement ${entry.add} came off the walk's spare seats`).to.include(addedIndex);
+      // A register's own journaled chain is trusted and deliberately BARE —
+      // {seq, remove, add, at} and nothing else; the self-verifying object
+      // (the quorum of signed acceptances) rides the PUBLISHED record. Read
+      // the proof where it lives, from the master's own synced copy.
+      let publishedEntry = null;
+      await waitFor(async () => {
+        const roster = await dbClient(masterIndex + 1).getMasterleaseRoster(name, 'master');
+        publishedEntry = (roster?.chain ?? [])
+          .find((e) => e.remove === outpoints[refereeIndex]) ?? null;
+        return publishedEntry !== null;
+      }, { timeout: 60000, interval: 5000, label: 'the published record carries the healed chain' });
+      expect(publishedEntry.acceptances.length, 'a quorum signed the seat change').to.be.at.least(5);
 
-    // The freshly seated grantor answers for a grant its register never
-    // held: the holder's seeding accept (or the next renewal) lands there.
-    await waitFor(async () => {
-      const cell = await readCell(addedIndex);
-      return cell?.accepted?.grantee === first.grantee;
-    }, { timeout: 180000, interval: 10000, label: 'the seeded replacement answers the grant' });
+      // The freshly seated grantor answers for a grant its register never
+      // held: the holder's seeding accept (or the next renewal) lands there.
+      await waitFor(async () => {
+        const cell = await readCell(addedIndex);
+        return cell?.accepted?.grantee === first.grantee;
+      }, { timeout: 180000, interval: 10000, label: 'the seeded replacement answers the grant' });
+    } finally {
+      // The heal is proven; the dark node returns to the fleet HERE, never
+      // as a later test's leftover — today's first run left it paused
+      // through the whole re-roll test and its SSE stream died with it.
+      await unpauseHostContainer(env.clients[refereeIndex].container);
+    }
   });
 
   it('the owner re-deals the walk, and the master re-acquires under the new generation', async function () {
@@ -241,7 +259,5 @@ describe('the committee heals its dark seat, and the owner re-deals the walk', f
 
     const after = await quorumVerdict();
     expect(after.grantee, 'the master survives its own re-deal').to.equal(before.grantee);
-
-    await unpauseHostContainer(env.clients[refereeIndex].container);
   });
 });
