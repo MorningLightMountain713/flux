@@ -23,6 +23,10 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(__dirname, '..', '..', '..');
 
 export const NODE_IMAGE = 'flux-e2e-fluxos-01';
+// The mixed-version suites' OLD node image, built once from the v9 branch
+// point (pre-grant-plane). Its baked flux-spec is historic BY DESIGN, so the
+// vendor guard below deliberately checks only NODE_IMAGE.
+export const OLD_NODE_IMAGE = 'flux-e2e-fluxos-old';
 
 const PIN_PATH = join(repoRoot, 'test-infra', 'flux-spec', 'pin');
 const VENDOR_REF_PATH = join(repoRoot, 'test-infra', 'flux-spec', 'dist', '.vendored-ref');
