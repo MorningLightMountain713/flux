@@ -54,11 +54,6 @@ describe('dark referees: the list lies, the plane must not', function () {
     }
   }
 
-  async function liveQuorumFor(grantee) {
-    const cells = await Promise.all(env.clients.map((_, i) => readCell(i)));
-    return cells.filter((c) => c && c.grantee === grantee && !c.released).length;
-  }
-
   async function runningMasters() {
     const statuses = await Promise.all(env.clients.map(
       (c) => getAppContainerStatus(c.container, name).catch(() => null),
