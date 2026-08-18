@@ -54,6 +54,14 @@ const FINGERPRINT_PATTERN = /^[0-9a-f]{64}$/;
 
 // Per-peer ceiling on asks, the limit counter's discipline: the checks above
 // bound what a peer can do; this bounds how fast it can try.
+//
+// The ceiling binds per (caller-host → this-grantor) PAIR and is shared by
+// every app the pair interacts over. At production cadences one app costs a
+// pair roughly 3 asks/min mastered (renewals every ~20s) or ~2-6 asks/min
+// as a resting standby (term-lapse probes), so the default 600/min supports
+// on the order of 100+ co-hosted activeStandby apps sharing one referee.
+// Beyond that density raise quorumGrantPeerAsksPerMinute — starvation shows
+// as `rateLimited` in the served events, never silently.
 const PEER_WINDOW_MS = 60 * 1000;
 const peerAsks = new Map(); // host -> { windowStart, count }
 

@@ -52,7 +52,7 @@ describe('reconciler enforces masterSlave g: election', function () {
     await resetFdm();
     await resetSyncState();
     await pushImage(appName, 'v1');
-    const app = await buildSeedableSyncthingApp({ name: appName, mode: 'g' });
+    const app = await buildSeedableSyncthingApp({ name: appName, syncMode: 'activeStandby' });
     // targeted install on two specific nodes — deterministic g: holders
     // Node 0 is the elected primary from the start: FDM names it before the app
     // is installed, so the other holder never starts it first.
