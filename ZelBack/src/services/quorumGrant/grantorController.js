@@ -314,7 +314,12 @@ async function askerHolds(ask, askerNode, type) {
   const challengeOps = type === 'prepare' || type === 'accept';
   if (ask.mode === 'held' && challengeOps && minHolderAgeMs() > 0) {
     const record = await grantRegister.read(ask.key);
-    if (record?.accepted) {
+    // The floor binds CHALLENGERS only, never the recorded grantee — the
+    // same principle as lock-delay. The incumbent's repair chore re-accepts
+    // (and, past a residue promise, re-acquires) its own term through these
+    // very ops, and holding it to a challenge floor would strand a young
+    // master with an answering-empty cell it cannot repair.
+    if (record?.accepted && record.accepted.grantee !== ask.candidate) {
       const since = row.runningSince ?? row.broadcastedAt ?? null;
       const age = since !== null ? Date.now() - new Date(since).getTime() : 0;
       if (!Number.isFinite(age) || age < minHolderAgeMs()) {
@@ -332,13 +337,22 @@ async function askerHolds(ask, askerNode, type) {
  */
 async function serve(req, res, type, operate) {
   // Stage timings, published win or lose: the caller's 5s budget dies
-  // SOMEWHERE in this gauntlet and nothing else says where. publish() is a
-  // no-op outside the harness.
+  // SOMEWHERE in this gauntlet and nothing else says where. The ask's own
+  // key/epoch/candidate and the operate verdict's refusal code ride along
+  // once known — solving the 1205 fight from archived captures took an hour
+  // of cross-cell arithmetic to recover exactly these four fields. publish()
+  // is a no-op outside the harness.
   const t0 = Date.now();
   const ms = {};
-  function report(outcome) {
+  let askSeen = null;
+  function report(outcome, code) {
     fluxEventBus.publish('quorumGrant:served', {
-      type, outcome, total: Date.now() - t0, ...ms,
+      type,
+      outcome,
+      total: Date.now() - t0,
+      ...(askSeen ? { key: askSeen.key, epoch: askSeen.epoch, candidate: askSeen.candidate } : {}),
+      ...(code ? { code } : {}),
+      ...ms,
     });
   }
   try {
@@ -355,6 +369,7 @@ async function serve(req, res, type, operate) {
       return res.status(read.code).json(messageHelper.createErrorMessage(read.message));
     }
     const { ask, askerNode } = read;
+    askSeen = ask;
 
     const committee = await selfOnCommittee(ask.key, ask.mode ?? 'held', ask.fingerprint, ask.generation, ask.chain);
     ms.committee = Date.now() - t0 - ms.read;
@@ -374,7 +389,7 @@ async function serve(req, res, type, operate) {
 
     const reply = await operate(ask);
     ms.operate = Date.now() - t0 - ms.read - ms.committee - (ms.holds ?? 0);
-    report('served');
+    report('served', reply?.ok === false ? reply.code : undefined);
     return res.json(messageHelper.createDataMessage(reply));
   } catch (error) {
     report('errored');

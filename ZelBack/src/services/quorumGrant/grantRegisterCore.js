@@ -127,7 +127,11 @@ function decidePrepare(record, request, nowMs, tunables) {
       promisedEpoch: epoch,
       accepted: record?.accepted ?? null,
     },
-    record: { ...(record ?? {}), promisedEpoch: epoch },
+    // The stamp is what keeps a promise a claim about NOW: revival (onRenew)
+    // yields only to a promise fresh within the lock-delay, because a pursuit
+    // that was going to complete completed within it — an older promise is a
+    // residue, and refusing forever on a residue is a ratchet, not a guard.
+    record: { ...(record ?? {}), promisedEpoch: epoch, promisedAt: nowMs },
   };
 }
 
@@ -199,6 +203,7 @@ function onAccept(record, request, nowMs, tunables) {
     record: {
       ...(record ?? {}),
       promisedEpoch: Math.max(promisedEpoch, epoch),
+      ...(epoch > promisedEpoch ? { promisedAt: nowMs } : {}),
       accepted,
       ...(rosterStale ? { roster: null } : {}),
     },
@@ -215,7 +220,7 @@ function onAccept(record, request, nowMs, tunables) {
  * may assume is counted from ITS send time — both conservative, neither
  * comparing one machine's clock to another's.
  */
-function onRenew(record, request, nowMs) {
+function onRenew(record, request, nowMs, tunables) {
   const { epoch, grantee } = request;
   const state = grantState(record, nowMs);
 
@@ -233,10 +238,19 @@ function onRenew(record, request, nowMs) {
   // record lapsed while the process was down, though the term lived on the
   // other cells. Safe by intersection arithmetic - any successor needed a
   // quorum that did not include this sleeping cell, and this cell adopts
-  // the higher epoch at its next prepare. A promise above the recorded
-  // epoch means a takeover is in flight, and the revival yields to it.
+  // the higher epoch at its next prepare. A promise above the recorded epoch
+  // means a takeover is in flight ONLY while it is fresh: a completing
+  // pursuit completes within the lock-delay, so revival yields to a promise
+  // stamped inside that window and to nothing older — a stale or unstamped
+  // promise is a residue (a pursuit that died mid-flight), and refusing on
+  // it forever is the ratchet the 1205 fleet measured, not a safety rule.
+  // The promise itself stays durable either way: proposal ordering
+  // (prepare/accept) never reads the stamp.
   if (state === 'lapsed' && (record.promisedEpoch ?? 0) > record.accepted.epoch) {
-    return { reply: refusal('lapsed', record), record: null };
+    const age = Number.isFinite(record.promisedAt) ? nowMs - record.promisedAt : Infinity;
+    if (age <= (tunables?.lockDelayMs ?? 30_000)) {
+      return { reply: refusal('lapsed', record), record: null };
+    }
   }
 
   const accepted = { ...record.accepted, expiresAt: nowMs + request.ttlMs };

@@ -82,6 +82,10 @@ function jitteredMs(baseMs) {
   return Math.floor(baseMs / 2 + Math.random() * baseMs);
 }
 
+// Consecutive renewal refusals from one cell before the repair chore treats
+// it as answering-empty rather than transiently confused.
+const REPAIR_AFTER_REFUSALS = 3;
+
 function outpointOf(node) {
   return `${node.txhash}:${node.outidx}`;
 }
@@ -320,7 +324,16 @@ async function relayThroughStandbys(standbys, members, type, ask, signature, hav
         }
       });
     } catch (error) {
-      // a carrier that failed is just a carrier that failed
+      // a carrier that failed is just a carrier that failed — but say so:
+      // the 1205 fight's relay leg was unreadable because this catch and
+      // carryAsk's early-outs were both silent. publish() is a no-op
+      // outside the harness.
+      fluxEventBus.publish('quorumGrant:relayFailed', {
+        type,
+        carrier: outpointOf(standbys[i]),
+        status: error.response?.status ?? null,
+        reason: error.response?.data?.data?.message ?? error.message ?? null,
+      });
     }
   }
   return replies;
@@ -539,6 +552,13 @@ class Holder {
 
   #lastHealMs = null;
 
+  // grantor outpoint -> consecutive renewal REFUSALS (no_grant / not_grantee /
+  // lapsed). Refusing is evidence and silence is not: a silent referee is the
+  // heal chore's business, an answering-empty one is the repair chore's.
+  #refusals = new Map();
+
+  #lastRepairMs = null;
+
   #state = 'held';
 
   #coasting = false;
@@ -703,25 +723,36 @@ class Holder {
       this.#lastAnswerMs.set(outpoint, sentMs);
       if (reply?.ok && reply.renewed) {
         this.recordAck(outpoint, sentMs);
+        this.#refusals.delete(outpoint);
         renewed += 1;
       } else if (reply?.code === 'not_grantee' || reply?.code === 'no_grant' || reply?.code === 'lapsed') {
         // this grantor no longer counts toward safety; its old ack must not
         // linger as if it did
         this.#acks.delete(outpoint);
+        this.#refusals.set(outpoint, (this.#refusals.get(outpoint) ?? 0) + 1);
       }
     });
 
-    // A reply teaching a higher epoch than ours means a successor exists:
-    // not jeopardy — deposed. Stop immediately.
-    const taught = core.highestEpochSeen([...replies.values()]);
-    if (taught > this.#epoch) {
-      this.#demote(`a grant at epoch ${taught} supersedes ours at ${this.#epoch}`);
+    // A reply teaching a higher ACCEPTED grant by someone else means a
+    // successor exists: not jeopardy — deposed. Stop immediately. A bare
+    // promisedEpoch teaches nothing here: a promise binds the CELL (accept
+    // nothing lower), never the incumbent — deposing on one is Raft's
+    // documented disruptive-server defect, and it is how a residue promise
+    // from the founding scramble deposed a healthy master on the 1205 fleet.
+    // Our own grant at a higher epoch is a partial term refresh, converged by
+    // the repair chore, never a successor.
+    const successor = core.adoptFrom([...replies.values()]);
+    if (successor && successor.epoch > this.#epoch
+      && successor.grantee !== this.#identity.outpoint) {
+      this.#demote(`a grant at epoch ${successor.epoch} supersedes ours at ${this.#epoch}`);
       return;
     }
 
     await this.#assess(renewed >= this.#committee.quorum);
 
     await this.#maybeHeal();
+
+    await this.#maybeRepair();
   }
 
   /**
@@ -819,16 +850,19 @@ class Holder {
     });
 
     await this.publishRecord();
-    await this.#seedAddedGrantor(expected);
+    await this.#seedGrantor(expected);
   }
 
   /**
-   * Hand the freshly seated grantor the grant it now referees: an accept at
-   * the current epoch, carrying the chain that seats it. Until this lands
-   * (or a later renewal does the same job) the new seat answers refusals,
-   * which the safety arithmetic already treats as absence.
+   * Hand one grantor the grant this holder already holds: an accept at the
+   * CURRENT epoch, carrying any chain. Two callers: the heal path seeds a
+   * freshly seated replacement, and the repair chore re-seats an
+   * answering-empty cell (wiped journal, stale record). Until it lands the
+   * cell answers refusals, which the safety arithmetic treats as absence.
+   * Returns the grantor's reply so the repair chore can read a refusal —
+   * `superseded` there means a promise stands above the term.
    */
-  async #seedAddedGrantor(added) {
+  async #seedGrantor(member) {
     const signed = await signedAskFor(
       'accept',
       this.#key,
@@ -836,12 +870,123 @@ class Holder {
       this.#epoch,
       this.#identity,
       this.#committee,
-      { ttlMs: this.#ttlMs, chain: this.#committee.chain },
+      {
+        ttlMs: this.#ttlMs,
+        ...(this.#committee.chain.length ? { chain: this.#committee.chain } : {}),
+      },
     );
-    if (!signed) return;
+    if (!signed) return null;
     const sentMs = this.#clock();
-    const reply = await askGrantor(added, 'accept', signed.ask, signed.signature);
-    if (reply?.ok && reply.accepted) this.recordAck(outpointOf(added), sentMs);
+    const reply = await askGrantor(member, 'accept', signed.ask, signed.signature);
+    if (reply?.ok && reply.accepted) {
+      this.recordAck(outpointOf(member), sentMs);
+      this.#refusals.delete(outpointOf(member));
+    }
+    return reply;
+  }
+
+  /**
+   * The repair chore — the heal chore's sibling. Heal replaces referees that
+   * answer NOBODY; repair re-seats referees that ANSWER but hold no usable
+   * record: the wiped journal, the stale record, and the founding scramble's
+   * residue (a promise above the term with nothing accepted — §13.9's
+   * answering-empty cell). Left alone, such a cell sits out the term for the
+   * term's whole life and the committee runs silently degraded.
+   *
+   * Runs only from a HELD, non-coasting term — while a quorum renews, no
+   * challenger can win (its prepares are shield-refused on the renewed
+   * quorum), so nothing this chore bulldozes can be an in-flight takeover.
+   * In jeopardy a takeover may be legitimately winning and repair stays out
+   * of its way. One window per maxTtl, like heal.
+   *
+   * Two rungs: seed (an accept at the CURRENT epoch — no epoch movement, the
+   * catch-up shape) and, when a seed is refused `superseded`, ONE full
+   * re-acquisition at a higher epoch to clear the residue promise — ordinary
+   * retry-higher, same grantee, adopting its own value forward.
+   */
+  async #maybeRepair() {
+    if (this.#stopped || this.#state !== 'held' || this.#coasting) return;
+    const now = this.#clock();
+    if (this.#lastRepairMs !== null && now - this.#lastRepairMs < maxTtlMs()) return;
+
+    const targets = this.#committee.members.filter(
+      (member) => (this.#refusals.get(outpointOf(member)) ?? 0) >= REPAIR_AFTER_REFUSALS,
+    );
+    if (!targets.length) return;
+    this.#lastRepairMs = now;
+
+    let blocked = false;
+    let seeded = 0;
+    // eslint-disable-next-line no-restricted-syntax -- seeds are sequential on
+    // purpose: repair is a background chore, never a burst
+    for (const member of targets) {
+      // eslint-disable-next-line no-await-in-loop
+      const reply = await this.#seedGrantor(member);
+      if (reply?.ok && reply.accepted) seeded += 1;
+      else if (reply?.code === 'superseded') blocked = true;
+    }
+    fluxEventBus.publish('quorumGrant:repair', {
+      key: this.#key,
+      targets: targets.map(outpointOf),
+      seeded,
+      escalating: blocked,
+    });
+    if (blocked) await this.#refreshTerm();
+  }
+
+  /**
+   * One re-acquisition of this holder's own term at a higher epoch — the
+   * repair chore's second rung, clearing every promise a seed cannot get
+   * past. The incumbent passes the shield by design, so this is probe →
+   * prepare → accept over the same committee; a failed round changes nothing
+   * and the next repair window retries. A partial accept round is converged
+   * the same way: the cells that took the higher epoch refuse the old-epoch
+   * renewals, feeding the refusal counter that re-runs this chore — and the
+   * deposition rule ignores our own higher grant on purpose.
+   */
+  async #refreshTerm() {
+    const chainExtras = this.#committee.chain.length ? { chain: this.#committee.chain } : {};
+    const probeSigned = await signedAskFor('probe', this.#key, 'held', 1, this.#identity, this.#committee, chainExtras);
+    if (!probeSigned) return;
+    const probeReplies = await askCommittee(this.#committee.members, 'probe', probeSigned.ask, probeSigned.signature);
+
+    // defensive: a real successor learned here is a deposition, not a repair
+    const adopted = core.adoptFrom([...probeReplies.values()]);
+    if (adopted && adopted.epoch > this.#epoch && adopted.grantee !== this.#identity.outpoint) {
+      this.#demote(`a grant at epoch ${adopted.epoch} supersedes ours at ${this.#epoch}`);
+      return;
+    }
+
+    const epoch = core.nextEpoch(core.highestEpochSeen([...probeReplies.values()]));
+    if (epoch <= this.#epoch) return;
+
+    const prepareSigned = await signedAskFor('prepare', this.#key, 'held', epoch, this.#identity, this.#committee, chainExtras);
+    if (!prepareSigned) return;
+    const prepareReplies = await askCommittee(this.#committee.members, 'prepare', prepareSigned.ask, prepareSigned.signature);
+    const prepared = core.prepareOutcome([...prepareReplies.values()], this.#committee.quorum);
+    if (!prepared.promised) return;
+
+    const acceptSigned = await signedAskFor('accept', this.#key, 'held', epoch, this.#identity, this.#committee, {
+      ttlMs: this.#ttlMs,
+      ...chainExtras,
+    });
+    if (!acceptSigned) return;
+    const sentMs = this.#clock();
+    const acceptReplies = await askCommittee(this.#committee.members, 'accept', acceptSigned.ask, acceptSigned.signature);
+    const accepted = core.acceptOutcome([...acceptReplies.values()], this.#committee.quorum);
+    if (!accepted.granted) return;
+
+    this.#epoch = epoch;
+    this.#acks.clear();
+    acceptReplies.forEach((reply, outpoint) => {
+      if (reply?.ok && reply.accepted) {
+        this.recordAck(outpoint, sentMs);
+        this.#refusals.delete(outpoint);
+      }
+    });
+    this.#armDemotion(this.safeUntil() + demotionSlackMs());
+    await this.publishRecord();
+    fluxEventBus.publish('quorumGrant:termRefreshed', { key: this.#key, epoch });
   }
 
   async #assess(quorumRenewed) {
@@ -857,6 +1002,9 @@ class Holder {
       quorumRenewed,
       coasting: this.#coasting,
       safeForMs: safeUntil === null ? null : Math.round(safeUntil - now),
+      // cells refusing renewals right now — the silently-degraded-committee
+      // number the repair chore exists to drive back to zero
+      refusingCells: this.#refusals.size,
     };
 
     if (quorumRenewed) {
@@ -1026,9 +1174,17 @@ async function witnessAnswer(key, mode = 'held') {
  * no reason a legitimate holder would ever need to name one.
  */
 async function carryAsk(type, ask, signature) {
-  if (!signedEnvelope.TYPES.includes(type)) return { replies: [] };
+  if (!signedEnvelope.TYPES.includes(type)) {
+    fluxEventBus.publish('quorumGrant:carryRefused', { type, key: ask?.key ?? null, reason: 'unknown ask type' });
+    return { replies: [] };
+  }
   const committee = await committeeFor(ask.key, ask.mode ?? 'held', ask.fingerprint);
-  if (!committee) return { replies: [] };
+  if (!committee) {
+    // an empty carry has two causes — bad type, unresolvable committee —
+    // and the caller sees the same {replies: []} either way; name which
+    fluxEventBus.publish('quorumGrant:carryRefused', { type, key: ask.key, reason: 'committee unavailable for fingerprint' });
+    return { replies: [] };
+  }
 
   // The ask may carry a chain newer than anything this carrier has seen
   // published — a heal that just happened. It is self-verifying, so honor

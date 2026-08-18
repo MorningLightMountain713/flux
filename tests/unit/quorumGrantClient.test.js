@@ -168,7 +168,7 @@ describe('quorumGrant grantClient', () => {
       probe: () => ({ reply: registerCore.onProbe(record, request, Date.now(), REGISTER_TUNABLES), record: null }),
       prepare: () => registerCore.onPrepare(record, request, Date.now(), REGISTER_TUNABLES),
       accept: () => registerCore.onAccept(record, request, Date.now(), REGISTER_TUNABLES),
-      renew: () => registerCore.onRenew(record, request, Date.now()),
+      renew: () => registerCore.onRenew(record, request, Date.now(), REGISTER_TUNABLES),
       release: () => registerCore.onRelease(record, request, Date.now()),
     };
     const outcome = handlers[type]();
@@ -524,6 +524,38 @@ describe('quorumGrant grantClient', () => {
       expect(demotedReason).to.contain('witness');
     });
 
+    it('a bare promise deposes nobody — only an accepted grant is a successor', async () => {
+      // The 1205 fight: one cell carried a residue promise from the founding
+      // scramble (promised high, accepted nothing) and its refusal deposed a
+      // healthy master on its first renewal pass. A promise binds the CELL —
+      // accept nothing lower — never the incumbent.
+      const holder = await acquireHolder();
+      const poisoned = committeeHosts[0];
+      registers.get(poisoned).set(KEY, { promisedEpoch: 9, promisedAt: Date.now(), accepted: null });
+
+      clockNow += 20_000;
+      await holder.renewOnce();
+
+      expect(holder.state).to.equal('held');
+      expect(holder.safeUntil()).to.equal(clockNow + TTL);
+    });
+
+    it('its own newer grant is not a successor — a partial term refresh must not self-depose', async () => {
+      const holder = await acquireHolder();
+      const partial = committeeHosts[0];
+      const record = registers.get(partial).get(KEY);
+      registers.get(partial).set(KEY, {
+        ...record,
+        promisedEpoch: record.accepted.epoch + 3,
+        accepted: { ...record.accepted, epoch: record.accepted.epoch + 3 },
+      });
+
+      clockNow += 20_000;
+      await holder.renewOnce();
+
+      expect(holder.state).to.equal('held');
+    });
+
     it('a higher epoch in any reply is a deposition, not a jeopardy', async () => {
       let demotedReason = null;
       const outcome = await grantClient.acquire(KEY, holderOptions({
@@ -554,6 +586,88 @@ describe('quorumGrant grantClient', () => {
       });
       const witness = await grantClient.witnessAnswer(KEY);
       expect(witness.holding).to.equal(false);
+    });
+  });
+
+  describe('the repair chore — an answering-empty cell is re-seated, never abandoned', () => {
+    async function heldHolder() {
+      const outcome = await grantClient.acquire(KEY, holderOptions());
+      expect(outcome.granted).to.equal(true);
+      return outcome.holder;
+    }
+
+    async function passes(holder, count) {
+      for (let i = 0; i < count; i += 1) {
+        clockNow += 20_000;
+        // eslint-disable-next-line no-await-in-loop -- renewal passes are serial by nature
+        await holder.renewOnce();
+      }
+    }
+
+    it('a cell refusing with an empty register is seeded back at the CURRENT epoch', async () => {
+      const holder = await heldHolder();
+      const wiped = committeeHosts[0];
+      const epochBefore = holder.epoch;
+      registers.get(wiped).delete(KEY); // the wiped-journal referee
+
+      await passes(holder, 3);
+
+      const reseated = registers.get(wiped).get(KEY);
+      expect(reseated?.accepted?.grantee).to.equal(SELF);
+      expect(reseated.accepted.epoch).to.equal(epochBefore);
+      expect(holder.epoch).to.equal(epochBefore); // a seed moves no epoch
+      expect(holder.state).to.equal('held');
+    });
+
+    it('a residue promise above the term escalates to one re-acquisition at a higher epoch', async () => {
+      const holder = await heldHolder();
+      const poisoned = committeeHosts[0];
+      const epochBefore = holder.epoch;
+      registers.get(poisoned).set(KEY, { promisedEpoch: 9, promisedAt: Date.now(), accepted: null });
+
+      await passes(holder, 3);
+
+      expect(holder.epoch).to.be.greaterThan(9); // cleared every promise
+      expect(holder.state).to.equal('held');
+      committeeHosts.forEach((host) => {
+        const record = registers.get(host).get(KEY);
+        expect(record.accepted.grantee).to.equal(SELF);
+        expect(record.accepted.epoch).to.equal(holder.epoch);
+      });
+      expect(holder.epoch).to.not.equal(epochBefore);
+    });
+
+    it('one repair per rate window — the second empty cell waits it out', async () => {
+      const holder = await heldHolder();
+      const first = committeeHosts[0];
+      const second = committeeHosts[1];
+      registers.get(first).delete(KEY);
+      await passes(holder, 3);
+      expect(registers.get(first).get(KEY)?.accepted?.grantee).to.equal(SELF);
+
+      registers.get(second).delete(KEY);
+      await passes(holder, 3); // inside the window: counted, not yet repaired
+      expect(registers.get(second).get(KEY)).to.equal(undefined);
+
+      clockNow += 300_000; // past the rate window
+      await passes(holder, 1);
+      expect(registers.get(second).get(KEY)?.accepted?.grantee).to.equal(SELF);
+    });
+
+    it('repair is a healthy holder\'s chore — jeopardy repairs nothing', async () => {
+      const holder = await heldHolder();
+      // five answering-empty cells: the renewal quorum itself is gone, and a
+      // takeover may be legitimately winning — repair must not fight it
+      committeeHosts.slice(0, 5).forEach((host) => registers.get(host).delete(KEY));
+      witnessReplies.set(STANDBY_HOST, { quorumReachable: true, holding: false, acquiring: false });
+
+      clockNow += 20_000;
+      await holder.renewOnce();
+
+      expect(holder.state).to.equal('jeopardy');
+      committeeHosts.slice(0, 5).forEach((host) => {
+        expect(registers.get(host).get(KEY)).to.equal(undefined);
+      });
     });
   });
 
