@@ -24,7 +24,7 @@ import { defaultGroupGrantDoc } from './policy-helper.js';
 import { MongoClient } from 'mongodb';
 import { authenticate } from '../auth.js';
 import { fluxTeamKey, nodeKey } from './keys.js';
-import { assertFluxSpecVendorCurrent, NODE_IMAGE, OLD_NODE_IMAGE } from './flux-spec-vendor.js';
+import { assertFluxSpecVendorCurrent, NODE_IMAGE } from './flux-spec-vendor.js';
 import { assertNodeConfigsCurrent } from './node-configs.js';
 import { statelessRegex } from './log-reader.js';
 import {
@@ -487,8 +487,7 @@ export function releaseBootLock() {
 
 export async function createTestEnv({
   hookCtx = null, nodes = 1, deferredNodes = 0, legacyNodes = [], stubPeers = [],
-  oldNodes = [], configOverrides = null, nodeConfigOverrides = {}, nodeTiers = null,
-  dataCenter = true,
+  configOverrides = null, nodeConfigOverrides = {}, nodeTiers = null, dataCenter = true,
   tickerAutostart = false, discoveryAutostart = false, nodeStatusOverrides = {},
   rpcFailures = [], bootContext = 'running', arcane = true, shutdowndMock = true,
   telemetrydMock = false, systemdMode = false, telemetrydReal = false,
@@ -532,7 +531,7 @@ export async function createTestEnv({
 
   try {
     await _buildEnv(
-      env, nodes, deferredNodes, legacyNodes, oldNodes, stubPeers, configOverrides, nodeConfigOverrides,
+      env, nodes, deferredNodes, legacyNodes, stubPeers, configOverrides, nodeConfigOverrides,
       nodeTiers, dataCenter, tickerAutostart, discoveryAutostart, nodeStatusOverrides, rpcFailures,
       bootContext, arcane, shutdowndMock, telemetrydMock, systemdMode, telemetrydReal,
       shutdowndReal, dnsdReal, zmqTopics, nodeZmqTopics, { perNodeZmq },
@@ -580,7 +579,7 @@ function mergeConfigs(base, override) {
 }
 
 async function _buildEnv(
-  env, nodes, deferredNodes, legacyNodes, oldNodes, stubPeers, configOverrides, nodeConfigOverrides,
+  env, nodes, deferredNodes, legacyNodes, stubPeers, configOverrides, nodeConfigOverrides,
   nodeTiers, dataCenter, tickerAutostart, discoveryAutostart, nodeStatusOverrides, rpcFailures,
   bootContext, arcane, shutdowndMock, telemetrydMock, systemdMode, telemetrydReal, shutdowndReal,
   dnsdReal, zmqTopics, nodeZmqTopics, zmqOptions = {},
@@ -984,10 +983,7 @@ async function _buildEnv(
     // machine: under a contended 10-node fleet boot, Wait.forHealthCheck() tears
     // the fleet down on a transient "unhealthy" even when FluxOS is up. See
     // http-wait-strategy.js for the full rationale.
-    // Mixed-version fleets: an oldNodes index boots the pre-grant-plane image.
-    // Its baked flux-spec is historic by design (the vendor guard checks only
-    // the default image).
-    const builder = new StaticIpContainer(oldNodes.includes(i) ? OLD_NODE_IMAGE : NODE_IMAGE)
+    const builder = new StaticIpContainer(NODE_IMAGE)
       .withPrivilegedMode()
       .withStaticIp(networkName, nodeIp)
       .withBindMounts(bindMounts)
