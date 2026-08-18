@@ -86,7 +86,9 @@ describe('encrypted mastership: a sealed spec holds and fails over a term', func
         },
       },
     });
-    await bootAndPeer(env);
+    // A REAL registration prices the spec at validation: the pricing
+    // bootstrap is part of boot for every suite that registers on-chain.
+    await bootAndPeer(env, { pricing: true });
 
     name = `e2eseal${Date.now()}`;
     await pushImage(name, 'v1');
