@@ -235,8 +235,14 @@ describe('operator commands against a held mastership', function () {
     // cannot re-acquire behind the successor — and its container stays down.
     await assertNoEvent(env.clients[masterIndex], 'quorumGrant:granted',
       (d) => d.key === `${name}/master`, 45000);
-    const oldStatus = await getAppContainerStatus(env.clients[masterIndex].container, name).catch(() => null);
-    expect(!oldStatus || !oldStatus.status.startsWith('Up'), 'the yielded master stays stopped').to.equal(true);
+    // Bounded, not a single sample: the yield's stop is asynchronous (operator
+    // lock, reconciler pass, graceful drain) and the successor seating above is
+    // another node's clock — sampling at that instant can catch a healthy stop
+    // mid-flight.
+    await waitFor(async () => {
+      const oldStatus = await getAppContainerStatus(env.clients[masterIndex].container, name).catch(() => null);
+      return !oldStatus || !oldStatus.status.startsWith('Up');
+    }, { timeout: 90000, interval: 5000, label: 'the yielded master stops' });
     expect(await runningMasters(), 'exactly one master runs').to.equal(1);
 
     // apprestart returns it as a STANDBY: adopt, never reclaim.
