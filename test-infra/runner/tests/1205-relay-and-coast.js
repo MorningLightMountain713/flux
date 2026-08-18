@@ -327,4 +327,44 @@ describe('relay renewal and the partitioned app island', function () {
     expect(after.grantee, 'the returning master did not reclaim').to.not.equal(before.grantee);
   });
 
+  it('the term rides partition FLAPS without churning — hysteresis, not twitchiness', async function () {
+    this.timeout(600000);
+
+    // Clean partitions are covered above; production links FLAP. Each cycle
+    // is well inside the term (ttl 90s), so a correctly-damped master sees a
+    // few failed rounds bridged by relays, never a lapse: the grantee must
+    // not move and no demotion may fire. A twitchy implementation demotes on
+    // the first bad cycle — exactly the miscalibration the punctual alarm
+    // exposed once before (§2.5's arithmetic).
+    let before = null;
+    await waitFor(async () => {
+      before = await quorumVerdict();
+      return before !== null;
+    }, { timeout: 240000, interval: 10000, label: 'a standing grant before the flaps' });
+    const masterIndex = Number(Object.keys(holderOutpoints).find((i) => holderOutpoints[i] === before.grantee));
+    const masterAfter = env.clients[masterIndex].getLastEventId();
+
+    for (let cycle = 0; cycle < 3; cycle += 1) {
+      // eslint-disable-next-line no-await-in-loop
+      await env.partitionGroups([masterIndex], OUTSIDERS);
+      // eslint-disable-next-line no-await-in-loop
+      await new Promise((resolve) => { setTimeout(resolve, 20000); });
+      // eslint-disable-next-line no-await-in-loop
+      await env.healPartition([masterIndex], OUTSIDERS);
+      // eslint-disable-next-line no-await-in-loop
+      await new Promise((resolve) => { setTimeout(resolve, 15000); });
+    }
+
+    const buffered = env.clients[masterIndex].getEventBuffer();
+    const demoted = buffered.find((e) => e.event === 'quorumGrant:demoted'
+      && e.id > masterAfter && e.data.key === `${name}/master`);
+    expect(demoted, 'no flap cycle demoted the master').to.equal(undefined);
+
+    const after = await quorumVerdict();
+    expect(after, 'the quorum view stands after the flaps').to.not.equal(null);
+    expect(after.grantee, 'the master never changed').to.equal(before.grantee);
+    expect(after.epoch, 'the epoch never regresses').to.be.at.least(before.epoch);
+    expect(await runningMasters(), 'exactly one master throughout').to.equal(1);
+  });
+
 });
