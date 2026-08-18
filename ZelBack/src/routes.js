@@ -1327,6 +1327,9 @@ module.exports = (app) => {
   app.get('/apps/appstop/:appname?/:global?', (req, res) => {
     appController.appStop(req, res);
   });
+  app.get('/apps/appyield/:appname?/:global?', (req, res) => {
+    appController.appYieldApi(req, res);
+  });
   app.get('/apps/apprestart/:appname?/:global?', (req, res) => {
     appController.appRestart(req, res);
   });

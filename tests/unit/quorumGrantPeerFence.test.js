@@ -5,7 +5,7 @@ const sinon = require('sinon');
 
 const serviceHelper = require('../../ZelBack/src/services/serviceHelper');
 const networkStateService = require('../../ZelBack/src/services/networkStateService');
-const mastershipGrantGate = require('../../ZelBack/src/services/quorumGrant/mastershipGrantGate');
+const mastershipGrantGate = require('../../ZelBack/src/services/appLifecycle/mastershipGrantGate');
 const { buildDeviceConfiguration } = require('../../ZelBack/src/services/appMonitoring/syncthingMonitorHelpers');
 
 // The peer fence: a deposed master that cannot clean up after itself is

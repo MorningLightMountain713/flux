@@ -28,7 +28,7 @@ const pendingTeardownStore = require('../appLifecycle/pendingTeardownStore');
 const appTamperingDetectionService = require('../appTamperingDetectionService');
 const telemetrySinkCache = require('../telemetrySinkCache');
 const reconcilerQueue = require('./reconcilerQueue');
-const mastershipGrantGate = require('../quorumGrant/mastershipGrantGate');
+const mastershipGrantGate = require('../appLifecycle/mastershipGrantGate');
 
 // The lightweight scheduling seam this engine drives: enqueue/scheduleRetry
 // live there, and the engine registers its reconcile + onSettled below. A producer

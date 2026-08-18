@@ -13,7 +13,7 @@ const volumeService = require('../utils/volumeService');
 const appCaches = require('../utils/appCaches');
 const { appsFolder } = require('../utils/appConstants');
 const appTamperingDetectionService = require('../appTamperingDetectionService');
-const mastershipGrantGate = require('../quorumGrant/mastershipGrantGate');
+const mastershipGrantGate = require('../appLifecycle/mastershipGrantGate');
 const { socketAddressesMatch } = require('../utils/socketAddressUtils');
 const {
   LEADER_CONFIRM_COUNT,

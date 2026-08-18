@@ -30,7 +30,7 @@ const {
   folderNeedsUpdate,
 } = require('./syncthingMonitorHelpers');
 const volumeService = require('../utils/volumeService');
-const mastershipGrantGate = require('../quorumGrant/mastershipGrantGate');
+const mastershipGrantGate = require('../appLifecycle/mastershipGrantGate');
 const { extractIp } = require('../utils/socketAddressUtils');
 const appReconciler = require('./appReconciler');
 const {

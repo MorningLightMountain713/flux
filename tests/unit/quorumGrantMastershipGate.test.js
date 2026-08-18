@@ -11,7 +11,7 @@ const registryManager = require('../../ZelBack/src/services/appDatabase/registry
 const messageStore = require('../../ZelBack/src/services/appMessaging/messageStore');
 const reconcilerQueue = require('../../ZelBack/src/services/appMonitoring/reconcilerQueue');
 const grantClient = require('../../ZelBack/src/services/quorumGrant/grantClient');
-const mastershipGrantGate = require('../../ZelBack/src/services/quorumGrant/mastershipGrantGate');
+const mastershipGrantGate = require('../../ZelBack/src/services/appLifecycle/mastershipGrantGate');
 
 // The reconciler's one question — "does the grant veto this component?" —
 // answered veto-only. What matters most here is what the gate does NOT do:
@@ -93,7 +93,7 @@ describe('quorumGrant mastershipGrantGate', () => {
     // supplied: proxyquire replaces the module wholesale and a missing key would
     // read as undefined rather than fail.
     function gateWith({ flag, required, floor }) {
-      return proxyquire('../../ZelBack/src/services/quorumGrant/mastershipGrantGate', {
+      return proxyquire('../../ZelBack/src/services/appLifecycle/mastershipGrantGate', {
         config: {
           minimumFluxOSAllowedVersion: floor,
           fluxapps: {
@@ -339,6 +339,26 @@ describe('quorumGrant mastershipGrantGate', () => {
       await mastershipGrantGate.onComponentTeardown(IDENTIFIER, plainComp());
       await mastershipGrantGate.onComponentTeardown(IDENTIFIER, activeStandbyComp());
       expect(grantClient.holderFor.callCount).to.equal(1);
+    });
+  });
+
+  describe('yieldMastership — the operator grant-layer verb', () => {
+    it('voluntarily releases a held grant and says it held', async () => {
+      // appyield: release BEFORE the stop, so the successor pays no
+      // lock-delay — failover is the operator's stated intent, arriving as
+      // a command because a stopped container cannot carry it
+      const release = sinon.stub().resolves();
+      grantClient.holderFor.returns({ release });
+
+      const outcome = await mastershipGrantGate.yieldMastership('myapp');
+
+      expect(outcome.held).to.equal(true);
+      sinon.assert.calledOnce(release);
+    });
+
+    it('is a no-op on a non-holder — stop-regardless keeps the global fan-out idempotent', async () => {
+      const outcome = await mastershipGrantGate.yieldMastership('myapp');
+      expect(outcome.held).to.equal(false);
     });
   });
 });

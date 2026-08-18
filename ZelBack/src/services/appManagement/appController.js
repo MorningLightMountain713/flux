@@ -9,6 +9,7 @@ const reconcilerQueue = require('../appMonitoring/reconcilerQueue');
 const log = require('../../lib/log');
 const deploymentProvider = require('../appRuntime/deploymentProvider');
 const globalCommand = require('./globalCommand');
+const mastershipGrantGate = require('../appLifecycle/mastershipGrantGate');
 
 /**
  * Start an application
@@ -151,6 +152,87 @@ async function appStop(req, res) {
     await driveOperatorCommand(ids, (id) => appsRuntimeState.setOperatorStopped(id, true));
 
     const appResponse = messageHelper.createDataMessage(appRes);
+    return res ? res.json(appResponse) : appResponse;
+  } catch (error) {
+    log.error(error);
+    const errorResponse = messageHelper.createErrorMessage(
+      error.message || error,
+      error.name,
+      error.code,
+    );
+    return res ? res.json(errorResponse) : errorResponse;
+  }
+}
+
+/**
+ * Yield mastership, then stop: the operator's failover verb. `appstop` keeps
+ * the grant (maintenance — no failover behind the operator's back); this
+ * releases it FIRST, so a standby is seated with no lock-delay, then applies
+ * the same durable operator stop. Grants are app-scoped, so a component
+ * target yields the app's mastership and stops the named component. On a
+ * non-holder the yield is a no-op and the stop still applies — which is what
+ * keeps the global fan-out idempotent: every instance stops, only the master
+ * releases. The operator stop lock keeps this node's gate unconsulted
+ * afterwards, so it cannot re-acquire behind the successor.
+ *
+ * @param {string} appname app or component name
+ * @param {{replica?: string|null}} [options]
+ * @returns {Promise<{name: string, held: boolean}>}
+ */
+async function appYield(appname, { replica = null } = {}) {
+  if (!appname) {
+    throw new Error('No Flux App specified');
+  }
+  const mainAppName = deploymentProvider.appNameFromRequest(appname);
+  const { instantiated, ids } = await deploymentProvider.resolveRequestTargets(appname, { replica });
+
+  const { held } = await mastershipGrantGate.yieldMastership(mainAppName);
+  await driveOperatorCommand(ids, (id) => appsRuntimeState.setOperatorStopped(id, true));
+
+  return { name: instantiated.name, held };
+}
+
+/**
+ * Express wrapper for appYield: parse, authorize, fan out or run locally,
+ * respond. The express objects never leave this function.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
+ * @returns {object} Response message
+ */
+async function appYieldApi(req, res) {
+  try {
+    let { appname } = req.params;
+    appname = appname || req.query.appname;
+    let { global } = req.params;
+    global = global || req.query.global || false;
+    global = serviceHelper.ensureBoolean(global);
+
+    if (!appname) {
+      throw new Error('No Flux App specified');
+    }
+
+    const mainAppName = deploymentProvider.appNameFromRequest(appname);
+
+    // eslint-disable-next-line global-require
+    const verificationHelper = require('../verificationHelper');
+    const authorized = await verificationHelper.verifyPrivilege('appownerabove', req, mainAppName);
+    if (!authorized) {
+      const errMessage = messageHelper.errUnauthorizedMessage();
+      return res ? res.json(errMessage) : errMessage;
+    }
+
+    const replica = req.query.replica || null;
+
+    if (global) {
+      globalCommand.executeAppGlobalCommand(appname, 'appyield', req.headers.zelidauth, undefined, undefined, replica); // do not wait
+      const appResponse = messageHelper.createSuccessMessage(`${appname} queried for global yield`);
+      return res ? res.json(appResponse) : appResponse;
+    }
+
+    const { name, held } = await appYield(appname, { replica });
+    const appResponse = messageHelper.createDataMessage(
+      held ? `${name} yielded mastership and stopped` : `${name} stopped (held no mastership)`,
+    );
     return res ? res.json(appResponse) : appResponse;
   } catch (error) {
     log.error(error);
@@ -508,6 +590,8 @@ async function createFluxNetworkAPI(req, res) {
 module.exports = {
   appStart,
   appStop,
+  appYield,
+  appYieldApi,
   appRestart,
   appKill,
   appPause,

@@ -10,7 +10,7 @@ const reconcilerQueue = require('../appMonitoring/reconcilerQueue');
 const fluxEventBus = require('../utils/fluxEventBus');
 const { extractIp, extractPort } = require('../utils/socketAddressUtils');
 const { nowMs } = require('../utils/monotonicClock');
-const grantClient = require('./grantClient');
+const grantClient = require('../quorumGrant/grantClient');
 const log = require('../../lib/log');
 
 // The activeStandby mastership consumer (doc §10.1): the seam between the
@@ -396,6 +396,33 @@ async function onComponentTeardown(identifier, comp) {
   }
 }
 
+/**
+ * The operator's grant-layer verb (`appyield`): voluntarily release this
+ * node's held mastership grant so a standby can be seated with NO lock-delay,
+ * before the caller applies the ordinary operator stop. Intent must arrive as
+ * a command — the plane never infers grant intent from container state,
+ * because a stopped container cannot say whether the operator wanted
+ * maintenance (`appstop`: the grant holds, no failover behind their back) or
+ * failover (this). On a non-holder it is a no-op, so the global fan-out stays
+ * idempotent: every instance stops, only the master releases. The operator
+ * stop lock then keeps this node's gate unconsulted, so it cannot re-acquire
+ * behind the successor.
+ */
+async function yieldMastership(appName) {
+  const key = keyFor(appName);
+  const holder = grantClient.holderFor(key);
+  if (!holder) return { held: false };
+  try {
+    await holder.release();
+    log.info(`mastershipGrantGate - yielded ${key} on operator command`);
+    fluxEventBus.publish('quorumGrant:yielded', { key });
+    return { held: true };
+  } catch (error) {
+    log.warn(`mastershipGrantGate - yield of ${key} failed: ${error.message}`);
+    return { held: true };
+  }
+}
+
 /** Test seam. */
 function resetForTests(options = {}) {
   testOverrides.enabled = options.enabled ?? null;
@@ -418,5 +445,6 @@ module.exports = {
   raiseFence,
   liftFence,
   onComponentTeardown,
+  yieldMastership,
   resetForTests,
 };

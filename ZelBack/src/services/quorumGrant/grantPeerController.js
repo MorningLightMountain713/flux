@@ -9,7 +9,7 @@ const registryManager = require('../appDatabase/registryManager');
 const { extractIp } = require('../utils/socketAddressUtils');
 const signedEnvelope = require('./signedEnvelope');
 const grantClient = require('./grantClient');
-const mastershipGrantGate = require('./mastershipGrantGate');
+const mastershipGrantGate = require('../appLifecycle/mastershipGrantGate');
 const log = require('../../lib/log');
 
 // The holder-to-holder face of the grant plane: the witness poll and the
