@@ -417,6 +417,17 @@ async function onComponentTeardown(identifier, comp) {
  */
 async function yieldMastership(appName) {
   const key = keyFor(appName);
+  // The fast-succession interleave: a yield can land while this node's own
+  // gate is mid-pursuit (it may already be chasing a term another node just
+  // yielded). The acquire completes milliseconds later and would seat a
+  // master whose container the operator just stopped — so settle the
+  // in-flight acquisition first, bounded by an acquisition's own worst-case
+  // wire time, and release whatever it won.
+  const settleDeadline = nowMs() + 20_000;
+  while (grantClient.isAcquiring(key) && !grantClient.holderFor(key) && nowMs() < settleDeadline) {
+    // eslint-disable-next-line no-await-in-loop -- deliberately serial: this IS the wait
+    await new Promise((resolve) => { setTimeout(resolve, 250); });
+  }
   const holder = grantClient.holderFor(key);
   if (!holder) return { held: false };
   try {
