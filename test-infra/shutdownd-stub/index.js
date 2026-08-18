@@ -61,21 +61,28 @@ const modeFor = (app) => behavior.perApp.get(app) || behavior.default;
 const logCall = (entry) => { callLog.push({ ...entry, ts: Date.now(), seq: seq += 1 }); };
 
 // Stop the app's containers on the inner dockerd. componentIdentityLabels stamps
-// runonflux.app on EVERY flux container (graceful or not), so this selector covers
-// plain and graceful apps. A replica name narrows the set to that identity's
-// containers via runonflux.replica — co-located siblings share the app label, so
-// stopping by app alone would take the sibling down with it. A null replica means
-// the whole app, which is what every whole-app path (expiry, cancel, node drain)
-// wants. Best-effort: a missing docker CLI (e.g. local protocol tests) or an
-// already-stopped container is not fatal.
+// io.runonflux.app on EVERY flux container (graceful or not — the label schema is
+// flux-spec's LABEL_KEYS, namespace included), so this selector covers plain and
+// graceful apps. A replica name narrows the set to that identity's containers via
+// io.runonflux.replica — co-located siblings share the app label, so stopping by
+// app alone would take the sibling down with it. A null replica means the whole
+// app, which is what every whole-app path (expiry, cancel, node drain) wants.
+// Best-effort: a missing docker CLI (e.g. local protocol tests) or an
+// already-stopped container is not fatal — but say so, because a selector that
+// silently matches nothing while replying 'complete' reads as a product mystery
+// from the FluxOS side.
 function dockerStopApp(app, replica) {
   return new Promise((resolve) => {
-    const filters = ['--filter', `label=runonflux.app=${app}`];
-    if (replica != null) filters.push('--filter', `label=runonflux.replica=${replica}`);
+    const filters = ['--filter', `label=io.runonflux.app=${app}`];
+    if (replica != null) filters.push('--filter', `label=io.runonflux.replica=${replica}`);
     execFile('docker', ['ps', '-q', ...filters], (err, stdout) => {
       if (err) { resolve(0); return; }
       const ids = stdout.split('\n').map((s) => s.trim()).filter(Boolean);
-      if (ids.length === 0) { resolve(0); return; }
+      if (ids.length === 0) {
+        console.log(`shutdownd-mock: stop ${app}${replica == null ? '' : `/${replica}`} matched 0 running containers`);
+        resolve(0);
+        return;
+      }
       let done = 0;
       ids.forEach((id) => {
         execFile('docker', ['stop', '-t', '3', id], () => {
