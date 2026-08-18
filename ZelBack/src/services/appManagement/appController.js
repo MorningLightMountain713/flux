@@ -165,15 +165,22 @@ async function appStop(req, res) {
 }
 
 /**
- * Yield mastership, then stop: the operator's failover verb. `appstop` keeps
+ * Stop, yielding mastership: the operator's failover verb. `appstop` keeps
  * the grant (maintenance — no failover behind the operator's back); this
- * releases it FIRST, so a standby is seated with no lock-delay, then applies
- * the same durable operator stop. Grants are app-scoped, so a component
- * target yields the app's mastership and stops the named component. On a
- * non-holder the yield is a no-op and the stop still applies — which is what
- * keeps the global fan-out idempotent: every instance stops, only the master
- * releases. The operator stop lock keeps this node's gate unconsulted
- * afterwards, so it cannot re-acquire behind the successor.
+ * applies the same durable operator stop and then voluntarily releases the
+ * grant, so a standby is seated with no lock-delay. THE ORDER IS
+ * LOAD-BEARING, and the first fleet run proved it: release-then-lock leaves
+ * a window where this node's own gate sees a running component with no
+ * holder and re-acquires the freshly released term — a released grant has
+ * no lock-delay for ANYONE, and the ex-master is fastest to its own
+ * registers (measured: the yielded master re-held within one pass and the
+ * standbys rested against it forever). Lock-then-release is race-free: a
+ * pursuit in flight at lock time still sees the held key, and the gate is
+ * unconsulted afterwards. Grants are app-scoped, so a component target
+ * yields the app's mastership and stops the named component. On a
+ * non-holder the yield is a no-op and the stop still applies — which keeps
+ * the global fan-out idempotent: every instance stops, only the master
+ * releases.
  *
  * @param {string} appname app or component name
  * @param {{replica?: string|null}} [options]
@@ -186,8 +193,8 @@ async function appYield(appname, { replica = null } = {}) {
   const mainAppName = deploymentProvider.appNameFromRequest(appname);
   const { instantiated, ids } = await deploymentProvider.resolveRequestTargets(appname, { replica });
 
-  const { held } = await mastershipGrantGate.yieldMastership(mainAppName);
   await driveOperatorCommand(ids, (id) => appsRuntimeState.setOperatorStopped(id, true));
+  const { held } = await mastershipGrantGate.yieldMastership(mainAppName);
 
   return { name: instantiated.name, held };
 }
