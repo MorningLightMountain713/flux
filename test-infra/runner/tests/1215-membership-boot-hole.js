@@ -120,28 +120,32 @@ describe('the membership boot hole: a fleet-wide restart inside the founding win
     // Fail safe means fail CLOSED: the founder question keeps answering
     // wait/no — never yes — for as long as nobody can verify the committee.
     // Sample across multiple ask rounds; a single non-yes read proves
-    // nothing (one input is not a probe).
+    // nothing (one input is not a probe), and a round only counts when EVERY
+    // node produced a real answer: a null is an unasked question (container
+    // missing, endpoint down), so a suite that accepted nulls could go green
+    // without asking anything. A yes fails even in a partial round.
     const rounds = [];
     await waitFor(async () => {
       const answers = await Promise.all(env.clients.map((_, i) => askFounder(i)));
+      expect(answers.filter((a) => a === 'yes'), `no yes may ever be issued (round ${rounds.length + 1}: ${answers})`).to.deep.equal([]);
+      if (answers.some((a) => a === null)) return false;
       rounds.push(answers);
-      // Keep sampling until we have held the line across 6 rounds (~60s).
-      expect(answers.filter((a) => a === 'yes'), `no yes may ever be issued (round ${rounds.length}: ${answers})`).to.deep.equal([]);
+      console.log(`# 1215 round ${rounds.length}: ${answers.join(' ')}`);
+      // Keep sampling until we have held the line across 6 full rounds (~60s).
       return rounds.length >= 6;
-    }, { timeout: 300000, interval: 10000, label: 'founder answers stay non-yes across rounds' });
+    }, { timeout: 300000, interval: 10000, label: 'six full rounds of real non-yes founder answers' });
 
-    // And no register anywhere holds a founder grant.
-    const cells = await Promise.all(env.clients.map(async (client) => {
-      try {
-        const res = await fetch(
-          `${client.url}/flux/quorumgrant/record?key=${encodeURIComponent(`${name}/founder`)}`,
-          { signal: AbortSignal.timeout(5000) },
-        );
-        const body = await res.json();
-        return body?.data?.accepted ?? null;
-      } catch {
-        return null;
-      }
+    // And no register anywhere holds a founder grant — asked of every node,
+    // with every node required to answer: an unreachable register is not an
+    // empty one, so a fetch failure here is a red, not a null.
+    const cells = await Promise.all(env.clients.map(async (client, i) => {
+      const res = await fetch(
+        `${client.url}/flux/quorumgrant/record?key=${encodeURIComponent(`${name}/founder`)}`,
+        { signal: AbortSignal.timeout(5000) },
+      );
+      expect(res.ok, `node ${i} answers the record query`).to.equal(true);
+      const body = await res.json();
+      return body?.data?.accepted ?? null;
     }));
     expect(cells.filter(Boolean), 'no founder grant exists anywhere').to.deep.equal([]);
   });
