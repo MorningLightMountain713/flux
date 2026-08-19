@@ -30,6 +30,13 @@ const COMMITTEE = {
 const TOKEN_DB = foundingCommittee.founderToken('myapp', 'db');
 const TOKEN_DB_UPPER = foundingCommittee.founderToken('myapp', 'DB');
 
+function recordRow(rung, grantee, generation = 2) {
+  return {
+    dedupKey: `masterlease:myapp/founder-${TOKEN_DB}@${rung}`,
+    data: { mode: 'oneshot', grantee, generation },
+  };
+}
+
 describe('foundingService', () => {
   beforeEach(() => {
     sinon.stub(foundingCommittee, 'componentWorld').resolves({
@@ -37,7 +44,7 @@ describe('foundingService', () => {
     });
     sinon.stub(foundingCommittee, 'refereeCommittee').resolves(COMMITTEE);
     sinon.stub(daemonServiceMiscRpcs, 'isDaemonSynced').returns({ status: 'success', data: { synced: true } });
-    sinon.stub(messageStore, 'getMasterleaseRecord').resolves(null);
+    sinon.stub(messageStore, 'getMasterleaseRecordsByRolePrefix').resolves([]);
     sinon.stub(messageStore, 'getGrantGenerationRecord').resolves({ data: { generation: 2 } });
     sinon.stub(grantClient, 'acquire').resolves({ granted: true, founder: SELF });
     sinon.stub(generalService, 'obtainNodeCollateralInformation').resolves({
@@ -73,10 +80,10 @@ describe('foundingService', () => {
 
   it('newest-decided-wins: a higher rung record retires a lower rung yes', async () => {
     foundingCommittee.componentWorld.resolves({ intro: 500000, rungs: [500000, 500720], armed: false });
-    messageStore.getMasterleaseRecord.callsFake(async (app, role) => {
-      if (role.endsWith('@500720')) return { data: { mode: 'oneshot', grantee: 'other:0', generation: 2 } };
-      return { data: { mode: 'oneshot', grantee: SELF, generation: 2 } };
-    });
+    messageStore.getMasterleaseRecordsByRolePrefix.resolves([
+      recordRow(500720, 'other:0'),
+      recordRow(500000, SELF),
+    ]);
     expect(await foundingService.founderAsk('myapp', 'db')).to.deep.equal({ answer: 'no' });
     expect(grantClient.acquire.called).to.equal(false);
   });
@@ -106,24 +113,18 @@ describe('foundingService', () => {
   });
 
   it('the synced record answers without a wire round — yes for the recorded founder, no for anyone else', async () => {
-    messageStore.getMasterleaseRecord.resolves({
-      data: { mode: 'oneshot', grantee: SELF, generation: 2 },
-    });
+    messageStore.getMasterleaseRecordsByRolePrefix.resolves([recordRow(500000, SELF)]);
     expect(await foundingService.founderAsk('myapp', 'db')).to.deep.equal({ answer: 'yes' });
 
-    messageStore.getMasterleaseRecord.resolves({
-      data: { mode: 'oneshot', grantee: 'other:0', generation: 2 },
-    });
+    messageStore.getMasterleaseRecordsByRolePrefix.resolves([recordRow(500000, 'other:0')]);
     expect(await foundingService.founderAsk('myapp', 'db')).to.deep.equal({ answer: 'no' });
 
-    expect(messageStore.getMasterleaseRecord.alwaysCalledWith('myapp', `founder-${TOKEN_DB}@500000`)).to.equal(true);
+    expect(messageStore.getMasterleaseRecordsByRolePrefix.alwaysCalledWith('myapp', `founder-${TOKEN_DB}@`)).to.equal(true);
     expect(grantClient.acquire.called).to.equal(false);
   });
 
   it('a retired generation record is the dead world talking — the round runs fresh', async () => {
-    messageStore.getMasterleaseRecord.resolves({
-      data: { mode: 'oneshot', grantee: 'other:0', generation: 1 },
-    });
+    messageStore.getMasterleaseRecordsByRolePrefix.resolves([recordRow(500000, 'other:0', 1)]);
     const reply = await foundingService.founderAsk('myapp', 'db');
     expect(reply).to.deep.equal({ answer: 'yes' });
     expect(grantClient.acquire.calledOnce).to.equal(true);
@@ -134,14 +135,10 @@ describe('foundingService', () => {
   // photo-less late joiner answering wait for an app founded long ago.
   it('a photo-less node still answers from the synced record — record before photo', async () => {
     foundingCommittee.refereeCommittee.resolves(null);
-    messageStore.getMasterleaseRecord.resolves({
-      data: { mode: 'oneshot', grantee: 'other:0', generation: 2 },
-    });
+    messageStore.getMasterleaseRecordsByRolePrefix.resolves([recordRow(500000, 'other:0')]);
     expect(await foundingService.founderAsk('myapp', 'db')).to.deep.equal({ answer: 'no' });
 
-    messageStore.getMasterleaseRecord.resolves({
-      data: { mode: 'oneshot', grantee: SELF, generation: 2 },
-    });
+    messageStore.getMasterleaseRecordsByRolePrefix.resolves([recordRow(500000, SELF)]);
     expect(await foundingService.founderAsk('myapp', 'db')).to.deep.equal({ answer: 'yes' });
     expect(grantClient.acquire.called).to.equal(false);
   });
@@ -151,11 +148,21 @@ describe('foundingService', () => {
     // newest owner-record view judges the record, so the retired world's
     // record stays dead even where a stale photo would have believed it.
     messageStore.getGrantGenerationRecord.resolves({ data: { generation: 3 } });
-    messageStore.getMasterleaseRecord.resolves({
-      data: { mode: 'oneshot', grantee: 'other:0', generation: 2 },
-    });
+    messageStore.getMasterleaseRecordsByRolePrefix.resolves([recordRow(500000, 'other:0')]);
     const reply = await foundingService.founderAsk('myapp', 'db');
     expect(reply.answer).to.not.equal('no');
+  });
+
+  it('a record at a rung the ladder never minted still answers — the rejoined pocket converges', async () => {
+    // The pocket's evaluator rightly never mints the rung (post-heal its
+    // old committee stands again); ONLY the synced record can retire its
+    // founding. The scan is knowledge-driven, not ladder-driven.
+    messageStore.getMasterleaseRecordsByRolePrefix.resolves([
+      recordRow(500000, SELF),
+      recordRow(500720, 'other:0'),
+    ]);
+    expect(await foundingService.founderAsk('myapp', 'db')).to.deep.equal({ answer: 'no' });
+    expect(grantClient.acquire.called).to.equal(false);
   });
 
   it('a photo-less node with no record still waits — record-first never mints a basis', async () => {

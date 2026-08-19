@@ -942,6 +942,27 @@ async function getMasterleaseRecord(appName, role) {
   );
 }
 
+/**
+ * Every published record whose role starts with a prefix — the founder
+ * plane's world scan: `founder-<token>@` collects one world's record at
+ * EVERY rung, including rungs this node's own ladder never minted. A
+ * rejoining pocket learns a flip from the RECORD, not from its own
+ * evaluator (post-heal its old committee stands again, so its evaluator
+ * rightly never mints the rung); the world scan is what makes
+ * newest-decided-wins knowledge-driven rather than ladder-driven.
+ */
+async function getMasterleaseRecordsByRolePrefix(appName, rolePrefix) {
+  const db = dbHelper.databaseConnection();
+  const database = db.db(config.database.appsglobal.database);
+  const escaped = `masterlease:${appName}/${rolePrefix}`.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return database.collection(globalAppStateEvents)
+    .find(
+      { type: APP_STATE_EVENT_TYPES.MASTERLEASE, dedupKey: { $regex: `^${escaped}` } },
+      { projection: { _id: 0 } },
+    )
+    .toArray();
+}
+
 function storeAppStateEvent(type, payload) {
   switch (type) {
     case APP_STATE_EVENT_TYPES.APPRUNNING: return handleAppRunningEvent(payload);
@@ -1214,5 +1235,6 @@ module.exports = {
   storeBatchAppInstallingErrorMessages,
   storeIPChangedMessage,
   getMasterleaseRecord,
+  getMasterleaseRecordsByRolePrefix,
   getGrantGenerationRecord,
 };
