@@ -110,6 +110,7 @@ export function nodeClient(nodeNum) {
         'quorumGrant:assess',
         'quorumGrant:founded',
         'quorumGrant:founderAnswer',
+        'quorumGrant:founderFlip',
         'quorumGrant:granted',
         'quorumGrant:demoted',
         'quorumGrant:fenceRaised',

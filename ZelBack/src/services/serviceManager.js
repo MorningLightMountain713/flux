@@ -37,6 +37,7 @@ const { AppSyncOrchestrator } = require('./appMessaging/appSyncOrchestrator');
 const crontabAndMountsCleanup = require('./appLifecycle/crontabAndMountsCleanup');
 const appJanitor = require('./appLifecycle/appJanitor');
 const meshReconciler = require('./appMesh/meshReconciler');
+const foundingCommittee = require('./appMesh/foundingCommittee');
 const backendTlsRenewal = require('./appLifecycle/backendTlsRenewal');
 const containerMountRecovery = require('./appLifecycle/containerMountRecovery');
 const appStartupManager = require('./appLifecycle/appStartupManager');
@@ -670,6 +671,10 @@ async function startFluxFunctions() {
     // rides it), the impersonation detector. Dormant on a node running no
     // mesh app.
     meshReconciler.start();
+    // The founder flip evaluator: tracks sustained committee rot per world
+    // and photographs the new basis at its grid height (8.5). Dormant on a
+    // fleet with standing committees.
+    foundingCommittee.startFlipEvaluator();
     // Re-issue managed backend-TLS leaves before their 30-day life runs out
     // (dormant on a node running no verify:required app).
     backendTlsRenewal.start();

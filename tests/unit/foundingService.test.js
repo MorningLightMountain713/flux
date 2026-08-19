@@ -8,6 +8,7 @@ const messageStore = require('../../ZelBack/src/services/appMessaging/messageSto
 const grantClient = require('../../ZelBack/src/services/quorumGrant/grantClient');
 const foundingCommittee = require('../../ZelBack/src/services/appMesh/foundingCommittee');
 const registryManager = require('../../ZelBack/src/services/appDatabase/registryManager');
+const daemonServiceMiscRpcs = require('../../ZelBack/src/services/daemonService/daemonServiceMiscRpcs');
 const serviceHelper = require('../../ZelBack/src/services/serviceHelper');
 const foundingService = require('../../ZelBack/src/services/appMesh/foundingService');
 
@@ -31,8 +32,11 @@ const TOKEN_DB_UPPER = foundingCommittee.founderToken('myapp', 'DB');
 
 describe('foundingService', () => {
   beforeEach(() => {
-    sinon.stub(foundingCommittee, 'componentAnchor').resolves(500000);
+    sinon.stub(foundingCommittee, 'componentWorld').resolves({
+      intro: 500000, rungs: [500000], armed: false,
+    });
     sinon.stub(foundingCommittee, 'refereeCommittee').resolves(COMMITTEE);
+    sinon.stub(daemonServiceMiscRpcs, 'isDaemonSynced').returns({ status: 'success', data: { synced: true } });
     sinon.stub(messageStore, 'getMasterleaseRecord').resolves(null);
     sinon.stub(messageStore, 'getGrantGenerationRecord').resolves({ data: { generation: 2 } });
     sinon.stub(grantClient, 'acquire').resolves({ granted: true, founder: SELF });
@@ -47,13 +51,33 @@ describe('foundingService', () => {
     sinon.restore();
   });
 
-  it('no anchor or no committee basis answers wait — never no, never a minted basis', async () => {
-    foundingCommittee.componentAnchor.resolves(null);
+  it('no world or no committee basis answers wait — never no, never a minted basis', async () => {
+    foundingCommittee.componentWorld.resolves(null);
     expect(await foundingService.founderAsk('myapp', 'db')).to.deep.equal({ answer: 'wait' });
 
-    foundingCommittee.componentAnchor.resolves(500000);
+    foundingCommittee.componentWorld.resolves({ intro: 500000, rungs: [500000], armed: false });
     foundingCommittee.refereeCommittee.resolves(null);
     expect(await foundingService.founderAsk('myapp', 'db')).to.deep.equal({ answer: 'wait' });
+    expect(grantClient.acquire.called).to.equal(false);
+  });
+
+  it('the asker gates hold the round: a stale chain view waits, an armed world waits', async () => {
+    daemonServiceMiscRpcs.isDaemonSynced.returns({ status: 'success', data: { synced: false } });
+    expect(await foundingService.founderAsk('myapp', 'db')).to.deep.equal({ answer: 'wait' });
+
+    daemonServiceMiscRpcs.isDaemonSynced.returns({ status: 'success', data: { synced: true } });
+    foundingCommittee.componentWorld.resolves({ intro: 500000, rungs: [500000], armed: true });
+    expect(await foundingService.founderAsk('myapp', 'db')).to.deep.equal({ answer: 'wait' });
+    expect(grantClient.acquire.called).to.equal(false);
+  });
+
+  it('newest-decided-wins: a higher rung record retires a lower rung yes', async () => {
+    foundingCommittee.componentWorld.resolves({ intro: 500000, rungs: [500000, 500720], armed: false });
+    messageStore.getMasterleaseRecord.callsFake(async (app, role) => {
+      if (role.endsWith('@500720')) return { data: { mode: 'oneshot', grantee: 'other:0', generation: 2 } };
+      return { data: { mode: 'oneshot', grantee: SELF, generation: 2 } };
+    });
+    expect(await foundingService.founderAsk('myapp', 'db')).to.deep.equal({ answer: 'no' });
     expect(grantClient.acquire.called).to.equal(false);
   });
 
@@ -161,7 +185,7 @@ describe('foundingService', () => {
     });
 
     it('an undecided round runs on a peer-discovered basis', async () => {
-      serviceHelper.axiosGet.resolves({ data: { status: 'success', data: { basis: DISCOVERED } } });
+      serviceHelper.axiosGet.resolves({ data: { status: 'success', data: { rung: 500000, basis: DISCOVERED } } });
       const reply = await foundingService.founderAsk('myapp', 'db');
       expect(reply).to.deep.equal({ answer: 'yes' });
       expect(grantClient.acquire.calledOnce).to.equal(true);
@@ -170,8 +194,20 @@ describe('foundingService', () => {
       expect(opts.committee.members).to.deep.equal(DISCOVERED.members);
     });
 
+    it('discovery of a NEWER rung moves the ask there — a missed flip window heals', async () => {
+      serviceHelper.axiosGet.resolves({ data: { status: 'success', data: { rung: 500720, basis: DISCOVERED } } });
+      const reply = await foundingService.founderAsk('myapp', 'db');
+      expect(reply).to.deep.equal({ answer: 'yes' });
+      const [key] = grantClient.acquire.firstCall.args;
+      expect(key).to.include('@500720');
+    });
+
     it('a malformed discovered basis is a non-answer, never a minted basis', async () => {
-      serviceHelper.axiosGet.resolves({ data: { status: 'success', data: { basis: { fingerprint: 'x', members: [] } } } });
+      serviceHelper.axiosGet.resolves({ data: { status: 'success', data: { rung: 500000, basis: { fingerprint: 'x', members: [] } } } });
+      expect(await foundingService.founderAsk('myapp', 'db')).to.deep.equal({ answer: 'wait' });
+      expect(grantClient.acquire.called).to.equal(false);
+
+      serviceHelper.axiosGet.resolves({ data: { status: 'success', data: { rung: 499000, basis: DISCOVERED } } });
       expect(await foundingService.founderAsk('myapp', 'db')).to.deep.equal({ answer: 'wait' });
       expect(grantClient.acquire.called).to.equal(false);
     });

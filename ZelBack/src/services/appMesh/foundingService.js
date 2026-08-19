@@ -5,6 +5,7 @@ const generalService = require('../generalService');
 const messageStore = require('../appMessaging/messageStore');
 const grantClient = require('../quorumGrant/grantClient');
 const registryManager = require('../appDatabase/registryManager');
+const daemonServiceMiscRpcs = require('../daemonService/daemonServiceMiscRpcs');
 const serviceHelper = require('../serviceHelper');
 const fluxEventBus = require('../utils/fluxEventBus');
 const foundingCommittee = require('./foundingCommittee');
@@ -46,37 +47,63 @@ const HEX64 = /^[0-9a-f]{64}$/;
  * @returns {Promise<{answer: 'yes'|'no'|'wait', retryAfterMs?: number}>}
  */
 async function founderAsk(appName, component) {
-  // The anchor is host-side knowledge (this node runs the container, so it
-  // resolves the view). Missing it is an honest "not yet" — never a no,
-  // never a minted basis.
-  const anchor = await foundingCommittee.componentAnchor(appName, component);
-  if (anchor === null) return { answer: 'wait' };
+  // The world is host-side knowledge (this node runs the container, so it
+  // resolves the view): the intro anchor and every flip rung this node has
+  // minted. Missing it is an honest "not yet" — never a no, never a minted
+  // basis.
+  const world = await foundingCommittee.componentWorld(appName, component);
+  if (!world) return { answer: 'wait' };
 
-  // Record first: a decided register's answer is a durable, fleet-synced
-  // fact, judged against the durable generation record — the newest
-  // owner-record view, the same source the grantors teach from. Neither
-  // read needs the photo, so a node however young answers a founded world
-  // from its own database. The photo is a safety input for JUDGING an
-  // undecided round, and only that path below requires it.
-  const role = `founder-${foundingCommittee.founderToken(appName, component)}@${anchor}`;
-  const generation = await currentGeneration(appName, role);
-  const recorded = await recordedFounder(appName, role, generation);
-  if (recorded) {
-    const collateral = await generalService.obtainNodeCollateralInformation();
-    const self = `${collateral.txhash}:${collateral.txindex}`;
-    return settled(appName, component, recorded === self ? 'yes' : 'no');
+  const token = foundingCommittee.founderToken(appName, component);
+  const generation = await currentGeneration(appName);
+
+  // Record first, NEWEST rung first (newest-decided-wins, §8.5): a decided
+  // register's answer is a durable, fleet-synced fact, judged against the
+  // durable generation record — the newest owner-record view, the same
+  // source the grantors teach from. Neither read needs a photo, so a node
+  // however young answers a founded world from its own database, and a
+  // rejoining pocket's older founding retires the moment a higher rung's
+  // record is known.
+  for (const rung of [...world.rungs].reverse()) {
+    const role = `founder-${token}@${rung}`;
+    // eslint-disable-next-line no-await-in-loop
+    const recorded = await recordedFounder(appName, role, generation);
+    if (recorded) {
+      const collateral = await generalService.obtainNodeCollateralInformation();
+      const self = `${collateral.txhash}:${collateral.txindex}`;
+      return settled(appName, component, recorded === self ? 'yes' : 'no');
+    }
   }
 
-  // Undecided: the committee is needed to ask a round. The own photo is
-  // authoritative; without one, a peer-DISCOVERED basis routes the asks —
-  // routing needs no trust ("receiving a photo is believing" governs
-  // refereeing): every grantor reached verifies the ask against ITS OWN
-  // photo and the register is write-once, so a lying answer here can only
-  // misroute asks to nodes that refuse. Nothing discovered is ever stored.
-  const committee = await foundingCommittee.refereeCommittee(appName, anchor)
-    ?? await discoveredBasis(appName, anchor);
+  // Undecided everywhere — asker gates before any round (§8.5, both
+  // model-forced): a stale chain view cannot know the current basis, and
+  // an ARMED world (rot sustained, flip within the quiet zone) refuses to
+  // start a founding that would race the flip's one-block gossip window.
+  if (daemonServiceMiscRpcs.isDaemonSynced()?.data?.synced !== true) {
+    return { answer: 'wait' };
+  }
+  if (world.armed) return { answer: 'wait' };
+
+  // The round runs at the newest rung. The own photo is authoritative;
+  // without one, a peer-DISCOVERED basis routes the asks — routing needs
+  // no trust ("receiving a photo is believing" governs refereeing): every
+  // grantor reached verifies the ask against ITS OWN photo and the
+  // register is write-once, so a lying answer can only misroute asks to
+  // nodes that refuse. Discovery may also know a NEWER rung than this
+  // node has minted (a missed flip window); asking there is the same
+  // trust story. Nothing discovered is ever stored.
+  let rung = world.rungs[world.rungs.length - 1];
+  let committee = await foundingCommittee.refereeCommittee(appName, rung);
+  if (!committee) {
+    const discovered = await discoveredBasis(appName, world.intro);
+    if (discovered && discovered.rung >= rung) {
+      ({ rung } = discovered);
+      committee = discovered.basis;
+    }
+  }
   if (!committee) return { answer: 'wait' };
 
+  const role = `founder-${token}@${rung}`;
   const outcome = await grantClient.acquire(`${appName}/${role}`, {
     mode: 'oneshot',
     committee,
@@ -119,15 +146,16 @@ async function recordedFounder(appName, role, generation) {
 }
 
 /**
- * The current generation for this world: the newest owner-signed record on
- * the event plane as this node has synced it, 0 when the owner never
- * re-rolled. Durable and photo-free — the same view the grantors 409-teach
- * from, so the record read above and the committee's judgment agree on
- * which world is current.
+ * The current generation for the app's founder plane: the newest
+ * owner-signed record on the event plane as this node has synced it, 0
+ * when the owner never re-rolled. Durable and photo-free — the same view
+ * the grantors 409-teach from, so the record read above and the
+ * committee's judgment agree on which world is current. The re-roll is one
+ * record for the whole plane, stored at role `founder`.
  */
-async function currentGeneration(appName, role) {
+async function currentGeneration(appName) {
   try {
-    const record = await messageStore.getGrantGenerationRecord(appName, role);
+    const record = await messageStore.getGrantGenerationRecord(appName, 'founder');
     return record?.data?.generation ?? 0;
   } catch (error) {
     return 0;
@@ -135,11 +163,14 @@ async function currentGeneration(appName, role) {
 }
 
 /**
- * Ask the app's peers for the founding basis this node holds no photo for.
- * The app's other locations are the natural photo-holders (they processed
- * the same spec acts); the first well-formed answer routes the round.
- * Ephemeral by design: a discovered basis is used for this ask and never
- * persisted — persistence would turn routing aid into believed history.
+ * Ask the app's peers for the founding basis this node holds no photo for
+ * — or a newer rung than it has minted. The app's other locations are the
+ * natural photo-holders (they processed the same spec acts); the first
+ * well-formed answer routes the round. Ephemeral by design: a discovered
+ * basis is used for this ask and never persisted — persistence would turn
+ * routing aid into believed history.
+ *
+ * @returns {Promise<{rung: number, basis: object}|null>}
  */
 async function discoveredBasis(appName, anchor) {
   let locations;
@@ -157,10 +188,10 @@ async function discoveredBasis(appName, anchor) {
         `http://${location.ip}/flux/quorumgrant/foundingbasis?app=${encodeURIComponent(appName)}&anchor=${anchor}`,
         { timeout },
       );
-      const basis = response?.data?.data?.basis;
-      if (validBasis(basis)) {
-        log.info(`foundingService - ${appName}@${anchor}: founding basis discovered from ${location.ip}`);
-        return basis;
+      const payload = response?.data?.data;
+      if (Number.isInteger(payload?.rung) && payload.rung >= anchor && validBasis(payload?.basis)) {
+        log.info(`foundingService - ${appName}@${anchor}: founding basis discovered from ${location.ip} at rung ${payload.rung}`);
+        return { rung: payload.rung, basis: payload.basis };
       }
     } catch (error) {
       // an unreachable or unhelpful peer is a routing miss, not an answer
