@@ -42,20 +42,30 @@ const log = require('../../lib/log');
  */
 async function founderAsk(appName, component) {
   // The anchor is host-side knowledge (this node runs the container, so it
-  // resolves the view); the committee is public-facts knowledge. Missing
-  // either is an honest "not yet" — never a no, never a minted basis.
+  // resolves the view). Missing it is an honest "not yet" — never a no,
+  // never a minted basis.
   const anchor = await foundingCommittee.componentAnchor(appName, component);
   if (anchor === null) return { answer: 'wait' };
-  const committee = await foundingCommittee.refereeCommittee(appName, anchor);
-  if (!committee) return { answer: 'wait' };
 
+  // Record first: a decided register's answer is a durable, fleet-synced
+  // fact, judged against the durable generation record — the newest
+  // owner-record view, the same source the grantors teach from. Neither
+  // read needs the photo, so a node however young answers a founded world
+  // from its own database. The photo is a safety input for JUDGING an
+  // undecided round, and only that path below requires it.
   const role = `founder-${foundingCommittee.founderToken(appName, component)}@${anchor}`;
-  const recorded = await recordedFounder(appName, role, committee.generation);
+  const generation = await currentGeneration(appName, role);
+  const recorded = await recordedFounder(appName, role, generation);
   if (recorded) {
     const collateral = await generalService.obtainNodeCollateralInformation();
     const self = `${collateral.txhash}:${collateral.txindex}`;
     return settled(appName, component, recorded === self ? 'yes' : 'no');
   }
+
+  // Undecided: the committee is public-facts knowledge this node must hold
+  // to ask a round; without the photo the honest answer stays "not yet".
+  const committee = await foundingCommittee.refereeCommittee(appName, anchor);
+  if (!committee) return { answer: 'wait' };
 
   const outcome = await grantClient.acquire(`${appName}/${role}`, {
     mode: 'oneshot',
@@ -95,6 +105,22 @@ async function recordedFounder(appName, role, generation) {
     return data.grantee;
   } catch (error) {
     return null;
+  }
+}
+
+/**
+ * The current generation for this world: the newest owner-signed record on
+ * the event plane as this node has synced it, 0 when the owner never
+ * re-rolled. Durable and photo-free — the same view the grantors 409-teach
+ * from, so the record read above and the committee's judgment agree on
+ * which world is current.
+ */
+async function currentGeneration(appName, role) {
+  try {
+    const record = await messageStore.getGrantGenerationRecord(appName, role);
+    return record?.data?.generation ?? 0;
+  } catch (error) {
+    return 0;
   }
 }
 
