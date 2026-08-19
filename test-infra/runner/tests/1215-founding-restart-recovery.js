@@ -13,7 +13,7 @@ import {
 import {
   execInContainer, requireAppContainerName, restartFluxos,
 } from '../framework/container.js';
-import { waitFor, waitForAppInstalled } from '../framework/wait.js';
+import { waitFor, waitForAppInstalled, waitForUp } from '../framework/wait.js';
 
 // Founding survives a fleet-wide FluxOS restart — §13.7 is CLOSED and this
 // suite pins the closure, not the hole. The founding photo is the pin made
@@ -43,6 +43,7 @@ const COMPONENT = 'meshcomp';
 
 describe('founding recovers through a fleet-wide restart', function () {
   let env;
+  let restartMarkers;
 
   function componentSpec(compName, appImage, hostPort) {
     return {
@@ -90,6 +91,26 @@ describe('founding recovers through a fleet-wide restart', function () {
       return rows.every((r) => r && r.status === 'success' && r.data && r.data.name === appName);
     }, { timeout: 120000, interval: 3000, label: `global spec for ${appName} on all nodes` });
     await Promise.all(env.clients.map((c) => waitForAppInstalled(c, appName, 240000)));
+    // Installed is not running: v9's installer hands the container start to
+    // the reconciler, and a restart landing inside the create-to-start window
+    // strands the container in Created with its volume never mounted (the
+    // 48c5c41ca red). The founding window is open until something asks — a
+    // running fleet is the honest starting state, not a mid-install one.
+    await Promise.all(env.clients.map((c) => waitForUp(c, appName, `${appName} up on all nodes`)));
+  }
+
+  // A fleet-wide FluxOS restart is only over when every node has finished its
+  // own boot recovery — boot:settled is that signal, and before it the node
+  // is still judging which installed apps it keeps. afterId markers are
+  // captured pre-kill so the PREVIOUS boot's settled event cannot satisfy
+  // the wait from the buffer. Returns the markers for later peer waits.
+  async function restartAllFluxos(settleIndexes) {
+    const markers = env.clients.map((c) => c.getLastEventId());
+    await Promise.all(env.clients.map((c) => restartFluxos(c.container)));
+    await Promise.all(settleIndexes.map(
+      (i) => env.clients[i].waitForEvent('boot:settled', () => true, 180000, { afterId: markers[i] }),
+    ));
+    return markers;
   }
 
   // Ask every node each round until one full round shows exactly one yes.
@@ -172,7 +193,7 @@ describe('founding recovers through a fleet-wide restart', function () {
     // Restart EVERY node's FluxOS before anything has asked the founder
     // question — the founding window is open, no founder grant exists, and
     // the in-memory membership history is wiped fleet-wide.
-    await Promise.all(env.clients.map((c) => restartFluxos(c.container)));
+    restartMarkers = await restartAllFluxos([0, 1, 2]);
 
     // The photo survived, so after the rejoin drain the scramble completes:
     // exactly one node is ever told yes, and the verdict is stable.
@@ -182,6 +203,13 @@ describe('founding recovers through a fleet-wide restart', function () {
 
   it('membership churn between the anchor and the restart does not wedge founding', async function () {
     this.timeout(600000);
+    // Registration refuses below the outbound-peer floor, and a fleet-wide
+    // restart re-forms peering on the discovery cadence — minutes, measured
+    // ~4 on the 48c5c41ca red. Wait for the registering node to re-peer from
+    // test 1's restart rather than racing it.
+    await env.clients[0].waitForEvent(
+      'peers:added', (d) => d.outbound >= 1, 360000, { afterId: restartMarkers[0] },
+    );
     const name = `e2echurn${Date.now()}`;
     await registerAndInstall(name, 31001);
 
@@ -193,7 +221,9 @@ describe('founding recovers through a fleet-wide restart', function () {
     // proof the committee never re-pinned to the churned list.
     await removeFromNodeList(`${env.clients[2].ip}:16127`);
     await advanceBlock();
-    await Promise.all(env.clients.map((c) => restartFluxos(c.container)));
+    // Only the listed nodes gate settling: a delisted node reboots into a
+    // world that may refuse its dials, and nothing downstream requires it.
+    await restartAllFluxos([0, 1]);
 
     // The delisted node keeps its photo and its seat (registration-height
     // pinning); its app container may not survive delisting, so only the
