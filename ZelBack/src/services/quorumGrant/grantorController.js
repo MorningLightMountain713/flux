@@ -550,6 +550,40 @@ async function record(req, res) {
   }
 }
 
+/**
+ * The founding basis this node's own photo holds for one app anchor —
+ * fingerprint, generation, quorum, members. A routing aid for photo-less
+ * hosts, never a trust grant: every grantor an asker then reaches verifies
+ * the ask against ITS OWN photo and the register is write-once, so a lying
+ * answer here can only misroute asks to nodes that refuse. Public facts,
+ * unauthenticated like the record read; an absent photo answers null.
+ */
+async function foundingBasis(req, res) {
+  try {
+    const appName = req.query.app;
+    const anchor = Number(req.query.anchor);
+    if (typeof appName !== 'string' || !appName || appName.length > 200
+      || !Number.isInteger(anchor) || anchor <= 0) {
+      return res.status(400).json(messageHelper.createErrorMessage('malformed founding basis query'));
+    }
+    const committee = await foundingCommittee.refereeCommittee(appName, anchor);
+    if (!committee) {
+      return res.json(messageHelper.createDataMessage({ basis: null }));
+    }
+    return res.json(messageHelper.createDataMessage({
+      basis: {
+        fingerprint: committee.fingerprint,
+        generation: committee.generation,
+        quorum: committee.quorum,
+        members: committee.members,
+      },
+    }));
+  } catch (error) {
+    log.error(`quorumGrant grantorController foundingBasis: ${error.message}`);
+    return res.status(500).json(messageHelper.createErrorMessage(error.message));
+  }
+}
+
 /** Test seam. */
 function reset() {
   peerAsks.clear();
@@ -563,5 +597,6 @@ module.exports = {
   roster,
   release,
   record,
+  foundingBasis,
   reset,
 };

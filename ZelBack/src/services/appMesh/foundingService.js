@@ -1,11 +1,16 @@
 'use strict';
 
+const config = require('config');
 const generalService = require('../generalService');
 const messageStore = require('../appMessaging/messageStore');
 const grantClient = require('../quorumGrant/grantClient');
+const registryManager = require('../appDatabase/registryManager');
+const serviceHelper = require('../serviceHelper');
 const fluxEventBus = require('../utils/fluxEventBus');
 const foundingCommittee = require('./foundingCommittee');
 const log = require('../../lib/log');
+
+const HEX64 = /^[0-9a-f]{64}$/;
 
 // The container-facing half of founding. A component's entrypoint asks its
 // own node "may I found?" and the node answers from the founding grant —
@@ -62,9 +67,14 @@ async function founderAsk(appName, component) {
     return settled(appName, component, recorded === self ? 'yes' : 'no');
   }
 
-  // Undecided: the committee is public-facts knowledge this node must hold
-  // to ask a round; without the photo the honest answer stays "not yet".
-  const committee = await foundingCommittee.refereeCommittee(appName, anchor);
+  // Undecided: the committee is needed to ask a round. The own photo is
+  // authoritative; without one, a peer-DISCOVERED basis routes the asks —
+  // routing needs no trust ("receiving a photo is believing" governs
+  // refereeing): every grantor reached verifies the ask against ITS OWN
+  // photo and the register is write-once, so a lying answer here can only
+  // misroute asks to nodes that refuse. Nothing discovered is ever stored.
+  const committee = await foundingCommittee.refereeCommittee(appName, anchor)
+    ?? await discoveredBasis(appName, anchor);
   if (!committee) return { answer: 'wait' };
 
   const outcome = await grantClient.acquire(`${appName}/${role}`, {
@@ -122,6 +132,54 @@ async function currentGeneration(appName, role) {
   } catch (error) {
     return 0;
   }
+}
+
+/**
+ * Ask the app's peers for the founding basis this node holds no photo for.
+ * The app's other locations are the natural photo-holders (they processed
+ * the same spec acts); the first well-formed answer routes the round.
+ * Ephemeral by design: a discovered basis is used for this ask and never
+ * persisted — persistence would turn routing aid into believed history.
+ */
+async function discoveredBasis(appName, anchor) {
+  let locations;
+  try {
+    locations = await registryManager.appLocation(appName);
+  } catch (error) {
+    return null;
+  }
+  const timeout = config.fluxapps.quorumGrantAskTimeoutMs ?? 5_000;
+  for (const location of locations ?? []) {
+    if (typeof location?.ip !== 'string' || !location.ip) continue; // eslint-disable-line no-continue
+    try {
+      // eslint-disable-next-line no-await-in-loop
+      const response = await serviceHelper.axiosGet(
+        `http://${location.ip}/flux/quorumgrant/foundingbasis?app=${encodeURIComponent(appName)}&anchor=${anchor}`,
+        { timeout },
+      );
+      const basis = response?.data?.data?.basis;
+      if (validBasis(basis)) {
+        log.info(`foundingService - ${appName}@${anchor}: founding basis discovered from ${location.ip}`);
+        return basis;
+      }
+    } catch (error) {
+      // an unreachable or unhelpful peer is a routing miss, not an answer
+    }
+  }
+  return null;
+}
+
+/**
+ * Shape gate for a peer-supplied basis — strict, because everything here is
+ * untrusted input that will only ever be used to ADDRESS asks.
+ */
+function validBasis(basis) {
+  return Boolean(basis)
+    && typeof basis.fingerprint === 'string' && HEX64.test(basis.fingerprint)
+    && Number.isInteger(basis.generation) && basis.generation >= 0
+    && Number.isInteger(basis.quorum) && basis.quorum >= 1
+    && Array.isArray(basis.members) && basis.members.length >= basis.quorum
+    && basis.members.every((m) => typeof m?.ip === 'string' && m.ip.length > 0);
 }
 
 module.exports = {

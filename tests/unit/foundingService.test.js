@@ -7,6 +7,8 @@ const generalService = require('../../ZelBack/src/services/generalService');
 const messageStore = require('../../ZelBack/src/services/appMessaging/messageStore');
 const grantClient = require('../../ZelBack/src/services/quorumGrant/grantClient');
 const foundingCommittee = require('../../ZelBack/src/services/appMesh/foundingCommittee');
+const registryManager = require('../../ZelBack/src/services/appDatabase/registryManager');
+const serviceHelper = require('../../ZelBack/src/services/serviceHelper');
 const foundingService = require('../../ZelBack/src/services/appMesh/foundingService');
 
 // The answer mapping is the whole module: every grant outcome must land on
@@ -37,6 +39,8 @@ describe('foundingService', () => {
     sinon.stub(generalService, 'obtainNodeCollateralInformation').resolves({
       txhash: SELF_TXHASH, txindex: 0,
     });
+    sinon.stub(registryManager, 'appLocation').resolves([]);
+    sinon.stub(serviceHelper, 'axiosGet').rejects(new Error('unreachable'));
   });
 
   afterEach(() => {
@@ -134,5 +138,53 @@ describe('foundingService', () => {
     foundingCommittee.refereeCommittee.resolves(null);
     expect(await foundingService.founderAsk('myapp', 'db')).to.deep.equal({ answer: 'wait' });
     expect(grantClient.acquire.called).to.equal(false);
+  });
+
+  // §8.5 part 2 — committee discovery. Routing needs no trust: every grantor
+  // an asker reaches verifies against its OWN photo and the register is
+  // write-once, so a lying answer here can only misroute asks to refusals.
+  describe('committee discovery for photo-less hosts', () => {
+    const DISCOVERED = {
+      fingerprint: 'd'.repeat(64),
+      generation: 2,
+      quorum: 2,
+      members: [
+        { txhash: 'e'.repeat(64), outidx: 0, ip: '198.18.0.11:16127' },
+        { txhash: 'f'.repeat(64), outidx: 0, ip: '198.18.0.12:16127' },
+        { txhash: '1'.repeat(64), outidx: 0, ip: '198.18.0.13:16127' },
+      ],
+    };
+
+    beforeEach(() => {
+      foundingCommittee.refereeCommittee.resolves(null);
+      registryManager.appLocation.resolves([{ ip: '198.18.0.11:16127' }, { ip: '198.18.0.12:16127' }]);
+    });
+
+    it('an undecided round runs on a peer-discovered basis', async () => {
+      serviceHelper.axiosGet.resolves({ data: { status: 'success', data: { basis: DISCOVERED } } });
+      const reply = await foundingService.founderAsk('myapp', 'db');
+      expect(reply).to.deep.equal({ answer: 'yes' });
+      expect(grantClient.acquire.calledOnce).to.equal(true);
+      const [, opts] = grantClient.acquire.firstCall.args;
+      expect(opts.committee.fingerprint).to.equal(DISCOVERED.fingerprint);
+      expect(opts.committee.members).to.deep.equal(DISCOVERED.members);
+    });
+
+    it('a malformed discovered basis is a non-answer, never a minted basis', async () => {
+      serviceHelper.axiosGet.resolves({ data: { status: 'success', data: { basis: { fingerprint: 'x', members: [] } } } });
+      expect(await foundingService.founderAsk('myapp', 'db')).to.deep.equal({ answer: 'wait' });
+      expect(grantClient.acquire.called).to.equal(false);
+    });
+
+    it('unreachable peers leave the honest wait', async () => {
+      expect(await foundingService.founderAsk('myapp', 'db')).to.deep.equal({ answer: 'wait' });
+      expect(grantClient.acquire.called).to.equal(false);
+    });
+
+    it('the own photo stays authoritative — discovery is never consulted beside it', async () => {
+      foundingCommittee.refereeCommittee.resolves(COMMITTEE);
+      await foundingService.founderAsk('myapp', 'db');
+      expect(serviceHelper.axiosGet.called).to.equal(false);
+    });
   });
 });
