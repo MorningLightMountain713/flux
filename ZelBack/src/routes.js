@@ -564,6 +564,12 @@ module.exports = (app) => {
   app.get('/flux/quorumgrant/record', (req, res) => {
     grantorController.record(req, res);
   });
+  // The founding basis this node photographed for one app anchor — a routing
+  // aid for photo-less hosts; every grantor still verifies asks against its
+  // own photo, so this read carries no trust. Unauthenticated like record.
+  app.get('/flux/quorumgrant/foundingbasis', (req, res) => {
+    grantorController.foundingBasis(req, res);
+  });
   // Owner-facing: the generation re-roll. The read tells the owner the
   // standing generation; the submission takes an owner-signed record for
   // exactly the next one, broadcasts it, and stores it here first. The
