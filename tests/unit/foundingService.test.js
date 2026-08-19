@@ -32,6 +32,7 @@ describe('foundingService', () => {
     sinon.stub(foundingCommittee, 'componentAnchor').resolves(500000);
     sinon.stub(foundingCommittee, 'refereeCommittee').resolves(COMMITTEE);
     sinon.stub(messageStore, 'getMasterleaseRecord').resolves(null);
+    sinon.stub(messageStore, 'getGrantGenerationRecord').resolves({ data: { generation: 2 } });
     sinon.stub(grantClient, 'acquire').resolves({ granted: true, founder: SELF });
     sinon.stub(generalService, 'obtainNodeCollateralInformation').resolves({
       txhash: SELF_TXHASH, txindex: 0,
@@ -98,5 +99,40 @@ describe('foundingService', () => {
     const reply = await foundingService.founderAsk('myapp', 'db');
     expect(reply).to.deep.equal({ answer: 'yes' });
     expect(grantClient.acquire.calledOnce).to.equal(true);
+  });
+
+  // §8.5 part 1 — record first. A decided register's answer is a durable,
+  // fleet-synced fact; requiring the local photo to read it left a
+  // photo-less late joiner answering wait for an app founded long ago.
+  it('a photo-less node still answers from the synced record — record before photo', async () => {
+    foundingCommittee.refereeCommittee.resolves(null);
+    messageStore.getMasterleaseRecord.resolves({
+      data: { mode: 'oneshot', grantee: 'other:0', generation: 2 },
+    });
+    expect(await foundingService.founderAsk('myapp', 'db')).to.deep.equal({ answer: 'no' });
+
+    messageStore.getMasterleaseRecord.resolves({
+      data: { mode: 'oneshot', grantee: SELF, generation: 2 },
+    });
+    expect(await foundingService.founderAsk('myapp', 'db')).to.deep.equal({ answer: 'yes' });
+    expect(grantClient.acquire.called).to.equal(false);
+  });
+
+  it('the record answers against the durable generation, not the photo copy', async () => {
+    // The photo lags a re-roll the generation record already carries: the
+    // newest owner-record view judges the record, so the retired world's
+    // record stays dead even where a stale photo would have believed it.
+    messageStore.getGrantGenerationRecord.resolves({ data: { generation: 3 } });
+    messageStore.getMasterleaseRecord.resolves({
+      data: { mode: 'oneshot', grantee: 'other:0', generation: 2 },
+    });
+    const reply = await foundingService.founderAsk('myapp', 'db');
+    expect(reply.answer).to.not.equal('no');
+  });
+
+  it('a photo-less node with no record still waits — record-first never mints a basis', async () => {
+    foundingCommittee.refereeCommittee.resolves(null);
+    expect(await foundingService.founderAsk('myapp', 'db')).to.deep.equal({ answer: 'wait' });
+    expect(grantClient.acquire.called).to.equal(false);
   });
 });
