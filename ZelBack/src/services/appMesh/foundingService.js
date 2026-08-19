@@ -57,22 +57,21 @@ async function founderAsk(appName, component) {
   const token = foundingCommittee.founderToken(appName, component);
   const generation = await currentGeneration(appName);
 
-  // Record first, NEWEST rung first (newest-decided-wins, §8.5): a decided
+  // Record first, HIGHEST rung wins (newest-decided-wins, §8.5): a decided
   // register's answer is a durable, fleet-synced fact, judged against the
   // durable generation record — the newest owner-record view, the same
-  // source the grantors teach from. Neither read needs a photo, so a node
-  // however young answers a founded world from its own database, and a
-  // rejoining pocket's older founding retires the moment a higher rung's
-  // record is known.
-  for (const rung of [...world.rungs].reverse()) {
-    const role = `founder-${token}@${rung}`;
-    // eslint-disable-next-line no-await-in-loop
-    const recorded = await recordedFounder(appName, role, generation);
-    if (recorded) {
-      const collateral = await generalService.obtainNodeCollateralInformation();
-      const self = `${collateral.txhash}:${collateral.txindex}`;
-      return settled(appName, component, recorded === self ? 'yes' : 'no');
-    }
+  // source the grantors teach from. The scan is KNOWLEDGE-driven, never
+  // ladder-driven: it collects this world's records at every rung the
+  // fleet ever decided, including rungs this node's own evaluator never
+  // minted — a rejoining pocket's old committee stands again in its view,
+  // so its ladder rightly never grows, and only the record can retire its
+  // older founding. No read here needs a photo, so a node however young
+  // answers a founded world from its own database.
+  const recorded = await recordedFounderInWorld(appName, token, generation);
+  if (recorded) {
+    const collateral = await generalService.obtainNodeCollateralInformation();
+    const self = `${collateral.txhash}:${collateral.txindex}`;
+    return settled(appName, component, recorded === self ? 'yes' : 'no');
   }
 
   // Undecided everywhere — asker gates before any round (§8.5, both
@@ -127,19 +126,32 @@ function settled(appName, component, answer) {
 }
 
 /**
- * The founder the published record names for this world, or null. Answering
- * from the record spares the committee a wire round per ask — a founding is
- * durable, so once the record has synced, every later ask is a local read.
- * The role already names the world's anchor; the generation check keeps a
- * retired generation's record from answering for the re-rolled one.
+ * The founder the world's HIGHEST-rung record names, or null. Answering
+ * from the record spares the committee a wire round per ask — a founding
+ * is durable, so once the record has synced, every later ask is a local
+ * read; the generation check keeps a retired generation's record from
+ * answering for the re-rolled one. One prefix
+ * scan over the published records collects every rung the fleet decided;
+ * the rung rides the role (`founder-<token>@<height>`), so ordering is
+ * arithmetic on the key. A malformed or retired-generation row is skipped
+ * whole, never trusted partially.
  */
-async function recordedFounder(appName, role, generation) {
+async function recordedFounderInWorld(appName, token, generation) {
   try {
-    const record = await messageStore.getMasterleaseRecord(appName, role);
-    const data = record?.data;
-    if (!data || data.mode !== 'oneshot' || typeof data.grantee !== 'string') return null;
-    if ((data.generation ?? 0) !== generation) return null;
-    return data.grantee;
+    const rows = await messageStore.getMasterleaseRecordsByRolePrefix(appName, `founder-${token}@`);
+    let best = null;
+    let bestRung = -1;
+    for (const row of rows ?? []) {
+      const data = row?.data;
+      if (!data || data.mode !== 'oneshot' || typeof data.grantee !== 'string') continue; // eslint-disable-line no-continue
+      if ((data.generation ?? 0) !== generation) continue; // eslint-disable-line no-continue
+      const at = String(row.dedupKey ?? '').lastIndexOf('@');
+      const rung = at === -1 ? NaN : Number(String(row.dedupKey).slice(at + 1));
+      if (!Number.isInteger(rung) || rung <= bestRung) continue; // eslint-disable-line no-continue
+      best = data.grantee;
+      bestRung = rung;
+    }
+    return best;
   } catch (error) {
     return null;
   }
