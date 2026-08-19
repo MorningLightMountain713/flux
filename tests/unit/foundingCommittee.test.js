@@ -5,6 +5,7 @@ const sinon = require('sinon');
 
 const dbHelper = require('../../ZelBack/src/services/dbHelper');
 const networkStateService = require('../../ZelBack/src/services/networkStateService');
+const daemonServiceMiscRpcs = require('../../ZelBack/src/services/daemonService/daemonServiceMiscRpcs');
 const foundingCommittee = require('../../ZelBack/src/services/appMesh/foundingCommittee');
 
 // Component-blind referees: the anchor side works from public registry
@@ -66,9 +67,12 @@ describe('foundingCommittee', () => {
       }
       return { value: store.get(query._id) };
     });
+    sinon.stub(dbHelper, 'findInDatabase').callsFake(async () => [...store.values()]);
     sinon.stub(networkStateService, 'membershipFingerprintAt').returns(FP);
     sinon.stub(networkStateService, 'membershipAt').callsFake((fp) => (fp === FP || fp === CURRENT_FP ? fleet(12) : null));
     sinon.stub(networkStateService, 'membershipFingerprint').returns(CURRENT_FP);
+    sinon.stub(daemonServiceMiscRpcs, 'isDaemonSynced').returns({ status: 'success', data: { synced: true } });
+    sinon.stub(daemonServiceMiscRpcs, 'getCurrentDaemonHeight').returns(REG_HEIGHT + 10);
   });
 
   afterEach(() => {
@@ -243,7 +247,6 @@ describe('foundingCommittee', () => {
     it('the photo stands while a quorum of its owners remains listed', async () => {
       await foundingCommittee.recordAnchor(anchorDoc());
       const committee = await foundingCommittee.refereeCommittee('myapp', REG_HEIGHT);
-      expect(committee.repinned).to.equal(false);
       expect(committee.fingerprint).to.equal(FP);
       expect(committee.members).to.have.length(9);
     });
@@ -256,11 +259,14 @@ describe('foundingCommittee', () => {
         return fleet(12).filter((node) => node.txhash !== gone.txhash);
       });
       const committee = await foundingCommittee.refereeCommittee('myapp', REG_HEIGHT);
-      expect(committee.repinned).to.equal(false);
       expect(committee.members.find((m) => m.txhash === gone.txhash).ip).to.equal(null);
     });
 
-    it('re-pins from the current list once the recorded owners rot below quorum', async () => {
+    it('rot never re-derives at read time — the photo answers, rotted or not', async () => {
+      // The old exit rule re-pinned from the CURRENT list here — a moving
+      // target two readers never share, the two-committees-one-register
+      // hazard the model broke (formal/founder-pin-expiry). The flip
+      // evaluator owns rot now; the read stays pinned.
       await foundingCommittee.recordAnchor(anchorDoc());
       const photo = store.get('myapp').anchors[String(REG_HEIGHT)];
       const survivor = photo.members[0];
@@ -277,9 +283,8 @@ describe('foundingCommittee', () => {
         return null;
       });
       const committee = await foundingCommittee.refereeCommittee('myapp', REG_HEIGHT);
-      expect(committee.repinned).to.equal(true);
-      expect(committee.fingerprint).to.equal(CURRENT_FP);
-      expect(committee.members).to.have.length(9);
+      expect(committee.fingerprint).to.equal(FP);
+      expect(committee.members.map((m) => m.txhash)).to.deep.equal(photo.members.map((m) => m.txhash));
     });
 
     it('no row, an unknown anchor, no current list — each answers null, never a guess', async () => {
@@ -290,6 +295,144 @@ describe('foundingCommittee', () => {
 
       networkStateService.membershipFingerprint.returns(null);
       expect(await foundingCommittee.refereeCommittee('myapp', REG_HEIGHT)).to.equal(null);
+    });
+  });
+
+  describe('the flip', () => {
+    // Dials at code defaults: FlipN 720, GateLag 240, QuietZone 10. The
+    // grid is intro + k*720; rot observed at REG_HEIGHT+10 puts the first
+    // eligible rung at REG_HEIGHT+720.
+    const ROT_SEEN = REG_HEIGHT + 10;
+    const RUNG = REG_HEIGHT + 720;
+
+    function rotTheFleet() {
+      const photo = store.get('myapp').anchors[String(REG_HEIGHT)];
+      const survivor = photo.members[0];
+      networkStateService.membershipAt.callsFake((fp) => {
+        if (fp === FP) return fleet(12);
+        return [
+          {
+            txhash: survivor.txhash, outidx: 0, pubkey: survivor.pubkey, ip: survivor.ip,
+          },
+          ...fleet(11, 'n', 40),
+        ];
+      });
+    }
+
+    it('sustained rot stamps, recovery clears — no flip before the gate', async () => {
+      await foundingCommittee.recordAnchor(anchorDoc());
+      rotTheFleet();
+      daemonServiceMiscRpcs.getCurrentDaemonHeight.returns(ROT_SEEN);
+      await foundingCommittee.evaluateFlips();
+      expect(store.get('myapp').anchors[String(REG_HEIGHT)].rotSinceHeight).to.equal(ROT_SEEN);
+      expect(store.get('myapp').anchors[String(RUNG)]).to.equal(undefined);
+
+      // the committee recovers: the stamp clears, nothing ever flips
+      networkStateService.membershipAt.callsFake((fp) => (fp === FP || fp === CURRENT_FP ? fleet(12) : null));
+      await foundingCommittee.evaluateFlips();
+      expect(store.get('myapp').anchors[String(REG_HEIGHT)].rotSinceHeight).to.equal(undefined);
+    });
+
+    it('the flip mints at the grid height once rot has aged past the gate', async () => {
+      await foundingCommittee.recordAnchor(anchorDoc());
+      rotTheFleet();
+      daemonServiceMiscRpcs.getCurrentDaemonHeight.returns(ROT_SEEN);
+      await foundingCommittee.evaluateFlips();
+
+      // gate not yet: the rung height has not arrived
+      daemonServiceMiscRpcs.getCurrentDaemonHeight.returns(RUNG - 1);
+      networkStateService.membershipFingerprintAt.callsFake((h) => (h === RUNG ? CURRENT_FP : FP));
+      await foundingCommittee.evaluateFlips();
+      expect(store.get('myapp').anchors[String(RUNG)]).to.equal(undefined);
+
+      daemonServiceMiscRpcs.getCurrentDaemonHeight.returns(RUNG);
+      await foundingCommittee.evaluateFlips();
+      const minted = store.get('myapp').anchors[String(RUNG)];
+      expect(minted.flipOf).to.equal(REG_HEIGHT);
+      expect(minted.fingerprint).to.equal(CURRENT_FP);
+      expect(minted.members).to.have.length(9);
+    });
+
+    it('a missed photo window delays the flip, never guesses it', async () => {
+      await foundingCommittee.recordAnchor(anchorDoc());
+      rotTheFleet();
+      daemonServiceMiscRpcs.getCurrentDaemonHeight.returns(ROT_SEEN);
+      await foundingCommittee.evaluateFlips();
+      daemonServiceMiscRpcs.getCurrentDaemonHeight.returns(RUNG);
+      networkStateService.membershipFingerprintAt.returns(null);
+      await foundingCommittee.evaluateFlips();
+      expect(store.get('myapp').anchors[String(RUNG)]).to.equal(undefined);
+    });
+
+    it('componentWorld walks the ladder and arms inside the quiet zone', async () => {
+      await foundingCommittee.recordAnchor(anchorDoc());
+      await foundingCommittee.applyComponentView(meshView());
+      rotTheFleet();
+      daemonServiceMiscRpcs.getCurrentDaemonHeight.returns(ROT_SEEN);
+      await foundingCommittee.evaluateFlips();
+
+      // far from the rung: not armed
+      let world = await foundingCommittee.componentWorld('myapp', 'db');
+      expect(world).to.deep.include({ intro: REG_HEIGHT, armed: false });
+      expect(world.rungs).to.deep.equal([REG_HEIGHT]);
+
+      // inside the quiet zone of the pending rung: armed
+      daemonServiceMiscRpcs.getCurrentDaemonHeight.returns(RUNG - 5);
+      world = await foundingCommittee.componentWorld('myapp', 'db');
+      expect(world.armed).to.equal(true);
+
+      // the rung mints: the ladder grows and the world disarms
+      networkStateService.membershipFingerprintAt.callsFake((h) => (h === RUNG ? CURRENT_FP : FP));
+      daemonServiceMiscRpcs.getCurrentDaemonHeight.returns(RUNG);
+      await foundingCommittee.evaluateFlips();
+      world = await foundingCommittee.componentWorld('myapp', 'db');
+      expect(world.rungs).to.deep.equal([REG_HEIGHT, RUNG]);
+      expect(world.armed).to.equal(false);
+      expect(await foundingCommittee.newestRungFor('myapp', REG_HEIGHT)).to.equal(RUNG);
+    });
+
+    it('equality serve: a flipped-past basis is refused, the newest rung answers', async () => {
+      await foundingCommittee.recordAnchor(anchorDoc());
+      rotTheFleet();
+      daemonServiceMiscRpcs.getCurrentDaemonHeight.returns(ROT_SEEN);
+      await foundingCommittee.evaluateFlips();
+      networkStateService.membershipFingerprintAt.callsFake((h) => (h === RUNG ? CURRENT_FP : FP));
+      daemonServiceMiscRpcs.getCurrentDaemonHeight.returns(RUNG);
+      await foundingCommittee.evaluateFlips();
+
+      const minted = store.get('myapp').anchors[String(RUNG)];
+      const member = minted.members[2];
+      const oldAsk = await foundingCommittee.selfOnFoundingCommittee(
+        'myapp', REG_HEIGHT, FP, 0, { txhash: member.txhash, txindex: 0 },
+      );
+      expect(oldAsk.member).to.equal(false);
+      expect(oldAsk.reason).to.include('flipped past');
+
+      const newAsk = await foundingCommittee.selfOnFoundingCommittee(
+        'myapp', RUNG, CURRENT_FP, 0, { txhash: member.txhash, txindex: 0 },
+      );
+      expect(newAsk.member).to.equal(true);
+    });
+
+    it('founder serving gates on the own view: stale chain and self-delisted both refuse', async () => {
+      await foundingCommittee.recordAnchor(anchorDoc());
+      const member = store.get('myapp').anchors[String(REG_HEIGHT)].members[0];
+      const collateral = { txhash: member.txhash, txindex: 0 };
+
+      daemonServiceMiscRpcs.isDaemonSynced.returns({ status: 'success', data: { synced: false } });
+      let verdict = await foundingCommittee.selfOnFoundingCommittee('myapp', REG_HEIGHT, FP, 0, collateral);
+      expect(verdict.member).to.equal(false);
+      expect(verdict.reason).to.include('stale');
+
+      daemonServiceMiscRpcs.isDaemonSynced.returns({ status: 'success', data: { synced: true } });
+      networkStateService.membershipAt.callsFake((fp) => {
+        if (fp === FP) return fleet(12);
+        if (fp === CURRENT_FP) return fleet(12).filter((node) => node.txhash !== member.txhash);
+        return null;
+      });
+      verdict = await foundingCommittee.selfOnFoundingCommittee('myapp', REG_HEIGHT, FP, 0, collateral);
+      expect(verdict.member).to.equal(false);
+      expect(verdict.reason).to.include('no longer listed');
     });
   });
 

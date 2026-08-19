@@ -4,8 +4,10 @@ const crypto = require('node:crypto');
 const config = require('config');
 const dbHelper = require('../dbHelper');
 const networkStateService = require('../networkStateService');
+const daemonServiceMiscRpcs = require('../daemonService/daemonServiceMiscRpcs');
 const { selectCommittee } = require('../utils/committeeSelector');
 const { globalAppStateEvents } = require('../utils/appConstants');
+const fluxEventBus = require('../utils/fluxEventBus');
 const log = require('../../lib/log');
 
 // The founding committees, materialized: the photo, not the album. A founding
@@ -28,16 +30,29 @@ const log = require('../../lib/log');
 // domain-separated hash token the hosts compute and everyone else treats as
 // opaque.
 //
-// The pin is immutable; the membership is not. Reading back applies the exit
-// rule: while at least a quorum's worth of a photo's owners remain on the
-// CURRENT list, the photographed committee stands (listed today = alive
-// today; members are reached at their current addresses). Below that, every
-// reader re-derives a fresh committee from the current list — deterministic
-// arithmetic over the same record and the same chain, so dead referees never
-// wedge a register. Only lost MEMORY of the photo can, and the owner's
-// generation re-roll re-anchors that to a recent height every node can walk.
+// The pin is immutable; the membership is not. When a photo's owners rot
+// below a quorum of the CURRENT list, the committee does NOT re-derive at
+// read time — a read-time current list is a moving target two readers never
+// share, which is the two-committees-one-register hazard the model runs
+// broke (formal/founder-pin-expiry, §8.5). Instead THE FLIP: rot sustained
+// for GateLag blocks arms the world, and at the next rung of a fixed grid
+// (intro anchor + k·FlipN) every node photographs a NEW basis at that exact
+// height — a different height, a different register key, one answer however
+// late anyone computes it. Dead referees still never wedge a register; they
+// just stop being able to wedge anyone else's view of WHICH register.
 
 const ONESHOT_COMMITTEE_SIZE = () => config.fluxapps.quorumGrantOneshotCommitteeSize ?? 9;
+
+// The flip dials. Code fallbacks like every other plane tunable. The dial
+// rule (§8.5, David's catch): the gate's earliest fire — rot observed plus
+// GATE_LAG — must exceed the unsynced self-clean horizon (~2 h: a segmented
+// node removes its own apps), and delisting itself takes deconfirmation
+// (≈5.3 h), so the defaults keep the pocket's world long dead before any
+// successor basis can exist.
+const FLIP_N = () => config.fluxapps.founderFlipNBlocks ?? 720; // rung grid, ~24 h
+const GATE_LAG = () => config.fluxapps.founderGateLagBlocks ?? 240; // sustained rot, ~8 h
+const QUIET_ZONE = () => config.fluxapps.founderQuietZoneBlocks ?? 10; // pre-flip, ~20 min
+const FLIP_EVALUATE_MS = () => config.fluxapps.founderFlipEvaluateIntervalMs ?? 60_000;
 
 const collection = () => config.database.local.collections.foundingCommittees;
 
@@ -333,45 +348,149 @@ async function refereeCommittee(appName, anchor) {
   if (!current) return null;
   const listedByOutpoint = new Map(current.map((node) => [`${node.txhash}:${node.outidx}`, node]));
 
-  const listedOwners = new Set();
-  photo.members.forEach((member) => {
-    if (listedByOutpoint.has(outpointOf(member))) listedOwners.add(member.pubkey);
-  });
-  if (listedOwners.size >= photo.quorum) {
-    return {
-      repinned: false,
-      generation,
-      anchor,
-      fingerprint: photo.fingerprint,
-      quorum: photo.quorum,
-      members: photo.members.map((member) => ({
-        ...member,
-        ip: listedByOutpoint.get(outpointOf(member))?.ip ?? null,
-      })),
-    };
-  }
-
-  // The exit: the photo's owners have churned below quorum — a fact every
-  // reader computes identically from the same record and the same chain —
-  // so the committee re-derives from the current list, behind the adoption
-  // gate, with the boundary-overlap argument carrying the seam.
-  const committee = selectCommittee(current, `quorumgrant|${appName}/founder`, {
-    size: ONESHOT_COMMITTEE_SIZE(),
-  });
-  if (committee.refusal) return null;
+  // The photo IS the committee for this basis, standing or rotted — rot is
+  // the flip evaluator's business (a NEW basis at a fixed height), never a
+  // read-time re-derivation: a current list is a moving target two readers
+  // never share, and the model broke every variant of serving one register
+  // from it (formal/founder-pin-expiry). Members keep their seats; delisted
+  // members simply have nowhere to be reached.
   return {
-    repinned: true,
     generation,
     anchor,
-    fingerprint: currentFingerprint,
-    quorum: committee.quorum,
-    members: committee.members.map((member) => ({
-      txhash: member.txhash,
-      outidx: String(member.outidx),
-      pubkey: member.pubkey,
-      ip: member.ip,
+    fingerprint: photo.fingerprint,
+    quorum: photo.quorum,
+    members: photo.members.map((member) => ({
+      ...member,
+      ip: listedByOutpoint.get(outpointOf(member))?.ip ?? null,
     })),
   };
+}
+
+/**
+ * The rung ladder of one world: the intro anchor, then every flip rung this
+ * node has minted, in order. Flip rungs live in `anchors` like any photo,
+ * linked by `flipOf`.
+ */
+function worldRungs(record, introAnchor) {
+  const rungs = [introAnchor];
+  for (;;) {
+    const next = Object.entries(record?.anchors ?? {})
+      .find(([, photo]) => photo?.flipOf === rungs[rungs.length - 1]);
+    if (!next) return rungs;
+    rungs.push(Number(next[0]));
+  }
+}
+
+/**
+ * The first rung-grid height at which an armed world may flip: on the
+ * world's own grid (intro + k·FlipN), past the newest rung, and no earlier
+ * than the observed rot start plus the gate lag.
+ */
+function nextFlipHeight(introAnchor, newestRung, rotSinceHeight) {
+  const floor = Math.max(rotSinceHeight + GATE_LAG(), newestRung + 1);
+  const steps = Math.ceil((floor - introAnchor) / FLIP_N());
+  return introAnchor + Math.max(steps, 1) * FLIP_N();
+}
+
+/**
+ * How many of a photo's members remain on the current list — the standing
+ * check the evaluator and nothing else consumes.
+ */
+function listedSeats(photo, listedByOutpoint) {
+  return photo.members.filter((member) => listedByOutpoint.has(outpointOf(member))).length;
+}
+
+/**
+ * One evaluator pass: for every world's newest rung, track sustained rot
+ * and mint the flip photo once the gate holds. Deterministic per node given
+ * the chain — the rung height is grid arithmetic, the photo is taken AT
+ * that height (fingerprintAt window), and a node that misses the window
+ * simply lacks the rung photo: record-first and discovery cover it, and a
+ * conservative miss only delays a flip, never forks one.
+ */
+async function evaluateFlips() {
+  const database = db();
+  if (!database) return;
+  const height = daemonServiceMiscRpcs.getCurrentDaemonHeight();
+  if (!Number.isFinite(height) || height <= 0) return;
+  const currentFingerprint = networkStateService.membershipFingerprint();
+  const current = currentFingerprint ? networkStateService.membershipAt(currentFingerprint) : null;
+  if (!current) return;
+  const listedByOutpoint = new Map(current.map((node) => [`${node.txhash}:${node.outidx}`, node]));
+
+  const rows = await dbHelper.findInDatabase(database, collection(), {}, { projection: {} });
+  for (const row of rows ?? []) {
+    const intros = Object.entries(row.anchors ?? {})
+      .filter(([, photo]) => photo && photo.flipOf === undefined)
+      .map(([h]) => Number(h));
+    for (const intro of intros) {
+      // eslint-disable-next-line no-await-in-loop
+      await serialized(row._id, () => evaluateWorld(row._id, intro, height, listedByOutpoint));
+    }
+  }
+}
+
+async function evaluateWorld(appName, intro, height, listedByOutpoint) {
+  const database = db();
+  if (!database) return;
+  const record = await dbHelper.findOneInDatabase(database, collection(), { _id: appName });
+  if (!record) return;
+  const rungs = worldRungs(record, intro);
+  const newest = rungs[rungs.length - 1];
+  const photo = record.anchors?.[String(newest)];
+  if (!photo) return;
+
+  const standing = listedSeats(photo, listedByOutpoint) >= photo.quorum;
+  if (standing) {
+    if (photo.rotSinceHeight !== undefined) {
+      await dbHelper.findOneAndUpdateInDatabase(
+        database, collection(), { _id: appName },
+        { $set: { anchors: { ...record.anchors, [String(newest)]: stripRot(photo) } } },
+        DURABLE,
+      );
+    }
+    return;
+  }
+
+  if (photo.rotSinceHeight === undefined) {
+    await dbHelper.findOneAndUpdateInDatabase(
+      database, collection(), { _id: appName },
+      { $set: { anchors: { ...record.anchors, [String(newest)]: { ...photo, rotSinceHeight: height } } } },
+      DURABLE,
+    );
+    return;
+  }
+
+  const flipHeight = nextFlipHeight(intro, newest, photo.rotSinceHeight);
+  if (height < flipHeight || record.anchors?.[String(flipHeight)]) return;
+  const flipPhoto = photoAt(appName, flipHeight);
+  if (!flipPhoto) return; // window missed on this node — an honest gap, never a guess
+  await dbHelper.findOneAndUpdateInDatabase(
+    database, collection(), { _id: appName },
+    { $set: { anchors: { ...record.anchors, [String(flipHeight)]: { ...flipPhoto, flipOf: newest } } } },
+    DURABLE,
+  );
+  fluxEventBus.publish('quorumGrant:founderFlip', {
+    appName, world: intro, rung: flipHeight, of: newest,
+  });
+  log.info(`foundingCommittee - ${appName} world ${intro} flipped to basis ${flipHeight} (rot since ${photo.rotSinceHeight})`);
+}
+
+function stripRot(photo) {
+  const rest = { ...photo };
+  delete rest.rotSinceHeight;
+  return rest;
+}
+
+let flipTimer = null;
+
+/** Start the flip evaluator chore. Idempotent; serviceManager calls once. */
+function startFlipEvaluator() {
+  if (flipTimer) return;
+  flipTimer = setInterval(() => {
+    evaluateFlips().catch((error) => log.error(`foundingCommittee - flip evaluation: ${error.message}`));
+  }, FLIP_EVALUATE_MS());
+  if (flipTimer.unref) flipTimer.unref();
 }
 
 /**
@@ -384,6 +503,35 @@ async function componentAnchor(appName, component) {
   if (!database) return null;
   const record = await dbHelper.findOneInDatabase(database, collection(), { _id: appName });
   return record?.components?.[component]?.anchorHeight ?? null;
+}
+
+/**
+ * One component's WORLD as this node knows it: the rung ladder from its
+ * intro anchor through every minted flip, and whether the newest rung is
+ * ARMED — rot sustained and the next flip within the quiet zone, the
+ * chain-visible fact a fresh asker refuses to start a founding under
+ * (§8.5: a completion landing one block before a flip loses a one-block
+ * gossip race; the quiet zone closes that race entirely).
+ */
+async function componentWorld(appName, component) {
+  const database = db();
+  if (!database) return null;
+  const record = await dbHelper.findOneInDatabase(database, collection(), { _id: appName });
+  const intro = record?.components?.[component]?.anchorHeight ?? null;
+  if (intro === null) return null;
+
+  const rungs = worldRungs(record, intro);
+  const newest = rungs[rungs.length - 1];
+  const photo = record.anchors?.[String(newest)];
+
+  let armed = false;
+  if (photo?.rotSinceHeight !== undefined) {
+    const height = daemonServiceMiscRpcs.getCurrentDaemonHeight();
+    if (Number.isFinite(height) && height > 0) {
+      armed = nextFlipHeight(intro, newest, photo.rotSinceHeight) - height <= QUIET_ZONE();
+    }
+  }
+  return { intro, rungs, armed };
 }
 
 /**
@@ -402,23 +550,79 @@ async function componentAnchor(appName, component) {
  * @returns {Promise<{member: boolean, reason: string|null, quorum?: number}>}
  */
 async function selfOnFoundingCommittee(appName, anchor, askFingerprint, askGeneration, collateral) {
+  // Founder-serving gates (§8.5, each a LOCAL fact, each model-forced):
+  // a grantor whose own chain view is stale cannot know the current basis
+  // (the dark-rot arm); one that can SEE itself delisted has no seat to
+  // serve from (the collateral-moved arm). Founder registers only — HELD
+  // asks pin to current fingerprints and keep their own rules.
+  const synced = daemonServiceMiscRpcs.isDaemonSynced()?.data?.synced === true;
+  if (!synced) {
+    return { member: false, reason: 'own chain view is stale' };
+  }
+  const currentFingerprint = networkStateService.membershipFingerprint();
+  const current = currentFingerprint ? networkStateService.membershipAt(currentFingerprint) : null;
+  const self = `${collateral.txhash}:${collateral.txindex}`;
+  if (current && !current.some((node) => `${node.txhash}:${node.outidx}` === self)) {
+    return { member: false, reason: 'this node is no longer listed' };
+  }
+
   const committee = await refereeCommittee(appName, anchor);
   if (!committee) {
     return { member: false, reason: 'no honest committee basis on this node' };
   }
+
+  // EQUALITY serve (model run 6: the one-directional form leaked): this
+  // node answers exactly the rung its own view holds newest for the asked
+  // world — never a basis it has flipped past. The record answers decided
+  // rungs; the register only ever collects at the current one.
+  const database = db();
+  const record = database
+    ? await dbHelper.findOneInDatabase(database, collection(), { _id: appName }) : null;
+  if (record) {
+    const intro = introOf(record, anchor);
+    const rungs = worldRungs(record, intro);
+    const newest = rungs[rungs.length - 1];
+    if (newest !== anchor) {
+      return { member: false, reason: `basis flipped past — newest rung is ${newest}` };
+    }
+  }
+
   if (committee.fingerprint !== askFingerprint) {
     return { member: false, reason: 'ask names a different committee basis' };
   }
   if (committee.generation !== askGeneration) {
     return { member: false, reason: `ask names generation ${askGeneration}, current is ${committee.generation}` };
   }
-  const self = `${collateral.txhash}:${collateral.txindex}`;
   const member = committee.members.some((entry) => outpointOf(entry) === self);
   return {
     member,
     reason: member ? null : 'this node is not on that committee',
     quorum: committee.quorum,
   };
+}
+
+/** Walk flipOf links back from any rung to its world's intro anchor. */
+function introOf(record, rung) {
+  let at = rung;
+  for (;;) {
+    const photo = record.anchors?.[String(at)];
+    if (photo?.flipOf === undefined) return at;
+    at = photo.flipOf;
+  }
+}
+
+/**
+ * The newest rung this node holds for the world containing `anchor` —
+ * referee-side and component-blind (the discovery endpoint's resolver).
+ * Null when this node never photographed the world at all.
+ */
+async function newestRungFor(appName, anchor) {
+  const database = db();
+  if (!database) return null;
+  const record = await dbHelper.findOneInDatabase(database, collection(), { _id: appName });
+  if (!record?.anchors?.[String(anchor)]) return null;
+  const rungs = worldRungs(record, introOf(record, anchor));
+  return rungs[rungs.length - 1];
 }
 
 module.exports = {
@@ -428,5 +632,9 @@ module.exports = {
   materializeGeneration,
   refereeCommittee,
   componentAnchor,
+  componentWorld,
+  newestRungFor,
   selfOnFoundingCommittee,
+  evaluateFlips,
+  startFlipEvaluator,
 };

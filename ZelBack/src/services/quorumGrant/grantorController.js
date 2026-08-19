@@ -566,11 +566,19 @@ async function foundingBasis(req, res) {
       || !Number.isInteger(anchor) || anchor <= 0) {
       return res.status(400).json(messageHelper.createErrorMessage('malformed founding basis query'));
     }
-    const committee = await foundingCommittee.refereeCommittee(appName, anchor);
+    // Resolve the asked world to THIS node's newest rung — a host missing
+    // a flip it never witnessed discovers the current basis, not the one
+    // it asked about.
+    const rung = await foundingCommittee.newestRungFor(appName, anchor);
+    if (rung === null) {
+      return res.json(messageHelper.createDataMessage({ rung: null, basis: null }));
+    }
+    const committee = await foundingCommittee.refereeCommittee(appName, rung);
     if (!committee) {
-      return res.json(messageHelper.createDataMessage({ basis: null }));
+      return res.json(messageHelper.createDataMessage({ rung, basis: null }));
     }
     return res.json(messageHelper.createDataMessage({
+      rung,
       basis: {
         fingerprint: committee.fingerprint,
         generation: committee.generation,
