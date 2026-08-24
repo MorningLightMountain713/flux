@@ -121,7 +121,11 @@ function sessionIdentity(sessionId) {
  * the thing boots.
  */
 async function buildDeployment(rawSpec, identity) {
-  const spec = await validateSubmissionSpec(rawSpec, {});
+  // A session is one copy on one node: `instances` has no meaning here (the
+  // declared view below pins replica: null), but submission validation
+  // requires it when placement names no replicas — default it at intake so
+  // an owner's minimal spec stays submittable.
+  const spec = await validateSubmissionSpec({ instances: 1, ...rawSpec }, {});
   const { DeploymentSpec } = await getSpecBackend();
 
   // The declared view: a session is one copy on one node, so `instances` and the

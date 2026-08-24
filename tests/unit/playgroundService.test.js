@@ -188,6 +188,19 @@ describe('playgroundService', () => {
   // one whose teardown merely failed. Running it here bounds the debris to one
   // session's worth at the only moment it matters, instead of up to a sweep
   // interval later.
+  describe('spec intake', () => {
+    it('defaults instances - a session is one copy and the field has no meaning here', async () => {
+      await service.submitSession({ version: 9, name: 'demoapp' }, caller);
+      expect(stubs.validateSpec.firstCall.args[0].instances, 'absent instances defaults for validation').to.equal(1);
+      await settle();
+
+      stubs.validateSpec.resetHistory();
+      await service.submitSession({ version: 9, name: 'demoapp', instances: 3 }, caller);
+      expect(stubs.validateSpec.firstCall.args[0].instances, 'a stated value passes through untouched').to.equal(3);
+      await settle();
+    });
+  });
+
   describe('collecting debris before a new session', () => {
     it('reaps abandoned containers before the session claims anything', async () => {
       await service.submitSession({}, caller);
