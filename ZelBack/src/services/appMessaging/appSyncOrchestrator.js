@@ -115,6 +115,10 @@ class AppSyncOrchestrator {
   #syncPeerLostHandler = null;
   #syncPeersAvailableHandler = null;
   #peerReestablishedHandler = null;
+  // Peers with a scoped reconnect pull in flight: their completion is the
+  // pull's, never the round's - a scoped answer must not stand in for a full
+  // one. A round that asks such a peer reclaims it (round membership wins).
+  #reconnectPulls = new Set();
   #hashSyncAttempts = 0;
   #hashSyncRetryTimer = null;
   #nextHashRetryHeight = 0;
@@ -237,6 +241,9 @@ class AppSyncOrchestrator {
   }
 
   #onEphemeralSyncComplete(syncType, peerKey) {
+    // A scoped reconnect pull completing is the pull's own business - it
+    // answered from a since bound, not the round's since=0.
+    if (this.#reconnectPulls.delete(peerKey)) return;
     if (this.#stateSyncComplete) return;
     if (this.#syncCompletions[syncType] === undefined) return;
     const progress = this.#peerProgress.get(peerKey);
@@ -434,6 +441,8 @@ class AppSyncOrchestrator {
       this.#askedPeers.add(peer.key);
       this.#markSyncRequested(peer.key);
       this.#peerProgress.set(peer.key, { askedAt, done: new Set(), failed: false });
+      // round membership wins: this peer's next completion is the round's
+      this.#reconnectPulls.delete(peer.key);
     }
 
     let pubkey;
@@ -484,7 +493,11 @@ class AppSyncOrchestrator {
   // the peer was lost less the slack; the responder's per-peer throttle
   // bounds a flapping peer.
   async #onPeerReestablished({ key, lostAtMs }) {
-    if (this.#state !== STATES.READY) return;
+    // ANY state: the node that most needs the pull is one inside a degraded
+    // window whose resync round burned against its own side of a partition
+    // (1216 run five). Only a peer the active round is already asking at
+    // since=0 is skipped - the round covers it.
+    if (this.#peerProgress.has(key)) return;
     if (!this.#canSendMessages) return;
     const peer = this.#getEligibleSyncPeers(0).find((p) => p.key === key);
     if (!peer) return;
@@ -494,6 +507,7 @@ class AppSyncOrchestrator {
     const requestTs = Date.now();
     const msg = peerCodec.buildSyncSignatureMessage(peerCodec.MSG_TYPE.REQUEST_APP_RUNNING, sinceTs, requestTs);
     const sig = verificationHelper.signMessage(msg, privkey);
+    this.#reconnectPulls.add(key);
     this.#markSyncRequested(key);
     this.#sendRequests([peer], 'apprunning (reconnect)', peerCodec.encodeRequestAppRunning(sinceTs, requestTs, pubkey, sig));
     fluxEventBus.publish('ephemeralSync:reconnectRequested', { peer: key, sinceTimestamp: sinceTs });
