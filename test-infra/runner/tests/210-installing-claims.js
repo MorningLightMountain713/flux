@@ -9,6 +9,7 @@ import { queueAppTx, advanceBlocks } from '../framework/daemon-control.js';
 import { waitFor } from '../framework/wait.js';
 import { isAppContainerRunning } from '../framework/container.js';
 import { dbClient, closeDb } from '../framework/db-client.js';
+import { setLatency, clearLatency } from '../framework/latency.js';
 import { REGISTRY_REPO_HOST, getSubnetConfig } from '../framework/subnet-config.js';
 
 // Installing claims (fluxappinstalling v2): a spawn attempt's seat reservation is
@@ -23,6 +24,14 @@ import { REGISTRY_REPO_HOST, getSubnetConfig } from '../framework/subnet-config.
 // every pinned node stores + broadcasts its claim BEFORE parking on the collision
 // window, so loser claims are guaranteed to exist and only a cleared broadcast
 // can remove them.
+//
+// The race needs a real wire. The claims sieve stands a node down when it
+// already sees rivals covering the seats, and the harness bridge delivers a
+// claim in sub-millisecond - faster than a second contender can wake. The
+// blind window in which several contenders claim concurrently IS production's
+// propagation delay, so the fleet links get a WAN-shaped netem latency for
+// the whole scenario: contenders claim inside the window, the flood converges
+// ~80ms later, and the second-pass election seats exactly two.
 
 const subnet = getSubnetConfig();
 const nodeIp = (num) => subnet.nodeIp(num);
@@ -48,6 +57,10 @@ describe('installing claims: election losers release their seats by cleared broa
       },
     });
     await bootAndPeer(env, { minOutbound: 2, minInbound: 2, pricing: true });
+
+    // Boot and peering ran at bridge speed; everything the scenario measures
+    // runs on the WAN-shaped wire (header comment).
+    await setLatency(env);
 
     await pushImage(appName, 'v1');
 
@@ -80,6 +93,7 @@ describe('installing claims: election losers release their seats by cleared broa
 
   after(async function () {
     this.timeout(30000);
+    if (env) await clearLatency(env).catch(() => {});
     await closeDb();
     await env?.teardown();
   });
