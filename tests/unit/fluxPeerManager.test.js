@@ -605,17 +605,48 @@ describe('FluxPeerManager tests', () => {
   });
 
   describe('peer re-establishment (mechanism B trigger)', () => {
-    it('emits peerReestablished with the loss time when a lost peer returns', () => {
+    it('a returned peer carries the old link\'s last proof of life, not the detection time', () => {
+      // Removal happens when the ping timeout DETECTS the death - the link
+      // may have stalled minutes earlier, and broadcasts sent into the
+      // stalled socket are exactly the ones lost. The last pong is the last
+      // moment the link provably worked.
       const events = [];
       manager.on('peerReestablished', (info) => events.push(info));
-      const before = Date.now();
-      manager.add(createMockWs('10.0.0.9', '16127'), '10.0.0.9', '16127', { source: PEER_SOURCE.RANDOM });
+      const peer = manager.add(createMockWs('10.0.0.9', '16127'), '10.0.0.9', '16127', { source: PEER_SOURCE.RANDOM });
+      peer.lastPongTime = Date.now() - 45000;
       manager.remove('10.0.0.9:16127', 1006);
       manager.add(createMockWs('10.0.0.9', '16127'), '10.0.0.9', '16127', { source: PEER_SOURCE.RANDOM });
 
       expect(events).to.have.lengthOf(1);
       expect(events[0].key).to.equal('10.0.0.9:16127');
-      expect(events[0].lostAtMs).to.be.at.least(before);
+      expect(events[0].lostAtMs, 'the last pong bounds the stall').to.equal(peer.lastPongTime);
+    });
+
+    it('a link that never ponged falls back to its connect time', () => {
+      const events = [];
+      manager.on('peerReestablished', (info) => events.push(info));
+      const peer = manager.add(createMockWs('10.0.0.9', '16127'), '10.0.0.9', '16127', { source: PEER_SOURCE.RANDOM });
+      manager.remove('10.0.0.9:16127', 1006);
+      manager.add(createMockWs('10.0.0.9', '16127'), '10.0.0.9', '16127', { source: PEER_SOURCE.RANDOM });
+
+      expect(events).to.have.lengthOf(1);
+      expect(events[0].lostAtMs, 'an unproven link contributes nothing after connect').to.equal(peer.connectedAt);
+    });
+
+    it('a replaced peer is a reconnection of the pair, stamped the same way', () => {
+      // The gate red: a stalled-but-registered peer replaced by the other
+      // side\'s redial went through the replace branch, which never stamped
+      // a loss - the pull that repairs missed broadcasts silently never fired.
+      const events = [];
+      manager.on('peerReestablished', (info) => events.push(info));
+      const first = manager.add(createMockWs('10.0.0.9', '16127'), '10.0.0.9', '16127', { source: PEER_SOURCE.RANDOM });
+      first.lastPongTime = Date.now() - 45000;
+
+      manager.add(createMockWs('10.0.0.9', '16127'), '10.0.0.9', '16127', { source: PEER_SOURCE.INBOUND });
+
+      expect(events).to.have.lengthOf(1);
+      expect(events[0].key).to.equal('10.0.0.9:16127');
+      expect(events[0].lostAtMs, 'the last pong bounds the stall').to.equal(first.lastPongTime);
     });
 
     it('a first-ever add emits nothing; each loss arms exactly one re-establishment', () => {

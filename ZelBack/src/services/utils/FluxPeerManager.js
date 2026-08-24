@@ -154,6 +154,10 @@ class FluxPeerManager extends EventEmitter {
       existing.ws.onmessage = null;
       try { existing.ws.close(CLOSE_CODES.DUPLICATE_PEER, 'replaced'); } catch (_e) { /* noop */ }
       this.#removeTracking(existing);
+      // A replacement IS a reconnection of the pair: the old socket may have
+      // stalled long before this dial arrived, and nothing else records the
+      // loss (remove() never ran for it).
+      this.#stampLoss(existing);
     }
     const peer = new FluxPeerSocket(ws, ip, String(port), this);
     peer.source = options.source || PEER_SOURCE.INBOUND;
@@ -241,11 +245,7 @@ class FluxPeerManager extends EventEmitter {
 
     // Track disconnect for unstable node detection and network health
     this.trackDisconnect(peer.ip, peer.port);
-    this.#lastLostAt.set(key, Date.now());
-    if (this.#lastLostAt.size > 2000) {
-      // insertion-ordered: the oldest loss is the least likely to return
-      this.#lastLostAt.delete(this.#lastLostAt.keys().next().value);
-    }
+    this.#stampLoss(peer);
     if (this.networkHealthMonitor) this.networkHealthMonitor.recordDisconnect(peer.connectedAt, closeCode);
 
     // Queue outbound peers for reconnection only on unexpected disconnections.
@@ -579,6 +579,24 @@ class FluxPeerManager extends EventEmitter {
    * @param {string} ip
    * @param {string} port
    */
+  /**
+   * Record when a peer's link was lost, for the peerReestablished pull. The
+   * stamp is the last moment the link PROVABLY worked — the last pong, or the
+   * connect time for a link that never proved itself — never the detection
+   * time: the link may have stalled long before the ping timeout noticed, and
+   * everything sent into the stalled socket since then is what the pull must
+   * cover. Pings run every wsPingIntervalMs (15s), so on a healthy link this
+   * stamp trails the true stall start by at most one interval.
+   * @param {FluxPeerSocket} peer the lost or replaced socket
+   */
+  #stampLoss(peer) {
+    this.#lastLostAt.set(peer.key, peer.lastPongTime ?? peer.connectedAt);
+    if (this.#lastLostAt.size > 2000) {
+      // insertion-ordered: the oldest loss is the least likely to return
+      this.#lastLostAt.delete(this.#lastLostAt.keys().next().value);
+    }
+  }
+
   trackDisconnect(ip, port) {
     const key = `${ip}:${port}`;
     const now = Date.now();
