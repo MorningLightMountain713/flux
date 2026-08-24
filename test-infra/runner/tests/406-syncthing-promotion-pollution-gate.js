@@ -36,7 +36,7 @@ describe('syncthing promotion gate reverts local pollution before flipping to se
     env = await createTestEnv({ hookCtx: this, nodes: 10, tickerAutostart: false });
     await bootAndPeer(env);
     await resetSyncState();
-    app = await seedSyncthingApp(env, { name: appName, mode: 'r', forceNonLeader: true, index: 0 });
+    app = await seedSyncthingApp(env, { name: appName, syncMode: 'syncFirst', forceNonLeader: true, index: 0 });
     // fully synced BUT with local foreign files - the promotion-blocking shape.
     // The stub's db/revert clears the receiveOnlyChangedFiles override, exactly
     // like the real revert removes the local changes.

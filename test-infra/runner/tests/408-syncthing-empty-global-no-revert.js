@@ -60,13 +60,13 @@ describe('syncthing promotion gate never reverts/promotes against an empty globa
     // folder config now exists and survives a FluxOS process restart - which is
     // how the legs reach handleFirstRun's preserve branch.
     aEmpty = await seedSyncthingApp(env, {
-      name: appEmpty, mode: 'r', forceNonLeader: true, index: 0,
+      name: appEmpty, syncMode: 'syncFirst', forceNonLeader: true, index: 0,
     });
     await setSyncState({ ip: subnet.nodeIp(aEmpty.index + 1), folder: aEmpty.folder, state: 'idle', globalBytes: 100000, inSyncBytes: 40000, receiveOnlyChangedFiles: 0 });
     await setPeerDisconnected({ ip: subnet.nodeIp(aEmpty.index + 1), folder: aEmpty.folder });
 
     aPart = await seedSyncthingApp(env, {
-      name: appPart, mode: 'r', forceNonLeader: true, index: 1,
+      name: appPart, syncMode: 'syncFirst', forceNonLeader: true, index: 1,
     });
     await setSyncState({ ip: subnet.nodeIp(aPart.index + 1), folder: aPart.folder, state: 'idle', globalBytes: 100000, inSyncBytes: 40000, receiveOnlyChangedFiles: 0 });
     await setPeerDisconnected({ ip: subnet.nodeIp(aPart.index + 1), folder: aPart.folder });

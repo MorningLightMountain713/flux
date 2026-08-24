@@ -294,17 +294,18 @@ export async function waitForInstanceCount(env, appName, target, {
 // holds the data its index claims (see seedSyncScopedData). Whether/when to pin the
 // SUBJECT synced stays the caller's choice.
 export async function seedSyncthingApp(env, {
-  name, mode = 'r', forceNonLeader = false, index = 0, hdd = 1,
+  name, syncMode = 'syncFirst', forceNonLeader = false, index = 0, hdd = 1, ...rest
 }) {
+  if (rest.mode !== undefined) throw new Error("seedSyncthingApp: pass syncMode by name ('activeStandby' | 'syncFirst' | 'sync'), not a legacy 'mode' letter");
   await pushImage(name, 'v1');
-  const app = await buildSeedableSyncthingApp({ name, mode, hdd });
+  const app = await buildSeedableSyncthingApp({ name, syncMode, hdd });
   const folder = `flux${name}_${name}`;
   const identifier = `${name}_${name}`;
-  // The install-settled signal is mode-dependent: decider modes (g:/r:) run the
-  // first-run clean-install reset (dataCleared) before any start, while a
-  // plain-sync (s:) component has no decider and no reset - it just starts, so
-  // dataCleared never fires for it.
-  const settleAction = mode === 's' ? 'firstStart' : 'dataCleared';
+  // The install-settled signal is mode-dependent: decider modes (activeStandby/
+  // syncFirst) run the first-run clean-install reset (dataCleared) before any
+  // start, while a plain-sync component has no decider and no reset - it just
+  // starts, so dataCleared never fires for it.
+  const settleAction = syncMode === 'sync' ? 'firstStart' : 'dataCleared';
 
   const peerIndex = forceNonLeader ? (index === 0 ? env.clients.length - 1 : 0) : null;
   if (forceNonLeader) {

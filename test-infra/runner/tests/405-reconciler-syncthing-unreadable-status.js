@@ -34,7 +34,7 @@ describe('reconciler never removes (or starts) on an unreadable sync status', fu
     env = await createTestEnv({ hookCtx: this, nodes: 10, tickerAutostart: false });
     await bootAndPeer(env);
     await resetSyncState();
-    app = await seedSyncthingApp(env, { name: appName, mode: 'r', forceNonLeader: true, index: 0 });
+    app = await seedSyncthingApp(env, { name: appName, syncMode: 'syncFirst', forceNonLeader: true, index: 0 });
     // unreadable BEFORE the first evaluation; a connected synced peer exists,
     // but without a readable local status that is not evidence to act on
     await setStatusUnreadable({ ip: subnet.nodeIp(1), folder: app.folder });

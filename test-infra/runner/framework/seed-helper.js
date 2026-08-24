@@ -120,6 +120,10 @@ export async function buildSeedableSyncthingApp({
   hdd = 1,
   ...rest
 }) {
+  // syncMode is the only mode surface. A 'mode' key would fall into rest,
+  // where the syncMode default silently replaces the caller's intent - so it
+  // fails loudly instead.
+  if (rest.mode !== undefined) throw new Error("buildSeedableSyncthingApp: pass syncMode by name ('activeStandby' | 'syncFirst' | 'sync'), not a legacy 'mode' letter");
   const mode = CONTAINER_DATA_FLAG[syncMode];
   if (!mode) throw new Error(`buildSeedableSyncthingApp: unknown syncMode '${syncMode}'`);
   const compose = [{
@@ -265,18 +269,21 @@ export async function buildSeedableMixedMountApp({
  */
 export async function buildSeedableMultiSyncthingApp({
   name,
-  mode = 'g',
+  syncMode = 'activeStandby',
   components = 2,
   repotag = `${REGISTRY_REPO_HOST}/${name}:v1`,
   basePort = 31111,
   containerPorts = [80],
   ...rest
 }) {
+  if (rest.mode !== undefined) throw new Error("buildSeedableMultiSyncthingApp: pass syncMode by name ('activeStandby' | 'syncFirst' | 'sync'), not a legacy 'mode' letter");
+  const mode = CONTAINER_DATA_FLAG[syncMode];
+  if (!mode) throw new Error(`buildSeedableMultiSyncthingApp: unknown syncMode '${syncMode}'`);
   const compose = [];
   for (let i = 0; i < components; i += 1) {
     compose.push({
       name: `${name}c${i}`,
-      description: `${mode}: component ${i}`,
+      description: `${syncMode} component ${i}`,
       repotag,
       ports: [basePort + i],
       domains: [''],

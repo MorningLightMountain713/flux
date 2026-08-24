@@ -43,7 +43,7 @@ describe('backup leases the whole app against the reconciler', function () {
     // backup dies ENOSPC mid-window (observed: the failed backup then never
     // resumed the app and the final is-up assert timed out).
     app = await seedSyncthingApp(env, {
-      name: appName, mode: 'r', index: 0, hdd: 2,
+      name: appName, syncMode: 'syncFirst', index: 0, hdd: 2,
     });
     await setSynced({ ip: subnet.nodeIp(1), folder: app.folder });
     await waitForUp(env.clients[0], appName, 'app running before backup');

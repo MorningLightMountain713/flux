@@ -128,7 +128,7 @@ describe('FluxOS-owned volume mounting (no crontab) + inert unmounted app dirs',
     // index claiming bytes over an empty disk is the phantom state the guard
     // demotes, and the demote/hold would latch the app down mid-suite
     const syncInstallAfter = env.clients[0].getLastEventId();
-    await seedSyncthingApp(env, { name: syncName, mode: 'r', index: 0 });
+    await seedSyncthingApp(env, { name: syncName, syncMode: 'syncFirst', index: 0 });
     await waitForReconcileActuated(env.clients[0], syncIdentifier, 'dataCleared', 60000, { afterId: syncInstallAfter });
     await seedSyncScopedData(env, syncName, 0);
     // pin the folder synced so the leader promotes and the app runs steadily
