@@ -444,8 +444,8 @@ describe('primary election under a divergent placement order', function () {
 
       // Watched for as many election passes as the last holder's turn spans,
       // plus HELD_PASSES, on every holder.
-      const { masterSlaveStaggerMs, masterSlaveIntervalMs } = loadSharedConfig().fluxapps;
-      const span = Math.ceil(((holders.length - 1) * masterSlaveStaggerMs) / masterSlaveIntervalMs) + HELD_PASSES;
+      const { activeStandbyStaggerMs, masterSlaveIntervalMs } = loadSharedConfig().fluxapps;
+      const span = Math.ceil(((holders.length - 1) * activeStandbyStaggerMs) / masterSlaveIntervalMs) + HELD_PASSES;
       const passesAtDeploy = await Promise.all(holders.map((i) => electionCount(i, genesisApp, 'evaluated')));
       await Promise.all(holders.map((i, k) => waitHolding(async () => {
         expect(await countUp(genesisApp), 'a holder started the app while the seed is cut off').to.equal(0);
@@ -700,8 +700,8 @@ describe('primary election under a divergent placement order', function () {
     // election passes as the junior's turn spans, plus HELD_PASSES: a turn booked
     // at genesis comes due inside that, finds the primary running, and a standby
     // that books while it runs books again.
-    const { masterSlaveStaggerMs, masterSlaveIntervalMs } = loadSharedConfig().fluxapps;
-    const span = Math.ceil((indexOf(junior) * masterSlaveStaggerMs) / masterSlaveIntervalMs) + HELD_PASSES;
+    const { activeStandbyStaggerMs, masterSlaveIntervalMs } = loadSharedConfig().fluxapps;
+    const span = Math.ceil((indexOf(junior) * activeStandbyStaggerMs) / masterSlaveIntervalMs) + HELD_PASSES;
     const bookedAtRun = await Promise.all([senior, junior].map((i) => electionCount(i, lossApp, 'staggerBooked')));
     const passesAtRun = await Promise.all([senior, junior].map((i) => electionCount(i, lossApp, 'evaluated')));
     await Promise.all([senior, junior].map((i, k) => waitFor(async () => (await electionCount(i, lossApp, 'evaluated')) >= passesAtRun[k] + span, {
@@ -728,7 +728,7 @@ describe('primary election under a divergent placement order', function () {
       });
       // The junior's turn comes one place later; it finds the senior running it.
       const juniorPasses = await electionCount(junior, lossApp, 'evaluated');
-      const place = Math.ceil(masterSlaveStaggerMs / masterSlaveIntervalMs) + HELD_PASSES;
+      const place = Math.ceil(activeStandbyStaggerMs / masterSlaveIntervalMs) + HELD_PASSES;
       await waitFor(async () => (await electionCount(junior, lossApp, 'evaluated')) >= juniorPasses + place, {
         timeout: 240000, interval: 1000, label: `holder ${junior} ran ${place} election passes after the senior committed`,
       });

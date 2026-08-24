@@ -185,17 +185,17 @@ describe('coupled harness knobs track production', () => {
     const { fluxapps } = productionConfig();
 
     expect(knobs.PRODUCTION.masterSlaveIntervalMs).to.equal(fluxapps.masterSlaveIntervalMs);
-    expect(knobs.PRODUCTION.masterSlaveStaggerMs).to.equal(fluxapps.masterSlaveStaggerMs);
+    expect(knobs.PRODUCTION.activeStandbyStaggerMs).to.equal(fluxapps.activeStandbyStaggerMs);
   });
 
   it('rejects a stagger that spans fewer election passes than production\'s', () => {
     const pass = 3000;
     const tooShort = (knobs.staggerPassesPerPlace() - 1) * pass;
 
-    expect(() => knobs.assertCoupledRatios({ masterSlaveIntervalMs: pass, masterSlaveStaggerMs: tooShort }))
+    expect(() => knobs.assertCoupledRatios({ masterSlaveIntervalMs: pass, activeStandbyStaggerMs: tooShort }))
       .to.throw(/spans too few election passes/);
     expect(() => knobs.assertCoupledRatios({
-      masterSlaveIntervalMs: pass, masterSlaveStaggerMs: knobs.staggerPassesPerPlace() * pass,
+      masterSlaveIntervalMs: pass, activeStandbyStaggerMs: knobs.staggerPassesPerPlace() * pass,
     })).to.not.throw();
   });
 

@@ -17,7 +17,7 @@ The two halves of a pair need not live in the same layer: `explorerPollIntervalM
 | a handback turn holds its owner's second give-up pass | `residentialTurnMs` : `removeFluxAppsPeriod` x 4 x `explorerPollIntervalMs` | 2.73 | `derivedTurnMs(fluxapps)` - never a literal |
 | a departure is visible before the next holder decides | give-up pass : `DEPARTURE_ANNOUNCE_MS` | - | `assertTurnPacing(fluxapps)` |
 | a holder's own announcement outlasts the turn it acts in | `residentialTurnMs` : `locationTtlS` less the announce interval | 0.92 | `assertTurnPacing(fluxapps)` |
-| a standby looks at the candidate ahead as often as production before its turn | `masterSlaveStaggerMs` : `masterSlaveIntervalMs` | 6 | `assertStaggerSpansElectionPasses(fluxapps)` |
+| a standby looks at the candidate ahead as often as production before its turn | `activeStandbyStaggerMs` : `masterSlaveIntervalMs` | 6 | `assertStaggerSpansElectionPasses(fluxapps)` |
 
 A holder acts only on the second pass of a turn it owns, so one whole pass separates two holders acting; the second pair is what makes that pass long enough for the first departure to reach the second holder. The third is bounded by what it must stay under rather than by a ratio: a holder refuses a turn its own announcement lapses inside, so a turn at or above what a renewed announcement has left is one no holder ever acts in.
 
@@ -77,7 +77,7 @@ loses the property, so the factor is pinned by a unit test.
 | `fluxapps.installCollisionWaitMs` | 90000 | 5000 | 18.0x |
 | `fluxapps.locationTtlS` | 7500 | 63 | 119.0x |
 | `fluxapps.masterSlaveIntervalMs` | 30000 | 3000 | 10.0x |
-| `fluxapps.masterSlaveStaggerMs` | 180000 | 18000 | 10.0x |
+| `fluxapps.activeStandbyStaggerMs` | 180000 | 18000 | 10.0x |
 | `fluxapps.minHashSyncPeers` | 12 | 1 | 12.0x |
 | `fluxapps.minIncoming` | 4 | 2 | 2.0x |
 | `fluxapps.minOutgoing` | 8 | 4 | 2.0x |

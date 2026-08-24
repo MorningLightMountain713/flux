@@ -346,7 +346,7 @@ module.exports = {
     // from the moment it commits, so a place need only span the election passes
     // the one ahead takes to commit: production's six, at this fleet's cycle.
     // Suites wait on election decisions, never on this.
-    masterSlaveStaggerMs: 18000,
+    activeStandbyStaggerMs: 18000,
     installation: { probability: 100, delay: 5 },
     removal: { probability: 25, delay: 5 },
     // 1 = every pass. `Math.floor(Math.random() * probability) === 0` gates the

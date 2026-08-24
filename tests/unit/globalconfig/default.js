@@ -508,7 +508,7 @@ module.exports = {
     // when the key is missing, so a config value equal to the fallback cannot
     // tell "read from config" from "key misspelled and silently defaulted" -
     // which is exactly how statsSampleIntervalMs came to read undefined.
-    masterSlaveStaggerMs: 30000,
+    activeStandbyStaggerMs: 30000,
   },
   lockedSystemResources: {
     cpu: 10, // 1 cpu core

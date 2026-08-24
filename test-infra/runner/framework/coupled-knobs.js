@@ -55,7 +55,7 @@ export const PRODUCTION = Object.freeze({
   // The g: election's cycle, and the per-place wait a standby serves before it
   // may take a primary FDM names nobody for.
   masterSlaveIntervalMs: 30000,
-  masterSlaveStaggerMs: 180000,
+  activeStandbyStaggerMs: 180000,
   installingTtlS: 900,
 });
 
@@ -67,7 +67,7 @@ export const PRODUCTION = Object.freeze({
  * @returns {number}
  */
 export function staggerPassesPerPlace() {
-  return PRODUCTION.masterSlaveStaggerMs / PRODUCTION.masterSlaveIntervalMs;
+  return PRODUCTION.activeStandbyStaggerMs / PRODUCTION.masterSlaveIntervalMs;
 }
 
 /**
@@ -76,15 +76,15 @@ export function staggerPassesPerPlace() {
  * @throws {Error} When one place of stagger is fewer passes than production's.
  */
 export function assertStaggerSpansElectionPasses(fluxapps) {
-  const stagger = fluxapps.masterSlaveStaggerMs;
+  const stagger = fluxapps.activeStandbyStaggerMs;
   const pass = fluxapps.masterSlaveIntervalMs;
   if (typeof stagger !== 'number' || typeof pass !== 'number') return;
   const required = staggerPassesPerPlace();
   if (stagger / pass >= required) return;
   throw new Error(
-    'coupled-knobs: masterSlaveStaggerMs spans too few election passes.\n'
+    'coupled-knobs: activeStandbyStaggerMs spans too few election passes.\n'
     + `  stagger ${stagger}ms, election pass ${pass}ms  -> ${(stagger / pass).toFixed(1)} passes\n`
-    + `  needed  ${required} passes, production's ${PRODUCTION.masterSlaveStaggerMs}ms over ${PRODUCTION.masterSlaveIntervalMs}ms\n`
+    + `  needed  ${required} passes, production's ${PRODUCTION.activeStandbyStaggerMs}ms over ${PRODUCTION.masterSlaveIntervalMs}ms\n`
     + '  A standby looks at the candidate ahead of it once a pass; below this it takes the\n'
     + '  primary having looked fewer times than production does.',
   );
