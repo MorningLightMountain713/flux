@@ -3,7 +3,7 @@ import { describe, it, before, after } from 'mocha';
 import { expect } from 'chai';
 import { createTestEnv } from '../framework/test-env.js';
 import { bootAndPeer } from '../framework/reconciler-suite.js';
-import { registerEncryptedV9App } from '../framework/content-helper.js';
+import { registerEncryptedV9App, updateEncryptedV9App } from '../framework/content-helper.js';
 import { queueAppTx, advanceBlocks } from '../framework/daemon-control.js';
 import { waitFor, waitForAppInstalled } from '../framework/wait.js';
 import { authenticate } from '../auth.js';
@@ -192,27 +192,69 @@ describe('mesh membership level API', function () {
     this.timeout(420000);
     const current = (await readLevel(0)).data.generation;
 
-    // Park a poll inside node 0's container, writing its answer to a file.
-    const containerName = await appContainerName(0);
-    await execInContainer(env.clients[0].container,
-      `docker exec ${containerName} /bin/busybox sh -c '`
-      + `rm -f /tmp/woken.json && (/bin/busybox wget -qO /tmp/woken.json `
-      + `"${MEMBERSHIP_URL}?waitAfter=${current}&timeoutS=300" && `
-      + `echo done > /tmp/woken.flag) &'`);
+    // Park a poll inside a container, writing its answer to a file. Parked on
+    // nodes 0 AND 1: the shrink below removes ONE instance by rank, so at
+    // least one of the two parked polls survives to be read.
+    const park = async (i) => {
+      const containerName = await appContainerName(i);
+      await execInContainer(env.clients[i].container,
+        `docker exec ${containerName} /bin/busybox sh -c '`
+        + `rm -f /tmp/woken.json && (/bin/busybox wget -qO /tmp/woken.json `
+        + `"${MEMBERSHIP_URL}?waitAfter=${current}&timeoutS=300" && `
+        + `echo done > /tmp/woken.flag) &'`);
+    };
+    await park(0);
+    await park(1);
 
-    // The membership change: the app leaves node 2 (a graceful leave — the
-    // appremoved broadcast pulls the member out on the next mesh pass).
-    const removeRes = await fetch(`${env.clients[2].url}/apps/appremove/${name}`, {
-      headers: { zelidauth: ownerAuths[2] },
+    // The membership change must be DURABLE: a raw appremove un-happens - the
+    // spec still demands 3 instances on a 3-node fleet, so the spawner heals
+    // the hole within a pass and the snapshot returns byte-identical, waking
+    // nothing. Shrinking the SPEC to 2 instances is the operator's real move:
+    // the healer has nothing to undo, membership genuinely contracts.
+    const upd = await updateEncryptedV9App(env.clients[0].url, {
+      name,
+      instances: 2,
+      specOverrides: { network: { mesh: true } },
+      components: {
+        db: {
+          name: 'db',
+          description: 'membership level consumer',
+          image: `${REGISTRY_REPO_HOST}/${name}:v1`,
+          cpu: 0.5,
+          memory: 300,
+          rootFsGb: 2,
+          entrypoint: ['/bin/busybox', 'sh', '-c',
+            'while true; do /bin/busybox nc -l -p 7001 -e /bin/busybox echo LVL-OK; done'],
+          ports: { echo: { containerPort: 7001, hostPort: 31284 } },
+          meshPorts: { 'db-server': { containerPort: 7001 } },
+        },
+      },
     });
-    expect(removeRes.ok, 'appremove accepted').to.equal(true);
+    expect(upd.status, JSON.stringify(upd)).to.equal('success');
+    await queueAppTx(upd.data);
+    await advanceBlocks(3);
 
+    // A survivor whose parked poll can still be read: whichever of 0/1 keeps
+    // its container after the trim.
+    const survivor = async () => {
+      for (const i of [0, 1]) {
+        // eslint-disable-next-line no-await-in-loop
+        const alive = await appContainerName(i).then(() => i).catch(() => null);
+        if (alive != null) return i;
+      }
+      return null;
+    };
+    let woke = null;
     await waitFor(async () => {
-      const out = await inApp(0, '/bin/busybox cat /tmp/woken.flag').catch(() => null);
-      return out?.stdout?.includes('done');
-    }, { timeout: 240000, interval: 5000, label: 'the parked poll woke' });
+      const i = await survivor();
+      if (i == null) return false;
+      const out = await inApp(i, '/bin/busybox cat /tmp/woken.flag').catch(() => null);
+      if (!out?.stdout?.includes('done')) return false;
+      woke = i;
+      return true;
+    }, { timeout: 240000, interval: 5000, label: 'a surviving parked poll woke' });
 
-    const out = await inApp(0, '/bin/busybox cat /tmp/woken.json');
+    const out = await inApp(woke, '/bin/busybox cat /tmp/woken.json');
     const woken = JSON.parse(out.stdout);
     expect(woken.status).to.equal('success');
     expect(woken.data.generation, 'the level moved').to.be.greaterThan(current);
