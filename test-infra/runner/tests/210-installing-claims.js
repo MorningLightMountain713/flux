@@ -28,10 +28,14 @@ import { REGISTRY_REPO_HOST, getSubnetConfig } from '../framework/subnet-config.
 // The race needs a real wire. The claims sieve stands a node down when it
 // already sees rivals covering the seats, and the harness bridge delivers a
 // claim in sub-millisecond - faster than a second contender can wake. The
-// blind window in which several contenders claim concurrently IS production's
-// propagation delay, so the fleet links get a WAN-shaped netem latency for
-// the whole scenario: contenders claim inside the window, the flood converges
-// ~80ms later, and the second-pass election seats exactly two.
+// blind window in which several contenders claim concurrently is the wire
+// latency, so the fleet links get a netem delay sized to EXCEED the fleet's
+// wake spread (~500ms measured: block processing + spawner-pass work between
+// nodes), which is what makes every contender claim blind deterministically.
+// Production runs this same path whenever its own spread is under its RTT -
+// the suite pins the path's correctness, not its frequency. The flood
+// converges within a second, well inside the collision park, and the
+// second-pass election seats exactly two.
 
 const subnet = getSubnetConfig();
 const nodeIp = (num) => subnet.nodeIp(num);
@@ -59,8 +63,9 @@ describe('installing claims: election losers release their seats by cleared broa
     await bootAndPeer(env, { minOutbound: 2, minInbound: 2, pricing: true });
 
     // Boot and peering ran at bridge speed; everything the scenario measures
-    // runs on the WAN-shaped wire (header comment).
-    await setLatency(env);
+    // runs on the shaped wire. The dial's one job is to beat the wake spread
+    // (header comment) - it is not modelling any particular geography.
+    await setLatency(env, { delay: '750ms 50ms' });
 
     await pushImage(appName, 'v1');
 
