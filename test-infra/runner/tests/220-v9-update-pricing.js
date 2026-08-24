@@ -203,10 +203,13 @@ describe('v9 update pricing', function () {
         await registerV9(appName, { components: SMALL });
       });
 
-      it('is applied though it pays nothing at all', async function () {
+      // "Free" means the fee is zero, not the transaction: the explorer's
+      // indexing bar ignores any tx under minPrice by design (anti-spam), so a
+      // free update pays the floor and owes nothing above it.
+      it('is applied at the floor, owing nothing above it', async function () {
         this.timeout(180000);
         const before = await row(appName);
-        await updateV9(appName, { components: SMALL, valueSat: 0 });
+        await updateV9(appName, { components: SMALL, valueSat: FLOOR_SAT });
 
         const current = await row(appName);
         expect(current.hash).to.not.equal(before.hash);
@@ -216,7 +219,7 @@ describe('v9 update pricing', function () {
       it('does not move the app expiry, having bought no time', async function () {
         this.timeout(180000);
         const before = await row(appName);
-        await updateV9(appName, { components: SMALL, valueSat: 0 });
+        await updateV9(appName, { components: SMALL, valueSat: FLOOR_SAT });
 
         const current = await row(appName);
         expect(current.hash).to.not.equal(before.hash);
@@ -266,7 +269,7 @@ describe('v9 update pricing', function () {
 
       it('is free, and the app stops being current', async function () {
         this.timeout(180000);
-        await updateV9(appName, { components: SMALL, ttl: 0, valueSat: 0 });
+        await updateV9(appName, { components: SMALL, ttl: 0, valueSat: FLOOR_SAT });
 
         await waitFor(async () => (await row(appName)) === null, {
           timeout: 60000, label: `${appName} released after cancellation`,
@@ -286,14 +289,14 @@ describe('v9 update pricing', function () {
         // Five free updates inside the window — the whole allowance.
         for (let i = 0; i < 5; i += 1) {
           // eslint-disable-next-line no-await-in-loop
-          await updateV9(appName, { components: SMALL, valueSat: 0 });
+          await updateV9(appName, { components: SMALL, valueSat: FLOOR_SAT });
         }
       });
 
       it('refuses a sixth free update in the window', async function () {
         this.timeout(180000);
         const before = await row(appName);
-        await updateV9(appName, { components: SMALL, valueSat: 0 });
+        await updateV9(appName, { components: SMALL, valueSat: FLOOR_SAT });
 
         const current = await row(appName);
         expect(current.hash).to.equal(before.hash);
