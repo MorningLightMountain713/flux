@@ -13,6 +13,7 @@ import {
   queueAppTx, advanceBlocks, removeFromNodeList, restoreToNodeList,
 } from '../framework/daemon-control.js';
 import { waitFor, waitForAppInstalled } from '../framework/wait.js';
+import { dbClient } from '../framework/db-client.js';
 import { execInContainer, requireAppContainerName } from '../framework/container.js';
 import { partition, healPartition } from '../framework/partition.js';
 
@@ -107,10 +108,13 @@ describe('two founders born across a partition converge to one on heal', functio
 
     await waitFor(async () => {
       const rows = await Promise.all(env.clients.map((c) => c.getAppSpecs(name).catch(() => null)));
-      if (!rows.every((r) => r && r.status === 'success' && r.data && r.data.name === name)) return false;
-      anchor = rows[0].data.height;
-      return Number.isInteger(anchor);
+      return rows.every((r) => r && r.status === 'success' && r.data && r.data.name === name);
     }, { timeout: 180000, interval: 5000, label: `global spec for ${name} on all nodes` });
+
+    // The anchor is row metadata, not spec content: the API serves the
+    // serialized spec without it, the stored row carries it.
+    anchor = (await dbClient(1).getGlobalApp(name))?.height;
+    expect(Number.isInteger(anchor), `the stored row carries the anchor height (${anchor})`).to.equal(true);
 
     // The committee decides the pocket: read it from the discovery endpoint
     // (public facts) and cut off SIX members — a quorum of five plus one
