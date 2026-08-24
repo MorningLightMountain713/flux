@@ -69,6 +69,32 @@ let wakePending = false;
  * @param {object} placement - the spec's Placement
  * @returns {number}
  */
+// Election order for installing-claim rows: claim time first - announcedAt
+// where present (immutable under v2 renewals), broadcastedAt for rows from v1
+// peers (which never move either) - then row identity (ip, replica). Every
+// contender reads its seat off this ranking, so it must be a total order
+// every node computes identically regardless of its own row return order;
+// wake-synchronized contenders make equal claim times the normal case.
+function compareClaimRows(a, b) {
+  const aClaimedAt = a.announcedAt ?? a.broadcastedAt;
+  const bClaimedAt = b.announcedAt ?? b.broadcastedAt;
+  if (aClaimedAt < bClaimedAt) {
+    return -1;
+  }
+  if (aClaimedAt > bClaimedAt) {
+    return 1;
+  }
+  const aIdentity = `${a.ip ?? ''}|${a.replica ?? ''}`;
+  const bIdentity = `${b.ip ?? ''}|${b.replica ?? ''}`;
+  if (aIdentity < bIdentity) {
+    return -1;
+  }
+  if (aIdentity > bIdentity) {
+    return 1;
+  }
+  return 0;
+}
+
 function placementPinCount(placement) {
   if (!placement) return 0;
   return placement.targetIps.length
@@ -1145,19 +1171,7 @@ async function trySpawningGlobalApplication() {
     runningAppList = await registryManager.appLocation(appToRun);
     installingAppList = await registryManager.appInstallingLocation(appToRun);
     if (runningAppList.length + installingAppList.length > minInstances) {
-      // Rank contenders by claim time: announcedAt where present (immutable under v2
-      // renewals), broadcastedAt for rows from v1 peers (which never move either).
-      installingAppList.sort((a, b) => {
-        const aClaimedAt = a.announcedAt ?? a.broadcastedAt;
-        const bClaimedAt = b.announcedAt ?? b.broadcastedAt;
-        if (aClaimedAt < bClaimedAt) {
-          return -1;
-        }
-        if (aClaimedAt > bClaimedAt) {
-          return 1;
-        }
-        return 0;
-      });
+      installingAppList.sort(compareClaimRows);
       broadcastedAt = Date.now();
       const index = installingAppList.findIndex((x) => socketAddressesMatch(x.ip, localSocketAddr));
       if (runningAppList.length + index + 1 > minInstances) {
@@ -1328,5 +1342,6 @@ module.exports = {
   trySpawningGlobalApplication,
   isSoleRequiredInstaller,
   isPinnedContended,
+  compareClaimRows,
   notifySpecStored,
 };
