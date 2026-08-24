@@ -120,10 +120,6 @@ export async function buildSeedableSyncthingApp({
   hdd = 1,
   ...rest
 }) {
-  // syncMode is the only mode surface. A 'mode' key would fall into rest,
-  // where the syncMode default silently replaces the caller's intent - so it
-  // fails loudly instead.
-  if (rest.mode !== undefined) throw new Error("buildSeedableSyncthingApp: pass syncMode by name ('activeStandby' | 'syncFirst' | 'sync'), not a legacy 'mode' letter");
   const mode = CONTAINER_DATA_FLAG[syncMode];
   if (!mode) throw new Error(`buildSeedableSyncthingApp: unknown syncMode '${syncMode}'`);
   const compose = [{
@@ -276,7 +272,6 @@ export async function buildSeedableMultiSyncthingApp({
   containerPorts = [80],
   ...rest
 }) {
-  if (rest.mode !== undefined) throw new Error("buildSeedableMultiSyncthingApp: pass syncMode by name ('activeStandby' | 'syncFirst' | 'sync'), not a legacy 'mode' letter");
   const mode = CONTAINER_DATA_FLAG[syncMode];
   if (!mode) throw new Error(`buildSeedableMultiSyncthingApp: unknown syncMode '${syncMode}'`);
   const compose = [];

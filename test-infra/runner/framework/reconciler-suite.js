@@ -294,9 +294,8 @@ export async function waitForInstanceCount(env, appName, target, {
 // holds the data its index claims (see seedSyncScopedData). Whether/when to pin the
 // SUBJECT synced stays the caller's choice.
 export async function seedSyncthingApp(env, {
-  name, syncMode = 'syncFirst', forceNonLeader = false, index = 0, hdd = 1, ...rest
+  name, syncMode = 'syncFirst', forceNonLeader = false, index = 0, hdd = 1,
 }) {
-  if (rest.mode !== undefined) throw new Error("seedSyncthingApp: pass syncMode by name ('activeStandby' | 'syncFirst' | 'sync'), not a legacy 'mode' letter");
   await pushImage(name, 'v1');
   const app = await buildSeedableSyncthingApp({ name, syncMode, hdd });
   const folder = `flux${name}_${name}`;
