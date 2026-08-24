@@ -294,8 +294,10 @@ async function setContentManifestApplied(appName, version) {
  * Latest-wins upsert of a manifest row. A confirmed store advances a strictly-older
  * row OR promotes a same-version quarantined row in place (clearing its TTL); a
  * quarantine store holds only a strictly-newer version (TTL-reaped if its spec never
- * arrives). Returns false when a same/higher version already won the race (the unique
- * appName index throws 11000), true otherwise.
+ * arrives). Returns false when a same/higher version already stands — decided by this
+ * function's own read, never delegated to the unique index: with upsert a non-matching
+ * guard filter INSERTS, so index absence (a freshly-prepared collection) would turn
+ * refusals into regressions. The index remains the backstop for the fresh-insert race.
  *
  * @param {object} row - { appName, version, data, envelope? }
  * @param {object} opts - { confirmed=true, expireAt?, clearEnvelope? }
@@ -322,10 +324,19 @@ async function upsertContentManifest(row, opts = {}) {
     if (clearEnvelope) update.$unset = { envelope: '' };
   }
   try {
-    await dbHelper.updateOneInDatabase(globalDb(), appContentManifests, filter, update, { upsert: true });
+    const res = await dbHelper.updateOneInDatabase(globalDb(), appContentManifests, filter, update);
+    if (res && res.matchedCount > 0) return true;
+    // Nothing matched: either no row exists (a fresh insert is legal) or a
+    // same/higher version stands (refuse).
+    const existing = await dbHelper.findOneInDatabase(
+      globalDb(), appContentManifests, { appName }, { projection: { _id: 0, version: 1 } },
+    );
+    if (existing) return false;
+    const insertDoc = confirmed ? base : { ...base, expireAt: opts.expireAt };
+    await dbHelper.insertOneToDatabase(globalDb(), appContentManifests, insertDoc);
     return true;
   } catch (error) {
-    if (error && error.code === 11000) return false; // a same/higher version is already stored
+    if (error && error.code === 11000) return false; // lost the fresh-insert race
     throw error;
   }
 }
