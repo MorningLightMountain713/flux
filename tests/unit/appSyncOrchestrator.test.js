@@ -500,7 +500,10 @@ describe('AppSyncOrchestrator', () => {
       expect(encodeAppRunningStub.calledWith(expectedSince), 'the frame carries the scoped since').to.equal(true);
     });
 
-    it('does nothing outside READY - the boot rounds own those windows', async () => {
+    it('pulls in any state - a degraded-window node is the one that needs it most', async () => {
+      // 1216 run five: the pocket sat outside READY through the whole heal
+      // window (its resync round burned against its own side during the cut)
+      // and a READY-gated pull never fired on the nodes missing the records.
       const peers = makeEligiblePeers(3);
       getEligibleSyncPeersStub = sinon.stub().returns(peers);
       const orchestrator = makeOrchestrator({ isEnterprise: () => true });
@@ -511,7 +514,53 @@ describe('AppSyncOrchestrator', () => {
 
       peerEmitter.emit('peerReestablished', { key: peers[0].key, lostAtMs: Date.now() - 60000 });
       await clock.tickAsync(0);
-      expect(peers[0].send.called).to.equal(false);
+      expect(peers[0].send.callCount, 'the scoped pull fires outside READY too').to.equal(1);
+    });
+
+    it('a peer the active round is already asking is not double-asked', async () => {
+      const peers = makeEligiblePeers(3);
+      getEligibleSyncPeersStub = sinon.stub().returns(peers);
+      const orchestrator = makeOrchestrator({ isEnterprise: () => true });
+      orchestrator.start(defaultBootContext);
+      blockEmitter.emit('blocksProcessed', 2555000);
+      await clock.tickAsync(0);
+      peerEmitter.emit('peerThresholdReached', 12);
+      await clock.tickAsync(0);
+      const roundSends = peers[0].send.callCount;
+      expect(roundSends, 'the round asked this peer').to.be.greaterThan(0);
+
+      peerEmitter.emit('peerReestablished', { key: peers[0].key, lostAtMs: Date.now() - 60000 });
+      await clock.tickAsync(0);
+      expect(peers[0].send.callCount, 'the round already covers it at since=0').to.equal(roundSends);
+    });
+
+    it('a scoped pull completion never counts toward the round', async () => {
+      const peers = makeEligiblePeers(4);
+      getEligibleSyncPeersStub = sinon.stub().returns(peers);
+      const orchestrator = makeOrchestrator({ isEnterprise: () => true });
+      orchestrator.start(defaultBootContext);
+      blockEmitter.emit('blocksProcessed', 2555000);
+      await clock.tickAsync(0);
+      peerEmitter.emit('peerThresholdReached', 12);
+      await clock.tickAsync(0);
+
+      // The 4th peer is outside the round; reconnect-pull it.
+      peerEmitter.emit('peerReestablished', { key: peers[3].key, lostAtMs: Date.now() - 60000 });
+      await clock.tickAsync(0);
+      expect(peers[3].send.callCount).to.equal(1);
+
+      // Its scoped answer completes, plus two round completions per type:
+      // apprunning must still read 2 of 3 - the scoped pull is not a full sync.
+      appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_COMPLETE, 'apprunning', peers[3].key);
+      for (let i = 0; i < 2; i += 1) {
+        appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_COMPLETE, 'apprunning');
+      }
+      for (let i = 0; i < 3; i += 1) {
+        appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_COMPLETE, 'appinstalling');
+        appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_COMPLETE, 'apperrors');
+      }
+      await clock.tickAsync(0);
+      expect(orchestrator.state, 'a scoped answer must not stand in for a full one').to.equal(STATES.SYNCING);
     });
 
     it('a peer no longer connected is quietly skipped', async () => {
