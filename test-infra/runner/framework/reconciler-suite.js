@@ -157,6 +157,20 @@ export async function restartAndPeer(env, settleIndexes, { minOutbound = 1, minI
   return markers;
 }
 
+// The single-node restore: after a suite cycles one node's FluxOS on its own
+// terms (a referee under test, a master mid-watch), hold that node to the
+// same settled-discovering-peered contract restartAndPeer holds a fleet to.
+// markers are pre-restart event ids, env.clients-indexed.
+export async function redialAndPeer(env, indices, markers, { minOutbound = 1 } = {}) {
+  await Promise.all(indices.map(
+    (i) => env.clients[i].waitForEvent('boot:settled', () => true, 180000, { afterId: markers[i] }),
+  ));
+  await env.startDiscovery(indices);
+  await Promise.all(indices.map((i) => env.clients[i].waitForEvent(
+    'peers:added', (d) => d.outbound >= minOutbound, 120000, { afterId: markers[i] },
+  )));
+}
+
 // Seed a pre-built app (buildSeedableApp / buildSeedableSyncthingApp) into every
 // node's DB and wait until it installs on some node; resolves that node index.
 export async function seedAndInstall(env, app, { timeout = 120000 } = {}) {

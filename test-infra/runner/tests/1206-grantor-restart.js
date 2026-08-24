@@ -3,7 +3,9 @@ import { describe, it, before, after } from 'mocha';
 import { expect } from 'chai';
 import { createTestEnv } from '../framework/test-env.js';
 import { ALL_ZMQ_TOPICS } from '../framework/fluxd-conf.js';
-import { bootAndPeer, installOnNodes, seedSyncScopedData } from '../framework/reconciler-suite.js';
+import {
+  bootAndPeer, installOnNodes, redialAndPeer, seedSyncScopedData,
+} from '../framework/reconciler-suite.js';
 import { buildSeedableSyncthingApp } from '../framework/seed-helper.js';
 import { pushImage } from '../framework/registry-helper.js';
 import { setSynced } from '../framework/syncthing-control.js';
@@ -155,6 +157,7 @@ describe('a grantor restarts, and its promises outlive the process', function ()
     expect(refereeIndex, 'a non-holder committee member exists').to.be.greaterThan(-1);
     const beforeCell = cells[refereeIndex];
 
+    const preRestartMarkers = env.clients.map((c) => c.getLastEventId());
     await restartFluxos(env.clients[refereeIndex].container);
 
     // The journal outlives the process: the very first read after boot —
@@ -169,6 +172,10 @@ describe('a grantor restarts, and its promises outlive the process', function ()
     expect(afterCell.accepted?.grantee, 'the journaled grantee survived').to.equal(beforeCell.accepted.grantee);
     expect(afterCell.accepted?.epoch, 'the journaled epoch survived').to.equal(beforeCell.accepted.epoch);
     expect(afterCell.promisedEpoch, 'the journaled promise survived').to.equal(beforeCell.promisedEpoch);
+
+    // The referee dials again before the stability watch — a restarted node
+    // never redials on its own in-harness.
+    await redialAndPeer(env, [refereeIndex], preRestartMarkers);
 
     // Through the drain and past it, the term itself never wobbles: eight
     // referees renew it, no demotion fires on the master, and the grantee
@@ -223,6 +230,7 @@ describe('a grantor restarts, and its promises outlive the process', function ()
     // The app container and the inner dockerd are untouched by the restart,
     // so container state stays readable the whole way through.
     let restartError = null;
+    const preRestartMarkers = env.clients.map((c) => c.getLastEventId());
     const restart = restartFluxos(env.clients[masterIndex].container)
       .catch((error) => { restartError = error; });
 
@@ -255,6 +263,9 @@ describe('a grantor restarts, and its promises outlive the process', function ()
     expect(after, 'the quorum view survives the restart').to.not.equal(null);
     expect(after.grantee, 'the incumbent kept the grant').to.equal(first.grantee);
     expect(after.epoch, 'epochs never move backwards').to.be.at.least(first.epoch);
+
+    // The master dials again before the next test inherits it.
+    await redialAndPeer(env, [masterIndex], preRestartMarkers);
   });
 
   it('a standby that missed the published record converges through the app-state sync', async function () {
@@ -276,7 +287,9 @@ describe('a grantor restarts, and its promises outlive the process', function ()
     const wiped = await dbClient(standby + 1).wipeMasterleaseRecord(name, 'master');
     expect(wiped, 'the staged miss removed the row').to.equal(1);
 
+    const preRestartMarkers = env.clients.map((c) => c.getLastEventId());
     await restartFluxos(env.clients[standby].container);
+    await redialAndPeer(env, [standby], preRestartMarkers);
 
     await waitFor(async () => {
       const record = await dbClient(standby + 1).getMasterleaseRecord(name, 'master');
