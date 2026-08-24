@@ -515,6 +515,38 @@ describe('appSpawner tests', () => {
     });
   });
 
+  describe('claim election ordering', () => {
+    // Every contender runs the same election over the same rows and reads its
+    // seat off the ranking, so the order must be total and identical on every
+    // node - independent of each node's own row return order. Wake-synchronized
+    // contenders claim within the same millisecond, so equal claim times are
+    // the normal case, not the edge.
+    it('ranks equal-claim-time rows identically from any starting order', () => {
+      buildModule({});
+      const rows = [
+        { ip: '198.18.0.12:16127', announcedAt: 1000 },
+        { ip: '198.18.0.10:16127', announcedAt: 1000 },
+        { ip: '198.18.0.13:16127', announcedAt: 999 },
+        { ip: '198.18.0.11:16127', announcedAt: 1000 },
+      ];
+      const oneOrder = [...rows].sort(appSpawner.compareClaimRows).map((r) => r.ip);
+      const otherOrder = [...rows].reverse().sort(appSpawner.compareClaimRows).map((r) => r.ip);
+      expect(oneOrder, 'the ranking is input-order independent').to.deep.equal(otherOrder);
+      expect(oneOrder[0], 'the earliest claim still ranks first').to.equal('198.18.0.13:16127');
+    });
+
+    it('ranks co-located replica rows of one address deterministically', () => {
+      buildModule({});
+      const rows = [
+        { ip: '198.18.0.10:16127', announcedAt: 1000, replica: 's2' },
+        { ip: '198.18.0.10:16127', announcedAt: 1000, replica: 's1' },
+      ];
+      const oneOrder = [...rows].sort(appSpawner.compareClaimRows).map((r) => r.replica);
+      const otherOrder = [...rows].reverse().sort(appSpawner.compareClaimRows).map((r) => r.replica);
+      expect(oneOrder, 'the ranking is input-order independent').to.deep.equal(otherOrder);
+    });
+  });
+
   describe('pure-follower spawn suppression (manageCollectorLifecycle)', () => {
     it('flag on: drops a follower candidate that nothing assigned to this node requires', async () => {
       buildModule({
