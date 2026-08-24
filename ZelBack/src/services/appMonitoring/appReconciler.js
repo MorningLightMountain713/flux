@@ -1033,7 +1033,7 @@ async function healDetachedNetwork(identifier, app, networkName = null) {
  * @param {{action: string, why: string, blockedWhy: string, recordAnomaly?: function}} desc
  */
 async function rebuildOntoNetwork(identifier, app, {
-  action, why, blockedWhy, recordAnomaly = null,
+  action, why, blockedWhy, recordAnomaly = null, detail = null,
 }) {
   // Never destroy what we cannot rebuild: every precondition of the recreate must
   // hold BEFORE the remove, or this turns a half-alive container into a gone one.
@@ -1068,7 +1068,7 @@ async function rebuildOntoNetwork(identifier, app, {
   }
 
   log.warn(`appReconciler - ${identifier} ${why}`);
-  fluxEventBus.publish('reconciler:actuated', { identifier, action });
+  fluxEventBus.publish('reconciler:actuated', { identifier, action, ...(detail && { detail }) });
 
   try {
     // Record the anomaly (once per episode) and the durable "I removed this on
@@ -1425,6 +1425,9 @@ async function reconcile(identifier) {
         action: 'meshIdentityRebuild',
         why: `carries mesh identity ${meshDrift.is} but its resolved slot names it ${meshDrift.wants}; recreating under the current identity`,
         blockedWhy: 'carries a stale mesh identity',
+        // The direction is the diagnosis: which identity the container carries
+        // and which its resolved slot names.
+        detail: { is: meshDrift.is, wants: meshDrift.wants },
       });
       return;
     }

@@ -20,9 +20,11 @@
 //     ordinal names and the SRV answers name, nothing else.
 //
 // A transient double-claim (two joiners racing inside one gossip window)
-// converges because arbitration is a pure function of gossiped facts: among
-// running assertions the earliest runningSince wins, tiebroken on the
-// outpoint; among installing claims the earliest announcedAt ??
+// converges because arbitration is a pure function of gossiped facts, ordered
+// on keys the protocol's own actions can never move: among running assertions
+// the lowest OUTPOINT wins (runningSince restamps on every rebuild — the
+// resolution step itself — so it may gate running-vs-joiner but never order
+// the contest); among installing claims the earliest announcedAt ??
 // broadcastedAt wins — the seat election's exact key, immutable under claim
 // renewals — tiebroken on the ip. Every observer reaches the same verdict,
 // the winner KEEPS its slot, and only the losers re-pick the next vacancy.
@@ -34,18 +36,19 @@ const fluxNetworkHelper = require('../fluxNetworkHelper');
 const fluxCommunicationMessagesSender = require('../fluxCommunicationMessagesSender');
 const log = require('../../lib/log');
 
-// Assertions with no runningSince (an installing claim maturing into its first
-// running broadcast) sort after every real one: a member that is already
-// running always beats a joiner.
-const NO_SINCE = '9999-12-31T23:59:59.999Z';
-
-const contestKey = (a) => `${a.since ?? NO_SINCE}|${a.tiebreak ?? ''}`;
+// runningSince gates, never orders: its PRESENCE says a member is running (a
+// running member always beats a joiner still maturing out of its claim), but
+// its VALUE restamps on every rebuild — the arbitration's own resolution step
+// — so ordering on it would let a contest reshuffle itself. The order is the
+// outpoint: immutable for a member's whole life, total across the fleet.
+const contestKey = (a) => `${a.since != null ? '0' : '1'}|${a.tiebreak ?? ''}`;
 
 /**
- * Winner per slot among assertions — deterministic on every node: earliest
- * `since` (runningSince) wins, ties broken on `tiebreak` (outpoint). Input
- * entries carry {slot, since, tiebreak, …}; the returned map keeps the whole
- * winning entry so callers can read their own fields back off it.
+ * Winner per slot among assertions — deterministic on every node: a running
+ * member (any `since`) beats a joiner (none); among equals the lowest
+ * `tiebreak` (outpoint) wins. Input entries carry {slot, since, tiebreak, …};
+ * the returned map keeps the whole winning entry so callers can read their
+ * own fields back off it.
  *
  * @param {Array<{slot: number, since: string|null, tiebreak: string}>} assertions
  * @returns {Map<number, object>} slot → winning assertion

@@ -790,12 +790,14 @@ describe('meshReconciler', () => {
         name: 'myblog',
         view: { componentNames: () => ['web'], instances: 3 },
         material: {
-          slotView: { ownSlot: 1, ownSince: '2026-08-10T10:00:00.000Z' },
+          slotView: { ownSlot: 1, ownSince: '2026-08-10T09:00:00.000Z' },
           members: [
-            // Same slot, earlier runningSince: the peer wins, this node is
+            // Same slot, lower outpoint: the peer wins, this node is
             // slot-less this pass (its own resolver re-picks on the next).
+            // Its later runningSince is irrelevant - the contest orders on
+            // the outpoint, never the restampable timestamp.
             {
-              nodeId: PEER_NODE_ID, outpoint: PEER_OUTPOINT, slot: 1, runningSince: '2026-08-10T09:00:00.000Z',
+              nodeId: PEER_NODE_ID, outpoint: '1111aaaa1111aaaa1111aaaa1111aaaa1111aaaa1111aaaa1111aaaa1111aaaa:0', slot: 1, runningSince: '2026-08-10T10:00:00.000Z',
             },
           ],
         },
