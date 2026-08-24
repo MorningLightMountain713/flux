@@ -86,7 +86,14 @@ class AppSyncOrchestrator {
   #isEnterprise = null;
   #waitForNetworkState = null;
   #networkReady = false;
-  #peersReady = false;
+  #peersAtFloor = false;
+  // Epoch-scoped fact, not a remembered edge: did the peer floor get attained
+  // since this sync epoch (SYNCING/RESYNCING entry) began. Discriminates the
+  // two below-floor worlds in the rule table: losing a network you had is an
+  // incident; never finding one is a startup condition the timer may release.
+  #floorAttainedThisEpoch = false;
+  #evaluating = false;
+  #reevaluate = false;
   #explorerSynced = false;
   #hashSyncComplete = false;
   #dbRebuilt = false;
@@ -184,12 +191,18 @@ class AppSyncOrchestrator {
 
     this.#peerThresholdHandler = (count) => {
       log.info(`AppSyncOrchestrator - Peer threshold reached (${count} peers)`);
-      this.#peersReady = true;
-      this.#tryStartSync();
+      this.#peersAtFloor = true;
+      this.#floorAttainedThisEpoch = true;
+      this.#onPeersReady();
     };
     this.#peersBelowHandler = (count) => {
       log.info(`AppSyncOrchestrator - Peers below threshold (${count} peers)`);
-      this.#onPeersDegraded();
+      // A downward crossing proves the floor WAS attained - the edge carries
+      // the level's history, covering an upward edge this instance never saw
+      // (raced the subscription or the startup seed).
+      this.#floorAttainedThisEpoch = true;
+      this.#peersAtFloor = false;
+      this.#evaluate();
     };
     this.#syncPeerLostHandler = (key) => this.#onSyncPeerLost(key);
     this.#syncPeersAvailableHandler = () => this.#onSyncPeersAvailable();
@@ -211,7 +224,7 @@ class AppSyncOrchestrator {
     // false and stall ephemeral state sync until the block timer. Read the
     // level after subscribing to the edge.
     const peersAlready = this.#peerCountIfAboveThreshold();
-    if (peersAlready && !this.#peersReady) {
+    if (peersAlready && !this.#peersAtFloor) {
       this.#peerThresholdHandler(peersAlready);
     }
 
@@ -238,13 +251,9 @@ class AppSyncOrchestrator {
     } else {
       this.#networkReady = true;
     }
-    // #peersReady may already be true here (live edge during the network-state
-    // wait, or the latched-level check above), so always attempt the start.
-    this.#tryStartSync();
-  }
-
-  #tryStartSync() {
-    if (!this.#networkReady || !this.#peersReady) return;
+    // The floor may already be attained here (live edge during the
+    // network-state wait, or the latched-level check above), so always attempt
+    // the start.
     this.#onPeersReady();
   }
 
@@ -275,7 +284,7 @@ class AppSyncOrchestrator {
         appinstalling: this.#syncCompletions.appinstalling,
         apperrors: this.#syncCompletions.apperrors,
       });
-      this.#checkReadiness();
+      this.#evaluate();
     }
   }
 
@@ -385,10 +394,10 @@ class AppSyncOrchestrator {
   }
 
   async #onPeersReady() {
-    if (this.#state === STATES.DEGRADED) {
-      this.#setState(STATES.RESYNCING);
-      log.info('AppSyncOrchestrator - Peers recovered, resyncing');
-    }
+    if (!this.#networkReady || !this.#peersAtFloor) return;
+    // The transition (DEGRADED -> RESYNCING, or nothing) belongs to the rule
+    // table; this handler only wakes the I/O that peers arriving unblocks.
+    await this.#evaluate();
 
     this.#startAppRunningBroadcast();
     this.#requestSyncs();
@@ -541,15 +550,13 @@ class AppSyncOrchestrator {
     }
   }
 
-  #onPeersDegraded() {
-    if (this.#state === STATES.READY || this.#state === STATES.SYNCING) {
-      this.#setState(STATES.DEGRADED);
-      this.#hashSyncComplete = false;
-      this.#dbRebuilt = false;
-      globalState.dbReady = false;
-      this.#resetSyncState();
-      log.warn('AppSyncOrchestrator - Degraded, pausing spawner');
-    }
+  #enterDegraded() {
+    this.#setState(STATES.DEGRADED);
+    this.#hashSyncComplete = false;
+    this.#dbRebuilt = false;
+    globalState.dbReady = false;
+    this.#resetSyncState();
+    log.warn('AppSyncOrchestrator - Degraded, pausing spawner');
   }
 
   #resetSyncState() {
@@ -577,8 +584,7 @@ class AppSyncOrchestrator {
       this.#explorerSynced = true;
       log.info(`AppSyncOrchestrator - Explorer synced at block ${blockHeight}`);
       if (this.#state === STATES.INITIALIZING) {
-        this.#setState(STATES.SYNCING);
-        this.#ensureBlockThreshold();
+        this.#evaluate();
         this.#advanceSync();
         advanced = true;
       }
@@ -586,7 +592,7 @@ class AppSyncOrchestrator {
     if (this.#state === STATES.SYNCING || this.#state === STATES.READY || this.#state === STATES.RESYNCING) {
       this.#blocksSinceSyncStarted += count;
       this.#superviseStateSync();
-      this.#checkReadiness();
+      this.#evaluate();
       this.#checkHashRetry(blockHeight);
       this.#checkManifestRefresh(blockHeight);
       this.#checkIngressRefresh(blockHeight);
@@ -657,7 +663,7 @@ class AppSyncOrchestrator {
     }
     // Both permanent-plane steps already converged — nothing to run, just re-evaluate.
     if (this.#hashSyncComplete && this.#manifestSyncComplete) {
-      this.#checkReadiness();
+      this.#evaluate();
       return;
     }
     log.info('AppSyncOrchestrator - Sync started');
@@ -668,7 +674,7 @@ class AppSyncOrchestrator {
     await this.#runManifestSync();
     // Best-effort, never gates readiness — attribution metadata, not operational state.
     await this.#runIngressSync();
-    this.#checkReadiness();
+    this.#evaluate();
   }
 
   async #checkVersionUpgrade() {
@@ -717,7 +723,7 @@ class AppSyncOrchestrator {
         log.info(`AppSyncOrchestrator - Scheduling hash sync retry in ${HASH_SYNC_RETRY_MS / 1000}s`);
         this.#hashSyncRetryTimer = setTimeout(() => {
           this.#hashSyncRetryTimer = null;
-          this.#runHashSync().then(() => this.#checkReadiness());
+          this.#runHashSync().then(() => this.#evaluate());
         }, HASH_SYNC_RETRY_MS);
       } else {
         log.warn('AppSyncOrchestrator - Hash sync retries exhausted, falling back to block timer');
@@ -805,9 +811,79 @@ class AppSyncOrchestrator {
     return this.#isBlockTimerExpired();
   }
 
-  async #checkReadiness() {
-    if (this.#state !== STATES.SYNCING && this.#state !== STATES.RESYNCING) return;
+  // The state is a pure function of the LEVELS; events only update a level and
+  // call #evaluate(). Entry actions run on the transition. The table:
+  //
+  // | levels                                                   | state             |
+  // |----------------------------------------------------------|-------------------|
+  // | chain feed never seen                                     | INITIALIZING      |
+  // | floor attained this sync epoch, now below it              | DEGRADED          |
+  // | DEGRADED and the floor re-attained                        | RESYNCING (new epoch) |
+  // | READY and the message capability lost                     | SYNCING           |
+  // | below floor, never attained this epoch, timer not expired | SYNCING/RESYNCING (hold) |
+  // | below floor, never attained this epoch, timer expired     | READY (lone-node backstop) |
+  // | at floor, readiness levels incomplete                     | SYNCING/RESYNCING (hold) |
+  // | at floor, readiness levels met (or timer-backstopped)     | READY             |
+  //
+  // "Floor attained this epoch, now lost" outranks everything below it: losing
+  // a network you had is an incident; never finding one is a startup condition
+  // the timer may release.
+  async #evaluate() {
+    if (this.#evaluating) {
+      this.#reevaluate = true;
+      return;
+    }
+    this.#evaluating = true;
+    try {
+      do {
+        this.#reevaluate = false;
+        // eslint-disable-next-line no-await-in-loop
+        await this.#evaluateOnce();
+      } while (this.#reevaluate);
+    } catch (error) {
+      log.error(`AppSyncOrchestrator - evaluate failed: ${error.message}`);
+    } finally {
+      this.#evaluating = false;
+    }
+  }
+
+  async #evaluateOnce() {
+    // INITIALIZING holds until the chain feed proves itself; the first block
+    // starts the first sync epoch.
     if (!this.#explorerSynced) return;
+    if (this.#state === STATES.INITIALIZING) {
+      this.#setState(STATES.SYNCING);
+      this.#ensureBlockThreshold();
+    }
+
+    // An attained-then-lost floor is an incident, whatever the machine was doing.
+    if (this.#floorAttainedThisEpoch && !this.#peersAtFloor) {
+      if (this.#state !== STATES.DEGRADED) this.#enterDegraded();
+      return;
+    }
+
+    // DEGRADED leaves only by re-attaining the floor - a new sync epoch.
+    if (this.#state === STATES.DEGRADED) {
+      if (!this.#peersAtFloor) return;
+      this.#setState(STATES.RESYNCING);
+      this.#floorAttainedThisEpoch = true;
+      log.info('AppSyncOrchestrator - Peers recovered, resyncing');
+    }
+
+    // READY holds only while its levels hold.
+    if (this.#state === STATES.READY) {
+      if (!this.#canSendMessages) {
+        this.#setState(STATES.SYNCING);
+        log.warn('AppSyncOrchestrator - Readiness lost (message capability), pausing spawner');
+      }
+      return;
+    }
+
+    await this.#tryPromoteReady();
+  }
+
+  async #tryPromoteReady() {
+    if (this.#state !== STATES.SYNCING && this.#state !== STATES.RESYNCING) return;
 
     const blockTimerExpired = this.#isBlockTimerExpired();
     if (!this.#hashSyncComplete && !blockTimerExpired) return;
@@ -926,10 +1002,7 @@ class AppSyncOrchestrator {
       });
     } else {
       log.info('AppSyncOrchestrator - Message capability lost');
-      if (this.#state === STATES.READY) {
-        this.#setState(STATES.SYNCING);
-        log.warn('AppSyncOrchestrator - Readiness lost (message capability), pausing spawner');
-      }
+      this.#evaluate();
     }
   }
 
