@@ -502,7 +502,7 @@ async function acquireOnce(key, mode, ttlMs, identity, committee, options) {
       fingerprint: committee.fingerprint,
       generation: committee.generation,
     });
-    fluxEventBus.publish('quorumGrant:founded', { key, founder: identity.outpoint });
+    fluxEventBus.publish('quorumGrant:founded', { key, founder: identity.outpoint, generation: committee.generation });
     return { granted: true, founder: identity.outpoint };
   }
 

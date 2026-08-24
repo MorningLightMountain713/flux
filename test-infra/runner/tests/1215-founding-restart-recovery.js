@@ -145,10 +145,12 @@ describe('founding recovers through a fleet-wide restart', function () {
   // Every cell must ANSWER the record query (an unreachable register is not
   // an empty one); the founder grant must stand on a quorum of cells and
   // every copy must name the same grantee — the one the founded event named.
-  async function assertOneRecordedFounder(key, founder) {
+  // Founder cells are per-generation rows; the founded event names the
+  // generation and the record endpoint addresses the cell with it.
+  async function assertOneRecordedFounder({ key, founder, generation }) {
     const cells = await Promise.all(env.clients.map(async (client, i) => {
       const res = await fetch(
-        `${client.url}/flux/quorumgrant/record?key=${encodeURIComponent(key)}`,
+        `${client.url}/flux/quorumgrant/record?key=${encodeURIComponent(key)}&generation=${generation ?? 0}`,
         { signal: AbortSignal.timeout(5000) },
       );
       expect(res.ok, `node ${i} answers the record query`).to.equal(true);
@@ -156,7 +158,7 @@ describe('founding recovers through a fleet-wide restart', function () {
       return body?.data?.accepted ?? null;
     }));
     const accepted = cells.filter(Boolean);
-    expect(accepted.length, 'the founder grant stands on a quorum of cells').to.be.at.least(2);
+    expect(accepted.length, `the founder grant stands on a quorum of cells (${key})`).to.be.at.least(2);
     expect(new Set(accepted.map((a) => a.grantee)), 'every cell names the same founder').to.have.lengthOf(1);
     expect(accepted[0].grantee, 'the recorded grantee is the founded founder').to.equal(founder);
   }
@@ -203,7 +205,7 @@ describe('founding recovers through a fleet-wide restart', function () {
     // exactly one node is ever told yes, and the verdict is stable.
     const winner = await sampleUntilOneFounder(name, [0, 1, 2], 'stable-fleet');
     const founded = await foundedGrant(winner, name, restartMarkers[winner]);
-    await assertOneRecordedFounder(founded.key, founded.founder);
+    await assertOneRecordedFounder(founded);
   });
 
   it('membership churn between the anchor and the restart does not wedge founding', async function () {
@@ -229,6 +231,6 @@ describe('founding recovers through a fleet-wide restart', function () {
     // against exactly-one.
     const winner = await sampleUntilOneFounder(name, [0, 1], 'churned-fleet');
     const founded = await foundedGrant(winner, name, churnMarkers[winner]);
-    await assertOneRecordedFounder(founded.key, founded.founder);
+    await assertOneRecordedFounder(founded);
   });
 });

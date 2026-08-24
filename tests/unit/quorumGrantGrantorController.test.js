@@ -625,6 +625,47 @@ describe('quorumGrant grantorController', () => {
       expect(res.body.data.roster.fingerprint).to.equal(FINGERPRINT);
     });
 
+    it('reads a founder cell at its generation row - the write path\'s own addressing', async () => {
+      const founderKey = 'myapp/founder-0123456789abcdef@2100088';
+      grantRegister.read.resolves(null);
+      grantRegister.read.withArgs(`${founderKey}@0`).resolves({
+        promisedEpoch: 2,
+        accepted: { epoch: 2, grantee: ASKER },
+      });
+      const req = fakeReq({});
+      req.query.key = founderKey;
+      const res = fakeRes();
+      await grantorController.record(req, res);
+      expect(res.statusCode).to.equal(200);
+      expect(res.body.data.accepted, 'the generation-0 cell answers the bare founder read').to.not.equal(null);
+      expect(res.body.data.accepted.grantee).to.equal(ASKER);
+    });
+
+    it('addresses a re-rolled world\'s cell by the generation parameter', async () => {
+      const founderKey = 'myapp/founder-0123456789abcdef@2100088';
+      grantRegister.read.resolves(null);
+      grantRegister.read.withArgs(`${founderKey}@3`).resolves({
+        promisedEpoch: 1,
+        accepted: { epoch: 1, grantee: ASKER },
+      });
+      const req = fakeReq({});
+      req.query.key = founderKey;
+      req.query.generation = '3';
+      const res = fakeRes();
+      await grantorController.record(req, res);
+      expect(res.statusCode).to.equal(200);
+      expect(res.body.data.accepted.grantee).to.equal(ASKER);
+    });
+
+    it('refuses a malformed generation', async () => {
+      const req = fakeReq({});
+      req.query.key = 'myapp/founder-0123456789abcdef@2100088';
+      req.query.generation = 'x';
+      const res = fakeRes();
+      await grantorController.record(req, res);
+      expect(res.statusCode).to.equal(400);
+    });
+
     it('refuses a malformed key and answers emptiness honestly', async () => {
       const badReq = fakeReq({});
       badReq.query.key = '///';
