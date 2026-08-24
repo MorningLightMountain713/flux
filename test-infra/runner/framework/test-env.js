@@ -1139,6 +1139,14 @@ async function _buildEnv(
         container.waitStrategy = saved;
       }
       if (clients[index]) await clients[index].connectEventStream();
+      // The build-time log consumer dies with the stopped process and never
+      // re-attaches, so every restart suite's capture ended at the stop and
+      // the second boot was a black box. Re-attach the SAME collector through
+      // the container's own logs API (demuxed by the library).
+      const cfg = nodeConfigs.find((n) => n.index === index);
+      if (cfg?.logCollector) {
+        cfg.logCollector(await container.logs({ since: Math.floor(Date.now() / 1000) }));
+      }
       return clients[index];
     },
 
