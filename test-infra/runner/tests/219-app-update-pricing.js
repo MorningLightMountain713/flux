@@ -13,7 +13,7 @@ import { expect } from 'chai';
 import { createTestEnv } from '../framework/test-env.js';
 import { nodeKey } from '../framework/keys.js';
 import { buildAppSpec, registerAndConfirm, waitForPricingVerdict } from '../framework/app-helper.js';
-import { startTicker, advanceBlock } from '../framework/daemon-control.js';
+import { startTicker, advanceBlock, advanceBlocks } from '../framework/daemon-control.js';
 import { waitForDaemonReady, waitFor, waitForBlockProcessed, waitForNodeStatus } from '../framework/wait.js';
 import { dbClient } from '../framework/db-client.js';
 
@@ -106,10 +106,14 @@ describe('App update pricing', function () {
       expect(current.description).to.not.equal(originalSpec.description);
     });
 
-    // The floor is the whole legacy fee, so an update one satoshi under it is
-    // refused. This is what pins the legacy regime: were its resolution to
-    // change, the required fee would rise above the floor and the accepted case
-    // above would start failing — this one holds the other edge.
+    // The floor is the whole legacy fee, and it is also the explorer's
+    // indexing bar: a tx paying under minPrice is never recorded as an app
+    // transaction at all ("min of X flux had to be paid for us bothering
+    // checking"). One satoshi under the floor is therefore refused by
+    // INVISIBILITY - no promotion, no permanent message, no verdict - which in
+    // the legacy regime (fee == floor == bar) is the only refusal shape an
+    // underpaid update can have. The temp message's fleet-wide presence is the
+    // control: the message travelled, and only the chain leg ignored it.
     it('is refused when it pays one satoshi under the floor', async function () {
       this.timeout(180000);
       const previous = await specOnNode(env.clients[0], appName);
@@ -119,9 +123,15 @@ describe('App update pricing', function () {
         { type: 'fluxappupdate', valueSat: FLOOR_SAT - 1 },
       );
       expect(result.status).to.equal('success');
+      expect(result.tempPropagation.count, 'the message itself reached the fleet').to.equal(env.clients.length);
       await waitForBlockProcessed(env.clients[0], (d) => d.height >= result.targetHeight, 60000);
-      await waitForPricingVerdict(env.clients[0], dbClient(1), result.appHash);
 
+      // Settle two more blocks so a promotion that were going to happen has had
+      // every trigger it will ever get, then assert the tx stayed invisible.
+      await advanceBlocks(2);
+      await waitForBlockProcessed(env.clients[0], (d) => d.height >= result.targetHeight + 2, 60000);
+
+      expect(await dbClient(1).getPermanentMessage(result.appHash), 'no permanent message - the tx was never indexed').to.equal(null);
       const current = await specOnNode(env.clients[0], appName);
       expect(current.description).to.equal(previous.description);
     });
