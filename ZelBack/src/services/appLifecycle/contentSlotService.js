@@ -289,7 +289,9 @@ async function storeManifest(manifest, opts = {}) {
     expireAt: confirmed ? undefined : new Date(now + QUARANTINE_TTL_MS),
     clearEnvelope: !opts.broadcast,
   });
-  fluxEventBus.publish('content:manifestStored', { appName, version, confirmed });
+  // The event states what the register now holds - a refused write changed
+  // nothing and announces nothing.
+  if (result) fluxEventBus.publish('content:manifestStored', { appName, version, confirmed });
   return result;
 }
 
