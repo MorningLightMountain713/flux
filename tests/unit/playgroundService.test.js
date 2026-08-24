@@ -130,7 +130,10 @@ describe('playgroundService', () => {
       },
       '../utils/specLibs': {
         validateSubmissionSpec: stubs.validateSpec,
-        getSpecBackend: async () => ({ DeploymentSpec: { fromSpec: stubs.fromSpec } }),
+        getSpecBackend: async () => ({
+          DeploymentSpec: { fromSpec: stubs.fromSpec },
+          ValidationPurpose: { REGISTRATION: 'registration', SESSION: 'session' },
+        }),
       },
       '../utils/appConstants': { appsFolder: '/tmp/apps/' },
       // hourly:false swaps in a limiter that always refuses, so a refusal lands
@@ -189,14 +192,13 @@ describe('playgroundService', () => {
   // session's worth at the only moment it matters, instead of up to a sweep
   // interval later.
   describe('spec intake', () => {
-    it('defaults instances - a session is one copy and the field has no meaning here', async () => {
-      await service.submitSession({ version: 9, name: 'demoapp' }, caller);
-      expect(stubs.validateSpec.firstCall.args[0].instances, 'absent instances defaults for validation').to.equal(1);
-      await settle();
-
-      stubs.validateSpec.resetHistory();
-      await service.submitSession({ version: 9, name: 'demoapp', instances: 3 }, caller);
-      expect(stubs.validateSpec.firstCall.args[0].instances, 'a stated value passes through untouched').to.equal(3);
+    it('asks the SESSION validation question and fabricates nothing', async () => {
+      const rawSpec = { version: 9, name: 'demoapp' };
+      await service.submitSession(rawSpec, caller);
+      const [sentSpec, options] = stubs.validateSpec.firstCall.args;
+      expect(options.purpose, 'a session is one copy on one node').to.equal('session');
+      expect(sentSpec, 'the submission passes through untouched').to.deep.equal(rawSpec);
+      expect(sentSpec.instances, 'no invented value enters any record').to.equal(undefined);
       await settle();
     });
   });
@@ -365,7 +367,10 @@ describe('playgroundService', () => {
         '../appManagement/operationsController': { accepted: (res, h) => h },
         '../utils/specLibs': {
           validateSubmissionSpec: stubs.validateSpec,
-          getSpecBackend: async () => ({ DeploymentSpec: { fromSpec: stubs.fromSpec } }),
+          getSpecBackend: async () => ({
+            DeploymentSpec: { fromSpec: stubs.fromSpec },
+            ValidationPurpose: { REGISTRATION: 'registration', SESSION: 'session' },
+          }),
         },
         '../utils/appConstants': { appsFolder: '/tmp/apps/' },
         '../utils/ingressCapture': resolver(),

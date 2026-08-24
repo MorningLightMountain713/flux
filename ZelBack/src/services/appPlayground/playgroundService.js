@@ -121,11 +121,12 @@ function sessionIdentity(sessionId) {
  * the thing boots.
  */
 async function buildDeployment(rawSpec, identity) {
-  // A session is one copy on one node: `instances` has no meaning here (the
-  // declared view below pins replica: null), but submission validation
-  // requires it when placement names no replicas — default it at intake so
-  // an owner's minimal spec stays submittable.
-  const spec = await validateSubmissionSpec({ instances: 1, ...rawSpec }, {});
+  // A session is one copy on one node, and the validation says so: SESSION
+  // purpose skips the placement-family requirements (instances, and the
+  // canonical wire shape a session spec never becomes) while every rule
+  // about the spec's own shape still runs.
+  const { ValidationPurpose } = await getSpecBackend();
+  const spec = await validateSubmissionSpec(rawSpec, { purpose: ValidationPurpose.SESSION });
   const { DeploymentSpec } = await getSpecBackend();
 
   // The declared view: a session is one copy on one node, so `instances` and the

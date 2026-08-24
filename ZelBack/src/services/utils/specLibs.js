@@ -18,7 +18,7 @@ const { load, CONTRACT_VERSION } = require('@runonflux/flux-spec-cjs');
 // Checked at require rather than at first use. A node whose spec library is too old to
 // verify a signature cannot do its job, and refusing to start says so far more plainly
 // than serving traffic that is rejected for a reason nobody can see.
-const REQUIRED_CONTRACT_VERSION = 1;
+const REQUIRED_CONTRACT_VERSION = 2;
 
 if (!(CONTRACT_VERSION >= REQUIRED_CONTRACT_VERSION)) {
   throw new Error(
@@ -46,9 +46,12 @@ async function getSpecPolicy() { return load(); }
  * @param {object} spec - Submission blob
  * @param {object} [options]
  * @param {number} [options.height] - Current daemon height for version gating
+ * @param {string} [options.purpose] - Which question is being asked
+ *   (a flux-spec ValidationPurpose value; default registration, the strict
+ *   one). The spec library refuses unknown purposes at the door.
  * @returns {Promise<FluxAppSpecBase>} The validated spec class instance
  */
-async function validateSubmissionSpec(spec, { height } = {}) {
+async function validateSubmissionSpec(spec, { height, purpose } = {}) {
   await getSpecBackend();
   const { FluxAppSpecBase, ValidationError } = await getSpec();
   const VersionClass = spec && FluxAppSpecBase.getVersionClass(spec.version);
@@ -60,7 +63,7 @@ async function validateSubmissionSpec(spec, { height } = {}) {
     throw new Error(`Flux apps specifications of version ${spec.version} not yet supported`);
   }
   try {
-    return VersionClass.fromSubmission(spec);
+    return VersionClass.fromSubmission(spec, purpose === undefined ? {} : { purpose });
   } catch (err) {
     if (err instanceof ValidationError && Array.isArray(err.errors) && err.errors.length > 0) {
       const first = err.errors[0];
