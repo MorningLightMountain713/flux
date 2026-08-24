@@ -120,6 +120,12 @@ class AppSyncOrchestrator {
   // pull's, never the round's - a scoped answer must not stand in for a full
   // one. A round that asks such a peer reclaims it (round membership wins).
   #reconnectPulls = new Set();
+  // Reconnect credits not yet spent: key -> earliest lostAtMs. The
+  // re-establishment event is one-shot but the credit it grants is DURABLE
+  // until a pull is sent or a round covers the peer at since=0 - a transient
+  // gate (message capability lost while the healed side's chain catches up)
+  // must delay the pull, never destroy it.
+  #pendingReconnectPulls = new Map();
   #hashSyncAttempts = 0;
   #hashSyncRetryTimer = null;
   #nextHashRetryHeight = 0;
@@ -497,26 +503,42 @@ class AppSyncOrchestrator {
   async #onPeerReestablished({ key, lostAtMs }) {
     // ANY state: the node that most needs the pull is one inside a degraded
     // window whose resync round burned against its own side of a partition
-    // (1216 run five). Only a peer the active round is already asking at
-    // since=0 is skipped - the round covers it.
-    if (this.#peerProgress.has(key)) return;
+    // (1216 run five). The credit is stashed first - repeated losses keep the
+    // EARLIEST gap - and drained now if nothing gates it.
+    const existing = this.#pendingReconnectPulls.get(key);
+    this.#pendingReconnectPulls.set(key, existing === undefined ? lostAtMs : Math.min(existing, lostAtMs));
+    await this.#drainReconnectPulls();
+  }
+
+  async #drainReconnectPulls() {
     if (!this.#canSendMessages) return;
-    // Addressed BY KEY, never filtered by sync candidacy: a fresh inbound
-    // accept has no reported uptime at add() time, so an eligibility lookup
-    // misses the very peer the event names (outbound redials pulled, inbound
-    // accepts never did - the second 1216 gate red).
-    const peer = this.#getPeerByKey(key);
-    if (!peer) return;
-    const sinceTs = Math.max(0, lostAtMs - RECONNECT_SYNC_SLACK_MS);
-    const pubkey = await fluxNetworkHelper.getFluxNodePublicKey();
-    const privkey = await fluxNetworkHelper.getFluxNodePrivateKey();
-    const requestTs = Date.now();
-    const msg = peerCodec.buildSyncSignatureMessage(peerCodec.MSG_TYPE.REQUEST_APP_RUNNING, sinceTs, requestTs);
-    const sig = verificationHelper.signMessage(msg, privkey);
-    this.#reconnectPulls.add(key);
-    this.#markSyncRequested(key);
-    this.#sendRequests([peer], 'apprunning (reconnect)', peerCodec.encodeRequestAppRunning(sinceTs, requestTs, pubkey, sig));
-    fluxEventBus.publish('ephemeralSync:reconnectRequested', { peer: key, sinceTimestamp: sinceTs });
+    for (const [key, lostAtMs] of [...this.#pendingReconnectPulls]) {
+      // A peer the active round is asking at since=0 is covered outright.
+      if (this.#peerProgress.has(key)) {
+        this.#pendingReconnectPulls.delete(key);
+        continue;
+      }
+      // Addressed BY KEY, never filtered by sync candidacy: a fresh inbound
+      // accept has no reported uptime at add() time, so an eligibility lookup
+      // misses the very peer the event names (outbound redials pulled,
+      // inbound accepts never did - the second 1216 gate red). A peer gone
+      // right now keeps its credit: its return re-fires the event.
+      const peer = this.#getPeerByKey(key);
+      if (!peer) continue;
+      const sinceTs = Math.max(0, lostAtMs - RECONNECT_SYNC_SLACK_MS);
+      // eslint-disable-next-line no-await-in-loop
+      const pubkey = await fluxNetworkHelper.getFluxNodePublicKey();
+      // eslint-disable-next-line no-await-in-loop
+      const privkey = await fluxNetworkHelper.getFluxNodePrivateKey();
+      const requestTs = Date.now();
+      const msg = peerCodec.buildSyncSignatureMessage(peerCodec.MSG_TYPE.REQUEST_APP_RUNNING, sinceTs, requestTs);
+      const sig = verificationHelper.signMessage(msg, privkey);
+      this.#pendingReconnectPulls.delete(key);
+      this.#reconnectPulls.add(key);
+      this.#markSyncRequested(key);
+      this.#sendRequests([peer], 'apprunning (reconnect)', peerCodec.encodeRequestAppRunning(sinceTs, requestTs, pubkey, sig));
+      fluxEventBus.publish('ephemeralSync:reconnectRequested', { peer: key, sinceTimestamp: sinceTs });
+    }
   }
 
   #onPeersDegraded() {
@@ -896,6 +918,12 @@ class AppSyncOrchestrator {
       // the hash sync but leaves the manifest un-reconciled, and keying the retry on
       // #hashSyncComplete alone would skip it forever.
       this.#advanceSync();
+      // Reconnect credits stashed while incapable are spent now - the heal's
+      // reconnection wave lands while the healed side's chain is still
+      // catching up, before capability returns.
+      this.#drainReconnectPulls().catch((error) => {
+        log.error(`AppSyncOrchestrator - reconnect pull drain failed: ${error.message}`);
+      });
     } else {
       log.info('AppSyncOrchestrator - Message capability lost');
       if (this.#state === STATES.READY) {
