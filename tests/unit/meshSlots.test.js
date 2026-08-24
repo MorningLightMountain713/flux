@@ -44,15 +44,27 @@ describe('meshSlots', () => {
   afterEach(() => sinon.restore());
 
   describe('arbitrate', () => {
-    it('the earliest runningSince wins a contested slot, outpoint breaks ties', () => {
+    it('the lowest outpoint wins a contested slot among running members', () => {
       const winners = meshSlots.arbitrate([
         { slot: 1, since: '2026-08-10T10:00:00.000Z', tiebreak: 'bb:0' },
         { slot: 1, since: '2026-08-10T09:00:00.000Z', tiebreak: 'cc:0' },
         { slot: 2, since: '2026-08-10T09:00:00.000Z', tiebreak: 'bb:0' },
         { slot: 2, since: '2026-08-10T09:00:00.000Z', tiebreak: 'aa:0' },
       ]);
-      expect(winners.get(1).tiebreak).to.equal('cc:0');
+      expect(winners.get(1).tiebreak).to.equal('bb:0');
       expect(winners.get(2).tiebreak).to.equal('aa:0');
+    });
+
+    // The contest is ordered on a key the protocol's own actions can never
+    // move: a rebuild restamps runningSince, and an order that its own
+    // resolution step can reshuffle flaps instead of converging.
+    it('a settled contest does not reorder when a runningSince restamps', () => {
+      const a = { slot: 1, since: '2026-08-10T09:00:00.000Z', tiebreak: 'aa:0' };
+      const b = { slot: 1, since: '2026-08-10T10:00:00.000Z', tiebreak: 'bb:0' };
+      const before = meshSlots.arbitrate([a, b]).get(1).tiebreak;
+      const aRestamped = { ...a, since: '2026-08-10T11:00:00.000Z' };
+      const after = meshSlots.arbitrate([aRestamped, b]).get(1).tiebreak;
+      expect(after).to.equal(before);
     });
 
     it('a running member always beats a joiner with no runningSince', () => {
@@ -95,14 +107,16 @@ describe('meshSlots', () => {
     });
 
     it('re-picks after losing a double-claim arbitration', async () => {
-      // The peer asserted slot 0 earlier: it was never validly ours, and the
-      // deterministic verdict sends this node to the next vacancy.
+      // The peer's outpoint sorts first: the slot was never validly ours, and
+      // the deterministic verdict sends this node to the next vacancy. This
+      // node's EARLIER runningSince buys nothing - the value restamps on every
+      // rebuild, so the contest never orders on it.
       stubs.rows = [
         {
-          ip: OWN_ADDR, meshSlot: 0, runningSince: '2026-08-10T10:00:00.000Z', outpoint: 'own:0',
+          ip: OWN_ADDR, meshSlot: 0, runningSince: '2026-08-10T09:00:00.000Z', outpoint: 'own:0',
         },
         {
-          ip: PEER_ADDR, meshSlot: 0, runningSince: '2026-08-10T09:00:00.000Z', outpoint: 'peer:0',
+          ip: PEER_ADDR, meshSlot: 0, runningSince: '2026-08-10T10:00:00.000Z', outpoint: 'aaaa:0',
         },
       ];
       expect(await meshSlots.resolveOwnSlot('myblog', 3)).to.equal(1);
