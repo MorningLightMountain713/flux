@@ -77,6 +77,7 @@ class AppSyncOrchestrator {
   #state = STATES.INITIALIZING;
   #blockEmitter = null;
   #getEligibleSyncPeers = null;
+  #getPeerByKey = null;
   #onPeerEvent = null;
   #offPeerEvent = null;
   #markSyncRequested = null;
@@ -137,6 +138,7 @@ class AppSyncOrchestrator {
   constructor(options = {}) {
     this.#blockEmitter = options.blockEmitter;
     this.#getEligibleSyncPeers = options.getEligibleSyncPeers;
+    this.#getPeerByKey = options.getPeerByKey ?? (() => null);
     this.#onPeerEvent = options.onPeerEvent;
     this.#offPeerEvent = options.offPeerEvent;
     this.#markSyncRequested = options.markSyncRequested ?? (() => {});
@@ -499,7 +501,11 @@ class AppSyncOrchestrator {
     // since=0 is skipped - the round covers it.
     if (this.#peerProgress.has(key)) return;
     if (!this.#canSendMessages) return;
-    const peer = this.#getEligibleSyncPeers(0).find((p) => p.key === key);
+    // Addressed BY KEY, never filtered by sync candidacy: a fresh inbound
+    // accept has no reported uptime at add() time, so an eligibility lookup
+    // misses the very peer the event names (outbound redials pulled, inbound
+    // accepts never did - the second 1216 gate red).
+    const peer = this.#getPeerByKey(key);
     if (!peer) return;
     const sinceTs = Math.max(0, lostAtMs - RECONNECT_SYNC_SLACK_MS);
     const pubkey = await fluxNetworkHelper.getFluxNodePublicKey();
