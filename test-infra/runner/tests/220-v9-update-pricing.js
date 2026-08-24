@@ -108,7 +108,7 @@ describe('v9 update pricing', function () {
     it('refuses a registration rather than minting a free app', async function () {
       this.timeout(180000);
       const res = await registerEncryptedV9App(url(), { name: appName, ownerKey: ownerKey(), components: SMALL });
-      expect(res.status).to.equal('success');
+      expect(res.status, `register ${appName}: ${JSON.stringify(res.data)}`).to.equal('success');
       await confirmAndSettle(res.data, AMPLE_SAT);
 
       expect(await row(appName)).to.equal(null);
