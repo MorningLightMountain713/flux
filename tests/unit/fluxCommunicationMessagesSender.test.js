@@ -18,7 +18,6 @@ const verificationHelper = require('../../ZelBack/src/services/verificationHelpe
 const { peerManager } = require('../../ZelBack/src/services/utils/peerState');
 const { PEER_SOURCE } = require('../../ZelBack/src/services/utils/FluxPeerSocket');
 const globalState = require('../../ZelBack/src/services/utils/globalState');
-const dbHelper = require('../../ZelBack/src/services/dbHelper');
 const { getSpec } = require('../../ZelBack/src/services/utils/specLibs');
 
 chai.use(chaiAsPromised);
@@ -2276,7 +2275,22 @@ describe('fluxCommunicationMessagesSender tests', () => {
     // the gossip silently excludes exactly the records a rejoining node can
     // never re-receive any other way. The query must carry them regardless
     // of age; one row per app/role bounds the stream.
-    afterEach(() => sinon.restore());
+    //
+    // Authoritative is set here because this block was written before
+    // development's #1797 refusal gate: streamBatchedSync declines outright
+    // when globalState.appStateAuthoritative is false, so without this the
+    // responder never reaches the query and the assertion below reads as a
+    // missing durable branch rather than a refused request. The two sibling
+    // responder blocks in this file save and set it the same way.
+    let wasAuthoritativeForDurable;
+    beforeEach(() => {
+      wasAuthoritativeForDurable = globalState.appStateAuthoritative;
+      globalState.appStateAuthoritative = true;
+    });
+    afterEach(() => {
+      globalState.appStateAuthoritative = wasAuthoritativeForDurable;
+      sinon.restore();
+    });
 
     it('serves durable grant records regardless of the freshness floor', async () => {
       let capturedQuery = null;

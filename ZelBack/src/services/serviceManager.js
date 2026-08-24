@@ -775,7 +775,7 @@ async function startFluxFunctions() {
     // costs is the interval: the next tick is twelve hours away and nothing brings it
     // forward, so a node on the blocklist goes unenforced for twelve hours per restart.
     globalState.waitForPolicyReady()
-      .then(() => appTamperingBlocklistService.start())
+      .then(() => appTamperingBlocklistService.start({ blockEmitter: explorerService.getBlockEmitter() }))
       .catch((err) => log.error(`appTamperingBlocklist start error: ${err.message}`));
     // Not awaited, and started ahead of setNodeGeolocation below on purpose: the
     // first tick reads geolocation from the db when there is one, and otherwise

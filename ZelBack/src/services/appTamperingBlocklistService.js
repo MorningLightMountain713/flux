@@ -15,7 +15,6 @@ const CHECK_INTERVAL_MS = config.fluxapps.tamperingCheckIntervalMs ?? 12 * 60 * 
 // blocklist fetch and no benchmark call, which is why it can run this often
 // against a 12-hourly enforcement cadence.
 const SLOT_WATCH_MS = 60 * 1000; // 60s
-const SYNC_POLL_MS = 60 * 1000; // 60s while waiting for daemon sync
 const TAMPER_SCORE_THRESHOLD = 10;
 const DOS_MESSAGE_PREFIX = 'Node flagged via tampering blocklist';
 
@@ -30,8 +29,9 @@ let slotWatchHandle = null;
 let deferredDosMessage = null;
 let ourDosActive = false;
 let stopping = false;
-let syncWaitTimer = null;
 let syncWaitResolver = null;
+let syncBlockEmitter = null;
+let syncBlockListener = null;
 
 /**
  * True when the current sticky DOS message was set by this service.
@@ -123,23 +123,37 @@ async function getMyTxhash() {
 }
 
 /**
- * Block until the daemon reports synced. Polls every SYNC_POLL_MS.
- * The per-iteration sleep is cancellable via stop() so shutdown is prompt.
+ * Block until the daemon reports synced. The sync fact only changes when a
+ * block is processed, so that event is what releases the wait - the level is
+ * re-read on each one, and once more right after subscribing in case the edge
+ * fired in between. No timer: a chain that never updates is a node that must
+ * not enforce, and stop() releases the wait for shutdown.
  */
 async function waitForDaemonSynced() {
-  while (!stopping) {
+  const synced = () => {
     const s = daemonServiceMiscRpcs.isDaemonSynced();
-    if (s && s.data && s.data.synced) return;
-    // eslint-disable-next-line no-await-in-loop
-    await new Promise((resolve) => {
-      syncWaitResolver = resolve;
-      syncWaitTimer = setTimeout(() => {
-        syncWaitTimer = null;
-        syncWaitResolver = null;
-        resolve();
-      }, SYNC_POLL_MS);
-    });
-  }
+    return Boolean(s && s.data && s.data.synced);
+  };
+  if (stopping || synced()) return;
+  await new Promise((resolve) => {
+    const settle = () => {
+      if (syncBlockEmitter && syncBlockListener) {
+        syncBlockEmitter.off('blocksProcessed', syncBlockListener);
+      }
+      syncBlockListener = null;
+      syncWaitResolver = null;
+      resolve();
+    };
+    syncWaitResolver = settle;
+    if (syncBlockEmitter) {
+      syncBlockListener = () => {
+        if (stopping || synced()) settle();
+      };
+      syncBlockEmitter.on('blocksProcessed', syncBlockListener);
+      syncBlockListener();
+    }
+    // No emitter wired: only stop() releases the wait.
+  });
 }
 
 /**
@@ -257,12 +271,19 @@ function stopSlotWatch() {
 }
 
 /**
- * Start the enforcer. Waits for daemon sync, performs the first check, then
- * runs every config.fluxapps.tamperingCheckIntervalMs (12h by default). Safe to
- * call multiple times (no-ops if already started).
+ * Start the enforcer. Waits for daemon sync (released by the block feed),
+ * performs the first check, then runs every
+ * config.fluxapps.tamperingCheckIntervalMs (12h by default). Safe to call
+ * multiple times (no-ops if already started).
+ *
+ * @param {object} [options]
+ * @param {import('events').EventEmitter} [options.blockEmitter] - emits
+ *   'blocksProcessed'; what releases the sync wait. Without it only stop()
+ *   can release an unsynced wait.
  */
-async function start() {
+async function start(options = {}) {
   if (intervalHandle) return;
+  syncBlockEmitter = options.blockEmitter ?? null;
   if (isArcaneOs()) {
     log.info('appTamperingBlocklist - node is ArcaneOS, enforcer will not start');
     return;
@@ -296,10 +317,6 @@ async function start() {
 function stop() {
   stopping = true;
   stopSlotWatch();
-  if (syncWaitTimer) {
-    clearTimeout(syncWaitTimer);
-    syncWaitTimer = null;
-  }
   if (syncWaitResolver) {
     const resolve = syncWaitResolver;
     syncWaitResolver = null;
