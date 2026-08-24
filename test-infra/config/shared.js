@@ -341,12 +341,7 @@ module.exports = {
     imageUpdateDelayAfterRedeployMs: 1000,
     imageUpdateDelayBetweenComponentsMs: 100,
     masterSlaveIntervalMs: 3000, // compressed g: FDM election cycle (prod 30s)
-    // The per-place wait before a standby may take a primary FDM names nobody
-    // for (prod 180s). A candidate reads the one ahead as holding the component
-    // from the moment it commits, so a place need only span the election passes
-    // the one ahead takes to commit: production's six, at this fleet's cycle.
-    // Suites wait on election decisions, never on this.
-    activeStandbyStaggerMs: 18000,
+    activeStandbyStaggerMs: 45000, // prod 180000. The floor is NOT the election-cycle ratio but decision->actuation latency, which no knob compresses: a standby's guard probes the real container, and 19.7s was measured under full gate load (310). 45s keeps 2x margin.
     installation: { probability: 100, delay: 5 },
     removal: { probability: 25, delay: 5 },
     // 1 = every pass. `Math.floor(Math.random() * probability) === 0` gates the
