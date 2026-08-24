@@ -41,6 +41,8 @@ describe('two founders born across a partition converge to one on heal', functio
   let hostIn = null; // the pocket's hosting node
   let hostsOut = []; // majority-side hosting nodes
   let delisted = [];
+  let pocketFounded = null; // the pocket's founded event payload (key, founder)
+  let rungFounded = null; // the majority's founded event payload at the rung
 
   async function askFounder(clientIndex) {
     try {
@@ -55,6 +57,22 @@ describe('two founders born across a partition converge to one on heal', functio
     } catch {
       return null;
     }
+  }
+
+  // Instance placement CHURNS under a mass delist: coverage reads swing while
+  // the list shrinks, survivors' spawners top up, and the excess trim removes
+  // by rank — an original host can lose its instance mid-test. The founder
+  // question therefore goes to the CURRENT hosts, read from the location view
+  // of the given node, never to the seating test 1 arranged.
+  async function currentHosts(viewIndex, side = null) {
+    const cfg = getSubnetConfig();
+    const res = await env.clients[viewIndex].getAppLocations(name).catch(() => null);
+    const rows = res?.data ?? [];
+    const idx = rows
+      .map((r) => env.clients.findIndex((c, i) => r.ip && r.ip.startsWith(cfg.nodeIp(i + 1))))
+      .filter((i) => i !== -1);
+    const uniq = [...new Set(idx)];
+    return side ? uniq.filter((i) => side.has(i)) : uniq;
   }
 
   before(async function () {
@@ -155,6 +173,7 @@ describe('two founders born across a partition converge to one on heal', functio
     // A newborn tip at the cut: the freshness window the test name promises
     // starts full, not half-spent by test 1's install waits.
     await advanceBlocks(1);
+    const cutMarkers = env.clients.map((c) => c.getLastEventId());
     await partition(env, pocket);
 
     // Inside the pocket everything looks healthy for chainStaleAfterMs: the
@@ -166,6 +185,14 @@ describe('two founders born across a partition converge to one on heal', functio
       return answer === 'yes';
     }, { timeout: 180000, interval: 10000, label: 'the pocket seats its founder' });
     expect(answer).to.equal('yes');
+
+    const founded = await env.clients[hostIn].waitForEvent(
+      'quorumGrant:founded',
+      (d) => typeof d.key === 'string' && d.key.startsWith(`${name}/founder-`),
+      30000,
+      { afterId: cutMarkers[hostIn] },
+    );
+    pocketFounded = founded.data;
   });
 
   it('the majority delists the silent pocket, flips, and founds at the rung', async function () {
@@ -188,13 +215,33 @@ describe('two founders born across a partition converge to one on heal', functio
       return flipped.filter(Boolean).length >= 3;
     }, { timeout: 240000, interval: 5000, label: 'the flip rung mints on the majority' });
 
+    const majoritySet = new Set(majority);
+    let hosts = [];
     let answers = [];
     await waitFor(async () => {
       await advanceBlocks(1);
-      answers = await Promise.all(hostsOut.map((i) => askFounder(i)));
-      return answers.every((a) => a === 'yes' || a === 'no');
+      hosts = await currentHosts(majority[0], majoritySet);
+      if (hosts.length < 2) return false;
+      answers = await Promise.all(hosts.map((i) => askFounder(i)));
+      // Two majority-side yeses is a safety violation in ANY pass, settled
+      // or not — fail loud, never retry past it.
+      expect(answers.filter((a) => a === 'yes').length, `two founders on the majority side: ${answers} on hosts ${hosts}`).to.be.at.most(1);
+      return answers.every((a) => a === 'yes' || a === 'no')
+        && answers.filter((a) => a === 'yes').length === 1;
     }, { timeout: 300000, interval: 10000, label: 'the majority founds at the rung' });
-    expect(answers.filter((a) => a === 'yes'), `majority answers: ${answers}`).to.have.length(1);
+    expect(answers.filter((a) => a === 'yes'), `majority answers: ${answers} on hosts ${hosts}`).to.have.length(1);
+
+    // The rung founding is a SECOND world: its founded event names a key on
+    // a different basis than the pocket's.
+    const yesHost = hosts[answers.indexOf('yes')];
+    const founded = await env.clients[yesHost].waitForEvent(
+      'quorumGrant:founded',
+      (d) => typeof d.key === 'string' && d.key.startsWith(`${name}/founder-`) && d.key !== pocketFounded.key,
+      30000,
+      { afterId: markers[majority.indexOf(yesHost)] },
+    );
+    rungFounded = founded.data;
+    expect(rungFounded.key, 'the rung key is a new basis').to.not.equal(pocketFounded.key);
   });
 
   it('heal: the pocket founder reads the higher rung and stands down — one founder everywhere', async function () {
@@ -207,21 +254,41 @@ describe('two founders born across a partition converge to one on heal', functio
     await healPartition(env, pocket);
     await advanceBlocks(2);
 
-    // The pocket syncs; the HIGHER rung's record retires its founding via
-    // the world scan — its own ladder never grows (its old committee stands
-    // again post-heal, so its evaluator rightly never mints the rung), and
-    // that is exactly why the scan is knowledge-driven.
-    let pocketAnswer = null;
+    // Record-plane convergence is the theorem (newest-decided-basis-wins):
+    // the HIGHER rung's record reaches EVERY node — the pocket adopts it via
+    // the world scan and its rung-0 founder stands down. The pocket's own
+    // ladder never grows (its old committee stands again post-heal, so its
+    // evaluator rightly never mints the rung), which is exactly why the scan
+    // is knowledge-driven.
+    const role = rungFounded.key.slice(name.length + 1);
     await waitFor(async () => {
       await advanceBlocks(1);
-      pocketAnswer = await askFounder(hostIn);
-      return pocketAnswer === 'no';
-    }, { timeout: 300000, interval: 10000, label: 'the pocket founder stands down to the rung record' });
-    expect(pocketAnswer).to.equal('no');
+      const rows = await Promise.all(env.clients.map(
+        (unused, i) => dbClient(i + 1).getMasterleaseRecord(name, role).catch(() => null),
+      ));
+      return rows.every((r) => r && r.grantee === rungFounded.founder);
+    }, { timeout: 300000, interval: 10000, label: 'the rung record reaches every node' });
 
-    // Exactly one yes fleet-wide, and it is on the majority side.
-    const finals = await Promise.all([hostIn, ...hostsOut].map((i) => askFounder(i)));
-    expect(finals.filter((a) => a === 'yes'), `final answers: ${finals}`).to.have.length(1);
-    expect(finals[0], 'the pocket founder stays down').to.equal('no');
+    // Live yes is BOUNDED, not guaranteed: instance churn may have removed
+    // the rung founder's own host, and nobody else may ever say yes. At most
+    // one yes among the current hosts, and any yes is the recorded founder's
+    // own node. A lingering pocket yes here is the safety violation.
+    let hosts = [];
+    let finals = [];
+    await waitFor(async () => {
+      await advanceBlocks(1);
+      hosts = await currentHosts(0);
+      if (!hosts.length) return false;
+      finals = await Promise.all(hosts.map((i) => askFounder(i)));
+      return finals.every((a) => a === 'yes' || a === 'no');
+    }, { timeout: 180000, interval: 10000, label: 'founder answers settle post-heal' });
+    const yeses = finals.filter((a) => a === 'yes');
+    expect(yeses.length, `final answers: ${finals} on hosts ${hosts}`).to.be.at.most(1);
+    if (yeses.length === 1) {
+      const yesHost = hosts[finals.indexOf('yes')];
+      const status = await env.clients[yesHost].getNodeStatus();
+      expect(`${status.data.txhash}:${status.data.outidx}`, 'the one yes is the recorded rung founder')
+        .to.equal(rungFounded.founder);
+    }
   });
 });
