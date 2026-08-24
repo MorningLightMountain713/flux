@@ -11,7 +11,7 @@ import { waitForAppInstalled } from '../framework/wait.js';
 import { pushTestApp } from '../framework/registry-helper.js';
 import { buildSeedableTestApp } from '../framework/seed-helper.js';
 import { REGISTRY_REPO_HOST } from '../framework/subnet-config.js';
-import { execInContainer } from '../framework/container.js';
+import { execInContainer, requireAppContainerName } from '../framework/container.js';
 import {
   telemetrydControl, waitForTelemetryEvent, announcedIdentities,
 } from '../framework/telemetryd-control.js';
@@ -29,7 +29,7 @@ import {
 // install, announce (send-set gated — the same-app collector stays out by
 // default), reconnect-sync, agent recreation, the scoping gate, a
 // port-changing spec update that also overrides the send set, and inter-app
-// collector routing via shareWith.
+// collector routing via a network-sharing dependency edge.
 // The daemon's own half (cgroup sampling, OTLP protobuf emission, exporter
 // rotation on a changed endpoint) is covered by the daemon's unit tests and the
 // live-node validation — the harness cannot run a host daemon.
@@ -44,7 +44,9 @@ const PLAIN = 'otlplainapp';
 const COLLECTOR_APP = 'otlplogstack';
 const SHIPPER = 'otlpshipper';
 
-const agentContainer = `flux${AGENT}_${APP}`;
+// The agent's docker name carries the app's minted identity, which no suite
+// can spell - resolve it from the labels every time it is needed.
+const agentContainer = (client) => requireAppContainerName(client.container, APP, AGENT);
 
 const image = `${REGISTRY_REPO_HOST}/${APP}:v1`;
 const components = {
@@ -94,7 +96,7 @@ async function containerIp(client, containerName, { timeout = 30000 } = {}) {
   }
 }
 
-const agentIp = (client, opts) => containerIp(client, agentContainer, opts);
+const agentIp = async (client, opts) => containerIp(client, await agentContainer(client), opts);
 
 const forApp = (identities, appName) => identities.filter((a) => a.identity.app_name === appName);
 
@@ -200,7 +202,7 @@ describe('otlp telemetry: the identity socket carries the resolved agent endpoin
     // sides; no deterministic recreate stimulus can change the address
     // here). The collector is outside the send set, so its recreate emits
     // no announce of its own — docker is the recreate signal.
-    const r = await execInContainer(client.container, `docker rm -f ${agentContainer}`);
+    const r = await execInContainer(client.container, `docker rm -f ${await agentContainer(client)}`);
     expect(r.exitCode, `docker rm -f: ${r.output}`).to.equal(0);
 
     const ip = await agentIp(client, { timeout: 180000 });
@@ -298,7 +300,7 @@ describe('otlp telemetry: the identity socket carries the resolved agent endpoin
     }
   });
 
-  it('routes a consumer at a shareWith-linked collector where they co-reside — and stays silent elsewhere', async function () {
+  it('routes a consumer at a network-linked collector where they co-reside — and stays silent elsewhere', async function () {
     this.timeout(480000);
 
     // Two apps through the real door: a collector app with no telemetry of
@@ -341,7 +343,7 @@ describe('otlp telemetry: the identity socket carries the resolved agent endpoin
       },
       instances: 3,
       specOverrides: {
-        network: { shareWith: [COLLECTOR_APP] },
+        dependencies: { [COLLECTOR_APP]: { strength: 'wants', network: true } },
         telemetry: { provider: 'otlp', app: COLLECTOR_APP, component: 'collector' },
       },
     });
