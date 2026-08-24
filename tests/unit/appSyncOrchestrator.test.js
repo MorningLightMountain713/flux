@@ -251,10 +251,50 @@ describe('AppSyncOrchestrator', () => {
       }
       await clock.tickAsync(0);
 
-      if (orchestrator.state === STATES.READY) {
-        peerEmitter.emit('peersBelowThreshold', 3);
-        expect(orchestrator.state).to.equal(STATES.DEGRADED);
+      expect(orchestrator.state).to.equal(STATES.READY);
+      peerEmitter.emit('peersBelowThreshold', 3);
+      expect(orchestrator.state).to.equal(STATES.DEGRADED);
+    });
+
+    // The floor is an invariant of the node, not of an enumerated state list:
+    // a collapse during RESYNCING must land DEGRADED, and the in-flight
+    // resync's completion must not promote past it - READY entry reads the
+    // peer level like every other readiness condition.
+    it('lands DEGRADED, never READY, when the floor collapses mid-RESYNCING', async () => {
+      const peers = makeEligiblePeers(3);
+      getEligibleSyncPeersStub = sinon.stub().returns(peers);
+
+      const orchestrator = makeOrchestrator({ isEnterprise: () => true });
+      orchestrator.start(defaultBootContext);
+
+      blockEmitter.emit('blocksProcessed', 2555000);
+      await clock.tickAsync(0);
+      peerEmitter.emit('peerThresholdReached', 12);
+      await clock.tickAsync(0);
+      for (let i = 0; i < 3; i += 1) {
+        appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_COMPLETE, 'apprunning');
+        appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_COMPLETE, 'appinstalling');
+        appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_COMPLETE, 'apperrors');
       }
+      await clock.tickAsync(0);
+      expect(orchestrator.state).to.equal(STATES.READY);
+
+      peerEmitter.emit('peersBelowThreshold', 3);
+      expect(orchestrator.state).to.equal(STATES.DEGRADED);
+      peerEmitter.emit('peerThresholdReached', 12);
+      await clock.tickAsync(0);
+      expect(orchestrator.state).to.equal(STATES.RESYNCING);
+
+      // Every peer gone while the resync is in flight...
+      peerEmitter.emit('peersBelowThreshold', 0);
+      // ...and the rounds already in flight then complete anyway.
+      for (let i = 0; i < 3; i += 1) {
+        appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_COMPLETE, 'apprunning');
+        appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_COMPLETE, 'appinstalling');
+        appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_COMPLETE, 'apperrors');
+      }
+      await clock.tickAsync(0);
+      expect(orchestrator.state).to.equal(STATES.DEGRADED);
     });
 
     it('should emit readinessLost on degradation', async () => {
