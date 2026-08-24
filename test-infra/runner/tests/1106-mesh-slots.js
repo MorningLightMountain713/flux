@@ -251,14 +251,16 @@ describe('mesh ordinal slots — claim, identity, replacement inheritance', func
     const victimSlot = await ownSlotOf(victim);
     expect(victimSlot, 'the victim holds a slot').to.be.a('number');
 
-    // Kill the victim's FluxOS ungracefully: mask first so Restart=always
-    // cannot respawn it, SIGKILL so no shutdown handler runs and no leave
-    // broadcast goes out (systemctl stop is a SIGTERM — the graceful path,
-    // which vacates early on sigtermTtlS). The rows age out network-wide
-    // on locationTtlS, vacating the slot, and the spawner replaces the
-    // missing instance onto the spare node.
+    // Kill the victim's FluxOS ungracefully and KEEP it down: SIGKILL first
+    // so no shutdown handler runs and no leave broadcast goes out, then an
+    // immediate stop — the process is already gone, so stop delivers no
+    // signal to the app; it only cancels the Restart=always respawn inside
+    // its RestartSec window. A runtime mask does NOT hold a loaded
+    // Restart=always unit down on this systemd (measured on the image,
+    // daemon-reload or not) — the old mask idiom left the victim free to
+    // resurrect, and test 8's victim check raced its boot.
     await execInContainer(env.clients[victim].container,
-      'systemctl mask --runtime fluxos && systemctl kill --signal=SIGKILL fluxos');
+      'systemctl kill --signal=SIGKILL fluxos && systemctl stop fluxos');
 
     await waitFor(async () => {
       const status = await meshStatus(spare);
@@ -292,7 +294,7 @@ describe('mesh ordinal slots — claim, identity, replacement inheritance', func
     const victim = env.clients.findIndex((_, i) => !holders.includes(i));
     expect(victim, 'the stopped node is identifiable').to.be.at.least(0);
     await execInContainer(env.clients[victim].container,
-      'systemctl unmask --runtime fluxos && systemctl start fluxos');
+      'systemctl start fluxos');
 
     // Settled means the returned node COMPLETED a mesh pass in this process
     // lifetime and resolved itself without a stolen slot. lastPass is
