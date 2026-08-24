@@ -21,6 +21,8 @@ import { bootstrapPricing } from '../framework/price-helper.js';
 import { startTicker, advanceBlock } from '../framework/daemon-control.js';
 import { waitForDaemonReady, waitFor, waitForBlockProcessed, waitForNodeStatus } from '../framework/wait.js';
 import { dbClient } from '../framework/db-client.js';
+import { pushImage } from '../framework/registry-helper.js';
+import { REGISTRY_REPO_HOST } from '../framework/subnet-config.js';
 
 let env;
 let db;
@@ -32,11 +34,15 @@ const FLOOR_SAT = 1000000;
 // Comfortably above any fee these specs can reach.
 const AMPLE_SAT = 200000000;
 
+// The image lives in the harness registry - the fleet is hermetic, and an
+// external tag dies in Docker Hub verification with no DNS to resolve it.
+const PRICING_IMAGE = 'v9pricing';
+
 const SMALL = {
   web: {
     name: 'web',
     description: 'pricing test component',
-    image: 'nginx:latest',
+    image: `${REGISTRY_REPO_HOST}/${PRICING_IMAGE}:v1`,
     cpu: 0.5,
     memory: 300,
     rootFsGb: 2,
@@ -84,6 +90,7 @@ describe('v9 update pricing', function () {
     this.timeout(300000);
     env = await createTestEnv({ hookCtx: this, nodes: 10, tickerAutostart: false });
     db = dbClient(1);
+    await pushImage(PRICING_IMAGE, 'v1');
     await Promise.all(env.clients.map((c) => waitForDaemonReady(c)));
     await Promise.all(env.clients.map((c) => waitForNodeStatus(c, (d) => d.confirmed === true, 30000)));
     await advanceBlock();
