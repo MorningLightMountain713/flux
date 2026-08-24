@@ -270,7 +270,19 @@ describe('content slots: manifest gossip propagation + boot recovery', function 
     //    runs on a real process boot. Re-trigger discovery so the rebooted node re-peers
     //    and its in-band manifest reconcile can pull the version it missed while down.
     await env.reconnectNode(installedIndex);
+    // The rows the boot reconcile keys on, dumped either side of the restart:
+    // present-before/gone-after convicts the shutdown-or-boot window; gone
+    // already convicts the first process. (The 2f8e05384 gate lost both rows
+    // with the deleter unrecorded - these lines are what names it next time.)
+    const dumpRows = async (label) => {
+      const installedRow = await dbClient(installedIndex + 1).getLocalApp(appName);
+      const manifestRow = await dbClient(installedIndex + 1).getContentManifest(appName);
+      // eslint-disable-next-line no-console
+      console.log(`###505-ROWS ${label} installed=${JSON.stringify(installedRow && { name: installedRow.name, hash: installedRow.hash })} manifest=${JSON.stringify(manifestRow && { version: manifestRow.version, confirmed: manifestRow.confirmed })}`);
+    };
+    await dumpRows('pre-restart');
     await env.restartNode(installedIndex);
+    await dumpRows('post-restart');
     await env.startDiscovery();
     const node = env.clients[installedIndex];
 
