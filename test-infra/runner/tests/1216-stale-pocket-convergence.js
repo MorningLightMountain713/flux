@@ -152,6 +152,9 @@ describe('two founders born across a partition converge to one on heal', functio
 
   it('the pocket founds inside its freshness window, unseen', async function () {
     this.timeout(480000);
+    // A newborn tip at the cut: the freshness window the test name promises
+    // starts full, not half-spent by test 1's install waits.
+    await advanceBlocks(1);
     await partition(env, pocket);
 
     // Inside the pocket everything looks healthy for chainStaleAfterMs: the
