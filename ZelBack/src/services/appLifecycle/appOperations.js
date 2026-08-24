@@ -2375,7 +2375,7 @@ async function coordinateActiveStandbyApps() {
                   }
                 } else if (index > 0 && !activePrimaryByIdentifier.has(identifier) && !scheduledPrimaryStart.has(identifier)) {
                   // Non-primary node with no history - schedule start based on index
-                  const timetoStartApp = Date.now() + (index * 3 * 60 * 1000);
+                  const timetoStartApp = Date.now() + (index * config.fluxapps.activeStandbyStaggerMs);
                   log.info(`activeStandby: scheduling app:${appName} index: ${index} to start at ${timetoStartApp.toString()}`);
                   scheduledPrimaryStart.set(identifier, timetoStartApp);
                 } else {

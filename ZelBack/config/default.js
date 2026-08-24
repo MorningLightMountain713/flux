@@ -591,6 +591,7 @@ module.exports = {
     meshReconcileIntervalMs: 1800000, // mesh reconcile cadence (membership, certs incl. aged-replacement promotion, detector)
     backendTlsRenewalIntervalMs: 21600000, // managed backend-TLS renewal cadence (6h; the 30-day leaf is re-issued with ~10 days to spare, so the pace only bounds how fast a missing cert heals)
     installCollisionWaitMs: 90000,
+    activeStandbyStaggerMs: 180000, // per-index delay before a history-less standby self-promotes (index * this); 6 election cycles at the 30s cadence
     portTestPeerTimeoutMs: 5000, // per-peer reachability round-trip timeout
     portTestPeerQueryCount: 3, // peers queried concurrently per round - distinct prefix, excluding our own
     portTestMaxRounds: 3, // max retry rounds when a round is inconclusive (no peer answered)
