@@ -172,7 +172,7 @@ module.exports = {
     imageUpdateDelayAfterRedeployMs: 1000,
     imageUpdateDelayBetweenComponentsMs: 100,
     masterSlaveIntervalMs: 3000, // compressed g: FDM election cycle (prod 30s)
-    activeStandbyStaggerMs: 18000, // prod 180000; keeps prod's 6-election-cycles-per-index-seat ratio at the compressed 3s cadence
+    activeStandbyStaggerMs: 45000, // prod 180000. The floor is NOT the election-cycle ratio but decision->actuation latency, which no knob compresses: a standby's guard probes the real container, and 19.7s was measured under full gate load (310). 45s keeps 2x margin.
     installation: { probability: 100, delay: 5 },
     removal: { probability: 25, delay: 5 },
     redeploy: { probability: 2, delay: 1, composedDelay: 1 },
