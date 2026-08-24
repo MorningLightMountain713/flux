@@ -44,11 +44,13 @@ function fakeRepo(overrides = {}) {
 }
 
 function load(specStub = defaultSpecStub(), repo = fakeRepo()) {
+  const bus = { publish: sinon.stub() };
   const service = proxyquire('../../ZelBack/src/services/appLifecycle/contentSlotService', {
     '../utils/specLibs': { getSpec: sinon.stub().resolves(specStub) },
     '../appDatabase/appsRepository': repo,
+    '../utils/fluxEventBus': bus,
   });
-  return { service, specStub, repo };
+  return { service, specStub, repo, bus };
 }
 
 function makeBenchmark(overrides = {}) {
@@ -412,6 +414,15 @@ describe('contentSlotService', () => {
   });
 
   describe('storeManifest / getLatestManifest', () => {
+    it('a refused store publishes nothing and answers false', async () => {
+      const { service, repo, bus } = load();
+      repo.upsertContentManifest.resolves(false);
+      const stored = await service.storeManifest(manifest());
+      expect(stored).to.equal(false);
+      const storedEvents = bus.publish.getCalls().filter((c) => c.args[0] === 'content:manifestStored');
+      expect(storedEvents).to.have.length(0);
+    });
+
     it('builds a confirmed catch-up row and delegates the latest-wins upsert to the registry', async () => {
       const { service, repo } = load();
       const stored = await service.storeManifest(manifest()); // default confirmed:true, no broadcast

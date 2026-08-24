@@ -30,7 +30,8 @@ describe('appsRepository', () => {
       findInDatabase: sinon.stub(),
       replaceOneInDatabase: sinon.stub(),
       removeDocumentsFromCollection: sinon.stub(),
-      updateOneInDatabase: sinon.stub().resolves({ acknowledged: true }),
+      updateOneInDatabase: sinon.stub().resolves({ acknowledged: true, matchedCount: 1 }),
+      insertOneToDatabase: sinon.stub().resolves({}),
       aggregateInDatabase: sinon.stub().resolves([]),
       bulkWriteInDatabase: sinon.stub().resolves({ upsertedCount: 0 }),
     };
@@ -599,7 +600,8 @@ describe('appsRepository', () => {
       const [, collection, filter, update, opts] = dbHelperStub.updateOneInDatabase.firstCall.args;
       expect(collection).to.equal('zelappcontentmanifests');
       expect(filter).to.deep.equal({ appName: 'app', $or: [{ version: { $lt: 2 } }, { version: 2, confirmed: false }] });
-      expect(opts).to.deep.equal({ upsert: true });
+      // NO upsert: the guard refuses via its own read, never via the index.
+      expect(opts).to.equal(undefined);
       expect(update.$set).to.include({ appName: 'app', version: 2, confirmed: true });
       expect(update.$set.data).to.deep.equal({ d: 1 });
       expect(update.$set.receivedAt).to.be.instanceOf(Date);
@@ -850,6 +852,33 @@ describe('appsRepository', () => {
 
   // The row records the identifiers its containers are named by, so ownership is
   // a lookup rather than a decomposition of a container's own name.
+  describe('upsertContentManifest', () => {
+    // The floor is the write's own logic: with upsert, a non-matching guard
+    // filter INSERTS, so refusal used to exist only while the unique index
+    // did - a freshly-prepared collection turned refusals into regressions.
+    it('refuses an older manifest without leaning on the unique index', async () => {
+      dbHelperStub.updateOneInDatabase.resolves({ acknowledged: true, matchedCount: 0 });
+      dbHelperStub.findOneInDatabase.resolves({ appName: 'app', version: 3, confirmed: true });
+      dbHelperStub.insertOneToDatabase = sinon.stub();
+      const stored = await appsRepository.upsertContentManifest(
+        { appName: 'app', version: 1, data: {} }, { confirmed: true },
+      );
+      expect(stored).to.equal(false);
+      sinon.assert.notCalled(dbHelperStub.insertOneToDatabase);
+    });
+
+    it('inserts fresh when no row exists at all', async () => {
+      dbHelperStub.updateOneInDatabase.resolves({ acknowledged: true, matchedCount: 0 });
+      dbHelperStub.findOneInDatabase.resolves(null);
+      dbHelperStub.insertOneToDatabase = sinon.stub().resolves({});
+      const stored = await appsRepository.upsertContentManifest(
+        { appName: 'app', version: 1, data: {} }, { confirmed: true },
+      );
+      expect(stored).to.equal(true);
+      sinon.assert.calledOnce(dbHelperStub.insertOneToDatabase);
+    });
+  });
+
   describe('backfillComponentIdentifiers', () => {
     it('records identifiers only for rows that lack them', async () => {
       dbHelperStub.findInDatabase.resolves([
