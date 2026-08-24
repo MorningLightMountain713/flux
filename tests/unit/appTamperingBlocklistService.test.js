@@ -2,6 +2,7 @@
 
 const { expect } = require('chai');
 const sinon = require('sinon');
+const { EventEmitter } = require('events');
 const proxyquire = require('proxyquire').noCallThru();
 
 describe('appTamperingBlocklistService tests', () => {
@@ -276,6 +277,23 @@ describe('appTamperingBlocklistService tests', () => {
   });
 
   describe('start/stop cancellation', () => {
+    it('an unsynced boot enforces on the first processed block, not a timer', async () => {
+      daemonMiscStub.isDaemonSynced = sinon.stub().returns({ data: { synced: false } });
+      setBlocklist([MOCK_TXHASH]);
+      setTamperScore(100);
+      const blockEmitter = new EventEmitter();
+      const startPromise = service.start({ blockEmitter });
+      await new Promise((resolve) => { setImmediate(resolve); });
+      expect(nodeDosStateStub.setStickyDosMessage.called).to.be.false;
+
+      // The chain updates: the poller stamps the level, the block event
+      // announces it - and the first tick follows immediately.
+      daemonMiscStub.isDaemonSynced = sinon.stub().returns({ data: { synced: true } });
+      blockEmitter.emit('blocksProcessed', 100);
+      await startPromise;
+      expect(nodeDosStateStub.setStickyDosMessage.called).to.be.true;
+    });
+
     it('start() aborts without scheduling an interval if stop() is called during daemon-sync wait', async () => {
       // Daemon never reports synced
       daemonMiscStub.isDaemonSynced = sinon.stub().returns({ data: { synced: false } });

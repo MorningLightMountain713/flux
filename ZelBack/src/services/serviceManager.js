@@ -490,7 +490,7 @@ async function startFluxFunctions() {
       log.info('Native image update service started');
     }, bootDelay(10 * 60 * 1000)); // 10 minutes after startup
     fluxNetworkMonitor.checkDeterministicNodesCollisions();
-    appTamperingBlocklistService.start().catch((err) => {
+    appTamperingBlocklistService.start({ blockEmitter: explorerService.getBlockEmitter() }).catch((err) => {
       log.error(`appTamperingBlocklist start error: ${err.message}`);
     });
     log.info('Flux checks operational');
