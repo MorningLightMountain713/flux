@@ -56,8 +56,15 @@ export async function setLatency(env, { delay = '80ms 20ms', perNode = {}, loss 
     const filters = peers
       .map((ip) => `tc filter add dev $DEV parent ${ROOT_HANDLE} protocol ip prio 1 u32 match ip dst ${ip}/32 flowid ${NETEM_BAND}`)
       .join(' && ');
+    // execInContainer surfaces failure only through exitCode - a dropped tc
+    // error here is a suite that silently runs at bridge speed, so apply and
+    // read back in one guarded command and refuse anything but a live netem.
     // eslint-disable-next-line no-await-in-loop
-    await execInContainer(env.clients[i].container, `${findDevCmd(cfg.nodeIp(i + 1))} && ${qdiscs} && ${filters}`);
+    const applied = await execInContainer(env.clients[i].container,
+      `${findDevCmd(cfg.nodeIp(i + 1))} && ${qdiscs} && ${filters} && tc qdisc show dev $DEV`);
+    if (applied.exitCode !== 0 || !/netem/.test(applied.stdout ?? '')) {
+      throw new Error(`latency: netem did not apply on node ${i}: rc=${applied.exitCode} ${applied.stderr || applied.stdout || ''}`);
+    }
   }
 }
 
