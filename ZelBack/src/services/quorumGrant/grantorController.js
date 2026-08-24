@@ -537,7 +537,18 @@ async function record(req, res) {
     if (typeof key !== 'string' || !ROW_PATTERN.test(key)) {
       return res.status(400).json(messageHelper.createErrorMessage('malformed key'));
     }
-    const stored = await grantRegister.read(key);
+    const generation = Number(req.query.generation ?? 0);
+    if (!Number.isInteger(generation) || generation < 0) {
+      return res.status(400).json(messageHelper.createErrorMessage('malformed generation'));
+    }
+    // A founder register is one cell per generation (registerRowFor): a
+    // logical founder key addresses its generation's cell, default 0. Any
+    // other key — held, or an explicit row id — reads verbatim.
+    const role = key.slice(key.indexOf('/') + 1);
+    const row = FOUNDER_ROLE_PATTERN.test(role)
+      ? registerRowFor({ mode: 'oneshot', key, generation })
+      : key;
+    const stored = await grantRegister.read(row);
     return res.json(messageHelper.createDataMessage({
       key,
       promisedEpoch: stored?.promisedEpoch ?? 0,
