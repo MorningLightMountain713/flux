@@ -43,7 +43,7 @@ describe('reconciler keeps a running syncthing app up across a FluxOS process re
     await bootAndPeer(env);
     await resetSyncState();
     ({ index: idx, folder, identifier } = await seedSyncthingApp(env, {
-      name: appName, mode: 'r', forceNonLeader: true,
+      name: appName, syncMode: 'syncFirst', forceNonLeader: true,
     }));
     // drive the r: folder to fully synced so the reconciler starts the container
     await setSynced({ folder });

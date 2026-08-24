@@ -33,7 +33,7 @@ describe('plain-sync (s:) components run like normal components', function () {
     env = await createTestEnv({ hookCtx: this, nodes: 10, tickerAutostart: false });
     await bootAndPeer(env);
     ({ index: idx, folder, identifier } = await seedSyncthingApp(env, {
-      name: appName, mode: 's',
+      name: appName, syncMode: 'sync',
     }));
   });
 

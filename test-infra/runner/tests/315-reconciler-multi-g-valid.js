@@ -36,7 +36,7 @@ describe('install accepts a valid multi-g (every component g:) app', function ()
 
   it('installs without rejection and flags no component invalidSpec', async function () {
     this.timeout(120000);
-    const app = await buildSeedableMultiSyncthingApp({ name: appName, mode: 'g', components: 2 });
+    const app = await buildSeedableMultiSyncthingApp({ name: appName, syncMode: 'activeStandby', components: 2 });
     // a valid g: primary on every component installs (contrast suite 41's [plain|g],
     // which is rejected at volume construction). A throw here = wrongly rejected.
     await installOnNodes(env, app, [0]);

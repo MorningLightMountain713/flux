@@ -38,7 +38,7 @@ describe('syncthing events-stream outage degrades to the poll, never to wrong ac
     env = await createTestEnv({ hookCtx: this, nodes: 10, tickerAutostart: false });
     await bootAndPeer(env);
     await resetSyncState();
-    app = await seedSyncthingApp(env, { name: appName, mode: 'r', forceNonLeader: true, index: 0 });
+    app = await seedSyncthingApp(env, { name: appName, syncMode: 'syncFirst', forceNonLeader: true, index: 0 });
     // actively syncing - healthy, nothing for the ladder to do
     await setSyncing({ ip: subnet.nodeIp(1), folder: app.folder, percent: 40 });
   });
