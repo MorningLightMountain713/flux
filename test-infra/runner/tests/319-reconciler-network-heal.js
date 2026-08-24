@@ -287,7 +287,7 @@ describe('reconciler network-detach heal', function () {
     const ids = {};
     for (const comp of stormComps) {
       // eslint-disable-next-line no-await-in-loop
-      await waitForUp(client, `${comp}_${stormName}`, `${comp} running before the storm`);
+      await waitForUp(client, stormName, `${comp} running before the storm`);
       // eslint-disable-next-line no-await-in-loop
       ids[comp] = await getAppContainerId(client.container, stormName, comp);
     }
