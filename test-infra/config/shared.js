@@ -327,6 +327,7 @@ module.exports = {
     imageUpdateDelayAfterRedeployMs: 1000,
     imageUpdateDelayBetweenComponentsMs: 100,
     masterSlaveIntervalMs: 3000, // compressed g: FDM election cycle (prod 30s)
+    activeStandbyStaggerMs: 18000, // prod 180000; keeps prod's 6-election-cycles-per-index-seat ratio at the compressed 3s cadence
     installation: { probability: 100, delay: 5 },
     removal: { probability: 25, delay: 5 },
     // 1 = every pass. `Math.floor(Math.random() * probability) === 0` gates the
