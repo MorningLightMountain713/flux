@@ -584,6 +584,51 @@ describe('AppSyncOrchestrator', () => {
       expect(freshInbound.send.callCount, 'addressed by key, never filtered by candidacy').to.equal(1);
     });
 
+    it('a pull blocked by lost message capability fires when capability returns, with the original since', async () => {
+      // The third gate red: the heal\'s reconnection wave lands while the
+      // healed side\'s chain view is still stale (capability lost), and a
+      // one-shot event dropped there is a credit destroyed. The credit is
+      // durable: stash and drain on capability-gained.
+      const peers = makeEligiblePeers(3);
+      getEligibleSyncPeersStub = sinon.stub().returns(peers);
+      const orchestrator = makeOrchestrator({ isEnterprise: () => true });
+      orchestrator.start(defaultBootContext);
+      await reachReady();
+      await clock.tickAsync(300000);
+
+      orchestrator.onMessageCapabilityChange(false);
+      const bootSends = peers[0].send.callCount;
+      const lostAtMs = Date.now() - 60000;
+      peerEmitter.emit('peerReestablished', { key: peers[0].key, lostAtMs });
+      await clock.tickAsync(0);
+      expect(peers[0].send.callCount, 'nothing sent while incapable').to.equal(bootSends);
+
+      orchestrator.onMessageCapabilityChange(true);
+      await clock.tickAsync(0);
+      expect(peers[0].send.callCount, 'the stashed pull fires on capability return').to.equal(bootSends + 1);
+      const expectedSince = lostAtMs - RECONNECT_SLACK_MS;
+      expect(encodeAppRunningStub.calledWith(expectedSince), 'the original since survives the stash').to.equal(true);
+    });
+
+    it('repeated losses keep the EARLIEST since - the oldest unhealed gap bounds the miss', async () => {
+      const peers = makeEligiblePeers(3);
+      getEligibleSyncPeersStub = sinon.stub().returns(peers);
+      const orchestrator = makeOrchestrator({ isEnterprise: () => true });
+      orchestrator.start(defaultBootContext);
+      await reachReady();
+      await clock.tickAsync(300000);
+
+      orchestrator.onMessageCapabilityChange(false);
+      const earlyLostAt = Date.now() - 90000;
+      peerEmitter.emit('peerReestablished', { key: peers[0].key, lostAtMs: earlyLostAt });
+      peerEmitter.emit('peerReestablished', { key: peers[0].key, lostAtMs: Date.now() - 10000 });
+      await clock.tickAsync(0);
+
+      orchestrator.onMessageCapabilityChange(true);
+      await clock.tickAsync(0);
+      expect(encodeAppRunningStub.calledWith(earlyLostAt - RECONNECT_SLACK_MS), 'earliest gap wins').to.equal(true);
+    });
+
     it('a peer no longer connected is quietly skipped', async () => {
       const peers = makeEligiblePeers(3);
       getEligibleSyncPeersStub = sinon.stub().returns(peers);
