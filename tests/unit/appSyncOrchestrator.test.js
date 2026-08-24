@@ -53,6 +53,7 @@ describe('AppSyncOrchestrator', () => {
   function makePeerOptions(overrides = {}) {
     return {
       getEligibleSyncPeers: getEligibleSyncPeersStub,
+      getPeerByKey: (key) => getEligibleSyncPeersStub(0).find((p) => p.key === key) ?? null,
       onPeerEvent: (event, cb) => peerEmitter.on(event, cb),
       offPeerEvent: (event, cb) => peerEmitter.removeListener(event, cb),
       ...overrides,
@@ -561,6 +562,26 @@ describe('AppSyncOrchestrator', () => {
       }
       await clock.tickAsync(0);
       expect(orchestrator.state, 'a scoped answer must not stand in for a full one').to.equal(STATES.SYNCING);
+    });
+
+    it('pulls a peer that is connected but not yet a sync CANDIDATE - a fresh inbound accept has no reported uptime', async () => {
+      // The second gate red: inbound re-establishments carry no uptime at
+      // add() time, so an eligibility-filtered lookup missed the very peer
+      // the event named - outbound redials pulled, inbound accepts never did.
+      const peers = makeEligiblePeers(3);
+      const freshInbound = makePeer('10.0.0.99:16127');
+      getEligibleSyncPeersStub = sinon.stub().returns(peers);
+      const orchestrator = makeOrchestrator({
+        isEnterprise: () => true,
+        getPeerByKey: (key) => (key === freshInbound.key ? freshInbound : null),
+      });
+      orchestrator.start(defaultBootContext);
+      await reachReady();
+      expect(orchestrator.state).to.equal(STATES.READY);
+
+      peerEmitter.emit('peerReestablished', { key: freshInbound.key, lostAtMs: Date.now() - 60000 });
+      await clock.tickAsync(0);
+      expect(freshInbound.send.callCount, 'addressed by key, never filtered by candidacy').to.equal(1);
     });
 
     it('a peer no longer connected is quietly skipped', async () => {

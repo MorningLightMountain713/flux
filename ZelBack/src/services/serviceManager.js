@@ -432,6 +432,12 @@ async function startFluxFunctions() {
       blockEmitter: explorerService.getBlockEmitter(),
       getEligibleSyncPeers: (minUptime) => peerManager.getEligibleSyncPeers(minUptime)
         .map((p) => ({ key: p.key, send: (msg) => p.send(msg) })),
+      // By key, unfiltered: the reconnect pull addresses a specific peer that
+      // may not be a sync candidate yet (no reported uptime at add() time).
+      getPeerByKey: (key) => {
+        const p = peerManager.get(key);
+        return p ? { key: p.key, send: (msg) => p.send(msg) } : null;
+      },
       onPeerEvent: (event, cb) => peerManager.on(event, cb),
       offPeerEvent: (event, cb) => peerManager.removeListener(event, cb),
       peerCountIfAboveThreshold: () => peerManager.peerCountIfAboveThreshold(),
