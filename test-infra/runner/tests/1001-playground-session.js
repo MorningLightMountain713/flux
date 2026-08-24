@@ -237,16 +237,20 @@ describe('playground: a session runs on a real node and reports what happened', 
     // above) so the refusal can be provoked with a single extra session rather
     // than by holding three, which would triple the wall clock for a test about
     // the gate rather than about concurrency.
+    //
+    // The slot is held for the RUN's duration: the runner frees it in the same
+    // stroke that settles the verdict, so the refusal must be provoked while
+    // the run is in flight - after the verdict there is nothing left to refuse.
     it('refuses a session past the concurrency limit, and says to try another node', async function () {
       this.timeout(240000);
       const jobId = await startSession(client, zelidauth, oneComponent({ name: uniqueName(), image: appImage }));
-      await verdictFor(client, zelidauth, jobId, 'web');
 
       const second = await client.post('/apps/playground', oneComponent({ name: uniqueName(), image: appImage }), { zelidauth });
 
       expect(second.status).to.equal('error');
       expect(second.data.message).to.include('another node');
 
+      await verdictFor(client, zelidauth, jobId, 'web');
       await endSession(client, zelidauth, jobId);
     });
   });
