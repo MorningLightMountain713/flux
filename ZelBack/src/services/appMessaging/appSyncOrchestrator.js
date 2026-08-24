@@ -61,6 +61,11 @@ const MANIFEST_REFRESH_MIN_PEER_UPTIME_SECONDS = config.fluxapps.manifestRefresh
 // peer count and uptime floor.
 const INGRESS_REFRESH_BLOCKS = config.fluxapps.ingressRefreshBlocks ?? 200;
 
+// Mechanism B's slack (fluxModels formal/record-convergence): how far before
+// the observed loss the scoped reconnect pull reaches back, covering
+// publishes in flight either side of the drop.
+const RECONNECT_SYNC_SLACK_MS = config.fluxapps.reconnectSyncSlackMs ?? 120000;
+
 // The counted ephemeral sync types — each gates boot readiness. Temp messages are
 // requested with the initial batch but are best-effort and never counted toward it. The
 // content manifest is NOT here: it is permanent data reconciled on its own plane (a
@@ -109,6 +114,7 @@ class AppSyncOrchestrator {
   #syncRoundAbandoned = false;
   #syncPeerLostHandler = null;
   #syncPeersAvailableHandler = null;
+  #peerReestablishedHandler = null;
   #hashSyncAttempts = 0;
   #hashSyncRetryTimer = null;
   #nextHashRetryHeight = 0;
@@ -175,10 +181,16 @@ class AppSyncOrchestrator {
     };
     this.#syncPeerLostHandler = (key) => this.#onSyncPeerLost(key);
     this.#syncPeersAvailableHandler = () => this.#onSyncPeersAvailable();
+    this.#peerReestablishedHandler = (info) => {
+      this.#onPeerReestablished(info).catch((error) => {
+        log.error(`AppSyncOrchestrator - reconnect sync failed: ${error.message}`);
+      });
+    };
     this.#onPeerEvent('peerThresholdReached', this.#peerThresholdHandler);
     this.#onPeerEvent('peersBelowThreshold', this.#peersBelowHandler);
     this.#onPeerEvent('syncPeerLost', this.#syncPeerLostHandler);
     this.#onPeerEvent('syncPeersAvailable', this.#syncPeersAvailableHandler);
+    this.#onPeerEvent('peerReestablished', this.#peerReestablishedHandler);
 
     // peerThresholdReached is edge-triggered and latched in FluxPeerManager:
     // if peers connected fast enough that the threshold was crossed BEFORE the
@@ -461,6 +473,30 @@ class AppSyncOrchestrator {
       peers: peersToAsk.map((peer) => peer.key),
       types,
     });
+  }
+
+  // Mechanism B (fluxModels formal/record-convergence): durable records are
+  // published once, the boot sync runs at boot, and the degrade resync needs
+  // the peer set to collapse below the floor — a re-established connection is
+  // the one observable trigger that a RUNNING node may have missed one-shot
+  // broadcasts. One scoped apprunning pull per re-establishment (that stream
+  // carries the durable types unconditionally), reaching back to the moment
+  // the peer was lost less the slack; the responder's per-peer throttle
+  // bounds a flapping peer.
+  async #onPeerReestablished({ key, lostAtMs }) {
+    if (this.#state !== STATES.READY) return;
+    if (!this.#canSendMessages) return;
+    const peer = this.#getEligibleSyncPeers(0).find((p) => p.key === key);
+    if (!peer) return;
+    const sinceTs = Math.max(0, lostAtMs - RECONNECT_SYNC_SLACK_MS);
+    const pubkey = await fluxNetworkHelper.getFluxNodePublicKey();
+    const privkey = await fluxNetworkHelper.getFluxNodePrivateKey();
+    const requestTs = Date.now();
+    const msg = peerCodec.buildSyncSignatureMessage(peerCodec.MSG_TYPE.REQUEST_APP_RUNNING, sinceTs, requestTs);
+    const sig = verificationHelper.signMessage(msg, privkey);
+    this.#markSyncRequested(key);
+    this.#sendRequests([peer], 'apprunning (reconnect)', peerCodec.encodeRequestAppRunning(sinceTs, requestTs, pubkey, sig));
+    fluxEventBus.publish('ephemeralSync:reconnectRequested', { peer: key, sinceTimestamp: sinceTs });
   }
 
   #onPeersDegraded() {
@@ -958,6 +994,9 @@ class AppSyncOrchestrator {
     }
     if (this.#syncPeersAvailableHandler) {
       this.#offPeerEvent('syncPeersAvailable', this.#syncPeersAvailableHandler);
+    }
+    if (this.#peerReestablishedHandler) {
+      this.#offPeerEvent('peerReestablished', this.#peerReestablishedHandler);
     }
     peerNotification.stopBroadcastInterval();
     this.#broadcastStarted = null;

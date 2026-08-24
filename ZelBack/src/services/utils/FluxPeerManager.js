@@ -45,6 +45,14 @@ class FluxPeerManager extends EventEmitter {
   #reconnectQueue = new Map();
   /** @type {Map<string, {disconnects: number, firstDisconnect: number}>} */
   #unstableNodes = new Map();
+  /**
+   * When each lost peer key was removed. Feeds the peerReestablished event: a
+   * re-established connection is the one observable trigger that this node may
+   * have missed one-shot broadcasts while the link was down (fluxModels
+   * formal/record-convergence — mechanism B).
+   * @type {Map<string, number>}
+   */
+  #lastLostAt = new Map();
   /** @type {Map<string, number>} "outbound:192.168" → count */
   #ipGroupCounts = new Map();
   /** @type {Map<string, number>} "outbound:10.0.0.1" → count */
@@ -197,6 +205,11 @@ class FluxPeerManager extends EventEmitter {
     this.#schedulePeerUpdate();
     if (this.networkHealthMonitor) this.networkHealthMonitor.recordConnect();
     fluxEventBus.publish('peers:added', { ip, port: String(port), direction, outbound: this.#outboundKeys.size, inbound: this.#inboundKeys.size, total: this.#peers.size });
+    const lostAtMs = this.#lastLostAt.get(peer.key);
+    if (lostAtMs !== undefined) {
+      this.#lastLostAt.delete(peer.key);
+      this.emit('peerReestablished', { key: peer.key, lostAtMs });
+    }
     if (!this.#aboveThreshold && this.#peers.size >= this.#syncPeerThreshold) {
       this.#aboveThreshold = true;
       this.emit('peerThresholdReached', this.#peers.size);
@@ -228,6 +241,11 @@ class FluxPeerManager extends EventEmitter {
 
     // Track disconnect for unstable node detection and network health
     this.trackDisconnect(peer.ip, peer.port);
+    this.#lastLostAt.set(key, Date.now());
+    if (this.#lastLostAt.size > 2000) {
+      // insertion-ordered: the oldest loss is the least likely to return
+      this.#lastLostAt.delete(this.#lastLostAt.keys().next().value);
+    }
     if (this.networkHealthMonitor) this.networkHealthMonitor.recordDisconnect(peer.connectedAt, closeCode);
 
     // Queue outbound peers for reconnection only on unexpected disconnections.

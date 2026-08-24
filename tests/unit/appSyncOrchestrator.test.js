@@ -27,6 +27,8 @@ describe('AppSyncOrchestrator', () => {
   let getFluxNodePrivateKeyStub;
   let signMessageStub;
   let reconcileStub;
+  let buildSyncSigStub;
+  let encodeAppRunningStub;
 
   function makePeer(key) {
     return { key, send: sinon.stub() };
@@ -118,9 +120,9 @@ describe('AppSyncOrchestrator', () => {
         MSG_TYPE: {
           REQUEST_TEMP_MESSAGES: 0x20, REQUEST_APP_RUNNING: 0x21, REQUEST_APP_INSTALLING: 0x22, REQUEST_APP_INSTALLING_ERRORS: 0x23,
         },
-        buildSyncSignatureMessage: sinon.stub().returns('testmsg'),
+        buildSyncSignatureMessage: (buildSyncSigStub = sinon.stub().returns('testmsg')),
         encodeRequestTempMessages: sinon.stub().returns(Buffer.alloc(9, 0x20)),
-        encodeRequestAppRunning: sinon.stub().returns(Buffer.alloc(9, 0x21)),
+        encodeRequestAppRunning: (encodeAppRunningStub = sinon.stub().returns(Buffer.alloc(9, 0x21))),
         encodeRequestAppInstalling: sinon.stub().returns(Buffer.alloc(9, 0x22)),
         encodeRequestAppInstallingErrors: sinon.stub().returns(Buffer.alloc(9, 0x23)),
       },
@@ -451,6 +453,79 @@ describe('AppSyncOrchestrator', () => {
       peerEmitter.emit('peerThresholdReached', 12);
       await clock.tickAsync(0);
       expect(orchestrator.state).to.equal(STATES.RESYNCING);
+    });
+  });
+
+  describe('reconnect-triggered durable sync (mechanism B)', () => {
+    // formal/record-convergence: a re-established peer is the one observable
+    // trigger that a RUNNING node may have missed one-shot broadcasts.
+    const RECONNECT_SLACK_MS = 120000;
+
+    async function reachReady() {
+      blockEmitter.emit('blocksProcessed', 2555000);
+      await clock.tickAsync(0);
+      peerEmitter.emit('peerThresholdReached', 12);
+      await clock.tickAsync(0);
+      for (let i = 0; i < 3; i += 1) {
+        appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_COMPLETE, 'apprunning');
+        appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_COMPLETE, 'appinstalling');
+        appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_COMPLETE, 'apperrors');
+      }
+      await clock.tickAsync(0);
+    }
+
+    it('a re-established peer gets one scoped apprunning pull from its loss time', async () => {
+      const peers = makeEligiblePeers(3);
+      getEligibleSyncPeersStub = sinon.stub().returns(peers);
+      const markStub = sinon.stub();
+      const orchestrator = makeOrchestrator({ isEnterprise: () => true, markSyncRequested: markStub });
+      orchestrator.start(defaultBootContext);
+      await reachReady();
+      expect(orchestrator.state).to.equal(STATES.READY);
+
+      const bootSends = peers[0].send.callCount;
+      const otherSends = peers[1].send.callCount;
+      markStub.resetHistory();
+      // a positive clock baseline, or the slack subtraction floors at zero
+      await clock.tickAsync(300000);
+      const lostAtMs = Date.now() - 60000;
+      peerEmitter.emit('peerReestablished', { key: peers[0].key, lostAtMs });
+      await clock.tickAsync(0);
+
+      expect(peers[0].send.callCount, 'one pull to the returned peer').to.equal(bootSends + 1);
+      expect(peers[1].send.callCount, 'nobody else asked').to.equal(otherSends);
+      expect(markStub.calledWith(peers[0].key), 'response gate opened for the peer').to.equal(true);
+      const expectedSince = lostAtMs - RECONNECT_SLACK_MS;
+      expect(buildSyncSigStub.calledWith(0x21, expectedSince), 'the signed ask names the scoped since').to.equal(true);
+      expect(encodeAppRunningStub.calledWith(expectedSince), 'the frame carries the scoped since').to.equal(true);
+    });
+
+    it('does nothing outside READY - the boot rounds own those windows', async () => {
+      const peers = makeEligiblePeers(3);
+      getEligibleSyncPeersStub = sinon.stub().returns(peers);
+      const orchestrator = makeOrchestrator({ isEnterprise: () => true });
+      orchestrator.start(defaultBootContext);
+      blockEmitter.emit('blocksProcessed', 2555000);
+      await clock.tickAsync(0);
+      expect(orchestrator.state).to.equal(STATES.SYNCING);
+
+      peerEmitter.emit('peerReestablished', { key: peers[0].key, lostAtMs: Date.now() - 60000 });
+      await clock.tickAsync(0);
+      expect(peers[0].send.called).to.equal(false);
+    });
+
+    it('a peer no longer connected is quietly skipped', async () => {
+      const peers = makeEligiblePeers(3);
+      getEligibleSyncPeersStub = sinon.stub().returns(peers);
+      const orchestrator = makeOrchestrator({ isEnterprise: () => true });
+      orchestrator.start(defaultBootContext);
+      await reachReady();
+      expect(orchestrator.state).to.equal(STATES.READY);
+
+      const sends = peers.map((p) => p.send.callCount);
+      peerEmitter.emit('peerReestablished', { key: '10.9.9.9:16127', lostAtMs: Date.now() - 60000 });
+      await clock.tickAsync(0);
+      peers.forEach((p, i) => expect(p.send.callCount).to.equal(sends[i]));
     });
   });
 

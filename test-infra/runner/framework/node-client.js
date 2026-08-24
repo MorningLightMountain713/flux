@@ -151,6 +151,7 @@ export function nodeClient(nodeNum) {
         'network:ipchanged',
         'network:sigterm',
         'ephemeralSync:requested',
+        'ephemeralSync:reconnectRequested',
         'ephemeralSync:peerComplete',
         'ephemeralSync:peerFailed',
         'ephemeralSync:allComplete',

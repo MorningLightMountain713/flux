@@ -604,6 +604,34 @@ describe('FluxPeerManager tests', () => {
     manager.reset();
   });
 
+  describe('peer re-establishment (mechanism B trigger)', () => {
+    it('emits peerReestablished with the loss time when a lost peer returns', () => {
+      const events = [];
+      manager.on('peerReestablished', (info) => events.push(info));
+      const before = Date.now();
+      manager.add(createMockWs('10.0.0.9', '16127'), '10.0.0.9', '16127', { source: PEER_SOURCE.RANDOM });
+      manager.remove('10.0.0.9:16127', 1006);
+      manager.add(createMockWs('10.0.0.9', '16127'), '10.0.0.9', '16127', { source: PEER_SOURCE.RANDOM });
+
+      expect(events).to.have.lengthOf(1);
+      expect(events[0].key).to.equal('10.0.0.9:16127');
+      expect(events[0].lostAtMs).to.be.at.least(before);
+    });
+
+    it('a first-ever add emits nothing; each loss arms exactly one re-establishment', () => {
+      const events = [];
+      manager.on('peerReestablished', (info) => events.push(info));
+      manager.add(createMockWs('10.0.0.9', '16127'), '10.0.0.9', '16127', { source: PEER_SOURCE.RANDOM });
+      expect(events, 'first add is not a re-establishment').to.have.lengthOf(0);
+
+      manager.remove('10.0.0.9:16127', 1006);
+      manager.add(createMockWs('10.0.0.9', '16127'), '10.0.0.9', '16127', { source: PEER_SOURCE.RANDOM });
+      manager.remove('10.0.0.9:16127', 1006);
+      manager.add(createMockWs('10.0.0.9', '16127'), '10.0.0.9', '16127', { source: PEER_SOURCE.RANDOM });
+      expect(events, 'one event per loss-and-return cycle').to.have.lengthOf(2);
+    });
+  });
+
   describe('add', () => {
     it('should create FluxPeerSocket, insert into map and correct direction set', () => {
       const ws = createMockWs('10.0.0.1', '16127');
