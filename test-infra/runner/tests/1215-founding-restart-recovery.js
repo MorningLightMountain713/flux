@@ -3,7 +3,7 @@ import { describe, it, before, after } from 'mocha';
 import { expect } from 'chai';
 import { createTestEnv } from '../framework/test-env.js';
 import { ALL_ZMQ_TOPICS } from '../framework/fluxd-conf.js';
-import { bootAndPeer } from '../framework/reconciler-suite.js';
+import { bootAndPeer, restartAndPeer } from '../framework/reconciler-suite.js';
 import { registerEncryptedV9App } from '../framework/content-helper.js';
 import { pushBusybox } from '../framework/registry-helper.js';
 import { REGISTRY_REPO_HOST } from '../framework/subnet-config.js';
@@ -11,7 +11,7 @@ import {
   queueAppTx, advanceBlocks, advanceBlock, removeFromNodeList,
 } from '../framework/daemon-control.js';
 import {
-  execInContainer, requireAppContainerName, restartFluxos,
+  execInContainer, requireAppContainerName,
 } from '../framework/container.js';
 import { waitFor, waitForAppInstalled, waitForUp } from '../framework/wait.js';
 
@@ -43,7 +43,6 @@ const COMPONENT = 'meshcomp';
 
 describe('founding recovers through a fleet-wide restart', function () {
   let env;
-  let restartMarkers;
 
   function componentSpec(compName, appImage, hostPort) {
     return {
@@ -104,15 +103,6 @@ describe('founding recovers through a fleet-wide restart', function () {
   // is still judging which installed apps it keeps. afterId markers are
   // captured pre-kill so the PREVIOUS boot's settled event cannot satisfy
   // the wait from the buffer. Returns the markers for later peer waits.
-  async function restartAllFluxos(settleIndexes) {
-    const markers = env.clients.map((c) => c.getLastEventId());
-    await Promise.all(env.clients.map((c) => restartFluxos(c.container)));
-    await Promise.all(settleIndexes.map(
-      (i) => env.clients[i].waitForEvent('boot:settled', () => true, 180000, { afterId: markers[i] }),
-    ));
-    return markers;
-  }
-
   // Ask every node each round until one full round shows exactly one yes.
   // requiredNonNull are the nodes whose answers must be real for a round to
   // count (a delisted node's app may be mid-teardown; its yes still counts
@@ -139,13 +129,26 @@ describe('founding recovers through a fleet-wide restart', function () {
     return winner;
   }
 
+  // The founder register key is rung-salted (<app>/founder-<world>@<rung>)
+  // and the suite must never re-derive that arithmetic itself: the winner's
+  // founded event names the key the founding actually used.
+  async function foundedGrant(winner, appName, afterId) {
+    const entry = await env.clients[winner].waitForEvent(
+      'quorumGrant:founded',
+      (d) => typeof d.key === 'string' && d.key.startsWith(`${appName}/founder-`),
+      30000,
+      { afterId },
+    );
+    return entry.data;
+  }
+
   // Every cell must ANSWER the record query (an unreachable register is not
   // an empty one); the founder grant must stand on a quorum of cells and
-  // every copy must name the same grantee.
-  async function assertOneRecordedFounder(appName) {
+  // every copy must name the same grantee — the one the founded event named.
+  async function assertOneRecordedFounder(key, founder) {
     const cells = await Promise.all(env.clients.map(async (client, i) => {
       const res = await fetch(
-        `${client.url}/flux/quorumgrant/record?key=${encodeURIComponent(`${appName}/founder`)}`,
+        `${client.url}/flux/quorumgrant/record?key=${encodeURIComponent(key)}`,
         { signal: AbortSignal.timeout(5000) },
       );
       expect(res.ok, `node ${i} answers the record query`).to.equal(true);
@@ -155,6 +158,7 @@ describe('founding recovers through a fleet-wide restart', function () {
     const accepted = cells.filter(Boolean);
     expect(accepted.length, 'the founder grant stands on a quorum of cells').to.be.at.least(2);
     expect(new Set(accepted.map((a) => a.grantee)), 'every cell names the same founder').to.have.lengthOf(1);
+    expect(accepted[0].grantee, 'the recorded grantee is the founded founder').to.equal(founder);
   }
 
   before(async function () {
@@ -193,23 +197,17 @@ describe('founding recovers through a fleet-wide restart', function () {
     // Restart EVERY node's FluxOS before anything has asked the founder
     // question — the founding window is open, no founder grant exists, and
     // the in-memory membership history is wiped fleet-wide.
-    restartMarkers = await restartAllFluxos([0, 1, 2]);
+    const restartMarkers = await restartAndPeer(env, [0, 1, 2]);
 
     // The photo survived, so after the rejoin drain the scramble completes:
     // exactly one node is ever told yes, and the verdict is stable.
-    await sampleUntilOneFounder(name, [0, 1, 2], 'stable-fleet');
-    await assertOneRecordedFounder(name);
+    const winner = await sampleUntilOneFounder(name, [0, 1, 2], 'stable-fleet');
+    const founded = await foundedGrant(winner, name, restartMarkers[winner]);
+    await assertOneRecordedFounder(founded.key, founded.founder);
   });
 
   it('membership churn between the anchor and the restart does not wedge founding', async function () {
     this.timeout(600000);
-    // Registration refuses below the outbound-peer floor, and a fleet-wide
-    // restart re-forms peering on the discovery cadence — minutes, measured
-    // ~4 on the 48c5c41ca red. Wait for the registering node to re-peer from
-    // test 1's restart rather than racing it.
-    await env.clients[0].waitForEvent(
-      'peers:added', (d) => d.outbound >= 1, 360000, { afterId: restartMarkers[0] },
-    );
     const name = `e2echurn${Date.now()}`;
     await registerAndInstall(name, 31001);
 
@@ -223,13 +221,14 @@ describe('founding recovers through a fleet-wide restart', function () {
     await advanceBlock();
     // Only the listed nodes gate settling: a delisted node reboots into a
     // world that may refuse its dials, and nothing downstream requires it.
-    await restartAllFluxos([0, 1]);
+    const churnMarkers = await restartAndPeer(env, [0, 1]);
 
     // The delisted node keeps its photo and its seat (registration-height
     // pinning); its app container may not survive delisting, so only the
     // listed nodes gate the round count — but a yes anywhere still counts
     // against exactly-one.
-    await sampleUntilOneFounder(name, [0, 1], 'churned-fleet');
-    await assertOneRecordedFounder(name);
+    const winner = await sampleUntilOneFounder(name, [0, 1], 'churned-fleet');
+    const founded = await foundedGrant(winner, name, churnMarkers[winner]);
+    await assertOneRecordedFounder(founded.key, founded.founder);
   });
 });

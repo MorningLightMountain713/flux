@@ -20,7 +20,7 @@ import { throwIfInfraDead, sleepUnlessInfraDead } from './infra-death.js';
 import { REGISTRY_REPO_HOST, getSubnetConfig } from './subnet-config.js';
 import { dialerCount, expectedPeerTotal } from './peer-topology.js';
 import { setSynced, setSyncState, setNoPeerData } from './syncthing-control.js';
-import { execInContainer } from './container.js';
+import { execInContainer, restartFluxos } from './container.js';
 import { bootstrapPricing } from './price-helper.js';
 
 // A folder the suite pins "synced" (setSynced reports a non-zero global index)
@@ -403,6 +403,27 @@ export async function waitForLocationTable(node, { domains, timeout = 90000 } = 
       && response.data.tableAvailable === true
       && (domains === undefined || response.data.total.domains === domains);
   }, { timeout, interval: 2000, label: `location table live${domains === undefined ? '' : ` with ${domains} domains`}` });
+}
+
+// bootAndPeer's restart twin: cycle FluxOS on every node and hold the fleet to
+// the same contract a first boot ends with — settled, discovering, and peered
+// back to the floor. Discovery never autostarts in-harness, so peering after a
+// restart is the suite's move exactly as on first boot. settleIndexes names the
+// nodes the contract can still be expected of (a delisted node reboots into a
+// world that may refuse its dials); the floor is read from the first of them,
+// as bootAndPeer reads it from its first client. Returns the pre-restart event
+// markers, one per client, for afterId-disciplined waits on what follows.
+export async function restartAndPeer(env, settleIndexes, { minOutbound = 1, minInbound = 1 } = {}) {
+  const markers = env.clients.map((c) => c.getLastEventId());
+  await Promise.all(env.clients.map((c) => restartFluxos(c.container)));
+  await Promise.all(settleIndexes.map(
+    (i) => env.clients[i].waitForEvent('boot:settled', () => true, 180000, { afterId: markers[i] }),
+  ));
+  await env.startDiscovery(settleIndexes);
+  const [gate] = settleIndexes;
+  await env.clients[gate].waitForEvent('peers:added', (d) => d.outbound >= minOutbound, 120000, { afterId: markers[gate] });
+  await env.clients[gate].waitForEvent('peers:added', (d) => d.inbound >= minInbound, 120000, { afterId: markers[gate] });
+  return markers;
 }
 
 // Seed a pre-built app (buildSeedableApp / buildSeedableSyncthingApp) into every
