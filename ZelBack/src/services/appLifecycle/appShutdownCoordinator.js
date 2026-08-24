@@ -40,22 +40,25 @@ const inFlight = new Map();
 // never wedges into a re-route loop, yet daemon routing resumes once it recovers.
 const localFallback = new Set();
 
-function baseAppName(identifier) {
-  return identifier.includes('_') ? identifier.split('_')[1] : identifier;
-}
-
 /**
  * Request a graceful stop-but-keep via flux-shutdownd. Returns true when the daemon
  * owns the stop (the reconciler then takes NO docker action); false when the reconciler
  * should stop locally (non-Arcane, daemon unavailable/failed, or app unknown).
  *
- * @param {string} identifier component identifier (e.g. web_myapp)
+ * @param {string} identifier component identifier (e.g. web_<app identity>)
  * @param {string} reconcilerReason the reconciler's desired-stopped reason
  * @returns {Promise<boolean>}
  */
 async function requestGracefulStop(identifier, reconcilerReason) {
   if (!globalState.isArcane()) return false;
-  const appName = baseAppName(identifier);
+
+  // The row that owns this component names the app - identifiers are built from
+  // the minted identity and cannot be taken apart into a name. A row the boot
+  // backfill has not resolved yet does not answer, and the local stop below is
+  // exactly what such rows get today.
+  const instantiated = await appsRepository.getInstalledAppByComponentIdentifier(identifier);
+  if (!instantiated) return false;
+  const appName = instantiated.name;
 
   // A drain just failed: do one local stop, then re-allow daemon routing next time.
   if (localFallback.has(appName)) {
@@ -64,9 +67,6 @@ async function requestGracefulStop(identifier, reconcilerReason) {
   }
   // Already draining (another component, or an earlier pass): the LB gate holds it.
   if (inFlight.has(appName)) return true;
-
-  const instantiated = await appsRepository.getInstalledApp(appName);
-  if (!instantiated) return false;
   // This is a whole-app stop (operator stop / hold / condemned drains every local
   // replica together), so the deadline budgets for ALL of this node's deployments -
   // the daemon drains them sequentially within the app.
