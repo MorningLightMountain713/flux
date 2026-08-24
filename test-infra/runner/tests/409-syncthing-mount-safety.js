@@ -109,7 +109,7 @@ describe('syncthing mount-safety guard demotes unsafe sendreceive folders', func
     // if the index ever claims bytes over an empty disk, the phantom guard
     // (correctly) demotes and holds, and the app never reaches the premise.
     const leakInstallAfter = env.clients[0].getLastEventId();
-    await seedSyncthingApp(env, { name: leakName, mode: 'r', index: 0 });
+    await seedSyncthingApp(env, { name: leakName, syncMode: 'syncFirst', index: 0 });
     await waitForReconcileActuated(env.clients[0], leakIdentifier, 'dataCleared', 60000, { afterId: leakInstallAfter });
     await seedSyncScopedData(env, leakName, 0);
     await setSynced({ ip: ip0, folder: leakFolder });
@@ -118,11 +118,12 @@ describe('syncthing mount-safety guard demotes unsafe sendreceive folders', func
     // The phantom app carries an f: mount, because that is the volume shape the guard
     // has to be right about. FluxOS touches the named file at the volume root when it
     // builds the volume - docker would create a directory where a bind source is
-    // missing - and a wipe leaves it there, zero-length. A bare r:/appdata app puts no
-    // regular file at the root at all, so it cannot tell a walk that counts any file
-    // from one that counts the owner's data, and the guard reads the same either way.
+    // missing - and a wipe leaves it there, zero-length. A syncFirst app with only
+    // /appdata puts no regular file at the root at all, so it cannot tell a walk that
+    // counts any file from one that counts the owner's data, and the guard reads the
+    // same either way.
     await seedSyncthingApp(env, {
-      name: phantomName, mode: 'r', index: 1, extraMounts: ['f:server.json:/etc/server.json'],
+      name: phantomName, syncMode: 'syncFirst', index: 1, extraMounts: ['f:server.json:/etc/server.json'],
     });
     await waitForReconcileActuated(env.clients[1], phantomIdentifier, 'dataCleared', 60000, { afterId: phantomInstallAfter });
     await seedSyncScopedData(env, phantomName, 1);
@@ -324,7 +325,7 @@ describe('syncthing mount-safety guard demotes unsafe sendreceive folders', func
       // seeding: seeded data declares the cold start, an empty index the leader
       // rightly seeds over.
       await pushImage(name, 'v1');
-      const app = await buildSeedableSyncthingApp({ name, mode: 'r', instances: 1 });
+      const app = await buildSeedableSyncthingApp({ name, syncMode: 'syncFirst', instances: 1 });
       await client.holdCheckpoint(BEFORE_SEED_CHECK, folder);
       await claimSyncedOverEmptyDisk(subnet.nodeIp(index + 1), folder);
       await installOnNodes(env, app, [index]);
@@ -345,7 +346,7 @@ describe('syncthing mount-safety guard demotes unsafe sendreceive folders', func
       const folder = appId(name);
       const client = env.clients[index];
       // A running peer is ahead of it, so it promotes only once synced.
-      await seedSyncthingApp(env, { name, mode: 'r', index, forceNonLeader: true });
+      await seedSyncthingApp(env, { name, syncMode: 'syncFirst', index, forceNonLeader: true });
       expect(await folderType(subnet.nodeIp(index + 1), folder), 'fixture: the standby receives').to.equal('receiveonly');
 
       const afterId = client.getLastEventId();

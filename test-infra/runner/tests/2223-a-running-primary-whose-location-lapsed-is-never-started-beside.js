@@ -71,7 +71,7 @@ describe('a running primary whose location lapsed is never started beside', func
     })));
     await resetFdm();
     await pushImage(appName, 'v1');
-    const app = await buildSeedableSyncthingApp({ name: appName, mode: 'g', instances: 2 });
+    const app = await buildSeedableSyncthingApp({ name: appName, syncMode: 'activeStandby', instances: 2 });
 
     await electMaster(appName, client(B).ip);
     const primaryAfter = client(B).getLastEventId();

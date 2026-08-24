@@ -51,7 +51,7 @@ describe('a node that read its folders publishes them even when the device read 
     // selection for this cycle". So the node answers ready with an EMPTY list,
     // which is a true answer to a different question, and a suite that waits on
     // `ready` proceeds with nothing to withhold and can never fail.
-    const seeded = await seedSyncthingApp(env, { name: appName, mode: 'g', index: 0 });
+    const seeded = await seedSyncthingApp(env, { name: appName, syncMode: 'activeStandby', index: 0 });
     await setSynced({ ip: subnet.nodeIp(1), folder: seeded.folder });
 
     await waitFor(async () => (await promoted(0)).folders.includes(seeded.folder), {

@@ -77,7 +77,7 @@ export async function placeSilentPrimaryApp({
   await pushImage(appName, 'v1');
   // Two instances: the holders the suites place. Wanting more, the spawner would
   // place a third on C, which would then judge and take over beside them.
-  const app = await buildSeedableSyncthingApp({ name: appName, mode: 'g', instances: 2 });
+  const app = await buildSeedableSyncthingApp({ name: appName, syncMode: 'activeStandby', instances: 2 });
 
   await electMaster(appName, client(B).ip);
   const primaryAfter = client(B).getLastEventId();

@@ -69,7 +69,7 @@ async function bootFleet(env) {
 async function buildApp(prefix) {
   const appName = `${prefix}${Date.now()}`;
   await pushTestApp(appName);
-  const app = await buildSeedableSyncthingApp({ name: appName, mode: 'g', instances: 2 });
+  const app = await buildSeedableSyncthingApp({ name: appName, syncMode: 'activeStandby', instances: 2 });
   return { appName, app };
 }
 

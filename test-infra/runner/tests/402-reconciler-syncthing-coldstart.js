@@ -89,7 +89,7 @@ describe('reconciler cold start - fresh multi-node placement, no seeded source',
     const gSpec = await buildSeedableSyncthingApp({ name: gApp, syncMode: 'activeStandby', ports: [31112] });
 
     await pushImage(claimApp, 'v1');
-    const claimSpec = await buildSeedableSyncthingApp({ name: claimApp, mode: 'r' });
+    const claimSpec = await buildSeedableSyncthingApp({ name: claimApp, syncMode: 'syncFirst' });
 
     // The folder id carries the app's minted identity, which only the registration
     // row states — and this runs before install, so there is no container to ask.
@@ -154,7 +154,7 @@ describe('reconciler cold start - fresh multi-node placement, no seeded source',
     expect(unmeasured, 'no holder is left between the address-order winner and the data holder').to.not.equal(undefined);
 
     await pushImage(waitApp, 'v1');
-    const spec = await buildSeedableSyncthingApp({ name: waitApp, mode: 'r' });
+    const spec = await buildSeedableSyncthingApp({ name: waitApp, syncMode: 'syncFirst' });
     const folder = await dbClient(1).appFolderId(waitApp, waitApp);
     const passes = () => env.clients[seedIndex].getDecisionCount('syncthing:folderPass', folder, 'evaluated');
     await pinColdStart(holders, folder);
@@ -234,7 +234,7 @@ describe('reconciler cold start - fresh multi-node placement, no seeded source',
     expect(silenced, 'the fixture needs a third holder to silence').to.not.equal(undefined);
 
     await pushImage(splitApp, 'v1');
-    const splitSpec = await buildSeedableSyncthingApp({ name: splitApp, mode: 'r' });
+    const splitSpec = await buildSeedableSyncthingApp({ name: splitApp, syncMode: 'syncFirst' });
     const folder = await dbClient(1).appFolderId(splitApp, splitApp);
     await pinColdStart(holders, folder);
     await pinHolding(claimHolder, folder, claimBytes);

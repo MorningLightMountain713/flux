@@ -150,7 +150,7 @@ describe('a call to one node answered by another', function () {
       this.timeout(420000);
       const appName = `e2eredirsync${Date.now()}`;
       await pushTestApp(appName);
-      const app = await buildSeedableSyncthingApp({ name: appName, mode: 'g', instances: 2 });
+      const app = await buildSeedableSyncthingApp({ name: appName, syncMode: 'activeStandby', instances: 2 });
       const spawnAnchor = env.clients[A].getLastEventId();
       await seedSpawnerApp(env, app);
 

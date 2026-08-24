@@ -49,7 +49,7 @@ describe('a start the reconciler does not make records no attempt', function () 
     await resetFdm();
     await resetSyncState();
     await pushImage(appName, 'v1');
-    const app = await buildSeedableSyncthingApp({ name: appName, mode: 'g' });
+    const app = await buildSeedableSyncthingApp({ name: appName, syncMode: 'activeStandby' });
 
     const installAfters = [0, 1].map((i) => env.clients[i].getLastEventId());
     holders = await installOnNodes(env, app, [0, 1]);

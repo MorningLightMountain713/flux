@@ -49,22 +49,22 @@ describe('reconciler stall ladder: nudge with evidence, remove only with proof, 
     // Gate every follower's sync shape BEFORE its first evaluation - otherwise it
     // sees the stub's default-synced state and starts. Each app sits on its own
     // subject node so the per-node nudge logs stay independent.
-    active = await seedSyncthingApp(env, { name: activeApp, mode: 'r', forceNonLeader: true, index: 0 });
+    active = await seedSyncthingApp(env, { name: activeApp, syncMode: 'syncFirst', forceNonLeader: true, index: 0 });
     await setActiveFlat({ ip: subnet.nodeIp(1), folder: active.folder, percent: 60 });
     await setPeerHasData({ ip: subnet.nodeIp(1), folder: active.folder });
 
     // seeded ACTIVE (healthy, ladder dormant): the walk to removal is started by
     // leg 2 itself, so the app:removed lands after that leg's afterId - seeded
     // stalled, the ~50s walk completes during leg 1's window and the event is lost
-    ladder = await seedSyncthingApp(env, { name: ladderApp, mode: 'r', forceNonLeader: true, index: 1 });
+    ladder = await seedSyncthingApp(env, { name: ladderApp, syncMode: 'syncFirst', forceNonLeader: true, index: 1 });
     await setSyncing({ ip: subnet.nodeIp(2), folder: ladder.folder, percent: 60 });
     await setPeerHasData({ ip: subnet.nodeIp(2), folder: ladder.folder });
 
-    offline = await seedSyncthingApp(env, { name: offlineApp, mode: 'r', forceNonLeader: true, index: 2 });
+    offline = await seedSyncthingApp(env, { name: offlineApp, syncMode: 'syncFirst', forceNonLeader: true, index: 2 });
     await setStalled({ ip: subnet.nodeIp(3), folder: offline.folder, percent: 60 });
     await setPeerDisconnected({ ip: subnet.nodeIp(3), folder: offline.folder });
 
-    stuck = await seedSyncthingApp(env, { name: stuckApp, mode: 'r', forceNonLeader: true, index: 3 });
+    stuck = await seedSyncthingApp(env, { name: stuckApp, syncMode: 'syncFirst', forceNonLeader: true, index: 3 });
     await setStalled({ ip: subnet.nodeIp(4), folder: stuck.folder, percent: 60 });
     await setNoPeerData({ ip: subnet.nodeIp(4), folder: stuck.folder });
   });

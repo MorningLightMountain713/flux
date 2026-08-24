@@ -95,7 +95,7 @@ describe('a single-writer folder type has one writer', function () {
     const identifier = identifierOf(appName);
     const from = holders.map((i) => env.clients[i].getLastEventId());
     await pushImage(appName, 'v1');
-    const app = await buildSeedableSyncthingApp({ name: appName, mode: 'g' });
+    const app = await buildSeedableSyncthingApp({ name: appName, syncMode: 'activeStandby' });
     await placeGAppInOrder(env, app, { placementOrder: holders, folder, identifier });
     await waitFor(async () => (await Promise.all(holders.map((i) => isUp(env.clients[i], appName)))).filter(Boolean).length === 1, {
       timeout: 300000, interval: 3000, label: `${appName} runs on one holder`,

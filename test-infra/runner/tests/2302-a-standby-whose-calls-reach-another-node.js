@@ -115,7 +115,7 @@ describe('a standby whose calls to its primary reach another node', function () 
 
     await resetFdm();
     await pushImage(appName, 'v1');
-    const app = await buildSeedableSyncthingApp({ name: appName, mode: 'g' });
+    const app = await buildSeedableSyncthingApp({ name: appName, syncMode: 'activeStandby' });
 
     // The primary first, holding the world.
     await electMaster(appName, env.clients[B].ip);

@@ -96,7 +96,7 @@ describe('a restore does not reach the other instances data', function () {
 
     // the incident's shape: a g: app with two instances, one elected
     await pushImage(appName, 'v1');
-    const app = await buildSeedableSyncthingApp({ name: appName, mode: 'g' });
+    const app = await buildSeedableSyncthingApp({ name: appName, syncMode: 'activeStandby' });
     // Node 0 is the elected primary from the start: FDM names it before the app
     // is installed, so the other holder never starts it first.
     await electMaster(appName, env.clients[0].ip);
@@ -217,7 +217,7 @@ describe('a restore does not reach the other instances data', function () {
     before(async function () {
       this.timeout(420000);
       await pushImage(ownName, 'v1');
-      const app = await buildSeedableSyncthingApp({ name: ownName, mode: 'g' });
+      const app = await buildSeedableSyncthingApp({ name: ownName, syncMode: 'activeStandby' });
       // node 0 holds it, so node 1 is a standby the election has stopped - which
       // is the state a restore must not undo. FDM names node 0 before the app is
       // installed, so node 1 never starts it first.

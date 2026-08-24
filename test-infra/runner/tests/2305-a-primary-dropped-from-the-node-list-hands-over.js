@@ -82,7 +82,7 @@ describe('a primary dropped from the node list hands its app over', function () 
 
     await resetFdm();
     await pushImage(appName, 'v1');
-    const app = await buildSeedableSyncthingApp({ name: appName, mode: 'g' });
+    const app = await buildSeedableSyncthingApp({ name: appName, syncMode: 'activeStandby' });
 
     await electMaster(appName, env.clients[B].ip);
     const primaryAfter = env.clients[B].getLastEventId();
