@@ -86,7 +86,11 @@ describe('installing claims: election losers release their seats by cleared broa
           memory: 300,
           rootFsGb: 2,
           persistentStorage: { sizeGb: 10, mounts: { '/data': { source: 'data', destination: '/data' } } },
-          ports: { game: { containerPort: 8080, hostPort: 35060 } },
+          // Deliberately portless: the peer port-reachability probe sits between
+          // the wake and the claim, and on the shaped wire its multi-round-trip
+          // duration would re-widen the claim spread the latency exists to beat.
+          // A portless app skips the probe by design, and the claims election
+          // owes nothing to ports.
           env: {},
         },
       },
