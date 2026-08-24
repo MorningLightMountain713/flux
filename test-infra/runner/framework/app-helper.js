@@ -94,7 +94,9 @@ export async function registerApp(nodeUrl, adminKeypair, spec, type = 'fluxappre
   const auth = await authenticate(nodeUrl, adminKeypair);
   const signed = await signAppSpec(spec, type);
 
-  const res = await fetch(`${nodeUrl}/apps/appregister`, {
+  // Updates have their own door — the register route accepts only register types.
+  const endpoint = type === 'fluxappupdate' ? '/apps/appupdate' : '/apps/appregister';
+  const res = await fetch(`${nodeUrl}${endpoint}`, {
     method: 'POST',
     headers: { 'Content-Type': 'text/plain', zelidauth: auth.zelidauth },
     body: JSON.stringify(signed),
