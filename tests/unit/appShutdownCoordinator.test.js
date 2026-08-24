@@ -22,7 +22,7 @@ describe('appShutdownCoordinator', () => {
   beforeEach(() => {
     stubs = {
       log: { warn: sinon.stub(), info: sinon.stub(), error: sinon.stub() },
-      appsRepository: { getInstalledApp: sinon.stub().resolves({ name: 'myapp', owner: '1own' }) },
+      appsRepository: { getInstalledAppByComponentIdentifier: sinon.stub().resolves({ name: 'myapp', owner: '1own' }) },
       deploymentProvider: {
         buildDeployment: sinon.stub().resolves({ componentEntries: () => [] }),
         // Delegates at call time so per-test overrides of buildDeployment flow
@@ -67,8 +67,20 @@ describe('appShutdownCoordinator', () => {
     expect(stubs.fluxShutdowndClient.beginAppStop.called).to.equal(false);
   });
 
+  it('resolves a minted-identity component through the identifier index, not the name split', async () => {
+    // Reality-shaped repo: the identifier index answers only recorded component
+    // identifiers. An encrypted v9 identifier carries the minted identity -
+    // there is no name to split out of it.
+    stubs.appsRepository.getInstalledAppByComponentIdentifier.callsFake(
+      async (id) => (id === 'web_5df148117fa5' ? { name: 'myapp', owner: '1own' } : null),
+    );
+    const result = await coordinator.requestGracefulStop('web_5df148117fa5', 'operatorStopped');
+    expect(result).to.equal(true);
+    expect(stubs.fluxShutdowndClient.beginAppStop.calledWith('1own', 'myapp')).to.equal(true);
+  });
+
   it('returns false for an app not in the local database', async () => {
-    stubs.appsRepository.getInstalledApp.resolves(null);
+    stubs.appsRepository.getInstalledAppByComponentIdentifier.resolves(null);
     const res = await coordinator.requestGracefulStop('web_myapp', 'condemned');
     expect(res).to.equal(false);
     expect(stubs.fluxShutdowndClient.beginAppStop.called).to.equal(false);
