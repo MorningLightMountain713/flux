@@ -614,6 +614,29 @@ describe('appUninstaller tests', () => {
       }
     });
 
+    it('a removal that names no replica removes ALL identity rows - pinned included', async () => {
+      appsRepositoryStub.getInstalledApp.callsFake(async (name) => spec(name));
+      // The fleet condition: a pinned app's rows carry replica 's1', so a
+      // {replica: null} delete matches none of them, the app stays
+      // "installed" forever, and the tampering detector resurrects it.
+      appsRepositoryStub.countInstalledIdentities.resolves(1);
+
+      await appUninstaller.uninstallApplication('pinnedapp', { forceKill: true, background: true });
+
+      sinon.assert.calledWith(appsRepositoryStub.removeInstalledApp, 'pinnedapp');
+      sinon.assert.notCalled(appsRepositoryStub.removeInstalledIdentity);
+    });
+
+    it("a replica-named removal removes only that identity's row", async () => {
+      appsRepositoryStub.getInstalledApp.callsFake(async (name) => spec(name));
+      appsRepositoryStub.countInstalledIdentities.resolves(1); // a sibling stays
+
+      await appUninstaller.uninstallApplication('pinnedapp', { forceKill: true, background: true, replica: 's1' });
+
+      sinon.assert.calledWith(appsRepositoryStub.removeInstalledIdentity, 'pinnedapp', 's1');
+      sinon.assert.notCalled(appsRepositoryStub.removeInstalledApp);
+    });
+
     it('a force-kill does NOT cascade', async () => {
       configStub.fluxapps.manageCollectorLifecycle = true;
       appsRepositoryStub.getInstalledApp.callsFake(async (name) => spec(name));

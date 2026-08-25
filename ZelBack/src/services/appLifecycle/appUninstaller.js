@@ -920,7 +920,18 @@ async function uninstallApplication(appName, options = {}) {
     // This identity's row goes first, so what remains IS the sibling set — read
     // from the store rather than probed from docker, where an unreachable
     // daemon would read as "no siblings" and delete a running sibling's row.
-    await appsRepository.removeInstalledIdentity(appName, replica ?? null);
+    //
+    // No replica named = the WHOLE app leaves this node, and its rows may be
+    // pinned identities (replica 's1', ...): a {replica: null} delete matches
+    // none of them, the app reads as installed forever, and the tampering
+    // detector then resurrects the removed containers. The unique
+    // (name, replica) index caps loose placement at one row, so the all-rows
+    // delete is exact for both shapes.
+    if (replica != null) {
+      await appsRepository.removeInstalledIdentity(appName, replica);
+    } else {
+      await appsRepository.removeInstalledApp(appName);
+    }
     const lastReplica = await appsRepository.countInstalledIdentities(appName) === 0;
     if (broadcastRemoval) {
       const ip = await fluxNetworkHelper.getLocalSocketAddress();
@@ -938,10 +949,11 @@ async function uninstallApplication(appName, options = {}) {
         }
       }
     }
-    if (lastReplica) {
-      // Belt-and-braces: this identity's row is already gone, so this clears any
-      // row a partially-failed earlier removal left behind, and every reader
-      // sees the app as gone with zero filtering.
+    if (lastReplica && replica != null) {
+      // Belt-and-braces after a replica-scoped delete: clears any row a
+      // partially-failed earlier removal left behind, so every reader sees the
+      // app as gone with zero filtering. A whole-app removal already deleted
+      // every row above.
       await appsRepository.removeInstalledApp(appName);
     }
 
