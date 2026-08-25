@@ -2071,12 +2071,15 @@ async function _buildEnv(env, nodes, deferredNodes, legacyNodes, unprivilegedNod
       .withBindMounts(bindMounts)
       .withLogConsumer(logCollector)
       .withEnvironment(nodeEnv)
-      // The bound, not a pace: the wait is an event-driven HTTP poll, so a
-      // healthy node costs exactly its boot time whatever this says. Under a
-      // full parallel gate GREEN fleet boots measure 102-125s (gate-5
-      // boot-lock holds), so the old 120s allowance sat INSIDE the real
-      // distribution and whoever drew the slow tail was shot mid-boot - a
-      // false red wearing a product bug's clothes (1105, gates 4 and 5).
+      // A bound, not a pace. The wait is an event-driven HTTP poll, so a healthy node
+      // costs exactly its boot time whatever this says; the number exists only so a
+      // node that will never serve cannot hold a suite open indefinitely. It must sit
+      // clear of the real boot distribution under a full parallel gate, where fleets
+      // boot far slower than solo — sizing it against a quiet box is what makes it fire
+      // on healthy nodes. It is NOT a regression detector for boot time: the runner's
+      // BOOTS distribution is, and it warns as the tail approaches this bound. A node
+      // that DIES is failed immediately by the wait's own liveness check and never
+      // reaches this deadline (see http-wait-strategy.js).
       .withWaitStrategy(nodeReadyWaitStrategy(nodeIp).withStartupTimeout(300000));
     builder.withStopSignal('SIGRTMIN+3');
     if (nodeAppArmor()) builder.withAppArmorProfile(nodeAppArmor());
