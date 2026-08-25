@@ -15,6 +15,7 @@ const dockerService = require('../../ZelBack/src/services/dockerService');
 const appsRepository = require('../../ZelBack/src/services/appDatabase/appsRepository');
 const appsRuntimeState = require('../../ZelBack/src/services/appManagement/appsRuntimeState');
 const reconcilerQueue = require('../../ZelBack/src/services/appMonitoring/reconcilerQueue');
+const appReconciler = require('../../ZelBack/src/services/appMonitoring/appReconciler');
 const deploymentProvider = require('../../ZelBack/src/services/appRuntime/deploymentProvider');
 const mastershipGrantGate = require('../../ZelBack/src/services/appLifecycle/mastershipGrantGate');
 const { deserializeSpec } = require('../../ZelBack/src/services/utils/specCutover');
@@ -204,6 +205,27 @@ describe('appController tests', () => {
       sinon.assert.calledOnceWithExactly(setOperatorStopped, 'TestApp', false);
       sinon.assert.calledOnceWithExactly(enqueueComponent, 'TestApp');
       sinon.assert.callOrder(setOperatorStopped, enqueueComponent);
+    });
+
+    it('withdraws a decider verdict recorded before the stop, so the decider rules again', async () => {
+      verificationHelperStub.resolves(true);
+      const clearControllerDesired = sinon.stub(appReconciler, 'clearControllerDesired');
+      const instantiated = await mockInstantiated({
+        name: 'TestApp', version: 3, compose: [{ name: 'TestApp' }],
+      });
+      sinon.stub(appsRepository, 'getGlobalAppInfo').resolves(instantiated);
+      sinon.stub(deploymentProvider, 'buildDeployment').resolves(stubDeployment([
+        { name: 'TestApp', identifier: 'TestApp' },
+      ]));
+
+      const req = { params: { appname: 'TestApp' }, query: {} };
+      const res = { json: sinon.fake((param) => param) };
+
+      await appController.appStart(req, res);
+
+      expect(res.json.firstCall.args[0].status).to.equal('success');
+      sinon.assert.calledOnceWithExactly(clearControllerDesired, 'TestApp');
+      sinon.assert.callOrder(clearControllerDesired, enqueueComponent);
     });
 
     it('should return error if no app name provided', async () => {
@@ -523,6 +545,23 @@ describe('appController tests', () => {
       sinon.assert.calledOnceWithExactly(requestRestart, 'TestApp');
       sinon.assert.calledOnceWithExactly(enqueueComponent, 'TestApp');
       sinon.assert.callOrder(setOperatorStopped, enqueueComponent);
+    });
+
+    it('withdraws a decider verdict recorded before the stop, so the decider rules again', async () => {
+      verificationHelperStub.resolves(true);
+      const clearControllerDesired = sinon.stub(appReconciler, 'clearControllerDesired');
+      sinon.stub(appsRepository, 'getGlobalAppInfo').resolves({ name: 'TestApp' });
+      sinon.stub(deploymentProvider, 'buildDeployment').resolves(stubDeployment([
+        { name: 'TestApp', identifier: 'TestApp' },
+      ]));
+
+      const req = { params: { appname: 'TestApp' }, query: {} };
+      const res = { json: sinon.fake((param) => param) };
+      await appController.appRestart(req, res);
+
+      expect(res.json.firstCall.args[0].status).to.equal('success');
+      sinon.assert.calledOnceWithExactly(clearControllerDesired, 'TestApp');
+      sinon.assert.callOrder(clearControllerDesired, enqueueComponent);
     });
 
     it('restarts every component of a composed app through the reconciler', async () => {
