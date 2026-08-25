@@ -101,20 +101,32 @@ export const mochaHooks = {
   // signature of a setup-hook failure (an all-pending describe is excluded: its
   // tests never intended to run). Dump at the highest such suite; its subtree
   // shares the one evidence set.
-  afterAll() {
+  async afterAll() {
     const root = this.test?.parent;
     if (!root) return;
     const allTests = (s) => [...s.tests, ...s.suites.flatMap(allTests)];
+    const targets = [];
     const visit = (suite) => {
       const tests = allTests(suite);
       const runnable = tests.filter((t) => !t.pending);
       const anyPassed = tests.some((t) => t.state === 'passed');
       if (runnable.length && !anyPassed && !dumpedSuites.has(suite)) {
-        dump(suite.fullTitle() || suite.title || 'setup-hook', envsFor(suite));
+        targets.push(suite);
         return;
       }
       suite.suites.forEach(visit);
     };
     root.suites.forEach(visit);
+    for (const suite of targets) {
+      const envs = envsFor(suite);
+      // A setup failure means createTestEnv may have THROWN: the suite's own
+      // after() never saw an env to tear down, so nothing pulled the
+      // in-container records - and the containers are still alive right here
+      // (run-all's label sweep collects them only after mocha exits). This is
+      // the last reader they will ever have.
+      // eslint-disable-next-line no-await-in-loop
+      await Promise.all(envs.map((env) => env.captureNodeRecords?.().catch(() => {})));
+      dump(suite.fullTitle() || suite.title || 'setup-hook', envs);
+    }
   },
 };
