@@ -303,6 +303,11 @@ async function updateFee(spec, prevSpec, height, prevHeight, prevRegisteredAt, n
     isEncrypted: spec.isEncrypted,
     ...resolveMarketplacePricingCtx(spec, height),
   });
+  // null = REFUSED: free-shaped but the allowance is spent. There is no
+  // payable figure - pricing it would let the mandatory floor payment apply
+  // an update that buys nothing, with a term restart the owner never asked
+  // for. The caller declines the update outright.
+  if (result && result.refused) return null;
   return (result && result.free) ? 0n : BigInt(result.total);
 }
 

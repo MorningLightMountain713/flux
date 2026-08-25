@@ -37,11 +37,13 @@ class FluxosDiscounter {
       recentEvents: ctx.recentEvents || [],
       now: ctx.now || Date.now(),
     });
-    // The helper returns a rich result on BOTH outcomes; the Discounter contract
-    // is "result on free, null on not-free", and priceUpdate's `if (free)` relies
-    // on it. Without this wrap a not-free update returns a truthy {free:false},
-    // short-circuiting the price computation and yielding no total.
-    return result.free ? result : null;
+    // The helper returns a rich result on EVERY outcome; the Discounter
+    // contract is "result on free, refusal result on free-shaped-but-refused,
+    // null on not-free". A plain shape rejection must collapse to null or its
+    // truthy {free:false} would short-circuit the price computation - but a
+    // refusal (every spec rule passed, allowance spent) must travel, so the
+    // engine can decline to price what the spec never asked to buy.
+    return (result.free || result.refused) ? result : null;
   }
 }
 

@@ -712,6 +712,25 @@ describe('messageVerifier tests', () => {
           expect(updateSpecs.firstCall.args[0].registeredAt).to.equal(1740000000);
         });
 
+        // Past the free allowance a free-shaped update is REFUSED, not priced:
+        // an unchanged spec's arithmetic collapses to the floor, and the
+        // mandatory floor payment would apply it WITH a term restart the
+        // owner never asked for. The regime answers null; no payment applies.
+        it('refuses a free-shaped update whose allowance is spent, whatever it paid', async () => {
+          const { stubs, v9Regime } = await pricedUpdate();
+          v9Regime.updateFee = sinon.stub().resolves(null);
+          const updateSpecs = stubs['../appDatabase/registryManager'].updateAppSpecifications;
+          const { logStub } = { logStub: stubs['../../lib/log'] };
+          const mv = proxyquire('../../ZelBack/src/services/appMessaging/messageVerifier', stubs);
+
+          const result = await mv.checkAndRequestApp('updHash', 'txid', 2000000, 900000000000, BLOCK_TIME, 2);
+
+          expect(result).to.be.true;
+          sinon.assert.notCalled(updateSpecs);
+          const warned = logStub.warn.getCalls().some((c) => typeof c.args[0] === 'string' && c.args[0].includes('refused'));
+          expect(warned, 'the refusal is announced').to.equal(true);
+        });
+
         it('applies an update that pays the fee its regime asks for', async () => {
           const { stubs } = await pricedUpdate({ fee: 100000000n });
           const mv = proxyquire('../../ZelBack/src/services/appMessaging/messageVerifier', stubs);

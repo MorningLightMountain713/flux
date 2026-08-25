@@ -565,7 +565,14 @@ async function checkAndRequestApp(hash, txid, height, valueSat, blockTime = null
         pricingSpec, prevSpec, height, prevMessage.height,
         prevMessage.registeredAt || 0, confirmedBlockTime,
       );
-      if (BigInt(valueSat) >= requiredSats) {
+      if (requiredSats === null) {
+        // Free-shaped, allowance spent: refused regardless of the payment
+        // attached - money alone cannot convert an update that asks for
+        // nothing into a term purchase. The owner's pay path is to ask for
+        // something in the signed spec (time or resources), or wait for the
+        // free-update window to roll.
+        log.warn(`App ${hash} update refused: free-update allowance exhausted and the update buys nothing`);
+      } else if (BigInt(valueSat) >= requiredSats) {
         const stored = instantiatedForStorage(
           InstantiatedSpec, confirmedEvent, requiredSats,
           currentState?.registeredAt ?? prevMessage.registeredAt ?? null,
