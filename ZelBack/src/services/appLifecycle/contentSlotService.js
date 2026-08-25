@@ -19,6 +19,7 @@ const networkStateService = require('../networkStateService');
 const fluxNetworkHelper = require('../fluxNetworkHelper');
 const transportHelper = require('../utils/transportHelper');
 const fluxDriveClient = require('../utils/fluxDriveClient');
+const volumeService = require('../utils/volumeService');
 const globalState = require('../utils/globalState');
 const fluxEventBus = require('../utils/fluxEventBus');
 const { getSpec } = require('../utils/specLibs');
@@ -1097,6 +1098,7 @@ async function reconcileBootContent(appName, deps = {}) {
     getLatest = getLatestManifest,
     getPeers = listAppPeers,
     provision = provisionContentSlots,
+    ensureMounted = volumeService.ensureAppVolumeMounted,
     schedule = scheduleContentApplication,
     now = Date.now,
     restarting = true,
@@ -1139,6 +1141,20 @@ async function reconcileBootContent(appName, deps = {}) {
   if (!restarting) {
     await applyStoredIfBehind(appName, deps);
     return;
+  }
+  // This runs before the boot mounts sweep, and slot writes only land through
+  // a MOUNTED volume — the immutable mountpoint underneath (the unmounted-write
+  // guard) EPERMs everything else. Idempotent: an already-mounted volume is a
+  // no-op. A volume that cannot mount is a loud refusal, not an empty-slot
+  // provision — the caller's best-effort catch logs it and the app starts on
+  // its persisted on-disk content.
+  for (const [, comp] of deployment.componentEntries()) {
+    if (!comp.hasContentSlots()) continue;
+    // eslint-disable-next-line no-await-in-loop
+    const mount = await ensureMounted(comp.identifier);
+    if (!mount || mount.mounted !== true) {
+      throw new Error(`contentSlot: ${comp.identifier} volume not mountable before boot provision (${mount && mount.reason ? mount.reason : 'unknown'})`);
+    }
   }
   const peers = await getPeers(appName);
   await provision(deployment, { appName, peers }, deps);

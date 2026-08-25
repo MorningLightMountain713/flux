@@ -1419,8 +1419,45 @@ describe('contentSlotService', () => {
   });
 
   describe('reconcileBootContent (boot before-start recovery)', () => {
-    const slotDeployment = { componentEntries: () => [['web', { hasContentSlots: () => true }]] };
-    const noSlotDeployment = { componentEntries: () => [['web', { hasContentSlots: () => false }]] };
+    const slotDeployment = { componentEntries: () => [['web', { hasContentSlots: () => true, identifier: 'web_abc123def456' }]] };
+    const noSlotDeployment = { componentEntries: () => [['web', { hasContentSlots: () => false, identifier: 'web_abc123def456' }]] };
+
+    it('mounts each slot component\'s volume before provisioning (the immutable mountpoint EPERMs an unmounted write)', async () => {
+      const { service } = load();
+      const provision = sinon.spy();
+      const ensureMounted = sinon.stub().resolves({ mounted: true });
+      await service.reconcileBootContent('app', {
+        getDeployment: async () => slotDeployment,
+        getLatest: async () => ({ confirmed: true, data: { manifest: manifest({ rollout: { strategy: 'immediate' } }) } }),
+        getPeers: async () => ['p1'],
+        provision,
+        ensureMounted,
+        schedule: sinon.spy(),
+        now: () => 0,
+      });
+      sinon.assert.calledOnceWithExactly(ensureMounted, 'web_abc123def456');
+      sinon.assert.calledOnce(provision);
+      sinon.assert.callOrder(ensureMounted, provision);
+    });
+
+    it('refuses to provision over a volume that cannot mount, loudly', async () => {
+      const { service } = load();
+      const provision = sinon.spy();
+      const ensureMounted = sinon.stub().resolves({ mounted: false, reason: 'volume_file_missing' });
+      let thrown = null;
+      await service.reconcileBootContent('app', {
+        getDeployment: async () => slotDeployment,
+        getLatest: async () => ({ confirmed: true, data: { manifest: manifest({ rollout: { strategy: 'immediate' } }) } }),
+        getPeers: async () => ['p1'],
+        provision,
+        ensureMounted,
+        schedule: sinon.spy(),
+        now: () => 0,
+      }).catch((err) => { thrown = err; });
+      expect(thrown, 'the caller\'s best-effort catch must hear this').to.be.an('error');
+      expect(thrown.message).to.include('volume_file_missing');
+      sinon.assert.notCalled(provision);
+    });
 
     it('is a no-op for an app with no content slots', async () => {
       const { service } = load();
@@ -1440,6 +1477,7 @@ describe('contentSlotService', () => {
         getLatest: async () => ({ confirmed: true, data: { manifest: manifest({ rollout: { strategy: 'immediate' } }) } }),
         getPeers: async () => ['p1'],
         provision,
+        ensureMounted: async () => ({ mounted: true }),
         schedule,
         now: () => 0,
       });
@@ -1478,6 +1516,7 @@ describe('contentSlotService', () => {
         getLatest: async () => ({ confirmed: true, data: { manifest: past } }),
         getPeers: async () => [],
         provision,
+        ensureMounted: async () => ({ mounted: true }),
         schedule,
         now: () => 5000, // past activateAt
       });
