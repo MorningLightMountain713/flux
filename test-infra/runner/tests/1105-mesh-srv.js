@@ -159,8 +159,15 @@ describe('mesh SRV discovery and membership-not-liveness', function () {
 
   it('FLUX_MESH_SELF_FQDN is handed in and resolves to the caller\'s own address', async function () {
     this.timeout(180000);
-    const envOut = await inApp(0, 'web',
-      '/bin/busybox sh -c "/bin/busybox env | /bin/busybox grep FLUX_MESH_SELF"');
+    // The mesh identity rebuild force-removes and recreates a container whose
+    // ordinal moved; a one-shot exec can land inside that window. Retry the
+    // read until a container answers.
+    let envOut;
+    await waitFor(async () => {
+      envOut = await inApp(0, 'web',
+        '/bin/busybox sh -c "/bin/busybox env | /bin/busybox grep FLUX_MESH_SELF"').catch(() => null);
+      return !!envOut?.stdout?.includes('FLUX_MESH_SELF');
+    }, { timeout: 120000, interval: 3000, label: 'web container answers with its mesh identity' });
     const fqdn = envOut.stdout.match(/FLUX_MESH_SELF_FQDN=(\S+)/)?.[1];
     const selfIp = envOut.stdout.match(/FLUX_MESH_SELF_IP=([0-9.]+)/)?.[1];
     // Three instances, three slots: every member is a slot-holder, so the
