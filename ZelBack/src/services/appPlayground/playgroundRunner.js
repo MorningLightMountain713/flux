@@ -71,10 +71,6 @@ function cpuSampleMs() {
   return config.fluxapps.playgroundCpuSampleMs ?? 15_000;
 }
 
-function logLines() {
-  return config.fluxapps.playgroundLogLines ?? 50;
-}
-
 function logRetainedLines() {
   return config.fluxapps.playgroundLogRetainedLines ?? 2000;
 }
@@ -518,7 +514,10 @@ async function followLogsInto(component, buffer) {
   try {
     const { stream, stop } = await dockerService.dockerContainerLogsStream(component.identifier, {
       timestamps: true,
-      tail: logLines(),
+      // The tail carries lines written BEFORE this attached - the container's
+      // boot burst - so its window matches what the buffer retains. Anything
+      // beyond that would be dropped by the buffer anyway.
+      tail: logRetainedLines(),
     });
     stream.on('data', (chunk) => buffer.append(chunk));
     stream.on('end', () => buffer.flush());
