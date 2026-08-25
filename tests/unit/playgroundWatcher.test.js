@@ -38,9 +38,18 @@ describe('playgroundWatcher', () => {
     NetworkSettings: { Networks: { flxpg0: { IPAddress: '172.23.255.5' } } },
   });
 
-  const event = (action, name, attributes = {}) => ({
+  // What docker actually sends: the DOCKER name (prefixed) in the same
+  // Actor.Attributes bag as the container's labels. The identity label is how
+  // an event maps back to the component identifier - names are never parsed.
+  const event = (action, identifier, attributes = {}) => ({
     Action: action,
-    Actor: { Attributes: { name, ...attributes } },
+    Actor: {
+      Attributes: {
+        name: `flux${identifier}`,
+        'io.runonflux.identifier': identifier,
+        ...attributes,
+      },
+    },
   });
 
   beforeEach(load);
@@ -180,6 +189,21 @@ describe('playgroundWatcher', () => {
       const watcher = await watching();
 
       await stubs.options.onEvent(event('die', 'somethingelse', { exitCode: '1' }));
+
+      expect(watcher.state('web_demoapp').running).to.equal(true);
+    });
+
+    it('drops an event with no identity label rather than guessing from the name', async () => {
+      // The subscription is label-filtered, and every session container is
+      // created at the one chokepoint that stamps identity labels - an event
+      // without one is malformed, not legacy, and a guess parsed out of the
+      // docker name is exactly the pattern being retired.
+      const watcher = await watching();
+
+      await stubs.options.onEvent({
+        Action: 'die',
+        Actor: { Attributes: { name: 'fluxweb_demoapp', exitCode: '1' } },
+      });
 
       expect(watcher.state('web_demoapp').running).to.equal(true);
     });
