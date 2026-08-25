@@ -82,9 +82,25 @@ describe('playgroundWatcher', () => {
       expect(state.address).to.equal('172.23.255.5');
     });
 
-    it('reads a missing container as gone', async () => {
+    it('reads a NEVER-SEEN missing container as not-yet-created, not as gone', async () => {
+      // The runner subscribes (and so snapshots) BEFORE it creates the
+      // session's containers - reading that first null inspect as "destroyed"
+      // fails every probe with 'container disappeared' before anything ran.
       const watcher = createSessionWatcher('sess-1');
       await watcher.start(['web_demoapp']);
+
+      const state = watcher.state('web_demoapp');
+      expect(state.gone).to.equal(false);
+      expect(state.known).to.equal(false);
+    });
+
+    it('reads a KNOWN container that stops answering inspects as gone', async () => {
+      stubs.inspect.resolves(runningInfo());
+      const watcher = createSessionWatcher('sess-1');
+      await watcher.start(['web_demoapp']);
+
+      stubs.inspect.resolves(null);
+      await stubs.options.onReconnect();
 
       expect(watcher.state('web_demoapp').gone).to.equal(true);
     });
