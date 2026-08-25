@@ -649,7 +649,7 @@ describe('messageVerifier tests', () => {
         // dispatcher routes on the model the spec itself declares, so naming the
         // wrong one here would fail rather than silently answer anyway.
         async function pricedUpdate(overrides = {}) {
-          const { stubs, v9Regime } = await updateStubs({ name: 'testapp', owner: 'owner1' });
+          const { stubs, v9Regime } = await updateStubs(overrides.activeRow ?? { name: 'testapp', owner: 'owner1' });
           v9Regime.supersededMessage = sinon.stub().resolves(
             'superseded' in overrides ? overrides.superseded : predecessor,
           );
@@ -690,6 +690,26 @@ describe('messageVerifier tests', () => {
           expect(prevHeight).to.equal(predecessor.height);
           expect(prevRegisteredAt).to.equal(predecessor.registeredAt);
           expect(prevHeight).to.not.equal(height);
+        });
+
+        // instantiatedForStorage's own doc: a free update keeps the term start
+        // it supersedes. The MESSAGE chain cannot carry that - every permanent
+        // message is stamped with its own confirming block, so a chain of free
+        // updates read from prevMessage walks the term forward one
+        // confirmation interval per update: renewal for nothing, indefinitely
+        // (gate suite 220-t8). The standing term lives on the stored app row.
+        it("a free update keeps the STORED term start, never the previous message's own block", async () => {
+          const { stubs } = await pricedUpdate({
+            fee: 0n,
+            activeRow: { name: 'testapp', owner: 'owner1', registeredAt: 1740000000 },
+          });
+          const updateSpecs = stubs['../appDatabase/registryManager'].updateAppSpecifications;
+          const mv = proxyquire('../../ZelBack/src/services/appMessaging/messageVerifier', stubs);
+
+          await mv.checkAndRequestApp('updHash', 'txid', 2000000, 200000000, BLOCK_TIME, 2);
+
+          sinon.assert.calledOnce(updateSpecs);
+          expect(updateSpecs.firstCall.args[0].registeredAt).to.equal(1740000000);
         });
 
         it('applies an update that pays the fee its regime asks for', async () => {
