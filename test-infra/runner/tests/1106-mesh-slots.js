@@ -191,6 +191,11 @@ describe('mesh ordinal slots — claim, identity, replacement inheritance', func
     }, { timeout: 180000, interval: 5000, label: 'all three holders hold distinct slots' });
     const slots = await Promise.all(holders.map((i) => ownSlotOf(i)));
     expect(new Set(slots), 'the dense slot space, fully assigned').to.deep.equal(new Set([0, 1, 2]));
+    // The wait above completes the moment each member sees its OWN slot; one
+    // node's view of EVERYONE's slots trails the last claim by a broadcast, so
+    // the full SRV set is a convergence fact, not an instant one.
+    await waitFor(async () => (await srvTargets(holders[0])).length === FULL_SET().length,
+      { timeout: 60000, interval: 3000, label: 'holder 0 serves the full SRV set' });
     expect(await srvTargets(holders[0])).to.deep.equal(FULL_SET());
   });
 
@@ -217,6 +222,10 @@ describe('mesh ordinal slots — claim, identity, replacement inheritance', func
   it('PTR names the ordinal identity for a peer address', async function () {
     this.timeout(120000);
     const [holder] = await holderIndices();
+    // Same convergence fact as the SRV set: the group answer carries a peer
+    // only once the holder has ingested that peer's claim.
+    await waitFor(async () => (await srvTargets(holder)).length === FULL_SET().length,
+      { timeout: 60000, interval: 3000, label: 'the group name serves every member' });
     const groupOut = await inApp(holder, `/bin/busybox nslookup web.${name}.mesh.flux ${RESOLVER_ADDR}`);
     const envOut = await inApp(holder, '/bin/busybox sh -c "/bin/busybox env | /bin/busybox grep FLUX_MESH_SELF_IP"');
     const selfIp = envOut.stdout.match(/FLUX_MESH_SELF_IP=([0-9.]+)/)?.[1];
