@@ -89,7 +89,9 @@ describe('stateless components: a v9 component with no persistent volume', funct
   const exists = async (path) => (await X(`test -e ${path}`)).exitCode === 0;
   const isMountpoint = async (dir) => (await X(`mountpoint -q ${dir}`)).exitCode === 0;
   const isUp = async (comp) => {
-    const status = await getAppContainerStatus(client.container, containerName(comp));
+    // By app label + component: the docker NAME carries the minted identity,
+    // and getAppContainerStatus matches app names against the label.
+    const status = await getAppContainerStatus(client.container, APP, { component: comp });
     return !!(status && status.status.startsWith('Up'));
   };
 
@@ -166,7 +168,7 @@ describe('stateless components: a v9 component with no persistent volume', funct
     await assertNoEvent(
       client,
       'reconciler:actuated',
-      (d) => d.identifier === `${STATELESS}_${APP}` && d.action === 'volumeUnavailable',
+      (d) => d.identifier.startsWith(`${STATELESS}_`) && d.action === 'volumeUnavailable',
       20000,
     );
     expect(await isUp(STATELESS), 'stateless component still running after the observation window').to.equal(true);
@@ -194,8 +196,8 @@ describe('stateless components: a v9 component with no persistent volume', funct
     await client.removeApp(APP, { zelidauth });
 
     await waitFor(async () => {
-      const stateless = await getAppContainerStatus(client.container, containerName(STATELESS));
-      const stateful = await getAppContainerStatus(client.container, containerName(STATEFUL));
+      const stateless = await getAppContainerStatus(client.container, APP, { component: STATELESS });
+      const stateful = await getAppContainerStatus(client.container, APP, { component: STATEFUL });
       return !stateless && !stateful;
     }, { timeout: 240000, interval: 5000, label: 'both containers removed' });
 
