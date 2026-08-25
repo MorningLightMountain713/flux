@@ -252,6 +252,17 @@ describe('deploymentProvider tests', () => {
       expect(ids).to.deep.equal(['web_myapp']);
     });
 
+    it('an opts identity overrides the spec view - the update path builds the NEW view at the INSTALLED identity', async () => {
+      // A registry spec carries no identity (identities are minted at install),
+      // so the update diff's new side must be handed the installed row's.
+      const deployments = await provider.buildDeployments({ name: 'myapp' }, { identity: 'a1b2c3d4e5f6' });
+      const ids = deployments.flatMap((d) => d.componentEntries().map(([, c]) => c.identifier));
+      expect(ids).to.deep.equal(['web_a1b2c3d4e5f6']);
+
+      const single = await provider.buildDeployment({ name: 'myapp' }, { replica: null, identity: 'a1b2c3d4e5f6' });
+      expect(single.componentEntries().map(([, c]) => c.identifier)).to.deep.equal(['web_a1b2c3d4e5f6']);
+    });
+
     it('agrees with the single-identity path', async () => {
       const [fromSet] = await provider.buildDeployments({ name: 'myapp', identity: 'a1b2c3d4e5f6' });
       const single = await provider.buildDeployment({ name: 'myapp', identity: 'a1b2c3d4e5f6' }, { replica: null });
