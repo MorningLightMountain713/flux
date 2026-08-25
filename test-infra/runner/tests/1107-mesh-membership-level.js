@@ -72,7 +72,18 @@ describe('mesh membership level API', function () {
       dnsdReal: true,
       arcane: true,
       configOverrides: {
-        fluxapps: { meshReconcileIntervalMs: 15000, minOutgoing: 1, minIncoming: 1 },
+        // t4's spec shrink only contracts membership once each node ADOPTS the
+        // update (the trim reads the LOCAL spec's instance count), and loose
+        // adoption is staggered hash(ip|name) % window — at the production
+        // window (300s) the trim routinely lands beyond the test budget.
+        // Compressed per-suite, the 1201/901 pattern.
+        fluxapps: {
+          meshReconcileIntervalMs: 15000,
+          minOutgoing: 1,
+          minIncoming: 1,
+          adoptionStaggerStepMs: 5000,
+          adoptionStaggerWindowMs: 10000,
+        },
       },
     });
     await bootAndPeer(env, { minOutbound: 1, minInbound: 1, pricing: true });
