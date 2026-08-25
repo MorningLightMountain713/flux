@@ -561,9 +561,14 @@ async function checkAndRequestApp(hash, txid, height, valueSat, blockTime = null
         log.error(`checkAndRequestApp - could not resolve previous spec for ${spec.name} to compute update fee`);
         return true;
       }
+      // The unused-time credit refunds what is actually LEFT, so its basis is
+      // the standing term on the app row - the message chain stamps every
+      // permanent message with its own block, and after free updates (which
+      // keep the term) that stamp overstates the remaining time and the
+      // credit refunds seconds already consumed.
       const requiredSats = await computeUpdateFee(
         pricingSpec, prevSpec, height, prevMessage.height,
-        prevMessage.registeredAt || 0, confirmedBlockTime,
+        currentState?.registeredAt ?? prevMessage.registeredAt ?? 0, confirmedBlockTime,
       );
       if (requiredSats === null) {
         // Free-shaped, allowance spent: refused regardless of the payment
