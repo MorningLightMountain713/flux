@@ -83,15 +83,24 @@ async function verdictFor(client, zelidauth, jobId, component, timeout = 180000)
   return probe;
 }
 
+// Every session a test started and has not yet ended. A failed assert throws
+// past its endSession, and a leaked session holds the node's only slot to its
+// TTL - the afterEach reaps these so one failure cannot fail the rest of the
+// file on admission instead of its subject.
+const liveSessions = new Set();
+
 /** End a session and wait for it, so the next test starts on a free node. */
 async function endSession(client, zelidauth, jobId) {
   await cancel(client, zelidauth, jobId);
-  return settled(client, zelidauth, jobId);
+  const view = await settled(client, zelidauth, jobId);
+  liveSessions.delete(jobId);
+  return view;
 }
 
 async function startSession(client, zelidauth, spec) {
   const res = await client.post('/apps/playground', spec, { zelidauth });
   expect(res.status, `session refused: ${JSON.stringify(res.data)}`).to.equal('success');
+  liveSessions.add(res.data.jobId);
   return res.data.jobId;
 }
 
@@ -184,6 +193,19 @@ describe('playground: a session runs on a real node and reports what happened', 
   after(async function () {
     this.timeout(60000);
     await env?.teardown();
+  });
+
+  afterEach(async function () {
+    // Reap anything the test leaked - a session already settled answers the
+    // cancel as a no-op, so this only ever costs time on a genuine leak.
+    this.timeout(90000);
+    for (const jobId of [...liveSessions]) {
+      // eslint-disable-next-line no-await-in-loop
+      await cancel(client, zelidauth, jobId);
+      // eslint-disable-next-line no-await-in-loop
+      await settled(client, zelidauth, jobId, 60000).catch(() => {});
+      liveSessions.delete(jobId);
+    }
   });
 
   describe('accepting work', function () {
