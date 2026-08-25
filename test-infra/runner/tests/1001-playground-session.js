@@ -308,7 +308,10 @@ describe('playground: a session runs on a real node and reports what happened', 
       const spec = oneComponent({
         name: uniqueName(),
         image: busyboxImage,
-        entrypoint: ['/bin/busybox', 'sh', '-c', 'busybox nc -l -p 80 -e /bin/busybox true; sleep 999'],
+        // The fixture image is the bare busybox binary with no standalone
+        // applets: every utility is spelled /bin/busybox, because a bare
+        // `sleep` dies with "not found" and takes the container with it.
+        entrypoint: ['/bin/busybox', 'sh', '-c', 'busybox nc -l -p 80 -e /bin/busybox true; /bin/busybox sleep 999'],
         ports: { http: { containerPort: 80, hostPort: 31000 } },
       });
 
@@ -407,7 +410,7 @@ describe('playground: a session runs on a real node and reports what happened', 
       const spec = oneComponent({
         name: uniqueName(),
         image: busyboxImage,
-        entrypoint: ['/bin/busybox', 'sh', '-c', `echo ${marker}; sleep 999`],
+        entrypoint: ['/bin/busybox', 'sh', '-c', `echo ${marker}; /bin/busybox sleep 999`],
       });
 
       const jobId = await startSession(client, zelidauth, spec);
@@ -461,7 +464,7 @@ describe('playground: a session runs on a real node and reports what happened', 
       const spec = oneComponent({
         name: uniqueName(),
         image: busyboxImage,
-        entrypoint: ['/bin/busybox', 'sh', '-c', 'i=0; while [ $i -lt 5000 ]; do echo line-$i; i=$((i+1)); done; sleep 999'],
+        entrypoint: ['/bin/busybox', 'sh', '-c', 'i=0; while [ $i -lt 5000 ]; do echo line-$i; i=$((i+1)); done; /bin/busybox sleep 999'],
       });
 
       const jobId = await startSession(client, zelidauth, spec);
@@ -507,7 +510,7 @@ describe('playground: a session runs on a real node and reports what happened', 
       // the node uses to recognise one anyway.
       const { stdout } = await execInContainer(client.container, [
         'docker', 'ps',
-        '--filter', 'label=flux.playground',
+        '--filter', 'label=io.runonflux.playground',
         '--format', '{{.Names}} {{.Ports}}',
       ]);
       const row = stdout.split('\n').find((line) => line.trim());
