@@ -24,6 +24,7 @@ const CONFIG = {
     playgroundTcpRetryMs: 5,
     // Fast enough to take several samples inside that window.
     playgroundCpuSampleMs: 5,
+    playgroundFinalLogReadMs: 50,
   },
 };
 
@@ -463,6 +464,58 @@ describe('playgroundRunner', () => {
       expect(stubs.logError.called).to.equal(false);
     });
 
+    // A container that died milliseconds after starting has its words in
+    // docker's log and nowhere else: the follow attached, but the stream's
+    // first bytes were still in flight when the session ended. The record
+    // outlives the container, so teardown takes one authoritative read for
+    // any component whose follow never delivered - BEFORE the removal
+    // destroys the record (gate 1001 t12/t13).
+    it('reads the record for a component whose follow never delivered, before removing it', async () => {
+      const buffer = { seenCount: () => 0, append: sinon.stub(), flush: sinon.stub() };
+      const order = [];
+      stubs.logStream.callsFake(async () => {
+        order.push('read');
+        const stream = new PassThrough();
+        setImmediate(() => { stream.write('2026-01-01T00:00:00Z dying words\n'); stream.end(); });
+        return { stream, stop: sinon.stub() };
+      });
+      stubs.forceRemove.callsFake(async () => { order.push('removed'); });
+
+      await runner.teardownSession({ ...session(), logBuffers: { web: buffer } });
+
+      expect(order).to.deep.equal(['read', 'removed']);
+      expect(String(buffer.append.firstCall.args[0])).to.include('dying words');
+      expect(buffer.flush.called).to.equal(true);
+    });
+
+    // Two writers into one cursor space cannot be reconciled under a tail
+    // cap, and the observed failure class is all-or-nothing: a follow that
+    // delivered anything delivered everything the container wrote.
+    it('leaves a buffer alone once the follow delivered anything', async () => {
+      const buffer = { seenCount: () => 3, append: sinon.stub(), flush: sinon.stub() };
+
+      await runner.teardownSession({ ...session(), logBuffers: { web: buffer } });
+
+      expect(stubs.logStream.called).to.equal(false);
+      expect(buffer.append.called).to.equal(false);
+    });
+
+    // On a still-running container the log endpoint keeps the stream open.
+    // The bytes wanted arrive immediately; the bound just closes the tap.
+    it('bounds the final read, so a live stream cannot stall the teardown', async () => {
+      const buffer = { seenCount: () => 0, append: sinon.stub(), flush: sinon.stub() };
+      let stop = null;
+      stubs.logStream.callsFake(async () => {
+        const stream = new PassThrough();
+        stop = sinon.stub();
+        return { stream, stop };
+      });
+
+      await runner.teardownSession({ ...session(), logBuffers: { web: buffer } });
+
+      expect(stop.calledOnce, 'the read is closed, not abandoned').to.equal(true);
+    });
+
     // Teardown runs from the completion path, the deadline timer and the cancel
     // path. A throw here would leave the node believing a session it can no
     // longer see still occupies its only slot.
@@ -783,15 +836,18 @@ describe('playgroundRunner', () => {
 
     it('stops every follow at teardown', async () => {
       // A follow outliving its session holds a docker connection open for
-      // nothing, and a cancelled session's containers are still up.
+      // nothing, and a cancelled session's containers are still up. The
+      // teardown's own final log read (the session's follow delivered
+      // nothing here) opens one more stream - it must be closed too.
       const s2 = session();
       stubs.inspect.resolves(running('healthy'));
 
       await runner.runSession(s2);
       await runner.teardownSession(s2);
 
-      expect(stubs.follows).to.have.lengthOf(1);
-      expect(stubs.follows[0].stop.calledOnce).to.equal(true);
+      stubs.follows.forEach((follow) => {
+        expect(follow.stop.called, 'every opened stream is closed').to.equal(true);
+      });
     });
 
     it('reports how many lines it dropped, so a truncated log is not read as complete', async () => {

@@ -79,6 +79,14 @@ function logRetainedLines() {
   return config.fluxapps.playgroundLogRetainedLines ?? 2000;
 }
 
+// Bounds the teardown's final log read. Not load-bearing for the case the read
+// exists for - a dead container's log endpoint delivers and closes in
+// milliseconds - it only closes the tap on a still-running container, whose
+// bytes arrive immediately but whose stream would otherwise stay open.
+function finalLogReadMs() {
+  return config.fluxapps.playgroundFinalLogReadMs ?? 2000;
+}
+
 function sessionTtlMs() {
   return config.fluxapps.playgroundSessionTtlMs ?? 900_000;
 }
@@ -429,11 +437,16 @@ function logBuffer(maxLines, nextSeq) {
   // truncated log's arithmetic stops adding up.
   let produced = 0;
   let dropped = 0;
+  // Every line ever OFFERED, blanks included - distinct from `produced`
+  // (admitted lines). Zero means the feeding stream never delivered a single
+  // byte, which is what the teardown's final read keys on.
+  let seen = 0;
   // Whatever arrived after the last newline. A stream is bytes, not lines, so a
   // line straddling two chunks is held here until the rest of it comes.
   let partial = '';
 
   function admit(line) {
+    seen += 1;
     if (!line.trim()) return;
     const match = LOG_LINE.exec(line);
     produced += 1;
@@ -465,6 +478,10 @@ function logBuffer(maxLines, nextSeq) {
       const last = partial;
       partial = '';
       admit(last);
+    },
+    /** How many lines the feeding stream has ever offered, blanks included. */
+    seenCount() {
+      return seen;
     },
     /**
      * @param {number} [sinceSeq] what the caller already has; 0 means everything
@@ -723,6 +740,39 @@ function startCpuSampler(components, watcher, cpu) {
 }
 
 /**
+ * The terminal read of one component's log, straight from the record.
+ *
+ * The follow serves the live session; docker's log FILE is the source of truth
+ * and outlives the container. A component whose follow never delivered a
+ * single line - a container that died milliseconds after starting, its bytes
+ * still in flight when the session ended - gets its words from here, read
+ * BEFORE the removal destroys the record. A buffer the follow ever fed is
+ * left alone: two writers into one cursor space cannot be reconciled under a
+ * tail cap, and the observed failure class is all-or-nothing.
+ */
+async function readFinalLogs(component, buffer) {
+  if (!buffer || buffer.seenCount() > 0) return;
+  let follow = null;
+  try {
+    follow = await dockerService.dockerContainerLogsStream(component.identifier, {
+      timestamps: true,
+      tail: logRetainedLines(),
+    });
+    await new Promise((resolve) => {
+      const tap = setTimeout(resolve, finalLogReadMs());
+      follow.stream.on('data', (chunk) => buffer.append(chunk));
+      follow.stream.on('end', () => { clearTimeout(tap); resolve(); });
+      follow.stream.on('error', () => { clearTimeout(tap); resolve(); });
+    });
+    buffer.flush();
+  } catch (error) {
+    log.warn(`playground: could not take the final log read for ${component.identifier}: ${error.message}`);
+  } finally {
+    try { if (follow) follow.stop(); } catch (error) { /* the stream is already closed */ }
+  }
+}
+
+/**
  * Destroy everything a session owns.
  *
  * Never throws. Teardown runs from the TTL timer, from the cancel path and from
@@ -752,6 +802,14 @@ async function teardownSession(session) {
   const components = session.deployment
     ? names.map((name) => session.deployment.getComponent(name)).filter(Boolean)
     : [];
+
+  // The follow served the live session; the terminal state comes from the
+  // record, which outlives the container - read before the removal destroys it.
+  // eslint-disable-next-line no-restricted-syntax
+  for (const component of components) {
+    // eslint-disable-next-line no-await-in-loop
+    await readFinalLogs(component, session.logBuffers && session.logBuffers[component.name]);
+  }
 
   // eslint-disable-next-line no-restricted-syntax
   for (const component of components) {
