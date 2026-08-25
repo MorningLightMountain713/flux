@@ -286,6 +286,7 @@ async function finishSession(session, outcome) {
  * function itself never returns.
  */
 async function driveSession(session) {
+  let failure = null;
   try {
     const results = await playgroundRunner.runSession(session, {
       onStatus: (message) => jobRegistry.progress(session.sessionId, message),
@@ -297,23 +298,33 @@ async function driveSession(session) {
 
     const allPassed = Object.values(results).every((r) => r.probe && r.probe.passed);
     session.verdict = allPassed ? 'passed' : 'failed';
-    jobRegistry.succeed(session.sessionId);
   } catch (error) {
     if (error.kind === 'cancelled') {
       // A cancel is not a failure: the caller got the outcome they asked for, so
       // it is recorded as its own terminal state rather than as an error the
       // spec did not cause.
       session.verdict = 'cancelled';
-      jobRegistry.cancelled(session.sessionId);
     } else {
       session.verdict = 'error';
       session.error = error.message;
-      jobRegistry.fail(session.sessionId, error);
+      failure = error;
     }
   } finally {
     await finishSession(session, session.verdict ?? 'error').catch((error) => {
       log.error(`playground: teardown of ${session.sessionId} failed: ${error.message}`);
     });
+    // The operation settles only now, teardown included: a terminal status is
+    // the claim "this session has stopped and its slot is free", and the
+    // admission check that refuses a second session reads exactly that slot.
+    // Settled before the teardown, a caller who waited for Cancelled is
+    // refused by the very session they cancelled until the cleanup catches up.
+    if (session.verdict === 'cancelled') {
+      jobRegistry.cancelled(session.sessionId);
+    } else if (failure) {
+      jobRegistry.fail(session.sessionId, failure);
+    } else {
+      jobRegistry.succeed(session.sessionId);
+    }
   }
 }
 

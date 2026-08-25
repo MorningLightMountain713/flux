@@ -633,6 +633,32 @@ describe('playgroundService', () => {
       expect(stubs.audit.firstCall.args[0].verdict).to.equal('passed');
     });
 
+    // The terminal status is the claim "this session has stopped and its slot
+    // is free" - the admission check that refuses a second session reads
+    // exactly that slot. Settling before the teardown finishes opens a window
+    // where a caller who waited for Cancelled is refused by the very session
+    // they cancelled (gate 1001 t7+, the whole cascade).
+    it('stays Running until the teardown has finished, then settles', async () => {
+      const jobRegistry = require('../../ZelBack/src/services/utils/jobRegistry');
+      service = load();
+      stubs.runSession.rejects(Object.assign(new Error('The session was cancelled.'), { kind: 'cancelled' }));
+      let releaseTeardown;
+      stubs.teardownSession.callsFake(() => new Promise((resolve) => { releaseTeardown = resolve; }));
+
+      const handle = await service.submitSession({}, caller);
+      await settle();
+
+      expect(sessionRegistry.get(handle.sessionId), 'slot still held mid-teardown').to.not.equal(null);
+      expect(jobRegistry.get(handle.jobId, caller.fluxId).status, 'Cancelled would promise a slot the registry still refuses')
+        .to.equal(jobRegistry.JobStatus.RUNNING);
+
+      releaseTeardown([]);
+      await settle();
+
+      expect(sessionRegistry.get(handle.sessionId), 'slot freed once teardown finished').to.equal(null);
+      expect(jobRegistry.get(handle.jobId, caller.fluxId).status).to.equal(jobRegistry.JobStatus.CANCELED);
+    });
+
     // A cancel is the outcome the caller asked for, so it is its own terminal
     // state - not an error the spec caused.
     it('records a cancel as cancelled rather than as a failure', async () => {
