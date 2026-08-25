@@ -165,6 +165,22 @@ describe('playgroundWatcher', () => {
       expect(watcher.state('web_demoapp').exitCode).to.equal(null);
     });
 
+    it("a start event learns the container's address, so the TCP rung has somewhere to dial", async () => {
+      // The boot snapshot runs BEFORE the container exists, and only an
+      // inspect carries the address - a start event that merely flips
+      // `running` leaves address null, probeTcp declines to dial, and every
+      // portless verdict collapses to uptime (gate 1001 t8).
+      const watcher = createSessionWatcher('sess-1');
+      await watcher.start(['web_demoapp']);
+      stubs.inspect.resolves(runningInfo());
+
+      await stubs.options.onEvent(event('start', 'web_demoapp'));
+
+      const state = watcher.state('web_demoapp');
+      expect(state.running).to.equal(true);
+      expect(state.address).to.equal('172.23.255.5');
+    });
+
     it('marks a destroyed container gone', async () => {
       const watcher = await watching();
 
