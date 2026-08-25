@@ -57,6 +57,13 @@ const GROWN = {
   web: { ...SMALL.web, cpu: 2, memory: 1200, persistentStorage: { sizeGb: 40, mounts: SMALL.web.persistentStorage.mounts } },
 };
 
+// Half again over GROWN. What makes an update priced is growth over what
+// stands, so an app already at GROWN needs somewhere bigger to go for its
+// next update to owe a fee.
+const GROWN2 = {
+  web: { ...SMALL.web, cpu: 3, memory: 1800, persistentStorage: { sizeGb: 60, mounts: SMALL.web.persistentStorage.mounts } },
+};
+
 const url = () => env.clients[0].url;
 const ownerKey = () => appOwnerKey();
 
@@ -180,14 +187,18 @@ describe('v9 update pricing', function () {
         expect(current.hash).to.not.equal(before.hash);
       });
 
-      // A paid update bought its term, so the clock restarts: the fee already
-      // credited back whatever time was left on the old one.
-      it('starts a new term, having paid for one', async function () {
+      // Only an update that OWES a fee buys a term: the fee credits back
+      // whatever time was left on the old one, so the clock restarts. A
+      // shrink owes nothing — it is a free update whatever payment rides the
+      // transaction, and a free update keeps the standing term (the
+      // changes-nothing tests below pin that side).
+      it('starts a new term when it owes a fee, having paid for one', async function () {
         this.timeout(180000);
         const before = await row(appName);
-        await updateV9(appName, { components: SMALL, valueSat: AMPLE_SAT });
+        await updateV9(appName, { components: GROWN2, valueSat: AMPLE_SAT });
 
         const current = await row(appName);
+        expect(current.hash).to.not.equal(before.hash);
         expect(current.registeredAt).to.be.greaterThan(before.registeredAt);
       });
     });
@@ -278,8 +289,11 @@ describe('v9 update pricing', function () {
     });
 
     // Rule 7. Free updates are relayed, verified and stored permanently by every
-    // node on the network, so they are capped: 5 in 24h. Past the cap an update
-    // is priced like any other, and the floor no longer buys one.
+    // node on the network, so they are capped: 5 in 24h. Past the cap, payment
+    // converts nothing: a free-shaped update is refused whatever rides the
+    // transaction, because money never changes what an update is — the spec
+    // does. The pay path is asking for something (growth or time), which is
+    // priced like any other update.
     describe('the free-update rate limit', function () {
       const appName = `v9ratelimit${Date.now()}`;
 
@@ -302,10 +316,19 @@ describe('v9 update pricing', function () {
         expect(current.hash).to.equal(before.hash);
       });
 
-      it('accepts that sixth update once it pays', async function () {
+      it('still refuses the sixth free-shaped update, however much it pays', async function () {
         this.timeout(180000);
         const before = await row(appName);
         await updateV9(appName, { components: SMALL, valueSat: AMPLE_SAT });
+
+        const current = await row(appName);
+        expect(current.hash).to.equal(before.hash);
+      });
+
+      it('accepts a sixth update that buys something, priced like any other', async function () {
+        this.timeout(180000);
+        const before = await row(appName);
+        await updateV9(appName, { components: GROWN, valueSat: AMPLE_SAT });
 
         const current = await row(appName);
         expect(current.hash).to.not.equal(before.hash);
