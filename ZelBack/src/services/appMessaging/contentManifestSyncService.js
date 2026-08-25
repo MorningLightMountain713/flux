@@ -58,6 +58,18 @@ function depositIndex(peerKey, index) {
   }
 }
 
+/** A peer has finished answering the body request it was sent — the `done` flag its reply
+ *  already carries. The settle delay is the bound for a peer that never says so; without
+ *  this the round pays that bound for every peer, however fast the answer came. */
+function depositFetchDone(peerKey) {
+  if (!activeRound || !activeRound.peerKeys.has(peerKey)) return;
+  const resolveFetch = activeRound.fetchWaiters.get(peerKey);
+  if (resolveFetch) {
+    activeRound.fetchWaiters.delete(peerKey);
+    resolveFetch();
+  }
+}
+
 function unionTarget(indexes) {
   const target = new Map();
   for (const index of indexes.values()) {
@@ -89,11 +101,16 @@ function computeNeeded(target, local) {
  *
  * @param {Array<{key: string, send: Function}>} peers
  * @param {object} deps - { getLocalVersions?, sign?, delay?, now?, indexTimeoutMs?, fetchSettleMs? }
- * @returns {Promise<{peers: number, indexesReceived: number, fetched: number}>}
+ * @returns {Promise<{peers: number, indexesReceived: number, fetched: number,
+ *                    requested: number, remaining: string[]}>}
  */
 async function reconcile(peers, deps = {}) {
   if (reconcileInFlight) return reconcileInFlight;
-  if (!Array.isArray(peers) || peers.length === 0) return { peers: 0, indexesReceived: 0, fetched: 0 };
+  if (!Array.isArray(peers) || peers.length === 0) {
+    return {
+      peers: 0, indexesReceived: 0, fetched: 0, requested: 0, remaining: [],
+    };
+  }
 
   reconcileInFlight = runReconcile(peers, deps).finally(() => { reconcileInFlight = null; });
   return reconcileInFlight;
@@ -107,6 +124,11 @@ async function runReconcile(peers, deps = {}) {
     now = Date.now,
     indexTimeoutMs = INDEX_TIMEOUT_MS,
     fetchSettleMs = FETCH_SETTLE_MS,
+    // Identity, not liveness, is what a round can carry: the caller supplies the lookup
+    // that turns a key back into whatever socket currently serves that peer, and null when
+    // no socket does any more. Defaults to the captured handle, so a caller that has no
+    // lookup behaves exactly as before.
+    resolvePeer = (key, captured) => captured,
   } = deps;
 
   try {
@@ -115,6 +137,7 @@ async function runReconcile(peers, deps = {}) {
     activeRound = {
       peerKeys: new Set(peers.map((peer) => peer.key)),
       indexes: new Map(),
+      fetchWaiters: new Map(),
       expected: peers.length,
       resolveIndexes,
     };
@@ -136,13 +159,32 @@ async function runReconcile(peers, deps = {}) {
 
     // Step 2 — fetch the bodies, one peer at a time, re-checking the gap from the store
     // after each so every body is pulled once (the next peer only sees what's still missing).
+    // Only peers that answered the index: silence tells us nothing about what a peer holds,
+    // and asking anyway costs a full settle window per peer for an answer it never claimed
+    // it could give (the ingress-attestation round skips them the same way).
     for (const peer of peers) {
       if (remaining.length === 0) break;
+      if (!activeRound.indexes.has(peer.key)) continue;
+      // Re-resolved at the moment of sending. The peer object was captured when the round
+      // selected it, and a socket that has closed since — or been replaced by a reconnect
+      // on the same address — cannot be detected through that handle. send() reports a
+      // dead socket by returning false and never throws, so the boolean is the liveness
+      // signal; a peer we cannot reach must not buy a settle window.
+      const live = resolvePeer(peer.key, peer);
+      if (!live) continue;
       // eslint-disable-next-line no-await-in-loop
       const fetchReq = await sign({ type: FETCH_REQUEST, version: 1, appNames: remaining, timestamp: now() });
-      try { peer.send(fetchReq); } catch (error) { continue; }
+      // Armed BEFORE the send: the answer can land before the sending call has even
+      // returned, and a waiter registered afterwards would miss it and then wait out the
+      // full settle for a peer that had already finished.
+      const peerDone = new Promise((resolve) => { activeRound.fetchWaiters.set(peer.key, resolve); });
+      let sent = false;
+      try { sent = live.send(fetchReq) !== false; } catch (error) { sent = false; }
+      if (!sent) { activeRound.fetchWaiters.delete(peer.key); continue; }
+      // The settle delay is the bound for a peer that never reports done, not the pace.
       // eslint-disable-next-line no-await-in-loop
-      await delay(fetchSettleMs);
+      await Promise.race([peerDone, delay(fetchSettleMs)]);
+      activeRound.fetchWaiters.delete(peer.key);
       // eslint-disable-next-line no-await-in-loop
       const after = new Map((await getLocalVersions()).map((row) => [row.appName, row.version]));
       remaining = remaining.filter((appName) => {
@@ -160,7 +202,14 @@ async function runReconcile(peers, deps = {}) {
     fluxEventBus.publish('content:manifestReconciled', {
       requested: neededCount, fetched, peers: peers.length, indexesReceived,
     });
-    return { peers: peers.length, indexesReceived, fetched };
+    // `requested` rides the RETURN as well as the event: the caller decides from this
+    // whether its catch-up step is finished, and without the gap it set out to close
+    // "asked for one and got nothing" is indistinguishable from "asked for nothing because
+    // I was already current". `remaining` names the apps still owed, so a node that is
+    // behind can say which apps rather than only that it is.
+    return {
+      peers: peers.length, indexesReceived, fetched, requested: neededCount, remaining,
+    };
   } finally {
     activeRound = null;
   }
@@ -169,6 +218,7 @@ async function runReconcile(peers, deps = {}) {
 module.exports = {
   reconcile,
   depositIndex,
+  depositFetchDone,
   isPeerInActiveRound,
   // exposed for tests
   unionTarget,
