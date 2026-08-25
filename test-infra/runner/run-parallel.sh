@@ -324,9 +324,30 @@ sweep_harness_leftovers
 # at the next kernel message. A long-lived process this driver starts must not
 # inherit the write end, or the pipe stays open while it lives: each launch
 # closes it.
+# Beside free RAM and load: CPU steal (a co-tenant VM eating the hypervisor
+# reads as idle from in here - steal is the only tell) and a timed 4k dsync
+# write on the docker data root (mongo collection prep is fsync-bound; healthy
+# local storage is sub-ms, and 20ms+ here is the boot-crawl mechanism seen in
+# gate 5). One tiny probe write per tick - negligible next to a booting fleet.
 capture_memory(){
+  local prev_steal=0 prev_total=0 probe_dir total dt ds steal t0 fsync_ms
+  local u n sy id io irq sirq st
+  # Probe the filesystem the fleets actually live on - the docker data root -
+  # not /tmp, which can be a different (and idle) device entirely.
+  probe_dir=$(docker info --format '{{.DockerRootDir}}' 2>/dev/null || echo /tmp)
   while true; do
-    echo "$(date -u +%H:%M:%S) avail=$(free_mb)MB load=$(cut -d' ' -f1 /proc/loadavg) containers=$(docker ps -q 2>/dev/null | wc -l)"
+    read -r _ u n sy id io irq sirq st _ < /proc/stat
+    total=$((u + n + sy + id + io + irq + sirq + st))
+    dt=$((total - prev_total)); ds=$((st - prev_steal))
+    steal="-"
+    if [ "$prev_total" -ne 0 ] && [ "$dt" -gt 0 ]; then
+      steal=$(awk -v a="$ds" -v b="$dt" 'BEGIN{printf "%.1f", 100*a/b}')
+    fi
+    prev_steal=$st; prev_total=$total
+    t0=$(date +%s%N)
+    dd if=/dev/zero of="$probe_dir/e2e-fsync-probe" bs=4k count=1 oflag=dsync conv=notrunc 2>/dev/null
+    fsync_ms=$(( ($(date +%s%N) - t0) / 1000000 ))
+    echo "$(date -u +%H:%M:%S) avail=$(free_mb)MB load=$(cut -d' ' -f1 /proc/loadavg) containers=$(docker ps -q 2>/dev/null | wc -l) steal_pct=$steal fsync_ms=$fsync_ms"
     sleep 5
   done
 }
