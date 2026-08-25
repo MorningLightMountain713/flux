@@ -6,6 +6,7 @@ const messageHelper = require('../messageHelper');
 const dockerService = require('../dockerService');
 const appsRuntimeState = require('./appsRuntimeState');
 const reconcilerQueue = require('../appMonitoring/reconcilerQueue');
+const appReconciler = require('../appMonitoring/appReconciler');
 const log = require('../../lib/log');
 const deploymentProvider = require('../appRuntime/deploymentProvider');
 const globalCommand = require('./globalCommand');
@@ -84,7 +85,17 @@ async function appStart(req, res) {
     // clear the operator stop lock; the reconciler then (re)starts each component,
     // honouring its own election/dependency gates (a non-elected activeStandby
     // component is held at awaitingController, never force-started).
-    await driveOperatorCommand(ids, (id) => appsRuntimeState.setOperatorStopped(id, false));
+    //
+    // A decider verdict recorded BEFORE the stop is withdrawn with the lock: an
+    // operator stop is an interregnum, and the verdict's safety checks (sync
+    // position, sibling state, location order) were made against a world that
+    // kept moving while the component sat stopped. Absent-verdict is the state
+    // a FluxOS restart already produces — running containers are left as-is,
+    // stopped decider-owned ones wait for their decider to rule again.
+    await driveOperatorCommand(ids, async (id) => {
+      await appsRuntimeState.setOperatorStopped(id, false);
+      appReconciler.clearControllerDesired(id);
+    });
 
     const appResponse = messageHelper.createDataMessage(appRes);
     return res ? res.json(appResponse) : appResponse;
@@ -303,8 +314,11 @@ async function appRestart(req, res) {
     // user-initiated restart = "make it run now": clear the operator stop lock AND
     // bump the durable restart generation, so the reconciler restarts a running
     // container (or starts a stopped one) and honours its election/dependency gates.
+    // The pre-stop decider verdict is withdrawn for the same reason as appStart:
+    // deciders re-assert live verdicts within a pass, stale ones must not stand.
     await driveOperatorCommand(ids, async (id) => {
       await appsRuntimeState.setOperatorStopped(id, false);
+      appReconciler.clearControllerDesired(id);
       await appsRuntimeState.requestRestart(id);
     });
 
