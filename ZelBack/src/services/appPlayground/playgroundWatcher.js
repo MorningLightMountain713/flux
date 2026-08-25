@@ -68,12 +68,19 @@ function createSessionWatcher(sessionId) {
       return;
     }
 
-    state.known = true;
     if (!info) {
-      state.gone = true;
-      state.running = false;
+      // Absent is only "destroyed" for a container that has ever been seen —
+      // the runner deliberately subscribes (and so snapshots) BEFORE it
+      // creates the session's containers, so a never-seen identifier is
+      // simply not created yet. Its create/start event or a later refresh
+      // fills the state in.
+      if (state.known) {
+        state.gone = true;
+        state.running = false;
+      }
       return;
     }
+    state.known = true;
     state.gone = false;
     state.running = Boolean(info.State && info.State.Running);
     state.health = (info.State && info.State.Health && info.State.Health.Status) || null;
