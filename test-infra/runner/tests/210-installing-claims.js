@@ -57,6 +57,12 @@ describe('installing claims: election losers release their seats by cleared broa
           // released. Renewal is pushed out with it (it must undercut the TTL).
           installingTtlS: 3600,
           installingRenewalS: 3000,
+          // Coupled to the latency dial below and compressed PROPORTIONALLY:
+          // production parks 90s against a sub-second wire (a 100x-plus
+          // ratio); the shared 5s park against this suite's 4s wire would
+          // invert that - claims still in flight as the park expires. 15s
+          // keeps the park comfortably above one full propagation.
+          installCollisionWaitMs: 15000,
         },
       },
     });
@@ -64,8 +70,12 @@ describe('installing claims: election losers release their seats by cleared broa
 
     // Boot and peering ran at bridge speed; everything the scenario measures
     // runs on the shaped wire. The dial's one job is to beat the wake spread
-    // (header comment) - it is not modelling any particular geography.
-    await setLatency(env, { delay: '750ms 50ms' });
+    // (header comment) - it is not modelling any particular geography. 750ms
+    // beat the ~500ms spread of a quiet box; under a full parallel gate the
+    // spread measures ~2.7s (gate-5 capture: two nodes woke together, three
+    // woke 2.7s later, saw the standing claims and correctly stood down - the
+    // premise collapsed, not the product). Sized to beat the GATE's spread.
+    await setLatency(env, { delay: '4000ms 200ms' });
 
     await pushImage(appName, 'v1');
 
