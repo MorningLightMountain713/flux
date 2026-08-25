@@ -140,6 +140,26 @@ describe('encrypted mastership: a sealed spec holds and fails over a term', func
     }
     await Promise.all(hosts.map((i) => waitForAppInstalled(env.clients[i], name, 240000)));
 
+    // The spawner can race a 4th instance into the claim-propagation window,
+    // and the surplus trim then sheds by runningSince rank — possibly one of
+    // the targeted nodes (gate 3: node-05 spawned itself in, node-02
+    // self-evicted 4s after its own install). Placement is the network's
+    // decision: wait for it to settle at the spec's 3 and RE-DERIVE the
+    // hosting set from the surviving locations, never assume the targeted
+    // three all kept their seats.
+    const ipToIndex = new Map(env.clients.map((c, i) => (c ? [c.ip, i] : null)).filter(Boolean));
+    let survivorIps = [];
+    await waitFor(async () => {
+      const res = await env.clients[0].getAppLocations(name).catch(() => null);
+      const ips = (res && res.data ? res.data : []).map((l) => String(l.ip).split(':')[0]);
+      if (ips.length !== 3) { survivorIps = []; return false; }
+      const same = survivorIps.length === 3 && ips.every((ip) => survivorIps.includes(ip));
+      survivorIps = ips;
+      return same; // three instances, stable across two consecutive polls
+    }, { timeout: 180000, interval: 5000, label: 'placement settled at the spec\'s 3 instances' });
+    hosts = survivorIps.map((ip) => ipToIndex.get(ip)).filter((i) => i != null).sort((a, b) => a - b);
+    expect(hosts.length, `every surviving location maps to a fleet node (${survivorIps.join(',')})`).to.equal(3);
+
     // Identity-minted identifiers are opaque, so the physical names are read
     // OFF the containers — never derived from the name.
     identifiers = new Map();

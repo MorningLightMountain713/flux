@@ -10,7 +10,7 @@ import {
 import { waitFor, waitForAppInstalled } from '../framework/wait.js';
 import { authenticate } from '../auth.js';
 import { appOwnerKey, fluxTeamKey } from '../framework/keys.js';
-import { execInContainer } from '../framework/container.js';
+import { execInContainer, pauseHostContainer, unpauseHostContainer } from '../framework/container.js';
 import { REGISTRY_REPO_HOST } from '../framework/subnet-config.js';
 
 // Mesh membership across a real 3-node fleet, without the overlay data plane:
@@ -183,12 +183,24 @@ describe('mesh membership across a multi-node fleet', function () {
   it('a chain jump past the anchor window stops the stored vouchers being believed', async function () {
     this.timeout(240000);
 
-    const { currentHeight } = await getState();
-    await setHeight(currentHeight + 250);
+    // Freeze the voucher owners first: every apprunning broadcast re-anchors
+    // the stored vouchers at the broadcaster's current tip, so an unpaused
+    // peer closes the staleness window at its next ~30s beat — and the 15s
+    // pass cadence can miss the window entirely (the measured gate-3 window
+    // was 7.3s, wholly between two passes; earlier greens were phase luck).
+    // Paused, the peers cannot re-anchor, so the jump stays past the window
+    // until the assertion has seen a pass reject on it.
+    await Promise.all([1, 2].map((i) => pauseHostContainer(env.clients[i].container)));
+    try {
+      const { currentHeight } = await getState();
+      await setHeight(currentHeight + 250);
 
-    await waitFor(async () => {
-      const s = await meshStatus(0);
-      return (s.data.lastPass.rejected ?? []).some((r) => r.reason === 'stale-anchor');
-    }, { timeout: 120000, interval: 5000, label: 'stale-anchor rejections appear' });
+      await waitFor(async () => {
+        const s = await meshStatus(0);
+        return (s.data.lastPass.rejected ?? []).some((r) => r.reason === 'stale-anchor');
+      }, { timeout: 120000, interval: 5000, label: 'stale-anchor rejections appear' });
+    } finally {
+      await Promise.all([1, 2].map((i) => unpauseHostContainer(env.clients[i].container)));
+    }
   });
 });
