@@ -86,9 +86,10 @@ export async function removeAppImage(container, imageRef) {
   return execInContainer(container, `docker rmi -f ${imageRef}`);
 }
 
-export async function getAppContainerStatus(container, appName, { all = false, replica = null } = {}) {
+export async function getAppContainerStatus(container, appName, { all = false, replica = null, component = null } = {}) {
   const containers = await listAppContainers(container, { all });
-  return containers.find((c) => isAppContainer(c, appName, replica)) ?? null;
+  return containers.find((c) => isAppContainer(c, appName, replica)
+    && (component == null || c.component === component)) ?? null;
 }
 
 // The REAL docker name of one component's container, resolved through the labels.
