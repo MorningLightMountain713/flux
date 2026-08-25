@@ -53,8 +53,8 @@ function dump(label, envs) {
   const written = [];
   envs.forEach((env, e) => {
     const prefix = envs.length > 1 ? `env${e + 1}-` : '';
-    for (const { index, ip, lines, events } of env.nodeDiagnostics()) {
-      if (!lines.length && !events.length) continue;
+    for (const { index, ip, lines, events, record } of env.nodeDiagnostics()) {
+      if (!lines.length && !events.length && !record) continue;
 
       const parts = [`=== Node ${index} (ip ${ip ?? '?'}) — ${lines.length} log lines ===`];
       parts.push(...lines);
@@ -62,9 +62,13 @@ function dump(label, envs) {
         parts.push('', `=== Node ${index} SSE events (${events.length}) ===`);
         events.forEach((ev) => parts.push(`${ev.event}: ${JSON.stringify(ev.data)}`));
       }
+      if (record) {
+        parts.push('', `=== Node ${index} in-container record (journal + file log) ===`);
+        parts.push(record);
+      }
       const file = join(dir, `${prefix}node-${String(index).padStart(2, '0')}.log`);
       writeFileSync(file, `${parts.join('\n')}\n`);
-      written.push(`${file} (${lines.length} lines, ${events.length} events)`);
+      written.push(`${file} (${lines.length} lines, ${events.length} events${record ? ', record' : ''})`);
     }
   });
 
@@ -79,10 +83,16 @@ function dump(label, envs) {
 // Root hook plugin (.mocharc.json `require`): every suite file gets failure
 // dumps automatically — no per-suite registration.
 export const mochaHooks = {
-  afterEach() {
+  async afterEach() {
     if (!ALWAYS && this.currentTest.state !== 'failed') return;
+    const envs = envsFor(this.currentTest.parent);
+    // The containers are still alive here - the one moment their journals
+    // (systemd nodes log there, never to stdout) can be read. Bounded pulls.
+    if (this.currentTest.state === 'failed') {
+      await Promise.all(envs.map((env) => env.captureNodeRecords?.().catch(() => {})));
+    }
     for (const s of ancestorChain(this.currentTest.parent)) dumpedSuites.add(s);
-    dump(this.currentTest.fullTitle(), envsFor(this.currentTest.parent));
+    dump(this.currentTest.fullTitle(), envs);
   },
 
   // afterEach never fires for a before/after-all HOOK failure, which is exactly
