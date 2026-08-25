@@ -312,8 +312,14 @@ function makeEnvShell(networkName) {
         if (!ip) return;
         const pull = await dockerCli(['exec', id, 'bash', '-c',
           'echo "=== journalctl (tail 1500)"; journalctl --no-pager -n 1500 2>/dev/null; '
-          + 'echo "=== /flux/fluxos.log (tail 400)"; tail -n 400 /flux/fluxos.log 2>/dev/null'], 20000);
-        const text = pull.ok ? pull.stdout : `record pull failed: ${pull.stderr || 'exec error'}`;
+          + 'echo "=== /flux/fluxos.log (tail 400)"; tail -n 400 /flux/fluxos.log 2>/dev/null; true'], 20000);
+        // The output is the point, whatever the script's last command exited:
+        // on a plain-mode node journalctl does not exist and the file log may
+        // not either, and a non-zero tail must not condemn a full journal
+        // (gate-5 1214: ten good pulls discarded as "exec error").
+        const text = pull.stdout && pull.stdout.trim()
+          ? pull.stdout
+          : `record pull failed: ${pull.stderr || 'exec error'}`;
         nodeRecords.set(ip, text);
       }));
     },
@@ -1080,9 +1086,16 @@ async function _buildEnv(
   // them) — an earlier exemption left all-legacy fleets booting outside the
   // lock and suite 21 failed on exactly the contention this wait prevents.
   const rpcFailSet = new Set(rpcFailures);
+  // The bound, not a pace (see the startup allowance above). Under a full
+  // gate the DB-prep phase alone measures ~90s on EVERY node of a healthy
+  // fleet - one per-fleet mongod prepares ten nodes' collections, 5-17s per
+  // collection under contention (gate-5 1214, record pull) - so the old 90s
+  // budget sat inside the healthy distribution and the first node checked
+  // reported "never". The BOOTS distribution the gate now prints is the
+  // regression detector for this whole end-to-end duration.
   await Promise.all(clients
     .filter((c) => c && !rpcFailSet.has(c.ip))
-    .map((c) => c.waitForEvent('daemon:polled', () => true, 90000)));
+    .map((c) => c.waitForEvent('daemon:polled', () => true, 240000)));
 
   // In systemd mode the container's stdout is systemd's console and FluxOS's
   // own stream is journal-connected — that connection is the mechanism under
