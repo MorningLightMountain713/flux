@@ -126,6 +126,11 @@ function createSessionWatcher(sessionId) {
       state.running = true;
       state.gone = false;
       state.known = true;
+      // The event says it started; the inspect fills in what the event does
+      // not carry - the address (the TCP rung dials it) and whether the image
+      // declares a health check. The boot snapshot ran before the container
+      // existed, so this is the first look that can see either.
+      await refresh(identifier);
     } else if (action.startsWith('health_status')) {
       await refresh(identifier);
     } else {
