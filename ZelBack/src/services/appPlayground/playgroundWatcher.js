@@ -25,6 +25,10 @@ function createSessionWatcher(sessionId) {
   const states = new Map();
   const waiters = new Set();
   let subscription = null;
+  // Set at start(), read by onEvent: events name containers by their DOCKER
+  // name, and the identity label in the same Attributes bag is what maps one
+  // back to the component identifier the states are keyed by.
+  let labelKeys = null;
 
   function stateFor(identifier) {
     if (!states.has(identifier)) {
@@ -93,8 +97,19 @@ function createSessionWatcher(sessionId) {
   }
 
   async function onEvent(event) {
-    const identifier = event.Actor && event.Actor.Attributes && event.Actor.Attributes.name;
-    if (!identifier) return;
+    // The event names its container by DOCKER name; the states here are keyed
+    // by the component identifier. The identity label - in the same
+    // Actor.Attributes bag as the name - states the identifier outright, and
+    // names are never parsed. Every session container is created at the one
+    // chokepoint that stamps identity labels, so a missing label is a
+    // malformed event, not a legacy container.
+    const attributes = (event.Actor && event.Actor.Attributes) || {};
+    const identifier = labelKeys ? attributes[labelKeys.IDENTIFIER] : null;
+    if (!identifier) {
+      log.warn(`playground ${sessionId} - dropped a ${event.Action || event.status || '?'} event for `
+        + `${attributes.name || 'an unnamed container'}: no identity label`);
+      return;
+    }
     const action = event.Action || event.status || '';
     const state = stateFor(identifier);
 
@@ -133,6 +148,7 @@ function createSessionWatcher(sessionId) {
      */
     async start(identifiers) {
       const { LABEL_KEYS } = await getSpecBackend();
+      labelKeys = LABEL_KEYS;
       subscription = dockerEventStream.createDockerEventStream({
         label: `playground ${sessionId}`,
         filters: {
