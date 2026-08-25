@@ -297,6 +297,33 @@ describe('AppSyncOrchestrator', () => {
       expect(orchestrator.state).to.equal(STATES.DEGRADED);
     });
 
+    // A degrade closes the sync epoch: the block timer that backstopped the
+    // PREVIOUS epoch must not release the next one. A node that reached READY
+    // on the timer, degraded, and recovered its peers has a resync to run —
+    // promoting on the dead epoch's expired timer skips the hash sync
+    // entirely (gate-3 suite 108: RESYNCING -> READY in 2.3s, no sync ran).
+    it('starts recovery with a fresh block timer - the old epoch\'s expiry cannot promote', async () => {
+      const peers = makeEligiblePeers(3);
+      getEligibleSyncPeersStub = sinon.stub().returns(peers);
+
+      const orchestrator = makeOrchestrator({ isEnterprise: () => true });
+      orchestrator.start(defaultBootContext);
+
+      blockEmitter.emit('blocksProcessed', 2555000);
+      await clock.tickAsync(0);
+      for (let i = 0; i < 130; i += 1) {
+        blockEmitter.emit('blocksProcessed', 2555000 + i);
+      }
+      await clock.tickAsync(0);
+      expect(orchestrator.state).to.equal(STATES.READY);
+
+      peerEmitter.emit('peersBelowThreshold', 3);
+      expect(orchestrator.state).to.equal(STATES.DEGRADED);
+      peerEmitter.emit('peerThresholdReached', 12);
+      await clock.tickAsync(0);
+      expect(orchestrator.state).to.equal(STATES.RESYNCING);
+    });
+
     it('should emit readinessLost on degradation', async () => {
       const orchestrator = makeOrchestrator({ isEnterprise: () => true });
       orchestrator.start(defaultBootContext);

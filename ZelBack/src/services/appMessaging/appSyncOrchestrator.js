@@ -563,6 +563,10 @@ class AppSyncOrchestrator {
     this.#askedPeers.clear();
     this.#peerProgress.clear();
     this.#clearSyncRequested();
+    // The block timer is EPOCH state: it backstops the sync that is starting,
+    // and one carried over from before the degrade is already expired — which
+    // would promote the recovery straight to READY without a sync running.
+    this.#blocksSinceSyncStarted = 0;
     this.#syncCompletions = {
       apprunning: 0, appinstalling: 0, apperrors: 0,
     };
