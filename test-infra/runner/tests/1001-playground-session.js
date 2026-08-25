@@ -460,11 +460,14 @@ describe('playground: a session runs on a real node and reports what happened', 
 
     it('says how many lines it dropped, so a truncated log is not read as complete', async function () {
       this.timeout(300000);
-      // Far more lines than the retained window, as fast as busybox can write.
+      // Far more lines than the retained window - emitted AFTER the follow has
+      // attached (the pause covers the attach), because history is capped by
+      // docker's tail at exactly the retention: only LIVE lines can overflow
+      // the buffer, which is the scenario a chatty container actually is.
       const spec = oneComponent({
         name: uniqueName(),
         image: busyboxImage,
-        entrypoint: ['/bin/busybox', 'sh', '-c', 'i=0; while [ $i -lt 5000 ]; do echo line-$i; i=$((i+1)); done; /bin/busybox sleep 999'],
+        entrypoint: ['/bin/busybox', 'sh', '-c', '/bin/busybox sleep 5; i=0; while [ $i -lt 5000 ]; do echo line-$i; i=$((i+1)); done; /bin/busybox sleep 999'],
       });
 
       const jobId = await startSession(client, zelidauth, spec);
@@ -517,8 +520,12 @@ describe('playground: a session runs on a real node and reports what happened', 
       expect(row, 'the session container is running').to.be.a('string');
       expect(row, 'named for the session, never for the spec').to.not.include(appName);
       expect(row).to.match(/pg-[0-9a-f]{12}/);
+      // Exposed is not published: every flux container lists its spec's ports
+      // as EXPOSED metadata (`80/tcp, 31000/tcp`), which binds nothing. An
+      // inbound path is a PUBLICATION, and docker spells one with an arrow
+      // (`0.0.0.0:31000->80/tcp`) - the absence being asserted is the binding.
       expect(row).to.not.include('0.0.0.0');
-      expect(row).to.not.include('31000');
+      expect(row).to.not.include('->');
 
       await endSession(client, zelidauth, jobId);
     });
