@@ -11,7 +11,7 @@ import { waitForAppInstalled } from '../framework/wait.js';
 import { pushTestApp } from '../framework/registry-helper.js';
 import { buildSeedableTestApp } from '../framework/seed-helper.js';
 import { REGISTRY_REPO_HOST } from '../framework/subnet-config.js';
-import { execInContainer, requireAppContainerName } from '../framework/container.js';
+import { execInContainer, requireAppContainerName, appContainerName } from '../framework/container.js';
 import {
   telemetrydControl, waitForTelemetryEvent, announcedIdentities,
 } from '../framework/telemetryd-control.js';
@@ -96,7 +96,22 @@ async function containerIp(client, containerName, { timeout = 30000 } = {}) {
   }
 }
 
-const agentIp = async (client, opts) => containerIp(client, await agentContainer(client), opts);
+// Resolve-and-inspect PER ATTEMPT under one deadline: the recreate the tests
+// provoke leaves a window with no container to name, and a one-shot resolution
+// ahead of the poll throws straight through the timeout it was given.
+const agentIp = async (client, { timeout = 30000 } = {}) => {
+  const deadline = Date.now() + timeout;
+  for (;;) {
+    try {
+      // eslint-disable-next-line no-await-in-loop
+      return await containerIp(client, await agentContainer(client), { timeout: 5000 });
+    } catch (err) {
+      if (Date.now() > deadline) throw err;
+      // eslint-disable-next-line no-await-in-loop
+      await new Promise((resolve) => { setTimeout(resolve, 500); });
+    }
+  }
+};
 
 const forApp = (identities, appName) => identities.filter((a) => a.identity.app_name === appName);
 
@@ -359,9 +374,11 @@ describe('otlp telemetry: the identity socket carries the resolved agent endpoin
     // both apps reach their instance counts, then hold each node to its own
     // contract: a co-resident sender routes at the local collector, a sender
     // without one stays off the wire (the loud-warn unresolved state).
-    const present = async (client, name) => {
-      const r = await execInContainer(client.container, `docker ps --format '{{.Names}}' --filter name=${name}`);
-      return r.exitCode === 0 && r.output.includes(name);
+    // Resolve by app+component through the label index — a container's NAME
+    // carries the minted identity, which this suite cannot spell.
+    const present = async (client, appName, componentName) => {
+      const name = await appContainerName(client.container, appName, componentName).catch(() => null);
+      return !!name;
     };
     let placement = [];
     for (let round = 0; round < 40; round += 1) {
@@ -373,8 +390,8 @@ describe('otlp telemetry: the identity socket carries the resolved agent endpoin
       )));
       // eslint-disable-next-line no-await-in-loop
       placement = await Promise.all(env.clients.map(async (c) => ({
-        sender: await present(c, `fluxsender_${SHIPPER}`),
-        collector: await present(c, `fluxcollector_${COLLECTOR_APP}`),
+        sender: await present(c, SHIPPER, 'sender'),
+        collector: await present(c, COLLECTOR_APP, 'collector'),
       })));
       if (placement.filter((p) => p.sender).length >= 3
         && placement.filter((p) => p.collector).length >= 3) break;
@@ -385,7 +402,7 @@ describe('otlp telemetry: the identity socket carries the resolved agent endpoin
 
     for (const i of overlap) {
       // eslint-disable-next-line no-await-in-loop
-      const ip = await containerIp(env.clients[i], `fluxcollector_${COLLECTOR_APP}`);
+      const ip = await containerIp(env.clients[i], await requireAppContainerName(env.clients[i].container, COLLECTOR_APP, 'collector'));
       const endpoint = `http://${ip}:${AGENT_PORT}`;
       // eslint-disable-next-line no-await-in-loop
       await waitForTelemetryEvent(telemetrydControl(i + 1), (e) => {
