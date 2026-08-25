@@ -757,6 +757,58 @@ describe('AppSyncOrchestrator', () => {
       expect(orchestrator.state).to.equal(STATES.SYNCING);
     });
 
+    // The step means "my content register is caught up", so a round that identified work
+    // and did none of it has not finished it. Latching there strands the node: the
+    // per-block retry skips a step already marked complete, leaving only the steady-state
+    // refresh a hundred blocks out, and meanwhile the node is live and serving content it
+    // already knows has been superseded.
+    it('stays gated when the round fetched less than the gap it found', async () => {
+      const peers = makeEligiblePeers(3);
+      getEligibleSyncPeersStub.returns(peers);
+      reconcileStub.resolves({
+        peers: 3, indexesReceived: 1, requested: 1, fetched: 0,
+      });
+
+      const orchestrator = makeOrchestrator({ isEnterprise: () => true });
+      orchestrator.start(defaultBootContext);
+      blockEmitter.emit('blocksProcessed', 2555000);
+      await clock.tickAsync(0);
+      peerEmitter.emit('peerThresholdReached', 12);
+      await clock.tickAsync(0);
+      completeEphemeral();
+      await clock.tickAsync(0);
+
+      expect(orchestrator.state).to.equal(STATES.SYNCING);
+    });
+
+    it('latches once a later round closes the gap', async () => {
+      const peers = makeEligiblePeers(3);
+      getEligibleSyncPeersStub.returns(peers);
+      reconcileStub.resolves({
+        peers: 3, indexesReceived: 1, requested: 2, fetched: 0,
+      });
+
+      const orchestrator = makeOrchestrator({ isEnterprise: () => true });
+      orchestrator.start(defaultBootContext);
+      blockEmitter.emit('blocksProcessed', 2555000);
+      await clock.tickAsync(0);
+      peerEmitter.emit('peerThresholdReached', 12);
+      await clock.tickAsync(0);
+      completeEphemeral();
+      await clock.tickAsync(0);
+      expect(orchestrator.state, 'held while the gap is open').to.equal(STATES.SYNCING);
+
+      // The peers come good. The retry that carries the node out of this state runs only
+      // for a step that never latched, which is what the assertion above protects.
+      reconcileStub.resolves({
+        peers: 3, indexesReceived: 1, requested: 2, fetched: 2,
+      });
+      blockEmitter.emit('blocksProcessed', 2555001);
+      await clock.tickAsync(0);
+
+      expect(orchestrator.state).to.equal(STATES.READY);
+    });
+
     it('does not latch the manifest on a single-flight-skipped round', async () => {
       const peers = makeEligiblePeers(3);
       getEligibleSyncPeersStub.returns(peers);

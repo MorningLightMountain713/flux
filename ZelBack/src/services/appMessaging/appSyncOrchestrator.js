@@ -760,15 +760,30 @@ class AppSyncOrchestrator {
     fluxEventBus.publish('content:manifestSyncStarted', {});
     try {
       const peers = this.#getEligibleSyncPeers(MIN_UPTIME_SECONDS);
-      const result = await contentManifestSyncService.reconcile(peers);
-      // Latch complete only on evidence the register was actually compared against a
-      // peer (>=1 index received). A vacuous round — no eligible peers, a single-flight
-      // collision, or a silent index timeout — must stay incomplete so a later wake-up
-      // retries; otherwise the node ships READY believing it converged when it asked no one.
-      if (result.indexesReceived >= 1) {
+      const result = await contentManifestSyncService.reconcile(peers, {
+        // The round selects its peers up front but can send seconds later, by which time a
+        // socket may be closed or replaced by a reconnect on the same address. Re-resolving
+        // by key is how the reconnect pull already addresses a peer at the moment it uses it.
+        resolvePeer: (key, captured) => this.#getPeerByKey(key) ?? captured,
+      });
+      // Latch complete only on evidence the register was actually compared against a peer
+      // (>=1 index received) AND that the gap the comparison found was closed. A vacuous
+      // round — no eligible peers, a single-flight collision, a silent index timeout — has
+      // asked nobody; a round that identified manifests and fetched none of them has asked
+      // and failed. Both must stay incomplete so a later wake-up retries: the per-block
+      // retry skips a step already marked complete, so latching either one leaves the
+      // steady-state refresh a full period away as the only remaining attempt, with the
+      // node live and serving content it already knows has been superseded.
+      const outstanding = result.requested ?? 0;
+      if (result.indexesReceived >= 1 && result.fetched >= outstanding) {
         this.#manifestSyncComplete = true;
         log.info(`AppSyncOrchestrator - Manifest reconcile complete (peers=${result.peers}, indexes=${result.indexesReceived}, fetched=${result.fetched ?? 0})`);
         fluxEventBus.publish('content:manifestSyncComplete', result);
+      } else if (result.indexesReceived >= 1) {
+        // Named, not counted: an operator asking why a node is holding needs to know which
+        // apps it is behind on, and a count cannot answer that.
+        const behind = (result.remaining ?? []).join(', ') || 'unknown';
+        log.warn(`AppSyncOrchestrator - Manifest reconcile fetched ${result.fetched} of ${outstanding} (still behind on ${behind}), will retry`);
       } else {
         log.info(`AppSyncOrchestrator - Manifest reconcile made no peer contact (peers=${result.peers}), will retry`);
       }
