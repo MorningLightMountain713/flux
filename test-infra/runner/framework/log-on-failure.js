@@ -72,8 +72,8 @@ async function dump(label, envs) {
       writeFileSync(file, text.endsWith('\n') ? text : `${text}\n`);
       written.push(`${file} (${text.trimEnd().split('\n').length} lines)`);
     }
-    for (const { index, ip, lines, events } of env.nodeDiagnostics()) {
-      if (!lines.length && !events.length) continue;
+    for (const { index, ip, lines, events, record } of env.nodeDiagnostics()) {
+      if (!lines.length && !events.length && !record) continue;
 
       const parts = [`=== Node ${index} (ip ${ip ?? '?'}) — ${lines.length} log lines ===`];
       parts.push(...lines);
@@ -81,9 +81,13 @@ async function dump(label, envs) {
         parts.push('', `=== Node ${index} SSE events (${events.length}) ===`);
         events.forEach((ev) => parts.push(`${ev.event}: ${JSON.stringify(ev.data)}`));
       }
+      if (record) {
+        parts.push('', `=== Node ${index} in-container record (journal + file log) ===`);
+        parts.push(record);
+      }
       const file = join(dir, `${prefix}node-${String(index).padStart(2, '0')}.log`);
       writeFileSync(file, `${parts.join('\n')}\n`);
-      written.push(`${file} (${lines.length} lines, ${events.length} events)`);
+      written.push(`${file} (${lines.length} lines, ${events.length} events${record ? ', record' : ''})`);
     }
   });
 
@@ -100,6 +104,12 @@ async function dump(label, envs) {
 export const mochaHooks = {
   async afterEach() {
     if (!ALWAYS && this.currentTest.state !== 'failed') return;
+    const envs = envsFor(this.currentTest.parent);
+    // The containers are still alive here - the one moment their journals
+    // (systemd nodes log there, never to stdout) can be read. Bounded pulls.
+    if (this.currentTest.state === 'failed') {
+      await Promise.all(envs.map((env) => env.captureNodeRecords?.().catch(() => {})));
+    }
     for (const s of ancestorChain(this.currentTest.parent)) dumpedSuites.add(s);
     await dump(this.currentTest.fullTitle(), envsFor(this.currentTest.parent));
   },

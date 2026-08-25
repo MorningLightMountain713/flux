@@ -10,6 +10,7 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
+import { execFile } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import http from 'node:http';
 import { nodeClient } from './node-client.js';
@@ -47,6 +48,31 @@ import {
 // replaying a line it already has. Docker's `since` is whole-second, so the replay is over
 // within a second of the stream opening; this is that bound with room for a loaded box.
 const REPLAY_WINDOW_MS = 5000;
+// Bounded docker CLI call from the runner host. Used for the in-container
+// record pull, where the testcontainers handle may not exist at all: a node
+// whose startContainer threw (the boot-timeout class) is precisely the one
+// whose logs matter, and the CLI reaches it by network + address.
+function dockerCli(args, timeoutMs = 15000) {
+  return new Promise((resolve) => {
+    execFile('docker', args, { timeout: timeoutMs, maxBuffer: 8 * 1024 * 1024 }, (err, stdout, stderr) => {
+      resolve({ ok: !err, stdout: stdout ?? '', stderr: stderr ?? '' });
+    });
+  });
+}
+
+// Whether this env's mocha suite has failed - a failed test, or runnable tests
+// none of which passed (the signature of a setup-hook failure, where teardown
+// is the LAST moment the containers, and their journals, exist). An env with
+// no attribution reads as healthy: the cost of a wrong "failed" here is a
+// journal pull on every green teardown of the whole gate.
+function suiteLooksFailed(suite) {
+  if (!suite) return false;
+  const allTests = (s) => [...s.tests, ...s.suites.flatMap(allTests)];
+  const tests = allTests(suite);
+  if (tests.some((t) => t.state === 'failed')) return true;
+  const runnable = tests.filter((t) => !t.pending);
+  return runnable.length > 0 && !tests.some((t) => t.state === 'passed');
+}
 
 function createLogCollector() {
   // Each entry is { t, line }: t is the capture wall-clock (ISO), line is the raw
@@ -434,6 +460,7 @@ function makeEnvShell(networkName) {
   const eventSnapshots = new Map(); // node index -> SSE events captured at teardown
   const infraContainers = []; // { name, container, expected } - infra only, never nodes
   let infraLogSnapshot = null; // infra logs captured at teardown when the run is void
+  const nodeRecords = new Map(); // node ip -> in-container record (journal + file log)
   let tornDown = false;
 
   const env = {
@@ -465,11 +492,14 @@ function makeEnvShell(networkName) {
           ip: cfg.ip,
           lines: cfg.logCollector?.getLines() ?? [],
           events: [],
+          record: nodeRecords.get(cfg.ip) ?? null,
         });
       }
       clients.forEach((client, i) => {
         if (!client) return;
-        const d = byIndex.get(i) ?? { index: i, ip: client.ip, lines: [], events: [] };
+        const d = byIndex.get(i) ?? {
+          index: i, ip: client.ip, lines: [], events: [], record: nodeRecords.get(client.ip) ?? null,
+        };
         const live = client.getEventBuffer();
         d.events = live.length ? live : (eventSnapshots.get(i) ?? []);
         byIndex.set(i, d);
@@ -484,6 +514,36 @@ function makeEnvShell(networkName) {
       if (infraLogSnapshot) return infraLogSnapshot;
       return readInfraLogs(infraContainers)
         .catch((err) => [{ name: 'infra', text: '', error: err.message }]);
+    },
+
+    /**
+     * Pull each node's IN-CONTAINER logs - the journal (systemd mode logs
+     * there, never to stdout) and FluxOS's own file log - while the
+     * containers still exist. The stream collector captures only stdout, so
+     * a node that died before its API came up leaves it empty; the record
+     * inside the container is the only evidence, and teardown destroys it.
+     * Resolved by network + address through the docker CLI, because the node
+     * that matters most (startContainer threw) has no testcontainers handle.
+     * Idempotent; every call is bounded.
+     */
+    async captureNodeRecords() {
+      if (nodeRecords.size) return;
+      const ps = await dockerCli(['ps', '-a', '--filter', `network=${networkName}`, '--format', '{{.ID}} {{.Image}}']);
+      if (!ps.ok) return;
+      const ids = ps.stdout.split('\n')
+        .filter((line) => line.includes('flux-e2e-fluxos'))
+        .map((line) => line.split(' ')[0])
+        .filter(Boolean);
+      await Promise.all(ids.map(async (id) => {
+        const inspect = await dockerCli(['inspect', id, '-f', `{{with index .NetworkSettings.Networks "${networkName}"}}{{.IPAddress}}{{end}}`]);
+        const ip = inspect.stdout.trim();
+        if (!ip) return;
+        const pull = await dockerCli(['exec', id, 'bash', '-c',
+          'echo "=== journalctl (tail 1500)"; journalctl --no-pager -n 1500 2>/dev/null; '
+          + 'echo "=== /flux/fluxos.log (tail 400)"; tail -n 400 /flux/fluxos.log 2>/dev/null'], 20000);
+        const text = pull.ok ? pull.stdout : `record pull failed: ${pull.stderr || 'exec error'}`;
+        nodeRecords.set(ip, text);
+      }));
     },
 
     async teardown() {
@@ -522,6 +582,14 @@ function makeEnvShell(networkName) {
         infraLogSnapshot = await readInfraLogs(infraContainers).catch(() => null);
       }
       step('infra-snapshot');
+      // A setup-hook failure never fires afterEach, so the failure dump runs
+      // AFTER this teardown - by then the containers, and the in-container
+      // journals that hold the only record of a node that never booted, are
+      // gone. Mocha's own state on the owning suite says whether this suite
+      // failed; pull the records now, while they exist.
+      if (suiteLooksFailed(env.ownerSuite)) {
+        await env.captureNodeRecords().catch((err) => warn('captureNodeRecords', err));
+      }
       // disconnectEventStream wipes the client's event buffer — snapshot first so
       // a failure dump running after teardown still has the events
       clients.forEach((client, i) => {
