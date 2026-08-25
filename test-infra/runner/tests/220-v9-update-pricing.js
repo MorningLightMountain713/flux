@@ -109,7 +109,10 @@ describe('v9 update pricing', function () {
   });
 
   after(async function () {
-    this.timeout(30000);
+    // Ten nodes' teardown on a flush-bound datastore measures well past 30s
+    // under a full gate (gate-5: every test passed and the after() red-flagged
+    // the suite) - the budget is a bound, the teardown takes what it takes.
+    this.timeout(120000);
     await env?.teardown();
   });
 
