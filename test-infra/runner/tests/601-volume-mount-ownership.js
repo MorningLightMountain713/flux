@@ -13,7 +13,6 @@ import { setSynced, resetSyncState } from '../framework/syncthing-control.js';
 import { getSubnetConfig, REGISTRY_REPO_HOST } from '../framework/subnet-config.js';
 import { authenticate } from '../auth.js';
 import { fluxTeamKey } from '../framework/keys.js';
-import { dbClient } from '../framework/db-client.js';
 
 // FluxOS owns app volume mounting (no @reboot crontab), and an unmounted app
 // dir is inert. These are the incident regressions:
@@ -40,20 +39,12 @@ const subnet = getSubnetConfig();
 // `flux<component>_<identity>` — the identity is minted at registration and cannot be
 // spelled from the app's name, so it is resolved once (resolveAppIds) and read from
 // here afterwards, leaving every call site synchronous.
-const resolvedAppIds = new Map();
-const appId = (name) => {
-  const id = resolvedAppIds.get(name);
-  if (!id) throw new Error(`appId(${name}) before resolveAppIds() - nothing can be named yet`);
-  return id;
-};
-async function resolveAppIds(names) {
-  for (const name of names) {
-    // eslint-disable-next-line no-await-in-loop
-    const id = await dbClient(1).appFolderId(name, name);
-    if (!id) throw new Error(`no registration row for ${name}; cannot resolve its identifier`);
-    resolvedAppIds.set(name, id);
-  }
-}
+// A SEEDED app's identifier is its own name: seedGlobalSpec writes the spec
+// with no minted identity, and the product states identity as the name for
+// such rows (prepareInstalledAppsCollection's backfill rule; 310's captures
+// show the containers spelled fluxe2eopstop..._e2eopstop...). Deterministic by
+// construction - a registration-row read here races the seeding it precedes.
+const appId = (name) => `flux${name}_${name}`;
 const appDir = (name) => `/mnt/appdata/flux-apps/${appId(name)}`;
 const volFile = (name) => `/mnt/appdata/${appId(name)}FLUXFSVOL`;
 
@@ -120,7 +111,6 @@ describe('FluxOS-owned volume mounting (no crontab) + inert unmounted app dirs',
     env = await createTestEnv({ hookCtx: this, nodes: 10, tickerAutostart: false });
     await bootAndPeer(env);
     await resetSyncState();
-    await resolveAppIds([syncName, rebootName, inertName, rmName, entName]);
     syncIdentifier = appId(syncName).replace(/^flux/, '');
     inertIdentifier = appId(inertName).replace(/^flux/, '');
 
