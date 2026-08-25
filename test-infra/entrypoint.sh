@@ -167,6 +167,12 @@ EOF
     ln -sf /etc/systemd/system/flux-dnsd.service /etc/systemd/system/multi-user.target.wants/flux-dnsd.service
   fi
 
+  # The handoff marker. Everything above runs as PID 1's shell, whose output IS the
+  # container's stdout; everything after it belongs to systemd, whose output is not.
+  # So a container that died with this line in `docker logs` failed under systemd (read
+  # its journal — the harness mounts it to the host), and one that died WITHOUT it
+  # failed in the setup above, where the failing command's own stderr is the diagnosis.
+  echo "[entrypoint] setup complete, handing off to systemd as pid 1"
   exec /lib/systemd/systemd
 fi
 
