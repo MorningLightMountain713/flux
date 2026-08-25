@@ -53,6 +53,31 @@ if [ -z "${E2E_ALLOW_HOST_FLUXOS:-}" ]; then
   done
 fi
 
+# The kernel neighbor (ARP) table must hold every container across every
+# concurrent fleet. At the default hard cap (gc_thresh3=1024) six 10-node
+# fleets overflow it: new entries are refused, packets to whichever addresses
+# lost the lottery silently drop, and one node per fleet goes dark while the
+# host sits idle - a before-all boot timeout wearing a product bug's clothes
+# (gate-3 suite 1209, and five suites of gate 4, were exactly this;
+# /proc/net/stat/arp_cache table_fulls is the tell). Checked and raised here
+# because a gate on an overflowing host produces false reds by design.
+NEIGH_MIN="${E2E_NEIGH_GC_THRESH3:-8192}"
+neigh_now=$(sysctl -n net.ipv4.neigh.default.gc_thresh3 2>/dev/null || echo 0)
+if [ "$neigh_now" -lt "$NEIGH_MIN" ]; then
+  sudo -n sysctl -q -w \
+    "net.ipv4.neigh.default.gc_thresh1=$((NEIGH_MIN / 4))" \
+    "net.ipv4.neigh.default.gc_thresh2=$((NEIGH_MIN / 2))" \
+    "net.ipv4.neigh.default.gc_thresh3=$NEIGH_MIN" 2>/dev/null
+  neigh_now=$(sysctl -n net.ipv4.neigh.default.gc_thresh3 2>/dev/null || echo 0)
+  if [ "$neigh_now" -lt "$NEIGH_MIN" ]; then
+    echo "###ABORT neighbor table cap too small (gc_thresh3=$neigh_now < $NEIGH_MIN) and could not raise it."
+    echo "Raise it for the run:  sudo sysctl -w net.ipv4.neigh.default.gc_thresh3=$NEIGH_MIN (and thresh1/2 to a quarter/half)"
+    echo "Or lower the bar deliberately with E2E_NEIGH_GC_THRESH3."
+    exit 96
+  fi
+  echo "# neighbor table cap raised to gc_thresh3=$neigh_now for the gate"
+fi
+
 LOGROOT="${E2E_LOG_DIR:-/tmp/e2e-logs}"
 MAXN="${MAXN:-3}"
 MIN_FREE_MB="${MIN_FREE_MB:-15000}"
