@@ -29,7 +29,8 @@ describe('Peering', function () {
     });
 
     it('should find own IP in deterministic node list', async function () {
-      expect(env.nodeHasLog(0, 'My node was found on index')).to.equal(true);
+      // fed9c8110 folded the per-pass line into the transition summary.
+      expect(env.nodeHasLog(0, 'Discovery: index')).to.equal(true);
     });
 
     it('should have outgoing peers on node 0', async function () {
