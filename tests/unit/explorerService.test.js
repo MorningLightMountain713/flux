@@ -1141,7 +1141,7 @@ describe('explorerService tests', () => {
   });
 
   describe('the hashblockheight subscriber', () => {
-    it('records the tip the message carries before anything reads the cached height', async () => {
+    it('carries the pushed height into the scan request, so the drain never trusts the cache alone', async () => {
       // The push handler chain is synchronous and ordered by registration:
       // the explorer's drain reads isDaemonSynced() before chainTipSource's
       // sibling handler records the new height, so the drain sees the
@@ -1151,22 +1151,19 @@ describe('explorerService tests', () => {
       // eslint-disable-next-line global-require
       const proxyquire = require('proxyquire');
       const captured = new Map();
-      const recordSpy = sinon.spy(daemonServiceMiscRpcs, 'recordChainTip');
-      try {
-        const fresh = proxyquire('../../ZelBack/src/services/explorerService', {
-          './daemonService/daemonSubscriptionService': {
-            ...daemonSubscriptionService,
-            subscribe: (topic, handler) => captured.set(topic, handler),
-          },
-        });
-        await fresh.stopScanning();
-        const handler = captured.get(daemonSubscriptionService.TOPICS.hashBlockHeight);
-        expect(handler, 'explorer subscribes to hashblockheight').to.exist;
-        handler.onMessage({ height: 2100777 });
-        sinon.assert.calledWith(recordSpy, 2100777);
-      } finally {
-        recordSpy.restore();
-      }
+      const fresh = proxyquire('../../ZelBack/src/services/explorerService', {
+        './daemonService/daemonSubscriptionService': {
+          ...daemonSubscriptionService,
+          subscribe: (topic, handler) => captured.set(topic, handler),
+        },
+      });
+      const handler = captured.get(daemonSubscriptionService.TOPICS.hashBlockHeight);
+      expect(handler, 'explorer subscribes to hashblockheight').to.exist;
+      // The record is synchronous at requestScan entry - assert before any
+      // microtask can run the drain (which consumes the target per round).
+      handler.onMessage({ height: 2100777 });
+      expect(fresh.pushedTip(), 'the drain floors on the height the push carried').to.equal(2100777);
+      await fresh.stopScanning();
     });
   });
 });

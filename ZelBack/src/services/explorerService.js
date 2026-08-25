@@ -55,6 +55,9 @@ let cachedDaemonVersion = null;
 // backoff, and for a daemon that publishes no block events at all.
 let scanStopped = true;
 let scanDraining = false;
+// The highest tip a block push announced, consumed one drain round at a time —
+// a stale target from before a reorg cannot outlive the round it floors.
+let pushedTipHeight = 0;
 let scanDrainPromise = null;
 let scanRequestPending = false;
 let scanFallbackPolling = false;
@@ -1055,7 +1058,9 @@ async function drainToTip() {
     return;
   }
 
-  const daemonHeight = syncStatus.data.height;
+  const pushedTip = pushedTipHeight;
+  pushedTipHeight = 0;
+  const daemonHeight = Math.max(syncStatus.data.height, pushedTip);
   const db = dbHelper.databaseConnection();
   const database = db.db(config.database.daemon.database);
 
@@ -1110,7 +1115,14 @@ async function drainToTip() {
  * @param {string} reason What asked for it, for the log.
  * @returns {Promise<void>} Resolves when the drain this call caused has finished.
  */
-async function requestScan(reason = 'requested') {
+async function requestScan(reason = 'requested', { toHeight = null } = {}) {
+  // The push carries the freshest height. Reading only the cached daemon
+  // status races the sibling subscriber that maintains it (handlers dispatch
+  // synchronously in registration order, and this module subscribes first),
+  // so the drain would compare against the pre-block tip, find nothing to do,
+  // and never re-arm in push mode. Recorded even when stopped: it is a fact,
+  // and the next drain consumes it.
+  if (Number.isInteger(toHeight) && toHeight > pushedTipHeight) pushedTipHeight = toHeight;
   if (scanStopped) return;
 
   if (scanDraining) {
@@ -1202,9 +1214,9 @@ async function stopScanning() {
  * @returns {void}
  */
 function onNewBlock(height) {
-  if (scanStopped) return;
-
-  requestScan(`block ${height}`).catch((error) => {
+  // No stopped-guard here: requestScan owns it, and it records the announced
+  // height (a fact) before deciding whether a scan may run.
+  requestScan(`block ${height}`, { toHeight: height }).catch((error) => {
     log.error(`Block processor scan request failed: ${error.message}`);
   });
 }
@@ -1632,18 +1644,12 @@ function setZelAppSpecsMigrationDone(value) {
 reorgSource.onReorg(handleChainReorg);
 
 daemonSubscriptionService.subscribe(daemonSubscriptionService.TOPICS.hashBlockHeight, {
-  onMessage: (decoded) => {
-    // Handlers dispatch synchronously in registration order, and this one
-    // registers at require time — before chainTipSource. The drain reads the
-    // cached daemon height, so record the height this message itself carries
-    // FIRST, or the scan compares against the pre-block tip, returns without
-    // scanning, and nothing re-arms in push mode.
-    daemonServiceMiscRpcs.recordChainTip(decoded.height);
-    onNewBlock(decoded.height);
-  },
+  onMessage: (decoded) => onNewBlock(decoded.height),
 });
 
 module.exports = {
+  // exported for tests
+  pushedTip: () => pushedTipHeight,
   initiateBlockProcessor,
   processOneBlock,
   reindexExplorer,
