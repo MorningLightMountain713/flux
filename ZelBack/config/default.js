@@ -493,12 +493,12 @@ module.exports = {
     // which is why the sampling is coarse.
     playgroundTcpRetryMs: 2000,
     playgroundCpuSampleMs: 15000,
-    // Lines tailed when a follow attaches, and how many the session keeps for
-    // the client. The log is FOLLOWED, so the poll returns numbered lines above
+    // How many log lines a session keeps for the client - and the follow's
+    // history window when it attaches, so a boot burst is retained to the same
+    // bound. The log is FOLLOWED, so the poll returns numbered lines above
     // whatever cursor the client sends rather than re-reading and guessing.
     // Retention is bounded, and a client is told how many lines were dropped so
     // a truncated log never reads as a complete one.
-    playgroundLogLines: 200,
     playgroundLogRetainedLines: 2000,
     // How long a session's sealed audit record is kept. Long enough to answer an
     // abuse report, short enough that an operator is not indefinitely holding

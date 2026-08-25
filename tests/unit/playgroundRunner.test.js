@@ -919,6 +919,19 @@ describe('playgroundRunner', () => {
       expect(stubs.createSessionWatcher.calledBefore(stubs.start)).to.equal(true);
     });
 
+    it("follows with the buffer's own retention as its history window", async () => {
+      // The tail is what carries lines written BEFORE the follow attached - a
+      // container's boot burst. Capped below what the buffer retains, history
+      // is silently truncated at a number that belongs to the poll page size,
+      // not to the feed (gate 1001 t14: 5000 boot lines, 200 delivered).
+      const s2 = session();
+      stubs.inspect.resolves(running('healthy'));
+
+      await runner.runSession(s2);
+
+      expect(stubs.logStream.firstCall.args[1].tail).to.equal(CONFIG.fluxapps.playgroundLogRetainedLines);
+    });
+
     it('follows the log for the whole session, not just around the probe', async () => {
       const s2 = session();
       stubs.inspect.resolves(running('healthy'));
