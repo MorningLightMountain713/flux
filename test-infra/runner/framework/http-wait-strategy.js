@@ -53,7 +53,33 @@ export class HttpPollWaitStrategy {
     return this.#startupTimeoutMs;
   }
 
-  async waitUntilReady() {
+  // Only a SETTLED container counts as dead. 'created' is the pre-start moment, and
+  // inspect can fail transiently (the container may be mid-removal on another path);
+  // neither is evidence, so both keep polling and the deadline stays the backstop.
+  async #deathReport(container) {
+    if (!container || typeof container.inspect !== 'function') return null;
+    let state;
+    try {
+      ({ State: state } = await container.inspect());
+    } catch {
+      return null;
+    }
+    if (!state || state.Running || state.Status === 'created') return null;
+    const parts = [`status=${state.Status}`, `exitCode=${state.ExitCode}`];
+    if (state.OOMKilled) parts.push('OOMKilled=true');
+    if (state.Error) parts.push(`error=${state.Error}`);
+    return parts.join(' ');
+  }
+
+  // A container that has EXITED never answers, so without a liveness check a dead node
+  // is indistinguishable from a slow one: both stay silent for the whole allowance and
+  // both report "not ready after Nms". Raising the allowance cannot fix that reading,
+  // and a boot-time distribution cannot detect it either — a node that dies contributes
+  // no sample, so the distribution reads healthiest when this failure is worst. Fail on
+  // the exit instead and report what docker recorded.
+  // testcontainers passes the dockerode container as the first argument (see
+  // wait-for-container.js); container.restart() calls this the same way.
+  async waitUntilReady(container) {
     const deadline = Date.now() + this.#startupTimeoutMs;
     while (Date.now() < deadline) {
       try {
@@ -61,6 +87,12 @@ export class HttpPollWaitStrategy {
         if (this.#validate ? await this.#validate(res) : res.ok) return;
       } catch {
         // not serving yet — keep polling until the deadline
+      }
+      // Checked after the probe so a container that served and then exited on its own
+      // teardown is still reported ready, rather than lost to a race with it.
+      const death = await this.#deathReport(container);
+      if (death) {
+        throw new Error(`HttpPollWaitStrategy: ${this.#url} container exited during boot (${death})`);
       }
       await new Promise((r) => setTimeout(r, this.#pollIntervalMs));
     }
