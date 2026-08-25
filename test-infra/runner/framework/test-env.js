@@ -984,7 +984,13 @@ async function _buildEnv(
       .withBindMounts(bindMounts)
       .withLogConsumer(logCollector)
       .withEnvironment(nodeEnv)
-      .withWaitStrategy(nodeReadyWaitStrategy(nodeIp).withStartupTimeout(120000));
+      // The bound, not a pace: the wait is an event-driven HTTP poll, so a
+      // healthy node costs exactly its boot time whatever this says. Under a
+      // full parallel gate GREEN fleet boots measure 102-125s (gate-5
+      // boot-lock holds), so the old 120s allowance sat INSIDE the real
+      // distribution and whoever drew the slow tail was shot mid-boot - a
+      // false red wearing a product bug's clothes (1105, gates 4 and 5).
+      .withWaitStrategy(nodeReadyWaitStrategy(nodeIp).withStartupTimeout(300000));
     if (systemdMode) builder.withStopSignal('SIGRTMIN+3');
 
     nodeConfigs.push({
