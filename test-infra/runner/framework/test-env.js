@@ -26,6 +26,7 @@ import { authenticate } from '../auth.js';
 import { fluxTeamKey, nodeKey } from './keys.js';
 import { assertFluxSpecVendorCurrent, NODE_IMAGE } from './flux-spec-vendor.js';
 import { assertNodeConfigsCurrent } from './node-configs.js';
+import { acquireBootLock, releaseBootLock, BOOT_LOCK_MAX_WAIT_MS } from './boot-lock.js';
 import { statelessRegex } from './log-reader.js';
 import {
   renderFluxdConf, DEFAULT_ZMQ_TOPICS, ZMQ_NODE_PORT_BASE, zmqNodePort,
@@ -403,88 +404,6 @@ async function seedMongo(mongoIp, nodeCount, bootContext = 'running', { dataCent
   }
 }
 
-// ---- host-wide boot semaphore ----
-// Fleet boot is the only CPU-heavy phase a suite has: every node in the fleet
-// starts its own dockerd and runs FluxOS DB prep at once. When two suites' boots
-// overlap under run-parallel.sh, they starve each other and a healthy node can
-// blow its event-wait budget while merely slow (observed in the 42-suite gate:
-// suite 22's second fleet booted at load ~15 on 16 cores and mongo collection
-// prep crawled at 7-17s a step). Running fleets are cheap, so serialise just the
-// boot phase host-wide and let everything else overlap. The claim protocol
-// mirrors the subnet claim in run-all.sh: an atomic mkdir holding the owner pid,
-// reclaimable by any waiter once the owner process is dead.
-const BOOT_LOCK_DIR = process.env.E2E_BOOT_LOCK_DIR ?? join(tmpdir(), 'e2e-boot-lock');
-
-const sleep = (ms) => new Promise((resolve) => { setTimeout(resolve, ms); });
-
-// A claimer writes its pid in the same breath as the mkdir, so a lock directory
-// without one is either that microsecond-wide window or a run that was killed
-// inside it. Treating the second as a live claimer waits forever, and because the
-// wait logs nothing it presents as a suite that simply hangs — every later run on
-// the box wedged by a directory nobody owns. A pid that never arrives is therefore
-// taken as abandoned after a few polls, which is orders of magnitude longer than
-// the window it protects.
-const BOOT_LOCK_PIDLESS_GRACE_POLLS = 5;
-// Waiting past this means the queue is wedged rather than busy. Failing here says
-// so, instead of sleeping until the runner's wall-clock kills the suite with a
-// SIGKILL that explains nothing.
-const BOOT_LOCK_MAX_WAIT_MS = Number(process.env.E2E_BOOT_LOCK_MAX_WAIT_MS ?? 600000);
-
-export async function acquireBootLock() {
-  const startedAt = process.hrtime.bigint();
-  let pidlessPolls = 0;
-  for (;;) {
-    try {
-      mkdirSync(BOOT_LOCK_DIR);
-      writeFileSync(join(BOOT_LOCK_DIR, 'pid'), String(process.pid));
-      return;
-    } catch (err) {
-      if (err.code !== 'EEXIST') throw err;
-    }
-    let owner = 0;
-    try {
-      owner = Number(readFileSync(join(BOOT_LOCK_DIR, 'pid'), 'utf-8'));
-    } catch {
-      // claimer is between mkdir and pid write, or died in it — the grace below decides
-    }
-    if (owner) {
-      pidlessPolls = 0;
-      try {
-        process.kill(owner, 0);
-      } catch {
-        // owner is dead — reclaim; if a sibling reclaims first, the next
-        // mkdir attempt just loses the race and waits
-        rmSync(BOOT_LOCK_DIR, { recursive: true, force: true });
-        continue;
-      }
-    } else {
-      pidlessPolls += 1;
-      if (pidlessPolls >= BOOT_LOCK_PIDLESS_GRACE_POLLS) {
-        rmSync(BOOT_LOCK_DIR, { recursive: true, force: true });
-        pidlessPolls = 0;
-        continue;
-      }
-    }
-    const waitedMs = Number((process.hrtime.bigint() - startedAt) / 1000000n);
-    if (waitedMs > BOOT_LOCK_MAX_WAIT_MS) {
-      throw new Error(
-        `boot lock: waited ${Math.round(waitedMs / 1000)}s for ${BOOT_LOCK_DIR} `
-        + `(holder pid ${owner || 'none'}). The queue is wedged, not merely busy.`,
-      );
-    }
-    await sleep(1000);
-  }
-}
-
-export function releaseBootLock() {
-  try {
-    const owner = Number(readFileSync(join(BOOT_LOCK_DIR, 'pid'), 'utf-8'));
-    if (owner === process.pid) rmSync(BOOT_LOCK_DIR, { recursive: true, force: true });
-  } catch {
-    // already released or reclaimed
-  }
-}
-
 export async function createTestEnv({
   hookCtx = null, nodes = 1, deferredNodes = 0, legacyNodes = [], stubPeers = [],
   configOverrides = null, nodeConfigOverrides = {}, nodeTiers = null, dataCenter = true,
@@ -507,15 +426,22 @@ export async function createTestEnv({
   // MID-QUEUE whenever the queue alone outlasts the budget), and a completion-time
   // duration check that fails any hook whose TOTAL elapsed time exceeds the
   // timeout VALUE — so merely re-setting the same value re-arms the watchdog but
-  // still fails the hook once it completes. Disable the timeout while queued
-  // (queue liveness is the lock's own job: a dead owner's claim is reclaimed),
-  // then set declared + queued: that value passes the duration check with exactly
-  // the declared budget left for the boot, and setting it re-arms the watchdog.
+  // still fails the hook once it completes. Widen it to cover the longest wait the
+  // lock itself will tolerate, then set declared + queued once through: that value
+  // passes the duration check with exactly the declared budget left for the boot,
+  // and setting it re-arms the watchdog.
+  //
+  // Widened, never DISABLED. A hook with no timeout has no failure mode, only a
+  // silence: with the timeout off, a waiter that never reached the front of the
+  // queue hung until the runner's 1800s SIGKILL, which reports as rc=125 and
+  // discards every test the suite had already passed. The slack below keeps the
+  // lock's own deadline the one that fires, so the error names the queue instead
+  // of being an anonymous mocha timeout.
   // Hooks that disabled their timeout (0) are left disabled.
   const declaredMs = (hookCtx && typeof hookCtx.timeout === 'function') ? hookCtx.timeout() : 0;
-  if (declaredMs > 0) hookCtx.timeout(0);
+  if (declaredMs > 0) hookCtx.timeout(declaredMs + BOOT_LOCK_MAX_WAIT_MS + 30000);
   const queuedFrom = process.hrtime.bigint();
-  await acquireBootLock();
+  await acquireBootLock({ nodes, deferred: deferredNodes, legacy: legacyNodes.length });
   if (declaredMs > 0) {
     const queuedMs = Number((process.hrtime.bigint() - queuedFrom) / 1000000n);
     hookCtx.timeout(declaredMs + queuedMs);
