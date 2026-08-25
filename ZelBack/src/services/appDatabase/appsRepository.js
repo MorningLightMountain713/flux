@@ -349,12 +349,18 @@ async function deleteQuarantinedContentManifest(appName) {
   );
 }
 
-/** The (appName, version) vector of every confirmed manifest — the version index
- *  SERVED to peers (only verified rows are authoritative to others). */
+/** The (appName, version) vector of every confirmed manifest this node can actually serve
+ *  — the version index SERVED to peers (only verified rows are authoritative to others).
+ *  Filtered exactly as listConfirmedContentManifestBroadcasts serves the bodies: the index
+ *  is a promise to hand those manifests over, and a confirmed row without an envelope (one
+ *  pulled over HTTP from a running peer, or restored from the FluxDrive backstop) has no
+ *  broadcast to send. Advertising one makes every asking node request it, receive a
+ *  well-formed EMPTY answer, and stay behind for as long as this node is its source — a
+ *  stale state no retry clears, because the fetch was answered correctly. */
 async function listConfirmedContentManifestVersions() {
   const docs = await dbHelper.findInDatabase(
     globalDb(), appContentManifests,
-    { confirmed: true },
+    { confirmed: true, envelope: { $exists: true } },
     { projection: { _id: 0, appName: 1, version: 1 } },
   );
   return docs.map((doc) => ({ appName: doc.appName, version: doc.version }));

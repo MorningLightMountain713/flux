@@ -593,6 +593,19 @@ describe('appsRepository', () => {
   });
 
   describe('content manifests', () => {
+    // The index a node publishes is a promise to serve those bodies, and the bodies come
+    // from listConfirmedContentManifestBroadcasts, which requires an envelope. A confirmed
+    // row without one (a manifest pulled over HTTP from a running peer, or restored from
+    // the FluxDrive backstop) cannot be served. Advertising it makes the asking node
+    // request it every round, receive a well-formed EMPTY answer, and stay behind for as
+    // long as that peer is its source — the two queries have to agree on what is servable.
+    it('the served index offers only rows that can actually be served', async () => {
+      dbHelperStub.findInDatabase.resolves([]);
+      await appsRepository.listConfirmedContentManifestVersions();
+      const filter = dbHelperStub.findInDatabase.firstCall.args[2];
+      expect(filter).to.deep.equal({ confirmed: true, envelope: { $exists: true } });
+    });
+
     it('upsert: a confirmed store advances a higher version OR promotes a same-version quarantined row', async () => {
       const row = { appName: 'app', version: 2, data: { d: 1 } };
       const ok = await appsRepository.upsertContentManifest(row, { confirmed: true, clearEnvelope: true });
@@ -668,7 +681,7 @@ describe('appsRepository', () => {
       const out = await appsRepository.listConfirmedContentManifestVersions();
       expect(out).to.deep.equal([{ appName: 'a', version: 2 }, { appName: 'b', version: 5 }]);
       const [, , query, options] = dbHelperStub.findInDatabase.firstCall.args;
-      expect(query).to.deep.equal({ confirmed: true });
+      expect(query).to.deep.equal({ confirmed: true, envelope: { $exists: true } });
       expect(options.projection).to.deep.equal({ _id: 0, appName: 1, version: 1 });
     });
 
