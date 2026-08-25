@@ -112,11 +112,16 @@ async function reconcileAppsOnBoot() {
     // Create a set for quick lookup of installed app names
     const installedAppNames = new Set(installedApps);
 
-    // Get all stopped Flux containers + the apps they belong to.
+    // Get all stopped Flux containers + the apps they belong to. The app label
+    // is the name's source of truth: a container's NAME embeds the app's minted
+    // identity, which is not the app name and matches no installed row. Name
+    // parsing remains only for pre-label legacy containers.
+    const { LABEL_KEYS } = await getSpecBackend();
     const stoppedContainers = await getStoppedFluxContainers();
     const appsWithStoppedContainers = new Set();
     for (const container of stoppedContainers) {
-      const { appName } = parseContainerName(container.Names[0]);
+      const appName = container.Labels?.[LABEL_KEYS.APP]
+        ?? parseContainerName(container.Names[0]).appName;
       appsWithStoppedContainers.add(appName);
     }
 

@@ -258,6 +258,26 @@ describe('appStartupManager tests', () => {
       expect(appUninstallerStub.uninstallApplication.called).to.equal(true);
     });
 
+    it('resolves a v9 identity-named container through its app label, never the name', async () => {
+      // A v9 container's name embeds the minted identity, not the app name —
+      // only the io.runonflux.app label carries the name the installed row uses.
+      dockerServiceStub.dockerListContainers.resolves([
+        {
+          Names: ['/fluxweb_26fbf41541f5'],
+          State: 'exited',
+          Labels: { 'io.runonflux.app': 'AppA', 'io.runonflux.identifier': 'web_26fbf41541f5' },
+        },
+      ]);
+      appsRepositoryStub.listInstalledAppNames.resolves(['AppA']);
+      appsRepositoryStub.appLocationFromEvents.resolves([{ name: 'AppA' }]);
+
+      const results = await appStartupManager.reconcileAppsOnBoot();
+
+      expect(results.appsSkippedNotInstalled).to.deep.equal([]);
+      expect(results.appsEnqueued).to.deep.equal(['AppA']);
+      expect(appReconcilerStub.enqueueApp.calledWith('AppA')).to.equal(true);
+    });
+
     it('should skip location check and start app when IP is not available', async () => {
       fluxNetworkHelperStub.getLocalSocketAddress.resolves(null);
 
