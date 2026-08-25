@@ -197,6 +197,28 @@ for s in $SUITES; do
 done
 sweep_harness_leftovers
 
+# Boot-time visibility: the per-node startup allowance (test-env.js,
+# currently 300s) is a liveness bound, not the regression detector - THIS is
+# the regression detector. Every fleet boot logs its boot-lock hold; the
+# distribution printed here is what makes boot-time creep loud instead of
+# silently absorbed by the allowance. WARN when the tail closes within 80%
+# of the allowance: that is the margin the bound was sized against
+# (gate-5 measured 102-125s healthy, 300s bound).
+BOOT_ALLOWANCE_MS=300000
+boots=$(grep -h "boot-lock released" "$LOGROOT"/*.out 2>/dev/null \
+  | grep -oE 'held_ms=[0-9]+' | cut -d= -f2 | sort -n)
+if [ -n "$boots" ]; then
+  bcount=$(echo "$boots" | wc -l | tr -d ' ')
+  bmin=$(echo "$boots" | head -1)
+  bmax=$(echo "$boots" | tail -1)
+  bmed=$(echo "$boots" | awk -v c="$bcount" 'NR==int((c+1)/2){print; exit}')
+  bp90=$(echo "$boots" | awk -v c="$bcount" 'NR==int(c*9/10)+((c*9%10)>0?1:0){print; exit}')
+  log "BOOTS   count=$bcount min_ms=$bmin median_ms=$bmed p90_ms=$bp90 max_ms=$bmax allowance_ms=$BOOT_ALLOWANCE_MS"
+  if [ "$bmax" -gt $((BOOT_ALLOWANCE_MS * 8 / 10)) ]; then
+    log "BOOTS   WARNING: slowest fleet boot is within 20% of the startup allowance - boots have crept; raise the allowance deliberately or find what slowed them"
+  fi
+fi
+
 log "RESULT  suites_pass=$pass suites_fail=$fail FAILED:[$failed ]"
 log "###PAR-DONE"
 [ "$fail" -eq 0 ]
