@@ -586,7 +586,7 @@ function escalateTeardown(name) {
  *   consumer half-torn. A FAILED workload does not block: its teardown is already
  *   committed (record owed, retried by boot recovery), so the dependency may go.
  */
-async function removeRequiringWorkloadsFirst(appName) {
+async function removeRequiringWorkloadsFirst(appName, { forceKill = false, operatorForce = false } = {}) {
   if (!appName) {
     return true;
   }
@@ -595,17 +595,25 @@ async function removeRequiringWorkloadsFirst(appName) {
   // eslint-disable-next-line no-restricted-syntax
   for (const workload of workloads) {
     log.info(`Reverse dependency cascade: uninstalling workload ${workload.name} before its dependency ${appName}`);
-    // forceKill=false honours the graceful drain; broadcastRemoval tells the network.
+    // The dependency removal's manner propagates: graceful honours each
+    // consumer's drain; forced kills them - consumer-first either way, so the
+    // ordering invariant holds. broadcastRemoval tells the network.
     // eslint-disable-next-line no-await-in-loop, no-use-before-define
-    const result = await uninstallApplication(workload.name, { forceKill: false, broadcastRemoval: true });
+    const result = await uninstallApplication(workload.name, { forceKill, operatorForce, broadcastRemoval: true });
     // A workload mid-operation (redeploy/backup/install) DEFERS - it will resume as a
     // live consumer, so its dependency must not be torn down under it (that leaves the
     // workload's post-teardown re-verify throwing with its own containers already gone).
-    // A FAILED workload has already committed its teardown (record owed) and won't
+    // Blocking is the GRACEFUL rule: under force the dependency is coming down
+    // regardless, so a deferring consumer is noted and stepped past. A FAILED
+    // workload has already committed its teardown (record owed) and won't
     // resume, so it does not block the dependency.
     if (result && result.status === UninstallStatus.DEFERRED) {
-      log.warn(`Reverse dependency cascade: workload ${workload.name} is mid-operation (deferred); deferring teardown of ${appName}`);
-      allRemoved = false;
+      if (forceKill) {
+        log.warn(`Reverse dependency cascade: workload ${workload.name} is mid-operation; proceeding under force`);
+      } else {
+        log.warn(`Reverse dependency cascade: workload ${workload.name} is mid-operation (deferred); deferring teardown of ${appName}`);
+        allRemoved = false;
+      }
     }
   }
   return allRemoved;
@@ -706,6 +714,12 @@ async function uninstallApplication(appName, options = {}) {
     onStatus = null,
     reason = null,
     operatorForce = false,
+    // The reverse-dependency cascade is a correctness invariant (a consumer
+    // never outlives its dependency) and fires by default on every whole-app
+    // removal. Only a removal that does NOT end the app's presence here - the
+    // installer's failed-install cleanups, which the spawner retries - may
+    // state cascade:false.
+    cascade = true,
   } = options;
   // The identity this removal targets: a replica name tears down ONLY that
   // replica's containers/volumes (the app row survives while a sibling
@@ -797,16 +811,19 @@ async function uninstallApplication(appName, options = {}) {
       return { status: UninstallStatus.SKIPPED, reason: 'Flux App not found' };
     }
 
-    // onRemove cascade: before tearing this app down, gracefully uninstall
-    // every installed app whose edges declare it must not outlive this one
-    // (cascade chains; transitionally also every workload of a pure-follower
-    // target — the v8 model). Fires on graceful removals only, cancel/expiry
-    // included; a plain force-kill is an emergency teardown and does not
+    // onRemove cascade: before tearing this app down, uninstall every
+    // installed app whose edges declare it must not outlive this one (cascade
+    // chains; transitionally also every workload of a pure-follower target —
+    // the v8 model). The cascade fires on every whole-app removal whatever
+    // its urgency - the removal's MANNER propagates instead: a graceful
+    // removal drains its consumers and defers on one mid-operation; a forced
+    // removal kills them, consumer-first, and defers for nothing. A
+    // replica-scoped removal leaves the app present, so there is nothing to
     // cascade. Runs before this app's teardown record exists, so each nested
     // removal is an ordinary standalone removal. Gated off in production: the
     // flux console owns the collector lifecycle.
-    if (config.fluxapps.manageCollectorLifecycle && !forceKill) {
-      const workloadsRemoved = await removeRequiringWorkloadsFirst(appName);
+    if (config.fluxapps.manageCollectorLifecycle && cascade && replica === undefined) {
+      const workloadsRemoved = await removeRequiringWorkloadsFirst(appName, { forceKill, operatorForce });
       if (!workloadsRemoved) {
         // A consumer that still requires this follower could not be removed yet
         // (it is mid-operation). Defer this teardown - it runs before the prelude,

@@ -466,7 +466,9 @@ async function installApplication(instantiated, options = {}) {
     }
     log.info(`Error occured. Initiating Flux App ${appName} removal`);
     if (onStatus) onStatus(messageHelper.createErrorMessage(`Error occured. Initiating Flux App ${appName} removal`));
-    await appUninstaller.uninstallApplication(appName, { forceKill: true, skipGuard: true, broadcastRemoval: sendRemovalMessage, onStatus, replica });
+    // cascade:false - this cleanup does not end the app's presence here (the
+    // spawner retries the install), so its consumers must not be torn down.
+    await appUninstaller.uninstallApplication(appName, { forceKill: true, skipGuard: true, broadcastRemoval: sendRemovalMessage, onStatus, replica, cascade: false });
     log.info(`Cleanup completed for ${appName} after installation failure`);
 
     // A linked dependency's network vanished mid-install (attach-time
@@ -541,7 +543,9 @@ async function installApplication(instantiated, options = {}) {
     // the broken app from scratch.
     await storeAndBroadcastInstallError(appName, instantiated.hash,
       new Error(`App ${appName} failed its install trial: ${failed.join(', ')} never completed a successful run`));
-    await appUninstaller.uninstallApplication(appName, { forceKill: true, skipGuard: true, broadcastRemoval: sendRemovalMessage, onStatus, replica });
+    // cascade:false - a failed trial's cleanup, not the end of the app's
+    // presence: the spawner retries, so its consumers stay.
+    await appUninstaller.uninstallApplication(appName, { forceKill: true, skipGuard: true, broadcastRemoval: sendRemovalMessage, onStatus, replica, cascade: false });
     return { status: InstallStatus.FAILED, reason: `PROVISIONED-BUT-NOT-RUNNING: ${failed.join(', ')}` };
   }
   return { status: InstallStatus.INSTALLED, reason: null };

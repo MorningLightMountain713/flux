@@ -408,9 +408,12 @@ async function handleExpiredApp(name) {
     // eslint-disable-next-line global-require
     const appUninstaller = require('../appLifecycle/appUninstaller');
     // background: at-tip cancel enforcement — the prelude condemns + removes the row
-    // fast; the destructive teardown runs deferred.
+    // fast; the destructive teardown runs deferred. Graceful on purpose: an
+    // owner cancelling and a term lapsing are deliberate releases, not
+    // emergencies - the app keeps its drain, and the reverse-dependency
+    // cascade fires so no consumer outlives it.
     await appUninstaller.uninstallApplication(name, {
-      forceKill: true, skipGuard: true, broadcastRemoval: true, background: true,
+      skipGuard: true, broadcastRemoval: true, background: true,
     });
   }
 }

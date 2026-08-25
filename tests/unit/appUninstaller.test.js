@@ -637,11 +637,62 @@ describe('appUninstaller tests', () => {
       sinon.assert.notCalled(appsRepositoryStub.removeInstalledApp);
     });
 
-    it('a force-kill does NOT cascade', async () => {
+    // The cascade is a correctness invariant - a consumer must never outlive
+    // its dependency - so it fires whatever the removal's urgency. Force
+    // decides the MANNER, and it propagates: the consumers come down
+    // consumer-first like any cascade, but killed rather than drained.
+    it('a force-kill cascades too, and the force propagates to the consumers', async () => {
+      configStub.fluxapps.manageCollectorLifecycle = true;
+      appsRepositoryStub.getInstalledApp.callsFake(async (name) => spec(name));
+      relationshipResolverStub.findCascadeWorkloadsRequiring.withArgs('collector').resolves([spec('workload')]);
+
+      await appUninstaller.uninstallApplication('collector', { forceKill: true, background: true });
+
+      expect(warnLogged('APP REMOVAL TRIGGERED: workload | forceKill=true'), 'the consumer is removed in the same manner').to.equal(true);
+      const keys = pendingTeardownStoreStub.writeTeardown.getCalls().map((c) => c.args[0].key);
+      expect(keys.indexOf('workload'), 'consumer-first ordering holds under force').to.be.at.least(0);
+      expect(keys.indexOf('workload')).to.be.lessThan(keys.indexOf('collector'));
+    });
+
+    // Force means the dependency is coming down regardless: a consumer
+    // mid-operation is escalated past, never allowed to block the teardown -
+    // the defer rule belongs to graceful removals only.
+    it('a forced cascade does not defer on a mid-operation consumer', async () => {
+      configStub.fluxapps.manageCollectorLifecycle = true;
+      appsRepositoryStub.getInstalledApp.callsFake(async (name) => spec(name));
+      relationshipResolverStub.findCascadeWorkloadsRequiring.withArgs('collector').resolves([spec('workload')]);
+      operationRegistry.acquire('workload', 'redeploy', 'the-redeploy');
+      try {
+        const result = await appUninstaller.uninstallApplication('collector', { forceKill: true, background: true });
+
+        expect(result.status, 'the dependency comes down under force').to.not.equal(appUninstaller.UninstallStatus.DEFERRED);
+        const keys = pendingTeardownStoreStub.writeTeardown.getCalls().map((c) => c.args[0].key);
+        expect(keys.indexOf('collector'), 'the dependency teardown proceeded').to.be.at.least(0);
+      } finally {
+        operationRegistry.clear();
+      }
+    });
+
+    // The installer's failed-install cleanups remove an app the network still
+    // wants here - the spawner retries it - so tearing its consumers down
+    // would churn them for nothing. Intent is its own axis: those callers say
+    // so explicitly, and everyone else keeps the invariant by default.
+    it('a caller stating cascade:false skips the cascade', async () => {
       configStub.fluxapps.manageCollectorLifecycle = true;
       appsRepositoryStub.getInstalledApp.callsFake(async (name) => spec(name));
 
-      await appUninstaller.uninstallApplication('collector', { forceKill: true, background: true });
+      await appUninstaller.uninstallApplication('collector', { forceKill: true, background: true, cascade: false });
+
+      expect(relationshipResolverStub.findCascadeWorkloadsRequiring.called).to.equal(false);
+    });
+
+    // A replica removal leaves the app present on the node - nothing a
+    // consumer depends on has gone, so there is nothing to cascade.
+    it('a replica-scoped removal never cascades', async () => {
+      configStub.fluxapps.manageCollectorLifecycle = true;
+      appsRepositoryStub.getInstalledApp.callsFake(async (name) => spec(name));
+
+      await appUninstaller.uninstallApplication('collector', { forceKill: false, background: true, replica: 's1' });
 
       expect(relationshipResolverStub.findCascadeWorkloadsRequiring.called).to.equal(false);
     });
