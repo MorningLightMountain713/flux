@@ -322,17 +322,19 @@ describe('reconciler network-detach heal', function () {
     this.timeout(300000);
     await waitForUp(client, restartName, 'running before the mid-heal restart');
 
-    // A recreate with genuinely nothing to run: black-holed registry now, local
-    // image gone the moment the heal's remove unpins it (inside the pull-verify
-    // window, the same race-free trick as suite 33).
+    // A recreate with genuinely nothing to run: black-holed registry, and the
+    // image UNTAGGED while the container still runs (rmi -f unties the tag;
+    // the layers stay pinned by ID under the live container, and the recreate
+    // pulls by tag). Staged BEFORE the detach: the heal runs remove->recreate
+    // inside one pass, so there is no observable removed-but-not-recreated
+    // window to sequence an image removal into - both gates lost that race,
+    // each at a different sample point.
     await env.containers.registry.stop({ remove: false, removeVolumes: false });
+    await removeAppImage(client.container, `${REGISTRY_REPO_HOST}/${restartName}:v1`);
 
     const afterId = client.getLastEventId();
     await disconnectAppNetwork(client.container, restartName);
     await waitForReconcileActuated(client, restartId, 'networkDetached', 60000, { afterId });
-    await waitFor(async () => !(await getAppContainerStatus(client.container, restartName, { all: true })),
-      { timeout: 30000, interval: 500, label: 'heal removed the detached container' });
-    await removeAppImage(client.container, `${REGISTRY_REPO_HOST}/${restartName}:v1`);
     await waitForReconcileActuated(client, restartId, 'networkHealRecreateFailed', 120000, { afterId });
 
     // FluxOS dies between the remove and a successful recreate. The durable
