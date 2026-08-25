@@ -2181,9 +2181,16 @@ async function _buildEnv(env, nodes, deferredNodes, legacyNodes, unprivilegedNod
   // them) — an earlier exemption left all-legacy fleets booting outside the
   // lock and suite 21 failed on exactly the contention this wait prevents.
   const rpcFailSet = new Set(rpcFailures);
+  // The bound, not a pace (see the startup allowance above). Under a full
+  // gate the DB-prep phase alone measures ~90s on EVERY node of a healthy
+  // fleet - one per-fleet mongod prepares ten nodes' collections, 5-17s per
+  // collection under contention (gate-5 1214, record pull) - so the old 90s
+  // budget sat inside the healthy distribution and the first node checked
+  // reported "never". The BOOTS distribution the gate now prints is the
+  // regression detector for this whole end-to-end duration.
   await Promise.all(clients
     .filter((c) => c && !rpcFailSet.has(c.ip))
-    .map((c) => c.waitForEvent('daemon:polled', () => true, 90000)));
+    .map((c) => c.waitForEvent('daemon:polled', () => true, 240000)));
 
   // THE DECLARED STUB PEERINGS ARE MADE TRUE BEFORE THE FLEET IS HANDED OVER.
   //
