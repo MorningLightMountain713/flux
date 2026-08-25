@@ -201,16 +201,26 @@ describe('mesh membership level API', function () {
 
   it('a parked long-poll WAKES on a membership change and answers the shrunken level', async function () {
     this.timeout(420000);
-    const current = (await readLevel(0)).data.generation;
 
     // Park a poll inside a container, writing its answer to a file. Parked on
     // nodes 0 AND 1: the shrink below removes ONE instance by rank, so at
     // least one of the two parked polls survives to be read.
-    const park = async (i) => {
+    //
+    // Each poll parks against ITS OWN node's generation - generations are
+    // per-node counters, so a cursor borrowed from another node can already
+    // differ and the poll answers before anything happened. The fixture
+    // image is the bare busybox binary: /tmp does not exist until the park
+    // creates it, and every utility must be spelled /bin/busybox (a bare rm
+    // aborts the chain with "not found", silently, in a backgrounded exec).
+    const cursors = new Map();
+    const park = async (i, after = null) => {
+      const current = after ?? (await readLevel(i)).data.generation;
+      cursors.set(i, current);
       const containerName = await appContainerName(i);
       await execInContainer(env.clients[i].container,
         `docker exec ${containerName} /bin/busybox sh -c '`
-        + `rm -f /tmp/woken.json && (/bin/busybox wget -qO /tmp/woken.json `
+        + `/bin/busybox mkdir -p /tmp && /bin/busybox rm -f /tmp/woken.json /tmp/woken.flag && `
+        + `(/bin/busybox wget -qO /tmp/woken.json `
         + `"${MEMBERSHIP_URL}?waitAfter=${current}&timeoutS=300" && `
         + `echo done > /tmp/woken.flag) &'`);
     };
@@ -245,31 +255,39 @@ describe('mesh membership level API', function () {
     await queueAppTx(upd.data);
     await advanceBlocks(3);
 
-    // A survivor whose parked poll can still be read: whichever of 0/1 keeps
-    // its container after the trim.
-    const survivor = async () => {
-      for (const i of [0, 1]) {
-        // eslint-disable-next-line no-await-in-loop
-        const alive = await appContainerName(i).then(() => i).catch(() => null);
-        if (alive != null) return i;
-      }
-      return null;
-    };
-    let woke = null;
+    // Any surviving parked poll that woke to the SHRUNKEN level: the trim
+    // picks its victim by rank, so which of 0/1 survives - and whether both
+    // do - is the network's choice, not the suite's. A poll can also wake on
+    // an unrelated snapshot write with membership still at 3 - the contract
+    // is a level, not one wake per change - so such an answer re-parks at
+    // the generation it saw and the wait continues.
+    let shrunken = null;
     await waitFor(async () => {
-      const i = await survivor();
-      if (i == null) return false;
-      const out = await inApp(i, '/bin/busybox cat /tmp/woken.flag').catch(() => null);
-      if (!out?.stdout?.includes('done')) return false;
-      woke = i;
-      return true;
-    }, { timeout: 240000, interval: 5000, label: 'a surviving parked poll woke' });
+      for (const i of [0, 1]) {
+        try {
+          // eslint-disable-next-line no-await-in-loop
+          const flag = await inApp(i, '/bin/busybox cat /tmp/woken.flag');
+          if (!flag?.stdout?.includes('done')) continue; // eslint-disable-line no-continue
+          // eslint-disable-next-line no-await-in-loop
+          const body = await inApp(i, '/bin/busybox cat /tmp/woken.json');
+          const woken = JSON.parse(body.stdout);
+          if (woken.status === 'success'
+            && woken.data.members.length === 2
+            && woken.data.generation > cursors.get(i)) {
+            shrunken = woken;
+            return true;
+          }
+          // eslint-disable-next-line no-await-in-loop
+          await park(i, woken?.data?.generation ?? cursors.get(i));
+        } catch {
+          // A trimmed container, a mid-write file: skip this node this tick.
+        }
+      }
+      return false;
+    }, { timeout: 240000, interval: 5000, label: 'a surviving parked poll woke to the shrunken level' });
 
-    const out = await inApp(woke, '/bin/busybox cat /tmp/woken.json');
-    const woken = JSON.parse(out.stdout);
-    expect(woken.status).to.equal('success');
-    expect(woken.data.generation, 'the level moved').to.be.greaterThan(current);
-    expect(woken.data.members, 'the departed member is gone').to.have.length(2);
+    expect(shrunken.status).to.equal('success');
+    expect(shrunken.data.members, 'the departed member is gone').to.have.length(2);
   });
 
   it('the node itself is refused — the containers table is the tenant boundary', async function () {
