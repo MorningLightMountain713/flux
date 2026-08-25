@@ -187,6 +187,7 @@ export function nodeClient(nodeNum) {
         'content:manifestSyncComplete',
         'content:manifestReconciled',
         'content:manifestReaped',
+        'activeStandby:decided',
       ]) {
         eventSource.addEventListener(name, (e) => {
           const entry = {
