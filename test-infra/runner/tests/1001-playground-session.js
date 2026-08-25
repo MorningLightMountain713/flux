@@ -159,6 +159,13 @@ describe('playground: a session runs on a real node and reports what happened', 
           // test in this file runs alone rather than racing a leftover.
           playgroundNodeConcurrentSessions: 1,
         },
+        // The fleet-wide per-caller tally is a SEPARATE dial from the per-node
+        // hourly ones above, with a 24h window no suite outlives: at the
+        // production 5-per-window, the sixth session of this file is refused
+        // forever and every later test fails on the allowance, not its subject.
+        limitCounters: {
+          playground: { maxConcurrent: 2, maxPerWindow: 50, windowMs: 86400000 },
+        },
       },
     });
     [client] = env.clients;
