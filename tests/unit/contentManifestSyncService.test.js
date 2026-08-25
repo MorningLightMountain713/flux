@@ -74,7 +74,9 @@ describe('contentManifestSyncService', () => {
     it('is a no-op with no peers', async () => {
       const svc = load();
       const result = await svc.reconcile([]);
-      expect(result).to.deep.equal({ peers: 0, indexesReceived: 0, fetched: 0 });
+      expect(result).to.deep.equal({
+        peers: 0, indexesReceived: 0, fetched: 0, requested: 0, remaining: [],
+      });
     });
 
     it('hands a concurrent caller the real outcome of the round in flight', async () => {
@@ -158,6 +160,93 @@ describe('contentManifestSyncService', () => {
       expect(p2Fetch.args[0].appNames).to.deep.equal(['b']); // only the still-missing one
     });
 
+    // A round that cannot reach anyone must not look like a round that had nothing to do.
+    // Everything below is about the fetch half staying honest and cheap when the peers it
+    // selected are no longer usable — the state a partition heal leaves behind.
+    describe('reaching the peers', () => {
+      it('asks only the peers that answered the index', async () => {
+        const svc = load();
+        const store = new Map();
+        const getLocalVersions = sinon.stub().callsFake(async () => [...store].map(([appName, version]) => ({ appName, version })));
+        // The gap must still be OPEN when the loop reaches the silent peer, or the round
+        // breaks out early and the assertion below passes without exercising anything.
+        const answered = { key: 'p1' };
+        answered.send = sinon.stub().callsFake((msg) => {
+          if (msg.type === 'fluxappcontentmanifestindexrequest') svc.depositIndex('p1', [{ appName: 'a', version: 2 }, { appName: 'b', version: 2 }]);
+          else store.set('a', 9999); // delivers one of the two, so 'b' is still owed
+          return true;
+        });
+        // Never answered, so it has said nothing about holding anything. Asking it costs a
+        // full settle window and can only ever return what it never claimed to have.
+        const silent = { key: 'p2', send: sinon.stub() };
+
+        const result = await svc.reconcile([answered, silent], { getLocalVersions });
+
+        expect(result.fetched, 'the gap was still open at the silent peer').to.equal(1);
+        const silentFetch = silent.send.getCalls().find((c) => c.args[0].type === 'fluxappcontentmanifestrequest');
+        expect(silentFetch, 'a peer that never answered the index is not asked for bodies').to.equal(undefined);
+      });
+
+      it('re-resolves each peer at the moment it sends, and skips one that has gone', async () => {
+        const svc = load();
+        const store = new Map();
+        const getLocalVersions = sinon.stub().callsFake(async () => [...store].map(([appName, version]) => ({ appName, version })));
+        const p1 = makePeer(svc, 'p1', [{ appName: 'a', version: 2 }], store);
+        // The socket this round selected is closed by the time the fetch runs — the state
+        // every one of these peers was in after the heal. The handle captured at selection
+        // cannot report that, so the round has to ask for the peer again by key.
+        const resolvePeer = sinon.stub().returns(null);
+
+        const result = await svc.reconcile([p1], { getLocalVersions, resolvePeer });
+
+        expect(resolvePeer.calledWith('p1'), 'the peer is looked up again before sending').to.equal(true);
+        const fetch = p1.send.getCalls().find((c) => c.args[0].type === 'fluxappcontentmanifestrequest');
+        expect(fetch, 'nothing is sent to a peer that no longer resolves').to.equal(undefined);
+        expect(result.fetched).to.equal(0);
+      });
+
+      it('treats a refused send as a peer that cannot be reached', async () => {
+        const svc = load();
+        const store = new Map();
+        const getLocalVersions = sinon.stub().callsFake(async () => [...store].map(([appName, version]) => ({ appName, version })));
+        const p1 = { key: 'p1' };
+        // send() reports failure by returning false and never throws, so the boolean is the
+        // only liveness signal a caller gets.
+        p1.send = sinon.stub().callsFake((msg) => {
+          if (msg.type === 'fluxappcontentmanifestindexrequest') { svc.depositIndex('p1', [{ appName: 'a', version: 2 }]); return true; }
+          return false;
+        });
+        const delay = sinon.stub().resolves();
+
+        const result = await svc.reconcile([p1], { getLocalVersions, delay });
+
+        expect(result.fetched).to.equal(0);
+        // One call, and it is the index wait — no second call for a settle window the
+        // round would be spending on a peer it could not reach.
+        expect(delay.callCount, 'a refused send does not buy a settle window').to.equal(1);
+      });
+
+      it('stops waiting on a peer the moment it says it is done', async () => {
+        const svc = load();
+        const store = new Map();
+        const getLocalVersions = sinon.stub().callsFake(async () => [...store].map(([appName, version]) => ({ appName, version })));
+        const p1 = { key: 'p1' };
+        p1.send = sinon.stub().callsFake((msg) => {
+          if (msg.type === 'fluxappcontentmanifestindexrequest') { svc.depositIndex('p1', [{ appName: 'a', version: 2 }]); return true; }
+          store.set('a', 9999);
+          svc.depositFetchDone('p1'); // the answer already carries this flag on the wire
+          return true;
+        });
+        // The settle window is the fallback, never the pace: if the round can only finish
+        // by waiting it out, a peer that answered instantly still costs the full window.
+        const neverSettles = sinon.stub().returns(new Promise(() => {}));
+
+        const result = await svc.reconcile([p1], { getLocalVersions, delay: neverSettles });
+
+        expect(result.fetched).to.equal(1);
+      });
+    });
+
     // A node that reconciled against silence and a node that was already current both end
     // a round having fetched nothing. Only indexesReceived separates them, so it has to be
     // on the event and not merely in the return value — an observer watching the bus (the
@@ -175,6 +264,28 @@ describe('contentManifestSyncService', () => {
         sinon.assert.calledOnceWithExactly(publish, 'content:manifestReconciled', {
           requested: 0, fetched: 0, peers: 1, indexesReceived: 1,
         });
+      });
+
+      // The caller decides whether its catch-up step is finished from what this returns.
+      // Without the gap in the RETURN value, "asked for one and got nothing" and "asked
+      // for nothing because I was current" are the same {fetched: 0} — and the caller
+      // latches on both, so the node goes live believing it converged.
+      it('returns the size of the gap it set out to close, not only what it closed', async () => {
+        const svc = load();
+        const store = new Map();
+        const getLocalVersions = sinon.stub().callsFake(async () => [...store].map(([appName, version]) => ({ appName, version })));
+        // Advertises a body and then supplies nothing — the shape of a peer that dropped
+        // mid-round, and of one serving an index it cannot back.
+        const hollow = { key: 'p1' };
+        hollow.send = sinon.stub().callsFake((msg) => {
+          if (msg.type === 'fluxappcontentmanifestindexrequest') svc.depositIndex('p1', [{ appName: 'a', version: 2 }]);
+          return true;
+        });
+
+        const result = await svc.reconcile([hollow], { getLocalVersions });
+
+        expect(result.requested, 'the round knows it needed one').to.equal(1);
+        expect(result.fetched).to.equal(0);
       });
 
       it('distinguishes a silent round from an already-current one', async () => {

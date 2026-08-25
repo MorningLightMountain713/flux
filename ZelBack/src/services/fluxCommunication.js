@@ -381,7 +381,7 @@ async function handleContentManifestSyncResponse(message, peerKey) {
   try {
     if (!contentManifestSyncService.isPeerInActiveRound(peerKey)) return;
     if (!message.data || message.data.type !== 'fluxappcontentmanifestsync') return;
-    const { messages } = message.data;
+    const { messages, done } = message.data;
     if (!Array.isArray(messages) || messages.length > 2500) return;
     log.info(`handleContentManifestSyncResponse - Received ${messages.length} manifests from ${peerKey}`);
     // batchVerifyBroadcasts verifies the relaying node's envelope; storeBatchContentManifests
@@ -392,6 +392,11 @@ async function handleContentManifestSyncResponse(message, peerKey) {
       log.info(`handleContentManifestSyncResponse - Stored ${stored} of ${verified.length} verified manifests`);
       fluxEventBus.publish('sync:chunkVerified', { syncType: 'appcontentmanifest', peer: peerKey, verified: verified.length, stored });
     }
+    // The responder marks its last batch, exactly as the ephemeral sync responses do.
+    // Released after the store above, so the round re-reads its gap knowing everything
+    // this peer sent has already landed. Without it the round has no signal that a peer
+    // has finished and can only wait out its settle bound.
+    if (done) contentManifestSyncService.depositFetchDone(peerKey);
   } catch (error) {
     log.error(error);
   }
