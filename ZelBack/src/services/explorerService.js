@@ -1632,7 +1632,15 @@ function setZelAppSpecsMigrationDone(value) {
 reorgSource.onReorg(handleChainReorg);
 
 daemonSubscriptionService.subscribe(daemonSubscriptionService.TOPICS.hashBlockHeight, {
-  onMessage: (decoded) => onNewBlock(decoded.height),
+  onMessage: (decoded) => {
+    // Handlers dispatch synchronously in registration order, and this one
+    // registers at require time — before chainTipSource. The drain reads the
+    // cached daemon height, so record the height this message itself carries
+    // FIRST, or the scan compares against the pre-block tip, returns without
+    // scanning, and nothing re-arms in push mode.
+    daemonServiceMiscRpcs.recordChainTip(decoded.height);
+    onNewBlock(decoded.height);
+  },
 });
 
 module.exports = {

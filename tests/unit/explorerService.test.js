@@ -8,6 +8,7 @@ const appJanitor = require('../../ZelBack/src/services/appLifecycle/appJanitor')
 const portManager = require('../../ZelBack/src/services/appNetwork/portManager');
 const daemonServiceBlockchainRpcs = require('../../ZelBack/src/services/daemonService/daemonServiceBlockchainRpcs');
 const daemonServiceMiscRpcs = require('../../ZelBack/src/services/daemonService/daemonServiceMiscRpcs');
+const daemonSubscriptionService = require('../../ZelBack/src/services/daemonService/daemonSubscriptionService');
 const daemonServiceUtils = require('../../ZelBack/src/services/daemonService/daemonServiceUtils');
 const dbHelper = require('../../ZelBack/src/services/dbHelper');
 const globalState = require('../../ZelBack/src/services/utils/globalState');
@@ -1136,6 +1137,36 @@ describe('explorerService tests', () => {
         const tx = { vin: [{ address: oracleAddr, scriptSig: { hex: NONE_SCRIPTSIG } }] };
         expect(explorerService.isOracleSigner(tx, 100)).to.equal(false);
       });
+    });
+  });
+
+  describe('the hashblockheight subscriber', () => {
+    it('records the tip the message carries before anything reads the cached height', async () => {
+      // The push handler chain is synchronous and ordered by registration:
+      // the explorer's drain reads isDaemonSynced() before chainTipSource's
+      // sibling handler records the new height, so the drain sees the
+      // pre-block tip and returns without scanning — and nothing re-arms in
+      // push mode. The message itself carries the freshest fact; the
+      // subscriber records it before asking for the scan.
+      // eslint-disable-next-line global-require
+      const proxyquire = require('proxyquire');
+      const captured = new Map();
+      const recordSpy = sinon.spy(daemonServiceMiscRpcs, 'recordChainTip');
+      try {
+        const fresh = proxyquire('../../ZelBack/src/services/explorerService', {
+          './daemonService/daemonSubscriptionService': {
+            ...daemonSubscriptionService,
+            subscribe: (topic, handler) => captured.set(topic, handler),
+          },
+        });
+        await fresh.stopScanning();
+        const handler = captured.get(daemonSubscriptionService.TOPICS.hashBlockHeight);
+        expect(handler, 'explorer subscribes to hashblockheight').to.exist;
+        handler.onMessage({ height: 2100777 });
+        sinon.assert.calledWith(recordSpy, 2100777);
+      } finally {
+        recordSpy.restore();
+      }
     });
   });
 });
