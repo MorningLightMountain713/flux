@@ -85,7 +85,11 @@ async function toDeployment(instantiated, opts = {}) {
   // name inside fromSpec, which is exactly the identifier it already has.
   return DeploymentSpec.fromSpec(resolved, appsFolder, {
     replica: opts.replica,
-    identity: instantiated.identity ?? null,
+    // opts.identity is the update path's seam: a registry spec carries no
+    // identity (identities are minted at install), so the caller diffing an
+    // update hands in the installed row's — the app keeps the identity it was
+    // installed with for as long as it is installed.
+    identity: opts.identity ?? instantiated.identity ?? null,
   });
 }
 
@@ -160,7 +164,7 @@ async function localIdentities(instantiated) {
  * @param {object} instantiated - InstantiatedSpec
  * @returns {Promise<object[]>} DeploymentSpec[]
  */
-async function toDeployments(instantiated) {
+async function toDeployments(instantiated, opts = {}) {
   const resolved = await resolveInstantiatedSpec(instantiated);
   if (!resolved) throw new Error(`Could not resolve spec for ${instantiated.name}`);
   const replicas = await resolveLocalReplicas(resolved);
@@ -171,10 +175,11 @@ async function toDeployments(instantiated) {
   for (const replica of identities) {
     // Same identity read as toDeployment: every identity of one app shares the
     // app's, so building the set without it would name the same containers
-    // differently from the single-identity path that created them.
+    // differently from the single-identity path that created them. opts.identity
+    // is the update path's seam (see toDeployment).
     deployments.push(DeploymentSpec.fromSpec(resolved, appsFolder, {
       replica,
-      identity: instantiated.identity ?? null,
+      identity: opts.identity ?? instantiated.identity ?? null,
     }));
   }
   return deployments;

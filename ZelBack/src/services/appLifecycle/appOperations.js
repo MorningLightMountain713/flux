@@ -1742,7 +1742,7 @@ async function reconcileComponents(appName, oldDeployment, newDeployment, regist
   // spec being written rather than carried over from the one being replaced.
   await appsRepository.upsertInstalledApp(appName, wireSpec, async (rowReplica) => {
     const rowDeployment = await deploymentProvider.buildDeployment(
-      registrySpec, { replica: rowReplica },
+      registrySpec, { replica: rowReplica, identity: newDeployment.identity ?? null },
     );
     return rowDeployment
       ? rowDeployment.componentEntries().map(([, comp]) => comp.identifier)
@@ -1752,7 +1752,7 @@ async function reconcileComponents(appName, oldDeployment, newDeployment, regist
 
   // Rebuild THIS identity's fresh view - handing a co-located sibling's view to
   // the reinstalls below would apply its ports/env to the wrong containers.
-  const freshDeployment = await deploymentProvider.buildDeployment(registrySpec, { replica: newDeployment.replica ?? null });
+  const freshDeployment = await deploymentProvider.buildDeployment(registrySpec, { replica: newDeployment.replica ?? null, identity: newDeployment.identity ?? null });
   await hwRequirements.checkNodeResourcesReclaiming(freshDeployment);
 
   // Re-seed telemetry routing from the updated spec. A sink change (key
@@ -1831,7 +1831,11 @@ async function reconcileComponents(appName, oldDeployment, newDeployment, regist
 
 async function reconcileApp(installed, registrySpec) {
   const oldDeployments = await deploymentProvider.getInstalledDeployments(installed.name);
-  const newDeployments = await deploymentProvider.buildDeployments(registrySpec);
+  // The registry spec carries no identity - an update KEEPS the identity the
+  // app was installed with, or the diff's new side spells <component>_<appName>
+  // and matches nothing (no component ever redeploys, and the row's identifier
+  // list is rewritten wrong).
+  const newDeployments = await deploymentProvider.buildDeployments(registrySpec, { identity: installed.identity ?? null });
   if (oldDeployments.length === 0 || newDeployments.length === 0) return;
 
   if (operationRegistry.isHeld(installed.name)) {
