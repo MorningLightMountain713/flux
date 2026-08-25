@@ -376,17 +376,22 @@ async function computeUpdateFee(spec, prevSpec, height, prevHeight, prevRegister
  * would rewrite content the owner signed and its hash covers; the term start is
  * FluxOS's own record of when the app's current term began.
  *
+ * The kept term comes from the STORED app state, never the message chain:
+ * every permanent message is stamped with its own confirming block, so a
+ * chain of free updates read from the superseded message would walk the term
+ * forward one confirmation interval per update.
+ *
  * @param {object} InstantiatedSpec - the domain class, from the spec backend
  * @param {object} confirmedEvent - the confirmed update event
  * @param {bigint} requiredSats - the fee this update had to pay
- * @param {object} prevMessage - the permanent message being superseded
+ * @param {number|null} termStartAt - the standing term start being kept
  * @returns {object} the InstantiatedSpec to store
  */
-function instantiatedForStorage(InstantiatedSpec, confirmedEvent, requiredSats, prevMessage) {
+function instantiatedForStorage(InstantiatedSpec, confirmedEvent, requiredSats, termStartAt) {
   const projection = confirmedEvent.toInstantiatedSpec();
-  const keepsTerm = requiredSats === 0n && Boolean(prevMessage.registeredAt);
+  const keepsTerm = requiredSats === 0n && Boolean(termStartAt);
   return InstantiatedSpec.fromEvent(
-    keepsTerm ? { ...projection, registeredAt: prevMessage.registeredAt } : projection,
+    keepsTerm ? { ...projection, registeredAt: termStartAt } : projection,
   );
 }
 
@@ -471,8 +476,9 @@ async function checkAndRequestApp(hash, txid, height, valueSat, blockTime = null
     // The row is the only authority here — the name's message history spans
     // every app that has ever held the name, so an expired app's owner would
     // still authorize an update to whoever holds the name now.
+    let currentState = null;
     if (confirmedEvent.isUpdate) {
-      const currentState = await appsRepository.getGlobalAppInfo(specifications.name);
+      currentState = await appsRepository.getGlobalAppInfo(specifications.name);
       await appEventVerifier.authorize({
         appEvent: confirmedEvent,
         previousState: currentState,
@@ -561,7 +567,8 @@ async function checkAndRequestApp(hash, txid, height, valueSat, blockTime = null
       );
       if (BigInt(valueSat) >= requiredSats) {
         const stored = instantiatedForStorage(
-          InstantiatedSpec, confirmedEvent, requiredSats, prevMessage,
+          InstantiatedSpec, confirmedEvent, requiredSats,
+          currentState?.registeredAt ?? prevMessage.registeredAt ?? null,
         );
         await updateAppSpecifications(stored.serialize());
       } else {
