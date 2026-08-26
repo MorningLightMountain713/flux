@@ -360,8 +360,12 @@ run_captures(){
     | grep --line-buffered -iE 'oom|killed process' > "$LOGROOT/cap-dmesg.log" &
   capture_memory > "$LOGROOT/cap-mem.log" 2>&1 &
   mem=$!
+  # id= and image= make the log attributable: docker reuses names and fleets churn
+  # through any given minute, so a name alone cannot say which container - or which
+  # kind of container - a death belongs to. The id settles which; the image settles
+  # whether it was a node, a stub or the load balancer, after the container is gone.
   docker events --filter event=die --filter event=kill --filter event=oom \
-    --format '{{.Time}} {{.Action}} name={{.Actor.Attributes.name}} exitCode={{.Actor.Attributes.exitCode}}' \
+    --format '{{.Time}} {{.Action}} id={{.Actor.ID}} image={{.Actor.Attributes.image}} name={{.Actor.Attributes.name}} exitCode={{.Actor.Attributes.exitCode}}' \
     > "$LOGROOT/cap-events.log" 2>&1 &
   events=$!
   read -r _ <&3
