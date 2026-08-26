@@ -8,8 +8,16 @@
 // second, so "the app is gone" and "the app was there at 06:37:29 and gone by :30"
 // are indistinguishable — and only the second one can be lined up against a log.
 //
-//   node test-infra/runner/db-watch.js --node 1                 # every 500ms
-//   node test-infra/runner/db-watch.js --node 3 --interval 250 --out /tmp/dbwatch.log
+//   TEST_SUBNET_BASE=198.18.2 node test-infra/runner/db-watch.js --node 1
+//   TEST_SUBNET_BASE=198.18.2 node test-infra/runner/db-watch.js --node 3 --interval 250 --out /tmp/dbwatch.log
+//
+// TEST_SUBNET_BASE IS NOT OPTIONAL IN PRACTICE. Each concurrent run claims its own
+// /24 and its own mongo, and subnet-config falls back to 198.18.0 when the variable
+// is unset — so without it this attaches to whichever suite happens to own the
+// default range and reports ITS database, confidently and wrongly. Take the base
+// from the run you are watching: the runner prints it as `###SUBNET-BASE` in that
+// suite's .out file. The header line below echoes the mongo it actually reached, so
+// the mistake is visible in the first line of output rather than in the conclusion.
 //
 // DELIBERATELY NOT WIRED INTO A GATE. It watches ONE node at a few samples a second,
 // so using it in a gate means choosing the node before you know which one misbehaves
@@ -22,6 +30,7 @@
 // and archive-run.sh are in the repo.
 
 import { dbClient, closeDb } from './framework/db-client.js';
+import { getSubnetConfig } from './framework/subnet-config.js';
 
 function arg(name, fallback = null) {
   const i = process.argv.indexOf(`--${name}`);
@@ -83,7 +92,8 @@ const stop = async () => {
 process.on('SIGINT', stop);
 process.on('SIGTERM', stop);
 
-emit(`# db-watch node=${nodeNum} interval=${intervalMs}ms started ${new Date().toISOString()}`);
+const subnet = getSubnetConfig();
+emit(`# db-watch node=${nodeNum} mongo=${subnet.mongo} base=${process.env.TEST_SUBNET_BASE ?? '(unset - DEFAULTED, check this is the run you meant)'} interval=${intervalMs}ms started ${new Date().toISOString()}`);
 for (;;) {
   // eslint-disable-next-line no-await-in-loop
   await sample();
