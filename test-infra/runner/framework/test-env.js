@@ -58,6 +58,25 @@ function hostJournalRead(dir, timeoutMs = 20000) {
   });
 }
 
+// Hand a node's host journal back to whoever ran the suite. journald writes as root
+// inside the container, so the files it leaves under the run's log directory are
+// root-owned and 0640 — unreadable by the user who created the directory. Everything
+// downstream then needs privilege it has no reason to need, and the failure is
+// silent in the worst way: `cp` refuses one file, an && chain abandons the rest, and
+// an archive that looks complete is missing exactly the record the mount exists to
+// preserve. Fixed at the source rather than in every reader.
+//
+// Non-interactive sudo only, and best-effort: a box without it should still finish
+// its teardown, and journalctl -D still reads the files under sudo either way.
+function hostJournalChown(dir, timeoutMs = 20000) {
+  return new Promise((resolve) => {
+    const args = ['-n', 'chown', '-R', `${process.getuid()}:${process.getgid()}`, dir];
+    execFile('sudo', args, { timeout: timeoutMs }, (err, _stdout, stderr) => {
+      resolve({ ok: !err, stderr: stderr ?? '' });
+    });
+  });
+}
+
 // Whether this env's mocha suite has failed - a failed test, or runnable tests
 // none of which passed (the signature of a setup-hook failure, where teardown
 // is the LAST moment the containers, and their journals, exist). An env with
@@ -447,6 +466,15 @@ function makeEnvShell(networkName) {
         }
       }
       await removeNetwork(networkName);
+      // Once the containers are gone nothing is writing to the journals, so this is
+      // the moment to hand them back — see hostJournalChown. Kept off the failure
+      // path deliberately: a green run's journals are archived and read too.
+      await Promise.all(nodeConfigs
+        .filter((cfg) => cfg.journalDir && existsSync(cfg.journalDir))
+        .map(async (cfg) => {
+          const res = await hostJournalChown(cfg.journalDir);
+          if (!res.ok) warn(`journal chown ${cfg.journalDir}`, new Error(res.stderr || 'sudo -n chown failed'));
+        }));
       for (const cfg of nodeConfigs) {
         if (cfg.bootIdDir) rmSync(cfg.bootIdDir, { recursive: true, force: true });
         if (cfg.fluxdConfDir) rmSync(cfg.fluxdConfDir, { recursive: true, force: true });
@@ -1096,7 +1124,7 @@ async function _buildEnv(
     if (systemdMode) builder.withStopSignal('SIGRTMIN+3');
 
     nodeConfigs.push({
-      index: i, builder, ip: nodeIp, num: i + 1, logCollector, bootIdDir, fluxdConfDir,
+      index: i, builder, ip: nodeIp, num: i + 1, logCollector, bootIdDir, fluxdConfDir, journalDir,
     });
   }
 
