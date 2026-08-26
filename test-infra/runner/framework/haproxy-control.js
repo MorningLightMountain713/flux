@@ -79,6 +79,32 @@ export function renderConfig(backends) {
 // record dies with the container. Returns null for anything still running, still
 // being created, or an inspect that failed transiently: only a settled container is
 // death, and a false positive here would fail a fleet that was merely slow.
+// The container's state and log tail, whatever state that is — shared by the death
+// path and the timeout path, because a wait that expires needs the same evidence a
+// wait that dies does. Never throws: this only ever decorates a failure.
+async function describeContainer(container) {
+  let line = 'container state unavailable';
+  try {
+    const client = await getContainerRuntimeClient();
+    const { State: st } = await client.container.dockerode.getContainer(container.getId()).inspect();
+    line = `status=${st?.Status} running=${st?.Running} exitCode=${st?.ExitCode}`;
+  } catch {
+    // keep the placeholder
+  }
+  let tail = '(no logs)';
+  try {
+    const stream = await container.logs({ tail: 40 });
+    const chunks = [];
+    // eslint-disable-next-line no-restricted-syntax
+    for await (const chunk of stream) chunks.push(chunk);
+    const text = chunks.join('').trim();
+    if (text) tail = text.split('\n').slice(-20).join('\n');
+  } catch {
+    // keep '(no logs)'
+  }
+  return `${line}\n--- haproxy container logs ---\n${tail}`;
+}
+
 async function settledContainerReason(container) {
   let state;
   try {
@@ -173,7 +199,14 @@ export async function startHaproxy(networkName, { backends, cas = {} }) {
       // URL first: the reason ends in multi-line container logs, and a trailing
       // clause after them reads as part of haproxy's own output.
       if (dead) throw new Error(`haproxy at ${base} died before answering: ${dead}`);
-      if (Date.now() > deadline) throw new Error(`haproxy did not answer on ${base} within 30000ms (last probe: ${error.message})`);
+      if (Date.now() > deadline) {
+        // A live-but-silent haproxy is the other half of this failure, and a bare
+        // timeout says nothing about it. Report what the container is doing — its
+        // logs show whether it bound, is still parsing, or never got that far — so
+        // "slow" and "dead" are BOTH diagnosable rather than only one of them.
+        const alive = await describeContainer(container);
+        throw new Error(`haproxy at ${base} never answered within 30000ms (last probe: ${error.message})\n${alive}`);
+      }
       // eslint-disable-next-line no-await-in-loop
       await new Promise((resolve) => { setTimeout(resolve, 500); });
     }
