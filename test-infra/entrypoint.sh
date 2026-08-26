@@ -172,6 +172,23 @@ EOF
   # So a container that died with this line in `docker logs` failed under systemd (read
   # its journal — the harness mounts it to the host), and one that died WITHOUT it
   # failed in the setup above, where the failing command's own stderr is the diagnosis.
+  # systemd's FIRST act is to create an inotify instance to watch cgroups, and
+  # fs.inotify.max_user_instances is a PER-UID, HOST-WIDE pool that every container
+  # on the box draws from as root. Exhaust it and systemd cannot allocate its manager
+  # object and PID 1 exits 255 — having written the reason to /dev/console, which a
+  # container without a TTY does not have. That is total silence: no docker logs, no
+  # journal (journald never started), nothing. The class went unexplained for three
+  # gates and survived six reproduction attempts, because a solo run never exhausts a
+  # host-wide pool and the failure could not speak.
+  #
+  # So ask the question here, where the answer can be printed. node is in this image;
+  # fs.watch allocates exactly the resource systemd is about to need.
+  if ! node -e 'const w=require("fs").watch("/tmp",()=>{}); w.close();' 2>/dev/null; then
+    echo "[entrypoint] FATAL: cannot allocate an inotify instance — systemd will exit 255." >&2
+    echo "[entrypoint] fs.inotify.max_user_instances=$(cat /proc/sys/fs/inotify/max_user_instances 2>/dev/null) is a HOST-WIDE per-uid pool" >&2
+    echo "[entrypoint] shared by every container on this box. Raise it on the HOST, not here." >&2
+    exit 3
+  fi
   echo "[entrypoint] setup complete, handing off to systemd as pid 1"
   exec /lib/systemd/systemd
 fi

@@ -78,6 +78,36 @@ if [ "$neigh_now" -lt "$NEIGH_MIN" ]; then
   echo "# neighbor table cap raised to gc_thresh3=$neigh_now for the gate"
 fi
 
+# systemd's first act is to create an inotify instance to watch cgroups, and
+# fs.inotify.max_user_instances is a PER-UID, HOST-WIDE pool that every container
+# draws from as root. Exhaust it and systemd cannot allocate its manager object:
+# PID 1 exits 255, having written the reason to /dev/console, which a container
+# without a TTY does not have. No docker logs, no journal (journald never started)
+# - the silent exit-255 class that went unexplained for three gates and survived
+# six reproduction attempts, because a solo run never exhausts a host-wide pool.
+#
+# The arithmetic is why it was intermittent rather than constant: a full gate peaks
+# at 102 concurrent containers (measured, gates 7 and 8) at 1.27 inotify instances
+# each (measured live) - about 130 against a default ceiling of 128. Demand has been
+# sitting exactly ON the limit, so whether a fleet booted or died came down to who
+# reached it first. 1024 is ~8x the measured peak, which leaves room for wider
+# fleets rather than merely clearing today's number.
+INOTIFY_MIN="${E2E_INOTIFY_MAX_USER_INSTANCES:-1024}"
+ino_now=$(sysctl -n fs.inotify.max_user_instances 2>/dev/null || echo 0)
+if [ "$ino_now" -lt "$INOTIFY_MIN" ]; then
+  sudo -n sysctl -q -w "fs.inotify.max_user_instances=$INOTIFY_MIN" 2>/dev/null
+  ino_now=$(sysctl -n fs.inotify.max_user_instances 2>/dev/null || echo 0)
+  if [ "$ino_now" -lt "$INOTIFY_MIN" ]; then
+    echo "###ABORT inotify instance pool too small (max_user_instances=$ino_now < $INOTIFY_MIN) and could not raise it."
+    echo "Every systemd-mode node needs one and the pool is host-wide, so a gate on this host"
+    echo "produces silent exit-255 boot deaths by design."
+    echo "Raise it for the run:  sudo sysctl -w fs.inotify.max_user_instances=$INOTIFY_MIN"
+    echo "Or lower the bar deliberately with E2E_INOTIFY_MAX_USER_INSTANCES."
+    exit 96
+  fi
+  echo "# inotify instance pool raised to max_user_instances=$ino_now for the gate"
+fi
+
 LOGROOT="${E2E_LOG_DIR:-/tmp/e2e-logs}"
 MAXN="${MAXN:-3}"
 MIN_FREE_MB="${MIN_FREE_MB:-15000}"
@@ -160,7 +190,18 @@ sweep_harness_leftovers
     t0=$(date +%s%N)
     dd if=/dev/zero of="$probe_dir/e2e-fsync-probe" bs=4k count=1 oflag=dsync conv=notrunc 2>/dev/null
     fsync_ms=$(( ($(date +%s%N) - t0) / 1000000 ))
-    echo "$(date -u +%H:%M:%S) avail=$(free_mb)MB load=$(cut -d' ' -f1 /proc/loadavg) containers=$(docker ps -q 2>/dev/null | wc -l) steal_pct=$steal fsync_ms=$fsync_ms"
+    # inotify instances: a PER-UID, HOST-WIDE pool every container draws from as
+    # root, and the resource that silently killed systemd nodes with exit 255 for
+    # three gates while this very sidecar reported a healthy box. Memory, load and
+    # fsync were all fine every time — they were simply the wrong resource. Sampled
+    # every 6th cycle (~30s) because the scan walks every process's fd table.
+    ino_n=$((${ino_n:-0} + 1))
+    if [ $((ino_n % 6)) -eq 1 ]; then
+      ino_used=$(sudo -n find /proc/[0-9]*/fd -lname 'anon_inode:inotify' 2>/dev/null | wc -l)
+      ino_max=$(cat /proc/sys/fs/inotify/max_user_instances 2>/dev/null)
+      ino="inotify=${ino_used}/${ino_max}"
+    fi
+    echo "$(date -u +%H:%M:%S) avail=$(free_mb)MB load=$(cut -d' ' -f1 /proc/loadavg) containers=$(docker ps -q 2>/dev/null | wc -l) steal_pct=$steal fsync_ms=$fsync_ms ${ino:-inotify=?}"
     sleep 5
   done ) > "$LOGROOT/cap-mem.log" 2>&1 & CAP2=$!
 # id= and image= are what make this log ATTRIBUTABLE. Docker reuses names, six
