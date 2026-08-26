@@ -4,8 +4,8 @@ import { describe, it, before, after } from 'mocha';
 import { createTestEnv } from '../framework/test-env.js';
 import {
   getAppContainerStatus, getAppContainerId, getAppContainerAttachment,
-  disconnectAppNetwork, connectAppNetwork, stopAppContainer,
-  getAppNetwork, getAppNetworkSubnet, removeAppNetworkRaw,
+  disconnectAppNetwork, connectAppNetwork,
+  getAppNetwork, getAppNetworkSubnet, removeAppNetworkRaw, stopAndPruneAppNetwork,
   removeAppImage, restartFluxos, execInContainer,
 } from '../framework/container.js';
 import { waitFor, waitForReconcileActuated } from '../framework/wait.js';
@@ -261,14 +261,25 @@ describe('reconciler network-detach heal', function () {
     await waitForUp(client, stopName, 'running before the stop');
 
     const afterId = client.getLastEventId();
-    await stopAppContainer(client.container, stopName, stopName);
-    await waitFor(async () => {
-      const s = await getAppContainerStatus(client.container, stopName, { all: true });
-      return s && !s.status.startsWith('Up');
-    }, { timeout: 60000, interval: 1000, label: 'container stopped' });
-
-    const rm = await removeAppNetworkRaw(client.container, stopName);
-    expect(rm.exitCode, `network rm failed: ${rm.output}`).to.equal(0);
+    // The premise is a state the product REPAIRS, not one it leaves alone:
+    // controllerDesired is running and the crash-backoff ladder starts at 0ms, so the
+    // reconciler restarts this container as soon as it sees it stop. Stopping and then
+    // pruning in two calls leaves a round trip for a pass to land in, and when one did
+    // the rm failed `has active endpoints` — the container measured `Up 8 seconds` at
+    // that moment, so the message meant "it is running again", never a slow endpoint
+    // release. Both halves go in one exec, and losing anyway is retried rather than
+    // asserted on: sampling a transient state is what this is, and the alternative is
+    // asserting against whichever state we happened to land in.
+    let pruned = { ok: false, output: 'not attempted' };
+    let attempts = 0;
+    for (; attempts < 5 && !pruned.ok; attempts += 1) {
+      // eslint-disable-next-line no-await-in-loop
+      pruned = await stopAndPruneAppNetwork(client.container, stopName, stopName);
+    }
+    expect(pruned.ok, `could not catch the app stopped with its network pruned in ${attempts} attempts: ${pruned.output}`).to.be.true;
+    // Say when the race actually fired: a retry nobody can see is a retry nobody
+    // knows is load-bearing, and a quiet run would hide the loop rotting.
+    if (attempts > 1) console.log(`# stopped+pruned on attempt ${attempts} (the reconciler won the earlier ones)`);
     expect(await getAppNetwork(client.container, stopName), 'the network really is gone').to.equal(null);
 
     // The controller still wants it running, so the next pass must rebuild the
