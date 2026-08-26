@@ -131,6 +131,20 @@ async function onChainDisplayUpdatePrice(spec, existing, daemonHeight) {
     isEncrypted: spec.isEncrypted,
     ...resolveMarketplacePricingCtx(spec, daemonHeight),
   });
+  // REFUSED is a third outcome, and it carries a reason rather than a figure: the
+  // update is free-shaped but the allowance is spent, so there is nothing to quote
+  // (updateFee declines it outright for the same reason). Reaching for .total here
+  // produced undefined / 1e8 = NaN, which serialises to a null price a caller cannot
+  // tell from a real one. Thrown rather than returned, because this function already
+  // reports 'no price, and here is why' by throwing — an unsynced daemon and an
+  // invalid spec both do — and a second way of saying it is how the two callers of
+  // one engine drifted apart in the first place. The name lets a UI branch without
+  // matching on English; the message is the engine's own reason.
+  if (result && result.refused) {
+    const refusal = new Error(result.reason || 'update refused');
+    refusal.name = 'UpdateRefused';
+    throw refusal;
+  }
   if (result && result.free) return 0;
   return result.total / 1e8;
 }

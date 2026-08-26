@@ -838,14 +838,33 @@ describe('appSpecHelpers tests', () => {
 
     // The free-update cap is 5 in 24h. Without a populated event list it can
     // never fire, and every free update is granted forever.
-    it('v9: the free-update rate limit fires once the history is fed to it', async () => {
+    //
+    // Hitting the cap REFUSES the update; it does not charge for it. That is the
+    // engine's deliberate answer and updateFee's comment says why: the update is
+    // free-shaped, so pricing it would let the mandatory floor payment buy nothing
+    // while restarting a term the owner never asked to restart. There is no payable
+    // figure to quote, so the quote reports the refusal - by throwing, which is how
+    // this function already answers 'no price, and here is why' for an unsynced
+    // daemon and an invalid spec.
+    //
+    // This assertion used to expect a charge, so it failed on a NaN the caller made
+    // by dividing an absent total. It was red at every commit on this branch and
+    // invisible: the documented unit command runs 19 named files and this is not
+    // one of them.
+    it('v9: the free-update rate limit refuses, rather than quoting a price', async () => {
       const helpers = buildHelpers({
         newSpec: v9SpecWith(),
         prevSpec: v9SpecWith(),
         messages: updatesAt(5, 60 * 60 * 1000),
       });
-      const result = await helpers.getAppFiatAndFluxPrice(v9SpecWith());
-      expect(result.flux).to.be.greaterThan(0);
+      try {
+        const result = await helpers.getAppFiatAndFluxPrice(v9SpecWith());
+        expect.fail(`Should have refused, got ${JSON.stringify(result)}`);
+      } catch (error) {
+        expect(error.name, 'a UI must branch on this without matching English').to.equal('UpdateRefused');
+        expect(error.message, 'and still show the engine reason').to.include('rate limit');
+        expect(String(error.message)).to.not.include('NaN');
+      }
     });
 
     // The witness for "Display == consensus". Both sides must reach the same
