@@ -604,6 +604,8 @@ async function startFluxFunctions() {
         log.error(err);
       }
     }, bootDelay(20 * 60 * 1000));
+    // Deliberately not awaited — boot carries on while the chain scan starts.
+    // Safe to leave unhandled: initiateBlockProcessor does not reject.
     explorerService.initiateBlockProcessor({ restoreDatabase: true, deepRestore: true });
     log.info('Flux Block Processing Service started');
     setTimeout(() => {

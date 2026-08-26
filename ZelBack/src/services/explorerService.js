@@ -189,6 +189,41 @@ async function storeToCollection(collectionName, doc) {
   await dbHelper.updateOneInDatabase(database, collectionName, query, update, options);
 }
 
+/**
+ * Store a soft-fork message and apply it to its in-memory history, together.
+ *
+ * These two used to be independent statements, so a throw between them left the row
+ * written and the history without it — the node priced against state the database
+ * disagreed with, and only a restart resolved it.
+ *
+ * The history is derived state: initiateBlockProcessor replays every stored row
+ * through the same `add()` (rebuildPriceOracleState / rebuildPolicyGroupState) before
+ * the scan resumes. So the row is what is durable, and `add()` is what decides whether
+ * that row is usable. That fixes the order — apply in memory FIRST, persist only if
+ * the apply succeeded.
+ *
+ * Resolved that way round rather than "write, then delete the row if add() throws"
+ * because a row `add()` rejects is a poison pill: the rebuild calls `add()` unguarded,
+ * so one such row makes every subsequent startup throw, on every node that stored it.
+ * Never writing it is the only outcome that leaves the node able to boot. A surgical
+ * roll-back is not on offer either — the histories expose only `removeAtHeight()`,
+ * which drops every entry at or above a height, including ones already durable.
+ *
+ * The residual direction — the apply succeeds, the write fails — leaves the history
+ * holding an entry the database lacks. That cannot outlive the process, because the
+ * next rebuild reads the database, and the throw propagates rather than being
+ * swallowed here.
+ *
+ * @param {string} collectionName Chainparams collection to upsert into.
+ * @param {{txid: string, height: number, message: object}} doc Row to store.
+ * @param {object|null} history In-memory history for this message type, if built yet.
+ * @returns {Promise<void>}
+ */
+async function applySoftForkMessage(collectionName, doc, history) {
+  if (history) history.add(doc.message, doc.height);
+  await storeToCollection(collectionName, doc);
+}
+
 // Flux transparent (t1) P2PKH address version byte (0x1CB8).
 const FLUX_T1_PUBKEY_HASH = '1cb8';
 
@@ -274,15 +309,34 @@ function isRecognizedMessageSigner(address, height) {
 }
 
 async function processSoftFork(txid, height, bytes, senderIsLegacyAuthority, tx) {
-  const { dispatch } = await getSpecPolicy();
+  const { dispatch, ValidationError } = await getSpecPolicy();
   let dispatched;
   try {
     dispatched = dispatch(bytes);
   } catch (error) {
-    // A malformed or out-of-range message is rejected at the parse boundary.
-    // Log and skip it — don't apply it, and don't abort the rest of the batch.
-    log.warn(`Rejected soft-fork message ${txid} at height ${height}: ${error.message}`);
-    return;
+    // Two entirely different failures arrive here, and only the class separates them.
+    //
+    // A ValidationError is the parse boundary refusing the payload: the sender put
+    // something malformed or out of range on chain. Log it against the sender, skip
+    // the message, and leave the rest of the batch alone — that is the case this
+    // handler was written for.
+    //
+    // Anything else is ours: a coding TypeError inside spec-policy, a stale dispatch
+    // table, a contract mismatch. Reporting that as "Rejected soft-fork message" is
+    // what let one defect skip every price message on every node while every log line
+    // blamed the foundation for sending garbage. Name it as our own and let it out —
+    // the callers that can carry on (processInsight) already log and continue; the one
+    // that cannot (bootstrapSoftForks) should not paper over a broken parser.
+    if (ValidationError && error instanceof ValidationError) {
+      log.warn(`Rejected soft-fork message ${txid} at height ${height}: ${error.message}`);
+      return;
+    }
+    log.error(
+      `Soft-fork parser failed on ${txid} at height ${height} — this is a FluxOS/spec-policy `
+      + `defect, not a bad message: ${error.message}`,
+    );
+    log.error(error);
+    throw error;
   }
   const { kind, message } = dispatched;
 
@@ -308,10 +362,11 @@ async function processSoftFork(txid, height, bytes, senderIsLegacyAuthority, tx)
     case 'price':
       if (!isMessageAuthority(tx)) return;
       log.info(`PriceMessage at height ${height}: ${txid}`);
-      await storeToCollection(priceMessagesCollection, { txid, height, message });
-      if (priceOracleState.getPriceMessageHistory()) {
-        priceOracleState.getPriceMessageHistory().add(message, height);
-      }
+      await applySoftForkMessage(
+        priceMessagesCollection,
+        { txid, height, message },
+        priceOracleState.getPriceMessageHistory(),
+      );
       break;
     case 'rate':
       if (!isOracleSigner(tx, height)) {
@@ -319,42 +374,47 @@ async function processSoftFork(txid, height, bytes, senderIsLegacyAuthority, tx)
         return;
       }
       log.info(`RateMessage at height ${height}: ${txid}`);
-      await storeToCollection(rateMessagesCollection, { txid, height, message });
-      if (priceOracleState.getRateMessageHistory()) {
-        priceOracleState.getRateMessageHistory().add(message, height);
-      }
+      await applySoftForkMessage(
+        rateMessagesCollection,
+        { txid, height, message },
+        priceOracleState.getRateMessageHistory(),
+      );
       break;
     case 'price-modifier':
       if (!isMessageAuthority(tx)) return;
       log.info(`PriceModifierMessage at height ${height}: ${txid}`);
-      await storeToCollection(priceModifierMessagesCollection, { txid, height, message });
-      if (priceOracleState.getPriceModifierHistory()) {
-        priceOracleState.getPriceModifierHistory().add(message, height);
-      }
+      await applySoftForkMessage(
+        priceModifierMessagesCollection,
+        { txid, height, message },
+        priceOracleState.getPriceModifierHistory(),
+      );
       break;
     case 'oracle-key':
       if (!isMessageAuthority(tx)) return;
       log.info(`OracleKeyMessage at height ${height}: ${txid}`);
-      await storeToCollection(oracleKeyMessagesCollection, { txid, height, message });
-      if (priceOracleState.getOracleKeyHistory()) {
-        priceOracleState.getOracleKeyHistory().add(message, height);
-      }
+      await applySoftForkMessage(
+        oracleKeyMessagesCollection,
+        { txid, height, message },
+        priceOracleState.getOracleKeyHistory(),
+      );
       break;
     case 'marketplace-pricing':
       if (!isMessageAuthority(tx)) return;
       log.info(`MarketplacePricingMessage at height ${height}: ${txid}`);
-      await storeToCollection(marketplacePricingMessagesCollection, { txid, height, message });
-      if (priceOracleState.getMarketplacePricingHistory()) {
-        priceOracleState.getMarketplacePricingHistory().add(message, height);
-      }
+      await applySoftForkMessage(
+        marketplacePricingMessagesCollection,
+        { txid, height, message },
+        priceOracleState.getMarketplacePricingHistory(),
+      );
       break;
     case 'policy-group':
       if (!isMessageAuthority(tx)) return;
       log.info(`PolicyGroupMessage at height ${height}: ${txid}`);
-      await storeToCollection(policyGroupMessagesCollection, { txid, height, message });
-      if (entitlementsState.getPolicyGroupHistory()) {
-        entitlementsState.getPolicyGroupHistory().add(message, height);
-      }
+      await applySoftForkMessage(
+        policyGroupMessagesCollection,
+        { txid, height, message },
+        entitlementsState.getPolicyGroupHistory(),
+      );
       break;
     default:
       break;
@@ -1244,6 +1304,15 @@ async function recoverFromError(deepRestore) {
 
 // do a deepRestore of 100 blocks if daemon if enouncters an error (mostly flux daemon was down) or if its initial start of flux
 // use reindexGlobalApps with caution!!!
+/**
+ * Does NOT reject. Every caller starts it fire-and-forget — boot, and the
+ * /explorer/restart, /explorer/reindex and /explorer/rescan routes — so a
+ * rejection escaping would be an unhandled rejection, and with no
+ * process-level handler installed that ends the fluxos process. Everything
+ * awaitable is inside the try, and the catch's own recovery is wrapped, so
+ * there is no path out. Callers therefore need no `.catch()`; if you ever add
+ * an `await` above the try, that stops being true for all four of them at once.
+ */
 async function initiateBlockProcessor(options = {}) {
   const { restoreDatabase = false, deepRestore = false, rescanGlobalApps = false } = options;
 
@@ -1410,8 +1479,21 @@ async function initiateBlockProcessor(options = {}) {
   } catch (error) {
     log.error(error);
     isInInitiationOfBP = false;
-    await recoverFromError(true);
-    await startScanning();
+    // The recovery must not be able to throw out of this catch. Every caller starts
+    // this function as a fire-and-forget promise — boot, and the /explorer/restart,
+    // /explorer/reindex and /explorer/rescan routes — so a rejection escaping here is
+    // an unhandled rejection, and with no process-level handler installed that ends
+    // the fluxos process. recoverFromError reaches the daemon and the database, and
+    // startScanning reaches the daemon, so both can fail exactly when this handler is
+    // running: the path that runs *because* something already went wrong is the one
+    // that cannot be allowed to throw.
+    try {
+      await recoverFromError(true);
+      await startScanning();
+    } catch (recoveryError) {
+      log.error('Block processor recovery failed — the scan is not running');
+      log.error(recoveryError);
+    }
   }
 }
 
@@ -1441,6 +1523,9 @@ async function stopBlockProcessing() {
  */
 async function restartBlockProcessing() {
   await stopBlockProcessing();
+  // Deliberately not awaited — the caller is an HTTP handler that answers as soon as
+  // the restart is under way. Not awaited still means handled: a bare floating promise
+  // turns any escape into an unhandled rejection, which takes the process down.
   initiateBlockProcessor({ restoreDatabase: true });
 }
 
@@ -1466,6 +1551,8 @@ async function reindexExplorer(options = {}) {
     operationBlocked = false;
   }
 
+  // Not awaited: this returns to the caller while the scan runs. Safe to leave
+  // unhandled because initiateBlockProcessor does not reject — see its docstring.
   initiateBlockProcessor({
     restoreDatabase: true,
     rescanGlobalApps: options.rescanGlobalApps === true,
@@ -1505,6 +1592,8 @@ async function rescanExplorer(options = {}) {
     operationBlocked = false;
   }
 
+  // Not awaited: this returns to the caller while the scan runs. Safe to leave
+  // unhandled because initiateBlockProcessor does not reject — see its docstring.
   initiateBlockProcessor({
     restoreDatabase: true,
     rescanGlobalApps: options.rescanGlobalApps === true,
@@ -1656,6 +1745,7 @@ module.exports = {
   handleChainReorg,
 
   // exports for testing purposes
+  processSoftFork,
   bootstrapSoftForks,
   bootstrapAppHashes,
   getPriceSpecForHeight,

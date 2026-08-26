@@ -10,7 +10,7 @@ const fluxCommunicationMessagesSender = require('../fluxCommunicationMessagesSen
 const serviceHelper = require('../serviceHelper');
 const daemonServiceMiscRpcs = require('../daemonService/daemonServiceMiscRpcs');
 const daemonServiceBlockchainRpcs = require('../daemonService/daemonServiceBlockchainRpcs');
-const { getSpecBackend } = require('../utils/specLibs');
+const { getSpec, getSpecBackend } = require('../utils/specLibs');
 const { resolveSpec, resolveInstantiatedSpec } = require('../utils/specCutover');
 const { regimeFor } = require('../pricing/pricingRegime');
 const appsRepository = require('../appDatabase/appsRepository');
@@ -498,75 +498,110 @@ async function checkAndRequestApp(hash, txid, height, valueSat, blockTime = null
       return true;
     }
 
-    // Pricing — the spec is a class instance on confirmedEvent.spec. Pricing
-    // reads the cleartext components (DeploymentSpec.fromSpec), so an encrypted
-    // (enterprise) spec must be decrypted first. Identity/lookups still use the
-    // encrypted wire form (no decrypt needed).
+    // Pricing and the registry write, held in their own try.
+    //
+    // Everything above this point is "can this message be resolved at all". Below it,
+    // the message IS resolved: it is already a permanent message and its hash is
+    // already flagged (appHashHasMessage, above). So the outer catch's `return false`
+    // is not just uninformative here, it is untrue — it tells insertAndRequestAppHashes
+    // to raise HASH_UNRESOLVED and re-request a message this node has stored, and the
+    // very next call short-circuits on the `existing` branch and answers true. The part
+    // that actually failed, the registry write, is never retried by anyone and leaves
+    // no trace but a log line shared with every other internal failure.
+    //
+    // A pricing regime reaches spec-policy, the price histories and the database. Its
+    // failure is our side going wrong, not the sender's message being unresolvable, and
+    // it must read that way in the log.
     const { spec } = instantiated;
-    // Cleartext apps resolve to their own spec; encrypted apps to a
-    // DecryptedCanonicalSpec the pricer reads through.
-    const pricingSpec = await resolveInstantiatedSpec(instantiated);
-    if (!pricingSpec) {
-      log.error(`checkAndRequestApp - could not resolve spec for ${instantiated.name} to compute fee`);
-      return true;
-    }
-    if (confirmedEvent.isRegistration) {
-      const requiredSats = await computeRegistrationFee(pricingSpec, height);
-      if (requiredSats === 0n) {
-        // Fail-closed: a registration always pays for its TTL, so a fee of 0 can
-        // only mean pricing isn't in force yet (no PriceMessage on chain for v9).
-        // Reject rather than mint a free app. Legacy (v1-v8) always has a minPrice
-        // floor, so this only ever catches the un-bootstrapped v9 case.
-        log.warn(`App ${hash} registration rejected: pricing not available at height ${height}`);
-      } else if (BigInt(valueSat) >= requiredSats) {
-        // The app's instance identity, minted here because this is the one place
-        // that holds both halves: the name being registered and the transaction
-        // registering it. An update never reaches this branch, so it can never
-        // re-mint one against its own txid.
-        const uuid = mintAppUuid(instantiated.name, txid);
-        const registered = InstantiatedSpec.fromEvent({
-          ...confirmedEvent.toInstantiatedSpec(),
-          uuid,
-          identity: identityFromUuid(uuid),
+    try {
+      // Pricing — the spec is a class instance on confirmedEvent.spec. Pricing
+      // reads the cleartext components (DeploymentSpec.fromSpec), so an encrypted
+      // (enterprise) spec must be decrypted first. Identity/lookups still use the
+      // encrypted wire form (no decrypt needed).
+      // Cleartext apps resolve to their own spec; encrypted apps to a
+      // DecryptedCanonicalSpec the pricer reads through.
+      const pricingSpec = await resolveInstantiatedSpec(instantiated);
+      if (!pricingSpec) {
+        log.error(`checkAndRequestApp - could not resolve spec for ${instantiated.name} to compute fee`);
+        return true;
+      }
+      if (confirmedEvent.isRegistration) {
+        const requiredSats = await computeRegistrationFee(pricingSpec, height);
+        if (requiredSats === 0n) {
+          // Fail-closed: a registration always pays for its TTL, so a fee of 0 can
+          // only mean pricing isn't in force yet (no PriceMessage on chain for v9).
+          // Reject rather than mint a free app. Legacy (v1-v8) always has a minPrice
+          // floor, so this only ever catches the un-bootstrapped v9 case.
+          log.warn(`App ${hash} registration rejected: pricing not available at height ${height}`);
+        } else if (BigInt(valueSat) >= requiredSats) {
+          // The app's instance identity, minted here because this is the one place
+          // that holds both halves: the name being registered and the transaction
+          // registering it. An update never reaches this branch, so it can never
+          // re-mint one against its own txid.
+          const uuid = mintAppUuid(instantiated.name, txid);
+          const registered = InstantiatedSpec.fromEvent({
+            ...confirmedEvent.toInstantiatedSpec(),
+            uuid,
+            identity: identityFromUuid(uuid),
+          });
+          await insertAppSpecifications(registered.serialize());
+          await processPendingUpdates(instantiated.name);
+        } else {
+          log.warn(`App ${hash} registration underpaid: ${valueSat} < ${requiredSats}`);
+        }
+      } else {
+        // The state this update supersedes, and so what it is priced against.
+        // Each regime resolves it its own way — this message is already stored
+        // above, and whether that matters is a property of the economics, not of
+        // this function.
+        const regime = await regimeFor(pricingSpec);
+        const prevMessage = await regime.supersededMessage(spec.name, {
+          height, timestamp: tempMessage.timestamp,
         });
-        await insertAppSpecifications(registered.serialize());
-        await processPendingUpdates(instantiated.name);
-      } else {
-        log.warn(`App ${hash} registration underpaid: ${valueSat} < ${requiredSats}`);
-      }
-    } else {
-      // The state this update supersedes, and so what it is priced against.
-      // Each regime resolves it its own way — this message is already stored
-      // above, and whether that matters is a property of the economics, not of
-      // this function.
-      const regime = await regimeFor(pricingSpec);
-      const prevMessage = await regime.supersededMessage(spec.name, {
-        height, timestamp: tempMessage.timestamp,
-      });
-      if (!prevMessage) {
-        log.error(`Last permanent message for ${spec.name} not found`);
-        return true;
-      }
-      const prevSpecs = prevMessage.appSpecifications;
-      // resolveSpec deserializes and decrypts (if encrypted) the previous spec —
-      // computeUpdateFee prices the previous spec too.
-      const prevSpec = await resolveSpec(prevSpecs);
-      if (!prevSpec) {
-        log.error(`checkAndRequestApp - could not resolve previous spec for ${spec.name} to compute update fee`);
-        return true;
-      }
-      const requiredSats = await computeUpdateFee(
-        pricingSpec, prevSpec, height, prevMessage.height,
-        prevMessage.registeredAt || 0, confirmedBlockTime,
-      );
-      if (BigInt(valueSat) >= requiredSats) {
-        const stored = instantiatedForStorage(
-          InstantiatedSpec, confirmedEvent, requiredSats, prevMessage,
+        if (!prevMessage) {
+          log.error(`Last permanent message for ${spec.name} not found`);
+          return true;
+        }
+        const prevSpecs = prevMessage.appSpecifications;
+        // resolveSpec deserializes and decrypts (if encrypted) the previous spec —
+        // computeUpdateFee prices the previous spec too.
+        const prevSpec = await resolveSpec(prevSpecs);
+        if (!prevSpec) {
+          log.error(`checkAndRequestApp - could not resolve previous spec for ${spec.name} to compute update fee`);
+          return true;
+        }
+        const requiredSats = await computeUpdateFee(
+          pricingSpec, prevSpec, height, prevMessage.height,
+          prevMessage.registeredAt || 0, confirmedBlockTime,
         );
-        await updateAppSpecifications(stored.serialize());
-      } else {
-        log.warn(`App ${hash} update underpaid: ${valueSat} < ${requiredSats}`);
+        if (BigInt(valueSat) >= requiredSats) {
+          const stored = instantiatedForStorage(
+            InstantiatedSpec, confirmedEvent, requiredSats, prevMessage,
+          );
+          await updateAppSpecifications(stored.serialize());
+        } else {
+          log.warn(`App ${hash} update underpaid: ${valueSat} < ${requiredSats}`);
+        }
       }
+    } catch (pricingError) {
+      const { ValidationError } = await getSpec();
+      const kind = ValidationError && pricingError instanceof ValidationError
+        // The spec reached the pricer and the pricer refused it. That is the message's
+        // own content being wrong, not pricing being unavailable — nothing about this
+        // app will ever price, so there is nothing to retry.
+        ? 'the spec cannot be priced'
+        // Anything else is ours: a regime with no implementation for the declared
+        // model, a price history that is not in force, a coding fault in the pricer.
+        : 'PRICING/POLICY FAILURE - not a message problem';
+      log.error(
+        `checkAndRequestApp - ${kind}: ${spec.name} (${hash}) at height ${height}. `
+        + `The permanent message is stored but the app registry was NOT updated: ${pricingError.message}`,
+      );
+      log.error(pricingError);
+      // True, not false: the message resolved. Answering false would send the node
+      // hunting the network for a message it already holds, and would say nothing
+      // about the write that was actually lost — the line above is where that lives.
+      return true;
     }
 
     return true;
