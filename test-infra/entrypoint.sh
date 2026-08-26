@@ -190,7 +190,20 @@ EOF
     exit 3
   fi
   echo "[entrypoint] setup complete, handing off to systemd as pid 1"
-  exec /lib/systemd/systemd
+  # journal-or-kmsg, not the default: systemd's own messages go to the journal once
+  # journald exists, and to the KERNEL RING BUFFER before it does — which is the exact
+  # window a boot failure happens in. The default target leaves that window writing to
+  # /dev/console, and a container without a TTY has none, so a systemd that dies before
+  # journald is completely mute. That silence is what made the exit-255 class take
+  # three gates and six reproduction attempts: cap-dmesg.log was 0 bytes every time,
+  # not because nothing went wrong but because nothing could say so.
+  #
+  # The harness already captures the ring buffer (`sudo dmesg -wT` in run-parallel), so
+  # this needs no new plumbing. Measured cost on a healthy boot: 63 lines per node,
+  # against a default level; the alternative that costs 1 line (--log-level=err) buys
+  # it by dropping systemd's info messages out of the journal too, which is a worse
+  # trade than the noise.
+  exec /lib/systemd/systemd --log-target=journal-or-kmsg
 fi
 
 # cgroup v2: move existing processes to an init sub-cgroup so dockerd
