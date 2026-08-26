@@ -89,10 +89,26 @@ describe('mesh ordinal slots — claim, identity, replacement inheritance', func
       .map((m) => ({ port: Number(m[3]), target: m[4].replace(/\.$/, '') }));
   }
 
-  // The named cluster set, queried from a holder's container.
+  // The named cluster set, queried from a holder's container. Strict: a missing
+  // container is an error, because an ASSERTION on the SRV set must never pass or
+  // fail for want of somewhere to ask.
   async function srvTargets(clientIndex) {
     const out = await inApp(clientIndex, `/bin/busybox nslookup -type=srv _mesh-echo._tcp.web.${name}.mesh.flux ${RESOLVER_ADDR}`);
     return srvRows(out.stdout).map((r) => r.target).sort();
+  }
+
+  // The polling form. A member's container is legitimately absent for a moment while
+  // the drift-rebuild engine re-identifies it, and this suite waits ACROSS exactly
+  // those moments — so "no container yet" is the wait's not-yet, not its failure.
+  // srvTargets throws there (requireAppContainerName does), which kills the wait
+  // outright instead of polling again: gate 8's test 2 died that way, 8 seconds into
+  // a 60-second convergence window, on a fleet that then converged fine. Scoped to
+  // the container lookup deliberately — a docker exec that fails INSIDE a live
+  // container is a real fault and still surfaces.
+  async function srvTargetsIfUp(clientIndex) {
+    const containerName = await appContainerName(clientIndex).catch(() => null);
+    if (!containerName) return null;
+    return srvTargets(clientIndex);
   }
 
   const FULL_SET = () => [
@@ -195,7 +211,7 @@ describe('mesh ordinal slots — claim, identity, replacement inheritance', func
     // The wait above completes the moment each member sees its OWN slot; one
     // node's view of EVERYONE's slots trails the last claim by a broadcast, so
     // the full SRV set is a convergence fact, not an instant one.
-    await waitFor(async () => (await srvTargets(holders[0])).length === FULL_SET().length,
+    await waitFor(async () => (await srvTargetsIfUp(holders[0]))?.length === FULL_SET().length,
       { timeout: 60000, interval: 3000, label: 'holder 0 serves the full SRV set' });
     expect(await srvTargets(holders[0])).to.deep.equal(FULL_SET());
   });
@@ -225,7 +241,7 @@ describe('mesh ordinal slots — claim, identity, replacement inheritance', func
     const [holder] = await holderIndices();
     // Same convergence fact as the SRV set: the group answer carries a peer
     // only once the holder has ingested that peer's claim.
-    await waitFor(async () => (await srvTargets(holder)).length === FULL_SET().length,
+    await waitFor(async () => (await srvTargetsIfUp(holder))?.length === FULL_SET().length,
       { timeout: 60000, interval: 3000, label: 'the group name serves every member' });
     const groupOut = await inApp(holder, `/bin/busybox nslookup web.${name}.mesh.flux ${RESOLVER_ADDR}`);
     const envOut = await inApp(holder, '/bin/busybox sh -c "/bin/busybox env | /bin/busybox grep FLUX_MESH_SELF_IP"');
@@ -296,8 +312,8 @@ describe('mesh ordinal slots — claim, identity, replacement inheritance', func
     // The named cluster set is whole again: exactly three ordinal targets.
     const survivor = holders.find((i) => i !== victim);
     await waitFor(async () => {
-      const targets = await srvTargets(survivor);
-      return targets.length === 3 && targets.every((t, idx) => t === FULL_SET()[idx]);
+      const targets = await srvTargetsIfUp(survivor);
+      return targets?.length === 3 && targets.every((t, idx) => t === FULL_SET()[idx]);
     }, { timeout: 180000, interval: 5000, label: 'SRV names exactly the three ordinals again' });
   });
 
