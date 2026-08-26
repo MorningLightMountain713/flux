@@ -9,6 +9,7 @@
 // The unit names mirror production: `fluxos` is load-bearing (the admin log
 // endpoints shell out to `journalctl -u fluxos`).
 import { execInContainer } from './container.js';
+import { waitFor } from './wait.js';
 
 const FLUXOS_UNIT = 'fluxos';
 const DOCKERD_UNIT = 'dockerd';
@@ -16,17 +17,13 @@ const DOCKERD_UNIT = 'dockerd';
 // Single-quote for `sh -c`: end the quote, escape the quote, reopen.
 const shQuote = (s) => `'${String(s).replace(/'/g, "'\\''")}'`;
 
-const sleep = (ms) => new Promise((res) => setTimeout(res, ms));
 
+// Polling is waitFor's job, not this module's. A private copy is a second set of
+// semantics for one behaviour, and the two had already diverged: waitFor knows an
+// absence from a fault (NotPresentError) and this did not, so a probe written here
+// tomorrow would silently inherit the older, worse contract. One helper, one meaning.
 async function poll(fn, { timeout, interval, label }) {
-  const start = Date.now();
-  for (;;) {
-    // eslint-disable-next-line no-await-in-loop
-    if (await fn()) return;
-    if (Date.now() - start >= timeout) throw new Error(`${label}: not satisfied within ${timeout}ms`);
-    // eslint-disable-next-line no-await-in-loop
-    await sleep(interval);
-  }
+  await waitFor(fn, { timeout, interval, label });
 }
 
 /** `systemctl is-active <unit>` — 'active' | 'inactive' | 'failed' | 'activating' | … */
