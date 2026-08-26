@@ -2,13 +2,14 @@
 import { describe, it, before, after } from 'mocha';
 import { expect } from 'chai';
 import { createTestEnv } from '../framework/test-env.js';
-import { bootAndPeer } from '../framework/reconciler-suite.js';
+import { bootAndPeer, redialAndPeer } from '../framework/reconciler-suite.js';
 import { registerEncryptedV9App } from '../framework/content-helper.js';
 import { queueAppTx, advanceBlocks } from '../framework/daemon-control.js';
 import { waitFor, waitForAppInstalled } from '../framework/wait.js';
 import { authenticate } from '../auth.js';
 import { appOwnerKey } from '../framework/keys.js';
 import { execInContainer, appContainersFor, getAppNetwork, requireAppContainerName } from '../framework/container.js';
+import { restartFluxos, startFluxos } from '../framework/systemd-control.js';
 import { pushBusybox } from '../framework/registry-helper.js';
 import { REGISTRY_REPO_HOST, getSubnetConfig } from '../framework/subnet-config.js';
 
@@ -239,7 +240,17 @@ describe('mesh ordinal slots — claim, identity, replacement inheritance', func
     this.timeout(420000);
     const holders = await holderIndices();
     const beforeSlots = await Promise.all(holders.map((i) => ownSlotOf(i)));
-    await execInContainer(env.clients[holders[1]].container, 'systemctl restart fluxos');
+    // Discovery does not autostart in-harness and a restarted node opens no
+    // outbound sockets of its own, so it comes back holding only whatever
+    // inbound socket a peer happens to re-dial - one, in a ring, against a
+    // minOutgoing+minIncoming floor of two. A node under the floor never arms
+    // its app-running broadcast, so it stops announcing its location and its
+    // ordinal ages out of the fleet's SRV answer at locationTtlS while every
+    // local view still reads correct. Hold it to the settled-discovering-
+    // peered contract before asserting anything on the mesh.
+    const markers = env.clients.map((c) => c.getLastEventId());
+    await restartFluxos(env.clients[holders[1]].container);
+    await redialAndPeer(env, [holders[1]], markers);
     await waitFor(async () => {
       const status = await meshStatus(holders[1]);
       return status.status === 'success'
@@ -302,8 +313,12 @@ describe('mesh ordinal slots — claim, identity, replacement inheritance', func
     const spareSlots = await Promise.all(holders.map((i) => ownSlotOf(i)));
     const victim = env.clients.findIndex((_, i) => !holders.includes(i));
     expect(victim, 'the stopped node is identifiable').to.be.at.least(0);
-    await execInContainer(env.clients[victim].container,
-      'systemctl start fluxos');
+    // The returned node has to be back in the mesh for this assertion to mean
+    // anything: deterministic arbitration keeps the slot with the replacement
+    // only if the victim can see the replacement's claim at all.
+    const markers = env.clients.map((c) => c.getLastEventId());
+    await startFluxos(env.clients[victim].container);
+    await redialAndPeer(env, [victim], markers);
 
     // Settled means the returned node COMPLETED a mesh pass in this process
     // lifetime and resolved itself without a stolen slot. lastPass is
