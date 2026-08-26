@@ -199,10 +199,13 @@ EOF
   # not because nothing went wrong but because nothing could say so.
   #
   # The harness already captures the ring buffer (`sudo dmesg -wT` in run-parallel), so
-  # this needs no new plumbing. Measured cost on a healthy boot: 63 lines per node,
-  # against a default level; the alternative that costs 1 line (--log-level=err) buys
-  # it by dropping systemd's info messages out of the journal too, which is a worse
-  # trade than the noise.
+  # this needs no new plumbing, and it costs NOTHING on a healthy boot: the fallback
+  # only fires when the journal is unavailable, so once journald is up systemd logs
+  # there and kmsg stays empty. Confirmed in gate 11 — six systemd suites booted and
+  # host dmesg carried zero systemd[1] lines. (An earlier estimate of 63 lines per
+  # boot came from a probe that bypassed THIS setup with --entrypoint, so journald was
+  # never configured and everything fell to kmsg — it measured the failure path and
+  # called it the healthy one.)
   exec /lib/systemd/systemd --log-target=journal-or-kmsg
 fi
 
