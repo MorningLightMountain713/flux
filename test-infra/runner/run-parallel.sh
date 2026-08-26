@@ -86,12 +86,13 @@ fi
 # - the silent exit-255 class that went unexplained for three gates and survived
 # six reproduction attempts, because a solo run never exhausts a host-wide pool.
 #
-# The arithmetic is why it was intermittent rather than constant: a full gate peaks
-# at 102 concurrent containers (measured, gates 7 and 8) at 1.27 inotify instances
-# each (measured live) - about 130 against a default ceiling of 128. Demand has been
-# sitting exactly ON the limit, so whether a fleet booted or died came down to who
-# reached it first. 1024 is ~8x the measured peak, which leaves room for wider
-# fleets rather than merely clearing today's number.
+# The arithmetic is why it was intermittent rather than constant. Measured directly
+# once the gauge existed (gate 10): a full gate peaks at 102 concurrent containers
+# and 221 inotify instances - 2.17 each, not the 1.27 a quieter sample suggested.
+# So the harness has been running at 1.7x the default ceiling of 128, and the wonder
+# is not that gates failed but that any passed: containers hold an instance only
+# briefly, so a boot survived or died on the exact overlap. 1024 is 4.6x the measured
+# peak, which leaves room for wider fleets rather than merely clearing today's number.
 INOTIFY_MIN="${E2E_INOTIFY_MAX_USER_INSTANCES:-1024}"
 ino_now=$(sysctl -n fs.inotify.max_user_instances 2>/dev/null || echo 0)
 if [ "$ino_now" -lt "$INOTIFY_MIN" ]; then
