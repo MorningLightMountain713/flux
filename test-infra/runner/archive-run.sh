@@ -86,7 +86,10 @@ echo "archiving $LOG_DIR -> $DEST"
 step "log dir"       "$LOG_DIR"                                    "$DEST/e2e-logs"
 [ -n "$DRIVER_LOG" ] && step "driver log" "$DRIVER_LOG" "$DEST/driver.log"
 step "per-test logs" "$(dirname "$0")/test-logs"                   "$DEST/test-logs"
-step "dbwatch"       /tmp/checkoff-dbwatch.log                     "$DEST/checkoff-dbwatch.log"
+# No dbwatch step. A gate does not produce one and never did: db-watch.js watches a
+# SINGLE node at a few samples a second, which is a targeted-investigation instrument,
+# not a gate one. Copying "if present" here implied a gate ought to have it and made
+# four gates read as though something had gone missing.
 
 [ -n "$S" ] && $S chown -R "$(id -u):$(id -g)" "$DEST"
 
