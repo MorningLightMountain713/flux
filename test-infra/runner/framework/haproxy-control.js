@@ -170,7 +170,9 @@ export async function startHaproxy(networkName, { backends, cas = {} }) {
     } catch (error) {
       // eslint-disable-next-line no-await-in-loop
       const dead = await settledContainerReason(container);
-      if (dead) throw new Error(`haproxy container ${dead} before answering on ${base}`);
+      // URL first: the reason ends in multi-line container logs, and a trailing
+      // clause after them reads as part of haproxy's own output.
+      if (dead) throw new Error(`haproxy at ${base} died before answering: ${dead}`);
       if (Date.now() > deadline) throw new Error(`haproxy did not answer on ${base} within 30000ms (last probe: ${error.message})`);
       // eslint-disable-next-line no-await-in-loop
       await new Promise((resolve) => { setTimeout(resolve, 500); });
