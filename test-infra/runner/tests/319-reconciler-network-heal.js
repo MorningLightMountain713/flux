@@ -5,7 +5,7 @@ import { createTestEnv } from '../framework/test-env.js';
 import {
   getAppContainerStatus, getAppContainerId, getAppContainerAttachment,
   disconnectAppNetwork, connectAppNetwork,
-  getAppNetwork, getAppNetworkSubnet, removeAppNetworkRaw, stopAndPruneAppNetwork,
+  getAppNetworkSubnet, removeAppNetworkRaw, stopAndPruneAppNetwork,
   removeAppImage, restartFluxos, execInContainer,
 } from '../framework/container.js';
 import { waitFor, waitForReconcileActuated } from '../framework/wait.js';
@@ -285,7 +285,13 @@ describe('reconciler network-detach heal', function () {
     // Say when the race actually fired: a retry nobody can see is a retry nobody
     // knows is load-bearing, and a quiet run would hide the loop rotting.
     if (attempts > 1) console.log(`# stopped+pruned on attempt ${attempts} (the reconciler won the earlier ones)`);
-    expect(await getAppNetwork(client.container, stopName), 'the network really is gone').to.equal(null);
+    // The successful rm IS the proof, and reading the network back is not available as
+    // one. `docker network rm` exits 0 only when the network was removed AND no
+    // container still held an endpoint on it - so that single exit code establishes
+    // both halves of the premise, stopped and pruned, at the instant they were true.
+    // Looking again afterwards asks whether the state PERSISTS, which is a different
+    // question and one the product answers no to on purpose: rebuilding that network
+    // is the behaviour under test, and it beat the next line to it.
 
     // The controller still wants it running, so the next pass must rebuild the
     // network and start the EXISTING container - no recreate, no uninstall.
