@@ -115,7 +115,7 @@ describe('relay renewal and the partitioned app island', function () {
           // every node carries it. The harness pins the requirement to the floor
           // already in force so the gate is live under test; production pins it
           // to the release that actually ships the plane.
-          quorumGrantMinFluxOSVersion: '8.13.1',
+          quorumGrantActivationHeight: 2_100_000,
         },
       },
     });
