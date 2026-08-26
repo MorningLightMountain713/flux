@@ -54,14 +54,12 @@ describe('steady-state manifest backstop converges a silently-stale node', funct
       nodes: 5,
       tickerAutostart: false,
       arcane: true,
+      // partitionGroups only returns once the cross-group sockets are gone — until
+      // then the "missed" gossip is queued in TCP, not lost — so that wait IS peer
+      // liveness, and declaring the partition is what compresses it.
+      timing: { partitions: true },
       configOverrides: {
         confirmation: { daemonStaleMs: 300000 },
-        // partitionGroups only returns once the cross-group sockets are gone — until then
-        // the "missed" gossip is queued in TCP, not lost. That wait IS peer liveness, 45s
-        // on production defaults; compressed here like every other cadence in this suite,
-        // to ~9s. wsMaxMissedPongs stays at 3 deliberately: three consecutive misses is a
-        // far safer signal on a loaded box than one slow round-trip.
-        peers: { wsPingIntervalMs: 3000 },
         fluxapps: {
           appSyncPeerThreshold: 3,
           appSyncDegradedThreshold: 0, // never degrade on peer count — the minority stays "above the floor"
