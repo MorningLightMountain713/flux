@@ -270,9 +270,14 @@ describe('reconciler network-detach heal', function () {
     // release. Both halves go in one exec, and losing anyway is retried rather than
     // asserted on: sampling a transient state is what this is, and the alternative is
     // asserting against whichever state we happened to land in.
+    // Sized against the restart ladder, not picked. Every lost attempt is another
+    // restart, which walks the reconciler further down crashBackoffDelaysMs — so each
+    // attempt faces a WIDER window than the last, and the loop converges because the
+    // product's own backoff opens the door. The ladder is five long; a run with the
+    // window deliberately widened to 8s needed all five, so the bound sits above it.
     let pruned = { ok: false, output: 'not attempted' };
     let attempts = 0;
-    for (; attempts < 5 && !pruned.ok; attempts += 1) {
+    for (; attempts < 8 && !pruned.ok; attempts += 1) {
       // eslint-disable-next-line no-await-in-loop
       pruned = await stopAndPruneAppNetwork(client.container, stopName, stopName);
     }
