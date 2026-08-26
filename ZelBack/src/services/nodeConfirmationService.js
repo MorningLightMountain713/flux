@@ -216,6 +216,7 @@ async function reconcile(previous, statusObserved) {
     messageCapable = false;
     if (prevMessageCapable !== messageCapable) {
       log.info('nodeConfirmationService - Node not confirmed by daemon, message capability lost');
+      fluxEventBus.publish('messageCapability:changed', { capable: messageCapable });
       for (const cb of messageCapabilityListeners) {
         try { cb(false); } catch (e) { log.error(e); }
       }
