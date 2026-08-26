@@ -49,6 +49,10 @@ describe('installing claims: election losers release their seats by cleared broa
     this.timeout(600000);
     env = await createTestEnv({
       hookCtx: this, nodes: 5, tickerAutostart: false, arcane: true,
+      // The wire is declared, not passed to setLatency, because things that must
+      // sit above the round trip — the peer-liveness budget most of all — are
+      // boot-time config and have to be derived before the fleet starts.
+      timing: { wireLatency: { delay: '4000ms 200ms' } },
       configOverrides: {
         fluxapps: {
           minOutgoing: 2,
@@ -75,7 +79,7 @@ describe('installing claims: election losers release their seats by cleared broa
     // spread measures ~2.7s (gate-5 capture: two nodes woke together, three
     // woke 2.7s later, saw the standing claims and correctly stood down - the
     // premise collapsed, not the product). Sized to beat the GATE's spread.
-    await setLatency(env, { delay: '4000ms 200ms' });
+    await setLatency(env);
 
     await pushImage(appName, 'v1');
 

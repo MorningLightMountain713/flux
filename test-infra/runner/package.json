@@ -5,7 +5,8 @@
   "type": "module",
   "description": "E2E test runner and helpers for FluxOS test network",
   "scripts": {
-    "test": "mocha --timeout 120000 --slow 10000 tests/**/*.js"
+    "test": "mocha --timeout 120000 --slow 10000 tests/**/*.js",
+    "test:unit": "node --test unit/*.test.js"
   },
   "dependencies": {
     "@hpke/core": "~1.9.0",

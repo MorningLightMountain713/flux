@@ -88,6 +88,10 @@ describe('relay renewal and the partitioned app island', function () {
       // production runs. The harness default is the polling path, whose
       // history carries no chain anchors and can never answer at-height.
       zmqTopics: ALL_ZMQ_TOPICS,
+      // This suite partitions four times, and partitionGroups holds until the
+      // cross-group sockets are actually gone — that wait IS peer liveness, so it
+      // is declared rather than left on the uncompressed fleet default.
+      timing: { partitions: true },
       configOverrides: {
         fluxapps: {
           quorumGrantMastership: true,

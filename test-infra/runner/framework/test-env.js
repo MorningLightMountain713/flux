@@ -19,6 +19,7 @@ import { waitFor } from './wait.js';
 import { HttpPollWaitStrategy } from './http-wait-strategy.js';
 import { TcpPollWaitStrategy } from './tcp-wait-strategy.js';
 import { getSubnetConfig, REGISTRY_ALIAS, STORAGE_HOST } from './subnet-config.js';
+import { deriveTiming, validateTiming } from './timing.js';
 import { closeDb } from './db-client.js';
 import {
   clearInfraDeath, infraDeathError, reportInfraDeath, sleepUnlessInfraDead,
@@ -910,6 +911,7 @@ export async function createTestEnv({
   hookCtx = null, nodes = 1, deferredNodes = 0, legacyNodes = [], unprivilegedNodes = [], stubPeers = [], syncedNodes = null, silentSyncPeers = [],
   unverifiableSyncPeers = [], policyUnawarePeers = [], stubPeeredWith = null,
   configOverrides = null, nodeConfigOverrides = {}, nodeTiers = null, dataCenter = true,
+  timing = null,
   tickerAutostart = false, discoveryAutostart = false, nodeStatusOverrides = {},
   rpcFailures = [], bootContext = 'running', initialHeight = DEFAULT_INITIAL_HEIGHT, syncthing = 'stub', aptSeeded = true, aptBadSource = false,
   geolocation = {}, locationTable = null, staticIp = true, policy = null, policySeeds = null,
@@ -1158,6 +1160,16 @@ export async function createTestEnv({
   if (aptBadSource && legacyNodes.length === 0) {
     throw new Error('createTestEnv: aptBadSource needs legacyNodes - no other node type runs apt');
   }
+  // And the suite's own declared physics, for the third time the same reasoning:
+  // a wire whose liveness budget cannot hold a healthy link, or a confirmation
+  // window the node list is already past, is an authoring error and belongs here —
+  // before the boot lock, the network and the containers — not as a dead socket or
+  // an unreachable premise discovered a fleet boot later. The derived layer goes
+  // UNDER the suite's own overrides so an explicit value still wins; the check runs
+  // on what the merge actually produced.
+  const { overrides: timingOverrides, wire: declaredWire } = deriveTiming(timing, { initialHeight });
+  const mergedOverrides = mergeConfigs(timingOverrides, configOverrides);
+  validateTiming(timing, mergedOverrides, { initialHeight });
   // The boot-lock queue wait must not count against the suite's hook budget.
   // Mocha enforces a hook's timeout twice: the watchdog timer (which would fire
   // MID-QUEUE whenever the queue alone outlasts the budget), and a completion-time
@@ -1192,6 +1204,10 @@ export async function createTestEnv({
   env.ownerSuite = (hookCtx && typeof hookCtx.runnable === 'function')
     ? (hookCtx.runnable()?.parent ?? null)
     : null;
+  // The wire the suite declared, so setLatency applies it without the delay spec
+  // being written down a second time — the duplication that let 0ba3b0e10 raise
+  // one copy and leave every number derived from it behind.
+  env.wire = declaredWire;
   activeEnvs.add(env);
   // A previous env's death must not fail this one's waits.
   clearInfraDeath();
@@ -1201,7 +1217,7 @@ export async function createTestEnv({
     // mongo starts, i.e. inside the fleet boot, where the waits at risk are the
     // boot's own.
     await startInfraDeathWatch(env);
-    await _buildEnv(env, nodes, deferredNodes, legacyNodes, unprivilegedNodes, stubPeers, silentSyncPeers, unverifiableSyncPeers, policyUnawarePeers, stubPeerings, configOverrides, mergedNodeOverrides, nodeTiers, dataCenter, tickerAutostart, discoveryAutostart, nodeStatusOverrides, rpcFailures, bootContext, initialHeight, syncthing, aptSeeded, aptBadSource, geolocation, locationTable, staticIp, policy, policySeeds, policyReachable, arcane, shutdowndMock, telemetrydMock, systemdMode, telemetrydReal, shutdowndReal, dnsdReal, zmqTopics, nodeZmqTopics, { perNodeZmq });
+    await _buildEnv(env, nodes, deferredNodes, legacyNodes, unprivilegedNodes, stubPeers, silentSyncPeers, unverifiableSyncPeers, policyUnawarePeers, stubPeerings, mergedOverrides, mergedNodeOverrides, nodeTiers, dataCenter, tickerAutostart, discoveryAutostart, nodeStatusOverrides, rpcFailures, bootContext, initialHeight, syncthing, aptSeeded, aptBadSource, geolocation, locationTable, staticIp, policy, policySeeds, policyReachable, arcane, shutdowndMock, telemetrydMock, systemdMode, telemetrydReal, shutdowndReal, dnsdReal, zmqTopics, nodeZmqTopics, { perNodeZmq });
     return env;
   } catch (err) {
     // Boot failed: the env owns everything started so far. The shared teardown
