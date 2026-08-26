@@ -2,6 +2,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import axios from 'axios';
+import { getContainerRuntimeClient } from 'testcontainers';
 import { getSubnetConfig } from './subnet-config.js';
 import { StaticIpContainer } from './test-env.js';
 
@@ -73,6 +74,47 @@ export function renderConfig(backends) {
   return `${lines.join('\n')}\n`;
 }
 
+// Whether the container has SETTLED into a non-running state, and why — with its
+// logs, because for haproxy the reason is a config error printed at exit and the
+// record dies with the container. Returns null for anything still running, still
+// being created, or an inspect that failed transiently: only a settled container is
+// death, and a false positive here would fail a fleet that was merely slow.
+async function settledContainerReason(container) {
+  let state;
+  try {
+    // Liveness is the one thing StartedTestContainer cannot answer: its interface
+    // (testcontainers 11.14) offers logs, exec, ports and ids, and nothing that
+    // reports State or an exit code. getContainerRuntimeClient is the package's own
+    // sanctioned route to dockerode and already how this framework reaches networks
+    // and volumes — so this is the supported escape hatch, not a bypass of it.
+    const client = await getContainerRuntimeClient();
+    ({ State: state } = await client.container.dockerode.getContainer(container.getId()).inspect());
+  } catch {
+    return null; // transient — the deadline stays the backstop
+  }
+  if (!state || state.Running || state.Status === 'created') return null;
+
+  let tail = '(no logs)';
+  try {
+    // testcontainers' own logs(), not dockerode's: it already demuxes docker's
+    // 8-byte non-TTY frame headers (docker-container-client demuxStream), so the
+    // stream is text and there is nothing here to hand-decode.
+    const stream = await container.logs({ tail: 40 });
+    const chunks = [];
+    // eslint-disable-next-line no-restricted-syntax
+    for await (const chunk of stream) chunks.push(chunk);
+    const text = chunks.join('').trim();
+    if (text) tail = text.split('\n').slice(-20).join('\n');
+  } catch {
+    // keep '(no logs)' — the exit code alone is still worth reporting
+  }
+
+  const parts = [`status=${state.Status}`, `exitCode=${state.ExitCode}`];
+  if (state.OOMKilled) parts.push('OOMKilled=true');
+  if (state.Error) parts.push(`error=${state.Error}`);
+  return `${parts.join(' ')}\n--- haproxy container logs ---\n${tail}`;
+}
+
 /**
  * Start HAProxy on the run's network with the given backends and CA files.
  *
@@ -109,6 +151,16 @@ export async function startHaproxy(networkName, { backends, cas = {} }) {
   // haproxy binds a moment after the container starts. Any HTTP answer means the
   // frontend is up — a 503 is a perfectly good sign of life here, since it is
   // also what a backend that failed verification produces.
+  //
+  // The poll also asks whether the container is still ALIVE, for the reason the node
+  // boot wait does (http-wait-strategy): haproxy VALIDATES ITS CONFIG AT STARTUP and
+  // exits non-zero on a bad one, so a dead haproxy is otherwise polled for the full
+  // allowance and then reported as a timeout — the message naming the last 2s probe
+  // rather than the exit that made every probe pointless. Its logs carry the config
+  // error verbatim, which is the whole diagnosis, and they die with the container.
+  // Checked AFTER the probe, so a frontend that answered and then exited on its own
+  // teardown still counts as ready; only a SETTLED container is death, since
+  // `created` is the pre-start moment and inspect can fail transiently.
   const deadline = Date.now() + 30000;
   for (;;) {
     try {
@@ -116,7 +168,10 @@ export async function startHaproxy(networkName, { backends, cas = {} }) {
       await axios.get(base, { validateStatus: () => true, timeout: 2000 });
       break;
     } catch (error) {
-      if (Date.now() > deadline) throw new Error(`haproxy did not answer on ${base}: ${error.message}`);
+      // eslint-disable-next-line no-await-in-loop
+      const dead = await settledContainerReason(container);
+      if (dead) throw new Error(`haproxy container ${dead} before answering on ${base}`);
+      if (Date.now() > deadline) throw new Error(`haproxy did not answer on ${base} within 30000ms (last probe: ${error.message})`);
       // eslint-disable-next-line no-await-in-loop
       await new Promise((resolve) => { setTimeout(resolve, 500); });
     }
