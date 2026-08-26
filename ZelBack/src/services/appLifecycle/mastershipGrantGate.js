@@ -102,6 +102,51 @@ function pursuitIntervalMs() {
   return config.fluxapps.quorumGrantPursuitIntervalMs ?? 30_000;
 }
 
+/**
+ * How long a node that is NOT running the component waits before pursuing a COLD
+ * key - one no grant has ever been issued for. Derived, not chosen, from the two
+ * constants that actually govern the race:
+ *
+ *   daemonInfoIntervalMs   the worst case for NOTICING the activation height. A node
+ *                          on the push path has the tip within milliseconds; one
+ *                          whose daemon does not publish the topic is polling, and
+ *                          can be a full interval behind. The incumbent may be the
+ *                          late one.
+ *   askTimeoutMs x 3       a healthy acquisition, with margin. One ask round is a
+ *                          single timeout.
+ *
+ * Deliberately NOT sized to cover an acquisition that has to fall through relay and
+ * witness (~7 timeouts): that only happens to an incumbent which is partitioned or
+ * whose committee is unreachable, and a standby taking over then is the outcome you
+ * want, not a failure to prevent.
+ */
+/**
+ * Whether THIS node is running the component right now — the local half of the
+ * incumbent question, and the only half that can be asked without an opinion about
+ * another node. Docker is the authority rather than any record: the point is what is
+ * actually serving, not what something believes should be.
+ *
+ * Unreadable docker answers false. A node that cannot see its own containers should
+ * not claim the head start, and the fallback (waiting like a standby) is the safe
+ * side of that error.
+ */
+async function runsComponentLocally(identifier) {
+  try {
+    const inspected = await dockerService.dockerContainerInspect(identifier);
+    return Boolean(inspected?.State?.Running);
+  } catch {
+    return false;
+  }
+}
+
+function coldKeyHeadStartMs() {
+  const override = config.fluxapps.quorumGrantIncumbentHeadStartMs;
+  if (Number.isFinite(override)) return override;
+  const noticing = config.fluxapps.daemonInfoIntervalMs ?? 30_000;
+  const acquiring = (config.fluxapps.quorumGrantAskTimeoutMs ?? 5_000) * 3;
+  return noticing + acquiring;
+}
+
 function heldTtlMs() {
   return config.fluxapps.quorumGrantHeldTtlMs ?? 150_000;
 }
@@ -110,6 +155,11 @@ const testOverrides = { enabled: null, unknownGraceMs: null, activationHeight: n
 
 // key -> monotonic ms of the last pursuit kick, jitter-spread
 const pursuits = new Map();
+
+// key -> monotonic ms this node first saw the key with no grant ever issued. The
+// head start below is measured from here rather than from process start, so a node
+// that joins later does not get to skip the wait.
+const coldSince = new Map();
 
 // identifier -> monotonic ms the unknown state was first seen, for the bound
 const unknownSince = new Map();
@@ -160,6 +210,34 @@ async function acquireUnlessSettled(identifier, appName, key) {
   try {
     const record = await messageStore.getMasterleaseRecord(appName, ROLE);
     const data = record?.data;
+    // A COLD key - no grant has ever been issued for this app. That is the state
+    // every app is in at the activation crossing, because the grantors have no
+    // memory of a regime that never ran, and it is the one moment the plane can
+    // move a master for no reason: with nothing to shield an incumbent, the term
+    // goes to whichever node's pursuit fires first, which is not the node holding
+    // the container. Measured on a 10-node fleet: the app ran on .11 and the term
+    // went to .10.
+    //
+    // Under this scheme exactly ONE node is running the component, and every node
+    // knows locally whether that is itself. So the incumbent goes first and the
+    // rest wait - no cross-node agreement, and no opinion about anyone else, which
+    // is the property the plane requires of everything it decides on. The switch
+    // then inherits what the legacy election decided instead of re-running it.
+    //
+    // A head start, not exclusivity: if the incumbent cannot acquire in that window
+    // it is partitioned or dying, and a standby taking the term is exactly right.
+    // Making it exclusive would leave an app whose master died before the crossing
+    // with no master at all, because the only node allowed to claim it is gone.
+    if (!data?.grantee) {
+      const firstSeen = coldSince.get(key) ?? nowMs();
+      coldSince.set(key, firstSeen);
+      if (!(await runsComponentLocally(identifier))
+        && nowMs() - firstSeen < coldKeyHeadStartMs()) {
+        return;
+      }
+    } else {
+      coldSince.delete(key);
+    }
     if (data?.grantee && data.mode === 'held') {
       const self = await generalService.obtainNodeCollateralInformation();
       if (data.grantee !== `${self.txhash}:${self.txindex}`) {

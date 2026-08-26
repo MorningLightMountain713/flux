@@ -11,6 +11,7 @@ const registryManager = require('../../ZelBack/src/services/appDatabase/registry
 const messageStore = require('../../ZelBack/src/services/appMessaging/messageStore');
 const reconcilerQueue = require('../../ZelBack/src/services/appMonitoring/reconcilerQueue');
 const appsRuntimeState = require('../../ZelBack/src/services/appManagement/appsRuntimeState');
+const dockerService = require('../../ZelBack/src/services/dockerService');
 const grantClient = require('../../ZelBack/src/services/quorumGrant/grantClient');
 const mastershipGrantGate = require('../../ZelBack/src/services/appLifecycle/mastershipGrantGate');
 
@@ -34,6 +35,12 @@ function plainComp() {
 describe('quorumGrant mastershipGrantGate', () => {
   beforeEach(() => {
     mastershipGrantGate.resetForTests({ enabled: true });
+    // This node IS running the component unless a test says otherwise. Most of these
+    // exercise a node that holds or wins the app, and on a COLD key that is exactly
+    // the incumbent — which is what earns it the head start. Left unstubbed it would
+    // reach real docker, answer false, and every acquisition here would sit out its
+    // wait for reasons that have nothing to do with what is being tested.
+    sinon.stub(dockerService, 'dockerContainerInspect').resolves({ State: { Running: true } });
     // The shape appLocation actually returns (appsRepository RUNNING_ROW_TAIL):
     // an address, and an outpoint that is NULL on this node's own row - a node
     // stores its own announcement with no announcer to resolve it from. Neither
@@ -115,6 +122,9 @@ describe('quorumGrant mastershipGrantGate', () => {
       const gate = gateWith({ flag: true, activateAt: 2100000, height: 2100000 });
       const verdict = await gate.grantVerdict(IDENTIFIER, activeStandbyComp());
       expect(verdict, 'the plane engaged').to.not.equal(null);
+      // The pursuit is fire-and-forget and now asks docker whether this node is the
+      // incumbent before it acquires, so the call lands a tick later than the verdict.
+      await new Promise(setImmediate);
       expect(grantClient.acquire.called).to.equal(true);
     });
 
@@ -151,6 +161,54 @@ describe('quorumGrant mastershipGrantGate', () => {
       const noHeight = gateWith({ flag: true, activateAt: 2100000, height: undefined });
       expect(await noHeight.grantVerdict(IDENTIFIER, activeStandbyComp())).to.equal(null);
       expect(grantClient.acquire.called).to.equal(false);
+    });
+  });
+
+  describe('the activation crossing: a cold key belongs to whoever is running it', () => {
+    // At the crossing no grant exists for any app - the grantors have no memory of a
+    // regime that never ran - so every candidate sees a cold key at once. Without a
+    // head start the term goes to whichever pursuit fires first, which is not the
+    // node holding the container: measured on a 10-node fleet, the app ran on .11 and
+    // the term went to .10. Fleet-wide that is every activeStandby app re-racing its
+    // master at one instant, for nothing.
+
+    it('the node running the component pursues a cold key at once', async () => {
+      messageStore.getMasterleaseRecord.resolves(null);
+      dockerService.dockerContainerInspect.resolves({ State: { Running: true } });
+      await mastershipGrantGate.grantVerdict(IDENTIFIER, activeStandbyComp());
+      await new Promise(setImmediate);
+      expect(grantClient.acquire.called, 'the incumbent goes first').to.equal(true);
+    });
+
+    it('a node not running it waits, so the incumbent is not raced for its own app', async () => {
+      messageStore.getMasterleaseRecord.resolves(null);
+      dockerService.dockerContainerInspect.resolves({ State: { Running: false } });
+      await mastershipGrantGate.grantVerdict(IDENTIFIER, activeStandbyComp());
+      await new Promise(setImmediate);
+      expect(grantClient.acquire.called, 'a standby holds off on a cold key').to.equal(false);
+    });
+
+    it('a node that cannot read docker waits rather than claiming the head start', async () => {
+      // The safe side of the error: a node blind to its own containers must not
+      // assert incumbency, and waiting like a standby costs only the head start.
+      messageStore.getMasterleaseRecord.resolves(null);
+      dockerService.dockerContainerInspect.rejects(new Error('docker unreachable'));
+      await mastershipGrantGate.grantVerdict(IDENTIFIER, activeStandbyComp());
+      await new Promise(setImmediate);
+      expect(grantClient.acquire.called).to.equal(false);
+    });
+
+    it('the head start applies ONLY to a cold key, never to a live one', async () => {
+      // A key with a grantee is not cold, whoever holds it. Applying the wait there
+      // would delay every legitimate takeover from a dead master by the head start.
+      messageStore.getMasterleaseRecord.resolves({
+        data: { grantee: `${'9'.repeat(64)}:0`, mode: 'lapsed' },
+      });
+      dockerService.dockerContainerInspect.resolves({ State: { Running: false } });
+      grantClient.termLapsed.resolves(true);
+      await mastershipGrantGate.grantVerdict(IDENTIFIER, activeStandbyComp());
+      await new Promise(setImmediate);
+      expect(grantClient.acquire.called, 'a lapsed term is pursued without the wait').to.equal(true);
     });
   });
 
