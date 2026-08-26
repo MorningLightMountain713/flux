@@ -830,7 +830,7 @@ function makeEnvShell(networkName) {
       step('network');
       // Once the containers are gone nothing is writing to the journals, so this is
       // the moment to hand them back — see hostJournalChown. Kept off the failure
-      // path deliberately: a green run's journals are read too.
+      // path deliberately: a green run's journals are archived and read too.
       await Promise.all(nodeConfigs
         .filter((cfg) => cfg.journalDir && existsSync(cfg.journalDir))
         .map(async (cfg) => {
