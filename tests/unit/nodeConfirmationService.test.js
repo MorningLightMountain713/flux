@@ -231,6 +231,46 @@ describe('nodeConfirmationService', () => {
       expect(callback.calledOnce).to.be.true;
       expect(callback.calledWith(true)).to.be.true;
     });
+
+    // A node that cannot broadcast is in the same state whichever check failed,
+    // so it has to say so the same way. Only the in-process listeners are told
+    // twice over - anything watching from outside the process (an operator on
+    // the event stream, the integration harness) has the published event and
+    // nothing else, and a silence there is indistinguishable from a node that
+    // never lost the capability at all.
+    it('publishes the loss when the chain confirmation goes', async () => {
+      setupConfirmed();
+      await service.start();
+      expect(publishedAs('messageCapability:changed')).to.eql([{ capable: true }]);
+
+      setupNotConfirmed();
+      await advancePoll();
+
+      expect(publishedAs('messageCapability:changed')).to.eql([{ capable: true }, { capable: false }]);
+    });
+
+    it('publishes the loss when the node list no longer holds us', async () => {
+      setupConfirmed();
+      await service.start();
+      expect(publishedAs('messageCapability:changed')).to.eql([{ capable: true }]);
+
+      setupConfirmedButIpMissing();
+      await advancePoll();
+
+      expect(publishedAs('messageCapability:changed')).to.eql([{ capable: true }, { capable: false }]);
+    });
+
+    it('publishes once per transition, not once per poll', async () => {
+      setupConfirmed();
+      await service.start();
+
+      setupNotConfirmed();
+      await advancePoll();
+      await advancePoll();
+      await advancePoll();
+
+      expect(publishedAs('messageCapability:changed')).to.eql([{ capable: true }, { capable: false }]);
+    });
   });
 
   describe('onConfirmationChange', () => {
