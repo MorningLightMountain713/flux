@@ -163,8 +163,16 @@ sweep_harness_leftovers
     echo "$(date -u +%H:%M:%S) avail=$(free_mb)MB load=$(cut -d' ' -f1 /proc/loadavg) containers=$(docker ps -q 2>/dev/null | wc -l) steal_pct=$steal fsync_ms=$fsync_ms"
     sleep 5
   done ) > "$LOGROOT/cap-mem.log" 2>&1 & CAP2=$!
+# id= and image= are what make this log ATTRIBUTABLE. Docker reuses names, six
+# fleets churn through any given minute, and a name alone cannot say which
+# container - or which kind of container - a death belongs to. Gate 7 recorded
+# exactly one self-exit in 7040 lines (die exitCode=1, no preceding kill, at the
+# second suite 703's wait expired) and it could not be tied to haproxy, because
+# the name was all there was. The id settles which container; the image settles
+# whether it was a node, a stub, or the load balancer, without needing the
+# container to still exist.
 ( docker events --filter event=die --filter event=kill --filter event=oom \
-    --format '{{.Time}} {{.Action}} name={{.Actor.Attributes.name}} exitCode={{.Actor.Attributes.exitCode}}' ) > "$LOGROOT/cap-events.log" 2>&1 & CAP3=$!
+    --format '{{.Time}} {{.Action}} id={{.Actor.ID}} image={{.Actor.Attributes.image}} name={{.Actor.Attributes.name}} exitCode={{.Actor.Attributes.exitCode}}' ) > "$LOGROOT/cap-events.log" 2>&1 & CAP3=$!
 trap 'kill $CAP1 $CAP2 $CAP3 2>/dev/null' EXIT
 
 declare -A PID2SUITE
