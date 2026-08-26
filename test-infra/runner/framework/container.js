@@ -1,4 +1,5 @@
 import { execFile } from 'node:child_process';
+import { NotPresentError } from './errors.js';
 import { promisify } from 'node:util';
 
 const execFileAsync = promisify(execFile);
@@ -107,7 +108,7 @@ async function appContainerName(container, appName, componentName, replica = nul
 export async function requireAppContainerName(container, appName, componentName, replica = null) {
   const name = await appContainerName(container, appName, componentName, replica);
   if (!name) {
-    throw new Error(`no container on this node for app ${appName}`
+    throw new NotPresentError(`no container on this node for app ${appName}`
       + `${componentName ? ` component ${componentName}` : ''}${replica ? ` replica ${replica}` : ''}`);
   }
   return name;

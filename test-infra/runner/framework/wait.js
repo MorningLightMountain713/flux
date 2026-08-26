@@ -1,12 +1,32 @@
 import { getAppContainerStatus, isAppFullyGone } from './container.js';
+import { NotPresentError } from './errors.js';
 
+/**
+ * Poll until the condition holds.
+ *
+ * A predicate that throws NotPresentError is reaching for something the fleet has
+ * not produced yet, which is the wait's not-yet and not its failure — so it counts
+ * as false and polling continues. Every other throw still aborts immediately with
+ * its own message: a broken predicate must not be ground into an anonymous timeout.
+ *
+ * The last absence is carried into the timeout, so nothing is lost by waiting the
+ * window out. Before this, such a throw ended the wait early but at least said what
+ * was missing; keeping the reason means the full window costs no diagnosis.
+ */
 export async function waitFor(condition, { timeout = 60000, interval = 2000, label = '' } = {}) {
   const start = Date.now();
+  let lastAbsence = null;
   while (Date.now() - start < timeout) {
-    if (await condition()) return true;
+    try {
+      if (await condition()) return true;
+    } catch (err) {
+      if (!(err instanceof NotPresentError)) throw err;
+      lastAbsence = err.message;
+    }
     await new Promise((r) => setTimeout(r, interval));
   }
-  throw new Error(`Timeout after ${timeout}ms waiting for: ${label || 'condition'}`);
+  const because = lastAbsence ? ` — last: ${lastAbsence}` : '';
+  throw new Error(`Timeout after ${timeout}ms waiting for: ${label || 'condition'}${because}`);
 }
 
 // Container-state wait helpers (docker-level, via the node's DinD)
