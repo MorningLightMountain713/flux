@@ -91,7 +91,7 @@ describe('dark referees: the list lies, the plane must not', function () {
           quorumGrantMinHolderAgeMs: 0,
           quorumGrantPursuitIntervalMs: 10000,
           quorumGrantUnknownGraceMs: 30000,
-          quorumGrantMinFluxOSVersion: '8.13.1',
+          quorumGrantActivationHeight: 2_100_000,
         },
       },
     });

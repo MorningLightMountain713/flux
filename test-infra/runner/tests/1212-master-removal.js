@@ -86,7 +86,7 @@ describe('removing the master\'s app from a live node', function () {
           quorumGrantMinHolderAgeMs: 0,
           quorumGrantPursuitIntervalMs: 10000,
           quorumGrantUnknownGraceMs: 30000,
-          quorumGrantMinFluxOSVersion: '8.13.1',
+          quorumGrantActivationHeight: 2_100_000,
         },
       },
     });
