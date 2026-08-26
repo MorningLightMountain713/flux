@@ -519,6 +519,60 @@ describe('messageVerifier tests', () => {
       expect(insertStub.called).to.be.false;
     });
 
+    describe('when pricing itself fails', () => {
+      // The fee computation runs after the message is already permanent and its hash
+      // already flagged. Reported through the function-wide catch it became
+      // `return false` — "message not yet resolvable" — which is the one thing it is
+      // not: the message resolved, and it is the registry write that was lost.
+      async function pricingFailure(thrown) {
+        const insertStub = sinon.stub().resolves();
+        const storePermanentStub = sinon.stub().resolves();
+        const { stubs, logStub, v9Regime } = makeBaseStubs();
+        stubs['../appDatabase/appsRepository'].getTempMessage = sinon.stub().resolves(
+          await domain.tempMessage({ version: 2, hash: 'v9reg' }),
+        );
+        stubs['../appDatabase/appsRepository'].storePermanentMessage = storePermanentStub;
+        stubs['../appDatabase/registryManager'].insertAppSpecifications = insertStub;
+
+        const mv = proxyquire('../../ZelBack/src/services/appMessaging/messageVerifier', stubs);
+        v9Regime.registrationFee = sinon.stub().rejects(thrown);
+
+        const result = await mv.checkAndRequestApp('v9reg', 'txid', 2000000, 200000000, 1760000000, 2);
+        return {
+          result, logStub, insertStub, storePermanentStub,
+        };
+      }
+
+      it('names a pricing failure as ours, not as a message that has not arrived', async () => {
+        const {
+          result, logStub, insertStub, storePermanentStub,
+        } = await pricingFailure(new Error('No pricing regime implements model "unified"'));
+
+        // The message did resolve — it is stored and its hash is flagged. Answering
+        // false sends the node re-requesting a message it already holds, raises
+        // HASH_UNRESOLVED across the sync machinery, and still says nothing about the
+        // write that was actually lost.
+        expect(result).to.be.true;
+        expect(storePermanentStub.calledOnce).to.be.true;
+        expect(insertStub.called).to.be.false;
+        expect(logStub.error.calledWithMatch(/PRICING\/POLICY FAILURE/)).to.be.true;
+        expect(logStub.error.calledWithMatch(/registry was NOT updated/)).to.be.true;
+        // Not the line every other internal failure in this function shares.
+        expect(logStub.error.calledWithMatch(/Error checking and requesting app/)).to.be.false;
+      });
+
+      it('separates a spec the pricer refuses from pricing being broken', async () => {
+        const { ValidationError } = await require('../../ZelBack/src/services/utils/specLibs').getSpec();
+        const { result, logStub } = await pricingFailure(new ValidationError([
+          { path: ['compose', 0, 'cpu'], code: 'OUT_OF_RANGE', message: 'above the tier ceiling' },
+        ]));
+
+        expect(result).to.be.true;
+        expect(logStub.error.calledWithMatch(/the spec cannot be priced/)).to.be.true;
+        expect(logStub.error.calledWithMatch(/PRICING\/POLICY FAILURE/)).to.be.false;
+      });
+    });
+
     // registeredAt anchors v9 time-based expiry: a wrong value (0, or a stray
     // retry counter) stores an app every liveness query reads as long-dead.
     async function makeV9Fixture(stubs) {
