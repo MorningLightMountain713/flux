@@ -65,6 +65,7 @@ describe('appSubmission tests', () => {
         getSpec: sinon.stub().resolves({ FluxAppSpecV9: { fromSubmission: sinon.stub().returns({ templateSpec: true }) } }),
         getSpecBackend: sinon.stub(),
         assertUpdateInvariants: sinon.stub().resolves(),
+        assertVersionActivated: sinon.stub(),
       },
       imageArchitectureValidator: { verifyImageRegistryAndArchitectures: sinon.stub().resolves() },
       entitlementsState: { assertSpecEntitled: sinon.stub().resolves() },
@@ -132,8 +133,17 @@ describe('appSubmission tests', () => {
 
     it('decrypts a v8 enterprise blob, validates the inner spec, and keeps the encrypted wire form', async () => {
       appSubmission = load();
-      const innerSerialize = sinon.stub().returns({ inner: 'cleartext' });
-      const decrypted = { spec: { serialize: innerSerialize, version: 8 }, name: 'myapp', owner: 'owner1' };
+      // The wrapper models the real one: validateContents applies the rules
+      // without producing a blob, and the inner spec has no wire form at all.
+      const validateContents = sinon.stub();
+      const innerSerialize = sinon.stub().throws(new Error('a decrypted spec has no wire form'));
+      const decrypted = {
+        spec: { serialize: innerSerialize, version: 8 },
+        version: 8,
+        validateContents,
+        name: 'myapp',
+        owner: 'owner1',
+      };
       const wireSpec = {
         isEncrypted: true,
         createProvider: sinon.stub().resolves({ p: 1 }),
@@ -151,7 +161,12 @@ describe('appSubmission tests', () => {
       expect(result.isEncrypted).to.be.true;
       expect(result.broadcastBlob).to.deep.equal({ form: 'v8-enterprise-blob' });
       sinon.assert.calledOnce(wireSpec.decrypt);
-      sinon.assert.calledWith(stubs.specLibs.validateSubmissionSpec, { inner: 'cleartext' }, { height: 100 });
+      // Submission rules applied through the wrapper, and the height gate
+      // separately — the node owns enforcement heights, flux-spec does not.
+      sinon.assert.calledWith(validateContents, { purpose: 'submission' });
+      sinon.assert.calledWith(stubs.specLibs.assertVersionActivated, 8, 100);
+      // and nothing serialized the decrypted contents on the way
+      sinon.assert.notCalled(innerSerialize);
       // the entitlements gate runs for every version now (no version branch); v8
       // carries no gated features, so it is a no-op rather than skipped
       sinon.assert.calledOnce(stubs.entitlementsState.assertSpecEntitled);

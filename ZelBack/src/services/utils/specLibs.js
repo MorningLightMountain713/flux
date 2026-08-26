@@ -40,6 +40,30 @@ async function getSpecBackend() { return load(); }
 async function getSpecPolicy() { return load(); }
 
 /**
+ * Refuse a spec version the chain has not activated yet.
+ *
+ * Enforcement heights are chain policy, so they stay here rather than in
+ * flux-spec. Split out because a DECRYPTED spec is validated through
+ * `DecryptedCanonicalSpec.validateContents()` — which deliberately produces no
+ * blob, so it cannot be routed through validateSubmissionSpec/validateGossipSpec
+ * — and the height gate still has to apply to it.
+ *
+ * @param {number} version
+ * @param {number} [height] - current daemon height; undefined skips the gate
+ * @throws {Error} if the version is unknown or not yet activated
+ */
+function assertVersionActivated(version, height) {
+  if (height === undefined) return;
+  const activationHeight = config.fluxapps.appSpecsEnforcementHeights[version];
+  if (activationHeight === undefined) {
+    throw new Error(`Unsupported Flux App specification version: ${version}`);
+  }
+  if (height < activationHeight) {
+    throw new Error(`Flux apps specifications of version ${version} not yet supported`);
+  }
+}
+
+/**
  * Validate a submission-shape spec blob through the appropriate version
  * class, optionally enforcing FluxOS fork-activation height gates.
  *
@@ -105,6 +129,7 @@ async function assertUpdateInvariants(priorSpec, newSpec) {
 
 module.exports = {
   getSpec,
+  assertVersionActivated,
   getSpecBackend,
   getSpecPolicy,
   validateSubmissionSpec,

@@ -10,7 +10,7 @@ const serviceHelper = require('../serviceHelper');
 const messageVerifier = require('./messageVerifier');
 const appEventVerifier = require('./appEventVerifier');
 const { deserializeSpec } = require('../utils/specCutover');
-const { validateGossipSpec, getSpecBackend } = require('../utils/specLibs');
+const { validateGossipSpec, getSpecBackend, assertVersionActivated } = require('../utils/specLibs');
 const daemonServiceMiscRpcs = require('../daemonService/daemonServiceMiscRpcs');
 const { serialiseAndSignFluxBroadcast } = require('../utils/fluxBroadcastHelper');
 const { peerManager } = require('../utils/peerState');
@@ -309,7 +309,10 @@ async function processMessages(messages, onProgress) {
           try {
             const provider = await wireSpec.createProvider();
             const decrypted = await wireSpec.decrypt(provider);
-            validationBlob = decrypted.spec.serialize();
+            // Through the wrapper: a decrypted spec has no wire form, so no
+            // plaintext blob is produced to hand a validator. Same rules.
+            assertVersionActivated(decrypted.version, height);
+            decrypted.validateContents({ purpose: 'gossip' });
           } catch (err) {
             log.warn(`processMessages enterprise decrypt skipped for ${wireSpec.name}: ${err.message}`);
           }

@@ -8,7 +8,7 @@ const benchmarkService = require('../benchmarkService');
 const appsRepository = require('../appDatabase/appsRepository');
 const appEventVerifier = require('./appEventVerifier');
 const registryManager = require('../appDatabase/registryManager');
-const { getSpec, validateGossipSpec } = require('../utils/specLibs');
+const { getSpec, validateGossipSpec, assertVersionActivated } = require('../utils/specLibs');
 const { getStateBeforeHeight } = require('../appDatabase/appSpecHistory');
 const globalState = require('../utils/globalState');
 const {
@@ -160,7 +160,10 @@ async function storeAppTemporaryMessage(message, options = {}) {
       if (await benchmarkService.isSystemSecure()) {
         const provider = await appEvent.spec.createProvider();
         const decrypted = await appEvent.spec.decrypt(provider);
-        validationBlob = decrypted.spec.serialize();
+        // Validated through the wrapper: a decrypted spec has no wire form, so
+        // there is no blob to hand a validator. Same rules, no plaintext bytes.
+        assertVersionActivated(decrypted.version, block);
+        decrypted.validateContents({ purpose: 'gossip' });
       }
     } else {
       validationBlob = message.appSpecifications;
