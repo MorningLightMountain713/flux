@@ -61,12 +61,17 @@ function handleReorg(reorg) {
  * Subscribes to chain reorgs, where the daemon publishes them.
  * @returns {boolean} True when the push path is in use.
  */
+// The mode this source settled on, so /flux/info can report which push paths a
+// node actually has (a daemon that does not publish the topic degrades it to poll).
+let mode = null;
+
 function start() {
   const topic = daemonSubscriptionService.TOPICS.chainReorg;
 
   if (!daemonSubscriptionService.isTopicAvailable(topic)) {
     log.info('reorgSource - daemon does not publish chainreorg, reorgs stay poll-detected');
-    fluxEventBus.publish('daemon:subscriptionMode', { source: 'reorgSource', mode: 'poll', topic });
+    mode = 'poll';
+    fluxEventBus.publish('daemon:subscriptionMode', { source: 'reorgSource', mode, topic });
     return false;
   }
 
@@ -74,7 +79,8 @@ function start() {
     onMessage: (reorg) => handleReorg(reorg),
   });
 
-  fluxEventBus.publish('daemon:subscriptionMode', { source: 'reorgSource', mode: 'push', topic });
+  mode = 'push';
+  fluxEventBus.publish('daemon:subscriptionMode', { source: 'reorgSource', mode, topic });
   return true;
 }
 
@@ -83,6 +89,7 @@ function stop() {
 }
 
 module.exports = {
+  currentMode: () => mode,
   handleReorg,
   onReorg,
   start,

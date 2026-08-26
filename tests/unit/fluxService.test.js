@@ -1922,7 +1922,21 @@ describe('fluxService tests', () => {
 
       expect(result).to.be.an('object');
       expect(result.status).to.equal('success');
-      expect(result.data.daemon).to.eql({ info: 'info data', zmqEnabled: false });
+      // subscriptions is the RUNTIME answer - which push paths this node actually
+      // took - and is not the same question as zmqEnabled, which reads the daemon's
+      // config for one topic (zmqpubhashblock). chainTipSource subscribes to
+      // hashBlockHeight, a different topic, so the two can legitimately disagree.
+      // 'unstarted' because no source has been started in this test.
+      expect(result.data.daemon).to.eql({
+        info: 'info data',
+        zmqEnabled: false,
+        subscriptions: {
+          chainTip: 'unstarted',
+          fluxnodeStatus: 'unstarted',
+          reorg: 'unstarted',
+          nodeList: 'unstarted',
+        },
+      });
       expect(result.data.node).to.eql({ status: 'status data' });
       expect(result.data.flux).to.be.an('object');
       expect(result.data.apps).to.be.an('object');

@@ -32,6 +32,15 @@ const fluxNetworkHelper = require('./fluxNetworkHelper');
 const fluxNetworkMonitor = require('./fluxNetworkMonitor');
 const nodeDosState = require('./nodeDosState');
 const geolocationService = require('./geolocationService');
+// The four subscription-backed sources, for /flux/info. Each settles on push or poll
+// at startup depending on whether the DAEMON publishes its topic — which FluxOS's own
+// version cannot guarantee, so it is a per-node fact that is otherwise unobservable
+// from outside. A node degraded to poll is minutes behind on the node list and up to a
+// poll interval behind on the chain tip; nothing said so before this.
+const chainTipSource = require('./daemonService/chainTipSource');
+const fluxnodeStatusSource = require('./daemonService/fluxnodeStatusSource');
+const reorgSource = require('./daemonService/reorgSource');
+const nodeListSource = require('./nodeListSource');
 const syncthingService = require('./syncthingService');
 const dockerService = require('./dockerService');
 const upnpService = require('./upnpService');
@@ -1365,6 +1374,22 @@ async function getFluxInfo(req, res) {
     info.flux.dockerVersion = dockerVersion.Version;
     info.flux.mongoDbVersion = await dbHelper.getMongoDbVersion();
     const osDistInfo = await getOSDistributionInfo();
+    // Never allowed to break the endpoint: a source that has not started yet reports
+    // null rather than throwing, and getFluxInfo already fails hard on enough of its
+    // other lookups.
+    const subscriptionMode = (source) => {
+      try {
+        return source.currentMode() ?? 'unstarted';
+      } catch {
+        return 'unknown';
+      }
+    };
+    info.daemon.subscriptions = {
+      chainTip: subscriptionMode(chainTipSource),
+      fluxnodeStatus: subscriptionMode(fluxnodeStatusSource),
+      reorg: subscriptionMode(reorgSource),
+      nodeList: subscriptionMode(nodeListSource),
+    };
     info.flux.os = osDistInfo.distribution;
     info.flux.osVersion = osDistInfo.version;
     info.flux.osPrettyName = osDistInfo.prettyName;

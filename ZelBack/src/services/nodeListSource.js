@@ -213,12 +213,17 @@ async function onDelta(delta) {
  * @param {(filter: string|null) => Promise<Array>} options.listFetcher Filtered list fetch.
  * @returns {Promise<boolean>} True when the push path is in use.
  */
+// The mode this source settled on, so /flux/info can report which push paths a node
+// actually has (a daemon that does not publish the topic degrades it to poll).
+let mode = null;
+
 async function start(options) {
   const topic = daemonSubscriptionService.TOPICS.fluxnodeListDelta;
 
   if (!daemonSubscriptionService.isTopicAvailable(topic)) {
     log.info('nodeListSource - daemon does not publish fluxnodelistdelta, keeping the fetch path');
-    fluxEventBus.publish('daemon:subscriptionMode', { source: 'nodeListSource', mode: 'poll', topic });
+    mode = 'poll';
+    fluxEventBus.publish('daemon:subscriptionMode', { source: 'nodeListSource', mode, topic });
     return false;
   }
 
@@ -233,7 +238,8 @@ async function start(options) {
     onResync: (reason) => bootstrap(reason),
   });
 
-  fluxEventBus.publish('daemon:subscriptionMode', { source: 'nodeListSource', mode: 'push', topic });
+  mode = 'push';
+  fluxEventBus.publish('daemon:subscriptionMode', { source: 'nodeListSource', mode, topic });
 
   return bootstrap(BOOTSTRAP_REASONS.startup);
 }
@@ -247,6 +253,7 @@ function stop() {
 }
 
 module.exports = {
+  currentMode: () => mode,
   takeAppliedSummary,
   bootstrap,
   resolveAdded,
