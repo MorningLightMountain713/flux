@@ -318,6 +318,34 @@ export async function getAppNetworkSubnet(container, appName) {
   return stdout.trim() || null;
 }
 
+/**
+ * Stop an app container and prune its network in ONE exec, and say whether that took.
+ *
+ * The "stopped container with no network" state is one the product actively repairs:
+ * a component whose controllerDesired is `running` is restarted as soon as the
+ * reconciler sees it stop, and the crash-backoff ladder starts at 0ms. Stopping from
+ * the runner and then removing the network in a second call leaves a full round trip
+ * for a pass to land in, and when it does, `docker network rm` fails with
+ * `has active endpoints` — which does NOT mean a slow endpoint teardown. It means the
+ * container is UP again. Measured: at the moment of a failing rm the container read
+ * `Up 8 seconds`, and docker (24.0.7 and 29.3.1 alike) empties EndpointID the instant
+ * a container stops, so there is no teardown lag to wait out.
+ *
+ * Both halves therefore go to the node in a single command, leaving no round trip
+ * between them. The caller still has to check: this is a transient state being
+ * sampled, not a stable one being set, so a lost race is reported rather than hidden.
+ *
+ * @returns {Promise<{ok: boolean, output: string}>} ok when the network is gone.
+ */
+export async function stopAndPruneAppNetwork(container, appName, componentName) {
+  const name = await requireAppContainerName(container, appName, componentName);
+  const network = await fluxAppNetworkName(container, appName);
+  if (!network) return { ok: true, output: 'no network present' };
+  const res = await execInContainer(container,
+    `docker stop ${name} >/dev/null 2>&1; docker network rm ${network}`);
+  return { ok: res.exitCode === 0, output: (res.output ?? '').trim() };
+}
+
 export async function removeAppNetworkRaw(container, appName) {
   const network = await fluxAppNetworkName(container, appName);
   return execInContainer(container, `docker network rm ${network}`);
