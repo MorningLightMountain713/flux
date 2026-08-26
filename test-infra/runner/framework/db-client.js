@@ -179,6 +179,14 @@ export function dbClient(nodeNum) {
     // Every installed row for the app on this node, one per deployed identity.
     // The single-row read above cannot say WHICH sibling it returned on a
     // co-located node, so per-identity assertions read these instead.
+    // Every local app row, not one app's. The count says a row vanished; this says
+    // WHICH — the difference between "an app is gone" and a name to grep the logs for.
+    async listLocalApps() {
+      const localDb = await db('appsLocal');
+      return localDb.collection('zelappsinformation')
+        .find({}, { projection: { _id: 0, name: 1, hash: 1 } }).toArray();
+    },
+
     async getLocalApps(appName) {
       const localDb = await db('appsLocal');
       return localDb.collection('zelappsinformation')
