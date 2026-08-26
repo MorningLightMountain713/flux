@@ -148,9 +148,50 @@ export async function appComponentIdentifiers(container, appName) {
 // graceful stop -> the container exits 0 and stays present (not removed). Use to
 // exercise restart-on-clean-exit, as opposed to killAppContainer (docker rm -f,
 // which removes it -> the missing-container/recreate path).
-export async function stopAppContainer(container, appName, componentName) {
+/**
+ * Stop an app container and wait until it is genuinely detached from its network.
+ *
+ * `docker stop` returns, and the container reads as no longer `Up`, BEFORE dockerd
+ * has finished releasing its network endpoint — they are two different facts, and a
+ * caller that stops a container in order to do something with its network needs the
+ * second one. Waiting on the first and acting on the second is a race that only
+ * loses under load: suite 319 removed a network a beat after the stop and got
+ * `network ... has active endpoints`, on a box running six fleets.
+ *
+ * The promise this helper makes is therefore "stopped AND detached", because that is
+ * what every caller already assumes it makes. Bounded, and a container still holding
+ * an endpoint at the deadline is reported by name rather than waited on forever: an
+ * endpoint that genuinely never releases is a real signal, and it should read as one
+ * instead of being absorbed by a retry somewhere downstream.
+ */
+export async function stopAppContainer(container, appName, componentName, { timeout = 30000, interval = 250 } = {}) {
   const name = await requireAppContainerName(container, appName, componentName);
-  return execInContainer(container, `docker stop ${name}`);
+  const result = await execInContainer(container, `docker stop ${name}`);
+
+  // Read back the ENDPOINTS, not the network names. A stopped container still lists
+  // every network it is configured on — that never changes — but its EndpointID goes
+  // EMPTY the moment dockerd releases the endpoint, and the empty one is what lets
+  // `docker network rm` succeed. Measured on docker 24.0.7: running reports the
+  // network with a 64-char EndpointID, stopped reports the same network with an
+  // empty one, and the rm succeeds exactly then. Matching on the network name would
+  // be true forever and turn this wait into a guaranteed timeout on every caller.
+  const stillAttached = async () => {
+    const { stdout } = await execInContainer(container,
+      `docker inspect --format '{{range $k, $v := .NetworkSettings.Networks}}{{if $v.EndpointID}}{{$k}} {{end}}{{end}}' ${name} 2>/dev/null || echo ""`);
+    return stdout.trim();
+  };
+
+  const deadline = Date.now() + timeout;
+  for (;;) {
+    // eslint-disable-next-line no-await-in-loop
+    const attached = await stillAttached();
+    if (!attached) return result;
+    if (Date.now() > deadline) {
+      throw new Error(`stopAppContainer: ${name} stopped but still holds endpoints after ${timeout}ms on: ${attached}`);
+    }
+    // eslint-disable-next-line no-await-in-loop
+    await new Promise((resolve) => { setTimeout(resolve, interval); });
+  }
 }
 
 // SIGKILL -> the container exits non-zero (137) and stays present. Use to
