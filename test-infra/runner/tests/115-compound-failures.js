@@ -5,7 +5,7 @@ import { createTestEnv } from '../framework/test-env.js';
 import {
   waitForDaemonReady, waitForNodeStatus, waitForBlockProcessed,
   waitForExplorerReady, waitForOrchestratorStarted, waitForOrchestratorState,
-  waitForPeerThreshold,
+  waitForPeerThreshold, waitForMessageCapabilityChanged,
   waitForSpawnerPaused, waitForSpawnerResumed,
 } from '../framework/wait.js';
 import {
@@ -32,7 +32,22 @@ describe('Compound failures: peer loss + daemon failure during READY', function 
 
   before(async function () {
     this.timeout(300000);
-    env = await createTestEnv({ hookCtx: this, nodes: 5, tickerAutostart: false });
+    env = await createTestEnv({
+      hookCtx: this,
+      nodes: 5,
+      tickerAutostart: false,
+      configOverrides: {
+        // An unreachable daemon deliberately PRESERVES message capability - the
+        // node still knows who it is and can still broadcast - so the only thing
+        // that withdraws it while the poll goes unanswered is the confirmation
+        // ageing out on chain. The stub confirms every node 10 blocks back, so a
+        // limit of 11 leaves one block owed: reachable either as a couple of
+        // blocks on the live chain view or as one block's worth of time once that
+        // view goes stale. Nodes that can still poll are untouched by the limit -
+        // the expiry branch only runs for a node with no answer at all.
+        confirmation: { confirmExpirationBlocks: 11, blockIntervalMs: 10000 },
+      },
+    });
     await bootToReady(env);
   });
 
@@ -57,17 +72,28 @@ describe('Compound failures: peer loss + daemon failure during READY', function 
     expect(pauseEvents.length).to.equal(1, 'READINESS_LOST should fire exactly once');
   });
 
-  it('should enter RESYNCING but NOT READY when peers recover with RPC still failing', async function () {
-    this.timeout(120000);
+  it('should enter RESYNCING but NOT READY once the stranded confirmation expires', async function () {
+    this.timeout(180000);
     for (let i = 1; i < env.clients.length; i++) {
       await env.reconnectNode(i);
     }
     await waitForOrchestratorState(env.clients[0], 'RESYNCING', 60000);
-    // Advance blocks past block timer — READY should still be blocked by canSendMessages
+
+    // Establish the premise rather than assuming it. Losing the daemon does not
+    // cost the node its capability, so this waits for the node to say the
+    // capability is gone and takes that event as the floor - everything before it
+    // is a node that was still entitled to go READY, and counting it would make
+    // the assertion true or false for reasons that have nothing to do with the
+    // rule under test.
+    await advanceBlocks(260);
+    const lost = await waitForMessageCapabilityChanged(env.clients[0], false, 90000);
+
+    // Only now is denying promotion meaningful, so drive the block timer here:
+    // the assertion has to be given the chance it is denying.
     await advanceBlocks(260);
     const stateEvents = env.clients[0].getEventBuffer()
-      .filter((e) => e.event === 'orchestrator:stateChanged');
-    const reachedReady = stateEvents.find((e) => e.data.from === 'RESYNCING' && e.data.to === 'READY');
+      .filter((e) => e.event === 'orchestrator:stateChanged' && e.id > lost.id);
+    const reachedReady = stateEvents.find((e) => e.data.to === 'READY');
     expect(reachedReady, 'should not reach READY while canSendMessages is false').to.be.undefined;
   });
 
