@@ -24,6 +24,21 @@ if (unclassified.length) {
   );
 }
 
+/**
+ * Poll until the condition holds.
+ *
+ * A POLL THAT COULD NOT BE TAKEN IS NOT A POLL THAT CAME BACK FALSE. Any throw
+ * from the predicate — a NotPresentError reaching for something the fleet has not
+ * produced yet, or a refused connection under gate load — counts as not-yet and
+ * polling continues. Aborting on the second kind was tried and reverted: suite 96
+ * lost a two-minute wait to a single `fetch failed` on a fleet that was healthy
+ * either side of it, and four suites had already worked the same thing around one
+ * predicate at a time.
+ *
+ * The reason is carried into the timeout rather than swallowed, so nothing is lost
+ * by waiting the window out — and a predicate that throws every time still times
+ * out, so this cannot turn a red into a green.
+ */
 export async function waitFor(condition, { timeout = 60000, interval = 2000, label = '' } = {}) {
   const start = Date.now();
   let lastError = null;
