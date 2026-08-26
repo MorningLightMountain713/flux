@@ -340,7 +340,18 @@ CAP_DMESG_PID="$LOGROOT/cap-dmesg.pid"
     t0=$(date +%s%N)
     dd if=/dev/zero of="$probe_dir/e2e-fsync-probe" bs=4k count=1 oflag=dsync conv=notrunc 2>/dev/null
     fsync_ms=$(( ($(date +%s%N) - t0) / 1000000 ))
-    echo "$(date -u +%H:%M:%S) avail=$(free_mb)MB load=$(cut -d' ' -f1 /proc/loadavg) containers=$(docker ps -q 2>/dev/null | wc -l) steal_pct=$steal fsync_ms=$fsync_ms"
+    # inotify instances: a PER-UID, HOST-WIDE pool every container draws from as
+    # root, and the resource that silently killed systemd nodes with exit 255 for
+    # three gates while this very sidecar reported a healthy box. Memory, load and
+    # fsync were all fine every time — they were simply the wrong resource. Sampled
+    # every 6th cycle (~30s) because the scan walks every process's fd table.
+    ino_n=$((${ino_n:-0} + 1))
+    if [ $((ino_n % 6)) -eq 1 ]; then
+      ino_used=$(sudo -n find /proc/[0-9]*/fd -lname 'anon_inode:inotify' 2>/dev/null | wc -l)
+      ino_max=$(cat /proc/sys/fs/inotify/max_user_instances 2>/dev/null)
+      ino="inotify=${ino_used}/${ino_max}"
+    fi
+    echo "$(date -u +%H:%M:%S) avail=$(free_mb)MB load=$(cut -d' ' -f1 /proc/loadavg) containers=$(docker ps -q 2>/dev/null | wc -l) steal_pct=$steal fsync_ms=$fsync_ms ${ino:-inotify=?}"
     sleep 5
   done ) > "$LOGROOT/cap-mem.log" 2>&1 & CAP2=$!
 # id= and image= are what make this log ATTRIBUTABLE. Docker reuses names, six
