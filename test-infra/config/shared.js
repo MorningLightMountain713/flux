@@ -40,10 +40,12 @@ module.exports = {
     // (production is minutes-scale). Suites that exercise the stale/expiry
     // removal flows override these per-env to fast values.
     daemonStaleMs: 300000,
-    // Expiry is a block count now. The stub confirms each node 10 blocks back, so a
-    // limit above that leaves the fleet default unexpired; suites that exercise the
-    // flow lower it until those 10 blocks are close to the limit and tune the block
-    // interval, which is what turns the blocks still owed into a deadline.
+    // Expiry is a block count. The fleet default sits far above the offset the node
+    // list is seeded with, so nothing expires here. A suite that exercises the flow
+    // does NOT hand-pick a lower limit: it declares
+    // timing: { confirmation: { blocksOwed: N } } and the runner derives the limit
+    // and the block interval from the fixture's own offset, so this file and the
+    // suites cannot drift apart when that fixture changes.
     confirmExpirationBlocks: 640,
     blockIntervalMs: 30000,
   },

@@ -18,6 +18,7 @@ import { execInContainer } from './container.js';
 import { HttpPollWaitStrategy } from './http-wait-strategy.js';
 import { TcpPollWaitStrategy } from './tcp-wait-strategy.js';
 import { getSubnetConfig, REGISTRY_ALIAS } from './subnet-config.js';
+import { deriveTiming, validateTiming } from './timing.js';
 import { closeDb } from './db-client.js';
 import { stubPeerClient } from './stub-peer-helper.js';
 import { pushImage } from './registry-helper.js';
@@ -541,6 +542,7 @@ async function seedMongo(mongoIp, nodeCount, bootContext = 'running', { dataCent
 export async function createTestEnv({
   hookCtx = null, nodes = 1, deferredNodes = 0, legacyNodes = [], stubPeers = [],
   configOverrides = null, nodeConfigOverrides = {}, nodeTiers = null, dataCenter = true,
+  timing = null,
   tickerAutostart = false, discoveryAutostart = false, nodeStatusOverrides = {},
   rpcFailures = [], bootContext = 'running', arcane = true, shutdowndMock = true,
   telemetrydMock = false, systemdMode = false, telemetrydReal = false,
@@ -555,6 +557,16 @@ export async function createTestEnv({
   // declares and a node config lacks fails as a product mystery, or as a
   // startup that never finishes.
   assertNodeConfigsCurrent();
+  // And the suite's own declared physics, for the third time the same reasoning:
+  // a wire whose liveness budget cannot hold a healthy link, or a confirmation
+  // window the node list is already past, is an authoring error and belongs here —
+  // before the boot lock, the network and the containers — not as a dead socket or
+  // an unreachable premise discovered a fleet boot later. The derived layer goes
+  // UNDER the suite's own overrides so an explicit value still wins; the check runs
+  // on what the merge actually produced.
+  const { overrides: timingOverrides, wire: declaredWire } = deriveTiming(timing, { initialHeight: INITIAL_HEIGHT });
+  const mergedOverrides = mergeConfigs(timingOverrides, configOverrides);
+  validateTiming(timing, mergedOverrides, { initialHeight: INITIAL_HEIGHT });
   // The boot-lock queue wait must not count against the suite's hook budget.
   // Mocha enforces a hook's timeout twice: the watchdog timer (which would fire
   // MID-QUEUE whenever the queue alone outlasts the budget), and a completion-time
@@ -587,11 +599,15 @@ export async function createTestEnv({
   env.ownerSuite = (hookCtx && typeof hookCtx.runnable === 'function')
     ? (hookCtx.runnable()?.parent ?? null)
     : null;
+  // The wire the suite declared, so setLatency applies it without the delay spec
+  // being written down a second time — the duplication that let 0ba3b0e10 raise
+  // one copy and leave every number derived from it behind.
+  env.wire = declaredWire;
   activeEnvs.add(env);
 
   try {
     await _buildEnv(
-      env, nodes, deferredNodes, legacyNodes, stubPeers, configOverrides, nodeConfigOverrides,
+      env, nodes, deferredNodes, legacyNodes, stubPeers, mergedOverrides, nodeConfigOverrides,
       nodeTiers, dataCenter, tickerAutostart, discoveryAutostart, nodeStatusOverrides, rpcFailures,
       bootContext, arcane, shutdowndMock, telemetrydMock, systemdMode, telemetrydReal,
       shutdowndReal, dnsdReal, zmqTopics, nodeZmqTopics, { perNodeZmq },

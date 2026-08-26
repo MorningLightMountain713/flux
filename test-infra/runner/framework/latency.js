@@ -30,15 +30,27 @@ function findDevCmd(ownIp) {
 }
 
 /**
- * Shape every node's egress toward its fleet peers.
+ * Shape every node's egress toward its fleet peers, to the wire the suite declared
+ * in createTestEnv's `timing.wireLatency`.
  *
- * @param {object} env - the suite's test env
- * @param {object} [opts]
- * @param {string} [opts.delay] - netem delay spec, e.g. '80ms 20ms' (mean, jitter)
- * @param {object} [opts.perNode] - {nodeIndex: delaySpec} egress overrides
- * @param {string} [opts.loss] - optional netem loss, e.g. '0.5%'
+ * The spec is NOT an argument. A shaped wire raises the floor under peer liveness
+ * and under every cadence the suite races against it, and those are boot-time
+ * config — so the wire has to be known before the fleet starts, and taking it here
+ * as well would be a second copy free to disagree with the first. That is exactly
+ * how this call came to run an 8.4s round trip against a 4s liveness budget.
+ *
+ * @param {object} env - the suite's test env, carrying the declared wire
  */
-export async function setLatency(env, { delay = '80ms 20ms', perNode = {}, loss = null } = {}) {
+export async function setLatency(env) {
+  const wire = env?.wire;
+  if (!wire) {
+    throw new Error(
+      'setLatency: this suite shapes the wire but never declared it. Pass '
+      + "timing: { wireLatency: { delay: '80ms 20ms' } } to createTestEnv, so the peer-liveness "
+      + 'budget and anything else derived from the round trip move with it.',
+    );
+  }
+  const { delay, perNode = {}, loss = null } = wire;
   const cfg = getSubnetConfig();
   const n = env.clients.length;
   for (let i = 0; i < n; i += 1) {

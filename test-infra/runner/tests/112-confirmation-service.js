@@ -84,11 +84,13 @@ describe('Confirmation service: RPC failure windows', function () {
       hookCtx: this,
       nodes: 1,
       tickerAutostart: false,
+      // One block owed against however many the node list is actually seeded with,
+      // rather than a limit that only works while that number stays 10. With the
+      // chain view withdrawn after 5s the deadline is that one block's worth of
+      // time, which is what makes expiry observable inside the timeouts.
+      timing: { confirmation: { blocksOwed: 1 } },
       configOverrides: {
-        // The stub confirms 10 blocks back, so a limit of 11 leaves one block owed.
-        // With the chain view withdrawn after 5s the deadline is that one block's
-        // worth of time, which is what makes expiry observable inside the timeouts.
-        confirmation: { daemonStaleMs: 10000, confirmExpirationBlocks: 11, blockIntervalMs: 10000 },
+        confirmation: { daemonStaleMs: 10000 },
         daemon: { subscriptions: { chainStaleAfterMs: 5000 } },
       },
     });

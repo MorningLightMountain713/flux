@@ -36,17 +36,14 @@ describe('Compound failures: peer loss + daemon failure during READY', function 
       hookCtx: this,
       nodes: 5,
       tickerAutostart: false,
-      configOverrides: {
-        // An unreachable daemon deliberately PRESERVES message capability - the
-        // node still knows who it is and can still broadcast - so the only thing
-        // that withdraws it while the poll goes unanswered is the confirmation
-        // ageing out on chain. The stub confirms every node 10 blocks back, so a
-        // limit of 11 leaves one block owed: reachable either as a couple of
-        // blocks on the live chain view or as one block's worth of time once that
-        // view goes stale. Nodes that can still poll are untouched by the limit -
-        // the expiry branch only runs for a node with no answer at all.
-        confirmation: { confirmExpirationBlocks: 11, blockIntervalMs: 10000 },
-      },
+      // An unreachable daemon deliberately PRESERVES message capability - the node
+      // still knows who it is and can still broadcast - so the only thing that
+      // withdraws it while the poll goes unanswered is the confirmation ageing out
+      // on chain. One block owed is reachable either as a couple of blocks on the
+      // live chain view or as one block's worth of time once that view goes stale.
+      // Nodes that can still poll are untouched by the window - the expiry branch
+      // only runs for a node with no answer at all.
+      timing: { confirmation: { blocksOwed: 1 } },
     });
     await bootToReady(env);
   });

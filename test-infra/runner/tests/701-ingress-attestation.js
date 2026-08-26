@@ -72,11 +72,12 @@ describe('82 ingress attestation - capture, gossip, gating, backfill', function 
       hookCtx: this,
       nodes: 5,
       tickerAutostart: false,
+      // partitionGroups only returns once the cross-group sockets are gone — until
+      // then the gossip the isolated node is supposed to miss sits queued in TCP and
+      // lands on heal — so that wait IS peer liveness, and declaring the partition is
+      // what compresses it.
+      timing: { partitions: true },
       configOverrides: {
-        // partitionGroups only returns once the cross-group sockets are gone — until then
-        // the gossip the isolated node is supposed to miss sits queued in TCP and lands on
-        // heal. That wait IS peer liveness, 45s on production defaults; compressed to ~9s.
-        peers: { wsPingIntervalMs: 3000 },
         fluxapps: {
           minOutgoing: 2,
           minIncoming: 1,
