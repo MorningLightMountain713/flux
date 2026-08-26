@@ -10,15 +10,22 @@ import { setSynced } from '../framework/syncthing-control.js';
 import { getAppContainerStatus } from '../framework/container.js';
 import { waitFor, waitForAppInstalled, waitForReconcileActuated, assertNoEvent } from '../framework/wait.js';
 
-// The rollout's sequencing claim (§13.6): the plane ships everywhere INERT
-// and governs only once the network-enforced version floor
-// (config.minimumFluxOSAllowedVersion, a per-release constant enforced
-// peer-to-peer at handshake) reaches the release that carries it. Below that
-// floor the fleet is, behaviorally, the legacy world: the legacy election
-// governs, apps serve, and not one grant is pursued anywhere. The dangerous
-// rollout state is both regimes actuating at once, and this suite pins the
-// half no other suite covers — the plane staying SILENT while pinned above
-// the floor in force. (The active half is every other 12xx suite; a
+// The rollout's sequencing claim (§13.6): the plane ships everywhere INERT and
+// governs only from an agreed block. Two things gate it and they answer different
+// questions. The network-enforced version floor
+// (config.minimumFluxOSAllowedVersion, refused at handshake) settles WHETHER a
+// node has the code at all — a node without it is not on the network to elect
+// anything. The activation height settles WHEN everyone starts using it, which a
+// version cannot: each node satisfies a version comparison the moment IT upgrades,
+// and the watchdog spreads upgrades over hours, so a version-only gate has a
+// window in which some nodes grant while the rest still elect. A height is the one
+// value every node answers identically, at the same time.
+//
+// Below the height the fleet is, behaviorally, the legacy world: the legacy
+// election governs, apps serve, and not one grant is pursued anywhere. The
+// dangerous rollout state is both regimes actuating at once, and this suite pins
+// the half no other suite covers — the plane staying SILENT while scheduled for a
+// block the chain has not reached. (The active half is every other 12xx suite; a
 // version-evicted or genuinely old node is, to the plane, a listed-but-silent
 // cell — 1213's dark-referee content, both flavors. Real wire interop with
 // the deployed release is the v9 RELEASE qualification, tested in the
@@ -26,7 +33,7 @@ import { waitFor, waitForAppInstalled, waitForReconcileActuated, assertNoEvent }
 
 const HOLDERS = [0, 1, 2];
 
-describe('rollout sequencing: the plane stays inert below the version floor', function () {
+describe('rollout sequencing: the plane stays inert below the activation height', function () {
   let env;
   let name;
 
@@ -49,9 +56,9 @@ describe('rollout sequencing: the plane stays inert below the version floor', fu
           quorumGrantMinHolderAgeMs: 0,
           quorumGrantPursuitIntervalMs: 10000,
           quorumGrantUnknownGraceMs: 30000,
-          // Pinned ABOVE any floor in force: the exact state every node ships
-          // in until the release that raises the floor.
-          quorumGrantMinFluxOSVersion: '99.0.0',
+          // Scheduled for a block this chain never reaches: the exact state every
+          // node ships in until the activation block arrives.
+          quorumGrantActivationHeight: 99_000_000,
         },
       },
     });

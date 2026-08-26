@@ -89,61 +89,68 @@ describe('quorumGrant mastershipGrantGate', () => {
     });
   });
 
-  describe('sequencing: the version floor decides, not a probe', () => {
+  describe('sequencing: the chain decides WHEN, the floor decided WHETHER', () => {
     // The real wiring, config included - node-config is frozen once read, so the
     // config module is injected rather than mutated. Every key the gate reads is
     // supplied: proxyquire replaces the module wholesale and a missing key would
     // read as undefined rather than fail.
-    function gateWith({ flag, required, floor }) {
+    function gateWith({ flag, activateAt, height, synced = true }) {
       return proxyquire('../../ZelBack/src/services/appLifecycle/mastershipGrantGate', {
         config: {
-          minimumFluxOSAllowedVersion: floor,
           fluxapps: {
             quorumGrantMastership: flag,
-            quorumGrantMinFluxOSVersion: required,
+            quorumGrantActivationHeight: activateAt,
             quorumGrantUnknownGraceMs: 120000,
             quorumGrantPursuitIntervalMs: 30000,
             quorumGrantHeldTtlMs: 150000,
           },
         },
+        '../daemonService/daemonServiceMiscRpcs': {
+          isDaemonSynced: () => ({ data: { height, synced } }),
+        },
       });
     }
 
-    it('governs once the enforced floor reaches the release that carries it', async () => {
-      const gate = gateWith({ flag: true, required: '8.17.0', floor: '8.17.0' });
+    it('governs once the chain reaches the activation height', async () => {
+      const gate = gateWith({ flag: true, activateAt: 2100000, height: 2100000 });
       const verdict = await gate.grantVerdict(IDENTIFIER, activeStandbyComp());
       expect(verdict, 'the plane engaged').to.not.equal(null);
       expect(grantClient.acquire.called).to.equal(true);
     });
 
-    it('stays inert while the floor is below it, however the flag is set', async () => {
-      const gate = gateWith({ flag: true, required: '8.17.0', floor: '8.13.1' });
-      const verdict = await gate.grantVerdict(IDENTIFIER, activeStandbyComp());
-      expect(verdict, 'a mixed fleet is still possible, so the plane sits out').to.equal(null);
-      expect(grantClient.acquire.called).to.equal(false);
-    });
-
-    it('stays inert while no release carries it yet', async () => {
-      const gate = gateWith({ flag: true, required: null, floor: '9.9.9' });
+    it('stays inert one block short, however the flag is set', async () => {
+      // The boundary, both sides. A height comparison off by one engages a whole
+      // fleet a block early - which is a block in which some nodes grant and the
+      // rest still elect.
+      const gate = gateWith({ flag: true, activateAt: 2100000, height: 2099999 });
       expect(await gate.grantVerdict(IDENTIFIER, activeStandbyComp())).to.equal(null);
       expect(grantClient.acquire.called).to.equal(false);
     });
 
-    it('stays inert while the flag is off, however high the floor', async () => {
-      const gate = gateWith({ flag: false, required: '8.17.0', floor: '9.9.9' });
+    it('stays inert while no height is scheduled yet', async () => {
+      const gate = gateWith({ flag: true, activateAt: null, height: 9999999 });
       expect(await gate.grantVerdict(IDENTIFIER, activeStandbyComp())).to.equal(null);
       expect(grantClient.acquire.called).to.equal(false);
     });
 
-    it('compares the floor against the requirement, not the other way round', async () => {
-      // The arg-order mistake this guards: a floor ABOVE the requirement must
-      // engage, and one below must not. Reversing them inverts both.
-      const ahead = gateWith({ flag: true, required: '8.17.0', floor: '9.1.0' });
-      expect(await ahead.grantVerdict(IDENTIFIER, activeStandbyComp())).to.not.equal(null);
+    it('stays inert while the flag is off, however far past the height', async () => {
+      const gate = gateWith({ flag: false, activateAt: 2100000, height: 9999999 });
+      expect(await gate.grantVerdict(IDENTIFIER, activeStandbyComp())).to.equal(null);
+      expect(grantClient.acquire.called).to.equal(false);
+    });
+
+    it('stays inert while the node cannot say where the chain is', async () => {
+      // An unsynced node does not get to decide the plane has started. Reading a
+      // stale or absent tip as 'reached' would engage exactly the node least able
+      // to know, and a node that is behind is the one most likely to be behind on
+      // the grant records too.
+      const unsynced = gateWith({ flag: true, activateAt: 2100000, height: 2100000, synced: false });
+      expect(await unsynced.grantVerdict(IDENTIFIER, activeStandbyComp())).to.equal(null);
 
       grantClient.acquire.resetHistory();
-      const behind = gateWith({ flag: true, required: '9.1.0', floor: '8.17.0' });
-      expect(await behind.grantVerdict(IDENTIFIER, activeStandbyComp())).to.equal(null);
+      const noHeight = gateWith({ flag: true, activateAt: 2100000, height: undefined });
+      expect(await noHeight.grantVerdict(IDENTIFIER, activeStandbyComp())).to.equal(null);
+      expect(grantClient.acquire.called).to.equal(false);
     });
   });
 

@@ -2,6 +2,7 @@
 
 const config = require('config');
 const serviceHelper = require('../serviceHelper');
+const daemonServiceMiscRpcs = require('../daemonService/daemonServiceMiscRpcs');
 const dockerService = require('../dockerService');
 const generalService = require('../generalService');
 const networkStateService = require('../networkStateService');
@@ -44,37 +45,52 @@ const log = require('../../lib/log');
 
 const ROLE = 'master';
 
-// The release that carries the grant plane, as a version the NETWORK enforces.
-// Absent means the plane has not been pinned to a release yet and stays inert:
-// there is no version to compare a floor against, so nothing can guarantee the
-// code is everywhere.
-function requiredFluxOSVersion() {
-  return config.fluxapps.quorumGrantMinFluxOSVersion ?? null;
+// The block at which the plane starts governing. Absent means it has not been
+// scheduled yet and the plane stays inert.
+function activationHeight() {
+  if (testOverrides.activationHeight !== null) return testOverrides.activationHeight;
+  const height = config.fluxapps.quorumGrantActivationHeight;
+  return Number.isInteger(height) && height > 0 ? height : null;
 }
 
 /**
- * Sequencing, not detection.
+ * Sequencing, not detection - and the chain is the clock.
  *
- * A node that does not carry this code cannot say so - it can only fail to
- * answer, and so can a node that is dead, and so can a node behind a broken
- * path. No probe can tell those apart, which is why asking the fleet its
- * version at runtime cannot be made correct.
+ * A node that does not carry this code cannot say so: it can only fail to answer,
+ * and so can a dead node, and so can one behind a broken path. No probe tells
+ * those apart, so asking the fleet its version at runtime cannot be made correct.
+ * That much the network already solves: `minimumFluxOSAllowedVersion` is refused
+ * at handshake, so a node without the release is not on the network to run a
+ * competing election. PRESENCE is settled before this function is reached.
  *
- * So the plane does not ask. It governs only once `minimumFluxOSAllowedVersion`
- * - the floor the network already enforces on every node it will peer with -
- * has been raised to the release that carries it. At that point "every holder
- * speaks the plane" is enforced by the network rather than guessed by a probe,
- * and there is no mixed fleet left to detect.
+ * What a version floor cannot settle is WHEN. Each node satisfies a version
+ * comparison the moment it upgrades, and upgrades are staggered - the watchdog
+ * spreads them over hours. During that window some nodes would be granting while
+ * others were still electing, which is the split brain this plane exists to
+ * prevent, arriving on the way in.
  *
- * The flag may therefore be flipped at any time: it cannot engage the plane
- * before the floor makes it safe.
+ * A height is the one value every node agrees on without asking anyone. Past the
+ * block or not, same answer everywhere, at the same time. So the floor guarantees
+ * everyone HAS it and the height decides when everyone USES it, and neither
+ * substitutes for the other.
+ *
+ * The flag may still be flipped at any time; it cannot engage the plane before
+ * the height, and the height must be scheduled far enough out for the floor to
+ * have been raised first. That ordering is release management, not a runtime
+ * check: a height that arrives while nodes below the floor are still on the
+ * network is a scheduling mistake no config value here can catch.
  */
 function featureEnabled() {
   if (testOverrides.enabled !== null) return testOverrides.enabled;
   if (config.fluxapps.quorumGrantMastership !== true) return false;
-  const required = requiredFluxOSVersion();
-  if (!required) return false;
-  return serviceHelper.minVersionSatisfy(config.minimumFluxOSAllowedVersion, required);
+  const activateAt = activationHeight();
+  if (!activateAt) return false;
+  // The node's own cached tip. Unsynced or unknown reads as NOT reached: a node
+  // that cannot say where the chain is must not be the one deciding the plane
+  // has started.
+  const { height, synced } = daemonServiceMiscRpcs.isDaemonSynced().data ?? {};
+  if (!synced || !Number.isFinite(height)) return false;
+  return height >= activateAt;
 }
 
 function unknownGraceMs() {
@@ -90,7 +106,7 @@ function heldTtlMs() {
   return config.fluxapps.quorumGrantHeldTtlMs ?? 150_000;
 }
 
-const testOverrides = { enabled: null, unknownGraceMs: null };
+const testOverrides = { enabled: null, unknownGraceMs: null, activationHeight: null };
 
 // key -> monotonic ms of the last pursuit kick, jitter-spread
 const pursuits = new Map();
