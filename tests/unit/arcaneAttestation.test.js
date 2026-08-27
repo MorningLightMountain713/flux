@@ -43,34 +43,36 @@ describe('arcaneAttestation verify primitive', () => {
     expect(verifyAttestationSignature('msg', 'not-a-32-byte-key', 'c2ln')).to.equal(false);
   });
 
-  // The production app-purpose key is not yet known: it has to be read once,
-  // out-of-band, from a secure-backend build carrying the `app` purpose. These
-  // two tests pin the state that leaves us in, so it is a tested property rather
-  // than a comment somebody has to notice — and so filling the key in turns them
-  // red, which is the reminder to replace them with a real pinned signature.
-  it('has no production app-attestation key yet', () => {
-    expect(ARCANE_APP_ATTESTATION_PUBKEY).to.equal('');
-  });
-
-  it('fails closed while the key is unset — every attestation is invalid', () => {
-    // The safe direction, and harmless while v9 has not activated: an encrypted
-    // v9 message is dropped rather than admitted on an unverifiable receipt.
-    const { privateKey } = crypto.generateKeyPairSync('ed25519');
-    const message = 'FLUX_ARCANE_ATTEST_v2:abc123';
-    const signature = crypto.sign(null, Buffer.from(message), privateKey).toString('base64');
+  it('verifies a real app-purpose attestation against the hardcoded key', () => {
+    // Captured live from cabbage 2026-08-27, running the SAS build that added
+    // the `app` purpose:
+    //   POST /v2/attest {"message":"<64 a's><64 b's>","purpose":"app"}
+    // The signer prepends FLUX_ARCANE_ATTEST_v2: server-side, so the message
+    // rebuilt here is the domain plus the payload — exactly what flux-spec's
+    // buildArcaneAttestMessage produces from a contentHash and an envelope hash.
+    const message = `FLUX_ARCANE_ATTEST_v2:${'a'.repeat(64)}${'b'.repeat(64)}`;
+    const signature = 'KgeTEdb3s2bBeDG3cttfzwwO85JVh0xcg4PfTE5TNb7HIc567wuzE1PSpmcoO8xeDUUlUpkZvSMbGcbyDsM1CA==';
 
     expect(verifyAttestationSignature(message, ARCANE_APP_ATTESTATION_PUBKEY, signature))
+      .to.equal(true);
+  });
+
+  it('does not verify a signature made under the default purpose', () => {
+    // Same payload, same instance, signed without a purpose — the default
+    // network-wide key that FluxDrive blob upload pins. A purpose derives its
+    // own key, so this is mathematically unable to verify here rather than
+    // merely unlikely to. Captured in the same session as the signature above.
+    const message = `FLUX_ARCANE_ATTEST_v2:${'a'.repeat(64)}${'b'.repeat(64)}`;
+    const defaultPurposeSignature = 'RdqozoBfUOsViIWUhxWnosBvQdeHjyttndVvOWISN2uWw+lc1Jk85xVfP8cXUgsq/9YkvUHkLByIrovJm5wRCg==';
+
+    expect(verifyAttestationSignature(message, ARCANE_APP_ATTESTATION_PUBKEY, defaultPurposeSignature))
       .to.equal(false);
   });
 
-  it('takes a config override, which is how the harness exercises the real gate', () => {
-    // The gate is only meaningful if something can point it at a keypair a test
-    // controls; the fleet harness sets arcane.appAttestationPubkey to its
-    // benchmark stub's app-purpose key.
-    const { publicKey, privateKey } = crypto.generateKeyPairSync('ed25519');
-    const message = 'FLUX_ARCANE_ATTEST_v2:abc123';
-    const signature = crypto.sign(null, Buffer.from(message), privateKey).toString('base64');
-
-    expect(verifyAttestationSignature(message, rawPubBase64(publicKey), signature)).to.equal(true);
+  it('resolves to the network constant when no config override is set', () => {
+    // Config-driven (arcane.appAttestationPubkey) so the fleet harness can point
+    // the gate at its benchmark stub's app-purpose key; with no override it must
+    // fall back to the network constant.
+    expect(ARCANE_APP_ATTESTATION_PUBKEY).to.equal('ERXxzVN8fg4sCjhIPp37XRu1ealmD4TA6tU7A3o6tQM=');
   });
 });
