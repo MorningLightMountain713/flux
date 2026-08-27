@@ -9,8 +9,6 @@ const fluxNetworkHelper = require('../fluxNetworkHelper');
 const { resolveSpec, resolveInstantiatedSpec } = require('../utils/specCutover');
 const { appPricePerMonth } = require('../utils/appUtilities');
 const { getChainParamsPriceUpdates } = require('../utils/chainUtilities');
-const { getSpecBackend } = require('../utils/specLibs');
-const { appsFolder } = require('../utils/appConstants');
 const cacheManager = require('../utils/cacheManager').default;
 const log = require('../../lib/log');
 
@@ -236,9 +234,10 @@ async function onChainDisplayPrice(spec) {
     }
   }
 
-  const { DeploymentSpec } = await getSpecBackend();
-  // Declared view: display pricing must match what every node computes.
-  const { cpu, memoryMb: memory, storageGb: storage } = DeploymentSpec.fromSpec(spec, appsFolder, { replica: null }).resourceTotals();
+  // Declared view: display pricing must match what every node computes. The
+  // spec answers this directly; building a DeploymentSpec to read it resolved
+  // every mount and Docker bind source, then threw all of it away.
+  const { cpu, memoryMb: memory, storageGb: storage } = spec.resourceTotals();
   if (cpu < 3 && memory < 6000 && storage < 150) {
     actualPriceToPay *= 0.8;
   } else if (cpu < 7 && memory < 29000 && storage < 370) {
@@ -344,9 +343,10 @@ async function fiatAndFluxDisplayPrice(spec, appSpecification) {
     }
   }
 
-  const { DeploymentSpec } = await getSpecBackend();
-  // Declared view: display pricing must match what every node computes.
-  const { cpu, memoryMb: memory, storageGb: storage } = DeploymentSpec.fromSpec(spec, appsFolder, { replica: null }).resourceTotals();
+  // Declared view: display pricing must match what every node computes. The
+  // spec answers this directly; building a DeploymentSpec to read it resolved
+  // every mount and Docker bind source, then threw all of it away.
+  const { cpu, memoryMb: memory, storageGb: storage } = spec.resourceTotals();
   const applyHWDiscount = spec.version <= 3 || spec.instances < 4;
   if (applyHWDiscount) {
     if (cpu < 3 && memory < 6000 && storage < 150) {
