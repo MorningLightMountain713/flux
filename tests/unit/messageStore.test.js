@@ -63,6 +63,11 @@ describe('messageStore tests', () => {
       '../utils/specLibs': {
         validateGossipSpec: sinon.stub().resolves(),
         getSpec: sinon.stub().resolves({ UpdatePolicy: { assertCompatible: sinon.stub() } }),
+        // A pure guard: it throws when the version is not yet activated and returns
+        // silently otherwise, so a no-op is the right default here. A test that means
+        // to exercise the gate has to make this THROW - left as a plain stub, it
+        // would pass vacuously.
+        assertVersionActivated: sinon.stub(),
       },
       '../utils/globalState': {
         queuePendingUpdate: sinon.stub(),
