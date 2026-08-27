@@ -22,15 +22,14 @@ const config = require('config');
  * constant as the default, so production always uses the constant while a
  * controlled environment can point verification at a different keypair.
  *
- * PENDING: the production value must be fetched once, out-of-band, from a
- * secure-backend build carrying the `app` purpose:
- *   GET /v2/attestationPublicKey?purpose=app
- * Until it is filled in, every production attestation fails to verify and every
- * encrypted v9 message is dropped — fail-closed, which is the safe direction,
- * and harmless while v9 has not activated. See fluxModels
- * workstreams/sas-attestation-transport/ATTESTATION_ENVELOPE_BINDING.md §10.
+ * Read out-of-band from a secure-backend build carrying the `app` purpose
+ * (`GET /v2/attestationPublicKey?purpose=app`), the same way the network-wide
+ * key was. Verified on cabbage 2026-08-27: distinct from both the default
+ * attestation key and the mesh key, and a signature made under one does not
+ * verify under another — see the pinned live signature in
+ * tests/unit/arcaneAttestation.test.js.
  */
-const DEFAULT_ARCANE_APP_ATTESTATION_PUBKEY = '';
+const DEFAULT_ARCANE_APP_ATTESTATION_PUBKEY = 'ERXxzVN8fg4sCjhIPp37XRu1ealmD4TA6tU7A3o6tQM=';
 const ARCANE_APP_ATTESTATION_PUBKEY = (config.arcane && config.arcane.appAttestationPubkey)
   ?? DEFAULT_ARCANE_APP_ATTESTATION_PUBKEY;
 
