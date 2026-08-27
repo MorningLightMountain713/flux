@@ -90,7 +90,17 @@ function featureEnabled() {
   // has started.
   const { height, synced } = daemonServiceMiscRpcs.isDaemonSynced().data ?? {};
   if (!synced || !Number.isFinite(height)) return false;
-  return height >= activateAt;
+  if (height < activateAt) return false;
+  // Once, on the way in. Every node crosses at its own moment - the tip arrives by
+  // push for some and by poll for others - and the spread between those moments is
+  // exactly what the incumbent's head start has to absorb. Unrecorded, it is not
+  // measurable after the fact.
+  if (!activationAnnounced) {
+    activationAnnounced = true;
+    log.info(`mastershipGrantGate - the plane is live: tip ${height} reached activation height ${activateAt}`);
+    fluxEventBus.publish('quorumGrant:planeActivated', { height, activateAt });
+  }
+  return true;
 }
 
 function unknownGraceMs() {
@@ -129,13 +139,30 @@ function pursuitIntervalMs() {
  * Unreadable docker answers false. A node that cannot see its own containers should
  * not claim the head start, and the fallback (waiting like a standby) is the safe
  * side of that error.
+ *
+ * It reports WHY, not just what. `running: false` has three causes — no such
+ * container, a stopped one, and a docker that would not answer — and the head
+ * start treats all three the same while a diagnosis cannot: a node that answers
+ * false because the name it looked up is not the name docker holds is a lookup
+ * bug, and one that answers false because it genuinely does not run the component
+ * is the rule working. The lookup name is reported alongside the answer so the two
+ * are never confused again.
  */
-async function runsComponentLocally(identifier) {
+async function localComponentState(identifier) {
+  const lookup = dockerService.getAppDockerNameIdentifier(identifier);
   try {
     const inspected = await dockerService.dockerContainerInspect(identifier);
-    return Boolean(inspected?.State?.Running);
-  } catch {
-    return false;
+    if (!inspected) return { running: false, found: false, lookup, name: null };
+    return {
+      running: Boolean(inspected.State?.Running),
+      found: true,
+      lookup,
+      name: inspected.Name ?? null,
+    };
+  } catch (error) {
+    return {
+      running: false, found: false, lookup, name: null, error: error.message,
+    };
   }
 }
 
@@ -152,6 +179,9 @@ function heldTtlMs() {
 }
 
 const testOverrides = { enabled: null, unknownGraceMs: null, activationHeight: null };
+
+// one-shot, so the crossing is announced rather than repeated every pass
+let activationAnnounced = false;
 
 // key -> monotonic ms of the last pursuit kick, jitter-spread
 const pursuits = new Map();
@@ -231,10 +261,20 @@ async function acquireUnlessSettled(identifier, appName, key) {
     if (!data?.grantee) {
       const firstSeen = coldSince.get(key) ?? nowMs();
       coldSince.set(key, firstSeen);
-      if (!(await runsComponentLocally(identifier))
-        && nowMs() - firstSeen < coldKeyHeadStartMs()) {
-        return;
-      }
+      const local = await localComponentState(identifier);
+      const waited = nowMs() - firstSeen;
+      const headStart = coldKeyHeadStartMs();
+      const deferring = !local.running && waited < headStart;
+      // One line per pursuit of a cold key, and it carries every input to the
+      // decision. A cold key is rare - an app's birth, and the activation crossing -
+      // so this costs nothing standing, and without it the only observable is which
+      // node ended up with the term, which cannot tell a lookup that missed from a
+      // head start that was too short.
+      log.info(`mastershipGrantGate - cold key ${key}: identifier=${identifier} `
+        + `lookup=${local.lookup} found=${local.found} name=${local.name ?? 'none'} `
+        + `running=${local.running}${local.error ? ` dockerError=${local.error}` : ''} `
+        + `waited=${waited}ms headStart=${headStart}ms -> ${deferring ? 'DEFER' : 'PURSUE'}`);
+      if (deferring) return;
     } else {
       coldSince.delete(key);
     }
@@ -255,6 +295,12 @@ async function acquireUnlessSettled(identifier, appName, key) {
     log.warn(`mastershipGrantGate - record read before pursuing ${key} failed: ${error.message}`);
   }
 
+  // The head start is a duration, so an acquisition's own duration is what says
+  // whether it can fit inside one. A cold key is founded, not merely asked for -
+  // a committee has to form first - and nothing until now measured how long that
+  // takes against the window the incumbent is given.
+  const acquireStarted = nowMs();
+  log.info(`mastershipGrantGate - acquiring ${key} for ${identifier}`);
   grantClient.acquire(key, {
     mode: 'held',
     ttlMs: heldTtlMs(),
@@ -273,13 +319,25 @@ async function acquireUnlessSettled(identifier, appName, key) {
     },
   }).then((outcome) => {
     if (outcome.granted) {
-      log.info(`mastershipGrantGate - ${identifier} holds ${key} (epoch ${outcome.holder.epoch})`);
+      log.info(`mastershipGrantGate - ${identifier} holds ${key} (epoch ${outcome.holder.epoch}) `
+        + `after ${nowMs() - acquireStarted}ms`);
       if (outcome.deposed) raiseFence(appName, outcome.deposed);
       reconcilerQueue.enqueueComponent(identifier);
+    } else {
+      // A refusal names itself four different ways (reason, a live incumbent, a
+      // taught wait, another founder) and reading only `reason` reports three of
+      // them as unexplained.
+      const refusal = outcome.reason
+        ?? (outcome.incumbent ? `shielded by incumbent ${outcome.incumbent.grantee ?? 'unknown'}` : null)
+        ?? (Number.isFinite(outcome.retryAfterMs) ? `lock-delay taught ${outcome.retryAfterMs}ms` : null)
+        ?? (outcome.founder ? `founded by ${outcome.founder}` : 'unexplained');
+      log.info(`mastershipGrantGate - ${key} not granted to ${identifier} `
+        + `after ${nowMs() - acquireStarted}ms: ${refusal}`);
     }
     return outcome;
   }).catch((error) => {
-    log.warn(`mastershipGrantGate - pursuit of ${key} failed: ${error.message}`);
+    log.warn(`mastershipGrantGate - pursuit of ${key} failed `
+      + `after ${nowMs() - acquireStarted}ms: ${error.message}`);
   });
 }
 
@@ -555,7 +613,9 @@ async function yieldMastership(appName) {
 function resetForTests(options = {}) {
   testOverrides.enabled = options.enabled ?? null;
   testOverrides.unknownGraceMs = options.unknownGraceMs ?? null;
+  activationAnnounced = false;
   pursuits.clear();
+  coldSince.clear();
   unknownSince.clear();
   folderDemotions.clear();
   fences.clear();
