@@ -62,6 +62,60 @@ describe('specLibs — how a spec validation failure reaches the caller', () => 
     });
   });
 
+  // The version-activation gate — chain policy, and until now completely
+  // untested: removing it from both wrappers broke nothing across 31 suites.
+  //
+  // It runs BEFORE the version class validates anything, which is what makes it
+  // testable without a fully valid spec: below the height the call fails on the
+  // gate, above it the call gets far enough to fail on the schema instead. The
+  // difference between those two errors is the assertion.
+  describe('version activation height', () => {
+    // v9 activates at 2,791,000 in the test config.
+    const V9_ACTIVATION = 2791000;
+    const incompleteV9 = { version: 9, name: 'x' };
+
+    for (const [label, validate] of [
+      ['validateSubmissionSpec', (blob, opts) => validateSubmissionSpec(blob, opts)],
+      ['validateGossipSpec', (blob, opts) => validateGossipSpec(blob, opts)],
+    ]) {
+      describe(label, () => {
+        it('refuses a version the chain has not activated yet', async () => {
+          try {
+            await validate(incompleteV9, { height: V9_ACTIVATION - 1 });
+            expect.fail('a pre-activation height should be refused');
+          } catch (err) {
+            expect(err.message).to.match(/version 9 not yet supported/);
+          }
+        });
+
+        it('lets the spec through to real validation once activated', async () => {
+          // Reaching the schema failure IS the pass condition: the gate did not
+          // fire. Asserting "does not throw" would be wrong — this blob is
+          // invalid either way, which is exactly how a broken gate would hide.
+          try {
+            await validate(incompleteV9, { height: V9_ACTIVATION });
+            expect.fail('an incomplete v9 spec should still fail validation');
+          } catch (err) {
+            expect(err).to.be.instanceOf(ValidationError);
+            expect(err.message).to.not.match(/not yet supported/);
+          }
+        });
+
+        it('skips the gate entirely when no height is supplied', async () => {
+          // Callers without a daemon height (offline tooling, tests) must not be
+          // gated on a height they do not have.
+          try {
+            await validate(incompleteV9);
+            expect.fail('an incomplete v9 spec should still fail validation');
+          } catch (err) {
+            expect(err).to.be.instanceOf(ValidationError);
+            expect(err.message).to.not.match(/not yet supported/);
+          }
+        });
+      });
+    }
+  });
+
   // An unsupported version is not a schema failure, so it stays a plain Error —
   // the type distinction is the point of surfacing ValidationError at all.
   it('leaves a version rejection as a plain Error', async () => {
