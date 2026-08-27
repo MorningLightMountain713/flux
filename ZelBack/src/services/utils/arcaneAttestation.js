@@ -4,23 +4,35 @@ const crypto = require('node:crypto');
 const config = require('config');
 
 /**
- * Network arcane-attestation public key (base64, raw 32-byte Ed25519).
+ * App-attestation public key (base64, raw 32-byte Ed25519) for the secure
+ * backend's `app` purpose.
  *
- * Every genuine Arcane node derives the same attestation keypair from the
- * network-wide salt, so there is exactly one public key for the whole network.
- * Any node — with or without a local secure backend — can verify an attestation
- * locally with it, without an RPC.
+ * Every genuine Arcane node derives the same keypair from the network-wide
+ * salt, so there is exactly one public key for the whole network. Any node —
+ * with or without a local secure backend — verifies an attestation locally with
+ * it, without an RPC. That is the point: a node that cannot decrypt an
+ * encrypted spec still has to decide whether to store and relay it.
  *
- * Resolved from config (`arcane.attestationPubkey`) with the network constant as
- * the default, so production always uses the constant while a controlled
- * environment can point verification at a different attestation keypair.
+ * The `app` purpose has its OWN key, derived from the same salt under its own
+ * HKDF info. An app attestation is therefore mathematically unable to verify
+ * under the network-wide default-purpose key (which FluxDrive blob upload
+ * pins), or the other way round, rather than merely unlikely to.
  *
- * Rotation: bump the attestation domain version (FLUX_ARCANE_ATTEST_v1 -> v2)
- * and ship the new public key in a release; retain old keys to verify history.
+ * Resolved from config (`arcane.appAttestationPubkey`) with the network
+ * constant as the default, so production always uses the constant while a
+ * controlled environment can point verification at a different keypair.
+ *
+ * PENDING: the production value must be fetched once, out-of-band, from a
+ * secure-backend build carrying the `app` purpose:
+ *   GET /v2/attestationPublicKey?purpose=app
+ * Until it is filled in, every production attestation fails to verify and every
+ * encrypted v9 message is dropped — fail-closed, which is the safe direction,
+ * and harmless while v9 has not activated. See fluxModels
+ * workstreams/sas-attestation-transport/ATTESTATION_ENVELOPE_BINDING.md §10.
  */
-const DEFAULT_ARCANE_ATTESTATION_PUBKEY = 'fYkJ9M6NBKnQxnr8HD3FrYakKr8JM8BRo/wF4MA9/Ss=';
-const ARCANE_ATTESTATION_PUBKEY = (config.arcane && config.arcane.attestationPubkey)
-  ?? DEFAULT_ARCANE_ATTESTATION_PUBKEY;
+const DEFAULT_ARCANE_APP_ATTESTATION_PUBKEY = '';
+const ARCANE_APP_ATTESTATION_PUBKEY = (config.arcane && config.arcane.appAttestationPubkey)
+  ?? DEFAULT_ARCANE_APP_ATTESTATION_PUBKEY;
 
 // DER SubjectPublicKeyInfo prefix for an Ed25519 public key. Prepended to the
 // raw 32-byte key so node:crypto can import it as a KeyObject.
@@ -59,6 +71,6 @@ function verifyAttestationSignature(message, publicKeyB64, signatureB64) {
 }
 
 module.exports = {
-  ARCANE_ATTESTATION_PUBKEY,
+  ARCANE_APP_ATTESTATION_PUBKEY,
   verifyAttestationSignature,
 };

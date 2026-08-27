@@ -447,9 +447,12 @@ const benchHandlers = {
   signblobupload: (params) => JSON.stringify({ status: 'ok', signature: benchCrypto.signBlobUpload(JSON.parse(params[0])) }),
   attest: (params) => {
     const { message, purpose } = JSON.parse(params[0]);
-    const signature = purpose === 'mesh'
-      ? benchCrypto.signMeshAttestation(message)
-      : benchCrypto.signAttestation(message);
+    // Purpose selects both the key and the domain the signer prepends, exactly
+    // as the real backend does. No purpose is the legacy verbatim path.
+    let signature;
+    if (purpose === 'mesh') signature = benchCrypto.signMeshAttestation(message);
+    else if (purpose === 'app') signature = benchCrypto.signAppAttestation(message);
+    else signature = benchCrypto.signAttestation(message);
     return JSON.stringify({ status: 'ok', signature });
   },
   appencrypt: (params) => JSON.stringify({ status: 'ok', ...benchCrypto.appEncrypt(JSON.parse(params[0])) }),
