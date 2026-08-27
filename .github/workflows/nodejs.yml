@@ -82,8 +82,8 @@ jobs:
         run: |
           node -v
           npm -v
-      - name: npm install
-        run: npm i
+      - name: npm ci
+        run: npm ci
       - name: configure
         run: npm run ciconfig
       - name: prebuild
