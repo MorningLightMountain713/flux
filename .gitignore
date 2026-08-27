@@ -39,7 +39,6 @@ dist/web/*
 build/*
 !build/icons
 !dist/electron/splash.html
-.package-lock.json
 node_modules/
 npm-debug.log
 npm-debug.log.*
