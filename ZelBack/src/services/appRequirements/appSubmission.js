@@ -393,7 +393,7 @@ async function submitAppRegistration(req, res, processedBody, contentCtx) {
   // before parsing, so the field only ever rides messages they ignore.
   let arcaneAttestation;
   if (signedEvent.requiresArcaneAttestation()) {
-    arcaneAttestation = await appEventVerifier.requestAttestation(contentHash);
+    arcaneAttestation = await appEventVerifier.requestAttestation(contentHash, broadcastBlob);
   }
 
   const temporaryAppMessage = {

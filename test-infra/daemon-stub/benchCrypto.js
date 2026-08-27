@@ -37,11 +37,18 @@ function ed25519FromSeed(seed) {
 const attestationKey = ed25519FromSeed(hkdf32('ed25519', 'attestation'));
 const blobUploadKey = ed25519FromSeed(hkdf32('ed25519', 'blobupload'));
 const meshAttestationKey = ed25519FromSeed(hkdf32('ed25519', 'mesh-attestation'));
+const appAttestationKey = ed25519FromSeed(hkdf32('ed25519', 'app-attestation'));
 
 // Mesh voucher domain separator — must match VOUCHER_DOMAIN in
 // ZelBack/src/services/appMesh/meshVoucher.js. The signer prepends it, so no
 // caller can mint bytes shaped like another protocol's.
 const MESH_VOUCHER_DOMAIN = 'FLUX_MESH_VOUCHER_v1:';
+
+// App-attestation domain separator — must match ARCANE_ATTEST_DOMAIN in
+// flux-spec signature/arcaneAttestation.js. Prepended here for the same reason
+// as the mesh one: the signer owns the domain, so a caller supplies only a
+// payload and cannot mint bytes shaped like another protocol's message.
+const APP_ATTEST_DOMAIN = 'FLUX_ARCANE_ATTEST_v2:';
 
 function signEd25519(privateKey, messageBuf) {
   return crypto.sign(null, messageBuf, privateKey).toString('base64');
@@ -341,7 +348,9 @@ module.exports = {
   signMeshAttestation: (message) => signEd25519(meshAttestationKey.privateKey, Buffer.from(MESH_VOUCHER_DOMAIN + message)),
   attestationPubkeyB64: attestationKey.rawPubB64,
   blobUploadPubkeyB64: blobUploadKey.rawPubB64,
+  signAppAttestation: (message) => signEd25519(appAttestationKey.privateKey, Buffer.from(APP_ATTEST_DOMAIN + message)),
   meshAttestationPubkeyB64: meshAttestationKey.rawPubB64,
+  appAttestationPubkeyB64: appAttestationKey.rawPubB64,
   TRANSPORT_INFO,
   TRANSPORT_EXPORT_LABEL,
 };

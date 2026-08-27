@@ -93,7 +93,11 @@ describe('appEventVerifier', () => {
         ConfirmedAppEvent: realBackend.ConfirmedAppEvent,
         computeMessageHash: sinon.stub().returns('v1-hash-abc'),
         computeMessageHashV2: sinon.stub().returns('v2-hash-xyz'),
-        buildArcaneAttestMessage: sinon.stub().callsFake((h) => `FLUX_ARCANE_ATTEST_v1${h}`),
+        // The payload the node sends to be signed: both hashes, no domain — the
+        // secure backend prefixes that itself under the `app` purpose.
+        buildArcaneAttestPayload: sinon.stub().callsFake((h, e) => `${h}${e}`),
+        envelopeHash: sinon.stub().callsFake(() => 'e'.repeat(64)),
+        ARCANE_ATTEST_PURPOSE: 'app',
       }),
     };
 
@@ -102,7 +106,7 @@ describe('appEventVerifier', () => {
     };
 
     arcaneAttestationStub = {
-      ARCANE_ATTESTATION_PUBKEY: 'test-network-pubkey',
+      ARCANE_APP_ATTESTATION_PUBKEY: 'test-app-attestation-pubkey',
       verifyAttestationSignature: sinon.stub(),
     };
 
@@ -464,26 +468,32 @@ describe('appEventVerifier', () => {
   });
 
   describe('requestAttestation', () => {
-    it('signs the domain-separated content hash via the local secure backend and returns the signature', async () => {
+    it('signs the content hash AND the envelope hash, under the app purpose', async () => {
       benchmarkServiceStub.attest.resolves({ status: 'success', data: JSON.stringify({ status: 'ok', signature: 'attest-signature-b64' }) });
 
-      const signature = await appEventVerifier.requestAttestation('deadbeef');
+      const signature = await appEventVerifier.requestAttestation('deadbeef', { encrypted: {} });
 
       expect(signature).to.equal('attest-signature-b64');
-      expect(benchmarkServiceStub.attest.calledOnceWithExactly({ message: 'FLUX_ARCANE_ATTEST_v1deadbeef' })).to.be.true;
+      // The envelope hash is the half a node without a secure backend can check
+      // for itself, so it has to reach the signer. And the purpose has to ride
+      // along, or the backend signs verbatim under the wrong key.
+      expect(benchmarkServiceStub.attest.calledOnceWithExactly({
+        message: `deadbeef${'e'.repeat(64)}`,
+        purpose: 'app',
+      })).to.be.true;
     });
 
     it('throws when the attestation call does not succeed', async () => {
       benchmarkServiceStub.attest.resolves({ status: 'error', data: 'attestation unavailable' });
 
-      await expect(appEventVerifier.requestAttestation('deadbeef'))
+      await expect(appEventVerifier.requestAttestation('deadbeef', { encrypted: {} }))
         .to.be.rejectedWith(/Failed to obtain arcane attestation/);
     });
 
     it('throws when the attestation response omits a signature', async () => {
       benchmarkServiceStub.attest.resolves({ status: 'success', data: JSON.stringify({ status: 'ok' }) });
 
-      await expect(appEventVerifier.requestAttestation('deadbeef'))
+      await expect(appEventVerifier.requestAttestation('deadbeef', { encrypted: {} }))
         .to.be.rejectedWith(/Failed to obtain arcane attestation/);
     });
   });
@@ -497,7 +507,7 @@ describe('appEventVerifier', () => {
       expect(result).to.be.true;
       expect(appEvent.verifyArcaneAttestation.calledOnceWithExactly(
         arcaneAttestationStub.verifyAttestationSignature,
-        'test-network-pubkey',
+        'test-app-attestation-pubkey',
       )).to.be.true;
     });
 
