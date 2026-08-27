@@ -79,10 +79,7 @@ async function validateSubmissionSpec(spec, { height } = {}) {
   if (!VersionClass) {
     throw new Error(`Unsupported Flux App specification version: ${spec && spec.version}`);
   }
-  if (height !== undefined
-    && height < config.fluxapps.appSpecsEnforcementHeights[spec.version]) {
-    throw new Error(`Flux apps specifications of version ${spec.version} not yet supported`);
-  }
+  assertVersionActivated(spec.version, height);
   return VersionClass.fromSubmission(spec);
 }
 
@@ -104,10 +101,7 @@ async function validateGossipSpec(spec, { height } = {}) {
   if (!VersionClass) {
     throw new Error(`Unsupported Flux App specification version: ${spec && spec.version}`);
   }
-  if (height !== undefined
-    && height < config.fluxapps.appSpecsEnforcementHeights[spec.version]) {
-    throw new Error(`Flux apps specifications of version ${spec.version} not yet supported`);
-  }
+  assertVersionActivated(spec.version, height);
   return VersionClass.deserialize(spec);
 }
 
