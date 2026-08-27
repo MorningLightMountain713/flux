@@ -73,7 +73,7 @@ jobs:
           node-version: 20.8.0
 
       - name: Install runner dependencies
-        run: npm install --no-audit --no-fund
+        run: npm ci --no-audit --no-fund
         working-directory: test-infra/runner
 
       - name: Build harness images
