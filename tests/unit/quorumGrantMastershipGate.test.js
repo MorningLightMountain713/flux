@@ -14,6 +14,7 @@ const appsRuntimeState = require('../../ZelBack/src/services/appManagement/appsR
 const dockerService = require('../../ZelBack/src/services/dockerService');
 const grantClient = require('../../ZelBack/src/services/quorumGrant/grantClient');
 const mastershipGrantGate = require('../../ZelBack/src/services/appLifecycle/mastershipGrantGate');
+const log = require('../../ZelBack/src/lib/log');
 
 // The reconciler's one question — "does the grant veto this component?" —
 // answered veto-only. What matters most here is what the gate does NOT do:
@@ -196,6 +197,100 @@ describe('quorumGrant mastershipGrantGate', () => {
       await mastershipGrantGate.grantVerdict(IDENTIFIER, activeStandbyComp());
       await new Promise(setImmediate);
       expect(grantClient.acquire.called).to.equal(false);
+    });
+
+    // The head start is a WINDOW, and until now only its opening was covered: three
+    // tests asserted what happens at waited=0 and none asserted that it ever ends. A
+    // rule that deferred forever would have passed all of them, and on a fleet that
+    // is an app with no master at all rather than one that keeps its own.
+    function coldGate(extraConfig) {
+      return proxyquire('../../ZelBack/src/services/appLifecycle/mastershipGrantGate', {
+        config: {
+          fluxapps: {
+            quorumGrantMastership: true,
+            quorumGrantActivationHeight: 2100000,
+            quorumGrantUnknownGraceMs: 120000,
+            quorumGrantPursuitIntervalMs: 30000,
+            quorumGrantHeldTtlMs: 150000,
+            ...extraConfig,
+          },
+        },
+        '../daemonService/daemonServiceMiscRpcs': {
+          isDaemonSynced: () => ({ data: { height: 2100000, synced: true } }),
+        },
+      });
+    }
+
+    it('the head start ENDS: past the window a standby pursues after all', async () => {
+      // Otherwise an app whose master died just before the crossing would have no
+      // node permitted to claim it, and would sit masterless forever. The head start
+      // buys the incumbent priority, never exclusivity.
+      messageStore.getMasterleaseRecord.resolves(null);
+      dockerService.dockerContainerInspect.resolves({ State: { Running: false } });
+      const gate = coldGate({ quorumGrantIncumbentHeadStartMs: 0 });
+      await gate.grantVerdict(IDENTIFIER, activeStandbyComp());
+      await new Promise(setImmediate);
+      expect(grantClient.acquire.called, 'an elapsed head start no longer defers').to.equal(true);
+    });
+
+    it('the head start is the noticing interval plus three ask rounds', async () => {
+      // Derived, not chosen — and the derivation is only checkable because the
+      // decision line reports the figure it used.
+      messageStore.getMasterleaseRecord.resolves(null);
+      dockerService.dockerContainerInspect.resolves({ State: { Running: false } });
+      const info = sinon.stub(log, 'info');
+      const gate = coldGate({ daemonInfoIntervalMs: 5000, quorumGrantAskTimeoutMs: 3000 });
+      await gate.grantVerdict(IDENTIFIER, activeStandbyComp());
+      await new Promise(setImmediate);
+      const line = info.getCalls().map((c) => c.args[0]).find((m) => String(m).includes('cold key'));
+      expect(line, 'the cold-key decision is logged').to.be.a('string');
+      expect(line).to.include('headStart=14000ms');
+    });
+
+    it('the decision line names the identifier, the docker name and the verdict', async () => {
+      // The instrument itself, run rather than read: on the fleet the only other
+      // observable is which node ended up with the term, and that cannot tell a
+      // lookup that missed from a head start that was too short.
+      messageStore.getMasterleaseRecord.resolves(null);
+      dockerService.dockerContainerInspect.resolves({ Name: `/flux${IDENTIFIER}`, State: { Running: true } });
+      const info = sinon.stub(log, 'info');
+      await mastershipGrantGate.grantVerdict(IDENTIFIER, activeStandbyComp());
+      await new Promise(setImmediate);
+      const line = info.getCalls().map((c) => c.args[0]).find((m) => String(m).includes('cold key'));
+      expect(line, 'the cold-key decision is logged').to.be.a('string');
+      expect(line).to.include(`identifier=${IDENTIFIER}`);
+      expect(line).to.include(`lookup=/flux${IDENTIFIER}`);
+      expect(line).to.include('found=true');
+      expect(line).to.include('running=true');
+      expect(line).to.include('-> PURSUE');
+    });
+
+    it('a container docker does not hold reads as absent, not as stopped', async () => {
+      // The two are one boolean on the decision path and must never be one in the
+      // record of it: absent is a lookup that missed, stopped is the rule working.
+      messageStore.getMasterleaseRecord.resolves(null);
+      dockerService.dockerContainerInspect.resolves(null);
+      const info = sinon.stub(log, 'info');
+      await mastershipGrantGate.grantVerdict(IDENTIFIER, activeStandbyComp());
+      await new Promise(setImmediate);
+      const line = info.getCalls().map((c) => c.args[0]).find((m) => String(m).includes('cold key'));
+      expect(line, 'the cold-key decision is logged').to.be.a('string');
+      expect(line).to.include('found=false');
+      expect(line).to.include('name=none');
+      expect(line).to.include('running=false');
+      expect(line).to.include('-> DEFER');
+    });
+
+    it('a docker that will not answer says so, rather than reading as absent', async () => {
+      messageStore.getMasterleaseRecord.resolves(null);
+      dockerService.dockerContainerInspect.rejects(new Error('docker unreachable'));
+      const info = sinon.stub(log, 'info');
+      await mastershipGrantGate.grantVerdict(IDENTIFIER, activeStandbyComp());
+      await new Promise(setImmediate);
+      const line = info.getCalls().map((c) => c.args[0]).find((m) => String(m).includes('cold key'));
+      expect(line, 'the cold-key decision is logged').to.be.a('string');
+      expect(line).to.include('dockerError=docker unreachable');
+      expect(line).to.include('-> DEFER');
     });
 
     it('the head start applies ONLY to a cold key, never to a live one', async () => {
