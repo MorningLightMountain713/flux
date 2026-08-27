@@ -4,7 +4,7 @@ const config = require('config');
 const { getSpec, getSpecBackend } = require('../utils/specLibs');
 const signatureVerifier = require('../signatureVerifier');
 const benchmarkService = require('../benchmarkService');
-const { ARCANE_ATTESTATION_PUBKEY, verifyAttestationSignature } = require('../utils/arcaneAttestation');
+const { ARCANE_APP_ATTESTATION_PUBKEY, verifyAttestationSignature } = require('../utils/arcaneAttestation');
 const { getChainTeamSupportAddressUpdates } = require('../utils/chainUtilities');
 const { ownerChangeRaceSigner } = require('./ownerChangeRaces');
 
@@ -120,19 +120,34 @@ async function authorize({
 /**
  * Request an arcane attestation from the local secure backend for an encrypted spec.
  *
- * Signs the domain-separated attestation message over the spec's contentHash,
- * proving a genuine secure backend processed this content. Only the originating
- * Arcane node calls this; relayers carry the attestation as-is. Throws on backend
- * failure — this is our own broadcast, so the submission should fail loudly
- * rather than broadcast an unattested encrypted spec.
+ * Signs over the spec's contentHash AND a hash of the sealed wire form, proving
+ * a genuine secure backend both validated this content and produced these bytes.
+ * The second half is what a non-Arcane node can actually check: it cannot
+ * decrypt, so contentHash alone tells it nothing about the envelope in its hand.
+ *
+ * Sent as a payload with no domain — the backend prefixes it under the `app`
+ * purpose and signs with that purpose's own key, so the caller cannot mint bytes
+ * shaped like another protocol's message.
+ *
+ * Only the originating Arcane node calls this; relayers carry the attestation
+ * as-is. Throws on backend failure — this is our own broadcast, so the
+ * submission should fail loudly rather than broadcast an unattested encrypted
+ * spec.
  *
  * @param {string} contentHash
+ * @param {object} specBlob - the sealed wire form being broadcast
  * @returns {Promise<string>} base64 Ed25519 signature
  */
-async function requestAttestation(contentHash) {
+async function requestAttestation(contentHash, specBlob) {
   const backend = await getSpecBackend();
-  const message = backend.buildArcaneAttestMessage(contentHash);
-  const response = await benchmarkService.attest({ message });
+  const message = backend.buildArcaneAttestPayload(
+    contentHash,
+    backend.envelopeHash(specBlob),
+  );
+  const response = await benchmarkService.attest({
+    message,
+    purpose: backend.ARCANE_ATTEST_PURPOSE,
+  });
   // A successful benchmark reply rides as a JSON string in data (the same shape
   // contentBlobService unwraps); parse it before reading the signature.
   const ok = response && response.status === 'success';
@@ -154,7 +169,7 @@ async function requestAttestation(contentHash) {
  * @returns {boolean}
  */
 function verifyAttestation(appEvent) {
-  return appEvent.verifyArcaneAttestation(verifyAttestationSignature, ARCANE_ATTESTATION_PUBKEY);
+  return appEvent.verifyArcaneAttestation(verifyAttestationSignature, ARCANE_APP_ATTESTATION_PUBKEY);
 }
 
 async function computeOutboundHash({

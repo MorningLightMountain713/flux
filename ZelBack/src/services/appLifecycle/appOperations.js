@@ -1460,7 +1460,10 @@ async function updateAppGlobaly(params) {
   // key. v9 messages are rejected by old nodes before parsing.
   let arcaneAttestation;
   if (appEvent.requiresArcaneAttestation()) {
-    arcaneAttestation = await appEventVerifier.requestAttestation(cleanContentHash);
+    arcaneAttestation = await appEventVerifier.requestAttestation(
+      cleanContentHash,
+      broadcastBlob,
+    );
   }
 
   const temporaryAppMessage = {

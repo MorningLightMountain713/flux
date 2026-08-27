@@ -5,7 +5,7 @@ const { expect } = require('chai');
 
 const arcaneAttestation = require('../../ZelBack/src/services/utils/arcaneAttestation');
 
-const { ARCANE_ATTESTATION_PUBKEY, verifyAttestationSignature } = arcaneAttestation;
+const { ARCANE_APP_ATTESTATION_PUBKEY, verifyAttestationSignature } = arcaneAttestation;
 
 // Export an Ed25519 KeyObject as the raw 32-byte base64 form the backend returns.
 function rawPubBase64(publicKey) {
@@ -16,7 +16,7 @@ function rawPubBase64(publicKey) {
 describe('arcaneAttestation verify primitive', () => {
   it('verifies a genuine signature against its public key', () => {
     const { publicKey, privateKey } = crypto.generateKeyPairSync('ed25519');
-    const message = 'FLUX_ARCANE_ATTEST_v1abc123';
+    const message = 'FLUX_ARCANE_ATTEST_v2:abc123';
     const signature = crypto.sign(null, Buffer.from(message), privateKey).toString('base64');
 
     expect(verifyAttestationSignature(message, rawPubBase64(publicKey), signature)).to.equal(true);
@@ -24,7 +24,7 @@ describe('arcaneAttestation verify primitive', () => {
 
   it('rejects a tampered message', () => {
     const { publicKey, privateKey } = crypto.generateKeyPairSync('ed25519');
-    const message = 'FLUX_ARCANE_ATTEST_v1abc123';
+    const message = 'FLUX_ARCANE_ATTEST_v2:abc123';
     const signature = crypto.sign(null, Buffer.from(message), privateKey).toString('base64');
 
     expect(verifyAttestationSignature(`${message}x`, rawPubBase64(publicKey), signature)).to.equal(false);
@@ -33,7 +33,7 @@ describe('arcaneAttestation verify primitive', () => {
   it('rejects a signature from a different key', () => {
     const signer = crypto.generateKeyPairSync('ed25519');
     const other = crypto.generateKeyPairSync('ed25519');
-    const message = 'FLUX_ARCANE_ATTEST_v1abc123';
+    const message = 'FLUX_ARCANE_ATTEST_v2:abc123';
     const signature = crypto.sign(null, Buffer.from(message), signer.privateKey).toString('base64');
 
     expect(verifyAttestationSignature(message, rawPubBase64(other.publicKey), signature)).to.equal(false);
@@ -43,20 +43,34 @@ describe('arcaneAttestation verify primitive', () => {
     expect(verifyAttestationSignature('msg', 'not-a-32-byte-key', 'c2ln')).to.equal(false);
   });
 
-  it('verifies a real attestation against the hardcoded network public key', () => {
-    // Captured live from a production node via fluxbenchd attest:
-    //   attest {"message":"FLUX_ARCANE_ATTEST_v1deadbeefcafe"}
-    const message = 'FLUX_ARCANE_ATTEST_v1deadbeefcafe';
-    const signature = 'qs9kQxwJCcLpk9ps7SuIlokTBqrZ7PSZL8pRQFze8oqlAaT5LyrY3qHGvZztzRkZSXc+YB1IV5WyXNcjzp+xBw==';
-
-    expect(verifyAttestationSignature(message, ARCANE_ATTESTATION_PUBKEY, signature)).to.equal(true);
+  // The production app-purpose key is not yet known: it has to be read once,
+  // out-of-band, from a secure-backend build carrying the `app` purpose. These
+  // two tests pin the state that leaves us in, so it is a tested property rather
+  // than a comment somebody has to notice — and so filling the key in turns them
+  // red, which is the reminder to replace them with a real pinned signature.
+  it('has no production app-attestation key yet', () => {
+    expect(ARCANE_APP_ATTESTATION_PUBKEY).to.equal('');
   });
 
-  it('resolves to the production network constant when no config override is set', () => {
-    // The pubkey is config-driven (arcane.attestationPubkey) so a controlled
-    // environment can point the gate at a different attestation key; with no
-    // override configured it must fall back to the network constant, leaving
-    // production behavior unchanged.
-    expect(ARCANE_ATTESTATION_PUBKEY).to.equal('fYkJ9M6NBKnQxnr8HD3FrYakKr8JM8BRo/wF4MA9/Ss=');
+  it('fails closed while the key is unset — every attestation is invalid', () => {
+    // The safe direction, and harmless while v9 has not activated: an encrypted
+    // v9 message is dropped rather than admitted on an unverifiable receipt.
+    const { privateKey } = crypto.generateKeyPairSync('ed25519');
+    const message = 'FLUX_ARCANE_ATTEST_v2:abc123';
+    const signature = crypto.sign(null, Buffer.from(message), privateKey).toString('base64');
+
+    expect(verifyAttestationSignature(message, ARCANE_APP_ATTESTATION_PUBKEY, signature))
+      .to.equal(false);
+  });
+
+  it('takes a config override, which is how the harness exercises the real gate', () => {
+    // The gate is only meaningful if something can point it at a keypair a test
+    // controls; the fleet harness sets arcane.appAttestationPubkey to its
+    // benchmark stub's app-purpose key.
+    const { publicKey, privateKey } = crypto.generateKeyPairSync('ed25519');
+    const message = 'FLUX_ARCANE_ATTEST_v2:abc123';
+    const signature = crypto.sign(null, Buffer.from(message), privateKey).toString('base64');
+
+    expect(verifyAttestationSignature(message, rawPubBase64(publicKey), signature)).to.equal(true);
   });
 });
