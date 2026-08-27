@@ -111,11 +111,33 @@ describe('activation crossing: the plane inherits the running master, it does no
 
     // 3. Prove the plane actually engaged, BEFORE asserting nothing moved —
     //    otherwise a plane that never woke up passes this suite trivially.
-    const granted = await env.clients[incumbent].waitForEvent(
-      'quorumGrant:granted', (d) => d.key === `${name}/master`, 300000,
-      { afterId: afterIds[incumbent] },
-    );
-    expect(granted, 'the crossing happened: a term was granted').to.not.equal(undefined);
+    //
+    //    Three things can go wrong at the crossing and the first version of this
+    //    suite reported all three as one 300s timeout on the incumbent: the height
+    //    was never noticed, nobody was granted, or somebody else was. Separating
+    //    them cost ten node logs, twice. So each is asked for by name.
+    const label = (i) => `node-${env.clients[i].num} (${env.clients[i].ip})`;
+
+    // 3a. Every holder SAW the height. Until that is true no verdict about who
+    //     holds the term means anything — the plane simply had not started.
+    await Promise.all(HOLDERS.map((i) => env.clients[i].waitForEvent(
+      'quorumGrant:planeActivated', () => true, 180000, { afterId: afterIds[i] },
+    ).catch((error) => {
+      throw new Error(`${label(i)} never saw the activation height: ${error.message}`);
+    })));
+
+    // 3b. A term was granted, and the answer NAMES the node that got it. The wait
+    //     is on every node, not on the incumbent, so 'granted elsewhere' arrives as
+    //     an equality failure naming the winner instead of as a silent timeout.
+    const key = `${name}/master`;
+    const grantedOn = await Promise.any(env.clients.map(
+      (c, i) => c.waitForEvent('quorumGrant:granted', (d) => d.key === key, 300000,
+        { afterId: afterIds[i] }).then(() => i),
+    )).catch(() => null);
+    expect(grantedOn, `the crossing happened: no node was granted ${key} within 300s`)
+      .to.not.equal(null);
+    expect(label(grantedOn), 'the plane inherited the running master, it did not re-elect one')
+      .to.equal(label(incumbent));
 
     // 4. The no-op: same holder, same container, and no one else ever ran it.
     const stillUp = await upHolders();
