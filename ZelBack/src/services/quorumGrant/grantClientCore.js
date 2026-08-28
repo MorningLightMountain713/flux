@@ -164,6 +164,93 @@ function holderStateAt(nowMs, safeUntil, demotionAt) {
  * @returns {{coast: boolean, reason: string|null}} the reason names the first
  *   standby that broke unanimity, for the demotion log
  */
+/**
+ * What a quorum of registers says about a term this node may still hold.
+ *
+ * A FluxOS restart wipes the in-memory holder while the container keeps
+ * running, and the node cannot COUNT its way back: it knows the term ends no
+ * LATER than when it lost track, but safety needs the EARLIEST possible end,
+ * which is unbounded below. There is nothing to time. So it re-learns from the
+ * grantors, which is sound exactly when acquisition is refused, because
+ * grantRegister.read is served THROUGH the rejoin drain.
+ *
+ * Every rule here was forced by a violation trace in
+ * fluxModels/formal/held-term-lifecycle:
+ *
+ *   a QUORUM at ONE epoch, never a single record. A round that reached one
+ *   grantor and then died leaves an orphan row naming a node that never won,
+ *   and recovering from it seated a second writer beside a legitimate master.
+ *   §4's rule is "recorded on distinct owners = granted", and re-learning a
+ *   term is subject to it exactly as winning one is. It is also why local
+ *   persistence is the wrong primitive - a local file is one record, stale in
+ *   the direction that hurts.
+ *
+ *   the EARLIEST remainder in the quorum bounds the term. It is live only
+ *   while a quorum still says so.
+ *
+ *   the round trip is DISCOUNTED before the duration lands on this clock. Each
+ *   remainingMs was computed on its grantor's own clock at an unknown instant
+ *   inside the read window, so the only sound reading is the earliest: assume
+ *   the whole trip is already spent. Adding an undiscounted remote figure to a
+ *   local clock is the defect the model found in the first proposed fix, and
+ *   it broke at every margin because the flaw is the conversion rather than
+ *   any gap. Rate skew over what is left of the term is carried by the
+ *   grantors' lock-delay - see §7 of QUORUM_GRANT_PRIMITIVE.md.
+ *
+ *   a discounted remainder of zero REFUSES rather than adopting a term it
+ *   cannot serve.
+ *
+ * @param {Array<object>} replies one per grantor reached, each
+ *   {grantee, epoch, remainingMs} as GET /flux/quorumgrant/record answers -
+ *   a duration on the grantor's clock, never a deadline
+ * @param {string} selfOutpoint
+ * @param {number} quorum
+ * @param {number} roundTripMs measured cost of the read, on this node's clock
+ * @returns {{recovered: boolean, epoch: number|null, safeForMs: number,
+ *   reason: string|null}}
+ */
+function recoverOutcome(replies, selfOutpoint, quorum, roundTripMs) {
+  const mine = (replies || []).filter((reply) => reply
+    && reply.grantee === selfOutpoint
+    && Number.isInteger(reply.epoch)
+    && Number.isFinite(reply.remainingMs)
+    // a row the grantor already calls lapsed cannot say the term is live
+    && reply.remainingMs > 0);
+  if (mine.length < quorum) {
+    return {
+      recovered: false, epoch: null, safeForMs: 0, reason: 'no quorum of registers names this node',
+    };
+  }
+
+  // ONE epoch. Rows at different epochs are different terms, and a quorum
+  // spread across two of them is not a quorum for either.
+  const byEpoch = new Map();
+  mine.forEach((reply) => {
+    byEpoch.set(reply.epoch, [...(byEpoch.get(reply.epoch) ?? []), reply]);
+  });
+  let best = null;
+  byEpoch.forEach((rows, epoch) => {
+    if (rows.length >= quorum && (best === null || epoch > best.epoch)) best = { epoch, rows };
+  });
+  if (!best) {
+    return {
+      recovered: false, epoch: null, safeForMs: 0, reason: 'registers disagree on the epoch',
+    };
+  }
+
+  const earliest = Math.min(...best.rows.map((reply) => reply.remainingMs));
+  const trip = Number.isFinite(roundTripMs) && roundTripMs > 0 ? roundTripMs : 0;
+  const safeForMs = earliest - trip;
+  if (safeForMs <= 0) {
+    return {
+      recovered: false, epoch: null, safeForMs: 0, reason: 'no term remains once the read is discounted',
+    };
+  }
+  return {
+    recovered: true, epoch: best.epoch, safeForMs, reason: null,
+  };
+}
+
 function coastVerdict(standbys, witnessReplies) {
   for (let i = 0; i < (standbys || []).length; i += 1) {
     const outpoint = standbys[i];
@@ -190,4 +277,5 @@ module.exports = {
   safeUntilMs,
   holderStateAt,
   coastVerdict,
+  recoverOutcome,
 };
