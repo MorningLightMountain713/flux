@@ -795,21 +795,23 @@ describe('quorumGrant grantClient', () => {
       expect(holder.epoch).to.not.equal(epochBefore);
     });
 
-    it('one repair per rate window — the second empty cell waits it out', async () => {
+    it('a cell is re-seated only once it has REFUSED enough times, never on silence', async () => {
       const holder = await heldHolder();
-      const first = committeeHosts[0];
-      const second = committeeHosts[1];
+      const [first, second] = committeeHosts;
       registers.get(first).delete(KEY);
-      await passes(holder, 3);
+
+      await passes(holder, 2); // refusing, but under the threshold
+      expect(registers.get(first).get(KEY), 're-seated before it had refused enough').to.equal(undefined);
+
+      await passes(holder, 1); // threshold reached
       expect(registers.get(first).get(KEY)?.accepted?.grantee).to.equal(SELF);
 
+      // and a cell that is merely SILENT is the heal chore's business, never
+      // this one - it refuses nothing, so it is never re-seated here
       registers.get(second).delete(KEY);
-      await passes(holder, 3); // inside the window: counted, not yet repaired
-      expect(registers.get(second).get(KEY)).to.equal(undefined);
-
-      clockNow += 300_000; // past the rate window
-      await passes(holder, 1);
-      expect(registers.get(second).get(KEY)?.accepted?.grantee).to.equal(SELF);
+      unreachable.add(second);
+      await passes(holder, 4);
+      expect(registers.get(second).get(KEY), 'a silent cell was re-seated on no evidence').to.equal(undefined);
     });
 
     it('repair is a healthy holder\'s chore — jeopardy repairs nothing', async () => {
