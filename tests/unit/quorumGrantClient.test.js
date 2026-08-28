@@ -454,6 +454,26 @@ describe('quorumGrant grantClient', () => {
       expect(holder.safeUntil()).to.equal(clockNow + TTL);
     });
 
+    // D3, the other half. §7's alarm is STANDING - it fires ON the deadline
+    // without waiting for a pass - and acquire() installs a Holder whose alarm
+    // is armed only inside the first renewal pass, a jittered renewal interval
+    // later. A fresh term has most of a TTL left so the window is harmless
+    // today, but it is the same defect in the same shape as the restart case,
+    // and the fix belongs in both places or it comes back.
+    it('arms the standing alarm at acquisition, not at the first renewal pass', async () => {
+      const scheduled = [];
+      const outcome = await grantClient.acquire(KEY, {
+        ...holderOptions(),
+        schedule: (fn, ms) => { scheduled.push(ms); return null; },
+      });
+      expect(outcome.granted).to.equal(true);
+      const deadlineInMs = outcome.holder.safeUntil() - clockNow;
+      expect(
+        scheduled.some((ms) => ms >= deadlineInMs),
+        'nothing is scheduled as far out as the deadline - only the renewal loop armed',
+      ).to.equal(true);
+    });
+
     it('publishes the record on acquisition only — no timer ever republishes it', async () => {
       const holder = await acquireHolder();
       expect(masterleasePublisher.publishMasterlease.callCount).to.equal(1);
