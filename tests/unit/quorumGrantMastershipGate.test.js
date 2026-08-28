@@ -306,6 +306,62 @@ describe('quorumGrant mastershipGrantGate', () => {
     });
   });
 
+  // A1. The plane's whole clock-rate-skew budget is the gap between the
+  // demotion slack plus the container stop and the grantors' lock-delay -
+  // §7's TTL:deadline ratio is 1:1 in the code and carries none of it. The code
+  // stated that inequality in a comment for months and never checked it.
+  describe('the timing inequality is checked before the plane governs anything', () => {
+    function gateWithTiming({ slack, lockDelay }) {
+      return proxyquire('../../ZelBack/src/services/appLifecycle/mastershipGrantGate', {
+        config: {
+          fluxapps: {
+            quorumGrantMastership: true,
+            quorumGrantActivationHeight: 2100000,
+            quorumGrantPursuitIntervalMs: 30000,
+            quorumGrantHeldTtlMs: 150000,
+            quorumGrantDemotionSlackMs: slack,
+            quorumGrantLockDelayMs: lockDelay,
+          },
+        },
+        '../daemonService/daemonServiceMiscRpcs': {
+          isDaemonSynced: () => ({ data: { height: 2100000, synced: true } }),
+        },
+      });
+    }
+
+    it('governs normally on the shipped values', async () => {
+      const gate = gateWithTiming({ slack: 15_000, lockDelay: 30_000 });
+      const verdict = await gate.grantVerdict(IDENTIFIER, activeStandbyComp());
+      expect(verdict, 'the plane did not engage on a safe configuration').to.not.equal(null);
+    });
+
+    it('stays INERT rather than governing with a slack past the lock-delay', async () => {
+      const gate = gateWithTiming({ slack: 40_000, lockDelay: 30_000 });
+      const verdict = await gate.grantVerdict(IDENTIFIER, activeStandbyComp());
+      expect(verdict, 'the plane governed on a configuration that seats two writers').to.equal(null);
+    });
+
+    // the regression this exists to catch: the lock-delay now carries the whole
+    // drift budget, so lowering it spends the margin and nothing else notices
+    it('stays INERT when the lock-delay is lowered under the slack', async () => {
+      const gate = gateWithTiming({ slack: 15_000, lockDelay: 15_000 });
+      expect(await gate.grantVerdict(IDENTIFIER, activeStandbyComp())).to.equal(null);
+    });
+
+    // FAIL-CLOSED, not fail-loud. The plane is inert by default and the legacy
+    // election is what runs without it, so refusing to engage falls back to
+    // today's behaviour. Throwing would brick a node over a feature it is not
+    // using.
+    it('refuses to engage rather than throwing', async () => {
+      const gate = gateWithTiming({ slack: 40_000, lockDelay: 30_000 });
+      let threw = null;
+      try {
+        await gate.grantVerdict(IDENTIFIER, activeStandbyComp());
+      } catch (error) { threw = error; }
+      expect(threw, 'a misconfigured node must not be bricked by an inert feature').to.equal(null);
+    });
+  });
+
   describe('the veto-only verdicts', () => {
     it('held answers nothing — the data gates still decide', async () => {
       grantClient.holderFor.returns({ state: 'held' });

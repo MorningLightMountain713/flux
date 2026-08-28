@@ -209,6 +209,59 @@ function holderStateAt(nowMs, safeUntil, demotionAt) {
  * @returns {{recovered: boolean, epoch: number|null, safeForMs: number,
  *   reason: string|null}}
  */
+// The hard stop a demoted master gets, straight at docker. A term in the
+// inequality below rather than an implementation detail of the consumer, so it
+// lives here in the leaf: an assertion cannot reference a literal, and a
+// back-require from the client to the consumer is a cycle. The consumer's own
+// reconciler paths use docker's DEFAULT timeout, which measured over a minute
+// on the fleet - a demotion routed through one of those breaks the inequality
+// outright, which is what makes this value load-bearing.
+const HARD_STOP_MS = 2_000;
+
+/**
+ * The one inequality the plane rests on, checked rather than commented.
+ *
+ * A demoted holder stops at `safeUntil + demotionSlackMs` on its own clock and
+ * then takes the container down, which costs the hard-stop timeout. A
+ * challenger may be granted at the grantors' expiry + `lockDelayMs` on THEIRS.
+ * If the stop has not finished by then, both are running. So:
+ *
+ *     demotionSlackMs + hardStopMs  <  lockDelayMs
+ *
+ * STRICT, deliberately. The model works in whole ticks and finds `<=` safe;
+ * at equality the two events race in continuous time, which no tick-based
+ * model can see.
+ *
+ * The margin is not spare change. It is the entire clock-rate-skew budget of
+ * the plane: §7's TTL:deadline ratio, which the design used to credit with
+ * that job, is 1:1 in the code and absorbs nothing (see
+ * QUORUM_GRANT_PRIMITIVE.md §7). At the shipped values the margin is 13,000ms
+ * against a drift term that scales with TTL + slack, which is a one-sided
+ * clock-rate error of 3.77%. Lowering lockDelayMs spends that silently, and
+ * this is what notices.
+ *
+ * @param {{demotionSlackMs: number, hardStopMs: number, lockDelayMs: number}} timing
+ * @returns {{safe: boolean, marginMs: number, reason: string|null}}
+ */
+function timingIsSafe(timing) {
+  const slack = timing?.demotionSlackMs;
+  const stop = timing?.hardStopMs;
+  const lockDelay = timing?.lockDelayMs;
+  if (![slack, stop, lockDelay].every((value) => Number.isFinite(value) && value >= 0)) {
+    return { safe: false, marginMs: 0, reason: 'quorumGrant timing values are not all finite and non-negative' };
+  }
+  const marginMs = Math.max(0, lockDelay - slack - stop);
+  const safe = slack + stop < lockDelay;
+  return {
+    safe,
+    marginMs,
+    reason: safe ? null
+      : `quorumGrant timing is unsafe: demotion slack ${slack}ms + hard stop ${stop}ms `
+        + `must be strictly under the grantors' lock-delay ${lockDelay}ms, `
+        + 'or a demoted holder is still stopping when its successor is granted',
+  };
+}
+
 function recoverOutcome(replies, selfOutpoint, quorum, roundTripMs) {
   const mine = (replies || []).filter((reply) => reply
     && reply.grantee === selfOutpoint
@@ -278,4 +331,6 @@ module.exports = {
   holderStateAt,
   coastVerdict,
   recoverOutcome,
+  timingIsSafe,
+  HARD_STOP_MS,
 };

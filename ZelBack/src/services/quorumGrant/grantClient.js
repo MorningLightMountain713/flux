@@ -57,10 +57,35 @@ function defaultTtlMs() {
 }
 
 function demotionSlackMs() {
-  // must stay below the grantors' lock-delay by more than the container stop
-  // time; both sides of that inequality are config, so the build-time values
-  // are asserted together here rather than hoped about
   return config.fluxapps.quorumGrantDemotionSlackMs ?? 15_000;
+}
+
+function lockDelayMs() {
+  return config.fluxapps.quorumGrantLockDelayMs ?? 30_000;
+}
+
+/**
+ * The comment above this function used to say the two values "are asserted
+ * together here rather than hoped about", and the body was a single return.
+ * They were hoped about. This is the assertion.
+ *
+ * It matters more than it looks: §7 used to credit the TTL:deadline ratio with
+ * the plane's clock-rate-skew tolerance, and the code has no such ratio - the
+ * holder's deadline IS the TTL. The lock-delay carries the whole budget on its
+ * own, so lowering it spends the margin silently and nothing else would notice.
+ *
+ * Throws rather than warns. A fleet that boots with this wrong runs two writers
+ * under skew, and a node that refuses to start is the cheaper failure.
+ */
+function assertTimingSafe(timing) {
+  const checked = timing ?? {
+    demotionSlackMs: demotionSlackMs(),
+    hardStopMs: core.HARD_STOP_MS,
+    lockDelayMs: lockDelayMs(),
+  };
+  const outcome = core.timingIsSafe(checked);
+  if (!outcome.safe) throw new Error(outcome.reason);
+  return outcome;
 }
 
 function askTimeoutMs() {
@@ -1389,6 +1414,7 @@ module.exports = {
   termLapsed,
   holderFor,
   relearn,
+  assertTimingSafe,
   isAcquiring,
   witnessAnswer,
   carryAsk,
