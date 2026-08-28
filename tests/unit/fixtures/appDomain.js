@@ -148,12 +148,15 @@ async function confirmedEvent(overrides = {}) {
   const { ConfirmedAppEvent } = await load();
   const { spec, ...rest } = overrides;
   const type = rest.type ?? 'fluxappregister';
-  const appSpecifications = (spec ?? await v9Spec()).serialize();
+  const built = spec ?? await v9Spec();
+  const appSpecifications = built.serialize();
   return ConfirmedAppEvent.deserialize({
     type,
     version: 2,
     appSpecifications,
-    contentHash: 'fixtureContentHash',
+    // Derived, not stubbed: the event refuses to construct when contentHash and
+    // the spec beside it disagree, because that pairing is what was signed.
+    contentHash: built.contentHash(),
     hash: 'fixtureHash',
     timestamp: 1_760_000_000_000,
     extend: type === 'fluxappregister' ? true : (rest.extend ?? false),
@@ -195,6 +198,12 @@ async function tempMessage(overrides = {}) {
     hash: 'fixtureHash',
     timestamp: 1_760_000_000_000,
     signature: 'fixtureSignature',
+    // A v2 envelope's contentHash is the fingerprint of the spec beside it —
+    // that pairing is what the owner signed, and the event classes refuse to
+    // construct when the two disagree. Derived from the built spec rather than
+    // stubbed, for the same reason as extend below: a literal would build a
+    // message no node could ever have received.
+    ...(version >= 2 ? { contentHash: built.contentHash() } : {}),
     // A registration carries extend=true or it does not exist: AppEvent,
     // SignedAppEvent and ConfirmedAppEvent each refuse to construct one
     // without it, so a stored message could never have reached a verifier
