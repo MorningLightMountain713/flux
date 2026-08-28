@@ -11,6 +11,7 @@ const {
   safeUntilMs,
   holderStateAt,
   coastVerdict,
+  recoverOutcome,
 } = require('../../ZelBack/src/services/quorumGrant/grantClientCore');
 const { nowMs, Deadline } = require('../../ZelBack/src/services/utils/monotonicClock');
 
@@ -143,6 +144,110 @@ describe('quorumGrant grantClientCore', () => {
       expect(holderStateAt(250, 100, 200)).to.equal('lost');
       expect(holderStateAt(50, null, 200)).to.equal('jeopardy');
       expect(holderStateAt(50, null, null)).to.equal('lost');
+    });
+  });
+
+  // A restarted holder re-learns its term from the grantors, and every rule
+  // below was forced by a violation trace in formal/held-term-lifecycle. The
+  // shape a reply carries is what GET /flux/quorumgrant/record answers:
+  // { grantee, epoch, remainingMs } - a DURATION on the grantor's own clock,
+  // never a deadline, because a deadline crossing machines is exactly what §7
+  // forbids and what defect D4 was.
+  describe('term recovery from a quorum of registers', () => {
+    const SELF = `${'a'.repeat(64)}:0`;
+    const OTHER = `${'b'.repeat(64)}:0`;
+
+    it('recovers when a quorum names this node at ONE epoch', () => {
+      const out = recoverOutcome([
+        { grantee: SELF, epoch: 4, remainingMs: 90_000 },
+        { grantee: SELF, epoch: 4, remainingMs: 80_000 },
+        { grantee: SELF, epoch: 4, remainingMs: 95_000 },
+      ], SELF, 2, 200);
+      expect(out.recovered).to.equal(true);
+      expect(out.epoch).to.equal(4);
+    });
+
+    // R1. A round that reached ONE grantor and then died leaves an orphan row
+    // naming a node that never won. Recovering from it seated a SECOND writer
+    // beside a legitimate master at depth 18. This is also why local
+    // persistence is the wrong primitive: a local file is one record.
+    it('REFUSES a single record even when nothing contradicts it', () => {
+      const out = recoverOutcome([
+        { grantee: SELF, epoch: 4, remainingMs: 90_000 },
+      ], SELF, 2, 200);
+      expect(out.recovered).to.equal(false);
+      expect(out.reason).to.match(/quorum/i);
+    });
+
+    it('REFUSES when the naming rows do not agree on one epoch', () => {
+      const out = recoverOutcome([
+        { grantee: SELF, epoch: 4, remainingMs: 90_000 },
+        { grantee: SELF, epoch: 5, remainingMs: 90_000 },
+      ], SELF, 2, 200);
+      expect(out.recovered).to.equal(false);
+      expect(out.reason).to.match(/epoch/i);
+    });
+
+    it('REFUSES when the quorum names somebody else', () => {
+      const out = recoverOutcome([
+        { grantee: OTHER, epoch: 4, remainingMs: 90_000 },
+        { grantee: OTHER, epoch: 4, remainingMs: 90_000 },
+      ], SELF, 2, 200);
+      expect(out.recovered).to.equal(false);
+    });
+
+    // The EARLIEST expiry in the quorum bounds the term: it is live only while
+    // a quorum still says so, so the shortest remainder is the real one.
+    it('takes the SHORTEST remainder in the quorum, not the longest', () => {
+      const out = recoverOutcome([
+        { grantee: SELF, epoch: 4, remainingMs: 90_000 },
+        { grantee: SELF, epoch: 4, remainingMs: 40_000 },
+        { grantee: SELF, epoch: 4, remainingMs: 95_000 },
+      ], SELF, 2, 0);
+      expect(out.safeForMs).to.equal(40_000);
+    });
+
+    // D4. The grantor computed remainingMs at an unknown instant inside the
+    // read window, so the only sound assumption is the earliest one: the whole
+    // round trip is already spent. Without this the recovered deadline outlives
+    // the grantor's expiry and the model produced two writers at EVERY margin -
+    // the flaw is the cross-machine conversion, not the size of any gap.
+    it('discounts the measured round trip before the duration lands locally', () => {
+      const out = recoverOutcome([
+        { grantee: SELF, epoch: 4, remainingMs: 10_000 },
+        { grantee: SELF, epoch: 4, remainingMs: 10_000 },
+      ], SELF, 2, 1_500);
+      expect(out.safeForMs).to.equal(8_500);
+    });
+
+    // The model's MinOf({SafeRemaining}) > 0: a recovery whose discounted
+    // remainder is zero refuses rather than adopting a term it cannot serve.
+    it('REFUSES when the discounted remainder is gone', () => {
+      const out = recoverOutcome([
+        { grantee: SELF, epoch: 4, remainingMs: 400 },
+        { grantee: SELF, epoch: 4, remainingMs: 400 },
+      ], SELF, 2, 900);
+      expect(out.recovered).to.equal(false);
+      expect(out.reason).to.match(/remain/i);
+    });
+
+    it('REFUSES on no replies at all - silence is not a term', () => {
+      const out = recoverOutcome([], SELF, 2, 200);
+      expect(out.recovered).to.equal(false);
+    });
+
+    // A row whose remainder the grantor reports as already gone cannot count
+    // toward the quorum that says the term is live.
+    it('does not count a lapsed row toward the quorum', () => {
+      const out = recoverOutcome([
+        { grantee: SELF, epoch: 4, remainingMs: 90_000 },
+        { grantee: SELF, epoch: 4, remainingMs: 0 },
+      ], SELF, 2, 0);
+      expect(out.recovered).to.equal(false);
+      // the REASON is the assertion. Counting the lapsed row and then failing
+      // the zero-remainder guard also yields recovered:false, so asserting
+      // only that cannot tell the two apart - and did not, under mutation.
+      expect(out.reason).to.match(/quorum/i);
     });
   });
 
