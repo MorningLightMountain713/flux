@@ -103,6 +103,7 @@ describe('quorumGrant grantClient', () => {
   let relayDelivers; // whether a reachable carrier can itself reach the committee
   let witnessReplies; // host -> reply for /witness
   let clockNow;
+  let readCostMs; // what each record read costs this node on its OWN clock
 
   function clock() {
     return clockNow;
@@ -215,11 +216,35 @@ describe('quorumGrant grantClient', () => {
     relayDelivers = true;
     witnessReplies = new Map();
     clockNow = 1_000_000;
+    readCostMs = 0;
 
     sinon.stub(serviceHelper, 'axiosPost').callsFake(async (url, body) => fakePost(url, body));
     sinon.stub(serviceHelper, 'axiosGet').callsFake(async (url) => {
       const [, host] = url.match(/^http:\/\/([^:]+):/);
-      if (unreachable.has(host)) throw new Error('unreachable');
+      if (unreachable.has(host) || dark.has(host)) throw new Error('unreachable');
+      // the record read, served off this grantor's own register and THROUGH
+      // its drain - a read contradicts nothing, which is the whole reason
+      // re-learning works exactly when acquisition is refused. It answers a
+      // DURATION on this grantor's clock, never its expiresAt.
+      const [, path, query] = url.match(/^http:\/\/[^:]+:\d+([^?]+)\??(.*)$/);
+      if (path === '/flux/quorumgrant/record') {
+        clockNow += readCostMs;
+        const key = new URLSearchParams(query).get('key');
+        const stored = registers.get(host)?.get(key) ?? null;
+        const expiresAt = stored?.accepted?.expiresAt;
+        return {
+          data: {
+            status: 'success',
+            data: {
+              key,
+              promisedEpoch: stored?.promisedEpoch ?? 0,
+              accepted: stored?.accepted ?? null,
+              remainingMs: Number.isFinite(expiresAt) ? Math.max(0, expiresAt - Date.now()) : null,
+              roster: stored?.roster ?? null,
+            },
+          },
+        };
+      }
       return { data: { status: 'success', data: {} } };
     });
     sinon.stub(generalService, 'obtainNodeCollateralInformation').resolves({
@@ -586,6 +611,119 @@ describe('quorumGrant grantClient', () => {
       });
       const witness = await grantClient.witnessAnswer(KEY);
       expect(witness.holding).to.equal(false);
+    });
+  });
+
+  // A FluxOS restart wipes the in-memory holder while the container keeps
+  // running. The node cannot count its way back - it knows the term ends no
+  // LATER than when it lost track, but safety needs the EARLIEST possible end,
+  // which is unbounded below - so it re-learns from the grantors, whose reads
+  // are served THROUGH the rejoin drain. That is what makes this work at
+  // exactly the moment acquisition is refused, which is the moment a real
+  // fleet update wave produces.
+  describe('re-learning a term across a FluxOS restart', () => {
+    async function seatThenRestart() {
+      const outcome = await grantClient.acquire(KEY, holderOptions());
+      expect(outcome.granted).to.equal(true);
+      // the restart: the process forgets everything, the registers do not
+      grantClient.resetForTests();
+      return outcome;
+    }
+
+    it('re-learns the term from a quorum of registers and re-installs the holder', async () => {
+      await seatThenRestart();
+      clockNow += 5_000;
+
+      const relearned = await grantClient.relearn(KEY, holderOptions());
+      expect(relearned.recovered).to.equal(true);
+      expect(grantClient.holderFor(KEY)).to.not.equal(null);
+      expect(relearned.holder.state).to.equal('held');
+    });
+
+    // The recovered deadline is the grantors' remaining duration, never their
+    // expiresAt, and it can only ever be EARLIER than the term this node
+    // originally held - never later.
+    it('the recovered term is a duration, and never longer than a full TTL', async () => {
+      await seatThenRestart();
+      clockNow += 5_000;
+
+      const relearned = await grantClient.relearn(KEY, holderOptions());
+      expect(relearned.recovered).to.equal(true);
+      const recoveredForMs = relearned.holder.safeUntil() - clockNow;
+      expect(recoveredForMs).to.be.above(0);
+      expect(recoveredForMs).to.be.at.most(TTL);
+    });
+
+    // R1, and the reason local persistence is the wrong primitive: one record
+    // is one record whether it came off a disk or off a wire.
+    it('REFUSES to re-learn from fewer than a quorum of registers', async () => {
+      await seatThenRestart();
+      // leave exactly one grantor answering - below the quorum of five
+      committeeHosts.slice(1).forEach((host) => unreachable.add(host));
+
+      const relearned = await grantClient.relearn(KEY, holderOptions());
+      expect(relearned.recovered).to.equal(false);
+      expect(grantClient.holderFor(KEY)).to.equal(null);
+    });
+
+    it('REFUSES when the committee cannot be reached at all', async () => {
+      await seatThenRestart();
+      committeeHosts.forEach((host) => unreachable.add(host));
+
+      const relearned = await grantClient.relearn(KEY, holderOptions());
+      expect(relearned.recovered).to.equal(false);
+      expect(grantClient.holderFor(KEY)).to.equal(null);
+    });
+
+    it('REFUSES when the term has lapsed on the grantors while this node was down', async () => {
+      await seatThenRestart();
+      registers.forEach((store) => {
+        const row = store.get(KEY);
+        if (row?.accepted) row.accepted.expiresAt = Date.now() - 1_000;
+      });
+
+      const relearned = await grantClient.relearn(KEY, holderOptions());
+      expect(relearned.recovered).to.equal(false);
+      expect(grantClient.holderFor(KEY)).to.equal(null);
+    });
+
+    // D4 through the wiring, not just the arithmetic. The grantors compute
+    // remainingMs at an unknown instant inside the read window, so the whole
+    // window is assumed spent. Without the discount a slow read hands this
+    // node a deadline the grantors have already partly consumed - which is the
+    // conversion defect, and it broke at every margin in the model.
+    it('discounts the time the read itself took', async () => {
+      await seatThenRestart();
+      const fast = await grantClient.relearn(KEY, holderOptions());
+      const fastRemaining = fast.holder.safeUntil() - clockNow;
+
+      grantClient.resetForTests();
+      readCostMs = 500; // nine members, so the batch costs this node 4.5s
+      const slow = await grantClient.relearn(KEY, holderOptions());
+      expect(slow.recovered).to.equal(true);
+      const slowRemaining = slow.holder.safeUntil() - clockNow;
+      expect(fastRemaining - slowRemaining).to.be.at.least(4_000);
+    });
+
+    // D3. §7's demotion alarm is STANDING - it fires ON the deadline without
+    // waiting for a pass. A restart clears the belief that armed it, so a
+    // re-learned holder that never arms one runs past its term with nothing
+    // scheduled to stop it. This is the half of D3 that the acquire path also
+    // gets wrong today.
+    it('arms the demotion alarm at the moment it re-learns, not at the first renewal', async () => {
+      await seatThenRestart();
+      clockNow += 5_000;
+      const scheduled = [];
+      const relearned = await grantClient.relearn(KEY, {
+        ...holderOptions(),
+        schedule: (fn, ms) => { scheduled.push(ms); return null; },
+      });
+      expect(relearned.recovered).to.equal(true);
+      const deadlineInMs = relearned.holder.safeUntil() - clockNow;
+      expect(
+        scheduled.some((ms) => ms >= deadlineInMs),
+        'nothing is scheduled as far out as the deadline - only the renewal loop armed',
+      ).to.equal(true);
     });
   });
 
