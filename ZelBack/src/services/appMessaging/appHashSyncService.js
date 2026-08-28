@@ -364,11 +364,20 @@ async function processMessages(messages, records, onProgress) {
         const specifications = appMessage.appSpecifications;
         if (!specifications) continue;
 
-        const wireSpec = await deserializeSpec(specifications);
-        const appSpecFormatted = wireSpec.serialize();
         const height = serviceHelper.ensureNumber(appMessage.height);
         const messageTimestamp = serviceHelper.ensureNumber(appMessage.timestamp);
         const isRegistration = appMessage.type === 'fluxappregister' || appMessage.type === 'zelappregister';
+
+        // The typed event (ConfirmedAppEvent v2 / AppEventLegacy v1) round-trips
+        // its own permanent-message shape; a hand-built object here drops the
+        // v2-only fields (contentHash, registeredAt, extend, arcaneAttestation).
+        //
+        // Built first, and its spec used below: deserializing this message parses
+        // and validates the spec, so a separate deserializeSpec beforehand was a
+        // second full pass over the same document.
+        const appEvent = await appEventVerifier.deserializeMessage(appMessage);
+        const permMsg = appEvent.serialize();
+        const wireSpec = appEvent.spec;
 
         if (wireSpec && wireSpec.isEncrypted) {
           try {
@@ -382,20 +391,12 @@ async function processMessages(messages, records, onProgress) {
             log.warn(`processMessages enterprise decrypt skipped for ${wireSpec.name}: ${err.message}`);
           }
         } else {
-          // deserializeSpec above already validated this by constructing it;
-          // re-parsing the same document was a third full pass.
           assertVersionActivated(wireSpec.version, height);
         }
 
-        const appEvent = await appEventVerifier.deserializeMessage(appMessage);
-        // The typed event (ConfirmedAppEvent v2 / AppEventLegacy v1) round-trips
-        // its own permanent-message shape; a hand-built object here drops the
-        // v2-only fields (contentHash, registeredAt, extend, arcaneAttestation).
-        const permMsg = appEvent.serialize();
-
         let previousState = null;
         if (!isRegistration) {
-          const prevMessagesList = prevMessagesMap.get(appSpecFormatted.name);
+          const prevMessagesList = prevMessagesMap.get(wireSpec.name);
           const prevMsg = prevMessagesList ? findPrevMessage(countedBefore(prevMessagesList), height, messageTimestamp) : null;
           if (!prevMsg) {
             failed += 1;
@@ -419,9 +420,9 @@ async function processMessages(messages, records, onProgress) {
 
         // Verified — add to batch and update map for subsequent messages
         permInserts.push(permMsg);
-        if (!prevMessagesMap.has(appSpecFormatted.name)) prevMessagesMap.set(appSpecFormatted.name, []);
+        if (!prevMessagesMap.has(wireSpec.name)) prevMessagesMap.set(wireSpec.name, []);
         // kept sorted, as findPrevMessage searches it: a gap filled late lands mid-list, not at its end
-        const prevList = prevMessagesMap.get(appSpecFormatted.name);
+        const prevList = prevMessagesMap.get(wireSpec.name);
         const at = prevList.indexOf(findPrevMessage(prevList, height, messageTimestamp)) + 1;
         prevList.splice(at, 0, permMsg);
 

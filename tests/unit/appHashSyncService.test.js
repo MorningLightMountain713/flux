@@ -110,7 +110,18 @@ describe('appHashSyncService tests', () => {
     };
 
     appEventVerifierStub = {
-      deserializeMessage: sinon.stub().callsFake(async (msg) => ({ serialize: () => ({ ...msg }) })),
+      deserializeMessage: sinon.stub().callsFake(async (msg) => ({
+        serialize: () => ({ ...msg }),
+        // A real event always carries its parsed spec; the service reads it
+        // rather than parsing the document a second time.
+        spec: {
+          name: msg.appSpecifications?.name,
+          owner: msg.appSpecifications?.owner,
+          version: msg.appSpecifications?.version,
+          isEncrypted: false,
+          serialize: () => msg.appSpecifications,
+        },
+      })),
       authorize: sinon.stub().resolves(),
     };
 
@@ -741,7 +752,18 @@ describe('appHashSyncService tests', () => {
       };
 
       localAppEventVerifierStub = {
-        deserializeMessage: sinon.stub().callsFake(async (msg) => ({ serialize: () => ({ ...msg }) })),
+        deserializeMessage: sinon.stub().callsFake(async (msg) => ({
+        serialize: () => ({ ...msg }),
+        // A real event always carries its parsed spec; the service reads it
+        // rather than parsing the document a second time.
+        spec: {
+          name: msg.appSpecifications?.name,
+          owner: msg.appSpecifications?.owner,
+          version: msg.appSpecifications?.version,
+          isEncrypted: false,
+          serialize: () => msg.appSpecifications,
+        },
+      })),
         authorize: sinon.stub().resolves(),
       };
 
