@@ -490,7 +490,7 @@ async function relearn(key, options = {}) {
   // here rather than waiting for the first renewal pass is the whole point:
   // the pass is a renewal interval away, and a term re-learned with less than
   // that left would otherwise run with nothing scheduled to stop it.
-  holder.armRecoveredDeadline();
+  holder.armStandingDeadline();
   holder.start();
   log.info(`quorumGrant ${key}: term re-learned at epoch ${outcome.epoch}, ${outcome.safeForMs}ms remaining`);
   return { recovered: true, holder, reason: null };
@@ -608,6 +608,11 @@ async function acquireOnce(key, mode, ttlMs, identity, committee, options) {
     if (reply?.ok) holder.recordAck(outpoint, sentMs);
   });
   held.set(key, holder);
+  // §7's demotion alarm is STANDING: it fires ON the deadline without waiting
+  // for a pass. Arming it here rather than inside the first renewal is the same
+  // rule the restart path needs - the first pass is a jittered renewal interval
+  // away, and a holder is not allowed to be un-alarmed for any of it.
+  holder.armStandingDeadline();
   await holder.publishRecord();
   holder.start();
   fluxEventBus.publish('quorumGrant:granted', { key, epoch, generation: committee.generation ?? 0 });
@@ -761,12 +766,16 @@ class Holder {
   }
 
   /**
-   * Arm the standing alarm for a deadline this holder did not earn itself.
-   * §7's alarm fires ON the deadline without waiting for a pass, and a restart
-   * clears the belief that armed it - so a re-learned term with less left than
-   * one renewal interval would otherwise run with nothing scheduled at all.
+   * Arm the standing alarm from whatever deadline this holder currently has,
+   * without waiting for a renewal pass to do it.
+   *
+   * §7's alarm fires ON the deadline, and both entry points otherwise leave a
+   * holder un-alarmed for a jittered renewal interval: acquire() installs a
+   * Holder and schedules only the loop, and a restart clears the belief that
+   * armed the previous one. A term with less left than that interval - a
+   * re-learned one especially - would run with nothing scheduled to stop it.
    */
-  armRecoveredDeadline() {
+  armStandingDeadline() {
     const safeUntil = this.safeUntil();
     if (safeUntil === null) return;
     this.#armDemotion(safeUntil + demotionSlackMs());
