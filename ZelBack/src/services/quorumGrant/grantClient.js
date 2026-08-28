@@ -409,6 +409,94 @@ async function acquire(key, options = {}) {
 }
 
 /**
+ * Re-learn a term this node may still hold, after a FluxOS restart wiped the
+ * in-memory holder while the container kept running.
+ *
+ * There is nothing to time. A node that lost its term knowledge knows the term
+ * ends no LATER than that instant plus a TTL, but safety needs the EARLIEST
+ * possible end and that is unbounded below - the term may already be gone. So
+ * no timer is sound at any value, and the node re-learns from the grantors or
+ * it stops.
+ *
+ * This works at exactly the moment acquisition does not. `grantRegister.read`
+ * is served THROUGH the rejoin drain - "reading what the journal holds
+ * contradicts nothing" - so a fleet update wave, which puts every grantor
+ * inside its drain and refuses every ask, still answers this. That wave is the
+ * production case: it is what stopped a healthy master on a 10-node fleet 22
+ * seconds before that same node was granted the term back.
+ *
+ * @returns {Promise<{recovered: boolean, holder: Holder|null, reason: string|null}>}
+ */
+async function relearn(key, options = {}) {
+  if (held.has(key)) return { recovered: true, holder: held.get(key), reason: null };
+
+  const identity = await selfIdentity();
+  if (!identity) return { recovered: false, holder: null, reason: 'node identity unavailable' };
+
+  const mode = options.mode ?? 'held';
+  const committee = options.committee
+    ?? await committeeFor(key, mode, options.fingerprint ?? networkStateService.membershipFingerprint());
+  if (!committee) return { recovered: false, holder: null, reason: 'committee unavailable for fingerprint' };
+
+  const clock = options.clock ?? nowMs;
+  const startMs = clock();
+  const reads = committee.members.map(async (member) => {
+    try {
+      const response = await serviceHelper.axiosGet(
+        `${grantorUrl(member, '/flux/quorumgrant/record')}?key=${encodeURIComponent(key)}`,
+        { timeout: askTimeoutMs(), httpAgent: askAgent },
+      );
+      const data = response?.data?.data;
+      if (!data?.accepted) return null;
+      return {
+        grantee: data.accepted.grantee,
+        epoch: data.accepted.epoch,
+        remainingMs: data.remainingMs,
+      };
+    } catch (error) {
+      return null;
+    }
+  });
+  const replies = (await Promise.all(reads)).filter(Boolean);
+  // The WHOLE batch, not each reply: the slowest answer bounds how stale the
+  // earliest one may be, and over-discounting is the safe direction.
+  const roundTripMs = clock() - startMs;
+
+  const outcome = core.recoverOutcome(replies, identity.outpoint, committee.quorum, roundTripMs);
+  fluxEventBus.publish('quorumGrant:relearn', {
+    key,
+    read: replies.length,
+    quorum: committee.quorum,
+    recovered: outcome.recovered,
+    safeForMs: outcome.safeForMs,
+    reason: outcome.reason,
+  });
+  if (!outcome.recovered) return { recovered: false, holder: null, reason: outcome.reason };
+
+  const holder = new Holder({
+    key,
+    epoch: outcome.epoch,
+    ttlMs: options.ttlMs ?? defaultTtlMs(),
+    identity,
+    committee,
+    onDemoted: options.onDemoted,
+    clock: options.clock,
+    schedule: options.schedule,
+    cancel: options.cancel,
+    recoveredUntilMs: clock() + outcome.safeForMs,
+  });
+  held.set(key, holder);
+  // §7's alarm is STANDING and a restart is exactly what disarms it. Arming
+  // here rather than waiting for the first renewal pass is the whole point:
+  // the pass is a renewal interval away, and a term re-learned with less than
+  // that left would otherwise run with nothing scheduled to stop it.
+  holder.armRecoveredDeadline();
+  holder.start();
+  log.info(`quorumGrant ${key}: term re-learned at epoch ${outcome.epoch}, ${outcome.safeForMs}ms remaining`);
+  return { recovered: true, holder, reason: null };
+}
+
+/**
  * Whether a held term has PROVABLY lapsed — how a resting standby decides to
  * pursue. The published record is durable and only says who last held the
  * term; whether they still stand is asked of the referees. Deliberately not
@@ -589,6 +677,14 @@ class Holder {
   // the last coast-refusing reason, for the alarm's demotion message
   #lastDoubt = null;
 
+  // A RE-LEARNED term has no acks of its own: this node never sent the round
+  // that won it, it read the result off a quorum of registers after a restart.
+  // So the median rule has nothing to work with and this carries the deadline
+  // until the first renewal replaces it - already discounted for the read's
+  // round trip by recoverOutcome, because the grantors' figure was computed
+  // on THEIR clocks.
+  #recoveredUntilMs = null;
+
   constructor(options) {
     this.#key = options.key;
     this.#epoch = options.epoch;
@@ -598,6 +694,7 @@ class Holder {
     this.#committee.chain = this.#committee.chain ?? [];
     this.#committee.generation = this.#committee.generation ?? 0;
     this.#onDemoted = options.onDemoted ?? null;
+    this.#recoveredUntilMs = options.recoveredUntilMs ?? null;
     this.#clock = options.clock ?? nowMs;
     this.#schedule = options.schedule ?? ((fn, ms) => setTimeout(fn, ms));
     this.#cancel = options.cancel ?? ((handle) => clearTimeout(handle));
@@ -631,7 +728,14 @@ class Holder {
   /** The median rule over the latest ack per grantor. */
   safeUntil() {
     const acks = [...this.#acks.values()].map((sentMs) => ({ sentMs, ttlMs: this.#ttlMs }));
-    return core.safeUntilMs(acks, this.#committee.quorum);
+    const fromAcks = core.safeUntilMs(acks, this.#committee.quorum);
+    // A re-learned holder has no acks until its first renewal lands, and the
+    // median rule answers null for that, so the recovered figure carries the
+    // deadline until then. It is CLEARED the moment a renewal quorum answers
+    // (see renewOnce) rather than being max'd or min'd against the acks: once
+    // the acks exist they are the truth, and making that true by construction
+    // beats making it true by arithmetic nobody can test.
+    return fromAcks !== null ? fromAcks : this.#recoveredUntilMs;
   }
 
   /**
@@ -654,6 +758,18 @@ class Holder {
       ttlMs: this.#ttlMs,
       ...(this.#committee.chain.length ? { roster: { chain: this.#committee.chain } } : {}),
     });
+  }
+
+  /**
+   * Arm the standing alarm for a deadline this holder did not earn itself.
+   * §7's alarm fires ON the deadline without waiting for a pass, and a restart
+   * clears the belief that armed it - so a re-learned term with less left than
+   * one renewal interval would otherwise run with nothing scheduled at all.
+   */
+  armRecoveredDeadline() {
+    const safeUntil = this.safeUntil();
+    if (safeUntil === null) return;
+    this.#armDemotion(safeUntil + demotionSlackMs());
   }
 
   start() {
@@ -984,6 +1100,8 @@ class Holder {
         this.#refusals.delete(outpoint);
       }
     });
+    // the acks are the truth from here; a re-learned figure must not outlive them
+    this.#recoveredUntilMs = null;
     this.#armDemotion(this.safeUntil() + demotionSlackMs());
     await this.publishRecord();
     fluxEventBus.publish('quorumGrant:termRefreshed', { key: this.#key, epoch });
@@ -1010,6 +1128,7 @@ class Holder {
     if (quorumRenewed) {
       this.#state = 'held';
       this.#coasting = false;
+      this.#recoveredUntilMs = null;
       this.#armDemotion(safeUntil + demotionSlackMs());
       fluxEventBus.publish('quorumGrant:assess', { ...seen, outcome: 'held' });
       return;
@@ -1260,6 +1379,7 @@ module.exports = {
   acquire,
   termLapsed,
   holderFor,
+  relearn,
   isAcquiring,
   witnessAnswer,
   carryAsk,
