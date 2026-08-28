@@ -299,10 +299,19 @@ async function processMessages(messages, onProgress) {
         const specifications = appMessage.appSpecifications;
         if (!specifications) continue;
 
-        const wireSpec = await deserializeSpec(specifications);
-        const appSpecFormatted = wireSpec.serialize();
         const height = serviceHelper.ensureNumber(appMessage.height);
         const isRegistration = appMessage.type === 'fluxappregister' || appMessage.type === 'zelappregister';
+
+        // The typed event (ConfirmedAppEvent v2 / AppEventLegacy v1) round-trips
+        // its own permanent-message shape; a hand-built object here drops the
+        // v2-only fields (contentHash, registeredAt, extend, arcaneAttestation).
+        //
+        // Built first, and its spec used below: deserializing this message parses
+        // and validates the spec, so a separate deserializeSpec beforehand was a
+        // second full pass over the same document.
+        const appEvent = await appEventVerifier.deserializeMessage(appMessage);
+        const permMsg = appEvent.serialize();
+        const wireSpec = appEvent.spec;
 
         if (wireSpec && wireSpec.isEncrypted) {
           try {
@@ -316,20 +325,12 @@ async function processMessages(messages, onProgress) {
             log.warn(`processMessages enterprise decrypt skipped for ${wireSpec.name}: ${err.message}`);
           }
         } else {
-          // deserializeSpec above already validated this by constructing it;
-          // re-parsing the same document was a third full pass.
           assertVersionActivated(wireSpec.version, height);
         }
 
-        const appEvent = await appEventVerifier.deserializeMessage(appMessage);
-        // The typed event (ConfirmedAppEvent v2 / AppEventLegacy v1) round-trips
-        // its own permanent-message shape; a hand-built object here drops the
-        // v2-only fields (contentHash, registeredAt, extend, arcaneAttestation).
-        const permMsg = appEvent.serialize();
-
         let previousState = null;
         if (!isRegistration) {
-          const prevMessagesList = prevMessagesMap.get(appSpecFormatted.name);
+          const prevMessagesList = prevMessagesMap.get(wireSpec.name);
           const prevMsg = prevMessagesList ? findPrevMessage(prevMessagesList, height) : null;
           if (!prevMsg) {
             failed += 1;
@@ -353,8 +354,8 @@ async function processMessages(messages, onProgress) {
 
         // Verified — add to batch and update map for subsequent messages
         permInserts.push(permMsg);
-        if (!prevMessagesMap.has(appSpecFormatted.name)) prevMessagesMap.set(appSpecFormatted.name, []);
-        prevMessagesMap.get(appSpecFormatted.name).push(permMsg);
+        if (!prevMessagesMap.has(wireSpec.name)) prevMessagesMap.set(wireSpec.name, []);
+        prevMessagesMap.get(wireSpec.name).push(permMsg);
 
         hashMarkOps.push({
           updateOne: { filter: { hash: appMessage.hash }, update: { $set: { message: true, messageNotFound: false } } },
