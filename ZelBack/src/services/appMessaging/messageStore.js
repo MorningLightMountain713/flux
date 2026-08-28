@@ -158,12 +158,25 @@ async function storeAppTemporaryMessage(message, options = {}) {
     let validationBlob;
     if (appEvent.isEncrypted) {
       if (await benchmarkService.isSystemSecure()) {
-        const provider = await appEvent.spec.createProvider();
-        const decrypted = await appEvent.spec.decrypt(provider);
-        // Validated through the wrapper: a decrypted spec has no wire form, so
-        // there is no blob to hand a validator. Same rules, no plaintext bytes.
-        assertVersionActivated(decrypted.version, block);
-        decrypted.validateContents({ purpose: 'gossip' });
+        try {
+          const provider = await appEvent.spec.createProvider();
+          // decryptAndVerify, not decrypt: the signature commits to a contentHash,
+          // so opening the envelope says nothing about whether what came out is
+          // what the owner signed for.
+          const decrypted = await appEvent.decryptAndVerify(provider);
+          // Validated through the wrapper: a decrypted spec has no wire form, so
+          // there is no blob to hand a validator. Same rules, no plaintext bytes.
+          assertVersionActivated(decrypted.version, block);
+          decrypted.validateContents({ purpose: 'gossip' });
+        } catch (err) {
+          // A bad message is a rejection, and the caller logs a RETURNED Error
+          // with the hash and sender IP where a throw reaches a bare log.error.
+          // But a TypeError here is our bug, not a bad message: returning it
+          // would bury a defect under a stream of peer rejections, so it stays
+          // loud.
+          if (err instanceof TypeError || err instanceof ReferenceError) throw err;
+          return new Error(`Invalid encrypted Flux App message: ${err.message}`);
+        }
       }
     } else {
       validationBlob = message.appSpecifications;
