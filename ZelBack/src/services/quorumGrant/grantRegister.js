@@ -221,6 +221,33 @@ async function roster(key, request, context) {
  * catch-up paths consume. Served during the drain: reading what the journal
  * holds contradicts nothing.
  */
+/**
+ * Write a term this grantor did NOT witness, learned from a quorum of its own
+ * committee - the F1 adopt path, and the only way a row is ever written
+ * without a round. The expiry is computed from the DURATION the quorum
+ * reported, on this node's clock, because their expiresAt figures are on
+ * theirs: §7 ships durations, never deadlines.
+ */
+async function adopt(key, term) {
+  const database = db();
+  if (!database) return null;
+  const accepted = {
+    epoch: term.epoch,
+    grantee: term.grantee,
+    mode: 'held',
+    expiresAt: Date.now() + term.remainingMs,
+    generation: term.generation ?? 0,
+    fingerprint: term.fingerprint ?? null,
+  };
+  return dbHelper.updateOneInDatabase(
+    database,
+    collection(),
+    { _id: key },
+    { $set: { accepted, promisedEpoch: term.epoch, updatedAt: Date.now() } },
+    { upsert: true },
+  );
+}
+
 async function read(key) {
   const database = db();
   if (!database) return null;
@@ -234,6 +261,7 @@ function resetForTests(options = {}) {
 }
 
 module.exports = {
+  adopt,
   drainRemainingMs,
   probe,
   prepare,
