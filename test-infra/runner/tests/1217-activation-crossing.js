@@ -57,7 +57,6 @@ describe('activation crossing: the plane inherits the running master, it does no
           quorumGrantDrainMs: 90000,
           quorumGrantMinHolderAgeMs: 0,
           quorumGrantPursuitIntervalMs: 10000,
-          quorumGrantUnknownGraceMs: 30000,
           // Ahead of the chain's start, so the fleet boots and settles under the
           // legacy election exactly as production does today, and the crossing is
           // something this suite performs rather than something it starts inside.

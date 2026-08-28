@@ -65,6 +65,7 @@ describe('quorumGrant mastershipGrantGate', () => {
     sinon.stub(appsRuntimeState, 'isOperatorStopped').resolves(false);
     sinon.stub(grantClient, 'acquire').resolves({ granted: false, reason: 'test' });
     sinon.stub(grantClient, 'termLapsed').resolves(false);
+    sinon.stub(grantClient, 'relearn').resolves({ recovered: false, holder: null, reason: 'test' });
     sinon.stub(reconcilerQueue, 'enqueueComponent');
   });
 
@@ -108,7 +109,6 @@ describe('quorumGrant mastershipGrantGate', () => {
           fluxapps: {
             quorumGrantMastership: flag,
             quorumGrantActivationHeight: activateAt,
-            quorumGrantUnknownGraceMs: 120000,
             quorumGrantPursuitIntervalMs: 30000,
             quorumGrantHeldTtlMs: 150000,
           },
@@ -209,7 +209,6 @@ describe('quorumGrant mastershipGrantGate', () => {
           fluxapps: {
             quorumGrantMastership: true,
             quorumGrantActivationHeight: 2100000,
-            quorumGrantUnknownGraceMs: 120000,
             quorumGrantPursuitIntervalMs: 30000,
             quorumGrantHeldTtlMs: 150000,
             ...extraConfig,
@@ -320,21 +319,56 @@ describe('quorumGrant mastershipGrantGate', () => {
       expect(verdict).to.deep.equal({ desired: false, reason: 'peerHoldsGrant' });
     });
 
-    it('a record naming THIS node is not a peer verdict — the defer path runs', async () => {
+    it('a record naming THIS node is not a peer verdict — it goes on to ask', async () => {
       messageStore.getMasterleaseRecord.resolves({ data: { grantee: SELF } });
+      grantClient.relearn.resolves({ recovered: true, holder: { state: 'held' }, reason: null });
       const verdict = await mastershipGrantGate.grantVerdict(IDENTIFIER, activeStandbyComp());
-      expect(verdict).to.deep.equal({ desired: null, reason: 'grantUnknown' });
+      expect(verdict?.reason).to.not.equal('peerHoldsGrant');
+      expect(grantClient.relearn.called).to.equal(true);
     });
 
-    it('unknown defers within the grace, then fails closed past it', async () => {
-      mastershipGrantGate.resetForTests({ enabled: true, unknownGraceMs: 0 });
+    it('unknown ASKS the grantors instead of counting - and keeps running when they say it holds', async () => {
+      grantClient.relearn.resolves({ recovered: true, holder: { state: 'held' }, reason: null });
+      const verdict = await mastershipGrantGate.grantVerdict(IDENTIFIER, activeStandbyComp());
+      expect(grantClient.relearn.called, 'the gate never asked the grantors').to.equal(true);
+      expect(verdict).to.equal(null); // held answers nothing; the data gates decide
+    });
+
+    it('unknown fails closed the moment a quorum says the term is not this node\'s', async () => {
+      grantClient.relearn.resolves({ recovered: false, holder: null, reason: 'no quorum of registers names this node' });
+      const verdict = await mastershipGrantGate.grantVerdict(IDENTIFIER, activeStandbyComp());
+      expect(verdict.desired).to.equal(false);
+    });
+
+    // THE FLEET BUG. The grantors are inside their rejoin drain and refuse
+    // every ask, which is what a release wave produces on every node at once.
+    // The old gate counted to 120s and stopped a healthy master 22 seconds
+    // before that same node was granted the term back. Reads are served
+    // THROUGH the drain, so re-learning answers where acquisition cannot.
+    it('a refused ACQUISITION never stops a master whose term a quorum still records', async () => {
+      mastershipGrantGate.resetForTests({ enabled: true });
+      grantClient.acquire.resolves({ granted: false, reason: 'no prepare quorum' });
+      grantClient.relearn.resolves({ recovered: true, holder: { state: 'held' }, reason: null });
+
+      const verdicts = [];
+      for (let i = 0; i < 5; i += 1) {
+        // eslint-disable-next-line no-await-in-loop -- passes are sequential
+        verdicts.push(await mastershipGrantGate.grantVerdict(IDENTIFIER, activeStandbyComp()));
+      }
+      expect(verdicts.every((v) => v === null || v.desired !== false),
+        'a pass stopped the master while a quorum still recorded its term').to.equal(true);
+    });
+
+    // No amount of elapsed time turns an unanswered question into an answer.
+    it('never degrades on elapsed time alone - the same silence answers the same way', async () => {
+      mastershipGrantGate.resetForTests({ enabled: true });
+      grantClient.relearn.resolves({ recovered: true, holder: { state: 'held' }, reason: null });
       const first = await mastershipGrantGate.grantVerdict(IDENTIFIER, activeStandbyComp());
-      expect(first.desired).to.equal(null);
-
-      await new Promise((resolve) => { setTimeout(resolve, 10); });
-      const second = await mastershipGrantGate.grantVerdict(IDENTIFIER, activeStandbyComp());
-      expect(second).to.deep.equal({ desired: false, reason: 'grantNotHeld' });
+      await new Promise((resolve) => { setTimeout(resolve, 25); });
+      const later = await mastershipGrantGate.grantVerdict(IDENTIFIER, activeStandbyComp());
+      expect(later).to.deep.equal(first);
     });
+
 
     it('never returns desired true, whatever the state', async () => {
       const states = [
