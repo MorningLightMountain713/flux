@@ -549,10 +549,25 @@ async function record(req, res) {
       ? registerRowFor({ mode: 'oneshot', key, generation })
       : key;
     const stored = await grantRegister.read(row);
+    // §7 ships DURATIONS, never deadlines. `expiresAt` is a figure on THIS
+    // grantor's clock and a reader that adds it to its own is comparing a
+    // remote timestamp to a local one - which §7 forbids in as many words, and
+    // which the model found inside the first proposed recovery fix, where it
+    // broke at every margin because the flaw is the conversion rather than any
+    // gap. So the read also answers what is LEFT, subtracted here, and a
+    // recovering holder acts on that and never on expiresAt.
+    //
+    // null is not zero: a one-shot founding is durable and carries no expiry,
+    // and reading that as "lapsed" would be a different answer entirely.
+    const expiresAt = stored?.accepted?.expiresAt;
+    const remainingMs = Number.isFinite(expiresAt)
+      ? Math.max(0, expiresAt - Date.now())
+      : null;
     return res.json(messageHelper.createDataMessage({
       key,
       promisedEpoch: stored?.promisedEpoch ?? 0,
       accepted: stored?.accepted ?? null,
+      remainingMs,
       roster: stored?.roster ?? null,
     }));
   } catch (error) {

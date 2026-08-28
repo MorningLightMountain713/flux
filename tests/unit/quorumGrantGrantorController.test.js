@@ -625,6 +625,61 @@ describe('quorumGrant grantorController', () => {
       expect(res.body.data.roster.fingerprint).to.equal(FINGERPRINT);
     });
 
+    // §7 ships DURATIONS, never deadlines. expiresAt is a figure on THIS
+    // grantor's clock, and a node that adds it to its own is comparing a remote
+    // timestamp to a local one - the rule §7 states outright, and the defect
+    // the model found in the first proposed recovery fix. So the read also
+    // answers what is LEFT, computed here, which is the only figure a recovering
+    // holder may act on.
+    it('answers the remaining term as a DURATION, computed on this grantor clock', async () => {
+      const now = Date.now();
+      grantRegister.read.resolves({
+        promisedEpoch: 5,
+        accepted: {
+          epoch: 5, grantee: ASKER, mode: 'held', expiresAt: now + 90_000,
+        },
+      });
+      const req = fakeReq({});
+      req.query.key = 'myapp/master';
+      const res = fakeRes();
+      await grantorController.record(req, res);
+      expect(res.statusCode).to.equal(200);
+      expect(res.body.data.remainingMs).to.be.within(88_000, 90_000);
+    });
+
+    it('answers a LAPSED term as zero remaining, never a negative', async () => {
+      grantRegister.read.resolves({
+        accepted: {
+          epoch: 5, grantee: ASKER, mode: 'held', expiresAt: Date.now() - 30_000,
+        },
+      });
+      const req = fakeReq({});
+      req.query.key = 'myapp/master';
+      const res = fakeRes();
+      await grantorController.record(req, res);
+      expect(res.body.data.remainingMs).to.equal(0);
+    });
+
+    // A one-shot founding is durable and has no expiry: null says "not a term",
+    // which is different from zero and must not read as a lapsed one.
+    it('answers null remaining for a row that carries no expiry', async () => {
+      grantRegister.read.resolves({ accepted: { epoch: 1, grantee: ASKER, mode: 'oneshot' } });
+      const req = fakeReq({});
+      req.query.key = 'myapp/master';
+      const res = fakeRes();
+      await grantorController.record(req, res);
+      expect(res.body.data.remainingMs).to.equal(null);
+    });
+
+    it('answers null remaining when there is no accepted row at all', async () => {
+      grantRegister.read.resolves(null);
+      const req = fakeReq({});
+      req.query.key = 'myapp/master';
+      const res = fakeRes();
+      await grantorController.record(req, res);
+      expect(res.body.data.remainingMs).to.equal(null);
+    });
+
     it('reads a founder cell at its generation row - the write path\'s own addressing', async () => {
       const founderKey = 'myapp/founder-0123456789abcdef@2100088';
       grantRegister.read.resolves(null);
