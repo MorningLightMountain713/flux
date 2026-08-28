@@ -262,6 +262,55 @@ function timingIsSafe(timing) {
   };
 }
 
+/**
+ * What a quorum of registers says the term IS - whoever holds it.
+ *
+ * The adoption half of the same question recoverOutcome asks about this node.
+ * A tier-1 heal is a SWAP: remove X, add Y in one step, so {A,B,X} becomes
+ * {A,B,Y} and the majorities {B,X} and {A,Y} share nobody. Raft permits
+ * add-one or remove-one for exactly this reason, and X is only "dark" from
+ * someone's point of view - a partitioned X votes happily.
+ *
+ * The fix is the one §5 already states for a ONE-SHOT re-pin - state transfer
+ * with an activation gate, the grantor serves only once it holds the state -
+ * and §7.1 never stated for HELD additions: an added seat ADOPTS the published
+ * term before it serves, so it cannot be the swing vote for a challenger. It
+ * arrives already knowing a term is live and refuses anyone else.
+ *
+ * Same rules as recovery, for the same reasons: a QUORUM at ONE epoch, and the
+ * EARLIEST remainder in that quorum, because the term is live only while a
+ * quorum still says so.
+ *
+ * @param {Array<object>} replies {grantee, epoch, remainingMs} per grantor read
+ * @param {number} quorum
+ * @returns {{grantee: string|null, epoch: number|null, remainingMs: number}}
+ */
+function quorumTerm(replies, quorum) {
+  const live = (replies || []).filter((reply) => reply
+    && typeof reply.grantee === 'string'
+    && Number.isInteger(reply.epoch)
+    && Number.isFinite(reply.remainingMs)
+    && reply.remainingMs > 0);
+
+  const byTerm = new Map();
+  live.forEach((reply) => {
+    const id = `${reply.grantee}@${reply.epoch}`;
+    byTerm.set(id, [...(byTerm.get(id) ?? []), reply]);
+  });
+
+  let best = null;
+  byTerm.forEach((rows) => {
+    if (rows.length < quorum) return;
+    if (best === null || rows[0].epoch > best[0].epoch) best = rows;
+  });
+  if (!best) return { grantee: null, epoch: null, remainingMs: 0 };
+  return {
+    grantee: best[0].grantee,
+    epoch: best[0].epoch,
+    remainingMs: Math.min(...best.map((reply) => reply.remainingMs)),
+  };
+}
+
 function recoverOutcome(replies, selfOutpoint, quorum, roundTripMs) {
   const mine = (replies || []).filter((reply) => reply
     && reply.grantee === selfOutpoint
@@ -332,5 +381,6 @@ module.exports = {
   coastVerdict,
   recoverOutcome,
   timingIsSafe,
+  quorumTerm,
   HARD_STOP_MS,
 };

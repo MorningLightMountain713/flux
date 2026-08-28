@@ -13,6 +13,7 @@ const {
   coastVerdict,
   recoverOutcome,
   timingIsSafe,
+  quorumTerm,
 } = require('../../ZelBack/src/services/quorumGrant/grantClientCore');
 const { nowMs, Deadline } = require('../../ZelBack/src/services/utils/monotonicClock');
 
@@ -145,6 +146,63 @@ describe('quorumGrant grantClientCore', () => {
       expect(holderStateAt(250, 100, 200)).to.equal('lost');
       expect(holderStateAt(50, null, 200)).to.equal('jeopardy');
       expect(holderStateAt(50, null, null)).to.equal('lost');
+    });
+  });
+
+  // F1. A tier-1 heal is a SWAP - remove X, add Y in one step - and majorities
+  // either side of a swap can be disjoint: {A,B,X} -> {A,B,Y} leaves {B,X} and
+  // {A,Y} sharing nobody. Raft permits add-one or remove-one for exactly this
+  // reason. The fix is the one §5 already states for a ONE-SHOT re-pin and
+  // §7.1 never stated for HELD additions: the added seat ADOPTS the published
+  // term before it serves, so it cannot be the swing vote for a challenger.
+  //
+  // Same shape as recoverOutcome, asking "does a quorum name ANYONE" rather
+  // than "does a quorum name ME".
+  describe('what a quorum of registers says the term is', () => {
+    const A = `${'a'.repeat(64)}:0`;
+    const B = `${'b'.repeat(64)}:0`;
+
+    it('reports the holder a quorum agrees on', () => {
+      const out = quorumTerm([
+        { grantee: A, epoch: 7, remainingMs: 90_000 },
+        { grantee: A, epoch: 7, remainingMs: 70_000 },
+        { grantee: B, epoch: 6, remainingMs: 50_000 },
+      ], 2);
+      expect(out.grantee).to.equal(A);
+      expect(out.epoch).to.equal(7);
+    });
+
+    it('takes the EARLIEST expiry in the quorum', () => {
+      const out = quorumTerm([
+        { grantee: A, epoch: 7, remainingMs: 90_000 },
+        { grantee: A, epoch: 7, remainingMs: 70_000 },
+      ], 2);
+      expect(out.remainingMs).to.equal(70_000);
+    });
+
+    it('reports NOTHING when no grantee has a quorum', () => {
+      expect(quorumTerm([
+        { grantee: A, epoch: 7, remainingMs: 90_000 },
+        { grantee: B, epoch: 7, remainingMs: 90_000 },
+      ], 2).grantee).to.equal(null);
+    });
+
+    it('reports NOTHING when the quorum straddles two epochs', () => {
+      expect(quorumTerm([
+        { grantee: A, epoch: 7, remainingMs: 90_000 },
+        { grantee: A, epoch: 8, remainingMs: 90_000 },
+      ], 2).grantee).to.equal(null);
+    });
+
+    it('ignores lapsed rows - a dead term is not a term to adopt', () => {
+      expect(quorumTerm([
+        { grantee: A, epoch: 7, remainingMs: 90_000 },
+        { grantee: A, epoch: 7, remainingMs: 0 },
+      ], 2).grantee).to.equal(null);
+    });
+
+    it('reports NOTHING on silence', () => {
+      expect(quorumTerm([], 2).grantee).to.equal(null);
     });
   });
 
