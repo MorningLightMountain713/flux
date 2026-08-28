@@ -55,7 +55,6 @@ describe('rollout sequencing: the plane stays inert below the activation height'
           quorumGrantDrainMs: 90000,
           quorumGrantMinHolderAgeMs: 0,
           quorumGrantPursuitIntervalMs: 10000,
-          quorumGrantUnknownGraceMs: 30000,
           // Scheduled for a block this chain never reaches: the exact state every
           // node ships in until the activation block arrives.
           quorumGrantActivationHeight: 99_000_000,
