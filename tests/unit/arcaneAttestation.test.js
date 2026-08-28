@@ -5,7 +5,7 @@ const { expect } = require('chai');
 
 const arcaneAttestation = require('../../ZelBack/src/services/utils/arcaneAttestation');
 
-const { ARCANE_ATTESTATION_PUBKEY, verifyAttestationSignature } = arcaneAttestation;
+const { ARCANE_APP_ATTESTATION_PUBKEY, verifyAttestationSignature } = arcaneAttestation;
 
 // Export an Ed25519 KeyObject as the raw 32-byte base64 form the backend returns.
 function rawPubBase64(publicKey) {
@@ -16,7 +16,7 @@ function rawPubBase64(publicKey) {
 describe('arcaneAttestation verify primitive', () => {
   it('verifies a genuine signature against its public key', () => {
     const { publicKey, privateKey } = crypto.generateKeyPairSync('ed25519');
-    const message = 'FLUX_ARCANE_ATTEST_v1abc123';
+    const message = 'FLUX_ARCANE_ATTEST_v2:abc123';
     const signature = crypto.sign(null, Buffer.from(message), privateKey).toString('base64');
 
     expect(verifyAttestationSignature(message, rawPubBase64(publicKey), signature)).to.equal(true);
@@ -24,7 +24,7 @@ describe('arcaneAttestation verify primitive', () => {
 
   it('rejects a tampered message', () => {
     const { publicKey, privateKey } = crypto.generateKeyPairSync('ed25519');
-    const message = 'FLUX_ARCANE_ATTEST_v1abc123';
+    const message = 'FLUX_ARCANE_ATTEST_v2:abc123';
     const signature = crypto.sign(null, Buffer.from(message), privateKey).toString('base64');
 
     expect(verifyAttestationSignature(`${message}x`, rawPubBase64(publicKey), signature)).to.equal(false);
@@ -33,7 +33,7 @@ describe('arcaneAttestation verify primitive', () => {
   it('rejects a signature from a different key', () => {
     const signer = crypto.generateKeyPairSync('ed25519');
     const other = crypto.generateKeyPairSync('ed25519');
-    const message = 'FLUX_ARCANE_ATTEST_v1abc123';
+    const message = 'FLUX_ARCANE_ATTEST_v2:abc123';
     const signature = crypto.sign(null, Buffer.from(message), signer.privateKey).toString('base64');
 
     expect(verifyAttestationSignature(message, rawPubBase64(other.publicKey), signature)).to.equal(false);
@@ -43,20 +43,36 @@ describe('arcaneAttestation verify primitive', () => {
     expect(verifyAttestationSignature('msg', 'not-a-32-byte-key', 'c2ln')).to.equal(false);
   });
 
-  it('verifies a real attestation against the hardcoded network public key', () => {
-    // Captured live from a production node via fluxbenchd attest:
-    //   attest {"message":"FLUX_ARCANE_ATTEST_v1deadbeefcafe"}
-    const message = 'FLUX_ARCANE_ATTEST_v1deadbeefcafe';
-    const signature = 'qs9kQxwJCcLpk9ps7SuIlokTBqrZ7PSZL8pRQFze8oqlAaT5LyrY3qHGvZztzRkZSXc+YB1IV5WyXNcjzp+xBw==';
+  it('verifies a real app-purpose attestation against the hardcoded key', () => {
+    // Captured live from cabbage 2026-08-27, running the SAS build that added
+    // the `app` purpose:
+    //   POST /v2/attest {"message":"<64 a's><64 b's>","purpose":"app"}
+    // The signer prepends FLUX_ARCANE_ATTEST_v2: server-side, so the message
+    // rebuilt here is the domain plus the payload — exactly what flux-spec's
+    // buildArcaneAttestMessage produces from a contentHash and an envelope hash.
+    const message = `FLUX_ARCANE_ATTEST_v2:${'a'.repeat(64)}${'b'.repeat(64)}`;
+    const signature = 'KgeTEdb3s2bBeDG3cttfzwwO85JVh0xcg4PfTE5TNb7HIc567wuzE1PSpmcoO8xeDUUlUpkZvSMbGcbyDsM1CA==';
 
-    expect(verifyAttestationSignature(message, ARCANE_ATTESTATION_PUBKEY, signature)).to.equal(true);
+    expect(verifyAttestationSignature(message, ARCANE_APP_ATTESTATION_PUBKEY, signature))
+      .to.equal(true);
   });
 
-  it('resolves to the production network constant when no config override is set', () => {
-    // The pubkey is config-driven (arcane.attestationPubkey) so a controlled
-    // environment can point the gate at a different attestation key; with no
-    // override configured it must fall back to the network constant, leaving
-    // production behavior unchanged.
-    expect(ARCANE_ATTESTATION_PUBKEY).to.equal('fYkJ9M6NBKnQxnr8HD3FrYakKr8JM8BRo/wF4MA9/Ss=');
+  it('does not verify a signature made under the default purpose', () => {
+    // Same payload, same instance, signed without a purpose — the default
+    // network-wide key that FluxDrive blob upload pins. A purpose derives its
+    // own key, so this is mathematically unable to verify here rather than
+    // merely unlikely to. Captured in the same session as the signature above.
+    const message = `FLUX_ARCANE_ATTEST_v2:${'a'.repeat(64)}${'b'.repeat(64)}`;
+    const defaultPurposeSignature = 'RdqozoBfUOsViIWUhxWnosBvQdeHjyttndVvOWISN2uWw+lc1Jk85xVfP8cXUgsq/9YkvUHkLByIrovJm5wRCg==';
+
+    expect(verifyAttestationSignature(message, ARCANE_APP_ATTESTATION_PUBKEY, defaultPurposeSignature))
+      .to.equal(false);
+  });
+
+  it('resolves to the network constant when no config override is set', () => {
+    // Config-driven (arcane.appAttestationPubkey) so the fleet harness can point
+    // the gate at its benchmark stub's app-purpose key; with no override it must
+    // fall back to the network constant.
+    expect(ARCANE_APP_ATTESTATION_PUBKEY).to.equal('ERXxzVN8fg4sCjhIPp37XRu1ealmD4TA6tU7A3o6tQM=');
   });
 });

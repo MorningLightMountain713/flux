@@ -40,6 +40,30 @@ async function getSpecBackend() { return load(); }
 async function getSpecPolicy() { return load(); }
 
 /**
+ * Refuse a spec version the chain has not activated yet.
+ *
+ * Enforcement heights are chain policy, so they stay here rather than in
+ * flux-spec. Split out because a DECRYPTED spec is validated through
+ * `DecryptedCanonicalSpec.validateContents()` — which deliberately produces no
+ * blob, so it cannot be routed through validateSubmissionSpec/validateGossipSpec
+ * — and the height gate still has to apply to it.
+ *
+ * @param {number} version
+ * @param {number} [height] - current daemon height; undefined skips the gate
+ * @throws {Error} if the version is unknown or not yet activated
+ */
+function assertVersionActivated(version, height) {
+  if (height === undefined) return;
+  const activationHeight = config.fluxapps.appSpecsEnforcementHeights[version];
+  if (activationHeight === undefined) {
+    throw new Error(`Unsupported Flux App specification version: ${version}`);
+  }
+  if (height < activationHeight) {
+    throw new Error(`Flux apps specifications of version ${version} not yet supported`);
+  }
+}
+
+/**
  * Validate a submission-shape spec blob through the appropriate version
  * class, optionally enforcing FluxOS fork-activation height gates.
  *
@@ -53,25 +77,13 @@ async function getSpecPolicy() { return load(); }
  */
 async function validateSubmissionSpec(spec, { height, purpose } = {}) {
   await getSpecBackend();
-  const { FluxAppSpecBase, ValidationError } = await getSpec();
+  const { FluxAppSpecBase } = await getSpec();
   const VersionClass = spec && FluxAppSpecBase.getVersionClass(spec.version);
   if (!VersionClass) {
     throw new Error(`Unsupported Flux App specification version: ${spec && spec.version}`);
   }
-  if (height !== undefined
-    && height < config.fluxapps.appSpecsEnforcementHeights[spec.version]) {
-    throw new Error(`Flux apps specifications of version ${spec.version} not yet supported`);
-  }
-  try {
-    return VersionClass.fromSubmission(spec, purpose === undefined ? {} : { purpose });
-  } catch (err) {
-    if (err instanceof ValidationError && Array.isArray(err.errors) && err.errors.length > 0) {
-      const first = err.errors[0];
-      const path = first.field ? `${first.field}: ` : '';
-      throw new Error(`${path}${first.message}`);
-    }
-    throw err;
-  }
+  assertVersionActivated(spec.version, height);
+  return VersionClass.fromSubmission(spec, purpose === undefined ? {} : { purpose });
 }
 
 /**
@@ -87,25 +99,13 @@ async function validateSubmissionSpec(spec, { height, purpose } = {}) {
  */
 async function validateGossipSpec(spec, { height } = {}) {
   await getSpecBackend();
-  const { FluxAppSpecBase, ValidationError } = await getSpec();
+  const { FluxAppSpecBase } = await getSpec();
   const VersionClass = spec && FluxAppSpecBase.getVersionClass(spec.version);
   if (!VersionClass) {
     throw new Error(`Unsupported Flux App specification version: ${spec && spec.version}`);
   }
-  if (height !== undefined
-    && height < config.fluxapps.appSpecsEnforcementHeights[spec.version]) {
-    throw new Error(`Flux apps specifications of version ${spec.version} not yet supported`);
-  }
-  try {
-    return VersionClass.deserialize(spec);
-  } catch (err) {
-    if (err instanceof ValidationError && Array.isArray(err.errors) && err.errors.length > 0) {
-      const first = err.errors[0];
-      const path = first.field ? `${first.field}: ` : '';
-      throw new Error(`${path}${first.message}`);
-    }
-    throw err;
-  }
+  assertVersionActivated(spec.version, height);
+  return VersionClass.deserialize(spec);
 }
 
 /**
@@ -117,25 +117,16 @@ async function validateGossipSpec(spec, { height } = {}) {
  *
  * @param {object} priorSpec - previous confirmed spec (cleartext)
  * @param {object} newSpec - incoming update spec (cleartext)
- * @throws {Error} with a clean message if an immutable field changed
+ * @throws {ValidationError} naming the immutable field that changed
  */
 async function assertUpdateInvariants(priorSpec, newSpec) {
   const { assertUpdateInvariants: impl } = await getSpecBackend();
-  const { ValidationError } = await getSpec();
-  try {
-    impl(priorSpec, newSpec);
-  } catch (err) {
-    if (err instanceof ValidationError && Array.isArray(err.errors) && err.errors.length > 0) {
-      const first = err.errors[0];
-      const path = first.field ? `${first.field}: ` : '';
-      throw new Error(`${path}${first.message}`);
-    }
-    throw err;
-  }
+  impl(priorSpec, newSpec);
 }
 
 module.exports = {
   getSpec,
+  assertVersionActivated,
   getSpecBackend,
   getSpecPolicy,
   validateSubmissionSpec,

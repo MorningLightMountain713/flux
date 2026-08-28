@@ -14,7 +14,9 @@ const registryManager = require('../appDatabase/registryManager');
 const messageVerifier = require('../appMessaging/messageVerifier');
 const appEventVerifier = require('../appMessaging/appEventVerifier');
 const { verifyImageRegistryAndArchitectures } = require('../appSecurity/imageArchitectureValidator');
-const { validateSubmissionSpec, getSpec, getSpecBackend, assertUpdateInvariants } = require('../utils/specLibs');
+const {
+  validateSubmissionSpec, getSpec, getSpecBackend, assertUpdateInvariants, assertVersionActivated,
+} = require('../utils/specLibs');
 const { ensureProvidersRegistered, resolveInstantiatedSpec } = require('../utils/specCutover');
 const transportHelper = require('../utils/transportHelper');
 const appsRepository = require('../appDatabase/appsRepository');
@@ -146,7 +148,12 @@ async function resolveSubmission(appSpecification, {
     // v8 enterprise blob — decrypt, then hold the decrypted instance to submission rules
     const provider = await wireSpec.createProvider();
     spec = await wireSpec.decrypt(provider);
-    await validateSubmissionSpec(spec.spec.serialize(), { height: daemonHeight });
+    // Through the wrapper: a decrypted spec has no wire form, so submission
+    // rules are applied without ever producing a plaintext blob. v8's decrypt
+    // uses the looser deserialize path, so this is the check that holds an
+    // enterprise blob's contents to submission rules.
+    assertVersionActivated(spec.version, daemonHeight);
+    spec.validateContents({ purpose: 'submission' });
   } else {
     spec = await validateSubmissionSpec(submissionBlob, { height: daemonHeight });
   }
@@ -385,7 +392,7 @@ async function submitAppRegistration(req, res, processedBody, contentCtx) {
   // before parsing, so the field only ever rides messages they ignore.
   let arcaneAttestation;
   if (signedEvent.requiresArcaneAttestation()) {
-    arcaneAttestation = await appEventVerifier.requestAttestation(contentHash);
+    arcaneAttestation = await appEventVerifier.requestAttestation(contentHash, broadcastBlob);
   }
 
   const temporaryAppMessage = {

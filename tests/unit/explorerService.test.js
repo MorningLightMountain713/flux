@@ -1,14 +1,17 @@
 'use strict';
 
 const sinon = require('sinon');
+const daemonSubscriptionService = require('../../ZelBack/src/services/daemonService/daemonSubscriptionService');
+const proxyquire = require('proxyquire');
 const explorerService = require('../../ZelBack/src/services/explorerService');
+const chainRollback = require('../../ZelBack/src/services/chainRollback');
+const specLibs = require('../../ZelBack/src/services/utils/specLibs');
 const serviceHelper = require('../../ZelBack/src/services/serviceHelper');
 const specReconciler = require('../../ZelBack/src/services/appLifecycle/specReconciler');
 const appJanitor = require('../../ZelBack/src/services/appLifecycle/appJanitor');
 const portManager = require('../../ZelBack/src/services/appNetwork/portManager');
 const daemonServiceBlockchainRpcs = require('../../ZelBack/src/services/daemonService/daemonServiceBlockchainRpcs');
 const daemonServiceMiscRpcs = require('../../ZelBack/src/services/daemonService/daemonServiceMiscRpcs');
-const daemonSubscriptionService = require('../../ZelBack/src/services/daemonService/daemonSubscriptionService');
 const daemonServiceUtils = require('../../ZelBack/src/services/daemonService/daemonServiceUtils');
 const dbHelper = require('../../ZelBack/src/services/dbHelper');
 const globalState = require('../../ZelBack/src/services/utils/globalState');
@@ -1140,6 +1143,140 @@ describe('explorerService tests', () => {
     });
   });
 
+  describe('processSoftFork failure handling', () => {
+    const config = require('config');
+    const priceOracleState = require('../../ZelBack/src/services/pricing/priceOracleState');
+
+    // Same real mainnet P2PKH scriptSig the authority tests use: SIGHASH_ALL, so the
+    // input commits to the OP_RETURN and isMessageAuthority accepts the transaction.
+    const ALL_SCRIPTSIG = '483045022100d8a57c5364a2eb062a6fdac519d665074a1a075dff2215eb15e17c4dfb170eef02203b96971b6a07f880a2d946de2155e3a296d3ebf02d1754cba1f4a648fc2e4591012103a9329557d633a7b261290f7c3b17506d460c3fcfd0cb8fd9339b27d4f583eca7';
+    const authorityTx = () => ({
+      vin: [{ address: config.fluxapps.messageAuthorityAddress, scriptSig: { hex: ALL_SCRIPTSIG } }],
+    });
+
+    const PAYLOAD = new Uint8Array([0x02, 0x00]);
+    const PARSED_PRICE = { fields: { cpu: 1n }, unknownTags: [] };
+
+    let realPolicy;
+    let ValidationError;
+
+    before(async () => {
+      realPolicy = await specLibs.getSpecPolicy();
+      ({ ValidationError } = realPolicy);
+    });
+
+    afterEach(() => sinon.restore());
+
+    // explorerService loaded with spec-policy's dispatch under the test's control.
+    // The CJS bridge freezes the namespace it hands out, so `dispatch` cannot be
+    // stubbed on it — the accessor is the only seam.
+    function explorerWith(dispatch) {
+      const policy = { ...realPolicy, dispatch };
+      return proxyquire('../../ZelBack/src/services/explorerService', {
+        './utils/specLibs': { ...specLibs, getSpecPolicy: async () => policy },
+      });
+    }
+
+    describe('telling a bad message from a broken parser', () => {
+      it('skips a message the parser rejects, and reports it against the sender', async () => {
+        const warnSpy = sinon.spy(log, 'warn');
+        const errorSpy = sinon.spy(log, 'error');
+        const svc = explorerWith(() => {
+          throw new ValidationError([
+            { path: [], code: 'MALFORMED_ENCODING', message: 'trailing bytes' },
+          ]);
+        });
+
+        await svc.processSoftFork('badTx', 1594832, PAYLOAD, false, authorityTx());
+
+        expect(warnSpy.calledWithMatch(/Rejected soft-fork message badTx/)).to.equal(true);
+        expect(errorSpy.calledWithMatch(/defect/)).to.equal(false);
+      });
+
+      it('surfaces a broken parser instead of blaming the sender', async () => {
+        const warnSpy = sinon.spy(log, 'warn');
+        const errorSpy = sinon.spy(log, 'error');
+        const svc = explorerWith(() => {
+          // Not a ValidationError: a coding fault inside spec-policy. Swallowed as
+          // "rejected message", one of these skips every price message on every node
+          // while the log accuses the foundation of publishing garbage.
+          throw new TypeError('PRICE_TAGS.get is not a function');
+        });
+
+        await expect(svc.processSoftFork('goodTx', 1594832, PAYLOAD, false, authorityTx()))
+          .to.eventually.be.rejectedWith('PRICE_TAGS.get is not a function');
+
+        expect(errorSpy.calledWithMatch(/FluxOS\/spec-policy.*defect, not a bad message/)).to.equal(true);
+        expect(warnSpy.calledWithMatch(/Rejected soft-fork message/)).to.equal(false);
+      });
+    });
+
+    describe('the stored row and the in-memory history move together', () => {
+      it('does not write the row when the in-memory apply refuses the message', async () => {
+        const updateStub = sinon.stub(dbHelper, 'updateOneInDatabase').resolves();
+        sinon.stub(priceOracleState, 'getPriceMessageHistory').returns({
+          add: sinon.stub().throws(new TypeError('PriceMessageHistory.add: chainHeight must be a non-negative integer')),
+        });
+        const svc = explorerWith(() => ({ kind: 'price', message: PARSED_PRICE, firstByte: 0x02 }));
+
+        await expect(svc.processSoftFork('priceTx', 1594832, PAYLOAD, false, authorityTx()))
+          .to.eventually.be.rejectedWith(/chainHeight must be a non-negative integer/);
+
+        // A row the history refuses is a poison pill: rebuildPriceOracleState replays
+        // every stored row through the same add() at startup, unguarded.
+        expect(updateStub.called).to.equal(false);
+      });
+
+      it('writes the row and applies the message when both succeed', async () => {
+        const updateStub = sinon.stub(dbHelper, 'updateOneInDatabase').resolves();
+        const addStub = sinon.stub();
+        sinon.stub(priceOracleState, 'getPriceMessageHistory').returns({ add: addStub });
+        const svc = explorerWith(() => ({ kind: 'price', message: PARSED_PRICE, firstByte: 0x02 }));
+
+        await svc.processSoftFork('priceTx', 1594832, PAYLOAD, false, authorityTx());
+
+        sinon.assert.calledOnceWithExactly(addStub, PARSED_PRICE, 1594832);
+        const write = updateStub.getCalls().find((c) => c.args[2]?.txid === 'priceTx');
+        expect(write, 'the price row must be stored').to.not.be.undefined;
+        expect(write.args[3].$set.message).to.equal(PARSED_PRICE);
+      });
+    });
+  });
+
+  describe('initiateBlockProcessor never rejects', () => {
+    beforeEach(async () => {
+      sinon.stub(daemonServiceMiscRpcs, 'isDaemonSynced').returns({ data: { synced: true } });
+      await dbHelper.initiateDB();
+      dbHelper.databaseConnection();
+      sinon.stub(dbHelper, 'countInDatabase').resolves(1);
+    });
+
+    afterEach(() => {
+      explorerService.setIsInInitiationOfBP(false);
+      explorerService.setZelAppSpecsMigrationDone(false);
+      sinon.restore();
+    });
+
+    // Every caller starts this as a fire-and-forget promise — boot, and the
+    // /explorer/restart|reindex|rescan routes. There is no process-level
+    // unhandledRejection handler, so anything escaping here ends fluxos: the failure
+    // path is the one that must not be able to fail.
+    it('swallows a failure in its own recovery rather than taking the process down', async () => {
+      explorerService.setZelAppSpecsMigrationDone(true);
+      const errorSpy = sinon.spy(log, 'error');
+      sinon.stub(dbHelper, 'findOneInDatabase').resolves({ generalScannedHeight: 700000 });
+      // The body fails...
+      sinon.stub(daemonServiceBlockchainRpcs, 'getBlockCount').returns({
+        status: 'error', data: { message: 'daemon is down' },
+      });
+      // ...and so does the recovery it triggers.
+      sinon.stub(chainRollback, 'rollbackTo').rejects(new Error('rollback hit a dead database'));
+
+      await expect(explorerService.initiateBlockProcessor({})).to.eventually.be.fulfilled;
+
+      expect(errorSpy.calledWithMatch(/Block processor recovery failed/)).to.equal(true);
+    });
+  });
   describe('the hashblockheight subscriber', () => {
     it('carries the pushed height into the scan request, so the drain never trusts the cache alone', async () => {
       // The push handler chain is synchronous and ordered by registration:

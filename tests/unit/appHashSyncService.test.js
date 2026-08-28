@@ -18,6 +18,9 @@ function makeDeserializeSpecStub() {
     isEncrypted: false,
     name: spec.name,
     owner: spec.owner,
+    // A real deserialized spec always carries its version; omitting it here
+    // made the stub something the production object can never be.
+    version: spec.version,
   }));
 }
 
@@ -34,7 +37,6 @@ describe('appHashSyncService tests', () => {
   let peerManagerStub;
   let collectionStub;
   let deserializeSpecStub;
-  let validateGossipSpecStub;
 
   function makePeer(ip, port, source = 'random') {
     return {
@@ -57,7 +59,7 @@ describe('appHashSyncService tests', () => {
       './messageVerifier': messageVerifierStub,
       './appEventVerifier': appEventVerifierStub,
       '../utils/specCutover': { deserializeSpec: deserializeSpecStub },
-      '../utils/specLibs': { validateGossipSpec: validateGossipSpecStub, getSpec: sinon.stub().resolves({}), getSpecBackend: sinon.stub().resolves({ InstantiatedSpec: { fromEvent: (x) => x } }) },
+      '../utils/specLibs': { assertVersionActivated: sinon.stub(), getSpec: sinon.stub().resolves({}), getSpecBackend: sinon.stub().resolves({ InstantiatedSpec: { fromEvent: (x) => x } }) },
       '../daemonService/daemonServiceMiscRpcs': { isDaemonSynced: sinon.stub().returns({ data: { height: 2555000 } }) },
       '../utils/fluxBroadcastHelper': fluxBroadcastHelperStub,
       '../invalidMessages': { invalidMessages: [] },
@@ -108,12 +110,22 @@ describe('appHashSyncService tests', () => {
     };
 
     appEventVerifierStub = {
-      deserializeMessage: sinon.stub().callsFake(async (msg) => ({ serialize: () => ({ ...msg }) })),
+      deserializeMessage: sinon.stub().callsFake(async (msg) => ({
+        serialize: () => ({ ...msg }),
+        // A real event always carries its parsed spec; the service reads it
+        // rather than parsing the document a second time.
+        spec: {
+          name: msg.appSpecifications?.name,
+          owner: msg.appSpecifications?.owner,
+          version: msg.appSpecifications?.version,
+          isEncrypted: false,
+          serialize: () => msg.appSpecifications,
+        },
+      })),
       authorize: sinon.stub().resolves(),
     };
 
     deserializeSpecStub = makeDeserializeSpecStub();
-    validateGossipSpecStub = sinon.stub().resolves();
 
     fluxBroadcastHelperStub = {
       serialiseAndSignFluxBroadcast: sinon.stub().resolves('{"signed":"data"}'),
@@ -717,8 +729,8 @@ describe('appHashSyncService tests', () => {
     let localDbHelperStub;
     let localAppEventVerifierStub;
     let localDeserializeSpecStub;
-    let localValidateGossipSpecStub;
     let localLogStub;
+    let localAssertVersionActivatedStub;
 
     beforeEach(() => {
       localCollectionStub = {
@@ -740,12 +752,23 @@ describe('appHashSyncService tests', () => {
       };
 
       localAppEventVerifierStub = {
-        deserializeMessage: sinon.stub().callsFake(async (msg) => ({ serialize: () => ({ ...msg }) })),
+        deserializeMessage: sinon.stub().callsFake(async (msg) => ({
+        serialize: () => ({ ...msg }),
+        // A real event always carries its parsed spec; the service reads it
+        // rather than parsing the document a second time.
+        spec: {
+          name: msg.appSpecifications?.name,
+          owner: msg.appSpecifications?.owner,
+          version: msg.appSpecifications?.version,
+          isEncrypted: false,
+          serialize: () => msg.appSpecifications,
+        },
+      })),
         authorize: sinon.stub().resolves(),
       };
 
       localDeserializeSpecStub = makeDeserializeSpecStub();
-      localValidateGossipSpecStub = sinon.stub().resolves();
+      localAssertVersionActivatedStub = sinon.stub();
 
       localLogStub = {
         error: sinon.stub(),
@@ -762,7 +785,7 @@ describe('appHashSyncService tests', () => {
         './messageVerifier': messageVerifierStub,
         './appEventVerifier': localAppEventVerifierStub,
         '../utils/specCutover': { deserializeSpec: localDeserializeSpecStub },
-        '../utils/specLibs': { validateGossipSpec: localValidateGossipSpecStub, getSpec: sinon.stub().resolves({}), getSpecBackend: sinon.stub().resolves({ InstantiatedSpec: { fromEvent: (x) => x } }) },
+        '../utils/specLibs': { assertVersionActivated: localAssertVersionActivatedStub, getSpec: sinon.stub().resolves({}), getSpecBackend: sinon.stub().resolves({ InstantiatedSpec: { fromEvent: (x) => x } }) },
         '../daemonService/daemonServiceMiscRpcs': { isDaemonSynced: sinon.stub().returns({ data: { height: 2555000 } }) },
         '../utils/fluxBroadcastHelper': fluxBroadcastHelperStub,
         '../invalidMessages': { invalidMessages: [] },
@@ -838,6 +861,35 @@ describe('appHashSyncService tests', () => {
       expect(localCollectionStub.insertMany.called).to.be.true;
       const inserted = localCollectionStub.insertMany.firstCall.args[0];
       expect(inserted.length).to.equal(2);
+    });
+
+    // deserializeSpec above already validated these by constructing them, so the
+    // second full parse was removed. The activation height was the only thing it
+    // added, and it has to survive that removal.
+    it('checks the activation height for each message it processes', async () => {
+      const bulkMessages = [{
+        type: 'fluxappupdate', version: 4, hash: 'hash1', timestamp: Date.now(),
+        signature: 'sig1', appSpecifications: { name: 'testapp', version: 4, owner: 'newOwner' },
+        valueSat: 1e8, txid: 'tx1', height: 1000,
+      }];
+      const manyMissing = Array(600).fill(null).map((_, i) => ({
+        hash: `hash${i}`, txid: `tx${i}`, height: 1000 + i, value: 100, message: false,
+      }));
+      let calls = 0;
+      localDbHelperStub.findInDatabase.callsFake(() => {
+        calls += 1;
+        return Promise.resolve(calls === 1 ? manyMissing : []);
+      });
+      localDbHelperStub.findOneInDatabase.resolves({ generalScannedHeight: 2555000 });
+      serviceHelperStub.axiosGet.callsFake((url) => (url.includes('permanentmessages')
+        ? Promise.resolve(makeStreamResponse(bulkMessages))
+        : Promise.resolve({ data: { status: 'success', data: true } })));
+
+      await localModule.syncMissingHashes();
+
+      expect(localAssertVersionActivatedStub.called, 'the activation check must still run').to.be.true;
+      expect(localAssertVersionActivatedStub.firstCall.args[0], 'the parsed version, not the document')
+        .to.equal(4);
     });
 
     it('should skip messages when authorize fails', async () => {

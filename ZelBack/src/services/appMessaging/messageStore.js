@@ -12,7 +12,7 @@ const foundingCommittee = require('../appMesh/foundingCommittee');
 const fluxEventBus = require('../utils/fluxEventBus');
 const ownerGenerationRecord = require('../quorumGrant/ownerGenerationRecord');
 const rosterOverlay = require('../quorumGrant/rosterOverlay');
-const { getSpec, validateGossipSpec } = require('../utils/specLibs');
+const { getSpec, assertVersionActivated } = require('../utils/specLibs');
 const { getStateBeforeHeight } = require('../appDatabase/appSpecHistory');
 const globalState = require('../utils/globalState');
 const {
@@ -161,19 +161,37 @@ async function storeAppTemporaryMessage(message, options = {}) {
       return new Error('Invalid or missing arcane attestation on encrypted Flux App message');
     }
 
-    let validationBlob;
+    // False for a sealed spec this node cannot open — the checks below need to
+    // read it.
+    let specReadable = false;
     if (appEvent.isEncrypted) {
       if (await benchmarkService.isSystemSecure()) {
-        const provider = await appEvent.spec.createProvider();
-        const decrypted = await appEvent.spec.decrypt(provider);
-        validationBlob = decrypted.spec.serialize();
+        try {
+          const provider = await appEvent.spec.createProvider();
+          // decryptAndVerify, not decrypt: the signature commits to a contentHash,
+          // so opening the envelope says nothing about whether what came out is
+          // what the owner signed for.
+          const decrypted = await appEvent.decryptAndVerify(provider);
+          // Validated through the wrapper: a decrypted spec has no wire form, so
+          // there is no blob to hand a validator. Same rules, no plaintext bytes.
+          assertVersionActivated(decrypted.version, block);
+          decrypted.validateContents({ purpose: 'gossip' });
+        } catch (err) {
+          // A bad message is a rejection, and the caller logs a RETURNED Error
+          // with the hash and sender IP where a throw reaches a bare log.error.
+          // But a TypeError here is our bug, not a bad message: returning it
+          // would bury a defect under a stream of peer rejections, so it stays
+          // loud.
+          if (err instanceof TypeError || err instanceof ReferenceError) throw err;
+          return new Error(`Invalid encrypted Flux App message: ${err.message}`);
+        }
       }
     } else {
-      validationBlob = message.appSpecifications;
-    }
-
-    if (validationBlob) {
-      await validateGossipSpec(validationBlob, { height: block });
+      // deserializeTempMessage already validated this spec by constructing it.
+      // Re-parsing the raw blob cost 4.5ms of 11.6ms on a 157KB spec; only the
+      // activation height was new, and it needs the version, not the document.
+      assertVersionActivated(appEvent.spec.version, block);
+      specReadable = true;
     }
 
     let previousState = null;
@@ -194,7 +212,7 @@ async function storeAppTemporaryMessage(message, options = {}) {
       }
     }
 
-    if (validationBlob) {
+    if (specReadable) {
       if (appEvent.isRegistration) {
         await registryManager.checkApplicationRegistrationNameConflicts(appEvent.spec, appEvent.hash);
       } else if (previousState) {

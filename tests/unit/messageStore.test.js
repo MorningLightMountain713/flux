@@ -15,6 +15,8 @@ describe('messageStore tests', () => {
   let appEventVerifierStub;
   let logStub;
   let configStub;
+  let registryManagerStub;
+  let assertVersionActivatedStub;
 
   function makeMockAppEvent(message) {
     const specs = message.appSpecifications || {};
@@ -54,15 +56,13 @@ describe('messageStore tests', () => {
       '../daemonService/daemonServiceMiscRpcs': {
         isDaemonSynced: sinon.stub().returns({ data: { height: 1000 } }),
       },
-      '../appDatabase/registryManager': {
-        checkApplicationRegistrationNameConflicts: sinon.stub().resolves(),
-      },
+      '../appDatabase/registryManager': registryManagerStub,
       '../appDatabase/appSpecHistory': {
         getStateBeforeHeight: sinon.stub().resolves({ owner: 'owner1', spec: { owner: 'owner1' }, contentHash: null }),
       },
       '../utils/specLibs': {
-        validateGossipSpec: sinon.stub().resolves(),
         getSpec: sinon.stub().resolves({ UpdatePolicy: { assertCompatible: sinon.stub() } }),
+        assertVersionActivated: assertVersionActivatedStub,
       },
       '../utils/globalState': {
         queuePendingUpdate: sinon.stub(),
@@ -118,6 +118,11 @@ describe('messageStore tests', () => {
       authorize: sinon.stub().resolves(),
       verifyAttestation: sinon.stub().returns(true),
     };
+
+    registryManagerStub = {
+      checkApplicationRegistrationNameConflicts: sinon.stub().resolves(),
+    };
+    assertVersionActivatedStub = sinon.stub();
 
     logStub = {
       error: sinon.stub(),
@@ -471,6 +476,207 @@ describe('messageStore tests', () => {
         expect(result).to.deep.equal({ rebroadcast: true });
         expect(appEventVerifierStub.verifyAttestation.called).to.be.false;
         expect(dbHelperStub.insertOneToDatabase.calledOnce).to.be.true;
+      });
+    });
+
+    // The spec arrives already validated — deserializeTempMessage builds the
+    // event, and constructing a spec class runs the whole chain. What used to
+    // re-validate it here added exactly one thing: the activation height.
+    describe('a validated spec is not validated a second time', () => {
+      const cleartextMessage = {
+        type: 'fluxappregister',
+        version: 2,
+        appSpecifications: { name: 'clear-app', owner: 'owner1', version: 9 },
+        hash: 'clearhash',
+        timestamp: Date.now(),
+        signature: 'sig',
+      };
+
+      beforeEach(() => {
+        appsRepositoryStub.getPermanentMessage.resolves(null);
+        appsRepositoryStub.getTempMessage.resolves(null);
+        dbHelperStub.databaseConnection.returns({ db: sinon.stub().returns('database') });
+        dbHelperStub.findOneInDatabase.resolves(null);
+        dbHelperStub.insertOneToDatabase.resolves();
+      });
+
+      it('still refuses a spec whose version is not active at that height', () => {
+        assertVersionActivatedStub.throws(new Error('v9 is not active until height 2000000'));
+
+        return messageStore.storeAppTemporaryMessage(cleartextMessage).then(
+          () => expect.fail('an inactive version must not be stored'),
+          (err) => {
+            expect(err.message).to.match(/not active/);
+            expect(dbHelperStub.insertOneToDatabase.called).to.be.false;
+          },
+        );
+      });
+
+      it('checks the activation height against the version it already parsed', async () => {
+        await messageStore.storeAppTemporaryMessage(cleartextMessage);
+
+        expect(assertVersionActivatedStub.calledOnce).to.be.true;
+        expect(assertVersionActivatedStub.firstCall.args[0], 'the spec version, not the document')
+          .to.equal(9);
+      });
+
+      it('runs the registration name-conflict check on a readable spec', async () => {
+        await messageStore.storeAppTemporaryMessage(cleartextMessage);
+        expect(registryManagerStub.checkApplicationRegistrationNameConflicts.calledOnce).to.be.true;
+      });
+
+      // Preserved deliberately: those checks read the spec, and a node that
+      // cannot open a sealed one has nothing to read.
+      it('skips them for a sealed spec this node cannot open', async () => {
+        appEventVerifierStub.deserializeTempMessage.resolves({
+          hash: 'sealedhash',
+          timestamp: Date.now(),
+          version: 2,
+          isEncrypted: true,
+          requiresArcaneAttestation: () => true,
+          isRegistration: true,
+          isUpdate: false,
+          spec: { name: 'sealed-app', owner: 'owner1', version: 9, serialize: () => ({}) },
+          serialize: () => ({
+            type: 'fluxappregister', version: 2, appSpecifications: {}, hash: 'sealedhash',
+            timestamp: Date.now(), signature: 'sig', contentHash: 'x', extend: false,
+          }),
+        });
+        appEventVerifierStub.verifyAttestation.returns(true);
+        // A node that cannot open it — benchmarkService must be stubbed or the
+        // real one dials 127.0.0.1:26224 and the harness fails the run.
+        messageStore = proxyquire(
+          '../../ZelBack/src/services/appMessaging/messageStore',
+          buildProxyquireStubs({
+            '../benchmarkService': { isSystemSecure: sinon.stub().resolves(false) },
+          }),
+        );
+
+        await messageStore.storeAppTemporaryMessage({ ...cleartextMessage, hash: 'sealedhash' });
+
+        expect(registryManagerStub.checkApplicationRegistrationNameConflicts.called).to.be.false;
+        expect(assertVersionActivatedStub.called, 'nothing to read, nothing to check').to.be.false;
+      });
+    });
+
+    // A v9 signature commits to a contentHash, not to a spec, so decrypting an
+    // envelope says nothing about whether what came out is what the owner
+    // signed for. These run with isSystemSecure true, so they go THROUGH the
+    // decrypt branch the attestation tests above deliberately skip.
+    describe('decrypted content is reconciled against the signed contentHash', () => {
+      // spec.decrypt resolves and decryptAndVerify rejects, so a caller using
+      // the wrong one stores the message and fails these tests. That is the
+      // whole point: the two are indistinguishable unless the content differs.
+      function makeSecureEvent({ reconciles }) {
+        const specs = { name: 'enc-app', owner: 'owner1', version: 9 };
+        const decrypted = { version: 9, validateContents: sinon.stub() };
+        return {
+          hash: 'enchash',
+          timestamp: Date.now(),
+          version: 2,
+          isEncrypted: true,
+          requiresArcaneAttestation: () => true,
+          isRegistration: true,
+          isUpdate: false,
+          spec: {
+            ...specs,
+            serialize: () => specs,
+            createProvider: sinon.stub().resolves({}),
+            decrypt: sinon.stub().resolves(decrypted),
+          },
+          decryptAndVerify: reconciles
+            ? sinon.stub().resolves(decrypted)
+            : sinon.stub().rejects(Object.assign(
+              new Error('decrypted content does not match the contentHash this event was signed over'),
+              { code: 'CONTENT_HASH_MISMATCH' },
+            )),
+          serialize: () => ({
+            type: 'fluxappregister',
+            version: 2,
+            appSpecifications: specs,
+            hash: 'enchash',
+            timestamp: Date.now(),
+            signature: 'sig',
+            contentHash: 'deadbeef',
+            extend: false,
+            arcaneAttestation: 'att-sig',
+          }),
+        };
+      }
+
+      const secureMessage = {
+        type: 'fluxappregister',
+        version: 2,
+        appSpecifications: { name: 'enc-app', cipher: 'xxx' },
+        hash: 'enchash',
+        timestamp: Date.now(),
+        signature: 'sig',
+      };
+
+      function buildSecure() {
+        return proxyquire(
+          '../../ZelBack/src/services/appMessaging/messageStore',
+          buildProxyquireStubs({
+            '../benchmarkService': { isSystemSecure: sinon.stub().resolves(true) },
+            '../utils/specLibs': {
+              getSpec: sinon.stub().resolves({ UpdatePolicy: { assertCompatible: sinon.stub() } }),
+              assertVersionActivated: sinon.stub(),
+            },
+          }),
+        );
+      }
+
+      beforeEach(() => {
+        appsRepositoryStub.getPermanentMessage.resolves(null);
+        appsRepositoryStub.getTempMessage.resolves(null);
+        dbHelperStub.databaseConnection.returns({ db: sinon.stub().returns('database') });
+        dbHelperStub.findOneInDatabase.resolves(null);
+        dbHelperStub.insertOneToDatabase.resolves();
+        appEventVerifierStub.verifyAttestation.returns(true);
+      });
+
+      it('rejects a message whose decrypted content is not what was signed', async () => {
+        const event = makeSecureEvent({ reconciles: false });
+        appEventVerifierStub.deserializeTempMessage.resolves(event);
+        messageStore = buildSecure();
+
+        const result = await messageStore.storeAppTemporaryMessage(secureMessage);
+
+        expect(result, 'a mismatch must be a returned rejection, not a throw').to.be.instanceOf(Error);
+        expect(result.message).to.include('contentHash');
+        expect(dbHelperStub.insertOneToDatabase.called, 'must not be stored').to.be.false;
+        expect(event.decryptAndVerify.calledOnce, 'must go through decryptAndVerify').to.be.true;
+      });
+
+      it('stores a message whose decrypted content matches', async () => {
+        const event = makeSecureEvent({ reconciles: true });
+        appEventVerifierStub.deserializeTempMessage.resolves(event);
+        messageStore = buildSecure();
+
+        const result = await messageStore.storeAppTemporaryMessage(secureMessage);
+
+        expect(result, `unexpected: ${result && result.message}`).to.deep.equal({ rebroadcast: true });
+        expect(event.decryptAndVerify.calledOnce).to.be.true;
+        expect(dbHelperStub.insertOneToDatabase.calledOnce).to.be.true;
+      });
+
+      // A bad message is a rejection; a TypeError in this block is our own bug.
+      // Returning it would report a defect as a stream of peer rejections and
+      // hide it — which is exactly what happened while writing these tests, when
+      // a missing stub surfaced as "Invalid encrypted Flux App message".
+      it('lets a programming error escape rather than reporting it as a bad message', async () => {
+        const event = makeSecureEvent({ reconciles: true });
+        event.decryptAndVerify = sinon.stub().rejects(new TypeError('someFn is not a function'));
+        appEventVerifierStub.deserializeTempMessage.resolves(event);
+        messageStore = buildSecure();
+
+        try {
+          await messageStore.storeAppTemporaryMessage(secureMessage);
+          expect.fail('a TypeError must not be swallowed into a returned Error');
+        } catch (err) {
+          expect(err).to.be.instanceOf(TypeError);
+          expect(err.message).to.include('is not a function');
+        }
       });
     });
   });
