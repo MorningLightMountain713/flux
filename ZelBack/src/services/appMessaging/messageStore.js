@@ -8,7 +8,7 @@ const benchmarkService = require('../benchmarkService');
 const appsRepository = require('../appDatabase/appsRepository');
 const appEventVerifier = require('./appEventVerifier');
 const registryManager = require('../appDatabase/registryManager');
-const { getSpec, validateGossipSpec, assertVersionActivated } = require('../utils/specLibs');
+const { getSpec, assertVersionActivated } = require('../utils/specLibs');
 const { getStateBeforeHeight } = require('../appDatabase/appSpecHistory');
 const globalState = require('../utils/globalState');
 const {
@@ -155,7 +155,9 @@ async function storeAppTemporaryMessage(message, options = {}) {
       return new Error('Invalid or missing arcane attestation on encrypted Flux App message');
     }
 
-    let validationBlob;
+    // False for a sealed spec this node cannot open — the checks below need to
+    // read it.
+    let specReadable = false;
     if (appEvent.isEncrypted) {
       if (await benchmarkService.isSystemSecure()) {
         try {
@@ -179,11 +181,11 @@ async function storeAppTemporaryMessage(message, options = {}) {
         }
       }
     } else {
-      validationBlob = message.appSpecifications;
-    }
-
-    if (validationBlob) {
-      await validateGossipSpec(validationBlob, { height: block });
+      // deserializeTempMessage already validated this spec by constructing it.
+      // Re-parsing the raw blob cost 4.5ms of 11.6ms on a 157KB spec; only the
+      // activation height was new, and it needs the version, not the document.
+      assertVersionActivated(appEvent.spec.version, block);
+      specReadable = true;
     }
 
     let previousState = null;
@@ -204,7 +206,7 @@ async function storeAppTemporaryMessage(message, options = {}) {
       }
     }
 
-    if (validationBlob) {
+    if (specReadable) {
       if (appEvent.isRegistration) {
         await registryManager.checkApplicationRegistrationNameConflicts(appEvent.spec, appEvent.hash);
       } else if (previousState) {

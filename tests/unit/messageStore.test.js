@@ -15,6 +15,8 @@ describe('messageStore tests', () => {
   let appEventVerifierStub;
   let logStub;
   let configStub;
+  let registryManagerStub;
+  let assertVersionActivatedStub;
 
   function makeMockAppEvent(message) {
     const specs = message.appSpecifications || {};
@@ -54,15 +56,13 @@ describe('messageStore tests', () => {
       '../daemonService/daemonServiceMiscRpcs': {
         isDaemonSynced: sinon.stub().returns({ data: { height: 1000 } }),
       },
-      '../appDatabase/registryManager': {
-        checkApplicationRegistrationNameConflicts: sinon.stub().resolves(),
-      },
+      '../appDatabase/registryManager': registryManagerStub,
       '../appDatabase/appSpecHistory': {
         getStateBeforeHeight: sinon.stub().resolves({ owner: 'owner1', spec: { owner: 'owner1' }, contentHash: null }),
       },
       '../utils/specLibs': {
-        validateGossipSpec: sinon.stub().resolves(),
         getSpec: sinon.stub().resolves({ UpdatePolicy: { assertCompatible: sinon.stub() } }),
+        assertVersionActivated: assertVersionActivatedStub,
       },
       '../utils/globalState': {
         queuePendingUpdate: sinon.stub(),
@@ -118,6 +118,11 @@ describe('messageStore tests', () => {
       authorize: sinon.stub().resolves(),
       verifyAttestation: sinon.stub().returns(true),
     };
+
+    registryManagerStub = {
+      checkApplicationRegistrationNameConflicts: sinon.stub().resolves(),
+    };
+    assertVersionActivatedStub = sinon.stub();
 
     logStub = {
       error: sinon.stub(),
@@ -474,6 +479,86 @@ describe('messageStore tests', () => {
       });
     });
 
+    // The spec arrives already validated — deserializeTempMessage builds the
+    // event, and constructing a spec class runs the whole chain. What used to
+    // re-validate it here added exactly one thing: the activation height.
+    describe('a validated spec is not validated a second time', () => {
+      const cleartextMessage = {
+        type: 'fluxappregister',
+        version: 2,
+        appSpecifications: { name: 'clear-app', owner: 'owner1', version: 9 },
+        hash: 'clearhash',
+        timestamp: Date.now(),
+        signature: 'sig',
+      };
+
+      beforeEach(() => {
+        appsRepositoryStub.getPermanentMessage.resolves(null);
+        appsRepositoryStub.getTempMessage.resolves(null);
+        dbHelperStub.databaseConnection.returns({ db: sinon.stub().returns('database') });
+        dbHelperStub.findOneInDatabase.resolves(null);
+        dbHelperStub.insertOneToDatabase.resolves();
+      });
+
+      it('still refuses a spec whose version is not active at that height', () => {
+        assertVersionActivatedStub.throws(new Error('v9 is not active until height 2000000'));
+
+        return messageStore.storeAppTemporaryMessage(cleartextMessage).then(
+          () => expect.fail('an inactive version must not be stored'),
+          (err) => {
+            expect(err.message).to.match(/not active/);
+            expect(dbHelperStub.insertOneToDatabase.called).to.be.false;
+          },
+        );
+      });
+
+      it('checks the activation height against the version it already parsed', async () => {
+        await messageStore.storeAppTemporaryMessage(cleartextMessage);
+
+        expect(assertVersionActivatedStub.calledOnce).to.be.true;
+        expect(assertVersionActivatedStub.firstCall.args[0], 'the spec version, not the document')
+          .to.equal(9);
+      });
+
+      it('runs the registration name-conflict check on a readable spec', async () => {
+        await messageStore.storeAppTemporaryMessage(cleartextMessage);
+        expect(registryManagerStub.checkApplicationRegistrationNameConflicts.calledOnce).to.be.true;
+      });
+
+      // Preserved deliberately: those checks read the spec, and a node that
+      // cannot open a sealed one has nothing to read.
+      it('skips them for a sealed spec this node cannot open', async () => {
+        appEventVerifierStub.deserializeTempMessage.resolves({
+          hash: 'sealedhash',
+          timestamp: Date.now(),
+          version: 2,
+          isEncrypted: true,
+          requiresArcaneAttestation: () => true,
+          isRegistration: true,
+          isUpdate: false,
+          spec: { name: 'sealed-app', owner: 'owner1', version: 9, serialize: () => ({}) },
+          serialize: () => ({
+            type: 'fluxappregister', version: 2, appSpecifications: {}, hash: 'sealedhash',
+            timestamp: Date.now(), signature: 'sig', contentHash: 'x', extend: false,
+          }),
+        });
+        appEventVerifierStub.verifyAttestation.returns(true);
+        // A node that cannot open it — benchmarkService must be stubbed or the
+        // real one dials 127.0.0.1:26224 and the harness fails the run.
+        messageStore = proxyquire(
+          '../../ZelBack/src/services/appMessaging/messageStore',
+          buildProxyquireStubs({
+            '../benchmarkService': { isSystemSecure: sinon.stub().resolves(false) },
+          }),
+        );
+
+        await messageStore.storeAppTemporaryMessage({ ...cleartextMessage, hash: 'sealedhash' });
+
+        expect(registryManagerStub.checkApplicationRegistrationNameConflicts.called).to.be.false;
+        expect(assertVersionActivatedStub.called, 'nothing to read, nothing to check').to.be.false;
+      });
+    });
+
     // A v9 signature commits to a contentHash, not to a spec, so decrypting an
     // envelope says nothing about whether what came out is what the owner
     // signed for. These run with isSystemSecure true, so they go THROUGH the
@@ -534,7 +619,6 @@ describe('messageStore tests', () => {
           buildProxyquireStubs({
             '../benchmarkService': { isSystemSecure: sinon.stub().resolves(true) },
             '../utils/specLibs': {
-              validateGossipSpec: sinon.stub().resolves(),
               getSpec: sinon.stub().resolves({ UpdatePolicy: { assertCompatible: sinon.stub() } }),
               assertVersionActivated: sinon.stub(),
             },

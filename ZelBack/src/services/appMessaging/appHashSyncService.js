@@ -10,7 +10,7 @@ const serviceHelper = require('../serviceHelper');
 const messageVerifier = require('./messageVerifier');
 const appEventVerifier = require('./appEventVerifier');
 const { deserializeSpec } = require('../utils/specCutover');
-const { validateGossipSpec, getSpecBackend, assertVersionActivated } = require('../utils/specLibs');
+const { getSpecBackend, assertVersionActivated } = require('../utils/specLibs');
 const daemonServiceMiscRpcs = require('../daemonService/daemonServiceMiscRpcs');
 const { serialiseAndSignFluxBroadcast } = require('../utils/fluxBroadcastHelper');
 const { peerManager } = require('../utils/peerState');
@@ -304,7 +304,6 @@ async function processMessages(messages, onProgress) {
         const height = serviceHelper.ensureNumber(appMessage.height);
         const isRegistration = appMessage.type === 'fluxappregister' || appMessage.type === 'zelappregister';
 
-        let validationBlob;
         if (wireSpec && wireSpec.isEncrypted) {
           try {
             const provider = await wireSpec.createProvider();
@@ -317,11 +316,9 @@ async function processMessages(messages, onProgress) {
             log.warn(`processMessages enterprise decrypt skipped for ${wireSpec.name}: ${err.message}`);
           }
         } else {
-          validationBlob = appSpecFormatted;
-        }
-
-        if (validationBlob) {
-          await validateGossipSpec(validationBlob, { height });
+          // deserializeSpec above already validated this by constructing it;
+          // re-parsing the same document was a third full pass.
+          assertVersionActivated(wireSpec.version, height);
         }
 
         const appEvent = await appEventVerifier.deserializeMessage(appMessage);
