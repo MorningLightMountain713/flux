@@ -92,9 +92,31 @@ function askTimeoutMs() {
   return config.fluxapps.quorumGrantAskTimeoutMs ?? 5_000;
 }
 
-function maxTtlMs() {
-  return config.fluxapps.quorumGrantMaxTtlMs ?? 300_000;
+/**
+ * How long the heal and repair chores wait between seat changes.
+ *
+ * It used to be maxTtlMs - 300s - purely because they shared a knob, and the
+ * two do entirely different jobs: maxTtlMs bounds a TERM, this bounds how fast
+ * the COMMITTEE may move. Coupled, three dark seats took 150s to notice plus
+ * 300s each to replace: over twelve minutes to repair a committee, during which
+ * losing a quorum is permanent, because healing itself needs a quorum.
+ *
+ * The floor is propagation, not detection. The roster chain rides on every ask
+ * and renewals go every ~20s, so healing faster than the chain spreads means
+ * chains grow faster than nodes learn them. 30s is one full renewal cycle plus
+ * margin, and 10x faster than the coupling it replaces.
+ *
+ * Safe to shorten: the one-seat-per-TTL rate limit is NOT what carries
+ * at-most-one-live-grantee. formal/held-committee-rotation naive-multiseat
+ * turns it off and finds no violation over 126,463 simulated traces / 17.9M
+ * states - against a calibration (naive-noadopt) that surfaces its known
+ * violation in 20 traces. It does a different job: bounding how fast a holder
+ * could pack the committee. Not droppable, but not a safety brake either.
+ */
+function repairIntervalMs() {
+  return config.fluxapps.quorumGrantRepairIntervalMs ?? 30_000;
 }
+
 
 function committeeSizeFor(mode) {
   if (mode === 'oneshot') return config.fluxapps.quorumGrantOneshotCommitteeSize ?? 9;
@@ -917,7 +939,7 @@ class Holder {
   async #maybeHeal() {
     if (this.#stopped || this.#state !== 'held' || this.#coasting) return;
     const now = this.#clock();
-    if (this.#lastHealMs !== null && now - this.#lastHealMs < maxTtlMs()) return;
+    if (this.#lastHealMs !== null && now - this.#lastHealMs < repairIntervalMs()) return;
 
     const dark = this.#committee.members.filter(
       (member) => now - (this.#lastAnswerMs.get(outpointOf(member)) ?? now) > this.#ttlMs,
@@ -1057,7 +1079,7 @@ class Holder {
   async #maybeRepair() {
     if (this.#stopped || this.#state !== 'held' || this.#coasting) return;
     const now = this.#clock();
-    if (this.#lastRepairMs !== null && now - this.#lastRepairMs < maxTtlMs()) return;
+    if (this.#lastRepairMs !== null && now - this.#lastRepairMs < repairIntervalMs()) return;
 
     const targets = this.#committee.members.filter(
       (member) => (this.#refusals.get(outpointOf(member)) ?? 0) >= REPAIR_AFTER_REFUSALS,
