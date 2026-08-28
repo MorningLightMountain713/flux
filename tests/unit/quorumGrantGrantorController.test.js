@@ -5,6 +5,7 @@ const sinon = require('sinon');
 const secp256k1 = require('secp256k1');
 const bs58check = require('bs58check');
 
+const serviceHelper = require('../../ZelBack/src/services/serviceHelper');
 const fluxCommunicationUtils = require('../../ZelBack/src/services/fluxCommunicationUtils');
 const fluxNetworkHelper = require('../../ZelBack/src/services/fluxNetworkHelper');
 const networkStateService = require('../../ZelBack/src/services/networkStateService');
@@ -565,19 +566,93 @@ describe('quorumGrant grantorController', () => {
       expect(added).to.not.equal(null);
     });
 
-    it('a freshly seated replacement answers once the ask carries the chain that seats it', async () => {
+    // F1. A heal is a SWAP - remove X, add Y in one step - so the majorities
+    // either side of it can be disjoint, and X is only dark from someone's
+    // point of view. The added seat must therefore ADOPT the standing term
+    // before it answers anything, or it is exactly the swing vote a challenger
+    // needs. It used to answer straight away; that is the defect.
+    it('a freshly seated replacement ADOPTS the standing term before it answers', async () => {
       generalService.obtainNodeCollateralInformation.resolves({
         txhash: added.txhash, txindex: added.outidx,
       });
+      // its committee tells it a term stands
+      sinon.stub(serviceHelper, 'axiosGet').resolves({
+        data: {
+          status: 'success',
+          data: { accepted: { epoch: 4, grantee: ASKER, mode: 'held' }, remainingMs: 90_000 },
+        },
+      });
+      sinon.stub(grantRegister, 'adopt').resolves(null);
 
       const bareRes = fakeRes();
       await grantorController.renew(fakeReq(signedAsk('renew')), bareRes);
-      expect(bareRes.statusCode).to.equal(409);
+      expect(bareRes.statusCode, 'no chain, not on the committee at all').to.equal(409);
 
       const chainRes = fakeRes();
       await grantorController.renew(fakeReq(signedAsk('renew', { chain })), chainRes);
       expect(chainRes.statusCode).to.equal(200);
-      expect(grantRegister.renew.calledOnce).to.equal(true);
+      expect(grantRegister.adopt.calledOnce, 'it served without adopting').to.equal(true);
+      expect(grantRegister.adopt.firstCall.args[1].grantee).to.equal(ASKER);
+      expect(grantRegister.adopt.firstCall.args[1].epoch).to.equal(4);
+    });
+
+    // FAILS CLOSED. A fresh seat with no state and no way to get any must not
+    // answer: answering from that position is the whole defect.
+    it('a freshly seated replacement REFUSES when it cannot reach a quorum to adopt', async () => {
+      generalService.obtainNodeCollateralInformation.resolves({
+        txhash: added.txhash, txindex: added.outidx,
+      });
+      sinon.stub(serviceHelper, 'axiosGet').rejects(new Error('unreachable'));
+      sinon.stub(grantRegister, 'adopt').resolves(null);
+
+      const res = fakeRes();
+      await grantorController.renew(fakeReq(signedAsk('renew', { chain })), res);
+      expect(res.statusCode).to.equal(409);
+      expect(grantRegister.renew.called, 'it served with no state at all').to.equal(false);
+    });
+
+    // The QUORUM is the rule, not "somebody said so". A single stray row from a
+    // round that reached one grantor and died names a node that never won, and
+    // a fresh seat adopting it would shield a master that does not exist.
+    it('does NOT adopt a term only a minority reports', async () => {
+      generalService.obtainNodeCollateralInformation.resolves({
+        txhash: added.txhash, txindex: added.outidx,
+      });
+      let call = 0;
+      sinon.stub(serviceHelper, 'axiosGet').callsFake(async () => {
+        call += 1;
+        // exactly one peer carries a row; every other answers empty
+        return call === 1
+          ? {
+            data: {
+              status: 'success',
+              data: { accepted: { epoch: 4, grantee: ASKER, mode: 'held' }, remainingMs: 90_000 },
+            },
+          }
+          : { data: { status: 'success', data: { accepted: null, remainingMs: null } } };
+      });
+      sinon.stub(grantRegister, 'adopt').resolves(null);
+
+      const res = fakeRes();
+      await grantorController.renew(fakeReq(signedAsk('renew', { chain })), res);
+      expect(grantRegister.adopt.called, 'adopted a term no quorum records').to.equal(false);
+    });
+
+    // A quorum answering "no term stands" is an ANSWER, not an outage: the seat
+    // may serve. Distinct from being unable to ask, which refuses above.
+    it('a freshly seated replacement serves when a quorum says no term stands', async () => {
+      generalService.obtainNodeCollateralInformation.resolves({
+        txhash: added.txhash, txindex: added.outidx,
+      });
+      sinon.stub(serviceHelper, 'axiosGet').resolves({
+        data: { status: 'success', data: { accepted: null, remainingMs: null } },
+      });
+      sinon.stub(grantRegister, 'adopt').resolves(null);
+
+      const res = fakeRes();
+      await grantorController.renew(fakeReq(signedAsk('renew', { chain })), res);
+      expect(res.statusCode).to.equal(200);
+      expect(grantRegister.adopt.called, 'nothing to adopt, so nothing written').to.equal(false);
     });
 
     it('a displaced seat stops answering the moment the chain reaches it', async () => {

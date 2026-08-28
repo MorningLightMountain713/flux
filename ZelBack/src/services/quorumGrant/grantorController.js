@@ -10,13 +10,14 @@ const networkStateService = require('../networkStateService');
 const registryManager = require('../appDatabase/registryManager');
 const messageStore = require('../appMessaging/messageStore');
 const foundingCommittee = require('../appMesh/foundingCommittee');
-const { extractIp } = require('../utils/socketAddressUtils');
+const { extractIp, extractPort } = require('../utils/socketAddressUtils');
 const { selectCommittee } = require('../utils/committeeSelector');
 const fluxEventBus = require('../utils/fluxEventBus');
 const signedEnvelope = require('./signedEnvelope');
 const rosterOverlay = require('./rosterOverlay');
 const grantRegister = require('./grantRegister');
 const { MODES } = require('./grantRegisterCore');
+const core = require('./grantClientCore');
 const log = require('../../lib/log');
 
 // The node-to-node face of the grantor. A grant is a WRITE, unlike almost
@@ -299,9 +300,93 @@ async function selfOnCommittee(key, mode, fingerprint, generation, carriedChain)
     (node) => node.txhash === collateral.txhash
       && String(node.outidx) === String(collateral.txindex),
   );
+  // Seated by a CHAIN rather than by the base walk - a tier-1 heal added this
+  // node. That is the seat F1 is about: a heal is a swap, so the majorities
+  // either side of it can be disjoint, and an added seat that answers before it
+  // knows the standing term is exactly the swing vote a challenger needs.
+  const seatedByChain = member && !committee.members.some(
+    (node) => node.txhash === collateral.txhash
+      && String(node.outidx) === String(collateral.txindex),
+  );
   return {
-    member, code: member ? 200 : 409, reason: member ? null : 'this node is not on that committee', quorum: committee.quorum, rung: committee.rung,
+    member,
+    seatedByChain,
+    members,
+    code: member ? 200 : 409,
+    reason: member ? null : 'this node is not on that committee',
+    quorum: committee.quorum,
+    rung: committee.rung,
   };
+}
+
+/**
+ * F1: an added seat adopts the standing term before it serves.
+ *
+ * A tier-1 heal is a SWAP - remove X, add Y in one step - and majorities either
+ * side of a swap can be disjoint: {A,B,X} -> {A,B,Y} leaves {B,X} and {A,Y}
+ * sharing nobody. X is only "dark" from someone's point of view, and a
+ * partitioned X votes happily. So the new seat must not be able to crown a
+ * second master: it reads the standing term off a quorum of its own committee,
+ * writes it into its register, and only then answers.
+ *
+ * FAILS CLOSED. A fresh seat that cannot reach a quorum to ask does not serve -
+ * it has no state and no way to get any, and answering from that position is
+ * the whole defect.
+ *
+ * This is what §5 already requires of a ONE-SHOT re-pin ("state transfer with
+ * an activation gate"); §7.1 never said it for HELD additions.
+ *
+ * @returns {Promise<{ok: boolean, reason: string|null}>}
+ */
+async function adoptStandingTerm(ask, committee) {
+  const stored = await grantRegister.read(ask.key);
+  // Already holds state for this key: nothing to adopt, and adopting over it
+  // would be a fresh seat overwriting a row it earned.
+  if (stored?.accepted) return { ok: true, reason: null };
+
+  const self = await generalService.obtainNodeCollateralInformation();
+  const peers = (committee.members || []).filter(
+    (node) => !(node.txhash === self.txhash && String(node.outidx) === String(self.txindex)),
+  );
+  const reads = peers.map(async (node) => {
+    try {
+      const response = await serviceHelper.axiosGet(
+        `http://${extractIp(node.ip)}:${extractPort(node.ip)}/flux/quorumgrant/record`
+          + `?key=${encodeURIComponent(ask.key)}`,
+        { timeout: config.fluxapps.quorumGrantAskTimeoutMs ?? 5_000 },
+      );
+      const data = response?.data?.data;
+      if (!data) return null;
+      if (!data.accepted) return { answered: true };
+      return {
+        answered: true,
+        grantee: data.accepted.grantee,
+        epoch: data.accepted.epoch,
+        remainingMs: data.remainingMs,
+      };
+    } catch (error) {
+      return null;
+    }
+  });
+  const answers = (await Promise.all(reads)).filter(Boolean);
+  if (answers.length < committee.quorum) {
+    return { ok: false, reason: 'a freshly seated grantor cannot reach a quorum to adopt the standing term' };
+  }
+
+  const term = core.quorumTerm(answers.filter((reply) => reply.grantee), committee.quorum);
+  // A quorum answered and no term stands: there is nothing to adopt and this
+  // seat may serve. Distinct from not being able to ASK, which refuses above.
+  if (!term.grantee) return { ok: true, reason: null };
+
+  await grantRegister.adopt(ask.key, {
+    epoch: term.epoch,
+    grantee: term.grantee,
+    remainingMs: term.remainingMs,
+    generation: ask.generation,
+    fingerprint: ask.fingerprint ?? null,
+  });
+  log.info(`quorumGrant grantorController: fresh seat adopted ${ask.key} epoch ${term.epoch} for ${term.grantee}`);
+  return { ok: true, reason: null };
 }
 
 /**
@@ -384,6 +469,17 @@ async function serve(req, res, type, operate) {
     if (!committee.member) {
       report('refusedCommittee');
       return res.status(committee.code).json(messageHelper.createErrorMessage(committee.reason));
+    }
+
+    // F1: a seat a heal ADDED knows nothing about the standing term, and a
+    // heal is a swap whose two majorities can be disjoint. It adopts before it
+    // answers, or it does not answer.
+    if (committee.seatedByChain && (ask.mode ?? 'held') === 'held') {
+      const adopted = await adoptStandingTerm(ask, committee);
+      if (!adopted.ok) {
+        report('refusedUnadopted');
+        return res.status(409).json(messageHelper.createErrorMessage(adopted.reason));
+      }
     }
 
     if (type !== 'probe') {
