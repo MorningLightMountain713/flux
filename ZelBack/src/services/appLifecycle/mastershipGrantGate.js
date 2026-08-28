@@ -13,6 +13,7 @@ const fluxEventBus = require('../utils/fluxEventBus');
 const { extractIp, extractPort } = require('../utils/socketAddressUtils');
 const { nowMs } = require('../utils/monotonicClock');
 const grantClient = require('../quorumGrant/grantClient');
+const grantClientCore = require('../quorumGrant/grantClientCore');
 const log = require('../../lib/log');
 
 // The activeStandby mastership consumer (doc §10.1): the seam between the
@@ -88,9 +89,38 @@ function activationHeight() {
  * check: a height that arrives while nodes below the floor are still on the
  * network is a scheduling mistake no config value here can catch.
  */
+// A1: the plane's safety inequality, checked before it governs anything rather
+// than described in a comment. slack + hard stop must be STRICTLY under the
+// grantors' lock-delay, or a demoted holder is still stopping when its
+// successor is granted.
+//
+// This is the whole clock-rate-skew budget of the plane. §7 used to credit the
+// TTL:deadline ratio with that job and the code has no such ratio - the
+// holder's deadline IS the TTL - so the lock-delay carries it alone and
+// lowering it spends the margin silently.
+//
+// FAIL-CLOSED, not fail-loud. The plane is inert by default and the legacy
+// election is what runs without it, so refusing to engage falls back to
+// today's behaviour. Throwing would brick a node over a feature it is not
+// using, which is a worse outcome than the bug.
+let timingWarned = false;
+function timingSafe() {
+  const outcome = grantClientCore.timingIsSafe({
+    demotionSlackMs: config.fluxapps.quorumGrantDemotionSlackMs ?? 15_000,
+    hardStopMs: grantClientCore.HARD_STOP_MS,
+    lockDelayMs: config.fluxapps.quorumGrantLockDelayMs ?? 30_000,
+  });
+  if (!outcome.safe && !timingWarned) {
+    timingWarned = true;
+    log.error(`mastershipGrantGate - the plane stays INERT: ${outcome.reason}`);
+  }
+  return outcome.safe;
+}
+
 function featureEnabled() {
   if (testOverrides.enabled !== null) return testOverrides.enabled;
   if (config.fluxapps.quorumGrantMastership !== true) return false;
+  if (!timingSafe()) return false;
   const activateAt = activationHeight();
   if (!activateAt) return false;
   // The node's own cached tip. Unsynced or unknown reads as NOT reached: a node
@@ -313,7 +343,7 @@ async function acquireUnlessSettled(identifier, appName, key) {
       // converges the durable state, but its pass latency plus a graceful
       // drain measured over a minute on the fleet - the demotion slack only
       // undercuts the grantors' lock-delay if the stop is immediate.
-      dockerService.appDockerStop(identifier, 2).catch((error) => {
+      dockerService.appDockerStop(identifier, grantClientCore.HARD_STOP_MS / 1000).catch((error) => {
         log.warn(`mastershipGrantGate - hard stop of ${identifier} failed: ${error.message}`);
       });
       reconcilerQueue.enqueueComponent(identifier);
@@ -617,6 +647,7 @@ async function yieldMastership(appName) {
 function resetForTests(options = {}) {
   testOverrides.enabled = options.enabled ?? null;
   activationAnnounced = false;
+  timingWarned = false;
   pursuits.clear();
   coldSince.clear();
   folderDemotions.clear();

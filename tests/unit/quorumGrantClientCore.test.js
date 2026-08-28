@@ -12,6 +12,7 @@ const {
   holderStateAt,
   coastVerdict,
   recoverOutcome,
+  timingIsSafe,
 } = require('../../ZelBack/src/services/quorumGrant/grantClientCore');
 const { nowMs, Deadline } = require('../../ZelBack/src/services/utils/monotonicClock');
 
@@ -144,6 +145,53 @@ describe('quorumGrant grantClientCore', () => {
       expect(holderStateAt(250, 100, 200)).to.equal('lost');
       expect(holderStateAt(50, null, 200)).to.equal('jeopardy');
       expect(holderStateAt(50, null, null)).to.equal('lost');
+    });
+  });
+
+  // The one inequality the whole plane rests on, and until 2026-08-28 the code
+  // stated it in a comment and never checked it. The holder stops at
+  // safeUntil + slack and then takes the container down; a challenger may be
+  // granted at the grantors' expiry + lockDelay. If the stop is not finished
+  // first, both are running.
+  describe('the timing inequality - slack + stop < lock-delay', () => {
+    it('accepts the shipped values', () => {
+      const out = timingIsSafe({ demotionSlackMs: 15_000, hardStopMs: 2_000, lockDelayMs: 30_000 });
+      expect(out.safe).to.equal(true);
+      expect(out.marginMs).to.equal(13_000);
+    });
+
+    it('accepts what every harness suite sets', () => {
+      expect(timingIsSafe({ demotionSlackMs: 5_000, hardStopMs: 2_000, lockDelayMs: 10_000 }).safe).to.equal(true);
+    });
+
+    it('REFUSES a slack that leaves no room for the stop', () => {
+      const out = timingIsSafe({ demotionSlackMs: 28_000, hardStopMs: 2_000, lockDelayMs: 30_000 });
+      expect(out.safe).to.equal(false);
+      expect(out.marginMs).to.equal(0);
+    });
+
+    it('REFUSES a slack past the lock-delay outright', () => {
+      expect(timingIsSafe({ demotionSlackMs: 40_000, hardStopMs: 2_000, lockDelayMs: 30_000 }).safe).to.equal(false);
+    });
+
+    // STRICT, not <=. At equality the stop and the challenger's grant race in
+    // continuous time; the model works in whole ticks and cannot see that.
+    it('REFUSES equality - the two events race at the boundary', () => {
+      const out = timingIsSafe({ demotionSlackMs: 28_000, hardStopMs: 2_000, lockDelayMs: 30_000 });
+      expect(out.safe).to.equal(false);
+    });
+
+    // Lowering the lock-delay is the regression this exists to catch: it is the
+    // only value carrying the clock-rate-skew budget now.
+    it('REFUSES a lock-delay lowered under the shipped slack', () => {
+      expect(timingIsSafe({ demotionSlackMs: 15_000, hardStopMs: 2_000, lockDelayMs: 15_000 }).safe).to.equal(false);
+    });
+
+    it('names every term it used, so a refusal is actionable', () => {
+      const out = timingIsSafe({ demotionSlackMs: 40_000, hardStopMs: 2_000, lockDelayMs: 30_000 });
+      expect(out.reason).to.contain('40000');
+      expect(out.reason).to.contain('2000');
+      expect(out.reason).to.contain('30000');
     });
   });
 
