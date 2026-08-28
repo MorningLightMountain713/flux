@@ -35,13 +35,21 @@ const log = require('../../lib/log');
 //
 // The FluxOS-restart case shapes the unknown state: a restart wipes the
 // in-memory holder while the container keeps running. Stopping a healthy
-// master because this process rebooted would be self-inflicted failover, so
-// unknown DEFERS (desired:null) while a re-acquire runs — the grantors
-// remember their grantee, and incumbent priority makes that re-acquire
-// immediate — and only past a bounded grace does unknown degrade to lost.
-// Silence keeps the holder; absence of evidence authorizes nothing; and a
-// bound turns "temporarily unsure" into "provably not mine" rather than
-// letting a node run unverified forever.
+// master because this process rebooted would be self-inflicted failover.
+//
+// There is NO TIMER here, and that is a proof rather than a preference. A node
+// that lost its term knowledge at U knows the term ends no LATER than U + TTL,
+// but safety needs the EARLIEST possible end, and that is unbounded below — the
+// term may already be gone. So no value is sound: a short one kills healthy
+// masters and a long one lets a lapsed holder keep writing. The node asks
+// instead of counting — grantClient.relearn reads a QUORUM of registers, and
+// those reads are served THROUGH the grantors' rejoin drain, so the answer
+// arrives at exactly the moment acquisition is being refused.
+//
+// That moment is the production case. On a 10-node fleet the grantors were
+// inside their drain, refused 30 of 31 asks, the old 120s grace expired, and
+// the reconciler stopped a healthy master 22 seconds before that same node was
+// granted its term back. Re-learning removes the race rather than re-tuning it.
 
 const ROLE = 'master';
 
@@ -101,11 +109,6 @@ function featureEnabled() {
     fluxEventBus.publish('quorumGrant:planeActivated', { height, activateAt });
   }
   return true;
-}
-
-function unknownGraceMs() {
-  if (testOverrides.unknownGraceMs !== null) return testOverrides.unknownGraceMs;
-  return config.fluxapps.quorumGrantUnknownGraceMs ?? 120_000;
 }
 
 function pursuitIntervalMs() {
@@ -178,7 +181,7 @@ function heldTtlMs() {
   return config.fluxapps.quorumGrantHeldTtlMs ?? 150_000;
 }
 
-const testOverrides = { enabled: null, unknownGraceMs: null, activationHeight: null };
+const testOverrides = { enabled: null, activationHeight: null };
 
 // one-shot, so the crossing is announced rather than repeated every pass
 let activationAnnounced = false;
@@ -191,8 +194,6 @@ const pursuits = new Map();
 // that joins later does not get to skip the wait.
 const coldSince = new Map();
 
-// identifier -> monotonic ms the unknown state was first seen, for the bound
-const unknownSince = new Map();
 
 function keyFor(appName) {
   return `${appName}/${ROLE}`;
@@ -363,7 +364,6 @@ async function grantVerdict(identifier, comp) {
 
   const key = keyFor(appName);
   if (grantClient.holderFor(key)) {
-    unknownSince.delete(identifier);
     return null;
   }
 
@@ -377,7 +377,6 @@ async function grantVerdict(identifier, comp) {
     if (grantee) {
       const self = await generalService.obtainNodeCollateralInformation();
       if (grantee !== `${self.txhash}:${self.txindex}`) {
-        unknownSince.delete(identifier);
         return { desired: false, reason: 'peerHoldsGrant' };
       }
     }
@@ -385,12 +384,18 @@ async function grantVerdict(identifier, comp) {
     log.warn(`mastershipGrantGate - record read for ${appName} failed: ${error.message}`);
   }
 
-  const firstSeen = unknownSince.get(identifier) ?? nowMs();
-  unknownSince.set(identifier, firstSeen);
-  if (nowMs() - firstSeen <= unknownGraceMs()) {
-    return { desired: null, reason: 'grantUnknown' };
+  // Ask, never count. A quorum of registers either still records this node's
+  // term — in which case the holder is re-installed and the container keeps
+  // running — or it does not, and there is nothing left to defer for.
+  const relearned = await grantClient.relearn(key);
+  if (relearned?.recovered) {
+    return null;
   }
-  return { desired: false, reason: 'grantNotHeld' };
+  // A quorum that cannot be READ is not a quorum that says no. Reads survive
+  // the drain, so an unreadable committee means this node is isolated, and §7's
+  // witness coast — not this seam — is what decides whether an isolated master
+  // keeps running.
+  return { desired: false, reason: relearned?.reason ?? 'grantNotHeld' };
 }
 
 /**
@@ -558,7 +563,6 @@ async function pollFenceLift(appName, fence) {
  */
 async function onComponentTeardown(identifier, appName) {
   if (!appName) return;
-  unknownSince.delete(identifier);
   const holder = grantClient.holderFor(keyFor(appName));
   if (!holder) return;
   try {
@@ -612,11 +616,9 @@ async function yieldMastership(appName) {
 /** Test seam. */
 function resetForTests(options = {}) {
   testOverrides.enabled = options.enabled ?? null;
-  testOverrides.unknownGraceMs = options.unknownGraceMs ?? null;
   activationAnnounced = false;
   pursuits.clear();
   coldSince.clear();
-  unknownSince.clear();
   folderDemotions.clear();
   fences.clear();
   liftPolls.clear();
