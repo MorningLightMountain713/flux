@@ -257,6 +257,24 @@ async function read(key) {
 }
 
 /**
+ * Every held resource key this grantor holds state for — what a return from
+ * unreachability must resync before its cells answer again. Founder rows
+ * are exempt: a write-once register cannot go stale.
+ *
+ * @returns {Promise<string[]>}
+ */
+async function heldKeys() {
+  const database = db();
+  if (!database) return [];
+  const docs = await dbHelper.findInDatabase(
+    database, collection(), {}, { projection: { _id: 1 } },
+  );
+  return (docs || [])
+    .map((doc) => doc._id)
+    .filter((key) => typeof key === 'string' && !key.includes('/founder-'));
+}
+
+/**
  * Journal a verified cancel chain the controller was taught. Served during
  * the drain — taught state contradicts nothing — and serialized per key like
  * every write. The chain must extend the journaled one at the same basis
@@ -310,6 +328,7 @@ function resetForTests(options = {}) {
 module.exports = {
   adopt,
   adoptCancels,
+  heldKeys,
   drainRemainingMs,
   probe,
   prepare,
