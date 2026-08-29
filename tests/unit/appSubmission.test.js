@@ -5,85 +5,20 @@ const sinon = require('sinon');
 const proxyquire = require('proxyquire').noCallThru();
 const express = require('express');
 const request = require('supertest');
-// `load` is already the proxyquire loader in this file's scope.
-const { load: loadFluxSpec } = require('@runonflux/flux-spec-cjs');
+const {
+  loadSpecLibrary, V9_SUBMISSION, V8_SUBMISSION, assertAnswers,
+} = require('./fixtures/fluxSpec');
 
-// The spec library is NOT stubbed here, and that is the point.
-//
-// It is pure, deterministic and in-process: ~2.4s once to load and compile its
-// schemas, then ~1.5ms per spec. Stubbing bought nothing and cost correctness.
-// A hand-written double is always a SUBSET of the real class, and production
-// code then gets written to the subset — this file's own v8 double gave its
-// inner spec only `serialize` and `version`, so appSubmission grew
-// `spec.spec || spec` to work around a gap that does not exist in the real
-// DecryptedCanonicalSpec, which has delegated contentHash all along.
-//
-// What stays stubbed is I/O: the daemon RPCs, the repository, the benchmark
-// channel behind transportHelper, and FluxOS's own height-activation policy.
+// The spec library is real here, not stubbed — see tests/unit/fixtures/fluxSpec.js
+// for why. What stays stubbed is I/O and FluxOS policy.
 let flux;
 
-// A real, minimal v9 submission. Ordinary test data — deliberately defined here
-// rather than read from flux-spec's fixtures, which are not published and would
-// stop resolving the day the package is installed from the registry.
-const V9_SUBMISSION = {
-  version: 9,
-  name: 'myapp',
-  description: 'submission under test',
-  owner: '16dNCFf7nR3nx5iwn2RQMBw6KcJXkE3JC1',
-  instances: 3,
-  ttl: 2592000,
-  components: {
-    web: {
-      name: 'web',
-      description: 'nginx',
-      image: 'nginx:latest',
-      cpu: 0.5,
-      memory: 300,
-      rootFsGb: 2,
-      persistentStorage: {
-        sizeGb: 5,
-        mounts: { '/usr/share/nginx/html': { source: 'html', destination: '/usr/share/nginx/html' } },
-      },
-      ports: { http: { containerPort: 80, hostPort: 31000 } },
-    },
-  },
-  contacts: { email: ['ops@example.com'] },
-};
-
-// What a marketplace template stores: a v9 spec body with no owner and no
+// What a marketplace template stores: a v9 spec body with no owner, name or
 // contacts, which the gate completes from the deployed spec before comparing.
 const TEMPLATE_BODY = (() => {
   const { owner, contacts, name, ...rest } = V9_SUBMISSION;
   return rest;
 })();
-// A real cleartext v8 submission, sealed by the test into an enterprise blob.
-const V8_SUBMISSION = {
-  version: 8,
-  name: 'myapp',
-  description: 'legacy submission under test',
-  owner: '19z6SjrVrWqBTLiCXWLRjcu9ydnzWNz3UD',
-  compose: [{
-    name: 'web',
-    description: 'web',
-    repotag: 'nginx:latest',
-    ports: [31443],
-    domains: [''],
-    environmentParameters: [],
-    commands: [],
-    containerPorts: [443],
-    containerData: '/tmp',
-    cpu: 0.1,
-    ram: 100,
-    hdd: 1,
-    repoauth: '',
-  }],
-  instances: 3,
-  contacts: [],
-  geolocation: [],
-  expire: 88000,
-  nodes: [],
-  staticip: false,
-};
 
 const TEMPLATE_ID = '3f2a1b4c-5d6e-4f70-8192-a3b4c5d6e7f8';
 const UNKNOWN_CONFIG_ID = '00000000-1111-4222-8333-444444444444';
@@ -93,14 +28,10 @@ describe('appSubmission tests', () => {
   let appSubmission;
   let stubs;
 
-  before(async function loadSpecLibrary() {
-    // First fromSubmission compiles the ajv schemas.
+  before(async function loadLibrary() {
+    // The first fromSubmission compiles the ajv schemas.
     this.timeout(30000);
-    flux = await loadFluxSpec();
-    const { InsecureTestCryptoProvider } = await import('@runonflux/flux-spec-backend/testing');
-    const provider = () => new InsecureTestCryptoProvider();
-    flux.EncryptedSpecV8.registerProvider(provider);
-    flux.EncryptedSpecV9.registerProvider(provider);
+    flux = await loadSpecLibrary();
   });
 
   /** A real FluxAppSpecV9, with serialize spied so a test can assert it was never called. */
@@ -243,8 +174,14 @@ describe('appSubmission tests', () => {
       stubs.transportHelper.openTransportEnvelope.resolves(submission);
       stubs.parseSpec.resolves(wireSpec);
 
+      // With a signed contentHash, so the guard actually runs against a
+      // DecryptedCanonicalSpec — the only path that uses its contentHash
+      // delegation, and otherwise unexercised anywhere in this repo.
       const result = await appSubmission.resolveSubmission(submission, {
-        timestamp: 1, type: 'fluxappregister', daemonHeight: 100,
+        contentHash: cleartext.contentHash(),
+        timestamp: 1,
+        type: 'fluxappregister',
+        daemonHeight: 100,
       });
 
       expect(result.isEncrypted).to.be.true;
@@ -270,9 +207,16 @@ describe('appSubmission tests', () => {
       // DecryptedCanonicalSpec — so assert it can answer, or a delegation could
       // disappear from flux-spec with this suite still green. It did, and this
       // suite was.
+      //
+      // All three of these collaborators receive the spec object, and all three
+      // are stubbed here. assertAnswers calls what the real ones call.
       const [gated] = stubs.entitlementsState.assertSpecEntitled.firstCall.args;
-      expect(gated.toCanonical(), 'the entitlements gate cannot read what it was given')
-        .to.be.an('object').with.property('version', 8);
+      assertAnswers(gated, ['toCanonical']);
+      expect(gated.toCanonical()).to.have.property('version', 8);
+
+      const [imaged] = stubs.imageArchitectureValidator
+        .verifyImageRegistryAndArchitectures.firstCall.args;
+      assertAnswers(imaged, ['allImages', 'componentEntries']);
     });
 
     it('runs the entitlements gate for a legacy v8 spec without a version branch', async () => {
