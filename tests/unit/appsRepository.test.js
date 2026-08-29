@@ -4,7 +4,7 @@ const { expect } = require('chai');
 const sinon = require('sinon');
 const proxyquire = require('proxyquire').noCallThru();
 const {
-  loadSpecLibrary, V8_SUBMISSION, v1Spec, v8Spec, v9Spec, sealedV8Spec, sealedV9Spec,
+  loadSpecLibrary, v1Spec, v8Spec, v9Spec, sealedV8Spec, sealedV9Spec,
   instantiatedSpec, assertAnswers,
 } = require('./fixtures/fluxSpec');
 
