@@ -389,6 +389,7 @@ async function teardownComponentCore(c, opts = {}) {
     return { removed: false };
   }
   let removed = false;
+  let cleanupFailed = false;
   try {
     status(`Removing Flux App ${c.label} container...`);
     if (forceKill) {
@@ -422,7 +423,7 @@ async function teardownComponentCore(c, opts = {}) {
     }
     if (stillPresent) {
       log.error(`Teardown of ${c.identifier}: container still present after remove — skipping destructive cleanup, keeping the teardown owed`);
-      return { removed: false };
+      return { removed: false, cleanupFailed: false };
     }
     removed = true;
     if (!skipPorts) {
@@ -437,11 +438,18 @@ async function teardownComponentCore(c, opts = {}) {
       await cleanupVolumePath(volumepath, { entityName: c.label, onStatus });
     }
   } catch (err) {
+    // The container is gone but host residue may remain — a mount, an appdata
+    // directory, a crontab entry, the volume file. Reported separately from
+    // `removed` so the caller can keep the teardown record OWED (which is what
+    // retries the residue) without holding the component hostage as if its
+    // container had survived. Collapsing the two is how the residue used to be
+    // abandoned: `removed` was already true, so the record was cleared.
+    if (removed) cleanupFailed = true;
     log.error(`Host teardown of ${c.identifier} failed (continuing): ${err.message}`);
   } finally {
     operationRegistry.release(c.appId, removingToken);
   }
-  return { removed };
+  return { removed, cleanupFailed };
 }
 
 /**
@@ -1176,12 +1184,13 @@ async function executeTeardown(doc, { onStatus = null } = {}) {
   // record: destroying its volume under a live container would corrupt it, so the core skips
   // the cleanup and we leave the teardown for boot recovery (which re-checks the container is gone).
   let containerSurvived = false;
+  let residueOwed = false;
   const survivedComponents = new Set();
   await withHostMutationLock(async () => {
     // eslint-disable-next-line no-restricted-syntax
     for (const c of list) {
       // eslint-disable-next-line no-await-in-loop
-      const { removed } = await teardownComponentCore(
+      const { removed, cleanupFailed } = await teardownComponentCore(
         {
           identifier: c.identifier, appId: c.appId, appName: name, label: c.label, ports: c.ports,
         },
@@ -1192,6 +1201,10 @@ async function executeTeardown(doc, { onStatus = null } = {}) {
       if (!removed) {
         containerSurvived = true;
         survivedComponents.add(c.identifier);
+      } else if (cleanupFailed) {
+        // The container went, so the component is NOT held hostage — but host
+        // residue is still on disk and only the owed record will retry it.
+        residueOwed = true;
       }
     }
     // Reclaim the app's images (reference-gated) — an image-store mutation, so under the lock.
@@ -1249,10 +1262,14 @@ async function executeTeardown(doc, { onStatus = null } = {}) {
     if (!dropped) allDropped = false;
     if (onComponentRemoved) onComponentRemoved(c.identifier);
   }
-  if (allDropped && !containerSurvived) {
+  if (allDropped && !containerSurvived && !residueOwed) {
     await pendingTeardownStore.clearTeardown(key);
   } else {
-    log.warn(`Teardown of ${name}: ${containerSurvived ? 'a container survived removal' : 'a condemned stamp did not drop'}; keeping the teardown record owed`);
+    // eslint-disable-next-line no-nested-ternary
+    const why = containerSurvived ? 'a container survived removal'
+      : (residueOwed ? 'host cleanup failed and its residue is still on disk'
+        : 'a condemned stamp did not drop');
+    log.warn(`Teardown of ${name}: ${why}; keeping the teardown record owed`);
     // Hand the still-owed teardown back to the reconciler to CONVERGE (drive + retry with
     // backoff) instead of abandoning it until the next boot. Each component's null-spec
     // reconcile pass re-drives the owed record via driveOwedTeardown; single-flight and
