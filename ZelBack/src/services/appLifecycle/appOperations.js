@@ -995,7 +995,15 @@ async function appendBackupTask(req, res) {
         await startApplication(appname);
       } else {
         for (const [compName, comp] of backupDeployment.componentEntries()) {
-          if (comp.persistentStorage?.sync?.mode !== 'activeStandby') {
+          // Ask the component, not a field it does not have. This read
+          // `comp.persistentStorage?.sync?.mode`, but DeploymentComponent flattens
+          // the mount config and exposes `sync` directly — there is no
+          // persistentStorage on it. So the optional chain was always undefined,
+          // the condition always true, and an activeStandby component was started
+          // alongside its siblings: exactly the case this branch exists to skip,
+          // and for a g:/masterSlave app that is the standby coming up against the
+          // election's intent.
+          if (!comp.hasActiveStandbySyncthing()) {
             // eslint-disable-next-line no-await-in-loop
             await startApplication(`${compName}_${appname}`);
           }

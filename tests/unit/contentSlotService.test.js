@@ -224,6 +224,22 @@ describe('contentSlotService', () => {
       sinon.assert.calledOnce(specLib.assertValidContentManifest);
     });
 
+    // verifyManifest takes its spec from the CALLER, so all three readable shapes
+    // can arrive: cleartext, sealed (decrypt it), and already-decrypted. The last
+    // used to throw `spec.createProvider is not a function`, because the branch
+    // asked `isEncrypted` — which stays TRUE on a decrypted view — instead of
+    // `sealed`, which is the readability question.
+    it('accepts a spec that is already decrypted', async () => {
+      const { service } = load();
+      const decrypted = await slotSpecSealed.decrypt(await slotSpecSealed.createProvider());
+      expect(decrypted.isEncrypted, 'stays true on the readable view').to.equal(true);
+      expect(decrypted.sealed, 'but it can be read right now').to.equal(false);
+
+      await service.verifyManifest(
+        manifest(), { owner: OWNER, spec: decrypted }, { verify: () => true },
+      );
+    });
+
     it('rejects an invalid owner signature', async () => {
       const { service } = load();
       await expectReject(
