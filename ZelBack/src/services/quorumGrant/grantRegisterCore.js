@@ -190,13 +190,16 @@ function onAccept(record, request, nowMs, tunables) {
     released: false,
   };
 
-  // The roster chain is bound to its committee basis — the membership AND
+  // Both overlays are bound to their committee basis — the membership AND
   // the generation. A grant accepted at either a different fingerprint or a
   // re-rolled generation draws a fresh base committee, and an overlay from
   // the old world must not survive to reshape it.
   const rosterStale = record?.roster
     && (record.roster.fingerprint !== accepted.fingerprint
       || (record.roster.generation ?? 0) !== accepted.generation);
+  const cancelsStale = record?.cancels
+    && (record.cancels.fingerprint !== accepted.fingerprint
+      || (record.cancels.generation ?? 0) !== accepted.generation);
 
   return {
     reply: { ok: true, accepted },
@@ -206,6 +209,7 @@ function onAccept(record, request, nowMs, tunables) {
       ...(epoch > promisedEpoch ? { promisedAt: nowMs } : {}),
       accepted,
       ...(rosterStale ? { roster: null } : {}),
+      ...(cancelsStale ? { cancels: null } : {}),
     },
   };
 }

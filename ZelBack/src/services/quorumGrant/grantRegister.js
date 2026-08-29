@@ -3,6 +3,7 @@
 const config = require('config');
 const dbHelper = require('../dbHelper');
 const core = require('./grantRegisterCore');
+const rosterOverlay = require('./rosterOverlay');
 const log = require('../../lib/log');
 
 // The durable half of the grantor: one document per resource key, every
@@ -136,9 +137,10 @@ async function transact(key, decide) {
             // unstamped promise reads as stale, never as fresh)
             ...(outcome.record.promisedAt !== undefined ? { promisedAt: outcome.record.promisedAt } : {}),
             accepted: outcome.record.accepted ?? null,
-            // the roster overlay rides the same journal: absent stays
-            // absent, null clears (a basis change), an object replaces
+            // the overlays ride the same journal: absent stays absent,
+            // null clears (a basis change), an object replaces
             ...(outcome.record.roster !== undefined ? { roster: outcome.record.roster } : {}),
+            ...(outcome.record.cancels !== undefined ? { cancels: outcome.record.cancels } : {}),
             updatedAt: Date.now(),
           },
         },
@@ -254,6 +256,51 @@ async function read(key) {
   return dbHelper.findOneInDatabase(database, collection(), { _id: key });
 }
 
+/**
+ * Journal a verified cancel chain the controller was taught. Served during
+ * the drain — taught state contradicts nothing — and serialized per key like
+ * every write. The chain must extend the journaled one at the same basis
+ * exactly (a fork is corruption, refused, never chosen); a new basis starts
+ * a fresh chain, because the old world's cancellations name seats a new deal
+ * never seated.
+ *
+ * @param {string} key resource key
+ * @param {{fingerprint: string, generation: number, chain: object[]}} overlay
+ * @returns {Promise<true|null>} true when journaled, null when refused
+ */
+async function adoptCancels(key, overlay) {
+  const database = db();
+  if (!database) return null;
+  return serialized(key, async () => {
+    const stored = await dbHelper.findOneInDatabase(database, collection(), { _id: key });
+    const journaled = stored?.cancels?.fingerprint === overlay.fingerprint
+      && (stored.cancels.generation ?? 0) === (overlay.generation ?? 0)
+      ? stored.cancels.chain : [];
+    if (overlay.chain.length <= journaled.length) return null;
+    if (!rosterOverlay.extendsCancelChain(journaled, overlay.chain)) return null;
+    await dbHelper.findOneAndUpdateInDatabase(
+      database,
+      collection(),
+      { _id: key },
+      {
+        $set: {
+          cancels: {
+            fingerprint: overlay.fingerprint,
+            generation: overlay.generation ?? 0,
+            chain: overlay.chain,
+          },
+          updatedAt: Date.now(),
+        },
+      },
+      { upsert: true, ...DURABLE },
+    );
+    return true;
+  }).catch((error) => {
+    log.error(`quorumGrant grantRegister adoptCancels ${key}: ${error.message}`);
+    return null;
+  });
+}
+
 /** Test seam: restart the drain clock as if the process just started. */
 function resetForTests(options = {}) {
   startedMs = options.startedMs ?? monotonicMs();
@@ -262,6 +309,7 @@ function resetForTests(options = {}) {
 
 module.exports = {
   adopt,
+  adoptCancels,
   drainRemainingMs,
   probe,
   prepare,

@@ -16,6 +16,7 @@ const foundingCommittee = require('../../ZelBack/src/services/appMesh/foundingCo
 
 const FOUNDER_KEY = `myapp/founder-${foundingCommittee.founderToken('myapp', 'db')}@500000`;
 const grantRegister = require('../../ZelBack/src/services/quorumGrant/grantRegister');
+const downCertificates = require('../../ZelBack/src/services/quorumGrant/downCertificates');
 const grantorController = require('../../ZelBack/src/services/quorumGrant/grantorController');
 const signedEnvelope = require('../../ZelBack/src/services/quorumGrant/signedEnvelope');
 const rosterOverlay = require('../../ZelBack/src/services/quorumGrant/rosterOverlay');
@@ -810,6 +811,139 @@ describe('quorumGrant grantorController', () => {
       expect(emptyRes.statusCode).to.equal(200);
       expect(emptyRes.body.data.promisedEpoch).to.equal(0);
       expect(emptyRes.body.data.accepted).to.equal(null);
+    });
+  });
+
+  describe('the cancel overlay at the gauntlet', () => {
+    // A fleet wide enough that the walk has spare eligibles: the asker plus
+    // thirteen fillers, distinct owners, distinct /16s.
+    const wideFleet = [
+      {
+        txhash: ASKER_TXHASH, outidx: 0, pubkey: PUBKEY, ip: `${ASKER_HOST}:16127`,
+      },
+      ...Array.from({ length: 13 }, (unused, i) => ({
+        txhash: String(i + 1).padStart(2, '0').repeat(32),
+        outidx: 0,
+        pubkey: `owner-${i + 1}`,
+        ip: `10.${i + 1}.0.1:16127`,
+      })),
+    ];
+    const walkKey = rosterOverlay.walkKeyFor('myapp/master', 0);
+    const committee = selectCommittee(wideFleet, walkKey, { size: 9 });
+    const cancelled = committee.members.find((node) => node.txhash !== ASKER_TXHASH);
+    const cancelledOutpoint = `${cancelled.txhash}:${cancelled.outidx}`;
+    const survivors = committee.members.filter((node) => node !== cancelled);
+    const replacement = rosterOverlay.nextReplacement(
+      wideFleet, walkKey, survivors, new Set([cancelledOutpoint]),
+    );
+    const CANCELS = [{
+      seq: 1, cancel: cancelledOutpoint, cert: { subject: cancelledOutpoint, token: 'standing' }, at: 1_000,
+    }];
+
+    function selfIs(node) {
+      generalService.obtainNodeCollateralInformation.resolves({
+        txhash: node.txhash, txindex: node.outidx,
+      });
+    }
+
+    beforeEach(() => {
+      fluxCommunicationUtils.deterministicFluxList.resolves(wideFleet);
+      networkStateService.membershipAt.returns(wideFleet);
+      sinon.stub(grantRegister, 'adoptCancels').resolves(true);
+      // adopt-before-serve quorum reads: every peer answers term-free
+      sinon.stub(serviceHelper, 'axiosGet').resolves({
+        data: { status: 'success', data: { accepted: null, remainingMs: null } },
+      });
+      downCertificates.registerProvider({
+        standingCertificateFor: async () => null,
+        refutationFor: async () => null,
+        verifyCertificate: (cert) => ({ valid: cert?.token === 'standing', subject: cert?.subject ?? null }),
+        verifyRefutation: () => false,
+      });
+    });
+
+    afterEach(() => {
+      downCertificates.resetForTests();
+    });
+
+    it('fixture: the walk can seat a replacement, and the cancelled seat is not the asker', () => {
+      expect(replacement).to.not.equal(null);
+      expect(cancelled.txhash).to.not.equal(ASKER_TXHASH);
+      expect(committee.members.map((node) => node.txhash)).to.not.include(replacement.txhash);
+    });
+
+    it('refuses malformed cancels before any verification', async () => {
+      const res = fakeRes();
+      await grantorController.probe(fakeReq({ ...signedAsk('probe'), cancels: 'bogus' }), res);
+      expect(res.statusCode).to.equal(400);
+      expect(res.body.data.message).to.match(/cancels/);
+    });
+
+    it('a verified carried cancel chain seats the replacement — it answers only through the adopt gate, and the chain is journaled', async () => {
+      selfIs(replacement);
+
+      const without = fakeRes();
+      await grantorController.probe(fakeReq(signedAsk('probe')), without);
+      expect(without.statusCode).to.equal(409);
+
+      const withCancels = fakeRes();
+      await grantorController.probe(fakeReq({ ...signedAsk('probe'), cancels: CANCELS }), withCancels);
+      expect(withCancels.statusCode).to.equal(200);
+      // the seat adopted the standing term off its committee before serving
+      expect(serviceHelper.axiosGet.called).to.equal(true);
+      expect(grantRegister.adoptCancels.calledOnce).to.equal(true);
+      const [key, overlay] = grantRegister.adoptCancels.firstCall.args;
+      expect(key).to.equal('myapp/master');
+      expect(overlay.fingerprint).to.equal(FINGERPRINT);
+      expect(overlay.chain).to.deep.equal(CANCELS);
+    });
+
+    it('the cancelled seat itself is refused once the chain names it', async () => {
+      selfIs(cancelled);
+
+      const without = fakeRes();
+      await grantorController.probe(fakeReq(signedAsk('probe')), without);
+      expect(without.statusCode).to.equal(200);
+
+      const withCancels = fakeRes();
+      await grantorController.probe(fakeReq({ ...signedAsk('probe'), cancels: CANCELS }), withCancels);
+      expect(withCancels.statusCode).to.equal(409);
+    });
+
+    it('an unverifiable chain reshapes nothing and is never journaled', async () => {
+      downCertificates.resetForTests(); // the inert store verifies nothing
+      selfIs(replacement);
+
+      const res = fakeRes();
+      await grantorController.probe(fakeReq({ ...signedAsk('probe'), cancels: CANCELS }), res);
+      expect(res.statusCode).to.equal(409);
+      expect(grantRegister.adoptCancels.called).to.equal(false);
+    });
+
+    it('the journaled chain applies without re-verification — its entries were verified when first taught', async () => {
+      downCertificates.resetForTests(); // no store at all: the journal is trusted
+      selfIs(replacement);
+      grantRegister.read.resolves({
+        cancels: { fingerprint: FINGERPRINT, generation: 0, chain: CANCELS },
+      });
+
+      const res = fakeRes();
+      await grantorController.probe(fakeReq(signedAsk('probe')), res);
+      expect(res.statusCode).to.equal(200);
+    });
+
+    it('the record read teaches the journaled cancel chain', async () => {
+      grantRegister.read.resolves({
+        promisedEpoch: 1,
+        accepted: null,
+        cancels: { fingerprint: FINGERPRINT, generation: 0, chain: CANCELS },
+      });
+      const req = fakeReq({});
+      req.query.key = 'myapp/master';
+      const res = fakeRes();
+      await grantorController.record(req, res);
+      expect(res.statusCode).to.equal(200);
+      expect(res.body.data.cancels.chain).to.have.length(1);
     });
   });
 });

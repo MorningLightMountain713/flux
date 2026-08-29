@@ -555,5 +555,27 @@ describe('quorumGrant grantRegisterCore', () => {
       expect(reRolled.record.accepted.generation).to.equal(1);
       expect(reRolled.record.roster).to.equal(null);
     });
+
+    it('accepting a grant at a new basis clears the old cancel chain too; at the same basis it survives', () => {
+      const record = heldRecord();
+      record.cancels = {
+        fingerprint: 'fp-1',
+        generation: 0,
+        chain: [{
+          seq: 1, cancel: `${'9'.repeat(64)}:0`, cert: { token: 'standing' }, at: T0,
+        }],
+      };
+
+      const sameBasis = onAccept(record, {
+        epoch: 6, grantee: 'aaaa:0', mode: 'held', ttlMs: TTL, fingerprint: 'fp-1',
+      }, T0, TUNABLES);
+      expect(sameBasis.record.cancels.chain).to.have.length(1);
+
+      const lapsedAt = T0 + TTL + TUNABLES.lockDelayMs + 1;
+      const newBasis = onAccept(record, {
+        epoch: 7, grantee: 'bbbb:0', mode: 'held', ttlMs: TTL, fingerprint: 'fp-2',
+      }, lapsedAt, TUNABLES);
+      expect(newBasis.record.cancels).to.equal(null);
+    });
   });
 });
