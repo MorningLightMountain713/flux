@@ -22,7 +22,7 @@ const GOSSIP_TYPES = [
   'fluxapprunning', 'fluxipchanged', 'fluxappremoved', 'fluxappinstalling',
   'fluxappinstallingerror', 'fluxnodesigterm', 'fluxapprequest',
   'fluxpolicyrequest', 'fluxpolicyseq', 'fluxpolicy',
-  'fluxmasterlease', 'fluxgrantgeneration', 'fluxlimitcounterrecord', 'fluxappcontentmanifest', 'fluxappingress',
+  'fluxmasterlease', 'fluxgrantgeneration', 'fluxnodedown', 'fluxnodedownverdict', 'fluxlimitcounterrecord', 'fluxappcontentmanifest', 'fluxappingress',
   'fluxappcontentmanifestindexrequest', 'fluxappcontentmanifestrequest',
   'fluxappingressindexrequest', 'fluxappingressrequest',
 ];
