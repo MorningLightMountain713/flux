@@ -2,11 +2,47 @@
 
 process.env.NODE_CONFIG_DIR = `${process.cwd()}/tests/unit/globalconfig`;
 
+const path = require('node:path');
 const { expect } = require('chai');
 const sinon = require('sinon');
 const proxyquire = require('proxyquire').noCallThru();
+const {
+  loadSpecLibrary, V9_SUBMISSION, v9Spec, instantiatedSpec,
+} = require('./fixtures/fluxSpec');
+
+// The spec library is real here, not stubbed — see tests/unit/fixtures/fluxSpec.js
+// for why. What stays stubbed is I/O and the actuator: the shell-out behind
+// serviceHelper.runCommand, docker, mongo, the daemon socket, the reconciler.
+
+// The apps folder the module under test is built with. Every DeploymentSpec in this
+// file is built with the SAME folder, so a component's own `dir` and the path the
+// production code derives from its identifier cannot drift apart.
+const APPS_FOLDER = '/tmp/flux/apps/';
+
+let flux;
+
+/** A real DeploymentSpec, built the way deploymentProvider builds one: the
+ * identity is stated, never defaulted, exactly as DeploymentSpec.fromSpec demands. */
+function deploymentFor(spec, opts = {}) {
+  return flux.DeploymentSpec.fromSpec(spec, APPS_FOLDER, { replica: null, ...opts });
+}
+
+/** A real FluxAppSpecV9 whose components are named copies of the fixture's. */
+function specWithComponents(appName, components) {
+  const built = {};
+  for (const [compName, overrides] of Object.entries(components)) {
+    built[compName] = { ...V9_SUBMISSION.components.web, name: compName, ...overrides };
+  }
+  return v9Spec({ name: appName, components: built });
+}
 
 describe('dockerOperations tests', () => {
+  before(async function loadLibrary() {
+    // The first fromSubmission compiles the ajv schemas.
+    this.timeout(30000);
+    flux = await loadSpecLibrary();
+  });
+
   afterEach(() => {
     sinon.restore();
   });
@@ -15,32 +51,57 @@ describe('dockerOperations tests', () => {
     const build = (serviceHelper, log) => proxyquire('../../ZelBack/src/services/appManagement/dockerOperations', {
       '../serviceHelper': serviceHelper,
       '../../lib/log': log,
-      '../utils/appConstants': { appsFolder: '/tmp/flux/apps/' },
+      '../utils/appConstants': { appsFolder: APPS_FOLDER },
     });
 
+    /**
+     * A real DeploymentComponent for a stateful component, plus the appId its
+     * SOLE caller passes: appReconciler hands over
+     * `dockerService.getAppIdentifier(identifier)`, i.e. the component's real
+     * identifier under the platform's `flux` namespace prefix. Passing the bare
+     * app name instead — as this test used to — describes a call that is never made.
+     */
+    async function statefulComponent(appName = 'testapp', compName = 'web') {
+      const deployment = deploymentFor(await specWithComponents(appName, { [compName]: {} }));
+      const [[, component]] = deployment.componentEntries();
+      // A component with mounts always resolves a host dir; a stateless one gets
+      // null, and the appdata path below would then be derived from nothing.
+      expect(component.dir, 'a stateful component must resolve a host dir').to.be.a('string');
+      // The prefix is applied exactly once. v9 forbids an app name beginning with
+      // `flux`, which is what makes a single prefix unambiguous — a component that
+      // carried its own would point the wipe at a different directory.
+      expect(component.identifier.startsWith('flux'), 'the identifier must not carry the namespace prefix itself').to.be.false;
+      return { component, appId: `flux${component.identifier}` };
+    }
+
     it('deletes the appdata dir via runCommand (as root, no shell glob)', async () => {
+      const { component, appId } = await statefulComponent();
       const runCommand = sinon.stub().resolves({ error: null });
       const dockerOperations = build(
         { runCommand, delay: sinon.stub().resolves() },
         { info: sinon.stub(), error: sinon.stub() },
       );
 
-      await dockerOperations.appDeleteDataInMountPoint('testapp');
+      await dockerOperations.appDeleteDataInMountPoint(appId);
 
       expect(runCommand.calledOnce).to.be.true;
       expect(runCommand.firstCall.args[0]).to.equal('rm');
       expect(runCommand.firstCall.args[1].runAsRoot).to.equal(true);
-      expect(runCommand.firstCall.args[1].params).to.deep.equal(['-rf', '/tmp/flux/apps/testapp/appdata']);
+      // The wiped path is the component's OWN host dir as flux-spec resolves it,
+      // not a literal reproduced here: the two derivations of `appsFolder +
+      // flux<identifier>` must agree or the node wipes somebody else's directory.
+      expect(runCommand.firstCall.args[1].params).to.deep.equal(['-rf', path.join(component.dir, 'appdata')]);
     });
 
     it('retries until the delete succeeds (the stopped container released the mount)', async () => {
+      const { appId } = await statefulComponent();
       const runCommand = sinon.stub();
       runCommand.onFirstCall().resolves({ error: new Error('device busy') });
       runCommand.onSecondCall().resolves({ error: null });
       const log = { info: sinon.stub(), error: sinon.stub() };
       const dockerOperations = build({ runCommand, delay: sinon.stub().resolves() }, log);
 
-      await dockerOperations.appDeleteDataInMountPoint('testapp', { intervalMs: 1 });
+      await dockerOperations.appDeleteDataInMountPoint(appId, { intervalMs: 1 });
 
       expect(runCommand.calledTwice).to.be.true;
       expect(log.info.calledOnce).to.be.true;
@@ -48,30 +109,18 @@ describe('dockerOperations tests', () => {
     });
 
     it('gives up and logs after the timeout (never loops forever)', async () => {
+      const { appId } = await statefulComponent();
       const runCommand = sinon.stub().resolves({ error: new Error('still busy') });
       const log = { info: sinon.stub(), error: sinon.stub() };
       const dockerOperations = build({ runCommand, delay: sinon.stub().resolves() }, log);
 
-      await dockerOperations.appDeleteDataInMountPoint('testapp', { timeoutMs: 0 });
+      await dockerOperations.appDeleteDataInMountPoint(appId, { timeoutMs: 0 });
 
       expect(log.error.calledOnce).to.be.true;
       expect(log.info.called).to.be.false;
     });
   });
 });
-
-function mockInstantiatedSpec(spec) {
-  if (!spec) return null;
-  return {
-    spec,
-    name: spec.name,
-    version: spec.version || 4,
-    hash: 'testhash',
-    height: 1000,
-    isEncrypted: false,
-    serialize: () => ({ ...spec }),
-  };
-}
 
 describe('appOperations application lifecycle tests', () => {
   let appOperations;
@@ -82,6 +131,11 @@ describe('appOperations application lifecycle tests', () => {
   let appVolumeServiceStub;
   let appReconcilerStub;
   let logStub;
+
+  before(async function loadLibrary() {
+    this.timeout(30000);
+    flux = await loadSpecLibrary();
+  });
 
   beforeEach(() => {
     dockerServiceStub = {
@@ -100,7 +154,17 @@ describe('appOperations application lifecycle tests', () => {
       getGlobalAppInfo: sinon.stub().resolves(null),
     };
 
-    buildDeploymentStub = sinon.stub().resolves(null);
+    // deploymentProvider stays stubbed because the real one resolves this node's
+    // identity through two daemon RPCs and the docker socket. What it does with the
+    // InstantiatedSpec it is handed is NOT stubbed: the fake runs the real
+    // DeploymentSpec.fromSpec on it, exactly as toDeployment does, so a row this
+    // module hands over that the real provider could not build from fails here.
+    buildDeploymentStub = sinon.stub().callsFake(async (instantiated) => {
+      if (!instantiated) return null;
+      // Cleartext specs resolve to themselves (resolveInstantiatedSpec); the
+      // identity is READ off the row, never recomputed from the name.
+      return deploymentFor(instantiated.spec, { identity: instantiated.identity ?? null });
+    });
 
     appVolumeServiceStub = {
       ensureMountSourcesExist: sinon.stub().resolves(),
@@ -171,7 +235,9 @@ describe('appOperations application lifecycle tests', () => {
       './appUninstaller': { uninstallApplication: sinon.stub().resolves() },
       './componentProvisioner': { installComponent: sinon.stub().resolves() },
       '../utils/globalState': {},
-      '../utils/appConstants': { localAppsInformation: 'test', globalAppsInformation: 'test', globalAppsInstallingErrorsLocations: 'test', globalAppsMessages: 'test', appsFolder: '/tmp/flux/apps/' },
+      '../utils/appConstants': {
+        localAppsInformation: 'test', globalAppsInformation: 'test', globalAppsInstallingErrorsLocations: 'test', globalAppsMessages: 'test', appsFolder: APPS_FOLDER,
+      },
       config: { fluxapps: { minimumInstances: 3, redeploy: { composedDelay: 30000 } }, database: { appsglobal: { database: 'globalapps', collections: {} } } },
 
       // proxyquire does not recurse: every require absent from this map loads for
@@ -271,19 +337,54 @@ describe('appOperations application lifecycle tests', () => {
     });
   });
 
+  afterEach(() => {
+    sinon.restore();
+  });
+
+  /**
+   * A real two-component app and the deployment view of it this node would hold.
+   * Two components cannot share a hostPort — the real library rejects it — so the
+   * second one is moved off 31000.
+   */
+  async function twoComponentApp(appName = 'testapp') {
+    const spec = await specWithComponents(appName, {
+      web: {},
+      api: { ports: { http: { containerPort: 8080, hostPort: 31001 } } },
+    });
+    return { spec, deployment: deploymentFor(spec) };
+  }
+
+  /**
+   * The invariant the app-vs-component branch in componentIdentifiersFor rests on:
+   * a v9 app name cannot contain `_` (`^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$`), and a
+   * container identifier always does (`<component>_<identity>`). Asserted against
+   * the real objects rather than assumed, because the branch is a string test.
+   */
+  function assertNameSplitsFromIdentifier(appName, identifier) {
+    expect(appName.includes('_'), 'a real app name must not contain the separator the branch keys on').to.be.false;
+    expect(identifier.includes('_'), 'a real container identifier must contain it').to.be.true;
+  }
+
   // backup/restore drive run-state THROUGH the reconciler (the sole actuator) via
   // appReconciler.drive() — they never touch Docker. A single component resolves to
   // itself (no spec lookup); a whole app expands to every component identifier.
   describe('stopApplication', () => {
     it('should drive a single component to stopped through the reconciler', async () => {
-      await appOperations.stopApplication('Component1_TestApp');
+      const { deployment } = await twoComponentApp();
+      const [[, web]] = deployment.componentEntries();
+      assertNameSplitsFromIdentifier(deployment.appName, web.identifier);
 
-      sinon.assert.calledOnceWithExactly(appReconcilerStub.drive, ['Component1_TestApp'], 'stopped');
+      await appOperations.stopApplication(web.identifier);
+
+      sinon.assert.calledOnceWithExactly(appReconcilerStub.drive, [web.identifier], 'stopped');
       sinon.assert.notCalled(dockerServiceStub.appDockerStop);
     });
 
     it('should not look up specs when stopping a single component', async () => {
-      await appOperations.stopApplication('Web_MyApp');
+      const { deployment } = await twoComponentApp('myapp');
+      const [[, web]] = deployment.componentEntries();
+
+      await appOperations.stopApplication(web.identifier);
 
       sinon.assert.notCalled(appsRepositoryStub.getGlobalAppInfo);
     });
@@ -291,33 +392,44 @@ describe('appOperations application lifecycle tests', () => {
     it('should log error and not drive when app specs not found for whole app', async () => {
       appsRepositoryStub.getGlobalAppInfo.resolves(null);
 
-      await appOperations.stopApplication('TestApp');
+      await appOperations.stopApplication('testapp');
 
       sinon.assert.calledOnce(logStub.error);
       sinon.assert.notCalled(appReconcilerStub.drive);
     });
 
     it('should drive all components of a whole app to stopped', async () => {
-      const fakeSpec = { name: 'TestApp', version: 4, components: { Web: {}, API: {} } };
-      appsRepositoryStub.getGlobalAppInfo.resolves(mockInstantiatedSpec(fakeSpec));
+      const { spec, deployment } = await twoComponentApp();
+      const installed = await instantiatedSpec(spec);
+      appsRepositoryStub.getGlobalAppInfo.resolves(installed);
 
-      const mockDeployment = {
-        componentEntries: sinon.stub().returns([
-          ['Web', { identifier: 'Web_TestApp' }],
-          ['API', { identifier: 'API_TestApp' }],
-        ]),
-      };
-      buildDeploymentStub.resolves(mockDeployment);
+      await appOperations.stopApplication(spec.name);
 
-      await appOperations.stopApplication('TestApp');
+      // Every component, in the deployment's own startup order, named by the real
+      // container-identifier rule — `<component>_<app>` for an unqualified identity.
+      const identifiers = deployment.componentEntries().map(([, comp]) => comp.identifier);
+      expect(identifiers, 'the real container-naming rule').to.deep.equal(['web_testapp', 'api_testapp']);
+      sinon.assert.calledOnceWithExactly(appReconcilerStub.drive, identifiers, 'stopped');
 
-      sinon.assert.calledOnceWithExactly(appReconcilerStub.drive, ['Web_TestApp', 'API_TestApp'], 'stopped');
+      // The row handed to the (stubbed) provider must answer what the real
+      // toDeployments reads off it: the encryption flag it branches on, the
+      // readable spec it builds from, the name it reports, and the stored identity
+      // it reads rather than recomputing.
+      const [handed] = buildDeploymentStub.firstCall.args;
+      expect(handed.isEncrypted, 'resolveInstantiatedSpec branches on this').to.be.a('boolean');
+      expect(handed.name).to.equal(spec.name);
+      expect(handed).to.have.property('identity');
+      expect(flux.DeploymentSpec.fromSpec(handed.spec, APPS_FOLDER, { replica: null, identity: handed.identity ?? null })
+        .componentEntries().map(([, comp]) => comp.identifier), 'the real provider must be able to build from what it was handed')
+        .to.deep.equal(identifiers);
     });
 
     it('should handle reconciler errors gracefully', async () => {
+      const { deployment } = await twoComponentApp();
+      const [[, web]] = deployment.componentEntries();
       appReconcilerStub.drive.rejects(new Error('converge failed'));
 
-      await appOperations.stopApplication('Component1_TestApp');
+      await appOperations.stopApplication(web.identifier);
 
       sinon.assert.calledOnce(logStub.error);
     });
@@ -325,32 +437,31 @@ describe('appOperations application lifecycle tests', () => {
 
   describe('startApplication', () => {
     it('should drive a single component to running through the reconciler', async () => {
-      await appOperations.startApplication('Component1_TestApp');
+      const { deployment } = await twoComponentApp();
+      const [[, web]] = deployment.componentEntries();
+      assertNameSplitsFromIdentifier(deployment.appName, web.identifier);
 
-      sinon.assert.calledOnceWithExactly(appReconcilerStub.drive, ['Component1_TestApp'], 'running');
+      await appOperations.startApplication(web.identifier);
+
+      sinon.assert.calledOnceWithExactly(appReconcilerStub.drive, [web.identifier], 'running');
       sinon.assert.notCalled(dockerServiceStub.appDockerStart);
     });
 
     it('should drive all components of a whole app to running', async () => {
-      appsRepositoryStub.getGlobalAppInfo.resolves(mockInstantiatedSpec({ name: 'TestApp' }));
+      const { spec, deployment } = await twoComponentApp();
+      appsRepositoryStub.getGlobalAppInfo.resolves(await instantiatedSpec(spec));
 
-      const mockDeployment = {
-        componentEntries: sinon.stub().returns([
-          ['Web', { identifier: 'Web_TestApp' }],
-          ['API', { identifier: 'API_TestApp' }],
-        ]),
-      };
-      buildDeploymentStub.resolves(mockDeployment);
+      await appOperations.startApplication(spec.name);
 
-      await appOperations.startApplication('TestApp');
-
-      sinon.assert.calledOnceWithExactly(appReconcilerStub.drive, ['Web_TestApp', 'API_TestApp'], 'running');
+      const identifiers = deployment.componentEntries().map(([, comp]) => comp.identifier);
+      expect(identifiers, 'the real container-naming rule').to.deep.equal(['web_testapp', 'api_testapp']);
+      sinon.assert.calledOnceWithExactly(appReconcilerStub.drive, identifiers, 'running');
     });
 
     it('should log error and not drive when app not found', async () => {
       appsRepositoryStub.getGlobalAppInfo.resolves(null);
 
-      await appOperations.startApplication('TestApp');
+      await appOperations.startApplication('testapp');
 
       sinon.assert.calledOnce(logStub.error);
       sinon.assert.notCalled(appReconcilerStub.drive);

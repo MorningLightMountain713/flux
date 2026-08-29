@@ -11,13 +11,35 @@ const messageHelper = require('../../ZelBack/src/services/messageHelper');
 const daemonServiceMiscRpcs = require('../../ZelBack/src/services/daemonService/daemonServiceMiscRpcs');
 const appsRepository = require('../../ZelBack/src/services/appDatabase/appsRepository');
 const verificationHelper = require('../../ZelBack/src/services/verificationHelper');
+const serviceHelper = require('../../ZelBack/src/services/serviceHelper');
+const fluxCommunicationMessagesSender = require('../../ZelBack/src/services/fluxCommunicationMessagesSender');
 const transportCryptoProvider = require('../../ZelBack/src/services/providers/FluxOSTransportProvider');
 const legacyTransportProvider = require('../../ZelBack/src/services/providers/FluxOSLegacyTransportProvider');
+const specCutover = require('../../ZelBack/src/services/utils/specCutover');
+const foundingCommittee = require('../../ZelBack/src/services/appMesh/foundingCommittee');
 const { RUNNING_EXPIRY_MS, SIGTERM_EXPIRY_MS } = require('../../ZelBack/src/services/utils/appConstants');
 const { requireMongo } = require('./dbTestHelper');
+const {
+  loadSpecLibrary, V8_SUBMISSION, V9_SUBMISSION,
+  v8Spec, v9Spec, sealedV8Spec, sealedV9Spec, instantiatedSpec, assertAnswers,
+} = require('./fixtures/fluxSpec');
+
+// The spec library is real here, not stubbed — see tests/unit/fixtures/fluxSpec.js
+// for why. This module owns the registry and the app-spec view API, so what it is
+// handed are real STORED forms (an InstantiatedSpec's serialization, cleartext or
+// node-sealed) and what it hands back is produced by the real classes. What stays
+// stubbed is I/O and FluxOS policy: the daemon sync RPC, the privilege check, and
+// the two transport providers that talk to the benchmark channel.
+let flux;
 
 describe('registryManager tests', () => {
   before(requireMongo);
+
+  before(async function loadLibrary() {
+    // The first fromSubmission compiles the ajv schemas.
+    this.timeout(30000);
+    flux = await loadSpecLibrary();
+  });
 
   let db;
   let database;
@@ -31,6 +53,36 @@ describe('registryManager tests', () => {
   afterEach(() => {
     sinon.restore();
   });
+
+  /**
+   * What `appsRepository.getGlobalAppInfo` hands the module: a real
+   * InstantiatedSpec. Only the mongo read is stubbed.
+   *
+   * It is built through the STORED doc, so the object under test is what a node
+   * would rebuild from its own row rather than one this file kept a reference to.
+   * `registeredAt` is dropped for a legacy app because a v1-v8 row carries none.
+   *
+   * One form cannot make that trip: a v8 ENTERPRISE spec. v8's wire slot for the
+   * ciphertext is a single opaque `enterprise` string, so `EncryptedSpecV8.
+   * deserialize` rebuilds `{ algorithm, ciphertext }` and nothing else.
+   * Production is fine — FluxOSLegacyCryptoProvider packs the wrapped key, nonce
+   * and tag *inside* that string and unpacks them on the way back — but the spec
+   * library's own test provider carries nonce and tag as separate fields, which
+   * v8 has nowhere to put, so a fixture-sealed v8 would come back undecryptable.
+   * It is therefore handed over unstored. v9 keeps its whole `encrypted` object
+   * on the wire and round-trips intact.
+   */
+  async function registryHolds(spec, { hash = 'storedhash', height = 1700000 } = {}) {
+    const instantiated = await instantiatedSpec(spec, { hash, height });
+    let stored = instantiated;
+    if (!(spec instanceof flux.EncryptedSpecV8)) {
+      const doc = instantiated.serialize();
+      if (spec.version < 9) delete doc.registeredAt;
+      stored = flux.InstantiatedSpec.deserialize(doc);
+    }
+    sinon.stub(appsRepository, 'getGlobalAppInfo').resolves(stored);
+    return stored;
+  }
 
   describe('getApplicationOwner tests', () => {
     beforeEach(async () => {
@@ -491,41 +543,36 @@ describe('registryManager tests', () => {
       expect(result.data.message).to.include('Daemon not yet synced');
     });
 
+    // The doubles these replaced carried `version` and `isEncrypted` as writable
+    // literals, so a "v8 test" and a "v9 test" differed by an assignment rather
+    // than by the class that actually arrives. A real InstantiatedSpec derives
+    // both from the spec it wraps, so the branch under test is now chosen by the
+    // object — an EncryptedSpecV9 or an EncryptedSpecV8 — and cannot be faked
+    // into the wrong one. The old double also could not answer `serialize()`
+    // with anything but `{ sparse: true }`, which is not a shape any stored spec
+    // has ever had.
     describe('encrypted spec view channel negotiation', () => {
-      let fakeDecrypted;
-      let fakeInstantiated;
+      let decryptV9;
+      let decryptV8;
+      let reencrypt;
 
       const buildReq = (headers) => ({
-        params: { appname: 'TestApp', decrypt: 'true' },
+        params: { appname: 'myapp', decrypt: 'true' },
         query: {},
         headers,
       });
 
       beforeEach(() => {
-        fakeDecrypted = {
-          spec: {
-            name: 'TestApp',
-            owner: 'owner123',
-            toCanonical: () => ({ name: 'TestApp', version: 9, owner: 'owner123' }),
-          },
-          reencrypt: sinon.fake.resolves({ serialize: () => ({ reencrypted: true }) }),
-        };
-        fakeInstantiated = {
-          isEncrypted: true,
-          version: 9,
-          name: 'TestApp',
-          owner: 'owner123',
-          spec: {
-            createProvider: sinon.fake.resolves({}),
-            decrypt: sinon.fake.resolves(fakeDecrypted),
-            serialize: () => ({ sparse: true }),
-          },
-        };
-        sinon.stub(appsRepository, 'getGlobalAppInfo').resolves(fakeInstantiated);
         sinon.stub(verificationHelper, 'verifyPrivilege').resolves(true);
+        // The instances are Object.freeze'd, so the call counters go on the
+        // prototypes; sinon.restore() in the outer afterEach puts them back.
+        decryptV9 = sinon.spy(flux.EncryptedSpecV9.prototype, 'decrypt');
+        decryptV8 = sinon.spy(flux.EncryptedSpecV8.prototype, 'decrypt');
+        reencrypt = sinon.spy(flux.DecryptedCanonicalSpec.prototype, 'reencrypt');
       });
 
       it('should require a view credential when decrypt is requested', async () => {
+        await registryHolds(await sealedV9Spec());
         const res = { json: sinon.fake((param) => param) };
 
         await registryManager.getApplicationSpecificationAPI(buildReq({}), res);
@@ -533,12 +580,14 @@ describe('registryManager tests', () => {
         const result = res.json.firstCall.args[0];
         expect(result.status).to.equal('error');
         expect(result.data.message).to.include('flux-transport-pubkey or enterprise-key');
+        sinon.assert.notCalled(decryptV9);
       });
 
       it('should seal a v9 encrypted spec toward the caller over the transport layer', async () => {
+        await registryHolds(await sealedV9Spec());
         const fakeEnvelope = { toJSON: () => ({ algorithm: 'HPKE', encapsulatedKey: 'enc', ciphertext: 'ct' }) };
         const seal = sinon.fake.resolves(fakeEnvelope);
-        sinon.stub(transportCryptoProvider, 'create').resolves({ seal });
+        const create = sinon.stub(transportCryptoProvider, 'create').resolves({ seal });
         const pubkey = Buffer.alloc(32, 7).toString('base64');
         const res = { json: sinon.fake((param) => param) };
 
@@ -547,35 +596,66 @@ describe('registryManager tests', () => {
         const result = res.json.firstCall.args[0];
         expect(result.status).to.equal('success');
         expect(result.data.encrypted).to.equal(true);
-        expect(result.data.appName).to.equal('TestApp');
+        expect(result.data.appName).to.equal('myapp');
         expect(result.data).to.have.property('timestamp');
         expect(result.data.transportEncrypted).to.deep.equal({ algorithm: 'HPKE', encapsulatedKey: 'enc', ciphertext: 'ct' });
         // the storage decrypt ran, and the transport seal — not the storage
         // reencrypt — produced the view payload
-        sinon.assert.calledOnce(fakeInstantiated.spec.decrypt);
-        sinon.assert.notCalled(fakeDecrypted.reencrypt);
+        sinon.assert.calledOnce(decryptV9);
+        sinon.assert.notCalled(reencrypt);
+
+        // The transport provider is stubbed and never sees the spec object: it is
+        // asked to seal FOR an app, and both arguments are read off the INNER
+        // cleartext spec the wrapper hands out (`decrypted.spec`), not off the
+        // wrapper itself. Assert they are the real app's, so a lost delegation
+        // seals toward `undefined` here instead of on a node.
+        sinon.assert.calledOnceWithExactly(create, 'myapp', V9_SUBMISSION.owner);
+
         const sealArg = seal.firstCall.args[0];
         expect(sealArg.peerPublicKey).to.deep.equal(Buffer.from(pubkey, 'base64'));
         expect(sealArg.info).to.be.a('string').that.is.not.empty;
         expect(sealArg.aad).to.exist;
+        // And what it was handed is the real canonical cleartext the owner needs
+        // in order to re-sign — the decrypt actually opened the blob, rather than
+        // a literal standing in for it.
+        const canonical = JSON.parse(sealArg.plaintext.toString('utf8'));
+        expect(canonical.version).to.equal(9);
+        expect(canonical.components.web.image).to.equal('nginx:latest');
+        expect(canonical.owner).to.equal(V9_SUBMISSION.owner);
       });
 
       it('should reencrypt a v8 encrypted spec over the legacy enterprise channel', async () => {
-        fakeInstantiated.version = 8;
-        const legacyCreate = sinon.stub(legacyTransportProvider, 'create').resolves({ tag: 'legacy' });
+        const sealed = await sealedV8Spec();
+        await registryHolds(sealed);
+        // The legacy transport provider wraps an AES key under the caller's RSA
+        // key off the benchmark channel, so it stays stubbed — but it must hand
+        // back a real CryptoProvider, because EncryptedSpecV8.reencryptFrom
+        // refuses anything else. The library's own registered test factory is it.
+        const provider = await flux.EncryptedSpecV8.createProviderFor(sealed.name, sealed.owner);
+        const legacyCreate = sinon.stub(legacyTransportProvider, 'create').resolves(provider);
         const res = { json: sinon.fake((param) => param) };
 
         await registryManager.getApplicationSpecificationAPI(buildReq({ 'enterprise-key': 'wrappedKeyBase64' }), res);
 
         const result = res.json.firstCall.args[0];
         expect(result.status).to.equal('success');
-        expect(result.data).to.deep.equal({ reencrypted: true });
-        sinon.assert.calledOnceWithExactly(legacyCreate, 'TestApp', 'owner123', 'wrappedKeyBase64');
-        sinon.assert.calledOnce(fakeDecrypted.reencrypt);
+        // Same property guard as the v9 channel: the stubbed provider is told
+        // which app and owner to wrap for, off the InstantiatedSpec's accessors.
+        sinon.assert.calledOnceWithExactly(legacyCreate, 'myapp', V8_SUBMISSION.owner, 'wrappedKeyBase64');
+        sinon.assert.calledOnce(decryptV8);
+        sinon.assert.calledOnce(reencrypt);
+        // v8's own enterprise wire form came back, not a passthrough of the
+        // stored row and not a literal: ciphertext present, cleartext absent.
+        expect(result.data.version).to.equal(8);
+        expect(flux.EncryptedSpecV8.matchesWire(result.data)).to.be.true;
+        expect(result.data.enterprise).to.be.a('string').and.not.equal('');
+        expect(result.data.compose, 'cleartext components never reach the caller').to.deep.equal([]);
+        expect(result.data.contacts).to.deep.equal([]);
+        expect(await reencrypt.firstCall.returnValue).to.be.instanceOf(flux.EncryptedSpecV8);
       });
 
       it('should reject a v9 app that arrives on the legacy enterprise channel', async () => {
-        fakeInstantiated.version = 9;
+        await registryHolds(await sealedV9Spec());
         const res = { json: sinon.fake((param) => param) };
 
         await registryManager.getApplicationSpecificationAPI(buildReq({ 'enterprise-key': 'wrappedKeyBase64' }), res);
@@ -584,58 +664,226 @@ describe('registryManager tests', () => {
         expect(result.status).to.equal('error');
         expect(result.data.message).to.include('flux-transport-pubkey channel');
         // rejected before any crypto work
-        sinon.assert.notCalled(fakeInstantiated.spec.decrypt);
+        sinon.assert.notCalled(decryptV9);
       });
 
       it('should return the sparse stored spec when no decrypt is requested', async () => {
-        const req = { params: { appname: 'TestApp' }, query: {}, headers: {} };
+        const sealed = await sealedV9Spec();
+        await registryHolds(sealed);
+        const req = { params: { appname: 'myapp' }, query: {}, headers: {} };
         const res = { json: sinon.fake((param) => param) };
 
         await registryManager.getApplicationSpecificationAPI(req, res);
 
         const result = res.json.firstCall.args[0];
         expect(result.status).to.equal('success');
-        expect(result.data).to.deep.equal({ sparse: true });
-        sinon.assert.notCalled(fakeInstantiated.spec.decrypt);
+        expect(result.data).to.deep.equal(sealed.serialize());
+        // "sparse" is a real shape, not a marker: cleartext metadata plus the
+        // resource summary a node screens on, and the ciphertext — never the
+        // components.
+        expect(result.data.encrypted.ciphertext).to.be.a('string').and.not.equal('');
+        expect(result.data.resources).to.include({ cpu: 0.5, memoryMb: 300 });
+        expect(result.data).to.not.have.property('components');
+        sinon.assert.notCalled(decryptV9);
+      });
+
+      // The double hardcoded isEncrypted:true, so the branch that returns a
+      // cleartext app's stored spec untouched — credential or no credential —
+      // was unreachable and untested.
+      it('returns a cleartext app untouched even when a view credential is presented', async () => {
+        const cleartext = await v9Spec();
+        await registryHolds(cleartext);
+        const create = sinon.stub(transportCryptoProvider, 'create');
+        const res = { json: sinon.fake((param) => param) };
+
+        await registryManager.getApplicationSpecificationAPI(
+          buildReq({ 'flux-transport-pubkey': Buffer.alloc(32, 7).toString('base64') }), res,
+        );
+
+        const result = res.json.firstCall.args[0];
+        expect(result.status).to.equal('success');
+        expect(result.data).to.deep.equal(cleartext.serialize());
+        expect(result.data.components.web.image).to.equal('nginx:latest');
+        sinon.assert.notCalled(create); // nothing to protect, so nothing sealed
       });
     });
   });
 
+  // The v8->v9 conversion endpoint had no tests at all. It is the other half of
+  // this module's spec-view surface: it decrypts an enterprise spec node-side,
+  // runs the real fromLegacy, and seals the draft back toward the owner — so the
+  // sealed shape and the decrypted shape both matter, and neither is expressible
+  // with a literal.
+  describe('convertApplicationSpecification (appconvert)', () => {
+    let decryptV8;
+
+    beforeEach(() => {
+      decryptV8 = sinon.spy(flux.EncryptedSpecV8.prototype, 'decrypt');
+    });
+
+    it('converts a cleartext legacy app into a signable v9 draft', async () => {
+      await registryHolds(await v8Spec({ name: 'convertme', contacts: ['ops@example.com'] }));
+
+      const result = await registryManager.convertApplicationSpecification('convertme');
+
+      expect(result.encrypted).to.be.false;
+      expect(result.complete, 'a v8 app with contacts converts cleanly').to.be.true;
+      expect(result.errors).to.deep.equal([]);
+      // The draft is the real class's canonical form, so it carries the v9-only
+      // sections a legacy row has never had.
+      expect(result.spec.version).to.equal(9);
+      expect(result.spec.name).to.equal('convertme');
+      expect(result.spec.owner).to.equal(V8_SUBMISSION.owner);
+      expect(result.spec.components.web.image).to.equal('nginx:latest');
+      expect(result.spec).to.have.all.keys(
+        'version', 'name', 'description', 'owner', 'instances', 'ttl', 'network',
+        'placement', 'assignment', 'components', 'contacts', 'marketplace',
+        'telemetry', 'referral', 'activation', 'dependencies',
+      );
+      // Warnings are the owner's review list, not errors.
+      expect(result.warnings.join(' ')).to.include('TCP only');
+    });
+
+    it('returns a fillable draft when the legacy app is missing a v9-required field', async () => {
+      // The shared v8 fixture carries no contacts, which v9 requires — the exact
+      // "fixable gap" the endpoint is documented to return rather than reject.
+      await registryHolds(await v8Spec({ name: 'convertme' }));
+
+      const result = await registryManager.convertApplicationSpecification('convertme');
+
+      expect(result.complete).to.be.false;
+      expect(result.errors.map((e) => e.field)).to.deep.equal(['contacts']);
+      // Incomplete means the raw converted blob, not a validated canonical form.
+      expect(result.spec.components.web.image).to.equal('nginx:latest');
+      expect(result.spec).to.not.have.property('contacts');
+    });
+
+    it('refuses an app already on spec version 9', async () => {
+      await registryHolds(await v9Spec());
+
+      let err;
+      try { await registryManager.convertApplicationSpecification('myapp'); } catch (e) { err = e; }
+
+      expect(err, 'should have thrown').to.exist;
+      expect(err.message).to.include('already on spec version 9');
+    });
+
+    it('decrypts an enterprise app node-side and seals the draft toward the caller', async () => {
+      const sealed = await sealedV8Spec({ name: 'convertme', contacts: ['ops@example.com'] });
+      await registryHolds(sealed);
+      const fakeEnvelope = { toJSON: () => ({ algorithm: 'HPKE', encapsulatedKey: 'enc', ciphertext: 'ct' }) };
+      const seal = sinon.fake.resolves(fakeEnvelope);
+      const create = sinon.stub(transportCryptoProvider, 'create').resolves({ seal });
+      const pubkey = Buffer.alloc(32, 3).toString('base64');
+
+      const result = await registryManager.convertApplicationSpecification('convertme', {
+        recipientPubkeyBase64: pubkey,
+      });
+
+      expect(result.encrypted).to.be.true;
+      expect(result.complete).to.be.true;
+      expect(result.appName).to.equal('convertme');
+      expect(result.transportEncrypted).to.deep.equal({ algorithm: 'HPKE', encapsulatedKey: 'enc', ciphertext: 'ct' });
+      expect(result).to.not.have.property('spec'); // cleartext never crosses the wire
+      sinon.assert.calledOnce(decryptV8);
+      // The stubbed transport provider is told which app and owner to seal for,
+      // and both come out of the converted blob — which fromLegacy built from the
+      // DECRYPTED spec. Sealing toward `undefined` would pass without this.
+      sinon.assert.calledOnceWithExactly(create, 'convertme', V8_SUBMISSION.owner);
+      const sealArg = seal.firstCall.args[0];
+      expect(sealArg.peerPublicKey).to.deep.equal(Buffer.from(pubkey, 'base64'));
+      expect(sealArg.aad).to.exist;
+      const draft = JSON.parse(sealArg.plaintext.toString('utf8'));
+      expect(draft.version).to.equal(9);
+      expect(draft.components.web.image, 'the sealed blob really was opened').to.equal('nginx:latest');
+    });
+
+    it('refuses to convert an encrypted app with no transport pubkey to seal toward', async () => {
+      await registryHolds(await sealedV8Spec({ name: 'convertme', contacts: ['ops@example.com'] }));
+
+      let err;
+      try { await registryManager.convertApplicationSpecification('convertme'); } catch (e) { err = e; }
+
+      expect(err, 'should have thrown').to.exist;
+      expect(err.message).to.include('flux-transport-pubkey is mandatory');
+      // it got far enough to decrypt: the refusal is about the return channel,
+      // not about reading the app
+      sinon.assert.calledOnce(decryptV8);
+    });
+
+    // A CLEARTEXT source can still produce a secret draft: v9 has no storage-ref
+    // convention, so an F_S_ENV reference is fetched and inlined, and the values
+    // were externalised precisely because they are sensitive.
+    it('seals the draft when a storage reference is inlined, even from a cleartext app', async () => {
+      await registryHolds(await v8Spec({
+        name: 'convertme',
+        contacts: ['ops@example.com'],
+        compose: [{
+          ...V8_SUBMISSION.compose[0],
+          environmentParameters: ['F_S_ENV=https://storage.example.com/env.json'],
+        }],
+      }));
+      // Flux Storage is a signed HTTP fetch — I/O, so stubbed at the http seam.
+      sinon.stub(serviceHelper, 'axiosGet').resolves({ data: ['SECRET=hunter2'] });
+      sinon.stub(fluxCommunicationMessagesSender, 'getFluxMessageSignature').resolves('sig');
+      const seal = sinon.fake.resolves({ toJSON: () => ({ algorithm: 'HPKE' }) });
+      sinon.stub(transportCryptoProvider, 'create').resolves({ seal });
+
+      const result = await registryManager.convertApplicationSpecification('convertme', {
+        recipientPubkeyBase64: Buffer.alloc(32, 5).toString('base64'),
+      });
+
+      expect(result.encrypted, 'an inlined secret forces the sealed channel').to.be.true;
+      const draft = JSON.parse(seal.firstCall.args[0].plaintext.toString('utf8'));
+      expect(draft.components.web.env).to.deep.equal({ SECRET: 'hunter2' });
+      expect(draft.components.web.env).to.not.have.property('F_S_ENV');
+    });
+
+    it('appConvertApi refuses an unprivileged caller before reading the app', async () => {
+      sinon.stub(daemonServiceMiscRpcs, 'isDaemonSynced').returns({ data: { synced: true, height: 1000 } });
+      sinon.stub(verificationHelper, 'verifyPrivilege').resolves(false);
+      const getInfo = sinon.stub(appsRepository, 'getGlobalAppInfo').resolves(null);
+      const res = { json: sinon.fake((param) => param) };
+
+      await registryManager.appConvertApi({ params: { appname: 'convertme' }, query: {}, headers: {} }, res);
+
+      const result = res.json.firstCall.args[0];
+      expect(result.status).to.equal('error');
+      expect(result.data.code).to.equal(401);
+      sinon.assert.notCalled(getInfo);
+    });
+  });
+
+  // The row seeded here is a real STORED spec, not a hand-assembled document:
+  // this check reads the live registry entry back through hydrate, and the hash
+  // branch below then asks that entry two questions (`expiresAtHeight` and
+  // `serialize`) that only the real InstantiatedSpec can answer.
   describe('checkApplicationRegistrationNameConflicts tests', () => {
+    const EXISTING_HEIGHT = 1700000;
+    // v8's `expire` of 88000 blocks from EXISTING_HEIGHT, as the real class
+    // computes it across the PON fork — read off the object, never assumed.
+    let existingExpiresAt;
+
     beforeEach(async () => {
       const collection = config.database.appsglobal.collections.appsInformation;
-      const existingApp = {
-        name: 'ExistingApp',
-        version: 3,
-        description: 'Test app',
-        owner: '1CbErtneaX2QVyUfwU7JGB7VzvPgrgc3uC',
-        repotag: 'test/image:latest',
-        ports: ['30001'],
-        containerPorts: ['8080'],
-        domains: [''],
-        containerData: '',
-        cpu: 0.5,
-        ram: 500,
-        hdd: 5,
-        instances: 3,
-        height: 100,
-        expire: 22000,
-        hash: 'testhash123',
-      };
+      const stored = await instantiatedSpec(
+        await v8Spec({ name: 'existingapp' }),
+        { hash: 'testhash123', height: EXISTING_HEIGHT },
+      );
+      existingExpiresAt = stored.expiresAtHeight;
+      const doc = stored.serialize();
+      delete doc.registeredAt; // a v1-v8 row carries none
 
       try {
         await database.collection(collection).drop();
       } catch (err) {
         // Collection doesn't exist
       }
-      await dbHelper.insertOneToDatabase(database, collection, existingApp);
+      await dbHelper.insertOneToDatabase(database, collection, doc);
     });
 
     it('should throw error if app name already exists', async () => {
-      const appSpec = {
-        name: 'ExistingApp',
-        owner: '1CbErtneaX2QVyUfwU7JGB7VzvPgrgc3uC',
-      };
+      const appSpec = await v8Spec({ name: 'existingapp' });
 
       try {
         await registryManager.checkApplicationRegistrationNameConflicts(appSpec);
@@ -646,10 +894,7 @@ describe('registryManager tests', () => {
     });
 
     it('should allow registration if app name is unique', async () => {
-      const appSpec = {
-        name: 'UniqueAppName',
-        owner: '1CbErtneaX2QVyUfwU7JGB7VzvPgrgc3uC',
-      };
+      const appSpec = await v9Spec({ name: 'uniqueappname' });
 
       const result = await registryManager.checkApplicationRegistrationNameConflicts(appSpec);
 
@@ -657,10 +902,7 @@ describe('registryManager tests', () => {
     });
 
     it('should reject app named "share"', async () => {
-      const appSpec = {
-        name: 'share',
-        owner: '1CbErtneaX2QVyUfwU7JGB7VzvPgrgc3uC',
-      };
+      const appSpec = await v9Spec({ name: 'share' });
 
       try {
         await registryManager.checkApplicationRegistrationNameConflicts(appSpec);
@@ -669,95 +911,135 @@ describe('registryManager tests', () => {
         expect(error.message).to.include('already assigned to Flux main application');
       }
     });
+
+    // The hash branch decides whether an incoming registration is allowed to
+    // take a name the registry already holds, and it decides it by asking the
+    // STORED entry when its lease runs out. Nothing exercised it before.
+    describe('re-registration by hash', () => {
+      const hashesCollection = config.database.daemon.collections.appsHashes;
+
+      beforeEach(async () => {
+        try {
+          await db.db(config.database.daemon.database).collection(hashesCollection).drop();
+        } catch (err) {
+          // Collection doesn't exist
+        }
+      });
+
+      it('refuses a hash the chain never carried', async () => {
+        const appSpec = await v8Spec({ name: 'existingapp' });
+
+        try {
+          await registryManager.checkApplicationRegistrationNameConflicts(appSpec, 'unknownhash');
+          expect.fail('Should have thrown an error');
+        } catch (error) {
+          expect(error.message).to.include('Hash not found in collection');
+        }
+      });
+
+      it('refuses a hash confirmed while the held name is still leased', async () => {
+        // Confirmed after the stored spec but before its lease runs out, so the
+        // name is not free. `expiresAtHeight` is the question being asked, and a
+        // hand-written double cannot answer it — the previous literal here had
+        // no such accessor at all.
+        const confirmedAt = EXISTING_HEIGHT + 1000;
+        expect(confirmedAt, 'the incoming hash must land inside the lease').to.be.below(existingExpiresAt);
+        await dbHelper.insertOneToDatabase(
+          db.db(config.database.daemon.database), hashesCollection,
+          { hash: 'incominghash', height: confirmedAt, txid: 'tx1' },
+        );
+        const appSpec = await v8Spec({ name: 'existingapp' });
+
+        try {
+          await registryManager.checkApplicationRegistrationNameConflicts(appSpec, 'incominghash');
+          expect.fail('Should have thrown an error');
+        } catch (error) {
+          expect(error.message).to.include('Hash is not older than our current app');
+        }
+      });
+    });
   });
 
+  // These write and read the real globalAppsInformation rows, so the docs are
+  // real stored forms: what a confirmed spec actually leaves in mongo, produced
+  // by InstantiatedSpec.serialize rather than assembled by hand.
   describe('updateAppSpecifications tests', () => {
+    // These assert on what a FIRST registration leaves behind, so the collection
+    // has to start empty: mongo outlives the run, and a row left at the higher
+    // height by the previous one makes both writes no-ops.
+    beforeEach(async () => {
+      try {
+        await database.collection(config.database.appsglobal.collections.appsInformation).drop();
+      } catch (err) {
+        // Collection doesn't exist
+      }
+    });
+
+    /** The stored document for an app at a given chain position. */
+    async function storedDoc(spec, { hash, height }) {
+      const doc = (await instantiatedSpec(spec, { hash, height })).serialize();
+      if (spec.version < 9) delete doc.registeredAt;
+      return doc;
+    }
+
+    /** The stored row, without mongo's own key. */
+    async function readBack(name) {
+      const row = await dbHelper.findOneInDatabase(
+        database, config.database.appsglobal.collections.appsInformation, { name },
+      );
+      if (!row) return row;
+      // eslint-disable-next-line no-unused-vars
+      const { _id, ...doc } = row;
+      return doc;
+    }
+
     it('should update app specifications', async () => {
-      const initialSpecs = {
-        name: 'UpdateTestApp',
-        version: 3,
-        owner: '1CbErtneaX2QVyUfwU7JGB7VzvPgrgc3uC',
-        height: 100,
-        hash: 'oldhash',
-      };
-      await registryManager.insertAppSpecifications(initialSpecs);
+      const spec = await v9Spec({ name: 'updatetestapp' });
+      await registryManager.insertAppSpecifications(await storedDoc(spec, { hash: 'oldhash', height: 100 }));
 
-      const updatedSpecs = {
-        name: 'UpdateTestApp',
-        version: 3,
-        owner: '1CbErtneaX2QVyUfwU7JGB7VzvPgrgc3uC',
-        height: 200,
-        hash: 'newhash',
-      };
-      await registryManager.updateAppSpecifications(updatedSpecs);
+      await registryManager.updateAppSpecifications(await storedDoc(spec, { hash: 'newhash', height: 200 }));
 
-      const result = await dbHelper.findOneInDatabase(database, config.database.appsglobal.collections.appsInformation, { name: 'UpdateTestApp' });
-      expect(result.name).to.equal('UpdateTestApp');
+      const result = await readBack('updatetestapp');
+      expect(result.name).to.equal('updatetestapp');
       expect(result.height).to.equal(200);
       expect(result.hash).to.equal('newhash');
+      // and the row is still one the real deserializer will accept on next boot
+      expect(flux.InstantiatedSpec.deserialize(result).height).to.equal(200);
     });
 
     it('should not update if height is lower than existing', async () => {
-      const initialSpecs = {
-        name: 'HeightTestApp',
-        version: 3,
-        owner: '1CbErtneaX2QVyUfwU7JGB7VzvPgrgc3uC',
-        height: 300,
-        hash: 'hash1',
-      };
+      const spec = await v9Spec({ name: 'heighttestapp' });
+      await registryManager.insertAppSpecifications(await storedDoc(spec, { hash: 'hash1', height: 300 }));
 
-      await registryManager.insertAppSpecifications(initialSpecs);
+      await registryManager.updateAppSpecifications(await storedDoc(spec, { hash: 'hash2', height: 200 }));
 
-      const lowerHeightSpecs = {
-        ...initialSpecs,
-        height: 200,
-        hash: 'hash2',
-      };
-
-      await registryManager.updateAppSpecifications(lowerHeightSpecs);
-
-      const result = await dbHelper.findOneInDatabase(database, config.database.appsglobal.collections.appsInformation, { name: 'HeightTestApp' });
+      const result = await readBack('heighttestapp');
       expect(result.height).to.equal(300);
       expect(result.hash).to.equal('hash1');
     });
 
     it('should not accumulate ghost fields when spec version changes', async () => {
-      // Simulate a v3 flat spec registration
-      const v3Spec = {
-        version: 3,
-        name: 'GhostFieldTestApp',
-        description: 'Test',
-        owner: '1CbErtneaX2QVyUfwU7JGB7VzvPgrgc3uC',
-        repotag: 'test/image:latest',
-        cpu: 0.5,
-        ram: 500,
-        hdd: 5,
-        height: 100,
-        hash: 'hash1',
-      };
-      await registryManager.insertAppSpecifications(v3Spec);
+      // A real version change, v8 -> v9: the two shapes share almost no field
+      // names, so every v8-only key is a candidate ghost. The literals this
+      // replaced invented a v3 and a v4 blob; the real classes make the same
+      // point with the transition the network is actually about to make.
+      const legacy = await v8Spec({ name: 'ghostfieldapp' });
+      await registryManager.insertAppSpecifications(await storedDoc(legacy, { hash: 'hash1', height: 100 }));
+      const seeded = await readBack('ghostfieldapp');
+      expect(seeded.compose, 'the legacy row really did carry the v8 shape').to.be.an('array');
 
-      // Simulate a v4 compose update (no flat fields)
-      const v4Spec = {
-        version: 4,
-        name: 'GhostFieldTestApp',
-        description: 'Test',
-        owner: '1CbErtneaX2QVyUfwU7JGB7VzvPgrgc3uC',
-        compose: [{ name: 'main', cpu: 0.5, ram: 500, hdd: 5 }],
-        instances: 3,
-        height: 200,
-        hash: 'hash2',
-      };
-      await registryManager.updateAppSpecifications(v4Spec);
+      const modern = await v9Spec({ name: 'ghostfieldapp' });
+      await registryManager.updateAppSpecifications(await storedDoc(modern, { hash: 'hash2', height: 200 }));
 
-      const result = await dbHelper.findOneInDatabase(database, config.database.appsglobal.collections.appsInformation, { name: 'GhostFieldTestApp' });
-      expect(result.version).to.equal(4);
-      expect(result.compose).to.exist;
-      // Ghost flat fields from v3 should NOT exist
-      expect(result.repotag).to.be.undefined;
-      expect(result.cpu).to.be.undefined;
-      expect(result.ram).to.be.undefined;
-      expect(result.hdd).to.be.undefined;
+      const result = await readBack('ghostfieldapp');
+      expect(result.version).to.equal(9);
+      expect(result.components).to.exist;
+      // Ghost v8 fields must NOT survive the replace — a v9 row carrying `compose`
+      // or `expire` would be rejected outright by the v9 deserializer.
+      for (const ghost of ['compose', 'expire', 'geolocation', 'nodes', 'staticip']) {
+        expect(result[ghost], `${ghost} is a v8-only field and must not survive`).to.be.undefined;
+      }
+      expect(() => flux.InstantiatedSpec.deserialize(result)).to.not.throw();
     });
   });
 
@@ -1250,12 +1532,33 @@ describe('registryManager tests', () => {
       registryManager.setOnSpecStored(null);
     });
 
+    /** The stored document for an app at a given chain position. */
+    async function storedDoc(name, { hash, height }) {
+      return (await instantiatedSpec(await v9Spec({ name }), { hash, height })).serialize();
+    }
+
+    /**
+     * `upsertGlobalAppInfo` is stubbed here — it is the mongo write — so nothing
+     * in this suite reads the row back. What the real one does with the document
+     * is key it by `name` and store it verbatim; what reads it back is hydrate,
+     * on the next boot, through InstantiatedSpec.deserialize. So assert the
+     * property the repository reads and that the deserializer accepts the doc:
+     * that pair is what the stub would otherwise be hiding.
+     */
+    function assertStorable(doc, name) {
+      expect(doc.name, 'the repository keys the row on name').to.equal(name);
+      const rehydrated = flux.InstantiatedSpec.deserialize(doc);
+      expect(rehydrated.spec).to.be.instanceOf(flux.FluxAppSpecV9);
+      expect(rehydrated.name).to.equal(name);
+      return rehydrated;
+    }
+
     it('fires the hook with the stored spec after a permanent store', async () => {
       const upsert = sinon.stub(appsRepository, 'upsertGlobalAppInfo').resolves();
       const hook = sinon.stub();
       registryManager.setOnSpecStored(hook);
 
-      const spec = { name: 'HookApp', height: 100, hash: 'h1', owner: 'o' };
+      const spec = await storedDoc('hookapp', { hash: 'h1', height: 100 });
       const res = await registryManager.storeAppSpecificationInPermanentStorage(spec);
 
       expect(res.status).to.equal('success');
@@ -1263,6 +1566,15 @@ describe('registryManager tests', () => {
       sinon.assert.calledWith(upsert, spec);
       sinon.assert.calledOnce(hook);
       sinon.assert.calledWith(hook, spec);
+
+      assertStorable(upsert.firstCall.args[0], 'hookapp');
+      // The hook is the spawner wake, and the spawner is not in this suite. It
+      // keys its work off the app's name and the message hash, so assert the
+      // object it was handed still carries both.
+      const [woken] = hook.firstCall.args;
+      expect(woken.name).to.equal('hookapp');
+      expect(woken.hash).to.equal('h1');
+      expect(woken.height).to.equal(100);
     });
 
     it('insert routes through the registry (not raw dbHelper) and fires the hook', async () => {
@@ -1273,7 +1585,7 @@ describe('registryManager tests', () => {
       const hook = sinon.stub();
       registryManager.setOnSpecStored(hook);
 
-      const spec = { name: 'RouteApp', height: 10, hash: 'h2' };
+      const spec = await storedDoc('routeapp', { hash: 'h2', height: 10 });
       await registryManager.insertAppSpecifications(spec);
 
       sinon.assert.calledOnce(upsert); // went through the registry
@@ -1281,6 +1593,7 @@ describe('registryManager tests', () => {
       sinon.assert.notCalled(replaceOne); // did NOT hand-roll the dbHelper spec write
       sinon.assert.calledOnce(hook);
       sinon.assert.calledWith(hook, spec);
+      assertStorable(upsert.firstCall.args[0], 'routeapp');
     });
 
     it('update routes through the registry with upsert:false and fires the hook', async () => {
@@ -1291,19 +1604,22 @@ describe('registryManager tests', () => {
       const hook = sinon.stub();
       registryManager.setOnSpecStored(hook);
 
-      const spec = { name: 'UpdRoute', height: 100, hash: 'h3' };
+      const spec = await storedDoc('updroute', { hash: 'h3', height: 100 });
       await registryManager.updateAppSpecifications(spec);
 
       sinon.assert.calledWith(upsert, spec, { upsert: false });
       sinon.assert.notCalled(replaceOne);
       sinon.assert.calledOnce(hook);
+      assertStorable(upsert.firstCall.args[0], 'updroute');
     });
 
     it('a throwing hook does not break the store', async () => {
       sinon.stub(appsRepository, 'upsertGlobalAppInfo').resolves();
       registryManager.setOnSpecStored(() => { throw new Error('hook boom'); });
 
-      const res = await registryManager.storeAppSpecificationInPermanentStorage({ name: 'SafeApp', height: 1, hash: 'h' });
+      const res = await registryManager.storeAppSpecificationInPermanentStorage(
+        await storedDoc('safeapp', { hash: 'h', height: 1 }),
+      );
       expect(res.status).to.equal('success'); // store succeeded despite the throwing hook
     });
 
@@ -1311,9 +1627,49 @@ describe('registryManager tests', () => {
       registryManager.setOnSpecStored(null);
       const upsert = sinon.stub(appsRepository, 'upsertGlobalAppInfo').resolves();
 
-      await registryManager.storeAppSpecificationInPermanentStorage({ name: 'NoHook', height: 1, hash: 'h' });
+      await registryManager.storeAppSpecificationInPermanentStorage(
+        await storedDoc('nohook', { hash: 'h', height: 1 }),
+      );
 
       sinon.assert.calledOnce(upsert); // store still happened, just no hook
+    });
+  });
+
+  // Every spec write also maintains the host-side component mapping, from the
+  // CLEARTEXT view of what was just stored. Nothing covered it.
+  describe('founding view materialization', () => {
+    it('resolves the entry it just stored and maps the components off the cleartext view', async () => {
+      const sealed = await sealedV9Spec({ name: 'meshapp' });
+      const stored = await registryHolds(sealed, { hash: 'hm', height: 2500000 });
+      const doc = stored.serialize();
+      sinon.stub(appsRepository, 'upsertGlobalAppInfo').resolves();
+      // The resolver decrypts through the benchmark channel, so it stays
+      // stubbed — and it hands back what the real one hands back for a sealed
+      // app: a DecryptedCanonicalSpec, never a raw serializable spec.
+      const view = await sealed.decrypt(await sealed.createProvider());
+      const resolve = sinon.stub(specCutover, 'resolveInstantiatedSpec').resolves(view);
+      const applyComponentView = sinon.stub(foundingCommittee, 'applyComponentView').resolves();
+
+      await registryManager.storeAppSpecificationInPermanentStorage(doc);
+
+      // Stubbing the resolver hides whether the entry we hand it is usable. The
+      // real one branches on `isEncrypted`, then calls `createProvider()` on the
+      // inner spec before decrypting it — so assert the entry can answer that,
+      // or the delegation could vanish from flux-spec with this suite green.
+      sinon.assert.calledOnce(resolve);
+      const [handed] = resolve.firstCall.args;
+      expect(handed.isEncrypted, 'the real resolver branches on it').to.be.true;
+      expect(handed.name, 'and logs a failed decrypt against it').to.equal('meshapp');
+      assertAnswers(handed.spec, ['createProvider']);
+
+      // And the mapping is taken off the cleartext view, not off the sealed row —
+      // the sealed row has no components at all.
+      sinon.assert.calledOnce(applyComponentView);
+      const [mapped] = applyComponentView.firstCall.args;
+      expect(mapped.name).to.equal('meshapp');
+      expect(mapped.height).to.equal(2500000);
+      expect(Object.keys(mapped.components)).to.deep.equal(['web']);
+      expect(doc, 'the stored row itself carries none').to.not.have.property('components');
     });
   });
 });
