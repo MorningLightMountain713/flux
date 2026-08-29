@@ -1,0 +1,236 @@
+'use strict';
+
+process.env.NODE_CONFIG_DIR = `${process.cwd()}/tests/unit/globalconfig`;
+
+const { expect } = require('chai');
+const proxyquire = require('proxyquire').noCallThru();
+const secp256k1 = require('secp256k1');
+const bs58check = require('bs58check');
+const config = require('config');
+
+const dbHelper = require('../../ZelBack/src/services/dbHelper');
+const verificationHelper = require('../../ZelBack/src/services/verificationHelper');
+const downCertificates = require('../../ZelBack/src/services/quorumGrant/downCertificates');
+const { MembershipHistory } = require('../../ZelBack/src/services/utils/membershipHistory');
+const { NodeDownTopology } = require('../../ZelBack/src/services/utils/nodeDownTopology');
+const {
+  verdictPayload,
+  RECORD_LIFETIME_MS,
+} = require('../../ZelBack/src/services/utils/nodeDownCertificates');
+const { globalAppStateEvents } = require('../../ZelBack/src/services/utils/appConstants');
+
+const T0 = 1_700_000_000_000;
+const S = 's'.repeat(64).slice(0, 64).concat(':0'); // distinctive test subject
+
+// Real keys, real signatures, real mongo: the only fakes here are the
+// network-state singletons, replaced by this world's topology and height.
+const keypairs = new Map();
+function keypairFor(name) {
+  if (!keypairs.has(name)) {
+    const priv = Buffer.alloc(32);
+    Buffer.from(name).copy(priv, 20);
+    keypairs.set(name, {
+      wif: bs58check.encode(Buffer.concat([Buffer.from([0x80]), priv])),
+      pubkey: Buffer.from(secp256k1.publicKeyCreate(priv, false)).toString('hex'),
+    });
+  }
+  return keypairs.get(name);
+}
+
+function makeWorld() {
+  const history = new MembershipHistory();
+  const jurors = ['j1', 'j2', 'j3', 'j4', 'j5', 'j6'];
+  const nodes = [
+    ...jurors.map((name, i) => ({
+      txhash: `nd${name}`.padEnd(10, 'x'),
+      outidx: 0,
+      pubkey: keypairFor(name).pubkey,
+      ip: `10.9.0.${i + 11}:16127`,
+      added_height: 1,
+    })),
+    {
+      txhash: S.split(':')[0], outidx: 0, pubkey: keypairFor('subject').pubkey, ip: '10.9.0.20:16127', added_height: 1,
+    },
+  ];
+  const world = { nodes, history, height: 1000 };
+  world.fp = history.record(nodes, { height: 999, hash: 'nh999' }, T0);
+  world.topology = new NodeDownTopology({
+    nodes: () => world.nodes,
+    membershipHistory: history,
+  });
+  world.jurorOutpoint = (name) => `${`nd${name}`.padEnd(10, 'x')}:0`;
+  world.signedVerdict = (name, over = {}) => {
+    const verdict = {
+      subject: S,
+      juror: world.jurorOutpoint(name),
+      judgement: 'unreachable',
+      height: world.height,
+      fingerprint: world.fp,
+      ...over,
+    };
+    const payload = verdictPayload(verdict);
+    verdict.signature = verificationHelper.signMessage(payload.toString(), keypairFor(name).wif);
+    return verdict;
+  };
+  world.certificate = (names, over = {}) => ({
+    subject: S,
+    assembler: world.jurorOutpoint(names[0]),
+    height: world.height,
+    fingerprint: world.fp,
+    verdicts: names.map((name) => world.signedVerdict(name)),
+    ...over,
+  });
+  return world;
+}
+
+describe('nodeDownStore', () => {
+  let world;
+  let store;
+  let collection;
+
+  before(async function bootstrap() {
+    this.timeout(30000);
+    await dbHelper.initiateDB();
+    collection = dbHelper.databaseConnection()
+      .db(config.database.appsglobal.database)
+      .collection(globalAppStateEvents);
+  });
+
+  beforeEach(async () => {
+    world = makeWorld();
+    store = proxyquire('../../ZelBack/src/services/appMessaging/nodeDownStore', {
+      '../networkStateService': {
+        nodeDownTopology: () => world.topology,
+        chainHeight: () => world.height,
+        networkState: () => world.nodes,
+      },
+    });
+    await collection.deleteMany({ subject: S });
+    await collection.deleteMany({ outpoint: S });
+    downCertificates.resetForTests();
+  });
+
+  after(async () => {
+    await collection.deleteMany({ subject: S });
+    await collection.deleteMany({ outpoint: S });
+  });
+
+  describe('verifyNodeDownCertificate — cold, synchronous, real signatures', () => {
+    it('accepts a quorum of real signatures and refuses one short', () => {
+      // jury of 6 → H = 4
+      const good = store.verifyNodeDownCertificate(world.certificate(['j1', 'j2', 'j3', 'j4']));
+      expect(good).to.include({ valid: true, subject: S, counted: 4, needed: 4 });
+
+      const short = store.verifyNodeDownCertificate(world.certificate(['j1', 'j2', 'j3']));
+      expect(short).to.include({ valid: false, reason: 'sub_quorum' });
+    });
+
+    it('a tampered verdict fails its signature and costs the quorum', () => {
+      const certificate = world.certificate(['j1', 'j2', 'j3', 'j4']);
+      certificate.verdicts[0].height += 1; // signed bytes no longer match
+      const result = store.verifyNodeDownCertificate(certificate);
+      expect(result.valid).to.equal(false);
+      expect(result.discarded.bad_signature).to.equal(1);
+    });
+
+    it('an unrebuildable fingerprint refuses whole', () => {
+      const certificate = world.certificate(['j1', 'j2', 'j3', 'j4'], { fingerprint: 'f'.repeat(64) });
+      expect(store.verifyNodeDownCertificate(certificate).reason).to.equal('unknown_fingerprint');
+    });
+  });
+
+  describe('intake — verified, stored per certification, duplicates absorbed', () => {
+    it('stores a valid certificate and asks for the relay', async () => {
+      const result = await store.handleNodeDownEvent({
+        message: { certificate: world.certificate(['j1', 'j2', 'j3', 'j4']), broadcastedAt: Date.now() },
+      });
+      expect(result).to.deep.equal({ accepted: true, rebroadcast: true, reason: 'stored' });
+
+      const row = await collection.findOne({ type: 'nodedown', subject: S });
+      expect(row.dedupKey).to.equal(`nodedown:${S}:1000`);
+      expect(row.ip).to.equal('10.9.0.20:16127');
+      expect(new Date(row.expireAt).getTime() - new Date(row.broadcastedAt).getTime())
+        .to.equal(RECORD_LIFETIME_MS);
+    });
+
+    it('a second copy while one stands is dropped without relay — one flood per death', async () => {
+      const at = Date.now();
+      await store.handleNodeDownEvent({
+        message: { certificate: world.certificate(['j1', 'j2', 'j3', 'j4']), broadcastedAt: at },
+      });
+      const copy = await store.handleNodeDownEvent({
+        message: { certificate: world.certificate(['j2', 'j3', 'j4', 'j5']), broadcastedAt: at + 50 },
+      });
+      expect(copy).to.include({ accepted: false, rebroadcast: false, reason: 'already_standing' });
+      expect(await collection.countDocuments({ type: 'nodedown', subject: S })).to.equal(1);
+    });
+
+    it('an invalid certificate is never stored and never relayed', async () => {
+      const result = await store.handleNodeDownEvent({
+        message: { certificate: world.certificate(['j1', 'j2', 'j3']), broadcastedAt: Date.now() },
+      });
+      expect(result.rebroadcast).to.equal(false);
+      expect(await collection.countDocuments({ type: 'nodedown', subject: S })).to.equal(0);
+    });
+  });
+
+  describe('record semantics — standing, refuted, lapsed', () => {
+    it('standingCertificateFor answers while unrefuted, and the announcement clears it', async () => {
+      const at = Date.now() - 60_000;
+      await store.handleNodeDownEvent({
+        message: { certificate: world.certificate(['j1', 'j2', 'j3', 'j4']), broadcastedAt: at },
+      });
+      const standing = await store.standingCertificateFor(S);
+      expect(standing.subject).to.equal(S);
+      expect(standing.broadcastedAt).to.equal(at);
+      expect(await store.refutationFor(S)).to.equal(null);
+
+      // the subject announces: the pipeline's own apprunning row, $gte wins
+      await collection.insertOne({
+        type: 'apprunning', outpoint: S, ip: '10.9.0.20:16127', dedupKey: 'v2', broadcastedAt: new Date(at), expireAt: new Date(Date.now() + 60_000), data: { note: 'alive' },
+      });
+      expect(await store.standingCertificateFor(S)).to.equal(null);
+      const refutation = await store.refutationFor(S);
+      expect(refutation.broadcastedAt).to.equal(at); // tie goes to the announcement
+    });
+
+    it('a new death after a refutation stores a new row and stands again', async () => {
+      const at = Date.now() - 120_000;
+      await store.handleNodeDownEvent({
+        message: { certificate: world.certificate(['j1', 'j2', 'j3', 'j4']), broadcastedAt: at },
+      });
+      await collection.insertOne({
+        type: 'apprunning', outpoint: S, ip: '10.9.0.20:16127', dedupKey: 'v2', broadcastedAt: new Date(at + 10_000), expireAt: new Date(Date.now() + 60_000), data: {},
+      });
+
+      world.height = 1005;
+      const second = await store.handleNodeDownEvent({
+        message: { certificate: world.certificate(['j2', 'j3', 'j4', 'j5'], { height: 1005 }), broadcastedAt: at + 60_000 },
+      });
+      expect(second.accepted).to.equal(true);
+      expect(await collection.countDocuments({ type: 'nodedown', subject: S })).to.equal(2);
+      const standing = await store.standingCertificateFor(S);
+      expect(standing.height).to.equal(1005);
+    });
+
+    it('verifyRefutation is the $gte rule exactly', () => {
+      expect(store.verifyRefutation({ broadcastedAt: 100 }, { broadcastedAt: 100 })).to.equal(true);
+      expect(store.verifyRefutation({ broadcastedAt: 99 }, { broadcastedAt: 100 })).to.equal(false);
+      expect(store.verifyRefutation({}, { broadcastedAt: 100 })).to.equal(false);
+    });
+  });
+
+  describe('the grant-plane provider', () => {
+    it('registers the full contract and answers through it', async () => {
+      store.registerWithGrantPlane();
+      const at = Date.now() - 30_000;
+      await store.handleNodeDownEvent({
+        message: { certificate: world.certificate(['j1', 'j2', 'j3', 'j4']), broadcastedAt: at },
+      });
+      const standing = await downCertificates.standingCertificateFor(S);
+      expect(standing.subject).to.equal(S);
+      const { certificate: verify } = downCertificates.verifiers();
+      expect(verify(standing).valid).to.equal(true);
+    });
+  });
+});
