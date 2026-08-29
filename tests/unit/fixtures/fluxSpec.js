@@ -39,8 +39,7 @@ let cached = null;
  * @returns {Promise<object>} the flattened flux-spec namespace
  */
 async function loadSpecLibrary() {
-  if (cached) return cached;
-  const flux = await load();
+  const flux = cached ?? await load();
   const {
     InsecureTestCryptoProvider, InsecureLegacyTestCryptoProvider,
   } = await import('@runonflux/flux-spec-backend/testing');
@@ -49,6 +48,16 @@ async function loadSpecLibrary() {
   // object; v8's wire form is one opaque `enterprise` string, so a nonce and tag
   // returned alongside are dropped at storage and the spec comes back
   // undecryptable. The legacy provider packs them into the blob.
+  //
+  // Re-registered on EVERY call, not just the first. The library is memoised but
+  // the provider slot is global and something else overwrites it:
+  // specCutover.ensureProvidersRegistered() swaps in FluxOS's real providers the
+  // first time production code resolves an encrypted spec, and those need the
+  // benchmark channel. Registering only once meant a later file in the same
+  // mocha process inherited FluxOS's providers from an earlier file and its
+  // sealed fixtures tried to reach the network — which tests/init.js correctly
+  // fails the run over. Alphabetical order decides who poisons whom, which is
+  // not a property a suite should have.
   flux.EncryptedSpecV8.registerProvider(() => new InsecureLegacyTestCryptoProvider());
   flux.EncryptedSpecV9.registerProvider(() => new InsecureTestCryptoProvider());
   cached = flux;
