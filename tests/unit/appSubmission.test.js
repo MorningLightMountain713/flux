@@ -6,7 +6,7 @@ const proxyquire = require('proxyquire').noCallThru();
 const express = require('express');
 const request = require('supertest');
 const {
-  loadSpecLibrary, V9_SUBMISSION, V8_SUBMISSION, assertAnswers,
+  loadSpecLibrary, V9_SUBMISSION, V8_SUBMISSION, v8Spec, sealedV9Spec, assertAnswers,
 } = require('./fixtures/fluxSpec');
 
 // The spec library is real here, not stubbed — see tests/unit/fixtures/fluxSpec.js
@@ -147,7 +147,8 @@ describe('appSubmission tests', () => {
       stubs.transportHelper.openTransportEnvelope.resolves(sparse);
       stubs.parseSpec.resolves({ isEncrypted: false });
       stubs.specLibs.validateSubmissionSpec.resolves(spec);
-      const encryptedSpec = { serialize: sinon.stub().returns({ form: 'EncryptedSpecV9' }) };
+      // The real sealed form the node broadcasts, not a marker object.
+      const encryptedSpec = await sealedV9Spec({ name: V9_SUBMISSION.name });
       const sealForStorage = sinon.stub().resolves(encryptedSpec);
       stubs.specLibs.getSpecBackend.resolves({ deserializeSpec: stubs.parseSpec, sealForStorage });
 
@@ -156,7 +157,9 @@ describe('appSubmission tests', () => {
       });
 
       expect(result.isEncrypted).to.be.true;
-      expect(result.broadcastBlob).to.deep.equal({ form: 'EncryptedSpecV9' });
+      expect(result.broadcastBlob).to.deep.equal(encryptedSpec.serialize());
+      expect(result.broadcastBlob.encrypted, 'the sealed form carries ciphertext').to.be.an('object');
+      expect(result.broadcastBlob, 'and never the components').to.not.have.property('components');
       // the cleartext serialize must never become the wire form
       sinon.assert.notCalled(spec.serialize);
       sinon.assert.calledOnce(sealForStorage);
@@ -226,21 +229,21 @@ describe('appSubmission tests', () => {
 
     it('runs the entitlements gate for a legacy v8 spec without a version branch', async () => {
       appSubmission = load();
-      const spec = {
-        name: 'myapp', owner: 'owner1', version: 8, serialize: sinon.stub().returns({ form: 'v8-cleartext' }),
-      };
-      stubs.transportHelper.openTransportEnvelope.resolves({ version: 8, name: 'myapp', owner: 'owner1' });
+      const spec = await v8Spec();
+      stubs.transportHelper.openTransportEnvelope.resolves(V8_SUBMISSION);
       stubs.parseSpec.resolves({ isEncrypted: false });
       stubs.specLibs.validateSubmissionSpec.resolves(spec);
 
-      const result = await appSubmission.resolveSubmission({ version: 8, name: 'myapp', owner: 'owner1' }, {
+      const result = await appSubmission.resolveSubmission(V8_SUBMISSION, {
         timestamp: 1, type: 'fluxappregister', daemonHeight: 100,
       });
 
-      expect(result.broadcastBlob).to.deep.equal({ form: 'v8-cleartext' });
+      expect(result.broadcastBlob).to.deep.equal(spec.serialize());
       // the gate executes for v8 (proving no version branch) and no-ops: it is
       // entitlement-checked but carries no marketplace block to verify
-      sinon.assert.calledOnceWithExactly(stubs.entitlementsState.assertSpecEntitled, spec, 'owner1', 100, false);
+      sinon.assert.calledOnceWithExactly(
+        stubs.entitlementsState.assertSpecEntitled, spec, spec.owner, 100, false,
+      );
       sinon.assert.notCalled(stubs.marketplaceTemplateCache.getTemplate);
     });
 
@@ -325,10 +328,9 @@ describe('appSubmission tests', () => {
         UpdatePolicy: { assertVersionTransition },
       });
       appSubmission = load();
-      const updateSpec = {
-        name: 'myapp', owner: 'owner1', version: 8, serialize: sinon.stub().returns({ form: 'v8' }),
-      };
-      const previousSpec = { name: 'myapp', owner: 'owner1', version: 7 };
+      const updateSpec = await v8Spec();
+      const previousSpec = flux.FluxAppSpecBase.getVersionClass(7)
+        .fromSubmission({ ...V8_SUBMISSION, version: 7 });
       stubs.transportHelper.openTransportEnvelope.resolves({ version: 8 });
       stubs.parseSpec.resolves({ isEncrypted: false });
       stubs.specLibs.validateSubmissionSpec.resolves(updateSpec);
