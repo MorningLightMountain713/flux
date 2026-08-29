@@ -52,10 +52,19 @@ function appShutdownBudgetSeconds(deployment) {
 /**
  * Whether an app uses any graceful-shutdown feature (shutdown, preStop, or a port
  * drain) and therefore needs a flux-shutdownd plan + the `runonflux.shutdown.*`
- * budget labels. Keyed on FEATURE USAGE, not `isEncrypted`: a graceful-shutdown
- * app is necessarily encrypted (the spec forces it), but a secrets-only encrypted
- * app with no shutdown config must NOT get a plan, and a graceful app must always
- * get one. Reads the same getters `buildShutdownPlan` consumes, so they can't drift.
+ * budget labels. Keyed on FEATURE USAGE, not `isEncrypted`, and the reason is
+ * narrower than this comment used to claim.
+ *
+ * `shutdown` and `preStop` do NOT force encryption. flux-spec keeps two separate
+ * sets: ENCRYPTION_FORCING_FIELDS is imageAuth, secretEnvironment, telemetry and
+ * content, while shutdown/preStop/backendTls/mesh sit in ARCANE_REQUIRING_FIELDS,
+ * which constrains PLACEMENT. A cleartext v9 spec carrying a graceful shutdown
+ * builds perfectly well, so "necessarily encrypted" was never true.
+ *
+ * Feature usage is still the right key, for the reason that always held: a
+ * secrets-only encrypted app with no shutdown config must NOT get a plan, and a
+ * graceful app must always get one, encrypted or not. Reads the same getters
+ * `buildShutdownPlan` consumes, so they can't drift.
  *
  * @param {object} deployment - a DeploymentSpec
  * @returns {boolean}
