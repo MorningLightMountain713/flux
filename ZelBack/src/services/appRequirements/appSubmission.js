@@ -170,8 +170,7 @@ async function resolveSubmission(appSpecification, {
   // check instead of failing it. A guard against a tampered envelope has to
   // fail closed.
   if (contentHash) {
-    const cleartext = spec.spec || spec;
-    if (cleartext.contentHash() !== contentHash) {
+    if (spec.contentHash() !== contentHash) {
       const err = new Error('contentHash does not match submitted spec');
       err.code = 'DECRYPT_FAILED';
       throw err;
@@ -183,9 +182,14 @@ async function resolveSubmission(appSpecification, {
   // Feature entitlements + marketplace-template gate. Total across versions:
   // a v1-v8 spec exposes no gated features and carries no marketplace block,
   // so both calls are a no-op for legacy specs — no version branch needed.
-  const cleartextSpec = spec.spec || spec;
-  await entitlementsState.assertSpecEntitled(cleartextSpec, spec.owner, daemonHeight, isEncrypted);
-  await assertMatchesMarketplaceTemplate(cleartextSpec);
+  //
+  // `spec` directly, not `spec.spec || spec`. A decrypted spec is a
+  // DecryptedCanonicalSpec that delegates toCanonical/matchesTemplate/marketplace,
+  // so the wrapper answers everything both gates ask. Unwrapping discarded the
+  // type guarantee the wrapper exists to hold, and made every caller responsible
+  // for knowing which half of the `||` applied.
+  await entitlementsState.assertSpecEntitled(spec, spec.owner, daemonHeight, isEncrypted);
+  await assertMatchesMarketplaceTemplate(spec);
 
   // Wire form for broadcast/storage; never cleartext for encrypted apps
   let broadcastBlob;
