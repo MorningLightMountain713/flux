@@ -122,14 +122,35 @@ function callerHost(req) {
 }
 
 /**
- * The current generation for a held key: the newest owner-signed record on
- * the event plane as this node has synced it, 0 when the owner has never
- * re-rolled. What every held ask's named generation is judged against.
+ * The current generation for a held key — the newest owner-signed record on
+ * the event plane as this node has synced it, 0 with no record — and the
+ * chain height the record names, the retirement moment of the world it
+ * replaced.
  */
 async function heldGeneration(key) {
   const slash = key.indexOf('/');
   const record = await messageStore.getGrantGenerationRecord(key.slice(0, slash), key.slice(slash + 1));
-  return record?.data?.generation ?? 0;
+  return {
+    generation: record?.data?.generation ?? 0,
+    height: record?.data?.height ?? null,
+  };
+}
+
+/**
+ * Blocks a re-rolled generation drains before its committee first serves —
+ * sized so the old world's rows are provably dead first:
+ *
+ *   first serve of generation G  >=  R + drainBlocks
+ *
+ * where R is the record's named height and drainBlocks must cover, at block
+ * cadence, the old committee's view-staleness allowance (the serve gate's
+ * chainStaleAfterMs) plus one full term TTL plus the lock-delay. The
+ * operator hatch's precondition — the human stops the app before re-rolling
+ * — is what bounds an old cell the record never reaches: with no grantee
+ * renewing, its rows lapse within one TTL regardless.
+ */
+function generationDrainBlocks() {
+  return config.fluxapps.quorumGrantGenerationDrainBlocks ?? 20;
 }
 
 function bad(code, message) {
@@ -294,8 +315,19 @@ async function selfOnCommittee(key, mode, fingerprint, generation, carriedChain,
   }
 
   const current = await heldGeneration(key);
-  if (generation !== current) {
-    return { member: false, code: 409, reason: `ask names generation ${generation}, current is ${current}` };
+  if (generation !== current.generation) {
+    return { member: false, code: 409, reason: `ask names generation ${generation}, current is ${current.generation}` };
+  }
+  if (current.generation >= 1 && current.height !== null) {
+    const height = daemonServiceMiscRpcs.isDaemonSynced()?.data?.height ?? 0;
+    const drainUntil = current.height + generationDrainBlocks();
+    if (height < drainUntil) {
+      return {
+        member: false,
+        code: 409,
+        reason: `generation ${current.generation} is draining until height ${drainUntil}`,
+      };
+    }
   }
 
   const walkKey = rosterOverlay.walkKeyFor(key, generation);

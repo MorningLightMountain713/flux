@@ -1080,4 +1080,34 @@ describe('quorumGrant grantorController', () => {
       expect(res.statusCode).to.equal(200);
     });
   });
+
+  describe('the generation retirement drain', () => {
+    it('a re-rolled generation may not serve until the old world\'s grants are provably dead', async () => {
+      messageStore.getGrantGenerationRecord.resolves({
+        data: { generation: 1, height: 95 },
+      });
+      daemonServiceMiscRpcs.isDaemonSynced.returns({
+        status: 'success', data: { synced: true, height: 100, header: 100 },
+      });
+
+      const draining = fakeRes();
+      await grantorController.probe(fakeReq(signedAsk('probe', { generation: 1 })), draining);
+      expect(draining.statusCode).to.equal(409);
+      expect(draining.body.data.message).to.match(/draining/);
+
+      daemonServiceMiscRpcs.isDaemonSynced.returns({
+        status: 'success', data: { synced: true, height: 115, header: 115 },
+      });
+      const served = fakeRes();
+      await grantorController.probe(fakeReq(signedAsk('probe', { generation: 1 })), served);
+      expect(served.statusCode).to.equal(200);
+    });
+
+    it('generation zero never drains — there is no old world to outlive', async () => {
+      const res = fakeRes();
+      await grantorController.probe(fakeReq(signedAsk('probe')), res);
+      expect(res.statusCode).to.equal(200);
+    });
+  });
+
 });
