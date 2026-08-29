@@ -11,6 +11,18 @@ const operationRegistry = require('../../ZelBack/src/services/utils/operationReg
 // Real registry singleton for the same reason: the janitor and the test must
 // agree on which playground sessions are live.
 const playgroundSessionRegistry = require('../../ZelBack/src/services/appPlayground/playgroundSessionRegistry');
+const {
+  loadSpecLibrary, v8Spec, v9Spec, instantiatedSpec, assertAnswers,
+} = require('./fixtures/fluxSpec');
+
+// The spec library is real here, not stubbed - see tests/unit/fixtures/fluxSpec.js
+// for why. Every registry and installed row below is a real InstantiatedSpec, so
+// the expiry sweep runs the LIBRARY's rule (v9: registeredAt + ttl against the
+// tip block time; v1-v8: the block height, with the PON fork's 4x) rather than a
+// hand-written `isExpired: () => true` that can only ever agree with itself.
+// What stays stubbed is I/O: mongo through appsRepository/registryManager,
+// docker through dockerService/appQueryService, and the uninstaller.
+let flux;
 
 describe('appJanitor tests', () => {
   let appJanitor;
@@ -23,6 +35,46 @@ describe('appJanitor tests', () => {
   let appQueryServiceStub;
   let appDockerNetworkStub;
   let appUninstallerStub;
+
+  // What registryManager.getScannedHeight() reports below. v1-v8 expiry is
+  // measured against THIS, never against wall-clock time.
+  const SCANNED_HEIGHT = 1000000;
+  // V9_SUBMISSION's ttl is 30 days, so a row registered at this timestamp
+  // (2025-07-04) is long past it against wall-clock time.
+  const LONG_EXPIRED_AT = 1751628800;
+
+  before(async function loadLibrary() {
+    // The first fromSubmission compiles the ajv schemas.
+    this.timeout(30000);
+    flux = await loadSpecLibrary();
+  });
+
+  /**
+   * A real global-registry row: an InstantiatedSpec, which is what
+   * appsRepository.listGlobalAppInfo() resolves. Its isExpired(tipBlockTime,
+   * currentHeight) adapts the two numbers appJanitor has into the
+   * {state},{clock} pair the inner spec wants - the adaptation the sweep
+   * depends on and a literal cannot have.
+   */
+  async function v9Row(name, { registeredAt = LONG_EXPIRED_AT, height = 2500000 } = {}) {
+    return instantiatedSpec(await v9Spec({ name }), { registeredAt, height });
+  }
+
+  /** A real v1-v8 registry row, which expires by HEIGHT. */
+  async function v8Row(name, { height }) {
+    return instantiatedSpec(await v8Spec({ name }), { height });
+  }
+
+  /**
+   * A real installed-app row as appQueryService.installedApps() returns it:
+   * the SERIALIZED form of the stored InstantiatedSpec, since that endpoint
+   * maps `app.serialize()` over the repository's rows. The janitor matches
+   * docker containers against `row.name`, so what serialize() actually emits
+   * is the thing under test, not a literal that agrees by construction.
+   */
+  async function installedRow(name) {
+    return (await v9Row(name, { registeredAt: Math.floor(Date.now() / 1000) })).serialize();
+  }
 
   const container = (name, labels = null) => ({
     Names: [name],
@@ -67,7 +119,7 @@ describe('appJanitor tests', () => {
       reapOrphanedContentManifests: sinon.stub().resolves({ reaped: 0, orphans: [] }),
     };
     registryManagerStub = {
-      getScannedHeight: sinon.stub().resolves(1000000),
+      getScannedHeight: sinon.stub().resolves(SCANNED_HEIGHT),
     };
     appQueryServiceStub = {
       listAllApps: sinon.stub().resolves({ status: 'success', data: [] }),
@@ -111,7 +163,10 @@ describe('appJanitor tests', () => {
     it('resolves the app from the runonflux.app label, not the container name', async () => {
       appQueryServiceStub.listAllApps.resolves({
         status: 'success',
-        data: [container('/fluxweb_misleading', { 'io.runonflux.app': 'labelapp' })],
+        // The label KEY is a flux-spec contract that the janitor reads out of the
+        // library, so the fixture takes it from the same place - a hardcoded
+        // 'io.runonflux.app' would survive a rename and quietly stop matching.
+        data: [container('/fluxweb_misleading', { [flux.LABEL_KEYS.APP]: 'labelapp' })],
       });
 
       await appJanitor.sweepDockerOrphans();
@@ -134,9 +189,11 @@ describe('appJanitor tests', () => {
     it('leaves apps with an installed row alone', async () => {
       appQueryServiceStub.listAllApps.resolves({
         status: 'success',
-        data: [container('/fluxweb_owned', { 'io.runonflux.app': 'owned' })],
+        data: [container('/fluxweb_owned', { [flux.LABEL_KEYS.APP]: 'owned' })],
       });
-      appQueryServiceStub.installedApps.resolves({ status: 'success', data: [{ name: 'owned' }] });
+      // A real serialized InstantiatedSpec, so the name the janitor matches on is
+      // the one serialize() actually emits.
+      appQueryServiceStub.installedApps.resolves({ status: 'success', data: [await installedRow('owned')] });
 
       const result = await appJanitor.sweepDockerOrphans();
 
@@ -148,8 +205,8 @@ describe('appJanitor tests', () => {
       appQueryServiceStub.listAllApps.resolves({
         status: 'success',
         data: [
-          container('/fluxweb_located', { 'io.runonflux.app': 'located' }),
-          container('/fluxweb_unlocated', { 'io.runonflux.app': 'unlocated' }),
+          container('/fluxweb_located', { [flux.LABEL_KEYS.APP]: 'located' }),
+          container('/fluxweb_unlocated', { [flux.LABEL_KEYS.APP]: 'unlocated' }),
         ],
       });
       appsRepositoryStub.appLocationFromEvents.callsFake(async ({ appname }) => (appname === 'located' ? [{ name: appname }] : []));
@@ -176,10 +233,14 @@ describe('appJanitor tests', () => {
   });
 
   describe('sweepRegistryExpiry', () => {
-    const spec = (name, expired) => ({ name, isExpired: () => expired });
-
     it('drops expired global rows with their error records and reaps manifests', async () => {
-      appsRepositoryStub.listGlobalAppInfo.resolves([spec('deadapp', true), spec('liveapp', false)]);
+      // Neither verdict is asserted onto the row: `deadapp` was registered 30+
+      // days of ttl ago and `liveapp` was registered now, and the library
+      // decides what that means.
+      appsRepositoryStub.listGlobalAppInfo.resolves([
+        await v9Row('deadapp', { registeredAt: LONG_EXPIRED_AT }),
+        await v9Row('liveapp', { registeredAt: Math.floor(Date.now() / 1000) }),
+      ]);
       appsRepositoryStub.reapOrphanedContentManifests.resolves({ reaped: 2, orphans: ['x', 'y'] });
 
       const result = await appJanitor.sweepRegistryExpiry();
@@ -189,8 +250,60 @@ describe('appJanitor tests', () => {
       expect(result).to.deep.equal({ expired: 1, manifestsReaped: 2 });
     });
 
+    it('expires a v1-v8 row by block height, not by wall-clock time', async () => {
+      // The pre-v9 rule is `currentHeight >= height + expire` (V8_SUBMISSION's
+      // expire is 88000). Both rows below carry the SAME stale registeredAt, so
+      // a sweep that measured them the v9 way would expire both.
+      appsRepositoryStub.listGlobalAppInfo.resolves([
+        await v8Row('deadapp', { height: SCANNED_HEIGHT - 88000 - 1 }),
+        await v8Row('liveapp', { height: SCANNED_HEIGHT - 88000 + 1 }),
+      ]);
+
+      const result = await appJanitor.sweepRegistryExpiry();
+
+      sinon.assert.calledOnceWithExactly(appsRepositoryStub.removeGlobalAppInfo, 'deadapp');
+      expect(result.expired).to.equal(1);
+    });
+
+    it('does not expire a v9 row on height - its clock is the tip block time', async () => {
+      // Registered at a height whose v8 lease ran out long ago, and freshly
+      // registered in time. The version, not the caller, picks the rule.
+      appsRepositoryStub.listGlobalAppInfo.resolves([
+        await v9Row('liveapp', { registeredAt: Math.floor(Date.now() / 1000), height: 100000 }),
+      ]);
+
+      const result = await appJanitor.sweepRegistryExpiry();
+
+      expect(result.expired).to.equal(0);
+      expect(appsRepositoryStub.removeGlobalAppInfo.called).to.be.false;
+    });
+
+    it('asks each row for its own verdict, with the wall clock and the scanned height', async () => {
+      // listGlobalAppInfo stays stubbed, so nothing else proves the rows it hands
+      // back can answer what the sweep asks of them, nor that the sweep passes
+      // the two numbers in the order InstantiatedSpec.isExpired declares them
+      // (tipBlockTime, currentHeight). Swap them and every v1-v8 row on the node
+      // is measured against a unix timestamp.
+      const isExpired = sinon.spy(flux.InstantiatedSpec.prototype, 'isExpired');
+      const row = await v9Row('deadapp', { registeredAt: LONG_EXPIRED_AT });
+      appsRepositoryStub.listGlobalAppInfo.resolves([row]);
+
+      const before = Math.floor(Date.now() / 1000);
+      await appJanitor.sweepRegistryExpiry();
+
+      expect(isExpired.callCount, 'one verdict per row').to.equal(1);
+      const [tipBlockTime, currentHeight] = isExpired.firstCall.args;
+      expect(tipBlockTime).to.be.at.least(before);
+      expect(currentHeight).to.equal(SCANNED_HEIGHT);
+
+      const [handed] = await appsRepositoryStub.listGlobalAppInfo.firstCall.returnValue;
+      expect(handed.name, 'and the sweep removes rows by this').to.equal('deadapp');
+      // Last, because assertAnswers invokes the member it is checking.
+      assertAnswers(handed, ['isExpired']);
+    });
+
     it('never uninstalls anything - expired local installs are the reconciler\'s', async () => {
-      appsRepositoryStub.listGlobalAppInfo.resolves([spec('deadapp', true)]);
+      appsRepositoryStub.listGlobalAppInfo.resolves([await v9Row('deadapp', { registeredAt: LONG_EXPIRED_AT })]);
 
       await appJanitor.sweepRegistryExpiry();
 
@@ -221,7 +334,7 @@ describe('appJanitor tests', () => {
     it('runs while an installed app sits stopped - ownership decides, not run state', async () => {
       // The old guard skipped the whole sweep whenever any installed component
       // was down, which on a real node meant it never ran at all.
-      appQueryServiceStub.installedApps.resolves({ status: 'success', data: [{ name: 'stoppedapp' }] });
+      appQueryServiceStub.installedApps.resolves({ status: 'success', data: [await installedRow('stoppedapp')] });
       appQueryServiceStub.listAllApps.resolves({
         status: 'success', data: [{ ...container('/fluxweb_stoppedapp'), State: 'exited' }],
       });
@@ -237,7 +350,7 @@ describe('appJanitor tests', () => {
 
     it('hands the installed set to the network reap, so ownership is what decides', async () => {
       appQueryServiceStub.installedApps.resolves({
-        status: 'success', data: [{ name: 'liveapp' }, { name: 'stoppedapp' }],
+        status: 'success', data: [await installedRow('liveapp'), await installedRow('stoppedapp')],
       });
       appDockerNetworkStub.removeUnownedAppNetworks.resolves({ removed: ['goneapp'], unidentified: 0 });
 
@@ -253,7 +366,7 @@ describe('appJanitor tests', () => {
     // installed apps and nothing else - a live session no longer contributes a
     // name to defend, because there is no longer a name to defend.
     it('protects only installed apps, and never names a live session', async () => {
-      appQueryServiceStub.installedApps.resolves({ status: 'success', data: [{ name: 'liveapp' }] });
+      appQueryServiceStub.installedApps.resolves({ status: 'success', data: [await installedRow('liveapp')] });
       playgroundSessionRegistry.add({ sessionId: 'op_1', appName: 'guestapp' });
 
       await appJanitor.sweepDockerDebris();
@@ -266,7 +379,10 @@ describe('appJanitor tests', () => {
   describe('playground containers are not app debris', () => {
     const playgroundContainer = (name, sessionId) => ({
       Names: [name],
-      Labels: { 'io.runonflux.app': 'guestapp', 'io.runonflux.playground': sessionId },
+      Labels: {
+        [flux.LABEL_KEYS.APP]: 'guestapp',
+        [flux.LABEL_KEYS.PLAYGROUND_SESSION]: sessionId,
+      },
     });
 
     // The orphan sweep removes containers with no installed-app row by running a
@@ -302,7 +418,7 @@ describe('appJanitor tests', () => {
         status: 'success',
         data: [
           playgroundContainer('/fluxweb_guestapp', 'op_1'),
-          container('/fluxweb_realghost', { 'io.runonflux.app': 'realghost' }),
+          container('/fluxweb_realghost', { [flux.LABEL_KEYS.APP]: 'realghost' }),
         ],
       });
 
