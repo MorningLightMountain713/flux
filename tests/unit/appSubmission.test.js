@@ -5,22 +5,109 @@ const sinon = require('sinon');
 const proxyquire = require('proxyquire').noCallThru();
 const express = require('express');
 const request = require('supertest');
+// `load` is already the proxyquire loader in this file's scope.
+const { load: loadFluxSpec } = require('@runonflux/flux-spec-cjs');
+
+// The spec library is NOT stubbed here, and that is the point.
+//
+// It is pure, deterministic and in-process: ~2.4s once to load and compile its
+// schemas, then ~1.5ms per spec. Stubbing bought nothing and cost correctness.
+// A hand-written double is always a SUBSET of the real class, and production
+// code then gets written to the subset — this file's own v8 double gave its
+// inner spec only `serialize` and `version`, so appSubmission grew
+// `spec.spec || spec` to work around a gap that does not exist in the real
+// DecryptedCanonicalSpec, which has delegated contentHash all along.
+//
+// What stays stubbed is I/O: the daemon RPCs, the repository, the benchmark
+// channel behind transportHelper, and FluxOS's own height-activation policy.
+let flux;
+
+// A real, minimal v9 submission. Ordinary test data — deliberately defined here
+// rather than read from flux-spec's fixtures, which are not published and would
+// stop resolving the day the package is installed from the registry.
+const V9_SUBMISSION = {
+  version: 9,
+  name: 'myapp',
+  description: 'submission under test',
+  owner: '16dNCFf7nR3nx5iwn2RQMBw6KcJXkE3JC1',
+  instances: 3,
+  ttl: 2592000,
+  components: {
+    web: {
+      name: 'web',
+      description: 'nginx',
+      image: 'nginx:latest',
+      cpu: 0.5,
+      memory: 300,
+      rootFsGb: 2,
+      persistentStorage: {
+        sizeGb: 5,
+        mounts: { '/usr/share/nginx/html': { source: 'html', destination: '/usr/share/nginx/html' } },
+      },
+      ports: { http: { containerPort: 80, hostPort: 31000 } },
+    },
+  },
+  contacts: { email: ['ops@example.com'] },
+};
+
+// What a marketplace template stores: a v9 spec body with no owner and no
+// contacts, which the gate completes from the deployed spec before comparing.
+const TEMPLATE_BODY = (() => {
+  const { owner, contacts, name, ...rest } = V9_SUBMISSION;
+  return rest;
+})();
+// A real cleartext v8 submission, sealed by the test into an enterprise blob.
+const V8_SUBMISSION = {
+  version: 8,
+  name: 'myapp',
+  description: 'legacy submission under test',
+  owner: '19z6SjrVrWqBTLiCXWLRjcu9ydnzWNz3UD',
+  compose: [{
+    name: 'web',
+    description: 'web',
+    repotag: 'nginx:latest',
+    ports: [31443],
+    domains: [''],
+    environmentParameters: [],
+    commands: [],
+    containerPorts: [443],
+    containerData: '/tmp',
+    cpu: 0.1,
+    ram: 100,
+    hdd: 1,
+    repoauth: '',
+  }],
+  instances: 3,
+  contacts: [],
+  geolocation: [],
+  expire: 88000,
+  nodes: [],
+  staticip: false,
+};
+
+const TEMPLATE_ID = '3f2a1b4c-5d6e-4f70-8192-a3b4c5d6e7f8';
+const UNKNOWN_CONFIG_ID = '00000000-1111-4222-8333-444444444444';
+const CONFIG_ID = '9e8d7c6b-5a49-4382-9170-6f5e4d3c2b1a';
 
 describe('appSubmission tests', () => {
   let appSubmission;
   let stubs;
 
-  // Builds a cleartext v9 spec instance shape (the thing validateSubmissionSpec returns).
+  before(async function loadSpecLibrary() {
+    // First fromSubmission compiles the ajv schemas.
+    this.timeout(30000);
+    flux = await loadFluxSpec();
+    const { InsecureTestCryptoProvider } = await import('@runonflux/flux-spec-backend/testing');
+    const provider = () => new InsecureTestCryptoProvider();
+    flux.EncryptedSpecV8.registerProvider(provider);
+    flux.EncryptedSpecV9.registerProvider(provider);
+  });
+
+  /** A real FluxAppSpecV9, with serialize spied so a test can assert it was never called. */
   function v9Spec(overrides = {}) {
-    return {
-      name: 'myapp',
-      owner: 'owner1',
-      version: 9,
-      serialize: sinon.stub().returns({ form: 'cleartext-v9' }),
-      toCanonical: sinon.stub().returns({ canonical: true }),
-      contentHash: sinon.stub().returns('HASH123'),
-      ...overrides,
-    };
+    const spec = flux.FluxAppSpecV9.fromSubmission({ ...V9_SUBMISSION, ...overrides });
+    sinon.spy(spec, 'serialize');
+    return spec;
   }
 
   function load() {
@@ -61,15 +148,21 @@ describe('appSubmission tests', () => {
         resolveInstantiatedSpec: sinon.stub().callsFake((row) => Promise.resolve(row?.spec ?? null)),
       },
       specLibs: {
-        validateSubmissionSpec: sinon.stub(),
-        getSpec: sinon.stub().resolves({ FluxAppSpecV9: { fromSubmission: sinon.stub().returns({ templateSpec: true }) } }),
+        // Real library behind FluxOS's own wrappers. assertVersionActivated stays
+        // stubbed because it is FluxOS policy about fork heights, not spec shape.
+        validateSubmissionSpec: sinon.stub().callsFake(async (blob) => (
+          flux.FluxAppSpecBase.getVersionClass(blob.version).fromSubmission(blob)
+        )),
+        getSpec: sinon.stub().callsFake(async () => flux),
         getSpecBackend: sinon.stub(),
         assertUpdateInvariants: sinon.stub().resolves(),
         assertVersionActivated: sinon.stub(),
       },
       imageArchitectureValidator: { verifyImageRegistryAndArchitectures: sinon.stub().resolves() },
       entitlementsState: { assertSpecEntitled: sinon.stub().resolves() },
-      marketplaceTemplateCache: { getTemplate: sinon.stub().resolves({ spec: { version: 9 }, userConfigurable: [] }) },
+      marketplaceTemplateCache: {
+        getTemplate: sinon.stub().resolves({ spec: TEMPLATE_BODY, userConfigurable: [] }),
+      },
       registryManager: { checkApplicationRegistrationNameConflicts: sinon.stub().resolves() },
       daemonServiceMiscRpcs: { isDaemonSynced: sinon.stub().returns({ data: { synced: true, height: 100 } }) },
       appsRepository: { getGlobalAppInfo: sinon.stub().resolves(null) },
@@ -94,14 +187,17 @@ describe('appSubmission tests', () => {
       stubs.specLibs.validateSubmissionSpec.resolves(spec);
 
       const result = await appSubmission.resolveSubmission(submission, {
-        contentHash: 'HASH123', timestamp: 1, type: 'fluxappregister', daemonHeight: 100,
+        contentHash: spec.contentHash(), timestamp: 1, type: 'fluxappregister', daemonHeight: 100,
       });
 
       expect(result.isEncrypted).to.be.false;
       // v9 cleartext is gated and not backend-encrypted: the wire form is the
       // spec's own serialization (the stubbed backend has no sealForStorage,
       // so reaching it would throw).
-      expect(result.broadcastBlob).to.deep.equal({ form: 'cleartext-v9' });
+      expect(result.broadcastBlob).to.deep.equal(spec.serialize());
+      expect(result.broadcastBlob.components, 'a cleartext app broadcasts its components')
+        .to.have.property('web');
+      expect(result.broadcastBlob).to.not.have.property('encrypted');
       sinon.assert.calledOnce(stubs.entitlementsState.assertSpecEntitled);
     });
 
@@ -120,7 +216,7 @@ describe('appSubmission tests', () => {
       stubs.specLibs.getSpecBackend.resolves({ deserializeSpec: stubs.parseSpec, sealForStorage });
 
       const result = await appSubmission.resolveSubmission(submission, {
-        contentHash: 'HASH123', timestamp: 1, type: 'fluxappregister', daemonHeight: 100,
+        contentHash: spec.contentHash(), timestamp: 1, type: 'fluxappregister', daemonHeight: 100,
       });
 
       expect(result.isEncrypted).to.be.true;
@@ -133,24 +229,17 @@ describe('appSubmission tests', () => {
 
     it('decrypts a v8 enterprise blob, validates the inner spec, and keeps the encrypted wire form', async () => {
       appSubmission = load();
-      // The wrapper models the real one: validateContents applies the rules
-      // without producing a blob, and the inner spec has no wire form at all.
-      const validateContents = sinon.stub();
-      const innerSerialize = sinon.stub().throws(new Error('a decrypted spec has no wire form'));
-      const decrypted = {
-        spec: { serialize: innerSerialize, version: 8 },
-        version: 8,
-        validateContents,
-        name: 'myapp',
-        owner: 'owner1',
-      };
-      const wireSpec = {
-        isEncrypted: true,
-        createProvider: sinon.stub().resolves({ p: 1 }),
-        decrypt: sinon.stub().resolves(decrypted),
-        serialize: sinon.stub().returns({ form: 'v8-enterprise-blob' }),
-      };
-      const submission = { version: 8, name: 'myapp' };
+      // A REAL sealed v8, decrypted by the real classes through the registered
+      // provider. The double this replaced gave its inner spec only `serialize`
+      // and `version`, and appSubmission grew `spec.spec || spec` to cope with a
+      // wrapper shaped like that — a shape the real DecryptedCanonicalSpec has
+      // never had.
+      const cleartext = flux.FluxAppSpecV8.fromSubmission(V8_SUBMISSION);
+      const wireSpec = await flux.EncryptedSpecV8.fromSpec(
+        cleartext, await flux.EncryptedSpecV8.createProviderFor(cleartext.name, cleartext.owner),
+      );
+      const validateContents = sinon.spy(flux.DecryptedCanonicalSpec.prototype, 'validateContents');
+      const submission = wireSpec.serialize();
       stubs.transportHelper.openTransportEnvelope.resolves(submission);
       stubs.parseSpec.resolves(wireSpec);
 
@@ -159,17 +248,31 @@ describe('appSubmission tests', () => {
       });
 
       expect(result.isEncrypted).to.be.true;
-      expect(result.broadcastBlob).to.deep.equal({ form: 'v8-enterprise-blob' });
-      sinon.assert.calledOnce(wireSpec.decrypt);
+      // The submitted blob IS the stored form for v8 — the owner sealed it, so
+      // the node re-broadcasts those exact bytes rather than resealing.
+      expect(result.broadcastBlob).to.deep.equal(submission);
+      expect(result.broadcastBlob.enterprise, 'the ciphertext is the wire form')
+        .to.be.a('string').and.not.equal('');
+      expect(result.broadcastBlob.compose, 'cleartext components never reach the wire')
+        .to.deep.equal([]);
       // Submission rules applied through the wrapper, and the height gate
       // separately — the node owns enforcement heights, flux-spec does not.
       sinon.assert.calledWith(validateContents, { purpose: 'submission' });
       sinon.assert.calledWith(stubs.specLibs.assertVersionActivated, 8, 100);
-      // and nothing serialized the decrypted contents on the way
-      sinon.assert.notCalled(innerSerialize);
+      // A decrypted spec has no wire form at all; the real class enforces that.
+      expect(() => result.spec.serialize()).to.throw();
       // the entitlements gate runs for every version now (no version branch); v8
       // carries no gated features, so it is a no-op rather than skipped
       sinon.assert.calledOnce(stubs.entitlementsState.assertSpecEntitled);
+
+      // Stubbing a collaborator hides whether what we hand it is usable. The
+      // gate calls toCanonical() on whatever arrives, and what arrives here is a
+      // DecryptedCanonicalSpec — so assert it can answer, or a delegation could
+      // disappear from flux-spec with this suite still green. It did, and this
+      // suite was.
+      const [gated] = stubs.entitlementsState.assertSpecEntitled.firstCall.args;
+      expect(gated.toCanonical(), 'the entitlements gate cannot read what it was given')
+        .to.be.an('object').with.property('version', 8);
     });
 
     it('runs the entitlements gate for a legacy v8 spec without a version branch', async () => {
@@ -194,7 +297,8 @@ describe('appSubmission tests', () => {
 
     it('rejects when the signed contentHash does not match the decrypted content', async () => {
       appSubmission = load();
-      const spec = v9Spec({ contentHash: sinon.stub().returns('ACTUAL') });
+      // A real spec computes a real hash; the envelope claims a different one.
+      const spec = v9Spec();
       stubs.transportHelper.openTransportEnvelope.resolves({ version: 9 });
       stubs.parseSpec.resolves({ isEncrypted: false });
       stubs.specLibs.validateSubmissionSpec.resolves(spec);
@@ -219,7 +323,7 @@ describe('appSubmission tests', () => {
       stubs.entitlementsState.assertSpecEntitled.rejects(denial);
 
       try {
-        await appSubmission.resolveSubmission({ version: 9 }, { contentHash: 'HASH123', daemonHeight: 100 });
+        await appSubmission.resolveSubmission({ version: 9 }, { daemonHeight: 100 });
         expect.fail('should have thrown');
       } catch (err) {
         expect(err.code).to.equal('FEATURE_NOT_ENTITLED');
@@ -239,7 +343,7 @@ describe('appSubmission tests', () => {
       stubs.specLibs.assertUpdateInvariants.rejects(lockErr);
 
       try {
-        await appSubmission.validateAppUpdate({ version: 9 }, { contentHash: 'HASH123' });
+        await appSubmission.validateAppUpdate({ version: 9 }, {});
         expect.fail('should have thrown');
       } catch (err) {
         expect(err.message).to.include('registration-locked');
@@ -256,7 +360,7 @@ describe('appSubmission tests', () => {
       stubs.appsRepository.getGlobalAppInfo.resolves(null);
 
       try {
-        await appSubmission.validateAppUpdate({ version: 9 }, { contentHash: 'HASH123' });
+        await appSubmission.validateAppUpdate({ version: 9 }, {});
         expect.fail('should have thrown');
       } catch (err) {
         expect(err.message).to.include('does not exist and cannot be updated');
@@ -294,12 +398,14 @@ describe('appSubmission tests', () => {
   });
 
   describe('marketplace template verification', () => {
+    // A real spec carrying a real marketplace block. Only the COMPARISON is
+    // stubbed, and on the instance — these tests are about how appSubmission
+    // reacts to a match or a mismatch, not about flux-spec's matching rules.
+    // Stubbing the method on a real object keeps the member set honest.
     function marketplaceSpec(matchesResult) {
-      return v9Spec({
-        marketplace: { templateId: 'uuid-1', templateVersion: 2 },
-        matchesTemplate: sinon.stub().returns(matchesResult),
-        toCanonical: sinon.stub().returns({ name: 'myapp', owner: 'owner1', contacts: { email: ['a@b.co'] } }),
-      });
+      const spec = v9Spec({ marketplace: { templateId: TEMPLATE_ID, templateVersion: 2 } });
+      sinon.stub(spec, 'matchesTemplate').returns(matchesResult);
+      return spec;
     }
 
     async function submit(spec, submission = { version: 9, name: 'myapp', owner: 'owner1' }) {
@@ -308,14 +414,14 @@ describe('appSubmission tests', () => {
       stubs.parseSpec.resolves({ isEncrypted: false });
       stubs.specLibs.validateSubmissionSpec.resolves(spec);
       return appSubmission.resolveSubmission(submission, {
-        contentHash: 'HASH123', timestamp: 1, type: 'fluxappregister', daemonHeight: 100,
+        contentHash: spec.contentHash(), timestamp: 1, type: 'fluxappregister', daemonHeight: 100,
       });
     }
 
     it('accepts a marketplace app whose spec matches the template', async () => {
       const spec = marketplaceSpec({ matches: true, mismatches: [] });
       const result = await submit(spec);
-      sinon.assert.calledWith(stubs.marketplaceTemplateCache.getTemplate, 'uuid-1', 2);
+      sinon.assert.calledWith(stubs.marketplaceTemplateCache.getTemplate, TEMPLATE_ID, 2);
       sinon.assert.calledOnce(spec.matchesTemplate);
       expect(result.spec).to.equal(spec);
     });
@@ -331,7 +437,7 @@ describe('appSubmission tests', () => {
 
     it('rejects (retry) when the template is unavailable', async () => {
       const spec = marketplaceSpec({ matches: true, mismatches: [] });
-      stubs.marketplaceTemplateCache.getTemplate = sinon.stub().rejects(new Error('Marketplace template uuid-1 v2 not available, try again later'));
+      stubs.marketplaceTemplateCache.getTemplate = sinon.stub().rejects(new Error(`Marketplace template ${TEMPLATE_ID} v2 not available, try again later`));
       let err;
       try { await submit(spec); } catch (e) { err = e; }
       expect(err).to.exist;
@@ -347,20 +453,20 @@ describe('appSubmission tests', () => {
     describe('tiered templates (configs)', () => {
       function tieredTemplate(extra = {}) {
         return {
-          spec: { version: 9 },
+          spec: TEMPLATE_BODY,
           useConfig: true,
-          configs: [{ id: 'tier-heavy', overrides: { instances: 2 } }],
+          configs: [{ id: CONFIG_ID, overrides: { instances: 2 } }],
           userConfigurable: [],
           ...extra,
         };
       }
 
       function configuredSpec(configId, matchesResult) {
-        return v9Spec({
-          marketplace: { templateId: 'uuid-1', templateVersion: 2, configId },
-          matchesTemplate: sinon.stub().returns(matchesResult),
-          toCanonical: sinon.stub().returns({ name: 'myapp', owner: 'owner1', contacts: { email: ['a@b.co'] } }),
+        const spec = v9Spec({
+          marketplace: { templateId: TEMPLATE_ID, templateVersion: 2, configId },
         });
+        sinon.stub(spec, 'matchesTemplate').returns(matchesResult);
+        return spec;
       }
 
       it('verifies against the merged base+override spec for the deployed tier', async () => {
@@ -369,10 +475,10 @@ describe('appSubmission tests', () => {
         stubs.specLibs.getSpec = sinon.stub().resolves({ FluxAppSpecV9: { fromSubmission }, deepMerge });
         stubs.marketplaceTemplateCache.getTemplate = sinon.stub().resolves(tieredTemplate());
 
-        const spec = configuredSpec('tier-heavy', { matches: true, mismatches: [] });
+        const spec = configuredSpec(CONFIG_ID, { matches: true, mismatches: [] });
         const result = await submit(spec);
 
-        sinon.assert.calledWith(deepMerge, { version: 9 }, { instances: 2 });
+        sinon.assert.calledWith(deepMerge, TEMPLATE_BODY, { instances: 2 });
         sinon.assert.calledOnce(spec.matchesTemplate);
         expect(result.spec).to.equal(spec);
       });
@@ -389,17 +495,17 @@ describe('appSubmission tests', () => {
 
       it('hard-rejects an unknown configId', async () => {
         stubs.marketplaceTemplateCache.getTemplate = sinon.stub().resolves(tieredTemplate());
-        const spec = configuredSpec('tier-nope', { matches: true, mismatches: [] });
+        const spec = configuredSpec(UNKNOWN_CONFIG_ID, { matches: true, mismatches: [] });
         let err;
         try { await submit(spec); } catch (e) { err = e; }
         expect(err).to.exist;
         expect(err.code).to.equal('TEMPLATE_MISMATCH');
-        expect(err.message).to.match(/no config tier-nope/);
+        expect(err.message).to.include(UNKNOWN_CONFIG_ID);
       });
 
       it('hard-rejects a configId on a non-tiered template', async () => {
         stubs.marketplaceTemplateCache.getTemplate = sinon.stub().resolves({ spec: { version: 9 }, useConfig: false, userConfigurable: [] });
-        const spec = configuredSpec('tier-heavy', { matches: true, mismatches: [] });
+        const spec = configuredSpec(CONFIG_ID, { matches: true, mismatches: [] });
         let err;
         try { await submit(spec); } catch (e) { err = e; }
         expect(err).to.exist;
