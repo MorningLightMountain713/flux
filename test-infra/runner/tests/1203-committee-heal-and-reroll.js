@@ -8,9 +8,9 @@ import { buildSeedableSyncthingApp } from '../framework/seed-helper.js';
 import { pushImage } from '../framework/registry-helper.js';
 import { setSynced } from '../framework/syncthing-control.js';
 import { pauseHostContainer, unpauseHostContainer } from '../framework/container.js';
-import { waitFor, waitForAppInstalled, waitForReconcileActuated } from '../framework/wait.js';
+import { waitFor, waitForAppInstalled, waitForReconcileActuated, assertNoEvent } from '../framework/wait.js';
 import { dbClient } from '../framework/db-client.js';
-import { getState } from '../framework/daemon-control.js';
+import { getState, advanceBlock } from '../framework/daemon-control.js';
 import { authenticate, signBtcMessage } from '../auth.js';
 import { appOwnerKey } from '../framework/keys.js';
 
@@ -102,6 +102,11 @@ describe('the committee heals its dark seat, and the owner re-deals the walk', f
           quorumGrantDrainMs: 90000,
           quorumGrantMinHolderAgeMs: 0,
           quorumGrantPursuitIntervalMs: 10000,
+          // Small but real: the re-roll test asserts the retirement drain
+          // HOLDS while blocks stand still and lifts when they pass — a
+          // zero here would turn the only re-roll suite into one that never
+          // exercises the drain at all.
+          quorumGrantGenerationDrainBlocks: 3,
           // The plane governs only once the network's enforced floor guarantees
           // every node carries it. The harness pins the requirement to the floor
           // already in force so the gate is live under test; production pins it
@@ -306,6 +311,25 @@ describe('the committee heals its dark seat, and the owner re-deals the walk', f
       (d) => d.appName === name && d.role === 'master' && d.generation === 1,
       120000,
     )));
+
+    // THE RETIREMENT DRAIN: the record names the current height, so the
+    // fresh committee may not serve until three blocks pass — and with the
+    // ticker off, none do. The master's pursuit fires every ~10s into
+    // draining refusals; nothing may be granted at generation 1 while the
+    // chain stands still. Inside the master's own demotion arithmetic
+    // (deadline ~TTL+slack after the old world stops renewing), so the app
+    // still never changes hands.
+    await Promise.all(HOLDERS.map((i) => assertNoEvent(
+      env.clients[i],
+      'quorumGrant:granted',
+      (d) => d.key === `${name}/master` && d.generation === 1,
+      40000,
+    )));
+    // The passage of blocks is the one thing that lifts the drain — the
+    // discriminator between "draining" and any other slowness.
+    await advanceBlock();
+    await advanceBlock();
+    await advanceBlock();
     await Promise.any(HOLDERS.map((i) => env.clients[i].waitForEvent(
       'quorumGrant:granted',
       (d) => d.key === `${name}/master` && d.generation === 1,
