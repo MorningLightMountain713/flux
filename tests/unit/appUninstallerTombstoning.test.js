@@ -4,29 +4,120 @@ const { expect } = require('chai');
 const sinon = require('sinon');
 const proxyquire = require('proxyquire').noCallThru();
 const serviceHelper = require('../../ZelBack/src/services/serviceHelper');
+const { appsFolder } = require('../../ZelBack/src/services/utils/appConstants');
+// The REAL shutdown planner appUninstaller resolves (it is not stubbed below), so
+// the budget stamped on the durable record can be compared against the library's
+// own answer rather than a number copied into the fixture.
+const shutdownPlan = require('../../ZelBack/src/services/appLifecycle/shutdownPlan');
+const {
+  loadSpecLibrary, V9_SUBMISSION, v9Spec, instantiatedSpec, assertAnswers,
+} = require('./fixtures/fluxSpec');
 
 // Tombstoning teardown: the removal prelude records a durable owed-teardown doc +
 // condemns + deletes the local row, and the deferred worker (runTeardown) stops,
 // removes, tears down the host state, and clears the record LAST. The order is
 // load-bearing (see the adversarial-gate checklist).
+//
+// The spec library is real here, not stubbed — see tests/unit/fixtures/fluxSpec.js
+// for why. The prelude reads an InstantiatedSpec (owner, identity, placement) and
+// projects the durable record off a DeploymentSpec, so those are the two real
+// classes below; what stays stubbed is I/O and FluxOS policy (docker, mongo, the
+// firewall, flux-shutdownd, the registry).
 
 describe('appUninstaller tombstoning teardown', () => {
   let appUninstaller;
   let stubs;
+  let flux;
+  // The app being removed: the real InstantiatedSpec its local row hydrates to,
+  // and the real DeploymentSpec the deployment layer projects from it.
+  let installedSpec;
+  let deployment;
+  // The globally-registered row for the same app, pinned to this node.
+  let globalPinnedSpec;
 
-  // a fake DeploymentSpec component + deployment
-  const makeComponent = (name) => ({
-    identifier: `${name}_app`, name, appName: 'app', hostPorts: [8080], image: `${name}:latest`,
+  // This node's socket address, as fluxNetworkHelper reports it below and as the
+  // pinned placement names it.
+  const LOCAL_SOCKET = '198.18.0.1:16127';
+
+  before(async function loadLibrary() {
+    // The first fromSubmission compiles the ajv schemas.
+    this.timeout(30000);
+    flux = await loadSpecLibrary();
   });
-  const makeDeployment = (componentNames) => {
-    const comps = componentNames.map(makeComponent);
-    return {
-      componentEntries: () => comps.map((c) => [c.name, c]),
-      getComponent: (n) => comps.find((c) => c.name === n) || null,
-    };
+
+  /**
+   * A real FluxAppSpecV9 with the named components. Two components may not share
+   * a hostPort, so each gets its own; everything else comes from the shared
+   * submission fixture.
+   */
+  const v9App = (appName, components, specOverrides = {}) => {
+    let hostPort = 31000;
+    const built = {};
+    for (const [name, over] of Object.entries(components)) {
+      hostPort += 1;
+      built[name] = {
+        ...V9_SUBMISSION.components.web,
+        name,
+        ports: { http: { containerPort: 80, hostPort } },
+        ...over,
+      };
+    }
+    return v9Spec({ name: appName, components: built, ...specOverrides });
   };
 
-  beforeEach(() => {
+  /** A real DeploymentSpec — the class deploymentProvider hands every caller. */
+  const deploymentFor = (spec, opts = {}) => flux.DeploymentSpec.fromSpec(
+    spec, appsFolder, { replica: null, ...opts },
+  );
+
+  /** The real DeploymentComponent of the single-component app under test. */
+  const onlyComponent = () => deployment.componentEntries()[0][1];
+
+  /**
+   * The durable owed-teardown record exactly as the prelude writes it — every
+   * field projected off the real DeploymentSpec / InstantiatedSpec rather than
+   * spelled out, so an identifier, network name, host-port set or image the
+   * library would not produce cannot appear in a fixture.
+   */
+  const teardownDocFor = (dep, overrides = {}) => ({
+    key: dep.appName,
+    name: dep.appName,
+    replica: dep.replica,
+    networkName: dep.networkName,
+    forceKill: false,
+    owner: installedSpec.owner,
+    identity: installedSpec.identity,
+    reason: null,
+    shutdownBudgetSeconds: shutdownPlan.appShutdownBudgetSeconds(dep),
+    createdAt: Date.now(),
+    attempts: 0,
+    components: dep.componentEntries({ reverse: true }).map(([, c]) => ({
+      identifier: c.identifier,
+      // dockerService.getAppIdentifier is the identity stub below, as in production
+      // for an already-prefixed identifier.
+      appId: c.identifier,
+      componentName: c.name,
+      label: c.name === dep.appName ? dep.appName : `component ${c.name} of ${dep.appName}`,
+      ports: c.hostPorts,
+      image: c.image,
+    })),
+    ...overrides,
+  });
+
+  beforeEach(async () => {
+    const spec = await v9App('app', { web: {} });
+    installedSpec = await instantiatedSpec(spec);
+    deployment = deploymentFor(spec);
+    // The GLOBAL registry row the prelude reads for the spawn-throttle clear: a
+    // real InstantiatedSpec whose real Placement targets this node's socket
+    // address, so hasTargets() and isPinnedTo() are the library's own answers.
+    // Legacy specs answered both of these wrongly, which is why nothing here
+    // stands in for a Placement.
+    globalPinnedSpec = await instantiatedSpec(
+      await v9App('app', { web: {} }, { placement: { targetIps: [LOCAL_SOCKET] } }),
+      { hash: 'p'.repeat(64) },
+    );
+
     // The deferred worker's host teardown (umount, rm -rf) goes through
     // serviceHelper.runCommand; stub it so the tests neither spawn real sudo
     // subprocesses nor stall the timing-sensitive lease-release assertion.
@@ -61,14 +152,17 @@ describe('appUninstaller tombstoning teardown', () => {
         getTeardown: sinon.stub().resolves(null),
         bumpAttempts: sinon.stub().resolves(),
       },
+      // Hands back the REAL DeploymentSpec built for the installed app — the same
+      // class the real provider projects. Identifiers, host ports, images, the
+      // network name and the shutdown budget are all the library's answers.
       deploymentProvider: {
-        getInstalledDeployment: sinon.stub().resolves(makeDeployment(['web'])),
-        buildDeployment: sinon.stub().resolves(makeDeployment(['web'])),
+        getInstalledDeployment: sinon.stub().callsFake(async () => deployment),
+        buildDeployment: sinon.stub().callsFake(async () => deployment),
         localIdentities: sinon.stub().resolves([null]),
       },
       appsRepository: {
-        getInstalledApp: sinon.stub().resolves({ name: 'app', owner: 'owner1' }),
-        getGlobalAppInfo: sinon.stub().resolves(null),
+        getInstalledApp: sinon.stub().callsFake(async () => installedSpec),
+        getGlobalAppInfo: sinon.stub().callsFake(async () => globalPinnedSpec),
         getAppMessage: sinon.stub().resolves(null),
         existsInstalledApp: sinon.stub().resolves(false),
         // Rows are identity-keyed: the removal drops THIS identity's row, then
@@ -94,7 +188,13 @@ describe('appUninstaller tombstoning teardown', () => {
       fluxCommunicationMessagesSender: { broadcastMessageToAll: sinon.stub().resolves() },
       appVolumeService: {},
       syncthingMonitorHelpers: { removeSyncthingFolder: sinon.stub().resolves() },
-      volumeService: { getVolumeFilePath: sinon.stub().resolves(null) },
+      volumeService: {
+        // Mounted, so the teardown's unmount is actually attempted — otherwise the
+        // "volume NOT unmounted under a live container" guard below can only ever
+        // pass, whatever the production code does.
+        isPathMounted: sinon.stub().resolves(true),
+        getVolumeFilePath: sinon.stub().resolves(null),
+      },
       appSwapPoolService: { reconcile: sinon.stub().resolves() },
       telemetrySinkCache: { deleteSink: sinon.stub(), hasAnyTelemetryApps: sinon.stub().returns(false) },
       telemetryConfigService: { remove: sinon.stub().resolves() },
@@ -111,7 +211,12 @@ describe('appUninstaller tombstoning teardown', () => {
         isHeld: sinon.stub().returns(false), get: sinon.stub().returns(null), acquire: sinon.stub().returns('tok'), release: sinon.stub(),
       },
       globalState: {
-        runningAppsCache: new Map(), receiveOnlySyncthingAppsCache: new Map(), abortInstall: sinon.stub().returns(false),
+        runningAppsCache: new Map(),
+        receiveOnlySyncthingAppsCache: new Map(),
+        // Seeded with the pinned app's real content hash so the prelude's
+        // spawn-throttle clear has something to clear.
+        trySpawningGlobalAppCache: new Map([[globalPinnedSpec.hash, Date.now()]]),
+        abortInstall: sinon.stub().returns(false),
       },
       fluxEventBus: { publish: sinon.stub() },
       reconcilerQueue: { enqueueComponent: sinon.stub() },
@@ -152,21 +257,18 @@ describe('appUninstaller tombstoning teardown', () => {
   afterEach(() => sinon.restore());
 
   describe('runTeardown (the deferred worker)', () => {
-    const doc = () => ({
-      key: 'app',
-      name: 'app',
-      networkName: 'fluxDockerNetwork_app',
-      forceKill: false,
-      owner: 'owner1',
-      components: [{
-        identifier: 'web_app', appId: 'web_app', componentName: 'web', label: 'app', ports: [8080], image: 'web:latest',
-      }],
-    });
+    // The durable record the prelude persisted, projected off the real deployment.
+    const doc = (overrides = {}) => teardownDocFor(deployment, overrides);
 
     it('stops, then removes, then drops runtime state LAST, then clears the durable record', async () => {
       const { appDockerStop, appDockerRemove } = stubs.dockerService;
       await appUninstaller.runTeardown(doc());
-      expect(appDockerStop.calledOnce, 'graceful stop').to.be.true;
+      // Addressed by the identifier the real DeploymentSpec minted, not a string
+      // the fixture invented.
+      expect(
+        appDockerStop.calledOnceWith(onlyComponent().identifier),
+        'graceful stop of the real identifier',
+      ).to.be.true;
       expect(stubs.dockerService.appDockerKill.called, 'no kill on a graceful teardown').to.be.false;
       expect(appDockerRemove.calledOnce, 'container removed').to.be.true;
       expect(stubs.appsRuntimeState.remove.calledOnce, 'runtime state dropped').to.be.true;
@@ -175,6 +277,13 @@ describe('appUninstaller tombstoning teardown', () => {
       expect(appDockerStop.calledBefore(appDockerRemove)).to.be.true;
       expect(appDockerRemove.calledBefore(stubs.appsRuntimeState.remove)).to.be.true;
       expect(stubs.appsRuntimeState.remove.calledBefore(stubs.pendingTeardownStore.clearTeardown)).to.be.true;
+      // Host storage IS reclaimed once the container is confirmed gone — the
+      // positive half of the "never unmount under a live container" guard below,
+      // without which that guard could pass on a teardown that never unmounts at all.
+      expect(
+        serviceHelper.runCommand.getCalls().some((c) => c.args[0] === 'umount'),
+        'volume unmounted once the container is confirmed gone',
+      ).to.be.true;
     });
 
     it('removes the whole-app docker network (force-disconnecting any endpoints first)', async () => {
@@ -183,8 +292,10 @@ describe('appUninstaller tombstoning teardown', () => {
       // consumers, and a plain removal would leak the network on "active endpoints".
       // the record carries the resolved network name; removal takes it as the option,
       // so a teardown that outlives the row still takes the right network with it
+      // the network name is the real DeploymentSpec's, derived from the app
+      // identity — not a string spelled out here
       expect(stubs.dockerService.forceRemoveFluxAppDockerNetwork.calledOnceWith(
-        null, { networkName: 'fluxDockerNetwork_app' },
+        null, { networkName: deployment.networkName },
       )).to.be.true;
       expect(stubs.dockerService.removeFluxAppDockerNetwork.called).to.be.false;
     });
@@ -193,6 +304,25 @@ describe('appUninstaller tombstoning teardown', () => {
       stubs.appsRuntimeState.remove.resolves(false);
       await appUninstaller.runTeardown(doc());
       expect(stubs.pendingTeardownStore.clearTeardown.called).to.be.false;
+    });
+
+    // The docstring on teardownComponentCore promises "the host residue is
+    // retried by the owed record, never by holding the component hostage". It
+    // was not: `removed` was set to true BEFORE the destructive cleanup, so a
+    // throw from unmount / appdata / crontab / volume-file removal still
+    // reported removed, the caller saw no survivor, and clearTeardown dropped
+    // the record. The mount, the appdata directory, the crontab entry and the
+    // FLUXFSVOL file were then never retried — not by the reconciler, not at
+    // boot.
+    it('keeps the durable record when host cleanup fails after the container is gone', async () => {
+      stubs.volumeService.isPathMounted.rejects(new Error('/proc/self/mountinfo unreadable'));
+
+      await appUninstaller.runTeardown(doc());
+
+      expect(stubs.pendingTeardownStore.clearTeardown.called, 'residue is still on disk').to.be.false;
+      // And NOT by holding the component hostage: its runtime state still drops,
+      // which is the half the docstring gets right.
+      expect(stubs.appsRuntimeState.remove.called, 'the component is not held hostage').to.be.true;
     });
 
     it('never reclaims host storage (nor clears the record) while the container survives the remove', async () => {
@@ -208,8 +338,7 @@ describe('appUninstaller tombstoning teardown', () => {
     });
 
     it('force teardown kills + force-removes the container and force-removes the network', async () => {
-      const forced = { ...doc(), forceKill: true };
-      await appUninstaller.runTeardown(forced);
+      await appUninstaller.runTeardown(doc({ forceKill: true }));
       expect(stubs.dockerService.appDockerKill.calledOnce).to.be.true;
       expect(stubs.dockerService.appDockerStop.called).to.be.false;
       expect(stubs.dockerService.appDockerForceRemove.calledOnce).to.be.true;
@@ -252,7 +381,7 @@ describe('appUninstaller tombstoning teardown', () => {
       expect(stubs.pendingTeardownStore.clearTeardown.called, 'kept owed for boot recovery').to.be.false;
       // and it hands the still-owed teardown to the reconciler to converge (retry with
       // backoff), rather than abandoning it until the next boot.
-      expect(stubs.reconcilerQueue.enqueueComponent.calledWith('web_app'), 'enqueued the survivor for the reconciler to re-drive').to.be.true;
+      expect(stubs.reconcilerQueue.enqueueComponent.calledWith(onlyComponent().identifier), 'enqueued the survivor for the reconciler to re-drive').to.be.true;
     });
   });
 
@@ -261,7 +390,7 @@ describe('appUninstaller tombstoning teardown', () => {
       const res = await appUninstaller.uninstallApplication('app', { broadcastRemoval: true });
       expect(res.status).to.equal(appUninstaller.UninstallStatus.REMOVED);
       expect(stubs.pendingTeardownStore.writeTeardown.calledOnce, 'doc written').to.be.true;
-      expect(stubs.appsRuntimeState.setCondemned.calledWith('web_app', true), 'component condemned').to.be.true;
+      expect(stubs.appsRuntimeState.setCondemned.calledWith(onlyComponent().identifier, true), 'component condemned').to.be.true;
       expect(stubs.appsRepository.removeInstalledApp.calledOnce, 'local row deleted').to.be.true;
       // ORDER (load-bearing): durable doc persisted BEFORE the row is deleted
       expect(stubs.pendingTeardownStore.writeTeardown.calledBefore(stubs.appsRepository.removeInstalledApp)).to.be.true;
@@ -269,6 +398,72 @@ describe('appUninstaller tombstoning teardown', () => {
       expect(stubs.dockerService.appDockerRemove.called).to.be.true;
       // the prelude aborts any in-flight install of the same app (cancel-vs-install)
       expect(stubs.globalState.abortInstall.calledWith('app'), 'in-flight install aborted').to.be.true;
+
+      // The record the prelude persisted is projected off the REAL deployment: the
+      // component identifiers, host ports and images are the library's, and the
+      // stop budget is the real shutdown planner's answer over that deployment.
+      // Nothing here is a number written twice.
+      const [written] = stubs.pendingTeardownStore.writeTeardown.firstCall.args;
+      expect(written).to.deep.include({
+        key: 'app',
+        name: 'app',
+        networkName: deployment.networkName,
+        owner: installedSpec.owner,
+        identity: installedSpec.identity,
+        shutdownBudgetSeconds: shutdownPlan.appShutdownBudgetSeconds(deployment),
+      });
+      expect(written.components.map((c) => c.identifier))
+        .to.deep.equal(deployment.componentEntries({ reverse: true }).map(([, c]) => c.identifier));
+      expect(written.components.map((c) => c.ports))
+        .to.deep.equal(deployment.componentEntries({ reverse: true }).map(([, c]) => c.hostPorts));
+
+      // The two collaborators that stay stubbed and receive the spec: the real
+      // deploymentProvider reads name/identity off the row and resolves its
+      // cleartext through isEncrypted/spec, so the object handed over must answer
+      // all four — and must actually project to the same deployment.
+      const [handedForIdentities] = stubs.deploymentProvider.localIdentities.firstCall.args;
+      const [handedForBuild, buildOpts] = stubs.deploymentProvider.buildDeployment.firstCall.args;
+      for (const handed of [handedForIdentities, handedForBuild]) {
+        expect(handed.name).to.equal('app');
+        expect(handed.identity).to.equal(null);
+        expect(handed.isEncrypted).to.equal(false);
+        expect(handed.spec, 'the row must carry a resolvable spec').to.be.an('object');
+      }
+      // buildDeployment is contractually given an explicit identity — the real one
+      // throws without it.
+      expect(buildOpts).to.have.property('replica', null);
+      // The real provider resolves the row's cleartext and then asks its Placement
+      // which replicas this node runs — placement.mode() is the first thing
+      // resolveLocalReplicas calls, so the resolved spec has to answer it.
+      assertAnswers(handedForBuild.spec.placement, ['mode', 'hasTargets']);
+      expect(
+        deploymentFor(handedForBuild.spec, { identity: handedForBuild.identity })
+          .componentEntries().map(([, c]) => c.identifier),
+        'what was handed over really does project to this deployment',
+      ).to.deep.equal(deployment.componentEntries().map(([, c]) => c.identifier));
+
+      // The spawn-throttle clear ran against a REAL Placement: hasTargets() and
+      // isPinnedTo() answered for a v9 candidate placement naming this node's
+      // socket address, so the throttle entry for its content hash is gone.
+      expect(
+        stubs.globalState.trySpawningGlobalAppCache.has(globalPinnedSpec.hash),
+        'throttle cleared for an app whose real placement pins it here',
+      ).to.be.false;
+    });
+
+    it('leaves the spawn throttle alone when the real placement does not target this node', async () => {
+      // Same code path, opposite real answer: an untargeted placement — mode
+      // 'none', hasTargets() false — must not read as pinned here.
+      globalPinnedSpec = await instantiatedSpec(await v9App('app', { web: {} }), { hash: 'q'.repeat(64) });
+      stubs.globalState.trySpawningGlobalAppCache = new Map([[globalPinnedSpec.hash, Date.now()]]);
+
+      await appUninstaller.uninstallApplication('app', { broadcastRemoval: true });
+
+      expect(globalPinnedSpec.placement.hasTargets(), 'the real placement has no targets').to.be.false;
+      expect(
+        stubs.globalState.trySpawningGlobalAppCache.has(globalPinnedSpec.hash),
+        'an unpinned app keeps its throttle',
+      ).to.be.true;
     });
 
     it('fails CLOSED: a doc-persist failure aborts the removal WITHOUT deleting the local row', async () => {
@@ -308,37 +503,37 @@ describe('appUninstaller tombstoning teardown', () => {
   });
 
   describe('recoverOwedTeardowns (boot recovery)', () => {
-    const owedDoc = {
-      key: 'app', name: 'app', networkName: 'fluxDockerNetwork_app', forceKill: false, owner: 'o', components: [{ identifier: 'web_app', appId: 'web_app', label: 'app', ports: [], image: null }],
-    };
+    // The record a crashed removal left behind — the same projection off the real
+    // deployment the prelude writes.
+    const owedDoc = () => teardownDocFor(deployment);
 
     it('re-condemns owed components then hands them to the reconciler to converge (not a one-shot boot drive)', async () => {
-      stubs.pendingTeardownStore.readAllTeardowns.resolves([owedDoc]);
+      stubs.pendingTeardownStore.readAllTeardowns.resolves([owedDoc()]);
       stubs.appsRepository.existsInstalledIdentity.resolves(false);
       await appUninstaller.recoverOwedTeardowns();
-      expect(stubs.appsRuntimeState.setCondemned.calledWith('web_app', true)).to.be.true;
+      expect(stubs.appsRuntimeState.setCondemned.calledWith(onlyComponent().identifier, true)).to.be.true;
       // Boot recovery no longer drives the teardown directly (a partial would be abandoned
       // until the NEXT boot); it enqueues the components so the reconciler converges them.
-      expect(stubs.reconcilerQueue.enqueueComponent.calledWith('web_app'), 'enqueued for the reconciler to drive').to.be.true;
+      expect(stubs.reconcilerQueue.enqueueComponent.calledWith(onlyComponent().identifier), 'enqueued for the reconciler to drive').to.be.true;
       await new Promise((r) => { setImmediate(r); });
       expect(stubs.dockerService.appDockerStop.called, 'no direct boot-time teardown drive').to.be.false;
     });
 
     it('un-condemns + drops the record without teardown when the app is re-installed (row is back)', async () => {
-      stubs.pendingTeardownStore.readAllTeardowns.resolves([owedDoc]);
+      stubs.pendingTeardownStore.readAllTeardowns.resolves([owedDoc()]);
       stubs.appsRepository.existsInstalledIdentity.resolves(true); // re-installed
       await appUninstaller.recoverOwedTeardowns();
-      expect(stubs.appsRuntimeState.setCondemned.calledWith('web_app', false), 'un-condemned').to.be.true;
+      expect(stubs.appsRuntimeState.setCondemned.calledWith(onlyComponent().identifier, false), 'un-condemned').to.be.true;
       expect(stubs.pendingTeardownStore.clearTeardown.calledOnceWith('app')).to.be.true;
       await new Promise((r) => { setImmediate(r); });
       expect(stubs.dockerService.appDockerRemove.called, 'never tear down a re-installed app').to.be.false;
     });
 
     it('defers (no teardown, keeps the record) when the install-row read fails transiently', async () => {
-      stubs.pendingTeardownStore.readAllTeardowns.resolves([owedDoc]);
+      stubs.pendingTeardownStore.readAllTeardowns.resolves([owedDoc()]);
       stubs.appsRepository.existsInstalledIdentity.rejects(new Error('db blip'));
       await appUninstaller.recoverOwedTeardowns();
-      expect(stubs.appsRuntimeState.setCondemned.calledWith('web_app', true), 'must not condemn on a guess').to.be.false;
+      expect(stubs.appsRuntimeState.setCondemned.calledWith(onlyComponent().identifier, true), 'must not condemn on a guess').to.be.false;
       expect(stubs.pendingTeardownStore.clearTeardown.called, 'record kept for next boot').to.be.false;
       await new Promise((r) => { setImmediate(r); });
       expect(stubs.dockerService.appDockerRemove.called).to.be.false;
@@ -346,9 +541,7 @@ describe('appUninstaller tombstoning teardown', () => {
   });
 
   describe('driveOwedTeardown (the reconciler converge-to-gone actuator)', () => {
-    const owedDoc = () => ({
-      key: 'app', name: 'app', networkName: 'fluxDockerNetwork_app', forceKill: false, owner: 'o', attempts: 0, components: [{ identifier: 'web_app', appId: 'web_app', label: 'app', ports: [], image: null }],
-    });
+    const owedDoc = () => teardownDocFor(deployment);
 
     it('returns none when nothing is owed (the component is genuinely uninstalled)', async () => {
       stubs.pendingTeardownStore.getTeardown.resolves(null);
