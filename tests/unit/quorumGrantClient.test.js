@@ -105,6 +105,7 @@ describe('quorumGrant grantClient', () => {
   let witnessReplies; // host -> reply for /witness
   let clockNow;
   let readCostMs; // what each record read costs this node on its OWN clock
+  let refereeingAnswer; // record reads carry it when set; undefined = old node
 
   function clock() {
     return clockNow;
@@ -218,6 +219,7 @@ describe('quorumGrant grantClient', () => {
     witnessReplies = new Map();
     clockNow = 1_000_000;
     readCostMs = 0;
+    refereeingAnswer = undefined;
 
     sinon.stub(serviceHelper, 'axiosPost').callsFake(async (url, body) => fakePost(url, body));
     sinon.stub(serviceHelper, 'axiosGet').callsFake(async (url) => {
@@ -242,6 +244,7 @@ describe('quorumGrant grantClient', () => {
               accepted: stored?.accepted ?? null,
               remainingMs: Number.isFinite(expiresAt) ? Math.max(0, expiresAt - Date.now()) : null,
               roster: stored?.roster ?? null,
+              ...(refereeingAnswer !== undefined ? { refereeing: refereeingAnswer } : {}),
             },
           },
         };
@@ -843,6 +846,15 @@ describe('quorumGrant grantClient', () => {
       committeeHosts.forEach((host) => unreachable.add(host));
       const cut = await grantClient.witnessAnswer(KEY);
       expect(cut.quorumReachable).to.equal(false);
+    });
+
+    it('a committee that answers reads but is not refereeing counts as unreachable — a stale fleet must coast, not demote', async () => {
+      await grantClient.acquire(KEY, holderOptions());
+      // every grantor's record read says it would refuse asks (stale view or
+      // mid-resync): no takeover is possible, whatever the reads say
+      refereeingAnswer = false;
+      const answer = await grantClient.witnessAnswer(KEY);
+      expect(answer.quorumReachable).to.equal(false);
     });
 
     it('carryAsk computes the committee itself and carries verbatim', async () => {

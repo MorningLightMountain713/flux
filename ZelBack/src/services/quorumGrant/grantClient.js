@@ -1422,7 +1422,12 @@ async function witnessAnswer(key, mode = 'held') {
           grantorUrl(member, `/flux/quorumgrant/record?key=${encodeURIComponent(key)}`),
           { timeout: askTimeoutMs() },
         );
-        return response?.data?.status === 'success';
+        // A cell that answers reads but is not REFEREEING cannot seat a
+        // challenger, and counting it would talk the incumbent out of the
+        // coast exactly when the whole fleet's grantors went quiet. An
+        // absent field is an older node and counts as it always did.
+        return response?.data?.status === 'success'
+          && response.data.data?.refereeing !== false;
       } catch (error) {
         return false;
       }
