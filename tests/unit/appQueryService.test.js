@@ -5,6 +5,23 @@ const sinon = require('sinon');
 const proxyquire = require('proxyquire').noCallThru();
 // Real registry singleton - un-stubbed in proxyquire, so the module under test and the test share it.
 const operationRegistry = require('../../ZelBack/src/services/utils/operationRegistry');
+const {
+  loadSpecLibrary, V8_SUBMISSION, v8Spec, v9Spec, sealedV9Spec, instantiatedSpec, assertAnswers,
+} = require('./fixtures/fluxSpec');
+
+// The spec library is real here, not stubbed — see tests/unit/fixtures/fluxSpec.js.
+// This is the query layer over stored app state, so what appsRepository hands back
+// is what it really hands back: hydrated InstantiatedSpec objects, cleartext or
+// node-sealed. What stays stubbed is I/O and policy — mongo through dbHelper,
+// docker, the repository itself, and the message wrapper.
+//
+// The docker literals below are Docker API responses and the location/permanent
+// message literals are mongo rows; neither is a spec double, and both stay as they are.
+let flux;
+
+// A second real Flux ID, so "the last registration wins" is a comparison between two
+// real owners rather than between two placeholder strings the library would refuse.
+const OTHER_OWNER = '16dNCFf7nR3nx5iwn2RQMBw6KcJXkE3JC1';
 
 describe('appQueryService tests', () => {
   let appQueryService;
@@ -16,6 +33,12 @@ describe('appQueryService tests', () => {
   let appsRepositoryStub;
   let logStub;
   let configStub;
+
+  before(async function loadLibrary() {
+    // The first fromSubmission compiles the ajv schemas.
+    this.timeout(30000);
+    flux = await loadSpecLibrary();
+  });
 
   beforeEach(() => {
     // Config stub
@@ -122,50 +145,98 @@ describe('appQueryService tests', () => {
 
   describe('installedApps', () => {
     it('should return installed apps from database', async () => {
-      const mockApps = [
-        { name: 'app1', version: 4 },
-        { name: 'app2', version: 3 },
+      // What listInstalledApps really resolves: hydrated InstantiatedSpec objects,
+      // version-mixed the way the local collection is. installedApps maps
+      // serialize() over them, so the answer is the stored wire form, not a summary.
+      const rows = [
+        await instantiatedSpec(await v8Spec({ name: 'appone' }), { hash: 'h1', height: 100 }),
+        await instantiatedSpec(await v9Spec({ name: 'apptwo' }), { hash: 'h2', height: 200 }),
       ];
+      const expected = rows.map((row) => row.serialize());
 
-      appsRepositoryStub.listInstalledApps.resolves(mockApps.map((d) => ({ serialize: () => d })));
-      messageHelperStub.createDataMessage.returns({ status: 'success', data: mockApps });
+      appsRepositoryStub.listInstalledApps.resolves(rows);
+      messageHelperStub.createDataMessage.callsFake((data) => ({ status: 'success', data }));
 
       const result = await appQueryService.installedApps();
 
-      expect(result).to.deep.equal({ status: 'success', data: mockApps });
+      expect(result).to.deep.equal({ status: 'success', data: expected });
+      expect(result.data.map((doc) => doc.version), 'the list is version-mixed').to.deep.equal([8, 9]);
       expect(appsRepositoryStub.listInstalledApps.calledOnce).to.be.true;
-      expect(messageHelperStub.createDataMessage.calledWith(mockApps)).to.be.true;
+
+      // The repository stays stubbed, so nothing here exercises what the real one
+      // returns — assert the rows crossing that boundary answer what production
+      // calls on them.
+      rows.forEach((row) => assertAnswers(row, ['serialize']));
+
+      // messageHelper stays stubbed too, and the real one only wraps its payload for
+      // res.json. The payload is a stored row, so the real deserializer must read it
+      // straight back: this endpoint is where a peer's `/apps/installedapps` answer
+      // comes from, and a shape hydrate cannot read is a shape nobody can consume.
+      const [payload] = messageHelperStub.createDataMessage.firstCall.args;
+      payload.forEach((doc) => {
+        expect(flux.InstantiatedSpec.deserialize(doc)).to.be.instanceOf(flux.InstantiatedSpec);
+      });
+    });
+
+    // An enterprise app is stored node-sealed. The endpoint must be able to answer
+    // for it, and the answer must stay sealed.
+    it('serves a node-sealed app without leaking its cleartext', async () => {
+      const row = await instantiatedSpec(
+        await sealedV9Spec({ name: 'sealedapp' }), { hash: 'hs9', height: 900 },
+      );
+
+      appsRepositoryStub.listInstalledApps.resolves([row]);
+      messageHelperStub.createDataMessage.callsFake((data) => ({ status: 'success', data }));
+
+      const result = await appQueryService.installedApps();
+
+      const [doc] = result.data;
+      expect(doc.version).to.equal(9);
+      expect(doc).to.have.property('encrypted');
+      expect(doc, 'the cleartext component set must not be served').to.not.have.property('components');
+      // The cleartext summary survives, which is what a caller sizes the app from.
+      expect(doc.resources).to.exist;
+      expect(flux.InstantiatedSpec.deserialize(doc).spec).to.be.instanceOf(flux.EncryptedSpecV9);
+      // And the round-trip above is not vacuous: a sealed row binds its cleartext
+      // metadata into the AAD, so one extra storage field is refused outright.
+      expect(
+        () => flux.InstantiatedSpec.deserialize({ ...doc, replica: 'r1' }),
+        'a decorated sealed doc must be refused, or the round-trip proves nothing',
+      ).to.throw(/unexpected fields/);
     });
 
     it('should return installed apps with specific appname from query', async () => {
-      const mockApp = { name: 'app1', version: 4 };
+      const row = await instantiatedSpec(await v8Spec({ name: 'appone' }), { hash: 'h1', height: 100 });
       const req = {
-        params: { appname: 'app1' },
+        params: { appname: 'appone' },
         query: {},
       };
       const res = {
         json: sinon.stub(),
       };
 
-      appsRepositoryStub.listInstalledApps.resolves([mockApp].map((d) => ({ serialize: () => d })));
-      messageHelperStub.createDataMessage.returns({ status: 'success', data: [mockApp] });
+      appsRepositoryStub.listInstalledApps.resolves([row]);
+      messageHelperStub.createDataMessage.callsFake((data) => ({ status: 'success', data }));
 
       await appQueryService.installedApps(req, res);
 
       expect(res.json.calledOnce).to.be.true;
-      expect(appsRepositoryStub.listInstalledApps.calledOnce).to.be.true;
+      expect(appsRepositoryStub.listInstalledApps.firstCall.args[0])
+        .to.deep.equal({ filter: { name: 'appone' } });
+      expect(res.json.firstCall.args[0]).to.deep.equal({ status: 'success', data: [row.serialize()] });
     });
 
     it('should handle string parameter for appname', async () => {
-      const mockApp = [{ name: 'app1', version: 4 }];
+      const row = await instantiatedSpec(await v8Spec({ name: 'appone' }), { hash: 'h1', height: 100 });
 
-      appsRepositoryStub.listInstalledApps.resolves(mockApp.map((d) => ({ serialize: () => d })));
-      messageHelperStub.createDataMessage.returns({ status: 'success', data: mockApp });
+      appsRepositoryStub.listInstalledApps.resolves([row]);
+      messageHelperStub.createDataMessage.callsFake((data) => ({ status: 'success', data }));
 
-      const result = await appQueryService.installedApps('app1');
+      const result = await appQueryService.installedApps('appone');
 
-      expect(result).to.deep.equal({ status: 'success', data: mockApp });
-      expect(appsRepositoryStub.listInstalledApps.calledOnce).to.be.true;
+      expect(result).to.deep.equal({ status: 'success', data: [row.serialize()] });
+      expect(appsRepositoryStub.listInstalledApps.firstCall.args[0])
+        .to.deep.equal({ filter: { name: 'appone' } });
     });
 
     it('should return error message on database failure', async () => {
@@ -182,10 +253,11 @@ describe('appQueryService tests', () => {
     });
 
     it('should return apps data with response passed', async () => {
-      const mockApps = [
-        { name: 'app1', version: 4 },
-        { name: 'app2', version: 3 },
+      const rows = [
+        await instantiatedSpec(await v8Spec({ name: 'appone' }), { hash: 'h1', height: 100 }),
+        await instantiatedSpec(await v9Spec({ name: 'apptwo' }), { hash: 'h2', height: 200 }),
       ];
+      const expected = rows.map((row) => row.serialize());
       const res = {
         json: sinon.stub(),
       };
@@ -194,12 +266,12 @@ describe('appQueryService tests', () => {
         query: {},
       };
 
-      appsRepositoryStub.listInstalledApps.resolves(mockApps.map((d) => ({ serialize: () => d })));
-      messageHelperStub.createDataMessage.returns({ status: 'success', data: mockApps });
+      appsRepositoryStub.listInstalledApps.resolves(rows);
+      messageHelperStub.createDataMessage.callsFake((data) => ({ status: 'success', data }));
 
       await appQueryService.installedApps(req, res);
 
-      expect(res.json.calledOnceWith({ status: 'success', data: mockApps })).to.be.true;
+      expect(res.json.calledOnceWith({ status: 'success', data: expected })).to.be.true;
     });
 
     it('should return error with response passed on database failure', async () => {
@@ -428,9 +500,21 @@ describe('appQueryService tests', () => {
       const res = {
         json: sinon.stub(),
       };
+      // Permanent messages are mongo rows, but the spec nested in one is the real
+      // wire form. The owner the endpoint reads is the spec's own owner, and the
+      // placeholder these rows used to carry is not an address at all:
+      expect(
+        () => flux.FluxAppSpecV8.fromSubmission({ ...V8_SUBMISSION, owner: 'owner1' }),
+        'the real class refuses a placeholder owner',
+      ).to.throw(/Flux ID/);
+
+      const firstRegistration = await v8Spec({ name: 'testapp' });
+      const lastRegistration = await v8Spec({ name: 'testapp', owner: OTHER_OWNER });
+      expect(firstRegistration.owner).to.not.equal(lastRegistration.owner);
+
       const mockMessages = [
-        { appSpecifications: { owner: 'owner1', name: 'testapp' }, height: 100 },
-        { appSpecifications: { owner: 'owner2', name: 'testapp' }, height: 200 },
+        { appSpecifications: firstRegistration.serialize(), height: 100, type: 'fluxappregister' },
+        { appSpecifications: lastRegistration.serialize(), height: 200, type: 'fluxappregister' },
       ];
       const mockDb = {
         db: sinon.stub().returns('appsDatabase'),
@@ -438,12 +522,15 @@ describe('appQueryService tests', () => {
 
       dbHelperStub.databaseConnection.returns(mockDb);
       dbHelperStub.findInDatabase.resolves(mockMessages);
-      messageHelperStub.createDataMessage.returns({ status: 'success', data: 'owner2' });
+      messageHelperStub.createDataMessage.callsFake((data) => ({ status: 'success', data }));
 
       await appQueryService.getApplicationOriginalOwner(req, res);
 
       expect(res.json.calledOnce).to.be.true;
       expect(dbHelperStub.findInDatabase.calledOnce).to.be.true;
+      // The newest registration wins, and it is a real address.
+      expect(res.json.firstCall.args[0])
+        .to.deep.equal({ status: 'success', data: lastRegistration.owner });
     });
 
     it('should handle missing appname parameter', async () => {
