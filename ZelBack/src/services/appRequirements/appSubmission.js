@@ -162,9 +162,16 @@ async function resolveSubmission(appSpecification, {
 
   // The signed contentHash (v9) must match the actual decrypted content, so a
   // tampered envelope can't slip different bytes past the signature.
+  //
+  // Every spec answers contentHash() now — a sealed container returns null,
+  // because the hash is over the cleartext it is hiding. This used to ask
+  // `typeof cleartext.contentHash === 'function'` and SKIP the comparison when
+  // the method was absent, so anything that could not produce a hash passed the
+  // check instead of failing it. A guard against a tampered envelope has to
+  // fail closed.
   if (contentHash) {
     const cleartext = spec.spec || spec;
-    if (typeof cleartext.contentHash === 'function' && cleartext.contentHash() !== contentHash) {
+    if (cleartext.contentHash() !== contentHash) {
       const err = new Error('contentHash does not match submitted spec');
       err.code = 'DECRYPT_FAILED';
       throw err;
