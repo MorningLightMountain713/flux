@@ -208,6 +208,9 @@ class FluxPeerManager extends EventEmitter {
     this.#pendingRemoves.delete(peer.key);
     this.#schedulePeerUpdate();
     if (this.networkHealthMonitor) this.networkHealthMonitor.recordConnect();
+    // Direct emitter event: the bus below is harness observability only and
+    // never fires on a real node.
+    this.emit('peer:added', { ip, port: String(port), direction });
     fluxEventBus.publish('peers:added', { ip, port: String(port), direction, outbound: this.#outboundKeys.size, inbound: this.#inboundKeys.size, total: this.#peers.size });
     const lostAtMs = this.#lastLostAt.get(peer.key);
     if (lostAtMs !== undefined) {
@@ -274,6 +277,11 @@ class FluxPeerManager extends EventEmitter {
     });
 
     log.info(`Connection ${key} removed from peerManager (${peer.direction}, code: ${closeCode})`);
+    // Direct emitter event: the bus below is harness observability only and
+    // never fires on a real node.
+    this.emit('peer:removed', {
+      ip: peer.ip, port: peer.port, direction: peer.direction, closeCode: closeCode || null,
+    });
     fluxEventBus.publish('peers:removed', { ip: peer.ip, port: peer.port, direction: peer.direction, closeCode: closeCode || null, outbound: this.#outboundKeys.size, inbound: this.#inboundKeys.size, total: this.#peers.size });
     if (this.#aboveThreshold && this.#peers.size < this.#syncDegradedThreshold) {
       this.#aboveThreshold = false;

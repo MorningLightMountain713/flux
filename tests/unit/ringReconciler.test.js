@@ -204,6 +204,26 @@ describe('ringReconciler', () => {
     expect(reconciler.snapshot().duties['a:0']).to.equal('failed');
   });
 
+  it('a certified-down duty leaves the dial plan and a substitute covers its slot', async () => {
+    const world = makeWorld({ duties: ['a:0', 'b:0'], successors: ['s1:0'] });
+    world.inbound = 99;
+    world.held.set('addr-b:0', 'outbound');
+    const stood = new Set(['a:0']);
+    world.deps.stoodDown = (outpoint) => Promise.resolve(stood.has(outpoint));
+    reconciler = makeReconciler(world, { floor: 2 });
+    await tick();
+
+    // a is never dialed; the shortfall its absence opens is covered non-witness
+    expect(world.dials.map((d) => [d.socketAddress, d.witness]))
+      .to.deep.equal([['addr-s1:0', false]]);
+    expect(reconciler.snapshot().duties['a:0']).to.equal('stood_down');
+
+    // the subject returns (record cleared): the duty is dialed again
+    stood.clear();
+    await reconciler.schedule('cleared');
+    expect(world.dials.some((d) => d.socketAddress === 'addr-a:0' && d.witness)).to.equal(true);
+  });
+
   it('coalesces schedules while a pass runs instead of stacking them', async () => {
     const world = makeWorld({ duties: ['a:0'] });
     world.inbound = 99;

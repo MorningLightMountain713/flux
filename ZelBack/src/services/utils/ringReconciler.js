@@ -4,14 +4,14 @@ const { OUTBOUND_FLOOR, M_OWNERS } = require('./peerRings');
 
 const log = require('../../lib/log');
 
-// The rings maintenance loop: reconcile, do not discover (peering doc §3.8).
+// The rings maintenance loop: reconcile, do not discover.
 // duties(me) is a pure function of the committed list, so there is nothing to
 // search for — compare the set that should be held against the set that is,
 // and repair the difference. Event-driven: a dropped connection or a list
 // change schedules a pass; the periodic sweep is a backstop for a missed
 // event, never the mechanism.
 //
-// Floor accounting (§3.7, the rule the harness paid for): a duty counts
+// Floor accounting: a duty counts
 // toward the outbound floor while PENDING (dial in flight) or CONNECTED
 // outbound; only a dial that RESOLVED with an error discounts it. No timer
 // anywhere — the dial's own resolution is the event. A duty held as inbound
@@ -25,6 +25,9 @@ const DUTY_STATE = Object.freeze({
   PENDING: 'pending',
   CONNECTED: 'connected',
   FAILED: 'failed',
+  // The network certified this duty down: not dialed, counts for nothing,
+  // a substitute covers the slot until the subject returns.
+  STOOD_DOWN: 'stood_down',
 });
 
 class RingReconciler {
@@ -65,7 +68,7 @@ class RingReconciler {
    * @param {(socketAddress: string) => void} deps.ask request an inbound dial-back
    * @param {() => number} deps.inboundCount
    * @param {object} [options]
-   * @param {number} [options.floor] outbound floor (§3.7)
+   * @param {number} [options.floor] outbound connection floor
    * @param {number} [options.releaseMargin] hysteresis above the floor
    * @param {number} [options.askThreshold] inbound below which the jury is asked
    * @param {number} [options.sweepIntervalMs] backstop sweep cadence
@@ -79,7 +82,7 @@ class RingReconciler {
   }
 
   /** Runs the first pass immediately: a starting node's whole set is missing
-   *  at once, and the ask must fire on start, not on a timer (§3.8 req 6). */
+   *  at once, and the ask must fire on start, not on a timer. */
   start() {
     if (this.#started) return;
     this.#started = true;
@@ -122,13 +125,10 @@ class RingReconciler {
     }
   }
 
-  /** What counts toward the outbound floor: first-attempt pending dials and
-   *  connections actually labelled outbound, across duties and top-ups alike.
-   *  A WRITTEN-OFF target — one whose last dial resolved failed — counts for
-   *  nothing even while a retry is in flight: the duty is still dialled (owed
-   *  to a named node until the list says otherwise) but the floor stopped
-   *  counting on it, and only a success reinstates it. Without this a corpse's
-   *  endless retries keep it "pending" and the shortfall never fires. */
+  /** Pending dials and outbound-labelled connections, duties and top-ups
+   *  alike. A written-off target (last dial resolved failed) counts for
+   *  nothing even while a retry is in flight — only a success reinstates it,
+   *  or a corpse's retries hold the shortfall shut. */
   #outboundStanding() {
     let count = 0;
     const tally = (entry) => {
@@ -150,7 +150,9 @@ class RingReconciler {
       const entry = map.get(outpoint);
       if (!entry || entry.socketAddress !== socketAddress) return;
       entry.state = connected ? DUTY_STATE.CONNECTED : DUTY_STATE.FAILED;
-      entry.writtenOff = !connected;
+      // null = indeterminate (a dial was already in flight): retry next
+      // pass; only a resolved dial moves the write-off.
+      if (connected !== null) entry.writtenOff = !connected;
       if (!connected) this.schedule('dial-failed');
     };
     this.#deps.dial(socketAddress, { witness }).then(settle).catch(() => settle(false));
@@ -164,13 +166,21 @@ class RingReconciler {
     const duties = topology.duties(myOutpoint);
     if (duties === null) return; // not on the list — nothing is owed by or to us
 
-    // --- duties: reconcile against held PEERS, either direction (§3.0a) ---
+    // --- duties: reconcile against held PEERS, either direction ---
     const current = new Map();
-    duties.forEach((duty) => {
+    const standings = await Promise.all(duties.map(async (duty) => ({
+      duty,
+      stoodDown: this.#deps.stoodDown ? await this.#deps.stoodDown(duty.outpoint) : false,
+    })));
+    standings.forEach(({ duty, stoodDown }) => {
       const socketAddress = this.#deps.resolveOutpoint(duty.outpoint);
       if (!socketAddress) return;
       const known = this.#duties.get(duty.outpoint);
 
+      if (stoodDown) {
+        current.set(duty.outpoint, { state: DUTY_STATE.STOOD_DOWN, socketAddress, writtenOff: true });
+        return;
+      }
       if (this.#deps.isHeld(socketAddress)) {
         current.set(duty.outpoint, { state: DUTY_STATE.CONNECTED, socketAddress, writtenOff: false });
         return;
@@ -204,8 +214,8 @@ class RingReconciler {
 
     const shortfall = this.#floor - this.#outboundStanding();
     if (shortfall > 0) {
-      // A duty is never a top-up candidate whatever its state — the walk looks
-      // PAST the corpses, at the successors the duties never were.
+      // A duty is never a top-up candidate; the walk looks past failures
+      // to successors.
       const exclude = new Set([myOutpoint]);
       this.#duties.forEach((entry, outpoint) => exclude.add(outpoint));
       this.#topups.forEach((entry, outpoint) => exclude.add(outpoint));
@@ -216,7 +226,7 @@ class RingReconciler {
         this.#dialTracked(this.#topups, candidate.outpoint, socketAddress, false);
       });
     } else {
-      // Hysteretic release (§3.7): a substitute is not torn down the instant
+      // Hysteretic release: a substitute is not torn down the instant
       // the ideal returns — only what stands above floor + margin goes, so a
       // flapping duty costs one idle connection, not two swaps per cycle.
       let excess = this.#outboundStanding() - (this.#floor + this.#releaseMargin);

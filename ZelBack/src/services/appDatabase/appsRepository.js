@@ -1306,7 +1306,7 @@ function buildAppLocationPipeline({
   const base = {
     $or: [
       { type: { $in: ['apprunning', 'appremoved'] }, expireAt: { $gt: now } },
-      { type: { $in: ['sigterm', 'evicted'] } },
+      { type: { $in: ['sigterm', 'evicted', 'nodedown'] } },
     ],
   };
   if (ip) base.ip = ip;
@@ -1348,7 +1348,10 @@ function buildAppLocationPipeline({
           { $group: { _id: { ip: '$ip', name: '$data.appName' }, removedAt: { $max: '$broadcastedAt' } } },
         ],
         shutdowns: [
-          { $match: { type: { $in: ['sigterm', 'evicted'] } } },
+          // nodedown rides the same override as the others: an announcement
+          // at or after the event wins. It gets no sigterm-style grace — a
+          // quorum-attested death is not a maybe.
+          { $match: { type: { $in: ['sigterm', 'evicted', 'nodedown'] } } },
           { $addFields: { _eventAt: { $ifNull: ['$broadcastedAt', '$createdAt'] } } },
           { $sort: { _eventAt: -1 } },
           { $group: { _id: '$ip', eventAt: { $first: '$_eventAt' }, expireAt: { $first: '$expireAt' }, type: { $first: '$type' } } },

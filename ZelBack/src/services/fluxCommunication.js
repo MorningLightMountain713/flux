@@ -7,6 +7,7 @@ const WebSocket = require('ws');
 const log = require('../lib/log');
 const serviceHelper = require('./serviceHelper');
 const messageStore = require('./appMessaging/messageStore');
+const nodeDownService = require('./nodeDownService');
 const messageVerifier = require('./appMessaging/messageVerifier');
 const ingressAttestationService = require('./appMessaging/ingressAttestationService');
 const ingressAttestationSyncService = require('./appMessaging/ingressAttestationSyncService');
@@ -16,7 +17,7 @@ const fluxCommunicationMessagesSender = require('./fluxCommunicationMessagesSend
 const fluxCommunicationUtils = require('./fluxCommunicationUtils');
 const fluxNetworkHelper = require('./fluxNetworkHelper');
 const messageHelper = require('./messageHelper');
-const { peerManager, PEER_SOURCE } = require('./utils/peerState');
+const { peerManager, PEER_SOURCE, CLOSE_CODES } = require('./utils/peerState');
 const limitCounter = require('./utils/limitCounter');
 const cacheManager = require('./utils/cacheManager').default;
 const networkStateService = require('./networkStateService');
@@ -38,17 +39,12 @@ const { messageCache, wsPeerCache } = cacheManager;
 
 const testListCache = new LRUCache(LRUTest); */
 
-const { FluxPeerManager, DIRECTION, FLUX_VERSION, FLUX_CAPABILITIES } = require('./utils/FluxPeerManager');
+const { FLUX_VERSION, FLUX_CAPABILITIES } = require('./utils/FluxPeerManager');
 const { NAK_REASON, buildSyncSignatureMessage } = require('./utils/peerCodec');
 const { networkHealthMonitor } = require('./utils/NetworkHealthMonitor');
 const verifyPool = require('./utils/verifyPool');
 
 const DISCOVERY = {
-  maxOutbound: 14,
-  minUniqueOutboundIps: 9,
-  maxInbound: 12,
-  minUniqueInboundIps: 5,
-  maxIterations: 100,
   connectionDelayMs: config.fluxapps.discoveryConnectionDelayMs ?? 500,
 };
 
@@ -712,6 +708,39 @@ async function handleMasterleaseMessage(message, fromIP, port, announcer) {
 }
 
 /**
+ * A node-down certificate arriving off the wire: store on independent
+ * verification, relay only what was accepted — a forgery dies at this hop.
+ * @param {object} message Signed broadcast whose data carries the certificate.
+ * @param {string} fromIP Sender's node ip.
+ * @param {string} port Sender's node api port.
+ */
+async function handleNodeDownMessage(message, fromIP, port) {
+  try {
+    const currentTimeStamp = Date.now();
+    const timestampOK = fluxCommunicationUtils.verifyTimestampInFluxBroadcast(message, currentTimeStamp, 240000);
+    if (!timestampOK) {
+      return;
+    }
+
+    const envelope = {
+      version: message.version, timestamp: message.timestamp, pubKey: message.pubKey, signature: message.signature,
+    };
+    const result = await nodeDownService.onCertificateBroadcast(message.data, envelope);
+    if (!result.rebroadcast) return;
+
+    const syncStatus = daemonServiceMiscRpcs.isDaemonSynced();
+    const daemonHeight = syncStatus.data.height || 0;
+    if (daemonHeight >= config.messagesBroadcastRefactorStart) {
+      peerManager.broadcastHash(hash(message.data), `${fromIP}:${port}`);
+    } else {
+      fluxCommunicationMessagesSender.relay(serviceHelper.ensureString(message), `${fromIP}:${port}`);
+    }
+  } catch (error) {
+    log.error(error);
+  }
+}
+
+/**
  * Unified message dispatcher for both inbound and outbound peer connections.
  * Handles message validation, cache checking, signature verification, and message type dispatch.
  * Registered as peerManager.messageDispatcher to break circular dependencies.
@@ -811,6 +840,10 @@ async function dispatchFluxMessage(msgObj, peerSocket) {
           setImmediate(() => handleNodeSigtermMessage(msgObj, peerSocket.ip, peerSocket.port));
         } else if (msgObj.data.type === 'fluxmasterlease') {
           setImmediate(() => handleMasterleaseMessage(msgObj, peerSocket.ip, peerSocket.port, announcer));
+        } else if (msgObj.data.type === 'fluxnodedown') {
+          setImmediate(() => handleNodeDownMessage(msgObj, peerSocket.ip, peerSocket.port));
+        } else if (msgObj.data.type === 'fluxnodedownverdict') {
+          setImmediate(() => nodeDownService.onVerdictMessage(msgObj));
         } else if (msgObj.data.type === 'fluxgrantgeneration') {
           setImmediate(() => handleGrantGenerationMessage(msgObj, peerSocket.ip, peerSocket.port));
         } else if (msgObj.data.type === 'fluxappcontentmanifest') {
@@ -1147,12 +1180,27 @@ let discoveryRunning = false;
 /** @type {WeakMap<WebSocket, {ip: string, port: string, source: string}>} */
 const wsMetadata = new WeakMap();
 
+function settleOutbound(meta, connected) {
+  if (meta.settled) return;
+  meta.settled = true;
+  if (meta.onSettle) meta.onSettle(connected);
+}
+
 function onOutboundError(error) {
   const meta = wsMetadata.get(this);
   if (!meta) return;
   const key = `${meta.ip}:${meta.port}`;
   peerManager.clearPending(key);
+  peerManager.recordFailedConnection(meta.ip, meta.port);
+  settleOutbound(meta, false);
   log.error(`Outbound connection to ${key} failed: ${error.message}`);
+}
+
+function onOutboundClose() {
+  const meta = wsMetadata.get(this);
+  if (!meta || meta.settled) return;
+  peerManager.clearPending(`${meta.ip}:${meta.port}`);
+  settleOutbound(meta, false);
 }
 
 function onOutboundOpen() {
@@ -1165,6 +1213,7 @@ function onOutboundOpen() {
     remoteVersion: meta.remoteVersion,
     remoteFluxUptime: meta.remoteFluxUptime,
   });
+  settleOutbound(meta, true);
 }
 
 function onOutboundUpgrade(response) {
@@ -1185,17 +1234,28 @@ function onOutboundUpgrade(response) {
   }
 }
 
-async function initiateAndHandleConnection(connection, source = PEER_SOURCE.RANDOM) {
+async function initiateAndHandleConnection(connection, source = PEER_SOURCE.RANDOM, dialOptions = {}) {
   const ip = extractIp(connection);
   const port = extractPort(connection);
+  // onSettle reports how the dial resolved: true connected, false failed,
+  // null indeterminate (no dial was made — retry later, no evidence gained).
+  const { onSettle } = dialOptions;
   try {
     const key = `${ip}:${port}`;
-    if (peerManager.has(key) || peerManager.isPending(key)) return;
+    if (peerManager.has(key)) {
+      if (onSettle) onSettle(true);
+      return;
+    }
+    if (peerManager.isPending(key)) {
+      if (onSettle) onSettle(null);
+      return;
+    }
     peerManager.markPending(key);
     if (!myPort) {
       const localSocketAddr = await fluxNetworkHelper.getLocalSocketAddress();
       if (!localSocketAddr) {
         peerManager.clearPending(key);
+        if (onSettle) onSettle(null);
         return;
       }
       myPort = extractPort(localSocketAddr);
@@ -1237,13 +1297,17 @@ async function initiateAndHandleConnection(connection, source = PEER_SOURCE.RAND
     }
     const wsuri = `ws://${ip}:${port}/ws/flux/${myPort}`;
     const websocket = new WebSocket(wsuri, options);
-    wsMetadata.set(websocket, { ip, port, source });
+    wsMetadata.set(websocket, {
+      ip, port, source, onSettle, settled: false,
+    });
     websocket.on('error', onOutboundError);
+    websocket.on('close', onOutboundClose);
     websocket.on('upgrade', onOutboundUpgrade);
     websocket.onopen = onOutboundOpen;
   } catch (error) {
     const catchKey = `${ip}:${port}`;
     peerManager.clearPending(catchKey);
+    if (onSettle) onSettle(null);
     log.error(error);
   }
 }
@@ -1449,6 +1513,23 @@ async function addOutgoingPeer(req, res) {
 function startDiscovery() {
   if (discoveryRunning) return;
   discoveryRunning = true;
+  nodeDownService.start({
+    dial: (socketAddress, { witness } = {}) => new Promise((resolve) => {
+      initiateAndHandleConnection(
+        socketAddress,
+        witness ? PEER_SOURCE.DETERMINISTIC : PEER_SOURCE.RANDOM,
+        { onSettle: resolve },
+      );
+    }),
+    openEphemeralConnection,
+    sendSignedMessage: fluxCommunicationMessagesSender.sendSignedMessage,
+    broadcastMessageToAll: fluxCommunicationMessagesSender.broadcastMessageToAll,
+    closePeer: (socketAddress, reason) => {
+      const peer = peerManager.get(socketAddress);
+      if (peer) peer.close(CLOSE_CODES.CLOSED_OUTBOUND, reason);
+    },
+    peerManager,
+  });
   fluxDiscovery();
 }
 
@@ -1490,73 +1571,18 @@ async function fluxDiscovery() {
       throw new Error('Flux IP not detected. Flux discovery is awaiting.');
     }
 
-    const sortedNodeList = await fluxCommunicationUtils.deterministicFluxList({
-      sort: true,
-      addressOnly: true,
-    });
+    // Selection is the ring reconciler's: duties are a pure function of the
+    // committed list, so there is nothing to discover — this loop is the
+    // housekeeping backstop (reconnects, pruning, a sweep for missed events).
+    peerManager.numberOfFluxNodes = networkStateService.nodeCount();
 
-    peerManager.numberOfFluxNodes = sortedNodeList.length;
-
-    const fluxNodeIndex = sortedNodeList.findIndex((addr) => socketAddressesMatch(addr, localSocketAddr));
-    const minDeterministicOutPeers = Math.min(sortedNodeList.length, config.fluxapps.minOutgoing);
     // one line per discovery pass, and only when something changed since the
     // last pass - steady state stays out of the journal
-    const discoveryStatus = `Discovery: index ${fluxNodeIndex} of ${sortedNodeList.length} nodes, ${peerManager.outboundCount} outgoing, ${peerManager.inboundCount} incoming`;
+    const discoveryStatus = `Discovery: ${peerManager.numberOfFluxNodes} nodes, ${peerManager.outboundCount} outgoing, ${peerManager.inboundCount} incoming`;
     if (discoveryStatus !== lastDiscoveryStatus) {
       log.info(discoveryStatus);
       lastDiscoveryStatus = discoveryStatus;
     }
-    // always try to connect to deterministic nodes
-    // established deterministic outgoing connections
-    let deterministicPeerConnections = false;
-    const myIpGroup = FluxPeerManager.getIpGroup(extractIp(localSocketAddr));
-
-    // established deterministic 8 outgoing connections
-    for (let i = 1; i <= minDeterministicOutPeers; i += 1) {
-      const fixedIndex = fluxNodeIndex + i < sortedNodeList.length ? fluxNodeIndex + i : fluxNodeIndex + i - sortedNodeList.length;
-      const addr = sortedNodeList[fixedIndex];
-      const ipInc = extractIp(addr);
-      if (!ipInc || ipInc === extractIp(localSocketAddr)) {
-        // eslint-disable-next-line no-continue
-        continue;
-      }
-      const portInc = extractPort(addr);
-      if (peerManager.shouldAttemptConnection(ipInc, portInc)) {
-        deterministicPeerConnections = true;
-        initiateAndHandleConnection(addr, PEER_SOURCE.DETERMINISTIC);
-        // eslint-disable-next-line no-await-in-loop
-        await serviceHelper.delay(DISCOVERY.connectionDelayMs);
-      }
-    }
-    // established deterministic 8 incoming connections
-    for (let i = 1; i <= minDeterministicOutPeers; i += 1) {
-      const fixedIndex = fluxNodeIndex - i >= 0 ? fluxNodeIndex - i : sortedNodeList.length + fluxNodeIndex - i;
-      const addr = sortedNodeList[fixedIndex];
-      const ipInc = extractIp(addr);
-      if (!ipInc || ipInc === extractIp(localSocketAddr)) {
-        // eslint-disable-next-line no-continue
-        continue;
-      }
-      const portInc = extractPort(addr);
-      if (peerManager.shouldAttemptConnection(ipInc, portInc)) {
-        // eslint-disable-next-line no-await-in-loop
-        const result = await serviceHelper.axiosGet(
-          `http://${ipInc}:${portInc}/flux/addoutgoingpeer/${localSocketAddr}`,
-          { timeout: 5_000 },
-        ).catch((error) => {
-          peerManager.recordFailedConnection(ipInc, portInc);
-          if (error.code !== 'ECONNREFUSED') log.error(error);
-          return null;
-        });
-
-        if (result) deterministicPeerConnections = true;
-      }
-    }
-    if (deterministicPeerConnections) {
-      log.info('Connections to deterministic peers established');
-    }
-
-    await serviceHelper.delay(DISCOVERY.connectionDelayMs);
 
     // Process reconnect queue — retry recently disconnected outbound peers
     const reconnectCandidates = peerManager.getReconnectCandidates();
@@ -1570,68 +1596,8 @@ async function fluxDiscovery() {
     // Prune expired unstable node entries periodically
     peerManager.pruneUnstableList();
 
-    const triedIps = new Set();
-    const triedIpGroups = new Set();
+    await nodeDownService.sweep();
 
-    // Random outbound connections
-    const outThresholds = { maxCount: DISCOVERY.maxOutbound, minUniqueIps: DISCOVERY.minUniqueOutboundIps };
-    let index = 0;
-    while (peerManager.needsMorePeers(DIRECTION.OUTBOUND, outThresholds) && index < DISCOVERY.maxIterations) {
-      index += 1;
-      // eslint-disable-next-line no-await-in-loop
-      const connection = await networkStateService.getRandomSocketAddress(localSocketAddr);
-      if (connection) {
-        const ipInc = extractIp(connection);
-        const portInc = extractPort(connection);
-        if (!peerManager.canAcceptPeer(ipInc, portInc, DIRECTION.OUTBOUND, myIpGroup)) {
-          // eslint-disable-next-line no-continue
-          continue;
-        }
-        const ipGroup = FluxPeerManager.getIpGroup(ipInc);
-        if (triedIpGroups.has(ipGroup) || triedIps.has(ipInc)) {
-          // eslint-disable-next-line no-continue
-          continue;
-        }
-        log.info(`Adding random Flux peer: ${connection}`);
-        triedIps.add(ipInc);
-        triedIpGroups.add(ipGroup);
-        initiateAndHandleConnection(connection);
-      }
-      // eslint-disable-next-line no-await-in-loop
-      await serviceHelper.delay(DISCOVERY.connectionDelayMs);
-    }
-
-    // Random inbound connections
-    const inThresholds = { maxCount: DISCOVERY.maxInbound, minUniqueIps: DISCOVERY.minUniqueInboundIps };
-    index = 0;
-    while (peerManager.needsMorePeers(DIRECTION.INBOUND, inThresholds) && index < DISCOVERY.maxIterations) {
-      index += 1;
-      // eslint-disable-next-line no-await-in-loop
-      const connection = await networkStateService.getRandomSocketAddress(localSocketAddr);
-      if (connection) {
-        const ipInc = extractIp(connection);
-        const portInc = extractPort(connection);
-        if (!peerManager.canAcceptPeer(ipInc, portInc, DIRECTION.INBOUND, myIpGroup)) {
-          // eslint-disable-next-line no-continue
-          continue;
-        }
-        const ipGroup = FluxPeerManager.getIpGroup(ipInc);
-        if (triedIpGroups.has(ipGroup) || triedIps.has(ipInc)) {
-          // eslint-disable-next-line no-continue
-          continue;
-        }
-        log.info(`Asking random Flux ${connection} to add us as a peer`);
-        triedIps.add(ipInc);
-        triedIpGroups.add(ipGroup);
-        // eslint-disable-next-line no-await-in-loop
-        await serviceHelper.axiosGet(
-          `http://${ipInc}:${portInc}/flux/addoutgoingpeer/${localSocketAddr}`,
-          { timeout: 5_000 },
-        ).catch((error) => log.error(error));
-      }
-      // eslint-disable-next-line no-await-in-loop
-      await serviceHelper.delay(DISCOVERY.connectionDelayMs);
-    }
     setTimeout(() => {
       fluxDiscovery();
     }, config.fluxapps.discoveryRetryMs ?? 60000);
