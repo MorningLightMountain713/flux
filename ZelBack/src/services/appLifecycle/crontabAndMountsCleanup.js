@@ -70,6 +70,18 @@ async function getInstalledAppIds() {
     for (const deployment of deployments) {
       // eslint-disable-next-line no-restricted-syntax
       for (const [, deployComp] of deployment.componentEntries()) {
+        // A stateless component has no volume by design, so it has no mount to
+        // verify and no FLUXFSVOL crontab entry to keep. Both consumers of this
+        // set want it excluded: ensureInstalledAppVolumesMounted would otherwise
+        // report volume_file_missing and record a mount_vanished TAMPERING event
+        // — keyed by the APP, so one stateless sidecar taints the whole app's
+        // history at every boot — and the crontab sweep correctly treats an entry
+        // for a component that should have none as stale.
+        //
+        // containerHealthMonitor:105, appReconciler:903/1218, appVolumeService:36
+        // and syncthingMonitor all gate on this; this enumeration did not.
+        // eslint-disable-next-line no-continue
+        if (deployComp.isStateless) continue;
         installedAppIds.set(dockerService.getAppIdentifier(deployComp.identifier), instantiated.name);
       }
     }

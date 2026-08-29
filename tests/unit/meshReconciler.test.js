@@ -13,16 +13,33 @@ const path = require('node:path');
 // disk (config.yml, tayga.conf) and what was asked of the namespace, units,
 // chains and detector. Expected addresses are computed with the real
 // derivation and the real ledger assignment, never transcribed by hand.
+//
+// The spec library is real here too — see tests/unit/fixtures/fluxSpec.js for
+// why. Everything this module reads a spec for is a real object: the installed
+// row is an InstantiatedSpec, its resolved view a FluxAppSpecV9 (so
+// `network.mesh`, `componentNames()`, `instances` and `components[].meshPorts`
+// are the spec's own answers), the placement a real Placement (so `mode()` and
+// `hasTargets()` are the class's, for v9 AND for the legacy v8 conversion), the
+// installed deployment a real DeploymentSpec (so `networkName` and every
+// container `identifier` are derived, not spelled), and the component mesh slot
+// comes from the library's own derivation rather than a made-up number.
 const meshDerivation = require('../../ZelBack/src/services/appMesh/meshDerivation');
 const realSnapshot = require('../../ZelBack/src/services/appMesh/meshSnapshot');
+const { appsFolder } = require('../../ZelBack/src/services/utils/appConstants');
+const {
+  loadSpecLibrary, V9_SUBMISSION, v9Spec, v8Spec, instantiatedSpec,
+} = require('./fixtures/fluxSpec');
 
 const APP_UUID = '5db6f53acbbd9b38e949307e96601e573bd6437ddec08707e76a33f771b358ea';
 const IDENTITY = 'ab12cd34ef56';
+// The app's private docker network is named from the IDENTITY, never the name —
+// derived here through the same class the reconciler reads it off, so a change
+// to that rule cannot leave this suite quietly passing on a stale spelling.
+const NETWORK_NAME = `fluxDockerNetwork_${IDENTITY}`;
 const OWN_OUTPOINT = '9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08:0';
 const PEER_OUTPOINT = 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855:1';
 const OWN_NODE_ID = meshDerivation.nodeId(OWN_OUTPOINT);
 const PEER_NODE_ID = meshDerivation.nodeId(PEER_OUTPOINT);
-const SLOT = 0x03a9f2c1;
 const ANCHOR_HASH = 'aa'.repeat(32);
 
 const PEER_MEMBER = {
@@ -49,30 +66,53 @@ describe('meshReconciler', () => {
   let meshReconciler;
   let stubs;
   let logLines;
+  let flux;
+  // The component's overlay address slot, from the library's own derivation.
+  let SLOT;
 
-  const makeView = (overrides = {}) => ({
-    network: { mesh: true },
-    placement: { mode: () => 'none', hasTargets: () => false },
-    componentNames: () => ['web'],
-    ...overrides,
+  before(async function loadLibrary() {
+    // The first fromSubmission compiles the ajv schemas.
+    this.timeout(30000);
+    flux = await loadSpecLibrary();
+    SLOT = flux.meshComponentSlot('myblog', 'web');
   });
 
-  const makeApp = (overrides = {}) => ({
-    name: 'myblog',
-    uuid: APP_UUID,
-    identity: IDENTITY,
-    view: makeView(),
-    ...overrides,
+  /** A real mesh-enabled FluxAppSpecV9 for the app under test. */
+  const meshSpec = (overrides = {}) => v9Spec({
+    name: 'myblog', network: { mesh: true }, ...overrides,
   });
+
+  /** The installed row a mesh spec hydrates to — identity and uuid are node-side
+   * columns stated on the row, exactly as appsRepository stores them. */
+  const installedRow = (spec, state = {}) => instantiatedSpec(spec, {
+    identity: IDENTITY, uuid: APP_UUID, ...state,
+  });
+
+  /** The default installed app: one mesh-enabled v9 app on this node. */
+  const makeApp = async (specOverrides = {}, rowOverrides = {}) => installedRow(
+    await meshSpec(specOverrides), rowOverrides,
+  );
+
+  /** The deployment view of an installed spec — one loose instance. */
+  const deploymentFor = (spec) => flux.DeploymentSpec.fromSpec(
+    spec, appsFolder, { replica: null, identity: IDENTITY },
+  );
 
   beforeEach(async () => {
     tmpRoot = await realFsp.mkdtemp(path.join(os.tmpdir(), 'mesh-rec-'));
     await realFsp.mkdir(path.join(tmpRoot, IDENTITY), { recursive: true });
     logLines = { error: [], warn: [], info: [] };
 
+    const spec = await meshSpec();
+
     stubs = {
-      installedApps: [makeApp()],
+      installedApps: [await installedRow(spec)],
       listInstalledApps: sinon.stub().callsFake(async () => stubs.installedApps),
+      deployments: [deploymentFor(spec)],
+      // Mirrors specCutover.resolveInstantiatedSpec for a cleartext row: the
+      // held spec instance itself. Stubbed only because the encrypted branch
+      // would register FluxOS's own crypto providers, which need a node.
+      resolveInstantiated: sinon.stub().callsFake(async (inst) => inst.spec),
       rows: [{
         ip: '203.0.113.7:16240',
         outpoint: PEER_OUTPOINT,
@@ -128,14 +168,14 @@ describe('meshReconciler', () => {
           .find((app) => app.name === name) ?? null),
       },
       '../appRuntime/deploymentProvider': {
-        getInstalledDeployments: sinon.stub().resolves([
-          { componentEntries: () => [['web', { identifier: 'web_ab12cd34ef56' }]] },
-        ]),
+        getInstalledDeployments: sinon.stub().callsFake(async () => stubs.deployments),
       },
       '../dockerService': {
         dockerContainerInspect: sinon.stub().callsFake(async () => stubs.containerInspect ?? {
           State: { Pid: 4242 },
-          NetworkSettings: { Networks: { fluxDockerNetwork_myblog: { IPAddress: '172.23.4.5' } } },
+          // ONLY the identity-named network: the bridge address can be found
+          // here only by reading the real DeploymentSpec's networkName.
+          NetworkSettings: { Networks: { [NETWORK_NAME]: { IPAddress: '172.23.4.5' } } },
         }),
       },
       '../daemonService/daemonServiceMiscRpcs': {
@@ -164,11 +204,10 @@ describe('meshReconciler', () => {
         resolveOwnSlot: sinon.stub().callsFake(async () => (stubs.slotView?.ownSlot ?? null)),
         publishClaimSlot: sinon.stub().callsFake(async (...args) => { stubs.slotClaims.push(args); }),
       },
-      '../utils/specLibs': {
-        getSpec: sinon.stub().resolves({ meshComponentSlot: () => SLOT }),
-      },
+      // ../utils/specLibs is NOT stubbed: the component slot every overlay
+      // address and link id is derived from comes from the real library.
       '../utils/specCutover': {
-        resolveInstantiatedSpec: sinon.stub().callsFake(async (inst) => inst.view),
+        resolveInstantiatedSpec: (...args) => stubs.resolveInstantiated(...args),
       },
       './meshCertificates': {
         HostCertificateAction: { DEPLOYED: 'deployed', PARKED: 'parked', NONE: 'none' },
@@ -249,28 +288,68 @@ describe('meshReconciler', () => {
 
   describe('hostingOutpointsFor', () => {
     it('is null for unrestricted placement', async () => {
-      const placement = { mode: () => 'none', hasTargets: () => false };
+      // A real v9 spec that targeted nobody, and a real v8 one with an empty
+      // legacy `nodes` list: both must answer mode 'none' with no targets, and
+      // the v8 answer is the one a hand-written double cannot vouch for — the
+      // conversion is where a pin list has silently restricted nothing before.
+      const { placement } = await v9Spec();
+      expect(placement.mode()).to.equal('none');
+      expect(placement.hasTargets()).to.equal(false);
       expect(await meshReconciler.hostingOutpointsFor(placement)).to.equal(null);
+
+      const legacy = (await v8Spec({ nodes: [] })).placement;
+      expect(legacy.mode()).to.equal('none');
+      expect(legacy.hasTargets()).to.equal(false);
+      expect(await meshReconciler.hostingOutpointsFor(legacy)).to.equal(null);
+
       expect(await meshReconciler.hostingOutpointsFor(null)).to.equal(null);
     });
 
     it('resolves outpoint, ip and operator targets through the node list', async () => {
+      const txA = 'a'.repeat(64);
       const txB = 'b'.repeat(64);
       const txC = 'c'.repeat(64);
       stubs.nodeByAddress = { '1.2.3.4:16137': { txhash: txB, outidx: '1' } };
       stubs.nodesByPubkey = {
         opkey: new Map([['5.6.7.8', { txhash: txC, outidx: 2 }]]),
       };
-      const placement = {
-        mode: () => 'candidate',
-        hasTargets: () => true,
-        targetOutpoints: [`${'A'.repeat(64)}:0`],
-        targetIps: ['1.2.3.4:16137', '9.9.9.9'],
-        targetOperators: ['opkey'],
-      };
+      const { placement } = await v9Spec({
+        placement: {
+          targetOutpoints: [`${txA}:0`],
+          targetIps: ['1.2.3.4:16137', '9.9.9.9'],
+          targetOperators: ['opkey'],
+        },
+      });
+      // The two answers meshReconciler gates on, from the real class.
+      expect(placement.mode()).to.equal('candidate');
+      expect(placement.hasTargets()).to.equal(true);
+
       const outpoints = await meshReconciler.hostingOutpointsFor(placement);
       expect([...outpoints].sort()).to.deep.equal([
-        `${'a'.repeat(64)}:0`,
+        `${txA}:0`,
+        `${txB}:1`,
+        `${txC}:2`,
+      ].sort());
+    });
+
+    it('reads a legacy v8 nodes list as a real candidate placement', async () => {
+      // v8 has no placement of its own: the mixed-identity `nodes` array is
+      // converted into the typed target arrays, and the derived mode is what
+      // decides whether this node checks a host set at all. A v8 pin list that
+      // reported mode 'none' would restrict nothing.
+      const txB = 'b'.repeat(64);
+      const txC = 'c'.repeat(64);
+      stubs.nodeByAddress = { '1.2.3.4:16137': { txhash: txB, outidx: '1' } };
+      stubs.nodesByPubkey = { opkey: new Map([['5.6.7.8', { txhash: txC, outidx: 2 }]]) };
+      const { placement } = await v8Spec({
+        nodes: [`${'d'.repeat(64)}:3`, '1.2.3.4:16137', 'opkey'],
+      });
+      expect(placement.mode()).to.equal('candidate');
+      expect(placement.hasTargets()).to.equal(true);
+
+      const outpoints = await meshReconciler.hostingOutpointsFor(placement);
+      expect([...outpoints].sort()).to.deep.equal([
+        `${'d'.repeat(64)}:3`,
         `${txB}:1`,
         `${txC}:2`,
       ].sort());
@@ -310,14 +389,14 @@ describe('meshReconciler', () => {
     });
 
     it('does nothing on a node with no mesh apps', async () => {
-      stubs.installedApps = [makeApp({ view: makeView({ network: { mesh: false } }) })];
+      stubs.installedApps = [await makeApp({ network: { mesh: false } })];
       await meshReconciler.reconcileAllMeshApps();
       expect(stubs.writeSnapshotCalls).to.have.length(0);
       expect(stubs.chainsEnsured).to.equal(false);
     });
 
     it('skips a mesh app with no registration uuid, loudly', async () => {
-      stubs.installedApps = [makeApp({ uuid: null, identity: null })];
+      stubs.installedApps = [await makeApp({}, { uuid: null, identity: null })];
       stubs.materialInstances = [];
       await meshReconciler.reconcileAllMeshApps();
       expect(logLines.warn.some((m) => m.includes('no registration uuid'))).to.equal(true);
@@ -327,12 +406,20 @@ describe('meshReconciler', () => {
     it('converges one app end to end: material, snapshot, tayga, runtime, chains, detector', async () => {
       await meshReconciler.reconcileAllMeshApps();
 
+      // The row handed to the cutover seam is the stored InstantiatedSpec, and
+      // it answers what the REAL resolveInstantiatedSpec reads off it.
+      const [handedRow] = stubs.resolveInstantiated.firstCall.args;
+      expect(handedRow, 'specCutover reads row.isEncrypted').to.have.property('isEncrypted', false);
+      expect(handedRow, 'specCutover returns row.spec').to.have.property('spec');
+      expect(handedRow.spec.network.mesh).to.equal(true);
+
       // Material: candidates were judged with the anchor resolved from MY chain.
       const ctx = stubs.evaluateCandidates.firstCall.args[0];
       expect(ctx.appUuid).to.equal(APP_UUID);
       expect(ctx.ownOutpoint).to.equal(OWN_OUTPOINT);
       expect(ctx.tipHeight).to.equal(1000);
       expect(ctx.anchorHeights.get(ANCHOR_HASH)).to.equal(995);
+      // The real Placement of an untargeted app: no host set to check against.
       expect(ctx.hostingOutpoints).to.equal(null);
       expect(stubs.writeTrustBundle.firstCall.args).to.deep.equal([IDENTITY, ['PEM-PEER\n']]);
 
@@ -351,10 +438,12 @@ describe('meshReconciler', () => {
         { component: 'web', nodeId: OWN_NODE_ID },
         { component: 'web', nodeId: PEER_NODE_ID },
       ].sort((a, b) => (a.nodeId < b.nodeId ? -1 : 1)));
+      // The bridge address was found on the deployment's OWN network — the
+      // identity-named one, the only network the inspect stub carries.
       expect(snapApp.containers).to.deep.equal([{ component: 'web', sourceIp: '172.23.4.5' }]);
 
       // Tayga map: one entry per member, addresses from the ledger, IPv6 from
-      // the derivation.
+      // the derivation over the library's own component slot.
       const addresses = realSnapshot.assignMemberAddresses(null, stubs.writeSnapshotCalls[0].apps);
       const taygaText = await realFsp.readFile(path.join(tmpRoot, IDENTITY, 'tayga.conf'), 'utf8');
       expect(taygaText).to.include(`map ${addresses.get(`myblog|${OWN_NODE_ID}|web`)} ${meshDerivation.memberAddress(APP_UUID, OWN_OUTPOINT, SLOT)}`);
@@ -368,7 +457,7 @@ describe('meshReconciler', () => {
       expect(stubs.unitCalls).to.deep.include(['startAll', IDENTITY]);
       expect(stubs.attachments).to.deep.equal([{
         instance: IDENTITY,
-        linkId: '03a9f2c1',
+        linkId: SLOT.toString(16).padStart(8, '0'),
         containerPid: 4242,
         presentedIp: addresses.get(`myblog|${OWN_NODE_ID}|web`),
       }]);
@@ -560,7 +649,7 @@ describe('meshReconciler', () => {
     });
 
     it('an installed app keeps its material even when its view is not mesh', async () => {
-      stubs.installedApps = [makeApp({ view: makeView({ network: { mesh: false } }) })];
+      stubs.installedApps = [await makeApp({ network: { mesh: false } })];
       stubs.materialInstances = [IDENTITY];
       await meshReconciler.reconcileAllMeshApps();
       expect(stubs.namespaceCalls.map(([name]) => name)).to.not.include('removeAppMaterial');
@@ -599,20 +688,23 @@ describe('meshReconciler', () => {
     it('surfaces slot-identity drift, and enqueues the rebuild only once confirmed', async () => {
       // The container was created as a standby (nodeid identity); the passes
       // resolve slot 1 — drift. One pass records it, the second confirms and
-      // hands the identifier to the app reconciler's queue.
+      // hands the identifier to the app reconciler's queue. The identifier is
+      // the DeploymentSpec's own, built from the app identity.
+      const [[, component]] = stubs.deployments[0].componentEntries();
+      expect(component.identifier).to.equal(`web_${IDENTITY}`);
       stubs.slotView = { ownSlot: 1, ownSince: null, winners: new Map() };
       stubs.containerInspect = {
         State: { Pid: 4242 },
         Config: { Env: [`FLUX_MESH_SELF=web-${OWN_NODE_ID}`] },
-        NetworkSettings: { Networks: { fluxDockerNetwork_myblog: { IPAddress: '172.23.4.5' } } },
+        NetworkSettings: { Networks: { [NETWORK_NAME]: { IPAddress: '172.23.4.5' } } },
       };
       await meshReconciler.reconcileAllMeshApps();
       expect(meshReconciler.lastPassStatus('myblog').identityDrift).to.deep.equal([{
-        identifier: 'web_ab12cd34ef56', component: 'web', is: `web-${OWN_NODE_ID}`, wants: 'web-1',
+        identifier: `web_${IDENTITY}`, component: 'web', is: `web-${OWN_NODE_ID}`, wants: 'web-1',
       }]);
       expect(stubs.enqueued).to.deep.equal([]);
       await meshReconciler.reconcileAllMeshApps();
-      expect(stubs.enqueued).to.deep.equal(['web_ab12cd34ef56']);
+      expect(stubs.enqueued).to.deep.equal([`web_${IDENTITY}`]);
       // A container matching its resolved slot records no drift at all.
       stubs.containerInspect.Config.Env = ['FLUX_MESH_SELF=web-1'];
       await meshReconciler.reconcileAllMeshApps();
@@ -622,7 +714,7 @@ describe('meshReconciler', () => {
 
   describe('prepareComponentMesh', () => {
     it('is null for a non-mesh app', async () => {
-      stubs.installedApps = [makeApp({ view: makeView({ network: { mesh: false } }) })];
+      stubs.installedApps = [await makeApp({ network: { mesh: false } })];
       expect(await meshReconciler.prepareComponentMesh('myblog', 'web')).to.equal(null);
     });
 
@@ -715,21 +807,27 @@ describe('meshReconciler', () => {
   });
 
   describe('buildSnapshotApp', () => {
-    it('feeds each component\'s mesh ports into the snapshot as the SRV map', () => {
-      const app = {
-        name: 'myblog',
-        view: {
-          componentNames: () => ['web', 'mysql'],
-          components: {
-            web: { meshPorts: {} },
-            mysql: {
-              meshPorts: {
-                galera: { containerPort: 4567, protocol: 'tcp' },
-                sst: { containerPort: 4444 },
-              },
+    it('feeds each component\'s mesh ports into the snapshot as the SRV map', async () => {
+      // A real two-component v9 app: `mysql` declares mesh ports, `web` does
+      // not. Two components may not share a hostPort, and meshPorts are only
+      // valid at all because network.mesh is true — both enforced by the class.
+      const spec = await meshSpec({
+        components: {
+          web: V9_SUBMISSION.components.web,
+          mysql: {
+            ...V9_SUBMISSION.components.web,
+            name: 'mysql',
+            ports: { db: { containerPort: 3306, hostPort: 31001 } },
+            meshPorts: {
+              galera: { containerPort: 4567, protocol: 'tcp' },
+              sst: { containerPort: 4444 },
             },
           },
         },
+      });
+      const app = {
+        name: 'myblog',
+        view: spec,
         material: { members: [{ nodeId: PEER_NODE_ID }] },
         containers: [],
       };
@@ -747,10 +845,10 @@ describe('meshReconciler', () => {
       expect(snapApp.members).to.have.length(4);
     });
 
-    it('emits an empty components map for a view carrying no meshPorts', () => {
+    it('emits an empty components map for a view carrying no meshPorts', async () => {
       const app = {
         name: 'myblog',
-        view: { componentNames: () => ['web'] },
+        view: await meshSpec(),
         material: { members: [] },
         containers: [],
       };
@@ -758,10 +856,10 @@ describe('meshReconciler', () => {
       expect(snapApp.components).to.deep.equal({});
     });
 
-    it('assigns ordinals from the arbitrated slot assertions', () => {
+    it('assigns ordinals from the arbitrated slot assertions', async () => {
       const app = {
         name: 'myblog',
-        view: { componentNames: () => ['web'], instances: 3 },
+        view: await meshSpec({ instances: 3 }),
         material: {
           slotView: { ownSlot: 0, ownSince: '2026-08-10T08:00:00.000Z' },
           members: [
@@ -785,10 +883,10 @@ describe('meshReconciler', () => {
       expect(snapApp.members.find((m) => m.nodeId === 'aaaa1111')).to.not.have.property('ordinal');
     });
 
-    it('a double-claimed slot names only the arbitration winner', () => {
+    it('a double-claimed slot names only the arbitration winner', async () => {
       const app = {
         name: 'myblog',
-        view: { componentNames: () => ['web'], instances: 3 },
+        view: await meshSpec({ instances: 3 }),
         material: {
           slotView: { ownSlot: 1, ownSince: '2026-08-10T09:00:00.000Z' },
           members: [
@@ -811,10 +909,10 @@ describe('meshReconciler', () => {
       expect(snapApp.members.find((m) => m.nodeId === OWN_NODE_ID)).to.not.have.property('ordinal');
     });
 
-    it('ignores slots at or beyond the instance cap', () => {
+    it('ignores slots at or beyond the instance cap', async () => {
       const app = {
         name: 'myblog',
-        view: { componentNames: () => ['web'], instances: 2 },
+        view: await meshSpec({ instances: 2 }),
         material: {
           slotView: { ownSlot: null, ownSince: null },
           members: [{

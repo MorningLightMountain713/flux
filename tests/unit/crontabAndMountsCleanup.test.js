@@ -6,6 +6,20 @@ process.env.NODE_CONFIG_DIR = `${process.cwd()}/tests/unit/globalconfig`;
 const { expect } = require('chai');
 const sinon = require('sinon');
 const proxyquire = require('proxyquire').noCallThru();
+const { appsFolder } = require('../../ZelBack/src/services/utils/appConstants');
+const {
+  loadSpecLibrary, V8_SUBMISSION, V9_SUBMISSION, v1Spec, v9Spec, sealedV8Spec,
+  instantiatedSpec, assertAnswers,
+} = require('./fixtures/fluxSpec');
+
+// The spec library is real here, not stubbed - see tests/unit/fixtures/fluxSpec.js
+// for why. Every installed row is a real InstantiatedSpec and every deployment a
+// real DeploymentSpec, so the docker identifiers this module enumerates are the
+// ones the deployment layer MINTS (`myapp` flat for v1-v3, `comp_app` for
+// composed specs) rather than a `${c.name}_${app.name}` reimplementation living
+// in the test. What stays stubbed is I/O: the crontab, mongo through
+// appsRepository, docker, the mount probes, and the tampering recorder.
+let flux;
 
 // Create mocks for dependencies
 const crontabMock = {
@@ -20,15 +34,15 @@ const logMock = {
 
 const appsRepositoryMock = {
   listInstalledApps: sinon.stub(),
-  // Empty by default so the tests below keep driving the disk derivation they
-  // are about; the recorded path has a test of its own.
+  // Empty by default so the tests below keep driving the deployment derivation
+  // they are about; the recorded path has a test of its own.
   listComponentIdentifiers: sinon.stub().resolves([]),
 };
 
 const deploymentProviderMock = {
   buildDeployment: sinon.stub(),
-  // Delegates at call time so per-test withArgs overrides (incl. rejects)
-  // flow through the plural entry the cleanup uses.
+  // Delegates at call time so per-test outcomes (incl. rejects) flow through
+  // the plural entry the cleanup uses.
   get buildDeployments() {
     const single = this.buildDeployment;
     return async (inst) => {
@@ -64,6 +78,94 @@ const crontabAndMountsCleanup = proxyquire('../../ZelBack/src/services/appLifecy
 });
 
 describe('crontabAndMountsCleanup tests', () => {
+  // Real installed rows + the deployment each one resolves to. Built once, in
+  // `before`, because the first fromSubmission compiles the ajv schemas.
+  let legacyMyapp;
+  let legacyApp1;
+  let composedWordpress;
+  let soloWordpress;
+  let enterpriseHermes;
+
+  // row (InstantiatedSpec) -> DeploymentSpec, or an Error to reject with.
+  // Keyed by object IDENTITY rather than sinon's withArgs, whose structural
+  // match cannot tell two frozen domain instances apart (their state lives in
+  // private fields, which are not enumerable).
+  const outcomeByRow = new Map();
+
+  /** A real installed row + the deployment deploymentProvider builds from it. */
+  async function appFixture(spec, deploymentSource = spec) {
+    return {
+      row: await instantiatedSpec(spec),
+      deployment: flux.DeploymentSpec.fromSpec(deploymentSource, appsFolder, { replica: null }),
+    };
+  }
+
+  /** Seed listInstalledApps and what buildDeployment answers for each row. */
+  function installApps(entries) {
+    outcomeByRow.clear();
+    entries.forEach(({ row, deployment, error }) => outcomeByRow.set(row, error || deployment));
+    appsRepositoryMock.listInstalledApps.resolves(entries.map((e) => e.row));
+  }
+
+  /** The docker app ids a deployment's components map to. */
+  const appIdsOf = ({ deployment }) => deployment
+    .componentEntries().map(([, comp]) => `flux${comp.identifier}`);
+
+  /** A v9 component derived from the shared fixture submission. */
+  const componentOn = (name, hostPort, containerPort) => ({
+    ...V9_SUBMISSION.components.web,
+    name,
+    ports: { main: { containerPort, hostPort } },
+  });
+
+  before(async function loadLibrary() {
+    this.timeout(30000);
+    flux = await loadSpecLibrary();
+
+    // v1 is the only stored form whose docker identifier is the BARE app name -
+    // the flat pre-compose shape this module still has to enumerate. It cannot
+    // be minted from a composed spec, so the version is the fixture.
+    legacyMyapp = await appFixture(await v1Spec({ name: 'myapp' }));
+    legacyApp1 = await appFixture(await v1Spec({ name: 'app1' }));
+
+    composedWordpress = await appFixture(await v9Spec({
+      name: 'wordpress123',
+      components: {
+        wp: componentOn('wp', 31001, 80),
+        mysql: componentOn('mysql', 31002, 3306),
+        operator: componentOn('operator', 31003, 8080),
+      },
+    }));
+    soloWordpress = await appFixture(await v9Spec({
+      name: 'wordpress123',
+      components: { wp: componentOn('wp', 31001, 80) },
+    }));
+
+    // The enterprise shape, built the way production holds it: the row carries
+    // the SEALED spec (so isEncrypted is the class's own answer, never a flag
+    // set on a literal), and the deployment is built from what decrypting it
+    // yields. `compose` is not "stored empty" by the test - the components
+    // genuinely only exist inside the blob.
+    const sealed = await sealedV8Spec({
+      name: 'hermesagent123',
+      compose: [{ ...V8_SUBMISSION.compose[0], name: 'hermes' }],
+    });
+    const decrypted = await sealed.decrypt(await sealed.createProvider());
+    enterpriseHermes = {
+      row: await instantiatedSpec(sealed),
+      deployment: flux.DeploymentSpec.fromSpec(decrypted, appsFolder, { replica: null }),
+    };
+
+    // Derived by the library, never asserted onto the fixtures here.
+    expect(appIdsOf(legacyMyapp)).to.deep.equal(['fluxmyapp']);
+    expect(appIdsOf(composedWordpress)).to.deep.equal([
+      'fluxwp_wordpress123', 'fluxmysql_wordpress123', 'fluxoperator_wordpress123',
+    ]);
+    expect(appIdsOf(enterpriseHermes)).to.deep.equal(['fluxhermes_hermesagent123']);
+    expect(legacyMyapp.row.isEncrypted, 'a cleartext row is not encrypted').to.be.false;
+    expect(enterpriseHermes.row.isEncrypted, 'and a sealed one says so itself').to.be.true;
+  });
+
   beforeEach(() => {
     // Reset only this file's own stubs (a global sinon.reset() would wipe stub
     // behaviour set up at module load by other test files in the same run)
@@ -75,7 +177,18 @@ describe('crontabAndMountsCleanup tests', () => {
     appsRepositoryMock.listComponentIdentifiers.reset();
     appsRepositoryMock.listComponentIdentifiers.resolves([]);
     deploymentProviderMock.buildDeployment.reset();
+    outcomeByRow.clear();
+    deploymentProviderMock.buildDeployment.callsFake(async (row) => {
+      const outcome = outcomeByRow.get(row);
+      if (outcome instanceof Error) throw outcome;
+      return outcome || null;
+    });
     dockerServiceMock.getAppIdentifier.reset();
+    // The real one is `flux${identifier}` - a pure string function over the
+    // component identifier, so the stub reproduces it rather than enumerating
+    // answers per test. That makes every app id below the string production
+    // would build from the identifier the deployment actually minted.
+    dockerServiceMock.getAppIdentifier.callsFake((identifier) => `flux${identifier}`);
     volumeServiceMock.ensureAppVolumeMounted.reset();
     volumeServiceMock.getComponentAppIdsFromVolumeFiles.reset();
     volumeServiceMock.isPathMounted.reset();
@@ -83,33 +196,9 @@ describe('crontabAndMountsCleanup tests', () => {
     appTamperingDetectionServiceMock.recordEvent.resolves();
   });
 
-  // A mock deployment whose componentEntries() yields the given docker identifiers.
-  const mockDeployment = (identifiers) => ({
-    componentEntries: () => identifiers.map((id, i) => [String(i), { identifier: id }]),
-  });
-
-  // Docker identifiers a decryptable app's deployment exposes: the bare app name
-  // for legacy (v<=3) specs, comp_app per component for composed (v4+) specs.
-  const identifiersOf = (app) => (app.version <= 3
-    ? [app.name]
-    : (app.compose || []).map((c) => `${c.name}_${app.name}`));
-
-  // Seed listInstalledApps with instantiated specs (isEncrypted flagged from
-  // `enterprise`) and a default buildDeployment resolving each app's deployment
-  // (decrypt success). Returns the instantiated specs so a test can override
-  // buildDeployment for one app to reject (decryption unavailable).
-  const stubInstalledApps = (apps) => {
-    const installed = (apps || []).map((a) => ({ name: a.name, isEncrypted: !!a.enterprise }));
-    appsRepositoryMock.listInstalledApps.resolves(installed);
-    installed.forEach((inst, i) => {
-      deploymentProviderMock.buildDeployment.withArgs(inst).resolves(mockDeployment(identifiersOf(apps[i])));
-    });
-    return installed;
-  };
-
   describe('getInstalledAppIds', () => {
     it('should return an empty map when no apps are installed', async () => {
-      stubInstalledApps([]);
+      installApps([]);
 
       const result = await crontabAndMountsCleanup.getInstalledAppIds();
       expect(result).to.be.instanceOf(Map);
@@ -117,8 +206,7 @@ describe('crontabAndMountsCleanup tests', () => {
     });
 
     it('should enumerate a legacy app (version <= 3) as a single id', async () => {
-      stubInstalledApps([{ name: 'myapp', version: 3 }]);
-      dockerServiceMock.getAppIdentifier.withArgs('myapp').returns('fluxmyapp');
+      installApps([legacyMyapp]);
 
       const result = await crontabAndMountsCleanup.getInstalledAppIds();
       // each id carries the app it belongs to, so nothing downstream has to cut
@@ -127,15 +215,31 @@ describe('crontabAndMountsCleanup tests', () => {
       expect(result.size).to.equal(1);
     });
 
+    // A stateless component has no volume by design (appVolumeService returns
+    // early and never creates one), so it must not enter this set. Both
+    // consumers depend on that: ensureInstalledAppVolumesMounted would report
+    // volume_file_missing and record a mount_vanished TAMPERING event keyed by
+    // the APP, so one stateless sidecar taints the whole app's history at every
+    // boot; and the crontab sweep correctly treats an entry for a component that
+    // should have none as stale.
+    it('leaves out a stateless component, which has no volume to mount', async () => {
+      const mixed = await appFixture(await v9Spec({
+        name: 'mixedapp',
+        components: {
+          web: componentOn('web', 31001, 80),
+          sidecar: { ...componentOn('sidecar', 31002, 8080), persistentStorage: { sizeGb: 0 } },
+        },
+      }));
+      expect(mixed.deployment.getComponent('sidecar').isStateless, 'fixture must be stateless').to.be.true;
+      expect(mixed.deployment.getComponent('web').isStateless).to.be.false;
+      installApps([mixed]);
+
+      const result = await crontabAndMountsCleanup.getInstalledAppIds();
+      expect([...result.keys()]).to.deep.equal(['fluxweb_mixedapp']);
+    });
+
     it('should enumerate every component of a composed app (version > 3)', async () => {
-      stubInstalledApps([{
-        name: 'wordpress123',
-        version: 4,
-        compose: [{ name: 'wp' }, { name: 'mysql' }, { name: 'operator' }],
-      }]);
-      dockerServiceMock.getAppIdentifier.withArgs('wp_wordpress123').returns('fluxwp_wordpress123');
-      dockerServiceMock.getAppIdentifier.withArgs('mysql_wordpress123').returns('fluxmysql_wordpress123');
-      dockerServiceMock.getAppIdentifier.withArgs('operator_wordpress123').returns('fluxoperator_wordpress123');
+      installApps([composedWordpress]);
 
       const result = await crontabAndMountsCleanup.getInstalledAppIds();
       expect(result.get('fluxwp_wordpress123')).to.equal('wordpress123');
@@ -163,14 +267,11 @@ describe('crontabAndMountsCleanup tests', () => {
       // enterprise specs are stored locally with compose: []; buildDeployment
       // decrypts them the way the rest of the runtime reads them. The incident
       // regression treated them as "not installed" and ate their crontab entries.
-      const [inst] = stubInstalledApps([{
-        name: 'hermesagent123', version: 8, compose: [{ name: 'hermes' }], enterprise: 'encryptedblob',
-      }]);
-      dockerServiceMock.getAppIdentifier.withArgs('hermes_hermesagent123').returns('fluxhermes_hermesagent123');
+      installApps([enterpriseHermes]);
 
       const result = await crontabAndMountsCleanup.getInstalledAppIds();
 
-      expect(deploymentProviderMock.buildDeployment.calledWith(inst)).to.be.true;
+      expect(deploymentProviderMock.buildDeployment.calledWith(enterpriseHermes.row)).to.be.true;
       expect(result.has('fluxhermes_hermesagent123')).to.be.true;
       expect(result.size).to.equal(1);
     });
@@ -180,10 +281,7 @@ describe('crontabAndMountsCleanup tests', () => {
       // app treated as having none gets its live volume left unmounted and its
       // crontab safety net dropped. The startup backfill is what fills this gap,
       // and it is the only place that reads components off disk.
-      const [inst] = stubInstalledApps([{
-        name: 'hermesagent123', version: 8, compose: [], enterprise: 'encryptedblob',
-      }]);
-      deploymentProviderMock.buildDeployment.withArgs(inst).rejects(new Error('fluxbenchd unavailable'));
+      installApps([{ row: enterpriseHermes.row, error: new Error('fluxbenchd unavailable') }]);
       appsRepositoryMock.listComponentIdentifiers.withArgs('hermesagent123').resolves([]);
 
       const result = await crontabAndMountsCleanup.getInstalledAppIds();
@@ -196,13 +294,51 @@ describe('crontabAndMountsCleanup tests', () => {
       ).to.equal(false);
     });
 
+    it('takes an undecryptable CLEARTEXT app as a build failure, not an enterprise lookup', async () => {
+      // The recorded-components fallback is gated on isEncrypted, and that is
+      // the row's OWN answer. A cleartext row whose deployment cannot be built
+      // is a different failure: it must warn and skip, never consult the
+      // components table for an app whose spec states them in the open.
+      installApps([{ row: legacyMyapp.row, error: new Error('appsFolder unavailable') }]);
+      appsRepositoryMock.listComponentIdentifiers.resolves(['should_never_be_read']);
+
+      const result = await crontabAndMountsCleanup.getInstalledAppIds();
+
+      expect(result.size).to.equal(0);
+      expect(appsRepositoryMock.listComponentIdentifiers.called).to.equal(false);
+      expect(logMock.warn.called, 'a build failure is still reported').to.equal(true);
+    });
+
     it('never derives from disk on the runtime path, for any app', async () => {
-      stubInstalledApps([{ name: 'wordpress123', version: 4, compose: [{ name: 'wp' }] }]);
-      dockerServiceMock.getAppIdentifier.withArgs('wp_wordpress123').returns('fluxwp_wordpress123');
+      installApps([soloWordpress]);
 
       await crontabAndMountsCleanup.getInstalledAppIds();
 
       expect(volumeServiceMock.getComponentAppIdsFromVolumeFiles.called).to.be.false;
+    });
+
+    it('hands its stubbed collaborators objects that answer what the real ones ask', async () => {
+      // deploymentProvider stays stubbed, so nothing else exercises what the
+      // REAL one does with the row it is handed, nor what this module does with
+      // the deployment it gets back. Either delegation could disappear from
+      // flux-spec with this suite still green.
+      installApps([composedWordpress]);
+
+      await crontabAndMountsCleanup.getInstalledAppIds();
+
+      // buildDeployments -> toDeployments reads these PROPERTIES off the row
+      // (specCutover.resolveInstantiatedSpec, then DeploymentSpec.fromSpec).
+      const [handedRow] = deploymentProviderMock.buildDeployment.firstCall.args;
+      expect(handedRow.isEncrypted, 'resolveInstantiatedSpec branches on it').to.be.a('boolean');
+      expect(handedRow.spec, 'and unwraps this when it is encrypted').to.be.an('object');
+      expect(handedRow.name, 'which this module keys the map by').to.equal('wordpress123');
+      expect(handedRow, 'identity is READ off the row, never recomputed').to.have.property('identity');
+
+      // and what comes back is walked by componentEntries(), one identifier each
+      const handedDeployment = await deploymentProviderMock.buildDeployment.firstCall.returnValue;
+      assertAnswers(handedDeployment, ['componentEntries']);
+      const [, handedComp] = handedDeployment.componentEntries()[0];
+      expect(handedComp.identifier, 'the docker identifier is read, never parsed together').to.equal('wp_wordpress123');
     });
   });
 
@@ -240,12 +376,7 @@ describe('crontabAndMountsCleanup tests', () => {
 
   describe('ensureInstalledAppVolumesMounted', () => {
     it('should mount every installed app volume derived from the DB', async () => {
-      stubInstalledApps([
-        { name: 'app1', version: 3 },
-        { name: 'wordpress123', version: 4, compose: [{ name: 'wp' }] },
-      ]);
-      dockerServiceMock.getAppIdentifier.withArgs('app1').returns('fluxapp1');
-      dockerServiceMock.getAppIdentifier.withArgs('wp_wordpress123').returns('fluxwp_wordpress123');
+      installApps([legacyApp1, soloWordpress]);
       volumeServiceMock.ensureAppVolumeMounted.withArgs('fluxapp1').resolves({ mounted: true, alreadyMounted: false });
       volumeServiceMock.ensureAppVolumeMounted.withArgs('fluxwp_wordpress123').resolves({ mounted: true, alreadyMounted: true });
 
@@ -257,16 +388,30 @@ describe('crontabAndMountsCleanup tests', () => {
     });
 
     it('should record a tampering event when a volume cannot be mounted', async () => {
-      stubInstalledApps([{ name: 'app1', version: 3 }]);
-      dockerServiceMock.getAppIdentifier.withArgs('app1').returns('fluxapp1');
+      installApps([legacyApp1]);
       volumeServiceMock.ensureAppVolumeMounted.resolves({ mounted: false, reason: 'volume_file_missing' });
 
       const result = await crontabAndMountsCleanup.ensureInstalledAppVolumesMounted();
 
       expect(result.failed).to.deep.equal([{ appId: 'fluxapp1', reason: 'volume_file_missing' }]);
       // the incident is keyed by the APP, not the component's docker id — the
-      // reconciler emits the same app's events under that name
+      // reconciler emits the same app's events under that name, and the name
+      // comes off the real InstantiatedSpec
       expect(appTamperingDetectionServiceMock.recordEvent.calledWith('app1', 'mount_vanished')).to.be.true;
+    });
+
+    it('keys the incident by the owning app for a composed spec, not by the component id', async () => {
+      // Every component of one app rolls up under the SAME app name, which is
+      // only true because the map carries the owner rather than letting the
+      // recorder cut a name back out of `mysql_wordpress123`.
+      installApps([composedWordpress]);
+      volumeServiceMock.ensureAppVolumeMounted.resolves({ mounted: false, reason: 'volume_file_missing' });
+
+      await crontabAndMountsCleanup.ensureInstalledAppVolumesMounted();
+
+      expect(appTamperingDetectionServiceMock.recordEvent.callCount).to.equal(3);
+      const names = appTamperingDetectionServiceMock.recordEvent.getCalls().map((c) => c.args[0]);
+      expect(names).to.deep.equal(['wordpress123', 'wordpress123', 'wordpress123']);
     });
   });
 
@@ -400,13 +545,11 @@ describe('crontabAndMountsCleanup tests', () => {
       // cannot open it cannot enumerate them from the spec. The row wrote them
       // down at install time, when it could — a stated fact rather than a
       // filename pattern that has already been wrong once.
-      const inst = {
-        name: 'hermesagent123', version: 8, compose: [], enterprise: 'encryptedblob', isEncrypted: true,
-      };
-      appsRepositoryMock.listInstalledApps.resolves([inst]);
-      deploymentProviderMock.buildDeployment.withArgs(inst).rejects(new Error('fluxbenchd unavailable'));
-      appsRepositoryMock.listComponentIdentifiers.withArgs('hermesagent123').resolves(['hermes_hermesagent123']);
-      dockerServiceMock.getAppIdentifier.withArgs('hermes_hermesagent123').returns('fluxhermes_hermesagent123');
+      installApps([{ row: enterpriseHermes.row, error: new Error('fluxbenchd unavailable') }]);
+      // The recorded identifier is the one the deployment layer would have
+      // minted, taken from the real deployment rather than spelled out again.
+      const [, recordedComp] = enterpriseHermes.deployment.componentEntries()[0];
+      appsRepositoryMock.listComponentIdentifiers.withArgs('hermesagent123').resolves([recordedComp.identifier]);
       volumeServiceMock.ensureAppVolumeMounted.withArgs('fluxhermes_hermesagent123').resolves({ mounted: true, alreadyMounted: false });
 
       const result = await crontabAndMountsCleanup.cleanupCrontabAndMounts();
@@ -422,10 +565,7 @@ describe('crontabAndMountsCleanup tests', () => {
       // The safe answer is to mount nothing rather than guess: a wrong id would
       // mount a volume that is not this app's. The volume stays unmounted until
       // the backfill records what the app has, which is the one place that can.
-      const [inst] = stubInstalledApps([{
-        name: 'hermesagent123', version: 8, compose: [], enterprise: 'encryptedblob',
-      }]);
-      deploymentProviderMock.buildDeployment.withArgs(inst).rejects(new Error('fluxbenchd unavailable'));
+      installApps([{ row: enterpriseHermes.row, error: new Error('fluxbenchd unavailable') }]);
       appsRepositoryMock.listComponentIdentifiers.withArgs('hermesagent123').resolves([]);
 
       const result = await crontabAndMountsCleanup.cleanupCrontabAndMounts();
@@ -439,8 +579,7 @@ describe('crontabAndMountsCleanup tests', () => {
       // the incident regression: the old implementation derived mounts from
       // crontab entries, so a silently emptied crontab meant nothing was ever
       // remounted after a reboot
-      stubInstalledApps([{ name: 'myapp', version: 3 }]);
-      dockerServiceMock.getAppIdentifier.withArgs('myapp').returns('fluxmyapp');
+      installApps([legacyMyapp]);
       volumeServiceMock.ensureAppVolumeMounted.resolves({ mounted: true, alreadyMounted: false });
       mockJobs = [];
 
@@ -451,8 +590,7 @@ describe('crontabAndMountsCleanup tests', () => {
     });
 
     it('should mount volumes even when the crontab cannot be loaded at all', async () => {
-      stubInstalledApps([{ name: 'myapp', version: 3 }]);
-      dockerServiceMock.getAppIdentifier.withArgs('myapp').returns('fluxmyapp');
+      installApps([legacyMyapp]);
       volumeServiceMock.ensureAppVolumeMounted.resolves({ mounted: true, alreadyMounted: false });
       crontabMock.load.callsFake((callback) => callback(new Error('Crontab load failed')));
 
@@ -463,8 +601,7 @@ describe('crontabAndMountsCleanup tests', () => {
     });
 
     it('should remove legacy mount entries of installed apps too', async () => {
-      stubInstalledApps([{ name: 'myapp', version: 3 }]);
-      dockerServiceMock.getAppIdentifier.withArgs('myapp').returns('fluxmyapp');
+      installApps([legacyMyapp]);
       volumeServiceMock.ensureAppVolumeMounted.resolves({ mounted: true, alreadyMounted: true });
       const legacyJob = {
         isValid: () => true,
@@ -483,8 +620,7 @@ describe('crontabAndMountsCleanup tests', () => {
     it('should never remove an app because of crontab state', async () => {
       // the old implementation force-removed apps when a crontab rewrite
       // failed; the new one must take no app-lifecycle action at all
-      stubInstalledApps([{ name: 'myapp', version: 3 }]);
-      dockerServiceMock.getAppIdentifier.withArgs('myapp').returns('fluxmyapp');
+      installApps([legacyMyapp]);
       volumeServiceMock.ensureAppVolumeMounted.resolves({ mounted: true, alreadyMounted: true });
       mockJobs = [{
         isValid: () => true,
