@@ -220,6 +220,27 @@ class MembershipHistory {
     return this.#entries.length ? null : this.#current.fingerprint;
   }
 
+  /**
+   * Every fingerprint the window can still rebuild, newest first: the current
+   * membership, then each retained transition's parent. Bounded by retention,
+   * deduplicated (a membership can recur across transitions).
+   *
+   * @returns {string[]}
+   */
+  retainedFingerprints() {
+    if (!this.#current) return [];
+    const seen = new Set([this.#current.fingerprint]);
+    const out = [this.#current.fingerprint];
+    for (let i = this.#entries.length - 1; i >= 0; i -= 1) {
+      const fingerprint = this.#entries[i].parentFingerprint;
+      if (!seen.has(fingerprint)) {
+        seen.add(fingerprint);
+        out.push(fingerprint);
+      }
+    }
+    return out;
+  }
+
   /** How many transitions the window currently holds — an observability hook. */
   entryCount() {
     return this.#entries.length;
