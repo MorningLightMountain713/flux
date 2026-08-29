@@ -18,16 +18,29 @@ const config = require('config');
 // outpoints alone would miss it and the history could not reconstruct who a
 // walk excluded; that defect is why the triple is the unit.
 //
-// Retention is wall-bounded (~150 minutes — the location TTL plus formation
-// margin) and count-bounded as a backstop. Outside the window the answer is
-// null, never a guess: a fingerprint this node cannot rebuild is a committee
-// this node cannot verify membership of, and refusing is the honest answer
-// (strict verification, no tolerance matching).
+// Retention is wall-bounded and count-bounded as a backstop. The wall is
+// derived from the nodedown record lifetime plus slack — every STANDING
+// certificate must stay cold-verifiable for its whole life (certs doc §6.12;
+// NODE_DOWN_REQUIREMENTS_COMMITTEE_RECOVERY.md R1: retention >= record
+// lifetime + issue-to-publish slack) — and that window also covers the
+// committee-formation need (location TTL + formation margin) it first served.
+// Outside the window the answer is null, never a guess: a fingerprint this
+// node cannot rebuild is a committee this node cannot verify membership of,
+// and refusing is the honest answer (strict verification, no tolerance
+// matching).
+
+const { RECORD_LIFETIME_MS } = require('./nodeDownCertificates');
 
 const OUTPOINT = (triple) => `${triple.txhash}:${triple.outidx}`;
 
+// The R1 inequality, satisfied by construction: shrinking retention below the
+// record lifetime, or growing the record past the retention, breaks cold
+// verification of a still-standing certificate — change both together.
+const ISSUE_TO_PUBLISH_SLACK_MS = 30 * 60 * 1000;
+
 function retentionMs() {
-  return config.fluxapps.membershipHistoryRetentionMs ?? 150 * 60 * 1000;
+  return config.fluxapps.membershipHistoryRetentionMs
+    ?? RECORD_LIFETIME_MS + ISSUE_TO_PUBLISH_SLACK_MS;
 }
 
 function maxEntries() {

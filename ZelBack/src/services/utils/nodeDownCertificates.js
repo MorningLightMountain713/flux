@@ -29,6 +29,17 @@ const FIELD_SEPARATOR = '|';
 // replay window by exactly the amount of the lie.
 const FUTURE_BLOCKS_TOLERANCE = 1;
 
+// A verdict's lifetime, counted against the verifier's own height. Callers
+// pass this as verifyCertificate's maxAgeBlocks unless a test narrows it.
+const VERDICT_LIFETIME_BLOCKS = 10;
+
+// The nodedown record's lifetime (§6.12): sized just past the 640-block list
+// expiry, where the certificate becomes both uncheckable and pointless.
+// membershipHistory's retention is derived from THIS plus slack — every
+// standing certificate must stay cold-verifiable for its whole life
+// (NODE_DOWN_REQUIREMENTS_COMMITTEE_RECOVERY.md R1).
+const RECORD_LIFETIME_MS = 6 * 60 * 60 * 1000;
+
 const JUDGEMENT = Object.freeze({
   UNREACHABLE: 'unreachable',
   REACHABLE: 'reachable',
@@ -298,6 +309,8 @@ module.exports = {
   ALIVE_DOMAIN,
   FIELD_SEPARATOR,
   FUTURE_BLOCKS_TOLERANCE,
+  VERDICT_LIFETIME_BLOCKS,
+  RECORD_LIFETIME_MS,
   JUDGEMENT,
   REASON,
   DISCARDED,

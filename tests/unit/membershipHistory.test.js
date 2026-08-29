@@ -8,6 +8,7 @@ const {
   tripleOf,
 } = require('../../ZelBack/src/services/utils/membershipHistory');
 const { NetworkStateManager } = require('../../ZelBack/src/services/utils/networkStateManager');
+const { RECORD_LIFETIME_MS } = require('../../ZelBack/src/services/utils/nodeDownCertificates');
 
 // The history is the committee-pinning basis: a fingerprint must move exactly
 // when membership-relevant facts move, and reconstruction must be exact or
@@ -112,11 +113,24 @@ describe('membershipHistory', () => {
       expect(history.membershipAt(null)).to.equal(null);
     });
 
+    it('a fingerprint as old as a nodedown record\'s whole life still rebuilds (R1)', () => {
+      const fpOld = history.record([node(1)], { height: 100, hash: 'a' }, T0);
+      history.record([node(1), node(2)], { height: 101, hash: 'b' }, T0 + 1000);
+      // the last moment a standing certificate can name fpOld: the record
+      // lifetime after issue — retention must still answer, never null
+      history.record(
+        [node(1), node(2), node(3)],
+        { height: 400, hash: 'c' },
+        T0 + RECORD_LIFETIME_MS + 5 * 60 * 1000,
+      );
+      expect(history.membershipAt(fpOld)).to.not.equal(null);
+    });
+
     it('retention expires the oldest transitions and their fingerprints with them', () => {
       const fpOld = history.record([node(1)], { height: 100, hash: 'a' }, T0);
       history.record([node(1), node(2)], { height: 101, hash: 'b' }, T0 + 1000);
-      // a transition far past the 150-minute window prunes the first entry
-      history.record([node(1), node(2), node(3)], { height: 400, hash: 'c' }, T0 + 155 * 60 * 1000);
+      // a transition far past the window (record lifetime + slack) prunes it
+      history.record([node(1), node(2), node(3)], { height: 400, hash: 'c' }, T0 + 7 * 60 * 60 * 1000);
       expect(history.membershipAt(fpOld)).to.equal(null);
     });
 
