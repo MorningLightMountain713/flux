@@ -3,6 +3,7 @@
 const daemonServiceFluxnodeRpcs = require('./daemonService/daemonServiceFluxnodeRpcs');
 const nodeListSource = require('./nodeListSource');
 const networkStateManager = require('./utils/networkStateManager');
+const { NodeDownTopology } = require('./utils/nodeDownTopology');
 
 /**
  * @typedef {import('./utils/networkStateManager').Fluxnode} Fluxnode
@@ -15,6 +16,13 @@ const networkStateManager = require('./utils/networkStateManager');
  * @type {networkStateManager.NetworkStateManager | null}
  */
 let stateManager = null;
+
+/**
+ * The ring topology over the live list, one instance per manager lifecycle.
+ * @type {NodeDownTopology | null}
+ */
+let ringTopology = null;
+let ringTopologyManager = null;
 
 /**
  * Throttle state for daemon RPC calls
@@ -264,6 +272,25 @@ if (require.main === module) {
   main();
 }
 
+/**
+ * The node-down ring topology — jury, duty and at-fingerprint reads over the
+ * SAME list and membership history the manager maintains (one substrate, R9).
+ *
+ * @returns {NodeDownTopology | null} null until the state manager exists
+ */
+function nodeDownTopology() {
+  if (!stateManager) return null;
+  if (ringTopology && ringTopologyManager === stateManager) return ringTopology;
+
+  const manager = stateManager;
+  ringTopology = new NodeDownTopology({
+    nodes: () => manager.state(),
+    membershipHistory: manager.membershipHistory,
+  });
+  ringTopologyManager = manager;
+  return ringTopology;
+}
+
 module.exports = {
   getFluxnodeBySocketAddress,
   getFluxnodesByPubkey,
@@ -274,6 +301,7 @@ module.exports = {
   membershipFingerprintAt,
   networkState,
   nodeCount,
+  nodeDownTopology,
   pubkeyInNetworkState,
   socketAddressInNetworkState,
   start,
