@@ -9,6 +9,29 @@ const proxyquire = require('proxyquire').noCallThru();
 // Real registry singleton - un-stubbed in proxyquire, so the module under test
 // and the test drive the same instance.
 const operationRegistry = require('../../ZelBack/src/services/utils/operationRegistry');
+// The spec library is real here, not stubbed — see tests/unit/fixtures/fluxSpec.js.
+// Everything this service reads off a deployment (appName, componentEntries, and
+// per-component identifier / image / imageAuth / autoUpdate, plus allImages after
+// a redeploy) is answered by the REAL DeploymentSpec the real deploymentProvider
+// would build for the app on this node, not by a literal. The double this
+// replaced was free to invent an identifier, to answer '' for a credential it
+// never had, and — the shape that matters — to hand the post-redeploy image
+// cache an empty image list.
+const {
+  loadSpecLibrary, v1Spec, v8Spec, v9Spec, V8_SUBMISSION, V9_SUBMISSION,
+} = require('./fixtures/fluxSpec');
+
+// What deploymentProvider passes as the apps root; only volume paths derive from
+// it, and nothing in this service reads one.
+const APPS_FOLDER = '/dat/var/lib/fluxos/flux-apps';
+
+// A digest the service can actually parse. getLocalImageDigest matches
+// /@(sha256:[a-f0-9]+)$/, so a readable-looking placeholder like 'sha256:same'
+// is silently unparseable ('m' is not hex) and every component is skipped before
+// the registry is ever asked — a cycle test can pass having polled nothing.
+const SAME_DIGEST = 'sha256:5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a';
+
+let flux;
 
 // Create all stubs upfront
 const dockerServiceStub = {
@@ -52,12 +75,15 @@ const logStub = {
   debug: sinon.stub(),
 };
 
-// Mock ImageVerifier class
+// Mock ImageVerifier class — the registry HTTP client, which stays stubbed.
 let mockVerifierParseError = false;
 let mockVerifierError = false;
 let mockVerifierErrorDetail = '';
 let mockVerifierErrorMeta = null;
 let mockDigestToReturn = null;
+// Every verifier the service constructed, so a test can read back the image
+// string it was actually handed.
+const constructedVerifiers = [];
 
 class MockImageVerifier {
   constructor(repotag, options) {
@@ -67,6 +93,7 @@ class MockImageVerifier {
     this.error = mockVerifierError;
     this.errorDetail = mockVerifierErrorDetail;
     this.errorMeta = mockVerifierErrorMeta;
+    constructedVerifiers.push(this);
   }
 
   async fetchManifestDigestOnly() {
@@ -89,6 +116,41 @@ const imageUpdateService = proxyquire('../../ZelBack/src/services/imageUpdateSer
 });
 
 describe('imageUpdateService tests', () => {
+  before(async () => {
+    flux = await loadSpecLibrary();
+  });
+
+  /**
+   * The REAL DeploymentSpec deploymentProvider would build for this spec on this
+   * node — the loose (unreplicated) identity, which is what an ordinary app has.
+   */
+  function deploymentFor(spec) {
+    return flux.DeploymentSpec.fromSpec(spec, APPS_FOLDER, { replica: null });
+  }
+
+  /** A legacy compose entry off the shared submission blob. */
+  function legacyComponent(overrides = {}) {
+    return { ...V8_SUBMISSION.compose[0], ...overrides };
+  }
+
+  /**
+   * GUARD. The digest poll is driven by the deployment's OWN identifiers and
+   * images. dockerContainerInspect is handed the bare identifier (it prefixes
+   * internally) and the registry verifier is constructed on the component's
+   * image — neither is re-derived from the app name here, and an empty or
+   * invented list would mean the poll examined something other than the app.
+   */
+  function expectPolledFrom(deployment, componentNames) {
+    const entries = deployment.componentEntries()
+      .filter(([name]) => componentNames.includes(name));
+    expect(entries, 'no component was selected — the guard would assert nothing')
+      .to.not.be.empty;
+    expect(dockerServiceStub.dockerContainerInspect.getCalls().map((c) => c.args[0]))
+      .to.deep.equal(entries.map(([, comp]) => comp.identifier));
+    expect(constructedVerifiers.map((v) => v.repotag))
+      .to.deep.equal(entries.map(([, comp]) => comp.image));
+  }
+
   beforeEach(() => {
     // Reset all stubs
     dockerServiceStub.dockerListContainers.reset();
@@ -125,6 +187,7 @@ describe('imageUpdateService tests', () => {
     mockVerifierErrorDetail = '';
     mockVerifierErrorMeta = null;
     mockDigestToReturn = null;
+    constructedVerifiers.length = 0;
   });
 
   afterEach(() => {
@@ -332,22 +395,12 @@ describe('imageUpdateService tests', () => {
       dockerServiceStub.getAppIdentifier.callsFake((name) => `flux${name}`);
     });
 
-    function mockDeployment(appName, components) {
-      return {
-        appName,
-        componentEntries: () => components.map((c) => [c.name, {
-          identifier: c.identifier || c.name,
-          image: c.image,
-          imageAuth: c.imageAuth || '',
-          autoUpdate: c.autoUpdate,
-        }]),
-      };
-    }
-
     it('should detect update needed for v1-v3 app', async () => {
-      const deployment = mockDeployment('TestApp', [
-        { name: 'TestApp', identifier: 'TestApp', image: 'nginx:latest' },
-      ]);
+      // A real v1 spec: the oldest stored form, one flat component whose
+      // container identifier IS the app name — nothing else produces that shape.
+      const deployment = deploymentFor(await v1Spec({ name: 'TestApp' }));
+      expect(deployment.componentEntries().map(([name, comp]) => [name, comp.identifier]))
+        .to.deep.equal([['TestApp', 'TestApp']]);
 
       const localDigest = 'sha256:abc123def456abc123def456abc123def456abc123def456abc123def456abcd';
       const remoteDigest = 'sha256:fed987cba654fed987cba654fed987cba654fed987cba654fed987cba654fedc';
@@ -364,14 +417,14 @@ describe('imageUpdateService tests', () => {
       expect(result.needsUpdate).to.equal(true);
       expect(result.components).to.have.lengthOf(1);
       expect(result.components[0].name).to.equal('TestApp');
+      expect(result.components[0].repotag).to.equal('nginx:latest');
       expect(result.components[0].localDigest).to.equal(localDigest);
       expect(result.components[0].remoteDigest).to.equal(remoteDigest);
+      expectPolledFrom(deployment, ['TestApp']);
     });
 
     it('should not detect update when digests match for v1-v3 app', async () => {
-      const deployment = mockDeployment('TestApp', [
-        { name: 'TestApp', identifier: 'TestApp', image: 'nginx:latest' },
-      ]);
+      const deployment = deploymentFor(await v1Spec({ name: 'TestApp' }));
 
       const sameDigest = 'sha256:abc123def456abc123def456abc123def456abc123def456abc123def456abcd';
 
@@ -389,9 +442,10 @@ describe('imageUpdateService tests', () => {
     });
 
     it('inspects by the bare identifier - dockerContainerInspect prefixes internally', async () => {
-      const deployment = mockDeployment('ComposedApp', [
-        { name: 'web', identifier: 'web_ComposedApp', image: 'nginx:latest' },
-      ]);
+      const deployment = deploymentFor(await v8Spec({
+        name: 'ComposedApp',
+        compose: [legacyComponent({ name: 'web', repotag: 'nginx:latest' })],
+      }));
       const digest = 'sha256:abc123def456abc123def456abc123def456abc123def456abc123def456abcd';
       dockerServiceStub.dockerContainerInspect.resolves({ Image: 'sha256:webImage' });
       dockerServiceStub.dockerListImages.resolves([
@@ -401,14 +455,24 @@ describe('imageUpdateService tests', () => {
 
       await imageUpdateService.checkAppForUpdates(deployment);
 
+      // The identifier is the class's own (component_appName), not a name the
+      // test invented and not the fluxXxx form getAppIdentifier would return.
       sinon.assert.calledWith(dockerServiceStub.dockerContainerInspect, 'web_ComposedApp');
+      expectPolledFrom(deployment, ['web']);
     });
 
     it('should check all components for v4+ compose app', async () => {
-      const deployment = mockDeployment('ComposedApp', [
-        { name: 'web', identifier: 'web_ComposedApp', image: 'nginx:latest' },
-        { name: 'api', identifier: 'api_ComposedApp', image: 'node:18' },
-      ]);
+      const deployment = deploymentFor(await v8Spec({
+        name: 'ComposedApp',
+        compose: [
+          legacyComponent({
+            name: 'web', repotag: 'nginx:latest', ports: [31443], containerPorts: [443],
+          }),
+          legacyComponent({
+            name: 'api', repotag: 'node:18', ports: [31444], containerPorts: [8080],
+          }),
+        ],
+      }));
 
       const webLocalDigest = 'sha256:111111111111111111111111111111111111111111111111111111111111aaaa';
       const webRemoteDigest = 'sha256:222222222222222222222222222222222222222222222222222222222222bbbb';
@@ -430,12 +494,12 @@ describe('imageUpdateService tests', () => {
       expect(result.needsUpdate).to.equal(true);
       expect(result.components.length).to.be.at.least(1);
       expect(result.components[0].name).to.equal('web');
+      // Both components were reached, each by its own identifier and image.
+      expectPolledFrom(deployment, ['web', 'api']);
     });
 
     it('should skip component when local digest cannot be retrieved', async () => {
-      const deployment = mockDeployment('TestApp', [
-        { name: 'TestApp', identifier: 'TestApp', image: 'nginx:latest' },
-      ]);
+      const deployment = deploymentFor(await v1Spec({ name: 'TestApp' }));
 
       dockerServiceStub.dockerContainerInspect.rejects(new Error('Container not found'));
 
@@ -445,9 +509,14 @@ describe('imageUpdateService tests', () => {
     });
 
     it('does not poll or update a component pinned with autoUpdate false even when a newer image exists', async () => {
-      const deployment = mockDeployment('TestApp', [
-        { name: 'TestApp', identifier: 'TestApp', image: 'nginx:latest', autoUpdate: false },
-      ]);
+      // autoUpdate is a v9 field — no legacy component can express the pin, so
+      // this has to be a real v9 spec for the opt-out to exist at all.
+      const deployment = deploymentFor(await v9Spec({
+        components: {
+          web: { ...V9_SUBMISSION.components.web, autoUpdate: false },
+        },
+      }));
+      expect(deployment.componentEntries()[0][1].autoUpdate).to.equal(false);
 
       const localDigest = 'sha256:abc123def456abc123def456abc123def456abc123def456abc123def456abcd';
       const remoteDigest = 'sha256:fed987cba654fed987cba654fed987cba654fed987cba654fed987cba654fedc';
@@ -465,17 +534,88 @@ describe('imageUpdateService tests', () => {
       // pinned: never even polled the local digest
       expect(dockerServiceStub.dockerContainerInspect.called).to.equal(false);
     });
+
+    it('polls an unpinned v9 component - autoUpdate defaults to true on the real class', async () => {
+      const deployment = deploymentFor(await v9Spec());
+      expect(deployment.componentEntries()[0][1].autoUpdate).to.equal(true);
+
+      const digest = 'sha256:abc123def456abc123def456abc123def456abc123def456abc123def456abcd';
+      dockerServiceStub.dockerContainerInspect.resolves({ Image: 'sha256:local123' });
+      dockerServiceStub.dockerListImages.resolves([
+        { Id: 'sha256:local123', RepoDigests: [`nginx@${digest}`] },
+      ]);
+      mockDigestToReturn = digest;
+
+      await imageUpdateService.checkAppForUpdates(deployment);
+
+      expectPolledFrom(deployment, ['web']);
+    });
+
+    it('carries the component real imageAuth into the registry credential lookup', async () => {
+      const deployment = deploymentFor(await v8Spec({
+        name: 'PrivateApp',
+        compose: [legacyComponent({
+          name: 'web', repotag: 'private/image:v1', repoauth: 'encrypted_auth_blob',
+        })],
+      }));
+      const [, comp] = deployment.componentEntries()[0];
+      expect(comp.imageAuth).to.equal('encrypted_auth_blob');
+
+      const digest = 'sha256:abc123def456abc123def456abc123def456abc123def456abc123def456abcd';
+      dockerServiceStub.dockerContainerInspect.resolves({ Image: 'sha256:local123' });
+      dockerServiceStub.dockerListImages.resolves([
+        { Id: 'sha256:local123', RepoDigests: [`private/image@${digest}`] },
+      ]);
+      registryCredentialHelperStub.getCredentials.resolves({ username: 'u', password: 'p' });
+      mockDigestToReturn = digest;
+
+      await imageUpdateService.checkAppForUpdates(deployment);
+
+      // The credential lookup is keyed on the component's own image and its own
+      // credential blob, and the app's own name — all read off the real class.
+      sinon.assert.calledOnceWithExactly(
+        registryCredentialHelperStub.getCredentials,
+        comp.image,
+        comp.imageAuth,
+        deployment.appName,
+      );
+      expect(constructedVerifiers[0].options.credentials)
+        .to.deep.equal({ username: 'u', password: 'p' });
+    });
   });
 
   describe('triggerAppUpdate tests', () => {
     it('should call redeployApplication when no operation in progress', async () => {
       appOperationsStub.redeployApplication.resolves();
+      // After the redeploy the service re-reconciles the app's pinned images,
+      // and the list it reconciles is the deployment's OWN — an empty one
+      // silently leaves every pin pointing at the superseded digest.
+      const deployment = deploymentFor(await v8Spec({
+        name: 'TestApp',
+        compose: [
+          legacyComponent({
+            name: 'web', repotag: 'nginx:latest', ports: [31443], containerPorts: [443],
+          }),
+          legacyComponent({
+            name: 'api', repotag: 'node:18', ports: [31444], containerPorts: [8080],
+          }),
+        ],
+      }));
+      deploymentProviderStub.getInstalledDeployment.resolves(deployment);
 
       const result = await imageUpdateService.triggerAppUpdate('TestApp');
 
       expect(result).to.equal(true);
       sinon.assert.calledOnce(appOperationsStub.redeployApplication);
       sinon.assert.calledWith(appOperationsStub.redeployApplication, 'TestApp', { createVolumes: false });
+
+      const reconciled = imageCacheServiceStub.reconcilePinnedImage.getCalls()
+        .map((call) => call.args[0]);
+      expect(reconciled, 'the image cache was reconciled against an empty list — it re-pinned nothing')
+        .to.not.be.empty;
+      expect(reconciled).to.deep.equal(deployment.allImages());
+      expect(reconciled).to.deep.equal(['nginx:latest', 'node:18']);
+      sinon.assert.calledOnce(imageReaperStub.pruneUnusedImages);
     });
 
     it('should return false when the app holds an operation lease', async () => {
@@ -517,40 +657,42 @@ describe('imageUpdateService tests', () => {
       sinon.assert.calledOnce(deploymentProviderStub.listInstalledDeployments);
     });
 
-    function mockDeployment(appName, components) {
-      return {
-        appName,
-        componentEntries: () => components.map((c) => [c.name, {
-          identifier: c.identifier || c.name,
-          image: c.image,
-          imageAuth: c.imageAuth || '',
-        }]),
-      };
+    async function singleComponentDeployment(appName, repotag) {
+      return deploymentFor(await v8Spec({
+        name: appName,
+        compose: [legacyComponent({ name: appName, repotag })],
+      }));
     }
 
     it('should process all installed apps', async () => {
-      deploymentProviderStub.listInstalledDeployments.resolves([
-        mockDeployment('App1', [{ name: 'App1', image: 'nginx:latest' }]),
-        mockDeployment('App2', [{ name: 'App2', image: 'redis:latest' }]),
-      ]);
+      const app1 = await singleComponentDeployment('App1', 'nginx:latest');
+      const app2 = await singleComponentDeployment('App2', 'redis:latest');
+      deploymentProviderStub.listInstalledDeployments.resolves([app1, app2]);
 
       dockerServiceStub.getAppIdentifier.callsFake((name) => `flux${name}`);
       dockerServiceStub.dockerContainerInspect.resolves({ Image: 'sha256:img' });
       dockerServiceStub.dockerListImages.resolves([
-        { Id: 'sha256:img', RepoDigests: ['repo@sha256:same'] },
+        { Id: 'sha256:img', RepoDigests: [`repo@${SAME_DIGEST}`] },
       ]);
-      mockDigestToReturn = 'sha256:same';
+      mockDigestToReturn = SAME_DIGEST;
 
       await imageUpdateService.checkForImageUpdates();
 
       sinon.assert.calledOnce(deploymentProviderStub.listInstalledDeployments);
       sinon.assert.calledWith(logStub.info, sinon.match(/Checking 2 installed apps/));
+      // Each app was polled through its own identifiers and images.
+      expect(dockerServiceStub.dockerContainerInspect.getCalls().map((c) => c.args[0]))
+        .to.deep.equal(['App1_App1', 'App2_App2']);
+      expect(constructedVerifiers.map((v) => v.repotag))
+        .to.deep.equal([...app1.allImages(), ...app2.allImages()]);
+      // no update: digests matched, so nothing was redeployed
+      sinon.assert.notCalled(appOperationsStub.redeployApplication);
     });
 
     it('does not abort the cycle when an operation starts mid-check (processes every app)', async () => {
       deploymentProviderStub.listInstalledDeployments.resolves([
-        mockDeployment('App1', [{ name: 'App1', image: 'nginx:latest' }]),
-        mockDeployment('App2', [{ name: 'App2', image: 'redis:latest' }]),
+        await singleComponentDeployment('App1', 'nginx:latest'),
+        await singleComponentDeployment('App2', 'redis:latest'),
       ]);
 
       dockerServiceStub.getAppIdentifier.callsFake((name) => `flux${name}`);
@@ -566,9 +708,9 @@ describe('imageUpdateService tests', () => {
       });
 
       dockerServiceStub.dockerListImages.resolves([
-        { Id: 'sha256:img', RepoDigests: ['repo@sha256:same'] },
+        { Id: 'sha256:img', RepoDigests: [`repo@${SAME_DIGEST}`] },
       ]);
-      mockDigestToReturn = 'sha256:same';
+      mockDigestToReturn = SAME_DIGEST;
 
       await imageUpdateService.checkForImageUpdates();
 
@@ -581,6 +723,8 @@ describe('imageUpdateService tests', () => {
     let clock;
 
     beforeEach(() => {
+      // Specs are built before the clock is faked elsewhere in this file; nothing
+      // in this block builds one, so installing fake timers here is safe.
       clock = sinon.useFakeTimers();
     });
 
