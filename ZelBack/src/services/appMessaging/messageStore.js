@@ -44,6 +44,7 @@ const APP_STATE_EVENT_TYPES = Object.freeze({
   IPCHANGED: 'ipchanged',
   MASTERLEASE: 'masterlease',
   GRANTGENERATION: 'grantgeneration',
+  NODEDOWN: 'nodedown',
 });
 
 /**
