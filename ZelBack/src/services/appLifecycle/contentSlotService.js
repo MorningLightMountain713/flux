@@ -89,9 +89,16 @@ async function verifyManifest(manifest, ctx, deps = {}) {
   // A spec read from the registry is the sealed EncryptedSpec for an encrypted app
   // (all content-slot apps are encrypted), whose declared slots aren't visible while
   // sealed. Decrypt it to its DecryptedCanonicalSpec and operate through that class.
-  // The submission path passes an already-cleartext spec (isEncrypted === false),
-  // which is left untouched.
-  if (spec.isEncrypted) {
+  // The submission path passes an already-cleartext spec, which is left untouched.
+  //
+  // `sealed`, not `isEncrypted`. They are different questions and only one of
+  // them is the one being asked here. `sealed` is "can you be read right now";
+  // `isEncrypted` is "is this an encrypted app", which stays TRUE on the
+  // decrypted view. Since this takes its spec from the caller, an already
+  // decrypted one can arrive — and it has no createProvider, so the old test
+  // would have thrown `spec.createProvider is not a function` rather than
+  // recognising a spec it can already read.
+  if (spec.sealed) {
     const provider = deps.provider || await spec.createProvider();
     spec = await spec.decrypt(provider);
   }

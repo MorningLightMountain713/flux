@@ -1454,6 +1454,51 @@ describe('appOperations tests', () => {
       expect(operationRegistry.isHeld('bkapp'), 'the backup lease must release on failure').to.be.false;
     });
 
+    // The restart after a synced backup must skip an activeStandby component:
+    // the election decides which side runs, and starting the standby alongside
+    // its sibling is the thing this branch exists to prevent. It used to read
+    // `comp.persistentStorage?.sync?.mode`, a field DeploymentComponent does not
+    // have — always undefined, so the guard was always true and the standby was
+    // started every time. A hand-written double supplied whatever shape the code
+    // read, so nothing noticed.
+    it('does not restart an activeStandby component after a synced backup', async () => {
+      const clock = sinon.useFakeTimers({ toFake: ['setTimeout'] });
+      sinon.stub(verificationHelper, 'verifyPrivilege').resolves(true);
+      const composed = deploymentFor(await specWithComponents('bkapp', {
+        web: {
+          persistentStorage: {
+            sizeGb: 5,
+            mounts: { '/data': { source: 'data', destination: '/data' } },
+            sync: { mode: 'activeStandby' },
+          },
+        },
+        worker: { ports: { rpc: { containerPort: 9000, hostPort: 31001 } } },
+      }));
+      expect(composed.getComponent('web').hasActiveStandbySyncthing(), 'fixture must be activeStandby').to.be.true;
+      expect(composed.getComponent('worker').hasActiveStandbySyncthing()).to.be.false;
+      sinon.stub(deploymentProvider, 'getInstalledDeployment').resolves(composed);
+      sinon.stub(appsRepository, 'getGlobalAppInfo').resolves(await instantiatedSpec(await v9Spec({ name: 'bkapp' })));
+      sinon.stub(deploymentProvider, 'buildDeployment').resolves(composed);
+      const drive = sinon.stub(appReconciler, 'drive').resolves({ converged: true, failed: [] });
+      sinon.stub(volumeService, 'listComponentVolumeMounts').resolves([{ replica: null, mount: '/vol' }]);
+      sinon.stub(syncthingMonitorHelpers, 'removeSyncthingFolder').resolves();
+      sinon.stub(IOUtils, 'checkFileExists').resolves(false);
+      sinon.stub(IOUtils, 'removeFile').resolves();
+      sinon.stub(IOUtils, 'createTarGz').resolves({ status: true });
+
+      const req = { body: { appname: 'bkapp', backup: [{ component: 'web', backup: true }] } };
+      const pending = appOperations.appendBackupTask(req, makeRes());
+      await clock.tickAsync(120000);
+      await pending;
+      clock.restore();
+
+      const started = drive.getCalls()
+        .filter((call) => call.args[1] === 'running')
+        .flatMap((call) => call.args[0]);
+      expect(started, 'the standby must not be started alongside its sibling')
+        .to.not.include('web_bkapp');
+    });
+
     it('never drives run-state when a foreign operation already holds the app', async () => {
       const clock = sinon.useFakeTimers({ toFake: ['setTimeout'] });
       const drive = sinon.stub(appReconciler, 'drive').resolves({ converged: true, failed: [] });
