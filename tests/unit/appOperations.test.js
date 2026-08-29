@@ -27,8 +27,46 @@ const appQueryService = require('../../ZelBack/src/services/appQuery/appQuerySer
 const syncthingService = require('../../ZelBack/src/services/syncthingService');
 const config = require('config');
 const proxyquire = require('proxyquire');
+const { appsFolder } = require('../../ZelBack/src/services/utils/appConstants');
+const {
+  loadSpecLibrary, V9_SUBMISSION, v9Spec, instantiatedSpec, assertAnswers,
+} = require('./fixtures/fluxSpec');
+
+// The spec library is real here, not stubbed — see tests/unit/fixtures/fluxSpec.js
+// for why. What stays stubbed is I/O and FluxOS policy: the daemon socket, mongo,
+// docker, the syncthing API, the resource gate.
+let flux;
 
 describe('appOperations tests', () => {
+  before(async function loadLibrary() {
+    // The first fromSubmission compiles the ajv schemas.
+    this.timeout(30000);
+    flux = await loadSpecLibrary();
+  });
+
+  /**
+   * A real DeploymentSpec — the class deploymentProvider hands every caller in
+   * this module (it builds them with the same appsFolder). `replica` is stated,
+   * never defaulted, exactly as DeploymentSpec.fromSpec demands.
+   */
+  function deploymentFor(spec, opts = {}) {
+    return flux.DeploymentSpec.fromSpec(spec, appsFolder, { replica: null, ...opts });
+  }
+
+  /** A real FluxAppSpecV9 with one component, named. */
+  function specWithComponents(appName, components) {
+    const built = {};
+    for (const [compName, overrides] of Object.entries(components)) {
+      built[compName] = { ...V9_SUBMISSION.components.web, name: compName, ...overrides };
+    }
+    return v9Spec({ name: appName, components: built });
+  }
+
+  /** A real DeploymentSpec for a one-component app. */
+  async function oneComponentDeployment(appName, compName, overrides = {}, depOpts = {}) {
+    return deploymentFor(await specWithComponents(appName, { [compName]: overrides }), depOpts);
+  }
+
   beforeEach(() => {
     // Delegate the plural provider entries to the singular stubs each test
     // installs, at call time, so per-test failure injection flows through.
@@ -66,8 +104,11 @@ describe('appOperations tests', () => {
 
     it('serves the blob using the installed app owner as the fluxID', async () => {
       sinon.stub(globalState, 'isArcane').returns(true);
-      sinon.stub(appsRepository, 'getInstalledApp').resolves({ owner: 'owner1' });
-      sinon.stub(deploymentProvider, 'getInstalledDeployment').resolves({ marker: 'deployment' });
+      // The installed row hydrates to an InstantiatedSpec; its `owner` is a real
+      // FluxID, which is what the owner-keyed locator was derived from.
+      const installed = await instantiatedSpec(await v9Spec());
+      sinon.stub(appsRepository, 'getInstalledApp').resolves(installed);
+      sinon.stub(deploymentProvider, 'getInstalledDeployment').resolves(await oneComponentDeployment('myapp', 'web'));
       const framed = Buffer.from('cipher');
       const serveBlob = sinon.stub(contentBlobService, 'serveBlob').resolves(framed);
       const res = makeRes();
@@ -76,7 +117,8 @@ describe('appOperations tests', () => {
 
       // the locator is owner-keyed: fluxID must be the installed app's owner
       const [reqArg] = serveBlob.firstCall.args;
-      expect(reqArg).to.include({ appName: 'myapp', fluxID: 'owner1', locator: 'loc-1' });
+      expect(reqArg).to.include({ appName: 'myapp', fluxID: installed.owner, locator: 'loc-1' });
+      expect(installed.owner, 'the owner must be the spec\'s real FluxID, not a placeholder').to.equal(V9_SUBMISSION.owner);
       sinon.assert.calledWith(res.send, framed);
     });
 
@@ -91,8 +133,8 @@ describe('appOperations tests', () => {
 
     it('returns 404 when no local mount matches the requested locator', async () => {
       sinon.stub(globalState, 'isArcane').returns(true);
-      sinon.stub(appsRepository, 'getInstalledApp').resolves({ owner: 'owner1' });
-      sinon.stub(deploymentProvider, 'getInstalledDeployment').resolves({ marker: 'd' });
+      sinon.stub(appsRepository, 'getInstalledApp').resolves(await instantiatedSpec(await v9Spec()));
+      sinon.stub(deploymentProvider, 'getInstalledDeployment').resolves(await oneComponentDeployment('myapp', 'web'));
       sinon.stub(contentBlobService, 'serveBlob').resolves(null);
       const res = makeRes();
       await appOperations.contentBlobServeApi({ params: { appName: 'myapp', locator: 'nope' } }, res);
@@ -245,9 +287,9 @@ describe('appOperations tests', () => {
     });
 
     it('hands recovery to the reconciler (no destroy) when component not found in app', async () => {
-      sinon.stub(deploymentProvider, 'getInstalledDeployment').resolves({
-        getComponent: () => null,
-      });
+      // A real deployment of an intact app that simply has no 'frontend' component:
+      // getComponent answers for what the spec declares and nothing else.
+      sinon.stub(deploymentProvider, 'getInstalledDeployment').resolves(await oneComponentDeployment('myapp', 'web'));
       const uninstall = sinon.stub(appUninstaller, 'uninstallApplication').resolves();
       const enqueue = sinon.stub(appReconciler, 'enqueueApp');
 
@@ -261,14 +303,22 @@ describe('appOperations tests', () => {
     // Prong A: a broken new image is rejected by the pre-flight BEFORE the old version
     // is torn down, so the running app is never disturbed by a bad redeploy.
     it('aborts without tearing down the old version when the new image fails pre-flight verify', async () => {
-      const deployComp = { identifier: 'frontend_myapp', image: 'myrepo/app:deleted-tag' };
-      sinon.stub(deploymentProvider, 'getInstalledDeployment').resolves({ getComponent: () => deployComp });
-      sinon.stub(componentProvisioner, 'verifyComponentImage').rejects(new Error('image not found in registry'));
+      const deployment = await oneComponentDeployment('myapp', 'frontend', { image: 'myrepo/app:deleted-tag' });
+      sinon.stub(deploymentProvider, 'getInstalledDeployment').resolves(deployment);
+      const verifyImage = sinon.stub(componentProvisioner, 'verifyComponentImage').rejects(new Error('image not found in registry'));
       const uninstallComponent = sinon.stub(appUninstaller, 'uninstallComponent').resolves();
       const uninstallApplication = sinon.stub(appUninstaller, 'uninstallApplication').resolves();
       const enqueue = sinon.stub(appReconciler, 'enqueueApp');
 
       await appOperations.redeployComponent('myapp', 'frontend', { onStatus: () => {} });
+
+      // The image validator stays stubbed, so nothing else proves the object it was
+      // handed can answer what the real one reads off it.
+      const [handedComp] = verifyImage.firstCall.args;
+      expect(handedComp.image, 'verifyComponentImage pulls component.image').to.equal('myrepo/app:deleted-tag');
+      expect(handedComp.appName, 'and component.appName, for the registry credential lookup').to.equal('myapp');
+      // '' on the real class, not null — falsy either way, so the credential lookup is skipped
+      expect(handedComp.imageAuth, 'and component.imageAuth, which gates the credential lookup').to.equal('');
 
       expect(uninstallComponent.called, 'must NOT tear down the old version when the new image fails pre-flight').to.be.false;
       expect(uninstallApplication.called, 'and must NOT destroy the app').to.be.false;
@@ -283,19 +333,23 @@ describe('appOperations tests', () => {
     it('leaves ufw/UPnP untouched: teardown and reinstall both run with skipPorts', async () => {
       // eslint-disable-next-line global-require
       const hwRequirements = require('../../ZelBack/src/services/appRequirements/hwRequirements');
-      const deployComp = {
-        identifier: 'frontend_myapp', image: 'myrepo/app:v1', name: 'frontend', requiresDaemonShutdown: () => false, shutdownBudgetSeconds: () => 10,
-      };
-      sinon.stub(deploymentProvider, 'getInstalledDeployment').resolves({ getComponent: () => deployComp });
+      // A real component with no shutdown/preStop/drain: requiresDaemonShutdown()
+      // is false and shutdownBudgetSeconds() is docker's own 10s window.
+      const deployment = await oneComponentDeployment('myapp', 'frontend', { image: 'myrepo/app:v1' });
+      const deployComp = deployment.getComponent('frontend');
+      expect(deployComp.requiresDaemonShutdown()).to.be.false;
+      expect(deployComp.shutdownBudgetSeconds()).to.equal(10);
+      sinon.stub(deploymentProvider, 'getInstalledDeployment').resolves(deployment);
       sinon.stub(componentProvisioner, 'verifyComponentImage').resolves();
       sinon.stub(serviceHelper, 'delay').resolves();
-      sinon.stub(appsRepository, 'getInstalledApp').resolves({ version: 8, owner: 'owner1' });
-      sinon.stub(deploymentProvider, 'buildDeployment').resolves({ marker: 'fresh', componentEntries: () => [] });
+      sinon.stub(appsRepository, 'getInstalledApp').resolves(await instantiatedSpec(await v9Spec()));
+      const freshDeployment = await oneComponentDeployment('myapp', 'frontend', { image: 'myrepo/app:v1' });
+      sinon.stub(deploymentProvider, 'buildDeployment').resolves(freshDeployment);
       sinon.stub(hwRequirements, 'checkNodeResources').resolves();
       // The redeploy/update path uses the reclaiming variant: these run AFTER
       // the containers are gone, so a shortfall leaves a paid app destroyed and
       // free session capacity must never be what causes one.
-      sinon.stub(hwRequirements, 'checkNodeResourcesReclaiming').resolves();
+      const reclaiming = sinon.stub(hwRequirements, 'checkNodeResourcesReclaiming').resolves();
       const uninstallComponent = sinon.stub(appUninstaller, 'uninstallComponent').resolves();
       const installComponent = sinon.stub(componentProvisioner, 'installComponent').resolves();
       sinon.stub(appReconciler, 'enqueueApp');
@@ -304,6 +358,12 @@ describe('appOperations tests', () => {
 
       expect(uninstallComponent.calledOnceWith(deployComp, sinon.match({ skipPorts: true })), 'teardown must skip ports').to.be.true;
       expect(installComponent.calledOnceWith(deployComp, sinon.match({ skipPorts: true })), 'reinstall must skip ports').to.be.true;
+
+      // Both gates stay stubbed, so assert the objects they were handed can answer
+      // what the real ones ask: the resource gate sums the deployment's totals, and
+      // the provisioner asks the component whether it takes a managed cert.
+      assertAnswers(reclaiming.firstCall.args[0], ['resourceTotals']);
+      assertAnswers(installComponent.firstCall.args[0], ['requiresBackendTls', 'toDockerEnv', 'toDockerPortBindings']);
     });
 
     it('routes a graceful component redeploy through flux-shutdownd, component-scoped', async () => {
@@ -311,18 +371,21 @@ describe('appOperations tests', () => {
       const hwRequirements = require('../../ZelBack/src/services/appRequirements/hwRequirements');
       // eslint-disable-next-line global-require
       const fluxShutdowndClient = require('../../ZelBack/src/services/utils/fluxShutdowndClient');
-      const deployComp = {
-        identifier: 'frontend_myapp',
+      // A declared graceful contract on the real class: shutdown.gracefulTimeout is
+      // what makes requiresDaemonShutdown() true and sets the budget.
+      const deployment = await oneComponentDeployment('myapp', 'frontend', {
         image: 'myrepo/app:v1',
-        name: 'frontend',
-        requiresDaemonShutdown: () => true,
-        shutdownBudgetSeconds: () => 300,
-      };
-      sinon.stub(deploymentProvider, 'getInstalledDeployment').resolves({ replica: null, getComponent: () => deployComp });
+        shutdown: { gracefulTimeout: 290 },
+      });
+      const deployComp = deployment.getComponent('frontend');
+      expect(deployComp.requiresDaemonShutdown(), 'a declared shutdown IS the graceful contract').to.be.true;
+      sinon.stub(deploymentProvider, 'getInstalledDeployment').resolves(deployment);
       sinon.stub(componentProvisioner, 'verifyComponentImage').resolves();
       sinon.stub(serviceHelper, 'delay').resolves();
-      sinon.stub(appsRepository, 'getInstalledApp').resolves({ version: 8, owner: 'owner1' });
-      sinon.stub(deploymentProvider, 'buildDeployment').resolves({ marker: 'fresh', componentEntries: () => [] });
+      sinon.stub(appsRepository, 'getInstalledApp').resolves(await instantiatedSpec(await v9Spec()));
+      sinon.stub(deploymentProvider, 'buildDeployment').resolves(
+        await oneComponentDeployment('myapp', 'frontend', { image: 'myrepo/app:v1', shutdown: { gracefulTimeout: 290 } }),
+      );
       sinon.stub(hwRequirements, 'checkNodeResources').resolves();
       sinon.stub(hwRequirements, 'checkNodeResourcesReclaiming').resolves();
       const beginAppStop = sinon.stub(fluxShutdowndClient, 'beginAppStop').resolves({ outcome: 'complete' });
@@ -342,6 +405,8 @@ describe('appOperations tests', () => {
   describe('redeployApplication pre-teardown dependency check', () => {
     // eslint-disable-next-line global-require
     const relationshipResolver = require('../../ZelBack/src/services/appLifecycle/relationshipResolver');
+    // eslint-disable-next-line global-require
+    const { resolveInstantiatedSpec } = require('../../ZelBack/src/services/utils/specCutover');
 
     beforeEach(() => {
       operationRegistry.clear();
@@ -350,12 +415,13 @@ describe('appOperations tests', () => {
     // Same contract as the image pre-flight: a redeploy that cannot complete must be
     // rejected BEFORE the old version is torn down, never after.
     it('aborts without tearing down the old version when a dependency is missing', async () => {
-      const deployComp = { identifier: 'frontend_myapp', image: 'myrepo/app:v1' };
-      sinon.stub(deploymentProvider, 'getInstalledDeployment').resolves({ componentEntries: () => [['frontend', deployComp]] });
+      sinon.stub(deploymentProvider, 'getInstalledDeployment').resolves(
+        await oneComponentDeployment('myapp', 'frontend', { image: 'myrepo/app:v1' }),
+      );
       sinon.stub(componentProvisioner, 'verifyComponentImage').resolves();
       sinon.stub(serviceHelper, 'delay').resolves();
-      sinon.stub(appsRepository, 'getInstalledApp').resolves({ name: 'myapp', owner: 'owner1' });
-      sinon.stub(relationshipResolver, 'checkAppDependencyRequirements').rejects(
+      sinon.stub(appsRepository, 'getInstalledApp').resolves(await instantiatedSpec(await v9Spec()));
+      const checkDeps = sinon.stub(relationshipResolver, 'checkAppDependencyRequirements').rejects(
         Object.assign(new Error("App 'collector' that 'myapp' depends on is not installed on this node. Installation aborted."), { code: 'NETWORK_DEPENDENCY_NOT_READY' }),
       );
       const uninstallComponent = sinon.stub(appUninstaller, 'uninstallComponent').resolves();
@@ -363,6 +429,12 @@ describe('appOperations tests', () => {
       const enqueue = sinon.stub(appReconciler, 'enqueueApp');
 
       await appOperations.redeployApplication('myapp', { onStatus: () => {} });
+
+      // The dependency gate stays stubbed. The real one resolves the instantiated
+      // spec to its readable view and reads the edges off that, so both steps have
+      // to work on the object it was actually handed.
+      const [handedSpec] = checkDeps.firstCall.args;
+      assertAnswers(await resolveInstantiatedSpec(handedSpec), ['dependencyEntries']);
 
       expect(uninstallComponent.called, 'must NOT tear down the old version when a dependency is missing').to.be.false;
       expect(uninstallApplication.called, 'and must NOT destroy the app').to.be.false;
@@ -375,16 +447,18 @@ describe('appOperations tests', () => {
       const fluxShutdowndClient = require('../../ZelBack/src/services/utils/fluxShutdowndClient');
       // eslint-disable-next-line global-require
       const shutdownPlan = require('../../ZelBack/src/services/appLifecycle/shutdownPlan');
-      const deployComp = { identifier: 'frontend_myapp', image: 'myrepo/app:v1' };
-      sinon.stub(deploymentProvider, 'getInstalledDeployment').resolves({ replica: null, componentEntries: () => [['frontend', deployComp]] });
+      const deployment = await oneComponentDeployment('myapp', 'frontend', { image: 'myrepo/app:v1' });
+      const deployComp = deployment.getComponent('frontend');
+      sinon.stub(deploymentProvider, 'getInstalledDeployment').resolves(deployment);
       sinon.stub(componentProvisioner, 'verifyComponentImage').resolves();
       sinon.stub(serviceHelper, 'delay').resolves();
+      const installed = await instantiatedSpec(await v9Spec());
       const getInstalledApp = sinon.stub(appsRepository, 'getInstalledApp');
-      getInstalledApp.onFirstCall().resolves({ name: 'myapp', owner: 'owner1' });
+      getInstalledApp.onFirstCall().resolves(installed);
       getInstalledApp.onSecondCall().resolves(null);
       sinon.stub(relationshipResolver, 'checkAppDependencyRequirements').resolves(true);
       const beginAppStop = sinon.stub(fluxShutdowndClient, 'beginAppStop').resolves({ outcome: 'complete' });
-      sinon.stub(shutdownPlan, 'appShutdownBudgetSeconds').returns(30);
+      const budgetSeconds = sinon.stub(shutdownPlan, 'appShutdownBudgetSeconds').returns(30);
       const uninstallComponent = sinon.stub(appUninstaller, 'uninstallComponent').resolves();
       sinon.stub(appReconciler, 'enqueueApp');
 
@@ -392,22 +466,26 @@ describe('appOperations tests', () => {
 
       expect(beginAppStop.calledOnce, 'the daemon owns the stop').to.be.true;
       const [owner, name, reason, opts] = beginAppStop.firstCall.args;
-      expect(owner).to.equal('owner1');
+      expect(owner).to.equal(installed.owner);
       expect(name).to.equal('myapp');
       expect(reason).to.equal(fluxShutdowndClient.SHUTDOWN_REASON.REDEPLOY);
       expect(opts.replica).to.equal(null);
       expect(uninstallComponent.calledWith(deployComp, sinon.match({ stopHandled: true })), 'the component teardown must not stop again').to.be.true;
+      // The budget calculator stays stubbed; the real one walks the deployment's
+      // components, so the view it was handed has to be able to hand them back.
+      assertAnswers(budgetSeconds.firstCall.args[0], ['componentEntries']);
     });
 
     it('proceeds to teardown when every dependency is satisfied', async () => {
-      const deployComp = { identifier: 'frontend_myapp', image: 'myrepo/app:v1' };
-      sinon.stub(deploymentProvider, 'getInstalledDeployment').resolves({ componentEntries: () => [['frontend', deployComp]] });
+      sinon.stub(deploymentProvider, 'getInstalledDeployment').resolves(
+        await oneComponentDeployment('myapp', 'frontend', { image: 'myrepo/app:v1' }),
+      );
       sinon.stub(componentProvisioner, 'verifyComponentImage').resolves();
       sinon.stub(serviceHelper, 'delay').resolves();
       // First read feeds the pre-teardown check; the post-teardown read returns null so
       // the run settles through the catch without exercising the full reinstall path.
       const getInstalledApp = sinon.stub(appsRepository, 'getInstalledApp');
-      getInstalledApp.onFirstCall().resolves({ name: 'myapp', owner: 'owner1' });
+      getInstalledApp.onFirstCall().resolves(await instantiatedSpec(await v9Spec()));
       getInstalledApp.onSecondCall().resolves(null);
       sinon.stub(relationshipResolver, 'checkAppDependencyRequirements').resolves(true);
       const uninstallComponent = sinon.stub(appUninstaller, 'uninstallComponent').resolves();
@@ -461,9 +539,7 @@ describe('appOperations tests', () => {
     });
 
     it('hands recovery to the reconciler (no destroy) when component not found in app', async () => {
-      sinon.stub(deploymentProvider, 'getInstalledDeployment').resolves({
-        getComponent: () => null,
-      });
+      sinon.stub(deploymentProvider, 'getInstalledDeployment').resolves(await oneComponentDeployment('myapp', 'web'));
       const uninstall = sinon.stub(appUninstaller, 'uninstallApplication').resolves();
       const enqueue = sinon.stub(appReconciler, 'enqueueApp');
 
@@ -487,6 +563,7 @@ describe('appOperations tests', () => {
   describe('ensureMountSourcesExist tests', () => {
     let serviceHelperStub;
     let logStub;
+    let fsStub;
     let proxyquire;
 
     beforeEach(() => {
@@ -502,67 +579,89 @@ describe('appOperations tests', () => {
         warn: sinon.stub(),
         error: sinon.stub(),
       };
+
+      // Real components carry a real `dir`, so the trailing writeStignore would
+      // touch the host filesystem. That is I/O and stays stubbed.
+      fsStub = {
+        rm: sinon.stub().resolves(),
+        readFile: sinon.stub().resolves(null),
+        writeFile: sinon.stub().resolves(),
+      };
     });
 
     afterEach(() => {
       sinon.restore();
     });
 
-    function buildDeployComp(mounts) {
-      return { mounts };
+    /**
+     * A real DeploymentComponent whose mounts are the ones the spec declares.
+     * `mounts` (Source + sourceType + perms) is derived by the spec library from
+     * the persistentStorage block — the shape ensureMountSourcesExist consumes.
+     */
+    async function buildDeployComp(mounts) {
+      const persistentStorage = Object.keys(mounts).length
+        ? { sizeGb: 5, mounts }
+        : { sizeGb: 0, mounts: {} };
+      const deployment = await oneComponentDeployment('webapp', 'test', { persistentStorage });
+      return deployment.getComponent('test');
     }
+
+    const dirMount = (destination, source) => [destination, { source, destination, type: 'directory' }];
+    const fileMount = (destination, source) => [destination, { source, destination, type: 'file' }];
 
     function loadModule() {
       return proxyquire('../../ZelBack/src/services/appLifecycle/appVolumeService', {
         '../serviceHelper': serviceHelperStub,
         '../../lib/log': logStub,
+        'node:fs/promises': fsStub,
       });
     }
 
     it('creates a file source with touch and chmod', async () => {
       const mod = loadModule();
-      const deployComp = buildDeployComp([
-        { Source: '/apps/fluxweb_test/config.yaml', sourceType: 'file' },
-      ]);
+      const deployComp = await buildDeployComp(Object.fromEntries([fileMount('/etc/app/config.yaml', 'config.yaml')]));
+      const configYaml = `${deployComp.dir}/config.yaml`;
 
       await mod.ensureMountSourcesExist(deployComp);
 
-      expect(serviceHelperStub.runCommand.calledWith('touch', sinon.match({ params: ['/apps/fluxweb_test/config.yaml'], runAsRoot: true }))).to.be.true;
-      expect(serviceHelperStub.runCommand.calledWith('chmod', sinon.match({ params: ['777', '/apps/fluxweb_test/config.yaml'], runAsRoot: true }))).to.be.true;
+      expect(serviceHelperStub.runCommand.calledWith('touch', sinon.match({ params: [configYaml], runAsRoot: true }))).to.be.true;
+      expect(serviceHelperStub.runCommand.calledWith('chmod', sinon.match({ params: ['777', configYaml], runAsRoot: true }))).to.be.true;
     });
 
     it('creates a directory source with mkdir -p', async () => {
       const mod = loadModule();
-      const deployComp = buildDeployComp([
-        { Source: '/apps/fluxweb_test/logs', sourceType: 'directory' },
-      ]);
+      const deployComp = await buildDeployComp(Object.fromEntries([dirMount('/var/log/app', 'logs')]));
+      const logs = `${deployComp.dir}/logs`;
 
       await mod.ensureMountSourcesExist(deployComp);
 
-      expect(serviceHelperStub.runCommand.calledWith('mkdir', sinon.match({ params: ['-p', '/apps/fluxweb_test/logs'], runAsRoot: true }))).to.be.true;
+      expect(serviceHelperStub.runCommand.calledWith('mkdir', sinon.match({ params: ['-p', logs], runAsRoot: true }))).to.be.true;
     });
 
     it('materialises every source unconditionally, with no prior existence check (idempotent, no TOCTOU)', async () => {
       const mod = loadModule();
-      const deployComp = buildDeployComp([
-        { Source: '/apps/fluxweb_test/html', sourceType: 'directory' },
-        { Source: '/apps/fluxweb_test/logs', sourceType: 'directory' },
-        { Source: '/apps/fluxweb_test/config.yaml', sourceType: 'file' },
-      ]);
+      const deployComp = await buildDeployComp(Object.fromEntries([
+        dirMount('/usr/share/nginx/html', 'html'),
+        dirMount('/var/log/app', 'logs'),
+        fileMount('/etc/app/config.yaml', 'config.yaml'),
+      ]));
+      const { dir } = deployComp;
 
       await mod.ensureMountSourcesExist(deployComp);
 
       // mkdir -p / touch run for every source, not gated on a prior stat — mkdir -p
       // and touch are themselves idempotent, so there is no check-then-act window.
-      expect(serviceHelperStub.runCommand.calledWith('mkdir', sinon.match({ params: ['-p', '/apps/fluxweb_test/html'] }))).to.be.true;
-      expect(serviceHelperStub.runCommand.calledWith('mkdir', sinon.match({ params: ['-p', '/apps/fluxweb_test/logs'] }))).to.be.true;
-      expect(serviceHelperStub.runCommand.calledWith('touch', sinon.match({ params: ['/apps/fluxweb_test/config.yaml'] }))).to.be.true;
-      expect(serviceHelperStub.runCommand.calledWith('chmod', sinon.match({ params: ['777', '/apps/fluxweb_test/config.yaml'] }))).to.be.true;
+      expect(serviceHelperStub.runCommand.calledWith('mkdir', sinon.match({ params: ['-p', `${dir}/html`] }))).to.be.true;
+      expect(serviceHelperStub.runCommand.calledWith('mkdir', sinon.match({ params: ['-p', `${dir}/logs`] }))).to.be.true;
+      expect(serviceHelperStub.runCommand.calledWith('touch', sinon.match({ params: [`${dir}/config.yaml`] }))).to.be.true;
+      expect(serviceHelperStub.runCommand.calledWith('chmod', sinon.match({ params: ['777', `${dir}/config.yaml`] }))).to.be.true;
     });
 
     it('handles empty mounts array', async () => {
       const mod = loadModule();
-      const deployComp = buildDeployComp([]);
+      // A stateless component: the spec gives it no volume, so it has no mounts.
+      const deployComp = await buildDeployComp({});
+      expect(deployComp.mounts).to.eql([]);
 
       await mod.ensureMountSourcesExist(deployComp);
 
@@ -575,6 +674,32 @@ describe('appOperations tests', () => {
   describe('coordinateActiveStandbyApps tests', () => {
     let globalStateRef;
     let deploymentProviderStub;
+
+    // What makes a component a g:/masterSlave component on the real class:
+    // persistentStorage.sync.mode === activeStandby. hasActiveStandbySyncthing()
+    // and hasSyncthing() are derived from it, never set independently.
+    const AS_STORAGE = {
+      sizeGb: 5,
+      mounts: { '/data': { source: 'data', destination: '/data' } },
+      sync: { mode: 'activeStandby' },
+    };
+
+    /** A real DeploymentSpec for a single-component activeStandby app. */
+    const gDeployment = (appName, identifier) => oneComponentDeployment(
+      appName, identifier.split('_')[0], { persistentStorage: AS_STORAGE },
+    );
+
+    /**
+     * A real MIXED app: a plain component declared first, then the activeStandby
+     * one. The coordinator must walk past the sibling and act on the g: component.
+     */
+    async function mixedGDeployment(appName, asComponent) {
+      const spec = await specWithComponents(appName, {
+        db: { ports: { pg: { containerPort: 5432, hostPort: 31001 } } },
+        [asComponent]: { persistentStorage: AS_STORAGE },
+      });
+      return deploymentFor(spec);
+    }
 
     beforeEach(() => {
       globalStateRef = globalState;
@@ -608,15 +733,7 @@ describe('appOperations tests', () => {
 
     it('should skip apps in backup progress', async () => {
       const appName = 'testapp';
-      const mockDeployment = {
-        appName,
-        componentEntries: () => [[appName, {
-          identifier: appName,
-          hasActiveStandbySyncthing: () => true,
-          hasSyncthing: () => true,
-        }]],
-      };
-      deploymentProviderStub.resolves([mockDeployment]);
+      deploymentProviderStub.resolves([await gDeployment(appName, `web_${appName}`)]);
       operationRegistry.acquire(appName, 'backup', 'test');
 
       const serviceHelper = require('../../ZelBack/src/services/serviceHelper');
@@ -646,15 +763,10 @@ describe('appOperations tests', () => {
         '../appQuery/appQueryService': { ...appQueryService, listRunningContainers },
       });
 
-      const mockDeployment = {
-        appName: 'n8napp',
-        componentEntries: () => [['n8n', {
-          identifier,
-          hasActiveStandbySyncthing: () => true,
-          hasSyncthing: () => true,
-        }]],
-      };
-      deploymentProviderStub.resolves([mockDeployment]);
+      const mixed = await mixedGDeployment('n8napp', 'n8n');
+      expect(mixed.componentEntries()[0][0], 'the plain sibling comes first, so the walk must pass it').to.equal('db');
+      expect(mixed.getComponent('n8n').identifier).to.equal(identifier);
+      deploymentProviderStub.resolves([mixed]);
 
       const serviceHelper = require('../../ZelBack/src/services/serviceHelper');
       // FDM reports the primary lives on a DIFFERENT node -> this node is a standby.
@@ -689,15 +801,7 @@ describe('appOperations tests', () => {
         '../appQuery/appQueryService': { ...appQueryService, listRunningContainers },
       });
 
-      const mockDeployment = {
-        appName: 'n8napp',
-        componentEntries: () => [['n8n', {
-          identifier,
-          hasActiveStandbySyncthing: () => true,
-          hasSyncthing: () => true,
-        }]],
-      };
-      deploymentProviderStub.resolves([mockDeployment]);
+      deploymentProviderStub.resolves([await gDeployment('n8napp', identifier)]);
 
       const serviceHelper = require('../../ZelBack/src/services/serviceHelper');
       // FDM names THIS node as primary, returned as a bare IP (production format).
@@ -725,18 +829,9 @@ describe('appOperations tests', () => {
         && c.args[1].action === action,
     );
 
-    const gDeployment = (appName, identifier) => ({
-      appName,
-      componentEntries: () => [[identifier.split('_')[0], {
-        identifier,
-        hasActiveStandbySyncthing: () => true,
-        hasSyncthing: () => true,
-      }]],
-    });
-
     it('announces an operator-stopped component once, not on every pass', async () => {
       const identifier = 'opstopa_appa';
-      deploymentProviderStub.resolves([gDeployment('appa', identifier)]);
+      deploymentProviderStub.resolves([await gDeployment('appa', identifier)]);
 
       appsRuntimeState.isOperatorStopped.resetBehavior();
       appsRuntimeState.isOperatorStopped.resolves(true);
@@ -753,7 +848,7 @@ describe('appOperations tests', () => {
 
     it('announces again after the operator lock is lifted and re-applied', async () => {
       const identifier = 'opstopb_appb';
-      deploymentProviderStub.resolves([gDeployment('appb', identifier)]);
+      deploymentProviderStub.resolves([await gDeployment('appb', identifier)]);
 
       appsRuntimeState.isOperatorStopped.resetBehavior();
       appsRuntimeState.isOperatorStopped.resolves(true);
@@ -820,7 +915,7 @@ describe('appOperations tests', () => {
       // restarting FluxOS. Without the eviction every start branch is closed to it.
       const identifier = 'staleprim_appc';
       const appId = `flux${identifier}`;
-      deploymentProviderStub.resolves([gDeployment('appc', identifier)]);
+      deploymentProviderStub.resolves([await gDeployment('appc', identifier)]);
 
       sinon.stub(dockerService, 'getAppIdentifier').returns(appId);
       sinon.stub(fluxNetworkHelper, 'getLocalSocketAddress').resolves('192.168.1.5:16137');
@@ -854,14 +949,27 @@ describe('appOperations tests', () => {
   });
 
   describe('shutdownPlanResync tests', () => {
+    // eslint-disable-next-line global-require
+    const { resolveInstantiatedSpec } = require('../../ZelBack/src/services/utils/specCutover');
     let proxyquire;
+
+    // Real spec hashes: 64 hex characters, the form the registry and the daemon's
+    // stored plans both carry.
+    const HASH_OLD = 'a'.repeat(64);
+    const HASH_NEW = 'b'.repeat(64);
+    const OWNER = V9_SUBMISSION.owner;
 
     beforeEach(() => {
       proxyquire = require('proxyquire');
     });
 
-    function loadWith({
-      arcane = true, installed = [], plans = [], deployment = {}, deployments = null,
+    /** A real InstantiatedSpec — what listInstalledApps hydrates each row into. */
+    async function installedRow(name, hash) {
+      return instantiatedSpec(await v9Spec({ name }), { hash });
+    }
+
+    async function loadWith({
+      arcane = true, installed = [], plans = [], deployment, deployments = null,
       buildThrows = false, requires = true,
     } = {}) {
       const client = {
@@ -874,52 +982,76 @@ describe('appOperations tests', () => {
       const fsPromises = {
         access: arcane ? sinon.stub().resolves() : sinon.stub().rejects(new Error('ENOENT')),
       };
+      const built = deployment ?? await oneComponentDeployment('app1', 'web');
+      // Records what the resync hands the (stubbed) provider, so a test can prove
+      // the real provider could have built a deployment from it.
+      const buildDeploymentsSpy = sinon.stub();
       const providerStub = {
-        buildDeployment: sinon.stub().resolves(deployment),
+        buildDeployment: sinon.stub().resolves(built),
         // Delegates at call time so per-test overrides of buildDeployment flow
         // through the plural entry the resync uses; `deployments`/`buildThrows`
         // exercise the multi-identity and build-failure paths directly.
         get buildDeployments() {
-          if (buildThrows) return async () => { throw new Error('resolve failed'); };
-          if (deployments) return async () => deployments;
           const single = this.buildDeployment;
           return async (inst) => {
-            const built = await single(inst);
-            return built ? [built] : [];
+            buildDeploymentsSpy(inst);
+            if (buildThrows) throw new Error('resolve failed');
+            if (deployments) return deployments;
+            const one = await single(inst);
+            return one ? [one] : [];
           };
         },
+      };
+      const shutdownPlanStub = {
+        buildShutdownPlan: sinon.stub().callsFake((inst, dep) => ({ app_name: inst.name, replica: dep.replica ?? null })),
+        appRequiresDaemonShutdown: sinon.stub().returns(requires),
       };
       const mod = proxyquire('../../ZelBack/src/services/appLifecycle/appOperations', {
         'node:fs/promises': fsPromises,
         '../../lib/log': { info: sinon.stub(), warn: sinon.stub(), error: sinon.stub() },
         '../appDatabase/appsRepository': { listInstalledApps: sinon.stub().resolves(installed) },
         '../appRuntime/deploymentProvider': providerStub,
-        './shutdownPlan': {
-          buildShutdownPlan: sinon.stub().callsFake((inst, dep) => ({ app_name: inst.name, replica: dep.replica ?? null })),
-          appRequiresDaemonShutdown: sinon.stub().returns(requires),
-        },
+        './shutdownPlan': shutdownPlanStub,
         '../utils/fluxShutdowndClient': client,
       });
-      return { mod, client };
+      return {
+        mod, client, shutdownPlanStub, buildDeploymentsSpy,
+      };
     }
 
     it('re-pushes a drifted plan and removes an orphan', async () => {
-      const { mod, client } = loadWith({
-        installed: [{ name: 'app1', owner: '1own', hash: 'hashNEW' }],
+      const {
+        mod, client, shutdownPlanStub, buildDeploymentsSpy,
+      } = await loadWith({
+        installed: [await installedRow('app1', HASH_NEW)],
         plans: [
-          { app_name: 'app1', owner_flux_id: '1own', spec_hash: 'hashOLD' },
-          { app_name: 'gone', owner_flux_id: '1own', spec_hash: 'x' },
+          { app_name: 'app1', owner_flux_id: OWNER, spec_hash: HASH_OLD },
+          { app_name: 'gone', owner_flux_id: OWNER, spec_hash: 'c'.repeat(64) },
         ],
       });
       await mod.shutdownPlanResync();
       expect(client.upsertAppPlanBestEffort.calledOnce).to.be.true;
-      expect(client.deleteAppPlanBestEffort.calledOnceWith('gone', '1own')).to.be.true;
+      expect(client.deleteAppPlanBestEffort.calledOnceWith('gone', OWNER)).to.be.true;
+
+      // The provider is stubbed, so nothing else proves the installed row it was
+      // handed is one the real provider could resolve and build a deployment from.
+      const [handedRow] = buildDeploymentsSpy.firstCall.args;
+      const rebuilt = deploymentFor(await resolveInstantiatedSpec(handedRow));
+      expect(rebuilt.appName).to.equal('app1');
+
+      // shutdownPlan is stubbed too; both of its entry points walk the deployment's
+      // components, and buildShutdownPlan reads owner/hash off the installed row.
+      assertAnswers(shutdownPlanStub.appRequiresDaemonShutdown.firstCall.args[0], ['componentEntries']);
+      const [planRow, planDeployment] = shutdownPlanStub.buildShutdownPlan.firstCall.args;
+      assertAnswers(planDeployment, ['componentEntries']);
+      expect(planRow.owner).to.equal(OWNER);
+      expect(planRow.hash).to.equal(HASH_NEW);
     });
 
     it('leaves a plan untouched when its hash already matches', async () => {
-      const { mod, client } = loadWith({
-        installed: [{ name: 'app1', owner: '1own', hash: 'h' }],
-        plans: [{ app_name: 'app1', owner_flux_id: '1own', spec_hash: 'h' }],
+      const { mod, client } = await loadWith({
+        installed: [await installedRow('app1', HASH_NEW)],
+        plans: [{ app_name: 'app1', owner_flux_id: OWNER, spec_hash: HASH_NEW }],
       });
       await mod.shutdownPlanResync();
       expect(client.upsertAppPlanBestEffort.called).to.be.false;
@@ -927,7 +1059,7 @@ describe('appOperations tests', () => {
     });
 
     it('does nothing when the shutdownd socket is absent', async () => {
-      const { mod, client } = loadWith({ arcane: false });
+      const { mod, client } = await loadWith({ arcane: false });
       await mod.shutdownPlanResync();
       expect(client.listAppPlans.called).to.be.false;
     });
@@ -936,19 +1068,19 @@ describe('appOperations tests', () => {
       // The app dropped its graceful-shutdown features (spec hash drifted), so the
       // predicate is now false: it must be excluded from `live` and its stale plan
       // removed, never re-pushed.
-      const { mod, client } = loadWith({
-        installed: [{ name: 'app1', owner: '1own', hash: 'hashNEW' }],
-        plans: [{ app_name: 'app1', owner_flux_id: '1own', spec_hash: 'hashOLD' }],
+      const { mod, client } = await loadWith({
+        installed: [await installedRow('app1', HASH_NEW)],
+        plans: [{ app_name: 'app1', owner_flux_id: OWNER, spec_hash: HASH_OLD }],
         requires: false,
       });
       await mod.shutdownPlanResync();
       expect(client.upsertAppPlanBestEffort.called).to.be.false;
-      expect(client.deleteAppPlanBestEffort.calledOnceWith('app1', '1own')).to.be.true;
+      expect(client.deleteAppPlanBestEffort.calledOnceWith('app1', OWNER)).to.be.true;
     });
 
     it('pushes no plan for a non-requiring installed app with no stored plan', async () => {
-      const { mod, client } = loadWith({
-        installed: [{ name: 'plain', owner: '1own', hash: 'h' }],
+      const { mod, client } = await loadWith({
+        installed: [await installedRow('plain', HASH_NEW)],
         plans: [],
         requires: false,
       });
@@ -958,29 +1090,40 @@ describe('appOperations tests', () => {
     });
 
     it('keys per replica: re-pushes each assigned identity and orphan-deletes a de-assigned one', async () => {
-      const { mod, client } = loadWith({
-        installed: [{ name: 'app1', owner: '1own', hash: 'hashNEW' }],
+      const { mod, client } = await loadWith({
+        installed: [await installedRow('app1', HASH_NEW)],
         plans: [
-          { app_name: 'app1', owner_flux_id: '1own', replica: 's1', spec_hash: 'hashOLD' },
-          { app_name: 'app1', owner_flux_id: '1own', replica: 's2', spec_hash: 'hashOLD' },
+          {
+            app_name: 'app1', owner_flux_id: OWNER, replica: 's1', spec_hash: HASH_OLD,
+          },
+          {
+            app_name: 'app1', owner_flux_id: OWNER, replica: 's2', spec_hash: HASH_OLD,
+          },
         ],
-        deployments: [{ replica: 's1' }],
+        deployments: [await oneComponentDeployment('app1', 'web', {}, { replica: 's1' })],
       });
       await mod.shutdownPlanResync();
       expect(client.upsertAppPlanBestEffort.calledOnce).to.be.true;
       expect(client.upsertAppPlanBestEffort.firstCall.args[0].replica).to.equal('s1');
       // s2 is no longer assigned here: its plan is an orphan, deleted by identity.
-      expect(client.deleteAppPlanBestEffort.calledOnceWith('app1', '1own', 's2')).to.be.true;
+      expect(client.deleteAppPlanBestEffort.calledOnceWith('app1', OWNER, 's2')).to.be.true;
     });
 
     it('a matching hash keeps each replica plan without a re-push', async () => {
-      const { mod, client } = loadWith({
-        installed: [{ name: 'app1', owner: '1own', hash: 'h' }],
+      const { mod, client } = await loadWith({
+        installed: [await installedRow('app1', HASH_NEW)],
         plans: [
-          { app_name: 'app1', owner_flux_id: '1own', replica: 's1', spec_hash: 'h' },
-          { app_name: 'app1', owner_flux_id: '1own', replica: 's2', spec_hash: 'h' },
+          {
+            app_name: 'app1', owner_flux_id: OWNER, replica: 's1', spec_hash: HASH_NEW,
+          },
+          {
+            app_name: 'app1', owner_flux_id: OWNER, replica: 's2', spec_hash: HASH_NEW,
+          },
         ],
-        deployments: [{ replica: 's1' }, { replica: 's2' }],
+        deployments: [
+          await oneComponentDeployment('app1', 'web', {}, { replica: 's1' }),
+          await oneComponentDeployment('app1', 'web', {}, { replica: 's2' }),
+        ],
       });
       await mod.shutdownPlanResync();
       expect(client.upsertAppPlanBestEffort.called).to.be.false;
@@ -988,11 +1131,15 @@ describe('appOperations tests', () => {
     });
 
     it('keeps every stored plan of an app whose deployments cannot be built', async () => {
-      const { mod, client } = loadWith({
-        installed: [{ name: 'app1', owner: '1own', hash: 'hashNEW' }],
+      const { mod, client } = await loadWith({
+        installed: [await installedRow('app1', HASH_NEW)],
         plans: [
-          { app_name: 'app1', owner_flux_id: '1own', replica: 's1', spec_hash: 'hashOLD' },
-          { app_name: 'app1', owner_flux_id: '1own', replica: 's2', spec_hash: 'hashOLD' },
+          {
+            app_name: 'app1', owner_flux_id: OWNER, replica: 's1', spec_hash: HASH_OLD,
+          },
+          {
+            app_name: 'app1', owner_flux_id: OWNER, replica: 's2', spec_hash: HASH_OLD,
+          },
         ],
         buildThrows: true,
       });
@@ -1008,24 +1155,30 @@ describe('appOperations tests', () => {
     // A spec-change reconcile must move only the ufw/UPnP rules that changed: close the
     // dropped ports (old−new), open the added ports (new−old), leave the kept ports'
     // mappings in place. The per-component teardown/reinstall run with skipPorts.
-    const makeComp = (hostPorts, storage) => ({
-      hostPorts,
-      storage,
-      name: 'web',
-      identifier: `web_myapp`,
-      image: 'nginx:latest',
-      equals: () => false, // changed component
-      // The domain-class contract methods (DeploymentComponent): default fixtures
-      // declare nothing, so the local stop is their contract.
-      requiresDaemonShutdown: () => false,
-      shutdownBudgetSeconds: () => 10,
-      injectedContentFiles: () => [],
-    });
-    const makeDeployment = (components) => ({
-      components,
-      componentEntries: () => Object.entries(components),
-      getComponent: (n) => components[n] || null,
-    });
+    // eslint-disable-next-line global-require
+    const { resolveInstantiatedSpec } = require('../../ZelBack/src/services/utils/specCutover');
+
+    /**
+     * A real DeploymentSpec for a one-component app, parameterised on exactly the
+     * fields this suite varies. `cpu` is the "same volume, changed component" lever:
+     * DeploymentComponent.equals is a deep field compare, so two views that differ
+     * only in cpu land in keepVolume rather than being skipped as unchanged.
+     */
+    async function makeDeployment({
+      hostPorts, storage, graceful = false, cpu = 0.5,
+    }, depOpts = {}) {
+      const ports = {};
+      for (const hostPort of hostPorts) ports[`p${hostPort}`] = { containerPort: hostPort, hostPort };
+      const overrides = {
+        cpu,
+        ports,
+        persistentStorage: { sizeGb: storage, mounts: { '/data': { source: 'data', destination: '/data' } } },
+      };
+      // A declared shutdown IS the graceful contract; without one the component's
+      // contract is docker's own SIGTERM + 10s window.
+      if (graceful) overrides.shutdown = { gracefulTimeout: 290 };
+      return oneComponentDeployment('myapp', 'web', overrides, depOpts);
+    }
 
     let uninstallComponentStub;
     let denyPortsStub;
@@ -1055,19 +1208,40 @@ describe('appOperations tests', () => {
       teardownOwedForStub = sinon.stub(pendingTeardownStore, 'teardownOwedFor').resolves(teardownOwed);
     }
 
-    const registrySpec = { serialize: () => ({}), version: 8, owner: 'owner1' };
+    /** The registry side of a reconcile is an InstantiatedSpec (a hydrated row). */
+    let registrySpec;
+
+    beforeEach(async () => {
+      registrySpec = await instantiatedSpec(await v9Spec());
+    });
 
     it('closes only the dropped ports, opens only the added ones, and skips ports in the loops', async () => {
       setup();
       // old: 80,443 ; new: 443,8080 -> drop 80, add 8080, keep 443.
-      const oldDeployment = makeDeployment({ web: makeComp([80, 443], 5) });
-      const newDeployment = makeDeployment({ web: makeComp([443, 8080], 10) });
+      const oldDeployment = await makeDeployment({ hostPorts: [80, 443], storage: 5 });
+      const newDeployment = await makeDeployment({ hostPorts: [443, 8080], storage: 10 });
 
       await appOperations.reconcileComponents('myapp', oldDeployment, newDeployment, registrySpec);
 
       expect(uninstallComponentStub.calledWith(sinon.match.any, sinon.match({ skipPorts: true })), 'teardown skips ports').to.be.true;
       expect(denyPortsStub.calledOnceWith([80], 'myapp'), 'closes only the dropped port').to.be.true;
       expect(openHostPortsStub.calledOnceWith([8080], 'myapp'), 'opens only the added port').to.be.true;
+      // The row written back is the registry spec's own wire form, produced by the
+      // real serializer rather than a stub returning {}.
+      const [, wireSpec] = appsRepository.upsertInstalledApp.firstCall.args;
+      expect(wireSpec).to.include({ version: 9, name: 'myapp', owner: registrySpec.owner });
+
+      // The uninstaller stays stubbed: assert the component it was handed carries
+      // the two fields the real teardown reads off it (container name, port set).
+      const [handedComp] = uninstallComponentStub.firstCall.args;
+      expect(handedComp.identifier).to.equal('web_myapp');
+      expect(handedComp.hostPorts).to.eql([80, 443]);
+
+      // The deployment provider stays stubbed too, and this is the seam the update
+      // path hands the registry spec through — it has to be one the real provider
+      // could resolve and build from.
+      const [handedRegistrySpec] = deploymentProvider.buildDeployment.firstCall.args;
+      expect(deploymentFor(await resolveInstantiatedSpec(handedRegistrySpec)).appName).to.equal('myapp');
     });
 
     it('routes a graceful component teardown through flux-shutdownd, component-scoped', async () => {
@@ -1075,20 +1249,20 @@ describe('appOperations tests', () => {
       const fluxShutdowndClient = require('../../ZelBack/src/services/utils/fluxShutdowndClient');
       setup();
       const beginAppStop = sinon.stub(fluxShutdowndClient, 'beginAppStop').resolves({ outcome: 'complete' });
-      const graceful = {
-        ...makeComp([80], 5),
-        name: 'web',
-        requiresDaemonShutdown: () => true,
-        shutdownBudgetSeconds: () => 300,
-      };
-      const oldDeployment = { ...makeDeployment({ web: graceful }), replica: null };
-      const newDeployment = makeDeployment({ web: { ...graceful, storage: 5 } });
+      // Same volume size, changed component -> keepVolume, and a declared shutdown
+      // contract on both sides.
+      const oldDeployment = await makeDeployment({ hostPorts: [80], storage: 5, graceful: true });
+      const newDeployment = await makeDeployment({
+        hostPorts: [80], storage: 5, graceful: true, cpu: 0.7,
+      });
+      expect(oldDeployment.getComponent('web').requiresDaemonShutdown()).to.be.true;
+      expect(oldDeployment.getComponent('web').equals(newDeployment.getComponent('web')), 'the component must read as changed').to.be.false;
 
       await appOperations.reconcileComponents('myapp', oldDeployment, newDeployment, registrySpec);
 
       expect(beginAppStop.calledOnce, 'the daemon owns the graceful stop').to.be.true;
       const [owner, app, reason, opts] = beginAppStop.firstCall.args;
-      expect(owner).to.equal('owner1');
+      expect(owner).to.equal(registrySpec.owner);
       expect(app).to.equal('myapp');
       expect(reason).to.equal(fluxShutdowndClient.SHUTDOWN_REASON.REDEPLOY);
       expect(opts.component).to.equal('web');
@@ -1101,14 +1275,9 @@ describe('appOperations tests', () => {
       const fluxShutdowndClient = require('../../ZelBack/src/services/utils/fluxShutdowndClient');
       setup();
       const beginAppStop = sinon.stub(fluxShutdowndClient, 'beginAppStop').resolves({ outcome: 'complete' });
-      const plain = {
-        ...makeComp([80], 5),
-        name: 'web',
-        requiresDaemonShutdown: () => false,
-        shutdownBudgetSeconds: () => 10,
-      };
-      const oldDeployment = { ...makeDeployment({ web: plain }), replica: null };
-      const newDeployment = makeDeployment({ web: { ...plain, storage: 5 } });
+      const oldDeployment = await makeDeployment({ hostPorts: [80], storage: 5 });
+      const newDeployment = await makeDeployment({ hostPorts: [80], storage: 5, cpu: 0.7 });
+      expect(oldDeployment.getComponent('web').requiresDaemonShutdown(), 'no shutdown/preStop/drain declared').to.be.false;
 
       await appOperations.reconcileComponents('myapp', oldDeployment, newDeployment, registrySpec);
 
@@ -1116,10 +1285,25 @@ describe('appOperations tests', () => {
       expect(uninstallComponentStub.calledWith(sinon.match.any, sinon.match({ stopHandled: true }))).to.be.false;
     });
 
+    it('leaves an unchanged component alone entirely', async () => {
+      // The equality check is the real deep field compare now, so two identical
+      // views must produce no teardown at all — the case a hard-coded
+      // `equals: () => false` could never reach.
+      setup();
+      const oldDeployment = await makeDeployment({ hostPorts: [80], storage: 5 });
+      const newDeployment = await makeDeployment({ hostPorts: [80], storage: 5 });
+
+      await appOperations.reconcileComponents('myapp', oldDeployment, newDeployment, registrySpec);
+
+      expect(uninstallComponentStub.called, 'an unchanged component must not be torn down').to.be.false;
+      expect(denyPortsStub.called, 'and its ports must not move').to.be.false;
+      expect(openHostPortsStub.called).to.be.false;
+    });
+
     it('skips the port-open (but still closes) when a cancel teardown is owed', async () => {
       setup({ teardownOwed: true });
-      const oldDeployment = makeDeployment({ web: makeComp([80, 443], 5) });
-      const newDeployment = makeDeployment({ web: makeComp([443, 8080], 10) });
+      const oldDeployment = await makeDeployment({ hostPorts: [80, 443], storage: 5 });
+      const newDeployment = await makeDeployment({ hostPorts: [443, 8080], storage: 10 });
 
       await appOperations.reconcileComponents('myapp', oldDeployment, newDeployment, registrySpec);
 
@@ -1208,17 +1392,24 @@ describe('appOperations tests', () => {
       sinon.stub(verificationHelper, 'verifyPrivilege').resolves(true);
       // Composed app: folders are registered as flux<component>_<app>, so the
       // removal must target component identifiers - flux<app> matches nothing.
-      sinon.stub(deploymentProvider, 'getInstalledDeployment').resolves({
-        componentEntries: () => [
-          ['web', { identifier: 'web_bkapp', hasSyncthing: () => true }],
-          ['worker', { identifier: 'worker_bkapp', hasSyncthing: () => false }],
-        ],
-      });
+      // Real components: `web` declares sync, `worker` does not — hasSyncthing()
+      // is derived from persistentStorage.sync, never set independently.
+      const composed = deploymentFor(await specWithComponents('bkapp', {
+        web: {
+          persistentStorage: {
+            sizeGb: 5,
+            mounts: { '/data': { source: 'data', destination: '/data' } },
+            sync: { mode: 'sync' },
+          },
+        },
+        worker: { ports: { rpc: { containerPort: 9000, hostPort: 31001 } } },
+      }));
+      expect(composed.getComponent('web').hasSyncthing()).to.be.true;
+      expect(composed.getComponent('worker').hasSyncthing()).to.be.false;
+      sinon.stub(deploymentProvider, 'getInstalledDeployment').resolves(composed);
       const removeFolder = sinon.stub(syncthingMonitorHelpers, 'removeSyncthingFolder').resolves();
-      sinon.stub(appsRepository, 'getGlobalAppInfo').resolves({ name: 'bkapp' });
-      sinon.stub(deploymentProvider, 'buildDeployment').resolves({
-        componentEntries: () => [['web', { identifier: 'web_bkapp' }]],
-      });
+      sinon.stub(appsRepository, 'getGlobalAppInfo').resolves(await instantiatedSpec(await v9Spec({ name: 'bkapp' })));
+      sinon.stub(deploymentProvider, 'buildDeployment').resolves(composed);
       sinon.stub(appReconciler, 'drive').resolves({ converged: true, failed: [] });
       sinon.stub(volumeService, 'listComponentVolumeMounts').resolves([{ replica: null, mount: '/vol' }]);
       sinon.stub(IOUtils, 'checkFileExists').resolves(false);
@@ -1239,11 +1430,12 @@ describe('appOperations tests', () => {
     it('drives the app back to running when the archive fails after the stop', async () => {
       const clock = sinon.useFakeTimers({ toFake: ['setTimeout'] });
       sinon.stub(verificationHelper, 'verifyPrivilege').resolves(true);
-      sinon.stub(deploymentProvider, 'getInstalledDeployment').resolves({ componentEntries: () => [] });
-      sinon.stub(appsRepository, 'getGlobalAppInfo').resolves({ name: 'bkapp' });
-      sinon.stub(deploymentProvider, 'buildDeployment').resolves({
-        componentEntries: () => [['comp1', { identifier: 'comp1_bkapp' }]],
-      });
+      // No component declares sync, so the backup takes the plain app-wide stop.
+      const deployment = await oneComponentDeployment('bkapp', 'comp1');
+      expect(deployment.getComponent('comp1').hasSyncthing()).to.be.false;
+      sinon.stub(deploymentProvider, 'getInstalledDeployment').resolves(deployment);
+      sinon.stub(appsRepository, 'getGlobalAppInfo').resolves(await instantiatedSpec(await v9Spec({ name: 'bkapp' })));
+      sinon.stub(deploymentProvider, 'buildDeployment').resolves(deployment);
       const drive = sinon.stub(appReconciler, 'drive').resolves({ converged: true, failed: [] });
       sinon.stub(volumeService, 'listComponentVolumeMounts').resolves([{ replica: null, mount: '/vol' }]);
       sinon.stub(IOUtils, 'checkFileExists').resolves(false);
@@ -1286,12 +1478,12 @@ describe('appOperations tests', () => {
         { replica: 's2', mount: '/vol/s2' },
       ];
 
-      function setupBackup(volumes) {
+      async function setupBackup(volumes) {
         sinon.stub(verificationHelper, 'verifyPrivilege').resolves(true);
-        sinon.stub(deploymentProvider, 'getInstalledDeployment').resolves({
-          componentEntries: () => [['web', { identifier: 'web_bkapp', hasSyncthing: () => false }]],
-        });
-        sinon.stub(appsRepository, 'getGlobalAppInfo').resolves({ name: 'bkapp' });
+        sinon.stub(deploymentProvider, 'getInstalledDeployment').resolves(await oneComponentDeployment('bkapp', 'web'));
+        // A real InstantiatedSpec: the (unstubbed) buildDeployment behind
+        // componentIdentifiersFor resolves and builds from it for real.
+        sinon.stub(appsRepository, 'getGlobalAppInfo').resolves(await instantiatedSpec(await v9Spec({ name: 'bkapp' })));
         sinon.stub(appReconciler, 'drive').resolves({ converged: true, failed: [] });
         sinon.stub(volumeService, 'listComponentVolumeMounts').resolves(volumes);
         sinon.stub(IOUtils, 'checkFileExists').resolves(false);
@@ -1301,7 +1493,7 @@ describe('appOperations tests', () => {
 
       it('archives every identity when the task names no replica', async () => {
         const clock = sinon.useFakeTimers({ toFake: ['setTimeout'] });
-        const createTarGz = setupBackup(coLocated);
+        const createTarGz = await setupBackup(coLocated);
 
         const req = { body: { appname: 'bkapp', backup: [{ component: 'web', backup: true }] } };
         const pending = appOperations.appendBackupTask(req, makeRes());
@@ -1316,7 +1508,7 @@ describe('appOperations tests', () => {
 
       it('archives exactly the replica the task names', async () => {
         const clock = sinon.useFakeTimers({ toFake: ['setTimeout'] });
-        const createTarGz = setupBackup(coLocated);
+        const createTarGz = await setupBackup(coLocated);
 
         const req = { body: { appname: 'bkapp', backup: [{ component: 'web', backup: true, replica: 's2' }] } };
         const pending = appOperations.appendBackupTask(req, makeRes());
@@ -1330,7 +1522,7 @@ describe('appOperations tests', () => {
 
       it('fails rather than archive a sibling when the named replica is absent', async () => {
         const clock = sinon.useFakeTimers({ toFake: ['setTimeout'] });
-        const createTarGz = setupBackup(coLocated);
+        const createTarGz = await setupBackup(coLocated);
 
         const req = { body: { appname: 'bkapp', backup: [{ component: 'web', backup: true, replica: 's9' }] } };
         const pending = appOperations.appendBackupTask(req, makeRes());

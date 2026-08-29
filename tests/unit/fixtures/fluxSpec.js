@@ -119,6 +119,38 @@ async function v8Spec(overrides = {}) {
   return flux.FluxAppSpecV8.fromSubmission({ ...V8_SUBMISSION, ...overrides });
 }
 
+/**
+ * A real FluxAppSpecV1 — the oldest stored form, and the only one that carries
+ * no `instances` field at all. That absence is not trivia: appsRepository reads
+ * `doc.instances ?? 3`, and the default cannot be tested honestly against any
+ * later version, because v2+ REQUIRE instances and the real class rejects a row
+ * without it. A hand-written double will happily omit it at any version and
+ * prove nothing.
+ *
+ * Derived from V8_SUBMISSION's single component so the two stay describing the
+ * same app.
+ */
+async function v1Spec(overrides = {}) {
+  const flux = await loadSpecLibrary();
+  const [component] = V8_SUBMISSION.compose;
+  return flux.FluxAppSpecBase.getVersionClass(1).fromSubmission({
+    version: 1,
+    name: V8_SUBMISSION.name,
+    description: V8_SUBMISSION.description,
+    owner: V8_SUBMISSION.owner,
+    repotag: component.repotag,
+    port: component.ports[0],
+    enviromentParameters: [],
+    commands: [],
+    containerPort: component.containerPorts[0],
+    containerData: component.containerData,
+    cpu: component.cpu,
+    ram: component.ram,
+    hdd: component.hdd,
+    ...overrides,
+  });
+}
+
 /** A real EncryptedSpecV9 — the node-sealed form a v9 app is stored and
  * gossiped as. In production the NODE produces this, after validating cleartext
  * that arrived HPKE-sealed; the owner never holds it. */
@@ -200,6 +232,7 @@ module.exports = {
   V8_SUBMISSION,
   v9Spec,
   v8Spec,
+  v1Spec,
   sealedV9Spec,
   sealedV8Spec,
   decryptedV9Spec,

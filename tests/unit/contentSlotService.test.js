@@ -4,6 +4,9 @@ const { expect } = require('chai');
 const sinon = require('sinon');
 const crypto = require('node:crypto');
 const proxyquire = require('proxyquire').noCallThru();
+const {
+  loadSpecLibrary, V9_SUBMISSION, sealedV9Spec, decryptedV9Spec, assertAnswers,
+} = require('./fixtures/fluxSpec');
 
 const hashOf = (buf) => `sha256:${crypto.createHash('sha256').update(buf).digest('hex')}`;
 // executeCall shape the benchmark channel returns: { status: 'success', data: { status: 'ok', <field> } }
@@ -15,16 +18,88 @@ const now = () => NOW_MS;
 // blob freshness window compares in ms
 const freshTs = String(NOW_MS);
 
-// flux-spec is ESM-only; FluxOS reaches it through the async getSpec() loader.
-// Stub it (the FluxOS test convention) with simple deterministic fakes — the real
-// canonicalization/validation is exercised in flux-spec's own suite.
-function defaultSpecStub() {
+const APP = 'app';
+const OWNER = V9_SUBMISSION.owner;
+const APPS_FOLDER = '/dat/var/lib/fluxos/flux-apps';
+
+// The spec library is REAL here, not stubbed — see tests/unit/fixtures/fluxSpec.js
+// for why. What stays stubbed is I/O and FluxOS policy: the registry, the event bus,
+// the FluxDrive uploader, the benchmark channel, and the app-secret crypto provider.
+let flux;
+
+// ── Real spec fixtures ────────────────────────────────────────────────────
+//
+// flux-spec's own rules shape these, not test convention: a contentSlot is legal
+// only on a `type: 'file'` mount, an atomic slot delivers into the managed
+// /io.runonflux/ dir, and a self-watching slot (onUpdate: null) MUST be atomic —
+// the library rejects `atomic: false` with no reaction outright.
+
+const SIGHUP = Object.freeze({ action: 'signal', signal: 'SIGHUP' });
+const RESTART = Object.freeze({ action: 'restart' });
+
+function slotMount(slot, { atomic = false, onUpdate = SIGHUP } = {}) {
+  const destination = atomic ? `/io.runonflux/${slot}` : `/etc/app/${slot}`;
+  return [destination, {
+    source: slot, destination, type: 'file', contentSlot: slot, atomic, onUpdate,
+  }];
+}
+
+function blobMount(name, hash) {
+  const destination = `/etc/app/${name}`;
+  return [destination, {
+    source: name, destination, type: 'file', contentRef: { hash },
+  }];
+}
+
+function component(name, mounts, { hostPort = 31000, containerPort = 80 } = {}) {
   return {
-    // eslint-disable-next-line no-unused-vars
-    canonicalContentManifest: (m) => { const { ownerSignature, ...rest } = m; return JSON.stringify(rest); },
-    assertValidContentManifest: sinon.stub().callsFake((m) => m),
+    name,
+    description: name,
+    image: 'nginx:latest',
+    cpu: 0.5,
+    memory: 300,
+    rootFsGb: 2,
+    persistentStorage: { sizeGb: 5, mounts: Object.fromEntries(mounts) },
+    ports: { svc: { containerPort, hostPort } },
   };
 }
+
+/** A one-component (`web`) v9 components block carrying the given mounts. */
+const webWith = (...mounts) => ({ web: component('web', mounts) });
+
+/**
+ * The cleartext FluxAppSpecV9 the SUBMISSION path holds: appSubmission validates
+ * the submission blob and hands that instance straight to processManifestSubmission
+ * before anything is sealed. `isEncrypted` is false, so verifyManifest reads it
+ * directly rather than decrypting.
+ */
+function cleartextSpec(components) {
+  return flux.FluxAppSpecV9.fromSubmission({ ...V9_SUBMISSION, name: APP, components });
+}
+
+/**
+ * The sealed EncryptedSpecV9 the REGISTRY hands back — `getGlobalAppInfo().spec`
+ * for an encrypted app, which every content-slot app is. Only its public metadata
+ * (name/owner/instances/version) is readable; verifyManifest has to decrypt it
+ * itself before it can see a single declared slot.
+ */
+function sealedSpec(components, overrides = {}) {
+  return sealedV9Spec({ name: APP, components, ...overrides });
+}
+
+/** A real DeploymentSpec — the projection the install/apply paths receive. */
+async function deploymentOf(components) {
+  const decrypted = await decryptedV9Spec({ name: APP, components });
+  return flux.DeploymentSpec.fromSpec(decrypted, APPS_FOLDER, { replica: null });
+}
+
+/** The resolved host path flux-spec derived for a slot — never a literal here. */
+const mountSource = (dep, slot) => dep.componentEntries()
+  .flatMap(([, comp]) => comp.contentSlotMounts())
+  .find((m) => m.slot === slot).source;
+
+const identifierOf = (dep, name = 'web') => dep.componentEntries()
+  .find(([n]) => n === name)[1].identifier;
 
 // All appContentManifests DB access lives in appsRepository (the registry); the
 // content domain only builds the row + opts and delegates. So the manifest seam is a
@@ -43,14 +118,22 @@ function fakeRepo(overrides = {}) {
   };
 }
 
-function load(specStub = defaultSpecStub(), repo = fakeRepo()) {
+// The real library, with assertValidContentManifest SPIED over the real
+// implementation (never replaced) so a test can still assert the manifest actually
+// went through flux-spec's validator.
+function specLibNamespace() {
+  return { ...flux, assertValidContentManifest: sinon.spy(flux.assertValidContentManifest) };
+}
+
+function load(repo = fakeRepo()) {
   const bus = { publish: sinon.stub() };
+  const specLib = specLibNamespace();
   const service = proxyquire('../../ZelBack/src/services/appLifecycle/contentSlotService', {
-    '../utils/specLibs': { getSpec: sinon.stub().resolves(specStub) },
+    '../utils/specLibs': { getSpec: sinon.stub().resolves(specLib) },
     '../appDatabase/appsRepository': repo,
     '../utils/fluxEventBus': bus,
   });
-  return { service, specStub, repo, bus };
+  return { service, specLib, repo, bus };
 }
 
 function makeBenchmark(overrides = {}) {
@@ -74,6 +157,8 @@ function makeUploader({ exists = true } = {}) {
 }
 
 // A deterministic, reversible stand-in for the app-secret seal/unseal provider.
+// Production's default reaches fluxbenchd over the benchmark channel, so this stays
+// a fake — unlike the spec classes, it is I/O.
 function fakeProvider() {
   return {
     encrypt: async (buf) => ({ algorithm: 'fake', ciphertext: buf.toString('base64'), nonce: 'n', tag: 't' }),
@@ -81,17 +166,12 @@ function fakeProvider() {
   };
 }
 
-function specWithSlots(names) {
-  const comp = { persistentStorage: { getMountsWithContentSlot: () => names.map((n) => ({ contentSlot: n })) } };
-  return { name: 'app', owner: '1id', componentEntries: () => [['web', comp]] };
-}
-
 const CFG = Buffer.from('slot content');
 const CFG_HASH = hashOf(CFG);
 
 function manifest(overrides = {}) {
   return {
-    appName: 'app',
+    appName: APP,
     version: 2,
     slots: { 'app-config': { hash: CFG_HASH } },
     rollout: { strategy: 'immediate' },
@@ -112,25 +192,42 @@ async function expectReject(promise, regex) {
 }
 
 describe('contentSlotService', () => {
+  // A cleartext v9 spec declaring one slot — what the submission path carries.
+  let slotSpec;
+  // Two slots, for the carried-over-hash case.
+  let twoSlotSpec;
+  // The same app as the registry stores it: sealed, slots invisible until decrypt.
+  let slotSpecSealed;
+
+  before(async function loadLibrary() {
+    // The first fromSubmission compiles the ajv schemas.
+    this.timeout(30000);
+    flux = await loadSpecLibrary();
+    slotSpec = cleartextSpec(webWith(slotMount('app-config')));
+    twoSlotSpec = cleartextSpec(webWith(slotMount('app-config'), slotMount('tls-cert')));
+    slotSpecSealed = await sealedSpec(webWith(slotMount('app-config')));
+  });
+
   describe('specSlotNames', () => {
     it('collects every declared contentSlot name', () => {
       const { service } = load();
-      const names = service.specSlotNames(specWithSlots(['a', 'b']));
+      const spec = cleartextSpec(webWith(slotMount('a'), slotMount('b')));
+      const names = service.specSlotNames(spec);
       expect([...names]).to.have.members(['a', 'b']);
     });
   });
 
   describe('verifyManifest', () => {
     it('accepts a valid, owner-signed manifest whose slots are all declared', async () => {
-      const { service, specStub } = load();
-      await service.verifyManifest(manifest(), { owner: '1id', spec: specWithSlots(['app-config']) }, { verify: () => true });
-      sinon.assert.calledOnce(specStub.assertValidContentManifest);
+      const { service, specLib } = load();
+      await service.verifyManifest(manifest(), { owner: OWNER, spec: slotSpec }, { verify: () => true });
+      sinon.assert.calledOnce(specLib.assertValidContentManifest);
     });
 
     it('rejects an invalid owner signature', async () => {
       const { service } = load();
       await expectReject(
-        service.verifyManifest(manifest(), { owner: '1id', spec: specWithSlots(['app-config']) }, { verify: () => false }),
+        service.verifyManifest(manifest(), { owner: OWNER, spec: slotSpec }, { verify: () => false }),
         /invalid owner signature/,
       );
     });
@@ -138,31 +235,42 @@ describe('contentSlotService', () => {
     it('rejects a manifest whose appName does not match the spec', async () => {
       const { service } = load();
       await expectReject(
-        service.verifyManifest(manifest({ appName: 'other' }), { owner: '1id', spec: specWithSlots(['app-config']) }, { verify: () => true }),
+        service.verifyManifest(manifest({ appName: 'other' }), { owner: OWNER, spec: slotSpec }, { verify: () => true }),
         /does not match the spec/,
       );
     });
 
     it('rejects a slot the spec does not declare', async () => {
       const { service } = load();
+      const otherSpec = cleartextSpec(webWith(slotMount('something-else')));
       await expectReject(
-        service.verifyManifest(manifest(), { owner: '1id', spec: specWithSlots(['something-else']) }, { verify: () => true }),
+        service.verifyManifest(manifest(), { owner: OWNER, spec: otherSpec }, { verify: () => true }),
         /not declared in the spec/,
       );
     });
 
+    it('rejects a structurally invalid manifest through flux-spec before any signature check', async () => {
+      const { service } = load();
+      const verify = sinon.stub().returns(true);
+      // A real slot hash is sha256:<64 hex>; the library refuses anything else, and
+      // it refuses it before the owner signature is ever consulted.
+      await expectReject(
+        service.verifyManifest(
+          manifest({ slots: { 'app-config': { hash: 'not-a-hash' } } }),
+          { owner: OWNER, spec: slotSpec }, { verify },
+        ),
+        /sha256/,
+      );
+      sinon.assert.notCalled(verify);
+    });
+
     it('decrypts a sealed (isEncrypted) spec to its DecryptedCanonicalSpec before checking slots', async () => {
       const { service } = load();
-      // The registry hands back the sealed EncryptedSpec for an encrypted app — its
+      // The registry hands back the sealed EncryptedSpecV9 for an encrypted app — its
       // declared slots are visible only after decrypt -> DecryptedCanonicalSpec.
-      // specSlotNames on the sealed spec would find none and reject without the decrypt.
-      const sealed = {
-        name: 'app',
-        isEncrypted: true,
-        createProvider: async () => fakeProvider(),
-        decrypt: async () => specWithSlots(['app-config']),
-      };
-      await service.verifyManifest(manifest(), { owner: '1id', spec: sealed }, { verify: () => true });
+      expect(service.specSlotNames(slotSpecSealed).size, 'a sealed spec declares nothing readable')
+        .to.equal(0);
+      await service.verifyManifest(manifest(), { owner: OWNER, spec: slotSpecSealed }, { verify: () => true });
     });
   });
 
@@ -170,16 +278,16 @@ describe('contentSlotService', () => {
     it('round-trips an encrypted app\'s slots through the app secret', async () => {
       const { service } = load();
       const provider = fakeProvider();
-      const sealed = await service.sealManifestSlots(manifest(), { owner: '1id', encrypted: true }, { provider });
+      const sealed = await service.sealManifestSlots(manifest(), { owner: OWNER, encrypted: true }, { provider });
       expect(sealed.slots).to.have.property('sealed');
       expect(sealed.slots['app-config']).to.equal(undefined);
-      const opened = await service.openManifestSlots(sealed, { owner: '1id', encrypted: true }, { provider });
+      const opened = await service.openManifestSlots(sealed, { owner: OWNER, encrypted: true }, { provider });
       expect(opened.slots).to.deep.equal(manifest().slots);
     });
 
     it('leaves a plaintext app\'s slots untouched', async () => {
       const { service } = load();
-      const out = await service.sealManifestSlots(manifest(), { owner: '1id', encrypted: false }, {});
+      const out = await service.sealManifestSlots(manifest(), { owner: OWNER, encrypted: false }, {});
       expect(out.slots).to.deep.equal(manifest().slots);
     });
   });
@@ -188,8 +296,9 @@ describe('contentSlotService', () => {
     function baseInput(overrides = {}) {
       return {
         manifest: manifest(),
-        spec: specWithSlots(['app-config']),
-        owner: '1id',
+        // The register path hands the cleartext instance it just validated.
+        spec: slotSpec,
+        owner: OWNER,
         encrypted: true,
         blobs: new Map([[CFG_HASH, CFG]]),
         ownerSigs: new Map([[CFG_HASH, { sig: 'osig', timestamp: freshTs }]]),
@@ -258,15 +367,24 @@ describe('contentSlotService', () => {
       const { service } = load();
       const uploader = makeUploader();
       let refreshed = false;
+      const refresh = sinon.stub().callsFake(async () => { refreshed = true; });
       const deps = baseDeps({
         uploader,
         getLatest: async () => (refreshed ? priorRow(1, {}) : null),
-        refresh: async () => { refreshed = true; },
+        refresh,
       });
       const out = await service.processManifestSubmission(baseInput(), deps);
       expect(refreshed).to.equal(true);
       expect(uploader.calls.length).to.equal(1);
       expect(out.slots).to.have.property('sealed');
+
+      // refreshLatestManifest stays stubbed here, so nothing exercises what it does
+      // with the spec it was handed. The real one forwards it to
+      // fetchManifestFromPeers -> verifyManifest, which reads the declared slots off
+      // it — so assert the handed object can actually answer that.
+      const [refreshedApp, ctx] = refresh.firstCall.args;
+      expect(refreshedApp).to.equal(APP);
+      assertAnswers(ctx.spec, ['componentEntries']);
     });
 
     it('rejects a declared slot with no blob part', async () => {
@@ -284,7 +402,7 @@ describe('contentSlotService', () => {
         version,
         data: {
           manifest: {
-            appName: 'app',
+            appName: APP,
             version,
             slots: { sealed: { algorithm: 'fake', ciphertext: Buffer.from(JSON.stringify(slots)).toString('base64'), nonce: 'n', tag: 't' } },
             rollout: { strategy: 'immediate' },
@@ -302,7 +420,7 @@ describe('contentSlotService', () => {
       const uploader = makeUploader({ exists: true });
       const input = baseInput({
         manifest: manifest({ slots: { 'app-config': { hash: CFG_HASH }, 'tls-cert': { hash: freshHash } } }),
-        spec: specWithSlots(['app-config', 'tls-cert']),
+        spec: twoSlotSpec,
         blobs: new Map([[freshHash, fresh]]),
         ownerSigs: new Map([[freshHash, { sig: 'osig-new', timestamp: freshTs }]]),
       });
@@ -355,37 +473,44 @@ describe('contentSlotService', () => {
   });
 
   describe('refreshLatestManifest', () => {
-    const ctx = () => ({ owner: '1id', encrypted: true, spec: specWithSlots(['app-config']) });
+    // The catch-up ctx is built from the registry row, so its spec is the SEALED one.
+    const ctx = () => ({ owner: OWNER, encrypted: true, spec: slotSpecSealed });
     const sealedSlots = (slots) => ({ sealed: { algorithm: 'fake', ciphertext: Buffer.from(JSON.stringify(slots)).toString('base64'), nonce: 'n', tag: 't' } });
 
     it('adopts a higher-version peer manifest through the latest-wins store', async () => {
       const { service } = load();
       const store = sinon.spy();
-      const gossip = { appName: 'app', version: 3 };
-      await service.refreshLatestManifest('app', ctx(), {
+      const gossip = { appName: APP, version: 3 };
+      const fetchPeers = sinon.stub().resolves({ gossip, plaintext: {} });
+      await service.refreshLatestManifest(APP, ctx(), {
         getLatest: async () => ({ version: 1 }),
         getPeers: async () => ['1.2.3.4'],
-        fetchPeers: async () => ({ gossip, plaintext: {} }),
+        fetchPeers,
         fetchFromDrive: sinon.stub().resolves(null),
         store,
         verify: () => true,
         provider: fakeProvider(),
       });
       sinon.assert.calledOnceWithExactly(store, gossip);
+      // fetchManifestFromPeers is stubbed, so nothing here exercises what it would do
+      // with the ctx spec: the real one runs verifyManifest against it, which has to
+      // decrypt the sealed spec before it can read a slot. Run that for real.
+      const handedSpec = fetchPeers.firstCall.args[2].spec;
+      await service.verifyManifest(manifest(), { owner: OWNER, spec: handedSpec }, { verify: () => true });
     });
 
     it('falls back to the FluxDrive backstop, re-verifying before adoption', async () => {
       const { service } = load();
       const store = sinon.spy();
       const driveManifest = {
-        appName: 'app',
+        appName: APP,
         version: 4,
         slots: sealedSlots({ 'app-config': { hash: CFG_HASH } }),
         rollout: { strategy: 'immediate' },
         timestamp: NOW_MS,
         ownerSignature: 'sig',
       };
-      await service.refreshLatestManifest('app', ctx(), {
+      await service.refreshLatestManifest(APP, ctx(), {
         getLatest: async () => ({ version: 1 }),
         getPeers: async () => [],
         fetchPeers: async () => null,
@@ -400,10 +525,10 @@ describe('contentSlotService', () => {
     it('adopts nothing at or below the stored version and swallows source failures', async () => {
       const { service } = load();
       const store = sinon.spy();
-      await service.refreshLatestManifest('app', ctx(), {
+      await service.refreshLatestManifest(APP, ctx(), {
         getLatest: async () => ({ version: 3 }),
         getPeers: async () => [],
-        fetchPeers: async () => ({ gossip: { appName: 'app', version: 3 }, plaintext: {} }),
+        fetchPeers: async () => ({ gossip: { appName: APP, version: 3 }, plaintext: {} }),
         fetchFromDrive: async () => { throw new Error('drive down'); },
         store,
         verify: () => true,
@@ -428,7 +553,7 @@ describe('contentSlotService', () => {
       const stored = await service.storeManifest(manifest()); // default confirmed:true, no broadcast
       expect(stored).to.equal(true); // returns whatever the registry returns
       const [row, opts] = repo.upsertContentManifest.firstCall.args;
-      expect(row).to.deep.equal({ appName: 'app', version: 2, data: { type: 'fluxappcontentmanifest', appName: 'app', manifest: manifest() } });
+      expect(row).to.deep.equal({ appName: APP, version: 2, data: { type: 'fluxappcontentmanifest', appName: APP, manifest: manifest() } });
       expect(row).to.not.have.property('envelope'); // no broadcast → no envelope
       // A catch-up body clears any stale envelope it promotes over (the registry shapes the $unset).
       expect(opts).to.include({ confirmed: true, clearEnvelope: true });
@@ -446,7 +571,7 @@ describe('contentSlotService', () => {
 
     it('splits a node broadcast into verbatim data + envelope, never a second copy of the body', async () => {
       const { service, repo } = load();
-      const data = { type: 'fluxappcontentmanifest', appName: 'app', manifest: manifest() };
+      const data = { type: 'fluxappcontentmanifest', appName: APP, manifest: manifest() };
       const bc = {
         version: 1, timestamp: 7, pubKey: 'pk', signature: 'sig', data,
       };
@@ -471,17 +596,17 @@ describe('contentSlotService', () => {
 
     it('returns the registry verdict (a stale-version collision maps to false there)', async () => {
       const repo = fakeRepo({ upsertContentManifest: sinon.stub().resolves(false) });
-      const { service } = load(undefined, repo);
+      const { service } = load(repo);
       const stored = await service.storeManifest(manifest());
       expect(stored).to.equal(false);
     });
 
     it('reads the latest manifest by appName from the registry', async () => {
-      const repo = fakeRepo({ getContentManifest: sinon.stub().resolves({ appName: 'app', version: 2 }) });
-      const { service } = load(undefined, repo);
-      const out = await service.getLatestManifest('app');
+      const repo = fakeRepo({ getContentManifest: sinon.stub().resolves({ appName: APP, version: 2 }) });
+      const { service } = load(repo);
+      const out = await service.getLatestManifest(APP);
       expect(out.version).to.equal(2);
-      sinon.assert.calledWith(repo.getContentManifest, 'app');
+      sinon.assert.calledWith(repo.getContentManifest, APP);
     });
   });
 
@@ -495,9 +620,13 @@ describe('contentSlotService', () => {
       data: { type: 'fluxappcontentmanifest', appName: gossipManifest.appName, manifest: gossipManifest },
     };
   }
+  // The gossip receive path reads the app's spec straight off the registry row. This
+  // fixture is the cleartext-app case (isEncrypted:false → plaintext manifest slots);
+  // the sealed-spec counterpart is exercised by promoteQuarantinedManifest,
+  // submitContentUpdate and provisionContentSlots below.
   function recvDeps(overrides = {}) {
     return {
-      getApp: async () => ({ owner: '1id', isEncrypted: false, spec: specWithSlots(['app-config']) }),
+      getApp: async () => ({ owner: OWNER, isEncrypted: false, spec: slotSpec }),
       isInstalledHere: async () => true,
       rebroadcast: sinon.spy(),
       schedule: sinon.spy(),
@@ -514,7 +643,12 @@ describe('contentSlotService', () => {
       await service.receiveManifest(msg(), deps);
       sinon.assert.calledOnce(deps.rebroadcast);
       sinon.assert.calledOnce(deps.schedule);
-      expect(deps.schedule.firstCall.args[0].appName).to.equal('app');
+      expect(deps.schedule.firstCall.args[0].appName).to.equal(APP);
+      // scheduleContentApplication is stubbed here; the real one reads the app's
+      // fleet target and owner off the spec it is handed.
+      const [, handedSpec] = deps.schedule.firstCall.args;
+      expect(handedSpec.owner).to.equal(OWNER);
+      expect(handedSpec.instances).to.be.a('number');
     });
 
     it('stores and rebroadcasts but does not schedule when the app is not installed here', async () => {
@@ -526,8 +660,8 @@ describe('contentSlotService', () => {
     });
 
     it('drops a manifest no newer than the stored version', async () => {
-      const repo = fakeRepo({ getContentManifest: sinon.stub().resolves({ appName: 'app', version: 5 }) });
-      const { service } = load(undefined, repo);
+      const repo = fakeRepo({ getContentManifest: sinon.stub().resolves({ appName: APP, version: 5 }) });
+      const { service } = load(repo);
       const deps = recvDeps();
       await service.receiveManifest(msg(manifest({ version: 2 })), deps);
       sinon.assert.notCalled(deps.rebroadcast);
@@ -569,7 +703,7 @@ describe('contentSlotService', () => {
     }
     function batchDeps(overrides = {}) {
       return {
-        getApp: async () => ({ owner: '1id', isEncrypted: false, spec: specWithSlots(['app-config']) }),
+        getApp: async () => ({ owner: OWNER, isEncrypted: false, spec: slotSpec }),
         getLatest: async () => null,
         store: sinon.stub().resolves(true),
         verify: () => true,
@@ -627,23 +761,26 @@ describe('contentSlotService', () => {
   });
 
   describe('promoteQuarantinedManifest (spec-confirm hook for non-running nodes)', () => {
-    const info = { owner: '1id', isEncrypted: true, spec: specWithSlots(['app-config']) };
+    // The spec-confirm hook reads the registry row, so the spec is the sealed one and
+    // verifyManifest has to decrypt it before it can see the declared slot.
+    let info;
+    before(() => { info = { owner: OWNER, isEncrypted: true, spec: slotSpecSealed }; });
 
     it('promotes a quarantined manifest once the spec is available', async () => {
       const { service } = load();
       const provider = fakeProvider();
       const store = sinon.stub().resolves(true);
-      const sealed = await service.sealManifestSlots(manifest(), { owner: '1id', encrypted: true }, { provider });
+      const sealed = await service.sealManifestSlots(manifest(), { owner: OWNER, encrypted: true }, { provider });
       const env = { version: 1, timestamp: 7, pubKey: 'pk', signature: 's' };
-      const data = { type: 'fluxappcontentmanifest', appName: 'app', manifest: sealed };
-      const ok = await service.promoteQuarantinedManifest('app', {
+      const data = { type: 'fluxappcontentmanifest', appName: APP, manifest: sealed };
+      const promoted = await service.promoteQuarantinedManifest(APP, {
         getApp: async () => info,
         getLatest: async () => ({ data, envelope: env, version: 2, confirmed: false }),
         store,
         provider,
         verify: () => true,
       });
-      expect(ok).to.equal(true);
+      expect(promoted).to.equal(true);
       // Promotes in place AND rebuilds the captured node broadcast (stays sync-servable).
       sinon.assert.calledWith(store, sealed, { confirmed: true, broadcast: { ...env, data } });
     });
@@ -651,23 +788,23 @@ describe('contentSlotService', () => {
     it('is a no-op when nothing is quarantined (already confirmed)', async () => {
       const { service } = load();
       const store = sinon.spy();
-      const ok = await service.promoteQuarantinedManifest('app', {
+      const promoted = await service.promoteQuarantinedManifest(APP, {
         getLatest: async () => ({ data: { manifest: {} }, version: 2, confirmed: true }),
         store,
       });
-      expect(ok).to.equal(false);
+      expect(promoted).to.equal(false);
       sinon.assert.notCalled(store);
     });
 
     it('is a no-op when the spec is still absent', async () => {
       const { service } = load();
       const store = sinon.spy();
-      const ok = await service.promoteQuarantinedManifest('app', {
+      const promoted = await service.promoteQuarantinedManifest(APP, {
         getApp: async () => null,
         getLatest: async () => ({ data: { manifest: {} }, version: 2, confirmed: false }),
         store,
       });
-      expect(ok).to.equal(false);
+      expect(promoted).to.equal(false);
       sinon.assert.notCalled(store);
     });
 
@@ -676,9 +813,9 @@ describe('contentSlotService', () => {
       const provider = fakeProvider();
       const drop = sinon.spy();
       const store = sinon.spy();
-      const sealed = await service.sealManifestSlots(manifest(), { owner: '1id', encrypted: true }, { provider });
-      const data = { type: 'fluxappcontentmanifest', appName: 'app', manifest: sealed };
-      const ok = await service.promoteQuarantinedManifest('app', {
+      const sealed = await service.sealManifestSlots(manifest(), { owner: OWNER, encrypted: true }, { provider });
+      const data = { type: 'fluxappcontentmanifest', appName: APP, manifest: sealed };
+      const promoted = await service.promoteQuarantinedManifest(APP, {
         getApp: async () => info,
         getLatest: async () => ({ data, version: 2, confirmed: false }),
         drop,
@@ -686,7 +823,7 @@ describe('contentSlotService', () => {
         provider,
         verify: () => false,
       });
-      expect(ok).to.equal(false);
+      expect(promoted).to.equal(false);
       sinon.assert.calledOnce(drop);
       sinon.assert.notCalled(store);
     });
@@ -699,7 +836,7 @@ describe('contentSlotService', () => {
     }));
     function subBody(overrides = {}) {
       return {
-        appName: 'app',
+        appName: APP,
         version: 2,
         timestamp: NOW_MS, // unix epoch ms (must match the sealed manifest's timestamp)
         content: { algorithm: 'x', encapsulatedKey: 'k', nonce: 'n', ciphertext: 'c' },
@@ -709,7 +846,8 @@ describe('contentSlotService', () => {
     }
     function subDeps(overrides = {}) {
       return {
-        getApp: async () => ({ owner: '1id', isEncrypted: true, spec: specWithSlots(['app-config']) }),
+        // The standalone update reads the app off the registry: sealed spec.
+        getApp: async () => ({ owner: OWNER, isEncrypted: true, spec: slotSpecSealed }),
         isInstalledHere: async () => null,
         openEnvelope: async () => sealedPayload(),
         broadcast: sinon.spy(),
@@ -724,7 +862,7 @@ describe('contentSlotService', () => {
     }
     // The register already stored this app's initial manifest (version 1), so the
     // fixture update (version 2) is its strict successor.
-    const loadSub = () => load(defaultSpecStub(), fakeRepo({ getContentManifest: sinon.stub().resolves({ version: 1 }) }));
+    const loadSub = () => load(fakeRepo({ getContentManifest: sinon.stub().resolves({ version: 1 }) }));
 
     it('transport-opens, processes, stores, and gossips the sealed manifest', async () => {
       const { service } = loadSub();
@@ -732,13 +870,13 @@ describe('contentSlotService', () => {
       const out = await service.submitContentUpdate(subBody(), deps);
       expect(out.slots).to.have.property('sealed'); // at-rest sealed for gossip
       sinon.assert.calledOnce(deps.broadcast);
-      expect(deps.broadcast.firstCall.args[0]).to.include({ type: 'fluxappcontentmanifest', appName: 'app' });
+      expect(deps.broadcast.firstCall.args[0]).to.include({ type: 'fluxappcontentmanifest', appName: APP });
       expect(deps.uploader.calls[0].headers.source).to.equal('slot');
     });
 
     it('stores the exact signed broadcast it gossiped (envelope + verbatim data) for boot-sync re-serving', async () => {
       const { service, repo } = loadSub();
-      const data = { type: 'fluxappcontentmanifest', appName: 'app', manifest: { sealed: true } };
+      const data = { type: 'fluxappcontentmanifest', appName: APP, manifest: { sealed: true } };
       const signed = {
         version: 1, timestamp: 7, pubKey: 'pk', signature: 's', data,
       };
@@ -768,10 +906,15 @@ describe('contentSlotService', () => {
 
     it('schedules local application when the submitter also runs the app', async () => {
       const { service } = loadSub();
-      const deps = subDeps({ isInstalledHere: async () => ({ name: 'app' }) });
+      const deps = subDeps({ isInstalledHere: async () => ({ name: APP }) });
       await service.submitContentUpdate(subBody(), deps);
       sinon.assert.calledOnce(deps.schedule);
-      expect(deps.schedule.firstCall.args[0].appName).to.equal('app'); // plaintext manifest
+      expect(deps.schedule.firstCall.args[0].appName).to.equal(APP); // plaintext manifest
+      // scheduleContentApplication stays stubbed; the real one reads owner + instances
+      // off the sealed spec's public metadata.
+      const [, handedSpec] = deps.schedule.firstCall.args;
+      expect(handedSpec.owner).to.equal(OWNER);
+      expect(handedSpec.instances).to.be.a('number');
     });
 
     // The submitter is the one node that applies its own update without gossip, so it is
@@ -780,7 +923,7 @@ describe('contentSlotService', () => {
     it('answers success when the local application fails (the submission itself succeeded)', async () => {
       const { service } = loadSub();
       const deps = subDeps({
-        isInstalledHere: async () => ({ name: 'app' }),
+        isInstalledHere: async () => ({ name: APP }),
         schedule: sinon.stub().rejects(new Error('ENOENT: no such file or directory')),
       });
       const out = await service.submitContentUpdate(subBody(), deps);
@@ -800,7 +943,7 @@ describe('contentSlotService', () => {
       await service.submitContentUpdate(subBody(), deps);
       sinon.assert.calledOnce(backstop);
       const [gossipManifest, ctx] = backstop.firstCall.args;
-      expect(ctx).to.include({ appName: 'app', version: 2, manifestPutSig: 'owner-put-sig' });
+      expect(ctx).to.include({ appName: APP, version: 2, manifestPutSig: 'owner-put-sig' });
       expect(gossipManifest.slots).to.have.property('sealed'); // the gossip-form (sealed) manifest
     });
   });
@@ -811,14 +954,16 @@ describe('contentSlotService', () => {
       const put = sinon.spy();
       const sign = sinon.stub().resolves('arcane-sig');
       const okPut = await service.backstopManifest(
-        { appName: 'app', version: 2, slots: { sealed: {} } },
-        { appName: 'app', version: 2, timestamp: 1_700_000_000_000, manifestPutSig: 'owner-sig' },
+        { appName: APP, version: 2, slots: { sealed: {} } },
+        {
+          appName: APP, version: 2, timestamp: 1_700_000_000_000, manifestPutSig: 'owner-sig',
+        },
         { put, sign },
       );
       expect(okPut).to.equal(true);
       sinon.assert.calledOnce(put);
       const [appName, body] = put.firstCall.args;
-      expect(appName).to.equal('app');
+      expect(appName).to.equal(APP);
       expect(body).to.include({ version: 2, ownerSig: 'owner-sig', arcaneSig: 'arcane-sig' });
     });
 
@@ -826,7 +971,9 @@ describe('contentSlotService', () => {
       const { service } = load();
       const put = sinon.spy();
       const okPut = await service.backstopManifest(
-        {}, { appName: 'app', version: 2, timestamp: 1, manifestPutSig: undefined }, { put },
+        {}, {
+          appName: APP, version: 2, timestamp: 1, manifestPutSig: undefined,
+        }, { put },
       );
       expect(okPut).to.equal(false);
       sinon.assert.notCalled(put);
@@ -837,7 +984,9 @@ describe('contentSlotService', () => {
       const put = sinon.stub().rejects(new Error('fluxdrive down'));
       const sign = sinon.stub().resolves('arcane-sig');
       const okPut = await service.backstopManifest(
-        {}, { appName: 'app', version: 2, timestamp: 1, manifestPutSig: 'sig' }, { put, sign },
+        {}, {
+          appName: APP, version: 2, timestamp: 1, manifestPutSig: 'sig',
+        }, { put, sign },
       );
       expect(okPut).to.equal(false);
     });
@@ -849,17 +998,19 @@ describe('contentSlotService', () => {
       const reconcile = sinon.spy();
       const sign = sinon.stub().resolves('arcane-sig');
       const deriveLocator = sinon.stub().resolves('loc-cfg');
-      const ok = await service.reconcileSlots(
+      const pushed = await service.reconcileSlots(
         manifest({ version: 3 }),
-        { appName: 'app', owner: '1id', version: 3, reconcileSig: 'owner-rsig' },
+        {
+          appName: APP, owner: OWNER, version: 3, reconcileSig: 'owner-rsig',
+        },
         { reconcile, sign, deriveLocator },
       );
-      expect(ok).to.equal(true);
-      sinon.assert.calledWithMatch(deriveLocator, sinon.match.any, { appName: 'app', fluxID: '1id', contentHash: CFG_HASH });
-      sinon.assert.calledWithMatch(sign, { appName: 'app', source: 'slot', version: 3 });
+      expect(pushed).to.equal(true);
+      sinon.assert.calledWithMatch(deriveLocator, sinon.match.any, { appName: APP, fluxID: OWNER, contentHash: CFG_HASH });
+      sinon.assert.calledWithMatch(sign, { appName: APP, source: 'slot', version: 3 });
       sinon.assert.calledOnce(reconcile);
       const [appName, body] = reconcile.firstCall.args;
-      expect(appName).to.equal('app');
+      expect(appName).to.equal(APP);
       expect(body).to.deep.equal({
         source: 'slot', version: 3, arcaneSig: 'arcane-sig', ownerSig: 'owner-rsig', liveLocators: ['loc-cfg'],
       });
@@ -875,30 +1026,36 @@ describe('contentSlotService', () => {
         version: 3,
         slots: { a: { hash: `sha256:${'1'.repeat(64)}` }, b: { hash: `sha256:${'2'.repeat(64)}` } },
       });
-      const ok = await service.reconcileSlots(
-        m, { appName: 'app', owner: '1id', version: 3, reconcileSig: 'sig' }, { reconcile, sign, deriveLocator },
+      const pushed = await service.reconcileSlots(
+        m, {
+          appName: APP, owner: OWNER, version: 3, reconcileSig: 'sig',
+        }, { reconcile, sign, deriveLocator },
       );
-      expect(ok).to.equal(true);
+      expect(pushed).to.equal(true);
       expect(reconcile.firstCall.args[1].liveLocators).to.deep.equal(['loc-a', 'loc-b']);
     });
 
     it('skips when the frontend supplied no owner reconcile-sig', async () => {
       const { service } = load();
       const reconcile = sinon.spy();
-      const ok = await service.reconcileSlots(
-        manifest({ version: 3 }), { appName: 'app', owner: '1id', version: 3, reconcileSig: undefined }, { reconcile },
+      const pushed = await service.reconcileSlots(
+        manifest({ version: 3 }), {
+          appName: APP, owner: OWNER, version: 3, reconcileSig: undefined,
+        }, { reconcile },
       );
-      expect(ok).to.equal(false);
+      expect(pushed).to.equal(false);
       sinon.assert.notCalled(reconcile);
     });
 
     it('skips the first manifest version — nothing to supersede', async () => {
       const { service } = load();
       const reconcile = sinon.spy();
-      const ok = await service.reconcileSlots(
-        manifest({ version: 1 }), { appName: 'app', owner: '1id', version: 1, reconcileSig: 'sig' }, { reconcile },
+      const pushed = await service.reconcileSlots(
+        manifest({ version: 1 }), {
+          appName: APP, owner: OWNER, version: 1, reconcileSig: 'sig',
+        }, { reconcile },
       );
-      expect(ok).to.equal(false);
+      expect(pushed).to.equal(false);
       sinon.assert.notCalled(reconcile);
     });
 
@@ -906,12 +1063,14 @@ describe('contentSlotService', () => {
       const { service } = load();
       const reconcile = sinon.spy();
       const deriveLocator = sinon.stub().resolves('x');
-      const ok = await service.reconcileSlots(
+      const pushed = await service.reconcileSlots(
         { ...manifest({ version: 3 }), slots: {} },
-        { appName: 'app', owner: '1id', version: 3, reconcileSig: 'sig' },
+        {
+          appName: APP, owner: OWNER, version: 3, reconcileSig: 'sig',
+        },
         { reconcile, deriveLocator },
       );
-      expect(ok).to.equal(false);
+      expect(pushed).to.equal(false);
       sinon.assert.notCalled(reconcile);
     });
 
@@ -920,10 +1079,12 @@ describe('contentSlotService', () => {
       const reconcile = sinon.stub().rejects(new Error('fluxdrive down'));
       const sign = sinon.stub().resolves('arcane-sig');
       const deriveLocator = sinon.stub().resolves('loc-cfg');
-      const ok = await service.reconcileSlots(
-        manifest({ version: 3 }), { appName: 'app', owner: '1id', version: 3, reconcileSig: 'sig' }, { reconcile, sign, deriveLocator },
+      const pushed = await service.reconcileSlots(
+        manifest({ version: 3 }), {
+          appName: APP, owner: OWNER, version: 3, reconcileSig: 'sig',
+        }, { reconcile, sign, deriveLocator },
       );
-      expect(ok).to.equal(false);
+      expect(pushed).to.equal(false);
     });
   });
 
@@ -947,11 +1108,28 @@ describe('contentSlotService', () => {
   describe('applyManifest', () => {
     const HCFG = `sha256:${'1'.repeat(64)}`;
     const HDATA = `sha256:${'2'.repeat(64)}`;
-    const manifestSlots = { appName: 'app', slots: { cfg: { hash: HCFG }, data: { hash: HDATA } } };
-    const ctx = { appName: 'app', owner: '1id', peers: [] };
-    function deployment(mounts) {
-      return { componentEntries: () => [['web', { identifier: 'web_app', contentSlotMounts: () => mounts }]] };
-    }
+    const HBLOB = `sha256:${'9'.repeat(64)}`;
+    const manifestSlots = { appName: APP, slots: { cfg: { hash: HCFG }, data: { hash: HDATA } } };
+    const ctx = { appName: APP, owner: OWNER, peers: [] };
+
+    // Real DeploymentSpecs projected from real v9 specs — the slot's host path,
+    // delivery mode, reaction and perms all come from flux-spec, never from a literal.
+    let signalPlusAtomic; // cfg: in-place + SIGHUP, data: atomic + self-watching
+    let restartPlusAtomic; // cfg: in-place + restart, data: atomic + self-watching
+    let signalPlusRestart; // cfg: in-place + SIGHUP, data: atomic + restart
+    let cfgRestart; // cfg only, restart
+    let cfgSignal; // cfg only, SIGHUP
+    let cfgSignalWithBlob; // cfg slot + a signed contentRef blob
+
+    before(async () => {
+      signalPlusAtomic = await deploymentOf(webWith(slotMount('cfg'), slotMount('data', { atomic: true, onUpdate: null })));
+      restartPlusAtomic = await deploymentOf(webWith(slotMount('cfg', { onUpdate: RESTART }), slotMount('data', { atomic: true, onUpdate: null })));
+      signalPlusRestart = await deploymentOf(webWith(slotMount('cfg'), slotMount('data', { atomic: true, onUpdate: RESTART })));
+      cfgRestart = await deploymentOf(webWith(slotMount('cfg', { onUpdate: RESTART })));
+      cfgSignal = await deploymentOf(webWith(slotMount('cfg')));
+      cfgSignalWithBlob = await deploymentOf(webWith(slotMount('cfg'), blobMount('seed', HBLOB)));
+    });
+
     function applyDeps(overrides = {}) {
       return {
         resolve: async ({ contentHash }) => Buffer.from(`bytes:${contentHash}`),
@@ -967,26 +1145,20 @@ describe('contentSlotService', () => {
     it('writes atomic:false in place and atomic:true via temp+rename, then signals the component', async () => {
       const { service } = load();
       const deps = applyDeps();
-      const dep = deployment([
-        { slot: 'cfg', source: '/dat/app/cfg', atomic: false, onUpdate: { action: 'signal', signal: 'SIGHUP' } },
-        { slot: 'data', source: '/io.runonflux/data', atomic: true, onUpdate: null },
-      ]);
+      const dep = signalPlusAtomic;
       await service.applyManifest(dep, manifestSlots, ctx, deps);
-      sinon.assert.calledWith(deps.writeFile, '/dat/app/cfg', Buffer.from(`bytes:${HCFG}`));
-      sinon.assert.calledWith(deps.writeFile, '/io.runonflux/data.flux-content-tmp', Buffer.from(`bytes:${HDATA}`));
-      sinon.assert.calledWith(deps.rename, '/io.runonflux/data.flux-content-tmp', '/io.runonflux/data');
-      sinon.assert.calledOnceWithExactly(deps.signal, 'web_app', 'SIGHUP');
+      const atomicSource = mountSource(dep, 'data');
+      sinon.assert.calledWith(deps.writeFile, mountSource(dep, 'cfg'), Buffer.from(`bytes:${HCFG}`));
+      sinon.assert.calledWith(deps.writeFile, `${atomicSource}.flux-content-tmp`, Buffer.from(`bytes:${HDATA}`));
+      sinon.assert.calledWith(deps.rename, `${atomicSource}.flux-content-tmp`, atomicSource);
+      sinon.assert.calledOnceWithExactly(deps.signal, identifierOf(dep), 'SIGHUP');
       sinon.assert.notCalled(deps.restart);
     });
 
     it('applies nothing when any slot fails to stage (stage-all-then-apply)', async () => {
       const { service } = load();
       const deps = applyDeps({ resolve: async ({ contentHash }) => { if (contentHash === HDATA) throw new Error('no source'); return Buffer.from('x'); } });
-      const dep = deployment([
-        { slot: 'cfg', source: '/dat/app/cfg', atomic: false, onUpdate: { action: 'restart' } },
-        { slot: 'data', source: '/io.runonflux/data', atomic: true, onUpdate: null },
-      ]);
-      await expectReject(service.applyManifest(dep, manifestSlots, ctx, deps), /no source/);
+      await expectReject(service.applyManifest(restartPlusAtomic, manifestSlots, ctx, deps), /no source/);
       sinon.assert.notCalled(deps.writeFile);
       sinon.assert.notCalled(deps.restart);
     });
@@ -994,39 +1166,32 @@ describe('contentSlotService', () => {
     it('restart subsumes signal within a component', async () => {
       const { service } = load();
       const deps = applyDeps();
-      const dep = deployment([
-        { slot: 'cfg', source: '/dat/app/cfg', atomic: false, onUpdate: { action: 'signal', signal: 'SIGHUP' } },
-        { slot: 'data', source: '/io.runonflux/data', atomic: true, onUpdate: { action: 'restart' } },
-      ]);
-      await service.applyManifest(dep, manifestSlots, ctx, deps);
-      sinon.assert.calledOnceWithExactly(deps.restart, 'web_app');
+      await service.applyManifest(signalPlusRestart, manifestSlots, ctx, deps);
+      sinon.assert.calledOnceWithExactly(deps.restart, identifierOf(signalPlusRestart));
       sinon.assert.notCalled(deps.signal);
     });
 
     it('a failed reaction never throws (content stays on disk)', async () => {
       const { service } = load();
       const deps = applyDeps({ restart: sinon.stub().rejects(new Error('daemon busy')) });
-      const dep = deployment([{ slot: 'cfg', source: '/dat/app/cfg', atomic: false, onUpdate: { action: 'restart' } }]);
-      await service.applyManifest(dep, { slots: { cfg: { hash: HCFG } } }, ctx, deps);
-      sinon.assert.calledWith(deps.writeFile, '/dat/app/cfg', Buffer.from(`bytes:${HCFG}`));
+      await service.applyManifest(cfgRestart, { slots: { cfg: { hash: HCFG } } }, ctx, deps);
+      sinon.assert.calledWith(deps.writeFile, mountSource(cfgRestart, 'cfg'), Buffer.from(`bytes:${HCFG}`));
     });
 
     it('applies a version at most once (submitter apply vs its gossip echo)', async () => {
       const { service } = load();
       const deps = applyDeps();
-      const dep = deployment([{ slot: 'cfg', source: '/dat/app/cfg', atomic: false, onUpdate: { action: 'signal', signal: 'SIGHUP' } }]);
-      const m = { appName: 'app', version: 2, slots: { cfg: { hash: HCFG } } };
-      await service.applyManifest(dep, m, ctx, deps);
-      await service.applyManifest(dep, m, ctx, deps);
+      const m = { appName: APP, version: 2, slots: { cfg: { hash: HCFG } } };
+      await service.applyManifest(cfgSignal, m, ctx, deps);
+      await service.applyManifest(cfgSignal, m, ctx, deps);
       sinon.assert.calledOnce(deps.signal);
     });
 
     it('skips a superseded version after a newer one has applied (late rollout timer)', async () => {
       const { service } = load();
       const deps = applyDeps();
-      const dep = deployment([{ slot: 'cfg', source: '/dat/app/cfg', atomic: false, onUpdate: { action: 'signal', signal: 'SIGHUP' } }]);
-      await service.applyManifest(dep, { appName: 'app', version: 3, slots: { cfg: { hash: HCFG } } }, ctx, deps);
-      await service.applyManifest(dep, { appName: 'app', version: 2, slots: { cfg: { hash: HCFG } } }, ctx, deps);
+      await service.applyManifest(cfgSignal, { appName: APP, version: 3, slots: { cfg: { hash: HCFG } } }, ctx, deps);
+      await service.applyManifest(cfgSignal, { appName: APP, version: 2, slots: { cfg: { hash: HCFG } } }, ctx, deps);
       sinon.assert.calledOnce(deps.signal);
     });
 
@@ -1036,29 +1201,20 @@ describe('contentSlotService', () => {
       resolve.onFirstCall().rejects(new Error('peer gone'));
       resolve.resolves(Buffer.from('bytes'));
       const deps = applyDeps({ resolve });
-      const dep = deployment([{ slot: 'cfg', source: '/dat/app/cfg', atomic: false, onUpdate: { action: 'signal', signal: 'SIGHUP' } }]);
-      const m = { appName: 'app', version: 2, slots: { cfg: { hash: HCFG } } };
-      await expectReject(service.applyManifest(dep, m, ctx, deps), /peer gone/);
-      await service.applyManifest(dep, m, ctx, deps);
+      const m = { appName: APP, version: 2, slots: { cfg: { hash: HCFG } } };
+      await expectReject(service.applyManifest(cfgSignal, m, ctx, deps), /peer gone/);
+      await service.applyManifest(cfgSignal, m, ctx, deps);
       sinon.assert.calledOnce(deps.signal);
     });
 
     it('reaps artifact-store entries down to the spec blobs + this manifest\'s slot hashes', async () => {
       const { service } = load();
-      const HBLOB = `sha256:${'9'.repeat(64)}`;
       const store = { retainOnly: sinon.stub().resolves() };
       const deps = applyDeps({ store });
-      const dep = {
-        componentEntries: () => [['web', {
-          identifier: 'web_app',
-          contentSlotMounts: () => [{ slot: 'cfg', source: '/dat/app/cfg', atomic: false, onUpdate: null }],
-          contentBlobMounts: () => [{ source: '/dat/app/seed', hash: HBLOB }],
-        }]],
-      };
-      await service.applyManifest(dep, { appName: 'app', version: 5, slots: { cfg: { hash: HCFG } } }, ctx, deps);
+      await service.applyManifest(cfgSignalWithBlob, { appName: APP, version: 5, slots: { cfg: { hash: HCFG } } }, ctx, deps);
       sinon.assert.calledOnce(store.retainOnly);
       const [app, keep] = store.retainOnly.firstCall.args;
-      expect(app).to.equal('app');
+      expect(app).to.equal(APP);
       expect([...keep].sort()).to.deep.equal([HCFG, HBLOB].sort());
     });
 
@@ -1066,45 +1222,60 @@ describe('contentSlotService', () => {
       const chown = sinon.stub().resolves();
       const chmod = sinon.stub().resolves();
       const service = proxyquire('../../ZelBack/src/services/appLifecycle/contentSlotService', {
-        '../utils/specLibs': { getSpec: sinon.stub().resolves(defaultSpecStub()) },
+        '../utils/specLibs': { getSpec: sinon.stub().resolves(specLibNamespace()) },
         '../appDatabase/appsRepository': fakeRepo(),
         'node:fs/promises': {
           chown, chmod, writeFile: sinon.stub().resolves(), rename: sinon.stub().resolves(),
         },
       });
       const deps = { resolve: async () => Buffer.from('bytes'), signal: sinon.spy(), restart: sinon.spy() };
-      const dep = deployment([{ slot: 'cfg', source: '/dat/app/cfg', atomic: false, onUpdate: null }]);
-      await service.applyManifest(dep, { appName: 'app', slots: { cfg: { hash: HCFG } } }, ctx, deps);
-      sinon.assert.calledWith(chown, '/dat/app/cfg', 0, 0);
-      sinon.assert.calledWith(chmod, '/dat/app/cfg', 0o644);
+      await service.applyManifest(cfgSignal, { appName: APP, slots: { cfg: { hash: HCFG } } }, ctx, deps);
+      // flux-spec resolved the mount's perms (declared uid/gid/mode, else root 0644).
+      const source = mountSource(cfgSignal, 'cfg');
+      sinon.assert.calledWith(chown, source, 0, 0);
+      sinon.assert.calledWith(chmod, source, 0o644);
     });
   });
 
   describe('scheduleContentApplication', () => {
     // An installed, content-bearing deployment whose container is up — this path only ever
     // applies to a RUNNING app, so the fixture has to be able to say it isn't one.
-    const dep = { componentEntries: () => [['web', { hasContentSlots: () => true, identifier: 'web_app' }]] };
+    let dep;
+    // The stored spec the scheduler reads owner + instances off: the sealed registry
+    // form, whose public metadata stays readable while its components do not.
+    let spec;
+    let tenInstanceSpec;
     const up = async () => ({ State: { Running: true } });
+
+    before(async function buildFixtures() {
+      this.timeout(30000);
+      dep = await deploymentOf(webWith(slotMount('app-config')));
+      spec = slotSpecSealed;
+      tenInstanceSpec = await sealedSpec(webWith(slotMount('app-config')), { instances: 10 });
+    });
 
     it('applies via the installed deployment and the app\'s running peers', async () => {
       const { service } = load();
       const apply = sinon.spy();
       await service.scheduleContentApplication(
-        { appName: 'app', slots: {} }, { owner: '1id' },
+        { appName: APP, slots: {} }, spec,
         {
           getDeployment: async () => dep, getPeers: async () => ['1.2.3.4:16127'], apply, inspect: up,
         },
       );
       sinon.assert.calledOnce(apply);
       expect(apply.firstCall.args[0]).to.equal(dep);
-      expect(apply.firstCall.args[2]).to.deep.equal({ appName: 'app', owner: '1id', peers: ['1.2.3.4:16127'] });
+      expect(apply.firstCall.args[2]).to.deep.equal({ appName: APP, owner: OWNER, peers: ['1.2.3.4:16127'] });
+      // applyManifest stays stubbed here; the real one walks the deployment's
+      // components for their slot and blob mounts.
+      assertAnswers(apply.firstCall.args[0], ['componentEntries']);
     });
 
     it('does nothing when the app is not installed here', async () => {
       const { service } = load();
       const apply = sinon.spy();
       await service.scheduleContentApplication(
-        { appName: 'app', slots: {} }, { owner: '1id' },
+        { appName: APP, slots: {} }, spec,
         { getDeployment: async () => null, apply, inspect: up },
       );
       sinon.assert.notCalled(apply);
@@ -1118,7 +1289,7 @@ describe('contentSlotService', () => {
       const { service } = load();
       const apply = sinon.spy();
       await service.scheduleContentApplication(
-        { appName: 'app', slots: {} }, { owner: '1id' },
+        { appName: APP, slots: {} }, spec,
         {
           getDeployment: async () => dep,
           getPeers: async () => [],
@@ -1133,7 +1304,7 @@ describe('contentSlotService', () => {
       const { service } = load();
       const apply = sinon.spy();
       await service.scheduleContentApplication(
-        { appName: 'app', slots: {} }, { owner: '1id' },
+        { appName: APP, slots: {} }, spec,
         {
           getDeployment: async () => dep,
           getPeers: async () => [],
@@ -1177,7 +1348,7 @@ describe('contentSlotService', () => {
       const { service } = load();
       const apply = sinon.spy();
       const sched = fakeScheduler(1000);
-      await service.scheduleContentApplication(manifest({ rollout: { strategy: 'immediate' } }), { owner: '1id' }, schedDeps(sched, { apply }));
+      await service.scheduleContentApplication(manifest({ rollout: { strategy: 'immediate' } }), spec, schedDeps(sched, { apply }));
       sinon.assert.calledOnce(apply);
       expect(sched.timers.length).to.equal(0);
     });
@@ -1187,7 +1358,7 @@ describe('contentSlotService', () => {
       const apply = sinon.spy();
       const sched = fakeScheduler(1000); // now = 1000ms
       const m = manifest({ rollout: { strategy: 'scheduled', activateAt: 2000 } }); // activateAt = 2000ms
-      await service.scheduleContentApplication(m, { owner: '1id' }, schedDeps(sched, { apply }));
+      await service.scheduleContentApplication(m, spec, schedDeps(sched, { apply }));
       expect(sched.timers.length).to.equal(1);
       expect(sched.timers[0].ms).to.equal(1000); // activateAt - now
       sinon.assert.notCalled(apply);
@@ -1200,7 +1371,7 @@ describe('contentSlotService', () => {
       const apply = sinon.spy();
       const sched = fakeScheduler(5000); // well past activateAt
       const m = manifest({ rollout: { strategy: 'scheduled', activateAt: 2000 } });
-      await service.scheduleContentApplication(m, { owner: '1id' }, schedDeps(sched, { apply }));
+      await service.scheduleContentApplication(m, spec, schedDeps(sched, { apply }));
       sinon.assert.calledOnce(apply);
       expect(sched.timers.length).to.equal(0);
     });
@@ -1211,12 +1382,13 @@ describe('contentSlotService', () => {
       const computeDelay = sinon.stub().resolves(5000); // this node's slot is 5s into the window
       const sched = fakeScheduler(1000);
       const m = manifest({ rollout: { strategy: 'staggered', activateAt: 2000, staggerSeconds: 30 } });
-      await service.scheduleContentApplication(m, { owner: '1id', instances: 10 }, schedDeps(sched, { apply, computeDelay }));
+      await service.scheduleContentApplication(m, tenInstanceSpec, schedDeps(sched, { apply, computeDelay }));
       expect(sched.timers.length).to.equal(1); // first a timer to activateAt
       sinon.assert.notCalled(computeDelay); // slot is computed only when activateAt arrives (snapshot-at-activateAt)
       await sched.run();
       sinon.assert.calledOnce(computeDelay);
-      expect(computeDelay.firstCall.args.slice(0, 3)).to.deep.equal(['app', 10, 30]);
+      // the fleet target comes off the spec's own public metadata, not a literal
+      expect(computeDelay.firstCall.args.slice(0, 3)).to.deep.equal([APP, 10, 30]);
       sinon.assert.calledOnce(apply);
     });
 
@@ -1226,7 +1398,7 @@ describe('contentSlotService', () => {
       const computeDelay = sinon.stub().resolves(5000);
       const sched = fakeScheduler(40000); // past activateAt + staggerSeconds
       const m = manifest({ rollout: { strategy: 'staggered', activateAt: 2000, staggerSeconds: 30 } });
-      await service.scheduleContentApplication(m, { owner: '1id', instances: 10 }, schedDeps(sched, { apply, computeDelay }));
+      await service.scheduleContentApplication(m, tenInstanceSpec, schedDeps(sched, { apply, computeDelay }));
       sinon.assert.calledOnce(apply);
       sinon.assert.notCalled(computeDelay);
       expect(sched.timers.length).to.equal(0);
@@ -1239,7 +1411,7 @@ describe('contentSlotService', () => {
       const apply = sinon.spy();
       const sched = fakeScheduler(1000);
       const m = manifest({ rollout: { strategy: 'scheduled', activateAt: 2000 } });
-      await service.scheduleContentApplication(m, { owner: '1id' }, schedDeps(sched, {
+      await service.scheduleContentApplication(m, spec, schedDeps(sched, {
         apply, inspect: async () => ({ State: { Running: false } }),
       }));
       expect(sched.timers.length).to.equal(1);
@@ -1261,35 +1433,37 @@ describe('contentSlotService', () => {
       const { service } = load();
       // sorted collaterals: aaaa,bbbb,cccc(self),dddd → i=2 of N=4 → (2/4)*40s
       const deps = staggerDeps('cccc', { 'p1:16127': 'aaaa', 'p2:16127': 'bbbb', 'p3:16127': 'dddd' });
-      expect(await service.computeStaggerDelayMs('app', 4, 40, deps)).to.equal(20000);
+      expect(await service.computeStaggerDelayMs(APP, 4, 40, deps)).to.equal(20000);
     });
 
     it('returns 0 when this node\'s own collateral cannot be resolved (degenerate)', async () => {
       const { service } = load();
       const deps = staggerDeps(null, { 'p1:16127': 'aaaa' });
-      expect(await service.computeStaggerDelayMs('app', 4, 40, deps)).to.equal(0);
+      expect(await service.computeStaggerDelayMs(APP, 4, 40, deps)).to.equal(0);
     });
 
     it('clamps N up to the observed count so a slot never exceeds the window', async () => {
       const { service } = load();
       // instances=2 but 4 observed (transient over-count): N=max(2,4)=4, self 'dddd' i=3 → (3/4)*40s
       const deps = staggerDeps('dddd', { 'p1:16127': 'aaaa', 'p2:16127': 'bbbb', 'p3:16127': 'cccc' });
-      expect(await service.computeStaggerDelayMs('app', 2, 40, deps)).to.equal(30000);
+      expect(await service.computeStaggerDelayMs(APP, 2, 40, deps)).to.equal(30000);
     });
   });
 
   describe('applyManifest records the delivered version', () => {
     const HCFG = `sha256:${'1'.repeat(64)}`;
-    const dep = { componentEntries: () => [['web', { identifier: 'web_app', contentSlotMounts: () => [{ slot: 'cfg', source: '/dat/app/cfg', atomic: false, onUpdate: { action: 'signal', signal: 'SIGHUP' } }] }]] };
-    const m = { appName: 'app', version: 4, slots: { cfg: { hash: HCFG } } };
+    const m = { appName: APP, version: 4, slots: { cfg: { hash: HCFG } } };
+    let dep;
+
+    before(async () => { dep = await deploymentOf(webWith(slotMount('cfg'))); });
 
     it('write-throughs appliedVersion after a successful apply', async () => {
       const { service } = load();
       const recordApplied = sinon.spy();
-      await service.applyManifest(dep, m, { appName: 'app', owner: '1id', peers: [] }, {
+      await service.applyManifest(dep, m, { appName: APP, owner: OWNER, peers: [] }, {
         resolve: async () => Buffer.from('x'), writeFile: sinon.spy(), applyPerms: sinon.spy(), signal: sinon.spy(), recordApplied,
       });
-      sinon.assert.calledOnceWithExactly(recordApplied, 'app', 4);
+      sinon.assert.calledOnceWithExactly(recordApplied, APP, 4);
     });
 
     it('does not record when the apply is skipped (already-applied guard)', async () => {
@@ -1298,25 +1472,27 @@ describe('contentSlotService', () => {
       const deps = {
         resolve: async () => Buffer.from('x'), writeFile: sinon.spy(), applyPerms: sinon.spy(), signal: sinon.spy(), recordApplied,
       };
-      await service.applyManifest(dep, m, { appName: 'app', owner: '1id', peers: [] }, deps);
-      await service.applyManifest(dep, m, { appName: 'app', owner: '1id', peers: [] }, deps); // echo — skipped
+      await service.applyManifest(dep, m, { appName: APP, owner: OWNER, peers: [] }, deps);
+      await service.applyManifest(dep, m, { appName: APP, owner: OWNER, peers: [] }, deps); // echo — skipped
       sinon.assert.calledOnce(recordApplied); // only the real apply recorded
     });
   });
 
   describe('contentComponentsRunning', () => {
-    const twoComp = {
-      componentEntries: () => [
-        ['web', { hasContentSlots: () => true, identifier: 'web_app' }],
-        ['db', { hasContentSlots: () => false, identifier: 'db_app' }],
-      ],
-    };
+    // Two real components: one carries a content slot, one does not.
+    let twoComp;
+    before(async () => {
+      twoComp = await deploymentOf({
+        web: component('web', [slotMount('app-config')]),
+        db: component('db', [], { hostPort: 31001, containerPort: 5432 }),
+      });
+    });
 
     it('is true when every content component is running (ignores non-content ones)', async () => {
       const { service } = load();
       const inspect = sinon.stub().resolves({ State: { Running: true } });
       expect(await service.contentComponentsRunning(twoComp, { inspect })).to.be.true;
-      sinon.assert.calledOnceWithExactly(inspect, 'web_app'); // db (no content) not inspected
+      sinon.assert.calledOnceWithExactly(inspect, identifierOf(twoComp, 'web')); // db (no content) not inspected
     });
 
     it('is false when a content component is stopped', async () => {
@@ -1331,12 +1507,16 @@ describe('contentSlotService', () => {
   });
 
   describe('applyStoredIfBehind (catch a running container up to its stored manifest)', () => {
-    const slotDeployment = { componentEntries: () => [['web', { hasContentSlots: () => true, identifier: 'web_app' }]] };
+    let slotDeployment;
+    before(async () => { slotDeployment = await deploymentOf(webWith(slotMount('app-config'))); });
+
     function baseDeps(overrides = {}) {
       return {
-        getStored: async () => ({ version: 2, appliedVersion: 1, confirmed: true, data: { manifest: manifest({ version: 2 }) } }),
+        getStored: async () => ({
+          version: 2, appliedVersion: 1, confirmed: true, data: { manifest: manifest({ version: 2 }) },
+        }),
         getDeployment: async () => slotDeployment,
-        getApp: async () => ({ owner: '1id', isEncrypted: false, spec: { owner: '1id', instances: 3 } }),
+        getApp: async () => ({ owner: OWNER, isEncrypted: false, spec: slotSpec }),
         componentsRunning: async () => true,
         schedule: sinon.spy(),
         ...overrides,
@@ -1346,47 +1526,52 @@ describe('contentSlotService', () => {
     it('applies when the register is ahead of the delivered version and the container is running', async () => {
       const { service } = load();
       const deps = baseDeps();
-      const applied = await service.applyStoredIfBehind('app', deps);
+      const applied = await service.applyStoredIfBehind(APP, deps);
       expect(applied).to.be.true;
       sinon.assert.calledOnce(deps.schedule);
+      // scheduleContentApplication stays stubbed; the real one reads the fleet target
+      // and owner off the spec it is handed.
+      const [, handedSpec] = deps.schedule.firstCall.args;
+      expect(handedSpec.owner).to.equal(OWNER);
+      expect(handedSpec.instances).to.be.a('number');
     });
 
     it('is a no-op when already delivered (appliedVersion >= version)', async () => {
       const { service } = load();
       const deps = baseDeps({ getStored: async () => ({ version: 2, appliedVersion: 2, confirmed: true, data: { manifest: manifest({ version: 2 }) } }) });
-      expect(await service.applyStoredIfBehind('app', deps)).to.be.false;
+      expect(await service.applyStoredIfBehind(APP, deps)).to.be.false;
       sinon.assert.notCalled(deps.schedule);
     });
 
     it('is a no-op when the container is not running (leaves it for the start path)', async () => {
       const { service } = load();
       const deps = baseDeps({ componentsRunning: async () => false });
-      expect(await service.applyStoredIfBehind('app', deps)).to.be.false;
+      expect(await service.applyStoredIfBehind(APP, deps)).to.be.false;
       sinon.assert.notCalled(deps.schedule);
     });
 
     it('is a no-op when the app is not installed here', async () => {
       const { service } = load();
       const deps = baseDeps({ getDeployment: async () => null });
-      expect(await service.applyStoredIfBehind('app', deps)).to.be.false;
+      expect(await service.applyStoredIfBehind(APP, deps)).to.be.false;
       sinon.assert.notCalled(deps.schedule);
     });
 
     it('is a no-op when nothing is stored (or the row is unconfirmed)', async () => {
       const { service } = load();
       const missing = baseDeps({ getStored: async () => null });
-      expect(await service.applyStoredIfBehind('app', missing)).to.be.false;
+      expect(await service.applyStoredIfBehind(APP, missing)).to.be.false;
       sinon.assert.notCalled(missing.schedule);
 
       const quarantined = baseDeps({ getStored: async () => ({ version: 2, appliedVersion: 1, confirmed: false, data: { manifest: manifest({ version: 2 }) } }) });
-      expect(await service.applyStoredIfBehind('app', quarantined)).to.be.false;
+      expect(await service.applyStoredIfBehind(APP, quarantined)).to.be.false;
       sinon.assert.notCalled(quarantined.schedule);
     });
 
     it('treats a never-applied row (no appliedVersion) as behind', async () => {
       const { service } = load();
       const deps = baseDeps({ getStored: async () => ({ version: 1, confirmed: true, data: { manifest: manifest({ version: 1 }) } }) });
-      expect(await service.applyStoredIfBehind('app', deps)).to.be.true;
+      expect(await service.applyStoredIfBehind(APP, deps)).to.be.true;
       sinon.assert.calledOnce(deps.schedule);
     });
   });
@@ -1419,14 +1604,23 @@ describe('contentSlotService', () => {
   });
 
   describe('reconcileBootContent (boot before-start recovery)', () => {
-    const slotDeployment = { componentEntries: () => [['web', { hasContentSlots: () => true, identifier: 'web_abc123def456' }]] };
-    const noSlotDeployment = { componentEntries: () => [['web', { hasContentSlots: () => false, identifier: 'web_abc123def456' }]] };
+    let slotDeployment;
+    let noSlotDeployment;
+    let webIdentifier;
+
+    before(async () => {
+      slotDeployment = await deploymentOf(webWith(slotMount('app-config')));
+      noSlotDeployment = await deploymentOf(webWith());
+      webIdentifier = identifierOf(slotDeployment);
+    });
+
+    const appInfo = () => ({ owner: OWNER, isEncrypted: false, spec: slotSpec });
 
     it('mounts each slot component\'s volume before provisioning (the immutable mountpoint EPERMs an unmounted write)', async () => {
       const { service } = load();
       const provision = sinon.spy();
       const ensureMounted = sinon.stub().resolves({ mounted: true });
-      await service.reconcileBootContent('app', {
+      await service.reconcileBootContent(APP, {
         getDeployment: async () => slotDeployment,
         getLatest: async () => ({ confirmed: true, data: { manifest: manifest({ rollout: { strategy: 'immediate' } }) } }),
         getPeers: async () => ['p1'],
@@ -1435,7 +1629,7 @@ describe('contentSlotService', () => {
         schedule: sinon.spy(),
         now: () => 0,
       });
-      sinon.assert.calledOnceWithExactly(ensureMounted, 'web_abc123def456');
+      sinon.assert.calledOnceWithExactly(ensureMounted, webIdentifier);
       sinon.assert.calledOnce(provision);
       sinon.assert.callOrder(ensureMounted, provision);
     });
@@ -1445,7 +1639,7 @@ describe('contentSlotService', () => {
       const provision = sinon.spy();
       const ensureMounted = sinon.stub().resolves({ mounted: false, reason: 'volume_file_missing' });
       let thrown = null;
-      await service.reconcileBootContent('app', {
+      await service.reconcileBootContent(APP, {
         getDeployment: async () => slotDeployment,
         getLatest: async () => ({ confirmed: true, data: { manifest: manifest({ rollout: { strategy: 'immediate' } }) } }),
         getPeers: async () => ['p1'],
@@ -1463,7 +1657,7 @@ describe('contentSlotService', () => {
       const { service } = load();
       const provision = sinon.spy();
       const schedule = sinon.spy();
-      await service.reconcileBootContent('app', { getDeployment: async () => noSlotDeployment, provision, schedule });
+      await service.reconcileBootContent(APP, { getDeployment: async () => noSlotDeployment, provision, schedule });
       sinon.assert.notCalled(provision);
       sinon.assert.notCalled(schedule);
     });
@@ -1472,7 +1666,7 @@ describe('contentSlotService', () => {
       const { service } = load();
       const provision = sinon.spy();
       const schedule = sinon.spy();
-      await service.reconcileBootContent('app', {
+      await service.reconcileBootContent(APP, {
         getDeployment: async () => slotDeployment,
         getLatest: async () => ({ confirmed: true, data: { manifest: manifest({ rollout: { strategy: 'immediate' } }) } }),
         getPeers: async () => ['p1'],
@@ -1483,8 +1677,11 @@ describe('contentSlotService', () => {
       });
       sinon.assert.calledOnce(provision);
       expect(provision.firstCall.args[0]).to.equal(slotDeployment);
-      expect(provision.firstCall.args[1]).to.deep.equal({ appName: 'app', peers: ['p1'] });
+      expect(provision.firstCall.args[1]).to.deep.equal({ appName: APP, peers: ['p1'] });
       sinon.assert.notCalled(schedule);
+      // provisionContentSlots stays stubbed; the real one walks the deployment's
+      // components to decide whether the app declares slots at all.
+      assertAnswers(provision.firstCall.args[0], ['componentEntries']);
     });
 
     it('does NOT apply a future-dated rollout early — re-arms it instead (on-disk content stays)', async () => {
@@ -1492,10 +1689,10 @@ describe('contentSlotService', () => {
       const provision = sinon.spy();
       const schedule = sinon.spy();
       const future = manifest({ rollout: { strategy: 'scheduled', activateAt: 1_000_000 } }); // far future (ms), well ahead of now=0
-      await service.reconcileBootContent('app', {
+      await service.reconcileBootContent(APP, {
         getDeployment: async () => slotDeployment,
         getLatest: async () => ({ confirmed: true, data: { manifest: future } }),
-        getApp: async () => ({ owner: '1id', isEncrypted: false, spec: { owner: '1id', instances: 3 } }),
+        getApp: async () => appInfo(),
         provision,
         schedule,
         now: () => 0,
@@ -1511,7 +1708,7 @@ describe('contentSlotService', () => {
       const provision = sinon.spy();
       const schedule = sinon.spy();
       const past = manifest({ rollout: { strategy: 'scheduled', activateAt: 1000 } }); // 1000ms, past (now=5000)
-      await service.reconcileBootContent('app', {
+      await service.reconcileBootContent(APP, {
         getDeployment: async () => slotDeployment,
         getLatest: async () => ({ confirmed: true, data: { manifest: past } }),
         getPeers: async () => [],
@@ -1529,7 +1726,7 @@ describe('contentSlotService', () => {
       const provision = sinon.spy();
       const schedule = sinon.spy();
       const future = manifest({ rollout: { strategy: 'scheduled', activateAt: 1_000_000 } }); // far future (ms)
-      await service.reconcileBootContent('app', {
+      await service.reconcileBootContent(APP, {
         getDeployment: async () => slotDeployment,
         getLatest: async () => ({ confirmed: false, data: { manifest: future } }), // quarantined
         provision,
@@ -1545,10 +1742,10 @@ describe('contentSlotService', () => {
       const provision = sinon.spy();
       const schedule = sinon.spy();
       const future = manifest({ rollout: { strategy: 'scheduled', activateAt: 1_000_000 } });
-      await service.reconcileBootContent('app', {
+      await service.reconcileBootContent(APP, {
         getDeployment: async () => slotDeployment,
         getLatest: async () => ({ confirmed: true, data: { manifest: future } }),
-        getApp: async () => ({ owner: '1id', isEncrypted: false, spec: { owner: '1id', instances: 3 } }),
+        getApp: async () => appInfo(),
         provision,
         schedule,
         now: () => 0,
@@ -1563,12 +1760,12 @@ describe('contentSlotService', () => {
       const { service } = load();
       const provision = sinon.spy();
       const schedule = sinon.spy();
-      await service.reconcileBootContent('app', {
+      await service.reconcileBootContent(APP, {
         getDeployment: async () => slotDeployment,
         getLatest: async () => ({ confirmed: true, data: { manifest: manifest({ version: 3, rollout: { strategy: 'immediate' } }) } }),
         // applyStoredIfBehind seam (reconcileBootContent forwards deps): register ahead of delivered
         getStored: async () => ({ version: 3, appliedVersion: 2, confirmed: true, data: { manifest: manifest({ version: 3 }) } }),
-        getApp: async () => ({ owner: '1id', isEncrypted: false, spec: { owner: '1id', instances: 3 } }),
+        getApp: async () => appInfo(),
         componentsRunning: async () => true,
         provision,
         schedule,
@@ -1584,11 +1781,11 @@ describe('contentSlotService', () => {
       const { service } = load();
       const provision = sinon.spy();
       const schedule = sinon.spy();
-      await service.reconcileBootContent('app', {
+      await service.reconcileBootContent(APP, {
         getDeployment: async () => slotDeployment,
         getLatest: async () => ({ confirmed: true, data: { manifest: manifest({ version: 3, rollout: { strategy: 'immediate' } }) } }),
         getStored: async () => ({ version: 3, appliedVersion: 3, confirmed: true, data: { manifest: manifest({ version: 3 }) } }),
-        getApp: async () => ({ owner: '1id', isEncrypted: false, spec: { owner: '1id', instances: 3 } }),
+        getApp: async () => appInfo(),
         componentsRunning: async () => true,
         provision,
         schedule,
@@ -1601,21 +1798,22 @@ describe('contentSlotService', () => {
   });
 
   describe('fetchManifestFromPeers', () => {
-    const ctx = { owner: '1id', encrypted: false, spec: specWithSlots(['app-config']) };
+    const ctx = () => ({ owner: OWNER, encrypted: false, spec: slotSpec });
 
     it('adopts the highest valid version and rejects an invalid candidate', async () => {
       const { service } = load();
       const byPeer = { p1: manifest({ version: 2 }), p2: manifest({ version: 3 }), p3: manifest({ version: 5 }) };
       const fetch = async (peer) => byPeer[peer];
-      // canonical excludes ownerSignature; reject the version-5 candidate (e.g. forged)
+      // flux-spec's canonical form excludes ownerSignature and key-sorts the rest;
+      // reject the version-5 candidate (e.g. forged)
       const verify = (signed) => !signed.includes('"version":5');
-      const best = await service.fetchManifestFromPeers('app', ['p1', 'p2', 'p3'], ctx, { fetch, verify });
+      const best = await service.fetchManifestFromPeers(APP, ['p1', 'p2', 'p3'], ctx(), { fetch, verify });
       expect(best.gossip.version).to.equal(3);
     });
 
     it('returns null when no peer yields a valid manifest', async () => {
       const { service } = load();
-      const best = await service.fetchManifestFromPeers('app', ['p1'], ctx, { fetch: async () => null });
+      const best = await service.fetchManifestFromPeers(APP, ['p1'], ctx(), { fetch: async () => null });
       expect(best).to.equal(null);
     });
 
@@ -1623,29 +1821,32 @@ describe('contentSlotService', () => {
       const { service } = load();
       const seen = [];
       const fetch = async (peer) => { seen.push(peer); return null; };
-      await service.fetchManifestFromPeers('app', ['p1', 'p2', 'p3', 'p4'], ctx, { fetch, maxPeers: 2 });
+      await service.fetchManifestFromPeers(APP, ['p1', 'p2', 'p3', 'p4'], ctx(), { fetch, maxPeers: 2 });
       expect(seen).to.deep.equal(['p1', 'p2']);
     });
   });
 
   describe('provisionContentSlots', () => {
-    function deployment(slots = ['app-config']) {
-      const comp = {
-        hasContentSlots: () => slots.length > 0,
-        contentSlotMounts: () => slots.map((s) => ({ slot: s, source: `/dat/${s}`, atomic: false, onUpdate: null })),
-      };
-      return { componentEntries: () => [['web', comp]] };
-    }
-    const info = { owner: '1id', isEncrypted: true, spec: specWithSlots(['app-config']) };
+    let slotDeployment;
+    let noSlotDeployment;
+    let info;
+
+    before(async () => {
+      slotDeployment = await deploymentOf(webWith(slotMount('app-config')));
+      noSlotDeployment = await deploymentOf(webWith());
+      // Install-time provisioning reads the app off the registry: the sealed spec.
+      info = { owner: OWNER, isEncrypted: true, spec: slotSpecSealed };
+    });
 
     it('stages from this node\'s stored manifest when present (no catch-up)', async () => {
       const { service } = load();
       const provider = fakeProvider();
       const stageApply = sinon.spy();
       const fetchPeers = sinon.spy();
-      const sealed = await service.sealManifestSlots(manifest(), { owner: '1id', encrypted: true }, { provider });
+      const sealed = await service.sealManifestSlots(manifest(), { owner: OWNER, encrypted: true }, { provider });
 
-      await service.provisionContentSlots(deployment(), { appName: 'app', peers: ['p1'] }, {        getApp: async () => info,
+      await service.provisionContentSlots(slotDeployment, { appName: APP, peers: ['p1'] }, {
+        getApp: async () => info,
         getLatest: async () => ({ data: { manifest: sealed }, version: 2 }),
         fetchPeers,
         stageApply,
@@ -1655,7 +1856,10 @@ describe('contentSlotService', () => {
       sinon.assert.notCalled(fetchPeers);
       sinon.assert.calledOnce(stageApply);
       expect(stageApply.firstCall.args[1].slots).to.deep.equal(manifest().slots);
-      expect(stageApply.firstCall.args[2]).to.deep.equal({ appName: 'app', owner: '1id', peers: ['p1'] });
+      expect(stageApply.firstCall.args[2]).to.deep.equal({ appName: APP, owner: OWNER, peers: ['p1'] });
+      // stageAndApplySlots stays stubbed; the real one walks the deployment's
+      // components for their contentSlotMounts.
+      assertAnswers(stageApply.firstCall.args[0], ['componentEntries']);
     });
 
     it('records the provisioned version so a later behind-check does not re-apply it with a reaction', async () => {
@@ -1663,9 +1867,9 @@ describe('contentSlotService', () => {
       const provider = fakeProvider();
       const stageApply = sinon.spy();
       const recordApplied = sinon.spy();
-      const sealed = await service.sealManifestSlots(manifest(), { owner: '1id', encrypted: true }, { provider });
+      const sealed = await service.sealManifestSlots(manifest(), { owner: OWNER, encrypted: true }, { provider });
 
-      await service.provisionContentSlots(deployment(), { appName: 'app', peers: ['p1'] }, {
+      await service.provisionContentSlots(slotDeployment, { appName: APP, peers: ['p1'] }, {
         getApp: async () => info,
         getLatest: async () => ({ data: { manifest: sealed }, version: 2 }),
         stageApply,
@@ -1677,7 +1881,7 @@ describe('contentSlotService', () => {
       // Without this record, applyStoredIfBehind sees the node "behind" and re-applies the
       // just-provisioned content to the now-running container THROUGH applyManifest, firing
       // the onUpdate reaction — a spurious install-time restart/signal.
-      sinon.assert.calledOnceWithExactly(recordApplied, 'app', 2);
+      sinon.assert.calledOnceWithExactly(recordApplied, APP, 2);
     });
 
     it('verifies and promotes a locally-quarantined manifest at install (no catch-up round-trip)', async () => {
@@ -1686,12 +1890,15 @@ describe('contentSlotService', () => {
       const stageApply = sinon.spy();
       const fetchPeers = sinon.spy();
       const store = sinon.spy();
-      const sealed = await service.sealManifestSlots(manifest(), { owner: '1id', encrypted: true }, { provider });
+      const sealed = await service.sealManifestSlots(manifest(), { owner: OWNER, encrypted: true }, { provider });
 
       const env = { version: 1, timestamp: 7, pubKey: 'pk', signature: 's' };
-      const data = { type: 'fluxappcontentmanifest', appName: 'app', manifest: sealed };
-      await service.provisionContentSlots(deployment(), { appName: 'app', peers: ['p1'] }, {        getApp: async () => info,
-        getLatest: async () => ({ data, envelope: env, version: 2, confirmed: false }), // quarantined
+      const data = { type: 'fluxappcontentmanifest', appName: APP, manifest: sealed };
+      await service.provisionContentSlots(slotDeployment, { appName: APP, peers: ['p1'] }, {
+        getApp: async () => info,
+        getLatest: async () => ({
+          data, envelope: env, version: 2, confirmed: false,
+        }), // quarantined
         fetchPeers,
         store,
         stageApply,
@@ -1709,11 +1916,13 @@ describe('contentSlotService', () => {
       const provider = fakeProvider();
       const stageApply = sinon.spy();
       const fetched = { gossip: manifest(), plaintext: manifest() };
-      const sealed = await service.sealManifestSlots(manifest(), { owner: '1id', encrypted: true }, { provider });
+      const fetchPeers = sinon.stub().resolves(fetched);
+      const sealed = await service.sealManifestSlots(manifest(), { owner: OWNER, encrypted: true }, { provider });
 
-      await service.provisionContentSlots(deployment(), { appName: 'app', peers: ['p1'] }, {        getApp: async () => info,
+      await service.provisionContentSlots(slotDeployment, { appName: APP, peers: ['p1'] }, {
+        getApp: async () => info,
         getLatest: async () => ({ data: { manifest: sealed }, version: 2, confirmed: false }),
-        fetchPeers: async () => fetched,
+        fetchPeers,
         store: sinon.spy(),
         stageApply,
         provider,
@@ -1722,6 +1931,10 @@ describe('contentSlotService', () => {
 
       sinon.assert.calledOnce(stageApply);
       expect(stageApply.firstCall.args[1]).to.equal(fetched.plaintext); // used the caught-up manifest
+      // fetchManifestFromPeers stays stubbed; the real one runs verifyManifest against
+      // the ctx spec, which has to decrypt the sealed registry form first. Run it.
+      const handedSpec = fetchPeers.firstCall.args[2].spec;
+      await service.verifyManifest(manifest(), { owner: OWNER, spec: handedSpec }, { verify: () => true });
     });
 
     it('catches up from a running peer when nothing is stored, then stores + stages', async () => {
@@ -1730,7 +1943,8 @@ describe('contentSlotService', () => {
       const stageApply = sinon.spy();
       const fetched = { gossip: manifest(), plaintext: manifest() };
 
-      await service.provisionContentSlots(deployment(), { appName: 'app', peers: ['p1'] }, {        getApp: async () => info,
+      await service.provisionContentSlots(slotDeployment, { appName: APP, peers: ['p1'] }, {
+        getApp: async () => info,
         getLatest: async () => null,
         fetchPeers: async () => fetched,
         store,
@@ -1747,10 +1961,11 @@ describe('contentSlotService', () => {
       const provider = fakeProvider();
       const store = sinon.spy();
       const stageApply = sinon.spy();
-      const sealed = await service.sealManifestSlots(manifest(), { owner: '1id', encrypted: true }, { provider });
+      const sealed = await service.sealManifestSlots(manifest(), { owner: OWNER, encrypted: true }, { provider });
       const fetchFromDrive = sinon.stub().resolves({ version: 2, manifest: sealed });
 
-      await service.provisionContentSlots(deployment(), { appName: 'app', peers: [] }, {        getApp: async () => info,
+      await service.provisionContentSlots(slotDeployment, { appName: APP, peers: [] }, {
+        getApp: async () => info,
         getLatest: async () => null,
         fetchPeers: async () => null, // no running peer
         fetchFromDrive,
@@ -1771,11 +1986,12 @@ describe('contentSlotService', () => {
       const { service } = load();
       const provider = fakeProvider();
       const stageApply = sinon.spy();
-      const sealed = await service.sealManifestSlots(manifest(), { owner: '1id', encrypted: true }, { provider });
+      const sealed = await service.sealManifestSlots(manifest(), { owner: OWNER, encrypted: true }, { provider });
       const fetchFromDrive = sinon.stub().resolves({ version: 2, manifest: sealed });
 
       await expectReject(
-        service.provisionContentSlots(deployment(), { appName: 'app', peers: [] }, {          getApp: async () => info,
+        service.provisionContentSlots(slotDeployment, { appName: APP, peers: [] }, {
+          getApp: async () => info,
           getLatest: async () => null,
           fetchPeers: async () => null,
           fetchFromDrive,
@@ -1792,7 +2008,8 @@ describe('contentSlotService', () => {
     it('holds the install (throws) when no manifest is stored, no peer, and FluxDrive 404s', async () => {
       const { service } = load();
       await expectReject(
-        service.provisionContentSlots(deployment(), { appName: 'app', peers: [] }, {          getApp: async () => info,
+        service.provisionContentSlots(slotDeployment, { appName: APP, peers: [] }, {
+          getApp: async () => info,
           getLatest: async () => null,
           fetchPeers: async () => null,
           fetchFromDrive: async () => null, // FluxDrive has nothing either
@@ -1806,7 +2023,8 @@ describe('contentSlotService', () => {
       const { service } = load();
       const stageApply = sinon.spy();
       await expectReject(
-        service.provisionContentSlots(deployment(), { appName: 'app', peers: [] }, {          getApp: async () => info,
+        service.provisionContentSlots(slotDeployment, { appName: APP, peers: [] }, {
+          getApp: async () => info,
           getLatest: async () => null,
           fetchPeers: async () => null,
           fetchFromDrive: async () => { throw new Error('fluxdrive 502'); }, // swallowed -> fall through to hold
@@ -1821,7 +2039,7 @@ describe('contentSlotService', () => {
       const { service } = load();
       const stageApply = sinon.spy();
       const getApp = sinon.spy();
-      await service.provisionContentSlots(deployment([]), { appName: 'app' }, { getApp, stageApply });
+      await service.provisionContentSlots(noSlotDeployment, { appName: APP }, { getApp, stageApply });
       sinon.assert.notCalled(stageApply);
       sinon.assert.notCalled(getApp);
     });

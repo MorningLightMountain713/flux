@@ -3,16 +3,56 @@
 const { expect } = require('chai');
 const sinon = require('sinon');
 const proxyquire = require('proxyquire').noCallThru();
+const {
+  loadSpecLibrary, V8_SUBMISSION, v1Spec, v8Spec, v9Spec, sealedV8Spec, sealedV9Spec,
+  instantiatedSpec, assertAnswers,
+} = require('./fixtures/fluxSpec');
+
+// The spec library is real here, not stubbed — see tests/unit/fixtures/fluxSpec.js
+// for why. This is the repository layer, so what the tests hand it are real STORED
+// forms: an InstantiatedSpec's serialization, cleartext or node-sealed. What stays
+// stubbed is I/O — mongo through dbHelper, and the event-log collection handle the
+// running-set derivation reads directly.
+let flux;
 
 describe('appsRepository', () => {
   let appsRepository;
   let dbHelperStub;
   let specLibsStub;
-  let versionRegistry;
   let logStub;
   let mockDb;
   let eventCollection;
   let runningCounts;
+
+  before(async function loadLibrary() {
+    // The first fromSubmission compiles the ajv schemas.
+    this.timeout(30000);
+    flux = await loadSpecLibrary();
+  });
+
+  /**
+   * The stored form of a legacy (v1–v8) app: the spec's wire form plus the chain
+   * state InstantiatedSpec appends. `registeredAt` is dropped because a legacy row
+   * carries none — it anchors v9's time-based TTL, and InstantiatedSpec.serialize
+   * omits it when it is null.
+   */
+  async function legacyDoc(spec, { hash = 'h1', height = 2550000 } = {}) {
+    const doc = (await instantiatedSpec(spec, { hash, height })).serialize();
+    delete doc.registeredAt;
+    return doc;
+  }
+
+  /** The stored form of a v9 app, cleartext or node-sealed. */
+  async function modernDoc(spec, { hash = 'h9', height = 2550000, registeredAt = 1751628800 } = {}) {
+    return (await instantiatedSpec(spec, { hash, height, registeredAt })).serialize();
+  }
+
+  /**
+   * A real FluxAppSpecV1 — the only stored form that carries no `instances` at
+   * all (v1 predates the field and the class hardcodes 3), which is the row
+   * findUnderProvisionedApps' `?? 3` default exists for. Built from the shared v8
+   * fixture's own single component, so it is the same app in the flat v1 shape.
+   */
 
   beforeEach(() => {
     // countRunningByApp reads the event log directly off the collection handle:
@@ -36,47 +76,14 @@ describe('appsRepository', () => {
       bulkWriteInDatabase: sinon.stub().resolves({ upsertedCount: 0 }),
     };
 
-    // getSpec() returns { FluxAppSpecBase: { getVersionClass } }.
-    // getSpecBackend() returns { InstantiatedSpec } — hydrate() calls
-    // InstantiatedSpec.deserialize(doc) which wraps the spec with metadata.
-    versionRegistry = new Map();
-
-    function mockDeserializeSpec(doc) {
-      if (doc.version === 8 && typeof doc.enterprise === 'string' && doc.enterprise !== '') {
-        throw new Error('appsRepository test: no EncryptedSpecV8 stub registered');
-      }
-      const VersionClass = versionRegistry.get(doc.version);
-      if (!VersionClass) {
-        throw new Error(`no spec class registered for version ${doc.version}`);
-      }
-      return VersionClass.deserialize(doc);
-    }
-
-    const MockInstantiatedSpec = {
-      deserialize: (doc) => {
-        const spec = mockDeserializeSpec(doc);
-        return {
-          spec,
-          hash: doc.hash,
-          height: doc.height,
-          registeredAt: doc.registeredAt ?? null,
-          name: spec.name,
-          version: spec.version,
-          owner: spec.owner,
-          isEncrypted: false,
-        };
-      },
-    };
-
+    // specLibs is FluxOS's own bridge to the spec library, and both accessors
+    // return the same flattened namespace (ZelBack/src/services/utils/specLibs.js),
+    // so the stub hands back the real one. hydrate() then runs the real
+    // InstantiatedSpec.deserialize over the real version registry — which is the
+    // whole of this module's read path.
     specLibsStub = {
-      getSpec: sinon.stub().resolves({
-        FluxAppSpecBase: {
-          getVersionClass: (v) => versionRegistry.get(v),
-        },
-      }),
-      getSpecBackend: sinon.stub().resolves({
-        InstantiatedSpec: MockInstantiatedSpec,
-      }),
+      getSpec: sinon.stub().callsFake(async () => flux),
+      getSpecBackend: sinon.stub().callsFake(async () => flux),
     };
 
     logStub = { warn: sinon.stub(), error: sinon.stub(), info: sinon.stub() };
@@ -139,19 +146,22 @@ describe('appsRepository', () => {
     });
 
     it('dispatches to the registered version class and wraps in InstantiatedSpec', async () => {
-      const v7Instance = { name: 'example', version: 7 };
-      const V7 = { deserialize: sinon.stub().returns(v7Instance) };
-      versionRegistry.set(7, V7);
-
-      const doc = { name: 'example', version: 7, hash: 'h', height: 100, compose: [] };
+      const doc = await legacyDoc(await v8Spec({ name: 'example' }), { hash: 'h', height: 100 });
+      const deserialize = sinon.spy(flux.FluxAppSpecV8, 'deserialize');
       dbHelperStub.findOneInDatabase.resolves(doc);
 
       const result = await appsRepository.getGlobalAppInfo('example');
-      expect(result.spec).to.equal(v7Instance);
+      expect(result).to.be.instanceOf(flux.InstantiatedSpec);
+      expect(result.spec).to.be.instanceOf(flux.FluxAppSpecV8);
       expect(result.hash).to.equal('h');
       expect(result.height).to.equal(100);
       expect(result.name).to.equal('example');
-      expect(V7.deserialize.calledOnceWith(doc)).to.be.true;
+      expect(result.isEncrypted, 'a cleartext row is not encrypted').to.be.false;
+      sinon.assert.calledOnce(deserialize);
+      expect(deserialize.firstCall.args[0]).to.deep.equal(doc);
+      // assertNoNameConflicts reads both off this object, and only the real class
+      // derives the second — a legacy app's expiry is height + expire over the fork.
+      expect(result.expiresAtHeight).to.be.a('number').and.be.greaterThan(100);
     });
 
     it('returns null and logs when no version class is registered', async () => {
@@ -160,15 +170,64 @@ describe('appsRepository', () => {
       const result = await appsRepository.getGlobalAppInfo('phantom');
       expect(result).to.be.null;
       expect(logStub.warn.calledOnce).to.be.true;
+      expect(logStub.warn.firstCall.args[0]).to.include('version 99');
     });
 
     it('hydrates v9 documents through InstantiatedSpec.deserialize', async () => {
-      versionRegistry.set(9, { deserialize: sinon.stub().returns({ version: 9, name: 'modern' }) });
-      const doc = { name: 'modern', version: 9, hash: 'h', height: 100 };
+      const doc = await modernDoc(await v9Spec({ name: 'modern' }), { hash: 'h', height: 100 });
       dbHelperStub.findOneInDatabase.resolves(doc);
       const result = await appsRepository.getGlobalAppInfo('modern');
       expect(result).to.not.be.null;
+      expect(result.spec).to.be.instanceOf(flux.FluxAppSpecV9);
       expect(result.name).to.equal('modern');
+      // v9 is time-based, so the row carries the confirming block's timestamp
+      expect(result.registeredAt).to.equal(1751628800);
+    });
+
+    // The double this replaced could not hydrate a sealed row at all: it hardcoded
+    // isEncrypted:false and threw outright on a v8 enterprise doc. Both forms are
+    // ordinary stored rows, and encryption is the fact every consumer branches on.
+    it('hydrates a node-sealed v9 row and reports it encrypted', async () => {
+      const doc = await modernDoc(await sealedV9Spec({ name: 'sealed9' }), { hash: 'hs9', height: 900 });
+      dbHelperStub.findOneInDatabase.resolves(doc);
+
+      const result = await appsRepository.getGlobalAppInfo('sealed9');
+      expect(result.spec).to.be.instanceOf(flux.EncryptedSpecV9);
+      expect(result.isEncrypted).to.be.true;
+      expect(result.requiresArcane(), 'only an Arcane node can unseal it').to.be.true;
+      // Judging fitness without unsealing is what the cleartext summary is for, and
+      // it survives the trip through storage.
+      expect(result.resourceTotals()).to.include({ cpu: 0.5, memoryMb: 300 });
+    });
+
+    it('hydrates a v8 enterprise row', async () => {
+      const doc = await legacyDoc(await sealedV8Spec({ name: 'sealed8' }), { hash: 'hs8', height: 800 });
+      dbHelperStub.findOneInDatabase.resolves(doc);
+
+      const result = await appsRepository.getGlobalAppInfo('sealed8');
+      expect(result.spec).to.be.instanceOf(flux.EncryptedSpecV8);
+      expect(result.isEncrypted).to.be.true;
+      // v8's blob carries no cleartext summary at all: "I cannot tell from here".
+      expect(result.resourceTotals()).to.be.null;
+    });
+
+    it('strips the storage-only fields a sealed spec would refuse', async () => {
+      // `replica` and `componentIdentifiers` are this collection's own key and
+      // index, not part of any spec wire form. hydrate strips them because the
+      // encrypted deserializers reject an unknown field outright rather than
+      // letting it into the AAD and failing later as an opaque GCM error.
+      const stored = await modernDoc(await sealedV9Spec({ name: 'sealed9' }));
+      expect(
+        () => flux.InstantiatedSpec.deserialize({ ...stored, replica: 'r1' }),
+        'the real class must refuse a decorated doc, or this test proves nothing',
+      ).to.throw(/unexpected fields/);
+
+      dbHelperStub.findOneInDatabase.resolves({
+        ...stored, replica: 'r1', componentIdentifiers: ['web_sealed9_r1'],
+      });
+      const result = await appsRepository.getInstalledIdentity('sealed9', 'r1');
+      expect(result).to.not.be.null;
+      expect(result.spec).to.be.instanceOf(flux.EncryptedSpecV9);
     });
   });
 
@@ -312,42 +371,67 @@ describe('appsRepository', () => {
       await appsRepository.upsertAppInstallingErrorLocations([]);
       expect(dbHelperStub.bulkWriteInDatabase.firstCall.args[2]).to.deep.equal([]);
     });
+
+    // upsertIfNewer is the one write that takes a spec OBJECT rather than a
+    // document, and dbHelper is stubbed here — so nothing in this suite reads the
+    // row back. hydrate will, on the next boot, which makes "the real deserializer
+    // accepts what we wrote" the assertion that stands in for it.
+    it('upsertIfNewer stores a form hydrate can read back', async () => {
+      const instantiated = await instantiatedSpec(
+        await v9Spec({ name: 'newerapp' }), { hash: 'h2', height: 200 },
+      );
+      dbHelperStub.findOneInDatabase.resolves({ height: 100 });
+      dbHelperStub.replaceOneInDatabase.resolves({ matchedCount: 1 });
+
+      expect(await appsRepository.upsertIfNewer(instantiated)).to.be.true;
+
+      const doc = dbHelperStub.replaceOneInDatabase.firstCall.args[3];
+      const rehydrated = flux.InstantiatedSpec.deserialize(doc);
+      expect(rehydrated.name).to.equal('newerapp');
+      expect(rehydrated.hash).to.equal('h2');
+      expect(rehydrated.height).to.equal(200);
+      expect(rehydrated.spec).to.be.instanceOf(flux.FluxAppSpecV9);
+    });
+
+    it('upsertIfNewer refuses a spec no newer than the stored height', async () => {
+      const instantiated = await instantiatedSpec(
+        await v9Spec({ name: 'newerapp' }), { hash: 'h2', height: 100 },
+      );
+      dbHelperStub.findOneInDatabase.resolves({ height: 100 });
+
+      expect(await appsRepository.upsertIfNewer(instantiated)).to.be.false;
+      sinon.assert.notCalled(dbHelperStub.replaceOneInDatabase);
+    });
   });
 
   describe('list accessors', () => {
     it('listGlobalAppInfo hydrates every document into InstantiatedSpec', async () => {
-      const inst1 = { name: 'a' };
-      const inst2 = { name: 'b' };
-      const V = { deserialize: sinon.stub() };
-      V.deserialize.onFirstCall().returns(inst1);
-      V.deserialize.onSecondCall().returns(inst2);
-      versionRegistry.set(7, V);
-
+      // Two rows of different vintages, because the list is version-mixed in
+      // production and one deserializer standing in for both would hide it.
       dbHelperStub.findInDatabase.resolves([
-        { name: 'a', version: 7, hash: 'h1', height: 10 },
-        { name: 'b', version: 7, hash: 'h2', height: 20 },
+        await legacyDoc(await v8Spec({ name: 'appa' }), { hash: 'h1', height: 10 }),
+        await modernDoc(await v9Spec({ name: 'appb' }), { hash: 'h2', height: 20 }),
       ]);
 
       const result = await appsRepository.listGlobalAppInfo();
       expect(result).to.have.length(2);
-      expect(result[0].spec).to.equal(inst1);
+      expect(result[0].spec).to.be.instanceOf(flux.FluxAppSpecV8);
+      expect(result[0].name).to.equal('appa');
       expect(result[0].hash).to.equal('h1');
-      expect(result[1].spec).to.equal(inst2);
+      expect(result[1].spec).to.be.instanceOf(flux.FluxAppSpecV9);
+      expect(result[1].name).to.equal('appb');
       expect(result[1].hash).to.equal('h2');
     });
 
     it('listGlobalAppInfo drops docs whose version class is missing', async () => {
-      const V = { deserialize: sinon.stub().returns({ name: 'a' }) };
-      versionRegistry.set(7, V);
-
       dbHelperStub.findInDatabase.resolves([
-        { name: 'a', version: 7, hash: 'h1', height: 10 },
-        { name: 'b', version: 42, hash: 'h2', height: 20 }, // no class registered
+        await legacyDoc(await v8Spec({ name: 'appa' }), { hash: 'h1', height: 10 }),
+        { name: 'appb', version: 42, hash: 'h2', height: 20 }, // no class registered
       ]);
 
       const result = await appsRepository.listGlobalAppInfo();
       expect(result).to.have.length(1);
-      expect(result[0].name).to.equal('a');
+      expect(result[0].name).to.equal('appa');
     });
   });
 
@@ -414,25 +498,22 @@ describe('appsRepository', () => {
     });
 
     it('hydrates the nested appSpecifications into InstantiatedSpec', async () => {
-      const specInstance = { name: 'x', version: 7 };
-      const V = { deserialize: sinon.stub().returns(specInstance) };
-      versionRegistry.set(7, V);
-
-      const message = {
-        hash: 'abc',
-        height: 500,
-        appSpecifications: { name: 'x', version: 7, compose: [] },
-      };
+      // A permanent message stores the spec's own wire form and nothing else: the
+      // chain state lives on the message, and hydrate is what puts the two together.
+      const spec = await v8Spec({ name: 'legacyapp' });
+      const message = { hash: 'abc', height: 500, appSpecifications: spec.serialize() };
+      const deserialize = sinon.spy(flux.FluxAppSpecV8, 'deserialize');
       dbHelperStub.findOneInDatabase.resolves(message);
 
       const result = await appsRepository.getAppMessage('abc');
       expect(result.message).to.equal(message);
-      expect(result.spec.spec).to.equal(specInstance);
+      expect(result.spec.spec).to.be.instanceOf(flux.FluxAppSpecV8);
+      expect(result.spec.spec.name).to.equal('legacyapp');
       expect(result.spec.hash).to.equal('abc');
       expect(result.spec.height).to.equal(500);
 
       // The hydrate call should have received the spec blob with hash/height appended
-      const docForHydrate = V.deserialize.firstCall.args[0];
+      const docForHydrate = deserialize.firstCall.args[0];
       expect(docForHydrate.hash).to.equal('abc');
       expect(docForHydrate.height).to.equal(500);
     });
@@ -472,21 +553,6 @@ describe('appsRepository', () => {
   });
 
   describe('findUnderProvisionedApps', () => {
-    beforeEach(() => {
-      const V7 = {
-        deserialize: (doc) => ({
-          version: doc.version,
-          name: doc.name,
-          owner: doc.owner,
-          instances: doc.instances,
-          placement: { staticIp: false, dataCenter: false },
-          enterprise: doc.enterprise,
-          hasSyncthing: () => false,
-        }),
-      };
-      versionRegistry.set(7, V7);
-    });
-
     it('returns nothing when no app is alive', async () => {
       dbHelperStub.aggregateInDatabase.resolves([]);
       const result = await appsRepository.findUnderProvisionedApps(2555000, 1716000000);
@@ -494,7 +560,7 @@ describe('appsRepository', () => {
     });
 
     it('flags an app running fewer replicas than it wants', async () => {
-      const doc = { version: 7, name: 'testApp', owner: 'owner1', hash: 'h1', height: 2550000, instances: 3 };
+      const doc = await legacyDoc(await v8Spec({ name: 'testApp', instances: 3 }));
       dbHelperStub.aggregateInDatabase.resolves([doc]);
       runningCounts = [{ _id: 'testApp', count: 1 }];
 
@@ -504,11 +570,19 @@ describe('appsRepository', () => {
       expect(result[0].instantiated.name).to.equal('testApp');
       expect(result[0].actual).to.equal(1);
       expect(result[0].required).to.equal(3);
+
+      // The spawner is this query's only consumer, and it is not in this suite —
+      // so nothing else here exercises what it does with a candidate. It sizes
+      // one, screens it for Arcane, reads its dependency edges and filters on its
+      // placement, so assert the object can answer all of that. The double this
+      // replaced answered none of it, and the suite was green regardless.
+      assertAnswers(result[0].instantiated, ['resourceTotals', 'requiresArcane', 'linkedAppNames', 'serialize']);
+      expect(result[0].instantiated.spec.placement, 'the spawner filters candidates on it').to.exist;
+      expect(result[0].instantiated.hash, 'and caches its spawn attempts by it').to.equal('h1');
     });
 
     it('leaves an app alone once it is at target', async () => {
-      const doc = { version: 7, name: 'testApp', owner: 'owner1', hash: 'h1', height: 2550000, instances: 3 };
-      dbHelperStub.aggregateInDatabase.resolves([doc]);
+      dbHelperStub.aggregateInDatabase.resolves([await legacyDoc(await v8Spec({ name: 'testApp', instances: 3 }))]);
       runningCounts = [{ _id: 'testApp', count: 3 }];
 
       expect(await appsRepository.findUnderProvisionedApps(2555000, 1716000000)).to.deep.equal([]);
@@ -518,16 +592,14 @@ describe('appsRepository', () => {
     // case-insensitively everywhere else, and a miss here reads as zero instances
     // and spawns a replica that is already running.
     it('matches the running count to the spec name case-insensitively', async () => {
-      const doc = { version: 7, name: 'TestApp', owner: 'o', hash: 'h1', height: 2550000, instances: 3 };
-      dbHelperStub.aggregateInDatabase.resolves([doc]);
+      dbHelperStub.aggregateInDatabase.resolves([await legacyDoc(await v8Spec({ name: 'TestApp', instances: 3 }))]);
       runningCounts = [{ _id: 'testapp', count: 3 }];
 
       expect(await appsRepository.findUnderProvisionedApps(2555000, 1716000000)).to.deep.equal([]);
     });
 
     it('treats an app with no running replicas as fully under-provisioned', async () => {
-      const doc = { version: 7, name: 'ghost', owner: 'o', hash: 'h1', height: 2550000, instances: 2 };
-      dbHelperStub.aggregateInDatabase.resolves([doc]);
+      dbHelperStub.aggregateInDatabase.resolves([await legacyDoc(await v8Spec({ name: 'ghost', instances: 2 }))]);
       runningCounts = [];
 
       const result = await appsRepository.findUnderProvisionedApps(2555000, 1716000000);
@@ -537,7 +609,11 @@ describe('appsRepository', () => {
     });
 
     it('defaults the target to 3 when the spec does not say', async () => {
-      const doc = { version: 7, name: 'noInstances', owner: 'o', hash: 'h1', height: 2550000 };
+      // A real v1 row, the only stored form with no `instances` at all — the
+      // reason the default exists. Every later version states one, and the real
+      // library refuses a v2+ row that omits it.
+      const doc = await legacyDoc(await v1Spec({ name: 'noinstances' }));
+      expect(doc, 'a v1 row carries no instances').to.not.have.property('instances');
       dbHelperStub.aggregateInDatabase.resolves([doc]);
       runningCounts = [{ _id: 'noinstances', count: 2 }];
 
@@ -547,7 +623,7 @@ describe('appsRepository', () => {
     });
 
     it('skips docs that fail hydration', async () => {
-      const good = { version: 7, name: 'goodApp', owner: 'o1', hash: 'h1', height: 100, instances: 3 };
+      const good = await legacyDoc(await v8Spec({ name: 'goodApp', instances: 3 }), { hash: 'h1', height: 100 });
       const bad = { version: 99, name: 'badApp', owner: 'o2', hash: 'h2', height: 100, instances: 3 };
       dbHelperStub.aggregateInDatabase.resolves([good, bad]);
       runningCounts = [];
@@ -561,17 +637,26 @@ describe('appsRepository', () => {
     // with anything the query added fails to decrypt. Counting outside the pipeline
     // means the doc reaches hydrate exactly as stored.
     it('hands hydrate the stored doc, undecorated', async () => {
-      const doc = { version: 7, name: 'testApp', owner: 'o', hash: 'h1', height: 2550000, instances: 3 };
+      const doc = await modernDoc(await sealedV9Spec({ name: 'testapp' }), { hash: 'h1', height: 2550000 });
+      const storedKeys = Object.keys(doc).sort();
+      expect(
+        () => flux.InstantiatedSpec.deserialize({ ...doc, _isAlive: true }),
+        'a decorated sealed doc must be refused, or this test proves nothing',
+      ).to.throw(/unexpected fields/);
       dbHelperStub.aggregateInDatabase.resolves([doc]);
       runningCounts = [];
 
-      await appsRepository.findUnderProvisionedApps(2555000, 1716000000);
+      const result = await appsRepository.findUnderProvisionedApps(2555000, 1716000000);
 
       const pipeline = dbHelperStub.aggregateInDatabase.firstCall.args[2];
       // no join, and nothing left of the aliveness check
       expect(pipeline.some((stage) => stage.$lookup)).to.be.false;
       expect(pipeline.filter((stage) => stage.$unset).map((stage) => stage.$unset)).to.deep.include('_isAlive');
-      expect(Object.keys(doc).sort()).to.deep.equal(['hash', 'height', 'instances', 'name', 'owner', 'version']);
+      expect(Object.keys(doc).sort(), 'nothing above hydrate may decorate the stored doc').to.deep.equal(storedKeys);
+      // and the proof that matters: the real deserializer accepted it. A decorated
+      // doc would have been refused and the app would simply have vanished here.
+      expect(result).to.have.lengthOf(1);
+      expect(result[0].instantiated.isEncrypted).to.be.true;
     });
 
     it('does not count instances inside the spec query', async () => {
