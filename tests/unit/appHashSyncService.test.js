@@ -5,6 +5,21 @@ const sinon = require('sinon');
 const proxyquire = require('proxyquire').noCallThru();
 const { Readable } = require('stream');
 const config = require('config');
+const {
+  loadSpecLibrary, v8Spec, v9Spec, sealedV9Spec, assertAnswers,
+} = require('./fixtures/fluxSpec');
+
+// The spec library is real here, not stubbed — see tests/unit/fixtures/fluxSpec.js
+// for why. What stays stubbed is I/O and FluxOS policy: mongo, the peer
+// transport and the explorer HTTP calls, the daemon RPCs, the signature gate
+// (appEventVerifier.authorize) and the fork-activation height gate.
+let flux;
+
+// Two real owner addresses. An update is judged against the owner the app
+// ALREADY has, so both halves of that comparison have to be addresses the real
+// classes accept — 'oldOwner' / 'newOwner' / 'owner1' never were.
+const OLD_OWNER = '19z6SjrVrWqBTLiCXWLRjcu9ydnzWNz3UD';
+const NEW_OWNER = '16dNCFf7nR3nx5iwn2RQMBw6KcJXkE3JC1';
 
 function makeStreamResponse(data) {
   const json = JSON.stringify({ status: 'success', data });
@@ -12,19 +27,60 @@ function makeStreamResponse(data) {
   return { data: stream, headers: {} };
 }
 
+/**
+ * `specCutover.deserializeSpec` stays stubbed because the wrapper registers the
+ * node's crypto providers, which are I/O. The parse behind it is the real
+ * library's, so what comes back is a real FluxAppSpecV8 — the class production
+ * hands to InstantiatedSpec.fromEvent — rather than a literal that answers only
+ * the four members this service happens to read today.
+ */
 function makeDeserializeSpecStub() {
-  return sinon.stub().callsFake((spec) => Promise.resolve({
-    serialize: () => spec,
-    isEncrypted: false,
-    name: spec.name,
-    owner: spec.owner,
-    // A real deserialized spec always carries its version; omitting it here
-    // made the stub something the production object can never be.
-    version: spec.version,
-  }));
+  return sinon.stub().callsFake(async (blob) => flux.deserializeSpec(blob));
+}
+
+/**
+ * The event classes `appEventVerifier.deserializeMessage` really returns,
+ * routed exactly as production routes them: envelope version 2 is a
+ * ConfirmedAppEvent, anything older an AppEventLegacy. Both are frozen, both
+ * carry a real spec on `.spec`, and both refuse a document whose
+ * appSpecifications is not a spec the library can parse.
+ */
+function makeDeserializeMessageStub() {
+  return sinon.stub().callsFake(async (msg) => (msg.version === 2
+    ? flux.ConfirmedAppEvent.deserialize(msg)
+    : flux.AppEventLegacy.deserialize(msg)));
+}
+
+/**
+ * A permanent-message document carrying a REAL serialized spec — the shape a
+ * peer's /apps/permanentmessages actually streams. The envelope version stays
+ * at the legacy 4 while the spec inside is v8, so the two versions are
+ * distinguishable: the service must gate on the parsed spec's version.
+ */
+async function legacyMessage({
+  type, hash, txid, height, name, owner, timestamp,
+}) {
+  const spec = await v8Spec({ name, owner: owner ?? OLD_OWNER });
+  return {
+    type,
+    version: 4,
+    hash,
+    timestamp: timestamp ?? Date.now(),
+    signature: `sig-${hash}`,
+    appSpecifications: spec.serialize(),
+    valueSat: 1e8,
+    txid,
+    height,
+  };
 }
 
 describe('appHashSyncService tests', () => {
+  before(async function loadLibrary() {
+    // The first fromSubmission compiles the ajv schemas.
+    this.timeout(30000);
+    flux = await loadSpecLibrary();
+  });
+
   let appHashSyncService;
   let dbHelperStub;
   let messageHelperStub;
@@ -59,7 +115,14 @@ describe('appHashSyncService tests', () => {
       './messageVerifier': messageVerifierStub,
       './appEventVerifier': appEventVerifierStub,
       '../utils/specCutover': { deserializeSpec: deserializeSpecStub },
-      '../utils/specLibs': { assertVersionActivated: sinon.stub(), getSpec: sinon.stub().resolves({}), getSpecBackend: sinon.stub().resolves({ InstantiatedSpec: { fromEvent: (x) => x } }) },
+      // The real library behind FluxOS's own accessor, so InstantiatedSpec is
+      // the real class. assertVersionActivated stays stubbed: it is FluxOS
+      // policy about fork heights, not spec shape.
+      '../utils/specLibs': {
+        assertVersionActivated: sinon.stub(),
+        getSpec: sinon.stub().callsFake(async () => flux),
+        getSpecBackend: sinon.stub().callsFake(async () => flux),
+      },
       '../daemonService/daemonServiceMiscRpcs': { isDaemonSynced: sinon.stub().returns({ data: { height: 2555000 } }) },
       '../utils/fluxBroadcastHelper': fluxBroadcastHelperStub,
       '../invalidMessages': { invalidMessages: [] },
@@ -110,18 +173,7 @@ describe('appHashSyncService tests', () => {
     };
 
     appEventVerifierStub = {
-      deserializeMessage: sinon.stub().callsFake(async (msg) => ({
-        serialize: () => ({ ...msg }),
-        // A real event always carries its parsed spec; the service reads it
-        // rather than parsing the document a second time.
-        spec: {
-          name: msg.appSpecifications?.name,
-          owner: msg.appSpecifications?.owner,
-          version: msg.appSpecifications?.version,
-          isEncrypted: false,
-          serialize: () => msg.appSpecifications,
-        },
-      })),
+      deserializeMessage: makeDeserializeMessageStub(),
       authorize: sinon.stub().resolves(),
     };
 
@@ -328,11 +380,9 @@ describe('appHashSyncService tests', () => {
       }));
 
       // Bulk fetch returns 10 messages (6 already exist, 4 new)
-      const bulkFetchResult = Array(10).fill(null).map((_, i) => ({
-        type: 'fluxappregister', version: 4, hash: `hash${i}`, timestamp: Date.now(),
-        signature: 'sig', appSpecifications: { name: `app${i}` }, valueSat: 1e8,
-        txid: `tx${i}`, height: 1000 + i,
-      }));
+      const bulkFetchResult = await Promise.all(Array(10).fill(null).map((_, i) => legacyMessage({
+        type: 'fluxappregister', hash: `hash${i}`, txid: `tx${i}`, height: 1000 + i, name: `app${i}`,
+      })));
       const existingPermanent = [
         { hash: 'hash0' }, { hash: 'hash1' }, { hash: 'hash2' },
         { hash: 'hash3' }, { hash: 'hash4' }, { hash: 'hash5' },
@@ -380,11 +430,9 @@ describe('appHashSyncService tests', () => {
         hash: `hash${i}`, txid: `tx${i}`, height: 1000 + i, value: 100, message: false,
       }));
 
-      const bulkFetchResult = Array(5).fill(null).map((_, i) => ({
-        type: 'fluxappregister', version: 4, hash: `hash${i}`, timestamp: Date.now(),
-        signature: 'sig', appSpecifications: { name: `app${i}` }, valueSat: 1e8,
-        txid: `tx${i}`, height: 1000 + i,
-      }));
+      const bulkFetchResult = await Promise.all(Array(5).fill(null).map((_, i) => legacyMessage({
+        type: 'fluxappregister', hash: `hash${i}`, txid: `tx${i}`, height: 1000 + i, name: `app${i}`,
+      })));
 
       let getMissingCalls = 0;
       dbHelperStub.findInDatabase.callsFake((db, col, query) => {
@@ -752,18 +800,7 @@ describe('appHashSyncService tests', () => {
       };
 
       localAppEventVerifierStub = {
-        deserializeMessage: sinon.stub().callsFake(async (msg) => ({
-        serialize: () => ({ ...msg }),
-        // A real event always carries its parsed spec; the service reads it
-        // rather than parsing the document a second time.
-        spec: {
-          name: msg.appSpecifications?.name,
-          owner: msg.appSpecifications?.owner,
-          version: msg.appSpecifications?.version,
-          isEncrypted: false,
-          serialize: () => msg.appSpecifications,
-        },
-      })),
+        deserializeMessage: makeDeserializeMessageStub(),
         authorize: sinon.stub().resolves(),
       };
 
@@ -785,7 +822,11 @@ describe('appHashSyncService tests', () => {
         './messageVerifier': messageVerifierStub,
         './appEventVerifier': localAppEventVerifierStub,
         '../utils/specCutover': { deserializeSpec: localDeserializeSpecStub },
-        '../utils/specLibs': { assertVersionActivated: localAssertVersionActivatedStub, getSpec: sinon.stub().resolves({}), getSpecBackend: sinon.stub().resolves({ InstantiatedSpec: { fromEvent: (x) => x } }) },
+        '../utils/specLibs': {
+          assertVersionActivated: localAssertVersionActivatedStub,
+          getSpec: sinon.stub().callsFake(async () => flux),
+          getSpecBackend: sinon.stub().callsFake(async () => flux),
+        },
         '../daemonService/daemonServiceMiscRpcs': { isDaemonSynced: sinon.stub().returns({ data: { height: 2555000 } }) },
         '../utils/fluxBroadcastHelper': fluxBroadcastHelperStub,
         '../invalidMessages': { invalidMessages: [] },
@@ -799,17 +840,15 @@ describe('appHashSyncService tests', () => {
     it('should verify messages through appEventVerifier and insert valid ones', async () => {
       // Two update messages for the same app where first changes ownership
       const bulkMessages = [
-        {
-          type: 'fluxappupdate', version: 4, hash: 'hash1', timestamp: Date.now() - 1000,
-          signature: 'sig1', appSpecifications: { name: 'testapp', version: 4, owner: 'newOwner' },
-          valueSat: 1e8, txid: 'tx1', height: 1000,
-        },
-        {
-          type: 'fluxappupdate', version: 4, hash: 'hash2', timestamp: Date.now(),
-          signature: 'sig2', appSpecifications: { name: 'testapp', version: 4, owner: 'newOwner' },
-          valueSat: 1e8, txid: 'tx2', height: 1001,
-        },
+        await legacyMessage({
+          type: 'fluxappupdate', hash: 'hash1', txid: 'tx1', height: 1000, name: 'testapp', owner: NEW_OWNER,
+        }),
+        await legacyMessage({
+          type: 'fluxappupdate', hash: 'hash2', txid: 'tx2', height: 1001, name: 'testapp', owner: NEW_OWNER,
+        }),
       ];
+      // The registration the first update is judged against.
+      const registeredSpec = await v8Spec({ name: 'testapp', owner: OLD_OWNER });
 
       // Generate > 500 missing hashes to trigger bulk fetch path
       const manyMissing = Array(600).fill(null).map((_, i) => ({
@@ -840,7 +879,7 @@ describe('appHashSyncService tests', () => {
             toArray: sinon.stub().resolves([
               {
                 type: 'fluxappregister', hash: 'hash0', height: 999,
-                appSpecifications: { name: 'testapp', version: 4, owner: 'oldOwner' },
+                appSpecifications: registeredSpec.serialize(),
               },
             ]),
           }),
@@ -855,8 +894,19 @@ describe('appHashSyncService tests', () => {
       expect(localAppEventVerifierStub.authorize.callCount).to.equal(2);
       // previous spec resolved and passed to authorize for each update message
       // (first update sees the registered owner; second sees the first update's owner)
-      expect(localAppEventVerifierStub.authorize.firstCall.args[0].previousState.spec).to.have.property('owner', 'oldOwner');
-      expect(localAppEventVerifierStub.authorize.secondCall.args[0].previousState.spec).to.have.property('owner', 'newOwner');
+      expect(localAppEventVerifierStub.authorize.firstCall.args[0].previousState.spec).to.have.property('owner', OLD_OWNER);
+      expect(localAppEventVerifierStub.authorize.secondCall.args[0].previousState.spec).to.have.property('owner', NEW_OWNER);
+
+      // The authorization gate stays stubbed, so nothing here exercises what it
+      // does with what it is handed. The real one calls verifyHash() and
+      // assessRenewal() on the event and reads the prior owner straight off the
+      // state, so check all three can answer — a delegation could otherwise
+      // disappear from flux-spec with this suite still green.
+      const [handed] = localAppEventVerifierStub.authorize.firstCall.args;
+      assertAnswers(handed.appEvent, ['verifyHash', 'assessRenewal']);
+      expect(handed.previousState.owner, 'the owner the update is judged against')
+        .to.equal(OLD_OWNER);
+
       // Both messages should be inserted
       expect(localCollectionStub.insertMany.called).to.be.true;
       const inserted = localCollectionStub.insertMany.firstCall.args[0];
@@ -867,11 +917,11 @@ describe('appHashSyncService tests', () => {
     // second full parse was removed. The activation height was the only thing it
     // added, and it has to survive that removal.
     it('checks the activation height for each message it processes', async () => {
-      const bulkMessages = [{
-        type: 'fluxappupdate', version: 4, hash: 'hash1', timestamp: Date.now(),
-        signature: 'sig1', appSpecifications: { name: 'testapp', version: 4, owner: 'newOwner' },
-        valueSat: 1e8, txid: 'tx1', height: 1000,
-      }];
+      // Envelope version 4, spec version 8 — so the two are distinguishable and
+      // the assertion below actually discriminates.
+      const bulkMessages = [await legacyMessage({
+        type: 'fluxappupdate', hash: 'hash1', txid: 'tx1', height: 1000, name: 'testapp', owner: NEW_OWNER,
+      })];
       const manyMissing = Array(600).fill(null).map((_, i) => ({
         hash: `hash${i}`, txid: `tx${i}`, height: 1000 + i, value: 100, message: false,
       }));
@@ -889,16 +939,68 @@ describe('appHashSyncService tests', () => {
 
       expect(localAssertVersionActivatedStub.called, 'the activation check must still run').to.be.true;
       expect(localAssertVersionActivatedStub.firstCall.args[0], 'the parsed version, not the document')
-        .to.equal(4);
+        .to.equal(8);
+      expect(localAssertVersionActivatedStub.firstCall.args[1], 'gated at the message height')
+        .to.equal(1000);
+    });
+
+    // The double this suite used always answered `isEncrypted: false`, so the
+    // enterprise branch — decrypt through the wire spec, then validate the
+    // cleartext that comes back — had never been executed by any test. A real
+    // EncryptedSpecV9 inside a real ConfirmedAppEvent is the only way to reach it.
+    it('opens an encrypted spec and validates the cleartext it gets back', async () => {
+      const sealed = await sealedV9Spec({ name: 'sealedapp' });
+      const cleartext = await v9Spec({ name: 'sealedapp' });
+      // Instances are frozen, so the branch is observed on the prototype.
+      const validateContents = sinon.spy(flux.DecryptedCanonicalSpec.prototype, 'validateContents');
+      const bulkMessages = [{
+        type: 'fluxappregister',
+        version: 2,
+        hash: 'hash1',
+        timestamp: Date.now(),
+        extend: true,
+        signature: 'sig1',
+        appSpecifications: sealed.serialize(),
+        contentHash: cleartext.contentHash(),
+        valueSat: 1e8,
+        txid: 'tx1',
+        height: 2000,
+        registeredAt: 1751628800,
+      }];
+      const manyMissing = Array(600).fill(null).map((_, i) => ({
+        hash: `hash${i}`, txid: `tx${i}`, height: 1000 + i, value: 100, message: false,
+      }));
+      let calls = 0;
+      localDbHelperStub.findInDatabase.callsFake(() => {
+        calls += 1;
+        return Promise.resolve(calls === 1 ? manyMissing : []);
+      });
+      localDbHelperStub.findOneInDatabase.resolves({ generalScannedHeight: 2555000 });
+      serviceHelperStub.axiosGet.callsFake((url) => (url.includes('permanentmessages')
+        ? Promise.resolve(makeStreamResponse(bulkMessages))
+        : Promise.resolve({ data: { status: 'success', data: true } })));
+
+      await localModule.syncMissingHashes();
+
+      // The branch is only observable through the decrypted object: the sealed
+      // blob's own `version` is 9 too, so gating on 9 alone proves nothing.
+      // validateContents lives on DecryptedCanonicalSpec and nowhere else, so a
+      // call to it is proof the wire spec was actually opened.
+      sinon.assert.calledOnceWithExactly(validateContents, { purpose: 'gossip' });
+      // The decrypt/validate pair is wrapped in a catch that only warns, so a
+      // silent failure would still insert the message — the absence of the warn
+      // is what says the branch got all the way through.
+      const warnings = localLogStub.warn.args.map((a) => String(a[0]));
+      expect(warnings, 'enterprise decrypt must not have been skipped').to.deep.equal([]);
+      expect(localAssertVersionActivatedStub.firstCall.args[0]).to.equal(9);
+      expect(localCollectionStub.insertMany.firstCall.args[0].length).to.equal(1);
     });
 
     it('should skip messages when authorize fails', async () => {
       const bulkMessages = [
-        {
-          type: 'fluxappregister', version: 4, hash: 'hash1', timestamp: Date.now(),
-          signature: 'sig1', appSpecifications: { name: 'testapp', version: 4, owner: 'owner1' },
-          valueSat: 1e8, txid: 'tx1', height: 1000,
-        },
+        await legacyMessage({
+          type: 'fluxappregister', hash: 'hash1', txid: 'tx1', height: 1000, name: 'testapp', owner: OLD_OWNER,
+        }),
       ];
 
       const manyMissing = Array(600).fill(null).map((_, i) => ({
@@ -928,6 +1030,14 @@ describe('appHashSyncService tests', () => {
       // No messages inserted since authorize failed
       expect(localCollectionStub.insertMany.called).to.be.false;
       expect(localLogStub.warn.calledWith(sinon.match('processMessages verify failed'))).to.be.true;
+
+      // A registration is self-signed: the real gate reads the owner straight
+      // off the event's spec and verifies the hash. Both have to be answerable
+      // on what it was actually handed.
+      const [handed] = localAppEventVerifierStub.authorize.firstCall.args;
+      assertAnswers(handed.appEvent, ['verifyHash']);
+      expect(handed.previousState, 'a registration has nothing to be judged against').to.equal(null);
+      expect(handed.appEvent.spec.owner, 'the self-signing owner').to.equal(OLD_OWNER);
     });
   });
 
