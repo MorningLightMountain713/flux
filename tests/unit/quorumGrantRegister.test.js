@@ -232,4 +232,77 @@ describe('quorumGrant grantRegister', () => {
       expect(stored.roster.chain[0].remove).to.equal(removedOutpoint);
     });
   });
+
+  describe('the cancel journal', () => {
+    const cancelEntry = (seq, subject) => ({
+      seq, cancel: subject, cert: { subject, token: 'standing' }, at: 1_000,
+    });
+    const SUBJECT = `${'9'.repeat(64)}:0`;
+    const OTHER = `${'8'.repeat(64)}:0`;
+
+    it('journals a verified chain that extends the journal, durable like every decision', async () => {
+      const adopted = await grantRegister.adoptCancels('app/master', {
+        fingerprint: 'fp', generation: 0, chain: [cancelEntry(1, SUBJECT)],
+      });
+      expect(adopted).to.equal(true);
+      expect(store.get('app/master').cancels.chain).to.have.length(1);
+
+      const extended = await grantRegister.adoptCancels('app/master', {
+        fingerprint: 'fp', generation: 0, chain: [cancelEntry(1, SUBJECT), cancelEntry(2, OTHER)],
+      });
+      expect(extended).to.equal(true);
+      expect(store.get('app/master').cancels.chain).to.have.length(2);
+    });
+
+    it('refuses a fork and a chain no longer than the journal', async () => {
+      await grantRegister.adoptCancels('app/master', {
+        fingerprint: 'fp', generation: 0, chain: [cancelEntry(1, SUBJECT)],
+      });
+
+      const fork = await grantRegister.adoptCancels('app/master', {
+        fingerprint: 'fp', generation: 0, chain: [cancelEntry(1, OTHER), cancelEntry(2, SUBJECT)],
+      });
+      expect(fork).to.equal(null);
+
+      const shorter = await grantRegister.adoptCancels('app/master', {
+        fingerprint: 'fp', generation: 0, chain: [cancelEntry(1, SUBJECT)],
+      });
+      expect(shorter).to.equal(null);
+      expect(store.get('app/master').cancels.chain).to.have.length(1);
+      expect(store.get('app/master').cancels.chain[0].cancel).to.equal(SUBJECT);
+    });
+
+    it('a new basis starts a fresh chain — the old world\'s cancellations do not carry', async () => {
+      await grantRegister.adoptCancels('app/master', {
+        fingerprint: 'fp', generation: 0, chain: [cancelEntry(1, SUBJECT)],
+      });
+      const rebased = await grantRegister.adoptCancels('app/master', {
+        fingerprint: 'fp2', generation: 1, chain: [cancelEntry(1, OTHER)],
+      });
+      expect(rebased).to.equal(true);
+      const stored = store.get('app/master').cancels;
+      expect(stored.fingerprint).to.equal('fp2');
+      expect(stored.chain).to.have.length(1);
+      expect(stored.chain[0].cancel).to.equal(OTHER);
+    });
+
+    it('is served during the drain — taught state contradicts nothing', async () => {
+      grantRegister.resetForTests(); // as if the process just started
+      const adopted = await grantRegister.adoptCancels('app/master', {
+        fingerprint: 'fp', generation: 0, chain: [cancelEntry(1, SUBJECT)],
+      });
+      expect(adopted).to.equal(true);
+    });
+
+    it('an accept at a new basis clears the journaled chain through the shell', async () => {
+      await grantRegister.adoptCancels('app/master', {
+        fingerprint: 'fp', generation: 0, chain: [cancelEntry(1, SUBJECT)],
+      });
+      const reply = await grantRegister.accept('app/master', {
+        epoch: 1, grantee: 'a:0', mode: 'held', ttlMs: TTL, fingerprint: 'fp2', generation: 0,
+      });
+      expect(reply.ok).to.equal(true);
+      expect(store.get('app/master').cancels).to.equal(null);
+    });
+  });
 });

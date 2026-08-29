@@ -15,6 +15,7 @@ const { selectCommittee } = require('../utils/committeeSelector');
 const fluxEventBus = require('../utils/fluxEventBus');
 const signedEnvelope = require('./signedEnvelope');
 const rosterOverlay = require('./rosterOverlay');
+const downCertificates = require('./downCertificates');
 const grantRegister = require('./grantRegister');
 const { MODES } = require('./grantRegisterCore');
 const core = require('./grantClientCore');
@@ -126,7 +127,7 @@ async function readAsk(req, type) {
   const body = serviceHelper.ensureObject(req.body) ?? {};
   const {
     key, mode, epoch, candidate, ttlMs, generation, fingerprint, at, signature,
-    remove, add, seq, chain,
+    remove, add, seq, chain, cancels,
   } = body;
 
   if (typeof key !== 'string' || !KEY_PATTERN.test(key)) {
@@ -163,11 +164,16 @@ async function readAsk(req, type) {
       return bad(400, 'malformed seq');
     }
   }
-  // Any held ask may carry the holder's roster chain — self-verifying on its
-  // own signatures and outside the ask's signature, so a carrier stripping
-  // it costs liveness, never safety. Shape-gated here; verified where used.
+  // Any held ask may carry the holder's overlay state — the roster chain and
+  // the cancel chain, both outside the ask's signature (the chain is
+  // self-verifying, the cancel chain is re-verified at this gauntlet), so a
+  // carrier stripping either costs liveness, never safety. Shape-gated here;
+  // verified where used.
   if (chain !== undefined && !rosterOverlay.chainWellFormed(chain)) {
     return bad(400, 'malformed chain');
+  }
+  if (cancels !== undefined && !rosterOverlay.cancelChainWellFormed(cancels)) {
+    return bad(400, 'malformed cancels');
   }
   if (!Number.isSafeInteger(at) || Math.abs(Date.now() - at) > askFreshnessMs()) {
     return bad(400, 'stale ask');
@@ -201,7 +207,7 @@ async function readAsk(req, type) {
   }
 
   const ask = {
-    key, mode, epoch, candidate, ttlMs, generation, fingerprint, at, remove, add, seq, chain,
+    key, mode, epoch, candidate, ttlMs, generation, fingerprint, at, remove, add, seq, chain, cancels,
   };
   const fields = signedEnvelope.fieldsFor(type, ask);
   if (!fields || !signedEnvelope.verify(type, fields, signature, askerNode.pubkey)) {
@@ -242,7 +248,7 @@ async function readAsk(req, type) {
  * freshly seated replacement, whose register has never heard of the key,
  * knows to answer for it.
  */
-async function selfOnCommittee(key, mode, fingerprint, generation, carriedChain) {
+async function selfOnCommittee(key, mode, fingerprint, generation, carriedChain, carriedCancels) {
   if (mode === 'oneshot') {
     const role = key.slice(key.indexOf('/') + 1);
     const founderRole = FOUNDER_ROLE_PATTERN.exec(role);
@@ -285,6 +291,7 @@ async function selfOnCommittee(key, mode, fingerprint, generation, carriedChain)
   const journaled = stored?.roster?.fingerprint === fingerprint
     && (stored.roster.generation ?? 0) === generation
     ? stored.roster.chain : [];
+  let appliedChain = journaled;
   if (journaled.length) {
     members = rosterOverlay.rosterAfter(committee.members, membership, journaled) ?? members;
   }
@@ -292,7 +299,40 @@ async function selfOnCommittee(key, mode, fingerprint, generation, carriedChain)
     const verified = rosterOverlay.verifyChain(
       membership, key, fingerprint, generation, committeeSize('held'), carriedChain,
     );
-    if (verified) ({ members } = verified);
+    if (verified) {
+      ({ members } = verified);
+      appliedChain = carriedChain;
+    }
+  }
+
+  // The cancel overlay, applied after the chain. The journaled chain was
+  // verified when first taught and applies as written; a longer carried
+  // chain applies only after its new entries cold-verify against the
+  // node-down store — this gauntlet is what keeps a grantor's applied set
+  // exactly the published object, never a fabrication and never a private
+  // opinion of who is certified.
+  const journaledCancels = stored?.cancels?.fingerprint === fingerprint
+    && (stored.cancels.generation ?? 0) === generation
+    ? stored.cancels.chain : [];
+  let cancels = journaledCancels;
+  let adoptableCancels = null;
+  if (Array.isArray(carriedCancels)
+    && carriedCancels.length > journaledCancels.length
+    && rosterOverlay.extendsCancelChain(journaledCancels, carriedCancels)) {
+    const verified = rosterOverlay.verifyCancelChain(
+      membership, carriedCancels, downCertificates.verifiers(), journaledCancels.length,
+    );
+    if (verified) {
+      cancels = carriedCancels;
+      adoptableCancels = carriedCancels;
+    }
+  }
+  const cancelled = rosterOverlay.cancelledSubjects(cancels);
+  if (cancelled.size) {
+    ({ members } = rosterOverlay.applyCancellations(
+      membership, walkKey, members,
+      new Set(appliedChain.map((entry) => entry.remove)), cancelled,
+    ));
   }
 
   const collateral = await generalService.obtainNodeCollateralInformation();
@@ -300,17 +340,19 @@ async function selfOnCommittee(key, mode, fingerprint, generation, carriedChain)
     (node) => node.txhash === collateral.txhash
       && String(node.outidx) === String(collateral.txindex),
   );
-  // Seated by a CHAIN rather than by the base walk - a tier-1 heal added this
-  // node. That is the seat F1 is about: a heal is a swap, so the majorities
-  // either side of it can be disjoint, and an added seat that answers before it
-  // knows the standing term is exactly the swing vote a challenger needs.
-  const seatedByChain = member && !committee.members.some(
+  // Seated by an OVERLAY rather than by the base walk - a tier-1 heal or a
+  // cancellation added this node. That is the seat F1 is about: a seat
+  // change swaps majorities that can be disjoint, and an added seat that
+  // answers before it knows the standing term is exactly the swing vote a
+  // challenger needs.
+  const seatedByOverlay = member && !committee.members.some(
     (node) => node.txhash === collateral.txhash
       && String(node.outidx) === String(collateral.txindex),
   );
   return {
     member,
-    seatedByChain,
+    seatedByOverlay,
+    adoptableCancels,
     members,
     code: member ? 200 : 409,
     reason: member ? null : 'this node is not on that committee',
@@ -464,17 +506,30 @@ async function serve(req, res, type, operate) {
     const { ask, askerNode } = read;
     askSeen = ask;
 
-    const committee = await selfOnCommittee(ask.key, ask.mode ?? 'held', ask.fingerprint, ask.generation, ask.chain);
+    const committee = await selfOnCommittee(
+      ask.key, ask.mode ?? 'held', ask.fingerprint, ask.generation, ask.chain, ask.cancels,
+    );
     ms.committee = Date.now() - t0 - ms.read;
     if (!committee.member) {
       report('refusedCommittee');
       return res.status(committee.code).json(messageHelper.createErrorMessage(committee.reason));
     }
 
-    // F1: a seat a heal ADDED knows nothing about the standing term, and a
-    // heal is a swap whose two majorities can be disjoint. It adopts before it
-    // answers, or it does not answer.
-    if (committee.seatedByChain && (ask.mode ?? 'held') === 'held') {
+    // A carried cancel chain that verified is journaled before anything is
+    // answered under it — the same journal-before-reply rule as every
+    // decision.
+    if (committee.adoptableCancels) {
+      await grantRegister.adoptCancels(ask.key, {
+        fingerprint: ask.fingerprint,
+        generation: ask.generation,
+        chain: committee.adoptableCancels,
+      });
+    }
+
+    // F1: a seat an overlay ADDED knows nothing about the standing term, and
+    // a seat change swaps majorities that can be disjoint. It adopts before
+    // it answers, or it does not answer.
+    if (committee.seatedByOverlay && (ask.mode ?? 'held') === 'held') {
       const adopted = await adoptStandingTerm(ask, committee);
       if (!adopted.ok) {
         report('refusedUnadopted');
@@ -665,6 +720,7 @@ async function record(req, res) {
       accepted: stored?.accepted ?? null,
       remainingMs,
       roster: stored?.roster ?? null,
+      cancels: stored?.cancels ?? null,
     }));
   } catch (error) {
     log.error(`quorumGrant grantorController record: ${error.message}`);

@@ -158,6 +158,27 @@ describe('quorumGrant cancelOverlay', () => {
       )).to.equal(null);
     });
 
+    it('a trusted prefix skips certificate re-verification — the journaled entries were verified when first taught', () => {
+      const target = base.members[0];
+      const other = base.members[1];
+      // the first entry's certificate is past the store's retention and no
+      // longer cold-verifies; the second is fresh
+      const aged = { ...cancelEntry(1, target), cert: { ...certFor(target), token: 'lapsed' } };
+      const fresh = cancelEntry(2, other);
+
+      expect(rosterOverlay.verifyCancelChain(membership, [aged, fresh], verifiers)).to.equal(null);
+
+      const verified = rosterOverlay.verifyCancelChain(membership, [aged, fresh], verifiers, 1);
+      expect(verified).to.not.equal(null);
+      expect([...verified.cancelled].sort()).to.deep.equal(
+        [outpointOf(target), outpointOf(other)].sort(),
+      );
+
+      // the trust reaches exactly the prefix: a bad entry past it still refuses
+      const badFresh = { ...fresh, cert: { ...certFor(other), token: 'lapsed' } };
+      expect(rosterOverlay.verifyCancelChain(membership, [aged, badFresh], verifiers, 1)).to.equal(null);
+    });
+
     it('a re-cancellation after a reinstatement stands again', () => {
       const target = base.members[0];
       const first = cancelEntry(1, target);
