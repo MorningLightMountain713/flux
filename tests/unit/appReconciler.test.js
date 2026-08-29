@@ -10,6 +10,11 @@ const fluxEventBus = require('../../ZelBack/src/services/utils/fluxEventBus');
 // The real registry (dependency-free singleton): the engine under test reads
 // it directly, so the drift tests write it and every test resets it.
 const meshIdentityDrift = require('../../ZelBack/src/services/appMesh/meshIdentityDrift');
+const { appsFolder } = require('../../ZelBack/src/services/utils/appConstants');
+const {
+  loadSpecLibrary, V9_SUBMISSION, V8_SUBMISSION, v1Spec, v8Spec, v9Spec, sealedV8Spec,
+  instantiatedSpec, assertAnswers,
+} = require('./fixtures/fluxSpec');
 
 // Mirrors appUninstaller.UninstallStatus (proxyquire.noCallThru stubs the real module out).
 const UninstallStatus = Object.freeze({
@@ -19,55 +24,118 @@ const UninstallStatus = Object.freeze({
   FAILED: 'failed',
 });
 
+// The spec library is real here, not stubbed — see tests/unit/fixtures/fluxSpec.js
+// for why. The reconciler drives run-state over a DeploymentSpec and the
+// InstantiatedSpec its app row hydrates to, so those are the two real classes the
+// fixtures below build; what stays stubbed is I/O (docker, mongo, the volume
+// layer) and FluxOS policy.
+let flux;
+
+// The owner every fixture app carries: a real FluxID, not a placeholder. The
+// desired-network set is validated with it, so a fiction here would be a fiction
+// on the wire.
+const OWNER = V9_SUBMISSION.owner;
+
 describe('appReconciler tests', () => {
   let appReconciler;
   let stubs;
-  let localSpec; // the app spec getLocalComponentSpec will resolve
+  // The app installed on this node: a real InstantiatedSpec (what appsRepository
+  // hydrates a row to) and the real DeploymentSpec the deployment layer projects
+  // from it. Either may be null — an app that is not installed here.
+  let localInst;
+  let localDeployment;
 
-  const fakeDeployment = (spec) => {
-    const entries = (spec.version >= 4 && Array.isArray(spec.compose))
-      ? spec.compose
-      : [{ name: spec.name, containerData: spec.containerData }];
-    const comps = entries.map((c) => {
-      const primary = (c.containerData || '').split('|')[0];
-      const isG = primary.startsWith('g:');
-      const isR = primary.startsWith('r:');
-      const isSync = isG || isR || primary.startsWith('s:');
-      return {
-        name: c.name,
-        appName: spec.name,
-        // segment = identity ?? appName, exactly as AppComponentBase.containerIdentifier:
-        // an app whose identity was minted names its containers from the identity.
-        identifier: (spec.version >= 4) ? `${c.name}_${spec.identity ?? spec.name}` : spec.name,
-        hasActiveStandbySyncthing: () => isG,
-        requiresSyncBeforeStart: () => isR,
-        hasSyncthing: () => isSync,
-        restartPolicy: c.restartPolicy ?? 'always',
-        // persistentStorage.sizeGb 0 — no volume is ever created for it
-        isStateless: c.isStateless === true,
-        hasDependencies: () => !!c.dependsOn && Object.keys(c.dependsOn).length > 0,
-        dependencyEntries: () => (c.dependsOn ? Object.entries(c.dependsOn).map(([n, v]) => [n, v.condition]) : []),
+  before(async function loadLibrary() {
+    // The first fromSubmission compiles the ajv schemas.
+    this.timeout(30000);
+    flux = await loadSpecLibrary();
+  });
+
+  /**
+   * A real FluxAppSpecV9 with the named components. Two components may not share
+   * a hostPort, so each gets its own; everything else comes from the shared
+   * submission fixture.
+   */
+  const v9App = (appName, components, specOverrides = {}) => {
+    let hostPort = 31000;
+    const built = {};
+    for (const [name, over] of Object.entries(components)) {
+      hostPort += 1;
+      built[name] = {
+        ...V9_SUBMISSION.components.web,
+        name,
+        ports: { http: { containerPort: 80, hostPort } },
+        ...over,
       };
-    });
-    return {
-      appName: spec.name,
-      // Named from the identity, exactly as DeploymentSpec.networkName: the network is
-      // durable state and a name is a lease. A fake without it reads undefined and the
-      // desired-membership set silently loses the app's own network.
-      networkName: `fluxDockerNetwork_${spec.identity ?? spec.name}`,
-      linkedApps: spec.linkedApps || [],
-      appDependencies: spec.appDependencies || [],
-      getComponent: (n) => comps.find((c) => c.name === n) || null,
-      componentForIdentifier: (id) => comps.find((c) => c.identifier === id) || null,
-      componentEntries: () => comps.map((c) => [c.name, c]),
-      dependentsOf: (name) => comps.filter((c) => c.dependencyEntries().some(([dn]) => dn === name)).map((c) => c.name),
-    };
+    }
+    return v9Spec({ name: appName, components: built, ...specOverrides });
   };
 
-  beforeEach(() => {
-    localSpec = {
-      name: 'App', version: 4, compose: [{ name: 'www', containerData: '/data' }],
-    };
+  /** The v8 compose array for the named components — legacy containerData shapes. */
+  const v8Compose = (components) => {
+    const [template] = V8_SUBMISSION.compose;
+    let hostPort = 31100;
+    return Object.entries(components).map(([name, over]) => {
+      hostPort += 1;
+      return {
+        ...template, name, ports: [hostPort], containerPorts: [443], ...over,
+      };
+    });
+  };
+
+  /** A real FluxAppSpecV8 with the named components. */
+  const v8App = (appName, components) => v8Spec({ name: appName, compose: v8Compose(components) });
+
+  /**
+   * The persistent-storage shapes the sync modes are declared through. The legacy
+   * `g:`/`r:`/`s:` containerData prefixes parse to exactly these, and
+   * hasActiveStandbySyncthing()/requiresSyncBeforeStart()/hasSyncthing() are
+   * derived from them — never settable independently on the real component.
+   */
+  const syncStorage = (mode) => ({
+    sizeGb: 5,
+    mounts: { '/data': { source: 'data', destination: '/data' } },
+    sync: { mode },
+  });
+  const ACTIVE_STANDBY = { persistentStorage: syncStorage('activeStandby') }; // legacy g:
+  const SYNC_FIRST = { persistentStorage: syncStorage('syncFirst') }; // legacy r:
+  const PLAIN_SYNC = { persistentStorage: syncStorage('sync') }; // legacy s:
+  // sizeGb 0 — no volume is ever created, so DeploymentComponent.isStateless is true
+  const STATELESS = { persistentStorage: undefined };
+
+  /**
+   * Install an app on this node: the real InstantiatedSpec the row hydrates to,
+   * plus the real DeploymentSpec built from it. `identity` is the app-identity
+   * segment container identifiers and the docker network are named from — stated,
+   * never derived, exactly as DeploymentSpec.fromSpec demands.
+   */
+  const installApp = async (spec, { identity = null } = {}) => {
+    localInst = await instantiatedSpec(spec, { identity });
+    localDeployment = flux.DeploymentSpec.fromSpec(spec, appsFolder, { replica: null, identity });
+    return localDeployment;
+  };
+
+  /**
+   * Install a real ENTERPRISE app: the row hydrates to an InstantiatedSpec over a
+   * real EncryptedSpecV8, so `isEncrypted` is the class's own answer rather than a
+   * flag a fixture set. The deployment is projected from the CLEARTEXT of the same
+   * app — exactly what the deployment layer produces once it has decrypted, and the
+   * only thing anything downstream is ever allowed to read.
+   */
+  const installSealedV8App = async (appName, components) => {
+    const compose = v8Compose(components);
+    localInst = await instantiatedSpec(await sealedV8Spec({ name: appName, compose }));
+    localDeployment = flux.DeploymentSpec.fromSpec(
+      await v8Spec({ name: appName, compose }), appsFolder, { replica: null },
+    );
+    return localDeployment;
+  };
+
+  /** Nothing installed here. */
+  const installNothing = () => { localInst = null; localDeployment = null; };
+
+  beforeEach(async () => {
+    await installApp(await v9App('app', { www: {} }));
 
     stubs = {
       log: { info: sinon.stub(), warn: sinon.stub(), error: sinon.stub() },
@@ -77,9 +145,7 @@ describe('appReconciler tests', () => {
         // are apps whose identity was borrowed from their name (everything
         // registered before identities were minted), so the segment IS the name
         // here — which is exactly the case that must keep working.
-        getInstalledAppByIdentity: sinon.stub().callsFake(async () => (localSpec
-          ? { name: localSpec.name, owner: localSpec.owner ?? 'owner1', isEncrypted: Boolean(localSpec.enterprise) }
-          : null)),
+        getInstalledAppByIdentity: sinon.stub().callsFake(async () => localInst),
         // Null by default, so every test below drives the fallback that rows
         // predating the identifier index still need. The index path has its own
         // test rather than being the silent default here.
@@ -90,9 +156,7 @@ describe('appReconciler tests', () => {
         // The by-NAME lookup, which is the only thing an app-level key can be
         // resolved by: an app name is neither a component identifier nor an
         // identity, so a sweep of a minted app answers here or nowhere.
-        getInstalledApp: sinon.stub().callsFake(async () => (localSpec
-          ? { name: localSpec.name, owner: localSpec.owner ?? 'owner1', isEncrypted: Boolean(localSpec.enterprise) }
-          : null)),
+        getInstalledApp: sinon.stub().callsFake(async () => localInst),
         // Nothing else installed by default, so the cross-app dependent fan-out
         // is inert unless a test states requirers.
         listInstalledApps: sinon.stub().resolves([]),
@@ -102,10 +166,12 @@ describe('appReconciler tests', () => {
       pendingTeardownStore: {
         teardownForComponent: sinon.stub().resolves(null),
       },
-      // mirrors the deployment view the reconciler reads: primary-mount g: =>
-      // activeStandby, r:/s: => replicated sync (full parsing lives in flux-spec)
+      // Hands back the REAL DeploymentSpec built for the installed app — the same
+      // class the real provider projects. Sync mode, restart policy, identifiers,
+      // the network name and the dependency graph are all the library's answers,
+      // not a fixture's.
       deploymentProvider: {
-        buildDeployment: sinon.stub().callsFake(async () => fakeDeployment(localSpec)),
+        buildDeployment: sinon.stub().callsFake(async () => localDeployment),
         // Delegates at call time so per-test failure injection on buildDeployment
         // flows through the plural path the same way the real provider fails.
         get buildDeployments() {
@@ -236,17 +302,10 @@ describe('appReconciler tests', () => {
       '../appManagement/dockerOperations': stubs.dockerOperations,
       '../serviceHelper': stubs.serviceHelper,
       '../telemetrySinkCache': stubs.telemetrySinkCache,
-      // The identifier rule comes from flux-spec itself now, awaited, rather
-      // than through the retired sync bridge.
-      '../utils/specLibs': {
-        getSpecBackend: sinon.stub().resolves({
-          DeploymentSpec: {
-            appNameFromIdentifier: (id) => { const parts = id.split('_'); return parts.length <= 1 ? id : parts[1]; },
-            componentNameFromIdentifier: (id) => id.split('_')[0],
-            replicaFromIdentifier: (id) => { const parts = id.split('_'); return parts.length >= 3 ? parts[2] : null; },
-          },
-        }),
-      },
+      // specLibs is deliberately NOT stubbed: the identifier rule the reconciler
+      // takes an identifier apart with is flux-spec's own DeploymentSpec static,
+      // and a re-typed copy of it here would be free to disagree with the rule
+      // that MINTED the identifiers these tests reconcile.
     });
   });
 
@@ -276,24 +335,28 @@ describe('appReconciler tests', () => {
   };
 
   describe('network-membership convergence', () => {
+    // linkedApps is not a settable field: the real DeploymentSpec derives it from
+    // the app's NETWORK-BEARING dependency edges. A `wants` edge is the one that
+    // shares a network without also gating the start.
+    const SHARES_NETWORK_WITH_COLLECTOR = { dependencies: { collector: { strength: 'wants', network: true } } };
+
     it('steady state: converges a running container onto its own + linked networks', async () => {
-      localSpec = {
-        name: 'App', version: 4, owner: 'owner1', compose: [{ name: 'www', containerData: '/data' }], linkedApps: ['collector'],
-      };
+      await installApp(await v9App('app', { www: {} }, SHARES_NETWORK_WITH_COLLECTOR));
       stubs.dockerService.dockerContainerInspect.resolves({
         State: { Running: true, Status: 'running' },
-        NetworkSettings: { Networks: { fluxDockerNetwork_App: {} } },
+        NetworkSettings: { Networks: { fluxDockerNetwork_app: {} } },
       });
 
-      await appReconciler.reconcile('www_App');
+      await appReconciler.reconcile('www_app');
 
-      // Desired-set validation runs with the CONSUMER's own owner threaded through.
-      sinon.assert.calledWith(stubs.appNetworkLinker.resolveActiveLinkedNetworks, 'owner1', ['collector']);
+      // Desired-set validation runs with the CONSUMER's own owner threaded through —
+      // the real FluxID off the spec, which is what a same-owner check compares.
+      sinon.assert.calledWith(stubs.appNetworkLinker.resolveActiveLinkedNetworks, OWNER, ['collector']);
       sinon.assert.calledOnceWithExactly(
         stubs.appNetworkLinker.ensureContainerNetworkMembership,
-        'www_App',
-        ['fluxDockerNetwork_App', 'fluxDockerNetwork_collector'],
-        ['fluxDockerNetwork_App'],
+        'www_app',
+        ['fluxDockerNetwork_app', 'fluxDockerNetwork_collector'],
+        ['fluxDockerNetwork_app'],
       );
     });
 
@@ -302,9 +365,7 @@ describe('appReconciler tests', () => {
       // fluxDockerNetwork_<identity>, so a desired set spelled from the app NAME
       // disconnects the container from the only network it is on and attaches it to
       // one that does not exist - the container then cannot start at all.
-      localSpec = {
-        name: 'App', version: 4, identity: 'c32de812b2ff', owner: 'owner1', compose: [{ name: 'www', containerData: '/data' }], linkedApps: [],
-      };
+      await installApp(await v9App('app', { www: {} }), { identity: 'c32de812b2ff' });
       stubs.appNetworkLinker.resolveActiveLinkedNetworks.resolves([]);
       stubs.dockerService.dockerContainerInspect.resolves({
         State: { Running: true, Status: 'running' },
@@ -322,15 +383,13 @@ describe('appReconciler tests', () => {
     });
 
     it('wires memberships BEFORE starting a created/stopped container', async () => {
-      localSpec = {
-        name: 'App', version: 4, compose: [{ name: 'www', containerData: '/data' }], linkedApps: ['collector'],
-      };
+      await installApp(await v9App('app', { www: {} }, SHARES_NETWORK_WITH_COLLECTOR));
       stubs.dockerService.dockerContainerInspect.resolves({
         State: { Running: false, Status: 'created' },
-        NetworkSettings: { Networks: { fluxDockerNetwork_App: {} } },
+        NetworkSettings: { Networks: { fluxDockerNetwork_app: {} } },
       });
 
-      await appReconciler.reconcile('www_App');
+      await appReconciler.reconcile('www_app');
 
       sinon.assert.calledOnce(stubs.appNetworkLinker.ensureContainerNetworkMembership);
       sinon.assert.calledOnce(stubs.dockerService.appDockerStart);
@@ -338,16 +397,14 @@ describe('appReconciler tests', () => {
     });
 
     it('a failed membership change never blocks the start - it paces a retry instead', async () => {
-      localSpec = {
-        name: 'App', version: 4, compose: [{ name: 'www', containerData: '/data' }], linkedApps: ['collector'],
-      };
+      await installApp(await v9App('app', { www: {} }, SHARES_NETWORK_WITH_COLLECTOR));
       stubs.appNetworkLinker.ensureContainerNetworkMembership.resolves({ connected: [], disconnected: [], failed: ['fluxDockerNetwork_collector'] });
       stubs.dockerService.dockerContainerInspect.resolves({
         State: { Running: false, Status: 'created' },
-        NetworkSettings: { Networks: { fluxDockerNetwork_App: {} } },
+        NetworkSettings: { Networks: { fluxDockerNetwork_app: {} } },
       });
 
-      await appReconciler.reconcile('www_App');
+      await appReconciler.reconcile('www_app');
 
       sinon.assert.calledOnce(stubs.dockerService.appDockerStart);
     });
@@ -360,21 +417,24 @@ describe('appReconciler tests', () => {
       // started, the start fails "network not found", and it backs off forever.
       stubs.dockerService.dockerContainerInspect.resolves({
         State: { Running: false, Status: 'created' },
-        NetworkSettings: { Networks: { fluxDockerNetwork_App: {} } },
+        NetworkSettings: { Networks: { fluxDockerNetwork_app: {} } },
       });
 
-      await appReconciler.reconcile('www_App');
+      await appReconciler.reconcile('www_app');
 
-      sinon.assert.calledOnceWithExactly(stubs.appDockerNetwork.ensureAppNetworkPresent, 'App', null);
+      // The network is named from the component, not spelled from the app name:
+      // a real DeploymentComponent carries networkName, so the ensure is given the
+      // identity-named network the container actually joins.
+      sinon.assert.calledOnceWithExactly(stubs.appDockerNetwork.ensureAppNetworkPresent, 'app', 'fluxDockerNetwork_app');
       sinon.assert.callOrder(stubs.appDockerNetwork.ensureAppNetworkPresent, stubs.dockerService.appDockerStart);
     });
 
     it('ensures the network before recreating a missing container', async () => {
       stubs.dockerService.dockerContainerInspect.resolves(null);
 
-      await appReconciler.reconcile('www_App');
+      await appReconciler.reconcile('www_app');
 
-      sinon.assert.calledOnceWithExactly(stubs.appDockerNetwork.ensureAppNetworkPresent, 'App', null);
+      sinon.assert.calledOnceWithExactly(stubs.appDockerNetwork.ensureAppNetworkPresent, 'app', 'fluxDockerNetwork_app');
       sinon.assert.callOrder(
         stubs.appDockerNetwork.ensureAppNetworkPresent,
         stubs.containerHealthMonitor.recreateMissingContainers,
@@ -386,10 +446,10 @@ describe('appReconciler tests', () => {
       // present network every pass is pure waste.
       stubs.dockerService.dockerContainerInspect.resolves({
         State: { Running: true, Status: 'running', ExitCode: 0 },
-        NetworkSettings: { Networks: { fluxDockerNetwork_App: {} } },
+        NetworkSettings: { Networks: { fluxDockerNetwork_app: {} } },
       });
 
-      await appReconciler.reconcile('www_App');
+      await appReconciler.reconcile('www_app');
 
       expect(stubs.appDockerNetwork.ensureAppNetworkPresent.called).to.be.false;
     });
@@ -397,7 +457,7 @@ describe('appReconciler tests', () => {
     it('does not touch the network when the component should be stopped', async () => {
       stubs.globalState.getAppShutdownPipelineState.returns('stopping');
 
-      await appReconciler.reconcile('www_App');
+      await appReconciler.reconcile('www_app');
 
       expect(stubs.appDockerNetwork.ensureAppNetworkPresent.called).to.be.false;
     });
@@ -409,26 +469,26 @@ describe('appReconciler tests', () => {
     // start fails "network not found" forever.
     const boundTo = (networkId, status = 'exited') => ({
       State: { Running: false, Status: status, ExitCode: 1 },
-      HostConfig: { NetworkMode: 'fluxDockerNetwork_App' },
-      NetworkSettings: { Networks: { fluxDockerNetwork_App: { NetworkID: networkId } } },
+      HostConfig: { NetworkMode: 'fluxDockerNetwork_app' },
+      NetworkSettings: { Networks: { fluxDockerNetwork_app: { NetworkID: networkId } } },
     });
 
     it('recreates a container bound to a network id that no longer exists', async () => {
       stubs.dockerService.dockerContainerInspect.resolves(boundTo('deadnetworkid'));
       stubs.dockerService.dockerNetworkId.resolves('livenetworkid');
 
-      await appReconciler.reconcile('www_App');
+      await appReconciler.reconcile('www_app');
 
       expect(stubs.dockerService.appDockerStart.called, 'starting it can only fail - it must be rebuilt').to.be.false;
       expect(stubs.dockerService.appDockerForceRemove.called, 'removed so the recreate can bind it to the live network').to.be.true;
-      expect(stubs.appsRuntimeState.setNetworkHealRemoval.calledWith('www_App', true), 'durably marked ours, so the absence is never read as tampering').to.be.true;
+      expect(stubs.appsRuntimeState.setNetworkHealRemoval.calledWith('www_app', true), 'durably marked ours, so the absence is never read as tampering').to.be.true;
     });
 
     it('starts normally when the container is bound to the live network', async () => {
       stubs.dockerService.dockerContainerInspect.resolves(boundTo('livenetworkid'));
       stubs.dockerService.dockerNetworkId.resolves('livenetworkid');
 
-      await appReconciler.reconcile('www_App');
+      await appReconciler.reconcile('www_app');
 
       expect(stubs.dockerService.appDockerForceRemove.called, 'a healthy binding is not rebuilt').to.be.false;
       sinon.assert.calledOnce(stubs.dockerService.appDockerStart);
@@ -440,7 +500,7 @@ describe('appReconciler tests', () => {
       stubs.dockerService.dockerContainerInspect.resolves(boundTo('somenetworkid'));
       stubs.dockerService.dockerNetworkId.resolves(null);
 
-      await appReconciler.reconcile('www_App');
+      await appReconciler.reconcile('www_app');
 
       expect(stubs.dockerService.appDockerForceRemove.called).to.be.false;
     });
@@ -449,7 +509,7 @@ describe('appReconciler tests', () => {
   describe('shutdown pipeline holds (LB drain state)', () => {
     it('takes no action on a stopped component while its app is stopping', async () => {
       stubs.globalState.getAppShutdownPipelineState.returns('stopping');
-      await appReconciler.reconcile('www_App');
+      await appReconciler.reconcile('www_app');
       expect(stubs.dockerService.appDockerStart.called).to.be.false;
       expect(stubs.dockerService.appDockerStop.called).to.be.false;
     });
@@ -457,7 +517,7 @@ describe('appReconciler tests', () => {
     it('does not stop a still-running component while its app is draining', async () => {
       stubs.globalState.getAppShutdownPipelineState.returns('draining');
       stubs.dockerService.dockerContainerInspect.resolves({ State: { Running: true, Status: 'running', ExitCode: 0 } });
-      await appReconciler.reconcile('www_App');
+      await appReconciler.reconcile('www_app');
       expect(stubs.dockerService.appDockerStop.called).to.be.false;
     });
 
@@ -465,15 +525,15 @@ describe('appReconciler tests', () => {
       // the shutdown-pipeline hold (desired:null) must win over the livenessProbe actuator
       stubs.globalState.getAppShutdownPipelineState.returns('draining');
       stubs.dockerService.dockerContainerInspect.resolves({ State: { Running: true, Status: 'running', ExitCode: 0, Health: { Status: 'unhealthy' } } });
-      await appReconciler.reconcile('www_App');
+      await appReconciler.reconcile('www_app');
       expect(stubs.dockerService.appDockerRestart.called).to.be.false;
       expect(stubs.dockerService.appDockerStop.called).to.be.false;
     });
 
     it('restarts the stopped component on the first reconcile after the state clears', async () => {
       stubs.globalState.getAppShutdownPipelineState.returns(null);
-      await appReconciler.reconcile('www_App');
-      expect(stubs.dockerService.appDockerStart.calledWith('www_App')).to.be.true;
+      await appReconciler.reconcile('www_app');
+      expect(stubs.dockerService.appDockerStart.calledWith('www_app')).to.be.true;
     });
   });
 
@@ -497,23 +557,23 @@ describe('appReconciler tests', () => {
     });
 
     it('does not restart a completed run-once component (onFailure, exit 0)', async () => {
-      localSpec = { name: 'App', version: 9, compose: [{ name: 'init', containerData: '/data', restartPolicy: 'onFailure' }] };
+      await installApp(await v9App('app', { init: { restartPolicy: 'onFailure' } }));
       stubs.dockerService.dockerContainerInspect.resolves({ State: { Running: false, Status: 'exited', ExitCode: 0 } });
-      await appReconciler.reconcile('init_App');
+      await appReconciler.reconcile('init_app');
       expect(stubs.dockerService.appDockerStart.called).to.be.false;
     });
 
     it('restarts a failed onFailure component (non-zero exit)', async () => {
-      localSpec = { name: 'App', version: 9, compose: [{ name: 'init', containerData: '/data', restartPolicy: 'onFailure' }] };
+      await installApp(await v9App('app', { init: { restartPolicy: 'onFailure' } }));
       stubs.dockerService.dockerContainerInspect.resolves({ State: { Running: false, Status: 'exited', ExitCode: 1 } });
-      await appReconciler.reconcile('init_App');
-      expect(stubs.dockerService.appDockerStart.calledOnceWith('init_App')).to.be.true;
+      await appReconciler.reconcile('init_app');
+      expect(stubs.dockerService.appDockerStart.calledOnceWith('init_app')).to.be.true;
     });
 
     it('never restarts a never-policy component after it has run', async () => {
-      localSpec = { name: 'App', version: 9, compose: [{ name: 'job', containerData: '/data', restartPolicy: 'never' }] };
+      await installApp(await v9App('app', { job: { restartPolicy: 'never' } }));
       stubs.dockerService.dockerContainerInspect.resolves({ State: { Running: false, Status: 'exited', ExitCode: 137 } });
-      await appReconciler.reconcile('job_App');
+      await appReconciler.reconcile('job_app');
       expect(stubs.dockerService.appDockerStart.called).to.be.false;
     });
   });
@@ -523,51 +583,51 @@ describe('appReconciler tests', () => {
 
     it('restarts a running container whose healthcheck reports unhealthy', async () => {
       stubs.dockerService.dockerContainerInspect.resolves(runningUnhealthy);
-      await appReconciler.reconcile('www_App');
-      expect(stubs.appsRuntimeState.recordRestart.calledOnceWith('www_App')).to.be.true;
-      expect(stubs.dockerService.appDockerRestart.calledOnceWith('www_App')).to.be.true;
+      await appReconciler.reconcile('www_app');
+      expect(stubs.appsRuntimeState.recordRestart.calledOnceWith('www_app')).to.be.true;
+      expect(stubs.dockerService.appDockerRestart.calledOnceWith('www_app')).to.be.true;
       expect(stubs.dockerService.appDockerStop.called).to.be.false;
     });
 
     it('paces the unhealthy restart off the running-now ladder, not the death-based one', async () => {
       stubs.dockerService.dockerContainerInspect.resolves(runningUnhealthy);
-      await appReconciler.reconcile('www_App');
+      await appReconciler.reconcile('www_app');
       const [id, opts] = stubs.appsRuntimeState.restartWaitMs.firstCall.args;
-      expect(id).to.equal('www_App');
+      expect(id).to.equal('www_app');
       expect(opts).to.deep.equal({ runningNow: true });
     });
 
     it('backs off instead of restarting an unhealthy container during its cooldown', async () => {
       stubs.dockerService.dockerContainerInspect.resolves(runningUnhealthy);
       stubs.appsRuntimeState.restartWaitMs.resolves(30000);
-      await appReconciler.reconcile('www_App');
+      await appReconciler.reconcile('www_app');
       expect(stubs.dockerService.appDockerRestart.called).to.be.false;
       expect(stubs.appsRuntimeState.recordRestart.called).to.be.false;
     });
 
     it('leaves a running healthy container alone', async () => {
       stubs.dockerService.dockerContainerInspect.resolves({ State: { Running: true, Status: 'running', ExitCode: 0, Health: { Status: 'healthy' } } });
-      await appReconciler.reconcile('www_App');
+      await appReconciler.reconcile('www_app');
       expect(stubs.dockerService.appDockerRestart.called).to.be.false;
       expect(stubs.dockerService.appDockerStop.called).to.be.false;
     });
 
     it('leaves a running container in the starting grace period alone', async () => {
       stubs.dockerService.dockerContainerInspect.resolves({ State: { Running: true, Status: 'running', ExitCode: 0, Health: { Status: 'starting' } } });
-      await appReconciler.reconcile('www_App');
+      await appReconciler.reconcile('www_app');
       expect(stubs.dockerService.appDockerRestart.called).to.be.false;
     });
 
     it('leaves a running container with no healthcheck alone', async () => {
       stubs.dockerService.dockerContainerInspect.resolves({ State: { Running: true, Status: 'running', ExitCode: 0 } });
-      await appReconciler.reconcile('www_App');
+      await appReconciler.reconcile('www_app');
       expect(stubs.dockerService.appDockerRestart.called).to.be.false;
     });
 
     it('retries with the managed delay when the unhealthy restart throws', async () => {
       stubs.dockerService.dockerContainerInspect.resolves(runningUnhealthy);
       stubs.dockerService.appDockerRestart.rejects(new Error('docker busy'));
-      await appReconciler.reconcile('www_App'); // must not throw
+      await appReconciler.reconcile('www_app'); // must not throw
       const loggedFailure = stubs.log.error.getCalls().some((c) => /failed to restart unhealthy/.test(c.args[0]));
       expect(loggedFailure).to.be.true;
     });
@@ -584,81 +644,91 @@ describe('appReconciler tests', () => {
     const edge = (over = {}) => ({
       strength: 'requires', after: true, condition: 'started', network: false, onRemove: 'detach', ...over,
     });
-    const appWithEdge = (e) => ({
-      name: 'App',
-      version: 9,
-      compose: [{ name: 'www', containerData: '/data' }],
-      appDependencies: [['collector', e]],
-    });
-    // The TARGET app's resolved deployment — one container, driven per-identifier.
-    const targetDeployment = { componentEntries: () => [['main', { identifier: 'main_collector' }]] };
+    // A real app carrying one dependency edge on `collector`. The edge is declared
+    // on the spec and read back off the resolved deployment, so the strength/after/
+    // condition vocabulary the gate branches on is the schema's, not a literal's.
+    const appWithEdge = async (e) => installApp(
+      await v9App('app', { www: {} }, { dependencies: { collector: e } }),
+    );
+    // The TARGET app's resolved deployment — a real one-container app, driven
+    // per-identifier through its own component's identifier.
+    let targetDeployment;
     const wwwCreated = { State: { Running: false, Status: 'created', ExitCode: 0 } };
     const running = { State: { Running: true, Status: 'running', ExitCode: 0 } };
 
+    beforeEach(async () => {
+      targetDeployment = flux.DeploymentSpec.fromSpec(
+        await v9App('collector', { main: {} }), appsFolder, { replica: null },
+      );
+    });
+
     it('holds a gated start while the dependency app is not installed here', async () => {
-      localSpec = appWithEdge(edge());
-      stubs.dockerService.dockerContainerInspect.withArgs('www_App').resolves(wwwCreated);
-      await appReconciler.reconcile('www_App');
+      await appWithEdge(edge());
+      stubs.dockerService.dockerContainerInspect.withArgs('www_app').resolves(wwwCreated);
+      await appReconciler.reconcile('www_app');
       expect(stubs.dockerService.appDockerStart.called).to.be.false;
     });
 
     it('holds while the dependency app is not running, starts once it is', async () => {
-      localSpec = appWithEdge(edge());
+      await appWithEdge(edge());
       stubs.deploymentProvider.getInstalledDeployment.withArgs('collector').resolves(targetDeployment);
-      stubs.dockerService.dockerContainerInspect.withArgs('www_App').resolves(wwwCreated);
+      stubs.dockerService.dockerContainerInspect.withArgs('www_app').resolves(wwwCreated);
       stubs.dockerService.dockerContainerInspect.withArgs('main_collector').resolves({ State: { Running: false, Status: 'exited', ExitCode: 0 } });
-      await appReconciler.reconcile('www_App');
+      await appReconciler.reconcile('www_app');
       expect(stubs.dockerService.appDockerStart.called, 'held while the target app is down').to.be.false;
 
       stubs.dockerService.dockerContainerInspect.withArgs('main_collector').resolves(running);
-      await appReconciler.reconcile('www_App');
-      expect(stubs.dockerService.appDockerStart.calledWith('www_App'), 'starts once the target app runs').to.be.true;
+      await appReconciler.reconcile('www_app');
+      expect(stubs.dockerService.appDockerStart.calledWith('www_app'), 'starts once the target app runs').to.be.true;
     });
 
     it('a healthy condition waits for every probe-bearing container of the target', async () => {
-      localSpec = appWithEdge(edge({ condition: 'healthy' }));
+      await appWithEdge(edge({ condition: 'healthy' }));
       stubs.deploymentProvider.getInstalledDeployment.withArgs('collector').resolves(targetDeployment);
-      stubs.dockerService.dockerContainerInspect.withArgs('www_App').resolves(wwwCreated);
+      stubs.dockerService.dockerContainerInspect.withArgs('www_app').resolves(wwwCreated);
       stubs.dockerService.dockerContainerInspect.withArgs('main_collector').resolves({ State: { Running: true, Status: 'running', ExitCode: 0, Health: { Status: 'starting' } } });
-      await appReconciler.reconcile('www_App');
+      await appReconciler.reconcile('www_app');
       expect(stubs.dockerService.appDockerStart.called, 'held while the target is only starting').to.be.false;
 
       stubs.dockerService.dockerContainerInspect.withArgs('main_collector').resolves({ State: { Running: true, Status: 'running', ExitCode: 0, Health: { Status: 'healthy' } } });
-      await appReconciler.reconcile('www_App');
-      expect(stubs.dockerService.appDockerStart.calledWith('www_App'), 'starts once the target reads healthy').to.be.true;
+      await appReconciler.reconcile('www_app');
+      expect(stubs.dockerService.appDockerStart.calledWith('www_app'), 'starts once the target reads healthy').to.be.true;
     });
 
     it('boundTo stops a running requirer while its target is down, leaves it once back', async () => {
-      localSpec = appWithEdge(edge({ strength: 'boundTo', onRemove: 'cascade' }));
+      await appWithEdge(edge({ strength: 'boundTo', onRemove: 'cascade' }));
       stubs.deploymentProvider.getInstalledDeployment.withArgs('collector').resolves(targetDeployment);
-      stubs.dockerService.dockerContainerInspect.withArgs('www_App').resolves(running);
+      stubs.dockerService.dockerContainerInspect.withArgs('www_app').resolves(running);
       stubs.dockerService.dockerContainerInspect.withArgs('main_collector').resolves({ State: { Running: false, Status: 'exited', ExitCode: 1 } });
-      await appReconciler.reconcile('www_App');
-      expect(stubs.dockerService.appDockerStop.calledWith('www_App'), 'a boundTo requirer is stopped while its target is down').to.be.true;
+      await appReconciler.reconcile('www_app');
+      expect(stubs.dockerService.appDockerStop.calledWith('www_app'), 'a boundTo requirer is stopped while its target is down').to.be.true;
 
       stubs.dockerService.appDockerStop.resetHistory();
       stubs.dockerService.dockerContainerInspect.withArgs('main_collector').resolves(running);
-      await appReconciler.reconcile('www_App');
+      await appReconciler.reconcile('www_app');
       expect(stubs.dockerService.appDockerStop.called, 'a running requirer with its target back is left alone').to.be.false;
     });
 
     it('an unordered edge (after: false) never gates a start', async () => {
       // No installed target at all — the presence axis owns that; the running
       // axis only gates where the author asked for ordering.
-      localSpec = appWithEdge(edge({ after: false }));
-      stubs.dockerService.dockerContainerInspect.withArgs('www_App').resolves(wwwCreated);
-      await appReconciler.reconcile('www_App');
-      expect(stubs.dockerService.appDockerStart.calledWith('www_App')).to.be.true;
+      await appWithEdge(edge({ after: false }));
+      stubs.dockerService.dockerContainerInspect.withArgs('www_app').resolves(wwwCreated);
+      await appReconciler.reconcile('www_app');
+      expect(stubs.dockerService.appDockerStart.calledWith('www_app')).to.be.true;
     });
 
     it('a container milestone in a dependency app re-enqueues its requirers (cross-app fan-out)', async () => {
-      localSpec = { name: 'App', version: 9, compose: [{ name: 'www', containerData: '/data' }] };
+      await installApp(await v9App('app', { www: {} }));
       stubs.dockerService.dockerContainerInspect.resolves(running);
-      stubs.appsRepository.listInstalledApps.resolves([{ name: 'requirer', owner: 'owner1' }]);
+      // listInstalledApps hydrates its rows, so the fan-out walks InstantiatedSpecs.
+      stubs.appsRepository.listInstalledApps.resolves([
+        await instantiatedSpec(await v9App('requirer', { www: {} })),
+      ]);
       stubs.relationshipResolver.edgesOf.callsFake((views, nameLower) => (nameLower === 'requirer'
-        ? [['App', edge()]] : []));
+        ? [['app', edge()]] : []));
 
-      await appReconciler.enqueueDependents('www_App');
+      await appReconciler.enqueueDependents('www_app');
       await flush();
 
       // The requirer is held as an APP name, so the fan-out resolves it by name and
@@ -682,103 +752,101 @@ describe('appReconciler tests', () => {
     };
 
     // web depends on db; db's container state is driven per-identifier via withArgs.
-    const twoComp = (condition) => ({
-      name: 'App',
-      version: 9,
-      compose: [
-        { name: 'db', containerData: '/data', restartPolicy: condition === 'completed' ? 'never' : 'always' },
-        { name: 'web', containerData: '/data', dependsOn: { db: { condition } } },
-      ],
-    });
+    // `completed` is only legal against a run-once target and `healthy` only against
+    // a probe-bearing one; the schema enforces both pairings, so the target's
+    // restartPolicy and livenessProbe below are requirements, not decoration.
+    const twoComp = async (condition) => installApp(await v9App('app', {
+      db: {
+        restartPolicy: condition === 'completed' ? 'never' : 'always',
+        livenessProbe: condition === 'healthy' ? { cmd: ['true'] } : null,
+      },
+      web: { dependsOn: { db: { condition } } },
+    }));
     // a fresh (never-started) dependent the reconciler would start once unblocked
     const webCreated = { State: { Running: false, Status: 'created', ExitCode: 0 } };
 
     it('holds a started-dependent while its target is not running', async () => {
-      localSpec = twoComp('started');
-      stubs.dockerService.dockerContainerInspect.withArgs('web_App').resolves(webCreated);
-      stubs.dockerService.dockerContainerInspect.withArgs('db_App').resolves({ State: { Running: false, Status: 'exited', ExitCode: 0 } });
-      await appReconciler.reconcile('web_App');
+      await twoComp('started');
+      stubs.dockerService.dockerContainerInspect.withArgs('web_app').resolves(webCreated);
+      stubs.dockerService.dockerContainerInspect.withArgs('db_app').resolves({ State: { Running: false, Status: 'exited', ExitCode: 0 } });
+      await appReconciler.reconcile('web_app');
       expect(stubs.dockerService.appDockerStart.called).to.be.false;
     });
 
     it('starts a started-dependent once its target is running', async () => {
-      localSpec = twoComp('started');
-      stubs.dockerService.dockerContainerInspect.withArgs('web_App').resolves(webCreated);
-      stubs.dockerService.dockerContainerInspect.withArgs('db_App').resolves({ State: { Running: true, Status: 'running', ExitCode: 0 } });
-      await appReconciler.reconcile('web_App');
-      expect(stubs.dockerService.appDockerStart.calledWith('web_App')).to.be.true;
+      await twoComp('started');
+      stubs.dockerService.dockerContainerInspect.withArgs('web_app').resolves(webCreated);
+      stubs.dockerService.dockerContainerInspect.withArgs('db_app').resolves({ State: { Running: true, Status: 'running', ExitCode: 0 } });
+      await appReconciler.reconcile('web_app');
+      expect(stubs.dockerService.appDockerStart.calledWith('web_app')).to.be.true;
     });
 
     it('holds a healthy-dependent while its target is only starting, starts it once healthy', async () => {
-      localSpec = twoComp('healthy');
-      stubs.dockerService.dockerContainerInspect.withArgs('web_App').resolves(webCreated);
-      stubs.dockerService.dockerContainerInspect.withArgs('db_App').resolves({ State: { Running: true, Status: 'running', ExitCode: 0, Health: { Status: 'starting' } } });
-      await appReconciler.reconcile('web_App');
+      await twoComp('healthy');
+      stubs.dockerService.dockerContainerInspect.withArgs('web_app').resolves(webCreated);
+      stubs.dockerService.dockerContainerInspect.withArgs('db_app').resolves({ State: { Running: true, Status: 'running', ExitCode: 0, Health: { Status: 'starting' } } });
+      await appReconciler.reconcile('web_app');
       expect(stubs.dockerService.appDockerStart.called, 'held while dep only starting').to.be.false;
 
-      stubs.dockerService.dockerContainerInspect.withArgs('db_App').resolves({ State: { Running: true, Status: 'running', ExitCode: 0, Health: { Status: 'healthy' } } });
-      await appReconciler.reconcile('web_App');
-      expect(stubs.dockerService.appDockerStart.calledWith('web_App'), 'starts once dep healthy').to.be.true;
+      stubs.dockerService.dockerContainerInspect.withArgs('db_app').resolves({ State: { Running: true, Status: 'running', ExitCode: 0, Health: { Status: 'healthy' } } });
+      await appReconciler.reconcile('web_app');
+      expect(stubs.dockerService.appDockerStart.calledWith('web_app'), 'starts once dep healthy').to.be.true;
     });
 
     it('holds a completed-dependent until its run-once target exits 0', async () => {
-      localSpec = twoComp('completed');
-      stubs.dockerService.dockerContainerInspect.withArgs('web_App').resolves(webCreated);
-      stubs.dockerService.dockerContainerInspect.withArgs('db_App').resolves({ State: { Running: true, Status: 'running', ExitCode: 0 } });
-      await appReconciler.reconcile('web_App');
+      await twoComp('completed');
+      stubs.dockerService.dockerContainerInspect.withArgs('web_app').resolves(webCreated);
+      stubs.dockerService.dockerContainerInspect.withArgs('db_app').resolves({ State: { Running: true, Status: 'running', ExitCode: 0 } });
+      await appReconciler.reconcile('web_app');
       expect(stubs.dockerService.appDockerStart.called, 'held while target still running').to.be.false;
 
-      stubs.dockerService.dockerContainerInspect.withArgs('db_App').resolves({ State: { Running: false, Status: 'exited', ExitCode: 0 } });
-      await appReconciler.reconcile('web_App');
-      expect(stubs.dockerService.appDockerStart.calledWith('web_App'), 'starts once target exits 0').to.be.true;
+      stubs.dockerService.dockerContainerInspect.withArgs('db_app').resolves({ State: { Running: false, Status: 'exited', ExitCode: 0 } });
+      await appReconciler.reconcile('web_app');
+      expect(stubs.dockerService.appDockerStart.calledWith('web_app'), 'starts once target exits 0').to.be.true;
     });
 
     it('treats a completed dependency as satisfied even after its container is removed (durable exit)', async () => {
-      localSpec = twoComp('completed');
-      stubs.dockerService.dockerContainerInspect.withArgs('web_App').resolves(webCreated);
-      // db_App vanished: inspect throws, docker's list (default []) confirms it's gone
-      stubs.dockerService.dockerContainerInspect.withArgs('db_App').rejects(new Error('no such container'));
-      stubs.appsRuntimeState.getState.withArgs('db_App').resolves({ lastExitCode: 0 });
-      await appReconciler.reconcile('web_App');
-      expect(stubs.dockerService.appDockerStart.calledWith('web_App')).to.be.true;
+      await twoComp('completed');
+      stubs.dockerService.dockerContainerInspect.withArgs('web_app').resolves(webCreated);
+      // db_app vanished: inspect throws, docker's list (default []) confirms it's gone
+      stubs.dockerService.dockerContainerInspect.withArgs('db_app').rejects(new Error('no such container'));
+      stubs.appsRuntimeState.getState.withArgs('db_app').resolves({ lastExitCode: 0 });
+      await appReconciler.reconcile('web_app');
+      expect(stubs.dockerService.appDockerStart.calledWith('web_app')).to.be.true;
     });
 
     it('does not re-run a completed run-once component whose container has vanished (durable exit)', async () => {
-      localSpec = { name: 'App', version: 9, compose: [{ name: 'job', containerData: '/data', restartPolicy: 'never' }] };
+      await installApp(await v9App('app', { job: { restartPolicy: 'never' } }));
       stubs.dockerService.dockerContainerInspect.rejects(new Error('no such container'));
       stubs.dockerService.dockerListContainers.resolves([]); // docker confirms it's gone -> exists:false
-      stubs.appsRuntimeState.getState.withArgs('job_App').resolves({ lastExitCode: 0 });
-      await appReconciler.reconcile('job_App');
+      stubs.appsRuntimeState.getState.withArgs('job_app').resolves({ lastExitCode: 0 });
+      await appReconciler.reconcile('job_app');
       expect(stubs.dockerService.appDockerStart.called, 'must not re-run a completed run-once container').to.be.false;
       expect(stubs.containerHealthMonitor.recreateMissingContainers.called).to.be.false;
     });
 
     it('enqueueDependents re-evaluates every dependent of a component', async () => {
-      localSpec = {
-        name: 'App',
-        version: 9,
-        compose: [
-          { name: 'db', containerData: '/data' },
-          { name: 'web', containerData: '/data', dependsOn: { db: { condition: 'started' } } },
-          { name: 'cache', containerData: '/data', dependsOn: { db: { condition: 'started' } } },
-        ],
-      };
-      stubs.dockerService.dockerContainerInspect.withArgs('db_App').resolves({ State: { Running: true, Status: 'running', ExitCode: 0 } });
-      stubs.dockerService.dockerContainerInspect.withArgs('web_App').resolves(webCreated);
-      stubs.dockerService.dockerContainerInspect.withArgs('cache_App').resolves(webCreated);
+      await installApp(await v9App('app', {
+        db: {},
+        web: { dependsOn: { db: { condition: 'started' } } },
+        cache: { dependsOn: { db: { condition: 'started' } } },
+      }));
+      stubs.dockerService.dockerContainerInspect.withArgs('db_app').resolves({ State: { Running: true, Status: 'running', ExitCode: 0 } });
+      stubs.dockerService.dockerContainerInspect.withArgs('web_app').resolves(webCreated);
+      stubs.dockerService.dockerContainerInspect.withArgs('cache_app').resolves(webCreated);
       const started = [];
       stubs.dockerService.appDockerStart.callsFake(async (id) => { started.push(id); });
 
-      await appReconciler.enqueueDependents('db_App');
+      await appReconciler.enqueueDependents('db_app');
       await flush();
-      expect(started).to.have.members(['web_App', 'cache_App']);
+      expect(started).to.have.members(['web_app', 'cache_app']);
     });
 
     it('does not hold a plain component that has no dependsOn', async () => {
-      localSpec = { name: 'App', version: 9, compose: [{ name: 'solo', containerData: '/data' }] };
+      await installApp(await v9App('app', { solo: {} }));
       stubs.dockerService.dockerContainerInspect.resolves(webCreated);
-      await appReconciler.reconcile('solo_App');
-      expect(stubs.dockerService.appDockerStart.calledWith('solo_App')).to.be.true;
+      await appReconciler.reconcile('solo_app');
+      expect(stubs.dockerService.appDockerStart.calledWith('solo_app')).to.be.true;
     });
 
     // Depending on an active-standby component is how an owner asks to be placed with the
@@ -787,16 +855,13 @@ describe('appReconciler tests', () => {
     // it must read as a settled decision, not as the wedge that the age-based warning
     // exists to catch. A warning that is usually a false alarm gets skimmed past.
     describe('depending on an active-standby target', () => {
-      // 'g:' marks activeStandby in legacy containerData, which is what the component
-      // stub reads to answer hasActiveStandbySyncthing().
-      const withStandbyDb = () => ({
-        name: 'App',
-        version: 9,
-        compose: [
-          { name: 'db', containerData: 'g:/data' },
-          { name: 'web', containerData: '/data', dependsOn: { db: { condition: 'started' } } },
-        ],
-      });
+      // The activeStandby sync mode is what the real component answers
+      // hasActiveStandbySyncthing() from — it is derived from persistentStorage.sync,
+      // never settable on its own.
+      const withStandbyDb = async () => installApp(await v9App('app', {
+        db: ACTIVE_STANDBY,
+        web: { dependsOn: { db: { condition: 'started' } } },
+      }));
 
       const settledFor = (spy, identifier) => spy.getCalls().filter(
         (c) => c.args[0] === 'reconciler:actuated'
@@ -805,51 +870,51 @@ describe('appReconciler tests', () => {
       );
 
       it('holds the dependent on a node where the target is not the elected instance', async () => {
-        localSpec = withStandbyDb();
-        stubs.dockerService.dockerContainerInspect.withArgs('web_App').resolves(webCreated);
-        stubs.dockerService.dockerContainerInspect.withArgs('db_App').resolves({ State: { Running: false, Status: 'created', ExitCode: 0 } });
+        await withStandbyDb();
+        stubs.dockerService.dockerContainerInspect.withArgs('web_app').resolves(webCreated);
+        stubs.dockerService.dockerContainerInspect.withArgs('db_app').resolves({ State: { Running: false, Status: 'created', ExitCode: 0 } });
 
-        await appReconciler.reconcile('web_App');
+        await appReconciler.reconcile('web_app');
 
         expect(stubs.dockerService.appDockerStart.called, 'must not start without its database').to.be.false;
         expect(stubs.dockerService.appDockerStop.called, 'a hold leaves the container alone').to.be.false;
       });
 
       it('reports that hold as a settled decision rather than a stall', async () => {
-        localSpec = withStandbyDb();
+        await withStandbyDb();
         const publishSpy = sinon.spy(fluxEventBus, 'publish');
-        stubs.dockerService.dockerContainerInspect.withArgs('web_App').resolves(webCreated);
-        stubs.dockerService.dockerContainerInspect.withArgs('db_App').resolves({ State: { Running: false, Status: 'created', ExitCode: 0 } });
+        stubs.dockerService.dockerContainerInspect.withArgs('web_app').resolves(webCreated);
+        stubs.dockerService.dockerContainerInspect.withArgs('db_app').resolves({ State: { Running: false, Status: 'created', ExitCode: 0 } });
 
-        await appReconciler.reconcile('web_App');
-        await appReconciler.reconcile('web_App');
-        await appReconciler.reconcile('web_App');
+        await appReconciler.reconcile('web_app');
+        await appReconciler.reconcile('web_app');
+        await appReconciler.reconcile('web_app');
 
-        const stated = settledFor(publishSpy, 'web_App');
+        const stated = settledFor(publishSpy, 'web_app');
         expect(stated, 'announced once, not per pass').to.have.lengthOf(1);
         expect(stated[0].args[1].reason).to.equal('awaitingElectedPeer');
       });
 
       it('starts the dependent on the elected node, where the target is running', async () => {
-        localSpec = withStandbyDb();
-        stubs.dockerService.dockerContainerInspect.withArgs('web_App').resolves(webCreated);
-        stubs.dockerService.dockerContainerInspect.withArgs('db_App').resolves({ State: { Running: true, Status: 'running', ExitCode: 0 } });
+        await withStandbyDb();
+        stubs.dockerService.dockerContainerInspect.withArgs('web_app').resolves(webCreated);
+        stubs.dockerService.dockerContainerInspect.withArgs('db_app').resolves({ State: { Running: true, Status: 'running', ExitCode: 0 } });
 
-        await appReconciler.reconcile('web_App');
+        await appReconciler.reconcile('web_app');
 
-        expect(stubs.dockerService.appDockerStart.calledWith('web_App')).to.be.true;
+        expect(stubs.dockerService.appDockerStart.calledWith('web_app')).to.be.true;
       });
     });
   });
 
   describe('reconcile decisions', () => {
     it('does nothing when the app is not installed locally and nothing is owed', async () => {
-      localSpec = null;
-      await appReconciler.reconcile('www_App');
+      installNothing();
+      await appReconciler.reconcile('www_app');
       // it checks the OTHER desired state (gone) before concluding "not installed",
       // and asks by the component's own identifier - the record's key is not
       // derivable from it
-      expect(stubs.pendingTeardownStore.teardownForComponent.calledOnceWith('www_App')).to.be.true;
+      expect(stubs.pendingTeardownStore.teardownForComponent.calledOnceWith('www_app')).to.be.true;
       expect(stubs.appUninstaller.driveOwedTeardown.called, 'no record means nothing is owed').to.be.false;
       expect(stubs.dockerService.appDockerStart.called).to.be.false;
       expect(stubs.dockerService.appDockerStop.called).to.be.false;
@@ -860,12 +925,12 @@ describe('appReconciler tests', () => {
     // teardown to completion, and once it converges it does NOT retry.
     it('drives an owed teardown to completion and does not retry once converged (desired = gone)', async () => {
       const clock = sinon.useFakeTimers({ toFake: ['setTimeout'] });
-      localSpec = null;
-      stubs.pendingTeardownStore.teardownForComponent.resolves({ key: 'App', name: 'App' });
+      installNothing();
+      stubs.pendingTeardownStore.teardownForComponent.resolves({ key: 'app', name: 'app' });
       stubs.appUninstaller.driveOwedTeardown.resolves({ status: 'removed', attempts: 0 });
 
-      await appReconciler.reconcile('www_App');
-      expect(stubs.appUninstaller.driveOwedTeardown.calledOnceWith('App')).to.be.true;
+      await appReconciler.reconcile('www_app');
+      expect(stubs.appUninstaller.driveOwedTeardown.calledOnceWith('app')).to.be.true;
       expect(stubs.dockerService.appDockerStart.called).to.be.false;
       clock.tick(60 * 60 * 1000); // an hour: a converged removal must not re-drive
       await new Promise((resolve) => { setImmediate(() => { setImmediate(resolve); }); });
@@ -879,15 +944,15 @@ describe('appReconciler tests', () => {
     // declares the component gone, and the containers and volume sit there until the next
     // boot re-drives the record.
     it('drives a replica-targeted teardown by the record key, not by the app name', async () => {
-      localSpec = null;
-      stubs.pendingTeardownStore.teardownForComponent.resolves({ key: 'App_r1', name: 'App' });
+      installNothing();
+      stubs.pendingTeardownStore.teardownForComponent.resolves({ key: 'app_r1', name: 'app' });
       stubs.appUninstaller.driveOwedTeardown.resolves({ status: 'removed', attempts: 0 });
 
       await appReconciler.reconcile('www_App_r1');
 
       expect(stubs.pendingTeardownStore.teardownForComponent.calledOnceWith('www_App_r1')).to.be.true;
       expect(
-        stubs.appUninstaller.driveOwedTeardown.calledOnceWith('App_r1'),
+        stubs.appUninstaller.driveOwedTeardown.calledOnceWith('app_r1'),
         'must drive the replica record by its own key - an app name finds nothing',
       ).to.be.true;
     });
@@ -897,11 +962,11 @@ describe('appReconciler tests', () => {
     // abandoned until the next boot.
     it('retries an owed teardown with backoff when it has not converged (attempt count paces it)', async () => {
       const clock = sinon.useFakeTimers({ toFake: ['setTimeout'] });
-      localSpec = null;
-      stubs.pendingTeardownStore.teardownForComponent.resolves({ key: 'App', name: 'App' });
+      installNothing();
+      stubs.pendingTeardownStore.teardownForComponent.resolves({ key: 'app', name: 'app' });
       stubs.appUninstaller.driveOwedTeardown.resolves({ status: 'deferred', attempts: 1 });
 
-      await appReconciler.reconcile('www_App');
+      await appReconciler.reconcile('www_app');
       expect(stubs.appUninstaller.driveOwedTeardown.callCount).to.equal(1);
       // attempt 1 -> the 30s rung of the removal ladder; tick past it and it re-drives
       clock.tick(30 * 1000 + 100);
@@ -914,9 +979,18 @@ describe('appReconciler tests', () => {
       // '/data|g:/...' puts the sync flag on a non-primary mount -> unparseable per the
       // mount model (real prod shape: roundcube). The reconciler must not attempt a start
       // (volume construction would throw) and must surface it, not silently loop "not ready".
-      localSpec = { name: 'App', version: 4, compose: [{ name: 'www', containerData: '/data|g:/var/roundcube/db' }] };
-      stubs.deploymentProvider.buildDeployment.rejects(new Error('invalid containerData: sync flag on a non-primary mount'));
-      await appReconciler.reconcile('www_App');
+      //
+      // The spec itself validates — the refusal comes from the deployment projection,
+      // which is where the mount model lives. So the build here is the REAL one: it
+      // throws flux-spec's own error over a CLEARTEXT row, which is exactly the
+      // structural (never-retryable) shape this branch classifies.
+      const badSpec = await v8App('app', { www: { containerData: '/data|g:/var/roundcube/db' } });
+      localInst = await instantiatedSpec(badSpec);
+      localDeployment = null;
+      stubs.deploymentProvider.buildDeployment.callsFake(
+        async () => flux.DeploymentSpec.fromSpec(badSpec, appsFolder, { replica: null }),
+      );
+      await appReconciler.reconcile('www_app');
       expect(stubs.dockerService.appDockerStart.called).to.be.false;
       expect(stubs.dockerService.appDockerStop.called).to.be.false;
       const failedLoud = stubs.log.error.getCalls().some((c) => /invalid containerData/.test(c.args[0]));
@@ -927,7 +1001,7 @@ describe('appReconciler tests', () => {
       // a momentary DB read failure must not be mistaken for "not installed" - the
       // reconcile defers and retries rather than silently dropping the recovery
       stubs.appsRepository.getInstalledAppByIdentity.rejects(new Error('connection reset'));
-      await appReconciler.reconcile('www_App'); // must not throw
+      await appReconciler.reconcile('www_app'); // must not throw
       expect(stubs.dockerService.appDockerStart.called).to.be.false;
       expect(stubs.dockerService.appDockerStop.called).to.be.false;
       const deferred = stubs.log.warn.getCalls().some((c) => /identity read failed, deferring/.test(c.args[0]));
@@ -937,14 +1011,14 @@ describe('appReconciler tests', () => {
     it('stops a running container the operator has stopped', async () => {
       stubs.appsRuntimeState.isOperatorStopped.resolves(true);
       stubs.dockerService.dockerContainerInspect.resolves({ State: { Running: true, Status: 'running', ExitCode: 0 } });
-      await appReconciler.reconcile('www_App');
-      expect(stubs.dockerService.appDockerStop.calledOnceWith('www_App')).to.be.true;
+      await appReconciler.reconcile('www_app');
+      expect(stubs.dockerService.appDockerStop.calledOnceWith('www_app')).to.be.true;
       expect(stubs.dockerService.appDockerStart.called).to.be.false;
     });
 
     it('leaves an operator-stopped container alone if already stopped', async () => {
       stubs.appsRuntimeState.isOperatorStopped.resolves(true);
-      await appReconciler.reconcile('www_App'); // inspect default: stopped
+      await appReconciler.reconcile('www_app'); // inspect default: stopped
       expect(stubs.dockerService.appDockerStop.called).to.be.false;
       expect(stubs.dockerService.appDockerStart.called).to.be.false;
     });
@@ -962,11 +1036,11 @@ describe('appReconciler tests', () => {
       const publishSpy = sinon.spy(fluxEventBus, 'publish');
       stubs.appsRuntimeState.isOperatorStopped.resolves(true);
 
-      await appReconciler.reconcile('www_App'); // inspect default: stopped
-      await appReconciler.reconcile('www_App');
-      await appReconciler.reconcile('www_App');
+      await appReconciler.reconcile('www_app'); // inspect default: stopped
+      await appReconciler.reconcile('www_app');
+      await appReconciler.reconcile('www_app');
 
-      const stated = settledStops(publishSpy, 'www_App');
+      const stated = settledStops(publishSpy, 'www_app');
       expect(stated).to.have.lengthOf(1);
       expect(stated[0].args[1].reason).to.equal('operatorStopped');
     });
@@ -974,28 +1048,28 @@ describe('appReconciler tests', () => {
     it('states the new reason when a stopped component stays down for a different one', async () => {
       const publishSpy = sinon.spy(fluxEventBus, 'publish');
       stubs.appsRuntimeState.isOperatorStopped.resolves(true);
-      await appReconciler.reconcile('www_App');
+      await appReconciler.reconcile('www_app');
 
       // the operator lock lifts but the component is condemned - still down, different why
       stubs.appsRuntimeState.isOperatorStopped.resolves(false);
       stubs.appsRuntimeState.isCondemned.resolves(true);
-      await appReconciler.reconcile('www_App');
+      await appReconciler.reconcile('www_app');
 
-      expect(settledStops(publishSpy, 'www_App').map((c) => c.args[1].reason)).to.eql(['operatorStopped', 'condemned']);
+      expect(settledStops(publishSpy, 'www_app').map((c) => c.args[1].reason)).to.eql(['operatorStopped', 'condemned']);
     });
 
     it('gracefully stops a running condemned container and never starts it (tombstoning)', async () => {
       stubs.appsRuntimeState.isCondemned.resolves(true);
       stubs.dockerService.dockerContainerInspect.resolves({ State: { Running: true, Status: 'running', ExitCode: 0 } });
-      await appReconciler.reconcile('www_App');
-      expect(stubs.dockerService.appDockerStop.calledOnceWith('www_App')).to.be.true;
+      await appReconciler.reconcile('www_app');
+      expect(stubs.dockerService.appDockerStop.calledOnceWith('www_app')).to.be.true;
       expect(stubs.dockerService.appDockerKill.called).to.be.false;
       expect(stubs.dockerService.appDockerStart.called).to.be.false;
     });
 
     it('leaves an already-stopped condemned container alone (no re-stop)', async () => {
       stubs.appsRuntimeState.isCondemned.resolves(true);
-      await appReconciler.reconcile('www_App'); // inspect default: stopped
+      await appReconciler.reconcile('www_app'); // inspect default: stopped
       expect(stubs.dockerService.appDockerStop.called).to.be.false;
       expect(stubs.dockerService.appDockerStart.called).to.be.false;
     });
@@ -1006,11 +1080,11 @@ describe('appReconciler tests', () => {
       const clock = sinon.useFakeTimers({ toFake: ['setTimeout'] });
       stubs.appsRuntimeState.isCondemned.resolves(true);
       stubs.dockerService.dockerContainerInspect.resolves({ State: { Running: true, Status: 'running', ExitCode: 0 } });
-      const held = new Error("fluxwww_App: an 'actuating' container transition is in flight; deferring 'stopping'");
+      const held = new Error("fluxwww_app: an 'actuating' container transition is in flight; deferring 'stopping'");
       held.code = 'ETRANSITIONHELD';
       stubs.dockerService.appDockerStop.rejects(held);
 
-      await appReconciler.reconcile('www_App'); // must not throw (the queue would not reschedule a bare throw)
+      await appReconciler.reconcile('www_app'); // must not throw (the queue would not reschedule a bare throw)
 
       expect(stubs.dockerService.appDockerStop.callCount).to.equal(1);
       clock.tick(6000);
@@ -1025,8 +1099,8 @@ describe('appReconciler tests', () => {
       // operator force is set, but the reason is 'condemned' so only condemnedForce applies
       stubs.appsRuntimeState.getState.resolves({ operatorStopForce: true });
       stubs.dockerService.dockerContainerInspect.resolves({ State: { Running: true, Status: 'running', ExitCode: 0 } });
-      await appReconciler.reconcile('www_App');
-      expect(stubs.dockerService.appDockerStop.calledOnceWith('www_App')).to.be.true;
+      await appReconciler.reconcile('www_app');
+      expect(stubs.dockerService.appDockerStop.calledOnceWith('www_app')).to.be.true;
       expect(stubs.dockerService.appDockerKill.called).to.be.false;
     });
 
@@ -1034,20 +1108,20 @@ describe('appReconciler tests', () => {
       stubs.appsRuntimeState.isCondemned.resolves(true);
       stubs.appsRuntimeState.getState.resolves({ condemnedForce: true });
       stubs.dockerService.dockerContainerInspect.resolves({ State: { Running: true, Status: 'running', ExitCode: 0 } });
-      await appReconciler.reconcile('www_App');
-      expect(stubs.dockerService.appDockerKill.calledOnceWith('www_App')).to.be.true;
+      await appReconciler.reconcile('www_app');
+      expect(stubs.dockerService.appDockerKill.calledOnceWith('www_app')).to.be.true;
       expect(stubs.dockerService.appDockerStop.called).to.be.false;
     });
 
     it('skips the data-clear wipe for a condemned component (never races the teardown rm -rf)', async () => {
       stubs.appsRuntimeState.isCondemned.resolves(true);
-      appReconciler.requestStopAndClearData('www_App', 'test'); // dataDesired = 'clear'
+      appReconciler.requestStopAndClearData('www_app', 'test'); // dataDesired = 'clear'
       stubs.dockerService.dockerContainerInspect.resolves({ State: { Running: true, Status: 'running', ExitCode: 0 } });
-      await appReconciler.reconcile('www_App');
+      await appReconciler.reconcile('www_app');
       expect(stubs.dockerOperations.appDeleteDataInMountPoint.called).to.be.false;
       // still stopped (condemned desired:false), just not wiped (calledWith, not
       // calledOnce: requestStopAndClearData also enqueues a reconcile)
-      expect(stubs.dockerService.appDockerStop.calledWith('www_App')).to.be.true;
+      expect(stubs.dockerService.appDockerStop.calledWith('www_app')).to.be.true;
       expect(stubs.dockerService.appDockerStart.called).to.be.false;
     });
 
@@ -1055,7 +1129,7 @@ describe('appReconciler tests', () => {
       // not condemned at the entry gate, but condemned by the time we re-read at actuation
       stubs.appsRuntimeState.isCondemned.onCall(0).resolves(false);
       stubs.appsRuntimeState.isCondemned.onCall(1).resolves(true);
-      await appReconciler.reconcile('www_App'); // a stopped component that would otherwise start
+      await appReconciler.reconcile('www_app'); // a stopped component that would otherwise start
       expect(stubs.dockerService.appDockerStart.called).to.be.false;
     });
 
@@ -1063,42 +1137,50 @@ describe('appReconciler tests', () => {
       // getState resolves null by default — a first start, which is not a restart, so it
       // must not record: seeding the history would push the container's first crash-recovery
       // off the immediate rung onto the 30s rung.
-      await appReconciler.reconcile('www_App');
-      expect(stubs.dockerService.appDockerStart.calledOnceWith('www_App')).to.be.true;
+      await appReconciler.reconcile('www_app');
+      expect(stubs.dockerService.appDockerStart.calledOnceWith('www_app')).to.be.true;
       expect(stubs.appInspector.startAppMonitoring.calledOnce).to.be.true;
       expect(stubs.appsRuntimeState.recordRestart.called, 'a clean first start does not seed the crash-backoff ladder').to.be.false;
+      // deploymentProvider stays stubbed, so nothing here exercises what the real one
+      // does with the row it is handed. Read it back and ask it what the real provider
+      // asks: resolveInstantiatedSpec branches on isEncrypted and takes `.spec`, then
+      // DeploymentSpec.fromSpec projects that spec's own linkedAppNames/dependencyEntries.
+      const [handedRow] = stubs.deploymentProvider.buildDeployment.firstCall.args;
+      expect(handedRow.name).to.equal('app');
+      expect(handedRow.isEncrypted).to.equal(false);
+      assertAnswers(handedRow.spec, ['linkedAppNames', 'dependencyEntries']);
     });
 
     it('marks hasEverStarted on a first start — docker accepting the start is NOT a proven run', async () => {
       // getState resolves null by default — never started here, so this is a first start.
-      await appReconciler.reconcile('www_App');
-      expect(stubs.dockerService.appDockerStart.calledOnceWith('www_App')).to.be.true;
-      expect(stubs.appsRuntimeState.setEverStarted.calledOnceWith('www_App')).to.be.true;
+      await appReconciler.reconcile('www_app');
+      expect(stubs.dockerService.appDockerStart.calledOnceWith('www_app')).to.be.true;
+      expect(stubs.appsRuntimeState.setEverStarted.calledOnceWith('www_app')).to.be.true;
       expect(stubs.appsRuntimeState.setSuccessfullyStarted.called, 'start-accept must not latch the proven-run marker').to.be.false;
     });
 
     it('does not re-mark hasEverStarted when restarting a component docker has launched here before', async () => {
-      stubs.appsRuntimeState.getState.withArgs('www_App').resolves({ hasEverStarted: true });
-      await appReconciler.reconcile('www_App');
-      expect(stubs.dockerService.appDockerStart.calledOnceWith('www_App')).to.be.true;
+      stubs.appsRuntimeState.getState.withArgs('www_app').resolves({ hasEverStarted: true });
+      await appReconciler.reconcile('www_app');
+      expect(stubs.dockerService.appDockerStart.calledOnceWith('www_app')).to.be.true;
       expect(stubs.appsRuntimeState.setEverStarted.called).to.be.false;
     });
 
     it('records a restart when starting a stopped component that has run here before (crash-ladder paces repeated crashes)', async () => {
       // hasEverStarted true → this start IS a restart (the container ran, crashed,
       // and is being brought back), so it seeds the ladder that paces repeated crashes.
-      stubs.appsRuntimeState.getState.withArgs('www_App').resolves({ hasEverStarted: true });
-      await appReconciler.reconcile('www_App');
-      expect(stubs.dockerService.appDockerStart.calledOnceWith('www_App')).to.be.true;
-      expect(stubs.appsRuntimeState.recordRestart.calledOnceWith('www_App')).to.be.true;
+      stubs.appsRuntimeState.getState.withArgs('www_app').resolves({ hasEverStarted: true });
+      await appReconciler.reconcile('www_app');
+      expect(stubs.dockerService.appDockerStart.calledOnceWith('www_app')).to.be.true;
+      expect(stubs.appsRuntimeState.recordRestart.calledOnceWith('www_app')).to.be.true;
     });
 
     it('treats a pre-marker-split proven doc as already-started (proven implies started)', async () => {
       // docs persisted before the hasEverStarted split carry only hasSuccessfullyStarted;
       // such a component must restart (recording into the ladder), not "first start".
-      stubs.appsRuntimeState.getState.withArgs('www_App').resolves({ hasSuccessfullyStarted: true });
-      await appReconciler.reconcile('www_App');
-      expect(stubs.appsRuntimeState.recordRestart.calledOnceWith('www_App')).to.be.true;
+      stubs.appsRuntimeState.getState.withArgs('www_app').resolves({ hasSuccessfullyStarted: true });
+      await appReconciler.reconcile('www_app');
+      expect(stubs.appsRuntimeState.recordRestart.calledOnceWith('www_app')).to.be.true;
       expect(stubs.appsRuntimeState.setEverStarted.called).to.be.false;
     });
 
@@ -1107,9 +1189,9 @@ describe('appReconciler tests', () => {
       // settles the component. A proven component settles on the start itself; an
       // unproven one holds the converge open through the first-run proof (see the
       // install-trial describe).
-      stubs.appsRuntimeState.getState.withArgs('www_App').resolves({ hasSuccessfullyStarted: true });
-      const result = await appReconciler.awaitConvergence(['www_App']);
-      expect(stubs.dockerService.appDockerStart.calledWith('www_App')).to.be.true;
+      stubs.appsRuntimeState.getState.withArgs('www_app').resolves({ hasSuccessfullyStarted: true });
+      const result = await appReconciler.awaitConvergence(['www_app']);
+      expect(stubs.dockerService.appDockerStart.calledWith('www_app')).to.be.true;
       expect(result.converged).to.be.true;
       expect(result.failed).to.deep.equal([]);
     });
@@ -1153,18 +1235,18 @@ describe('appReconciler tests', () => {
           Running: false, Status: 'exited', ExitCode: 127, FinishedAt: new Date(Date.now() - 60000).toISOString(),
         },
       });
-      const convergePromise = appReconciler.awaitConvergence(['www_App']);
+      const convergePromise = appReconciler.awaitConvergence(['www_app']);
       // each start "succeeds", then the container is found dead again; the enqueues
       // stand in for the die-event bridge
       await waitFor(() => stubs.appsRuntimeState.setEverStarted.callCount >= 1);
-      appReconciler.enqueueComponent('www_App');
+      appReconciler.enqueueComponent('www_app');
       await waitFor(() => stubs.appsRuntimeState.recordRestart.callCount >= 1);
-      appReconciler.enqueueComponent('www_App');
+      appReconciler.enqueueComponent('www_app');
       await waitFor(() => stubs.appsRuntimeState.recordRestart.callCount >= 2);
-      appReconciler.enqueueComponent('www_App');
+      appReconciler.enqueueComponent('www_app');
       const result = await convergePromise;
       expect(result.converged).to.be.false;
-      expect(result.failed).to.deep.equal(['www_App']);
+      expect(result.failed).to.deep.equal(['www_app']);
       expect(stubs.dockerService.appDockerStart.callCount, 'exactly 3 total start attempts').to.equal(3);
     });
 
@@ -1173,26 +1255,26 @@ describe('appReconciler tests', () => {
       stubs.dockerService.appDockerStart.rejects(new Error('oci runtime error: exec not found'));
       // 'created': docker never ran it, so exitCode is null (no clean-exit latch)
       stubs.dockerService.dockerContainerInspect.resolves({ State: { Running: false, Status: 'created', ExitCode: 0 } });
-      const convergePromise = appReconciler.awaitConvergence(['www_App']);
+      const convergePromise = appReconciler.awaitConvergence(['www_app']);
       await waitFor(() => stubs.appsRuntimeState.recordRestart.callCount >= 1);
-      appReconciler.enqueueComponent('www_App');
+      appReconciler.enqueueComponent('www_app');
       await waitFor(() => stubs.appsRuntimeState.recordRestart.callCount >= 2);
-      appReconciler.enqueueComponent('www_App');
+      appReconciler.enqueueComponent('www_app');
       const result = await convergePromise;
       expect(result.converged).to.be.false;
-      expect(result.failed).to.deep.equal(['www_App']);
+      expect(result.failed).to.deep.equal(['www_app']);
       expect(stubs.dockerService.appDockerStart.callCount, 'exactly 3 total start attempts').to.equal(3);
     });
 
     it('a proven component crashing repeatedly never fails the converge (the ladder owns it)', async () => {
       wireRuntimeStateFake();
-      rtState.www_App = { hasSuccessfullyStarted: true, restartHistory: [1, 2, 3, 4, 5] };
+      rtState.www_app = { hasSuccessfullyStarted: true, restartHistory: [1, 2, 3, 4, 5] };
       stubs.dockerService.dockerContainerInspect.resolves({
         State: {
           Running: false, Status: 'exited', ExitCode: 137, FinishedAt: new Date(Date.now() - 60000).toISOString(),
         },
       });
-      const result = await appReconciler.awaitConvergence(['www_App']);
+      const result = await appReconciler.awaitConvergence(['www_app']);
       expect(result.converged, 'a proven app is never rolled back, however deep its history').to.be.true;
       expect(stubs.dockerService.appDockerStart.callCount).to.equal(1);
     });
@@ -1204,8 +1286,8 @@ describe('appReconciler tests', () => {
           Running: false, Status: 'exited', ExitCode: 0, FinishedAt: new Date(Date.now() - 60000).toISOString(),
         },
       });
-      await appReconciler.reconcile('www_App');
-      expect(rtState.www_App && rtState.www_App.hasSuccessfullyStarted).to.be.true;
+      await appReconciler.reconcile('www_app');
+      expect(rtState.www_app && rtState.www_app.hasSuccessfullyStarted).to.be.true;
     });
 
     it('probe-healthy latches the proven-run marker on a running unproven component', async () => {
@@ -1213,8 +1295,8 @@ describe('appReconciler tests', () => {
       stubs.dockerService.dockerContainerInspect.resolves({
         State: { Running: true, Status: 'running', Health: { Status: 'healthy' } },
       });
-      await appReconciler.reconcile('www_App');
-      expect(rtState.www_App && rtState.www_App.hasSuccessfullyStarted).to.be.true;
+      await appReconciler.reconcile('www_app');
+      expect(rtState.www_app && rtState.www_app.hasSuccessfullyStarted).to.be.true;
     });
 
     it('uptime past the proof window latches the proven-run marker (probe-less service)', async () => {
@@ -1222,8 +1304,8 @@ describe('appReconciler tests', () => {
       stubs.dockerService.dockerContainerInspect.resolves({
         State: { Running: true, Status: 'running', StartedAt: new Date(Date.now() - 61000).toISOString() },
       });
-      await appReconciler.reconcile('www_App');
-      expect(rtState.www_App && rtState.www_App.hasSuccessfullyStarted).to.be.true;
+      await appReconciler.reconcile('www_app');
+      expect(rtState.www_app && rtState.www_app.hasSuccessfullyStarted).to.be.true;
     });
 
     it('a probe-less run younger than the proof window does not latch', async () => {
@@ -1231,8 +1313,8 @@ describe('appReconciler tests', () => {
       stubs.dockerService.dockerContainerInspect.resolves({
         State: { Running: true, Status: 'running', StartedAt: new Date(Date.now() - 1000).toISOString() },
       });
-      await appReconciler.reconcile('www_App');
-      expect(rtState.www_App && rtState.www_App.hasSuccessfullyStarted, 'must not latch on a 1s-old run').to.not.be.true;
+      await appReconciler.reconcile('www_app');
+      expect(rtState.www_app && rtState.www_app.hasSuccessfullyStarted, 'must not latch on a 1s-old run').to.not.be.true;
     });
   });
 
@@ -1240,56 +1322,56 @@ describe('appReconciler tests', () => {
     it('hard-kills (not graceful-stops) a running operator-stopped component when force is set', async () => {
       stubs.dockerService.dockerContainerInspect.resolves({ State: { Running: true, Status: 'running', ExitCode: 0 } });
       stubs.appsRuntimeState.isOperatorStopped.resolves(true);
-      stubs.appsRuntimeState.getState.withArgs('www_App').resolves({ operatorStopForce: true });
-      await appReconciler.reconcile('www_App');
-      expect(stubs.dockerService.appDockerKill.calledOnceWith('www_App')).to.be.true;
+      stubs.appsRuntimeState.getState.withArgs('www_app').resolves({ operatorStopForce: true });
+      await appReconciler.reconcile('www_app');
+      expect(stubs.dockerService.appDockerKill.calledOnceWith('www_app')).to.be.true;
       expect(stubs.dockerService.appDockerStop.called).to.be.false;
     });
 
     it('gracefully stops a running operator-stopped component when force is not set', async () => {
       stubs.dockerService.dockerContainerInspect.resolves({ State: { Running: true, Status: 'running', ExitCode: 0 } });
       stubs.appsRuntimeState.isOperatorStopped.resolves(true);
-      await appReconciler.reconcile('www_App');
-      expect(stubs.dockerService.appDockerStop.calledOnceWith('www_App')).to.be.true;
+      await appReconciler.reconcile('www_app');
+      expect(stubs.dockerService.appDockerStop.calledOnceWith('www_app')).to.be.true;
       expect(stubs.dockerService.appDockerKill.called).to.be.false;
     });
 
     it('rebuilds a running mesh component whose slot identity drifted (confirmed across two passes)', async () => {
       stubs.dockerService.dockerContainerInspect.resolves({ State: { Running: true, Status: 'running', ExitCode: 0 } });
-      localSpec.compose[0].isStateless = true;
-      const drifts = new Map([['www_App', { component: 'www', is: 'www-aaaa1111', wants: 'www-1' }]]);
+      await installApp(await v9App('app', { www: STATELESS }));
+      const drifts = new Map([['www_app', { component: 'www', is: 'www-aaaa1111', wants: 'www-1' }]]);
       meshIdentityDrift.recordPassDrifts(drifts);
       meshIdentityDrift.recordPassDrifts(drifts);
-      await appReconciler.reconcile('www_App');
+      await appReconciler.reconcile('www_app');
       // The full network-heal discipline: durably marked ours BEFORE the
       // remove, then the no-uninstall recreate.
-      expect(stubs.appsRuntimeState.setNetworkHealRemoval.calledWith('www_App', true)).to.be.true;
-      expect(stubs.dockerService.appDockerForceRemove.calledWith('www_App')).to.be.true;
-      expect(stubs.containerHealthMonitor.recreateMissingContainers.calledWith('www_App')).to.be.true;
+      expect(stubs.appsRuntimeState.setNetworkHealRemoval.calledWith('www_app', true)).to.be.true;
+      expect(stubs.dockerService.appDockerForceRemove.calledWith('www_app')).to.be.true;
+      expect(stubs.containerHealthMonitor.recreateMissingContainers.calledWith('www_app')).to.be.true;
       expect(stubs.appUninstaller.uninstallApplication.called).to.be.false;
     });
 
     it('a drift seen on only ONE mesh pass rebuilds nothing', async () => {
       stubs.dockerService.dockerContainerInspect.resolves({ State: { Running: true, Status: 'running', ExitCode: 0 } });
-      localSpec.compose[0].isStateless = true;
-      meshIdentityDrift.recordPassDrifts(new Map([['www_App', { component: 'www', is: 'www-aaaa1111', wants: 'www-1' }]]));
-      await appReconciler.reconcile('www_App');
+      await installApp(await v9App('app', { www: STATELESS }));
+      meshIdentityDrift.recordPassDrifts(new Map([['www_app', { component: 'www', is: 'www-aaaa1111', wants: 'www-1' }]]));
+      await appReconciler.reconcile('www_app');
       expect(stubs.dockerService.appDockerForceRemove.called).to.be.false;
       expect(stubs.containerHealthMonitor.recreateMissingContainers.called).to.be.false;
     });
 
     it('bounces a running component when a restart is requested (desired generation > actuated)', async () => {
       stubs.dockerService.dockerContainerInspect.resolves({ State: { Running: true, Status: 'running', ExitCode: 0 } });
-      stubs.appsRuntimeState.getState.withArgs('www_App').resolves({ restartGeneration: 1, actuatedRestartGeneration: 0 });
-      await appReconciler.reconcile('www_App');
-      expect(stubs.dockerService.appDockerRestart.calledOnceWith('www_App')).to.be.true;
-      expect(stubs.appsRuntimeState.recordRestartGeneration.calledOnceWith('www_App', 1)).to.be.true;
+      stubs.appsRuntimeState.getState.withArgs('www_app').resolves({ restartGeneration: 1, actuatedRestartGeneration: 0 });
+      await appReconciler.reconcile('www_app');
+      expect(stubs.dockerService.appDockerRestart.calledOnceWith('www_app')).to.be.true;
+      expect(stubs.appsRuntimeState.recordRestartGeneration.calledOnceWith('www_app', 1)).to.be.true;
     });
 
     it('does not bounce a running component whose restart generation is already actuated', async () => {
       stubs.dockerService.dockerContainerInspect.resolves({ State: { Running: true, Status: 'running', ExitCode: 0 } });
-      stubs.appsRuntimeState.getState.withArgs('www_App').resolves({ restartGeneration: 2, actuatedRestartGeneration: 2 });
-      await appReconciler.reconcile('www_App');
+      stubs.appsRuntimeState.getState.withArgs('www_app').resolves({ restartGeneration: 2, actuatedRestartGeneration: 2 });
+      await appReconciler.reconcile('www_app');
       expect(stubs.dockerService.appDockerRestart.called).to.be.false;
     });
 
@@ -1298,8 +1380,13 @@ describe('appReconciler tests', () => {
       // retry path is what converges sink state once decryption is available.
       const sink = { provider: 'datadog', apiKey: 'k' };
       stubs.telemetrySinkCache.extractSink.returns(sink);
-      await appReconciler.reconcile('www_App');
-      expect(stubs.telemetrySinkCache.setSink.calledWith('App', sink)).to.be.true;
+      await appReconciler.reconcile('www_app');
+      expect(stubs.telemetrySinkCache.setSink.calledWith('app', sink)).to.be.true;
+      // telemetrySinkCache stays stubbed, so read back what it was handed and ask it
+      // what the real extractSink asks: the deployment's own telemetry projection.
+      const [handedDeployment] = stubs.telemetrySinkCache.extractSink.firstCall.args;
+      expect(handedDeployment, 'extractSink reads deployment.telemetry').to.have.property('telemetry');
+      assertAnswers(handedDeployment, ['componentEntries']);
     });
 
     it('defers ALL actuation when the data volume cannot be mounted', async () => {
@@ -1308,7 +1395,7 @@ describe('appReconciler tests', () => {
       // must keep the component inert and retry, never actuate
       stubs.volumeService.ensureAppVolumeMounted.resolves({ mounted: false, reason: 'mount_failed: bad superblock' });
       stubs.dockerService.dockerContainerInspect.resolves({ State: { Running: true, Status: 'running', ExitCode: 0 } });
-      await appReconciler.reconcile('www_App');
+      await appReconciler.reconcile('www_app');
       expect(stubs.dockerService.appDockerStart.called).to.be.false;
       expect(stubs.dockerService.appDockerStop.called).to.be.false;
       expect(stubs.dockerOperations.appDeleteDataInMountPoint.called).to.be.false;
@@ -1322,14 +1409,14 @@ describe('appReconciler tests', () => {
       stubs.volumeService.ensureAppVolumeMounted.resolves({ mounted: false, reason: 'volume_file_missing' });
       stubs.dockerService.dockerContainerInspect.resolves({ State: { Running: true, Status: 'running', ExitCode: 0 } });
       try {
-        appReconciler.setControllerDesired('www_App', 'stopped', 'mount safety block: unmounted_with_content');
+        appReconciler.setControllerDesired('www_app', 'stopped', 'mount safety block: unmounted_with_content');
         // setControllerDesired enqueues its own reconcile; wait for it to land
         await new Promise((resolve) => { setTimeout(resolve, 50); });
-        expect(stubs.dockerService.appDockerStop.calledWith('www_App')).to.be.true;
+        expect(stubs.dockerService.appDockerStop.calledWith('www_app')).to.be.true;
         expect(stubs.dockerService.appDockerStart.called).to.be.false;
         expect(stubs.dockerOperations.appDeleteDataInMountPoint.called).to.be.false;
       } finally {
-        appReconciler.clearControllerDesired('www_App');
+        appReconciler.clearControllerDesired('www_app');
       }
     });
 
@@ -1338,18 +1425,18 @@ describe('appReconciler tests', () => {
       // closed forever: the component would never start and every pass would
       // report a tampering event. It has no app dir to write through either, so
       // the hazard the gate exists for cannot arise.
-      localSpec.compose[0].isStateless = true;
+      await installApp(await v9App('app', { www: STATELESS }));
       stubs.volumeService.ensureAppVolumeMounted.resolves({ mounted: false, reason: 'volume_file_missing' });
-      await appReconciler.reconcile('www_App');
+      await appReconciler.reconcile('www_app');
       expect(stubs.volumeService.ensureAppVolumeMounted.called, 'must not probe a volume that cannot exist').to.be.false;
-      expect(stubs.dockerService.appDockerStart.calledOnceWith('www_App')).to.be.true;
+      expect(stubs.dockerService.appDockerStart.calledOnceWith('www_app')).to.be.true;
     });
 
     it('records no volume tampering event for a stateless component', async () => {
-      localSpec.compose[0].isStateless = true;
+      await installApp(await v9App('app', { www: STATELESS }));
       stubs.volumeService.ensureAppVolumeMounted.resolves({ mounted: false, reason: 'volume_file_missing' });
-      await appReconciler.reconcile('www_App');
-      await appReconciler.reconcile('www_App');
+      await appReconciler.reconcile('www_app');
+      await appReconciler.reconcile('www_app');
       const volumeEvents = stubs.appTamperingDetectionService.recordEvent.getCalls()
         .filter((c) => c.args[1] === 'volume_missing');
       expect(volumeEvents, 'a component with no volume is not a tampered one').to.have.lengthOf(0);
@@ -1357,23 +1444,23 @@ describe('appReconciler tests', () => {
 
     it('mounts an unmounted volume and proceeds with the start', async () => {
       stubs.volumeService.ensureAppVolumeMounted.resolves({ mounted: true, alreadyMounted: false });
-      await appReconciler.reconcile('www_App');
-      expect(stubs.dockerService.appDockerStart.calledOnceWith('www_App')).to.be.true;
+      await appReconciler.reconcile('www_app');
+      expect(stubs.dockerService.appDockerStart.calledOnceWith('www_app')).to.be.true;
       sinon.assert.callOrder(stubs.volumeService.ensureAppVolumeMounted, stubs.dockerService.appDockerStart);
     });
 
     it('records a tampering event once (not per retry) when the backing image is missing', async () => {
       stubs.volumeService.ensureAppVolumeMounted.resolves({ mounted: false, reason: 'volume_file_missing' });
-      await appReconciler.reconcile('www_App');
-      await appReconciler.reconcile('www_App');
+      await appReconciler.reconcile('www_app');
+      await appReconciler.reconcile('www_app');
       const volumeEvents = stubs.appTamperingDetectionService.recordEvent.getCalls()
         .filter((c) => c.args[1] === 'volume_missing');
       expect(volumeEvents).to.have.lengthOf(1);
-      expect(volumeEvents[0].args[0]).to.equal('App');
+      expect(volumeEvents[0].args[0]).to.equal('app');
     });
 
     it('ensures the volume is mounted before actuating a pending data wipe', async () => {
-      appReconciler.requestStopAndClearData('www_App', 'test wipe');
+      appReconciler.requestStopAndClearData('www_app', 'test wipe');
       // requestStopAndClearData enqueues its own reconcile; wait for it to land
       await new Promise((resolve) => { setTimeout(resolve, 50); });
       expect(stubs.dockerOperations.appDeleteDataInMountPoint.calledOnce).to.be.true;
@@ -1381,10 +1468,20 @@ describe('appReconciler tests', () => {
     });
 
     it('ensures mount sources exist (recreating any syncthing-cleaned source) before starting', async () => {
-      await appReconciler.reconcile('www_App');
+      await appReconciler.reconcile('www_app');
       expect(stubs.appVolumeService.ensureMountSourcesExist.calledOnce).to.be.true;
       const [comp] = stubs.appVolumeService.ensureMountSourcesExist.firstCall.args;
-      expect(comp.identifier).to.equal('www_App');
+      expect(comp.identifier).to.equal('www_app');
+      // appVolumeService stays stubbed (it shells out and writes files), so nothing
+      // here exercises what it does with the component it was handed. Read the
+      // argument back and ask it what the REAL implementation asks: it walks
+      // `mounts`, keys the stignore path off `dir`, branches on `sync`, and calls
+      // injectedSyncExcludes(). A component that could not answer these would fail
+      // in production with the suite still green.
+      expect(comp.mounts, 'ensureMountSourcesExist iterates mounts').to.be.an('array');
+      expect(comp.dir, 'writeStignore keys the stignore path off dir').to.be.a('string');
+      expect(comp.sync, 'writeStignore branches on sync').to.satisfy((s) => s === null || typeof s === 'object');
+      assertAnswers(comp, ['injectedSyncExcludes', 'hasSyncthing']);
       // and the ensure must happen before the docker start, or the start could fail on a missing mount
       sinon.assert.callOrder(stubs.appVolumeService.ensureMountSourcesExist, stubs.dockerService.appDockerStart);
     });
@@ -1393,7 +1490,7 @@ describe('appReconciler tests', () => {
       stubs.appVolumeService.ensureMountSourcesExist.rejects(new Error('mkdir failed'));
       let threw = false;
       try {
-        await appReconciler.reconcile('www_App');
+        await appReconciler.reconcile('www_app');
       } catch (err) {
         threw = true;
         expect(err.message).to.equal('mkdir failed');
@@ -1405,7 +1502,7 @@ describe('appReconciler tests', () => {
 
     it('does nothing when the container is already running', async () => {
       stubs.dockerService.dockerContainerInspect.resolves({ State: { Running: true, Status: 'running', ExitCode: 0 } });
-      await appReconciler.reconcile('www_App');
+      await appReconciler.reconcile('www_app');
       expect(stubs.dockerService.appDockerStart.called).to.be.false;
     });
 
@@ -1413,19 +1510,28 @@ describe('appReconciler tests', () => {
       // production shape of a genuinely-missing container: dockerContainerInspect
       // resolves null (docker's own container list has no match).
       stubs.dockerService.dockerContainerInspect.resolves(null); // docker's list has no match: confirmed absent
-      await appReconciler.reconcile('www_App');
-      expect(stubs.appTamperingDetectionService.recordEvent.calledWithMatch('App', 'container_vanished')).to.be.true;
-      expect(stubs.containerHealthMonitor.recreateMissingContainers.calledOnceWith('www_App')).to.be.true;
+      await appReconciler.reconcile('www_app');
+      expect(stubs.appTamperingDetectionService.recordEvent.calledWithMatch('app', 'container_vanished')).to.be.true;
+      expect(stubs.containerHealthMonitor.recreateMissingContainers.calledOnceWith('www_app')).to.be.true;
       expect(stubs.dockerService.appDockerStart.called).to.be.false;
+      // containerHealthMonitor stays stubbed (it builds containers), so read back the
+      // installed row it was handed and ask it what the real recreate asks: the app
+      // NAME it recreates under, the IDENTITY its containers are named from, and the
+      // inner spec, which it re-projects through deploymentProvider.installedDeployments.
+      const [, handedRow] = stubs.containerHealthMonitor.recreateMissingContainers.firstCall.args;
+      expect(handedRow.name, 'the recreate reads instantiated.name').to.equal('app');
+      expect(handedRow.identity ?? handedRow.name, 'and instantiated.identity ?? name').to.equal('app');
+      expect(handedRow.isEncrypted, 'resolveInstantiatedSpec branches on isEncrypted').to.equal(false);
+      assertAnswers(handedRow.spec, ['linkedAppNames', 'dependencyEntries']);
     });
 
     it('removes a NEVER-RAN app when recreation fails (fresh-install rollback)', async () => {
       stubs.dockerService.dockerContainerInspect.resolves(null); // docker's list has no match: confirmed absent
       stubs.containerHealthMonitor.recreateMissingContainers.rejects(new Error('boom'));
       // getState defaults to null -> never ran here -> removable
-      await appReconciler.reconcile('www_App');
-      expect(stubs.appTamperingDetectionService.recordEvent.calledWithMatch('App', 'recreation_failed')).to.be.true;
-      expect(stubs.appUninstaller.uninstallApplication.calledOnceWith('App', { broadcastRemoval: true })).to.be.true;
+      await appReconciler.reconcile('www_app');
+      expect(stubs.appTamperingDetectionService.recordEvent.calledWithMatch('app', 'recreation_failed')).to.be.true;
+      expect(stubs.appUninstaller.uninstallApplication.calledOnceWith('app', { broadcastRemoval: true })).to.be.true;
     });
 
     // §14.5: a component that has run here before must NEVER be destroyed on a
@@ -1435,9 +1541,9 @@ describe('appReconciler tests', () => {
       stubs.dockerService.dockerContainerInspect.resolves(null); // docker's list has no match: confirmed absent
       stubs.containerHealthMonitor.recreateMissingContainers.rejects(new Error('image not found'));
       stubs.appsRuntimeState.getState.resolves({ hasSuccessfullyStarted: true });
-      await appReconciler.reconcile('www_App');
+      await appReconciler.reconcile('www_app');
       expect(stubs.appUninstaller.uninstallApplication.called, 'must NOT destroy an app that has run here').to.be.false;
-      expect(stubs.appsRuntimeState.recordRestart.calledWith('www_App')).to.be.true;
+      expect(stubs.appsRuntimeState.recordRestart.calledWith('www_app')).to.be.true;
     });
 
     // A recreate provision against a black-holed registry (dead IP behind a stale
@@ -1448,8 +1554,8 @@ describe('appReconciler tests', () => {
       stubs.dockerService.dockerContainerInspect.resolves(null); // docker's list has no match: confirmed absent
       stubs.containerHealthMonitor.recreateMissingContainers.returns(new Promise(() => {})); // black hole
       stubs.appsRuntimeState.getState.resolves({ hasSuccessfullyStarted: true });
-      await appReconciler.reconcile('www_App'); // must terminate at the cap, not hang
-      expect(stubs.appsRuntimeState.recordRestart.calledWith('www_App'), 'the cap is a recreate failure - the proven app is kept and paced').to.be.true;
+      await appReconciler.reconcile('www_app'); // must terminate at the cap, not hang
+      expect(stubs.appsRuntimeState.recordRestart.calledWith('www_app'), 'the cap is a recreate failure - the proven app is kept and paced').to.be.true;
       const opts = stubs.containerHealthMonitor.recreateMissingContainers.firstCall.args[2];
       expect(opts.abortSignal, 'the provision must receive the abort signal so the pull ends too').to.be.instanceOf(AbortSignal);
       expect(opts.abortSignal.aborted).to.be.true;
@@ -1460,8 +1566,8 @@ describe('appReconciler tests', () => {
       stubs.dockerService.dockerContainerInspect.resolves(null); // docker's list has no match: confirmed absent
       stubs.containerHealthMonitor.recreateMissingContainers.rejects(new Error('image not found'));
       stubs.appsRuntimeState.getState.resolves({ hasSuccessfullyStarted: true });
-      await appReconciler.reconcile('www_App');
-      expect(publishSpy.calledWithMatch('reconciler:actuated', sinon.match({ identifier: 'www_App', action: 'recreateFailedKept' }))).to.be.true;
+      await appReconciler.reconcile('www_app');
+      expect(publishSpy.calledWithMatch('reconciler:actuated', sinon.match({ identifier: 'www_app', action: 'recreateFailedKept' }))).to.be.true;
     });
 
     // While the install converge is open, the recreate-failure verdict for a
@@ -1474,9 +1580,9 @@ describe('appReconciler tests', () => {
       stubs.dockerService.dockerContainerInspect.resolves(null); // docker's list has no match: confirmed absent
       stubs.containerHealthMonitor.recreateMissingContainers.rejects(new Error('pull failed'));
       // getState defaults to null -> never proven
-      const result = await appReconciler.awaitConvergence(['www_App']);
+      const result = await appReconciler.awaitConvergence(['www_app']);
       expect(result.converged).to.be.false;
-      expect(result.failed).to.deep.equal(['www_App']);
+      expect(result.failed).to.deep.equal(['www_app']);
       expect(stubs.appUninstaller.uninstallApplication.called, 'the installer rollback owns the teardown, not the reconcile pass').to.be.false;
     });
 
@@ -1485,7 +1591,7 @@ describe('appReconciler tests', () => {
       const unreachable = Object.assign(new Error('dial tcp: connection refused'), { registryErrorClass: 'transient' });
       stubs.containerHealthMonitor.recreateMissingContainers.rejects(unreachable);
       // getState defaults to null -> never proven
-      const result = await appReconciler.awaitConvergence(['www_App']);
+      const result = await appReconciler.awaitConvergence(['www_app']);
       expect(result.converged, 'a could-not-ask answer must not draw the rollback verdict').to.be.true;
       expect(result.failed).to.deep.equal([]);
       expect(stubs.appUninstaller.uninstallApplication.called).to.be.false;
@@ -1494,10 +1600,10 @@ describe('appReconciler tests', () => {
     it('does not record a restart when the start finds the container removed mid-pass (out-of-band rm)', async () => {
       stubs.dockerService.dockerContainerInspect.resolves({ State: { Running: false, Status: 'exited', ExitCode: 137 } });
       stubs.appsRuntimeState.getState.resolves({ hasEverStarted: true, hasSuccessfullyStarted: true });
-      const gone = new Error('Container www_App not found');
+      const gone = new Error('Container www_app not found');
       gone.code = 'ENOCONTAINER';
       stubs.dockerService.appDockerStart.rejects(gone);
-      await appReconciler.reconcile('www_App');
+      await appReconciler.reconcile('www_app');
       expect(stubs.appsRuntimeState.recordRestart.called, 'a removal mid-pass is not a crash - it must never advance the ladder').to.be.false;
     });
 
@@ -1508,7 +1614,7 @@ describe('appReconciler tests', () => {
       // a deferred removal means the app is still there - the reconcile must retry, not assume it's gone
       stubs.appUninstaller.uninstallApplication.resolves({ status: UninstallStatus.DEFERRED, reason: 'busy' });
 
-      await appReconciler.reconcile('www_App');
+      await appReconciler.reconcile('www_app');
       expect(stubs.appUninstaller.uninstallApplication.callCount).to.equal(1);
 
       clock.tick(6000); // past MANAGED_RETRY_MS
@@ -1526,10 +1632,10 @@ describe('appReconciler tests', () => {
     it('defers when inspect fails but the container appears in the docker list (transient inspect failure)', async () => {
       stubs.dockerService.dockerContainerInspect.rejects(new Error('socket hang up'));
       stubs.dockerService.dockerListContainers.resolves([
-        { Names: ['/fluxwww_App'], State: 'running' }, // the "missing" container, alive
-        { Names: ['/fluxother_Other'], State: 'running' },
+        { Names: ['/fluxwww_app'], State: 'running' }, // the "missing" container, alive
+        { Names: ['/fluxother_other'], State: 'running' },
       ]);
-      await appReconciler.reconcile('www_App');
+      await appReconciler.reconcile('www_app');
       expect(stubs.containerHealthMonitor.recreateMissingContainers.called, 'must not recreate an existing container').to.be.false;
       expect(stubs.appTamperingDetectionService.recordEvent.called, 'must not write tamper events on a transient failure').to.be.false;
       expect(stubs.appUninstaller.uninstallApplication.called).to.be.false;
@@ -1548,7 +1654,7 @@ describe('appReconciler tests', () => {
       stubs.dockerService.dockerContainerInspect.resolves(null); // docker's list has no match: confirmed absent
       stubs.containerHealthMonitor.recreateMissingContainers.rejects(new Error('409 Conflict: name already in use'));
       stubs.dockerService.getDockerContainer.resolves({ Id: 'abc123' }); // exists at re-check
-      await appReconciler.reconcile('www_App');
+      await appReconciler.reconcile('www_app');
       expect(stubs.appUninstaller.uninstallApplication.called, 'must not remove - the container exists').to.be.false;
       const recordedFailure = stubs.appTamperingDetectionService.recordEvent.getCalls()
         .some((c) => c.args[1] === 'recreation_failed');
@@ -1562,7 +1668,7 @@ describe('appReconciler tests', () => {
       connErr.code = 'ENOENT';
       stubs.dockerService.dockerContainerInspect.rejects(connErr);
       stubs.dockerService.dockerListContainers.rejects(connErr); // probe: docker is down
-      await appReconciler.reconcile('www_App');
+      await appReconciler.reconcile('www_app');
       expect(stubs.containerHealthMonitor.recreateMissingContainers.called).to.be.false;
       expect(stubs.appUninstaller.uninstallApplication.called).to.be.false;
       expect(stubs.appTamperingDetectionService.recordEvent.called).to.be.false;
@@ -1570,39 +1676,39 @@ describe('appReconciler tests', () => {
     });
 
     it('does NOT start a g: component until a controller elects it', async () => {
-      localSpec = { name: 'App', version: 4, compose: [{ name: 'db', containerData: 'g:/data' }] };
-      await appReconciler.reconcile('db_App'); // controllerDesired unset
+      await installApp(await v9App('app', { db: ACTIVE_STANDBY }));
+      await appReconciler.reconcile('db_app'); // controllerDesired unset
       expect(stubs.dockerService.appDockerStart.called).to.be.false;
     });
 
     it('exposes the controller verdict so the election can see a promotion already in effect', () => {
-      expect(appReconciler.getControllerDesired('db_App')).to.equal(undefined);
-      appReconciler.setControllerDesired('db_App', 'running', 'masterSlave primary (synced)');
-      expect(appReconciler.getControllerDesired('db_App')).to.equal('running');
-      appReconciler.clearControllerDesired('db_App');
-      expect(appReconciler.getControllerDesired('db_App')).to.equal(undefined);
+      expect(appReconciler.getControllerDesired('db_app')).to.equal(undefined);
+      appReconciler.setControllerDesired('db_app', 'running', 'masterSlave primary (synced)');
+      expect(appReconciler.getControllerDesired('db_app')).to.equal('running');
+      appReconciler.clearControllerDesired('db_app');
+      expect(appReconciler.getControllerDesired('db_app')).to.equal(undefined);
     });
 
     it('a same-state controller verdict repeat is a no-op; only a transition re-publishes (decider poll ticks)', () => {
       const publishSpy = sinon.spy(fluxEventBus, 'publish');
       const desiredEvents = () => publishSpy.getCalls().filter((c) => c.args[0] === 'reconciler:desiredChanged').length;
 
-      appReconciler.setControllerDesired('db_App', 'running', 'syncthing syncFirst: ensure-running');
-      appReconciler.setControllerDesired('db_App', 'running', 'syncthing syncFirst: ensure-running');
+      appReconciler.setControllerDesired('db_app', 'running', 'syncthing syncFirst: ensure-running');
+      appReconciler.setControllerDesired('db_app', 'running', 'syncthing syncFirst: ensure-running');
       expect(desiredEvents(), 'the repeat must not re-publish/re-enqueue - a syncing app re-asserts every ~3s').to.equal(1);
 
-      appReconciler.setControllerDesired('db_App', 'stopped', 'decider stop');
+      appReconciler.setControllerDesired('db_app', 'stopped', 'decider stop');
       expect(desiredEvents(), 'a genuine transition still publishes').to.equal(2);
     });
 
     it('starts a g: component once a controller sets it running', async () => {
-      localSpec = { name: 'App', version: 4, compose: [{ name: 'db', containerData: 'g:/data' }] };
+      await installApp(await v9App('app', { db: ACTIVE_STANDBY }));
       // set desired without triggering the workqueue (boot gate closed -> enqueue held)
       stubs.globalState.bootContainerStateSettled = false;
-      appReconciler.setControllerDesired('db_App', 'running', 'test');
+      appReconciler.setControllerDesired('db_app', 'running', 'test');
       stubs.globalState.bootContainerStateSettled = true;
-      await appReconciler.reconcile('db_App');
-      expect(stubs.dockerService.appDockerStart.calledOnceWith('db_App')).to.be.true;
+      await appReconciler.reconcile('db_app');
+      expect(stubs.dockerService.appDockerStart.calledOnceWith('db_app')).to.be.true;
     });
 
     // The controller verdict is sampled at reconcile entry, but the syncthing
@@ -1611,27 +1717,27 @@ describe('appReconciler tests', () => {
     // (mount-path recreation, DB reads). The verdict must therefore be re-read at
     // actuation time - starting onto a folder mid-wipe corrupts the fresh sync.
     it('aborts the start when the controller verdict flips to stopped mid-reconcile', async () => {
-      localSpec = { name: 'App', version: 4, compose: [{ name: 'db', containerData: 'g:/data' }] };
+      await installApp(await v9App('app', { db: ACTIVE_STANDBY }));
       stubs.globalState.bootContainerStateSettled = false;
-      appReconciler.setControllerDesired('db_App', 'running', 'test');
+      appReconciler.setControllerDesired('db_app', 'running', 'test');
       stubs.globalState.bootContainerStateSettled = true;
       // decider stop+wipe lands during the mount-path await
       stubs.appVolumeService.ensureMountSourcesExist.callsFake(async () => {
-        appReconciler.setControllerDesired('db_App', 'stopped', 'decider stop+wipe');
+        appReconciler.setControllerDesired('db_app', 'stopped', 'decider stop+wipe');
       });
-      await appReconciler.reconcile('db_App');
+      await appReconciler.reconcile('db_app');
       expect(stubs.dockerService.appDockerStart.called).to.be.false;
     });
 
     it('aborts the start when the controller verdict is cleared mid-reconcile (uninstall seam)', async () => {
-      localSpec = { name: 'App', version: 4, compose: [{ name: 'db', containerData: 'g:/data' }] };
+      await installApp(await v9App('app', { db: ACTIVE_STANDBY }));
       stubs.globalState.bootContainerStateSettled = false;
-      appReconciler.setControllerDesired('db_App', 'running', 'test');
+      appReconciler.setControllerDesired('db_app', 'running', 'test');
       stubs.globalState.bootContainerStateSettled = true;
       stubs.appVolumeService.ensureMountSourcesExist.callsFake(async () => {
-        appReconciler.clearControllerDesired('db_App');
+        appReconciler.clearControllerDesired('db_app');
       });
-      await appReconciler.reconcile('db_App');
+      await appReconciler.reconcile('db_app');
       expect(stubs.dockerService.appDockerStart.called).to.be.false;
     });
 
@@ -1639,12 +1745,12 @@ describe('appReconciler tests', () => {
       // uninstall fires appUninstaller's component-removed seam -> serviceManager
       // wires it to clearControllerDesired: a reinstalled g: component must await a
       // fresh election rather than inherit the pre-uninstall verdict
-      localSpec = { name: 'App', version: 4, compose: [{ name: 'db', containerData: 'g:/data' }] };
+      await installApp(await v9App('app', { db: ACTIVE_STANDBY }));
       stubs.globalState.bootContainerStateSettled = false;
-      appReconciler.setControllerDesired('db_App', 'running', 'test');
+      appReconciler.setControllerDesired('db_app', 'running', 'test');
       stubs.globalState.bootContainerStateSettled = true;
-      appReconciler.clearControllerDesired('db_App');
-      await appReconciler.reconcile('db_App');
+      appReconciler.clearControllerDesired('db_app');
+      await appReconciler.reconcile('db_app');
       expect(stubs.dockerService.appDockerStart.called).to.be.false;
       expect(stubs.dockerService.appDockerStop.called).to.be.false;
     });
@@ -1652,13 +1758,13 @@ describe('appReconciler tests', () => {
     // the actuation half of the masterSlave standby path: the decider sets a running
     // g: component desired-stopped, the reconciler is what actually stops Docker.
     it('stops a running g: component a controller has set stopped (masterSlave standby)', async () => {
-      localSpec = { name: 'App', version: 4, compose: [{ name: 'db', containerData: 'g:/data' }] };
+      await installApp(await v9App('app', { db: ACTIVE_STANDBY }));
       stubs.dockerService.dockerContainerInspect.resolves({ State: { Running: true, Status: 'running', ExitCode: 0 } });
       stubs.globalState.bootContainerStateSettled = false;
-      appReconciler.setControllerDesired('db_App', 'stopped', 'masterSlave standby');
+      appReconciler.setControllerDesired('db_app', 'stopped', 'masterSlave standby');
       stubs.globalState.bootContainerStateSettled = true;
-      await appReconciler.reconcile('db_App');
-      expect(stubs.dockerService.appDockerStop.calledOnceWith('db_App')).to.be.true;
+      await appReconciler.reconcile('db_app');
+      expect(stubs.dockerService.appDockerStop.calledOnceWith('db_app')).to.be.true;
       expect(stubs.dockerService.appDockerStart.called).to.be.false;
     });
 
@@ -1668,35 +1774,35 @@ describe('appReconciler tests', () => {
     // alone - stopping it here would bounce every running syncthing app on every
     // FluxOS restart. The decider re-derives intent within its next cycle.
     it('leaves a running g: component alone when no controller has spoken yet', async () => {
-      localSpec = { name: 'App', version: 4, compose: [{ name: 'db', containerData: 'g:/data' }] };
+      await installApp(await v9App('app', { db: ACTIVE_STANDBY }));
       stubs.dockerService.dockerContainerInspect.resolves({ State: { Running: true, Status: 'running', ExitCode: 0 } });
-      await appReconciler.reconcile('db_App'); // controllerDesired unset
+      await appReconciler.reconcile('db_app'); // controllerDesired unset
       expect(stubs.dockerService.appDockerStop.called).to.be.false;
       expect(stubs.dockerService.appDockerStart.called).to.be.false;
     });
 
     it('leaves a running r: component alone when no controller has spoken yet (FluxOS-restart case)', async () => {
-      localSpec = { name: 'App', version: 4, compose: [{ name: 'web', containerData: 'r:/data' }] };
+      await installApp(await v9App('app', { web: SYNC_FIRST }));
       stubs.dockerService.dockerContainerInspect.resolves({ State: { Running: true, Status: 'running', ExitCode: 0 } });
-      await appReconciler.reconcile('web_App'); // controllerDesired unset
+      await appReconciler.reconcile('web_app'); // controllerDesired unset
       expect(stubs.dockerService.appDockerStop.called).to.be.false;
       expect(stubs.dockerService.appDockerStart.called).to.be.false;
     });
 
-    // Plain sync replicates data but no decider owns its run-state: a stopped
+    // plain sync replicates data but no decider owns its run-state: a stopped
     // s: component must restart like any normal component, with no controller
     // opinion required - holding it would leave a crashed one down forever.
     it('starts a stopped s: component without any controller opinion', async () => {
-      localSpec = { name: 'App', version: 4, compose: [{ name: 'cache', containerData: 's:/data' }] };
+      await installApp(await v9App('app', { cache: PLAIN_SYNC }));
       stubs.dockerService.dockerContainerInspect.resolves({ State: { Running: false, Status: 'exited', ExitCode: 137 } });
-      await appReconciler.reconcile('cache_App'); // controllerDesired unset
-      expect(stubs.dockerService.appDockerStart.calledOnceWith('cache_App')).to.be.true;
+      await appReconciler.reconcile('cache_app'); // controllerDesired unset
+      expect(stubs.dockerService.appDockerStart.calledOnceWith('cache_app')).to.be.true;
     });
 
     it('leaves a running s: component running (no controller involvement either way)', async () => {
-      localSpec = { name: 'App', version: 4, compose: [{ name: 'cache', containerData: 's:/data' }] };
+      await installApp(await v9App('app', { cache: PLAIN_SYNC }));
       stubs.dockerService.dockerContainerInspect.resolves({ State: { Running: true, Status: 'running', ExitCode: 0 } });
-      await appReconciler.reconcile('cache_App');
+      await appReconciler.reconcile('cache_app');
       expect(stubs.dockerService.appDockerStop.called).to.be.false;
       expect(stubs.dockerService.appDockerStart.called).to.be.false;
     });
@@ -1709,28 +1815,28 @@ describe('appReconciler tests', () => {
       // The deciders pass the bare identifier; this engine stores and reads the
       // verdict under exactly that key. It used to strip a `flux` prefix first,
       // which for a component genuinely named `fluxdb` filed the verdict under
-      // `db_App` — another component's key.
-      localSpec = { name: 'App', version: 4, compose: [{ name: 'fluxdb', containerData: 'g:/data' }] };
+      // `db_app` — another component's key.
+      await installApp(await v9App('app', { fluxdb: ACTIVE_STANDBY }));
       stubs.globalState.bootContainerStateSettled = false;
-      appReconciler.setControllerDesired('fluxdb_App', 'running', 'syncthing synced');
+      appReconciler.setControllerDesired('fluxdb_app', 'running', 'syncthing synced');
       stubs.globalState.bootContainerStateSettled = true;
-      await appReconciler.reconcile('fluxdb_App');
-      expect(stubs.dockerService.appDockerStart.calledOnceWith('fluxdb_App')).to.be.true;
+      await appReconciler.reconcile('fluxdb_app');
+      expect(stubs.dockerService.appDockerStart.calledOnceWith('fluxdb_app')).to.be.true;
     });
 
     it('defers while an app-scoped operation holds the parent app lease', async () => {
       // any app-scoped lease on the parent app (here: install) owns the whole app's
       // runtime - a reconcile of any component must not actuate. Per-app, not node-wide.
-      operationRegistry.acquire('App', 'install', 'test');
-      await appReconciler.reconcile('www_App');
+      operationRegistry.acquire('app', 'install', 'test');
+      await appReconciler.reconcile('www_app');
       expect(stubs.dockerService.appDockerStart.called).to.be.false;
       expect(stubs.dockerService.appDockerStop.called).to.be.false;
     });
 
     it('does NOT defer when the lease is on a DIFFERENT app (no node-wide freeze)', async () => {
-      operationRegistry.acquire('OtherApp', 'install', 'test');
-      await appReconciler.reconcile('www_App');
-      expect(stubs.dockerService.appDockerStart.calledOnceWith('www_App')).to.be.true;
+      operationRegistry.acquire('otherapp', 'install', 'test');
+      await appReconciler.reconcile('www_app');
+      expect(stubs.dockerService.appDockerStart.calledOnceWith('www_app')).to.be.true;
     });
 
     // The backup/restore lease: while the parent app holds a backup/restore lease
@@ -1744,8 +1850,8 @@ describe('appReconciler tests', () => {
       // reconciler stands down while one runs to avoid racing construction.
       ['install', 'remove', 'redeploy', 'rebuild', 'reconcile'].forEach((type) => {
         it(`defers while a ${type} lease is held on the app`, async () => {
-          operationRegistry.acquire('App', type, 'test');
-          await appReconciler.reconcile('www_App');
+          operationRegistry.acquire('app', type, 'test');
+          await appReconciler.reconcile('www_app');
           expect(stubs.dockerService.appDockerStart.called).to.be.false;
           expect(stubs.appsRuntimeState.recordRestart.called).to.be.false;
         });
@@ -1756,9 +1862,9 @@ describe('appReconciler tests', () => {
       // The lease alone must never strand a component.
       ['backup', 'restore'].forEach((type) => {
         it(`keeps actuating while a ${type} lease is held (run-state is held via drive, not the lease)`, async () => {
-          operationRegistry.acquire('App', type, 'test');
-          await appReconciler.reconcile('www_App'); // stopped, should-run, no operation hold
-          expect(stubs.dockerService.appDockerStart.calledOnceWith('www_App')).to.be.true;
+          operationRegistry.acquire('app', type, 'test');
+          await appReconciler.reconcile('www_app'); // stopped, should-run, no operation hold
+          expect(stubs.dockerService.appDockerStart.calledOnceWith('www_app')).to.be.true;
         });
       });
 
@@ -1767,34 +1873,34 @@ describe('appReconciler tests', () => {
       // container (the desired-false short-circuit runs before the recreate path),
       // so it cannot race the volume work.
       it('holds a driven component stopped and does not recreate it when missing during a backup', async () => {
-        operationRegistry.acquire('App', 'backup', 'test');
+        operationRegistry.acquire('app', 'backup', 'test');
         stubs.dockerService.dockerContainerInspect.resolves(null); // docker's list has no match: confirmed absent
-        await appReconciler.drive(['www_App'], 'stopped');
+        await appReconciler.drive(['www_app'], 'stopped');
         expect(stubs.dockerService.appDockerStart.called).to.be.false;
         expect(stubs.containerHealthMonitor.recreateMissingContainers.called).to.be.false;
         expect(stubs.appUninstaller.uninstallApplication.called).to.be.false;
       });
 
       it('enforces desired state again once a construction lease is released', async () => {
-        operationRegistry.acquire('App', 'install', 'test');
-        await appReconciler.reconcile('www_App');
+        operationRegistry.acquire('app', 'install', 'test');
+        await appReconciler.reconcile('www_app');
         expect(stubs.dockerService.appDockerStart.called).to.be.false; // held
 
-        operationRegistry.release('App'); // lease released
-        await appReconciler.reconcile('www_App');
-        expect(stubs.dockerService.appDockerStart.calledOnceWith('www_App')).to.be.true;
+        operationRegistry.release('app'); // lease released
+        await appReconciler.reconcile('www_app');
+        expect(stubs.dockerService.appDockerStart.calledOnceWith('www_app')).to.be.true;
       });
     });
 
     it('defers while the component holds a stopping lease (transient stop)', async () => {
-      operationRegistry.acquire('fluxwww_App', 'stopping', 'test'); // prefixed docker name, as dockerService acquires it
-      await appReconciler.reconcile('www_App');
+      operationRegistry.acquire('fluxwww_app', 'stopping', 'test'); // prefixed docker name, as dockerService acquires it
+      await appReconciler.reconcile('www_app');
       expect(stubs.dockerService.appDockerStart.called).to.be.false;
     });
 
     it('backs off instead of restarting when a wait is pending', async () => {
       stubs.appsRuntimeState.restartWaitMs.resolves(30 * 1000);
-      await appReconciler.reconcile('www_App');
+      await appReconciler.reconcile('www_app');
       expect(stubs.dockerService.appDockerStart.called).to.be.false;
       expect(stubs.appsRuntimeState.recordRestart.called).to.be.false;
     });
@@ -1807,7 +1913,7 @@ describe('appReconciler tests', () => {
       const clock = sinon.useFakeTimers({ toFake: ['setTimeout'] });
       stubs.dockerService.appDockerStart.rejects(new Error('failed to attach network'));
 
-      await appReconciler.reconcile('www_App'); // must not throw
+      await appReconciler.reconcile('www_app'); // must not throw
 
       expect(stubs.dockerService.appDockerStart.callCount).to.equal(1);
       clock.tick(6000); // past the near-term retry
@@ -1820,9 +1926,9 @@ describe('appReconciler tests', () => {
 
     it('arms only the post-start verify glance after a successful start of a proven component — it observes, never re-actuates', async () => {
       const clock = sinon.useFakeTimers({ toFake: ['setTimeout'] });
-      stubs.appsRuntimeState.getState.withArgs('www_App').resolves({ hasSuccessfullyStarted: true });
+      stubs.appsRuntimeState.getState.withArgs('www_app').resolves({ hasSuccessfullyStarted: true });
 
-      await appReconciler.reconcile('www_App');
+      await appReconciler.reconcile('www_app');
       expect(stubs.dockerService.appDockerStart.callCount).to.equal(1);
 
       // the container is up (and attached — the benign default) when the verify
@@ -1839,7 +1945,7 @@ describe('appReconciler tests', () => {
     it('schedules exactly the first-run proof pass after a successful start of an unproven component', async () => {
       const clock = sinon.useFakeTimers({ toFake: ['setTimeout'] });
 
-      await appReconciler.reconcile('www_App');
+      await appReconciler.reconcile('www_app');
       expect(stubs.dockerService.appDockerStart.callCount).to.equal(1);
 
       // the container is up when the proof pass lands: it observes and latches,
@@ -1850,7 +1956,7 @@ describe('appReconciler tests', () => {
       clock.tick(60 * 1000);
       await new Promise((resolve) => { setImmediate(() => { setImmediate(resolve); }); });
       expect(stubs.dockerService.appDockerStart.callCount, 'the proof pass observes, never re-starts').to.equal(1);
-      expect(stubs.appsRuntimeState.setSuccessfullyStarted.calledWith('www_App')).to.be.true;
+      expect(stubs.appsRuntimeState.setSuccessfullyStarted.calledWith('www_app')).to.be.true;
       clock.restore();
     });
 
@@ -1859,11 +1965,11 @@ describe('appReconciler tests', () => {
     // restart (recording would advance the backoff ladder for a collision that never ran).
     it('defers (retries, records no restart) when the start hits an in-flight transition', async () => {
       const clock = sinon.useFakeTimers({ toFake: ['setTimeout'] });
-      const held = new Error("fluxwww_App: a 'removing' container transition is in flight; deferring 'actuating'");
+      const held = new Error("fluxwww_app: a 'removing' container transition is in flight; deferring 'actuating'");
       held.code = 'ETRANSITIONHELD';
       stubs.dockerService.appDockerStart.rejects(held);
 
-      await appReconciler.reconcile('www_App'); // must not throw
+      await appReconciler.reconcile('www_app'); // must not throw
 
       expect(stubs.dockerService.appDockerStart.callCount).to.equal(1);
       expect(stubs.appsRuntimeState.recordRestart.called, 'a deferral is not an attempt — it must not touch the backoff ladder').to.be.false;
@@ -1881,8 +1987,8 @@ describe('appReconciler tests', () => {
           Running: false, Status: 'exited', ExitCode: 1, FinishedAt: finishedAt,
         },
       });
-      await appReconciler.reconcile('www_App');
-      sinon.assert.calledWithExactly(stubs.appsRuntimeState.restartWaitMs, 'www_App', { lastFinishedAtMs: Date.parse(finishedAt) });
+      await appReconciler.reconcile('www_app');
+      sinon.assert.calledWithExactly(stubs.appsRuntimeState.restartWaitMs, 'www_app', { lastFinishedAtMs: Date.parse(finishedAt) });
     });
 
     it('passes no death evidence for a container that never ran (docker zero FinishedAt)', async () => {
@@ -1891,8 +1997,8 @@ describe('appReconciler tests', () => {
           Running: false, Status: 'created', ExitCode: 0, FinishedAt: '0001-01-01T00:00:00Z',
         },
       });
-      await appReconciler.reconcile('www_App');
-      sinon.assert.calledWithExactly(stubs.appsRuntimeState.restartWaitMs, 'www_App', { lastFinishedAtMs: null });
+      await appReconciler.reconcile('www_app');
+      sinon.assert.calledWithExactly(stubs.appsRuntimeState.restartWaitMs, 'www_app', { lastFinishedAtMs: null });
     });
   });
 
@@ -1907,12 +2013,12 @@ describe('appReconciler tests', () => {
     // key every desired-state input shares — and the reconciler re-prefixes for the
     // on-disk wipe path, which is a docker-namespaced directory.
     it('wipes local appdata (prefixed path) and does not start, on a clear request', async () => {
-      localSpec = { name: 'App', version: 4, compose: [{ name: 'db', containerData: 'g:/data' }] };
+      await installApp(await v9App('app', { db: ACTIVE_STANDBY }));
       stubs.globalState.bootContainerStateSettled = false;
-      appReconciler.requestStopAndClearData('db_App', 'syncthing first-run');
+      appReconciler.requestStopAndClearData('db_app', 'syncthing first-run');
       stubs.globalState.bootContainerStateSettled = true;
-      await appReconciler.reconcile('db_App');
-      expect(stubs.dockerOperations.appDeleteDataInMountPoint.calledOnceWith('fluxdb_App')).to.be.true;
+      await appReconciler.reconcile('db_app');
+      expect(stubs.dockerOperations.appDeleteDataInMountPoint.calledOnceWith('fluxdb_app')).to.be.true;
       expect(stubs.dockerService.appDockerStart.called).to.be.false;
     });
 
@@ -1920,54 +2026,54 @@ describe('appReconciler tests', () => {
     // pending clear is resolved before the run decision in the SAME single-flight,
     // so a start can never race the wipe.
     it('never starts while a clear is pending, even if the controller says running', async () => {
-      localSpec = { name: 'App', version: 4, compose: [{ name: 'db', containerData: 'g:/data' }] };
+      await installApp(await v9App('app', { db: ACTIVE_STANDBY }));
       stubs.globalState.bootContainerStateSettled = false;
-      appReconciler.requestStopAndClearData('db_App', 'syncthing first-run');
-      appReconciler.setControllerDesired('fluxdb_App', 'running', 'contrived contradiction');
+      appReconciler.requestStopAndClearData('db_app', 'syncthing first-run');
+      appReconciler.setControllerDesired('fluxdb_app', 'running', 'contrived contradiction');
       stubs.globalState.bootContainerStateSettled = true;
-      await appReconciler.reconcile('db_App');
+      await appReconciler.reconcile('db_app');
       expect(stubs.dockerOperations.appDeleteDataInMountPoint.called).to.be.true;
       expect(stubs.dockerService.appDockerStart.called).to.be.false;
     });
 
     it('stops a running container before wiping (no rm -rf under a live container)', async () => {
-      localSpec = { name: 'App', version: 4, compose: [{ name: 'db', containerData: 'g:/data' }] };
+      await installApp(await v9App('app', { db: ACTIVE_STANDBY }));
       stubs.dockerService.dockerContainerInspect.resolves({ State: { Running: true, Status: 'running', ExitCode: 0 } });
       stubs.globalState.bootContainerStateSettled = false;
-      appReconciler.requestStopAndClearData('db_App', 'syncthing reset');
+      appReconciler.requestStopAndClearData('db_app', 'syncthing reset');
       stubs.globalState.bootContainerStateSettled = true;
-      await appReconciler.reconcile('db_App');
-      expect(stubs.dockerService.appDockerStop.calledWith('db_App')).to.be.true;
+      await appReconciler.reconcile('db_app');
+      expect(stubs.dockerService.appDockerStop.calledWith('db_app')).to.be.true;
       sinon.assert.callOrder(stubs.dockerService.appDockerStop, stubs.dockerOperations.appDeleteDataInMountPoint);
     });
 
     it('is one-shot: wipes first, then the next reconcile starts once the verdict is running', async () => {
-      localSpec = { name: 'App', version: 4, compose: [{ name: 'db', containerData: 'g:/data' }] };
+      await installApp(await v9App('app', { db: ACTIVE_STANDBY }));
       stubs.globalState.bootContainerStateSettled = false;
-      appReconciler.requestStopAndClearData('db_App', 'syncthing first-run');
+      appReconciler.requestStopAndClearData('db_app', 'syncthing first-run');
       // sync layer has already confirmed a source and elected running; the pending
       // clear must still win the first pass
-      appReconciler.setControllerDesired('db_App', 'running', 'syncthing synced');
+      appReconciler.setControllerDesired('db_app', 'running', 'syncthing synced');
       stubs.globalState.bootContainerStateSettled = true;
 
-      await appReconciler.reconcile('db_App'); // clear wins -> wipes, no start
+      await appReconciler.reconcile('db_app'); // clear wins -> wipes, no start
       expect(stubs.dockerOperations.appDeleteDataInMountPoint.calledOnce).to.be.true;
       expect(stubs.dockerService.appDockerStart.called).to.be.false;
 
-      await appReconciler.reconcile('db_App'); // flag cleared -> now starts
-      expect(stubs.dockerService.appDockerStart.calledOnceWith('db_App')).to.be.true;
+      await appReconciler.reconcile('db_app'); // flag cleared -> now starts
+      expect(stubs.dockerService.appDockerStart.calledOnceWith('db_app')).to.be.true;
       expect(stubs.dockerOperations.appDeleteDataInMountPoint.calledOnce).to.be.true; // no second wipe
     });
 
     it('keys the clear per-component (clearing one app does not wipe another)', async () => {
       stubs.globalState.bootContainerStateSettled = false;
-      appReconciler.requestStopAndClearData('db_App', 'reset db');
-      appReconciler.setControllerDesired('web_Other', 'running', 'synced');
+      appReconciler.requestStopAndClearData('db_app', 'reset db');
+      appReconciler.setControllerDesired('web_other', 'running', 'synced');
       stubs.globalState.bootContainerStateSettled = true;
-      localSpec = { name: 'Other', version: 4, compose: [{ name: 'web', containerData: 'r:/data' }] };
-      await appReconciler.reconcile('web_Other');
+      await installApp(await v9App('other', { web: SYNC_FIRST }));
+      await appReconciler.reconcile('web_other');
       expect(stubs.dockerOperations.appDeleteDataInMountPoint.called).to.be.false;
-      expect(stubs.dockerService.appDockerStart.calledOnceWith('web_Other')).to.be.true;
+      expect(stubs.dockerService.appDockerStart.calledOnceWith('web_other')).to.be.true;
     });
 
     // A failed stop/wipe (busy mount, fs error, docker blip) is the one actuation
@@ -1975,13 +2081,13 @@ describe('appReconciler tests', () => {
     // own quick retry like the start path does.
     it('schedules its own retry when the wipe fails (not the hourly sweep)', async () => {
       const clock = sinon.useFakeTimers({ toFake: ['setTimeout'] });
-      localSpec = { name: 'App', version: 4, compose: [{ name: 'db', containerData: 'g:/data' }] };
+      await installApp(await v9App('app', { db: ACTIVE_STANDBY }));
       stubs.dockerOperations.appDeleteDataInMountPoint.rejects(new Error('mount busy'));
       stubs.globalState.bootContainerStateSettled = false;
-      appReconciler.requestStopAndClearData('db_App', 'syncthing first-run');
+      appReconciler.requestStopAndClearData('db_app', 'syncthing first-run');
       stubs.globalState.bootContainerStateSettled = true;
 
-      await appReconciler.reconcile('db_App'); // must not throw
+      await appReconciler.reconcile('db_app'); // must not throw
 
       expect(stubs.dockerOperations.appDeleteDataInMountPoint.callCount).to.equal(1);
       clock.tick(6000); // past the near-term retry (MANAGED_RETRY_MS)
@@ -1994,17 +2100,17 @@ describe('appReconciler tests', () => {
     // a later reconcile re-runs the (idempotent) wipe and can NEVER start the container
     // on un-wiped data, even when the controller already says running.
     it('keeps the clear pending on a failed wipe — never starts on un-wiped data', async () => {
-      localSpec = { name: 'App', version: 4, compose: [{ name: 'db', containerData: 'g:/data' }] };
+      await installApp(await v9App('app', { db: ACTIVE_STANDBY }));
       stubs.dockerOperations.appDeleteDataInMountPoint.rejects(new Error('mount busy'));
       stubs.globalState.bootContainerStateSettled = false;
-      appReconciler.requestStopAndClearData('db_App', 'syncthing first-run');
-      appReconciler.setControllerDesired('fluxdb_App', 'running', 'contrived contradiction');
+      appReconciler.requestStopAndClearData('db_app', 'syncthing first-run');
+      appReconciler.setControllerDesired('fluxdb_app', 'running', 'contrived contradiction');
       stubs.globalState.bootContainerStateSettled = true;
 
-      await appReconciler.reconcile('db_App'); // first attempt: wipe throws, caught
+      await appReconciler.reconcile('db_app'); // first attempt: wipe throws, caught
 
       stubs.dockerOperations.appDeleteDataInMountPoint.resetHistory();
-      await appReconciler.reconcile('db_App'); // flag still 'clear' -> re-wipes, no start
+      await appReconciler.reconcile('db_app'); // flag still 'clear' -> re-wipes, no start
       expect(stubs.dockerOperations.appDeleteDataInMountPoint.called).to.be.true;
       expect(stubs.dockerService.appDockerStart.called).to.be.false;
     });
@@ -2018,9 +2124,9 @@ describe('appReconciler tests', () => {
     it('stops monitoring when it stops a running operator-stopped component', async () => {
       stubs.appsRuntimeState.isOperatorStopped.resolves(true);
       stubs.dockerService.dockerContainerInspect.resolves({ State: { Running: true, Status: 'running', ExitCode: 0 } });
-      await appReconciler.reconcile('www_App');
-      expect(stubs.dockerService.appDockerStop.calledOnceWith('www_App')).to.be.true;
-      expect(stubs.appInspector.stopAppMonitoring.calledOnceWith('www_App', false)).to.be.true;
+      await appReconciler.reconcile('www_app');
+      expect(stubs.dockerService.appDockerStop.calledOnceWith('www_app')).to.be.true;
+      expect(stubs.appInspector.stopAppMonitoring.calledOnceWith('www_app', false)).to.be.true;
     });
   });
 
@@ -2031,33 +2137,33 @@ describe('appReconciler tests', () => {
   describe('drive (operation run-state hold)', () => {
     it('drives a running component to stopped and resolves converged', async () => {
       stubs.dockerService.dockerContainerInspect.resolves({ State: { Running: true, Status: 'running', ExitCode: 0 } });
-      const result = await appReconciler.drive(['www_App'], 'stopped');
+      const result = await appReconciler.drive(['www_app'], 'stopped');
       expect(result.converged).to.be.true;
-      expect(stubs.dockerService.appDockerStop.calledOnceWith('www_App')).to.be.true;
-      expect(stubs.appInspector.stopAppMonitoring.calledOnceWith('www_App', false)).to.be.true;
+      expect(stubs.dockerService.appDockerStop.calledOnceWith('www_app')).to.be.true;
+      expect(stubs.appInspector.stopAppMonitoring.calledOnceWith('www_app', false)).to.be.true;
       expect(stubs.dockerService.appDockerStart.called).to.be.false;
     });
 
     it('keeps a held component stopped on a later reconcile (transient hold persists)', async () => {
       stubs.dockerService.dockerContainerInspect.resolves({ State: { Running: false, Status: 'exited', ExitCode: 0 } });
-      await appReconciler.drive(['www_App'], 'stopped');
+      await appReconciler.drive(['www_app'], 'stopped');
       stubs.dockerService.appDockerStart.resetHistory();
-      await appReconciler.reconcile('www_App');
+      await appReconciler.reconcile('www_app');
       expect(stubs.dockerService.appDockerStart.called).to.be.false;
     });
 
     it('drives a held component back to running once the hold is released', async () => {
       stubs.dockerService.dockerContainerInspect.resolves({ State: { Running: false, Status: 'exited', ExitCode: 0 } });
-      await appReconciler.drive(['www_App'], 'stopped');
-      const result = await appReconciler.drive(['www_App'], 'running');
+      await appReconciler.drive(['www_app'], 'stopped');
+      const result = await appReconciler.drive(['www_app'], 'running');
       expect(result.converged).to.be.true;
-      expect(stubs.dockerService.appDockerStart.calledOnceWith('www_App')).to.be.true;
+      expect(stubs.dockerService.appDockerStart.calledOnceWith('www_app')).to.be.true;
     });
 
     it('settles a driveRunning to stopped when the operator lock still holds (no churn start)', async () => {
       stubs.appsRuntimeState.isOperatorStopped.resolves(true);
       stubs.dockerService.dockerContainerInspect.resolves({ State: { Running: false, Status: 'exited', ExitCode: 0 } });
-      const result = await appReconciler.drive(['www_App'], 'running');
+      const result = await appReconciler.drive(['www_app'], 'running');
       expect(result.converged).to.be.true;
       expect(stubs.dockerService.appDockerStart.called).to.be.false;
     });
@@ -2068,51 +2174,53 @@ describe('appReconciler tests', () => {
     // matching compose entry out of a multi-entry app, so a partial state (one component
     // crashed while siblings run) is enforced on the right component with the right type.
     it('selects the matching entry from a multi-component compose (partial state)', async () => {
-      localSpec = {
-        name: 'App',
-        version: 4,
-        compose: [
-          { name: 'www', containerData: '/data' },
-          { name: 'db', containerData: 'g:/data' }, // master/slave - needs a controller
-          { name: 'cache', containerData: '/cache' }, // plain - always policy
-        ],
-      };
+      await installApp(await v9App('app', {
+        www: {},
+        db: ACTIVE_STANDBY, // master/slave - needs a controller
+        cache: {}, // plain - always policy
+      }));
       // 'cache' is plain -> a stopped one is started (picked 'cache', not 'www' or g: 'db')
-      await appReconciler.reconcile('cache_App');
-      expect(stubs.dockerService.appDockerStart.calledOnceWith('cache_App')).to.be.true;
+      await appReconciler.reconcile('cache_app');
+      expect(stubs.dockerService.appDockerStart.calledOnceWith('cache_app')).to.be.true;
 
       // 'db' is g: -> NOT started without a controller (picked 'db', not plain 'cache'/'www')
       stubs.dockerService.appDockerStart.resetHistory();
-      await appReconciler.reconcile('db_App');
+      await appReconciler.reconcile('db_app');
       expect(stubs.dockerService.appDockerStart.called).to.be.false;
       expect(stubs.dockerService.appDockerStop.called).to.be.false;
     });
 
+    const installEnterpriseApp = async () => {
+      await installSealedV8App('app', { db: { containerData: 'g:/data' } });
+      expect(localInst.isEncrypted, 'the fixture must be a genuinely sealed app').to.be.true;
+    };
+
     it('acts on the decrypted spec, not the encrypted one, for an enterprise app', async () => {
-      // stored (encrypted) spec has no usable containerData; decryption reveals it is g:
-      localSpec = {
-        name: 'App', version: 8, enterprise: 'CIPHERTEXT', compose: [{ name: 'db', containerData: '' }],
-      };
-      stubs.deploymentProvider.buildDeployment.callsFake(async () => fakeDeployment(
-        { name: 'App', version: 8, compose: [{ name: 'db', containerData: 'g:/data' }] },
-      ));
-      await appReconciler.reconcile('db_App');
+      // The stored spec is ciphertext — nothing can read a containerData off it.
+      // Only the decrypted view says the component is activeStandby.
+      await installEnterpriseApp();
+      await appReconciler.reconcile('db_app');
       // treated as g: from the DECRYPTED containerData -> not started without a controller.
-      // If it had acted on the encrypted spec (containerData '') it would be a plain start.
+      // If it had acted on the encrypted spec it could not have known that at all.
       expect(stubs.dockerService.appDockerStart.called).to.be.false;
     });
 
     it('defers (does not act on encrypted data) when enterprise decryption fails', async () => {
-      localSpec = {
-        name: 'App', version: 8, enterprise: 'CIPHERTEXT', compose: [{ name: 'db', containerData: '' }],
-      };
+      // The encrypted branch of getLocalComponentSpec: a build failure over a SEALED
+      // app is transient (the enterprise key may not be loaded yet), never structural.
+      await installEnterpriseApp();
       // decryption failing (e.g. key not loaded at boot) must defer, not act on ciphertext
-      stubs.deploymentProvider.buildDeployment.rejects(new Error('Could not resolve spec for App'));
-      await appReconciler.reconcile('db_App'); // must not throw
+      stubs.deploymentProvider.buildDeployment.rejects(new Error('Could not resolve spec for app'));
+      await appReconciler.reconcile('db_app'); // must not throw
       expect(stubs.dockerService.appDockerStart.called).to.be.false;
       expect(stubs.dockerService.appDockerStop.called).to.be.false;
       const deferred = stubs.log.warn.getCalls().some((c) => /spec read failed, deferring/.test(c.args[0]));
       expect(deferred, 'should defer on decrypt failure, never act on still-encrypted data').to.equal(true);
+      // The two arms are mutually exclusive in their reporting: only the CLEARTEXT
+      // arm declares the spec permanently unactuatable. Asserting its absence is
+      // what makes this a test of the encrypted arm rather than of "it did nothing".
+      const declaredInvalid = stubs.log.error.getCalls().some((c) => /has invalid containerData/.test(c.args[0]));
+      expect(declaredInvalid, 'a sealed app must never be declared structurally invalid').to.equal(false);
     });
   });
 
@@ -2134,11 +2242,10 @@ describe('appReconciler tests', () => {
     };
 
     it('enqueues an app by name and reconciles every component it expands to', async () => {
-      localSpec = {
-        name: 'EntApp', version: 8, enterprise: 'CIPHERTEXT',
-        compose: [{ name: 'c1', containerData: '/data' }, { name: 'c2', containerData: '/data' }],
-      };
-      stubs.appQueryService.installedApps.resolves({ status: 'success', data: [{ name: 'EntApp' }] });
+      await installSealedV8App('entapp', { c1: {}, c2: {} });
+      // installedApps answers with SERIALIZED rows (appQueryService maps serialize()
+      // over the hydrated specs), so the sweep walks the real wire form.
+      stubs.appQueryService.installedApps.resolves({ status: 'success', data: [localInst.serialize()] });
 
       const started = [];
       stubs.dockerService.appDockerStart.callsFake(async (id) => { started.push(id); });
@@ -2147,14 +2254,12 @@ describe('appReconciler tests', () => {
       await flush();
       // the app id expands through the deployment layer to its component ids,
       // each reconciled to a start
-      expect(started).to.have.members(['c1_EntApp', 'c2_EntApp']);
+      expect(started).to.have.members(['c1_entapp', 'c2_entapp']);
     });
 
     it('defers an app whose spec cannot be resolved (decrypt fails) - never acts on ciphertext', async () => {
-      localSpec = {
-        name: 'EntApp', version: 8, enterprise: 'CIPHERTEXT', compose: [{ name: 'c1', containerData: '/data' }],
-      };
-      stubs.appQueryService.installedApps.resolves({ status: 'success', data: [{ name: 'EntApp' }] });
+      await installSealedV8App('entapp', { c1: {} });
+      stubs.appQueryService.installedApps.resolves({ status: 'success', data: [localInst.serialize()] });
       // benchd unavailable: building the deployment for the still-encrypted spec throws
       stubs.deploymentProvider.buildDeployment.rejects(new Error('benchd unavailable'));
 
@@ -2166,13 +2271,20 @@ describe('appReconciler tests', () => {
     });
 
     it('one app failing to resolve does not abort the sweep for the others', async () => {
-      const plain = { name: 'Plain', version: 4, compose: [{ name: 'www', containerData: '/data' }] };
-      // the failing app FIRST: a sweep that died on it would never reach Plain
-      stubs.appQueryService.installedApps.resolves({ status: 'success', data: [{ name: 'EntApp' }, { name: 'Plain' }] });
-      stubs.appsRepository.getInstalledAppByIdentity.callsFake(async (n) => ({ name: n, isEncrypted: n === 'EntApp' }));
+      // Two real installed apps: one sealed (its decrypt will fail), one cleartext.
+      const sealedApp = await instantiatedSpec(await sealedV8Spec({ name: 'entapp' }));
+      const plainApp = await instantiatedSpec(await v9App('plain', { www: {} }));
+      const plainDeployment = flux.DeploymentSpec.fromSpec(plainApp.spec, appsFolder, { replica: null });
+      // the failing app FIRST: a sweep that died on it would never reach plain
+      stubs.appQueryService.installedApps.resolves({
+        status: 'success', data: [sealedApp.serialize(), plainApp.serialize()],
+      });
+      const byName = { entapp: sealedApp, plain: plainApp };
+      stubs.appsRepository.getInstalledAppByIdentity.callsFake(async (n) => byName[n] ?? null);
+      stubs.appsRepository.getInstalledApp.callsFake(async (n) => byName[n] ?? null);
       stubs.deploymentProvider.buildDeployment.callsFake(async (inst) => {
-        if (inst.name === 'EntApp') throw new Error('benchd unavailable');
-        return fakeDeployment(plain);
+        if (inst.name === 'entapp') throw new Error('benchd unavailable');
+        return plainDeployment;
       });
 
       const started = [];
@@ -2180,18 +2292,16 @@ describe('appReconciler tests', () => {
 
       await appReconciler.enqueueAll('test');
       await flush();
-      expect(started, 'the resolvable app must still reconcile and start').to.include('www_Plain');
+      expect(started, 'the resolvable app must still reconcile and start').to.include('www_plain');
     });
 
     // Ownership is a lookup on what the row recorded, not a decomposition of the
     // container's own name — a name states the segment its containers were built
     // from, which stops resembling the app's name once identities are minted.
     it('resolves the app from the recorded identifiers, without taking the name apart', async () => {
-      localSpec = { name: 'Minted', version: 4, compose: [{ name: 'www', containerData: '/data' }] };
-      stubs.appQueryService.installedApps.resolves({ status: 'success', data: [{ name: 'Minted' }] });
-      stubs.appsRepository.getInstalledAppByComponentIdentifier.resolves({
-        name: 'Minted', owner: 'owner1', isEncrypted: false,
-      });
+      await installApp(await v9App('minted', { www: {} }));
+      stubs.appQueryService.installedApps.resolves({ status: 'success', data: [localInst.serialize()] });
+      stubs.appsRepository.getInstalledAppByComponentIdentifier.resolves(localInst);
 
       await appReconciler.enqueueAll('test');
       await flush();
@@ -2207,8 +2317,10 @@ describe('appReconciler tests', () => {
     });
 
     it('sweeps a single-component (flat) app under its bare app name', async () => {
-      localSpec = { name: 'Legacy', version: 3, containerData: '/data' };
-      stubs.appQueryService.installedApps.resolves({ status: 'success', data: [{ name: 'Legacy' }] });
+      // A real v1 spec — the flat form whose single synthesized component IS the app,
+      // so its container identifier is the bare name with no component segment.
+      await installApp(await v1Spec({ name: 'legacy' }));
+      stubs.appQueryService.installedApps.resolves({ status: 'success', data: [localInst.serialize()] });
 
       const started = [];
       stubs.dockerService.appDockerStart.callsFake(async (id) => { started.push(id); });
@@ -2217,7 +2329,7 @@ describe('appReconciler tests', () => {
       await flush();
       // a flat (v1-3) component identifier IS the bare app name, so reconcile
       // resolves it directly (no expansion stutter)
-      expect(started).to.deep.equal(['Legacy']);
+      expect(started).to.deep.equal(['legacy']);
     });
 
     // A minted identity is NOT the app's name (a sha256(name‖txid) prefix), so the row
@@ -2225,14 +2337,12 @@ describe('appReconciler tests', () => {
     // index — only to a name lookup. The stubs above model an app whose identity is its
     // name; this one models what the fleet stores.
     it('sweeps an app whose identity was MINTED, not borrowed from its name', async () => {
-      localSpec = {
-        name: 'Minted', identity: '933b4b9a0af3', version: 4, compose: [{ name: 'www', containerData: '/data' }],
-      };
-      const row = { name: 'Minted', owner: 'owner1', isEncrypted: false };
-      stubs.appQueryService.installedApps.resolves({ status: 'success', data: [{ name: 'Minted' }] });
+      await installApp(await v9App('minted', { www: {} }), { identity: '933b4b9a0af3' });
+      const row = localInst;
+      stubs.appQueryService.installedApps.resolves({ status: 'success', data: [localInst.serialize()] });
       // What the row actually records for an app installed today.
       stubs.appsRepository.listComponentIdentifiers.callsFake(
-        async (name) => (name === 'Minted' ? ['www_933b4b9a0af3'] : []),
+        async (name) => (name === 'minted' ? ['www_933b4b9a0af3'] : []),
       );
       // The identity lookup answers an IDENTITY - never a name. This is the fidelity
       // that matters: while it answered to a name too, the sweep looked like it worked.
@@ -2243,7 +2353,7 @@ describe('appReconciler tests', () => {
         async (identifier) => (identifier === 'www_933b4b9a0af3' ? row : null),
       );
       stubs.appsRepository.getInstalledApp.callsFake(
-        async (name) => (name === 'Minted' ? row : null),
+        async (name) => (name === 'minted' ? row : null),
       );
 
       const started = [];
@@ -2277,7 +2387,7 @@ describe('appReconciler tests', () => {
         finishInspect = () => resolve({ State: { Running: false, Status: 'exited', ExitCode: 1 } });
       }));
 
-      appReconciler.enqueueComponent('www_App'); // held in bootPending
+      appReconciler.enqueueComponent('www_app'); // held in bootPending
       const startPromise = appReconciler.start();
       let drainSettled = false;
       appReconciler.waitForBootDrainSettled().then(() => { drainSettled = true; });
@@ -2301,7 +2411,7 @@ describe('appReconciler tests', () => {
         stubs.globalState.waitForBootContainerStateSettled = () => new Promise((resolve) => { openBootGate = resolve; });
         stubs.dockerService.dockerContainerInspect = sinon.stub().callsFake(() => new Promise(() => {})); // wedged forever
 
-        appReconciler.enqueueComponent('www_App');
+        appReconciler.enqueueComponent('www_app');
         const startPromise = appReconciler.start();
         let drainSettled = false;
         appReconciler.waitForBootDrainSettled().then(() => { drainSettled = true; });
@@ -2326,9 +2436,9 @@ describe('appReconciler tests', () => {
       // startAppMonitoring is the last step of a start-path reconcile
       const done = deferred();
       stubs.appInspector.startAppMonitoring = sinon.stub().callsFake(() => done.resolve());
-      appReconciler.enqueueComponent('www_App');
+      appReconciler.enqueueComponent('www_app');
       await done.promise;
-      expect(stubs.dockerService.appDockerStart.calledOnceWith('www_App')).to.be.true;
+      expect(stubs.dockerService.appDockerStart.calledOnceWith('www_app')).to.be.true;
     });
 
     it('holds enqueues until boot settles, then drains them on start()', async () => {
@@ -2336,7 +2446,7 @@ describe('appReconciler tests', () => {
       stubs.globalState.bootContainerStateSettled = false;
       stubs.globalState.waitForBootContainerStateSettled = () => new Promise((res) => { openGate = res; });
 
-      appReconciler.enqueueComponent('www_App');
+      appReconciler.enqueueComponent('www_app');
       // enqueue is synchronous while the gate is closed, so this is a real assertion
       expect(stubs.dockerService.dockerContainerInspect.called).to.be.false; // held
 
@@ -2354,44 +2464,33 @@ describe('appReconciler tests', () => {
       // Component identifiers live inside the deployment (sometimes behind
       // encryption), so boot recovery and the hourly sweep can only enqueue
       // the bare app name. The reconciler must fan out, not silently drop it.
-      localSpec = {
-        name: 'App',
-        version: 4,
-        compose: [
-          { name: 'web', containerData: '/data' },
-          { name: 'cache', containerData: '/data' },
-        ],
-      };
+      await installApp(await v9App('app', { web: {}, cache: {} }));
       const started = [];
       const done = deferred();
       stubs.dockerService.appDockerStart = sinon.stub().callsFake(async (id) => {
         started.push(id);
         if (started.length === 2) done.resolve();
       });
-      appReconciler.enqueueApp('App'); // bare app name - no component identifier matches
+      appReconciler.enqueueApp('app'); // bare app name - no component identifier matches
       await done.promise;
-      expect(started.sort()).to.deep.equal(['cache_App', 'web_App']);
+      expect(started.sort()).to.deep.equal(['cache_app', 'web_app']);
     });
 
     it('expands the bare name of a component named like its app to the name_name identifier', async () => {
       // 146 live production apps are single-component with the component
       // named after the app; their container identifier is the stutter, so a
       // bare-name enqueue must expand rather than half-match the component.
-      localSpec = {
-        name: 'App',
-        version: 4,
-        compose: [{ name: 'App', containerData: '/data' }],
-      };
+      await installApp(await v9App('app', { app: {} }));
       const done = deferred();
       stubs.dockerService.appDockerStart = sinon.stub().callsFake(async (id) => done.resolve(id));
-      appReconciler.enqueueApp('App');
-      expect(await done.promise).to.equal('App_App');
+      appReconciler.enqueueApp('app');
+      expect(await done.promise).to.equal('app_app');
     });
 
     it('surfaces a component identifier that matches nothing instead of dropping it', async () => {
       const done = deferred();
       stubs.log.error = sinon.stub().callsFake(() => done.resolve());
-      appReconciler.enqueueComponent('gone_App'); // component "gone" does not exist
+      appReconciler.enqueueComponent('gone_app'); // component "gone" does not exist
       await done.promise;
       expect(stubs.log.error.firstCall.args[0]).to.include('does not match any component');
       expect(stubs.dockerService.appDockerStart.called).to.be.false;
@@ -2406,12 +2505,12 @@ describe('appReconciler tests', () => {
         if (d) d.resolve();
       }));
 
-      appReconciler.enqueueComponent('www_App'); // reconcile #1 -> blocks at inspect
+      appReconciler.enqueueComponent('www_app'); // reconcile #1 -> blocks at inspect
       await reachedInspect[0].promise;
       expect(resolvers).to.have.lengthOf(1);
 
-      appReconciler.enqueueComponent('www_App'); // in-flight -> mark dirty
-      appReconciler.enqueueComponent('www_App'); // still dirty (coalesced, not a separate run)
+      appReconciler.enqueueComponent('www_app'); // in-flight -> mark dirty
+      appReconciler.enqueueComponent('www_app'); // still dirty (coalesced, not a separate run)
       resolvers[0](); // finish #1 -> exactly one coalesced re-run
       await reachedInspect[1].promise;
       expect(resolvers).to.have.lengthOf(2); // one re-run, not two
@@ -2430,9 +2529,9 @@ describe('appReconciler tests', () => {
       const requestGracefulStop = sinon.stub().resolves(true);
       appReconciler.setRequestGracefulStop(requestGracefulStop);
 
-      await appReconciler.reconcile('www_App');
+      await appReconciler.reconcile('www_app');
 
-      expect(requestGracefulStop.calledOnceWith('www_App', 'condemned')).to.equal(true);
+      expect(requestGracefulStop.calledOnceWith('www_app', 'condemned')).to.equal(true);
       expect(stubs.dockerService.appDockerStop.called).to.equal(false);
       expect(stubs.dockerService.appDockerKill.called).to.equal(false);
     });
@@ -2440,15 +2539,15 @@ describe('appReconciler tests', () => {
     it('falls back to a local appDockerStop when the coordinator declines (non-Arcane)', async () => {
       appReconciler.setRequestGracefulStop(sinon.stub().resolves(false));
 
-      await appReconciler.reconcile('www_App');
+      await appReconciler.reconcile('www_app');
 
-      expect(stubs.dockerService.appDockerStop.calledOnceWith('www_App')).to.equal(true);
+      expect(stubs.dockerService.appDockerStop.calledOnceWith('www_app')).to.equal(true);
       expect(stubs.dockerService.appDockerKill.called).to.equal(false);
     });
 
     it('does a local appDockerStop when no coordinator is wired', async () => {
-      await appReconciler.reconcile('www_App');
-      expect(stubs.dockerService.appDockerStop.calledOnceWith('www_App')).to.equal(true);
+      await appReconciler.reconcile('www_app');
+      expect(stubs.dockerService.appDockerStop.calledOnceWith('www_app')).to.equal(true);
     });
 
     it('still hard-kills a force-condemned app, never routing to the coordinator', async () => {
@@ -2456,9 +2555,9 @@ describe('appReconciler tests', () => {
       const requestGracefulStop = sinon.stub().resolves(true);
       appReconciler.setRequestGracefulStop(requestGracefulStop);
 
-      await appReconciler.reconcile('www_App');
+      await appReconciler.reconcile('www_app');
 
-      expect(stubs.dockerService.appDockerKill.calledOnceWith('www_App')).to.equal(true);
+      expect(stubs.dockerService.appDockerKill.calledOnceWith('www_app')).to.equal(true);
       expect(requestGracefulStop.called).to.equal(false);
       expect(stubs.dockerService.appDockerStop.called).to.equal(false);
     });
@@ -2480,7 +2579,7 @@ describe('appReconciler tests', () => {
       clock = sinon.useFakeTimers({ toFake: ['Date'] });
       stubs.dockerService.dockerContainerInspect.resolves({ State: { Running: true, Status: 'running', ExitCode: 0 } });
       stubs.dockerService.classifyContainerNetworkAttachment.returns({
-        managed: true, running: true, networkMode: 'fluxDockerNetwork_App', attached: false,
+        managed: true, running: true, networkMode: 'fluxDockerNetwork_app', attached: false,
       });
       stubs.dockerService.isContainerDetachedFromNetwork.returns(true);
       // a successful recreate provisions the container in 'created' state (the flip:
@@ -2497,7 +2596,7 @@ describe('appReconciler tests', () => {
     });
 
     // first pass opens the persistence window; the second, past it, may act
-    const healPasses = async (id = 'www_App') => {
+    const healPasses = async (id = 'www_app') => {
       await appReconciler.reconcile(id);
       clock.tick(61 * 1000);
       await appReconciler.reconcile(id);
@@ -2507,10 +2606,10 @@ describe('appReconciler tests', () => {
 
     it('leaves a running, properly-attached container alone and clears any heal state', async () => {
       stubs.dockerService.isContainerDetachedFromNetwork.returns(false);
-      await appReconciler.reconcile('www_App');
+      await appReconciler.reconcile('www_app');
       expect(stubs.dockerService.appDockerForceRemove.called).to.be.false;
       expect(stubs.containerHealthMonitor.recreateMissingContainers.called).to.be.false;
-      expect(stubs.appsRuntimeState.clearNetworkHeal.calledWith('www_App'), 'a healthy container clears the durable heal state').to.be.true;
+      expect(stubs.appsRuntimeState.clearNetworkHeal.calledWith('www_app'), 'a healthy container clears the durable heal state').to.be.true;
     });
 
     it('clears the durable heal state for a container that merely EXISTS, even stopped', async () => {
@@ -2521,9 +2620,9 @@ describe('appReconciler tests', () => {
       stubs.dockerService.isContainerDetachedFromNetwork.returns(false);
       stubs.appsRuntimeState.restartWaitMs.resolves(60 * 1000); // stay in backoff, never start
 
-      await appReconciler.reconcile('www_App');
+      await appReconciler.reconcile('www_app');
 
-      expect(stubs.appsRuntimeState.clearNetworkHeal.calledWith('www_App')).to.be.true;
+      expect(stubs.appsRuntimeState.clearNetworkHeal.calledWith('www_app')).to.be.true;
     });
 
     it('confirms in-pass before acting: a detached read that clears on re-inspect destroys nothing', async () => {
@@ -2531,36 +2630,36 @@ describe('appReconciler tests', () => {
       // branch, then the heal's confirming re-inspect. Detached for the first two,
       // attached on the re-inspect - i.e. the first read was transient.
       stubs.dockerService.isContainerDetachedFromNetwork.onCall(2).returns(false);
-      await appReconciler.reconcile('www_App');
+      await appReconciler.reconcile('www_app');
       expect(stubs.serviceHelper.delay.called, 'settles before re-reading').to.be.true;
       expect(stubs.dockerService.dockerContainerInspect.callCount, 're-inspects to confirm').to.be.at.least(2);
       expect(stubs.dockerService.appDockerForceRemove.called, 'a transient detached read must never destroy a healthy container').to.be.false;
     });
 
     it('waits for the detach to persist before destroying anything', async () => {
-      await appReconciler.reconcile('www_App'); // confirmed detached, but only just now
+      await appReconciler.reconcile('www_app'); // confirmed detached, but only just now
       expect(stubs.dockerService.appDockerForceRemove.called, 'a detach seen for the first time is not yet actionable').to.be.false;
 
       clock.tick(61 * 1000);
-      await appReconciler.reconcile('www_App');
+      await appReconciler.reconcile('www_app');
       expect(stubs.dockerService.appDockerForceRemove.called, 'a detach that persisted is healed').to.be.true;
     });
 
     it('heals a persisted detach: durable flag before the remove, monitoring stopped, no volume creation on the recreate, never uninstall', async () => {
       await healPasses();
       expect(
-        stubs.appsRuntimeState.setNetworkHealRemoval.calledWith('www_App', true),
+        stubs.appsRuntimeState.setNetworkHealRemoval.calledWith('www_app', true),
         'records the deliberate removal durably',
       ).to.be.true;
       expect(
         stubs.appsRuntimeState.setNetworkHealRemoval.calledBefore(stubs.dockerService.appDockerForceRemove),
         'the flag must be durable BEFORE the container is removed, or a restart in the window reads the absence as tampering',
       ).to.be.true;
-      expect(stubs.appInspector.stopAppMonitoring.calledWith('www_App', true), 'stops the stats monitor before removing').to.be.true;
-      expect(stubs.dockerService.appDockerForceRemove.calledWith('www_App', false), 'force-removes keeping bind-mounted data').to.be.true;
+      expect(stubs.appInspector.stopAppMonitoring.calledWith('www_app', true), 'stops the stats monitor before removing').to.be.true;
+      expect(stubs.dockerService.appDockerForceRemove.calledWith('www_app', false), 'force-removes keeping bind-mounted data').to.be.true;
       expect(
         stubs.containerHealthMonitor.recreateMissingContainers.calledOnceWith(
-          'www_App', sinon.match.object, { allowVolumeCreation: false },
+          'www_app', sinon.match.object, { allowVolumeCreation: false },
         ),
         'the recreate must never be allowed to create (reformat) the data volume',
       ).to.be.true;
@@ -2584,13 +2683,13 @@ describe('appReconciler tests', () => {
       // the operation lease is sampled at reconcile entry, but the heal spends
       // seconds confirming - a redeploy starting in that window must not have its
       // container force-removed underneath it.
-      await appReconciler.reconcile('www_App'); // opens the persistence window
+      await appReconciler.reconcile('www_app'); // opens the persistence window
       clock.tick(61 * 1000);
       stubs.serviceHelper.delay.callsFake(async () => {
-        operationRegistry.acquire('App', 'redeploy', 'test'); // a redeploy starts mid-settle
+        operationRegistry.acquire('app', 'redeploy', 'test'); // a redeploy starts mid-settle
       });
 
-      await appReconciler.reconcile('www_App');
+      await appReconciler.reconcile('www_app');
 
       expect(stubs.dockerService.appDockerForceRemove.called, 'must not actuate on a container another subsystem owns').to.be.false;
     });
@@ -2598,19 +2697,15 @@ describe('appReconciler tests', () => {
     it('does not rebuild the whole node when many containers look detached at once', async () => {
       // a dockerd restart can serve inspects before libnetwork restores endpoint IPs,
       // and the reconnect sweep enqueues everything at that moment
-      localSpec = {
-        name: 'App',
-        version: 4,
-        compose: [{ name: 'www', containerData: '/data' }, { name: 'api', containerData: '/data' }, { name: 'db', containerData: '/data' }],
-      };
+      await installApp(await v9App('app', { www: {}, api: {}, db: {} }));
 
-      await appReconciler.reconcile('www_App');
-      await appReconciler.reconcile('api_App');
-      await appReconciler.reconcile('db_App');
+      await appReconciler.reconcile('www_app');
+      await appReconciler.reconcile('api_app');
+      await appReconciler.reconcile('db_app');
       clock.tick(61 * 1000);
-      await appReconciler.reconcile('www_App');
-      await appReconciler.reconcile('api_App');
-      await appReconciler.reconcile('db_App');
+      await appReconciler.reconcile('www_app');
+      await appReconciler.reconcile('api_app');
+      await appReconciler.reconcile('db_app');
 
       expect(stubs.dockerService.appDockerForceRemove.called, 'a node-wide detach is a docker fault, not N stale endpoints').to.be.false;
       const storm = stubs.log.error.getCalls().some((c) => /docker-level fault/.test(c.args[0]));
@@ -2625,7 +2720,7 @@ describe('appReconciler tests', () => {
 
       await healPasses();
 
-      sinon.assert.calledWith(stubs.appDockerNetwork.ensureAppNetworkPresent, 'App', null);
+      sinon.assert.calledWith(stubs.appDockerNetwork.ensureAppNetworkPresent, 'app', 'fluxDockerNetwork_app');
       sinon.assert.callOrder(
         stubs.appDockerNetwork.ensureAppNetworkPresent,
         stubs.dockerService.appDockerForceRemove,
@@ -2648,20 +2743,16 @@ describe('appReconciler tests', () => {
     it('does not rebuild anything on a detach storm - that is a docker fault, not a missing network', async () => {
       // The storm guard sits ABOVE the network question, so making the network
       // rebuildable must not give a node-wide docker fault a way through.
-      localSpec = {
-        name: 'App',
-        version: 4,
-        compose: [{ name: 'www', containerData: '/data' }, { name: 'api', containerData: '/data' }, { name: 'db', containerData: '/data' }],
-      };
+      await installApp(await v9App('app', { www: {}, api: {}, db: {} }));
       stubs.dockerService.dockerNetworkState.resolves('absent');
 
-      await appReconciler.reconcile('www_App');
-      await appReconciler.reconcile('api_App');
-      await appReconciler.reconcile('db_App');
+      await appReconciler.reconcile('www_app');
+      await appReconciler.reconcile('api_app');
+      await appReconciler.reconcile('db_app');
       clock.tick(61 * 1000);
-      await appReconciler.reconcile('www_App');
-      await appReconciler.reconcile('api_App');
-      await appReconciler.reconcile('db_App');
+      await appReconciler.reconcile('www_app');
+      await appReconciler.reconcile('api_app');
+      await appReconciler.reconcile('db_app');
 
       expect(stubs.appDockerNetwork.ensureAppNetworkPresent.called, 'no rebuild while docker itself looks broken').to.be.false;
       expect(stubs.dockerService.appDockerForceRemove.called).to.be.false;
@@ -2702,7 +2793,7 @@ describe('appReconciler tests', () => {
       stubs.dockerService.appDockerForceRemove.rejects(new Error('device or resource busy'));
       await healPasses();
       expect(
-        stubs.appInspector.startAppMonitoring.calledWith('www_App'),
+        stubs.appInspector.startAppMonitoring.calledWith('www_app'),
         'the container is still there: it must not be left unmonitored',
       ).to.be.true;
       expect(stubs.appUninstaller.uninstallApplication.called).to.be.false;
@@ -2723,7 +2814,7 @@ describe('appReconciler tests', () => {
       // running-detached branch - as the hourly sweep would drive it
       for (let i = 0; i < 8; i += 1) {
         // eslint-disable-next-line no-await-in-loop
-        await appReconciler.reconcile('www_App');
+        await appReconciler.reconcile('www_app');
         clock.tick(61 * 1000);
       }
       expect(stubs.appUninstaller.uninstallApplication.called, 'never uninstalls, however long it stays broken').to.be.false;
@@ -2744,7 +2835,7 @@ describe('appReconciler tests', () => {
       stubs.dockerService.dockerListContainers.resolves([]); // docker up, container really absent
       stubs.containerHealthMonitor.recreateMissingContainers.rejects(new Error('host port still in use'));
 
-      await appReconciler.reconcile('www_App');
+      await appReconciler.reconcile('www_app');
 
       const vanished = stubs.appTamperingDetectionService.recordEvent.getCalls().some((c) => c.args[1] === 'container_vanished');
       expect(vanished, 'our own removal must not be recorded as tampering').to.be.false;
@@ -2759,7 +2850,7 @@ describe('appReconciler tests', () => {
       stubs.dockerService.dockerContainerInspect.rejects(new Error('no such container'));
       stubs.dockerService.dockerListContainers.resolves([]);
 
-      await appReconciler.reconcile('www_App');
+      await appReconciler.reconcile('www_app');
 
       expect(stubs.containerHealthMonitor.recreateMissingContainers.called, 'no recreate on an unreadable state').to.be.false;
       expect(stubs.appUninstaller.uninstallApplication.called, 'and above all, no uninstall').to.be.false;
@@ -2772,7 +2863,7 @@ describe('appReconciler tests', () => {
       stubs.dockerService.dockerContainerInspect.rejects(new Error('no such container'));
       stubs.dockerService.dockerListContainers.resolves([]);
 
-      await appReconciler.reconcile('www_App');
+      await appReconciler.reconcile('www_app');
 
       const vanished = stubs.appTamperingDetectionService.recordEvent.getCalls().some((c) => c.args[1] === 'container_vanished');
       expect(vanished, 'a genuine vanish is still a tampering signal').to.be.true;
@@ -2783,7 +2874,7 @@ describe('appReconciler tests', () => {
     it('re-checks a container shortly after starting it, instead of waiting for the hourly sweep', async () => {
       const clock = sinon.useFakeTimers({ toFake: ['setTimeout'] });
       try {
-        await appReconciler.reconcile('www_App'); // stopped -> start
+        await appReconciler.reconcile('www_app'); // stopped -> start
         expect(stubs.dockerService.appDockerStart.calledOnce).to.be.true;
         const inspectsAfterStart = stubs.dockerService.dockerContainerInspect.callCount;
 
