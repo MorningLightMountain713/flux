@@ -45,8 +45,8 @@ async function getSpecPolicy() { return load(); }
  * Enforcement heights are chain policy, so they stay here rather than in
  * flux-spec. Split out because a DECRYPTED spec is validated through
  * `DecryptedCanonicalSpec.validateContents()` — which deliberately produces no
- * blob, so it cannot be routed through validateSubmissionSpec/validateGossipSpec
- * — and the height gate still has to apply to it.
+ * blob, so it cannot be routed through validateSubmissionSpec — and the height
+ * gate still has to apply to it.
  *
  * @param {number} version
  * @param {number} [height] - current daemon height; undefined skips the gate
@@ -87,28 +87,6 @@ async function validateSubmissionSpec(spec, { height, purpose } = {}) {
 }
 
 /**
- * Validate a spec blob from gossip or chain sync through the appropriate
- * version class's deserialize path. Runs structural validation and
- * capacity checks but does not apply submission-time policies (e.g.
- * tiered deprecation).
- *
- * @param {object} spec - Spec blob from gossip message or chain data
- * @param {object} [options]
- * @param {number} [options.height] - Current daemon height for version gating
- * @returns {Promise<FluxAppSpecBase>} The validated spec class instance
- */
-async function validateGossipSpec(spec, { height } = {}) {
-  await getSpecBackend();
-  const { FluxAppSpecBase } = await getSpec();
-  const VersionClass = spec && FluxAppSpecBase.getVersionClass(spec.version);
-  if (!VersionClass) {
-    throw new Error(`Unsupported Flux App specification version: ${spec && spec.version}`);
-  }
-  assertVersionActivated(spec.version, height);
-  return VersionClass.deserialize(spec);
-}
-
-/**
  * Enforce cross-update invariants (fields locked at first registration, e.g.
  * `referral`). Compares the incoming spec against the app's previous on-chain
  * spec. Both must be cleartext class instances — decrypt encrypted specs at
@@ -130,6 +108,5 @@ module.exports = {
   getSpecBackend,
   getSpecPolicy,
   validateSubmissionSpec,
-  validateGossipSpec,
   assertUpdateInvariants,
 };

@@ -2,7 +2,7 @@
 
 const { expect } = require('chai');
 
-const { validateSubmissionSpec, validateGossipSpec, getSpec } = require('../../ZelBack/src/services/utils/specLibs');
+const { validateSubmissionSpec, getSpec } = require('../../ZelBack/src/services/utils/specLibs');
 
 describe('specLibs — how a spec validation failure reaches the caller', () => {
   let ValidationError;
@@ -50,18 +50,6 @@ describe('specLibs — how a spec validation failure reaches the caller', () => 
     });
   });
 
-  describe('validateGossipSpec', () => {
-    it('propagates the ValidationError on the gossip path too', async () => {
-      try {
-        await validateGossipSpec({ version: 9, name: 'x' });
-        expect.fail('an incomplete v9 gossip spec should not validate');
-      } catch (err) {
-        expect(err).to.be.instanceOf(ValidationError);
-        expect(err.name).to.equal('ValidationError');
-      }
-    });
-  });
-
   // The version-activation gate — chain policy, and until now completely
   // untested: removing it from both wrappers broke nothing across 31 suites.
   //
@@ -76,7 +64,6 @@ describe('specLibs — how a spec validation failure reaches the caller', () => 
 
     for (const [label, validate] of [
       ['validateSubmissionSpec', (blob, opts) => validateSubmissionSpec(blob, opts)],
-      ['validateGossipSpec', (blob, opts) => validateGossipSpec(blob, opts)],
     ]) {
       describe(label, () => {
         it('refuses a version the chain has not activated yet', async () => {
