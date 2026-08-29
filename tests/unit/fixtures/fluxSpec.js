@@ -41,10 +41,16 @@ let cached = null;
 async function loadSpecLibrary() {
   if (cached) return cached;
   const flux = await load();
-  const { InsecureTestCryptoProvider } = await import('@runonflux/flux-spec-backend/testing');
-  const provider = () => new InsecureTestCryptoProvider();
-  flux.EncryptedSpecV8.registerProvider(provider);
-  flux.EncryptedSpecV9.registerProvider(provider);
+  const {
+    InsecureTestCryptoProvider, InsecureLegacyTestCryptoProvider,
+  } = await import('@runonflux/flux-spec-backend/testing');
+  // Two providers, because v8 and v9 store a sealed spec differently and
+  // production has two for the same reason. v9 keeps the whole `encrypted`
+  // object; v8's wire form is one opaque `enterprise` string, so a nonce and tag
+  // returned alongside are dropped at storage and the spec comes back
+  // undecryptable. The legacy provider packs them into the blob.
+  flux.EncryptedSpecV8.registerProvider(() => new InsecureLegacyTestCryptoProvider());
+  flux.EncryptedSpecV9.registerProvider(() => new InsecureTestCryptoProvider());
   cached = flux;
   return cached;
 }
@@ -162,7 +168,13 @@ async function sealedV9Spec(overrides = {}) {
   );
 }
 
-/** A real EncryptedSpecV8 — the enterprise blob an owner seals and submits. */
+/**
+ * A real EncryptedSpecV8 — the enterprise blob an owner seals and submits.
+ *
+ * Sealed with the legacy provider, so this survives serialize() ->
+ * deserialize() -> decrypt() the way a production one does. It did not before:
+ * v8 has nowhere to store a separate nonce and tag.
+ */
 async function sealedV8Spec(overrides = {}) {
   const flux = await loadSpecLibrary();
   const spec = await v8Spec(overrides);
