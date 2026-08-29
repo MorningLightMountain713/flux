@@ -280,6 +280,164 @@ function extendsChain(journaled, carried) {
   return true;
 }
 
+// The cancel overlay: a seat holding a standing node-down certificate is
+// cancelled and the walk's next eligible node seats in its place — the same
+// forced-replacement arithmetic as the chain above, with the certificate
+// replacing the committee-quorum backing exactly where tier 1 stops working:
+// a committee that lost its quorum can sign nothing. A cancel chain therefore
+// carries no acceptances; each entry's authority is the certificate (or, for
+// a reinstatement, the subject's own refutation of it), verified through the
+// node-down store's seam. The roster is derived from the set the chain
+// currently names, and appliers consult ONLY that published set — a
+// grantor's private knowledge of a certificate never picks a roster.
+
+/**
+ * Shape of one cancel-chain entry: exactly one of `cancel` (with the backing
+ * certificate) or `reinstate` (with the refutation that lifts it).
+ *
+ * @param {object} entry
+ * @returns {boolean}
+ */
+function cancelEntryWellFormed(entry) {
+  if (!entry || !Number.isSafeInteger(entry.seq) || entry.seq < 1) return false;
+  const cancels = typeof entry.cancel === 'string';
+  const reinstates = typeof entry.reinstate === 'string';
+  if (cancels === reinstates) return false;
+  if (cancels) {
+    return OUTPOINT_PATTERN.test(entry.cancel)
+      && typeof entry.cert === 'object' && entry.cert !== null;
+  }
+  return OUTPOINT_PATTERN.test(entry.reinstate)
+    && typeof entry.refutation === 'object' && entry.refutation !== null;
+}
+
+/**
+ * Wire-shape gate for a whole carried cancel chain — run before any
+ * verification, so a malformed object costs a parse.
+ *
+ * @param {unknown} chain
+ * @returns {boolean}
+ */
+function cancelChainWellFormed(chain) {
+  return Array.isArray(chain)
+    && chain.length <= MAX_CHAIN_ENTRIES
+    && chain.every(cancelEntryWellFormed);
+}
+
+/**
+ * Full verification of a carried cancel chain: entries in seq order, each
+ * cancellation backed by a certificate the node-down verifiers accept for
+ * exactly the named seat, each reinstatement refuting a standing
+ * cancellation. Strict throughout — a duplicate cancel, an unfounded
+ * reinstatement, or a subject outside the membership is corruption, refused
+ * whole, never partially applied.
+ *
+ * @param {object[]} membership the membership the fingerprint names
+ * @param {object[]} chain carried entries, seq order
+ * @param {{certificate: Function, refutation: Function}} verifiers the
+ *   node-down store's cold-verification seam: `certificate(cert)` answers
+ *   `{valid, subject}`; `refutation(refutation, cert)` answers whether the
+ *   subject's alive announcement supersedes the certificate
+ * @returns {{cancelled: Set<string>}|null} the currently cancelled
+ *   outpoints, or null when anything fails to verify
+ */
+function verifyCancelChain(membership, chain, verifiers) {
+  if (!cancelChainWellFormed(chain)) return null;
+  if (typeof verifiers?.certificate !== 'function' || typeof verifiers?.refutation !== 'function') {
+    return null;
+  }
+  const listed = new Set((membership || []).map(outpointOf));
+  const standing = new Map(); // outpoint -> the certificate that cancelled it
+  for (let i = 0; i < chain.length; i += 1) {
+    const entry = chain[i];
+    if (entry.seq !== i + 1) return null;
+    if (entry.cancel) {
+      if (!listed.has(entry.cancel) || standing.has(entry.cancel)) return null;
+      const verdict = verifiers.certificate(entry.cert);
+      if (!verdict?.valid || verdict.subject !== entry.cancel) return null;
+      standing.set(entry.cancel, entry.cert);
+    } else {
+      const cert = standing.get(entry.reinstate);
+      if (!cert || !verifiers.refutation(entry.refutation, cert)) return null;
+      standing.delete(entry.reinstate);
+    }
+  }
+  return { cancelled: new Set(standing.keys()) };
+}
+
+/**
+ * The standing set a pre-verified cancel chain names, last event per subject
+ * winning. Membership lookups only, no cryptography — the journal's analogue
+ * of rosterAfter, for chains that passed the full gauntlet when written.
+ *
+ * @param {object[]} chain journaled entries, seq order
+ * @returns {Set<string>} currently cancelled outpoints
+ */
+function cancelledSubjects(chain) {
+  const standing = new Set();
+  (chain || []).forEach((entry) => {
+    if (entry.cancel) standing.add(entry.cancel);
+    else standing.delete(entry.reinstate);
+  });
+  return standing;
+}
+
+/**
+ * The cancel set applied to a roster: every cancelled seat is removed and the
+ * walk's next eligible node seats in its place, subjects processed in
+ * canonical outpoint order so the result is a function of the SET alone.
+ * Replacements exclude every cancelled subject and everything the tier-1
+ * chain removed; where no eligible node remains the roster shrinks — the
+ * certificate stands whether or not a replacement exists.
+ *
+ * @param {object[]} membership the membership the fingerprint names
+ * @param {string} walkKey the committee's fully-qualified walk key
+ * @param {object[]} roster the roster after the tier-1 chain
+ * @param {Set<string>} excluded outpoints the tier-1 chain removed
+ * @param {Set<string>} cancelled currently cancelled outpoints
+ * @param {(node: object, host: string) => string|null} [domainOf]
+ *   selectCommittee's custom-rung hook
+ * @returns {{members: object[]}}
+ */
+function applyCancellations(membership, walkKey, roster, excluded, cancelled, domainOf) {
+  const subjects = [...cancelled].sort();
+  const barred = new Set([...excluded, ...cancelled]);
+  let members = [...roster];
+  for (let i = 0; i < subjects.length; i += 1) {
+    const subject = subjects[i];
+    const before = members.length;
+    members = members.filter((node) => outpointOf(node) !== subject);
+    if (members.length === before) continue;
+    const replacement = nextReplacement(membership, walkKey, members, barred, domainOf);
+    if (replacement) members.push(replacement);
+  }
+  return { members };
+}
+
+/**
+ * Whether a carried cancel chain extends a journaled one where they overlap
+ * — the roster chain's fork refusal: entries at one seq must agree in kind
+ * and subject, and a shorter carry teaches nothing.
+ *
+ * @param {object[]} journaled this grantor's own entries
+ * @param {object[]} carried the chain offered for adoption
+ * @returns {boolean}
+ */
+function extendsCancelChain(journaled, carried) {
+  if (!Array.isArray(journaled) || !Array.isArray(carried)) return false;
+  if (carried.length < journaled.length) return false;
+  for (let i = 0; i < journaled.length; i += 1) {
+    const own = journaled[i];
+    const offered = carried[i];
+    if (own.seq !== offered.seq
+      || (own.cancel ?? null) !== (offered.cancel ?? null)
+      || (own.reinstate ?? null) !== (offered.reinstate ?? null)) {
+      return false;
+    }
+  }
+  return true;
+}
+
 module.exports = {
   chainCap,
   entryWellFormed,
@@ -289,4 +447,9 @@ module.exports = {
   rosterAfter,
   verifyChain,
   extendsChain,
+  cancelChainWellFormed,
+  verifyCancelChain,
+  cancelledSubjects,
+  applyCancellations,
+  extendsCancelChain,
 };
