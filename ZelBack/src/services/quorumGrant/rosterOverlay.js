@@ -338,10 +338,14 @@ function cancelChainWellFormed(chain) {
  *   node-down store's cold-verification seam: `certificate(cert)` answers
  *   `{valid, subject}`; `refutation(refutation, cert)` answers whether the
  *   subject's alive announcement supersedes the certificate
+ * @param {number} [trustedPrefixLength] entries below this index skip
+ *   certificate and refutation re-verification — a grantor's own journal,
+ *   verified when first taught, whose certificates may since have aged past
+ *   the store's retention. Shape and sequence stay checked throughout.
  * @returns {{cancelled: Set<string>}|null} the currently cancelled
  *   outpoints, or null when anything fails to verify
  */
-function verifyCancelChain(membership, chain, verifiers) {
+function verifyCancelChain(membership, chain, verifiers, trustedPrefixLength = 0) {
   if (!cancelChainWellFormed(chain)) return null;
   if (typeof verifiers?.certificate !== 'function' || typeof verifiers?.refutation !== 'function') {
     return null;
@@ -351,14 +355,18 @@ function verifyCancelChain(membership, chain, verifiers) {
   for (let i = 0; i < chain.length; i += 1) {
     const entry = chain[i];
     if (entry.seq !== i + 1) return null;
+    const trusted = i < trustedPrefixLength;
     if (entry.cancel) {
       if (!listed.has(entry.cancel) || standing.has(entry.cancel)) return null;
-      const verdict = verifiers.certificate(entry.cert);
-      if (!verdict?.valid || verdict.subject !== entry.cancel) return null;
+      if (!trusted) {
+        const verdict = verifiers.certificate(entry.cert);
+        if (!verdict?.valid || verdict.subject !== entry.cancel) return null;
+      }
       standing.set(entry.cancel, entry.cert);
     } else {
       const cert = standing.get(entry.reinstate);
-      if (!cert || !verifiers.refutation(entry.refutation, cert)) return null;
+      if (!cert) return null;
+      if (!trusted && !verifiers.refutation(entry.refutation, cert)) return null;
       standing.delete(entry.reinstate);
     }
   }
