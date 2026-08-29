@@ -85,6 +85,20 @@ async function checkAppFolderMounts(deployments) {
   for (const deployment of deployments) {
     // eslint-disable-next-line no-restricted-syntax
     for (const [, deployComp] of deployment.componentEntries()) {
+      // A stateless component has no volume BY DESIGN, so it has no folder to
+      // check and its absence is not a fault. appVolumeService returns early on
+      // the same question and never creates the directory, so checking for it
+      // reports base_directory_missing every pass — which returns before
+      // syncthingInitializedSuccessfully is set, so syncthingAppsFirstRun never
+      // clears and syncthing is never configured for ANY app on the node. It
+      // also records a mount_vanished tampering event each time, for a volume
+      // that was never supposed to exist.
+      //
+      // v9-only in practice: every v8 compose component has hdd >= 1, so
+      // `storage > 0`. containerHealthMonitor, appReconciler (twice) and
+      // appVolumeService all already gate on this; this loop was the one that
+      // did not.
+      if (deployComp.isStateless) continue;
       // deployComp.identifier is the docker-style id - bare appName for flat
       // (v1-3) specs, comp_app for composed (v4+) - so no version branching here.
       const appId = dockerService.getAppIdentifier(deployComp.identifier);

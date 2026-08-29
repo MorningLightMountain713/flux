@@ -388,6 +388,39 @@ describe('syncthingMonitor tests', () => {
       expect(checkedAppName, 'the owning app, for incident roll-up').to.equal('testapp');
     });
 
+    // A stateless component has no volume by design — appVolumeService returns
+    // early and never creates its directory. Checking for that directory anyway
+    // reported base_directory_missing on every pass, which returns before
+    // syncthingInitializedSuccessfully is set, so syncthingAppsFirstRun never
+    // cleared and syncthing was never configured for ANY app on the node. It
+    // also recorded a mount_vanished tampering event each pass, for a volume
+    // that was never meant to exist.
+    //
+    // Invisible while the components were literals: every hand-written double
+    // implicitly had a volume, so this loop was never handed one that legitimately
+    // does not.
+    it('does not mount-check a stateless component, or wedge the cycle on it', async () => {
+      const stateless = await deploymentFor('statelessapp', 'web', {
+        persistentStorage: { sizeGb: 0 },
+      });
+      expect(stateless.getComponent('web').isStateless, 'fixture must be stateless').to.be.true;
+      expect(stateless.getComponent('web').dir, 'and therefore has no directory').to.equal(null);
+
+      // First run is when every deployment is mount-verified — the pass that
+      // has to complete before syncthingAppsFirstRun can clear.
+      mockState.syncthingAppsFirstRun = true;
+      syncthingServiceMock.getDeviceId.resolves('DEVICE-ID');
+      deploymentProviderMock.listInstalledDeployments.resolves([stateless]);
+
+      monitorControl = syncthingMonitor.syncthingApps(mockState, mockGetGlobalStateFn);
+      await clock.tickAsync(10000);
+
+      sinon.assert.notCalled(syncthingFolderStateMachineMock.verifyFolderMountSafety);
+      // The cycle got past the mount gate rather than skipping on a folder that
+      // was never supposed to be there.
+      sinon.assert.called(syncthingServiceMock.getDeviceId);
+    });
+
     it('demotes a sendreceive folder over an unrepairable mount while skipping the cycle', async () => {
       // repair fails (backing image gone) so the whole cycle is skipped, but a
       // folder left sendreceive over the bad mount could still broadcast its disk
