@@ -18,9 +18,12 @@
 const CONTRACT = Object.freeze([
   // (outpoint) -> Promise<cert|null>: the standing certificate for a node
   'standingCertificateFor',
-  // (outpoint) -> Promise<refutation|null>: the alive announcement that
-  // revoked the node's last certificate — what justifies a reinstatement;
-  // a certificate that merely lapsed has none and its cancellation stands
+  // (outpoint) -> Promise<refutation|null>: the record that revoked the
+  // node's last certificate — in FluxOS the subject's own apprunning
+  // announcement, returned as the store holds it. Opaque here: cancel
+  // entries carry it verbatim and verifyRefutation is its only reader.
+  // What justifies a reinstatement; a certificate that merely lapsed has
+  // none and its cancellation stands
   'refutationFor',
   // (cert) -> {valid, subject}: cold verification of one certificate
   'verifyCertificate',

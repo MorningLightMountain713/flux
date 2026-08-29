@@ -936,6 +936,31 @@ describe('quorumGrant grantorController', () => {
       expect(res.statusCode).to.equal(200);
     });
 
+    it('the record read says whether this cell is refereeing — stale or returning cells read as dark to witnesses', async () => {
+      const req = fakeReq({});
+      req.query.key = 'myapp/master';
+
+      const fresh = fakeRes();
+      await grantorController.record(req, fresh);
+      expect(fresh.body.data.refereeing).to.equal(true);
+
+      daemonServiceMiscRpcs.isDaemonSynced.returns({
+        status: 'success', data: { synced: false, height: 0 },
+      });
+      const stale = fakeRes();
+      await grantorController.record(req, stale);
+      expect(stale.body.data.refereeing).to.equal(false);
+
+      daemonServiceMiscRpcs.isDaemonSynced.returns({
+        status: 'success', data: { synced: true, height: 100, header: 100 },
+      });
+      sinon.stub(grantRegister, 'heldKeys').resolves(['myapp/master']);
+      await grantorController.noteReturnFromUnreachability();
+      const returning = fakeRes();
+      await grantorController.record(req, returning);
+      expect(returning.body.data.refereeing).to.equal(false);
+    });
+
     it('the record read teaches the journaled cancel chain', async () => {
       grantRegister.read.resolves({
         promisedEpoch: 1,

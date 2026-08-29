@@ -854,6 +854,15 @@ async function record(req, res) {
     const remainingMs = Number.isFinite(expiresAt)
       ? Math.max(0, expiresAt - Date.now())
       : null;
+    // Whether this cell would actually referee an ask right now — false
+    // while the view-freshness gate or the return gate would refuse. The
+    // witness poll counts only refereeing cells toward quorumReachable, so
+    // a fleet whose grantors all stopped refereeing (a chain stall, an
+    // upgrade wave) reads as committee-down and the incumbent COASTS —
+    // reads answering must never talk a witness out of the coast that
+    // keeps the app alive.
+    const refereeing = daemonServiceMiscRpcs.isDaemonSynced()?.data?.synced === true
+      && !resyncPending?.has(key);
     return res.json(messageHelper.createDataMessage({
       key,
       promisedEpoch: stored?.promisedEpoch ?? 0,
@@ -861,6 +870,7 @@ async function record(req, res) {
       remainingMs,
       roster: stored?.roster ?? null,
       cancels: stored?.cancels ?? null,
+      refereeing,
     }));
   } catch (error) {
     log.error(`quorumGrant grantorController record: ${error.message}`);
