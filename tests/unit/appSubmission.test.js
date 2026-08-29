@@ -16,8 +16,13 @@ let flux;
 // What a marketplace template stores: a v9 spec body with no owner, name or
 // contacts, which the gate completes from the deployed spec before comparing.
 const TEMPLATE_BODY = (() => {
-  const { owner, contacts, name, ...rest } = V9_SUBMISSION;
-  return rest;
+  const body = { ...V9_SUBMISSION };
+  // A template carries the app's shape, not its identity: the gate fills name,
+  // owner and contacts in from the deployed spec before comparing.
+  delete body.name;
+  delete body.owner;
+  delete body.contacts;
+  return body;
 })();
 
 const TEMPLATE_ID = '3f2a1b4c-5d6e-4f70-8192-a3b4c5d6e7f8';
