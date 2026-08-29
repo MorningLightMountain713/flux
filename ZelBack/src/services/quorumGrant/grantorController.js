@@ -3,6 +3,7 @@
 const config = require('config');
 const messageHelper = require('../messageHelper');
 const serviceHelper = require('../serviceHelper');
+const daemonServiceMiscRpcs = require('../daemonService/daemonServiceMiscRpcs');
 const generalService = require('../generalService');
 const fluxCommunicationUtils = require('../fluxCommunicationUtils');
 const fluxNetworkHelper = require('../fluxNetworkHelper');
@@ -84,6 +85,23 @@ function committeeSize(mode) {
 
 function minHolderAgeMs() {
   return config.fluxapps.quorumGrantMinHolderAgeMs ?? 420_000;
+}
+
+// Keys whose cells must re-fetch the published record before answering again
+// — set by the return event, cleared per key by a successful resync. Null
+// when nothing is pending.
+let resyncPending = null;
+
+/**
+ * The return event: this node was unreachable over FluxOS and is back. Time
+ * does not teach — every held key this grantor holds state for re-fetches
+ * the published record off a quorum before its cell answers again. Founder
+ * rows are exempt: write-once state cannot go stale. Called by the
+ * node-down plane on reconnection.
+ */
+async function noteReturnFromUnreachability() {
+  const keys = await grantRegister.heldKeys();
+  resyncPending = keys.length ? new Set(keys) : null;
 }
 
 function peerAllowed(host) {
@@ -432,6 +450,72 @@ async function adoptStandingTerm(ask, committee) {
 }
 
 /**
+ * One key's return resync: read the record off a quorum of the committee as
+ * this grantor derives it, adopt the standing term, and journal any longer
+ * cancel chain the quorum teaches — the published record adopted as state.
+ * Fails closed: no quorum of answers, no serving.
+ *
+ * @returns {Promise<boolean>} whether the key is resynced and may serve
+ */
+async function resyncReturnedKey(ask) {
+  const committee = await selfOnCommittee(
+    ask.key, 'held', ask.fingerprint, ask.generation, ask.chain, ask.cancels,
+  );
+  if (!committee.members || !committee.quorum) return false;
+  const self = await generalService.obtainNodeCollateralInformation();
+  const peers = committee.members.filter(
+    (node) => !(node.txhash === self.txhash && String(node.outidx) === String(self.txindex)),
+  );
+  const reads = peers.map(async (node) => {
+    try {
+      const response = await serviceHelper.axiosGet(
+        `http://${extractIp(node.ip)}:${extractPort(node.ip)}/flux/quorumgrant/record`
+          + `?key=${encodeURIComponent(ask.key)}`,
+        { timeout: config.fluxapps.quorumGrantAskTimeoutMs ?? 5_000 },
+      );
+      const data = response?.data?.data;
+      if (!data) return null;
+      return {
+        answered: true,
+        grantee: data.accepted?.grantee,
+        epoch: data.accepted?.epoch,
+        remainingMs: data.remainingMs,
+        cancels: data.cancels ?? null,
+      };
+    } catch (error) {
+      return null;
+    }
+  });
+  const answers = (await Promise.all(reads)).filter(Boolean);
+  if (answers.length < committee.quorum) return false;
+
+  const term = core.quorumTerm(answers.filter((reply) => reply.grantee), committee.quorum);
+  if (term.grantee) {
+    await grantRegister.adopt(ask.key, {
+      epoch: term.epoch,
+      grantee: term.grantee,
+      remainingMs: term.remainingMs,
+      generation: ask.generation,
+      fingerprint: ask.fingerprint ?? null,
+    });
+  }
+
+  const taught = answers
+    .map((reply) => reply.cancels)
+    .filter((cancels) => cancels
+      && cancels.fingerprint === ask.fingerprint
+      && (cancels.generation ?? 0) === ask.generation
+      && rosterOverlay.cancelChainWellFormed(cancels.chain))
+    .sort((a, b) => b.chain.length - a.chain.length)[0];
+  if (taught?.chain.length) {
+    await grantRegister.adoptCancels(ask.key, {
+      fingerprint: ask.fingerprint, generation: ask.generation, chain: taught.chain,
+    });
+  }
+  return true;
+}
+
+/**
  * Whether the asker holds the app the key names, from this node's own
  * locations view — the anti-squat rule. For HELD challenges of an existing
  * record the row must also be old enough that every grantor and the
@@ -505,6 +589,30 @@ async function serve(req, res, type, operate) {
     }
     const { ask, askerNode } = read;
     askSeen = ask;
+
+    if ((ask.mode ?? 'held') === 'held') {
+      // The view-freshness serve gate: a grantor whose own chain view is
+      // stale refuses to referee. Locally observable, and the bound on every
+      // "never heard" cell — whatever it failed to hear, it stops answering
+      // when its tip does. Reads stay open; the founder plane is exempt
+      // (write-once registers cannot go stale).
+      const sync = daemonServiceMiscRpcs.isDaemonSynced();
+      if (!sync?.data?.synced) {
+        report('refusedStale');
+        return res.status(503).json(messageHelper.createErrorMessage('chain view stale — this grantor is not refereeing'));
+      }
+      // The return gate: a cell back from unreachability answers only after
+      // re-fetching the published record — waiting teaches nothing.
+      if (resyncPending?.has(ask.key)) {
+        const resynced = await resyncReturnedKey(ask);
+        if (!resynced) {
+          report('refusedResync');
+          return res.status(503).json(messageHelper.createErrorMessage('returned grantor has not re-fetched the published record'));
+        }
+        resyncPending.delete(ask.key);
+        if (!resyncPending.size) resyncPending = null;
+      }
+    }
 
     const committee = await selfOnCommittee(
       ask.key, ask.mode ?? 'held', ask.fingerprint, ask.generation, ask.chain, ask.cancels,
@@ -773,6 +881,7 @@ async function foundingBasis(req, res) {
 /** Test seam. */
 function reset() {
   peerAsks.clear();
+  resyncPending = null;
 }
 
 module.exports = {
@@ -784,5 +893,6 @@ module.exports = {
   release,
   record,
   foundingBasis,
+  noteReturnFromUnreachability,
   reset,
 };

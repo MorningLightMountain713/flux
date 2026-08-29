@@ -6,6 +6,7 @@ const secp256k1 = require('secp256k1');
 const bs58check = require('bs58check');
 
 const serviceHelper = require('../../ZelBack/src/services/serviceHelper');
+const daemonServiceMiscRpcs = require('../../ZelBack/src/services/daemonService/daemonServiceMiscRpcs');
 const fluxCommunicationUtils = require('../../ZelBack/src/services/fluxCommunicationUtils');
 const fluxNetworkHelper = require('../../ZelBack/src/services/fluxNetworkHelper');
 const networkStateService = require('../../ZelBack/src/services/networkStateService');
@@ -115,6 +116,9 @@ describe('quorumGrant grantorController', () => {
     });
     sinon.stub(grantRegister, 'release').resolves({ ok: true, released: true });
     sinon.stub(fluxNetworkHelper, 'getFluxNodePrivateKey').resolves(WIF);
+    sinon.stub(daemonServiceMiscRpcs, 'isDaemonSynced').returns({
+      status: 'success', data: { synced: true, height: 100, header: 100 },
+    });
   });
 
   afterEach(() => {
@@ -944,6 +948,136 @@ describe('quorumGrant grantorController', () => {
       await grantorController.record(req, res);
       expect(res.statusCode).to.equal(200);
       expect(res.body.data.cancels.chain).to.have.length(1);
+    });
+  });
+
+  describe('the view-freshness serve gate', () => {
+    it('a grantor whose chain view is stale refuses to referee held asks — reads stay open', async () => {
+      daemonServiceMiscRpcs.isDaemonSynced.returns({
+        status: 'success', data: { synced: false, height: 0 },
+      });
+
+      const probeRes = fakeRes();
+      await grantorController.probe(fakeReq(signedAsk('probe')), probeRes);
+      expect(probeRes.statusCode).to.equal(503);
+
+      const renewRes = fakeRes();
+      await grantorController.renew(fakeReq(signedAsk('renew')), renewRes);
+      expect(renewRes.statusCode).to.equal(503);
+
+      const recordReq = fakeReq({});
+      recordReq.query.key = 'myapp/master';
+      const recordRes = fakeRes();
+      await grantorController.record(recordReq, recordRes);
+      expect(recordRes.statusCode).to.equal(200);
+    });
+
+    it('the founder plane is exempt — a write-once register has nothing staleness can corrupt', async () => {
+      daemonServiceMiscRpcs.isDaemonSynced.returns({
+        status: 'success', data: { synced: false, height: 0 },
+      });
+      const res = fakeRes();
+      await grantorController.probe(
+        fakeReq(signedAsk('probe', { key: FOUNDER_KEY, mode: 'oneshot' })), res,
+      );
+      expect(res.statusCode).to.equal(200);
+    });
+  });
+
+  describe('the return-resync gate', () => {
+    const TERM_RECORD = {
+      data: {
+        status: 'success',
+        data: {
+          accepted: {
+            grantee: `${'2'.repeat(64)}:0`, epoch: 4, mode: 'held', generation: 0, fingerprint: FINGERPRINT,
+          },
+          remainingMs: 30_000,
+          roster: null,
+          cancels: null,
+        },
+      },
+    };
+
+    beforeEach(() => {
+      sinon.stub(grantRegister, 'heldKeys').resolves(['myapp/master']);
+      sinon.stub(grantRegister, 'adopt').resolves(true);
+      sinon.stub(grantRegister, 'adoptCancels').resolves(true);
+    });
+
+    it('a returned grantor refuses a held ask until the published record is re-fetched, then serves', async () => {
+      await grantorController.noteReturnFromUnreachability();
+
+      sinon.stub(serviceHelper, 'axiosGet').rejects(new Error('unreachable'));
+      const refused = fakeRes();
+      await grantorController.probe(fakeReq(signedAsk('probe')), refused);
+      expect(refused.statusCode).to.equal(503);
+      expect(grantRegister.adopt.called).to.equal(false);
+
+      serviceHelper.axiosGet.resolves(TERM_RECORD);
+      const served = fakeRes();
+      await grantorController.probe(fakeReq(signedAsk('probe')), served);
+      expect(served.statusCode).to.equal(200);
+      expect(grantRegister.adopt.calledOnce).to.equal(true);
+      const [key, term] = grantRegister.adopt.firstCall.args;
+      expect(key).to.equal('myapp/master');
+      expect(term.epoch).to.equal(4);
+      expect(term.grantee).to.equal(`${'2'.repeat(64)}:0`);
+
+      // resynced once: the next ask is served without another fetch
+      const again = fakeRes();
+      await grantorController.probe(fakeReq(signedAsk('probe')), again);
+      expect(again.statusCode).to.equal(200);
+      expect(grantRegister.adopt.calledOnce).to.equal(true);
+    });
+
+    it('a quorum answering with no standing term is also an answer — nothing adopts and serving resumes', async () => {
+      await grantorController.noteReturnFromUnreachability();
+      sinon.stub(serviceHelper, 'axiosGet').resolves({
+        data: { status: 'success', data: { accepted: null, remainingMs: null, cancels: null } },
+      });
+
+      const res = fakeRes();
+      await grantorController.probe(fakeReq(signedAsk('probe')), res);
+      expect(res.statusCode).to.equal(200);
+      expect(grantRegister.adopt.called).to.equal(false);
+    });
+
+    it('the resync adopts a longer cancel chain the quorum teaches', async () => {
+      const subject = `${'3'.repeat(64)}:0`;
+      const taughtCancels = {
+        fingerprint: FINGERPRINT,
+        generation: 0,
+        chain: [{
+          seq: 1, cancel: subject, cert: { subject, token: 'standing' }, at: 1_000,
+        }],
+      };
+      await grantorController.noteReturnFromUnreachability();
+      sinon.stub(serviceHelper, 'axiosGet').resolves({
+        data: {
+          status: 'success',
+          data: { accepted: null, remainingMs: null, cancels: taughtCancels },
+        },
+      });
+
+      const res = fakeRes();
+      await grantorController.probe(fakeReq(signedAsk('probe')), res);
+      expect(res.statusCode).to.equal(200);
+      expect(grantRegister.adoptCancels.calledOnce).to.equal(true);
+      const [key, overlay] = grantRegister.adoptCancels.firstCall.args;
+      expect(key).to.equal('myapp/master');
+      expect(overlay.chain).to.have.length(1);
+    });
+
+    it('the founder plane is exempt from the return gate', async () => {
+      await grantorController.noteReturnFromUnreachability();
+      sinon.stub(serviceHelper, 'axiosGet').rejects(new Error('unreachable'));
+
+      const res = fakeRes();
+      await grantorController.probe(
+        fakeReq(signedAsk('probe', { key: FOUNDER_KEY, mode: 'oneshot' })), res,
+      );
+      expect(res.statusCode).to.equal(200);
     });
   });
 });

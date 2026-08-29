@@ -294,6 +294,18 @@ describe('quorumGrant grantRegister', () => {
       expect(adopted).to.equal(true);
     });
 
+    it('heldKeys names every held row and never a founder cell — write-once state cannot go stale', async () => {
+      sinon.stub(dbHelper, 'findInDatabase').callsFake(
+        async () => [...store.keys()].map((id) => ({ _id: id })),
+      );
+      store.set('app/master', { _id: 'app/master' });
+      store.set('other/worker', { _id: 'other/worker' });
+      store.set('app/founder-0123456789abcdef@500000@0', { _id: 'app/founder-0123456789abcdef@500000@0' });
+
+      const keys = await grantRegister.heldKeys();
+      expect(keys.sort()).to.deep.equal(['app/master', 'other/worker']);
+    });
+
     it('an accept at a new basis clears the journaled chain through the shell', async () => {
       await grantRegister.adoptCancels('app/master', {
         fingerprint: 'fp', generation: 0, chain: [cancelEntry(1, SUBJECT)],
