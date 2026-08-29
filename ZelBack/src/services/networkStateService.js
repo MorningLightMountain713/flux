@@ -347,6 +347,17 @@ if (require.main === module) {
 }
 
 /**
+ * The block the held list was last brought to — the verifier's own height for
+ * aging verdicts, synchronous and local.
+ *
+ * @returns {number | null}
+ */
+function chainHeight() {
+  if (!stateManager) return null;
+  return stateManager.chainAnchor?.height ?? null;
+}
+
+/**
  * The node-down ring topology — jury, duty and at-fingerprint reads over the
  * SAME list and membership history the manager maintains (one substrate, R9).
  *
@@ -366,6 +377,7 @@ function nodeDownTopology() {
 }
 
 module.exports = {
+  chainHeight,
   getFluxnodeBySocketAddress,
   getFluxnodesByPubkey,
   getRandomSocketAddress,
