@@ -13,14 +13,15 @@ const { extractIp } = require('./socketAddressUtils');
 
 const log = require('../../lib/log');
 
-// The juror engine: certs doc §3 steps 1–7 as one state machine, every side
+// The juror engine: observe, self-check, probe, record, push, wake and
+// assemble as one state machine, every side
 // effect injected. Observation in (a duty dropped, a duty dial failed, a
 // verdict arrived, our own gates recovered), verdict push and certificate
 // assembly out. No timer appears anywhere in the correctness path — verdicts
 // age in blocks, and every trigger is an event.
 //
-// The pile is how a node remembers it has already looked. Rules paid for in
-// the harness (certs doc §3 step 3): a juror's newer verdict REPLACES its
+// The pile is how a node remembers it has already looked: a juror's newer
+// verdict REPLACES its
 // older one; an `abstain` suppresses re-checking only while the inability
 // stands — it stops standing on a verdict arriving while healthy and on the
 // juror's own sick-to-healthy transition, which must re-open every pile it

@@ -16,9 +16,9 @@ const {
 } = require('../utils/nodeDownCertificates');
 const { normalizeSocketAddress } = require('../utils/socketAddressUtils');
 
-// The nodedown record store (certs doc §6.4): one row PER CERTIFICATION,
-// keyed on the certificate — never a constant dedupKey, or re-certification
-// overwrites the one row and §6.8's quarantine count has nothing to count.
+// The nodedown record store: one row PER CERTIFICATION, keyed on the
+// certificate — never a constant dedupKey, or re-certification overwrites
+// the one row and the flap-quarantine count has nothing to count.
 // Verification runs at EVERY intake, gossip and sync alike, and an invalid
 // certificate is never stored and never relayed — a forgery dies at its
 // first hop.
@@ -203,7 +203,7 @@ async function standingCertificateFor(outpoint) {
 
 /**
  * The announcement that revoked the subject's latest certificate, or null —
- * a merely-lapsed certificate has none, so its cancellation stands (R4).
+ * a merely-lapsed certificate has none, so its cancellation stands.
  *
  * @param {string} outpoint
  * @returns {Promise<object|null>}

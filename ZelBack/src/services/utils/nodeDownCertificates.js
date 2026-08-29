@@ -4,14 +4,14 @@ const crypto = require('crypto');
 
 const { quorumThreshold } = require('./peerRings');
 
-// Node-down certificates: the verdict, the quorum, and what a receiver checks
-// (NODE_DOWN_CERTIFICATES.md §3, §5, §6.3, §6.10). Pure — a verdict is signed
+// Node-down certificates: the verdict, the quorum, and what a receiver
+// checks. Pure — a verdict is signed
 // bytes, a certificate is a bag of them, and verification is arithmetic over a
 // jury the caller recomputed at the certificate's named fingerprint. Signature
 // verification is injected: the quorum rules never depend on the curve.
 //
-// The canonical encodings are byte-normative (certs doc §6.3, WIRE_CONTRACT §B)
-// and pinned by tests/unit/fixtures/rings-fixture.json: two implementations
+// The canonical encodings are byte-normative, pinned by
+// tests/unit/fixtures/rings-fixture.json: two implementations
 // that canonicalise differently do not fail a test — they evict different nodes.
 
 // Domain separation: a verdict can never be replayed as any other signed
@@ -33,11 +33,10 @@ const FUTURE_BLOCKS_TOLERANCE = 1;
 // pass this as verifyCertificate's maxAgeBlocks unless a test narrows it.
 const VERDICT_LIFETIME_BLOCKS = 10;
 
-// The nodedown record's lifetime (§6.12): sized just past the 640-block list
-// expiry, where the certificate becomes both uncheckable and pointless.
-// membershipHistory's retention is derived from THIS plus slack — every
-// standing certificate must stay cold-verifiable for its whole life
-// (NODE_DOWN_REQUIREMENTS_COMMITTEE_RECOVERY.md R1).
+// The nodedown record's lifetime: sized just past the 640-block list expiry,
+// where the certificate becomes both uncheckable and pointless.
+// membershipHistory's retention is derived from THIS plus slack, so every
+// standing certificate stays cold-verifiable for its whole life.
 const RECORD_LIFETIME_MS = 6 * 60 * 60 * 1000;
 
 const JUDGEMENT = Object.freeze({
@@ -138,7 +137,7 @@ function collectorRanking(subject, jury) {
 }
 
 /**
- * Where verdicts about this subject are pushed. r <= 0 is push-to-all — §3 as
+ * Where verdicts about this subject are pushed. r <= 0 is push-to-all, as
  * adopted; a positive r bounds the burst without touching the correctness
  * argument (assembly still requires H distinct owners).
  *

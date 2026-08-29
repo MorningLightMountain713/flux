@@ -5,13 +5,13 @@ const { extractIp } = require('./socketAddressUtils');
 
 // The ring topology over the LIVE node list: jury and duty reads on the
 // current membership for the peering layer, and at-fingerprint juries for
-// certificate verification (certs doc §6.1 — a certificate is verified against
-// the list it NAMES, rebuilt exactly or refused). Every view is keyed by the
+// certificate verification: a certificate is verified against the list it
+// NAMES, rebuilt exactly or refused. Every view is keyed by the
 // fingerprint it was built from, so a membership move can never serve a stale
 // jury; an unrebuildable fingerprint answers null, never a substitution.
 //
 // Nodes are identified by collateral OUTPOINT throughout — the immutable name
-// that certificates carry (§6.3). The walk's owner is the list's pubkey and
+// that certificates carry. The walk's owner is the list's pubkey and
 // its address is the ip WITHOUT port, so co-tenants on one machine exclude
 // each other whatever ports they serve.
 
@@ -52,7 +52,8 @@ class NodeDownTopology {
    * @param {object} deps
    * @param {() => Array<object>} deps.nodes the live node list
    * @param {import('./membershipHistory').MembershipHistory} deps.membershipHistory
-   *   the SAME history the state manager feeds — one substrate (R9)
+   *   the SAME history the state manager feeds; two fingerprint
+   *   implementations that could disagree would be two committees
    */
   constructor({ nodes, membershipHistory }) {
     this.#nodes = nodes;
@@ -121,7 +122,7 @@ class NodeDownTopology {
   /**
    * May observations of `otherOutpoint` feed suspicion — is it in my jury, or
    * am I in its? Answerable from the list alone, independent of which code
-   * path opened any socket (peering doc §5.3: PEER_SOURCE cannot carry this).
+   * path opened any socket — PEER_SOURCE cannot carry witness status.
    *
    * @param {string} myOutpoint
    * @param {string} otherOutpoint
@@ -136,7 +137,7 @@ class NodeDownTopology {
 
   /**
    * Deterministic non-witness top-up targets on the CURRENT membership
-   * (peering doc §3.7). MUTATES `exclude`, as the walk requires.
+   * MUTATES `exclude`, as the walk requires.
    *
    * @param {string} myOutpoint
    * @param {number} want
@@ -169,8 +170,8 @@ class NodeDownTopology {
   /**
    * Every retained fingerprint that assigns the subject a jury IDENTICAL to
    * the one at `fingerprint` — the unit that has to agree is the jury, not the
-   * network list (certs doc §6.1; a verdict cast under any of these answered
-   * the same question). Null when `fingerprint` itself is unrebuildable.
+   * network list: a verdict cast under any of these answered the same
+   * question. Null when `fingerprint` itself is unrebuildable.
    *
    * @param {string} subjectOutpoint
    * @param {string} fingerprint
@@ -193,7 +194,7 @@ class NodeDownTopology {
 
   /**
    * Jurors sharing the subject's address on the list the COUNTER holds NOW —
-   * the count-time co-tenant discard's input (certs doc §6.2, model-forced).
+   * the count-time co-tenant discard's input.
    * A juror or subject no longer on the current list contributes nothing.
    *
    * @param {string} subjectOutpoint

@@ -2,9 +2,9 @@
 
 const crypto = require('crypto');
 
-// The node-down jury construction: M distinct owners walked over R hash rings
-// (network-liveness/PEER_SELECTION_K_RINGS.md §3, §3.7; NODE_DOWN_CERTIFICATES.md §6.2).
-// Pure — no I/O, no config, no clock. Every value here is a protocol constant: every
+// The node-down jury construction: M distinct owners walked over R hash
+// rings. Pure — no I/O, no config, no clock. Every value here is a protocol
+// constant: every
 // node must compute the identical jury, duty set and quorum from the same list, so
 // none of this may ever come from local configuration.
 //
@@ -17,7 +17,7 @@ const M_OWNERS = 14;
 // Rings walked. Derived, not fitted: the walk takes exactly one juror from each ring,
 // so it needs precisely as many rings as jurors.
 const RING_BUDGET = M_OWNERS;
-// §3.7 top-up floor: below this a node dials extra non-witness targets, because
+// The top-up floor: below this a node dials extra non-witness targets, because
 // outbound is allocated by other nodes' walks and thin nodes are handed fewer.
 const OUTBOUND_FLOOR = 12;
 
@@ -25,7 +25,7 @@ const OUTBOUND_FLOOR = 12;
  * Verdicts needed to certify a subject down: H = ceil(2/3 · |jury|), floored at 2.
  *
  * Derived from the subject's own jury, never fixed: a fleet below 15 owners
- * legitimately has smaller juries (§3.4) and a fixed H would fail them for having
+ * legitimately has smaller juries and a fixed H would fail them for having
  * been sized correctly. The floor means a jury of one cannot certify at all — a
  * single hairpin-failed probe must never be a quorum (formal/verdict-churn).
  *
@@ -192,7 +192,7 @@ class PeerRings {
 
   /**
    * Deterministic top-up targets — successors, walked the opposite way to a jury,
-   * one per ring, distinct addresses. Scanned rather than abandoned so the §3.7
+   * one per ring, distinct addresses. Scanned rather than abandoned so the
    * floor stays reachable when early candidates are excluded.
    *
    * MUTATES `exclude`: every pick is added, so a caller composing walks never

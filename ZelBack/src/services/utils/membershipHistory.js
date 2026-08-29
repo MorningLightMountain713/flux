@@ -19,10 +19,9 @@ const config = require('config');
 // walk excluded; that defect is why the triple is the unit.
 //
 // Retention is wall-bounded and count-bounded as a backstop. The wall is
-// derived from the nodedown record lifetime plus slack — every STANDING
-// certificate must stay cold-verifiable for its whole life (certs doc §6.12;
-// NODE_DOWN_REQUIREMENTS_COMMITTEE_RECOVERY.md R1: retention >= record
-// lifetime + issue-to-publish slack) — and that window also covers the
+// derived from the nodedown record lifetime plus slack — retention must
+// exceed the record lifetime plus issue-to-publish slack, or a standing
+// certificate stops being cold-verifiable — and that window also covers the
 // committee-formation need (location TTL + formation margin) it first served.
 // Outside the window the answer is null, never a guess: a fingerprint this
 // node cannot rebuild is a committee this node cannot verify membership of,
