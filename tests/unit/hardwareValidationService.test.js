@@ -1,8 +1,31 @@
 'use strict';
 
+// Set NODE_CONFIG_DIR before any requires
+process.env.NODE_CONFIG_DIR = `${process.cwd()}/tests/unit/globalconfig`;
+
 const { expect } = require('chai');
 const sinon = require('sinon');
 const proxyquire = require('proxyquire').noCallThru();
+const {
+  loadSpecLibrary, V9_SUBMISSION, v9Spec, instantiatedSpec, assertAnswers,
+} = require('./fixtures/fluxSpec');
+
+// The spec library is real here, not stubbed — see tests/unit/fixtures/fluxSpec.js
+// for why. Everything this module does arithmetic on comes off real objects: the
+// installed rows are real InstantiatedSpecs (the class appsRepository.hydrate
+// produces), and every figure it sums is a real DeploymentSpec's own
+// resourceTotals()/reservableHostDiskGb(). The host-disk overhead in particular
+// is the spec's to state — a fake that added a flat 12GB was asserting the
+// answer it was there to check.
+//
+// What stays stubbed is I/O and node policy: mongo (appsRepository), the
+// hardware probe (hwRequirements), the deployment provider (two daemon RPCs and
+// the docker socket), the uninstaller, and the delay between removals.
+
+// One fixed apps folder for every DeploymentSpec here.
+const APPS_FOLDER = '/tmp/flux/apps/';
+
+let flux;
 
 describe('hardwareValidationService tests', () => {
   let hardwareValidationService;
@@ -13,6 +36,75 @@ describe('hardwareValidationService tests', () => {
   let appUninstallerStub;
   let serviceHelperStub;
   let deploymentProviderStub;
+
+  before(async function loadLibrary() {
+    // The first fromSubmission compiles the ajv schemas.
+    this.timeout(30000);
+    flux = await loadSpecLibrary();
+  });
+
+  /**
+   * A real FluxAppSpecV9 sized to order.
+   *
+   * `memory` must be a multiple of 100 and `cpu` at most 14 — the schema says
+   * so, which is why the numbers below are not the ones a literal could carry.
+   * rootFsGb 10 + swapGb 2 is the per-component overhead the host must hold on
+   * top of the persistent volume, so reservableHostDiskGb() comes out as
+   * storageGb + 12 — derived by flux-spec rather than added by this file.
+   */
+  function specSized(name, { cpu, memoryMb, storageGb }) {
+    return v9Spec({
+      name,
+      components: {
+        web: {
+          ...V9_SUBMISSION.components.web,
+          cpu,
+          memory: memoryMb,
+          rootFsGb: 10,
+          swapGb: 2,
+          persistentStorage: { sizeGb: storageGb, mounts: {} },
+        },
+      },
+    });
+  }
+
+  /** Real DeploymentSpecs — one per identity installed on this node. */
+  function deploymentsFor(spec, replicas) {
+    return replicas.map((replica) => flux.DeploymentSpec.fromSpec(spec, APPS_FOLDER, { replica }));
+  }
+
+  /**
+   * Register real installed apps: each returns the row appsRepository hands over
+   * and wires the (stubbed) provider to answer with that app's real deployments.
+   *
+   * `height: undefined` builds the row the way appsRepository.hydrate does, from
+   * a stored document — which is how a row written before the height column
+   * existed comes back with no height at all.
+   */
+  async function installAll(entries) {
+    const rows = [];
+    for (const entry of entries) {
+      // eslint-disable-next-line no-await-in-loop
+      const spec = await specSized(entry.name, entry.sizing);
+      const row = entry.height === undefined
+        ? flux.InstantiatedSpec.deserialize({ ...spec.serialize(), hash: 'a'.repeat(64) })
+        // eslint-disable-next-line no-await-in-loop
+        : await instantiatedSpec(spec, { height: entry.height });
+      rows.push(row);
+      deploymentProviderStub.getInstalledDeployments
+        .withArgs(entry.name).resolves(deploymentsFor(spec, entry.replicas ?? [null]));
+    }
+    return rows;
+  }
+
+  /** An app that comfortably fits the node below: 1 CPU, 1000MB, 17GB of host disk. */
+  const FITS = Object.freeze({ cpu: 1, memoryMb: 1000, storageGb: 5 });
+
+  /** The node every test measures against: 4 cores, 8GB, 100GB. Net of the
+   *  locked reserves below that is 3 CPU, 6192MB and 85GB usable. */
+  function fourCoreNode() {
+    hwRequirementsStub.getNodeSpecs.resolves({ cpuCores: 4, ram: 8192, ssdStorage: 100 });
+  }
 
   beforeEach(() => {
     logStub = {
@@ -28,10 +120,6 @@ describe('hardwareValidationService tests', () => {
         ram: 2000, // 2GB reserved
         hdd: 10, // 10GB reserved
         extrahdd: 0,
-      },
-      fluxapps: {
-        hddFileSystemMinimum: 5, // 5GB per app
-        defaultSwap: 2, // 2GB swap per app
       },
     };
 
@@ -51,18 +139,11 @@ describe('hardwareValidationService tests', () => {
       delay: sinon.stub().resolves(),
     };
 
+    // Validation sums every identity installed here, so the provider answers
+    // with a list. An app nothing was registered for answers the empty list -
+    // the "no deployment found" case.
     deploymentProviderStub = {
-      getInstalledDeployment: sinon.stub().resolves(null),
-      // Validation sums every installed identity. These fixtures are
-      // single-identity, so the plural delegates at call time to whatever the
-      // singular stub was set to; co-located cases stub this directly.
-      get getInstalledDeployments() {
-        const single = this.getInstalledDeployment;
-        return async (name) => {
-          const deployment = await single(name);
-          return deployment ? [deployment] : [];
-        };
-      },
+      getInstalledDeployments: sinon.stub().resolves([]),
     };
 
     hardwareValidationService = proxyquire('../../ZelBack/src/services/appLifecycle/hardwareValidationService', {
@@ -80,14 +161,6 @@ describe('hardwareValidationService tests', () => {
     sinon.restore();
   });
 
-  function fakeDeployment(resources) {
-    return {
-      resourceTotals: () => resources,
-      // sizeGb + rootFsGb(10) + swapGb(2) for a legacy single-component app
-      reservableHostDiskGb: () => (resources.storageGb || 0) + 12,
-    };
-  }
-
   describe('performBootTimeHardwareValidation', () => {
     it('should return empty results if no apps are installed', async () => {
       appsRepositoryStub.listInstalledApps.resolves([]);
@@ -103,19 +176,22 @@ describe('hardwareValidationService tests', () => {
     });
 
     it('should not remove apps if all apps meet hardware requirements', async () => {
-      const installedApps = [
-        { name: 'app1', height: 1000 },
-        { name: 'app2', height: 2000 },
-      ];
+      fourCoreNode();
+      const rows = await installAll([
+        { name: 'app1', height: 1000, sizing: FITS },
+        { name: 'app2', height: 2000, sizing: FITS },
+      ]);
+      appsRepositoryStub.listInstalledApps.resolves(rows);
 
-      hwRequirementsStub.getNodeSpecs.resolves({
-        cpuCores: 4,
-        ram: 8192,
-        ssdStorage: 100,
+      // The rows carry what the sweep reads off them, and the deployments answer
+      // the two questions it asks - both of which live in flux-spec, so a
+      // delegation removed there must fail here rather than pass silently.
+      rows.forEach((row) => {
+        expect(row.name, 'the sweep looks the app up by name').to.be.a('string');
+        expect(row.height, 'installation order is the chain height').to.be.a('number');
       });
-
-      appsRepositoryStub.listInstalledApps.resolves(installedApps);
-      deploymentProviderStub.getInstalledDeployment.resolves(fakeDeployment({ cpu: 1, memoryMb: 1024, storageGb: 5 }));
+      const [deployment] = await deploymentProviderStub.getInstalledDeployments('app1');
+      assertAnswers(deployment, ['resourceTotals', 'reservableHostDiskGb']);
 
       const result = await hardwareValidationService.performBootTimeHardwareValidation();
 
@@ -142,99 +218,84 @@ describe('hardwareValidationService tests', () => {
 
   describe('validateAppsCumulatively', () => {
     it('should return empty array if all apps fit within capacity', async () => {
-      const installedApps = [
-        { name: 'app1', height: 1000 },
-        { name: 'app2', height: 2000 },
-      ];
+      fourCoreNode();
+      const rows = await installAll([
+        { name: 'app1', height: 1000, sizing: FITS },
+        { name: 'app2', height: 2000, sizing: FITS },
+      ]);
 
-      hwRequirementsStub.getNodeSpecs.resolves({
-        cpuCores: 4,
-        ram: 8192,
-        ssdStorage: 100,
-      });
-
-      deploymentProviderStub.getInstalledDeployment.resolves(fakeDeployment({ cpu: 1, memoryMb: 1024, storageGb: 5 }));
-
-      const result = await hardwareValidationService.validateAppsCumulatively(installedApps);
+      const result = await hardwareValidationService.validateAppsCumulatively(rows);
 
       expect(result).to.have.length(0);
     });
 
     it('should remove app that individually exceeds CPU capacity', async () => {
-      const installedApps = [
-        { name: 'bigApp', height: 1000 },
-      ];
+      fourCoreNode();
+      const rows = await installAll([
+        { name: 'bigapp', height: 1000, sizing: { cpu: 5, memoryMb: 1000, storageGb: 5 } },
+      ]);
 
-      hwRequirementsStub.getNodeSpecs.resolves({
-        cpuCores: 4,
-        ram: 8192,
-        ssdStorage: 100,
-      });
-
-      deploymentProviderStub.getInstalledDeployment.resolves(fakeDeployment({ cpu: 5, memoryMb: 1024, storageGb: 5 }));
-
-      const result = await hardwareValidationService.validateAppsCumulatively(installedApps);
+      const result = await hardwareValidationService.validateAppsCumulatively(rows);
 
       expect(result).to.have.length(1);
-      expect(result[0].name).to.equal('bigApp');
+      expect(result[0].name).to.equal('bigapp');
       expect(result[0].reason).to.include('requires 5 CPU');
     });
 
     it('should remove app that individually exceeds RAM capacity', async () => {
-      const installedApps = [
-        { name: 'bigApp', height: 1000 },
-      ];
+      fourCoreNode();
+      const rows = await installAll([
+        { name: 'bigapp', height: 1000, sizing: { cpu: 1, memoryMb: 7200, storageGb: 5 } },
+      ]);
 
-      hwRequirementsStub.getNodeSpecs.resolves({
-        cpuCores: 4,
-        ram: 8192,
-        ssdStorage: 100,
-      });
-
-      deploymentProviderStub.getInstalledDeployment.resolves(fakeDeployment({ cpu: 1, memoryMb: 7168, storageGb: 5 }));
-
-      const result = await hardwareValidationService.validateAppsCumulatively(installedApps);
+      const result = await hardwareValidationService.validateAppsCumulatively(rows);
 
       expect(result).to.have.length(1);
-      expect(result[0].name).to.equal('bigApp');
-      expect(result[0].reason).to.include('requires 7168MB RAM');
+      expect(result[0].name).to.equal('bigapp');
+      expect(result[0].reason).to.include('requires 7200MB RAM');
     });
 
     it('should remove app that individually exceeds storage capacity', async () => {
-      const installedApps = [
-        { name: 'bigApp', height: 1000 },
-      ];
+      fourCoreNode();
+      const rows = await installAll([
+        { name: 'bigapp', height: 1000, sizing: { cpu: 1, memoryMb: 1000, storageGb: 80 } },
+      ]);
 
-      hwRequirementsStub.getNodeSpecs.resolves({
-        cpuCores: 4,
-        ram: 8192,
-        ssdStorage: 100,
-      });
-
-      deploymentProviderStub.getInstalledDeployment.resolves(fakeDeployment({ cpu: 1, memoryMb: 1024, storageGb: 80 }));
-
-      const result = await hardwareValidationService.validateAppsCumulatively(installedApps);
+      const result = await hardwareValidationService.validateAppsCumulatively(rows);
 
       expect(result).to.have.length(1);
-      expect(result[0].name).to.equal('bigApp');
+      expect(result[0].name).to.equal('bigapp');
+      // 80GB of volume + the component's own rootFs and swap: the full host
+      // footprint flux-spec states, not the declared persistent size.
       expect(result[0].reason).to.include('requires 92GB storage');
     });
 
+    it('should sum every identity of a co-located app', async () => {
+      fourCoreNode();
+      // Two named replicas of one app on this node. Each holds its own
+      // containers and volumes, so one identity's totals report a fraction of
+      // what the app actually consumes here: 2 CPU fits, 2 + 2 does not.
+      const rows = await installAll([
+        { name: 'app1', height: 1000, sizing: { cpu: 2, memoryMb: 1000, storageGb: 5 }, replicas: ['r1', 'r2'] },
+      ]);
+      expect(await deploymentProviderStub.getInstalledDeployments('app1')).to.have.length(2);
+
+      const result = await hardwareValidationService.validateAppsCumulatively(rows);
+
+      expect(result).to.have.length(1);
+      expect(result[0].name).to.equal('app1');
+      expect(result[0].reason).to.include('requires 4 CPU');
+    });
+
     it('should remove newer apps when cumulative CPU exceeds capacity', async () => {
-      const installedApps = [
-        { name: 'app1', height: 1000 },
-        { name: 'app2', height: 2000 },
-      ];
+      fourCoreNode();
+      const sizing = { cpu: 2, memoryMb: 1000, storageGb: 5 };
+      const rows = await installAll([
+        { name: 'app1', height: 1000, sizing },
+        { name: 'app2', height: 2000, sizing },
+      ]);
 
-      hwRequirementsStub.getNodeSpecs.resolves({
-        cpuCores: 4,
-        ram: 8192,
-        ssdStorage: 100,
-      });
-
-      deploymentProviderStub.getInstalledDeployment.resolves(fakeDeployment({ cpu: 2, memoryMb: 1024, storageGb: 5 }));
-
-      const result = await hardwareValidationService.validateAppsCumulatively(installedApps);
+      const result = await hardwareValidationService.validateAppsCumulatively(rows);
 
       expect(result).to.have.length(1);
       expect(result[0].name).to.equal('app2');
@@ -242,20 +303,14 @@ describe('hardwareValidationService tests', () => {
     });
 
     it('should remove newer apps when cumulative RAM exceeds capacity', async () => {
-      const installedApps = [
-        { name: 'app1', height: 1000 },
-        { name: 'app2', height: 2000 },
-      ];
+      fourCoreNode();
+      const sizing = { cpu: 1, memoryMb: 4100, storageGb: 5 };
+      const rows = await installAll([
+        { name: 'app1', height: 1000, sizing },
+        { name: 'app2', height: 2000, sizing },
+      ]);
 
-      hwRequirementsStub.getNodeSpecs.resolves({
-        cpuCores: 4,
-        ram: 8192,
-        ssdStorage: 100,
-      });
-
-      deploymentProviderStub.getInstalledDeployment.resolves(fakeDeployment({ cpu: 1, memoryMb: 4096, storageGb: 5 }));
-
-      const result = await hardwareValidationService.validateAppsCumulatively(installedApps);
+      const result = await hardwareValidationService.validateAppsCumulatively(rows);
 
       expect(result).to.have.length(1);
       expect(result[0].name).to.equal('app2');
@@ -263,20 +318,14 @@ describe('hardwareValidationService tests', () => {
     });
 
     it('should remove newer apps when cumulative storage exceeds capacity', async () => {
-      const installedApps = [
-        { name: 'app1', height: 1000 },
-        { name: 'app2', height: 2000 },
-      ];
+      fourCoreNode();
+      const sizing = { cpu: 1, memoryMb: 1000, storageGb: 40 };
+      const rows = await installAll([
+        { name: 'app1', height: 1000, sizing },
+        { name: 'app2', height: 2000, sizing },
+      ]);
 
-      hwRequirementsStub.getNodeSpecs.resolves({
-        cpuCores: 4,
-        ram: 8192,
-        ssdStorage: 100,
-      });
-
-      deploymentProviderStub.getInstalledDeployment.resolves(fakeDeployment({ cpu: 1, memoryMb: 1024, storageGb: 40 }));
-
-      const result = await hardwareValidationService.validateAppsCumulatively(installedApps);
+      const result = await hardwareValidationService.validateAppsCumulatively(rows);
 
       expect(result).to.have.length(1);
       expect(result[0].name).to.equal('app2');
@@ -284,79 +333,56 @@ describe('hardwareValidationService tests', () => {
     });
 
     it('should sort apps by height and keep oldest apps', async () => {
-      const installedApps = [
-        { name: 'newestApp', height: 3000 },
-        { name: 'oldestApp', height: 1000 },
-        { name: 'middleApp', height: 2000 },
-      ];
+      fourCoreNode();
+      const sizing = { cpu: 1.5, memoryMb: 1000, storageGb: 5 };
+      const rows = await installAll([
+        { name: 'newest-app', height: 3000, sizing },
+        { name: 'oldest-app', height: 1000, sizing },
+        { name: 'middle-app', height: 2000, sizing },
+      ]);
 
-      hwRequirementsStub.getNodeSpecs.resolves({
-        cpuCores: 4,
-        ram: 8192,
-        ssdStorage: 100,
-      });
-
-      deploymentProviderStub.getInstalledDeployment.resolves(fakeDeployment({ cpu: 1.5, memoryMb: 1024, storageGb: 5 }));
-
-      const result = await hardwareValidationService.validateAppsCumulatively(installedApps);
+      const result = await hardwareValidationService.validateAppsCumulatively(rows);
 
       expect(result).to.have.length(1);
-      expect(result[0].name).to.equal('newestApp');
+      expect(result[0].name).to.equal('newest-app');
       expect(result[0].height).to.equal(3000);
     });
 
     it('should handle apps with missing height field (treat as 0)', async () => {
-      const installedApps = [
-        { name: 'app1' },
-        { name: 'app2', height: 1000 },
-      ];
+      fourCoreNode();
+      // app1 is a row stored before the height column existed - the real
+      // InstantiatedSpec built from that document reports no height at all.
+      const rows = await installAll([
+        { name: 'app1', height: undefined, sizing: FITS },
+        { name: 'app2', height: 1000, sizing: FITS },
+      ]);
+      expect(rows[0].height, 'a legacy row states no height').to.equal(undefined);
 
-      hwRequirementsStub.getNodeSpecs.resolves({
-        cpuCores: 4,
-        ram: 8192,
-        ssdStorage: 100,
-      });
-
-      deploymentProviderStub.getInstalledDeployment.resolves(fakeDeployment({ cpu: 1, memoryMb: 1024, storageGb: 5 }));
-
-      const result = await hardwareValidationService.validateAppsCumulatively(installedApps);
+      const result = await hardwareValidationService.validateAppsCumulatively(rows);
 
       expect(result).to.have.length(0);
     });
 
     it('should skip app if deployment is not found', async () => {
-      const installedApps = [
-        { name: 'app1', height: 1000 },
-        { name: 'app2', height: 2000 },
-      ];
+      fourCoreNode();
+      const rows = await installAll([
+        { name: 'app1', height: 1000, sizing: FITS },
+        { name: 'app2', height: 2000, sizing: FITS },
+      ]);
+      // Installed in the database, but no identity was ever provisioned here.
+      deploymentProviderStub.getInstalledDeployments.withArgs('app1').resolves([]);
 
-      hwRequirementsStub.getNodeSpecs.resolves({
-        cpuCores: 4,
-        ram: 8192,
-        ssdStorage: 100,
-      });
-
-      deploymentProviderStub.getInstalledDeployment.onFirstCall().resolves(null);
-      deploymentProviderStub.getInstalledDeployment.onSecondCall().resolves(fakeDeployment({ cpu: 1, memoryMb: 1024, storageGb: 5 }));
-
-      const result = await hardwareValidationService.validateAppsCumulatively(installedApps);
+      const result = await hardwareValidationService.validateAppsCumulatively(rows);
 
       expect(result).to.have.length(0);
       expect(logStub.warn.calledWith('hardwareValidationService - No deployment found for app1, skipping')).to.equal(true);
     });
 
     it('should return empty array if storage is 0', async () => {
-      const installedApps = [
-        { name: 'app1', height: 1000 },
-      ];
+      hwRequirementsStub.getNodeSpecs.resolves({ cpuCores: 4, ram: 8192, ssdStorage: 0 });
+      const rows = await installAll([{ name: 'app1', height: 1000, sizing: FITS }]);
 
-      hwRequirementsStub.getNodeSpecs.resolves({
-        cpuCores: 4,
-        ram: 8192,
-        ssdStorage: 0,
-      });
-
-      const result = await hardwareValidationService.validateAppsCumulatively(installedApps);
+      const result = await hardwareValidationService.validateAppsCumulatively(rows);
 
       expect(result).to.have.length(0);
       expect(logStub.error.calledWith(sinon.match(/No storage detected/))).to.equal(true);
@@ -364,6 +390,10 @@ describe('hardwareValidationService tests', () => {
   });
 
   describe('removeNonCompliantApps', () => {
+    // The input here is the sweep's OWN verdict shape - {name, reason, height}
+    // built by validateAppsCumulatively above - not a spec object, so these stay
+    // plain: substituting a spec would be describing something the caller
+    // never passes.
     it('should return empty results if no apps to remove', async () => {
       const result = await hardwareValidationService.removeNonCompliantApps([]);
 

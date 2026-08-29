@@ -21,6 +21,51 @@ const verificationHelper = require('../../ZelBack/src/services/verificationHelpe
 const daemonServiceMiscRpcs = require('../../ZelBack/src/services/daemonService/daemonServiceMiscRpcs');
 const upnpService = require('../../ZelBack/src/services/upnpService');
 const networkStateService = require('../../ZelBack/src/services/networkStateService');
+const {
+  loadSpecLibrary, V8_SUBMISSION, instantiatedSpec, assertAnswers,
+} = require('./fixtures/fluxSpec');
+
+// The spec library is real here, not stubbed — see tests/unit/fixtures/fluxSpec.js
+// for why. This checker asks each installed app for the host ports it occupies
+// and then refuses to probe one of them, so the port list is the whole point of
+// the module. The doubles it carried made that list impossible to exercise:
+// `{ allHostPorts: () => [30001, 30002, 30003] }` never had to agree with any
+// spec, and `{ name: 'App1', version: 3, ports: [30001] }` was handed to the
+// checker as an INSTALLED APP, whose ports the checker does not read at all —
+// it reads them off the deployment. With the default deployment stub answering
+// undefined, the app-port list was empty on every run and the "port in use"
+// branch was never taken by any test in this file.
+//
+// What stays stubbed is I/O and node-local facts: the daemon sync RPC, the
+// confirmation flag, the local socket address, the firewall and UPnP calls, the
+// peer picker and the installed-app query.
+let flux;
+
+const APPS_FOLDER = '/tmp/apps';
+
+/**
+ * A real multi-component legacy spec occupying the given host ports. v8 because
+ * the app names here are mixed case, which v9 refuses.
+ */
+function multiPortSpec(name, hostPorts) {
+  const [template] = V8_SUBMISSION.compose;
+  return flux.FluxAppSpecV8.fromSubmission({
+    ...V8_SUBMISSION,
+    name,
+    compose: hostPorts.map((hostPort, index) => ({
+      ...template,
+      name: `Component${index + 1}`,
+      description: `Component${index + 1}`,
+      ports: [hostPort],
+      containerPorts: [8080 + index],
+    })),
+  });
+}
+
+/** A real DeploymentSpec — the object the checker calls allHostPorts() on. */
+function deploymentOf(spec) {
+  return flux.DeploymentSpec.fromSpec(spec, APPS_FOLDER, { replica: null });
+}
 
 describe('availabilityChecker tests', () => {
   let mockDosState;
@@ -29,6 +74,35 @@ describe('availabilityChecker tests', () => {
   let waitMs;
   let listInstalledAppsStub;
   let buildDeploymentStub;
+
+  before(async function loadLibrary() {
+    // The first fromSubmission compiles the ajv schemas.
+    this.timeout(60000);
+    flux = await loadSpecLibrary();
+  });
+
+  /**
+   * deploymentProvider stays stubbed, so nothing here exercises what the real
+   * one does with the InstantiatedSpec it is handed. buildDeployments reads
+   * `.isEncrypted` and `.spec` (through resolveInstantiatedSpec), `.name` for
+   * its error messages and `.identity` for every container name it derives,
+   * then asks the resolved spec's placement for its mode. Assert all of that
+   * off the object that actually arrived: the `{ name: 'App1' }` literal this
+   * file used to hand over answers exactly one of those and would have reached
+   * the real provider as a spec-less object.
+   */
+  function assertBuildDeploymentGotARealSpec(expected) {
+    const [handed] = buildDeploymentStub.firstCall.args;
+    expect(handed, 'nothing was handed to the deployment provider').to.be.an('object');
+    expect(handed.name, 'the provider names the app in every failure it logs').to.equal(expected.name);
+    expect(handed.isEncrypted, 'resolveInstantiatedSpec branches on this').to.be.a('boolean');
+    expect(handed.identity, 'read off the row, never recomputed - it names every container')
+      .to.satisfy((id) => id === null || typeof id === 'string');
+    expect(handed.spec, 'resolveInstantiatedSpec returns this for a cleartext row').to.be.an('object');
+    // resolveLocalReplicas asks the RESOLVED spec's placement for its mode
+    // before it will build anything.
+    assertAnswers(handed.spec.placement, ['mode', 'hasTargets']);
+  }
 
   beforeEach(() => {
     listInstalledAppsStub = sinon.stub(appsRepository, 'listInstalledApps').resolves([]);
@@ -150,9 +224,15 @@ describe('availabilityChecker tests', () => {
     });
 
     it('should collect ports via DeploymentSpec.allHostPorts', async () => {
-      const mockInstantiated = { name: 'App1' };
-      listInstalledAppsStub.resolves([mockInstantiated]);
-      buildDeploymentStub.resolves({ allHostPorts: () => [30001, 30002, 30003] });
+      const spec = multiPortSpec('App1', [30001, 30002, 30003]);
+      const instantiated = await instantiatedSpec(spec);
+      const deployment = deploymentOf(spec);
+      // The ports are the library's, derived from the components, not a
+      // fixture's claim about them.
+      expect(deployment.allHostPorts()).to.deep.equal([30001, 30002, 30003]);
+
+      listInstalledAppsStub.resolves([instantiated]);
+      buildDeploymentStub.resolves(deployment);
 
       sinon.stub(daemonServiceMiscRpcs, 'isDaemonSynced').returns({
         data: { synced: true },
@@ -170,7 +250,9 @@ describe('availabilityChecker tests', () => {
 
       sinon.assert.calledOnce(listInstalledAppsStub);
       sinon.assert.calledOnce(buildDeploymentStub);
-      sinon.assert.calledWith(buildDeploymentStub, mockInstantiated);
+      sinon.assert.calledWith(buildDeploymentStub, instantiated);
+      assertBuildDeploymentGotARealSpec(spec);
+      expect(waitMs).to.equal(240_000);
     });
 
     it('should skip banned ports', async () => {
@@ -216,18 +298,25 @@ describe('availabilityChecker tests', () => {
     });
 
     it('should skip ports already in use by apps', async () => {
-      mockDosState.testingPort = 30001;
-      const apps = [
-        { name: 'App1', version: 3, ports: [30001] },
-      ];
+      // The port under test is CHOSEN by the checker, never read from the state
+      // it was handed - so pinning `testingPort` beforehand, as this case used
+      // to, was overwritten on the next line of production code and the branch
+      // never ran. `nextTestingPort` is the field that actually steers it.
+      const spec = multiPortSpec('App1', [30001, 30002, 30003]);
+      const instantiated = await instantiatedSpec(spec);
+      listInstalledAppsStub.resolves([instantiated]);
+      buildDeploymentStub.resolves(deploymentOf(spec));
+      mockDosState.nextTestingPort = 30002;
 
       sinon.stub(daemonServiceMiscRpcs, 'isDaemonSynced').returns({
         data: { synced: true },
       });
       sinon.stub(nodeConfirmationService, 'isConfirmed').returns(true);
       sinon.stub(fluxNetworkHelper, 'getLocalSocketAddress').resolves('192.168.1.100:16127');
-      listInstalledAppsStub.resolves(apps);
       sinon.stub(fluxNetworkHelper, 'isPortBanned').returns(false);
+      // Reached only if the "in use" branch does NOT fire, so leaving this
+      // stubbed proves the branch by what it does not do.
+      const peerPicker = sinon.stub(networkStateService, 'getRandomSocketAddress').resolves(null);
 
       waitMs = await availabilityChecker.runAvailabilityCheckOnce(
         mockDosState,
@@ -235,7 +324,79 @@ describe('availabilityChecker tests', () => {
         mockFailedNodesCache,
       );
 
-      expect(waitMs).to.be.a('number');
+      expect(mockDosState.testingPort).to.equal(30002);
+      // timeouts.failure - the port belongs to an installed app, so it is not
+      // probed at all.
+      expect(waitMs).to.equal(15_000);
+      sinon.assert.notCalled(peerPicker);
+    });
+
+    it('probes a port no installed app occupies', async () => {
+      // The contrast that makes the case above non-vacuous: same apps, same
+      // stubs, one port outside the set the real deployment reports. This one
+      // gets as far as picking a peer.
+      const spec = multiPortSpec('App1', [30001, 30002, 30003]);
+      const instantiated = await instantiatedSpec(spec);
+      listInstalledAppsStub.resolves([instantiated]);
+      buildDeploymentStub.resolves(deploymentOf(spec));
+      mockDosState.nextTestingPort = 30009;
+
+      sinon.stub(daemonServiceMiscRpcs, 'isDaemonSynced').returns({
+        data: { synced: true },
+      });
+      sinon.stub(nodeConfirmationService, 'isConfirmed').returns(true);
+      sinon.stub(fluxNetworkHelper, 'getLocalSocketAddress').resolves('192.168.1.100:16127');
+      sinon.stub(fluxNetworkHelper, 'isPortBanned').returns(false);
+      const peerPicker = sinon.stub(networkStateService, 'getRandomSocketAddress').resolves(null);
+
+      waitMs = await availabilityChecker.runAvailabilityCheckOnce(
+        mockDosState,
+        mockPortsNotWorking,
+        mockFailedNodesCache,
+      );
+
+      expect(mockDosState.testingPort).to.equal(30009);
+      sinon.assert.calledOnce(peerPicker);
+      expect(waitMs).to.equal(240_000);
+    });
+
+    it('keeps the ports of the apps it can resolve when one app cannot be built', async () => {
+      // The per-app catch in the collection loop. An app whose spec will not
+      // resolve - an encrypted one this node cannot decrypt - must not cost the
+      // sweep the ports of every app after it, or the checker would probe a
+      // port an app is listening on and DOS itself over the failure.
+      const broken = multiPortSpec('BrokenApp', [30005]);
+      const healthy = multiPortSpec('HealthyApp', [30002]);
+      const brokenInstantiated = await instantiatedSpec(broken);
+      const healthyInstantiated = await instantiatedSpec(healthy);
+      listInstalledAppsStub.resolves([brokenInstantiated, healthyInstantiated]);
+      // sinon's withArgs cannot tell two frozen InstantiatedSpec instances
+      // apart, so the answer is keyed off an identity Map instead.
+      const answers = new Map([[healthyInstantiated, deploymentOf(healthy)]]);
+      buildDeploymentStub.callsFake(async (inst) => {
+        const deployment = answers.get(inst);
+        if (!deployment) throw new Error(`Could not resolve spec for ${inst.name}`);
+        return deployment;
+      });
+      mockDosState.nextTestingPort = 30002;
+
+      sinon.stub(daemonServiceMiscRpcs, 'isDaemonSynced').returns({
+        data: { synced: true },
+      });
+      sinon.stub(nodeConfirmationService, 'isConfirmed').returns(true);
+      sinon.stub(fluxNetworkHelper, 'getLocalSocketAddress').resolves('192.168.1.100:16127');
+      sinon.stub(fluxNetworkHelper, 'isPortBanned').returns(false);
+      const peerPicker = sinon.stub(networkStateService, 'getRandomSocketAddress').resolves(null);
+
+      waitMs = await availabilityChecker.runAvailabilityCheckOnce(
+        mockDosState,
+        mockPortsNotWorking,
+        mockFailedNodesCache,
+      );
+
+      sinon.assert.calledTwice(buildDeploymentStub);
+      expect(waitMs, 'the healthy app still shields its own port').to.equal(15_000);
+      sinon.assert.notCalled(peerPicker);
     });
 
     it('should skip if remote socket address not available', async () => {
