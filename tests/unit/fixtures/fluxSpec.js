@@ -240,10 +240,18 @@ async function instantiatedSpec(spec, state = {}) {
  */
 function assertAnswers(subject, members) {
   for (const member of members) {
-    expect(subject, `nothing was handed to the collaborator`).to.be.an('object');
+    expect(subject, 'nothing was handed to the collaborator').to.be.an('object');
     expect(subject[member], `the collaborator calls ${member}(), which this object does not have`)
       .to.be.a('function');
-    expect(() => subject[member](), `${member}() threw on the object handed over`).to.not.throw();
+    // Invoked only when it takes no required arguments. Presence is the failure
+    // this catches, but a member that merely EXISTS can still be broken, so a
+    // zero-arity one is called. A member with parameters cannot be called blind:
+    // `isExpired(state, clock)` rightly throws without a clock, and treating
+    // that as a broken object would be the helper inventing a rule the class
+    // does not have.
+    if (subject[member].length === 0) {
+      expect(() => subject[member](), `${member}() threw on the object handed over`).to.not.throw();
+    }
   }
 }
 
