@@ -22,6 +22,7 @@ const serviceHelper = require('../../ZelBack/src/services/serviceHelper');
 const networkStateService = require('../../ZelBack/src/services/networkStateService');
 const appsRepository = require('../../ZelBack/src/services/appDatabase/appsRepository');
 const { peerManager } = require('../../ZelBack/src/services/utils/peerState');
+const nodeDownService = require('../../ZelBack/src/services/nodeDownService');
 const { appSyncEvents, EVENTS: SYNC_EVENTS } = require('../../ZelBack/src/services/utils/appSyncEvents');
 const { PEER_SOURCE } = require('../../ZelBack/src/services/utils/FluxPeerSocket');
 const rateLimit = require('../../ZelBack/src/services/utils/rateLimit');
@@ -1566,7 +1567,7 @@ describe('fluxCommunication tests', () => {
       sinon.assert.calledOnceWithExactly(logSpy, 'Node not confirmed. Flux discovery is awaiting.');
     });
 
-    it('should start connecting nodes if everything is set up properly', async () => {
+    it('runs the housekeeping pass: status line, reconnect queue, reconcile sweep', async () => {
       const fluxNodeList = [
         '44.192.51.10',
         '44.192.51.12',
@@ -1585,6 +1586,7 @@ describe('fluxCommunication tests', () => {
       fluxNetworkHelper.setLocalSocketAddress('44.192.51.11');
       sinon.stub(fluxCommunicationUtils, 'getFluxnodeFromFluxList').returns('44.192.51.11');
       sinon.stub(fluxCommunicationUtils, 'deterministicFluxList').returns(fluxNodeList);
+      sinon.stub(networkStateService, 'nodeCount').returns(10);
 
       // Mock delay to return immediately
       sinon.stub(serviceHelper, 'delay').resolves();
@@ -1608,6 +1610,11 @@ describe('fluxCommunication tests', () => {
       // before it opens a socket; every log this test asserts on is emitted by
       // fluxDiscovery beforehand.
       sinon.stub(peerManager, 'isPending').returns(true);
+      sinon.stub(peerManager, 'getReconnectCandidates').returns([
+        { key: '1.2.3.4:16137', ip: '1.2.3.4', port: '16137', attempts: 1 },
+      ]);
+      // Selection belongs to the ring reconciler now: the pass only sweeps it.
+      const sweepStub = sinon.stub(nodeDownService, 'sweep').resolves();
 
       const infoSpy = sinon.spy(log, 'info');
 
@@ -1617,32 +1624,15 @@ describe('fluxCommunication tests', () => {
         },
       });
 
-      const axiosGetResponse = {
-        data: {
-          status: 'success',
-          data: {
-            message: 'all is good!',
-          },
-        },
-      };
-      sinon.stub(serviceHelper, 'axiosGet').resolves(axiosGetResponse);
-
-      // Start fluxDiscovery and wait for it to make connection attempts
       // eslint-disable-next-line no-unused-vars
       const discoveryPromise = fluxCommunication.fluxDiscovery();
 
-      // Wait for the discovery logic to execute and make at least one connection attempt
       // eslint-disable-next-line no-promise-executor-return
       await new Promise((resolve) => setTimeout(resolve, 1000));
 
-      // Verify the expected log calls were made
-      sinon.assert.calledWith(infoSpy, sinon.match(/Discovery: index 9 of 10 nodes/));
-
-      // Verify that connection process started by checking for peer addition logs
-      const addPeerCalls = infoSpy.getCalls().filter((call) => call.args[0] && call.args[0].includes('Adding random Flux peer'));
-
-      // The test passes if we see peer addition logs (which happen right before connections)
-      expect(addPeerCalls.length).to.be.at.least(1);
+      sinon.assert.calledWith(infoSpy, sinon.match(/Discovery: 10 nodes/));
+      sinon.assert.calledWith(infoSpy, sinon.match(/Reconnecting to queued peer: 1.2.3.4:16137/));
+      sinon.assert.called(sweepStub);
     }).timeout(5000);
   });
 
