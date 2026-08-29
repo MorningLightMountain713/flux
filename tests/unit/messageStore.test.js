@@ -3,6 +3,14 @@
 const { expect } = require('chai');
 const sinon = require('sinon');
 const proxyquire = require('proxyquire').noCallThru();
+const {
+  loadSpecLibrary, v8Spec, v9Spec, sealedV8Spec, sealedV9Spec, instantiatedSpec, assertAnswers,
+} = require('./fixtures/fluxSpec');
+
+// The spec library is real here, not stubbed — see tests/unit/fixtures/fluxSpec.js
+// for why. What stays stubbed is I/O and FluxOS policy: mongo, the daemon RPCs,
+// the benchmark channel, and the fork-activation height gate.
+let flux;
 
 describe('messageStore tests', () => {
   // Mirrors config.fluxapps.clockSkewAllowanceMs. Declared once so the stub and the
@@ -17,31 +25,60 @@ describe('messageStore tests', () => {
   let configStub;
   let registryManagerStub;
   let assertVersionActivatedStub;
+  // What getGlobalAppInfo / getStateBeforeHeight really return: an InstantiatedSpec,
+  // a stored spec plus its chain state. messageStore reads .owner and .spec off it.
+  let priorState;
 
-  function makeMockAppEvent(message) {
-    const specs = message.appSpecifications || {};
-    return {
+  before(async function loadLibrary() {
+    // The first fromSubmission compiles the ajv schemas.
+    this.timeout(30000);
+    flux = await loadSpecLibrary();
+  });
+
+  /**
+   * The event class deserializeTempMessage really returns for an envelope
+   * version 1 message. Legacy events never require an arcane attestation, and
+   * that is a property of the class rather than of a flag a double can set.
+   */
+  function legacyEvent(message, spec) {
+    return new flux.AppEventLegacy({
+      originalType: message.type,
+      spec,
+      version: message.version,
       hash: message.hash,
       timestamp: message.timestamp,
-      spec: {
-        name: specs.name,
-        owner: specs.owner,
-        version: specs.version || 1,
-        serialize: () => specs,
-      },
-      isRegistration: message.type === 'fluxappregister' || message.type === 'zelappregister',
-      isUpdate: message.type === 'fluxappupdate' || message.type === 'zelappupdate',
-      isEncrypted: false,
-      requiresArcaneAttestation: () => false,
-      serialize: () => ({
-        type: message.type,
-        version: message.version,
-        appSpecifications: specs,
-        hash: message.hash,
-        timestamp: message.timestamp,
-        signature: message.signature,
-      }),
-    };
+      signature: message.signature,
+    });
+  }
+
+  /**
+   * The event class deserializeTempMessage really returns for an envelope
+   * version 2 message. A cleartext spec is reconciled against the signed
+   * contentHash by the constructor; a sealed one carries the hash of the
+   * cleartext that was sealed, and is reconciled only on decrypt.
+   */
+  function signedEvent(message, spec, { contentHash, arcaneAttestation } = {}) {
+    return new flux.SignedAppEvent({
+      type: message.type,
+      spec,
+      version: message.version,
+      contentHash: contentHash ?? spec.contentHash(),
+      timestamp: message.timestamp,
+      // registration always buys TTL; the class refuses anything else
+      extend: message.type === 'fluxappregister' ? true : (message.extend ?? false),
+      signature: message.signature,
+      hash: message.hash,
+      arcaneAttestation,
+    });
+  }
+
+  /** The real event for an ordinary cleartext message. */
+  async function realAppEvent(message) {
+    const specs = message.appSpecifications || {};
+    if (message.version === 2) {
+      return signedEvent(message, await v9Spec({ name: specs.name }));
+    }
+    return legacyEvent(message, await v8Spec({ name: specs.name }));
   }
 
   function buildProxyquireStubs(overrides = {}) {
@@ -58,10 +95,13 @@ describe('messageStore tests', () => {
       },
       '../appDatabase/registryManager': registryManagerStub,
       '../appDatabase/appSpecHistory': {
-        getStateBeforeHeight: sinon.stub().resolves({ owner: 'owner1', spec: { owner: 'owner1' }, contentHash: null }),
+        getStateBeforeHeight: sinon.stub().resolves(priorState),
       },
       '../utils/specLibs': {
-        getSpec: sinon.stub().resolves({ UpdatePolicy: { assertCompatible: sinon.stub() } }),
+        // The real library behind FluxOS's own accessor — UpdatePolicy.assertCompatible
+        // runs for real against both specs. assertVersionActivated stays stubbed:
+        // it is FluxOS policy about fork heights, not spec shape.
+        getSpec: sinon.stub().callsFake(async () => flux),
         assertVersionActivated: assertVersionActivatedStub,
       },
       '../utils/globalState': {
@@ -91,7 +131,10 @@ describe('messageStore tests', () => {
     };
   }
 
-  beforeEach(() => {
+  beforeEach(async () => {
+    // The app that holds the name now, as the registry really answers it.
+    priorState = await instantiatedSpec(await v8Spec({ name: 'test' }), { height: 400 });
+
     // Stubs
     dbHelperStub = {
       databaseConnection: sinon.stub(),
@@ -109,11 +152,11 @@ describe('messageStore tests', () => {
     appsRepositoryStub = {
       getPermanentMessage: sinon.stub(),
       getTempMessage: sinon.stub(),
-      getGlobalAppInfo: sinon.stub().resolves({ owner: 'owner1', spec: { owner: 'owner1' }, contentHash: null }),
+      getGlobalAppInfo: sinon.stub().resolves(priorState),
     };
 
     appEventVerifierStub = {
-      deserializeTempMessage: sinon.stub().callsFake((msg) => Promise.resolve(makeMockAppEvent(msg))),
+      deserializeTempMessage: sinon.stub().callsFake((msg) => realAppEvent(msg)),
       deserializeMessage: sinon.stub().resolves({}),
       authorize: sinon.stub().resolves(),
       verifyAttestation: sinon.stub().returns(true),
@@ -324,6 +367,15 @@ describe('messageStore tests', () => {
 
         sinon.assert.calledOnceWithExactly(appsRepositoryStub.getGlobalAppInfo, 'test');
         sinon.assert.notCalled(stubs['../appDatabase/appSpecHistory'].getStateBeforeHeight);
+
+        // The authorization gate stays stubbed, so nothing here exercises what it
+        // does with what it is handed. The real one calls verifyHash() on the
+        // event and reads the prior owner off the state, so check both can answer
+        // — a delegation could otherwise disappear with this suite still green.
+        const [handed] = stubs['./appEventVerifier'].authorize.firstCall.args;
+        assertAnswers(handed.appEvent, ['verifyHash', 'assessRenewal']);
+        expect(handed.previousState.owner, 'the owner the update is judged against')
+          .to.equal(priorState.spec.owner);
       });
 
       // A message already on chain is a replay: the node is catching up on
@@ -384,32 +436,27 @@ describe('messageStore tests', () => {
     });
 
     describe('arcane attestation gate', () => {
-      // A v9 (envelope version 2) encrypted event. isEncrypted true drives the
-      // gate; the decrypt branch downstream is short-circuited by isSystemSecure
-      // resolving false, so these tests isolate the gate itself.
-      function makeEncryptedV9Event({ version = 2, attestation = 'att-sig' } = {}) {
-        const specs = { name: 'enc-app', owner: 'owner1', version: 9 };
-        return {
-          hash: 'enchash',
-          timestamp: Date.now(),
-          version,
-          isEncrypted: true,
-          requiresArcaneAttestation: () => version === 2,
-          isRegistration: true,
-          isUpdate: false,
-          spec: { ...specs, serialize: () => specs },
-          serialize: () => ({
-            type: 'fluxappregister',
-            version,
-            appSpecifications: specs,
-            hash: 'enchash',
-            timestamp: Date.now(),
-            signature: 'sig',
-            contentHash: 'deadbeef',
-            extend: false,
-            arcaneAttestation: attestation,
-          }),
-        };
+      // A real v9 (envelope version 2) encrypted event: a node-sealed
+      // EncryptedSpecV9 inside a real SignedAppEvent, whose isEncrypted and
+      // requiresArcaneAttestation() follow from the spec class rather than from
+      // a flag. The decrypt branch downstream is short-circuited by
+      // isSystemSecure resolving false, so these tests isolate the gate itself.
+      async function encryptedV9Event({ attestation = 'att-sig' } = {}) {
+        const sealed = await sealedV9Spec({ name: 'enc-app' });
+        const cleartext = await v9Spec({ name: 'enc-app' });
+        return signedEvent({ ...encryptedMessage, version: 2 }, sealed, {
+          contentHash: cleartext.contentHash(),
+          arcaneAttestation: attestation,
+        });
+      }
+
+      // The v8 enterprise equivalent. An envelope version 1 message deserializes
+      // to AppEventLegacy, and that class answers requiresArcaneAttestation()
+      // false by construction — which is the thing under test.
+      async function encryptedV8Event() {
+        return legacyEvent(
+          { ...encryptedMessage, version: 1 }, await sealedV8Spec({ name: 'enc-app' }),
+        );
       }
 
       const encryptedMessage = {
@@ -440,7 +487,7 @@ describe('messageStore tests', () => {
       });
 
       it('rejects an encrypted v9 message with a missing or invalid attestation', async () => {
-        appEventVerifierStub.deserializeTempMessage.resolves(makeEncryptedV9Event());
+        appEventVerifierStub.deserializeTempMessage.resolves(await encryptedV9Event());
         appEventVerifierStub.verifyAttestation.returns(false);
         messageStore = buildWithSystemSecure(false);
 
@@ -452,7 +499,7 @@ describe('messageStore tests', () => {
       });
 
       it('stores an encrypted v9 message carrying a valid attestation', async () => {
-        appEventVerifierStub.deserializeTempMessage.resolves(makeEncryptedV9Event());
+        appEventVerifierStub.deserializeTempMessage.resolves(await encryptedV9Event());
         appEventVerifierStub.verifyAttestation.returns(true);
         messageStore = buildWithSystemSecure(false);
 
@@ -462,12 +509,23 @@ describe('messageStore tests', () => {
         expect(appEventVerifierStub.verifyAttestation.calledOnce).to.be.true;
         const stored = dbHelperStub.insertOneToDatabase.firstCall.args[2];
         expect(stored.arcaneAttestation).to.equal('att-sig');
+
+        // verifyAttestation stays stubbed, so nothing here exercises what it does
+        // with the event. The real one rebuilds the signed message from the
+        // event's own contentHash AND a hash of the sealed envelope — the second
+        // half needs the spec to answer serialize() — so hand it a verifier and
+        // check it got that far.
+        const [attested] = appEventVerifierStub.verifyAttestation.firstCall.args;
+        let signedOver = null;
+        expect(attested.verifyArcaneAttestation((msg) => { signedOver = msg; return true; }, 'pk'))
+          .to.be.true;
+        expect(signedOver, 'the attest message is built from the envelope').to.be.a('string').and.not.equal('');
       });
 
       it('does not subject a v8 (envelope version 1) encrypted message to the gate', async () => {
         // Legacy enterprise apps predate attestation and aren't born attested;
         // AppEventLegacy has no verifyArcaneAttestation, so the gate must skip them.
-        appEventVerifierStub.deserializeTempMessage.resolves(makeEncryptedV9Event({ version: 1, attestation: undefined }));
+        appEventVerifierStub.deserializeTempMessage.resolves(await encryptedV8Event());
         appEventVerifierStub.verifyAttestation.returns(false);
         messageStore = buildWithSystemSecure(false);
 
@@ -523,25 +581,24 @@ describe('messageStore tests', () => {
       it('runs the registration name-conflict check on a readable spec', async () => {
         await messageStore.storeAppTemporaryMessage(cleartextMessage);
         expect(registryManagerStub.checkApplicationRegistrationNameConflicts.calledOnce).to.be.true;
+        // The conflict check stays stubbed, and the real one reads the app name
+        // straight off the spec it is handed — so that is what is checked here.
+        const [handed] = registryManagerStub.checkApplicationRegistrationNameConflicts.firstCall.args;
+        expect(handed.name).to.equal('clear-app');
       });
 
       // Preserved deliberately: those checks read the spec, and a node that
       // cannot open a sealed one has nothing to read.
       it('skips them for a sealed spec this node cannot open', async () => {
-        appEventVerifierStub.deserializeTempMessage.resolves({
-          hash: 'sealedhash',
-          timestamp: Date.now(),
-          version: 2,
-          isEncrypted: true,
-          requiresArcaneAttestation: () => true,
-          isRegistration: true,
-          isUpdate: false,
-          spec: { name: 'sealed-app', owner: 'owner1', version: 9, serialize: () => ({}) },
-          serialize: () => ({
-            type: 'fluxappregister', version: 2, appSpecifications: {}, hash: 'sealedhash',
-            timestamp: Date.now(), signature: 'sig', contentHash: 'x', extend: false,
-          }),
-        });
+        const sealed = await sealedV9Spec({ name: 'sealed-app' });
+        const cleartext = await v9Spec({ name: 'sealed-app' });
+        appEventVerifierStub.deserializeTempMessage.resolves(signedEvent(
+          {
+            type: 'fluxappregister', version: 2, hash: 'sealedhash', timestamp: Date.now(), signature: 'sig',
+          },
+          sealed,
+          { contentHash: cleartext.contentHash(), arcaneAttestation: 'att-sig' },
+        ));
         appEventVerifierStub.verifyAttestation.returns(true);
         // A node that cannot open it — benchmarkService must be stubbed or the
         // real one dials 127.0.0.1:26224 and the harness fails the run.
@@ -564,44 +621,20 @@ describe('messageStore tests', () => {
     // signed for. These run with isSystemSecure true, so they go THROUGH the
     // decrypt branch the attestation tests above deliberately skip.
     describe('decrypted content is reconciled against the signed contentHash', () => {
-      // spec.decrypt resolves and decryptAndVerify rejects, so a caller using
-      // the wrong one stores the message and fails these tests. That is the
-      // whole point: the two are indistinguishable unless the content differs.
-      function makeSecureEvent({ reconciles }) {
-        const specs = { name: 'enc-app', owner: 'owner1', version: 9 };
-        const decrypted = { version: 9, validateContents: sinon.stub() };
-        return {
-          hash: 'enchash',
-          timestamp: Date.now(),
-          version: 2,
-          isEncrypted: true,
-          requiresArcaneAttestation: () => true,
-          isRegistration: true,
-          isUpdate: false,
-          spec: {
-            ...specs,
-            serialize: () => specs,
-            createProvider: sinon.stub().resolves({}),
-            decrypt: sinon.stub().resolves(decrypted),
-          },
-          decryptAndVerify: reconciles
-            ? sinon.stub().resolves(decrypted)
-            : sinon.stub().rejects(Object.assign(
-              new Error('decrypted content does not match the contentHash this event was signed over'),
-              { code: 'CONTENT_HASH_MISMATCH' },
-            )),
-          serialize: () => ({
-            type: 'fluxappregister',
-            version: 2,
-            appSpecifications: specs,
-            hash: 'enchash',
-            timestamp: Date.now(),
-            signature: 'sig',
-            contentHash: 'deadbeef',
-            extend: false,
-            arcaneAttestation: 'att-sig',
-          }),
-        };
+      // A real sealed event. spec.decrypt() resolves either way and only
+      // decryptAndVerify() reconciles, so a caller using the wrong one stores the
+      // mismatching message and fails these tests. That is the whole point: the
+      // two are indistinguishable unless the content differs — and here the
+      // difference is real, produced by the real classes rather than declared.
+      async function secureEvent({ reconciles }) {
+        const sealed = await sealedV9Spec({ name: 'enc-app' });
+        const cleartext = await v9Spec({ name: 'enc-app' });
+        return signedEvent(secureMessage, sealed, {
+          // The signature commits to a contentHash, never to the envelope: sign
+          // over what was actually sealed, or over something else entirely.
+          contentHash: reconciles ? cleartext.contentHash() : 'f'.repeat(64),
+          arcaneAttestation: 'att-sig',
+        });
       }
 
       const secureMessage = {
@@ -619,7 +652,7 @@ describe('messageStore tests', () => {
           buildProxyquireStubs({
             '../benchmarkService': { isSystemSecure: sinon.stub().resolves(true) },
             '../utils/specLibs': {
-              getSpec: sinon.stub().resolves({ UpdatePolicy: { assertCompatible: sinon.stub() } }),
+              getSpec: sinon.stub().callsFake(async () => flux),
               assertVersionActivated: sinon.stub(),
             },
           }),
@@ -636,8 +669,10 @@ describe('messageStore tests', () => {
       });
 
       it('rejects a message whose decrypted content is not what was signed', async () => {
-        const event = makeSecureEvent({ reconciles: false });
-        appEventVerifierStub.deserializeTempMessage.resolves(event);
+        // Spied, not replaced: the reconciliation that decides this test is the
+        // real one, and the spy only records that the node went through it.
+        const decryptAndVerify = sinon.spy(flux.SignedAppEvent.prototype, 'decryptAndVerify');
+        appEventVerifierStub.deserializeTempMessage.resolves(await secureEvent({ reconciles: false }));
         messageStore = buildSecure();
 
         const result = await messageStore.storeAppTemporaryMessage(secureMessage);
@@ -645,18 +680,23 @@ describe('messageStore tests', () => {
         expect(result, 'a mismatch must be a returned rejection, not a throw').to.be.instanceOf(Error);
         expect(result.message).to.include('contentHash');
         expect(dbHelperStub.insertOneToDatabase.called, 'must not be stored').to.be.false;
-        expect(event.decryptAndVerify.calledOnce, 'must go through decryptAndVerify').to.be.true;
+        expect(decryptAndVerify.calledOnce, 'must go through decryptAndVerify').to.be.true;
       });
 
       it('stores a message whose decrypted content matches', async () => {
-        const event = makeSecureEvent({ reconciles: true });
-        appEventVerifierStub.deserializeTempMessage.resolves(event);
+        const decryptAndVerify = sinon.spy(flux.SignedAppEvent.prototype, 'decryptAndVerify');
+        // The decrypted spec is validated for real on the way in — a
+        // DecryptedCanonicalSpec has no wire form, so validateContents is the
+        // only way to ask it the gossip question.
+        const validateContents = sinon.spy(flux.DecryptedCanonicalSpec.prototype, 'validateContents');
+        appEventVerifierStub.deserializeTempMessage.resolves(await secureEvent({ reconciles: true }));
         messageStore = buildSecure();
 
         const result = await messageStore.storeAppTemporaryMessage(secureMessage);
 
         expect(result, `unexpected: ${result && result.message}`).to.deep.equal({ rebroadcast: true });
-        expect(event.decryptAndVerify.calledOnce).to.be.true;
+        expect(decryptAndVerify.calledOnce).to.be.true;
+        sinon.assert.calledWith(validateContents, { purpose: 'gossip' });
         expect(dbHelperStub.insertOneToDatabase.calledOnce).to.be.true;
       });
 
@@ -665,9 +705,11 @@ describe('messageStore tests', () => {
       // hide it — which is exactly what happened while writing these tests, when
       // a missing stub surfaced as "Invalid encrypted Flux App message".
       it('lets a programming error escape rather than reporting it as a bad message', async () => {
-        const event = makeSecureEvent({ reconciles: true });
-        event.decryptAndVerify = sinon.stub().rejects(new TypeError('someFn is not a function'));
-        appEventVerifierStub.deserializeTempMessage.resolves(event);
+        // A real SignedAppEvent is frozen, so the outcome is controlled on the
+        // class rather than by swapping the object for a literal.
+        sinon.stub(flux.SignedAppEvent.prototype, 'decryptAndVerify')
+          .rejects(new TypeError('someFn is not a function'));
+        appEventVerifierStub.deserializeTempMessage.resolves(await secureEvent({ reconciles: true }));
         messageStore = buildSecure();
 
         try {
