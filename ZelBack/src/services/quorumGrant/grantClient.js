@@ -15,6 +15,7 @@ const messageStore = require('../appMessaging/messageStore');
 const foundingCommittee = require('../appMesh/foundingCommittee');
 const signedEnvelope = require('./signedEnvelope');
 const rosterOverlay = require('./rosterOverlay');
+const downCertificates = require('./downCertificates');
 const core = require('./grantClientCore');
 const masterleasePublisher = require('./masterleasePublisher');
 const log = require('../../lib/log');
@@ -208,26 +209,45 @@ async function committeeFor(key, mode, fingerprint) {
   const committee = selectCommittee(membership, walkKey, { size: committeeSizeFor('held') });
   if (committee.refusal) return null;
 
-  let { members } = committee;
+  let chainMembers = committee.members;
   let chain = [];
+  let cancels = [];
   const appName = key.slice(0, key.indexOf('/'));
   const role = key.slice(key.indexOf('/') + 1);
   const published = await readMasterleaseRoster(appName, role);
-  if (published
+  const sameBasis = published
     && published.fingerprint === fingerprint
-    && published.generation === generation
-    && published.chain.length) {
+    && published.generation === generation;
+  if (sameBasis && published.chain.length) {
     const verified = rosterOverlay.verifyChain(
       membership, key, fingerprint, generation, committeeSizeFor('held'), published.chain,
     );
     if (verified) {
-      ({ members } = verified);
+      chainMembers = verified.members;
       ({ chain } = published);
     }
   }
+  // The published cancel chain is adopted as published state, shape-gated
+  // only: certificates verify at formation and at the grantors' gauntlet,
+  // and a reader past the store's retention could not re-verify them anyway.
+  // A lie here misroutes asks to grantors that refuse — routing, not trust.
+  if (sameBasis && published.cancels.length
+    && rosterOverlay.cancelChainWellFormed(published.cancels)) {
+    ({ cancels } = published);
+  }
+  cancels = await withStoreCancellations(chainMembers, chain, cancels, membership, walkKey);
+  const members = cancelledApplied(membership, walkKey, chainMembers, chain, cancels);
 
   return {
-    members, quorum: committee.quorum, fingerprint, generation, chain,
+    members, chainMembers, quorum: committee.quorum, fingerprint, generation, chain, cancels,
+  };
+}
+
+/** What every held ask carries of the committee's overlay state. */
+function overlayExtras(committee) {
+  return {
+    ...(committee.chain?.length ? { chain: committee.chain } : {}),
+    ...(committee.cancels?.length ? { cancels: committee.cancels } : {}),
   };
 }
 
@@ -246,23 +266,82 @@ async function currentGeneration(key) {
 }
 
 /**
- * The roster chain the published record carries for a key, with the basis it
- * binds to — or null. A read, never a verification: the caller verifies
- * against the membership it resolved.
+ * The overlay state the published record carries for a key — roster chain
+ * and cancel chain — with the basis it binds to, or null. A read, never a
+ * verification: the roster chain re-verifies against the membership, the
+ * cancel chain is adopted as published state.
  */
 async function readMasterleaseRoster(appName, role) {
   try {
     const record = await messageStore.getMasterleaseRecord(appName, role);
     const data = record?.data;
     if (!data || typeof data.fingerprint !== 'string') return null;
-    if (!Array.isArray(data.roster?.chain)) return null;
     return {
       fingerprint: data.fingerprint,
       generation: data.generation ?? 0,
-      chain: data.roster.chain,
+      chain: Array.isArray(data.roster?.chain) ? data.roster.chain : [],
+      cancels: Array.isArray(data.cancels?.chain) ? data.cancels.chain : [],
     };
   } catch (error) {
     return null;
+  }
+}
+
+/**
+ * The roster with a cancel chain applied over the tier-1 result — the
+ * overlay order every verifier runs: base walk, then the quorum-signed
+ * chain, then the cancel set.
+ */
+function cancelledApplied(membership, walkKey, members, chain, cancels) {
+  const cancelled = rosterOverlay.cancelledSubjects(cancels);
+  if (!cancelled.size) return members;
+  const excluded = new Set(chain.map((entry) => entry.remove));
+  return rosterOverlay.applyCancellations(membership, walkKey, members, excluded, cancelled).members;
+}
+
+/**
+ * Extend a cancel chain with what this node's own store holds that the
+ * published chain does not: a refutation lifts a standing cancellation, a
+ * standing certificate cancels a seated member — replacements included, so
+ * derivation runs to a fixed point. A lapsed certificate changes nothing:
+ * without a refutation the published cancellation stands.
+ */
+async function withStoreCancellations(members, chain, cancels, membership, walkKey) {
+  let extended = [...cancels];
+
+  const standing = rosterOverlay.cancelledSubjects(extended);
+  const lifts = await Promise.all([...standing].sort().map(async (subject) => {
+    if (await downCertificates.standingCertificateFor(subject)) return null;
+    const refutation = await downCertificates.refutationFor(subject);
+    return refutation ? { subject, refutation } : null;
+  }));
+  lifts.filter(Boolean).forEach(({ subject, refutation }) => {
+    extended.push({
+      seq: extended.length + 1, reinstate: subject, refutation, at: Date.now(),
+    });
+  });
+
+  for (;;) {
+    const roster = cancelledApplied(membership, walkKey, members, chain, extended);
+    const seated = roster.map(outpointOf).sort();
+    // eslint-disable-next-line no-await-in-loop -- each round checks the
+    // roster the previous round's cancellations derived
+    const certified = (await Promise.all(seated.map(async (outpoint) => {
+      const cert = await downCertificates.standingCertificateFor(outpoint);
+      return cert ? { outpoint, cert } : null;
+    }))).filter(Boolean);
+    if (!certified.length) return extended;
+
+    const appended = [...extended];
+    certified.forEach(({ outpoint, cert }) => {
+      appended.push({
+        seq: appended.length + 1, cancel: outpoint, cert, at: Date.now(),
+      });
+    });
+    // past the shape cap the world has changed too much for an overlay:
+    // stop extending and let re-acquisition at a fresh basis restart it
+    if (!rosterOverlay.cancelChainWellFormed(appended)) return extended;
+    extended = appended;
   }
 }
 
@@ -559,8 +638,8 @@ async function termLapsed(key) {
   if (!identity) return false;
   const committee = await committeeFor(key, 'held', networkStateService.membershipFingerprint());
   if (!committee) return false;
-  const chainExtras = committee.chain?.length ? { chain: committee.chain } : {};
-  const signed = await signedAskFor('probe', key, 'held', 1, identity, committee, chainExtras);
+  const overlay = overlayExtras(committee);
+  const signed = await signedAskFor('probe', key, 'held', 1, identity, committee, overlay);
   if (!signed) return false;
   const replies = await askCommittee(committee.members, 'probe', signed.ask, signed.signature);
   const shielded = [...replies.values()].some(
@@ -575,11 +654,11 @@ async function acquireOnce(key, mode, ttlMs, identity, committee, options) {
   const { members, quorum } = committee;
   // a healed committee's chain rides every ask, so a grantor seated by it —
   // whose register may be empty — can prove to itself that it belongs
-  const chainExtras = committee.chain?.length ? { chain: committee.chain } : {};
+  const overlay = overlayExtras(committee);
 
   // Pre-vote: learn without burning an epoch. A live incumbent means the
   // answer is "not you, not now" and a correct challenger walks away.
-  const probeSigned = await signedAskFor('probe', key, mode, 1, identity, committee, chainExtras);
+  const probeSigned = await signedAskFor('probe', key, mode, 1, identity, committee, overlay);
   if (!probeSigned) return { granted: false, reason: 'could not sign ask' };
   const probeReplies = await askCommittee(members, 'probe', probeSigned.ask, probeSigned.signature);
 
@@ -597,7 +676,7 @@ async function acquireOnce(key, mode, ttlMs, identity, committee, options) {
 
   // Prepare at one past everything the probe taught.
   const epoch = core.nextEpoch(probeOutcome.highestEpoch);
-  const prepareSigned = await signedAskFor('prepare', key, mode, epoch, identity, committee, chainExtras);
+  const prepareSigned = await signedAskFor('prepare', key, mode, epoch, identity, committee, overlay);
   const prepareReplies = await askCommittee(members, 'prepare', prepareSigned.ask, prepareSigned.signature);
   const prepared = core.prepareOutcome([...prepareReplies.values()], quorum);
 
@@ -616,7 +695,7 @@ async function acquireOnce(key, mode, ttlMs, identity, committee, options) {
 
   const acceptSigned = await signedAskFor('accept', key, mode, epoch, identity, committee, {
     ttlMs: mode === 'held' ? ttlMs : undefined,
-    ...chainExtras,
+    ...overlay,
   });
   const sentMs = (options.clock ?? nowMs)();
   const acceptReplies = await askCommittee(members, 'accept', acceptSigned.ask, acceptSigned.signature);
@@ -744,6 +823,7 @@ class Holder {
     this.#identity = options.identity;
     this.#committee = options.committee;
     this.#committee.chain = this.#committee.chain ?? [];
+    this.#committee.cancels = this.#committee.cancels ?? [];
     this.#committee.generation = this.#committee.generation ?? 0;
     this.#onDemoted = options.onDemoted ?? null;
     this.#recoveredUntilMs = options.recoveredUntilMs ?? null;
@@ -809,6 +889,7 @@ class Holder {
       generation: this.#committee.generation,
       ttlMs: this.#ttlMs,
       ...(this.#committee.chain.length ? { roster: { chain: this.#committee.chain } } : {}),
+      ...(this.#committee.cancels.length ? { cancels: { chain: this.#committee.cancels } } : {}),
     });
   }
 
@@ -861,7 +942,7 @@ class Holder {
       this.#committee,
       {
         ttlMs: this.#ttlMs,
-        ...(this.#committee.chain.length ? { chain: this.#committee.chain } : {}),
+        ...overlayExtras(this.#committee),
       },
     );
     if (!signed) {
@@ -941,23 +1022,32 @@ class Holder {
     const now = this.#clock();
     if (this.#lastHealMs !== null && now - this.#lastHealMs < repairIntervalMs()) return;
 
+    // Tier-1 is cancel-blind: proposals are judged against the base-plus-
+    // chain roster, so only seats on THAT roster are healable here. A dark
+    // cancel-seated member is the cancel plane's business — its certificate
+    // replaces it at the next derivation.
+    const membership = networkStateService.membershipAt(this.#committee.fingerprint);
+    if (!membership) return;
+    const walkKey = rosterOverlay.walkKeyFor(this.#key, this.#committee.generation);
+    const base = selectCommittee(membership, walkKey, { size: committeeSizeFor('held') });
+    if (base.refusal) return;
+    const chainRoster = rosterOverlay.rosterAfter(base.members, membership, this.#committee.chain);
+    if (!chainRoster) return;
+    const healable = new Set(chainRoster.map(outpointOf));
+
     const dark = this.#committee.members.filter(
-      (member) => now - (this.#lastAnswerMs.get(outpointOf(member)) ?? now) > this.#ttlMs,
+      (member) => healable.has(outpointOf(member))
+        && now - (this.#lastAnswerMs.get(outpointOf(member)) ?? now) > this.#ttlMs,
     );
     if (!dark.length) return;
     this.#lastHealMs = now;
 
-    const membership = networkStateService.membershipAt(this.#committee.fingerprint);
-    if (!membership) return;
-
     const target = dark[0];
     const targetOutpoint = outpointOf(target);
-    const survivors = this.#committee.members.filter((member) => member !== target);
+    const survivors = chainRoster.filter((member) => outpointOf(member) !== targetOutpoint);
     const excluded = new Set(this.#committee.chain.map((entry) => entry.remove));
     excluded.add(targetOutpoint);
-    const expected = rosterOverlay.nextReplacement(
-      membership, rosterOverlay.walkKeyFor(this.#key, this.#committee.generation), survivors, excluded,
-    );
+    const expected = rosterOverlay.nextReplacement(membership, walkKey, survivors, excluded);
     if (!expected) return;
 
     const seq = this.#committee.chain.length + 1;
@@ -972,7 +1062,7 @@ class Holder {
         remove: targetOutpoint,
         add: outpointOf(expected),
         seq,
-        ...(this.#committee.chain.length ? { chain: this.#committee.chain } : {}),
+        ...overlayExtras(this.#committee),
       },
     );
     if (!signed) return;
@@ -1012,7 +1102,9 @@ class Holder {
     if (entry.acceptances.length < this.#committee.quorum) return;
 
     this.#committee.chain.push(entry);
-    this.#committee.members = [...survivors, expected];
+    this.#committee.members = cancelledApplied(
+      membership, walkKey, [...survivors, expected], this.#committee.chain, this.#committee.cancels,
+    );
     this.#acks.delete(targetOutpoint);
     this.#lastAnswerMs.delete(targetOutpoint);
     this.#lastAnswerMs.set(entry.add, now);
@@ -1044,7 +1136,7 @@ class Holder {
       this.#committee,
       {
         ttlMs: this.#ttlMs,
-        ...(this.#committee.chain.length ? { chain: this.#committee.chain } : {}),
+        ...overlayExtras(this.#committee),
       },
     );
     if (!signed) return null;
@@ -1117,8 +1209,8 @@ class Holder {
    * deposition rule ignores our own higher grant on purpose.
    */
   async #refreshTerm() {
-    const chainExtras = this.#committee.chain.length ? { chain: this.#committee.chain } : {};
-    const probeSigned = await signedAskFor('probe', this.#key, 'held', 1, this.#identity, this.#committee, chainExtras);
+    const overlay = overlayExtras(this.#committee);
+    const probeSigned = await signedAskFor('probe', this.#key, 'held', 1, this.#identity, this.#committee, overlay);
     if (!probeSigned) return;
     const probeReplies = await askCommittee(this.#committee.members, 'probe', probeSigned.ask, probeSigned.signature);
 
@@ -1132,7 +1224,7 @@ class Holder {
     const epoch = core.nextEpoch(core.highestEpochSeen([...probeReplies.values()]));
     if (epoch <= this.#epoch) return;
 
-    const prepareSigned = await signedAskFor('prepare', this.#key, 'held', epoch, this.#identity, this.#committee, chainExtras);
+    const prepareSigned = await signedAskFor('prepare', this.#key, 'held', epoch, this.#identity, this.#committee, overlay);
     if (!prepareSigned) return;
     const prepareReplies = await askCommittee(this.#committee.members, 'prepare', prepareSigned.ask, prepareSigned.signature);
     const prepared = core.prepareOutcome([...prepareReplies.values()], this.#committee.quorum);
@@ -1140,7 +1232,7 @@ class Holder {
 
     const acceptSigned = await signedAskFor('accept', this.#key, 'held', epoch, this.#identity, this.#committee, {
       ttlMs: this.#ttlMs,
-      ...chainExtras,
+      ...overlay,
     });
     if (!acceptSigned) return;
     const sentMs = this.#clock();
@@ -1361,21 +1453,39 @@ async function carryAsk(type, ask, signature) {
     return { replies: [] };
   }
 
-  // The ask may carry a chain newer than anything this carrier has seen
-  // published — a heal that just happened. It is self-verifying, so honor
-  // it: otherwise a freshly seated grantor reachable only through relays
-  // would never hear a word.
+  // The ask may carry overlay state newer than anything this carrier has
+  // seen published — a heal or a cancellation that just happened. The roster
+  // chain is self-verifying, so verify and honor it: otherwise a freshly
+  // seated grantor reachable only through relays would never hear a word.
+  // The cancel chain steers only who is asked, so it is adopted on shape
+  // like every other routing read.
   let { members } = committee;
-  if (Array.isArray(ask.chain)
-    && ask.chain.length > committee.chain.length
-    && rosterOverlay.chainWellFormed(ask.chain)) {
+  if ((ask.mode ?? 'held') === 'held') {
     const membership = networkStateService.membershipAt(ask.fingerprint);
-    const verified = membership
-      ? rosterOverlay.verifyChain(
-        membership, ask.key, ask.fingerprint, ask.generation ?? 0, committeeSizeFor(ask.mode ?? 'held'), ask.chain,
-      )
-      : null;
-    if (verified) ({ members } = verified);
+    if (membership) {
+      let chainMembers = committee.chainMembers ?? committee.members;
+      let { chain } = committee;
+      if (Array.isArray(ask.chain)
+        && ask.chain.length > committee.chain.length
+        && rosterOverlay.chainWellFormed(ask.chain)) {
+        const verified = rosterOverlay.verifyChain(
+          membership, ask.key, ask.fingerprint, ask.generation ?? 0, committeeSizeFor('held'), ask.chain,
+        );
+        if (verified) {
+          ({ members: chainMembers } = verified);
+          ({ chain } = ask);
+        }
+      }
+      let { cancels = [] } = committee;
+      if (Array.isArray(ask.cancels)
+        && ask.cancels.length > cancels.length
+        && rosterOverlay.cancelChainWellFormed(ask.cancels)) {
+        ({ cancels } = ask);
+      }
+      members = cancelledApplied(
+        membership, rosterOverlay.walkKeyFor(ask.key, ask.generation ?? 0), chainMembers, chain, cancels,
+      );
+    }
   }
 
   const replies = await askCommittee(members, type, ask, signature);

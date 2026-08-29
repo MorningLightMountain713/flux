@@ -15,6 +15,7 @@ const foundingCommittee = require('../../ZelBack/src/services/appMesh/foundingCo
 
 const FOUNDER_KEY = `myapp/founder-${foundingCommittee.founderToken('myapp', 'db')}@500000`;
 const grantClient = require('../../ZelBack/src/services/quorumGrant/grantClient');
+const downCertificates = require('../../ZelBack/src/services/quorumGrant/downCertificates');
 const registerCore = require('../../ZelBack/src/services/quorumGrant/grantRegisterCore');
 const rosterOverlay = require('../../ZelBack/src/services/quorumGrant/rosterOverlay');
 const signedEnvelope = require('../../ZelBack/src/services/quorumGrant/signedEnvelope');
@@ -274,6 +275,7 @@ describe('quorumGrant grantClient', () => {
 
   afterEach(() => {
     grantClient.resetForTests();
+    downCertificates.resetForTests();
     sinon.restore();
   });
 
@@ -1000,6 +1002,153 @@ describe('quorumGrant grantClient', () => {
       expect(replacementRecord.accepted.epoch).to.equal(outcome.holder.epoch);
       const darkRecord = registers.get(DARK_HOST).get(KEY);
       expect(darkRecord.accepted.epoch).to.not.equal(outcome.holder.epoch);
+    });
+  });
+
+  describe('the cancel overlay — a certificate cancels a seat without any committee quorum', () => {
+    const outpoint = (node) => `${node.txhash}:${node.outidx}`;
+
+    const certified = committee.members[0];
+    const CERTIFIED_HOST = certified.ip.split(':')[0];
+    const survivors = committee.members.filter((node) => node !== certified);
+    const replacement = rosterOverlay.nextReplacement(
+      membership, rosterOverlay.walkKeyFor(KEY, 0), survivors, new Set([outpoint(certified)]),
+    );
+
+    function providerWith({ standing = new Map(), refutations = new Map() } = {}) {
+      return {
+        standingCertificateFor: async (o) => standing.get(o) ?? null,
+        refutationFor: async (o) => refutations.get(o) ?? null,
+        verifyCertificate: (cert) => ({ valid: cert?.token === 'standing', subject: cert?.subject ?? null }),
+        verifyRefutation: (refutation, cert) => Boolean(
+          refutation?.token === 'alive' && refutation.subject === cert.subject,
+        ),
+      };
+    }
+
+    function askedHosts(type) {
+      return serviceHelper.axiosPost.getCalls()
+        .filter((call) => call.args[0].endsWith(`/flux/quorumgrant/${type}`))
+        .map((call) => call.args[0].match(/^http:\/\/([^:]+):/)[1]);
+    }
+
+    it('fixture: the walk can seat a replacement for the certified referee', () => {
+      expect(replacement).to.not.equal(null);
+      expect(committeeHosts).to.not.include(replacement.ip.split(':')[0]);
+    });
+
+    it('a standing certificate on a seat makes acquisition ask the healed committee — the certified seat is never asked', async () => {
+      const standing = new Map([[outpoint(certified), { subject: outpoint(certified), token: 'standing' }]]);
+      downCertificates.registerProvider(providerWith({ standing }));
+
+      const outcome = await grantClient.acquire(KEY, holderOptions());
+      expect(outcome.granted).to.equal(true);
+
+      expect(askedHosts('accept')).to.not.include(CERTIFIED_HOST);
+      expect(askedHosts('accept')).to.include(replacement.ip.split(':')[0]);
+      expect(registers.get(replacement.ip.split(':')[0]).get(KEY).accepted.grantee).to.equal(SELF);
+      expect(registers.get(CERTIFIED_HOST).get(KEY)).to.equal(undefined);
+
+      // the asks named the cancellation they applied, certificate riding along
+      const acceptBody = serviceHelper.axiosPost.getCalls()
+        .find((call) => call.args[0].endsWith('/flux/quorumgrant/accept')).args[1];
+      expect(acceptBody.cancels).to.have.length(1);
+      expect(acceptBody.cancels[0].cancel).to.equal(outpoint(certified));
+      expect(acceptBody.cancels[0].cert.token).to.equal('standing');
+
+      // the published record carries the cancel chain beside the roster
+      const published = masterleasePublisher.publishMasterlease.lastCall.args[0];
+      expect(published.cancels.chain).to.have.length(1);
+
+      // renewals keep carrying it
+      await outcome.holder.renewOnce();
+      const renewBody = serviceHelper.axiosPost.getCalls()
+        .find((call) => call.args[0].endsWith('/flux/quorumgrant/renew')).args[1];
+      expect(renewBody.cancels).to.have.length(1);
+    });
+
+    it('the published record teaches the cancellation — a reader with no store of its own applies it as published state', async () => {
+      messageStore.getMasterleaseRecord.resolves({
+        data: {
+          fingerprint,
+          cancels: {
+            chain: [{
+              seq: 1, cancel: outpoint(certified), cert: { subject: outpoint(certified), token: 'standing' }, at: 900,
+            }],
+          },
+        },
+      });
+
+      // no provider registered: the store answers nothing, and adoption of
+      // the published set must not depend on it
+      const outcome = await grantClient.acquire(KEY, holderOptions());
+      expect(outcome.granted).to.equal(true);
+      expect(askedHosts('accept')).to.not.include(CERTIFIED_HOST);
+      expect(registers.get(replacement.ip.split(':')[0]).get(KEY).accepted.grantee).to.equal(SELF);
+    });
+
+    it('a refutation reinstates the seat — the roster re-derives with the returned referee', async () => {
+      messageStore.getMasterleaseRecord.resolves({
+        data: {
+          fingerprint,
+          cancels: {
+            chain: [{
+              seq: 1, cancel: outpoint(certified), cert: { subject: outpoint(certified), token: 'standing' }, at: 900,
+            }],
+          },
+        },
+      });
+      const refutations = new Map([[outpoint(certified), { subject: outpoint(certified), token: 'alive' }]]);
+      downCertificates.registerProvider(providerWith({ refutations }));
+
+      const outcome = await grantClient.acquire(KEY, holderOptions());
+      expect(outcome.granted).to.equal(true);
+
+      // the base committee is whole again: the certified seat is asked, the
+      // one-time replacement is not
+      expect(askedHosts('accept')).to.include(CERTIFIED_HOST);
+      expect(askedHosts('accept')).to.not.include(replacement.ip.split(':')[0]);
+
+      // the chain records the lift rather than forgetting the cancellation
+      const acceptBody = serviceHelper.axiosPost.getCalls()
+        .find((call) => call.args[0].endsWith('/flux/quorumgrant/accept')).args[1];
+      expect(acceptBody.cancels).to.have.length(2);
+      expect(acceptBody.cancels[1].reinstate).to.equal(outpoint(certified));
+    });
+
+    it('a lapsed certificate reinstates nothing — without a refutation the cancellation stands', async () => {
+      messageStore.getMasterleaseRecord.resolves({
+        data: {
+          fingerprint,
+          cancels: {
+            chain: [{
+              seq: 1, cancel: outpoint(certified), cert: { subject: outpoint(certified), token: 'standing' }, at: 900,
+            }],
+          },
+        },
+      });
+      // store empty both ways: no standing certificate, no refutation
+      downCertificates.registerProvider(providerWith());
+
+      const outcome = await grantClient.acquire(KEY, holderOptions());
+      expect(outcome.granted).to.equal(true);
+      expect(askedHosts('accept')).to.not.include(CERTIFIED_HOST);
+    });
+
+    it('tier-1 heal never proposes removing a cancel-seated member — its darkness is the cancel plane\'s business', async () => {
+      const standing = new Map([[outpoint(certified), { subject: outpoint(certified), token: 'standing' }]]);
+      downCertificates.registerProvider(providerWith({ standing }));
+      const outcome = await grantClient.acquire(KEY, holderOptions());
+      expect(outcome.granted).to.equal(true);
+
+      // the replacement goes dark for over a full term: heal must not fire a
+      // roster proposal at it, because the grantors judge tier-1 entries
+      // against the base-plus-chain roster the replacement is not on
+      dark.add(replacement.ip.split(':')[0]);
+      clockNow += TTL + 1_000;
+      await outcome.holder.renewOnce();
+      expect(askedHosts('roster')).to.have.length(0);
+      expect(outcome.holder.state).to.equal('held');
     });
   });
 });
