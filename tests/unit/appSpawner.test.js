@@ -3,12 +3,23 @@
 const { expect } = require('chai');
 const sinon = require('sinon');
 const proxyquire = require('proxyquire').noCallThru();
+const {
+  loadSpecLibrary, V9_SUBMISSION, v9Spec, sealedV9Spec, sealedV8Spec, instantiatedSpec,
+  assertAnswers,
+} = require('./fixtures/fluxSpec');
 
 // The real fit rule, not a restatement of it. capacityShortfall and
 // burstHeadroomShortfall are pure and synchronous, so a stub could only
 // re-implement them — and a re-implementation is free to drift from the rule
 // the spawner actually applies in production.
 const hwRequirementsActual = require('../../ZelBack/src/services/appRequirements/hwRequirements');
+
+// The spec library is real here, not stubbed — see tests/unit/fixtures/fluxSpec.js
+// for why. Every candidate the spawner screens, targets, decrypts and installs is a
+// real InstantiatedSpec over a real spec, so the placement, size and Arcane answers
+// are the ones production reads. What stays stubbed is I/O and FluxOS policy: the
+// daemon RPCs, the repository and registry, the benchmark channel, docker.
+let flux;
 
 // Mirrors appInstaller.InstallStatus (proxyquire.noCallThru stubs the real module out).
 const InstallStatus = Object.freeze({
@@ -18,6 +29,16 @@ const InstallStatus = Object.freeze({
   REJECTED: 'rejected',
   FAILED: 'failed',
 });
+
+// This node's three identities in the harness — the benchmark stub's IP, the
+// collateral stub's outpoint and fluxNetworkHelper's operator key. A spec that
+// pins this node names one of these VALUES: a real Placement decides
+// matchesTarget from its target arrays, so there is no `matchesTarget: () => true`
+// to write, and a placement that names some other node genuinely does not match.
+const MY_ADDR = '192.168.1.1';
+const MY_TXHASH = 'a'.repeat(64);
+const MY_OUTPOINT = `${MY_TXHASH}:0`;
+const MY_OPERATOR = 'pubkey123';
 
 describe('appSpawner tests', () => {
   let appSpawner;
@@ -30,6 +51,8 @@ describe('appSpawner tests', () => {
   let delayStub;
   let daemonSyncStub;
   let ensureProvidersRegisteredStub;
+  let hwRequirementsStub;
+  let portManagerStub;
 
   function createConfigStub(overrides = {}) {
     return {
@@ -77,83 +100,75 @@ describe('appSpawner tests', () => {
     };
   }
 
-  function mockPlacement(overrides = {}) {
-    return {
-      staticIp: false,
-      dataCenter: false,
-      geoAllow: null,
-      geoDeny: null,
-      // targeting fields: arrays of node identity strings (ip / outpoint / operator)
-      targetIps: [],
-      targetOutpoints: [],
-      targetOperators: [],
-      hasTargets: () => ((overrides.targetIps || []).length > 0
-        || (overrides.targetOutpoints || []).length > 0
-        || (overrides.targetOperators || []).length > 0),
-      hasGeoRestrictions: () => false,
-      matches: () => true,
-      // mirrors the real Placement: with no targets set, matchesTarget is
-      // vacuously true ("run anywhere") — never stub it false for an
-      // untargeted spec, that masks pinned-vs-eligible conflation bugs
-      matchesTarget: () => true,
-      isPinnedTo(nodeInfo) { return this.hasTargets() && this.matchesTarget(nodeInfo); },
-      ...overrides,
-    };
+  before(async function loadLibrary() {
+    // The first fromSubmission compiles the ajv schemas.
+    this.timeout(60000);
+    flux = await loadSpecLibrary();
+  });
+
+  /**
+   * A real v9 components blob, resized. Every size below is inside the schema's
+   * own caps — cpu <= 14, memory <= 57000 MB, persistentStorage.sizeGb <= 780 —
+   * which is why the node capacities the screening tests use are small: the
+   * 64000 MB / 100-core apps the hand-written double accepted cannot be
+   * registered at all.
+   */
+  function sizedComponents({ cpu, memory, storageGb, arcaneShutdown } = {}) {
+    const components = JSON.parse(JSON.stringify(V9_SUBMISSION.components));
+    const { web } = components;
+    if (cpu !== undefined) web.cpu = cpu;
+    if (memory !== undefined) web.memory = memory;
+    if (storageGb !== undefined) web.persistentStorage.sizeGb = storageGb;
+    // Graceful shutdown is executed by flux-shutdownd, which runs only on
+    // Arcane — the cheapest real way to make a CLEARTEXT spec Arcane-requiring.
+    if (arcaneShutdown) web.shutdown = { gracefulTimeout: 30 };
+    return components;
   }
 
-  function mockSpec(overrides = {}) {
-    const placement = mockPlacement(overrides.placement);
-    return {
-      version: overrides.version || 7,
-      name: overrides.name || 'testApp',
-      owner: overrides.owner || 'testOwner',
-      instances: overrides.instances || 3,
-      enterprise: overrides.enterprise || false,
-      placement,
-      componentEntries: () => [],
-      serialize: () => overrides,
-      hasSyncthing: () => false,
-    };
-  }
-
-  function mockInstantiated(overrides = {}) {
-    const spec = mockSpec(overrides);
-    return {
-      name: spec.name,
-      version: spec.version,
-      owner: spec.owner,
-      hash: overrides.hash || 'abc123',
+  /**
+   * A real InstantiatedSpec — what findUnderProvisionedApps hands the spawner and
+   * what every gate below reads: name, owner, hash, identity, placement,
+   * requiresArcane(), resourceTotals(), isEncrypted.
+   *
+   * `encrypted` produces the node-sealed v9 form (isEncrypted true,
+   * requiresArcane true, and a cleartext resource summary it can still be
+   * screened by). `sealedV8` produces the enterprise v8 blob — the one vantage
+   * that genuinely cannot size itself, so resourceTotals() really is null.
+   */
+  async function realInstantiated(overrides = {}) {
+    let spec;
+    if (overrides.sealedV8) {
+      spec = await sealedV8Spec({ name: overrides.name ?? 'testapp' });
+    } else {
+      const submission = { name: overrides.name ?? 'testapp' };
+      if (overrides.owner) submission.owner = overrides.owner;
+      if (overrides.instances) submission.instances = overrides.instances;
+      if (overrides.placement) submission.placement = overrides.placement;
+      if (overrides.size || overrides.requiresArcane) {
+        submission.components = sizedComponents({
+          ...(overrides.size ?? {}), arcaneShutdown: overrides.requiresArcane,
+        });
+      }
+      spec = overrides.encrypted ? await sealedV9Spec(submission) : await v9Spec(submission);
+    }
+    if (overrides.unsizeable) {
+      // A spec whose resources cannot be computed at all (a malformed legacy
+      // containerData does this in production). Stubbed on the REAL spec rather
+      // than replacing the object, so the member set stays honest —
+      // InstantiatedSpec.resourceTotals delegates straight through to it.
+      sinon.stub(spec, 'resourceTotals').throws(new Error('unparseable containerData'));
+    }
+    return instantiatedSpec(spec, {
+      hash: overrides.hash ?? 'abc123',
       // The app-identity segment its containers are named from — minted at
-      // registration and carried on the real InstantiatedSpec.
-      identity: overrides.identity ?? 'a1b2c3d4e5f6',
-      spec,
-      isEncrypted: !!overrides.encrypted,
-      // Mirrors InstantiatedSpec.requiresArcane(): every encrypted spec
-      // requires Arcane; a cleartext spec only via an Arcane-requiring
-      // feature (telemetry, content, shutdown, preStop) — forced in tests
-      // with overrides.requiresArcane.
-      requiresArcane: () => !!overrides.encrypted || !!overrides.requiresArcane,
-      // Mirrors InstantiatedSpec.resourceTotals(): a readable spec sums its
-      // components, a sealed v9 reads its cleartext summary, and a sealed v8
-      // cannot answer at all — null meaning "cannot tell", never zero.
-      // `resourceTotals: 'throws'` stands in for a spec whose resources cannot
-      // be computed (a malformed legacy containerData does this in production).
-      resourceTotals: () => {
-        if (overrides.resourceTotals === 'throws') throw new Error('unparseable containerData');
-        if (overrides.resourceTotals === null) return null;
-        const r = {
-          cpu: 1, memoryMb: 1000, storageGb: 10, rootFsGb: 2, swapGb: 0, componentCount: 1,
-          ...(overrides.resourceTotals || {}),
-        };
-        return { ...r, hostDiskGb: r.storageGb + r.rootFsGb + r.swapGb };
-      },
-      serialize: () => overrides,
-    };
+      // registration and carried on the InstantiatedSpec.
+      identity: 'identity' in overrides ? overrides.identity : 'a1b2c3d4e5f6',
+    });
   }
 
-  function makeCandidate(overrides = {}) {
+  async function makeCandidate(overrides = {}) {
     return {
-      instantiated: mockInstantiated(overrides),
+      instantiated: await realInstantiated(overrides),
       actual: overrides.actual ?? 0,
       required: overrides.required ?? 3,
     };
@@ -170,14 +185,13 @@ describe('appSpawner tests', () => {
     }
 
     logStub = { error: sinon.stub(), info: sinon.stub(), warn: sinon.stub() };
-    deploymentFromSpecStub = sinon.stub().callsFake((spec, folder, options = {}) => ({
-      identity: options.identity ?? spec.name,
-      replica: options.replica ?? null,
-      allHostPorts: sinon.stub().returns([]),
-      allImages: sinon.stub().returns([]),
-      componentEntries: sinon.stub().returns([]),
-      resourceTotals: sinon.stub().returns({ cpu: 1, memoryMb: 1000, storageGb: 10 }),
-    }));
+    // The real DeploymentSpec behind a spy: it is the same pure library, and the
+    // view it builds is what the capacity gate, the port guard and the blocklist
+    // check are actually handed. A hand-written view answered [] to allHostPorts()
+    // and allImages(), so those three gates were fed nothing at all.
+    deploymentFromSpecStub = sinon.stub().callsFake(
+      (spec, folder, options) => flux.DeploymentSpec.fromSpec(spec, folder, options),
+    );
     findUnderProvisionedStub = sinon.stub().resolves(opts.candidates || []);
     delayStub = sinon.stub();
     delayStub.onFirstCall().resolves();
@@ -196,6 +210,25 @@ describe('appSpawner tests', () => {
       getRunningAppIpList: sinon.stub().resolves([]),
       countAppInstallingErrors: sinon.stub().resolves(opts.errorCount ?? 0),
     };
+    hwRequirementsStub = {
+      checkNodeResources: sinon.stub().resolves(),
+      checkCpuBurstHeadroom: sinon.stub().resolves(),
+      systemArchitecture: sinon.stub().resolves('amd64'),
+      // The real pair: one reading of free capacity, applied per candidate.
+      // Defaults to a node with ample room so existing cases are unaffected;
+      // opts.nodeCapacity shrinks it to exercise the screen.
+      nodeCapacity: opts.nodeCapacityStub ?? sinon.stub().resolves(opts.nodeCapacity ?? {
+        totalSpaceOnNode: 1000, availableSpace: 500, availableCpu: 200,
+        availableRam: 100000, freeCores: 32,
+      }),
+      capacityShortfall: opts.capacityShortfall ?? hwRequirementsActual.capacityShortfall,
+      burstHeadroomShortfall: opts.burstHeadroomShortfall
+        ?? hwRequirementsActual.burstHeadroomShortfall,
+    };
+    portManagerStub = {
+      ensureApplicationPortsNotUsed: sinon.stub().resolves(),
+      checkInstallingAppPortAvailable: sinon.stub().resolves(true),
+    };
 
     appSpawner = proxyquire('../../ZelBack/src/services/appLifecycle/appSpawner', {
       config: configStub,
@@ -212,18 +245,20 @@ describe('appSpawner tests', () => {
       '../generalService': {
         checkSynced: sinon.stub().resolves(true),
         nodeTier: sinon.stub().resolves('cumulus'),
-        obtainNodeCollateralInformation: sinon.stub().resolves({ txhash: 'aaa', txindex: 0 }),
+        // A real txid, because a real Placement's targetOutpoints entries are
+        // schema-checked as `txid:vout` — 'aaa:0' cannot be registered.
+        obtainNodeCollateralInformation: sinon.stub().resolves({ txhash: MY_TXHASH, txindex: 0 }),
       },
       '../benchmarkService': {
         getBenchmarks: sinon.stub().resolves({
           status: 'success',
-          data: { ipaddress: '192.168.1.1' },
+          data: { ipaddress: MY_ADDR },
         }),
       },
       '../fluxNetworkHelper': {
         isPortOpen: sinon.stub().resolves(true),
         isPortUserBlocked: sinon.stub().returns(false),
-        getFluxNodePublicKey: sinon.stub().returns('pubkey123'),
+        getFluxNodePublicKey: sinon.stub().returns(MY_OPERATOR),
       },
       '../nodeDosState': {
         isNodeDos: sinon.stub().returns(false),
@@ -243,23 +278,14 @@ describe('appSpawner tests', () => {
         listInstalledApps: opts.installedApps ?? sinon.stub().resolves([]),
       },
       '../utils/specLibs': {
+        // The real backend classes. DeploymentSpec.fromSpec is `identity ??
+        // appName`, so a caller that omits the identity produces a view named
+        // from the app's NAME — which is what every port/ownership comparison
+        // then reads. notifySpecStored hydrates the raw stored doc through the
+        // real InstantiatedSpec.deserialize, so its gate reads a real Placement.
         getSpecBackend: sinon.stub().resolves({
-          DeploymentSpec: {
-            // Mirrors DeploymentSpec.fromSpec: `identity ?? appName`, so a caller
-            // that omits the identity produces a view named from the app's NAME —
-            // which is what every port/ownership comparison then reads.
-            fromSpec: deploymentFromSpecStub,
-          },
-          // notifySpecStored hydrates the raw stored doc into an InstantiatedSpec at
-          // the perimeter; the test doc carries a placement object the stub passes through.
-          InstantiatedSpec: {
-            deserialize: (doc) => ({
-              name: doc.name,
-              owner: doc.owner,
-              spec: { instances: doc.instances },
-              placement: doc.placement,
-            }),
-          },
+          DeploymentSpec: { fromSpec: deploymentFromSpecStub },
+          InstantiatedSpec: flux.InstantiatedSpec,
         }),
       },
       '../utils/socketAddressUtils': {
@@ -272,25 +298,8 @@ describe('appSpawner tests', () => {
         isImageBlocked: opts.imageBlockedStub ?? sinon.stub().resolves({ blocked: false }),
         verifyRepository: sinon.stub().resolves(),
       },
-      '../appRequirements/hwRequirements': {
-        checkNodeResources: sinon.stub().resolves(),
-        checkCpuBurstHeadroom: sinon.stub().resolves(),
-        systemArchitecture: sinon.stub().resolves('amd64'),
-        // The real pair: one reading of free capacity, applied per candidate.
-        // Defaults to a node with ample room so existing cases are unaffected;
-        // opts.nodeCapacity shrinks it to exercise the screen.
-        nodeCapacity: opts.nodeCapacityStub ?? sinon.stub().resolves(opts.nodeCapacity ?? {
-          totalSpaceOnNode: 1000, availableSpace: 500, availableCpu: 200,
-          availableRam: 100000, freeCores: 32,
-        }),
-        capacityShortfall: opts.capacityShortfall ?? hwRequirementsActual.capacityShortfall,
-        burstHeadroomShortfall: opts.burstHeadroomShortfall
-          ?? hwRequirementsActual.burstHeadroomShortfall,
-      },
-      '../appNetwork/portManager': {
-        ensureApplicationPortsNotUsed: sinon.stub().resolves(),
-        checkInstallingAppPortAvailable: sinon.stub().resolves(true),
-      },
+      '../appRequirements/hwRequirements': hwRequirementsStub,
+      '../appNetwork/portManager': portManagerStub,
       '../utils/globalState': globalStateStub,
       '../geolocationService': {
         isStaticIP: sinon.stub().returns(opts.nodeHasStaticIp ?? false),
@@ -423,7 +432,7 @@ describe('appSpawner tests', () => {
 
   describe('candidate filtering', () => {
     it('should filter out apps in the long-term error cache', async () => {
-      const candidate = makeCandidate();
+      const candidate = await makeCandidate();
       buildModule({ candidates: [candidate] });
       globalStateStub.spawnErrorsLongerAppCache.set('abc123', '');
       await appSpawner.trySpawningGlobalApplication().catch(() => {});
@@ -431,7 +440,7 @@ describe('appSpawner tests', () => {
     });
 
     it('should filter out apps in the short-term spawn cache', async () => {
-      const candidate = makeCandidate();
+      const candidate = await makeCandidate();
       buildModule({ candidates: [candidate] });
       globalStateStub.trySpawningGlobalAppCache.set('abc123', '');
       await appSpawner.trySpawningGlobalApplication().catch(() => {});
@@ -439,7 +448,11 @@ describe('appSpawner tests', () => {
     });
 
     it('refuses a cleartext Arcane-requiring app on a non-Arcane node and remembers it', async () => {
-      const candidate = makeCandidate({ requiresArcane: true });
+      // A real cleartext v9 spec carrying graceful shutdown: the library derives
+      // requiresArcane() from the feature, so this is the production answer and
+      // not a hand-set flag.
+      const candidate = await makeCandidate({ requiresArcane: true });
+      expect(candidate.instantiated.isEncrypted, 'cleartext, so the refusal is about the FEATURE').to.be.false;
       buildModule({ candidates: [candidate] });
       await appSpawner.trySpawningGlobalApplication().catch(() => {});
       expect(globalStateStub.spawnErrorsLongerAppCache.has('abc123'), 'long-error cache remembers the refusal').to.be.true;
@@ -447,14 +460,15 @@ describe('appSpawner tests', () => {
     });
 
     it('should filter out apps that fail placement.matches', async () => {
-      const candidate = makeCandidate({ placement: { matches: () => false } });
+      // The node reports NA/US/US-NY, so a real geoDeny on NA is a real miss.
+      const candidate = await makeCandidate({ placement: { geoDeny: [{ continent: 'NA' }] } });
       buildModule({ candidates: [candidate] });
       await appSpawner.trySpawningGlobalApplication().catch(() => {});
       expect(logStub.info.args.some((a) => a[0]?.includes?.('No app currently to be processed'))).to.be.true;
     });
 
     it('should pass apps that satisfy placement.matches', async () => {
-      const candidate = makeCandidate({ placement: { matches: () => true } });
+      const candidate = await makeCandidate({ placement: { geoAllow: [{ continent: 'NA' }] } });
       buildModule({ candidates: [candidate] });
       await appSpawner.trySpawningGlobalApplication().catch(() => {});
       expect(logStub.info.args.some((a) => a[0]?.includes?.('selected to try to spawn'))).to.be.true;
@@ -463,7 +477,7 @@ describe('appSpawner tests', () => {
     it('skips the install trial when 5+ nodes report genuine failures (the re-armed network gate)', async () => {
       // only permanent verdicts are stored/broadcast now, so the count means the
       // app itself is broken - the node must not burn a trial rediscovering it
-      const candidate = makeCandidate({ placement: { matches: () => true } });
+      const candidate = await makeCandidate();
       buildModule({ candidates: [candidate], errorCount: 5 });
       await appSpawner.trySpawningGlobalApplication().catch(() => {});
       expect(logStub.warn.args.some((a) => a[0]?.includes?.('network-wide install failures; skipping'))).to.be.true;
@@ -471,7 +485,7 @@ describe('appSpawner tests', () => {
     });
 
     it('should filter out an app that is mid-teardown (teardown-aware selection)', async () => {
-      buildModule({ candidates: [makeCandidate()], teardownOwedFor: sinon.stub().resolves(true) });
+      buildModule({ candidates: [await makeCandidate()], teardownOwedFor: sinon.stub().resolves(true) });
       await appSpawner.trySpawningGlobalApplication().catch(() => {});
       expect(logStub.info.args.some((a) => a[0]?.includes?.('No app currently to be processed'))).to.be.true;
       expect(logStub.info.args.some((a) => a[0]?.includes?.('selected to try to spawn'))).to.be.false;
@@ -484,7 +498,7 @@ describe('appSpawner tests', () => {
     // win the draw ahead of one this node could actually have installed.
     it('drops a candidate whose remaining slots are already claimed by installers', async () => {
       buildModule({
-        candidates: [makeCandidate({ actual: 1, required: 3 })],
+        candidates: [await makeCandidate({ actual: 1, required: 3 })],
         installingCounts: new Map([['testapp', 2]]),
       });
       await appSpawner.trySpawningGlobalApplication().catch(() => {});
@@ -494,7 +508,7 @@ describe('appSpawner tests', () => {
 
     it('keeps a candidate whose claims still leave a slot open', async () => {
       buildModule({
-        candidates: [makeCandidate({ actual: 1, required: 3 })],
+        candidates: [await makeCandidate({ actual: 1, required: 3 })],
         installingCounts: new Map([['testapp', 1]]),
       });
       await appSpawner.trySpawningGlobalApplication().catch(() => {});
@@ -504,7 +518,7 @@ describe('appSpawner tests', () => {
     // A network covered exactly is covered: 3 required and 3 running-plus-installing
     // means no seat is open, and proceeding installs a fourth instance.
     it('bails when running plus installing exactly meets the requirement', async () => {
-      buildModule({ candidates: [makeCandidate({ actual: 0, required: 3 })] });
+      buildModule({ candidates: [await makeCandidate({ actual: 0, required: 3 })] });
       registryManagerStub.appLocation.resolves([{ ip: '192.168.1.5:16127' }]);
       registryManagerStub.appInstallingLocation.resolves([
         { ip: '192.168.1.6:16127' }, { ip: '192.168.1.7:16127' },
@@ -550,7 +564,7 @@ describe('appSpawner tests', () => {
   describe('pure-follower spawn suppression (manageCollectorLifecycle)', () => {
     it('flag on: drops a follower candidate that nothing assigned to this node requires', async () => {
       buildModule({
-        candidates: [makeCandidate()],
+        candidates: [await makeCandidate()],
         configOverrides: { manageCollectorLifecycle: true },
         isPureFollower: sinon.stub().returns(true),
         getRequiredDependencyNamesForNode: sinon.stub().resolves(new Set()),
@@ -562,10 +576,10 @@ describe('appSpawner tests', () => {
 
     it('flag on: keeps a follower candidate that an assigned app requires', async () => {
       buildModule({
-        candidates: [makeCandidate()],
+        candidates: [await makeCandidate()],
         configOverrides: { manageCollectorLifecycle: true },
         isPureFollower: sinon.stub().returns(true),
-        getRequiredDependencyNamesForNode: sinon.stub().resolves(new Set(['testApp'])),
+        getRequiredDependencyNamesForNode: sinon.stub().resolves(new Set(['testapp'])),
       });
       await appSpawner.trySpawningGlobalApplication().catch(() => {});
       expect(logStub.info.args.some((a) => a[0]?.includes?.('selected to try to spawn'))).to.be.true;
@@ -573,7 +587,7 @@ describe('appSpawner tests', () => {
 
     it('flag off (default): a follower is never suppressed - the console owns the lifecycle', async () => {
       buildModule({
-        candidates: [makeCandidate()],
+        candidates: [await makeCandidate()],
         isPureFollower: sinon.stub().returns(true),
         getRequiredDependencyNamesForNode: sinon.stub().resolves(new Set()),
       });
@@ -583,7 +597,7 @@ describe('appSpawner tests', () => {
 
     it('flag on: a registry-read failure falls back to not suppressing', async () => {
       buildModule({
-        candidates: [makeCandidate()],
+        candidates: [await makeCandidate()],
         configOverrides: { manageCollectorLifecycle: true },
         isPureFollower: sinon.stub().returns(true),
         getRequiredDependencyNamesForNode: sinon.stub().rejects(new Error('registry read failed')),
@@ -593,23 +607,34 @@ describe('appSpawner tests', () => {
     });
 
     it('flag on: the deferred-queue intake path is covered by the install gate (skip + throttle clear)', async () => {
-      const queued = makeCandidate({ name: 'placeholder', hash: 'ph1' });
+      const queued = await makeCandidate({ name: 'placeholder', hash: 'ph1' });
+      const isPureFollower = sinon.stub().returns(true);
       buildModule({
         // a placeholder keeps the candidate pool non-empty so the deferred-queue branch is reached
         candidates: [queued],
         configOverrides: { manageCollectorLifecycle: true },
-        isPureFollower: sinon.stub().returns(true),
+        isPureFollower,
         getRequiredDependencyNamesForNode: sinon.stub().resolves(new Set()),
-        globalAppInfoStub: sinon.stub().resolves(mockInstantiated({ name: 'testApp', hash: 'abc123' })),
+        globalAppInfoStub: sinon.stub().resolves(await realInstantiated({ name: 'testapp', hash: 'abc123' })),
         globalStateOverrides: {
           appsToBeCheckedLater: [{
-            appName: 'testApp', hash: 'abc123', required: 3, timeToCheck: Date.now() - 1000,
+            appName: 'testapp', hash: 'abc123', required: 3, timeToCheck: Date.now() - 1000,
           }],
         },
       });
       await appSpawner.trySpawningGlobalApplication().catch(() => {});
       expect(logStub.info.args.some((a) => a[0]?.includes?.('is a pure follower and nothing on this node requires it'))).to.be.true;
       expect(globalStateStub.trySpawningGlobalAppCache.has('abc123')).to.be.false;
+
+      // The resolver stays stubbed, so nothing here exercises what it does with
+      // the InstantiatedSpec it is handed. The real isPureFollowerApp resolves
+      // the spec and reads its activation off the resolved view, so assert the
+      // object can answer for it — a delegation could otherwise disappear from
+      // flux-spec with this suite still green.
+      const [handedApp] = isPureFollower.getCall(isPureFollower.callCount - 1).args;
+      assertAnswers(handedApp, ['requiresArcane', 'resourceTotals', 'serialize']);
+      expect(handedApp.spec.activation, 'the resolved view carries the activation the follower check reads')
+        .to.satisfy((a) => a === null || typeof a === 'object');
     });
   });
 
@@ -620,7 +645,7 @@ describe('appSpawner tests', () => {
 
     it('drops a candidate whose shareWith dependency is not ready', async () => {
       buildModule({
-        candidates: [makeCandidate()],
+        candidates: [await makeCandidate()],
         checkAppDependencyRequirements: sinon.stub().rejects(notReadyError()),
       });
       await appSpawner.trySpawningGlobalApplication().catch(() => {});
@@ -638,16 +663,27 @@ describe('appSpawner tests', () => {
       const cheap = sinon.stub().resolves(true);
       buildModule({
         candidates: [
-          makeCandidate({ name: 'pinnedApp', hash: 'pin1', placement: { targetIps: ['7.7.7.7:16127'] } }),
-          makeCandidate({ name: 'generalApp', hash: 'gen1' }),
+          // Pinned to THIS node, so the real Placement actually says so —
+          // the double answered matchesTarget true while naming 7.7.7.7.
+          await makeCandidate({ name: 'pinnedapp', hash: 'pin1', placement: { targetIps: [MY_ADDR] } }),
+          await makeCandidate({ name: 'generalapp', hash: 'gen1' }),
         ],
         checkAppDependencyRequirements: gate,
         dependenciesReadyForSelection: cheap,
       });
       await appSpawner.trySpawningGlobalApplication().catch(() => {});
 
-      expect(gate.getCalls().map((c) => c.args[0].name)).to.eql(['pinnedApp']);
-      expect(cheap.getCalls().map((c) => c.args[0].name)).to.eql(['generalApp']);
+      expect(gate.getCalls().map((c) => c.args[0].name)).to.eql(['pinnedapp']);
+      expect(cheap.getCalls().map((c) => c.args[0].name)).to.eql(['generalapp']);
+
+      // Both resolvers stay stubbed, so nothing here exercises what they do with
+      // the InstantiatedSpec they receive. The real pair reads the app's
+      // dependency edges off its spec view, so assert what arrives can answer.
+      const [pinned] = gate.firstCall.args;
+      assertAnswers(pinned, ['requiresArcane', 'resourceTotals', 'linkedAppNames']);
+      assertAnswers(pinned.spec, ['dependencyEntries']);
+      const [general] = cheap.firstCall.args;
+      assertAnswers(general.spec, ['dependencyEntries']);
     });
 
     it('outpoint- and operator-pinned candidates also take the resolving gate', async () => {
@@ -657,22 +693,22 @@ describe('appSpawner tests', () => {
       const cheap = sinon.stub().resolves(true);
       buildModule({
         candidates: [
-          makeCandidate({ name: 'byOutpoint', hash: 'o1', placement: { targetOutpoints: ['abc:0'] } }),
-          makeCandidate({ name: 'byOperator', hash: 'r1', placement: { targetOperators: ['opkey'] } }),
-          makeCandidate({ name: 'generalApp', hash: 'g1' }),
+          await makeCandidate({ name: 'byoutpoint', hash: 'o1', placement: { targetOutpoints: [MY_OUTPOINT] } }),
+          await makeCandidate({ name: 'byoperator', hash: 'r1', placement: { targetOperators: [MY_OPERATOR] } }),
+          await makeCandidate({ name: 'generalapp', hash: 'g1' }),
         ],
         checkAppDependencyRequirements: gate,
         dependenciesReadyForSelection: cheap,
       });
       await appSpawner.trySpawningGlobalApplication().catch(() => {});
 
-      expect(gate.getCalls().map((c) => c.args[0].name).sort()).to.eql(['byOperator', 'byOutpoint']);
-      expect(cheap.getCalls().map((c) => c.args[0].name)).to.eql(['generalApp']);
+      expect(gate.getCalls().map((c) => c.args[0].name).sort()).to.eql(['byoperator', 'byoutpoint']);
+      expect(cheap.getCalls().map((c) => c.args[0].name)).to.eql(['generalapp']);
     });
 
     it('does not error-cache a dropped candidate — it is reconsidered once the dependency appears', async () => {
       buildModule({
-        candidates: [makeCandidate()],
+        candidates: [await makeCandidate()],
         checkAppDependencyRequirements: sinon.stub().rejects(notReadyError()),
       });
       await appSpawner.trySpawningGlobalApplication().catch(() => {});
@@ -683,7 +719,7 @@ describe('appSpawner tests', () => {
 
     it('keeps a candidate whose shareWith dependencies are ready', async () => {
       buildModule({
-        candidates: [makeCandidate()],
+        candidates: [await makeCandidate()],
         checkAppDependencyRequirements: sinon.stub().resolves(true),
       });
       await appSpawner.trySpawningGlobalApplication().catch(() => {});
@@ -692,7 +728,7 @@ describe('appSpawner tests', () => {
 
     it('keeps a candidate on a non-NOT_READY error — a real misconfig is handled at install', async () => {
       buildModule({
-        candidates: [makeCandidate()],
+        candidates: [await makeCandidate()],
         checkAppDependencyRequirements: sinon.stub().rejects(new Error('owned by a different owner')),
       });
       await appSpawner.trySpawningGlobalApplication().catch(() => {});
@@ -702,42 +738,30 @@ describe('appSpawner tests', () => {
 
   describe('target priority cascade', () => {
     it('should prefer IP-targeted apps over untargeted', async () => {
-      const untargeted = makeCandidate({ name: 'untargeted', hash: 'h1' });
-      const ipTargeted = makeCandidate({
-        name: 'ipTargeted', hash: 'h2',
-        placement: {
-          targetIps: ['192.168.1.1'],
-          matchesTarget: (info) => info.ip === '192.168.1.1',
-        },
+      const untargeted = await makeCandidate({ name: 'untargeted', hash: 'h1' });
+      const ipTargeted = await makeCandidate({
+        name: 'iptargeted', hash: 'h2', placement: { targetIps: [MY_ADDR] },
       });
       buildModule({ candidates: [untargeted, ipTargeted] });
       await appSpawner.trySpawningGlobalApplication().catch(() => {});
-      expect(logStub.info.args.some((a) => a[0]?.includes?.('ipTargeted selected'))).to.be.true;
+      expect(logStub.info.args.some((a) => a[0]?.includes?.('iptargeted selected'))).to.be.true;
     });
 
     it('should prefer outpoint-targeted over operator-targeted', async () => {
-      const operatorTargeted = makeCandidate({
-        name: 'opTargeted', hash: 'h1',
-        placement: {
-          targetOperators: ['pubkey123'],
-          matchesTarget: (info) => !!info.operator,
-        },
+      const operatorTargeted = await makeCandidate({
+        name: 'optargeted', hash: 'h1', placement: { targetOperators: [MY_OPERATOR] },
       });
-      const outpointTargeted = makeCandidate({
-        name: 'outTargeted', hash: 'h2',
-        placement: {
-          targetOutpoints: ['aaa:0'],
-          matchesTarget: (info) => !!info.outpoint,
-        },
+      const outpointTargeted = await makeCandidate({
+        name: 'outtargeted', hash: 'h2', placement: { targetOutpoints: [MY_OUTPOINT] },
       });
       buildModule({ candidates: [operatorTargeted, outpointTargeted] });
       await appSpawner.trySpawningGlobalApplication().catch(() => {});
-      expect(logStub.info.args.some((a) => a[0]?.includes?.('outTargeted selected'))).to.be.true;
+      expect(logStub.info.args.some((a) => a[0]?.includes?.('outtargeted selected'))).to.be.true;
     });
 
     it('should fall back to random selection when no targets match', async () => {
-      const a = makeCandidate({ name: 'appA', hash: 'h1' });
-      const b = makeCandidate({ name: 'appB', hash: 'h2' });
+      const a = await makeCandidate({ name: 'appa', hash: 'h1' });
+      const b = await makeCandidate({ name: 'appb', hash: 'h2' });
       buildModule({ candidates: [a, b] });
       await appSpawner.trySpawningGlobalApplication().catch(() => {});
       const selectedLog = logStub.info.args.find((args) => args[0]?.includes?.('selected to try to spawn'));
@@ -749,6 +773,11 @@ describe('appSpawner tests', () => {
   // host does not merely waste its own cycle — it can win the draw ahead of one
   // that would have installed, and the node spawns nothing.
   describe('resource screening before selection', () => {
+    // Sized against what a REAL spec can ask for: the v9 schema caps a component
+    // at 14 cores / 57000 MB / 780 GB, so the oversized apps below are ordinary
+    // registrations and the node is the thing that is small. The hand-written
+    // double let these tests assert on 64000 MB and 100-core apps that could
+    // never have been registered.
     const tightNode = {
       totalSpaceOnNode: 1000, availableSpace: 20, availableCpu: 20,
       availableRam: 2000, freeCores: 8,
@@ -768,67 +797,80 @@ describe('appSpawner tests', () => {
     it('picks the app that fits over the one that does not', async () => {
       // Selection draws at random from the surviving pool, so pin the draw to
       // the first entry and put the oversized app there: without the screen
-      // this selects tooBig, with it tooBig is gone and the draw lands on fits.
+      // this selects toobig, with it toobig is gone and the draw lands on fits.
       // Left to chance the assertion would hold half the time either way.
       sinon.stub(Math, 'random').returns(0);
-      const tooBig = makeCandidate({
-        name: 'tooBig', hash: 'h1', resourceTotals: { memoryMb: 64000 },
+      const tooBig = await makeCandidate({
+        name: 'toobig', hash: 'h1', size: { memory: 4000 },
       });
-      const fits = makeCandidate({
-        name: 'fits', hash: 'h2', resourceTotals: { cpu: 0.5, memoryMb: 500, storageGb: 5 },
+      const fits = await makeCandidate({
+        name: 'fits', hash: 'h2', size: { cpu: 0.5, memory: 500, storageGb: 5 },
       });
+      // The real library computed both sizes; the node's 2000 MB is what makes
+      // one of them not fit.
+      expect(tooBig.instantiated.resourceTotals().memoryMb).to.be.above(tightNode.availableRam);
+      expect(fits.instantiated.resourceTotals().memoryMb).to.be.below(tightNode.availableRam);
       buildModule({ candidates: [tooBig, fits], nodeCapacity: tightNode });
       await appSpawner.trySpawningGlobalApplication().catch(() => {});
       expect(selectedName()).to.equal('fits');
     });
 
     it('screens on RAM, CPU and host disk alike', async () => {
-      for (const [label, totals] of [
-        ['ram', { memoryMb: 64000 }],
-        ['cpu', { cpu: 100 }],
-        ['disk', { storageGb: 900 }],
+      // Each app is oversized on exactly ONE axis, and the reason is asserted:
+      // three specs that all tripped the same (first-checked) rule would leave
+      // two thirds of the screen unexercised while still selecting nothing.
+      for (const [label, size, reason] of [
+        ['ram', { memory: 4000 }, 'Insufficient RAM'], // > availableRam 2000
+        ['cpu', { cpu: 3 }, 'Insufficient CPU power'], // 30 cpu units > availableCpu 20
+        ['disk', { storageGb: 30 }, 'Insufficient space'], // + rootFs 2 = 32 GB > availableSpace 20
       ]) {
         logStub.info.resetHistory();
-        buildModule({
-          candidates: [makeCandidate({ name: label, hash: `h-${label}`, resourceTotals: totals })],
-          nodeCapacity: tightNode,
-        });
+        // eslint-disable-next-line no-await-in-loop
+        const candidate = await makeCandidate({ name: label, hash: `h-${label}`, size });
+        buildModule({ candidates: [candidate], nodeCapacity: tightNode });
         // eslint-disable-next-line no-await-in-loop
         await appSpawner.trySpawningGlobalApplication().catch(() => {});
         expect(selectedName(), label).to.equal(null);
+        expect(
+          logStub.info.args.some((a) => a[0]?.includes?.(`Skipping ${label} this cycle: ${reason}`)),
+          `${label} must be screened out for the ${label} shortfall specifically`,
+        ).to.be.true;
       }
     });
 
     it('screens on burst headroom, not just whether the app fits', async () => {
       // Room for the cores, but installing it leaves the node unable to absorb
       // a spike — a distinct rule from "does it fit".
-      buildModule({
-        candidates: [makeCandidate({ name: 'burst', hash: 'hb', resourceTotals: { cpu: 5 } })],
-        nodeCapacity: {
-          totalSpaceOnNode: 1000, availableSpace: 500, availableCpu: 200,
-          availableRam: 100000, freeCores: 8,
-        },
-      });
+      const roomyNode = {
+        totalSpaceOnNode: 1000, availableSpace: 500, availableCpu: 200,
+        availableRam: 100000, freeCores: 8,
+      };
+      const candidate = await makeCandidate({ name: 'burst', hash: 'hb', size: { cpu: 5 } });
+      // It genuinely fits — the rule that rejects it is the headroom one alone.
+      expect(hwRequirementsActual.capacityShortfall(roomyNode, candidate.instantiated.resourceTotals()))
+        .to.equal(null);
+      buildModule({ candidates: [candidate], nodeCapacity: roomyNode });
       await appSpawner.trySpawningGlobalApplication().catch(() => {});
       expect(selectedName()).to.equal(null);
+      expect(logStub.info.args.some((a) => a[0]?.includes?.('Skipping burst this cycle: Insufficient CPU burst headroom'))).to.be.true;
     });
 
     it('keeps a candidate that cannot report its size — the install gate decides', async () => {
-      // A sealed v8 spec: its format carries no cleartext summary, so the
+      // A real sealed v8 spec: its format carries no cleartext summary, so the
       // sealed vantage answers null. Null is "cannot tell", never "needs
       // nothing", and must not be screened out on a guess.
-      buildModule({
-        candidates: [makeCandidate({ name: 'sealedV8', hash: 'h8', resourceTotals: null })],
-        nodeCapacity: tightNode,
-      });
+      const candidate = await makeCandidate({ name: 'sealedv8', hash: 'h8', sealedV8: true });
+      expect(candidate.instantiated.resourceTotals(), 'the sealed v8 vantage really cannot size itself')
+        .to.equal(null);
+      buildModule({ candidates: [candidate], nodeCapacity: tightNode });
       await appSpawner.trySpawningGlobalApplication().catch(() => {});
-      expect(selectedName()).to.equal('sealedV8');
+      expect(selectedName()).to.equal('sealedv8');
     });
 
     it('one unsizeable spec does not take down the sweep for the rest', async () => {
-      const broken = makeCandidate({ name: 'broken', hash: 'hx', resourceTotals: 'throws' });
-      const fits = makeCandidate({
-        name: 'fits', hash: 'h2', resourceTotals: { cpu: 0.5, memoryMb: 500, storageGb: 5 },
+      const broken = await makeCandidate({ name: 'broken', hash: 'hx', unsizeable: true });
+      const fits = await makeCandidate({
+        name: 'fits', hash: 'h2', size: { cpu: 0.5, memory: 500, storageGb: 5 },
       });
       buildModule({ candidates: [broken, fits], nodeCapacity: tightNode });
       await appSpawner.trySpawningGlobalApplication().catch(() => {});
@@ -840,7 +882,7 @@ describe('appSpawner tests', () => {
 
     it('screens nothing when node capacity cannot be read', async () => {
       buildModule({
-        candidates: [makeCandidate({ name: 'huge', hash: 'h1', resourceTotals: { memoryMb: 999999 } })],
+        candidates: [await makeCandidate({ name: 'huge', hash: 'h1', size: { memory: 57000, cpu: 14 } })],
         nodeCapacityStub: sinon.stub().rejects(new Error('benchmark unavailable')),
       });
       await appSpawner.trySpawningGlobalApplication().catch(() => {});
@@ -852,21 +894,17 @@ describe('appSpawner tests', () => {
 
   describe('deferral logic', () => {
     it('should defer apps with targets that do not match this node', async () => {
-      const candidate = makeCandidate({
-        placement: {
-          targetIps: ['10.0.0.1'],
-          hasTargets: () => true,
-          matchesTarget: () => false,
-        },
-      });
+      // A real Placement naming some other node: matchesTarget is decided from
+      // the target list, so there is nothing to force.
+      const candidate = await makeCandidate({ placement: { targetIps: ['10.0.0.1'] } });
       buildModule({ candidates: [candidate] });
       await appSpawner.trySpawningGlobalApplication().catch(() => {});
       expect(globalStateStub.appsToBeCheckedLater).to.have.lengthOf(1);
-      expect(globalStateStub.appsToBeCheckedLater[0].appName).to.equal('testApp');
+      expect(globalStateStub.appsToBeCheckedLater[0].appName).to.equal('testapp');
     });
 
     it('should not defer apps with no targets', async () => {
-      const candidate = makeCandidate();
+      const candidate = await makeCandidate();
       buildModule({ candidates: [candidate] });
       await appSpawner.trySpawningGlobalApplication().catch(() => {});
       expect(globalStateStub.appsToBeCheckedLater).to.have.lengthOf(0);
@@ -876,7 +914,11 @@ describe('appSpawner tests', () => {
       // real Placement semantics: no targets -> matchesTarget true (run
       // anywhere). On a static-IP node the static-IP politeness deferral
       // still applies; only a genuinely pinned app skips it.
-      const candidate = makeCandidate();
+      const candidate = await makeCandidate();
+      expect(candidate.instantiated.spec.placement.matchesTarget({ ip: MY_ADDR }), 'vacuously true')
+        .to.be.true;
+      expect(candidate.instantiated.spec.placement.isPinnedTo({ ip: MY_ADDR }), 'but not pinned')
+        .to.be.false;
       buildModule({ candidates: [candidate], nodeHasStaticIp: true });
       await appSpawner.trySpawningGlobalApplication().catch(() => {});
       expect(globalStateStub.appsToBeCheckedLater).to.have.lengthOf(1);
@@ -886,14 +928,9 @@ describe('appSpawner tests', () => {
     it('never defers an app that targets this node (politeness rules have nobody to yield to)', async () => {
       // outpoint-pinned to this node + node has a static IP the app does not
       // require: the static-IP deferral must NOT delay a targeted app
-      const candidate = makeCandidate({
-        placement: {
-          targetOutpoints: ['txid:0'],
-          hasTargets: () => true,
-          matchesTarget: () => true,
-          staticIp: false,
-        },
-      });
+      const candidate = await makeCandidate({ placement: { targetOutpoints: [MY_OUTPOINT] } });
+      expect(candidate.instantiated.spec.placement.staticIp, 'the app does not require a static IP')
+        .to.be.false;
       buildModule({ candidates: [candidate], nodeHasStaticIp: true });
       await appSpawner.trySpawningGlobalApplication().catch(() => {});
       expect(globalStateStub.appsToBeCheckedLater).to.have.lengthOf(0);
@@ -905,7 +942,7 @@ describe('appSpawner tests', () => {
     it('skips cleanly at 5+ network errors without touching either local cache', async () => {
       // the shared error docs ARE the backoff - they expire in 24h and a respec
       // clears them, so a local cache entry would only delay the recovery
-      const candidate = makeCandidate();
+      const candidate = await makeCandidate();
       buildModule({ candidates: [candidate], errorCount: 5 });
       await appSpawner.trySpawningGlobalApplication().catch(() => {});
       expect(globalStateStub.trySpawningGlobalAppCache.has('abc123')).to.be.false;
@@ -913,7 +950,7 @@ describe('appSpawner tests', () => {
     });
 
     it('should add to long-term cache on local install failure', async () => {
-      const candidate = makeCandidate();
+      const candidate = await makeCandidate();
       buildModule({
         candidates: [candidate],
         errorCount: 0,
@@ -924,7 +961,7 @@ describe('appSpawner tests', () => {
     });
 
     it('defers without long-caching when the blocklist is unreachable at the compliance check', async () => {
-      const candidate = makeCandidate();
+      const candidate = await makeCandidate();
       buildModule({
         candidates: [candidate],
         errorCount: 0,
@@ -936,7 +973,7 @@ describe('appSpawner tests', () => {
     });
 
     it('defers without long-caching when installApplication reports the blocklist unreachable', async () => {
-      const candidate = makeCandidate();
+      const candidate = await makeCandidate();
       buildModule({
         candidates: [candidate],
         errorCount: 0,
@@ -950,10 +987,11 @@ describe('appSpawner tests', () => {
     // app's IDENTITY. A view built without it reports the app's name instead, so
     // the app meets itself in the port map as a stranger and refuses its own port.
     it('builds its deployment views with the app identity, never falling back to the name', async () => {
+      const installStub = sinon.stub().resolves({ status: InstallStatus.INSTALLED, reason: null });
       buildModule({
-        candidates: [makeCandidate({ identity: 'a1b2c3d4e5f6' })],
+        candidates: [await makeCandidate({ identity: 'a1b2c3d4e5f6' })],
         errorCount: 0,
-        installStub: sinon.stub().resolves({ status: InstallStatus.INSTALLED, reason: null }),
+        installStub,
       });
 
       await appSpawner.trySpawningGlobalApplication().catch(() => {});
@@ -963,11 +1001,23 @@ describe('appSpawner tests', () => {
       for (const call of calls) {
         expect(call.args[2], 'fromSpec options').to.include({ identity: 'a1b2c3d4e5f6' });
       }
+      // The real DeploymentSpec is what carries the identity forward, and the
+      // gates it is handed all stay stubbed here — so read the view back off
+      // each of them and assert it answers what the real gate asks it.
+      const [capacityView] = hwRequirementsStub.checkNodeResources.firstCall.args;
+      expect(capacityView.identity, 'the port guard compares THIS').to.equal('a1b2c3d4e5f6');
+      assertAnswers(capacityView, ['resourceTotals']);
+      const [portView] = portManagerStub.ensureApplicationPortsNotUsed.firstCall.args;
+      assertAnswers(portView, ['allHostPorts', 'allImages']);
+      expect(portView.allHostPorts(), 'a real view reports the spec ports, not []').to.not.be.empty;
+      // installApplication reads requiresArcane() and serialize() off the row.
+      const [installed] = installStub.firstCall.args;
+      assertAnswers(installed, ['requiresArcane', 'serialize', 'resourceTotals']);
     });
 
     it('retracts its own installing record when the install DEFERS (so the next cycle is not self-locked)', async () => {
       buildModule({
-        candidates: [makeCandidate()],
+        candidates: [await makeCandidate()],
         errorCount: 0,
         installStub: sinon.stub().resolves({ status: InstallStatus.DEFERRED, reason: 'node busy' }),
       });
@@ -979,7 +1029,7 @@ describe('appSpawner tests', () => {
 
     it('keeps its own installing record when the install SUCCEEDS', async () => {
       buildModule({
-        candidates: [makeCandidate()],
+        candidates: [await makeCandidate()],
         errorCount: 0,
         installStub: sinon.stub().resolves({ status: InstallStatus.INSTALLED, reason: null }),
       });
@@ -989,8 +1039,13 @@ describe('appSpawner tests', () => {
     });
 
     it('retries a failed decrypt next cycle instead of caching the app', async () => {
-      const candidate = makeCandidate({ encrypted: true, hash: 'enc123' });
-      candidate.instantiated.spec.createProvider = sinon.stub().rejects(new Error('benchmark channel down'));
+      const candidate = await makeCandidate({ encrypted: true, hash: 'enc123' });
+      expect(candidate.instantiated.isEncrypted, 'a real node-sealed v9 spec').to.be.true;
+      // The crypto provider is the benchmark channel — I/O, and the one thing
+      // this test needs to fail. EncryptedSpecV9 instances are frozen, so the
+      // seam is the class method, restored by sinon.restore().
+      sinon.stub(flux.EncryptedSpecV9.prototype, 'createProvider')
+        .rejects(new Error('benchmark channel down'));
       // attested arcane: encrypted apps are eligible here, so the decrypt is actually reached
       buildModule({ candidates: [candidate], globalStateOverrides: { capabilityVerdict: true } });
       await appSpawner.trySpawningGlobalApplication().catch(() => {});
@@ -998,6 +1053,26 @@ describe('appSpawner tests', () => {
       // cache may hold the hash, so the next cycle reselects it
       expect(globalStateStub.trySpawningGlobalAppCache.has('enc123')).to.be.false;
       expect(globalStateStub.spawnErrorsLongerAppCache.has('enc123')).to.be.false;
+      expect(logStub.warn.args.some((a) => a[0]?.includes?.('decrypt of testapp failed'))).to.be.true;
+    });
+
+    it('decrypts a real sealed spec and installs from the cleartext view', async () => {
+      // The counterpart of the failure above: with the provider working, the
+      // spawner unseals the app and every gate downstream reads the DECRYPTED
+      // spec — which is what makes the sealed/decrypted distinction load-bearing
+      // rather than a flag on a hand-written object.
+      const candidate = await makeCandidate({ encrypted: true, hash: 'enc456' });
+      const installStub = sinon.stub().resolves({ status: InstallStatus.INSTALLED, reason: null });
+      buildModule({
+        candidates: [candidate], installStub, globalStateOverrides: { capabilityVerdict: true },
+      });
+
+      await appSpawner.trySpawningGlobalApplication().catch(() => {});
+
+      sinon.assert.called(installStub);
+      const [handedSpec] = deploymentFromSpecStub.firstCall.args;
+      expect(handedSpec.sealed, 'DeploymentSpec.fromSpec refuses a still-sealed spec').to.not.be.true;
+      expect(handedSpec.constructor.name).to.equal('FluxAppSpecV9');
     });
   });
 
@@ -1233,9 +1308,11 @@ describe('appSpawner tests', () => {
   describe('isSoleRequiredInstaller', () => {
     beforeEach(() => buildModule());
 
-    const placementWith = (targetIps = [], targetOutpoints = [], targetOperators = []) => ({
-      targetIps, targetOutpoints, targetOperators,
-    });
+    // A real Placement, so the pin count is read off the same arrays the spec
+    // exposes in production rather than off a literal shaped like them.
+    const placementWith = (targetIps = [], targetOutpoints = [], targetOperators = []) => (
+      flux.Placement.from({ targetIps, targetOutpoints, targetOperators })
+    );
 
     it('is true when pinned to exactly as many nodes as required instances', () => {
       expect(appSpawner.isSoleRequiredInstaller(placementWith(['1.2.3.4:16127']), 1)).to.equal(true);
@@ -1269,9 +1346,8 @@ describe('appSpawner tests', () => {
   describe('sole-required-installer wait skip', () => {
     it('skips both propagation waits for a pinned app with pins <= required instances', async () => {
       const installStub = sinon.stub().resolves({ status: InstallStatus.INSTALLED, reason: null });
-      const candidate = makeCandidate({
-        required: 1,
-        placement: { targetIps: ['192.168.1.1'], hasTargets: () => true, matchesTarget: () => true },
+      const candidate = await makeCandidate({
+        required: 1, instances: 1, placement: { targetIps: [MY_ADDR] },
       });
       buildModule({ candidates: [candidate], installStub });
 
@@ -1285,7 +1361,7 @@ describe('appSpawner tests', () => {
 
     it('takes the collision wait for a non-pinned app (open contention)', async () => {
       const installStub = sinon.stub().resolves({ status: InstallStatus.INSTALLED, reason: null });
-      const candidate = makeCandidate({ required: 3 }); // default placement: no targets
+      const candidate = await makeCandidate({ required: 3 }); // default placement: no targets
 
       buildModule({ candidates: [candidate], installStub });
 
@@ -1299,9 +1375,11 @@ describe('appSpawner tests', () => {
   describe('isPinnedContended', () => {
     beforeEach(() => buildModule());
 
-    const placementWith = (targetIps = [], targetOutpoints = [], targetOperators = []) => ({
-      targetIps, targetOutpoints, targetOperators,
-    });
+    // A real Placement, so the pin count is read off the same arrays the spec
+    // exposes in production rather than off a literal shaped like them.
+    const placementWith = (targetIps = [], targetOutpoints = [], targetOperators = []) => (
+      flux.Placement.from({ targetIps, targetOutpoints, targetOperators })
+    );
 
     it('is true when pinned to MORE nodes than required instances (real multi-node contention)', () => {
       expect(appSpawner.isPinnedContended(placementWith(['a', 'b']), 1)).to.equal(true);
@@ -1328,22 +1406,22 @@ describe('appSpawner tests', () => {
   });
 
   describe('pinned-contended collision window runs OFF the serial spawn loop', () => {
-    const contendedPlacement = () => ({
-      targetIps: ['192.168.1.1', '10.0.0.7'], // 2 pins, 1 instance -> real contention
-      hasTargets: () => true,
-      matchesTarget: () => true,
-    });
+    // 2 real pins, 1 required instance -> real contention. Both entries are node
+    // identities the real Placement matches on; this node is the first of them.
+    const contendedPlacement = () => ({ targetIps: [MY_ADDR, '10.0.0.7'] });
 
     it('first pass: a pinned-contended app is deferred (collisionDeferred) and does NOT install inline', async () => {
       const installStub = sinon.stub().resolves({ status: InstallStatus.INSTALLED, reason: null });
-      const candidate = makeCandidate({ name: 'conApp', hash: 'con1', required: 1, placement: contendedPlacement() });
+      const candidate = await makeCandidate({
+        name: 'conapp', hash: 'con1', required: 1, instances: 1, placement: contendedPlacement(),
+      });
       buildModule({ candidates: [candidate], installStub });
 
       await appSpawner.trySpawningGlobalApplication().catch(() => {});
 
       // the collision window is taken OFF the loop: the app is queued (collisionDeferred) instead of
       // installed-with-an-inline-wait, so contention-free apps behind it are not blocked.
-      const queued = globalStateStub.appsToBeCheckedLater.find((a) => a.appName === 'conApp');
+      const queued = globalStateStub.appsToBeCheckedLater.find((a) => a.appName === 'conapp');
       expect(queued, 'pinned-contended app must be deferred onto appsToBeCheckedLater').to.exist;
       expect(queued.collisionDeferred).to.equal(true);
       expect(installStub.called, 'install must NOT run on the deferring first pass').to.equal(false);
@@ -1351,15 +1429,17 @@ describe('appSpawner tests', () => {
 
     it('second pass: the deferred (collisionDeferred) app installs without re-deferring', async () => {
       const installStub = sinon.stub().resolves({ status: InstallStatus.INSTALLED, reason: null });
-      const globalAppInfoStub = sinon.stub().resolves(mockInstantiated({ name: 'conApp', hash: 'con1', placement: contendedPlacement() }));
+      const globalAppInfoStub = sinon.stub().resolves(await realInstantiated({
+        name: 'conapp', hash: 'con1', instances: 1, placement: contendedPlacement(),
+      }));
       buildModule({
         // a placeholder keeps numberOfGlobalApps > 0 so the deferred-queue branch is reached
-        candidates: [makeCandidate({ name: 'placeholder', hash: 'ph1' })],
+        candidates: [await makeCandidate({ name: 'placeholder', hash: 'ph1' })],
         installStub,
         globalAppInfoStub,
         globalStateOverrides: {
           appsToBeCheckedLater: [{
-            appName: 'conApp', hash: 'con1', required: 1, timeToCheck: Date.now() - 1000, collisionDeferred: true,
+            appName: 'conapp', hash: 'con1', required: 1, timeToCheck: Date.now() - 1000, collisionDeferred: true,
           }],
         },
       });
@@ -1368,19 +1448,21 @@ describe('appSpawner tests', () => {
 
       // window already elapsed off-loop -> it installs this time, and is spliced out (not re-queued).
       expect(installStub.called, 'a collisionDeferred app back from the queue must install').to.equal(true);
-      expect(globalStateStub.appsToBeCheckedLater.find((a) => a.appName === 'conApp'), 'must not re-defer').to.not.exist;
+      expect(globalStateStub.appsToBeCheckedLater.find((a) => a.appName === 'conapp'), 'must not re-defer').to.not.exist;
     });
 
     it('second pass under real contention: reaches the election, not the count-gate, and installs as the index-0 winner', async () => {
       const installStub = sinon.stub().resolves({ status: InstallStatus.INSTALLED, reason: null });
-      const globalAppInfoStub = sinon.stub().resolves(mockInstantiated({ name: 'conApp', hash: 'con1', placement: contendedPlacement() }));
+      const globalAppInfoStub = sinon.stub().resolves(await realInstantiated({
+        name: 'conapp', hash: 'con1', instances: 1, placement: contendedPlacement(),
+      }));
       buildModule({
-        candidates: [makeCandidate({ name: 'placeholder', hash: 'ph1' })],
+        candidates: [await makeCandidate({ name: 'placeholder', hash: 'ph1' })],
         installStub,
         globalAppInfoStub,
         globalStateOverrides: {
           appsToBeCheckedLater: [{
-            appName: 'conApp', hash: 'con1', required: 1, timeToCheck: Date.now() - 1000, collisionDeferred: true,
+            appName: 'conapp', hash: 'con1', required: 1, timeToCheck: Date.now() - 1000, collisionDeferred: true,
           }],
         },
       });
@@ -1389,7 +1471,7 @@ describe('appSpawner tests', () => {
       // instead fall through to the broadcastedAt election. Our record broadcast
       // first, so the election ranks us index-0 and we install.
       registryManagerStub.appInstallingLocation.resolves([
-        { ip: '192.168.1.1', broadcastedAt: 1000 },
+        { ip: MY_ADDR, broadcastedAt: 1000 },
         { ip: '10.0.0.7', broadcastedAt: 2000 },
       ]);
 
@@ -1401,7 +1483,9 @@ describe('appSpawner tests', () => {
     it('second pass when the app reached target while parked: an empty scan still runs the entry, and the loser retracts + clears', async () => {
       const installStub = sinon.stub().resolves({ status: InstallStatus.INSTALLED, reason: null });
       const broadcastAllStub = sinon.stub().resolves();
-      const globalAppInfoStub = sinon.stub().resolves(mockInstantiated({ name: 'conApp', hash: 'con1', placement: contendedPlacement() }));
+      const globalAppInfoStub = sinon.stub().resolves(await realInstantiated({
+        name: 'conapp', hash: 'con1', instances: 1, placement: contendedPlacement(),
+      }));
       buildModule({
         // NOTHING is missing instances any more - the winners filled the app while
         // this contender sat parked. The no-candidates prefilter must not starve the
@@ -1412,34 +1496,31 @@ describe('appSpawner tests', () => {
         globalAppInfoStub,
         globalStateOverrides: {
           appsToBeCheckedLater: [{
-            appName: 'conApp', hash: 'con1', required: 1, timeToCheck: Date.now() - 1000, collisionDeferred: true, announcedAt: 500,
+            appName: 'conapp', hash: 'con1', required: 1, timeToCheck: Date.now() - 1000, collisionDeferred: true, announcedAt: 500,
           }],
         },
       });
       // One running instance fills the single seat; our standing claim is the only
       // installing row, so the election ranks us out (running + index + 1 > required).
       registryManagerStub.appLocation.resolves([{ ip: '10.0.0.7', runningSince: new Date() }]);
-      registryManagerStub.appInstallingLocation.resolves([{ ip: '192.168.1.1', broadcastedAt: 500, announcedAt: 500 }]);
+      registryManagerStub.appInstallingLocation.resolves([{ ip: MY_ADDR, broadcastedAt: 500, announcedAt: 500 }]);
 
       await appSpawner.trySpawningGlobalApplication().catch(() => {});
 
       expect(installStub.called, 'a fully-served app must not install').to.equal(false);
-      sinon.assert.calledWithMatch(registryManagerStub.removeAppInstallingMessage, 'conApp');
-      const clearedSent = broadcastAllStub.getCalls().some((c) => c.args[0] && c.args[0].name === 'conApp' && c.args[0].cleared === true);
+      sinon.assert.calledWithMatch(registryManagerStub.removeAppInstallingMessage, 'conapp');
+      const clearedSent = broadcastAllStub.getCalls().some((c) => c.args[0] && c.args[0].name === 'conapp' && c.args[0].cleared === true);
       expect(clearedSent, 'the parked claim must be cleared, not left to the TTL').to.equal(true);
     });
   });
 
   describe('installing claims (v2 announce / renewal / clear)', () => {
-    const contendedPlacement = () => ({
-      targetIps: ['192.168.1.1', '10.0.0.7'], // 2 pins, 1 instance -> real contention
-      hasTargets: () => true,
-      matchesTarget: () => true,
-    });
+    // 2 real pins, 1 required instance -> real contention.
+    const contendedPlacement = () => ({ targetIps: [MY_ADDR, '10.0.0.7'] });
 
     it('announces v1 to everyone and the v2 claim to claim-capable peers, storing the claim locally', async () => {
       const broadcastAllStub = sinon.stub().resolves();
-      buildModule({ candidates: [makeCandidate()], broadcastAllStub });
+      buildModule({ candidates: [await makeCandidate()], broadcastAllStub });
 
       await appSpawner.trySpawningGlobalApplication().catch(() => {});
 
@@ -1460,13 +1541,21 @@ describe('appSpawner tests', () => {
 
     it('a named app announces one tagged v2 claim per assigned replica and no v1', async () => {
       const broadcastAllStub = sinon.stub().resolves();
+      const assignedIdentitiesStub = sinon.stub().resolves(['s1', 's2']);
       buildModule({
-        candidates: [makeCandidate()],
+        candidates: [await makeCandidate()],
         broadcastAllStub,
-        assignedIdentitiesStub: sinon.stub().resolves(['s1', 's2']),
+        assignedIdentitiesStub,
       });
 
       await appSpawner.trySpawningGlobalApplication().catch(() => {});
+
+      // The provider stays stubbed, so nothing here exercises what it does with
+      // the row it is handed. The real assignedIdentities resolves the spec and
+      // asks its placement for the mode, so assert what arrives can answer.
+      const [handedRow] = assignedIdentitiesStub.firstCall.args;
+      assertAnswers(handedRow.spec.placement, ['mode', 'hasTargets']);
+      expect(handedRow.spec.placement.mode()).to.equal('none');
 
       const calls = broadcastAllStub.getCalls();
       // An untagged v1 row beside the per-replica claim rows would over-count this
@@ -1484,7 +1573,7 @@ describe('appSpawner tests', () => {
     it('a failed named install retracts and clears every replica claim', async () => {
       const broadcastAllStub = sinon.stub().resolves();
       buildModule({
-        candidates: [makeCandidate()],
+        candidates: [await makeCandidate()],
         broadcastAllStub,
         installStub: sinon.stub().resolves({ status: InstallStatus.FAILED, reason: 'boom' }),
         assignedIdentitiesStub: sinon.stub().resolves(['s1', 's2']),
@@ -1501,7 +1590,7 @@ describe('appSpawner tests', () => {
     it('broadcasts a neutral cleared claim when the install fails', async () => {
       const broadcastAllStub = sinon.stub().resolves();
       buildModule({
-        candidates: [makeCandidate()],
+        candidates: [await makeCandidate()],
         broadcastAllStub,
         installStub: sinon.stub().resolves({ status: InstallStatus.FAILED, reason: 'boom' }),
       });
@@ -1517,7 +1606,7 @@ describe('appSpawner tests', () => {
 
     it('does not clear when the install succeeds', async () => {
       const broadcastAllStub = sinon.stub().resolves();
-      buildModule({ candidates: [makeCandidate()], broadcastAllStub });
+      buildModule({ candidates: [await makeCandidate()], broadcastAllStub });
 
       await appSpawner.trySpawningGlobalApplication().catch(() => {});
 
@@ -1526,7 +1615,9 @@ describe('appSpawner tests', () => {
 
     it('first pass of a pinned-contended app leaves the claim standing for the parked election', async () => {
       const broadcastAllStub = sinon.stub().resolves();
-      const candidate = makeCandidate({ name: 'conApp', hash: 'con1', required: 1, placement: contendedPlacement() });
+      const candidate = await makeCandidate({
+        name: 'conapp', hash: 'con1', required: 1, instances: 1, placement: contendedPlacement(),
+      });
       buildModule({
         candidates: [candidate],
         broadcastAllStub,
@@ -1539,7 +1630,7 @@ describe('appSpawner tests', () => {
       // withdraw this node from an election it intends to contest on the second pass.
       sinon.assert.notCalled(registryManagerStub.removeAppInstallingMessage);
       expect(broadcastAllStub.getCalls().find((c) => c.args[0].cleared === true)).to.equal(undefined);
-      const queued = globalStateStub.appsToBeCheckedLater.find((a) => a.appName === 'conApp');
+      const queued = globalStateStub.appsToBeCheckedLater.find((a) => a.appName === 'conapp');
       expect(queued.announcedAt, 'the deferred entry must carry the announce time').to.be.a('number');
       // The second pass retracts what the first pass claimed - the identities ride
       // the entry so a spec change between park and pop cannot orphan a row.
@@ -1549,15 +1640,17 @@ describe('appSpawner tests', () => {
     it('second pass failure retracts the re-adopted claim and broadcasts the clear', async () => {
       const broadcastAllStub = sinon.stub().resolves();
       const installStub = sinon.stub().resolves({ status: InstallStatus.FAILED, reason: 'boom' });
-      const globalAppInfoStub = sinon.stub().resolves(mockInstantiated({ name: 'conApp', hash: 'con1', placement: contendedPlacement() }));
+      const globalAppInfoStub = sinon.stub().resolves(await realInstantiated({
+        name: 'conapp', hash: 'con1', instances: 1, placement: contendedPlacement(),
+      }));
       buildModule({
-        candidates: [makeCandidate({ name: 'placeholder', hash: 'ph1' })],
+        candidates: [await makeCandidate({ name: 'placeholder', hash: 'ph1' })],
         installStub,
         globalAppInfoStub,
         broadcastAllStub,
         globalStateOverrides: {
           appsToBeCheckedLater: [{
-            appName: 'conApp', hash: 'con1', required: 1, timeToCheck: Date.now() - 1000, collisionDeferred: true, announcedAt: Date.now() - 60000, replicas: ['s1'],
+            appName: 'conapp', hash: 'con1', required: 1, timeToCheck: Date.now() - 1000, collisionDeferred: true, announcedAt: Date.now() - 60000, replicas: ['s1'],
           }],
         },
       });
@@ -1573,14 +1666,16 @@ describe('appSpawner tests', () => {
 
     it('election ranks by announcedAt when present: a renewed claim (late broadcastedAt) still wins by announce order', async () => {
       const installStub = sinon.stub().resolves({ status: InstallStatus.INSTALLED, reason: null });
-      const globalAppInfoStub = sinon.stub().resolves(mockInstantiated({ name: 'conApp', hash: 'con1', placement: contendedPlacement() }));
+      const globalAppInfoStub = sinon.stub().resolves(await realInstantiated({
+        name: 'conapp', hash: 'con1', instances: 1, placement: contendedPlacement(),
+      }));
       buildModule({
-        candidates: [makeCandidate({ name: 'placeholder', hash: 'ph1' })],
+        candidates: [await makeCandidate({ name: 'placeholder', hash: 'ph1' })],
         installStub,
         globalAppInfoStub,
         globalStateOverrides: {
           appsToBeCheckedLater: [{
-            appName: 'conApp', hash: 'con1', required: 1, timeToCheck: Date.now() - 1000, collisionDeferred: true, announcedAt: 1000,
+            appName: 'conapp', hash: 'con1', required: 1, timeToCheck: Date.now() - 1000, collisionDeferred: true, announcedAt: 1000,
           }],
         },
       });
@@ -1588,7 +1683,7 @@ describe('appSpawner tests', () => {
       // peer announced second (2000, v1 row - no announcedAt). broadcastedAt ordering
       // would rank us last; announce ordering must rank us first.
       registryManagerStub.appInstallingLocation.resolves([
-        { ip: '192.168.1.1', broadcastedAt: 5000, announcedAt: 1000 },
+        { ip: MY_ADDR, broadcastedAt: 5000, announcedAt: 1000 },
         { ip: '10.0.0.7', broadcastedAt: 2000 },
       ]);
 
@@ -1599,19 +1694,21 @@ describe('appSpawner tests', () => {
 
     it('election ranks by announcedAt when present: a later announcer loses despite an older broadcastedAt', async () => {
       const installStub = sinon.stub().resolves({ status: InstallStatus.INSTALLED, reason: null });
-      const globalAppInfoStub = sinon.stub().resolves(mockInstantiated({ name: 'conApp', hash: 'con1', placement: contendedPlacement() }));
+      const globalAppInfoStub = sinon.stub().resolves(await realInstantiated({
+        name: 'conapp', hash: 'con1', instances: 1, placement: contendedPlacement(),
+      }));
       buildModule({
-        candidates: [makeCandidate({ name: 'placeholder', hash: 'ph1' })],
+        candidates: [await makeCandidate({ name: 'placeholder', hash: 'ph1' })],
         installStub,
         globalAppInfoStub,
         globalStateOverrides: {
           appsToBeCheckedLater: [{
-            appName: 'conApp', hash: 'con1', required: 1, timeToCheck: Date.now() - 1000, collisionDeferred: true, announcedAt: 3000,
+            appName: 'conapp', hash: 'con1', required: 1, timeToCheck: Date.now() - 1000, collisionDeferred: true, announcedAt: 3000,
           }],
         },
       });
       registryManagerStub.appInstallingLocation.resolves([
-        { ip: '192.168.1.1', broadcastedAt: 1000, announcedAt: 3000 },
+        { ip: MY_ADDR, broadcastedAt: 1000, announcedAt: 3000 },
         { ip: '10.0.0.7', broadcastedAt: 2000 },
       ]);
 
@@ -1621,12 +1718,16 @@ describe('appSpawner tests', () => {
     });
 
     it('renews the claim while the install is in flight (same announcedAt, fresh broadcastedAt)', async () => {
+      // The candidate is built BEFORE the fake clock starts: the spec library
+      // hashes and seals with real timers, and freezing Date under it would stall
+      // work this test is not about.
+      const candidate = await makeCandidate();
       const clock = sinon.useFakeTimers({ now: 1_000_000, toFake: ['setInterval', 'clearInterval', 'Date'] });
       try {
         let resolveInstall;
         const installStub = sinon.stub().returns(new Promise((resolve) => { resolveInstall = resolve; }));
         const broadcastAllStub = sinon.stub().resolves();
-        buildModule({ candidates: [makeCandidate()], installStub, broadcastAllStub });
+        buildModule({ candidates: [candidate], installStub, broadcastAllStub });
 
         const run = appSpawner.trySpawningGlobalApplication();
         await clock.tickAsync(0); // drive the attempt to the in-flight install await
@@ -1653,8 +1754,6 @@ describe('appSpawner tests', () => {
 
   describe('notifySpecStored - spec-stored wake gate', () => {
     const { appSyncEvents, EVENTS: SYNC_EVENTS } = require('../../ZelBack/src/services/utils/appSyncEvents');
-    // harness benchmark IP; normalizeSocketAddress is identity in this harness
-    const MY_ADDR = '192.168.1.1';
 
     afterEach(() => {
       appSyncEvents.removeAllListeners();
@@ -1693,65 +1792,69 @@ describe('appSpawner tests', () => {
       await appSpawner.trySpawningGlobalApplication().catch(() => {});
     }
 
-    const placementFor = (targetIps, mode = 'candidate') => ({
-      targetIps,
-      targetOutpoints: [],
-      targetOperators: [],
-      mode: () => mode,
-      matchesTarget: ({ ip, ipMatcher }) => targetIps.some((t) => ipMatcher(t, ip)),
-      isPinnedTo(nodeInfo) { return targetIps.length > 0 && this.matchesTarget(nodeInfo); },
-    });
-
-    const passingSpec = (overrides = {}) => ({
-      name: 'edingoa', owner: 'enterpriseOwnerX', instances: 1, placement: placementFor([MY_ADDR]), ...overrides,
-    });
+    /**
+     * The raw stored doc for a real spec — exactly what globalAppsInformation
+     * holds and what notifySpecStored hydrates through the real
+     * InstantiatedSpec.deserialize. The gate's every read (placement.mode(),
+     * placement.isPinnedTo, spec.instances, owner) is answered by real objects,
+     * so a doc that would not deserialize cannot pass here.
+     */
+    const passingSpec = async (overrides = {}) => {
+      const instantiated = await realInstantiated({
+        name: 'edingoa',
+        hash: 'wake1',
+        instances: overrides.instances ?? 1,
+        placement: { targetIps: overrides.targetIps ?? [MY_ADDR] },
+      });
+      return instantiated.serialize();
+    };
 
     it('wakes for an enterprise-owned app pinned to this node with pins <= instances', async () => {
       buildModule({ getCachedEnterpriseIdentity: true, isEnterpriseAppOwner: () => true });
       await primeNodeAddr();
-      await appSpawner.notifySpecStored(passingSpec());
+      await appSpawner.notifySpecStored(await passingSpec());
       expect(woke()).to.equal(true);
     });
 
     it('wakes when pinned to exactly as many nodes as required instances (no overshoot)', async () => {
       buildModule({ getCachedEnterpriseIdentity: true, isEnterpriseAppOwner: () => true });
       await primeNodeAddr();
-      await appSpawner.notifySpecStored(passingSpec({ instances: 2, placement: placementFor([MY_ADDR, '10.0.0.9']) }));
+      await appSpawner.notifySpecStored(await passingSpec({ instances: 2, targetIps: [MY_ADDR, '10.0.0.9'] }));
       expect(woke()).to.equal(true);
     });
 
     it('does NOT wake on a non-enterprise node', async () => {
       buildModule({ getCachedEnterpriseIdentity: false, isEnterpriseAppOwner: () => true });
       await primeNodeAddr();
-      await appSpawner.notifySpecStored(passingSpec());
+      await appSpawner.notifySpecStored(await passingSpec());
       expect(woke()).to.equal(false);
     });
 
     it('does NOT wake for a non-enterprise-owned app', async () => {
       buildModule({ getCachedEnterpriseIdentity: true, isEnterpriseAppOwner: () => false });
       await primeNodeAddr();
-      await appSpawner.notifySpecStored(passingSpec());
+      await appSpawner.notifySpecStored(await passingSpec());
       expect(woke()).to.equal(false);
     });
 
     it('does NOT wake when pinned to more nodes than required instances (contention)', async () => {
       buildModule({ getCachedEnterpriseIdentity: true, isEnterpriseAppOwner: () => true });
       await primeNodeAddr();
-      await appSpawner.notifySpecStored(passingSpec({ instances: 1, placement: placementFor([MY_ADDR, '10.0.0.9']) }));
+      await appSpawner.notifySpecStored(await passingSpec({ instances: 1, targetIps: [MY_ADDR, '10.0.0.9'] }));
       expect(woke()).to.equal(false);
     });
 
     it('does NOT wake when pinned to a different node', async () => {
       buildModule({ getCachedEnterpriseIdentity: true, isEnterpriseAppOwner: () => true });
       await primeNodeAddr();
-      await appSpawner.notifySpecStored(passingSpec({ placement: placementFor(['10.0.0.9']) }));
+      await appSpawner.notifySpecStored(await passingSpec({ targetIps: ['10.0.0.9'] }));
       expect(woke()).to.equal(false);
     });
 
     it('does NOT wake before the first spawn cycle resolves this node address', async () => {
       buildModule({ getCachedEnterpriseIdentity: true, isEnterpriseAppOwner: () => true });
       // no primeNodeAddr() -> lastKnownLocalSocketAddr is null -> matchesTarget false
-      await appSpawner.notifySpecStored(passingSpec());
+      await appSpawner.notifySpecStored(await passingSpec());
       expect(woke()).to.equal(false);
     });
 
@@ -1759,7 +1862,7 @@ describe('appSpawner tests', () => {
       buildModule({ getCachedEnterpriseIdentity: true, isEnterpriseAppOwner: () => true });
       await primeNodeAddr();
       globalStateStub.spawnerPaused = true;
-      await appSpawner.notifySpecStored(passingSpec());
+      await appSpawner.notifySpecStored(await passingSpec());
       expect(woke()).to.equal(false);
     });
 
@@ -1768,6 +1871,17 @@ describe('appSpawner tests', () => {
       await primeNodeAddr();
       await appSpawner.notifySpecStored(undefined);
       expect(woke()).to.equal(false);
+    });
+
+    it('does not throw — and does not wake — on a doc the real deserializer rejects', async () => {
+      // The gate hydrates through the real InstantiatedSpec.deserialize, so a
+      // malformed doc raises there. It must stay best-effort: the spec-store
+      // path calls this and nothing may escape into it.
+      buildModule({ getCachedEnterpriseIdentity: true, isEnterpriseAppOwner: () => true });
+      await primeNodeAddr();
+      await appSpawner.notifySpecStored({ version: 9, name: 'edingoa' });
+      expect(woke()).to.equal(false);
+      expect(logStub.error.args.some((a) => `${a[0]}`.includes('notifySpecStored'))).to.be.true;
     });
 
     it('ends the idle delay early and re-scans when a pinned spec is stored', async () => {
@@ -1788,7 +1902,7 @@ describe('appSpawner tests', () => {
       // Causality guard: the first delay never resolves on its own, so the loop is parked
       // at exactly one scan. Only the wake can advance it.
       expect(findUnderProvisionedStub.callCount).to.equal(1);
-      await appSpawner.notifySpecStored(passingSpec());
+      await appSpawner.notifySpecStored(await passingSpec());
       await waitForLoopExits(1);
 
       expect(findUnderProvisionedStub.callCount).to.equal(2);
@@ -1816,7 +1930,6 @@ describe('appSpawner tests', () => {
 
   describe('spawn loop wake latch (mid-cycle wake)', () => {
     const { appSyncEvents, EVENTS: SYNC_EVENTS } = require('../../ZelBack/src/services/utils/appSyncEvents');
-    const MY_ADDR = '192.168.1.1';
 
     afterEach(() => {
       appSyncEvents.removeAllListeners();
@@ -1836,6 +1949,12 @@ describe('appSpawner tests', () => {
     it('latches a wake that fires mid-cycle and skips the next idle delay', async () => {
       buildModule({ getCachedEnterpriseIdentity: true, isEnterpriseAppOwner: () => true });
 
+      // The stored doc for a real spec pinned to this node, built up front so the
+      // wake below is a plain call rather than spec construction inside the cycle.
+      const storedDoc = (await realInstantiated({
+        name: 'edingoa', hash: 'wake2', instances: 1, placement: { targetIps: [MY_ADDR] },
+      })).serialize();
+
       const events = []; // ordered record of 'cycleN' and 'delay'
       let cycle = 0;
       findUnderProvisionedStub.resetBehavior();
@@ -1848,17 +1967,7 @@ describe('appSpawner tests', () => {
           // resolves and wakeIdleLoop latches wakePending BEFORE cycle 1 returns - the latch
           // must then skip cycle 1's park. The cycle has already cached this node's address,
           // so the pin-match passes.
-          await appSpawner.notifySpecStored({
-            name: 'edingoa', owner: 'enterpriseOwnerX', instances: 1,
-            placement: {
-              targetIps: [MY_ADDR],
-              targetOutpoints: [],
-              targetOperators: [],
-              mode: () => 'candidate',
-              matchesTarget: ({ ip, ipMatcher }) => ipMatcher(MY_ADDR, ip),
-              isPinnedTo({ ip, ipMatcher }) { return ipMatcher(MY_ADDR, ip); },
-            },
-          });
+          await appSpawner.notifySpecStored(storedDoc);
         }
         return [];
       });
@@ -1881,12 +1990,14 @@ describe('appSpawner tests', () => {
   });
 
   describe('installing-broadcast fire-and-forget on sole-installer', () => {
-    const MY_ADDR = '192.168.1.1';
-    const solePlacement = () => ({ targetIps: [MY_ADDR], hasTargets: () => true, matchesTarget: () => true });
+    // One real pin, and it is this node: the sole required installer.
+    const solePlacement = () => ({ targetIps: [MY_ADDR] });
 
     it('sole path: install proceeds even if the broadcast REJECTS (fire-and-forget)', async () => {
       const installStub = sinon.stub().resolves({ status: InstallStatus.INSTALLED, reason: null });
-      const candidate = makeCandidate({ name: 'soleApp', hash: 'sole1', required: 1, placement: solePlacement() });
+      const candidate = await makeCandidate({
+        name: 'soleapp', hash: 'sole1', required: 1, instances: 1, placement: solePlacement(),
+      });
       buildModule({ candidates: [candidate], installStub, broadcastAllStub: sinon.stub().rejects(new Error('broadcast down')) });
 
       await appSpawner.trySpawningGlobalApplication().catch(() => {});
@@ -1898,7 +2009,7 @@ describe('appSpawner tests', () => {
 
     it('non-sole path: a broadcast REJECT aborts before install (awaited)', async () => {
       const installStub = sinon.stub().resolves({ status: InstallStatus.INSTALLED, reason: null });
-      const candidate = makeCandidate({ required: 3 }); // non-pinned: legacy inline election awaits the broadcast
+      const candidate = await makeCandidate({ required: 3 }); // non-pinned: legacy inline election awaits the broadcast
       buildModule({ candidates: [candidate], installStub, broadcastAllStub: sinon.stub().rejects(new Error('broadcast down')) });
 
       await appSpawner.trySpawningGlobalApplication().catch(() => {});
