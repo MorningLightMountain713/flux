@@ -88,7 +88,10 @@ async function pushVerdict(socketAddress, verdict) {
     const target = index.bySocket.get(socketAddress);
     if (target && await stoodDown(target)) return;
     const peer = await transport.openEphemeralConnection(socketAddress);
-    if (!peer) return;
+    if (!peer) {
+      log.warn(`nodeDownService: verdict push to ${socketAddress}: no ephemeral connection`);
+      return;
+    }
     await transport.sendSignedMessage(
       { type: 'fluxnodedownverdict', version: 1, verdict },
       peer,

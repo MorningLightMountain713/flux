@@ -1416,8 +1416,12 @@ register('fluxmasterlease', (msg, peer, announcer) => handleMasterleaseMessage(m
 register('fluxgrantgeneration', (msg, peer) => handleGrantGenerationMessage(msg, peer.ip, peer.port), ROUTE.GOSSIP, INTENT.ANNOUNCE);
 register('fluxnodedown', (msg, peer) => handleNodeDownMessage(msg, peer.ip, peer.port), ROUTE.GOSSIP, INTENT.ANNOUNCE);
 // A juror's verdict, pushed to one node: the juror who signed it is part of what it
-// says, so it is neither relayed nor deduplicated.
-register('fluxnodedownverdict', (msg) => nodeDownService.onVerdictMessage(msg), ROUTE.GOSSIP, INTENT.ANSWER);
+// says, so it is neither relayed nor deduplicated. It rides only an ephemeral
+// connection; one arriving down a peering is ignored, so the gossip plane cannot
+// inject a verdict.
+register('fluxnodedownverdict', (msg, peer) => {
+  if (peer.source === PEER_SOURCE.EPHEMERAL) nodeDownService.onVerdictMessage(msg);
+}, ROUTE.GOSSIP, INTENT.ANSWER);
 register('fluxlimitcounterrecord', (msg) => limitCounter.acceptRecord(msg.data), ROUTE.GOSSIP, INTENT.ANNOUNCE);
 register('fluxappcontentmanifest', (msg) => contentSlotService.handleIncomingManifest(msg), ROUTE.GOSSIP, INTENT.ANNOUNCE);
 register('fluxappingress', (msg, peer) => handleIngressAttestation(msg, peer.ip, peer.port), ROUTE.GOSSIP, INTENT.ANNOUNCE);
@@ -1908,6 +1912,10 @@ function openEphemeralConnection(connection) {
           'X-Flux-Capabilities': FLUX_CAPABILITIES.join(','),
           'X-Flux-Version': FLUX_VERSION,
           'X-Flux-Uptime': String(Math.floor(process.uptime())),
+          // Tells the far end this is a transient exchange, not a peering
+          // bid — without it, a receiver already holding this pair closes
+          // the socket as a duplicate without ever attaching a reader.
+          'X-Flux-Ephemeral': '1',
         },
       };
       const offsetMs = fluxNetworkHelper.getLocalClockOffsetMs();
