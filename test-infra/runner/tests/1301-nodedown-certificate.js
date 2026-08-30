@@ -195,16 +195,26 @@ describe('node-down certificates end to end', function () {
     const premature = await dbClient(REBOOTER + 1).getNodeDownRecords(subjectOutpoint);
     expect(premature, 'row restored without a boot — not the sync path').to.have.length(0);
 
+    // Anchor before the reboot: bus event ids are monotonic across a process
+    // restart, so this cursor cannot be satisfied by anything pre-wipe, and
+    // an event that fires before the wait is armed is answered from the
+    // buffer rather than missed.
+    const afterId = env.clients[REBOOTER].getLastEventId();
     await env.restartNode(REBOOTER, { timeout: 30000 });
 
-    await waitFor(async () => {
-      const rows = await dbClient(REBOOTER + 1).getNodeDownRecords(subjectOutpoint);
-      return rows.length >= 1;
-    }, { timeout: 180000, interval: 5000, label: 'certificate restored over sync after boot' });
+    // The event names the path: only the sync intake stamps source 'sync',
+    // so neither gossip nor a local assembly can satisfy this wait.
+    await env.clients[REBOOTER].waitForEvent(
+      'nodedown:stored',
+      (data) => data.subject === subjectOutpoint && data.source === 'sync',
+      180000,
+      { afterId },
+    );
 
     // Restored through the verifier, not copied blind: the row it stored
     // carries the same incident the fleet certified.
     const [row] = await dbClient(REBOOTER + 1).getNodeDownRecords(subjectOutpoint);
+    expect(row, 'the stored row backs the event').to.exist;
     expect(row.data?.certificate?.subject).to.equal(subjectOutpoint);
   });
 

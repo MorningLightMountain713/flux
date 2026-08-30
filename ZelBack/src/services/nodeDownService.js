@@ -9,6 +9,7 @@ const { RingReconciler } = require('./utils/ringReconciler');
 const { NodeDownJuror } = require('./utils/nodeDownJuror');
 const { FluxPeerManager } = require('./utils/FluxPeerManager');
 const { normalizeSocketAddress, extractIp } = require('./utils/socketAddressUtils');
+const fluxEventBus = require('./utils/fluxEventBus');
 const log = require('../lib/log');
 
 // The node-down assembly: binds the reconciler (who to hold) and the juror
@@ -104,11 +105,18 @@ async function pushVerdict(socketAddress, verdict) {
 }
 
 async function broadcastOwnCertificate(certificate) {
+  fluxEventBus.publish('nodedown:assembled', { subject: certificate.subject });
   const broadcastedAt = Date.now();
   const stored = await nodeDownStore.handleNodeDownEvent({
     message: { certificate, broadcastedAt },
   });
-  if (!stored.accepted) return;
+  if (!stored.accepted) {
+    fluxEventBus.publish('nodedown:refused', {
+      subject: certificate.subject, source: 'own', reason: stored.reason,
+    });
+    return;
+  }
+  fluxEventBus.publish('nodedown:stored', { subject: certificate.subject, source: 'own' });
   await transport.broadcastMessageToAll({
     type: 'fluxnodedown', version: 1, certificate, broadcastedAt,
   });
@@ -123,11 +131,19 @@ async function broadcastOwnCertificate(certificate) {
  *
  * @param {object} message {certificate, broadcastedAt}
  * @param {object|null} envelope
+ * @param {string} source 'gossip' or 'sync' — stamped on the harness events,
+ *   so a suite can assert WHICH path delivered a certificate
  * @returns {Promise<{accepted: boolean, rebroadcast: boolean, reason: string}>}
  */
-async function intakeCertificate(message, envelope) {
+async function intakeCertificate(message, envelope, source) {
   const result = await nodeDownStore.handleNodeDownEvent({ message, envelope });
-  if (!result.accepted) return result;
+  if (!result.accepted) {
+    fluxEventBus.publish('nodedown:refused', {
+      subject: message?.certificate?.subject ?? null, source, reason: result.reason,
+    });
+    return result;
+  }
+  fluxEventBus.publish('nodedown:stored', { subject: message.certificate.subject, source });
 
   if (message.certificate.subject === myOutpoint()) {
     // eslint-disable-next-line global-require
@@ -149,7 +165,7 @@ async function intakeCertificate(message, envelope) {
  * @returns {Promise<{accepted: boolean, rebroadcast: boolean, reason: string}>}
  */
 async function onCertificateBroadcast(data, envelope = null) {
-  return intakeCertificate(data, envelope);
+  return intakeCertificate(data, envelope, 'gossip');
 }
 
 /**
@@ -170,14 +186,20 @@ async function onCertificateSyncEvent(event) {
   if (!certificate || !Number.isFinite(broadcastedAt)) {
     return { accepted: false, rebroadcast: false, reason: 'malformed' };
   }
-  return intakeCertificate({ certificate, broadcastedAt }, event.envelope ?? null);
+  return intakeCertificate({ certificate, broadcastedAt }, event.envelope ?? null, 'sync');
 }
 
 function onVerdictMessage(msgObj) {
   if (!juror) return;
   const verdict = msgObj?.data?.verdict;
   if (!verdict) return;
-  juror.onVerdictArrived(verdict);
+  const result = juror.onVerdictArrived(verdict);
+  fluxEventBus.publish('nodedown:verdict', {
+    subject: verdict.subject ?? null,
+    juror: verdict.juror ?? null,
+    piled: result.piled,
+    reason: result.reason,
+  });
 }
 
 function onPeerRemoved({ ip, port, closeCode }) {
