@@ -247,19 +247,33 @@ function timingIsSafe(timing) {
   const slack = timing?.demotionSlackMs;
   const stop = timing?.hardStopMs;
   const lockDelay = timing?.lockDelayMs;
-  if (![slack, stop, lockDelay].every((value) => Number.isFinite(value) && value >= 0)) {
+  const renewInterval = timing?.renewIntervalMs;
+  if (![slack, stop, lockDelay, renewInterval].every((value) => Number.isFinite(value) && value >= 0)) {
     return { safe: false, marginMs: 0, reason: 'quorumGrant timing values are not all finite and non-negative' };
   }
   const marginMs = Math.max(0, lockDelay - slack - stop);
-  const safe = slack + stop < lockDelay;
-  return {
-    safe,
-    marginMs,
-    reason: safe ? null
-      : `quorumGrant timing is unsafe: demotion slack ${slack}ms + hard stop ${stop}ms `
+  if (!(slack + stop < lockDelay)) {
+    return {
+      safe: false,
+      marginMs,
+      reason: `quorumGrant timing is unsafe: demotion slack ${slack}ms + hard stop ${stop}ms `
         + `must be strictly under the grantors' lock-delay ${lockDelay}ms, `
         + 'or a demoted holder is still stopping when its successor is granted',
-  };
+    };
+  }
+  // The refereeing-anchored lock-delay's companion: when the grantors
+  // return, the successor's wait restarts at the return — the incumbent's
+  // reclaim pass must land inside it, or the anchor buys nothing.
+  if (!(renewInterval < lockDelay)) {
+    return {
+      safe: false,
+      marginMs,
+      reason: `quorumGrant timing is unsafe: the renewal interval ${renewInterval}ms `
+        + `must sit strictly under the grantors' lock-delay ${lockDelay}ms, `
+        + 'or a returning committee can seat a successor before the incumbent reclaims',
+    };
+  }
+  return { safe: true, marginMs, reason: null };
 }
 
 /**

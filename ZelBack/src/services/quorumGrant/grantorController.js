@@ -92,6 +92,36 @@ function minHolderAgeMs() {
 // when nothing is pending.
 let resyncPending = null;
 
+// The refereeing-return anchor (the quiet-window model's run 3). The
+// successor's lock-delay must run only while this grantor is refereeing —
+// while the serve gates refuse everyone, the exclusivity window the
+// incumbent is owed burns for nobody. The register is handed the moment
+// this grantor last RETURNED to refereeing: the later of the last observed
+// stale->synced crossing and the key's resync clearance. Observations are
+// lazy, made at the gates that already read the synced flag; lazy can only
+// place the anchor LATER than the true return, which is the safe side. The
+// very traffic the hazard needs (the incumbent's refused renewals, the
+// witnesses' record reads) is what feeds the observations. An unknown
+// starting state counts as a return — subsumed in practice by the register's
+// rejoin drain, and the conservative reading of absence.
+let syncedWas = null;
+let syncedSinceMs = 0;
+const resyncClearedMs = new Map();
+
+function observeSynced(synced) {
+  if (synced && syncedWas !== true) syncedSinceMs = Date.now();
+  syncedWas = synced;
+}
+
+function refereeingSinceFor(key) {
+  const cleared = resyncClearedMs.get(key) ?? 0;
+  // a stamp older than the lock-delay can never bind again — drop it
+  if (cleared && Date.now() - cleared > (config.fluxapps.quorumGrantLockDelayMs ?? 30_000)) {
+    resyncClearedMs.delete(key);
+  }
+  return Math.max(syncedSinceMs, resyncClearedMs.get(key) ?? 0);
+}
+
 /**
  * The return event: this node was unreachable over FluxOS and is back. Time
  * does not teach — every held key this grantor holds state for re-fetches
@@ -629,6 +659,7 @@ async function serve(req, res, type, operate) {
       // when its tip does. Reads stay open; the founder plane is exempt
       // (write-once registers cannot go stale).
       const sync = daemonServiceMiscRpcs.isDaemonSynced();
+      observeSynced(sync?.data?.synced === true);
       if (!sync?.data?.synced) {
         report('refusedStale');
         return res.status(503).json(messageHelper.createErrorMessage('chain view stale — this grantor is not refereeing'));
@@ -643,6 +674,9 @@ async function serve(req, res, type, operate) {
         }
         resyncPending.delete(ask.key);
         if (!resyncPending.size) resyncPending = null;
+        // the clearance IS this key's return to refereeing — stamp it for
+        // the register's lock-delay anchor
+        resyncClearedMs.set(ask.key, Date.now());
       }
     }
 
@@ -686,7 +720,7 @@ async function serve(req, res, type, operate) {
       }
     }
 
-    const reply = await operate(ask);
+    const reply = await operate(ask, { refereeingSinceMs: refereeingSinceFor(ask.key) });
     ms.operate = Date.now() - t0 - ms.read - ms.committee - (ms.holds ?? 0);
     report('served', reply?.ok === false ? reply.code : undefined);
     return res.json(messageHelper.createDataMessage(reply));
@@ -711,26 +745,26 @@ function registerRowFor(ask) {
 }
 
 async function probe(req, res) {
-  return serve(req, res, 'probe', (ask) => grantRegister.probe(registerRowFor(ask), {
+  return serve(req, res, 'probe', (ask, context) => grantRegister.probe(registerRowFor(ask), {
     epoch: ask.epoch, candidate: ask.candidate,
-  }));
+  }, context));
 }
 
 async function prepare(req, res) {
-  return serve(req, res, 'prepare', (ask) => grantRegister.prepare(registerRowFor(ask), {
+  return serve(req, res, 'prepare', (ask, context) => grantRegister.prepare(registerRowFor(ask), {
     epoch: ask.epoch, candidate: ask.candidate,
-  }));
+  }, context));
 }
 
 async function accept(req, res) {
-  return serve(req, res, 'accept', (ask) => grantRegister.accept(registerRowFor(ask), {
+  return serve(req, res, 'accept', (ask, context) => grantRegister.accept(registerRowFor(ask), {
     epoch: ask.epoch,
     grantee: ask.candidate,
     mode: ask.mode,
     ttlMs: ask.ttlMs,
     generation: ask.generation,
     fingerprint: ask.fingerprint ?? null,
-  }));
+  }, context));
 }
 
 async function renew(req, res) {
@@ -861,8 +895,12 @@ async function record(req, res) {
     // upgrade wave) reads as committee-down and the incumbent COASTS —
     // reads answering must never talk a witness out of the coast that
     // keeps the app alive.
-    const refereeing = daemonServiceMiscRpcs.isDaemonSynced()?.data?.synced === true
-      && !resyncPending?.has(key);
+    const daemonSynced = daemonServiceMiscRpcs.isDaemonSynced()?.data?.synced === true;
+    // the read observes the synced flag anyway — feed the refereeing-return
+    // anchor, so a stall witnessed only by record reads still re-anchors the
+    // lock-delay (the witness polls are exactly the traffic a coast has)
+    observeSynced(daemonSynced);
+    const refereeing = daemonSynced && !resyncPending?.has(key);
     return res.json(messageHelper.createDataMessage({
       key,
       promisedEpoch: stored?.promisedEpoch ?? 0,

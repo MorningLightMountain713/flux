@@ -109,6 +109,7 @@ function timingSafe() {
     demotionSlackMs: config.fluxapps.quorumGrantDemotionSlackMs ?? 15_000,
     hardStopMs: grantClientCore.HARD_STOP_MS,
     lockDelayMs: config.fluxapps.quorumGrantLockDelayMs ?? 30_000,
+    renewIntervalMs: config.fluxapps.quorumGrantRenewIntervalMs ?? 20_000,
   });
   if (!outcome.safe && !timingWarned) {
     timingWarned = true;

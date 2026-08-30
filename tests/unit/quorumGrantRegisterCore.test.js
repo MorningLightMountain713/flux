@@ -578,4 +578,59 @@ describe('quorumGrant grantRegisterCore', () => {
       expect(newBasis.record.cancels).to.equal(null);
     });
   });
+
+  // The refereeing-anchored lock-delay (the quiet-window model's run 3): the
+  // successor's wait runs only while this grantor is refereeing. While the
+  // register was closed — stale view, unresynced return — nobody could have
+  // reclaimed the lapsed row, so the exclusivity window must not have burned:
+  // the wait anchors at the LATER of the row's death and the grantor's return
+  // to refereeing, carried beside the knobs as refereeingSinceMs. Without it
+  // a coast that outlives lockDelay − slack inverts the plane's stated
+  // ordering (grantClient.js: demotion before any successor can be seated).
+  describe('the refereeing-anchored lock-delay', () => {
+    const returnedAt = T0 + TTL + 100_000; // long past death + lockDelay
+    const anchored = { ...TUNABLES, refereeingSinceMs: returnedAt };
+
+    it('holds challengers for one lock-delay after the grantor returns to refereeing', () => {
+      const { reply, record } = onPrepare(heldRecord(), { epoch: 9, candidate: 'cccc:0' }, returnedAt + 1, anchored);
+      expect(reply.code).to.equal('lock_delay');
+      expect(reply.retryAfterMs).to.equal(TUNABLES.lockDelayMs - 1);
+      expect(record).to.equal(null);
+    });
+
+    it('holds challengers on accept behind the same anchor', () => {
+      const { reply } = onAccept(heldRecord(), {
+        epoch: 9, grantee: 'cccc:0', mode: 'held', ttlMs: TTL,
+      }, returnedAt + 1, anchored);
+      expect(reply.code).to.equal('lock_delay');
+    });
+
+    it('never delays the recorded grantee, whatever the anchor says', () => {
+      const { reply } = onPrepare(heldRecord(), { epoch: 9, candidate: 'aaaa:0' }, returnedAt + 1, anchored);
+      expect(reply.ok).to.equal(true);
+    });
+
+    it('frees challengers one lock-delay after the return', () => {
+      const { reply } = onPrepare(
+        heldRecord(),
+        { epoch: 9, candidate: 'cccc:0' },
+        returnedAt + TUNABLES.lockDelayMs + 1,
+        anchored,
+      );
+      expect(reply.ok).to.equal(true);
+    });
+
+    it('an anchor older than the row death changes nothing', () => {
+      const early = { ...TUNABLES, refereeingSinceMs: T0 }; // refereeing since before the term
+      const wellPast = T0 + TTL + TUNABLES.lockDelayMs + 1;
+      const { reply } = onPrepare(heldRecord(), { epoch: 9, candidate: 'cccc:0' }, wellPast, early);
+      expect(reply.ok).to.equal(true);
+    });
+
+    it('an absent anchor keeps the row-death behaviour', () => {
+      const wellPast = T0 + TTL + TUNABLES.lockDelayMs + 1;
+      const { reply } = onPrepare(heldRecord(), { epoch: 9, candidate: 'cccc:0' }, wellPast, TUNABLES);
+      expect(reply.ok).to.equal(true);
+    });
+  });
 });

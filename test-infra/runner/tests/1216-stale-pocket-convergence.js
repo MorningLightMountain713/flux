@@ -89,6 +89,10 @@ describe('two founders born across a partition converge to one on heal', functio
           quorumGrantMaxTtlMs: 30000,
           quorumGrantDrainMs: 20000,
           quorumGrantLockDelayMs: 10000,
+          // timingIsSafe now asserts renewInterval < lockDelay (the
+          // refereeing-anchored lock-delay needs the incumbent to reclaim
+          // inside the window); the 20s default would refuse this 10s lock
+          quorumGrantRenewIntervalMs: 5000,
           quorumGrantAskTimeoutMs: 3000,
           founderFlipNBlocks: 4,
           founderGateLagBlocks: 2,
