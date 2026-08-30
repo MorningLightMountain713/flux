@@ -77,6 +77,10 @@ describe('the founding committee rots, and the flip re-anchors it at the rung', 
           quorumGrantMaxTtlMs: 30000,
           quorumGrantDrainMs: 20000,
           quorumGrantLockDelayMs: 10000,
+          // timingIsSafe now asserts renewInterval < lockDelay (the
+          // refereeing-anchored lock-delay needs the incumbent to reclaim
+          // inside the window); the 20s default would refuse this 10s lock
+          quorumGrantRenewIntervalMs: 5000,
           quorumGrantAskTimeoutMs: 3000,
           // The flip dials, compressed like every other cadence: a rung
           // grid of 4 blocks, rot aged 2 blocks before the gate, a

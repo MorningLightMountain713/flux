@@ -213,42 +213,79 @@ describe('quorumGrant grantClientCore', () => {
   // first, both are running.
   describe('the timing inequality - slack + stop < lock-delay', () => {
     it('accepts the shipped values', () => {
-      const out = timingIsSafe({ demotionSlackMs: 15_000, hardStopMs: 2_000, lockDelayMs: 30_000 });
+      const out = timingIsSafe({
+        demotionSlackMs: 15_000, hardStopMs: 2_000, lockDelayMs: 30_000, renewIntervalMs: 20_000,
+      });
       expect(out.safe).to.equal(true);
       expect(out.marginMs).to.equal(13_000);
     });
 
     it('accepts what every harness suite sets', () => {
-      expect(timingIsSafe({ demotionSlackMs: 5_000, hardStopMs: 2_000, lockDelayMs: 10_000 }).safe).to.equal(true);
+      expect(timingIsSafe({
+        demotionSlackMs: 5_000, hardStopMs: 2_000, lockDelayMs: 10_000, renewIntervalMs: 4_000,
+      }).safe).to.equal(true);
     });
 
     it('REFUSES a slack that leaves no room for the stop', () => {
-      const out = timingIsSafe({ demotionSlackMs: 28_000, hardStopMs: 2_000, lockDelayMs: 30_000 });
+      const out = timingIsSafe({
+        demotionSlackMs: 28_000, hardStopMs: 2_000, lockDelayMs: 30_000, renewIntervalMs: 20_000,
+      });
       expect(out.safe).to.equal(false);
       expect(out.marginMs).to.equal(0);
     });
 
     it('REFUSES a slack past the lock-delay outright', () => {
-      expect(timingIsSafe({ demotionSlackMs: 40_000, hardStopMs: 2_000, lockDelayMs: 30_000 }).safe).to.equal(false);
+      expect(timingIsSafe({
+        demotionSlackMs: 40_000, hardStopMs: 2_000, lockDelayMs: 30_000, renewIntervalMs: 20_000,
+      }).safe).to.equal(false);
+    });
+
+    // The refereeing-anchored lock-delay (quiet-window run 3) makes a second
+    // inequality load-bearing: after the grantors return, the incumbent's
+    // reclaim pass must land inside the successor's re-anchored wait, so the
+    // renewal interval must sit strictly under the lock-delay. Asserted, not
+    // hoped about — including when the term is simply absent.
+    it('REFUSES a renewal interval that cannot reclaim inside the lock-delay', () => {
+      expect(timingIsSafe({
+        demotionSlackMs: 15_000, hardStopMs: 2_000, lockDelayMs: 30_000, renewIntervalMs: 35_000,
+      }).safe).to.equal(false);
+    });
+
+    it('REFUSES an absent renewal interval — the reclaim-first claim is not hoped about', () => {
+      expect(timingIsSafe({ demotionSlackMs: 15_000, hardStopMs: 2_000, lockDelayMs: 30_000 }).safe).to.equal(false);
     });
 
     // STRICT, not <=. At equality the stop and the challenger's grant race in
     // continuous time; the model works in whole ticks and cannot see that.
     it('REFUSES equality - the two events race at the boundary', () => {
-      const out = timingIsSafe({ demotionSlackMs: 28_000, hardStopMs: 2_000, lockDelayMs: 30_000 });
+      const out = timingIsSafe({
+        demotionSlackMs: 28_000, hardStopMs: 2_000, lockDelayMs: 30_000, renewIntervalMs: 20_000,
+      });
       expect(out.safe).to.equal(false);
     });
 
     // Lowering the lock-delay is the regression this exists to catch: it is the
     // only value carrying the clock-rate-skew budget now.
     it('REFUSES a lock-delay lowered under the shipped slack', () => {
-      expect(timingIsSafe({ demotionSlackMs: 15_000, hardStopMs: 2_000, lockDelayMs: 15_000 }).safe).to.equal(false);
+      expect(timingIsSafe({
+        demotionSlackMs: 15_000, hardStopMs: 2_000, lockDelayMs: 15_000, renewIntervalMs: 10_000,
+      }).safe).to.equal(false);
     });
 
     it('names every term it used, so a refusal is actionable', () => {
-      const out = timingIsSafe({ demotionSlackMs: 40_000, hardStopMs: 2_000, lockDelayMs: 30_000 });
+      const out = timingIsSafe({
+        demotionSlackMs: 40_000, hardStopMs: 2_000, lockDelayMs: 30_000, renewIntervalMs: 20_000,
+      });
       expect(out.reason).to.contain('40000');
       expect(out.reason).to.contain('2000');
+      expect(out.reason).to.contain('30000');
+    });
+
+    it('names the renewal interval when that is the broken term', () => {
+      const out = timingIsSafe({
+        demotionSlackMs: 15_000, hardStopMs: 2_000, lockDelayMs: 30_000, renewIntervalMs: 35_000,
+      });
+      expect(out.reason).to.contain('35000');
       expect(out.reason).to.contain('30000');
     });
   });

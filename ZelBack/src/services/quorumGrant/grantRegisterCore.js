@@ -61,12 +61,23 @@ function isGrantee(accepted, candidate) {
  * does. A released grant carries no delay — the holder said goodbye, nothing
  * is in doubt.
  *
+ * The wait runs only while this grantor is refereeing. While the register was
+ * closed — stale chain view, an unresynced return — nobody could have
+ * reclaimed the lapsed row, so the exclusivity window the incumbent is owed
+ * must not have burned in its absence: the anchor is the LATER of the row's
+ * death and the grantor's last return to refereeing (refereeingSinceMs,
+ * carried beside the knobs by the controller). Without it, a coast that
+ * outlives lockDelay − demotionSlack inverts the holder's stop-before-
+ * successor ordering at the moment the grantor comes back (the quiet-window
+ * model's run 3). An absent anchor keeps the row-death behaviour.
+ *
  * @returns {number} ms the candidate must still wait; 0 when free to proceed
  */
-function lockDelayRemaining(record, candidate, nowMs, lockDelayMs) {
+function lockDelayRemaining(record, candidate, nowMs, lockDelayMs, refereeingSinceMs) {
   if (grantState(record, nowMs) !== 'lapsed') return 0;
   if (isGrantee(record.accepted, candidate)) return 0;
-  const lockedUntil = record.accepted.expiresAt + lockDelayMs;
+  const anchorMs = Math.max(record.accepted.expiresAt, refereeingSinceMs ?? 0);
+  const lockedUntil = anchorMs + lockDelayMs;
   return Math.max(0, lockedUntil - nowMs);
 }
 
@@ -111,7 +122,7 @@ function decidePrepare(record, request, nowMs, tunables) {
     return { reply: refusal('incumbent_active', record), record: null };
   }
 
-  const waitMs = lockDelayRemaining(record, candidate, nowMs, tunables.lockDelayMs);
+  const waitMs = lockDelayRemaining(record, candidate, nowMs, tunables.lockDelayMs, tunables.refereeingSinceMs);
   if (waitMs > 0) {
     return { reply: refusal('lock_delay', record, { retryAfterMs: waitMs }), record: null };
   }
@@ -171,7 +182,7 @@ function onAccept(record, request, nowMs, tunables) {
     return { reply: refusal('incumbent_active', record), record: null };
   }
 
-  const waitMs = lockDelayRemaining(record, grantee, nowMs, tunables.lockDelayMs);
+  const waitMs = lockDelayRemaining(record, grantee, nowMs, tunables.lockDelayMs, tunables.refereeingSinceMs);
   if (waitMs > 0) {
     return { reply: refusal('lock_delay', record, { retryAfterMs: waitMs }), record: null };
   }
