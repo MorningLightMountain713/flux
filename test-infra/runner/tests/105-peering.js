@@ -28,9 +28,11 @@ describe('Peering', function () {
       expect(env.nodeHasLog(0, 'Daemon Sync status')).to.equal(true);
     });
 
-    it('should find own IP in deterministic node list', async function () {
-      // fed9c8110 folded the per-pass line into the transition summary.
-      expect(env.nodeHasLog(0, 'Discovery: index')).to.equal(true);
+    it('should find its own place on the node list', async function () {
+      // The reconciler derives duties only for a node that resolved its own
+      // outpoint on the list — a reconcile pass IS the evidence the old
+      // 'Discovery: index' line used to carry.
+      expect(env.nodeHasLog(0, 'ringReconciler pass')).to.equal(true);
     });
 
     it('should hold peers on node 0', async function () {

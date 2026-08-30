@@ -524,7 +524,11 @@ describe('replica placement (v9): assignment + placement, overrides, platform en
       components: webComponents(nameSingle, { hostPort: 35060 }),
     });
     expect(res.status).to.equal('error');
-    expect(res.data.message).to.include('PLACEMENT_IDENTITY_MISMATCH');
+    // The rule name rides the error's code field, not its prose — the
+    // message is composed from code+path+meta and is explicitly not
+    // contract. Field precision is what this test owns: the failure names
+    // the placement field that disagrees.
+    expect(res.data.message).to.include('placement.targetIps');
   });
 
   it('rejects an override naming an undeclared replica at the API', async function () {
