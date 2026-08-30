@@ -205,6 +205,28 @@ function generationDrainBlocks() {
   return config.fluxapps.quorumGrantGenerationDrainBlocks ?? 20;
 }
 
+// The plane's birth is a drain window of the same shape: nodes cross the
+// activation height at their own tips' pace, and a register serving cold
+// keys the moment its own node crossed would hand every running app's term
+// to whichever pursuer's tip crossed earliest.
+const activationOverrides = { activateAt: null, drainBlocks: null };
+
+function resetActivationForTests(options = {}) {
+  activationOverrides.activateAt = options.activateAt ?? null;
+  activationOverrides.drainBlocks = options.drainBlocks ?? null;
+}
+
+function activationHeight() {
+  if (activationOverrides.activateAt !== null) return activationOverrides.activateAt;
+  const height = config.fluxapps.quorumGrantActivationHeight;
+  return Number.isInteger(height) && height > 0 ? height : null;
+}
+
+function activationDrainBlocks() {
+  if (activationOverrides.drainBlocks !== null) return activationOverrides.drainBlocks;
+  return config.fluxapps.quorumGrantActivationDrainBlocks ?? 20;
+}
+
 function bad(code, message) {
   return { ok: false, code, message };
 }
@@ -379,6 +401,28 @@ async function selfOnCommittee(key, mode, fingerprint, generation, carriedChain,
         code: 409,
         reason: `generation ${current.generation} is draining until height ${drainUntil}`,
       };
+    }
+  }
+
+  // The activation drain: a VIRGIN row serves nobody until this grantor's
+  // own view passes activateAt + drainBlocks, so the one-time crossing is a
+  // uniform fleet-wide window rather than a race between tips. A row with
+  // accepted history is exempt — renewals and reclaims never drain, so an
+  // activation height configured above standing terms cannot demote a
+  // fleet.
+  const activateAt = activationHeight();
+  if (activateAt !== null) {
+    const height = daemonServiceMiscRpcs.isDaemonSynced()?.data?.height ?? 0;
+    const liftAt = activateAt + activationDrainBlocks();
+    if (height < liftAt) {
+      const stored = await grantRegister.read(key);
+      if (!stored?.accepted) {
+        return {
+          member: false,
+          code: 409,
+          reason: `activation is draining until height ${liftAt}`,
+        };
+      }
     }
   }
 
@@ -1010,5 +1054,6 @@ module.exports = {
   foundingBasis,
   noteReturnFromUnreachability,
   registerSyncReadyProvider,
+  resetActivationForTests,
   reset,
 };

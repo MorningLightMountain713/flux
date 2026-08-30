@@ -225,6 +225,19 @@ const pursuits = new Map();
 // that joins later does not get to skip the wait.
 const coldSince = new Map();
 
+// keys whose cold pursuit deferred for the activation drain: the head start
+// runs only while the register it races is OPEN, so the first pursuit past
+// the lift re-bases the clock instead of inheriting below-lift burn.
+const activationDrainSeen = new Set();
+
+// The activation drain's lift as THIS node's view sees it, or null when no
+// activation is scheduled. The grantors refuse every cold-key seat below it.
+function activationLiftHeight() {
+  const activateAt = activationHeight();
+  if (activateAt === null) return null;
+  return activateAt + (config.fluxapps.quorumGrantActivationDrainBlocks ?? 20);
+}
+
 
 function keyFor(appName) {
   return `${appName}/${ROLE}`;
@@ -265,7 +278,12 @@ async function acquireUnlessSettled(identifier, appName, key) {
   // ask). Unknown operator state pursues — the lock refuses only when it is
   // readable and true, so a state-read hiccup costs nothing but this pass.
   try {
-    if (await appsRuntimeState.isOperatorStopped(identifier)) return;
+    if (await appsRuntimeState.isOperatorStopped(identifier)) {
+      // the one swallow on this path that is invisible from the term's
+      // final owner — say so, or a silent gate reads as a dead node
+      log.info(`mastershipGrantGate - pursuit of ${key} silenced by the operator stop lock`);
+      return;
+    }
   } catch (error) {
     log.warn(`mastershipGrantGate - operator-state read before pursuing ${key} failed: ${error.message}`);
   }
@@ -291,9 +309,28 @@ async function acquireUnlessSettled(identifier, appName, key) {
     // Making it exclusive would leave an app whose master died before the crossing
     // with no master at all, because the only node allowed to claim it is gone.
     if (!data?.grantee) {
+      const local = await localComponentState(identifier);
+      // Below the activation drain's lift the register is shut to every
+      // cold-key seat, so a standby's head-start clock must not run there —
+      // a clock burning against a shut register would decide the crossing
+      // by whose tip crossed earliest, not by who runs the container. The
+      // incumbent never defers: its asks are refused grantor-side until the
+      // lift and retried, which is what puts it first in line.
+      if (!local.running) {
+        const liftAt = activationLiftHeight();
+        if (liftAt !== null) {
+          const { height, synced } = daemonServiceMiscRpcs.isDaemonSynced().data ?? {};
+          if (!synced || !Number.isFinite(height) || height < liftAt) {
+            activationDrainSeen.add(key);
+            log.info(`mastershipGrantGate - cold key ${key}: identifier=${identifier} `
+              + `running=false -> DEFER (activation drain until height ${liftAt})`);
+            return;
+          }
+          if (activationDrainSeen.delete(key)) coldSince.set(key, nowMs());
+        }
+      }
       const firstSeen = coldSince.get(key) ?? nowMs();
       coldSince.set(key, firstSeen);
-      const local = await localComponentState(identifier);
       const waited = nowMs() - firstSeen;
       const headStart = coldKeyHeadStartMs();
       const deferring = !local.running && waited < headStart;
@@ -676,6 +713,7 @@ function resetForTests(options = {}) {
   timingWarned = false;
   pursuits.clear();
   coldSince.clear();
+  activationDrainSeen.clear();
   folderDemotions.clear();
   fences.clear();
   liftPolls.clear();
