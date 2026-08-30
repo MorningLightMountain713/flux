@@ -119,6 +119,9 @@ describe('quorumGrant grantorController', () => {
     sinon.stub(daemonServiceMiscRpcs, 'isDaemonSynced').returns({
       status: 'success', data: { synced: true, height: 100, header: 100 },
     });
+    // the boot-sync gate is fail-closed until the service wiring registers
+    // the orchestrator's live state; these tests run with it open
+    grantorController.registerSyncReadyProvider(() => true);
   });
 
   afterEach(() => {
@@ -1132,6 +1135,65 @@ describe('quorumGrant grantorController', () => {
       const res = fakeRes();
       await grantorController.probe(fakeReq(signedAsk('probe')), res);
       expect(res.statusCode).to.equal(200);
+    });
+  });
+
+  // A grantor referees FROM its stored records, so it may not referee
+  // before this node's boot message-sync has delivered them. The gate is
+  // event-derived state read per ask — never elapsed time — and fail-closed
+  // until the service wiring registers the orchestrator's live level. Reads
+  // stay open and answer refereeing:false, so witnesses count a syncing
+  // cell dark and the coast carries masters through fleet-wide restarts.
+  describe('the boot-sync serve gate', () => {
+    it('refuses held asks while the sync is incomplete — reads stay open, refereeing false', async () => {
+      grantorController.registerSyncReadyProvider(() => false);
+
+      const refused = fakeRes();
+      await grantorController.prepare(fakeReq(signedAsk('prepare')), refused);
+      expect(refused.statusCode).to.equal(503);
+      expect(refused.body.data.message).to.match(/sync/i);
+
+      const readReq = fakeReq({});
+      readReq.query.key = 'myapp/master';
+      const read = fakeRes();
+      await grantorController.record(readReq, read);
+      expect(read.statusCode).to.equal(200);
+      expect(read.body.data.refereeing).to.equal(false);
+    });
+
+    it('the founder plane is exempt, like every serve gate on write-once state', async () => {
+      grantorController.registerSyncReadyProvider(() => false);
+      const res = fakeRes();
+      await grantorController.probe(
+        fakeReq(signedAsk('probe', { key: FOUNDER_KEY, mode: 'oneshot' })), res,
+      );
+      expect(res.statusCode).to.equal(200);
+    });
+
+    it('serves once the provider answers ready, and the reopening stamps the lock-delay anchor', async () => {
+      let ready = false;
+      grantorController.registerSyncReadyProvider(() => ready);
+      await grantorController.prepare(fakeReq(signedAsk('prepare')), fakeRes());
+
+      const before = Date.now();
+      ready = true;
+      const res = fakeRes();
+      await grantorController.prepare(fakeReq(signedAsk('prepare')), res);
+      expect(res.statusCode).to.equal(200);
+      const context = grantRegister.prepare.lastCall.args[2];
+      expect(context.refereeingSinceMs).to.be.at.least(before);
+    });
+
+    it('an unregistered or throwing provider fails closed', async () => {
+      grantorController.registerSyncReadyProvider(null);
+      const unregistered = fakeRes();
+      await grantorController.prepare(fakeReq(signedAsk('prepare')), unregistered);
+      expect(unregistered.statusCode).to.equal(503);
+
+      grantorController.registerSyncReadyProvider(() => { throw new Error('boom'); });
+      const throwing = fakeRes();
+      await grantorController.prepare(fakeReq(signedAsk('prepare')), throwing);
+      expect(throwing.statusCode).to.equal(503);
     });
   });
 

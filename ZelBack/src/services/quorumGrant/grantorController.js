@@ -113,6 +113,28 @@ function observeSynced(synced) {
   syncedWas = synced;
 }
 
+// A grantor referees FROM its stored records — the generation and
+// masterlease records boot sync delivers — so it may not referee before
+// that sync has completed. The provider is the orchestrator's live,
+// event-derived state, read per ask (never elapsed time), registered by
+// the service wiring at start; unregistered or throwing answers NOT READY,
+// so the gate fails closed exactly like the down-certificate seam.
+let syncReadyProvider = null;
+
+function registerSyncReadyProvider(provider) {
+  syncReadyProvider = typeof provider === 'function' ? provider : null;
+}
+
+function syncReady() {
+  if (!syncReadyProvider) return false;
+  try {
+    return syncReadyProvider() === true;
+  } catch (error) {
+    log.warn(`quorumGrant grantorController: sync-ready provider threw — refusing to referee: ${error.message}`);
+    return false;
+  }
+}
+
 function refereeingSinceFor(key) {
   const cleared = resyncClearedMs.get(key) ?? 0;
   // a stamp older than the lock-delay can never bind again — drop it
@@ -659,10 +681,18 @@ async function serve(req, res, type, operate) {
       // when its tip does. Reads stay open; the founder plane is exempt
       // (write-once registers cannot go stale).
       const sync = daemonServiceMiscRpcs.isDaemonSynced();
-      observeSynced(sync?.data?.synced === true);
+      const booted = syncReady();
+      // the refereeing-return anchor observes the WHOLE gate: a cell coming
+      // back from daemon staleness or from an incomplete boot sync is
+      // returning to refereeing either way
+      observeSynced(sync?.data?.synced === true && booted);
       if (!sync?.data?.synced) {
         report('refusedStale');
         return res.status(503).json(messageHelper.createErrorMessage('chain view stale — this grantor is not refereeing'));
+      }
+      if (!booted) {
+        report('refusedUnsynced');
+        return res.status(503).json(messageHelper.createErrorMessage('app-state sync incomplete — this grantor is not refereeing'));
       }
       // The return gate: a cell back from unreachability answers only after
       // re-fetching the published record — waiting teaches nothing.
@@ -896,11 +926,12 @@ async function record(req, res) {
     // reads answering must never talk a witness out of the coast that
     // keeps the app alive.
     const daemonSynced = daemonServiceMiscRpcs.isDaemonSynced()?.data?.synced === true;
-    // the read observes the synced flag anyway — feed the refereeing-return
+    const booted = syncReady();
+    // the read observes the serve gates anyway — feed the refereeing-return
     // anchor, so a stall witnessed only by record reads still re-anchors the
     // lock-delay (the witness polls are exactly the traffic a coast has)
-    observeSynced(daemonSynced);
-    const refereeing = daemonSynced && !resyncPending?.has(key);
+    observeSynced(daemonSynced && booted);
+    const refereeing = daemonSynced && booted && !resyncPending?.has(key);
     return res.json(messageHelper.createDataMessage({
       key,
       promisedEpoch: stored?.promisedEpoch ?? 0,
@@ -962,6 +993,10 @@ async function foundingBasis(req, res) {
 function reset() {
   peerAsks.clear();
   resyncPending = null;
+  syncedWas = null;
+  syncedSinceMs = 0;
+  resyncClearedMs.clear();
+  syncReadyProvider = null;
 }
 
 module.exports = {
@@ -974,5 +1009,6 @@ module.exports = {
   record,
   foundingBasis,
   noteReturnFromUnreachability,
+  registerSyncReadyProvider,
   reset,
 };
