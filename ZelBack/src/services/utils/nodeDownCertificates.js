@@ -199,8 +199,12 @@ function assemble(subject, assembler, height, membership, verdicts, jury, sameJu
  * retained window — reject, do not apply, do not relay. `sameJury` is every
  * rebuildable fingerprint assigning the same jury: the unit that has to agree
  * is the jury, not the network list. `verifySignature(owner, payload,
- * signature)` is the injected crypto seam. Verdicts age in BLOCKS against the
- * verifier's own height, both directions.
+ * signature)` is the injected crypto seam. Verdicts age in BLOCKS against
+ * `nowHeight`, both directions — the caller chooses the anchor: a juror
+ * checking its own assembly passes its current height; the record store
+ * passes the certificate's height, proving the verdicts were fresh when the
+ * quorum FORMED rather than fresh now, since a stored record outlives the
+ * verdict lifetime by design.
  *
  * @param {{subject: string, verdicts: VerdictShape[]}} certificate
  * @param {Array<{key: string, owner: string}> | null} watchers

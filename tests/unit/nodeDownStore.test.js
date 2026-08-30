@@ -137,6 +137,38 @@ describe('nodeDownStore', () => {
       const certificate = world.certificate(['j1', 'j2', 'j3', 'j4'], { fingerprint: 'f'.repeat(64) });
       expect(store.verifyNodeDownCertificate(certificate).reason).to.equal('unknown_fingerprint');
     });
+
+    it('a late reader verifies verdict freshness at the certificate, not at itself', () => {
+      // The fleet-run shape: certificate formed at height 1000, reader syncs
+      // it 13 blocks later. The record stands for six hours; a reader
+      // measuring verdict age against its own height can never restore a
+      // certificate older than the verdict lifetime, which unsyncs the
+      // record for almost all of its life.
+      const certificate = world.certificate(['j1', 'j2', 'j3', 'j4']);
+      world.height = 1013;
+      const result = store.verifyNodeDownCertificate(certificate);
+      expect(result).to.include({ valid: true, subject: S, counted: 4 });
+    });
+
+    it('formation freshness still binds: verdicts stale against the certificate height stay dead', () => {
+      world.height = 1015; // reader well past both heights
+      const certificate = world.certificate(['j1', 'j2', 'j3', 'j4'], { height: 1011 });
+      // verdicts signed at 1000 under a certificate claiming 1011 — outside
+      // the lifetime window AT FORMATION, whenever the reader looks.
+      const result = store.verifyNodeDownCertificate(certificate);
+      expect(result.valid).to.equal(false);
+      expect(result.discarded.stale).to.equal(4);
+    });
+
+    it('a certificate from the reader\'s future is refused whole', () => {
+      const certificate = world.certificate(['j1', 'j2', 'j3', 'j4'], { height: world.height + 2 });
+      expect(store.verifyNodeDownCertificate(certificate).reason).to.equal('future_height');
+    });
+
+    it('a certificate without a numeric height is malformed', () => {
+      const certificate = world.certificate(['j1', 'j2', 'j3', 'j4'], { height: 'soon' });
+      expect(store.verifyNodeDownCertificate(certificate).reason).to.equal('malformed');
+    });
   });
 
   describe('intake — verified, stored per certification, duplicates absorbed', () => {
