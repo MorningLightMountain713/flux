@@ -92,7 +92,7 @@ function minHolderAgeMs() {
 // when nothing is pending.
 let resyncPending = null;
 
-// The refereeing-return anchor (the quiet-window model's run 3). The
+// The refereeing-return anchor. The
 // successor's lock-delay must run only while this grantor is refereeing —
 // while the serve gates refuse everyone, the exclusivity window the
 // incumbent is owed burns for nobody. The register is handed the moment
