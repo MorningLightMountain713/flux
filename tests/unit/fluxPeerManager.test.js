@@ -1025,8 +1025,7 @@ describe('FluxPeerManager tests', () => {
       // Make one peer dead
       peer2.missedPongs = 5;
 
-      // Add a reconnect entry and unstable entry
-      manager.queueReconnect('10.0.0.4', '16127');
+      // Add an unstable entry
       manager.trackDisconnect('10.0.0.5', '16127');
 
       const stats = manager.getStats();
@@ -1035,7 +1034,6 @@ describe('FluxPeerManager tests', () => {
         outbound: 2,
         total: 3,
         dead: 1,
-        reconnectQueue: 1,
         unstable: 1,
         peerTopology: 0,
       });
@@ -1048,7 +1046,6 @@ describe('FluxPeerManager tests', () => {
         outbound: 0,
         total: 0,
         dead: 0,
-        reconnectQueue: 0,
         unstable: 0,
         peerTopology: 0,
       });
@@ -1059,7 +1056,6 @@ describe('FluxPeerManager tests', () => {
     it('should empty everything', () => {
       manager.add(createMockWs('10.0.0.1', '16127'), '10.0.0.1', '16127', { source: PEER_SOURCE.RANDOM });
       manager.add(createMockWs('10.0.0.2', '16127'), '10.0.0.2', '16127', { source: PEER_SOURCE.INBOUND });
-      manager.queueReconnect('10.0.0.3', '16127');
       manager.trackDisconnect('10.0.0.4', '16127');
 
       manager.reset();
@@ -1067,7 +1063,6 @@ describe('FluxPeerManager tests', () => {
       expect(manager.getNumberOfPeers()).to.equal(0);
       expect(manager.outboundCount).to.equal(0);
       expect(manager.inboundCount).to.equal(0);
-      expect(manager.getReconnectQueue().size).to.equal(0);
       expect(manager.unstableCount).to.equal(0);
     });
   });
@@ -1389,50 +1384,6 @@ describe('FluxPeerManager tests', () => {
     });
   });
 
-  describe('getReconnectCandidates', () => {
-    it('should return queued entries with ≤3 attempts', () => {
-      manager.queueReconnect('10.0.0.1', '16127');
-      manager.queueReconnect('10.1.0.1', '16127');
-
-      const candidates = manager.getReconnectCandidates();
-      expect(candidates).to.have.lengthOf(2);
-      expect(candidates[0].key).to.equal('10.0.0.1:16127');
-      expect(candidates[1].key).to.equal('10.1.0.1:16127');
-    });
-
-    it('should exclude already connected peers and clean up', () => {
-      manager.queueReconnect('10.0.0.1', '16127');
-      manager.add(createMockWs('10.0.0.1', '16127'), '10.0.0.1', '16127', { source: PEER_SOURCE.RANDOM });
-
-      const candidates = manager.getReconnectCandidates();
-      expect(candidates).to.have.lengthOf(0);
-      expect(manager.getReconnectQueue().has('10.0.0.1:16127')).to.equal(false);
-    });
-
-    it('should exclude unstable peers and clean up', () => {
-      manager.queueReconnect('10.0.0.1', '16127');
-      // Make unstable
-      for (let i = 0; i < 5; i += 1) {
-        manager.trackDisconnect('10.0.0.1', '16127');
-      }
-
-      const candidates = manager.getReconnectCandidates();
-      expect(candidates).to.have.lengthOf(0);
-      expect(manager.getReconnectQueue().has('10.0.0.1:16127')).to.equal(false);
-    });
-
-    it('should exclude entries with >3 attempts and clean up', () => {
-      manager.queueReconnect('10.0.0.1', '16127');
-      manager.queueReconnect('10.0.0.1', '16127');
-      manager.queueReconnect('10.0.0.1', '16127');
-      manager.queueReconnect('10.0.0.1', '16127'); // 4th attempt
-
-      const candidates = manager.getReconnectCandidates();
-      expect(candidates).to.have.lengthOf(0);
-      expect(manager.getReconnectQueue().has('10.0.0.1:16127')).to.equal(false);
-    });
-  });
-
   describe('failed connection tracking', () => {
     it('should allow first connection attempt', () => {
       expect(manager.shouldAttemptConnection('10.0.0.1', '16127')).to.equal(true);
@@ -1531,35 +1482,6 @@ describe('FluxPeerManager tests', () => {
     it('should return false for invalid messages', () => {
       expect(FluxPeerManager.shouldReconnect(CLOSE_CODES.INVALID_MSG_INBOUND)).to.equal(false);
       expect(FluxPeerManager.shouldReconnect(CLOSE_CODES.INVALID_MSG_OUTBOUND)).to.equal(false);
-    });
-  });
-
-  describe('remove reconnect integration', () => {
-    it('should queue reconnect for outbound dead connection', () => {
-      const ws = createMockWs('10.0.0.1', '16127');
-      manager.add(ws, '10.0.0.1', '16127', { source: PEER_SOURCE.RANDOM });
-
-      manager.remove('10.0.0.1:16127', CLOSE_CODES.DEAD_CONNECTION);
-
-      expect(manager.getReconnectQueue().has('10.0.0.1:16127')).to.equal(true);
-    });
-
-    it('should NOT queue reconnect for outbound duplicate rejection', () => {
-      const ws = createMockWs('10.0.0.1', '16127');
-      manager.add(ws, '10.0.0.1', '16127', { source: PEER_SOURCE.RANDOM });
-
-      manager.remove('10.0.0.1:16127', CLOSE_CODES.DUPLICATE_PEER);
-
-      expect(manager.getReconnectQueue().has('10.0.0.1:16127')).to.equal(false);
-    });
-
-    it('should NOT queue reconnect for inbound peers regardless of code', () => {
-      const ws = createMockWs('10.0.0.1', '16127');
-      manager.add(ws, '10.0.0.1', '16127', { source: PEER_SOURCE.INBOUND });
-
-      manager.remove('10.0.0.1:16127', CLOSE_CODES.DEAD_CONNECTION);
-
-      expect(manager.getReconnectQueue().has('10.0.0.1:16127')).to.equal(false);
     });
   });
 
@@ -2506,9 +2428,9 @@ describe('FluxPeerManager tests', () => {
       const removed = manager.removeEphemeral('50.0.0.1:16127');
       expect(removed).to.not.be.null;
       expect(removed.key).to.equal('50.0.0.1:16127');
-      // Should not be in reconnect queue
-      const candidates = manager.getReconnectCandidates();
-      expect(candidates.map((c) => `${c.ip}:${c.port}`)).to.not.include('50.0.0.1:16127');
+      // Leaves no trace behind: not held, nothing pending
+      expect(manager.has('50.0.0.1:16127')).to.equal(false);
+      expect(manager.isPending('50.0.0.1:16127')).to.equal(false);
     });
 
     it('should coexist with a regular peer on the same IP:port', () => {

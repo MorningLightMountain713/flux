@@ -1394,7 +1394,7 @@ describe('fluxCommunication tests', () => {
       sinon.assert.calledOnceWithExactly(logSpy, 'Node not confirmed. Flux discovery is awaiting.');
     });
 
-    it('runs the housekeeping pass: status line, reconnect queue, reconcile sweep', async () => {
+    it('runs the housekeeping pass: status line and reconcile sweep, no dialing of its own', async () => {
       const fluxNodeList = [
         '44.192.51.10',
         '44.192.51.12',
@@ -1418,12 +1418,9 @@ describe('fluxCommunication tests', () => {
       // Mock delay to return immediately
       sinon.stub(serviceHelper, 'delay').resolves();
 
-      // Prevent an actual connection from the reconnect-queue path: pending
-      // returns initiateAndHandleConnection before it opens a socket.
+      // The reconciler is the ONE engine that initiates connections; the
+      // housekeeping pass must not dial anything itself.
       sinon.stub(peerManager, 'isPending').returns(true);
-      sinon.stub(peerManager, 'getReconnectCandidates').returns([
-        { key: '1.2.3.4:16137', ip: '1.2.3.4', port: '16137', attempts: 1 },
-      ]);
       // Selection belongs to the ring reconciler now: the pass only sweeps it.
       const sweepStub = sinon.stub(nodeDownService, 'sweep').resolves();
 
@@ -1442,7 +1439,7 @@ describe('fluxCommunication tests', () => {
       await new Promise((resolve) => setTimeout(resolve, 1000));
 
       sinon.assert.calledWith(infoSpy, sinon.match(/Discovery: 10 nodes/));
-      sinon.assert.calledWith(infoSpy, sinon.match(/Reconnecting to queued peer: 1.2.3.4:16137/));
+      sinon.assert.neverCalledWith(infoSpy, sinon.match(/Reconnecting to queued peer/));
       sinon.assert.called(sweepStub);
     }).timeout(5000);
   });
@@ -1661,6 +1658,52 @@ describe('fluxCommunication tests', () => {
       }
 
       expect(completed).to.deep.equal([['apprunning', peerKey]]);
+    });
+  });
+
+  describe('the crossing-dial rule: first connection wins, the newcomer loses', () => {
+    afterEach(() => {
+      peerManager.reset();
+      sinon.restore();
+    });
+
+    it('a dial completing into an already-held live pair is refused; the held connection survives', async () => {
+      // Reciprocal duties make both ends dial the same pair at once. The
+      // rule (the sim's, and the peering doc's): the pair keeps the FIRST
+      // connection that established, whichever end dialed it — replacing
+      // the existing instead kills both ends' connections in the crossing
+      // race and the pair re-dials forever.
+      sinon.stub(rateLimit, 'lruRateLimit').returns(true);
+      sinon.stub(daemonServiceMiscRpcs, 'isDaemonSynced').returns({ data: { synced: false, height: 0 } });
+      sinon.stub(fluxNetworkHelper, 'getLocalSocketAddress').returns('44.192.51.11:16127');
+      peerManager.reset();
+
+      const { port } = localWsServer.address();
+      const key = `127.0.0.1:${port}`;
+
+      // Start the dial, then land the pair's other connection mid-handshake.
+      const settled = [];
+      fluxCommunication.initiateAndHandleConnection(key, PEER_SOURCE.DETERMINISTIC, {
+        onSettle: (v) => settled.push(v),
+      });
+      const held = await connectWs();
+      held.ip = '127.0.0.1';
+      held.port = String(port);
+      held.on = sinon.stub();
+      peerManager.add(held, '127.0.0.1', port, { source: PEER_SOURCE.INBOUND });
+      const original = peerManager.get(key);
+      expect(original).to.not.be.undefined;
+
+      // The dial's handshake completes against the held pair: it must lose.
+      await waitFor(() => settled.length === 1, 5000);
+      await waitFor(() => !peerManager.isPending(key), 5000);
+
+      expect(settled).to.deep.equal([true]); // the duty IS satisfied — by the survivor
+      expect(peerManager.get(key)).to.equal(original); // the held connection survives
+      expect(peerManager.get(key).direction).to.equal('inbound');
+      expect(held.readyState).to.equal(WebSocket.OPEN); // never closed
+      expect(peerManager.outboundCount).to.equal(0);
+      expect(peerManager.inboundCount).to.equal(1);
     });
   });
 

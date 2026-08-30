@@ -44,9 +44,16 @@ const { NAK_REASON, buildSyncSignatureMessage } = require('./utils/peerCodec');
 const { networkHealthMonitor } = require('./utils/NetworkHealthMonitor');
 const verifyPool = require('./utils/verifyPool');
 
-const DISCOVERY = {
-  connectionDelayMs: config.fluxapps.discoveryConnectionDelayMs ?? 500,
-};
+// Upper bound of the random delay before each reconciler dial. Reciprocal
+// duties make simultaneous crossing dials the common case; the jitter breaks
+// the symmetry so a crossing loss cannot repeat in lockstep.
+const DIAL_JITTER_MS = config.fluxapps.dialJitterMs ?? 250;
+
+// How a dial resolved, for the reconciler's settle callback. HELD: the pair
+// holds a live connection (this dial's, or the survivor of a crossing race).
+// FAILED: the dial resolved without one — evidence against the target.
+// NO_DIAL: nothing was dialed, no evidence gained — retry later.
+const DIAL_RESULT = Object.freeze({ HELD: true, FAILED: false, NO_DIAL: null });
 
 /**
  * Fire the store's promotion signal: a just-stored temp message matched an
@@ -1201,7 +1208,7 @@ function onOutboundError(error) {
   const key = `${meta.ip}:${meta.port}`;
   peerManager.clearPending(key);
   peerManager.recordFailedConnection(meta.ip, meta.port);
-  settleOutbound(meta, false);
+  settleOutbound(meta, DIAL_RESULT.FAILED);
   log.error(`Outbound connection to ${key} failed: ${error.message}`);
 }
 
@@ -1209,12 +1216,28 @@ function onOutboundClose() {
   const meta = wsMetadata.get(this);
   if (!meta || meta.settled) return;
   peerManager.clearPending(`${meta.ip}:${meta.port}`);
-  settleOutbound(meta, false);
+  settleOutbound(meta, DIAL_RESULT.FAILED);
 }
 
 function onOutboundOpen() {
   const meta = wsMetadata.get(this);
   if (!meta) return;
+  const key = `${meta.ip}:${meta.port}`;
+  const existing = peerManager.get(key);
+  if (existing && existing.isAlive) {
+    // Both ends of a reciprocal duty can dial the same pair at once. The
+    // pair keeps the FIRST connection that established, whichever end
+    // dialed it — the same rule at both ends and in both directions, so a
+    // crossing race converges on one survivor. Replacing here instead
+    // makes each side close the other's connection and the pair re-dials
+    // forever. A dead or stalling existing still gets replaced by the
+    // reconnect flows; this newcomer simply lost the race, and the duty it
+    // was dialed for is satisfied by the survivor.
+    peerManager.clearPending(key);
+    try { this.close(CLOSE_CODES.DUPLICATE_PEER, 'Peer already connected'); } catch (_e) { /* noop */ }
+    settleOutbound(meta, DIAL_RESULT.HELD);
+    return;
+  }
   peerManager.add(this, meta.ip, meta.port, {
     source: meta.source,
     remoteCapabilities: meta.remoteCapabilities,
@@ -1222,7 +1245,7 @@ function onOutboundOpen() {
     remoteVersion: meta.remoteVersion,
     remoteFluxUptime: meta.remoteFluxUptime,
   });
-  settleOutbound(meta, true);
+  settleOutbound(meta, DIAL_RESULT.HELD);
 }
 
 function onOutboundUpgrade(response) {
@@ -1252,11 +1275,11 @@ async function initiateAndHandleConnection(connection, source = PEER_SOURCE.RAND
   try {
     const key = `${ip}:${port}`;
     if (peerManager.has(key)) {
-      if (onSettle) onSettle(true);
+      if (onSettle) onSettle(DIAL_RESULT.HELD);
       return;
     }
     if (peerManager.isPending(key)) {
-      if (onSettle) onSettle(null);
+      if (onSettle) onSettle(DIAL_RESULT.NO_DIAL);
       return;
     }
     peerManager.markPending(key);
@@ -1264,7 +1287,7 @@ async function initiateAndHandleConnection(connection, source = PEER_SOURCE.RAND
       const localSocketAddr = await fluxNetworkHelper.getLocalSocketAddress();
       if (!localSocketAddr) {
         peerManager.clearPending(key);
-        if (onSettle) onSettle(null);
+        if (onSettle) onSettle(DIAL_RESULT.NO_DIAL);
         return;
       }
       myPort = extractPort(localSocketAddr);
@@ -1316,7 +1339,7 @@ async function initiateAndHandleConnection(connection, source = PEER_SOURCE.RAND
   } catch (error) {
     const catchKey = `${ip}:${port}`;
     peerManager.clearPending(catchKey);
-    if (onSettle) onSettle(null);
+    if (onSettle) onSettle(DIAL_RESULT.NO_DIAL);
     log.error(error);
   }
 }
@@ -1524,11 +1547,19 @@ function startDiscovery() {
   discoveryRunning = true;
   nodeDownService.start({
     dial: (socketAddress, { witness } = {}) => new Promise((resolve) => {
-      initiateAndHandleConnection(
-        socketAddress,
-        witness ? PEER_SOURCE.DETERMINISTIC : PEER_SOURCE.RANDOM,
-        { onSettle: resolve },
-      );
+      // Reciprocal duties mean both ends often owe the same pair a dial at
+      // the same instant (a fleet boot, a shared drop). A small random
+      // delay breaks the symmetry so the crossing race — both connections
+      // establishing at once, both losing to the first-wins rule — cannot
+      // repeat in lockstep. The reference sim jitters every dial the same
+      // way.
+      setTimeout(() => {
+        initiateAndHandleConnection(
+          socketAddress,
+          witness ? PEER_SOURCE.DETERMINISTIC : PEER_SOURCE.RANDOM,
+          { onSettle: resolve },
+        );
+      }, Math.floor(Math.random() * DIAL_JITTER_MS));
     }),
     openEphemeralConnection,
     sendSignedMessage: fluxCommunicationMessagesSender.sendSignedMessage,
@@ -1582,7 +1613,11 @@ async function fluxDiscovery() {
 
     // Selection is the ring reconciler's: duties are a pure function of the
     // committed list, so there is nothing to discover — this loop is the
-    // housekeeping backstop (reconnects, pruning, a sweep for missed events).
+    // housekeeping backstop (pruning, a sweep for missed events). The
+    // reconciler is the ONE engine that initiates connections: it re-dials
+    // lost duties and top-ups on its own pass with per-target backoff, so
+    // there is no reconnect queue — a second dialing engine is a second
+    // opinion about who to hold, and two opinions fight.
     peerManager.numberOfFluxNodes = networkStateService.nodeCount();
 
     // one line per discovery pass, and only when something changed since the
@@ -1591,15 +1626,6 @@ async function fluxDiscovery() {
     if (discoveryStatus !== lastDiscoveryStatus) {
       log.info(discoveryStatus);
       lastDiscoveryStatus = discoveryStatus;
-    }
-
-    // Process reconnect queue — retry recently disconnected outbound peers
-    const reconnectCandidates = peerManager.getReconnectCandidates();
-    for (const candidate of reconnectCandidates) {
-      log.info(`Reconnecting to queued peer: ${candidate.key} (attempt ${candidate.attempts})`);
-      initiateAndHandleConnection(`${candidate.ip}:${candidate.port}`, PEER_SOURCE.RECONNECT);
-      // eslint-disable-next-line no-await-in-loop
-      await serviceHelper.delay(DISCOVERY.connectionDelayMs);
     }
 
     // Prune expired unstable node entries periodically

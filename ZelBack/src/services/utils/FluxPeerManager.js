@@ -42,7 +42,6 @@ class FluxPeerManager extends EventEmitter {
   /** @type {Set<string>} */
   #outboundKeys = new Set();
   /** @type {Map<string, {ip: string, port: string, attempts: number, lastAttempt: number}>} */
-  #reconnectQueue = new Map();
   /** @type {Map<string, {disconnects: number, firstDisconnect: number}>} */
   #unstableNodes = new Map();
   /**
@@ -183,8 +182,6 @@ class FluxPeerManager extends EventEmitter {
       this.#inboundKeys.add(peer.key);
     } else {
       this.#outboundKeys.add(peer.key);
-      // Successful outbound connection — clear from reconnect queue
-      this.#reconnectQueue.delete(peer.key);
     }
     // Track IP group and unique IP for diversity checks
     const groupKey = `${direction}:${FluxPeerManager.getIpGroup(ip)}`;
@@ -250,13 +247,6 @@ class FluxPeerManager extends EventEmitter {
     this.trackDisconnect(peer.ip, peer.port);
     this.#stampLoss(peer);
     if (this.networkHealthMonitor) this.networkHealthMonitor.recordDisconnect(peer.connectedAt, closeCode);
-
-    // Queue outbound peers for reconnection only on unexpected disconnections.
-    // Whitelist: only reconnect for dead connections, capacity rejections,
-    // and standard WebSocket closes (network failures, crashes).
-    if (peer.direction === DIRECTION.OUTBOUND && FluxPeerManager.shouldReconnect(closeCode)) {
-      this.queueReconnect(peer.ip, peer.port);
-    }
 
     const now = Date.now();
     this.#recordEvent({
@@ -552,34 +542,6 @@ class FluxPeerManager extends EventEmitter {
     }
   }
 
-  // --- Reconnection queue ---
-
-  /**
-   * Queue an outbound peer for reconnection by fluxDiscovery.
-   * @param {string} ip
-   * @param {string} port
-   */
-  queueReconnect(ip, port) {
-    const key = `${ip}:${port}`;
-    const existing = this.#reconnectQueue.get(key);
-    if (existing) {
-      existing.attempts += 1;
-      existing.lastAttempt = Date.now();
-    } else {
-      this.#reconnectQueue.set(key, {
-        ip, port, attempts: 1, lastAttempt: Date.now(),
-      });
-    }
-  }
-
-  getReconnectQueue() {
-    return this.#reconnectQueue;
-  }
-
-  clearReconnectEntry(key) {
-    this.#reconnectQueue.delete(key);
-  }
-
   // --- Unstable node tracking ---
 
   /**
@@ -653,9 +615,11 @@ class FluxPeerManager extends EventEmitter {
   // --- Close code classification ---
 
   /**
-   * Should we queue this peer for reconnection?
-   * Whitelist approach: only reconnect for codes that mean "peer went away unexpectedly".
-   * Everything else (policy, auth, admin close, duplicate) means "don't retry".
+   * Did the peer go away UNEXPECTEDLY? Pure close-code classifier — it drives
+   * no dialing (the ring reconciler is the only engine that initiates
+   * connections and re-dials its own duties). Consumed by the node-down
+   * suspicion filter: only an unexpected loss may accuse a peer, never our
+   * own deliberate closes (policy, auth, admin close, duplicate).
    * @param {number} [closeCode]
    * @returns {boolean}
    */
@@ -985,34 +949,6 @@ class FluxPeerManager extends EventEmitter {
     }
   }
 
-  // --- Reconnect candidates ---
-
-  /**
-   * Get filtered reconnect candidates (outbound only).
-   * Returns entries that are: not already connected, not unstable, ≤3 attempts.
-   * Cleans up ineligible entries internally.
-   * @returns {Array<{key: string, ip: string, port: string, attempts: number}>}
-   */
-  getReconnectCandidates() {
-    const candidates = [];
-    for (const [key, entry] of this.#reconnectQueue) {
-      if (this.has(key)) {
-        this.#reconnectQueue.delete(key);
-        continue;
-      }
-      if (this.isUnstable(entry.ip, entry.port)) {
-        this.#reconnectQueue.delete(key);
-        continue;
-      }
-      if (entry.attempts > 3) {
-        this.#reconnectQueue.delete(key);
-        continue;
-      }
-      candidates.push({ key, ...entry });
-    }
-    return candidates;
-  }
-
   // --- Failed connection tracking ---
 
   /**
@@ -1059,7 +995,6 @@ class FluxPeerManager extends EventEmitter {
       outbound: this.#outboundKeys.size,
       total: this.#peers.size,
       dead,
-      reconnectQueue: this.#reconnectQueue.size,
       unstable: this.#unstableNodes.size,
       peerTopology: this.#peerTopology.size,
     };
@@ -1552,7 +1487,6 @@ class FluxPeerManager extends EventEmitter {
     this.#peers.clear();
     this.#inboundKeys.clear();
     this.#outboundKeys.clear();
-    this.#reconnectQueue.clear();
     this.#unstableNodes.clear();
     this.#ipGroupCounts.clear();
     this.#uniqueIps.clear();
