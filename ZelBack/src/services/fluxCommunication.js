@@ -40,7 +40,7 @@ const { messageCache, wsPeerCache } = cacheManager;
 const testListCache = new LRUCache(LRUTest); */
 
 const { FLUX_VERSION, FLUX_CAPABILITIES } = require('./utils/FluxPeerManager');
-const { NAK_REASON, buildSyncSignatureMessage } = require('./utils/peerCodec');
+const { NAK_REASON, buildSyncSignatureMessage, encodeHashRequest } = require('./utils/peerCodec');
 const { networkHealthMonitor } = require('./utils/NetworkHealthMonitor');
 const verifyPool = require('./utils/verifyPool');
 
@@ -414,10 +414,17 @@ async function handleContentManifestSyncResponse(message, peerKey) {
   }
 }
 
-async function handleCheckMessageHashPresent(messageHash, fromIP, port) {
+async function handleCheckMessageHashPresent(messageHash, peerSocket) {
   try {
     if (!messageCache.has(messageHash)) {
-      peerManager.sendHashRequest(`${fromIP}:${port}`, messageHash);
+      // Ask on the socket the announce arrived on. The announcer can be a
+      // transient (ephemeral) connection that is never in the peer map, and
+      // a map lookup by ip:port silently asks nobody.
+      if (peerSocket.remoteCapabilities.has('binaryMessages')) {
+        peerSocket.send(encodeHashRequest(messageHash));
+      } else {
+        peerSocket.send(JSON.stringify({ requestMessageHash: messageHash }));
+      }
     }
   } catch (error) {
     log.error(error);
@@ -427,20 +434,20 @@ async function handleCheckMessageHashPresent(messageHash, fromIP, port) {
 /**
  * To handle a request of a message, from the message hash from one of the ws connections.
  * @param {string} messageHash Message hash.
- * @param {string} fromIP Sender's IP address.
- * @param {string} port Sender's node Api port.
- * @param {boolean} outgoingConnection says if ip/port is from incoming or outgoing connections.
+ * @param {import('./utils/FluxPeerSocket').FluxPeerSocket} peerSocket the
+ *   connection the request arrived on
  */
-async function handleRequestMessageHash(messageHash, fromIP, port) {
+async function handleRequestMessageHash(messageHash, peerSocket) {
   try {
     if (messageCache.has(messageHash)) {
       const message = messageCache.get(messageHash);
       if (message) {
         const messageString = serviceHelper.ensureString(message);
-        const peer = peerManager.get(`${fromIP}:${port}`);
-        if (peer) {
-          peer.send(messageString);
-        }
+        // Reply on the socket the request arrived on. Hash-sync requests ride
+        // ephemeral connections that are never in the peer map; a map lookup
+        // by ip:port here answered nobody, silently, and the symptom — zero
+        // hashes resolved — surfaced two subsystems away.
+        peerSocket.send(messageString);
       }
     }
   } catch (error) {
@@ -782,7 +789,7 @@ async function dispatchFluxMessage(msgObj, peerSocket) {
     }
     const counter = peerSocket.msgMap.get('newHash');
     peerSocket.msgMap.set('newHash', counter + 1);
-    setImmediate(() => handleCheckMessageHashPresent(messageHashPresent, peerSocket.ip, peerSocket.port));
+    setImmediate(() => handleCheckMessageHashPresent(messageHashPresent, peerSocket));
     return;
   }
   if (requestMessageHash) {
@@ -797,7 +804,7 @@ async function dispatchFluxMessage(msgObj, peerSocket) {
     }
     const counter = peerSocket.msgMap.get('requestHash');
     peerSocket.msgMap.set('requestHash', counter + 1);
-    setImmediate(() => handleRequestMessageHash(requestMessageHash, peerSocket.ip, peerSocket.port));
+    setImmediate(() => handleRequestMessageHash(requestMessageHash, peerSocket));
     return;
   }
   if (!pubKey || !timestamp || !signature || !version || !data) {
@@ -1018,12 +1025,12 @@ peerManager.hashHandlers = {
   handleHashPresent: (peer, hexHash) => {
     const counter = peer.msgMap.get('newHash');
     peer.msgMap.set('newHash', counter + 1);
-    setImmediate(() => handleCheckMessageHashPresent(hexHash, peer.ip, peer.port));
+    setImmediate(() => handleCheckMessageHashPresent(hexHash, peer));
   },
   handleHashRequest: (peer, hexHash) => {
     const counter = peer.msgMap.get('requestHash');
     peer.msgMap.set('requestHash', counter + 1);
-    setImmediate(() => handleRequestMessageHash(hexHash, peer.ip, peer.port));
+    setImmediate(() => handleRequestMessageHash(hexHash, peer));
   },
   handleTempMessagesRequest: (peer, decoded) => {
     const now = Date.now();

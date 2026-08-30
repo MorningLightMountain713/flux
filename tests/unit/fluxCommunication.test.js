@@ -1812,3 +1812,53 @@ describe('fluxnodedownverdict wire contract', () => {
     sinon.assert.notCalled(onVerdictStub);
   });
 });
+
+describe('hash request/response rides the arrival socket', () => {
+  // Hash-sync requests arrive on ephemeral connections that are never in
+  // the peer map — the reply must go down the socket the question came on.
+  // A map lookup by ip:port answered nobody, silently, and the symptom
+  // (zero hashes resolved) surfaced two subsystems away.
+  const makeSocket = () => ({
+    ip: '45.45.45.45',
+    port: '16127',
+    key: '45.45.45.45:16127',
+    direction: 'inbound',
+    source: PEER_SOURCE.EPHEMERAL,
+    closeCodes: { invalidMsg: 4016 },
+    close: sinon.stub(),
+    send: sinon.stub(),
+    remoteCapabilities: new Set(),
+    badMessageTimestamps: [],
+    msgMap: new Map([['requestHash', 0], ['newHash', 0]]),
+  });
+
+  afterEach(() => sinon.restore());
+
+  it('answers a hash request from a socket that is not in the peer map', async () => {
+    const hash = 'a'.repeat(40);
+    const cached = {
+      timestamp: 1, pubKey: 'k', signature: 's', version: 1, data: { type: 'x' },
+    };
+    sinon.stub(FluxTTLCache.prototype, 'has').returns(true);
+    sinon.stub(FluxTTLCache.prototype, 'get').returns(cached);
+    const socket = makeSocket();
+
+    await peerManager.messageDispatcher({ requestMessageHash: hash }, socket);
+    await new Promise((resolve) => { setImmediate(resolve); });
+
+    sinon.assert.calledOnce(socket.send);
+    expect(socket.send.firstCall.args[0]).to.include('"pubKey":"k"');
+  });
+
+  it('asks for an announced hash on the socket that announced it', async () => {
+    const hash = 'b'.repeat(40);
+    sinon.stub(FluxTTLCache.prototype, 'has').returns(false);
+    const socket = makeSocket();
+
+    await peerManager.messageDispatcher({ messageHashPresent: hash }, socket);
+    await new Promise((resolve) => { setImmediate(resolve); });
+
+    sinon.assert.calledOnce(socket.send);
+    expect(socket.send.firstCall.args[0]).to.equal(JSON.stringify({ requestMessageHash: hash }));
+  });
+});
