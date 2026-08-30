@@ -66,10 +66,10 @@ function isGrantee(accepted, candidate) {
  * reclaimed the lapsed row, so the exclusivity window the incumbent is owed
  * must not have burned in its absence: the anchor is the LATER of the row's
  * death and the grantor's last return to refereeing (refereeingSinceMs,
- * carried beside the knobs by the controller). Without it, a coast that
- * outlives lockDelay − demotionSlack inverts the holder's stop-before-
- * successor ordering at the moment the grantor comes back (the quiet-window
- * model's run 3). An absent anchor keeps the row-death behaviour.
+ * carried beside the knobs by the controller). Anchored at row death alone,
+ * a coast outliving lockDelay − demotionSlack inverts the holder's
+ * stop-before-successor ordering the moment the grantor comes back. An
+ * absent anchor keeps the row-death behaviour.
  *
  * @returns {number} ms the candidate must still wait; 0 when free to proceed
  */

@@ -240,7 +240,7 @@ describe('quorumGrant grantClientCore', () => {
       }).safe).to.equal(false);
     });
 
-    // The refereeing-anchored lock-delay (quiet-window run 3) makes a second
+    // The refereeing-anchored lock-delay makes a second
     // inequality load-bearing: after the grantors return, the incumbent's
     // reclaim pass must land inside the successor's re-anchored wait, so the
     // renewal interval must sit strictly under the lock-delay. Asserted, not

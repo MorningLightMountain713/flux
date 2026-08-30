@@ -579,7 +579,7 @@ describe('quorumGrant grantRegisterCore', () => {
     });
   });
 
-  // The refereeing-anchored lock-delay (the quiet-window model's run 3): the
+  // The refereeing-anchored lock-delay: the
   // successor's wait runs only while this grantor is refereeing. While the
   // register was closed — stale view, unresynced return — nobody could have
   // reclaimed the lapsed row, so the exclusivity window must not have burned:

@@ -170,9 +170,8 @@ describe('the founding grant on a multi-node fleet', function () {
           quorumGrantMaxTtlMs: 30000,
           quorumGrantDrainMs: 20000,
           quorumGrantLockDelayMs: 10000,
-          // timingIsSafe now asserts renewInterval < lockDelay (the
-          // refereeing-anchored lock-delay needs the incumbent to reclaim
-          // inside the window); the 20s default would refuse this 10s lock
+          // renewInterval must sit strictly under lockDelayMs or
+          // timingIsSafe refuses and the plane stays inert
           quorumGrantRenewIntervalMs: 5000,
           quorumGrantAskTimeoutMs: 3000,
           // Spec updates adopt inside a stagger window (production: 5 min,
