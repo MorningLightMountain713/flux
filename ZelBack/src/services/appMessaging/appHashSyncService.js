@@ -462,7 +462,12 @@ async function broadcastHashRequest(hashes, peers) {
 }
 
 /**
- * Pick random IPs from the deterministic node list, excluding connected peers.
+ * Pick target IPs for a hash round: held peers first, then the rest of the
+ * deterministic list. Held peers are proven reachable, and since the wire
+ * carries the ephemeral distinction an ephemeral ask to a held peer is read
+ * like any other. The old form EXCLUDED connected peers — a dodge around
+ * the receiver swallowing ephemerals on held pairs — which on a small
+ * network left only unreachable list entries and resolved nothing.
  * @param {number} count
  * @returns {Promise<string[]>} Array of ip:port strings
  */
@@ -474,19 +479,23 @@ async function pickEphemeralTargets(count) {
   for (const peer of peerManager.allValues()) {
     connectedKeys.add(peer.key);
   }
-  const candidates = [];
+  const held = [];
+  const unheld = [];
   for (const node of nodeList) {
     if (!node.ip) continue;
     const key = normalizeSocketAddress(node.ip);
-    if (connectedKeys.has(key)) continue;
     if (key === localSocketAddress) continue;
-    candidates.push(key);
+    if (connectedKeys.has(key)) held.push(key);
+    else unheld.push(key);
   }
-  for (let i = candidates.length - 1; i > 0; i -= 1) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [candidates[i], candidates[j]] = [candidates[j], candidates[i]];
-  }
-  return candidates.slice(0, count);
+  const shuffle = (arr) => {
+    for (let i = arr.length - 1; i > 0; i -= 1) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [arr[i], arr[j]] = [arr[j], arr[i]];
+    }
+    return arr;
+  };
+  return [...shuffle(held), ...shuffle(unheld)].slice(0, count);
 }
 
 /**
