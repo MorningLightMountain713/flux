@@ -13,6 +13,7 @@ const {
   verifyCertificate,
   RECORD_LIFETIME_MS,
   VERDICT_LIFETIME_BLOCKS,
+  FUTURE_BLOCKS_TOLERANCE,
 } = require('../utils/nodeDownCertificates');
 const { normalizeSocketAddress } = require('../utils/socketAddressUtils');
 
@@ -45,6 +46,7 @@ function verifyNodeDownCertificate(certificate) {
     !certificate
     || typeof certificate.subject !== 'string'
     || typeof certificate.fingerprint !== 'string'
+    || !Number.isFinite(certificate.height)
     || !Array.isArray(certificate.verdicts)
   ) {
     return { valid: false, subject: null, reason: 'malformed' };
@@ -55,6 +57,9 @@ function verifyNodeDownCertificate(certificate) {
   if (!topology || height === null) {
     return { valid: false, subject: null, reason: 'not_ready' };
   }
+  if (certificate.height > height + FUTURE_BLOCKS_TOLERANCE) {
+    return { valid: false, subject: null, reason: 'future_height' };
+  }
 
   const watchers = topology.juryAt(certificate.fingerprint, certificate.subject);
   if (watchers === null) {
@@ -64,13 +69,20 @@ function verifyNodeDownCertificate(certificate) {
     || new Set([certificate.fingerprint]);
   const cotenants = topology.cotenants(certificate.subject, watchers);
 
+  // Verdict freshness is measured at the CERTIFICATE's height, not this
+  // reader's: the window proves the verdicts were fresh when the quorum
+  // formed, and a record stands for six hours — a reader measuring against
+  // its own height could never restore a certificate older than the verdict
+  // lifetime, unsyncing the record for almost all of its life. Total age is
+  // bounded by the record lifetime at intake, and the future check above
+  // keeps the anchor honest against this reader's chain.
   const verdict = verifyCertificate(
     certificate,
     watchers,
     sameJury,
     (owner, payload, signature) => verificationHelper
       .verifyMessage(payload.toString(), owner, signature) === true,
-    height,
+    certificate.height,
     VERDICT_LIFETIME_BLOCKS,
     cotenants,
   );
