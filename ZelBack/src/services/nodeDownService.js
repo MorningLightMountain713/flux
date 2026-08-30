@@ -113,26 +113,61 @@ async function broadcastOwnCertificate(certificate) {
 }
 
 /**
- * Intake for a nodedown broadcast; fluxCommunication relays on rebroadcast.
- * A certificate about THIS node triggers the immediate coalesced announce —
+ * The shared certificate intake: gossip and sync land here alike, so both
+ * pass the store's full verification and both trigger the same reactions.
+ * A certificate about THIS node fires the immediate coalesced announce —
  * the announcement is the refutation, and it must ride the existing stagger.
+ *
+ * @param {object} message {certificate, broadcastedAt}
+ * @param {object|null} envelope
+ * @returns {Promise<{accepted: boolean, rebroadcast: boolean, reason: string}>}
+ */
+async function intakeCertificate(message, envelope) {
+  const result = await nodeDownStore.handleNodeDownEvent({ message, envelope });
+  if (!result.accepted) return result;
+
+  if (message.certificate.subject === myOutpoint()) {
+    // eslint-disable-next-line global-require
+    const peerNotification = require('./appMessaging/peerNotification');
+    peerNotification.checkAndNotifyPeersOfRunningApps();
+  } else if (reconciler) {
+    // Sync can deliver before start(); the reconciler's first pass reads the
+    // store, so a certificate stored now is honoured then.
+    reconciler.schedule('nodedown-stored');
+  }
+  return result;
+}
+
+/**
+ * Intake for a nodedown broadcast; fluxCommunication relays on rebroadcast.
  *
  * @param {object} data {certificate, broadcastedAt}
  * @param {object} [envelope]
  * @returns {Promise<{accepted: boolean, rebroadcast: boolean, reason: string}>}
  */
 async function onCertificateBroadcast(data, envelope = null) {
-  const result = await nodeDownStore.handleNodeDownEvent({ message: data, envelope });
-  if (!result.accepted) return result;
+  return intakeCertificate(data, envelope);
+}
 
-  if (data.certificate.subject === myOutpoint()) {
-    // eslint-disable-next-line global-require
-    const peerNotification = require('./appMessaging/peerNotification');
-    peerNotification.checkAndNotifyPeersOfRunningApps();
-  } else {
-    reconciler.schedule('nodedown-stored');
+/**
+ * Intake for a nodedown row arriving over the app-state sync stream — a
+ * booting node catching up on certificates it missed. The row is the stored
+ * document served whole, so its dates arrive JSON-serialized. The jury
+ * signatures inside the certificate are the gate, checked by the same
+ * verification as gossip; there is no envelope-freshness check because a
+ * synced record is old by nature — the record lifetime is the age bound.
+ * Sync is solicited catch-up, so nothing is relayed.
+ *
+ * @param {object} event stored row {broadcastedAt, data: {certificate}, envelope}
+ * @returns {Promise<{accepted: boolean, rebroadcast: boolean, reason: string}>}
+ */
+async function onCertificateSyncEvent(event) {
+  const certificate = event?.data?.certificate;
+  const broadcastedAt = new Date(event?.broadcastedAt ?? NaN).getTime();
+  if (!certificate || !Number.isFinite(broadcastedAt)) {
+    return { accepted: false, rebroadcast: false, reason: 'malformed' };
   }
-  return result;
+  return intakeCertificate({ certificate, broadcastedAt }, event.envelope ?? null);
 }
 
 function onVerdictMessage(msgObj) {
@@ -272,4 +307,5 @@ module.exports = {
   sweep,
   onVerdictMessage,
   onCertificateBroadcast,
+  onCertificateSyncEvent,
 };

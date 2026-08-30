@@ -2274,7 +2274,10 @@ describe('fluxCommunicationMessagesSender tests', () => {
     // are DURABLE and published once (D1: change-driven) — a floor that fits
     // the gossip silently excludes exactly the records a rejoining node can
     // never re-receive any other way. The query must carry them regardless
-    // of age; one row per app/role bounds the stream.
+    // of age; one row per app/role bounds the stream. Nodedown certificates
+    // stand for six hours and are broadcast once per incident, so the floor
+    // would blind a booting node to any standing certificate older than it;
+    // the record TTL bounds those rows instead.
     //
     // Authoritative is set here because this block was written before
     // development's #1797 refusal gate: streamBatchedSync declines outright
@@ -2315,6 +2318,7 @@ describe('fluxCommunicationMessagesSender tests', () => {
       expect(durable, 'the query carries a durable-type branch no freshness floor applies to').to.not.equal(undefined);
       expect(durable.type.$in).to.include('masterlease');
       expect(durable.type.$in).to.include('grantgeneration');
+      expect(durable.type.$in).to.include('nodedown');
     });
   });
 

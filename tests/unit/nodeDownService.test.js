@@ -117,6 +117,75 @@ describe('nodeDownService', () => {
     service.stop();
   });
 
+  describe('sync intake', () => {
+    it('adapts the served row to the shared intake: certificate, numeric timestamp, envelope', async () => {
+      const { service, transport, stubs } = makeHarness();
+      service.start(transport);
+      await tick();
+
+      const at = Date.now() - 60_000;
+      const envelope = {
+        version: 1, pubKey: 'pk', timestamp: at, signature: 'sig',
+      };
+      // the stored doc as the sync stream serves it: dates JSON-serialized
+      const row = JSON.parse(JSON.stringify({
+        type: 'nodedown',
+        subject: 'other:0',
+        broadcastedAt: new Date(at),
+        data: { certificate: { subject: 'other:0', height: 100 } },
+        envelope,
+      }));
+      const result = await service.onCertificateSyncEvent(row);
+      expect(result.accepted).to.equal(true);
+      const call = stubs.handleNodeDownEvent.firstCall.args[0];
+      expect(call.message.broadcastedAt).to.equal(at);
+      expect(call.message.certificate.subject).to.equal('other:0');
+      expect(call.envelope).to.deep.equal(envelope);
+      service.stop();
+    });
+
+    it('a synced certificate about THIS node announces — the refutation fires on catch-up too', async () => {
+      const { service, transport, stubs } = makeHarness();
+      service.start(transport);
+      await tick();
+
+      const row = JSON.parse(JSON.stringify({
+        type: 'nodedown',
+        subject: MY_OUTPOINT,
+        broadcastedAt: new Date(),
+        data: { certificate: { subject: MY_OUTPOINT, height: 100 } },
+        envelope: null,
+      }));
+      const result = await service.onCertificateSyncEvent(row);
+      expect(result.accepted).to.equal(true);
+      expect(stubs.announce.callCount).to.equal(1);
+      service.stop();
+    });
+
+    it('a row without a certificate is refused before the store is consulted', async () => {
+      const { service, stubs } = makeHarness();
+      const result = await service.onCertificateSyncEvent({
+        type: 'nodedown', broadcastedAt: new Date().toISOString(), data: {},
+      });
+      expect(result).to.deep.equal({ accepted: false, rebroadcast: false, reason: 'malformed' });
+      expect(stubs.handleNodeDownEvent.callCount).to.equal(0);
+    });
+
+    it('delivery before start() stores without throwing — the reconciler catches up on its first pass', async () => {
+      const { service, stubs } = makeHarness();
+      const row = JSON.parse(JSON.stringify({
+        type: 'nodedown',
+        subject: 'other:0',
+        broadcastedAt: new Date(),
+        data: { certificate: { subject: 'other:0', height: 100 } },
+        envelope: null,
+      }));
+      const result = await service.onCertificateSyncEvent(row);
+      expect(result.accepted).to.equal(true);
+      expect(stubs.announce.callCount).to.equal(0);
+    });
+  });
+
   it('returning from total unreachability re-fetches grant records and announces', async () => {
     const { service, transport, stubs } = makeHarness();
     let peersDown = false;

@@ -220,6 +220,68 @@ describe('nodeDownStore', () => {
     });
   });
 
+  describe('sync intake — the same verifier as gossip, real signatures', () => {
+    // The sync stream serves stored rows whole; the service adapts each row
+    // back to the intake shape and the store verifies the certificate inside
+    // exactly as it would off the wire — a forged row a peer slips into a
+    // solicited sync response dies here.
+    function syncService() {
+      return proxyquire('../../ZelBack/src/services/nodeDownService', {
+        './appMessaging/nodeDownStore': store,
+        './networkStateService': {
+          membershipFingerprint: () => world.fp,
+          networkState: () => world.nodes,
+          nodeDownTopology: () => null,
+          chainHeight: () => world.height,
+        },
+      });
+    }
+
+    function servedRow(certificate, at) {
+      // the stored doc as the wire delivers it: dates JSON-serialized
+      return JSON.parse(JSON.stringify({
+        type: 'nodedown',
+        dedupKey: `nodedown:${certificate.subject}:${certificate.height}`,
+        subject: certificate.subject,
+        ip: '10.9.0.20:16127',
+        broadcastedAt: new Date(at),
+        data: { certificate },
+        envelope: null,
+        receivedAt: new Date(),
+      }));
+    }
+
+    it('stores a served certificate and keeps the originator timestamp', async () => {
+      // hours past the gossip freshness window, well within the record lifetime
+      const at = Date.now() - (3 * 60 * 60 * 1000);
+      const result = await syncService().onCertificateSyncEvent(
+        servedRow(world.certificate(['j1', 'j2', 'j3', 'j4']), at),
+      );
+      expect(result.accepted).to.equal(true);
+      const row = await collection.findOne({ type: 'nodedown', subject: S });
+      expect(new Date(row.broadcastedAt).getTime()).to.equal(at);
+    });
+
+    it('a tampered certificate off the sync stream is never stored', async () => {
+      const certificate = world.certificate(['j1', 'j2', 'j3', 'j4']);
+      certificate.verdicts[0].height += 1; // signed bytes no longer match
+      const result = await syncService().onCertificateSyncEvent(
+        servedRow(certificate, Date.now()),
+      );
+      expect(result.accepted).to.equal(false);
+      expect(await collection.countDocuments({ type: 'nodedown', subject: S })).to.equal(0);
+    });
+
+    it('a lapsed row the TTL sweep has not deleted yet dies at intake', async () => {
+      const at = Date.now() - RECORD_LIFETIME_MS - 1000;
+      const result = await syncService().onCertificateSyncEvent(
+        servedRow(world.certificate(['j1', 'j2', 'j3', 'j4']), at),
+      );
+      expect(result).to.include({ accepted: false, reason: 'expired' });
+      expect(await collection.countDocuments({ type: 'nodedown', subject: S })).to.equal(0);
+    });
+  });
+
   describe('the grant-plane provider', () => {
     it('registers the full contract and answers through it', async () => {
       store.registerWithGrantPlane();

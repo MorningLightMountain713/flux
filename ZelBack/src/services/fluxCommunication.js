@@ -269,6 +269,7 @@ async function handleAppRunningSyncResponse(message, peerSocket) {
     // Evictions are applied ahead of the other state events, as they were
     // before this response was processed in slices.
     const evictions = [];
+    const nodeDowns = [];
     const stateEvents = [];
     let eventWriteFailed = false;
 
@@ -276,14 +277,21 @@ async function handleAppRunningSyncResponse(message, peerSocket) {
       const appRunningBroadcasts = [];
       const otherBroadcasts = [];
       const evictedEvents = [];
+      const nodeDownEvents = [];
       for (const event of slice) {
         if (event.envelope && event.type === 'apprunning') {
           appRunningBroadcasts.push({ ...event.envelope, data: event.data });
+        } else if (event.type === 'nodedown') {
+          // A certificate row is self-proving: the jury signatures inside it
+          // are the gate, checked by the same verification as the gossip
+          // intake. The envelope is provenance only — a locally-assembled row
+          // carries none — so these bypass the envelope filter below.
+          nodeDownEvents.push(event);
         } else if (event.type === 'evicted') {
           // Evicted events lack per-event signatures because they are generated
           // locally by nodeStatusMonitor, which makes non-deterministic HTTP
           // probe decisions about whether a remote node is alive. The
-          // isSyncResponseWanted check above ensures only solicited responses are
+          // isSyncRequested check above ensures only solicited responses are
           // processed, but a compromised confirmed peer we sync from could still
           // include fake evictions. Impact is limited: only affects this node's
           // view and self-heals on the next apprunning broadcast (≤60 min).
@@ -305,6 +313,7 @@ async function handleAppRunningSyncResponse(message, peerSocket) {
       const { verified: verifiedOther } = await batchVerifyBroadcasts(otherToVerify, 'handleAppRunningSyncResponse');
       const verifiedOtherSet = new Set(verifiedOther);
       evictions.push(...evictedEvents);
+      nodeDowns.push(...nodeDownEvents);
       for (let i = 0; i < otherBroadcasts.length; i++) {
         if (verifiedOtherSet.has(otherToVerify[i])) {
           stateEvents.push(otherBroadcasts[i]);
@@ -332,11 +341,13 @@ async function handleAppRunningSyncResponse(message, peerSocket) {
     // slice every time, and nothing here establishes that the event log is
     // indifferent to seeing them last. An eviction's time is createdAt, when the
     // evicting node made it.
-    for (const event of [...evictions, ...stateEvents]) {
+    for (const event of [...evictions, ...nodeDowns, ...stateEvents]) {
       if (event.type === 'sigterm' || event.type === 'appremoved' || event.type === 'ipchanged' || event.type === 'masterlease' || event.type === 'grantgeneration') {
         await messageStore.storeAppStateEvent(event.type, { message: event.data, envelope: event.envelope });
       } else if (event.type === 'evicted') {
         await messageStore.applyEviction(event.ip, Date.parse(event.createdAt));
+      } else if (event.type === 'nodedown') {
+        await nodeDownService.onCertificateSyncEvent(event);
       }
     }
 
