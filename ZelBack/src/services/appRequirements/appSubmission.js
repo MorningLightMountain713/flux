@@ -312,11 +312,13 @@ async function submitAppRegistration(req, res, processedBody, contentCtx) {
     return;
   }
 
-  if (peerManager.outboundCount < config.fluxapps.minOutgoing) {
-    throw new Error('Sorry, This Flux does not have enough outgoing peers for safe application registration');
-  }
-  if (peerManager.inboundCount < config.fluxapps.minIncoming) {
-    throw new Error('Sorry, This Flux does not have enough incoming peers for safe application registration');
+  // Direction-agnostic on purpose: duty pairs are reciprocal, one connection
+  // per pair, and which end wears the outbound label is decided by a dial
+  // race — a well-connected node can hold every pair inbound-labelled.
+  // What safety needs is that enough distinct peers hold a connection to
+  // this node; counting by direction undercounts exactly the healthy case.
+  if (peerManager.getNumberOfPeers() < config.fluxapps.minOutgoing + config.fluxapps.minIncoming) {
+    throw new Error('Sorry, This Flux does not hold enough peer connections for safe application registration');
   }
 
   let { appSpecification, timestamp, signature } = processedBody;

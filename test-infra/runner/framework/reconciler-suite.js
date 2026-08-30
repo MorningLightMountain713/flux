@@ -118,8 +118,10 @@ export async function bootAndPeer(env, { minOutbound = 4, minInbound = 2, pricin
     });
   }
   await env.startDiscovery();
-  await fluxClients[0].waitForEvent('peers:added', (d) => d.outbound >= minOutbound, 120000);
-  await fluxClients[0].waitForEvent('peers:added', (d) => d.inbound >= minInbound, 120000);
+  // Direction-agnostic: duty pairs are reciprocal and the outbound label is
+  // a dial-race outcome — the first-booted node can legitimately hold every
+  // pair inbound-labelled. What "peered" means is enough distinct peers HELD.
+  await fluxClients[0].waitForEvent('peers:added', (d) => d.total >= minOutbound + minInbound, 120000);
   await startTicker();
   if (pricing) {
     await bootstrapPricing(pricing === true ? {} : pricing);
@@ -152,8 +154,7 @@ export async function restartAndPeer(env, settleIndexes, { minOutbound = 1, minI
   ));
   await env.startDiscovery(settleIndexes);
   const [gate] = settleIndexes;
-  await env.clients[gate].waitForEvent('peers:added', (d) => d.outbound >= minOutbound, 120000, { afterId: markers[gate] });
-  await env.clients[gate].waitForEvent('peers:added', (d) => d.inbound >= minInbound, 120000, { afterId: markers[gate] });
+  await env.clients[gate].waitForEvent('peers:added', (d) => d.total >= minOutbound + minInbound, 120000, { afterId: markers[gate] });
   return markers;
 }
 
