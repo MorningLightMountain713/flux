@@ -1377,6 +1377,87 @@ describe('FluxPeerManager tests', () => {
     });
   });
 
+  describe('validateAndAddInbound ephemeral acceptance', () => {
+    // The receiving half of openEphemeralConnection: a dialer that declared
+    // itself transient must get a reader even when the pair is already held.
+    // Without this path, a verdict pushed between two watchers - who hold
+    // each other by construction - is closed as a duplicate with the frame
+    // never read, and nothing is logged at either end.
+    it('accepts an ephemeral-flagged inbound while the pair is held, with a reader attached', () => {
+      manager.numberOfFluxNodes = 10000;
+      manager.add(createMockWs('8.8.8.8'), '8.8.8.8', '16127', { source: PEER_SOURCE.INBOUND });
+
+      const clock = sinon.useFakeTimers();
+      const ws = createMockWs('8.8.8.8');
+      manager.validateAndAddInbound(ws, '16127', createMockReq('8.8.8.8', { 'x-flux-ephemeral': '1' }));
+
+      expect(ws.onmessage).to.be.a('function');
+      clock.tick(1100);
+      sinon.assert.notCalled(ws.close);
+      expect(manager.inboundCount).to.equal(1);
+      expect(manager.getNumberOfPeers()).to.equal(1);
+      clock.restore();
+    });
+
+    it('an ephemeral inbound never registers as a peer, even when the pair is not held', () => {
+      manager.numberOfFluxNodes = 10000;
+      const ws = createMockWs('8.8.8.8');
+      manager.validateAndAddInbound(ws, '16127', createMockReq('8.8.8.8', { 'x-flux-ephemeral': '1' }));
+
+      expect(ws.onmessage).to.be.a('function');
+      expect(manager.has('8.8.8.8:16127')).to.equal(false);
+      expect(manager.inboundCount).to.equal(0);
+      expect(manager.getNumberOfPeers()).to.equal(0);
+    });
+
+    it('caps concurrent inbound ephemerals from one ip', () => {
+      manager.numberOfFluxNodes = 10000;
+      for (let i = 0; i < 4; i += 1) {
+        manager.validateAndAddInbound(createMockWs('8.8.8.8'), '16127', createMockReq('8.8.8.8', { 'x-flux-ephemeral': '1' }));
+      }
+      const fifth = createMockWs('8.8.8.8');
+      manager.validateAndAddInbound(fifth, '16127', createMockReq('8.8.8.8', { 'x-flux-ephemeral': '1' }));
+
+      sinon.assert.calledWith(fifth.close, CLOSE_CODES.MAX_CONNECTIONS, sinon.match(/ephemeral capacity/));
+      expect(fifth.onmessage).to.equal(null);
+    });
+
+    it('caps total concurrent ephemerals', () => {
+      manager.numberOfFluxNodes = 10000;
+      for (let i = 0; i < 32; i += 1) {
+        const ip = `9.9.${Math.floor(i / 4)}.${(i % 4) + 1}`;
+        manager.validateAndAddInbound(createMockWs(ip), '16127', createMockReq(ip, { 'x-flux-ephemeral': '1' }));
+      }
+      const extra = createMockWs('9.9.99.1');
+      manager.validateAndAddInbound(extra, '16127', createMockReq('9.9.99.1', { 'x-flux-ephemeral': '1' }));
+
+      sinon.assert.calledWith(extra.close, CLOSE_CODES.MAX_CONNECTIONS, sinon.match(/ephemeral capacity/));
+    });
+
+    it('an inbound ephemeral that outlives its lifetime is closed', () => {
+      const clock = sinon.useFakeTimers();
+      manager.numberOfFluxNodes = 10000;
+      const ws = createMockWs('8.8.8.8');
+      manager.validateAndAddInbound(ws, '16127', createMockReq('8.8.8.8', { 'x-flux-ephemeral': '1' }));
+
+      clock.tick(120000);
+      sinon.assert.calledWith(ws.close, CLOSE_CODES.EPHEMERAL_DONE, sinon.match(/lifetime/));
+      clock.restore();
+    });
+
+    it('crossing ephemerals on one pair keep separate book entries', () => {
+      // Both ends of a reciprocal pair push to each other at once - the
+      // common case in a verdict storm - so two live ephemerals share an
+      // ip:port and must not clobber each other's bookkeeping.
+      const dialer = manager.addEphemeral(createMockWs('8.8.8.8'), '8.8.8.8', '16127');
+      const inbound = manager.addInboundEphemeral(createMockWs('8.8.8.8'), '8.8.8.8', '16127');
+
+      expect(dialer.ephemeralKey).to.not.equal(inbound.ephemeralKey);
+      expect(manager.removeEphemeral(dialer.ephemeralKey)).to.equal(dialer);
+      expect(manager.removeEphemeral('8.8.8.8:16127')).to.equal(inbound);
+    });
+  });
+
   describe('failed connection tracking', () => {
     it('should allow first connection attempt', () => {
       expect(manager.shouldAttemptConnection('10.0.0.1', '16127')).to.equal(true);

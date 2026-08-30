@@ -859,7 +859,12 @@ async function dispatchFluxMessage(msgObj, peerSocket) {
         } else if (msgObj.data.type === 'fluxnodedown') {
           setImmediate(() => handleNodeDownMessage(msgObj, peerSocket.ip, peerSocket.port));
         } else if (msgObj.data.type === 'fluxnodedownverdict') {
-          setImmediate(() => nodeDownService.onVerdictMessage(msgObj));
+          // Wire contract: a verdict rides only an ephemeral connection. One
+          // arriving down a peering is silently ignored, so the gossip plane
+          // can never be used to inject verdicts.
+          if (peerSocket.source === PEER_SOURCE.EPHEMERAL) {
+            setImmediate(() => nodeDownService.onVerdictMessage(msgObj));
+          }
         } else if (msgObj.data.type === 'fluxgrantgeneration') {
           setImmediate(() => handleGrantGenerationMessage(msgObj, peerSocket.ip, peerSocket.port));
         } else if (msgObj.data.type === 'fluxappcontentmanifest') {
@@ -1374,6 +1379,10 @@ function openEphemeralConnection(connection) {
           'X-Flux-Capabilities': FLUX_CAPABILITIES.join(','),
           'X-Flux-Version': FLUX_VERSION,
           'X-Flux-Uptime': String(Math.floor(process.uptime())),
+          // Tells the far end this is a transient exchange, not a peering
+          // bid — without it, a receiver already holding this pair closes
+          // the socket as a duplicate without ever attaching a reader.
+          'X-Flux-Ephemeral': '1',
         },
       };
       const offsetMs = fluxNetworkHelper.getLocalClockOffsetMs();

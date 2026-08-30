@@ -30,6 +30,15 @@ const CLOSE_CODE_NAMES = Object.freeze(
   Object.fromEntries(Object.entries(CLOSE_CODES).map(([name, code]) => [code, name])),
 );
 
+// Inbound ephemeral acceptance bounds. An ephemeral connection is transient
+// by contract — the dialer closes it after one exchange — so nothing else
+// polices these sockets: without a count cap a burst of dialers exhausts
+// descriptors, and without a lifetime a dialer that vanished mid-exchange
+// (a partition is exactly when verdicts fly) leaks its socket forever.
+const INBOUND_EPHEMERAL_MAX_TOTAL = 32;
+const INBOUND_EPHEMERAL_MAX_PER_IP = 4;
+const INBOUND_EPHEMERAL_LIFETIME_MS = 120000;
+
 class FluxPeerManager extends EventEmitter {
   static CONNECTION_BACKOFF_MS = config.fluxapps.connectionBackoffMs ?? [2 * 60000, 5 * 60000, 10 * 60000, 15 * 60000];
 
@@ -37,6 +46,10 @@ class FluxPeerManager extends EventEmitter {
   #peers = new Map();
   /** @type {Map<string, FluxPeerSocket>} */
   #ephemeralPeers = new Map();
+  /** Uniquifies ephemeral map keys: both ends of a pair push to each other
+   *  at once (reciprocal duties make that the common case), and a plain
+   *  ip:port key would let the two entries clobber each other. */
+  #ephemeralSeq = 0;
   /** @type {Set<string>} */
   #inboundKeys = new Set();
   /** @type {Set<string>} */
@@ -342,22 +355,73 @@ class FluxPeerManager extends EventEmitter {
     if (typeof options.remoteClockOffsetMs === 'number' && !Number.isNaN(options.remoteClockOffsetMs)) {
       peer.remoteClockOffsetMs = options.remoteClockOffsetMs;
     }
-    this.#ephemeralPeers.set(peer.key, peer);
+    this.#ephemeralSeq += 1;
+    peer.ephemeralKey = `${peer.key}#e${this.#ephemeralSeq}`;
+    this.#ephemeralPeers.set(peer.ephemeralKey, peer);
     this.#pendingConnections.delete(peer.key);
-    log.info(`Ephemeral connection to ${peer.key} established`);
+    log.info(`Ephemeral connection ${options.inbound ? 'from' : 'to'} ${peer.key} ${options.inbound ? 'accepted' : 'established'}`);
     return peer;
   }
 
   /**
    * Remove an ephemeral peer. No reconnection, no tracking, no threshold events.
-   * @param {string} key
+   * @param {string} key ephemeralKey, or a plain ip:port (first match wins)
    * @returns {FluxPeerSocket|null}
    */
   removeEphemeral(key) {
-    const peer = this.#ephemeralPeers.get(key);
+    let mapKey = key;
+    let peer = this.#ephemeralPeers.get(key);
+    if (!peer) {
+      for (const [candidateKey, candidate] of this.#ephemeralPeers) {
+        if (candidate.key === key) {
+          mapKey = candidateKey;
+          peer = candidate;
+          break;
+        }
+      }
+    }
     if (!peer) return null;
-    this.#ephemeralPeers.delete(key);
-    log.info(`Ephemeral connection ${key} removed`);
+    this.#ephemeralPeers.delete(mapKey);
+    if (peer.lifetimeTimer) clearTimeout(peer.lifetimeTimer);
+    log.info(`Ephemeral connection ${peer.key} removed`);
+    return peer;
+  }
+
+  /**
+   * Accept an inbound ephemeral connection — the receiving half of
+   * openEphemeralConnection. The dialer declared itself transient
+   * (X-Flux-Ephemeral), so this connection is not a peering bid: it never
+   * competes with a held pair for the ip:port key, never registers as a
+   * peer, and never moves any peer count a gate reads. Without this path,
+   * a message pushed over an ephemeral connection to an already-held peer
+   * is closed as a duplicate with no reader ever attached — dropped
+   * unread, unlogged at both ends.
+   * @param {WebSocket} ws
+   * @param {string} ip
+   * @param {string} port
+   * @param {object} [metadata]
+   * @returns {FluxPeerSocket|null}
+   */
+  addInboundEphemeral(ws, ip, port, metadata = {}) {
+    let fromSameIp = 0;
+    this.#ephemeralPeers.forEach((peer) => {
+      if (peer.ip === ip) fromSameIp += 1;
+    });
+    if (this.#ephemeralPeers.size >= INBOUND_EPHEMERAL_MAX_TOTAL
+      || fromSameIp >= INBOUND_EPHEMERAL_MAX_PER_IP) {
+      try {
+        ws.close(CLOSE_CODES.MAX_CONNECTIONS, 'ephemeral capacity reached');
+      } catch (error) {
+        log.error(error);
+      }
+      return null;
+    }
+    const peer = this.addEphemeral(ws, ip, port, { ...metadata, inbound: true });
+    peer.lifetimeTimer = setTimeout(() => {
+      try {
+        peer.close(CLOSE_CODES.EPHEMERAL_DONE, 'ephemeral lifetime over');
+      } catch (error) { /* already gone */ }
+    }, INBOUND_EPHEMERAL_LIFETIME_MS);
     return peer;
   }
 
@@ -890,18 +954,6 @@ class FluxPeerManager extends EventEmitter {
           metadata.remoteFluxUptime = Number(req.headers['x-flux-uptime']);
         }
       }
-      const maxPeers = 4 * config.fluxapps.minIncoming;
-      const maxNumberOfConnections = this.numberOfFluxNodes / 160 < 9 * config.fluxapps.minIncoming
-        ? this.numberOfFluxNodes / 160
-        : 9 * config.fluxapps.minIncoming;
-      const maxCon = Math.max(maxPeers, maxNumberOfConnections);
-      if (this.inboundCount > maxCon) {
-        setTimeout(() => {
-          ws.close(CLOSE_CODES.MAX_CONNECTIONS, `Max number of incomming connections ${maxCon} reached`);
-        }, 1000);
-        return;
-      }
-
       let ipv4Peer;
       try {
         ipv4Peer = (req.socket.remoteAddress || '').replace('::ffff:', '');
@@ -919,6 +971,29 @@ class FluxPeerManager extends EventEmitter {
           ws.close(CLOSE_CODES.PRIVATE_IP, 'Peer received is using internal IP');
         }, 1000);
         log.error(`Incoming connection of peer from internal IP not allowed: ${ipv4Peer}`);
+        return;
+      }
+
+      // The dialer declared this connection transient (openEphemeralConnection
+      // at the far end): it is here to exchange a message and go, not to bid
+      // for the pair's peering. The pair being held is the NORMAL case for a
+      // push between watchers, so it must bypass the duplicate-peer policy
+      // below, and it is bounded by its own caps rather than the peering
+      // limits.
+      if (req && req.headers && req.headers['x-flux-ephemeral']) {
+        this.addInboundEphemeral(ws, ipv4Peer, port, metadata);
+        return;
+      }
+
+      const maxPeers = 4 * config.fluxapps.minIncoming;
+      const maxNumberOfConnections = this.numberOfFluxNodes / 160 < 9 * config.fluxapps.minIncoming
+        ? this.numberOfFluxNodes / 160
+        : 9 * config.fluxapps.minIncoming;
+      const maxCon = Math.max(maxPeers, maxNumberOfConnections);
+      if (this.inboundCount > maxCon) {
+        setTimeout(() => {
+          ws.close(CLOSE_CODES.MAX_CONNECTIONS, `Max number of incomming connections ${maxCon} reached`);
+        }, 1000);
         return;
       }
 

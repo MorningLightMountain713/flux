@@ -312,7 +312,7 @@ class FluxPeerSocket {
     ws.onclose = (evt) => {
       log.info(`${this.direction === DIRECTION.INBOUND ? 'Incoming' : 'Outgoing'} connection ${this.direction === DIRECTION.INBOUND ? 'from' : 'to'} ${this.key} closed with code ${evt.code}`);
       if (this.source === PEER_SOURCE.EPHEMERAL) {
-        manager.removeEphemeral(this.key);
+        manager.removeEphemeral(this.ephemeralKey ?? this.key);
       } else {
         manager.remove(this.key, evt.code);
       }

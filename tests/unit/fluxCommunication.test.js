@@ -1762,3 +1762,53 @@ describe('fluxCommunication tests', () => {
     });
   });
 });
+
+describe('fluxnodedownverdict wire contract', () => {
+  // A verdict rides only an ephemeral connection. One arriving down a
+  // peering must be silently ignored - otherwise the gossip plane can be
+  // used to inject verdicts.
+  const makePeerSocket = (source) => ({
+    ip: '44.44.44.44',
+    port: '16127',
+    key: '44.44.44.44:16127',
+    direction: 'inbound',
+    source,
+    closeCodes: { invalidMsg: 4016, blocked: 4003 },
+    close: sinon.stub(),
+    badMessageTimestamps: [],
+    msgMap: new Map([['requestHash', 0], ['newHash', 0]]),
+  });
+  const makeMsg = (marker) => ({
+    timestamp: Date.now(),
+    pubKey: 'pubkey',
+    signature: 'sig',
+    version: 1,
+    data: { type: 'fluxnodedownverdict', verdict: { subject: `s:${marker}` } },
+  });
+
+  let onVerdictStub;
+
+  beforeEach(() => {
+    sinon.stub(FluxTTLCache.prototype, 'has').returns(false);
+    sinon.stub(fluxCommunicationUtils, 'verifyFluxBroadcast')
+      .resolves({ result: fluxCommunicationUtils.VerifyResult.OK, announcer: null });
+    sinon.stub(fluxCommunicationUtils, 'verifyTimestampInFluxBroadcast').returns(true);
+    onVerdictStub = sinon.stub(nodeDownService, 'onVerdictMessage');
+  });
+
+  afterEach(() => {
+    sinon.restore();
+  });
+
+  it('dispatches a verdict arriving on an ephemeral connection', async () => {
+    await peerManager.messageDispatcher(makeMsg(1), makePeerSocket(PEER_SOURCE.EPHEMERAL));
+    await new Promise((resolve) => { setImmediate(resolve); });
+    sinon.assert.calledOnce(onVerdictStub);
+  });
+
+  it('silently ignores a verdict arriving down a peering', async () => {
+    await peerManager.messageDispatcher(makeMsg(2), makePeerSocket(PEER_SOURCE.INBOUND));
+    await new Promise((resolve) => { setImmediate(resolve); });
+    sinon.assert.notCalled(onVerdictStub);
+  });
+});
