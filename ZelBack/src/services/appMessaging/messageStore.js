@@ -914,6 +914,11 @@ async function handleGrantGenerationEvent({ message, envelope }) {
         type: APP_STATE_EVENT_TYPES.GRANTGENERATION,
         dedupKey,
         broadcastedAt: new Date(message.broadcastedAt),
+        // Explicitly null, not merely absent: a row carrying a Date here
+        // keeps being reaped by the collection's TTL index through upserts
+        // that do not clear it, and the record vanishes from the store and
+        // from boot sync with it. The TTL monitor skips non-date values.
+        expireAt: null,
         envelope: envelope ?? null,
         data: message,
       }, { alwaysSetFields: { receivedAt: new Date() } }),
