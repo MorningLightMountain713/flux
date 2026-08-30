@@ -1663,4 +1663,59 @@ describe('fluxCommunication tests', () => {
       expect(completed).to.deep.equal([['apprunning', peerKey]]);
     });
   });
+
+  describe('nodedown certificates over the app-state sync stream', () => {
+    afterEach(() => {
+      sinon.restore();
+    });
+
+    it('routes them through the certificate intake, never the unverified store', async () => {
+      // A booting node catches up on stored certificates over sync. The rows
+      // are self-proving (jury signatures inside), so they bypass the envelope
+      // filter — a locally-assembled row has no envelope at all — and must
+      // reach the same verifying intake as gossip, never the plain app-state
+      // store that takes an envelope check as sufficient.
+      sinon.stub(peerManager, 'isSyncRequested').returns(true);
+      sinon.stub(fluxCommunicationUtils, 'verifyFluxBroadcast')
+        .resolves({ result: fluxCommunicationUtils.VerifyResult.OK });
+      const intake = sinon.stub(nodeDownService, 'onCertificateSyncEvent')
+        .resolves({ accepted: true, rebroadcast: false, reason: 'stored' });
+      const stateStore = sinon.stub(messageStore, 'storeAppStateEvent').resolves();
+
+      const peerKey = '10.20.30.41:16127';
+      const bare = {
+        type: 'nodedown',
+        subject: 'aa:0',
+        broadcastedAt: '2026-08-30T00:00:00.000Z',
+        data: { certificate: { subject: 'aa:0', height: 100, fingerprint: 'fp', verdicts: [] } },
+        envelope: null,
+      };
+      const enveloped = {
+        ...bare,
+        subject: 'bb:0',
+        data: { certificate: { subject: 'bb:0', height: 100, fingerprint: 'fp', verdicts: [] } },
+        envelope: {
+          version: 1, pubKey: 'pk', timestamp: 1700000000000, signature: 'sig',
+        },
+      };
+
+      const completed = [];
+      const onComplete = (...args) => completed.push(args);
+      appSyncEvents.on(SYNC_EVENTS.EPHEMERAL_SYNC_COMPLETE, onComplete);
+      try {
+        await peerManager.syncResponseDispatcher(
+          { data: { type: 'fluxapprunningsync', done: true, messages: [bare, enveloped] } },
+          { key: peerKey },
+        );
+      } finally {
+        appSyncEvents.off(SYNC_EVENTS.EPHEMERAL_SYNC_COMPLETE, onComplete);
+      }
+
+      expect(intake.callCount).to.equal(2);
+      expect(intake.firstCall.args[0]).to.deep.equal(bare);
+      expect(intake.secondCall.args[0]).to.deep.equal(enveloped);
+      expect(stateStore.callCount).to.equal(0);
+      expect(completed).to.deep.equal([['apprunning', peerKey]]);
+    });
+  });
 });

@@ -417,12 +417,16 @@ async function respondWithAppRunningMessages(peer, sinceTimestamp = 0) {
     // so a floor that ages them out would silently exclude exactly the rows a
     // rejoining node can never re-receive any other way — the record of any
     // term older than two hours would be unsyncable forever. One row per
-    // app/role bounds the unconditional stream.
+    // app/role bounds the unconditional stream. A nodedown certificate stands
+    // for six hours and is broadcast once per incident, so the floor would
+    // blind a booting node to any certificate older than the floor; the
+    // record TTL bounds those rows, and the intake refuses a lapsed one the
+    // TTL sweep has not yet deleted.
     query: (min) => ({
       $or: [
         { broadcastedAt: { $gt: min } },
         { createdAt: { $gt: min } },
-        { type: { $in: ['masterlease', 'grantgeneration'] } },
+        { type: { $in: ['masterlease', 'grantgeneration', 'nodedown'] } },
       ],
     }),
     projection: { _id: 0, expireAt: 0 },

@@ -217,9 +217,16 @@ async function handleAppRunningSyncResponse(message, peerKey) {
     const appRunningBroadcasts = [];
     const otherBroadcasts = [];
     const evictedEvents = [];
+    const nodeDownEvents = [];
     for (const event of messages) {
       if (event.envelope && event.type === 'apprunning') {
         appRunningBroadcasts.push({ ...event.envelope, data: event.data });
+      } else if (event.type === 'nodedown') {
+        // A certificate row is self-proving: the jury signatures inside it
+        // are the gate, checked by the same verification as the gossip
+        // intake. The envelope is provenance only — a locally-assembled row
+        // carries none — so these bypass the envelope filter below.
+        nodeDownEvents.push(event);
       } else if (event.type === 'evicted') {
         // Evicted events lack per-event signatures because they are generated
         // locally by nodeStatusMonitor, which makes non-deterministic HTTP
@@ -245,7 +252,7 @@ async function handleAppRunningSyncResponse(message, peerKey) {
     const otherToVerify = otherBroadcasts.map((e) => ({ ...e.envelope, data: e.data }));
     const { verified: verifiedOther } = await batchVerifyBroadcasts(otherToVerify, 'handleAppRunningSyncResponse');
     const verifiedOtherSet = new Set(verifiedOther);
-    const otherEvents = [...evictedEvents];
+    const otherEvents = [...evictedEvents, ...nodeDownEvents];
     for (let i = 0; i < otherBroadcasts.length; i++) {
       if (verifiedOtherSet.has(otherToVerify[i])) {
         otherEvents.push(otherBroadcasts[i]);
@@ -262,6 +269,8 @@ async function handleAppRunningSyncResponse(message, peerKey) {
         await messageStore.storeAppStateEvent(event.type, { message: event.data, envelope: event.envelope });
       } else if (event.type === 'evicted') {
         await messageStore.storeAppStateEvent(event.type, { ip: event.ip });
+      } else if (event.type === 'nodedown') {
+        await nodeDownService.onCertificateSyncEvent(event);
       }
     }
     if (done) {
