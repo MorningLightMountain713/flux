@@ -45,10 +45,18 @@ describe('two founders born across a partition converge to one on heal', functio
   let rungFounded = null; // the majority's founded event payload at the rung
 
   async function askFounder(clientIndex) {
+    let containerName;
     try {
-      const containerName = await requireAppContainerName(
+      containerName = await requireAppContainerName(
         env.clients[clientIndex].container, name, COMPONENT,
       );
+    } catch {
+      // The location view lags removals by the row's remaining life, so a
+      // listed host whose container is gone is ABSENT from the founder
+      // question — never an unsettled answer a poll can wait out.
+      return 'absent';
+    }
+    try {
       const { stdout } = await execInContainer(
         env.clients[clientIndex].container,
         `docker exec ${containerName} /bin/busybox wget -qO- --post-data='' http://fluxnode.service:16101/mesh/founder`,
@@ -283,7 +291,8 @@ describe('two founders born across a partition converge to one on heal', functio
       hosts = await currentHosts(0);
       if (!hosts.length) return false;
       finals = await Promise.all(hosts.map((i) => askFounder(i)));
-      return finals.every((a) => a === 'yes' || a === 'no');
+      const present = finals.filter((a) => a !== 'absent');
+      return present.length > 0 && present.every((a) => a === 'yes' || a === 'no');
     }, { timeout: 180000, interval: 10000, label: 'founder answers settle post-heal' });
     const yeses = finals.filter((a) => a === 'yes');
     expect(yeses.length, `final answers: ${finals} on hosts ${hosts}`).to.be.at.most(1);

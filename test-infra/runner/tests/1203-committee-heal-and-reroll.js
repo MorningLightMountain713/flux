@@ -279,7 +279,7 @@ describe('the committee heals its dark seat, and the owner re-deals the walk', f
     }, { timeout: 120000, interval: 10000, label: 'the returning corpse adopted' });
   });
 
-  it('the owner re-deals the walk, and the master re-acquires under the new generation', async function () {
+  it('the owner re-deals the walk: refused under a live term, landing after release-and-stop', async function () {
     this.timeout(600000);
 
     const before = await quorumVerdict();
@@ -287,30 +287,56 @@ describe('the committee heals its dark seat, and the owner re-deals the walk', f
     expect(before.generation).to.equal(0);
 
     const owner = appOwnerKey();
-    const { currentHeight } = await getState();
-    const at = Date.now();
-    const canonical = `fluxgrantgeneration:${name}|master|1|${currentHeight}|${at}`;
-    const signature = await signBtcMessage(canonical, owner.privkey);
-    const res = await fetch(`${env.clients[0].url}/apps/grantgeneration`, {
-      method: 'POST',
-      headers: { zelidauth: ownerAuth0, 'content-type': 'application/json' },
-      body: JSON.stringify({
-        appName: name, role: 'master', generation: 1, height: currentHeight, at, signature,
-      }),
+    async function submitReroll() {
+      const { currentHeight } = await getState();
+      const at = Date.now();
+      const canonical = `fluxgrantgeneration:${name}|master|1|${currentHeight}|${at}`;
+      const signature = await signBtcMessage(canonical, owner.privkey);
+      return fetch(`${env.clients[0].url}/apps/grantgeneration`, {
+        method: 'POST',
+        headers: { zelidauth: ownerAuth0, 'content-type': 'application/json' },
+        body: JSON.stringify({
+          appName: name, role: 'master', generation: 1, height: currentHeight, at, signature,
+        }),
+      });
+    }
+
+    // THE STOP-FIRST DOOR: a re-roll under a live held term is refused,
+    // teaching the precondition. A re-roll under a RUNNING master seats a
+    // successor on rows nothing can shield while the master coasts
+    // record-deaf — the register may only re-deal a world whose old term
+    // is provably over.
+    const refused = await submitReroll();
+    expect(refused.status).to.equal(409);
+    expect(await refused.text()).to.match(/live held term stands/);
+
+    // Release-and-stop, the door's own instruction: the master yields its
+    // term and every instance stops under the operator lock.
+    const yielded = await fetch(`${env.clients[0].url}/apps/appyield/${name}/true`, {
+      headers: { zelidauth: ownerAuth0 },
     });
-    expect(res.status, await res.text().catch(() => '')).to.equal(200);
+    expect(yielded.status).to.equal(200);
+
+    // The door itself is the observable for the term's end — resubmit until
+    // it answers 200. A released term shields nobody; only record spread
+    // paces this, never a timer.
+    await waitFor(async () => (await submitReroll()).status === 200,
+      { timeout: 180000, interval: 10000, label: 'the re-roll lands once the term is over' });
 
     // The record reaches every holder (its own event on each node), the
-    // salted walk deals a fresh committee, the old world's grantors refuse
-    // renewals teaching generation 1, and the master re-acquires there
-    // without the app changing hands — its granted event under the new
-    // generation, then the registers: same grantee, generation 1 on a
-    // quorum of cells.
+    // salted walk deals a fresh committee, and the stopped world restarts
+    // into it: the operator lock lifts and the instances pursue generation
+    // 1 — into the retirement drain first.
     await Promise.all(HOLDERS.map((i) => env.clients[i].waitForEvent(
       'quorumGrant:generationRecord',
       (d) => d.appName === name && d.role === 'master' && d.generation === 1,
       120000,
     )));
+
+    const restarted = await fetch(`${env.clients[0].url}/apps/apprestart/${name}/true`, {
+      headers: { zelidauth: ownerAuth0 },
+    });
+    expect(restarted.status).to.equal(200);
 
     // THE RETIREMENT DRAIN: the record names the current height, so the
     // fresh committee may not serve until three blocks pass — and with the
@@ -340,7 +366,12 @@ describe('the committee heals its dark seat, and the owner re-deals the walk', f
       return verdict !== null && verdict.generation === 1;
     }, { timeout: 60000, interval: 5000, label: 'a generation-1 quorum forms' });
 
+    // Under stop-first the old master released before the re-deal, so the
+    // new world's term goes to whichever restarted instance wins — the
+    // theorem here is one clean generation-1 quorum, not incumbency. The
+    // no-stop carry across a re-deal is the seamless candidate's promise,
+    // and it stays out of this suite until its safety cell proves.
     const after = await quorumVerdict();
-    expect(after.grantee, 'the master survives its own re-deal').to.equal(before.grantee);
+    expect(after.generation, 'one clean generation-1 world').to.equal(1);
   });
 });
