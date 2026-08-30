@@ -453,7 +453,32 @@ async function blocksStart(identifier, comp) {
  */
 async function leaderIsSelf(identifier, appName, isActiveStandby) {
   if (!featureEnabled() || !isActiveStandby) return null;
-  if (grantClient.holderFor(keyFor(appName))) return true;
+  const key = keyFor(appName);
+  if (grantClient.holderFor(key)) return true;
+  // No verdict while this node's own acquisition is in flight — a false
+  // here would demote the incumbent against a round it itself started.
+  if (grantClient.isAcquiring(key)) return null;
+  // The self-fence fences a DEPOSED node, and deposed means the plane has
+  // DECIDED: a published record names a grantee. On an undecided plane — a
+  // cold key at the activation crossing or an app's birth — "not the
+  // holder" is true of everybody and fences nobody, and a false verdict
+  // there stops the running incumbent's container, which forfeits the cold-
+  // key head start that exists to let it inherit. A record naming ANYONE —
+  // this node included — fences: a grantee that no longer holds is a
+  // corpse, and the fence is for corpses. An unreadable record is no
+  // verdict, matching masterIntent's error path; the epoch fencing and the
+  // successor-raised peer fence carry safety regardless.
+  try {
+    const record = await messageStore.getMasterleaseRecord(appName, ROLE);
+    if (!record?.data?.grantee) {
+      pursue(identifier, appName);
+      return null;
+    }
+  } catch (error) {
+    log.warn(`mastershipGrantGate - leaderIsSelf record read for ${appName} failed: ${error.message}`);
+    pursue(identifier, appName);
+    return null;
+  }
   pursue(identifier, appName);
   return false;
 }
