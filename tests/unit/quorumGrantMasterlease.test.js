@@ -95,11 +95,12 @@ describe('quorumGrant masterlease', () => {
         message: baseMessage(), envelope: null, announcer: null,
       });
       const heldSet = updates[0].update[0].$set;
-      // explicitly null, never a date: the row says WHO holds the term, and
-      // a null also neutralizes the TTL index on rows written before records
-      // became durable. The ordinal wrapper conditionalizes every field, so
-      // the assertion reads the winning branch.
-      expect(heldSet.expireAt.$cond[1]).to.equal(null);
+      // A literal null on EVERY touch, never a conditional field: a
+      // conditional slot keeps the stored value on a losing touch, so a row
+      // carrying a Date would keep being reaped by the TTL index until a
+      // strictly newer record happened to arrive. Boot sync re-delivers
+      // these records, so every row is touched and cleared.
+      expect(heldSet.expireAt).to.equal(null);
 
       await messageStore.storeAppStateEvent('masterlease', {
         message: baseMessage({ role: 'founder', mode: 'oneshot', ttlMs: undefined }),
@@ -107,7 +108,7 @@ describe('quorumGrant masterlease', () => {
         announcer: null,
       });
       const oneshotSet = updates[1].update[0].$set;
-      expect(oneshotSet.expireAt.$cond[1]).to.equal(null);
+      expect(oneshotSet.expireAt).to.equal(null);
       expect(updates[1].filter.dedupKey).to.equal('masterlease:myapp/founder');
     });
 
