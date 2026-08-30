@@ -865,13 +865,15 @@ async function handleMasterleaseEvent({ message, envelope, announcer }) {
         type: APP_STATE_EVENT_TYPES.MASTERLEASE,
         dedupKey,
         broadcastedAt: new Date(message.broadcastedAt),
-        // Explicitly null, not merely absent: a row written before records
-        // became durable carries a Date here, and the collection's TTL index
-        // would go on reaping it. The TTL monitor skips non-date values.
-        expireAt: null,
         envelope: envelope ?? null,
         data: message,
-      }, { alwaysSetFields: { receivedAt: new Date() } }),
+        // In alwaysSetFields, never a conditional field: a conditional slot
+        // keeps the stored value on a losing touch, so a row carrying a Date
+        // here would keep being reaped by the collection's TTL index until a
+        // strictly newer record happened to arrive. Cleared on EVERY touch —
+        // boot sync re-delivers these records, so every row is touched. The
+        // TTL monitor skips non-date values.
+      }, { alwaysSetFields: { receivedAt: new Date(), expireAt: null } }),
       { upsert: true },
     );
   } catch (err) {
@@ -914,14 +916,15 @@ async function handleGrantGenerationEvent({ message, envelope }) {
         type: APP_STATE_EVENT_TYPES.GRANTGENERATION,
         dedupKey,
         broadcastedAt: new Date(message.broadcastedAt),
-        // Explicitly null, not merely absent: a row carrying a Date here
-        // keeps being reaped by the collection's TTL index through upserts
-        // that do not clear it, and the record vanishes from the store and
-        // from boot sync with it. The TTL monitor skips non-date values.
-        expireAt: null,
         envelope: envelope ?? null,
         data: message,
-      }, { alwaysSetFields: { receivedAt: new Date() } }),
+        // In alwaysSetFields, never a conditional field: a conditional slot
+        // keeps the stored value on a losing touch, so a row carrying a Date
+        // here would keep being reaped by the collection's TTL index until a
+        // strictly newer record happened to arrive. Cleared on EVERY touch —
+        // boot sync re-delivers these records, so every row is touched. The
+        // TTL monitor skips non-date values.
+      }, { alwaysSetFields: { receivedAt: new Date(), expireAt: null } }),
       { upsert: true },
     );
 
