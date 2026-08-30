@@ -99,6 +99,23 @@ export function dbClient(nodeNum) {
       return res.deletedCount;
     },
 
+    // This node's synced nodedown certificate rows for a subject (all incidents,
+    // newest and lapsed alike — standing-ness is derived, never materialized).
+    async getNodeDownRecords(subject) {
+      const globalDb = await db('appsGlobal');
+      return globalDb.collection('appstateevents')
+        .find({ type: 'nodedown', subject }, { projection: { _id: 0 } }).toArray();
+    },
+
+    // Delete this node's synced copy of a subject's certificates — stages "the
+    // node missed the one-flood gossip" so a boot must recover them over sync.
+    async wipeNodeDownRecords(subject) {
+      const globalDb = await db('appsGlobal');
+      const res = await globalDb.collection('appstateevents')
+        .deleteMany({ type: 'nodedown', subject });
+      return res.deletedCount;
+    },
+
     async permanentMessageCount() {
       const globalDb = await db('appsGlobal');
       return globalDb.collection('zelappsmessages').countDocuments({});
