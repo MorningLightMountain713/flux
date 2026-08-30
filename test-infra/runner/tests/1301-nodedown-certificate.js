@@ -22,9 +22,10 @@ import { getSubnetConfig, REGISTRY_REPO_HOST } from '../framework/subnet-config.
 //   3. THE CERTIFICATE NEGATES THE SUBJECT'S APP ROW — the location derivation
 //      drops the subject while a certificate stands; a co-holder's row is
 //      untouched.
-//   4. A BOOTING NODE RECOVERS THE CERTIFICATE OVER SYNC — gossip is one
-//      flood, so a node that missed it can only be made whole by the app-state
-//      sync, through the same verifier the gossip intake uses.
+//   4. A NODE THAT LOST THE RECORD RECOVERS IT OVER SYNC — gossip is one
+//      flood, so a node that missed it is made whole by the app-state sync
+//      (the boot round or a reconnect pull — the same serve, the same
+//      verifier the gossip intake uses).
 //   5. THE RETURN ANNOUNCE CLEARS IT — the subject's own apprunning broadcast
 //      is the refutation: locations restore, and the watchers re-dial the
 //      subject they had stood down.
@@ -180,36 +181,33 @@ describe('node-down certificates end to end', function () {
       });
   });
 
-  it('a booting node recovers the standing certificate over the sync stream', async function () {
+  it('a node that lost the record recovers it over the sync stream, verified', async function () {
     this.timeout(360000);
-    // Stage "missed the one-flood gossip": the row is wiped, and nothing will
-    // ever re-broadcast a standing certificate — sync is the only way back.
+    // Stage "missed the one-flood gossip": wipe the row, then reboot. The
+    // restore must arrive through the sync intake, and the stored event's
+    // source field proves the path. What the first fleet runs taught: a
+    // standing certificate is never re-FLOODED — late gossip copies die as
+    // duplicates — but every apprunning sync response re-serves durable
+    // rows, reconnect pulls included, so even a running node that lost the
+    // row is made whole within seconds. One-flood is a gossip property, not
+    // a sync property, so no absence window exists to control on. The
+    // anchor sits before the wipe to catch the event whichever sync flavor
+    // delivers first; the reboot keeps the cold-boot verification leg
+    // exercised — by now the certificate is well past the verdict lifetime,
+    // exactly the late-reader shape.
+    const afterId = env.clients[REBOOTER].getLastEventId();
     const wiped = await dbClient(REBOOTER + 1).wipeNodeDownRecords(subjectOutpoint);
     expect(wiped, 'the rebooter held the record before the wipe').to.be.at.least(1);
 
-    // Control: a standing certificate is never re-broadcast, so the wiped row
-    // must stay absent while the node keeps running — if it reappears here,
-    // whatever restored it was not the boot sync and the next wait proves
-    // nothing.
-    await new Promise((resolve) => { setTimeout(resolve, 30000); });
-    const premature = await dbClient(REBOOTER + 1).getNodeDownRecords(subjectOutpoint);
-    expect(premature, 'row restored without a boot — not the sync path').to.have.length(0);
-
-    // Anchor before the reboot: bus event ids are monotonic across a process
-    // restart, so this cursor cannot be satisfied by anything pre-wipe, and
-    // an event that fires before the wait is armed is answered from the
-    // buffer rather than missed.
-    const afterId = env.clients[REBOOTER].getLastEventId();
     await env.restartNode(REBOOTER, { timeout: 30000 });
 
-    // The event names the path: only the sync intake stamps source 'sync',
-    // so neither gossip nor a local assembly can satisfy this wait.
-    await env.clients[REBOOTER].waitForEvent(
+    const stored = await env.clients[REBOOTER].waitForEvent(
       'nodedown:stored',
-      (data) => data.subject === subjectOutpoint && data.source === 'sync',
+      (data) => data.subject === subjectOutpoint,
       180000,
       { afterId },
     );
+    expect(stored.data.source, 'restored through sync, never a gossip re-flood').to.equal('sync');
 
     // Restored through the verifier, not copied blind: the row it stored
     // carries the same incident the fleet certified.
