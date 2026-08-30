@@ -532,7 +532,10 @@ describe('quorumGrant mastershipGrantGate', () => {
 
       mastershipGrantGate.resetForTests({ enabled: true });
       expect(await mastershipGrantGate.leaderIsSelf(IDENTIFIER, 'myapp', false)).to.equal(null);
-      expect(await mastershipGrantGate.leaderIsSelf(IDENTIFIER, 'myapp', true)).to.equal(false);
+      // a cold key is an UNDECIDED plane: no verdict, not "not leader" —
+      // the false verdict needs a record naming a grantee (see the
+      // undecided-plane describe below)
+      expect(await mastershipGrantGate.leaderIsSelf(IDENTIFIER, 'myapp', true)).to.equal(null);
       // the pursuit is fire-and-forget; let its await chain (operator-state
       // read, record read) settle before asserting it reached acquire
       await new Promise((resolve) => { setTimeout(resolve, 25); });
@@ -540,6 +543,50 @@ describe('quorumGrant mastershipGrantGate', () => {
 
       grantClient.holderFor.returns({ state: 'held' });
       expect(await mastershipGrantGate.leaderIsSelf(IDENTIFIER, 'myapp', true)).to.equal(true);
+    });
+
+    // The self-fence exists to fence a DEPOSED node, and deposed means the
+    // plane has DECIDED (a record names a grantee). An undecided plane — a
+    // cold key at the crossing or an app's birth, an in-flight own
+    // acquisition, an unreadable record — yields no verdict: a false there
+    // would stop the running incumbent's container and forfeit the cold-key
+    // head start. On the seeding path no-verdict correctly leaves the
+    // legacy election in authority until the plane decides.
+    describe('leaderIsSelf yields no verdict while the plane is undecided', () => {
+      it('answers null while its own acquisition is in flight', async () => {
+        mastershipGrantGate.resetForTests({ enabled: true });
+        grantClient.isAcquiring.returns(true);
+        expect(await mastershipGrantGate.leaderIsSelf(IDENTIFIER, 'myapp', true)).to.equal(null);
+      });
+
+      it('answers null on a cold key and still kicks the pursuit', async () => {
+        mastershipGrantGate.resetForTests({ enabled: true });
+        expect(await mastershipGrantGate.leaderIsSelf(IDENTIFIER, 'myapp', true)).to.equal(null);
+        await new Promise((resolve) => { setTimeout(resolve, 25); });
+        expect(grantClient.acquire.calledOnce).to.equal(true);
+      });
+
+      it('answers null when the record is unreadable', async () => {
+        mastershipGrantGate.resetForTests({ enabled: true });
+        messageStore.getMasterleaseRecord.rejects(new Error('store down'));
+        expect(await mastershipGrantGate.leaderIsSelf(IDENTIFIER, 'myapp', true)).to.equal(null);
+      });
+
+      it('answers false once the plane has decided for someone else', async () => {
+        mastershipGrantGate.resetForTests({ enabled: true });
+        messageStore.getMasterleaseRecord.resolves({
+          data: { grantee: `${'9'.repeat(64)}:0`, mode: 'held' },
+        });
+        expect(await mastershipGrantGate.leaderIsSelf(IDENTIFIER, 'myapp', true)).to.equal(false);
+      });
+
+      it('a record naming this node without a held term still fences the corpse', async () => {
+        mastershipGrantGate.resetForTests({ enabled: true });
+        messageStore.getMasterleaseRecord.resolves({
+          data: { grantee: `${SELF_TXHASH}:0`, mode: 'held' },
+        });
+        expect(await mastershipGrantGate.leaderIsSelf(IDENTIFIER, 'myapp', true)).to.equal(false);
+      });
     });
 
     it('masterIntent resolves the record grantee to its listed address, FDM-shaped', async () => {
