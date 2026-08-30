@@ -96,7 +96,11 @@ describe('quorumGrant ownerGenerationRecord', () => {
       });
       const pipeline = JSON.stringify(updates[0].update);
       expect(pipeline).to.contain('$data.generation');
-      expect(updates[0].update[0].$set.expireAt).to.equal(undefined);
+      // Explicitly null, never merely absent: a row written by a build that
+      // stamped an expiry keeps its Date through an upsert that does not
+      // clear it, and the collection's TTL index goes on reaping it — the
+      // record then vanishes from the store and from boot sync with it.
+      expect(updates[0].update[0].$set.expireAt).to.equal(null);
     });
 
     it('a founder-role record re-materializes the committee at its height', async () => {
