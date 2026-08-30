@@ -18,7 +18,10 @@ const { load, CONTRACT_VERSION } = require('@runonflux/flux-spec-cjs');
 // Checked at require rather than at first use. A node whose spec library is too old to
 // verify a signature cannot do its job, and refusing to start says so far more plainly
 // than serving traffic that is rejected for a reason nobody can see.
-const REQUIRED_CONTRACT_VERSION = 2;
+// 3: envelopeHash + the attest payload's envelope-hash argument — the
+// attestation path calls both, and a contract-2 copy fails at first
+// encrypted-v9 registration instead of at startup.
+const REQUIRED_CONTRACT_VERSION = 3;
 
 if (!(CONTRACT_VERSION >= REQUIRED_CONTRACT_VERSION)) {
   throw new Error(
