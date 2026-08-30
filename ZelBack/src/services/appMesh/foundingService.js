@@ -52,7 +52,10 @@ async function founderAsk(appName, component) {
   // minted. Missing it is an honest "not yet" — never a no, never a minted
   // basis.
   const world = await foundingCommittee.componentWorld(appName, component);
-  if (!world) return { answer: 'wait' };
+  if (!world) {
+    log.info(`foundingService - ${appName}/${component}: wait (component world unresolved)`);
+    return { answer: 'wait' };
+  }
 
   const token = foundingCommittee.founderToken(appName, component);
   const generation = await currentGeneration(appName);
@@ -79,9 +82,13 @@ async function founderAsk(appName, component) {
   // an ARMED world (rot sustained, flip within the quiet zone) refuses to
   // start a founding that would race the flip's one-block gossip window.
   if (daemonServiceMiscRpcs.isDaemonSynced()?.data?.synced !== true) {
+    log.info(`foundingService - ${appName}/${component}: wait (own chain view stale)`);
     return { answer: 'wait' };
   }
-  if (world.armed) return { answer: 'wait' };
+  if (world.armed) {
+    log.info(`foundingService - ${appName}/${component}: wait (world armed - flip inside the quiet zone)`);
+    return { answer: 'wait' };
+  }
 
   // The round runs at the newest rung. The own photo is authoritative;
   // without one, a peer-DISCOVERED basis routes the asks — routing needs
@@ -100,7 +107,10 @@ async function founderAsk(appName, component) {
       committee = discovered.basis;
     }
   }
-  if (!committee) return { answer: 'wait' };
+  if (!committee) {
+    log.info(`foundingService - ${appName}/${component}: wait (no committee basis - no photo, nothing discovered)`);
+    return { answer: 'wait' };
+  }
 
   const role = `founder-${token}@${rung}`;
   const outcome = await grantClient.acquire(`${appName}/${role}`, {
