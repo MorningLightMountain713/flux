@@ -127,13 +127,15 @@ describe('flux-telemetryd e2e: the real daemon against real FluxOS on an Arcane-
   );
 
   // startFluxos returns when the API answers, but the submission door also needs
-  // the node re-peered: outbound >= minOutgoing and inbound >= minIncoming. After a
-  // mid-suite FluxOS restart the node re-dials from zero, so a register/update
-  // driven immediately is rejected ('not enough {incoming,outgoing} peers') until
-  // the peers are back. The counts come over REST, so they survive the restart.
+  // the node re-peered. The door counts distinct peers HELD, either direction —
+  // duty pairs are reciprocal and the outbound label is a dial-race outcome.
+  // After a mid-suite FluxOS restart the node re-dials from zero, so a
+  // register/update driven immediately is rejected ('does not hold enough peer
+  // connections') until the peers are back. The counts come over REST, so they
+  // survive the restart.
   const waitForSubmissionDoor = (node) => waitFor(async () => {
     const [outbound, inbound] = await Promise.all([node.getPeers(), node.getIncomingPeers()]);
-    return (outbound.data?.length ?? 0) >= 2 && (inbound.data?.length ?? 0) >= 1;
+    return (outbound.data?.length ?? 0) + (inbound.data?.length ?? 0) >= 3;
   }, { timeout: 120000, interval: 2000, label: 'submitting node re-peered past the submission door' });
 
   before(async function () {

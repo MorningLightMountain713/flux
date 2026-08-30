@@ -21,8 +21,7 @@ async function bootAndPeer(env) {
     await waitForBlockProcessed(client, (d) => d.height > env.initialHeight, 50000);
   }
   await env.startDiscovery();
-  await env.clients[0].waitForEvent('peers:added', (d) => d.outbound >= 4, 120000);
-  await env.clients[0].waitForEvent('peers:added', (d) => d.inbound >= 2, 120000);
+  await env.clients[0].waitForEvent('peers:added', (d) => d.total >= 6, 120000);
   await startTicker();
 }
 
@@ -88,7 +87,7 @@ describe('Inbound connections rejected when unconfirmed', function () {
 
     const indices = Array.from({ length: 9 }, (_, i) => i + 1);
     await env.startDiscovery(indices);
-    await env.clients[1].waitForEvent('peers:added', (d) => d.outbound >= 4, 120000);
+    await env.clients[1].waitForEvent('peers:added', (d) => d.total >= 4, 120000);
     await startTicker();
   });
 

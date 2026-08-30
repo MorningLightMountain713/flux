@@ -48,8 +48,7 @@ async function bootAndPeerInitial(env, nodeIndices) {
     await waitForBlockProcessed(client, (d) => d.height > 2100000, 50000);
   }
   await env.startDiscovery(nodeIndices);
-  await clients[0].waitForEvent('peers:added', (d) => d.outbound >= 4, 120000);
-  await clients[0].waitForEvent('peers:added', (d) => d.inbound >= 2, 120000);
+  await clients[0].waitForEvent('peers:added', (d) => d.total >= 6, 120000);
   await startTicker();
 }
 
