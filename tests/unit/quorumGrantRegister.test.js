@@ -168,6 +168,37 @@ describe('quorumGrant grantRegister', () => {
       expect(stored.accepted.released).to.equal(true);
     });
 
+    it('the refereeing-return anchor rides the shell into the core', async () => {
+      // a held term that lapsed long ago — the row-death lock-delay has run
+      store.set('app/master', {
+        _id: 'app/master',
+        promisedEpoch: 1,
+        accepted: {
+          epoch: 1, grantee: 'a:0', mode: 'held', fingerprint: 'fp', expiresAt: Date.now() - 120_000, released: false,
+        },
+      });
+      const unanchored = await grantRegister.prepare('app/master', { epoch: 2, candidate: 'b:0' });
+      expect(unanchored.ok).to.equal(true);
+
+      // the same challenger waits when this grantor only just returned to
+      // refereeing: the wait runs only while the register was open
+      const anchored = await grantRegister.prepare(
+        'app/master',
+        { epoch: 3, candidate: 'b:0' },
+        { refereeingSinceMs: Date.now() - 1_000 },
+      );
+      expect(anchored.code).to.equal('lock_delay');
+      expect(anchored.retryAfterMs).to.be.greaterThan(0);
+
+      // and the recorded grantee never waits, whatever the anchor says
+      const incumbent = await grantRegister.prepare(
+        'app/master',
+        { epoch: 4, candidate: 'a:0' },
+        { refereeingSinceMs: Date.now() - 1_000 },
+      );
+      expect(incumbent.ok).to.equal(true);
+    });
+
     it('a oneshot register is init-only across restarts of everything but the disk', async () => {
       await grantRegister.prepare('app/founder', { epoch: 1, candidate: 'f:1' });
       const founded = await grantRegister.accept('app/founder', {

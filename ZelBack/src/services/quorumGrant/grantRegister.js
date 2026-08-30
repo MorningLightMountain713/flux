@@ -103,9 +103,12 @@ function serialized(key, operation) {
  *
  * @param {string} key resource key
  * @param {(record: object|null, nowMs: number, knobs: object) => {reply: object, record: object|null}} decide
+ * @param {object} [context] per-call facts the core judges beside the config
+ *   knobs — today refereeingSinceMs, the controller's refereeing-return
+ *   anchor for the lock-delay (see grantRegisterCore.lockDelayRemaining)
  * @returns {Promise<object>} the core's reply, or a fail-closed refusal
  */
-async function transact(key, decide) {
+async function transact(key, decide, context) {
   const drainMs = drainRemainingMs();
   if (drainMs > 0) {
     return {
@@ -121,7 +124,7 @@ async function transact(key, decide) {
   }
 
   return serialized(key, async () => {
-    const knobs = tunables();
+    const knobs = { ...tunables(), ...(context ?? {}) };
     const stored = await dbHelper.findOneInDatabase(database, collection(), { _id: key });
     const outcome = decide(stored, Date.now(), knobs);
 
@@ -164,17 +167,17 @@ function badTtl(ttlMs, knobs) {
 }
 
 /** Pre-vote: answers, changes nothing, and is served even without quorum intent. */
-async function probe(key, request) {
+async function probe(key, request, context) {
   return transact(key, (record, nowMs, knobs) => (
     { reply: core.onProbe(record, request, nowMs, knobs), record: null }
-  ));
+  ), context);
 }
 
-async function prepare(key, request) {
-  return transact(key, (record, nowMs, knobs) => core.onPrepare(record, request, nowMs, knobs));
+async function prepare(key, request, context) {
+  return transact(key, (record, nowMs, knobs) => core.onPrepare(record, request, nowMs, knobs), context);
 }
 
-async function accept(key, request) {
+async function accept(key, request, context) {
   return transact(key, (record, nowMs, knobs) => {
     if (request.mode === 'held' && badTtl(request.ttlMs, knobs)) {
       return {
@@ -185,7 +188,7 @@ async function accept(key, request) {
       };
     }
     return core.onAccept(record, request, nowMs, knobs);
-  });
+  }, context);
 }
 
 async function renew(key, request) {

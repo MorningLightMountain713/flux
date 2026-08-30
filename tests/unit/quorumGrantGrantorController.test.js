@@ -1135,4 +1135,74 @@ describe('quorumGrant grantorController', () => {
     });
   });
 
+  // The quiet-window model's run 3: a coast that outlives lockDelay − slack
+  // lets a successor be seated before the incumbent's demote fires, because
+  // the lock-delay clock ran while this grantor was refusing everyone. The
+  // controller therefore hands every held register write the moment this
+  // grantor last RETURNED to refereeing — observed lazily at the gates that
+  // already read the synced flag (lazy can only move the anchor later than
+  // the true return, the safe direction) and stamped exactly at a resync
+  // clearance — and the register anchors the successor's wait at the later
+  // of row death and that return.
+  describe('the refereeing-return lock-delay anchor', () => {
+    it('a prepare after a stale spell carries the return moment to the register', async () => {
+      daemonServiceMiscRpcs.isDaemonSynced.returns({
+        status: 'success', data: { synced: false, height: 0 },
+      });
+      const staleRes = fakeRes();
+      await grantorController.prepare(fakeReq(signedAsk('prepare')), staleRes);
+      expect(staleRes.statusCode).to.equal(503);
+
+      const before = Date.now();
+      daemonServiceMiscRpcs.isDaemonSynced.returns({
+        status: 'success', data: { synced: true, height: 100, header: 100 },
+      });
+      const res = fakeRes();
+      await grantorController.prepare(fakeReq(signedAsk('prepare')), res);
+      expect(res.statusCode).to.equal(200);
+      const context = grantRegister.prepare.lastCall.args[2];
+      expect(context, 'the register call must carry the anchor context').to.be.an('object');
+      expect(context.refereeingSinceMs).to.be.at.least(before);
+      expect(context.refereeingSinceMs).to.be.at.most(Date.now());
+    });
+
+    it('a stale spell observed only by the record read still moves the anchor', async () => {
+      daemonServiceMiscRpcs.isDaemonSynced.returns({
+        status: 'success', data: { synced: false, height: 0 },
+      });
+      const readReq = fakeReq({});
+      readReq.query.key = 'myapp/master';
+      await grantorController.record(readReq, fakeRes());
+
+      const before = Date.now();
+      daemonServiceMiscRpcs.isDaemonSynced.returns({
+        status: 'success', data: { synced: true, height: 100, header: 100 },
+      });
+      const res = fakeRes();
+      await grantorController.accept(fakeReq(signedAsk('accept')), res);
+      expect(res.statusCode).to.equal(200);
+      const context = grantRegister.accept.lastCall.args[2];
+      expect(context, 'the register call must carry the anchor context').to.be.an('object');
+      expect(context.refereeingSinceMs).to.be.at.least(before);
+    });
+
+    it('a resync clearance stamps the key its own return moment', async () => {
+      sinon.stub(grantRegister, 'heldKeys').resolves(['myapp/master']);
+      sinon.stub(grantRegister, 'adopt').resolves(true);
+      sinon.stub(grantRegister, 'adoptCancels').resolves(true);
+      await grantorController.noteReturnFromUnreachability();
+      sinon.stub(serviceHelper, 'axiosGet').resolves({
+        data: { status: 'success', data: { accepted: null, remainingMs: null, cancels: null } },
+      });
+
+      const before = Date.now();
+      const res = fakeRes();
+      await grantorController.prepare(fakeReq(signedAsk('prepare')), res);
+      expect(res.statusCode).to.equal(200);
+      const context = grantRegister.prepare.lastCall.args[2];
+      expect(context, 'the register call must carry the anchor context').to.be.an('object');
+      expect(context.refereeingSinceMs).to.be.at.least(before);
+    });
+  });
+
 });

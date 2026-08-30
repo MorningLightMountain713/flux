@@ -45,6 +45,18 @@ const log = require('../../lib/log');
 //   lock-delay, stops the container before any challenger can be seated —
 //   with the gap between them exceeding the real container stop time.
 //
+//   The COAST bends that arithmetic: a coasting holder's demotion re-arms at
+//   coast-collapse + slack, arbitrarily later than the row death the
+//   lock-delay counts from — so a coast outliving lockDelay − slack would
+//   let a successor be seated at the very moment the grantors return, before
+//   the collapse is even observable here (the quiet-window model's run 3).
+//   The grantor side restores the ordering: the lock-delay is anchored at
+//   the LATER of row death and the grantor's own return to refereeing
+//   (grantRegisterCore.lockDelayRemaining), so the successor's wait starts
+//   only when a successor could first be seated at all, and this holder's
+//   renewal loop (renewIntervalMs < lockDelayMs) reclaims its own rows —
+//   free-or-mine, never delayed — inside that window.
+//
 // The Holder takes an injectable clock and scheduler so every timing rule
 // above is testable as arithmetic; production passes nothing and gets the
 // monotonic clock and setTimeout.
@@ -83,6 +95,7 @@ function assertTimingSafe(timing) {
     demotionSlackMs: demotionSlackMs(),
     hardStopMs: core.HARD_STOP_MS,
     lockDelayMs: lockDelayMs(),
+    renewIntervalMs: renewIntervalMs(),
   };
   const outcome = core.timingIsSafe(checked);
   if (!outcome.safe) throw new Error(outcome.reason);
