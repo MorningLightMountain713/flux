@@ -388,6 +388,10 @@ export function nodeClient(nodeNum) {
         'placementHold:cleared',
         'hostStall:appUnloaded',
         'hostStall:appsStopped',
+        'nodedown:assembled',
+        'nodedown:stored',
+        'nodedown:refused',
+        'nodedown:verdict',
         'network:apprunning',
         // entries of an apprunning message this node refused, by gossip or sync
         'network:apprunningRefused',

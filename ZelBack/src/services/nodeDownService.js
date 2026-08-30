@@ -184,6 +184,9 @@ async function onCertificateSyncEvent(event) {
   const certificate = event?.data?.certificate;
   const broadcastedAt = new Date(event?.broadcastedAt ?? NaN).getTime();
   if (!certificate || !Number.isFinite(broadcastedAt)) {
+    fluxEventBus.publish('nodedown:refused', {
+      subject: certificate?.subject ?? null, source: 'sync', reason: 'malformed',
+    });
     return { accepted: false, rebroadcast: false, reason: 'malformed' };
   }
   return intakeCertificate({ certificate, broadcastedAt }, event.envelope ?? null, 'sync');
