@@ -209,6 +209,9 @@ describe('quorumGrant mastershipGrantGate', () => {
           fluxapps: {
             quorumGrantMastership: true,
             quorumGrantActivationHeight: 2100000,
+            // these cells sit AT the activation height; a zero-block drain
+            // keeps them about the head start, not the activation drain
+            quorumGrantActivationDrainBlocks: 0,
             quorumGrantPursuitIntervalMs: 30000,
             quorumGrantHeldTtlMs: 150000,
             ...extraConfig,
@@ -244,6 +247,64 @@ describe('quorumGrant mastershipGrantGate', () => {
       const line = info.getCalls().map((c) => c.args[0]).find((m) => String(m).includes('cold key'));
       expect(line, 'the cold-key decision is logged').to.be.a('string');
       expect(line).to.include('headStart=14000ms');
+    });
+
+    // The head start runs only while the register it races is OPEN. Below
+    // the activation drain's lift the grantors refuse every cold-key seat,
+    // so a standby clock burning there would decide the crossing by whose
+    // tip crossed earliest — not by who runs the container.
+    function drainGate(state, extraConfig = {}) {
+      return proxyquire('../../ZelBack/src/services/appLifecycle/mastershipGrantGate', {
+        config: {
+          fluxapps: {
+            quorumGrantMastership: true,
+            quorumGrantActivationHeight: 2100000,
+            quorumGrantActivationDrainBlocks: 20,
+            quorumGrantPursuitIntervalMs: 30000,
+            quorumGrantHeldTtlMs: 150000,
+            quorumGrantIncumbentHeadStartMs: 0,
+            ...extraConfig,
+          },
+        },
+        '../daemonService/daemonServiceMiscRpcs': {
+          isDaemonSynced: () => ({ data: { height: state.height, synced: true } }),
+        },
+        '../utils/monotonicClock': { nowMs: () => state.now },
+      });
+    }
+
+    it('below the drain lift a standby defers even with its head start long elapsed', async () => {
+      messageStore.getMasterleaseRecord.resolves(null);
+      dockerService.dockerContainerInspect.resolves({ State: { Running: false } });
+      const gate = drainGate({ height: 2100005, now: 1_000_000 });
+      await gate.grantVerdict(IDENTIFIER, activeStandbyComp());
+      await new Promise(setImmediate);
+      expect(grantClient.acquire.called, 'the register is shut; the clock must not run').to.equal(false);
+    });
+
+    it('the incumbent pursues straight through the drain', async () => {
+      // Its asks are refused grantor-side until the lift and retried by the
+      // pursuit loop — being first in line at the lift is the entire point.
+      messageStore.getMasterleaseRecord.resolves(null);
+      dockerService.dockerContainerInspect.resolves({ State: { Running: true } });
+      const gate = drainGate({ height: 2100005, now: 1_000_000 });
+      await gate.grantVerdict(IDENTIFIER, activeStandbyComp());
+      await new Promise(setImmediate);
+      expect(grantClient.acquire.called, 'the incumbent never defers').to.equal(true);
+    });
+
+    it('past the lift the head start restarts at the lift, not at discovery', async () => {
+      messageStore.getMasterleaseRecord.resolves(null);
+      dockerService.dockerContainerInspect.resolves({ State: { Running: false } });
+      const state = { height: 2100005, now: 1_000_000 };
+      const gate = drainGate(state, { quorumGrantIncumbentHeadStartMs: 60000 });
+      await gate.grantVerdict(IDENTIFIER, activeStandbyComp());
+      await new Promise(setImmediate);
+      state.now += 120000;
+      state.height = 2100025;
+      await gate.grantVerdict(IDENTIFIER, activeStandbyComp());
+      await new Promise(setImmediate);
+      expect(grantClient.acquire.called, 'the pre-lift wait bought no credit').to.equal(false);
     });
 
     it('the decision line names the identifier, the docker name and the verdict', async () => {
