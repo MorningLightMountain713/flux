@@ -327,6 +327,9 @@ export async function bootAndPeer(env, { minOutbound, minInbound, pricing = fals
     });
   }
   await env.startDiscovery();
+  // Direction-agnostic: duty pairs are reciprocal and the outbound label is
+  // a dial-race outcome — the first-booted node can legitimately hold every
+  // pair inbound-labelled. What "peered" means is enough distinct peers HELD.
   // Peering is a property of the fleet, not a literal. The ring's two halves are
   // disjoint only when dialers >= 2k+1 (peer-topology.js), and the fleet's own
   // config is derived to satisfy that, so outbound and inbound both settle at k.
@@ -421,8 +424,7 @@ export async function restartAndPeer(env, settleIndexes, { minOutbound = 1, minI
   ));
   await env.startDiscovery(settleIndexes);
   const [gate] = settleIndexes;
-  await env.clients[gate].waitForEvent('peers:added', (d) => d.outbound >= minOutbound, 120000, { afterId: markers[gate] });
-  await env.clients[gate].waitForEvent('peers:added', (d) => d.inbound >= minInbound, 120000, { afterId: markers[gate] });
+  await env.clients[gate].waitForEvent('peers:added', (d) => d.total >= minOutbound + minInbound, 120000, { afterId: markers[gate] });
   return markers;
 }
 

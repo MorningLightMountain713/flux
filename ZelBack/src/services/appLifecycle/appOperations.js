@@ -1531,11 +1531,11 @@ async function submitAppUpdate(req, res, processedBody, contentCtx) {
   }
   // eslint-disable-next-line global-require
   const { peerManager } = require('../utils/peerState');
-  if (peerManager.outboundCount < config.fluxapps.minOutgoing) {
-    throw new Error('Sorry, This Flux does not have enough outgoing peers for safe application update');
-  }
-  if (peerManager.inboundCount < config.fluxapps.minIncoming) {
-    throw new Error('Sorry, This Flux does not have enough incoming peers for safe application update');
+  // Direction-agnostic on purpose — see the registration gate: duty pairs
+  // are reciprocal and the outbound label is a dial-race outcome, so what
+  // safety needs is enough distinct peers HELD, whoever dialed.
+  if (peerManager.getNumberOfPeers() < config.fluxapps.minOutgoing + config.fluxapps.minIncoming) {
+    throw new Error('Sorry, This Flux does not hold enough peer connections for safe application update');
   }
 
   const hash = await updateAppGlobaly({
