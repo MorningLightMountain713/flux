@@ -162,13 +162,18 @@ export async function restartAndPeer(env, settleIndexes, { minOutbound = 1, minI
 // terms (a referee under test, a master mid-watch), hold that node to the
 // same settled-discovering-peered contract restartAndPeer holds a fleet to.
 // markers are pre-restart event ids, env.clients-indexed.
-export async function redialAndPeer(env, indices, markers, { minOutbound = 1 } = {}) {
+export async function redialAndPeer(env, indices, markers, { minPeers = 1 } = {}) {
   await Promise.all(indices.map(
     (i) => env.clients[i].waitForEvent('boot:settled', () => true, 180000, { afterId: markers[i] }),
   ));
   await env.startDiscovery(indices);
+  // Direction-agnostic, like bootAndPeer above: the outbound label is a
+  // dial-race outcome, and a returned node whose pairs were all established
+  // by the survivors' dials holds everything inbound-labelled while being
+  // perfectly peered — its reconciler rightly never redials a held duty, so
+  // an outbound-labelled wait here can never be satisfied.
   await Promise.all(indices.map((i) => env.clients[i].waitForEvent(
-    'peers:added', (d) => d.outbound >= minOutbound, 120000, { afterId: markers[i] },
+    'peers:added', (d) => d.total >= minPeers, 120000, { afterId: markers[i] },
   )));
 }
 
