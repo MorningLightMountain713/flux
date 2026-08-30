@@ -49,7 +49,7 @@ const log = require('../../lib/log');
 //   coast-collapse + slack, arbitrarily later than the row death the
 //   lock-delay counts from — so a coast outliving lockDelay − slack would
 //   let a successor be seated at the very moment the grantors return, before
-//   the collapse is even observable here (the quiet-window model's run 3).
+//   the collapse is even observable here.
 //   The grantor side restores the ordering: the lock-delay is anchored at
 //   the LATER of row death and the grantor's own return to refereeing
 //   (grantRegisterCore.lockDelayRemaining), so the successor's wait starts

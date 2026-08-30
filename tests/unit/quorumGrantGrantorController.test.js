@@ -1135,7 +1135,7 @@ describe('quorumGrant grantorController', () => {
     });
   });
 
-  // The quiet-window model's run 3: a coast that outlives lockDelay − slack
+  // A coast that outlives lockDelay − slack
   // lets a successor be seated before the incumbent's demote fires, because
   // the lock-delay clock ran while this grantor was refusing everyone. The
   // controller therefore hands every held register write the moment this
