@@ -31,8 +31,7 @@ function makeBaseStubs(overrides = {}) {
 
   const broadcastStub = {
     broadcastMessageToAll: sinon.stub().resolves(),
-    broadcastMessageToRandomIncoming: sinon.stub().resolves(),
-    broadcastMessageToRandomOutgoing: sinon.stub().resolves(),
+    broadcastMessageToRandomPeer: sinon.stub().resolves(),
   };
 
   // The five questions every regime answers. A regime reaches the daemon, the
@@ -173,28 +172,18 @@ describe('messageVerifier tests', () => {
   });
 
   describe('requestAppsMessage', () => {
-    it('should broadcast to random outgoing by default', async () => {
+    it('asks one random held peer, whichever direction label it carries', async () => {
       const { stubs, broadcastStub } = makeBaseStubs();
       const mv = proxyquire('../../ZelBack/src/services/appMessaging/messageVerifier', stubs);
 
       const apps = [{ hash: 'h1' }, { hash: 'h2' }];
-      await mv.requestAppsMessage(apps, false);
+      await mv.requestAppsMessage(apps);
 
-      expect(broadcastStub.broadcastMessageToRandomOutgoing.calledOnce).to.be.true;
-      const msg = broadcastStub.broadcastMessageToRandomOutgoing.firstCall.args[0];
+      expect(broadcastStub.broadcastMessageToRandomPeer.calledOnce).to.be.true;
+      const msg = broadcastStub.broadcastMessageToRandomPeer.firstCall.args[0];
       expect(msg.type).to.equal('fluxapprequest');
       expect(msg.version).to.equal(2);
       expect(msg.hashes).to.deep.equal(['h1', 'h2']);
-    });
-
-    it('should broadcast to random incoming when incoming is true', async () => {
-      const { stubs, broadcastStub } = makeBaseStubs();
-      const mv = proxyquire('../../ZelBack/src/services/appMessaging/messageVerifier', stubs);
-
-      const apps = [{ hash: 'h1' }];
-      await mv.requestAppsMessage(apps, true);
-
-      expect(broadcastStub.broadcastMessageToRandomIncoming.calledOnce).to.be.true;
     });
   });
 

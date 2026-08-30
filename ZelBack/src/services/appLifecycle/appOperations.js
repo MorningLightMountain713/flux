@@ -2506,8 +2506,8 @@ async function getPeerAppsInstallingErrorMessages() {
     // eslint-disable-next-line global-require
     const { peerManager } = require('../utils/peerState');
 
-    if (peerManager.outboundCount === 0) {
-      log.info('getPeerAppsInstallingErrorMessages - No outgoing peers available');
+    if (peerManager.getNumberOfPeers() === 0) {
+      log.info('getPeerAppsInstallingErrorMessages - No peers held');
       return;
     }
 
@@ -2515,7 +2515,7 @@ async function getPeerAppsInstallingErrorMessages() {
     let i = 0;
     while (!finished && i <= 10) {
       i += 1;
-      const peer = peerManager.getRandomPeer('outbound');
+      const peer = peerManager.getRandomPeer();
       if (!peer) break;
       const client = peer.toPeerInfo();
       let axiosConfig = {
