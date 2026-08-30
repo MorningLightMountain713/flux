@@ -1138,6 +1138,63 @@ describe('quorumGrant grantorController', () => {
     });
   });
 
+  // The plane's birth is a fleet-wide drain window: nodes cross the
+  // activation height at their own tips' pace, and a register that served
+  // cold keys the moment its own node crossed would hand every running
+  // app's term to whichever pursuer's tip crossed earliest. A virgin row
+  // serves nobody until this grantor's view passes activateAt +
+  // drainBlocks; rows with accepted history are exempt — renewals and
+  // reclaims must never drain, whatever the configured heights say.
+  describe('the activation drain', () => {
+    afterEach(() => {
+      grantorController.resetActivationForTests();
+    });
+
+    it('a virgin row serves nobody until the fleet-wide window closes', async () => {
+      grantorController.resetActivationForTests({ activateAt: 100, drainBlocks: 20 });
+      daemonServiceMiscRpcs.isDaemonSynced.returns({
+        status: 'success', data: { synced: true, height: 110, header: 110 },
+      });
+
+      const draining = fakeRes();
+      await grantorController.probe(fakeReq(signedAsk('probe')), draining);
+      expect(draining.statusCode).to.equal(409);
+      expect(draining.body.data.message).to.match(/activation is draining until height 120/);
+
+      daemonServiceMiscRpcs.isDaemonSynced.returns({
+        status: 'success', data: { synced: true, height: 120, header: 120 },
+      });
+      const served = fakeRes();
+      await grantorController.probe(fakeReq(signedAsk('probe')), served);
+      expect(served.statusCode).to.equal(200);
+    });
+
+    it('a row with accepted history is exempt — renewals never drain', async () => {
+      grantorController.resetActivationForTests({ activateAt: 100, drainBlocks: 20 });
+      daemonServiceMiscRpcs.isDaemonSynced.returns({
+        status: 'success', data: { synced: true, height: 110, header: 110 },
+      });
+      grantRegister.read.resolves({ accepted: { epoch: 2, grantee: 'x:1', mode: 'held' } });
+
+      const res = fakeRes();
+      await grantorController.probe(fakeReq(signedAsk('probe')), res);
+      expect(res.statusCode).to.equal(200);
+    });
+
+    it('the founder plane never drains at activation', async () => {
+      grantorController.resetActivationForTests({ activateAt: 100, drainBlocks: 20 });
+      daemonServiceMiscRpcs.isDaemonSynced.returns({
+        status: 'success', data: { synced: true, height: 110, header: 110 },
+      });
+
+      const res = fakeRes();
+      await grantorController.probe(
+        fakeReq(signedAsk('probe', { key: FOUNDER_KEY, mode: 'oneshot' })), res,
+      );
+      expect(res.statusCode).to.equal(200);
+    });
+  });
+
   // A grantor referees FROM its stored records, so it may not referee
   // before this node's boot message-sync has delivered them. The gate is
   // event-derived state read per ask — never elapsed time — and fail-closed
