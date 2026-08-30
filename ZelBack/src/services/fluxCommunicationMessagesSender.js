@@ -139,22 +139,14 @@ async function broadcastMessageToAll(dataToBroadcast, options = {}) {
 }
 
 /**
- * Sign and send to a random outbound peer.
+ * Sign and send to one random held peer — direction-free, because the
+ * outbound label is a dial-race outcome and a node that lost its races is
+ * fully peered. Randomness over all held peers is what spreads load.
  * @param {object} dataToBroadcast Data to broadcast.
  */
-async function broadcastMessageToRandomOutgoing(dataToBroadcast) {
+async function broadcastMessageToRandomPeer(dataToBroadcast) {
   const serialisedData = await serialiseAndSignFluxBroadcast(dataToBroadcast);
-  const peer = peerManager.getRandomPeer('outbound');
-  if (peer) peer.send(serialisedData);
-}
-
-/**
- * Sign and send to a random inbound peer.
- * @param {object} dataToBroadcast Data to broadcast.
- */
-async function broadcastMessageToRandomIncoming(dataToBroadcast) {
-  const serialisedData = await serialiseAndSignFluxBroadcast(dataToBroadcast);
-  const peer = peerManager.getRandomPeer('inbound');
+  const peer = peerManager.getRandomPeer();
   if (peer) peer.send(serialisedData);
 }
 
@@ -529,6 +521,5 @@ module.exports = {
   broadcastIngressAttestation,
   respondWithIngressIndex,
   respondWithIngressAttestations,
-  broadcastMessageToRandomOutgoing,
-  broadcastMessageToRandomIncoming,
+  broadcastMessageToRandomPeer,
 };

@@ -945,30 +945,23 @@ describe('FluxPeerManager tests', () => {
   });
 
   describe('getRandomPeer', () => {
-    it('should return a peer from the correct direction', () => {
-      manager.add(createMockWs('10.0.0.1', '16127'), '10.0.0.1', '16127', { source: PEER_SOURCE.RANDOM });
-      manager.add(createMockWs('10.0.0.2', '16127'), '10.0.0.2', '16127', { source: PEER_SOURCE.RANDOM });
+    it('returns a held peer whichever direction its label carries', () => {
+      // Direction-free on purpose: the outbound label is a dial-race
+      // outcome, and a node holding only inbound-labelled pairs is fully
+      // peered — it must still be able to pick a peer to ask.
       manager.add(createMockWs('10.0.0.3', '16127'), '10.0.0.3', '16127', { source: PEER_SOURCE.INBOUND });
-
-      const outPeer = manager.getRandomPeer('outbound');
-      expect(outPeer).to.be.instanceOf(FluxPeerSocket);
-      expect(outPeer.direction).to.equal('outbound');
-
-      const inPeer = manager.getRandomPeer('inbound');
-      expect(inPeer).to.be.instanceOf(FluxPeerSocket);
-      expect(inPeer.direction).to.equal('inbound');
+      const peer = manager.getRandomPeer();
+      expect(peer).to.be.instanceOf(FluxPeerSocket);
+      expect(peer.key).to.equal('10.0.0.3:16127');
     });
 
-    it('should return null when no peers of that direction exist', () => {
-      manager.add(createMockWs('10.0.0.1', '16127'), '10.0.0.1', '16127', { source: PEER_SOURCE.RANDOM });
-
-      const result = manager.getRandomPeer('inbound');
-      expect(result).to.equal(null);
+    it('never returns an ephemeral connection', () => {
+      manager.addEphemeral(createMockWs('50.0.0.1', '16127'), '50.0.0.1', '16127');
+      expect(manager.getRandomPeer()).to.equal(null);
     });
 
     it('should return null when no peers at all', () => {
-      expect(manager.getRandomPeer('outbound')).to.equal(null);
-      expect(manager.getRandomPeer('inbound')).to.equal(null);
+      expect(manager.getRandomPeer()).to.equal(null);
     });
   });
 

@@ -49,12 +49,13 @@ async function requestAppMessage(hash) {
 }
 
 /**
- * Request multiple app messages from network
+ * Request multiple app messages from one random held peer. Retries land on
+ * different peers by randomness, not by direction — the old incoming flag
+ * alternated socket populations whose split is a dial-race outcome.
  * @param {Array} apps - List of apps with hash property
- * @param {boolean} incoming - If true, request from incoming peers
  * @returns {Promise<void>}
  */
-async function requestAppsMessage(apps, incoming) {
+async function requestAppsMessage(apps) {
   // some message type request app message, message hash
   // peer responds with data from permanent database or temporary database. If does not have it requests further
   const message = {
@@ -62,12 +63,7 @@ async function requestAppsMessage(apps, incoming) {
     version: 2,
     hashes: apps.map((a) => a.hash),
   };
-
-  if (incoming) {
-    await fluxCommunicationMessagesSender.broadcastMessageToRandomIncoming(message);
-  } else {
-    await fluxCommunicationMessagesSender.broadcastMessageToRandomOutgoing(message);
-  }
+  await fluxCommunicationMessagesSender.broadcastMessageToRandomPeer(message);
 }
 
 /**
@@ -634,18 +630,17 @@ async function checkAndRequestApp(hash, txid, height, valueSat, blockTime = null
 /**
  * Check and request multiple app messages in batch
  * @param {object[]} apps - Array of app objects with hash, txid, height, value properties
- * @param {boolean} incoming - Whether messages are incoming
  * @param {number} i - Retry counter
  * @returns {Promise<void>} Completion status
  */
-async function checkAndRequestMultipleApps(apps, incoming = false, i = 1) {
+async function checkAndRequestMultipleApps(apps, i = 1) {
   try {
     const numberOfPeers = fluxNetworkHelper.getNumberOfPeers();
     if (numberOfPeers < config.fluxapps.minHashSyncPeers) {
       log.info('checkAndRequestMultipleApps - Not enough connected peers to request missing Flux App messages');
       return;
     }
-    await requestAppsMessage(apps, incoming);
+    await requestAppsMessage(apps);
     await serviceHelper.delay(30 * 1000);
     const appsToRemove = [];
     // eslint-disable-next-line no-restricted-syntax
@@ -659,7 +654,7 @@ async function checkAndRequestMultipleApps(apps, incoming = false, i = 1) {
     // eslint-disable-next-line no-param-reassign
     apps = apps.filter((item) => !appsToRemove.includes(item));
     if (apps.length > 0 && i < 5) {
-      await checkAndRequestMultipleApps(apps, i % 2 === 0, i + 1);
+      await checkAndRequestMultipleApps(apps, i + 1);
     }
   } catch (error) {
     log.error(error);

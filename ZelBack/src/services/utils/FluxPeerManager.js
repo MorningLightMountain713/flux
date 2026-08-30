@@ -41,7 +41,6 @@ class FluxPeerManager extends EventEmitter {
   #inboundKeys = new Set();
   /** @type {Set<string>} */
   #outboundKeys = new Set();
-  /** @type {Map<string, {ip: string, port: string, attempts: number, lastAttempt: number}>} */
   /** @type {Map<string, {disconnects: number, firstDisconnect: number}>} */
   #unstableNodes = new Map();
   /**
@@ -648,14 +647,16 @@ class FluxPeerManager extends EventEmitter {
   // --- Utility ---
 
   /**
-   * Get a random peer from a given direction.
-   * @param {'inbound'|'outbound'} direction
+   * Get a random held peer. Deliberately direction-free: duty pairs are
+   * reciprocal and which end wears the outbound label is a dial-race
+   * outcome, so selecting by direction starves a node that lost its races
+   * while meaning nothing about the peer reached. Ephemeral connections
+   * live outside the peer map and are never returned.
    * @returns {FluxPeerSocket|null}
    */
-  getRandomPeer(direction) {
-    const keys = direction === DIRECTION.INBOUND ? this.#inboundKeys : this.#outboundKeys;
-    if (keys.size === 0) return null;
-    const arr = [...keys];
+  getRandomPeer() {
+    if (this.#peers.size === 0) return null;
+    const arr = [...this.#peers.keys()];
     const randomKey = arr[Math.floor(Math.random() * arr.length)];
     return this.#peers.get(randomKey) || null;
   }
