@@ -33,7 +33,8 @@ const specReconciler = require('./appLifecycle/specReconciler');
 const appShutdownCoordinator = require('./appLifecycle/appShutdownCoordinator');
 const appSpawner = require('./appLifecycle/appSpawner');
 const registryManager = require('./appDatabase/registryManager');
-const { AppSyncOrchestrator } = require('./appMessaging/appSyncOrchestrator');
+const { AppSyncOrchestrator, STATES: APP_SYNC_STATES } = require('./appMessaging/appSyncOrchestrator');
+const grantorController = require('./quorumGrant/grantorController');
 const crontabAndMountsCleanup = require('./appLifecycle/crontabAndMountsCleanup');
 const appJanitor = require('./appLifecycle/appJanitor');
 const meshReconciler = require('./appMesh/meshReconciler');
@@ -452,6 +453,10 @@ async function startFluxFunctions() {
       fluxVersion,
     });
     nodeConfirmationService.onMessageCapabilityChange((capable) => orchestrator.onMessageCapabilityChange(capable));
+    // A grantor referees from the records this orchestrator's sync delivers,
+    // so it refuses to referee until the orchestrator is READY — the live
+    // level, read per ask; fail-closed until this line runs.
+    grantorController.registerSyncReadyProvider(() => orchestrator.state === APP_SYNC_STATES.READY);
     peerNotification.initialize();
     // Serve the flux-shutdownd drain socket (Arcane-only, best-effort).
     drainServer.start();
