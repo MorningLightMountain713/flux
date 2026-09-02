@@ -5,9 +5,12 @@ const sinon = require('sinon');
 const proxyquire = require('proxyquire').noCallThru();
 const express = require('express');
 const request = require('supertest');
+const EventEmitter = require('events');
+const WebSocket = require('ws');
 const {
   loadSpecLibrary, V9_SUBMISSION, V8_SUBMISSION, v8Spec, sealedV9Spec, assertAnswers,
 } = require('./fixtures/fluxSpec');
+const { FluxPeerManager, PEER_SOURCE } = require('../../ZelBack/src/services/utils/FluxPeerManager');
 
 // The spec library is real here, not stubbed — see tests/unit/fixtures/fluxSpec.js
 // for why. What stays stubbed is I/O and FluxOS policy.
@@ -46,7 +49,7 @@ describe('appSubmission tests', () => {
     return spec;
   }
 
-  function load() {
+  function load(overrides = {}) {
     return proxyquire('../../ZelBack/src/services/appRequirements/appSubmission', {
       config: { fluxapps: { latestSupportedSpecVersion: 9, minOutgoing: 0, minIncoming: 0 } },
       '../appLifecycle/contentBlobService': stubs.contentBlobService,
@@ -65,6 +68,7 @@ describe('appSubmission tests', () => {
       '../verificationHelper': {},
       '../utils/peerState': { peerManager: {} },
       '../../lib/log': { warn: sinon.stub(), info: sinon.stub(), error: sinon.stub() },
+      ...overrides,
     });
   }
 
@@ -555,6 +559,70 @@ describe('appSubmission tests', () => {
 
       const input = stubs.contentBlobService.encryptAndUploadBlobs.firstCall.args[0];
       expect(input.priorSpec).to.equal(prior);
+    });
+  });
+
+  describe('registration peer gate', () => {
+    // Duty pairs are reciprocal and one connection serves a pair, so which
+    // end wears the outbound label is a dial-race outcome: a well-connected
+    // node can hold every pair inbound-labelled. The gate counts peers held.
+    const MIN_OUTGOING = 2;
+    const MIN_INCOMING = 2;
+    let manager;
+
+    function heldSocket(ip) {
+      const ws = new EventEmitter();
+      ws.readyState = WebSocket.OPEN;
+      ws.ping = sinon.stub();
+      ws.send = sinon.stub();
+      ws.close = sinon.stub();
+      ws.terminate = sinon.stub();
+      ws._socket = { remoteAddress: ip, _peername: { address: ip } };
+      return ws;
+    }
+
+    function holdInboundPeers(count) {
+      for (let i = 1; i <= count; i += 1) {
+        const ip = `10.0.${i}.1`;
+        manager.add(heldSocket(ip), ip, '16127', { source: PEER_SOURCE.INBOUND });
+      }
+    }
+
+    // An empty body: the peer gate is the first check after privilege and the
+    // field check comes right after it, so the answer names which door the
+    // submission reached.
+    async function registerEmptyBody() {
+      const appSubmission = load({
+        config: { fluxapps: { latestSupportedSpecVersion: 9, minOutgoing: MIN_OUTGOING, minIncoming: MIN_INCOMING } },
+        '../utils/peerState': { peerManager: manager },
+        '../verificationHelper': { verifyPrivilege: sinon.stub().resolves(true) },
+      });
+      const res = { json: sinon.stub() };
+      await appSubmission.registerAppGlobalyApi({ headers: {}, body: {} }, res);
+      sinon.assert.calledOnce(res.json);
+      return res.json.firstCall.args[0].data.message;
+    }
+
+    beforeEach(() => {
+      manager = new FluxPeerManager();
+    });
+
+    afterEach(() => {
+      manager.reset();
+    });
+
+    it('passes with minOutgoing + minIncoming peers held and none of them outbound-labelled', async () => {
+      holdInboundPeers(MIN_OUTGOING + MIN_INCOMING);
+      expect(manager.outboundCount).to.equal(0);
+      expect(manager.getNumberOfPeers()).to.equal(MIN_OUTGOING + MIN_INCOMING);
+
+      expect(await registerEmptyBody()).to.match(/^Incomplete message received/);
+    });
+
+    it('refuses one peer short of the sum', async () => {
+      holdInboundPeers(MIN_OUTGOING + MIN_INCOMING - 1);
+
+      expect(await registerEmptyBody()).to.match(/does not hold enough peer connections/);
     });
   });
 });
