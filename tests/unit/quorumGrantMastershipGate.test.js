@@ -165,6 +165,116 @@ describe('quorumGrant mastershipGrantGate', () => {
     });
   });
 
+  // The two heights (ACTIVATION_CROSSING_DESIGN.md §2). The referees serve a
+  // fresh key from activateAt - preWindowBlocks; the plane GOVERNS from
+  // activateAt. Inside the window the seams answer nothing - the legacy
+  // election still decides who runs - and the node whose own docker says it
+  // runs the container takes its lease early, so that at the height the key
+  // is warm and nothing moves. A lease that lapses inside the window (a
+  // referee majority restarting inside one term) is re-acquired, never a
+  // docker stop: the plane stops nothing it does not yet govern.
+  describe('the window: the register opens before the plane governs', () => {
+    const ACTIVATE_AT = 2100000;
+    const PRE_WINDOW = 40;
+
+    function windowGate({ height, synced = true, extraConfig = {} }) {
+      return proxyquire('../../ZelBack/src/services/appLifecycle/mastershipGrantGate', {
+        config: {
+          fluxapps: {
+            quorumGrantMastership: true,
+            quorumGrantActivationHeight: ACTIVATE_AT,
+            quorumGrantPreWindowBlocks: PRE_WINDOW,
+            quorumGrantPursuitIntervalMs: 30000,
+            quorumGrantHeldTtlMs: 150000,
+            ...extraConfig,
+          },
+        },
+        '../daemonService/daemonServiceMiscRpcs': {
+          isDaemonSynced: () => ({ data: { height, synced } }),
+        },
+      });
+    }
+
+    beforeEach(() => {
+      sinon.stub(dockerService, 'appDockerStop').resolves();
+    });
+
+    it('inside the window the seam answers nothing, and the node running the component asks', async () => {
+      dockerService.dockerContainerInspect.resolves({ State: { Running: true } });
+      const gate = windowGate({ height: ACTIVATE_AT - PRE_WINDOW });
+      expect(await gate.grantVerdict(IDENTIFIER, activeStandbyComp()), 'no verdict below the height').to.equal(null);
+      await new Promise(setImmediate);
+      expect(grantClient.acquire.calledOnce, 'the running node asks at the window\'s first block').to.equal(true);
+      expect(grantClient.acquire.firstCall.args[0]).to.equal('myapp/master');
+    });
+
+    it('one block below the window nobody asks, running or not', async () => {
+      dockerService.dockerContainerInspect.resolves({ State: { Running: true } });
+      const gate = windowGate({ height: ACTIVATE_AT - PRE_WINDOW - 1 });
+      expect(await gate.grantVerdict(IDENTIFIER, activeStandbyComp())).to.equal(null);
+      await new Promise(setImmediate);
+      expect(grantClient.acquire.called, 'the register is not open yet').to.equal(false);
+    });
+
+    it('inside the window a node not running the component never asks', async () => {
+      dockerService.dockerContainerInspect.resolves({ State: { Running: false } });
+      const gate = windowGate({ height: ACTIVATE_AT - 1 });
+      expect(await gate.grantVerdict(IDENTIFIER, activeStandbyComp())).to.equal(null);
+      await new Promise(setImmediate);
+      expect(grantClient.acquire.called, 'standbys ask at the height, never below it').to.equal(false);
+    });
+
+    it('a lease that lapses inside the window is re-acquired, never a docker stop', async () => {
+      dockerService.dockerContainerInspect.resolves({ State: { Running: true } });
+      let demotion = null;
+      grantClient.acquire.callsFake(async (key, options) => {
+        demotion = options.onDemoted;
+        return { granted: true, holder: { epoch: 1 } };
+      });
+      const gate = windowGate({ height: ACTIVATE_AT - 10 });
+      await gate.grantVerdict(IDENTIFIER, activeStandbyComp());
+      await new Promise(setImmediate);
+      expect(demotion, 'the window pursuit installed a demotion handler').to.be.a('function');
+
+      demotion('renewal quorum lost past the deadline');
+      // the re-acquire runs the pursuit's own await chain (operator state,
+      // record, docker) before it reaches acquire
+      await new Promise((resolve) => { setTimeout(resolve, 25); });
+      expect(dockerService.appDockerStop.called, 'the plane governs nothing below the height').to.equal(false);
+      expect(grantClient.acquire.calledTwice, 'the lapse is answered by re-acquiring').to.equal(true);
+    });
+
+    it('at the height a lapse stops the container, as it always did', async () => {
+      dockerService.dockerContainerInspect.resolves({ State: { Running: true } });
+      let demotion = null;
+      grantClient.acquire.callsFake(async (key, options) => {
+        demotion = options.onDemoted;
+        return { granted: true, holder: { epoch: 1 } };
+      });
+      const gate = windowGate({ height: ACTIVATE_AT });
+      await gate.grantVerdict(IDENTIFIER, activeStandbyComp());
+      await new Promise(setImmediate);
+      expect(demotion).to.be.a('function');
+
+      demotion('a grant at epoch 2 supersedes ours at 1');
+      await new Promise(setImmediate);
+      expect(dockerService.appDockerStop.calledOnceWith(IDENTIFIER), 'a deposed master stops hard').to.equal(true);
+      expect(reconcilerQueue.enqueueComponent.calledWith(IDENTIFIER)).to.equal(true);
+    });
+
+    it('the decider seams answer nothing inside the window and still kick the pursuit', async () => {
+      // masterIntent is what the activeStandby coordinator asks every
+      // interval, so it is the periodic kick a running node gets inside the
+      // window - the reconciler's own sweep is hourly.
+      dockerService.dockerContainerInspect.resolves({ State: { Running: true } });
+      const gate = windowGate({ height: ACTIVATE_AT - 20 });
+      expect(await gate.masterIntent(IDENTIFIER, activeStandbyComp()), 'the FDM read stands').to.equal(null);
+      expect(await gate.leaderIsSelf(IDENTIFIER, 'myapp', true), 'the lowest-IP election stands').to.equal(null);
+      await new Promise((resolve) => { setTimeout(resolve, 25); });
+      expect(grantClient.acquire.calledOnce, 'one pursuit, throttled across the seams').to.equal(true);
+    });
+  });
+
   describe('the activation crossing: a cold key belongs to whoever is running it', () => {
     // At the crossing no grant exists for any app - the grantors have no memory of a
     // regime that never ran - so every candidate sees a cold key at once. Without a
