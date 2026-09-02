@@ -407,6 +407,44 @@ describe('quorumGrant grantClient', () => {
       expect(outcome.retryAfterMs).to.be.greaterThan(0);
     });
 
+    // The running node's attempt inside the activation window
+    // (ACTIVATION_CROSSING_DESIGN.md §2.5): a probe that prepares only on an
+    // open quorum, so a refused node burns no epoch against a committee that
+    // could not have promised, and learns the figure a quorum opens at.
+    it('prepareOnlyIfOpen: no open quorum means no prepare at all, and nothing taught means a re-probe', async () => {
+      // five of nine dark: four answer, the quorum is five
+      committeeHosts.slice(0, 5).forEach((host) => dark.add(host));
+      const outcome = await grantClient.acquire(KEY, holderOptions({ prepareOnlyIfOpen: true }));
+      expect(outcome.granted).to.equal(false);
+      expect(outcome.reason).to.equal('no open quorum');
+      expect(outcome.retryAfterMs).to.equal(0);
+      const prepares = serviceHelper.axiosPost.getCalls().filter((c) => String(c.args[0]).endsWith('/prepare'));
+      expect(prepares, 'no prepare went out').to.have.length(0);
+      committeeHosts.forEach((host) => {
+        expect(registers.get(host).get(KEY)?.promisedEpoch ?? 0, 'no epoch burnt').to.equal(0);
+      });
+    });
+
+    it('prepareOnlyIfOpen: a lapsed record\'s lock-delay is the taught figure, and still no prepare', async () => {
+      seedRecord({
+        promisedEpoch: 4,
+        accepted: {
+          epoch: 4, grantee: 'other:0', mode: 'held', expiresAt: Date.now() - 1000, released: false,
+        },
+      });
+      const outcome = await grantClient.acquire(KEY, holderOptions({ prepareOnlyIfOpen: true }));
+      expect(outcome.granted).to.equal(false);
+      expect(outcome.retryAfterMs).to.be.greaterThan(0);
+      const prepares = serviceHelper.axiosPost.getCalls().filter((c) => String(c.args[0]).endsWith('/prepare'));
+      expect(prepares).to.have.length(0);
+    });
+
+    it('prepareOnlyIfOpen: an open quorum acquires exactly as the built pursuit does', async () => {
+      const outcome = await grantClient.acquire(KEY, holderOptions({ prepareOnlyIfOpen: true }));
+      expect(outcome.granted).to.equal(true);
+      expect(outcome.holder.state).to.equal('held');
+    });
+
     it('founds once, and the second founder learns who was first', async () => {
       const founding = await grantClient.acquire(FOUNDER_KEY, holderOptions({ mode: 'oneshot' }));
       expect(founding.granted).to.equal(true);

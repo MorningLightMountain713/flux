@@ -224,6 +224,10 @@ function heldTtlMs() {
   return config.fluxapps.quorumGrantHeldTtlMs ?? 150_000;
 }
 
+function askTimeoutMs() {
+  return config.fluxapps.quorumGrantAskTimeoutMs ?? 5_000;
+}
+
 const testOverrides = { enabled: null, activationHeight: null };
 
 // one-shot, so the crossing is announced rather than repeated every pass
@@ -231,6 +235,38 @@ let activationAnnounced = false;
 
 // key -> monotonic ms of the last pursuit kick, jitter-spread
 const pursuits = new Map();
+
+// key -> the one pending retry of a refused running node inside the window
+const windowRetries = new Map();
+
+/**
+ * A refused running node inside the window never retries at random
+ * (ACTIVATION_CROSSING_DESIGN.md §2.5). It retries at the time the referee
+ * taught when the refusal carried one - the restart cooldown's figure, folded
+ * as the figure a QUORUM opens at - and re-probes after one ask timeout when
+ * it taught nothing: the sync gate, where nobody, the referee included, knows
+ * when a chain view catches up. The model priced the sync gate's residue at
+ * three ticks of one stable open quorum-set under this rule and five under
+ * the pursuit jitter (RESULTS.md reading M). A wait belongs to whoever knows
+ * when it ends; where nobody does, re-probe. One retry per key; every
+ * attempt re-asks docker and the record, so a node that stopped running the
+ * container, or learned of a holder, stops here on its own.
+ */
+function scheduleWindowRetry(identifier, appName, key, taughtMs) {
+  if (windowRetries.has(key)) return;
+  const taught = Number.isFinite(taughtMs) && taughtMs > 0;
+  const delayMs = taught ? taughtMs : askTimeoutMs();
+  log.info(`mastershipGrantGate - ${key} refused below the height: `
+    + (taught ? `retrying at the taught ${delayMs}ms` : `re-probing after one ask timeout (${delayMs}ms)`));
+  const timer = setTimeout(() => {
+    windowRetries.delete(key);
+    if (grantClient.holderFor(key) || grantClient.isAcquiring(key)) return;
+    pursuits.set(key, nowMs());
+    acquireUnlessSettled(identifier, appName, key);
+  }, delayMs);
+  if (typeof timer.unref === 'function') timer.unref();
+  windowRetries.set(key, timer);
+}
 
 function keyFor(appName) {
   return `${appName}/${ROLE}`;
@@ -336,10 +372,14 @@ async function acquireUnlessSettled(identifier, appName, key) {
   // not merely asked for - a committee has to form first - and the log is the
   // only place that duration is measured.
   const acquireStarted = nowMs();
-  log.info(`mastershipGrantGate - acquiring ${key} for ${identifier}`);
+  // Read once, before the ask: the answer decides both the attempt's shape
+  // and what a refusal does next, and the height may cross underneath it.
+  const inWindow = !featureEnabled();
+  log.info(`mastershipGrantGate - acquiring ${key} for ${identifier}${inWindow ? ' below the height' : ''}`);
   grantClient.acquire(key, {
     mode: 'held',
     ttlMs: heldTtlMs(),
+    prepareOnlyIfOpen: inWindow,
     onDemoted: (reason) => {
       log.warn(`mastershipGrantGate - ${identifier} demoted: ${reason}`);
       if (!featureEnabled()) {
@@ -380,11 +420,14 @@ async function acquireUnlessSettled(identifier, appName, key) {
         ?? (outcome.founder ? `founded by ${outcome.founder}` : 'unexplained');
       log.info(`mastershipGrantGate - ${key} not granted to ${identifier} `
         + `after ${nowMs() - acquireStarted}ms: ${refusal}`);
+      // a live incumbent is an answer, not a door: the record will name it
+      if (inWindow && !outcome.incumbent) scheduleWindowRetry(identifier, appName, key, outcome.retryAfterMs);
     }
     return outcome;
   }).catch((error) => {
     log.warn(`mastershipGrantGate - pursuit of ${key} failed `
       + `after ${nowMs() - acquireStarted}ms: ${error.message}`);
+    if (inWindow) scheduleWindowRetry(identifier, appName, key, 0);
   });
 }
 
@@ -700,6 +743,8 @@ function resetForTests(options = {}) {
   activationAnnounced = false;
   timingWarned = false;
   pursuits.clear();
+  windowRetries.forEach((timer) => clearTimeout(timer));
+  windowRetries.clear();
   folderDemotions.clear();
   fences.clear();
   liftPolls.clear();
