@@ -8,6 +8,7 @@ const nodeDownStore = require('./appMessaging/nodeDownStore');
 const { RECORD_STATE } = nodeDownStore;
 const { RingReconciler } = require('./utils/ringReconciler');
 const { NodeDownJuror } = require('./utils/nodeDownJuror');
+const { FlapLadder } = require('./utils/flapLadder');
 const { FluxPeerManager } = require('./utils/FluxPeerManager');
 const { normalizeSocketAddress, extractIp } = require('./utils/socketAddressUtils');
 const fluxEventBus = require('./utils/fluxEventBus');
@@ -21,6 +22,9 @@ const log = require('../lib/log');
 let transport = null;
 let reconciler = null;
 let juror = null;
+// The mild tier's counters: this node's own, never stored or sent, gone with
+// the process. A restart starts every duty from the bottom by design.
+let ladder = null;
 let localSocketAddress = null;
 let wasUnreachable = false;
 let dropHandler = null;
@@ -59,6 +63,14 @@ function myOutpoint() {
   if (!localSocketAddress) return null;
   refreshIndex();
   return index.bySocket.get(localSocketAddress) || null;
+}
+
+/** The duties this node owes now, by outpoint; empty off the list. */
+function dutyOutpoints() {
+  const topology = networkStateService.nodeDownTopology();
+  const me = myOutpoint();
+  const duties = topology && me ? topology.duties(me) : null;
+  return new Set((duties || []).map((duty) => duty.outpoint));
 }
 
 async function primeLocalAddress() {
@@ -286,15 +298,23 @@ function onPeerRemoved({ ip, port, closeCode }) {
   reconciler.schedule('peer-removed');
   if (transport.peerManager.allPeersDown()) wasUnreachable = true;
 
-  // Only an unexpected loss raises suspicion — a deliberate close (duplicate,
-  // capacity, our own teardown) is not an observation about the peer.
+  // Only an unexpected loss raises suspicion or counts as a flap — a
+  // deliberate close (duplicate, capacity, our own teardown) is not an
+  // observation about the peer.
   if (!FluxPeerManager.shouldReconnect(closeCode)) return;
   refreshIndex();
   const outpoint = index.bySocket.get(`${ip}:${port}`);
-  if (outpoint) juror.look(outpoint, 'drop');
+  if (!outpoint) return;
+  if (dutyOutpoints().has(outpoint)) ladder.noteDrop(outpoint);
+  juror.look(outpoint, 'drop');
 }
 
-function onPeerAdded() {
+function onPeerAdded({ ip, port } = {}) {
+  if (ladder && ip && port) {
+    refreshIndex();
+    const outpoint = index.bySocket.get(`${ip}:${port}`);
+    if (outpoint && dutyOutpoints().has(outpoint)) ladder.noteReturn(outpoint);
+  }
   if (!wasUnreachable) return;
   wasUnreachable = false;
   // Back from unreachability without a restart: the grant plane re-fetches
@@ -322,6 +342,7 @@ function onPeerAdded() {
 function start(injectedTransport) {
   if (reconciler) return;
   transport = injectedTransport;
+  ladder = new FlapLadder({ currentHeight: () => networkStateService.chainHeight() });
 
   reconciler = new RingReconciler({
     topology: () => networkStateService.nodeDownTopology(),
@@ -344,6 +365,8 @@ function start(injectedTransport) {
     },
     inboundCount: () => transport.peerManager.inboundCount,
     stoodDown,
+    dialPlan: (outpoint) => ladder.dialPlan(outpoint),
+    noteContact: (outpoint) => ladder.noteContact(outpoint),
   });
 
   juror = new NodeDownJuror({
@@ -374,7 +397,7 @@ function start(injectedTransport) {
   nodeDownStore.registerWithGrantPlane();
 
   dropHandler = (payload) => onPeerRemoved(payload);
-  addHandler = () => onPeerAdded();
+  addHandler = (payload) => onPeerAdded(payload);
   transport.peerManager.on('peer:removed', dropHandler);
   transport.peerManager.on('peer:added', addHandler);
   transport.peerManager.setInboundGate(inboundGate);
@@ -392,6 +415,7 @@ function stop() {
   if (reconciler) reconciler.stop();
   reconciler = null;
   juror = null;
+  ladder = null;
   transport = null;
   index.fingerprint = undefined;
   index.byOutpoint.clear();
@@ -404,6 +428,7 @@ function stop() {
 async function sweep() {
   if (!reconciler) return;
   await primeLocalAddress();
+  ladder.retain(dutyOutpoints());
   reconciler.schedule('sweep');
   juror.sweep();
 }

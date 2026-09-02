@@ -5,6 +5,7 @@ process.env.NODE_CONFIG_DIR = `${process.cwd()}/tests/unit/globalconfig`;
 const { expect } = require('chai');
 
 const { RingReconciler } = require('../../ZelBack/src/services/utils/ringReconciler');
+const { FlapLadder, DIAL_PLAN, FLAP_WINDOW_BLOCKS } = require('../../ZelBack/src/services/utils/flapLadder');
 
 const tick = () => new Promise((resolve) => { setImmediate(() => setImmediate(resolve)); });
 
@@ -237,6 +238,92 @@ describe('ringReconciler', () => {
     // out of the network and s2, s3 cover the two slots
     expect(world.dials.map((d) => [d.socketAddress, d.witness]).sort())
       .to.deep.equal([['addr-s2:0', false], ['addr-s3:0', false]]);
+  });
+
+  describe('the mild tier orders dials, never excludes a duty', () => {
+    it('a damped duty is dialed lazily: not while the floor is short, yes once it is covered without it', async () => {
+      const world = makeWorld({ duties: ['a:0', 'b:0'] });
+      world.inbound = 99;
+      world.deps.dialPlan = (outpoint) => (outpoint === 'a:0' ? DIAL_PLAN.LAZY : DIAL_PLAN.EAGER);
+      reconciler = makeReconciler(world, { floor: 1 });
+      await tick();
+      expect(world.dials.map((d) => d.socketAddress)).to.deep.equal(['addr-b:0']);
+      expect(reconciler.snapshot().duties['a:0']).to.equal('failed');
+
+      // b connects: the floor is covered, so the damped duty gets its dial
+      world.held.set('addr-b:0', 'outbound');
+      world.dials[0].resolve(true);
+      await tick();
+      await reconciler.schedule('covered');
+      expect(world.dials.map((d) => [d.socketAddress, d.witness])).to.deep.equal([['addr-b:0', true], ['addr-a:0', true]]);
+    });
+
+    it('a due duty is dialed whatever the floor says', async () => {
+      const world = makeWorld({ duties: ['a:0', 'b:0'] });
+      world.inbound = 99;
+      world.deps.dialPlan = (outpoint) => (outpoint === 'a:0' ? DIAL_PLAN.DUE : DIAL_PLAN.EAGER);
+      reconciler = makeReconciler(world, { floor: 5 });
+      await tick();
+      expect(world.dials.map((d) => d.socketAddress).sort()).to.deep.equal(['addr-a:0', 'addr-b:0']);
+    });
+
+    it('reports contact for every duty dialed or held, so the ladder\'s clock is the reconciler\'s', async () => {
+      const world = makeWorld({ duties: ['a:0', 'b:0', 'c:0'] });
+      world.inbound = 99;
+      world.held.set('addr-b:0', 'inbound');
+      world.backoff.add('addr-c:0');
+      const contacts = [];
+      world.deps.noteContact = (outpoint) => contacts.push(outpoint);
+      reconciler = makeReconciler(world);
+      await tick();
+      expect(contacts.sort()).to.deep.equal(['a:0', 'b:0']);
+    });
+
+    // The harness obligation in unit form: a node parked at the deepest rung
+    // and held stable is still dialed inside every window, so its watchers'
+    // contact gap — the input the confirmation check runs on — never exceeds
+    // W. The e2e replay asserts dosState never moves on a real fleet.
+    it('a duty parked at the deepest rung, stable and unheld, is dialed at least once per window', async () => {
+      const world = makeWorld({ duties: ['x:0', 'b:0'], successors: ['s1:0', 's2:0'] });
+      world.inbound = 99;
+      world.height = 1000;
+      const ladder = new FlapLadder({ currentHeight: () => world.height });
+      const flap = () => {
+        ladder.noteDrop('x:0');
+        world.height += 1;
+        ladder.noteReturn('x:0');
+        world.height += 1;
+      };
+      for (let trip = 0; trip < 5; trip += 1) {
+        for (let i = 0; i < 4; i += 1) flap();
+        world.height += 480;
+      }
+      for (let i = 0; i < 4; i += 1) flap();
+      expect(ladder.snapshot('x:0')).to.include({ rung: 5, damped: true, requiredClean: 480 });
+      // x drops for good this time and stays down: it never re-holds, the
+      // floor is short (b alone), so every eager pass would have written x off
+      ladder.noteDrop('x:0');
+
+      world.deps.dialPlan = (outpoint) => ladder.dialPlan(outpoint);
+      world.deps.noteContact = (outpoint) => ladder.noteContact(outpoint);
+      reconciler = makeReconciler(world, { floor: 5 });
+      const dialHeights = [];
+      world.deps.dial = (socketAddress) => {
+        if (socketAddress === 'addr-x:0') dialHeights.push(world.height);
+        return Promise.resolve(false);
+      };
+      await tick();
+
+      const start = world.height;
+      while (world.height < start + 4 * FLAP_WINDOW_BLOCKS) {
+        world.height += 7;
+        await reconciler.schedule('block'); // eslint-disable-line no-await-in-loop
+      }
+      expect(dialHeights.length).to.be.at.least(4);
+      const gaps = dialHeights.slice(1).map((at, i) => at - dialHeights[i]);
+      gaps.forEach((gap) => expect(gap).to.be.at.most(FLAP_WINDOW_BLOCKS + 7));
+      expect(ladder.snapshot('x:0').damped).to.equal(true); // still parked: the dials are the floor, not a lift
+    });
   });
 
   it('coalesces schedules while a pass runs instead of stacking them', async () => {
