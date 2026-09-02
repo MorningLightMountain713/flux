@@ -882,6 +882,35 @@ async function handleMasterleaseEvent({ message, envelope, announcer }) {
   }
 }
 
+// Product-side listeners for a generation record standing for its key —
+// how a holder hears that the world its term was granted in has ended,
+// registered by the service wiring. The bus event beside the write is
+// harness observability only and carries nothing in production.
+const grantGenerationListeners = new Set();
+
+/**
+ * Register a listener for `{appName, role, generation}`, called whenever a
+ * written generation record is the standing one for its key afterwards — a
+ * fresh arrival and a re-delivery alike, so listeners must be idempotent.
+ * Returns the unregister function.
+ */
+function onGrantGenerationRecord(listener) {
+  grantGenerationListeners.add(listener);
+  return () => grantGenerationListeners.delete(listener);
+}
+
+function notifyGrantGenerationListeners(event) {
+  grantGenerationListeners.forEach((listener) => {
+    try {
+      Promise.resolve(listener(event)).catch((error) => {
+        log.warn(`grantgeneration listener failed: ${error.message}`);
+      });
+    } catch (error) {
+      log.warn(`grantgeneration listener failed: ${error.message}`);
+    }
+  });
+}
+
 async function handleGrantGenerationEvent({ message, envelope }) {
   if (!ownerGenerationRecord.wellFormed(message)) return;
   if (!Number.isSafeInteger(message.broadcastedAt)) return;
@@ -909,7 +938,8 @@ async function handleGrantGenerationEvent({ message, envelope }) {
     // Durable and generation-newer-wins: a lower generation can never un-seat
     // a higher one, a replay refreshes nothing, and a re-pinned committee
     // months later must still find the newest generation standing.
-    await database.collection(globalAppStateEvents).updateOne(
+    const standing = await dbHelper.findOneAndUpdateInDatabase(
+      database, globalAppStateEvents,
       { type: APP_STATE_EVENT_TYPES.GRANTGENERATION, dedupKey },
       buildOrdinalConditionalUpsert([
         { field: 'generation', value: message.generation, absent: -1 },
@@ -926,12 +956,20 @@ async function handleGrantGenerationEvent({ message, envelope }) {
         // boot sync re-delivers these records, so every row is touched. The
         // TTL monitor skips non-date values.
       }, { alwaysSetFields: { receivedAt: new Date(), expireAt: null } }),
-      { upsert: true },
+      { upsert: true, returnDocument: 'after', projection: { _id: 0, 'data.generation': 1 } },
     );
 
     fluxEventBus.publish('quorumGrant:generationRecord', {
       appName: message.appName, role: message.role, generation: message.generation,
     });
+
+    // The write decided newest-wins; the row as it now stands says whether
+    // THIS record is the standing one. An older record that lost is not.
+    if (standing?.data?.generation === message.generation) {
+      notifyGrantGenerationListeners({
+        appName: message.appName, role: message.role, generation: message.generation,
+      });
+    }
 
     // In-window processors re-materialize the founding committee at the
     // record's named height; late ones store the record and answer honestly
@@ -1264,4 +1302,5 @@ module.exports = {
   getMasterleaseRecord,
   getMasterleaseRecordsByRolePrefix,
   getGrantGenerationRecord,
+  onGrantGenerationRecord,
 };

@@ -35,6 +35,8 @@ const appSpawner = require('./appLifecycle/appSpawner');
 const registryManager = require('./appDatabase/registryManager');
 const { AppSyncOrchestrator, STATES: APP_SYNC_STATES } = require('./appMessaging/appSyncOrchestrator');
 const grantorController = require('./quorumGrant/grantorController');
+const grantClient = require('./quorumGrant/grantClient');
+const messageStore = require('./appMessaging/messageStore');
 const crontabAndMountsCleanup = require('./appLifecycle/crontabAndMountsCleanup');
 const appJanitor = require('./appLifecycle/appJanitor');
 const meshReconciler = require('./appMesh/meshReconciler');
@@ -457,6 +459,9 @@ async function startFluxFunctions() {
     // so it refuses to referee until the orchestrator is READY — the live
     // level, read per ask; fail-closed until this line runs.
     grantorController.registerSyncReadyProvider(() => orchestrator.state === APP_SYNC_STATES.READY);
+    // A standing generation record ends the world a held term was granted
+    // in; the holder hears it from the store the moment the record lands.
+    messageStore.onGrantGenerationRecord(grantClient.noteGenerationRecord);
     peerNotification.initialize();
     // Serve the flux-shutdownd drain socket (Arcane-only, best-effort).
     drainServer.start();

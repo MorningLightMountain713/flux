@@ -106,6 +106,8 @@ describe('quorumGrant grantClient', () => {
   let clockNow;
   let readCostMs; // what each record read costs this node on its OWN clock
   let refereeingAnswer; // record reads carry it when set; undefined = old node
+  let teaching; // hosts refusing every ask under a newer world, and teaching it
+  let taughtRecord; // the standing generation record those refusals and every record read carry
 
   function clock() {
     return clockNow;
@@ -179,6 +181,25 @@ describe('quorumGrant grantClient', () => {
     return outcome.reply;
   }
 
+  // A grantor refusing under a newer world, exactly as the controller answers
+  // it: an HTTP 409 whose error payload carries the standing record.
+  function taughtRefusal() {
+    const error = new Error('Request failed with status code 409');
+    error.response = {
+      status: 409,
+      data: {
+        status: 'error',
+        data: {
+          name: 'Error',
+          message: `ask names generation 0, current is ${taughtRecord.generation}`,
+          generation: taughtRecord.generation,
+          generationRecord: taughtRecord,
+        },
+      },
+    };
+    return error;
+  }
+
   function fakePost(url, body) {
     const [, host, path] = url.match(/^http:\/\/([^:]+):\d+(\/.*)$/);
 
@@ -207,6 +228,7 @@ describe('quorumGrant grantClient', () => {
 
     const type = path.split('/').pop();
     if (unreachable.has(host) || dark.has(host)) throw new Error('unreachable');
+    if (teaching.has(host)) throw taughtRefusal();
     return { data: { status: 'success', data: dispatchToGrantor(host, type, body) } };
   }
 
@@ -220,6 +242,8 @@ describe('quorumGrant grantClient', () => {
     clockNow = 1_000_000;
     readCostMs = 0;
     refereeingAnswer = undefined;
+    teaching = new Set();
+    taughtRecord = null;
 
     sinon.stub(serviceHelper, 'axiosPost').callsFake(async (url, body) => fakePost(url, body));
     sinon.stub(serviceHelper, 'axiosGet').callsFake(async (url) => {
@@ -245,6 +269,7 @@ describe('quorumGrant grantClient', () => {
               remainingMs: Number.isFinite(expiresAt) ? Math.max(0, expiresAt - Date.now()) : null,
               roster: stored?.roster ?? null,
               ...(refereeingAnswer !== undefined ? { refereeing: refereeingAnswer } : {}),
+              ...(taughtRecord ? { generation: taughtRecord.generation, generationRecord: taughtRecord } : {}),
             },
           },
         };
@@ -1163,4 +1188,148 @@ describe('quorumGrant grantClient', () => {
       expect(outcome.holder.state).to.equal('held');
     });
   });
+
+  // The teach, consumed: a newer generation record learned from any answer
+  // enters this node's store through the same owner-verified path a
+  // broadcast takes, so every reader of the store — committee resolution,
+  // the witness poll, the holder — sees one fact from one place.
+  describe('the teach — learning a newer generation from whatever answers', () => {
+    const RECORD = {
+      type: 'fluxgrantgeneration',
+      version: 1,
+      ip: '10.1.0.1:16127',
+      appName: 'myapp',
+      role: 'master',
+      generation: 2,
+      height: 90,
+      at: 1_750_000_000_000,
+      signature: 'ownersig',
+      broadcastedAt: 1_750_000_000_500,
+    };
+    const rolledHosts = selectCommittee(membership, rosterOverlay.walkKeyFor(KEY, 2), { size: COMMITTEE_SIZE })
+      .members.map((node) => node.ip.split(':')[0]);
+
+    async function acquireHolder(overrides = {}) {
+      const outcome = await grantClient.acquire(KEY, holderOptions(overrides));
+      expect(outcome.granted).to.equal(true);
+      return outcome.holder;
+    }
+
+    beforeEach(() => {
+      sinon.stub(messageStore, 'storeAppStateEvent').resolves();
+      taughtRecord = RECORD;
+    });
+
+    it('a refused renewal naming a newer record stores it through the verified path — once per key, however many cells teach it', async () => {
+      const holder = await acquireHolder();
+      committeeHosts.forEach((host) => teaching.add(host));
+      clockNow += 20_000;
+      await holder.renewOnce();
+      expect(messageStore.storeAppStateEvent.callCount).to.equal(1);
+      expect(messageStore.storeAppStateEvent.firstCall.args).to.deep.equal([
+        messageStore.APP_STATE_EVENT_TYPES.GRANTGENERATION, { message: RECORD, envelope: null },
+      ]);
+    });
+
+    it('a taught record no newer than the world this node asked under is not news', async () => {
+      messageStore.getGrantGenerationRecord.resolves({ data: RECORD });
+      const holder = await acquireHolder();
+      rolledHosts.forEach((host) => teaching.add(host));
+      clockNow += 20_000;
+      await holder.renewOnce();
+      expect(messageStore.storeAppStateEvent.called).to.equal(false);
+    });
+
+    it('a record about some other key is not this answer\'s to teach', async () => {
+      taughtRecord = { ...RECORD, appName: 'otherapp' };
+      const holder = await acquireHolder();
+      committeeHosts.forEach((host) => teaching.add(host));
+      clockNow += 20_000;
+      await holder.renewOnce();
+      expect(messageStore.storeAppStateEvent.called).to.equal(false);
+    });
+
+    it('a record that does not carry a generation, or carries a malformed one, teaches nothing', async () => {
+      taughtRecord = { ...RECORD, generation: 'two' };
+      const holder = await acquireHolder();
+      committeeHosts.forEach((host) => teaching.add(host));
+      clockNow += 20_000;
+      await holder.renewOnce();
+      expect(messageStore.storeAppStateEvent.called).to.equal(false);
+    });
+
+    it('the witness poll learns from the committee it reads', async () => {
+      await grantClient.witnessAnswer(KEY);
+      expect(messageStore.storeAppStateEvent.callCount).to.equal(1);
+      expect(messageStore.storeAppStateEvent.firstCall.args[1].message).to.deep.equal(RECORD);
+    });
+
+    it('the witness answer carries what this node knows, so a polling master learns from its witnesses', async () => {
+      messageStore.getGrantGenerationRecord.resolves({ data: RECORD });
+      const answer = await grantClient.witnessAnswer(KEY);
+      expect(answer.generation).to.equal(2);
+      expect(answer.generationRecord).to.deep.equal(RECORD);
+    });
+
+    it('a master polling its witnesses learns what they know', async () => {
+      taughtRecord = null; // the committee knows nothing of the new world; the witness does
+      const holder = await acquireHolder();
+      committeeHosts.forEach((host) => unreachable.add(host));
+      relayDelivers = false;
+      witnessReplies.set(STANDBY_HOST, {
+        quorumReachable: false, holding: false, acquiring: false, generation: 2, generationRecord: RECORD,
+      });
+      clockNow += TTL + 30_000;
+      await holder.renewOnce();
+      expect(messageStore.storeAppStateEvent.callCount).to.equal(1);
+      expect(messageStore.storeAppStateEvent.firstCall.args[1].message).to.deep.equal(RECORD);
+    });
+
+    it('re-learning a term after a restart learns from the record reads too', async () => {
+      const holder = await acquireHolder();
+      holder.stop();
+      await grantClient.relearn(KEY, holderOptions());
+      expect(messageStore.storeAppStateEvent.callCount).to.equal(1);
+      expect(messageStore.storeAppStateEvent.firstCall.args[1].message).to.deep.equal(RECORD);
+    });
+
+    it('a standing record for a held key brings the holder\'s next contact forward to now', async () => {
+      taughtRecord = null;
+      const handles = [];
+      const cancelled = [];
+      const holder = await acquireHolder({
+        schedule: (fn, ms) => {
+          const handle = { fn, ms };
+          handles.push(handle);
+          return handle;
+        },
+        cancel: (handle) => cancelled.push(handle),
+      });
+      // the renewal loop's own timer: the one armed short of the term
+      const loop = handles.find((handle) => handle.ms < TTL);
+      expect(loop, 'the loop is armed at acquisition').to.not.equal(undefined);
+
+      grantClient.noteGenerationRecord({ appName: 'myapp', role: 'master', generation: 2 });
+      expect(cancelled).to.include(loop);
+      expect(handles[handles.length - 1].ms).to.equal(0);
+      expect(holder.state).to.equal('held');
+    });
+
+    it('a generation no newer than the held world, or a key nobody here holds, moves nothing', async () => {
+      taughtRecord = null;
+      const handles = [];
+      await acquireHolder({
+        schedule: (fn, ms) => {
+          const handle = { fn, ms };
+          handles.push(handle);
+          return handle;
+        },
+      });
+      const armed = handles.length;
+      grantClient.noteGenerationRecord({ appName: 'myapp', role: 'master', generation: 0 });
+      grantClient.noteGenerationRecord({ appName: 'otherapp', role: 'master', generation: 7 });
+      expect(handles).to.have.length(armed);
+    });
+  });
+
 });

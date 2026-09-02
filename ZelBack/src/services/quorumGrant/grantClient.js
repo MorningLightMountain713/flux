@@ -278,6 +278,50 @@ async function currentGeneration(key) {
   }
 }
 
+/** The owner-signed generation record this node holds for a key, or null. */
+async function knownGenerationRecord(key) {
+  try {
+    const slash = key.indexOf('/');
+    const record = await messageStore.getGrantGenerationRecord(key.slice(0, slash), key.slice(slash + 1));
+    return record?.data ?? null;
+  } catch (error) {
+    return null;
+  }
+}
+
+// keys whose taught record is being stored right now — one round of asks
+// brings the same record back from every cell that knows it
+const learning = new Set();
+
+/**
+ * Consume what an answer teaches. A generation record newer than the world
+ * this node asked under enters the store through the same owner-verified,
+ * newest-wins path a broadcast takes — one fact, kept in one place — and
+ * the store's listeners carry the news to whoever holds the key. A record
+ * no newer than what was asked under is nothing this node does not know,
+ * and a record about some other key is not this answer's to teach.
+ */
+async function learnGeneration(key, askedGeneration, answer) {
+  const record = answer?.generationRecord;
+  if (!record || !Number.isSafeInteger(record.generation)) return;
+  if (record.generation <= (askedGeneration ?? 0)) return;
+  const slash = key.indexOf('/');
+  if (record.appName !== key.slice(0, slash) || record.role !== key.slice(slash + 1)) return;
+  if (learning.has(key)) return;
+  learning.add(key);
+  try {
+    await messageStore.storeAppStateEvent(
+      messageStore.APP_STATE_EVENT_TYPES.GRANTGENERATION,
+      { message: record, envelope: null },
+    );
+    fluxEventBus.publish('quorumGrant:generationLearned', { key, generation: record.generation });
+  } catch (error) {
+    log.warn(`quorumGrant ${key}: storing a taught generation record failed: ${error.message}`);
+  } finally {
+    learning.delete(key);
+  }
+}
+
 /**
  * The overlay state the published record carries for a key — roster chain
  * and cancel chain — with the basis it binds to, or null. A read, never a
@@ -406,13 +450,16 @@ async function askGrantor(member, type, ask, signature) {
     // The grantor names why it refused and the reason dies in this catch —
     // outside the harness nothing observes it (publish() is a no-op), and a
     // refused ask and an unreachable grantor both come back null on purpose:
-    // the quorum arithmetic treats silence as silence either way.
+    // the quorum arithmetic treats silence as silence either way. What the
+    // refusal TEACHES does not die here: a newer generation named by the
+    // refusing cell is this node's world having ended.
     fluxEventBus.publish('quorumGrant:askRefused', {
       type,
       member: outpointOf(member),
       status: error.response?.status ?? null,
       reason: error.response?.data?.data?.message ?? error.message ?? null,
     });
+    await learnGeneration(ask.key, ask.generation, error.response?.data?.data);
     return null;
   }
 }
@@ -586,6 +633,7 @@ async function relearn(key, options = {}) {
         { timeout: askTimeoutMs(), httpAgent: askAgent },
       );
       const data = response?.data?.data;
+      await learnGeneration(key, committee.generation, data);
       if (!data?.accepted) return null;
       return {
         grantee: data.accepted.grantee,
@@ -742,6 +790,7 @@ async function acquireOnce(key, mode, ttlMs, identity, committee, options) {
     onDemoted: options.onDemoted,
     clock: options.clock,
     schedule: options.schedule,
+    cancel: options.cancel,
   });
   acceptReplies.forEach((reply, outpoint) => {
     if (reply?.ok) holder.recordAck(outpoint, sentMs);
@@ -926,16 +975,36 @@ class Holder {
     this.#loop();
   }
 
-  #loop() {
+  /**
+   * Arm the next renewal pass. A pass in flight holds no timer and re-arms
+   * itself when it ends, so at most one pass runs at a time.
+   */
+  #loop(delayMs = jitteredMs(renewIntervalMs())) {
     if (this.#stopped) return;
+    if (this.#timer !== null) this.#cancel(this.#timer);
     this.#timer = this.#schedule(async () => {
+      this.#timer = null;
       try {
         await this.renewOnce();
       } catch (error) {
         log.error(`quorumGrant holder ${this.#key}: ${error.message}`);
       }
       this.#loop();
-    }, jitteredMs(renewIntervalMs()));
+    }, delayMs);
+  }
+
+  /**
+   * A newer generation stands for this key: the world this term was granted
+   * in has ended, and the next contact with the referees is the one that
+   * acts on it — now, not a renewal interval from now. A pass in flight is
+   * that contact already.
+   */
+  noteGeneration(generation) {
+    if (this.#stopped || generation <= this.#committee.generation) return;
+    log.info(`quorumGrant holder ${this.#key}: generation ${generation} stands over our `
+      + `${this.#committee.generation} — contacting the referees now`);
+    if (this.#timer === null) return;
+    this.#loop(0);
   }
 
   /**
@@ -1304,7 +1373,9 @@ class Holder {
     // global app always has other instances by spec floor, so an empty set
     // means nobody can vouch that no takeover is possible - unanimity over
     // nobody proved nothing, and it kept an isolated master running.
-    const witnessReplies = standbys.length ? await pollWitnesses(standbys, this.#key) : new Map();
+    const witnessReplies = standbys.length
+      ? await pollWitnesses(standbys, this.#key, this.#committee.generation)
+      : new Map();
     const verdict = standbys.length
       ? core.coastVerdict(standbys.map(outpointOf), witnessReplies)
       : { coast: false, reason: 'no witnesses resolvable' };
@@ -1439,6 +1510,7 @@ async function witnessAnswer(key, mode = 'held') {
         // challenger, and counting it would talk the incumbent out of the
         // coast exactly when the whole fleet's grantors went quiet. An
         // absent field is an older node and counts as it always did.
+        await learnGeneration(key, committee.generation, response?.data?.data);
         return response?.data?.status === 'success'
           && response.data.data?.refereeing !== false;
       } catch (error) {
@@ -1449,7 +1521,17 @@ async function witnessAnswer(key, mode = 'held') {
     quorumReachable = answers.filter(Boolean).length >= committee.quorum;
   }
 
-  return { holding, acquiring: isAcquiring, quorumReachable };
+  // The answer teaches too: a master whose committee has gone dark to it
+  // still polls its witnesses, and a witness that knows the standing
+  // generation is the master's remaining way to hear its world ended.
+  const generationRecord = await knownGenerationRecord(key);
+  return {
+    holding,
+    acquiring: isAcquiring,
+    quorumReachable,
+    generation: generationRecord?.generation ?? 0,
+    generationRecord,
+  };
 }
 
 /**
@@ -1523,7 +1605,7 @@ function stopHolder(holder) {
   holder.stop();
 }
 
-async function pollWitnesses(standbys, key) {
+async function pollWitnesses(standbys, key, askedGeneration) {
   const polls = standbys.map(async (standby) => {
     try {
       // Double budget, like the relay call: the witness answers only after
@@ -1536,7 +1618,9 @@ async function pollWitnesses(standbys, key) {
         { key },
         { timeout: askTimeoutMs() * 2, httpAgent: askAgent },
       );
-      return { outpoint: outpointOf(standby), reply: response?.data?.data ?? null };
+      const reply = response?.data?.data ?? null;
+      await learnGeneration(key, askedGeneration, reply);
+      return { outpoint: outpointOf(standby), reply };
     } catch (error) {
       return { outpoint: outpointOf(standby), reply: null };
     }
@@ -1554,6 +1638,16 @@ function holderFor(key) {
   return held.get(key) ?? null;
 }
 
+/**
+ * The store's word that a generation record stands for a key — registered
+ * with messageStore.onGrantGenerationRecord by the service wiring. Only a
+ * holder of that key has anything to do about it.
+ */
+function noteGenerationRecord({ appName, role, generation }) {
+  const holder = held.get(`${appName}/${role}`);
+  if (holder) holder.noteGeneration(generation);
+}
+
 /** Whether an acquisition for the key is currently in flight. */
 function isAcquiring(key) {
   return acquiring.has(key);
@@ -1567,6 +1661,7 @@ module.exports = {
   assertTimingSafe,
   isAcquiring,
   witnessAnswer,
+  noteGenerationRecord,
   carryAsk,
   Holder,
   resetForTests,

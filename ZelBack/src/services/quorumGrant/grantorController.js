@@ -185,7 +185,31 @@ async function heldGeneration(key) {
   return {
     generation: record?.data?.generation ?? 0,
     height: record?.data?.height ?? null,
+    record: record?.data ?? null,
   };
+}
+
+/**
+ * What every answer about a held key teaches: the generation this cell
+ * knows for it, and the owner-signed record behind the number. A holder or
+ * witness that never synced the owner's re-roll learns it from whatever
+ * answers — the refusals included, which are all a retired world's master
+ * keeps hearing — and verifies the record itself before believing it.
+ * Founder cells address their world by the key and teach through the
+ * founding basis instead.
+ */
+async function taught(key) {
+  const role = key.slice(key.indexOf('/') + 1);
+  if (FOUNDER_ROLE_PATTERN.test(role)) return {};
+  const known = await heldGeneration(key);
+  return { generation: known.generation, generationRecord: known.record };
+}
+
+/** A refusal about a known key, teaching the standing generation with it. */
+async function refuse(res, code, message, key) {
+  const body = messageHelper.createErrorMessage(message);
+  Object.assign(body.data, await taught(key));
+  return res.status(code).json(body);
 }
 
 /**
@@ -732,11 +756,11 @@ async function serve(req, res, type, operate) {
       observeSynced(sync?.data?.synced === true && booted);
       if (!sync?.data?.synced) {
         report('refusedStale');
-        return res.status(503).json(messageHelper.createErrorMessage('chain view stale — this grantor is not refereeing'));
+        return refuse(res, 503, 'chain view stale — this grantor is not refereeing', ask.key);
       }
       if (!booted) {
         report('refusedUnsynced');
-        return res.status(503).json(messageHelper.createErrorMessage('app-state sync incomplete — this grantor is not refereeing'));
+        return refuse(res, 503, 'app-state sync incomplete — this grantor is not refereeing', ask.key);
       }
       // The return gate: a cell back from unreachability answers only after
       // re-fetching the published record — waiting teaches nothing.
@@ -744,7 +768,7 @@ async function serve(req, res, type, operate) {
         const resynced = await resyncReturnedKey(ask);
         if (!resynced) {
           report('refusedResync');
-          return res.status(503).json(messageHelper.createErrorMessage('returned grantor has not re-fetched the published record'));
+          return refuse(res, 503, 'returned grantor has not re-fetched the published record', ask.key);
         }
         resyncPending.delete(ask.key);
         if (!resyncPending.size) resyncPending = null;
@@ -760,7 +784,7 @@ async function serve(req, res, type, operate) {
     ms.committee = Date.now() - t0 - ms.read;
     if (!committee.member) {
       report('refusedCommittee');
-      return res.status(committee.code).json(messageHelper.createErrorMessage(committee.reason));
+      return refuse(res, committee.code, committee.reason, ask.key);
     }
 
     // A carried cancel chain that verified is journaled before anything is
@@ -781,7 +805,7 @@ async function serve(req, res, type, operate) {
       const adopted = await adoptStandingTerm(ask, committee);
       if (!adopted.ok) {
         report('refusedUnadopted');
-        return res.status(409).json(messageHelper.createErrorMessage(adopted.reason));
+        return refuse(res, 409, adopted.reason, ask.key);
       }
     }
 
@@ -790,7 +814,7 @@ async function serve(req, res, type, operate) {
       ms.holds = Date.now() - t0 - ms.read - ms.committee;
       if (!holding.holds) {
         report('refusedHolder');
-        return res.status(403).json(messageHelper.createErrorMessage(holding.reason));
+        return refuse(res, 403, holding.reason, ask.key);
       }
     }
 
@@ -984,6 +1008,7 @@ async function record(req, res) {
       roster: stored?.roster ?? null,
       cancels: stored?.cancels ?? null,
       refereeing,
+      ...(await taught(key)),
     }));
   } catch (error) {
     log.error(`quorumGrant grantorController record: ${error.message}`);
