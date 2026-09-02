@@ -9,6 +9,7 @@ const { RECORD_STATE } = nodeDownStore;
 const { RingReconciler } = require('./utils/ringReconciler');
 const { NodeDownJuror } = require('./utils/nodeDownJuror');
 const { FlapLadder } = require('./utils/flapLadder');
+const meshOrdinals = require('./appMesh/meshOrdinals');
 const { FluxPeerManager } = require('./utils/FluxPeerManager');
 const { normalizeSocketAddress, extractIp } = require('./utils/socketAddressUtils');
 const fluxEventBus = require('./utils/fluxEventBus');
@@ -326,6 +327,10 @@ function onPeerAdded({ ip, port } = {}) {
   } catch (error) {
     log.warn(`nodeDownService: return notice failed: ${error.message}`);
   }
+  // The mesh hears the same return: an ordinal the record names this node
+  // for may have been vacated and re-granted while it was cut, so its names
+  // are re-probed before they are trusted again.
+  meshOrdinals.noteReturnFromUnreachability();
   // eslint-disable-next-line global-require
   require('./appMessaging/peerNotification').checkAndNotifyPeersOfRunningApps();
 }

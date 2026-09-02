@@ -71,9 +71,24 @@ async function claimOrdinal(appName, instances) {
   return { state: CLAIM.STANDBY, ordinal: null };
 }
 
+// The return re-probe, the register model's obligation on the consumer: a
+// node back from a partition holds a record that may have been superseded
+// while it was cut — its ordinal vacated and granted to another — so the
+// record's answer for its OWN ordinal is not trusted until a quorum confirms
+// it. Each return raises the epoch; each app's name is re-probed once per
+// epoch; an undecided or contrary quorum leaves the node a standby until the
+// next pass, or until the record catches up and names it no longer.
+let returnEpoch = 0;
+const verifiedEpoch = new Map(); // appName → the epoch at which a quorum confirmed the own ordinal
+
+function noteReturnFromUnreachability() {
+  returnEpoch += 1;
+}
+
 /**
- * The ordinal the synced record names this node for, or null: a standby, or
- * a grant the record has not carried here yet.
+ * The ordinal the synced record names this node for, or null: a standby, a
+ * grant the record has not carried here yet, or a name a returning node has
+ * not yet had confirmed by the committee.
  * @param {string} appName
  * @returns {Promise<number|null>}
  */
@@ -81,7 +96,13 @@ async function ownOrdinal(appName) {
   const me = await ownOutpoint();
   const holders = await seam.ordinalHolders(appName);
   const mine = [...holders.entries()].find(([, holder]) => holder === me);
-  return mine ? mine[0] : null;
+  if (!mine) return null;
+  const [ordinal] = mine;
+  if ((verifiedEpoch.get(appName) ?? 0) >= returnEpoch) return ordinal;
+  const probe = await seam.probeOrdinal(appName, ordinal);
+  if (!probe.decided || probe.holder !== me) return null;
+  verifiedEpoch.set(appName, returnEpoch);
+  return ordinal;
 }
 
 function nodeIdOf(outpoint) {
@@ -117,6 +138,7 @@ async function releaseOrdinal(appName) {
   const ordinal = await ownOrdinal(appName);
   if (ordinal === null) return { released: false, ordinal: null, reason: 'none_held' };
   const result = await seam.releaseOrdinal(appName, ordinal);
+  verifiedEpoch.delete(appName);
   return {
     released: result.released === true,
     ordinal,
@@ -128,6 +150,7 @@ module.exports = {
   CLAIM,
   claimOrdinal,
   ownOrdinal,
+  noteReturnFromUnreachability,
   holdersByNode,
   releaseOrdinal,
   nodeIdOf,
