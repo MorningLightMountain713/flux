@@ -1,6 +1,7 @@
 'use strict';
 
 const { OUTBOUND_FLOOR, M_OWNERS } = require('./peerRings');
+const { DIAL_PLAN } = require('./flapLadder');
 
 const log = require('../../lib/log');
 
@@ -67,6 +68,12 @@ class RingReconciler {
    * @param {(socketAddress: string, reason: string) => void} deps.drop close a held connection
    * @param {(socketAddress: string) => void} deps.ask request an inbound dial-back
    * @param {() => number} deps.inboundCount
+   * @param {(outpoint: string) => Promise<boolean>} [deps.stoodDown] the network holds
+   *   the node out: certified down, or quarantined past the certificate
+   * @param {(outpoint: string) => string} [deps.dialPlan] the mild tier's order for
+   *   the duty's dial, a flapLadder DIAL_PLAN; eager when absent
+   * @param {(outpoint: string) => void} [deps.noteContact] the duty was dialed or is
+   *   held this pass — the ladder's clock
    * @param {object} [options]
    * @param {number} [options.floor] outbound connection floor
    * @param {number} [options.releaseMargin] hysteresis above the floor
@@ -195,6 +202,9 @@ class RingReconciler {
     if (duties === null) return; // not on the list — nothing is owed by or to us
 
     // --- duties: reconcile against held PEERS, either direction ---
+    // Standing before this pass's own dials: a damped duty takes a slot
+    // lazily, only when the floor is covered without it.
+    const standingBefore = this.#outboundStanding();
     const current = new Map();
     const standings = await Promise.all(duties.map(async (duty) => ({
       duty,
@@ -211,10 +221,20 @@ class RingReconciler {
       }
       if (this.#deps.isHeld(socketAddress)) {
         current.set(duty.outpoint, { state: DUTY_STATE.CONNECTED, socketAddress, writtenOff: false });
+        if (this.#deps.noteContact) this.#deps.noteContact(duty.outpoint);
         return;
       }
       if (known && known.socketAddress === socketAddress && known.state === DUTY_STATE.PENDING) {
         current.set(duty.outpoint, known); // dial in flight — its resolution is the event
+        return;
+      }
+      // Damping orders dials, it never excludes a duty: a damped duty waits
+      // while the floor is short and a substitute covers its slot, is dialed
+      // when the floor is covered without it, and is dialed regardless once
+      // a window has passed since its last contact.
+      const plan = this.#deps.dialPlan ? this.#deps.dialPlan(duty.outpoint) : DIAL_PLAN.EAGER;
+      if (plan === DIAL_PLAN.LAZY && standingBefore < this.#floor) {
+        current.set(duty.outpoint, { state: DUTY_STATE.FAILED, socketAddress, writtenOff: true });
         return;
       }
       // Owed to a named node until the list says otherwise: dial whenever the
@@ -228,6 +248,7 @@ class RingReconciler {
           true,
           known ? known.writtenOff === true : false,
         );
+        if (this.#deps.noteContact) this.#deps.noteContact(duty.outpoint);
       } else {
         current.set(duty.outpoint, { state: DUTY_STATE.FAILED, socketAddress, writtenOff: true });
       }
