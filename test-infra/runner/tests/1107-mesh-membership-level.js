@@ -144,12 +144,12 @@ describe('mesh membership level API', function () {
 
   it('a container reads its own level: generation, self, canonical names, no addresses', async function () {
     this.timeout(360000);
-    // Wait for CONVERGED identity, not just a full slot set. Simultaneous
-    // installs can bake colliding provision-time picks (claim-and-go:
-    // publishClaimSlot is best-effort and arbitration converges the losers
-    // through the drift-rebuild), so the arbitrated set can be complete
-    // while a container still carries a losing identity — and a pending
-    // rebuild would also recreate the container under the next test's
+    // Wait for CONVERGED identity, not just a full ordinal set. An ordinal is
+    // granted before its container exists, so a fresh install carries the
+    // right identity from birth; a container can still drift when its
+    // ordinal is vacated and re-granted while it runs, and the drift-rebuild
+    // recreates it — and a pending rebuild would also recreate the container
+    // under the next test's
     // parked poll. Settled means: every node's own pass resolved a slot,
     // the slots are distinct, and identityDrift is empty — a completed
     // pass always writes both keys, and drift empty on the same pass as a
