@@ -1,32 +1,27 @@
 'use strict';
 
 /**
- * Spec door order — the bound on a submitted document, and where it comes from.
+ * Spec door order — a submitted document is bounded whichever door it reaches.
  *
- * flux-spec's own door coverage is asserted in that repo
- * (packages/spec-backend/test/unit/doorCoverage.test.js). That suite cannot see
- * this: which of its doors FluxOS calls, and in what order.
+ * flux-spec asserts its own door-to-guard coverage
+ * (packages/spec-backend/test/unit/doorCoverage.test.js). What that suite cannot
+ * see is which of its doors FluxOS calls, and in what order. This file asserts
+ * that the answer does not matter.
  *
- * The order is load-bearing today, and nothing but this file says so.
+ * Two doors take a user-supplied spec document, and FluxOS reaches them by
+ * different routes:
  *
- *   - `deserializeSpec` routes a legacy document to `FluxAppSpecVn.deserialize`,
- *     which runs `assertLegacyWireBounds` — size and depth, both bounded.
- *   - `validateSubmissionSpec` routes the same document to
- *     `FluxAppSpecVn.fromSubmission`, which runs NEITHER. The guard was wired to
- *     all eight `deserialize` doors and none of the eight `fromSubmission` ones.
+ *   - `deserializeSpec` routes to `FluxAppSpecVn.deserialize`. Registration
+ *     (appSubmission.js) goes here first.
+ *   - `validateSubmissionSpec` routes to `FluxAppSpecVn.fromSubmission`. The
+ *     playground (playgroundService.js) goes straight here, with no prior
+ *     deserialize.
  *
- * So a caller that deserializes first is bounded, and a caller that goes
- * straight to submission is not. FluxOS does both:
- *
- *   - `appSubmission.js:143` calls `deserializeSpec` and only then
- *     `validateSubmissionSpec`. Registration is bounded — by the order, not by
- *     the door it eventually reaches.
- *   - `playgroundService.js:129` calls `validateSubmissionSpec` on the raw
- *     request body with no prior deserialize. That reaches the unbounded door.
- *
- * These tests pin both halves. When flux-spec bounds its legacy submission
- * doors, the "unbounded" expectations below fail and say so — that is the
- * signal to delete them, and to stop relying on call order.
+ * Both apply `assertLegacyWireBounds`, so both refuse an oversized or over-deep
+ * document and neither route depends on the other running first. The final test
+ * states that agreement directly: if one door loses its bound, the two answers
+ * diverge and the safety of a route silently becomes a property of its call
+ * order rather than of its doors.
  *
  * Runs against the real spec library (see tests/unit/fixtures/fluxSpec.js for
  * why the library is never doubled here). No database, no network.
@@ -41,7 +36,7 @@ const {
 } = require('../../ZelBack/src/services/utils/specLibs');
 
 // LEGACY_MAX_WIRE_BYTES is 1,048,576 and MAX_DOCUMENT_DEPTH is 32. Both probes
-// are built well past those so a bound, if present, cannot be a near miss.
+// sit well past those, so a refusal cannot be a near miss on either bound.
 const OVERSIZE_BYTES = 1_500_000;
 const OVER_DEPTH = 100;
 
@@ -76,10 +71,10 @@ function validV8() {
   };
 }
 
+// Bulk and depth go in a field both doors KEEP, so a refusal can only be the
+// bound and never an unknown-field check firing ahead of it.
 function oversizedV8() {
   const doc = validV8();
-  // Bulk goes in a field the door KEEPS, so a rejection can only be the size
-  // bound and never an unknown-field check firing first.
   const pad = [];
   let bytes = 0;
   while (bytes < OVERSIZE_BYTES) {
@@ -100,7 +95,13 @@ function overDeepV8() {
   return doc;
 }
 
-/** Drive a door and reduce the outcome to a comparable code. */
+/**
+ * Drive a door and reduce the outcome to a comparable code.
+ *
+ * The code is compared, not merely the fact of a throw: every door here rejects
+ * a malformed document for several reasons, and only the named code says the
+ * bound is what refused it.
+ */
 async function outcome(fn) {
   try {
     await fn();
@@ -111,7 +112,7 @@ async function outcome(fn) {
   }
 }
 
-describe('spec door order — where the bound on a submitted document comes from', () => {
+describe('spec door order — a submitted document is bounded at either door', () => {
   let deserializeSpec;
 
   before(async () => {
@@ -120,9 +121,9 @@ describe('spec door order — where the bound on a submitted document comes from
   });
 
   it('the baseline document is accepted by both doors', async () => {
-    expect(await outcome(() => deserializeSpec(validV8())), 'baseline must pass the wire door, '
-      + 'or every probe below rejects for the wrong reason').to.equal('ACCEPTED');
-    expect(await outcome(() => validateSubmissionSpec(validV8())), 'baseline must pass the '
+    expect(await outcome(() => deserializeSpec(validV8())), 'the baseline must pass the wire '
+      + 'door, or every probe below rejects for the wrong reason').to.equal('ACCEPTED');
+    expect(await outcome(() => validateSubmissionSpec(validV8())), 'the baseline must pass the '
       + 'submission door').to.equal('ACCEPTED');
   });
 
@@ -137,35 +138,30 @@ describe('spec door order — where the bound on a submitted document comes from
   });
 
   describe('the submission door, which the playground reaches directly', () => {
-    // These two expectations are the defect, pinned. They are written as
-    // "accepts" on purpose: when flux-spec wires assertLegacyWireBounds into the
-    // legacy fromSubmission doors, these fail, and the failure message is the
-    // instruction. Do not relax them to `.to.not.throw()` — that would pass
-    // either way and prove nothing.
-    it('[known gap] accepts an oversized document', async () => {
-      const got = await outcome(() => validateSubmissionSpec(oversizedV8()));
-      expect(got, 'FluxOS\'s submission door now bounds size. flux-spec has wired '
-        + 'assertLegacyWireBounds into the legacy fromSubmission doors, so registration no '
-        + 'longer depends on deserializeSpec running first. Change this to expect '
-        + 'SPEC_TOO_LARGE and delete this note.').to.equal('ACCEPTED');
+    it('refuses an oversized document', async () => {
+      expect(await outcome(() => validateSubmissionSpec(oversizedV8())), 'the playground calls '
+        + 'this door on a raw request body with nothing in front of it').to.equal('SPEC_TOO_LARGE');
     });
 
-    it('[known gap] does not refuse an over-deep document with a verdict', async () => {
-      const got = await outcome(() => validateSubmissionSpec(overDeepV8()));
-      expect(got, 'FluxOS\'s submission door now bounds depth. Change this to expect '
-        + 'DOCUMENT_TOO_DEEP and delete this note.').to.not.equal('DOCUMENT_TOO_DEEP');
+    it('refuses an over-deep document', async () => {
+      expect(await outcome(() => validateSubmissionSpec(overDeepV8())), 'an unbounded depth here '
+        + 'is a stack overflow, not a verdict').to.equal('DOCUMENT_TOO_DEEP');
     });
   });
 
-  describe('the consequence, stated so a reorder cannot pass silently', () => {
-    it('the wire door refuses what the submission door accepts', async () => {
+  describe('the two doors agree, so no route depends on its call order', () => {
+    it('gives the same verdict on an oversized document', async () => {
       const viaWire = await outcome(() => deserializeSpec(oversizedV8()));
       const viaSubmission = await outcome(() => validateSubmissionSpec(oversizedV8()));
+      expect(viaSubmission, 'the doors disagree about the same document, so whether a route is '
+        + 'bounded now depends on which door it reaches first').to.equal(viaWire);
+    });
 
-      expect(viaWire).to.equal('SPEC_TOO_LARGE');
-      expect(viaSubmission, 'the two doors disagree about the same document, which is why the '
-        + 'order matters: appSubmission.js calls deserializeSpec first and is bounded, '
-        + 'playgroundService.js does not and is bounded by nothing').to.not.equal(viaWire);
+    it('gives the same verdict on an over-deep document', async () => {
+      const viaWire = await outcome(() => deserializeSpec(overDeepV8()));
+      const viaSubmission = await outcome(() => validateSubmissionSpec(overDeepV8()));
+      expect(viaSubmission, 'the doors disagree about the same document, so whether a route is '
+        + 'bounded now depends on which door it reaches first').to.equal(viaWire);
     });
   });
 });
