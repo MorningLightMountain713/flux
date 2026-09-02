@@ -7,6 +7,7 @@ const {
   adoptFrom,
   highestEpochSeen,
   prepareOutcome,
+  openingOutcome,
   acceptOutcome,
   safeUntilMs,
   holderStateAt,
@@ -97,6 +98,57 @@ describe('quorumGrant grantClientCore', () => {
       const no = { ok: false, code: 'superseded', promisedEpoch: 5 };
       expect(acceptOutcome([yes, yes, yes], 3).granted).to.equal(true);
       expect(acceptOutcome([yes, yes, no], 3).granted).to.equal(false);
+    });
+  });
+
+  // The running node's question inside the activation window
+  // (ACTIVATION_CROSSING_DESIGN.md §2.5): would a quorum promise right now,
+  // and if not, when would one? The figure a quorum opens at is the
+  // quorum-th smallest opening, never the largest taught - one restarted
+  // referee beside an open quorum is an open committee.
+  describe('the opening — what a probe says about the committee\'s openness', () => {
+    const promise = { ok: true, promised: true, promisedEpoch: 0, accepted: null };
+    const behind = { ok: false, code: 'superseded', promisedEpoch: 8, accepted: null };
+    const draining = (retryAfterMs) => ({ ok: false, code: 'draining', retryAfterMs, promisedEpoch: 0, accepted: null });
+    const cooling = (retryAfterMs) => ({ ok: false, code: 'lock_delay', retryAfterMs });
+
+    it('a quorum of promises is open now', () => {
+      const outcome = openingOutcome([promise, promise, draining(100000)], 2);
+      expect(outcome.open).to.equal(true);
+      expect(outcome.retryAfterMs).to.equal(0);
+    });
+
+    it('an epoch behind is an open door, not a shut one', () => {
+      // the shield and the lock-delay are judged before the epoch, so
+      // `superseded` means only that a higher epoch would be promised
+      const outcome = openingOutcome([behind, behind, null], 2);
+      expect(outcome.open).to.equal(true);
+      expect(outcome.highestEpoch).to.equal(8);
+    });
+
+    it('the figure a quorum opens at is the quorum-th smallest opening, not the largest taught', () => {
+      const outcome = openingOutcome([promise, draining(100000), draining(200000)], 2);
+      expect(outcome.open).to.equal(false);
+      expect(outcome.retryAfterMs).to.equal(100000);
+    });
+
+    it('a lock-delay teaches the same way a drain does', () => {
+      const outcome = openingOutcome([cooling(4000), cooling(9000), promise], 3);
+      expect(outcome.open).to.equal(false);
+      expect(outcome.retryAfterMs).to.equal(9000);
+    });
+
+    it('fewer than a quorum of openings teaches nothing - the answer is a re-probe', () => {
+      const outcome = openingOutcome([draining(5000), { ok: false, code: 'unavailable' }], 2);
+      expect(outcome.open).to.equal(false);
+      expect(outcome.retryAfterMs).to.equal(0);
+    });
+
+    it('silence, a shield and an unavailable cell are never openings', () => {
+      const shield = { ok: false, code: 'incumbent_active', accepted: { epoch: 3, grantee: 'x:0', mode: 'held' } };
+      const outcome = openingOutcome([shield, { ok: false, code: 'unavailable' }, undefined, promise], 2);
+      expect(outcome.open).to.equal(false);
+      expect(outcome.retryAfterMs).to.equal(0);
     });
   });
 

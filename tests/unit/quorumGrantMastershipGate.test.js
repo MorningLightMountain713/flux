@@ -417,6 +417,148 @@ describe('quorumGrant mastershipGrantGate', () => {
     });
   });
 
+  // A refused running node inside the window never retries at random
+  // (ACTIVATION_CROSSING_DESIGN.md §2.5): it retries at the time the referee
+  // taught when the refusal carried one, and re-probes after one ask timeout
+  // when it taught nothing - the sync gate, where nobody knows when a chain
+  // view catches up. The attempt prepares only on an open quorum. Standbys
+  // keep the jittered pursuit for steady-state work; that was never the
+  // problem.
+  describe('the retry inside the window: at the taught time, or a re-probe after one ask timeout, never at random', () => {
+    const ACTIVATE_AT = 2100000;
+    const ASK_TIMEOUT = 5000;
+    let clock;
+
+    function windowGate({ height }) {
+      return proxyquire('../../ZelBack/src/services/appLifecycle/mastershipGrantGate', {
+        config: {
+          fluxapps: {
+            quorumGrantMastership: true,
+            quorumGrantActivationHeight: ACTIVATE_AT,
+            quorumGrantPreWindowBlocks: 40,
+            quorumGrantPursuitIntervalMs: 30000,
+            quorumGrantHeldTtlMs: 150000,
+            quorumGrantAskTimeoutMs: ASK_TIMEOUT,
+          },
+        },
+        '../daemonService/daemonServiceMiscRpcs': {
+          isDaemonSynced: () => ({ data: { height, synced: true } }),
+        },
+      });
+    }
+
+    // the pursuit's own await chain (operator state, docker, record) runs on
+    // real microtasks and immediates; only the timers are faked
+    async function settle() {
+      for (let i = 0; i < 8; i += 1) {
+        // eslint-disable-next-line no-await-in-loop
+        await new Promise(setImmediate);
+      }
+    }
+
+    beforeEach(() => {
+      clock = sinon.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+      dockerService.dockerContainerInspect.resolves({ State: { Running: true } });
+    });
+
+    afterEach(() => {
+      clock.restore();
+    });
+
+    it('the window attempt prepares only on an open quorum; the built pursuit at the height does not', async () => {
+      const gate = windowGate({ height: ACTIVATE_AT - 5 });
+      await gate.grantVerdict(IDENTIFIER, activeStandbyComp());
+      await settle();
+      expect(grantClient.acquire.calledOnce).to.equal(true);
+      expect(grantClient.acquire.firstCall.args[1].prepareOnlyIfOpen, 'a probe that prepares only on a promising quorum').to.equal(true);
+
+      grantClient.acquire.resetHistory();
+      const governing = windowGate({ height: ACTIVATE_AT });
+      await governing.grantVerdict(IDENTIFIER, activeStandbyComp());
+      await settle();
+      expect(grantClient.acquire.calledOnce).to.equal(true);
+      expect(grantClient.acquire.firstCall.args[1].prepareOnlyIfOpen, 'the built pursuit is unchanged').to.not.equal(true);
+    });
+
+    it('a refusal that taught a figure is retried at that figure, not at the pursuit jitter', async () => {
+      grantClient.acquire.resolves({ granted: false, retryAfterMs: 7000 });
+      const gate = windowGate({ height: ACTIVATE_AT - 5 });
+      await gate.grantVerdict(IDENTIFIER, activeStandbyComp());
+      await settle();
+      expect(grantClient.acquire.calledOnce).to.equal(true);
+
+      await clock.tickAsync(6999);
+      await settle();
+      expect(grantClient.acquire.calledOnce, 'not a millisecond before the taught time').to.equal(true);
+      await clock.tickAsync(1);
+      await settle();
+      expect(grantClient.acquire.calledTwice, 'the retry lands at the taught figure').to.equal(true);
+    });
+
+    it('a refusal that taught nothing is re-probed after one ask timeout', async () => {
+      grantClient.acquire.resolves({ granted: false, reason: 'no open quorum', retryAfterMs: 0 });
+      const gate = windowGate({ height: ACTIVATE_AT - 5 });
+      await gate.grantVerdict(IDENTIFIER, activeStandbyComp());
+      await settle();
+      expect(grantClient.acquire.calledOnce).to.equal(true);
+
+      await clock.tickAsync(ASK_TIMEOUT - 1);
+      await settle();
+      expect(grantClient.acquire.calledOnce).to.equal(true);
+      await clock.tickAsync(1);
+      await settle();
+      expect(grantClient.acquire.calledTwice, 'one ask timeout, then a re-probe').to.equal(true);
+    });
+
+    it('a retry is one per key, and it keeps retrying until something is learned', async () => {
+      grantClient.acquire.resolves({ granted: false, reason: 'no open quorum', retryAfterMs: 0 });
+      const gate = windowGate({ height: ACTIVATE_AT - 5 });
+      await gate.grantVerdict(IDENTIFIER, activeStandbyComp());
+      await gate.masterIntent(IDENTIFIER, activeStandbyComp());
+      await settle();
+      expect(grantClient.acquire.calledOnce, 'the seams share one pursuit').to.equal(true);
+
+      await clock.tickAsync(ASK_TIMEOUT);
+      await settle();
+      await clock.tickAsync(ASK_TIMEOUT);
+      await settle();
+      expect(grantClient.acquire.callCount, 'a re-probe per ask timeout, one at a time').to.equal(3);
+    });
+
+    it('a refusal by a live incumbent is not retried - the record will name the holder', async () => {
+      grantClient.acquire.resolves({ granted: false, incumbent: { grantee: 'other:0', epoch: 3 } });
+      const gate = windowGate({ height: ACTIVATE_AT - 5 });
+      await gate.grantVerdict(IDENTIFIER, activeStandbyComp());
+      await settle();
+      await clock.tickAsync(ASK_TIMEOUT * 4);
+      await settle();
+      expect(grantClient.acquire.calledOnce).to.equal(true);
+    });
+
+    it('a retry re-reads docker: a node that stopped running the container stops asking', async () => {
+      grantClient.acquire.resolves({ granted: false, reason: 'no open quorum', retryAfterMs: 0 });
+      const gate = windowGate({ height: ACTIVATE_AT - 5 });
+      await gate.grantVerdict(IDENTIFIER, activeStandbyComp());
+      await settle();
+      expect(grantClient.acquire.calledOnce).to.equal(true);
+
+      dockerService.dockerContainerInspect.resolves({ State: { Running: false } });
+      await clock.tickAsync(ASK_TIMEOUT);
+      await settle();
+      expect(grantClient.acquire.calledOnce, 'the rule is re-asked of docker on every attempt').to.equal(true);
+    });
+
+    it('at the height a refusal is left to the pursuit jitter, as before', async () => {
+      grantClient.acquire.resolves({ granted: false, retryAfterMs: 7000 });
+      const gate = windowGate({ height: ACTIVATE_AT });
+      await gate.grantVerdict(IDENTIFIER, activeStandbyComp());
+      await settle();
+      await clock.tickAsync(7000);
+      await settle();
+      expect(grantClient.acquire.calledOnce).to.equal(true);
+    });
+  });
+
   // A1. The plane's whole clock-rate-skew budget is the gap between the
   // demotion slack plus the container stop and the grantors' lock-delay -
   // §7's TTL:deadline ratio is 1:1 in the code and carries none of it. The code
