@@ -185,36 +185,18 @@ function pursuitIntervalMs() {
 }
 
 /**
- * How long a node that is NOT running the component waits before pursuing a COLD
- * key - one no grant has ever been issued for. Derived, not chosen, from the two
- * constants that actually govern the race:
- *
- *   daemonInfoIntervalMs   the worst case for NOTICING the activation height. A node
- *                          on the push path has the tip within milliseconds; one
- *                          whose daemon does not publish the topic is polling, and
- *                          can be a full interval behind. The incumbent may be the
- *                          late one.
- *   askTimeoutMs x 3       a healthy acquisition, with margin. One ask round is a
- *                          single timeout.
- *
- * Deliberately NOT sized to cover an acquisition that has to fall through relay and
- * witness (~7 timeouts): that only happens to an incumbent which is partitioned or
- * whose committee is unreachable, and a standby taking over then is the outcome you
- * want, not a failure to prevent.
- */
-/**
  * Whether THIS node is running the component right now — the local half of the
  * incumbent question, and the only half that can be asked without an opinion about
  * another node. Docker is the authority rather than any record: the point is what is
  * actually serving, not what something believes should be.
  *
  * Unreadable docker answers false. A node that cannot see its own containers should
- * not claim the head start, and the fallback (waiting like a standby) is the safe
- * side of that error.
+ * not claim to run the component, and waiting for the height like a standby is the
+ * safe side of that error.
  *
  * It reports WHY, not just what. `running: false` has three causes — no such
- * container, a stopped one, and a docker that would not answer — and the head
- * start treats all three the same while a diagnosis cannot: a node that answers
+ * container, a stopped one, and a docker that would not answer — and the window
+ * rule treats all three the same while a diagnosis cannot: a node that answers
  * false because the name it looked up is not the name docker holds is a lookup
  * bug, and one that answers false because it genuinely does not run the component
  * is the rule working. The lookup name is reported alongside the answer so the two
@@ -238,14 +220,6 @@ async function localComponentState(identifier) {
   }
 }
 
-function coldKeyHeadStartMs() {
-  const override = config.fluxapps.quorumGrantIncumbentHeadStartMs;
-  if (Number.isFinite(override)) return override;
-  const noticing = config.fluxapps.daemonInfoIntervalMs ?? 30_000;
-  const acquiring = (config.fluxapps.quorumGrantAskTimeoutMs ?? 5_000) * 3;
-  return noticing + acquiring;
-}
-
 function heldTtlMs() {
   return config.fluxapps.quorumGrantHeldTtlMs ?? 150_000;
 }
@@ -257,25 +231,6 @@ let activationAnnounced = false;
 
 // key -> monotonic ms of the last pursuit kick, jitter-spread
 const pursuits = new Map();
-
-// key -> monotonic ms this node first saw the key with no grant ever issued. The
-// head start below is measured from here rather than from process start, so a node
-// that joins later does not get to skip the wait.
-const coldSince = new Map();
-
-// keys whose cold pursuit deferred for the activation drain: the head start
-// runs only while the register it races is OPEN, so the first pursuit past
-// the lift re-bases the clock instead of inheriting below-lift burn.
-const activationDrainSeen = new Set();
-
-// The activation drain's lift as THIS node's view sees it, or null when no
-// activation is scheduled. The grantors refuse every cold-key seat below it.
-function activationLiftHeight() {
-  const activateAt = activationHeight();
-  if (activateAt === null) return null;
-  return activateAt + (config.fluxapps.quorumGrantActivationDrainBlocks ?? 20);
-}
-
 
 function keyFor(appName) {
   return `${appName}/${ROLE}`;
@@ -337,65 +292,28 @@ async function acquireUnlessSettled(identifier, appName, key) {
     log.warn(`mastershipGrantGate - operator-state read before pursuing ${key} failed: ${error.message}`);
   }
   try {
-    const record = await messageStore.getMasterleaseRecord(appName, ROLE);
-    const data = record?.data;
-    // A COLD key - no grant has ever been issued for this app. That is the state
-    // every app is in at the activation crossing, because the grantors have no
-    // memory of a regime that never ran, and it is the one moment the plane can
-    // move a master for no reason: with nothing to shield an incumbent, the term
-    // goes to whichever node's pursuit fires first, which is not the node holding
-    // the container. Measured on a 10-node fleet: the app ran on .11 and the term
-    // went to .10.
-    //
-    // Under this scheme exactly ONE node is running the component, and every node
-    // knows locally whether that is itself. So the incumbent goes first and the
-    // rest wait - no cross-node agreement, and no opinion about anyone else, which
-    // is the property the plane requires of everything it decides on. The switch
-    // then inherits what the legacy election decided instead of re-running it.
-    //
-    // A head start, not exclusivity: if the incumbent cannot acquire in that window
-    // it is partitioned or dying, and a standby taking the term is exactly right.
-    // Making it exclusive would leave an app whose master died before the crossing
-    // with no master at all, because the only node allowed to claim it is gone.
-    if (!data?.grantee) {
+    // Below the height the whole rule is this node's own docker: it asks iff
+    // it runs the container (ACTIVATION_CROSSING_DESIGN.md §2.2), cold key or
+    // lapsed term alike. The legacy election still decides who runs there
+    // and the plane follows it - the running node takes its lease early so
+    // the key is warm at the height, and a standby seated below the height
+    // would only be stopped for the running node at it. No clock and no
+    // head start: the fact the 45 s timer stood in for was local all along.
+    // At and past the height nobody is asked: a warm key shields its holder
+    // and a cold one is first come. One line per decision, carrying every
+    // input - a lookup that missed and a node that genuinely does not run
+    // the component are one boolean on this path and must never be one in
+    // the record of it.
+    if (!featureEnabled()) {
       const local = await localComponentState(identifier);
-      // Below the activation drain's lift the register is shut to every
-      // cold-key seat, so a standby's head-start clock must not run there —
-      // a clock burning against a shut register would decide the crossing
-      // by whose tip crossed earliest, not by who runs the container. The
-      // incumbent never defers: its asks are refused grantor-side until the
-      // lift and retried, which is what puts it first in line.
-      if (!local.running) {
-        const liftAt = activationLiftHeight();
-        if (liftAt !== null) {
-          const { height, synced } = daemonServiceMiscRpcs.isDaemonSynced().data ?? {};
-          if (!synced || !Number.isFinite(height) || height < liftAt) {
-            activationDrainSeen.add(key);
-            log.info(`mastershipGrantGate - cold key ${key}: identifier=${identifier} `
-              + `running=false -> DEFER (activation drain until height ${liftAt})`);
-            return;
-          }
-          if (activationDrainSeen.delete(key)) coldSince.set(key, nowMs());
-        }
-      }
-      const firstSeen = coldSince.get(key) ?? nowMs();
-      coldSince.set(key, firstSeen);
-      const waited = nowMs() - firstSeen;
-      const headStart = coldKeyHeadStartMs();
-      const deferring = !local.running && waited < headStart;
-      // One line per pursuit of a cold key, and it carries every input to the
-      // decision. A cold key is rare - an app's birth, and the activation crossing -
-      // so this costs nothing standing, and without it the only observable is which
-      // node ended up with the term, which cannot tell a lookup that missed from a
-      // head start that was too short.
-      log.info(`mastershipGrantGate - cold key ${key}: identifier=${identifier} `
+      log.info(`mastershipGrantGate - ${key} below the height: identifier=${identifier} `
         + `lookup=${local.lookup} found=${local.found} name=${local.name ?? 'none'} `
         + `running=${local.running}${local.error ? ` dockerError=${local.error}` : ''} `
-        + `waited=${waited}ms headStart=${headStart}ms -> ${deferring ? 'DEFER' : 'PURSUE'}`);
-      if (deferring) return;
-    } else {
-      coldSince.delete(key);
+        + `-> ${local.running ? 'ASK' : 'WAIT'}`);
+      if (!local.running) return;
     }
+    const record = await messageStore.getMasterleaseRecord(appName, ROLE);
+    const data = record?.data;
     if (data?.grantee && data.mode === 'held') {
       const self = await generalService.obtainNodeCollateralInformation();
       if (data.grantee !== `${self.txhash}:${self.txindex}`) {
@@ -413,10 +331,10 @@ async function acquireUnlessSettled(identifier, appName, key) {
     log.warn(`mastershipGrantGate - record read before pursuing ${key} failed: ${error.message}`);
   }
 
-  // The head start is a duration, so an acquisition's own duration is what says
-  // whether it can fit inside one. A cold key is founded, not merely asked for -
-  // a committee has to form first - and nothing until now measured how long that
-  // takes against the window the incumbent is given.
+  // An acquisition's own duration is what says whether it fits inside the
+  // window the running node is given before the height. A cold key is founded,
+  // not merely asked for - a committee has to form first - and the log is the
+  // only place that duration is measured.
   const acquireStarted = nowMs();
   log.info(`mastershipGrantGate - acquiring ${key} for ${identifier}`);
   grantClient.acquire(key, {
@@ -566,8 +484,8 @@ async function leaderIsSelf(identifier, appName, isActiveStandby) {
   // DECIDED: a published record names a grantee. On an undecided plane — a
   // cold key at the activation crossing or an app's birth — "not the
   // holder" is true of everybody and fences nobody, and a false verdict
-  // there stops the running incumbent's container, which forfeits the cold-
-  // key head start that exists to let it inherit. A record naming ANYONE —
+  // there stops the running incumbent's container before its acquisition
+  // could seat it. A record naming ANYONE —
   // this node included — fences: a grantee that no longer holds is a
   // corpse, and the fence is for corpses. An unreadable record is no
   // verdict, matching masterIntent's error path; the epoch fencing and the
@@ -782,8 +700,6 @@ function resetForTests(options = {}) {
   activationAnnounced = false;
   timingWarned = false;
   pursuits.clear();
-  coldSince.clear();
-  activationDrainSeen.clear();
   folderDemotions.clear();
   fences.clear();
   liftPolls.clear();
