@@ -10,7 +10,7 @@ import { setSynced } from '../framework/syncthing-control.js';
 import { pauseHostContainer, unpauseHostContainer } from '../framework/container.js';
 import { waitFor, waitForAppInstalled, waitForReconcileActuated, assertNoEvent } from '../framework/wait.js';
 import { dbClient } from '../framework/db-client.js';
-import { getState, advanceBlock } from '../framework/daemon-control.js';
+import { getState, advanceBlock, stopTicker, startTicker } from '../framework/daemon-control.js';
 import { authenticate, signBtcMessage } from '../auth.js';
 import { appOwnerKey } from '../framework/keys.js';
 
@@ -282,6 +282,20 @@ describe('the committee heals its dark seat, and the owner re-deals the walk', f
   it('the owner re-deals the walk: refused under a live term, landing after release-and-stop', async function () {
     this.timeout(600000);
 
+    // The retirement drain below is measured in BLOCKS, and bootAndPeer starts
+    // the ticker whatever tickerAutostart says (handover 09-02C: both quorum
+    // reds were a ticker the suites believed off). Off for the re-roll, so the
+    // three blocks that lift the drain are the three this test advances and
+    // nothing else; back on at the end for whatever follows.
+    await stopTicker();
+    try {
+      await rerollUnderAStoppedChain();
+    } finally {
+      await startTicker();
+    }
+  });
+
+  async function rerollUnderAStoppedChain() {
     const before = await quorumVerdict();
     expect(before, 'a standing grant before the re-roll').to.not.equal(null);
     expect(before.generation).to.equal(0);
@@ -373,5 +387,5 @@ describe('the committee heals its dark seat, and the owner re-deals the walk', f
     // and it stays out of this suite until its safety cell proves.
     const after = await quorumVerdict();
     expect(after.generation, 'one clean generation-1 world').to.equal(1);
-  });
+  }
 });
