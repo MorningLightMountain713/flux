@@ -1324,4 +1324,112 @@ describe('quorumGrant grantorController', () => {
     });
   });
 
+
+  // The teach: every answer names the standing generation for the key, so a
+  // holder or witness that has not synced the owner's record learns it from
+  // whatever it can reach — the refusals included, which are exactly what a
+  // retired world's master keeps hearing. The record itself rides along,
+  // owner-signed, so the learner verifies and stores it the way a broadcast
+  // is stored, never a bare number on trust.
+  describe('the teach — every answer names the standing generation', () => {
+    const RECORD = {
+      type: 'fluxgrantgeneration',
+      version: 1,
+      ip: '10.1.0.1:16127',
+      appName: 'myapp',
+      role: 'master',
+      generation: 2,
+      // named low enough that the world's drain (20 blocks) has lifted at the
+      // fixture's height of 100, so the gates past currency are reachable
+      height: 70,
+      at: 1_750_000_000_000,
+      signature: 'ownersig',
+      broadcastedAt: 1_750_000_000_500,
+    };
+
+    it('a currency 409 carries the standing record, not just its number', async () => {
+      messageStore.getGrantGenerationRecord.resolves({ data: RECORD });
+      const res = fakeRes();
+      await grantorController.prepare(fakeReq(signedAsk('prepare')), res);
+      expect(res.statusCode).to.equal(409);
+      expect(res.body.data.generation).to.equal(2);
+      expect(res.body.data.generationRecord).to.deep.equal(RECORD);
+    });
+
+    it('the serve gates teach too — a stale or syncing cell still says which world stands', async () => {
+      messageStore.getGrantGenerationRecord.resolves({ data: RECORD });
+      daemonServiceMiscRpcs.isDaemonSynced.returns({
+        status: 'success', data: { synced: false, height: 100, header: 130 },
+      });
+      const stale = fakeRes();
+      await grantorController.renew(fakeReq(signedAsk('renew')), stale);
+      expect(stale.statusCode).to.equal(503);
+      expect(stale.body.data.generation).to.equal(2);
+      expect(stale.body.data.generationRecord).to.deep.equal(RECORD);
+
+      daemonServiceMiscRpcs.isDaemonSynced.returns({
+        status: 'success', data: { synced: true, height: 100, header: 100 },
+      });
+      grantorController.registerSyncReadyProvider(() => false);
+      const syncing = fakeRes();
+      await grantorController.renew(fakeReq(signedAsk('renew')), syncing);
+      expect(syncing.statusCode).to.equal(503);
+      expect(syncing.body.data.generation).to.equal(2);
+      expect(syncing.body.data.generationRecord).to.deep.equal(RECORD);
+    });
+
+    it('a holdership 403 teaches — an asker off the app is still told what world it asked in', async () => {
+      messageStore.getGrantGenerationRecord.resolves({ data: RECORD });
+      registryManager.appLocation.resolves([]);
+      const res = fakeRes();
+      await grantorController.prepare(fakeReq(signedAsk('prepare', { generation: 2 })), res);
+      expect(res.statusCode).to.equal(403);
+      expect(res.body.data.generation).to.equal(2);
+      expect(res.body.data.generationRecord).to.deep.equal(RECORD);
+    });
+
+    it('an app the owner never re-rolled teaches generation 0 and no record', async () => {
+      daemonServiceMiscRpcs.isDaemonSynced.returns({
+        status: 'success', data: { synced: false, height: 100, header: 130 },
+      });
+      const res = fakeRes();
+      await grantorController.renew(fakeReq(signedAsk('renew')), res);
+      expect(res.statusCode).to.equal(503);
+      expect(res.body.data.generation).to.equal(0);
+      expect(res.body.data.generationRecord).to.equal(null);
+    });
+
+    it('a refusal before the key is read teaches nothing — there is no key to answer for', async () => {
+      messageStore.getGrantGenerationRecord.resolves({ data: RECORD });
+      const res = fakeRes();
+      await grantorController.prepare(fakeReq(signedAsk('prepare', { key: 'bad key' })), res);
+      expect(res.statusCode).to.equal(400);
+      expect(res.body.data).to.not.have.property('generation');
+      expect(res.body.data).to.not.have.property('generationRecord');
+    });
+
+    it('the record read answers the standing generation record beside the register state', async () => {
+      messageStore.getGrantGenerationRecord.resolves({ data: RECORD });
+      const req = fakeReq({});
+      req.query.key = 'myapp/master';
+      const res = fakeRes();
+      await grantorController.record(req, res);
+      expect(res.statusCode).to.equal(200);
+      expect(res.body.data.generation).to.equal(2);
+      expect(res.body.data.generationRecord).to.deep.equal(RECORD);
+      expect(messageStore.getGrantGenerationRecord.lastCall.args).to.deep.equal(['myapp', 'master']);
+    });
+
+    it('a founder cell read carries no held-world generation — the founder plane teaches through its basis', async () => {
+      messageStore.getGrantGenerationRecord.resolves({ data: RECORD });
+      const req = fakeReq({});
+      req.query.key = FOUNDER_KEY;
+      const res = fakeRes();
+      await grantorController.record(req, res);
+      expect(res.statusCode).to.equal(200);
+      expect(res.body.data).to.not.have.property('generation');
+      expect(res.body.data).to.not.have.property('generationRecord');
+    });
+  });
+
 });
