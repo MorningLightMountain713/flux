@@ -32,6 +32,7 @@ const fluxEventBus = require('../utils/fluxEventBus');
 const fluxShutdowndClient = require('../utils/fluxShutdowndClient');
 const pendingTeardownStore = require('./pendingTeardownStore');
 const meshReconciler = require('../appMesh/meshReconciler');
+const meshOrdinals = require('../appMesh/meshOrdinals');
 const imageCacheRetention = require('./imageCacheRetention');
 const shutdownPlan = require('./shutdownPlan');
 const reconcilerQueue = require('../appMonitoring/reconcilerQueue');
@@ -1221,6 +1222,9 @@ async function executeTeardown(doc, { onStatus = null } = {}) {
     // forbids co-location, so any removal of a mesh identity is the app
     // leaving this node.
     if (identity) {
+      // The app leaves this node: its ordinal goes back to the register for
+      // the next joiner. A restart is not a leave and keeps it.
+      await meshOrdinals.releaseOrdinal(name).catch((e) => log.error(`ordinal release ${name}: ${e.message}`));
       await meshReconciler.removeAppMesh(identity).catch((e) => log.error(`mesh removal ${identity}: ${e.message}`));
     }
   });
