@@ -107,6 +107,45 @@ function prepareOutcome(replies, quorum) {
 }
 
 /**
+ * What a probe round says about the committee's OPENNESS — the running
+ * node's question inside the activation window (ACTIVATION_CROSSING_DESIGN
+ * §2.5): would a quorum promise right now, and if not, when would one?
+ *
+ * A cell is open when it promised, or refused only because the probe's
+ * epoch is behind (`superseded`: the shield and the lock-delay are judged
+ * before the epoch, so it would promise a higher one). A cell that taught a
+ * figure (`lock_delay`, `draining`) opens at that figure. Silence and every
+ * other refusal teach nothing. The figure a quorum opens at is the
+ * quorum-th smallest opening, never the largest taught: one restarted
+ * referee beside an open quorum is an open committee.
+ *
+ * @param {Array<object>} replies one per grantor asked (missing = absent)
+ * @param {number} quorum the committee's quorum
+ * @returns {{open: boolean, retryAfterMs: number, highestEpoch: number}}
+ *   `retryAfterMs` is the figure a quorum opens at, or 0 when it is open now
+ *   or when nothing taught a quorum's opening (re-probe)
+ */
+function openingOutcome(replies, quorum) {
+  const openings = [];
+  (replies || []).forEach((reply) => {
+    if (!reply) return;
+    if ((reply.ok && reply.promised) || reply.code === 'superseded') {
+      openings.push(0);
+    } else if ((reply.code === 'lock_delay' || reply.code === 'draining')
+      && Number.isSafeInteger(reply.retryAfterMs) && reply.retryAfterMs > 0) {
+      openings.push(reply.retryAfterMs);
+    }
+  });
+  openings.sort((a, b) => a - b);
+  const opensAt = openings.length >= quorum ? openings[quorum - 1] : null;
+  return {
+    open: opensAt === 0,
+    retryAfterMs: opensAt ?? 0,
+    highestEpoch: highestEpochSeen(replies),
+  };
+}
+
+/**
  * What a round of accept replies amounts to. "Winning" and "knowing you won"
  * are distinct states — held begins HERE, at the quorum of durable accepts,
  * never at the last prepare.
@@ -393,6 +432,7 @@ module.exports = {
   adoptFrom,
   highestEpochSeen,
   prepareOutcome,
+  openingOutcome,
   acceptOutcome,
   safeUntilMs,
   holderStateAt,

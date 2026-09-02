@@ -558,7 +558,11 @@ const acquiring = new Set(); // keys with an acquisition in flight
  *
  * @param {string} key resource key
  * @param {object} options {mode, ttlMs, fingerprint, committee, onDemoted,
- *   clock, schedule} — `committee` is an already-resolved
+ *   clock, schedule, prepareOnlyIfOpen} — `prepareOnlyIfOpen` is the running
+ *   node's attempt inside the activation window: a probe that goes on to
+ *   prepare only when a quorum is open, answering {granted: false, reason:
+ *   'no open quorum', retryAfterMs} otherwise with the figure a quorum opens
+ *   at (0 = nothing taught, re-probe) and no epoch burnt; `committee` is an already-resolved
  *   {members, quorum, fingerprint, generation} basis used as given: the
  *   founding service resolves the committee ONCE to decide whether to ask
  *   at all, and handing that resolution in keeps the decision basis and the
@@ -728,6 +732,20 @@ async function acquireOnce(key, mode, ttlMs, identity, committee, options) {
   );
   if (mode === 'held' && shield) {
     return { granted: false, incumbent: shield.accepted };
+  }
+
+  // The window attempt prepares only on an open quorum (ACTIVATION_CROSSING_DESIGN
+  // §2.5): the model's poll rule, under which an opening of three ticks of one
+  // stable quorum-set is enough. Preparing into a shut committee would burn
+  // an epoch for nothing and, worse, leave an accept in flight against a
+  // cell that has just gone stale when the doors do open (RESULTS.md row 33).
+  if (options.prepareOnlyIfOpen) {
+    const opening = core.openingOutcome([...probeReplies.values()], quorum);
+    if (!opening.open) {
+      return {
+        granted: false, reason: 'no open quorum', retryAfterMs: opening.retryAfterMs, highestEpoch: opening.highestEpoch,
+      };
+    }
   }
 
   const probeOutcome = core.prepareOutcome([...probeReplies.values()], quorum);
