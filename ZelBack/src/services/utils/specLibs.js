@@ -76,9 +76,15 @@ function assertVersionActivated(version, height) {
  * @param {string} [options.purpose] - Which question is being asked
  *   (a flux-spec ValidationPurpose value; default registration, the strict
  *   one). The spec library refuses unknown purposes at the door.
+ * @param {boolean} [options.encrypted] - whether this submission will be
+ *   broadcast sealed. Fields that must never travel in the clear — `imageAuth`,
+ *   `secretEnvironment`, a content reference — are refused unless this says
+ *   true, and silence counts as false. The spec cannot answer this about
+ *   itself: for v9 the node decides whether to seal, so only the caller holding
+ *   that decision can state it.
  * @returns {Promise<FluxAppSpecBase>} The validated spec class instance
  */
-async function validateSubmissionSpec(spec, { height, purpose } = {}) {
+async function validateSubmissionSpec(spec, { height, purpose, encrypted } = {}) {
   await getSpecBackend();
   const { FluxAppSpecBase } = await getSpec();
   const VersionClass = spec && FluxAppSpecBase.getVersionClass(spec.version);
@@ -86,7 +92,9 @@ async function validateSubmissionSpec(spec, { height, purpose } = {}) {
     throw new Error(`Unsupported Flux App specification version: ${spec && spec.version}`);
   }
   assertVersionActivated(spec.version, height);
-  return VersionClass.fromSubmission(spec, purpose === undefined ? {} : { purpose });
+  const context = { encrypted: encrypted === true };
+  if (purpose !== undefined) context.purpose = purpose;
+  return VersionClass.fromSubmission(spec, context);
 }
 
 /**

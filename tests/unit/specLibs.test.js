@@ -114,4 +114,71 @@ describe('specLibs — how a spec validation failure reaches the caller', () => 
       expect(err.message).to.match(/Unsupported Flux App specification version/);
     }
   });
+
+  // The rule that stops a registry password reaching the chain, asked at the door
+  // that decides. The library has always had the rule; until it was wired here,
+  // nothing in FluxOS ever passed the flag that arms it, so it had never once run
+  // on a real submission. Every existing test drove `validateSemantics` by hand
+  // and checked the rule, which is a different question from whether anyone asks it.
+  describe('encryption-forcing fields at the submission door', () => {
+    const withImageAuth = () => ({
+      version: 9,
+      name: 'credentialtest',
+      description: 'x',
+      owner: '16dNCFf7nR3nx5iwn2RQMBw6KcJXkE3JC1',
+      instances: 3,
+      ttl: 86400,
+      contacts: { email: ['admin@example.com'] },
+      components: {
+        web: {
+          name: 'web',
+          image: 'nginx:latest',
+          cpu: 0.5,
+          memory: 300,
+          rootFsGb: 2,
+          // A literal registry credential. From v9 this field is plaintext: the
+          // protection moved off the field and onto the sealed spec.
+          imageAuth: 'registryuser:hunter2',
+          persistentStorage: {
+            sizeGb: 5,
+            mounts: { '/data': { source: 'data', destination: '/data' } },
+            sync: null,
+          },
+        },
+      },
+    });
+
+    async function refusal(options) {
+      try {
+        await validateSubmissionSpec(withImageAuth(), options);
+        return null;
+      } catch (err) {
+        return err;
+      }
+    }
+
+    it('refuses imageAuth when the caller states nothing about encryption', async () => {
+      const err = await refusal(undefined);
+      expect(err, 'silence must not accept a spec that publishes a password')
+        .to.be.instanceOf(ValidationError);
+      expect(err.errors.map((e) => e.code)).to.include('ENCRYPTION_REQUIRED');
+    });
+
+    it('refuses imageAuth on a submission stated to be cleartext', async () => {
+      const err = await refusal({ encrypted: false });
+      expect(err).to.be.instanceOf(ValidationError);
+      expect(err.errors.map((e) => e.code)).to.include('ENCRYPTION_REQUIRED');
+    });
+
+    it('names the field, so the submitter knows what to remove or seal', async () => {
+      const err = await refusal(undefined);
+      expect(err.message).to.match(/imageAuth/);
+      expect(err.message).to.match(/encrypted spec/);
+    });
+
+    it('accepts imageAuth once the caller states the spec will be sealed', async () => {
+      const err = await refusal({ encrypted: true });
+      expect(err, err && err.message).to.equal(null);
+    });
+  });
 });
