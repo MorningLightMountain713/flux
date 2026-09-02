@@ -1377,6 +1377,77 @@ describe('FluxPeerManager tests', () => {
     });
   });
 
+  describe('validateAndAddInbound peering gate', () => {
+    // The node-down plane installs the gate when it starts. A peering inbound
+    // from a subject the gate holds out is refused before it registers; an
+    // ephemeral never meets the gate, because a quarantined juror's verdict
+    // must still reach the pile (quarantine never feeds the jury math).
+    const settle = () => new Promise((resolve) => { setImmediate(() => setImmediate(resolve)); });
+
+    it('refuses a peering inbound the gate holds out, and registers nothing', async () => {
+      manager.numberOfFluxNodes = 10000;
+      const gate = sinon.stub().resolves({ admitted: false, reason: 'quarantined', subject: 'x:0' });
+      manager.setInboundGate(gate);
+      const ws = createMockWs('8.8.8.8');
+      manager.validateAndAddInbound(ws, '16127', createMockReq('8.8.8.8'));
+      await settle();
+
+      expect(gate.args).to.deep.equal([['8.8.8.8:16127']]);
+      expect(ws.close.args).to.have.length(1);
+      expect(ws.close.args[0][0]).to.equal(CLOSE_CODES.QUARANTINED);
+      expect(manager.has('8.8.8.8:16127')).to.equal(false);
+      expect(manager.inboundCount).to.equal(0);
+    });
+
+    it('admits what the gate admits', async () => {
+      manager.numberOfFluxNodes = 10000;
+      manager.setInboundGate(sinon.stub().resolves({ admitted: true, reason: 'not_quarantined' }));
+      const ws = createMockWs('8.8.8.8');
+      manager.validateAndAddInbound(ws, '16127', createMockReq('8.8.8.8'));
+      await settle();
+      expect(manager.has('8.8.8.8:16127')).to.equal(true);
+      expect(manager.inboundCount).to.equal(1);
+    });
+
+    it('a gate that fails admits: an unknown answer must not starve the node of its inbound', async () => {
+      manager.numberOfFluxNodes = 10000;
+      manager.setInboundGate(sinon.stub().rejects(new Error('store down')));
+      const ws = createMockWs('8.8.8.8');
+      manager.validateAndAddInbound(ws, '16127', createMockReq('8.8.8.8'));
+      await settle();
+      expect(manager.has('8.8.8.8:16127')).to.equal(true);
+    });
+
+    it('an ephemeral inbound never meets the gate', async () => {
+      manager.numberOfFluxNodes = 10000;
+      const gate = sinon.stub().resolves({ admitted: false, reason: 'quarantined', subject: 'x:0' });
+      manager.setInboundGate(gate);
+      const ws = createMockWs('8.8.8.8');
+      manager.validateAndAddInbound(ws, '16127', createMockReq('8.8.8.8', { 'x-flux-ephemeral': '1' }));
+      await settle();
+      expect(gate.callCount).to.equal(0);
+      expect(ws.onmessage).to.be.a('function');
+    });
+
+    it('clearing the gate restores the ungated path', () => {
+      manager.numberOfFluxNodes = 10000;
+      manager.setInboundGate(sinon.stub().resolves({ admitted: false, reason: 'quarantined', subject: 'x:0' }));
+      manager.setInboundGate(null);
+      manager.validateAndAddInbound(createMockWs('8.8.8.8'), '16127', createMockReq('8.8.8.8'));
+      expect(manager.has('8.8.8.8:16127')).to.equal(true);
+    });
+
+    it('a quarantined close backs the target off, where an ordinary remote close does not', () => {
+      manager.add(createMockWs('8.8.8.8'), '8.8.8.8', '16127', { source: PEER_SOURCE.DETERMINISTIC });
+      manager.remove('8.8.8.8:16127', CLOSE_CODES.QUARANTINED);
+      expect(manager.shouldAttemptConnection('8.8.8.8', '16127')).to.equal(false);
+
+      manager.add(createMockWs('9.9.9.9'), '9.9.9.9', '16127', { source: PEER_SOURCE.DETERMINISTIC });
+      manager.remove('9.9.9.9:16127', 1006);
+      expect(manager.shouldAttemptConnection('9.9.9.9', '16127')).to.equal(true);
+    });
+  });
+
   describe('validateAndAddInbound ephemeral acceptance', () => {
     // The receiving half of openEphemeralConnection: a dialer that declared
     // itself transient must get a reader even when the pair is already held.

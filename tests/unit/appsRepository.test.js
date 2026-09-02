@@ -23,6 +23,9 @@ describe('appsRepository', () => {
   let mockDb;
   let eventCollection;
   let runningCounts;
+  let moveStamps;
+  let nodeDownRows;
+  let listedNodes;
 
   before(async function loadLibrary() {
     // The first fromSubmission compiles the ajv schemas.
@@ -58,9 +61,20 @@ describe('appsRepository', () => {
     // countRunningByApp reads the event log directly off the collection handle:
     // resolveAddressMoves does a find, the count pipeline an aggregate.
     runningCounts = [];
+    moveStamps = [];
+    nodeDownRows = [];
+    listedNodes = [];
+    // The collection answers by query, as the real one does: the nodedown
+    // grouping the quarantine read asks for, the apprunning timestamps the
+    // address-move resolver asks for, and the location pipeline itself.
     eventCollection = {
       find: sinon.stub().returns({ toArray: async () => [] }),
-      aggregate: sinon.stub().callsFake(() => ({ toArray: async () => runningCounts })),
+      aggregate: sinon.stub().callsFake((pipeline) => {
+        const match = pipeline[0]?.$match ?? {};
+        if (match.type === 'nodedown') return { toArray: async () => nodeDownRows };
+        if (match.type === 'apprunning') return { toArray: async () => moveStamps };
+        return { toArray: async () => runningCounts };
+      }),
     };
     mockDb = { db: sinon.stub().returns({ collection: sinon.stub().returns(eventCollection) }) };
 
@@ -132,6 +146,9 @@ describe('appsRepository', () => {
       },
       './appsMaintenance': {
         expireHeightExpr: sinon.stub().returns({ $add: ['$height', '$expire'] }),
+      },
+      '../networkStateService': {
+        networkState: () => listedNodes,
       },
     });
   });
@@ -457,10 +474,8 @@ describe('appsRepository', () => {
           { ip: 'old:16127', broadcastedAt: new Date(now), data: { newIP: 'new:16127' } },
         ],
       });
-      // First aggregate is resolveAddressMoves' timestamp lookup, second is the pipeline.
-      eventCollection.aggregate
-        .onFirstCall().returns({ toArray: async () => [{ _id: 'old:16127', latest: new Date(now - 1000) }] })
-        .onSecondCall().returns({ toArray: async () => [{ _id: 'old:16127' }] });
+      moveStamps = [{ _id: 'old:16127', latest: new Date(now - 1000) }];
+      runningCounts = [{ _id: 'old:16127' }];
 
       const result = await appsRepository.listRunningAddresses();
       expect(result).to.deep.equal(['new:16127']);
@@ -475,18 +490,73 @@ describe('appsRepository', () => {
           { ip: 'old:16127', broadcastedAt: new Date(now), data: { newIP: 'new:16127' } },
         ],
       });
-      eventCollection.aggregate
-        .onFirstCall().returns({
-          toArray: async () => [
-            { _id: 'old:16127', latest: new Date(now - 1000) },
-            // not newer than the pre-move announcement, so this translates, not supersedes
-            { _id: 'new:16127', latest: new Date(now - 2000) },
-          ],
-        })
-        .onSecondCall().returns({ toArray: async () => [{ _id: 'old:16127' }, { _id: 'new:16127' }] });
+      moveStamps = [
+        { _id: 'old:16127', latest: new Date(now - 1000) },
+        // not newer than the pre-move announcement, so this translates, not supersedes
+        { _id: 'new:16127', latest: new Date(now - 2000) },
+      ];
+      runningCounts = [{ _id: 'old:16127' }, { _id: 'new:16127' }];
 
       const result = await appsRepository.listRunningAddresses();
       expect(result).to.deep.equal(['new:16127']);
+    });
+  });
+
+  describe('severe quarantine in the derivation', () => {
+    // The location pipeline is the aggregate whose first stage matches on the
+    // base $or, alone or as the first clause of an $and; the exclusion is the
+    // $nor clause beside it.
+    function announcementExclusion() {
+      const call = eventCollection.aggregate.args.find(([pipeline]) => {
+        const match = pipeline[0]?.$match;
+        return Boolean(match && (match.$or || match.$and));
+      });
+      expect(call, 'the location pipeline ran').to.exist;
+      const match = call[0][0].$match;
+      const clauses = match.$and ?? [match];
+      const nor = clauses.find((clause) => clause.$nor)?.$nor;
+      return nor ? nor[0].ip.$in : [];
+    }
+    const hour = 60 * 60 * 1000;
+
+    it('a quarantined subject\'s announcements cannot yield a row, at the address the list carries now', async () => {
+      const now = Date.now();
+      nodeDownRows = [{ _id: 'x:0', ip: 'old:16127', expiries: [new Date(now + hour), new Date(now + 2 * hour), new Date(now + 3 * hour)] }];
+      listedNodes = [{ txhash: 'x', outidx: 0, ip: 'moved:16127' }];
+      await appsRepository.listRunningAddresses();
+      expect(announcementExclusion()).to.deep.equal(['moved:16127']);
+    });
+
+    it('an unlisted subject is excluded at the address its certificates recorded', async () => {
+      const now = Date.now();
+      nodeDownRows = [{ _id: 'x:0', ip: 'old:16127', expiries: [new Date(now + hour), new Date(now + 2 * hour), new Date(now + 3 * hour)] }];
+      await appsRepository.countRunningByApp();
+      expect(announcementExclusion()).to.deep.equal(['old:16127']);
+    });
+
+    it('below the threshold nothing is excluded', async () => {
+      const now = Date.now();
+      nodeDownRows = [{ _id: 'x:0', ip: 'old:16127', expiries: [new Date(now + hour), new Date(now + 2 * hour)] }];
+      listedNodes = [{ txhash: 'x', outidx: 0, ip: 'old:16127' }];
+      await appsRepository.listRunningAddresses();
+      expect(announcementExclusion()).to.deep.equal([]);
+    });
+
+    it('a superseded move and a quarantine exclude through the same door', async () => {
+      const now = Date.now();
+      eventCollection.find.returns({
+        toArray: async () => [
+          { ip: 'old:16127', broadcastedAt: new Date(now), data: { newIP: 'new:16127' } },
+        ],
+      });
+      moveStamps = [
+        { _id: 'old:16127', latest: new Date(now - 2000) },
+        { _id: 'new:16127', latest: new Date(now - 1000) },
+      ];
+      nodeDownRows = [{ _id: 'q:0', ip: 'q:16127', expiries: [new Date(now + hour), new Date(now + 2 * hour), new Date(now + 3 * hour)] }];
+      listedNodes = [{ txhash: 'q', outidx: 0, ip: 'q:16127' }];
+      await appsRepository.appLocationFromEvents({});
+      expect(announcementExclusion().sort()).to.deep.equal(['old:16127', 'q:16127']);
     });
   });
 

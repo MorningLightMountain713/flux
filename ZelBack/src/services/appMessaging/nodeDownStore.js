@@ -11,6 +11,7 @@ const { APP_STATE_EVENT_TYPES } = require('./messageStore');
 const { globalAppStateEvents, CLOCK_SKEW_ALLOWANCE_MS } = require('../utils/appConstants');
 const {
   verifyCertificate,
+  quarantineFromExpiries,
   RECORD_LIFETIME_MS,
   VERDICT_LIFETIME_BLOCKS,
   FUTURE_BLOCKS_TOLERANCE,
@@ -101,20 +102,36 @@ function eventsCollection() {
   return db.db(config.database.appsglobal.database).collection(globalAppStateEvents);
 }
 
+const RECORD_STATE = Object.freeze({
+  STANDING: 'standing',
+  REFUTED: 'refuted',
+  NONE: 'none',
+});
+
+/**
+ * The subject's unexpired nodedown rows. Expiry is checked here as well as
+ * by the TTL index — a TTL sweep lags deletion by up to a minute.
+ *
+ * @param {string} subject collateral outpoint
+ * @returns {Promise<Array<object>>}
+ */
+async function liveRowsFor(subject) {
+  const rows = await eventsCollection()
+    .find({ type: APP_STATE_EVENT_TYPES.NODEDOWN, subject })
+    .toArray();
+  const now = Date.now();
+  return rows.filter((row) => new Date(row.expireAt).getTime() > now);
+}
+
 /**
  * The subject's freshest unexpired nodedown row and the announcement that
- * refuted it, if any. Expiry is checked here as well as by the TTL index —
- * a TTL sweep lags deletion by up to a minute.
+ * refuted it, if any.
  *
  * @param {string} subject collateral outpoint
  * @returns {Promise<{row: object, refutation: object|null} | null>}
  */
 async function latestRecordFor(subject) {
-  const rows = await eventsCollection()
-    .find({ type: APP_STATE_EVENT_TYPES.NODEDOWN, subject })
-    .toArray();
-  const now = Date.now();
-  const live = rows.filter((row) => new Date(row.expireAt).getTime() > now);
+  const live = await liveRowsFor(subject);
   if (!live.length) return null;
   const row = live.reduce((newest, candidate) => (
     new Date(candidate.broadcastedAt) > new Date(newest.broadcastedAt) ? candidate : newest
@@ -214,6 +231,52 @@ async function standingCertificateFor(outpoint) {
 }
 
 /**
+ * Where the subject's latest record stands, named by its row key so a
+ * reader can tell one record's lapse from the next record's.
+ *
+ * @param {string} subject collateral outpoint
+ * @returns {Promise<{state: string, key: string|null}>} state is a RECORD_STATE
+ */
+async function recordStateFor(subject) {
+  const held = await latestRecordFor(subject);
+  if (!held) return { state: RECORD_STATE.NONE, key: null };
+  return {
+    state: held.refutation ? RECORD_STATE.REFUTED : RECORD_STATE.STANDING,
+    key: held.row.dedupKey,
+  };
+}
+
+/**
+ * The severe quarantine verdict for a subject, counted over every unexpired
+ * certification row — refuted ones included, since each is a death the
+ * network certified. Rows are synced, so every node counts the same.
+ *
+ * @param {string} subject collateral outpoint
+ * @returns {Promise<{quarantined: boolean, count: number, liftsAt: number|null}>}
+ */
+async function quarantineFor(subject) {
+  const live = await liveRowsFor(subject);
+  return quarantineFromExpiries(live.map((row) => new Date(row.expireAt).getTime()), Date.now());
+}
+
+/**
+ * The same verdict looked up by a node's listed address — what a node has
+ * for itself before it knows its outpoint. An address the list does not
+ * carry has no rows to count.
+ *
+ * @param {string} socketAddress ip or ip:port
+ * @returns {Promise<{quarantined: boolean, count: number, liftsAt: number|null}>}
+ */
+async function quarantineForAddress(socketAddress) {
+  const wanted = normalizeSocketAddress(socketAddress);
+  const listed = wanted
+    ? networkStateService.networkState().find((node) => normalizeSocketAddress(node.ip) === wanted)
+    : undefined;
+  if (!listed) return { quarantined: false, count: 0, liftsAt: null };
+  return quarantineFor(`${listed.txhash}:${listed.outidx}`);
+}
+
+/**
  * The announcement that revoked the subject's latest certificate, or null —
  * a merely-lapsed certificate has none, so its cancellation stands.
  *
@@ -263,9 +326,13 @@ function registerWithGrantPlane() {
 }
 
 module.exports = {
+  RECORD_STATE,
   verifyNodeDownCertificate,
   handleNodeDownEvent,
   standingCertificateFor,
+  recordStateFor,
+  quarantineFor,
+  quarantineForAddress,
   refutationFor,
   verifyRefutation,
   registerWithGrantPlane,

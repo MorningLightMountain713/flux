@@ -9,6 +9,9 @@ const setReconciler = require('../appMessaging/setReconciler');
 const MongoStorageProvider = require('../providers/MongoStorageProvider');
 const { expireHeightExpr } = require('./appsMaintenance');
 const { mintAppUuid } = require('../utils/appIdentity');
+const networkStateService = require('../networkStateService');
+const { quarantineFromExpiries } = require('../utils/nodeDownCertificates');
+const { normalizeSocketAddress } = require('../utils/socketAddressUtils');
 const {
   globalAppsInformation,
   localAppsInformation,
@@ -1295,9 +1298,12 @@ async function upsertAppInstallingErrorLocations(records) {
  * @param {string|null} opts.ip
  * @param {Array<string>} opts.supersededIps addresses whose announcement the node has
  *   already replaced from a new address; excluded outright so they cannot yield a row.
+ * @param {Array<string>} opts.quarantinedIps addresses of subjects under severe
+ *   quarantine; their announcements are ignored, so their certified rows stay
+ *   negated and the spawner replaces them once instead of once per return.
  */
 function buildAppLocationPipeline({
-  now, appname = null, ip = null, host = null, supersededIps = [],
+  now, appname = null, ip = null, host = null, supersededIps = [], quarantinedIps = [],
 }) {
   const escapedName = appname ? appname.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') : null;
   const nameMatch = escapedName ? new RegExp(`^${escapedName}$`, 'i') : null;
@@ -1321,8 +1327,9 @@ function buildAppLocationPipeline({
   if (nameMatch) {
     clauses.push({ $or: [{ 'data.apps.name': nameMatch }, { type: { $ne: 'apprunning' } }] });
   }
-  if (supersededIps.length) {
-    clauses.push({ $nor: [{ type: 'apprunning', ip: { $in: supersededIps } }] });
+  const excludedIps = [...supersededIps, ...quarantinedIps];
+  if (excludedIps.length) {
+    clauses.push({ $nor: [{ type: 'apprunning', ip: { $in: excludedIps } }] });
   }
 
   return [
@@ -1485,6 +1492,37 @@ const RUNNING_ADDRESS_TAIL = [
  * this codebase targets 7.0. Revisit once the floor moves: the whole
  * supersede/translate step could then collapse into the v2 facet's existing $group.
  */
+/**
+ * The addresses whose announcements the derivation must ignore because their
+ * node is under severe quarantine: certified down enough times, while those
+ * records still stand, for the count over the synced rows to trip the rule in
+ * nodeDownCertificates. A subject is excluded at the address the list carries
+ * for it now — an address change re-deals a jury, never a sentence — and at
+ * the address its certificates recorded once it is no longer listed.
+ *
+ * @param {import('mongodb').Collection} collection the event log
+ * @param {Date} now
+ * @returns {Promise<Array<string>>} socket addresses
+ */
+async function resolveQuarantinedAddresses(collection, now) {
+  const bySubject = await collection.aggregate([
+    { $match: { type: 'nodedown', expireAt: { $gt: now } } },
+    { $group: { _id: '$subject', ip: { $last: '$ip' }, expiries: { $push: '$expireAt' } } },
+  ]).toArray();
+  if (bySubject.length === 0) return [];
+
+  const listedAddress = new Map(networkStateService.networkState()
+    .map((node) => [`${node.txhash}:${node.outidx}`, normalizeSocketAddress(node.ip)]));
+  const quarantined = [];
+  bySubject.forEach((row) => {
+    const expiries = row.expiries.map((at) => new Date(at).getTime());
+    if (!quarantineFromExpiries(expiries, now.getTime()).quarantined) return;
+    const address = listedAddress.get(row._id) ?? row.ip;
+    if (address) quarantined.push(address);
+  });
+  return quarantined;
+}
+
 async function resolveAddressMoves(collection, now) {
   const moves = await collection.find(
     { type: 'ipchanged', expireAt: { $gt: now } },
@@ -1521,10 +1559,11 @@ async function appLocationFromEvents(options = {}) {
   const collection = database.collection(globalAppStateEvents);
   const now = new Date();
 
+  const quarantinedIps = await resolveQuarantinedAddresses(collection, now);
   const { supersededIps, translate } = await resolveAddressMoves(collection, now);
   const rows = await collection.aggregate([
     ...buildAppLocationPipeline({
-      now, appname, ip, host, supersededIps,
+      now, appname, ip, host, supersededIps, quarantinedIps,
     }),
     ...RUNNING_ROW_TAIL,
   ]).toArray();
@@ -1551,9 +1590,10 @@ async function countRunningByApp() {
   const collection = database.collection(globalAppStateEvents);
   const now = new Date();
 
+  const quarantinedIps = await resolveQuarantinedAddresses(collection, now);
   const { supersededIps } = await resolveAddressMoves(collection, now);
   const counts = await collection.aggregate([
-    ...buildAppLocationPipeline({ now, supersededIps }),
+    ...buildAppLocationPipeline({ now, supersededIps, quarantinedIps }),
     ...RUNNING_COUNT_TAIL,
   ]).toArray();
   return new Map(counts.map((row) => [String(row._id).toLowerCase(), row.count]));
@@ -1576,9 +1616,10 @@ async function listRunningAddresses() {
   const collection = database.collection(globalAppStateEvents);
   const now = new Date();
 
+  const quarantinedIps = await resolveQuarantinedAddresses(collection, now);
   const { supersededIps, translate } = await resolveAddressMoves(collection, now);
   const rows = await collection.aggregate([
-    ...buildAppLocationPipeline({ now, supersededIps }),
+    ...buildAppLocationPipeline({ now, supersededIps, quarantinedIps }),
     ...RUNNING_ADDRESS_TAIL,
   ]).toArray();
 

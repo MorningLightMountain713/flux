@@ -148,6 +148,8 @@ export function nodeClient(nodeNum) {
         'nodedown:stored',
         'nodedown:refused',
         'nodedown:verdict',
+        'nodedown:quarantined',
+        'nodedown:inboundRefused',
         'network:apprunning',
         'network:appinstalling',
         'network:appinstallingerror',

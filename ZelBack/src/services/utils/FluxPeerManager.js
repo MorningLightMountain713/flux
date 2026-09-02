@@ -70,6 +70,9 @@ class FluxPeerManager extends EventEmitter {
   #uniqueIps = new Map();
   /** @type {Map<string, {attempts: number, lastAttempt: number}>} */
   #failedConnections = new Map();
+
+  /** The node-down plane's peering gate, installed at its start; see setInboundGate. */
+  #inboundGate = null;
   /** @type {Set<string>} keys of outbound connections currently being established */
   #pendingConnections = new Set();
   /** @type {Map<string, number>} reconnect count per peer key, persists across connection cycles */
@@ -258,6 +261,12 @@ class FluxPeerManager extends EventEmitter {
     // Track disconnect for unstable node detection and network health
     this.trackDisconnect(peer.ip, peer.port);
     this.#stampLoss(peer);
+    // A peer that refused us under quarantine refuses the next dial too:
+    // back the target off so the duty is re-dialed on the ladder rather
+    // than on every pass, and picked back up the moment the hold lifts.
+    if (closeCode === CLOSE_CODES.QUARANTINED && peer.direction === 'outbound') {
+      this.recordFailedConnection(peer.ip, peer.port);
+    }
     if (this.networkHealthMonitor) this.networkHealthMonitor.recordDisconnect(peer.connectedAt, closeCode);
 
     const now = Date.now();
@@ -979,50 +988,95 @@ class FluxPeerManager extends EventEmitter {
       // for the pair's peering. The pair being held is the NORMAL case for a
       // push between watchers, so it must bypass the duplicate-peer policy
       // below, and it is bounded by its own caps rather than the peering
-      // limits.
+      // limits. It also never meets the peering gate: a quarantined juror's
+      // verdict must still reach the pile, since quarantine never feeds the
+      // jury math.
       if (req && req.headers && req.headers['x-flux-ephemeral']) {
         this.addInboundEphemeral(ws, ipv4Peer, port, metadata);
         return;
       }
 
-      const maxPeers = 4 * config.fluxapps.minIncoming;
-      const maxNumberOfConnections = this.numberOfFluxNodes / 160 < 9 * config.fluxapps.minIncoming
-        ? this.numberOfFluxNodes / 160
-        : 9 * config.fluxapps.minIncoming;
-      const maxCon = Math.max(maxPeers, maxNumberOfConnections);
-      if (this.inboundCount > maxCon) {
-        setTimeout(() => {
-          ws.close(CLOSE_CODES.MAX_CONNECTIONS, `Max number of incomming connections ${maxCon} reached`);
-        }, 1000);
+      if (this.#inboundGate) {
+        this.#admitInboundThroughGate(ws, ipv4Peer, port, metadata, req);
         return;
       }
-
-      const key = `${ipv4Peer}:${port}`;
-      if (this.has(key)) {
-        const existing = this.get(key);
-        if (existing && !existing.isAlive) {
-          log.info(`Replacing stale inbound connection ${key}`);
-          this.add(ws, ipv4Peer, port, { source: PEER_SOURCE.INBOUND, ...metadata });
-          return;
-        }
-        // If the remote is reconnecting (asymmetric disconnect), verify the
-        // existing connection is still alive before rejecting. Ping it and
-        // wait up to 1s — if no pong, the old socket is dead, replace it.
-        const isReconnect = req && req.headers && req.headers['x-flux-reconnect'];
-        if (isReconnect && existing) {
-          this.#verifyOrReplace(existing, ws, ipv4Peer, port, metadata);
-          return;
-        }
-        setTimeout(() => {
-          ws.close(CLOSE_CODES.DUPLICATE_PEER, 'Peer already connected');
-        }, 1000);
-        return;
-      }
-
-      this.add(ws, ipv4Peer, port, { source: PEER_SOURCE.INBOUND, ...metadata });
+      this.#admitInbound(ws, ipv4Peer, port, metadata, req);
     } catch (error) {
       log.error(error);
     }
+  }
+
+  /**
+   * The node-down plane's peering gate: asked, with the dialer's ip:port,
+   * whether a peering inbound may register. Answers {admitted, reason} and,
+   * when refusing, the subject held out. Null while the plane is not started.
+   * @param {((socketAddress: string) => Promise<{admitted: boolean, reason: string, subject?: string}>)|null} gate
+   */
+  setInboundGate(gate) {
+    this.#inboundGate = gate;
+  }
+
+  async #admitInboundThroughGate(ws, ipv4Peer, port, metadata, req) {
+    let answer;
+    try {
+      answer = await this.#inboundGate(`${ipv4Peer}:${port}`);
+    } catch (error) {
+      // An unknown answer must not starve this node of its inbound.
+      log.error(`Inbound gate failed for ${ipv4Peer}:${port}, admitting: ${error.message}`);
+      answer = { admitted: true, reason: 'gate_error' };
+    }
+    if (!answer.admitted) {
+      try {
+        ws.close(CLOSE_CODES.QUARANTINED, `Peering refused: ${answer.reason}`);
+      } catch (error) {
+        log.error(error);
+      }
+      return;
+    }
+    try {
+      this.#admitInbound(ws, ipv4Peer, port, metadata, req);
+    } catch (error) {
+      log.error(error);
+    }
+  }
+
+  /** Capacity, then the duplicate-peer policy, then registration. */
+  #admitInbound(ws, ipv4Peer, port, metadata, req) {
+    const maxPeers = 4 * config.fluxapps.minIncoming;
+    const maxNumberOfConnections = this.numberOfFluxNodes / 160 < 9 * config.fluxapps.minIncoming
+      ? this.numberOfFluxNodes / 160
+      : 9 * config.fluxapps.minIncoming;
+    const maxCon = Math.max(maxPeers, maxNumberOfConnections);
+    if (this.inboundCount > maxCon) {
+      setTimeout(() => {
+        ws.close(CLOSE_CODES.MAX_CONNECTIONS, `Max number of incomming connections ${maxCon} reached`);
+      }, 1000);
+      return;
+    }
+
+    const key = `${ipv4Peer}:${port}`;
+    if (this.has(key)) {
+      const existing = this.get(key);
+      if (existing && !existing.isAlive) {
+        log.info(`Replacing stale inbound connection ${key}`);
+        this.add(ws, ipv4Peer, port, { source: PEER_SOURCE.INBOUND, ...metadata });
+        return;
+      }
+      // If the remote is reconnecting (asymmetric disconnect), verify the
+      // existing connection is still alive before rejecting. Ping it and
+      // wait up to 1s — if no pong, the old socket is dead, replace it.
+      const isReconnect = req && req.headers && req.headers['x-flux-reconnect'];
+      if (isReconnect && existing) {
+        this.#verifyOrReplace(existing, ws, ipv4Peer, port, metadata);
+        return;
+      }
+      setTimeout(() => {
+        ws.close(CLOSE_CODES.DUPLICATE_PEER, 'Peer already connected');
+      }, 1000);
+      return;
+    }
+
+    this.add(ws, ipv4Peer, port, { source: PEER_SOURCE.INBOUND, ...metadata });
   }
 
   // --- Failed connection tracking ---

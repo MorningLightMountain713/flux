@@ -17,6 +17,8 @@ function makeHarness() {
     registerWithGrantPlane: sinon.stub(),
     handleNodeDownEvent: sinon.stub().resolves({ accepted: true, rebroadcast: true, reason: 'stored' }),
     standingCertificateFor: sinon.stub().resolves(null),
+    recordStateFor: sinon.stub().resolves({ state: 'none', key: null }),
+    quarantineFor: sinon.stub().resolves({ quarantined: false, count: 0, liftsAt: null }),
     announce: sinon.stub(),
     noteReturn: sinon.stub(),
   };
@@ -31,9 +33,12 @@ function makeHarness() {
   const service = proxyquire('../../ZelBack/src/services/nodeDownService', {
     './networkStateService': networkStateServiceStub,
     './appMessaging/nodeDownStore': {
+      RECORD_STATE: { STANDING: 'standing', REFUTED: 'refuted', NONE: 'none' },
       registerWithGrantPlane: stubs.registerWithGrantPlane,
       handleNodeDownEvent: stubs.handleNodeDownEvent,
       standingCertificateFor: stubs.standingCertificateFor,
+      recordStateFor: stubs.recordStateFor,
+      quarantineFor: stubs.quarantineFor,
     },
     './appMessaging/peerNotification': { checkAndNotifyPeersOfRunningApps: stubs.announce },
     './quorumGrant/grantorController': { noteReturnFromUnreachability: stubs.noteReturn },
@@ -47,6 +52,7 @@ function makeHarness() {
     has: () => false,
     get: () => undefined,
     shouldAttemptConnection: () => false,
+    setInboundGate: sinon.stub(),
     inboundCount: 99,
     allPeersDown: () => false,
     networkHealthMonitor: null,
@@ -59,7 +65,36 @@ function makeHarness() {
     broadcastMessageToAll: sinon.stub().resolves(),
     closePeer: sinon.stub(),
   };
-  return { service, transport, stubs };
+  return {
+    service, transport, stubs, networkStateServiceStub,
+  };
+}
+
+const DUTY_IP = '10.0.0.2:16127';
+const DUTY_OUTPOINT = 'x:0';
+
+// One duty, x, listed beside this node: the reconciler owes it a dial and the
+// juror may probe it. The jury math is stubbed empty so a probe records an
+// answer and never assembles.
+function withDuty({ networkStateServiceStub, transport }) {
+  networkStateServiceStub.networkState = () => [
+    {
+      txhash: 'me', outidx: 0, pubkey: 'pk', ip: MY_IP, added_height: 1,
+    },
+    {
+      txhash: 'x', outidx: 0, pubkey: 'pkx', ip: DUTY_IP, added_height: 1,
+    },
+  ];
+  networkStateServiceStub.nodeDownTopology = () => ({
+    duties: () => [{ outpoint: DUTY_OUTPOINT }],
+    jury: () => [],
+    juryAt: () => [],
+    sameJuryFor: () => null,
+    cotenants: () => new Set(),
+    ringSuccessors: () => [],
+  });
+  transport.peerManager.shouldAttemptConnection = () => true;
+  transport.openEphemeralConnection = sinon.stub().resolves({ close: () => {} });
 }
 
 describe('nodeDownService', () => {
@@ -183,6 +218,123 @@ describe('nodeDownService', () => {
       const result = await service.onCertificateSyncEvent(row);
       expect(result.accepted).to.equal(true);
       expect(stubs.announce.callCount).to.equal(0);
+    });
+  });
+
+  describe('severe quarantine — the stand-down held open, the inbound refused, the lapse still probed', () => {
+    it('start installs the peering gate; stop removes it', async () => {
+      const { service, transport } = makeHarness();
+      service.start(transport);
+      await tick();
+      expect(transport.peerManager.setInboundGate.callCount).to.equal(1);
+      expect(transport.peerManager.setInboundGate.firstCall.args[0]).to.be.a('function');
+      service.stop();
+      expect(transport.peerManager.setInboundGate.lastCall.args[0]).to.equal(null);
+    });
+
+    it('the gate refuses a listed subject under quarantine and admits everyone else', async () => {
+      const harness = makeHarness();
+      withDuty(harness);
+      const { service, transport, stubs } = harness;
+      stubs.quarantineFor.withArgs(DUTY_OUTPOINT).resolves({ quarantined: true, count: 3, liftsAt: 1 });
+      service.start(transport);
+      await tick();
+      const gate = transport.peerManager.setInboundGate.firstCall.args[0];
+
+      expect(await gate(DUTY_IP)).to.deep.equal({ admitted: false, reason: 'quarantined', subject: DUTY_OUTPOINT });
+      expect(await gate(MY_IP)).to.deep.equal({ admitted: true, reason: 'not_quarantined' });
+      expect(await gate('10.0.0.9:16127')).to.deep.equal({ admitted: true, reason: 'unlisted' });
+      service.stop();
+    });
+
+    it('a quarantined duty stays out of the dial plan though its certificate is refuted', async () => {
+      const harness = makeHarness();
+      withDuty(harness);
+      const { service, transport, stubs } = harness;
+      stubs.recordStateFor.withArgs(DUTY_OUTPOINT).resolves({ state: 'refuted', key: 'nodedown:x:0:90' });
+      stubs.quarantineFor.withArgs(DUTY_OUTPOINT).resolves({ quarantined: true, count: 3, liftsAt: 1 });
+      service.start(transport);
+      await tick();
+      await service.sweep();
+      await tick();
+      expect(transport.dial.callCount).to.equal(0);
+
+      // the hold lifts: the same refuted record now lets the duty be dialed
+      stubs.quarantineFor.withArgs(DUTY_OUTPOINT).resolves({ quarantined: false, count: 2, liftsAt: null });
+      await service.sweep();
+      await tick();
+      expect(transport.dial.firstCall.args[0]).to.equal(DUTY_IP);
+      service.stop();
+    });
+
+    it('the trip drops a held connection to the subject', async () => {
+      const harness = makeHarness();
+      withDuty(harness);
+      const { service, transport, stubs } = harness;
+      transport.peerManager.has = (socketAddress) => socketAddress === DUTY_IP;
+      stubs.quarantineFor.withArgs(DUTY_OUTPOINT).resolves({ quarantined: true, count: 3, liftsAt: 1 });
+      service.start(transport);
+      await tick();
+
+      await service.onCertificateBroadcast({
+        certificate: { subject: DUTY_OUTPOINT, height: 100 },
+        broadcastedAt: Date.now(),
+      });
+      expect(transport.closePeer.args).to.deep.equal([[DUTY_IP, 'quarantined']]);
+      service.stop();
+    });
+
+    it('the record lapsing under the hold probes the subject once — the jury never loses a still-dark node', async () => {
+      const harness = makeHarness();
+      withDuty(harness);
+      const { service, transport, stubs } = harness;
+      stubs.recordStateFor.withArgs(DUTY_OUTPOINT).resolves({ state: 'standing', key: 'nodedown:x:0:90' });
+      stubs.quarantineFor.withArgs(DUTY_OUTPOINT).resolves({ quarantined: true, count: 3, liftsAt: 1 });
+      service.start(transport);
+      await tick();
+      await service.sweep();
+      await tick();
+      expect(transport.openEphemeralConnection.callCount).to.equal(0);
+
+      // the row expired unrefuted
+      stubs.recordStateFor.withArgs(DUTY_OUTPOINT).resolves({ state: 'none', key: null });
+      await service.sweep();
+      await tick();
+      expect(transport.openEphemeralConnection.args).to.deep.equal([[DUTY_IP]]);
+      expect(transport.dial.callCount).to.equal(0); // the hold itself never lifted
+
+      await service.sweep();
+      await tick();
+      expect(transport.openEphemeralConnection.callCount).to.equal(1); // once per lapse
+      service.stop();
+    });
+
+    it('a refutation is a return, not a lapse: no probe', async () => {
+      const harness = makeHarness();
+      withDuty(harness);
+      const { service, transport, stubs } = harness;
+      stubs.recordStateFor.withArgs(DUTY_OUTPOINT).resolves({ state: 'standing', key: 'nodedown:x:0:90' });
+      service.start(transport);
+      await tick();
+      stubs.recordStateFor.withArgs(DUTY_OUTPOINT).resolves({ state: 'refuted', key: 'nodedown:x:0:90' });
+      await service.sweep();
+      await tick();
+      expect(transport.openEphemeralConnection.callCount).to.equal(0);
+      service.stop();
+    });
+
+    it('the lapse probe fires without a hold too: a still-dark node is re-certified, not forgotten', async () => {
+      const harness = makeHarness();
+      withDuty(harness);
+      const { service, transport, stubs } = harness;
+      stubs.recordStateFor.withArgs(DUTY_OUTPOINT).resolves({ state: 'standing', key: 'nodedown:x:0:90' });
+      service.start(transport);
+      await tick();
+      stubs.recordStateFor.withArgs(DUTY_OUTPOINT).resolves({ state: 'none', key: null });
+      await service.sweep();
+      await tick();
+      expect(transport.openEphemeralConnection.args).to.deep.equal([[DUTY_IP]]);
+      service.stop();
     });
   });
 

@@ -334,6 +334,9 @@ describe('appSpawner tests', () => {
       '../utils/fluxEventBus': {
         publish: sinon.stub(),
       },
+      '../appMessaging/nodeDownStore': {
+        quarantineForAddress: opts.quarantineStub ?? sinon.stub().resolves({ quarantined: false, count: 0, liftsAt: null }),
+      },
       './appInstaller': {
         InstallStatus,
         installApplication: opts.installStub ?? sinon.stub().resolves({ status: InstallStatus.INSTALLED, reason: null }),
@@ -417,6 +420,16 @@ describe('appSpawner tests', () => {
       const result = await appSpawner.trySpawningGlobalApplication();
       expect(result).to.be.a('number');
       expect(logStub.info.args.some((a) => a[0]?.includes?.('No installable application found'))).to.be.true;
+    });
+
+    it('a node under severe quarantine places nothing: the flapper costs its operator, not the fleet', async () => {
+      const quarantineStub = sinon.stub().resolves({ quarantined: true, count: 3, liftsAt: 1 });
+      buildModule({ quarantineStub });
+      const result = await appSpawner.trySpawningGlobalApplication();
+      expect(result).to.be.a('number');
+      expect(quarantineStub.args).to.deep.equal([[MY_ADDR]]);
+      expect(findUnderProvisionedStub.callCount).to.equal(0);
+      expect(logStub.info.args.some((a) => a[0]?.includes?.('quarantine'))).to.be.true;
     });
 
     it('caps on INSTALLED apps (DB count), not running containers', async () => {

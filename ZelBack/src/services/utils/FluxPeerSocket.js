@@ -52,6 +52,10 @@ const CLOSE_CODES = Object.freeze({
 
   // Node lost confirmation — disconnecting all peers
   NODE_UNCONFIRMED: 4019,
+
+  // Peering refused by the node-down plane: the dialer is under severe
+  // quarantine. A policy close — the dialer backs off, never accuses.
+  QUARANTINED: 4020,
 });
 
 const PEER_SOURCE = Object.freeze({
