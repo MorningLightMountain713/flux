@@ -21,6 +21,7 @@ function makeHarness() {
     quarantineFor: sinon.stub().resolves({ quarantined: false, count: 0, liftsAt: null }),
     announce: sinon.stub(),
     noteReturn: sinon.stub(),
+    noteMeshReturn: sinon.stub(),
   };
   const world = { height: 100 };
   const networkStateServiceStub = {
@@ -43,6 +44,7 @@ function makeHarness() {
     },
     './appMessaging/peerNotification': { checkAndNotifyPeersOfRunningApps: stubs.announce },
     './quorumGrant/grantorController': { noteReturnFromUnreachability: stubs.noteReturn },
+    './appMesh/meshOrdinals': { noteReturnFromUnreachability: stubs.noteMeshReturn },
     './fluxNetworkHelper': {
       getLocalSocketAddress: sinon.stub().resolves(MY_IP),
       getFluxNodePrivateKey: sinon.stub().resolves('L1x'),
@@ -444,6 +446,7 @@ describe('nodeDownService', () => {
     transport.peerManager.emit('peer:added', {});
     await tick();
     expect(stubs.noteReturn.callCount).to.equal(0);
+    expect(stubs.noteMeshReturn.callCount).to.equal(0);
 
     // the last peer goes: the next connection is the return event, once
     peersDown = true;
@@ -453,6 +456,8 @@ describe('nodeDownService', () => {
     transport.peerManager.emit('peer:added', {});
     await tick();
     expect(stubs.noteReturn.callCount).to.equal(1);
+    // The mesh hears the same return: its ordinal names are re-probed before they are trusted.
+    expect(stubs.noteMeshReturn.callCount).to.equal(1);
     expect(stubs.announce.callCount).to.equal(1);
     service.stop();
   });

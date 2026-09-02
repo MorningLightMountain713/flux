@@ -112,6 +112,56 @@ describe('meshOrdinals', () => {
     });
   });
 
+  describe('the return re-probe — back from a partition, the record is not trusted until the committee confirms it', () => {
+    it('before any return, ownOrdinal never probes', async () => {
+      const { meshOrdinals, seam } = load({ ordinalHolders: sinon.stub().resolves(new Map([[1, ME]])) });
+      expect(await meshOrdinals.ownOrdinal('app')).to.equal(1);
+      expect(seam.probeOrdinal.callCount).to.equal(0);
+    });
+
+    it('after a return, the record\'s answer is probed once; a quorum naming another holder makes this node a standby', async () => {
+      const { meshOrdinals, seam } = load({
+        ordinalHolders: sinon.stub().resolves(new Map([[1, ME]])),
+        probeOrdinal: sinon.stub().resolves({ decided: true, holder: OTHER }),
+      });
+      meshOrdinals.noteReturnFromUnreachability();
+      expect(await meshOrdinals.ownOrdinal('app')).to.equal(null);
+      expect(seam.probeOrdinal.args).to.deep.equal([['app', 1]]);
+    });
+
+    it('a quorum confirming this node restores the name, and the probe is not repeated until the next return', async () => {
+      const { meshOrdinals, seam } = load({
+        ordinalHolders: sinon.stub().resolves(new Map([[1, ME]])),
+        probeOrdinal: sinon.stub().resolves({ decided: true, holder: ME }),
+      });
+      meshOrdinals.noteReturnFromUnreachability();
+      expect(await meshOrdinals.ownOrdinal('app')).to.equal(1);
+      expect(await meshOrdinals.ownOrdinal('app')).to.equal(1);
+      expect(seam.probeOrdinal.callCount).to.equal(1);
+      meshOrdinals.noteReturnFromUnreachability();
+      await meshOrdinals.ownOrdinal('app');
+      expect(seam.probeOrdinal.callCount).to.equal(2);
+    });
+
+    it('an undecided probe after a return keeps the node a standby, and asks again next pass', async () => {
+      const { meshOrdinals, seam } = load({
+        ordinalHolders: sinon.stub().resolves(new Map([[1, ME]])),
+        probeOrdinal: sinon.stub().resolves({ decided: false, holder: null }),
+      });
+      meshOrdinals.noteReturnFromUnreachability();
+      expect(await meshOrdinals.ownOrdinal('app')).to.equal(null);
+      expect(await meshOrdinals.ownOrdinal('app')).to.equal(null);
+      expect(seam.probeOrdinal.callCount).to.equal(2);
+    });
+
+    it('a record naming nothing of mine needs no probe after a return', async () => {
+      const { meshOrdinals, seam } = load();
+      meshOrdinals.noteReturnFromUnreachability();
+      expect(await meshOrdinals.ownOrdinal('app')).to.equal(null);
+      expect(seam.probeOrdinal.callCount).to.equal(0);
+    });
+  });
+
   describe('releaseOrdinal', () => {
     it('releases the ordinal the record names me for', async () => {
       const { meshOrdinals, seam } = load({ ordinalHolders: sinon.stub().resolves(new Map([[1, ME]])) });
