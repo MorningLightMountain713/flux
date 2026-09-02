@@ -294,6 +294,7 @@ export function nodeClient(nodeNum) {
         'quorumGrant:standbys',
         'quorumGrant:generationRecord',
         'quorumGrant:generationRecordDropped',
+        'quorumGrant:generationLearned',
         'quorumGrant:yielded',
         'quorumGrant:fenceLifted',
         'quorumGrant:repair',

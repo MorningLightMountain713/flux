@@ -63,13 +63,15 @@ describe('quorumGrant ownerGenerationRecord', () => {
 
   describe('the store handler', () => {
     let updates;
+    let standing; // the row as the collection answers it AFTER the write
 
     beforeEach(() => {
       updates = [];
+      standing = null;
       const collection = {
-        updateOne: async (filter, update, options) => {
+        findOneAndUpdate: async (filter, update, options) => {
           updates.push({ filter, update, options });
-          return { acknowledged: true };
+          return standing;
         },
       };
       sinon.stub(dbHelper, 'databaseConnection').returns({ db: () => ({ collection: () => collection }) });
@@ -132,6 +134,52 @@ describe('quorumGrant ownerGenerationRecord', () => {
       await stored(signedRecord({ role: 'Bad Role' }));
       expect(updates).to.have.length(0);
       expect(appsRepository.getGlobalAppOwner.called).to.equal(false);
+    });
+
+    // The product-side hook: the store owns the standing generation, and the
+    // holder must act the moment its world ends — a bus event is harness
+    // observability only, so listeners register here instead.
+    it('a record that becomes the standing one notifies the registered listeners, and only while registered', async () => {
+      const heard = [];
+      const off = messageStore.onGrantGenerationRecord((event) => heard.push(event));
+      try {
+        standing = { data: { generation: 2 } };
+        await stored(signedRecord({ role: 'master', generation: 2 }));
+        expect(heard).to.deep.equal([{ appName: 'myapp', role: 'master', generation: 2 }]);
+        expect(updates[0].options).to.include({ upsert: true, returnDocument: 'after' });
+      } finally {
+        off();
+      }
+      standing = { data: { generation: 3 } };
+      await stored(signedRecord({ role: 'master', generation: 3 }));
+      expect(heard).to.have.length(1);
+    });
+
+    it('a record that loses to a newer standing one is written newest-wins and notifies nobody', async () => {
+      const heard = [];
+      const off = messageStore.onGrantGenerationRecord((event) => heard.push(event));
+      try {
+        standing = { data: { generation: 5 } };
+        await stored(signedRecord({ role: 'master', generation: 2 }));
+        expect(updates).to.have.length(1);
+        expect(heard).to.deep.equal([]);
+      } finally {
+        off();
+      }
+    });
+
+    it('a listener that throws costs the other listeners nothing', async () => {
+      const heard = [];
+      const offThrowing = messageStore.onGrantGenerationRecord(() => { throw new Error('boom'); });
+      const offHearing = messageStore.onGrantGenerationRecord((event) => heard.push(event));
+      try {
+        standing = { data: { generation: 2 } };
+        await stored(signedRecord({ role: 'master', generation: 2 }));
+        expect(heard).to.have.length(1);
+      } finally {
+        offThrowing();
+        offHearing();
+      }
     });
   });
 });
