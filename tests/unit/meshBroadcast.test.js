@@ -28,14 +28,12 @@ describe('meshBroadcast', () => {
       mint: sinon.stub().resolves('voucher-b64'),
       bundle: sinon.stub().resolves('CA-PEM'),
       getPort: sinon.stub().resolves(16230),
-      resolveOwnSlot: sinon.stub().resolves(null),
     };
     meshBroadcast = proxyquire('../../ZelBack/src/services/appMesh/meshBroadcast', {
       '../generalService': { obtainNodeCollateralInformation: stubs.collateral },
       './meshVoucher': { fetchVoucherAnchor: stubs.anchor, mintVoucher: stubs.mint },
       './meshCertificates': { authorityBundle: stubs.bundle },
       './meshPorts': { getPort: stubs.getPort },
-      './meshSlots': { resolveOwnSlot: stubs.resolveOwnSlot },
       '../../lib/log': { info: sinon.stub(), warn: sinon.stub(), error: sinon.stub() },
     });
   });
@@ -59,18 +57,6 @@ describe('meshBroadcast', () => {
     expect(stubs.mint.firstCall.args[0]).to.deep.equal({
       meshCa: 'CA-PEM', appUuid: UUID, outpoint: `${TXHASH}:0`, blockHash: ANCHOR.hash,
     });
-  });
-
-  it('asserts the held ordinal slot beside the mesh fields', async () => {
-    stubs.resolveOwnSlot.resolves(2);
-    const meshViews = new Map([['myblog', { network: { mesh: true }, instances: 3 }]]);
-    const result = await meshBroadcast.meshBroadcastFields([meshApp], meshViews);
-    expect(result.perApp.get('myblog').meshSlot).to.equal(2);
-    expect(stubs.resolveOwnSlot.firstCall.args).to.deep.equal(['myblog', 3]);
-    // A standby (no slot) asserts nothing — the field is absent, not null.
-    stubs.resolveOwnSlot.resolves(null);
-    const standby = await meshBroadcast.meshBroadcastFields([meshApp], meshViews);
-    expect(standby.perApp.get('myblog')).to.not.have.property('meshSlot');
   });
 
   it('announces without mesh fields while no port is secured, and drops the anchor', async () => {

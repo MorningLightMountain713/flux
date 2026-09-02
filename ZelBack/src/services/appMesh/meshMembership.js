@@ -66,7 +66,6 @@ const sameSet = (values, expected) => {
  *   appUuid: string,
  *   ownOutpoint: string,
  *   rows: Array<{outpoint: string|null, ip: string, broadcastedAt: number,
- *     runningSince: string|null, meshSlot: number|null,
  *     meshCa: string|null, meshVoucher: string|null, meshPort: number|null,
  *     meshAnchor: {height: number, hash: string}|null}>,
  *   tipHeight: number,
@@ -174,10 +173,6 @@ async function evaluateCandidates(ctx) {
       endpoint: `${host}:${row.meshPort}`,
       caShas: certs.map((cert) => cert.fingerprint),
       meshCa: row.meshCa,
-      // The member's self-asserted ordinal slot and the arbitration facts
-      // (meshSlots.js) — identity naming, deliberately NOT an admission input.
-      slot: Number.isInteger(row.meshSlot) ? row.meshSlot : null,
-      runningSince: row.runningSince ?? null,
     });
   }
 
