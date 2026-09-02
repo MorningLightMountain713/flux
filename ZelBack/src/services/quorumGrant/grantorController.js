@@ -249,15 +249,16 @@ function generationDrainBlocks() {
   return config.fluxapps.quorumGrantGenerationDrainBlocks ?? 20;
 }
 
-// The plane's birth is a drain window of the same shape: nodes cross the
-// activation height at their own tips' pace, and a register serving cold
-// keys the moment its own node crossed would hand every running app's term
-// to whichever pursuer's tip crossed earliest.
-const activationOverrides = { activateAt: null, drainBlocks: null };
+// The plane's birth is the other height-gated serve: a register that served
+// fresh keys the moment its own node crossed would hand every running app's
+// term to whichever pursuer's tip crossed earliest, so instead the register
+// opens BEFORE the height and only the node running the container asks
+// there (preWindowBlocks below).
+const activationOverrides = { activateAt: null, preWindowBlocks: null };
 
 function resetActivationForTests(options = {}) {
   activationOverrides.activateAt = options.activateAt ?? null;
-  activationOverrides.drainBlocks = options.drainBlocks ?? null;
+  activationOverrides.preWindowBlocks = options.preWindowBlocks ?? null;
 }
 
 function activationHeight() {
@@ -266,9 +267,14 @@ function activationHeight() {
   return Number.isInteger(height) && height > 0 ? height : null;
 }
 
-function activationDrainBlocks() {
-  if (activationOverrides.drainBlocks !== null) return activationOverrides.drainBlocks;
-  return config.fluxapps.quorumGrantActivationDrainBlocks ?? 20;
+// The window before the activation height in which a fresh key is served
+// (ACTIVATION_CROSSING_DESIGN.md §2.4): sized so that a referee restart met
+// on the way still leaves the running node its lease before the height -
+// strictly, preWindowBlocks x blockTime > quorumGrantDrainMs + retry + 3 x
+// askTimeoutMs, i.e. 1,200 s against 300,000 + retry + 15,000 ms.
+function preWindowBlocks() {
+  if (activationOverrides.preWindowBlocks !== null) return activationOverrides.preWindowBlocks;
+  return config.fluxapps.quorumGrantPreWindowBlocks ?? 40;
 }
 
 function bad(code, message) {
@@ -463,23 +469,26 @@ async function selfOnCommittee(key, mode, fingerprint, generation, carriedChain,
     }
   }
 
-  // The activation drain: a VIRGIN row serves nobody until this grantor's
-  // own view passes activateAt + drainBlocks, so the one-time crossing is a
-  // uniform fleet-wide window rather than a race between tips. A row with
-  // accepted history is exempt — renewals and reclaims never drain, so an
-  // activation height configured above standing terms cannot demote a
-  // fleet.
+  // The two heights (ACTIVATION_CROSSING_DESIGN.md §2.1): a VIRGIN row is
+  // served from activateAt - preWindowBlocks in this grantor's own view and
+  // refused below it - the register is not open yet. The node running the
+  // container takes its lease inside that window (the gate asks there iff
+  // its own docker says it runs the container), so the key is warm when the
+  // plane starts governing at activateAt and nothing moves at the crossing.
+  // A row with accepted history is exempt: renewals and reclaims never wait
+  // on a height, so an activation height configured above standing terms
+  // cannot demote a fleet.
   const activateAt = activationHeight();
   if (activateAt !== null) {
     const height = daemonServiceMiscRpcs.isDaemonSynced()?.data?.height ?? 0;
-    const liftAt = activateAt + activationDrainBlocks();
-    if (height < liftAt) {
+    const opensAt = activateAt - preWindowBlocks();
+    if (height < opensAt) {
       const stored = await grantRegister.read(key);
       if (!stored?.accepted) {
         return {
           member: false,
           code: 409,
-          reason: `activation is draining until height ${liftAt}`,
+          reason: `the register opens for new keys at height ${opensAt}`,
         };
       }
     }

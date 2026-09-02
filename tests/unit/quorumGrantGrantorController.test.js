@@ -1251,42 +1251,61 @@ describe('quorumGrant grantorController', () => {
     });
   });
 
-  // The plane's birth is a fleet-wide drain window: nodes cross the
-  // activation height at their own tips' pace, and a register that served
-  // cold keys the moment its own node crossed would hand every running
-  // app's term to whichever pursuer's tip crossed earliest. A virgin row
-  // serves nobody until this grantor's view passes activateAt +
-  // drainBlocks; rows with accepted history are exempt — renewals and
-  // reclaims must never drain, whatever the configured heights say.
-  describe('the activation drain', () => {
+  // The two heights (ACTIVATION_CROSSING_DESIGN.md §2.1). A VIRGIN row is
+  // served from activateAt - preWindowBlocks in this grantor's own view and
+  // refused below it - the register is not open yet - so the node running
+  // the container can take its lease before the plane governs at activateAt,
+  // and the key is warm at the crossing. Rows with accepted history are
+  // exempt: renewals and reclaims never wait on a height, so an activation
+  // height configured above standing terms cannot demote a fleet. The
+  // activation drain this replaces (serve nobody until activateAt + 20) is
+  // gone: its job, stopping standbys racing at the height, is done by the
+  // gate's running-only rule below the height.
+  describe('the pre-window: the register opens before the plane governs', () => {
     afterEach(() => {
       grantorController.resetActivationForTests();
     });
 
-    it('a virgin row serves nobody until the fleet-wide window closes', async () => {
-      grantorController.resetActivationForTests({ activateAt: 100, drainBlocks: 20 });
+    function atHeight(height) {
       daemonServiceMiscRpcs.isDaemonSynced.returns({
-        status: 'success', data: { synced: true, height: 110, header: 110 },
+        status: 'success', data: { synced: true, height, header: height },
       });
+    }
 
-      const draining = fakeRes();
-      await grantorController.probe(fakeReq(signedAsk('probe')), draining);
-      expect(draining.statusCode).to.equal(409);
-      expect(draining.body.data.message).to.match(/activation is draining until height 120/);
+    it('a virgin row is refused one block below the window and served from its first block', async () => {
+      grantorController.resetActivationForTests({ activateAt: 100, preWindowBlocks: 40 });
+      atHeight(59);
+      const shut = fakeRes();
+      await grantorController.probe(fakeReq(signedAsk('probe')), shut);
+      expect(shut.statusCode).to.equal(409);
+      expect(shut.body.data.message).to.match(/the register opens for new keys at height 60/);
 
-      daemonServiceMiscRpcs.isDaemonSynced.returns({
-        status: 'success', data: { synced: true, height: 120, header: 120 },
-      });
+      atHeight(60);
       const served = fakeRes();
       await grantorController.probe(fakeReq(signedAsk('probe')), served);
       expect(served.statusCode).to.equal(200);
     });
 
-    it('a row with accepted history is exempt — renewals never drain', async () => {
-      grantorController.resetActivationForTests({ activateAt: 100, drainBlocks: 20 });
-      daemonServiceMiscRpcs.isDaemonSynced.returns({
-        status: 'success', data: { synced: true, height: 110, header: 110 },
-      });
+    it('a virgin row is served BELOW the activation height - that is the window', async () => {
+      grantorController.resetActivationForTests({ activateAt: 100, preWindowBlocks: 40 });
+      atHeight(99);
+      const res = fakeRes();
+      await grantorController.probe(fakeReq(signedAsk('probe')), res);
+      expect(res.statusCode).to.equal(200);
+    });
+
+    it('the window is a config knob beside the activation height, 40 blocks by default', async () => {
+      grantorController.resetActivationForTests({ activateAt: 100 });
+      atHeight(59);
+      const shut = fakeRes();
+      await grantorController.probe(fakeReq(signedAsk('probe')), shut);
+      expect(shut.statusCode).to.equal(409);
+      expect(shut.body.data.message).to.match(/at height 60/);
+    });
+
+    it('a row with accepted history is exempt - renewals never wait on a height', async () => {
+      grantorController.resetActivationForTests({ activateAt: 100, preWindowBlocks: 40 });
+      atHeight(59);
       grantRegister.read.resolves({ accepted: { epoch: 2, grantee: 'x:1', mode: 'held' } });
 
       const res = fakeRes();
@@ -1294,11 +1313,9 @@ describe('quorumGrant grantorController', () => {
       expect(res.statusCode).to.equal(200);
     });
 
-    it('the founder plane never drains at activation', async () => {
-      grantorController.resetActivationForTests({ activateAt: 100, drainBlocks: 20 });
-      daemonServiceMiscRpcs.isDaemonSynced.returns({
-        status: 'success', data: { synced: true, height: 110, header: 110 },
-      });
+    it('the founder plane never waits on a height', async () => {
+      grantorController.resetActivationForTests({ activateAt: 100, preWindowBlocks: 40 });
+      atHeight(59);
 
       const res = fakeRes();
       await grantorController.probe(
