@@ -268,6 +268,30 @@ describe('appSubmission tests', () => {
       }
     });
 
+    // The guard compares whatever the spec answers, and a sealed container
+    // answers null. It used to SKIP the comparison when the object could not
+    // answer, so a spec with no hash passed a check that exists to refuse it.
+    // Every real spec that reaches this line today can answer — the perimeter
+    // opens a sealed one first — which is why no ordinary fixture exercises the
+    // fail-closed shape: the real class is made to answer as a sealed container
+    // would, and the guard has to refuse rather than step aside.
+    it('refuses a spec that cannot produce a content hash, rather than skipping the comparison', async () => {
+      appSubmission = load();
+      const spec = v9Spec();
+      sinon.stub(flux.FluxAppSpecV9.prototype, 'contentHash').returns(null);
+      stubs.transportHelper.openTransportEnvelope.resolves({ version: 9 });
+      stubs.parseSpec.resolves({ isEncrypted: false });
+      stubs.specLibs.validateSubmissionSpec.resolves(spec);
+
+      try {
+        await appSubmission.resolveSubmission({ version: 9 }, { contentHash: 'EXPECTED', daemonHeight: 100 });
+        expect.fail('a spec with no content hash was accepted against a signed one');
+      } catch (err) {
+        expect(err.message).to.include('contentHash does not match');
+        expect(err.code).to.equal('DECRYPT_FAILED');
+      }
+    });
+
     it('propagates a feature-entitlement denial from the STAGE 4 gate', async () => {
       appSubmission = load();
       const spec = v9Spec();
