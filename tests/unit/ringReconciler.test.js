@@ -224,6 +224,21 @@ describe('ringReconciler', () => {
     expect(world.dials.some((d) => d.socketAddress === 'addr-a:0' && d.witness)).to.equal(true);
   });
 
+  it('a stood-down successor is never a top-up: the walk looks past it to the next', async () => {
+    const world = makeWorld({ duties: ['a:0'], successors: ['s1:0', 's2:0', 's3:0'] });
+    world.inbound = 99;
+    const stood = new Set(['a:0', 's1:0']);
+    world.deps.stoodDown = (outpoint) => Promise.resolve(stood.has(outpoint));
+    reconciler = makeReconciler(world, { floor: 2 });
+    await tick();
+    await tick();
+
+    // the duty is stood down, so the whole floor is a shortfall; s1 is held
+    // out of the network and s2, s3 cover the two slots
+    expect(world.dials.map((d) => [d.socketAddress, d.witness]).sort())
+      .to.deep.equal([['addr-s2:0', false], ['addr-s3:0', false]]);
+  });
+
   it('coalesces schedules while a pass runs instead of stacking them', async () => {
     const world = makeWorld({ duties: ['a:0'] });
     world.inbound = 99;

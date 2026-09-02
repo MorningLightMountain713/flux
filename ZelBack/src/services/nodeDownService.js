@@ -5,6 +5,7 @@ const fluxNetworkHelper = require('./fluxNetworkHelper');
 const verificationHelper = require('./verificationHelper');
 const networkStateService = require('./networkStateService');
 const nodeDownStore = require('./appMessaging/nodeDownStore');
+const { RECORD_STATE } = nodeDownStore;
 const { RingReconciler } = require('./utils/ringReconciler');
 const { NodeDownJuror } = require('./utils/nodeDownJuror');
 const { FluxPeerManager } = require('./utils/FluxPeerManager');
@@ -27,6 +28,11 @@ let addHandler = null;
 
 // outpoint <-> dialable address, rebuilt when the membership moves.
 const index = { fingerprint: undefined, byOutpoint: new Map(), bySocket: new Map() };
+
+// The records this node has seen standing, by subject: its own observation,
+// kept so that a record's lapse — gone unrefuted — is an edge it can act on.
+// Rows expire silently, so nothing else announces a lapse.
+const seenStanding = new Map();
 
 function refreshIndex() {
   const fingerprint = networkStateService.membershipFingerprint();
@@ -64,11 +70,80 @@ async function primeLocalAddress() {
   }
 }
 
+/**
+ * A record seen standing that is now gone unrefuted has lapsed: the jury
+ * probes the subject once, so a still-dark node is re-certified rather than
+ * forgotten at six hours — and a quarantined one, whose watchers no longer
+ * dial it, is re-certified through this probe alone. A refutation is a
+ * return, not a lapse; it only ends the watch.
+ */
+function noteRecordState(outpoint, record) {
+  if (record.state === RECORD_STATE.STANDING) {
+    seenStanding.set(outpoint, record.key);
+    return;
+  }
+  if (!seenStanding.has(outpoint)) return;
+  seenStanding.delete(outpoint);
+  if (record.state === RECORD_STATE.NONE && juror) juror.look(outpoint, 'record-lapse');
+}
+
+/**
+ * Whether a node is held out of the network: its certificate stands, or its
+ * quarantine holds the stand-down open past the certificate. Both leave the
+ * node out of the dial plan and off the verdict push list.
+ */
 async function stoodDown(outpoint) {
   try {
-    return (await nodeDownStore.standingCertificateFor(outpoint)) !== null;
+    const [record, quarantine] = await Promise.all([
+      nodeDownStore.recordStateFor(outpoint),
+      nodeDownStore.quarantineFor(outpoint),
+    ]);
+    noteRecordState(outpoint, record);
+    return record.state === RECORD_STATE.STANDING || quarantine.quarantined;
   } catch (error) {
     return false;
+  }
+}
+
+/**
+ * The peering gate the peer manager asks before a peering inbound registers.
+ * Only a listed subject under quarantine is refused; who else may peer is
+ * decided where it always was.
+ *
+ * @param {string} socketAddress the dialer's ip:port
+ * @returns {Promise<{admitted: boolean, reason: string, subject?: string}>}
+ */
+async function inboundGate(socketAddress) {
+  refreshIndex();
+  const subject = index.bySocket.get(normalizeSocketAddress(socketAddress));
+  if (!subject) return { admitted: true, reason: 'unlisted' };
+  try {
+    const quarantine = await nodeDownStore.quarantineFor(subject);
+    if (!quarantine.quarantined) return { admitted: true, reason: 'not_quarantined' };
+    fluxEventBus.publish('nodedown:inboundRefused', {
+      subject, socketAddress, count: quarantine.count, liftsAt: quarantine.liftsAt,
+    });
+    return { admitted: false, reason: 'quarantined', subject };
+  } catch (error) {
+    log.warn(`nodeDownService: quarantine lookup for ${subject} failed, admitting: ${error.message}`);
+    return { admitted: true, reason: 'store_error' };
+  }
+}
+
+/**
+ * A certification just stored may have tripped the subject's quarantine:
+ * say so, and drop any connection still held to it — its watchers will not
+ * dial it and the gate will not readmit it until the hold lifts.
+ */
+async function noteQuarantine(subject, source) {
+  const quarantine = await nodeDownStore.quarantineFor(subject);
+  if (!quarantine.quarantined) return;
+  fluxEventBus.publish('nodedown:quarantined', {
+    subject, source, count: quarantine.count, liftsAt: quarantine.liftsAt,
+  });
+  const socketAddress = resolveOutpoint(subject);
+  if (transport && socketAddress && transport.peerManager.has(socketAddress)) {
+    transport.closePeer(socketAddress, 'quarantined');
   }
 }
 
@@ -144,6 +219,7 @@ async function intakeCertificate(message, envelope, source) {
     return result;
   }
   fluxEventBus.publish('nodedown:stored', { subject: message.certificate.subject, source });
+  await noteQuarantine(message.certificate.subject, source);
 
   if (message.certificate.subject === myOutpoint()) {
     // eslint-disable-next-line global-require
@@ -301,6 +377,7 @@ function start(injectedTransport) {
   addHandler = () => onPeerAdded();
   transport.peerManager.on('peer:removed', dropHandler);
   transport.peerManager.on('peer:added', addHandler);
+  transport.peerManager.setInboundGate(inboundGate);
 
   primeLocalAddress().then(() => reconciler.start());
   log.info('nodeDownService started');
@@ -309,6 +386,7 @@ function start(injectedTransport) {
 function stop() {
   if (transport && dropHandler) transport.peerManager.off('peer:removed', dropHandler);
   if (transport && addHandler) transport.peerManager.off('peer:added', addHandler);
+  if (transport) transport.peerManager.setInboundGate(null);
   dropHandler = null;
   addHandler = null;
   if (reconciler) reconciler.stop();
@@ -318,6 +396,7 @@ function stop() {
   index.fingerprint = undefined;
   index.byOutpoint.clear();
   index.bySocket.clear();
+  seenStanding.clear();
 }
 
 /** The periodic housekeeping fluxDiscovery drives: refresh what a missed

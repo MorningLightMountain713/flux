@@ -39,6 +39,17 @@ const VERDICT_LIFETIME_BLOCKS = 10;
 // standing certificate stays cold-verifiable for its whole life.
 const RECORD_LIFETIME_MS = 6 * 60 * 60 * 1000;
 
+// Severe flap quarantine. A subject certified down this many times while
+// those records still stand is held out of the network: its inbound is
+// refused, its announcements are ignored in derivation, it places nothing,
+// and its jurors' stand-down stays open. The count is taken over the synced
+// certification rows, so every node reaches the same verdict from the same
+// rows; a private count would be laundered by one jury re-deal. Proposed
+// 2026-09-02, not yet measured against fleet restart rates: every reboot
+// long enough to certify counts one, so the third within a record lifetime
+// trips it.
+const QUARANTINE_CERTIFICATIONS = 3;
+
 const JUDGEMENT = Object.freeze({
   UNREACHABLE: 'unreachable',
   REACHABLE: 'reachable',
@@ -307,6 +318,25 @@ function verifyCertificate(certificate, watchers, sameJury, verifySignature, now
   };
 }
 
+/**
+ * The quarantine verdict over one subject's certification rows. A row counts
+ * while it is unexpired, refuted or not: the count is deaths certified, not
+ * certificates standing. The hold lasts until enough rows age out for the
+ * count to fall under the threshold, so every further certification extends
+ * it by that row's remaining life and nothing else needs remembering.
+ *
+ * @param {Array<number>} expiries epoch-ms expiry of each row
+ * @param {number} now epoch-ms
+ * @returns {{quarantined: boolean, count: number, liftsAt: number|null}}
+ *   liftsAt is the expiry that ends the hold, null when there is none
+ */
+function quarantineFromExpiries(expiries, now) {
+  const live = expiries.filter((at) => at > now).sort((a, b) => a - b);
+  const count = live.length;
+  if (count < QUARANTINE_CERTIFICATIONS) return { quarantined: false, count, liftsAt: null };
+  return { quarantined: true, count, liftsAt: live[count - QUARANTINE_CERTIFICATIONS] };
+}
+
 module.exports = {
   VERDICT_DOMAIN,
   ALIVE_DOMAIN,
@@ -314,6 +344,7 @@ module.exports = {
   FUTURE_BLOCKS_TOLERANCE,
   VERDICT_LIFETIME_BLOCKS,
   RECORD_LIFETIME_MS,
+  QUARANTINE_CERTIFICATIONS,
   JUDGEMENT,
   REASON,
   DISCARDED,
@@ -323,4 +354,5 @@ module.exports = {
   collectors,
   assemble,
   verifyCertificate,
+  quarantineFromExpiries,
 };

@@ -158,6 +158,34 @@ class RingReconciler {
     this.#deps.dial(socketAddress, { witness }).then(settle).catch(() => settle(false));
   }
 
+  /**
+   * One round of top-up dials over the ring successors, then another for
+   * every candidate the network holds out — a certified-down or quarantined
+   * node is no more a substitute than it is a duty, and the walk must look
+   * past it exactly as it looks past a duty. Ends when the slots are covered
+   * or the walk runs dry.
+   */
+  async #openTopUps(topology, myOutpoint, want, exclude) {
+    if (want <= 0) return;
+    const candidates = topology.ringSuccessors(myOutpoint, want, exclude);
+    if (!candidates.length) return;
+    candidates.forEach((candidate) => exclude.add(candidate.outpoint));
+    const heldOut = await Promise.all(candidates.map(
+      (candidate) => (this.#deps.stoodDown ? this.#deps.stoodDown(candidate.outpoint) : false),
+    ));
+    let skipped = 0;
+    candidates.forEach((candidate, i) => {
+      if (heldOut[i]) {
+        skipped += 1;
+        return;
+      }
+      const socketAddress = this.#deps.resolveOutpoint(candidate.outpoint);
+      if (!socketAddress || !this.#deps.mayDial(socketAddress)) return;
+      this.#dialTracked(this.#topups, candidate.outpoint, socketAddress, false);
+    });
+    await this.#openTopUps(topology, myOutpoint, skipped, exclude);
+  }
+
   async #pass(reason) {
     const topology = this.#deps.topology();
     const myOutpoint = this.#deps.myOutpoint();
@@ -219,12 +247,7 @@ class RingReconciler {
       const exclude = new Set([myOutpoint]);
       this.#duties.forEach((entry, outpoint) => exclude.add(outpoint));
       this.#topups.forEach((entry, outpoint) => exclude.add(outpoint));
-
-      topology.ringSuccessors(myOutpoint, shortfall, exclude).forEach((candidate) => {
-        const socketAddress = this.#deps.resolveOutpoint(candidate.outpoint);
-        if (!socketAddress || !this.#deps.mayDial(socketAddress)) return;
-        this.#dialTracked(this.#topups, candidate.outpoint, socketAddress, false);
-      });
+      await this.#openTopUps(topology, myOutpoint, shortfall, exclude);
     } else {
       // Hysteretic release: a substitute is not torn down the instant
       // the ideal returns — only what stands above floor + margin goes, so a
