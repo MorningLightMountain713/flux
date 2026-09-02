@@ -428,7 +428,13 @@ function stop() {
 async function sweep() {
   if (!reconciler) return;
   await primeLocalAddress();
-  ladder.retain(dutyOutpoints());
+  const duties = dutyOutpoints();
+  ladder.retain(duties);
+  // A record seen standing for a node the list has since dropped is never
+  // asked about again: forget it, so a later relisting starts clean.
+  [...seenStanding.keys()].forEach((outpoint) => {
+    if (!duties.has(outpoint)) seenStanding.delete(outpoint);
+  });
   reconciler.schedule('sweep');
   juror.sweep();
 }
