@@ -51,6 +51,15 @@ describe('quorumGrant grantClientCore', () => {
       expect(adoptFrom(replies).grantee).to.equal('b:0');
     });
 
+    it('ignores a RELEASED row — an ordinal given back or vacated is not a founder to adopt', () => {
+      const replies = [
+        { ok: true, promised: true, accepted: { epoch: 4, grantee: 'r:0', mode: 'oneshot', released: true } },
+        { ok: true, promised: true, accepted: { epoch: 2, grantee: 'b:0', mode: 'oneshot', released: false } },
+      ];
+      expect(adoptFrom(replies).grantee).to.equal('b:0');
+      expect(adoptFrom([replies[0]])).to.equal(null);
+    });
+
     it('adopts nothing from an unwritten world', () => {
       expect(adoptFrom([{ ok: true, promised: true, accepted: null }])).to.equal(null);
       expect(adoptFrom([])).to.equal(null);

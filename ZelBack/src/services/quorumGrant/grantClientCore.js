@@ -53,6 +53,10 @@ function adoptFrom(replies) {
   (replies || []).forEach((reply) => {
     const accepted = reply?.accepted;
     if (!accepted) return;
+    // A released row is a row given back (an ordinal on uninstall) or
+    // reclaimed (a certificate about its holder): free, not a decision to
+    // adopt. Founder rows never release, so this never fired before ordinals.
+    if (accepted.released) return;
     if (!adopted || accepted.epoch > adopted.epoch) adopted = accepted;
   });
   return adopted;

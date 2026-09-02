@@ -167,7 +167,12 @@ function onAccept(record, request, nowMs, tunables) {
   const promisedEpoch = record?.promisedEpoch ?? 0;
   const state = grantState(record, nowMs);
 
-  if (record?.accepted && record.accepted.mode === 'oneshot') {
+  // Init-only, until the row is given back: a founder row never is, an
+  // ordinal row is (released on uninstall, vacated on a certificate), and a
+  // released row is free for the next founding at a higher epoch — the same
+  // grantee included, which is how a row split by a vacate cut short at one
+  // cell is repaired (formal/ordinal-register, "free-or-mine").
+  if (record?.accepted && record.accepted.mode === 'oneshot' && !record.accepted.released) {
     if (record.accepted.grantee === grantee) {
       // Idempotent: a retried accept is the same decision, not a second one.
       return { reply: { ok: true, accepted: record.accepted }, record: null };
@@ -418,7 +423,11 @@ function onRelease(record, request, nowMs) {
   if (state === 'none' || state === 'released') {
     return { reply: { ok: true, released: true }, record: null };
   }
-  if (record.accepted.mode !== 'held') {
+  // A oneshot row is releasable only when the CALLER says the register is
+  // one that reopens — the controller decides that from the key's role
+  // (ordinal rows yes, founder rows never; re-founding a founder is an
+  // operator act, QUORUM_GRANT_PRIMITIVE 8.3). The core cannot read roles.
+  if (record.accepted.mode !== 'held' && request.allowOneshot !== true) {
     return { reply: refusal('bad_mode', record), record: null };
   }
   if (!isGrantee(record.accepted, grantee) || record.accepted.epoch !== epoch) {
@@ -428,6 +437,41 @@ function onRelease(record, request, nowMs) {
   const accepted = { ...record.accepted, released: true };
   return {
     reply: { ok: true, released: true },
+    record: { ...record, accepted },
+  };
+}
+
+/**
+ * Reclaim by certificate: a node-down certificate about the recorded grantee
+ * of a oneshot row marks it released — the row reads as free from here and
+ * the next founding takes it at a higher epoch. The certificate's authority
+ * travels with it (verified by the controller through the node-down store's
+ * seam before this runs, exactly as a cancel-chain entry is); the core sees
+ * only its subject. Final: a later refutation does not un-mark the row — the
+ * subject re-founds if its ordinal is still free. A vacate of a free or
+ * already-released row is a no-op success, like a release.
+ *
+ * @param {object|null} record
+ * @param {{subject: string}} request the certificate's subject outpoint
+ * @param {number} nowMs
+ */
+function onVacate(record, request, nowMs) {
+  const { subject } = request;
+  const state = grantState(record, nowMs);
+
+  if (state === 'none' || state === 'released') {
+    return { reply: { ok: true, vacated: true }, record: null };
+  }
+  if (record.accepted.mode !== 'oneshot') {
+    return { reply: refusal('bad_mode', record), record: null };
+  }
+  if (!isGrantee(record.accepted, subject)) {
+    return { reply: refusal('not_grantee', record), record: null };
+  }
+
+  const accepted = { ...record.accepted, released: true };
+  return {
+    reply: { ok: true, vacated: true },
     record: { ...record, accepted },
   };
 }
@@ -442,4 +486,5 @@ module.exports = {
   onRenew,
   onRoster,
   onRelease,
+  onVacate,
 };

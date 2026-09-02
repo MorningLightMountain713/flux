@@ -286,6 +286,119 @@ describe('quorumGrant grantorController', () => {
     });
   });
 
+  describe('the ordinal plane — write-once rows that reopen', () => {
+    // An ordinal register is a founder-shaped oneshot row on the app's
+    // founding committee, keyed `ordinal-<n>@<rung>`, with two exits a
+    // founder row never has: release by the holder and vacate by a node-down
+    // certificate (formal/ordinal-register/RESULTS.md).
+    const ORDINAL_KEY = 'myapp/ordinal-0@500000';
+
+    it('an ordinal ask consults the founding committee at its rung, component-blind', async () => {
+      const res = fakeRes();
+      await grantorController.prepare(fakeReq(signedAsk('prepare', { mode: 'oneshot', key: ORDINAL_KEY })), res);
+      expect(res.statusCode).to.equal(200);
+      expect(foundingCommittee.selfOnFoundingCommittee.calledOnceWith('myapp', 500000, FINGERPRINT, 0)).to.equal(true);
+      expect(grantRegister.prepare.firstCall.args[0]).to.equal(`${ORDINAL_KEY}@0`);
+    });
+
+    it('release of an ordinal row reaches the register row with the oneshot permission', async () => {
+      const res = fakeRes();
+      await grantorController.release(fakeReq(signedAsk('release', { key: ORDINAL_KEY, generation: 0 })), res);
+      expect(res.statusCode).to.equal(200);
+      const [row, request] = grantRegister.release.firstCall.args;
+      expect(row).to.equal(`${ORDINAL_KEY}@0`);
+      expect(request.allowOneshot).to.equal(true);
+      expect(request.grantee).to.equal(ASKER);
+    });
+
+    it('release of a founder row carries no such permission — founder rows never reopen', async () => {
+      const res = fakeRes();
+      await grantorController.release(fakeReq(signedAsk('release', { key: FOUNDER_KEY, generation: 0 })), res);
+      expect(res.statusCode).to.equal(200);
+      const [row, request] = grantRegister.release.firstCall.args;
+      expect(row).to.equal(`${FOUNDER_KEY}@0`);
+      expect(request.allowOneshot).to.equal(undefined);
+    });
+
+    it('release of a held key is unchanged: the key itself, no permission', async () => {
+      const res = fakeRes();
+      await grantorController.release(fakeReq(signedAsk('release')), res);
+      expect(res.statusCode).to.equal(200);
+      const [row, request] = grantRegister.release.firstCall.args;
+      expect(row).to.equal('myapp/master');
+      expect(request.allowOneshot).to.equal(undefined);
+    });
+
+    describe('vacate — reclaim by certificate', () => {
+      const HOLDER = `${'7'.repeat(64)}:0`;
+
+      beforeEach(() => {
+        sinon.stub(grantRegister, 'vacate').resolves({ ok: true, vacated: true });
+        downCertificates.registerProvider({
+          standingCertificateFor: async () => null,
+          refutationFor: async () => null,
+          verifyCertificate: (cert) => ({ valid: cert?.token === 'standing', subject: cert?.subject ?? null }),
+          verifyRefutation: () => false,
+        });
+      });
+
+      afterEach(() => {
+        downCertificates.resetForTests();
+      });
+
+      it('a verified certificate vacates the row for its subject', async () => {
+        const res = fakeRes();
+        const ask = signedAsk('vacate', { key: ORDINAL_KEY, generation: 0, cert: { token: 'standing', subject: HOLDER } });
+        await grantorController.vacate(fakeReq(ask), res);
+        expect(res.statusCode).to.equal(200);
+        expect(res.body.data).to.deep.equal({ ok: true, vacated: true });
+        const [row, request] = grantRegister.vacate.firstCall.args;
+        expect(row).to.equal(`${ORDINAL_KEY}@0`);
+        expect(request).to.deep.equal({ subject: HOLDER });
+      });
+
+      it('an unverifiable certificate vacates nothing — a register-level refusal, like every other', async () => {
+        const res = fakeRes();
+        const ask = signedAsk('vacate', { key: ORDINAL_KEY, generation: 0, cert: { token: 'forged', subject: HOLDER } });
+        await grantorController.vacate(fakeReq(ask), res);
+        expect(res.statusCode).to.equal(200);
+        expect(res.body.data.ok).to.equal(false);
+        expect(res.body.data.code).to.equal('bad_certificate');
+        expect(grantRegister.vacate.called).to.equal(false);
+      });
+
+      it('a vacate without a certificate, or against a held or founder key, is refused', async () => {
+        let res = fakeRes();
+        await grantorController.vacate(fakeReq(signedAsk('vacate', { key: ORDINAL_KEY, generation: 0 })), res);
+        expect(res.statusCode).to.equal(400);
+        res = fakeRes();
+        await grantorController.vacate(fakeReq(signedAsk('vacate', { key: 'myapp/master', generation: 0, cert: { token: 'standing', subject: HOLDER } })), res);
+        expect(res.statusCode).to.equal(409);
+        res = fakeRes();
+        await grantorController.vacate(fakeReq(signedAsk('vacate', { key: FOUNDER_KEY, generation: 0, cert: { token: 'standing', subject: HOLDER } })), res);
+        expect(res.statusCode).to.equal(409);
+        expect(grantRegister.vacate.called).to.equal(false);
+      });
+
+      it('the certificate is verified through the node-down seam, and an inert seam verifies nothing', async () => {
+        downCertificates.resetForTests();
+        const res = fakeRes();
+        const ask = signedAsk('vacate', { key: ORDINAL_KEY, generation: 0, cert: { token: 'standing', subject: HOLDER } });
+        await grantorController.vacate(fakeReq(ask), res);
+        expect(res.statusCode).to.equal(200);
+        expect(res.body.data.code).to.equal('bad_certificate');
+        expect(grantRegister.vacate.called).to.equal(false);
+      });
+    });
+
+    it('the record read addresses an ordinal row like a founder row', async () => {
+      const res = fakeRes();
+      await grantorController.record({ params: { key: ORDINAL_KEY }, query: { generation: '0' } }, res);
+      expect(res.statusCode).to.equal(200);
+      expect(grantRegister.read.firstCall.args[0]).to.equal(`${ORDINAL_KEY}@0`);
+    });
+  });
+
   describe('the founder plane — oneshot membership answers from the founding record', () => {
     it('an oneshot ask consults the founding committee, never the walk', async () => {
       const res = fakeRes();

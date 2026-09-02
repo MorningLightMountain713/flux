@@ -10,6 +10,7 @@ const { RingReconciler } = require('./utils/ringReconciler');
 const { NodeDownJuror } = require('./utils/nodeDownJuror');
 const { FlapLadder } = require('./utils/flapLadder');
 const meshOrdinals = require('./appMesh/meshOrdinals');
+const ordinalRegister = require('./quorumGrant/ordinalRegister');
 const { FluxPeerManager } = require('./utils/FluxPeerManager');
 const { normalizeSocketAddress, extractIp } = require('./utils/socketAddressUtils');
 const fluxEventBus = require('./utils/fluxEventBus');
@@ -233,6 +234,9 @@ async function intakeCertificate(message, envelope, source) {
   }
   fluxEventBus.publish('nodedown:stored', { subject: message.certificate.subject, source });
   await noteQuarantine(message.certificate.subject, source);
+  // every ordinal the certified node holds is reclaimed by this certificate
+  // (the grant plane's ordinal registers; a host of the app issues the asks)
+  ordinalRegister.noteCertificate(message.certificate).catch((error) => log.warn(`nodeDownService - ordinal vacate: ${error.message}`));
 
   if (message.certificate.subject === myOutpoint()) {
     // eslint-disable-next-line global-require

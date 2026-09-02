@@ -168,6 +168,28 @@ describe('quorumGrant grantRegister', () => {
       expect(stored.accepted.released).to.equal(true);
     });
 
+    it('carries an ordinal row: found, vacated on a certificate, re-founded by another at a higher epoch', async () => {
+      const key = 'app/ordinal-0@500';
+      const first = await grantRegister.accept(key, {
+        epoch: 1, grantee: 'a:0', mode: 'oneshot', fingerprint: 'fp',
+      });
+      expect(first.ok).to.equal(true);
+
+      const vacated = await grantRegister.vacate(key, { subject: 'a:0' });
+      expect(vacated).to.deep.equal({ ok: true, vacated: true });
+      expect(store.get(key).accepted.released).to.equal(true);
+
+      const again = await grantRegister.vacate(key, { subject: 'a:0' });
+      expect(again.ok).to.equal(true);
+
+      const second = await grantRegister.accept(key, {
+        epoch: 2, grantee: 'b:0', mode: 'oneshot', fingerprint: 'fp',
+      });
+      expect(second.ok).to.equal(true);
+      expect(store.get(key).accepted.grantee).to.equal('b:0');
+      expect(store.get(key).accepted.released).to.equal(false);
+    });
+
     it('the refereeing-return anchor rides the shell into the core', async () => {
       // a held term that lapsed long ago — the row-death lock-delay has run
       store.set('app/master', {

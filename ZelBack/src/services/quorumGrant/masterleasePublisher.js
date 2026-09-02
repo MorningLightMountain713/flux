@@ -30,6 +30,8 @@ const log = require('../../lib/log');
  * @param {{chain: object[]}} [grant.roster] the committee's quorum-signed
  *   seat changes atop the generation's base — self-verifying, so the record
  *   is proof enough for any reader
+ * @param {boolean} [grant.released] the row was given back or vacated: the
+ *   record supersedes the founding's at the same epoch and names it free
  * @returns {Promise<boolean>} whether the record went out
  */
 async function publishMasterlease(grant) {
@@ -54,6 +56,9 @@ async function publishMasterlease(grant) {
       fingerprint: grant.fingerprint,
       ...(grant.mode === 'held' ? { ttlMs: grant.ttlMs } : {}),
       ...(grant.roster ? { roster: grant.roster } : {}),
+      // an ordinal given back or reclaimed: same row, same epoch, a newer
+      // broadcast, and the flag every reader of the ordinal- prefix skips
+      ...(grant.released === true ? { released: true } : {}),
       broadcastedAt: Date.now(),
     };
 

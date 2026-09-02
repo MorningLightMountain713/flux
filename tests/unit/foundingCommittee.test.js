@@ -391,6 +391,18 @@ describe('foundingCommittee', () => {
       expect(await foundingCommittee.newestRungFor('myapp', REG_HEIGHT)).to.equal(RUNG);
     });
 
+    it('appWorld is the app\'s FIRST world — the earliest component intro — whatever the component ladder', async () => {
+      // an ordinal register is per app, shared by every component a node
+      // hosts, so its rung ladder is the app's oldest world's
+      expect(await foundingCommittee.appWorld('myapp')).to.equal(null);
+      await foundingCommittee.recordAnchor(anchorDoc());
+      await foundingCommittee.applyComponentView(meshView());
+      const byComponent = await foundingCommittee.componentWorld('myapp', 'db');
+      const byApp = await foundingCommittee.appWorld('myapp');
+      expect(byApp).to.deep.equal(byComponent);
+      expect(byApp.intro).to.equal(REG_HEIGHT);
+    });
+
     it('equality serve: a flipped-past basis is refused, the newest rung answers', async () => {
       await foundingCommittee.recordAnchor(anchorDoc());
       rotTheFleet();

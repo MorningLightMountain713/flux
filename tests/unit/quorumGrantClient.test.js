@@ -174,7 +174,15 @@ describe('quorumGrant grantClient', () => {
       prepare: () => registerCore.onPrepare(record, request, Date.now(), REGISTER_TUNABLES),
       accept: () => registerCore.onAccept(record, request, Date.now(), REGISTER_TUNABLES),
       renew: () => registerCore.onRenew(record, request, Date.now(), REGISTER_TUNABLES),
-      release: () => registerCore.onRelease(record, request, Date.now()),
+      // the controller's role rule: only an ordinal row may be given back
+      release: () => registerCore.onRelease(record, {
+        ...request, ...(/\/ordinal-\d+@/.test(ask.key) ? { allowOneshot: true } : {}),
+      }, Date.now()),
+      // the controller verifies the certificate through the node-down seam;
+      // here a certificate whose token says so stands
+      vacate: () => (ask.cert?.token === 'standing'
+        ? registerCore.onVacate(record, { subject: ask.cert.subject }, Date.now())
+        : { reply: { ok: false, code: 'bad_certificate' }, record: null }),
     };
     const outcome = handlers[type]();
     if (outcome.record) store.set(ask.key, outcome.record);
@@ -890,6 +898,57 @@ describe('quorumGrant grantClient', () => {
       const members = carried.replies.map((entry) => entry.member).sort();
       const expected = committee.members.map((node) => `${node.txhash}:${node.outidx}`).sort();
       expect(members).to.deep.equal(expected);
+    });
+  });
+
+  describe('the ordinal plane — probe as a quorum verdict, release, vacate', () => {
+    const ORDINAL = 'myapp/ordinal-0@500';
+    // the founding committee as the founding service hands it in: basis pair included
+    const founding = () => ({ ...committee, fingerprint, generation: 0 });
+
+    it('an unfounded ordinal probes decided with no holder; a founded one names its holder', async () => {
+      let verdict = await grantClient.probeOneshot(ORDINAL, founding());
+      expect(verdict).to.deep.equal({ decided: true, holder: null, epoch: 0 });
+      const outcome = await grantClient.acquire(ORDINAL, { mode: 'oneshot', committee: founding() });
+      expect(outcome.granted).to.equal(true);
+      verdict = await grantClient.probeOneshot(ORDINAL, founding());
+      expect(verdict.holder).to.equal(SELF);
+      expect(verdict.decided).to.equal(true);
+      expect(verdict.epoch).to.be.at.least(1);
+    });
+
+    it('a holder is a QUORUM verdict: one cell naming it is not enough, and released rows do not count', () => {
+      const row = (grantee, released = false) => ({ ok: true, accepted: { epoch: 1, grantee, mode: 'oneshot', released } });
+      expect(grantClient.oneshotQuorumFold([row('a:0'), row('b:0'), row('b:0')], 2).holder).to.equal('b:0');
+      expect(grantClient.oneshotQuorumFold([row('a:0'), { ok: true, accepted: null }, { ok: true, accepted: null }], 2).holder).to.equal(null);
+      expect(grantClient.oneshotQuorumFold([row('a:0', true), row('a:0', true), row('a:0')], 2).holder).to.equal(null);
+      expect(grantClient.oneshotQuorumFold([row('a:0')], 2).decided).to.equal(false);
+    });
+
+    it('a probe that cannot reach a quorum is undecided, never free', async () => {
+      committeeHosts.slice(0, 6).forEach((host) => dark.add(host));
+      const verdict = await grantClient.probeOneshot(ORDINAL, founding());
+      expect(verdict.decided).to.equal(false);
+      expect(verdict.holder).to.equal(null);
+    });
+
+    it('release gives the row back on a quorum, and the next probe reads it free', async () => {
+      const outcome = await grantClient.acquire(ORDINAL, { mode: 'oneshot', committee: founding() });
+      expect(outcome.granted).to.equal(true);
+      const { epoch } = await grantClient.probeOneshot(ORDINAL, founding());
+      expect(await grantClient.releaseOneshot(ORDINAL, founding(), epoch)).to.equal(true);
+      const verdict = await grantClient.probeOneshot(ORDINAL, founding());
+      expect(verdict).to.deep.include({ decided: true, holder: null });
+      const again = await grantClient.acquire(ORDINAL, { mode: 'oneshot', committee: founding() });
+      expect(again.granted).to.equal(true);
+    });
+
+    it('vacate reclaims the row on a standing certificate about the holder, and nothing on any other', async () => {
+      await grantClient.acquire(ORDINAL, { mode: 'oneshot', committee: founding() });
+      expect(await grantClient.vacateOneshot(ORDINAL, founding(), { token: 'forged', subject: SELF })).to.equal(false);
+      expect((await grantClient.probeOneshot(ORDINAL, founding())).holder).to.equal(SELF);
+      expect(await grantClient.vacateOneshot(ORDINAL, founding(), { token: 'standing', subject: SELF })).to.equal(true);
+      expect((await grantClient.probeOneshot(ORDINAL, founding())).holder).to.equal(null);
     });
   });
 
