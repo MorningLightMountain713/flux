@@ -34,6 +34,52 @@ function baseMessage(overrides = {}) {
 }
 
 describe('quorumGrant masterlease', () => {
+  describe('the published row', () => {
+    it('carries released only when the grant says so — an ordinal given back names its row free', async () => {
+      const sent = [];
+      sinon.stub(fluxNetworkHelper, 'getLocalSocketAddress').resolves('203.0.113.5:16127');
+      sinon.stub(fluxCommunicationMessagesSender, 'broadcastMessageToAll').callsFake(async (message) => { sent.push(message); return null; });
+      sinon.stub(messageStore, 'storeAppStateEvent').resolves();
+      try {
+        const base = {
+          key: 'myapp/ordinal-0@500', grantee: `${'a'.repeat(64)}:0`, epoch: 2, mode: 'oneshot', fingerprint: 'd'.repeat(64), generation: 0,
+        };
+        await masterleasePublisher.publishMasterlease(base);
+        await masterleasePublisher.publishMasterlease({ ...base, released: true });
+        expect(sent).to.have.length(2);
+        expect(sent[0]).to.not.have.property('released');
+        expect(sent[1].released).to.equal(true);
+        expect(sent[1]).to.deep.include({ role: 'ordinal-0@500', epoch: 2, mode: 'oneshot' });
+      } finally {
+        sinon.restore();
+      }
+    });
+  });
+
+  describe('the by-grantee read', () => {
+    it('finds every record of one role prefix naming one grantee, across apps', async () => {
+      const queries = [];
+      const collection = {
+        find: (filter, options) => {
+          queries.push({ filter, options });
+          return { toArray: async () => [] };
+        },
+      };
+      sinon.stub(dbHelper, 'databaseConnection').returns({ db: () => ({ collection: () => collection }) });
+      try {
+        const rows = await messageStore.getMasterleaseRecordsByGrantee('ordinal-', `${'a'.repeat(64)}:0`);
+        expect(rows).to.deep.equal([]);
+        expect(queries).to.have.length(1);
+        expect(queries[0].filter.type).to.equal('masterlease');
+        expect(queries[0].filter['data.grantee']).to.equal(`${'a'.repeat(64)}:0`);
+        // the role prefix is matched inside the dedup key, after the app name
+        expect(queries[0].filter.dedupKey.$regex).to.equal('^masterlease:[^/]+/ordinal-');
+      } finally {
+        sinon.restore();
+      }
+    });
+  });
+
   describe('the stored record', () => {
     let updates;
 
@@ -62,6 +108,29 @@ describe('quorumGrant masterlease', () => {
         type: 'masterlease', dedupKey: 'masterlease:myapp/master',
       });
       expect(updates[0].options.upsert).to.equal(true);
+    });
+
+    it('a released record stores with its flag — an ordinal given back or vacated, same epoch, newer broadcast', async () => {
+      await messageStore.storeAppStateEvent('masterlease', {
+        message: baseMessage({
+          role: 'ordinal-0@500', mode: 'oneshot', ttlMs: undefined, released: true,
+        }),
+        envelope: null,
+        announcer: null,
+      });
+      expect(updates).to.have.length(1);
+      const { data } = updates[0].update[0].$set;
+      // the payload rides the comparator; the flag rides the payload
+      expect(JSON.stringify(data)).to.contain('"released":true');
+    });
+
+    it('a record whose released flag is not a boolean is dropped whole', async () => {
+      await messageStore.storeAppStateEvent('masterlease', {
+        message: baseMessage({ role: 'ordinal-0@500', mode: 'oneshot', ttlMs: undefined, released: 'yes' }),
+        envelope: null,
+        announcer: null,
+      });
+      expect(updates).to.have.length(0);
     });
 
     it('compares generation ahead of epoch, broadcast time only as the full tiebreak', async () => {

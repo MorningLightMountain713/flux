@@ -52,6 +52,26 @@ const KEY_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,199}\/[a-zA-Z0-9-]{1,64}(@\d{1
 // register rows additionally carry a founder round's generation suffix
 const ROW_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,199}\/[a-zA-Z0-9-]{1,64}(@\d{1,16}){0,2}$/;
 const FOUNDER_ROLE_PATTERN = /^founder-([a-f0-9]{16})@(\d{1,10})$/;
+// An ordinal register: founder-shaped (oneshot, on the app's founding
+// committee at a rung, component-blind) with two exits a founder row never
+// has — the holder releases it on uninstall, a node-down certificate about
+// the holder vacates it. The role prefix is what tells the two apart at every
+// gate: a founder row never reopens (re-founding is an operator act,
+// QUORUM_GRANT_PRIMITIVE 8.3), an ordinal row does.
+const ORDINAL_ROLE_PATTERN = /^ordinal-(\d{1,5})@(\d{1,10})$/;
+
+function roleOf(key) {
+  return key.slice(key.indexOf('/') + 1);
+}
+
+function founderShaped(key) {
+  const role = roleOf(key);
+  return FOUNDER_ROLE_PATTERN.test(role) || ORDINAL_ROLE_PATTERN.test(role);
+}
+
+function ordinalKey(key) {
+  return ORDINAL_ROLE_PATTERN.test(roleOf(key));
+}
 const OUTPOINT_PATTERN = /^[0-9a-f]{64}:\d{1,6}$/;
 const FINGERPRINT_PATTERN = /^[0-9a-f]{64}$/;
 
@@ -263,16 +283,30 @@ function bad(code, message) {
 async function readAsk(req, type) {
   const body = serviceHelper.ensureObject(req.body) ?? {};
   const {
-    key, mode, epoch, candidate, ttlMs, generation, fingerprint, at, signature,
-    remove, add, seq, chain, cancels,
+    key, epoch, candidate, ttlMs, generation, fingerprint, at, signature,
+    remove, add, seq, chain, cancels, cert,
   } = body;
 
   if (typeof key !== 'string' || !KEY_PATTERN.test(key)) {
     return bad(400, 'malformed key');
   }
   const needsMode = type === 'probe' || type === 'prepare' || type === 'accept';
-  if (needsMode && !MODES.includes(mode)) {
+  if (needsMode && !MODES.includes(body.mode)) {
     return bad(400, 'malformed mode');
+  }
+  // An op with no mode on the wire (release, vacate, renew, roster) runs
+  // under the mode its key implies: founder-shaped keys are oneshot
+  // registers whose rows are addressed by generation, everything else is
+  // held. Unsigned and derived here, so a caller cannot pick a register
+  // kind the key does not name.
+  const mode = needsMode ? body.mode : impliedMode(key);
+  if (type === 'vacate') {
+    if (!ordinalKey(key)) {
+      return bad(409, 'only an ordinal register vacates');
+    }
+    if (typeof cert !== 'object' || cert === null) {
+      return bad(400, 'missing certificate');
+    }
   }
   if (!Number.isSafeInteger(epoch) || epoch < 1) {
     return bad(400, 'malformed epoch');
@@ -345,6 +379,7 @@ async function readAsk(req, type) {
 
   const ask = {
     key, mode, epoch, candidate, ttlMs, generation, fingerprint, at, remove, add, seq, chain, cancels,
+    ...(cert !== undefined ? { cert } : {}),
   };
   const fields = signedEnvelope.fieldsFor(type, ask);
   if (!fields || !signedEnvelope.verify(type, fields, signature, askerNode.pubkey)) {
@@ -387,8 +422,8 @@ async function readAsk(req, type) {
  */
 async function selfOnCommittee(key, mode, fingerprint, generation, carriedChain, carriedCancels) {
   if (mode === 'oneshot') {
-    const role = key.slice(key.indexOf('/') + 1);
-    const founderRole = FOUNDER_ROLE_PATTERN.exec(role);
+    const role = roleOf(key);
+    const founderRole = FOUNDER_ROLE_PATTERN.exec(role) ?? ORDINAL_ROLE_PATTERN.exec(role);
     if (!founderRole) {
       return { member: false, code: 409, reason: 'not a founder register' };
     }
@@ -809,7 +844,9 @@ async function serve(req, res, type, operate) {
       }
     }
 
-    if (type !== 'probe') {
+    // a vacate's authority is the certificate it carries, not the submitter's
+    // seat on the app — any listed node that holds the certificate may submit it
+    if (type !== 'probe' && type !== 'vacate') {
       const holding = await askerHolds(ask, askerNode, type);
       ms.holds = Date.now() - t0 - ms.read - ms.committee;
       if (!holding.holds) {
@@ -842,6 +879,12 @@ function registerRowFor(ask) {
   return ask.mode === 'oneshot' ? `${ask.key}@${ask.generation}` : ask.key;
 }
 
+// The mode an op without one on the wire (release, vacate) runs under: a
+// founder-shaped key is a oneshot register, everything else is held.
+function impliedMode(key) {
+  return founderShaped(key) ? 'oneshot' : 'held';
+}
+
 async function probe(req, res) {
   return serve(req, res, 'probe', (ask, context) => grantRegister.probe(registerRowFor(ask), {
     epoch: ask.epoch, candidate: ask.candidate,
@@ -872,9 +915,31 @@ async function renew(req, res) {
 }
 
 async function release(req, res) {
-  return serve(req, res, 'release', (ask) => grantRegister.release(ask.key, {
-    epoch: ask.epoch, grantee: ask.candidate,
+  return serve(req, res, 'release', (ask) => grantRegister.release(registerRowFor(ask), {
+    epoch: ask.epoch,
+    grantee: ask.candidate,
+    // only an ORDINAL row may be given back; the core refuses every other
+    // oneshot release with bad_mode, founder rows included
+    ...(ordinalKey(ask.key) ? { allowOneshot: true } : {}),
   }));
+}
+
+/**
+ * Reclaim an ordinal row by certificate. The ask carries the node-down
+ * certificate whole; it is verified through the store's seam (cold
+ * verification, as a cancel-chain entry is) and its subject must be the
+ * row's recorded grantee — the core checks that. Anyone listed may submit
+ * it: authority travels with the certificate, not the submitter. Only an
+ * ordinal key vacates; a held or founder key is refused at the gate.
+ */
+async function vacate(req, res) {
+  return serve(req, res, 'vacate', async (ask) => {
+    const verdict = downCertificates.verifiers().certificate(ask.cert);
+    if (!verdict?.valid || typeof verdict.subject !== 'string') {
+      return { ok: false, code: 'bad_certificate', promisedEpoch: 0, accepted: null };
+    }
+    return grantRegister.vacate(registerRowFor(ask), { subject: verdict.subject });
+  });
 }
 
 /**
@@ -967,8 +1032,7 @@ async function record(req, res) {
     // A founder register is one cell per generation (registerRowFor): a
     // logical founder key addresses its generation's cell, default 0. Any
     // other key — held, or an explicit row id — reads verbatim.
-    const role = key.slice(key.indexOf('/') + 1);
-    const row = FOUNDER_ROLE_PATTERN.test(role)
+    const row = founderShaped(key)
       ? registerRowFor({ mode: 'oneshot', key, generation })
       : key;
     const stored = await grantRegister.read(row);
@@ -1075,6 +1139,7 @@ module.exports = {
   renew,
   roster,
   release,
+  vacate,
   record,
   foundingBasis,
   noteReturnFromUnreachability,

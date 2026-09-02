@@ -4,6 +4,7 @@ const { expect } = require('chai');
 
 const {
   TYPES,
+  fieldsFor,
   canonical,
   sign,
   verify,
@@ -92,6 +93,17 @@ describe('quorumGrant signedEnvelope', () => {
     it('sign refuses what canonical refuses', () => {
       expect(sign('prepare', ['bad|field'], WIF)).to.equal(null);
       expect(sign('nonsense', ['k'], WIF)).to.equal(null);
+    });
+
+    it('a vacate signs the ask, never the certificate it carries', () => {
+      // the certificate is self-verifying through the node-down store's seam,
+      // exactly as a cancel-chain entry is; binding it here would stop one
+      // signature serving every cell of the committee
+      const ask = {
+        key: 'app/ordinal-0@500', candidate: 'aaaa:0', generation: 2, fingerprint: 'f'.repeat(64), at: 5, cert: { subject: 'bbbb:1' },
+      };
+      expect(fieldsFor('vacate', ask)).to.deep.equal(['app/ordinal-0@500', 'aaaa:0', 2, 'f'.repeat(64), 5]);
+      expect(TYPES).to.include('vacate');
     });
 
     it('every declared type signs and verifies', () => {

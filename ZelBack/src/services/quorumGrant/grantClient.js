@@ -1484,6 +1484,90 @@ class Holder {
 }
 
 // ---------------------------------------------------------------------------
+// the ordinal plane's three reads and writes against a oneshot register
+// (formal/ordinal-register/RESULTS.md, the build items): a probe folded as a
+// QUORUM verdict, a release, and a vacate carrying a certificate.
+
+/**
+ * The quorum fold over a oneshot committee's replies: a holder is named only
+ * when at least a quorum of cells record the SAME grantee on an unreleased
+ * row — never adoptFrom's highest single row, which the model showed
+ * adopting a returned holder from the one cell its vacate had not reached
+ * ("ask, never count", the rule relearn applies to terms).
+ *
+ * @param {Array<object>} replies
+ * @param {number} quorum
+ * @returns {{decided: boolean, holder: string|null, epoch: number}}
+ */
+function oneshotQuorumFold(replies, quorum) {
+  const answered = replies.filter((reply) => reply && (reply.ok === true || reply.accepted));
+  const counts = new Map();
+  let epoch = 0;
+  answered.forEach((reply) => {
+    const accepted = reply?.accepted;
+    if (!accepted || accepted.released || accepted.mode !== 'oneshot') return;
+    counts.set(accepted.grantee, (counts.get(accepted.grantee) ?? 0) + 1);
+    epoch = Math.max(epoch, accepted.epoch);
+  });
+  const named = [...counts.entries()].find(([, count]) => count >= quorum);
+  return {
+    decided: answered.length >= quorum,
+    holder: named ? named[0] : null,
+    epoch,
+  };
+}
+
+/**
+ * Probe a oneshot key across its committee and fold the answers as a quorum
+ * verdict. Burns no epoch (a probe is a pre-vote).
+ *
+ * @param {string} key
+ * @param {object} committee {members, quorum, fingerprint, generation}
+ * @returns {Promise<{decided: boolean, holder: string|null, epoch: number}>}
+ */
+async function probeOneshot(key, committee) {
+  const identity = await selfIdentity();
+  if (!identity) return { decided: false, holder: null, epoch: 0 };
+  const signed = await signedAskFor('probe', key, 'oneshot', 1, identity, committee);
+  if (!signed) return { decided: false, holder: null, epoch: 0 };
+  const replies = await askCommittee(committee.members, 'probe', signed.ask, signed.signature);
+  return oneshotQuorumFold([...replies.values()], committee.quorum);
+}
+
+/**
+ * Give a oneshot row back (an ordinal on uninstall): the grantee-signed
+ * release, quorum of acks or nothing.
+ *
+ * @returns {Promise<boolean>} a quorum of cells released the row
+ */
+async function releaseOneshot(key, committee, epoch) {
+  const identity = await selfIdentity();
+  if (!identity) return false;
+  const signed = await signedAskFor('release', key, 'oneshot', epoch, identity, committee);
+  if (!signed) return false;
+  const replies = await askCommittee(committee.members, 'release', signed.ask, signed.signature);
+  const acked = [...replies.values()].filter((reply) => reply?.ok === true).length;
+  return acked >= committee.quorum;
+}
+
+/**
+ * Reclaim a oneshot row by certificate: the ask carries the certificate
+ * whole (it is self-verifying through the node-down seam on every cell);
+ * the submitter signs the ask, not the certificate.
+ *
+ * @returns {Promise<boolean>} a quorum of cells vacated the row
+ */
+async function vacateOneshot(key, committee, cert) {
+  const identity = await selfIdentity();
+  if (!identity) return false;
+  const signed = await signedAskFor('vacate', key, 'oneshot', 1, identity, committee, { cert });
+  if (!signed) return false;
+  const replies = await askCommittee(committee.members, 'vacate', signed.ask, signed.signature);
+  const acked = [...replies.values()].filter((reply) => reply?.ok === true).length;
+  return acked >= committee.quorum;
+}
+
+// ---------------------------------------------------------------------------
 // what this node answers its peers
 
 /**
@@ -1664,5 +1748,9 @@ module.exports = {
   noteGenerationRecord,
   carryAsk,
   Holder,
+  probeOneshot,
+  releaseOneshot,
+  vacateOneshot,
+  oneshotQuorumFold,
   resetForTests,
 };

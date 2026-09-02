@@ -10,6 +10,7 @@ const {
   onRenew,
   onRoster,
   onRelease,
+  onVacate,
 } = require('../../ZelBack/src/services/quorumGrant/grantRegisterCore');
 const rosterOverlay = require('../../ZelBack/src/services/quorumGrant/rosterOverlay');
 const { selectCommittee } = require('../../ZelBack/src/services/utils/committeeSelector');
@@ -337,6 +338,82 @@ describe('quorumGrant grantRegisterCore', () => {
       expect(onRelease(heldRecord(), { epoch: 4, grantee: 'aaaa:0' }, T0).reply.code).to.equal('not_grantee');
       expect(onRelease(oneshotRecord(), { epoch: 2, grantee: 'ffff:1' }, T0).reply.code).to.equal('bad_mode');
     });
+  });
+
+  describe('ordinal rows — a write-once grant that can be given back or reclaimed', () => {
+    // An ordinal (db-0, db-1, …) is a oneshot grant like a founding, with two
+    // exits a founding never has: the holder releases it on uninstall, and a
+    // node-down certificate about the holder vacates it. Both mark the row
+    // released, and a released row is free for the next founding at a higher
+    // epoch — formal/ordinal-register/RESULTS.md, the three build items.
+    const CERT = { subject: 'ffff:1', verdicts: [] };
+
+    it('vacate: a certificate about the recorded grantee marks the row released', () => {
+      const { reply, record } = onVacate(oneshotRecord(), { subject: 'ffff:1' }, T0);
+      expect(reply).to.deep.equal({ ok: true, vacated: true });
+      expect(record.accepted.released).to.equal(true);
+      expect(record.accepted.grantee).to.equal('ffff:1');
+      expect(record.accepted.epoch).to.equal(2);
+    });
+
+    it('vacate refuses a certificate about anyone but the grantee, and a held row', () => {
+      expect(onVacate(oneshotRecord(), { subject: 'cccc:0' }, T0).reply.code).to.equal('not_grantee');
+      expect(onVacate(heldRecord(), { subject: 'aaaa:0' }, T0).reply.code).to.equal('bad_mode');
+    });
+
+    it('vacate of a free or already-released row is a no-op success', () => {
+      expect(onVacate(null, { subject: 'ffff:1' }, T0).reply).to.deep.equal({ ok: true, vacated: true });
+      const row = oneshotRecord();
+      row.accepted.released = true;
+      const { reply, record } = onVacate(row, { subject: 'ffff:1' }, T0);
+      expect(reply.ok).to.equal(true);
+      expect(record).to.equal(null);
+    });
+
+    it('release: the grantee may give back an ordinal row when the caller permits oneshot', () => {
+      const { reply, record } = onRelease(oneshotRecord(), { epoch: 2, grantee: 'ffff:1', allowOneshot: true }, T0);
+      expect(reply).to.deep.equal({ ok: true, released: true });
+      expect(record.accepted.released).to.equal(true);
+    });
+
+    it('release of a oneshot row stays refused without the permission — founder rows never reopen', () => {
+      expect(onRelease(oneshotRecord(), { epoch: 2, grantee: 'ffff:1' }, T0).reply.code).to.equal('bad_mode');
+      expect(onRelease(oneshotRecord(), { epoch: 2, grantee: 'cccc:0', allowOneshot: true }, T0).reply.code).to.equal('not_grantee');
+    });
+
+    it('a released oneshot row is free: a different grantee is accepted at a higher epoch', () => {
+      const row = oneshotRecord();
+      row.accepted.released = true;
+      const { reply, record } = onAccept(row, {
+        epoch: 3, grantee: 'cccc:0', mode: 'oneshot', fingerprint: 'fp-reg',
+      }, T0, TUNABLES);
+      expect(reply.ok).to.equal(true);
+      expect(record.accepted.grantee).to.equal('cccc:0');
+      expect(record.accepted.epoch).to.equal(3);
+      expect(record.accepted.released).to.equal(false);
+    });
+
+    it('a released oneshot row still refuses a LOWER epoch than it promised', () => {
+      const row = oneshotRecord();
+      row.accepted.released = true;
+      row.promisedEpoch = 4;
+      const { reply } = onAccept(row, {
+        epoch: 3, grantee: 'cccc:0', mode: 'oneshot', fingerprint: 'fp-reg',
+      }, T0, TUNABLES);
+      expect(reply.code).to.equal('superseded');
+    });
+
+    it(`the original grantee re-founds its own released row too, at a higher epoch (free-or-mine)`, () => {
+      const row = oneshotRecord();
+      row.accepted.released = true;
+      const { reply, record } = onAccept(row, {
+        epoch: 3, grantee: 'ffff:1', mode: 'oneshot', fingerprint: 'fp-reg',
+      }, T0, TUNABLES);
+      expect(reply.ok).to.equal(true);
+      expect(record.accepted.released).to.equal(false);
+      expect(record.accepted.epoch).to.equal(3);
+    });
+    void CERT;
   });
 
   describe('epoch monotonicity — the property everything hangs off', () => {

@@ -535,6 +535,40 @@ async function componentWorld(appName, component) {
 }
 
 /**
+ * The APP's world: the ladder from the earliest component intro this node
+ * recorded — what an ordinal register (per app, shared by every component a
+ * node hosts) founds under. Components introduced later have their own
+ * worlds for their own founder registers; the ordinals stay with the first.
+ * Same shape as componentWorld; null until the app has a recorded anchor.
+ *
+ * @param {string} appName
+ * @returns {Promise<{intro: number, rungs: number[], armed: boolean}|null>}
+ */
+async function appWorld(appName) {
+  const database = db();
+  if (!database) return null;
+  const record = await dbHelper.findOneInDatabase(database, collection(), { _id: appName });
+  const intros = Object.values(record?.components ?? {})
+    .map((entry) => entry?.anchorHeight)
+    .filter((height) => Number.isInteger(height));
+  if (!intros.length) return null;
+  const intro = Math.min(...intros);
+
+  const rungs = worldRungs(record, intro);
+  const newest = rungs[rungs.length - 1];
+  const photo = record.anchors?.[String(newest)];
+
+  let armed = false;
+  if (photo?.rotSinceHeight !== undefined) {
+    const height = daemonServiceMiscRpcs.getCurrentDaemonHeight();
+    if (Number.isFinite(height) && height > 0) {
+      armed = nextFlipHeight(intro, newest, photo.rotSinceHeight) - height <= QUIET_ZONE();
+    }
+  }
+  return { intro, rungs, armed };
+}
+
+/**
  * Whether THIS node sits on the committee for one anchor of an app — the
  * grantor-side check for founder registers, component-blind by design.
  * The ask must name the committee's basis whole: the fingerprint AND the
@@ -633,6 +667,7 @@ module.exports = {
   refereeCommittee,
   componentAnchor,
   componentWorld,
+  appWorld,
   newestRungFor,
   selfOnFoundingCommittee,
   evaluateFlips,

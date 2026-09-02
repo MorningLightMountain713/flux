@@ -210,6 +210,16 @@ async function release(key, request) {
 }
 
 /**
+ * Reclaim a oneshot row by certificate: the controller has verified the
+ * certificate through the node-down store's seam; the core checks its
+ * subject against the recorded grantee and marks the row released.
+ * Journaled before the reply like every other decision.
+ */
+async function vacate(key, request) {
+  return transact(key, (record, nowMs) => core.onVacate(record, request, nowMs));
+}
+
+/**
  * The roster-change op. The context carries what the pure core cannot
  * fetch: the membership the ask's fingerprint names, the mode's committee
  * size, and the carried chain AFTER the controller verified its quorum
@@ -339,6 +349,7 @@ module.exports = {
   renew,
   roster,
   release,
+  vacate,
   read,
   resetForTests,
 };
