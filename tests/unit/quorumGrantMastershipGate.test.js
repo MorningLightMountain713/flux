@@ -275,205 +275,145 @@ describe('quorumGrant mastershipGrantGate', () => {
     });
   });
 
-  describe('the activation crossing: a cold key belongs to whoever is running it', () => {
-    // At the crossing no grant exists for any app - the grantors have no memory of a
-    // regime that never ran - so every candidate sees a cold key at once. Without a
-    // head start the term goes to whichever pursuit fires first, which is not the
-    // node holding the container: measured on a 10-node fleet, the app ran on .11 and
-    // the term went to .10. Fleet-wide that is every activeStandby app re-racing its
-    // master at one instant, for nothing.
+  // Below the height the rule is the node's own docker and nothing else: a
+  // node asks iff it runs the container (ACTIVATION_CROSSING_DESIGN.md §2.2),
+  // cold key or lapsed term alike - a standby seated below the height would
+  // only be stopped for the running node at it. At and past the height the
+  // built pursuit stands: a warm key shields its holder, a cold one is first
+  // come. There is no head start and no clock: the fact the 45 s timer stood
+  // in for was local all along.
+  describe('below the height the docker rule is the whole rule; at it, a cold key is first come', () => {
+    const ACTIVATE_AT = 2100000;
 
-    it('the node running the component pursues a cold key at once', async () => {
+    function windowGate({ height }) {
+      return proxyquire('../../ZelBack/src/services/appLifecycle/mastershipGrantGate', {
+        config: {
+          fluxapps: {
+            quorumGrantMastership: true,
+            quorumGrantActivationHeight: ACTIVATE_AT,
+            quorumGrantPreWindowBlocks: 40,
+            quorumGrantPursuitIntervalMs: 30000,
+            quorumGrantHeldTtlMs: 150000,
+          },
+        },
+        '../daemonService/daemonServiceMiscRpcs': {
+          isDaemonSynced: () => ({ data: { height, synced: true } }),
+        },
+      });
+    }
+
+    function windowDecisionLine(info) {
+      return info.getCalls().map((c) => c.args[0]).find((m) => String(m).includes('below the height'));
+    }
+
+    it('at the height the node running the component asks at once', async () => {
       messageStore.getMasterleaseRecord.resolves(null);
       dockerService.dockerContainerInspect.resolves({ State: { Running: true } });
       await mastershipGrantGate.grantVerdict(IDENTIFIER, activeStandbyComp());
       await new Promise(setImmediate);
-      expect(grantClient.acquire.called, 'the incumbent goes first').to.equal(true);
+      expect(grantClient.acquire.called).to.equal(true);
     });
 
-    it('a node not running it waits, so the incumbent is not raced for its own app', async () => {
+    it('at the height a cold key is first come: a node NOT running the component asks at once, no head start', async () => {
+      // The running node took its lease inside the window; a key still cold
+      // at the height means nobody was running or the running node could not
+      // reach its committee for the whole window - the accepted takeover.
       messageStore.getMasterleaseRecord.resolves(null);
       dockerService.dockerContainerInspect.resolves({ State: { Running: false } });
       await mastershipGrantGate.grantVerdict(IDENTIFIER, activeStandbyComp());
       await new Promise(setImmediate);
-      expect(grantClient.acquire.called, 'a standby holds off on a cold key').to.equal(false);
+      expect(grantClient.acquire.called, 'no wait exists at the height').to.equal(true);
+      expect(dockerService.dockerContainerInspect.called, 'docker is not consulted at the height').to.equal(false);
     });
 
-    it('a node that cannot read docker waits rather than claiming the head start', async () => {
-      // The safe side of the error: a node blind to its own containers must not
-      // assert incumbency, and waiting like a standby costs only the head start.
+    it('inside the window a node not running the component never asks for a cold key', async () => {
+      dockerService.dockerContainerInspect.resolves({ State: { Running: false } });
+      const gate = windowGate({ height: ACTIVATE_AT - 5 });
       messageStore.getMasterleaseRecord.resolves(null);
+      await gate.grantVerdict(IDENTIFIER, activeStandbyComp());
+      await new Promise((resolve) => { setTimeout(resolve, 25); });
+      expect(grantClient.acquire.called, 'a cold key is not a standby\'s to take below the height').to.equal(false);
+    });
+
+    it('inside the window a node not running the component never asks for a lapsed term either', async () => {
+      // A dead master's term inside the window goes to whoever the legacy
+      // election seats next - a RUNNING node - never to a resting standby: a
+      // standby seated below the height would only be stopped for the running
+      // node at it. Its own gate instance: a pursuit throttled by an earlier
+      // kick would make this pass for the wrong reason.
+      dockerService.dockerContainerInspect.resolves({ State: { Running: false } });
+      const gate = windowGate({ height: ACTIVATE_AT - 5 });
+      messageStore.getMasterleaseRecord.resolves({ data: { grantee: `${'9'.repeat(64)}:0`, mode: 'held' } });
+      grantClient.termLapsed.resolves(true);
+      await gate.masterIntent(IDENTIFIER, activeStandbyComp());
+      await new Promise((resolve) => { setTimeout(resolve, 25); });
+      expect(grantClient.acquire.called, 'a lapsed term is not a standby\'s to take below the height').to.equal(false);
+    });
+
+    it('inside the window the running node takes a lapsed term - the plane follows the legacy election', async () => {
+      dockerService.dockerContainerInspect.resolves({ State: { Running: true } });
+      const gate = windowGate({ height: ACTIVATE_AT - 5 });
+      messageStore.getMasterleaseRecord.resolves({ data: { grantee: `${'9'.repeat(64)}:0`, mode: 'held' } });
+      grantClient.termLapsed.resolves(true);
+      await gate.grantVerdict(IDENTIFIER, activeStandbyComp());
+      await new Promise((resolve) => { setTimeout(resolve, 25); });
+      expect(grantClient.acquire.calledOnce).to.equal(true);
+    });
+
+    it('inside the window a node that cannot read docker waits - the safe side of that error', async () => {
       dockerService.dockerContainerInspect.rejects(new Error('docker unreachable'));
-      await mastershipGrantGate.grantVerdict(IDENTIFIER, activeStandbyComp());
-      await new Promise(setImmediate);
+      const gate = windowGate({ height: ACTIVATE_AT - 5 });
+      await gate.grantVerdict(IDENTIFIER, activeStandbyComp());
+      await new Promise((resolve) => { setTimeout(resolve, 25); });
       expect(grantClient.acquire.called).to.equal(false);
     });
 
-    // The head start is a WINDOW, and until now only its opening was covered: three
-    // tests asserted what happens at waited=0 and none asserted that it ever ends. A
-    // rule that deferred forever would have passed all of them, and on a fleet that
-    // is an app with no master at all rather than one that keeps its own.
-    function coldGate(extraConfig) {
-      return proxyquire('../../ZelBack/src/services/appLifecycle/mastershipGrantGate', {
-        config: {
-          fluxapps: {
-            quorumGrantMastership: true,
-            quorumGrantActivationHeight: 2100000,
-            // these cells sit AT the activation height; a zero-block drain
-            // keeps them about the head start, not the activation drain
-            quorumGrantActivationDrainBlocks: 0,
-            quorumGrantPursuitIntervalMs: 30000,
-            quorumGrantHeldTtlMs: 150000,
-            ...extraConfig,
-          },
-        },
-        '../daemonService/daemonServiceMiscRpcs': {
-          isDaemonSynced: () => ({ data: { height: 2100000, synced: true } }),
-        },
-      });
-    }
-
-    it('the head start ENDS: past the window a standby pursues after all', async () => {
-      // Otherwise an app whose master died just before the crossing would have no
-      // node permitted to claim it, and would sit masterless forever. The head start
-      // buys the incumbent priority, never exclusivity.
-      messageStore.getMasterleaseRecord.resolves(null);
-      dockerService.dockerContainerInspect.resolves({ State: { Running: false } });
-      const gate = coldGate({ quorumGrantIncumbentHeadStartMs: 0 });
-      await gate.grantVerdict(IDENTIFIER, activeStandbyComp());
-      await new Promise(setImmediate);
-      expect(grantClient.acquire.called, 'an elapsed head start no longer defers').to.equal(true);
-    });
-
-    it('the head start is the noticing interval plus three ask rounds', async () => {
-      // Derived, not chosen — and the derivation is only checkable because the
-      // decision line reports the figure it used.
-      messageStore.getMasterleaseRecord.resolves(null);
-      dockerService.dockerContainerInspect.resolves({ State: { Running: false } });
-      const info = sinon.stub(log, 'info');
-      const gate = coldGate({ daemonInfoIntervalMs: 5000, quorumGrantAskTimeoutMs: 3000 });
-      await gate.grantVerdict(IDENTIFIER, activeStandbyComp());
-      await new Promise(setImmediate);
-      const line = info.getCalls().map((c) => c.args[0]).find((m) => String(m).includes('cold key'));
-      expect(line, 'the cold-key decision is logged').to.be.a('string');
-      expect(line).to.include('headStart=14000ms');
-    });
-
-    // The head start runs only while the register it races is OPEN. Below
-    // the activation drain's lift the grantors refuse every cold-key seat,
-    // so a standby clock burning there would decide the crossing by whose
-    // tip crossed earliest — not by who runs the container.
-    function drainGate(state, extraConfig = {}) {
-      return proxyquire('../../ZelBack/src/services/appLifecycle/mastershipGrantGate', {
-        config: {
-          fluxapps: {
-            quorumGrantMastership: true,
-            quorumGrantActivationHeight: 2100000,
-            quorumGrantActivationDrainBlocks: 20,
-            quorumGrantPursuitIntervalMs: 30000,
-            quorumGrantHeldTtlMs: 150000,
-            quorumGrantIncumbentHeadStartMs: 0,
-            ...extraConfig,
-          },
-        },
-        '../daemonService/daemonServiceMiscRpcs': {
-          isDaemonSynced: () => ({ data: { height: state.height, synced: true } }),
-        },
-        '../utils/monotonicClock': { nowMs: () => state.now },
-      });
-    }
-
-    it('below the drain lift a standby defers even with its head start long elapsed', async () => {
-      messageStore.getMasterleaseRecord.resolves(null);
-      dockerService.dockerContainerInspect.resolves({ State: { Running: false } });
-      const gate = drainGate({ height: 2100005, now: 1_000_000 });
-      await gate.grantVerdict(IDENTIFIER, activeStandbyComp());
-      await new Promise(setImmediate);
-      expect(grantClient.acquire.called, 'the register is shut; the clock must not run').to.equal(false);
-    });
-
-    it('the incumbent pursues straight through the drain', async () => {
-      // Its asks are refused grantor-side until the lift and retried by the
-      // pursuit loop — being first in line at the lift is the entire point.
-      messageStore.getMasterleaseRecord.resolves(null);
-      dockerService.dockerContainerInspect.resolves({ State: { Running: true } });
-      const gate = drainGate({ height: 2100005, now: 1_000_000 });
-      await gate.grantVerdict(IDENTIFIER, activeStandbyComp());
-      await new Promise(setImmediate);
-      expect(grantClient.acquire.called, 'the incumbent never defers').to.equal(true);
-    });
-
-    it('past the lift the head start restarts at the lift, not at discovery', async () => {
-      messageStore.getMasterleaseRecord.resolves(null);
-      dockerService.dockerContainerInspect.resolves({ State: { Running: false } });
-      const state = { height: 2100005, now: 1_000_000 };
-      const gate = drainGate(state, { quorumGrantIncumbentHeadStartMs: 60000 });
-      await gate.grantVerdict(IDENTIFIER, activeStandbyComp());
-      await new Promise(setImmediate);
-      state.now += 120000;
-      state.height = 2100025;
-      await gate.grantVerdict(IDENTIFIER, activeStandbyComp());
-      await new Promise(setImmediate);
-      expect(grantClient.acquire.called, 'the pre-lift wait bought no credit').to.equal(false);
-    });
-
-    it('the decision line names the identifier, the docker name and the verdict', async () => {
-      // The instrument itself, run rather than read: on the fleet the only other
-      // observable is which node ended up with the term, and that cannot tell a
-      // lookup that missed from a head start that was too short.
-      messageStore.getMasterleaseRecord.resolves(null);
+    it('the window decision line names the identifier, the docker name and the verdict', async () => {
+      // The instrument itself, run rather than read: on the fleet the only
+      // other observable is which node ended up with the term, and that
+      // cannot tell a lookup that missed from a node that really was not
+      // running the container.
       dockerService.dockerContainerInspect.resolves({ Name: `/flux${IDENTIFIER}`, State: { Running: true } });
       const info = sinon.stub(log, 'info');
-      await mastershipGrantGate.grantVerdict(IDENTIFIER, activeStandbyComp());
-      await new Promise(setImmediate);
-      const line = info.getCalls().map((c) => c.args[0]).find((m) => String(m).includes('cold key'));
-      expect(line, 'the cold-key decision is logged').to.be.a('string');
+      const gate = windowGate({ height: ACTIVATE_AT - 5 });
+      await gate.grantVerdict(IDENTIFIER, activeStandbyComp());
+      await new Promise((resolve) => { setTimeout(resolve, 25); });
+      const line = windowDecisionLine(info);
+      expect(line, 'the decision is logged').to.be.a('string');
       expect(line).to.include(`identifier=${IDENTIFIER}`);
       expect(line).to.include(`lookup=/flux${IDENTIFIER}`);
       expect(line).to.include('found=true');
       expect(line).to.include('running=true');
-      expect(line).to.include('-> PURSUE');
+      expect(line).to.include('-> ASK');
     });
 
     it('a container docker does not hold reads as absent, not as stopped', async () => {
-      // The two are one boolean on the decision path and must never be one in the
-      // record of it: absent is a lookup that missed, stopped is the rule working.
-      messageStore.getMasterleaseRecord.resolves(null);
+      // The two are one boolean on the decision path and must never be one in
+      // the record of it: absent is a lookup that missed, stopped is the rule
+      // working.
       dockerService.dockerContainerInspect.resolves(null);
       const info = sinon.stub(log, 'info');
-      await mastershipGrantGate.grantVerdict(IDENTIFIER, activeStandbyComp());
-      await new Promise(setImmediate);
-      const line = info.getCalls().map((c) => c.args[0]).find((m) => String(m).includes('cold key'));
-      expect(line, 'the cold-key decision is logged').to.be.a('string');
+      const gate = windowGate({ height: ACTIVATE_AT - 5 });
+      await gate.grantVerdict(IDENTIFIER, activeStandbyComp());
+      await new Promise((resolve) => { setTimeout(resolve, 25); });
+      const line = windowDecisionLine(info);
+      expect(line, 'the decision is logged').to.be.a('string');
       expect(line).to.include('found=false');
       expect(line).to.include('name=none');
       expect(line).to.include('running=false');
-      expect(line).to.include('-> DEFER');
+      expect(line).to.include('-> WAIT');
     });
 
     it('a docker that will not answer says so, rather than reading as absent', async () => {
-      messageStore.getMasterleaseRecord.resolves(null);
       dockerService.dockerContainerInspect.rejects(new Error('docker unreachable'));
       const info = sinon.stub(log, 'info');
-      await mastershipGrantGate.grantVerdict(IDENTIFIER, activeStandbyComp());
-      await new Promise(setImmediate);
-      const line = info.getCalls().map((c) => c.args[0]).find((m) => String(m).includes('cold key'));
-      expect(line, 'the cold-key decision is logged').to.be.a('string');
+      const gate = windowGate({ height: ACTIVATE_AT - 5 });
+      await gate.grantVerdict(IDENTIFIER, activeStandbyComp());
+      await new Promise((resolve) => { setTimeout(resolve, 25); });
+      const line = windowDecisionLine(info);
+      expect(line, 'the decision is logged').to.be.a('string');
       expect(line).to.include('dockerError=docker unreachable');
-      expect(line).to.include('-> DEFER');
-    });
-
-    it('the head start applies ONLY to a cold key, never to a live one', async () => {
-      // A key with a grantee is not cold, whoever holds it. Applying the wait there
-      // would delay every legitimate takeover from a dead master by the head start.
-      messageStore.getMasterleaseRecord.resolves({
-        data: { grantee: `${'9'.repeat(64)}:0`, mode: 'lapsed' },
-      });
-      dockerService.dockerContainerInspect.resolves({ State: { Running: false } });
-      grantClient.termLapsed.resolves(true);
-      await mastershipGrantGate.grantVerdict(IDENTIFIER, activeStandbyComp());
-      await new Promise(setImmediate);
-      expect(grantClient.acquire.called, 'a lapsed term is pursued without the wait').to.equal(true);
+      expect(line).to.include('-> WAIT');
     });
   });
 
