@@ -43,7 +43,7 @@ const meshNamespace = require('./meshNamespace');
 const meshTransit = require('./meshTransit');
 const meshSsh = require('./meshSsh');
 const meshSnapshot = require('./meshSnapshot');
-const meshSlots = require('./meshSlots');
+const meshOrdinals = require('./meshOrdinals');
 const meshIdentityDrift = require('./meshIdentityDrift');
 const reconcilerQueue = require('../appMonitoring/reconcilerQueue');
 const meshPortAllocator = require('./meshPortAllocator');
@@ -164,7 +164,6 @@ const memberFacts = (member) => ({
   block: member.block,
   endpoint: member.endpoint,
   caShas: member.caShas,
-  slot: member.slot ?? null,
 });
 
 function recordPass(appName, patch) {
@@ -230,9 +229,13 @@ async function reconcileAppMaterial(app, ctx) {
     refused: await meshRefuseSet.refusedOutpoints(app.identity),
   });
 
-  // This node's own ordinal slot for the app (meshSlots.js) — resolved once
-  // per pass beside the membership it is arbitrated against.
-  const slotView = await meshSlots.appSlotView(app.name, app.view.instances);
+  // This node's ordinal and every holder's, from the synced grant record
+  // (meshOrdinals.js) — read once per pass beside the membership. Nobody
+  // arbitrates a name: the register decided each ordinal once.
+  const ordinals = {
+    own: await meshOrdinals.ownOrdinal(app.name),
+    byNode: await meshOrdinals.holdersByNode(app.name, app.view.instances),
+  };
 
   const bundleChanged = await meshCertificates.writeTrustBundle(
     app.identity,
@@ -254,7 +257,7 @@ async function reconcileAppMaterial(app, ctx) {
     rejected,
     meshPort,
     certAction,
-    slotView,
+    ordinals,
     needsReload: bundleChanged || configChanged || certAction === HostCertificateAction.DEPLOYED,
   };
 }
@@ -303,38 +306,12 @@ async function gatherContainers(app) {
 }
 
 /**
- * Ordinal slots per node for the snapshot: this node's own resolved slot plus
- * every ADMITTED peer's self-asserted one, arbitrated deterministically
- * (meshSlots.arbitrate — earliest runningSince wins, outpoint tiebreak), so a
- * transient double-claim never puts one ordinal on two members. Arbitrated
- * over admitted members only: raw rows would let an unadmitted announcement
- * shadow a real member's name.
+ * Ordinal per node for the snapshot: what the grant record names, this node
+ * included. A node the record does not name yet is a standby until it does —
+ * a lagging record is a temporarily unknown name, never a collision.
  */
-function slotsByNode(app, ctx) {
-  const cap = app.view.instances ?? 0;
-  const contenders = [];
-  const ownSlot = app.material.slotView?.ownSlot;
-  if (Number.isInteger(ownSlot) && ownSlot < cap) {
-    contenders.push({
-      nodeId: ctx.ownNodeId,
-      slot: ownSlot,
-      since: app.material.slotView.ownSince ?? null,
-      tiebreak: ctx.ownOutpoint,
-    });
-  }
-  app.material.members.forEach((member) => {
-    if (Number.isInteger(member.slot) && member.slot >= 0 && member.slot < cap) {
-      contenders.push({
-        nodeId: member.nodeId,
-        slot: member.slot,
-        since: member.runningSince ?? null,
-        tiebreak: member.outpoint,
-      });
-    }
-  });
-  const byNode = new Map();
-  meshSlots.arbitrate(contenders).forEach((winner, slot) => byNode.set(winner.nodeId, slot));
-  return byNode;
+function slotsByNode(app) {
+  return app.material.ordinals?.byNode ?? new Map();
 }
 
 /**
@@ -687,7 +664,7 @@ async function runReconcilePass() {
     try {
       // eslint-disable-next-line no-await-in-loop
       const detector = await runDetector(app, ctx);
-      const ownSlot = app.material.slotView?.ownSlot;
+      const ownSlot = app.material.ordinals?.own;
       const expectedSelf = (component) => (ownSlot != null
         ? `${component}-${ownSlot}`
         : meshDerivation.memberName(component, ctx.ownOutpoint));
@@ -785,19 +762,18 @@ async function prepareComponentMesh(appName, componentName) {
   if (!member?.ip) {
     throw new Error(`No presented address is assigned yet for ${componentName} of ${appName}`);
   }
-  // The member's ordinal slot (meshSlots.js): resolved before the container
-  // exists, because identity is fixed for the container's lifetime. Slot-
+  // The member's ordinal (meshOrdinals.js): granted before the container
+  // exists, because identity is fixed for the container's lifetime. Ordinal
   // holders are named by ordinal — the predictable identity consensus
   // software configures against — and a standby keeps the nodeid form until
-  // a vacancy opens (its promotion is a NEW identity: a recreated container).
-  const slot = await meshSlots.resolveOwnSlot(appName, view.instances);
-  if (slot != null) {
-    // Make the choice visible to concurrent installers before either side
-    // reaches its first running broadcast. Best-effort — the slot converges
-    // through running-assertion arbitration regardless.
-    await meshSlots.publishClaimSlot(appName, slot)
-      .catch((error) => log.warn(`meshReconciler - ${appName}: slot claim publish failed: ${error.message}`));
+  // an ordinal frees (its promotion is a NEW identity: a recreated container).
+  // A register that cannot decide yet is a node condition: the install
+  // defers, and nothing is assumed free.
+  const claim = await meshOrdinals.claimOrdinal(appName, view.instances);
+  if (claim.state === meshOrdinals.CLAIM.WAIT) {
+    throw new Error(`No ordinal is decided yet for ${componentName} of ${appName}: ${claim.reason ?? 'the register is waiting'}`);
   }
+  const slot = claim.ordinal;
   // The FQDN is the member's one stable mesh-wide identifier — the presented
   // IPv4 is node-local, so cluster software must advertise this name, never
   // the address (etcd --initial-advertise-peer-urls, Mongo replica hosts).
