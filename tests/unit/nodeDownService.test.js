@@ -22,13 +22,14 @@ function makeHarness() {
     announce: sinon.stub(),
     noteReturn: sinon.stub(),
   };
+  const world = { height: 100 };
   const networkStateServiceStub = {
     membershipFingerprint: () => 'fp1',
     networkState: () => [{
       txhash: 'me', outidx: 0, pubkey: 'pk', ip: MY_IP, added_height: 1,
     }],
     nodeDownTopology: () => null,
-    chainHeight: () => 100,
+    chainHeight: () => world.height,
   };
   const service = proxyquire('../../ZelBack/src/services/nodeDownService', {
     './networkStateService': networkStateServiceStub,
@@ -66,7 +67,7 @@ function makeHarness() {
     closePeer: sinon.stub(),
   };
   return {
-    service, transport, stubs, networkStateServiceStub,
+    service, transport, stubs, networkStateServiceStub, world,
   };
 }
 
@@ -334,6 +335,76 @@ describe('nodeDownService', () => {
       await service.sweep();
       await tick();
       expect(transport.openEphemeralConnection.args).to.deep.equal([[DUTY_IP]]);
+      service.stop();
+    });
+  });
+
+  describe('the mild tier — a juror\'s private count of its duty\'s cycles orders its dials', () => {
+    const DUTY_PORT = '16127';
+    const DUTY_HOST = '10.0.0.2';
+
+    async function cycles(harness, count, closeCode = 1006) {
+      const { transport, world } = harness;
+      for (let i = 0; i < count; i += 1) {
+        transport.peerManager.emit('peer:removed', {
+          ip: DUTY_HOST, port: DUTY_PORT, direction: 'outbound', closeCode,
+        });
+        world.height += 1;
+        transport.peerManager.emit('peer:added', { ip: DUTY_HOST, port: DUTY_PORT, direction: 'outbound' });
+        world.height += 1;
+      }
+      await tick();
+    }
+
+    it('four unexpected drop-and-return cycles damp the duty: no dial while the floor is short, a dial once a window has passed', async () => {
+      const harness = makeHarness();
+      withDuty(harness);
+      const { service, transport, world } = harness;
+      service.start(transport);
+      await tick();
+      await cycles(harness, 4);
+      transport.dial.resetHistory(); // the dials the cycles themselves drew, before the trip
+
+      await service.sweep();
+      await tick();
+      expect(transport.dial.callCount).to.equal(0);
+
+      world.height += 90;
+      await service.sweep();
+      await tick();
+      expect(transport.dial.firstCall.args[0]).to.equal(DUTY_IP);
+      service.stop();
+    });
+
+    it('a deliberate close is not a drop: four policy closes damp nothing', async () => {
+      const harness = makeHarness();
+      withDuty(harness);
+      const { service, transport } = harness;
+      service.start(transport);
+      await tick();
+      await cycles(harness, 4, 4009);
+
+      await service.sweep();
+      await tick();
+      expect(transport.dial.firstCall.args[0]).to.equal(DUTY_IP);
+      service.stop();
+    });
+
+    it('the count dies with the service: a restart starts every duty from the bottom', async () => {
+      const harness = makeHarness();
+      withDuty(harness);
+      const { service, transport } = harness;
+      service.start(transport);
+      await tick();
+      await cycles(harness, 4);
+      service.stop();
+
+      transport.dial.resetHistory();
+      service.start(transport);
+      await tick();
+      await service.sweep();
+      await tick();
+      expect(transport.dial.firstCall.args[0]).to.equal(DUTY_IP);
       service.stop();
     });
   });
