@@ -143,6 +143,13 @@ async function resolveSubmission(appSpecification, {
   const wireSpec = await parseSubmission(submissionBlob);
   if (!wireSpec) throw new Error('Could not deserialize app specifications');
 
+  // Computed BEFORE validation, because validation needs it. `wasTransportEncrypted`
+  // is what makes this node seal the spec for broadcast below, and `isEncrypted` is
+  // a v8 blob that arrived sealed; either way the credentials never travel in the
+  // clear. Neither, and the broadcast blob is the cleartext spec — which is exactly
+  // when `imageAuth` and `secretEnvironment` must be refused.
+  const isEncrypted = wasTransportEncrypted || wireSpec.isEncrypted;
+
   let spec;
   if (wireSpec.isEncrypted) {
     // v8 enterprise blob — decrypt, then hold the decrypted instance to submission rules
@@ -155,10 +162,10 @@ async function resolveSubmission(appSpecification, {
     assertVersionActivated(spec.version, daemonHeight);
     spec.validateContents({ purpose: 'submission' });
   } else {
-    spec = await validateSubmissionSpec(submissionBlob, { height: daemonHeight });
+    spec = await validateSubmissionSpec(submissionBlob, {
+      height: daemonHeight, encrypted: isEncrypted,
+    });
   }
-
-  const isEncrypted = wasTransportEncrypted || wireSpec.isEncrypted;
 
   // The signed contentHash (v9) must match the actual decrypted content, so a
   // tampered envelope can't slip different bytes past the signature.

@@ -70,7 +70,9 @@ const webWith = (...mounts) => ({ web: component('web', mounts) });
  * uploadSealedContent -> encryptAndUploadBlobs — nothing is sealed yet, so this
  * is a plain FluxAppSpecV9, `isEncrypted === false`.
  */
-const submissionSpec = (...mounts) => v9Spec({ components: webWith(...mounts) });
+// Every spec here carries a contentRef, which only works on the encrypted path,
+// so the envelope is stated once for the whole file.
+const submissionSpec = (...mounts) => v9Spec({ components: webWith(...mounts) }, { encrypted: true });
 
 /**
  * The `priorSpec` an UPDATE carries — a different class from the one above.

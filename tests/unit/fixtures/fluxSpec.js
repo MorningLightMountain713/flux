@@ -122,10 +122,16 @@ const V8_SUBMISSION = Object.freeze({
 });
 
 /** A real FluxAppSpecV9. Overrides are merged into the submission blob, so an
- * override the schema does not accept is rejected — which is the point. */
-async function v9Spec(overrides = {}) {
+ * override the schema does not accept is rejected — which is the point.
+ *
+ * `encrypted` states whether this spec would be broadcast sealed. It defaults to
+ * false because that is what the library defaults to and what a caller who says
+ * nothing means: fields that must never travel in the clear — `imageAuth`,
+ * `secretEnvironment`, a content reference — are refused. A test whose subject
+ * IS one of those features passes true, because such a spec only exists sealed. */
+async function v9Spec(overrides = {}, { encrypted = false } = {}) {
   const flux = await loadSpecLibrary();
-  return flux.FluxAppSpecV9.fromSubmission({ ...V9_SUBMISSION, ...overrides });
+  return flux.FluxAppSpecV9.fromSubmission({ ...V9_SUBMISSION, ...overrides }, { encrypted });
 }
 
 /** A real FluxAppSpecV8. */
@@ -171,7 +177,10 @@ async function v1Spec(overrides = {}) {
  * that arrived HPKE-sealed; the owner never holds it. */
 async function sealedV9Spec(overrides = {}) {
   const flux = await loadSpecLibrary();
-  const spec = await v9Spec(overrides);
+  // Sealed on the next line, so the envelope is stated on the way in. Without it
+  // the encryption-forcing rules refuse exactly the specs this helper exists to
+  // produce — the ones carrying the fields the envelope protects.
+  const spec = await v9Spec(overrides, { encrypted: true });
   return flux.EncryptedSpecV9.fromSpec(
     spec, await flux.EncryptedSpecV9.createProviderFor(spec.name, spec.owner),
   );

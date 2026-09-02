@@ -74,7 +74,11 @@ const webWith = (...mounts) => ({ web: component('web', mounts) });
  * directly rather than decrypting.
  */
 function cleartextSpec(components) {
-  return flux.FluxAppSpecV9.fromSubmission({ ...V9_SUBMISSION, name: APP, components });
+  // contentSlot only works on the encrypted path — a slot spec exists sealed or
+  // not at all, so the envelope is stated rather than left silent.
+  return flux.FluxAppSpecV9.fromSubmission(
+    { ...V9_SUBMISSION, name: APP, components }, { encrypted: true },
+  );
 }
 
 /**

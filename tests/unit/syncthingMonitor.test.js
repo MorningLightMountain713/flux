@@ -174,12 +174,14 @@ describe('syncthingMonitor tests', () => {
    * never defaulted, exactly as DeploymentSpec.fromSpec demands.
    */
   async function deploymentFor(appName, compName, overrides = {}) {
+    // Callers pass content-slot mounts, which only work on the encrypted path,
+    // so the envelope is stated for every spec this helper builds.
     const spec = await v9Spec({
       name: appName,
       components: {
         [compName]: { ...V9_SUBMISSION.components.web, name: compName, ...overrides },
       },
-    });
+    }, { encrypted: true });
     return flux.DeploymentSpec.fromSpec(spec, appsFolder, { replica: null });
   }
 
