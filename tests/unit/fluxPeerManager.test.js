@@ -1028,6 +1028,7 @@ describe('FluxPeerManager tests', () => {
         total: 3,
         dead: 1,
         unstable: 1,
+        ephemeralRefusals: 0,
         peerTopology: 0,
       });
     });
@@ -1040,6 +1041,7 @@ describe('FluxPeerManager tests', () => {
         total: 0,
         dead: 0,
         unstable: 0,
+        ephemeralRefusals: 0,
         peerTopology: 0,
       });
     });
@@ -1491,6 +1493,17 @@ describe('FluxPeerManager tests', () => {
 
       sinon.assert.calledWith(fifth.close, CLOSE_CODES.MAX_CONNECTIONS, sinon.match(/ephemeral capacity/));
       expect(fifth.onmessage).to.equal(null);
+    });
+
+    it('counts every refusal at the caps, so production can say whether they are tight', () => {
+      manager.numberOfFluxNodes = 10000;
+      expect(manager.getStats().ephemeralRefusals).to.equal(0);
+      for (let i = 0; i < 4; i += 1) {
+        manager.validateAndAddInbound(createMockWs('8.8.8.8'), '16127', createMockReq('8.8.8.8', { 'x-flux-ephemeral': '1' }));
+      }
+      manager.validateAndAddInbound(createMockWs('8.8.8.8'), '16127', createMockReq('8.8.8.8', { 'x-flux-ephemeral': '1' }));
+      manager.validateAndAddInbound(createMockWs('8.8.8.8'), '16127', createMockReq('8.8.8.8', { 'x-flux-ephemeral': '1' }));
+      expect(manager.getStats().ephemeralRefusals).to.equal(2);
     });
 
     it('caps total concurrent ephemerals', () => {

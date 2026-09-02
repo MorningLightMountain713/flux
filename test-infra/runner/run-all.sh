@@ -67,6 +67,14 @@ export E2E_LOG_DIR="$LOG_DIR"
 RUN_LABEL="${E2E_RUN_LABEL:-run-$$-$(date +%s)}"
 export E2E_RUN_LABEL="$RUN_LABEL"
 
+# Every docker event of THIS run, with the actor's name, so a fleet-wide
+# container restart is attributed from the archive alone instead of from a
+# capture recipe run after the fact. Scoped by the run label; ends with the run.
+docker events --filter "label=flux-e2e-run=$RUN_LABEL" \
+  --format '{{.Time}} {{.Type}} {{.Action}} {{.Actor.Attributes.name}} exit={{.Actor.Attributes.exitCode}} signal={{.Actor.Attributes.signal}}' \
+  > "$LOG_DIR/docker-events.log" 2>&1 &
+DOCKER_EVENTS_PID=$!
+
 # No ryuk under run-all: testcontainers-node REUSES one ryuk container across
 # processes and every process ADOPTS its session id (reaper.ts getReaper →
 # useExistingReaper), so all concurrent suites' containers share ONE session
@@ -133,6 +141,8 @@ cleanup_on_exit() {
     docker network ls -q --filter "label=flux-e2e-run=$RUN_LABEL" | xargs -r docker network rm >/dev/null 2>&1
     docker volume ls -q --filter "label=flux-e2e-run=$RUN_LABEL" | xargs -r docker volume rm >/dev/null 2>&1
   fi
+  # After the reap, so the run's own teardown is the log's last page.
+  [ -n "${DOCKER_EVENTS_PID:-}" ] && kill "$DOCKER_EVENTS_PID" 2>/dev/null
   release_base
 }
 trap cleanup_on_exit EXIT INT TERM

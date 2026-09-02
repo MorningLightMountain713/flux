@@ -73,6 +73,11 @@ class FluxPeerManager extends EventEmitter {
 
   /** The node-down plane's peering gate, installed at its start; see setInboundGate. */
   #inboundGate = null;
+
+  /** Inbound ephemerals refused at the caps since start, and when that was last logged. */
+  #ephemeralRefusals = 0;
+
+  #ephemeralRefusalLoggedAt = 0;
   /** @type {Set<string>} keys of outbound connections currently being established */
   #pendingConnections = new Set();
   /** @type {Map<string, number>} reconnect count per peer key, persists across connection cycles */
@@ -418,6 +423,7 @@ class FluxPeerManager extends EventEmitter {
     });
     if (this.#ephemeralPeers.size >= INBOUND_EPHEMERAL_MAX_TOTAL
       || fromSameIp >= INBOUND_EPHEMERAL_MAX_PER_IP) {
+      this.#noteEphemeralRefusal(ip, fromSameIp);
       try {
         ws.close(CLOSE_CODES.MAX_CONNECTIONS, 'ephemeral capacity reached');
       } catch (error) {
@@ -432,6 +438,23 @@ class FluxPeerManager extends EventEmitter {
       } catch (error) { /* already gone */ }
     }, INBOUND_EPHEMERAL_LIFETIME_MS);
     return peer;
+  }
+
+  /**
+   * A refusal at the ephemeral caps is counted, published, and logged at
+   * most once a minute — the caps exist for bursts, and a burst must not
+   * become a log flood. The count is what says whether 32 / 4 / 120 s is
+   * tight in production; nothing observed it beyond sixteen-node fleets.
+   */
+  #noteEphemeralRefusal(ip, fromSameIp) {
+    this.#ephemeralRefusals += 1;
+    fluxEventBus.publish('peers:ephemeralRefused', {
+      ip, fromSameIp, total: this.#ephemeralPeers.size, refusals: this.#ephemeralRefusals,
+    });
+    const now = Date.now();
+    if (now - this.#ephemeralRefusalLoggedAt < 60_000) return;
+    this.#ephemeralRefusalLoggedAt = now;
+    log.warn(`Inbound ephemeral refused at capacity (${this.#ephemeralPeers.size} held, ${fromSameIp} from ${ip}); ${this.#ephemeralRefusals} refusals since start`);
   }
 
   /**
@@ -1126,6 +1149,7 @@ class FluxPeerManager extends EventEmitter {
       total: this.#peers.size,
       dead,
       unstable: this.#unstableNodes.size,
+      ephemeralRefusals: this.#ephemeralRefusals,
       peerTopology: this.#peerTopology.size,
     };
   }
