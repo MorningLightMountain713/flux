@@ -287,3 +287,29 @@ describe('nodeDownCertificates assembly mirrors verification', () => {
     expect(result.discarded).to.deep.equal({});
   });
 });
+
+describe('nodeDownCertificates severe quarantine — the count over the standing rows', () => {
+  const { quarantineFromExpiries } = require('../../ZelBack/src/services/utils/nodeDownCertificates');
+  const now = 1_700_000_000_000;
+  const hour = 60 * 60 * 1000;
+
+  it('below the threshold nothing is held: the count is reported, there is no lift time', () => {
+    expect(quarantineFromExpiries([now + hour, now + 2 * hour], now))
+      .to.deep.equal({ quarantined: false, count: 2, liftsAt: null });
+  });
+
+  it('at the threshold the subject is held until its oldest standing row ages out', () => {
+    expect(quarantineFromExpiries([now + 3 * hour, now + hour, now + 2 * hour], now))
+      .to.deep.equal({ quarantined: true, count: 3, liftsAt: now + hour });
+  });
+
+  it('every further certification moves the lift to the row whose expiry brings the count under the threshold', () => {
+    expect(quarantineFromExpiries([now + hour, now + 2 * hour, now + 3 * hour, now + 4 * hour], now))
+      .to.deep.equal({ quarantined: true, count: 4, liftsAt: now + 2 * hour });
+  });
+
+  it('an expired row counts for nothing, exactly at its boundary', () => {
+    expect(quarantineFromExpiries([now, now + hour, now + 2 * hour], now))
+      .to.deep.equal({ quarantined: false, count: 2, liftsAt: null });
+  });
+});

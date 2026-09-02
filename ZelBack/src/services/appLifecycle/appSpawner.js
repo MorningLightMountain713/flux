@@ -58,6 +58,7 @@ const resourceQueryService = require('../appQuery/resourceQueryService');
 const messageStore = require('../appMessaging/messageStore');
 const registryManager = require('../appDatabase/registryManager');
 const appsRepository = require('../appDatabase/appsRepository');
+const nodeDownStore = require('../appMessaging/nodeDownStore');
 const imageManager = require('../appSecurity/imageManager');
 const hwRequirements = require('../appRequirements/hwRequirements');
 const portManager = require('../appNetwork/portManager');
@@ -416,6 +417,16 @@ async function trySpawningGlobalApplication() {
     // four places under three different names, so nothing told a reader they
     // were the same value.
     const localIp = extractIp(localSocketAddr);
+
+    // Under severe quarantine this node's announcements are ignored fleet-wide,
+    // so anything it placed would be replaced elsewhere at once: it places
+    // nothing until the hold lifts. The flapper's operator pays, not the fleet.
+    const quarantine = await nodeDownStore.quarantineForAddress(localSocketAddr);
+    if (quarantine.quarantined) {
+      log.info(`trySpawningGlobalApplication - Node is under severe quarantine (${quarantine.count} certifications standing). Global applications will not be installed`);
+      fluxEventBus.publish('spawner:blocked', { reason: 'quarantined', count: quarantine.count, liftsAt: quarantine.liftsAt });
+      return installDelay;
+    }
 
     // Capacity + the already-present filter both count INSTALLED apps (the DB), not
     // running containers. Post-flip a just-installed app is briefly Docker 'created'
