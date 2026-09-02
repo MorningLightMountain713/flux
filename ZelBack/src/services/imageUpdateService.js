@@ -28,9 +28,25 @@ const INITIAL_DELAY_MIN = config.fluxapps.imageUpdateInitialDelayMinMs || 10 * 6
 const INITIAL_DELAY_MAX = config.fluxapps.imageUpdateInitialDelayMaxMs || 30 * 60 * 1000;
 const DELAY_BETWEEN_COMPONENTS = config.fluxapps.imageUpdateDelayBetweenComponentsMs || 1000;
 
-// Track the timers
+// The schedule: an initial-delay timeout, then a repeating interval. `schedule`
+// counts start() and stop() calls so a timeout callback that fires later — after
+// any number of them — can tell whether the schedule it belongs to still exists
+// before it installs an interval.
 let checkIntervalTimer = null;
 let initialDelayTimer = null;
+let schedule = 0;
+
+function clearSchedule() {
+  if (initialDelayTimer) {
+    clearTimeout(initialDelayTimer);
+    initialDelayTimer = null;
+  }
+  if (checkIntervalTimer) {
+    clearInterval(checkIntervalTimer);
+    checkIntervalTimer = null;
+  }
+  schedule += 1;
+}
 
 /**
  * Removes the existing flux_watchtower container if it exists.
@@ -365,10 +381,12 @@ async function checkForImageUpdates() {
 function startImageUpdateService() {
   log.info('Starting native image update service');
 
-  // Clear any existing interval
-  if (checkIntervalTimer) {
-    clearInterval(checkIntervalTimer);
-  }
+  // Replace the previous schedule entirely. This used to clear only the
+  // interval, which left the previous initial-delay timeout alive: it fired,
+  // started an interval, and the newer timeout then overwrote the slot — an
+  // interval nothing could clear, running the check twice per period forever.
+  clearSchedule();
+  const mine = schedule;
 
   // Calculate random initial delay between 10-30 minutes
   // This prevents all nodes from hitting registries at the same time
@@ -383,6 +401,10 @@ function startImageUpdateService() {
     log.info('Running initial image update check');
     await checkForImageUpdates();
 
+    // stop(), or a newer start(), may have run while that check was in flight.
+    // A schedule that no longer exists installs nothing.
+    if (mine !== schedule) return;
+
     // Start the regular interval after the first check completes
     checkIntervalTimer = setInterval(checkForImageUpdates, CHECK_INTERVAL);
     log.info(`Image update service interval started. Check interval: ${CHECK_INTERVAL / 1000 / 60 / 60} hours`);
@@ -396,14 +418,7 @@ function startImageUpdateService() {
  * Clears the periodic check interval.
  */
 function stopImageUpdateService() {
-  if (initialDelayTimer) {
-    clearTimeout(initialDelayTimer);
-    initialDelayTimer = null;
-  }
-  if (checkIntervalTimer) {
-    clearInterval(checkIntervalTimer);
-    checkIntervalTimer = null;
-  }
+  clearSchedule();
   log.info('Image update service stopped');
 }
 

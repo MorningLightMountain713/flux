@@ -757,13 +757,37 @@ describe('imageUpdateService tests', () => {
       sinon.assert.calledWith(logStub.info, 'Image update service stopped');
     });
 
-    it('should handle multiple start calls by clearing previous interval', () => {
+    // A second start must replace the first entirely. Clearing only the
+    // interval left the first initial-delay timeout alive: it fired, started an
+    // interval, and the second timeout then overwrote the slot — orphaning the
+    // first interval, which nothing could clear again. Two checks per period,
+    // forever. The old test here asserted only that stop() logged a line.
+    it('a second start leaves exactly one schedule, and stop clears all of it', async () => {
       imageUpdateService.startImageUpdateService();
       imageUpdateService.startImageUpdateService();
+      // Past the longest initial delay: every surviving timeout has fired and
+      // started its interval.
+      await clock.tickAsync(30 * 60 * 1000);
 
-      // Should still only have one active interval
       imageUpdateService.stopImageUpdateService();
-      sinon.assert.calledWith(logStub.info, 'Image update service stopped');
+      expect(clock.countTimers(), 'an interval survived stop').to.equal(0);
+    });
+
+    // The same slot raced from the other side: stop() during the initial check
+    // found no timeout to clear — it had already fired — and the check then
+    // installed an interval on a service that had been stopped.
+    it('a stop during the initial check leaves no interval behind', async () => {
+      let finishCheck;
+      deploymentProviderStub.listInstalledDeployments
+        .returns(new Promise((resolve) => { finishCheck = resolve; }));
+      imageUpdateService.startImageUpdateService();
+      // The initial check is now in flight, awaiting the deployments.
+      await clock.tickAsync(30 * 60 * 1000);
+
+      imageUpdateService.stopImageUpdateService();
+      finishCheck([]);
+      await clock.tickAsync(0);
+      expect(clock.countTimers(), 'the stopped service started an interval').to.equal(0);
     });
   });
 });
