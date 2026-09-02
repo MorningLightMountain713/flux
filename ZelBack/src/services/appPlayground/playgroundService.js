@@ -126,7 +126,15 @@ async function buildDeployment(rawSpec, identity) {
   // canonical wire shape a session spec never becomes) while every rule
   // about the spec's own shape still runs.
   const { ValidationPurpose } = await getSpecBackend();
-  const spec = await validateSubmissionSpec(rawSpec, { purpose: ValidationPurpose.SESSION });
+  // `encrypted: true` states what the encryption-forcing rules actually ask:
+  // will these fields be published? A session is built and run on this node and
+  // never broadcast — there is no message, no chain entry and no relay — so a
+  // private image's credentials go no further than the box the operator is
+  // already using. Left silent, the rules read the spec as a cleartext
+  // broadcast and refuse exactly the apps the playground exists to try out.
+  const spec = await validateSubmissionSpec(rawSpec, {
+    purpose: ValidationPurpose.SESSION, encrypted: true,
+  });
   const { DeploymentSpec } = await getSpecBackend();
 
   // The declared view: a session is one copy on one node, so `instances` and the

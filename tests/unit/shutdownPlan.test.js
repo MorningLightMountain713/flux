@@ -255,7 +255,11 @@ describe('shutdownPlan', () => {
       // is genuinely encryption-forcing — the same app submitted as cleartext is
       // refused — so the app really is encrypted and still gets no plan.
       const secretsOnly = { ...PLAIN, secretEnvironment: { API_KEY: 'shh' } };
-      const asCleartext = await v9Spec({ components: componentsFor({ web: secretsOnly }) });
+      // Built with the envelope so the instance exists at all; the rule is then
+      // asked directly with the opposite answer, which is this test's subject.
+      const asCleartext = await v9Spec(
+        { components: componentsFor({ web: secretsOnly }) }, { encrypted: true },
+      );
       const refusals = asCleartext.validateSemantics({ encrypted: false });
       expect(refusals.map((e) => e.code), 'secretEnvironment must force encryption')
         .to.include('ENCRYPTION_REQUIRED');
