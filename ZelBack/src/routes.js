@@ -553,6 +553,11 @@ module.exports = (app) => {
   app.post('/flux/quorumgrant/release', (req, res) => {
     grantorController.release(req, res);
   });
+  // Reclaim an ordinal register by node-down certificate: the ask carries
+  // the certificate, the grantor verifies it and marks the row released.
+  app.post('/flux/quorumgrant/vacate', (req, res) => {
+    grantorController.vacate(req, res);
+  });
   // The holder's single-seat committee heal: the recorded grantee proposes
   // remove-dark-add-next-in-walk; the reply carries this grantor's SIGNED
   // acceptance, and a quorum of those is the roster.

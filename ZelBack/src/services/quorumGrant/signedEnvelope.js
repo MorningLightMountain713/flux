@@ -40,6 +40,7 @@ const TYPES = Object.freeze([
   'probe',
   'roster',
   'rosteraccept',
+  'vacate',
 ]);
 
 /**
@@ -130,6 +131,12 @@ function fieldsFor(type, ask) {
       return [ask.key, ask.epoch, ask.candidate, ask.ttlMs, ask.generation, ask.fingerprint, ask.at];
     case 'release':
       return [ask.key, ask.epoch, ask.candidate, ask.generation, ask.fingerprint, ask.at];
+    case 'vacate':
+      // candidate is the node submitting the certificate, not the row's
+      // holder; the certificate rides OUTSIDE these fields — it is
+      // self-verifying through the node-down store's seam, exactly as a
+      // cancel-chain entry is, so one signature serves every cell
+      return [ask.key, ask.candidate, ask.generation, ask.fingerprint, ask.at];
     case 'roster':
       // the proposal: candidate is the proposing grantee; seq pins where in
       // the chain this entry lands. The carried chain rides OUTSIDE these

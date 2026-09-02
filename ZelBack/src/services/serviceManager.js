@@ -36,6 +36,8 @@ const registryManager = require('./appDatabase/registryManager');
 const { AppSyncOrchestrator, STATES: APP_SYNC_STATES } = require('./appMessaging/appSyncOrchestrator');
 const grantorController = require('./quorumGrant/grantorController');
 const grantClient = require('./quorumGrant/grantClient');
+const ordinalRegister = require('./quorumGrant/ordinalRegister');
+const ordinalRegisterSeam = require('./appMesh/ordinalRegisterSeam');
 const messageStore = require('./appMessaging/messageStore');
 const crontabAndMountsCleanup = require('./appLifecycle/crontabAndMountsCleanup');
 const appJanitor = require('./appLifecycle/appJanitor');
@@ -462,6 +464,10 @@ async function startFluxFunctions() {
     // A standing generation record ends the world a held term was granted
     // in; the holder hears it from the store the moment the record lands.
     messageStore.onGrantGenerationRecord(grantClient.noteGenerationRecord);
+    // The mesh's ordinals are write-once grants on the founding committee;
+    // the plane registers into the mesh's seam here, and until it does every
+    // ordinal answer is the closed one.
+    ordinalRegisterSeam.registerProvider(ordinalRegister.provider());
     peerNotification.initialize();
     // Serve the flux-shutdownd drain socket (Arcane-only, best-effort).
     drainServer.start();

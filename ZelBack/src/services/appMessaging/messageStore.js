@@ -826,6 +826,11 @@ async function handleMasterleaseEvent({ message, envelope, announcer }) {
   if (message.mode === 'held' && (!Number.isSafeInteger(message.ttlMs) || message.ttlMs < 1)) return;
   if (message.generation !== undefined
     && (!Number.isSafeInteger(message.generation) || message.generation < 0)) return;
+  // A released record is an ordinal given back (uninstall) or reclaimed (a
+  // node-down certificate): same row, same epoch, a newer broadcast, and the
+  // flag is what readers of the ordinal- prefix skip. Boolean or absent;
+  // anything else is a malformed record and is dropped whole.
+  if (message.released !== undefined && typeof message.released !== 'boolean') return;
   // The roster is optional and shape-gated only: its signatures verify at
   // read time against the membership the fingerprint names, which a late
   // reader may resolve when this node cannot. A record wearing a malformed
@@ -1005,6 +1010,32 @@ async function getMasterleaseRecord(appName, role) {
  * rightly never mints the rung); the world scan is what makes
  * newest-decided-wins knowledge-driven rather than ladder-driven.
  */
+/**
+ * Every published record of one role prefix naming one grantee, across every
+ * app — what the ordinal plane reads when a certificate about a node lands:
+ * the ordinals that node holds, each of which is to be vacated. The prefix is
+ * matched inside the dedup key after the app segment.
+ *
+ * @param {string} rolePrefix e.g. `ordinal-`
+ * @param {string} grantee collateral outpoint
+ * @returns {Promise<object[]>}
+ */
+async function getMasterleaseRecordsByGrantee(rolePrefix, grantee) {
+  const db = dbHelper.databaseConnection();
+  const database = db.db(config.database.appsglobal.database);
+  const escaped = rolePrefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return database.collection(globalAppStateEvents)
+    .find(
+      {
+        type: APP_STATE_EVENT_TYPES.MASTERLEASE,
+        dedupKey: { $regex: `^masterlease:[^/]+/${escaped}` },
+        'data.grantee': grantee,
+      },
+      { projection: { _id: 0 } },
+    )
+    .toArray();
+}
+
 async function getMasterleaseRecordsByRolePrefix(appName, rolePrefix) {
   const db = dbHelper.databaseConnection();
   const database = db.db(config.database.appsglobal.database);
@@ -1290,6 +1321,7 @@ module.exports = {
   storeIPChangedMessage,
   getMasterleaseRecord,
   getMasterleaseRecordsByRolePrefix,
+  getMasterleaseRecordsByGrantee,
   getGrantGenerationRecord,
   onGrantGenerationRecord,
 };
