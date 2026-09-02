@@ -118,22 +118,60 @@ function timingSafe() {
   return outcome.safe;
 }
 
+/**
+ * The node's own view of the chain against the scheduled activation, or null
+ * when the plane cannot engage at all: flag off, timing unsafe, no height
+ * scheduled, or a node that cannot say where the chain is - unsynced or
+ * unknown reads as NOT reached, because a node that cannot place the tip must
+ * not be the one deciding the plane has started.
+ */
+function planeView() {
+  if (config.fluxapps.quorumGrantMastership !== true) return null;
+  if (!timingSafe()) return null;
+  const activateAt = activationHeight();
+  if (!activateAt) return null;
+  const { height, synced } = daemonServiceMiscRpcs.isDaemonSynced().data ?? {};
+  if (!synced || !Number.isFinite(height)) return null;
+  return { height, activateAt };
+}
+
+function preWindowBlocks() {
+  return config.fluxapps.quorumGrantPreWindowBlocks ?? 40;
+}
+
+/**
+ * The first of the two heights (ACTIVATION_CROSSING_DESIGN.md §2.1): the
+ * referees serve a fresh key from activateAt - preWindowBlocks, and this is
+ * the same arithmetic in the node's own view. From here to the height the
+ * plane GOVERNS nothing - every seam answers null and the legacy election
+ * still decides who runs - but the node whose own docker says it runs the
+ * container takes its lease, so the key is warm when the plane starts
+ * governing and nothing moves at the crossing. The window has to outlast a
+ * referee restart met on the way: strictly,
+ *
+ *   preWindowBlocks x blockTime > quorumGrantDrainMs + retry + 3 x askTimeoutMs
+ *                               > 300,000 + retry + 15,000 ms
+ *
+ * with the noticing lag (the coordinator's masterSlaveIntervalMs, 30 s, plus
+ * the tip's own arrival) inside the slack: 40 blocks at 30 s is 1,200 s.
+ */
+function registerOpen() {
+  if (testOverrides.enabled !== null) return testOverrides.enabled;
+  const view = planeView();
+  if (!view) return false;
+  return view.height >= view.activateAt - preWindowBlocks();
+}
+
 function featureEnabled() {
   if (testOverrides.enabled !== null) return testOverrides.enabled;
-  if (config.fluxapps.quorumGrantMastership !== true) return false;
-  if (!timingSafe()) return false;
-  const activateAt = activationHeight();
-  if (!activateAt) return false;
-  // The node's own cached tip. Unsynced or unknown reads as NOT reached: a node
-  // that cannot say where the chain is must not be the one deciding the plane
-  // has started.
-  const { height, synced } = daemonServiceMiscRpcs.isDaemonSynced().data ?? {};
-  if (!synced || !Number.isFinite(height)) return false;
+  const view = planeView();
+  if (!view) return false;
+  const { height, activateAt } = view;
   if (height < activateAt) return false;
   // Once, on the way in. Every node crosses at its own moment - the tip arrives by
   // push for some and by poll for others - and the spread between those moments is
-  // exactly what the incumbent's head start has to absorb. Unrecorded, it is not
-  // measurable after the fact.
+  // part of what the window absorbs. Unrecorded, it is not measurable after the
+  // fact.
   if (!activationAnnounced) {
     activationAnnounced = true;
     log.info(`mastershipGrantGate - the plane is live: tip ${height} reached activation height ${activateAt}`);
@@ -243,6 +281,17 @@ function keyFor(appName) {
   return `${appName}/${ROLE}`;
 }
 
+
+/**
+ * What every seam does below the height: no verdict, and inside the window
+ * a kick of the pursuit - which is where the running-only rule lives. The
+ * activeStandby coordinator asks masterIntent every interval, so that is the
+ * running node's periodic kick inside the window; the reconciler's own sweep
+ * is hourly and cannot be relied on for it.
+ */
+function kickInsideWindow(identifier, appName) {
+  if (registerOpen()) pursue(identifier, appName);
+}
 
 /**
  * Kick an acquisition if none is running and the last kick is stale. A
@@ -375,6 +424,17 @@ async function acquireUnlessSettled(identifier, appName, key) {
     ttlMs: heldTtlMs(),
     onDemoted: (reason) => {
       log.warn(`mastershipGrantGate - ${identifier} demoted: ${reason}`);
+      if (!featureEnabled()) {
+        // Below the height the plane governs nothing, so a lease that lapses
+        // inside the window - a referee majority restarting inside one term
+        // (ACTIVATION_CROSSING_DESIGN.md §4) - is re-acquired, never a docker
+        // stop of a container the legacy election still owns. The re-ask goes
+        // straight, past the pursuit throttle: the lapse IS the kick.
+        log.info(`mastershipGrantGate - ${identifier} lost ${key} below the activation height; re-acquiring`);
+        pursuits.delete(key);
+        pursue(identifier, appName);
+        return;
+      }
       // A deposed master stops HARD and NOW, straight at docker: it has lost
       // the right to write, and every second it runs politely is a second
       // beside a legitimately started successor. The reconciler queue then
@@ -425,7 +485,10 @@ async function acquireUnlessSettled(identifier, appName, key) {
  * @returns {Promise<{desired: false|null, reason: string}|null>}
  */
 async function grantVerdict(identifier, comp) {
-  if (!featureEnabled()) return null;
+  if (!featureEnabled()) {
+    if (comp?.hasActiveStandbySyncthing?.()) kickInsideWindow(identifier, comp.appName);
+    return null;
+  }
   if (!comp?.hasActiveStandbySyncthing?.()) return null;
 
   const { appName } = comp;
@@ -489,7 +552,11 @@ async function blocksStart(identifier, comp) {
  * @returns {Promise<boolean|null>}
  */
 async function leaderIsSelf(identifier, appName, isActiveStandby) {
-  if (!featureEnabled() || !isActiveStandby) return null;
+  if (!isActiveStandby) return null;
+  if (!featureEnabled()) {
+    kickInsideWindow(identifier, appName);
+    return null;
+  }
   const key = keyFor(appName);
   if (grantClient.holderFor(key)) return true;
   // No verdict while this node's own acquisition is in flight — a false
@@ -534,7 +601,10 @@ async function leaderIsSelf(identifier, appName, isActiveStandby) {
  * @returns {Promise<{ip: string|null, fdmOk: true}|null>}
  */
 async function masterIntent(identifier, comp) {
-  if (!featureEnabled()) return null;
+  if (!featureEnabled()) {
+    if (comp?.hasActiveStandbySyncthing?.()) kickInsideWindow(identifier, comp.appName);
+    return null;
+  }
   if (!comp?.hasActiveStandbySyncthing?.()) return null;
 
   pursue(identifier, comp.appName);
