@@ -324,6 +324,29 @@ describe('nodeDownService', () => {
       service.stop();
     });
 
+    it('a node that left the list while certified is forgotten on the sweep: no probe when its record later vanishes', async () => {
+      const harness = makeHarness();
+      withDuty(harness);
+      const { service, transport, stubs, networkStateServiceStub } = harness;
+      stubs.recordStateFor.withArgs(DUTY_OUTPOINT).resolves({ state: 'standing', key: 'nodedown:x:0:90' });
+      service.start(transport);
+      await tick();
+
+      // the list moves on without x; the sweep prunes what nobody will ask about
+      const listed = networkStateServiceStub.nodeDownTopology;
+      networkStateServiceStub.nodeDownTopology = () => ({ ...listed(), duties: () => [] });
+      await service.sweep();
+      await tick();
+
+      // x is listed again later with no record: a fresh start, not a lapse
+      networkStateServiceStub.nodeDownTopology = listed;
+      stubs.recordStateFor.withArgs(DUTY_OUTPOINT).resolves({ state: 'none', key: null });
+      await service.sweep();
+      await tick();
+      expect(transport.openEphemeralConnection.callCount).to.equal(0);
+      service.stop();
+    });
+
     it('the lapse probe fires without a hold too: a still-dark node is re-certified, not forgotten', async () => {
       const harness = makeHarness();
       withDuty(harness);
