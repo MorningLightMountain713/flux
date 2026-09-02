@@ -893,7 +893,15 @@ describe('quorumGrant grantClient', () => {
     });
   });
 
-  describe('the committee heal', () => {
+  describe('the committee heal', function healSuite() {
+    // These tests do real secp256k1 work: every heal signs and verifies eight
+    // acceptances, and a carried chain is verified link by link by each referee
+    // that has not journaled it. Measured: one heal 0.5 s, two heals 3.5 s on a
+    // box whose sixteen cores were saturated, under nyc instrumentation (the
+    // full-suite path runs mocha without --timeout, so its 2 s default was the
+    // bound that tripped). CPU-bound work, no timer and no race: the budget
+    // must exceed the saturated-box cost, and a genuine hang still fails.
+    this.timeout(30_000);
     const outpoint = (node) => `${node.txhash}:${node.outidx}`;
 
     // the walk's forced replacement for the first heal, derived with the
