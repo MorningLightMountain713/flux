@@ -15,39 +15,36 @@ import { REGISTRY_REPO_HOST, getSubnetConfig } from '../framework/subnet-config.
 
 const { gateway: GATEWAY } = getSubnetConfig();
 
-// The slot mechanism (DNS_SERVICE_DISCOVERY_SRV.md §11): each member claims
-// the lowest vacant ordinal and asserts it through the message flows the
-// network already gossips; the ordinal is the member's canonical identity.
-// Four nodes, three instances — the fourth node is the replacement pool.
+// Ordinals as grants: each member's ordinal (db-0, db-1, …) is a write-once
+// grant on the app's founding committee, decided exactly once, and every node
+// reads the holders off the synced grant record; the ordinal is the member's
+// canonical identity. Four nodes, three instances — the fourth node is the
+// replacement pool.
 //
-// Phase one (steady state): three members claim three DISTINCT ordinals with
-// no coordinator; the container carries the identity (env, hostname — the
-// k8s StatefulSet convention); the component name still resolves locally via
-// the network alias; PTR gives the ordinal FQDN; and slots survive a FluxOS
-// restart unchanged (echoed from the node's own prior assertion, never
-// re-elected).
+// Phase one (steady state): three members are granted three DISTINCT
+// ordinals with no arbitration among themselves; the container carries the
+// identity (env, hostname — the k8s StatefulSet convention); the component
+// name still resolves locally via the network alias; PTR gives the ordinal
+// FQDN; and ordinals survive a FluxOS restart unchanged (a grant is durable,
+// never re-decided).
 //
-// Phase two (the lifecycle): a member node's FluxOS is stopped outright and
-// the location TTLs are tuned low (they are config, not constants), so its
-// rows expire and its slot vacates; the spawner replaces the instance onto
-// the free node, which claims the lowest vacancy — REPLACEMENT INHERITS THE
-// ORDINAL. The stopped node then returns: its runningSince restamps (its own
-// rows expired too), so the deterministic arbitration keeps the slot with
-// the replacement — the zombie CANNOT yank its number back. Throughout, the
-// invariant that consensus bootstrap depends on holds: the SRV answer names
-// exactly `instances` ordinal targets, each slot exactly once.
+// Phase two (the lifecycle): a member node's FluxOS is killed outright and
+// kept down. Its jurors certify it down, the plane vacates the ordinals the
+// certified subject holds, and the spawner replaces the instance onto the
+// free node, whose scan founds the lowest free ordinal — REPLACEMENT INHERITS
+// THE ORDINAL. The stopped node then returns: the record names the
+// replacement, its container carries an ordinal it no longer holds, and the
+// drift-rebuild re-identifies it — the zombie CANNOT yank its number back.
+// Throughout, the invariant consensus bootstrap depends on holds: the SRV
+// answer names exactly `instances` ordinal targets, each ordinal exactly once.
 //
-// The returned member ends over-target (4 running, 3 wanted), a transient
-// state the network reaps on its own schedule — so the suite asserts the
-// INVARIANT (slot ownership and the bounded named set), never which node the
-// reaper picks. The drift-rebuild engine that re-identifies a demoted or
-// promoted member's container is pinned by the unit suites
-// (meshIdentityDrift, meshReconciler, appReconciler).
-
+// The vacate needs the node-down certificate, so this phase runs only with
+// the plane's ordinal registers wired (quorumGrant/ordinalRegister.js).
+//
 const RESOLVER_ADDR = '169.254.43.53';
 const LOCATION_TTL_S = 150;
 
-describe('mesh ordinal slots — claim, identity, replacement inheritance', function () {
+describe('mesh ordinals — granted identity, replacement inheritance', function () {
   let env;
   let name;
   let ownerAuths;
@@ -189,7 +186,7 @@ describe('mesh ordinal slots — claim, identity, replacement inheritance', func
     }, { timeout: 240000, interval: 5000, label: 'overlay live on all three holders' });
   });
 
-  it('three members claim three distinct ordinals with no coordinator', async function () {
+  it('three members are granted three distinct ordinals', async function () {
     this.timeout(240000);
     const holders = await holderIndices();
     await waitFor(async () => {
@@ -198,8 +195,8 @@ describe('mesh ordinal slots — claim, identity, replacement inheritance', func
     }, { timeout: 180000, interval: 5000, label: 'all three holders hold distinct slots' });
     const slots = await Promise.all(holders.map((i) => ownSlotOf(i)));
     expect(new Set(slots), 'the dense slot space, fully assigned').to.deep.equal(new Set([0, 1, 2]));
-    // The wait above completes the moment each member sees its OWN slot; one
-    // node's view of EVERYONE's slots trails the last claim by a broadcast, so
+    // The wait above completes the moment each member holds its OWN ordinal;
+    // one node's view of EVERYONE's trails the last grant by a record sync, so
     // the full SRV set is a convergence fact, not an instant one.
     await waitFor(async () => (await srvTargets(holders[0])).length === FULL_SET().length,
       { timeout: 60000, interval: 3000, label: 'holder 0 serves the full SRV set' });
@@ -242,7 +239,7 @@ describe('mesh ordinal slots — claim, identity, replacement inheritance', func
     expect(ptrOut.stdout).to.match(new RegExp(`web-[0-2]\\.${name}\\.mesh\\.flux`));
   });
 
-  it('slots survive a FluxOS restart — echoed, never re-elected', async function () {
+  it('ordinals survive a FluxOS restart — a grant is durable, never re-decided', async function () {
     this.timeout(420000);
     const holders = await holderIndices();
     const beforeSlots = await Promise.all(holders.map((i) => ownSlotOf(i)));
@@ -309,19 +306,18 @@ describe('mesh ordinal slots — claim, identity, replacement inheritance', func
 
   it('the returned node cannot yank its ordinal back', async function () {
     this.timeout(600000);
-    // The victim returns after its own rows expired, so its runningSince
-    // restamps and the deterministic arbitration keeps the slot with the
-    // replacement. The victim is now an over-target member the network reaps
-    // on its own schedule — either way, the invariant holds: the slot stays
-    // with the replacement and the named set stays exactly the three
+    // The victim returns to a record that names the replacement for its old
+    // ordinal: the register decided once and a returning node cannot re-ask
+    // for a held ordinal. The victim is now an over-target member the network
+    // reaps on its own schedule — either way, the invariant holds: the ordinal
+    // stays with the replacement and the named set stays exactly the three
     // ordinals, each exactly once.
     const holders = await holderIndices(); // now includes the replacement
     const spareSlots = await Promise.all(holders.map((i) => ownSlotOf(i)));
     const victim = env.clients.findIndex((_, i) => !holders.includes(i));
     expect(victim, 'the stopped node is identifiable').to.be.at.least(0);
     // The returned node has to be back in the mesh for this assertion to mean
-    // anything: deterministic arbitration keeps the slot with the replacement
-    // only if the victim can see the replacement's claim at all.
+    // anything: it must have synced the record that names the replacement.
     const markers = env.clients.map((c) => c.getLastEventId());
     await startFluxos(env.clients[victim].container);
     await redialAndPeer(env, [victim], markers);
