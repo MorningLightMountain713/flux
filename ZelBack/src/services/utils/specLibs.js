@@ -77,11 +77,13 @@ function assertVersionActivated(version, height) {
  *   (a flux-spec ValidationPurpose value; default registration, the strict
  *   one). The spec library refuses unknown purposes at the door.
  * @param {boolean} [options.encrypted] - whether this submission will be
- *   broadcast sealed. Fields that must never travel in the clear — `imageAuth`,
- *   `secretEnvironment`, a content reference — are refused unless this says
- *   true, and silence counts as false. The spec cannot answer this about
- *   itself: for v9 the node decides whether to seal, so only the caller holding
- *   that decision can state it.
+ *   broadcast sealed. Read under the REGISTRATION purpose only, which is the
+ *   one question where the contents are about to be published: fields that must
+ *   never travel in the clear — `imageAuth`, `secretEnvironment`, a content
+ *   reference — are refused unless this says true, and silence counts as false.
+ *   The spec cannot answer this about itself: for v9 the node decides whether to
+ *   seal, so only the caller holding that decision can state it. A SESSION never
+ *   broadcasts and is not asked.
  * @returns {Promise<FluxAppSpecBase>} The validated spec class instance
  */
 async function validateSubmissionSpec(spec, { height, purpose, encrypted } = {}) {
