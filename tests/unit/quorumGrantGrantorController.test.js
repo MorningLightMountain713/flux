@@ -1498,6 +1498,69 @@ describe('quorumGrant grantorController', () => {
     });
   });
 
+  // The carried credential (STEP_ACROSS_DESIGN.md D2): a prepare or accept may
+  // carry the retired world's basis and a quorum of its signed term
+  // acceptances, outside the ask's signature like a roster chain. The
+  // controller resolves the carried basis's membership and the standing
+  // generation, verifies through the overlay with real signatures, and hands
+  // the register the verified incumbent — or null, in which case the ask is a
+  // stranger's and proceeds as one. A malformed credential is refused whole.
+  describe('the carried credential', () => {
+    const RETIRED_FP = 'e'.repeat(64);
+    const retiredKeys = [0, 1, 2, 3, 4].map((i) => {
+      const priv = Buffer.alloc(32); priv.writeUInt32BE(i + 11, 28);
+      return { wif: bs58check.encode(Buffer.concat([Buffer.from([0x80]), priv])), pubkey: Buffer.from(secp256k1.publicKeyCreate(priv, false)).toString('hex') };
+    });
+    const retired = retiredKeys.map((k, i) => ({ txhash: String(i + 5).repeat(64).slice(0, 64), outidx: 0, pubkey: k.pubkey, ip: `10.${i + 20}.0.1:16127` }));
+    const outpointOf = (n) => `${n.txhash}:${n.outidx}`;
+    const credentialFor = (grantee, epoch, signers = retired) => ({
+      fingerprint: RETIRED_FP,
+      generation: 0,
+      epoch,
+      roster: null,
+      acceptances: signers.map((node, i) => {
+        const fields = signedEnvelope.fieldsFor('termaccept', { key: 'myapp/master', fingerprint: RETIRED_FP, generation: 0, epoch, grantee });
+        return { grantor: outpointOf(node), signature: signedEnvelope.sign('termaccept', fields, retiredKeys[i].wif).signature };
+      }),
+    });
+    beforeEach(() => {
+      networkStateService.membershipAt.restore();
+      sinon.stub(networkStateService, 'membershipAt').callsFake((fp) => (fp === RETIRED_FP ? retired : fixtureFleet()));
+      // the standing world is generation 1, its drain over
+      messageStore.getGrantGenerationRecord.resolves({ data: { generation: 1, height: 50 } });
+    });
+
+    it('a valid credential reaches the register as the verified incumbent', async () => {
+      const res = fakeRes();
+      await grantorController.prepare(fakeReq(signedAsk('prepare', { generation: 1, carried: credentialFor(ASKER, 4) })), res);
+      expect(res.statusCode).to.equal(200);
+      const context = grantRegister.prepare.lastCall.args[2];
+      expect(context.carriedIncumbent).to.equal(ASKER);
+      await grantorController.accept(fakeReq(signedAsk('accept', { generation: 1, carried: credentialFor(ASKER, 4) })), fakeRes());
+      expect(grantRegister.accept.lastCall.args[2].carriedIncumbent).to.equal(ASKER);
+    });
+
+    it('a credential that does not verify makes the ask a stranger\'s, not a refusal', async () => {
+      const res = fakeRes();
+      const other = `${'9'.repeat(64)}:0`;
+      await grantorController.prepare(fakeReq(signedAsk('prepare', { generation: 1, carried: credentialFor(other, 4) })), res);
+      expect(res.statusCode).to.equal(200);
+      expect(grantRegister.prepare.lastCall.args[2].carriedIncumbent).to.equal(null);
+      const unknownBasis = { ...credentialFor(ASKER, 4), fingerprint: 'd'.repeat(64) };
+      await grantorController.prepare(fakeReq(signedAsk('prepare', { generation: 1, carried: unknownBasis })), fakeRes());
+      expect(grantRegister.prepare.lastCall.args[2].carriedIncumbent).to.equal(null);
+    });
+
+    it('an ask without a credential carries null; a malformed one is refused whole', async () => {
+      await grantorController.prepare(fakeReq(signedAsk('prepare', { generation: 1 })), fakeRes());
+      expect(grantRegister.prepare.lastCall.args[2].carriedIncumbent).to.equal(null);
+      const res = fakeRes();
+      await grantorController.prepare(fakeReq(signedAsk('prepare', { generation: 1, carried: { fingerprint: RETIRED_FP, acceptances: 'x' } })), res);
+      expect(res.statusCode).to.equal(400);
+      expect(res.body.data.message).to.match(/malformed credential/);
+    });
+  });
+
   // The serving word (formal/quiet-window DrainAwareCoast, rows 23 and 29–31):
   // whether this cell would SERVE an ask for the key right now. `refereeing`
   // deliberately excludes the drains (a draining cell is refereeing and must
