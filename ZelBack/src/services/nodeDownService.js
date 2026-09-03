@@ -11,7 +11,6 @@ const { RingReconciler } = require('./utils/ringReconciler');
 const { NodeDownJuror, DROP_REASON } = require('./utils/nodeDownJuror');
 const { FlapLadder } = require('./utils/flapLadder');
 const meshOrdinals = require('./appMesh/meshOrdinals');
-const ordinalRegister = require('./quorumGrant/ordinalRegister');
 const { FluxPeerManager } = require('./utils/FluxPeerManager');
 const { CLOSE_CODES } = require('./utils/FluxPeerSocket');
 const { normalizeSocketAddress, extractIp } = require('./utils/socketAddressUtils');
@@ -305,9 +304,10 @@ async function intakeCertificate(message, envelope, source) {
   }
   fluxEventBus.publish('nodedown:stored', { subject: message.certificate.subject, source });
   await noteLockout(message.certificate.subject, source);
-  // every ordinal the certified node holds is reclaimed by this certificate
-  // (the grant plane's ordinal registers; a host of the app issues the asks)
-  ordinalRegister.noteCertificate(message.certificate).catch((error) => log.warn(`nodeDownService - ordinal vacate: ${error.message}`));
+  // the ordinals the certified node holds are NOT reclaimed here: the vacate
+  // follows the derivation's placement-dead edge (since + the grace), asked
+  // by the joiner that needs the name on its own scan (meshOrdinals.js,
+  // ordinalRegister.vacateOrdinal) — R9, NODE_DOWN_SCENARIOS.md §5
 
   if (message.certificate.subject === myOutpoint()) {
     applyPlacementThenAnnounce('certificate').catch((error) => log.warn(`nodeDownService: ${error.message}`));

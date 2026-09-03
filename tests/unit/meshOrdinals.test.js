@@ -20,6 +20,7 @@ function load(register = {}) {
     askOrdinal: sinon.stub().resolves({ answer: 'yes' }),
     releaseOrdinal: sinon.stub().resolves({ released: true }),
     ordinalHolders: sinon.stub().resolves(new Map()),
+    vacateOrdinal: sinon.stub().resolves({ vacated: false, reason: 'no standing certificate' }),
     ...register,
   };
   const meshOrdinals = proxyquire('../../ZelBack/src/services/appMesh/meshOrdinals', {
@@ -83,6 +84,36 @@ describe('meshOrdinals', () => {
       expect(await meshOrdinals.claimOrdinal('app', 2)).to.deep.equal({ state: 'standby', ordinal: null });
       expect(seam.askOrdinal.callCount).to.equal(0);
       expect(await meshOrdinals.claimOrdinal('app', 0)).to.deep.equal({ state: 'standby', ordinal: null });
+    });
+
+    // The vacate by certificate follows the derivation's placement-dead edge
+    // (NODE_DOWN_SCENARIOS.md R9): a held ordinal whose holder the network
+    // has certified down and stopped placing is reclaimed by the node that
+    // needs the name, on its own scan — the register judges, the joiner asks.
+    it("a held ordinal whose holder the register vacates is founded by the joiner — on the joiner's own pass", async () => {
+      const { meshOrdinals, seam } = load({
+        probeOrdinal: probes({ 0: OTHER }),
+        vacateOrdinal: sinon.stub().resolves({ vacated: true }),
+      });
+      expect(await meshOrdinals.claimOrdinal('app', 3)).to.deep.equal({ state: 'granted', ordinal: 0 });
+      expect(seam.vacateOrdinal.args).to.deep.equal([['app', 0, OTHER]]);
+      expect(seam.askOrdinal.args).to.deep.equal([['app', 0]]);
+    });
+
+    it('a vacate the register refuses leaves the ordinal held, and the scan moves on', async () => {
+      const { meshOrdinals, seam } = load({ probeOrdinal: probes({ 0: OTHER }) });
+      expect(await meshOrdinals.claimOrdinal('app', 3)).to.deep.equal({ state: 'granted', ordinal: 1 });
+      expect(seam.vacateOrdinal.args).to.deep.equal([['app', 0, OTHER]]);
+      expect(seam.askOrdinal.args).to.deep.equal([['app', 1]]);
+    });
+
+    it('an ordinal the register shows as mine, and a free one, are never offered for a vacate', async () => {
+      const mine = load({ probeOrdinal: probes({ 0: ME }) });
+      expect(await mine.meshOrdinals.claimOrdinal('app', 3)).to.deep.equal({ state: 'granted', ordinal: 0 });
+      expect(mine.seam.vacateOrdinal.callCount).to.equal(0);
+      const free = load();
+      expect(await free.meshOrdinals.claimOrdinal('app', 3)).to.deep.equal({ state: 'granted', ordinal: 0 });
+      expect(free.seam.vacateOrdinal.callCount).to.equal(0);
     });
 
     it('never reads the holders record to find a free ordinal — the record can lag, the probe cannot', async () => {

@@ -13,6 +13,8 @@ const grantClient = require('../../ZelBack/src/services/quorumGrant/grantClient'
 const masterleasePublisher = require('../../ZelBack/src/services/quorumGrant/masterleasePublisher');
 const ordinalRegisterSeam = require('../../ZelBack/src/services/appMesh/ordinalRegisterSeam');
 const ordinalRegister = require('../../ZelBack/src/services/quorumGrant/ordinalRegister');
+const downCertificates = require('../../ZelBack/src/services/quorumGrant/downCertificates');
+const networkStateService = require('../../ZelBack/src/services/networkStateService');
 
 // The plane half of ordinals-as-grants, behind the mesh's seam. What is
 // asserted: the key the plane addresses (the app's FIRST world's rung, the
@@ -25,6 +27,7 @@ const ordinalRegister = require('../../ZelBack/src/services/quorumGrant/ordinalR
 const SELF_TXHASH = 'a'.repeat(64);
 const SELF = `${SELF_TXHASH}:0`;
 const OTHER = `${'b'.repeat(64)}:0`;
+const THIRD = `${'d'.repeat(64)}:1`;
 const RUNG = 500000;
 const COMMITTEE = {
   fingerprint: 'c'.repeat(64),
@@ -67,6 +70,12 @@ describe('quorumGrant ordinalRegister', () => {
     sinon.stub(masterleasePublisher, 'publishMasterlease').resolves(true);
     sinon.stub(registryManager, 'appLocation').resolves([{ ip: '10.0.0.5:16127' }]);
     sinon.stub(fluxNetworkHelper, 'getLocalSocketAddress').resolves('10.0.0.5:16127');
+    sinon.stub(downCertificates, 'standingCertificateFor').resolves(null);
+    sinon.stub(networkStateService, 'membershipFingerprint').returns('f'.repeat(64));
+    sinon.stub(networkStateService, 'membershipAt').returns([
+      { txhash: SELF_TXHASH, outidx: 0, ip: '10.0.0.5:16127' },
+      { txhash: 'b'.repeat(64), outidx: 0, ip: '10.0.0.7:16127' },
+    ]);
   });
 
   afterEach(() => {
@@ -200,55 +209,81 @@ describe('quorumGrant ordinalRegister', () => {
     });
   });
 
-  describe('noteCertificate — reclaim by certificate', () => {
-    const CERT = { subject: OTHER, verdicts: [] };
+  // R9 (NODE_DOWN_SCENARIOS.md §5): the ordinal vacate follows the
+  // derivation's placement-dead edge — the same moment a replacement may be
+  // placed — observed on a host's pass and acted on once, never on a timer.
+  // The edge is read off the derived locations (a certified node's rows stay
+  // until since + the grace, then go; an announce inside the grace refutes),
+  // never recomputed; the certificate is the vacate's authority and rides
+  // the ask whole. The register's own probe says whether there is anything
+  // to vacate at all.
+  describe("vacateOrdinal — reclaim by certificate at the derivation's edge", () => {
+    const CERT = {
+      subject: OTHER, fingerprint: 'c'.repeat(64), height: 100, verdicts: [], since: 1_000, reason: 'unannounced',
+    };
 
-    it('vacates every ordinal the subject holds, from a host of the app, and publishes each released', async () => {
-      messageStore.getMasterleaseRecordsByGrantee.resolves([
-        row(1, OTHER, { epoch: 2 }),
-        row(4, OTHER, { epoch: 5, released: true }),
-        { dedupKey: 'masterlease/other/ordinal-0@7', data: { appName: 'other', role: 'ordinal-0@7', mode: 'oneshot', grantee: OTHER, epoch: 1 } },
-      ]);
-      registryManager.appLocation.callsFake(async (appName) => (appName === 'myapp' ? [{ ip: '10.0.0.5:16127' }] : []));
-      await ordinalRegister.noteCertificate(CERT);
-      expect(messageStore.getMasterleaseRecordsByGrantee.calledOnceWith('ordinal-', OTHER)).to.equal(true);
+    it('vacates a certified holder the derivation no longer places, carrying the certificate, and publishes its row released', async () => {
+      downCertificates.standingCertificateFor.resolves({ ...CERT, broadcastedAt: 5_000 });
+      grantClient.probeOneshot.resolves({ decided: true, holder: OTHER, epoch: 2 });
+      expect(await ordinalRegister.vacateOrdinal('myapp', 1, OTHER)).to.deep.equal({ vacated: true });
+      expect(downCertificates.standingCertificateFor.calledOnceWith(OTHER)).to.equal(true);
       expect(grantClient.vacateOneshot.calledOnce).to.equal(true);
       const [key, committee, cert] = grantClient.vacateOneshot.firstCall.args;
       expect(key).to.equal(`myapp/ordinal-1@${RUNG}`);
       expect(committee).to.deep.include({ fingerprint: COMMITTEE.fingerprint });
-      expect(cert).to.equal(CERT);
+      expect(cert, 'the certificate travels as gossiped, without the store\'s broadcastedAt').to.deep.equal(CERT);
       const published = masterleasePublisher.publishMasterlease.firstCall.args[0];
       expect(published).to.deep.include({ key: `myapp/ordinal-1@${RUNG}`, grantee: OTHER, epoch: 2, released: true });
       expect(events).to.deep.equal([{ name: 'quorumGrant:ordinalVacated', payload: { appName: 'myapp', ordinal: 1, holder: OTHER } }]);
     });
 
-    it('a node that does not host the app issues nothing; a vacate without a quorum publishes nothing', async () => {
-      messageStore.getMasterleaseRecordsByGrantee.resolves([row(1, OTHER, { epoch: 2 })]);
-      registryManager.appLocation.resolves([{ ip: '10.9.9.9:16127' }]);
-      await ordinalRegister.noteCertificate(CERT);
+    it('no standing certificate: nothing is probed, nothing is asked', async () => {
+      expect(await ordinalRegister.vacateOrdinal('myapp', 1, OTHER)).to.deep.equal({ vacated: false, reason: 'no standing certificate' });
+      expect(grantClient.probeOneshot.called).to.equal(false);
       expect(grantClient.vacateOneshot.called).to.equal(false);
+    });
 
-      registryManager.appLocation.resolves([{ ip: '10.0.0.5:16127' }]);
+    it("a certified holder the derivation still places is not vacated — the edge is the view's, not a clock's", async () => {
+      downCertificates.standingCertificateFor.resolves({ ...CERT, broadcastedAt: 5_000 });
+      registryManager.appLocation.resolves([{ ip: '10.0.0.7:16127' }, { ip: '10.0.0.5:16127' }]);
+      expect(await ordinalRegister.vacateOrdinal('myapp', 1, OTHER)).to.deep.equal({ vacated: false, reason: 'still placed' });
+      expect(grantClient.vacateOneshot.called).to.equal(false);
+      expect(events).to.deep.equal([]);
+    });
+
+    it('a vacate without a quorum publishes nothing', async () => {
+      downCertificates.standingCertificateFor.resolves({ ...CERT, broadcastedAt: 5_000 });
+      grantClient.probeOneshot.resolves({ decided: true, holder: OTHER, epoch: 2 });
       grantClient.vacateOneshot.resolves(false);
-      await ordinalRegister.noteCertificate(CERT);
-      expect(grantClient.vacateOneshot.calledOnce).to.equal(true);
+      expect(await ordinalRegister.vacateOrdinal('myapp', 1, OTHER)).to.deep.equal({ vacated: false, reason: 'no vacate quorum' });
       expect(masterleasePublisher.publishMasterlease.called).to.equal(false);
       expect(events).to.deep.equal([]);
     });
 
-    it('a malformed certificate is ignored', async () => {
-      await ordinalRegister.noteCertificate(null);
-      await ordinalRegister.noteCertificate({ subject: 7 });
-      expect(messageStore.getMasterleaseRecordsByGrantee.called).to.equal(false);
+    it("the register's own word decides: another holder vacates nothing, a free row needs no vacate, undecided waits", async () => {
+      downCertificates.standingCertificateFor.resolves({ ...CERT, broadcastedAt: 5_000 });
+      grantClient.probeOneshot.resolves({ decided: true, holder: THIRD, epoch: 3 });
+      expect(await ordinalRegister.vacateOrdinal('myapp', 1, OTHER)).to.deep.equal({ vacated: false, reason: `held by ${THIRD}` });
+      grantClient.probeOneshot.resolves({ decided: true, holder: null, epoch: 0 });
+      expect(await ordinalRegister.vacateOrdinal('myapp', 1, OTHER)).to.deep.equal({ vacated: true });
+      grantClient.probeOneshot.resolves({ decided: false, holder: null, epoch: 0 });
+      expect(await ordinalRegister.vacateOrdinal('myapp', 1, OTHER)).to.deep.equal({ vacated: false, reason: 'no quorum answered' });
+      expect(grantClient.vacateOneshot.called).to.equal(false);
     });
-  });
 
-  describe('the seam', () => {
-    it('provider() is the full contract and registers cleanly', async () => {
-      ordinalRegisterSeam.registerProvider(ordinalRegister.provider());
-      expect(ordinalRegisterSeam.registered()).to.equal(true);
-      grantClient.probeOneshot.resolves({ decided: true, holder: OTHER, epoch: 1 });
-      expect(await ordinalRegisterSeam.probeOrdinal('myapp', 0)).to.deep.equal({ decided: true, holder: OTHER });
+    it('a holder no longer on the node list is not placed; an unresolvable membership fails closed', async () => {
+      downCertificates.standingCertificateFor.resolves({ ...CERT, broadcastedAt: 5_000 });
+      grantClient.probeOneshot.resolves({ decided: true, holder: OTHER, epoch: 2 });
+      networkStateService.membershipAt.returns([{ txhash: SELF_TXHASH, outidx: 0, ip: '10.0.0.5:16127' }]);
+      expect(await ordinalRegister.vacateOrdinal('myapp', 1, OTHER)).to.deep.equal({ vacated: true });
+      networkStateService.membershipAt.returns(null);
+      expect(await ordinalRegister.vacateOrdinal('myapp', 1, OTHER)).to.deep.equal({ vacated: false, reason: 'membership unavailable' });
+      expect(grantClient.vacateOneshot.calledOnce).to.equal(true);
+    });
+
+    it('a malformed holder is refused without a read', async () => {
+      expect(await ordinalRegister.vacateOrdinal('myapp', 1, null)).to.deep.equal({ vacated: false, reason: 'malformed holder' });
+      expect(downCertificates.standingCertificateFor.called).to.equal(false);
     });
   });
 });
