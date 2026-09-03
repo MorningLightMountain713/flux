@@ -85,6 +85,9 @@ describe('quorumGrant grantClient', () => {
   );
   const STANDBY_HOST = standbyNode.ip.split(':')[0];
 
+  // a describe may widen the world (step-across needs committees that share
+  // fewer than a quorum of cells); the fake and the stubs read the active one
+  let activeMembership = membership;
   const hostNodes = new Map(membership.map((node) => [node.ip.split(':')[0], node]));
   const hostWifs = new Map(membership.map((node, i) => [
     node.ip.split(':')[0],
@@ -108,6 +111,8 @@ describe('quorumGrant grantClient', () => {
   let refereeingAnswer; // record reads carry it when set; undefined = old node
   let servingAnswer; // record reads carry it when set; undefined = a node without the word
   let acceptanceOnAccept; // false = the referees withhold the term acceptance on accept (delivered on renew)
+  let freshSeats; // true = the referees first served the re-rolled generation just now (a stranger waits); false = long ago
+  let refuseAccept; // true = every referee answers accept with a refusal
   let teaching; // hosts refusing every ask under a newer world, and teaching it
   let taughtRecord; // the standing generation record those refusals and every record read carry
 
@@ -116,6 +121,7 @@ describe('quorumGrant grantClient', () => {
   }
 
   function dispatchToGrantor(host, type, ask) {
+    if (!registers.has(host)) registers.set(host, new Map()); // a cell of a widened world
     const store = registers.get(host);
     const record = store.get(ask.key) ?? null;
     const request = {
@@ -186,10 +192,26 @@ describe('quorumGrant grantClient', () => {
         reply: { ...outcome.reply, acceptance: { grantor: `${node.txhash}:${node.outidx}`, signature: signed.signature } },
       };
     };
+    // the controller's empty-seat rule for a re-rolled world (STEP_ACROSS_DESIGN
+    // D2/D3): this cell first serves the new generation NOW, so a stranger waits
+    // one lock-delay and only a candidate carrying the retired committee's
+    // signed acceptances, verified here with real signatures, is let in at once
+    const seatTunables = () => {
+      if ((ask.generation ?? 0) < 1) return REGISTER_TUNABLES;
+      const carriedIncumbent = ask.carried
+        ? rosterOverlay.verifyTermCredential(activeMembership, ask.key, ask.carried, {
+          committeeSize: COMMITTEE_SIZE, candidate: ask.candidate, standingGeneration: taughtRecord?.generation ?? 0,
+        })
+        : null;
+      const servingSinceMs = freshSeats ? Date.now() : Date.now() - REGISTER_TUNABLES.lockDelayMs - 1;
+      return { ...REGISTER_TUNABLES, servingSinceMs, carriedIncumbent };
+    };
     const handlers = {
-      probe: () => ({ reply: registerCore.onProbe(record, request, Date.now(), REGISTER_TUNABLES), record: null }),
-      prepare: () => registerCore.onPrepare(record, request, Date.now(), REGISTER_TUNABLES),
-      accept: () => termAcceptance(registerCore.onAccept(record, request, Date.now(), REGISTER_TUNABLES)),
+      probe: () => ({ reply: registerCore.onProbe(record, request, Date.now(), seatTunables()), record: null }),
+      prepare: () => registerCore.onPrepare(record, request, Date.now(), seatTunables()),
+      accept: () => (refuseAccept
+        ? { reply: { ok: false, code: 'unavailable' }, record: null }
+        : termAcceptance(registerCore.onAccept(record, request, Date.now(), seatTunables()))),
       renew: () => termAcceptance(registerCore.onRenew(record, request, Date.now(), REGISTER_TUNABLES)),
       // the controller's role rule: only an ordinal row may be given back
       release: () => registerCore.onRelease(record, {
@@ -253,7 +275,10 @@ describe('quorumGrant grantClient', () => {
 
     const type = path.split('/').pop();
     if (unreachable.has(host) || dark.has(host)) throw new Error('unreachable');
-    if (teaching.has(host)) throw taughtRefusal();
+    // a teaching cell refuses only an ask naming a RETIRED generation (the
+    // controller's "ask names generation X, current is Y"); the standing one
+    // is served — a re-rolled committee shares cells with the old one
+    if (teaching.has(host) && (body?.generation ?? 0) < (taughtRecord?.generation ?? 0)) throw taughtRefusal();
     return { data: { status: 'success', data: dispatchToGrantor(host, type, body) } };
   }
 
@@ -269,6 +294,9 @@ describe('quorumGrant grantClient', () => {
     refereeingAnswer = undefined;
     servingAnswer = undefined;
     acceptanceOnAccept = true;
+    freshSeats = false;
+    refuseAccept = false;
+    activeMembership = membership;
     teaching = new Set();
     taughtRecord = null;
 
@@ -309,7 +337,7 @@ describe('quorumGrant grantClient', () => {
     });
     sinon.stub(fluxNetworkHelper, 'getFluxNodePrivateKey').resolves(WIF);
     sinon.stub(networkStateService, 'membershipFingerprint').returns(fingerprint);
-    sinon.stub(networkStateService, 'membershipAt').returns(membership);
+    sinon.stub(networkStateService, 'membershipAt').callsFake(() => activeMembership);
     sinon.stub(registryManager, 'appLocation').resolves([
       { ip: `${SELF_HOST}:16127` },
       { ip: `${STANDBY_HOST}:16127` },
@@ -1504,6 +1532,124 @@ describe('quorumGrant grantClient', () => {
       expect(cancelled).to.include(loop);
       expect(handles[handles.length - 1].ms).to.equal(0);
       expect(holder.state).to.equal('held');
+    });
+
+    // Step-across (STEP_ACROSS_DESIGN.md D4): on learning that a newer
+    // generation stands, the holder takes its seat on the re-rolled committee
+    // with its credential — the retired committee's signed acceptances — and
+    // its container never stops. Without the credential the fresh seats hold
+    // it like any stranger and it falls back to today's path.
+    describe('step-across', () => {
+      // A WIDE world: with 13 peers and committees of nine, any two committees
+      // share at least a quorum of cells, and on a shared cell the master is
+      // exempt by its own row — the credential would never be needed (the
+      // four-node model world's lesson, quiet-window row 24). Forty peers with
+      // real keys: two hash-drawn committees share a few cells, below quorum,
+      // so the step-across must convince cells that never held the master.
+      const wide = [
+        ...Array.from({ length: 40 }, (unused, i) => ({
+          txhash: String(i + 1).padStart(2, '0').repeat(32),
+          outidx: 0,
+          pubkey: keypairFor(i + 1).pubkey,
+          ip: `10.${i + 1}.0.1:16127`,
+        })),
+        membership.find((node) => node.txhash === SELF_TXHASH),
+      ];
+      wide.forEach((node, i) => {
+        const host = node.ip.split(':')[0];
+        if (!hostNodes.has(host)) {
+          hostNodes.set(host, node);
+          hostWifs.set(host, keypairFor(i + 1).wif);
+        }
+      });
+      const oldCommittee = selectCommittee(wide, rosterOverlay.walkKeyFor(KEY, 0), { size: COMMITTEE_SIZE });
+      const newCommittee = selectCommittee(wide, rosterOverlay.walkKeyFor(KEY, 1), { size: COMMITTEE_SIZE });
+      const hostsOf = (c) => c.members.map((node) => node.ip.split(':')[0]);
+      const oldHosts = hostsOf(oldCommittee);
+      const nextHosts = hostsOf(newCommittee);
+      // generations are consecutive (the owner controller refuses a skip), so
+      // the world the holder steps into is the one right above its own
+      const NEXT = { ...RECORD, generation: 1 };
+      beforeEach(() => {
+        activeMembership = wide;
+      });
+      const reroll = (holder) => {
+        // the owner re-rolls: the record stands at generation 1, the old cells
+        // refuse under it and teach it, the new cells have just started serving
+        taughtRecord = NEXT;
+        messageStore.getGrantGenerationRecord.resolves({ data: NEXT });
+        oldHosts.forEach((host) => teaching.add(host));
+        freshSeats = true;
+        grantClient.noteGenerationRecord({ appName: 'myapp', role: 'master', generation: 1 });
+        return holder;
+      };
+
+      it('fixture: the two committees share fewer than a quorum of cells, and neither seats this node', () => {
+        const shared = nextHosts.filter((host) => oldHosts.includes(host));
+        expect(shared.length, `shared cells ${shared.length} < quorum ${newCommittee.quorum}`).to.be.below(newCommittee.quorum);
+        expect(oldHosts).to.not.include(SELF_HOST);
+        expect(nextHosts).to.not.include(SELF_HOST);
+      });
+
+      it('the accept quorum decides: with every accept refused the holder keeps its old world', async () => {
+        taughtRecord = null;
+        const holder = reroll(await acquireHolder());
+        refuseAccept = true;
+        clockNow += 1_000;
+        await holder.renewOnce();
+        expect(holder.generation).to.equal(0);
+      });
+
+      it('steps across to the re-rolled committee with its credential, holds the new term, publishes it, and is never demoted', async () => {
+        taughtRecord = null;
+        const demoted = [];
+        const holder = reroll(await acquireHolder({ onDemoted: (reason) => demoted.push(reason) }));
+        const publishedBefore = masterleasePublisher.publishMasterlease.callCount;
+        clockNow += 1_000;
+        await holder.renewOnce();
+        expect(holder.state).to.equal('held');
+        expect(holder.generation, 'the holder now holds under the new generation').to.equal(1);
+        expect(demoted).to.deep.equal([]);
+        const seated = nextHosts.filter((host) => {
+          const row = registers.get(host)?.get(KEY);
+          return row?.accepted?.grantee === SELF && row.accepted.generation === 1 && row.accepted.released === false;
+        });
+        expect(seated.length, 'a quorum of the re-rolled committee accepted the incumbent').to.be.at.least(committee.quorum);
+        expect(masterleasePublisher.publishMasterlease.callCount).to.equal(publishedBefore + 1);
+        expect(masterleasePublisher.publishMasterlease.lastCall.args[0]).to.deep.include({ key: KEY, grantee: SELF, generation: 1 });
+        // and it renews there from now on
+        clockNow += 1_000;
+        await holder.renewOnce();
+        expect(holder.state).to.equal('held');
+        expect(holder.generation).to.equal(1);
+      });
+
+      it('without a credential every fresh seat holds it like a stranger: no seat is taken and the world is not changed', async () => {
+        taughtRecord = null;
+        acceptanceOnAccept = false;
+        const holder = await acquireHolder();
+        expect(holder.credential()).to.equal(null);
+        reroll(holder);
+        clockNow += 1_000;
+        await holder.renewOnce();
+        expect(holder.generation).to.equal(0);
+        // the old world's rows on the cells the two committees share are not a seat in the new one
+        const seated = nextHosts.filter((host) => {
+          const row = registers.get(host)?.get(KEY);
+          return row?.accepted?.grantee === SELF && row.accepted.generation === 1;
+        });
+        expect(seated).to.deep.equal([]);
+      });
+
+      it('a plain renewal under an unchanged world never steps across or republishes', async () => {
+        taughtRecord = null;
+        const holder = await acquireHolder();
+        const publishedBefore = masterleasePublisher.publishMasterlease.callCount;
+        clockNow += 20_000;
+        await holder.renewOnce();
+        expect(holder.generation).to.equal(0);
+        expect(masterleasePublisher.publishMasterlease.callCount).to.equal(publishedBefore);
+      });
     });
 
     it('a generation no newer than the held world, or a key nobody here holds, moves nothing', async () => {
