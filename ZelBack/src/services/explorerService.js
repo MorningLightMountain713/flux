@@ -218,12 +218,16 @@ async function storeToCollection(collectionName, doc) {
  * swallowed here.
  *
  * @param {string} collectionName Chainparams collection to upsert into.
- * @param {{txid: string, height: number, message: object}} doc Row to store.
+ * @param {{txid: string, height: number, txIndex: number, message: object}} doc Row to
+ *   store. `txIndex` is the transaction's position in its block: two messages can be
+ *   mined in one block, and the history orders them by it rather than by the order
+ *   this node happened to reach them in, which differs between the walk, the
+ *   bootstrap and a restore from this collection.
  * @param {object|null} history In-memory history for this message type, if built yet.
  * @returns {Promise<void>}
  */
 async function applySoftForkMessage(collectionName, doc, history) {
-  if (history) history.add(doc.message, doc.height);
+  if (history) history.add(doc.message, doc.height, doc.txIndex);
   await storeToCollection(collectionName, doc);
 }
 
@@ -311,7 +315,7 @@ function isRecognizedMessageSigner(address, height) {
   return address === resolveOracleAddress(height);
 }
 
-async function processSoftFork(txid, height, bytes, senderIsLegacyAuthority, tx) {
+async function processSoftFork(txid, height, txIndex, bytes, senderIsLegacyAuthority, tx) {
   const { dispatch, ValidationError } = await getSpecPolicy();
   let dispatched;
   try {
@@ -367,7 +371,7 @@ async function processSoftFork(txid, height, bytes, senderIsLegacyAuthority, tx)
       log.info(`PriceMessage at height ${height}: ${txid}`);
       await applySoftForkMessage(
         priceMessagesCollection,
-        { txid, height, message },
+        { txid, height, txIndex, message },
         priceOracleState.getPriceMessageHistory(),
       );
       break;
@@ -379,7 +383,7 @@ async function processSoftFork(txid, height, bytes, senderIsLegacyAuthority, tx)
       log.info(`RateMessage at height ${height}: ${txid}`);
       await applySoftForkMessage(
         rateMessagesCollection,
-        { txid, height, message },
+        { txid, height, txIndex, message },
         priceOracleState.getRateMessageHistory(),
       );
       break;
@@ -388,7 +392,7 @@ async function processSoftFork(txid, height, bytes, senderIsLegacyAuthority, tx)
       log.info(`PriceModifierMessage at height ${height}: ${txid}`);
       await applySoftForkMessage(
         priceModifierMessagesCollection,
-        { txid, height, message },
+        { txid, height, txIndex, message },
         priceOracleState.getPriceModifierHistory(),
       );
       break;
@@ -397,7 +401,7 @@ async function processSoftFork(txid, height, bytes, senderIsLegacyAuthority, tx)
       log.info(`OracleKeyMessage at height ${height}: ${txid}`);
       await applySoftForkMessage(
         oracleKeyMessagesCollection,
-        { txid, height, message },
+        { txid, height, txIndex, message },
         priceOracleState.getOracleKeyHistory(),
       );
       break;
@@ -406,7 +410,7 @@ async function processSoftFork(txid, height, bytes, senderIsLegacyAuthority, tx)
       log.info(`MarketplacePricingMessage at height ${height}: ${txid}`);
       await applySoftForkMessage(
         marketplacePricingMessagesCollection,
-        { txid, height, message },
+        { txid, height, txIndex, message },
         priceOracleState.getMarketplacePricingHistory(),
       );
       break;
@@ -415,7 +419,7 @@ async function processSoftFork(txid, height, bytes, senderIsLegacyAuthority, tx)
       log.info(`PolicyGroupMessage at height ${height}: ${txid}`);
       await applySoftForkMessage(
         policyGroupMessagesCollection,
-        { txid, height, message },
+        { txid, height, txIndex, message },
         entitlementsState.getPolicyGroupHistory(),
       );
       break;
@@ -432,9 +436,12 @@ async function processSoftFork(txid, height, bytes, senderIsLegacyAuthority, tx)
 async function processInsight(blockDataVerbose, database) {
   // get Block Deltas information
   const txs = blockDataVerbose.tx;
-  // go through each transaction in deltas
+  // go through each transaction in deltas. The index is the transaction's position in
+  // the block — a verbose block lists tx in block.vtx order, the same quantity fluxd
+  // stores as `txindex` in its address index — and a soft-fork message needs it to
+  // order against another message mined in the same block.
   // eslint-disable-next-line no-restricted-syntax
-  for (const tx of txs) {
+  for (const [txIndex, tx] of txs.entries()) {
     if (tx.version < 5 && tx.version > 0) {
       let message = '';
       let isFluxAppMessageValue = 0;
@@ -512,7 +519,7 @@ async function processInsight(blockDataVerbose, database) {
           const rawBytes = asmField ? decodeMessageBytes(asmField.scriptPubKey.asm) : null;
           if (rawBytes) {
             // eslint-disable-next-line no-await-in-loop
-            await processSoftFork(tx.txid, blockDataVerbose.height, rawBytes, senderIsLegacyAuthority, tx);
+            await processSoftFork(tx.txid, blockDataVerbose.height, txIndex, rawBytes, senderIsLegacyAuthority, tx);
           }
         } catch (error) {
           log.error('Error processing soft fork message:', error);
@@ -801,10 +808,20 @@ async function bootstrapSoftForks(currentDaemonHeight) {
     return;
   }
 
+  // `blockindex` on a delta record is the transaction's position within its block —
+  // fluxd stores it as CAddressIndexKey.txindex, assigned from its loop over
+  // block.vtx, and returns it under this name. Two soft-fork messages can be mined in
+  // one block and this is what orders them; the records themselves arrive grouped by
+  // address, so their order is not the chain's.
+  //
+  // Two traps in the names: `index` on the same record is the input/output index
+  // within the transaction, and getblockdeltas calls the block position `index`.
   const byTx = new Map();
+  const blockIndexByTxid = new Map();
   for (const d of deltaResult.data) {
     if (!byTx.has(d.txid)) byTx.set(d.txid, []);
     byTx.get(d.txid).push(d);
+    if (!blockIndexByTxid.has(d.txid)) blockIndexByTxid.set(d.txid, d.blockindex);
   }
   const selfSendTxids = [];
   for (const [txid, deltas] of byTx) {
@@ -854,8 +871,18 @@ async function bootstrapSoftForks(currentDaemonHeight) {
         const asmField = tx.vout.find((v) => v.scriptPubKey && v.scriptPubKey.asm);
         const rawBytes = asmField ? decodeMessageBytes(asmField.scriptPubKey.asm) : null;
         if (rawBytes) {
+          const txIndex = blockIndexByTxid.get(tx.txid);
+          if (!Number.isInteger(txIndex)) {
+            // Fail closed and say which requirement failed. Applying the message
+            // without a position would order it by arrival, which is the fork the
+            // position exists to close.
+            throw new Error(
+              `Bootstrap: getaddressdeltas returned no blockindex for ${tx.txid} — this `
+              + 'daemon cannot order two soft-fork messages mined in one block',
+            );
+          }
           // eslint-disable-next-line no-await-in-loop
-          await processSoftFork(tx.txid, tx.height, rawBytes, senderIsLegacyAuthority, tx);
+          await processSoftFork(tx.txid, tx.height, txIndex, rawBytes, senderIsLegacyAuthority, tx);
           totalForks += 1;
         }
       }

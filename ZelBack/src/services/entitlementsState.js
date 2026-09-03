@@ -1,6 +1,7 @@
 'use strict';
 
 const config = require('config');
+const { inChainOrder } = require('./utils/softForkRows');
 const bs58check = require('bs58check');
 const dbHelper = require('./dbHelper');
 const log = require('../lib/log');
@@ -39,10 +40,10 @@ async function rebuildPolicyGroupState() {
     database, config.database.chainparams.collections.policyGroupMessages,
     {}, { projection: { _id: 0 } },
   );
-  docs.sort((a, b) => a.height - b.height);
+  inChainOrder(docs, 'policyGroupMessages');
   for (const doc of docs) {
     restorePolicyGroupBinary(doc.message);
-    policyGroupHistory.add(doc.message, doc.height);
+    policyGroupHistory.add(doc.message, doc.height, doc.txIndex);
   }
 
   log.info(`Policy group state rebuilt: ${docs.length} policy-group messages`);

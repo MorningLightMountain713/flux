@@ -1,6 +1,7 @@
 'use strict';
 
 const config = require('config');
+const { inChainOrder } = require('../utils/softForkRows');
 const dbHelper = require('../dbHelper');
 const log = require('../../lib/log');
 const { getSpecPolicy } = require('../utils/specLibs');
@@ -54,47 +55,47 @@ async function rebuildPriceOracleState() {
     database, config.database.chainparams.collections.oracleKeyMessages,
     {}, projection,
   );
-  oracleKeyDocs.sort((a, b) => a.height - b.height);
+  inChainOrder(oracleKeyDocs, 'oracleKeyMessages');
   for (const doc of oracleKeyDocs) {
     fixBinaryFields(doc, ['pubkey']);
-    oracleKeyHistory.add(doc.message, doc.height);
+    oracleKeyHistory.add(doc.message, doc.height, doc.txIndex);
   }
 
   const priceDocs = await dbHelper.findInDatabase(
     database, config.database.chainparams.collections.priceMessages,
     {}, projection,
   );
-  priceDocs.sort((a, b) => a.height - b.height);
+  inChainOrder(priceDocs, 'priceMessages');
   for (const doc of priceDocs) {
-    priceMessageHistory.add(doc.message, doc.height);
+    priceMessageHistory.add(doc.message, doc.height, doc.txIndex);
   }
 
   const rateDocs = await dbHelper.findInDatabase(
     database, config.database.chainparams.collections.rateMessages,
     {}, projection,
   );
-  rateDocs.sort((a, b) => a.height - b.height);
+  inChainOrder(rateDocs, 'rateMessages');
   for (const doc of rateDocs) {
-    rateMessageHistory.add(doc.message, doc.height);
+    rateMessageHistory.add(doc.message, doc.height, doc.txIndex);
   }
 
   const modifierDocs = await dbHelper.findInDatabase(
     database, config.database.chainparams.collections.priceModifierMessages,
     {}, projection,
   );
-  modifierDocs.sort((a, b) => a.height - b.height);
+  inChainOrder(modifierDocs, 'priceModifierMessages');
   for (const doc of modifierDocs) {
-    priceModifierHistory.add(doc.message, doc.height);
+    priceModifierHistory.add(doc.message, doc.height, doc.txIndex);
   }
 
   const marketplaceDocs = await dbHelper.findInDatabase(
     database, config.database.chainparams.collections.marketplacePricingMessages,
     {}, projection,
   );
-  marketplaceDocs.sort((a, b) => a.height - b.height);
+  inChainOrder(marketplaceDocs, 'marketplacePricingMessages');
   for (const doc of marketplaceDocs) {
     fixBinaryFields(doc, ['templateUuid']);
-    marketplacePricingHistory.add(doc.message, doc.height);
+    marketplacePricingHistory.add(doc.message, doc.height, doc.txIndex);
   }
 
   log.info(`Price oracle state rebuilt: ${priceDocs.length} price, ${rateDocs.length} rate, ${modifierDocs.length} modifier, ${oracleKeyDocs.length} oracle-key, ${marketplaceDocs.length} marketplace`);

@@ -935,7 +935,10 @@ describe('explorerService tests', () => {
     const priceForkHex = Buffer.from(priceForkMsg).toString('hex');
 
     function makeDelta(txid, address, satoshis) {
-      return { txid, address, satoshis, index: 0, height: 1594832 };
+      // blockindex is the transaction's position in its block, which is what a
+      // soft-fork message is ordered by; index is the input/output index within
+      // the transaction, and is not it.
+      return { txid, address, satoshis, blockindex: 0, index: 0, height: 1594832 };
     }
 
     function makeSoftForkTx(txid, height, msgHex) {
@@ -1187,7 +1190,7 @@ describe('explorerService tests', () => {
           ]);
         });
 
-        await svc.processSoftFork('badTx', 1594832, PAYLOAD, false, authorityTx());
+        await svc.processSoftFork('badTx', 1594832, 4, PAYLOAD, false, authorityTx());
 
         expect(warnSpy.calledWithMatch(/Rejected soft-fork message badTx/)).to.equal(true);
         expect(errorSpy.calledWithMatch(/defect/)).to.equal(false);
@@ -1203,7 +1206,7 @@ describe('explorerService tests', () => {
           throw new TypeError('PRICE_TAGS.get is not a function');
         });
 
-        await expect(svc.processSoftFork('goodTx', 1594832, PAYLOAD, false, authorityTx()))
+        await expect(svc.processSoftFork('goodTx', 1594832, 4, PAYLOAD, false, authorityTx()))
           .to.eventually.be.rejectedWith('PRICE_TAGS.get is not a function');
 
         expect(errorSpy.calledWithMatch(/FluxOS\/spec-policy.*defect, not a bad message/)).to.equal(true);
@@ -1219,7 +1222,7 @@ describe('explorerService tests', () => {
         });
         const svc = explorerWith(() => ({ kind: 'price', message: PARSED_PRICE, firstByte: 0x02 }));
 
-        await expect(svc.processSoftFork('priceTx', 1594832, PAYLOAD, false, authorityTx()))
+        await expect(svc.processSoftFork('priceTx', 1594832, 4, PAYLOAD, false, authorityTx()))
           .to.eventually.be.rejectedWith(/chainHeight must be a non-negative integer/);
 
         // A row the history refuses is a poison pill: rebuildPriceOracleState replays
@@ -1233,9 +1236,9 @@ describe('explorerService tests', () => {
         sinon.stub(priceOracleState, 'getPriceMessageHistory').returns({ add: addStub });
         const svc = explorerWith(() => ({ kind: 'price', message: PARSED_PRICE, firstByte: 0x02 }));
 
-        await svc.processSoftFork('priceTx', 1594832, PAYLOAD, false, authorityTx());
+        await svc.processSoftFork('priceTx', 1594832, 4, PAYLOAD, false, authorityTx());
 
-        sinon.assert.calledOnceWithExactly(addStub, PARSED_PRICE, 1594832);
+        sinon.assert.calledOnceWithExactly(addStub, PARSED_PRICE, 1594832, 4);
         const write = updateStub.getCalls().find((c) => c.args[2]?.txid === 'priceTx');
         expect(write, 'the price row must be stored').to.not.be.undefined;
         expect(write.args[3].$set.message).to.equal(PARSED_PRICE);
