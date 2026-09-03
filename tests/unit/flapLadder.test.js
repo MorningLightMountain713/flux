@@ -63,11 +63,11 @@ describe('flapLadder — the mild tier, local by rule', () => {
     expect(world.ladder.dialPlan('x:0')).to.equal(DIAL_PLAN.EAGER);
   });
 
-  it('a release is not a flapper: drops across many duties in one span count for nothing', () => {
+  it('a release is not a flapper: at least three duties and at least half of those held dropping in one span count for nothing', () => {
     const world = makeLadder();
     const fleet = Array.from({ length: MASS_DROP_DUTIES }, (unused, i) => `d${i}:0`);
     for (let round = 0; round < FLAP_TRIP; round += 1) {
-      fleet.forEach((outpoint) => world.ladder.noteDrop(outpoint));
+      fleet.forEach((outpoint) => world.ladder.noteDrop(outpoint, 6)); // three of six held
       world.height += 1;
       fleet.forEach((outpoint) => world.ladder.noteReturn(outpoint));
       world.height += 1;
@@ -77,6 +77,30 @@ describe('flapLadder — the mild tier, local by rule', () => {
     world.height += MASS_DROP_SPAN_BLOCKS + 1;
     world.cyclesInWindow('d0:0', FLAP_TRIP);
     expect(world.ladder.dialPlan('d0:0')).to.equal(DIAL_PLAN.LAZY);
+  });
+
+  it('three duties dropping together out of fourteen held is not a release: each cycle counts', () => {
+    const world = makeLadder();
+    const fleet = Array.from({ length: MASS_DROP_DUTIES }, (unused, i) => `d${i}:0`);
+    for (let round = 0; round < FLAP_TRIP; round += 1) {
+      fleet.forEach((outpoint) => world.ladder.noteDrop(outpoint, 14));
+      world.height += 1;
+      fleet.forEach((outpoint) => world.ladder.noteReturn(outpoint));
+      world.height += 1;
+    }
+    fleet.forEach((outpoint) => expect(world.ladder.dialPlan(outpoint)).to.equal(DIAL_PLAN.LAZY));
+  });
+
+  it('two duties dropping together out of two held is not a release either: three is the floor', () => {
+    const world = makeLadder();
+    const pair = ['d0:0', 'd1:0'];
+    for (let round = 0; round < FLAP_TRIP; round += 1) {
+      pair.forEach((outpoint) => world.ladder.noteDrop(outpoint, 2));
+      world.height += 1;
+      pair.forEach((outpoint) => world.ladder.noteReturn(outpoint));
+      world.height += 1;
+    }
+    pair.forEach((outpoint) => expect(world.ladder.dialPlan(outpoint)).to.equal(DIAL_PLAN.LAZY));
   });
 
   it('the clean-period ladder: 30 clean blocks lift the first trip, the second needs 60', () => {
