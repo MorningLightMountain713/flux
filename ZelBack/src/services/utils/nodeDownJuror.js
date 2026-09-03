@@ -10,6 +10,7 @@ const {
 } = require('./nodeDownCertificates');
 const { quorumThreshold } = require('./peerRings');
 const { extractIp } = require('./socketAddressUtils');
+const { NODE_DOWN_GRACE_MS, RESTART_GRACE_MS } = require('./appConstants');
 
 const log = require('../../lib/log');
 
@@ -27,7 +28,27 @@ const log = require('../../lib/log');
 // juror's own sick-to-healthy transition, which must re-open every pile it
 // abstained into. A `reachable` stands only while the connection it vouched
 // for is current: once the duty is no longer held, the next wake-up probes
-// again instead of trusting a stale answer.
+// again instead of trusting a stale answer. An `unreachable` stands until it
+// ages out OR the duty is held again: a re-held connection is evidence the
+// subject returned, and without it a second death inside the verdict
+// lifetime would never be looked at (formal/deferral-courtesy, reheld-*).
+//
+// The drop carries its reason. A subject that stops on purpose closes the
+// held connection with a code, and the juror honours it: no look until the
+// grace for that code has run, and then only if the duty is still unheld.
+// An unannounced drop is looked at now.
+
+// What a dropped connection said about itself.
+const DROP_REASON = Object.freeze({
+  SHUTDOWN: 'shutdown',
+  RESTART: 'restart',
+  UNANNOUNCED: 'unannounced',
+});
+
+const GRACE_MS = Object.freeze({
+  [DROP_REASON.SHUTDOWN]: NODE_DOWN_GRACE_MS,
+  [DROP_REASON.RESTART]: RESTART_GRACE_MS,
+});
 
 class NodeDownJuror {
   /** @type {object} */
@@ -46,6 +67,15 @@ class NodeDownJuror {
 
   /** Subjects with a probe currently in flight — one look at a time. */
   #probing = new Set();
+
+  /**
+   * The honoured drops: subject → {reason, droppedAt, height, lookAt}. One
+   * per subject — a newer coded drop replaces an older one, and the grace
+   * runs from the newest. Spent by the look at the grace end, or by the
+   * duty being held again.
+   * @type {Map<string, {reason: string, droppedAt: number, height: number, lookAt: number}>}
+   */
+  #deferrals = new Map();
 
   /**
    * @param {object} deps
@@ -69,12 +99,49 @@ class NodeDownJuror {
    * @param {() => string|null} deps.currentFingerprint the membership our own
    *   verdicts and assemblies name
    * @param {(certificate: object) => void} deps.onCertificate a pile crossed H
+   * @param {() => number} [deps.now] wall clock in ms — the graces are
+   *   wall-clock constants, so the grace end is a known instant
    * @param {object} [options]
    * @param {number} [options.maxAgeBlocks]
    */
   constructor(deps, options = {}) {
-    this.#deps = deps;
+    this.#deps = { now: () => Date.now(), ...deps };
     this.maxAgeBlocks = options.maxAgeBlocks ?? VERDICT_LIFETIME_BLOCKS;
+  }
+
+  /**
+   * A duty connection dropped, with what the far end said about it. An
+   * unannounced drop is looked at now. A coded drop is honoured: recorded,
+   * and looked at once at the grace end if the duty is still unheld.
+   *
+   * @param {string} subject outpoint
+   * @param {string} reason a DROP_REASON
+   * @returns {{honoured: boolean}} whether the drop was honoured (deferred)
+   */
+  noteDrop(subject, reason) {
+    const droppedAt = this.#deps.now();
+    if (!(reason in GRACE_MS)) {
+      this.#deferrals.delete(subject);
+      this.look(subject, 'drop', { droppedAt, reason: DROP_REASON.UNANNOUNCED });
+      return { honoured: false };
+    }
+    this.#deferrals.set(subject, {
+      reason, droppedAt, height: this.#deps.currentHeight(), lookAt: droppedAt + GRACE_MS[reason],
+    });
+    return { honoured: true };
+  }
+
+  /**
+   * The duty is held again. Whatever was owed about the subject is over:
+   * the deferral, this juror's own standing answer, and the pile it may
+   * have assembled — a later death is a new incident.
+   *
+   * @param {string} subject outpoint
+   */
+  noteHeld(subject) {
+    this.#deferrals.delete(subject);
+    this.#piles.delete(subject);
+    this.#assembled.delete(subject);
   }
 
   #pileFor(subject) {
@@ -117,9 +184,11 @@ class NodeDownJuror {
    *
    * @param {string} subject outpoint
    * @param {string} reason journal only
+   * @param {{droppedAt: number, reason: string}|null} [drop] the drop this
+   *   look answers, when it answers one — a wake-up or a lapse answers none
    * @returns {Promise<void>}
    */
-  async look(subject, reason) {
+  async look(subject, reason, drop = null) {
     const myOutpoint = this.#deps.myOutpoint();
     const topology = this.#deps.topology();
     if (!myOutpoint || !topology || subject === myOutpoint) return;
@@ -178,7 +247,7 @@ class NodeDownJuror {
     if (payload === null) return;
     verdict.signature = await this.#deps.signVerdict(payload);
     this.#record(subject, verdict);
-    log.info(`nodeDownJuror: ${subject} unreachable at ${height} (${reason}); pushing to its jury`);
+    log.info(`nodeDownJuror: ${subject} unreachable at ${height} (${reason}${drop ? `, ${drop.reason} drop` : ''}); pushing to its jury`);
 
     // Push one-way to the other jurors, ephemeral transport (wire contract:
     // a verdict on a peering is silently ignored at the far end).
@@ -319,9 +388,22 @@ class NodeDownJuror {
     this.#deps.onCertificate(certificate);
   }
 
-  /** Prune every pile against the current height — the wiring's periodic
-   *  housekeeping; correctness never depends on it running. */
+  /**
+   * The wiring's periodic housekeeping: the looks the honoured drops owe
+   * once their grace has ended, and the prune of every pile against the
+   * current height. The grace-end look is the one thing here correctness
+   * depends on — it is the first pass after a known instant, not a wait for
+   * information.
+   */
   sweep() {
+    const now = this.#deps.now();
+    [...this.#deferrals.entries()].forEach(([subject, deferral]) => {
+      if (now < deferral.lookAt) return;
+      this.#deferrals.delete(subject);
+      const socketAddress = this.#deps.resolveOutpoint(subject);
+      if (socketAddress !== null && this.#deps.isHeld(socketAddress)) return;
+      this.look(subject, 'grace-end', { droppedAt: deferral.droppedAt, reason: deferral.reason });
+    });
     [...this.#piles.keys()].forEach((subject) => this.#maybeAssemble(subject));
   }
 
@@ -333,10 +415,11 @@ class NodeDownJuror {
         [...pile.entries()].map(([juror, verdict]) => [juror, verdict.judgement]),
       );
     });
-    return { piles, assembled: [...this.#assembled] };
+    return { piles, assembled: [...this.#assembled], deferrals: Object.fromEntries(this.#deferrals) };
   }
 }
 
 module.exports = {
   NodeDownJuror,
+  DROP_REASON,
 };

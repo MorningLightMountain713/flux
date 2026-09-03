@@ -233,7 +233,7 @@ describe('Boundary: clean shutdown beyond SIGTERM_EXPIRY', function () {
 
   before(async function () {
     this.timeout(120000);
-    // 600s pinned: past the sigterm window however little the boot adds, and far
+    // 600s pinned: past the 420 s node-down grace however little the boot adds, and far
     // under the running expiry however much it adds.
     //
     // That second bound is the one that matters. locationsExpired WAS

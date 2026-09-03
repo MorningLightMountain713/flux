@@ -24,7 +24,7 @@ const { extractIp, extractPort, socketAddressesMatch } = require('../utils/socke
 const { nodeSigner } = require('../utils/nodeSigner');
 const peerIdentityService = require('../peerIdentityService');
 const registryManager = require('../appDatabase/registryManager');
-const { SIGTERM_EXPIRY_MS } = require('../utils/appConstants');
+const { NODE_DOWN_GRACE_MS } = require('../utils/appConstants');
 
 // Bounded because this runs on the pass a node is about to promote, and a slow
 // peer must not hold the promotion open.
@@ -280,7 +280,7 @@ function createPeerFolderLiveness() {
 // connected to, and has not reconnected to since, counts as gone: the time the
 // network gives a node to come back from a restart. A live peer redials within
 // a minute or two.
-const RECONNECT_GRACE_MS = SIGTERM_EXPIRY_MS;
+const RECONNECT_GRACE_MS = NODE_DOWN_GRACE_MS;
 
 // The syncthing start time this FluxOS last read, and when it first read it on
 // its own monotonic clock: never earlier than that syncthing started, and not

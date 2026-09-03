@@ -43,14 +43,13 @@ const nodeDosState = require('./ZelBack/src/services/nodeDosState');
 const requestHistoryStore = require('./ZelBack/src/services/utils/requestHistory');
 const globalState = require('./ZelBack/src/services/utils/globalState');
 const fluxEventBus = require('./ZelBack/src/services/utils/fluxEventBus');
-const fluxNetworkHelper = require('./ZelBack/src/services/fluxNetworkHelper');
-const fluxCommunicationMessagesSender = require('./ZelBack/src/services/fluxCommunicationMessagesSender');
 const dockerService = require('./ZelBack/src/services/dockerService');
 const syncthingService = require('./ZelBack/src/services/syncthingService');
 const syncthingFolderWrites = require('./ZelBack/src/services/appMonitoring/syncthingFolderWrites');
-const messageStore = require('./ZelBack/src/services/appMessaging/messageStore');
 const { AppSyncOrchestrator } = require('./ZelBack/src/services/appMessaging/appSyncOrchestrator');
 const { PM2_KILL_TIMEOUT_MS } = require('./ZelBack/src/services/fluxService');
+const { peerManager } = require('./ZelBack/src/services/utils/FluxPeerManager');
+const { CLOSE_CODES } = require('./ZelBack/src/services/utils/FluxPeerSocket');
 
 // How long a stop may take, from the signal to the exit. pm2 kills FluxOS
 // PM2_KILL_TIMEOUT_MS after it signals, and Arcane's systemd 90 s after;
@@ -60,6 +59,9 @@ const SHUTDOWN_BUDGET_MS = PM2_KILL_TIMEOUT_MS - SHUTDOWN_EXIT_MS;
 // How much of SHUTDOWN_EXIT_MS pausing the folders may take.
 const SHUTDOWN_PAUSE_MS = 3000;
 const verifyPool = require('./ZelBack/src/services/utils/verifyPool');
+
+// How long the stop waits for its close frames to leave before exiting.
+const STOP_FLUSH_MS = 2000;
 
 // Read through the manager rather than off globalThis: the dependency on the config
 // having been loaded is then a real one, not an ordering convention between requires.
@@ -404,10 +406,15 @@ async function pauseFoldersForShutdown() {
 }
 
 /**
- * Stops FluxOS. On a system shutdown or reboot it announces the shutdown to its
- * peers, stops the app containers, drains every sendreceive folder to the
- * connected peers and pauses every folder before exiting; on a restart of the
- * service alone it exits at once.
+ * Stops FluxOS. Whether the machine is going down or only this process, the
+ * connections this node holds are closed with the reason, so the jurors
+ * holding them read the drop as announced and wait the grace for it before
+ * they look. Nothing is broadcast: only those jurors need to know, and if this
+ * node is not back in time their certificate tells the fleet. On a system
+ * shutdown or reboot it then stops the app containers, drains every
+ * sendreceive folder to the connected peers and pauses every folder before
+ * exiting; a restart of the service alone exits once the connections are
+ * closed, leaving the containers running.
  */
 async function shutDown() {
   const deadline = performance.now() + SHUTDOWN_BUDGET_MS;
@@ -417,57 +424,26 @@ async function shutDown() {
   await serviceHelper.delay(100);
 
   const systemShuttingDown = await isSystemShuttingDown();
+  const code = systemShuttingDown ? CLOSE_CODES.SHUTTING_DOWN : CLOSE_CODES.RESTARTING;
+
+  await AppSyncOrchestrator.writeShutdownReason(systemShuttingDown ? 'sigterm' : 'restart');
+
+  try {
+    const closed = await peerManager.closeAllForStop(code, { flushMs: STOP_FLUSH_MS });
+    log.info(`Closed ${closed} held connections with ${systemShuttingDown ? 'SHUTTING_DOWN' : 'RESTARTING'}`);
+  } catch (error) {
+    log.error(`Error announcing the stop on held connections: ${error.message}`);
+  }
 
   if (!systemShuttingDown) {
-    log.info('System is not shutting down (service restart detected), skipping shutdown broadcast');
+    log.info('System is not shutting down (service restart detected), exiting');
+    verifyPool.stop();
     process.exit(0);
   }
 
-  log.info('System shutdown/reboot detected, initiating graceful shutdown with peer notification...');
+  log.info('System shutdown/reboot detected, initiating graceful shutdown...');
   fluxEventBus.publish('shutdown:started', {});
   globalState.setShutdownInProgressTrue();
-
-  try {
-    const { runningAppsCache } = globalState;
-
-    if (runningAppsCache.size > 0) {
-      log.info(`Node was running ${runningAppsCache.size} apps, broadcasting shutdown notification to peers...`);
-
-      const ip = await fluxNetworkHelper.getLocalSocketAddress();
-      if (ip) {
-        const sigtermMessage = {
-          type: 'fluxnodesigterm',
-          version: 1,
-          ip,
-          broadcastedAt: Date.now(),
-        };
-
-        log.info(`Broadcasting fluxnodesigterm message: ${JSON.stringify(sigtermMessage)}`);
-
-        const signedMessage = await fluxCommunicationMessagesSender.broadcastMessageToAll(sigtermMessage);
-
-        // Store the sigterm in the event log, which ends this node's claims after the
-        // shutdown grace. Peers do the same when the sigterm reaches them by gossip.
-        try {
-          const envelope = { version: signedMessage.version, timestamp: signedMessage.timestamp, pubKey: signedMessage.pubKey, signature: signedMessage.signature };
-          await messageStore.storeAppStateEvent(messageStore.APP_STATE_EVENT_TYPES.SIGTERM, { message: sigtermMessage, envelope });
-          log.info('Local sigterm event stored');
-        } catch (dbError) {
-          log.warn(`Failed to update local app expiration: ${dbError.message}`);
-        }
-
-        log.info('Shutdown notification broadcasted successfully');
-      } else {
-        log.warn('Could not get IP address, skipping shutdown broadcast');
-      }
-    } else {
-      log.info('No running apps cached, skipping shutdown broadcast');
-    }
-  } catch (error) {
-    log.error(`Error during SIGTERM handling: ${error.message}`);
-  }
-
-  await AppSyncOrchestrator.writeShutdownReason('sigterm');
 
   // A start already under way when the flag was set can land after the first
   // list is taken; the second pass stops it.
@@ -492,9 +468,6 @@ async function shutDown() {
   // syncthing keeps a folder's pause across its own restart, so the next start
   // sends nothing until the election has decided who holds each folder.
   await pauseFoldersForShutdown();
-
-  // Give some time for the broadcast to complete
-  await serviceHelper.delay(1000);
 
   verifyPool.stop();
   log.info('Graceful shutdown complete, exiting...');

@@ -97,7 +97,18 @@ function withDuty({ networkStateServiceStub, transport }) {
     ringSuccessors: () => [],
   });
   transport.peerManager.shouldAttemptConnection = () => true;
-  transport.openEphemeralConnection = sinon.stub().resolves({ close: () => {} });
+  transport.openEphemeralConnection = sinon.stub().callsFake(() => Promise.resolve(fakePeer('pong')));
+}
+
+// An ephemeral peer as the probe sees it: a socket that answers the ping
+// with a pong, hangs up first, or says nothing.
+function fakePeer(answer = 'pong') {
+  const ws = new EventEmitter();
+  ws.ping = sinon.stub().callsFake(() => {
+    if (answer === 'pong') setImmediate(() => ws.emit('pong'));
+    if (answer === 'close') setImmediate(() => ws.emit('close', 4019, 'node not confirmed'));
+  });
+  return { ws, close: sinon.stub() };
 }
 
 describe('nodeDownService', () => {
@@ -459,6 +470,148 @@ describe('nodeDownService', () => {
     // The mesh hears the same return: its ordinal names are re-probed before they are trusted.
     expect(stubs.noteMeshReturn.callCount).to.equal(1);
     expect(stubs.announce.callCount).to.equal(1);
+    service.stop();
+  });
+});
+
+describe('nodeDownService — the drop carries its reason, and the probe is an exchange', () => {
+  const DUTY_PORT = '16127';
+  const DUTY_HOST = '10.0.0.2';
+  const { NODE_DOWN_GRACE_MS, RESTART_GRACE_MS } = require('../../ZelBack/src/services/utils/appConstants');
+  const { CLOSE_CODES } = require('../../ZelBack/src/services/utils/FluxPeerSocket');
+
+  function drop(transport, closeCode) {
+    transport.peerManager.emit('peer:removed', {
+      ip: DUTY_HOST, port: DUTY_PORT, direction: 'outbound', closeCode,
+    });
+  }
+  function held(transport) {
+    transport.peerManager.emit('peer:added', { ip: DUTY_HOST, port: DUTY_PORT, direction: 'outbound' });
+  }
+
+  afterEach(() => sinon.restore());
+
+  it('a SHUTTING_DOWN close probes nothing at the drop and feeds no ladder; the grace end probes once while the duty is unheld', async () => {
+    const clock = sinon.useFakeTimers({ now: 1_700_000_000_000, toFake: ['Date'] });
+    const harness = makeHarness();
+    withDuty(harness);
+    const { service, transport, world } = harness;
+    service.start(transport);
+    await tick();
+
+    // four coded drop-and-return cycles: not one probe, and no damping
+    for (let i = 0; i < 4; i += 1) {
+      drop(transport, CLOSE_CODES.SHUTTING_DOWN);
+      world.height += 1;
+      held(transport);
+      world.height += 1;
+    }
+    await tick();
+    expect(transport.openEphemeralConnection.callCount).to.equal(0);
+    transport.dial.resetHistory();
+    await service.sweep();
+    await tick();
+    expect(transport.dial.firstCall.args[0]).to.equal(DUTY_IP);
+
+    // one more close and the duty stays unheld: the look comes at the grace end, once
+    drop(transport, CLOSE_CODES.SHUTTING_DOWN);
+    await tick();
+    clock.tick(NODE_DOWN_GRACE_MS - 1);
+    await service.sweep();
+    await tick();
+    expect(transport.openEphemeralConnection.callCount).to.equal(0);
+    clock.tick(1);
+    await service.sweep();
+    await tick();
+    expect(transport.openEphemeralConnection.callCount).to.equal(1);
+    expect(transport.openEphemeralConnection.firstCall.args[0]).to.equal(DUTY_IP);
+    await service.sweep();
+    await tick();
+    expect(transport.openEphemeralConnection.callCount).to.equal(1);
+    service.stop();
+    clock.restore();
+  });
+
+  it('a RESTARTING close is honoured for the shorter grace', async () => {
+    const clock = sinon.useFakeTimers({ now: 1_700_000_000_000, toFake: ['Date'] });
+    const harness = makeHarness();
+    withDuty(harness);
+    const { service, transport } = harness;
+    service.start(transport);
+    await tick();
+    drop(transport, CLOSE_CODES.RESTARTING);
+    await tick();
+    clock.tick(RESTART_GRACE_MS - 1);
+    await service.sweep();
+    await tick();
+    expect(transport.openEphemeralConnection.callCount).to.equal(0);
+    clock.tick(1);
+    await service.sweep();
+    await tick();
+    expect(transport.openEphemeralConnection.callCount).to.equal(1);
+    service.stop();
+    clock.restore();
+  });
+
+  it('a duty held again before the grace ends is not looked at', async () => {
+    const clock = sinon.useFakeTimers({ now: 1_700_000_000_000, toFake: ['Date'] });
+    const harness = makeHarness();
+    withDuty(harness);
+    const { service, transport } = harness;
+    service.start(transport);
+    await tick();
+    drop(transport, CLOSE_CODES.SHUTTING_DOWN);
+    held(transport);
+    await tick();
+    clock.tick(NODE_DOWN_GRACE_MS);
+    await service.sweep();
+    await tick();
+    expect(transport.openEphemeralConnection.callCount).to.equal(0);
+    service.stop();
+    clock.restore();
+  });
+
+  it('an unannounced drop is still looked at now', async () => {
+    const harness = makeHarness();
+    withDuty(harness);
+    const { service, transport } = harness;
+    service.start(transport);
+    await tick();
+    drop(transport, 1006);
+    await tick();
+    expect(transport.openEphemeralConnection.callCount).to.equal(1);
+    service.stop();
+  });
+
+  it('the probe is an exchange: a pong is reachable, a hang-up before the pong is not, silence is not, and the connection is closed either way', async () => {
+    const harness = makeHarness();
+    withDuty(harness);
+    const { service, transport } = harness;
+    service.start(transport);
+    await tick();
+
+    const answering = fakePeer('pong');
+    transport.openEphemeralConnection = sinon.stub().resolves(answering);
+    expect(await service.probe(DUTY_IP)).to.equal(true);
+    sinon.assert.calledOnce(answering.ws.ping);
+    sinon.assert.calledOnce(answering.close);
+
+    const refusing = fakePeer('close');
+    transport.openEphemeralConnection = sinon.stub().resolves(refusing);
+    expect(await service.probe(DUTY_IP)).to.equal(false);
+    sinon.assert.calledOnce(refusing.close);
+
+    const clock = sinon.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const silent = fakePeer('silent');
+    transport.openEphemeralConnection = sinon.stub().resolves(silent);
+    const pending = service.probe(DUTY_IP);
+    await clock.tickAsync(10_000);
+    expect(await pending).to.equal(false);
+    sinon.assert.calledOnce(silent.close);
+    clock.restore();
+
+    transport.openEphemeralConnection = sinon.stub().resolves(null);
+    expect(await service.probe(DUTY_IP)).to.equal(false);
     service.stop();
   });
 });

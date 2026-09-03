@@ -37,6 +37,7 @@ function makeWorld({ extraNodes = [], myDetectedIp = '10.0.0.11' } = {}) {
     ],
     history,
     height: 1000,
+    nowMs: T0,
     healthy: true,
     held: new Set(),
     probeResult: false,
@@ -69,6 +70,7 @@ function makeWorld({ extraNodes = [], myDetectedIp = '10.0.0.11' } = {}) {
     verifySignature: (owner, payload, signature) => signature === fakeSign(payload),
     pushVerdict: (socketAddress, verdict) => world.pushes.push({ socketAddress, verdict }),
     currentHeight: () => world.height,
+    now: () => world.nowMs,
     currentFingerprint: () => history.currentFingerprint(),
     onCertificate: (certificate) => world.certificates.push(certificate),
   });
@@ -250,5 +252,140 @@ describe('nodeDownJuror', () => {
       const carried = world.certificates[0].verdicts.find((v) => v.juror === 'j2:0');
       expect(carried.fingerprint).to.equal(fp1);
     });
+  });
+});
+
+describe('nodeDownJuror — the drop carries its reason (R2), and a re-held duty is evidence', () => {
+  const SUBJECT_ADDRESS = '10.0.0.20:16127';
+  const { NODE_DOWN_GRACE_MS, RESTART_GRACE_MS } = require('../../ZelBack/src/services/utils/appConstants');
+
+  it('the graces are code constants nodes agree on: 420 s for a shutdown, 120 s for a restart', () => {
+    expect(NODE_DOWN_GRACE_MS).to.equal(420 * 1000);
+    expect(RESTART_GRACE_MS).to.equal(120 * 1000);
+  });
+
+  it('an unannounced drop is looked at now', async () => {
+    const world = makeWorld();
+    const { honoured } = world.juror.noteDrop(S, 'unannounced');
+    await tick();
+    expect(honoured).to.equal(false);
+    expect(world.probes).to.deep.equal([SUBJECT_ADDRESS]);
+  });
+
+  it('a SHUTTING_DOWN close is honoured: no probe and no verdict until the grace ends, then one look', async () => {
+    const world = makeWorld();
+    const { honoured } = world.juror.noteDrop(S, 'shutdown');
+    expect(honoured).to.equal(true);
+
+    world.nowMs += NODE_DOWN_GRACE_MS - 1;
+    world.juror.sweep();
+    await tick();
+    expect(world.probes).to.deep.equal([]);
+    expect(world.pushes).to.deep.equal([]);
+
+    world.nowMs += 1;
+    world.juror.sweep();
+    await tick();
+    expect(world.probes).to.deep.equal([SUBJECT_ADDRESS]);
+    expect(world.pushes.length).to.equal(5); // the other five jurors hear the verdict
+
+    // looked once: the deferral is spent
+    world.juror.sweep();
+    await tick();
+    expect(world.probes.length).to.equal(1);
+  });
+
+  it('a RESTARTING close waits the shorter grace', async () => {
+    const world = makeWorld();
+    world.juror.noteDrop(S, 'restart');
+    world.nowMs += RESTART_GRACE_MS - 1;
+    world.juror.sweep();
+    await tick();
+    expect(world.probes).to.deep.equal([]);
+    world.nowMs += 1;
+    world.juror.sweep();
+    await tick();
+    expect(world.probes).to.deep.equal([SUBJECT_ADDRESS]);
+  });
+
+  it('a duty held again before the grace ends is never looked at', async () => {
+    const world = makeWorld();
+    world.juror.noteDrop(S, 'shutdown');
+    world.held.add(SUBJECT_ADDRESS);
+    world.nowMs += NODE_DOWN_GRACE_MS;
+    world.juror.sweep();
+    await tick();
+    expect(world.probes).to.deep.equal([]);
+  });
+
+  it('an unannounced drop while a deferral pends is looked at now: the deferral does not absorb a death', async () => {
+    const world = makeWorld();
+    world.juror.noteDrop(S, 'shutdown');
+    world.juror.noteDrop(S, 'unannounced');
+    await tick();
+    expect(world.probes).to.deep.equal([SUBJECT_ADDRESS]);
+    // and the old deferral is gone: the grace end owes nothing more
+    world.nowMs += NODE_DOWN_GRACE_MS;
+    world.juror.sweep();
+    await tick();
+    expect(world.probes.length).to.equal(1);
+  });
+
+  it('a later coded close replaces the deferral: the grace runs from the newest drop', async () => {
+    const world = makeWorld();
+    world.juror.noteDrop(S, 'shutdown');
+    world.nowMs += NODE_DOWN_GRACE_MS - 1000;
+    world.juror.noteDrop(S, 'shutdown');
+    world.nowMs += 1000; // the first grace end
+    world.juror.sweep();
+    await tick();
+    expect(world.probes).to.deep.equal([]);
+    world.nowMs += NODE_DOWN_GRACE_MS - 1000;
+    world.juror.sweep();
+    await tick();
+    expect(world.probes).to.deep.equal([SUBJECT_ADDRESS]);
+  });
+
+  it('re-holding the duty retires the standing answer: the next drop probes again instead of trusting it', async () => {
+    const world = makeWorld();
+    world.juror.noteDrop(S, 'unannounced');
+    await tick();
+    expect(world.probes.length).to.equal(1); // unreachable, signed, standing
+
+    // as built, a second drop inside the verdict lifetime was skipped; the
+    // duty being held again in between is what retires the answer
+    world.juror.noteHeld(S);
+    world.juror.noteDrop(S, 'unannounced');
+    await tick();
+    expect(world.probes.length).to.equal(2);
+  });
+
+  it('re-holding the duty retires the pile too, so a second death inside the lifetime is a new incident', async () => {
+    const world = makeWorld();
+    world.juror.onVerdictArrived(world.verdictFrom('j2:0'));
+    await tick();
+    world.juror.onVerdictArrived(world.verdictFrom('j3:0'));
+    world.juror.onVerdictArrived(world.verdictFrom('j4:0'));
+    expect(world.certificates.length).to.equal(1);
+
+    world.juror.noteHeld(S);
+    expect(world.juror.snapshot().piles[S]).to.equal(undefined);
+    expect(world.juror.snapshot().assembled).to.deep.equal([]);
+
+    world.juror.onVerdictArrived(world.verdictFrom('j2:0'));
+    await tick();
+    world.juror.onVerdictArrived(world.verdictFrom('j3:0'));
+    world.juror.onVerdictArrived(world.verdictFrom('j4:0'));
+    expect(world.certificates.length).to.equal(2);
+  });
+
+  it('re-holding the duty ends a pending deferral: nothing is owed at the old grace end', async () => {
+    const world = makeWorld();
+    world.juror.noteDrop(S, 'shutdown');
+    world.juror.noteHeld(S);
+    world.nowMs += NODE_DOWN_GRACE_MS;
+    world.juror.sweep();
+    await tick();
+    expect(world.probes).to.deep.equal([]);
   });
 });

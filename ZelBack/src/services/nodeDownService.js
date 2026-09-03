@@ -1,5 +1,6 @@
 'use strict';
 
+const config = require('config');
 const serviceHelper = require('./serviceHelper');
 const fluxNetworkHelper = require('./fluxNetworkHelper');
 const verificationHelper = require('./verificationHelper');
@@ -7,11 +8,12 @@ const networkStateService = require('./networkStateService');
 const nodeDownStore = require('./appMessaging/nodeDownStore');
 const { RECORD_STATE } = nodeDownStore;
 const { RingReconciler } = require('./utils/ringReconciler');
-const { NodeDownJuror } = require('./utils/nodeDownJuror');
+const { NodeDownJuror, DROP_REASON } = require('./utils/nodeDownJuror');
 const { FlapLadder } = require('./utils/flapLadder');
 const meshOrdinals = require('./appMesh/meshOrdinals');
 const ordinalRegister = require('./quorumGrant/ordinalRegister');
 const { FluxPeerManager } = require('./utils/FluxPeerManager');
+const { CLOSE_CODES } = require('./utils/FluxPeerSocket');
 const { normalizeSocketAddress, extractIp } = require('./utils/socketAddressUtils');
 const fluxEventBus = require('./utils/fluxEventBus');
 const log = require('../lib/log');
@@ -34,6 +36,17 @@ let addHandler = null;
 
 // outpoint <-> dialable address, rebuilt when the membership moves.
 const index = { fingerprint: undefined, byOutpoint: new Map(), bySocket: new Map() };
+
+// What a stopping process says on the connection it closes. Any other
+// reconnect-worthy code is a drop it did not announce.
+const STOP_REASON_BY_CODE = new Map([
+  [CLOSE_CODES.SHUTTING_DOWN, DROP_REASON.SHUTDOWN],
+  [CLOSE_CODES.RESTARTING, DROP_REASON.RESTART],
+]);
+
+// How long the probe waits for the pong. The same bound as the handshake:
+// a node that accepted the connection and then says nothing is not there.
+const PROBE_ANSWER_MS = config.fluxapps.wsHandshakeTimeoutMs ?? 10000;
 
 // The records this node has seen standing, by subject: its own observation,
 // kept so that a record's lapse — gone unrefuted — is an edge it can act on.
@@ -161,15 +174,45 @@ async function noteQuarantine(subject, source) {
   }
 }
 
-/** One fresh dial, now — reachable or not. The connection is closed either
- *  way; a probe must never register a peer. */
+/**
+ * One fresh dial, now, and one exchange: reachable means the far end
+ * accepted the connection AND answered a ping. A node that is up but not
+ * yet confirmed completes the handshake and hangs up before reading a frame
+ * (FluxPeerManager.validateAndAddInbound), so the handshake alone would
+ * call a rebooting node reachable and nothing would ever expire its rows;
+ * the pong is what only a confirmed FluxOS gives. The connection is closed
+ * either way; a probe must never register a peer.
+ *
+ * @param {string} socketAddress
+ * @returns {Promise<boolean>}
+ */
 async function probe(socketAddress) {
   const peer = await transport.openEphemeralConnection(socketAddress);
   if (!peer) return false;
-  try {
-    peer.close();
-  } catch (error) { /* the answer was the handshake */ }
-  return true;
+  return new Promise((resolve) => {
+    let timer = null;
+    const answer = (reachable) => {
+      clearTimeout(timer);
+      peer.ws.removeListener('pong', onPong);
+      peer.ws.removeListener('close', onClose);
+      peer.ws.removeListener('error', onClose);
+      try {
+        peer.close();
+      } catch (error) { /* already gone */ }
+      resolve(reachable);
+    };
+    const onPong = () => answer(true);
+    const onClose = () => answer(false);
+    peer.ws.on('pong', onPong);
+    peer.ws.on('close', onClose);
+    peer.ws.on('error', onClose);
+    timer = setTimeout(() => answer(false), PROBE_ANSWER_MS);
+    try {
+      peer.ws.ping();
+    } catch (error) {
+      answer(false);
+    }
+  });
 }
 
 async function pushVerdict(socketAddress, verdict) {
@@ -305,20 +348,26 @@ function onPeerRemoved({ ip, port, closeCode }) {
 
   // Only an unexpected loss raises suspicion or counts as a flap — a
   // deliberate close (duplicate, capacity, our own teardown) is not an
-  // observation about the peer.
+  // observation about the peer. A stopping process closes with its reason:
+  // the juror honours it, and an honoured stop is neither suspicion nor a
+  // flap.
   if (!FluxPeerManager.shouldReconnect(closeCode)) return;
   refreshIndex();
   const outpoint = index.bySocket.get(`${ip}:${port}`);
   if (!outpoint) return;
-  if (dutyOutpoints().has(outpoint)) ladder.noteDrop(outpoint);
-  juror.look(outpoint, 'drop');
+  const reason = STOP_REASON_BY_CODE.get(closeCode) ?? DROP_REASON.UNANNOUNCED;
+  const { honoured } = juror.noteDrop(outpoint, reason);
+  if (!honoured && dutyOutpoints().has(outpoint)) ladder.noteDrop(outpoint);
 }
 
 function onPeerAdded({ ip, port } = {}) {
   if (ladder && ip && port) {
     refreshIndex();
     const outpoint = index.bySocket.get(`${ip}:${port}`);
-    if (outpoint && dutyOutpoints().has(outpoint)) ladder.noteReturn(outpoint);
+    if (outpoint && dutyOutpoints().has(outpoint)) {
+      ladder.noteReturn(outpoint);
+      juror.noteHeld(outpoint);
+    }
   }
   if (!wasUnreachable) return;
   wasUnreachable = false;
@@ -397,6 +446,7 @@ function start(injectedTransport) {
       .verifyMessage(payload.toString(), owner, signature) === true,
     pushVerdict,
     currentHeight: () => networkStateService.chainHeight() ?? 0,
+    now: () => Date.now(),
     currentFingerprint: () => networkStateService.membershipFingerprint(),
     onCertificate: (certificate) => {
       broadcastOwnCertificate(certificate).catch((error) => log.error(error));
@@ -452,6 +502,7 @@ module.exports = {
   start,
   stop,
   sweep,
+  probe,
   onVerdictMessage,
   onCertificateBroadcast,
   onCertificateSyncEvent,

@@ -252,8 +252,6 @@ async function broadcastTarget(payload, pubKey) {
       return { target: payload.oldIP, error: `Invalid fluxipchanged message, oldIP: ${payload.oldIP} pubkey: ${pubKey}` };
     case 'fluxappremoved':
       return { target: payload.ip, error: `Invalid fluxappremoved message, ip: ${payload.ip} pubkey: ${pubKey}` };
-    case 'fluxnodesigterm':
-      return { target: payload.ip, error: `Invalid fluxnodesigterm message, ip: ${payload.ip} pubkey: ${pubKey}` };
     case 'fluxmasterlease':
       return { target: payload.ip, error: `Invalid fluxmasterlease message, ip: ${payload.ip} pubkey: ${pubKey}` };
     case 'fluxgrantgeneration':

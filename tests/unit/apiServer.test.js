@@ -11,9 +11,8 @@ const syncthingFolderWrites = require('../../ZelBack/src/services/appMonitoring/
 const fluxEventBus = require('../../ZelBack/src/services/utils/fluxEventBus');
 const verifyPool = require('../../ZelBack/src/services/utils/verifyPool');
 const globalState = require('../../ZelBack/src/services/utils/globalState');
-const fluxNetworkHelper = require('../../ZelBack/src/services/fluxNetworkHelper');
-const fluxCommunicationMessagesSender = require('../../ZelBack/src/services/fluxCommunicationMessagesSender');
-const messageStore = require('../../ZelBack/src/services/appMessaging/messageStore');
+const { peerManager } = require('../../ZelBack/src/services/utils/FluxPeerManager');
+const { CLOSE_CODES } = require('../../ZelBack/src/services/utils/FluxPeerSocket');
 const { AppSyncOrchestrator } = require('../../ZelBack/src/services/appMessaging/appSyncOrchestrator');
 const { PM2_KILL_TIMEOUT_MS } = require('../../ZelBack/src/services/fluxService');
 const serviceManager = require('../../ZelBack/src/services/serviceManager');
@@ -250,113 +249,6 @@ describe('apiServer SIGTERM handling tests', () => {
       // Should detect via first method (scheduled file)
       expect(result.detected).to.equal(true);
       expect(result.method).to.equal('scheduled');
-    });
-  });
-
-  describe('handleSigterm logic tests', () => {
-    it('should skip broadcast when system is not shutting down', async () => {
-      const broadcastCalled = { outgoing: false, incoming: false };
-      const exitCalled = { code: null };
-
-      // Mock isSystemShuttingDown returning false (async)
-      const isSystemShuttingDown = async () => false;
-
-      // Simplified handleSigterm logic
-      async function handleSigterm(deps) {
-        const systemShuttingDown = await isSystemShuttingDown();
-
-        if (!systemShuttingDown) {
-          deps.exit(0);
-          return;
-        }
-
-        if (deps.runningAppsCache.size > 0) {
-          await deps.broadcastOutgoing({});
-          await deps.broadcastIncoming({});
-        }
-
-        deps.exit(0);
-      }
-
-      await handleSigterm({
-        runningAppsCache: new Set(['app1']),
-        broadcastOutgoing: () => { broadcastCalled.outgoing = true; },
-        broadcastIncoming: () => { broadcastCalled.incoming = true; },
-        exit: (code) => { exitCalled.code = code; },
-      });
-
-      expect(broadcastCalled.outgoing).to.equal(false);
-      expect(broadcastCalled.incoming).to.equal(false);
-      expect(exitCalled.code).to.equal(0);
-    });
-
-    it('should broadcast when system is shutting down and apps are running', async () => {
-      const broadcastCalled = { outgoing: false, incoming: false };
-      const exitCalled = { code: null };
-
-      // Mock isSystemShuttingDown returning true (async)
-      const isSystemShuttingDown = async () => true;
-
-      async function handleSigterm(deps) {
-        const systemShuttingDown = await isSystemShuttingDown();
-
-        if (!systemShuttingDown) {
-          deps.exit(0);
-          return;
-        }
-
-        if (deps.runningAppsCache.size > 0) {
-          await deps.broadcastOutgoing({});
-          await deps.broadcastIncoming({});
-        }
-
-        deps.exit(0);
-      }
-
-      await handleSigterm({
-        runningAppsCache: new Set(['app1', 'app2']),
-        broadcastOutgoing: () => { broadcastCalled.outgoing = true; },
-        broadcastIncoming: () => { broadcastCalled.incoming = true; },
-        exit: (code) => { exitCalled.code = code; },
-      });
-
-      expect(broadcastCalled.outgoing).to.equal(true);
-      expect(broadcastCalled.incoming).to.equal(true);
-      expect(exitCalled.code).to.equal(0);
-    });
-
-    it('should skip broadcast when system is shutting down but no apps are running', async () => {
-      const broadcastCalled = { outgoing: false, incoming: false };
-      const exitCalled = { code: null };
-
-      const isSystemShuttingDown = async () => true;
-
-      async function handleSigterm(deps) {
-        const systemShuttingDown = await isSystemShuttingDown();
-
-        if (!systemShuttingDown) {
-          deps.exit(0);
-          return;
-        }
-
-        if (deps.runningAppsCache.size > 0) {
-          await deps.broadcastOutgoing({});
-          await deps.broadcastIncoming({});
-        }
-
-        deps.exit(0);
-      }
-
-      await handleSigterm({
-        runningAppsCache: new Set(), // Empty - no apps
-        broadcastOutgoing: () => { broadcastCalled.outgoing = true; },
-        broadcastIncoming: () => { broadcastCalled.incoming = true; },
-        exit: (code) => { exitCalled.code = code; },
-      });
-
-      expect(broadcastCalled.outgoing).to.equal(false);
-      expect(broadcastCalled.incoming).to.equal(false);
-      expect(exitCalled.code).to.equal(0);
     });
   });
 
@@ -604,6 +496,7 @@ describe('handleSigterm drains syncthing folders before it exits', () => {
   let drainStub;
   let stopStub;
   let setShutdownStub;
+  let closeStub;
 
   beforeEach(() => {
     // Method 1 of isSystemShuttingDown: the scheduled-shutdown marker exists.
@@ -616,6 +509,7 @@ describe('handleSigterm drains syncthing folders before it exits', () => {
     drainStub = sinon.stub(syncthingService, 'drainFoldersToPeers').resolves([]);
     sinon.stub(syncthingFolderWrites, 'pauseAllFolders').resolves({ paused: [], failed: [] });
     sinon.stub(verifyPool, 'stop');
+    closeStub = sinon.stub(peerManager, 'closeAllForStop').resolves(0);
     // A database another test file left connected would take the write.
     sinon.stub(AppSyncOrchestrator, 'writeShutdownReason').resolves();
     exitStub = sinon.stub(process, 'exit');
@@ -675,21 +569,24 @@ describe('handleSigterm drains syncthing folders before it exits', () => {
     expect(drainStub.firstCall.callId).to.be.greaterThan(stopStub.firstCall.callId);
   });
 
-  it('records its own sigterm in the event log, under the time it was sent', async () => {
-    globalState.runningAppsCache.add('fluxprobe_app');
-    sinon.stub(fluxNetworkHelper, 'getLocalSocketAddress').resolves('203.0.113.7:16127');
-    sinon.stub(fluxCommunicationMessagesSender, 'broadcastMessageToAll').resolves({ version: 1, timestamp: 1, pubKey: 'P', signature: 'S' });
-    const store = sinon.stub(messageStore, 'storeAppStateEvent').resolves();
+  it('closes every held connection as shutting down before it stops the containers', async () => {
+    await apiServer.handleSigterm();
+
+    sinon.assert.calledOnce(closeStub);
+    expect(closeStub.firstCall.args[0]).to.equal(CLOSE_CODES.SHUTTING_DOWN);
+    expect(closeStub.firstCall.callId).to.be.lessThan(stopStub.firstCall.callId);
+    sinon.assert.calledWith(AppSyncOrchestrator.writeShutdownReason, 'sigterm');
+  });
+
+  it('closes every held connection as restarting on a restart of the service alone, and stops no container', async () => {
+    fs.existsSync.callsFake(() => false);
+    serviceHelper.runCommand.resolves({ stdout: '', error: null });
 
     await apiServer.handleSigterm();
 
-    sinon.assert.calledOnceWithExactly(store, messageStore.APP_STATE_EVENT_TYPES.SIGTERM, {
-      message: sinon.match({ type: 'fluxnodesigterm', ip: '203.0.113.7:16127', broadcastedAt: sinon.match.number }),
-      envelope: {
-        version: 1, timestamp: 1, pubKey: 'P', signature: 'S',
-      },
-    });
-    globalState.runningAppsCache.clear();
+    expect(closeStub.firstCall.args[0]).to.equal(CLOSE_CODES.RESTARTING);
+    sinon.assert.calledWith(AppSyncOrchestrator.writeShutdownReason, 'restart');
+    expect(exitStub.firstCall.callId).to.be.lessThan(stopStub.firstCall?.callId ?? Infinity);
   });
 
   it('still exits when the drain cannot run', async () => {

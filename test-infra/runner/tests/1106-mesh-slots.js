@@ -119,10 +119,9 @@ describe('mesh ordinals — granted identity, replacement inheritance', function
           meshReconcileIntervalMs: 15000,
           minOutgoing: 1,
           minIncoming: 1,
-          // The lifecycle phase rides row expiry, so the TTLs come down from
-          // their production values (125 min / 7 min) to suite scale.
+          // The lifecycle phase rides row expiry, so the TTL comes down from
+          // its production value (125 min) to suite scale.
           locationTtlS: LOCATION_TTL_S,
-          sigtermTtlS: 60,
           peerNotifyIntervalMs: 20000,
         },
       },

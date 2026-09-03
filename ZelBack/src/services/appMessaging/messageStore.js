@@ -39,7 +39,6 @@ const {
 
 const APP_STATE_EVENT_TYPES = Object.freeze({
   APPRUNNING: 'apprunning',
-  SIGTERM: 'sigterm',
   APPREMOVED: 'appremoved',
   EVICTED: 'evicted',
   IPCHANGED: 'ipchanged',
@@ -788,23 +787,6 @@ async function handleAppRunningEvent({ signedBroadcast, announcer = null }) {
   }
 }
 
-async function handleSigtermEvent({ message, envelope }) {
-  if (!message || !message.ip || !message.broadcastedAt) return;
-  const { ip } = message;
-  const db = dbHelper.databaseConnection();
-  const database = db.db(config.database.appsglobal.database);
-  await database.collection(globalAppStateEvents).updateOne(
-    { ip, type: APP_STATE_EVENT_TYPES.SIGTERM, dedupKey: 'sigterm' },
-    buildConditionalUpsert(message.broadcastedAt, {
-      ip, type: APP_STATE_EVENT_TYPES.SIGTERM, dedupKey: 'sigterm',
-      broadcastedAt: new Date(message.broadcastedAt),
-      expireAt: new Date(message.broadcastedAt + RUNNING_EXPIRY_MS),
-      envelope, data: message,
-    }, { alwaysSetFields: { receivedAt: new Date() } }),
-    { upsert: true },
-  );
-}
-
 async function handleAppRemovedStateEvent({ message, envelope }) {
   if (!message || !message.ip || !message.appName || !message.broadcastedAt) return;
   const db = dbHelper.databaseConnection();
@@ -1183,7 +1165,6 @@ async function getMasterleaseRecordsByRolePrefix(appName, rolePrefix) {
 function storeAppStateEvent(type, payload) {
   switch (type) {
     case APP_STATE_EVENT_TYPES.APPRUNNING: return handleAppRunningEvent(payload);
-    case APP_STATE_EVENT_TYPES.SIGTERM: return handleSigtermEvent(payload);
     case APP_STATE_EVENT_TYPES.APPREMOVED: return handleAppRemovedStateEvent(payload);
     case APP_STATE_EVENT_TYPES.EVICTED: return handleEvictedEvent(payload);
     case APP_STATE_EVENT_TYPES.IPCHANGED: return handleIPChangedEvent(payload);
