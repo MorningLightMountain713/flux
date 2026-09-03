@@ -107,6 +107,7 @@ describe('quorumGrant grantClient', () => {
   let readCostMs; // what each record read costs this node on its OWN clock
   let refereeingAnswer; // record reads carry it when set; undefined = old node
   let servingAnswer; // record reads carry it when set; undefined = a node without the word
+  let acceptanceOnAccept; // false = the referees withhold the term acceptance on accept (delivered on renew)
   let teaching; // hosts refusing every ask under a newer world, and teaching it
   let taughtRecord; // the standing generation record those refusals and every record read carry
 
@@ -170,11 +171,26 @@ describe('quorumGrant grantClient', () => {
       };
     }
 
+    // the term acceptance the controller signs on accept and renew
+    // (STEP_ACROSS_DESIGN D1), with this grantor's own key
+    const termAcceptance = (outcome) => {
+      if (!outcome.reply.ok) return outcome;
+      if (type === 'accept' && !acceptanceOnAccept) return outcome;
+      const node = hostNodes.get(host);
+      const fields = signedEnvelope.fieldsFor('termaccept', {
+        key: ask.key, fingerprint: ask.fingerprint, generation: ask.generation, epoch: ask.epoch, grantee: ask.candidate,
+      });
+      const signed = signedEnvelope.sign('termaccept', fields, hostWifs.get(host));
+      return {
+        ...outcome,
+        reply: { ...outcome.reply, acceptance: { grantor: `${node.txhash}:${node.outidx}`, signature: signed.signature } },
+      };
+    };
     const handlers = {
       probe: () => ({ reply: registerCore.onProbe(record, request, Date.now(), REGISTER_TUNABLES), record: null }),
       prepare: () => registerCore.onPrepare(record, request, Date.now(), REGISTER_TUNABLES),
-      accept: () => registerCore.onAccept(record, request, Date.now(), REGISTER_TUNABLES),
-      renew: () => registerCore.onRenew(record, request, Date.now(), REGISTER_TUNABLES),
+      accept: () => termAcceptance(registerCore.onAccept(record, request, Date.now(), REGISTER_TUNABLES)),
+      renew: () => termAcceptance(registerCore.onRenew(record, request, Date.now(), REGISTER_TUNABLES)),
       // the controller's role rule: only an ordinal row may be given back
       release: () => registerCore.onRelease(record, {
         ...request, ...(/\/ordinal-\d+@/.test(ask.key) ? { allowOneshot: true } : {}),
@@ -252,6 +268,7 @@ describe('quorumGrant grantClient', () => {
     readCostMs = 0;
     refereeingAnswer = undefined;
     servingAnswer = undefined;
+    acceptanceOnAccept = true;
     teaching = new Set();
     taughtRecord = null;
 
@@ -948,6 +965,53 @@ describe('quorumGrant grantClient', () => {
       servingAnswer = undefined;
       const answer = await grantClient.witnessAnswer(KEY);
       expect(answer.quorumReachable).to.equal(true);
+    });
+
+    // The credential (STEP_ACROSS_DESIGN D1): the holder keeps each referee's
+    // latest signed acceptance for its epoch; a quorum of them is what it
+    // carries to a re-rolled committee. They belong to the epoch — a re-acquire
+    // under a new epoch starts an empty bundle.
+    it('the holder keeps a quorum of signed acceptances for its epoch, each verifying against its referee', async () => {
+      const outcome = await grantClient.acquire(KEY, holderOptions());
+      expect(outcome.granted).to.equal(true);
+      const holder = grantClient.holderFor(KEY);
+      const credential = holder.credential();
+      expect(credential.epoch).to.equal(holder.epoch);
+      expect(credential.fingerprint).to.equal(fingerprint);
+      expect(credential.generation).to.equal(0);
+      expect(credential.acceptances.length).to.be.at.least(committee.quorum);
+      credential.acceptances.forEach(({ grantor, signature }) => {
+        const node = committee.members.find((m) => `${m.txhash}:${m.outidx}` === grantor);
+        expect(node, `acceptance from a committee member: ${grantor}`).to.be.an('object');
+        const fields = signedEnvelope.fieldsFor('termaccept', {
+          key: KEY, fingerprint, generation: 0, epoch: holder.epoch, grantee: SELF,
+        });
+        expect(signedEnvelope.verify('termaccept', fields, signature, node.pubkey)).to.equal(true);
+      });
+    });
+
+    it('a renewal records the acceptance too, and below a quorum there is no credential; an acceptance naming another grantor is ignored', async () => {
+      acceptanceOnAccept = false;
+      const outcome = await grantClient.acquire(KEY, holderOptions());
+      expect(outcome.granted).to.equal(true);
+      const holder = grantClient.holderFor(KEY);
+      expect(holder.credential(), 'nothing signed yet: no credential').to.equal(null);
+      await holder.renewOnce();
+      expect(holder.credential().acceptances.length).to.equal(committee.members.length);
+      holder.recordAcceptance('x:0', { grantor: 'y:0', signature: 'forged' });
+      expect(holder.credential().acceptances.some((a) => a.grantor === 'x:0' || a.signature === 'forged')).to.equal(false);
+    });
+
+    it('fewer acceptances than a quorum is no credential at all', async () => {
+      acceptanceOnAccept = false;
+      await grantClient.acquire(KEY, holderOptions());
+      const holder = grantClient.holderFor(KEY);
+      const hosts = committee.members.map((m) => m.ip.split(':')[0]);
+      // leave quorum − 1 referees answering the renewal — dark, so no carrier
+      // relays it to them either
+      hosts.slice(committee.quorum - 1).forEach((h) => dark.add(h));
+      await holder.renewOnce();
+      expect(holder.credential(), `${committee.quorum - 1} acceptances are below the quorum of ${committee.quorum}`).to.equal(null);
     });
 
     it('carryAsk computes the committee itself and carries verbatim', async () => {
