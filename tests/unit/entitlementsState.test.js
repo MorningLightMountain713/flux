@@ -58,10 +58,11 @@ describe('entitlementsState', () => {
 
   /** A stored policy-group definition, encoded and parsed the way the chain does. */
   function definitionDoc({
-    height = GRANT_HEIGHT, groupId = 0, features, action = 'upsert',
+    height = GRANT_HEIGHT, txIndex = 0, groupId = 0, features, action = 'upsert',
   }) {
     return {
       height,
+      txIndex,
       message: flux.PolicyGroupMessage.parse(
         flux.PolicyGroupMessage.encodeDefinition({
           groupId, bitmap: flux.encodeGrantBitmap(features), action,
@@ -77,7 +78,7 @@ describe('entitlementsState', () => {
    * the membership under an empty hex string without the restore step.
    */
   function membershipDoc({
-    height = GRANT_HEIGHT, groupId = MEMBER_GROUP, owner = OWNER, action = 'upsert',
+    height = GRANT_HEIGHT, txIndex = 0, groupId = MEMBER_GROUP, owner = OWNER, action = 'upsert',
   }) {
     const message = flux.PolicyGroupMessage.parse(
       flux.PolicyGroupMessage.encodeMembership({
@@ -89,7 +90,7 @@ describe('entitlementsState', () => {
     for (const fluxid of message.fluxids) {
       fluxid.bytes = new Binary(Buffer.from(fluxid.bytes));
     }
-    return { height, message };
+    return { height, txIndex, message };
   }
 
   beforeEach(() => {
@@ -220,7 +221,7 @@ describe('entitlementsState', () => {
   });
 
   describe('rebuildPolicyGroupState', () => {
-    it('replays persisted messages into the history in height order and restores fluxid bytes', async () => {
+    it('replays persisted messages in chain order and restores fluxid bytes', async () => {
       docs = [
         membershipDoc({ height: 20 }),
         definitionDoc({ height: 10, features: { mesh: true } }),
@@ -234,6 +235,29 @@ describe('entitlementsState', () => {
       const membership = addSpy.getCalls().map((call) => call.args[0])
         .find((message) => message.subtype === 'membership');
       expect(membership.fluxids[0].bytes).to.be.instanceOf(Uint8Array);
+    });
+
+    // Rows come back in storage order, and two messages can be mined in one block. A
+    // sort on height alone left that pair resolving by whichever row was written
+    // first, which is not what the chain says and not what a node that walked the
+    // block would hold.
+    it('replays two messages from one block by their position in it', async () => {
+      docs = [
+        definitionDoc({ height: 10, txIndex: 9, features: { mesh: true } }),
+        definitionDoc({ height: 10, txIndex: 2, features: { telemetry: true } }),
+      ];
+
+      await entitlementsState.rebuildPolicyGroupState();
+
+      expect(addSpy.getCalls().map((call) => call.args[2])).to.eql([2, 9]);
+    });
+
+    it('refuses a row stored before the position was recorded', async () => {
+      docs = [definitionDoc({ height: 10, features: { mesh: true } })];
+      delete docs[0].txIndex;
+
+      await expect(entitlementsState.rebuildPolicyGroupState())
+        .to.eventually.be.rejectedWith(/carries no txIndex/);
     });
 
     it('leaves the real history holding what was replayed', async () => {
