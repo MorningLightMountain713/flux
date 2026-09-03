@@ -110,38 +110,6 @@ describe('appStartupManager tests', () => {
   // The derivation only returns LIVE claims - an announcement past its TTL, a node
   // past its shutdown grace, and an evicted node are all excluded by the query - so a
   // row existing is the claim being valid. There is no expiry field to re-check.
-  describe('appHasValidLocationOnNode', () => {
-    it('is true when the network still holds a claim for this app here', async () => {
-      appsRepositoryStub.appLocationFromEvents.resolves([{ name: 'myApp', ip: '10.0.0.1:16127' }]);
-
-      expect(await appUtilities.appHasValidLocationOnNode('myApp', '10.0.0.1:16127')).to.equal(true);
-    });
-
-    it('is false when no claim remains', async () => {
-      appsRepositoryStub.appLocationFromEvents.resolves([]);
-
-      expect(await appUtilities.appHasValidLocationOnNode('myApp', '10.0.0.1:16127')).to.equal(false);
-    });
-
-    it('asks only about this app at this node address', async () => {
-      appsRepositoryStub.appLocationFromEvents.resolves([]);
-
-      await appUtilities.appHasValidLocationOnNode('testApp', '192.168.1.1:16127');
-
-      expect(appsRepositoryStub.appLocationFromEvents.calledOnceWithExactly({
-        appname: 'testApp', ip: '192.168.1.1:16127',
-      })).to.equal(true);
-    });
-
-    // The caller UNINSTALLS on a false answer, so a read failure must never be the
-    // reason an app is deleted.
-    it('fails open when the lookup throws', async () => {
-      appsRepositoryStub.appLocationFromEvents.rejects(new Error('DB connection lost'));
-
-      expect(await appUtilities.appHasValidLocationOnNode('myApp', '10.0.0.1:16127')).to.equal(true);
-    });
-  });
-
   describe('reconcileAppsOnBoot - boot orphan sweep (manageCollectorLifecycle)', () => {
     beforeEach(() => {
       // One installed app whose containers all auto-restarted (nothing stopped):
@@ -187,75 +155,71 @@ describe('appStartupManager tests', () => {
     });
   });
 
-  describe('reconcileAppsOnBoot - location check and removal', () => {
+  describe('reconcileAppsOnBoot - the node-level placement check (R5) and what starts', () => {
     const stoppedFluxContainers = [
       { Names: ['/fluxAppA'], State: 'exited' },
       { Names: ['/fluxAppB'], State: 'exited' },
       { Names: ['/fluxAppC'], State: 'exited' },
     ];
-
-    const installedApps = ['AppA', 'AppB', 'AppC'];
+    const REMOVE = { forceKill: true, skipGuard: true, broadcastRemoval: false };
 
     beforeEach(() => {
-      // Default: installed apps in local DB
-      appsRepositoryStub.listInstalledAppNames.resolves(installedApps);
-
-      // Default: stopped containers
+      appsRepositoryStub.listInstalledAppNames.resolves(['AppA', 'AppB', 'AppC']);
       dockerServiceStub.dockerListContainers.resolves(stoppedFluxContainers);
-
-      // Default: node IP available
       fluxNetworkHelperStub.getLocalSocketAddress.resolves('10.0.0.1:16127');
     });
 
-    it('should start app when location record has not expired', async () => {
-      // Only one stopped container
-      dockerServiceStub.dockerListContainers.resolves([
-        { Names: ['/fluxAppA'], State: 'exited' },
-      ]);
+    it('asks once about this node, never per app, and starts every stopped app while its rows still place it here', async () => {
+      dockerServiceStub.dockerListContainers.resolves([{ Names: ['/fluxAppA'], State: 'exited' }]);
       appsRepositoryStub.listInstalledAppNames.resolves(['AppA']);
-
-      // Valid location record (expireAt in the future)
-      // the network still claims this app here
-      appsRepositoryStub.appLocationFromEvents.resolves([{ name: 'AppA' }]);
+      appsRepositoryStub.appLocationFromEvents.resolves([{ name: 'AppA', ip: '10.0.0.1:16127' }]);
 
       const results = await appStartupManager.reconcileAppsOnBoot();
 
       expect(results.appsEnqueued).to.deep.equal(['AppA']);
       expect(results.appsRemoved).to.deep.equal([]);
       expect(appReconcilerStub.enqueueApp.calledWith('AppA')).to.equal(true);
+      sinon.assert.calledOnceWithExactly(appsRepositoryStub.appLocationFromEvents, { ip: '10.0.0.1:16127' });
     });
 
-    it('should remove app when location record has expired', async () => {
-      dockerServiceStub.dockerListContainers.resolves([
-        { Names: ['/fluxAppA'], State: 'exited' },
-      ]);
-      appsRepositoryStub.listInstalledAppNames.resolves(['AppA']);
-
-      // the claim lapsed while the node was down - the derivation excludes it
+    it('removes every installed app, whatever its containers are doing, when no row places this node any more - and broadcasts nothing', async () => {
+      // AppA stopped, AppB running: there is no middle ground
+      dockerServiceStub.dockerListContainers.resolves([{ Names: ['/fluxAppA'], State: 'exited' }]);
+      appsRepositoryStub.listInstalledAppNames.resolves(['AppA', 'AppB']);
       appsRepositoryStub.appLocationFromEvents.resolves([]);
 
       const results = await appStartupManager.reconcileAppsOnBoot();
 
-      expect(results.appsRemoved).to.deep.equal(['AppA']);
+      expect(results.appsRemoved).to.deep.equal(['AppA', 'AppB']);
       expect(results.appsEnqueued).to.deep.equal([]);
-      expect(appUninstallerStub.uninstallApplication.calledWith('AppA', { forceKill: true, skipGuard: true })).to.equal(true);
+      expect(appUninstallerStub.uninstallApplication.calledWith('AppA', REMOVE)).to.equal(true);
+      expect(appUninstallerStub.uninstallApplication.calledWith('AppB', REMOVE)).to.equal(true);
       expect(appReconcilerStub.enqueueApp.called).to.equal(false);
     });
 
-    it('should remove app when location record is missing', async () => {
-      dockerServiceStub.dockerListContainers.resolves([
-        { Names: ['/fluxAppA'], State: 'exited' },
-      ]);
+    it('a FluxOS restart whose node was replaced while it was away removes every app though nothing is stopped', async () => {
+      dockerServiceStub.dockerListContainers.resolves([]);
       appsRepositoryStub.listInstalledAppNames.resolves(['AppA']);
-
-      // No location records
       appsRepositoryStub.appLocationFromEvents.resolves([]);
 
       const results = await appStartupManager.reconcileAppsOnBoot();
 
       expect(results.appsRemoved).to.deep.equal(['AppA']);
-      expect(results.appsEnqueued).to.deep.equal([]);
-      expect(appUninstallerStub.uninstallApplication.called).to.equal(true);
+      expect(appUninstallerStub.uninstallApplication.calledWith('AppA', REMOVE)).to.equal(true);
+    });
+
+    it('an app without a row of its own is kept while the node\'s rows stand: an install the drop cut off before its announcement', async () => {
+      dockerServiceStub.dockerListContainers.resolves([
+        { Names: ['/fluxAppA'], State: 'exited' },
+        { Names: ['/fluxAppB'], State: 'exited' },
+      ]);
+      appsRepositoryStub.listInstalledAppNames.resolves(['AppA', 'AppB']);
+      appsRepositoryStub.appLocationFromEvents.resolves([{ name: 'AppA', ip: '10.0.0.1:16127' }]);
+
+      const results = await appStartupManager.reconcileAppsOnBoot();
+
+      expect(results.appsEnqueued).to.deep.equal(['AppA', 'AppB']);
+      expect(results.appsRemoved).to.deep.equal([]);
     });
 
     it('resolves a v9 identity-named container through its app label, never the name', async () => {
@@ -278,64 +242,36 @@ describe('appStartupManager tests', () => {
       expect(appReconcilerStub.enqueueApp.calledWith('AppA')).to.equal(true);
     });
 
-    it('should skip location check and start app when IP is not available', async () => {
+    it('starts the stopped apps without asking when the node has no address to ask about', async () => {
       fluxNetworkHelperStub.getLocalSocketAddress.resolves(null);
-
-      dockerServiceStub.dockerListContainers.resolves([
-        { Names: ['/fluxAppA'], State: 'exited' },
-      ]);
+      dockerServiceStub.dockerListContainers.resolves([{ Names: ['/fluxAppA'], State: 'exited' }]);
       appsRepositoryStub.listInstalledAppNames.resolves(['AppA']);
 
       const results = await appStartupManager.reconcileAppsOnBoot();
 
       expect(results.appsEnqueued).to.deep.equal(['AppA']);
       expect(results.appsRemoved).to.deep.equal([]);
+      expect(appsRepositoryStub.appLocationFromEvents.called).to.equal(false);
     });
 
-    it('should handle mixed apps: enqueue valid, remove expired', async () => {
-      dockerServiceStub.dockerListContainers.resolves([
-        { Names: ['/fluxAppA'], State: 'exited' },
-        { Names: ['/fluxAppB'], State: 'exited' },
-      ]);
+    it('records the failure and keeps removing when one uninstall throws', async () => {
+      dockerServiceStub.dockerListContainers.resolves([{ Names: ['/fluxAppA'], State: 'exited' }]);
       appsRepositoryStub.listInstalledAppNames.resolves(['AppA', 'AppB']);
-
-      // AppA is still claimed here; AppB's claim is gone (the derivation excludes it)
-      appsRepositoryStub.appLocationFromEvents.callsFake(
-        async ({ appname }) => (appname === 'AppA' ? [{ name: 'AppA' }] : []),
-      );
-
-      const results = await appStartupManager.reconcileAppsOnBoot();
-
-      expect(results.appsEnqueued).to.deep.equal(['AppA']);
-      expect(results.appsRemoved).to.deep.equal(['AppB']);
-    });
-
-    it('should record failure when removeAppLocally throws', async () => {
-      dockerServiceStub.dockerListContainers.resolves([
-        { Names: ['/fluxAppA'], State: 'exited' },
-      ]);
-      appsRepositoryStub.listInstalledAppNames.resolves(['AppA']);
-
-      // Expired location
       appsRepositoryStub.appLocationFromEvents.resolves([]);
-
-      appUninstallerStub.uninstallApplication.rejects(new Error('Remove failed'));
+      appUninstallerStub.uninstallApplication.callsFake(async (name) => {
+        if (name === 'AppA') throw new Error('Remove failed');
+      });
 
       const results = await appStartupManager.reconcileAppsOnBoot();
 
-      expect(results.appsRemoved).to.deep.equal([]);
-      expect(results.appsFailed).to.have.lengthOf(1);
-      expect(results.appsFailed[0].app).to.equal('AppA');
-      expect(results.appsFailed[0].error).to.equal('Remove failed');
+      expect(results.appsRemoved).to.deep.equal(['AppB']);
+      expect(results.appsFailed).to.deep.equal([{ app: 'AppA', error: 'Remove failed' }]);
+      expect(results.appsEnqueued).to.deep.equal([]);
     });
 
-    it('should still start app when location DB check errors (fail-safe)', async () => {
-      dockerServiceStub.dockerListContainers.resolves([
-        { Names: ['/fluxAppA'], State: 'exited' },
-      ]);
+    it('starts the stopped apps when the rows cannot be read: a database wobble never deletes an app', async () => {
+      dockerServiceStub.dockerListContainers.resolves([{ Names: ['/fluxAppA'], State: 'exited' }]);
       appsRepositoryStub.listInstalledAppNames.resolves(['AppA']);
-
-      // Location check throws error - appHasValidLocationOnNode returns true (fail-safe)
       appsRepositoryStub.appLocationFromEvents.rejects(new Error('DB error'));
 
       const results = await appStartupManager.reconcileAppsOnBoot();
@@ -350,17 +286,12 @@ describe('appStartupManager tests', () => {
         { Names: ['/fluxNormalApp'], State: 'exited' },
       ]);
       appsRepositoryStub.listInstalledAppNames.resolves(['SyncApp', 'NormalApp']);
-
-      // SyncApp is still claimed here, NormalApp is not
-      appsRepositoryStub.appLocationFromEvents.callsFake(
-        async ({ appname }) => (appname === 'SyncApp' ? [{ name: 'SyncApp' }] : []),
-      );
+      appsRepositoryStub.appLocationFromEvents.resolves([{ name: 'SyncApp' }, { name: 'NormalApp' }]);
 
       const results = await appStartupManager.reconcileAppsOnBoot();
 
-      expect(results.appsEnqueued).to.deep.equal(['SyncApp']);
-      expect(results.appsRemoved).to.deep.equal(['NormalApp']);
-      expect(appReconcilerStub.enqueueApp.calledOnceWith('SyncApp')).to.equal(true);
+      expect(results.appsEnqueued).to.deep.equal(['SyncApp', 'NormalApp']);
+      expect(results.appsRemoved).to.deep.equal([]);
     });
 
     it('enqueues a multi-component app once, by app name (the reconciler expands components)', async () => {
@@ -369,15 +300,51 @@ describe('appStartupManager tests', () => {
         { Names: ['/fluxdb_MixedApp'], State: 'exited' },
       ]);
       appsRepositoryStub.listInstalledAppNames.resolves(['MixedApp']);
-
-      // Valid location
-      // the network still claims this app here
-      appsRepositoryStub.appLocationFromEvents.resolves([{ name: 'AppA' }]);
+      appsRepositoryStub.appLocationFromEvents.resolves([{ name: 'MixedApp' }]);
 
       const results = await appStartupManager.reconcileAppsOnBoot();
 
       expect(results.appsEnqueued).to.deep.equal(['MixedApp']);
       expect(appReconcilerStub.enqueueApp.calledOnceWith('MixedApp')).to.equal(true);
+    });
+  });
+
+  describe('enforceNodePlacement - the one question a returning node asks (R5)', () => {
+    const REMOVE = { forceKill: true, skipGuard: true, broadcastRemoval: false };
+
+    beforeEach(() => {
+      fluxNetworkHelperStub.getLocalSocketAddress.resolves('10.0.0.1:16127');
+    });
+
+    it('nothing installed: nothing to decide, and the rows are not even read', async () => {
+      appsRepositoryStub.listInstalledAppNames.resolves([]);
+      expect(await appStartupManager.enforceNodePlacement('boot')).to.deep.equal({ placed: true, removed: [], failed: [] });
+      expect(appsRepositoryStub.appLocationFromEvents.called).to.equal(false);
+    });
+
+    it('rows place this node: every app kept, the caller announces', async () => {
+      appsRepositoryStub.listInstalledAppNames.resolves(['AppA', 'AppB']);
+      appsRepositoryStub.appLocationFromEvents.resolves([{ name: 'AppA' }]);
+      expect(await appStartupManager.enforceNodePlacement('return')).to.deep.equal({ placed: true, removed: [], failed: [] });
+      expect(appUninstallerStub.uninstallApplication.called).to.equal(false);
+    });
+
+    it('no rows: every app removed, no broadcast, and the caller announces nothing', async () => {
+      appsRepositoryStub.listInstalledAppNames.resolves(['AppA', 'AppB']);
+      appsRepositoryStub.appLocationFromEvents.resolves([]);
+      expect(await appStartupManager.enforceNodePlacement('certificate')).to.deep.equal({ placed: false, removed: ['AppA', 'AppB'], failed: [] });
+      expect(appUninstallerStub.uninstallApplication.calledWith('AppA', REMOVE)).to.equal(true);
+      expect(appUninstallerStub.uninstallApplication.calledWith('AppB', REMOVE)).to.equal(true);
+    });
+
+    it('fails open: a lookup error or a missing address keeps every app', async () => {
+      appsRepositoryStub.listInstalledAppNames.resolves(['AppA']);
+      appsRepositoryStub.appLocationFromEvents.rejects(new Error('DB error'));
+      expect(await appStartupManager.enforceNodePlacement('boot')).to.deep.equal({ placed: true, removed: [], failed: [] });
+      fluxNetworkHelperStub.getLocalSocketAddress.resolves(null);
+      appsRepositoryStub.appLocationFromEvents.resolves([]);
+      expect(await appStartupManager.enforceNodePlacement('boot')).to.deep.equal({ placed: true, removed: [], failed: [] });
+      expect(appUninstallerStub.uninstallApplication.called).to.equal(false);
     });
   });
 

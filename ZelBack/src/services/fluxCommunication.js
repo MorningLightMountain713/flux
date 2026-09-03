@@ -276,7 +276,7 @@ async function handleAppRunningSyncResponse(message, peerKey) {
       fluxEventBus.publish('sync:chunkVerified', { syncType: 'apprunning', peer: peerKey, verified: verifiedAppRunning.length, stored });
     }
     for (const event of otherEvents) {
-      if (event.type === 'sigterm' || event.type === 'appremoved' || event.type === 'ipchanged' || event.type === 'masterlease' || event.type === 'grantgeneration') {
+      if (event.type === 'appremoved' || event.type === 'ipchanged' || event.type === 'masterlease' || event.type === 'grantgeneration') {
         await messageStore.storeAppStateEvent(event.type, { message: event.data, envelope: event.envelope, announcer: announcerOf.get(event) ?? null });
       } else if (event.type === 'evicted') {
         await messageStore.storeAppStateEvent(event.type, { ip: event.ip });

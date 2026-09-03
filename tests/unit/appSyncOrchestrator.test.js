@@ -568,6 +568,29 @@ describe('AppSyncOrchestrator', () => {
       expect(encodeAppRunningStub.calledWith(expectedSince), 'the frame carries the scoped since').to.equal(true);
     });
 
+    it('a scoped pull completing is announced on appSyncEvents, so a returning node can run its placement check after it; a round completion is not', async () => {
+      const peers = makeEligiblePeers(3);
+      getEligibleSyncPeersStub = sinon.stub().returns(peers);
+      const orchestrator = makeOrchestrator({ isEnterprise: () => true, markSyncRequested: sinon.stub() });
+      orchestrator.start(defaultBootContext);
+      await reachReady();
+      await clock.tickAsync(300000);
+      peerEmitter.emit('peerReestablished', { key: peers[0].key, lostAtMs: Date.now() - 60000 });
+      await clock.tickAsync(0);
+
+      const heard = [];
+      const listener = (key) => heard.push(key);
+      appSyncEvents.on(EVENTS.RECONNECT_SYNC_COMPLETE, listener);
+      try {
+        appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_COMPLETE, 'apprunning', peers[1].key); // not a pull
+        appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_COMPLETE, 'apprunning', peers[0].key); // the pull
+        await clock.tickAsync(0);
+        expect(heard).to.deep.equal([peers[0].key]);
+      } finally {
+        appSyncEvents.off(EVENTS.RECONNECT_SYNC_COMPLETE, listener);
+      }
+    });
+
     it('pulls in any state - a degraded-window node is the one that needs it most', async () => {
       // 1216 run five: the pocket sat outside READY through the whole heal
       // window (its resync round burned against its own side during the cut)

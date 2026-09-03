@@ -11,7 +11,6 @@
 const config = require('config');
 const log = require('../../lib/log');
 const dockerService = require('../dockerService');
-const serviceHelper = require('../serviceHelper');
 const fluxNetworkHelper = require('../fluxNetworkHelper');
 const appReconciler = require('../appMonitoring/appReconciler');
 const appsRepository = require('../appDatabase/appsRepository');
@@ -29,7 +28,7 @@ const globalState = require('../utils/globalState');
 const fluxEventBus = require('../utils/fluxEventBus');
 const nodeConfirmationService = require('../nodeConfirmationService');
 const { NODE_DOWN_GRACE_MS } = require('../utils/appConstants');
-const { parseContainerName, appHasValidLocationOnNode } = require('../utils/appUtilities');
+const { parseContainerName } = require('../utils/appUtilities');
 
 const SYNC_TIMEOUT_MS = config.system.bootSyncTimeoutMs ?? 300000;
 
@@ -91,6 +90,55 @@ async function getStoppedFluxContainers() {
  * - Expired/missing location: app removed locally (node was reassigned).
  * @returns {Promise<Object>} Results of the reconciliation
  */
+/**
+ * The one question a node asks after its sync and before any announce: do
+ * my own derived rows still place me? The rows a certificate negated once
+ * its grace ran, rows that expired while the node was away, and rows that
+ * never existed all answer no together — the network has moved on from
+ * every app at once, and there is no middle ground. Then every installed
+ * app is removed, whatever its containers are doing, and nothing is
+ * broadcast: the removal event's only reader is the derivation, whose rows
+ * are already gone. Otherwise every app is kept and the caller announces.
+ *
+ * Fails OPEN: a database wobble or a missing address must never be the
+ * reason an app is deleted.
+ *
+ * @param {string} trigger 'boot' | 'return' | 'certificate', journal only
+ * @returns {Promise<{placed: boolean, removed: string[], failed: Array<{app: string, error: string}>}>}
+ */
+async function enforceNodePlacement(trigger) {
+  const installedApps = await getInstalledAppNamesFromDb();
+  if (installedApps.length === 0) return { placed: true, removed: [], failed: [] };
+  const localSocketAddr = await fluxNetworkHelper.getLocalSocketAddress();
+  if (!localSocketAddr) {
+    log.warn(`appStartupManager - placement check (${trigger}) skipped: no local address`);
+    return { placed: true, removed: [], failed: [] };
+  }
+  let rows;
+  try {
+    rows = await appsRepository.appLocationFromEvents({ ip: localSocketAddr });
+  } catch (error) {
+    log.error(`appStartupManager - placement check (${trigger}) could not read the rows, keeping every app: ${error.message}`);
+    return { placed: true, removed: [], failed: [] };
+  }
+  if (rows.length > 0) return { placed: true, removed: [], failed: [] };
+
+  log.warn(`appStartupManager - placement check (${trigger}): no row places ${localSocketAddr} any more, the network has moved on; removing ${installedApps.length} app(s), no broadcast`);
+  const removed = [];
+  const failed = [];
+  for (const appName of installedApps) {
+    try {
+      // eslint-disable-next-line no-await-in-loop
+      await appUninstaller.uninstallApplication(appName, { forceKill: true, skipGuard: true, broadcastRemoval: false });
+      removed.push(appName);
+    } catch (error) {
+      log.error(`appStartupManager - failed to remove ${appName}: ${error.message}`);
+      failed.push({ app: appName, error: error.message });
+    }
+  }
+  return { placed: false, removed, failed };
+}
+
 async function reconcileAppsOnBoot() {
   const results = {
     appsChecked: 0,
@@ -153,15 +201,22 @@ async function reconcileAppsOnBoot() {
         .catch((error) => log.error(`appStartupManager - boot dependency cleanup failed: ${error.message}`));
     }
 
+    // The node-level question, for every installed app whatever its
+    // containers are doing — a FluxOS restart with nothing stopped included:
+    // a node the network moved on from starts nothing and keeps nothing.
+    const placement = await enforceNodePlacement('boot');
+    if (!placement.placed) {
+      results.appsRemoved.push(...placement.removed);
+      results.appsFailed.push(...placement.failed);
+      return results;
+    }
+
     if (stoppedContainers.length === 0) {
       log.info('appStartupManager - No stopped containers found');
       return results;
     }
 
     log.info(`appStartupManager - Found ${stoppedContainers.length} stopped Flux containers, belonging to ${appsWithStoppedContainers.size} app(s)`);
-
-    // Get this node's IP for location checks
-    const localSocketAddr = await fluxNetworkHelper.getLocalSocketAddress();
 
     // Process each app
     // eslint-disable-next-line no-restricted-syntax
@@ -176,30 +231,6 @@ async function reconcileAppsOnBoot() {
         results.appsSkippedNotInstalled.push(appName);
         // eslint-disable-next-line no-continue
         continue;
-      }
-
-      // Check if the app still has a valid location record for this node
-      // If the node was offline longer than the grace, the location record was
-      // negated and the app was respawned elsewhere
-      if (localSocketAddr) {
-        // eslint-disable-next-line no-await-in-loop
-        const hasValidLocation = await appHasValidLocationOnNode(appName, localSocketAddr);
-        if (!hasValidLocation) {
-          log.warn(`appStartupManager - App ${appName} no longer has a valid location record for this node (${localSocketAddr}), removing locally`);
-          try {
-            // eslint-disable-next-line no-await-in-loop
-            await appUninstaller.uninstallApplication(appName, { forceKill: true, skipGuard: true });
-            results.appsRemoved.push(appName);
-            log.info(`appStartupManager - App ${appName} removed locally (was reassigned to another node)`);
-          } catch (removeError) {
-            log.error(`appStartupManager - Failed to remove app ${appName}: ${removeError.message}`);
-            results.appsFailed.push({ app: appName, error: removeError.message });
-          }
-          // eslint-disable-next-line no-await-in-loop
-          await serviceHelper.delay(2000);
-          // eslint-disable-next-line no-continue
-          continue;
-        }
       }
 
       // App has valid location - hand it to the reconciler, which expands it
@@ -342,6 +373,7 @@ async function manageAppsOnBoot(bootContext) {
 module.exports = {
   manageAppsOnBoot,
   reconcileAppsOnBoot,
+  enforceNodePlacement,
   getStoppedFluxContainers,
   getInstalledAppNamesFromDb,
 };
