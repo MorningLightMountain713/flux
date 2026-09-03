@@ -389,3 +389,46 @@ describe('nodeDownJuror — the drop carries its reason (R2), and a re-held duty
     expect(world.probes).to.deep.equal([]);
   });
 });
+
+describe('nodeDownJuror — the verdict names the drop it answers (P1)', () => {
+  const { NODE_DOWN_GRACE_MS } = require('../../ZelBack/src/services/utils/appConstants');
+
+  it('an unannounced drop\'s verdict carries the drop time and reason unannounced', async () => {
+    const world = makeWorld();
+    world.juror.noteDrop(S, 'unannounced');
+    await tick();
+    expect(world.pushes.length).to.equal(5);
+    expect(world.pushes[0].verdict).to.include({ droppedAt: T0, reason: 'unannounced' });
+    // the signature binds them: the payload is the seven-field form
+    expect(verdictPayload(world.pushes[0].verdict).toString()).to.match(/\|1700000000000\|unannounced$/);
+  });
+
+  it('a grace-end look\'s verdict carries the honoured drop, not the look', async () => {
+    const world = makeWorld();
+    world.juror.noteDrop(S, 'shutdown');
+    world.nowMs += NODE_DOWN_GRACE_MS;
+    world.juror.sweep();
+    await tick();
+    expect(world.pushes[0].verdict).to.include({ droppedAt: T0, reason: 'shutdown' });
+  });
+
+  it('a wake-up look answers no drop: its verdict carries neither field', async () => {
+    const world = makeWorld();
+    world.juror.onVerdictArrived(world.verdictFrom('j2:0'));
+    await tick();
+    expect(world.pushes.length).to.equal(5);
+    expect(world.pushes[0].verdict).to.not.have.property('droppedAt');
+    expect(world.pushes[0].verdict).to.not.have.property('reason');
+    expect(world.pushes[0].verdict.signature).to.equal(fakeSign(verdictPayload(world.pushes[0].verdict)));
+  });
+
+  it('the certificate this juror assembles carries since = the latest drop its jury saw', async () => {
+    const world = makeWorld();
+    world.juror.onVerdictArrived(world.verdictFrom('j2:0', { droppedAt: T0 - 5000, reason: 'unannounced' }));
+    await tick();
+    world.juror.onVerdictArrived(world.verdictFrom('j3:0', { droppedAt: T0 - 1000, reason: 'unannounced' }));
+    world.juror.onVerdictArrived(world.verdictFrom('j4:0'));
+    expect(world.certificates.length).to.equal(1);
+    expect(world.certificates[0]).to.include({ since: T0 - 1000, reason: 'unannounced' });
+  });
+});

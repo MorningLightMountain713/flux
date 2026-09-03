@@ -22,6 +22,7 @@ const {
   globalAppStateEvents,
   appsHashesCollection,
   RUNNING_EXPIRY_MS,
+  NODE_DOWN_GRACE_MS,
 } = require('../utils/appConstants');
 
 // One-row-per-app content-slot manifest register (latest-wins). Not in appConstants
@@ -1348,11 +1349,22 @@ function buildAppLocationPipeline({
         ],
         shutdowns: [
           // nodedown rides the same override as the others: an announcement
-          // at or after the event wins.
+          // at or after the event wins. Its rows fall only once the grace has
+          // run from the drop the jury saw: `since` on the record, the same
+          // constant every node applies, so the fleet negates one node's rows
+          // at one instant.
           { $match: { type: { $in: ['evicted', 'nodedown'] } } },
           { $addFields: { _eventAt: { $ifNull: ['$broadcastedAt', '$createdAt'] } } },
           { $sort: { _eventAt: -1 } },
-          { $group: { _id: '$ip', eventAt: { $first: '$_eventAt' }, expireAt: { $first: '$expireAt' }, type: { $first: '$type' } } },
+          {
+            $group: {
+              _id: '$ip',
+              eventAt: { $first: '$_eventAt' },
+              since: { $first: { $ifNull: ['$since', '$_eventAt'] } },
+              expireAt: { $first: '$expireAt' },
+              type: { $first: '$type' },
+            },
+          },
         ],
       },
     },
@@ -1369,6 +1381,7 @@ function buildAppLocationPipeline({
                   $or: [
                     { $eq: ['$$sd', null] },
                     { $gte: ['$$entry.broadcastedAt', '$$sd.eventAt'] },
+                    { $and: [{ $eq: ['$$sd.type', 'nodedown'] }, { $gt: [{ $add: ['$$sd.since', NODE_DOWN_GRACE_MS] }, now] }] },
                   ],
                 },
               },
@@ -1422,9 +1435,25 @@ const RUNNING_ROW_TAIL = [
   },
   // When this row stops being believable. Derived rather than stored, to the rule
   // the materialized collection wrote it by: an announcement is good for the
-  // running TTL. Callers read this field off /apps/locations, so it has to mean
-  // what it has always meant.
-  { $addFields: { expireAt: { $add: ['$broadcastedAt', RUNNING_EXPIRY_MS] } } },
+  // running TTL, and a node certified down after it keeps its rows only until
+  // the grace runs from the drop. Callers read this field off /apps/locations,
+  // so it has to mean what it has always meant.
+  {
+    $addFields: {
+      expireAt: {
+        $let: {
+          vars: { sd: { $first: { $filter: { input: '$shutdowns', as: 's', cond: { $eq: ['$$s._id', '$ip'] } } } } },
+          in: {
+            $cond: [
+              { $and: [{ $ne: ['$$sd', null] }, { $eq: ['$$sd.type', 'nodedown'] }, { $gt: ['$$sd.eventAt', '$broadcastedAt'] }] },
+              { $add: ['$$sd.since', NODE_DOWN_GRACE_MS] },
+              { $add: ['$broadcastedAt', RUNNING_EXPIRY_MS] },
+            ],
+          },
+        },
+      },
+    },
+  },
   // No trailing $group: a node announces each replica once, so nothing remains to
   // deduplicate, and grouping on {name, ip} would merge co-located replicas and
   // discard the per-replica state and identity above.

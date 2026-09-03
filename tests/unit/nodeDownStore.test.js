@@ -409,3 +409,89 @@ describe('nodeDownStore', () => {
     });
   });
 });
+
+describe('nodeDownStore — the record carries since and reason (R4)', () => {
+  const { NODE_DOWN_GRACE_MS, CLOCK_SKEW_ALLOWANCE_MS } = require('../../ZelBack/src/services/utils/appConstants');
+  let world;
+  let store;
+  let collection;
+
+  before(async function bootstrap() {
+    this.timeout(30000);
+    await dbHelper.initiateDB();
+    collection = dbHelper.databaseConnection()
+      .db(config.database.appsglobal.database)
+      .collection(globalAppStateEvents);
+  });
+
+  beforeEach(async () => {
+    world = makeWorld();
+    store = proxyquire('../../ZelBack/src/services/appMessaging/nodeDownStore', {
+      '../networkStateService': {
+        nodeDownTopology: () => world.topology,
+        chainHeight: () => world.height,
+        networkState: () => world.nodes,
+      },
+    });
+    await collection.deleteMany({ subject: S });
+    await collection.deleteMany({ outpoint: S });
+    downCertificates.resetForTests();
+  });
+
+  after(async () => {
+    await collection.deleteMany({ subject: S });
+    await collection.deleteMany({ outpoint: S });
+  });
+
+  function certificateSince(since, reason) {
+    const names = ['j1', 'j2', 'j3', 'j4'];
+    return {
+      subject: S,
+      assembler: world.jurorOutpoint('j1'),
+      height: world.height,
+      fingerprint: world.fp,
+      verdicts: names.map((name) => world.signedVerdict(name, { droppedAt: since, reason })),
+      since,
+      reason,
+    };
+  }
+
+  it('stores since and reason on the row, and answers them from standingCertificateFor', async () => {
+    const at = Date.now();
+    const since = at - 30_000;
+    const result = await store.handleNodeDownEvent({ message: { certificate: certificateSince(since, 'shutdown'), broadcastedAt: at } });
+    expect(result.accepted).to.equal(true);
+    const row = await collection.findOne({ type: 'nodedown', subject: S });
+    expect(new Date(row.since).getTime()).to.equal(since);
+    expect(row.reason).to.equal('shutdown');
+    const standing = await store.standingCertificateFor(S);
+    expect(standing).to.include({ since, reason: 'shutdown' });
+  });
+
+  it('a certificate with no drop in it is stored with since = its broadcast time and reason unannounced', async () => {
+    const at = Date.now();
+    await store.handleNodeDownEvent({ message: { certificate: world.certificate(['j1', 'j2', 'j3', 'j4']), broadcastedAt: at } });
+    const row = await collection.findOne({ type: 'nodedown', subject: S });
+    expect(new Date(row.since).getTime()).to.equal(at);
+    expect(row.reason).to.equal('unannounced');
+  });
+
+  it('refuses a since after the broadcast beyond the skew allowance, or older than two graces', async () => {
+    const at = Date.now();
+    const future = await store.handleNodeDownEvent({ message: { certificate: certificateSince(at + CLOCK_SKEW_ALLOWANCE_MS + 1000, 'unannounced'), broadcastedAt: at } });
+    expect(future).to.include({ accepted: false, reason: 'since_out_of_range' });
+    const ancient = await store.handleNodeDownEvent({ message: { certificate: certificateSince(at - 2 * NODE_DOWN_GRACE_MS - 1000, 'shutdown'), broadcastedAt: at } });
+    expect(ancient).to.include({ accepted: false, reason: 'since_out_of_range' });
+    expect(await collection.countDocuments({ type: 'nodedown', subject: S })).to.equal(0);
+    const edge = await store.handleNodeDownEvent({ message: { certificate: certificateSince(at - 2 * NODE_DOWN_GRACE_MS, 'shutdown'), broadcastedAt: at } });
+    expect(edge.accepted).to.equal(true);
+  });
+
+  it('a certificate whose since disagrees with its verdicts is refused at intake', async () => {
+    const at = Date.now();
+    const certificate = certificateSince(at - 30_000, 'shutdown');
+    certificate.since = at - 1000;
+    const result = await store.handleNodeDownEvent({ message: { certificate, broadcastedAt: at } });
+    expect(result).to.include({ accepted: false, reason: 'since_mismatch' });
+  });
+});

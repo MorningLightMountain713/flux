@@ -56,11 +56,26 @@ const JUDGEMENT = Object.freeze({
   ABSTAIN: 'abstain',
 });
 
+// What the dropped connection said about itself: the close code a stopping
+// process sent, or nothing. A verdict carries the drop it answers — its
+// juror's wall clock at the drop and this reason — when the look was that
+// drop's own; a wake-up or a record-lapse look answers no drop and carries
+// neither. The certificate's `since` is the latest such drop among its
+// verdicts: the last moment any witness still held the subject, the reading
+// most generous to the node.
+const DROP_REASON = Object.freeze({
+  SHUTDOWN: 'shutdown',
+  RESTART: 'restart',
+  UNANNOUNCED: 'unannounced',
+});
+
 const REASON = Object.freeze({
   ACCEPTED: 'accepted',
   MALFORMED: 'malformed',
   UNKNOWN_FINGERPRINT: 'unknown_fingerprint',
   SUB_QUORUM: 'sub_quorum',
+  // the certificate's since or reason is not what its own verdicts say
+  SINCE_MISMATCH: 'since_mismatch',
 });
 
 const DISCARDED = Object.freeze({
@@ -88,6 +103,8 @@ const DISCARDED = Object.freeze({
  * @property {string} judgement one of JUDGEMENT
  * @property {number} height chain height the observation was made at
  * @property {string} fingerprint membership fingerprint the verdict was cast under
+ * @property {number} [droppedAt] epoch ms the juror saw the held connection drop
+ * @property {string} [reason] a DROP_REASON, present exactly when droppedAt is
  * @property {*} [signature] opaque to this module; verified via the injected seam
  */
 
@@ -106,10 +123,42 @@ function verdictPayload(verdict) {
     String(verdict.height),
     verdict.fingerprint,
   ];
+  // The drop is two trailing fields, both or neither: a verdict that saw no
+  // drop encodes exactly as it always has, and a signature over the seven-
+  // field form can neither be stripped to five nor grown from them.
+  const hasDrop = verdict.droppedAt !== undefined || verdict.reason !== undefined;
+  if (hasDrop) {
+    if (
+      !Number.isInteger(verdict.droppedAt) || verdict.droppedAt <= 0
+      || !Object.values(DROP_REASON).includes(verdict.reason)
+    ) {
+      return null;
+    }
+    parts.push(String(verdict.droppedAt), verdict.reason);
+  }
   if (parts.some((part) => typeof part !== 'string' || part.includes(FIELD_SEPARATOR))) {
     return null;
   }
   return Buffer.from(VERDICT_DOMAIN + parts.join(FIELD_SEPARATOR));
+}
+
+/**
+ * The drop a bag of verdicts answers: since = the latest droppedAt among
+ * them (null when none saw a drop), reason = that verdict's. The same
+ * function stamps the certificate at assembly and re-derives at
+ * verification, so a certificate cannot say otherwise than its verdicts.
+ *
+ * @param {VerdictShape[]} verdicts the verdicts that count
+ * @returns {{since: number|null, reason: string}}
+ */
+function dropOf(verdicts) {
+  let witness = null;
+  verdicts.forEach((verdict) => {
+    if (verdict.droppedAt === undefined) return;
+    if (witness === null || verdict.droppedAt > witness.droppedAt) witness = verdict;
+  });
+  if (witness === null) return { since: null, reason: DROP_REASON.UNANNOUNCED };
+  return { since: witness.droppedAt, reason: witness.reason };
 }
 
 /**
@@ -193,12 +242,14 @@ function assemble(subject, assembler, height, membership, verdicts, jury, sameJu
     }
   });
   if (byOwner.size < quorumThreshold(jury.length)) return null;
+  const counted = [...byOwner.values()];
   return {
     subject,
     assembler,
     height,
     fingerprint: membership,
-    verdicts: [...byOwner.values()],
+    verdicts: counted,
+    ...dropOf(counted),
   };
 }
 
@@ -244,6 +295,7 @@ function verifyCertificate(certificate, watchers, sameJury, verifySignature, now
   const needed = quorumThreshold(watchers.length);
   const signers = new Set();
   const owners = new Set();
+  const accepted = [];
   let counted = 0;
 
   certificate.verdicts.forEach((verdict) => {
@@ -305,16 +357,26 @@ function verifyCertificate(certificate, watchers, sameJury, verifySignature, now
     }
     signers.add(verdict.juror);
     owners.add(owner);
+    accepted.push(verdict);
     counted += 1;
   });
 
-  const accepted = counted >= needed;
+  if (counted < needed) {
+    return {
+      accepted: false, reason: REASON.SUB_QUORUM, counted, needed, discarded,
+    };
+  }
+  // The certificate's own since and reason must be what its counted
+  // verdicts say — absent and null are the same "no drop". Composed by
+  // whoever sent it, so checked, never trusted.
+  const drop = dropOf(accepted);
+  if ((certificate.since ?? null) !== drop.since || (certificate.reason ?? DROP_REASON.UNANNOUNCED) !== drop.reason) {
+    return {
+      accepted: false, reason: REASON.SINCE_MISMATCH, counted, needed, discarded,
+    };
+  }
   return {
-    accepted,
-    reason: accepted ? REASON.ACCEPTED : REASON.SUB_QUORUM,
-    counted,
-    needed,
-    discarded,
+    accepted: true, reason: REASON.ACCEPTED, counted, needed, discarded,
   };
 }
 
@@ -346,9 +408,11 @@ module.exports = {
   RECORD_LIFETIME_MS,
   QUARANTINE_CERTIFICATIONS,
   JUDGEMENT,
+  DROP_REASON,
   REASON,
   DISCARDED,
   verdictPayload,
+  dropOf,
   alivePayload,
   collectorRanking,
   collectors,
