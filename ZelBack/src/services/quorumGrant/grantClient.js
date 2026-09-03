@@ -932,6 +932,10 @@ class Holder {
     return this.#epoch;
   }
 
+  get generation() {
+    return this.#committee.generation;
+  }
+
   get state() {
     return this.#state;
   }
@@ -1061,6 +1065,13 @@ class Holder {
    * poll decides between coasting and the deadline.
    */
   async renewOnce() {
+    if (this.#stopped) return;
+    // A newer generation stands over this term's world: step across to the
+    // re-rolled committee before renewing (STEP_ACROSS_DESIGN.md D4). On
+    // success the renewal below already runs under the new committee; on
+    // refusal nothing changed and today's path follows — the old cells
+    // refuse, the lease lapses, the demotion handler runs.
+    await this.#maybeStepAcross();
     if (this.#stopped) return;
 
     const signed = await signedAskFor(
@@ -1386,6 +1397,80 @@ class Holder {
     this.#armDemotion(this.safeUntil() + demotionSlackMs());
     await this.publishRecord();
     fluxEventBus.publish('quorumGrant:termRefreshed', { key: this.#key, epoch });
+  }
+
+  /**
+   * Step-across (STEP_ACROSS_DESIGN.md D2–D4): take this term's seat on the
+   * re-rolled committee, carrying the retired committee's signed acceptances
+   * as the proof the new referees can check. Probe → prepare → accept over
+   * the NEW committee, both asks carrying the credential; on a quorum of
+   * accepts the holder's world becomes the new one — committee, epoch, acks,
+   * acceptances — and the record is republished. Any refusal leaves the
+   * holder exactly as it was: the next pass tries again while the credential
+   * and the standing generation say it should.
+   *
+   * @returns {Promise<boolean>} whether the holder now holds under the new world
+   */
+  async #maybeStepAcross() {
+    if (this.#stopped) return false;
+    const standing = await currentGeneration(this.#key);
+    if (standing <= this.#committee.generation) return false;
+    const credential = this.credential();
+    if (!credential) {
+      log.info(`quorumGrant holder ${this.#key}: generation ${standing} stands over ours and no credential is held — not stepping across`);
+      return false;
+    }
+    const next = await committeeFor(this.#key, 'held', networkStateService.membershipFingerprint());
+    if (!next || next.generation !== standing) return false;
+    next.chain = next.chain ?? [];
+    next.cancels = next.cancels ?? [];
+    const extras = { ...overlayExtras(next), carried: credential };
+
+    const probeSigned = await signedAskFor('probe', this.#key, 'held', 1, this.#identity, next, extras);
+    if (!probeSigned) return false;
+    const probeReplies = await askCommittee(next.members, 'probe', probeSigned.ask, probeSigned.signature);
+    // a grantee already seated on the new committee is its holder, not us: fall back
+    const adopted = core.adoptFrom([...probeReplies.values()]);
+    if (adopted && adopted.grantee !== this.#identity.outpoint) return false;
+    const epoch = core.nextEpoch(Math.max(core.highestEpochSeen([...probeReplies.values()]), this.#epoch));
+
+    const prepareSigned = await signedAskFor('prepare', this.#key, 'held', epoch, this.#identity, next, extras);
+    if (!prepareSigned) return false;
+    const prepareReplies = await askCommittee(next.members, 'prepare', prepareSigned.ask, prepareSigned.signature);
+    const prepared = core.prepareOutcome([...prepareReplies.values()], next.quorum);
+    if (!prepared.promised) {
+      log.info(`quorumGrant holder ${this.#key}: step-across to generation ${standing} not promised (${prepared.reason ?? 'no prepare quorum'})`);
+      return false;
+    }
+
+    const acceptSigned = await signedAskFor('accept', this.#key, 'held', epoch, this.#identity, next, { ttlMs: this.#ttlMs, ...extras });
+    if (!acceptSigned) return false;
+    const sentMs = this.#clock();
+    const acceptReplies = await askCommittee(next.members, 'accept', acceptSigned.ask, acceptSigned.signature);
+    const accepted = core.acceptOutcome([...acceptReplies.values()], next.quorum);
+    if (!accepted.granted) return false;
+
+    this.#committee = next;
+    this.#epoch = epoch;
+    this.#acks.clear();
+    this.#acceptances.clear();
+    this.#refusals.clear();
+    this.#lastAnswerMs.clear();
+    next.members.forEach((member) => this.#lastAnswerMs.set(outpointOf(member), sentMs));
+    acceptReplies.forEach((reply, outpoint) => {
+      if (reply?.ok && reply.accepted) {
+        this.recordAck(outpoint, sentMs);
+        this.recordAcceptance(outpoint, reply.acceptance);
+      }
+    });
+    this.#recoveredUntilMs = null;
+    this.#coasting = false;
+    this.#state = 'held';
+    this.#armDemotion(this.safeUntil() + demotionSlackMs());
+    await this.publishRecord();
+    log.info(`quorumGrant holder ${this.#key}: stepped across to generation ${standing} at epoch ${epoch}`);
+    fluxEventBus.publish('quorumGrant:steppedAcross', { key: this.#key, generation: standing, epoch });
+    return true;
   }
 
   async #assess(quorumRenewed) {

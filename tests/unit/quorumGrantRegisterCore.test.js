@@ -807,6 +807,15 @@ describe('quorumGrant grantRegisterCore', () => {
       expect(other.code, 'the credential is the carrier\'s, not the seat\'s').to.equal('lock_delay');
     });
 
+    it('a founding at a re-rolled generation pays no seat delay — write-once rows have no term to step across', () => {
+      const { reply } = onPrepare(null, { epoch: 1, candidate: 'cccc:0', generation: 2, mode: 'oneshot' }, servedAt + 1, anchored);
+      expect(reply.ok).to.equal(true);
+      const { reply: accepted } = onAccept(null, {
+        epoch: 1, grantee: 'cccc:0', mode: 'oneshot', generation: 2,
+      }, servedAt + 1, anchored);
+      expect(accepted.ok).to.equal(true);
+    });
+
     it('an absent anchor leaves the seat open', () => {
       const { reply } = onPrepare(null, { epoch: 1, candidate: 'cccc:0', generation: 1 }, servedAt + 1, TUNABLES);
       expect(reply.ok).to.equal(true);
