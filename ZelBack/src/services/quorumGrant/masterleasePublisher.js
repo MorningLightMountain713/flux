@@ -70,7 +70,7 @@ async function publishMasterlease(grant) {
       : null;
     await messageStore.storeAppStateEvent(
       messageStore.APP_STATE_EVENT_TYPES.MASTERLEASE,
-      { message, envelope, announcer: null },
+      { message, envelope, announcer: messageStore.LOCAL_ANNOUNCER },
     );
     return true;
   } catch (error) {

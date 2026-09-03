@@ -279,6 +279,11 @@ async function handleAppRunningSyncResponse(message, peerSocket) {
     const nodeDowns = [];
     const stateEvents = [];
     let eventWriteFailed = false;
+    // The announcer the verifier resolved rides with the event: the masterlease
+    // intake binds the record's grantee to it, and a synced record must meet the
+    // same rule a gossiped one does. Outer scope because the apply loop below runs
+    // after every slice, not inside one.
+    const announcerOf = new Map();
 
     await serviceHelper.processInSlices(messages, SYNC_EVENTS_PER_SLICE, async (slice) => {
       const appRunningBroadcasts = [];
@@ -317,13 +322,14 @@ async function handleAppRunningSyncResponse(message, peerSocket) {
       const { verified: verifiedAppRunning, announcers } = await batchVerifyBroadcasts(appRunningBroadcasts, 'handleAppRunningSyncResponse');
 
       const otherToVerify = otherBroadcasts.map((e) => ({ ...e.envelope, data: e.data }));
-      const { verified: verifiedOther } = await batchVerifyBroadcasts(otherToVerify, 'handleAppRunningSyncResponse');
+      const { verified: verifiedOther, announcers: otherAnnouncers } = await batchVerifyBroadcasts(otherToVerify, 'handleAppRunningSyncResponse');
       const verifiedOtherSet = new Set(verifiedOther);
       evictions.push(...evictedEvents);
       nodeDowns.push(...nodeDownEvents);
       for (let i = 0; i < otherBroadcasts.length; i++) {
         if (verifiedOtherSet.has(otherToVerify[i])) {
           stateEvents.push(otherBroadcasts[i]);
+          announcerOf.set(otherBroadcasts[i], otherAnnouncers.get(otherToVerify[i]) ?? null);
         }
       }
 
@@ -350,7 +356,7 @@ async function handleAppRunningSyncResponse(message, peerSocket) {
     // evicting node made it.
     for (const event of [...evictions, ...nodeDowns, ...stateEvents]) {
       if (event.type === 'sigterm' || event.type === 'appremoved' || event.type === 'ipchanged' || event.type === 'masterlease' || event.type === 'grantgeneration') {
-        await messageStore.storeAppStateEvent(event.type, { message: event.data, envelope: event.envelope });
+        await messageStore.storeAppStateEvent(event.type, { message: event.data, envelope: event.envelope, announcer: announcerOf.get(event) ?? null });
       } else if (event.type === 'evicted') {
         await messageStore.applyEviction(event.ip, Date.parse(event.createdAt));
       } else if (event.type === 'nodedown') {
