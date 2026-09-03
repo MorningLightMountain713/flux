@@ -118,6 +118,17 @@ async function transact(key, decide, context) {
       ok: false, code: 'draining', retryAfterMs: drainMs, promisedEpoch: 0, accepted: null,
     };
   }
+  // The rejoin drain is a closure of THIS register that no row and no
+  // controller observation records: the refereeing-return stamp lands at the
+  // first ask after boot, with the drain still to run, so a lapsed row's
+  // lock-delay would burn out inside it and a challenger be admitted the
+  // instant the drain lifts — two masters once the coast keeps the incumbent
+  // alive through a restart wave (formal/quiet-window rows 29–31). The
+  // register owns the drain, so it folds the drain's own lift into
+  // serving-since: the later of what the controller observed and the moment
+  // this register began to serve again.
+  const liftedAtMs = Date.now() - (Number(monotonicMs() - startedMs) - tunables().drainMs);
+  const servingSinceMs = Math.max(context?.servingSinceMs ?? 0, liftedAtMs);
 
   const database = db();
   if (!database) {
@@ -127,7 +138,7 @@ async function transact(key, decide, context) {
   }
 
   return serialized(key, async () => {
-    const knobs = { ...tunables(), ...(context ?? {}) };
+    const knobs = { ...tunables(), ...(context ?? {}), servingSinceMs };
     const stored = await dbHelper.findOneInDatabase(database, collection(), { _id: key });
     const outcome = decide(stored, Date.now(), knobs);
 
