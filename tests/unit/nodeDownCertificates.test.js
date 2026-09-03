@@ -313,3 +313,76 @@ describe('nodeDownCertificates severe quarantine — the count over the standing
       .to.deep.equal({ quarantined: false, count: 2, liftsAt: null });
   });
 });
+
+describe('nodeDownCertificates — the drop the verdict answers, and the certificate\'s since (P1)', () => {
+  const { assemble, verifyCertificate, verdictPayload } = require('../../ZelBack/src/services/utils/nodeDownCertificates');
+  const base = {
+    subject: 'sub:0', juror: 'w1', judgement: JUDGEMENT.UNREACHABLE, height: 100, fingerprint: 'fpA',
+  };
+
+  it('a verdict without a drop encodes as it always has; with one, droppedAt and reason are two trailing signed fields', () => {
+    const plain = verdictPayload(base).toString();
+    expect(plain).to.equal('fluxnodedown-verdict:sub:0|w1|unreachable|100|fpA');
+    const withDrop = verdictPayload({ ...base, droppedAt: 1_700_000_000_000, reason: 'shutdown' }).toString();
+    expect(withDrop).to.equal('fluxnodedown-verdict:sub:0|w1|unreachable|100|fpA|1700000000000|shutdown');
+  });
+
+  it('refuses to encode half a drop, a non-integer droppedAt, or an unknown reason', () => {
+    expect(verdictPayload({ ...base, droppedAt: 1_700_000_000_000 })).to.equal(null);
+    expect(verdictPayload({ ...base, reason: 'shutdown' })).to.equal(null);
+    expect(verdictPayload({ ...base, droppedAt: 1.5, reason: 'shutdown' })).to.equal(null);
+    expect(verdictPayload({ ...base, droppedAt: '1700000000000', reason: 'shutdown' })).to.equal(null);
+    expect(verdictPayload({ ...base, droppedAt: 1_700_000_000_000, reason: 'rebooting' })).to.equal(null);
+  });
+
+  const watchers = [
+    { key: 'w1', owner: 'o1' }, { key: 'w2', owner: 'o2' }, { key: 'w3', owner: 'o3' },
+    { key: 'w4', owner: 'o4' }, { key: 'w5', owner: 'o5' }, { key: 'w6', owner: 'o6' },
+  ];
+  const sameJury = new Set(['fpA']);
+  const v = (juror, over = {}) => ({ ...base, juror, signature: 'sig', ...over });
+  const T = 1_700_000_000_000;
+
+  it('assembly stamps since as the latest droppedAt among the counted verdicts, and reason as that verdict\'s', () => {
+    const certificate = assemble('sub:0', 'w1', 100, 'fpA', [
+      v('w1', { droppedAt: T - 5000, reason: 'unannounced' }),
+      v('w2', { droppedAt: T, reason: 'shutdown' }),
+      v('w3'), // a wake-up look: saw no drop
+      v('w4', { droppedAt: T - 1000, reason: 'shutdown' }),
+    ], watchers, sameJury);
+    expect(certificate.since).to.equal(T);
+    expect(certificate.reason).to.equal('shutdown');
+  });
+
+  it('a certificate whose verdicts saw no drop has no since and reason unannounced', () => {
+    const certificate = assemble('sub:0', 'w1', 100, 'fpA', [v('w1'), v('w2'), v('w3'), v('w4')], watchers, sameJury);
+    expect(certificate.since).to.equal(null);
+    expect(certificate.reason).to.equal('unannounced');
+  });
+
+  it('verification re-derives since and reason and refuses a certificate that says otherwise', () => {
+    const verdicts = [v('w1', { droppedAt: T, reason: 'restart' }), v('w2'), v('w3'), v('w4')];
+    const ok = verifyCertificate({ subject: 'sub:0', verdicts, since: T, reason: 'restart' }, watchers, sameJury, () => true, 100, 10);
+    expect(ok.accepted).to.equal(true);
+    const moved = verifyCertificate({ subject: 'sub:0', verdicts, since: T + 60_000, reason: 'restart' }, watchers, sameJury, () => true, 100, 10);
+    expect(moved).to.include({ accepted: false, reason: 'since_mismatch' });
+    const relabelled = verifyCertificate({ subject: 'sub:0', verdicts, since: T, reason: 'shutdown' }, watchers, sameJury, () => true, 100, 10);
+    expect(relabelled).to.include({ accepted: false, reason: 'since_mismatch' });
+    const stripped = verifyCertificate({ subject: 'sub:0', verdicts }, watchers, sameJury, () => true, 100, 10);
+    expect(stripped).to.include({ accepted: false, reason: 'since_mismatch' });
+  });
+
+  it('a certificate with no drop in it verifies with since absent, null, or reason unannounced alike', () => {
+    const verdicts = [v('w1'), v('w2'), v('w3'), v('w4')];
+    expect(verifyCertificate({ subject: 'sub:0', verdicts }, watchers, sameJury, () => true, 100, 10).accepted).to.equal(true);
+    expect(verifyCertificate({ subject: 'sub:0', verdicts, since: null, reason: 'unannounced' }, watchers, sameJury, () => true, 100, 10).accepted).to.equal(true);
+    expect(verifyCertificate({ subject: 'sub:0', verdicts, since: T, reason: 'unannounced' }, watchers, sameJury, () => true, 100, 10))
+      .to.include({ accepted: false, reason: 'since_mismatch' });
+  });
+
+  it('what assembly builds with drops in it, verification accepts', () => {
+    const verdicts = [v('w1', { droppedAt: T - 5000, reason: 'unannounced' }), v('w2', { droppedAt: T, reason: 'shutdown' }), v('w3'), v('w4')];
+    const certificate = assemble('sub:0', 'w1', 100, 'fpA', verdicts, watchers, sameJury);
+    expect(verifyCertificate(certificate, watchers, sameJury, () => true, 100, 10).accepted).to.equal(true);
+  });
+});

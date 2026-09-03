@@ -1193,6 +1193,20 @@ describe('registryManager tests', () => {
       };
     }
 
+    function makeNodeDownEvent(ip, broadcastedAt, since = broadcastedAt, reason = 'unannounced') {
+      return {
+        ip,
+        type: 'nodedown',
+        subject: 'subj:0',
+        dedupKey: `nodedown:subj:0:${broadcastedAt}`,
+        broadcastedAt: new Date(broadcastedAt),
+        since: new Date(since),
+        reason,
+        expireAt: new Date(broadcastedAt + 6 * 60 * 60 * 1000),
+        data: { certificate: { subject: 'subj:0', since, reason } },
+      };
+    }
+
     function makeEvictedEvent(ip, createdAt) {
       return {
         ip,
@@ -1429,6 +1443,41 @@ describe('registryManager tests', () => {
       const result = await appsRepository.appLocationFromEvents({ appname: 'AppA' });
       expect(result).to.have.lengthOf(1);
       expect(new Date(result[0].expireAt).getTime()).to.equal(at + RUNNING_EXPIRY_MS);
+    });
+
+    it('a certified node keeps its rows until since + the grace, then loses them; an announcement at or after the certificate restores them', async () => {
+      const { NODE_DOWN_GRACE_MS } = require('../../ZelBack/src/services/utils/appConstants');
+      await database.collection(eventsCollection).insertMany([
+        // inside the grace: the drop was 60 s ago, certified 50 s ago
+        makeV2Event('1.2.3.4', [{ name: 'AppA', hash: 'h1' }], now - 10 * 60 * 1000),
+        makeNodeDownEvent('1.2.3.4', now - 50 * 1000, now - 60 * 1000),
+        // past the grace: the drop was 8 minutes ago, certified at once
+        makeV2Event('1.2.3.5', [{ name: 'AppB', hash: 'h2' }], now - 10 * 60 * 1000),
+        makeNodeDownEvent('1.2.3.5', now - 8 * 60 * 1000 + 5000, now - 8 * 60 * 1000),
+        // an announced shutdown that overran: certified at the grace end, since = the drop 7 min ago -> gone on arrival
+        makeV2Event('1.2.3.6', [{ name: 'AppC', hash: 'h3' }], now - 10 * 60 * 1000),
+        makeNodeDownEvent('1.2.3.6', now - 1000, now - NODE_DOWN_GRACE_MS - 1000, 'shutdown'),
+        // past the grace but the node announced after the certificate: back
+        makeV2Event('1.2.3.7', [{ name: 'AppD', hash: 'h4' }], now - 1000),
+        makeNodeDownEvent('1.2.3.7', now - 8 * 60 * 1000, now - 8 * 60 * 1000),
+      ]);
+
+      const result = await appsRepository.appLocationFromEvents();
+      expect(result.map((row) => row.name).sort()).to.deep.equal(['AppA', 'AppD']);
+    });
+
+    it('a certified node\'s rows expire at since + the grace while the certificate stands newer than the announcement', async () => {
+      const { NODE_DOWN_GRACE_MS } = require('../../ZelBack/src/services/utils/appConstants');
+      const announcedAt = now - 60000;
+      const since = now - 30000;
+      await database.collection(eventsCollection).insertMany([
+        makeV2Event('1.1.1.1', [{ name: 'AppA', hash: 'h1' }], announcedAt),
+        makeNodeDownEvent('1.1.1.1', now - 20000, since),
+      ]);
+
+      const result = await appsRepository.appLocationFromEvents({ appname: 'AppA' });
+      expect(result).to.have.lengthOf(1);
+      expect(new Date(result[0].expireAt).getTime()).to.equal(since + NODE_DOWN_GRACE_MS);
     });
 
     it('a legacy sigterm row does not shorten expireAt', async () => {

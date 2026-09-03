@@ -411,9 +411,9 @@ describe('appStartupManager tests', () => {
       expect(appUninstallerStub.uninstallApplication.secondCall.args[0]).to.equal('app2');
     });
 
-    it('should remove all apps when downtime > RUNNING_EXPIRY regardless of shutdown reason', async () => {
+    it('an unclean boot past the node-down grace removes every app before the sync: the network has moved on', async () => {
       const bootContext = {
-        machineRebooted: true, downtimeMs: 8000000, cleanShutdown: false,
+        machineRebooted: true, downtimeMs: 500000, cleanShutdown: false,
       };
       appQueryServiceStub.installedApps.resolves({
         status: 'success',
