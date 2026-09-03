@@ -81,7 +81,7 @@ describe('pricing integration — chain messages through PricingEngine', () => {
     const priceResult = dispatch(priceBytes);
 
     const priceHistory = new PriceMessageHistory();
-    priceHistory.add(priceResult.message, chainHeight);
+    priceHistory.add(priceResult.message, chainHeight, 0);
 
     // RateMessage: FLUX/USD oracle rate
     const fluxUsdPriceE4 = opts.fluxUsdPriceE4 || 577; // $0.0577
@@ -89,7 +89,7 @@ describe('pricing integration — chain messages through PricingEngine', () => {
     const rateResult = dispatch(rateBytes);
 
     const rateHistory = new RateMessageHistory();
-    rateHistory.add(rateResult.message, chainHeight);
+    rateHistory.add(rateResult.message, chainHeight, 0);
 
     // PriceModifierMessage: duration discounts + instance surcharges
     const modifierFields = {
@@ -112,7 +112,7 @@ describe('pricing integration — chain messages through PricingEngine', () => {
     const modifierResult = dispatch(modifierBytes);
 
     const modifierHistory = new PriceModifierHistory();
-    modifierHistory.add(modifierResult.message, chainHeight);
+    modifierHistory.add(modifierResult.message, chainHeight, 0);
 
     return { priceHistory, rateHistory, modifierHistory, queryHeight, priceFields };
   }
@@ -133,7 +133,7 @@ describe('pricing integration — chain messages through PricingEngine', () => {
       const bytes = MarketplacePricingMessage.encode({ templateUuid: templateUuidBytes(), multiplier });
       const result = dispatch(bytes);
       const history = new MarketplacePricingHistory();
-      history.add(result.message, chainHeight);
+      history.add(result.message, chainHeight, 0);
       return history;
     }
 
@@ -141,7 +141,7 @@ describe('pricing integration — chain messages through PricingEngine', () => {
       const bytes = MarketplacePricingMessage.encode({ multiplier });
       const result = dispatch(bytes);
       const history = new MarketplacePricingHistory();
-      history.add(result.message, chainHeight);
+      history.add(result.message, chainHeight, 0);
       return history;
     }
 
@@ -357,7 +357,7 @@ describe('pricing integration — chain messages through PricingEngine', () => {
       const bytes = PriceModifierMessage.encode({ durationBucket1DiscountBp: 300 });
       const result = dispatch(bytes);
       const history = new PriceModifierHistory();
-      history.add(result.message, chainHeight);
+      history.add(result.message, chainHeight, 0);
       const resolved = history.resolveAt(queryHeight);
       expect(resolved.fiatMarkupBp || 0).to.equal(0);
     });
