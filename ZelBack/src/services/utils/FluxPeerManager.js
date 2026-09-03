@@ -936,8 +936,42 @@ class FluxPeerManager extends EventEmitter {
     // gets this far, but the network is mixed and older nodes still close with
     // it after the handshake.
     if (closeCode === CLOSE_CODES.NODE_UNCONFIRMED) return true;
+    // A stopping process said so: it is coming back, dial it again as normal
+    if (closeCode === CLOSE_CODES.SHUTTING_DOWN || closeCode === CLOSE_CODES.RESTARTING) return true;
     // Everything else: policy violation, auth failure, admin close, duplicate — don't retry
     return false;
+  }
+
+  /**
+   * A stopping process closes every held connection with its reason, so the
+   * jurors holding them read the drop as announced. Resolves once every
+   * close frame has gone out (each socket's close event) or at the bound,
+   * whichever is first: an exit must not wait on a peer that never answers.
+   * Ephemeral connections are not held ones and are left to their own
+   * lifetime.
+   *
+   * @param {number} code CLOSE_CODES.SHUTTING_DOWN or CLOSE_CODES.RESTARTING
+   * @param {object} [options]
+   * @param {number} [options.flushMs] the bound, default 2 s
+   * @returns {Promise<number>} how many held connections were closed
+   */
+  async closeAllForStop(code, { flushMs = 2000 } = {}) {
+    const peers = [...this.#peers.values()];
+    const flushed = peers.map((peer) => new Promise((resolve) => {
+      peer.ws.once('close', resolve);
+      try {
+        peer.close(code, CLOSE_CODE_NAMES[code] || 'stopping');
+      } catch (_e) {
+        resolve();
+      }
+    }));
+    let timer;
+    await Promise.race([
+      Promise.all(flushed),
+      new Promise((resolve) => { timer = setTimeout(resolve, flushMs); }),
+    ]);
+    clearTimeout(timer);
+    return peers.length;
   }
 
   // --- Network state ---

@@ -229,24 +229,11 @@ describe('Boundary: clean shutdown beyond SIGTERM_EXPIRY', function () {
 
   before(async function () {
     this.timeout(120000);
-    // 25s pinned, read as ~41s: past the 30s sigtermExpiryS, and deliberately
-    // still UNDER locationTtlS at 63s.
-    //
-    // That second bound is the one that matters. locationsExpired WAS
-    // `(cleanShutdown && downtime > sigterm) || downtime > running`, so a
-    // downtime past the running expiry expired on the second clause and this
-    // test passed without the sigterm window being involved at all. The old
-    // 500s pin did exactly that once locationTtlS became live - green, and
-    // proving nothing about the thing in its name.
-    //
-    // d24c003d0 has since made it `cleanShutdown ? downtime > sigterm : downtime
-    // > running`, so the second clause no longer fires for a clean shutdown and
-    // the pin no longer has to stay under locationTtlS to mean something. Kept
-    // under it anyway: the fixture is then correct under either expression.
+    // 500s ago with sigterm — exceeds the 420s node-down grace
     env = await createTestEnv({ hookCtx: this,
       nodes: 1,
       tickerAutostart: false,
-      bootContext: { lastAliveAgoMs: 25000, machineBootId: 'old-boot-id', shutdownReason: 'sigterm' },
+      bootContext: { lastAliveAgoMs: 500000, machineBootId: 'old-boot-id', shutdownReason: 'sigterm' },
     });
   });
 

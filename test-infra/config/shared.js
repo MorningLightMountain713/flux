@@ -243,7 +243,6 @@ module.exports = {
     // pinned value would have to be re-derived every time the TTL moved.
     tempMsgTtlS: 300,
     gossipValidityS: 300,
-    sigtermTtlS: 420,
     hashSyncIntervalMs: 30000,
     cpuCheckIntervalMs: 30000,
     statsSampleIntervalMs: 2000,

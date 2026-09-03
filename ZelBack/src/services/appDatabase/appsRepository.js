@@ -21,7 +21,6 @@ const {
   globalAppsIngressAttestationDigests,
   globalAppStateEvents,
   appsHashesCollection,
-  SIGTERM_EXPIRY_MS,
   RUNNING_EXPIRY_MS,
 } = require('../utils/appConstants');
 
@@ -1306,7 +1305,7 @@ function buildAppLocationPipeline({
   const base = {
     $or: [
       { type: { $in: ['apprunning', 'appremoved'] }, expireAt: { $gt: now } },
-      { type: { $in: ['sigterm', 'evicted', 'nodedown'] } },
+      { type: { $in: ['evicted', 'nodedown'] } },
     ],
   };
   if (ip) base.ip = ip;
@@ -1349,9 +1348,8 @@ function buildAppLocationPipeline({
         ],
         shutdowns: [
           // nodedown rides the same override as the others: an announcement
-          // at or after the event wins. It gets no sigterm-style grace — a
-          // quorum-attested death is not a maybe.
-          { $match: { type: { $in: ['sigterm', 'evicted', 'nodedown'] } } },
+          // at or after the event wins.
+          { $match: { type: { $in: ['evicted', 'nodedown'] } } },
           { $addFields: { _eventAt: { $ifNull: ['$broadcastedAt', '$createdAt'] } } },
           { $sort: { _eventAt: -1 } },
           { $group: { _id: '$ip', eventAt: { $first: '$_eventAt' }, expireAt: { $first: '$expireAt' }, type: { $first: '$type' } } },
@@ -1371,7 +1369,6 @@ function buildAppLocationPipeline({
                   $or: [
                     { $eq: ['$$sd', null] },
                     { $gte: ['$$entry.broadcastedAt', '$$sd.eventAt'] },
-                    { $and: [{ $eq: ['$$sd.type', 'sigterm'] }, { $gt: [{ $add: ['$$sd.eventAt', SIGTERM_EXPIRY_MS] }, now] }] },
                   ],
                 },
               },
@@ -1423,27 +1420,11 @@ const RUNNING_ROW_TAIL = [
       shutdowns: 1,
     },
   },
-  // When this row stops being believable. Derived rather than stored, but to the same
-  // rule the materialized collection wrote it by: an announcement is good for the
-  // running TTL, and a node that announced a clean shutdown only keeps its rows for
-  // the sigterm grace. Callers read this field off /apps/locations, so it has to mean
+  // When this row stops being believable. Derived rather than stored, to the rule
+  // the materialized collection wrote it by: an announcement is good for the
+  // running TTL. Callers read this field off /apps/locations, so it has to mean
   // what it has always meant.
-  {
-    $addFields: {
-      expireAt: {
-        $let: {
-          vars: { sd: { $first: { $filter: { input: '$shutdowns', as: 's', cond: { $eq: ['$$s._id', '$ip'] } } } } },
-          in: {
-            $cond: [
-              { $and: [{ $ne: ['$$sd', null] }, { $eq: ['$$sd.type', 'sigterm'] }, { $gt: ['$$sd.eventAt', '$broadcastedAt'] }] },
-              { $add: ['$$sd.eventAt', SIGTERM_EXPIRY_MS] },
-              { $add: ['$broadcastedAt', RUNNING_EXPIRY_MS] },
-            ],
-          },
-        },
-      },
-    },
-  },
+  { $addFields: { expireAt: { $add: ['$broadcastedAt', RUNNING_EXPIRY_MS] } } },
   // No trailing $group: a node announces each replica once, so nothing remains to
   // deduplicate, and grouping on {name, ip} would merge co-located replicas and
   // discard the per-replica state and identity above.
