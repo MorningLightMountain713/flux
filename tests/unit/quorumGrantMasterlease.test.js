@@ -5,6 +5,7 @@ const sinon = require('sinon');
 
 const dbHelper = require('../../ZelBack/src/services/dbHelper');
 const messageStore = require('../../ZelBack/src/services/appMessaging/messageStore');
+const fluxEventBus = require('../../ZelBack/src/services/utils/fluxEventBus');
 const fluxNetworkHelper = require('../../ZelBack/src/services/fluxNetworkHelper');
 const fluxCommunicationMessagesSender = require('../../ZelBack/src/services/fluxCommunicationMessagesSender');
 const masterleasePublisher = require('../../ZelBack/src/services/quorumGrant/masterleasePublisher');
@@ -101,7 +102,7 @@ describe('quorumGrant masterlease', () => {
 
     it('keys one row per app role — no ip, so a successor REPLACES the deposed', async () => {
       await messageStore.storeAppStateEvent('masterlease', {
-        message: baseMessage(), envelope: null, announcer: null,
+        message: baseMessage(), envelope: null, announcer: messageStore.LOCAL_ANNOUNCER,
       });
       expect(updates).to.have.length(1);
       expect(updates[0].filter).to.deep.equal({
@@ -116,7 +117,7 @@ describe('quorumGrant masterlease', () => {
           role: 'ordinal-0@500', mode: 'oneshot', ttlMs: undefined, released: true,
         }),
         envelope: null,
-        announcer: null,
+        announcer: messageStore.LOCAL_ANNOUNCER,
       });
       expect(updates).to.have.length(1);
       const { data } = updates[0].update[0].$set;
@@ -124,18 +125,92 @@ describe('quorumGrant masterlease', () => {
       expect(JSON.stringify(data)).to.contain('"released":true');
     });
 
+    // The record's grantee is a CLAIM and its signer is a FACT: the envelope
+    // binds the signer to the node listed at the record's ip, and nothing
+    // else about the record is verified on arrival. Readers act on the
+    // grantee — the reconciler's veto, the coordinator's primary intent, the
+    // re-rolled seat's exemption — so a listed node publishing a lease that
+    // names ANYONE would redirect all of them. A held or founding record
+    // therefore stores only when it names its own announcer; a released row
+    // is the one exception, because a vacate is published by whichever node
+    // holds the certificate, about the node it removed.
+    describe('the grantee is bound to the announcer', () => {
+      const ANNOUNCER = { txhash: 'b'.repeat(64), outidx: 0, pubkey: 'pk-b', ip: '203.0.113.5:16127' };
+      const SELF_NAMED = `${'b'.repeat(64)}:0`;
+
+      it('a network record naming its announcer stores', async () => {
+        await messageStore.storeAppStateEvent('masterlease', {
+          message: baseMessage({ grantee: SELF_NAMED }), envelope: { pubKey: 'pk-b' }, announcer: ANNOUNCER,
+        });
+        expect(updates).to.have.length(1);
+        expect(updates[0].update[0].$set.outpoint.$cond[1]).to.equal(SELF_NAMED);
+      });
+
+      it('a network record naming anyone else is dropped whole, and says so on the bus', async () => {
+        const dropped = [];
+        sinon.stub(fluxEventBus, 'publish').callsFake((name, payload) => { dropped.push({ name, payload }); });
+        await messageStore.storeAppStateEvent('masterlease', {
+          message: baseMessage(), envelope: { pubKey: 'pk-b' }, announcer: ANNOUNCER, // grantee aaaa…:0
+        });
+        expect(updates).to.have.length(0);
+        expect(dropped).to.have.length(1);
+        expect(dropped[0].name).to.equal('quorumGrant:masterleaseDropped');
+        expect(dropped[0].payload).to.deep.include({
+          appName: 'myapp', role: 'master', grantee: `${'a'.repeat(64)}:0`, announcer: SELF_NAMED,
+        });
+      });
+
+      it('a founding record is bound the same way — the winner publishes itself', async () => {
+        await messageStore.storeAppStateEvent('masterlease', {
+          message: baseMessage({ role: 'founder', mode: 'oneshot', ttlMs: undefined }),
+          envelope: { pubKey: 'pk-b' },
+          announcer: ANNOUNCER,
+        });
+        expect(updates).to.have.length(0);
+      });
+
+      it('a released row may name a node other than its announcer — the certificate holder publishes the vacate', async () => {
+        await messageStore.storeAppStateEvent('masterlease', {
+          message: baseMessage({
+            role: 'ordinal-0@500', mode: 'oneshot', ttlMs: undefined, released: true,
+          }),
+          envelope: { pubKey: 'pk-b' },
+          announcer: ANNOUNCER,
+        });
+        expect(updates).to.have.length(1);
+      });
+
+      it('a record with no resolved announcer fails closed', async () => {
+        await messageStore.storeAppStateEvent('masterlease', {
+          message: baseMessage({ grantee: SELF_NAMED }), envelope: { pubKey: 'pk-b' }, announcer: null,
+        });
+        await messageStore.storeAppStateEvent('masterlease', {
+          message: baseMessage({ grantee: SELF_NAMED }), envelope: { pubKey: 'pk-b' },
+        });
+        expect(updates).to.have.length(0);
+      });
+
+      it("this node's own publish stores whatever it names — it is not a network record", async () => {
+        await messageStore.storeAppStateEvent('masterlease', {
+          message: baseMessage(), envelope: null, announcer: messageStore.LOCAL_ANNOUNCER,
+        });
+        expect(updates).to.have.length(1);
+        expect(updates[0].update[0].$set.outpoint.$cond[1]).to.equal(null);
+      });
+    });
+
     it('a record whose released flag is not a boolean is dropped whole', async () => {
       await messageStore.storeAppStateEvent('masterlease', {
         message: baseMessage({ role: 'ordinal-0@500', mode: 'oneshot', ttlMs: undefined, released: 'yes' }),
         envelope: null,
-        announcer: null,
+        announcer: messageStore.LOCAL_ANNOUNCER,
       });
       expect(updates).to.have.length(0);
     });
 
     it('compares generation ahead of epoch, broadcast time only as the full tiebreak', async () => {
       await messageStore.storeAppStateEvent('masterlease', {
-        message: baseMessage({ epoch: 7, generation: 3 }), envelope: null, announcer: null,
+        message: baseMessage({ epoch: 7, generation: 3 }), envelope: null, announcer: messageStore.LOCAL_ANNOUNCER,
       });
       const pipeline = updates[0].update;
       const condition = JSON.stringify(pipeline);
@@ -153,7 +228,7 @@ describe('quorumGrant masterlease', () => {
 
     it('a record without a generation compares as generation zero, never as brand new', async () => {
       await messageStore.storeAppStateEvent('masterlease', {
-        message: baseMessage(), envelope: null, announcer: null,
+        message: baseMessage(), envelope: null, announcer: messageStore.LOCAL_ANNOUNCER,
       });
       const condition = JSON.stringify(updates[0].update);
       expect(condition).to.contain('"$ifNull":["$data.generation",0]');
@@ -161,7 +236,7 @@ describe('quorumGrant masterlease', () => {
 
     it('no record carries an expiry — durable until superseded, held and founding alike', async () => {
       await messageStore.storeAppStateEvent('masterlease', {
-        message: baseMessage(), envelope: null, announcer: null,
+        message: baseMessage(), envelope: null, announcer: messageStore.LOCAL_ANNOUNCER,
       });
       const heldSet = updates[0].update[0].$set;
       // A literal null on EVERY touch, never a conditional field: a
@@ -174,7 +249,7 @@ describe('quorumGrant masterlease', () => {
       await messageStore.storeAppStateEvent('masterlease', {
         message: baseMessage({ role: 'founder', mode: 'oneshot', ttlMs: undefined }),
         envelope: null,
-        announcer: null,
+        announcer: messageStore.LOCAL_ANNOUNCER,
       });
       const oneshotSet = updates[1].update[0].$set;
       expect(oneshotSet.expireAt).to.equal(null);
@@ -194,7 +269,7 @@ describe('quorumGrant masterlease', () => {
         baseMessage({ generation: 1.5 }),
       ];
       await Promise.all(garbage.map(async (message) => messageStore.storeAppStateEvent('masterlease', {
-        message, envelope: null, announcer: null,
+        message, envelope: null, announcer: messageStore.LOCAL_ANNOUNCER,
       })));
       expect(updates).to.have.length(0);
     });
@@ -208,7 +283,7 @@ describe('quorumGrant masterlease', () => {
         acceptances: [{ grantor: `${'d'.repeat(64)}:0`, signature: 'c2ln' }],
       };
       await messageStore.storeAppStateEvent('masterlease', {
-        message: baseMessage({ roster: { chain: [entry] } }), envelope: null, announcer: null,
+        message: baseMessage({ roster: { chain: [entry] } }), envelope: null, announcer: messageStore.LOCAL_ANNOUNCER,
       });
       expect(updates).to.have.length(1);
 
@@ -219,7 +294,7 @@ describe('quorumGrant masterlease', () => {
         baseMessage({ roster: { chain: [{ seq: 1 }] } }),
       ];
       await Promise.all(malformed.map(async (message) => messageStore.storeAppStateEvent('masterlease', {
-        message, envelope: null, announcer: null,
+        message, envelope: null, announcer: messageStore.LOCAL_ANNOUNCER,
       })));
       expect(updates).to.have.length(1);
     });
