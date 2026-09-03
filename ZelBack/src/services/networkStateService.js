@@ -4,6 +4,7 @@ const daemonServiceFluxnodeRpcs = require('./daemonService/daemonServiceFluxnode
 const nodeListSource = require('./nodeListSource');
 const networkStateManager = require('./utils/networkStateManager');
 const fluxEventBus = require('./utils/fluxEventBus');
+const { departures } = require('./appDatabase/offListDepartures');
 const { NodeDownTopology } = require('./utils/nodeDownTopology');
 
 /**
@@ -114,6 +115,12 @@ async function start(options = {}) {
     stateEmitter,
     stateEvent: 'blocksProcessed',
     progressEvent: 'syncProgress',
+  });
+  // Every refresh of the list is a refresh of the off-list register: an
+  // address gone from the list starts its grace, and one back on it is
+  // forgiven. The register itself decides what a departure means.
+  stateManager.on('updated', () => {
+    departures.noteList(stateManager.state().map((node) => node.ip));
   });
 
   const usingDeltas = await nodeListSource.start({ stateManager, listFetcher: fetcher });
