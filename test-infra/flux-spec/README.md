@@ -15,6 +15,13 @@ The machinery dies when flux-spec publishes to npm; a version range in
 
 - `pin` — the full commit hash of the paired flux-spec. Bump it in the same
   commit that starts calling a newer spec API, and re-vendor.
+
+  Also bump it when flux-spec changes BEHAVIOUR the harness depends on, not only
+  when it grows surface FluxOS calls. A tightened wire door is the case: the pinned
+  copy keeps accepting documents the unit suite has started refusing, so a fleet
+  proves something the unit tests no longer claim, and neither run is wrong about
+  itself. Bumping is not free — re-vendor and boot a fleet, because the harness's
+  own fixtures have to satisfy whatever got tightened.
 - `vendor.sh` — exports the pinned tree into `<repo>/flux-spec` (gitignored)
   with `git archive`, stamps `.vendored-ref`, and runs the workspace
   install. Skips when the vendor already matches the pin; `--force`
