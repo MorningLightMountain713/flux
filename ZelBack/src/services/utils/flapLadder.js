@@ -33,11 +33,14 @@ const CLEAN_LADDER_BLOCKS = Object.freeze([30, 60, 120, 240, 480]);
 // from the bottom.
 const FULL_RESET_BLOCKS = 640;
 
-// A release drops and returns every node at once. When this many of my
-// duties drop inside the span, the drop is a release from my side of the
-// wire, not a bad machine, and it counts for nothing. A watchdog-staggered
+// A release drops and returns every node at once. When at least this many
+// of my duties — and at least half of the duties I hold — drop inside the
+// span, the drop is a release from my side of the wire, not a bad machine,
+// and it counts for nothing. Proportional, so a node holding many duties is
+// not fooled by a handful of unrelated deaths landing close together, and a
+// node holding few still recognises its own side going. A watchdog-staggered
 // rollout is not caught here — that is what the trip threshold absorbs.
-const MASS_DROP_DUTIES = 4;
+const MASS_DROP_DUTIES = 3;
 const MASS_DROP_SPAN_BLOCKS = 2;
 
 const DIAL_PLAN = Object.freeze({
@@ -57,7 +60,8 @@ class FlapLadder {
   /** outpoint → {cycles, openDrop, rung, damped, lastCycle, lastContact} */
   #duties = new Map();
 
-  /** Every drop seen lately, across duties, for the release exclusion. */
+  /** Every drop seen lately, across duties, for the release exclusion, each
+   *  with how many duties were held when it was seen. */
   #drops = [];
 
   /**
@@ -93,13 +97,18 @@ class FlapLadder {
     entry.cycles = entry.cycles.filter((at) => at > height - FLAP_WINDOW_BLOCKS);
   }
 
-  /** An unexpected loss of the duty's connection. */
-  noteDrop(outpoint) {
+  /**
+   * An unexpected loss of the duty's connection.
+   * @param {string} outpoint
+   * @param {number} dutiesHeld how many duties this juror holds now — the
+   *   denominator of the release exclusion
+   */
+  noteDrop(outpoint, dutiesHeld = 0) {
     const height = this.#currentHeight();
     if (height === null) return;
     this.#entryFor(outpoint).openDrop = height;
     this.#drops = this.#drops.filter((drop) => drop.height > height - FLAP_WINDOW_BLOCKS);
-    this.#drops.push({ outpoint, height });
+    this.#drops.push({ outpoint, height, dutiesHeld });
   }
 
   /** The duty is held again: the open drop closes into one cycle. */
@@ -112,10 +121,10 @@ class FlapLadder {
     if (droppedAt === null) return;
     entry.openDrop = null;
 
-    const dropping = new Set(this.#drops
-      .filter((drop) => Math.abs(drop.height - droppedAt) <= MASS_DROP_SPAN_BLOCKS)
-      .map((drop) => drop.outpoint));
-    if (dropping.size >= MASS_DROP_DUTIES) return;
+    const inSpan = this.#drops.filter((drop) => Math.abs(drop.height - droppedAt) <= MASS_DROP_SPAN_BLOCKS);
+    const dropping = new Set(inSpan.map((drop) => drop.outpoint));
+    const held = Math.max(...inSpan.map((drop) => drop.dutiesHeld), 0);
+    if (dropping.size >= MASS_DROP_DUTIES && dropping.size * 2 >= held) return;
 
     FlapLadder.#settle(entry, height);
     entry.cycles.push(height);
