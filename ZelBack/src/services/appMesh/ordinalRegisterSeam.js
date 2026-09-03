@@ -14,16 +14,20 @@
 //                                       'yes' is durable: asking again answers yes from the record
 //   releaseOrdinal(appName, ordinal) -> {released, reason?}   grantee-signed; only the holder's own node
 //   ordinalHolders(appName)          -> Map<ordinal, outpoint>   the fleet-synced record read, for names
+//   vacateOrdinal(appName, ordinal, holder) -> {vacated, reason?}   reclaim by node-down certificate, judged
+//                                       by the register at the derivation's placement-dead edge; the
+//                                       joiner's scan asks it for a held ordinal, and founds on 'vacated'
 // A lagging holders record is a temporarily unknown name, never a collision;
 // the scan for a free ordinal probes and never reads the record.
 
-const CONTRACT = Object.freeze(['probeOrdinal', 'askOrdinal', 'releaseOrdinal', 'ordinalHolders']);
+const CONTRACT = Object.freeze(['probeOrdinal', 'askOrdinal', 'releaseOrdinal', 'ordinalHolders', 'vacateOrdinal']);
 
 const closed = Object.freeze({
   probeOrdinal: async () => ({ decided: false, holder: null }),
   askOrdinal: async () => ({ answer: 'wait', reason: 'unwired' }),
   releaseOrdinal: async () => ({ released: false, reason: 'unwired' }),
   ordinalHolders: async () => new Map(),
+  vacateOrdinal: async () => ({ vacated: false, reason: 'unwired' }),
 });
 
 let provider = closed;
@@ -67,6 +71,10 @@ async function ordinalHolders(appName) {
   return provider.ordinalHolders(appName);
 }
 
+async function vacateOrdinal(appName, ordinal, holder) {
+  return provider.vacateOrdinal(appName, ordinal, holder);
+}
+
 module.exports = {
   registerProvider,
   registered,
@@ -75,4 +83,5 @@ module.exports = {
   askOrdinal,
   releaseOrdinal,
   ordinalHolders,
+  vacateOrdinal,
 };
