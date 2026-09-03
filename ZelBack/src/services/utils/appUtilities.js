@@ -5,7 +5,6 @@ const config = require('config');
 const log = require('../../lib/log');
 const serviceHelper = require('../serviceHelper');
 const dockerService = require('../dockerService');
-const appsRepository = require('../appDatabase/appsRepository');
 const { getChainParamsPriceUpdates } = require('./chainUtilities');
 const appConstants = require('./appConstants');
 const { appsFolder } = appConstants;
@@ -383,30 +382,7 @@ function parseContainerName(containerName) {
   };
 }
 
-/**
- * Does the network still consider this app ours?
- *
- * Membership is the whole answer: the derivation only returns live claims — an
- * announcement past its TTL, a node past its shutdown grace, and an evicted node are
- * all already excluded — so a row existing IS the claim being valid. Reading an
- * expiry field back would only re-check what the query enforced.
- * @param {string} appName
- * @param {string} localSocketAddr
- * @returns {Promise<boolean|null>} null when the claims cannot be read: an unread claim is
- *   neither a valid nor an expired one.
- */
-async function appHasValidLocationOnNode(appName, localSocketAddr) {
-  try {
-    const claims = await appsRepository.appLocationFromEvents({ appname: appName, ip: localSocketAddr });
-    return claims.length > 0;
-  } catch (error) {
-    log.error(`Error checking app location for ${appName}: ${error.message}`);
-    return null;
-  }
-}
-
 module.exports = {
-  appHasValidLocationOnNode,
   appPricePerMonth,
   findCommonArchitectures,
   getAppPorts,

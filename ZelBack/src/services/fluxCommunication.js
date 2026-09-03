@@ -354,7 +354,7 @@ async function handleAppRunningSyncResponse(message, peerSocket) {
     // indifferent to seeing them last. An eviction's time is createdAt, when the
     // evicting node made it.
     for (const event of [...evictions, ...nodeDowns, ...stateEvents]) {
-      if (event.type === 'sigterm' || event.type === 'appremoved' || event.type === 'ipchanged' || event.type === 'masterlease' || event.type === 'grantgeneration') {
+      if (event.type === 'appremoved' || event.type === 'ipchanged' || event.type === 'masterlease' || event.type === 'grantgeneration') {
         await messageStore.storeAppStateEvent(event.type, { message: event.data, envelope: event.envelope, announcer: announcerOf.get(event) ?? null });
       } else if (event.type === 'evicted') {
         await messageStore.applyEviction(event.ip, Date.parse(event.createdAt));

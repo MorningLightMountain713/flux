@@ -17,6 +17,9 @@ const EVENTS = Object.freeze({
   // An operator asked for a check of every missing app message; the orchestrator
   // runs it once no hash sync or registry build holds the node.
   HASH_CHECK_REQUESTED: 'hashCheckRequested',
+  // a scoped reconnect pull answered: the store has caught up on what a
+  // re-established peer saw while this node was away (peer key as argument)
+  RECONNECT_SYNC_COMPLETE: 'reconnectSyncComplete',
 });
 
 module.exports = { appSyncEvents, EVENTS };
