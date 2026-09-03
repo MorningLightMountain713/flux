@@ -150,6 +150,13 @@ function helpers(env, name) {
     .filter(({ hits }) => hits.length)
     .map(({ i }) => label(i));
 
+  // Every named cell answers its record read with refereeing: true — the boot
+  // sync has completed and the serve gates would take an ask. Asked of the
+  // cells themselves, never inferred from time.
+  const waitRefereeing = (nodes, timeoutMs) => waitFor(async () => {
+    const cells = await Promise.all(nodes.map((i) => readCell(i)));
+    return cells.every((cell) => cell?.refereeing === true);
+  }, { timeout: timeoutMs, interval: 5000, label: `cells ${nodes.map(label).join(', ')} referee again` });
   const readCell = async (i) => {
     try {
       const res = await fetch(
@@ -195,7 +202,7 @@ function helpers(env, name) {
   };
 
   return {
-    key, label, upHolders, seatByElection, grantedSince, grantsInBufferSince, activationsInBufferSince, readCell, crossAndAssertNothingMoved,
+    key, label, upHolders, seatByElection, grantedSince, grantsInBufferSince, activationsInBufferSince, readCell, waitRefereeing, crossAndAssertNothingMoved,
   };
 }
 
@@ -295,6 +302,15 @@ describe('activation crossing: a referee majority restarting inside the window c
     const preRestart = env.clients.map((c) => c.getLastEventId());
     await Promise.all(restarting.map((i) => restartFluxos(env.clients[i].container)));
     await redialAndPeer(env, restarting, preRestart);
+    // A restarted node's app-state sync starts on its FIRST processed block (the
+    // orchestrator holds INITIALIZING until the chain feed proves itself), and
+    // this suite drives the chain by hand — so give the returning cells one
+    // block, far below the height, and wait until each referees again. Without
+    // it they answer 'not refereeing' for ever, the witnesses count nobody, and
+    // the incumbent COASTS instead of lapsing (the first run at 24582fb1f: five
+    // cells stuck at 'app-state sync incomplete' for the whole 240 s).
+    await advanceTo((await getState()).currentHeight + 1);
+    await h.waitRefereeing(restarting, 180000);
 
     // 3. The incumbent cannot renew against four cells and its lease lapses —
     //    the demotion fires. Below the height that is a re-acquire, NEVER a
