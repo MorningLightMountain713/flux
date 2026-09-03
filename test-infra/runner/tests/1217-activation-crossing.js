@@ -274,7 +274,7 @@ describe('activation crossing: a referee majority restarting inside the window c
     await env?.teardown();
   });
 
-  it('the lapsed lease is re-acquired at the taught time, the container is never stopped, and nothing moves at the height', async function () {
+  it('the incumbent coasts through the wave, is renewed again when the referees return, the container is never stopped, and nothing moves at the height', async function () {
     this.timeout(1200000);
     const h = helpers(env, name);
 
@@ -312,24 +312,29 @@ describe('activation crossing: a referee majority restarting inside the window c
     await advanceTo((await getState()).currentHeight + 1);
     await h.waitRefereeing(restarting, 180000);
 
-    // 3. The incumbent cannot renew against four cells and its lease lapses —
-    //    the demotion fires. Below the height that is a re-acquire, NEVER a
-    //    docker stop: the very same container is still up right after it.
-    await env.clients[incumbent].waitForEvent('quorumGrant:demoted', (d) => d.key === h.key, 240000, { afterId: preRestart[incumbent] });
-    const afterDemotion = env.clients.map((c) => c.getLastEventId());
-    const statusAfterDemotion = await getAppContainerStatus(env.clients[incumbent].container, name);
-    expect(statusAfterDemotion?.status, 'the container is still up after the demotion').to.match(/^Up/);
+    // 3. The incumbent cannot renew a quorum against four cells. Its witnesses
+    //    read the returning cells as refereeing but NOT serving (their rejoin
+    //    drain), so no takeover is possible and the incumbent COASTS — the
+    //    drain-aware coast (formal/quiet-window rows 29–31, flux 5a4fcc52d) —
+    //    instead of demoting: the very same container stays up throughout.
+    await env.clients[incumbent].waitForEvent('quorumGrant:coasting', (d) => d.key === h.key, 240000, { afterId: preRestart[incumbent] });
+    const afterCoast = env.clients.map((c) => c.getLastEventId());
+    const statusWhileCoasting = await getAppContainerStatus(env.clients[incumbent].container, name);
+    expect(statusWhileCoasting?.status, 'the container is still up while coasting').to.match(/^Up/);
     expect(await getAppContainerId(env.clients[incumbent].container, name, name),
       'the same container — the plane governs nothing below the height').to.equal(container);
 
-    // 4. The returning referees refuse inside their drain and TEACH the figure;
-    //    the incumbent retries at it and seats again once a quorum is open. The
-    //    budget is the drain plus one ask round plus the retry's own slack;
-    //    nobody else is granted meanwhile.
-    const regrantedOn = await h.grantedSince(afterDemotion, REFEREE_DRAIN_MS + 120000);
-    expect(regrantedOn !== null && h.label(regrantedOn), 'the incumbent re-acquired its lease inside the window')
-      .to.equal(h.label(incumbent));
-    expect(h.grantsInBufferSince(afterDemotion), 'and nobody else was granted').to.deep.equal([h.label(incumbent)]);
+    // 4. The returning referees serve again after their drain; the register
+    //    anchors every successor's wait at that lift (flux 60864170c), and the
+    //    incumbent's own renewal revives its lapsed rows first — no lapse, no
+    //    re-grant, nobody granted at all. The budget is the drain plus a few
+    //    renewal passes.
+    await env.clients[incumbent].waitForEvent('quorumGrant:assess',
+      (d) => d.key === h.key && d.outcome === 'held' && d.quorumRenewed === true,
+      REFEREE_DRAIN_MS + 120000, { afterId: afterCoast[incumbent] });
+    expect(h.grantsInBufferSince(preRestart), 'nobody was granted across the wave — the incumbent never lost its lease')
+      .to.deep.equal([]);
+    await assertNoEvent(env.clients[incumbent], 'quorumGrant:demoted', (d) => d.key === h.key, 15000);
     expect(await getAppContainerId(env.clients[incumbent].container, name, name),
       'still the same container').to.equal(container);
     const { currentHeight } = await getState();
