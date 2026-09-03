@@ -257,12 +257,17 @@ async function handleAppRunningSyncResponse(message, peerKey) {
     const { verified: verifiedAppRunning, announcers } = await batchVerifyBroadcasts(appRunningBroadcasts, 'handleAppRunningSyncResponse');
 
     const otherToVerify = otherBroadcasts.map((e) => ({ ...e.envelope, data: e.data }));
-    const { verified: verifiedOther } = await batchVerifyBroadcasts(otherToVerify, 'handleAppRunningSyncResponse');
+    const { verified: verifiedOther, announcers: otherAnnouncers } = await batchVerifyBroadcasts(otherToVerify, 'handleAppRunningSyncResponse');
     const verifiedOtherSet = new Set(verifiedOther);
     const otherEvents = [...evictedEvents, ...nodeDownEvents];
+    // the announcer the verifier resolved rides with the event: the masterlease
+    // intake binds the record's grantee to it, and a synced record must meet
+    // the same rule a gossiped one does
+    const announcerOf = new Map();
     for (let i = 0; i < otherBroadcasts.length; i++) {
       if (verifiedOtherSet.has(otherToVerify[i])) {
         otherEvents.push(otherBroadcasts[i]);
+        announcerOf.set(otherBroadcasts[i], otherAnnouncers.get(otherToVerify[i]) ?? null);
       }
     }
 
@@ -273,7 +278,7 @@ async function handleAppRunningSyncResponse(message, peerKey) {
     }
     for (const event of otherEvents) {
       if (event.type === 'sigterm' || event.type === 'appremoved' || event.type === 'ipchanged' || event.type === 'masterlease' || event.type === 'grantgeneration') {
-        await messageStore.storeAppStateEvent(event.type, { message: event.data, envelope: event.envelope });
+        await messageStore.storeAppStateEvent(event.type, { message: event.data, envelope: event.envelope, announcer: announcerOf.get(event) ?? null });
       } else if (event.type === 'evicted') {
         await messageStore.storeAppStateEvent(event.type, { ip: event.ip });
       } else if (event.type === 'nodedown') {

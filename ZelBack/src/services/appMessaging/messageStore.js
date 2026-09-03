@@ -59,6 +59,12 @@ function outpointOf(announcer) {
   return `${announcer.txhash}:${announcer.outidx}`;
 }
 
+// This node storing a record it published itself. A network intake always
+// carries the resolved list entry of the node whose key signed the envelope;
+// the local publish carries this instead, so the two can never be confused
+// and a missing announcer fails closed rather than reading as "mine".
+const LOCAL_ANNOUNCER = Object.freeze({ local: true });
+
 /**
  * Whether a self-reported broadcastedAt is usable as an ordering key.
  *
@@ -837,6 +843,26 @@ async function handleMasterleaseEvent({ message, envelope, announcer }) {
   // roster is dropped whole — a half-trusted record is worse than none.
   if (message.roster !== undefined
     && (!message.roster || !rosterOverlay.chainWellFormed(message.roster.chain))) return;
+  // The grantee is a CLAIM; the signer is the FACT. The envelope binds the
+  // signer to the node listed at the record's ip and verifies nothing else,
+  // and every reader acts on the grantee — the reconciler's veto, the
+  // coordinator's primary intent, the re-rolled seat's exemption — so a
+  // record that names anyone but its own announcer is dropped whole. A
+  // released row is the one exception: a vacate is published by whichever
+  // node holds the certificate, about the node it removed. The local publish
+  // is this node's own grant and not a network record.
+  const local = announcer === LOCAL_ANNOUNCER;
+  const announced = local ? null : outpointOf(announcer);
+  if (!local && message.released !== true && announced !== message.grantee) {
+    fluxEventBus.publish('quorumGrant:masterleaseDropped', {
+      appName: message.appName,
+      role: message.role,
+      grantee: message.grantee,
+      announcer: announced,
+      reason: announced ? 'record names a grantee other than its announcer' : 'no resolved announcer',
+    });
+    return;
+  }
   try {
     const db = dbHelper.databaseConnection();
     const database = db.db(config.database.appsglobal.database);
@@ -856,7 +882,7 @@ async function handleMasterleaseEvent({ message, envelope, announcer }) {
         { field: 'epoch', value: message.epoch, absent: -1 },
       ], message.broadcastedAt, {
         ip: message.ip,
-        outpoint: outpointOf(announcer),
+        outpoint: announced,
         type: APP_STATE_EVENT_TYPES.MASTERLEASE,
         dedupKey,
         broadcastedAt: new Date(message.broadcastedAt),
@@ -1324,4 +1350,5 @@ module.exports = {
   getMasterleaseRecordsByGrantee,
   getGrantGenerationRecord,
   onGrantGenerationRecord,
+  LOCAL_ANNOUNCER,
 };
