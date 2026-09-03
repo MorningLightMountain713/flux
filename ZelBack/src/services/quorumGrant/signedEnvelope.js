@@ -41,6 +41,7 @@ const TYPES = Object.freeze([
   'roster',
   'rosteraccept',
   'vacate',
+  'termaccept',
 ]);
 
 /**
@@ -149,6 +150,14 @@ function fieldsFor(type, ask) {
       // the COMMITTEE, not the grant) and replaying an identical entry is a
       // no-op by construction.
       return [ask.key, ask.fingerprint, ask.generation, ask.seq, ask.remove, ask.add];
+    case 'termaccept':
+      // the acceptance a grantor signs on accept and renew: the TERM's
+      // identity and nothing on any clock — no timestamp, no expiry (§7
+      // forbids comparing clocks) — so a quorum of these proves to a referee
+      // that was never on the committee that this committee accepted this
+      // grantee at this epoch (STEP_ACROSS_DESIGN.md D1). Replaying one is a
+      // no-op: it names a term, it does not ask for anything.
+      return [ask.key, ask.fingerprint, ask.generation, ask.epoch, ask.grantee];
     default:
       return null;
   }

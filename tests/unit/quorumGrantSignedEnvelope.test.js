@@ -106,6 +106,22 @@ describe('quorumGrant signedEnvelope', () => {
       expect(TYPES).to.include('vacate');
     });
 
+    // The term acceptance a referee signs on accept and renew (STEP_ACROSS_DESIGN
+    // D1): the term's identity and nothing on any clock — no timestamp, no
+    // expiry — so a quorum of them proves "this committee accepted this grantee
+    // at this epoch" to a referee that was never on that committee.
+    it('termaccept is the term\'s identity: key, fingerprint, generation, epoch, grantee', () => {
+      expect(TYPES).to.include('termaccept');
+      const fields = fieldsFor('termaccept', {
+        key: 'app/master', fingerprint: 'f'.repeat(64), generation: 2, epoch: 7, grantee: 'aaaa:0',
+      });
+      expect(fields).to.deep.equal(['app/master', 'f'.repeat(64), 2, 7, 'aaaa:0']);
+      const signed = sign('termaccept', fields, WIF);
+      expect(verify('termaccept', fields, signed.signature, PUBKEY)).to.equal(true);
+      expect(verify('termaccept', fields, signed.signature, WRONG_PUBKEY)).to.equal(false);
+      expect(verify('termaccept', ['app/master', 'f'.repeat(64), 2, 8, 'aaaa:0'], signed.signature, PUBKEY), 'another epoch is another term').to.equal(false);
+    });
+
     it('every declared type signs and verifies', () => {
       TYPES.forEach((type) => {
         const fields = ['key', 1, 'value'];

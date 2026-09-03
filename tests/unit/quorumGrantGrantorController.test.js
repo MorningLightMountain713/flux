@@ -148,6 +148,50 @@ describe('quorumGrant grantorController', () => {
       })).to.equal(true);
     });
 
+    // The term acceptance (STEP_ACROSS_DESIGN D1): a referee that accepts or
+    // renews a held term signs the term's identity with its own key, exactly
+    // as it signs a roster entry. A quorum of these is the incumbent's
+    // credential at a re-rolled committee. A referee that cannot sign answers
+    // a refusal, never a half-acceptance; a refusal carries nothing.
+    it('an accepted term carries the referee\'s signed acceptance over the term\'s identity', async () => {
+      grantRegister.accept.resolves({ ok: true, accepted: { epoch: 3, grantee: ASKER, mode: 'held' } });
+      const res = fakeRes();
+      await grantorController.accept(fakeReq(signedAsk('accept')), res);
+      expect(res.statusCode).to.equal(200);
+      const { acceptance } = res.body.data;
+      expect(acceptance, 'the reply carries an acceptance').to.be.an('object');
+      expect(acceptance.grantor).to.equal(ASKER);
+      const fields = signedEnvelope.fieldsFor('termaccept', {
+        key: 'myapp/master', fingerprint: FINGERPRINT, generation: 0, epoch: 3, grantee: ASKER,
+      });
+      expect(signedEnvelope.verify('termaccept', fields, acceptance.signature, PUBKEY)).to.equal(true);
+    });
+
+    it('a renewed term carries the same acceptance, at the term\'s epoch and generation', async () => {
+      const res = fakeRes();
+      await grantorController.renew(fakeReq(signedAsk('renew', { epoch: 4, generation: 0 })), res);
+      expect(res.statusCode).to.equal(200);
+      const { acceptance } = res.body.data;
+      const fields = signedEnvelope.fieldsFor('termaccept', {
+        key: 'myapp/master', fingerprint: FINGERPRINT, generation: 0, epoch: 4, grantee: ASKER,
+      });
+      expect(signedEnvelope.verify('termaccept', fields, acceptance.signature, PUBKEY)).to.equal(true);
+    });
+
+    it('a refusal carries no acceptance, and a referee that cannot sign refuses rather than half-accepts', async () => {
+      grantRegister.accept.resolves({ ok: false, code: 'lock_delay', retryAfterMs: 5 });
+      const refused = fakeRes();
+      await grantorController.accept(fakeReq(signedAsk('accept')), refused);
+      expect(refused.body.data).to.not.have.property('acceptance');
+
+      grantRegister.accept.resolves({ ok: true, accepted: { epoch: 3, grantee: ASKER, mode: 'held' } });
+      fluxNetworkHelper.getFluxNodePrivateKey.resolves(null);
+      const unsigned = fakeRes();
+      await grantorController.accept(fakeReq(signedAsk('accept')), unsigned);
+      expect(unsigned.body.data.ok).to.equal(false);
+      expect(unsigned.body.data.code).to.equal('unavailable');
+    });
+
     it('renew and release reach the register as the grantee', async () => {
       await grantorController.renew(fakeReq(signedAsk('renew')), fakeRes());
       await grantorController.release(fakeReq(signedAsk('release')), fakeRes());

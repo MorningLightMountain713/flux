@@ -922,21 +922,57 @@ async function prepare(req, res) {
   }, context));
 }
 
-async function accept(req, res) {
-  return serve(req, res, 'accept', (ask, context) => grantRegister.accept(registerRowFor(ask), {
+/**
+ * The term acceptance (STEP_ACROSS_DESIGN.md D1): a grantor that accepts or
+ * renews a held term signs the term's identity with its own key, exactly as
+ * it signs a roster entry. A quorum of these is the incumbent's credential at
+ * a re-rolled committee — the one proof a referee that never sat on the
+ * granting committee can check. Sequenced after the journal write like every
+ * reply; a grantor that cannot sign answers a refusal, never a half-acceptance.
+ */
+async function withTermAcceptance(ask, reply) {
+  if (!reply?.ok) return reply;
+  const wif = await fluxNetworkHelper.getFluxNodePrivateKey();
+  const fields = signedEnvelope.fieldsFor('termaccept', {
+    key: ask.key,
+    fingerprint: ask.fingerprint ?? null,
+    generation: ask.generation ?? 0,
     epoch: ask.epoch,
     grantee: ask.candidate,
-    mode: ask.mode,
-    ttlMs: ask.ttlMs,
-    generation: ask.generation,
-    fingerprint: ask.fingerprint ?? null,
-  }, context));
+  });
+  const signed = wif && fields ? signedEnvelope.sign('termaccept', fields, wif) : null;
+  if (!signed) {
+    return { ok: false, code: 'unavailable' };
+  }
+  const collateral = await generalService.obtainNodeCollateralInformation();
+  return {
+    ...reply,
+    acceptance: {
+      grantor: `${collateral.txhash}:${collateral.txindex}`,
+      signature: signed.signature,
+    },
+  };
+}
+
+async function accept(req, res) {
+  return serve(req, res, 'accept', async (ask, context) => {
+    const reply = await grantRegister.accept(registerRowFor(ask), {
+      epoch: ask.epoch,
+      grantee: ask.candidate,
+      mode: ask.mode,
+      ttlMs: ask.ttlMs,
+      generation: ask.generation,
+      fingerprint: ask.fingerprint ?? null,
+    }, context);
+    // a founding is write-once and needs no credential; only a held term steps across
+    return ask.mode === 'held' ? withTermAcceptance(ask, reply) : reply;
+  });
 }
 
 async function renew(req, res) {
-  return serve(req, res, 'renew', (ask) => grantRegister.renew(ask.key, {
+  return serve(req, res, 'renew', async (ask) => withTermAcceptance(ask, await grantRegister.renew(ask.key, {
     epoch: ask.epoch, grantee: ask.candidate, ttlMs: ask.ttlMs,
-  }));
+  })));
 }
 
 async function release(req, res) {
