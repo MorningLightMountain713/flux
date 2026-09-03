@@ -288,29 +288,38 @@ describe('nodeDownCertificates assembly mirrors verification', () => {
   });
 });
 
-describe('nodeDownCertificates severe quarantine — the count over the standing rows', () => {
-  const { quarantineFromExpiries } = require('../../ZelBack/src/services/utils/nodeDownCertificates');
+describe('nodeDownCertificates — the two rungs counted from the standing rows (R6)', () => {
+  const { standingRowsHold, PLACEMENT_FREEZE_ROWS, LOCKOUT_ROWS } = require('../../ZelBack/src/services/utils/nodeDownCertificates');
   const now = 1_700_000_000_000;
   const hour = 60 * 60 * 1000;
 
+  it('the rungs are code constants: placement freezes at two standing rows, the lockout is at four', () => {
+    expect(PLACEMENT_FREEZE_ROWS).to.equal(2);
+    expect(LOCKOUT_ROWS).to.equal(4);
+  });
+
   it('below the threshold nothing is held: the count is reported, there is no lift time', () => {
-    expect(quarantineFromExpiries([now + hour, now + 2 * hour], now))
-      .to.deep.equal({ quarantined: false, count: 2, liftsAt: null });
+    expect(standingRowsHold([now + hour], now, PLACEMENT_FREEZE_ROWS))
+      .to.deep.equal({ held: false, count: 1, liftsAt: null });
+    expect(standingRowsHold([now + hour, now + 2 * hour, now + 3 * hour], now, LOCKOUT_ROWS))
+      .to.deep.equal({ held: false, count: 3, liftsAt: null });
   });
 
   it('at the threshold the subject is held until its oldest standing row ages out', () => {
-    expect(quarantineFromExpiries([now + 3 * hour, now + hour, now + 2 * hour], now))
-      .to.deep.equal({ quarantined: true, count: 3, liftsAt: now + hour });
+    expect(standingRowsHold([now + 3 * hour, now + hour], now, PLACEMENT_FREEZE_ROWS))
+      .to.deep.equal({ held: true, count: 2, liftsAt: now + hour });
+    expect(standingRowsHold([now + 3 * hour, now + hour, now + 4 * hour, now + 2 * hour], now, LOCKOUT_ROWS))
+      .to.deep.equal({ held: true, count: 4, liftsAt: now + hour });
   });
 
   it('every further certification moves the lift to the row whose expiry brings the count under the threshold', () => {
-    expect(quarantineFromExpiries([now + hour, now + 2 * hour, now + 3 * hour, now + 4 * hour], now))
-      .to.deep.equal({ quarantined: true, count: 4, liftsAt: now + 2 * hour });
+    expect(standingRowsHold([now + hour, now + 2 * hour, now + 3 * hour], now, PLACEMENT_FREEZE_ROWS))
+      .to.deep.equal({ held: true, count: 3, liftsAt: now + 2 * hour });
   });
 
   it('an expired row counts for nothing, exactly at its boundary', () => {
-    expect(quarantineFromExpiries([now, now + hour, now + 2 * hour], now))
-      .to.deep.equal({ quarantined: false, count: 2, liftsAt: null });
+    expect(standingRowsHold([now, now + hour], now, PLACEMENT_FREEZE_ROWS))
+      .to.deep.equal({ held: false, count: 1, liftsAt: null });
   });
 });
 

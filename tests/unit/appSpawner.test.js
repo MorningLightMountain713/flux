@@ -335,7 +335,7 @@ describe('appSpawner tests', () => {
         publish: sinon.stub(),
       },
       '../appMessaging/nodeDownStore': {
-        quarantineForAddress: opts.quarantineStub ?? sinon.stub().resolves({ quarantined: false, count: 0, liftsAt: null }),
+        placementFreezeForAddress: opts.freezeStub ?? sinon.stub().resolves({ frozen: false, count: 0, liftsAt: null }),
       },
       './appInstaller': {
         InstallStatus,
@@ -422,14 +422,14 @@ describe('appSpawner tests', () => {
       expect(logStub.info.args.some((a) => a[0]?.includes?.('No installable application found'))).to.be.true;
     });
 
-    it('a node under severe quarantine places nothing: the flapper costs its operator, not the fleet', async () => {
-      const quarantineStub = sinon.stub().resolves({ quarantined: true, count: 3, liftsAt: 1 });
-      buildModule({ quarantineStub });
+    it('a node under placement freeze places nothing: the flapper costs its operator, not the fleet', async () => {
+      const freezeStub = sinon.stub().resolves({ frozen: true, count: 2, liftsAt: 1 });
+      buildModule({ freezeStub });
       const result = await appSpawner.trySpawningGlobalApplication();
       expect(result).to.be.a('number');
-      expect(quarantineStub.args).to.deep.equal([[MY_ADDR]]);
+      expect(freezeStub.args).to.deep.equal([[MY_ADDR]]);
       expect(findUnderProvisionedStub.callCount).to.equal(0);
-      expect(logStub.info.args.some((a) => a[0]?.includes?.('quarantine'))).to.be.true;
+      expect(logStub.info.args.some((a) => a[0]?.includes?.('placement freeze'))).to.be.true;
     });
 
     it('caps on INSTALLED apps (DB count), not running containers', async () => {

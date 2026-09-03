@@ -98,7 +98,9 @@ async function getStoppedFluxContainers() {
  * every app at once, and there is no middle ground. Then every installed
  * app is removed, whatever its containers are doing, and nothing is
  * broadcast: the removal event's only reader is the derivation, whose rows
- * are already gone. Otherwise every app is kept and the caller announces.
+ * are already gone. A locked-out node — four certifications standing — is
+ * the same branch whatever its rows say: the lockout's self-uninstall.
+ * Otherwise every app is kept and the caller announces.
  *
  * Fails OPEN: a database wobble or a missing address must never be the
  * reason an app is deleted.
@@ -115,15 +117,24 @@ async function enforceNodePlacement(trigger) {
     return { placed: true, removed: [], failed: [] };
   }
   let rows;
+  let lockout;
   try {
-    rows = await appsRepository.appLocationFromEvents({ ip: localSocketAddr });
+    // eslint-disable-next-line global-require
+    const nodeDownStore = require('../appMessaging/nodeDownStore');
+    [rows, lockout] = await Promise.all([
+      appsRepository.appLocationFromEvents({ ip: localSocketAddr }),
+      nodeDownStore.lockoutForAddress(localSocketAddr),
+    ]);
   } catch (error) {
     log.error(`appStartupManager - placement check (${trigger}) could not read the rows, keeping every app: ${error.message}`);
     return { placed: true, removed: [], failed: [] };
   }
-  if (rows.length > 0) return { placed: true, removed: [], failed: [] };
+  if (rows.length > 0 && !lockout.lockedOut) return { placed: true, removed: [], failed: [] };
 
-  log.warn(`appStartupManager - placement check (${trigger}): no row places ${localSocketAddr} any more, the network has moved on; removing ${installedApps.length} app(s), no broadcast`);
+  const why = lockout.lockedOut
+    ? `locked out (${lockout.count} certifications standing)`
+    : `no row places ${localSocketAddr} any more, the network has moved on`;
+  log.warn(`appStartupManager - placement check (${trigger}): ${why}; removing ${installedApps.length} app(s), no broadcast`);
   const removed = [];
   const failed = [];
   for (const appName of installedApps) {

@@ -337,13 +337,13 @@ async function trySpawningGlobalApplication() {
     }
     lastKnownLocalSocketAddr = localSocketAddr;
 
-    // Under severe quarantine this node's announcements are ignored fleet-wide,
-    // so anything it placed would be replaced elsewhere at once: it places
-    // nothing until the hold lifts. The flapper's operator pays, not the fleet.
-    const quarantine = await nodeDownStore.quarantineForAddress(localSocketAddr);
-    if (quarantine.quarantined) {
-      log.info(`trySpawningGlobalApplication - Node is under severe quarantine (${quarantine.count} certifications standing). Global applications will not be installed`);
-      fluxEventBus.publish('spawner:blocked', { reason: 'quarantined', count: quarantine.count, liftsAt: quarantine.liftsAt });
+    // Under a placement freeze — two certifications standing — this node
+    // places nothing until the rows age out. The flapper's operator pays, not
+    // the fleet. Nothing else changes for it.
+    const freeze = await nodeDownStore.placementFreezeForAddress(localSocketAddr);
+    if (freeze.frozen) {
+      log.info(`trySpawningGlobalApplication - Node is under placement freeze (${freeze.count} certifications standing). Global applications will not be installed`);
+      fluxEventBus.publish('spawner:blocked', { reason: 'placementFrozen', count: freeze.count, liftsAt: freeze.liftsAt });
       return installDelay;
     }
 

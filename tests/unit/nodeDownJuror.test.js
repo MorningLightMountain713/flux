@@ -432,3 +432,99 @@ describe('nodeDownJuror — the verdict names the drop it answers (P1)', () => {
     expect(world.certificates[0]).to.include({ since: T0 - 1000, reason: 'unannounced' });
   });
 });
+
+describe('nodeDownJuror — the courtesy: a clean stop is honoured only so many times per window (R7)', () => {
+  const SUBJECT_ADDRESS = '10.0.0.20:16127';
+  const {
+    SHUTDOWN_COURTESY, RESTART_COURTESY, COURTESY_WINDOW_BLOCKS,
+  } = require('../../ZelBack/src/services/utils/nodeDownJuror');
+  const { NODE_DOWN_GRACE_MS } = require('../../ZelBack/src/services/utils/appConstants');
+
+  it('the limits are code constants: four shutdowns and twelve restarts per 720 blocks', () => {
+    expect(SHUTDOWN_COURTESY).to.equal(4);
+    expect(RESTART_COURTESY).to.equal(12);
+    expect(COURTESY_WINDOW_BLOCKS).to.equal(720);
+  });
+
+  // one honoured stop and return, the duty re-held
+  async function cleanStop(world, reason) {
+    const { honoured } = world.juror.noteDrop(S, reason);
+    world.juror.noteHeld(S);
+    world.height += 1;
+    await tick();
+    return honoured;
+  }
+
+  it('the fifth SHUTTING_DOWN close in the window is not honoured: the juror looks at the drop, and its verdict says shutdown', async () => {
+    const world = makeWorld();
+    for (let i = 0; i < SHUTDOWN_COURTESY; i += 1) {
+      // eslint-disable-next-line no-await-in-loop
+      expect(await cleanStop(world, 'shutdown')).to.equal(true);
+    }
+    expect(world.probes).to.deep.equal([]);
+
+    const { honoured } = world.juror.noteDrop(S, 'shutdown');
+    await tick();
+    expect(honoured).to.equal(false);
+    expect(world.probes).to.deep.equal([SUBJECT_ADDRESS]);
+    expect(world.pushes[0].verdict).to.include({ droppedAt: T0, reason: 'shutdown' });
+  });
+
+  it('restarts have their own, longer courtesy', async () => {
+    const world = makeWorld();
+    for (let i = 0; i < RESTART_COURTESY; i += 1) {
+      // eslint-disable-next-line no-await-in-loop
+      expect(await cleanStop(world, 'restart')).to.equal(true);
+    }
+    expect((world.juror.noteDrop(S, 'restart')).honoured).to.equal(false);
+    await tick();
+    expect(world.pushes[0].verdict).to.include({ reason: 'restart' });
+  });
+
+  it('the courtesy is per subject, and restarts do not spend the shutdown courtesy', async () => {
+    const world = makeWorld({ extraNodes: [{ txhash: 'u', outidx: 0, pubkey: 'pkU', ip: '10.0.0.30:16127', added_height: 1 }] });
+    for (let i = 0; i < SHUTDOWN_COURTESY; i += 1) {
+      // eslint-disable-next-line no-await-in-loop
+      await cleanStop(world, 'shutdown');
+    }
+    expect(world.juror.noteDrop('u:0', 'shutdown').honoured).to.equal(true);
+    expect(world.juror.noteDrop(S, 'restart').honoured).to.equal(true);
+  });
+
+  it('the window slides: an honoured stop older than 720 blocks no longer counts', async () => {
+    const world = makeWorld();
+    for (let i = 0; i < SHUTDOWN_COURTESY; i += 1) {
+      // eslint-disable-next-line no-await-in-loop
+      await cleanStop(world, 'shutdown');
+    }
+    world.height += COURTESY_WINDOW_BLOCKS;
+    expect(world.juror.noteDrop(S, 'shutdown').honoured).to.equal(true);
+  });
+
+  it('an honoured stop that overruns is certified through the grace-end look and is not counted twice', async () => {
+    const world = makeWorld();
+    for (let i = 0; i < SHUTDOWN_COURTESY - 1; i += 1) {
+      // eslint-disable-next-line no-await-in-loop
+      await cleanStop(world, 'shutdown');
+    }
+    expect(world.juror.noteDrop(S, 'shutdown').honoured).to.equal(true); // the fourth
+    world.nowMs += NODE_DOWN_GRACE_MS;
+    world.juror.sweep();
+    await tick();
+    expect(world.probes).to.deep.equal([SUBJECT_ADDRESS]);
+    world.juror.noteHeld(S);
+    world.height += 1;
+    // still the fourth honoured stop in the window: the fifth is the one refused
+    expect(world.juror.noteDrop(S, 'shutdown').honoured).to.equal(false);
+  });
+
+  it('the memory is kept for duties only, and dies with the juror', async () => {
+    const world = makeWorld();
+    for (let i = 0; i < SHUTDOWN_COURTESY; i += 1) {
+      // eslint-disable-next-line no-await-in-loop
+      await cleanStop(world, 'shutdown');
+    }
+    world.juror.retain(new Set(['j2:0']));
+    expect(world.juror.noteDrop(S, 'shutdown').honoured).to.equal(true);
+  });
+});

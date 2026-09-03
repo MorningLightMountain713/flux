@@ -53,9 +53,10 @@ const CLOSE_CODES = Object.freeze({
   // Node lost confirmation — disconnecting all peers
   NODE_UNCONFIRMED: 4019,
 
-  // Peering refused by the node-down plane: the dialer is under severe
-  // quarantine. A policy close — the dialer backs off, never accuses.
-  QUARANTINED: 4020,
+  // Peering refused by the node-down plane: the dialer is locked out (four
+  // standing certifications). A policy close — the dialer backs off, never
+  // accuses.
+  LOCKED_OUT: 4020,
 
   // A stopping FluxOS closing the connections it holds, with its reason: the
   // machine is going down, or only the process is. Reconnect-worthy — the

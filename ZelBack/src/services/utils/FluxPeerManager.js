@@ -266,10 +266,10 @@ class FluxPeerManager extends EventEmitter {
     // Track disconnect for unstable node detection and network health
     this.trackDisconnect(peer.ip, peer.port);
     this.#stampLoss(peer);
-    // A peer that refused us under quarantine refuses the next dial too:
+    // A peer that refused us under the lockout refuses the next dial too:
     // back the target off so the duty is re-dialed on the ladder rather
     // than on every pass, and picked back up the moment the hold lifts.
-    if (closeCode === CLOSE_CODES.QUARANTINED && peer.direction === 'outbound') {
+    if (closeCode === CLOSE_CODES.LOCKED_OUT && peer.direction === 'outbound') {
       this.recordFailedConnection(peer.ip, peer.port);
     }
     if (this.networkHealthMonitor) this.networkHealthMonitor.recordDisconnect(peer.connectedAt, closeCode);
@@ -1084,7 +1084,7 @@ class FluxPeerManager extends EventEmitter {
     }
     if (!answer.admitted) {
       try {
-        ws.close(CLOSE_CODES.QUARANTINED, `Peering refused: ${answer.reason}`);
+        ws.close(CLOSE_CODES.LOCKED_OUT, `Peering refused: ${answer.reason}`);
       } catch (error) {
         log.error(error);
       }

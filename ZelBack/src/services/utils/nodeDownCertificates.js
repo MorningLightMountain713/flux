@@ -39,16 +39,19 @@ const VERDICT_LIFETIME_BLOCKS = 10;
 // standing certificate stays cold-verifiable for its whole life.
 const RECORD_LIFETIME_MS = 6 * 60 * 60 * 1000;
 
-// Severe flap quarantine. A subject certified down this many times while
-// those records still stand is held out of the network: its inbound is
-// refused, its announcements are ignored in derivation, it places nothing,
-// and its jurors' stand-down stays open. The count is taken over the synced
-// certification rows, so every node reaches the same verdict from the same
-// rows; a private count would be laundered by one jury re-deal. Proposed
-// 2026-09-02, not yet measured against fleet restart rates: every reboot
-// long enough to certify counts one, so the third within a record lifetime
-// trips it.
-const QUARANTINE_CERTIFICATIONS = 3;
+// The two rungs, named by what happens, counted over the subject's standing
+// certification rows — synced, so every node reaches the same verdict from
+// the same rows (a private count would be laundered by one jury re-deal).
+// Every certificate counts whatever its reason: each is a death that broke
+// the node's own promise. PLACEMENT FREEZE: the node's own spawner declines
+// new apps and nothing else changes. LOCKOUT: peers refuse its inbound, its
+// jurors stand down, and it removes every app it holds; a lockout of nearly
+// six hours outlasts the 640 unconfirmed blocks after which the chain drops
+// the node — that delisting is the point. One window, the record lifetime.
+// Generous on purpose (2026-09-02): tuned down in a release once the fleet
+// shows what normal looks like.
+const PLACEMENT_FREEZE_ROWS = 2;
+const LOCKOUT_ROWS = 4;
 
 const JUDGEMENT = Object.freeze({
   UNREACHABLE: 'unreachable',
@@ -381,22 +384,23 @@ function verifyCertificate(certificate, watchers, sameJury, verifySignature, now
 }
 
 /**
- * The quarantine verdict over one subject's certification rows. A row counts
- * while it is unexpired, refuted or not: the count is deaths certified, not
+ * A rung's verdict over one subject's certification rows. A row counts while
+ * it is unexpired, refuted or not: the count is deaths certified, not
  * certificates standing. The hold lasts until enough rows age out for the
  * count to fall under the threshold, so every further certification extends
  * it by that row's remaining life and nothing else needs remembering.
  *
  * @param {Array<number>} expiries epoch-ms expiry of each row
  * @param {number} now epoch-ms
- * @returns {{quarantined: boolean, count: number, liftsAt: number|null}}
+ * @param {number} threshold PLACEMENT_FREEZE_ROWS or LOCKOUT_ROWS
+ * @returns {{held: boolean, count: number, liftsAt: number|null}}
  *   liftsAt is the expiry that ends the hold, null when there is none
  */
-function quarantineFromExpiries(expiries, now) {
+function standingRowsHold(expiries, now, threshold) {
   const live = expiries.filter((at) => at > now).sort((a, b) => a - b);
   const count = live.length;
-  if (count < QUARANTINE_CERTIFICATIONS) return { quarantined: false, count, liftsAt: null };
-  return { quarantined: true, count, liftsAt: live[count - QUARANTINE_CERTIFICATIONS] };
+  if (count < threshold) return { held: false, count, liftsAt: null };
+  return { held: true, count, liftsAt: live[count - threshold] };
 }
 
 module.exports = {
@@ -406,7 +410,8 @@ module.exports = {
   FUTURE_BLOCKS_TOLERANCE,
   VERDICT_LIFETIME_BLOCKS,
   RECORD_LIFETIME_MS,
-  QUARANTINE_CERTIFICATIONS,
+  PLACEMENT_FREEZE_ROWS,
+  LOCKOUT_ROWS,
   JUDGEMENT,
   DROP_REASON,
   REASON,
@@ -418,5 +423,5 @@ module.exports = {
   collectors,
   assemble,
   verifyCertificate,
-  quarantineFromExpiries,
+  standingRowsHold,
 };
