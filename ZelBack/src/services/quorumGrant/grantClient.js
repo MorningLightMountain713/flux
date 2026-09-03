@@ -811,7 +811,10 @@ async function acquireOnce(key, mode, ttlMs, identity, committee, options) {
     cancel: options.cancel,
   });
   acceptReplies.forEach((reply, outpoint) => {
-    if (reply?.ok) holder.recordAck(outpoint, sentMs);
+    if (reply?.ok) {
+      holder.recordAck(outpoint, sentMs);
+      holder.recordAcceptance(outpoint, reply.acceptance);
+    }
   });
   held.set(key, holder);
   // §7's demotion alarm is STANDING: it fires ON the deadline without waiting
@@ -846,6 +849,10 @@ class Holder {
   #committee;
 
   #acks = new Map(); // grantor outpoint -> sentMs of its latest ack
+
+  // grantor outpoint -> its latest signed term acceptance for THIS epoch (the
+  // credential, STEP_ACROSS_DESIGN.md D1); starts empty at every epoch bump
+  #acceptances = new Map();
 
   #lastAnswerMs = new Map(); // grantor outpoint -> last instant it answered anything
 
@@ -935,6 +942,29 @@ class Holder {
 
   recordAck(grantorOutpoint, sentMs) {
     this.#acks.set(grantorOutpoint, sentMs);
+  }
+
+  /** The referee's signed term acceptance that rode an accept or renew reply. */
+  recordAcceptance(grantorOutpoint, acceptance) {
+    if (!acceptance || typeof acceptance.signature !== 'string' || acceptance.grantor !== grantorOutpoint) return;
+    this.#acceptances.set(grantorOutpoint, { grantor: grantorOutpoint, signature: acceptance.signature });
+  }
+
+  /**
+   * What this holder can prove to a committee that never granted it: the
+   * retired world's basis and a quorum of that world's signed acceptances of
+   * this term (STEP_ACROSS_DESIGN.md D1/D2). Null below a quorum.
+   */
+  credential() {
+    const acceptances = [...this.#acceptances.values()];
+    if (acceptances.length < this.#committee.quorum) return null;
+    return {
+      fingerprint: this.#committee.fingerprint,
+      generation: this.#committee.generation,
+      epoch: this.#epoch,
+      roster: this.#committee.chain.length ? { chain: this.#committee.chain } : null,
+      acceptances,
+    };
   }
 
   /** The median rule over the latest ack per grantor. */
@@ -1076,6 +1106,7 @@ class Holder {
       this.#lastAnswerMs.set(outpoint, sentMs);
       if (reply?.ok && reply.renewed) {
         this.recordAck(outpoint, sentMs);
+        this.recordAcceptance(outpoint, reply.acceptance);
         this.#refusals.delete(outpoint);
         renewed += 1;
       } else if (reply?.code === 'not_grantee' || reply?.code === 'no_grant' || reply?.code === 'lapsed') {
@@ -1342,9 +1373,11 @@ class Holder {
 
     this.#epoch = epoch;
     this.#acks.clear();
+    this.#acceptances.clear();
     acceptReplies.forEach((reply, outpoint) => {
       if (reply?.ok && reply.accepted) {
         this.recordAck(outpoint, sentMs);
+        this.recordAcceptance(outpoint, reply.acceptance);
         this.#refusals.delete(outpoint);
       }
     });
