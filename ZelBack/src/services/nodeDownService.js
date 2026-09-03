@@ -383,7 +383,8 @@ function onPeerRemoved({ ip, port, closeCode }) {
   if (!outpoint) return;
   const reason = STOP_REASON_BY_CODE.get(closeCode) ?? DROP_REASON.UNANNOUNCED;
   const { honoured } = juror.noteDrop(outpoint, reason);
-  if (!honoured && dutyOutpoints().has(outpoint)) ladder.noteDrop(outpoint);
+  const duties = dutyOutpoints();
+  if (!honoured && duties.has(outpoint)) ladder.noteDrop(outpoint, duties.size);
 }
 
 function onPeerAdded({ ip, port } = {}) {
