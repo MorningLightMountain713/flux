@@ -366,6 +366,16 @@ async function manageAppsOnBoot(bootContext) {
       throw error;
     }
 
+    // The off-list register starts empty on every boot: sweep the row
+    // addresses the current list does not carry so their grace runs from now.
+    // Best effort — a sweep that fails is logged, and the apps still start.
+    try {
+      const swept = await appsRepository.sweepOffListRows();
+      log.info(`appStartupManager - off-list boot sweep covered ${swept} row address(es)`);
+    } catch (error) {
+      log.warn(`appStartupManager - off-list boot sweep failed, the register starts empty: ${error.message}`);
+    }
+
     // Anything that would rather act on a container while it is down runs here:
     // FluxOS keeps every container on RestartPolicy 'no', so after a host reboot
     // nothing is running until the reconcile below starts it. Never allowed to stop

@@ -1480,6 +1480,65 @@ describe('registryManager tests', () => {
       expect(new Date(result[0].expireAt).getTime()).to.equal(since + NODE_DOWN_GRACE_MS);
     });
 
+    it('rows of an address gone from the node list past the off-list grace are negated on every read; inside the grace they stand; back on the list they return', async () => {
+      const { departures, OFF_LIST_GRACE_MS } = require('../../ZelBack/src/services/appDatabase/offListDepartures');
+      departures.resetForTests();
+      const listed = Array.from({ length: 20 }, (_, i) => `10.7.0.${i + 1}:16127`);
+      await database.collection(eventsCollection).insertMany([
+        makeV2Event('10.7.0.20:16127', [{ name: 'AppA', hash: 'h1' }], now - 60_000),
+        makeV2Event('10.7.0.19:16127', [{ name: 'AppB', hash: 'h2' }], now - 60_000),
+      ]);
+      // the register is read against the wall clock at read time, so its
+      // times come from the clock now, not the file's load-time `now`
+      const clock = Date.now();
+      departures.noteList(listed, clock - 10 * 60_000);
+      // 10.7.0.20 left the list inside the grace: its row stands
+      departures.noteList(listed.slice(0, 19), clock - OFF_LIST_GRACE_MS + 60_000);
+      let result = await appsRepository.appLocationFromEvents();
+      expect(result.map((row) => row.name).sort()).to.deep.equal(['AppA', 'AppB']);
+      // past the grace: negated, on the row read and on the count alike
+      departures.resetForTests();
+      departures.noteList(listed, clock - 10 * 60_000);
+      departures.noteList(listed.slice(0, 19), clock - OFF_LIST_GRACE_MS - 1000);
+      result = await appsRepository.appLocationFromEvents();
+      expect(result.map((row) => row.name)).to.deep.equal(['AppB']);
+      const counts = await appsRepository.countRunningByApp();
+      expect(counts.has('appa')).to.equal(false);
+      // back on the list: forgiven at once
+      departures.noteList(listed, Date.now());
+      result = await appsRepository.appLocationFromEvents();
+      expect(result.map((row) => row.name).sort()).to.deep.equal(['AppA', 'AppB']);
+      departures.resetForTests();
+    });
+
+    it('the boot sweep: a row address the current list does not carry starts its grace from the sweep, and nothing is negated before it', async () => {
+      const { departures, OFF_LIST_GRACE_MS } = require('../../ZelBack/src/services/appDatabase/offListDepartures');
+      departures.resetForTests();
+      const listed = Array.from({ length: 20 }, (_, i) => `10.7.0.${i + 1}:16127`);
+      await database.collection(eventsCollection).insertMany([
+        makeV2Event('10.7.0.99:16127', [{ name: 'AppGone', hash: 'h1' }], now - 60_000),
+        makeV2Event('10.7.0.1:16127', [{ name: 'AppHere', hash: 'h2' }], now - 60_000),
+      ]);
+      departures.noteList(listed, now);
+      const clock = sinon.useFakeTimers({ now, toFake: ['Date'] });
+      try {
+        // no sweep yet: the register knows nothing of the rows
+        clock.tick(OFF_LIST_GRACE_MS + 1);
+        let result = await appsRepository.appLocationFromEvents();
+        expect(result.map((row) => row.name).sort()).to.deep.equal(['AppGone', 'AppHere']);
+        // the sweep, then the grace
+        expect(await appsRepository.sweepOffListRows()).to.equal(2);
+        result = await appsRepository.appLocationFromEvents();
+        expect(result.map((row) => row.name).sort()).to.deep.equal(['AppGone', 'AppHere']);
+        clock.tick(OFF_LIST_GRACE_MS + 1);
+        result = await appsRepository.appLocationFromEvents();
+        expect(result.map((row) => row.name)).to.deep.equal(['AppHere']);
+      } finally {
+        clock.restore();
+        departures.resetForTests();
+      }
+    });
+
     it('a legacy sigterm row does not shorten expireAt', async () => {
       const announcedAt = now - 60000;
       await database.collection(eventsCollection).insertMany([

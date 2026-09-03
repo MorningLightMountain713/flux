@@ -35,6 +35,7 @@ describe('appStartupManager tests', () => {
     appsRepositoryStub = {
       listInstalledAppNames: sinon.stub().resolves([]),
       appLocationFromEvents: sinon.stub().resolves([]),
+      sweepOffListRows: sinon.stub().resolves(0),
     };
 
     dockerServiceStub = {
@@ -406,6 +407,17 @@ describe('appStartupManager tests', () => {
 
       expect(appUninstallerStub.uninstallApplication.calledOnce).to.be.true;
       expect(logStub.info.calledWithMatch(/Locations expired/)).to.be.true;
+    });
+
+    it('sweeps the off-list register once the database is ready, and starts the apps even when the sweep fails', async () => {
+      const bootContext = { machineRebooted: true, downtimeMs: 60000, cleanShutdown: true };
+      appsRepositoryStub.sweepOffListRows.rejects(new Error('distinct failed'));
+      await appStartupManager.manageAppsOnBoot(bootContext);
+      expect(globalStateStub.waitForDbReady.calledOnce).to.be.true;
+      expect(appsRepositoryStub.sweepOffListRows.calledOnce).to.be.true;
+      expect(appsRepositoryStub.sweepOffListRows.calledAfter(globalStateStub.waitForDbReady)).to.be.true;
+      expect(logStub.warn.calledWithMatch(/off-list boot sweep failed/)).to.be.true;
+      expect(globalStateStub.bootContainerStateSettled).to.equal(true);
     });
 
     it('should wait for dbReady then start apps when machine rebooted with valid locations', async () => {
