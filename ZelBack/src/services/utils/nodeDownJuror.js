@@ -2,6 +2,7 @@
 
 const {
   JUDGEMENT,
+  DROP_REASON,
   VERDICT_LIFETIME_BLOCKS,
   FUTURE_BLOCKS_TOLERANCE,
   verdictPayload,
@@ -37,13 +38,6 @@ const log = require('../../lib/log');
 // held connection with a code, and the juror honours it: no look until the
 // grace for that code has run, and then only if the duty is still unheld.
 // An unannounced drop is looked at now.
-
-// What a dropped connection said about itself.
-const DROP_REASON = Object.freeze({
-  SHUTDOWN: 'shutdown',
-  RESTART: 'restart',
-  UNANNOUNCED: 'unannounced',
-});
 
 const GRACE_MS = Object.freeze({
   [DROP_REASON.SHUTDOWN]: NODE_DOWN_GRACE_MS,
@@ -241,7 +235,13 @@ class NodeDownJuror {
     }
 
     const verdict = {
-      subject, juror: myOutpoint, judgement: JUDGEMENT.UNREACHABLE, height, fingerprint,
+      subject,
+      juror: myOutpoint,
+      judgement: JUDGEMENT.UNREACHABLE,
+      height,
+      fingerprint,
+      // the drop this look answers travels with the verdict, signed
+      ...(drop ? { droppedAt: drop.droppedAt, reason: drop.reason } : {}),
     };
     const payload = verdictPayload(verdict);
     if (payload === null) return;

@@ -32,7 +32,7 @@ const telemetryIdentityService = require('../telemetryIdentityService');
 const globalState = require('../utils/globalState');
 const fluxEventBus = require('../utils/fluxEventBus');
 const nodeConfirmationService = require('../nodeConfirmationService');
-const { localAppsInformation, NODE_DOWN_GRACE_MS, RUNNING_EXPIRY_MS } = require('../utils/appConstants');
+const { localAppsInformation, NODE_DOWN_GRACE_MS } = require('../utils/appConstants');
 const { parseContainerName, appHasValidLocationOnNode } = require('../utils/appUtilities');
 const { RemovalOutcome } = require('../utils/removalOutcome');
 const { untilSucceeds, BOOT_STEP_RETRY_MS } = require('../utils/untilSucceeds');
@@ -443,14 +443,11 @@ async function manageAppsOnBoot(bootContext) {
     } else if (bootContext.unreadable) {
       log.warn('appStartupManager - Boot context unreadable: whether locations expired is decided app by app');
     } else {
-      // A clean shutdown is governed by the node-down grace; an unclean or
-      // unknown one by the running-location TTL. Gating the running-TTL clause
-      // on !cleanShutdown keeps the grace intact when the running TTL is
-      // shorter than the grace (it never is in prod, but the intent is that a
-      // clean shutdown gets its full grace regardless).
-      const locationsExpired = bootContext.cleanShutdown
-        ? bootContext.downtimeMs > NODE_DOWN_GRACE_MS
-        : bootContext.downtimeMs > RUNNING_EXPIRY_MS;
+      // Every stop gets the same grace, announced or not: a node down longer
+      // was replaced by the fleet at since + the grace, and the same constant
+      // decides here before the sync. This is the fast path of the check the
+      // sync then makes for real against the derived rows.
+      const locationsExpired = bootContext.downtimeMs > NODE_DOWN_GRACE_MS;
 
       if (locationsExpired) {
         log.info(`appStartupManager - Locations expired (downtime ${Math.round(bootContext.downtimeMs / 1000)}s, cleanShutdown=${bootContext.cleanShutdown}), removing all apps`);

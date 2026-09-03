@@ -8,13 +8,14 @@ const networkStateService = require('../networkStateService');
 const verificationHelper = require('../verificationHelper');
 const downCertificates = require('../quorumGrant/downCertificates');
 const { APP_STATE_EVENT_TYPES } = require('./messageStore');
-const { globalAppStateEvents, CLOCK_SKEW_ALLOWANCE_MS } = require('../utils/appConstants');
+const { globalAppStateEvents, CLOCK_SKEW_ALLOWANCE_MS, NODE_DOWN_GRACE_MS } = require('../utils/appConstants');
 const {
   verifyCertificate,
   quarantineFromExpiries,
   RECORD_LIFETIME_MS,
   VERDICT_LIFETIME_BLOCKS,
   FUTURE_BLOCKS_TOLERANCE,
+  DROP_REASON,
 } = require('../utils/nodeDownCertificates');
 const { normalizeSocketAddress } = require('../utils/socketAddressUtils');
 
@@ -174,6 +175,18 @@ async function handleNodeDownEvent({ message, envelope = null }) {
       return { accepted: false, rebroadcast: false, reason: check.reason };
     }
 
+    // The drop the jury saw. A certificate whose verdicts saw none dates it
+    // from its broadcast. A drop after the broadcast (beyond skew) or older
+    // than two graces before it is not this death: the derivation negates
+    // the subject's rows at since + the grace, so since is what a stored
+    // certificate is FOR, and it is bounded here against the one wall-clock
+    // fact every reader holds — the row's broadcast time.
+    const since = certificate.since ?? broadcastedAt;
+    const reason = certificate.reason ?? DROP_REASON.UNANNOUNCED;
+    if (since > broadcastedAt + skew || broadcastedAt - since > 2 * NODE_DOWN_GRACE_MS) {
+      return { accepted: false, rebroadcast: false, reason: 'since_out_of_range' };
+    }
+
     // A node already holding a standing certificate for the subject drops
     // further copies without relaying: concurrent assemblies cost the fleet
     // one flood. A refuted or lapsed record is a PAST incident — store anew.
@@ -198,6 +211,8 @@ async function handleNodeDownEvent({ message, envelope = null }) {
           subject: certificate.subject,
           ip,
           broadcastedAt: new Date(broadcastedAt),
+          since: new Date(since),
+          reason,
           expireAt: new Date(broadcastedAt + RECORD_LIFETIME_MS),
           data: { certificate },
           envelope,
