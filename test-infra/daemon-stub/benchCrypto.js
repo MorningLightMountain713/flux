@@ -160,8 +160,26 @@ async function transportKeyPair(appName, fluxID) {
 }
 
 // The per-app transport public key + its attestation (network attestation key over
-// SHA-256(domain || appName || pubkey || fluxID || ts_be64)), matching
-// flux-spec transport/attestation.js so a real frontend would also verify it.
+// SHA-256(domain || len_be32(appName) || appName || pubkey || len_be32(fluxID)
+// || fluxID || ts_be64)).
+//
+// appName and fluxID carry their byte lengths so the message has exactly one reading.
+// Concatenated bare — which this did, while claiming to match — only the pubkey and
+// the timestamp are fixed-width, so a byte slid out of appName into pubkey and one out
+// of pubkey into fluxID gives an identical message, and one signature vouches for two
+// different (appName, pubkey, fluxID) triples.
+//
+// This is an independent implementation of flux-spec's attestationMessage() and of
+// SAS's, in api_server.h. Independent on purpose: three implementations agreeing is
+// worth something, and importing flux-spec's builder here would leave the test that
+// checks them comparing a function with itself. tests/unit/transportAttestation.test.js
+// runs this producer through that verifier, which is what keeps them honest.
+function be32(n) {
+  const b = Buffer.alloc(4);
+  b.writeUInt32BE(n);
+  return b;
+}
+
 async function transportPublicKey({ appName, fluxID, timestamp }) {
   const { kem } = await getHpke();
   const kp = await transportKeyPair(appName, fluxID);
@@ -169,11 +187,15 @@ async function transportPublicKey({ appName, fluxID, timestamp }) {
   const ts = Number.isInteger(timestamp) ? timestamp : Math.floor(Date.now() / 1000);
   const tsBe = Buffer.alloc(8);
   tsBe.writeBigUInt64BE(BigInt(ts));
+  const appNameBuf = Buffer.from(appName);
+  const fluxIdBuf = Buffer.from(String(fluxID));
   const digest = crypto.createHash('sha256')
     .update(Buffer.from(TRANSPORT_ATTEST_DOMAIN))
-    .update(Buffer.from(appName))
+    .update(be32(appNameBuf.length))
+    .update(appNameBuf)
     .update(rawPub)
-    .update(Buffer.from(String(fluxID)))
+    .update(be32(fluxIdBuf.length))
+    .update(fluxIdBuf)
     .update(tsBe)
     .digest();
   return {
