@@ -101,6 +101,9 @@ function lockDelayRemaining(record, candidate, nowMs, lockDelayMs, servingSinceM
  * @returns {number} ms the candidate must still wait; 0 when free to proceed
  */
 function newGenerationSeatRemaining(record, request, nowMs, lockDelayMs, servingSinceMs, carriedIncumbent) {
+  // a founding is write-once and has no term to step across: the seat rule
+  // is the HELD plane's (a re-found at a later generation pays nothing here)
+  if (request.mode === 'oneshot') return 0;
   const generation = request.generation ?? 0;
   if (generation < 1) return 0;
   const accepted = record?.accepted;
