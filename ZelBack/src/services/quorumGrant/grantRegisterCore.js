@@ -61,24 +61,53 @@ function isGrantee(accepted, candidate) {
  * does. A released grant carries no delay — the holder said goodbye, nothing
  * is in doubt.
  *
- * The wait runs only while this grantor is refereeing. While the register was
- * closed — stale chain view, an unresynced return — nobody could have
- * reclaimed the lapsed row, so the exclusivity window the incumbent is owed
- * must not have burned in its absence: the anchor is the LATER of the row's
- * death and the grantor's last return to refereeing (refereeingSinceMs,
- * carried beside the knobs by the controller). Anchored at row death alone,
- * a coast outliving lockDelay − demotionSlack inverts the holder's
- * stop-before-successor ordering the moment the grantor comes back. An
- * absent anchor keeps the row-death behaviour.
+ * The wait runs only while this grantor could serve the key. While the
+ * register was closed — stale chain view, an unresynced return, a re-rolled
+ * generation still draining, the owner's record not yet received — nobody
+ * could have reclaimed the lapsed row, so the exclusivity window the
+ * incumbent is owed must not have burned in its absence: the anchor is the
+ * LATER of the row's death and the cell's serving-since (servingSinceMs,
+ * carried beside the knobs by the controller: its last return to refereeing,
+ * or its first serve under the standing generation past that generation's
+ * drain, whichever is later). Anchored at row death alone, a coast outliving
+ * lockDelay − demotionSlack inverts the holder's stop-before-successor
+ * ordering the moment the grantor comes back (formal/quiet-window run 3), and
+ * a dead old-world row is taken at the instant the drain lifts (its family Q
+ * trace). An absent anchor keeps the row-death behaviour.
  *
  * @returns {number} ms the candidate must still wait; 0 when free to proceed
  */
-function lockDelayRemaining(record, candidate, nowMs, lockDelayMs, refereeingSinceMs) {
+function lockDelayRemaining(record, candidate, nowMs, lockDelayMs, servingSinceMs) {
   if (grantState(record, nowMs) !== 'lapsed') return 0;
   if (isGrantee(record.accepted, candidate)) return 0;
-  const anchorMs = Math.max(record.accepted.expiresAt, refereeingSinceMs ?? 0);
+  const anchorMs = Math.max(record.accepted.expiresAt, servingSinceMs ?? 0);
   const lockedUntil = anchorMs + lockDelayMs;
   return Math.max(0, lockedUntil - nowMs);
+}
+
+/**
+ * The empty seat a re-roll creates. A re-rolled generation's row at this cell
+ * is EMPTY — nothing of that generation was ever accepted here — so no
+ * row-death rule can hold a successor, and the register is closed to that
+ * generation until the drain lifts and the record is received, neither of
+ * which ages any row. The seat therefore opens to a candidate other than this
+ * cell's own recorded grantee one lock-delay past the cell's serving-since
+ * (formal/quiet-window, DrainLiftAnchoredLockDelay and its receipt half): the
+ * recorded grantee claims at once, its step-across being what the wait exists
+ * to order before. A row of the asked generation, whatever its state, is the
+ * row rules' business; generation zero is an app's birth, not a re-roll, and
+ * pays nothing here. An absent anchor leaves the seat open.
+ *
+ * @returns {number} ms the candidate must still wait; 0 when free to proceed
+ */
+function newGenerationSeatRemaining(record, request, nowMs, lockDelayMs, servingSinceMs) {
+  const generation = request.generation ?? 0;
+  if (generation < 1) return 0;
+  const accepted = record?.accepted;
+  if (accepted && (accepted.generation ?? 0) === generation) return 0;
+  if (isGrantee(accepted, request.candidate ?? request.grantee)) return 0;
+  if (!servingSinceMs) return 0;
+  return Math.max(0, servingSinceMs + lockDelayMs - nowMs);
 }
 
 /**
@@ -122,9 +151,13 @@ function decidePrepare(record, request, nowMs, tunables) {
     return { reply: refusal('incumbent_active', record), record: null };
   }
 
-  const waitMs = lockDelayRemaining(record, candidate, nowMs, tunables.lockDelayMs, tunables.refereeingSinceMs);
+  const waitMs = lockDelayRemaining(record, candidate, nowMs, tunables.lockDelayMs, tunables.servingSinceMs);
   if (waitMs > 0) {
     return { reply: refusal('lock_delay', record, { retryAfterMs: waitMs }), record: null };
+  }
+  const seatMs = newGenerationSeatRemaining(record, request, nowMs, tunables.lockDelayMs, tunables.servingSinceMs);
+  if (seatMs > 0) {
+    return { reply: refusal('lock_delay', record, { retryAfterMs: seatMs }), record: null };
   }
 
   if (epoch <= promisedEpoch) {
@@ -187,9 +220,13 @@ function onAccept(record, request, nowMs, tunables) {
     return { reply: refusal('incumbent_active', record), record: null };
   }
 
-  const waitMs = lockDelayRemaining(record, grantee, nowMs, tunables.lockDelayMs, tunables.refereeingSinceMs);
+  const waitMs = lockDelayRemaining(record, grantee, nowMs, tunables.lockDelayMs, tunables.servingSinceMs);
   if (waitMs > 0) {
     return { reply: refusal('lock_delay', record, { retryAfterMs: waitMs }), record: null };
+  }
+  const seatMs = newGenerationSeatRemaining(record, request, nowMs, tunables.lockDelayMs, tunables.servingSinceMs);
+  if (seatMs > 0) {
+    return { reply: refusal('lock_delay', record, { retryAfterMs: seatMs }), record: null };
   }
 
   if (epoch < promisedEpoch) {

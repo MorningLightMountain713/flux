@@ -207,7 +207,7 @@ describe('quorumGrant grantRegister', () => {
       const anchored = await grantRegister.prepare(
         'app/master',
         { epoch: 3, candidate: 'b:0' },
-        { refereeingSinceMs: Date.now() - 1_000 },
+        { servingSinceMs: Date.now() - 1_000 },
       );
       expect(anchored.code).to.equal('lock_delay');
       expect(anchored.retryAfterMs).to.be.greaterThan(0);
@@ -216,7 +216,7 @@ describe('quorumGrant grantRegister', () => {
       const incumbent = await grantRegister.prepare(
         'app/master',
         { epoch: 4, candidate: 'a:0' },
-        { refereeingSinceMs: Date.now() - 1_000 },
+        { servingSinceMs: Date.now() - 1_000 },
       );
       expect(incumbent.ok).to.equal(true);
     });
