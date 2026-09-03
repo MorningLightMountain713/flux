@@ -44,6 +44,25 @@ const GRACE_MS = Object.freeze({
   [DROP_REASON.RESTART]: RESTART_GRACE_MS,
 });
 
+// THE COURTESY. An honoured stop leaves no row anywhere, which is what makes
+// it cheap and what makes it invisible to the rungs. The jurors see every
+// one on the connection they hold, so each keeps a private count per
+// subject (the mild ladder's memory rule: no message carries it, it dies
+// with the process) and honours a code only so many times in the window;
+// beyond that it looks at the drop as for an unannounced death, all
+// fourteen cross together, and the certificate forms with the real reason
+// on it. Generous on purpose (2026-09-02): a release plus a hardware job is
+// two reboots and costs nothing; tuned down in a release once the fleet
+// shows what normal looks like.
+const SHUTDOWN_COURTESY = 4;
+const RESTART_COURTESY = 12;
+const COURTESY_WINDOW_BLOCKS = 720;
+
+const COURTESY = Object.freeze({
+  [DROP_REASON.SHUTDOWN]: SHUTDOWN_COURTESY,
+  [DROP_REASON.RESTART]: RESTART_COURTESY,
+});
+
 class NodeDownJuror {
   /** @type {object} */
   #deps;
@@ -70,6 +89,13 @@ class NodeDownJuror {
    * @type {Map<string, {reason: string, droppedAt: number, height: number, lookAt: number}>}
    */
   #deferrals = new Map();
+
+  /**
+   * The courtesy spent: subject → reason → heights of the honoured drops
+   * inside the window. Duties only; gone with the process.
+   * @type {Map<string, Object<string, number[]>>}
+   */
+  #courtesy = new Map();
 
   /**
    * @param {object} deps
@@ -114,15 +140,43 @@ class NodeDownJuror {
    */
   noteDrop(subject, reason) {
     const droppedAt = this.#deps.now();
-    if (!(reason in GRACE_MS)) {
+    if (!(reason in GRACE_MS) || !this.#honours(subject, reason)) {
       this.#deferrals.delete(subject);
-      this.look(subject, 'drop', { droppedAt, reason: DROP_REASON.UNANNOUNCED });
+      this.look(subject, 'drop', { droppedAt, reason: reason in GRACE_MS ? reason : DROP_REASON.UNANNOUNCED });
       return { honoured: false };
     }
     this.#deferrals.set(subject, {
       reason, droppedAt, height: this.#deps.currentHeight(), lookAt: droppedAt + GRACE_MS[reason],
     });
     return { honoured: true };
+  }
+
+  /**
+   * Spend one courtesy for this code if any is left in the window. The
+   * (limit + 1)-th code is not honoured, and spends nothing.
+   */
+  #honours(subject, reason) {
+    const height = this.#deps.currentHeight();
+    let spent = this.#courtesy.get(subject);
+    if (!spent) {
+      spent = { [DROP_REASON.SHUTDOWN]: [], [DROP_REASON.RESTART]: [] };
+      this.#courtesy.set(subject, spent);
+    }
+    spent[reason] = spent[reason].filter((at) => at > height - COURTESY_WINDOW_BLOCKS);
+    if (spent[reason].length >= COURTESY[reason]) return false;
+    spent[reason].push(height);
+    return true;
+  }
+
+  /**
+   * Keep the courtesy memory of these duties only; the list has moved the
+   * rest away.
+   * @param {Set<string>} outpoints the duties still owed
+   */
+  retain(outpoints) {
+    [...this.#courtesy.keys()].forEach((subject) => {
+      if (!outpoints.has(subject)) this.#courtesy.delete(subject);
+    });
   }
 
   /**
@@ -422,4 +476,7 @@ class NodeDownJuror {
 module.exports = {
   NodeDownJuror,
   DROP_REASON,
+  SHUTDOWN_COURTESY,
+  RESTART_COURTESY,
+  COURTESY_WINDOW_BLOCKS,
 };

@@ -397,7 +397,7 @@ export function nodeClient(nodeNum) {
         'nodedown:stored',
         'nodedown:refused',
         'nodedown:verdict',
-        'nodedown:quarantined',
+        'nodedown:lockedOut',
         'nodedown:inboundRefused',
         'network:apprunning',
         // entries of an apprunning message this node refused, by gossip or sync

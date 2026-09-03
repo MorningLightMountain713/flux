@@ -144,14 +144,22 @@ async function openInstalledAppPorts() {
  * Whether this node's own derived rows still place it: the one question a node
  * asks after its sync and before any announce. The rows a certificate negated
  * once its grace ran, rows that expired while the node was away, and rows that
- * never existed all answer no together.
+ * never existed all answer no together. A locked-out node — four certifications
+ * standing — is not placed whatever its rows say: the lockout's self-uninstall.
  * @param {string} localSocketAddr
- * @returns {Promise<boolean>}
+ * @returns {Promise<{placed: boolean, why: string}>} `why` says what a no rests on
  * @throws {Error} When the rows cannot be read.
  */
 async function readPlacement(localSocketAddr) {
-  const rows = await appsRepository.appLocationFromEvents({ ip: localSocketAddr });
-  return rows.length > 0;
+  // eslint-disable-next-line global-require
+  const nodeDownStore = require('../appMessaging/nodeDownStore');
+  const [rows, lockout] = await Promise.all([
+    appsRepository.appLocationFromEvents({ ip: localSocketAddr }),
+    nodeDownStore.lockoutForAddress(localSocketAddr),
+  ]);
+  if (lockout.lockedOut) return { placed: false, why: `locked out (${lockout.count} certifications standing)` };
+  if (rows.length > 0) return { placed: true, why: '' };
+  return { placed: false, why: `no row places ${localSocketAddr} any more, the network has moved on` };
 }
 
 /**
@@ -182,7 +190,8 @@ async function removeUnplacedApps(installedApps) {
  * after the resync, and on hearing a certificate about this node. Placed: every
  * app is kept and the caller announces. Not placed: every installed app is
  * removed, whatever its containers are doing, and nothing is broadcast. There is
- * no per-app test and no middle ground.
+ * no per-app test and no middle ground. A locked-out node takes the not-placed
+ * branch whatever its rows say.
  *
  * A database wobble or a missing address is never the reason an app is deleted:
  * no address keeps every app, and rows that cannot be read answer `placed: null`,
@@ -199,16 +208,16 @@ async function enforceNodePlacement(trigger) {
     log.warn(`appStartupManager - placement check (${trigger}) skipped: no local address`);
     return { placed: true, removed: [], failed: [] };
   }
-  let placed;
+  let placement;
   try {
-    placed = await readPlacement(localSocketAddr);
+    placement = await readPlacement(localSocketAddr);
   } catch (error) {
     log.error(`appStartupManager - placement check (${trigger}) could not read the rows, deciding nothing: ${error.message}`);
     return { placed: null, removed: [], failed: [] };
   }
-  if (placed) return { placed: true, removed: [], failed: [] };
+  if (placement.placed) return { placed: true, removed: [], failed: [] };
 
-  log.warn(`appStartupManager - placement check (${trigger}): no row places ${localSocketAddr} any more, the network has moved on; removing ${installedApps.length} app(s), no broadcast`);
+  log.warn(`appStartupManager - placement check (${trigger}): ${placement.why}; removing ${installedApps.length} app(s), no broadcast`);
   return { placed: false, ...await removeUnplacedApps(installedApps) };
 }
 
@@ -226,7 +235,7 @@ async function enforceNodePlacement(trigger) {
 async function confirmHeldApps(holds, localSocketAddr) {
   const isHeld = (appName) => globalState.unconfirmedApps.get(appName) === holds.get(appName);
   await serviceHelper.delay(BOOT_STEP_RETRY_MS);
-  const placed = await untilSucceeds('Placement check', () => readPlacement(localSocketAddr));
+  const { placed, why } = await untilSucceeds('Placement check', () => readPlacement(localSocketAddr));
   // eslint-disable-next-line no-restricted-syntax
   for (const appName of holds.keys()) {
     // eslint-disable-next-line no-await-in-loop
@@ -247,7 +256,7 @@ async function confirmHeldApps(holds, localSocketAddr) {
     }
     return;
   }
-  log.warn(`appStartupManager - placement check (boot): no row places ${localSocketAddr} any more, the network has moved on; removing every app, no broadcast`);
+  log.warn(`appStartupManager - placement check (boot): ${why}; removing every app, no broadcast`);
   holds.forEach((hold, appName) => fluxEventBus.publish('boot:appConfirmed', { name: appName, valid: false }));
   try {
     await removeUnplacedApps(await getInstalledAppNamesFromDb());
