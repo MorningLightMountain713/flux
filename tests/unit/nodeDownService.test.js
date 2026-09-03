@@ -18,7 +18,7 @@ function makeHarness() {
     handleNodeDownEvent: sinon.stub().resolves({ accepted: true, rebroadcast: true, reason: 'stored' }),
     standingCertificateFor: sinon.stub().resolves(null),
     recordStateFor: sinon.stub().resolves({ state: 'none', key: null }),
-    quarantineFor: sinon.stub().resolves({ quarantined: false, count: 0, liftsAt: null }),
+    lockoutFor: sinon.stub().resolves({ lockedOut: false, count: 0, liftsAt: null }),
     announce: sinon.stub(),
     noteReturn: sinon.stub(),
     noteMeshReturn: sinon.stub(),
@@ -41,7 +41,7 @@ function makeHarness() {
       handleNodeDownEvent: stubs.handleNodeDownEvent,
       standingCertificateFor: stubs.standingCertificateFor,
       recordStateFor: stubs.recordStateFor,
-      quarantineFor: stubs.quarantineFor,
+      lockoutFor: stubs.lockoutFor,
     },
     './appMessaging/peerNotification': { checkAndNotifyPeersOfRunningApps: stubs.announce },
     './appLifecycle/appStartupManager': { enforceNodePlacement: stubs.enforcePlacement },
@@ -249,7 +249,7 @@ describe('nodeDownService', () => {
     });
   });
 
-  describe('severe quarantine — the stand-down held open, the inbound refused, the lapse still probed', () => {
+  describe('the lockout — the stand-down held open, the inbound refused, the lapse still probed', () => {
     it('start installs the peering gate; stop removes it', async () => {
       const { service, transport } = makeHarness();
       service.start(transport);
@@ -260,27 +260,29 @@ describe('nodeDownService', () => {
       expect(transport.peerManager.setInboundGate.lastCall.args[0]).to.equal(null);
     });
 
-    it('the gate refuses a listed subject under quarantine and admits everyone else', async () => {
+    it('the gate refuses a listed subject under lockout and admits everyone else — a placement freeze refuses nobody', async () => {
       const harness = makeHarness();
       withDuty(harness);
       const { service, transport, stubs } = harness;
-      stubs.quarantineFor.withArgs(DUTY_OUTPOINT).resolves({ quarantined: true, count: 3, liftsAt: 1 });
+      stubs.lockoutFor.withArgs(DUTY_OUTPOINT).resolves({ lockedOut: true, count: 4, liftsAt: 1 });
       service.start(transport);
       await tick();
       const gate = transport.peerManager.setInboundGate.firstCall.args[0];
 
-      expect(await gate(DUTY_IP)).to.deep.equal({ admitted: false, reason: 'quarantined', subject: DUTY_OUTPOINT });
-      expect(await gate(MY_IP)).to.deep.equal({ admitted: true, reason: 'not_quarantined' });
+      expect(await gate(DUTY_IP)).to.deep.equal({ admitted: false, reason: 'locked_out', subject: DUTY_OUTPOINT });
+      stubs.lockoutFor.withArgs(DUTY_OUTPOINT).resolves({ lockedOut: false, count: 3, liftsAt: null });
+      expect(await gate(DUTY_IP)).to.deep.equal({ admitted: true, reason: 'not_locked_out' });
+      expect(await gate(MY_IP)).to.deep.equal({ admitted: true, reason: 'not_locked_out' });
       expect(await gate('10.0.0.9:16127')).to.deep.equal({ admitted: true, reason: 'unlisted' });
       service.stop();
     });
 
-    it('a quarantined duty stays out of the dial plan though its certificate is refuted', async () => {
+    it('a locked-out duty stays out of the dial plan though its certificate is refuted', async () => {
       const harness = makeHarness();
       withDuty(harness);
       const { service, transport, stubs } = harness;
       stubs.recordStateFor.withArgs(DUTY_OUTPOINT).resolves({ state: 'refuted', key: 'nodedown:x:0:90' });
-      stubs.quarantineFor.withArgs(DUTY_OUTPOINT).resolves({ quarantined: true, count: 3, liftsAt: 1 });
+      stubs.lockoutFor.withArgs(DUTY_OUTPOINT).resolves({ lockedOut: true, count: 4, liftsAt: 1 });
       service.start(transport);
       await tick();
       await service.sweep();
@@ -288,7 +290,7 @@ describe('nodeDownService', () => {
       expect(transport.dial.callCount).to.equal(0);
 
       // the hold lifts: the same refuted record now lets the duty be dialed
-      stubs.quarantineFor.withArgs(DUTY_OUTPOINT).resolves({ quarantined: false, count: 2, liftsAt: null });
+      stubs.lockoutFor.withArgs(DUTY_OUTPOINT).resolves({ lockedOut: false, count: 3, liftsAt: null });
       await service.sweep();
       await tick();
       expect(transport.dial.firstCall.args[0]).to.equal(DUTY_IP);
@@ -300,7 +302,7 @@ describe('nodeDownService', () => {
       withDuty(harness);
       const { service, transport, stubs } = harness;
       transport.peerManager.has = (socketAddress) => socketAddress === DUTY_IP;
-      stubs.quarantineFor.withArgs(DUTY_OUTPOINT).resolves({ quarantined: true, count: 3, liftsAt: 1 });
+      stubs.lockoutFor.withArgs(DUTY_OUTPOINT).resolves({ lockedOut: true, count: 4, liftsAt: 1 });
       service.start(transport);
       await tick();
 
@@ -308,7 +310,7 @@ describe('nodeDownService', () => {
         certificate: { subject: DUTY_OUTPOINT, height: 100 },
         broadcastedAt: Date.now(),
       });
-      expect(transport.closePeer.args).to.deep.equal([[DUTY_IP, 'quarantined']]);
+      expect(transport.closePeer.args).to.deep.equal([[DUTY_IP, 'locked out']]);
       service.stop();
     });
 
@@ -317,7 +319,7 @@ describe('nodeDownService', () => {
       withDuty(harness);
       const { service, transport, stubs } = harness;
       stubs.recordStateFor.withArgs(DUTY_OUTPOINT).resolves({ state: 'standing', key: 'nodedown:x:0:90' });
-      stubs.quarantineFor.withArgs(DUTY_OUTPOINT).resolves({ quarantined: true, count: 3, liftsAt: 1 });
+      stubs.lockoutFor.withArgs(DUTY_OUTPOINT).resolves({ lockedOut: true, count: 4, liftsAt: 1 });
       service.start(transport);
       await tick();
       await service.sweep();
@@ -565,8 +567,9 @@ describe('nodeDownService — the drop carries its reason, and the probe is an e
     service.start(transport);
     await tick();
 
-    // four coded drop-and-return cycles: not one probe, and no damping
-    for (let i = 0; i < 4; i += 1) {
+    // three coded drop-and-return cycles inside the courtesy: not one probe,
+    // and no damping (the fourth close below is the last honoured one)
+    for (let i = 0; i < 3; i += 1) {
       drop(transport, CLOSE_CODES.SHUTTING_DOWN);
       world.height += 1;
       held(transport);

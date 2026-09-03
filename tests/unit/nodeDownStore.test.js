@@ -252,7 +252,7 @@ describe('nodeDownStore', () => {
     });
   });
 
-  describe('severe quarantine — counted from the certification rows', () => {
+  describe('the two rungs — placement freeze and lockout, counted from the certification rows', () => {
     const SUBJECT_ADDRESS = '10.9.0.20:16127';
 
     async function certify(height, at) {
@@ -269,36 +269,44 @@ describe('nodeDownStore', () => {
       });
     }
 
-    // Three deaths, each refuted before the next, so each certification lands its own row.
-    async function certifyThrice() {
-      const first = Date.now() - 300_000;
-      await certify(1001, first);
-      await announce(first + 10_000, 'v1');
-      await certify(1002, first + 60_000);
-      await announce(first + 70_000, 'v2');
-      await certify(1003, first + 120_000);
+    // Deaths, each refuted before the next, so each certification lands its own row.
+    async function certifyTimes(n) {
+      const first = Date.now() - 600_000;
+      for (let i = 0; i < n; i += 1) {
+        // eslint-disable-next-line no-await-in-loop
+        await certify(1001 + i, first + i * 60_000);
+        // eslint-disable-next-line no-await-in-loop
+        if (i < n - 1) await announce(first + i * 60_000 + 10_000, `v${i + 1}`);
+      }
       return first;
     }
 
-    it('nothing certified: no hold, no record', async () => {
-      expect(await store.quarantineFor(S)).to.deep.equal({ quarantined: false, count: 0, liftsAt: null });
+    it('nothing certified: no rung, no record', async () => {
+      expect(await store.placementFreezeFor(S)).to.deep.equal({ frozen: false, count: 0, liftsAt: null });
+      expect(await store.lockoutFor(S)).to.deep.equal({ lockedOut: false, count: 0, liftsAt: null });
       expect(await store.recordStateFor(S)).to.deep.equal({ state: 'none', key: null });
     });
 
-    it('two certifications hold nothing', async () => {
-      const first = Date.now() - 300_000;
-      await certify(1001, first);
-      await announce(first + 10_000, 'v1');
-      await certify(1002, first + 60_000);
-      expect(await store.quarantineFor(S)).to.deep.equal({ quarantined: false, count: 2, liftsAt: null });
+    it('one certification holds nothing', async () => {
+      await certifyTimes(1);
+      expect((await store.placementFreezeFor(S)).frozen).to.equal(false);
+      expect((await store.lockoutFor(S)).lockedOut).to.equal(false);
     });
 
-    it('the third certification trips the hold: refuted rows count as deaths, the lift is the first row\'s expiry', async () => {
-      const first = await certifyThrice();
-      expect(await store.quarantineFor(S)).to.deep.equal({
-        quarantined: true, count: 3, liftsAt: first + RECORD_LIFETIME_MS,
-      });
-      expect(await store.recordStateFor(S)).to.deep.equal({ state: 'standing', key: `nodedown:${S}:1003` });
+    it('the second certification freezes placement and nothing more; refuted rows count as deaths; the lift is the first row\'s expiry', async () => {
+      const first = await certifyTimes(2);
+      expect(await store.placementFreezeFor(S)).to.deep.equal({ frozen: true, count: 2, liftsAt: first + RECORD_LIFETIME_MS });
+      expect(await store.lockoutFor(S)).to.deep.equal({ lockedOut: false, count: 2, liftsAt: null });
+      expect(await store.recordStateFor(S)).to.deep.equal({ state: 'standing', key: `nodedown:${S}:1002` });
+    });
+
+    it('the third holds nothing more; the fourth locks the subject out until the count falls under four', async () => {
+      const first = await certifyTimes(3);
+      expect((await store.lockoutFor(S)).lockedOut).to.equal(false);
+      await announce(first + 130_000, 'v3');
+      await certify(1004, first + 180_000);
+      expect(await store.lockoutFor(S)).to.deep.equal({ lockedOut: true, count: 4, liftsAt: first + RECORD_LIFETIME_MS });
+      expect((await store.placementFreezeFor(S))).to.deep.equal({ frozen: true, count: 4, liftsAt: first + 120_000 + RECORD_LIFETIME_MS });
     });
 
     it('recordStateFor names the record while it stands and after the announcement refutes it', async () => {
@@ -309,11 +317,12 @@ describe('nodeDownStore', () => {
       expect(await store.recordStateFor(S)).to.deep.equal({ state: 'refuted', key: `nodedown:${S}:1001` });
     });
 
-    it('quarantineForAddress resolves the listed subject, with or without its port, and holds nothing for an unlisted address', async () => {
-      await certifyThrice();
-      expect((await store.quarantineForAddress(SUBJECT_ADDRESS)).quarantined).to.equal(true);
-      expect((await store.quarantineForAddress('10.9.0.20')).count).to.equal(3);
-      expect(await store.quarantineForAddress('10.9.0.99:16127')).to.deep.equal({ quarantined: false, count: 0, liftsAt: null });
+    it('the address forms resolve the listed subject, with or without its port, and hold nothing for an unlisted address', async () => {
+      await certifyTimes(4);
+      expect((await store.lockoutForAddress(SUBJECT_ADDRESS)).lockedOut).to.equal(true);
+      expect((await store.placementFreezeForAddress('10.9.0.20')).count).to.equal(4);
+      expect(await store.lockoutForAddress('10.9.0.99:16127')).to.deep.equal({ lockedOut: false, count: 0, liftsAt: null });
+      expect(await store.placementFreezeForAddress('10.9.0.99:16127')).to.deep.equal({ frozen: false, count: 0, liftsAt: null });
     });
 
     it('a lapsed row the TTL sweep has not deleted yet is not counted', async () => {
@@ -325,11 +334,8 @@ describe('nodeDownStore', () => {
         expireAt: new Date(Date.now() - 1000),
         data: { certificate: {} },
       });
-      const first = Date.now() - 300_000;
-      await certify(1001, first);
-      await announce(first + 10_000, 'v1');
-      await certify(1002, first + 60_000);
-      expect(await store.quarantineFor(S)).to.deep.equal({ quarantined: false, count: 2, liftsAt: null });
+      await certifyTimes(1);
+      expect(await store.placementFreezeFor(S)).to.deep.equal({ frozen: false, count: 1, liftsAt: null });
     });
   });
 

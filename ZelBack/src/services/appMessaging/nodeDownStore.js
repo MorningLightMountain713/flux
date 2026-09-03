@@ -11,7 +11,9 @@ const { APP_STATE_EVENT_TYPES } = require('./messageStore');
 const { globalAppStateEvents, CLOCK_SKEW_ALLOWANCE_MS, NODE_DOWN_GRACE_MS } = require('../utils/appConstants');
 const {
   verifyCertificate,
-  quarantineFromExpiries,
+  standingRowsHold,
+  PLACEMENT_FREEZE_ROWS,
+  LOCKOUT_ROWS,
   RECORD_LIFETIME_MS,
   VERDICT_LIFETIME_BLOCKS,
   FUTURE_BLOCKS_TOLERANCE,
@@ -21,7 +23,7 @@ const { normalizeSocketAddress } = require('../utils/socketAddressUtils');
 
 // The nodedown record store: one row PER CERTIFICATION, keyed on the
 // certificate — never a constant dedupKey, or re-certification overwrites
-// the one row and the flap-quarantine count has nothing to count.
+// the one row and the rungs' count has nothing to count.
 // Verification runs at EVERY intake, gossip and sync alike, and an invalid
 // certificate is never stored and never relayed — a forgery dies at its
 // first hop.
@@ -262,33 +264,65 @@ async function recordStateFor(subject) {
 }
 
 /**
- * The severe quarantine verdict for a subject, counted over every unexpired
- * certification row — refuted ones included, since each is a death the
- * network certified. Rows are synced, so every node counts the same.
- *
- * @param {string} subject collateral outpoint
- * @returns {Promise<{quarantined: boolean, count: number, liftsAt: number|null}>}
+ * The rungs for a subject, counted over every unexpired certification row —
+ * refuted ones included, since each is a death the network certified. Rows
+ * are synced, so every node counts the same.
  */
-async function quarantineFor(subject) {
+async function rowExpiries(subject) {
   const live = await liveRowsFor(subject);
-  return quarantineFromExpiries(live.map((row) => new Date(row.expireAt).getTime()), Date.now());
+  return live.map((row) => new Date(row.expireAt).getTime());
 }
 
 /**
- * The same verdict looked up by a node's listed address — what a node has
- * for itself before it knows its outpoint. An address the list does not
- * carry has no rows to count.
+ * Placement freeze: the subject's own spawner declines new apps; nothing
+ * else changes.
+ *
+ * @param {string} subject collateral outpoint
+ * @returns {Promise<{frozen: boolean, count: number, liftsAt: number|null}>}
+ */
+async function placementFreezeFor(subject) {
+  const { held, count, liftsAt } = standingRowsHold(await rowExpiries(subject), Date.now(), PLACEMENT_FREEZE_ROWS);
+  return { frozen: held, count, liftsAt };
+}
+
+/**
+ * Lockout: peers refuse the subject's inbound, its jurors stand down, and
+ * it removes every app it holds.
+ *
+ * @param {string} subject collateral outpoint
+ * @returns {Promise<{lockedOut: boolean, count: number, liftsAt: number|null}>}
+ */
+async function lockoutFor(subject) {
+  const { held, count, liftsAt } = standingRowsHold(await rowExpiries(subject), Date.now(), LOCKOUT_ROWS);
+  return { lockedOut: held, count, liftsAt };
+}
+
+/**
+ * The listed subject at an address — what a node has for itself before it
+ * knows its outpoint. An address the list does not carry has no rows.
  *
  * @param {string} socketAddress ip or ip:port
- * @returns {Promise<{quarantined: boolean, count: number, liftsAt: number|null}>}
+ * @returns {string|null} outpoint
  */
-async function quarantineForAddress(socketAddress) {
+function listedSubjectAt(socketAddress) {
   const wanted = normalizeSocketAddress(socketAddress);
-  const listed = wanted
-    ? networkStateService.networkState().find((node) => normalizeSocketAddress(node.ip) === wanted)
-    : undefined;
-  if (!listed) return { quarantined: false, count: 0, liftsAt: null };
-  return quarantineFor(`${listed.txhash}:${listed.outidx}`);
+  const listed = networkStateService.networkState().find((node) => {
+    const nodeAddress = normalizeSocketAddress(node.ip);
+    return nodeAddress === wanted || nodeAddress?.split(':')[0] === wanted;
+  });
+  return listed ? `${listed.txhash}:${listed.outidx}` : null;
+}
+
+async function placementFreezeForAddress(socketAddress) {
+  const subject = listedSubjectAt(socketAddress);
+  if (!subject) return { frozen: false, count: 0, liftsAt: null };
+  return placementFreezeFor(subject);
+}
+
+async function lockoutForAddress(socketAddress) {
+  const subject = listedSubjectAt(socketAddress);
+  if (!subject) return { lockedOut: false, count: 0, liftsAt: null };
+  return lockoutFor(subject);
 }
 
 /**
@@ -346,8 +380,10 @@ module.exports = {
   handleNodeDownEvent,
   standingCertificateFor,
   recordStateFor,
-  quarantineFor,
-  quarantineForAddress,
+  placementFreezeFor,
+  placementFreezeForAddress,
+  lockoutFor,
+  lockoutForAddress,
   refutationFor,
   verifyRefutation,
   registerWithGrantPlane,

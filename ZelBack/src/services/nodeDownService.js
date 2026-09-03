@@ -103,7 +103,7 @@ async function primeLocalAddress() {
 /**
  * A record seen standing that is now gone unrefuted has lapsed: the jury
  * probes the subject once, so a still-dark node is re-certified rather than
- * forgotten at six hours — and a quarantined one, whose watchers no longer
+ * forgotten at six hours — and a locked-out one, whose watchers no longer
  * dial it, is re-certified through this probe alone. A refutation is a
  * return, not a lapse; it only ends the watch.
  */
@@ -119,17 +119,17 @@ function noteRecordState(outpoint, record) {
 
 /**
  * Whether a node is held out of the network: its certificate stands, or its
- * quarantine holds the stand-down open past the certificate. Both leave the
+ * lockout holds the stand-down open past the certificate. Both leave the
  * node out of the dial plan and off the verdict push list.
  */
 async function stoodDown(outpoint) {
   try {
-    const [record, quarantine] = await Promise.all([
+    const [record, lockout] = await Promise.all([
       nodeDownStore.recordStateFor(outpoint),
-      nodeDownStore.quarantineFor(outpoint),
+      nodeDownStore.lockoutFor(outpoint),
     ]);
     noteRecordState(outpoint, record);
-    return record.state === RECORD_STATE.STANDING || quarantine.quarantined;
+    return record.state === RECORD_STATE.STANDING || lockout.lockedOut;
   } catch (error) {
     return false;
   }
@@ -137,8 +137,8 @@ async function stoodDown(outpoint) {
 
 /**
  * The peering gate the peer manager asks before a peering inbound registers.
- * Only a listed subject under quarantine is refused; who else may peer is
- * decided where it always was.
+ * Only a listed subject under the lockout is refused — a placement freeze
+ * refuses nobody; who else may peer is decided where it always was.
  *
  * @param {string} socketAddress the dialer's ip:port
  * @returns {Promise<{admitted: boolean, reason: string, subject?: string}>}
@@ -148,32 +148,32 @@ async function inboundGate(socketAddress) {
   const subject = index.bySocket.get(normalizeSocketAddress(socketAddress));
   if (!subject) return { admitted: true, reason: 'unlisted' };
   try {
-    const quarantine = await nodeDownStore.quarantineFor(subject);
-    if (!quarantine.quarantined) return { admitted: true, reason: 'not_quarantined' };
+    const lockout = await nodeDownStore.lockoutFor(subject);
+    if (!lockout.lockedOut) return { admitted: true, reason: 'not_locked_out' };
     fluxEventBus.publish('nodedown:inboundRefused', {
-      subject, socketAddress, count: quarantine.count, liftsAt: quarantine.liftsAt,
+      subject, socketAddress, count: lockout.count, liftsAt: lockout.liftsAt,
     });
-    return { admitted: false, reason: 'quarantined', subject };
+    return { admitted: false, reason: 'locked_out', subject };
   } catch (error) {
-    log.warn(`nodeDownService: quarantine lookup for ${subject} failed, admitting: ${error.message}`);
+    log.warn(`nodeDownService: lockout lookup for ${subject} failed, admitting: ${error.message}`);
     return { admitted: true, reason: 'store_error' };
   }
 }
 
 /**
- * A certification just stored may have tripped the subject's quarantine:
- * say so, and drop any connection still held to it — its watchers will not
- * dial it and the gate will not readmit it until the hold lifts.
+ * A certification just stored may have locked the subject out: say so, and
+ * drop any connection still held to it — its watchers will not dial it and
+ * the gate will not readmit it until the hold lifts.
  */
-async function noteQuarantine(subject, source) {
-  const quarantine = await nodeDownStore.quarantineFor(subject);
-  if (!quarantine.quarantined) return;
-  fluxEventBus.publish('nodedown:quarantined', {
-    subject, source, count: quarantine.count, liftsAt: quarantine.liftsAt,
+async function noteLockout(subject, source) {
+  const lockout = await nodeDownStore.lockoutFor(subject);
+  if (!lockout.lockedOut) return;
+  fluxEventBus.publish('nodedown:lockedOut', {
+    subject, source, count: lockout.count, liftsAt: lockout.liftsAt,
   });
   const socketAddress = resolveOutpoint(subject);
   if (transport && socketAddress && transport.peerManager.has(socketAddress)) {
-    transport.closePeer(socketAddress, 'quarantined');
+    transport.closePeer(socketAddress, 'locked out');
   }
 }
 
@@ -304,7 +304,7 @@ async function intakeCertificate(message, envelope, source) {
     return result;
   }
   fluxEventBus.publish('nodedown:stored', { subject: message.certificate.subject, source });
-  await noteQuarantine(message.certificate.subject, source);
+  await noteLockout(message.certificate.subject, source);
   // every ordinal the certified node holds is reclaimed by this certificate
   // (the grant plane's ordinal registers; a host of the app issues the asks)
   ordinalRegister.noteCertificate(message.certificate).catch((error) => log.warn(`nodeDownService - ordinal vacate: ${error.message}`));
@@ -532,6 +532,7 @@ async function sweep() {
   await primeLocalAddress();
   const duties = dutyOutpoints();
   ladder.retain(duties);
+  juror.retain(duties);
   // A record seen standing for a node the list has since dropped is never
   // asked about again: forget it, so a later relisting starts clean.
   [...seenStanding.keys()].forEach((outpoint) => {

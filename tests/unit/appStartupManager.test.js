@@ -8,6 +8,7 @@ const proxyquire = require('proxyquire').noCallThru();
 describe('appStartupManager tests', () => {
   let appStartupManager;
   let appUtilities;
+  let nodeDownStoreStub;
   let logStub;
   let dbHelperStub;
   let appsRepositoryStub;
@@ -61,6 +62,10 @@ describe('appStartupManager tests', () => {
       removeUnrequiredDependencies: sinon.stub().resolves(),
     };
 
+    nodeDownStoreStub = {
+      lockoutForAddress: sinon.stub().resolves({ lockedOut: false, count: 0, liftsAt: null }),
+    };
+
     const mockDb = { db: sinon.stub().returns('mockDatabase') };
     dbHelperStub.databaseConnection.returns(mockDb);
 
@@ -97,6 +102,7 @@ describe('appStartupManager tests', () => {
       '../appQuery/appQueryService': appQueryServiceStub,
       '../utils/appConstants': { localAppsInformation: 'localAppsInformation', NODE_DOWN_GRACE_MS: 420000, RUNNING_EXPIRY_MS: 7500000 },
       '../utils/appUtilities': appUtilities,
+      '../appMessaging/nodeDownStore': nodeDownStoreStub,
       '../nodeConfirmationService': {
         isConfirmed: sinon.stub().returns(true),
         waitForConfirmed: sinon.stub().resolves(),
@@ -337,6 +343,15 @@ describe('appStartupManager tests', () => {
       expect(await appStartupManager.enforceNodePlacement('certificate')).to.deep.equal({ placed: false, removed: ['AppA', 'AppB'], failed: [] });
       expect(appUninstallerStub.uninstallApplication.calledWith('AppA', REMOVE)).to.equal(true);
       expect(appUninstallerStub.uninstallApplication.calledWith('AppB', REMOVE)).to.equal(true);
+    });
+
+    it('a locked-out node removes every app though its rows still stand: the lockout\'s self-uninstall is this branch', async () => {
+      appsRepositoryStub.listInstalledAppNames.resolves(['AppA']);
+      appsRepositoryStub.appLocationFromEvents.resolves([{ name: 'AppA' }]);
+      nodeDownStoreStub.lockoutForAddress.resolves({ lockedOut: true, count: 4, liftsAt: 1 });
+      expect(await appStartupManager.enforceNodePlacement('certificate')).to.deep.equal({ placed: false, removed: ['AppA'], failed: [] });
+      sinon.assert.calledOnceWithExactly(nodeDownStoreStub.lockoutForAddress, '10.0.0.1:16127');
+      expect(appUninstallerStub.uninstallApplication.calledWith('AppA', REMOVE)).to.equal(true);
     });
 
     it('fails open: a lookup error or a missing address keeps every app', async () => {
