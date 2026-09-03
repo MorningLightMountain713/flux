@@ -446,6 +446,60 @@ function extendsCancelChain(journaled, carried) {
   return true;
 }
 
+/**
+ * Shape gate for a carried term credential (STEP_ACROSS_DESIGN.md D2): the
+ * retired world's basis, its roster chain if any, and the signed acceptances.
+ * Shape only — verified where used.
+ */
+function credentialWellFormed(carried) {
+  if (!carried || typeof carried !== 'object') return false;
+  if (typeof carried.fingerprint !== 'string' || !carried.fingerprint) return false;
+  if (!Number.isSafeInteger(carried.generation) || carried.generation < 0) return false;
+  if (!Number.isSafeInteger(carried.epoch) || carried.epoch < 1) return false;
+  if (carried.roster !== null && carried.roster !== undefined
+    && (!carried.roster || !chainWellFormed(carried.roster.chain))) return false;
+  if (!Array.isArray(carried.acceptances)) return false;
+  return carried.acceptances.every((a) => a && typeof a.grantor === 'string' && typeof a.signature === 'string');
+}
+
+/**
+ * The term credential (STEP_ACROSS_DESIGN.md D1/D2): does a quorum of the
+ * committee that granted the retired world's term attest that this
+ * candidate held it? The committee is derived exactly as the referees derive
+ * it — the walk key at the carried generation, then the carried roster chain
+ * — and each acceptance is verified over the term's identity with the
+ * CANDIDATE as grantee, so a bundle signed for someone else can never admit
+ * the node presenting it. Only the world immediately below the standing one
+ * counts: a credential from an older world proves nothing about who held the
+ * term at the re-roll.
+ *
+ * @returns {string|null} the verified incumbent (the candidate) or null
+ */
+function verifyTermCredential(membership, key, carried, { committeeSize, candidate, standingGeneration }) {
+  if (!credentialWellFormed(carried)) return null;
+  if (typeof candidate !== 'string' || !candidate) return null;
+  if (carried.generation !== standingGeneration - 1) return null;
+  const committee = verifyChain(
+    membership, key, carried.fingerprint, carried.generation, committeeSize, carried.roster?.chain ?? [],
+  );
+  if (!committee) return null;
+  const members = new Map(committee.members.map((node) => [outpointOf(node), node]));
+  const fields = signedEnvelope.fieldsFor('termaccept', {
+    key, fingerprint: carried.fingerprint, generation: carried.generation, epoch: carried.epoch, grantee: candidate,
+  });
+  if (!fields) return null;
+  const signers = new Set();
+  for (let i = 0; i < carried.acceptances.length; i += 1) {
+    const acceptance = carried.acceptances[i];
+    const signer = members.get(acceptance.grantor);
+    if (!signer || signers.has(acceptance.grantor)) continue; // eslint-disable-line no-continue
+    if (signedEnvelope.verify('termaccept', fields, acceptance.signature, signer.pubkey)) {
+      signers.add(acceptance.grantor);
+    }
+  }
+  return signers.size >= committee.quorum ? candidate : null;
+}
+
 module.exports = {
   chainCap,
   entryWellFormed,
@@ -460,4 +514,6 @@ module.exports = {
   cancelledSubjects,
   applyCancellations,
   extendsCancelChain,
+  credentialWellFormed,
+  verifyTermCredential,
 };
