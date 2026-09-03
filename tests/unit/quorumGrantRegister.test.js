@@ -4,6 +4,7 @@ const { expect } = require('chai');
 const sinon = require('sinon');
 
 const dbHelper = require('../../ZelBack/src/services/dbHelper');
+const config = require('config');
 const grantRegister = require('../../ZelBack/src/services/quorumGrant/grantRegister');
 const rosterOverlay = require('../../ZelBack/src/services/quorumGrant/rosterOverlay');
 const { selectCommittee } = require('../../ZelBack/src/services/utils/committeeSelector');
@@ -70,6 +71,69 @@ describe('quorumGrant grantRegister', () => {
     it('serves once the drain has elapsed', async () => {
       const reply = await grantRegister.prepare('app/master', { epoch: 1, candidate: 'a:0' });
       expect(reply.ok).to.equal(true);
+    });
+  });
+
+  // The rejoin drain is a closure of this register that no row and no
+  // controller observation records: the return anchor is stamped at the first
+  // ask after boot, while the drain has one max TTL still to run, so a lapsed
+  // row's lock-delay burns out inside the drain and a challenger is admitted
+  // the instant the drain lifts. Harmless while the master steps down before
+  // the lift (formal/quiet-window row 29, exhaustive); with the drain-aware
+  // coast keeping the master alive it is two masters at the lift (row 30, the
+  // trace). The register owns the drain, so it folds the drain's own lift
+  // into serving-since: the wait runs only while the register could serve.
+  describe('the rejoin lift is a serving-since anchor', () => {
+    const lockDelayMs = config.fluxapps.quorumGrantLockDelayMs ?? 30_000;
+    const drainMs = config.fluxapps.quorumGrantDrainMs ?? config.fluxapps.quorumGrantMaxTtlMs ?? 300_000;
+    const liftedAgo = (ms) => process.hrtime.bigint() / 1_000_000n - BigInt(drainMs + ms);
+    const lapsedRow = () => {
+      store.set('app/master', {
+        _id: 'app/master',
+        promisedEpoch: 5,
+        accepted: {
+          epoch: 5, grantee: 'a:0', mode: 'held', fingerprint: 'fp', expiresAt: Date.now() - 600_000, released: false,
+        },
+      });
+    };
+
+    it('a challenger of a lapsed row waits one lock-delay from the lift, whatever the controller stamped', async () => {
+      grantRegister.resetForTests({ startedMs: liftedAgo(1_000) });
+      lapsedRow();
+      const reply = await grantRegister.prepare('app/master', { epoch: 9, candidate: 'c:0' }, { servingSinceMs: Date.now() - 900_000 });
+      expect(reply.code).to.equal('lock_delay');
+      expect(reply.retryAfterMs).to.be.within(lockDelayMs - 1_000 - 500, lockDelayMs - 1_000);
+    });
+
+    it('the recorded grantee is never delayed by the lift', async () => {
+      grantRegister.resetForTests({ startedMs: liftedAgo(1_000) });
+      lapsedRow();
+      const reply = await grantRegister.prepare('app/master', { epoch: 9, candidate: 'a:0' }, { servingSinceMs: Date.now() - 900_000 });
+      expect(reply.ok).to.equal(true);
+    });
+
+    it('one lock-delay after the lift the challenger is served', async () => {
+      grantRegister.resetForTests({ startedMs: liftedAgo(lockDelayMs + 2_000) });
+      lapsedRow();
+      const reply = await grantRegister.prepare('app/master', { epoch: 9, candidate: 'c:0' }, { servingSinceMs: Date.now() - 900_000 });
+      expect(reply.ok).to.equal(true);
+    });
+
+    it("the later anchor wins: a controller stamp newer than the lift is the one that binds", async () => {
+      grantRegister.resetForTests({ startedMs: liftedAgo(lockDelayMs + 2_000) });
+      lapsedRow();
+      const reply = await grantRegister.prepare('app/master', { epoch: 9, candidate: 'c:0' }, { servingSinceMs: Date.now() - 100 });
+      expect(reply.code).to.equal('lock_delay');
+      expect(reply.retryAfterMs).to.be.within(lockDelayMs - 100 - 500, lockDelayMs - 100);
+    });
+
+    it('the lift anchors accept too', async () => {
+      grantRegister.resetForTests({ startedMs: liftedAgo(1_000) });
+      lapsedRow();
+      const reply = await grantRegister.accept('app/master', {
+        epoch: 9, grantee: 'c:0', mode: 'held', ttlMs: TTL,
+      }, { servingSinceMs: Date.now() - 900_000 });
+      expect(reply.code).to.equal('lock_delay');
     });
   });
 
