@@ -335,7 +335,7 @@ async function handleAppRunningSyncResponse(message, peerSocket) {
     // them in the earliest slice every time, and nothing here establishes that the
     // event log is indifferent to seeing them last.
     for (const event of [...evictions, ...nodeDowns, ...stateEvents]) {
-      if (event.type === 'sigterm' || event.type === 'appremoved' || event.type === 'ipchanged' || event.type === 'masterlease' || event.type === 'grantgeneration') {
+      if (event.type === 'appremoved' || event.type === 'ipchanged' || event.type === 'masterlease' || event.type === 'grantgeneration') {
         await messageStore.storeAppStateEvent(event.type, { message: event.data, envelope: event.envelope, announcer: announcerOf.get(event) ?? null });
       } else if (event.type === 'evicted') {
         await messageStore.storeAppStateEvent(event.type, { ip: event.ip });

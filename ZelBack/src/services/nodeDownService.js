@@ -16,6 +16,7 @@ const { FluxPeerManager } = require('./utils/FluxPeerManager');
 const { CLOSE_CODES } = require('./utils/FluxPeerSocket');
 const { normalizeSocketAddress, extractIp } = require('./utils/socketAddressUtils');
 const fluxEventBus = require('./utils/fluxEventBus');
+const { appSyncEvents, EVENTS: SYNC_EVENTS } = require('./utils/appSyncEvents');
 const log = require('../lib/log');
 
 // The node-down assembly: binds the reconciler (who to hold) and the juror
@@ -33,6 +34,8 @@ let localSocketAddress = null;
 let wasUnreachable = false;
 let dropHandler = null;
 let addHandler = null;
+// A return waiting for the store to catch up before it asks its question.
+let returnSyncHandler = null;
 
 // outpoint <-> dialable address, rebuilt when the membership moves.
 const index = { fingerprint: undefined, byOutpoint: new Map(), bySocket: new Map() };
@@ -256,10 +259,35 @@ async function broadcastOwnCertificate(certificate) {
 }
 
 /**
+ * The return rule, run after the store is current: the node asks its own
+ * derived rows whether they still place it. Placed: keep every app and
+ * announce — the announcement is the refutation, riding the existing
+ * stagger. Not placed: every app is removed inside the check and nothing is
+ * said. A check that throws announces, as before: nothing here may be the
+ * reason an app is deleted.
+ *
+ * @param {string} trigger 'return' | 'certificate'
+ */
+async function applyPlacementThenAnnounce(trigger) {
+  // eslint-disable-next-line global-require
+  const appStartupManager = require('./appLifecycle/appStartupManager');
+  // eslint-disable-next-line global-require
+  const peerNotification = require('./appMessaging/peerNotification');
+  let placed = true;
+  try {
+    ({ placed } = await appStartupManager.enforceNodePlacement(trigger));
+  } catch (error) {
+    log.warn(`nodeDownService: placement check (${trigger}) failed, announcing: ${error.message}`);
+  }
+  if (placed) peerNotification.checkAndNotifyPeersOfRunningApps();
+}
+
+/**
  * The shared certificate intake: gossip and sync land here alike, so both
  * pass the store's full verification and both trigger the same reactions.
- * A certificate about THIS node fires the immediate coalesced announce —
- * the announcement is the refutation, and it must ride the existing stagger.
+ * A certificate about THIS node runs the return rule: inside the grace the
+ * rows still place it and the announce refutes; past it they are gone and
+ * the node removes.
  *
  * @param {object} message {certificate, broadcastedAt}
  * @param {object|null} envelope
@@ -282,9 +310,7 @@ async function intakeCertificate(message, envelope, source) {
   ordinalRegister.noteCertificate(message.certificate).catch((error) => log.warn(`nodeDownService - ordinal vacate: ${error.message}`));
 
   if (message.certificate.subject === myOutpoint()) {
-    // eslint-disable-next-line global-require
-    const peerNotification = require('./appMessaging/peerNotification');
-    peerNotification.checkAndNotifyPeersOfRunningApps();
+    applyPlacementThenAnnounce('certificate').catch((error) => log.warn(`nodeDownService: ${error.message}`));
   } else if (reconciler) {
     // Sync can deliver before start(); the reconciler's first pass reads the
     // store, so a certificate stored now is honoured then.
@@ -384,8 +410,21 @@ function onPeerAdded({ ip, port } = {}) {
   // for may have been vacated and re-granted while it was cut, so its names
   // are re-probed before they are trusted again.
   meshOrdinals.noteReturnFromUnreachability();
-  // eslint-disable-next-line global-require
-  require('./appMessaging/peerNotification').checkAndNotifyPeersOfRunningApps();
+  // The announce waits for the store: the orchestrator pulls what a
+  // re-established peer saw from the moment of the loss, and only once that
+  // pull has answered can the rows be read for real. Then the one question,
+  // then the announce — or the removal.
+  awaitReturnSync();
+}
+
+function awaitReturnSync() {
+  if (returnSyncHandler) return;
+  returnSyncHandler = () => {
+    appSyncEvents.off(SYNC_EVENTS.RECONNECT_SYNC_COMPLETE, returnSyncHandler);
+    returnSyncHandler = null;
+    applyPlacementThenAnnounce('return').catch((error) => log.warn(`nodeDownService: ${error.message}`));
+  };
+  appSyncEvents.on(SYNC_EVENTS.RECONNECT_SYNC_COMPLETE, returnSyncHandler);
 }
 
 /**
@@ -468,6 +507,10 @@ function start(injectedTransport) {
 function stop() {
   if (transport && dropHandler) transport.peerManager.off('peer:removed', dropHandler);
   if (transport && addHandler) transport.peerManager.off('peer:added', addHandler);
+  if (returnSyncHandler) {
+    appSyncEvents.off(SYNC_EVENTS.RECONNECT_SYNC_COMPLETE, returnSyncHandler);
+    returnSyncHandler = null;
+  }
   if (transport) transport.peerManager.setInboundGate(null);
   dropHandler = null;
   addHandler = null;

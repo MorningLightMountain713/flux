@@ -22,6 +22,7 @@ function makeHarness() {
     announce: sinon.stub(),
     noteReturn: sinon.stub(),
     noteMeshReturn: sinon.stub(),
+    enforcePlacement: sinon.stub().resolves({ placed: true, removed: [] }),
   };
   const world = { height: 100 };
   const networkStateServiceStub = {
@@ -43,6 +44,7 @@ function makeHarness() {
       quarantineFor: stubs.quarantineFor,
     },
     './appMessaging/peerNotification': { checkAndNotifyPeersOfRunningApps: stubs.announce },
+    './appLifecycle/appStartupManager': { enforceNodePlacement: stubs.enforcePlacement },
     './quorumGrant/grantorController': { noteReturnFromUnreachability: stubs.noteReturn },
     './appMesh/meshOrdinals': { noteReturnFromUnreachability: stubs.noteMeshReturn },
     './fluxNetworkHelper': {
@@ -131,7 +133,7 @@ describe('nodeDownService', () => {
     service.stop();
   });
 
-  it('a certificate about THIS node triggers the coalesced announce — the refutation path', async () => {
+  it('a certificate about THIS node runs the placement check and announces only while the rows still place it — the refutation path', async () => {
     const { service, transport, stubs } = makeHarness();
     service.start(transport);
     await tick();
@@ -141,6 +143,18 @@ describe('nodeDownService', () => {
       broadcastedAt: Date.now(),
     });
     expect(result.rebroadcast).to.equal(true);
+    await tick();
+    sinon.assert.calledOnceWithExactly(stubs.enforcePlacement, 'certificate');
+    expect(stubs.announce.callCount).to.equal(1);
+
+    // past the grace: the network has moved on, the node removes and says nothing
+    stubs.enforcePlacement.resolves({ placed: false, removed: ['app1'] });
+    await service.onCertificateBroadcast({
+      certificate: { subject: MY_OUTPOINT, height: 101 },
+      broadcastedAt: Date.now(),
+    });
+    await tick();
+    expect(stubs.enforcePlacement.callCount).to.equal(2);
     expect(stubs.announce.callCount).to.equal(1);
     service.stop();
   });
@@ -445,7 +459,8 @@ describe('nodeDownService', () => {
     });
   });
 
-  it('returning from total unreachability re-fetches grant records and announces', async () => {
+  it('returning from total unreachability re-fetches grant records at once, and announces only after the resync says the rows still place it', async () => {
+    const { appSyncEvents, EVENTS } = require('../../ZelBack/src/services/utils/appSyncEvents');
     const { service, transport, stubs } = makeHarness();
     let peersDown = false;
     transport.peerManager.allPeersDown = () => peersDown;
@@ -467,10 +482,61 @@ describe('nodeDownService', () => {
     transport.peerManager.emit('peer:added', {});
     await tick();
     expect(stubs.noteReturn.callCount).to.equal(1);
-    // The mesh hears the same return: its ordinal names are re-probed before they are trusted.
     expect(stubs.noteMeshReturn.callCount).to.equal(1);
+    // no announce yet: the store has not caught up
+    expect(stubs.enforcePlacement.callCount).to.equal(0);
+    expect(stubs.announce.callCount).to.equal(0);
+
+    // the orchestrator's reconnect pull completes: the check runs, then the announce
+    appSyncEvents.emit(EVENTS.RECONNECT_SYNC_COMPLETE, '1.2.3.4:16127');
+    await tick();
+    sinon.assert.calledOnceWithExactly(stubs.enforcePlacement, 'return');
     expect(stubs.announce.callCount).to.equal(1);
+
+    // a later pull completion is not a return
+    appSyncEvents.emit(EVENTS.RECONNECT_SYNC_COMPLETE, '1.2.3.4:16127');
+    await tick();
+    expect(stubs.enforcePlacement.callCount).to.equal(1);
     service.stop();
+  });
+
+  it('a node whose rows no longer place it removes on return and announces nothing', async () => {
+    const { appSyncEvents, EVENTS } = require('../../ZelBack/src/services/utils/appSyncEvents');
+    const { service, transport, stubs } = makeHarness();
+    stubs.enforcePlacement.resolves({ placed: false, removed: ['app1'] });
+    let peersDown = false;
+    transport.peerManager.allPeersDown = () => peersDown;
+    service.start(transport);
+    await tick();
+    peersDown = true;
+    transport.peerManager.emit('peer:removed', { ip: '1.2.3.4', port: '16127', closeCode: 4009 });
+    peersDown = false;
+    transport.peerManager.emit('peer:added', {});
+    await tick();
+    appSyncEvents.emit(EVENTS.RECONNECT_SYNC_COMPLETE, '1.2.3.4:16127');
+    await tick();
+    expect(stubs.enforcePlacement.callCount).to.equal(1);
+    expect(stubs.announce.callCount).to.equal(0);
+    service.stop();
+  });
+
+  it('stop forgets a return still waiting for its resync', async () => {
+    const { appSyncEvents, EVENTS } = require('../../ZelBack/src/services/utils/appSyncEvents');
+    const { service, transport, stubs } = makeHarness();
+    let peersDown = false;
+    transport.peerManager.allPeersDown = () => peersDown;
+    service.start(transport);
+    await tick();
+    peersDown = true;
+    transport.peerManager.emit('peer:removed', { ip: '1.2.3.4', port: '16127', closeCode: 4009 });
+    peersDown = false;
+    transport.peerManager.emit('peer:added', {});
+    await tick();
+    service.stop();
+    appSyncEvents.emit(EVENTS.RECONNECT_SYNC_COMPLETE, '1.2.3.4:16127');
+    await tick();
+    expect(stubs.enforcePlacement.callCount).to.equal(0);
+    expect(appSyncEvents.listenerCount(EVENTS.RECONNECT_SYNC_COMPLETE)).to.equal(0);
   });
 });
 
