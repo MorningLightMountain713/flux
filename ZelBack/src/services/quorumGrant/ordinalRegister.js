@@ -3,13 +3,14 @@
 const generalService = require('../generalService');
 const messageStore = require('../appMessaging/messageStore');
 const registryManager = require('../appDatabase/registryManager');
+const networkStateService = require('../networkStateService');
 const daemonServiceMiscRpcs = require('../daemonService/daemonServiceMiscRpcs');
-const fluxNetworkHelper = require('../fluxNetworkHelper');
 const fluxEventBus = require('../utils/fluxEventBus');
 const { extractIp } = require('../utils/socketAddressUtils');
 const foundingCommittee = require('../appMesh/foundingCommittee');
 const grantClient = require('./grantClient');
 const masterleasePublisher = require('./masterleasePublisher');
+const downCertificates = require('./downCertificates');
 const log = require('../../lib/log');
 
 // The plane half of ordinals-as-grants (David, 2026-09-02; modelled in
@@ -242,68 +243,69 @@ async function ordinalHolders(appName) {
 // ---------------------------------------------------------------------------
 // reclaim by certificate
 
-async function hostsApp(appName) {
-  try {
-    const [locations, local] = await Promise.all([
-      registryManager.appLocation(appName),
-      fluxNetworkHelper.getLocalSocketAddress(),
-    ]);
-    if (!local) return false;
-    const mine = extractIp(local);
-    return (locations ?? []).some((location) => extractIp(location?.ip ?? '') === mine);
-  } catch (error) {
-    return false;
-  }
+
+/**
+ * Whether the derivation still places a node on this app: its row is in the
+ * derived locations, which keep a certified node's rows until the grace has
+ * run from the drop (since + NODE_DOWN_GRACE_MS, appsRepository) and honour
+ * an announce inside it. Read, never recomputed — the edge is the view's.
+ *
+ * @returns {Promise<boolean|null>} null when the membership cannot be resolved
+ */
+async function placedOnApp(appName, outpoint) {
+  const membership = networkStateService.membershipAt(networkStateService.membershipFingerprint());
+  if (!Array.isArray(membership)) return null;
+  const [txhash, outidx] = outpoint.split(':');
+  const listed = membership.find((entry) => entry.txhash === txhash && String(entry.outidx) === outidx);
+  if (!listed?.ip) return false;
+  const holderIp = extractIp(listed.ip);
+  const locations = await registryManager.appLocation(appName);
+  return (locations ?? []).some((location) => extractIp(location?.ip ?? '') === holderIp);
 }
 
 /**
- * A node-down certificate landed: every ordinal its subject holds is
- * vacated — one vacate ask per ordinal to that app's founding committee,
- * carrying the certificate, then the superseding record. Only a node that
- * HOSTS the app issues the asks: the certificate reaches every node, and a
- * vacate is idempotent, but nine cells hearing it from the whole fleet is
- * the amplification the alive-refutation build measured and confined. The
- * hosts have the stake and are few.
+ * Reclaim one ordinal by node-down certificate — the seam's fifth call, asked
+ * by the joiner's scan for an ordinal the register says another node holds.
+ * R9 (NODE_DOWN_SCENARIOS.md §5): the vacate follows the derivation's
+ * placement-dead edge, the same moment a replacement may be placed, observed
+ * on a host's pass and acted on once, never on a timer. Three readings, each
+ * from its owner: the certificate stands (the node-down store, through the
+ * seam), the derivation no longer places the holder (the derived locations),
+ * and the register's own probe names the holder. The certificate is the
+ * vacate's authority and rides the ask whole; the superseding released row is
+ * published for everyone's names.
  *
- * @param {object} certificate {subject, …} as the node-down store holds it
+ * @returns {Promise<{vacated: boolean, reason?: string}>}
  */
-async function noteCertificate(certificate) {
-  const subject = certificate?.subject;
-  if (typeof subject !== 'string') return;
-  let rows;
-  try {
-    rows = await messageStore.getMasterleaseRecordsByGrantee(ROLE_PREFIX, subject);
-  } catch (error) {
-    log.warn(`ordinalRegister - record read for certificate about ${subject} failed: ${error.message}`);
-    return;
+async function vacateOrdinal(appName, ordinal, holder) {
+  if (typeof holder !== 'string' || !holder) return { vacated: false, reason: 'malformed holder' };
+  const standing = await downCertificates.standingCertificateFor(holder);
+  if (!standing) return { vacated: false, reason: 'no standing certificate' };
+  const placed = await placedOnApp(appName, holder);
+  if (placed === null) return { vacated: false, reason: 'membership unavailable' };
+  if (placed) return { vacated: false, reason: 'still placed' };
+
+  const basis = await basisFor(appName);
+  if (!basis) return { vacated: false, reason: 'no founding world' };
+  const key = keyFor(appName, ordinal, basis.rung);
+  const verdict = await grantClient.probeOneshot(key, basis.committee);
+  if (!verdict.decided) return { vacated: false, reason: 'no quorum answered' };
+  if (verdict.holder === null) return { vacated: true };
+  if (verdict.holder !== holder) return { vacated: false, reason: `held by ${verdict.holder}` };
+
+  // the store decorates its answer with the row's broadcastedAt; the referees
+  // verify the certificate as gossiped
+  const certificate = { ...standing };
+  delete certificate.broadcastedAt;
+  const ok = await grantClient.vacateOneshot(key, basis.committee, certificate);
+  if (!ok) {
+    log.info(`ordinalRegister - vacate of ${key} for ${holder} reached no quorum`);
+    return { vacated: false, reason: 'no vacate quorum' };
   }
-  const held = (rows ?? []).filter((row) => row?.data && row.data.mode === 'oneshot' && row.data.released !== true);
-  // eslint-disable-next-line no-restricted-syntax
-  for (const row of held) {
-    const { appName, role, epoch } = row.data;
-    const parsed = parseRole(role);
-    if (!parsed) continue; // eslint-disable-line no-continue
-    // eslint-disable-next-line no-await-in-loop
-    if (!(await hostsApp(appName))) continue; // eslint-disable-line no-continue
-    try {
-      // eslint-disable-next-line no-await-in-loop
-      const basis = await basisFor(appName);
-      if (!basis) continue; // eslint-disable-line no-continue
-      const key = `${appName}/${role}`;
-      // eslint-disable-next-line no-await-in-loop
-      const ok = await grantClient.vacateOneshot(key, basis.committee, certificate);
-      if (!ok) {
-        log.info(`ordinalRegister - vacate of ${key} for ${subject} reached no quorum`);
-        continue; // eslint-disable-line no-continue
-      }
-      // eslint-disable-next-line no-await-in-loop
-      await publishRow(key, subject, epoch, basis, true);
-      fluxEventBus.publish('quorumGrant:ordinalVacated', { appName, ordinal: parsed.ordinal, holder: subject });
-      log.info(`ordinalRegister - ${key} vacated: certificate about ${subject}`);
-    } catch (error) {
-      log.warn(`ordinalRegister - vacate of ${appName}/${role} failed: ${error.message}`);
-    }
-  }
+  await publishRow(key, holder, verdict.epoch, basis, true);
+  fluxEventBus.publish('quorumGrant:ordinalVacated', { appName, ordinal, holder });
+  log.info(`ordinalRegister - ${key} vacated: certificate about ${holder}`);
+  return { vacated: true };
 }
 
 /** The seam's provider: the full contract, registered at wiring. */
@@ -313,6 +315,7 @@ function provider() {
     askOrdinal,
     releaseOrdinal,
     ordinalHolders,
+    vacateOrdinal,
   };
 }
 
@@ -324,6 +327,6 @@ module.exports = {
   askOrdinal,
   releaseOrdinal,
   ordinalHolders,
-  noteCertificate,
+  vacateOrdinal,
   provider,
 };

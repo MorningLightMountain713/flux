@@ -55,17 +55,25 @@ async function claimOrdinal(appName, instances) {
     const probe = await seam.probeOrdinal(appName, ordinal);
     if (!probe.decided) return { state: CLAIM.WAIT, reason: 'undecided' };
     if (probe.holder === me) return { state: CLAIM.GRANTED, ordinal };
-    if (probe.holder === null) {
+    if (probe.holder !== null) {
+      // A held ordinal whose holder the network has certified down and no
+      // longer places is reclaimed here, by the node that needs the name, on
+      // its own pass: the register judges the vacate at the derivation's
+      // placement-dead edge (NODE_DOWN_SCENARIOS.md R9), so nothing here
+      // counts a grace or reads a certificate. A refusal is a held ordinal.
       // eslint-disable-next-line no-await-in-loop
-      const ask = await seam.askOrdinal(appName, ordinal);
-      if (ask.answer === 'yes') return { state: CLAIM.GRANTED, ordinal };
-      if (ask.answer === 'wait') {
-        return {
-          state: CLAIM.WAIT,
-          ...(ask.retryAfterMs !== undefined ? { retryAfterMs: ask.retryAfterMs } : {}),
-          ...(ask.reason !== undefined ? { reason: ask.reason } : {}),
-        };
-      }
+      const gone = await seam.vacateOrdinal(appName, ordinal, probe.holder);
+      if (!gone.vacated) continue; // eslint-disable-line no-continue
+    }
+    // eslint-disable-next-line no-await-in-loop
+    const ask = await seam.askOrdinal(appName, ordinal);
+    if (ask.answer === 'yes') return { state: CLAIM.GRANTED, ordinal };
+    if (ask.answer === 'wait') {
+      return {
+        state: CLAIM.WAIT,
+        ...(ask.retryAfterMs !== undefined ? { retryAfterMs: ask.retryAfterMs } : {}),
+        ...(ask.reason !== undefined ? { reason: ask.reason } : {}),
+      };
     }
   }
   return { state: CLAIM.STANDBY, ordinal: null };
