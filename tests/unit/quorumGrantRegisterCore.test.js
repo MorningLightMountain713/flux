@@ -661,12 +661,12 @@ describe('quorumGrant grantRegisterCore', () => {
   // register was closed — stale view, unresynced return — nobody could have
   // reclaimed the lapsed row, so the exclusivity window must not have burned:
   // the wait anchors at the LATER of the row's death and the grantor's return
-  // to refereeing, carried beside the knobs as refereeingSinceMs. Without it
+  // to refereeing, carried beside the knobs as servingSinceMs. Without it
   // a coast that outlives lockDelay − slack inverts the plane's stated
   // ordering (grantClient.js: demotion before any successor can be seated).
   describe('the refereeing-anchored lock-delay', () => {
     const returnedAt = T0 + TTL + 100_000; // long past death + lockDelay
-    const anchored = { ...TUNABLES, refereeingSinceMs: returnedAt };
+    const anchored = { ...TUNABLES, servingSinceMs: returnedAt };
 
     it('holds challengers for one lock-delay after the grantor returns to refereeing', () => {
       const { reply, record } = onPrepare(heldRecord(), { epoch: 9, candidate: 'cccc:0' }, returnedAt + 1, anchored);
@@ -698,7 +698,7 @@ describe('quorumGrant grantRegisterCore', () => {
     });
 
     it('an anchor older than the row death changes nothing', () => {
-      const early = { ...TUNABLES, refereeingSinceMs: T0 }; // refereeing since before the term
+      const early = { ...TUNABLES, servingSinceMs: T0 }; // serving since before the term
       const wellPast = T0 + TTL + TUNABLES.lockDelayMs + 1;
       const { reply } = onPrepare(heldRecord(), { epoch: 9, candidate: 'cccc:0' }, wellPast, early);
       expect(reply.ok).to.equal(true);
@@ -707,6 +707,96 @@ describe('quorumGrant grantRegisterCore', () => {
     it('an absent anchor keeps the row-death behaviour', () => {
       const wellPast = T0 + TTL + TUNABLES.lockDelayMs + 1;
       const { reply } = onPrepare(heldRecord(), { epoch: 9, candidate: 'cccc:0' }, wellPast, TUNABLES);
+      expect(reply.ok).to.equal(true);
+    });
+  });
+
+  // The seamless re-roll's two anchors (formal/quiet-window, toggle
+  // DrainLiftAnchoredLockDelay with its knownFor half): a successor's wait runs
+  // only while a successor could be seated at all. A re-rolled generation's
+  // seat at this cell is EMPTY — no row of that generation — so no row-death
+  // rule can guard it, and the cell's generation drain and its receipt of the
+  // owner's record both close the register without ageing any row. The
+  // controller stamps the moment this cell first served under the standing
+  // generation past its drain (later than both the lift and the receipt —
+  // the safe side) and carries it as servingSinceMs; the register holds a
+  // candidate other than its own recorded grantee one lock-delay past that
+  // anchor at an empty new-generation seat, and the row-anchored lock-delay
+  // folds the same anchor in for a lapsed old-world row.
+  describe('the drain-lift and receipt anchors on a re-rolled generation', () => {
+    const servedAt = T0 + TTL + 100_000; // long past the old row's death + lockDelay
+    const anchored = { ...TUNABLES, servingSinceMs: servedAt };
+    const oldWorld = (overrides = {}) => heldRecord({ accepted: { generation: 0, ...overrides } });
+
+    it('an empty new-generation seat holds a challenger one lock-delay past the first serve', () => {
+      const { reply, record } = onPrepare(null, { epoch: 1, candidate: 'cccc:0', generation: 1 }, servedAt + 1, anchored);
+      expect(reply.code).to.equal('lock_delay');
+      expect(reply.retryAfterMs).to.equal(TUNABLES.lockDelayMs - 1);
+      expect(record).to.equal(null);
+    });
+
+    it('holds the seat on accept behind the same anchor', () => {
+      const { reply, record } = onAccept(null, {
+        epoch: 1, grantee: 'cccc:0', mode: 'held', ttlMs: TTL, generation: 1,
+      }, servedAt + 1, anchored);
+      expect(reply.code).to.equal('lock_delay');
+      expect(reply.retryAfterMs).to.equal(TUNABLES.lockDelayMs - 1);
+      expect(record).to.equal(null);
+    });
+
+    it('a released old-world row is an empty seat under the new generation', () => {
+      const released = oldWorld({ released: true });
+      const { reply } = onPrepare(released, { epoch: 9, candidate: 'cccc:0', generation: 1 }, servedAt + 1, anchored);
+      expect(reply.code).to.equal('lock_delay');
+      expect(reply.retryAfterMs).to.equal(TUNABLES.lockDelayMs - 1);
+    });
+
+    it('a lapsed old-world row waits like the empty seat — the row anchor and the seat teach one figure', () => {
+      // the row died long before the anchor; anchored at death alone the row
+      // rule would have burned its wait while the cell drained, and the seat
+      // rule holds the same candidate for the same figure either way
+      const { reply } = onPrepare(oldWorld(), { epoch: 9, candidate: 'cccc:0', generation: 1 }, servedAt + 1, anchored);
+      expect(reply.code).to.equal('lock_delay');
+      expect(reply.retryAfterMs).to.equal(TUNABLES.lockDelayMs - 1);
+    });
+
+    it('the seat opens one lock-delay after the first serve, not before', () => {
+      const late = servedAt + TUNABLES.lockDelayMs;
+      const { reply: held } = onPrepare(null, { epoch: 1, candidate: 'cccc:0', generation: 1 }, late - 1, anchored);
+      expect(held.code).to.equal('lock_delay');
+      expect(held.retryAfterMs).to.equal(1);
+      const { reply: open } = onPrepare(null, { epoch: 1, candidate: 'cccc:0', generation: 1 }, late, anchored);
+      expect(open.ok).to.equal(true);
+      expect(open.promised).to.equal(true);
+    });
+
+    it("the cell's own recorded grantee claims the new-generation seat at once", () => {
+      const { reply: lapsed } = onPrepare(oldWorld(), { epoch: 9, candidate: 'aaaa:0', generation: 1 }, servedAt + 1, anchored);
+      expect(lapsed.ok).to.equal(true);
+      const { reply: released } = onPrepare(oldWorld({ released: true }), { epoch: 9, candidate: 'aaaa:0', generation: 1 }, servedAt + 1, anchored);
+      expect(released.ok).to.equal(true);
+    });
+
+    it("generation zero is not this rule's business — an app's birth pays no seat delay", () => {
+      const { reply } = onPrepare(null, { epoch: 1, candidate: 'cccc:0', generation: 0 }, servedAt + 1, anchored);
+      expect(reply.ok).to.equal(true);
+      const { reply: bare } = onPrepare(null, { epoch: 1, candidate: 'cccc:0' }, servedAt + 1, anchored);
+      expect(bare.ok).to.equal(true);
+    });
+
+    it('a row of the same generation is judged by the row rules, not the seat', () => {
+      const live = heldRecord({ accepted: { generation: 1, expiresAt: servedAt + TTL } });
+      const { reply: shielded } = onPrepare(live, { epoch: 9, candidate: 'cccc:0', generation: 1 }, servedAt + 1, anchored);
+      expect(shielded.code).to.equal('incumbent_active');
+      // a released row of the asked generation carries no delay — the seat was
+      // filled and given back, and the seat rule has nothing to say about it
+      const released = heldRecord({ accepted: { generation: 1, released: true } });
+      const { reply: free } = onPrepare(released, { epoch: 9, candidate: 'cccc:0', generation: 1 }, servedAt + 1, anchored);
+      expect(free.ok).to.equal(true);
+    });
+
+    it('an absent anchor leaves the seat open', () => {
+      const { reply } = onPrepare(null, { epoch: 1, candidate: 'cccc:0', generation: 1 }, servedAt + 1, TUNABLES);
       expect(reply.ok).to.equal(true);
     });
   });

@@ -112,21 +112,29 @@ function minHolderAgeMs() {
 // when nothing is pending.
 let resyncPending = null;
 
-// The refereeing-return anchor. The
-// successor's lock-delay must run only while this grantor is refereeing —
-// while the serve gates refuse everyone, the exclusivity window the
-// incumbent is owed burns for nobody. The register is handed the moment
-// this grantor last RETURNED to refereeing: the later of the last observed
-// stale->synced crossing and the key's resync clearance. Observations are
-// lazy, made at the gates that already read the synced flag; lazy can only
-// place the anchor LATER than the true return, which is the safe side. The
-// very traffic the hazard needs (the incumbent's refused renewals, the
-// witnesses' record reads) is what feeds the observations. An unknown
-// starting state counts as a return — subsumed in practice by the register's
-// rejoin drain, and the conservative reading of absence.
+// The serving-since anchor. The successor's lock-delay must run only while
+// this grantor could serve the key — while the serve gates refuse everyone,
+// the exclusivity window the incumbent is owed burns for nobody. The
+// register is handed the LATER of three locally observed moments: the last
+// stale->synced crossing, the key's resync clearance (its return to
+// refereeing, formal/quiet-window run 3), and the first ask this cell served
+// under the standing re-rolled generation past that generation's drain
+// (later than both the drain's lift and the owner record's receipt, the two
+// closures a re-roll adds — formal/quiet-window DrainLiftAnchoredLockDelay
+// and its receipt half; the register holds the empty re-rolled seat one
+// lock-delay past it). Observations are lazy, made at the gates that already
+// read the flag or the height; lazy can only place the anchor LATER than the
+// true moment, which is the safe side. The very traffic the hazard needs
+// (the incumbent's refused renewals, the witnesses' record reads, the
+// challenger's own probe) is what feeds the observations. An unknown starting
+// state counts as a return — subsumed in practice by the register's rejoin
+// drain, and the conservative reading of absence.
 let syncedWas = null;
 let syncedSinceMs = 0;
 const resyncClearedMs = new Map();
+// key -> {generation, atMs}: the first serve under the standing generation,
+// stamped once per generation so a later ask never moves it
+const generationServedMs = new Map();
 
 function observeSynced(synced) {
   if (synced && syncedWas !== true) syncedSinceMs = Date.now();
@@ -155,13 +163,15 @@ function syncReady() {
   }
 }
 
-function refereeingSinceFor(key) {
+function servingSinceFor(key) {
   const cleared = resyncClearedMs.get(key) ?? 0;
   // a stamp older than the lock-delay can never bind again — drop it
   if (cleared && Date.now() - cleared > (config.fluxapps.quorumGrantLockDelayMs ?? 30_000)) {
     resyncClearedMs.delete(key);
   }
-  return Math.max(syncedSinceMs, resyncClearedMs.get(key) ?? 0);
+  // the generation stamp stays: it must remember WHICH generation it served,
+  // and past the lock-delay it contributes nothing to the maximum anyway
+  return Math.max(syncedSinceMs, resyncClearedMs.get(key) ?? 0, generationServedMs.get(key)?.atMs ?? 0);
 }
 
 /**
@@ -467,6 +477,12 @@ async function selfOnCommittee(key, mode, fingerprint, generation, carriedChain,
         reason: `generation ${current.generation} is draining until height ${drainUntil}`,
       };
     }
+  }
+  // Past the drain this cell serves the re-rolled generation: its first ask
+  // here is the serving-since anchor's third moment (see the anchor's
+  // comment) — once per generation, whatever the ask goes on to be refused for
+  if (current.generation >= 1 && generationServedMs.get(key)?.generation !== current.generation) {
+    generationServedMs.set(key, { generation: current.generation, atMs: Date.now() });
   }
 
   // The two heights (ACTIVATION_CROSSING_DESIGN.md §2.1): a VIRGIN row is
@@ -864,7 +880,7 @@ async function serve(req, res, type, operate) {
       }
     }
 
-    const reply = await operate(ask, { refereeingSinceMs: refereeingSinceFor(ask.key) });
+    const reply = await operate(ask, { servingSinceMs: servingSinceFor(ask.key) });
     ms.operate = Date.now() - t0 - ms.read - ms.committee - (ms.holds ?? 0);
     report('served', reply?.ok === false ? reply.code : undefined);
     return res.json(messageHelper.createDataMessage(reply));
@@ -1138,6 +1154,7 @@ function reset() {
   syncedWas = null;
   syncedSinceMs = 0;
   resyncClearedMs.clear();
+  generationServedMs.clear();
   syncReadyProvider = null;
 }
 
