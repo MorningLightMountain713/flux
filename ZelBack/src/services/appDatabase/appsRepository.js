@@ -24,6 +24,7 @@ const {
   RUNNING_EXPIRY_MS,
   NODE_DOWN_GRACE_MS,
 } = require('../utils/appConstants');
+const { departures } = require('./offListDepartures');
 
 // One-row-per-app content-slot manifest register (latest-wins). Not in appConstants
 // because only the content-manifest plane touches it.
@@ -1295,9 +1296,12 @@ async function upsertAppInstallingErrorLocations(records) {
  * @param {string|null} opts.ip
  * @param {Array<string>} opts.supersededIps addresses whose announcement the node has
  *   already replaced from a new address; excluded outright so they cannot yield a row.
+ * @param {Array<string>} opts.offListIps addresses no longer on the deterministic node
+ *   list past the off-list grace (offListDepartures): every row of theirs is negated
+ *   here, locally, the same on every node that holds the same list.
  */
 function buildAppLocationPipeline({
-  now, appname = null, ip = null, host = null, supersededIps = [],
+  now, appname = null, ip = null, host = null, supersededIps = [], offListIps = [],
 }) {
   const escapedName = appname ? appname.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') : null;
   const nameMatch = escapedName ? new RegExp(`^${escapedName}$`, 'i') : null;
@@ -1323,6 +1327,9 @@ function buildAppLocationPipeline({
   }
   if (supersededIps.length) {
     clauses.push({ $nor: [{ type: 'apprunning', ip: { $in: supersededIps } }] });
+  }
+  if (offListIps.length) {
+    clauses.push({ ip: { $nin: offListIps } });
   }
 
   return [
@@ -1521,6 +1528,25 @@ async function resolveAddressMoves(collection, now) {
   return { supersededIps, translate };
 }
 
+/**
+ * The boot sweep of the off-list register: a rebooted node's register is
+ * empty, so the row addresses the current list does not carry start their
+ * grace from this observation — that is what stops the node believing a
+ * node that left while it was down. Once, at boot, after the database is
+ * ready; the reads then consult the register alone.
+ *
+ * @returns {Promise<number>} how many row addresses were swept
+ */
+async function sweepOffListRows() {
+  const dbopen = dbHelper.databaseConnection();
+  const database = dbopen.db(config.database.appsglobal.database);
+  const collection = database.collection(globalAppStateEvents);
+  const now = new Date();
+  const addresses = await collection.distinct('ip', { type: 'apprunning', expireAt: { $gt: now } });
+  departures.seedFromRows(addresses, now.getTime());
+  return addresses.length;
+}
+
 async function appLocationFromEvents(options = {}) {
   const { appname = null, ip = null, host = null } = options;
   const dbopen = dbHelper.databaseConnection();
@@ -1529,9 +1555,10 @@ async function appLocationFromEvents(options = {}) {
   const now = new Date();
 
   const { supersededIps, translate } = await resolveAddressMoves(collection, now);
+  const offListIps = departures.denySet(now.getTime());
   const rows = await collection.aggregate([
     ...buildAppLocationPipeline({
-      now, appname, ip, host, supersededIps,
+      now, appname, ip, host, supersededIps, offListIps,
     }),
     ...RUNNING_ROW_TAIL,
   ]).toArray();
@@ -1559,8 +1586,9 @@ async function countRunningByApp() {
   const now = new Date();
 
   const { supersededIps } = await resolveAddressMoves(collection, now);
+  const offListIps = departures.denySet(now.getTime());
   const counts = await collection.aggregate([
-    ...buildAppLocationPipeline({ now, supersededIps }),
+    ...buildAppLocationPipeline({ now, supersededIps, offListIps }),
     ...RUNNING_COUNT_TAIL,
   ]).toArray();
   return new Map(counts.map((row) => [String(row._id).toLowerCase(), row.count]));
@@ -1584,8 +1612,9 @@ async function listRunningAddresses() {
   const now = new Date();
 
   const { supersededIps, translate } = await resolveAddressMoves(collection, now);
+  const offListIps = departures.denySet(now.getTime());
   const rows = await collection.aggregate([
-    ...buildAppLocationPipeline({ now, supersededIps }),
+    ...buildAppLocationPipeline({ now, supersededIps, offListIps }),
     ...RUNNING_ADDRESS_TAIL,
   ]).toArray();
 
@@ -1690,6 +1719,7 @@ async function listHistoricalV7Secrets() {
 }
 
 module.exports = {
+  sweepOffListRows,
   hydrate,
   storageProvider,
   // spawner

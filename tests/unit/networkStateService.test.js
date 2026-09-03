@@ -78,6 +78,20 @@ describe('networkStateService tests', () => {
     sinon.restore();
   });
 
+  it('every list refresh feeds the off-list register with the listed addresses', async () => {
+    const { departures } = require('../../ZelBack/src/services/appDatabase/offListDepartures');
+    const noteList = sinon.spy(departures, 'noteList');
+    const blockEmitter = new EventEmitter();
+    fluxnodeRpcStub.resolves(defaultNetworkState);
+
+    await networkStateService.start({ stateEmitter: blockEmitter });
+
+    expect(noteList.callCount).to.be.at.least(1);
+    expect(noteList.lastCall.args[0]).to.deep.equal(defaultNetworkState.data.map((node) => node.ip));
+    departures.resetForTests();
+    await networkStateService.stop();
+  });
+
   it('should start and fetch the network state once', async () => {
     const blockEmitter = new EventEmitter();
     fluxnodeRpcStub.resolves(defaultNetworkState);
