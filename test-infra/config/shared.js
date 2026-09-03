@@ -125,7 +125,6 @@ module.exports = {
     installErrorTtlS: 300,
     tempMsgTtlS: 300,
     gossipValidityS: 300,
-    sigtermTtlS: 420,
     hashSyncIntervalMs: 30000,
     peerNotifyIntervalMs: 30000,
     cpuCheckIntervalMs: 30000,

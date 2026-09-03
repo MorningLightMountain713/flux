@@ -545,7 +545,7 @@ describe('fluxCommunicationUtils tests', () => {
     });
   });
 
-  describe('verifyFluxBroadcast fluxnodesigterm tests', () => {
+  describe('verifyFluxBroadcast fluxappremoved tests', () => {
     const privKey = '5JTeg79dTLzzHXoJPALMWuoGDM8QmLj4n5f6MeFjx8dzsirvjAh';
     const pubKey = '0474eb4690689bb408139249eda7f361b7881c4254ccbe303d3b4d58c2b48897d0f070b44944941998551f9ea0e1befd96f13adf171c07c885e62d0c2af56d3dab';
     let networkStateStub;
@@ -558,11 +558,11 @@ describe('fluxCommunicationUtils tests', () => {
       sinon.restore();
     });
 
-    it('should return true for valid fluxnodesigterm message from known node', async () => {
+    it('should return true for valid fluxappremoved message from known node', async () => {
       const nodeIp = '192.168.1.100:16127';
       const broadcastedAt = Date.now();
       const data = {
-        type: 'fluxnodesigterm',
+        type: 'fluxappremoved',
         ip: nodeIp,
         broadcastedAt,
         version: 1,
@@ -588,11 +588,11 @@ describe('fluxCommunicationUtils tests', () => {
       expect(isValid).to.equal(VerifyResult.OK);
     });
 
-    it('should return pubkeyMismatch for fluxnodesigterm message with wrong pubkey', async () => {
+    it('should return pubkeyMismatch for fluxappremoved message with wrong pubkey', async () => {
       const nodeIp = '192.168.1.100:16127';
       const broadcastedAt = Date.now();
       const data = {
-        type: 'fluxnodesigterm',
+        type: 'fluxappremoved',
         ip: nodeIp,
         broadcastedAt,
         version: 1,
@@ -618,11 +618,11 @@ describe('fluxCommunicationUtils tests', () => {
       expect(isValid).to.equal(VerifyResult.PUBKEY_MISMATCH);
     });
 
-    it('should return false for fluxnodesigterm message from unknown node', async () => {
+    it('should return false for fluxappremoved message from unknown node', async () => {
       const nodeIp = '192.168.1.100:16127';
       const broadcastedAt = Date.now();
       const data = {
-        type: 'fluxnodesigterm',
+        type: 'fluxappremoved',
         ip: nodeIp,
         broadcastedAt,
         version: 1,
@@ -648,11 +648,11 @@ describe('fluxCommunicationUtils tests', () => {
       expect(isValid).to.equal(VerifyResult.NODE_NOT_FOUND);
     });
 
-    it('should return false for fluxnodesigterm message with invalid signature', async () => {
+    it('should return false for fluxappremoved message with invalid signature', async () => {
       const nodeIp = '192.168.1.100:16127';
       const broadcastedAt = Date.now();
       const data = {
-        type: 'fluxnodesigterm',
+        type: 'fluxappremoved',
         ip: nodeIp,
         broadcastedAt,
         version: 1,
@@ -684,7 +684,7 @@ describe('fluxCommunicationUtils tests', () => {
       it(`should treat a timestamp ${label} the clock-skew allowance accordingly`, async () => {
         const nodeIp = '192.168.1.100:16127';
         const data = {
-          type: 'fluxnodesigterm', ip: nodeIp, broadcastedAt: Date.now(), version: 1,
+          type: 'fluxappremoved', ip: nodeIp, broadcastedAt: Date.now(), version: 1,
         };
         const timestamp = Date.now() + CLOCK_SKEW_ALLOWANCE_MS + offset;
         const version = 1;
@@ -704,11 +704,11 @@ describe('fluxCommunicationUtils tests', () => {
       });
     });
 
-    it('should return false for fluxnodesigterm message from future', async () => {
+    it('should return false for fluxappremoved message from future', async () => {
       const nodeIp = '192.168.1.100:16127';
       const broadcastedAt = Date.now();
       const data = {
-        type: 'fluxnodesigterm',
+        type: 'fluxappremoved',
         ip: nodeIp,
         broadcastedAt,
         version: 1,

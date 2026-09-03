@@ -187,7 +187,7 @@ describe('Boundary: clean shutdown beyond SIGTERM_EXPIRY', function () {
 
   before(async function () {
     this.timeout(120000);
-    // 500s ago with sigterm — exceeds 420s SIGTERM_EXPIRY_MS
+    // 500s ago with sigterm — exceeds the 420s node-down grace
     env = await createTestEnv({ hookCtx: this,
       nodes: 1,
       tickerAutostart: false,

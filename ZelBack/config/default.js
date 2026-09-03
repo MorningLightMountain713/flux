@@ -569,7 +569,6 @@ module.exports = {
     tempMsgTtlS: 3600,
     gossipValidityS: 300, // freshness window for accepting app gossip broadcasts
     clockSkewAllowanceMs: 120000, // how far a peer's self-reported timestamp may run AHEAD of ours before we distrust it. Bounds clock disagreement, NOT message usefulness, so it is deliberately not the 5-min staleness window in verifyTimestampInFluxBroadcast. Consumed by both the envelope guard in verifyFluxBroadcast and the broadcastedAt guard in messageStore; boundary tests in both suites are written relative to this value, so changing it moves the tested boundary with it rather than breaking them
-    sigtermTtlS: 420, // grace window a sigterm-announced node's app rows stay alive before expiry
     hashSyncIntervalMs: 1800000,
     peerNotifyIntervalMs: 3600000,
     cpuCheckIntervalMs: 900000,

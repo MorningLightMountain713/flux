@@ -2716,3 +2716,80 @@ describe('sync peer availability', () => {
     expect(manager.getEligibleSyncPeers(7500), 'floor above its uptime: not selectable').to.have.lengthOf(0);
   });
 });
+
+describe('FluxPeerManager — a stopping process closes its held connections with a code', () => {
+  let manager;
+
+  beforeEach(() => {
+    manager = new FluxPeerManager();
+    manager.messageDispatcher = sinon.stub().resolves();
+    manager.syncResponseDispatcher = sinon.stub().resolves();
+    manager.allowConnections();
+  });
+
+  afterEach(() => {
+    sinon.restore();
+    manager.reset();
+  });
+
+  // A socket whose close() completes like a real one: the close frame goes
+  // out and the 'close' event follows on the next turn.
+  function closingWs(ip) {
+    const ws = createMockWs(ip);
+    ws.close = sinon.stub().callsFake((code, reason) => {
+      setImmediate(() => ws.emit('close', code, reason));
+    });
+    return ws;
+  }
+
+  it('the two stop codes sit above every policy code, and a drop with either is reconnect-worthy', () => {
+    expect(CLOSE_CODES.SHUTTING_DOWN).to.equal(4021);
+    expect(CLOSE_CODES.RESTARTING).to.equal(4022);
+    expect(FluxPeerManager.shouldReconnect(CLOSE_CODES.SHUTTING_DOWN)).to.equal(true);
+    expect(FluxPeerManager.shouldReconnect(CLOSE_CODES.RESTARTING)).to.equal(true);
+    // the policy closes stay what they were: a dialer backs off, nobody accuses
+    expect(FluxPeerManager.shouldReconnect(CLOSE_CODES.NODE_UNCONFIRMED)).to.equal(false);
+    expect(FluxPeerManager.shouldReconnect(CLOSE_CODES.QUARANTINED)).to.equal(false);
+  });
+
+  it('closeAllForStop closes every held peer with the code and resolves once their close frames have gone', async () => {
+    const ws1 = closingWs('10.0.0.1');
+    const ws2 = closingWs('10.0.0.2');
+    manager.add(ws1, '10.0.0.1', '16127', { source: PEER_SOURCE.RANDOM });
+    manager.add(ws2, '10.0.0.2', '16127', { source: PEER_SOURCE.INBOUND });
+
+    const closed = await manager.closeAllForStop(CLOSE_CODES.RESTARTING, { flushMs: 2000 });
+
+    expect(closed).to.equal(2);
+    sinon.assert.calledWith(ws1.close, CLOSE_CODES.RESTARTING);
+    sinon.assert.calledWith(ws2.close, CLOSE_CODES.RESTARTING);
+  });
+
+  it('a peer that never acknowledges does not hold the exit past the bound', async () => {
+    const clock = sinon.useFakeTimers();
+    const ws = createMockWs('10.0.0.3'); // close() is a bare stub: no frame, no event
+    manager.add(ws, '10.0.0.3', '16127', { source: PEER_SOURCE.RANDOM });
+
+    let settled = false;
+    const pending = manager.closeAllForStop(CLOSE_CODES.SHUTTING_DOWN, { flushMs: 2000 })
+      .then((count) => { settled = true; return count; });
+    await clock.tickAsync(1999);
+    expect(settled).to.equal(false);
+    await clock.tickAsync(1);
+    expect(await pending).to.equal(1);
+    sinon.assert.calledWith(ws.close, CLOSE_CODES.SHUTTING_DOWN);
+    clock.restore();
+  });
+
+  it('an ephemeral connection is not a held one: it is left to its own lifetime', async () => {
+    const held = closingWs('10.0.0.4');
+    manager.add(held, '10.0.0.4', '16127', { source: PEER_SOURCE.RANDOM });
+    const ephemeral = closingWs('10.0.0.5');
+    manager.addEphemeral(ephemeral, '10.0.0.5', '16127');
+
+    const closed = await manager.closeAllForStop(CLOSE_CODES.RESTARTING, { flushMs: 2000 });
+
+    expect(closed).to.equal(1);
+    sinon.assert.notCalled(ephemeral.close);
+  });
+});

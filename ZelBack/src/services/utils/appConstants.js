@@ -101,7 +101,17 @@ const INSTALLING_EXPIRY_MS = config.fluxapps.installingTtlS * 1000;
 // gossip propagation. A dead node stops renewing and its claim expires on the TTL.
 const INSTALLING_RENEWAL_MS = config.fluxapps.installingRenewalS * 1000;
 const INSTALLING_ERRORS_EXPIRY_MS = config.fluxapps.installErrorTtlS * 1000;
-const SIGTERM_EXPIRY_MS = config.fluxapps.sigtermTtlS * 1000;
+// The grace every stop gets, announced or not. A juror that saw a
+// SHUTTING_DOWN close waits this long before it looks; the derivation
+// negates a certified node's rows this long after the certificate's since;
+// a booting node compares its downtime with it. One constant, in code and
+// not in config, because every node must negate the same rows at the same
+// instant — a node whose value differed would replace apps the rest of the
+// fleet still believes placed.
+const NODE_DOWN_GRACE_MS = 420 * 1000;
+// A FluxOS restart is back in seconds; a juror that saw a RESTARTING close
+// waits only this long.
+const RESTART_GRACE_MS = 120 * 1000;
 const EVICTED_EXPIRY_MS = RUNNING_EXPIRY_MS;
 
 // Hash sync constants (blocks, at 30s per block)
@@ -150,7 +160,8 @@ module.exports = {
   INSTALLING_EXPIRY_MS,
   INSTALLING_RENEWAL_MS,
   INSTALLING_ERRORS_EXPIRY_MS,
-  SIGTERM_EXPIRY_MS,
+  NODE_DOWN_GRACE_MS,
+  RESTART_GRACE_MS,
   EVICTED_EXPIRY_MS,
 
   // Hash sync

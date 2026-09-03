@@ -93,7 +93,7 @@ describe('appStartupManager tests', () => {
       './appUninstaller': appUninstallerStub,
       '../utils/globalState': globalStateStub,
       '../appQuery/appQueryService': appQueryServiceStub,
-      '../utils/appConstants': { localAppsInformation: 'localAppsInformation', SIGTERM_EXPIRY_MS: 420000, RUNNING_EXPIRY_MS: 7500000 },
+      '../utils/appConstants': { localAppsInformation: 'localAppsInformation', NODE_DOWN_GRACE_MS: 420000, RUNNING_EXPIRY_MS: 7500000 },
       '../utils/appUtilities': appUtilities,
       '../nodeConfirmationService': {
         isConfirmed: sinon.stub().returns(true),
@@ -173,7 +173,7 @@ describe('appStartupManager tests', () => {
         './appUninstaller': appUninstallerStub,
         '../utils/globalState': globalStateStub,
         '../appQuery/appQueryService': appQueryServiceStub,
-        '../utils/appConstants': { localAppsInformation: 'localAppsInformation', SIGTERM_EXPIRY_MS: 420000, RUNNING_EXPIRY_MS: 7500000 },
+        '../utils/appConstants': { localAppsInformation: 'localAppsInformation', NODE_DOWN_GRACE_MS: 420000, RUNNING_EXPIRY_MS: 7500000 },
         '../utils/appUtilities': appUtilities,
         '../nodeConfirmationService': {
           isConfirmed: sinon.stub().returns(true),
@@ -395,7 +395,7 @@ describe('appStartupManager tests', () => {
       expect(appUninstallerStub.uninstallApplication.called).to.be.false;
     });
 
-    it('should remove all apps when clean shutdown and downtime > SIGTERM_EXPIRY', async () => {
+    it('should remove all apps when clean shutdown and downtime > the node-down grace', async () => {
       const bootContext = {
         machineRebooted: true, downtimeMs: 500000, cleanShutdown: true,
       };

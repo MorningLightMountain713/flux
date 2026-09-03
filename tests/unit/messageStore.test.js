@@ -123,7 +123,6 @@ describe('messageStore tests', () => {
         RUNNING_EXPIRY_MS: 125 * 60 * 1000,
         INSTALLING_EXPIRY_MS: 15 * 60 * 1000,
         INSTALLING_ERRORS_EXPIRY_MS: 24 * 60 * 60 * 1000,
-        SIGTERM_EXPIRY_MS: 420 * 1000,
         EVICTED_EXPIRY_MS: 125 * 60 * 1000,
         CLOCK_SKEW_ALLOWANCE_MS: STUB_CLOCK_SKEW_ALLOWANCE_MS,
       },
@@ -1582,17 +1581,6 @@ describe('messageStore tests', () => {
       expect(dbHelperStub.findOneAndUpdateInDatabase.calledOnce).to.be.true;
       const filter = dbHelperStub.findOneAndUpdateInDatabase.firstCall.args[2];
       expect(filter.dedupKey).to.equal('v1:myapp');
-    });
-
-    it('should store sigterm event', async () => {
-      await messageStore.storeAppStateEvent(messageStore.APP_STATE_EVENT_TYPES.SIGTERM, {
-        message: { type: 'fluxnodesigterm', version: 1, ip: '1.2.3.4', broadcastedAt: Date.now() },
-        envelope: { version: 1, timestamp: Date.now(), pubKey: 'pk', signature: 'sig' },
-      });
-      expect(collectionStub.updateOne.calledOnce).to.be.true;
-      const filter = collectionStub.updateOne.firstCall.args[0];
-      expect(filter.type).to.equal('sigterm');
-      expect(filter.dedupKey).to.equal('sigterm');
     });
 
     it('should store appremoved event', async () => {

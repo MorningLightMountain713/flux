@@ -357,7 +357,6 @@ module.exports = {
     tempMsgTtlS: 3600,
     gossipValidityS: 300,
     clockSkewAllowanceMs: 120000,
-    sigtermTtlS: 420,
     hashSyncIntervalMs: 1800000,
     peerNotifyIntervalMs: 3600000,
     cpuCheckIntervalMs: 900000,

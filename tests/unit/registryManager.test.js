@@ -17,7 +17,7 @@ const transportCryptoProvider = require('../../ZelBack/src/services/providers/Fl
 const legacyTransportProvider = require('../../ZelBack/src/services/providers/FluxOSLegacyTransportProvider');
 const specCutover = require('../../ZelBack/src/services/utils/specCutover');
 const foundingCommittee = require('../../ZelBack/src/services/appMesh/foundingCommittee');
-const { RUNNING_EXPIRY_MS, SIGTERM_EXPIRY_MS } = require('../../ZelBack/src/services/utils/appConstants');
+const { RUNNING_EXPIRY_MS } = require('../../ZelBack/src/services/utils/appConstants');
 const { requireMongo } = require('./dbTestHelper');
 const {
   loadSpecLibrary, V8_SUBMISSION, V9_SUBMISSION,
@@ -1248,47 +1248,19 @@ describe('registryManager tests', () => {
       expect(result[0].name).to.equal('AppA');
     });
 
-    it('should exclude apps when sigterm is newer and expired', async () => {
-      const sigtermTime = now - 8 * 60 * 1000;
+    it('a sigterm row left by an older release is inert: it neither keeps nor negates an announcement', async () => {
+      // The sigterm broadcast is gone; the certificate's since + grace does its
+      // job. A row of the old type in a log that survived the upgrade must not
+      // negate (it was never a jury's word) and must not extend anything.
       await database.collection(eventsCollection).insertMany([
         makeV2Event('1.2.3.4', [{ name: 'AppA', hash: 'h1' }], now - 10 * 60 * 1000),
-        makeSigtermEvent('1.2.3.4', sigtermTime),
+        makeSigtermEvent('1.2.3.4', now - 8 * 60 * 1000),
+        makeV2Event('1.2.3.5', [{ name: 'AppB', hash: 'h2' }], now - 60 * 60 * 1000),
+        makeSigtermEvent('1.2.3.5', now - 30 * 60 * 1000),
       ]);
 
       const result = await appsRepository.appLocationFromEvents();
-      expect(result).to.be.an('array').with.lengthOf(0);
-    });
-
-    it('should keep apps when sigterm expiry has not passed', async () => {
-      await database.collection(eventsCollection).insertMany([
-        makeV2Event('1.2.3.4', [{ name: 'AppA', hash: 'h1' }], now - 60000),
-        makeSigtermEvent('1.2.3.4', now),
-      ]);
-
-      const result = await appsRepository.appLocationFromEvents();
-      expect(result).to.be.an('array').with.lengthOf(1);
-      expect(result[0].name).to.equal('AppA');
-    });
-
-    it('should exclude apps when sigterm is past grace period but still in event log', async () => {
-      const sigtermTime = now - 30 * 60 * 1000; // 30 min ago — past 7-min grace, within 125-min TTL
-      await database.collection(eventsCollection).insertMany([
-        makeV2Event('1.2.3.4', [{ name: 'AppA', hash: 'h1' }], now - 60 * 60 * 1000),
-        makeSigtermEvent('1.2.3.4', sigtermTime),
-      ]);
-
-      const result = await appsRepository.appLocationFromEvents();
-      expect(result).to.be.an('array').with.lengthOf(0);
-    });
-
-    it('should keep apps when broadcast is newer than sigterm', async () => {
-      await database.collection(eventsCollection).insertMany([
-        makeSigtermEvent('1.2.3.4', now - 120000),
-        makeV2Event('1.2.3.4', [{ name: 'AppA', hash: 'h1' }], now),
-      ]);
-
-      const result = await appsRepository.appLocationFromEvents();
-      expect(result).to.be.an('array').with.lengthOf(1);
+      expect(result.map((row) => row.name).sort()).to.deep.equal(['AppA', 'AppB']);
     });
 
     it('should exclude apps immediately when evicted (no grace period)', async () => {
@@ -1459,17 +1431,16 @@ describe('registryManager tests', () => {
       expect(new Date(result[0].expireAt).getTime()).to.equal(at + RUNNING_EXPIRY_MS);
     });
 
-    it('shortens expireAt to the sigterm grace for a node announcing shutdown', async () => {
+    it('a legacy sigterm row does not shorten expireAt', async () => {
       const announcedAt = now - 60000;
-      const sigtermAt = now - 30000;
       await database.collection(eventsCollection).insertMany([
         makeV2Event('1.1.1.1', [{ name: 'AppA', hash: 'h1' }], announcedAt),
-        makeSigtermEvent('1.1.1.1', sigtermAt),
+        makeSigtermEvent('1.1.1.1', now - 30000),
       ]);
 
       const result = await appsRepository.appLocationFromEvents({ appname: 'AppA' });
       expect(result).to.have.lengthOf(1);
-      expect(new Date(result[0].expireAt).getTime()).to.equal(sigtermAt + SIGTERM_EXPIRY_MS);
+      expect(new Date(result[0].expireAt).getTime()).to.equal(announcedAt + RUNNING_EXPIRY_MS);
     });
 
     it('should exclude expired events', async () => {

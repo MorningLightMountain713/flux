@@ -23,7 +23,6 @@ const cacheManager = require('./utils/cacheManager').default;
 const networkStateService = require('./networkStateService');
 const nodeConfirmationService = require('./nodeConfirmationService');
 const { extractIp, extractPort, parseSocketAddress, socketAddressesMatch } = require('./utils/socketAddressUtils');
-const appsRepository = require('./appDatabase/appsRepository');
 const contentSlotService = require('./appLifecycle/contentSlotService');
 const contentManifestSyncService = require('./appMessaging/contentManifestSyncService');
 const fluxEventBus = require('./utils/fluxEventBus');
@@ -617,51 +616,6 @@ async function handleAppRemovedMessage(message, fromIP, port) {
 }
 
 /**
- * To handle node sigterm messages (graceful shutdown notifications).
- * @param {object} message Message.
- * @param {string} fromIP Sender's IP address.
- * @param {string} port Sender's node Api port.
- */
-async function handleNodeSigtermMessage(message, fromIP, port) {
-  try {
-    const { ip, broadcastedAt } = message.data;
-    log.info(`Received SIGTERM notification from node ${ip} (broadcasted at ${new Date(broadcastedAt).toISOString()})`);
-
-    // Verify timestamp - only accept messages from last 4 minutes
-    const currentTimeStamp = Date.now();
-    const timestampOK = fluxCommunicationUtils.verifyTimestampInFluxBroadcast(message, currentTimeStamp, 240000);
-
-    if (!timestampOK) {
-      return;
-    }
-
-    const appsOnNode = await appsRepository.appLocationFromEvents({ ip });
-
-    if (!appsOnNode || appsOnNode.length === 0) {
-      log.info(`No apps found for node ${ip} in event log view, not rebroadcasting sigterm`);
-      return;
-    }
-
-    log.info(`Found ${appsOnNode.length} apps for node ${ip}, updating expiration and rebroadcasting sigterm`);
-
-    const envelope = { version: message.version, timestamp: message.timestamp, pubKey: message.pubKey, signature: message.signature };
-    await messageStore.storeAppStateEvent(messageStore.APP_STATE_EVENT_TYPES.SIGTERM, { message: message.data, envelope });
-    fluxEventBus.publish('network:sigterm', { ip });
-
-    // Rebroadcast to other peers
-    const syncStatus = daemonServiceMiscRpcs.isDaemonSynced();
-    const daemonHeight = syncStatus.data.height || 0;
-    if (daemonHeight >= config.messagesBroadcastRefactorStart) {
-      peerManager.broadcastHash(hash(message.data), `${fromIP}:${port}`);
-    } else {
-      fluxCommunicationMessagesSender.relay(serviceHelper.ensureString(message), `${fromIP}:${port}`);
-    }
-  } catch (error) {
-    log.error(error);
-  }
-}
-
-/**
  * The owner generation record: the app owner's signed word that a grant
  * key's world is retired and the next one draws from the named height. The
  * store verifies the inner OWNER signature against its own copy of the
@@ -864,8 +818,6 @@ async function dispatchFluxMessage(msgObj, peerSocket) {
           setImmediate(() => handleAppInstallingErrorMessage(msgObj, peerSocket.ip, peerSocket.port));
         } else if (msgObj.data.type === 'fluxlimitcounterrecord') {
           setImmediate(() => limitCounter.acceptRecord(msgObj.data));
-        } else if (msgObj.data.type === 'fluxnodesigterm') {
-          setImmediate(() => handleNodeSigtermMessage(msgObj, peerSocket.ip, peerSocket.port));
         } else if (msgObj.data.type === 'fluxmasterlease') {
           setImmediate(() => handleMasterleaseMessage(msgObj, peerSocket.ip, peerSocket.port, announcer));
         } else if (msgObj.data.type === 'fluxnodedown') {
@@ -1874,7 +1826,6 @@ module.exports = {
   handleAppRunningMessage,
   handleIPChangedMessage,
   handleAppRemovedMessage,
-  handleNodeSigtermMessage,
   initiateAndHandleConnection,
   addOutgoingPeer,
   getPeers,

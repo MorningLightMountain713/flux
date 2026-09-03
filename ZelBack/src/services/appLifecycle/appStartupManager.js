@@ -28,7 +28,7 @@ const telemetryIdentityService = require('../telemetryIdentityService');
 const globalState = require('../utils/globalState');
 const fluxEventBus = require('../utils/fluxEventBus');
 const nodeConfirmationService = require('../nodeConfirmationService');
-const { SIGTERM_EXPIRY_MS, RUNNING_EXPIRY_MS } = require('../utils/appConstants');
+const { NODE_DOWN_GRACE_MS, RUNNING_EXPIRY_MS } = require('../utils/appConstants');
 const { parseContainerName, appHasValidLocationOnNode } = require('../utils/appUtilities');
 
 const SYNC_TIMEOUT_MS = config.system.bootSyncTimeoutMs ?? 300000;
@@ -179,8 +179,8 @@ async function reconcileAppsOnBoot() {
       }
 
       // Check if the app still has a valid location record for this node
-      // If the node was offline longer than the TTL (~7 minutes after sigterm),
-      // the location record expired and the app was respawned elsewhere
+      // If the node was offline longer than the grace, the location record was
+      // negated and the app was respawned elsewhere
       if (localSocketAddr) {
         // eslint-disable-next-line no-await-in-loop
         const hasValidLocation = await appHasValidLocationOnNode(appName, localSocketAddr);
@@ -268,13 +268,13 @@ async function manageAppsOnBoot(bootContext) {
     if (bootContext.firstBoot) {
       log.info('appStartupManager - First boot (no heartbeat history), waiting for sync');
     } else {
-      // A clean sigterm shutdown is governed by the SIGTERM grace window; an
-      // unclean/unknown one by the running-location TTL. Gating the running-TTL
-      // clause on !cleanShutdown keeps the grace intact when the running TTL is
-      // shorter than the sigterm window (it never is in prod, but the intent is
-      // that a clean shutdown gets its full grace regardless).
+      // A clean shutdown is governed by the node-down grace; an unclean or
+      // unknown one by the running-location TTL. Gating the running-TTL clause
+      // on !cleanShutdown keeps the grace intact when the running TTL is
+      // shorter than the grace (it never is in prod, but the intent is that a
+      // clean shutdown gets its full grace regardless).
       const locationsExpired = bootContext.cleanShutdown
-        ? bootContext.downtimeMs > SIGTERM_EXPIRY_MS
+        ? bootContext.downtimeMs > NODE_DOWN_GRACE_MS
         : bootContext.downtimeMs > RUNNING_EXPIRY_MS;
 
       if (locationsExpired) {

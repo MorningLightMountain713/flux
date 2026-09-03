@@ -56,6 +56,13 @@ const CLOSE_CODES = Object.freeze({
   // Peering refused by the node-down plane: the dialer is under severe
   // quarantine. A policy close — the dialer backs off, never accuses.
   QUARANTINED: 4020,
+
+  // A stopping FluxOS closing the connections it holds, with its reason: the
+  // machine is going down, or only the process is. Reconnect-worthy — the
+  // duty is dialled again as normal — and the jurors that hold the
+  // connection read the code as the drop's announcement (nodeDownJuror).
+  SHUTTING_DOWN: 4021,
+  RESTARTING: 4022,
 });
 
 const PEER_SOURCE = Object.freeze({

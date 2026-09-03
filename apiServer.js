@@ -41,15 +41,14 @@ const serviceHelper = require('./ZelBack/src/services/serviceHelper');
 const upnpService = require('./ZelBack/src/services/upnpService');
 const nodeDosState = require('./ZelBack/src/services/nodeDosState');
 const requestHistoryStore = require('./ZelBack/src/services/utils/requestHistory');
-const globalState = require('./ZelBack/src/services/utils/globalState');
-const fluxNetworkHelper = require('./ZelBack/src/services/fluxNetworkHelper');
-const fluxCommunicationMessagesSender = require('./ZelBack/src/services/fluxCommunicationMessagesSender');
 const dockerService = require('./ZelBack/src/services/dockerService');
-const dbHelper = require('./ZelBack/src/services/dbHelper');
-const messageStore = require('./ZelBack/src/services/appMessaging/messageStore');
 const { AppSyncOrchestrator } = require('./ZelBack/src/services/appMessaging/appSyncOrchestrator');
-const { SIGTERM_EXPIRY_MS } = require('./ZelBack/src/services/utils/appConstants');
+const { peerManager } = require('./ZelBack/src/services/utils/FluxPeerManager');
+const { CLOSE_CODES } = require('./ZelBack/src/services/utils/FluxPeerSocket');
 const verifyPool = require('./ZelBack/src/services/utils/verifyPool');
+
+// How long the stop waits for its close frames to leave before exiting.
+const STOP_FLUSH_MS = 2000;
 
 // Read through the manager rather than off globalThis: the dependency on the config
 // having been loaded is then a real one, not an ordering convention between requires.
@@ -383,9 +382,13 @@ async function isSystemShuttingDown() {
 }
 
 /**
- * Handle SIGTERM signal for graceful shutdown.
- * Only broadcasts fluxnodesigterm message if the system is actually rebooting/shutting down,
- * not when the service is just being restarted by systemd/pm2.
+ * The stop. Whether the machine is going down or only this process, the
+ * connections this node holds are closed with the reason, so the jurors
+ * holding them read the drop as announced and wait the grace for it before
+ * they look. Nothing is broadcast: only those jurors need to know, and if
+ * this node is not back in time their certificate tells the fleet, carrying
+ * the drop it observed. A shutdown also stops the app containers; a restart
+ * leaves them running.
  */
 async function handleSigterm() {
   log.info('SIGTERM received, checking if system is shutting down...');
@@ -394,62 +397,22 @@ async function handleSigterm() {
   await serviceHelper.delay(100);
 
   const systemShuttingDown = await isSystemShuttingDown();
+  const code = systemShuttingDown ? CLOSE_CODES.SHUTTING_DOWN : CLOSE_CODES.RESTARTING;
 
-  if (!systemShuttingDown) {
-    log.info('System is not shutting down (service restart detected), skipping shutdown broadcast');
-    process.exit(0);
-  }
-
-  log.info('System shutdown/reboot detected, initiating graceful shutdown with peer notification...');
+  await AppSyncOrchestrator.writeShutdownReason(systemShuttingDown ? 'sigterm' : 'restart');
 
   try {
-    const { runningAppsCache } = globalState;
-
-    if (runningAppsCache.size > 0) {
-      log.info(`Node was running ${runningAppsCache.size} apps, broadcasting shutdown notification to peers...`);
-
-      const ip = await fluxNetworkHelper.getLocalSocketAddress();
-      if (ip) {
-        const sigtermMessage = {
-          type: 'fluxnodesigterm',
-          version: 1,
-          ip,
-          broadcastedAt: Date.now(),
-        };
-
-        log.info(`Broadcasting fluxnodesigterm message: ${JSON.stringify(sigtermMessage)}`);
-
-        const signedMessage = await fluxCommunicationMessagesSender.broadcastMessageToAll(sigtermMessage);
-
-        // Store sigterm event in event log and shorten location TTL to ~7 minutes.
-        // Peers apply the same when receiving the sigterm via gossip.
-        try {
-          const envelope = { version: signedMessage.version, timestamp: signedMessage.timestamp, pubKey: signedMessage.pubKey, signature: signedMessage.signature };
-          await messageStore.storeAppStateEvent(messageStore.APP_STATE_EVENT_TYPES.SIGTERM, { message: sigtermMessage, envelope });
-
-          const db = dbHelper.databaseConnection();
-          const database = db.db(config.database.appsglobal.database);
-          const globalAppsLocations = config.database.appsglobal.collections.appsLocations;
-          const newExpireAt = new Date(sigtermMessage.broadcastedAt + SIGTERM_EXPIRY_MS);
-          const update = { $set: { expireAt: newExpireAt } };
-          await dbHelper.updateInDatabase(database, globalAppsLocations, { ip }, update);
-          log.info('Local sigterm event stored and location records updated to expire in ~7 minutes');
-        } catch (dbError) {
-          log.warn(`Failed to update local app expiration: ${dbError.message}`);
-        }
-
-        log.info('Shutdown notification broadcasted successfully');
-      } else {
-        log.warn('Could not get IP address, skipping shutdown broadcast');
-      }
-    } else {
-      log.info('No running apps cached, skipping shutdown broadcast');
-    }
+    const closed = await peerManager.closeAllForStop(code, { flushMs: STOP_FLUSH_MS });
+    log.info(`Closed ${closed} held connections with ${systemShuttingDown ? 'SHUTTING_DOWN' : 'RESTARTING'}`);
   } catch (error) {
-    log.error(`Error during SIGTERM handling: ${error.message}`);
+    log.error(`Error announcing the stop on held connections: ${error.message}`);
   }
 
-  await AppSyncOrchestrator.writeShutdownReason('sigterm');
+  if (!systemShuttingDown) {
+    log.info('System is not shutting down (service restart detected), exiting');
+    verifyPool.stop();
+    process.exit(0);
+  }
 
   // Gracefully stop all running Flux app containers
   try {
@@ -486,9 +449,6 @@ async function handleSigterm() {
   } catch (error) {
     log.error(`Error stopping containers during shutdown: ${error.message}`);
   }
-
-  // Give some time for the broadcast to complete
-  await serviceHelper.delay(1000);
 
   verifyPool.stop();
   log.info('Graceful shutdown complete, exiting...');
