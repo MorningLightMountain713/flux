@@ -795,6 +795,18 @@ describe('quorumGrant grantRegisterCore', () => {
       expect(free.ok).to.equal(true);
     });
 
+    it('a verified carried credential names the incumbent: no wait at the empty seat, for that candidate alone', () => {
+      const carrying = { ...anchored, carriedIncumbent: 'cccc:0' };
+      const { reply } = onPrepare(null, { epoch: 1, candidate: 'cccc:0', generation: 1 }, servedAt + 1, carrying);
+      expect(reply.ok).to.equal(true);
+      const { reply: accepted } = onAccept(null, {
+        epoch: 1, grantee: 'cccc:0', mode: 'held', ttlMs: TTL, generation: 1,
+      }, servedAt + 1, carrying);
+      expect(accepted.ok).to.equal(true);
+      const { reply: other } = onPrepare(null, { epoch: 1, candidate: 'dddd:0', generation: 1 }, servedAt + 1, carrying);
+      expect(other.code, 'the credential is the carrier\'s, not the seat\'s').to.equal('lock_delay');
+    });
+
     it('an absent anchor leaves the seat open', () => {
       const { reply } = onPrepare(null, { epoch: 1, candidate: 'cccc:0', generation: 1 }, servedAt + 1, TUNABLES);
       expect(reply.ok).to.equal(true);

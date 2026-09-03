@@ -173,6 +173,79 @@ describe('quorumGrant rosterOverlay', () => {
     });
   });
 
+  // The term credential (STEP_ACROSS_DESIGN.md D1/D2): the retired world's
+  // basis and a quorum of THAT committee's signed term acceptances, verified by
+  // a referee that never sat on it. The committee is derived exactly as the
+  // referees derive it — the walk key at the carried generation, then the
+  // carried roster chain — and the signatures are over the term's identity
+  // with the CANDIDATE as grantee, so a bundle signed for someone else can
+  // never admit the node presenting it.
+  describe('verifyTermCredential', () => {
+    const EPOCH = 7;
+    const GRANTEE = outpointOf(membership[11]); // not on the committee, as a master need not be
+    const STANDING = GENERATION + 1;
+    function termAcceptance(node, wif, overrides = {}) {
+      const fields = signedEnvelope.fieldsFor('termaccept', {
+        key: KEY, fingerprint: FINGERPRINT, generation: GENERATION, epoch: EPOCH, grantee: GRANTEE, ...overrides,
+      });
+      const signed = signedEnvelope.sign('termaccept', fields, wif);
+      return { grantor: outpointOf(node), signature: signed.signature };
+    }
+    const credential = (signers, extra = {}) => ({
+      fingerprint: FINGERPRINT,
+      generation: GENERATION,
+      epoch: EPOCH,
+      roster: null,
+      acceptances: signers.map((node) => termAcceptance(node, wifs.get(outpointOf(node)))),
+      ...extra,
+    });
+    const opts = { committeeSize: SIZE, candidate: GRANTEE, standingGeneration: STANDING };
+
+    it('a quorum of the retired committee\'s signatures over this candidate\'s term names it the incumbent', () => {
+      const verified = rosterOverlay.verifyTermCredential(membership, KEY, credential(base.members.slice(0, base.quorum)), opts);
+      expect(verified).to.equal(GRANTEE);
+    });
+
+    it('below a quorum, or with a forged signature, or signed by outsiders, it names nobody', () => {
+      expect(rosterOverlay.verifyTermCredential(membership, KEY, credential(base.members.slice(0, base.quorum - 1)), opts)).to.equal(null);
+      const forged = credential(base.members.slice(0, base.quorum));
+      forged.acceptances[0] = { ...forged.acceptances[0], signature: forged.acceptances[1].signature };
+      expect(rosterOverlay.verifyTermCredential(membership, KEY, forged, opts)).to.equal(null);
+      const outsiders = membership.filter((node) => !base.members.includes(node));
+      expect(rosterOverlay.verifyTermCredential(membership, KEY, credential(outsiders.slice(0, base.quorum)), opts)).to.equal(null);
+      const repeated = credential(base.members.slice(0, base.quorum));
+      repeated.acceptances = Array(base.quorum).fill(repeated.acceptances[0]);
+      expect(rosterOverlay.verifyTermCredential(membership, KEY, repeated, opts), 'one signer counted once').to.equal(null);
+    });
+
+    it('only the world immediately below the standing one, and only for the grantee the signatures name', () => {
+      const good = credential(base.members.slice(0, base.quorum));
+      expect(rosterOverlay.verifyTermCredential(membership, KEY, good, { ...opts, standingGeneration: STANDING + 1 })).to.equal(null);
+      expect(rosterOverlay.verifyTermCredential(membership, KEY, good, { ...opts, standingGeneration: GENERATION })).to.equal(null);
+      expect(rosterOverlay.verifyTermCredential(membership, KEY, good, { ...opts, candidate: outpointOf(membership[10]) }), 'presented by someone else').to.equal(null);
+      expect(rosterOverlay.verifyTermCredential(membership, KEY, { ...good, epoch: EPOCH + 1 }, opts), 'another epoch is another term').to.equal(null);
+    });
+
+    it('a healed committee signs through its roster chain: the seat the chain added counts, the seat it removed does not', () => {
+      const { entry, added, survivors } = buildEntry(1, base.members, new Set());
+      const removed = base.members[0];
+      const healed = [...survivors, added];
+      const withChain = credential(healed.slice(0, base.quorum), { roster: { chain: [entry] } });
+      expect(rosterOverlay.verifyTermCredential(membership, KEY, withChain, opts)).to.equal(GRANTEE);
+      const staleSigners = [removed, ...survivors.slice(0, base.quorum - 1)];
+      const stale = credential(staleSigners, { roster: { chain: [entry] } });
+      expect(rosterOverlay.verifyTermCredential(membership, KEY, stale, opts)).to.equal(null);
+    });
+
+    it('a malformed credential is refused as malformed, never verified', () => {
+      expect(rosterOverlay.credentialWellFormed(credential(base.members.slice(0, base.quorum)))).to.equal(true);
+      expect(rosterOverlay.credentialWellFormed(null)).to.equal(false);
+      expect(rosterOverlay.credentialWellFormed({ fingerprint: FINGERPRINT, generation: 0, epoch: 1, acceptances: 'x' })).to.equal(false);
+      expect(rosterOverlay.credentialWellFormed({ fingerprint: FINGERPRINT, generation: 0, epoch: 1, roster: { chain: 'x' }, acceptances: [] })).to.equal(false);
+      expect(rosterOverlay.verifyTermCredential(membership, KEY, null, opts)).to.equal(null);
+    });
+  });
+
   describe('verifyChain', () => {
     it('accepts a quorum-signed chain and returns the effective roster', () => {
       const { entry, added } = buildEntry(1, base.members, new Set());

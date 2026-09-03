@@ -300,7 +300,7 @@ async function readAsk(req, type) {
   const body = serviceHelper.ensureObject(req.body) ?? {};
   const {
     key, epoch, candidate, ttlMs, generation, fingerprint, at, signature,
-    remove, add, seq, chain, cancels, cert,
+    remove, add, seq, chain, cancels, cert, carried,
   } = body;
 
   if (typeof key !== 'string' || !KEY_PATTERN.test(key)) {
@@ -362,6 +362,11 @@ async function readAsk(req, type) {
   if (cancels !== undefined && !rosterOverlay.cancelChainWellFormed(cancels)) {
     return bad(400, 'malformed cancels');
   }
+  // The step-across credential rides the same way (STEP_ACROSS_DESIGN.md D2):
+  // outside the signature, shape-gated here, verified before the register.
+  if (carried !== undefined && !rosterOverlay.credentialWellFormed(carried)) {
+    return bad(400, 'malformed credential');
+  }
   if (!Number.isSafeInteger(at) || Math.abs(Date.now() - at) > askFreshnessMs()) {
     return bad(400, 'stale ask');
   }
@@ -396,6 +401,7 @@ async function readAsk(req, type) {
   const ask = {
     key, mode, epoch, candidate, ttlMs, generation, fingerprint, at, remove, add, seq, chain, cancels,
     ...(cert !== undefined ? { cert } : {}),
+    ...(carried !== undefined ? { carried } : {}),
   };
   const fields = signedEnvelope.fieldsFor(type, ask);
   if (!fields || !signedEnvelope.verify(type, fields, signature, askerNode.pubkey)) {
@@ -880,7 +886,22 @@ async function serve(req, res, type, operate) {
       }
     }
 
-    const reply = await operate(ask, { servingSinceMs: servingSinceFor(ask.key) });
+    // The carried credential (STEP_ACROSS_DESIGN.md D2/D3): the retired
+    // world's basis resolved to ITS membership, the standing generation read
+    // off the store, and the overlay's verification with real signatures. A
+    // credential that verifies makes the candidate the recorded incumbent at
+    // this cell's empty seat; one that does not makes the ask a stranger's.
+    let carriedIncumbent = null;
+    if (ask.carried && (type === 'prepare' || type === 'accept') && (ask.mode ?? 'held') === 'held') {
+      const basis = networkStateService.membershipAt(ask.carried.fingerprint);
+      const standing = await heldGeneration(ask.key);
+      carriedIncumbent = basis
+        ? rosterOverlay.verifyTermCredential(basis, ask.key, ask.carried, {
+          committeeSize: committeeSize('held'), candidate: ask.candidate, standingGeneration: standing.generation,
+        })
+        : null;
+    }
+    const reply = await operate(ask, { servingSinceMs: servingSinceFor(ask.key), carriedIncumbent });
     ms.operate = Date.now() - t0 - ms.read - ms.committee - (ms.holds ?? 0);
     report('served', reply?.ok === false ? reply.code : undefined);
     return res.json(messageHelper.createDataMessage(reply));

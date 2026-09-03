@@ -100,12 +100,17 @@ function lockDelayRemaining(record, candidate, nowMs, lockDelayMs, servingSinceM
  *
  * @returns {number} ms the candidate must still wait; 0 when free to proceed
  */
-function newGenerationSeatRemaining(record, request, nowMs, lockDelayMs, servingSinceMs) {
+function newGenerationSeatRemaining(record, request, nowMs, lockDelayMs, servingSinceMs, carriedIncumbent) {
   const generation = request.generation ?? 0;
   if (generation < 1) return 0;
   const accepted = record?.accepted;
   if (accepted && (accepted.generation ?? 0) === generation) return 0;
-  if (isGrantee(accepted, request.candidate ?? request.grantee)) return 0;
+  const asker = request.candidate ?? request.grantee;
+  if (isGrantee(accepted, asker)) return 0;
+  // the recorded incumbent by PROOF (STEP_ACROSS_DESIGN.md D3): a quorum of
+  // the retired committee's signatures, verified by the controller, names the
+  // carrier — and only the carrier — as the seat's incumbent
+  if (carriedIncumbent && asker === carriedIncumbent) return 0;
   if (!servingSinceMs) return 0;
   return Math.max(0, servingSinceMs + lockDelayMs - nowMs);
 }
@@ -155,7 +160,7 @@ function decidePrepare(record, request, nowMs, tunables) {
   if (waitMs > 0) {
     return { reply: refusal('lock_delay', record, { retryAfterMs: waitMs }), record: null };
   }
-  const seatMs = newGenerationSeatRemaining(record, request, nowMs, tunables.lockDelayMs, tunables.servingSinceMs);
+  const seatMs = newGenerationSeatRemaining(record, request, nowMs, tunables.lockDelayMs, tunables.servingSinceMs, tunables.carriedIncumbent);
   if (seatMs > 0) {
     return { reply: refusal('lock_delay', record, { retryAfterMs: seatMs }), record: null };
   }
@@ -224,7 +229,7 @@ function onAccept(record, request, nowMs, tunables) {
   if (waitMs > 0) {
     return { reply: refusal('lock_delay', record, { retryAfterMs: waitMs }), record: null };
   }
-  const seatMs = newGenerationSeatRemaining(record, request, nowMs, tunables.lockDelayMs, tunables.servingSinceMs);
+  const seatMs = newGenerationSeatRemaining(record, request, nowMs, tunables.lockDelayMs, tunables.servingSinceMs, tunables.carriedIncumbent);
   if (seatMs > 0) {
     return { reply: refusal('lock_delay', record, { retryAfterMs: seatMs }), record: null };
   }
