@@ -106,6 +106,7 @@ describe('quorumGrant grantClient', () => {
   let clockNow;
   let readCostMs; // what each record read costs this node on its OWN clock
   let refereeingAnswer; // record reads carry it when set; undefined = old node
+  let servingAnswer; // record reads carry it when set; undefined = a node without the word
   let teaching; // hosts refusing every ask under a newer world, and teaching it
   let taughtRecord; // the standing generation record those refusals and every record read carry
 
@@ -250,6 +251,7 @@ describe('quorumGrant grantClient', () => {
     clockNow = 1_000_000;
     readCostMs = 0;
     refereeingAnswer = undefined;
+    servingAnswer = undefined;
     teaching = new Set();
     taughtRecord = null;
 
@@ -277,6 +279,7 @@ describe('quorumGrant grantClient', () => {
               remainingMs: Number.isFinite(expiresAt) ? Math.max(0, expiresAt - Date.now()) : null,
               roster: stored?.roster ?? null,
               ...(refereeingAnswer !== undefined ? { refereeing: refereeingAnswer } : {}),
+              ...(servingAnswer !== undefined ? { serving: servingAnswer } : {}),
               ...(taughtRecord ? { generation: taughtRecord.generation, generationRecord: taughtRecord } : {}),
             },
           },
@@ -926,6 +929,25 @@ describe('quorumGrant grantClient', () => {
       refereeingAnswer = false;
       const answer = await grantClient.witnessAnswer(KEY);
       expect(answer.quorumReachable).to.equal(false);
+    });
+
+    it('a committee that referees but is not SERVING counts as unreachable — a restart wave must coast, not demote', async () => {
+      await grantClient.acquire(KEY, holderOptions());
+      // every grantor referees (the drains are not in that word) but is in a
+      // drain: no takeover is possible until the drains lift, so the witness
+      // must not talk the incumbent out of the coast (formal/quiet-window rows 29–31)
+      refereeingAnswer = true;
+      servingAnswer = false;
+      const answer = await grantClient.witnessAnswer(KEY);
+      expect(answer.quorumReachable).to.equal(false);
+    });
+
+    it('a node without the serving word counts as it always did', async () => {
+      await grantClient.acquire(KEY, holderOptions());
+      refereeingAnswer = true;
+      servingAnswer = undefined;
+      const answer = await grantClient.witnessAnswer(KEY);
+      expect(answer.quorumReachable).to.equal(true);
     });
 
     it('carryAsk computes the committee itself and carries verbatim', async () => {

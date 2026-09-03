@@ -1089,6 +1089,22 @@ async function record(req, res) {
     // lock-delay (the witness polls are exactly the traffic a coast has)
     observeSynced(daemonSynced && booted);
     const refereeing = daemonSynced && booted && !resyncPending?.has(key);
+    // Whether this cell would SERVE an ask for the key right now: refereeing
+    // AND its rejoin drain over AND the key's generation not draining. The
+    // drains are deliberately not in `refereeing` — a draining cell referees
+    // and counts as such everywhere but the coast — and `serving` is the word
+    // the witness poll consumes: a quorum of cells in a drain can seat nobody,
+    // so a restart wave reads as committee-down and the incumbent coasts
+    // (formal/quiet-window DrainAwareCoast, rows 23 and 29–31).
+    let generationDraining = false;
+    if (!founderShaped(key)) {
+      const known = await heldGeneration(key);
+      if (known.generation >= 1 && known.height !== null) {
+        const height = daemonServiceMiscRpcs.isDaemonSynced()?.data?.height ?? 0;
+        generationDraining = height < known.height + generationDrainBlocks();
+      }
+    }
+    const serving = refereeing && grantRegister.drainRemainingMs() === 0 && !generationDraining;
     return res.json(messageHelper.createDataMessage({
       key,
       promisedEpoch: stored?.promisedEpoch ?? 0,
@@ -1097,6 +1113,7 @@ async function record(req, res) {
       roster: stored?.roster ?? null,
       cancels: stored?.cancels ?? null,
       refereeing,
+      serving,
       ...(await taught(key)),
     }));
   } catch (error) {

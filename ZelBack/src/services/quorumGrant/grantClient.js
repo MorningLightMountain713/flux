@@ -1610,11 +1610,17 @@ async function witnessAnswer(key, mode = 'held') {
         );
         // A cell that answers reads but is not REFEREEING cannot seat a
         // challenger, and counting it would talk the incumbent out of the
-        // coast exactly when the whole fleet's grantors went quiet. An
-        // absent field is an older node and counts as it always did.
+        // coast exactly when the whole fleet's grantors went quiet. Nor can
+        // a cell that referees but is not SERVING — in its rejoin drain or
+        // the key's generation drain (the drain-aware coast, formal/quiet-
+        // window rows 23 and 29–31): a restart wave is committee-down until
+        // the drains lift, and the register anchors every successor's wait
+        // at that lift. An absent field is an older node and counts as it
+        // always did.
         await learnGeneration(key, committee.generation, response?.data?.data);
         return response?.data?.status === 'success'
-          && response.data.data?.refereeing !== false;
+          && response.data.data?.refereeing !== false
+          && response.data.data?.serving !== false;
       } catch (error) {
         return false;
       }

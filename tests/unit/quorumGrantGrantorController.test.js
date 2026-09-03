@@ -1454,6 +1454,54 @@ describe('quorumGrant grantorController', () => {
     });
   });
 
+  // The serving word (formal/quiet-window DrainAwareCoast, rows 23 and 29–31):
+  // whether this cell would SERVE an ask for the key right now. `refereeing`
+  // deliberately excludes the drains (a draining cell is refereeing and must
+  // count as such for everything but the coast); `serving` is refereeing AND
+  // the rejoin drain over AND the key's generation not draining. The witness
+  // counts only serving cells, so a restart wave reads as committee-down and
+  // the incumbent coasts instead of demoting.
+  describe('the record read answers serving', () => {
+    beforeEach(() => {
+      sinon.stub(grantRegister, 'drainRemainingMs').returns(0);
+    });
+    const readRecord = async () => {
+      const req = fakeReq({});
+      req.query.key = 'myapp/master';
+      const res = fakeRes();
+      await grantorController.record(req, res);
+      return res.body.data;
+    };
+
+    it('serving is true when the cell referees and no drain stands', async () => {
+      const data = await readRecord();
+      expect(data.refereeing).to.equal(true);
+      expect(data.serving).to.equal(true);
+    });
+
+    it('the rejoin drain makes the cell non-serving while it still referees', async () => {
+      grantRegister.drainRemainingMs.returns(45_000);
+      const data = await readRecord();
+      expect(data.refereeing).to.equal(true);
+      expect(data.serving).to.equal(false);
+    });
+
+    it("the key's generation drain makes the cell non-serving for that key, and serving once it lifts", async () => {
+      messageStore.getGrantGenerationRecord.resolves({ data: { generation: 1, height: 95 } });
+      daemonServiceMiscRpcs.isDaemonSynced.returns({ status: 'success', data: { synced: true, height: 100, header: 100 } });
+      expect((await readRecord()).serving).to.equal(false);
+      daemonServiceMiscRpcs.isDaemonSynced.returns({ status: 'success', data: { synced: true, height: 115, header: 115 } });
+      expect((await readRecord()).serving).to.equal(true);
+    });
+
+    it('a cell that is not refereeing is not serving either', async () => {
+      grantorController.registerSyncReadyProvider(() => false);
+      const data = await readRecord();
+      expect(data.refereeing).to.equal(false);
+      expect(data.serving).to.equal(false);
+    });
+  });
+
   // The re-rolled seat's anchor (formal/quiet-window, DrainLiftAnchoredLockDelay
   // and its receipt half): a re-rolled generation's seat at this cell is empty,
   // and the generation drain and the record's receipt both close the register
