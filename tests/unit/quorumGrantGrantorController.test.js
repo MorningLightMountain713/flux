@@ -1368,7 +1368,7 @@ describe('quorumGrant grantorController', () => {
       await grantorController.prepare(fakeReq(signedAsk('prepare')), res);
       expect(res.statusCode).to.equal(200);
       const context = grantRegister.prepare.lastCall.args[2];
-      expect(context.refereeingSinceMs).to.be.at.least(before);
+      expect(context.servingSinceMs).to.be.at.least(before);
     });
 
     it('an unregistered or throwing provider fails closed', async () => {
@@ -1411,8 +1411,8 @@ describe('quorumGrant grantorController', () => {
       expect(res.statusCode).to.equal(200);
       const context = grantRegister.prepare.lastCall.args[2];
       expect(context, 'the register call must carry the anchor context').to.be.an('object');
-      expect(context.refereeingSinceMs).to.be.at.least(before);
-      expect(context.refereeingSinceMs).to.be.at.most(Date.now());
+      expect(context.servingSinceMs).to.be.at.least(before);
+      expect(context.servingSinceMs).to.be.at.most(Date.now());
     });
 
     it('a stale spell observed only by the record read still moves the anchor', async () => {
@@ -1432,7 +1432,7 @@ describe('quorumGrant grantorController', () => {
       expect(res.statusCode).to.equal(200);
       const context = grantRegister.accept.lastCall.args[2];
       expect(context, 'the register call must carry the anchor context').to.be.an('object');
-      expect(context.refereeingSinceMs).to.be.at.least(before);
+      expect(context.servingSinceMs).to.be.at.least(before);
     });
 
     it('a resync clearance stamps the key its own return moment', async () => {
@@ -1450,7 +1450,107 @@ describe('quorumGrant grantorController', () => {
       expect(res.statusCode).to.equal(200);
       const context = grantRegister.prepare.lastCall.args[2];
       expect(context, 'the register call must carry the anchor context').to.be.an('object');
-      expect(context.refereeingSinceMs).to.be.at.least(before);
+      expect(context.servingSinceMs).to.be.at.least(before);
+    });
+  });
+
+  // The re-rolled seat's anchor (formal/quiet-window, DrainLiftAnchoredLockDelay
+  // and its receipt half): a re-rolled generation's seat at this cell is empty,
+  // and the generation drain and the record's receipt both close the register
+  // to it without ageing any row. The controller stamps the moment this cell
+  // FIRST served under the standing generation past its drain — later than
+  // the lift and the receipt, the safe side — once per generation, and the
+  // register anchors the successor's wait at the later of that and the
+  // refereeing return. Generation zero is an app's birth and stamps nothing.
+  describe('the re-rolled generation serving-since anchor', () => {
+    const tick = (ms) => new Promise((resolve) => { setTimeout(resolve, ms); });
+    const rerolled = (generation, height) => {
+      messageStore.getGrantGenerationRecord.resolves({ data: { generation, height } });
+    };
+    const viewAt = (height) => {
+      daemonServiceMiscRpcs.isDaemonSynced.returns({
+        status: 'success', data: { synced: true, height, header: height },
+      });
+    };
+
+    it('the first ask served under a re-rolled generation stamps the anchor past the refereeing return', async () => {
+      rerolled(1, 95);
+      viewAt(115);
+      // the refereeing return is observed at the very first ask, whatever it asks
+      const retired = fakeRes();
+      await grantorController.prepare(fakeReq(signedAsk('prepare', { generation: 0 })), retired);
+      expect(retired.statusCode).to.equal(409);
+      await tick(5);
+
+      const before = Date.now();
+      const res = fakeRes();
+      await grantorController.prepare(fakeReq(signedAsk('prepare', { generation: 1 })), res);
+      expect(res.statusCode).to.equal(200);
+      const context = grantRegister.prepare.lastCall.args[2];
+      expect(context, 'the register call must carry the anchor context').to.be.an('object');
+      expect(context.servingSinceMs).to.be.at.least(before);
+      expect(context.servingSinceMs).to.be.at.most(Date.now());
+    });
+
+    it('the stamp is made once: a later ask under the same generation carries the same moment', async () => {
+      rerolled(1, 95);
+      viewAt(115);
+      await grantorController.prepare(fakeReq(signedAsk('prepare', { generation: 1 })), fakeRes());
+      const first = grantRegister.prepare.lastCall.args[2].servingSinceMs;
+      await tick(5);
+      await grantorController.prepare(fakeReq(signedAsk('prepare', { generation: 1 })), fakeRes());
+      expect(grantRegister.prepare.lastCall.args[2].servingSinceMs).to.equal(first);
+    });
+
+    it('a generation still draining stamps nothing — the anchor is the first serve past the lift', async () => {
+      rerolled(1, 95);
+      viewAt(100);
+      const draining = fakeRes();
+      await grantorController.prepare(fakeReq(signedAsk('prepare', { generation: 1 })), draining);
+      expect(draining.statusCode).to.equal(409);
+      expect(draining.body.data.message).to.match(/draining/);
+      await tick(5);
+
+      const before = Date.now();
+      viewAt(115);
+      const res = fakeRes();
+      await grantorController.prepare(fakeReq(signedAsk('prepare', { generation: 1 })), res);
+      expect(res.statusCode).to.equal(200);
+      expect(grantRegister.prepare.lastCall.args[2].servingSinceMs).to.be.at.least(before);
+    });
+
+    it('a newer generation re-stamps at its own first serve', async () => {
+      rerolled(1, 95);
+      viewAt(115);
+      await grantorController.prepare(fakeReq(signedAsk('prepare', { generation: 1 })), fakeRes());
+      const first = grantRegister.prepare.lastCall.args[2].servingSinceMs;
+      await tick(5);
+
+      const before = Date.now();
+      rerolled(2, 110);
+      viewAt(130);
+      const res = fakeRes();
+      await grantorController.prepare(fakeReq(signedAsk('prepare', { generation: 2 })), res);
+      expect(res.statusCode).to.equal(200);
+      const stamped = grantRegister.prepare.lastCall.args[2].servingSinceMs;
+      expect(stamped).to.be.at.least(before);
+      expect(stamped).to.be.above(first);
+    });
+
+    it("generation zero stamps nothing beyond the refereeing return — an app's birth is not a re-roll", async () => {
+      // the refereeing return is stamped at the first ask of all; a FIRST ask
+      // about another key, later, must carry that same return and nothing
+      // of its own — the stamp is per key, so only a second key can tell
+      await grantorController.prepare(fakeReq(signedAsk('prepare')), fakeRes());
+      const returned = grantRegister.prepare.lastCall.args[2].servingSinceMs;
+      await tick(5);
+      const before = Date.now();
+      const res = fakeRes();
+      await grantorController.prepare(fakeReq(signedAsk('prepare', { key: 'otherapp/master' })), res);
+      expect(res.statusCode).to.equal(200);
+      const other = grantRegister.prepare.lastCall.args[2].servingSinceMs;
+      expect(other).to.equal(returned);
+      expect(other).to.be.below(before);
     });
   });
 

@@ -104,8 +104,11 @@ function serialized(key, operation) {
  * @param {string} key resource key
  * @param {(record: object|null, nowMs: number, knobs: object) => {reply: object, record: object|null}} decide
  * @param {object} [context] per-call facts the core judges beside the config
- *   knobs — today refereeingSinceMs, the controller's refereeing-return
- *   anchor for the lock-delay (see grantRegisterCore.lockDelayRemaining)
+ *   knobs — today servingSinceMs, the controller's serving-since anchor for
+ *   the lock-delay and the re-rolled seat (the later of its return to
+ *   refereeing and its first serve under the standing generation past that
+ *   generation's drain; see grantRegisterCore.lockDelayRemaining and
+ *   newGenerationSeatRemaining)
  * @returns {Promise<object>} the core's reply, or a fail-closed refusal
  */
 async function transact(key, decide, context) {
