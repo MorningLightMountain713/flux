@@ -100,8 +100,8 @@ describe('FluxOSCryptoProvider', () => {
     // The AAD authenticates a v9 container's cleartext half — its name, owner,
     // ttl, placement and the resource summary other nodes schedule on without
     // decrypting. Forwarding it only `if (aad)` made a caller's omission look
-    // like a spec that legitimately has none, and SAS then sealed with no
-    // binding and answered ok.
+    // like a spec that legitimately has none, and the benchmark channel then
+    // sealed with no binding and answered ok.
     it('refuses to seal without an aad, rather than sealing an unbound container', async () => {
       const provider = await fluxOSCryptoProvider.create('TestApp', '1abc');
 
