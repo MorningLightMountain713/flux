@@ -279,6 +279,21 @@ describe('the committee heals its dark seat, and the owner re-deals the walk', f
     }, { timeout: 120000, interval: 10000, label: 'the returning corpse adopted' });
   });
 
+  async function submitReroll(generation) {
+    const owner = appOwnerKey();
+    const { currentHeight } = await getState();
+    const at = Date.now();
+    const canonical = `fluxgrantgeneration:${name}|master|${generation}|${currentHeight}|${at}`;
+    const signature = await signBtcMessage(canonical, owner.privkey);
+    return fetch(`${env.clients[0].url}/apps/grantgeneration`, {
+      method: 'POST',
+      headers: { zelidauth: ownerAuth0, 'content-type': 'application/json' },
+      body: JSON.stringify({
+        appName: name, role: 'master', generation, height: currentHeight, at, signature,
+      }),
+    });
+  }
+
   it('the owner re-deals a stopped app\'s walk, and the restarted instances take the new generation through its drain', async function () {
     this.timeout(600000);
 
@@ -300,28 +315,20 @@ describe('the committee heals its dark seat, and the owner re-deals the walk', f
     expect(before, 'a standing grant before the re-roll').to.not.equal(null);
     expect(before.generation).to.equal(0);
 
-    const owner = appOwnerKey();
-    async function submitReroll() {
-      const { currentHeight } = await getState();
-      const at = Date.now();
-      const canonical = `fluxgrantgeneration:${name}|master|1|${currentHeight}|${at}`;
-      const signature = await signBtcMessage(canonical, owner.privkey);
-      return fetch(`${env.clients[0].url}/apps/grantgeneration`, {
-        method: 'POST',
-        headers: { zelidauth: ownerAuth0, 'content-type': 'application/json' },
-        body: JSON.stringify({
-          appName: name, role: 'master', generation: 1, height: currentHeight, at, signature,
-        }),
-      });
-    }
+    const masterIndex = Number(Object.keys(outpoints).find((i) => outpoints[i] === before.grantee));
+    const markers = env.clients.map((c) => c.getLastEventId());
 
-    // Release-and-stop: the master yields its term and every instance stops
-    // under the operator lock. The re-roll lands at once.
+    // Release-and-stop, settled: the master yields its term and every
+    // instance stops under the operator lock. Then the re-roll lands at once.
     const yielded = await fetch(`${env.clients[0].url}/apps/appyield/${name}/true`, {
       headers: { zelidauth: ownerAuth0 },
     });
     expect(yielded.status).to.equal(200);
-    const submitted = await submitReroll();
+    await env.clients[masterIndex].waitForEvent('quorumGrant:yielded', (d) => d.key === `${name}/master`, 60000, { afterId: markers[masterIndex] });
+    await Promise.all(HOLDERS.map((i) => waitForReconcileActuated(
+      env.clients[i], `${name}_${name}`, 'settledStopped', 90000, { afterId: markers[i] },
+    )));
+    const submitted = await submitReroll(1);
     const submittedBody = await submitted.text();
     expect(submitted.status, submittedBody).to.equal(200);
 
@@ -374,4 +381,71 @@ describe('the committee heals its dark seat, and the owner re-deals the walk', f
     const after = await quorumVerdict();
     expect(after.generation, 'one clean generation-1 world').to.equal(1);
   }
+
+  // A release names the generation its row was written under. The owner
+  // re-rolls under the running master and stops the app inside the drain:
+  // the release names the retired generation, the cells holding the master's
+  // row serve it, and the restarted instances take the new generation once
+  // the drain lifts. A refused release leaves a live row that shields every
+  // pursuit and is re-learned by the restarted master.
+  it('the owner re-rolls under the running master and stops the app inside the drain: the retired release lands, and the restarted instances take the new generation', async function () {
+    this.timeout(600000);
+    await stopTicker();
+    try {
+      const before = await quorumVerdict();
+      expect(before, 'a standing grant before the re-roll').to.not.equal(null);
+      expect(before.generation).to.equal(1);
+      const masterIndex = Number(Object.keys(outpoints).find((i) => outpoints[i] === before.grantee));
+      const key = `${name}/master`;
+      const markers = env.clients.map((c) => c.getLastEventId());
+
+      // the re-roll lands under the running master; every holder stores it
+      const submitted = await submitReroll(2);
+      const submittedBody = await submitted.text();
+      expect(submitted.status, submittedBody).to.equal(200);
+      await Promise.all(HOLDERS.map((i) => env.clients[i].waitForEvent(
+        'quorumGrant:generationRecord',
+        (d) => d.appName === name && d.role === 'master' && d.generation === 2,
+        120000,
+        { afterId: markers[i] },
+      )));
+
+      // release-and-stop inside the drain: the release names generation 1
+      const yielded = await fetch(`${env.clients[0].url}/apps/appyield/${name}/true`, {
+        headers: { zelidauth: ownerAuth0 },
+      });
+      expect(yielded.status).to.equal(200);
+      await env.clients[masterIndex].waitForEvent('quorumGrant:yielded', (d) => d.key === key, 60000, { afterId: markers[masterIndex] });
+      await waitFor(async () => {
+        const cells = await Promise.all(env.clients.map((_, i) => readCell(i)));
+        const rows = cells.filter((c) => c?.accepted?.grantee === before.grantee && (c.accepted.generation ?? 0) === 1);
+        return rows.length > 0 && rows.every((c) => c.accepted.released === true);
+      }, { timeout: 60000, interval: 5000, label: 'every generation-1 row naming the master is released' });
+      await Promise.all(HOLDERS.map((i) => waitForReconcileActuated(
+        env.clients[i], `${name}_${name}`, 'settledStopped', 90000, { afterId: markers[i] },
+      )));
+
+      // restart into the drain: nothing at generation 2 while the chain stands still
+      const restarted = await fetch(`${env.clients[0].url}/apps/apprestart/${name}/true`, {
+        headers: { zelidauth: ownerAuth0 },
+      });
+      expect(restarted.status).to.equal(200);
+      await Promise.all(HOLDERS.map((i) => assertNoEvent(
+        env.clients[i], 'quorumGrant:granted', (d) => d.key === key && d.generation === 2, 40000,
+      )));
+
+      await advanceBlock();
+      await advanceBlock();
+      await advanceBlock();
+      await Promise.any(HOLDERS.map((i) => env.clients[i].waitForEvent(
+        'quorumGrant:granted', (d) => d.key === key && d.generation === 2, 360000,
+      )));
+      await waitFor(async () => {
+        const verdict = await quorumVerdict();
+        return verdict !== null && verdict.generation === 2;
+      }, { timeout: 60000, interval: 5000, label: 'a generation-2 quorum forms' });
+    } finally {
+      await startTicker();
+    }
+  });
 });
