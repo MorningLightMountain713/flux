@@ -19,51 +19,34 @@ import { getState, advanceBlocks, stopTicker } from '../framework/daemon-control
 import { authenticate, signBtcMessage } from '../auth.js';
 import { appOwnerKey } from '../framework/keys.js';
 
-// The walk itself, never a copy of it: which cells a re-rolled committee
-// shares with the granting one is decided by the function the nodes run.
+// The walk the nodes run, so the suite deals the same committees they do.
 const require = createRequire(import.meta.url);
 const { selectCommittee } = require('../../../ZelBack/src/services/utils/committeeSelector.js');
 
-// Step-across (STEP_ACROSS_DESIGN.md, shape stamped 2026-09-03): the owner
-// re-rolls an app's committee while its master RUNS, and the master keeps its
-// container. Today a re-roll is stop-first — ownerGenerationController refuses
-// it under a live term, because the fresh referees have never heard of the
-// master: their seats are empty, and a standby that took them would be a
-// second master. The build this suite proves: every referee that accepts or
-// renews a term signs it (termaccept); the holder keeps a quorum of those
-// signatures as its credential; a referee that never sat on the granting
-// committee verifies the carried credential and admits the carrier at its
-// empty seat with no wait; and the holder, on learning a newer generation
-// stands, steps across to the new committee with the credential before it
-// renews. The stop-first door lifts for good only once this suite is green
-// (the design's step 5); this suite passes it by its own rule, below.
+// A re-roll under a running master (STEP_ACROSS_DESIGN.md). Every referee
+// that accepts or renews a term signs it; the holder keeps a quorum of those
+// signatures as its credential; a referee on the re-rolled committee admits a
+// verified carrier at its empty seat with no wait; the holder steps across to
+// the new committee before it renews. Proved here: the master's container ID
+// never changes, it holds the new generation's term, nobody else is granted,
+// and the retired committee's rows lapse.
 //
-// THE DOOR AS BUILT is a door for one TTL. It refuses while the published
-// masterlease record is younger than its ttlMs, and its comment says a
-// renewing master keeps that record fresh — but nothing republishes on a
-// renewal: publishRecord runs at the grant, a heal, a refresh and the
-// step-across, and the record's broadcastedAt is stamped at publish. So a
-// re-roll submitted one TTL after the master's grant lands UNDER THE RUNNING
-// MASTER today, on any fleet. 1203's door assertion passed on timing (its
-// submission came seconds after a fresh grant). This suite makes the hole a
-// run: the first submission, seconds after the grant, is refused; the same
-// submission lands once the record ages past its TTL, with the master
-// renewing throughout — which is exactly the situation the step-across
-// exists to make safe.
+// The stop-first door refuses a re-roll only while the published masterlease
+// record is younger than its TTL, and renewals never republish that record
+// (publishRecord runs at the grant, a heal, a refresh and the step-across).
+// One TTL after the grant a re-roll lands under the running master. The suite
+// submits until it does; step 5 of the design removes the door.
 //
-// The vacuity trap (formal/quiet-window row 24, and the thirteen-peer unit
-// fixture before it): in a small world two committees share a QUORUM of cells,
-// the master is exempt at a shared cell by its own row, and the credential is
-// never the deciding fact. Nine-of-sixteen committees share five cells on
-// average — a quorum. So the app's NAME is chosen, with the walk the nodes
-// run, so that its re-rolled committee shares at most quorum − 2 cells with
-// the granting one: the master's new term needs at least two cells that never
-// held a row for it, and only the credential admits it there ahead of the
-// empty-seat wait. The choice is then checked against the cells themselves.
+// Two committees that share a quorum of cells never ask the credential: the
+// master is exempt at a shared cell by its own row (formal/quiet-window row
+// 24). Nine-of-sixteen committees share five cells on average, a quorum, so
+// the app's name is chosen with the walk the nodes run: its re-rolled
+// committee shares at most quorum − 2 cells with the granting one, and the
+// master's new term must stand on at least two cells that never held a row
+// for it. The choice is checked against the cells.
 //
-// The chain is driven by hand: the retirement drain is measured in blocks,
-// and with the ticker stopped the blocks that lift it are exactly the ones
-// this suite advances.
+// The retirement drain is measured in blocks; the ticker is stopped and the
+// suite advances the blocks that lift it.
 
 const HOLDERS = [0, 1, 2];
 const NODES = 16;
@@ -72,7 +55,7 @@ const HELD_TTL_MS = 90000;
 const DRAIN_BLOCKS = 3;
 
 const outpointOf = (node) => `${node.txhash}:${node.outidx}`;
-// rosterOverlay.walkKeyFor: the generation-salted walk key
+// rosterOverlay.walkKeyFor
 const walkKeyFor = (name, generation) => `quorumgrant|${name}/master@${generation}`;
 
 function committeeOf(membership, name, generation) {
@@ -82,9 +65,7 @@ function committeeOf(membership, name, generation) {
 }
 
 // An app whose re-rolled committee shares at most quorum − 2 cells with its
-// granting one. Names are tried in order off one stem; the walk is a hash, so
-// a few dozen suffice — and a run that finds none says so rather than proving
-// nothing.
+// granting one. A run that finds none says so.
 function chooseFreshCellApp(membership, stem) {
   for (let i = 0; i < 400; i += 1) {
     const name = `${stem}${i.toString(36)}`;
@@ -125,8 +106,7 @@ describe('step-across: the owner re-rolls the committee under a running master, 
     }
   }
 
-  // The cells whose register names a grantee at a generation, live or lapsed —
-  // read off every node, so a row that landed off the walk shows up.
+  // The cells whose register names a grantee at a generation, live or lapsed.
   async function cellsNaming(grantee, generation) {
     const cells = await Promise.all(env.clients.map((_, i) => readCell(i)));
     return new Set(cells
@@ -164,8 +144,7 @@ describe('step-across: the owner re-rolls the committee under a running master, 
     return HOLDERS.filter((_, k) => statuses[k] && statuses[k].status.startsWith('Up'));
   };
 
-  // Every grant of the key since the markers, on any node, named — so
-  // 'granted elsewhere' arrives as an equality failure naming the winner.
+  // Every grant of the key since the markers, on any node, named.
   const grantsSince = (afterIds) => env.clients
     .map((c, i) => ({
       i,
@@ -196,8 +175,7 @@ describe('step-across: the owner re-rolls the committee under a running master, 
       hookCtx: this,
       nodes: NODES,
       tickerAutostart: false,
-      // committees pin at anchored membership — the ZMQ delta machinery
-      // production runs, never the polling path
+      // committees pin at anchored membership: the ZMQ delta path
       zmqTopics: ALL_ZMQ_TOPICS,
       configOverrides: {
         fluxapps: {
@@ -211,8 +189,7 @@ describe('step-across: the owner re-rolls the committee under a running master, 
           quorumGrantDrainMs: 90000,
           quorumGrantMinHolderAgeMs: 0,
           quorumGrantPursuitIntervalMs: 10000,
-          // Small but real: the master must COAST through it and step across
-          // only at its lift — a zero here would never exercise the drain.
+          // the master coasts through the drain and steps across at its lift
           quorumGrantGenerationDrainBlocks: DRAIN_BLOCKS,
           // the plane governs from the fleet's first block
           quorumGrantActivationHeight: 2_100_000,
@@ -220,12 +197,11 @@ describe('step-across: the owner re-rolls the committee under a running master, 
       },
     });
     await bootAndPeer(env);
-    // bootAndPeer starts the ticker whatever tickerAutostart says; the drain
-    // below is measured in blocks, so the chain is driven by hand from here.
+    // bootAndPeer starts the ticker; the drain is measured in blocks
     await stopTicker();
     ownerAuth0 = (await authenticate(env.clients[0].url, appOwnerKey())).zelidauth;
 
-    // The walk's input: the deterministic list as the nodes hold it.
+    // the walk's input: the deterministic list as the nodes hold it
     const listed = await fetch(`${env.clients[0].url}/daemon/viewdeterministicfluxnodelist`, { signal: AbortSignal.timeout(10000) });
     const membership = (await listed.json())?.data;
     expect(membership, 'the deterministic list is the whole fleet').to.have.lengthOf(NODES);
@@ -235,9 +211,7 @@ describe('step-across: the owner re-rolls the committee under a running master, 
     const app = await buildSeedableSyncthingApp({ name, syncMode: 'activeStandby' });
     const installAfters = HOLDERS.map((i) => env.clients[i].getLastEventId());
     await installOnNodes(env, app, HOLDERS);
-    // Every node must know the app: the outsider grantors verify the owner's
-    // generation record against their own copy of the spec and drop it
-    // otherwise (1203's lesson).
+    // grantors verify the owner's record against their own copy of the spec
     await seedGlobalSpec(env, app, env.clients.map((_, i) => i).filter((i) => !HOLDERS.includes(i)));
     await Promise.all(HOLDERS.map((i) => waitForAppInstalled(env.clients[i], name, 240000)));
     await Promise.all(HOLDERS.map(async (i, k) => {
@@ -261,9 +235,8 @@ describe('step-across: the owner re-rolls the committee under a running master, 
   it('the master steps across on its credential: same container, the new generation\'s term, nobody else granted, the old rows lapse', async function () {
     this.timeout(900000);
 
-    // 1. The plane seats a master under generation 0, and the cells holding
-    //    its rows are the granting committee the suite dealt — the walk the
-    //    suite computed is the walk the fleet ran.
+    // 1. A generation-0 quorum seats a master; its rows sit on the committee
+    //    the suite dealt.
     let first = null;
     await waitFor(async () => {
       first = await quorumVerdict(walk.granting.quorum);
@@ -279,19 +252,14 @@ describe('step-across: the owner re-rolls the committee under a running master, 
       `every generation-0 row sits on the walk's granting committee (${describeCells(walk.granting.members)})`).to.deep.equal([]);
     expect(rows0.size, 'a quorum of the granting committee holds the master\'s row').to.be.at.least(walk.granting.quorum);
 
-    // 2. The re-roll, under the RUNNING master. Seconds after the grant the
-    //    record is fresh and the door refuses, teaching stop-first. Then the
-    //    door opens BY ITSELF: nothing republishes the record on a renewal, so
-    //    one TTL after the grant the same submission lands — with the master
-    //    still renewing (its passes keep answering held), never demoted,
-    //    never yielded, the container untouched. The door's own answer is the
-    //    observable; only the record's age paces it, never a timer here.
+    // 2. The re-roll under the running master: refused seconds after the
+    //    grant (the record is fresh), landing once the record ages past its
+    //    TTL, the master renewing throughout. Markers are taken before the
+    //    attempt that lands: node 0 stores the record before it answers.
     const beforeFirstAsk = env.clients.map((c) => c.getLastEventId());
     const refused = await submitReroll();
-    expect(refused.status, `a re-roll seconds after the grant is refused, teaching stop-first: ${refused.body}`).to.equal(409);
+    expect(refused.status, `a re-roll seconds after the grant is refused: ${refused.body}`).to.equal(409);
     expect(refused.body).to.match(/live held term stands/);
-    // The markers are taken before the attempt that lands: node 0 stores the
-    // record and fires its own event inside the submit path, before answering.
     let beforeReroll = null;
     await waitFor(async () => {
       const markers = env.clients.map((c) => c.getLastEventId());
@@ -299,18 +267,18 @@ describe('step-across: the owner re-rolls the committee under a running master, 
       if (attempt.status !== 200) return false;
       beforeReroll = markers;
       return true;
-    }, { timeout: HELD_TTL_MS + 90000, interval: 10000, label: 'the door opens on its own once the record ages past its TTL' });
+    }, { timeout: HELD_TTL_MS + 90000, interval: 10000, label: 'the re-roll lands once the record ages past its TTL' });
     const renewedWhileWaiting = env.clients[master].getEventBuffer()
       .filter((e) => e.event === 'quorumGrant:assess' && e.id > beforeFirstAsk[master]
         && e.data?.key === key() && e.data?.outcome === 'held' && e.data?.quorumRenewed === true);
-    expect(renewedWhileWaiting.length, 'the master renewed its term while the door aged open').to.be.at.least(1);
+    expect(renewedWhileWaiting.length, 'the master renewed its term while the record aged').to.be.at.least(1);
     expect(env.clients[master].getEventBuffer()
       .some((e) => e.event === 'quorumGrant:demoted' && e.id > beforeFirstAsk[master] && e.data?.key === key()),
     'the master was never demoted before the re-roll landed').to.equal(false);
     expect(await getAppContainerId(env.clients[master].container, name, name),
-      'the re-roll landed under the very same running container').to.equal(container);
+      'the re-roll landed under the same running container').to.equal(container);
 
-    // 3. The record reaches every holder — its own event on each node.
+    // 3. The record reaches every holder.
     await Promise.all(HOLDERS.map((i) => env.clients[i].waitForEvent(
       'quorumGrant:generationRecord',
       (d) => d.appName === name && d.role === 'master' && d.generation === 1,
@@ -318,12 +286,10 @@ describe('step-across: the owner re-rolls the committee under a running master, 
       { afterId: beforeReroll[i] },
     )));
 
-    // 4. THE RETIREMENT DRAIN. The old cells refuse the retired generation,
-    //    the new cells are draining and answer serving:false, the witnesses
-    //    count nobody — and the master COASTS (the drain-aware coast's
-    //    generation half, inert under stop-first until this fleet). Nothing
-    //    is granted at generation 1 while the chain stands still, and the
-    //    container is untouched.
+    // 4. The retirement drain: the old cells refuse the retired generation,
+    //    the new cells answer serving:false, the master coasts. Nothing is
+    //    granted at generation 1 while the chain stands still; the container
+    //    is untouched.
     await env.clients[master].waitForEvent('quorumGrant:coasting', (d) => d.key === key(), 120000, { afterId: beforeReroll[master] });
     await Promise.all(env.clients.map((c) => assertNoEvent(
       c, 'quorumGrant:granted', (d) => d.key === key() && d.generation === 1, 30000,
@@ -332,42 +298,40 @@ describe('step-across: the owner re-rolls the committee under a running master, 
       'the container is untouched through the drain').to.equal(container);
     expect(grantsSince(beforeReroll), 'nobody was granted inside the drain').to.deep.equal([]);
 
-    // 5. THE LIFT: the blocks that end the drain are the ones this suite
-    //    advances. The master's next pass steps across — probe, prepare,
-    //    accept over the NEW committee, carrying the credential — and holds
-    //    the new world without its container ever stopping. The renewal that
-    //    follows in the same pass already runs under the new committee.
+    // 5. The lift: the master's next pass steps across over the new committee
+    //    with its credential; its next assess is held under that committee.
+    //    Nobody was granted at generation 1, no demotion, same container.
     const beforeLift = env.clients.map((c) => c.getLastEventId());
     await advanceBlocks(DRAIN_BLOCKS);
     await env.clients[master].waitForEvent('quorumGrant:steppedAcross',
       (d) => d.key === key() && d.generation === 1, 180000, { afterId: beforeLift[master] });
     await env.clients[master].waitForEvent('quorumGrant:assess',
       (d) => d.key === key() && d.outcome === 'held' && d.quorumRenewed === true, 60000, { afterId: beforeLift[master] });
-    expect(grantsSince(beforeReroll), 'nobody was GRANTED at generation 1: the master stepped across, no standby was seated')
+    expect(grantsSince(beforeReroll), 'nobody was granted at generation 1: the master stepped across')
       .to.deep.equal([]);
     await assertNoEvent(env.clients[master], 'quorumGrant:demoted', (d) => d.key === key(), 15000);
     expect(await getAppContainerId(env.clients[master].container, name, name),
-      'the very same container across the re-roll').to.equal(container);
+      'the same container across the re-roll').to.equal(container);
 
-    // 6. The new world names the master: a generation-1 quorum on the cells
-    //    at a fresh epoch, and the published record on a standby.
+    // 6. The new world names the same master at a fresh epoch, on the cells
+    //    and in the published record.
     let second = null;
     await waitFor(async () => {
       second = await quorumVerdict(walk.reRolled.quorum);
       return second !== null && second.generation === 1;
     }, { timeout: 60000, interval: 5000, label: 'a generation-1 quorum forms' });
-    expect(second.grantee, 'and it names the SAME master').to.equal(first.grantee);
-    expect(second.epoch, 'the step-across took a fresh epoch over the new committee').to.be.greaterThan(first.epoch);
+    expect(second.grantee, 'it names the same master').to.equal(first.grantee);
+    expect(second.epoch, 'at a fresh epoch').to.be.greaterThan(first.epoch);
     const standby = HOLDERS.find((i) => i !== master);
     await waitFor(async () => {
       const record = await dbClient(standby + 1).getMasterleaseRecord(name, 'master');
       return record?.grantee === first.grantee && record.generation === 1;
     }, { timeout: 90000, interval: 5000, label: 'the published record names the master at generation 1' });
 
-    // 7. The credential was the deciding fact: the master's generation-1
-    //    rows sit on the walk's re-rolled committee, and at least two of them
-    //    on cells that never held a row for it — cells where only the carried
-    //    credential admits a candidate ahead of the empty-seat wait.
+    // 7. The credential decided: the generation-1 rows sit on the re-rolled
+    //    committee, at least two on cells that never held a row for the
+    //    master, and each such cell served the master's accept on a verified
+    //    credential while a stranger would still have waited at that seat.
     const rows1 = await cellsNaming(first.grantee, 1);
     expect([...rows1].filter((cell) => !walk.reRolled.members.has(cell)),
       `every generation-1 row sits on the walk's re-rolled committee (${describeCells(walk.reRolled.members)})`).to.deep.equal([]);
@@ -376,12 +340,6 @@ describe('step-across: the owner re-rolls the committee under a running master, 
     expect(freshSeats.length,
       `the new term stands on cells that never held a row for the master (shared cells ${walk.shared.length}, quorum ${walk.reRolled.quorum})`)
       .to.be.at.least(2);
-    // ...and those cells say so themselves: each served the master's accept
-    // on a credential it VERIFIED while a stranger would still have waited at
-    // that seat — the referee's own report names both. A seat taken at a door
-    // that had simply opened (a credential dropped, or one the register
-    // verified and ignored, then the lock-delay running out) shows no such
-    // report and fails here.
     const verifiedAt = freshSeats.filter((cell) => {
       const i = indexOf(cell);
       return env.clients[i].getEventBuffer().some((e) => e.event === 'quorumGrant:served'
@@ -394,9 +352,9 @@ describe('step-across: the owner re-rolls the committee under a running master, 
       `fresh cells that admitted the master on a verified credential ahead of the seat wait: ${describeCells(verifiedAt) || 'none'}`)
       .to.be.at.least(2);
 
-    // 8. THE OLD ROWS LAPSE: the retired committee's cells outside the new
-    //    one keep their generation-0 row, unrenewed, until its TTL runs out;
-    //    nothing rewrites them. And the master still runs the same container.
+    // 8. The old rows lapse: the retired committee's cells outside the new
+    //    one keep their generation-0 row, unrenewed, to its TTL. Same
+    //    container, one holder, no demotion.
     const retiredOnly = [...walk.granting.members].filter((cell) => !walk.reRolled.members.has(cell)).map(indexOf);
     expect(retiredOnly.length, 'the retired committee has cells the new one does not').to.be.at.least(1);
     await waitFor(async () => {
@@ -404,12 +362,12 @@ describe('step-across: the owner re-rolls the committee under a running master, 
       return cells.every((cell) => cell?.accepted?.grantee === first.grantee
         && (cell.accepted.generation ?? 0) === 0
         && cell.remainingMs === 0);
-    }, { timeout: HELD_TTL_MS + 60000, interval: 10000, label: 'the retired committee\'s own rows lapse, untouched' });
+    }, { timeout: HELD_TTL_MS + 60000, interval: 10000, label: 'the retired committee\'s own rows lapse' });
     expect(await getAppContainerId(env.clients[master].container, name, name),
-      'still the same container once the old rows have lapsed').to.equal(container);
+      'the same container once the old rows have lapsed').to.equal(container);
     const stillUp = await upHolders();
     expect(stillUp, 'exactly one holder runs the app').to.have.lengthOf(1);
-    expect(label(stillUp[0]), 'and it is the master that stepped across').to.equal(label(master));
+    expect(label(stillUp[0]), 'the master that stepped across').to.equal(label(master));
     await assertNoEvent(env.clients[master], 'quorumGrant:demoted', (d) => d.key === key(), 10000);
   });
 });
