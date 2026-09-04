@@ -19,10 +19,10 @@ import { appOwnerKey } from '../framework/keys.js';
 // proposes remove-dark-add-next-in-walk, a quorum of grantors signs, the
 // roster chain rides the published record, and the freshly seated
 // replacement answers for a grant its own register never heard of. And
-// when the OWNER re-rolls the generation, the whole committee re-deals
-// from a salted walk: the old world's grantors refuse teaching the new
-// number, and the master re-acquires under generation 1 without the app
-// ever stopping. Ten nodes: committee nine of ten, so the walk has a
+// when the OWNER re-rolls a stopped app's generation, the whole committee
+// re-deals from a salted walk: the old world's grantors refuse teaching the
+// new number, and the restarted instances take generation 1 through its
+// drain. Ten nodes: committee nine of ten, so the walk has a
 // spare seat to promote — the smallest fleet where a heal has somewhere
 // to go.
 
@@ -279,7 +279,7 @@ describe('the committee heals its dark seat, and the owner re-deals the walk', f
     }, { timeout: 120000, interval: 10000, label: 'the returning corpse adopted' });
   });
 
-  it('the owner re-deals the walk: refused under a live term, landing after release-and-stop', async function () {
+  it('the owner re-deals a stopped app\'s walk, and the restarted instances take the new generation through its drain', async function () {
     this.timeout(600000);
 
     // The retirement drain below is measured in BLOCKS, and bootAndPeer starts
@@ -315,27 +315,15 @@ describe('the committee heals its dark seat, and the owner re-deals the walk', f
       });
     }
 
-    // THE STOP-FIRST DOOR: a re-roll under a live held term is refused,
-    // teaching the precondition. A re-roll under a RUNNING master seats a
-    // successor on rows nothing can shield while the master coasts
-    // record-deaf — the register may only re-deal a world whose old term
-    // is provably over.
-    const refused = await submitReroll();
-    expect(refused.status).to.equal(409);
-    expect(await refused.text()).to.match(/live held term stands/);
-
-    // Release-and-stop, the door's own instruction: the master yields its
-    // term and every instance stops under the operator lock.
+    // Release-and-stop: the master yields its term and every instance stops
+    // under the operator lock. The re-roll lands at once.
     const yielded = await fetch(`${env.clients[0].url}/apps/appyield/${name}/true`, {
       headers: { zelidauth: ownerAuth0 },
     });
     expect(yielded.status).to.equal(200);
-
-    // The door itself is the observable for the term's end — resubmit until
-    // it answers 200. A released term shields nobody; only record spread
-    // paces this, never a timer.
-    await waitFor(async () => (await submitReroll()).status === 200,
-      { timeout: 180000, interval: 10000, label: 'the re-roll lands once the term is over' });
+    const submitted = await submitReroll();
+    const submittedBody = await submitted.text();
+    expect(submitted.status, submittedBody).to.equal(200);
 
     // The record reaches every holder (its own event on each node), the
     // salted walk deals a fresh committee, and the stopped world restarts
@@ -380,11 +368,9 @@ describe('the committee heals its dark seat, and the owner re-deals the walk', f
       return verdict !== null && verdict.generation === 1;
     }, { timeout: 60000, interval: 5000, label: 'a generation-1 quorum forms' });
 
-    // Under stop-first the old master released before the re-deal, so the
-    // new world's term goes to whichever restarted instance wins — the
-    // theorem here is one clean generation-1 quorum, not incumbency. The
-    // no-stop carry across a re-deal is the seamless candidate's promise,
-    // and it stays out of this suite until its safety cell proves.
+    // The app was stopped before the re-deal, so the new world's term goes to
+    // whichever restarted instance wins: one clean generation-1 quorum. The
+    // carry under a running master is 1219's.
     const after = await quorumVerdict();
     expect(after.generation, 'one clean generation-1 world').to.equal(1);
   }
