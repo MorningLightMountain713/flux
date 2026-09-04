@@ -893,13 +893,9 @@ async function serve(req, res, type, operate) {
     // credential that verifies makes the candidate the recorded incumbent at
     // this cell's empty seat; one that does not makes the ask a stranger's.
     let carriedIncumbent = null;
-    // What the fleet proof needs to SEE, never infer: whether a credential
-    // rode this ask, whether this cell verified it, and what a STRANGER would
-    // have waited at this cell's empty seat at that instant (the core's
-    // lock-delay from the serving-since anchor as this controller stamps it).
-    // 1219 asserts the fresh cells admitted the incumbent on a verified
-    // credential while that wait was still running — a seat the credential
-    // decided, not one taken at a door that had simply opened.
+    // Reported for the harness: whether a credential rode this ask and
+    // verified, and the lock-delay a candidate without one would still face
+    // at this seat, from this controller's serving-since anchor.
     let carried;
     let seatWaitMs;
     if (ask.carried && (type === 'prepare' || type === 'accept') && (ask.mode ?? 'held') === 'held') {
