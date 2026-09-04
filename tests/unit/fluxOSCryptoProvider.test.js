@@ -9,6 +9,10 @@ chai.use(chaiAsPromised);
 const { expect } = chai;
 
 describe('FluxOSCryptoProvider', () => {
+  // Any non-empty AAD; what it contains is EncryptedSpecV9's business, not this
+  // provider's. That it is always present is this provider's business.
+  const AAD = Buffer.from('aad-bytes');
+
   let benchmarkServiceStub;
   let specLibsStub;
   let fluxOSCryptoProvider;
@@ -93,24 +97,33 @@ describe('FluxOSCryptoProvider', () => {
       });
     });
 
-    it('omits aad from seal params when not provided', async () => {
-      benchmarkServiceStub.seal.resolves({
-        status: 'success',
-        data: { status: 'ok', algorithm: 'AES-256-GCM', ciphertext: '', nonce: '', tag: '' },
-      });
-
+    // The AAD authenticates a v9 container's cleartext half — its name, owner,
+    // ttl, placement and the resource summary other nodes schedule on without
+    // decrypting. Forwarding it only `if (aad)` made a caller's omission look
+    // like a spec that legitimately has none, and SAS then sealed with no
+    // binding and answered ok.
+    it('refuses to seal without an aad, rather than sealing an unbound container', async () => {
       const provider = await fluxOSCryptoProvider.create('TestApp', '1abc');
-      await provider.encrypt(Buffer.from('hello'));
 
-      const params = benchmarkServiceStub.seal.firstCall.args[0];
-      expect(params).to.not.have.property('aad');
+      await expect(provider.encrypt(Buffer.from('hello')))
+        .to.be.rejectedWith(/sealed under an AAD/);
+      expect(benchmarkServiceStub.seal.called, 'nothing should have reached the daemon')
+        .to.equal(false);
+    });
+
+    it('refuses an empty aad, which binds nothing', async () => {
+      const provider = await fluxOSCryptoProvider.create('TestApp', '1abc');
+
+      await expect(provider.encrypt(Buffer.from('hello'), Buffer.alloc(0)))
+        .to.be.rejectedWith(/sealed under an AAD/);
+      expect(benchmarkServiceStub.seal.called).to.equal(false);
     });
 
     it('throws when the RPC call itself fails', async () => {
       benchmarkServiceStub.seal.resolves({ status: 'error' });
       const provider = await fluxOSCryptoProvider.create('TestApp', '1abc');
 
-      await expect(provider.encrypt(Buffer.from('hello')))
+      await expect(provider.encrypt(Buffer.from('hello'), AAD))
         .to.be.rejectedWith(/seal RPC failed/);
     });
 
@@ -121,7 +134,7 @@ describe('FluxOSCryptoProvider', () => {
       });
       const provider = await fluxOSCryptoProvider.create('TestApp', '1abc');
 
-      await expect(provider.encrypt(Buffer.from('hello')))
+      await expect(provider.encrypt(Buffer.from('hello'), AAD))
         .to.be.rejectedWith(/seal RPC rejected: bad_request/);
     });
 
@@ -138,7 +151,7 @@ describe('FluxOSCryptoProvider', () => {
       });
 
       const provider = await fluxOSCryptoProvider.create('TestApp', '1abc');
-      const result = await provider.encrypt(Buffer.from('hello'));
+      const result = await provider.encrypt(Buffer.from('hello'), AAD);
       expect(result.ciphertext).to.equal('Y2lwaGVy');
     });
   });
@@ -169,6 +182,14 @@ describe('FluxOSCryptoProvider', () => {
       expect(params.aad).to.equal(Buffer.from('metadata').toString('base64'));
     });
 
+    it('refuses to unseal without an aad', async () => {
+      const provider = await fluxOSCryptoProvider.create('TestApp', '1abc');
+
+      await expect(provider.decrypt({ ciphertext: 'x', nonce: 'y', tag: 'z' }))
+        .to.be.rejectedWith(/sealed under an AAD/);
+      expect(benchmarkServiceStub.unseal.called).to.equal(false);
+    });
+
     it('throws when the backend rejects the unseal request', async () => {
       benchmarkServiceStub.unseal.resolves({
         status: 'success',
@@ -178,7 +199,7 @@ describe('FluxOSCryptoProvider', () => {
 
       await expect(provider.decrypt({
         algorithm: 'AES-256-GCM', ciphertext: 'x', nonce: 'y', tag: 'z',
-      })).to.be.rejectedWith(/unseal RPC rejected: DECRYPT_FAILED/);
+      }, AAD)).to.be.rejectedWith(/unseal RPC rejected: DECRYPT_FAILED/);
     });
   });
 });

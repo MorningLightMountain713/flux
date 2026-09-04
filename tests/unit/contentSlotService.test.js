@@ -164,9 +164,24 @@ function makeUploader({ exists = true } = {}) {
 // Production's default reaches fluxbenchd over the benchmark channel, so this stays
 // a fake — unlike the spec classes, it is I/O.
 function fakeProvider() {
+  // Binds the AAD, as AES-GCM does. A fake that accepted any AAD would make every
+  // test below vacuous about the binding: a manifest whose cleartext half had
+  // been rewritten would open cleanly here and fail only against a real daemon.
+  const sealedUnder = new Map();
   return {
-    encrypt: async (buf) => ({ algorithm: 'fake', ciphertext: buf.toString('base64'), nonce: 'n', tag: 't' }),
-    decrypt: async (env) => Buffer.from(env.ciphertext, 'base64'),
+    encrypt: async (buf, aad) => {
+      const ciphertext = buf.toString('base64');
+      sealedUnder.set(ciphertext, aad === undefined ? null : Buffer.from(aad).toString('base64'));
+      return { algorithm: 'fake', ciphertext, nonce: 'n', tag: 't' };
+    },
+    decrypt: async (env, aad) => {
+      const expected = sealedUnder.get(env.ciphertext);
+      const given = aad === undefined ? null : Buffer.from(aad).toString('base64');
+      if (expected !== undefined && expected !== given) {
+        throw new Error('fakeProvider: AAD mismatch — this container was sealed against a different cleartext half');
+      }
+      return Buffer.from(env.ciphertext, 'base64');
+    },
   };
 }
 
@@ -303,6 +318,42 @@ describe('contentSlotService', () => {
       expect(sealed.slots['app-config']).to.equal(undefined);
       const opened = await service.openManifestSlots(sealed, { owner: OWNER, encrypted: true }, { provider });
       expect(opened.slots).to.deep.equal(manifest().slots);
+    });
+
+    // The owner's signature covers the whole plaintext manifest, and every path
+    // that takes one from OUTSIDE re-verifies it after opening. These bind the
+    // seal as well, for the paths that do not: a node reading its own store
+    // trusts the confirmed flag it wrote earlier and has no signature check left
+    // to fail if the row changed underneath it.
+    it('refuses to open when the cleartext half is not the one it was sealed against', async () => {
+      const { service } = load();
+      const provider = fakeProvider();
+      const sealed = await service.sealManifestSlots(manifest(), { owner: OWNER, encrypted: true }, { provider });
+
+      for (const change of [
+        { version: sealed.version + 1 },
+        { appName: 'someone-elses-app' },
+        { timestamp: sealed.timestamp + 1000 },
+      ]) {
+        const tampered = { ...sealed, ...change };
+        let error;
+        try {
+          await service.openManifestSlots(tampered, { owner: OWNER, encrypted: true }, { provider });
+        } catch (e) { error = e; }
+        expect(error, `rewriting ${Object.keys(change)[0]} must not open`).to.exist;
+        expect(error.message).to.match(/AAD mismatch/);
+      }
+    });
+
+    it('seals under the manifest apart from the payload, so both ends derive it alike', async () => {
+      const { service, specLib } = load();
+      const provider = fakeProvider();
+      const plaintext = manifest();
+      const sealed = await service.sealManifestSlots(plaintext, { owner: OWNER, encrypted: true }, { provider });
+
+      // The two forms differ only in `slots`, which is exactly what the AAD drops.
+      expect(specLib.contentManifestSealAad(sealed))
+        .to.equal(specLib.contentManifestSealAad(plaintext));
     });
 
     it('leaves a plaintext app\'s slots untouched', async () => {

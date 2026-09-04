@@ -3,6 +3,28 @@
 const benchmarkService = require('../benchmarkService');
 const { getSpecBackend } = require('../utils/specLibs');
 
+/**
+ * The AAD is what authenticates a v9 container's cleartext half — its name,
+ * owner, ttl, placement and the resource summary every other node schedules on
+ * without decrypting. Nothing else covers those: the owner's signature is over
+ * the decrypted spec.
+ *
+ * This provider used to forward it only `if (aad)`, which made a caller's
+ * omission indistinguishable from a spec that legitimately has none. v8 is the
+ * one that legitimately has none, and v8 uses a different provider entirely.
+ *
+ * @param {Buffer} aad
+ * @param {string} operation - named in the error, so the caller is the one blamed
+ */
+function assertAad(aad, operation) {
+  if (!Buffer.isBuffer(aad) || aad.length === 0) {
+    throw new Error(
+      `FluxOSCryptoProvider.${operation}: a v9 container is sealed under an AAD; got ${
+        aad === undefined ? 'nothing' : JSON.stringify(String(aad))}`,
+    );
+  }
+}
+
 async function create(appName, owner) {
   const { CryptoProvider: Base } = await getSpecBackend();
 
@@ -17,14 +39,16 @@ async function create(appName, owner) {
     }
 
     async encrypt(plaintext, aad) {
+      // The v9 doors seal under an AAD and SAS refuses a request without one.
+      // Refusing here as well is what names the caller: an omission that reached
+      // the daemon would come back as MISSING_FIELD from three hops away.
+      assertAad(aad, 'encrypt');
       const params = {
         appName: this.#appName,
         fluxID: this.#owner,
         message: plaintext.toString('base64'),
+        aad: aad.toString('base64'),
       };
-      if (aad) {
-        params.aad = aad.toString('base64');
-      }
 
       const result = await benchmarkService.seal(params);
       if (result.status !== 'success') {
@@ -47,16 +71,15 @@ async function create(appName, owner) {
     }
 
     async decrypt(encrypted, aad) {
+      assertAad(aad, 'decrypt');
       const params = {
         appName: this.#appName,
         fluxID: this.#owner,
         ciphertext: encrypted.ciphertext,
         nonce: encrypted.nonce,
         tag: encrypted.tag,
+        aad: aad.toString('base64'),
       };
-      if (aad) {
-        params.aad = aad.toString('base64');
-      }
 
       const result = await benchmarkService.unseal(params);
       if (result.status !== 'success') {
