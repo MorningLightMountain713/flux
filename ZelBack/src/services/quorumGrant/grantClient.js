@@ -666,6 +666,8 @@ async function relearn(key, options = {}) {
   const roundTripMs = clock() - startMs;
 
   const outcome = core.recoverOutcome(replies, identity.outpoint, committee.quorum, roundTripMs);
+  // the term a quorum of registers names, whoever holds it — what the veto acts on
+  const term = core.quorumTerm(replies, committee.quorum);
   fluxEventBus.publish('quorumGrant:relearn', {
     key,
     read: replies.length,
@@ -674,7 +676,11 @@ async function relearn(key, options = {}) {
     safeForMs: outcome.safeForMs,
     reason: outcome.reason,
   });
-  if (!outcome.recovered) return { recovered: false, holder: null, reason: outcome.reason };
+  if (!outcome.recovered) {
+    return {
+      recovered: false, holder: null, reason: outcome.reason, term,
+    };
+  }
 
   const holder = new Holder({
     key,
@@ -696,7 +702,9 @@ async function relearn(key, options = {}) {
   holder.armStandingDeadline();
   holder.start();
   log.info(`quorumGrant ${key}: term re-learned at epoch ${outcome.epoch}, ${outcome.safeForMs}ms remaining`);
-  return { recovered: true, holder, reason: null };
+  return {
+    recovered: true, holder, reason: null, term,
+  };
 }
 
 /**
@@ -1018,6 +1026,7 @@ class Holder {
       fingerprint: this.#committee.fingerprint,
       generation: this.#committee.generation,
       ttlMs: this.#ttlMs,
+      acceptances: [...this.#acceptances.values()],
       ...(this.#committee.chain.length ? { roster: { chain: this.#committee.chain } } : {}),
       ...(this.#committee.cancels.length ? { cancels: { chain: this.#committee.cancels } } : {}),
     });

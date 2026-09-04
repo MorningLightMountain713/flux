@@ -461,27 +461,20 @@ async function grantVerdict(identifier, comp) {
 
   pursue(identifier, appName);
 
-  // a fresh published record naming someone else is a settled answer, not an
-  // unknown: this node is a standby and its container stays down
-  try {
-    const record = await messageStore.getMasterleaseRecord(appName, ROLE);
-    const grantee = record?.data?.grantee ?? null;
-    if (grantee) {
-      const self = await generalService.obtainNodeCollateralInformation();
-      if (grantee !== `${self.txhash}:${self.txindex}`) {
-        return { desired: false, reason: 'peerHoldsGrant' };
-      }
-    }
-  } catch (error) {
-    log.warn(`mastershipGrantGate - record read for ${appName} failed: ${error.message}`);
-  }
-
-  // Ask, never count. A quorum of registers either still records this node's
-  // term — in which case the holder is re-installed and the container keeps
-  // running — or it does not, and there is nothing left to defer for.
+  // Ask, never count. The published record is a claim; the registers are the
+  // truth. A quorum of them either still records this node's term — the
+  // holder is re-installed and the container keeps running — or names
+  // another node, whose standby this node is, or names nobody this node can
+  // act on.
   const relearned = await grantClient.relearn(key);
   if (relearned?.recovered) {
     return null;
+  }
+  if (relearned?.term?.grantee) {
+    const self = await generalService.obtainNodeCollateralInformation();
+    if (relearned.term.grantee !== `${self.txhash}:${self.txindex}`) {
+      return { desired: false, reason: 'peerHoldsGrant' };
+    }
   }
   // A quorum that cannot be READ is not a quorum that says no. Reads survive
   // the drain, so an unreadable committee means this node is isolated, and §7's

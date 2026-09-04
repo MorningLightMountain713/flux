@@ -74,6 +74,45 @@ describe('quorumGrant mastershipGrantGate', () => {
     sinon.restore();
   });
 
+  // The veto asks the registers, never the published record: a running
+  // non-holder stops when a quorum of registers names another node, keeps
+  // running when they record its own term, and the record's claim decides
+  // nothing either way.
+  describe('the veto asks the registers', () => {
+    const OTHER = `${'7'.repeat(64)}:0`;
+
+    it('stops a running non-holder when a quorum of registers names another node', async () => {
+      grantClient.relearn.resolves({
+        recovered: false, holder: null, reason: 'no quorum of registers names this node', term: { grantee: OTHER, epoch: 4, remainingMs: 50_000 },
+      });
+      const verdict = await mastershipGrantGate.grantVerdict(IDENTIFIER, activeStandbyComp());
+      expect(verdict).to.deep.equal({ desired: false, reason: 'peerHoldsGrant' });
+    });
+
+    it('a record naming another node stops nothing when the registers record this node\'s term', async () => {
+      messageStore.getMasterleaseRecord.resolves({ data: { grantee: OTHER, mode: 'held', epoch: 9 } });
+      grantClient.relearn.resolves({
+        recovered: true, holder: {}, reason: null, term: { grantee: SELF, epoch: 3, remainingMs: 40_000 },
+      });
+      expect(await mastershipGrantGate.grantVerdict(IDENTIFIER, activeStandbyComp())).to.equal(null);
+    });
+
+    it('a record naming this node keeps nothing running when the registers do not', async () => {
+      messageStore.getMasterleaseRecord.resolves({ data: { grantee: SELF, mode: 'held', epoch: 9 } });
+      grantClient.relearn.resolves({
+        recovered: false, holder: null, reason: 'no quorum of registers names this node', term: { grantee: null, epoch: null, remainingMs: 0 },
+      });
+      expect(await mastershipGrantGate.grantVerdict(IDENTIFIER, activeStandbyComp()))
+        .to.deep.equal({ desired: false, reason: 'no quorum of registers names this node' });
+    });
+
+    it('an unreadable committee carries its own reason, not a peer\'s claim', async () => {
+      grantClient.relearn.resolves({ recovered: false, holder: null, reason: 'committee unavailable for fingerprint' });
+      expect(await mastershipGrantGate.grantVerdict(IDENTIFIER, activeStandbyComp()))
+        .to.deep.equal({ desired: false, reason: 'committee unavailable for fingerprint' });
+    });
+  });
+
   describe('staying out of the way', () => {
     it('answers nothing while the feature is off — the default', async () => {
       mastershipGrantGate.resetForTests(); // no override: config default, off
@@ -622,10 +661,18 @@ describe('quorumGrant mastershipGrantGate', () => {
       expect(verdict).to.equal(null);
     });
 
-    it('a peer on the published record makes this node a standby, settled', async () => {
+    it('a peer in a quorum of registers makes this node a standby, settled; the published record alone decides nothing', async () => {
       messageStore.getMasterleaseRecord.resolves({ data: { grantee: 'other:0' } });
-      const verdict = await mastershipGrantGate.grantVerdict(IDENTIFIER, activeStandbyComp());
-      expect(verdict).to.deep.equal({ desired: false, reason: 'peerHoldsGrant' });
+      grantClient.relearn.resolves({
+        recovered: false, holder: null, reason: 'no quorum of registers names this node', term: { grantee: null, epoch: null, remainingMs: 0 },
+      });
+      expect(await mastershipGrantGate.grantVerdict(IDENTIFIER, activeStandbyComp()))
+        .to.deep.equal({ desired: false, reason: 'no quorum of registers names this node' });
+      grantClient.relearn.resolves({
+        recovered: false, holder: null, reason: 'no quorum of registers names this node', term: { grantee: 'other:0', epoch: 2, remainingMs: 1_000 },
+      });
+      expect(await mastershipGrantGate.grantVerdict(IDENTIFIER, activeStandbyComp()))
+        .to.deep.equal({ desired: false, reason: 'peerHoldsGrant' });
     });
 
     it('a record naming THIS node is not a peer verdict — it goes on to ask', async () => {
