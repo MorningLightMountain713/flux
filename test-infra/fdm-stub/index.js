@@ -13,6 +13,11 @@ const CONTROL_PORT = parseInt(process.env.CONTROL_PORT || '16131', 10);
 // which mirrors the real FDM returning an empty ips array (the node waits).
 const elected = new Map();
 
+// appName -> count of /appips polls. A plane-governed app must never be
+// polled: FluxOS elects mastership itself and FDM only routes. Tests assert
+// this stays zero.
+const queries = new Map();
+
 // --- FDM API (what the FluxOS node polls) ---
 
 const app = express();
@@ -22,6 +27,7 @@ app.use(express.json());
 // then data.ips[0] (passed through extractIp, which splits on ':' — bare IP is fine).
 // An empty ips array is the "no primary set" path: the node keeps waiting.
 app.get('/appips/:app', (req, res) => {
+  queries.set(req.params.app, (queries.get(req.params.app) ?? 0) + 1);
   const ip = elected.get(req.params.app);
   res.json({ status: 'success', data: { ips: ip ? [ip] : [] } });
 });
@@ -43,7 +49,7 @@ control.get('/health', (req, res) => {
 });
 
 control.get('/state', (req, res) => {
-  res.json({ elected: Object.fromEntries(elected) });
+  res.json({ elected: Object.fromEntries(elected), queries: Object.fromEntries(queries) });
 });
 
 // elect (or fail over) the primary for an app
@@ -62,6 +68,7 @@ control.post('/clear/:app', (req, res) => {
 
 control.post('/reset', (req, res) => {
   elected.clear();
+  queries.clear();
   res.json({ ok: true });
 });
 
