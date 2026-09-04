@@ -897,13 +897,15 @@ async function handleMasterleaseEvent({ message, envelope, announcer }) {
     // replaces the retired world's record however high its epoch climbed.
     // Within a generation a verified record outranks an unverified one; a
     // released row or a founding record carries no term to prove and ranks
-    // as verified, so a release still supersedes the term it ends.
-    const rank = proving && !verified ? 0 : 1;
+    // as verified, so a release still supersedes the term it ends. The
+    // comparator's field is the numeric proofRank — the database orders a
+    // number against a boolean by type, never by value.
+    const proofRank = proving && !verified ? 0 : 1;
     await database.collection(globalAppStateEvents).updateOne(
       { type: APP_STATE_EVENT_TYPES.MASTERLEASE, dedupKey },
       buildOrdinalConditionalUpsert([
         { field: 'generation', value: message.generation ?? 0, absent: 0 },
-        { field: 'verified', value: rank, absent: 0 },
+        { field: 'proofRank', value: proofRank, absent: 0 },
         { field: 'epoch', value: message.epoch, absent: -1 },
       ], message.broadcastedAt, {
         ip: message.ip,
@@ -912,7 +914,7 @@ async function handleMasterleaseEvent({ message, envelope, announcer }) {
         dedupKey,
         broadcastedAt: new Date(message.broadcastedAt),
         envelope: envelope ?? null,
-        data: { ...message, ...(proving ? { verified } : {}) },
+        data: { ...message, proofRank, ...(proving ? { verified } : {}) },
         // In alwaysSetFields, never a conditional field: a conditional slot
         // keeps the stored value on a losing touch, so a row carrying a Date
         // here would keep being reaped by the collection's TTL index until a

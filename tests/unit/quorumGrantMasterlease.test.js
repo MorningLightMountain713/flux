@@ -276,7 +276,7 @@ describe('quorumGrant masterlease', () => {
       expect(JSON.stringify(branches[0])).to.contain('$data.generation');
       expect(JSON.stringify(branches[0])).to.not.contain('$data.epoch');
       expect(JSON.stringify(branches[0])).to.contain('3');
-      expect(JSON.stringify(branches[1])).to.contain('$data.verified');
+      expect(JSON.stringify(branches[1])).to.contain('$data.proofRank');
       expect(JSON.stringify(branches[2])).to.contain('7');
     });
 
@@ -307,10 +307,14 @@ describe('quorumGrant masterlease', () => {
         expect(stored()[0].verified).to.equal(true);
         const branches = updates[0].update[0].$set.data.$cond[0].$or;
         expect(JSON.stringify(branches[0])).to.contain('$data.generation');
-        expect(JSON.stringify(branches[1]), 'verified ranks right after generation').to.contain('$data.verified');
-        expect(JSON.stringify(branches[1]), 'a verified record ranks 1').to.contain('"$gt":[1,{"$ifNull":["$data.verified",0]}]');
+        expect(JSON.stringify(branches[1]), 'the proof rank sits right after generation').to.contain('$data.proofRank');
+        expect(JSON.stringify(branches[1]), 'a verified record ranks 1').to.contain('"$gt":[1,{"$ifNull":["$data.proofRank",0]}]');
         expect(JSON.stringify(branches[1])).to.not.contain('$data.epoch');
         expect(JSON.stringify(branches[2])).to.contain('$data.epoch');
+        // the comparator's field is a number in the stored data: the database
+        // orders a number against a boolean by type, so a boolean here would
+        // let no later record of the generation ever replace the first
+        expect(stored()[0].proofRank).to.equal(1);
       });
 
       it('drops a held record below a quorum of acceptances', async () => {
@@ -387,7 +391,8 @@ describe('quorumGrant masterlease', () => {
         expect(updates).to.have.length(1);
         expect(stored()[0].verified).to.equal(false);
         const branches = updates[0].update[0].$set.data.$cond[0].$or;
-        expect(JSON.stringify(branches[1]), 'an unverified record ranks 0: it never replaces a verified one').to.contain('"$gt":[0,{"$ifNull":["$data.verified",0]}]');
+        expect(JSON.stringify(branches[1]), 'an unverified record ranks 0: it never replaces a verified one').to.contain('"$gt":[0,{"$ifNull":["$data.proofRank",0]}]');
+        expect(stored()[0].proofRank).to.equal(0);
       });
 
       it('a released record and a founding record need no acceptances', async () => {
