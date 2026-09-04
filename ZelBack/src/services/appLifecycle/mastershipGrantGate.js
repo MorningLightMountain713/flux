@@ -563,17 +563,31 @@ async function masterIntent(identifier, comp) {
 
   pursue(identifier, comp.appName);
 
+  // FluxOS owns mastership; FDM only routes where FluxOS elects. The primary
+  // is this node's own held term, or the committee-signed masterlease record
+  // (offline-verifiable) — never FDM, and never an unverified claim. A node
+  // that cannot yet name the master (no verified record, still syncing the
+  // membership its proof needs) abstains for the cycle: it returns no primary
+  // rather than a guess, the running master coasts, and synced peers carry
+  // the election. FDM's /appips is reached only for apps this plane does not
+  // govern (the not-applicable path above), never as an authority here.
   try {
-    const record = await messageStore.getMasterleaseRecord(comp.appName, ROLE);
-    const grantee = record?.data?.grantee ?? null;
+    const key = keyFor(comp.appName);
+    let grantee = null;
+    if (grantClient.holderFor(key)) {
+      const self = await generalService.obtainNodeCollateralInformation();
+      grantee = `${self.txhash}:${self.txindex}`;
+    } else {
+      const record = await messageStore.getMasterleaseRecord(comp.appName, ROLE);
+      if (record?.data?.verified === true) grantee = record.data.grantee ?? null;
+    }
     if (!grantee) return { ip: null, fdmOk: true };
     const membership = networkStateService.membershipAt(networkStateService.membershipFingerprint()) ?? [];
     const node = membership.find((entry) => `${entry.txhash}:${entry.outidx}` === grantee);
-    // a grantee that has left the list resolves to no primary rather than to
-    // a stale address; its term expires on its own and the record with it
+    // a grantee that has left the list resolves to no primary, never a stale address
     return { ip: node?.ip ?? null, fdmOk: true };
   } catch (error) {
-    log.warn(`mastershipGrantGate - intent read for ${comp.appName} failed: ${error.message}`);
+    log.warn(`mastershipGrantGate - intent for ${comp.appName} failed: ${error.message}`);
     return { ip: null, fdmOk: true };
   }
 }

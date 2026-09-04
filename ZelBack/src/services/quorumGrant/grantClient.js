@@ -1505,17 +1505,20 @@ class Holder {
 
   /**
    * The block that lifts a drain can land inside one pass, between the
-   * step-across probe (every new cell refused it at its door) and the witness
-   * poll (the new cells serve): the pass would demote a holder that steps
-   * across on its next one. One more ask decides on one reading. Only when
-   * every new cell answered the probe — none served anyone before it — and
-   * only inside what the lock-delay leaves after this pass and the hard stop,
-   * so a demotion is never delayed past a stranger's earliest seat.
+   * step-across probe (the new cells refused it at their door) and the
+   * witness poll (the new cells serve): the pass would demote a holder that
+   * steps across on its next one. So attempt the step-across once more before
+   * demoting — the register decides it, never this side. The new committee's
+   * accept quorum admits the carrier iff no rival was chosen (a chosen rival
+   * shields a quorum of cells, which refuses the carrier's prepare); a silent
+   * cell changes nothing, since a rival needs a quorum and the carrier reads
+   * the rest. The only bound is time: inside what the lock-delay leaves after
+   * this pass and the hard stop, so a demotion is never delayed past a
+   * stranger's earliest seat.
    */
   async #stepAcrossBeforeDemoting() {
     const probe = this.#lastProbe;
-    if (!probe || probe.answered < probe.members || probe.replies > 0) return false;
-    // the clock at the decision: the witness poll behind it has spent time too
+    if (!probe) return false;
     const budgetMs = probe.atMs + lockDelayMs() - this.#clock() - core.HARD_STOP_MS;
     if (budgetMs <= 0) return false;
     return this.#maybeStepAcross({ timeoutMs: Math.min(askTimeoutMs(), Math.floor(budgetMs / 3)) });
