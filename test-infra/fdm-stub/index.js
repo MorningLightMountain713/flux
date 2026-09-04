@@ -193,6 +193,10 @@ function followedAnswer(state) {
   }
   return state.served.ip;
 }
+// appName -> count of /appips polls. A plane-governed app must never be
+// polled: FluxOS elects mastership itself and FDM only routes. Tests assert
+// this stays zero.
+const queries = new Map();
 
 // --- FDM API (what the FluxOS node polls) ---
 
@@ -203,6 +207,7 @@ app.use(express.json());
 // then data.ips[0] (passed through extractIp, which splits on ':' — bare IP is fine).
 // An empty ips array is the "no primary set" path: the node keeps waiting.
 app.get('/appips/:app', (req, res) => {
+  queries.set(req.params.app, (queries.get(req.params.app) ?? 0) + 1);
   if (outageMode === 'unavailable') {
     res.status(503).json({ status: 'error', data: 'FDM starting up' });
     return;
@@ -243,7 +248,9 @@ control.get('/state', (req, res) => {
   const following = Object.fromEntries([...followed].map(([name, s]) => [name, {
     chosen: s.chosen, served: s.served?.ip ?? null, sticky: s.sticky, failures: s.failures,
   }]));
-  res.json({ elected: Object.fromEntries(elected), following, outage: outageMode });
+  res.json({
+    elected: Object.fromEntries(elected), following, outage: outageMode, queries: Object.fromEntries(queries),
+  });
 });
 
 // elect (or fail over) the primary for an app
@@ -326,6 +333,7 @@ control.post('/recover', (req, res) => {
 control.post('/reset', (req, res) => {
   elected.clear();
   stopFollowingAll();
+  queries.clear();
   endOutage(() => res.json({ ok: true }));
 });
 
