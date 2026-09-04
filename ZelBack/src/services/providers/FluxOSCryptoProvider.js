@@ -39,9 +39,10 @@ async function create(appName, owner) {
     }
 
     async encrypt(plaintext, aad) {
-      // The v9 doors seal under an AAD and SAS refuses a request without one.
-      // Refusing here as well is what names the caller: an omission that reached
-      // the daemon would come back as MISSING_FIELD from three hops away.
+      // A v9 container is sealed under an AAD and the benchmark channel refuses
+      // a request without one. Refusing here as well is what names the caller: an
+      // omission that reached the daemon comes back as MISSING_FIELD from a layer
+      // that knows nothing about which call site produced it.
       assertAad(aad, 'encrypt');
       const params = {
         appName: this.#appName,
