@@ -782,13 +782,14 @@ async function serve(req, res, type, operate) {
   const t0 = Date.now();
   const ms = {};
   let askSeen = null;
-  function report(outcome, code) {
+  function report(outcome, code, extra = {}) {
     fluxEventBus.publish('quorumGrant:served', {
       type,
       outcome,
       total: Date.now() - t0,
       ...(askSeen ? { key: askSeen.key, epoch: askSeen.epoch, candidate: askSeen.candidate } : {}),
       ...(code ? { code } : {}),
+      ...extra,
       ...ms,
     });
   }
@@ -892,6 +893,15 @@ async function serve(req, res, type, operate) {
     // credential that verifies makes the candidate the recorded incumbent at
     // this cell's empty seat; one that does not makes the ask a stranger's.
     let carriedIncumbent = null;
+    // What the fleet proof needs to SEE, never infer: whether a credential
+    // rode this ask, whether this cell verified it, and what a STRANGER would
+    // have waited at this cell's empty seat at that instant (the core's
+    // lock-delay from the serving-since anchor as this controller stamps it).
+    // 1219 asserts the fresh cells admitted the incumbent on a verified
+    // credential while that wait was still running — a seat the credential
+    // decided, not one taken at a door that had simply opened.
+    let carried;
+    let seatWaitMs;
     if (ask.carried && (type === 'prepare' || type === 'accept') && (ask.mode ?? 'held') === 'held') {
       const basis = networkStateService.membershipAt(ask.carried.fingerprint);
       const standing = await heldGeneration(ask.key);
@@ -900,10 +910,15 @@ async function serve(req, res, type, operate) {
           committeeSize: committeeSize('held'), candidate: ask.candidate, standingGeneration: standing.generation,
         })
         : null;
+      carried = carriedIncumbent ? 'verified' : 'refused';
+      const anchor = servingSinceFor(ask.key);
+      seatWaitMs = anchor
+        ? Math.max(0, anchor + (config.fluxapps.quorumGrantLockDelayMs ?? 30_000) - Date.now())
+        : 0;
     }
     const reply = await operate(ask, { servingSinceMs: servingSinceFor(ask.key), carriedIncumbent });
     ms.operate = Date.now() - t0 - ms.read - ms.committee - (ms.holds ?? 0);
-    report('served', reply?.ok === false ? reply.code : undefined);
+    report('served', reply?.ok === false ? reply.code : undefined, carried ? { carried, seatWaitMs } : {});
     return res.json(messageHelper.createDataMessage(reply));
   } catch (error) {
     report('errored');
