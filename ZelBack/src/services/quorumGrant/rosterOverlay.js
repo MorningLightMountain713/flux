@@ -475,10 +475,15 @@ function credentialWellFormed(carried) {
  *
  * @returns {string|null} the verified incumbent (the candidate) or null
  */
-function verifyTermCredential(membership, key, carried, { committeeSize, candidate, standingGeneration }) {
+function verifyTermCredential(membership, key, carried, {
+  committeeSize, candidate, standingGeneration, expectedGeneration,
+}) {
   if (!credentialWellFormed(carried)) return null;
   if (typeof candidate !== 'string' || !candidate) return null;
-  if (carried.generation !== standingGeneration - 1) return null;
+  // a step-across carries the world just below the standing one; a published
+  // record is proved against the committee of its own generation
+  const expected = expectedGeneration ?? standingGeneration - 1;
+  if (carried.generation !== expected) return null;
   const committee = verifyChain(
     membership, key, carried.fingerprint, carried.generation, committeeSize, carried.roster?.chain ?? [],
   );
