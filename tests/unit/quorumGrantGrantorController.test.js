@@ -323,6 +323,36 @@ describe('quorumGrant grantorController', () => {
       expect(grantRegister.prepare.called).to.equal(false);
     });
 
+    // A release names the generation its row was written under. It removes
+    // the asker's own row and nothing else, so a cell that sat on that
+    // generation's committee serves it after the generation retired, and
+    // through the standing generation's drain.
+    it('serves a release naming a retired generation', async () => {
+      messageStore.getGrantGenerationRecord.resolves({ data: { generation: 2, height: 50 } });
+      const res = fakeRes();
+      await grantorController.release(fakeReq(signedAsk('release', { generation: 1 })), res);
+      expect(res.statusCode, JSON.stringify(res.body)).to.equal(200);
+      expect(grantRegister.release.calledOnce).to.equal(true);
+    });
+
+    it('serves a retired release through the standing generation\'s drain', async () => {
+      // standing generation 2 at height 200, this cell at 100: draining until 220
+      messageStore.getGrantGenerationRecord.resolves({ data: { generation: 2, height: 200 } });
+      const res = fakeRes();
+      await grantorController.release(fakeReq(signedAsk('release', { generation: 1 })), res);
+      expect(res.statusCode, JSON.stringify(res.body)).to.equal(200);
+      expect(grantRegister.release.calledOnce).to.equal(true);
+    });
+
+    it('a retired renew stays refused', async () => {
+      messageStore.getGrantGenerationRecord.resolves({ data: { generation: 2, height: 50 } });
+      const res = fakeRes();
+      await grantorController.renew(fakeReq(signedAsk('renew', { generation: 1 })), res);
+      expect(res.statusCode).to.equal(409);
+      expect(res.body.data.message).to.contain('current is 2');
+      expect(grantRegister.renew.called).to.equal(false);
+    });
+
     it('refuses an ask without a well-formed fingerprint outright', async () => {
       const res = fakeRes();
       await grantorController.prepare(fakeReq(signedAsk('prepare', { fingerprint: 'fp-1' })), res);

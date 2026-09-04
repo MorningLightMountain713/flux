@@ -442,7 +442,7 @@ async function readAsk(req, type) {
  * freshly seated replacement, whose register has never heard of the key,
  * knows to answer for it.
  */
-async function selfOnCommittee(key, mode, fingerprint, generation, carriedChain, carriedCancels) {
+async function selfOnCommittee(key, mode, fingerprint, generation, carriedChain, carriedCancels, { retiredOk = false } = {}) {
   if (mode === 'oneshot') {
     const role = roleOf(key);
     const founderRole = FOUNDER_ROLE_PATTERN.exec(role) ?? ORDINAL_ROLE_PATTERN.exec(role);
@@ -470,10 +470,15 @@ async function selfOnCommittee(key, mode, fingerprint, generation, carriedChain,
   }
 
   const current = await heldGeneration(key);
-  if (generation !== current.generation) {
+  // A release names the generation its row was written under and removes the
+  // asker's own row, nothing else: a retired generation is served for it, on
+  // that generation's committee, through the standing generation's drain,
+  // and it never stamps the standing generation's anchor.
+  const retired = retiredOk && generation < current.generation;
+  if (generation !== current.generation && !retired) {
     return { member: false, code: 409, reason: `ask names generation ${generation}, current is ${current.generation}` };
   }
-  if (current.generation >= 1 && current.height !== null) {
+  if (!retired && current.generation >= 1 && current.height !== null) {
     const height = daemonServiceMiscRpcs.isDaemonSynced()?.data?.height ?? 0;
     const drainUntil = current.height + generationDrainBlocks();
     if (height < drainUntil) {
@@ -487,7 +492,7 @@ async function selfOnCommittee(key, mode, fingerprint, generation, carriedChain,
   // Past the drain this cell serves the re-rolled generation: its first ask
   // here is the serving-since anchor's third moment (see the anchor's
   // comment) — once per generation, whatever the ask goes on to be refused for
-  if (current.generation >= 1 && generationServedMs.get(key)?.generation !== current.generation) {
+  if (!retired && current.generation >= 1 && generationServedMs.get(key)?.generation !== current.generation) {
     generationServedMs.set(key, { generation: current.generation, atMs: Date.now() });
   }
 
@@ -847,6 +852,7 @@ async function serve(req, res, type, operate) {
 
     const committee = await selfOnCommittee(
       ask.key, ask.mode ?? 'held', ask.fingerprint, ask.generation, ask.chain, ask.cancels,
+      { retiredOk: type === 'release' },
     );
     ms.committee = Date.now() - t0 - ms.read;
     if (!committee.member) {
