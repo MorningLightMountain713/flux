@@ -170,7 +170,7 @@ async function transportKeyPair(appName, fluxID) {
 // different (appName, pubkey, fluxID) triples.
 //
 // This is an independent implementation of flux-spec's attestationMessage() and of
-// SAS's, in api_server.h. Independent on purpose: three implementations agreeing is
+// the benchmark channel signer's. Independent on purpose: three implementations agreeing is
 // worth something, and importing flux-spec's builder here would leave the test that
 // checks them comparing a function with itself. tests/unit/transportAttestation.test.js
 // runs this producer through that verifier, which is what keeps them honest.
