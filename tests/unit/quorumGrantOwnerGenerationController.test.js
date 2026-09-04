@@ -146,15 +146,10 @@ describe('quorumGrant ownerGenerationController', () => {
     });
   });
 
-  // The stop-first door (COMMITTEE_RECOVERY_DESIGN §3): a re-roll under
-  // a RUNNING master is the one thing no grantor-side rule can bound, so
-  // the intake refuses while it can see a live held term standing for the
-  // key — the record ages out within one TTL of the master stopping, so a
-  // genuinely stopped app passes. A courtesy door like contiguity: the
-  // button's release-and-stop is the rule, this refuses the honest path's
-  // mistakes and teaches.
-  describe('the live-term door', () => {
-    it('refuses a re-roll while the published record shows a live held term', async () => {
+  // A re-roll lands under a live held term: the running master steps across
+  // to the re-rolled committee on its credential (STEP_ACROSS_DESIGN.md).
+  describe('a live term', () => {
+    it('does not refuse a re-roll', async () => {
       messageStore.getMasterleaseRecord.resolves({
         data: {
           grantee: `${'2'.repeat(64)}:0`, mode: 'held', ttlMs: 150_000, broadcastedAt: Date.now() - 5_000,
@@ -162,27 +157,8 @@ describe('quorumGrant ownerGenerationController', () => {
       });
       const res = fakeRes();
       await ownerGenerationController.submit(fakeReq(signedRecord()), res);
-      expect(res.statusCode).to.equal(409);
-      expect(res.body.data.message).to.match(/live.*term|term.*stand/i);
-      expect(fluxCommunicationMessagesSender.broadcastMessageToAll.called).to.equal(false);
-    });
-
-    it('a record aged past its TTL is a stopped world — the door opens', async () => {
-      messageStore.getMasterleaseRecord.resolves({
-        data: {
-          grantee: `${'2'.repeat(64)}:0`, mode: 'held', ttlMs: 150_000, broadcastedAt: Date.now() - 200_000,
-        },
-      });
-      const res = fakeRes();
-      await ownerGenerationController.submit(fakeReq(signedRecord()), res);
       expect(res.statusCode).to.equal(200);
-    });
-
-    it('an unreadable record does not wedge the door — courtesy, not safety', async () => {
-      messageStore.getMasterleaseRecord.rejects(new Error('store down'));
-      const res = fakeRes();
-      await ownerGenerationController.submit(fakeReq(signedRecord()), res);
-      expect(res.statusCode).to.equal(200);
+      expect(fluxCommunicationMessagesSender.broadcastMessageToAll.calledOnce).to.equal(true);
     });
   });
 

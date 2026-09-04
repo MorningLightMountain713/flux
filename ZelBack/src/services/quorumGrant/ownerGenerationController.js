@@ -73,28 +73,8 @@ async function submit(req, res) {
       ));
     }
 
-    // The stop-first door (COMMITTEE_RECOVERY_DESIGN §3): a re-roll under a
-    // RUNNING master is the one seat no grantor-side rule can bound — an
-    // incumbent the record never reaches cannot learn its world ended. The
-    // published masterlease record ages out within one TTL of the master
-    // stopping, so a genuinely stopped app passes; a renewing master keeps
-    // it fresh and is refused, taught. A courtesy door like the contiguity
-    // gate above — the dashboard button's release-and-stop is the rule, and
-    // an unreadable record refuses nothing.
-    try {
-      const lease = await messageStore.getMasterleaseRecord(record.appName, record.role);
-      const term = lease?.data;
-      if (term?.grantee && term.mode === 'held'
-        && Number.isFinite(term.ttlMs) && Number.isFinite(term.broadcastedAt)
-        && Date.now() < term.broadcastedAt + term.ttlMs) {
-        return res.status(409).json(messageHelper.createErrorMessage(
-          `a live held term stands for ${record.appName}/${record.role} (grantee ${term.grantee}); `
-          + 'stop the app and let the term lapse before re-rolling',
-        ));
-      }
-    } catch (error) {
-      log.warn(`quorumGrant ownerGenerationController submit: live-term read failed, door stands open: ${error.message}`);
-    }
+    // A re-roll lands under a running master: the holder steps across to the
+    // re-rolled committee on its credential (STEP_ACROSS_DESIGN.md).
 
     // The broadcast names this node's own address: peer verification
     // resolves the announcer BY IP against the deterministic list and
