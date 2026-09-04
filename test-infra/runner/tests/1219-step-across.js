@@ -326,11 +326,12 @@ describe('step-across: the owner re-rolls the committee under a running master, 
       `fresh cells that admitted the master on a verified credential ahead of the seat wait: ${describeCells(verifiedAt) || 'none'}`)
       .to.be.at.least(2);
 
-    // 8. The old rows lapse: the retired committee's cells outside the new
-    //    one keep their generation-0 row, unrenewed, to its TTL. Same
+    // 8. The old rows lapse: every cell outside the new committee that held
+    //    the master's generation-0 row keeps it, unrenewed, to its TTL. A
+    //    granting cell in its boot drain at the grant holds no row. Same
     //    container, one holder, no demotion.
-    const retiredOnly = [...walk.granting.members].filter((cell) => !walk.reRolled.members.has(cell)).map(indexOf);
-    expect(retiredOnly.length, 'the retired committee has cells the new one does not').to.be.at.least(1);
+    const retiredOnly = [...rows0].filter((cell) => !walk.reRolled.members.has(cell)).map(indexOf);
+    expect(retiredOnly.length, 'a retired cell holds the master\'s generation-0 row').to.be.at.least(1);
     await waitFor(async () => {
       const cells = await Promise.all(retiredOnly.map((i) => readCell(i)));
       return cells.every((cell) => cell?.accepted?.grantee === first.grantee
