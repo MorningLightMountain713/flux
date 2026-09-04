@@ -115,6 +115,7 @@ describe('quorumGrant grantClient', () => {
   let refuseAccept; // true = every referee answers accept with a refusal
   let teaching; // hosts refusing every ask under a newer world, and teaching it
   let taughtRecord; // the standing generation record those refusals and every record read carry
+  let draining; // hosts refusing every ask under the standing generation as draining
 
   function clock() {
     return clockNow;
@@ -228,9 +229,9 @@ describe('quorumGrant grantClient', () => {
     return outcome.reply;
   }
 
-  // A grantor refusing under a newer world, exactly as the controller answers
-  // it: an HTTP 409 whose error payload carries the standing record.
-  function taughtRefusal() {
+  // A grantor refusing at its door, exactly as the controller answers it: an
+  // HTTP 409 whose error payload carries the standing record.
+  function doorRefusal(message) {
     const error = new Error('Request failed with status code 409');
     error.response = {
       status: 409,
@@ -238,7 +239,7 @@ describe('quorumGrant grantClient', () => {
         status: 'error',
         data: {
           name: 'Error',
-          message: `ask names generation 0, current is ${taughtRecord.generation}`,
+          message,
           generation: taughtRecord.generation,
           generationRecord: taughtRecord,
         },
@@ -246,6 +247,8 @@ describe('quorumGrant grantClient', () => {
     };
     return error;
   }
+  const taughtRefusal = () => doorRefusal(`ask names generation 0, current is ${taughtRecord.generation}`);
+  const drainingRefusal = () => doorRefusal(`generation ${taughtRecord.generation} is draining until height ${(taughtRecord.height ?? 0) + 3}`);
 
   function fakePost(url, body) {
     const [, host, path] = url.match(/^http:\/\/([^:]+):\d+(\/.*)$/);
@@ -268,7 +271,10 @@ describe('quorumGrant grantClient', () => {
 
     if (path === '/flux/quorumgrant/witness') {
       if (unreachable.has(host) || dark.has(host)) throw new Error('unreachable');
-      const reply = witnessReplies.get(host);
+      // a function fixture answers at the moment of the poll, so a test can
+      // move the world between a pass's earlier asks and its witness poll
+      const fixture = witnessReplies.get(host);
+      const reply = typeof fixture === 'function' ? fixture() : fixture;
       if (!reply) throw new Error('no witness fixture');
       return { data: { status: 'success', data: reply } };
     }
@@ -279,6 +285,9 @@ describe('quorumGrant grantClient', () => {
     // controller's "ask names generation X, current is Y"); the standing one
     // is served — a re-rolled committee shares cells with the old one
     if (teaching.has(host) && (body?.generation ?? 0) < (taughtRecord?.generation ?? 0)) throw taughtRefusal();
+    // a draining cell refuses every ask under the standing generation until
+    // the drain lifts (the controller's "generation X is draining until height Y")
+    if (draining.has(host) && taughtRecord && (body?.generation ?? 0) >= taughtRecord.generation) throw drainingRefusal();
     return { data: { status: 'success', data: dispatchToGrantor(host, type, body) } };
   }
 
@@ -299,6 +308,7 @@ describe('quorumGrant grantClient', () => {
     activeMembership = membership;
     teaching = new Set();
     taughtRecord = null;
+    draining = new Set();
 
     sinon.stub(serviceHelper, 'axiosPost').callsFake(async (url, body) => fakePost(url, body));
     sinon.stub(serviceHelper, 'axiosGet').callsFake(async (url) => {
@@ -1649,6 +1659,58 @@ describe('quorumGrant grantClient', () => {
         await holder.renewOnce();
         expect(holder.generation).to.equal(0);
         expect(masterleasePublisher.publishMasterlease.callCount).to.equal(publishedBefore);
+      });
+
+      // The block that lifts the drain lands inside one pass, between the
+      // step-across probe (every new cell refuses it as draining) and the
+      // witness poll (the new cells serve, a takeover is possible). The old
+      // lease ran out long ago, so the pass would demote; the holder asks the
+      // referees once more and decides on one reading.
+      const drainLiftsAtTheWitnessPoll = (extra = {}) => {
+        nextHosts.forEach((host) => draining.add(host));
+        witnessReplies.set(STANDBY_HOST, () => {
+          draining.clear();
+          if (extra.beforeAnswering) extra.beforeAnswering();
+          return { quorumReachable: true, holding: false, acquiring: false };
+        });
+      };
+
+      it('the coast ends on a reading the referees had not yet given: the holder asks once more and steps across instead of demoting', async () => {
+        taughtRecord = null;
+        const demoted = [];
+        const holder = reroll(await acquireHolder({ onDemoted: (reason) => demoted.push(reason) }));
+        drainLiftsAtTheWitnessPoll();
+        clockNow += TTL + 30_000;
+        await holder.renewOnce();
+        expect(demoted).to.deep.equal([]);
+        expect(holder.state).to.equal('held');
+        expect(holder.generation, 'the holder holds under the new generation').to.equal(1);
+      });
+
+      it('with no lock-delay budget left after the pass, the holder demotes without asking again', async () => {
+        taughtRecord = null;
+        const demoted = [];
+        const holder = reroll(await acquireHolder({ onDemoted: (reason) => demoted.push(reason) }));
+        // the pass's own reads ran past the lock-delay: a stranger's seat may
+        // already be open, and a demotion must not wait on three more rounds
+        drainLiftsAtTheWitnessPoll({ beforeAnswering: () => { clockNow += REGISTER_TUNABLES.lockDelayMs + 10_000; } });
+        clockNow += TTL + 30_000;
+        await holder.renewOnce();
+        expect(demoted).to.have.lengthOf(1);
+        expect(holder.state).to.equal('lost');
+        expect(holder.generation).to.equal(0);
+      });
+
+      it('a new cell that never answered the probe leaves the holder to demote: its first serve is not bounded by the probe', async () => {
+        taughtRecord = null;
+        const demoted = [];
+        const holder = reroll(await acquireHolder({ onDemoted: (reason) => demoted.push(reason) }));
+        drainLiftsAtTheWitnessPoll();
+        unreachable.add(nextHosts[0]);
+        clockNow += TTL + 30_000;
+        await holder.renewOnce();
+        expect(demoted).to.have.lengthOf(1);
+        expect(holder.state).to.equal('lost');
       });
     });
 

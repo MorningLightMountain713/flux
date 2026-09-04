@@ -438,14 +438,23 @@ async function standbysFor(key, selfOutpoint) {
  * One signed ask to one grantor. Null when the member did not answer — the
  * caller's quorum arithmetic treats silence as silence, never as a no.
  */
-async function askGrantor(member, type, ask, signature) {
+async function askGrantor(member, type, ask, signature, options = {}) {
+  return (await askGrantorDetailed(member, type, ask, signature, options)).reply;
+}
+
+/**
+ * askGrantor with one more fact: whether the grantor responded at all — a
+ * reply, or a refusal at its door — as against silence.
+ * @returns {Promise<{reply: object|null, answered: boolean}>}
+ */
+async function askGrantorDetailed(member, type, ask, signature, { timeoutMs } = {}) {
   try {
     const response = await serviceHelper.axiosPost(
       grantorUrl(member, `/flux/quorumgrant/${type}`),
       { ...ask, signature },
-      { timeout: askTimeoutMs(), httpAgent: askAgent },
+      { timeout: timeoutMs ?? askTimeoutMs(), httpAgent: askAgent },
     );
-    return response?.data?.data ?? null;
+    return { reply: response?.data?.data ?? null, answered: true };
   } catch (error) {
     // The grantor names why it refused and the reason dies in this catch —
     // outside the harness nothing observes it (publish() is a no-op), and a
@@ -460,25 +469,28 @@ async function askGrantor(member, type, ask, signature) {
       reason: error.response?.data?.data?.message ?? error.message ?? null,
     });
     await learnGeneration(ask.key, ask.generation, error.response?.data?.data);
-    return null;
+    return { reply: null, answered: error.response?.status !== undefined };
   }
 }
 
 /**
  * Ask every committee member directly. One signature serves all of them —
  * the payload never names the member.
- * @returns {Map<string, object>} outpoint -> reply, silent members absent
+ * @returns {Map<string, object>} outpoint -> reply, silent members absent;
+ *   `answered` on the map counts the members that responded at all
  */
-async function askCommittee(members, type, ask, signature) {
-  const asks = members.map(async (member) => {
-    const reply = await askGrantor(member, type, ask, signature);
-    return { member, reply };
-  });
+async function askCommittee(members, type, ask, signature, { timeoutMs } = {}) {
+  const asks = members.map(async (member) => ({
+    member, ...(await askGrantorDetailed(member, type, ask, signature, { timeoutMs })),
+  }));
   const settled = await Promise.all(asks);
   const replies = new Map();
-  settled.forEach(({ member, reply }) => {
+  let answered = 0;
+  settled.forEach(({ member, reply, answered: responded }) => {
+    if (responded) answered += 1;
     if (reply) replies.set(outpointOf(member), reply);
   });
+  replies.answered = answered;
   return replies;
 }
 
@@ -853,6 +865,10 @@ class Holder {
   // grantor outpoint -> its latest signed term acceptance for THIS epoch (the
   // credential, STEP_ACROSS_DESIGN.md D1); starts empty at every epoch bump
   #acceptances = new Map();
+
+  // the last step-across probe this pass: when, how many cells, how many
+  // answered at all, how many replied
+  #lastProbe = null;
 
   #lastAnswerMs = new Map(); // grantor outpoint -> last instant it answered anything
 
@@ -1411,7 +1427,8 @@ class Holder {
    *
    * @returns {Promise<boolean>} whether the holder now holds under the new world
    */
-  async #maybeStepAcross() {
+  async #maybeStepAcross({ timeoutMs } = {}) {
+    this.#lastProbe = null;
     if (this.#stopped) return false;
     const standing = await currentGeneration(this.#key);
     if (standing <= this.#committee.generation) return false;
@@ -1428,7 +1445,11 @@ class Holder {
 
     const probeSigned = await signedAskFor('probe', this.#key, 'held', 1, this.#identity, next, extras);
     if (!probeSigned) return false;
-    const probeReplies = await askCommittee(next.members, 'probe', probeSigned.ask, probeSigned.signature);
+    const probeAtMs = this.#clock();
+    const probeReplies = await askCommittee(next.members, 'probe', probeSigned.ask, probeSigned.signature, { timeoutMs });
+    this.#lastProbe = {
+      atMs: probeAtMs, members: next.members.length, answered: probeReplies.answered, replies: probeReplies.size,
+    };
     // a grantee already seated on the new committee is its holder, not us: fall back
     const adopted = core.adoptFrom([...probeReplies.values()]);
     if (adopted && adopted.grantee !== this.#identity.outpoint) return false;
@@ -1436,7 +1457,7 @@ class Holder {
 
     const prepareSigned = await signedAskFor('prepare', this.#key, 'held', epoch, this.#identity, next, extras);
     if (!prepareSigned) return false;
-    const prepareReplies = await askCommittee(next.members, 'prepare', prepareSigned.ask, prepareSigned.signature);
+    const prepareReplies = await askCommittee(next.members, 'prepare', prepareSigned.ask, prepareSigned.signature, { timeoutMs });
     const prepared = core.prepareOutcome([...prepareReplies.values()], next.quorum);
     if (!prepared.promised) {
       log.info(`quorumGrant holder ${this.#key}: step-across to generation ${standing} not promised (${prepared.reason ?? 'no prepare quorum'})`);
@@ -1446,7 +1467,7 @@ class Holder {
     const acceptSigned = await signedAskFor('accept', this.#key, 'held', epoch, this.#identity, next, { ttlMs: this.#ttlMs, ...extras });
     if (!acceptSigned) return false;
     const sentMs = this.#clock();
-    const acceptReplies = await askCommittee(next.members, 'accept', acceptSigned.ask, acceptSigned.signature);
+    const acceptReplies = await askCommittee(next.members, 'accept', acceptSigned.ask, acceptSigned.signature, { timeoutMs });
     const accepted = core.acceptOutcome([...acceptReplies.values()], next.quorum);
     if (!accepted.granted) return false;
 
@@ -1471,6 +1492,24 @@ class Holder {
     log.info(`quorumGrant holder ${this.#key}: stepped across to generation ${standing} at epoch ${epoch}`);
     fluxEventBus.publish('quorumGrant:steppedAcross', { key: this.#key, generation: standing, epoch });
     return true;
+  }
+
+  /**
+   * The block that lifts a drain can land inside one pass, between the
+   * step-across probe (every new cell refused it at its door) and the witness
+   * poll (the new cells serve): the pass would demote a holder that steps
+   * across on its next one. One more ask decides on one reading. Only when
+   * every new cell answered the probe — none served anyone before it — and
+   * only inside what the lock-delay leaves after this pass and the hard stop,
+   * so a demotion is never delayed past a stranger's earliest seat.
+   */
+  async #stepAcrossBeforeDemoting() {
+    const probe = this.#lastProbe;
+    if (!probe || probe.answered < probe.members || probe.replies > 0) return false;
+    // the clock at the decision: the witness poll behind it has spent time too
+    const budgetMs = probe.atMs + lockDelayMs() - this.#clock() - core.HARD_STOP_MS;
+    if (budgetMs <= 0) return false;
+    return this.#maybeStepAcross({ timeoutMs: Math.min(askTimeoutMs(), Math.floor(budgetMs / 3)) });
   }
 
   async #assess(quorumRenewed) {
@@ -1539,6 +1578,10 @@ class Holder {
       this.#armDemotion(now + demotionSlackMs());
     }
     if (now > this.#deadlineTargetMs) {
+      if (await this.#stepAcrossBeforeDemoting()) {
+        fluxEventBus.publish('quorumGrant:assess', { ...seen, outcome: 'steppedAcross' });
+        return;
+      }
       fluxEventBus.publish('quorumGrant:assess', {
         ...seen, outcome: 'demote', reason: verdict.reason ?? null,
       });

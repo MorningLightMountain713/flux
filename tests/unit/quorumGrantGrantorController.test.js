@@ -1677,6 +1677,22 @@ describe('quorumGrant grantorController', () => {
       expect(context.servingSinceMs).to.be.at.most(Date.now());
     });
 
+    it('a release naming a retired generation does not stamp the standing generation\'s anchor', async () => {
+      rerolled(1, 95);
+      viewAt(115);
+      const released = fakeRes();
+      await grantorController.release(fakeReq(signedAsk('release', { generation: 0 })), released);
+      expect(released.statusCode).to.equal(200);
+      await tick(5);
+
+      const before = Date.now();
+      const res = fakeRes();
+      await grantorController.prepare(fakeReq(signedAsk('prepare', { generation: 1 })), res);
+      expect(res.statusCode).to.equal(200);
+      expect(grantRegister.prepare.lastCall.args[2].servingSinceMs, 'the anchor is the first standing-generation ask, not the release')
+        .to.be.at.least(before);
+    });
+
     it('the stamp is made once: a later ask under the same generation carries the same moment', async () => {
       rerolled(1, 95);
       viewAt(115);
