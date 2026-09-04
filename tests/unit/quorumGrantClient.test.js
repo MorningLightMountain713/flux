@@ -794,6 +794,17 @@ describe('quorumGrant grantClient', () => {
       expect(relearned.holder.state).to.equal('held');
     });
 
+    it('reports the term a quorum of registers names, recovered or not', async () => {
+      const { holder } = await seatThenRestart();
+      const other = `${'7'.repeat(64)}:0`;
+      committeeHosts.forEach((host) => { registers.get(host).get(KEY).accepted.grantee = other; });
+      clockNow += 5_000;
+      const relearned = await grantClient.relearn(KEY, holderOptions());
+      expect(relearned.recovered).to.equal(false);
+      expect(relearned.term.grantee, 'the registers name another node').to.equal(other);
+      expect(relearned.term.epoch).to.equal(holder.epoch);
+    });
+
     // The recovered deadline is the grantors' remaining duration, never their
     // expiresAt, and it can only ever be EARLIER than the term this node
     // originally held - never later.
@@ -1649,6 +1660,22 @@ describe('quorumGrant grantClient', () => {
           return row?.accepted?.grantee === SELF && row.accepted.generation === 1;
         });
         expect(seated).to.deep.equal([]);
+      });
+
+      it('the published record carries the committee\'s signed acceptances: the granting committee\'s at the grant, the re-rolled committee\'s after the step-across', async () => {
+        taughtRecord = null;
+        const outpointsOf = (c) => c.members.map((node) => `${node.txhash}:${node.outidx}`);
+        const holder = await acquireHolder();
+        const granted = masterleasePublisher.publishMasterlease.lastCall.args[0];
+        expect(granted.acceptances.length, 'a quorum of the granting committee').to.be.at.least(oldCommittee.quorum);
+        granted.acceptances.forEach((a) => expect(outpointsOf(oldCommittee)).to.include(a.grantor));
+        reroll(holder);
+        clockNow += 1_000;
+        await holder.renewOnce();
+        const stepped = masterleasePublisher.publishMasterlease.lastCall.args[0];
+        expect(stepped.generation).to.equal(1);
+        expect(stepped.acceptances.length, 'a quorum of the re-rolled committee').to.be.at.least(newCommittee.quorum);
+        stepped.acceptances.forEach((a) => expect(outpointsOf(newCommittee)).to.include(a.grantor));
       });
 
       it('a plain renewal under an unchanged world never steps across or republishes', async () => {

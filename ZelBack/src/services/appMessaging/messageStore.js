@@ -12,6 +12,7 @@ const foundingCommittee = require('../appMesh/foundingCommittee');
 const fluxEventBus = require('../utils/fluxEventBus');
 const ownerGenerationRecord = require('../quorumGrant/ownerGenerationRecord');
 const rosterOverlay = require('../quorumGrant/rosterOverlay');
+const networkStateService = require('../networkStateService');
 const { getSpec, assertVersionActivated } = require('../utils/specLibs');
 const { getStateBeforeHeight } = require('../appDatabase/appSpecHistory');
 const globalState = require('../utils/globalState');
@@ -841,6 +842,47 @@ async function handleMasterleaseEvent({ message, envelope, announcer }) {
     });
     return;
   }
+  // The grantee is a claim; the granting committee's signed term acceptances
+  // are the proof. A held record carries a quorum of them, verified against
+  // the membership its fingerprint names, and a record that fails is dropped
+  // whole. A membership this node cannot rebuild — before its boot, or past
+  // its window — stores the record UNVERIFIED, ranked below any verified one
+  // of its generation. Released rows and founding records carry no term.
+  const proving = message.mode === 'held' && message.released !== true;
+  let verified = false;
+  if (proving) {
+    const carried = {
+      fingerprint: message.fingerprint,
+      generation: message.generation ?? 0,
+      epoch: message.epoch,
+      roster: message.roster ?? null,
+      acceptances: message.acceptances,
+    };
+    const dropped = (reason) => fluxEventBus.publish('quorumGrant:masterleaseDropped', {
+      appName: message.appName, role: message.role, grantee: message.grantee, announcer: announced, reason,
+    });
+    if (!rosterOverlay.credentialWellFormed(carried)) {
+      dropped('malformed acceptances');
+      return;
+    }
+    const membership = networkStateService.membershipAt(message.fingerprint);
+    if (membership) {
+      const proved = rosterOverlay.verifyTermCredential(membership, `${message.appName}/${message.role}`, carried, {
+        committeeSize: config.fluxapps.quorumGrantHeldCommitteeSize ?? 9,
+        candidate: message.grantee,
+        expectedGeneration: carried.generation,
+      });
+      if (!proved) {
+        dropped('acceptances do not verify against the granting committee');
+        return;
+      }
+      verified = true;
+    } else {
+      fluxEventBus.publish('quorumGrant:masterleaseUnverified', {
+        appName: message.appName, role: message.role, grantee: message.grantee, fingerprint: message.fingerprint,
+      });
+    }
+  }
   try {
     const db = dbHelper.databaseConnection();
     const database = db.db(config.database.appsglobal.database);
@@ -853,10 +895,15 @@ async function handleMasterleaseEvent({ message, envelope, announcer }) {
     // row carries no expiry and nothing depends on a sweeper reaping it.
     // Generation orders ahead of epoch: a re-rolled world's first grant
     // replaces the retired world's record however high its epoch climbed.
+    // Within a generation a verified record outranks an unverified one; a
+    // released row or a founding record carries no term to prove and ranks
+    // as verified, so a release still supersedes the term it ends.
+    const rank = proving && !verified ? 0 : 1;
     await database.collection(globalAppStateEvents).updateOne(
       { type: APP_STATE_EVENT_TYPES.MASTERLEASE, dedupKey },
       buildOrdinalConditionalUpsert([
         { field: 'generation', value: message.generation ?? 0, absent: 0 },
+        { field: 'verified', value: rank, absent: 0 },
         { field: 'epoch', value: message.epoch, absent: -1 },
       ], message.broadcastedAt, {
         ip: message.ip,
@@ -865,7 +912,7 @@ async function handleMasterleaseEvent({ message, envelope, announcer }) {
         dedupKey,
         broadcastedAt: new Date(message.broadcastedAt),
         envelope: envelope ?? null,
-        data: message,
+        data: { ...message, ...(proving ? { verified } : {}) },
         // In alwaysSetFields, never a conditional field: a conditional slot
         // keeps the stored value on a losing touch, so a row carrying a Date
         // here would keep being reaped by the collection's TTL index until a

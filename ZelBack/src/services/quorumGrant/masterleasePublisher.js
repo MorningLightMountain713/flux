@@ -55,6 +55,9 @@ async function publishMasterlease(grant) {
       generation: grant.generation ?? 0,
       fingerprint: grant.fingerprint,
       ...(grant.mode === 'held' ? { ttlMs: grant.ttlMs } : {}),
+      // the granting committee's signed term acceptances: the proof every
+      // reader's intake verifies before the record is stored
+      ...(grant.mode === 'held' && grant.acceptances ? { acceptances: grant.acceptances } : {}),
       ...(grant.roster ? { roster: grant.roster } : {}),
       // an ordinal given back or reclaimed: same row, same epoch, a newer
       // broadcast, and the flag every reader of the ordinal- prefix skips
