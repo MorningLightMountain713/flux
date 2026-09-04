@@ -44,10 +44,10 @@ describe('arcaneAttestation verify primitive', () => {
   });
 
   it('verifies a real app-purpose attestation against the hardcoded key', () => {
-    // Captured live from cabbage 2026-08-27, running the SAS build that added
-    // the `app` purpose:
-    //   POST /v2/attest {"message":"<64 a's><64 b's>","purpose":"app"}
-    // The signer prepends FLUX_ARCANE_ATTEST_v2: server-side, so the message
+    // Captured live from an Arcane node 2026-08-27, from the first build of the
+    // benchmark channel's signer to carry the `app` purpose — requested through the
+    // daemon's attest RPC with that purpose and a 128-hex message.
+    // The signer prepends FLUX_ARCANE_ATTEST_v2: itself, so the message
     // rebuilt here is the domain plus the payload — exactly what flux-spec's
     // buildArcaneAttestMessage produces from a contentHash and an envelope hash.
     const message = `FLUX_ARCANE_ATTEST_v2:${'a'.repeat(64)}${'b'.repeat(64)}`;

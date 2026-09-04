@@ -31,9 +31,9 @@ const b64 = (s) => new Uint8Array(Buffer.from(s, 'base64'));
 // and the harness's fake benchmark daemon — the only producer we can read — was never
 // pointed at it.
 //
-// It was not pointed at it because it would have failed. flux-spec and SAS both write
-// each variable field's length ahead of the field, so the signed message has exactly
-// one reading; the stub concatenated appName, pubkey and fluxID bare, while its
+// It was not pointed at it because it would have failed. flux-spec and the signer on
+// the benchmark channel both write each variable field's length ahead of the field, so
+// the signed message has exactly one reading; the stub concatenated appName, pubkey and fluxID bare, while its
 // comment claimed it matched flux-spec byte for byte. Nothing it signed could verify.
 //
 // This binds the two. The stub stays an independent implementation — importing
