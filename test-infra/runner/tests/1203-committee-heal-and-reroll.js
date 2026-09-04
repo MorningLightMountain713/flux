@@ -263,11 +263,17 @@ describe('the committee heals its dark seat, and the owner re-deals the walk', f
       }, { timeout: 120000, interval: 10000, label: 'a successor holds the grant' });
       expect(second.epoch, 'epochs never move backwards').to.be.greaterThan(before.epoch);
 
-      // the healed seat took part: the replacement's cell holds the NEW term
+      // The healed seat took part: the replacement's cell holds the CURRENT
+      // successor's term. Re-read the verdict each pass rather than pinning
+      // the first successor — under load a successor whose renewals time out
+      // steps down and hands the term on (epoch N -> N+1), and a check pinned
+      // to the first grantee could never converge on the second.
       await waitFor(async () => {
+        const verdict = await quorumVerdict();
+        if (!verdict || verdict.grantee === before.grantee) return false;
         const cell = await readCell(addedIndex);
-        return cell?.accepted?.grantee === second.grantee;
-      }, { timeout: 60000, interval: 5000, label: 'the replacement seat holds the successor grant' });
+        return cell?.accepted?.grantee === verdict.grantee;
+      }, { timeout: 120000, interval: 5000, label: 'the replacement seat holds the current successor grant' });
     } finally {
       await unpauseHostContainer(env.clients[masterIndex].container);
     }
