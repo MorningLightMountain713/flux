@@ -376,6 +376,23 @@ describe('step-across: the owner re-rolls the committee under a running master, 
     expect(freshSeats.length,
       `the new term stands on cells that never held a row for the master (shared cells ${walk.shared.length}, quorum ${walk.reRolled.quorum})`)
       .to.be.at.least(2);
+    // ...and those cells say so themselves: each served the master's accept
+    // on a credential it VERIFIED while a stranger would still have waited at
+    // that seat — the referee's own report names both. A seat taken at a door
+    // that had simply opened (a credential dropped, or one the register
+    // verified and ignored, then the lock-delay running out) shows no such
+    // report and fails here.
+    const verifiedAt = freshSeats.filter((cell) => {
+      const i = indexOf(cell);
+      return env.clients[i].getEventBuffer().some((e) => e.event === 'quorumGrant:served'
+        && e.id > beforeLift[i]
+        && e.data?.type === 'accept' && e.data?.key === key() && e.data?.candidate === first.grantee
+        && e.data?.outcome === 'served' && e.data?.code === undefined
+        && e.data?.carried === 'verified' && e.data?.seatWaitMs > 0);
+    });
+    expect(verifiedAt.length,
+      `fresh cells that admitted the master on a verified credential ahead of the seat wait: ${describeCells(verifiedAt) || 'none'}`)
+      .to.be.at.least(2);
 
     // 8. THE OLD ROWS LAPSE: the retired committee's cells outside the new
     //    one keep their generation-0 row, unrenewed, until its TTL runs out;
