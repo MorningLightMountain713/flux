@@ -231,6 +231,7 @@ describe('step-across: the owner re-rolls the committee under a running master, 
 
     // 1. A generation-0 quorum seats a master; its rows sit on the committee
     //    the suite dealt.
+    const startMarkers = env.clients.map((c) => c.getLastEventId());
     let first = null;
     await waitFor(async () => {
       first = await quorumVerdict(walk.granting.quorum);
@@ -239,6 +240,13 @@ describe('step-across: the owner re-rolls the committee under a running master, 
     expect(first.generation, 'the first world is generation 0').to.equal(0);
     const master = indexOf(first.grantee);
     expect(HOLDERS, `master ${first.grantee} maps to a holder`).to.include(master);
+    // Observe the master's own grant event before the drain markers below. The
+    // quorum verdict reads the committee cell rows, which the accept lands
+    // slightly before the holder emits granted; under load that gap can span a
+    // marker taken here, and the initial grant would then be miscounted as a
+    // grant "during the drain". Pinning it behind the marker keeps the drain
+    // assertions catching only a real grant.
+    await env.clients[master].waitForEvent('quorumGrant:granted', (d) => d.key === key(), 60000, { afterId: startMarkers[master] });
     const container = await getAppContainerId(env.clients[master].container, name, name);
     expect(container, 'the master has a container to keep').to.be.a('string');
     const rows0 = await cellsNaming(first.grantee, 0);
