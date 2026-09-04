@@ -80,6 +80,20 @@ async function canonicalManifest(manifest) {
  * @param {object} ctx - { owner, spec }
  * @param {object} deps - { verify? }
  */
+/**
+ * What a sealed slots payload is authenticated against — the manifest apart from
+ * the payload itself. flux-spec owns the byte string so the seal and the open
+ * cannot derive it differently; see contentManifestSealAad for what it binds and
+ * what it does not replace.
+ *
+ * @param {object} manifest - either form
+ * @returns {Promise<Buffer>}
+ */
+async function sealAad(manifest) {
+  const { contentManifestSealAad } = await getSpec();
+  return Buffer.from(contentManifestSealAad(manifest), 'utf8');
+}
+
 async function verifyManifest(manifest, ctx, deps = {}) {
   const { owner } = ctx;
   let { spec } = ctx;
@@ -137,7 +151,10 @@ async function verifyManifest(manifest, ctx, deps = {}) {
 async function sealManifestSlots(manifest, ctx, deps = {}) {
   if (!ctx.encrypted) return manifest;
   const provider = deps.provider || (await cryptoProvider.create(manifest.appName, ctx.owner));
-  const sealed = await provider.encrypt(Buffer.from(JSON.stringify(manifest.slots)));
+  const sealed = await provider.encrypt(
+    Buffer.from(JSON.stringify(manifest.slots)),
+    await sealAad(manifest),
+  );
   return { ...manifest, slots: { sealed } };
 }
 
@@ -156,7 +173,7 @@ async function openManifestSlots(manifest, ctx, deps = {}) {
     throw new Error('contentSlot: encrypted manifest is missing its sealed slots payload');
   }
   const provider = deps.provider || (await cryptoProvider.create(manifest.appName, ctx.owner));
-  const plaintext = await provider.decrypt(manifest.slots.sealed);
+  const plaintext = await provider.decrypt(manifest.slots.sealed, await sealAad(manifest));
   return { ...manifest, slots: JSON.parse(plaintext.toString('utf8')) };
 }
 
