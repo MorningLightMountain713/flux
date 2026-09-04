@@ -889,33 +889,49 @@ describe('quorumGrant mastershipGrantGate', () => {
       });
     });
 
-    it('masterIntent resolves the record grantee to its listed address, FDM-shaped', async () => {
+    it('masterIntent answers this node when it holds the term — its own held term, no record read', async () => {
+      grantClient.holderFor.returns({ state: 'held' });
+      networkStateService.membershipAt.returns([
+        { txhash: SELF_TXHASH, outidx: 0, pubkey: 'owner-self', ip: '203.0.113.5:16127' },
+      ]);
+      const intent = await mastershipGrantGate.masterIntent(IDENTIFIER, activeStandbyComp());
+      expect(intent).to.deep.equal({ ip: '203.0.113.5:16127', fdmOk: true });
+      expect(messageStore.getMasterleaseRecord.called, 'a holder needs no record').to.equal(false);
+    });
 
+    it('masterIntent resolves a VERIFIED record\'s grantee, FDM-shaped — a committee signature, not FDM', async () => {
       networkStateService.membershipAt.returns([
         { txhash: '9'.repeat(64), outidx: 0, pubkey: 'owner-9', ip: '10.9.0.9:16127' },
       ]);
-      messageStore.getMasterleaseRecord.resolves({ data: { grantee: `${'9'.repeat(64)}:0` } });
-
+      messageStore.getMasterleaseRecord.resolves({ data: { grantee: `${'9'.repeat(64)}:0`, verified: true } });
       const intent = await mastershipGrantGate.masterIntent(IDENTIFIER, activeStandbyComp());
       expect(intent).to.deep.equal({ ip: '10.9.0.9:16127', fdmOk: true });
     });
 
-    it('masterIntent with no record answers no-primary, never a guess', async () => {
+    it('an UNVERIFIED record names no primary — a forged or unprovable claim never routes', async () => {
+      networkStateService.membershipAt.returns([
+        { txhash: '9'.repeat(64), outidx: 0, pubkey: 'owner-9', ip: '10.9.0.9:16127' },
+      ]);
+      messageStore.getMasterleaseRecord.resolves({ data: { grantee: `${'9'.repeat(64)}:0`, verified: false } });
       const intent = await mastershipGrantGate.masterIntent(IDENTIFIER, activeStandbyComp());
       expect(intent).to.deep.equal({ ip: null, fdmOk: true });
     });
 
-    it('masterIntent answers null entirely when the plane is not applicable', async () => {
+    it('no record answers no-primary for the cycle, never a guess and never FDM', async () => {
+      const intent = await mastershipGrantGate.masterIntent(IDENTIFIER, activeStandbyComp());
+      expect(intent).to.deep.equal({ ip: null, fdmOk: true });
+    });
+
+    it('masterIntent answers null ONLY when the plane is not applicable — the sole path that lets FDM answer', async () => {
       mastershipGrantGate.resetForTests();
       expect(await mastershipGrantGate.masterIntent(IDENTIFIER, activeStandbyComp())).to.equal(null);
       mastershipGrantGate.resetForTests({ enabled: true });
       expect(await mastershipGrantGate.masterIntent(IDENTIFIER, plainComp())).to.equal(null);
     });
 
-    it('a grantee no longer on the list resolves to no primary, not a stale address', async () => {
-
+    it('a verified grantee no longer on the list resolves to no primary, not a stale address', async () => {
       networkStateService.membershipAt.returns([]);
-      messageStore.getMasterleaseRecord.resolves({ data: { grantee: `${'9'.repeat(64)}:0` } });
+      messageStore.getMasterleaseRecord.resolves({ data: { grantee: `${'9'.repeat(64)}:0`, verified: true } });
       const intent = await mastershipGrantGate.masterIntent(IDENTIFIER, activeStandbyComp());
       expect(intent).to.deep.equal({ ip: null, fdmOk: true });
     });

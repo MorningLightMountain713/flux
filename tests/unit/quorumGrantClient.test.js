@@ -1728,16 +1728,43 @@ describe('quorumGrant grantClient', () => {
         expect(holder.generation).to.equal(0);
       });
 
-      it('a new cell that never answered the probe leaves the holder to demote: its first serve is not bounded by the probe', async () => {
+      it('a new committee cell silent at the drain lift costs no restart: the holder steps across on the reachable quorum', async () => {
         taughtRecord = null;
         const demoted = [];
         const holder = reroll(await acquireHolder({ onDemoted: (reason) => demoted.push(reason) }));
         drainLiftsAtTheWitnessPoll();
-        unreachable.add(nextHosts[0]);
+        unreachable.add(nextHosts[0]); // one new cell cannot be reached at the lift
         clockNow += TTL + 30_000;
         await holder.renewOnce();
-        expect(demoted).to.have.lengthOf(1);
+        expect(demoted, 'a silent cell no longer forces a demotion').to.deep.equal([]);
+        expect(holder.state).to.equal('held');
+        expect(holder.generation, 'the holder stepped across on the other cells').to.equal(1);
+      });
+
+      it('a rival already granted on a quorum of the new committee: the register refuses the carrier and the holder demotes', async () => {
+        taughtRecord = null;
+        const demoted = [];
+        const holder = reroll(await acquireHolder({ onDemoted: (reason) => demoted.push(reason) }));
+        drainLiftsAtTheWitnessPoll();
+        // a rival holds a live term on a quorum of the new committee: those
+        // cells shield it and refuse the carrier's prepare, so the attempt
+        // fails and demotion is correct — the register, not this side, decided
+        const rival = `${'7'.repeat(64)}:0`;
+        newCommittee.members.slice(0, newCommittee.quorum).forEach((node) => {
+          const host = node.ip.split(':')[0];
+          if (!registers.has(host)) registers.set(host, new Map());
+          registers.get(host).set(KEY, {
+            promisedEpoch: 9,
+            accepted: {
+              grantee: rival, epoch: 9, mode: 'held', generation: 1, released: false, expiresAt: Date.now() + 300_000,
+            },
+          });
+        });
+        clockNow += TTL + 30_000;
+        await holder.renewOnce();
+        expect(demoted, 'a genuinely chosen rival demotes the holder').to.have.lengthOf(1);
         expect(holder.state).to.equal('lost');
+        expect(holder.generation).to.equal(0);
       });
     });
 
