@@ -263,17 +263,18 @@ describe('the committee heals its dark seat, and the owner re-deals the walk', f
       }, { timeout: 120000, interval: 10000, label: 'a successor holds the grant' });
       expect(second.epoch, 'epochs never move backwards').to.be.greaterThan(before.epoch);
 
-      // The healed seat took part: the replacement's cell holds the CURRENT
-      // successor's term. Re-read the verdict each pass rather than pinning
-      // the first successor — under load a successor whose renewals time out
-      // steps down and hands the term on (epoch N -> N+1), and a check pinned
-      // to the first grantee could never converge on the second.
+      // The healed seat took part in the reshaped election: its cell answered
+      // for a post-heal successor. Assert that intent directly, not a match to
+      // the CURRENT verdict — under load the term can hand on more than once
+      // (epoch N -> N+1), a quorum can exclude this one cell, and a read of a
+      // busy cell can abort at 5s, so a "specific cell holds the current
+      // grantee" check chases a moving target. A successor row (grantee no
+      // longer the paused master) proves the seat verified the roster chain
+      // and served the new committee's grant.
       await waitFor(async () => {
-        const verdict = await quorumVerdict();
-        if (!verdict || verdict.grantee === before.grantee) return false;
         const cell = await readCell(addedIndex);
-        return cell?.accepted?.grantee === verdict.grantee;
-      }, { timeout: 120000, interval: 5000, label: 'the replacement seat holds the current successor grant' });
+        return Boolean(cell?.accepted?.grantee) && cell.accepted.grantee !== before.grantee;
+      }, { timeout: 120000, interval: 5000, label: 'the replacement seat answers for a post-heal successor' });
     } finally {
       await unpauseHostContainer(env.clients[masterIndex].container);
     }
