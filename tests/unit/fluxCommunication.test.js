@@ -1678,10 +1678,38 @@ describe('fluxnodedownverdict wire contract', () => {
     sinon.assert.calledOnce(onVerdictStub);
   });
 
-  it('silently ignores a verdict arriving down a peering', async () => {
-    await peerManager.messageDispatcher(makeMsg(2), makePeerSocket(PEER_SOURCE.INBOUND));
+  it('ignores a verdict arriving down a peering, and says so once per connection', async () => {
+    const warn = sinon.stub(log, 'warn');
+    const onPeering = () => warn.args.map(([line]) => line).filter((line) => line.includes('arrived on a inbound peering')).length;
+    const socket = makePeerSocket(PEER_SOURCE.INBOUND);
+    await peerManager.messageDispatcher(makeMsg(2), socket);
+    await peerManager.messageDispatcher(makeMsg(3), socket);
     await new Promise((resolve) => { setImmediate(resolve); });
     sinon.assert.notCalled(onVerdictStub);
+    expect(onPeering(), 'two verdicts on one peering, one line').to.equal(1);
+    // a second connection is its own edge
+    await peerManager.messageDispatcher(makeMsg(4), makePeerSocket(PEER_SOURCE.INBOUND));
+    expect(onPeering()).to.equal(2);
+  });
+
+  it('a repeated verdict message is dropped and said once per sender, again only after a fresh one', async () => {
+    FluxTTLCache.prototype.has.restore();
+    const has = sinon.stub(FluxTTLCache.prototype, 'has');
+    const warn = sinon.stub(log, 'warn');
+    const repeats = () => warn.args.map(([line]) => line).filter((line) => line.includes('already seen')).length;
+    has.returns(true);
+    await peerManager.messageDispatcher(makeMsg(5), makePeerSocket(PEER_SOURCE.EPHEMERAL));
+    await peerManager.messageDispatcher(makeMsg(5), makePeerSocket(PEER_SOURCE.EPHEMERAL));
+    await new Promise((resolve) => { setImmediate(resolve); });
+    sinon.assert.notCalled(onVerdictStub);
+    expect(repeats(), 'two repeats, one line').to.equal(1);
+    has.returns(false);
+    await peerManager.messageDispatcher(makeMsg(6), makePeerSocket(PEER_SOURCE.EPHEMERAL));
+    await new Promise((resolve) => { setImmediate(resolve); });
+    sinon.assert.calledOnce(onVerdictStub);
+    has.returns(true);
+    await peerManager.messageDispatcher(makeMsg(6), makePeerSocket(PEER_SOURCE.EPHEMERAL));
+    expect(repeats(), 'a fresh one re-arms the edge').to.equal(2);
   });
 });
 

@@ -29,6 +29,9 @@ const fluxEventBus = require('./utils/fluxEventBus');
 const { appSyncEvents, EVENTS: SYNC_EVENTS } = require('./utils/appSyncEvents');
 
 const { messageCache, wsPeerCache } = cacheManager;
+// Senders whose last verdict message was a repeat; cleared by the next fresh one,
+// so a repeat is logged on its edge and not per message.
+const duplicateVerdictSenders = new Set();
 
 /* const LRUTest = {
   max: 25000000, // 25M
@@ -762,8 +765,17 @@ async function dispatchFluxMessage(msgObj, peerSocket) {
   await serviceHelper.delay(Math.floor(Math.random() * 75 + 1));
   const messageHash = hash(msgObj.data);
   if (messageCache.has(messageHash)) {
+    // Gossip repeats by design and says nothing. A verdict does not: each is
+    // pushed once, point to point, so a repeat is a fact worth one line — the
+    // first time per sender, and again only after a fresh one from that sender
+    // has come through.
+    if (msgObj.data.type === 'fluxnodedownverdict' && !duplicateVerdictSenders.has(pubKey)) {
+      duplicateVerdictSenders.add(pubKey);
+      log.warn(`Verdict from ${pubKey} via ${peerSocket.direction} peer ${peerSocket.key} already seen, dropped (subject ${msgObj.data.verdict?.subject ?? '?'})`);
+    }
     return;
   }
+  if (msgObj.data.type === 'fluxnodedownverdict') duplicateVerdictSenders.delete(pubKey);
   messageCache.set(messageHash, msgObj);
 
   // check blocked list
@@ -806,10 +818,14 @@ async function dispatchFluxMessage(msgObj, peerSocket) {
           setImmediate(() => handleNodeDownMessage(msgObj, peerSocket.ip, peerSocket.port));
         } else if (msgObj.data.type === 'fluxnodedownverdict') {
           // Wire contract: a verdict rides only an ephemeral connection. One
-          // arriving down a peering is silently ignored, so the gossip plane
-          // can never be used to inject verdicts.
+          // arriving down a peering is ignored, so the gossip plane can never
+          // be used to inject verdicts — and said once per connection, on the
+          // first, so a juror whose verdicts never count can be found.
           if (peerSocket.source === PEER_SOURCE.EPHEMERAL) {
             setImmediate(() => nodeDownService.onVerdictMessage(msgObj));
+          } else if (!peerSocket.verdictOnPeeringSeen) {
+            peerSocket.verdictOnPeeringSeen = true;
+            log.warn(`Verdict from ${pubKey} arrived on a ${peerSocket.direction} peering (${peerSocket.key}), ignored: verdicts ride ephemeral connections only`);
           }
         } else if (msgObj.data.type === 'fluxgrantgeneration') {
           setImmediate(() => handleGrantGenerationMessage(msgObj, peerSocket.ip, peerSocket.port));
