@@ -917,10 +917,14 @@ async function dispatchFluxMessage(msgObj, peerSocket) {
           setImmediate(() => handleNodeDownMessage(msgObj, peerSocket.ip, peerSocket.port));
         } else if (msgObj.data.type === 'fluxnodedownverdict') {
           // Wire contract: a verdict rides only an ephemeral connection. One
-          // arriving down a peering is silently ignored, so the gossip plane
-          // can never be used to inject verdicts.
+          // arriving down a peering is ignored, so the gossip plane can never
+          // be used to inject verdicts — and said once per connection, on the
+          // first, so a juror whose verdicts never count can be found.
           if (peerSocket.source === PEER_SOURCE.EPHEMERAL) {
             setImmediate(() => nodeDownService.onVerdictMessage(msgObj));
+          } else if (!peerSocket.verdictOnPeeringSeen) {
+            peerSocket.verdictOnPeeringSeen = true;
+            log.warn(`Verdict from ${pubKey} arrived on a ${peerSocket.direction} peering (${peerSocket.key}), ignored: verdicts ride ephemeral connections only`);
           }
         } else if (msgObj.data.type === 'fluxgrantgeneration') {
           setImmediate(() => handleGrantGenerationMessage(msgObj, peerSocket.ip, peerSocket.port));

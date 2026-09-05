@@ -354,10 +354,22 @@ async function onCertificateSyncEvent(event) {
   return intakeCertificate({ certificate, broadcastedAt }, event.envelope ?? null, 'sync');
 }
 
+// Senders whose last verdict message carried no verdict; cleared by the next
+// well-formed one, so the fault is logged on its edge and not per message.
+const malformedVerdictSenders = new Set();
+
 function onVerdictMessage(msgObj) {
   if (!juror) return;
   const verdict = msgObj?.data?.verdict;
-  if (!verdict) return;
+  const sender = msgObj?.pubKey ?? '?';
+  if (!verdict) {
+    if (!malformedVerdictSenders.has(sender)) {
+      malformedVerdictSenders.add(sender);
+      log.warn(`nodeDownService: verdict message from ${sender} carries no verdict, dropped`);
+    }
+    return;
+  }
+  malformedVerdictSenders.delete(sender);
   const result = juror.onVerdictArrived(verdict);
   fluxEventBus.publish('nodedown:verdict', {
     subject: verdict.subject ?? null,
