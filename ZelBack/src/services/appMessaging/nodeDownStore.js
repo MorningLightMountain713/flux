@@ -196,6 +196,11 @@ async function handleNodeDownEvent({ message, envelope = null }) {
     if (held && !held.refutation) {
       return { accepted: false, rebroadcast: false, reason: 'already_standing' };
     }
+    // A certificate no newer than the record already held is a past
+    // incident — a replay over sync, or an older row a node had missed:
+    // stored for the count, but not news about the subject, and a check run
+    // on it would answer for that record, not the newest.
+    const superseded = !!(held && new Date(held.row.broadcastedAt).getTime() >= broadcastedAt);
 
     const listed = networkStateService.networkState()
       .find((node) => `${node.txhash}:${node.outidx}` === certificate.subject);
@@ -223,7 +228,9 @@ async function handleNodeDownEvent({ message, envelope = null }) {
       },
       { upsert: true },
     );
-    return { accepted: true, rebroadcast: true, reason: 'stored' };
+    return {
+      accepted: true, rebroadcast: true, reason: 'stored', superseded,
+    };
   } catch (err) {
     log.error(`nodeDownStore.handleNodeDownEvent: ${err.message}`);
     return { accepted: false, rebroadcast: false, reason: 'error' };
