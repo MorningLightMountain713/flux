@@ -1361,13 +1361,20 @@ register('fluxappinstallingerror', (msg, peer) => handleAppInstallingErrorMessag
 register('fluxmasterlease', (msg, peer, announcer) => handleMasterleaseMessage(msg, peer.ip, peer.port, announcer), ROUTE.GOSSIP, INTENT.ANNOUNCE);
 register('fluxgrantgeneration', (msg, peer) => handleGrantGenerationMessage(msg, peer.ip, peer.port), ROUTE.GOSSIP, INTENT.ANNOUNCE);
 register('fluxnodedown', (msg, peer) => handleNodeDownMessage(msg, peer.ip, peer.port), ROUTE.GOSSIP, INTENT.ANNOUNCE);
-// A juror's verdict, pushed to one node: the juror who signed it is part of what it
-// says, so it is neither relayed nor deduplicated. It rides only an ephemeral
-// connection; one arriving down a peering is ignored, so the gossip plane cannot
-// inject a verdict.
+// Pushed point to point, but a juror's signed statement: the same bytes twice are one
+// verdict, so it is filtered on content like an announcement. It rides only an
+// ephemeral connection; one arriving down a peering is ignored, so the gossip plane
+// cannot inject a verdict — and said once per connection, on the first, so a juror
+// whose verdicts never count can be found.
 register('fluxnodedownverdict', (msg, peer) => {
-  if (peer.source === PEER_SOURCE.EPHEMERAL) nodeDownService.onVerdictMessage(msg);
-}, ROUTE.GOSSIP, INTENT.ANSWER);
+  if (peer.source === PEER_SOURCE.EPHEMERAL) {
+    nodeDownService.onVerdictMessage(msg);
+  } else if (!peer.verdictOnPeeringSeen) {
+    // eslint-disable-next-line no-param-reassign
+    peer.verdictOnPeeringSeen = true;
+    log.warn(`Verdict from ${msg.pubKey} arrived on a ${peer.direction} peering (${peer.key}), ignored: verdicts ride ephemeral connections only`);
+  }
+}, ROUTE.GOSSIP, INTENT.ANNOUNCE);
 register('fluxlimitcounterrecord', (msg) => limitCounter.acceptRecord(msg.data), ROUTE.GOSSIP, INTENT.ANNOUNCE);
 register('fluxappcontentmanifest', (msg) => contentSlotService.handleIncomingManifest(msg), ROUTE.GOSSIP, INTENT.ANNOUNCE);
 register('fluxappingress', (msg, peer) => handleIngressAttestation(msg, peer.ip, peer.port), ROUTE.GOSSIP, INTENT.ANNOUNCE);

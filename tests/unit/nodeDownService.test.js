@@ -125,6 +125,29 @@ describe('nodeDownService', () => {
     expect(transport.peerManager.listenerCount('peer:added')).to.equal(0);
   });
 
+  it('a verdict message without a verdict is dropped and said once per sender, again only after a well-formed one', async () => {
+    const log = require('../../ZelBack/src/lib/log');
+    const warn = sinon.stub(log, 'warn');
+    const said = () => warn.args.map(([line]) => line).filter((line) => line.includes('carries no verdict')).length;
+    const { service, transport } = makeHarness();
+    service.start(transport);
+    await tick();
+    try {
+      service.onVerdictMessage({ pubKey: 'pk-a', data: { type: 'fluxnodedownverdict' } });
+      service.onVerdictMessage({ pubKey: 'pk-a', data: { type: 'fluxnodedownverdict', verdict: null } });
+      expect(said(), 'two malformed from one sender, one line').to.equal(1);
+      service.onVerdictMessage({ pubKey: 'pk-b', data: { type: 'fluxnodedownverdict' } });
+      expect(said(), 'another sender is its own edge').to.equal(2);
+      // a well-formed one from pk-a re-arms its edge (whatever the juror makes of it)
+      service.onVerdictMessage({ pubKey: 'pk-a', data: { type: 'fluxnodedownverdict', verdict: { subject: 's:0', juror: 'j:0' } } });
+      service.onVerdictMessage({ pubKey: 'pk-a', data: { type: 'fluxnodedownverdict' } });
+      expect(said()).to.equal(3);
+    } finally {
+      service.stop();
+      warn.restore();
+    }
+  });
+
   it('registers exactly once and stays registered for the service lifetime', async () => {
     const { service, transport, stubs } = makeHarness();
     service.start(transport);

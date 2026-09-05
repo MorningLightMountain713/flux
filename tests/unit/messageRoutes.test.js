@@ -20,7 +20,7 @@ const freshTable = () => {
 const GOSSIP_TYPES = [
   'zelappregister', 'zelappupdate', 'fluxappregister', 'fluxappupdate',
   'fluxapprunning', 'fluxipchanged', 'fluxappremoved', 'fluxappinstalling',
-  'fluxappinstallingerror', 'fluxnodesigterm', 'fluxapprequest',
+  'fluxappinstallingerror', 'fluxapprequest',
   'fluxpolicyrequest', 'fluxpolicyseq', 'fluxpolicy',
   'fluxmasterlease', 'fluxgrantgeneration', 'fluxnodedown', 'fluxnodedownverdict', 'fluxlimitcounterrecord', 'fluxappcontentmanifest', 'fluxappingress',
   'fluxappcontentmanifestindexrequest', 'fluxappcontentmanifestrequest',
@@ -66,9 +66,15 @@ describe('messageRoutes tests', () => {
       // thing that stops one copy becoming one per peer per hop.
       ['zelappregister', 'zelappupdate', 'fluxappregister', 'fluxappupdate',
         'fluxapprunning', 'fluxipchanged', 'fluxappremoved', 'fluxappinstalling',
-        'fluxappinstallingerror', 'fluxnodesigterm'].forEach((type) => {
+        'fluxappinstallingerror'].forEach((type) => {
         expect(declaredIntent(type), type).to.equal(INTENT.ANNOUNCE);
       });
+    });
+
+    // Pushed point to point, but a juror's signed statement: the same bytes arriving
+    // twice are one verdict, so it is filtered as an announcement.
+    it('filters a verdict on its content', () => {
+      expect(declaredIntent('fluxnodedownverdict')).to.equal(INTENT.ANNOUNCE);
     });
 
     it('claims nothing it was not given', () => {
