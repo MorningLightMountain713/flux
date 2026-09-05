@@ -116,6 +116,15 @@ module.exports = {
     spawnDelayMs: 10000,
     removalSpacingMs: 1000,
     locationTtlS: 300,
+    // The node-down graces at the block cadence's factor: the stub ticks a
+    // block every 5 s against production's 30 s, and the graces are written
+    // in blocks (the off-list grace is two blocks of fork plus a capped
+    // fetch; the courtesy and verdict windows are counted in blocks), so
+    // they carry that factor of six. The row a certificate negates must
+    // outlive the grace: locationTtlS above stays well past nodeDownGraceS.
+    nodeDownGraceS: 70,
+    restartGraceS: 20,
+    offListGraceS: 20,
     installingTtlS: 60,
     installingRenewalS: 45,
     installErrorTtlS: 300,

@@ -10,6 +10,7 @@ import { buildSeedableApp } from '../framework/seed-helper.js';
 import { waitFor } from '../framework/wait.js';
 import { dbClient } from '../framework/db-client.js';
 import { execInContainer, restartFluxos } from '../framework/container.js';
+import shared from '../../config/shared.js';
 import { setNodeStatus, clearNodeStatus } from '../framework/daemon-control.js';
 import { getSubnetConfig, REGISTRY_REPO_HOST } from '../framework/subnet-config.js';
 
@@ -43,8 +44,16 @@ const SUBJECT = 5;
 const CO_HOLDER = 8;
 const WITNESS = 0;
 const INSTANCES = 2;
-const NODE_DOWN_GRACE_MS = 420_000;
-const RESTART_GRACE_MS = 120_000;
+// The graces every node of this fleet runs (test-infra/config/shared.js,
+// production's values at the block cadence's factor). The margins are
+// absolute: a certificate lands within a poll or two of the grace end
+// whatever the grace is, and jitter does not compress with the clocks.
+const NODE_DOWN_GRACE_MS = shared.fluxapps.nodeDownGraceS * 1000;
+const RESTART_GRACE_MS = shared.fluxapps.restartGraceS * 1000;
+const INSIDE_GRACE_MS = Math.floor(NODE_DOWN_GRACE_MS / 2);
+const PAST_GRACE_MARGIN_MS = 60_000;
+// between the drop the jurors saw and the certificate on every survivor
+const DROP_SLACK_MS = 30_000;
 const RESTART_COURTESY = 12;
 
 const list = JSON.parse(
@@ -159,11 +168,6 @@ describe('node-down: the map of stops end to end', function () {
       nodes: NODES,
       tickerAutostart: false,
       zmqTopics: ALL_ZMQ_TOPICS,
-      // The shared config expires a location row 300 s after its announce,
-      // inside the 420 s grace, so a dead node's rows fell on the TTL before
-      // the certificate ever negated them and no timing here could tell the
-      // two apart. Production's 125 minutes: the grace is the only clock.
-      configOverrides: { fluxapps: { locationTtlS: 7500 } },
     });
     survivors = env.clients.map((_, i) => i).filter((i) => i !== SUBJECT);
     await bootAndPeer(env);
@@ -222,7 +226,7 @@ describe('node-down: the map of stops end to end', function () {
     await restartSubjectFluxos();
     // past the RESTARTING grace and the next sweep: had a juror looked and
     // certified, the row would be here by now
-    await sleep(RESTART_GRACE_MS + 90_000);
+    await sleep(RESTART_GRACE_MS + PAST_GRACE_MARGIN_MS);
     expect((await rowsOnWitness()).length, 'no certification row for a restart').to.equal(before);
     const ips = await locationsSeenBy(WITNESS);
     expect(ips.filter((ip) => ipMatches(ip, subjectIp()) || ipMatches(ip, coHolderIp())).length, 'both holders stand').to.equal(2);
@@ -237,7 +241,7 @@ describe('node-down: the map of stops end to end', function () {
     await env.restartNode(SUBJECT, { timeout: 30000 });
     await unmarkMachineShutdown(subjectContainer());
     await startSubjectDiscovery();
-    await sleep(120_000);
+    await sleep(NODE_DOWN_GRACE_MS + PAST_GRACE_MARGIN_MS);
     expect((await rowsOnWitness()).length, 'no certification row for a clean reboot inside the grace').to.equal(before);
     await subjectListedAt(WITNESS, true, 'the subject stands in the location view after its reboot');
     expect(await subjectHoldsApp(), 'the subject kept its app').to.equal(true);
@@ -254,7 +258,7 @@ describe('node-down: the map of stops end to end', function () {
     expect(new Date(newest.since).getTime(), 'since is the drop, near the broadcast').to.be.closeTo(new Date(newest.broadcastedAt).getTime(), 90_000);
 
     // inside the grace the row stands and nothing is placed
-    await sleep(60_000);
+    await sleep(INSIDE_GRACE_MS);
     let ips = await locationsSeenBy(WITNESS);
     expect(ips.some((ip) => ipMatches(ip, subjectIp())), 'the subject stands inside the grace').to.equal(true);
     expect(ips.length, 'nothing placed inside the grace').to.equal(INSTANCES);
@@ -275,8 +279,8 @@ describe('node-down: the map of stops end to end', function () {
     const droppedAt = Date.now();
 
     // the row falls at since + G: the wait outlasts the grace by a margin
-    await subjectListedAt(WITNESS, false, 'the subject row falls once the grace has run', { timeout: NODE_DOWN_GRACE_MS + 180_000 });
-    expect(Date.now() - droppedAt, 'not before the grace').to.be.at.least(NODE_DOWN_GRACE_MS - 90_000);
+    await subjectListedAt(WITNESS, false, 'the subject row falls once the grace has run', { timeout: NODE_DOWN_GRACE_MS + PAST_GRACE_MARGIN_MS });
+    expect(Date.now() - droppedAt, 'not before the grace').to.be.at.least(NODE_DOWN_GRACE_MS - DROP_SLACK_MS);
 
     // the spawner on the survivors places one more holder
     let ips = [];
@@ -292,7 +296,7 @@ describe('node-down: the map of stops end to end', function () {
     // the return rule: the rows no longer place the subject, so it removes,
     // and it never announces the app again
     await waitFor(async () => !(await subjectHoldsApp()), { timeout: 600000, interval: 10000, label: 'the subject removed its app on return' });
-    await sleep(120_000);
+    await sleep(PAST_GRACE_MARGIN_MS);
     ips = await locationsSeenBy(WITNESS);
     expect(ips.some((ip) => ipMatches(ip, subjectIp())), 'the subject never refutes').to.equal(false);
     expect(ips.length, 'the co-holder and the replacement').to.equal(INSTANCES);
@@ -340,16 +344,16 @@ describe('node-down: the map of stops end to end', function () {
     await unmarkMachineShutdown(subjectContainer());
 
     // inside the grace: no certificate, the row stands
-    await sleep(RESTART_GRACE_MS + 60_000);
+    await sleep(INSIDE_GRACE_MS);
     expect((await rowsOnWitness()).length, 'no certificate inside the shutdown grace').to.equal(before);
     expect((await locationsSeenBy(WITNESS)).some((ip) => ipMatches(ip, subjectIp())), 'the row stands inside the grace').to.equal(true);
 
     // the grace end: the jurors look, the node hangs up before the pong
-    await rowsOnEverySurvivor(before + 1, { timeout: NODE_DOWN_GRACE_MS + 180_000 });
+    await rowsOnEverySurvivor(before + 1, { timeout: NODE_DOWN_GRACE_MS + PAST_GRACE_MARGIN_MS });
     const rows = await rowsOnWitness();
     const newest = rows.reduce((a, b) => (new Date(a.broadcastedAt) > new Date(b.broadcastedAt) ? a : b));
     expect(newest.reason, 'the reason the socket carried').to.equal('shutdown');
-    expect(new Date(newest.since).getTime(), 'since is the drop, not the look').to.be.closeTo(droppedAt, 90_000);
+    expect(new Date(newest.since).getTime(), 'since is the drop, not the look').to.be.closeTo(droppedAt, DROP_SLACK_MS);
     expect(new Date(newest.broadcastedAt).getTime() - new Date(newest.since).getTime(), 'certified at the grace end').to.be.at.least(NODE_DOWN_GRACE_MS - 30_000);
     // since + the grace had passed when it arrived: the rows go at once
     await subjectListedAt(WITNESS, false, 'the subject row falls on the certificate\'s arrival');
@@ -374,7 +378,7 @@ describe('node-down: the map of stops end to end', function () {
     expect((await rowsOnWitness()).length, 'twelve honoured restarts leave no row').to.equal(before);
 
     await restartSubjectFluxos();
-    await rowsOnEverySurvivor(before + 1, { timeout: 300000 });
+    await rowsOnEverySurvivor(before + 1, { timeout: RESTART_GRACE_MS + PAST_GRACE_MARGIN_MS });
     const rows = await rowsOnWitness();
     const newest = rows.reduce((a, b) => (new Date(a.broadcastedAt) > new Date(b.broadcastedAt) ? a : b));
     expect(newest.reason, 'the reason the socket carried').to.equal('restart');

@@ -13,6 +13,7 @@ import {
   removeFromNodeList, resetNodeList, setNodeStatus, clearAllNodeStatus,
 } from '../framework/daemon-control.js';
 import { getSubnetConfig, REGISTRY_REPO_HOST } from '../framework/subnet-config.js';
+import shared from '../../config/shared.js';
 
 // A node that leaves the deterministic node list, on a real fleet (R10 of
 // NODE_DOWN_SCENARIOS.md; NODESTATUSMONITOR_DECOMPOSITION.md §3). The old
@@ -46,14 +47,15 @@ const CO_HOLDER = 5;
 const WITNESS = 0;
 const INSTANCES = 2;
 // ZelBack/src/services/appDatabase/offListDepartures.js OFF_LIST_GRACE_MS —
-// a code constant, the same on every node.
-const OFF_LIST_GRACE_MS = 2 * 60 * 1000;
+// the fleet's value (test-infra/config/shared.js), the same on every node.
+const OFF_LIST_GRACE_MS = shared.fluxapps.offListGraceS * 1000;
 // A reading well inside the grace: the list change is observed within a
-// block, and this leaves a block and a half before the grace can end.
-const INSIDE_GRACE_MS = 45 * 1000;
+// block, and half the grace leaves two blocks before it can end.
+const INSIDE_GRACE_MS = Math.floor(OFF_LIST_GRACE_MS / 2);
 // The grace, one block for the list change to be observed, one for the
-// capped fetch, and the reader's own interval.
-const PAST_GRACE_TIMEOUT_MS = OFF_LIST_GRACE_MS + 120 * 1000;
+// capped fetch, the reader's own interval, and jitter that does not
+// compress with the clocks.
+const PAST_GRACE_TIMEOUT_MS = OFF_LIST_GRACE_MS + 60 * 1000;
 
 const list = JSON.parse(
   readFileSync(new URL('../../fixtures/deterministic-list.json', import.meta.url), 'utf-8'),
