@@ -10,9 +10,9 @@ import { buildSeedableApp } from '../framework/seed-helper.js';
 import { waitFor } from '../framework/wait.js';
 import { dbClient } from '../framework/db-client.js';
 import { execInContainer, restartFluxos } from '../framework/container.js';
-import { sharedConfig } from '../framework/harness-config.js';
+import { loadSharedConfig } from '../framework/coupled-knobs.js';
 
-const shared = sharedConfig();
+const shared = loadSharedConfig();
 import { setNodeStatus, clearNodeStatus } from '../framework/daemon-control.js';
 import { getSubnetConfig, REGISTRY_REPO_HOST } from '../framework/subnet-config.js';
 
