@@ -246,6 +246,14 @@ class NodeDownJuror {
     const duties = topology.duties(myOutpoint);
     if (!duties || !duties.some((duty) => duty.outpoint === subject)) return;
 
+    // R2: no probe and no verdict inside an honoured grace, whatever wakes
+    // us. The two looks that may come sooner — an unannounced drop, and the
+    // grace end itself — spend the deferral before they call. A wake-up or
+    // a lapse while it stands is declined: one juror that lost the close
+    // frame cannot pull a jury holding the code into certifying an
+    // announced stop.
+    if (this.#deferrals.has(subject)) return;
+
     this.#prune(subject);
     if (this.#standing(subject)) return;
 
