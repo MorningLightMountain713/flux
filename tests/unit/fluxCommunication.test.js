@@ -1055,7 +1055,7 @@ describe('fluxCommunication tests', () => {
         wsserver = new WebSocket.Server({ host: '127.0.0.2', port: 16127 });
         lruRateLimitStub.returns(true);
         sinon.stub(FluxTTLCache.prototype, 'has').returns(false);
-        const verifyFluxBroadcastStub = sinon.stub(fluxCommunicationUtils, 'verifyFluxBroadcast').returns(fluxCommunicationUtils.VerifyResult.OK);
+        const verifyFluxBroadcastStub = sinon.stub(fluxCommunicationUtils, 'verifyFluxBroadcast').returns({ result: fluxCommunicationUtils.VerifyResult.OK, announcer: null });
         sinon.stub(fluxCommunicationUtils, 'verifyTimestampInFluxBroadcast').returns(true);
         const respondWithAppMessageStub = sinon.stub(fluxCommunicationMessagesSender, 'respondWithAppMessage').returns(true);
         daemonServiceMiscRpcsStub.returns({
@@ -1103,7 +1103,7 @@ describe('fluxCommunication tests', () => {
         wsserver = new WebSocket.Server({ host: '127.0.0.2', port: 16127 });
         lruRateLimitStub.returns(true);
         sinon.stub(FluxTTLCache.prototype, 'has').returns(false);
-        const verifyFluxBroadcast = sinon.stub(fluxCommunicationUtils, 'verifyFluxBroadcast').returns(fluxCommunicationUtils.VerifyResult.OK);
+        const verifyFluxBroadcast = sinon.stub(fluxCommunicationUtils, 'verifyFluxBroadcast').returns({ result: fluxCommunicationUtils.VerifyResult.OK, announcer: null });
         sinon.stub(fluxCommunicationUtils, 'verifyTimestampInFluxBroadcast').returns(true);
         const storeAppTemporaryMessageStub = sinon.stub(messageStore, 'storeAppTemporaryMessage').returns(false);
         daemonServiceMiscRpcsStub.returns({
@@ -1151,9 +1151,12 @@ describe('fluxCommunication tests', () => {
         wsserver = new WebSocket.Server({ host: '127.0.0.2', port: 16127 });
         lruRateLimitStub.returns(true);
         sinon.stub(FluxTTLCache.prototype, 'has').returns(false);
-        const verifyFluxBroadcast = sinon.stub(fluxCommunicationUtils, 'verifyFluxBroadcast').returns(fluxCommunicationUtils.VerifyResult.OK);
+        const verifyFluxBroadcast = sinon.stub(fluxCommunicationUtils, 'verifyFluxBroadcast').returns({ result: fluxCommunicationUtils.VerifyResult.OK, announcer: null });
         sinon.stub(fluxCommunicationUtils, 'verifyTimestampInFluxBroadcast').returns(true);
-        const storeAppRunningMessageStub = sinon.stub(messageStore, 'storeAppRunningMessage').returns(false);
+        // the announcement is recorded on the event log (37376a976); the log's
+        // answer is what gates the relay, and this one advances nothing
+        const storeAppStateEventStub = sinon.stub(messageStore, 'storeAppStateEvent').resolves({ isNewer: false });
+        sinon.stub(messageStore, 'releaseInstallingClaims').resolves({ released: 0 });
         daemonServiceMiscRpcsStub.returns({
           data:
           {
@@ -1164,10 +1167,14 @@ describe('fluxCommunication tests', () => {
         await fluxCommunication.initiateAndHandleConnection(ip);
 
         await waitForWsConnected(wsserver);
-        await waitFor(() => storeAppRunningMessageStub.called);
+        await waitFor(() => storeAppStateEventStub.called);
 
         sinon.assert.calledOnceWithExactly(verifyFluxBroadcast, JSON.parse(message), undefined, sinon.match.number);
-        sinon.assert.calledOnceWithExactly(storeAppRunningMessageStub, JSON.parse(message).data);
+        sinon.assert.calledOnceWithExactly(
+          storeAppStateEventStub,
+          messageStore.APP_STATE_EVENT_TYPES.APPRUNNING,
+          { signedBroadcast: JSON.parse(message), announcer: null },
+        );
       });
     }
   });
