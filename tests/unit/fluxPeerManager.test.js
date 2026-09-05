@@ -420,6 +420,24 @@ describe('FluxPeerSocket tests', () => {
       sinon.assert.calledOnce(peer.onPongReceived);
     });
 
+    it('the first frame from the far end announces the peer once, on a pong or a message, never on the handshake', () => {
+      const ws = createMockWs();
+      const answered = [];
+      manager.on('peer:answered', (p) => answered.push(p));
+      const peer = new FluxPeerSocket(ws, '10.0.0.1', '16127', manager);
+      peer.source = PEER_SOURCE.RANDOM;
+      expect(peer.answered).to.equal(false);
+      expect(answered.length, 'the handshake says nothing').to.equal(0);
+
+      ws.emit('pong');
+      expect(peer.answered).to.equal(true);
+      expect(answered).to.deep.equal([{ ip: '10.0.0.1', port: '16127', direction: peer.direction }]);
+
+      ws.emit('pong');
+      ws.onmessage({ data: '{"type":"noise"}' });
+      expect(answered.length, 'said once').to.equal(1);
+    });
+
     it('should set onclose that calls manager.remove', () => {
       const ws = createMockWs();
       sinon.spy(manager, 'remove');
@@ -703,6 +721,27 @@ describe('FluxPeerManager tests', () => {
   });
 
   describe('remove', () => {
+    it('a policy close on an outbound peer backs the target off like a failed dial; a reconnect-worthy close does not', () => {
+      // An open-then-refuse recorded no failure, and a pass runs on every
+      // removal, so a refusing node was dialed once a second for minutes.
+      // MAX_CONNECTIONS stays retryable by shouldReconnect's own rule and is not backed off here
+      for (const code of [CLOSE_CODES.NODE_UNCONFIRMED, CLOSE_CODES.DUPLICATE_PEER, CLOSE_CODES.LOCKED_OUT]) {
+        const ws = createMockWs('10.0.0.9');
+        manager.add(ws, '10.0.0.9', '16127', { source: PEER_SOURCE.RANDOM });
+        manager.remove('10.0.0.9:16127', code);
+        expect(manager.shouldAttemptConnection('10.0.0.9', '16127'), `after ${code}`).to.equal(false);
+        manager.reset();
+      }
+      const ws = createMockWs('10.0.0.8');
+      manager.add(ws, '10.0.0.8', '16127', { source: PEER_SOURCE.RANDOM });
+      manager.remove('10.0.0.8:16127', CLOSE_CODES.RESTARTING);
+      expect(manager.shouldAttemptConnection('10.0.0.8', '16127'), 'a coded stop is dialed again as normal').to.equal(true);
+      const ws2 = createMockWs('10.0.0.7');
+      manager.add(ws2, '10.0.0.7', '16127', { source: PEER_SOURCE.INBOUND });
+      manager.remove('10.0.0.7:16127', CLOSE_CODES.DUPLICATE_PEER);
+      expect(manager.shouldAttemptConnection('10.0.0.7', '16127'), 'an inbound refusal is not our dial').to.equal(true);
+    });
+
     it('should delete from map and correct direction set, return removed peer', () => {
       const ws = createMockWs('10.0.0.1', '16127');
       const peer = manager.add(ws, '10.0.0.1', '16127', { source: PEER_SOURCE.RANDOM });

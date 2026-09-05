@@ -293,13 +293,15 @@ class FluxPeerManager extends EventEmitter {
     // Track disconnect for unstable node detection and network health
     this.trackDisconnect(peer.ip, peer.port);
     this.#stampLoss(peer);
-    // A peer that refused us under the lockout, or for its inbound cap,
-    // refuses the next dial too: back the target off so the duty is
-    // re-dialed on the ladder rather than on every pass (a full peer closes
-    // every accept within a second, and the ring re-dials on each failure),
-    // and picked back up the moment the hold lifts.
-    if ((closeCode === CLOSE_CODES.LOCKED_OUT || closeCode === CLOSE_CODES.MAX_CONNECTIONS)
-      && peer.direction === 'outbound') {
+    // A peer that closed us with a policy code — locked out, unconfirmed,
+    // duplicate — or for its inbound cap refuses the next dial too: back
+    // the target off so the duty is re-dialed on the ladder rather than on
+    // every pass (a pass runs on every removal; a full peer closes every
+    // accept within a second and an open-then-refuse recorded no failure,
+    // so a refusing node was dialed once a second for minutes), and picked
+    // back up the moment the refusal lifts.
+    if (peer.direction === 'outbound'
+      && (!FluxPeerManager.shouldReconnect(closeCode) || closeCode === CLOSE_CODES.MAX_CONNECTIONS)) {
       this.recordFailedConnection(peer.ip, peer.port);
     }
     if (this.networkHealthMonitor) this.networkHealthMonitor.recordDisconnect(peer.connectedAt, closeCode);
