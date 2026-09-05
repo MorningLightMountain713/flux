@@ -12,6 +12,7 @@ const signedEnvelope = require('./signedEnvelope');
 const ownerGenerationRecord = require('./ownerGenerationRecord');
 const grantClient = require('./grantClient');
 const mastershipGrantGate = require('../appLifecycle/mastershipGrantGate');
+const fluxEventBus = require('../utils/fluxEventBus');
 const log = require('../../lib/log');
 
 // The holder-to-holder face of the grant plane: the witness poll and the
@@ -174,15 +175,24 @@ async function teach(req, res) {
       return res.status(403).json(messageHelper.createErrorMessage('caller is not a listed node'));
     }
 
+    const before = await messageStore.getGrantGenerationRecord(record.appName, record.role);
     await messageStore.storeAppStateEvent(
       messageStore.APP_STATE_EVENT_TYPES.GRANTGENERATION,
       { message: record, envelope: null },
     );
     const standing = await messageStore.getGrantGenerationRecord(record.appName, record.role);
+    const generation = standing?.data?.generation ?? 0;
+    // Whether the delivery was news here: the courier reads only the
+    // generation; a suite asserts its premise from this node's own answer.
+    const learned = (before?.data?.generation ?? 0) < generation;
+    fluxEventBus.publish('quorumGrant:generationTaught', {
+      appName: record.appName, role: record.role, generation, learned, from: host,
+    });
     return res.json(messageHelper.createDataMessage({
       appName: record.appName,
       role: record.role,
-      generation: standing?.data?.generation ?? 0,
+      generation,
+      learned,
     }));
   } catch (error) {
     log.error(`quorumGrant teach: ${error.message}`);

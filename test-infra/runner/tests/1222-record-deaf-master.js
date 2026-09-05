@@ -171,6 +171,32 @@ describe('record-deaf master: the cells the re-roll seats carry the record to th
   async function releasePeerings(groupA, groupB) {
     await Promise.all(crossGroupPairs(groupA, groupB).map(([node, otherIp]) => env.clients[node].container.exec(UPGRADE_RULE_OFF(otherIp))));
   }
+  // Per node of a side: the upgrade drops' packet counters, and the peer-port
+  // sockets that stand across the divide anyway.
+  async function severState(side, otherSide) {
+    const otherIps = new Set(otherSide.map((i) => env.clients[i].ip));
+    const rows = await Promise.all(side.map(async (i) => {
+      const res = await env.clients[i].container.exec(['sh', '-c',
+        'iptables -L INPUT -v -n -x | awk \'/STRING/{n++; p+=$1} END{print n+0, p+0}\'; '
+        + 'ss -Htn state established "( sport = :16127 or dport = :16127 )" | awk \'{print $4}\' | sort -u | tr "\\n" " "']);
+      const [rules, sockets = ''] = res.output.trim().split('\n');
+      const across = sockets.split(' ').filter((s) => otherIps.has(s.split(':')[0]));
+      return `${label(i)} ${rules.replace(' ', ' rules/')} drops, sockets across: [${across.join(' ')}]`;
+    }));
+    return rows.join('; ');
+  }
+
+  // A pull's peer by side: the far side holds the record, the deaf side does not.
+  const sideOf = (peer, deafSide, farSide) => {
+    const i = env.clients.findIndex((c) => c.ip === peer.split(':')[0]);
+    if (deafSide.includes(i)) return 'deaf';
+    return farSide.includes(i) ? 'far' : 'unknown';
+  };
+  const pullsSince = (i, afterId, deafSide, farSide) => env.clients[i].getEventBuffer()
+    .filter((e) => e.event === 'ephemeralSync:reconnectRequested' && e.id > afterId)
+    .map((e) => ({ id: e.id, peer: e.data?.peer, side: sideOf(e.data?.peer ?? '', deafSide, farSide) }));
+  const describePull = (p) => `${p.peer} (${p.side}, id ${p.id})`;
+  const describePulls = (pulls) => (pulls.length ? pulls.map(describePull).join(', ') : 'none');
 
   async function submitRerollAt(i) {
     const owner = appOwnerKey();
@@ -278,6 +304,7 @@ describe('record-deaf master: the cells the re-roll seats carry the record to th
     expect(couriers.filter((i) => deafSide.includes(i)), 'every courier cell is on the far side').to.deep.equal([]);
     expect(couriers, 'a quorum of the re-rolled committee stands on the far side').to.have.length.of.at.least(walk.reRolled.quorum);
     ownerAuthFar = (await authenticate(env.clients[farStandbys[0]].url, appOwnerKey())).zelidauth;
+    console.log(`# master ${label(master)}; deaf side ${deafSide.map(label).join(', ')}; far side ${farSide.map(label).join(', ')}; couriers ${couriers.map(label).join(', ')}`);
 
     await env.partitionGroups(deafSide, farSide);
     let healed = false;
@@ -307,39 +334,40 @@ describe('record-deaf master: the cells the re-roll seats carry the record to th
       expect(await getAppContainerId(env.clients[master].container, name, name),
         'the container is untouched while the master is deaf').to.equal(container);
 
-      // 4. The heal — packets, not peerings. A peer connection that is lost
-      //    and returns makes the sync orchestrator pull the running-state
-      //    events published while it was gone (appSyncOrchestrator
-      //    #drainReconnectPulls, the ephemeralSync:reconnectRequested event),
-      //    and that sync carries generation records: a deaf side whose
-      //    sockets return learns by the product's own backstop, not by the
-      //    courier — and the peer managers re-dial lost peers on their own,
-      //    discovery or not (the fifth run: every deaf node pulled). The deaf
-      //    world this suite constructs is a broadcast MISSED with no lost
-      //    peer returning, so before the packet drops come off, every
-      //    cross-group WebSocket upgrade is dropped by content on both sides
-      //    (the string match the node image's iptables carries), and the
-      //    premise is asserted below from the pull's own event. The courier's
-      //    delivery, the asks and the record reads are plain HTTP and flow.
-      //    The master learns the generation from the courier — its own cells
-      //    still do not know it, and it never polled a witness — and stays
-      //    held under its old world until the lift.
+      // 4. The heal — packets, not peerings. A lost peer that returns pulls
+      //    the running-state events it missed (appSyncOrchestrator
+      //    #drainReconnectPulls) and that sync carries generation records, so
+      //    the cross-group WebSocket upgrades stay dropped by content on both
+      //    sides while the packet drops come off; the courier's delivery, the
+      //    asks and the record reads are plain HTTP and flow. The premise is
+      //    the master's own evidence in its own event order: the teach it
+      //    received was news to it, and before that teach no far-side peer
+      //    had returned to it, no granting cell had refused it, and no answer
+      //    had taught it. Pulls on the other deaf nodes are printed, not asserted.
       const beforeHeal = env.clients.map((c) => c.getLastEventId());
       await keepPeeringsSevered(deafSide, farSide);
       await env.healPartition(deafSide, farSide);
       healed = true;
-      await env.clients[master].waitForEvent('quorumGrant:generationRecord',
+      const taught = await env.clients[master].waitForEvent('quorumGrant:generationTaught',
         (d) => d.appName === name && d.role === 'master' && d.generation === 1, 120000, { afterId: beforeHeal[master] });
-      const pullsSince = (i, afterId) => env.clients[i].getEventBuffer()
-        .filter((e) => e.event === 'ephemeralSync:reconnectRequested' && e.id > afterId);
-      expect(deafSide.filter((i) => pullsSince(i, beforeHeal[i]).length).map(label),
-        'no reconnect pull ran on the deaf side: the premise of a missed broadcast holds').to.deep.equal([]);
+      const sever = await severState(deafSide, farSide);
+      const masterPulls = pullsSince(master, beforeHeal[master], deafSide, farSide);
+      const premise = `teach from ${taught.data.from} at id ${taught.id}; the master's pulls since the heal: ${describePulls(masterPulls)}; upgrade drops: ${sever}`;
+      expect(taught.data.learned, `the record was news to the master when the courier delivered it — ${premise}`).to.equal(true);
+      expect(masterPulls.filter((p) => p.side !== 'deaf' && p.id < taught.id).map(describePull),
+        `no lost far-side peer returned to the master before the courier's teach — ${premise}`).to.deep.equal([]);
+      const masterBeforeTeach = env.clients[master].getEventBuffer()
+        .filter((e) => e.id > beforeHeal[master] && e.id < taught.id && e.data?.key === key());
+      expect(masterBeforeTeach.filter((e) => e.event === 'quorumGrant:assess' && (e.data.refusingCells ?? 0) > 0).length,
+        `no granting cell refused the master before the teach: it learned from the courier, not from a refusal — ${premise}`).to.equal(0);
+      expect(masterBeforeTeach.filter((e) => e.event === 'quorumGrant:generationLearned').length,
+        `no ask's answer taught the master before the courier did — ${premise}`).to.equal(0);
       await waitFor(() => couriers.some((i) => env.clients[i].getEventBuffer().some((e) => e.event === 'quorumGrant:generationCarried'
         && e.id > beforeHeal[i] && e.data?.key === key() && e.data?.generation === 1 && e.data?.remaining === 0)),
       { timeout: 120000, interval: 5000, label: 'a courier cell reports every instance acknowledged' });
-      const deafCells = [...walk.granting.members].map(indexOf);
-      expect(deafCells.filter((i) => recordEventsSince(i, beforeReroll[i]).length),
-        'the granting cells never receive the record: the master learned from a courier, not from a refusal').to.deep.equal([]);
+      console.log(`# ${premise}`);
+      console.log(`# pulls on the other deaf nodes since the heal — ${deafSide.filter((i) => i !== master)
+        .map((i) => `${label(i)}: ${describePulls(pullsSince(i, beforeHeal[i], deafSide, farSide))}`).join('; ')}`);
       expect(grantsSince(beforeReroll, 1), 'nobody was granted at generation 1 before the lift').to.deep.equal([]);
       await assertNoEvent(env.clients[master], 'quorumGrant:demoted', (d) => d.key === key(), 5000);
 

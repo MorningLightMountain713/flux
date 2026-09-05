@@ -156,15 +156,28 @@ describe('quorumGrant grantPeerController', () => {
       sinon.stub(messageStore, 'getGrantGenerationRecord').resolves({ data: { generation: 2 } });
     });
 
-    it('stores a well-formed record on the broadcast path and answers the generation now held', async () => {
+    it('stores a well-formed record on the broadcast path and answers the generation now held, and that it was news', async () => {
+      messageStore.getGrantGenerationRecord.onFirstCall().resolves(null);
       const res = fakeRes();
       await grantPeerController.teach(fakeReq({ record: RECORD }), res);
       expect(res.statusCode).to.equal(200);
-      expect(res.body.data).to.deep.equal({ appName: 'myapp', role: 'master', generation: 2 });
+      expect(res.body.data).to.deep.equal({
+        appName: 'myapp', role: 'master', generation: 2, learned: true,
+      });
       expect(messageStore.storeAppStateEvent.calledOnce).to.equal(true);
       expect(messageStore.storeAppStateEvent.firstCall.args).to.deep.equal([
         messageStore.APP_STATE_EVENT_TYPES.GRANTGENERATION, { message: RECORD, envelope: null },
       ]);
+    });
+
+    it('a record the node already held is stored again and answered as not news', async () => {
+      const res = fakeRes();
+      await grantPeerController.teach(fakeReq({ record: RECORD }), res);
+      expect(res.statusCode).to.equal(200);
+      expect(res.body.data).to.deep.equal({
+        appName: 'myapp', role: 'master', generation: 2, learned: false,
+      });
+      expect(messageStore.storeAppStateEvent.calledOnce).to.equal(true);
     });
 
     it('a record the store dropped answers the generation that still stands - the courier reads that as undelivered', async () => {
@@ -173,6 +186,7 @@ describe('quorumGrant grantPeerController', () => {
       await grantPeerController.teach(fakeReq({ record: RECORD }), res);
       expect(res.statusCode).to.equal(200);
       expect(res.body.data.generation).to.equal(1);
+      expect(res.body.data.learned).to.equal(false);
     });
 
     it('refuses a malformed record before touching the store', async () => {
