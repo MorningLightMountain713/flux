@@ -164,6 +164,14 @@ describe('node-down: the map of stops end to end', function () {
     await bootAndPeer(env);
   });
 
+  // A scenario that fails inside its partition leaves it standing, and the
+  // next scenario's premise (the subject seated, its return refuting) is then
+  // a cascade of the last verdict. Every scenario ends with the fleet whole.
+  afterEach(async function () {
+    this.timeout(60000);
+    await env?.healPartition([SUBJECT], survivors).catch(() => {});
+  });
+
   after(async function () {
     this.timeout(60000);
     await clearNodeStatus(subjectIp()).catch(() => {});
