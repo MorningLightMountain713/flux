@@ -116,6 +116,8 @@ describe('quorumGrant grantClient', () => {
   let teaching; // hosts refusing every ask under a newer world, and teaching it
   let taughtRecord; // the standing generation record those refusals and every record read carry
   let draining; // hosts refusing every ask under the standing generation as draining
+  let teachCalls; // every courier delivery this node made: { host, record }
+  let teachAcks; // host -> the generation an instance answers a delivery with (default: the carried one)
 
   function clock() {
     return clockNow;
@@ -269,6 +271,14 @@ describe('quorumGrant grantClient', () => {
       return { data: { status: 'success', data: { replies } } };
     }
 
+    if (path === '/flux/quorumgrant/teach') {
+      // the attempt is recorded before the wire answers, as a real one is made
+      teachCalls.push({ host, record: body.record });
+      if (unreachable.has(host) || dark.has(host)) throw new Error('unreachable');
+      const generation = teachAcks.has(host) ? teachAcks.get(host) : body.record.generation;
+      return { data: { status: 'success', data: { appName: body.record.appName, role: body.record.role, generation } } };
+    }
+
     if (path === '/flux/quorumgrant/witness') {
       if (unreachable.has(host) || dark.has(host)) throw new Error('unreachable');
       // a function fixture answers at the moment of the poll, so a test can
@@ -309,6 +319,8 @@ describe('quorumGrant grantClient', () => {
     teaching = new Set();
     taughtRecord = null;
     draining = new Set();
+    teachCalls = [];
+    teachAcks = new Map();
 
     sinon.stub(serviceHelper, 'axiosPost').callsFake(async (url, body) => fakePost(url, body));
     sinon.stub(serviceHelper, 'axiosGet').callsFake(async (url) => {
@@ -1782,6 +1794,141 @@ describe('quorumGrant grantClient', () => {
       grantClient.noteGenerationRecord({ appName: 'myapp', role: 'master', generation: 0 });
       grantClient.noteGenerationRecord({ appName: 'otherapp', role: 'master', generation: 7 });
       expect(handles).to.have.length(armed);
+    });
+  });
+
+  // The look-ahead's push half (formal/quiet-window family K,
+  // COMMITTEE_RECOVERY_DESIGN.md 2026-09-05): a stranger can seat only at
+  // cells that hold the re-roll record, so a cell of the committee that
+  // generation draws carries the record to every instance of the app - the
+  // master among them - the moment it lands, and again each interval until
+  // each instance acknowledges. Nothing at rest.
+  describe('the generation courier - a new-committee cell carries the record to every instance', () => {
+    const onCommittee = (generation) => selectCommittee(
+      membership, rosterOverlay.walkKeyFor(KEY, generation), { size: COMMITTEE_SIZE },
+    ).members.some((node) => node.txhash === SELF_TXHASH);
+    // the first generation whose committee seats this node, and the first
+    // whose committee does not: both asserted, never assumed
+    const SEATED = Array.from({ length: 60 }, (unused, i) => i + 1).find(onCommittee);
+    const UNSEATED = Array.from({ length: 60 }, (unused, i) => i + 1).find((g) => !onCommittee(g));
+    const record = (generation) => ({
+      type: 'fluxgrantgeneration',
+      version: 1,
+      ip: '10.1.0.1:16127',
+      appName: 'myapp',
+      role: 'master',
+      generation,
+      height: 90,
+      at: 1_750_000_000_000,
+      signature: 'ownersig',
+      broadcastedAt: 1_750_000_000_500,
+    });
+    // a third instance of the app, on some node that is neither this one nor the standby
+    const thirdNode = membership.find((node) => node.txhash !== SELF_TXHASH && node.ip.split(':')[0] !== STANDBY_HOST);
+    const THIRD_HOST = thirdNode.ip.split(':')[0];
+    let armed; // the courier's retry timers, driven by hand
+    let cancelled;
+
+    beforeEach(() => {
+      armed = [];
+      cancelled = [];
+      grantClient.setCourierSchedulerForTests(
+        (fn, ms) => {
+          const handle = { fn, ms };
+          armed.push(handle);
+          return handle;
+        },
+        (handle) => cancelled.push(handle),
+      );
+      registryManager.appLocation.resolves([
+        { ip: `${SELF_HOST}:16127` },
+        { ip: `${STANDBY_HOST}:16127` },
+        { ip: `${THIRD_HOST}:16127` },
+      ]);
+    });
+
+    afterEach(() => {
+      grantClient.setCourierSchedulerForTests((fn, ms) => setTimeout(fn, ms), (handle) => clearTimeout(handle));
+    });
+
+    it('fixture: a generation seats this node and another does not', () => {
+      expect(SEATED, 'no generation under 60 seats this node').to.not.equal(undefined);
+      expect(UNSEATED, 'every generation under 60 seats this node').to.not.equal(undefined);
+    });
+
+    it('carries the standing record to every instance but itself, once, and is done when each acknowledges', async () => {
+      messageStore.getGrantGenerationRecord.resolves({ data: record(SEATED) });
+      await grantClient.noteGenerationRecord({ appName: 'myapp', role: 'master', generation: SEATED });
+      expect(teachCalls.map((call) => call.host).sort()).to.deep.equal([STANDBY_HOST, THIRD_HOST].sort());
+      teachCalls.forEach((call) => expect(call.record).to.deep.equal(record(SEATED)));
+      expect(armed).to.have.length(0);
+    });
+
+    it('a cell off the committee that generation draws carries nothing', async () => {
+      messageStore.getGrantGenerationRecord.resolves({ data: record(UNSEATED) });
+      await grantClient.noteGenerationRecord({ appName: 'myapp', role: 'master', generation: UNSEATED });
+      expect(teachCalls).to.have.length(0);
+      expect(armed).to.have.length(0);
+    });
+
+    it('a silent instance is carried to again next interval; an acknowledged one is not', async () => {
+      messageStore.getGrantGenerationRecord.resolves({ data: record(SEATED) });
+      unreachable.add(THIRD_HOST);
+      await grantClient.noteGenerationRecord({ appName: 'myapp', role: 'master', generation: SEATED });
+      expect(teachCalls.map((call) => call.host).sort()).to.deep.equal([STANDBY_HOST, THIRD_HOST].sort());
+      expect(armed).to.have.length(1);
+
+      unreachable.delete(THIRD_HOST);
+      teachCalls = [];
+      await armed[0].fn();
+      expect(teachCalls.map((call) => call.host)).to.deep.equal([THIRD_HOST]);
+      expect(armed).to.have.length(1);
+    });
+
+    it('an answer below the carried generation is not a delivery', async () => {
+      messageStore.getGrantGenerationRecord.resolves({ data: record(SEATED) });
+      teachAcks.set(STANDBY_HOST, SEATED - 1);
+      await grantClient.noteGenerationRecord({ appName: 'myapp', role: 'master', generation: SEATED });
+      expect(armed).to.have.length(1);
+      teachCalls = [];
+      teachAcks.delete(STANDBY_HOST);
+      await armed[0].fn();
+      expect(teachCalls.map((call) => call.host)).to.deep.equal([STANDBY_HOST]);
+      expect(armed).to.have.length(1);
+    });
+
+    it('a newer record supersedes a courier still carrying the old one', async () => {
+      const NEWER = Array.from({ length: 60 }, (unused, i) => SEATED + i + 1).find(onCommittee);
+      expect(NEWER, 'no later generation seats this node').to.not.equal(undefined);
+      messageStore.getGrantGenerationRecord.resolves({ data: record(SEATED) });
+      unreachable.add(THIRD_HOST);
+      await grantClient.noteGenerationRecord({ appName: 'myapp', role: 'master', generation: SEATED });
+      expect(armed).to.have.length(1);
+
+      unreachable.delete(THIRD_HOST);
+      teachCalls = [];
+      messageStore.getGrantGenerationRecord.resolves({ data: record(NEWER) });
+      await grantClient.noteGenerationRecord({ appName: 'myapp', role: 'master', generation: NEWER });
+      expect(cancelled).to.deep.equal([armed[0]]);
+      teachCalls.forEach((call) => expect(call.record.generation).to.equal(NEWER));
+      expect(teachCalls.map((call) => call.host).sort()).to.deep.equal([STANDBY_HOST, THIRD_HOST].sort());
+    });
+
+    it('stops carrying after one maximum term - the courier is not a timer for missing information', async () => {
+      const fixed = sinon.useFakeTimers({ now: Date.now(), toFake: ['Date'] });
+      try {
+        messageStore.getGrantGenerationRecord.resolves({ data: record(SEATED) });
+        unreachable.add(THIRD_HOST);
+        await grantClient.noteGenerationRecord({ appName: 'myapp', role: 'master', generation: SEATED });
+        expect(armed).to.have.length(1);
+        fixed.tick(300_001);
+        teachCalls = [];
+        await armed[0].fn();
+        expect(teachCalls.map((call) => call.host)).to.deep.equal([THIRD_HOST]);
+        expect(armed, 'no further round past the horizon').to.have.length(1);
+      } finally {
+        fixed.restore();
+      }
     });
   });
 

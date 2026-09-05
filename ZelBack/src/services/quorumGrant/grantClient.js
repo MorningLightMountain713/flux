@@ -77,31 +77,6 @@ function lockDelayMs() {
   return config.fluxapps.quorumGrantLockDelayMs ?? 30_000;
 }
 
-/**
- * The comment above this function used to say the two values "are asserted
- * together here rather than hoped about", and the body was a single return.
- * They were hoped about. This is the assertion.
- *
- * It matters more than it looks: §7 used to credit the TTL:deadline ratio with
- * the plane's clock-rate-skew tolerance, and the code has no such ratio - the
- * holder's deadline IS the TTL. The lock-delay carries the whole budget on its
- * own, so lowering it spends the margin silently and nothing else would notice.
- *
- * Throws rather than warns. A fleet that boots with this wrong runs two writers
- * under skew, and a node that refuses to start is the cheaper failure.
- */
-function assertTimingSafe(timing) {
-  const checked = timing ?? {
-    demotionSlackMs: demotionSlackMs(),
-    hardStopMs: core.HARD_STOP_MS,
-    lockDelayMs: lockDelayMs(),
-    renewIntervalMs: renewIntervalMs(),
-  };
-  const outcome = core.timingIsSafe(checked);
-  if (!outcome.safe) throw new Error(outcome.reason);
-  return outcome;
-}
-
 function askTimeoutMs() {
   return config.fluxapps.quorumGrantAskTimeoutMs ?? 5_000;
 }
@@ -1439,6 +1414,12 @@ class Holder {
   async #maybeStepAcross({ timeoutMs } = {}) {
     this.#lastProbe = null;
     if (this.#stopped) return false;
+    // The three rounds fit inside what the lock-delay leaves after the
+    // courier's delivery (one ask timeout): a cell that learned the re-roll
+    // at its lift seats a stranger one lock-delay past that, and this
+    // holder's accept must land first (formal/quiet-window family K; the
+    // boot inequality asserts only that the delivery itself fits).
+    const roundMs = timeoutMs ?? Math.max(1, Math.min(askTimeoutMs(), Math.floor((lockDelayMs() - askTimeoutMs()) / 3)));
     const standing = await currentGeneration(this.#key);
     if (standing <= this.#committee.generation) return false;
     const credential = this.credential();
@@ -1455,7 +1436,7 @@ class Holder {
     const probeSigned = await signedAskFor('probe', this.#key, 'held', 1, this.#identity, next, extras);
     if (!probeSigned) return false;
     const probeAtMs = this.#clock();
-    const probeReplies = await askCommittee(next.members, 'probe', probeSigned.ask, probeSigned.signature, { timeoutMs });
+    const probeReplies = await askCommittee(next.members, 'probe', probeSigned.ask, probeSigned.signature, { timeoutMs: roundMs });
     this.#lastProbe = {
       atMs: probeAtMs, members: next.members.length, answered: probeReplies.answered, replies: probeReplies.size,
     };
@@ -1466,7 +1447,7 @@ class Holder {
 
     const prepareSigned = await signedAskFor('prepare', this.#key, 'held', epoch, this.#identity, next, extras);
     if (!prepareSigned) return false;
-    const prepareReplies = await askCommittee(next.members, 'prepare', prepareSigned.ask, prepareSigned.signature, { timeoutMs });
+    const prepareReplies = await askCommittee(next.members, 'prepare', prepareSigned.ask, prepareSigned.signature, { timeoutMs: roundMs });
     const prepared = core.prepareOutcome([...prepareReplies.values()], next.quorum);
     if (!prepared.promised) {
       log.info(`quorumGrant holder ${this.#key}: step-across to generation ${standing} not promised (${prepared.reason ?? 'no prepare quorum'})`);
@@ -1476,7 +1457,7 @@ class Holder {
     const acceptSigned = await signedAskFor('accept', this.#key, 'held', epoch, this.#identity, next, { ttlMs: this.#ttlMs, ...extras });
     if (!acceptSigned) return false;
     const sentMs = this.#clock();
-    const acceptReplies = await askCommittee(next.members, 'accept', acceptSigned.ask, acceptSigned.signature, { timeoutMs });
+    const acceptReplies = await askCommittee(next.members, 'accept', acceptSigned.ask, acceptSigned.signature, { timeoutMs: roundMs });
     const accepted = core.acceptOutcome([...acceptReplies.values()], next.quorum);
     if (!accepted.granted) return false;
 
@@ -1880,6 +1861,8 @@ function resetForTests() {
   [...held.values()].forEach(stopHolder);
   held.clear();
   acquiring.clear();
+  couriers.forEach((courier) => { if (courier.timer) courierCancel(courier.timer); });
+  couriers.clear();
 }
 
 function stopHolder(holder) {
@@ -1925,8 +1908,126 @@ function holderFor(key) {
  * holder of that key has anything to do about it.
  */
 function noteGenerationRecord({ appName, role, generation }) {
-  const holder = held.get(`${appName}/${role}`);
+  const key = `${appName}/${role}`;
+  const holder = held.get(key);
   if (holder) holder.noteGeneration(generation);
+  return startCourier(key, generation);
+}
+
+// ---------------------------------------------------------------------------
+// the generation courier - the look-ahead's push half
+//
+// A stranger can seat only at cells that HOLD the re-roll record, so the cells
+// that hold it are the one source a record-deaf master always has
+// (formal/quiet-window family K, LookAheadProbe; COMMITTEE_RECOVERY_DESIGN.md
+// 2026-09-05: the master watches the door, not the mail). When a generation
+// record lands as the standing one and THIS node sits on the committee that
+// generation draws, it carries the record to every instance of the app - the
+// master among them, and the standbys that witness for it - and carries it
+// again each renewal interval until each acknowledges, for one maximum term.
+// Nothing at rest; a re-roll costs one call per new-committee cell per
+// instance. The record is the owner's signed statement and the receiver
+// stores it on the path a broadcast takes, so this is a courier, not an
+// authority: the worst courier is a silent one. The receiver's answer is the
+// generation it now holds; at or above the carried one, the delivery is done.
+const couriers = new Map(); // key -> { generation, targets, attempt, until, timer }
+// the retry scheduler, injectable like a holder's - a test drives it by hand
+let courierSchedule = (fn, ms) => {
+  const timer = setTimeout(fn, ms);
+  if (timer.unref) timer.unref();
+  return timer;
+};
+let courierCancel = (timer) => clearTimeout(timer);
+
+function courierHorizonMs() {
+  return config.fluxapps.quorumGrantMaxTtlMs ?? 300_000;
+}
+
+async function selfOutpoint() {
+  const collateral = await generalService.obtainNodeCollateralInformation();
+  return collateral?.txhash ? `${collateral.txhash}:${collateral.txindex}` : null;
+}
+
+/** Whether this node sits on the committee the given generation draws for a key. */
+async function onCommitteeOf(key, generation, self) {
+  const fingerprint = networkStateService.membershipFingerprint();
+  const membership = fingerprint ? networkStateService.membershipAt(fingerprint) : null;
+  if (!membership) return false;
+  const committee = selectCommittee(membership, rosterOverlay.walkKeyFor(key, generation), { size: committeeSizeFor('held') });
+  if (committee.refusal) return false;
+  return committee.members.some((member) => outpointOf(member) === self);
+}
+
+function startCourier(key, generation) {
+  const standing = couriers.get(key);
+  if (standing) {
+    if (standing.generation >= generation) return Promise.resolve();
+    if (standing.timer) courierCancel(standing.timer);
+    couriers.delete(key);
+  }
+  const courier = {
+    generation, targets: null, attempt: 0, until: Date.now() + courierHorizonMs(), timer: null,
+  };
+  couriers.set(key, courier);
+  return courierRound(key, courier).catch((error) => {
+    log.warn(`quorumGrant courier ${key}: ${error.message}`);
+    if (couriers.get(key) === courier) couriers.delete(key);
+  });
+}
+
+async function courierRound(key, courier) {
+  if (couriers.get(key) !== courier) return;
+  const record = await knownGenerationRecord(key);
+  if (!record || record.generation !== courier.generation) {
+    couriers.delete(key);
+    return;
+  }
+  if (courier.targets === null) {
+    const self = await selfOutpoint();
+    if (!self || !(await onCommitteeOf(key, courier.generation, self))) {
+      couriers.delete(key);
+      return;
+    }
+    // every instance of the app but this node: standbysFor is that list
+    courier.targets = new Map((await standbysFor(key, self)).map((node) => [outpointOf(node), node]));
+  }
+  courier.attempt += 1;
+  await Promise.all([...courier.targets.entries()].map(async ([outpoint, node]) => {
+    try {
+      const response = await serviceHelper.axiosPost(
+        grantorUrl(node, '/flux/quorumgrant/teach'),
+        { record },
+        { timeout: askTimeoutMs(), httpAgent: askAgent },
+      );
+      const standing = response?.data?.data?.generation;
+      if (Number.isSafeInteger(standing) && standing >= courier.generation) courier.targets.delete(outpoint);
+    } catch (error) {
+      // silent or refusing: carried again next interval
+    }
+  }));
+  // publish() is a no-op outside the harness
+  fluxEventBus.publish('quorumGrant:generationCarried', {
+    key, generation: courier.generation, attempt: courier.attempt, remaining: courier.targets.size,
+  });
+  if (courier.targets.size === 0 || Date.now() >= courier.until) {
+    couriers.delete(key);
+    return;
+  }
+  // the callback hands its round back so a scheduler that awaits it (the
+  // tests') sees the round complete; a timer ignores the return
+  courier.timer = courierSchedule(() => {
+    courier.timer = null;
+    return courierRound(key, courier).catch((error) => {
+      log.warn(`quorumGrant courier ${key}: ${error.message}`);
+      if (couriers.get(key) === courier) couriers.delete(key);
+    });
+  }, renewIntervalMs());
+}
+
+/** Test seam: the courier's retry scheduler. */
+function setCourierSchedulerForTests(schedule, cancel) {
+  courierSchedule = schedule;
+  courierCancel = cancel;
 }
 
 /** Whether an acquisition for the key is currently in flight. */
@@ -1939,10 +2040,10 @@ module.exports = {
   termLapsed,
   holderFor,
   relearn,
-  assertTimingSafe,
   isAcquiring,
   witnessAnswer,
   noteGenerationRecord,
+  setCourierSchedulerForTests,
   carryAsk,
   Holder,
   probeOneshot,

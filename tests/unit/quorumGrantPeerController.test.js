@@ -7,6 +7,7 @@ const fluxCommunicationUtils = require('../../ZelBack/src/services/fluxCommunica
 const generalService = require('../../ZelBack/src/services/generalService');
 const registryManager = require('../../ZelBack/src/services/appDatabase/registryManager');
 const grantClient = require('../../ZelBack/src/services/quorumGrant/grantClient');
+const messageStore = require('../../ZelBack/src/services/appMessaging/messageStore');
 const grantPeerController = require('../../ZelBack/src/services/quorumGrant/grantPeerController');
 
 // The witness and relay gauntlets. What they answer is grantClient's and has
@@ -133,6 +134,68 @@ describe('quorumGrant grantPeerController', () => {
       const res = fakeRes();
       await grantPeerController.relay(fakeReq(relayBody(), '198.51.100.9'), res);
       expect(res.statusCode).to.equal(403);
+    });
+  });
+
+  describe('teach - the courier\'s delivery of a re-roll record', () => {
+    const RECORD = {
+      type: 'fluxgrantgeneration',
+      version: 1,
+      ip: '10.1.0.1:16127',
+      appName: 'myapp',
+      role: 'master',
+      generation: 2,
+      height: 90,
+      at: 1_750_000_000_000,
+      signature: 'ownersig',
+      broadcastedAt: 1_750_000_000_500,
+    };
+
+    beforeEach(() => {
+      sinon.stub(messageStore, 'storeAppStateEvent').resolves();
+      sinon.stub(messageStore, 'getGrantGenerationRecord').resolves({ data: { generation: 2 } });
+    });
+
+    it('stores a well-formed record on the broadcast path and answers the generation now held', async () => {
+      const res = fakeRes();
+      await grantPeerController.teach(fakeReq({ record: RECORD }), res);
+      expect(res.statusCode).to.equal(200);
+      expect(res.body.data).to.deep.equal({ appName: 'myapp', role: 'master', generation: 2 });
+      expect(messageStore.storeAppStateEvent.calledOnce).to.equal(true);
+      expect(messageStore.storeAppStateEvent.firstCall.args).to.deep.equal([
+        messageStore.APP_STATE_EVENT_TYPES.GRANTGENERATION, { message: RECORD, envelope: null },
+      ]);
+    });
+
+    it('a record the store dropped answers the generation that still stands - the courier reads that as undelivered', async () => {
+      messageStore.getGrantGenerationRecord.resolves({ data: { generation: 1 } });
+      const res = fakeRes();
+      await grantPeerController.teach(fakeReq({ record: RECORD }), res);
+      expect(res.statusCode).to.equal(200);
+      expect(res.body.data.generation).to.equal(1);
+    });
+
+    it('refuses a malformed record before touching the store', async () => {
+      const cases = [
+        { record: { ...RECORD, signature: undefined } },
+        { record: { ...RECORD, generation: 0 } },
+        { record: { ...RECORD, broadcastedAt: 'now' } },
+        {},
+      ];
+      const codes = await Promise.all(cases.map(async (body) => {
+        const res = fakeRes();
+        await grantPeerController.teach(fakeReq(body), res);
+        return res.statusCode;
+      }));
+      expect(codes).to.deep.equal([400, 400, 400, 400]);
+      expect(messageStore.storeAppStateEvent.called).to.equal(false);
+    });
+
+    it('refuses an unlisted caller before touching the store', async () => {
+      const res = fakeRes();
+      await grantPeerController.teach(fakeReq({ record: RECORD }, '198.51.100.9'), res);
+      expect(res.statusCode).to.equal(403);
+      expect(messageStore.storeAppStateEvent.called).to.equal(false);
     });
   });
 

@@ -596,6 +596,12 @@ module.exports = (app) => {
   app.post('/flux/quorumgrant/relay', (req, res) => {
     grantPeerController.relay(req, res);
   });
+  // The courier's delivery: a new-committee cell carrying the owner's re-roll
+  // record to an instance of the app. Owner-verified on the broadcast path;
+  // the answer is the generation this node holds afterwards.
+  app.post('/flux/quorumgrant/teach', (req, res) => {
+    grantPeerController.teach(req, res);
+  });
   // Every endpoint that answers 202 points here: one status resource, one
   // status enum, one error shape, so a client polls the same way whatever it
   // started.

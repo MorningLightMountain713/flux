@@ -291,7 +291,8 @@ function timingIsSafe(timing) {
   const stop = timing?.hardStopMs;
   const lockDelay = timing?.lockDelayMs;
   const renewInterval = timing?.renewIntervalMs;
-  if (![slack, stop, lockDelay, renewInterval].every((value) => Number.isFinite(value) && value >= 0)) {
+  const askTimeout = timing?.askTimeoutMs;
+  if (![slack, stop, lockDelay, renewInterval, askTimeout].every((value) => Number.isFinite(value) && value >= 0)) {
     return { safe: false, marginMs: 0, reason: 'quorumGrant timing values are not all finite and non-negative' };
   }
   const marginMs = Math.max(0, lockDelay - slack - stop);
@@ -314,6 +315,24 @@ function timingIsSafe(timing) {
       reason: `quorumGrant timing is unsafe: the renewal interval ${renewInterval}ms `
         + `must sit strictly under the grantors' lock-delay ${lockDelay}ms, `
         + 'or a returning committee can seat a successor before the incumbent reclaims',
+    };
+  }
+  // The look-ahead's clock (formal/quiet-window family K, COMMITTEE_RECOVERY_
+  // DESIGN.md 2026-09-05): a cell that learns a re-roll record only at its
+  // drain's lift opens its seat to a stranger one lock-delay later, and the
+  // incumbent it was told about must have claimed that seat first. The
+  // courier's delivery is bounded by one ask timeout; the step-across then
+  // fits its three rounds inside what the lock-delay leaves (Holder
+  // #maybeStepAcross budgets them), so the one thing to assert is that the
+  // delivery itself fits - the model's LockDelayBlocks >= 2 ticks, in this
+  // plane's terms.
+  if (!(askTimeout < lockDelay)) {
+    return {
+      safe: false,
+      marginMs,
+      reason: `quorumGrant timing is unsafe: the ask timeout ${askTimeout}ms (the courier's delivery bound) `
+        + `must sit strictly under the grantors' lock-delay ${lockDelay}ms, `
+        + 'or a cell that learns a re-roll at its lift seats a stranger before the incumbent it told has claimed its seat',
     };
   }
   return { safe: true, marginMs, reason: null };
