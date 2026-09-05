@@ -162,6 +162,26 @@ describe('peerNotification tests', () => {
   });
 
   describe('checkAndNotifyPeersOfRunningApps', () => {
+    it('while the announcements are held a cycle sends nothing and stores nothing, and the next cycle after the release announces', async () => {
+      const store = moduleStubs();
+      const storeEvent = store['./messageStore'].storeAppStateEvent;
+      peerNotification = proxyquire('../../ZelBack/src/services/appMessaging/peerNotification', store);
+
+      peerNotification.holdAnnouncements('every peer is gone');
+      peerNotification.holdAnnouncements('every peer is gone'); // said once
+      await peerNotification.checkAndNotifyPeersOfRunningApps();
+      sinon.assert.notCalled(broadcastAllStub);
+      sinon.assert.notCalled(storeEvent);
+      expect(logStub.info.getCalls().filter((c) => String(c.args[0]).includes('announcements held')).length).to.equal(1);
+
+      peerNotification.releaseAnnouncements();
+      peerNotification.releaseAnnouncements(); // said once
+      await peerNotification.checkAndNotifyPeersOfRunningApps();
+      sinon.assert.calledOnce(broadcastAllStub);
+      sinon.assert.calledOnce(storeEvent);
+      expect(logStub.info.getCalls().filter((c) => String(c.args[0]).includes('announcements released')).length).to.equal(1);
+    });
+
     it('should be exported as a function', () => {
       expect(peerNotification.checkAndNotifyPeersOfRunningApps).to.be.a('function');
     });
