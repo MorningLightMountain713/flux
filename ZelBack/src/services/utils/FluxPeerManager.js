@@ -84,6 +84,15 @@ class FluxPeerManager extends EventEmitter {
 
   #stopRefusalLogged = false;
 
+  /**
+   * Inbound sockets admitted at the upgrade and not yet decided: awaiting a
+   * deferred refusal (over capacity, a duplicate) or a liveness verdict on
+   * the connection they would replace. The far end holds each of them as a
+   * peer until the answer lands, so the stop closes them with its code too.
+   * @type {Map<WebSocket, NodeJS.Timeout|null>}
+   */
+  #undecided = new Map();
+
   /** The node-down plane's peering gate, installed at its start; see setInboundGate. */
   #inboundGate = null;
 
@@ -496,11 +505,13 @@ class FluxPeerManager extends EventEmitter {
   #verifyOrReplace(existing, ws, ip, port, metadata) {
     const VERIFY_TIMEOUT_MS = 1000;
     let settled = false;
+    this.#undecided.set(ws, null);
 
     const onPong = () => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      this.#undecided.delete(ws);
       existing.ws.removeListener('pong', onPong);
       log.info(`Reconnect verify: existing connection ${existing.key} is alive, rejecting new inbound`);
       ws.close(CLOSE_CODES.DUPLICATE_PEER, 'Existing connection verified alive');
@@ -509,6 +520,7 @@ class FluxPeerManager extends EventEmitter {
     const timer = setTimeout(() => {
       if (settled) return;
       settled = true;
+      this.#undecided.delete(ws);
       existing.ws.removeListener('pong', onPong);
       log.info(`Reconnect verify: existing connection ${existing.key} failed pong check, replacing`);
       this.add(ws, ip, port, { source: PEER_SOURCE.INBOUND, ...metadata });
@@ -769,15 +781,31 @@ class FluxPeerManager extends EventEmitter {
    */
   async closeAllForStop(code, { flushMs = 2000 } = {}) {
     this.#stopCode = code;
+    const name = CLOSE_CODE_NAMES[code] || 'stopping';
     const peers = [...this.#peers.values()];
     const flushed = peers.map((peer) => new Promise((resolve) => {
       peer.ws.once('close', resolve);
       try {
-        peer.close(code, CLOSE_CODE_NAMES[code] || 'stopping');
+        peer.close(code, name);
       } catch (_e) {
         resolve();
       }
     }));
+    // The undecided inbound sockets are the far end's held connections too:
+    // closed with the code now, or they die with the process before their
+    // refusal lands, and their holder reads an unannounced drop.
+    this.#undecided.forEach((timer, ws) => {
+      if (timer) clearTimeout(timer);
+      flushed.push(new Promise((resolve) => {
+        ws.once('close', resolve);
+        try {
+          ws.close(code, name);
+        } catch (_e) {
+          resolve();
+        }
+      }));
+    });
+    this.#undecided.clear();
     let timer;
     await Promise.race([
       Promise.all(flushed),
@@ -1151,9 +1179,7 @@ class FluxPeerManager extends EventEmitter {
       : 9 * config.fluxapps.minIncoming;
     const maxCon = Math.max(maxPeers, maxNumberOfConnections);
     if (this.inboundCount > maxCon) {
-      setTimeout(() => {
-        ws.close(CLOSE_CODES.MAX_CONNECTIONS, `Max number of incomming connections ${maxCon} reached`);
-      }, 1000);
+      this.#deferRefusal(ws, CLOSE_CODES.MAX_CONNECTIONS, `Max number of incomming connections ${maxCon} reached`);
       return;
     }
 
@@ -1173,13 +1199,29 @@ class FluxPeerManager extends EventEmitter {
         this.#verifyOrReplace(existing, ws, ipv4Peer, port, metadata);
         return;
       }
-      setTimeout(() => {
-        ws.close(CLOSE_CODES.DUPLICATE_PEER, 'Peer already connected');
-      }, 1000);
+      this.#deferRefusal(ws, CLOSE_CODES.DUPLICATE_PEER, 'Peer already connected');
       return;
     }
 
     this.add(ws, ipv4Peer, port, { source: PEER_SOURCE.INBOUND, ...metadata });
+  }
+
+  /**
+   * Refuse an inbound socket after a second: a dialer closed at once
+   * redials at once, and the pause is what keeps a refused pair from
+   * spinning. Until the close lands the socket is the far end's held
+   * connection, so it is tracked, and a stop that begins first closes it
+   * with the stop code instead.
+   * @param {WebSocket} ws
+   * @param {number} code
+   * @param {string} reason
+   */
+  #deferRefusal(ws, code, reason) {
+    const timer = setTimeout(() => {
+      this.#undecided.delete(ws);
+      ws.close(code, reason);
+    }, 1000);
+    this.#undecided.set(ws, timer);
   }
 
   // --- Failed connection tracking ---
@@ -1727,6 +1769,8 @@ class FluxPeerManager extends EventEmitter {
     this.#failedConnections.clear();
     this.#stopCode = null;
     this.#stopRefusalLogged = false;
+    this.#undecided.forEach((timer) => { if (timer) clearTimeout(timer); });
+    this.#undecided.clear();
     this.#pendingConnections.clear();
     this.#reconnectCounts.clear();
     this.#peerTopology.clear();

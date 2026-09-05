@@ -2826,4 +2826,27 @@ describe('FluxPeerManager — a stopping process closes its held connections wit
 
     expect(await stop).to.equal(1); // the held one, and only it
   });
+
+  it('a socket admitted and awaiting its deferred refusal at the stop is closed with the stop code, not left to die with the process', async () => {
+    // A refused inbound is closed a second after the upgrade, and until
+    // then the far end holds it as a peer. A stop that begins inside that
+    // second used to exit before the refusal landed, and the holder read
+    // 1006 on a stop that was announced everywhere else.
+    manager.numberOfFluxNodes = 10000;
+    manager.allowConnections();
+    const held = closingWs('8.8.8.8');
+    manager.add(held, '8.8.8.8', '16127', { source: PEER_SOURCE.INBOUND });
+    const clock = sinon.useFakeTimers();
+    const duplicate = closingWs('8.8.8.8');
+    manager.validateAndAddInbound(duplicate, '16127', createMockReq('8.8.8.8'));
+    sinon.assert.notCalled(duplicate.close); // its refusal is a second away
+
+    const stop = manager.closeAllForStop(CLOSE_CODES.SHUTTING_DOWN, { flushMs: 2000 });
+    sinon.assert.calledWith(duplicate.close, CLOSE_CODES.SHUTTING_DOWN);
+    sinon.assert.calledWith(held.close, CLOSE_CODES.SHUTTING_DOWN);
+    await clock.tickAsync(1500);
+    sinon.assert.neverCalledWith(duplicate.close, CLOSE_CODES.DUPLICATE_PEER); // the refusal timer is spent
+    expect(await stop).to.equal(1);
+    clock.restore();
+  });
 });
