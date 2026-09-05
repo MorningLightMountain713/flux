@@ -1595,6 +1595,43 @@ describe('fluxCommunication tests', () => {
       expect(stateStore.callCount).to.equal(0);
       expect(completed).to.deep.equal([['apprunning', peerKey]]);
     });
+
+    it('an event without an envelope that is not a certificate is dropped: nothing unsigned reaches the store', async () => {
+      // The certificate is the only self-proving row. Every other event must
+      // carry the envelope of the node that produced it, or it is not stored —
+      // there is no type the intake takes on the relaying peer's say-so. (The
+      // eviction event was exactly that, and it is gone.)
+      sinon.stub(peerManager, 'isSyncRequested').returns(true);
+      sinon.stub(fluxCommunicationUtils, 'verifyFluxBroadcast')
+        .resolves({ result: fluxCommunicationUtils.VerifyResult.OK });
+      const intake = sinon.stub(nodeDownService, 'onCertificateSyncEvent').resolves();
+      const stateStore = sinon.stub(messageStore, 'storeAppStateEvent').resolves();
+      const batchStore = sinon.stub(messageStore, 'storeBatchAppRunningEvents').resolves({ stored: 0 });
+
+      const peerKey = '10.20.30.42:16127';
+      const unsigned = [
+        { type: 'evicted', ip: '1.2.3.4', createdAt: '2026-09-05T00:00:00.000Z', envelope: null },
+        { type: 'appremoved', ip: '1.2.3.4', data: { appName: 'a', broadcastedAt: 1700000000000 } },
+        { type: 'apprunning', ip: '1.2.3.4', data: { apps: [{ name: 'a', hash: 'h' }] } },
+      ];
+
+      const completed = [];
+      const onComplete = (...args) => completed.push(args);
+      appSyncEvents.on(SYNC_EVENTS.EPHEMERAL_SYNC_COMPLETE, onComplete);
+      try {
+        await peerManager.syncResponseDispatcher(
+          { data: { type: 'fluxapprunningsync', done: true, messages: unsigned } },
+          { key: peerKey },
+        );
+      } finally {
+        appSyncEvents.off(SYNC_EVENTS.EPHEMERAL_SYNC_COMPLETE, onComplete);
+      }
+
+      expect(stateStore.callCount).to.equal(0);
+      expect(batchStore.callCount).to.equal(0);
+      expect(intake.callCount).to.equal(0);
+      expect(completed).to.deep.equal([['apprunning', peerKey]]);
+    });
   });
 });
 
