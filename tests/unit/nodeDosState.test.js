@@ -14,6 +14,7 @@ describe('nodeDosState tests', () => {
     publishStub = sinon.stub();
     return proxyquire('../../ZelBack/src/services/nodeDosState', {
       './utils/fluxEventBus': { publish: publishStub },
+      './lib/log': { error: sinon.stub(), info: sinon.stub(), warn: sinon.stub() },
     });
   }
 
@@ -122,6 +123,44 @@ describe('nodeDosState tests', () => {
       nodeDosState.setStickyDosStateValue(100);
       nodeDosState.setStickyDosMessage('sticky reason');
       expect(nodeDosState.getDosData()).to.deep.equal({ dosState: 100, dosMessage: 'sticky reason' });
+    });
+  });
+  describe('onNodeDos', () => {
+    it('fires once when the score crosses the limit, not again while it stays there, and again after it clears and re-crosses', () => {
+      const listener = sinon.stub();
+      nodeDosState.onNodeDos(listener);
+
+      nodeDosState.setDosStateValue(99);
+      expect(listener.callCount).to.equal(0);
+      nodeDosState.addDosState(1);
+      expect(listener.callCount).to.equal(1);
+      nodeDosState.addDosState(50);
+      nodeDosState.setDosMessage('still dos');
+      expect(listener.callCount).to.equal(1);
+
+      nodeDosState.setDosStateValue(0);
+      expect(listener.callCount).to.equal(1);
+      nodeDosState.setDosStateValue(100);
+      expect(listener.callCount).to.equal(2);
+    });
+
+    it('fires for a sticky state reaching the limit', () => {
+      const listener = sinon.stub();
+      nodeDosState.onNodeDos(listener);
+      nodeDosState.setStickyDosMessage('tampering');
+      expect(listener.callCount).to.equal(0);
+      nodeDosState.setStickyDosStateValue(100);
+      expect(listener.callCount).to.equal(1);
+    });
+
+    it('a listener that throws does not break the setter or the other listeners', () => {
+      const bad = sinon.stub().throws(new Error('boom'));
+      const good = sinon.stub();
+      nodeDosState.onNodeDos(bad);
+      nodeDosState.onNodeDos(good);
+      nodeDosState.setDosStateValue(100);
+      expect(good.callCount).to.equal(1);
+      expect(nodeDosState.getDosStateValue()).to.equal(100);
     });
   });
 });

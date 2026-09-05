@@ -17,7 +17,7 @@ const DEFAULT_CHECK_INTERVAL_MS = 10_000;
  * ask a question, never an answer.
  *
  * The asymmetry drives the design: a wrong "alive" costs a few seconds of stale
- * height, while a wrong "dead" reaches nodeStatusMonitor and daemonHealthMonitor and
+ * height, while a wrong "dead" reaches nodeSelfDefense and daemonHealthMonitor and
  * removes every app on the node. So only a failed RPC can produce a dead verdict.
  *
  * @param {object} options

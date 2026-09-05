@@ -967,7 +967,6 @@ module.exports = {
     discoveryFailRetryMs: 120000,
     discoveryConnectionDelayMs: 500,
     connectionBackoffMs: [120000, 300000, 600000, 900000],
-    nodeMonitorIntervalMs: 1200000,
     nodeMonitorRemovalDelayMs: 60000,
     // events per message of an answer to a peer's state sync
     syncAnswerBatchSize: 2000,
@@ -986,11 +985,6 @@ module.exports = {
     // minutes), or no holder's announcement outlasts the turn it would act in.
     // Asserted against production's own config in the unit tests.
     residentialTurnMs: 60 * 60 * 1000,
-    nodeMonitorDosRecoveryDelayMs: 600000,
-    nodeMonitorConfirmationLossDelayMs: 1200000,
-    nodeMonitorErrorRecoveryDelayMs: 120000,
-    nodeMonitorCheckIntervalMs: 120000,
-    nodeMonitorCheckTimeoutMs: 10000,
     spawnDeferrals: {
       targetedNodesMs: { encrypted: 1800000, standard: 3420000 },
       staticIpMs: { encrypted: 1620000, standard: 3420000 },
