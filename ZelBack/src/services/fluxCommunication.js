@@ -272,9 +272,6 @@ async function handleAppRunningSyncResponse(message, peerSocket) {
     // database encoding of every location update in memory together, which is
     // what made a single response cost hundreds of megabytes that were never
     // returned to the OS.
-    // Evictions are applied ahead of the other state events, as they were
-    // before this response was processed in slices.
-    const evictions = [];
     const nodeDowns = [];
     const stateEvents = [];
     let eventWriteFailed = false;
@@ -287,7 +284,6 @@ async function handleAppRunningSyncResponse(message, peerSocket) {
     await serviceHelper.processInSlices(messages, SYNC_EVENTS_PER_SLICE, async (slice) => {
       const appRunningBroadcasts = [];
       const otherBroadcasts = [];
-      const evictedEvents = [];
       const nodeDownEvents = [];
       for (const event of slice) {
         if (event.envelope && event.type === 'apprunning') {
@@ -298,22 +294,7 @@ async function handleAppRunningSyncResponse(message, peerSocket) {
           // intake. The envelope is provenance only — a locally-assembled row
           // carries none — so these bypass the envelope filter below.
           nodeDownEvents.push(event);
-        } else if (event.type === 'evicted') {
-          // Evicted events lack per-event signatures because they are generated
-          // locally by nodeStatusMonitor, which makes non-deterministic HTTP
-          // probe decisions about whether a remote node is alive. The
-          // isSyncRequested check above ensures only solicited responses are
-          // processed, but a compromised confirmed peer we sync from could still
-          // include fake evictions. Impact is limited: only affects this node's
-          // view and self-heals on the next apprunning broadcast (≤60 min).
-          //
-          // The root cause is nodeStatusMonitor itself — it will be replaced by
-          // a peer quorum approach where eviction is determined by consensus of
-          // signed "peer unreachable" events (3 missed pongs on the WebSocket
-          // layer). Once that lands, evicted events will carry verifiable
-          // signatures and this path will verify them like all other event types.
-          evictedEvents.push(event);
-        } else if (event.envelope) {
+                } else if (event.envelope) {
           otherBroadcasts.push(event);
         }
       }
@@ -323,7 +304,6 @@ async function handleAppRunningSyncResponse(message, peerSocket) {
       const otherToVerify = otherBroadcasts.map((e) => ({ ...e.envelope, data: e.data }));
       const { verified: verifiedOther, announcers: otherAnnouncers } = await batchVerifyBroadcasts(otherToVerify, 'handleAppRunningSyncResponse');
       const verifiedOtherSet = new Set(verifiedOther);
-      evictions.push(...evictedEvents);
       nodeDowns.push(...nodeDownEvents);
       for (let i = 0; i < otherBroadcasts.length; i++) {
         if (verifiedOtherSet.has(otherToVerify[i])) {
@@ -348,16 +328,12 @@ async function handleAppRunningSyncResponse(message, peerSocket) {
       return;
     }
 
-    // Applied after every slice, never inside one: evictions carry no
-    // broadcastedAt, so the sender's timestamp sort puts them in the earliest
-    // slice every time, and nothing here establishes that the event log is
-    // indifferent to seeing them last. An eviction's time is createdAt, when the
-    // evicting node made it.
-    for (const event of [...evictions, ...nodeDowns, ...stateEvents]) {
+    // Applied after every slice, never inside one: a slice is a memory bound, not
+    // a unit of meaning, and an event's effect must not depend on which slice it
+    // landed in.
+    for (const event of [...nodeDowns, ...stateEvents]) {
       if (event.type === 'appremoved' || event.type === 'ipchanged' || event.type === 'masterlease' || event.type === 'grantgeneration') {
         await messageStore.storeAppStateEvent(event.type, { message: event.data, envelope: event.envelope, announcer: announcerOf.get(event) ?? null });
-      } else if (event.type === 'evicted') {
-        await messageStore.applyEviction(event.ip, Date.parse(event.createdAt));
       } else if (event.type === 'nodedown') {
         await nodeDownService.onCertificateSyncEvent(event);
       }
@@ -1292,11 +1268,10 @@ async function dispatchSyncResponse(msgObj, peerSocket) {
     if (!isReconcile && !peerManager.isSyncResponseWanted(peerSocket)) return;
 
     // THE QUEUE IS THE ORDER, so nothing that can reorder may sit in front of
-    // it. Chunks carry meaning by position: the sender sorts by timestamp and
-    // an eviction has none, so evictions land in the FIRST chunk and clear a
-    // node's locations outright - a later chunk processed ahead of them has its
-    // rows deleted by an eviction that came before them. `done` is positional
-    // too, and a stream marked finished early loses whatever was still coming.
+    // it. Chunks carry meaning by position: `done` is positional, and a stream
+    // marked finished early loses whatever was still coming. (The worked example
+    // here used to be evictions, which carried no timestamp and so always landed
+    // in the first chunk; they are gone, but the rule they illustrated is not.)
     //
     // So the chunk takes its place here, in the same synchronous step as its
     // arrival, and the envelope check is STARTED rather than waited for. Four

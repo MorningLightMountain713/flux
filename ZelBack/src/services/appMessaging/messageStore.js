@@ -34,14 +34,12 @@ const {
   RUNNING_EXPIRY_MS,
   INSTALLING_EXPIRY_MS,
   INSTALLING_ERRORS_EXPIRY_MS,
-  EVICTED_EXPIRY_MS,
   CLOCK_SKEW_ALLOWANCE_MS,
 } = require('../utils/appConstants');
 
 const APP_STATE_EVENT_TYPES = Object.freeze({
   APPRUNNING: 'apprunning',
   APPREMOVED: 'appremoved',
-  EVICTED: 'evicted',
   IPCHANGED: 'ipchanged',
   MASTERLEASE: 'masterlease',
   GRANTGENERATION: 'grantgeneration',
@@ -812,62 +810,6 @@ async function handleAppRemovedStateEvent({ message, envelope }) {
   );
 }
 
-/**
- * The time an eviction speaks from: when the evicting node made it, never later
- * than now. Evictions are unsigned, so a time in the future is taken as now
- * rather than trusted to outrank broadcasts that have not happened yet, and an
- * unreadable one is taken as now.
- *
- * @param {number} evictedAt - The eviction's time, ms
- * @returns {number}
- */
-function evictionTime(evictedAt) {
-  const now = Date.now();
-  return Number.isFinite(evictedAt) ? Math.min(evictedAt, now) : now;
-}
-
-/**
- * Records a node's eviction under the time it was made. The record keeps that
- * time wherever a peer sync carries it, so it expires one location lifetime
- * after the eviction however often it is passed on, and it is dated before any
- * broadcast the node makes on its return. Of two evictions of one node the
- * newer is kept.
- *
- * @param {object} payload
- * @param {string} payload.ip - The evicted node's socket address
- * @param {number} [payload.evictedAt] - When the eviction was made, ms; now when absent
- * @returns {Promise<void>}
- */
-async function handleEvictedEvent({ ip, evictedAt }) {
-  if (!ip) return;
-  const at = evictionTime(evictedAt);
-  const db = dbHelper.databaseConnection();
-  const database = db.db(config.database.appsglobal.database);
-  await database.collection(globalAppStateEvents).updateOne(
-    { ip, type: APP_STATE_EVENT_TYPES.EVICTED, dedupKey: 'evicted' },
-    {
-      $set: { receivedAt: new Date() },
-      $max: { createdAt: new Date(at), expireAt: new Date(at + EVICTED_EXPIRY_MS) },
-    },
-    { upsert: true },
-  );
-}
-
-/**
- * Applies a node's eviction: records it under the time it was made. An eviction
- * older than a location lifetime changes nothing.
- *
- * @param {string} ip - The evicted node's socket address
- * @param {number} [evictedAt] - When the eviction was made, ms; now when absent
- * @returns {Promise<void>}
- */
-async function applyEviction(ip, evictedAt) {
-  if (!ip) return;
-  const at = evictionTime(evictedAt);
-  if (at + EVICTED_EXPIRY_MS <= Date.now()) return;
-  await handleEvictedEvent({ ip, evictedAt: at });
-}
-
 async function handleIPChangedEvent({ message, envelope }) {
   if (!message || !message.oldIP || !message.newIP || !message.broadcastedAt) return;
   const db = dbHelper.databaseConnection();
@@ -1223,7 +1165,6 @@ function storeAppStateEvent(type, payload) {
   switch (type) {
     case APP_STATE_EVENT_TYPES.APPRUNNING: return handleAppRunningEvent(payload);
     case APP_STATE_EVENT_TYPES.APPREMOVED: return handleAppRemovedStateEvent(payload);
-    case APP_STATE_EVENT_TYPES.EVICTED: return handleEvictedEvent(payload);
     case APP_STATE_EVENT_TYPES.IPCHANGED: return handleIPChangedEvent(payload);
     case APP_STATE_EVENT_TYPES.MASTERLEASE: return handleMasterleaseEvent(payload);
     case APP_STATE_EVENT_TYPES.GRANTGENERATION: return handleGrantGenerationEvent(payload);
@@ -1550,7 +1491,6 @@ module.exports = {
   storeSignedAppInstallingBroadcast,
   storeBatchAppInstallingMessages,
   storeAppRemovedMessage,
-  applyEviction,
   storeAppInstallingErrorMessage,
   storeSignedAppInstallingErrorBroadcast,
   storeBatchAppInstallingErrorMessages,
