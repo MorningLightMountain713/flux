@@ -159,6 +159,11 @@ describe('node-down: the map of stops end to end', function () {
       nodes: NODES,
       tickerAutostart: false,
       zmqTopics: ALL_ZMQ_TOPICS,
+      // The shared config expires a location row 300 s after its announce,
+      // inside the 420 s grace, so a dead node's rows fell on the TTL before
+      // the certificate ever negated them and no timing here could tell the
+      // two apart. Production's 125 minutes: the grace is the only clock.
+      configOverrides: { fluxapps: { locationTtlS: 7500 } },
     });
     survivors = env.clients.map((_, i) => i).filter((i) => i !== SUBJECT);
     await bootAndPeer(env);
