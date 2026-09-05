@@ -326,10 +326,13 @@ describe('node-down: the map of stops end to end', function () {
     await markMachineShutdown(subjectContainer());
     await execInContainer(subjectContainer(), 'kill -TERM "$(cat /tmp/fluxos.pid 2>/dev/null)" 2>/dev/null || true');
     const droppedAt = Date.now();
-    await unmarkMachineShutdown(subjectContainer());
     // the respawned process boots into an unconfirmed daemon; production's
-    // autostart would still start its discovery, so the suite does too
+    // autostart would still start its discovery, so the suite does too. The
+    // marker comes off only once the respawned node serves: the handler reads
+    // it a hundred milliseconds after the signal, and an unmark right after
+    // the kill returned won that race and turned the shutdown into a restart.
     await startSubjectDiscovery();
+    await unmarkMachineShutdown(subjectContainer());
 
     // inside the grace: no certificate, the row stands
     await sleep(RESTART_GRACE_MS + 60_000);
