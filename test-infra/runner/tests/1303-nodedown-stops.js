@@ -78,14 +78,14 @@ describe('node-down: the map of stops end to end', function () {
   const coHolderIp = () => subnet.nodeIp(CO_HOLDER + 1);
   const subjectContainer = () => env.clients[SUBJECT].container;
 
-  async function locationsSeenBy(index) {
-    const res = await env.clients[index].getAppLocations(appName);
+  async function locationsSeenBy(index, name = appName) {
+    const res = await env.clients[index].getAppLocations(name);
     return (res?.data ?? []).map((row) => row.ip);
   }
 
-  async function subjectHoldsApp() {
+  async function subjectHoldsApp(name = appName) {
     const res = await env.clients[SUBJECT].getInstalledApps();
-    return (res?.data ?? []).some((app) => app.name === appName);
+    return (res?.data ?? []).some((app) => app.name === name);
   }
 
   async function rowsOnWitness() {
@@ -123,14 +123,17 @@ describe('node-down: the map of stops end to end', function () {
       });
   }
 
-  // Seat the app back on the subject: the install's announce is what refutes
-  // a standing record about it.
-  async function reseatSubject() {
+  // Seat an app on the subject: the install's announce is what refutes a
+  // standing record about it. A fresh app each time — the first app's two
+  // instances are the co-holder and D's replacement, so a third seat of it
+  // ranks last and the spec reconciler removes it within seconds.
+  async function reseatSubject(suffix) {
+    const name = `${appName}${suffix}`;
     const app = await buildSeedableApp({
-      name: appName,
+      name,
       instances: INSTANCES,
       compose: [{
-        name: appName,
+        name,
         description: 'node-down stops e2e component',
         repotag: `${REGISTRY_REPO_HOST}/${appName}:v1`,
         ports: [31313],
@@ -146,13 +149,14 @@ describe('node-down: the map of stops end to end', function () {
       }],
     });
     await installOnNodes(env, app, [SUBJECT], { timeout: 180000 }).catch(() => {});
-    await subjectListedAt(WITNESS, true, 'the subject seated again');
+    await subjectListedAt(WITNESS, true, 'the subject seated again', { name });
+    return name;
   }
 
-  async function subjectListedAt(index, listed, label, { timeout = 240000 } = {}) {
+  async function subjectListedAt(index, listed, label, { timeout = 240000, name = appName } = {}) {
     let ips = [];
     await waitFor(async () => {
-      ips = await locationsSeenBy(index);
+      ips = await locationsSeenBy(index, name);
       return ips.some((ip) => ipMatches(ip, subjectIp())) === listed;
     }, { timeout, interval: 5000, label })
       .catch((error) => {
@@ -334,8 +338,8 @@ describe('node-down: the map of stops end to end', function () {
 
   it('E. the overrunning reboot: a SHUTTING_DOWN close, then a node back but never confirmed, is certified at the grace end by the ping exchange with since = the drop, and its rows go on arrival', async function () {
     this.timeout(1200000);
-    // the subject holds an app again for this one: seat it back
-    await reseatSubject();
+    // the subject holds an app again for this one: a fresh one, seated on it
+    const eApp = await reseatSubject('e');
     await recordRefutedOnEverySurvivor('the reseat refutes the last record on every survivor');
     const before = (await rowsOnWitness()).length;
 
@@ -343,20 +347,20 @@ describe('node-down: the map of stops end to end', function () {
     // watchdog respawns FluxOS into a daemon that never confirms it
     await setNodeStatus(subjectIp(), 'STARTED');
     await markMachineShutdown(subjectContainer());
-    await execInContainer(subjectContainer(), 'kill -TERM "$(cat /tmp/fluxos.pid 2>/dev/null)" 2>/dev/null || true');
     const droppedAt = Date.now();
-    // the respawned process boots into an unconfirmed daemon; production's
-    // autostart would still start its discovery, so the suite does too. The
-    // marker comes off only once the respawned node serves: the handler reads
-    // it a hundred milliseconds after the signal, and an unmark right after
-    // the kill returned won that race and turned the shutdown into a restart.
-    await startSubjectDiscovery();
+    // The lever sends the TERM and waits for the process to go down and come
+    // back before discovery is restarted; the marker comes off after that.
+    // A discovery re-start issued right after the kill succeeded against the
+    // old process, still serving through the handler's hundred-millisecond
+    // grace, and the unmark that followed removed the marker before the
+    // handler read it: the subject announced RESTARTING on a staged shutdown.
+    await restartSubjectFluxos();
     await unmarkMachineShutdown(subjectContainer());
 
     // inside the grace: no certificate, the row stands
     await sleep(INSIDE_GRACE_MS);
     expect((await rowsOnWitness()).length, 'no certificate inside the shutdown grace').to.equal(before);
-    expect((await locationsSeenBy(WITNESS)).some((ip) => ipMatches(ip, subjectIp())), 'the row stands inside the grace').to.equal(true);
+    expect((await locationsSeenBy(WITNESS, eApp)).some((ip) => ipMatches(ip, subjectIp())), 'the row stands inside the grace').to.equal(true);
 
     // the grace end: the jurors look, the node hangs up before the pong
     await rowsOnEverySurvivor(before + 1, { timeout: NODE_DOWN_GRACE_MS + PAST_GRACE_MARGIN_MS });
@@ -366,7 +370,7 @@ describe('node-down: the map of stops end to end', function () {
     expect(new Date(newest.since).getTime(), 'since is the drop, not the look').to.be.closeTo(droppedAt, DROP_SLACK_MS);
     expect(new Date(newest.broadcastedAt).getTime() - new Date(newest.since).getTime(), 'certified at the grace end').to.be.at.least(NODE_DOWN_GRACE_MS - 30_000);
     // since + the grace had passed when it arrived: the rows go at once
-    await subjectListedAt(WITNESS, false, 'the subject row falls on the certificate\'s arrival');
+    await subjectListedAt(WITNESS, false, 'the subject row falls on the certificate\'s arrival', { name: eApp });
 
     await clearNodeStatus(subjectIp());
   });
@@ -379,7 +383,7 @@ describe('node-down: the map of stops end to end', function () {
     // E leaves the subject with no app, and an empty announcement is never
     // broadcast, so nothing of its own can refute E's record: seat the app
     // back first, as E did after D — the announce that seats it refutes.
-    await reseatSubject();
+    await reseatSubject('f');
     await recordRefutedOnEverySurvivor('the last record is refuted on every survivor before the restarts');
     const before = (await rowsOnWitness()).length;
     for (let i = 0; i < RESTART_COURTESY; i += 1) {
