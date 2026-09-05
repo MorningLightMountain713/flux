@@ -282,7 +282,10 @@ async function applyPlacementThenAnnounce(trigger) {
   peerNotification.releaseAnnouncements();
   // placed is null when the rows could not be read: the apps are kept, and so is
   // the announcement
-  if (placed !== false) peerNotification.checkAndNotifyPeersOfRunningApps();
+  if (placed !== false) {
+    log.info(`nodeDownService: placement check (${trigger}): ${placed ? 'the rows still place this node' : 'the rows could not be read'}, announcing`);
+    peerNotification.checkAndNotifyPeersOfRunningApps();
+  }
 }
 
 /**
