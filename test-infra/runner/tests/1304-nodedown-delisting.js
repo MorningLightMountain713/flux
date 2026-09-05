@@ -13,7 +13,9 @@ import {
   removeFromNodeList, resetNodeList, setNodeStatus, clearAllNodeStatus,
 } from '../framework/daemon-control.js';
 import { getSubnetConfig, REGISTRY_REPO_HOST } from '../framework/subnet-config.js';
-import shared from '../../config/shared.js';
+import { sharedConfig } from '../framework/harness-config.js';
+
+const shared = sharedConfig();
 
 // A node that leaves the deterministic node list, on a real fleet (R10 of
 // NODE_DOWN_SCENARIOS.md; NODESTATUSMONITOR_DECOMPOSITION.md §3). The old
