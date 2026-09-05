@@ -123,6 +123,32 @@ describe('node-down: the map of stops end to end', function () {
       });
   }
 
+  // Seat the app back on the subject: the install's announce is what refutes
+  // a standing record about it.
+  async function reseatSubject() {
+    const app = await buildSeedableApp({
+      name: appName,
+      instances: INSTANCES,
+      compose: [{
+        name: appName,
+        description: 'node-down stops e2e component',
+        repotag: `${REGISTRY_REPO_HOST}/${appName}:v1`,
+        ports: [31313],
+        domains: [''],
+        environmentParameters: [],
+        commands: [],
+        containerPorts: [80],
+        containerData: '/tmp',
+        cpu: 0.1,
+        ram: 100,
+        hdd: 1,
+        repoauth: '',
+      }],
+    });
+    await installOnNodes(env, app, [SUBJECT], { timeout: 180000 }).catch(() => {});
+    await subjectListedAt(WITNESS, true, 'the subject seated again');
+  }
+
   async function subjectListedAt(index, listed, label, { timeout = 240000 } = {}) {
     let ips = [];
     await waitFor(async () => {
@@ -138,6 +164,8 @@ describe('node-down: the map of stops end to end', function () {
   // marker, read by isSystemShuttingDown before the SHUTTING_DOWN close.
   async function markMachineShutdown(container) {
     await execInContainer(container, 'mkdir -p /run/systemd/shutdown && touch /run/systemd/shutdown/scheduled');
+    const { stdout } = await execInContainer(container, 'test -f /run/systemd/shutdown/scheduled && echo present');
+    expect(String(stdout).trim(), 'the shutdown marker is in place before the signal').to.equal('present');
   }
   async function unmarkMachineShutdown(container) {
     await execInContainer(container, 'rm -f /run/systemd/shutdown/scheduled');
@@ -307,27 +335,7 @@ describe('node-down: the map of stops end to end', function () {
   it('E. the overrunning reboot: a SHUTTING_DOWN close, then a node back but never confirmed, is certified at the grace end by the ping exchange with since = the drop, and its rows go on arrival', async function () {
     this.timeout(1200000);
     // the subject holds an app again for this one: seat it back
-    const app = await buildSeedableApp({
-      name: appName,
-      instances: INSTANCES,
-      compose: [{
-        name: appName,
-        description: 'node-down stops e2e component',
-        repotag: `${REGISTRY_REPO_HOST}/${appName}:v1`,
-        ports: [31313],
-        domains: [''],
-        environmentParameters: [],
-        commands: [],
-        containerPorts: [80],
-        containerData: '/tmp',
-        cpu: 0.1,
-        ram: 100,
-        hdd: 1,
-        repoauth: '',
-      }],
-    });
-    await installOnNodes(env, app, [SUBJECT], { timeout: 180000 }).catch(() => {});
-    await subjectListedAt(WITNESS, true, 'the subject seated again');
+    await reseatSubject();
     await recordRefutedOnEverySurvivor('the reseat refutes the last record on every survivor');
     const before = (await rowsOnWitness()).length;
 
@@ -368,6 +376,10 @@ describe('node-down: the map of stops end to end', function () {
     await clearNodeStatus(subjectIp()).catch(() => {});
     await env.healPartition([SUBJECT], survivors).catch(() => {});
     await sleep(60_000);
+    // E leaves the subject with no app, and an empty announcement is never
+    // broadcast, so nothing of its own can refute E's record: seat the app
+    // back first, as E did after D — the announce that seats it refutes.
+    await reseatSubject();
     await recordRefutedOnEverySurvivor('the last record is refuted on every survivor before the restarts');
     const before = (await rowsOnWitness()).length;
     for (let i = 0; i < RESTART_COURTESY; i += 1) {
