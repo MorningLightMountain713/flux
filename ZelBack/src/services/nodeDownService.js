@@ -280,7 +280,10 @@ async function applyPlacementThenAnnounce(trigger) {
   }
   // the store has been read: whatever was held back is free to go
   peerNotification.releaseAnnouncements();
-  if (placed) peerNotification.checkAndNotifyPeersOfRunningApps();
+  if (placed) {
+    log.info(`nodeDownService: placement check (${trigger}): the rows still place this node, announcing`);
+    peerNotification.checkAndNotifyPeersOfRunningApps();
+  }
 }
 
 /**
