@@ -126,6 +126,7 @@ export function nodeClient(nodeNum) {
         'quorumGrant:masterleaseDropped',
         'quorumGrant:masterleaseUnverified',
         'quorumGrant:generationLearned',
+        'quorumGrant:generationCarried',
         'quorumGrant:ordinalFounded',
         'quorumGrant:ordinalReleased',
         'quorumGrant:ordinalVacated',
