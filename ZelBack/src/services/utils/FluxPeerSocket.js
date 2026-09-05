@@ -164,6 +164,11 @@ class FluxPeerSocket {
      * treated differently.
      */
     this.livenessWindowMs = (config.peers.wsPingIntervalMs ?? 15000) * this.maxMissedPongs;
+    // The far end has sent a frame: a pong or a message. A handshake alone
+    // is not a return — a node refusing at the door completes it and hangs
+    // up before it says anything — so the jury's hold is noted on the first
+    // frame, not on the add.
+    this.answered = false;
     this.connectedAt = Date.now();
     this.nakCount = 0;
     this.nakWindowStart = Date.now();
@@ -242,7 +247,15 @@ class FluxPeerSocket {
     }
   }
 
+  /** The first frame from the far end, said once: the manager tells the jury. */
+  #noteAnswered() {
+    if (this.answered) return;
+    this.answered = true;
+    this.manager?.emit?.('peer:answered', { ip: this.ip, port: this.port, direction: this.direction });
+  }
+
   onPongReceived() {
+    this.#noteAnswered();
     const wasUnanswered = this.missedPongs !== 0;
     this.pingOutstanding = false;
     this.missedPongs = 0;
@@ -440,6 +453,7 @@ class FluxPeerSocket {
 
     ws.onmessage = (evt) => {
       if (!evt) return;
+      this.#noteAnswered();
 
       // Before the rate limit: a frame we decline to process still proves the peer is there, and
       // liveness is a question about the peer rather than about how much work we accept from it.
