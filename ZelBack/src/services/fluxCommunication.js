@@ -1205,13 +1205,20 @@ function onOutboundOpen() {
     settleOutbound(meta, DIAL_RESULT.HELD);
     return;
   }
-  peerManager.add(this, meta.ip, meta.port, {
+  const peer = peerManager.add(this, meta.ip, meta.port, {
     source: meta.source,
     remoteCapabilities: meta.remoteCapabilities,
     remoteClockOffsetMs: meta.remoteClockOffsetMs,
     remoteVersion: meta.remoteVersion,
     remoteFluxUptime: meta.remoteFluxUptime,
   });
+  if (!peer) {
+    // the stop began while this dial was in flight: the manager closed it
+    // with the stop code, and the duty learned nothing from it
+    peerManager.clearPending(key);
+    settleOutbound(meta, DIAL_RESULT.NO_DIAL);
+    return;
+  }
   settleOutbound(meta, DIAL_RESULT.HELD);
 }
 
@@ -1240,6 +1247,13 @@ async function initiateAndHandleConnection(connection, source = PEER_SOURCE.RAND
   // null indeterminate (no dial was made — retry later, no evidence gained).
   const { onSettle } = dialOptions;
   try {
+    // Once the stop has begun nothing is dialed: the connection would only
+    // land after the held ones were announced, and a duty learns nothing
+    // from a socket its subject is about to close.
+    if (peerManager.stopping) {
+      if (onSettle) onSettle(DIAL_RESULT.NO_DIAL);
+      return;
+    }
     const key = `${ip}:${port}`;
     if (peerManager.has(key)) {
       if (onSettle) onSettle(DIAL_RESULT.HELD);

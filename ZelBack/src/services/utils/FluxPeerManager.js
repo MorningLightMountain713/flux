@@ -71,6 +71,19 @@ class FluxPeerManager extends EventEmitter {
   /** @type {Map<string, {attempts: number, lastAttempt: number}>} */
   #failedConnections = new Map();
 
+  /**
+   * The stop code once the stop has begun, null before. A stopping process
+   * adds no peering: a newcomer — a dial that completes after the held
+   * connections were closed, an upgrade that arrives during the flush — is
+   * closed with the same code, so no juror sees this stop end in an
+   * unannounced drop on a socket it held for a moment. Never cleared: the
+   * process exits.
+   * @type {number|null}
+   */
+  #stopCode = null;
+
+  #stopRefusalLogged = false;
+
   /** The node-down plane's peering gate, installed at its start; see setInboundGate. */
   #inboundGate = null;
 
@@ -160,10 +173,15 @@ class FluxPeerManager extends EventEmitter {
    * @param {string} [options.source] - PEER_SOURCE value
    * @param {string[]} [options.remoteCapabilities] - Capabilities advertised by remote
    * @param {number} [options.remoteClockOffsetMs] - Remote clock offset in ms
-   * @returns {FluxPeerSocket}
+   * @returns {FluxPeerSocket|null} null once the stop has begun: the socket
+   *   was closed with the stop code and nothing was added
    */
   add(ws, ip, port, options = {}) {
     const key = `${ip}:${String(port)}`;
+    if (this.#stopCode !== null) {
+      this.#refuseForStop(ws, key);
+      return null;
+    }
     const existing = this.#peers.get(key);
     if (existing) {
       log.warn(`Replacing existing ${existing.direction} peer ${key}`);
@@ -750,6 +768,7 @@ class FluxPeerManager extends EventEmitter {
    * @returns {Promise<number>} how many held connections were closed
    */
   async closeAllForStop(code, { flushMs = 2000 } = {}) {
+    this.#stopCode = code;
     const peers = [...this.#peers.values()];
     const flushed = peers.map((peer) => new Promise((resolve) => {
       peer.ws.once('close', resolve);
@@ -766,6 +785,26 @@ class FluxPeerManager extends EventEmitter {
     ]);
     clearTimeout(timer);
     return peers.length;
+  }
+
+  /** @returns {boolean} the stop has begun: nothing is added or dialed */
+  get stopping() {
+    return this.#stopCode !== null;
+  }
+
+  /**
+   * A peering that arrives after the stop began is closed with the stop
+   * code — said once per stop, on the first.
+   * @param {WebSocket} ws
+   * @param {string} what the key, or what the socket was
+   */
+  #refuseForStop(ws, what) {
+    const name = CLOSE_CODE_NAMES[this.#stopCode] || String(this.#stopCode);
+    if (!this.#stopRefusalLogged) {
+      this.#stopRefusalLogged = true;
+      log.info(`${what} arrived after the stop began, closed with ${name}`);
+    }
+    try { ws.close(this.#stopCode, name); } catch (_e) { /* noop */ }
   }
 
   // --- Network state ---
@@ -989,6 +1028,10 @@ class FluxPeerManager extends EventEmitter {
    * @param {object} [request] - HTTP upgrade request (carries headers for metadata extraction)
    */
   validateAndAddInbound(ws, optionalPort, request) {
+    if (this.#stopCode !== null) {
+      this.#refuseForStop(ws, 'an inbound upgrade');
+      return;
+    }
     if (!this.acceptingConnections) {
       ws.close(CLOSE_CODES.NODE_UNCONFIRMED, 'node not confirmed');
       return;
@@ -1682,6 +1725,8 @@ class FluxPeerManager extends EventEmitter {
     this.#ipGroupCounts.clear();
     this.#uniqueIps.clear();
     this.#failedConnections.clear();
+    this.#stopCode = null;
+    this.#stopRefusalLogged = false;
     this.#pendingConnections.clear();
     this.#reconnectCounts.clear();
     this.#peerTopology.clear();

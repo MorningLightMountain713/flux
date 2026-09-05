@@ -2798,4 +2798,32 @@ describe('FluxPeerManager — a stopping process closes its held connections wit
     expect(closed).to.equal(1);
     sinon.assert.notCalled(ephemeral.close);
   });
+
+  it('once the stop has begun, a newcomer is closed with the stop code and never held', async () => {
+    // A dial in flight can complete after the held connections were
+    // announced, and an upgrade can arrive during the flush. Either would
+    // be held by the far end for the moments this process has left and then
+    // drop unannounced when it exits — a death to its juror, on a stop that
+    // was announced. So the stop refuses every peering after it began, with
+    // the same code, and the far end reads the same announcement.
+    const held = closingWs('10.0.0.6');
+    manager.add(held, '10.0.0.6', '16127', { source: PEER_SOURCE.RANDOM });
+    expect(manager.stopping).to.equal(false);
+    const stop = manager.closeAllForStop(CLOSE_CODES.RESTARTING, { flushMs: 2000 });
+    expect(manager.stopping).to.equal(true);
+
+    const late = closingWs('10.0.0.7');
+    const added = manager.add(late, '10.0.0.7', '16127', { source: PEER_SOURCE.RANDOM });
+    expect(added).to.equal(null);
+    sinon.assert.calledWith(late.close, CLOSE_CODES.RESTARTING);
+    expect(manager.has('10.0.0.7:16127')).to.equal(false);
+
+    const upgrade = createMockWs('10.0.0.8', '16127');
+    upgrade.close = sinon.stub();
+    manager.validateAndAddInbound(upgrade, '16127', createMockReq('10.0.0.8'));
+    sinon.assert.calledWith(upgrade.close, CLOSE_CODES.RESTARTING);
+    expect(manager.has('10.0.0.8:16127')).to.equal(false);
+
+    expect(await stop).to.equal(1); // the held one, and only it
+  });
 });

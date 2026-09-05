@@ -22,7 +22,7 @@ const networkStateService = require('../../ZelBack/src/services/networkStateServ
 const { peerManager } = require('../../ZelBack/src/services/utils/peerState');
 const nodeDownService = require('../../ZelBack/src/services/nodeDownService');
 const { appSyncEvents, EVENTS: SYNC_EVENTS } = require('../../ZelBack/src/services/utils/appSyncEvents');
-const { PEER_SOURCE } = require('../../ZelBack/src/services/utils/FluxPeerSocket');
+const { PEER_SOURCE, CLOSE_CODES } = require('../../ZelBack/src/services/utils/FluxPeerSocket');
 const rateLimit = require('../../ZelBack/src/services/utils/rateLimit');
 
 let localWsServer;
@@ -1539,6 +1539,38 @@ describe('fluxCommunication tests', () => {
       expect(held.readyState).to.equal(WebSocket.OPEN); // never closed
       expect(peerManager.outboundCount).to.equal(0);
       expect(peerManager.inboundCount).to.equal(1);
+    });
+
+    it('a dial that completes after the stop began is closed with the stop code, and the duty learns nothing from it', async () => {
+      // The stop announces itself on the held connections; a dial still in
+      // flight would land after that and drop unannounced at exit. The
+      // manager closes it with the stop code instead, the dial settles with
+      // no evidence, and once the stop has begun no further dial is made.
+      sinon.stub(rateLimit, 'lruRateLimit').returns(true);
+      sinon.stub(daemonServiceMiscRpcs, 'isDaemonSynced').returns({ data: { synced: false, height: 0 } });
+      sinon.stub(fluxNetworkHelper, 'getLocalSocketAddress').returns('44.192.51.11:16127');
+      peerManager.reset();
+
+      const { port } = localWsServer.address();
+      const key = `127.0.0.1:${port}`;
+      const settled = [];
+      // past the gate before the stop, its handshake completes after it
+      fluxCommunication.initiateAndHandleConnection(key, PEER_SOURCE.DETERMINISTIC, {
+        onSettle: (v) => settled.push(v),
+      });
+      await peerManager.closeAllForStop(CLOSE_CODES.RESTARTING, { flushMs: 10 });
+
+      await waitFor(() => settled.length === 1, 5000);
+      expect(settled).to.deep.equal([null]);
+      expect(peerManager.has(key)).to.equal(false);
+      expect(peerManager.isPending(key)).to.equal(false);
+
+      const again = [];
+      await fluxCommunication.initiateAndHandleConnection(key, PEER_SOURCE.DETERMINISTIC, {
+        onSettle: (v) => again.push(v),
+      });
+      expect(again).to.deep.equal([null]);
+      expect(peerManager.isPending(key)).to.equal(false);
     });
   });
 
