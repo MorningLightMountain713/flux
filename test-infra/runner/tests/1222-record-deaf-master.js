@@ -148,6 +148,30 @@ describe('record-deaf master: the cells the re-roll seats carry the record to th
     .filter((e) => e.event === 'quorumGrant:generationRecord' && e.id > afterId
       && e.data?.appName === name && e.data?.role === 'master' && e.data?.generation === 1);
 
+  // Drop every cross-group WebSocket upgrade by content, on both sides, so
+  // the peerings the sever cut never return while plain HTTP flows.
+  const UPGRADE_RULE = (ip) => ['sh', '-c', `iptables -I INPUT -s ${ip} -p tcp -m string --string "Upgrade: websocket" --algo bm --icase -j DROP`];
+  const UPGRADE_RULE_OFF = (ip) => ['sh', '-c', `iptables -D INPUT -s ${ip} -p tcp -m string --string "Upgrade: websocket" --algo bm --icase -j DROP || true`];
+  function crossGroupPairs(groupA, groupB) {
+    const pairs = [];
+    for (const a of groupA) {
+      for (const b of groupB) {
+        pairs.push([a, env.clients[b].ip]);
+        pairs.push([b, env.clients[a].ip]);
+      }
+    }
+    return pairs;
+  }
+  async function keepPeeringsSevered(groupA, groupB) {
+    await Promise.all(crossGroupPairs(groupA, groupB).map(async ([node, otherIp]) => {
+      const res = await env.clients[node].container.exec(UPGRADE_RULE(otherIp));
+      if (res.exitCode !== 0) throw new Error(`upgrade drop on ${label(node)} for ${otherIp} failed (exit ${res.exitCode}): ${res.output}`);
+    }));
+  }
+  async function releasePeerings(groupA, groupB) {
+    await Promise.all(crossGroupPairs(groupA, groupB).map(([node, otherIp]) => env.clients[node].container.exec(UPGRADE_RULE_OFF(otherIp))));
+  }
+
   async function submitRerollAt(i) {
     const owner = appOwnerKey();
     const { currentHeight } = await getState();
@@ -283,20 +307,25 @@ describe('record-deaf master: the cells the re-roll seats carry the record to th
       expect(await getAppContainerId(env.clients[master].container, name, name),
         'the container is untouched while the master is deaf').to.equal(container);
 
-      // 4. The heal — packets only, no re-dial. A peer connection that is
-      //    lost and returns makes the sync orchestrator pull the running-state
+      // 4. The heal — packets, not peerings. A peer connection that is lost
+      //    and returns makes the sync orchestrator pull the running-state
       //    events published while it was gone (appSyncOrchestrator
       //    #drainReconnectPulls, the ephemeralSync:reconnectRequested event),
-      //    and that sync carries generation records: a re-dialled deaf side
-      //    learns by the product's own backstop, not by the courier. The deaf
+      //    and that sync carries generation records: a deaf side whose
+      //    sockets return learns by the product's own backstop, not by the
+      //    courier — and the peer managers re-dial lost peers on their own,
+      //    discovery or not (the fifth run: every deaf node pulled). The deaf
       //    world this suite constructs is a broadcast MISSED with no lost
-      //    peer returning, so the sockets the sever cut stay cut and the
+      //    peer returning, so before the packet drops come off, every
+      //    cross-group WebSocket upgrade is dropped by content on both sides
+      //    (the string match the node image's iptables carries), and the
       //    premise is asserted below from the pull's own event. The courier's
-      //    delivery is a direct HTTP call and needs no peering. The master
-      //    learns the generation from the courier — its own cells still do
-      //    not know it, and it never polled a witness — and stays held under
-      //    its old world until the lift.
+      //    delivery, the asks and the record reads are plain HTTP and flow.
+      //    The master learns the generation from the courier — its own cells
+      //    still do not know it, and it never polled a witness — and stays
+      //    held under its old world until the lift.
       const beforeHeal = env.clients.map((c) => c.getLastEventId());
+      await keepPeeringsSevered(deafSide, farSide);
       await env.healPartition(deafSide, farSide);
       healed = true;
       await env.clients[master].waitForEvent('quorumGrant:generationRecord',
@@ -341,6 +370,7 @@ describe('record-deaf master: the cells the re-roll seats carry the record to th
       expect(describeCells(walk.reRolled.members), 'the re-rolled committee the suite dealt').to.be.a('string');
     } finally {
       if (!healed) await env.healPartition(deafSide, farSide);
+      await releasePeerings(deafSide, farSide);
     }
   });
 });
