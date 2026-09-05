@@ -1,4 +1,4 @@
-// weight: medium
+// weight: heavy
 import { readFileSync } from 'node:fs';
 import { describe, it, before, after } from 'mocha';
 import { expect } from 'chai';
@@ -33,13 +33,18 @@ import { getSubnetConfig, REGISTRY_REPO_HOST } from '../framework/subnet-config.
 //      the confirmation event, no loop).
 //   4. THE FLEET PLACES A REPLACEMENT — the app is back at its instance
 //      count, on nodes that are members.
-// Delisting needs no jury, so the fleet is small.
+// Delisting needs no jury, but the register's mass-departure guard refuses a
+// refresh that drops more than a tenth of the known addresses (a truncated
+// list from a sick daemon), so one honest departure needs at least eleven
+// listed nodes; sixteen, as in 1302. The spec asks for two instances, so the
+// spawner is idle until the delisting takes one away.
 
 const subnet = getSubnetConfig();
-const NODES = 8;
+const NODES = 16;
 const SUBJECT = 3;
 const CO_HOLDER = 5;
 const WITNESS = 0;
+const INSTANCES = 2;
 // ZelBack/src/services/appDatabase/offListDepartures.js OFF_LIST_GRACE_MS —
 // a code constant, the same on every node.
 const OFF_LIST_GRACE_MS = 2 * 60 * 1000;
@@ -101,6 +106,7 @@ describe('a delisted node is negated by every other node\'s own derivation, with
     await pushImage(appName, 'v1');
     const app = await buildSeedableApp({
       name: appName,
+      instances: INSTANCES,
       compose: [{
         name: appName,
         description: 'node-down delisting e2e component',
@@ -175,8 +181,8 @@ describe('a delisted node is negated by every other node\'s own derivation, with
     await waitFor(async () => {
       ips = await locationsSeenBy(WITNESS);
       const holders = ips.filter((ip) => !ipMatches(ip, subjectIp()));
-      return holders.length >= 2 && holders.some((ip) => ipMatches(ip, coHolderIp()));
-    }, { timeout: 720000, interval: 10000, label: 'two member holders in the witness view' })
+      return holders.length >= INSTANCES && holders.some((ip) => ipMatches(ip, coHolderIp()));
+    }, { timeout: 720000, interval: 10000, label: `${INSTANCES} member holders in the witness view` })
       .catch((error) => {
         throw new Error(`${error.message}\n    last location view: ${JSON.stringify(ips)}`);
       });
