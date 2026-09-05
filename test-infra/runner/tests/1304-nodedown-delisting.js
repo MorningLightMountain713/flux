@@ -29,8 +29,8 @@ import { getSubnetConfig, REGISTRY_REPO_HOST } from '../framework/subnet-config.
 //      looked. Nothing but each node's own derivation from its own copy of
 //      the list did this, and nothing was sent.
 //   3. THE NODE REMOVES ITS OWN APPS — its daemon says it is not confirmed,
-//      and a non-member runs no apps (davew 2026-09-05; the self-defence
-//      half of nodeStatusMonitor, unchanged).
+//      and a non-member runs no apps (davew 2026-09-05; nodeSelfDefense, on
+//      the confirmation event, no loop).
 //   4. THE FLEET PLACES A REPLACEMENT — the app is back at its instance
 //      count, on nodes that are members.
 // Delisting needs no jury, so the fleet is small.

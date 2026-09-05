@@ -1,6 +1,7 @@
 'use strict';
 
 const fluxEventBus = require('./utils/fluxEventBus');
+const log = require('../lib/log');
 
 // Node DOS (denial-of-service) state: this FluxNode's aggregate health/eligibility
 // score. Contributed to by the availability / IP-change / collision / fluxbench
@@ -16,13 +17,36 @@ let dosMessage = null;
 let stickyDosState = 0;
 let stickyDosMessage = null;
 
+// Fired once each time the effective state crosses the limit (isNodeDos goes
+// false → true); the node's self-defence removes its apps on it. In-process,
+// because the event bus below feeds SSE only and nothing can subscribe to it.
+const nodeDosListeners = [];
+let wasNodeDos = false;
+
 /**
  * Emits the current effective DOS state on the event bus (SSE observability).
  * Every mutator calls this so observers see the true node DOS status, including
- * sticky precedence.
+ * sticky precedence. Also the one place the limit crossing is observed.
  */
 function publishChanged() {
   fluxEventBus.publish('dos:changed', getDosData());
+  const nowNodeDos = isNodeDos();
+  if (nowNodeDos && !wasNodeDos) {
+    for (const cb of nodeDosListeners) {
+      try { cb(); } catch (error) { log.error(`nodeDosState - listener failed: ${error.message}`); }
+    }
+  }
+  wasNodeDos = nowNodeDos;
+}
+
+/**
+ * Registers a callback for the moment the node enters DOS state (the effective
+ * value reaching the limit). Not fired again while it stays there; fired again
+ * after it clears and re-crosses.
+ * @param {function} callback
+ */
+function onNodeDos(callback) {
+  nodeDosListeners.push(callback);
 }
 
 /**
@@ -136,6 +160,7 @@ function getDosData() {
 }
 
 module.exports = {
+  onNodeDos,
   getDosStateValue,
   setDosStateValue,
   addDosState,

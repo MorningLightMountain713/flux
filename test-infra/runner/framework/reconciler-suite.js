@@ -282,8 +282,8 @@ export async function waitForInstanceCount(env, appName, target, {
 // path (checkAndNotifyPeersOfRunningApps, carrying runningSince). We wait until the
 // subject node has received that location, so when it installs it sees a genuine
 // running peer and takes the sync-gated follower path. No fabricated DB rows — the
-// alternative (seeding a location) is reaped by nodeStatusMonitor unless it points
-// at a real node, and even then misrepresents an instance that isn't running.
+// alternative (seeding a location) is negated by every node's own derivation unless
+// it names a listed node, and even then misrepresents an instance that isn't running.
 //
 // The peer's stub must report a genuinely synced source (setSynced) so it PROMOTES
 // to sendreceive and keeps running for the whole test. On stub defaults the peer

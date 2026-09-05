@@ -112,9 +112,6 @@ module.exports = {
     wsHandshakeTimeoutMs: 5000,
     discoveryConnectionDelayMs: 100,
     nodeMonitorRemovalDelayMs: 1000,
-    nodeMonitorDosRecoveryDelayMs: 10000,
-    nodeMonitorConfirmationLossDelayMs: 10000,
-    nodeMonitorErrorRecoveryDelayMs: 5000,
     bootDelayMultiplier: 0.01,
     spawnDelayMs: 10000,
     removalSpacingMs: 1000,
@@ -151,7 +148,6 @@ module.exports = {
     discoveryRetryMs: 5000,
     discoveryFailRetryMs: 5000,
     connectionBackoffMs: [2000, 5000, 10000, 15000],
-    nodeMonitorIntervalMs: 10000,
     spawnDeferrals: {
       targetedNodesMs: { encrypted: 150, standard: 300 },
       staticIpMs: { encrypted: 200, standard: 400 },

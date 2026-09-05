@@ -391,7 +391,6 @@ module.exports = {
     discoveryRetryMs: 60000,
     discoveryFailRetryMs: 120000,
     connectionBackoffMs: [120000, 300000, 600000, 900000],
-    nodeMonitorIntervalMs: 1200000,
     spawnDeferrals: {
       targetedNodesMs: { encrypted: 1800000, standard: 3420000 },
       staticIpMs: { encrypted: 1620000, standard: 3420000 },
@@ -420,9 +419,6 @@ module.exports = {
     wsHandshakeTimeoutMs: 10000,
     discoveryConnectionDelayMs: 500,
     nodeMonitorRemovalDelayMs: 60000,
-    nodeMonitorDosRecoveryDelayMs: 600000,
-    nodeMonitorConfirmationLossDelayMs: 1200000,
-    nodeMonitorErrorRecoveryDelayMs: 120000,
     imageUpdateCheckIntervalMs: 21600000,
     imageUpdateInitialDelayMinMs: 600000,
     imageUpdateInitialDelayMaxMs: 1800000,

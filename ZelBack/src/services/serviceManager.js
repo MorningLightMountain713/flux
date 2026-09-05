@@ -21,7 +21,7 @@ const monitoringOrchestrator = require('./appMonitoring/monitoringOrchestrator')
 const portManager = require('./appNetwork/portManager');
 const appInspector = require('./appManagement/appInspector');
 const availabilityChecker = require('./appMonitoring/availabilityChecker');
-const nodeStatusMonitor = require('./appMonitoring/nodeStatusMonitor');
+const nodeSelfDefense = require('./appMonitoring/nodeSelfDefense');
 const peerNotification = require('./appMessaging/peerNotification');
 const drainServer = require('./appMessaging/drainServer');
 const syncthingMonitor = require('./appMonitoring/syncthingMonitor');
@@ -657,10 +657,7 @@ async function startFluxFunctions() {
         portManager.failedNodesTestPortsCache,
       );
     }, bootDelay(3 * 60 * 1000));
-    nodeStatusMonitor.initialize(appQueryService.installedApps);
-    setTimeout(() => {
-      nodeStatusMonitor.monitorNodeStatus(appQueryService.installedApps);
-    }, bootDelay(1.5 * 60 * 1000));
+    nodeSelfDefense.initialize();
     // Start the syncthing/masterSlave deciders once boot container state has settled
     // (the same AsyncGate the reconciler starts on), not after a fixed delay. Each
     // decider self-gates per cycle on its own prerequisites (mounts, syncthing health,
