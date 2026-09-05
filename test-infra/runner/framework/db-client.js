@@ -107,6 +107,26 @@ export function dbClient(nodeNum) {
         .find({ type: 'nodedown', subject }, { projection: { _id: 0 } }).toArray();
     },
 
+    // Where the subject's latest record stands, derived as the store derives it
+    // (nodeDownStore.recordStateFor): 'none' with no unexpired row, 'refuted'
+    // when an app-running announcement from the subject was stored at or after
+    // the newest row's broadcast, 'standing' otherwise. A standing record makes
+    // the store refuse the next certificate as already_standing, so a suite
+    // that stages a second death waits for the first's refutation everywhere.
+    async getNodeDownRecordState(subject) {
+      const globalDb = await db('appsGlobal');
+      const events = globalDb.collection('appstateevents');
+      const now = Date.now();
+      const rows = (await events.find({ type: 'nodedown', subject }).toArray())
+        .filter((row) => new Date(row.expireAt).getTime() > now);
+      if (!rows.length) return 'none';
+      const newest = rows.reduce((a, b) => (new Date(b.broadcastedAt) > new Date(a.broadcastedAt) ? b : a));
+      const refutation = await events.findOne({
+        type: 'apprunning', outpoint: subject, broadcastedAt: { $gte: new Date(newest.broadcastedAt) },
+      });
+      return refutation ? 'refuted' : 'standing';
+    },
+
     // Delete this node's synced copy of a subject's certificates — stages "the
     // node missed the one-flood gossip" so a boot must recover them over sync.
     async wipeNodeDownRecords(subject) {
