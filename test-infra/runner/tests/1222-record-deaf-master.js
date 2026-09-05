@@ -149,9 +149,12 @@ describe('record-deaf master: the cells the re-roll seats carry the record to th
       && e.data?.appName === name && e.data?.role === 'master' && e.data?.generation === 1);
 
   // Drop every cross-group WebSocket upgrade by content, on both sides, so
-  // the peerings the sever cut never return while plain HTTP flows.
-  const UPGRADE_RULE = (ip) => ['sh', '-c', `iptables -I INPUT -s ${ip} -p tcp -m string --string "Upgrade: websocket" --algo bm --icase -j DROP`];
-  const UPGRADE_RULE_OFF = (ip) => ['sh', '-c', `iptables -D INPUT -s ${ip} -p tcp -m string --string "Upgrade: websocket" --algo bm --icase -j DROP || true`];
+  // the peerings the sever cut never return while plain HTTP flows. kmp, not
+  // bm: a sent payload sits in page fragments, and the kernel's Boyer-Moore
+  // search restarts at every fragment, so a header straddling one is never
+  // seen (lib/ts_bm.c says so); KMP carries its state across fragments.
+  const UPGRADE_RULE = (ip) => ['sh', '-c', `iptables -I INPUT -s ${ip} -p tcp -m string --string "Upgrade: websocket" --algo kmp --icase -j DROP`];
+  const UPGRADE_RULE_OFF = (ip) => ['sh', '-c', `iptables -D INPUT -s ${ip} -p tcp -m string --string "Upgrade: websocket" --algo kmp --icase -j DROP || true`];
   function crossGroupPairs(groupA, groupB) {
     const pairs = [];
     for (const a of groupA) {
