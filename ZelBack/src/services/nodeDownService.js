@@ -315,7 +315,16 @@ async function intakeCertificate(message, envelope, source) {
   // ordinalRegister.vacateOrdinal) — R9, NODE_DOWN_SCENARIOS.md §5
 
   if (message.certificate.subject === myOutpoint()) {
-    applyPlacementThenAnnounce('certificate').catch((error) => log.warn(`nodeDownService: ${error.message}`));
+    // Not while a return is pending: the reconnect pull delivers the records
+    // in its own order, a past one ahead of the newest, and a check run on
+    // the first would answer for a store the pull has not finished filling —
+    // then release the hold and announce, which refutes the newest on every
+    // survivor. The return check reads the whole store once a pull has
+    // answered. And not for a certificate older than the record held: a
+    // past incident is stored for the count, not news about this node.
+    if (!returnSyncHandler && !result.superseded) {
+      applyPlacementThenAnnounce('certificate').catch((error) => log.warn(`nodeDownService: ${error.message}`));
+    }
   } else if (reconciler) {
     // Sync can deliver before start(); the reconciler's first pass reads the
     // store, so a certificate stored now is honoured then.

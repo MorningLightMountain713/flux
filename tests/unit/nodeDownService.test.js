@@ -564,6 +564,52 @@ describe('nodeDownService', () => {
     service.stop();
   });
 
+  it('a certificate about this node arriving while the return is pending runs no check: the return check reads the whole store', async () => {
+    // The reconnect pull delivered C's refuted certificate ahead of D's; the
+    // check ran on the first, found the rows still placing the node, released
+    // the hold and announced, and that announce refuted D's certificate on
+    // every survivor. On the fleet the subject never removed its app.
+    const { appSyncEvents, EVENTS } = require('../../ZelBack/src/services/utils/appSyncEvents');
+    const { service, transport, stubs } = makeHarness();
+    let peersDown = false;
+    transport.peerManager.allPeersDown = () => peersDown;
+    service.start(transport);
+    await tick();
+    peersDown = true;
+    transport.peerManager.emit('peer:removed', { ip: '1.2.3.4', port: '16127', closeCode: 4009 });
+    peersDown = false;
+    transport.peerManager.emit('peer:added', {});
+    await tick();
+
+    // a certificate about ME lands over the pull while the return is pending
+    stubs.handleNodeDownEvent.resolves({ accepted: true, rebroadcast: false, reason: 'stored' });
+    await service.onCertificateSyncEvent({ data: { certificate: { subject: MY_OUTPOINT, height: 1, fingerprint: 'fp', verdicts: [] }, broadcastedAt: Date.now() } });
+    await tick();
+    expect(stubs.enforcePlacement.callCount, 'no check on a store the pull is still filling').to.equal(0);
+    expect(stubs.release.callCount).to.equal(0);
+    expect(stubs.announce.callCount).to.equal(0);
+
+    appSyncEvents.emit(EVENTS.RECONNECT_SYNC_COMPLETE, '1.2.3.4:16127');
+    await tick();
+    sinon.assert.calledOnceWithExactly(stubs.enforcePlacement, 'return');
+    expect(stubs.release.callCount).to.equal(1);
+    service.stop();
+  });
+
+  it('a certificate about this node older than the record held is stored for the count and runs no check', async () => {
+    const { service, transport, stubs } = makeHarness();
+    service.start(transport);
+    await tick();
+    stubs.handleNodeDownEvent.resolves({
+      accepted: true, rebroadcast: false, reason: 'stored', superseded: true,
+    });
+    await service.onCertificateSyncEvent({ data: { certificate: { subject: MY_OUTPOINT, height: 1, fingerprint: 'fp', verdicts: [] }, broadcastedAt: Date.now() - 60_000 } });
+    await tick();
+    expect(stubs.enforcePlacement.callCount).to.equal(0);
+    expect(stubs.announce.callCount).to.equal(0);
+    service.stop();
+  });
+
   it('a node whose rows no longer place it releases the hold on return and announces nothing', async () => {
     const { appSyncEvents, EVENTS } = require('../../ZelBack/src/services/utils/appSyncEvents');
     const { service, transport, stubs } = makeHarness();
