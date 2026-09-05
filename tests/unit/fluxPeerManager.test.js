@@ -1448,6 +1448,12 @@ describe('FluxPeerManager tests', () => {
       manager.remove('9.9.9.9:16127', 1006);
       expect(manager.shouldAttemptConnection('9.9.9.9', '16127')).to.equal(true);
     });
+
+    it('a capacity close backs the target off the same way: a full peer refuses every accept within a second', () => {
+      manager.add(createMockWs('8.8.8.8'), '8.8.8.8', '16127', { source: PEER_SOURCE.DETERMINISTIC });
+      manager.remove('8.8.8.8:16127', CLOSE_CODES.MAX_CONNECTIONS);
+      expect(manager.shouldAttemptConnection('8.8.8.8', '16127')).to.equal(false);
+    });
   });
 
   describe('validateAndAddInbound ephemeral acceptance', () => {

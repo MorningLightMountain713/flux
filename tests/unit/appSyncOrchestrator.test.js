@@ -568,6 +568,55 @@ describe('AppSyncOrchestrator', () => {
       expect(encodeAppRunningStub.calledWith(expectedSince), 'the frame carries the scoped since').to.equal(true);
     });
 
+    it('a pull whose socket dies unanswered hands its loss back: the next re-establishment pulls from the original gap', async () => {
+      // A peer at its inbound cap closes every accept within a second, and
+      // each accept is a re-establishment: the credit spent on the refused
+      // socket is not lost, and its since does not walk forward to the
+      // refused socket's connect time.
+      const peers = makeEligiblePeers(3);
+      getEligibleSyncPeersStub = sinon.stub().returns(peers);
+      const orchestrator = makeOrchestrator({ isEnterprise: () => true, markSyncRequested: sinon.stub() });
+      orchestrator.start(defaultBootContext);
+      await reachReady();
+      await clock.tickAsync(300000);
+      const bootSends = peers[0].send.callCount;
+      const firstLoss = Date.now() - 60000;
+      peerEmitter.emit('peerReestablished', { key: peers[0].key, lostAtMs: firstLoss });
+      await clock.tickAsync(0);
+      expect(peers[0].send.callCount, 'the pull went out on the first return').to.equal(bootSends + 1);
+
+      peerEmitter.emit('syncPeerLost', peers[0].key); // the far end refused the socket
+      await clock.tickAsync(1000);
+      const laterLoss = Date.now() - 500;
+      peerEmitter.emit('peerReestablished', { key: peers[0].key, lostAtMs: laterLoss });
+      await clock.tickAsync(0);
+      expect(peers[0].send.callCount, 'the pull fires again on the next return').to.equal(bootSends + 2);
+      expect(encodeAppRunningStub.lastCall.args[0], 'from the original gap, not the refused socket\'s connect time')
+        .to.equal(firstLoss - RECONNECT_SLACK_MS);
+    });
+
+    it('a pull that was answered hands nothing back: a later loss starts its own gap', async () => {
+      const peers = makeEligiblePeers(3);
+      getEligibleSyncPeersStub = sinon.stub().returns(peers);
+      const orchestrator = makeOrchestrator({ isEnterprise: () => true, markSyncRequested: sinon.stub() });
+      orchestrator.start(defaultBootContext);
+      await reachReady();
+      await clock.tickAsync(300000);
+      const firstLoss = Date.now() - 60000;
+      peerEmitter.emit('peerReestablished', { key: peers[0].key, lostAtMs: firstLoss });
+      await clock.tickAsync(0);
+      appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_COMPLETE, 'apprunning', peers[0].key);
+      await clock.tickAsync(0);
+
+      peerEmitter.emit('syncPeerLost', peers[0].key);
+      await clock.tickAsync(1000);
+      const laterLoss = Date.now() - 500;
+      peerEmitter.emit('peerReestablished', { key: peers[0].key, lostAtMs: laterLoss });
+      await clock.tickAsync(0);
+      expect(encodeAppRunningStub.lastCall.args[0], 'the answered pull\'s gap is closed')
+        .to.equal(laterLoss - RECONNECT_SLACK_MS);
+    });
+
     it('a scoped pull completing is announced on appSyncEvents, so a returning node can run its placement check after it; a round completion is not', async () => {
       const peers = makeEligiblePeers(3);
       getEligibleSyncPeersStub = sinon.stub().returns(peers);
