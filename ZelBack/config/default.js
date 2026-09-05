@@ -873,7 +873,6 @@ module.exports = {
     discoveryFailRetryMs: 120000,
     discoveryConnectionDelayMs: 500,
     connectionBackoffMs: [120000, 300000, 600000, 900000],
-    nodeMonitorIntervalMs: 1200000,
     nodeMonitorRemovalDelayMs: 60000,
     // Residential-node staging. The placement hold is immediate and is not
     // tunable; these pace only the part that moves customer data.
@@ -894,11 +893,6 @@ module.exports = {
     // chain would have to slow to ~55s blocks before adjacent positions could
     // meet. Asserted against production's own config in the unit tests.
     residentialQueueStepMs: 40 * 60 * 1000,
-    nodeMonitorDosRecoveryDelayMs: 600000,
-    nodeMonitorConfirmationLossDelayMs: 1200000,
-    nodeMonitorErrorRecoveryDelayMs: 120000,
-    nodeMonitorCheckIntervalMs: 120000,
-    nodeMonitorCheckTimeoutMs: 10000,
     spawnDeferrals: {
       targetedNodesMs: { encrypted: 1800000, standard: 3420000 },
       staticIpMs: { encrypted: 1620000, standard: 3420000 },

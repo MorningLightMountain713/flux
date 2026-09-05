@@ -400,7 +400,6 @@ module.exports = {
     discoveryRetryMs: 60000,
     discoveryFailRetryMs: 120000,
     connectionBackoffMs: [120000, 300000, 600000, 900000],
-    nodeMonitorIntervalMs: 1200000,
     spawnDeferrals: {
       targetedNodesMs: { encrypted: 1800000, standard: 3420000 },
       staticIpMs: { encrypted: 1620000, standard: 3420000 },
@@ -435,9 +434,6 @@ module.exports = {
     residentialEvacuationIntervalMs: 21600000,
     residentialQueueBaseMs: 1800000,
     residentialQueueStepMs: 2400000, // 40m - must exceed the 22m give-up pass, see ZelBack/config/default.js
-    nodeMonitorDosRecoveryDelayMs: 600000,
-    nodeMonitorConfirmationLossDelayMs: 1200000,
-    nodeMonitorErrorRecoveryDelayMs: 120000,
     imageUpdateCheckIntervalMs: 21600000,
     imageUpdateInitialDelayMinMs: 600000,
     imageUpdateInitialDelayMaxMs: 1800000,
