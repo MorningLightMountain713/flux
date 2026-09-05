@@ -112,12 +112,12 @@ describe('node-down: the map of stops end to end', function () {
       });
   }
 
-  async function subjectListedAt(index, listed, label) {
+  async function subjectListedAt(index, listed, label, { timeout = 240000 } = {}) {
     let ips = [];
     await waitFor(async () => {
       ips = await locationsSeenBy(index);
       return ips.some((ip) => ipMatches(ip, subjectIp())) === listed;
-    }, { timeout: 240000, interval: 5000, label })
+    }, { timeout, interval: 5000, label })
       .catch((error) => {
         throw new Error(`${error.message}\n    last location view: ${JSON.stringify(ips)}`);
       });
@@ -269,7 +269,8 @@ describe('node-down: the map of stops end to end', function () {
     await rowsOnEverySurvivor(before + 1);
     const droppedAt = Date.now();
 
-    await subjectListedAt(WITNESS, false, 'the subject row falls once the grace has run');
+    // the row falls at since + G: the wait outlasts the grace by a margin
+    await subjectListedAt(WITNESS, false, 'the subject row falls once the grace has run', { timeout: NODE_DOWN_GRACE_MS + 180_000 });
     expect(Date.now() - droppedAt, 'not before the grace').to.be.at.least(NODE_DOWN_GRACE_MS - 90_000);
 
     // the spawner on the survivors places one more holder
