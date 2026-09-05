@@ -20,6 +20,8 @@ function makeHarness() {
     recordStateFor: sinon.stub().resolves({ state: 'none', key: null }),
     lockoutFor: sinon.stub().resolves({ lockedOut: false, count: 0, liftsAt: null }),
     announce: sinon.stub(),
+    hold: sinon.stub(),
+    release: sinon.stub(),
     noteReturn: sinon.stub(),
     noteMeshReturn: sinon.stub(),
     enforcePlacement: sinon.stub().resolves({ placed: true, removed: [] }),
@@ -43,7 +45,11 @@ function makeHarness() {
       recordStateFor: stubs.recordStateFor,
       lockoutFor: stubs.lockoutFor,
     },
-    './appMessaging/peerNotification': { checkAndNotifyPeersOfRunningApps: stubs.announce },
+    './appMessaging/peerNotification': {
+      checkAndNotifyPeersOfRunningApps: stubs.announce,
+      holdAnnouncements: stubs.hold,
+      releaseAnnouncements: stubs.release,
+    },
     './appLifecycle/appStartupManager': { enforceNodePlacement: stubs.enforcePlacement },
     './quorumGrant/grantorController': { noteReturnFromUnreachability: stubs.noteReturn },
     './appMesh/meshOrdinals': { noteReturnFromUnreachability: stubs.noteMeshReturn },
@@ -522,6 +528,59 @@ describe('nodeDownService', () => {
     appSyncEvents.emit(EVENTS.RECONNECT_SYNC_COMPLETE, '1.2.3.4:16127');
     await tick();
     expect(stubs.enforcePlacement.callCount).to.equal(1);
+    service.stop();
+  });
+
+  it('losing every peer holds the announcements until the return check has answered, and the release comes before the announce', async () => {
+    // A node with no peer keeps announcing to nobody and storing every
+    // announce; on return those announces refute, in its own store, the
+    // certificate the network formed while it was dark, and the check keeps
+    // apps the network has replaced. On the fleet the subject announced every
+    // thirty seconds through a seven-minute partition and again a second
+    // after the heal, and never removed its app.
+    const { appSyncEvents, EVENTS } = require('../../ZelBack/src/services/utils/appSyncEvents');
+    const { service, transport, stubs } = makeHarness();
+    let peersDown = false;
+    transport.peerManager.allPeersDown = () => peersDown;
+    service.start(transport);
+    await tick();
+
+    transport.peerManager.emit('peer:removed', { ip: '1.2.3.4', port: '16127', closeCode: 4009 });
+    expect(stubs.hold.callCount, 'peers remain: nothing is held').to.equal(0);
+
+    peersDown = true;
+    transport.peerManager.emit('peer:removed', { ip: '1.2.3.4', port: '16127', closeCode: 4009 });
+    expect(stubs.hold.callCount, 'the last peer gone: held').to.equal(1);
+    peersDown = false;
+    transport.peerManager.emit('peer:added', {});
+    await tick();
+    expect(stubs.release.callCount, 'a peer back is not the store caught up').to.equal(0);
+
+    appSyncEvents.emit(EVENTS.RECONNECT_SYNC_COMPLETE, '1.2.3.4:16127');
+    await tick();
+    expect(stubs.release.callCount).to.equal(1);
+    expect(stubs.announce.callCount).to.equal(1);
+    sinon.assert.callOrder(stubs.enforcePlacement, stubs.release, stubs.announce);
+    service.stop();
+  });
+
+  it('a node whose rows no longer place it releases the hold on return and announces nothing', async () => {
+    const { appSyncEvents, EVENTS } = require('../../ZelBack/src/services/utils/appSyncEvents');
+    const { service, transport, stubs } = makeHarness();
+    stubs.enforcePlacement.resolves({ placed: false, removed: ['app1'] });
+    let peersDown = false;
+    transport.peerManager.allPeersDown = () => peersDown;
+    service.start(transport);
+    await tick();
+    peersDown = true;
+    transport.peerManager.emit('peer:removed', { ip: '1.2.3.4', port: '16127', closeCode: 4009 });
+    peersDown = false;
+    transport.peerManager.emit('peer:added', {});
+    await tick();
+    appSyncEvents.emit(EVENTS.RECONNECT_SYNC_COMPLETE, '1.2.3.4:16127');
+    await tick();
+    expect(stubs.release.callCount).to.equal(1);
+    expect(stubs.announce.callCount).to.equal(0);
     service.stop();
   });
 

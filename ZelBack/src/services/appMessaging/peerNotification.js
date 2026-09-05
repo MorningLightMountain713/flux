@@ -89,6 +89,32 @@ function scheduleNextBroadcast(startedAt) {
   }, Math.max(0, ANNOUNCE_INTERVAL_MS - elapsedMs));
 }
 
+// An announcement is the refutation of a certificate about this node — but
+// only if the network heard it. From the moment every peer is gone until the
+// return check has read the store the network kept while this node was dark,
+// nothing is announced and nothing is stored: an announcement no peer carried
+// would refute, in this node's own store, a certificate it never heard of,
+// and the check would keep apps the network has already replaced.
+let announcementsHeld = null;
+
+/**
+ * Hold the announcements: no cycle broadcasts or stores until released.
+ * Said once per hold.
+ * @param {string} reason
+ */
+function holdAnnouncements(reason) {
+  if (announcementsHeld) return;
+  announcementsHeld = reason;
+  log.info(`peerNotification - announcements held: ${reason}`);
+}
+
+/** Release the hold; the caller announces if the rows still place it. */
+function releaseAnnouncements() {
+  if (!announcementsHeld) return;
+  announcementsHeld = null;
+  log.info('peerNotification - announcements released');
+}
+
 /**
  * Start announcing, and keep announcing.
  *
@@ -149,6 +175,7 @@ async function checkAndNotifyPeersOfRunningApps() {
       log.info('checkAndNotifyPeersOfRunningApps - Node cannot send messages, skipping broadcast');
       return;
     }
+    if (announcementsHeld) return; // said once, at the hold
 
     // The snapshot waits for the reconciler's first pass over the apps held at
     // boot: a pass that cannot recreate a container uninstalls the app, and a
@@ -294,4 +321,6 @@ module.exports = {
   checkAndNotifyPeersOfRunningApps,
   startBroadcasting,
   stopBroadcasting,
+  holdAnnouncements,
+  releaseAnnouncements,
 };
