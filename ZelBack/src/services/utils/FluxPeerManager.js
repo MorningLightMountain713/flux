@@ -321,10 +321,13 @@ class FluxPeerManager extends EventEmitter {
     // Track disconnect for unstable node detection and network health
     this.trackDisconnect(peer.ip, peer.port);
     this.#stampLoss(peer);
-    // A peer that refused us under the lockout refuses the next dial too:
-    // back the target off so the duty is re-dialed on the ladder rather
-    // than on every pass, and picked back up the moment the hold lifts.
-    if (closeCode === CLOSE_CODES.LOCKED_OUT && peer.direction === 'outbound') {
+    // A peer that refused us under the lockout, or for its inbound cap,
+    // refuses the next dial too: back the target off so the duty is
+    // re-dialed on the ladder rather than on every pass (a full peer closes
+    // every accept within a second, and the ring re-dials on each failure),
+    // and picked back up the moment the hold lifts.
+    if ((closeCode === CLOSE_CODES.LOCKED_OUT || closeCode === CLOSE_CODES.MAX_CONNECTIONS)
+      && peer.direction === 'outbound') {
       this.recordFailedConnection(peer.ip, peer.port);
     }
     if (this.networkHealthMonitor) this.networkHealthMonitor.recordDisconnect(peer.connectedAt, closeCode);
@@ -927,7 +930,7 @@ class FluxPeerManager extends EventEmitter {
     if (closeCode <= 1015) return true;
     // Dead connection: peer stopped responding, worth retrying
     if (closeCode === CLOSE_CODES.DEAD_CONNECTION) return true;
-    // Max connections: remote is full, try again next cycle
+    // Max connections: remote is full, try again on the backoff ladder
     if (closeCode === CLOSE_CODES.MAX_CONNECTIONS) return true;
     // Node unconfirmed: the remote is still booting and has not opened its
     // application gate yet - a statement about when, not about us. It is the
