@@ -278,6 +278,8 @@ async function applyPlacementThenAnnounce(trigger) {
   } catch (error) {
     log.warn(`nodeDownService: placement check (${trigger}) failed, announcing: ${error.message}`);
   }
+  // the store has been read: whatever was held back is free to go
+  peerNotification.releaseAnnouncements();
   // placed is null when the rows could not be read: the apps are kept, and so is
   // the announcement
   if (placed !== false) peerNotification.checkAndNotifyPeersOfRunningApps();
@@ -384,7 +386,11 @@ function onVerdictMessage(msgObj) {
 function onPeerRemoved({ ip, port, closeCode }) {
   if (!reconciler) return;
   reconciler.schedule('peer-removed');
-  if (transport.peerManager.allPeersDown()) wasUnreachable = true;
+  if (transport.peerManager.allPeersDown()) {
+    wasUnreachable = true;
+    // eslint-disable-next-line global-require
+    require('./appMessaging/peerNotification').holdAnnouncements('every peer is gone; the return check answers before the next announce');
+  }
 
   // Only an unexpected loss raises suspicion or counts as a flap — a
   // deliberate close (duplicate, capacity, our own teardown) is not an
@@ -525,6 +531,8 @@ function stop() {
   if (returnSyncHandler) {
     appSyncEvents.off(SYNC_EVENTS.RECONNECT_SYNC_COMPLETE, returnSyncHandler);
     returnSyncHandler = null;
+    // eslint-disable-next-line global-require
+    require('./appMessaging/peerNotification').releaseAnnouncements();
   }
   if (transport) transport.peerManager.setInboundGate(null);
   dropHandler = null;
