@@ -361,7 +361,7 @@ describe('reconciler network-detach heal', function () {
 
     // FluxOS dies between the remove and a successful recreate. The durable
     // networkHealRemoval flag is the only memory that the absence was deliberate.
-    await restartFluxos(client.container);
+    await restartFluxos(client.container, { signal: 'KILL' });
 
     // registry returns -> a paced heal attempt recreates; the app was never
     // uninstalled and its absence never recorded as a vanish

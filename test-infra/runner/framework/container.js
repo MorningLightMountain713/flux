@@ -374,16 +374,23 @@ async function holdFluxos(container) {
 }
 
 /**
- * Restart the FluxOS process only - the `systemctl restart fluxos` case. Kills just
- * FluxOS; systemd starts it again. The inner dockerd and the running app containers
- * are NOT affected - they keep running while FluxOS's in-memory state (e.g.
- * controllerDesired) is wiped. This is distinct from restartNode (whole container ->
- * dockerd + containers restart) and restartDockerd (dockerd only). Confirms FluxOS
- * went DOWN and came back UP so the caller can't observe a false "already ready".
+ * Restart the FluxOS process only - the `systemctl restart fluxos` case. Signals just
+ * FluxOS's main process; systemd starts it again (Restart=always). The inner dockerd
+ * and the running app containers are NOT affected - they keep running while FluxOS's
+ * in-memory state (e.g. controllerDesired) is wiped. This is distinct from
+ * restartNode (whole container -> dockerd + containers restart) and restartDockerd
+ * (dockerd only). Confirms FluxOS went DOWN and came back UP so the caller can't
+ * observe a false "already ready".
+ *
+ * The signal is SIGTERM, as systemd sends: FluxOS runs its stop path, announces
+ * RESTARTING on every held connection, and exits on its own. `signal: 'KILL'` is a
+ * crash - the process vanishes without a word and its jurors certify it - which is a
+ * different scenario, not a restart; name it when that is what a test means.
  */
-export async function restartFluxos(container, { apiPort = 16127, readyTimeoutMs = 120000, interval = 500 } = {}) {
-  // hard-kill only FluxOS (state wiped instantly)
-  await execInContainer(container, 'systemctl kill --kill-whom=main -s KILL fluxos');
+export async function restartFluxos(container, {
+  apiPort = 16127, readyTimeoutMs = 120000, interval = 500, signal = 'TERM',
+} = {}) {
+  await execInContainer(container, `systemctl kill --kill-whom=main -s ${signal} fluxos`);
   const probe = `curl -sf -o /dev/null http://127.0.0.1:${apiPort}/flux/version`;
   const start = Date.now();
   let sawDown = false;
