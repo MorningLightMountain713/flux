@@ -94,6 +94,24 @@ describe('node-down: the map of stops end to end', function () {
       });
   }
 
+  // The store refuses a certificate while an unrefuted record for the subject
+  // stands (nodeDownStore: already_standing), and a return refutes it only
+  // once the subject's announce is stored after the row. A scenario that
+  // stages the next death waits for the last record to be refuted on every
+  // survivor first, or the next certificate lands on none of them.
+  async function recordRefutedOnEverySurvivor(label) {
+    let states = [];
+    await waitFor(async () => {
+      states = await Promise.all(survivors.map(
+        (i) => dbClient(i + 1).getNodeDownRecordState(subjectOutpoint),
+      ));
+      return states.every((state) => state !== 'standing');
+    }, { timeout: 240000, interval: 5000, label })
+      .catch((error) => {
+        throw new Error(`${error.message}\n    record state per survivor: ${JSON.stringify(states)}`);
+      });
+  }
+
   async function subjectListedAt(index, listed, label) {
     let ips = [];
     await waitFor(async () => {
@@ -230,6 +248,7 @@ describe('node-down: the map of stops end to end', function () {
 
     await env.healPartition([SUBJECT], survivors);
     await subjectListedAt(WITNESS, true, 'the subject stands after its return');
+    await recordRefutedOnEverySurvivor('the return refutes the record on every survivor');
     ips = await locationsSeenBy(WITNESS);
     expect(ips.length, 'still two holders').to.equal(INSTANCES);
     expect(await subjectHoldsApp(), 'the subject kept its app').to.equal(true);
@@ -289,6 +308,7 @@ describe('node-down: the map of stops end to end', function () {
     });
     await installOnNodes(env, app, [SUBJECT], { timeout: 180000 }).catch(() => {});
     await subjectListedAt(WITNESS, true, 'the subject seated again');
+    await recordRefutedOnEverySurvivor('the reseat refutes the last record on every survivor');
     const before = (await rowsOnWitness()).length;
 
     // the machine "reboots": SHUTTING_DOWN on every held connection, then the
@@ -325,6 +345,7 @@ describe('node-down: the map of stops end to end', function () {
     await clearNodeStatus(subjectIp()).catch(() => {});
     await env.healPartition([SUBJECT], survivors).catch(() => {});
     await sleep(60_000);
+    await recordRefutedOnEverySurvivor('the last record is refuted on every survivor before the restarts');
     const before = (await rowsOnWitness()).length;
     for (let i = 0; i < RESTART_COURTESY; i += 1) {
       // eslint-disable-next-line no-await-in-loop
