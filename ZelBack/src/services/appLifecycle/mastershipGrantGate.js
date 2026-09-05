@@ -110,6 +110,7 @@ function timingSafe() {
     hardStopMs: grantClientCore.HARD_STOP_MS,
     lockDelayMs: config.fluxapps.quorumGrantLockDelayMs ?? 30_000,
     renewIntervalMs: config.fluxapps.quorumGrantRenewIntervalMs ?? 20_000,
+    askTimeoutMs: config.fluxapps.quorumGrantAskTimeoutMs ?? 5_000,
   });
   if (!outcome.safe && !timingWarned) {
     timingWarned = true;
