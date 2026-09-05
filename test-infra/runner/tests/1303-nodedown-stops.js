@@ -114,6 +114,26 @@ describe('node-down: the map of stops end to end', function () {
     await execInContainer(container, 'rm -f /run/systemd/shutdown/scheduled');
   }
 
+  // The harness starts discovery by API at fleet boot (discoveryAutostart is
+  // off in the shared config), so a restarted FluxOS process starts with no
+  // discovery and no ring reconciler: it never dials a duty again, and its
+  // jurors' backoffs leave it deaf. Production autostarts at every boot; a
+  // suite that restarts a node does the same by hand, after every restart.
+  async function startSubjectDiscovery() {
+    await waitFor(async () => {
+      try {
+        await env.startDiscovery([SUBJECT]);
+        return true;
+      } catch (_e) {
+        return false; // not serving auth yet
+      }
+    }, { timeout: 120000, interval: 2000, label: 'discovery restarted on the subject' });
+  }
+  async function restartSubjectFluxos(options) {
+    await restartFluxos(subjectContainer(), options);
+    await startSubjectDiscovery();
+  }
+
   before(async function () {
     this.timeout(900000);
     env = await createTestEnv({
@@ -168,7 +188,7 @@ describe('node-down: the map of stops end to end', function () {
   it('A. a FluxOS restart under apps is announced on the socket: no certificate, no replacement, the app never moves', async function () {
     this.timeout(400000);
     const before = (await rowsOnWitness()).length;
-    await restartFluxos(subjectContainer());
+    await restartSubjectFluxos();
     // past the RESTARTING grace and the next sweep: had a juror looked and
     // certified, the row would be here by now
     await sleep(RESTART_GRACE_MS + 90_000);
@@ -185,6 +205,7 @@ describe('node-down: the map of stops end to end', function () {
     await markMachineShutdown(subjectContainer());
     await env.restartNode(SUBJECT, { timeout: 30000 });
     await unmarkMachineShutdown(subjectContainer());
+    await startSubjectDiscovery();
     await sleep(120_000);
     expect((await rowsOnWitness()).length, 'no certification row for a clean reboot inside the grace').to.equal(before);
     await subjectListedAt(WITNESS, true, 'the subject stands in the location view after its reboot');
@@ -277,6 +298,9 @@ describe('node-down: the map of stops end to end', function () {
     await execInContainer(subjectContainer(), 'kill -TERM "$(cat /tmp/fluxos.pid 2>/dev/null)" 2>/dev/null || true');
     const droppedAt = Date.now();
     await unmarkMachineShutdown(subjectContainer());
+    // the respawned process boots into an unconfirmed daemon; production's
+    // autostart would still start its discovery, so the suite does too
+    await startSubjectDiscovery();
 
     // inside the grace: no certificate, the row stands
     await sleep(RESTART_GRACE_MS + 60_000);
@@ -304,14 +328,14 @@ describe('node-down: the map of stops end to end', function () {
     const before = (await rowsOnWitness()).length;
     for (let i = 0; i < RESTART_COURTESY; i += 1) {
       // eslint-disable-next-line no-await-in-loop
-      await restartFluxos(subjectContainer());
+      await restartSubjectFluxos();
       // the jurors re-hold the duty before the next close
       // eslint-disable-next-line no-await-in-loop
       await sleep(30_000);
     }
     expect((await rowsOnWitness()).length, 'twelve honoured restarts leave no row').to.equal(before);
 
-    await restartFluxos(subjectContainer());
+    await restartSubjectFluxos();
     await rowsOnEverySurvivor(before + 1, { timeout: 300000 });
     const rows = await rowsOnWitness();
     const newest = rows.reduce((a, b) => (new Date(a.broadcastedAt) > new Date(b.broadcastedAt) ? a : b));
