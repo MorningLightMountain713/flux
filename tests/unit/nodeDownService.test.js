@@ -431,7 +431,7 @@ describe('nodeDownService', () => {
           ip: DUTY_HOST, port: DUTY_PORT, direction: 'outbound', closeCode,
         });
         world.height += 1;
-        transport.peerManager.emit('peer:added', { ip: DUTY_HOST, port: DUTY_PORT, direction: 'outbound' });
+        transport.peerManager.emit('peer:answered', { ip: DUTY_HOST, port: DUTY_PORT, direction: 'outbound' });
         world.height += 1;
       }
       await tick();
@@ -564,6 +564,32 @@ describe('nodeDownService', () => {
     service.stop();
   });
 
+  it('a peering is a hold once the far end has spoken: the add retires nothing, the first frame does', async () => {
+    // A node refusing at the door completes the handshake and hangs up
+    // before it says anything; on the fleet every juror's redial to a
+    // listed-but-unconfirmed subject was a four-millisecond hold that
+    // retired the deferral, and the grace-end look never came.
+    const { NodeDownJuror } = require('../../ZelBack/src/services/utils/nodeDownJuror');
+    const noteHeld = sinon.spy(NodeDownJuror.prototype, 'noteHeld');
+    try {
+      const harness = makeHarness();
+      withDuty(harness);
+      const { service, transport } = harness;
+      service.start(transport);
+      await tick();
+      transport.peerManager.emit('peer:added', { ip: '10.0.0.2', port: '16127', direction: 'outbound' });
+      await tick();
+      expect(noteHeld.callCount, 'the handshake is not a hold').to.equal(0);
+      transport.peerManager.emit('peer:answered', { ip: '10.0.0.2', port: '16127', direction: 'outbound' });
+      await tick();
+      expect(noteHeld.callCount, 'the first frame is').to.equal(1);
+      service.stop();
+      expect(transport.peerManager.listenerCount('peer:answered')).to.equal(0);
+    } finally {
+      noteHeld.restore();
+    }
+  });
+
   it('a certificate about this node arriving while the return is pending runs no check: the return check reads the whole store', async () => {
     // The reconnect pull delivered C's refuted certificate ahead of D's; the
     // check ran on the first, found the rows still placing the node, released
@@ -683,6 +709,8 @@ describe('nodeDownService — the drop carries its reason, and the probe is an e
   }
   function held(transport) {
     transport.peerManager.emit('peer:added', { ip: DUTY_HOST, port: DUTY_PORT, direction: 'outbound' });
+    // a held duty is one that has spoken: the first frame notes the hold
+    transport.peerManager.emit('peer:answered', { ip: DUTY_HOST, port: DUTY_PORT, direction: 'outbound' });
   }
 
   afterEach(() => sinon.restore());

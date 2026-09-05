@@ -99,6 +99,11 @@ class FluxPeerSocket {
     this.lastPongTime = null;
     this.missedPongs = 0;
     this.maxMissedPongs = config.peers.wsMaxMissedPongs ?? 3;
+    // The far end has sent a frame: a pong or a message. A handshake alone
+    // is not a return — a node refusing at the door completes it and hangs
+    // up before it says anything — so the jury's hold is noted on the first
+    // frame, not on the add.
+    this.answered = false;
     this.connectedAt = Date.now();
     this.nakCount = 0;
     this.nakWindowStart = Date.now();
@@ -155,7 +160,15 @@ class FluxPeerSocket {
     }
   }
 
+  /** The first frame from the far end, said once: the manager tells the jury. */
+  #noteAnswered() {
+    if (this.answered) return;
+    this.answered = true;
+    this.manager?.emit?.('peer:answered', { ip: this.ip, port: this.port, direction: this.direction });
+  }
+
   onPongReceived() {
+    this.#noteAnswered();
     const wasUnanswered = this.missedPongs !== 0;
     this.missedPongs = 0;
     this.lastPongTime = Date.now();
@@ -337,6 +350,7 @@ class FluxPeerSocket {
 
     ws.onmessage = (evt) => {
       if (!evt) return;
+      this.#noteAnswered();
 
       const rateOK = rateLimit.lruRateLimit(`${this.ip}:${this.port}`, 120);
       if (!rateOK) return;

@@ -33,6 +33,7 @@ let localSocketAddress = null;
 let wasUnreachable = false;
 let dropHandler = null;
 let addHandler = null;
+let answerHandler = null;
 // A return waiting for the store to catch up before it asks its question.
 let returnSyncHandler = null;
 
@@ -417,15 +418,22 @@ function onPeerRemoved({ ip, port, closeCode }) {
   if (!honoured && duties.has(outpoint)) ladder.noteDrop(outpoint, duties.size);
 }
 
-function onPeerAdded({ ip, port } = {}) {
-  if (ladder && ip && port) {
-    refreshIndex();
-    const outpoint = index.bySocket.get(`${ip}:${port}`);
-    if (outpoint && dutyOutpoints().has(outpoint)) {
-      ladder.noteReturn(outpoint);
-      juror.noteHeld(outpoint);
-    }
+// A peering counts as a hold once the far end has spoken. The add is the
+// handshake, and a node refusing at the door completes it and hangs up
+// before it says anything: every juror's redial to a listed-but-unconfirmed
+// node was a four-millisecond hold that retired its deferral and its
+// standing answer, and the grace-end look never came.
+function onPeerAnswered({ ip, port } = {}) {
+  if (!ladder || !ip || !port) return;
+  refreshIndex();
+  const outpoint = index.bySocket.get(`${ip}:${port}`);
+  if (outpoint && dutyOutpoints().has(outpoint)) {
+    ladder.noteReturn(outpoint);
+    juror.noteHeld(outpoint);
   }
+}
+
+function onPeerAdded() {
   if (!wasUnreachable) return;
   wasUnreachable = false;
   // Back from unreachability without a restart: the grant plane re-fetches
@@ -527,8 +535,10 @@ function start(injectedTransport) {
 
   dropHandler = (payload) => onPeerRemoved(payload);
   addHandler = (payload) => onPeerAdded(payload);
+  answerHandler = (payload) => onPeerAnswered(payload);
   transport.peerManager.on('peer:removed', dropHandler);
   transport.peerManager.on('peer:added', addHandler);
+  transport.peerManager.on('peer:answered', answerHandler);
   transport.peerManager.setInboundGate(inboundGate);
 
   primeLocalAddress().then(() => reconciler.start());
@@ -538,6 +548,7 @@ function start(injectedTransport) {
 function stop() {
   if (transport && dropHandler) transport.peerManager.off('peer:removed', dropHandler);
   if (transport && addHandler) transport.peerManager.off('peer:added', addHandler);
+  if (transport && answerHandler) transport.peerManager.off('peer:answered', answerHandler);
   if (returnSyncHandler) {
     appSyncEvents.off(SYNC_EVENTS.RECONNECT_SYNC_COMPLETE, returnSyncHandler);
     returnSyncHandler = null;
