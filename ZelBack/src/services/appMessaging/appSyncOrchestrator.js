@@ -123,10 +123,12 @@ class AppSyncOrchestrator {
   #syncPeerLostHandler = null;
   #syncPeersAvailableHandler = null;
   #peerReestablishedHandler = null;
-  // Peers with a scoped reconnect pull in flight: their completion is the
-  // pull's, never the round's - a scoped answer must not stand in for a full
-  // one. A round that asks such a peer reclaims it (round membership wins).
-  #reconnectPulls = new Set();
+  // Peers with a scoped reconnect pull in flight, each with the loss its pull
+  // covers: their completion is the pull's, never the round's - a scoped
+  // answer must not stand in for a full one. A round that asks such a peer
+  // reclaims it (round membership wins). A pull whose socket dies unanswered
+  // hands its loss back to the credits.
+  #reconnectPulls = new Map();
   // Reconnect credits not yet spent: key -> earliest lostAtMs. The
   // re-establishment event is one-shot but the credit it grants is DURABLE
   // until a pull is sent or a round covers the peer at since=0 - a transient
@@ -310,6 +312,17 @@ class AppSyncOrchestrator {
    * @param {string} key ip:port of the lost peer
    */
   #onSyncPeerLost(key) {
+    // A scoped pull that dies with its socket was never answered: its loss
+    // goes back to the credits, so the next re-establishment pulls from the
+    // earliest gap and not from the connect time of a socket the far end
+    // refused (a peer at its inbound cap closes every accept within a
+    // second, and each accept is a re-establishment).
+    const lostAtMs = this.#reconnectPulls.get(key);
+    if (lostAtMs !== undefined) {
+      this.#reconnectPulls.delete(key);
+      const existing = this.#pendingReconnectPulls.get(key);
+      this.#pendingReconnectPulls.set(key, existing === undefined ? lostAtMs : Math.min(existing, lostAtMs));
+    }
     if (this.#stateSyncComplete) return;
     const progress = this.#peerProgress.get(key);
     if (!progress || progress.failed) return;
@@ -547,7 +560,7 @@ class AppSyncOrchestrator {
       const msg = peerCodec.buildSyncSignatureMessage(peerCodec.MSG_TYPE.REQUEST_APP_RUNNING, sinceTs, requestTs);
       const sig = verificationHelper.signMessage(msg, privkey);
       this.#pendingReconnectPulls.delete(key);
-      this.#reconnectPulls.add(key);
+      this.#reconnectPulls.set(key, lostAtMs);
       this.#markSyncRequested(key);
       this.#sendRequests([peer], 'apprunning (reconnect)', peerCodec.encodeRequestAppRunning(sinceTs, requestTs, pubkey, sig));
       fluxEventBus.publish('ephemeralSync:reconnectRequested', { peer: key, sinceTimestamp: sinceTs });
