@@ -176,7 +176,9 @@ describe('nodeDownStore', () => {
       const result = await store.handleNodeDownEvent({
         message: { certificate: world.certificate(['j1', 'j2', 'j3', 'j4']), broadcastedAt: Date.now() },
       });
-      expect(result).to.deep.equal({ accepted: true, rebroadcast: true, reason: 'stored' });
+      expect(result).to.deep.equal({
+        accepted: true, rebroadcast: true, reason: 'stored', superseded: false,
+      });
 
       const row = await collection.findOne({ type: 'nodedown', subject: S });
       expect(row.dedupKey).to.equal(`nodedown:${S}:1000`);
@@ -243,6 +245,29 @@ describe('nodeDownStore', () => {
       expect(await collection.countDocuments({ type: 'nodedown', subject: S })).to.equal(2);
       const standing = await store.standingCertificateFor(S);
       expect(standing.height).to.equal(1005);
+    });
+
+    it('a certificate no newer than the record held is stored for the count and marked superseded; a newer death is news', async () => {
+      const at = Date.now() - 120_000;
+      await store.handleNodeDownEvent({
+        message: { certificate: world.certificate(['j1', 'j2', 'j3', 'j4']), broadcastedAt: at },
+      });
+      await collection.insertOne({
+        type: 'apprunning', outpoint: S, ip: '10.9.0.20:16127', dedupKey: 'v2', broadcastedAt: new Date(at + 10_000), expireAt: new Date(Date.now() + 60_000), data: {},
+      });
+      // the same record again, replayed over a reconnect pull
+      const replay = await store.handleNodeDownEvent({
+        message: { certificate: world.certificate(['j1', 'j2', 'j3', 'j4']), broadcastedAt: at },
+      });
+      expect(replay.accepted).to.equal(true);
+      expect(replay.superseded).to.equal(true);
+
+      world.height = 1005;
+      const second = await store.handleNodeDownEvent({
+        message: { certificate: world.certificate(['j2', 'j3', 'j4', 'j5'], { height: 1005 }), broadcastedAt: at + 60_000 },
+      });
+      expect(second.accepted).to.equal(true);
+      expect(second.superseded).to.equal(false);
     });
 
     it('verifyRefutation is the $gte rule exactly', () => {
