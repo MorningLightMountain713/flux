@@ -222,6 +222,15 @@ module.exports = {
     // the ordering holds and a clean shutdown still gets a grace the running
     // expiry does not pre-empt. coupled-knobs.js asserts both ends.
     sigtermExpiryS: 30,
+    // The node-down graces at the block cadence's factor: the stub ticks a
+    // block every 5 s against production's 30 s, and the graces are written
+    // in blocks (the off-list grace is two blocks of fork plus a capped
+    // fetch; the courtesy and verdict windows are counted in blocks), so
+    // they carry that factor of six. The row a certificate negates must
+    // outlive the grace: locationTtlS above stays well past nodeDownGraceS.
+    nodeDownGraceS: 70,
+    restartGraceS: 20,
+    offListGraceS: 20,
     // NOT compressed, and not compressible by a ratio. What this must outlive is
     // an install, and the harness does not compress installs - they are real
     // image pulls and real container starts. The suites' own budgets say so:
