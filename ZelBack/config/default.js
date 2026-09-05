@@ -563,6 +563,15 @@ module.exports = {
     spawnDelayMs: 0,
     removalSpacingMs: 60000,
     locationTtlS: 7500,
+    // The node-down graces, in seconds. Every node of a fleet must carry the
+    // same values: a node whose grace differed would negate a certified
+    // node's rows at a different instant and replace apps the rest of the
+    // fleet still believes placed. They are config so a whole fleet can be
+    // scaled together (the harness runs them at the block cadence's factor),
+    // never for one node.
+    nodeDownGraceS: 420,
+    restartGraceS: 120,
+    offListGraceS: 120,
     installingTtlS: 900,
     installingRenewalS: 720, // in-flight install claim renewal cadence; undercuts installingTtlS with gossip slack
     installErrorTtlS: 86400,

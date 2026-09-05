@@ -104,14 +104,15 @@ const INSTALLING_ERRORS_EXPIRY_MS = config.fluxapps.installErrorTtlS * 1000;
 // The grace every stop gets, announced or not. A juror that saw a
 // SHUTTING_DOWN close waits this long before it looks; the derivation
 // negates a certified node's rows this long after the certificate's since;
-// a booting node compares its downtime with it. One constant, in code and
-// not in config, because every node must negate the same rows at the same
-// instant — a node whose value differed would replace apps the rest of the
-// fleet still believes placed.
-const NODE_DOWN_GRACE_MS = 420 * 1000;
+// a booting node compares its downtime with it. One value for a whole
+// fleet, because every node must negate the same rows at the same instant
+// — a node whose value differed would replace apps the rest of the fleet
+// still believes placed. Production's 420 s is the default; a harness
+// fleet scales it for every node together, at its block cadence's factor.
+const NODE_DOWN_GRACE_MS = (config.fluxapps.nodeDownGraceS ?? 420) * 1000;
 // A FluxOS restart is back in seconds; a juror that saw a RESTARTING close
 // waits only this long.
-const RESTART_GRACE_MS = 120 * 1000;
+const RESTART_GRACE_MS = (config.fluxapps.restartGraceS ?? 120) * 1000;
 
 // Hash sync constants (blocks, at 30s per block)
 const HASH_EXPIRY_BLOCKS = 1051200; // ~1 year — permanently flag unresolvable hashes
