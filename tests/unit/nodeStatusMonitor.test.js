@@ -16,15 +16,6 @@ describe('nodeStatusMonitor tests', () => {
     };
 
     nodeStatusMonitor = proxyquire('../../ZelBack/src/services/appMonitoring/nodeStatusMonitor', {
-      axios: {
-        get: sinon.stub().resolves({ data: { status: 'success' } }),
-        CancelToken: {
-          source: sinon.stub().returns({
-            token: 'token',
-            cancel: sinon.stub(),
-          }),
-        },
-      },
       config: {
         database: {
           appsglobal: {
@@ -39,9 +30,6 @@ describe('nodeStatusMonitor tests', () => {
       },
       '../nodeDosState': {
         isNodeDos: sinon.stub().returns(false),
-      },
-      '../fluxCommunicationUtils': {
-        socketAddressInFluxList: sinon.stub().resolves(true),
       },
       '../../lib/log': logStub,
     });

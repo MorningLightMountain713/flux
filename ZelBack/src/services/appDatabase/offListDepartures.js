@@ -7,20 +7,31 @@ const { normalizeSocketAddress } = require('../utils/socketAddressUtils');
 // node-down design): rows of an address no longer on the deterministic node
 // list are negated by local derivation. Every node holds the list and every
 // copy converges from chain, so the negation converges fleet-wide with no
-// traffic — and a node whose daemon says "not confirmed" is off the list
-// everywhere within a block or two, which closes the two hours the fleet
-// would otherwise believe its apps ran (NODE_DOWN_SCENARIOS.md §3 H).
+// traffic. This replaced the nodeStatusMonitor eviction loop — a twenty-minute
+// tick, an HTTP probe per off-list address, and an unsigned `evicted` event
+// relayed by sync that nobody could verify — which is deleted.
 //
-// The grace covers only the OBSERVER's own staleness — the 30 s fetch
-// throttle, a block of daemon lag, one errored fetch: an address gone for
-// four consecutive refreshes has left. There is no subject-side case: a node
-// that leaves the list has genuinely left, and a negation is a view-time
-// filter, so a false one reverses itself the moment the observer's list
-// catches up. The pathology a longer grace would insure against is the
-// observer's own daemon lying — a mid-reindex or a truncated list making a
-// chunk of the network vanish at once — and that is caught by its own
-// guard: a refresh that removes more than a sanity fraction of the known
-// addresses records nothing and the known list holds.
+// Each node's list is push-driven: a block event triggers the fetch, rate-
+// capped at 30 s, and a skipped fetch is caught by the next block. A stale
+// list can only DELAY a negation, never invent one. A false departure needs
+// the observer's own daemon to answer with a list missing a node the chain
+// still has — a short fork, or a partial fetch small enough to pass the
+// mass-departure guard — and such a glitch lasts a block or two and corrects
+// itself. The grace exists so that a glitch of that length cannot negate a
+// live node's rows on this observer and hand its spawner a wrong count:
+//   grace > 2 blocks of fork or skew + 1 capped fetch = 2 × 30 s + 30 s = 90 s
+// at 30 s blocks; 120 s is the first round figure above it, four blocks.
+// Nothing needs the rows gone sooner: the fleet refuses a delisted node's
+// messages the moment it leaves the list, and the only effect of its rows
+// lingering is that replacements are placed at two minutes rather than one.
+// There is no subject-side case: a node that leaves the list has genuinely
+// left, and a negation is a view-time filter, so a false one reverses itself
+// the moment the observer's list catches up. The pathology a longer grace
+// would insure against is the observer's own daemon lying wholesale — a
+// mid-reindex or a truncated list making a chunk of the network vanish at
+// once — and that is caught by its own guard: a refresh that removes more
+// than a sanity fraction of the known addresses records nothing and the
+// known list holds.
 //
 // A departure past the grace negates the rows the node announced BEFORE it
 // left, and keeps negating them if the node comes back: a node that leaves
