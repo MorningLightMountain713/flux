@@ -318,6 +318,25 @@ describe('nodeDownJuror — the drop carries its reason (R2), and a re-held duty
     expect(world.probes).to.deep.equal([]);
   });
 
+  it('a wake-up while a deferral pends is declined: no probe and no verdict until the grace end, whatever another juror saw', async () => {
+    // One juror that lost the close frame probes and pushes; its verdict
+    // wakes the rest. A juror holding the code stands by it — R2 — so the
+    // one bad view cannot pull the jury into certifying an announced stop.
+    const world = makeWorld();
+    world.juror.noteDrop(S, 'shutdown');
+    await tick();
+    const result = world.juror.onVerdictArrived(world.verdictFrom('j2:0'));
+    await tick();
+    expect(result.piled, 'the verdict is piled all the same').to.equal(true);
+    expect(world.probes, 'but it wakes no look inside the grace').to.deep.equal([]);
+    expect(world.pushes).to.deep.equal([]);
+
+    world.nowMs += NODE_DOWN_GRACE_MS;
+    world.juror.sweep();
+    await tick();
+    expect(world.probes, 'the grace end looks once').to.deep.equal([SUBJECT_ADDRESS]);
+  });
+
   it('an unannounced drop while a deferral pends is looked at now: the deferral does not absorb a death', async () => {
     const world = makeWorld();
     world.juror.noteDrop(S, 'shutdown');
