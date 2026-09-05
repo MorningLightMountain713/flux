@@ -785,12 +785,15 @@ module.exports = {
     // to a lifetime with slack, so the pair cannot drift. There is no separate
     // announce interval to keep in step with this number.
     locationTtlS: 7500,
-    // Grace after a node announces its own shutdown, before peers drop its
-    // locations. MUST stay below locationTtlS: appStartupManager expires on
-    // `(cleanShutdown && downtime > sigterm) || downtime > running`, so a value
-    // above the running expiry makes this window unreachable and a clean
-    // shutdown gets no grace at all.
-    sigtermExpiryS: 420,
+    // The node-down graces, in seconds. Every node of a fleet must carry the
+    // same values: a node whose grace differed would negate a certified
+    // node's rows at a different instant and replace apps the rest of the
+    // fleet still believes placed. They are config so a whole fleet can be
+    // scaled together (the harness runs them at the block cadence's factor),
+    // never for one node.
+    nodeDownGraceS: 420,
+    restartGraceS: 120,
+    offListGraceS: 120,
     installingTtlS: 900, // an in-progress install: 15 minutes
     // Renewal cadence for an in-flight install's fluxappinstalling claim. MUST
     // undercut installingTtlS with slack for gossip propagation, or a live install
