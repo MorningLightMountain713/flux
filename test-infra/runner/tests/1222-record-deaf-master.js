@@ -283,16 +283,28 @@ describe('record-deaf master: the cells the re-roll seats carry the record to th
       expect(await getAppContainerId(env.clients[master].container, name, name),
         'the container is untouched while the master is deaf').to.equal(container);
 
-      // 4. The heal. The courier's next attempt reaches the master: it learns
-      //    the generation from the courier — its own cells still do not know
-      //    it, and it never polled a witness — and stays held under its old
-      //    world until the lift.
+      // 4. The heal — packets only, no re-dial. A peer connection that is
+      //    lost and returns makes the sync orchestrator pull the running-state
+      //    events published while it was gone (appSyncOrchestrator
+      //    #drainReconnectPulls, the ephemeralSync:reconnectRequested event),
+      //    and that sync carries generation records: a re-dialled deaf side
+      //    learns by the product's own backstop, not by the courier. The deaf
+      //    world this suite constructs is a broadcast MISSED with no lost
+      //    peer returning, so the sockets the sever cut stay cut and the
+      //    premise is asserted below from the pull's own event. The courier's
+      //    delivery is a direct HTTP call and needs no peering. The master
+      //    learns the generation from the courier — its own cells still do
+      //    not know it, and it never polled a witness — and stays held under
+      //    its old world until the lift.
       const beforeHeal = env.clients.map((c) => c.getLastEventId());
       await env.healPartition(deafSide, farSide);
       healed = true;
-      await env.startDiscovery();
       await env.clients[master].waitForEvent('quorumGrant:generationRecord',
         (d) => d.appName === name && d.role === 'master' && d.generation === 1, 120000, { afterId: beforeHeal[master] });
+      const pullsSince = (i, afterId) => env.clients[i].getEventBuffer()
+        .filter((e) => e.event === 'ephemeralSync:reconnectRequested' && e.id > afterId);
+      expect(deafSide.filter((i) => pullsSince(i, beforeHeal[i]).length).map(label),
+        'no reconnect pull ran on the deaf side: the premise of a missed broadcast holds').to.deep.equal([]);
       await waitFor(() => couriers.some((i) => env.clients[i].getEventBuffer().some((e) => e.event === 'quorumGrant:generationCarried'
         && e.id > beforeHeal[i] && e.data?.key === key() && e.data?.generation === 1 && e.data?.remaining === 0)),
       { timeout: 120000, interval: 5000, label: 'a courier cell reports every instance acknowledged' });
