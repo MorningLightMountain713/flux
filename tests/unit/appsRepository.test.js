@@ -444,56 +444,6 @@ describe('appsRepository', () => {
     });
   });
 
-  describe('listRunningAddresses', () => {
-    // The tail groups on the address, so the aggregate yields { _id: <address> }.
-    it('returns one entry per address the derivation reports as running', async () => {
-      runningCounts = [{ _id: '1.2.3.4:16127' }, { _id: '5.6.7.8:16127' }];
-      const result = await appsRepository.listRunningAddresses();
-      expect(result).to.deep.equal(['1.2.3.4:16127', '5.6.7.8:16127']);
-    });
-
-    it('returns nothing when the derivation reports nothing running', async () => {
-      runningCounts = [];
-      expect(await appsRepository.listRunningAddresses()).to.deep.equal([]);
-    });
-
-    it('reports a moved node at the address it moved TO', async () => {
-      // One live move old -> new, where the node has NOT yet re-announced at the new
-      // address: resolveAddressMoves translates rather than supersedes.
-      const now = Date.now();
-      eventCollection.find.returns({
-        toArray: async () => [
-          { ip: 'old:16127', broadcastedAt: new Date(now), data: { newIP: 'new:16127' } },
-        ],
-      });
-      moveStamps = [{ _id: 'old:16127', latest: new Date(now - 1000) }];
-      runningCounts = [{ _id: 'old:16127' }];
-
-      const result = await appsRepository.listRunningAddresses();
-      expect(result).to.deep.equal(['new:16127']);
-    });
-
-    it('deduplicates when a translation collapses two rows onto one address', async () => {
-      // The node announced at BOTH addresses, so the derivation yields two rows and
-      // translating the pre-move one onto the new address would otherwise repeat it.
-      const now = Date.now();
-      eventCollection.find.returns({
-        toArray: async () => [
-          { ip: 'old:16127', broadcastedAt: new Date(now), data: { newIP: 'new:16127' } },
-        ],
-      });
-      moveStamps = [
-        { _id: 'old:16127', latest: new Date(now - 1000) },
-        // not newer than the pre-move announcement, so this translates, not supersedes
-        { _id: 'new:16127', latest: new Date(now - 2000) },
-      ];
-      runningCounts = [{ _id: 'old:16127' }, { _id: 'new:16127' }];
-
-      const result = await appsRepository.listRunningAddresses();
-      expect(result).to.deep.equal(['new:16127']);
-    });
-  });
-
   describe('getAppMessage', () => {
     it('returns null when the hash is not found', async () => {
       dbHelperStub.findOneInDatabase.resolves(null);

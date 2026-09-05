@@ -1,18 +1,21 @@
 'use strict';
 
-// Node Status Monitor - Monitors node status and uninstalls apps if node is not confirmed
-const axios = require('axios');
+// Node Status Monitor - removes every local app when this node is no longer a
+// member: its daemon says it is not confirmed, its daemon has gone stale, or it
+// is in DOS state. Membership is a chain fact every node reads the same way, so
+// the node's own reading is the authority and nothing is corroborated.
+//
+// The network's view of OTHER nodes is not this module's business. A listed
+// node that dies is certified by its jurors (nodeDownService); an address that
+// leaves the node list is negated by every node's own derivation
+// (offListDepartures). Neither needs a probe or an event from here.
 const config = require('config');
 const serviceHelper = require('../serviceHelper');
 const nodeDosState = require('../nodeDosState');
-const fluxCommunicationUtils = require('../fluxCommunicationUtils');
-const messageStore = require('../appMessaging/messageStore');
 const nodeConfirmationService = require('../nodeConfirmationService');
 const log = require('../../lib/log');
-const { extractIp, extractPort } = require('../utils/socketAddressUtils');
 const appUninstaller = require('../appLifecycle/appUninstaller');
 const appQueryService = require('../appQuery/appQueryService');
-const appsRepository = require('../appDatabase/appsRepository');
 
 let removalInProgress = false;
 
@@ -75,62 +78,6 @@ async function monitorNodeStatus() {
       await removeAllAppsLocally( 'node not confirmed');
       await serviceHelper.delay(config.fluxapps.nodeMonitorConfirmationLossDelayMs ?? 1200000);
       return monitorNodeStatus();
-    } if (nodeConfirmationService.isConfirmed()) {
-      log.info('monitorNodeStatus - Node is Confirmed');
-      // lets remove from locations when nodes are no longer confirmed
-      const appslocations = await appsRepository.listRunningAddresses();
-      const appsLocationCount = appslocations.length;
-      log.info(`monitorNodeStatus - Found ${appsLocationCount} distinct IP's on appslocations`);
-
-      const appsLocationsNotOnNodelist = [];
-
-      const iterChunk = async (chunk) => {
-        const promises = chunk.map(async (location) => {
-          const found = await fluxCommunicationUtils.socketAddressInFluxList(location);
-          if (!found) appsLocationsNotOnNodelist.push(location);
-        });
-        await Promise.all(promises);
-      };
-
-      const chunkSize = 250;
-      let startIndex = 0;
-      let endIndex = Math.min(chunkSize, appsLocationCount);
-
-      while (startIndex < appsLocationCount) {
-        const chunk = appslocations.slice(startIndex, endIndex);
-        // eslint-disable-next-line no-await-in-loop
-        await iterChunk(chunk);
-
-        startIndex = endIndex;
-        endIndex += chunk.length;
-      }
-
-      log.info(`monitorNodeStatus - Found ${appsLocationsNotOnNodelist.length} IP(s) not present on deterministic node list`);
-      // eslint-disable-next-line no-restricted-syntax
-      for (const location of appsLocationsNotOnNodelist) {
-        log.info(`monitorNodeStatus - Checking IP ${location}.`);
-        const ip = extractIp(location);
-        const port = extractPort(location);
-        const { CancelToken } = axios;
-        const source = CancelToken.source();
-        let isResolved = false;
-        const timeout = config.fluxapps.nodeMonitorCheckTimeoutMs ?? 10000;
-        setTimeout(() => {
-          if (!isResolved) {
-            source.cancel('Operation canceled by the user.');
-          }
-        }, timeout * 2);
-        // eslint-disable-next-line no-await-in-loop
-        const response = await axios.get(`http://${ip}:${port}/daemon/getfluxnodestatus`, { timeout, cancelToken: source.token }).catch(() => null);
-        isResolved = true;
-        if (response && response.data && response.data.status === 'success' && response.data.data.status === 'CONFIRMED') {
-          log.info(`monitorNodeStatus - IP ${location} is available and confirmed, awaiting for a new confirmation transaction`);
-        } else {
-          log.info(`monitorNodeStatus - Evicting IP ${location}, it is not on the node list and did not answer`);
-          // eslint-disable-next-line no-await-in-loop
-          await messageStore.storeAppStateEvent(messageStore.APP_STATE_EVENT_TYPES.EVICTED, { ip: location });
-        }
-      }
     }
     await serviceHelper.delay(config.fluxapps.nodeMonitorIntervalMs ?? 1200000);
     monitorNodeStatus();

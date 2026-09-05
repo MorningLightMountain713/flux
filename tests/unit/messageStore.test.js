@@ -123,7 +123,6 @@ describe('messageStore tests', () => {
         RUNNING_EXPIRY_MS: 125 * 60 * 1000,
         INSTALLING_EXPIRY_MS: 15 * 60 * 1000,
         INSTALLING_ERRORS_EXPIRY_MS: 24 * 60 * 60 * 1000,
-        EVICTED_EXPIRY_MS: 125 * 60 * 1000,
         CLOCK_SKEW_ALLOWANCE_MS: STUB_CLOCK_SKEW_ALLOWANCE_MS,
       },
       ...overrides,
@@ -1610,16 +1609,6 @@ describe('messageStore tests', () => {
       const filter = collectionStub.updateOne.firstCall.args[0];
       expect(filter.type).to.equal('appremoved');
       expect(filter.dedupKey).to.equal('appremoved:myapp');
-    });
-
-    it('should store evicted event with createdAt', async () => {
-      await messageStore.storeAppStateEvent(messageStore.APP_STATE_EVENT_TYPES.EVICTED, { ip: '1.2.3.4' });
-      expect(collectionStub.updateOne.calledOnce).to.be.true;
-      const filter = collectionStub.updateOne.firstCall.args[0];
-      expect(filter.type).to.equal('evicted');
-      expect(filter.dedupKey).to.equal('evicted');
-      const update = collectionStub.updateOne.firstCall.args[1];
-      expect(update.$set.createdAt).to.be.instanceOf(Date);
     });
 
     const apprunningPayload = (broadcastedAt) => ({

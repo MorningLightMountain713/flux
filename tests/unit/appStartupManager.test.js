@@ -115,7 +115,7 @@ describe('appStartupManager tests', () => {
   });
 
   // The derivation only returns LIVE claims - an announcement past its TTL, a node
-  // past its shutdown grace, and an evicted node are all excluded by the query - so a
+  // past its shutdown grace, and an address off the node list are all excluded by the query - so a
   // row existing is the claim being valid. There is no expiry field to re-check.
   describe('reconcileAppsOnBoot - boot orphan sweep (manageCollectorLifecycle)', () => {
     beforeEach(() => {

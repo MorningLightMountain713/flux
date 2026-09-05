@@ -1207,16 +1207,6 @@ describe('registryManager tests', () => {
       };
     }
 
-    function makeEvictedEvent(ip, createdAt) {
-      return {
-        ip,
-        type: 'evicted',
-        dedupKey: 'evicted',
-        createdAt: new Date(createdAt),
-        expireAt: new Date(createdAt + 125 * 60 * 1000),
-      };
-    }
-
     function makeIPChangedEvent(oldIP, newIP, broadcastedAt) {
       return {
         ip: oldIP,
@@ -1275,37 +1265,6 @@ describe('registryManager tests', () => {
 
       const result = await appsRepository.appLocationFromEvents();
       expect(result.map((row) => row.name).sort()).to.deep.equal(['AppA', 'AppB']);
-    });
-
-    it('should exclude apps immediately when evicted (no grace period)', async () => {
-      await database.collection(eventsCollection).insertMany([
-        makeV2Event('1.2.3.4', [{ name: 'AppA', hash: 'h1' }], now - 60000),
-        makeEvictedEvent('1.2.3.4', now),
-      ]);
-
-      const result = await appsRepository.appLocationFromEvents();
-      expect(result).to.be.an('array').with.lengthOf(0);
-    });
-
-    it('should exclude apps when evicted and expired', async () => {
-      const evictedTime = now - 8 * 60 * 1000;
-      await database.collection(eventsCollection).insertMany([
-        makeV2Event('1.2.3.4', [{ name: 'AppA', hash: 'h1' }], now - 10 * 60 * 1000),
-        makeEvictedEvent('1.2.3.4', evictedTime),
-      ]);
-
-      const result = await appsRepository.appLocationFromEvents();
-      expect(result).to.be.an('array').with.lengthOf(0);
-    });
-
-    it('should keep apps when broadcast is newer than eviction', async () => {
-      await database.collection(eventsCollection).insertMany([
-        makeEvictedEvent('1.2.3.4', now - 60000),
-        makeV2Event('1.2.3.4', [{ name: 'AppA', hash: 'h1' }], now),
-      ]);
-
-      const result = await appsRepository.appLocationFromEvents();
-      expect(result).to.be.an('array').with.lengthOf(1);
     });
 
     it('should remap IP when ipchanged event is newer than broadcast', async () => {

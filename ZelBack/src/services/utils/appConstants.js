@@ -112,7 +112,6 @@ const NODE_DOWN_GRACE_MS = 420 * 1000;
 // A FluxOS restart is back in seconds; a juror that saw a RESTARTING close
 // waits only this long.
 const RESTART_GRACE_MS = 120 * 1000;
-const EVICTED_EXPIRY_MS = RUNNING_EXPIRY_MS;
 
 // Hash sync constants (blocks, at 30s per block)
 const HASH_EXPIRY_BLOCKS = 1051200; // ~1 year — permanently flag unresolvable hashes
@@ -162,7 +161,6 @@ module.exports = {
   INSTALLING_ERRORS_EXPIRY_MS,
   NODE_DOWN_GRACE_MS,
   RESTART_GRACE_MS,
-  EVICTED_EXPIRY_MS,
 
   // Hash sync
   HASH_EXPIRY_BLOCKS,

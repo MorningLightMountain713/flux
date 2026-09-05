@@ -1314,7 +1314,7 @@ function buildAppLocationPipeline({
   const base = {
     $or: [
       { type: { $in: ['apprunning', 'appremoved'] }, expireAt: { $gt: now } },
-      { type: { $in: ['evicted', 'nodedown'] } },
+      { type: 'nodedown' },
     ],
   };
   if (ip) base.ip = ip;
@@ -1369,8 +1369,8 @@ function buildAppLocationPipeline({
           // run from the drop the jury saw: `since` on the record, the same
           // constant every node applies, so the fleet negates one node's rows
           // at one instant.
-          { $match: { type: { $in: ['evicted', 'nodedown'] } } },
-          { $addFields: { _eventAt: { $ifNull: ['$broadcastedAt', '$createdAt'] } } },
+          { $match: { type: 'nodedown' } },
+          { $addFields: { _eventAt: '$broadcastedAt' } },
           { $sort: { _eventAt: -1 } },
           {
             $group: {
@@ -1483,14 +1483,6 @@ const RUNNING_COUNT_TAIL = [
   { $group: { _id: '$_v2Filtered.apps.name', count: { $sum: 1 } } },
 ];
 
-// Which addresses currently run anything. Same rules again, grouping on the address
-// instead of the app - so an address that only ever appears on announcements the
-// shared stages exclude (shut down, or every app since removed) is not reported as
-// running something.
-const RUNNING_ADDRESS_TAIL = [
-  { $group: { _id: '$_v2Filtered.ip' } },
-];
-
 /**
  * Which pre-move announcements are dead, and which addresses still need translating.
  *
@@ -1601,35 +1593,6 @@ async function countRunningByApp() {
     ...RUNNING_COUNT_TAIL,
   ]).toArray();
   return new Map(counts.map((row) => [String(row._id).toLowerCase(), row.count]));
-}
-
-/**
- * Every address the network currently believes is running at least one app.
- *
- * The same derivation as appLocationFromEvents and countRunningByApp, so the three
- * cannot disagree about what counts as running. Address moves need the full
- * treatment here, not just the supersede exclusion the count uses: the caller acts
- * ON the address (it probes it, and evicts what does not answer), so a node that
- * has moved must be reported at the address it moved TO.
- *
- * @returns {Promise<Array<string>>} socket addresses, deduplicated
- */
-async function listRunningAddresses() {
-  const dbopen = dbHelper.databaseConnection();
-  const database = dbopen.db(config.database.appsglobal.database);
-  const collection = database.collection(globalAppStateEvents);
-  const now = new Date();
-
-  const { supersededIps, translate } = await resolveAddressMoves(collection, now);
-  const { absent: offListIps, returned: offListReturned } = departures.denySet(now.getTime());
-  const rows = await collection.aggregate([
-    ...buildAppLocationPipeline({ now, supersededIps, offListIps, offListReturned }),
-    ...RUNNING_ADDRESS_TAIL,
-  ]).toArray();
-
-  if (translate.size === 0) return rows.map((row) => row._id);
-  // Translating can collapse two rows onto one address, so dedupe after mapping.
-  return [...new Set(rows.map((row) => translate.get(row._id) ?? row._id))];
 }
 
 // ── Installing Locations ───────────────────────────────────────────
@@ -1798,7 +1761,6 @@ module.exports = {
   // the running set, derived from the app state event log
   appLocationFromEvents,
   countRunningByApp,
-  listRunningAddresses,
   removeInstallingLocation,
   // conflict checks
   assertNoNameConflicts,

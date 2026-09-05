@@ -33,14 +33,12 @@ const {
   RUNNING_EXPIRY_MS,
   INSTALLING_EXPIRY_MS,
   INSTALLING_ERRORS_EXPIRY_MS,
-  EVICTED_EXPIRY_MS,
   CLOCK_SKEW_ALLOWANCE_MS,
 } = require('../utils/appConstants');
 
 const APP_STATE_EVENT_TYPES = Object.freeze({
   APPRUNNING: 'apprunning',
   APPREMOVED: 'appremoved',
-  EVICTED: 'evicted',
   IPCHANGED: 'ipchanged',
   MASTERLEASE: 'masterlease',
   GRANTGENERATION: 'grantgeneration',
@@ -738,22 +736,6 @@ async function handleAppRemovedStateEvent({ message, envelope }) {
   }
 }
 
-async function handleEvictedEvent({ ip }) {
-  if (!ip) return;
-  try {
-    const now = new Date();
-    const db = dbHelper.databaseConnection();
-    const database = db.db(config.database.appsglobal.database);
-    await database.collection(globalAppStateEvents).updateOne(
-      { ip, type: APP_STATE_EVENT_TYPES.EVICTED, dedupKey: 'evicted' },
-      { $set: { ip, type: APP_STATE_EVENT_TYPES.EVICTED, dedupKey: 'evicted', createdAt: now, expireAt: new Date(now.getTime() + EVICTED_EXPIRY_MS), receivedAt: now } },
-      { upsert: true },
-    );
-  } catch (err) {
-    log.error(`storeAppStateEvent(evicted): ${err.message}`);
-  }
-}
-
 async function handleIPChangedEvent({ message, envelope }) {
   if (!message || !message.oldIP || !message.newIP || !message.broadcastedAt) return;
   try {
@@ -1113,7 +1095,6 @@ function storeAppStateEvent(type, payload) {
   switch (type) {
     case APP_STATE_EVENT_TYPES.APPRUNNING: return handleAppRunningEvent(payload);
     case APP_STATE_EVENT_TYPES.APPREMOVED: return handleAppRemovedStateEvent(payload);
-    case APP_STATE_EVENT_TYPES.EVICTED: return handleEvictedEvent(payload);
     case APP_STATE_EVENT_TYPES.IPCHANGED: return handleIPChangedEvent(payload);
     case APP_STATE_EVENT_TYPES.MASTERLEASE: return handleMasterleaseEvent(payload);
     case APP_STATE_EVENT_TYPES.GRANTGENERATION: return handleGrantGenerationEvent(payload);

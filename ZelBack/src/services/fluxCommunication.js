@@ -222,7 +222,6 @@ async function handleAppRunningSyncResponse(message, peerKey) {
 
     const appRunningBroadcasts = [];
     const otherBroadcasts = [];
-    const evictedEvents = [];
     const nodeDownEvents = [];
     for (const event of messages) {
       if (event.envelope && event.type === 'apprunning') {
@@ -233,21 +232,6 @@ async function handleAppRunningSyncResponse(message, peerKey) {
         // intake. The envelope is provenance only — a locally-assembled row
         // carries none — so these bypass the envelope filter below.
         nodeDownEvents.push(event);
-      } else if (event.type === 'evicted') {
-        // Evicted events lack per-event signatures because they are generated
-        // locally by nodeStatusMonitor, which makes non-deterministic HTTP
-        // probe decisions about whether a remote node is alive. The
-        // isSyncRequested check above ensures only solicited responses are
-        // processed, but a compromised confirmed peer we sync from could still
-        // include fake evictions. Impact is limited: only affects this node's
-        // view and self-heals on the next apprunning broadcast (≤60 min).
-        //
-        // The root cause is nodeStatusMonitor itself — it will be replaced by
-        // a peer quorum approach where eviction is determined by consensus of
-        // signed "peer unreachable" events (3 missed pongs on the WebSocket
-        // layer). Once that lands, evicted events will carry verifiable
-        // signatures and this path will verify them like all other event types.
-        evictedEvents.push(event);
       } else if (event.envelope) {
         otherBroadcasts.push(event);
       }
@@ -258,7 +242,7 @@ async function handleAppRunningSyncResponse(message, peerKey) {
     const otherToVerify = otherBroadcasts.map((e) => ({ ...e.envelope, data: e.data }));
     const { verified: verifiedOther, announcers: otherAnnouncers } = await batchVerifyBroadcasts(otherToVerify, 'handleAppRunningSyncResponse');
     const verifiedOtherSet = new Set(verifiedOther);
-    const otherEvents = [...evictedEvents, ...nodeDownEvents];
+    const otherEvents = [...nodeDownEvents];
     // the announcer the verifier resolved rides with the event: the masterlease
     // intake binds the record's grantee to it, and a synced record must meet
     // the same rule a gossiped one does
@@ -278,8 +262,6 @@ async function handleAppRunningSyncResponse(message, peerKey) {
     for (const event of otherEvents) {
       if (event.type === 'appremoved' || event.type === 'ipchanged' || event.type === 'masterlease' || event.type === 'grantgeneration') {
         await messageStore.storeAppStateEvent(event.type, { message: event.data, envelope: event.envelope, announcer: announcerOf.get(event) ?? null });
-      } else if (event.type === 'evicted') {
-        await messageStore.storeAppStateEvent(event.type, { ip: event.ip });
       } else if (event.type === 'nodedown') {
         await nodeDownService.onCertificateSyncEvent(event);
       }
