@@ -312,7 +312,13 @@ fi
 # the FluxOS process (restartFluxos) WITHOUT restarting the container or the inner
 # dockerd - the app containers keep running, exactly like `systemctl restart fluxos`.
 # The child PID is written to /tmp/fluxos.pid so a test kills only the node process,
-# never PID 1. A SIGTERM/SIGINT (docker stop at teardown) stops the child and exits.
+# never PID 1. A SIGTERM/SIGINT (docker stop/restart, teardown) is forwarded to the
+# child and then WAITED FOR: the trapped signal interrupts the first wait, and if the
+# shell exited there the container would die with node mid-shutdown - before it had
+# announced the stop on its held connections (SHUTTING_DOWN/RESTARTING) and stopped
+# its app containers. Production's systemd waits for the unit's main process the
+# same way (TimeoutStopSec), so the second wait is what makes a harness reboot look
+# like a real one to the node's jurors.
 set +e
 STOPPING=0
 trap 'STOPPING=1; kill -TERM "$(cat /tmp/fluxos.pid 2>/dev/null)" 2>/dev/null' TERM INT
@@ -325,3 +331,5 @@ while [ "$STOPPING" = "0" ]; do
   echo "fluxos (node app.js) exited, respawning in 1s" >&2
   sleep 1
 done
+# Stopping: let the child finish its SIGTERM path before PID 1 goes.
+wait "$FLUXOS_PID" 2>/dev/null

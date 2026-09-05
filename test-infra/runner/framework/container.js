@@ -234,7 +234,7 @@ export async function resumeDockerd(container, { readyTimeoutMs = 40000, interva
 }
 
 /**
- * Restart the FluxOS process only - the `systemctl restart fluxos` case. Kills just
+ * Restart the FluxOS process only - the `systemctl restart fluxos` case. Signals just
  * the node app.js child (its PID is in /tmp/fluxos.pid, written by the entrypoint
  * watchdog, so PID 1 is never touched); the watchdog respawns it. The inner dockerd
  * and the running app containers are NOT affected - they keep running while FluxOS's
@@ -242,10 +242,17 @@ export async function resumeDockerd(container, { readyTimeoutMs = 40000, interva
  * restartNode (whole container -> dockerd + containers restart) and restartDockerd
  * (dockerd only). Confirms FluxOS went DOWN and came back UP so the caller can't
  * observe a false "already ready".
+ *
+ * The signal is SIGTERM, as systemd sends: FluxOS runs its stop path, announces
+ * RESTARTING on every held connection, and exits on its own. `signal: 'KILL'` is a
+ * crash - the process vanishes without a word and its jurors certify it - which is a
+ * different scenario, not a restart; name it when that is what a test means.
  */
-export async function restartFluxos(container, { apiPort = 16127, readyTimeoutMs = 120000, interval = 500 } = {}) {
-  // hard-kill only the node child (state wiped instantly); never PID 1
-  await execInContainer(container, 'kill -9 "$(cat /tmp/fluxos.pid 2>/dev/null)" 2>/dev/null || true');
+export async function restartFluxos(container, {
+  apiPort = 16127, readyTimeoutMs = 120000, interval = 500, signal = 'TERM',
+} = {}) {
+  // signal only the node child; never PID 1
+  await execInContainer(container, `kill -${signal} "$(cat /tmp/fluxos.pid 2>/dev/null)" 2>/dev/null || true`);
   const probe = `curl -sf -o /dev/null http://127.0.0.1:${apiPort}/flux/version`;
   const start = Date.now();
   let sawDown = false;
