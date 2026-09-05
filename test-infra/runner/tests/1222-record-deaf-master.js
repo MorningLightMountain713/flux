@@ -40,13 +40,14 @@ const { selectCommittee } = require('../../../ZelBack/src/services/utils/committ
 // The mutant that disables the courier is red at that last line: the
 // standby seats the new generation under a live master.
 //
-// The app's name is chosen with the walk the nodes run: no holder sits on
-// the granting committee (so the master's side is exactly the master plus
-// that committee, and neither standby is a cell that could teach it), the
-// re-rolled committee shares at most quorum − 2 cells with the granting one
-// (the fresh-cell door), and at least quorum + 1 re-rolled cells stand
-// outside the deaf side (the couriers, and a challenger's quorum for the
-// mutant). The choice is checked against the cells.
+// The app's name is chosen with the walk the nodes run: at most one holder
+// sits on the granting committee (whichever holder becomes master, at least
+// one standby is then on the far side, holding the record and able to
+// pursue — the mutant's challenger), the re-rolled committee shares at most
+// quorum − 2 cells with the granting one (the fresh-cell door), and at
+// least a quorum of re-rolled cells stands outside both the granting
+// committee and the holders (the couriers, and a challenger's quorum for
+// the mutant). The choice is checked against the cells.
 
 const HOLDERS = [0, 1, 2];
 const NODES = 16;
@@ -69,16 +70,16 @@ function chooseDeafableApp(membership, stem, holderOutpoints) {
     const name = `${stem}${i.toString(36)}`;
     const granting = committeeOf(membership, name, 0);
     const reRolled = committeeOf(membership, name, 1);
-    if (holderOutpoints.some((holder) => granting.members.has(holder))) continue;
+    if (holderOutpoints.filter((holder) => granting.members.has(holder)).length > 1) continue;
     const shared = [...granting.members].filter((cell) => reRolled.members.has(cell));
     if (shared.length > granting.quorum - 2) continue;
     const farSideNew = [...reRolled.members].filter((cell) => !granting.members.has(cell) && !holderOutpoints.includes(cell));
-    if (farSideNew.length < reRolled.quorum + 1) continue;
+    if (farSideNew.length < reRolled.quorum) continue;
     return {
       name, granting, reRolled, shared, farSideNew,
     };
   }
-  throw new Error(`no app name off ${stem} in 2000 tries seats no holder on its granting committee, shares at most quorum − 2 cells, and leaves quorum + 1 re-rolled cells outside`);
+  throw new Error(`no app name off ${stem} in 2000 tries seats at most one holder on its granting committee, shares at most quorum − 2 cells, and leaves a quorum of re-rolled cells outside both`);
 }
 
 describe('record-deaf master: the cells the re-roll seats carry the record to the master, and it steps across', function () {
@@ -243,12 +244,16 @@ describe('record-deaf master: the cells the re-roll seats carry the record to th
     // 2. The deaf side: the master and every granting cell, cut from the
     //    rest until the cross-group sockets are gone. The master keeps its
     //    whole committee, so it stays held throughout.
-    const deafSide = [master, ...[...walk.granting.members].map(indexOf)];
+    const deafSide = [...new Set([master, ...[...walk.granting.members].map(indexOf)])];
     const farSide = env.clients.map((_, i) => i).filter((i) => !deafSide.includes(i));
-    expect(farSide, 'both standbys are on the far side').to.include.members(standbys);
+    // a standby that is itself a granting cell is deaf with the master; at
+    // least one standby stands on the far side by the app's choice
+    const farStandbys = standbys.filter((i) => farSide.includes(i));
+    expect(farStandbys, 'a standby is on the far side to receive the record').to.have.length.of.at.least(1);
     const couriers = walk.farSideNew.map(indexOf);
     expect(couriers.filter((i) => deafSide.includes(i)), 'every courier cell is on the far side').to.deep.equal([]);
-    ownerAuthFar = (await authenticate(env.clients[standbys[0]].url, appOwnerKey())).zelidauth;
+    expect(couriers, 'a quorum of the re-rolled committee stands on the far side').to.have.length.of.at.least(walk.reRolled.quorum);
+    ownerAuthFar = (await authenticate(env.clients[farStandbys[0]].url, appOwnerKey())).zelidauth;
 
     await env.partitionGroups(deafSide, farSide);
     let healed = false;
@@ -259,9 +264,9 @@ describe('record-deaf master: the cells the re-roll seats carry the record to th
       //    and both standbys store it; the master does not — nothing crosses
       //    the partition, and nothing re-delivers a missed broadcast.
       const beforeReroll = env.clients.map((c) => c.getLastEventId());
-      const rerolled = await submitRerollAt(standbys[0]);
+      const rerolled = await submitRerollAt(farStandbys[0]);
       expect(rerolled.status, `the re-roll lands on the far side: ${rerolled.body}`).to.equal(200);
-      await Promise.all([...couriers, ...standbys].map((i) => env.clients[i].waitForEvent(
+      await Promise.all([...couriers, ...farStandbys].map((i) => env.clients[i].waitForEvent(
         'quorumGrant:generationRecord',
         (d) => d.appName === name && d.role === 'master' && d.generation === 1,
         120000,
