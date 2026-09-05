@@ -603,7 +603,7 @@ describe('quorumGrant mastershipGrantGate', () => {
   // §7's TTL:deadline ratio is 1:1 in the code and carries none of it. The code
   // stated that inequality in a comment for months and never checked it.
   describe('the timing inequality is checked before the plane governs anything', () => {
-    function gateWithTiming({ slack, lockDelay }) {
+    function gateWithTiming({ slack, lockDelay, askTimeout }) {
       return proxyquire('../../ZelBack/src/services/appLifecycle/mastershipGrantGate', {
         config: {
           fluxapps: {
@@ -613,6 +613,7 @@ describe('quorumGrant mastershipGrantGate', () => {
             quorumGrantHeldTtlMs: 150000,
             quorumGrantDemotionSlackMs: slack,
             quorumGrantLockDelayMs: lockDelay,
+            ...(askTimeout !== undefined ? { quorumGrantAskTimeoutMs: askTimeout } : {}),
           },
         },
         '../daemonService/daemonServiceMiscRpcs': {
@@ -635,6 +636,13 @@ describe('quorumGrant mastershipGrantGate', () => {
 
     // the regression this exists to catch: the lock-delay now carries the whole
     // drift budget, so lowering it spends the margin and nothing else notices
+    // the look-ahead's clock (family K): the courier's delivery, one ask
+    // timeout, must fit inside the lock-delay
+    it('stays INERT when the ask timeout reaches the lock-delay - the courier\'s delivery could not fit', async () => {
+      const gate = gateWithTiming({ slack: 15_000, lockDelay: 30_000, askTimeout: 30_000 });
+      expect(await gate.grantVerdict(IDENTIFIER, activeStandbyComp())).to.equal(null);
+    });
+
     it('stays INERT when the lock-delay is lowered under the slack', async () => {
       const gate = gateWithTiming({ slack: 15_000, lockDelay: 15_000 });
       expect(await gate.grantVerdict(IDENTIFIER, activeStandbyComp())).to.equal(null);

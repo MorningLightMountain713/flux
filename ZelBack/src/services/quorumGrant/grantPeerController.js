@@ -7,7 +7,9 @@ const generalService = require('../generalService');
 const fluxCommunicationUtils = require('../fluxCommunicationUtils');
 const registryManager = require('../appDatabase/registryManager');
 const { extractIp } = require('../utils/socketAddressUtils');
+const messageStore = require('../appMessaging/messageStore');
 const signedEnvelope = require('./signedEnvelope');
+const ownerGenerationRecord = require('./ownerGenerationRecord');
 const grantClient = require('./grantClient');
 const mastershipGrantGate = require('../appLifecycle/mastershipGrantGate');
 const log = require('../../lib/log');
@@ -146,6 +148,48 @@ async function relay(req, res) {
   }
 }
 
+/**
+ * The courier's delivery (COMMITTEE_RECOVERY_DESIGN.md 2026-09-05, family K):
+ * a cell of the committee a re-roll draws carries the owner's generation
+ * record to every instance of the app, this node among them. The record is
+ * stored on the path a broadcast takes - owner-verified, newest-wins - and
+ * the answer is the generation this node holds afterwards, which is the
+ * courier's acknowledgement: a record that fails verification is dropped
+ * there and the answer says so by not moving. The caller must be a listed
+ * node; the record's own owner signature is what this node trusts.
+ */
+async function teach(req, res) {
+  try {
+    const host = callerHost(req);
+    if (!peerAllowed(host)) {
+      return res.status(429).json(messageHelper.createErrorMessage('too many teach asks'));
+    }
+    const body = serviceHelper.ensureObject(req.body) ?? {};
+    const record = serviceHelper.ensureObject(body.record) ?? null;
+    if (!ownerGenerationRecord.wellFormed(record) || !Number.isSafeInteger(record.broadcastedAt)
+      || typeof record.signature !== 'string' || !record.signature) {
+      return res.status(400).json(messageHelper.createErrorMessage('malformed generation record'));
+    }
+    if (!(await callerIsListed(host))) {
+      return res.status(403).json(messageHelper.createErrorMessage('caller is not a listed node'));
+    }
+
+    await messageStore.storeAppStateEvent(
+      messageStore.APP_STATE_EVENT_TYPES.GRANTGENERATION,
+      { message: record, envelope: null },
+    );
+    const standing = await messageStore.getGrantGenerationRecord(record.appName, record.role);
+    return res.json(messageHelper.createDataMessage({
+      appName: record.appName,
+      role: record.role,
+      generation: standing?.data?.generation ?? 0,
+    }));
+  } catch (error) {
+    log.error(`quorumGrant teach: ${error.message}`);
+    return res.status(500).json(messageHelper.createErrorMessage(error.message));
+  }
+}
+
 /** Test seam. */
 function reset() {
   peerAsks.clear();
@@ -154,5 +198,6 @@ function reset() {
 module.exports = {
   witness,
   relay,
+  teach,
   reset,
 };

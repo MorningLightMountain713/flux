@@ -643,6 +643,12 @@ module.exports = (app) => {
   app.post('/flux/quorumgrant/relay', asyncRoute((req, res) => {
     return grantPeerController.relay(req, res);
   }));
+  // The courier's delivery: a new-committee cell carrying the owner's re-roll
+  // record to an instance of the app. Owner-verified on the broadcast path;
+  // the answer is the generation this node holds afterwards.
+  app.post('/flux/quorumgrant/teach', asyncRoute((req, res) => {
+    return grantPeerController.teach(req, res);
+  }));
   app.post('/apps/placementfeasibility', asyncRoute((req, res) => { // fault domains and per-domain instance share for a prospective spec
     return placementFeasibility.placementFeasibilityAPI(req, res);
   }));
