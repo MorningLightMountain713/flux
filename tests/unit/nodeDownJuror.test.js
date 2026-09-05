@@ -259,7 +259,7 @@ describe('nodeDownJuror — the drop carries its reason (R2), and a re-held duty
   const SUBJECT_ADDRESS = '10.0.0.20:16127';
   const { NODE_DOWN_GRACE_MS, RESTART_GRACE_MS } = require('../../ZelBack/src/services/utils/appConstants');
 
-  it('the graces are code constants nodes agree on: 420 s for a shutdown, 120 s for a restart', () => {
+  it('the graces default to production\'s: 420 s for a shutdown, 120 s for a restart', () => {
     expect(NODE_DOWN_GRACE_MS).to.equal(420 * 1000);
     expect(RESTART_GRACE_MS).to.equal(120 * 1000);
   });
