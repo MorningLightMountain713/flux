@@ -24,10 +24,11 @@ import { getSubnetConfig, REGISTRY_REPO_HOST } from '../framework/subnet-config.
 //   2. TWO ROWS FREEZE PLACEMENT — the subject's own spawner reads the same
 //      rows and declines; nothing else changes: its inbound is admitted, and
 //      its return announce brings its row back.
-//   3. FOUR ROWS LOCK IT OUT — every survivor says so on its bus, refuses the
-//      subject's dials with the lockout close and says that too; and the
-//      subject, hearing the fourth certificate about itself, removes its app
-//      without a word.
+//   3. FOUR ROWS LOCK IT OUT — every survivor says so on its bus and refuses
+//      the subject's dials with the lockout close, handing it the rows first;
+//      the subject hears the fourth certificate at that door, removes its app
+//      without a word, and is starved as designed: no juror dials it, no
+//      dial-back is answered, and it stops knocking.
 // The record-lapse probe (six hours) is pinned in unit tests; no suite waits
 // for it. The fleet is 16 nodes, as in 1301, so the quorum has no margin.
 
@@ -43,6 +44,7 @@ const LOCKOUT_ROWS = 4;
 const shared = loadSharedConfig();
 const NODE_DOWN_GRACE_MS = shared.fluxapps.nodeDownGraceS * 1000;
 const PAST_GRACE_MARGIN_MS = 60_000;
+const HALF_GRACE_MS = Math.floor(NODE_DOWN_GRACE_MS / 2);
 
 const list = JSON.parse(
   readFileSync(new URL('../../fixtures/deterministic-list.json', import.meta.url), 'utf-8'),
@@ -193,10 +195,11 @@ describe('node-down placement freeze and lockout end to end', function () {
     expect(ips.some((ip) => ipMatches(ip, subjectIp())), 'the subject still stands').to.equal(true);
   });
 
-  it('the fourth death locks the subject out on every survivor, they refuse its inbound and say so, and the subject removes its app on hearing the certificate', async function () {
+  it('the fourth death locks the subject out: every survivor says so and refuses it at the door, it hears the rows there, removes its app without a word, and holds and makes no connection', async function () {
     this.timeout(900000);
     const anchors = survivors.map((i) => env.clients[i].getLastEventId());
     await recordRefutedOnEverySurvivor('the third record is refuted on every survivor before the fourth death');
+    const heardAnchor = env.clients[SUBJECT].getLastEventId();
     await env.partitionGroups([SUBJECT], survivors);
     await rowsOnEverySurvivor(LOCKOUT_ROWS);
 
@@ -209,8 +212,9 @@ describe('node-down placement freeze and lockout end to end', function () {
     locked.forEach((event) => expect(event.data.count).to.be.at.least(LOCKOUT_ROWS));
 
     await env.healPartition([SUBJECT], survivors);
-    // The subject re-dials its duties on return; every watcher answers with
-    // the lockout close. One refusal on one watcher is the mechanism firing.
+    // The subject re-dials its duties on return; every door answers with the
+    // lockout close, the rows first. One refusal on one watcher is the
+    // mechanism firing.
     const refused = await Promise.any(survivors.map((i) => env.clients[i].waitForEvent(
       'nodedown:inboundRefused',
       (data) => data.subject === subjectOutpoint,
@@ -218,13 +222,22 @@ describe('node-down placement freeze and lockout end to end', function () {
     )));
     expect(refused.data.count).to.be.at.least(LOCKOUT_ROWS);
 
-    // The lockout's self-uninstall: the fourth certificate about itself reaches
-    // the subject, the node-level check finds it locked out, and every app goes
-    // — no broadcast, and the fleet's rows were negated at since + the grace.
+    // The subject hears at the door: the rows arrive as gossip on the
+    // connection it opened, its own store crosses the count, and the
+    // lockout's self-uninstall runs — no broadcast. No juror dialled it and
+    // no sync completed, so the door is the only way it could have heard.
+    const heard = await env.clients[SUBJECT].waitForEvent(
+      'nodedown:stored',
+      (data) => data.subject === subjectOutpoint,
+      240000,
+      { afterId: heardAnchor },
+    );
+    expect(heard.data.source, 'heard at a door').to.equal('gossip');
     await waitFor(async () => {
       const res = await env.clients[SUBJECT].getInstalledApps();
       return !(res?.data ?? []).some((app) => app.name === appName);
-    }, { timeout: 600000, interval: 10000, label: 'the subject removed its app' });
+    }, { timeout: 600000, interval: 10000, label: 'the subject removed its app on hearing the rows' });
+
     // The removal broadcasts nothing (R5); the subject's row goes when the
     // derivation negates it at since + the grace (R4), not when the app goes.
     let ips = [];
@@ -236,5 +249,27 @@ describe('node-down placement freeze and lockout end to end', function () {
         throw new Error(`${error.message}\n    last location view: ${JSON.stringify(ips)}`);
       });
     expect(ips.some((ip) => ipMatches(ip, coHolderIp())), 'the co-holder stands').to.equal(true);
+
+    // Starved, as designed: the plan and the dial-back both read the lockout,
+    // so no juror dials it; every door refuses it; and it has stopped knocking
+    // — at rest it holds nothing in either direction, and over the next half
+    // grace no door is asked again.
+    const census = async () => {
+      const [outbound, inbound] = await Promise.all([
+        env.clients[SUBJECT].getPeers(),
+        env.clients[SUBJECT].getIncomingPeers(),
+      ]);
+      return { outbound: (outbound.data ?? []).length, inbound: (inbound.data ?? []).length };
+    };
+    expect(await census(), 'no connection in either direction').to.deep.equal({ outbound: 0, inbound: 0 });
+    const quietFrom = survivors.map((i) => env.clients[i].getLastEventId());
+    const knocks = await Promise.allSettled(survivors.map((i, k) => env.clients[i].waitForEvent(
+      'nodedown:inboundRefused',
+      (data) => data.subject === subjectOutpoint,
+      HALF_GRACE_MS,
+      { afterId: quietFrom[k] },
+    )));
+    expect(knocks.filter((knock) => knock.status === 'fulfilled').length, 'no door was asked again').to.equal(0);
+    expect(await census(), 'still nothing held').to.deep.equal({ outbound: 0, inbound: 0 });
   });
 });
