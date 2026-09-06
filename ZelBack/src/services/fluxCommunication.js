@@ -1513,9 +1513,8 @@ async function addOutgoingPeer(req, res) {
       return res.json(errMessage);
     }
 
-    // The reconciler's plan holds a stood-down node out; a dial made on its
-    // request reads the same rule, or a locked-out node gets its inbound back
-    // by asking for it.
+    // A locked-out node must not get its inbound back by asking for it: the
+    // plane answers whether this request may be dialled.
     const dialBack = await nodeDownService.mayDialBack(ip);
     if (!dialBack.allowed) {
       const errMessage = messageHelper.createErrorMessage(`FluxNode ${peerIp}:${peerPort} is held out of the network (${dialBack.reason}); no dial-back.`);

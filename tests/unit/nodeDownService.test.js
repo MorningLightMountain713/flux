@@ -485,17 +485,18 @@ describe('nodeDownService', () => {
       service.stop();
     });
 
-    it('a dial-back is refused for a stood-down node and allowed for anyone else', async () => {
+    it('a dial-back is refused for a locked-out node only: a node whose record merely stands is answered, since its ask is proof it is back', async () => {
       const harness = makeHarness();
       withDuty(harness);
       const { service, transport, stubs } = harness;
       expect(await service.mayDialBack(DUTY_IP)).to.deep.equal({ allowed: true, reason: 'not_started' });
       stubs.recordStateFor.withArgs(DUTY_OUTPOINT).resolves({ state: 'standing', key: 'nodedown:x:0:90' });
+      stubs.lockoutFor.withArgs(DUTY_OUTPOINT).resolves({ lockedOut: true, count: 4, liftsAt: 1 });
       service.start(transport);
       await tick();
-      expect(await service.mayDialBack(DUTY_IP)).to.deep.equal({ allowed: false, reason: 'stood_down', subject: DUTY_OUTPOINT });
-      stubs.recordStateFor.withArgs(DUTY_OUTPOINT).resolves({ state: 'refuted', key: 'nodedown:x:0:90' });
-      expect(await service.mayDialBack(DUTY_IP)).to.deep.equal({ allowed: true, reason: 'not_stood_down', subject: DUTY_OUTPOINT });
+      expect(await service.mayDialBack(DUTY_IP)).to.deep.equal({ allowed: false, reason: 'locked_out', subject: DUTY_OUTPOINT });
+      stubs.lockoutFor.withArgs(DUTY_OUTPOINT).resolves({ lockedOut: false, count: 3, liftsAt: null });
+      expect(await service.mayDialBack(DUTY_IP), 'standing, not locked out: answered').to.deep.equal({ allowed: true, reason: 'not_locked_out', subject: DUTY_OUTPOINT });
       expect(await service.mayDialBack('10.0.0.9:16127')).to.deep.equal({ allowed: true, reason: 'unlisted' });
       service.stop();
     });
