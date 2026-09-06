@@ -501,6 +501,53 @@ describe('nodeDownService', () => {
       service.stop();
     });
 
+    it('a certificate that locks this node out is remembered: isLockedOut answers from the last reading, a peering added while it holds is closed, and a later reading clears it', async () => {
+      const harness = makeHarness();
+      withDuty(harness); // a topology, so the reconciler's pass reads the lockout
+      const { service, transport, stubs } = harness;
+      service.start(transport);
+      await tick();
+      expect(service.isLockedOut()).to.equal(false);
+
+      stubs.lockoutFor.withArgs(MY_OUTPOINT).resolves({ lockedOut: true, count: 4, liftsAt: 1 });
+      stubs.enforcePlacement.resolves({ placed: false, removed: ['app'], failed: [] });
+      await service.onCertificateBroadcast({
+        certificate: {
+          subject: MY_OUTPOINT, height: 4, fingerprint: 'fp', verdicts: [],
+        },
+        broadcastedAt: Date.now(),
+      });
+      await tick();
+      expect(service.isLockedOut()).to.equal(true);
+      transport.peerManager.emit('peer:added', { ip: '10.0.0.2', port: '16127', direction: 'inbound' });
+      await tick();
+      expect(transport.closePeer.args).to.deep.equal([['10.0.0.2:16127', 'locked out']]);
+
+      stubs.lockoutFor.withArgs(MY_OUTPOINT).resolves({ lockedOut: false, count: 3, liftsAt: null });
+      await service.sweep();
+      await tick();
+      expect(service.isLockedOut()).to.equal(false);
+      service.stop();
+    });
+
+    it('a peering added with a locked-out duty is closed as it is added, whichever end dialled; a duty not locked out is kept', async () => {
+      const harness = makeHarness();
+      withDuty(harness);
+      const { service, transport, stubs } = harness;
+      stubs.lockoutFor.withArgs(DUTY_OUTPOINT).resolves({ lockedOut: true, count: 4, liftsAt: 1 });
+      service.start(transport);
+      await tick();
+      transport.peerManager.emit('peer:added', { ip: '10.0.0.2', port: '16127', direction: 'outbound' });
+      await tick();
+      expect(transport.closePeer.args).to.deep.equal([[DUTY_IP, 'locked out']]);
+
+      stubs.lockoutFor.withArgs(DUTY_OUTPOINT).resolves({ lockedOut: false, count: 3, liftsAt: null });
+      transport.peerManager.emit('peer:added', { ip: '10.0.0.2', port: '16127', direction: 'outbound' });
+      await tick();
+      expect(transport.closePeer.callCount, 'a duty not locked out is kept').to.equal(1);
+      service.stop();
+    });
+
     it('the record lapsing under the hold probes the subject once — the jury never loses a still-dark node', async () => {
       const harness = makeHarness();
       withDuty(harness);

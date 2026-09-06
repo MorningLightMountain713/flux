@@ -841,6 +841,17 @@ describe('fluxCommunication tests', () => {
   });
 
   describe('initiateAndHandleConnection tests', () => {
+    it('a locked-out node dials nobody, whoever asks: the dial settles as no dial before any socket is opened', async () => {
+      const locked = sinon.stub(nodeDownService, 'isLockedOut').returns(true);
+      try {
+        const onSettle = sinon.stub();
+        await fluxCommunication.initiateAndHandleConnection('10.0.0.5:16127', 'deterministic', { onSettle });
+        sinon.assert.calledOnceWithExactly(onSettle, null);
+      } finally {
+        locked.restore();
+      }
+    });
+
     before(function () { if (process.platform !== 'linux') this.skip(); });
 
     let wsserver;

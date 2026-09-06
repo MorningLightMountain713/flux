@@ -1254,6 +1254,13 @@ async function initiateAndHandleConnection(connection, source = PEER_SOURCE.RAND
       if (onSettle) onSettle(DIAL_RESULT.NO_DIAL);
       return;
     }
+    // A locked-out node dials nobody: every dialler — the plan, a request to
+    // be dialled back, the API — passes here, and its own lockout is read
+    // here rather than in each of them.
+    if (nodeDownService.isLockedOut()) {
+      if (onSettle) onSettle(DIAL_RESULT.NO_DIAL);
+      return;
+    }
     const key = `${ip}:${port}`;
     if (peerManager.has(key)) {
       if (onSettle) onSettle(DIAL_RESULT.HELD);

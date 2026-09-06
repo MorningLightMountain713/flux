@@ -37,6 +37,9 @@ let addHandler = null;
 let answerHandler = null;
 // A return waiting for the store to catch up before it asks its question.
 let returnSyncHandler = null;
+// This node's own lockout as last read — by the reconciler's pass, or the
+// moment a certificate about this node locks it out. Read by every dialler.
+let selfLocked = false;
 
 // outpoint <-> dialable address, rebuilt when the membership moves.
 const index = { fingerprint: undefined, byOutpoint: new Map(), bySocket: new Map() };
@@ -315,6 +318,7 @@ async function settleStoredCertificate(certificate, source, stored) {
     // a locked-out node has — its return sync never completes, so the wait
     // for it is over and the check runs now.
     const lockout = await nodeDownStore.lockoutFor(certificate.subject);
+    selfLocked = lockout.lockedOut;
     if (lockout.lockedOut) {
       clearReturnSync();
       applyPlacementThenAnnounce('lockout').catch((error) => log.warn(`nodeDownService: ${error.message}`));
@@ -488,7 +492,38 @@ function onPeerAnswered({ ip, port } = {}) {
   }
 }
 
-function onPeerAdded() {
+/**
+ * Whether this node is locked out, as last read. Every dialler reads it:
+ * a locked-out node dials nobody, whoever asks — on the fleet the survivors'
+ * asks to be dialled back had it knocking four times a second with its own
+ * plan stood down.
+ *
+ * @returns {boolean}
+ */
+function isLockedOut() {
+  return selfLocked;
+}
+
+async function onPeerAdded({ ip, port } = {}) {
+  // A peering with a node the network holds out is closed as it is added,
+  // whichever end dialled: a dial in flight when the lockout landed lands
+  // after it, and a locked-out node holds nothing in either direction.
+  if (transport && ip && port) {
+    const socketAddress = `${ip}:${port}`;
+    if (selfLocked) {
+      transport.closePeer(socketAddress, 'locked out');
+      return;
+    }
+    refreshIndex();
+    const subject = index.bySocket.get(socketAddress);
+    if (subject) {
+      const lockout = await nodeDownStore.lockoutFor(subject).catch(() => ({ lockedOut: false }));
+      if (lockout.lockedOut) {
+        transport.closePeer(socketAddress, 'locked out');
+        return;
+      }
+    }
+  }
   if (!wasUnreachable) return;
   wasUnreachable = false;
   // Back from unreachability without a restart: the grant plane re-fetches
@@ -591,7 +626,9 @@ function start(injectedTransport) {
     selfLockout: async () => {
       const me = myOutpoint();
       if (!me) return { lockedOut: false, count: 0, liftsAt: null };
-      return nodeDownStore.lockoutFor(me);
+      const lockout = await nodeDownStore.lockoutFor(me);
+      selfLocked = lockout.lockedOut;
+      return lockout;
     },
     dialPlan: (outpoint) => ladder.dialPlan(outpoint),
     noteContact: (outpoint) => ladder.noteContact(outpoint),
@@ -626,7 +663,7 @@ function start(injectedTransport) {
   nodeDownStore.registerWithGrantPlane();
 
   dropHandler = (payload) => onPeerRemoved(payload);
-  addHandler = (payload) => onPeerAdded(payload);
+  addHandler = (payload) => onPeerAdded(payload).catch((error) => log.warn(`nodeDownService: ${error.message}`));
   answerHandler = (payload) => onPeerAnswered(payload);
   transport.peerManager.on('peer:removed', dropHandler);
   transport.peerManager.on('peer:added', addHandler);
@@ -686,4 +723,5 @@ module.exports = {
   onCertificateBroadcast,
   onCertificateSyncEvent,
   mayDialBack,
+  isLockedOut,
 };
