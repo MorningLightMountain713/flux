@@ -306,6 +306,46 @@ describe('nodeDownStore', () => {
       return first;
     }
 
+    it('one death under two assemblers\' heights is one death: the second row is refused as the same death, and the count says one', async () => {
+      // Every assembler stamps its own height; the fleet re-serves other
+      // nodes' rows over a reconnect pull, and a second row for the same
+      // death locked a node out at its third (1302 test 5, 2026-09-06).
+      const at = Date.now() - 300_000;
+      await certify(1001, at);
+      await announce(at + 10_000, 'r1');
+      // the same death, certified by another juror a few seconds later,
+      // arriving after the return that refuted the record
+      const other = await store.handleNodeDownEvent({
+        message: { certificate: world.certificate(['j2', 'j3', 'j4', 'j5'], { height: 1002 }), broadcastedAt: at + 5_000 },
+      });
+      expect(other).to.deep.equal({ accepted: false, rebroadcast: false, reason: 'same_death' });
+      expect((await store.placementFreezeFor(S)).count).to.equal(1);
+      expect((await store.lockoutFor(S)).count).to.equal(1);
+      // the death's own row again, replayed over a pull, is accepted and not news
+      const replay = await store.handleNodeDownEvent({
+        message: { certificate: world.certificate(['j1', 'j2', 'j3', 'j4'], { height: 1001 }), broadcastedAt: at },
+      });
+      expect(replay.accepted).to.equal(true);
+      expect(replay.superseded).to.equal(true);
+      expect((await store.lockoutFor(S)).count).to.equal(1);
+    });
+
+    it('an older death this node had missed still counts: certified before the record\'s own drop, it is stored for the count', async () => {
+      const at = Date.now() - 300_000;
+      await certify(1010, at);
+      await announce(at + 10_000, 'r1');
+      // certified back at 1001, arriving now over a pull
+      world.height = 1001;
+      const olderCertificate = world.certificate(['j2', 'j3', 'j4', 'j5'], { height: 1001 });
+      world.height = 1010;
+      const older = await store.handleNodeDownEvent({
+        message: { certificate: olderCertificate, broadcastedAt: at - 120_000 },
+      });
+      expect(older.reason).to.equal('stored');
+      expect(older.superseded).to.equal(true);
+      expect((await store.lockoutFor(S)).count).to.equal(2);
+    });
+
     it('nothing certified: no rung, no record', async () => {
       expect(await store.placementFreezeFor(S)).to.deep.equal({ frozen: false, count: 0, liftsAt: null });
       expect(await store.lockoutFor(S)).to.deep.equal({ lockedOut: false, count: 0, liftsAt: null });
