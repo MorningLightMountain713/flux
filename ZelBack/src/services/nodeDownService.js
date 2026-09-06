@@ -251,11 +251,51 @@ async function broadcastOwnCertificate(certificate) {
     });
     return;
   }
-  fluxEventBus.publish('nodedown:stored', { subject: certificate.subject, source: 'own' });
+  // The fleet first: what the store's answer sets in motion on this node
+  // follows, and cannot hold the broadcast back.
   await transport.broadcastMessageToAll({
     type: 'fluxnodedown', version: 1, certificate, broadcastedAt,
   });
-  reconciler.schedule('own-assembly');
+  await settleStoredCertificate(certificate, 'own', stored);
+}
+
+/**
+ * What a stored certificate sets in motion on this node, whichever path
+ * stored it — the node's own assembly, gossip, or the sync stream. On a full
+ * jury every juror collects and assembles, and the gossip copies that follow
+ * are refused as already standing, so a lockout noted on the intake alone is
+ * a lockout no juror says: the fourth certificate locked the subject out of
+ * every door and not one survivor announced it or dropped a held connection.
+ *
+ * @param {object} certificate
+ * @param {string} source 'own', 'gossip' or 'sync' — stamped on the harness
+ *   events, so a suite can assert WHICH path delivered a certificate
+ * @param {{superseded?: boolean}} stored the store's answer
+ */
+async function settleStoredCertificate(certificate, source, stored) {
+  fluxEventBus.publish('nodedown:stored', { subject: certificate.subject, source });
+  await noteLockout(certificate.subject, source);
+  // the ordinals the certified node holds are NOT reclaimed here: the vacate
+  // follows the derivation's placement-dead edge (since + the grace), asked
+  // by the joiner that needs the name on its own scan (meshOrdinals.js,
+  // ordinalRegister.vacateOrdinal) — R9, NODE_DOWN_SCENARIOS.md §5
+
+  if (certificate.subject === myOutpoint()) {
+    // Not while a return is pending: the reconnect pull delivers the records
+    // in its own order, a past one ahead of the newest, and a check run on
+    // the first would answer for a store the pull has not finished filling —
+    // then release the hold and announce, which refutes the newest on every
+    // survivor. The return check reads the whole store once a pull has
+    // answered. And not for a certificate older than the record held: a
+    // past incident is stored for the count, not news about this node.
+    if (!returnSyncHandler && !stored.superseded) {
+      applyPlacementThenAnnounce('certificate').catch((error) => log.warn(`nodeDownService: ${error.message}`));
+    }
+  } else if (reconciler) {
+    // Sync can deliver before start(); the reconciler's first pass reads the
+    // store, so a certificate stored now is honoured then.
+    reconciler.schedule(`nodedown-stored:${source}`);
+  }
 }
 
 /**
@@ -308,29 +348,7 @@ async function intakeCertificate(message, envelope, source) {
     });
     return result;
   }
-  fluxEventBus.publish('nodedown:stored', { subject: message.certificate.subject, source });
-  await noteLockout(message.certificate.subject, source);
-  // the ordinals the certified node holds are NOT reclaimed here: the vacate
-  // follows the derivation's placement-dead edge (since + the grace), asked
-  // by the joiner that needs the name on its own scan (meshOrdinals.js,
-  // ordinalRegister.vacateOrdinal) — R9, NODE_DOWN_SCENARIOS.md §5
-
-  if (message.certificate.subject === myOutpoint()) {
-    // Not while a return is pending: the reconnect pull delivers the records
-    // in its own order, a past one ahead of the newest, and a check run on
-    // the first would answer for a store the pull has not finished filling —
-    // then release the hold and announce, which refutes the newest on every
-    // survivor. The return check reads the whole store once a pull has
-    // answered. And not for a certificate older than the record held: a
-    // past incident is stored for the count, not news about this node.
-    if (!returnSyncHandler && !result.superseded) {
-      applyPlacementThenAnnounce('certificate').catch((error) => log.warn(`nodeDownService: ${error.message}`));
-    }
-  } else if (reconciler) {
-    // Sync can deliver before start(); the reconciler's first pass reads the
-    // store, so a certificate stored now is honoured then.
-    reconciler.schedule('nodedown-stored');
-  }
+  await settleStoredCertificate(message.certificate, source, result);
   return result;
 }
 

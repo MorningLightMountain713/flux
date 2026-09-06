@@ -25,6 +25,8 @@ function makeHarness() {
     noteReturn: sinon.stub(),
     noteMeshReturn: sinon.stub(),
     enforcePlacement: sinon.stub().resolves({ placed: true, removed: [] }),
+    signMessage: sinon.stub().returns('sig-me'),
+    verifyMessage: sinon.stub().returns(true),
   };
   const world = { height: 100 };
   const networkStateServiceStub = {
@@ -57,6 +59,7 @@ function makeHarness() {
       getLocalSocketAddress: sinon.stub().resolves(MY_IP),
       getFluxNodePrivateKey: sinon.stub().resolves('L1x'),
     },
+    './verificationHelper': { signMessage: stubs.signMessage, verifyMessage: stubs.verifyMessage },
   });
   const peerManager = new EventEmitter();
   Object.assign(peerManager, {
@@ -339,6 +342,56 @@ describe('nodeDownService', () => {
         certificate: { subject: DUTY_OUTPOINT, height: 100 },
         broadcastedAt: Date.now(),
       });
+      expect(transport.closePeer.args).to.deep.equal([[DUTY_IP, 'locked out']]);
+      service.stop();
+    });
+
+    it('a certificate this node assembled itself trips the lockout like one it received: the held connection is dropped', async () => {
+      // On a full jury every juror collects and assembles, and the gossip
+      // copies that follow are refused as already standing, so the fourth
+      // certificate reaches most survivors as their own assembly and never
+      // as an intake. The fleet showed it: four rows on every survivor, one
+      // lockout announced.
+      const harness = makeHarness();
+      withDuty(harness);
+      const {
+        service, transport, stubs, networkStateServiceStub,
+      } = harness;
+      const jury = [
+        { key: MY_OUTPOINT, outpoint: MY_OUTPOINT, owner: 'me' },
+        { key: 'j:0', outpoint: 'j:0', owner: 'oj' },
+      ];
+      const listed = networkStateServiceStub.nodeDownTopology();
+      networkStateServiceStub.nodeDownTopology = () => ({ ...listed, juryAt: () => jury });
+      transport.openEphemeralConnection = sinon.stub().callsFake(() => Promise.resolve(fakePeer('close')));
+      transport.peerManager.has = (socketAddress) => socketAddress === DUTY_IP;
+      stubs.lockoutFor.withArgs(DUTY_OUTPOINT).resolves({ lockedOut: true, count: 4, liftsAt: 1 });
+      service.start(transport);
+      await tick();
+
+      // my own verdict: the duty dropped unannounced and the probe was hung up on
+      transport.peerManager.emit('peer:removed', {
+        ip: '10.0.0.2', port: '16127', direction: 'outbound', closeCode: 1006,
+      });
+      await tick();
+      await tick();
+      expect(transport.broadcastMessageToAll.callCount, 'one owner is below H').to.equal(0);
+
+      // the second owner's verdict crosses H: this node assembles and stores
+      service.onVerdictMessage({
+        pubKey: 'pkj',
+        data: {
+          type: 'fluxnodedownverdict',
+          verdict: {
+            subject: DUTY_OUTPOINT, juror: 'j:0', judgement: 'unreachable', height: 100, fingerprint: 'fp1', signature: 'sig-j',
+          },
+        },
+      });
+      await tick();
+      await tick();
+      expect(transport.broadcastMessageToAll.callCount).to.equal(1);
+      expect(transport.broadcastMessageToAll.firstCall.args[0].type).to.equal('fluxnodedown');
+      expect(stubs.handleNodeDownEvent.callCount).to.equal(1);
       expect(transport.closePeer.args).to.deep.equal([[DUTY_IP, 'locked out']]);
       service.stop();
     });
