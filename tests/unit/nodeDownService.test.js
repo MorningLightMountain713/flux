@@ -27,6 +27,8 @@ function makeHarness() {
     enforcePlacement: sinon.stub().resolves({ placed: true, removed: [] }),
     signMessage: sinon.stub().returns('sig-me'),
     verifyMessage: sinon.stub().returns(true),
+    certificatesFor: sinon.stub().resolves([]),
+    sign: sinon.stub().callsFake(async (message) => JSON.stringify(message)),
   };
   const world = { height: 100 };
   const networkStateServiceStub = {
@@ -46,6 +48,7 @@ function makeHarness() {
       standingCertificateFor: stubs.standingCertificateFor,
       recordStateFor: stubs.recordStateFor,
       lockoutFor: stubs.lockoutFor,
+      certificatesFor: stubs.certificatesFor,
     },
     './appMessaging/peerNotification': {
       checkAndNotifyPeersOfRunningApps: stubs.announce,
@@ -60,6 +63,7 @@ function makeHarness() {
       getFluxNodePrivateKey: sinon.stub().resolves('L1x'),
     },
     './verificationHelper': { signMessage: stubs.signMessage, verifyMessage: stubs.verifyMessage },
+    './utils/fluxBroadcastHelper': { serialiseAndSignFluxBroadcast: stubs.sign },
   });
   const peerManager = new EventEmitter();
   Object.assign(peerManager, {
@@ -301,7 +305,9 @@ describe('nodeDownService', () => {
       await tick();
       const gate = transport.peerManager.setInboundGate.firstCall.args[0];
 
-      expect(await gate(DUTY_IP)).to.deep.equal({ admitted: false, reason: 'locked_out', subject: DUTY_OUTPOINT });
+      expect(await gate(DUTY_IP)).to.deep.equal({
+        admitted: false, reason: 'locked_out', subject: DUTY_OUTPOINT, tell: [],
+      });
       stubs.lockoutFor.withArgs(DUTY_OUTPOINT).resolves({ lockedOut: false, count: 3, liftsAt: null });
       expect(await gate(DUTY_IP)).to.deep.equal({ admitted: true, reason: 'not_locked_out' });
       expect(await gate(MY_IP)).to.deep.equal({ admitted: true, reason: 'not_locked_out' });
@@ -393,6 +399,104 @@ describe('nodeDownService', () => {
       expect(transport.broadcastMessageToAll.firstCall.args[0].type).to.equal('fluxnodedown');
       expect(stubs.handleNodeDownEvent.callCount).to.equal(1);
       expect(transport.closePeer.args).to.deep.equal([[DUTY_IP, 'locked out']]);
+      service.stop();
+    });
+
+    it('the door hands a locked-out dialer every row it holds, signed, oldest first; an admitted dialer is told nothing', async () => {
+      // Every juror stands down and every door closes, so the door is the one
+      // place a locked-out node can still hear. It hears the network's word —
+      // the rows, which its own intake verifies — not a reason string.
+      const harness = makeHarness();
+      withDuty(harness);
+      const { service, transport, stubs } = harness;
+      stubs.lockoutFor.withArgs(DUTY_OUTPOINT).resolves({ lockedOut: true, count: 4, liftsAt: 1 });
+      stubs.certificatesFor.withArgs(DUTY_OUTPOINT).resolves([
+        { certificate: { subject: DUTY_OUTPOINT, height: 90 }, broadcastedAt: 1000 },
+        { certificate: { subject: DUTY_OUTPOINT, height: 100 }, broadcastedAt: 2000 },
+      ]);
+      service.start(transport);
+      await tick();
+      const gate = transport.peerManager.setInboundGate.firstCall.args[0];
+
+      const refused = await gate(DUTY_IP);
+      expect(refused.admitted).to.equal(false);
+      expect(refused.tell.map((frame) => JSON.parse(frame))).to.deep.equal([
+        {
+          type: 'fluxnodedown', version: 1, certificate: { subject: DUTY_OUTPOINT, height: 90 }, broadcastedAt: 1000,
+        },
+        {
+          type: 'fluxnodedown', version: 1, certificate: { subject: DUTY_OUTPOINT, height: 100 }, broadcastedAt: 2000,
+        },
+      ]);
+      stubs.lockoutFor.withArgs(DUTY_OUTPOINT).resolves({ lockedOut: false, count: 3, liftsAt: null });
+      expect((await gate(DUTY_IP)).tell).to.equal(undefined);
+      service.stop();
+    });
+
+    it('a certificate about this node that locks it out runs the removal though a return is pending: a locked-out node\'s return sync never completes', async () => {
+      const { appSyncEvents, EVENTS } = require('../../ZelBack/src/services/utils/appSyncEvents');
+      const { service, transport, stubs } = makeHarness();
+      let peersDown = false;
+      transport.peerManager.allPeersDown = () => peersDown;
+      service.start(transport);
+      await tick();
+      peersDown = true;
+      transport.peerManager.emit('peer:removed', { ip: '1.2.3.4', port: '16127', closeCode: 4009 });
+      peersDown = false;
+      transport.peerManager.emit('peer:added', {});
+      await tick();
+
+      // the fourth row about ME, handed over at a door while the return is pending
+      stubs.lockoutFor.withArgs(MY_OUTPOINT).resolves({ lockedOut: true, count: 4, liftsAt: 1 });
+      stubs.enforcePlacement.resolves({ placed: false, removed: ['app'], failed: [] });
+      await service.onCertificateBroadcast({
+        certificate: {
+          subject: MY_OUTPOINT, height: 4, fingerprint: 'fp', verdicts: [],
+        },
+        broadcastedAt: Date.now(),
+      });
+      await tick();
+      sinon.assert.calledOnceWithExactly(stubs.enforcePlacement, 'lockout');
+      expect(stubs.release.callCount).to.equal(1);
+      expect(stubs.announce.callCount, 'a locked-out node announces nothing').to.equal(0);
+
+      // the lockout answered the return's question: a pull completing later runs no second check
+      appSyncEvents.emit(EVENTS.RECONNECT_SYNC_COMPLETE, '1.2.3.4:16127');
+      await tick();
+      expect(stubs.enforcePlacement.callCount).to.equal(1);
+      service.stop();
+    });
+
+    it('the reconciler reads the lockout on this node: locked out, it dials no duty; lifted, it dials again', async () => {
+      const harness = makeHarness();
+      withDuty(harness);
+      const { service, transport, stubs } = harness;
+      stubs.lockoutFor.withArgs(MY_OUTPOINT).resolves({ lockedOut: true, count: 4, liftsAt: 1 });
+      service.start(transport);
+      await tick();
+      await service.sweep();
+      await tick();
+      expect(transport.dial.callCount).to.equal(0);
+
+      stubs.lockoutFor.withArgs(MY_OUTPOINT).resolves({ lockedOut: false, count: 0, liftsAt: null });
+      await service.sweep();
+      await tick();
+      expect(transport.dial.firstCall.args[0]).to.equal(DUTY_IP);
+      service.stop();
+    });
+
+    it('a dial-back is refused for a stood-down node and allowed for anyone else', async () => {
+      const harness = makeHarness();
+      withDuty(harness);
+      const { service, transport, stubs } = harness;
+      expect(await service.mayDialBack(DUTY_IP)).to.deep.equal({ allowed: true, reason: 'not_started' });
+      stubs.recordStateFor.withArgs(DUTY_OUTPOINT).resolves({ state: 'standing', key: 'nodedown:x:0:90' });
+      service.start(transport);
+      await tick();
+      expect(await service.mayDialBack(DUTY_IP)).to.deep.equal({ allowed: false, reason: 'stood_down', subject: DUTY_OUTPOINT });
+      stubs.recordStateFor.withArgs(DUTY_OUTPOINT).resolves({ state: 'refuted', key: 'nodedown:x:0:90' });
+      expect(await service.mayDialBack(DUTY_IP)).to.deep.equal({ allowed: true, reason: 'not_stood_down', subject: DUTY_OUTPOINT });
+      expect(await service.mayDialBack('10.0.0.9:16127')).to.deep.equal({ allowed: true, reason: 'unlisted' });
       service.stop();
     });
 

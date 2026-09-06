@@ -3,6 +3,7 @@
 process.env.NODE_CONFIG_DIR = `${process.cwd()}/tests/unit/globalconfig`;
 
 const { expect } = require('chai');
+const sinon = require('sinon');
 
 const { RingReconciler } = require('../../ZelBack/src/services/utils/ringReconciler');
 const { FlapLadder, DIAL_PLAN, FLAP_WINDOW_BLOCKS } = require('../../ZelBack/src/services/utils/flapLadder');
@@ -340,5 +341,32 @@ describe('ringReconciler', () => {
     await tick();
     // duty already pending: no duplicate dials however many schedules landed
     expect(world.dials.length).to.equal(dialsAfterStart);
+  });
+  it('a node the network holds out dials nobody and asks nobody, says so once, and dials again the pass after the lockout lifts', async () => {
+    const log = require('../../ZelBack/src/lib/log');
+    const warn = sinon.stub(log, 'warn');
+    const info = sinon.stub(log, 'info');
+    try {
+      const world = makeWorld({ duties: ['a:0', 'b:0'], jury: ['j:0'] });
+      let lockout = { lockedOut: true, count: 4, liftsAt: 1 };
+      world.deps.selfLockout = () => Promise.resolve(lockout);
+      reconciler = makeReconciler(world);
+      await tick();
+      await reconciler.schedule('sweep');
+      await tick();
+      expect(world.dials).to.have.length(0);
+      expect(world.asks).to.have.length(0);
+      expect(warn.callCount, 'said once, not per pass').to.equal(1);
+      expect(warn.firstCall.args[0]).to.match(/locked out \(4 certifications standing\)/);
+
+      lockout = { lockedOut: false, count: 3, liftsAt: null };
+      await reconciler.schedule('sweep');
+      await tick();
+      expect(world.dials.map((dial) => dial.socketAddress)).to.deep.equal(['addr-a:0', 'addr-b:0']);
+      expect(world.asks).to.deep.equal(['addr-j:0']);
+      expect(info.args.map((call) => call[0]).filter((line) => /lockout has lifted/.test(line))).to.have.length(1);
+    } finally {
+      sinon.restore();
+    }
   });
 });
