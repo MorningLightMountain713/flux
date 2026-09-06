@@ -97,6 +97,9 @@ class FluxPeerManager extends EventEmitter {
   /** The node-down plane's peering gate, installed at its start; see setInboundGate. */
   #inboundGate = null;
 
+  /** subjects refused with their rows handed over, for the once-per-run line */
+  #refusedTold = new Set();
+
   /** Inbound ephemerals refused at the caps since start, and when that was last logged. */
   #ephemeralRefusals = 0;
 
@@ -1160,8 +1163,18 @@ class FluxPeerManager extends EventEmitter {
       answer = { admitted: true, reason: 'gate_error' };
     }
     if (!answer.admitted) {
-      await this.#tellThenClose(ws, answer.tell, CLOSE_CODES.LOCKED_OUT, `Peering refused: ${answer.reason}`);
+      const written = await this.#tellThenClose(ws, answer.tell, CLOSE_CODES.LOCKED_OUT, `Peering refused: ${answer.reason}`);
+      // Said once per subject per refusal run: the first door it knocks on
+      // names what it was handed, and the line re-arms once it is admitted.
+      const subject = answer.subject ?? `${ipv4Peer}:${port}`;
+      if (!this.#refusedTold.has(subject)) {
+        this.#refusedTold.add(subject);
+        log.info(`Refused ${ipv4Peer}:${port} (${answer.reason}, subject ${subject}): handed over ${written.sent} of ${written.offered} frame(s) before the close${written.failed ? `, ${written.failed} failed to write` : ''}`);
+      }
       return;
+    }
+    if (answer.subject && this.#refusedTold.delete(answer.subject)) {
+      log.info(`Admitted ${ipv4Peer}:${port} again (${answer.reason}, subject ${answer.subject})`);
     }
     try {
       this.#admitInbound(ws, ipv4Peer, port, metadata, req);
@@ -1183,18 +1196,23 @@ class FluxPeerManager extends EventEmitter {
    * @param {string} reason close reason
    */
   async #tellThenClose(ws, frames, code, reason) {
+    const offered = (frames ?? []).length;
+    let sent = 0;
+    let failed = 0;
     try {
       for (const frame of frames ?? []) {
         // eslint-disable-next-line no-await-in-loop
-        await new Promise((resolve) => {
-          if (ws.readyState !== WebSocket.OPEN) { resolve(); return; }
-          ws.send(frame, () => resolve());
+        const ok = await new Promise((resolve) => {
+          if (ws.readyState !== WebSocket.OPEN) { resolve(false); return; }
+          ws.send(frame, (error) => resolve(!error));
         });
+        if (ok) sent += 1; else failed += 1;
       }
       ws.close(code, reason);
     } catch (error) {
       log.error(error);
     }
+    return { offered, sent, failed };
   }
 
   /** Capacity, then the duplicate-peer policy, then registration. */

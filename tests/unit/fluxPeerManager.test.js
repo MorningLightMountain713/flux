@@ -1456,6 +1456,37 @@ describe('FluxPeerManager tests', () => {
       expect(manager.inboundCount).to.equal(0);
     });
 
+    it('says once per subject what the door handed over, and re-arms once the subject is admitted', async () => {
+      const log = require('../../ZelBack/src/lib/log');
+      const info = sinon.stub(log, 'info');
+      try {
+        manager.numberOfFluxNodes = 10000;
+        const gate = sinon.stub().resolves({
+          admitted: false, reason: 'locked_out', subject: 'x:0', tell: ['row-1', 'row-2'],
+        });
+        manager.setInboundGate(gate);
+        const knock = () => {
+          const ws = createMockWs('8.8.8.8');
+          ws.send = (data, cb) => cb();
+          manager.validateAndAddInbound(ws, '16127', createMockReq('8.8.8.8'));
+          return settle();
+        };
+        await knock();
+        await knock();
+        const said = info.args.map((call) => call[0]).filter((line) => /handed over 2 of 2 frame/.test(line));
+        expect(said, 'one line for two knocks').to.have.length(1);
+        gate.resolves({ admitted: true, reason: 'not_locked_out', subject: 'x:0' });
+        await knock();
+        await knock();
+        gate.resolves({ admitted: false, reason: 'locked_out', subject: 'x:0', tell: ['row-1'] });
+        await knock();
+        expect(info.args.map((call) => call[0]).filter((line) => /Admitted 8\.8\.8\.8:16127 again/.test(line))).to.have.length(1);
+        expect(info.args.map((call) => call[0]).filter((line) => /handed over/.test(line)), 're-armed by the admission').to.have.length(2);
+      } finally {
+        sinon.restore();
+      }
+    });
+
     it('admits what the gate admits', async () => {
       manager.numberOfFluxNodes = 10000;
       manager.setInboundGate(sinon.stub().resolves({ admitted: true, reason: 'not_locked_out' }));
