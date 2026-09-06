@@ -199,9 +199,12 @@ describe('node-down placement freeze and lockout end to end', function () {
     this.timeout(900000);
     const anchors = survivors.map((i) => env.clients[i].getLastEventId());
     await recordRefutedOnEverySurvivor('the third record is refuted on every survivor before the fourth death');
-    const heardAnchor = env.clients[SUBJECT].getLastEventId();
     await env.partitionGroups([SUBJECT], survivors);
     await rowsOnEverySurvivor(LOCKOUT_ROWS);
+    // Anchored inside the partition: the subject's earlier pulls replay rows
+    // it already holds (source sync), and the row it hears at a door arrives
+    // as gossip on the connection it opened.
+    const heardAnchor = env.clients[SUBJECT].getLastEventId();
 
     const locked = await Promise.all(survivors.map((i, k) => env.clients[i].waitForEvent(
       'nodedown:lockedOut',
@@ -228,7 +231,7 @@ describe('node-down placement freeze and lockout end to end', function () {
     // no sync completed, so the door is the only way it could have heard.
     const heard = await env.clients[SUBJECT].waitForEvent(
       'nodedown:stored',
-      (data) => data.subject === subjectOutpoint,
+      (data) => data.subject === subjectOutpoint && data.source === 'gossip',
       240000,
       { afterId: heardAnchor },
     );
