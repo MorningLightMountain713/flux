@@ -330,6 +330,25 @@ describe('nodeDownStore', () => {
       expect((await store.lockoutFor(S)).count).to.equal(1);
     });
 
+    it('a second assembly of an OLDER death held is the same death, not a death missed: every row held is asked', async () => {
+      // 1303 F at 0269b802b: twelve honoured restarts, twelve reconnect pulls
+      // re-serving other nodes' rows, and the witness grew a fourth row for a
+      // death it already held — the same-death test had asked the newest row
+      // alone, and D's other assembly was "older" than E.
+      const first = await certifyTimes(3); // C, D, E — each refuted before the next
+      await announce(first + 2 * 60_000 + 10_000, 'v3'); // and E refuted by the reseat
+      expect((await store.lockoutFor(S)).count).to.equal(3);
+      // D again under another assembler's height — one no row held carries
+      world.height = 1050;
+      const dAgain = world.certificate(['j2', 'j3', 'j4', 'j5'], { height: 1050 });
+      const other = await store.handleNodeDownEvent({
+        message: { certificate: dAgain, broadcastedAt: first + 60_000 + 5_000 },
+      });
+      expect(other.reason).to.equal('same_death');
+      expect(other.accepted).to.equal(false);
+      expect((await store.lockoutFor(S)).count).to.equal(3);
+    });
+
     it('an older death this node had missed still counts: certified before the record\'s own drop, it is stored for the count', async () => {
       const at = Date.now() - 300_000;
       await certify(1010, at);

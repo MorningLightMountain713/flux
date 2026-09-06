@@ -223,22 +223,39 @@ async function handleNodeDownEvent({ message, envelope = null }) {
     //     re-served by a reconnect pull locked a node out at its third
     //     death. Refused, not stored.
     const dedupKey = `nodedown:${certificate.subject}:${certificate.height}`;
-    const held = await latestRecordFor(certificate.subject);
-    if (held && !held.refutation) {
-      return { accepted: false, rebroadcast: false, reason: 'already_standing' };
-    }
+    const live = await liveRowsFor(certificate.subject);
     let superseded = false;
-    if (held) {
-      const refutedAt = new Date(held.refutation.broadcastedAt).getTime();
-      const heldSince = new Date(held.row.since).getTime();
-      if (held.row.dedupKey === dedupKey) {
-        superseded = true;
-      } else if (since > refutedAt) {
-        superseded = false;
-      } else if (broadcastedAt < heldSince) {
+    if (live.length) {
+      const announced = (await eventsCollection().find(
+        { type: APP_STATE_EVENT_TYPES.APPRUNNING, outpoint: certificate.subject },
+        { projection: { broadcastedAt: 1 } },
+      ).toArray()).map((row) => new Date(row.broadcastedAt).getTime()).sort((a, b) => a - b);
+      // the return that refuted a row: the first announcement at or after it
+      const refutedAt = (row) => {
+        const at = new Date(row.broadcastedAt).getTime();
+        const answer = announced.find((when) => when >= at);
+        return answer === undefined ? null : answer;
+      };
+      const newest = live.reduce((a, b) => (new Date(b.broadcastedAt) > new Date(a.broadcastedAt) ? b : a));
+      if (refutedAt(newest) === null) {
+        return { accepted: false, rebroadcast: false, reason: 'already_standing' };
+      }
+      if (live.some((row) => row.dedupKey === dedupKey)) {
         superseded = true;
       } else {
-        return { accepted: false, rebroadcast: false, reason: 'same_death' };
+        // The same death as a row held, under another assembler's height: its
+        // drop no later than the return that refuted that row, certified no
+        // earlier than that row's drop. Every row held is asked, not the
+        // newest alone — a second assembly of an older death is not a death
+        // this node missed.
+        const sameDeath = live.some((row) => {
+          const answered = refutedAt(row);
+          return answered !== null && since <= answered && broadcastedAt >= new Date(row.since).getTime();
+        });
+        if (sameDeath) {
+          return { accepted: false, rebroadcast: false, reason: 'same_death' };
+        }
+        superseded = since <= refutedAt(newest);
       }
     }
 
