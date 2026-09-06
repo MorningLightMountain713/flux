@@ -10,6 +10,7 @@ import { buildSeedableApp } from '../framework/seed-helper.js';
 import { waitFor } from '../framework/wait.js';
 import { dbClient } from '../framework/db-client.js';
 import { waitForRowsOnEverySurvivor, waitForRecordRefutedOnEverySurvivor } from '../framework/nodedown-helper.js';
+import { loadSharedConfig } from '../framework/coupled-knobs.js';
 import { getSubnetConfig, REGISTRY_REPO_HOST } from '../framework/subnet-config.js';
 
 // The two rungs on a real fleet (NODE_DOWN_SCENARIOS.md R6, stamped
@@ -37,6 +38,11 @@ const CO_HOLDER = 8;
 const WITNESS = 0;
 const FREEZE_ROWS = 2;
 const LOCKOUT_ROWS = 4;
+// The node-down grace every node of this fleet runs (test-infra/config/shared.js);
+// the margin past it is absolute, as in 1303.
+const shared = loadSharedConfig();
+const NODE_DOWN_GRACE_MS = shared.fluxapps.nodeDownGraceS * 1000;
+const PAST_GRACE_MARGIN_MS = 60_000;
 
 const list = JSON.parse(
   readFileSync(new URL('../../fixtures/deterministic-list.json', import.meta.url), 'utf-8'),
@@ -219,8 +225,16 @@ describe('node-down placement freeze and lockout end to end', function () {
       const res = await env.clients[SUBJECT].getInstalledApps();
       return !(res?.data ?? []).some((app) => app.name === appName);
     }, { timeout: 600000, interval: 10000, label: 'the subject removed its app' });
-    const ips = await locationsSeenBy(WITNESS);
+    // The removal broadcasts nothing (R5); the subject's row goes when the
+    // derivation negates it at since + the grace (R4), not when the app goes.
+    let ips = [];
+    await waitFor(async () => {
+      ips = await locationsSeenBy(WITNESS);
+      return !ips.some((ip) => ipMatches(ip, subjectIp()));
+    }, { timeout: NODE_DOWN_GRACE_MS + PAST_GRACE_MARGIN_MS, interval: 5000, label: 'the subject row falls once the grace has run' })
+      .catch((error) => {
+        throw new Error(`${error.message}\n    last location view: ${JSON.stringify(ips)}`);
+      });
     expect(ips.some((ip) => ipMatches(ip, coHolderIp())), 'the co-holder stands').to.equal(true);
-    expect(ips.some((ip) => ipMatches(ip, subjectIp())), 'the subject is gone from the location view').to.equal(false);
   });
 });
