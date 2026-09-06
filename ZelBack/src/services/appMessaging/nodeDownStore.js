@@ -127,6 +127,25 @@ async function liveRowsFor(subject) {
 }
 
 /**
+ * Every unexpired nodedown row for a subject as the message that carried it,
+ * oldest first — what a door hands a locked-out dialer before it closes, so
+ * the dialer's own store can reach the count whichever rows it missed while
+ * it was dark.
+ *
+ * @param {string} subject collateral outpoint
+ * @returns {Promise<Array<{certificate: object, broadcastedAt: number}>>}
+ */
+async function certificatesFor(subject) {
+  const rows = await liveRowsFor(subject);
+  return rows
+    .sort((a, b) => new Date(a.broadcastedAt) - new Date(b.broadcastedAt))
+    .map((row) => ({
+      certificate: row.data.certificate,
+      broadcastedAt: new Date(row.broadcastedAt).getTime(),
+    }));
+}
+
+/**
  * The subject's freshest unexpired nodedown row and the announcement that
  * refuted it, if any.
  *
@@ -386,6 +405,7 @@ module.exports = {
   verifyNodeDownCertificate,
   handleNodeDownEvent,
   standingCertificateFor,
+  certificatesFor,
   recordStateFor,
   placementFreezeFor,
   placementFreezeForAddress,
