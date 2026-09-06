@@ -210,16 +210,37 @@ async function handleNodeDownEvent({ message, envelope = null }) {
 
     // A node already holding a standing certificate for the subject drops
     // further copies without relaying: concurrent assemblies cost the fleet
-    // one flood. A refuted or lapsed record is a PAST incident — store anew.
+    // one flood. A refuted record is a PAST incident, and what arrives now
+    // is one of three things, told apart by when its drop was and when it
+    // was certified against the record held and the return that refuted it:
+    //   - the record's own row again (a replay over sync): accepted, not news;
+    //   - a NEW death, its drop later than the return: news, its own row;
+    //   - an OLDER death this node had missed, certified before the record's
+    //     own drop: stored for the count, not news;
+    //   - the SAME death under another assembler's height — every assembler
+    //     stamps its own, so one death reaches a node under several, and a
+    //     second row would count the death twice. On the fleet it did: rows
+    //     re-served by a reconnect pull locked a node out at its third
+    //     death. Refused, not stored.
+    const dedupKey = `nodedown:${certificate.subject}:${certificate.height}`;
     const held = await latestRecordFor(certificate.subject);
     if (held && !held.refutation) {
       return { accepted: false, rebroadcast: false, reason: 'already_standing' };
     }
-    // A certificate no newer than the record already held is a past
-    // incident — a replay over sync, or an older row a node had missed:
-    // stored for the count, but not news about the subject, and a check run
-    // on it would answer for that record, not the newest.
-    const superseded = !!(held && new Date(held.row.broadcastedAt).getTime() >= broadcastedAt);
+    let superseded = false;
+    if (held) {
+      const refutedAt = new Date(held.refutation.broadcastedAt).getTime();
+      const heldSince = new Date(held.row.since).getTime();
+      if (held.row.dedupKey === dedupKey) {
+        superseded = true;
+      } else if (since > refutedAt) {
+        superseded = false;
+      } else if (broadcastedAt < heldSince) {
+        superseded = true;
+      } else {
+        return { accepted: false, rebroadcast: false, reason: 'same_death' };
+      }
+    }
 
     const listed = networkStateService.networkState()
       .find((node) => `${node.txhash}:${node.outidx}` === certificate.subject);
@@ -228,12 +249,12 @@ async function handleNodeDownEvent({ message, envelope = null }) {
     await eventsCollection().updateOne(
       {
         type: APP_STATE_EVENT_TYPES.NODEDOWN,
-        dedupKey: `nodedown:${certificate.subject}:${certificate.height}`,
+        dedupKey,
       },
       {
         $set: {
           type: APP_STATE_EVENT_TYPES.NODEDOWN,
-          dedupKey: `nodedown:${certificate.subject}:${certificate.height}`,
+          dedupKey,
           subject: certificate.subject,
           ip,
           broadcastedAt: new Date(broadcastedAt),
