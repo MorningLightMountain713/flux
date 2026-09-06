@@ -9,6 +9,7 @@ import { pushImage } from '../framework/registry-helper.js';
 import { buildSeedableApp } from '../framework/seed-helper.js';
 import { waitFor } from '../framework/wait.js';
 import { dbClient } from '../framework/db-client.js';
+import { waitForRowsOnEverySurvivor, waitForRecordRefutedOnEverySurvivor } from '../framework/nodedown-helper.js';
 import { getSubnetConfig, REGISTRY_REPO_HOST } from '../framework/subnet-config.js';
 
 // The two rungs on a real fleet (NODE_DOWN_SCENARIOS.md R6, stamped
@@ -59,18 +60,14 @@ describe('node-down placement freeze and lockout end to end', function () {
     return (res?.data ?? []).map((row) => row.ip);
   }
 
-  async function rowsOnEverySurvivor(atLeast) {
-    let counts = [];
-    await waitFor(async () => {
-      counts = await Promise.all(survivors.map(
-        async (i) => (await dbClient(i + 1).getNodeDownRecords(subjectOutpoint)).length,
-      ));
-      return counts.every((count) => count >= atLeast);
-    }, { timeout: 240000, interval: 5000, label: `${atLeast} nodedown row(s) on every survivor` })
-      .catch((error) => {
-        throw new Error(`${error.message}\n    rows per survivor: ${JSON.stringify(counts)}`);
-      });
-  }
+  // Each survivor's store, read by the framework's waits (nodedown-helper.js),
+  // bound to this suite's survivors and subject.
+  const rowsOnEverySurvivor = (atLeast) => waitForRowsOnEverySurvivor(
+    survivors, subjectOutpoint, atLeast,
+  );
+  const recordRefutedOnEverySurvivor = (label) => waitForRecordRefutedOnEverySurvivor(
+    survivors, subjectOutpoint, label,
+  );
 
   async function subjectLocationRestoredAt(index) {
     let ips = [];
@@ -84,8 +81,17 @@ describe('node-down placement freeze and lockout end to end', function () {
   }
 
   // One death: cut the subject from every survivor, wait for its row, heal,
-  // and wait for its return announce to restore its row on the witness.
+  // and wait for its return announce to restore its row on the witness. The
+  // cut waits for the last death's record to be refuted on every survivor
+  // first: the store refuses a certificate while an unrefuted record stands
+  // (already_standing), so a death staged on the witness's view alone lands
+  // its certificate on none of the survivors still holding the old record.
+  // The return comes inside the grace: the heal follows the row at once, and
+  // the row lands within the drop slack of the cut (1303's DROP_SLACK_MS),
+  // well before since + G — so the subject keeps its app and its announce
+  // is the refutation (R5).
   async function dieAndReturn(death) {
+    await recordRefutedOnEverySurvivor('the last record is refuted on every survivor before the next death');
     await env.partitionGroups([SUBJECT], survivors);
     await rowsOnEverySurvivor(death);
     await env.healPartition([SUBJECT], survivors);
@@ -184,6 +190,7 @@ describe('node-down placement freeze and lockout end to end', function () {
   it('the fourth death locks the subject out on every survivor, they refuse its inbound and say so, and the subject removes its app on hearing the certificate', async function () {
     this.timeout(900000);
     const anchors = survivors.map((i) => env.clients[i].getLastEventId());
+    await recordRefutedOnEverySurvivor('the third record is refuted on every survivor before the fourth death');
     await env.partitionGroups([SUBJECT], survivors);
     await rowsOnEverySurvivor(LOCKOUT_ROWS);
 

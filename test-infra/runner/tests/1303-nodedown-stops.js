@@ -9,6 +9,7 @@ import { pushImage } from '../framework/registry-helper.js';
 import { buildSeedableApp } from '../framework/seed-helper.js';
 import { waitFor } from '../framework/wait.js';
 import { dbClient } from '../framework/db-client.js';
+import { waitForRowsOnEverySurvivor, waitForRecordRefutedOnEverySurvivor } from '../framework/nodedown-helper.js';
 import { execInContainer, restartFluxos } from '../framework/container.js';
 import { loadSharedConfig } from '../framework/coupled-knobs.js';
 
@@ -92,36 +93,16 @@ describe('node-down: the map of stops end to end', function () {
     return dbClient(WITNESS + 1).getNodeDownRecords(subjectOutpoint);
   }
 
-  async function rowsOnEverySurvivor(atLeast, { timeout = 240000 } = {}) {
-    let counts = [];
-    await waitFor(async () => {
-      counts = await Promise.all(survivors.map(
-        async (i) => (await dbClient(i + 1).getNodeDownRecords(subjectOutpoint)).length,
-      ));
-      return counts.every((count) => count >= atLeast);
-    }, { timeout, interval: 5000, label: `${atLeast} nodedown row(s) on every survivor` })
-      .catch((error) => {
-        throw new Error(`${error.message}\n    rows per survivor: ${JSON.stringify(counts)}`);
-      });
-  }
-
-  // The store refuses a certificate while an unrefuted record for the subject
-  // stands (nodeDownStore: already_standing), and a return refutes it only
-  // once the subject's announce is stored after the row. A scenario that
-  // stages the next death waits for the last record to be refuted on every
-  // survivor first, or the next certificate lands on none of them.
-  async function recordRefutedOnEverySurvivor(label) {
-    let states = [];
-    await waitFor(async () => {
-      states = await Promise.all(survivors.map(
-        (i) => dbClient(i + 1).getNodeDownRecordState(subjectOutpoint),
-      ));
-      return states.every((state) => state !== 'standing');
-    }, { timeout: 240000, interval: 5000, label })
-      .catch((error) => {
-        throw new Error(`${error.message}\n    record state per survivor: ${JSON.stringify(states)}`);
-      });
-  }
+  // Each survivor's store, read by the framework's waits (nodedown-helper.js),
+  // bound to this suite's survivors and subject. A scenario that stages the
+  // next death waits for the last record to be refuted everywhere first, or
+  // the next certificate is refused already_standing on every survivor.
+  const rowsOnEverySurvivor = (atLeast, options) => waitForRowsOnEverySurvivor(
+    survivors, subjectOutpoint, atLeast, options,
+  );
+  const recordRefutedOnEverySurvivor = (label) => waitForRecordRefutedOnEverySurvivor(
+    survivors, subjectOutpoint, label,
+  );
 
   // Seat an app on the subject: the install's announce is what refutes a
   // standing record about it. A fresh app each time — the first app's two
