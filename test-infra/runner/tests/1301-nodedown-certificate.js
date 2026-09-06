@@ -9,6 +9,7 @@ import { pushImage } from '../framework/registry-helper.js';
 import { buildSeedableApp } from '../framework/seed-helper.js';
 import { waitFor } from '../framework/wait.js';
 import { dbClient } from '../framework/db-client.js';
+import { loadSharedConfig } from '../framework/coupled-knobs.js';
 import { getSubnetConfig, REGISTRY_REPO_HOST } from '../framework/subnet-config.js';
 
 // The node-down certificate plane, end to end on a real fleet — the first
@@ -20,15 +21,18 @@ import { getSubnetConfig, REGISTRY_REPO_HOST } from '../framework/subnet-config.
 //      connections, and the assembled certificate lands in every survivor's
 //      event log: one row, quorum-signed, keyed to the incident.
 //   3. THE CERTIFICATE NEGATES THE SUBJECT'S APP ROW — the location derivation
-//      drops the subject while a certificate stands; a co-holder's row is
-//      untouched.
+//      drops the subject once since + the grace has passed with the
+//      certificate standing (R4); a co-holder's row is untouched.
 //   4. A NODE THAT LOST THE RECORD RECOVERS IT OVER SYNC — gossip is one
 //      flood, so a node that missed it is made whole by the app-state sync
 //      (the boot round or a reconnect pull — the same serve, the same
 //      verifier the gossip intake uses).
-//   5. THE RETURN ANNOUNCE CLEARS IT — the subject's own apprunning broadcast
-//      is the refutation: locations restore, and the watchers re-dial the
-//      subject they had stood down.
+//   5. A RETURN PAST THE GRACE REMOVES — the network has moved on from the
+//      subject's rows together, so the returning node removes its app and
+//      announces nothing (R5): the record stands on every survivor, the
+//      subject never comes back into the location view, and it re-holds the
+//      fleet through its own dials, since its watchers hold a subject whose
+//      record stands out of their dial plan.
 // The fleet is 16 nodes — the manifest's maximum. The jury walk picks 14
 // owners and the quorum is 10, so killing one node leaves every watcher alive
 // and no margin: any silent watcher failure shows up here as a missing quorum.
@@ -39,6 +43,11 @@ const SUBJECT = 5; // the node this suite makes unreachable (holds one app insta
 const CO_HOLDER = 8; // keeps its instance through the incident
 const REBOOTER = 12; // wiped and rebooted mid-incident to prove the sync path
 const WITNESS = 0; // the survivor whose view the location assertions read
+// The node-down grace every node of this fleet runs (test-infra/config/shared.js);
+// the margin past it is absolute, as in 1303.
+const shared = loadSharedConfig();
+const NODE_DOWN_GRACE_MS = shared.fluxapps.nodeDownGraceS * 1000;
+const PAST_GRACE_MARGIN_MS = 60_000;
 
 const list = JSON.parse(
   readFileSync(new URL('../../fixtures/deterministic-list.json', import.meta.url), 'utf-8'),
@@ -50,6 +59,8 @@ const subjectOutpoint = `${list[SUBJECT].txhash}:${list[SUBJECT].outidx}`;
 function ipMatches(rowIp, nodeIp) {
   return rowIp === nodeIp || String(rowIp).startsWith(`${nodeIp}:`);
 }
+
+const sleep = (ms) => new Promise((resolve) => { setTimeout(resolve, ms); });
 
 describe('node-down certificates end to end', function () {
   let env;
@@ -216,30 +227,45 @@ describe('node-down certificates end to end', function () {
     expect(row.data?.certificate?.subject).to.equal(subjectOutpoint);
   });
 
-  it('the return announce clears the certificate and the watchers re-dial', async function () {
-    this.timeout(360000);
+  it('a return past the grace: the subject removes its app and never refutes, its record stands, and it re-holds the fleet by its own dials', async function () {
+    this.timeout(1200000);
+    // The rows went at since + G (R4), and the return rule reads the same
+    // clock (R5): a node whose certificate stands with since + G passed has
+    // been replaced by the network and removes everything, announcing
+    // nothing — an announce would put its rows back on every survivor. Past
+    // the grace by construction, not by the preceding tests' durations.
+    const [row] = await dbClient(WITNESS + 1).getNodeDownRecords(subjectOutpoint);
+    const graceEnd = new Date(row.since).getTime() + NODE_DOWN_GRACE_MS + PAST_GRACE_MARGIN_MS;
+    await sleep(Math.max(0, graceEnd - Date.now()));
     await env.healPartition([SUBJECT], survivors);
 
-    // The subject's own apprunning broadcast is the refutation — the location
-    // derivation reinstates the row the certificate had negated.
-    let ips = [];
     await waitFor(async () => {
-      ips = await locationsSeenBy(WITNESS);
-      return ips.some((ip) => ipMatches(ip, subjectIp()));
-    }, { timeout: 240000, interval: 5000, label: 'subject location restored after return' })
-      .catch((error) => {
-        throw new Error(`${error.message}\n    last location view: ${JSON.stringify(ips)}`);
-      });
+      const res = await env.clients[SUBJECT].getInstalledApps();
+      return !(res?.data ?? []).some((app) => app.name === appName);
+    }, { timeout: 600000, interval: 10000, label: 'the subject removed its app on return' });
 
-    // Stood-down watchers come back once the record is refuted: the subject
-    // is dialable again and ends up held by its watchers in both directions.
+    // The subject dials its own duties on return and the survivors admit it
+    // (only a lockout refuses at the door). Its watchers hold a subject whose
+    // record stands out of their dial plan, so the fleet re-holds it through
+    // its own dials.
     await waitFor(async () => {
       const [outbound, inbound] = await Promise.all([
         env.clients[SUBJECT].getPeers(),
         env.clients[SUBJECT].getIncomingPeers(),
       ]);
-      const held = (outbound.data ?? []).length + (inbound.data ?? []).length;
-      return held >= 2;
+      return (outbound.data ?? []).length + (inbound.data ?? []).length >= 2;
     }, { timeout: 240000, interval: 5000, label: 'subject re-held by the fleet' });
+
+    // Held and app-less, the subject has had every chance to announce, and an
+    // empty announcement is never broadcast: the record stands unrefuted on
+    // every survivor and the subject never returns to the location view.
+    await sleep(PAST_GRACE_MARGIN_MS);
+    const states = await Promise.all(survivors.map(
+      (i) => dbClient(i + 1).getNodeDownRecordState(subjectOutpoint),
+    ));
+    expect(states.every((state) => state === 'standing'), `the record is never refuted: ${JSON.stringify(states)}`).to.equal(true);
+    const ips = await locationsSeenBy(WITNESS);
+    expect(ips.some((ip) => ipMatches(ip, subjectIp())), 'the subject never refutes').to.equal(false);
+    expect(ips.some((ip) => ipMatches(ip, coHolderIp())), 'the co-holder stands').to.equal(true);
   });
 });
