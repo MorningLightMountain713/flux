@@ -1513,6 +1513,15 @@ async function addOutgoingPeer(req, res) {
       return res.json(errMessage);
     }
 
+    // The reconciler's plan holds a stood-down node out; a dial made on its
+    // request reads the same rule, or a locked-out node gets its inbound back
+    // by asking for it.
+    const dialBack = await nodeDownService.mayDialBack(ip);
+    if (!dialBack.allowed) {
+      const errMessage = messageHelper.createErrorMessage(`FluxNode ${peerIp}:${peerPort} is held out of the network (${dialBack.reason}); no dial-back.`);
+      return res.json(errMessage);
+    }
+
     initiateAndHandleConnection(ip, PEER_SOURCE.DETERMINISTIC);
     const message = messageHelper.createSuccessMessage(`Outgoing connection to ${peerIp}:${peerPort} initiated`);
     return res.json(message);

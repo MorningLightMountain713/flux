@@ -1793,4 +1793,22 @@ describe('hash request/response rides the arrival socket', () => {
     sinon.assert.calledOnce(socket.send);
     expect(socket.send.firstCall.args[0]).to.equal(JSON.stringify({ requestMessageHash: hash }));
   });
+  describe('addOutgoingPeer — a dial-back reads the node-down stand-down', () => {
+    afterEach(() => sinon.restore());
+
+    it('refuses a dial-back to a node the plane holds out, before any dial', async () => {
+      sinon.stub(nodeConfirmationService, 'isConfirmed').returns(true);
+      sinon.stub(fluxCommunicationUtils, 'deterministicFluxList').resolves([{ ip: '10.0.0.5:16127' }]);
+      const mayDialBack = sinon.stub(nodeDownService, 'mayDialBack').resolves({ allowed: false, reason: 'stood_down', subject: 'x:0' });
+      const req = {
+        params: { ip: '10.0.0.5:16127' }, ip: '10.0.0.5', headers: {}, connection: {}, socket: {},
+      };
+      const res = { json: sinon.stub() };
+      await fluxCommunication.addOutgoingPeer(req, res);
+      sinon.assert.calledOnceWithExactly(mayDialBack, '10.0.0.5:16127');
+      const answer = res.json.firstCall.args[0];
+      expect(answer.status).to.equal('error');
+      expect(answer.data.message).to.match(/held out of the network \(stood_down\)/);
+    });
+  });
 });

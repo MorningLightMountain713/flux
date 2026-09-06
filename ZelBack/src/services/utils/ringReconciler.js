@@ -55,6 +55,8 @@ class RingReconciler {
 
   #askThreshold;
 
+  #heldOut = false;
+
   /**
    * @param {object} deps every side effect, injected
    * @param {() => object|null} deps.topology the NodeDownTopology, or null before start
@@ -70,6 +72,9 @@ class RingReconciler {
    * @param {() => number} deps.inboundCount
    * @param {(outpoint: string) => Promise<boolean>} [deps.stoodDown] the network holds
    *   the node out: certified down, or quarantined past the certificate
+   * @param {() => Promise<{lockedOut: boolean, count: number, liftsAt: number|null}>}
+   *   [deps.selfLockout] the same reading on THIS node: while it is locked out it
+   *   dials nobody and asks nobody, and resumes at the lift its own rows name
    * @param {(outpoint: string) => string} [deps.dialPlan] the mild tier's order for
    *   the duty's dial, a flapLadder DIAL_PLAN; eager when absent
    * @param {(outpoint: string) => void} [deps.noteContact] the duty was dialed or is
@@ -197,6 +202,25 @@ class RingReconciler {
     const topology = this.#deps.topology();
     const myOutpoint = this.#deps.myOutpoint();
     if (!topology || !myOutpoint) return;
+
+    // A node the network holds out dials nobody and asks nobody: the
+    // starvation is the point, and the lift is a known instant from its own
+    // rows, not a wait for information — the next pass after it dials again.
+    if (this.#deps.selfLockout) {
+      const lockout = await this.#deps.selfLockout();
+      if (lockout.lockedOut) {
+        if (!this.#heldOut) {
+          this.#heldOut = true;
+          const lifts = lockout.liftsAt ? new Date(lockout.liftsAt).toISOString() : 'unknown';
+          log.warn(`ringReconciler: this node is locked out (${lockout.count} certifications standing) until ${lifts}; dialling nobody`);
+        }
+        return;
+      }
+      if (this.#heldOut) {
+        this.#heldOut = false;
+        log.info('ringReconciler: the lockout has lifted; dialling resumes');
+      }
+    }
 
     const duties = topology.duties(myOutpoint);
     if (duties === null) return; // not on the list — nothing is owed by or to us

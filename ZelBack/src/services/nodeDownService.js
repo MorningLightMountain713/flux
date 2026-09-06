@@ -4,6 +4,7 @@ const config = require('config');
 const serviceHelper = require('./serviceHelper');
 const fluxNetworkHelper = require('./fluxNetworkHelper');
 const verificationHelper = require('./verificationHelper');
+const { serialiseAndSignFluxBroadcast } = require('./utils/fluxBroadcastHelper');
 const networkStateService = require('./networkStateService');
 const nodeDownStore = require('./appMessaging/nodeDownStore');
 const { RECORD_STATE } = nodeDownStore;
@@ -136,12 +137,32 @@ async function stoodDown(outpoint) {
 }
 
 /**
+ * What a door hands a locked-out dialer before it closes: every row it holds
+ * about the dialer, as the signed messages the gossip would have carried. The
+ * dialer verifies each as it verifies any certificate and its own store
+ * reaches the count, whichever rows it missed while it was dark — it learns
+ * from the network's word, not from a reason string, and it needs no other
+ * channel: every juror stands down and every door closes, so the door is the
+ * one place a locked-out node can still hear.
+ *
+ * @param {string} subject collateral outpoint
+ * @returns {Promise<string[]>} serialised, signed frames, oldest row first
+ */
+async function doorEvidence(subject) {
+  const rows = await nodeDownStore.certificatesFor(subject);
+  return Promise.all(rows.map(({ certificate, broadcastedAt }) => serialiseAndSignFluxBroadcast({
+    type: 'fluxnodedown', version: 1, certificate, broadcastedAt,
+  })));
+}
+
+/**
  * The peering gate the peer manager asks before a peering inbound registers.
  * Only a listed subject under the lockout is refused — a placement freeze
- * refuses nobody; who else may peer is decided where it always was.
+ * refuses nobody; who else may peer is decided where it always was. A
+ * refusal carries the rows behind it (`tell`), written before the close.
  *
  * @param {string} socketAddress the dialer's ip:port
- * @returns {Promise<{admitted: boolean, reason: string, subject?: string}>}
+ * @returns {Promise<{admitted: boolean, reason: string, subject?: string, tell?: string[]}>}
  */
 async function inboundGate(socketAddress) {
   refreshIndex();
@@ -150,10 +171,18 @@ async function inboundGate(socketAddress) {
   try {
     const lockout = await nodeDownStore.lockoutFor(subject);
     if (!lockout.lockedOut) return { admitted: true, reason: 'not_locked_out' };
+    let tell = [];
+    try {
+      tell = await doorEvidence(subject);
+    } catch (error) {
+      log.warn(`nodeDownService: the rows behind ${subject}'s lockout could not be signed; refusing without them: ${error.message}`);
+    }
     fluxEventBus.publish('nodedown:inboundRefused', {
       subject, socketAddress, count: lockout.count, liftsAt: lockout.liftsAt,
     });
-    return { admitted: false, reason: 'locked_out', subject };
+    return {
+      admitted: false, reason: 'locked_out', subject, tell,
+    };
   } catch (error) {
     log.warn(`nodeDownService: lockout lookup for ${subject} failed, admitting: ${error.message}`);
     return { admitted: true, reason: 'store_error' };
@@ -281,14 +310,22 @@ async function settleStoredCertificate(certificate, source, stored) {
   // ordinalRegister.vacateOrdinal) — R9, NODE_DOWN_SCENARIOS.md §5
 
   if (certificate.subject === myOutpoint()) {
-    // Not while a return is pending: the reconnect pull delivers the records
-    // in its own order, a past one ahead of the newest, and a check run on
-    // the first would answer for a store the pull has not finished filling —
-    // then release the hold and announce, which refutes the newest on every
-    // survivor. The return check reads the whole store once a pull has
-    // answered. And not for a certificate older than the record held: a
-    // past incident is stored for the count, not news about this node.
-    if (!returnSyncHandler && !stored.superseded) {
+    // A lockout has no ordering race: four standing rows are four whichever
+    // arrived first. And the door that handed them over is the only channel
+    // a locked-out node has — its return sync never completes, so the wait
+    // for it is over and the check runs now.
+    const lockout = await nodeDownStore.lockoutFor(certificate.subject);
+    if (lockout.lockedOut) {
+      clearReturnSync();
+      applyPlacementThenAnnounce('lockout').catch((error) => log.warn(`nodeDownService: ${error.message}`));
+    } else if (!returnSyncHandler && !stored.superseded) {
+      // Not while a return is pending: the reconnect pull delivers the
+      // records in its own order, a past one ahead of the newest, and a
+      // check run on the first would answer for a store the pull has not
+      // finished filling — then release the hold and announce, which refutes
+      // the newest on every survivor. The return check reads the whole store
+      // once a pull has answered. And not for a certificate older than the
+      // record held: a past incident is stored for the count, not news.
       applyPlacementThenAnnounce('certificate').catch((error) => log.warn(`nodeDownService: ${error.message}`));
     }
   } else if (reconciler) {
@@ -477,11 +514,35 @@ function onPeerAdded() {
 function awaitReturnSync() {
   if (returnSyncHandler) return;
   returnSyncHandler = () => {
-    appSyncEvents.off(SYNC_EVENTS.RECONNECT_SYNC_COMPLETE, returnSyncHandler);
-    returnSyncHandler = null;
+    clearReturnSync();
     applyPlacementThenAnnounce('return').catch((error) => log.warn(`nodeDownService: ${error.message}`));
   };
   appSyncEvents.on(SYNC_EVENTS.RECONNECT_SYNC_COMPLETE, returnSyncHandler);
+}
+
+function clearReturnSync() {
+  if (!returnSyncHandler) return;
+  appSyncEvents.off(SYNC_EVENTS.RECONNECT_SYNC_COMPLETE, returnSyncHandler);
+  returnSyncHandler = null;
+}
+
+/**
+ * Whether this node may dial the far end on its request
+ * (/flux/addoutgoingpeer). The reconciler's plan holds a stood-down node out;
+ * a dial made on request must read the same rule, or a locked-out node gets
+ * its inbound back by asking for it — and with it the communication check
+ * the delisting rests on.
+ *
+ * @param {string} socketAddress the requester's ip:port
+ * @returns {Promise<{allowed: boolean, reason: string, subject?: string}>}
+ */
+async function mayDialBack(socketAddress) {
+  if (!transport) return { allowed: true, reason: 'not_started' };
+  refreshIndex();
+  const subject = index.bySocket.get(normalizeSocketAddress(socketAddress));
+  if (!subject) return { allowed: true, reason: 'unlisted' };
+  if (await stoodDown(subject)) return { allowed: false, reason: 'stood_down', subject };
+  return { allowed: true, reason: 'not_stood_down', subject };
 }
 
 /**
@@ -519,6 +580,11 @@ function start(injectedTransport) {
     },
     inboundCount: () => transport.peerManager.inboundCount,
     stoodDown,
+    selfLockout: async () => {
+      const me = myOutpoint();
+      if (!me) return { lockedOut: false, count: 0, liftsAt: null };
+      return nodeDownStore.lockoutFor(me);
+    },
     dialPlan: (outpoint) => ladder.dialPlan(outpoint),
     noteContact: (outpoint) => ladder.noteContact(outpoint),
   });
@@ -568,8 +634,7 @@ function stop() {
   if (transport && addHandler) transport.peerManager.off('peer:added', addHandler);
   if (transport && answerHandler) transport.peerManager.off('peer:answered', answerHandler);
   if (returnSyncHandler) {
-    appSyncEvents.off(SYNC_EVENTS.RECONNECT_SYNC_COMPLETE, returnSyncHandler);
-    returnSyncHandler = null;
+    clearReturnSync();
     // eslint-disable-next-line global-require
     require('./appMessaging/peerNotification').releaseAnnouncements();
   }
@@ -612,4 +677,5 @@ module.exports = {
   onVerdictMessage,
   onCertificateBroadcast,
   onCertificateSyncEvent,
+  mayDialBack,
 };

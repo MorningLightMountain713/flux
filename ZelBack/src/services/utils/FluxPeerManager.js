@@ -1,5 +1,6 @@
 'use strict';
 
+const WebSocket = require('ws');
 const { EventEmitter } = require('events');
 const config = require('config');
 const log = require('../../lib/log');
@@ -1159,15 +1160,38 @@ class FluxPeerManager extends EventEmitter {
       answer = { admitted: true, reason: 'gate_error' };
     }
     if (!answer.admitted) {
-      try {
-        ws.close(CLOSE_CODES.LOCKED_OUT, `Peering refused: ${answer.reason}`);
-      } catch (error) {
-        log.error(error);
-      }
+      await this.#tellThenClose(ws, answer.tell, CLOSE_CODES.LOCKED_OUT, `Peering refused: ${answer.reason}`);
       return;
     }
     try {
       this.#admitInbound(ws, ipv4Peer, port, metadata, req);
+    } catch (error) {
+      log.error(error);
+    }
+  }
+
+  /**
+   * A refusal that carries its evidence: the frames the gate hands over are
+   * written first, each flushed before the next, and the close follows, so
+   * the far end reads the rows behind the refusal before it reads the code.
+   * The socket was never admitted, so nothing registers and nothing is
+   * counted; the dialer's own intake verifies what it is told.
+   *
+   * @param {WebSocket} ws
+   * @param {string[]|undefined} frames serialised, signed messages
+   * @param {number} code close code
+   * @param {string} reason close reason
+   */
+  async #tellThenClose(ws, frames, code, reason) {
+    try {
+      for (const frame of frames ?? []) {
+        // eslint-disable-next-line no-await-in-loop
+        await new Promise((resolve) => {
+          if (ws.readyState !== WebSocket.OPEN) { resolve(); return; }
+          ws.send(frame, () => resolve());
+        });
+      }
+      ws.close(code, reason);
     } catch (error) {
       log.error(error);
     }

@@ -1440,6 +1440,22 @@ describe('FluxPeerManager tests', () => {
       expect(manager.inboundCount).to.equal(0);
     });
 
+    it('what the gate tells is written before the close, in order, each flushed; nothing registers', async () => {
+      manager.numberOfFluxNodes = 10000;
+      manager.setInboundGate(sinon.stub().resolves({
+        admitted: false, reason: 'locked_out', subject: 'x:0', tell: ['row-1', 'row-2'],
+      }));
+      const ws = createMockWs('8.8.8.8');
+      const order = [];
+      ws.send = (data, cb) => { order.push(`send:${data}`); cb(); };
+      ws.close = (code) => { order.push(`close:${code}`); };
+      manager.validateAndAddInbound(ws, '16127', createMockReq('8.8.8.8'));
+      await settle();
+      expect(order).to.deep.equal(['send:row-1', 'send:row-2', `close:${CLOSE_CODES.LOCKED_OUT}`]);
+      expect(manager.has('8.8.8.8:16127')).to.equal(false);
+      expect(manager.inboundCount).to.equal(0);
+    });
+
     it('admits what the gate admits', async () => {
       manager.numberOfFluxNodes = 10000;
       manager.setInboundGate(sinon.stub().resolves({ admitted: true, reason: 'not_locked_out' }));
