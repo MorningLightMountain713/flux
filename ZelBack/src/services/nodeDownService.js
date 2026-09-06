@@ -528,10 +528,12 @@ function clearReturnSync() {
 
 /**
  * Whether this node may dial the far end on its request
- * (/flux/addoutgoingpeer). The reconciler's plan holds a stood-down node out;
- * a dial made on request must read the same rule, or a locked-out node gets
- * its inbound back by asking for it — and with it the communication check
- * the delisting rests on.
+ * (/flux/addoutgoingpeer). Only the lockout refuses: a locked-out node must
+ * not get its inbound back by asking for it, or it passes the communication
+ * check the delisting rests on. A node whose record merely stands is a
+ * different case — the request itself is proof it is back, and the inbound
+ * it asks for is what lets it sync and refute inside the grace; the plan
+ * declines to dial such a node on its own, but answers its ask.
  *
  * @param {string} socketAddress the requester's ip:port
  * @returns {Promise<{allowed: boolean, reason: string, subject?: string}>}
@@ -541,8 +543,14 @@ async function mayDialBack(socketAddress) {
   refreshIndex();
   const subject = index.bySocket.get(normalizeSocketAddress(socketAddress));
   if (!subject) return { allowed: true, reason: 'unlisted' };
-  if (await stoodDown(subject)) return { allowed: false, reason: 'stood_down', subject };
-  return { allowed: true, reason: 'not_stood_down', subject };
+  try {
+    const lockout = await nodeDownStore.lockoutFor(subject);
+    if (lockout.lockedOut) return { allowed: false, reason: 'locked_out', subject };
+    return { allowed: true, reason: 'not_locked_out', subject };
+  } catch (error) {
+    log.warn(`nodeDownService: lockout lookup for ${subject} failed, allowing the dial-back: ${error.message}`);
+    return { allowed: true, reason: 'store_error', subject };
+  }
 }
 
 /**
