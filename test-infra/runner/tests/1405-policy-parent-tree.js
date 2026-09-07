@@ -31,7 +31,8 @@ describe('Policy: a child feature needs its parent granted', function () {
     await env?.teardown();
   });
 
-  const edge = () => ({ [target]: { strength: 'requires', network: true } });
+  // onRemove is required on a requires-strength edge (FluxAppSpecBase.fromSubmission).
+  const edge = () => ({ [target]: { strength: 'requires', network: true, onRemove: 'detach' } });
 
   it('the encoder refuses a definition granting the child without its parent', function () {
     expect(() => definitionBytes({ features: ['networkSharing'] })).to.throw();

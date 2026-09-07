@@ -77,7 +77,15 @@ export function policyTx(bytes, { sender = MESSAGE_AUTHORITY, signsAllOutputs = 
     vin: [{
       txid: 'prev-tx-stub', vout: 0, address: sender, scriptSig: scriptSig(signsAllOutputs ? SIGHASH_ALL : SIGHASH_NONE),
     }],
-    vout: [{ valueSat: 0, scriptPubKey: { addresses: [], asm: `OP_RETURN ${hex}` } }],
+    // The explorer's coarse filter takes a soft-fork message only from a recognised
+    // signer's SELF-SEND: the sender's address must also appear as a receiving
+    // output beside the OP_RETURN (explorerService: senderIsRecognizedSigner &&
+    // receiverIsRecognizedSigner && message). Without this output every message
+    // minted here was dropped at that gate with no log line (1402–1405, 2026-09-07).
+    vout: [
+      { valueSat: 0, scriptPubKey: { addresses: [sender], asm: '' } },
+      { valueSat: 0, scriptPubKey: { addresses: [], asm: `OP_RETURN ${hex}` } },
+    ],
   };
 }
 
