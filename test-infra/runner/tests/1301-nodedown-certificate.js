@@ -170,10 +170,16 @@ describe('node-down certificates end to end', function () {
 
     const [row] = await dbClient(WITNESS + 1).getNodeDownRecords(subjectOutpoint);
     expect(row.subject).to.equal(subjectOutpoint);
-    expect(row.dedupKey).to.match(new RegExp(`^nodedown:${subjectOutpoint}:\\d+$`));
+    // the row is keyed on the death's number as the jury counted it, and
+    // this is the subject's first: every juror's verdict named 1, the
+    // certificate carries the middle of its quorum, the store keyed on it
+    expect(row.dedupKey, 'keyed on the death number').to.equal(`nodedown:${subjectOutpoint}:1`);
+    expect(row.death).to.equal(1);
     const certificate = row.data?.certificate;
     expect(certificate, 'stored row carries the certificate').to.exist;
     expect(certificate.subject).to.equal(subjectOutpoint);
+    expect(certificate.death, 'the certificate names the death').to.equal(1);
+    expect(certificate.verdicts.every((verdict) => verdict.death === 1), 'every counted verdict named it').to.equal(true);
     // Quorum for a 14-owner jury is 10 — fewer signed verdicts must never
     // have been stored, whatever the transport delivered.
     expect(certificate.verdicts.length).to.be.at.least(10);
