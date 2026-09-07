@@ -28,12 +28,12 @@ class FluxosDiscounter {
     const result = checkFreeUpdate({
       oldSpec,
       newSpec,
-      // Feature sets are computed once by the pricer with each spec's real
-      // encryption flag — newFeatures is injected by PricingEngine.priceUpdate
-      // from the new breakdown; oldFeatures comes from the caller, derived from
+      // Metered quantities are computed once by the pricer with each spec's real
+      // encryption flag — newMetered is injected by PricingEngine.priceUpdate
+      // from the new breakdown; oldMetered comes from the caller, derived from
       // the old breakdown it prices for the unused-time credit.
-      oldFeatures: ctx.oldFeatures,
-      newFeatures: ctx.newFeatures,
+      oldMetered: ctx.oldMetered,
+      newMetered: ctx.newMetered,
       recentEvents: ctx.recentEvents || [],
       now: ctx.now || Date.now(),
     });
