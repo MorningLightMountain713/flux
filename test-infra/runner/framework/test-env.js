@@ -30,6 +30,19 @@ import { stubPeerClient } from './stub-peer-helper.js';
 import { derivePeerThresholds, ringArc, dialerCount } from './peer-topology.js';
 import { pushImage, mirrorExecutorImage, executorImageReference } from './registry-helper.js';
 import { defaultGroupGrantDoc } from './policy-helper.js';
+import { createRequire } from 'node:module';
+
+// The product's ordering rule over stored soft-fork rows, host-side: what
+// entitlementsState.rebuildPolicyGroupState runs over the seeded grant at boot.
+const requireProduct = createRequire(import.meta.url);
+function assertSeedInChainOrder(doc) {
+  const { inChainOrder } = requireProduct('../../../ZelBack/src/services/utils/softForkRows.js');
+  try {
+    inChainOrder([doc], 'policygroupmessages');
+  } catch (error) {
+    throw new Error(`the harness policy seed would be refused by every node at boot — fix policy-helper.defaultGroupGrantDoc: ${error.message}`);
+  }
+}
 import { MongoClient } from 'mongodb';
 import { authenticate } from '../auth.js';
 import { fluxTeamKey, nodeKey } from './keys.js';
@@ -857,7 +870,7 @@ function getBootId(nodeNum) {
   return `test-boot-id-node-${String(nodeNum).padStart(2, '0')}`;
 }
 
-async function seedMongo(mongoIp, nodeCount, bootContext = 'running', { dataCenter = true, staticIp = true, initialHeight = DEFAULT_INITIAL_HEIGHT, policySeeds = null, arcane = false } = {}) {
+async function seedMongo(mongoIp, nodeCount, bootContext = 'running', { dataCenter = true, staticIp = true, initialHeight = DEFAULT_INITIAL_HEIGHT, policySeeds = null, arcane = false, seedPolicyGrant = true } = {}) {
   const client = new MongoClient(`mongodb://${mongoIp}:27017`);
   try {
     await client.connect();
@@ -865,7 +878,13 @@ async function seedMongo(mongoIp, nodeCount, bootContext = 'running', { dataCent
     // harness chain grants none. Seed a default-group grant so every owner is entitled —
     // the precondition the submission gate checks (see policy-helper). Arcane only: the
     // legacy-verdict suites never submit v9 specs, so they don't need it.
-    const policyGrant = arcane ? defaultGroupGrantDoc() : null;
+    // seedPolicyGrant:false leaves the chain as a fresh one is — granting
+    // nothing — for the suites that put the policy on chain themselves (14xx).
+    const policyGrant = arcane && seedPolicyGrant ? defaultGroupGrantDoc() : null;
+    // The product's own rule over the row, before a node reads it: a seed the
+    // node would refuse at boot (2026-09-03..07: no txIndex) denied every gated
+    // feature on every node and read as 33 red suites. Now it is one line, here.
+    if (policyGrant) assertSeedInChainOrder(policyGrant);
     for (let i = 1; i <= nodeCount; i++) {
       const num = String(i).padStart(2, '0');
       if (policyGrant) {
@@ -1055,6 +1074,10 @@ export async function createTestEnv({
   // Real flux-dnsd from test-infra/flux-dnsd/dist, delivered to systemd-mode
   // nodes as its production unit.
   dnsdReal = false,
+  // The default-group grant seeded into every node's chainparams before boot.
+  // false leaves the chain as a fresh one is - granting nothing - for the
+  // suites that put the policy on chain themselves (14xx).
+  seedPolicyGrant = true,
   // Which ZMQ topics the daemon stub publishes: fleet-wide, and per node index for a
   // mixed push/poll fleet. Defaulted, not bare - nodeZmqTopics[i] is indexed at the
   // conf render below, so an absent option would throw rather than fall back.
@@ -1396,7 +1419,7 @@ export async function createTestEnv({
     // mongo starts, i.e. inside the fleet boot, where the waits at risk are the
     // boot's own.
     await startInfraDeathWatch(env);
-    await _buildEnv(env, nodes, deferredNodes, legacyNodes, unprivilegedNodes, stubPeers, silentSyncPeers, unverifiableSyncPeers, policyUnawarePeers, stubPeerings, mergedOverrides, mergedNodeOverrides, nodeTiers, dataCenter, tickerAutostart, discoveryAutostart, nodeStatusOverrides, rpcFailures, bootContext, initialHeight, syncthing, aptSeeded, aptBadSource, geolocation, locationTable, staticIp, policy, policySeeds, policyReachable, pm2Nodes, pausedSyncthingNodes, { ...sharedKeys, ...collateralOf }, networkShapes, globalIpv6, dnsRecords, firewall, collateralOf, syncthingFaults, configuredIp, nodeImageTags, freezableDockerRoot, symlinkedAppsFolder, arcane, shutdowndMock, telemetrydMock, fluxosJournal, arcaneHost, telemetrydReal, shutdowndReal, dnsdReal, zmqTopics, nodeZmqTopics, { perNodeZmq });
+    await _buildEnv(env, nodes, deferredNodes, legacyNodes, unprivilegedNodes, stubPeers, silentSyncPeers, unverifiableSyncPeers, policyUnawarePeers, stubPeerings, mergedOverrides, mergedNodeOverrides, nodeTiers, dataCenter, tickerAutostart, discoveryAutostart, nodeStatusOverrides, rpcFailures, bootContext, initialHeight, syncthing, aptSeeded, aptBadSource, geolocation, locationTable, staticIp, policy, policySeeds, policyReachable, pm2Nodes, pausedSyncthingNodes, { ...sharedKeys, ...collateralOf }, networkShapes, globalIpv6, dnsRecords, firewall, collateralOf, syncthingFaults, configuredIp, nodeImageTags, freezableDockerRoot, symlinkedAppsFolder, arcane, shutdowndMock, telemetrydMock, fluxosJournal, arcaneHost, telemetrydReal, shutdowndReal, dnsdReal, zmqTopics, nodeZmqTopics, { perNodeZmq, seedPolicyGrant });
     return env;
   } catch (err) {
     // Boot failed: the env owns everything started so far. The shared teardown
@@ -1426,7 +1449,7 @@ function mergeConfigs(base, override) {
 }
 
 async function _buildEnv(env, nodes, deferredNodes, legacyNodes, unprivilegedNodes, stubPeers, silentSyncPeers, unverifiableSyncPeers, policyUnawarePeers, stubPeerings, configOverrides, nodeConfigOverrides, nodeTiers, dataCenter, tickerAutostart, discoveryAutostart, nodeStatusOverrides, rpcFailures, bootContext, initialHeight, syncthing = 'stub', aptSeeded = true, aptBadSource = false, geolocation, locationTable, staticIp = true, policy = null, policySeeds = null, policyReachable = false, pm2Nodes = {}, pausedSyncthingNodes = [], sharedKeys = {}, networkShapes = {}, globalIpv6 = [], dnsRecords = [], firewall = false, collateralOf = {}, syncthingFaults = {}, configuredIp = {}, nodeImageTags = {}, freezableDockerRoot = [], symlinkedAppsFolder = [], arcane = false, shutdowndMock = false, telemetrydMock = false, fluxosJournal = false, arcaneHost = false, telemetrydReal = false, shutdowndReal = false, dnsdReal = false, zmqTopics, nodeZmqTopics, zmqOptions = {}) {
-  const { perNodeZmq = false } = zmqOptions;
+  const { perNodeZmq = false, seedPolicyGrant = true } = zmqOptions;
   // Everything built here registers onto the env shell as it comes up, so a
   // boot-phase throw leaves the partial state reachable (see makeEnvShell).
   const {
@@ -1469,7 +1492,7 @@ async function _buildEnv(env, nodes, deferredNodes, legacyNodes, unprivilegedNod
   watchInfra(env, 'mongo', mongo);
 
   await seedMongo(MONGO_IP, nodes, bootContext, {
-    dataCenter, staticIp, initialHeight, policySeeds, arcane,
+    dataCenter, staticIp, initialHeight, policySeeds, arcane, seedPolicyGrant,
   });
 
   const daemonStub = await new StaticIpContainer(image('flux-e2e-daemon-stub'))
