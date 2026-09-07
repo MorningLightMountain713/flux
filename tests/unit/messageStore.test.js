@@ -158,7 +158,7 @@ describe('messageStore tests', () => {
       deserializeTempMessage: sinon.stub().callsFake((msg) => realAppEvent(msg)),
       deserializeMessage: sinon.stub().resolves({}),
       authorize: sinon.stub().resolves(),
-      verifyAttestation: sinon.stub().returns(true),
+      verifyAttestation: sinon.stub().resolves(true),
     };
 
     registryManagerStub = {
@@ -487,7 +487,7 @@ describe('messageStore tests', () => {
 
       it('rejects an encrypted v9 message with a missing or invalid attestation', async () => {
         appEventVerifierStub.deserializeTempMessage.resolves(await encryptedV9Event());
-        appEventVerifierStub.verifyAttestation.returns(false);
+        appEventVerifierStub.verifyAttestation.resolves(false);
         messageStore = buildWithSystemSecure(false);
 
         const result = await messageStore.storeAppTemporaryMessage(encryptedMessage);
@@ -497,9 +497,27 @@ describe('messageStore tests', () => {
         expect(dbHelperStub.insertOneToDatabase.called).to.be.false;
       });
 
+      // verifyAttestation answers with a Promise now, and a Promise is truthy
+      // however it resolves. Drop the await at the gate and `!verifyAttestation()`
+      // is false for every message, so an unattested encrypted message is stored
+      // and relayed. The stub resolving false rather than returning it is what
+      // makes this test able to tell the two apart: a `returns(false)` stub would
+      // pass whether or not the caller awaited.
+      it('refuses a refusal that arrives asynchronously, not just a synchronous one', async () => {
+        appEventVerifierStub.deserializeTempMessage.resolves(await encryptedV9Event());
+        appEventVerifierStub.verifyAttestation.callsFake(async () => false);
+        messageStore = buildWithSystemSecure(false);
+
+        const result = await messageStore.storeAppTemporaryMessage(encryptedMessage);
+
+        expect(result, 'an unattested message was stored').to.be.instanceOf(Error);
+        expect(result.message).to.include('arcane attestation');
+        expect(dbHelperStub.insertOneToDatabase.called).to.be.false;
+      });
+
       it('stores an encrypted v9 message carrying a valid attestation', async () => {
         appEventVerifierStub.deserializeTempMessage.resolves(await encryptedV9Event());
-        appEventVerifierStub.verifyAttestation.returns(true);
+        appEventVerifierStub.verifyAttestation.resolves(true);
         messageStore = buildWithSystemSecure(false);
 
         const result = await messageStore.storeAppTemporaryMessage(encryptedMessage);
@@ -516,7 +534,7 @@ describe('messageStore tests', () => {
         // check it got that far.
         const [attested] = appEventVerifierStub.verifyAttestation.firstCall.args;
         let signedOver = null;
-        expect(attested.verifyArcaneAttestation((msg) => { signedOver = msg; return true; }, 'pk'))
+        expect(await attested.verifyArcaneAttestation((msg) => { signedOver = msg; return true; }, 'pk'))
           .to.be.true;
         expect(signedOver, 'the attest message is built from the envelope').to.be.a('string').and.not.equal('');
       });
@@ -525,7 +543,7 @@ describe('messageStore tests', () => {
         // Legacy enterprise apps predate attestation and aren't born attested;
         // AppEventLegacy has no verifyArcaneAttestation, so the gate must skip them.
         appEventVerifierStub.deserializeTempMessage.resolves(await encryptedV8Event());
-        appEventVerifierStub.verifyAttestation.returns(false);
+        appEventVerifierStub.verifyAttestation.resolves(false);
         messageStore = buildWithSystemSecure(false);
 
         const result = await messageStore.storeAppTemporaryMessage({ ...encryptedMessage, version: 1 });
@@ -598,7 +616,7 @@ describe('messageStore tests', () => {
           sealed,
           { contentHash: cleartext.contentHash(), arcaneAttestation: 'att-sig' },
         ));
-        appEventVerifierStub.verifyAttestation.returns(true);
+        appEventVerifierStub.verifyAttestation.resolves(true);
         // A node that cannot open it — benchmarkService must be stubbed or the
         // real one dials 127.0.0.1:26224 and the harness fails the run.
         messageStore = proxyquire(
@@ -664,7 +682,7 @@ describe('messageStore tests', () => {
         dbHelperStub.databaseConnection.returns({ db: sinon.stub().returns('database') });
         dbHelperStub.findOneInDatabase.resolves(null);
         dbHelperStub.insertOneToDatabase.resolves();
-        appEventVerifierStub.verifyAttestation.returns(true);
+        appEventVerifierStub.verifyAttestation.resolves(true);
       });
 
       it('rejects a message whose decrypted content is not what was signed', async () => {
