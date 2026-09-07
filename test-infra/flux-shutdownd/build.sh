@@ -34,7 +34,10 @@ if [ ! -d "$src/.git" ]; then
   mkdir -p "$(dirname "$src")"
   git clone "$repo" "$src"
 fi
-git -C "$src" fetch origin
+# A pin already in the cached clone needs no network: a fetch that cannot reach the
+# remote (no agent on a detached box) must not abort a build the checkout below
+# can satisfy; a pin that is genuinely absent still fails loudly at the checkout.
+git -C "$src" fetch origin || echo "flux-shutdownd: fetch failed, building from the cached clone" >&2
 git -C "$src" checkout -q "$pin"
 
 # safe.directory: the builder runs as root against a host-owned clone, and
