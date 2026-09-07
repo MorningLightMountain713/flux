@@ -2,6 +2,7 @@
 import { describe, it, before, after } from 'mocha';
 import { expect } from 'chai';
 import { createTestEnv } from '../framework/test-env.js';
+import { ALL_ZMQ_TOPICS } from '../framework/fluxd-conf.js';
 import { bootAndPeer } from '../framework/reconciler-suite.js';
 import { registerEncryptedV9App, updateEncryptedV9App } from '../framework/content-helper.js';
 import { queueAppTx, advanceBlocks } from '../framework/daemon-control.js';
@@ -71,6 +72,12 @@ describe('mesh membership level API', function () {
       shutdowndMock: false,
       dnsdReal: true,
       arcane: true,
+      // The founding photos pin committees at spec anchor heights, which
+      // needs the ANCHORED membership history — the ZMQ delta machinery
+      // production runs. The harness default is the polling path, whose
+      // history carries no chain anchors and can never answer at-height;
+      // a mesh app no node photographed stays undecided and never installs.
+      zmqTopics: ALL_ZMQ_TOPICS,
       configOverrides: {
         // t4's spec shrink only contracts membership once each node ADOPTS the
         // update (the trim reads the LOCAL spec's instance count), and loose
