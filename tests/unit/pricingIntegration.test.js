@@ -14,7 +14,7 @@ describe('pricing integration — chain messages through PricingEngine', () => {
   let SOFT_FORK_EFFECTIVE_DEPTH;
   let buildPricingEngine, resolveMarketplacePricingCtx;
   let convertMicrodollarsToSats;
-  let usedFeatureKeys;
+  let meteredQuantities;
   let FluxAppSpecV9;
 
   before(async () => {
@@ -24,7 +24,7 @@ describe('pricing integration — chain messages through PricingEngine', () => {
       MarketplacePricingMessage, MarketplacePricingHistory,
       SOFT_FORK_EFFECTIVE_DEPTH,
       convertMicrodollarsToSats,
-      usedFeatureKeys,
+      meteredQuantities,
     } = await import('@runonflux/flux-spec-policy'));
     ({ FluxAppSpecV9 } = await import('@runonflux/flux-spec'));
     ({ buildPricingEngine, resolveMarketplacePricingCtx } = require('../../ZelBack/src/services/pricing/buildPricingEngine'));
@@ -483,11 +483,11 @@ describe('pricing integration — chain messages through PricingEngine', () => {
       const engine = await buildPricingEngine(h.queryHeight);
 
       // Old breakdown priced with the old (cleartext) encryption bit, exactly as
-      // computeUpdateFee does, to derive the old feature set passed via ctx.
+      // computeUpdateFee does, to derive the metered quantities passed via ctx.
       const oldBreakdown = await engine.price(spec, {
         height: h.queryHeight, duration: spec.ttl, isEncrypted: false,
       });
-      const oldFeatures = usedFeatureKeys(oldBreakdown.features);
+      const oldMetered = meteredQuantities(oldBreakdown);
 
       return engine.priceUpdate(spec, spec, {
         height: h.queryHeight,
@@ -495,7 +495,7 @@ describe('pricing integration — chain messages through PricingEngine', () => {
         now: Date.now(),
         recentEvents: [],
         oldScaledPriceMicrodollars: oldBreakdown.marketplaceAdjustedMicrodollars,
-        oldFeatures,
+        oldMetered,
         remainingSeconds: spec.ttl,
         oldTtl: spec.ttl,
         isEncrypted: newIsEncrypted,
@@ -565,7 +565,7 @@ describe('pricing integration — chain messages through PricingEngine', () => {
         now: Date.now(),
         recentEvents: [],
         oldScaledPriceMicrodollars: oldBreakdown.marketplaceAdjustedMicrodollars,
-        oldFeatures: usedFeatureKeys(oldBreakdown.features),
+        oldMetered: meteredQuantities(oldBreakdown),
         remainingSeconds: 0,
         oldTtl: previous.ttl,
         isEncrypted: false,
