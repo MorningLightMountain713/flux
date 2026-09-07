@@ -485,6 +485,36 @@ describe('nodeDownService', () => {
       service.stop();
     });
 
+    it('a store that cannot be read does not stop the pass: the reading stays the last one, and the duty is still dialled', async () => {
+      // 217 on chud, 2026-09-07: the poisoned source's every pass failed on the
+      // failpoint ("ringReconciler pass failed"), so it dialled nobody and the
+      // joiner never got its fourth peer. The pass awaits this reading first.
+      const harness = makeHarness();
+      withDuty(harness);
+      const { service, transport, stubs } = harness;
+      stubs.lockoutFor.withArgs(MY_OUTPOINT).rejects(new Error('Failing command via failpoint'));
+      service.start(transport);
+      await tick();
+      await service.sweep();
+      await tick();
+      expect(transport.dial.callCount, 'the pass went on to its plan').to.be.at.least(1);
+      expect(transport.dial.firstCall.args[0]).to.equal(DUTY_IP);
+      expect(service.isLockedOut()).to.equal(false);
+
+      // the last reading is kept, whichever way it read
+      stubs.lockoutFor.withArgs(MY_OUTPOINT).resolves({ lockedOut: true, count: 4, liftsAt: 1 });
+      await service.sweep();
+      await tick();
+      expect(service.isLockedOut()).to.equal(true);
+      const dialled = transport.dial.callCount;
+      stubs.lockoutFor.withArgs(MY_OUTPOINT).rejects(new Error('Failing command via failpoint'));
+      await service.sweep();
+      await tick();
+      expect(service.isLockedOut(), 'unreadable: still locked out').to.equal(true);
+      expect(transport.dial.callCount, 'locked out: dialled nobody').to.equal(dialled);
+      service.stop();
+    });
+
     it('a dial-back is refused for a locked-out node only: a node whose record merely stands is answered, since its ask is proof it is back', async () => {
       const harness = makeHarness();
       withDuty(harness);

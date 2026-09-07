@@ -40,6 +40,8 @@ let returnSyncHandler = null;
 // This node's own lockout as last read — by the reconciler's pass, or the
 // moment a certificate about this node locks it out. Read by every dialler.
 let selfLocked = false;
+// edge: the lockout on this node could not be read; cleared when it can again
+let selfLockoutUnreadable = false;
 
 // outpoint <-> dialable address, rebuilt when the membership moves.
 const index = { fingerprint: undefined, byOutpoint: new Map(), bySocket: new Map() };
@@ -626,9 +628,26 @@ function start(injectedTransport) {
     selfLockout: async () => {
       const me = myOutpoint();
       if (!me) return { lockedOut: false, count: 0, liftsAt: null };
-      const lockout = await nodeDownStore.lockoutFor(me);
-      selfLocked = lockout.lockedOut;
-      return lockout;
+      try {
+        const lockout = await nodeDownStore.lockoutFor(me);
+        selfLocked = lockout.lockedOut;
+        if (selfLockoutUnreadable) {
+          selfLockoutUnreadable = false;
+          log.info('nodeDownService: the lockout on this node is readable again');
+        }
+        return lockout;
+      } catch (error) {
+        // A store that cannot be read is no evidence either way: the pass keeps
+        // its last reading and goes on. The pass awaits this first, so a read
+        // that rejected failed every pass and a node with a sick database
+        // dialled nobody (217 on chud, 2026-09-07: the poisoned source never
+        // reached the joiner).
+        if (!selfLockoutUnreadable) {
+          selfLockoutUnreadable = true;
+          log.warn(`nodeDownService: the lockout on this node could not be read; the pass keeps its last reading (locked out: ${selfLocked}): ${error.message}`);
+        }
+        return { lockedOut: selfLocked, count: null, liftsAt: null };
+      }
     },
     dialPlan: (outpoint) => ladder.dialPlan(outpoint),
     noteContact: (outpoint) => ladder.noteContact(outpoint),
