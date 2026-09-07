@@ -433,10 +433,9 @@ describe('verifyPool sizing', () => {
   // incident is. The pool starts at one resident worker and climbs on demand, so
   // sizing only start() would be inert: ten nodes of a fleet on one host each
   // climb to cpus-1 under the same gossip burst - 150 verifier threads on 16
-  // cores in one second, one main thread not running for 110 s, that node
-  // certified dead by its jury and removing its app on return (1203 on chud,
-  // 2026-09-07). This asserts the scale-up path, which is the one that gets
-  // there. The commit that introduced the knob asserted start()'s own size,
+  // cores in one second (1203 on chud, 2026-09-07), and a 96-node gate is 1,440
+  // of them. This asserts the scale-up path, which is the one that gets there.
+  // The commit that introduced the knob asserted start()'s own size,
   // against a pool that had no resident/scaling split at the time.
   it('caps the scale-up at config.fluxapps.verifyPoolSize, not at the host size', () => {
     const { pool, workers } = sizedPool({ verifyPoolSize: 3 }, 16);
