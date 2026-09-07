@@ -13,7 +13,12 @@ const appReconciler = require('../appMonitoring/appReconciler');
  * Inbound counterpart to utils/fluxShutdowndClient.js: the UNIX socket fluxos
  * serves so flux-shutdownd can ask it to drain an app's load-balanced traffic
  * before the node shuts down. Newline-delimited JSON-RPC, matching the daemon's
- * fluxos_client.rs contract.
+ * fluxos_client.rs contract: drain_app, stop_app, app_stop_done (the end of a
+ * per-app stop — complete, deadline or forced; never superseded, where the
+ * node-wide pipeline takes the app over) and clear_app (pipeline aborted).
+ * The whole lifecycle of an app's stopping state travels this ONE socket, in
+ * order, which is what lets its end be trusted: the begin_app_stop reply
+ * travels another channel and cannot be ordered against these.
  *
  * Deliberately a local UNIX socket, NOT the public HTTP API: the API binds all
  * interfaces and is UPnP-forwarded, so a network-reachable drain endpoint would
@@ -77,6 +82,30 @@ function ensureSweepTimer() {
 }
 
 /**
+ * The daemon stamps every per-app stop's messages with the stop's id. A message
+ * carrying an id older than the newest this node has seen for the app belongs
+ * to a stop that has already ended and is refused: a late "stopping" from a
+ * finished stop must not re-seed the state a later "done" already lifted.
+ * Messages without an id (a node-wide pipeline's, an older daemon's) are taken
+ * as they always were.
+ */
+function stopIdOf(params) {
+  const id = params && params.stop_id;
+  return Number.isFinite(id) ? id : null;
+}
+
+function isStale(method, appName, stopId) {
+  if (stopId === null) return false;
+  const last = globalState.getAppLastStopId(appName);
+  if (last !== null && stopId < last) {
+    log.warn(`drain ${method} for ${appName} carries stop ${stopId}, behind stop ${last} already seen — ignored`);
+    return true;
+  }
+  globalState.noteAppStopId(appName, stopId);
+  return false;
+}
+
+/**
  * Mark an app draining/stopping and trigger an immediate presence rebroadcast
  * so peers (and FDM) pull the backend from rotation well inside the drain
  * budget. The rebroadcast debounces internally, so the daemon's burst of
@@ -85,10 +114,33 @@ function ensureSweepTimer() {
 function handleSetState(method, state, params) {
   const appName = params && params.app_name;
   if (!appName) throw new Error(`${method}: app_name required`);
-  globalState.setAppShutdownPipelineState(appName, state, expiryFromDeadline(params.deadline));
+  const stopId = stopIdOf(params);
+  if (isStale(method, appName, stopId)) return { ok: true, stale: true };
+  globalState.setAppShutdownPipelineState(appName, state, expiryFromDeadline(params.deadline), stopId);
   ensureSweepTimer();
   peerNotification.checkAndNotifyPeersOfRunningApps();
   return { ok: true };
+}
+
+/**
+ * The end of a per-app stop, on this socket after the stop's last stop_app so
+ * it is ordered against them: the state is lifted, the app reverts to active
+ * on the next broadcast, and a reconcile sweep starts whatever should run
+ * (a reinstall that landed while the stop was in flight gets its first start
+ * here, not two minutes later at the entry's expiry).
+ */
+function handleAppStopDone(params) {
+  const appName = params && params.app_name;
+  if (!appName) throw new Error('app_stop_done: app_name required');
+  const stopId = stopIdOf(params);
+  if (isStale('app_stop_done', appName, stopId)) return { ok: true, stale: true };
+  const existed = globalState.clearAppShutdownPipelineState(appName);
+  if (!globalState.hasAppShutdownPipelineStates()) stopSweepTimer();
+  if (existed) {
+    peerNotification.checkAndNotifyPeersOfRunningApps();
+    appReconciler.enqueueAll('app-stop-done').catch((err) => log.error(`app stop done reconcile failed: ${err.message}`));
+  }
+  return { ok: true, existed };
 }
 
 /**
@@ -128,6 +180,9 @@ function handleRequest(line) {
     }
     if (method === 'clear_app') {
       return { jsonrpc: '2.0', id, result: handleClearApp(params) };
+    }
+    if (method === 'app_stop_done') {
+      return { jsonrpc: '2.0', id, result: handleAppStopDone(params) };
     }
     return { jsonrpc: '2.0', id, error: { code: -32601, message: `unknown method ${method}` } };
   } catch (error) {

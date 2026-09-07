@@ -59,6 +59,11 @@ const installingApps = new Map();
 // Entries carry an expiry derived from the pipeline deadline so a failed
 // shutdown can't wedge the node in a draining state.
 const appShutdownPipelineStates = new Map();
+// appName -> the newest per-app stop id seen on the drain socket. Outlives the
+// app's pipeline entry on purpose: once a stop's done has lifted the entry, a
+// late message from that same stop must still read as old, and the entry it
+// would compare against is gone.
+const appLastStopIds = new Map();
 
 // Cache references - these will be initialized from cacheManager
 let spawnErrorsLongerAppCache = null;
@@ -154,13 +159,49 @@ module.exports = {
   },
 
   /**
-   * Record an app's shutdown-pipeline state with an expiry.
+   * Record an app's shutdown-pipeline state with an expiry. `stopId` names the
+   * daemon's per-app stop the state belongs to; an entry without one (the
+   * client's seed, made before the daemon answers; a node-wide pipeline's
+   * message) keeps whatever id the app already carries.
    * @param {string} appName
    * @param {'draining'|'stopping'} state
    * @param {number} expiresAt epoch ms after which the entry no longer applies
+   * @param {number|null} [stopId]
    */
-  setAppShutdownPipelineState(appName, state, expiresAt) {
-    appShutdownPipelineStates.set(appName, { state, expiresAt });
+  setAppShutdownPipelineState(appName, state, expiresAt, stopId = null) {
+    const existing = appShutdownPipelineStates.get(appName);
+    appShutdownPipelineStates.set(appName, { state, expiresAt, stopId: stopId ?? existing?.stopId ?? null });
+  },
+
+  /**
+   * The stop id the app's current shutdown-pipeline entry carries, or null when
+   * none, expired, or never named.
+   * @param {string} appName
+   * @returns {number|null}
+   */
+  getAppShutdownPipelineStopId(appName) {
+    const entry = appShutdownPipelineStates.get(appName);
+    if (!entry || entry.expiresAt <= Date.now()) return null;
+    return entry.stopId ?? null;
+  },
+
+  /**
+   * Remember the newest per-app stop id seen for an app; ids only ever rise.
+   * @param {string} appName
+   * @param {number} stopId
+   */
+  noteAppStopId(appName, stopId) {
+    const last = appLastStopIds.get(appName);
+    if (last === undefined || stopId > last) appLastStopIds.set(appName, stopId);
+  },
+
+  /**
+   * The newest per-app stop id ever seen for an app, or null.
+   * @param {string} appName
+   * @returns {number|null}
+   */
+  getAppLastStopId(appName) {
+    return appLastStopIds.get(appName) ?? null;
   },
 
   /**

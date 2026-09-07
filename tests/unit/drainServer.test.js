@@ -83,6 +83,38 @@ describe('drainServer tests', () => {
       expect(enqueueAllStub.calledOnceWith('drain-cleared')).to.be.true;
     });
 
+    it('app_stop_done lifts the state, rebroadcasts and re-drives: the end of a stop travels this socket, in order', () => {
+      call('stop_app', { app_name: 'myapp', deadline: futureDeadline(60), stop_id: 4 });
+      rebroadcastStub.resetHistory();
+      const response = call('app_stop_done', { app_name: 'myapp', stop_id: 4, end_state: 'complete' });
+      expect(response.result).to.deep.equal({ ok: true, existed: true });
+      expect(globalState.getAppShutdownPipelineState('myapp')).to.equal(null);
+      expect(rebroadcastStub.calledOnce).to.equal(true);
+      expect(enqueueAllStub.calledOnceWith('app-stop-done')).to.equal(true);
+    });
+
+    it('a message from a stop older than the newest seen is refused: a late stopping cannot re-seed what its done lifted', () => {
+      call('stop_app', { app_name: 'myapp', deadline: futureDeadline(60), stop_id: 4 });
+      call('app_stop_done', { app_name: 'myapp', stop_id: 5, end_state: 'complete' });
+      const late = call('stop_app', { app_name: 'myapp', deadline: futureDeadline(60), stop_id: 4 });
+      expect(late.result).to.deep.equal({ ok: true, stale: true });
+      expect(globalState.getAppShutdownPipelineState('myapp')).to.equal(null);
+      // and a done from that older stop lifts nothing either
+      call('stop_app', { app_name: 'myapp', deadline: futureDeadline(60), stop_id: 6 });
+      const staleDone = call('app_stop_done', { app_name: 'myapp', stop_id: 5, end_state: 'complete' });
+      expect(staleDone.result).to.deep.equal({ ok: true, stale: true });
+      expect(globalState.getAppShutdownPipelineState('myapp')).to.equal('stopping');
+    });
+
+    it('a message without a stop id is taken as before, and keeps the id the app already carries', () => {
+      call('drain_app', { app_name: 'myapp', deadline: futureDeadline(60), stop_id: 9 });
+      call('stop_app', { app_name: 'myapp', deadline: futureDeadline(60) });
+      expect(globalState.getAppShutdownPipelineState('myapp')).to.equal('stopping');
+      expect(globalState.getAppShutdownPipelineStopId('myapp')).to.equal(9);
+      const done = call('app_stop_done', { app_name: 'myapp', end_state: 'complete' });
+      expect(done.result).to.deep.equal({ ok: true, existed: true });
+    });
+
     it('clear_app of an unknown app reports existed false and stays quiet', () => {
       const response = call('clear_app', { app_name: 'myapp' });
 
