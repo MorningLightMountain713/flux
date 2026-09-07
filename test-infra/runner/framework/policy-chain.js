@@ -19,8 +19,8 @@
 // authority check reads, and a message from any other address is dropped at
 // the gate before it is parsed.
 import { secp256k1 } from '@noble/curves/secp256k1.js';
-import { PolicyGroupMessage, encodeGrantBitmap } from '@runonflux/flux-spec-policy';
-import { injectBlockWith, getState } from './daemon-control.js';
+import { PolicyGroupMessage, encodeGrantBitmap, SOFT_FORK_EFFECTIVE_DEPTH } from '@runonflux/flux-spec-policy';
+import { injectBlockWith, getState, advanceBlocks } from './daemon-control.js';
 import { loadSharedConfig } from './coupled-knobs.js';
 import { waitForBlockProcessed } from './wait.js';
 
@@ -135,11 +135,19 @@ export async function mintMembership(opts) {
 }
 
 /**
- * Every node has processed the block at `height` — the point from which its
- * entitlement state includes what the block carried.
+ * Every node's entitlement state answers for what the block at `height`
+ * carried. A soft-fork message at chain height H is in force from
+ * H + SOFT_FORK_EFFECTIVE_DEPTH (PolicyGroupHistory's effective-height rule),
+ * so the chain is advanced past that height — the ticker is off in these
+ * suites — and every node has processed it. Registering at H itself is one
+ * depth too early: the message is stored and applied, and the gate still
+ * answers for the definition before it (1402–1408 at bb9f6eacd).
  * @param {Array<object>} clients
- * @param {number} height
+ * @param {number} height the block the message was minted in
  */
-export async function policyProcessed(clients, height, timeout = 60000) {
-  await Promise.all(clients.map((c) => waitForBlockProcessed(c, (d) => d.height >= height, timeout)));
+export async function policyProcessed(clients, height, timeout = 120000) {
+  const effective = height + SOFT_FORK_EFFECTIVE_DEPTH;
+  const { currentHeight } = await getState();
+  if (currentHeight < effective) await advanceBlocks(effective - currentHeight);
+  await Promise.all(clients.map((c) => waitForBlockProcessed(c, (d) => d.height >= effective, timeout)));
 }
