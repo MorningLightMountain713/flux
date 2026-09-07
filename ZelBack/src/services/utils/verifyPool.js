@@ -84,10 +84,9 @@ function start(poolSize) {
   // One FluxOS per host sizes its verifiers from the host. A harness fleet of N
   // nodes on ONE host must not: the pool starts lazily on the first gossip burst,
   // which is fleet-wide, so ten nodes started cpus−1 workers each inside the same
-  // second — 150 verifier threads on 16 cores — and one node's main thread did
-  // not run for 110 s, was certified dead by its jury, and removed its app on
-  // return (1203 on chud, 2026-09-07). The knob is the harness's; production
-  // leaves it unset.
+  // second — 150 verifier threads on 16 cores (1203 on chud, 2026-09-07), and a
+  // 96-node gate is 1,440 of them, the run queue that gate saw. The knob is the
+  // harness's; production leaves it unset.
   const size = poolSize ?? config.fluxapps.verifyPoolSize ?? Math.max(1, os.cpus().length - 1);
   if (slots.length) return;
   for (let i = 0; i < size; i++) {
