@@ -11,6 +11,7 @@ import {
 } from '../framework/policy-suite.js';
 import { mintPolicyBlock, definitionBytes, policyProcessed } from '../framework/policy-chain.js';
 import { restartFluxos } from '../framework/container.js';
+import { redialAndPeer } from '../framework/reconciler-suite.js';
 import { waitForNodeStatus } from '../framework/wait.js';
 
 describe('Policy: two definitions in one block — the later position wins, live and after a restart', function () {
@@ -55,7 +56,12 @@ describe('Policy: two definitions in one block — the later position wins, live
   it('a node restarted afterwards rebuilds the same answer from its rows', async function () {
     this.timeout(400000);
     const client = env.clients[0];
+    const preRestart = env.clients.map((c) => c.getLastEventId());
     await restartFluxos(client.container);
+    // A restarted harness node has no discovery (autostart is off in the shared
+    // config): re-issue it and wait for a peer, or the registration gate answers
+    // "not enough peer connections" before the policy answer is ever read.
+    await redialAndPeer(env, [0], preRestart);
     await waitForNodeStatus(client, (d) => d.confirmed === true, 120000);
     expectAccepted(await register(client, { mesh: true }), 'node 0 after its restart');
   });
