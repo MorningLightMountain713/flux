@@ -171,9 +171,16 @@ describe('node-down: the map of stops end to end', function () {
       }
     }, { timeout: 120000, interval: 2000, label: 'discovery restarted on the subject' });
   }
-  async function restartSubjectFluxos(options) {
+  // The RESTARTING closes this suite has made the jurors honour. R7's
+  // courtesy is a per-juror count over the window, and every close the suite
+  // makes on a held duty spends one — A's restart as much as F's twelve. A
+  // restart under the shutdown marker closes SHUTTING_DOWN and spends from
+  // the other budget.
+  let restartingClosesSpent = 0;
+  async function restartSubjectFluxos({ code = 'restart', ...options } = {}) {
     await restartFluxos(subjectContainer(), options);
     await startSubjectDiscovery();
+    if (code === 'restart') restartingClosesSpent += 1;
   }
 
   before(async function () {
@@ -335,7 +342,7 @@ describe('node-down: the map of stops end to end', function () {
     // old process, still serving through the handler's hundred-millisecond
     // grace, and the unmark that followed removed the marker before the
     // handler read it: the subject announced RESTARTING on a staged shutdown.
-    await restartSubjectFluxos();
+    await restartSubjectFluxos({ code: 'shutdown' });
     await unmarkMachineShutdown(subjectContainer());
 
     // inside the grace: no certificate, the row stands
@@ -356,7 +363,7 @@ describe('node-down: the map of stops end to end', function () {
     await clearNodeStatus(subjectIp());
   });
 
-  it('F. the courtesy edge: twelve FluxOS restarts are honoured, the thirteenth is certified at the drop with the real reason', async function () {
+  it('F. the courtesy edge: the window\'s twelve FluxOS restarts are honoured, A\'s counted, and the thirteenth is certified at the drop with the real reason', async function () {
     this.timeout(1500000);
     await clearNodeStatus(subjectIp()).catch(() => {});
     await env.healPartition([SUBJECT], survivors).catch(() => {});
@@ -367,14 +374,20 @@ describe('node-down: the map of stops end to end', function () {
     await reseatSubject('f');
     await recordRefutedOnEverySurvivor('the last record is refuted on every survivor before the restarts');
     const before = (await rowsOnWitness()).length;
-    for (let i = 0; i < RESTART_COURTESY; i += 1) {
+    // The courtesy is the window's, not this test's: run whole, A has spent
+    // one, and F's twelfth restart was the thirteenth close — certified by
+    // eleven survivors (chud, 2026-09-07, "unreachable ... (drop, restart
+    // drop)") while F alone, with a fresh budget, was green.
+    const honoured = RESTART_COURTESY - restartingClosesSpent;
+    for (let i = 0; i < honoured; i += 1) {
       // eslint-disable-next-line no-await-in-loop
       await restartSubjectFluxos();
       // the jurors re-hold the duty before the next close
       // eslint-disable-next-line no-await-in-loop
       await sleep(30_000);
     }
-    expect((await rowsOnWitness()).length, 'twelve honoured restarts leave no row').to.equal(before);
+    expect((await rowsOnWitness()).length, `${honoured} honoured restarts leave no row`).to.equal(before);
+    expect(restartingClosesSpent, 'the courtesy is spent exactly').to.equal(RESTART_COURTESY);
 
     await restartSubjectFluxos();
     await rowsOnEverySurvivor(before + 1, { timeout: RESTART_GRACE_MS + PAST_GRACE_MARGIN_MS });
