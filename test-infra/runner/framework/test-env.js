@@ -23,6 +23,19 @@ import { closeDb } from './db-client.js';
 import { stubPeerClient } from './stub-peer-helper.js';
 import { pushImage } from './registry-helper.js';
 import { defaultGroupGrantDoc } from './policy-helper.js';
+import { createRequire } from 'node:module';
+
+// The product's ordering rule over stored soft-fork rows, host-side: what
+// entitlementsState.rebuildPolicyGroupState runs over the seeded grant at boot.
+const requireProduct = createRequire(import.meta.url);
+function assertSeedInChainOrder(doc) {
+  const { inChainOrder } = requireProduct('../../../ZelBack/src/services/utils/softForkRows.js');
+  try {
+    inChainOrder([doc], 'policygroupmessages');
+  } catch (error) {
+    throw new Error(`the harness policy seed would be refused by every node at boot — fix policy-helper.defaultGroupGrantDoc: ${error.message}`);
+  }
+}
 import { MongoClient } from 'mongodb';
 import { authenticate } from '../auth.js';
 import { fluxTeamKey, nodeKey } from './keys.js';
@@ -489,7 +502,7 @@ function getBootId(nodeNum) {
   return `test-boot-id-node-${String(nodeNum).padStart(2, '0')}`;
 }
 
-async function seedMongo(mongoIp, nodeCount, bootContext = 'running', { dataCenter = true, arcane = false } = {}) {
+async function seedMongo(mongoIp, nodeCount, bootContext = 'running', { dataCenter = true, arcane = false, seedPolicyGrant = true } = {}) {
   const client = new MongoClient(`mongodb://${mongoIp}:27017`);
   try {
     await client.connect();
@@ -497,7 +510,13 @@ async function seedMongo(mongoIp, nodeCount, bootContext = 'running', { dataCent
     // harness chain grants none. Seed a default-group grant so every owner is entitled —
     // the precondition the submission gate checks (see policy-helper). Arcane only: the
     // legacy-verdict suites never submit v9 specs, so they don't need it.
-    const policyGrant = arcane ? defaultGroupGrantDoc() : null;
+    // seedPolicyGrant:false leaves the chain as a fresh one is — granting
+    // nothing — for the suites that put the policy on chain themselves (14xx).
+    const policyGrant = arcane && seedPolicyGrant ? defaultGroupGrantDoc() : null;
+    // The product's own rule over the row, before a node reads it: a seed the
+    // node would refuse at boot (2026-09-03..07: no txIndex) denied every gated
+    // feature on every node and read as 33 red suites. Now it is one line, here.
+    if (policyGrant) assertSeedInChainOrder(policyGrant);
     for (let i = 1; i <= nodeCount; i++) {
       const num = String(i).padStart(2, '0');
       if (policyGrant) {
@@ -574,7 +593,7 @@ export async function createTestEnv({
   tickerAutostart = false, discoveryAutostart = false, nodeStatusOverrides = {},
   rpcFailures = [], bootContext = 'running', arcane = true, shutdowndMock = true,
   telemetrydMock = false, systemdMode = false, telemetrydReal = false,
-  shutdowndReal = false, dnsdReal = false,
+  shutdowndReal = false, dnsdReal = false, seedPolicyGrant = true,
   zmqTopics = DEFAULT_ZMQ_TOPICS, nodeZmqTopics = {}, perNodeZmq = false,
 } = {}) {
   // Before the boot lock, the network, or a single container: a flux-spec
@@ -638,7 +657,7 @@ export async function createTestEnv({
       env, nodes, deferredNodes, legacyNodes, stubPeers, mergedOverrides, nodeConfigOverrides,
       nodeTiers, dataCenter, tickerAutostart, discoveryAutostart, nodeStatusOverrides, rpcFailures,
       bootContext, arcane, shutdowndMock, telemetrydMock, systemdMode, telemetrydReal,
-      shutdowndReal, dnsdReal, zmqTopics, nodeZmqTopics, { perNodeZmq },
+      shutdowndReal, dnsdReal, zmqTopics, nodeZmqTopics, { perNodeZmq, seedPolicyGrant },
     );
     return env;
   } catch (err) {
@@ -688,7 +707,7 @@ async function _buildEnv(
   bootContext, arcane, shutdowndMock, telemetrydMock, systemdMode, telemetrydReal, shutdowndReal,
   dnsdReal, zmqTopics, nodeZmqTopics, zmqOptions = {},
 ) {
-  const { perNodeZmq = false } = zmqOptions;
+  const { perNodeZmq = false, seedPolicyGrant = true } = zmqOptions;
   // Everything built here registers onto the env shell as it comes up, so a
   // boot-phase throw leaves the partial state reachable (see makeEnvShell).
   const {
@@ -719,7 +738,7 @@ async function _buildEnv(
   started.push(mongo);
   containers.mongo = mongo;
 
-  await seedMongo(MONGO_IP, nodes, bootContext, { dataCenter, arcane });
+  await seedMongo(MONGO_IP, nodes, bootContext, { dataCenter, arcane, seedPolicyGrant });
 
   const daemonStub = await new StaticIpContainer('flux-e2e-daemon-stub')
     .withStaticIp(networkName, DAEMON_IP)

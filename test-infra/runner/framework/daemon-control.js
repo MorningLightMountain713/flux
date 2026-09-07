@@ -63,6 +63,13 @@ export async function injectBlock(tx) {
   return post('/advance-block', { block: { tx: [tx] } });
 }
 
+// Advance one block carrying several transactions, in this order — the order is
+// each transaction's position in the block, which soft-fork messages for one
+// subject are ordered by.
+export async function injectBlockWith(txs) {
+  return post('/advance-block', { block: { tx: txs } });
+}
+
 // -- Per-node status --
 
 export async function setNodeStatus(ip, status) {
