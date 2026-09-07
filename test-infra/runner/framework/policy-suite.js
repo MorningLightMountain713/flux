@@ -5,6 +5,7 @@
 // case is the case throughout.
 import { expect } from 'chai';
 import { createTestEnv } from './test-env.js';
+import { ALL_ZMQ_TOPICS } from './fluxd-conf.js';
 import { bootAndPeer } from './reconciler-suite.js';
 import { registerEncryptedV9App, updateEncryptedV9App } from './content-helper.js';
 import { pushBusybox } from './registry-helper.js';
@@ -16,6 +17,12 @@ export async function bootPolicyFleet(hookCtx, { seedPolicyGrant = false, nodes 
     nodes,
     tickerAutostart: false,
     arcane: true,
+    // The daemon's push topics, as production runs them. Without `chainreorg`
+    // a reorg is poll-detected, and the poll only meets a reorg at the next
+    // block it cannot chain: a reorg that keeps the tip height (1407 t2) is
+    // invisible until something advances the chain, and the grant it removed
+    // stays in force on every node.
+    zmqTopics: ALL_ZMQ_TOPICS,
     seedPolicyGrant,
     configOverrides: { fluxapps: { minOutgoing: 1, minIncoming: 1 } },
   });
