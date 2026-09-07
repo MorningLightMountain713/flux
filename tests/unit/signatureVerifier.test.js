@@ -93,6 +93,44 @@ describe('signatureVerifier canonical-form gate', () => {
     });
   });
 
+  describe('the replay door', () => {
+    // Canonical form is a rule about ADMITTING a message. A message the chain
+    // already carries is replayed, and seven on chain carry the bare 0/1
+    // spelling of v — a node that refuses them cannot sync. On that path the
+    // gate does not run and the underlying libraries decide, which is exactly
+    // what the network ran on before the rule existed.
+    const REPLAY = { allowLegacyEncoding: true };
+
+    it('lets the bare 0/1 spelling of v reach the library', async () => {
+      expect(await signatureVerifier.verifySignature('msg', ETH_ADDRESS, ethSig(0), REPLAY)).to.equal(true);
+      expect(await signatureVerifier.verifySignature('msg', ETH_ADDRESS, ethSig(1), REPLAY)).to.equal(true);
+      sinon.assert.calledTwice(ethStub);
+    });
+
+    it('lets the high-S twin reach the library, on either curve', async () => {
+      expect(await signatureVerifier.verifySignature('msg', ETH_ADDRESS, ethSig(27, HIGH_S), REPLAY)).to.equal(true);
+      expect(await signatureVerifier.verifySignature('msg', BTC_ADDRESS, btcSig(31, HIGH_S), REPLAY)).to.equal(true);
+      sinon.assert.calledOnce(ethStub);
+      sinon.assert.calledOnce(btcStub);
+    });
+
+    it('does not decide the answer itself — the signer still has to be right', async () => {
+      // The property leniency must not touch. It widens how a signature may be
+      // spelled, never whose it is.
+      ethStub.returns('0x00000000000000000000000000000000000000ff');
+      btcStub.returns(false);
+      expect(await signatureVerifier.verifySignature('msg', ETH_ADDRESS, ethSig(0), REPLAY)).to.equal(false);
+      expect(await signatureVerifier.verifySignature('msg', BTC_ADDRESS, btcSig(31), REPLAY)).to.equal(false);
+    });
+
+    it('is opt-in: the same signatures are refused at the ingress door', async () => {
+      expect(await signatureVerifier.verifySignature('msg', ETH_ADDRESS, ethSig(0))).to.equal(false);
+      expect(await signatureVerifier.verifySignature('msg', BTC_ADDRESS, btcSig(31, HIGH_S))).to.equal(false);
+      sinon.assert.notCalled(ethStub);
+      sinon.assert.notCalled(btcStub);
+    });
+  });
+
   describe('missing parameters', () => {
     it('rejects empty inputs without consulting either library', async () => {
       expect(await signatureVerifier.verifySignature('', '', '')).to.equal(false);

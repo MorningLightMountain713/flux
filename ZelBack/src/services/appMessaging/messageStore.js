@@ -232,6 +232,11 @@ async function storeAppTemporaryMessage(message, options = {}) {
       appEvent,
       previousState,
       daemonHeight: block,
+      // The same flag that decides which state this is judged against decides
+      // which door it came in by: requested means the node is catching up on
+      // something the network already accepted, anything else is live traffic
+      // the node is being asked to relay.
+      allowLegacyEncoding: isAppRequested,
     });
   }
 
