@@ -28,6 +28,7 @@ function load({ isArcane = true } = {}) {
   const globalStateStub = {
     isArcane: sinon.stub().returns(isArcane),
     setAppShutdownPipelineState: sinon.stub(),
+    clearAppShutdownPipelineState: sinon.stub(),
   };
   const client = proxyquire('../../ZelBack/src/services/utils/fluxShutdowndClient', {
     'node:net': netStub,
@@ -188,6 +189,29 @@ describe('fluxShutdowndClient', () => {
       sockets[0].emit('connect');
       sockets[0].emit('data', Buffer.from(errLine(-32011, 'component-stop-busy')));
       expect(await p).to.deep.equal({ outcome: 'component_busy' });
+    });
+
+    it('an unreachable daemon un-seeds the gate it seeded: no drain-socket callback will ever clear it', async () => {
+      // The uninstaller (a deferred mesh install's cleanup among its callers) neither
+      // clears the gate nor waits for the daemon; with the gate left standing the
+      // reconciler withholds the next install's first start for COMPLETION_SLACK_MS
+      // and the app is announced "stopping" (1102/1106 on chud, 2026-09-07).
+      const { client, sockets, globalStateStub } = load();
+      const p = client.beginAppStop('1own', 'app', 'ttl-expired', { deadline: futureDeadline() });
+      const enoent = Object.assign(new Error('connect ENOENT /run/flux-shutdownd/daemon.sock'), { code: 'ENOENT' });
+      sockets[0].emit('error', enoent);
+      expect(await p).to.deep.equal({ outcome: 'unreachable' });
+      expect(globalStateStub.setAppShutdownPipelineState.calledOnce).to.equal(true);
+      expect(globalStateStub.clearAppShutdownPipelineState.calledOnceWith('app')).to.equal(true);
+    });
+
+    it('a component-scoped stop that cannot reach the daemon clears nothing: it seeded nothing', async () => {
+      const { client, sockets, globalStateStub } = load();
+      const p = client.beginAppStop('1own', 'app', 'ttl-expired', { deadline: futureDeadline(), component: 'web' });
+      sockets[0].emit('error', Object.assign(new Error('connect ENOENT'), { code: 'ENOENT' }));
+      expect(await p).to.deep.equal({ outcome: 'unreachable' });
+      expect(globalStateStub.setAppShutdownPipelineState.called).to.equal(false);
+      expect(globalStateStub.clearAppShutdownPipelineState.called).to.equal(false);
     });
 
     it('maps a socket error to unreachable', async () => {
