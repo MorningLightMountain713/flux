@@ -89,11 +89,11 @@ async function requestGracefulStop(identifier, reconcilerReason) {
     .then((res) => {
       inFlight.delete(appName);
       if (res.outcome === 'unreachable' || res.outcome === 'timeout') {
-        // The daemon did not handle it: drop the gate and re-drive so the reconciler does
-        // a local graceful stop, rather than waiting out the whole budget.
+        // The daemon did not handle it (the client has already un-seeded the gate it
+        // seeded): re-drive so the reconciler does a local graceful stop, rather than
+        // waiting out the whole budget.
         log.warn(`appShutdownCoordinator: ${appName} daemon stop ${res.outcome}; falling back to local`);
         localFallback.add(appName);
-        globalState.clearAppShutdownPipelineState(appName);
         appReconciler.enqueueComponent(identifier);
         return;
       }

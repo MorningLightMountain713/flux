@@ -264,12 +264,14 @@ describe('appShutdownCoordinator', () => {
     resolveDrain({ outcome: 'complete' });
   });
 
-  it('on an unreachable daemon: clears the gate, enqueues, and the next pass stops locally', async () => {
+  it('on an unreachable daemon: enqueues, and the next pass stops locally (the client un-seeds the gate)', async () => {
     stubs.fluxShutdowndClient.beginAppStop.resolves({ outcome: 'unreachable' });
     const first = await coordinator.requestGracefulStop(idOf('myapp'), 'condemned');
     expect(first).to.equal(true);
     await flush();
-    expect(stubs.globalState.clearAppShutdownPipelineState.calledWith('myapp')).to.equal(true);
+    // the gate is the client's to seed and un-seed; a second clear here hid every
+    // other caller's missing one
+    expect(stubs.globalState.clearAppShutdownPipelineState.called).to.equal(false);
     expect(stubs.appReconciler.enqueueComponent.calledWith(idOf('myapp'))).to.equal(true);
 
     // the re-driven pass falls back to a local stop (returns false), then re-allows the daemon

@@ -231,6 +231,12 @@ async function beginAppStop(ownerFluxId, appName, reason, {
   } catch (error) {
     if (isNodePipelineActive(error)) return { outcome: 'rejected_pipeline_active' };
     if (isComponentStopBusy(error)) return { outcome: 'component_busy' };
+    // The daemon never took the stop, so no drain-socket callback will ever clear
+    // the gate seeded above: un-seed it here, where it was seeded. Left standing it
+    // holds the reconciler off the whole app for COMPLETION_SLACK_MS past the
+    // deadline — an install landing in that window (a deferred mesh install's
+    // retry) never gets its first start, and the app is announced "stopping".
+    if (component == null) globalState.clearAppShutdownPipelineState(appName);
     if (isTimeout(error)) return { outcome: 'timeout' };
     return { outcome: 'unreachable' };
   }
