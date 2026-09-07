@@ -95,6 +95,25 @@ function dockerStopApp(app, replica, component) {
   });
 }
 
+// The node's drain socket (fluxos-side): the daemon's messages about a stop's
+// lifecycle travel it, and so do this mock's — stop_app before the stop, and
+// app_stop_done after it, each stamped with the stop's id — because fluxos lifts
+// an app's stopping state on app_stop_done, in order with the stop_app it
+// follows, never on the begin_app_stop reply (another channel). Best-effort like
+// the daemon's client: a missing socket is logged and the stop proceeds.
+const DRAIN_SOCKET = process.env.FLUX_DRAIN_SOCKET || '/run/fluxos/drain.sock';
+let stopSeq = 0;
+function drainCall(method, params) {
+  return new Promise((resolve) => {
+    const sock = net.createConnection(DRAIN_SOCKET);
+    const done = (why) => { if (why) console.error(`drain ${method} ${params.app_name}: ${why}`); sock.destroy(); resolve(); };
+    const timer = setTimeout(() => done('timed out'), 2000);
+    sock.once('connect', () => sock.write(`${JSON.stringify({ jsonrpc: '2.0', id: 1, method, params })}\n`));
+    sock.once('data', () => { clearTimeout(timer); done(); });
+    sock.once('error', (e) => { clearTimeout(timer); done(e.message); });
+  });
+}
+
 function reply(socket, id, result) {
   if (socket.destroyed) return;
   socket.write(`${JSON.stringify({ jsonrpc: '2.0', id, result })}\n`);
@@ -115,11 +134,18 @@ async function handleBeginAppStop(socket, id, params) {
   if (!owner || !app) { replyError(socket, id, RPC_INVALID_PARAMS, 'invalid params: missing owner/app'); return; }
   if (!VALID_REASONS.has(reason)) { replyError(socket, id, RPC_INVALID_PARAMS, `invalid reason: ${reason}`); return; }
 
+  stopSeq += 1;
+  const stopId = stopSeq;
+  const stateParams = {
+    app_name: app, component_name: component ?? '', owner_flux_id: owner, reason, deadline, stop_id: stopId,
+  };
   // A forceful stop (operator force teardown) is a zero-budget kill: always stop and
   // report complete, regardless of the configured drain behaviour.
   if (force) {
+    if (component == null) await drainCall('stop_app', stateParams);
     await dockerStopApp(app, replica, component);
-    reply(socket, id, { end_state: 'complete' });
+    if (component == null) await drainCall('app_stop_done', { app_name: app, stop_id: stopId, end_state: 'complete' });
+    reply(socket, id, { end_state: 'complete', stop_id: stopId });
     return;
   }
 
@@ -133,8 +159,14 @@ async function handleBeginAppStop(socket, id, params) {
     return;
   }
   const endState = STOP_END_STATES[mode] || 'complete';
+  if (component == null) await drainCall('stop_app', stateParams);
   await dockerStopApp(app, replica, component);
-  reply(socket, id, { end_state: endState });
+  // superseded: the node-wide pipeline owns the app from here and re-drains it —
+  // no done, exactly as the daemon sends none.
+  if (component == null && endState !== 'superseded') {
+    await drainCall('app_stop_done', { app_name: app, stop_id: stopId, end_state: endState });
+  }
+  reply(socket, id, { end_state: endState, stop_id: stopId });
 }
 
 async function handleForceAppStop(socket, id, params) {
