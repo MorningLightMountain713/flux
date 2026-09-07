@@ -284,10 +284,10 @@ describe('appShutdownCoordinator', () => {
     const res = await coordinator.requestGracefulStop(idOf('myapp'), 'condemned');
     expect(res).to.equal(true);
     await flush();
-    // the drain is over: nothing left for the gate to protect. Without the clear,
-    // reconciles stay suppressed for the rest of the budget window and a restart
-    // issued during the drain leaves the app down, broadcasting 'stopping'.
-    expect(stubs.globalState.clearAppShutdownPipelineState.calledWith('myapp')).to.equal(true);
+    // the drain is over: the client un-seeds the gate it seeded, and the
+    // coordinator only re-drives (a second clear here hid every other caller's
+    // missing one)
+    expect(stubs.globalState.clearAppShutdownPipelineState.called).to.equal(false);
     expect(stubs.appReconciler.enqueueComponent.calledWith(idOf('myapp'))).to.equal(true);
   });
 

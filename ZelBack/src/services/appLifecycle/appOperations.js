@@ -441,11 +441,6 @@ async function redeployApplication(appName, options = {}) {
         // eslint-disable-next-line no-await-in-loop
         await serviceHelper.delay(config.fluxapps.redeploy.composedDelay * 1000);
       }
-      // The drain is over and the identity is about to be reinstalled: clear the
-      // 'stopping' LB gate beginAppStop seeded so the reconciler can start the
-      // new containers immediately.
-      globalState.clearAppShutdownPipelineState(appName);
-
       status(`${unitLabel} removed. Awaiting installation...`);
       // eslint-disable-next-line no-await-in-loop
       await serviceHelper.delay(config.fluxapps.redeploy.delay * 1000);

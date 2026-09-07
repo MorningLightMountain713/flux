@@ -191,6 +191,32 @@ describe('fluxShutdowndClient', () => {
       expect(await p).to.deep.equal({ outcome: 'component_busy' });
     });
 
+    it('a completed stop un-seeds the gate: the drain is over and the daemon never clears on completion', async () => {
+      // The harness mock and a real daemon both answer complete and drive no
+      // drain-socket clear; a reinstall inside COMPLETION_SLACK_MS (a deferred
+      // mesh install's retry after a fleet-wide restart, 1215 on chud) met the
+      // standing gate and never got its first start.
+      for (const endState of ['complete', 'deadline', 'superseded', 'forced']) {
+        const { client, sockets, globalStateStub } = load();
+        const p = client.beginAppStop('1own', 'app', 'ttl-expired', { deadline: futureDeadline() });
+        sockets[0].emit('connect');
+        sockets[0].emit('data', Buffer.from(okLine({ end_state: endState })));
+        // eslint-disable-next-line no-await-in-loop
+        expect(await p).to.deep.equal({ outcome: endState });
+        expect(globalStateStub.clearAppShutdownPipelineState.calledOnceWith('app'), endState).to.equal(true);
+      }
+    });
+
+    it('rejected_pipeline_active keeps the gate: the node-wide pipeline owns the stop', async () => {
+      const { client, sockets, globalStateStub } = load();
+      const p = client.beginAppStop('1own', 'app', 'ttl-expired', { deadline: futureDeadline() });
+      sockets[0].emit('connect');
+      sockets[0].emit('data', Buffer.from(errLine(-32010, 'node pipeline active')));
+      const res = await p;
+      expect(res.outcome).to.equal('rejected_pipeline_active');
+      expect(globalStateStub.clearAppShutdownPipelineState.called).to.equal(false);
+    });
+
     it('an unreachable daemon un-seeds the gate it seeded: no drain-socket callback will ever clear it', async () => {
       // The uninstaller (a deferred mesh install's cleanup among its callers) neither
       // clears the gate nor waits for the daemon; with the gate left standing the
