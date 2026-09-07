@@ -79,6 +79,8 @@ const REASON = Object.freeze({
   SUB_QUORUM: 'sub_quorum',
   // the certificate's since or reason is not what its own verdicts say
   SINCE_MISMATCH: 'since_mismatch',
+  // the certificate's death number is not what its own verdicts say
+  DEATH_MISMATCH: 'death_mismatch',
 });
 
 const DISCARDED = Object.freeze({
@@ -106,6 +108,12 @@ const DISCARDED = Object.freeze({
  * @property {string} judgement one of JUDGEMENT
  * @property {number} height chain height the observation was made at
  * @property {string} fingerprint membership fingerprint the verdict was cast under
+ * @property {number} [death] which death of the subject this is, as the juror
+ *   counts them: the highest number it has seen certified for the subject,
+ *   plus one. The identity of a death (NODE_DOWN_SCENARIOS.md §5b 2026-09-07,
+ *   formal/death-identity): nothing the subject supplies, and a juror that
+ *   missed a death names a number a real death owns, so a count over these
+ *   never runs high
  * @property {number} [droppedAt] epoch ms the juror saw the held connection drop
  * @property {string} [reason] a DROP_REASON, present exactly when droppedAt is
  * @property {*} [signature] opaque to this module; verified via the injected seam
@@ -126,9 +134,15 @@ function verdictPayload(verdict) {
     String(verdict.height),
     verdict.fingerprint,
   ];
-  // The drop is two trailing fields, both or neither: a verdict that saw no
-  // drop encodes exactly as it always has, and a signature over the seven-
-  // field form can neither be stripped to five nor grown from them.
+  // The death number is one optional field after the five, and the drop is
+  // two trailing fields after it, both or neither: a verdict naming neither
+  // encodes exactly as it always has (the fixture's 762 vectors), and no two
+  // of the four forms share a field count, so a signature over one can
+  // neither be stripped to another nor grown into it.
+  if (verdict.death !== undefined) {
+    if (!Number.isInteger(verdict.death) || verdict.death <= 0) return null;
+    parts.push(String(verdict.death));
+  }
   const hasDrop = verdict.droppedAt !== undefined || verdict.reason !== undefined;
   if (hasDrop) {
     if (
@@ -162,6 +176,27 @@ function dropOf(verdicts) {
   });
   if (witness === null) return { since: null, reason: DROP_REASON.UNANNOUNCED };
   return { since: witness.droppedAt, reason: witness.reason };
+}
+
+/**
+ * The death a bag of verdicts names: the lower median of the numbers its
+ * verdicts carry, null when none carries one. The middle of the quorum,
+ * not its maximum, so one juror that inflates moves nothing and a stale
+ * minority moves nothing; between two halves the lower wins, the direction
+ * a count can afford. The same function stamps the certificate at assembly
+ * and re-derives at verification, so a certificate cannot say otherwise
+ * than its verdicts.
+ *
+ * @param {VerdictShape[]} verdicts the verdicts that count
+ * @returns {number|null}
+ */
+function deathOf(verdicts) {
+  const named = verdicts
+    .map((verdict) => verdict.death)
+    .filter((death) => Number.isInteger(death) && death > 0)
+    .sort((a, b) => a - b);
+  if (named.length === 0) return null;
+  return named[Math.ceil(named.length / 2) - 1];
 }
 
 /**
@@ -253,6 +288,7 @@ function assemble(subject, assembler, height, membership, verdicts, jury, sameJu
     fingerprint: membership,
     verdicts: counted,
     ...dropOf(counted),
+    death: deathOf(counted),
   };
 }
 
@@ -378,6 +414,12 @@ function verifyCertificate(certificate, watchers, sameJury, verifySignature, now
       accepted: false, reason: REASON.SINCE_MISMATCH, counted, needed, discarded,
     };
   }
+  // ... and so must its death number: the middle of its own quorum.
+  if ((certificate.death ?? null) !== deathOf(accepted)) {
+    return {
+      accepted: false, reason: REASON.DEATH_MISMATCH, counted, needed, discarded,
+    };
+  }
   return {
     accepted: true, reason: REASON.ACCEPTED, counted, needed, discarded,
   };
@@ -418,6 +460,7 @@ module.exports = {
   DISCARDED,
   verdictPayload,
   dropOf,
+  deathOf,
   alivePayload,
   collectorRanking,
   collectors,

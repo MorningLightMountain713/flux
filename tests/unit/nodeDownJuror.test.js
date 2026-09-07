@@ -67,6 +67,7 @@ function makeWorld({ extraNodes = [], myDetectedIp = '10.0.0.11' } = {}) {
     myAddress: () => world.myDetectedIp,
     isHeld: (socketAddress) => world.held.has(socketAddress),
     signVerdict: (payload) => fakeSign(payload),
+    nextDeath: (subject) => Promise.resolve(world.nextDeath?.(subject)),
     verifySignature: (owner, payload, signature) => signature === fakeSign(payload),
     pushVerdict: (socketAddress, verdict) => world.pushes.push({ socketAddress, verdict }),
     currentHeight: () => world.height,
@@ -406,6 +407,23 @@ describe('nodeDownJuror — the drop carries its reason (R2), and a re-held duty
     world.juror.sweep();
     await tick();
     expect(world.probes).to.deep.equal([]);
+  });
+});
+
+describe('nodeDownJuror — the verdict names which death this is (formal/death-identity, nth)', () => {
+  it('the verdict carries the number the store counts, signed; with no reading it names none and signs the five-field form', async () => {
+    const world = makeWorld();
+    world.nextDeath = () => 3;
+    await world.juror.look(S, 'drop');
+    expect(world.pushes[0].verdict.death).to.equal(3);
+    expect(verdictPayload(world.pushes[0].verdict).toString()).to.match(/\|3$/);
+    expect(world.pushes[0].verdict.signature).to.equal(fakeSign(verdictPayload(world.pushes[0].verdict)));
+
+    const blind = makeWorld();
+    blind.nextDeath = () => undefined;
+    await blind.juror.look(S, 'drop');
+    expect(blind.pushes[0].verdict).to.not.have.property('death');
+    expect(verdictPayload(blind.pushes[0].verdict).toString().split('|').length).to.equal(5);
   });
 });
 

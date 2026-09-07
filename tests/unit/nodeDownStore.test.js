@@ -72,14 +72,20 @@ function makeWorld() {
     verdict.signature = verificationHelper.signMessage(payload.toString(), keypairFor(name).wif);
     return verdict;
   };
-  world.certificate = (names, over = {}) => ({
-    subject: S,
-    assembler: world.jurorOutpoint(names[0]),
-    height: world.height,
-    fingerprint: world.fp,
-    verdicts: names.map((name) => world.signedVerdict(name)),
-    ...over,
-  });
+  // `death` in `over` is what the jurors name and the certificate carries;
+  // absent, the certificate names none (keyed on its height at the store)
+  world.certificate = (names, over = {}) => {
+    const { death, ...rest } = over;
+    return {
+      subject: S,
+      assembler: world.jurorOutpoint(names[0]),
+      height: world.height,
+      fingerprint: world.fp,
+      verdicts: names.map((name) => world.signedVerdict(name, death === undefined ? {} : { death })),
+      ...(death === undefined ? {} : { death }),
+      ...rest,
+    };
+  };
   return world;
 }
 
@@ -172,16 +178,17 @@ describe('nodeDownStore', () => {
   });
 
   describe('intake — verified, stored per certification, duplicates absorbed', () => {
-    it('stores a valid certificate and asks for the relay', async () => {
+    it('stores a valid certificate and asks for the relay: the row is keyed on the death\'s number', async () => {
       const result = await store.handleNodeDownEvent({
-        message: { certificate: world.certificate(['j1', 'j2', 'j3', 'j4']), broadcastedAt: Date.now() },
+        message: { certificate: world.certificate(['j1', 'j2', 'j3', 'j4'], { death: 1 }), broadcastedAt: Date.now() },
       });
       expect(result).to.deep.equal({
         accepted: true, rebroadcast: true, reason: 'stored', superseded: false,
       });
 
       const row = await collection.findOne({ type: 'nodedown', subject: S });
-      expect(row.dedupKey).to.equal(`nodedown:${S}:1000`);
+      expect(row.dedupKey).to.equal(`nodedown:${S}:1`);
+      expect(row.death).to.equal(1);
       expect(row.ip).to.equal('10.9.0.20:16127');
       expect(new Date(row.expireAt).getTime() - new Date(row.broadcastedAt).getTime())
         .to.equal(RECORD_LIFETIME_MS);
@@ -190,13 +197,22 @@ describe('nodeDownStore', () => {
     it('a second copy while one stands is dropped without relay — one flood per death', async () => {
       const at = Date.now();
       await store.handleNodeDownEvent({
-        message: { certificate: world.certificate(['j1', 'j2', 'j3', 'j4']), broadcastedAt: at },
+        message: { certificate: world.certificate(['j1', 'j2', 'j3', 'j4'], { death: 1 }), broadcastedAt: at },
       });
       const copy = await store.handleNodeDownEvent({
-        message: { certificate: world.certificate(['j2', 'j3', 'j4', 'j5']), broadcastedAt: at + 50 },
+        message: { certificate: world.certificate(['j2', 'j3', 'j4', 'j5'], { death: 1 }), broadcastedAt: at + 50 },
       });
-      expect(copy).to.include({ accepted: false, rebroadcast: false, reason: 'already_standing' });
+      expect(copy).to.include({ accepted: false, rebroadcast: false, reason: 'same_death' });
       expect(await collection.countDocuments({ type: 'nodedown', subject: S })).to.equal(1);
+    });
+
+    it('a certificate whose jurors named no number is keyed on its height, as every certificate was before the number', async () => {
+      await store.handleNodeDownEvent({
+        message: { certificate: world.certificate(['j1', 'j2', 'j3', 'j4']), broadcastedAt: Date.now() },
+      });
+      const row = await collection.findOne({ type: 'nodedown', subject: S });
+      expect(row.dedupKey).to.equal(`nodedown:${S}:h1000`);
+      expect(row.death).to.equal(null);
     });
 
     it('an invalid certificate is never stored and never relayed', async () => {
@@ -231,7 +247,7 @@ describe('nodeDownStore', () => {
     it('a new death after a refutation stores a new row and stands again', async () => {
       const at = Date.now() - 120_000;
       await store.handleNodeDownEvent({
-        message: { certificate: world.certificate(['j1', 'j2', 'j3', 'j4']), broadcastedAt: at },
+        message: { certificate: world.certificate(['j1', 'j2', 'j3', 'j4'], { death: 1 }), broadcastedAt: at },
       });
       await collection.insertOne({
         type: 'apprunning', outpoint: S, ip: '10.9.0.20:16127', dedupKey: 'v2', broadcastedAt: new Date(at + 10_000), expireAt: new Date(Date.now() + 60_000), data: {},
@@ -239,7 +255,7 @@ describe('nodeDownStore', () => {
 
       world.height = 1005;
       const second = await store.handleNodeDownEvent({
-        message: { certificate: world.certificate(['j2', 'j3', 'j4', 'j5'], { height: 1005 }), broadcastedAt: at + 60_000 },
+        message: { certificate: world.certificate(['j2', 'j3', 'j4', 'j5'], { height: 1005, death: 2 }), broadcastedAt: at + 60_000 },
       });
       expect(second.accepted).to.equal(true);
       expect(await collection.countDocuments({ type: 'nodedown', subject: S })).to.equal(2);
@@ -247,27 +263,37 @@ describe('nodeDownStore', () => {
       expect(standing.height).to.equal(1005);
     });
 
-    it('a certificate no newer than the record held is stored for the count and marked superseded; a newer death is news', async () => {
+    it('a copy of the record held is refused; an older death missed is stored for the count and marked superseded; a newer death is news', async () => {
       const at = Date.now() - 120_000;
+      // this node's first row is the subject's SECOND death: it missed the first
       await store.handleNodeDownEvent({
-        message: { certificate: world.certificate(['j1', 'j2', 'j3', 'j4']), broadcastedAt: at },
+        message: { certificate: world.certificate(['j1', 'j2', 'j3', 'j4'], { death: 2 }), broadcastedAt: at },
       });
       await collection.insertOne({
         type: 'apprunning', outpoint: S, ip: '10.9.0.20:16127', dedupKey: 'v2', broadcastedAt: new Date(at + 10_000), expireAt: new Date(Date.now() + 60_000), data: {},
       });
-      // the same record again, replayed over a reconnect pull
+      // the same record again, replayed over a reconnect pull: the same death
       const replay = await store.handleNodeDownEvent({
-        message: { certificate: world.certificate(['j1', 'j2', 'j3', 'j4']), broadcastedAt: at },
+        message: { certificate: world.certificate(['j1', 'j2', 'j3', 'j4'], { death: 2 }), broadcastedAt: at },
       });
-      expect(replay.accepted).to.equal(true);
-      expect(replay.superseded).to.equal(true);
+      expect(replay).to.deep.equal({ accepted: false, rebroadcast: false, reason: 'same_death' });
+
+      // the first death, arriving now: not news, but a death, and it counts
+      world.height = 990;
+      const older = await store.handleNodeDownEvent({
+        message: { certificate: world.certificate(['j2', 'j3', 'j4', 'j5'], { height: 990, death: 1 }), broadcastedAt: at - 60_000 },
+      });
+      expect(older.accepted).to.equal(true);
+      expect(older.superseded).to.equal(true);
+      expect((await store.lockoutFor(S)).count).to.equal(2);
 
       world.height = 1005;
-      const second = await store.handleNodeDownEvent({
-        message: { certificate: world.certificate(['j2', 'j3', 'j4', 'j5'], { height: 1005 }), broadcastedAt: at + 60_000 },
+      const third = await store.handleNodeDownEvent({
+        message: { certificate: world.certificate(['j2', 'j3', 'j4', 'j5'], { height: 1005, death: 3 }), broadcastedAt: at + 60_000 },
       });
-      expect(second.accepted).to.equal(true);
-      expect(second.superseded).to.equal(false);
+      expect(third.accepted).to.equal(true);
+      expect(third.superseded).to.equal(false);
+      expect((await store.lockoutFor(S)).count).to.equal(3);
     });
 
     it('verifyRefutation is the $gte rule exactly', () => {
@@ -280,67 +306,72 @@ describe('nodeDownStore', () => {
   describe('the two rungs — placement freeze and lockout, counted from the certification rows', () => {
     const SUBJECT_ADDRESS = '10.9.0.20:16127';
 
-    async function certify(height, at) {
+    async function certify(height, at, death) {
       world.height = height;
       const result = await store.handleNodeDownEvent({
-        message: { certificate: world.certificate(['j1', 'j2', 'j3', 'j4'], { height }), broadcastedAt: at },
+        message: { certificate: world.certificate(['j1', 'j2', 'j3', 'j4'], { height, death }), broadcastedAt: at },
       });
       expect(result.accepted).to.equal(true);
     }
 
-    async function announce(at, dedupKey) {
-      await collection.insertOne({
-        type: 'apprunning', outpoint: S, ip: SUBJECT_ADDRESS, dedupKey, broadcastedAt: new Date(at), expireAt: new Date(Date.now() + 60_000), data: {},
-      });
+    // The subject's announcement as production keeps it: ONE apprunning row
+    // per address, upserted to the newest (messageStore.handleAppRunningEvent
+    // keys on {ip, type, dedupKey: 'v2'}). A row per announcement — what this
+    // helper inserted until 2026-09-07 — is a store production never has, and
+    // hid a rule that read the announcement history.
+    async function announce(at) {
+      await collection.updateOne(
+        { type: 'apprunning', outpoint: S, ip: SUBJECT_ADDRESS, dedupKey: 'v2' },
+        { $set: { broadcastedAt: new Date(at), expireAt: new Date(Date.now() + 60_000), data: {} } },
+        { upsert: true },
+      );
     }
 
-    // Deaths, each refuted before the next, so each certification lands its own row.
+    // Deaths numbered 1..n, each refuted before the next, so each certification lands its own row.
     async function certifyTimes(n) {
       const first = Date.now() - 600_000;
       for (let i = 0; i < n; i += 1) {
         // eslint-disable-next-line no-await-in-loop
-        await certify(1001 + i, first + i * 60_000);
+        await certify(1001 + i, first + i * 60_000, i + 1);
         // eslint-disable-next-line no-await-in-loop
-        if (i < n - 1) await announce(first + i * 60_000 + 10_000, `v${i + 1}`);
+        if (i < n - 1) await announce(first + i * 60_000 + 10_000);
       }
       return first;
     }
 
-    it('one death under two assemblers\' heights is one death: the second row is refused as the same death, and the count says one', async () => {
+    it('one death under two assemblers\' heights is one death: the same number is the same row, and the count says one', async () => {
       // Every assembler stamps its own height; the fleet re-serves other
       // nodes' rows over a reconnect pull, and a second row for the same
       // death locked a node out at its third (1302 test 5, 2026-09-06).
       const at = Date.now() - 300_000;
-      await certify(1001, at);
-      await announce(at + 10_000, 'r1');
+      await certify(1001, at, 1);
+      await announce(at + 10_000);
       // the same death, certified by another juror a few seconds later,
       // arriving after the return that refuted the record
       const other = await store.handleNodeDownEvent({
-        message: { certificate: world.certificate(['j2', 'j3', 'j4', 'j5'], { height: 1002 }), broadcastedAt: at + 5_000 },
+        message: { certificate: world.certificate(['j2', 'j3', 'j4', 'j5'], { height: 1002, death: 1 }), broadcastedAt: at + 5_000 },
       });
       expect(other).to.deep.equal({ accepted: false, rebroadcast: false, reason: 'same_death' });
       expect((await store.placementFreezeFor(S)).count).to.equal(1);
       expect((await store.lockoutFor(S)).count).to.equal(1);
-      // the death's own row again, replayed over a pull, is accepted and not news
+      // the death's own row again, replayed over a pull, is the same death too
       const replay = await store.handleNodeDownEvent({
-        message: { certificate: world.certificate(['j1', 'j2', 'j3', 'j4'], { height: 1001 }), broadcastedAt: at },
+        message: { certificate: world.certificate(['j1', 'j2', 'j3', 'j4'], { height: 1001, death: 1 }), broadcastedAt: at },
       });
-      expect(replay.accepted).to.equal(true);
-      expect(replay.superseded).to.equal(true);
+      expect(replay.reason).to.equal('same_death');
       expect((await store.lockoutFor(S)).count).to.equal(1);
     });
 
-    it('a second assembly of an OLDER death held is the same death, not a death missed: every row held is asked', async () => {
+    it('a second assembly of an OLDER death held is the same death, not a death missed', async () => {
       // 1303 F at 0269b802b: twelve honoured restarts, twelve reconnect pulls
       // re-serving other nodes' rows, and the witness grew a fourth row for a
-      // death it already held — the same-death test had asked the newest row
-      // alone, and D's other assembly was "older" than E.
+      // death it already held.
       const first = await certifyTimes(3); // C, D, E — each refuted before the next
-      await announce(first + 2 * 60_000 + 10_000, 'v3'); // and E refuted by the reseat
+      await announce(first + 2 * 60_000 + 10_000); // and E refuted by the reseat
       expect((await store.lockoutFor(S)).count).to.equal(3);
-      // D again under another assembler's height — one no row held carries
+      // D again under another assembler's height
       world.height = 1050;
-      const dAgain = world.certificate(['j2', 'j3', 'j4', 'j5'], { height: 1050 });
+      const dAgain = world.certificate(['j2', 'j3', 'j4', 'j5'], { height: 1050, death: 2 });
       const other = await store.handleNodeDownEvent({
         message: { certificate: dAgain, broadcastedAt: first + 60_000 + 5_000 },
       });
@@ -349,13 +380,13 @@ describe('nodeDownStore', () => {
       expect((await store.lockoutFor(S)).count).to.equal(3);
     });
 
-    it('an older death this node had missed still counts: certified before the record\'s own drop, it is stored for the count', async () => {
+    it('an older death this node had missed still counts: a lower number no row carries is stored for the count', async () => {
       const at = Date.now() - 300_000;
-      await certify(1010, at);
-      await announce(at + 10_000, 'r1');
-      // certified back at 1001, arriving now over a pull
+      await certify(1010, at, 2);
+      await announce(at + 10_000);
+      // certified back at 1001 as the first death, arriving now over a pull
       world.height = 1001;
-      const olderCertificate = world.certificate(['j2', 'j3', 'j4', 'j5'], { height: 1001 });
+      const olderCertificate = world.certificate(['j2', 'j3', 'j4', 'j5'], { height: 1001, death: 1 });
       world.height = 1010;
       const older = await store.handleNodeDownEvent({
         message: { certificate: olderCertificate, broadcastedAt: at - 120_000 },
@@ -363,6 +394,74 @@ describe('nodeDownStore', () => {
       expect(older.reason).to.equal('stored');
       expect(older.superseded).to.equal(true);
       expect((await store.lockoutFor(S)).count).to.equal(2);
+    });
+
+    it('a late receiver: three deaths\' rows arriving after the subject\'s newest announcement, in any order, are three rows', async () => {
+      // Measured on chud, 2026-09-07, against the real store with production's
+      // one announcement row: the rule that read "the first announcement at
+      // or after each row" kept 1 of 3 in order and 2 of 3 out of order — a
+      // survivor down for one of the subject's deaths, or a node that just
+      // joined, never counted the rest. The number reads no announcement.
+      const first = Date.now() - 600_000;
+      const deaths = [1, 2, 3];
+      const orders = [[1, 2, 3], [3, 1, 2], [2, 1, 3], [3, 2, 1]];
+      for (const order of orders) {
+        // eslint-disable-next-line no-await-in-loop
+        await collection.deleteMany({ subject: S });
+        // eslint-disable-next-line no-await-in-loop
+        await collection.deleteMany({ outpoint: S });
+        // eslint-disable-next-line no-await-in-loop
+        await announce(first + 2 * 60_000 + 10_000); // after the third death's return
+        for (const d of order) {
+          world.height = 1000 + d;
+          // eslint-disable-next-line no-await-in-loop
+          const result = await store.handleNodeDownEvent({
+            message: { certificate: world.certificate(['j1', 'j2', 'j3', 'j4'], { height: 1000 + d, death: d }), broadcastedAt: first + (d - 1) * 60_000 },
+          });
+          expect(result.accepted, `death ${d} in order ${order}`).to.equal(true);
+        }
+        // eslint-disable-next-line no-await-in-loop
+        expect((await store.lockoutFor(S)).count, `order ${order}`).to.equal(deaths.length);
+      }
+    });
+
+    it('a number above every row held is refused while the newest record stands, and taken once the return is in', async () => {
+      // A new death needs a return. Two jurors whose looks straddled the
+      // window's last row expiring would name numbers one apart for one
+      // death; the second number arrives while the record stands and is a
+      // copy. A node that merely lacks the subject's return yet refuses for
+      // now and takes the row on its next delivery.
+      const at = Date.now() - 120_000;
+      await certify(1001, at, 1);
+      world.height = 1002;
+      const early = await store.handleNodeDownEvent({
+        message: { certificate: world.certificate(['j2', 'j3', 'j4', 'j5'], { height: 1002, death: 2 }), broadcastedAt: at + 60_000 },
+      });
+      expect(early).to.deep.equal({ accepted: false, rebroadcast: false, reason: 'already_standing' });
+      expect((await store.lockoutFor(S)).count).to.equal(1);
+      await announce(at + 10_000);
+      const later = await store.handleNodeDownEvent({
+        message: { certificate: world.certificate(['j2', 'j3', 'j4', 'j5'], { height: 1002, death: 2 }), broadcastedAt: at + 60_000 },
+      });
+      expect(later.accepted).to.equal(true);
+      expect((await store.lockoutFor(S)).count).to.equal(2);
+    });
+
+    it('nextDeathFor is the highest number among the live rows plus one, from the rows alone', async () => {
+      expect(await store.nextDeathFor(S)).to.equal(1);
+      await certifyTimes(2);
+      expect(await store.nextDeathFor(S)).to.equal(3);
+      // a lapsed row names nothing, and no memory outlives the rows
+      await collection.insertOne({
+        type: 'nodedown',
+        subject: S,
+        dedupKey: `nodedown:${S}:9`,
+        death: 9,
+        broadcastedAt: new Date(Date.now() - RECORD_LIFETIME_MS - 1000),
+        expireAt: new Date(Date.now() - 1000),
+        data: { certificate: {} },
+      });
+      expect(await store.nextDeathFor(S)).to.equal(3);
     });
 
     it('nothing certified: no rung, no record', async () => {
@@ -381,24 +480,24 @@ describe('nodeDownStore', () => {
       const first = await certifyTimes(2);
       expect(await store.placementFreezeFor(S)).to.deep.equal({ frozen: true, count: 2, liftsAt: first + RECORD_LIFETIME_MS });
       expect(await store.lockoutFor(S)).to.deep.equal({ lockedOut: false, count: 2, liftsAt: null });
-      expect(await store.recordStateFor(S)).to.deep.equal({ state: 'standing', key: `nodedown:${S}:1002` });
+      expect(await store.recordStateFor(S)).to.deep.equal({ state: 'standing', key: `nodedown:${S}:2` });
     });
 
     it('the third holds nothing more; the fourth locks the subject out until the count falls under four', async () => {
       const first = await certifyTimes(3);
       expect((await store.lockoutFor(S)).lockedOut).to.equal(false);
-      await announce(first + 130_000, 'v3');
-      await certify(1004, first + 180_000);
+      await announce(first + 130_000);
+      await certify(1004, first + 180_000, 4);
       expect(await store.lockoutFor(S)).to.deep.equal({ lockedOut: true, count: 4, liftsAt: first + RECORD_LIFETIME_MS });
       expect((await store.placementFreezeFor(S))).to.deep.equal({ frozen: true, count: 4, liftsAt: first + 120_000 + RECORD_LIFETIME_MS });
     });
 
     it('recordStateFor names the record while it stands and after the announcement refutes it', async () => {
       const at = Date.now() - 60_000;
-      await certify(1001, at);
-      expect(await store.recordStateFor(S)).to.deep.equal({ state: 'standing', key: `nodedown:${S}:1001` });
-      await announce(at + 10_000, 'v1');
-      expect(await store.recordStateFor(S)).to.deep.equal({ state: 'refuted', key: `nodedown:${S}:1001` });
+      await certify(1001, at, 1);
+      expect(await store.recordStateFor(S)).to.deep.equal({ state: 'standing', key: `nodedown:${S}:1` });
+      await announce(at + 10_000);
+      expect(await store.recordStateFor(S)).to.deep.equal({ state: 'refuted', key: `nodedown:${S}:1` });
     });
 
     it('the address forms resolve the listed subject, with or without its port, and hold nothing for an unlisted address', async () => {

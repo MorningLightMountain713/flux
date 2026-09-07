@@ -121,6 +121,11 @@ class NodeDownJuror {
    * @param {(certificate: object) => void} deps.onCertificate a pile crossed H
    * @param {() => number} [deps.now] wall clock in ms — the graces are
    *   wall-clock constants, so the grace end is a known instant
+   * @param {(subject: string) => Promise<number|undefined>} [deps.nextDeath]
+   *   which death of the subject a verdict cast now would name: the highest
+   *   number this node has seen certified for it, plus one. Undefined when
+   *   the store cannot say; the verdict then names none and the assembly
+   *   takes the number from the jurors that can
    * @param {object} [options]
    * @param {number} [options.maxAgeBlocks]
    */
@@ -296,12 +301,17 @@ class NodeDownJuror {
       return;
     }
 
+    // Which death this is, as this juror counts them — signed, so the
+    // certificate's number is the middle of its quorum and nothing the
+    // subject or an assembler supplies.
+    const death = this.#deps.nextDeath ? await this.#deps.nextDeath(subject) : undefined;
     const verdict = {
       subject,
       juror: myOutpoint,
       judgement: JUDGEMENT.UNREACHABLE,
       height,
       fingerprint,
+      ...(Number.isInteger(death) && death > 0 ? { death } : {}),
       // the drop this look answers travels with the verdict, signed
       ...(drop ? { droppedAt: drop.droppedAt, reason: drop.reason } : {}),
     };
