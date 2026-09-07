@@ -98,11 +98,13 @@ async function onChainDisplayUpdatePrice(spec, existing, daemonHeight) {
   });
   const oldScaledPriceMicrodollars = oldBreakdown.marketplaceAdjustedMicrodollars;
 
-  // Old spec's feature set off the breakdown just priced at the old rates (with
-  // the old encryption bit). Mirrors updateFee so display == consensus on the
-  // free-update feature check, including the cleartext->encrypted case.
-  const { usedFeatureKeys } = await getSpecPolicy();
-  const oldFeatures = usedFeatureKeys(oldBreakdown.features);
+  // Everything the pricer meters for the old spec, off the breakdown just priced
+  // at the old rates (with the old encryption bit). Mirrors updateFee so display
+  // == consensus on the free-update check, including the cleartext->encrypted
+  // case. Quantities rather than feature names: the rule refuses an increase in
+  // anything charged for, including more units of a feature already switched on.
+  const { meteredQuantities } = await getSpecPolicy();
+  const oldMetered = meteredQuantities(oldBreakdown);
 
   const nowSeconds = Math.floor(Date.now() / 1000);
   const remainingSeconds = Math.max(0, (existing.registeredAt + (prevSpec.ttl || 0)) - nowSeconds);
@@ -123,7 +125,7 @@ async function onChainDisplayUpdatePrice(spec, existing, daemonHeight) {
     now: Date.now(),
     recentEvents,
     oldScaledPriceMicrodollars,
-    oldFeatures,
+    oldMetered,
     remainingSeconds,
     oldTtl: prevSpec.ttl || 0,
     updateDiscountBp,
@@ -282,12 +284,13 @@ async function updateFee(spec, prevSpec, height, prevHeight, prevRegisteredAt, n
   });
   const oldScaledPriceMicrodollars = oldBreakdown.marketplaceAdjustedMicrodollars;
 
-  // Old spec's feature set, off the breakdown just priced at the old rates
-  // (with the old spec's encryption bit). priceUpdate derives the new set from
-  // the new breakdown; the free-update rule compares the two, so a feature
-  // newly added on this update — including turning encryption on — blocks it.
-  const { usedFeatureKeys } = await getSpecPolicy();
-  const oldFeatures = usedFeatureKeys(oldBreakdown.features);
+  // Everything the pricer meters for the old spec, off the breakdown just priced
+  // at the old rates (with the old spec's encryption bit). priceUpdate derives
+  // the new spec's from its own breakdown; the free-update rule compares the
+  // two, so anything charged for going up blocks the update — a feature newly
+  // switched on, including encryption, and more units of one already on.
+  const { meteredQuantities } = await getSpecPolicy();
+  const oldMetered = meteredQuantities(oldBreakdown);
 
   // Unused wall-clock seconds left on the prior registration.
   const remainingSeconds = Math.max(0, (prevRegisteredAt + (prevSpec.ttl || 0)) - nowBlockTime);
@@ -309,7 +312,7 @@ async function updateFee(spec, prevSpec, height, prevHeight, prevRegisteredAt, n
     now: Date.now(),
     recentEvents,
     oldScaledPriceMicrodollars,
-    oldFeatures,
+    oldMetered,
     remainingSeconds,
     oldTtl: prevSpec.ttl || 0,
     updateDiscountBp,
