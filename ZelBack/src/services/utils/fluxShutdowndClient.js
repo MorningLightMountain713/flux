@@ -219,6 +219,7 @@ async function beginAppStop(ownerFluxId, appName, reason, {
   }
 
   const timeoutMs = Math.max((deadline * 1000) - Date.now(), 0) + COMPLETION_SLACK_MS;
+  let outcome;
   try {
     const res = await callRpc(
       'begin_app_stop',
@@ -227,19 +228,28 @@ async function beginAppStop(ownerFluxId, appName, reason, {
       },
       { timeoutMs },
     );
-    return { outcome: res.end_state };
+    outcome = res.end_state;
   } catch (error) {
-    if (isNodePipelineActive(error)) return { outcome: 'rejected_pipeline_active' };
-    if (isComponentStopBusy(error)) return { outcome: 'component_busy' };
-    // The daemon never took the stop, so no drain-socket callback will ever clear
-    // the gate seeded above: un-seed it here, where it was seeded. Left standing it
-    // holds the reconciler off the whole app for COMPLETION_SLACK_MS past the
-    // deadline — an install landing in that window (a deferred mesh install's
-    // retry) never gets its first start, and the app is announced "stopping".
-    if (component == null) globalState.clearAppShutdownPipelineState(appName);
-    if (isTimeout(error)) return { outcome: 'timeout' };
-    return { outcome: 'unreachable' };
+    if (isNodePipelineActive(error)) outcome = 'rejected_pipeline_active';
+    else if (isComponentStopBusy(error)) outcome = 'component_busy';
+    else if (isTimeout(error)) outcome = 'timeout';
+    else outcome = 'unreachable';
   }
+  // The gate protects a drain IN FLIGHT. Once this call has returned, the drain
+  // is over on every outcome but one — the daemon completed, hit the deadline,
+  // was superseded, forced, never took it (unreachable), or timed out — and the
+  // daemon's drain socket only sets states or aborts, it never clears on
+  // completion; so the gate is un-seeded here, where it was seeded. Left
+  // standing it holds the reconciler off the whole app for COMPLETION_SLACK_MS
+  // past the deadline: an install landing in that window (a deferred mesh
+  // install's retry, a reinstall after expiry) never gets its first start, and
+  // the app is announced "stopping" (1102/1106/1215 on chud, 2026-09-07). The
+  // exception: rejected_pipeline_active — the node-wide pipeline owns the stop,
+  // and its own clear or expiry re-drives.
+  if (component == null && outcome !== 'rejected_pipeline_active') {
+    globalState.clearAppShutdownPipelineState(appName);
+  }
+  return { outcome };
 }
 
 /**
