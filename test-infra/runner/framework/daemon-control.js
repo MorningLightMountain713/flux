@@ -206,6 +206,13 @@ export async function clearNodeAddress(node) {
   return post(`/node-address/${String(node).split(':')[0]}`, {});
 }
 
+// Advance one block carrying several transactions, in this order — the order is
+// each transaction's position in the block, which soft-fork messages for one
+// subject are ordered by.
+export async function injectBlockWith(txs) {
+  return post('/advance-block', { block: { tx: txs } });
+}
+
 // -- Per-node status --
 
 export async function setNodeStatus(ip, status) {
