@@ -260,3 +260,29 @@ describe('verifyPool worker protocol', () => {
     expect(workers).to.have.lengthOf(1);
   });
 });
+
+describe('verifyPool sizing', () => {
+  it('sizes the pool from config.fluxapps.verifyPoolSize when set, not from the host', () => {
+    // Every node of a harness fleet shares one host's cores, and the pool starts
+    // on a fleet-wide trigger: sized from the host, ten nodes spawn 150 workers
+    // in one second (1203 on chud, 2026-09-07). The knob is what lets a fleet
+    // size itself; production leaves it unset and keeps cpus−1.
+    const workers = [];
+    class FakeWorker extends EventEmitter {
+      constructor() { super(); workers.push(this); }
+
+      postMessage() {}
+
+      terminate() {}
+    }
+    const pool = proxyquire('../../ZelBack/src/services/utils/verifyPool', {
+      worker_threads: { Worker: FakeWorker },
+      config: { fluxapps: { verifyPoolSize: 3 } },
+      os: { cpus: () => new Array(16) },
+      '../../lib/log': { info: sinon.stub(), warn: sinon.stub(), error: sinon.stub() },
+    });
+    pool.start();
+    expect(workers).to.have.lengthOf(3);
+    pool.stop();
+  });
+});

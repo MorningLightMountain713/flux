@@ -131,6 +131,10 @@ module.exports = {
     tempMsgTtlS: 300,
     gossipValidityS: 300,
     hashSyncIntervalMs: 30000,
+    // Every node of a fleet shares this host's cores, and the verify pool starts
+    // on a fleet-wide gossip burst: sized cpus−1 per node it put 150 threads on
+    // 16 cores in one second and stalled a main thread for 110 s (1203, 09-07).
+    verifyPoolSize: 2,
     peerNotifyIntervalMs: 30000,
     cpuCheckIntervalMs: 30000,
     portRestoreIntervalMs: 30000,
