@@ -302,6 +302,24 @@ async function heldKeys() {
 }
 
 /**
+ * Every unreleased oneshot row this grantor records: the seats and founder
+ * rows it holds, for the boot sweep of the delisted-holder register.
+ *
+ * @returns {Promise<Array<{key: string, grantee: string}>>}
+ */
+async function oneshotRows() {
+  const database = db();
+  if (!database) return [];
+  const docs = await dbHelper.findInDatabase(
+    database, collection(), { 'accepted.mode': 'oneshot', 'accepted.released': { $ne: true } },
+    { projection: { _id: 1, 'accepted.grantee': 1 } },
+  );
+  return (docs || [])
+    .filter((doc) => typeof doc._id === 'string' && typeof doc.accepted?.grantee === 'string')
+    .map((doc) => ({ key: doc._id, grantee: doc.accepted.grantee }));
+}
+
+/**
  * Journal a verified cancel chain the controller was taught. Served during
  * the drain — taught state contradicts nothing — and serialized per key like
  * every write. The chain must extend the journaled one at the same basis
@@ -356,6 +374,7 @@ module.exports = {
   adopt,
   adoptCancels,
   heldKeys,
+  oneshotRows,
   drainRemainingMs,
   probe,
   prepare,

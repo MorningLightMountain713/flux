@@ -57,6 +57,29 @@ function isGrantee(accepted, candidate) {
 }
 
 /**
+ * The record as this read sees it. A seat (a oneshot row the caller marks
+ * as one that a delisting reclaims) whose holder left the deterministic node
+ * list before the grace ran, and was granted before that departure, reads as
+ * released: the list every node reads from the chain is the fact, and a
+ * holder off it has removed its apps. The row itself is untouched — a
+ * founding writes it, a read never does — and a row the same node founds
+ * after coming back is newer than its departure and reads as held.
+ *
+ * @param {object|null} record persisted register doc
+ * @param {object} [tunables] `holderDelisted(grantee, acceptedAt) -> boolean`
+ *   from the controller, present only for seat rows; absent means no row
+ *   is ever read as delisted here (founder rows, held terms).
+ * @returns {object|null} the record to decide on; the persisted one to write
+ */
+function viewed(record, tunables) {
+  const accepted = record?.accepted;
+  if (!accepted || accepted.mode !== 'oneshot' || accepted.released) return record;
+  if (typeof tunables?.holderDelisted !== 'function') return record;
+  if (!tunables.holderDelisted(accepted.grantee, accepted.acceptedAt ?? 0)) return record;
+  return { ...record, accepted: { ...accepted, released: true, delisted: true } };
+}
+
+/**
  * Lock-delay: after an INVOLUNTARY lapse, challengers wait; the grantee never
  * does. A released grant carries no delay — the holder said goodbye, nothing
  * is in doubt.
@@ -144,8 +167,11 @@ function onProbe(record, request, nowMs, tunables) {
  * The shared prepare decision. onProbe reports it; onPrepare applies it.
  * @returns {{reply: object, record: object|null}} record null = no change
  */
-function decidePrepare(record, request, nowMs, tunables) {
+function decidePrepare(stored, request, nowMs, tunables) {
   const { epoch, candidate } = request;
+  // Decide on the record as read (a delisted seat holder's row reads as
+  // released); persist from the stored one — a read never writes the row.
+  const record = viewed(stored, tunables);
   const promisedEpoch = record?.promisedEpoch ?? 0;
   const state = grantState(record, nowMs);
 
@@ -183,7 +209,7 @@ function decidePrepare(record, request, nowMs, tunables) {
     // yields only to a promise fresh within the lock-delay, because a pursuit
     // that was going to complete completed within it — an older promise is a
     // residue, and refusing forever on a residue is a ratchet, not a guard.
-    record: { ...(record ?? {}), promisedEpoch: epoch, promisedAt: nowMs },
+    record: { ...(stored ?? {}), promisedEpoch: epoch, promisedAt: nowMs },
   };
 }
 
@@ -196,23 +222,28 @@ function onPrepare(record, request, nowMs, tunables) {
  * the term machinery and the init-only register, each refusing with the
  * record so a correct client adopts instead of fighting.
  */
-function onAccept(record, request, nowMs, tunables) {
+function onAccept(stored, request, nowMs, tunables) {
   const {
     epoch, grantee, mode, ttlMs, fingerprint,
   } = request;
 
   if (!MODES.includes(mode)) {
-    return { reply: refusal('bad_mode', record), record: null };
+    return { reply: refusal('bad_mode', stored), record: null };
   }
 
+  // Decide on the record as read (a delisted seat holder's row reads as
+  // released, so the next founding takes the seat); the accept writes a whole
+  // new row, so nothing of the stored one needs preserving here.
+  const record = viewed(stored, tunables);
   const promisedEpoch = record?.promisedEpoch ?? 0;
   const state = grantState(record, nowMs);
 
   // Init-only, until the row is given back: a founder row never is, an
-  // ordinal row is (released on uninstall, vacated on a certificate), and a
-  // released row is free for the next founding at a higher epoch — the same
-  // grantee included, which is how a row split by a vacate cut short at one
-  // cell is repaired (formal/ordinal-register, "free-or-mine").
+  // ordinal row is (released on uninstall, vacated on a certificate, read as
+  // released when its holder left the node list), and a released row is
+  // free for the next founding at a higher epoch — the same grantee
+  // included, which is how a row split by a vacate cut short at one cell is
+  // repaired (formal/ordinal-register, "free-or-mine").
   if (record?.accepted && record.accepted.mode === 'oneshot' && !record.accepted.released) {
     if (record.accepted.grantee === grantee) {
       // Idempotent: a retried accept is the same decision, not a second one.
@@ -249,6 +280,10 @@ function onAccept(record, request, nowMs, tunables) {
     generation: request.generation ?? 0,
     expiresAt: mode === 'held' ? nowMs + ttlMs : null,
     released: false,
+    // this cell's clock at the grant: a seat granted before its holder left
+    // the node list reads as released once the holder is off it past the
+    // grace; one founded after the holder came back does not (viewed)
+    acceptedAt: nowMs,
   };
 
   // Both overlays are bound to their committee basis — the membership AND

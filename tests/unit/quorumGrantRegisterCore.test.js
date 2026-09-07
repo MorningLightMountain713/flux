@@ -370,6 +370,90 @@ describe('quorumGrant grantRegisterCore', () => {
       expect(record).to.equal(null);
     });
 
+    describe('a delisted holder resolves to nobody — the seat reads as released at the cell, at read time', () => {
+      // The controller passes holderDelisted(grantee, acceptedAt) for SEAT keys
+      // only (delistedHolders): true when the holder left the node list past
+      // the grace and the row predates that departure. The row itself is never
+      // written by a read; a founding writes it.
+      const seatRow = () => ({ ...oneshotRecord(), accepted: { ...oneshotRecord().accepted, acceptedAt: T0 - 60_000 } });
+      const delisted = { ...TUNABLES, holderDelisted: (grantee, acceptedAt) => grantee === 'ffff:1' && acceptedAt < T0 };
+      const listed = { ...TUNABLES, holderDelisted: () => false };
+
+      it('a probe reports the delisted holder\'s seat released and says why', () => {
+        const reply = onProbe(seatRow(), { epoch: 3, candidate: 'cccc:0' }, T0, delisted);
+        expect(reply.ok).to.equal(true);
+        expect(reply.accepted.released).to.equal(true);
+        expect(reply.accepted.delisted).to.equal(true);
+        expect(reply.accepted.grantee).to.equal('ffff:1');
+      });
+
+      it('a prepare by another node is promised, and the persisted record keeps the row as it was', () => {
+        const { reply, record } = onPrepare(seatRow(), { epoch: 3, candidate: 'cccc:0' }, T0, delisted);
+        expect(reply.promised).to.equal(true);
+        expect(reply.accepted.released).to.equal(true);
+        expect(record.promisedEpoch).to.equal(3);
+        expect(record.accepted.released).to.equal(false);
+        expect(record.accepted.delisted).to.equal(undefined);
+      });
+
+      it('an accept by another node takes the seat at a higher epoch, stamped with this cell\'s clock', () => {
+        const { reply, record } = onAccept(seatRow(), {
+          epoch: 3, grantee: 'cccc:0', mode: 'oneshot', fingerprint: 'fp-reg', generation: 0,
+        }, T0, delisted);
+        expect(reply.ok).to.equal(true);
+        expect(record.accepted.grantee).to.equal('cccc:0');
+        expect(record.accepted.epoch).to.equal(3);
+        expect(record.accepted.released).to.equal(false);
+        expect(record.accepted.acceptedAt).to.equal(T0);
+      });
+
+      it('the returned holder founds again through free-or-mine, and is not handed the old row back', () => {
+        const { reply, record } = onAccept(seatRow(), {
+          epoch: 3, grantee: 'ffff:1', mode: 'oneshot', fingerprint: 'fp-reg', generation: 0,
+        }, T0, delisted);
+        expect(reply.ok).to.equal(true);
+        expect(record.accepted.epoch).to.equal(3);
+        expect(record.accepted.acceptedAt).to.equal(T0);
+      });
+
+      it('a listed holder\'s seat is refused to anyone else exactly as before', () => {
+        expect(onAccept(seatRow(), {
+          epoch: 3, grantee: 'cccc:0', mode: 'oneshot', fingerprint: 'fp-reg', generation: 0,
+        }, T0, listed).reply.code).to.equal('already_granted');
+        expect(onProbe(seatRow(), { epoch: 3, candidate: 'cccc:0' }, T0, listed).accepted.released).to.equal(false);
+      });
+
+      it('a seat the holder founded after coming back reads as held: the row is newer than the departure', () => {
+        const refounded = { ...seatRow(), accepted: { ...seatRow().accepted, acceptedAt: T0 + 1 } };
+        expect(onAccept(refounded, {
+          epoch: 3, grantee: 'cccc:0', mode: 'oneshot', fingerprint: 'fp-reg', generation: 0,
+        }, T0 + 2, delisted).reply.code).to.equal('already_granted');
+      });
+
+      it('a row from before the stamp existed is older than any departure', () => {
+        const legacy = oneshotRecord();
+        expect(legacy.accepted.acceptedAt).to.equal(undefined);
+        expect(onProbe(legacy, { epoch: 3, candidate: 'cccc:0' }, T0, delisted).accepted.released).to.equal(true);
+      });
+
+      it('without the predicate nothing is ever read as delisted: founder rows and held terms never are', () => {
+        expect(onProbe(seatRow(), { epoch: 3, candidate: 'cccc:0' }, T0, TUNABLES).accepted.released).to.equal(false);
+        expect(onAccept(seatRow(), {
+          epoch: 3, grantee: 'cccc:0', mode: 'oneshot', fingerprint: 'fp-reg', generation: 0,
+        }, T0, TUNABLES).reply.code).to.equal('already_granted');
+        const held = heldRecord();
+        expect(onProbe(held, { epoch: 9, candidate: 'cccc:0' }, T0, { ...TUNABLES, holderDelisted: () => true }).accepted.released).to.equal(false);
+      });
+
+      it('a released or vacated row is not touched by the view', () => {
+        const row = seatRow();
+        row.accepted.released = true;
+        const reply = onProbe(row, { epoch: 3, candidate: 'cccc:0' }, T0, delisted);
+        expect(reply.accepted.released).to.equal(true);
+        expect(reply.accepted.delisted).to.equal(undefined);
+      });
+    });
+
     it('release: the grantee may give back an ordinal row when the caller permits oneshot', () => {
       const { reply, record } = onRelease(oneshotRecord(), { epoch: 2, grantee: 'ffff:1', allowOneshot: true }, T0);
       expect(reply).to.deep.equal({ ok: true, released: true });

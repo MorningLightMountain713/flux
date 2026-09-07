@@ -22,11 +22,21 @@ const { normalizeSocketAddress } = require('../utils/socketAddressUtils');
 // guard: a refresh that removes more than a sanity fraction of the known
 // addresses records nothing and the known list holds.
 //
-// The deny set is the departures past the grace, and an entry ages out at
-// the location TTL: an address gone that long has no rows left to negate.
-// Nothing here is stored or sent; after a reboot the register is empty and
-// a boot sweep of the row addresses not on the current list starts their
-// grace from that observation.
+// A departure past the grace negates the rows the node announced BEFORE it
+// left, and keeps negating them if the node comes back: a node that leaves
+// the list removes its apps, so what it announced before is stale on its
+// return, and only what it announces after it is back on the list counts.
+// While the node is absent every row of its is older than its departure
+// (the fleet refuses a delisted node's messages), so the whole address is
+// denied; once it is back, the rows older than the return are. An entry
+// ages out at the location TTL: an address gone that long has no rows left
+// to negate. Nothing here is stored or sent; after a reboot the register is
+// empty and a boot sweep of the row addresses not on the current list starts
+// their grace from that observation.
+//
+// The same register, keyed on collateral outpoints, serves the mesh seats
+// (quorumGrant/delistedHolders.js): a seat held by a node no longer on the
+// list reads as free at the cells, with this grace and this guard.
 
 const OFF_LIST_GRACE_MS = 2 * 60 * 1000;
 const MASS_DEPARTURE_FRACTION = 0.1;
@@ -42,84 +52,140 @@ function denyForms(address) {
 }
 
 class OffListDepartures {
-  /** The addresses on the last trusted list, normalized. */
+  /** The keys on the last trusted list, normalized. */
   #known = new Set();
 
-  /** address (normalized) -> epoch ms first seen missing */
-  #missingSince = new Map();
+  /** key (normalized) -> {since: epoch ms first seen missing, returnedAt: epoch ms back on the list, or null} */
+  #departed = new Map();
+
+  #keyOf;
+
+  #forms;
+
+  #expiryMs;
+
+  /**
+   * @param {object} [options]
+   * @param {(raw: string) => string|null} [options.keyOf] normalizes a listed
+   *   or row key; null drops it. Default: socket addresses.
+   * @param {(key: string) => string[]} [options.forms] every form a row may
+   *   carry the key in. Default: with and without the default port.
+   * @param {number|null} [options.expiryMs] how long after its departure an
+   *   entry is kept; null keeps it for good (write-once rows never age).
+   *   Default: the running-row TTL.
+   */
+  constructor(options = {}) {
+    this.#keyOf = options.keyOf ?? normalizeSocketAddress;
+    this.#forms = options.forms ?? denyForms;
+    this.#expiryMs = options.expiryMs === undefined ? RUNNING_EXPIRY_MS : options.expiryMs;
+  }
 
   /**
    * A refresh of the node list.
    *
-   * @param {Iterable<string>} addresses the listed nodes' addresses
+   * @param {Iterable<string>} keys the listed nodes' keys
    * @param {number} [nowMs]
    * @returns {{departed: number, distrusted: boolean}}
    */
-  noteList(addresses, nowMs = Date.now()) {
+  noteList(keys, nowMs = Date.now()) {
     const current = new Set();
-    for (const address of addresses) {
-      const normalized = normalizeSocketAddress(address);
-      if (normalized) current.add(normalized);
+    for (const raw of keys) {
+      const key = this.#keyOf(raw);
+      if (key) current.add(key);
     }
     if (this.#known.size === 0) {
       this.#known = current;
       return { departed: 0, distrusted: false };
     }
-    const gone = [...this.#known].filter((address) => !current.has(address));
+    const gone = [...this.#known].filter((key) => !current.has(key));
     if (gone.length > MASS_DEPARTURE_FRACTION * this.#known.size) {
       return { departed: 0, distrusted: true };
     }
-    gone.forEach((address) => {
-      if (!this.#missingSince.has(address)) this.#missingSince.set(address, nowMs);
+    gone.forEach((key) => {
+      if (!this.#departed.has(key)) this.#departed.set(key, { since: nowMs, returnedAt: null });
     });
-    current.forEach((address) => this.#missingSince.delete(address));
+    current.forEach((key) => {
+      const entry = this.#departed.get(key);
+      if (!entry) return;
+      if (nowMs - entry.since <= OFF_LIST_GRACE_MS) {
+        // back inside the grace: it never left, as far as this observer knows
+        this.#departed.delete(key);
+      } else if (entry.returnedAt === null) {
+        entry.returnedAt = nowMs;
+      }
+    });
     this.#known = current;
     return { departed: gone.length, distrusted: false };
   }
 
   /**
-   * The boot sweep: row addresses that are not on the current list start
-   * their grace now — a rebooted node negates nothing prematurely.
+   * The boot sweep: row keys that are not on the current list start their
+   * grace now — a rebooted node negates nothing prematurely.
    *
-   * @param {Iterable<string>} addresses distinct row addresses
+   * @param {Iterable<string>} keys distinct row keys
    * @param {number} [nowMs]
    */
-  seedFromRows(addresses, nowMs = Date.now()) {
-    for (const address of addresses) {
-      const normalized = normalizeSocketAddress(address);
-      if (normalized && !this.#known.has(normalized) && !this.#missingSince.has(normalized)) {
-        this.#missingSince.set(normalized, nowMs);
+  seedFromRows(keys, nowMs = Date.now()) {
+    for (const raw of keys) {
+      const key = this.#keyOf(raw);
+      if (key && !this.#known.has(key) && !this.#departed.has(key)) {
+        this.#departed.set(key, { since: nowMs, returnedAt: null });
       }
     }
   }
 
+  #sweep(nowMs) {
+    if (this.#expiryMs === null) return;
+    this.#departed.forEach((entry, key) => {
+      if (nowMs - entry.since > this.#expiryMs) this.#departed.delete(key);
+    });
+  }
+
   /**
-   * The addresses whose rows the derivation negates now, in every form a
-   * row may carry them.
+   * When the key's departure was first observed, if it is past the grace;
+   * null while it is listed, or gone for less than the grace. A key that
+   * came back after the grace still answers with its departure: what it
+   * had before it left stays negated.
+   *
+   * @param {string} raw
+   * @param {number} [nowMs]
+   * @returns {number|null} epoch ms
+   */
+  departedSince(raw, nowMs = Date.now()) {
+    this.#sweep(nowMs);
+    const key = this.#keyOf(raw);
+    const entry = key ? this.#departed.get(key) : undefined;
+    if (!entry || nowMs - entry.since <= OFF_LIST_GRACE_MS) return null;
+    return entry.since;
+  }
+
+  /**
+   * What the derivation negates now: every row of a key still absent past
+   * the grace, and the rows older than the return of a key that came back
+   * after it — each in every form a row may carry the key.
    *
    * @param {number} [nowMs]
-   * @returns {string[]}
+   * @returns {{absent: string[], returned: Array<{keys: string[], before: number}>}}
    */
   denySet(nowMs = Date.now()) {
-    const denied = [];
-    this.#missingSince.forEach((since, address) => {
-      const gone = nowMs - since;
-      if (gone > RUNNING_EXPIRY_MS) {
-        this.#missingSince.delete(address);
-        return;
-      }
-      if (gone > OFF_LIST_GRACE_MS) denied.push(...denyForms(address));
+    this.#sweep(nowMs);
+    const absent = [];
+    const returned = [];
+    this.#departed.forEach((entry, key) => {
+      if (nowMs - entry.since <= OFF_LIST_GRACE_MS) return;
+      if (entry.returnedAt === null) absent.push(...this.#forms(key));
+      else returned.push({ keys: this.#forms(key), before: entry.returnedAt });
     });
-    return denied;
+    return { absent, returned };
   }
 
   resetForTests() {
     this.#known = new Set();
-    this.#missingSince = new Map();
+    this.#departed = new Map();
   }
 }
 
-// The one register a node keeps.
+// The one register a node keeps for row addresses.
 const departures = new OffListDepartures();
 
 module.exports = {
