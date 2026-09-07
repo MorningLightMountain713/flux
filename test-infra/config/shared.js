@@ -246,6 +246,11 @@ module.exports = {
     tempMsgTtlS: 300,
     gossipValidityS: 300,
     hashSyncIntervalMs: 30000,
+    // Every node of a fleet shares this host's cores, and the verify pool scales
+    // on demand: capped at cpus-1 per node it put 150 threads on 16 cores in one
+    // second and stalled a main thread for 110 s (1203, 09-07). This caps the
+    // ceiling, not just the resident count.
+    verifyPoolSize: 2,
     cpuCheckIntervalMs: 30000,
     statsSampleIntervalMs: 2000,
     portRestoreIntervalMs: 30000,
