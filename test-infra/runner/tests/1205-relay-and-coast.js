@@ -363,7 +363,14 @@ describe('relay renewal and the partitioned app island', function () {
     const masterIndex = Number(Object.keys(holderOutpoints).find((i) => holderOutpoints[i] === before.grantee));
     const masterAfter = env.clients[masterIndex].getLastEventId();
 
-    for (let cycle = 0; cycle < 3; cycle += 1) {
+    // Two cycles, not three: every cut here is an unannounced drop to the
+    // node-down jury (the harness pong timeout drops the duty socket inside
+    // 20 s), and test 2's partition already cost this master one. Four
+    // certifications inside the window is the D7 lockout — the placement
+    // check then removes the app (1205 t4 at a38302169, node-02: "locked out
+    // (4 certifications standing)"); three is the placement freeze, which
+    // leaves a running app alone.
+    for (let cycle = 0; cycle < 2; cycle += 1) {
       // eslint-disable-next-line no-await-in-loop
       await env.partitionGroups([masterIndex], OUTSIDERS);
       // eslint-disable-next-line no-await-in-loop
