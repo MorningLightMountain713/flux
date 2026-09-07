@@ -157,6 +157,16 @@ function helpers(env, name) {
     const cells = await Promise.all(nodes.map((i) => readCell(i)));
     return cells.every((cell) => cell?.refereeing === true);
   }, { timeout: timeoutMs, interval: 5000, label: `cells ${nodes.map(label).join(', ')} referee again` });
+  // Every named cell answers serving: true — refereeing AND past its rejoin
+  // drain, so an accept lands as a row rather than a 'draining' refusal. A
+  // cell still draining at the incumbent's first accept records no row and
+  // is not a referee when the cells are read (the killed gate at a38302169:
+  // three of six cells draining, the grant on exactly a quorum, three
+  // referees found where five were expected).
+  const waitServing = (nodes, timeoutMs) => waitFor(async () => {
+    const cells = await Promise.all(nodes.map((i) => readCell(i)));
+    return cells.every((cell) => cell?.serving === true);
+  }, { timeout: timeoutMs, interval: 5000, label: `cells ${nodes.map(label).join(', ')} serve` });
   const readCell = async (i) => {
     try {
       const res = await fetch(
@@ -202,7 +212,7 @@ function helpers(env, name) {
   };
 
   return {
-    key, label, upHolders, seatByElection, grantedSince, grantsInBufferSince, activationsInBufferSince, readCell, waitRefereeing, crossAndAssertNothingMoved,
+    key, label, upHolders, seatByElection, grantedSince, grantsInBufferSince, activationsInBufferSince, readCell, waitRefereeing, waitServing, crossAndAssertNothingMoved,
   };
 }
 
@@ -278,9 +288,11 @@ describe('activation crossing: a referee majority restarting inside the window c
     this.timeout(1200000);
     const h = helpers(env, name);
 
-    // 1. Seat by election, open the window, let the incumbent take its lease.
+    // 1. Seat by election; every non-holder cell past its post-boot drain, so the
+    //    lease lands on all of them; open the window, let the incumbent take it.
     const seated = await h.seatByElection();
     const { incumbent, container } = seated;
+    await h.waitServing(env.clients.map((_, i) => i).filter((i) => !HOLDERS.includes(i)), REFEREE_DRAIN_MS + 120000);
     await advanceTo(OPENS_AT);
     const windowOpen = env.clients.map((c) => c.getLastEventId());
     const grantedOn = await h.grantedSince(windowOpen, 300000);
