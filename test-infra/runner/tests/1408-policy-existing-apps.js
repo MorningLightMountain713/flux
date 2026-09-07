@@ -16,19 +16,21 @@ import {
 } from '../framework/policy-suite.js';
 import { mintDefinition, policyProcessed } from '../framework/policy-chain.js';
 import { queueAppTx, advanceBlocks } from '../framework/daemon-control.js';
-import { waitFor } from '../framework/wait.js';
 
 describe('Policy: an existing app when the grant changes — as the gate stands today', function () {
   let env;
   let name;
 
-  async function confirmed(hash, predicate, label) {
+  // The spec is sealed (registerEncryptedV9App), so nothing a node serves at
+  // /apps/appspecifications says what an update changed; the node's own store
+  // event names the hash it wrote, and that is the update landing on it.
+  async function confirmed(hash, label) {
+    const markers = env.clients.map((c) => c.getLastEventId());
     await queueAppTx(hash);
     await advanceBlocks(3);
-    await waitFor(async () => {
-      const rows = await Promise.all(env.clients.map((c) => c.getAppSpecs(name).catch(() => null)));
-      return rows.every((r) => r && r.status === 'success' && r.data && predicate(r.data));
-    }, { timeout: 120000, interval: 3000, label });
+    await Promise.all(env.clients.map((c, i) => c.waitForEvent(
+      'app:specStored', (d) => d.name === name && d.hash === hash, 120000, { afterId: markers[i] },
+    ).catch((err) => { throw new Error(`${label}: ${err.message}`); })));
   }
 
   before(async function () {
@@ -56,7 +58,7 @@ describe('Policy: an existing app when the grant changes — as the gate stands 
     await policyProcessed(env.clients, height);
     const upd = await update(env.clients[0], { name, mesh: true });
     expectAccepted(upd, 'update adding mesh, granted');
-    await confirmed(upd.data, (spec) => spec.network?.mesh === true, `mesh on ${name} on every node`);
+    await confirmed(upd.data, `the mesh update stored on every node`);
   });
 
   it('the group closed: an update of the app is refused, a renewal that only extends the ttl included', async function () {
