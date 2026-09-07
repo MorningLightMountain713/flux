@@ -86,6 +86,18 @@ describe('mesh membership level API', function () {
         // Compressed per-suite, the 1201/901 pattern.
         fluxapps: {
           meshReconcileIntervalMs: 15000,
+          // Grant timings compressed like every decider cadence the harness
+          // overlays - production values are minutes, and the referees' boot
+          // drain alone answers every joiner's probe "draining" for longer than
+          // the install wait (1103 at 76613c3ce: 71 of 73 probes, no ordinal
+          // decided in 300 s).
+          quorumGrantMaxTtlMs: 30000,
+          quorumGrantDrainMs: 20000,
+          quorumGrantLockDelayMs: 10000,
+          // renewInterval must sit strictly under lockDelayMs or
+          // timingIsSafe refuses and the plane stays inert
+          quorumGrantRenewIntervalMs: 5000,
+          quorumGrantAskTimeoutMs: 3000,
           minOutgoing: 1,
           minIncoming: 1,
           adoptionStaggerStepMs: 5000,
