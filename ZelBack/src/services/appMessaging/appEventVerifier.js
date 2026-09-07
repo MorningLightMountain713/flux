@@ -28,6 +28,25 @@ async function verifyFn(payload, address, signature) {
   return signatureVerifier.verifySignature(payload, address, signature);
 }
 
+/**
+ * The verifier for one door.
+ *
+ * Canonical signature form is an ingress rule: a live message is held to it,
+ * a message the chain already carries is not. Replaying is how a node catches
+ * up, and seven messages on chain carry a signature spelling the rule refuses,
+ * so a replay held to it would leave those permanently unsyncable. Only the
+ * encoding rules are dropped — the signature still has to be the signer's.
+ *
+ * @param {boolean} allowLegacyEncoding
+ * @returns {(payload: object, address: string, signature: string) => Promise<boolean>}
+ */
+function verifierFor(allowLegacyEncoding) {
+  if (!allowLegacyEncoding) return verifyFn;
+  return async (payload, address, signature) => signatureVerifier.verifySignature(
+    payload, address, signature, { allowLegacyEncoding: true },
+  );
+}
+
 function isMarketplaceApp(appName) {
   if (!appName) return false;
   const nums = appName.match(/\d+/g);
@@ -60,11 +79,16 @@ function resolveTeamSupportAddress(daemonHeight) {
  * rule; it is named, with its signer, in ownerChangeRaces.
  *
  * @param {{appEvent: object, previousState: object|null, daemonHeight: number,
- *   verifyHash?: boolean, extraSigners?: string[]}} params
+ *   verifyHash?: boolean, extraSigners?: string[],
+ *   allowLegacyEncoding?: boolean}} params - allowLegacyEncoding marks a
+ *   replay: the message is already on chain, so it is judged by whether the
+ *   signer is right, not by how the signature is spelled.
  */
 async function authorize({
   appEvent, previousState, daemonHeight, verifyHash = true, extraSigners = [],
+  allowLegacyEncoding = false,
 }) {
+  const verify = verifierFor(allowLegacyEncoding);
   if (verifyHash) {
     const hashResult = appEvent.verifyHash();
     if (!hashResult.valid) {
@@ -93,7 +117,7 @@ async function authorize({
     signers.push(appEvent.spec.owner);
   }
 
-  let result = await appEvent.verifySignature(verifyFn, signers);
+  let result = await appEvent.verifySignature(verify, signers);
   if (result.valid) return result;
 
   if (appEvent.isUpdate) {
@@ -106,7 +130,7 @@ async function authorize({
     if (UpdatePolicy.extensionSignerPermitted(verdict)) {
       const usersToExtend = (config.fluxapps && config.fluxapps.usersToExtend) || [];
       if (usersToExtend.length > 0) {
-        result = await appEvent.verifySignature(verifyFn, usersToExtend);
+        result = await appEvent.verifySignature(verify, usersToExtend);
         if (result.valid) return result;
       }
     }
@@ -199,5 +223,6 @@ module.exports = {
     isMarketplaceApp,
     resolveTeamSupportAddress,
     verifyFn,
+    verifierFor,
   },
 };
