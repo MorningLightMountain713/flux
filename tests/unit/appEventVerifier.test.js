@@ -567,10 +567,10 @@ describe('appEventVerifier', () => {
   });
 
   describe('verifyAttestation', () => {
-    it('delegates to the event with the local verify primitive and the network key', () => {
-      const appEvent = { verifyArcaneAttestation: sinon.stub().returns(true) };
+    it('delegates to the event with the local verify primitive and the network key', async () => {
+      const appEvent = { verifyArcaneAttestation: sinon.stub().resolves(true) };
 
-      const result = appEventVerifier.verifyAttestation(appEvent);
+      const result = await appEventVerifier.verifyAttestation(appEvent);
 
       expect(result).to.be.true;
       expect(appEvent.verifyArcaneAttestation.calledOnceWithExactly(
@@ -579,9 +579,24 @@ describe('appEventVerifier', () => {
       )).to.be.true;
     });
 
-    it('returns false when the event reports an invalid attestation', () => {
-      const appEvent = { verifyArcaneAttestation: sinon.stub().returns(false) };
-      expect(appEventVerifier.verifyAttestation(appEvent)).to.be.false;
+    it('returns false when the event reports an invalid attestation', async () => {
+      const appEvent = { verifyArcaneAttestation: sinon.stub().resolves(false) };
+      expect(await appEventVerifier.verifyAttestation(appEvent)).to.be.false;
+    });
+
+    // The reason the library change and this one had to move together. The
+    // library's verifyArcaneAttestation is async now, so this returns a Promise,
+    // and a Promise is truthy however it resolves. A caller writing
+    // `if (!verifyAttestation(event))` therefore has a gate that never fires —
+    // on the check that decides whether an encrypted message is stored and
+    // relayed at all. Awaiting is not a style preference here.
+    it('answers falsy only once awaited — the bare call is truthy either way', async () => {
+      const refuses = { verifyArcaneAttestation: sinon.stub().resolves(false) };
+
+      const unawaited = appEventVerifier.verifyAttestation(refuses);
+      expect(unawaited).to.be.a('promise');
+      expect(Boolean(unawaited), 'a refusal read as truthy before awaiting').to.equal(true);
+      expect(await unawaited).to.be.false;
     });
   });
 
