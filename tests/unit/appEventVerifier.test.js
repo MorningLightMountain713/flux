@@ -384,6 +384,74 @@ describe('appEventVerifier', () => {
     });
   });
 
+  describe('authorize (which door)', () => {
+    // Canonical signature form is an ingress rule. A message already on chain
+    // is replayed, and refusing one because of how its signature is spelled
+    // describes a node that cannot sync — seven on chain carry the bare 0/1
+    // spelling of v. The caller decides which door it is; authorize's job is
+    // to carry that decision as far as the verifier.
+    //
+    // FakeAppEvent above ignores the verifyFn it is handed, so this one calls
+    // it: the option is only useful if it survives the whole way down.
+    class CallingAppEvent extends FakeAppEvent {
+      async verifySignature(verifyFn, signers) {
+        await verifyFn('payload', signers[0], 'sig');
+        return super.verifySignature(verifyFn, signers);
+      }
+    }
+
+    const optionsOfLastCall = () => signatureVerifierStub.verifySignature.lastCall.args[3];
+
+    it('asks the ingress door by default', async () => {
+      const appEvent = new CallingAppEvent({
+        spec: { owner: 'ownerA', name: 'myapp' },
+        validSignersByIteration: [new Set(['ownerA'])],
+      });
+      await appEventVerifier.authorize({ appEvent, daemonHeight: 1000 });
+
+      sinon.assert.calledOnce(signatureVerifierStub.verifySignature);
+      expect(optionsOfLastCall()).to.satisfy(
+        (opts) => opts === undefined || opts.allowLegacyEncoding !== true,
+      );
+    });
+
+    it('asks the replay door when the caller says the message is already on chain', async () => {
+      const appEvent = new CallingAppEvent({
+        spec: { owner: 'ownerA', name: 'myapp' },
+        validSignersByIteration: [new Set(['ownerA'])],
+      });
+      await appEventVerifier.authorize({
+        appEvent, daemonHeight: 1000, allowLegacyEncoding: true,
+      });
+
+      sinon.assert.calledOnce(signatureVerifierStub.verifySignature);
+      expect(optionsOfLastCall()).to.deep.equal({ allowLegacyEncoding: true });
+    });
+
+    it('carries the door into the extension-signer retry as well', async () => {
+      // The second verification pass — a renewal authorized by usersToExtend —
+      // runs against the same message, so it is the same door.
+      const appEvent = new CallingAppEvent({
+        spec: { owner: 'ownerA', name: 'myapp' },
+        isUpdate: true,
+        renewalVerdict: 'unchanged',
+        validSignersByIteration: [new Set(), new Set(['extender1'])],
+      });
+
+      await appEventVerifier.authorize({
+        appEvent,
+        previousState: { owner: 'ownerA' },
+        daemonHeight: 1000,
+        allowLegacyEncoding: true,
+      });
+
+      expect(signatureVerifierStub.verifySignature.callCount).to.be.greaterThan(1);
+      for (const call of signatureVerifierStub.verifySignature.getCalls()) {
+        expect(call.args[3]).to.deep.equal({ allowLegacyEncoding: true });
+      }
+    });
+  });
+
   describe('authorize (verifyHash option)', () => {
     it('skips the hash check when verifyHash: false is passed (origination path)', async () => {
       const appEvent = new FakeAppEvent({

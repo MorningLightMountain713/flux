@@ -479,6 +479,9 @@ async function checkAndRequestApp(hash, txid, height, valueSat, blockTime = null
         appEvent: confirmedEvent,
         previousState: currentState,
         daemonHeight: getDaemonHeight(),
+        // The chain has confirmed this message; the re-check here is about
+        // which owner authorizes it, not about how it is spelled.
+        allowLegacyEncoding: true,
       });
     }
 

@@ -22,13 +22,22 @@ const log = require('../lib/log');
  * code. Do not reimplement it here — a consensus rule written twice is one that
  * eventually disagrees with itself.
  *
+ * It is an INGRESS rule. A live message is held to it, because that is where a
+ * second identity would be minted. A message the chain already carries is
+ * replayed rather than admitted, and a node that refuses one cannot sync —
+ * seven messages on chain carry the bare `0/1` spelling of `v`. Callers on a
+ * replay path pass `allowLegacyEncoding`, which drops the encoding rules and
+ * nothing else: who signed is still decided the same way.
+ *
  * @param {object} message
  * @param {string} address
  * @param {string} signature
+ * @param {{allowLegacyEncoding?: boolean}} [options] replay path when true
  *
  * @returns {Promise<bool>} isValid
  */
-async function verifySignature(message, address, signature) {
+async function verifySignature(message, address, signature, options = {}) {
+  const { allowLegacyEncoding = false } = options;
   let isValid = false;
   let signingAddress = address;
   try {
@@ -36,9 +45,11 @@ async function verifySignature(message, address, signature) {
       throw new Error('Missing parameters for message verification');
     }
 
-    const { isCanonicalSignature } = await getSpecBackend();
-    if (!isCanonicalSignature(signature, address.startsWith('0x') ? 'eth' : 'btc')) {
-      throw new Error('Signature is not in canonical form');
+    if (!allowLegacyEncoding) {
+      const { isCanonicalSignature } = await getSpecBackend();
+      if (!isCanonicalSignature(signature, address.startsWith('0x') ? 'eth' : 'btc')) {
+        throw new Error('Signature is not in canonical form');
+      }
     }
 
     if (address.startsWith('0x')) {

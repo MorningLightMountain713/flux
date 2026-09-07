@@ -350,6 +350,10 @@ async function processMessages(messages, onProgress) {
           appEvent,
           previousState,
           daemonHeight,
+          // Every message here is already on chain: this is the replay door,
+          // and a signature spelling the ingress rule refuses is not a reason
+          // to refuse to sync it.
+          allowLegacyEncoding: true,
         });
 
         // Verified — add to batch and update map for subsequent messages
