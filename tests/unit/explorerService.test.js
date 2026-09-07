@@ -1076,6 +1076,182 @@ describe('explorerService tests', () => {
     });
   });
 
+  // ── Phase 2: the oracle's own addresses ──────────────────────────────
+  //
+  // A catching-up node does not reread every block; it jumps to known signer
+  // addresses through the address index. RateMessages are not published from any
+  // of those — they come from the oracle's own address, which is not configuration
+  // but whatever the foundation named in an OracleKeyMessage, and it rotates. So
+  // they are reachable only by a second query, built from what the first one read.
+  //
+  // Without it a re-synced node rebuilds every other message and no rate history,
+  // has no FLUX/USD rate, resolves a v9 fee to zero — and zero is fail-closed at
+  // the registration gate, so it refuses registrations a node running at the time
+  // accepted.
+  describe('bootstrapSoftForks — the oracle addresses phase 1 discovers', () => {
+    const config = require('config');
+    const priceOracleState = require('../../ZelBack/src/services/pricing/priceOracleState');
+    const authority = config.fluxapps.messageAuthorityAddress;
+
+    // Independent literals, not derived by the code under test: this pubkey names
+    // this address under the Flux t1 P2PKH derivation. If the derivation moves,
+    // this says so rather than moving with it.
+    const ORACLE_PUBKEY_HEX = '02c7f5b5e6e7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b3c4';
+    const ORACLE_ADDR = 't1NfrwmYygJYwm4krB9KkhnBNLRffuCqvw8';
+    // A real P2PKH scriptSig: 72-byte signature push tagged SIGHASH_ALL, then the
+    // pubkey. Both authority checks require the input to commit to all outputs.
+    const ALL_SCRIPTSIG = '483045022100d8a57c5364a2eb062a6fdac519d665074a1a075dff2215eb15e17c4dfb170eef02203b96971b6a07f880a2d946de2155e3a296d3ebf02d1754cba1f4a648fc2e4591012103a9329557d633a7b261290f7c3b17506d460c3fcfd0cb8fd9339b27d4f583eca7';
+
+    const KEY_HEIGHT = 2000000;
+    // SOFT_FORK_EFFECTIVE_DEPTH is 40: a rate below its key's effective height can
+    // never validate, so the rate sits comfortably past it.
+    const RATE_HEIGHT = KEY_HEIGHT + 100;
+    const TIP = 2579000;
+
+    let executeCallStub;
+    let executeBatchCallStub;
+    let policy;
+
+    const delta = (txid, address, satoshis, height) => ({
+      txid, address, satoshis, blockindex: 0, index: 0, height,
+    });
+
+    const signedTx = (txid, height, from, msgHex) => ({
+      txid,
+      height,
+      vin: [{ address: from, scriptSig: { hex: ALL_SCRIPTSIG } }],
+      vout: [
+        { valueSat: 100000, scriptPubKey: { addresses: [from], asm: '' } },
+        { valueSat: 0, scriptPubKey: { addresses: [], asm: `OP_RETURN ${msgHex}` } },
+      ],
+    });
+
+    const selfSend = (txid, address, height) => [
+      delta(txid, address, -500000, height),
+      delta(txid, address, 500000, height),
+    ];
+
+    before(async () => {
+      policy = await require('@runonflux/flux-spec-cjs').load();
+    });
+
+    beforeEach(async () => {
+      await dbHelper.initiateDB();
+      dbHelper.databaseConnection();
+      executeCallStub = sinon.stub(daemonServiceUtils, 'executeCall');
+      executeBatchCallStub = sinon.stub(daemonServiceUtils, 'executeBatchCall');
+      sinon.stub(dbHelper, 'updateOneInDatabase').resolves();
+      // The real histories, emptied — a hand-written double would answer whatever
+      // this file expected rather than what the class does.
+      priceOracleState.getOracleKeyHistory().removeAtHeight(0);
+      priceOracleState.getRateMessageHistory().removeAtHeight(0);
+    });
+
+    afterEach(() => {
+      sinon.restore();
+      priceOracleState.getOracleKeyHistory().removeAtHeight(0);
+      priceOracleState.getRateMessageHistory().removeAtHeight(0);
+    });
+
+    const oracleKeyHex = () => Buffer.from(
+      policy.OracleKeyMessage.encode({ pubkey: Buffer.from(ORACLE_PUBKEY_HEX, 'hex') }),
+    ).toString('hex');
+
+    const rateHex = () => Buffer.from(
+      policy.RateMessage.encode({ timestamp: 1780000000, fluxUsdPriceE4: 691 }),
+    ).toString('hex');
+
+    it('asks only once while no oracle key has been published', async () => {
+      // Mainnet today. No OracleKeyMessage exists, so no rate message is authorised
+      // and there is nothing for a second query to find.
+      executeCallStub.resolves({ status: 'success', data: [] });
+
+      await explorerService.bootstrapSoftForks(TIP);
+
+      sinon.assert.calledOnce(executeCallStub);
+    });
+
+    it('queries the oracle address a published key names, from that key\'s height', async () => {
+      priceOracleState.getOracleKeyHistory().add(
+        { pubkey: Buffer.from(ORACLE_PUBKEY_HEX, 'hex') }, KEY_HEIGHT, 0,
+      );
+      executeCallStub.resolves({ status: 'success', data: [] });
+
+      await explorerService.bootstrapSoftForks(TIP);
+
+      sinon.assert.calledTwice(executeCallStub);
+      const second = executeCallStub.secondCall.args[1][0];
+      expect(second.addresses).to.deep.equal([ORACLE_ADDR]);
+      // Not epochstart: a rate below its own key can never validate, so starting
+      // earlier would only fetch transactions guaranteed to be refused.
+      expect(second.start).to.equal(KEY_HEIGHT);
+      expect(second.end).to.equal(TIP);
+    });
+
+    it('asks the foundation first — the oracle address is only knowable after', async () => {
+      priceOracleState.getOracleKeyHistory().add(
+        { pubkey: Buffer.from(ORACLE_PUBKEY_HEX, 'hex') }, KEY_HEIGHT, 0,
+      );
+      executeCallStub.resolves({ status: 'success', data: [] });
+
+      await explorerService.bootstrapSoftForks(TIP);
+
+      const first = executeCallStub.firstCall.args[1][0];
+      expect(first.addresses).to.include(authority);
+      expect(first.addresses).to.not.include(ORACLE_ADDR);
+      expect(executeCallStub.secondCall.calledAfter(executeCallStub.firstCall)).to.equal(true);
+    });
+
+    it('scans every address the key has ever had, and each one once', async () => {
+      const OTHER_PUBKEY_HEX = '03a9329557d633a7b261290f7c3b17506d460c3fcfd0cb8fd9339b27d4f583eca7';
+      priceOracleState.getOracleKeyHistory().add(
+        { pubkey: Buffer.from(ORACLE_PUBKEY_HEX, 'hex') }, KEY_HEIGHT, 0,
+      );
+      priceOracleState.getOracleKeyHistory().add(
+        { pubkey: Buffer.from(OTHER_PUBKEY_HEX, 'hex') }, KEY_HEIGHT + 5000, 0,
+      );
+      // The same key again: a rotation back, or a re-publication. One address.
+      priceOracleState.getOracleKeyHistory().add(
+        { pubkey: Buffer.from(ORACLE_PUBKEY_HEX, 'hex') }, KEY_HEIGHT + 9000, 0,
+      );
+      executeCallStub.resolves({ status: 'success', data: [] });
+
+      await explorerService.bootstrapSoftForks(TIP);
+
+      const { addresses } = executeCallStub.secondCall.args[1][0];
+      expect(addresses).to.have.lengthOf(2);
+      expect(addresses).to.include(ORACLE_ADDR);
+      // The earliest key still sets the lower bound, not the latest.
+      expect(executeCallStub.secondCall.args[1][0].start).to.equal(KEY_HEIGHT);
+    });
+
+    it('rebuilds a rate message that only the second query can reach', async () => {
+      // The whole point, end to end: the foundation's message names the key, and
+      // the rate that key signed is at an address the first query never asks about.
+      executeCallStub
+        .onFirstCall().resolves({ status: 'success', data: selfSend('keyTx', authority, KEY_HEIGHT) })
+        .onSecondCall().resolves({ status: 'success', data: selfSend('rateTx', ORACLE_ADDR, RATE_HEIGHT) });
+      executeBatchCallStub
+        .onFirstCall().resolves({
+          status: 'success',
+          data: [{ id: 0, result: signedTx('keyTx', KEY_HEIGHT, authority, oracleKeyHex()), error: null }],
+        })
+        .onSecondCall().resolves({
+          status: 'success',
+          data: [{ id: 0, result: signedTx('rateTx', RATE_HEIGHT, ORACLE_ADDR, rateHex()), error: null }],
+        });
+
+      await explorerService.bootstrapSoftForks(TIP);
+
+      // The key was read from the chain, not seeded by this test.
+      expect([...priceOracleState.getOracleKeyHistory().entries()]).to.have.lengthOf(1);
+      // And the rate it authorised is in the history a v9 fee reads.
+      const rates = [...priceOracleState.getRateMessageHistory().entries()];
+      expect(rates, 'no rate message was rebuilt — phase 2 did not reach it').to.have.lengthOf(1);
+      expect(rates[0].chainHeight).to.equal(RATE_HEIGHT);
+    });
+  });
+
   describe('soft-fork message authority', () => {
     const config = require('config');
     const priceOracleState = require('../../ZelBack/src/services/pricing/priceOracleState');

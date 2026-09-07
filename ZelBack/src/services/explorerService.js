@@ -271,13 +271,20 @@ function inputSignsAllOutputs(vin) {
   }
 }
 
+// The t1 address an OracleKeyMessage's pubkey names. One derivation, used both by
+// the check that accepts a rate message and by the bootstrap scan that goes looking
+// for one — two copies would let the scan fetch from addresses the check refuses,
+// and the only symptom would be a rate history that is quietly short.
+function oracleAddressFromKey(oracleKey) {
+  if (!oracleKey || !oracleKey.pubkey) return null;
+  return pubKeyToAddr(Buffer.from(oracleKey.pubkey).toString('hex'), FLUX_T1_PUBKEY_HASH);
+}
+
 // The oracle's t1 address in force at a height, derived from the pubkey published
 // by the most recent OracleKeyMessage (0x05). Null if no oracle key is in force.
 function resolveOracleAddress(height) {
   const history = priceOracleState.getOracleKeyHistory();
-  const oracleKey = history && history.resolveAt(height);
-  if (!oracleKey || !oracleKey.pubkey) return null;
-  return pubKeyToAddr(Buffer.from(oracleKey.pubkey).toString('hex'), FLUX_T1_PUBKEY_HASH);
+  return oracleAddressFromKey(history && history.resolveAt(height));
 }
 
 function isMessageAuthority(tx) {
@@ -787,25 +794,30 @@ function getPriceSpecForHeight(priceSpecs, height) {
   return priceSpecs[lo];
 }
 
-async function bootstrapSoftForks(currentDaemonHeight) {
-  // Phase 1 — the STATIC recognized signers: the legacy payment multisigs and the
-  // v9 message authority. Finds legacy price + PriceMessage/PriceModifier/OracleKey/
-  // Marketplace/PolicyGroup. TODO: RateMessages are signed by the dynamic oracle
-  // address (rotated via OracleKeyMessage), so a cold rebuild also needs a phase-2
-  // scan of the discovered oracle addresses — see
-  // fluxModels fluxos/BOOTSTRAP_ORACLE_RATE_HISTORY_REBUILD.md.
-  const signerAddresses = [
-    ...chainUtilities.legacyMessageAuthorities(),
-    config.fluxapps.messageAuthorityAddress,
-  ].filter(Boolean);
+/**
+ * Ingest every soft-fork message a set of signer addresses published, by jumping
+ * straight to their transactions through the address index rather than rescanning
+ * blocks.
+ *
+ * The caller decides which addresses and from which height; this is the same walk
+ * for any signer set, which is what lets the oracle's own addresses be scanned on
+ * the same terms as the foundation's once they are known.
+ *
+ * @param {string[]} addresses - signer addresses to query
+ * @param {number} startHeight - lower bound for the address-index query
+ * @param {number} endHeight - current daemon height
+ * @param {string} phase - label for the log lines
+ * @returns {Promise<number>} soft-fork messages stored
+ */
+async function scanForSoftForks(addresses, startHeight, endHeight, phase) {
   const deltaResult = await daemonServiceUtils.executeCall('getaddressdeltas', [{
-    addresses: signerAddresses,
-    start: config.fluxapps.epochstart,
-    end: currentDaemonHeight,
+    addresses,
+    start: startHeight,
+    end: endHeight,
   }]);
   if (deltaResult.status !== 'success') {
-    log.warn(`Bootstrap: getaddressdeltas failed: ${deltaResult.data?.message || deltaResult.data}`);
-    return;
+    log.warn(`Bootstrap ${phase}: getaddressdeltas failed: ${deltaResult.data?.message || deltaResult.data}`);
+    return 0;
   }
 
   // `blockindex` on a delta record is the transaction's position within its block —
@@ -830,11 +842,11 @@ async function bootstrapSoftForks(currentDaemonHeight) {
     if (hasSpend && hasReceive) selfSendTxids.push(txid);
   }
 
-  if (selfSendTxids.length === 0) return;
-  log.info(`Bootstrap: Found ${selfSendTxids.length} recognized-signer self-send transactions, checking for soft forks`);
+  if (selfSendTxids.length === 0) return 0;
+  log.info(`Bootstrap ${phase}: Found ${selfSendTxids.length} recognized-signer self-send transactions, checking for soft forks`);
 
   const BATCH_SIZE = 500;
-  const signerSet = new Set(signerAddresses);
+  const signerSet = new Set(addresses);
   let totalForks = 0;
   for (let i = 0; i < selfSendTxids.length; i += BATCH_SIZE) {
     const batch = selfSendTxids.slice(i, i + BATCH_SIZE);
@@ -888,7 +900,95 @@ async function bootstrapSoftForks(currentDaemonHeight) {
       }
     }
   }
-  log.info(`Bootstrap: Stored ${totalForks} soft fork messages`);
+  log.info(`Bootstrap ${phase}: Stored ${totalForks} soft fork messages`);
+  return totalForks;
+}
+
+/**
+ * Every address an oracle key has ever had, derived from the keys phase 1 found.
+ *
+ * The derivation is `resolveOracleAddress`'s, reached through the same helper, so
+ * the addresses this scan fetches from and the addresses `isOracleSigner` accepts
+ * cannot drift apart. If they did, phase 2 would fetch transactions the per-message
+ * check then refuses, and the only symptom would be a rate history that is quietly
+ * short.
+ *
+ * Note the two shapes: `resolveAt()` answers with the message, `entries()` yields
+ * `{ chainHeight, txIndex, message }`.
+ *
+ * @param {Set<string>} alreadyScanned - addresses phase 1 already covered
+ * @returns {{addresses: string[], firstKeyHeight: number|null}}
+ */
+function discoverOracleAddresses(alreadyScanned) {
+  const history = priceOracleState.getOracleKeyHistory();
+  if (!history) return { addresses: [], firstKeyHeight: null };
+
+  const seen = new Set(alreadyScanned);
+  const addresses = [];
+  let firstKeyHeight = null;
+
+  for (const entry of history.entries()) {
+    if (firstKeyHeight === null || entry.chainHeight < firstKeyHeight) {
+      firstKeyHeight = entry.chainHeight;
+    }
+    const address = oracleAddressFromKey(entry.message);
+    if (!address || seen.has(address)) continue;
+    seen.add(address);
+    addresses.push(address);
+  }
+
+  return { addresses, firstKeyHeight };
+}
+
+/**
+ * Rebuild historical soft-fork state without rescanning every block.
+ *
+ * Two phases, and the order is the point.
+ *
+ * Phase 1 queries the STATIC recognized signers — the legacy payment multisigs and
+ * the v9 message authority. That finds the legacy price messages and every v9
+ * governance message: PriceMessage, PriceModifier, OracleKey, Marketplace,
+ * PolicyGroup.
+ *
+ * Phase 2 queries the ORACLE's addresses, which is where RateMessages come from.
+ * They cannot be in phase 1's set because the oracle key is not configuration: it is
+ * whatever the foundation published in an OracleKeyMessage, it rotates, and every
+ * address it has ever had is only knowable once phase 1 has read those messages.
+ *
+ * Without phase 2 a node that cold-syncs or reindexes rebuilds every other message
+ * and no rate history at all. It has no FLUX/USD rate, so a v9 fee resolves to zero,
+ * and zero is deliberately fail-closed at the registration gate — the node would
+ * refuse registrations that a node running at the time accepted, and the two would
+ * disagree about which apps exist.
+ *
+ * @param {number} currentDaemonHeight
+ */
+async function bootstrapSoftForks(currentDaemonHeight) {
+  const staticSigners = [
+    ...chainUtilities.legacyMessageAuthorities(),
+    config.fluxapps.messageAuthorityAddress,
+  ].filter(Boolean);
+
+  await scanForSoftForks(
+    staticSigners, config.fluxapps.epochstart, currentDaemonHeight, 'phase 1 (foundation)',
+  );
+
+  // Only now can the oracle's addresses be known: phase 1 is what read the messages
+  // naming them.
+  const { addresses, firstKeyHeight } = discoverOracleAddresses(new Set(staticSigners));
+  if (addresses.length === 0) {
+    // The state on mainnet today. No OracleKeyMessage has been published, so no rate
+    // message is authorised anyway and there is nothing for this phase to find.
+    log.info('Bootstrap phase 2 (oracle): no oracle key in force, no rate history to rebuild');
+    return;
+  }
+
+  // A rate below its own key's height can never validate — isOracleSigner resolves
+  // the key at the rate's height and answers null before it — so starting earlier
+  // would only fetch transactions guaranteed to be refused.
+  await scanForSoftForks(
+    addresses, firstKeyHeight, currentDaemonHeight, 'phase 2 (oracle)',
+  );
 }
 
 function processBootstrapTx(tx, priceSpecs, seenHashes, hashBatch) {
