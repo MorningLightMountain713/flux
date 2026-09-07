@@ -189,10 +189,17 @@ async function requestAttestation(contentHash, specBlob) {
  * Local-only (hardcoded public key + node:crypto), so any node — Arcane or not —
  * can verify without a secure backend.
  *
+ * Async because the library's verifyArcaneAttestation is, and the caller MUST
+ * await it. The result is a Promise and a Promise is truthy, so an unawaited
+ * `if (!verifyAttestation(event))` is a gate that never fires — on the check
+ * that decides whether an encrypted message is stored and relayed at all.
+ * verifyAttestationSignature itself is still synchronous; awaiting a boolean
+ * is that boolean.
+ *
  * @param {object} appEvent - SignedAppEvent or ConfirmedAppEvent
- * @returns {boolean}
+ * @returns {Promise<boolean>}
  */
-function verifyAttestation(appEvent) {
+async function verifyAttestation(appEvent) {
   return appEvent.verifyArcaneAttestation(verifyAttestationSignature, ARCANE_APP_ATTESTATION_PUBKEY);
 }
 
