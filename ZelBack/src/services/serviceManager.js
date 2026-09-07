@@ -38,6 +38,7 @@ const grantorController = require('./quorumGrant/grantorController');
 const grantClient = require('./quorumGrant/grantClient');
 const ordinalRegister = require('./quorumGrant/ordinalRegister');
 const ordinalRegisterSeam = require('./appMesh/ordinalRegisterSeam');
+const meshOrdinals = require('./appMesh/meshOrdinals');
 const messageStore = require('./appMessaging/messageStore');
 const crontabAndMountsCleanup = require('./appLifecycle/crontabAndMountsCleanup');
 const appJanitor = require('./appLifecycle/appJanitor');
@@ -468,6 +469,17 @@ async function startFluxFunctions() {
     // the plane registers into the mesh's seam here, and until it does every
     // ordinal answer is the closed one.
     ordinalRegisterSeam.registerProvider(ordinalRegister.provider());
+    // A delisted holder resolves to nobody: the seats this cell records whose
+    // holders are not on the current list start their grace now (a reboot
+    // must not read a long-gone holder as present), and a node back on the
+    // list re-probes its own seats before trusting them — another node may
+    // have founded on them while it was off the list. The confirmation
+    // service's direct listener is the production hook; the bus is the
+    // harness's.
+    grantorController.seedDelistedHolders().catch((error) => log.warn(`delisted-holder sweep failed: ${error.message}`));
+    nodeConfirmationService.onMessageCapabilityChange((capable) => {
+      if (capable) meshOrdinals.noteReturnFromUnreachability();
+    });
     peerNotification.initialize();
     // Serve the flux-shutdownd drain socket (Arcane-only, best-effort).
     drainServer.start();

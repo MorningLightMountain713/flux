@@ -375,6 +375,21 @@ describe('quorumGrant grantorController', () => {
       expect(grantRegister.prepare.firstCall.args[0]).to.equal(`${ORDINAL_KEY}@0`);
     });
 
+    it('a delisted holder resolves to nobody at seat rows only: the ordinal ask carries the delisted-holder read, the founder and held asks do not', async () => {
+      const delistedHolders = require('../../ZelBack/src/services/quorumGrant/delistedHolders');
+      await grantorController.probe(fakeReq(signedAsk('probe', { mode: 'oneshot', key: ORDINAL_KEY })), fakeRes());
+      expect(grantRegister.probe.calledOnce).to.equal(true);
+      const [, , seatContext] = grantRegister.probe.firstCall.args;
+      expect(seatContext.holderDelisted).to.equal(delistedHolders.isDelistedHolder);
+
+      await grantorController.prepare(fakeReq(signedAsk('prepare', { mode: 'oneshot', key: FOUNDER_KEY })), fakeRes());
+      await grantorController.prepare(fakeReq(signedAsk('prepare')), fakeRes());
+      expect(grantRegister.prepare.calledTwice).to.equal(true);
+      grantRegister.prepare.getCalls().forEach((call) => {
+        expect(call.args[2]).to.not.have.property('holderDelisted');
+      });
+    });
+
     it('release of an ordinal row reaches the register row with the oneshot permission', async () => {
       const res = fakeRes();
       await grantorController.release(fakeReq(signedAsk('release', { key: ORDINAL_KEY, generation: 0 })), res);
