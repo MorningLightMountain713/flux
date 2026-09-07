@@ -6,6 +6,7 @@ const nodeListSource = require('./nodeListSource');
 const networkStateManager = require('./utils/networkStateManager');
 const fluxEventBus = require('./utils/fluxEventBus');
 const { departures } = require('./appDatabase/offListDepartures');
+const delistedHolders = require('./quorumGrant/delistedHolders');
 const { NodeDownTopology } = require('./utils/nodeDownTopology');
 
 /**
@@ -126,7 +127,11 @@ async function start(options = {}) {
   // address gone from the list starts its grace, and one back on it is
   // forgiven. The register itself decides what a departure means.
   stateManager.on('updated', () => {
-    departures.noteList(stateManager.state().map((node) => node.ip));
+    const listed = stateManager.state();
+    departures.noteList(listed.map((node) => node.ip));
+    // the same refresh, keyed on outpoints, for the mesh seats: a seat whose
+    // holder left the list reads as free at this cell once the grace has run
+    delistedHolders.noteList(listed);
   });
 
   const usingDeltas = await nodeListSource.start({ stateManager, listFetcher: fetcher });

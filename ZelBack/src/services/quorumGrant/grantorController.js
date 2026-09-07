@@ -18,6 +18,7 @@ const signedEnvelope = require('./signedEnvelope');
 const rosterOverlay = require('./rosterOverlay');
 const downCertificates = require('./downCertificates');
 const grantRegister = require('./grantRegister');
+const delistedHolders = require('./delistedHolders');
 const { MODES } = require('./grantRegisterCore');
 const core = require('./grantClientCore');
 const log = require('../../lib/log');
@@ -181,6 +182,20 @@ function servingSinceFor(key) {
  * rows are exempt: write-once state cannot go stale. Called by the
  * node-down plane on reconnection.
  */
+/**
+ * The boot sweep of the delisted-holder register: the holders of the seats
+ * this cell records that are not on the current node list start their grace
+ * now. Founder rows are skipped — a delisting never reclaims one.
+ *
+ * @returns {Promise<number>} seats swept
+ */
+async function seedDelistedHolders() {
+  const rows = await grantRegister.oneshotRows();
+  const seats = rows.filter((row) => ordinalKey(row.key)).map((row) => row.grantee);
+  delistedHolders.seedFromRows(seats);
+  return seats.length;
+}
+
 async function noteReturnFromUnreachability() {
   const keys = await grantRegister.heldKeys();
   resyncPending = keys.length ? new Set(keys) : null;
@@ -918,7 +933,15 @@ async function serve(req, res, type, operate) {
         ? Math.max(0, anchor + (config.fluxapps.quorumGrantLockDelayMs ?? 30_000) - Date.now())
         : 0;
     }
-    const reply = await operate(ask, { servingSinceMs: servingSinceFor(ask.key), carriedIncumbent });
+    const reply = await operate(ask, {
+      servingSinceMs: servingSinceFor(ask.key),
+      carriedIncumbent,
+      // A delisted holder resolves to nobody — for SEATS only: an ordinal row
+      // whose holder left the node list past the grace reads as released at
+      // this cell (grantRegisterCore.viewed). Founder rows and held terms
+      // never do; the core cannot read roles, so the key decides here.
+      ...(ordinalKey(ask.key) ? { holderDelisted: delistedHolders.isDelistedHolder } : {}),
+    });
     ms.operate = Date.now() - t0 - ms.read - ms.committee - (ms.holds ?? 0);
     report('served', reply?.ok === false ? reply.code : undefined, carried ? { carried, seatWaitMs } : {});
     return res.json(messageHelper.createDataMessage(reply));
@@ -1260,6 +1283,7 @@ module.exports = {
   record,
   foundingBasis,
   noteReturnFromUnreachability,
+  seedDelistedHolders,
   registerSyncReadyProvider,
   resetActivationForTests,
   reset,

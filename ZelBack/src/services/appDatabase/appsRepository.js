@@ -1299,9 +1299,13 @@ async function upsertAppInstallingErrorLocations(records) {
  * @param {Array<string>} opts.offListIps addresses no longer on the deterministic node
  *   list past the off-list grace (offListDepartures): every row of theirs is negated
  *   here, locally, the same on every node that holds the same list.
+ * @param {Array<{keys: string[], before: number}>} opts.offListReturned addresses back
+ *   on the list after a departure past the grace: the rows they announced before the
+ *   return are negated — a node that left the list removed its apps, so only what it
+ *   announces after it is back counts.
  */
 function buildAppLocationPipeline({
-  now, appname = null, ip = null, host = null, supersededIps = [], offListIps = [],
+  now, appname = null, ip = null, host = null, supersededIps = [], offListIps = [], offListReturned = [],
 }) {
   const escapedName = appname ? appname.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') : null;
   const nameMatch = escapedName ? new RegExp(`^${escapedName}$`, 'i') : null;
@@ -1330,6 +1334,11 @@ function buildAppLocationPipeline({
   }
   if (offListIps.length) {
     clauses.push({ ip: { $nin: offListIps } });
+  }
+  if (offListReturned.length) {
+    clauses.push({
+      $nor: offListReturned.map(({ keys, before }) => ({ ip: { $in: keys }, broadcastedAt: { $lt: before } })),
+    });
   }
 
   return [
@@ -1555,10 +1564,10 @@ async function appLocationFromEvents(options = {}) {
   const now = new Date();
 
   const { supersededIps, translate } = await resolveAddressMoves(collection, now);
-  const offListIps = departures.denySet(now.getTime());
+  const { absent: offListIps, returned: offListReturned } = departures.denySet(now.getTime());
   const rows = await collection.aggregate([
     ...buildAppLocationPipeline({
-      now, appname, ip, host, supersededIps, offListIps,
+      now, appname, ip, host, supersededIps, offListIps, offListReturned,
     }),
     ...RUNNING_ROW_TAIL,
   ]).toArray();
@@ -1586,9 +1595,9 @@ async function countRunningByApp() {
   const now = new Date();
 
   const { supersededIps } = await resolveAddressMoves(collection, now);
-  const offListIps = departures.denySet(now.getTime());
+  const { absent: offListIps, returned: offListReturned } = departures.denySet(now.getTime());
   const counts = await collection.aggregate([
-    ...buildAppLocationPipeline({ now, supersededIps, offListIps }),
+    ...buildAppLocationPipeline({ now, supersededIps, offListIps, offListReturned }),
     ...RUNNING_COUNT_TAIL,
   ]).toArray();
   return new Map(counts.map((row) => [String(row._id).toLowerCase(), row.count]));
@@ -1612,9 +1621,9 @@ async function listRunningAddresses() {
   const now = new Date();
 
   const { supersededIps, translate } = await resolveAddressMoves(collection, now);
-  const offListIps = departures.denySet(now.getTime());
+  const { absent: offListIps, returned: offListReturned } = departures.denySet(now.getTime());
   const rows = await collection.aggregate([
-    ...buildAppLocationPipeline({ now, supersededIps, offListIps }),
+    ...buildAppLocationPipeline({ now, supersededIps, offListIps, offListReturned }),
     ...RUNNING_ADDRESS_TAIL,
   ]).toArray();
 
