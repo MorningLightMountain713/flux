@@ -77,7 +77,23 @@ describe('mesh membership across a multi-node fleet', function () {
       // settles as the 3-cycle 0->1, 1->2, 2->0, one outbound and one inbound
       // per node, and any higher target churns on deduped redials forever.
       configOverrides: {
-        fluxapps: { meshReconcileIntervalMs: 15000, minOutgoing: 1, minIncoming: 1 },
+        fluxapps: {
+          meshReconcileIntervalMs: 15000,
+          minOutgoing: 1,
+          minIncoming: 1,
+          // Grant timings compressed like every decider cadence the harness
+          // overlays - production values are minutes, and the referees' boot
+          // drain alone answers every joiner's probe "draining" for longer than
+          // the install wait (1103 at 76613c3ce: 71 of 73 probes, no ordinal
+          // decided in 300 s).
+          quorumGrantMaxTtlMs: 30000,
+          quorumGrantDrainMs: 20000,
+          quorumGrantLockDelayMs: 10000,
+          // renewInterval must sit strictly under lockDelayMs or
+          // timingIsSafe refuses and the plane stays inert
+          quorumGrantRenewIntervalMs: 5000,
+          quorumGrantAskTimeoutMs: 3000,
+        },
       },
     });
     await bootAndPeer(env, { minOutbound: 1, minInbound: 1, pricing: true });
