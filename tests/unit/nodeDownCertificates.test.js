@@ -395,3 +395,66 @@ describe('nodeDownCertificates — the drop the verdict answers, and the certifi
     expect(verifyCertificate(certificate, watchers, sameJury, () => true, 100, 10).accepted).to.equal(true);
   });
 });
+
+describe('nodeDownCertificates — the death the verdict names, and the certificate\'s number (formal/death-identity, nth)', () => {
+  const {
+    assemble, verifyCertificate, verdictPayload, deathOf,
+  } = require('../../ZelBack/src/services/utils/nodeDownCertificates');
+  const base = {
+    subject: 'sub:0', juror: 'w1', judgement: JUDGEMENT.UNREACHABLE, height: 100, fingerprint: 'fpA',
+  };
+  const T = 1_700_000_000_000;
+
+  it('a death is one signed field after the five, before the drop pair; a verdict naming none encodes as it always has', () => {
+    expect(verdictPayload({ ...base, death: 3 }).toString())
+      .to.equal('fluxnodedown-verdict:sub:0|w1|unreachable|100|fpA|3');
+    expect(verdictPayload({ ...base, death: 3, droppedAt: T, reason: 'shutdown' }).toString())
+      .to.equal('fluxnodedown-verdict:sub:0|w1|unreachable|100|fpA|3|1700000000000|shutdown');
+    expect(verdictPayload(base).toString()).to.equal('fluxnodedown-verdict:sub:0|w1|unreachable|100|fpA');
+    // no two of the four forms share a field count
+    expect(verdictPayload({ ...base, droppedAt: T, reason: 'shutdown' }).toString().split('|').length).to.equal(7);
+    expect(verdictPayload({ ...base, death: 3 }).toString().split('|').length).to.equal(6);
+  });
+
+  it('refuses a death that is not a positive integer', () => {
+    [0, -1, 1.5, '3', null].forEach((death) => {
+      expect(verdictPayload({ ...base, death }), String(death)).to.equal(null);
+    });
+  });
+
+  const watchers = [
+    { key: 'w1', owner: 'o1' }, { key: 'w2', owner: 'o2' }, { key: 'w3', owner: 'o3' },
+    { key: 'w4', owner: 'o4' }, { key: 'w5', owner: 'o5' },
+  ];
+  const sameJury = new Set(['fpA']);
+  const v = (juror, over = {}) => ({ ...base, juror, signature: 'sig', ...over });
+
+  it('the number is the middle of the quorum: a lone inflater moves nothing, a stale minority moves nothing, a split takes the lower, none named is null', () => {
+    expect(deathOf([v('w1', { death: 4 }), v('w2', { death: 4 }), v('w3', { death: 100 })])).to.equal(4);
+    expect(deathOf([v('w1', { death: 4 }), v('w2', { death: 4 }), v('w3', { death: 3 })])).to.equal(4);
+    expect(deathOf([v('w1', { death: 3 }), v('w2', { death: 4 })])).to.equal(3);
+    expect(deathOf([v('w1', { death: 3 }), v('w2')])).to.equal(3);
+    expect(deathOf([v('w1'), v('w2')])).to.equal(null);
+  });
+
+  it('assembly stamps the number, and verification refuses a certificate that says otherwise than its verdicts', () => {
+    const certificate = assemble('sub:0', 'w1', 100, 'fpA', [
+      v('w1', { death: 4 }), v('w2', { death: 4 }), v('w3', { death: 100 }), v('w4', { death: 3 }),
+    ], watchers, sameJury);
+    expect(certificate.death).to.equal(4);
+    expect(verifyCertificate(certificate, watchers, sameJury, () => true, 100, 10).accepted).to.equal(true);
+
+    const inflated = { ...certificate, death: 100 };
+    expect(verifyCertificate(inflated, watchers, sameJury, () => true, 100, 10))
+      .to.include({ accepted: false, reason: 'death_mismatch' });
+    const stripped = { ...certificate };
+    delete stripped.death;
+    expect(verifyCertificate(stripped, watchers, sameJury, () => true, 100, 10))
+      .to.include({ accepted: false, reason: 'death_mismatch' });
+
+    // no juror named one: the certificate names none, and that verifies
+    const unnumbered = assemble('sub:0', 'w1', 100, 'fpA', [v('w1'), v('w2'), v('w3'), v('w4')], watchers, sameJury);
+    expect(unnumbered.death).to.equal(null);
+    expect(verifyCertificate(unnumbered, watchers, sameJury, () => true, 100, 10).accepted).to.equal(true);
+  });
+});

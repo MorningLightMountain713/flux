@@ -21,9 +21,15 @@ const {
 } = require('../utils/nodeDownCertificates');
 const { normalizeSocketAddress } = require('../utils/socketAddressUtils');
 
-// The nodedown record store: one row PER CERTIFICATION, keyed on the
-// certificate — never a constant dedupKey, or re-certification overwrites
-// the one row and the rungs' count has nothing to count.
+// The nodedown record store: one row PER DEATH, keyed on the death's number
+// — the number the jury counted it as, carried in the certificate as the
+// middle of its quorum (nodeDownCertificates.deathOf). Every juror whose pile
+// crosses the quorum assembles its own certificate, so one death reaches a
+// node under several; keyed on the number they are one row, and a copy
+// arriving later is refused as the same death whatever its assembler, its
+// height, or the order it came in. The rungs' count is the rows. A
+// certificate whose jurors named no number (none could read their count) is
+// keyed on its height, as every certificate was before 2026-09-07.
 // Verification runs at EVERY intake, gossip and sync alike, and an invalid
 // certificate is never stored and never relayed — a forgery dies at its
 // first hop.
@@ -103,6 +109,32 @@ function verifyNodeDownCertificate(certificate) {
 function eventsCollection() {
   const db = dbHelper.databaseConnection();
   return db.db(config.database.appsglobal.database).collection(globalAppStateEvents);
+}
+
+/**
+ * The highest death number among the subject's live rows: zero with none.
+ *
+ * @param {Array<object>} live rows from liveRowsFor
+ * @returns {number}
+ */
+function highestDeathOf(live) {
+  return live.reduce((most, row) => (Number.isInteger(row.death) && row.death > most ? row.death : most), 0);
+}
+
+/**
+ * Which death of the subject a verdict cast now would name: the highest
+ * number among the rows this node holds live, plus one. From the rows and
+ * nothing else — no memory beyond them: the rows are the same on every node
+ * to within seconds, a restart changes nothing, and when the window empties
+ * every juror starts again at one together. A memory that outlived the rows
+ * would have a restarted juror and a continuous one name different numbers
+ * for one death, and a release splits every jury that way.
+ *
+ * @param {string} subject collateral outpoint
+ * @returns {Promise<number>}
+ */
+async function nextDeathFor(subject) {
+  return highestDeathOf(await liveRowsFor(subject)) + 1;
 }
 
 const RECORD_STATE = Object.freeze({
@@ -208,56 +240,48 @@ async function handleNodeDownEvent({ message, envelope = null }) {
       return { accepted: false, rebroadcast: false, reason: 'since_out_of_range' };
     }
 
-    // A node already holding a standing certificate for the subject drops
-    // further copies without relaying: concurrent assemblies cost the fleet
-    // one flood. A refuted record is a PAST incident, and what arrives now
-    // is one of three things, told apart by when its drop was and when it
-    // was certified against the record held and the return that refuted it:
-    //   - the record's own row again (a replay over sync): accepted, not news;
-    //   - a NEW death, its drop later than the return: news, its own row;
-    //   - an OLDER death this node had missed, certified before the record's
-    //     own drop: stored for the count, not news;
-    //   - the SAME death under another assembler's height — every assembler
-    //     stamps its own, so one death reaches a node under several, and a
-    //     second row would count the death twice. On the fleet it did: rows
-    //     re-served by a reconnect pull locked a node out at its third
-    //     death. Refused, not stored.
-    const dedupKey = `nodedown:${certificate.subject}:${certificate.height}`;
+    // The identity of a death is its number (see the header). A copy of a
+    // death this node holds — the same number under another assembler's
+    // height, or its own row again over a sync — is refused without relay:
+    // concurrent assemblies cost the fleet one flood. A number no live row
+    // carries is a death not held, stored and counted: a higher one is a NEW
+    // death, a lower one an OLDER death this node had missed. Neither reads
+    // the subject's announcements, which the store keeps only the latest of
+    // (one apprunning row per address), and neither depends on the order the
+    // rows arrive in — a node hearing them after the subject's newest
+    // announcement, or by a pull that serves them backwards, reaches the same
+    // rows (formal/death-identity, nth-*).
+    const death = Number.isInteger(certificate.death) && certificate.death > 0 ? certificate.death : null;
+    const dedupKey = death !== null
+      ? `nodedown:${certificate.subject}:${death}`
+      : `nodedown:${certificate.subject}:h${certificate.height}`;
     const live = await liveRowsFor(certificate.subject);
-    let superseded = false;
-    if (live.length) {
-      const announced = (await eventsCollection().find(
-        { type: APP_STATE_EVENT_TYPES.APPRUNNING, outpoint: certificate.subject },
-        { projection: { broadcastedAt: 1 } },
-      ).toArray()).map((row) => new Date(row.broadcastedAt).getTime()).sort((a, b) => a - b);
-      // the return that refuted a row: the first announcement at or after it
-      const refutedAt = (row) => {
-        const at = new Date(row.broadcastedAt).getTime();
-        const answer = announced.find((when) => when >= at);
-        return answer === undefined ? null : answer;
-      };
+    if (live.some((row) => row.dedupKey === dedupKey)) {
+      return { accepted: false, rebroadcast: false, reason: 'same_death' };
+    }
+    const latestAnnounce = await eventsCollection().findOne(
+      { type: APP_STATE_EVENT_TYPES.APPRUNNING, outpoint: certificate.subject },
+      { sort: { broadcastedAt: -1 }, projection: { broadcastedAt: 1 } },
+    );
+    const announcedAt = latestAnnounce ? new Date(latestAnnounce.broadcastedAt).getTime() : null;
+    const heldMax = highestDeathOf(live);
+    if (death !== null && death > heldMax && live.length) {
+      // A number above every row held is a NEW death, and a new death needs
+      // a return: while the newest record stands unrefuted there has been
+      // none, so this is a copy under a number one higher — the window's
+      // last row expired between two jurors' looks and the quorums split
+      // across it. Refused without relay; a node that merely lacks the
+      // subject's return yet refuses for now and takes the row on its next
+      // delivery, once the announcement is in.
       const newest = live.reduce((a, b) => (new Date(b.broadcastedAt) > new Date(a.broadcastedAt) ? b : a));
-      if (refutedAt(newest) === null) {
+      if (announcedAt === null || announcedAt < new Date(newest.broadcastedAt).getTime()) {
         return { accepted: false, rebroadcast: false, reason: 'already_standing' };
       }
-      if (live.some((row) => row.dedupKey === dedupKey)) {
-        superseded = true;
-      } else {
-        // The same death as a row held, under another assembler's height: its
-        // drop no later than the return that refuted that row, certified no
-        // earlier than that row's drop. Every row held is asked, not the
-        // newest alone — a second assembly of an older death is not a death
-        // this node missed.
-        const sameDeath = live.some((row) => {
-          const answered = refutedAt(row);
-          return answered !== null && since <= answered && broadcastedAt >= new Date(row.since).getTime();
-        });
-        if (sameDeath) {
-          return { accepted: false, rebroadcast: false, reason: 'same_death' };
-        }
-        superseded = since <= refutedAt(newest);
-      }
     }
+    // News, or a past incident? A certificate is not news when the subject
+    // has announced since its drop — the one announcement the store holds is
+    // exactly that fact — or when a later death is already held.
+    const superseded = (announcedAt !== null && since <= announcedAt) || (death !== null && heldMax > death);
 
     const listed = networkStateService.networkState()
       .find((node) => `${node.txhash}:${node.outidx}` === certificate.subject);
@@ -277,6 +301,7 @@ async function handleNodeDownEvent({ message, envelope = null }) {
           broadcastedAt: new Date(broadcastedAt),
           since: new Date(since),
           reason,
+          death,
           expireAt: new Date(broadcastedAt + RECORD_LIFETIME_MS),
           data: { certificate },
           envelope,
@@ -449,6 +474,7 @@ module.exports = {
   placementFreezeForAddress,
   lockoutFor,
   lockoutForAddress,
+  nextDeathFor,
   refutationFor,
   verifyRefutation,
   registerWithGrantPlane,

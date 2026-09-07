@@ -42,6 +42,8 @@ let returnSyncHandler = null;
 let selfLocked = false;
 // edge: the lockout on this node could not be read; cleared when it can again
 let selfLockoutUnreadable = false;
+// edge: the death count for a subject could not be read; cleared when it can
+let deathUnreadable = false;
 
 // outpoint <-> dialable address, rebuilt when the membership moves.
 const index = { fingerprint: undefined, byOutpoint: new Map(), bySocket: new Map() };
@@ -668,6 +670,24 @@ function start(injectedTransport) {
       payload.toString(),
       await fluxNetworkHelper.getFluxNodePrivateKey(),
     ),
+    nextDeath: async (subject) => {
+      try {
+        const death = await nodeDownStore.nextDeathFor(subject);
+        if (deathUnreadable) {
+          deathUnreadable = false;
+          log.info('nodeDownService: the death count is readable again');
+        }
+        return death;
+      } catch (error) {
+        // No number is a verdict the assembly still counts; the number comes
+        // from the jurors that can read theirs.
+        if (!deathUnreadable) {
+          deathUnreadable = true;
+          log.warn(`nodeDownService: the death count could not be read; verdicts name no death until it can: ${error.message}`);
+        }
+        return undefined;
+      }
+    },
     verifySignature: (owner, payload, signature) => verificationHelper
       .verifyMessage(payload.toString(), owner, signature) === true,
     pushVerdict,
