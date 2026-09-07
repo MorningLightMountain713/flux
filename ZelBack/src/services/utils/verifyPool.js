@@ -2,6 +2,7 @@
 
 const path = require('path');
 const os = require('os');
+const config = require('config');
 const log = require('../../lib/log');
 const { createWorker } = require('./networkDefaults');
 
@@ -36,7 +37,16 @@ let nextBatchId = 0;
 let reapTimer = null;
 let workerPath = DEFAULT_WORKER_PATH;
 
+// One FluxOS per host sizes its verifiers from the host. A harness fleet of N
+// nodes on ONE host must not: the pool scales on a gossip burst, which is
+// fleet-wide, so ten nodes climbing to cpus-1 each put 150 verifier threads on
+// 16 cores inside one second, and one node's main thread did not run for 110 s,
+// was certified dead by its jury, and removed its app on return (1203 on chud,
+// 2026-09-07). The knob caps the CEILING, so it holds on the scale-up path as
+// well as at start; production leaves it unset and keeps cpus-1.
 function maxWorkers() {
+  const configured = config.fluxapps.verifyPoolSize;
+  if (Number.isInteger(configured) && configured > 0) return Math.max(RESIDENT_WORKERS, configured);
   return Math.max(RESIDENT_WORKERS, os.cpus().length - 1);
 }
 

@@ -407,3 +407,51 @@ describe('verifyPool worker protocol', () => {
     expect(workers).to.have.lengthOf(1);
   });
 });
+
+describe('verifyPool sizing', () => {
+  const ITEM = { messageToVerify: 'm', pubKey: 'p', signature: 's' };
+
+  function sizedPool(fluxapps, cores) {
+    const workers = [];
+    class FakeWorker extends EventEmitter {
+      constructor() { super(); workers.push(this); }
+
+      postMessage() {}
+
+      terminate() {}
+    }
+    const pool = proxyquire('../../ZelBack/src/services/utils/verifyPool', {
+      worker_threads: { Worker: FakeWorker },
+      config: { fluxapps },
+      os: { cpus: () => new Array(cores) },
+      '../../lib/log': { info: sinon.stub(), warn: sinon.stub(), error: sinon.stub() },
+    });
+    return { pool, workers };
+  }
+
+  // The knob caps the CEILING, not the resident count, because that is where the
+  // incident is. The pool starts at one resident worker and climbs on demand, so
+  // sizing only start() would be inert: ten nodes of a fleet on one host each
+  // climb to cpus-1 under the same gossip burst - 150 verifier threads on 16
+  // cores in one second, one main thread not running for 110 s, that node
+  // certified dead by its jury and removing its app on return (1203 on chud,
+  // 2026-09-07). This asserts the scale-up path, which is the one that gets
+  // there. The commit that introduced the knob asserted start()'s own size,
+  // against a pool that had no resident/scaling split at the time.
+  it('caps the scale-up at config.fluxapps.verifyPoolSize, not at the host size', () => {
+    const { pool, workers } = sizedPool({ verifyPoolSize: 3 }, 16);
+    pool.start();
+    // Ten batches outstanding: uncapped this pool would raise ten workers.
+    for (let i = 0; i < 10; i++) pool.verify([ITEM]);
+    expect(workers).to.have.lengthOf(3);
+    pool.stop();
+  });
+
+  it('keeps cpus-1 when production leaves the knob unset', () => {
+    const { pool, workers } = sizedPool({}, 4);
+    pool.start();
+    for (let i = 0; i < 10; i++) pool.verify([ITEM]);
+    expect(workers).to.have.lengthOf(3);
+    pool.stop();
+  });
+});
