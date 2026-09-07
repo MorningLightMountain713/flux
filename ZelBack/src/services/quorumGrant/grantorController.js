@@ -763,6 +763,20 @@ async function resyncReturnedKey(ask) {
  */
 async function askerHolds(ask, askerNode, type) {
   const appName = ask.key.slice(0, ask.key.indexOf('/'));
+  // A seat — an `ordinal-` row — is granted BEFORE the container exists
+  // (meshOrdinals.claimOrdinal, inside the install: identity is fixed for the
+  // container's lifetime), so its asker has no running row and cannot have one
+  // until it is granted. Asking "do you run this app" of a seat can only ever
+  // be answered no, and from 2026-09-02 to 2026-09-07 it was: every mesh
+  // install on v9 deferred forever ("No ordinal is decided yet: no prepare
+  // quorum", chud, 1201 alone: 54 asks, 54 refusals). The signed ask from the
+  // listed node's own address is the seat's commitment, and a seat's reclaims
+  // are the two the design stamped — release on uninstall (a failed install
+  // removes through the uninstaller, which releases) and vacate by the
+  // holder's certificate — never this check. Held rows are roles a running
+  // instance fills, and a founder is a running member: for those the row is
+  // real evidence and the rule stays.
+  if (ORDINAL_ROLE_PATTERN.test(ask.key.slice(ask.key.indexOf('/') + 1))) return { holds: true };
   const rows = await registryManager.appLocation(appName);
   const askerHost = extractIp(askerNode.ip);
   const row = (rows || []).find((location) => extractIp(location.ip) === askerHost);
