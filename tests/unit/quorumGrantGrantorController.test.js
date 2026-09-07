@@ -390,6 +390,33 @@ describe('quorumGrant grantorController', () => {
       });
     });
 
+    it('a seat ask needs no running row: the seat is granted before the container exists', async () => {
+      // chud, 2026-09-07: every mesh install on v9 had deferred since the
+      // plane landed — the install waited on the seat, the seat on a row only
+      // the install could write. The design's reclaims for a seat are the
+      // uninstall's release and the holder's certificate, never this check.
+      registryManager.appLocation.resolves([
+        { ip: '10.1.0.1:16127', runningSince: Date.now() - 24 * 60 * 60 * 1000 },
+      ]);
+      const res = fakeRes();
+      await grantorController.prepare(fakeReq(signedAsk('prepare', { mode: 'oneshot', key: ORDINAL_KEY })), res);
+      expect(res.statusCode).to.equal(200);
+      expect(grantRegister.prepare.calledOnce).to.equal(true);
+    });
+
+    it('a held ask and a founder ask still need the running row: those are roles a running member fills', async () => {
+      registryManager.appLocation.resolves([
+        { ip: '10.1.0.1:16127', runningSince: Date.now() - 24 * 60 * 60 * 1000 },
+      ]);
+      let res = fakeRes();
+      await grantorController.prepare(fakeReq(signedAsk('prepare')), res);
+      expect(res.statusCode, 'held').to.equal(403);
+      res = fakeRes();
+      await grantorController.prepare(fakeReq(signedAsk('prepare', { mode: 'oneshot', key: FOUNDER_KEY })), res);
+      expect(res.statusCode, 'founder').to.equal(403);
+      expect(grantRegister.prepare.called).to.equal(false);
+    });
+
     it('release of an ordinal row reaches the register row with the oneshot permission', async () => {
       const res = fakeRes();
       await grantorController.release(fakeReq(signedAsk('release', { key: ORDINAL_KEY, generation: 0 })), res);
