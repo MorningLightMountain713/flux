@@ -65,8 +65,10 @@ describe('Policy: an existing app when the grant changes — as the gate stands 
     await policyProcessed(env.clients, height);
     const before = (await env.clients[0].getAppSpecs(name)).data;
     expectRefused(await update(env.clients[0], { name, mesh: true, ttl: (before.ttl ?? 0) + 1000 }), 'mesh', 'renewal after the close');
-    // and the app's registered spec is untouched by the refusal
+    // and the refusal left the registered spec exactly as it was — this
+    // test's own claim, not a restatement of the previous test's (which
+    // put mesh on the spec; if that failed, this line must not fail for it)
     const after = (await env.clients[0].getAppSpecs(name)).data;
-    expect(after.network?.mesh, 'the app keeps the spec it was granted').to.equal(true);
+    expect(after, 'the refused renewal changed the registered spec').to.deep.equal(before);
   });
 });
