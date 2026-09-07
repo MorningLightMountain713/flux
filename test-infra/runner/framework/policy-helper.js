@@ -27,14 +27,20 @@ export function defaultGroupGrantMessage(features = Object.keys(FEATURE_BIT)) {
   return PolicyGroupMessage.parse(bytes);
 }
 
-// The chainparams.policygroupmessages row (the { txid, height, message } shape
+// The chainparams.policygroupmessages row (the { txid, height, txIndex, message } shape
 // explorerService writes and rebuildPolicyGroupState reads). Height 1 so the grant is in
 // force well before any app submission (~INITIAL_HEIGHT); txid is an opaque marker (the
-// rebuild keys on message + height, never the txid).
+// rebuild keys on message + height, never the txid). txIndex is the transaction's
+// position in its block: since 9b0498338 a fork history is ordered by (height, txIndex)
+// and a row without one is refused at boot — which, from 2026-09-03 to 2026-09-07,
+// had every Arcane-env node refuse this grant and deny every gated feature ("fluxid not
+// entitled to use: mesh", the whole mesh, content and telemetry blocks red on the first
+// v9 gate to run them since). The grant is the only message in block 1.
 export function defaultGroupGrantDoc(features) {
   return {
     txid: 'harness-policy-default-group-grant',
     height: 1,
+    txIndex: 0,
     message: defaultGroupGrantMessage(features),
   };
 }
