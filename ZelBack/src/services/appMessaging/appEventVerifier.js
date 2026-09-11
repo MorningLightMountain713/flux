@@ -55,12 +55,29 @@ function isMarketplaceApp(appName) {
   return nums.some((n) => Number(n) > epoch2020);
 }
 
-function resolveTeamSupportAddress(daemonHeight) {
+/**
+ * The support team addresses entitled to sign at a given height.
+ *
+ * A fork REPLACES its predecessor rather than adding to it, so only the latest
+ * one active at this height names signers.
+ *
+ * A fork used to name one address and now names a list, and both shapes have to
+ * be read: the forks already in force were written under the old one, and an
+ * event is judged against the fork in force at its own block. Rewriting those
+ * entries to the new shape would change which signatures the past accepts, so
+ * they stay as they are and this reads either.
+ *
+ * @param {number} daemonHeight
+ * @returns {string[]} Empty when no fork is active yet.
+ */
+function resolveTeamSupportAddresses(daemonHeight) {
   const intervals = getChainTeamSupportAddressUpdates().filter(
     (entry) => entry.height <= daemonHeight,
   );
-  if (intervals.length === 0) return null;
-  return intervals[intervals.length - 1].address;
+  if (intervals.length === 0) return [];
+  const fork = intervals[intervals.length - 1];
+  if (Array.isArray(fork.addresses)) return fork.addresses.filter(Boolean);
+  return fork.address ? [fork.address] : [];
 }
 
 /**
@@ -109,9 +126,9 @@ async function authorize({
     if (raceSigner) {
       signers.push(raceSigner);
     }
-    const teamSupport = resolveTeamSupportAddress(daemonHeight);
-    if (teamSupport && isMarketplaceApp(appEvent.spec.name)) {
-      signers.push(teamSupport);
+    const teamSupport = resolveTeamSupportAddresses(daemonHeight);
+    if (teamSupport.length > 0 && isMarketplaceApp(appEvent.spec.name)) {
+      signers.push(...teamSupport);
     }
   } else {
     signers.push(appEvent.spec.owner);
@@ -228,7 +245,7 @@ module.exports = {
   computeOutboundHash,
   _internal: {
     isMarketplaceApp,
-    resolveTeamSupportAddress,
+    resolveTeamSupportAddresses,
     verifyFn,
     verifierFor,
   },

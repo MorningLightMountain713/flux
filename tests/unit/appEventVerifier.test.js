@@ -188,12 +188,12 @@ describe('appEventVerifier', () => {
     });
   });
 
-  describe('resolveTeamSupportAddress', () => {
-    it('returns null when no forks are active at the given height', () => {
+  describe('resolveTeamSupportAddresses', () => {
+    it('returns nothing when no forks are active at the given height', () => {
       chainUtilitiesStub.getChainTeamSupportAddressUpdates.returns([
         { address: 'teamA', height: 2000000 },
       ]);
-      const { resolveTeamSupportAddress } = proxyquire(
+      const { resolveTeamSupportAddresses } = proxyquire(
         '../../ZelBack/src/services/appMessaging/appEventVerifier',
         {
           config: configStub,
@@ -202,7 +202,7 @@ describe('appEventVerifier', () => {
           '../utils/chainUtilities': chainUtilitiesStub,
         },
       )._internal;
-      expect(resolveTeamSupportAddress(1000000)).to.be.null;
+      expect(resolveTeamSupportAddresses(1000000)).to.deep.equal([]);
     });
 
     it('returns the most recent fork at or below the given height', () => {
@@ -210,7 +210,7 @@ describe('appEventVerifier', () => {
         { address: 'teamA', height: 1000000 },
         { address: 'teamB', height: 2000000 },
       ]);
-      const { resolveTeamSupportAddress } = proxyquire(
+      const { resolveTeamSupportAddresses } = proxyquire(
         '../../ZelBack/src/services/appMessaging/appEventVerifier',
         {
           config: configStub,
@@ -219,8 +219,27 @@ describe('appEventVerifier', () => {
           '../utils/chainUtilities': chainUtilitiesStub,
         },
       )._internal;
-      expect(resolveTeamSupportAddress(1500000)).to.equal('teamA');
-      expect(resolveTeamSupportAddress(2500000)).to.equal('teamB');
+      expect(resolveTeamSupportAddresses(1500000)).to.deep.equal(['teamA']);
+      expect(resolveTeamSupportAddresses(2500000)).to.deep.equal(['teamB']);
+    });
+
+    it('reads a fork that names a list, and one that names a single address', () => {
+      chainUtilitiesStub.getChainTeamSupportAddressUpdates.returns([
+        { address: 'teamA', height: 1000000 },
+        { addresses: ['teamB', 'teamC'], height: 2000000 },
+      ]);
+      const { resolveTeamSupportAddresses } = proxyquire(
+        '../../ZelBack/src/services/appMessaging/appEventVerifier',
+        {
+          config: configStub,
+          '../utils/specLibs': specLibsStub,
+          '../signatureVerifier': signatureVerifierStub,
+          '../utils/chainUtilities': chainUtilitiesStub,
+        },
+      )._internal;
+      // A fork replaces its predecessor, so past its height only the list signs.
+      expect(resolveTeamSupportAddresses(1500000)).to.deep.equal(['teamA']);
+      expect(resolveTeamSupportAddresses(2500000)).to.deep.equal(['teamB', 'teamC']);
     });
   });
 
@@ -313,6 +332,34 @@ describe('appEventVerifier', () => {
         daemonHeight: 2000000,
       });
       expect(result.signer).to.equal('teamSupport');
+    });
+
+    it('lets any address a list fork names sign a marketplace update', async () => {
+      chainUtilitiesStub.getChainTeamSupportAddressUpdates.returns([
+        { address: 'teamSupport', height: 1000000 },
+        { addresses: ['teamOne', 'teamTwo'], height: 2000000 },
+      ]);
+      appEventVerifier = proxyquire(
+        '../../ZelBack/src/services/appMessaging/appEventVerifier',
+        {
+          config: configStub,
+          '../utils/specLibs': specLibsStub,
+          '../signatureVerifier': signatureVerifierStub,
+          '../utils/chainUtilities': chainUtilitiesStub,
+        },
+      );
+
+      const appEvent = new FakeAppEvent({
+        spec: { owner: 'ownerA', name: 'wordpress1735018430692' },
+        isUpdate: true,
+        validSignersByIteration: [new Set(['teamTwo'])],
+      });
+      const result = await appEventVerifier.authorize({
+        appEvent,
+        previousState: { owner: 'ownerA' },
+        daemonHeight: 2500000,
+      });
+      expect(result.signer).to.equal('teamTwo');
     });
 
     it('does not offer team-support as a signer before its activation height', async () => {
