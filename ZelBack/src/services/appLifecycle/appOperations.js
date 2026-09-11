@@ -77,6 +77,15 @@ const operationRegistry = require('../utils/operationRegistry');
 
 // Active-standby app tracking
 const activePrimaryByIdentifier = new Map();
+// When each identifier's primary was last established. A record with no age is
+// indistinguishable from a fresh one, and the give-up gate reads this to answer
+// "is another node provably the primary" - which, answered from a stale record,
+// clears a node to hand back an app it may still be the writer for. Absence of a
+// recent record is "the election cannot say", not "no primary".
+const primaryElectionCheckedAt = new Map();
+// How long an election record is worth reading. Three coordinator cycles: one
+// missed pass must not turn every verdict into "cannot say".
+const PRIMARY_ELECTION_STALE_MS = 3 * 60 * 1000;
 const scheduledPrimaryStart = new Map();
 // Components already announced as operator-stopped. A reporting latch only - nothing
 // reads it to make a decision - so that the exclusion is stated once on entry (and again
@@ -2075,6 +2084,39 @@ async function shutdownPlanResync() {
 }
 
 /**
+ * Whether THIS node is the elected g: primary for an app. Three-state, and the
+ * three are not interchangeable.
+ *
+ *   true   this node is the primary - it is the one writing, so it must stand
+ *          down before the app can be handed back
+ *   false  another node provably is - this node holds a quiescent copy
+ *   null   the election cannot say. NOT "there is no primary": a caller that
+ *          treats it as false hands an app back from under a writer.
+ *
+ * Read from the coordinator's own record, and only while that record is recent
+ * enough to mean anything.
+ *
+ * @param {string} appName
+ * @param {string} localSocketAddr
+ * @param {number} [now]
+ * @returns {boolean|null}
+ */
+function isElectedPrimaryHere(appName, localSocketAddr, now = Date.now()) {
+  let namesAPrimary = false;
+  for (const [identifier, checkedAt] of primaryElectionCheckedAt) {
+    // The g: component of this app, whatever it is called: `<component>_<app>`
+    // above v4, the bare app name below it.
+    if (identifier !== appName && !identifier.endsWith(`_${appName}`)) continue;
+    if (now - checkedAt > PRIMARY_ELECTION_STALE_MS) continue;
+    const masterIp = activePrimaryByIdentifier.get(identifier);
+    if (!masterIp) continue;
+    namesAPrimary = true;
+    if (ipsMatch(masterIp, localSocketAddr)) return true;
+  }
+  return namesAPrimary ? false : null;
+}
+
+/**
  * Three outcomes, because the difference between them decides whether a second
  * writer is created on a shared volume.
  *
@@ -2280,6 +2322,7 @@ async function coordinateActiveStandbyApps() {
     for (const identifier of activePrimaryByIdentifier.keys()) {
       if (!validIdentifiers.has(identifier)) {
         activePrimaryByIdentifier.delete(identifier);
+        primaryElectionCheckedAt.delete(identifier);
         log.info(`activeStandby: Cleaned up stale entry from activePrimaryByIdentifier: ${identifier}`);
       }
     }
@@ -2522,6 +2565,7 @@ async function coordinateActiveStandbyApps() {
                   && ipsMatch(activePrimaryByIdentifier.get(identifier), localSocketAddr)
                   && !runningAppsNames.includes(identifier)) {
                   activePrimaryByIdentifier.delete(identifier);
+                  primaryElectionCheckedAt.delete(identifier);
                   log.info(`activeStandby: cleared this node's stale primary record for ${identifier} - it is not running here`);
                   fluxEventBus.publish('activeStandby:decided', { identifier, action: 'stalePrimaryEvicted' });
                 }
@@ -2627,6 +2671,7 @@ async function coordinateActiveStandbyApps() {
             } else {
               noPrimaryAnnounced.delete(identifier);
               activePrimaryByIdentifier.set(identifier, ip);
+              primaryElectionCheckedAt.set(identifier, Date.now());
               if (scheduledPrimaryStart.has(identifier)) {
                 log.info(`activeStandby: app:${appName} removed from scheduledPrimaryStart cache, already started on another standby node`);
                 scheduledPrimaryStart.delete(identifier);
@@ -2816,5 +2861,6 @@ module.exports = {
   // election: the loop reaches it only through the grant, FDM and index gates.
   peerComponentState,
   anyPeerHoldsComponent,
+  isElectedPrimaryHere,
   PeerComponent,
 };

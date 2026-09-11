@@ -21,6 +21,7 @@ const messageVerifier = require('./appMessaging/messageVerifier');
 const registryManager = require('./appDatabase/registryManager');
 const appJanitor = require('./appLifecycle/appJanitor');
 const specReconciler = require('./appLifecycle/specReconciler');
+const appGiveUp = require('./appLifecycle/appGiveUp');
 const benchmarkService = require('./benchmarkService');
 const fluxNetworkhelper = require('./fluxNetworkHelper');
 const { extractIp } = require('./utils/socketAddressUtils');
@@ -667,6 +668,32 @@ async function processOneBlock(blockHeight, isInsightExplorer, loopOptions) {
           // so it cannot stall the block loop; removing an expired LOCAL
           // install is the reconciler's job (the convergence call above).
           await appJanitor.sweepRegistryExpiry();
+        }
+        if (blockHeight % (config.fluxapps.removeFluxAppsPeriod * speedMultiplier) === 0) {
+          // The give-up-an-app pass. Keyed on block height rather than a timer
+          // so every node evaluates in the same instant - the evacuation queue
+          // stamps its maturity inside this pass, and two nodes on different
+          // clocks would read the same app at different strengths.
+          //
+          // It decides nothing unless this node is already evacuating, and hands
+          // back at most one app per pass. Never throws: a give-up that cannot
+          // decide must not stall the block loop.
+          try {
+            // Lazily required: both sit downstream of this module in the load
+            // graph, and requiring them at the top would close the cycle.
+            // eslint-disable-next-line global-require
+            const appQueryService = require('./appQuery/appQueryService');
+            // eslint-disable-next-line global-require
+            const appOperations = require('./appLifecycle/appOperations');
+            await appGiveUp.checkAndGiveUpAnApp({
+              installedAppsFn: appQueryService.installedApps,
+              isElectedPrimary: async (name) => appOperations.isElectedPrimaryHere(
+                name, await fluxNetworkhelper.getLocalSocketAddress(),
+              ),
+            });
+          } catch (error) {
+            log.error(`give-up pass error: ${error.message}`);
+          }
         }
         if (blockDataVerbose.height % (config.fluxapps.reconstructAppMessagesHashPeriod * speedMultiplier) === 0) {
           try {
