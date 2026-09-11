@@ -187,6 +187,79 @@ describe('appGiveUp - handing an app back', () => {
     });
   });
 
+  describe('surplusVerdict - which copy stands aside', () => {
+    const appOperations = require('../../ZelBack/src/services/appLifecycle/appOperations');
+    const appEvacuationSafety = require('../../ZelBack/src/services/appLifecycle/appEvacuationSafety');
+
+    const NEWEST = '1.2.3.4:16127';
+    const OLDEST = '9.9.9.9:16127';
+    // Junior end first: the newest instance stands aside.
+    const twoCopies = [{ ip: OLDEST, runningSince: 1 }, { ip: NEWEST, runningSince: 9 }];
+    const app = { name: 'gapp', spec: {}, instances: 1 };
+
+    const withWriter = (identifier) => sinon.stub(appEvacuationSafety, 'syncedComponents')
+      .returns(identifier ? [{ name: 'web', syncMode: 'g', identifier, folderId: `flux${identifier}` }] : []);
+
+    it('says nothing when the app is not over-served', async () => {
+      withWriter(null);
+      const verdict = await appGiveUp.surplusVerdict(
+        { ...app, instances: 3 }, twoCopies, NEWEST, { runningLocally: async () => false },
+      );
+      expect(verdict.giveUp).to.equal(false);
+      expect(verdict.code).to.equal(null);
+    });
+
+    it('the newest copy stands aside when it is not the writer', async () => {
+      withWriter('web_gapp');
+      const verdict = await appGiveUp.surplusVerdict(
+        app, twoCopies, NEWEST, { runningLocally: async () => false },
+      );
+      expect(verdict.giveUp).to.equal(true);
+    });
+
+    // "The newest stands aside" is a stand-in for "the least valuable copy
+    // stands aside", and when the newest IS the writer the stand-in is backwards
+    // - that is the most valuable copy on the network. The count-only trim this
+    // replaced could not see the difference.
+    it('the newest copy STAYS when it holds the writer', async () => {
+      withWriter('web_gapp');
+      const verdict = await appGiveUp.surplusVerdict(
+        app, twoCopies, NEWEST, { runningLocally: async (id) => id === 'web_gapp' },
+      );
+      expect(verdict.giveUp).to.equal(false);
+      expect(verdict.code).to.equal('NEWEST_HOLDS_WRITER');
+    });
+
+    it('the next copy trims instead, but only on a confirmed writer', async () => {
+      withWriter('web_gapp');
+      sinon.stub(appOperations, 'peerComponentState').resolves(appOperations.PeerComponent.RUNNING);
+
+      const verdict = await appGiveUp.surplusVerdict(
+        app, twoCopies, OLDEST, { runningLocally: async () => false, liveness: {} },
+      );
+
+      expect(verdict.giveUp).to.equal(true);
+      expect(verdict.code).to.equal('NEWEST_CONFIRMED_WRITER');
+    });
+
+    // FDM's registration lags a node actually starting by ~110s, so a second
+    // node acting on a guess is how two copies leave at once. The rule can only
+    // fail towards no trim, never towards two.
+    ['UNKNOWN', 'NOT_RUNNING'].forEach((state) => {
+      it(`the next copy does NOT trim when the newest answers ${state}`, async () => {
+        withWriter('web_gapp');
+        sinon.stub(appOperations, 'peerComponentState').resolves(appOperations.PeerComponent[state]);
+
+        const verdict = await appGiveUp.surplusVerdict(
+          app, twoCopies, OLDEST, { runningLocally: async () => false, liveness: {} },
+        );
+
+        expect(verdict.giveUp).to.equal(false);
+        expect(verdict.code, 'declining is a decision and is reported as one').to.equal('WRITER_UNCONFIRMED');
+      });
+    });
+  });
+
   it('does not pace a departure when the removal did not take', async () => {
     uninstall.resolves({ status: appUninstaller.UninstallStatus.DEFERRED, reason: 'an operation holds it' });
 
