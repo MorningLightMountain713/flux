@@ -29,8 +29,9 @@ describe('config fallbacks match what config ships', () => {
 
   /**
    * The fallback expression following `??`, ending where the expression does:
-   * at a top-level `;` `,` or newline, or at the `)` that closes an enclosing
-   * call - `(config.fluxapps.x ?? 300000)` is the common inline shape.
+   * at a top-level `;` `,` or newline, or at the bracket that closes an
+   * enclosing call or object - `(config.fluxapps.x ?? 300000)` and
+   * `{ x: config.fluxapps.x ?? 5_000 }` are both common inline shapes.
    * @param {string} text
    * @param {number} from index just past the `??`
    * @returns {string}
@@ -39,8 +40,8 @@ describe('config fallbacks match what config ships', () => {
     let depth = 0;
     for (let i = from; i < text.length; i += 1) {
       const ch = text[i];
-      if (ch === '(' || ch === '[') depth += 1;
-      else if (ch === ')' || ch === ']') {
+      if (ch === '(' || ch === '[' || ch === '{') depth += 1;
+      else if (ch === ')' || ch === ']' || ch === '}') {
         if (depth === 0) return text.slice(from, i);
         depth -= 1;
       } else if (depth === 0 && (ch === ';' || ch === ',' || ch === '\n')) {
@@ -74,15 +75,27 @@ describe('config fallbacks match what config ships', () => {
     if (trimmed === 'true') return true;
     if (trimmed === 'false') return false;
     if (trimmed === 'null') return null;
+    // An empty object is a literal like any other, and one of the two that use
+    // it means "no limits at all" where config ships real ones - exactly the
+    // drift this compares for. Declining to read it hid that.
+    if (trimmed === '{}') return {};
     // Matched rather than evaluated: admitting quotes to the whitelist below would
     // widen what reaches Function() to arbitrary string content.
     const quoted = trimmed.match(/^'([^'\\]*)'$/) || trimmed.match(/^"([^"\\]*)"$/);
     if (quoted) return quoted[1];
-    if (!/^[\d\s*+\-()[\],.]+$/.test(trimmed)) return UNPARSEABLE;
+    // Numeric separators and e-notation are part of the literal grammar and this
+    // tree writes both - 30_000, 2e9. Normalised to plain digits HERE rather than
+    // admitted to the whitelist below, so what reaches Function() is still only
+    // digits and operators: `_` and `e` are identifier characters, and letting
+    // either through would admit a bare name as well as a number.
+    const normalised = trimmed
+      .replace(/(\d)_(?=\d)/g, '$1')
+      .replace(/\d+(?:\.\d+)?[eE][+-]?\d+/g, (n) => String(Number(n)));
+    if (!/^[\d\s*+\-()[\],.]+$/.test(normalised)) return UNPARSEABLE;
     // The input is this repository's own source, read from disk, matched against
     // a digits-and-operators whitelist above.
     // eslint-disable-next-line no-new-func
-    return Function(`"use strict"; return (${trimmed});`)();
+    return Function(`"use strict"; return (${normalised});`)();
   }
 
   function jsFiles(dir) {
