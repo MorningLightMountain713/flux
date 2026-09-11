@@ -140,9 +140,33 @@ async function resolveSubmission(appSpecification, {
   // crash a loop; a submission error must reach the submitter with the
   // validator's field-precise message, so the validation error propagates.
   await ensureProvidersRegistered();
-  const { deserializeSpec: parseSubmission } = await getSpecBackend();
+  const { deserializeSpec: parseSubmission, EncryptedSpecV8 } = await getSpecBackend();
   const wireSpec = await parseSubmission(submissionBlob);
   if (!wireSpec) throw new Error('Could not deserialize app specifications');
+
+  // The ENVELOPE of a v8 enterprise submission, which nothing else checks.
+  // `deserializeSpec` dispatches every read — stored row, gossiped message,
+  // chain replay — through EncryptedSpecV8.deserialize, which takes the
+  // ciphertext and the named metadata and drops the rest. So a submission could
+  // carry a populated `compose` beside its blob and be accepted: signed onto the
+  // chain, then ignored by every node that read it back. Not a way to run
+  // unvalidated code, but a signed document saying something the network does
+  // not do, which anything reading chain data sees.
+  //
+  // `fromSubmission` is where those sentinels are written down and it had no
+  // caller anywhere. Here, and only here: this function is reached from the four
+  // register/update paths and from nothing that reads. The dispatcher stays
+  // exactly as loose as it is, because every v8 enterprise spec already on chain
+  // is re-validated through it on every sync and a stricter door there forks the
+  // node off the network.
+  //
+  // Measured before wiring it in: all 3599 v8 enterprise documents in the
+  // permanent-message corpus pass `fromSubmission`, so this rejects nothing that
+  // has ever been registered. The return value is discarded — `wireSpec` is
+  // already built and is what flows on; this call is the assertion.
+  if (EncryptedSpecV8.matchesWire(submissionBlob)) {
+    EncryptedSpecV8.fromSubmission(submissionBlob);
+  }
 
   // Computed BEFORE validation, because validation needs it. `wasTransportEncrypted`
   // is what makes this node seal the spec for broadcast below, and `isEncrypted` is

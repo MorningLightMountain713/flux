@@ -110,7 +110,14 @@ describe('appSubmission tests', () => {
     // resolveSubmission parses via the strict backend deserializer; the default
     // backend carries only that (a test needing sealForStorage adds it).
     stubs.parseSpec = sinon.stub();
-    stubs.specLibs.getSpecBackend.resolves({ deserializeSpec: stubs.parseSpec });
+    // EncryptedSpecV8 is the REAL class, not a stub of it. resolveSubmission
+    // asks it whether a submission is a v8 enterprise envelope and holds it to
+    // the sentinels if so; a hand-written stand-in here would be a second
+    // statement of that shape, and the test would keep passing after the real
+    // one changed underneath it.
+    stubs.specLibs.getSpecBackend.resolves({
+      deserializeSpec: stubs.parseSpec, EncryptedSpecV8: flux.EncryptedSpecV8,
+    });
   });
 
   afterEach(() => {
@@ -154,7 +161,9 @@ describe('appSubmission tests', () => {
       // The real sealed form the node broadcasts, not a marker object.
       const encryptedSpec = await sealedV9Spec({ name: V9_SUBMISSION.name });
       const sealForStorage = sinon.stub().resolves(encryptedSpec);
-      stubs.specLibs.getSpecBackend.resolves({ deserializeSpec: stubs.parseSpec, sealForStorage });
+      stubs.specLibs.getSpecBackend.resolves({
+        deserializeSpec: stubs.parseSpec, sealForStorage, EncryptedSpecV8: flux.EncryptedSpecV8,
+      });
 
       const result = await appSubmission.resolveSubmission(submission, {
         contentHash: spec.contentHash(), timestamp: 1, type: 'fluxappregister', daemonHeight: 100,
@@ -168,6 +177,54 @@ describe('appSubmission tests', () => {
       sinon.assert.notCalled(spec.serialize);
       sinon.assert.calledOnce(sealForStorage);
       sinon.assert.calledWith(sealForStorage, spec);
+    });
+
+    it('refuses a v8 enterprise submission whose envelope carries a compose', async () => {
+      // The sealed blob is the wire document for v8 — the owner signs THAT — so a
+      // v8 enterprise submission is the only one that reaches deserializeSpec on
+      // the way in, and deserialize keeps the ciphertext and the named metadata
+      // and drops everything else. A populated `compose` beside the blob was
+      // therefore accepted, signed onto the chain, and then ignored by every node
+      // reading it back. Held to the sentinels here, at the submission door only.
+      appSubmission = load();
+      const cleartext = flux.FluxAppSpecV8.fromSubmission(V8_SUBMISSION);
+      const wireSpec = await flux.EncryptedSpecV8.fromSpec(
+        cleartext, await flux.EncryptedSpecV8.createProviderFor(cleartext.name, cleartext.owner),
+      );
+      const submission = wireSpec.serialize();
+      expect(submission.compose, 'the honest form leaves it empty').to.deep.equal([]);
+      submission.compose = [{ name: 'web', repotag: 'nginx:latest' }];
+
+      stubs.transportHelper.openTransportEnvelope.resolves(submission);
+      stubs.parseSpec.resolves(wireSpec);
+
+      try {
+        await appSubmission.resolveSubmission(submission, {
+          contentHash: undefined, timestamp: 1, type: 'fluxappregister', daemonHeight: 2000000,
+        });
+        expect.fail('a stuffed envelope was accepted');
+      } catch (err) {
+        expect(err.message, err.message).to.match(/compose/i);
+      }
+    });
+
+    it('accepts the same submission once the envelope is honest', async () => {
+      // The companion. A check that refused every v8 enterprise submission would
+      // satisfy the test above just as well, and would take the whole version
+      // down with it.
+      appSubmission = load();
+      const cleartext = flux.FluxAppSpecV8.fromSubmission(V8_SUBMISSION);
+      const wireSpec = await flux.EncryptedSpecV8.fromSpec(
+        cleartext, await flux.EncryptedSpecV8.createProviderFor(cleartext.name, cleartext.owner),
+      );
+      const submission = wireSpec.serialize();
+      stubs.transportHelper.openTransportEnvelope.resolves(submission);
+      stubs.parseSpec.resolves(wireSpec);
+
+      const result = await appSubmission.resolveSubmission(submission, {
+        contentHash: undefined, timestamp: 1, type: 'fluxappregister', daemonHeight: 2000000,
+      });
+      expect(result.isEncrypted).to.equal(true);
     });
 
     it('decrypts a v8 enterprise blob, validates the inner spec, and keeps the encrypted wire form', async () => {
