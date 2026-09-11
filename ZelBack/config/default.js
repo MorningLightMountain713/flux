@@ -941,6 +941,73 @@ module.exports = {
     imageUpdateDelayBetweenComponentsMs: 1000,
     masterSlaveIntervalMs: 30000, // masterSlave (g:) FDM election cycle
     masterSlaveStaggerMs: 180000, // per-place wait before an instance may take an empty g: primary
+
+    // ---- knobs whose value lived only in the reader ----
+    //
+    // Each of these was read as `config.fluxapps.x ?? <literal>` with nothing
+    // shipping x, so the literal was the only definition and the knob could not
+    // be set - by an operator, by the harness, or by a fork. The values here are
+    // exactly what those literals evaluated to, so nothing changes by shipping
+    // them; what changes is that they can now be changed.
+
+    // app state sync
+    appSyncMaxPeers: 5, // distinct peers one sync round may ask, initial batch plus replacements
+    ingressRefreshBlocks: 200, // steady-state ingress-attestation anti-entropy cadence
+    reconnectSyncSlackMs: 120000, // how far before an observed loss a scoped reconnect pull reaches back
+    manifestIndexTimeoutMs: 15000,
+    manifestFetchSettleMs: 8000,
+    ingressIndexTimeoutMs: 15000,
+    ingressFetchSettleMs: 8000,
+
+    // app reconciler
+    convergeRetryMs: 10000, // between convergence attempts for one app
+    firstRunProofMs: 60000, // a fresh container must stay up this long to count as run
+
+    // explorer
+    explorerCursorBatchSize: 500,
+    explorerUnsyncedRetryMs: 5000,
+    explorerRecoveryRetryMs: 60000,
+    explorerIdlePollMs: 5000,
+
+    // peer dialling
+    dialJitterMs: 250, // spread on outbound dials, so a fleet restart does not arrive as one burst
+
+    // membership history - R1: retention MUST exceed the nodedown record
+    // lifetime (6h) plus issue-to-publish slack (30m), or a standing
+    // certificate stops being cold-verifiable. Change both together.
+    membershipHistoryRetentionMs: 23400000,
+    membershipHistoryMaxEntries: 4000,
+
+    // founding committee
+    quorumGrantOneshotCommitteeSize: 9,
+    quorumGrantHeldCommitteeSize: 9,
+    founderFlipNBlocks: 720,
+    founderGateLagBlocks: 240,
+    founderQuietZoneBlocks: 10,
+    founderFlipEvaluateIntervalMs: 60000,
+
+    // quorum grant
+    quorumGrantAskTimeoutMs: 5000,
+    quorumGrantAskFreshnessMs: 120000,
+    quorumGrantLockDelayMs: 30000,
+    quorumGrantMaxTtlMs: 300000,
+    quorumGrantDrainMs: 300000, // must not exceed quorumGrantMaxTtlMs
+    quorumGrantHeldTtlMs: 150000,
+    quorumGrantRenewIntervalMs: 20000,
+    quorumGrantRepairIntervalMs: 30000,
+    quorumGrantPursuitIntervalMs: 30000,
+    quorumGrantDemotionSlackMs: 15000,
+    quorumGrantMinHolderAgeMs: 420000,
+    quorumGrantPeerAsksPerMinute: 600,
+    quorumGrantPreWindowBlocks: 40,
+    quorumGrantGenerationDrainBlocks: 20,
+
+    // playground
+    playgroundFinalLogReadMs: 2000,
+
+    // Registry pull governor OVERRIDES, keyed by provider. Empty ships the
+    // policies compiled into registryGovernor; an entry here replaces one.
+    registryGovernor: {},
   },
   lockedSystemResources: {
     cpu: 10, // 1 cpu core
