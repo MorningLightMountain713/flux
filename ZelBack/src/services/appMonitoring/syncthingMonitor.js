@@ -524,7 +524,17 @@ async function syncthingAppsCore(state, getGlobalStateFn) {
     // flagged - never as a steady-state sweep of every folder. A vanished mount
     // takes the folder's .stfolder marker with it and raises FolderErrors, so the
     // flagged set catches real mount loss without re-walking healthy folders.
-    const erroredFolderIds = new Set(syncthingEventsConsumer.drainErroredFolderIds());
+    // Read, then clear - which is what the old drainErroredFolderIds() did in one
+    // call. It no longer exists: the consumer now splits the two, so that a flag
+    // is cleared by a completed OUTCOME rather than by the act of reading it, and
+    // a pass that dies mid-action leaves the flag standing for the next one.
+    // Taking that property needs the per-folder resolve points that go with it,
+    // which land with the rest of the syncthing pass port (D13). Until then this
+    // keeps the behaviour the surrounding code was written against, rather than
+    // half of it.
+    const pendingFolderIds = syncthingEventsConsumer.mountVerifyPendingIds();
+    const erroredFolderIds = new Set(pendingFolderIds);
+    pendingFolderIds.forEach((id) => syncthingEventsConsumer.resolveMountVerify(id));
     const deploymentsToVerify = state.syncthingAppsFirstRun
       ? deployments
       : deploymentsMatchingFolderIds(deployments, erroredFolderIds);

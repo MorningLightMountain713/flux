@@ -96,7 +96,8 @@ const syncthingEventsConsumerMock = {
   stop: sinon.stub().resolves(),
   isRunning: sinon.stub().returns(false),
   getFolderErrors: sinon.stub(),
-  drainErroredFolderIds: sinon.stub().returns([]),
+  mountVerifyPendingIds: sinon.stub().returns([]),
+  resolveMountVerify: sinon.stub(),
 };
 
 const volumeServiceMock = {
@@ -238,8 +239,9 @@ describe('syncthingMonitor tests', () => {
     syncthingEventsConsumerMock.start.reset();
     syncthingEventsConsumerMock.stop.reset();
     syncthingEventsConsumerMock.stop.resolves();
-    syncthingEventsConsumerMock.drainErroredFolderIds.reset();
-    syncthingEventsConsumerMock.drainErroredFolderIds.returns([]);
+    syncthingEventsConsumerMock.mountVerifyPendingIds.reset();
+    syncthingEventsConsumerMock.mountVerifyPendingIds.returns([]);
+    syncthingEventsConsumerMock.resolveMountVerify.reset();
     volumeServiceMock.ensureAppVolumeMounted.reset();
     volumeServiceMock.ensureAppVolumeMounted.resolves({ mounted: true, alreadyMounted: true });
     syncthingFolderStateMachineMock.verifyFolderMountSafety.reset();
@@ -426,7 +428,7 @@ describe('syncthingMonitor tests', () => {
       // folder left sendreceive over the bad mount could still broadcast its disk
       // state - it must be demoted and its container held before bailing.
       deploymentProviderMock.listInstalledDeployments.resolves([syncDeployment]);
-      syncthingEventsConsumerMock.drainErroredFolderIds.returns([syncFolderId]);
+      syncthingEventsConsumerMock.mountVerifyPendingIds.returns([syncFolderId]);
       syncthingFolderStateMachineMock.verifyFolderMountSafety.resolves({ isSafe: false, isMounted: false, reason: 'unmounted_with_content' });
       volumeServiceMock.ensureAppVolumeMounted.resolves({ mounted: false, reason: 'volume_file_missing' });
       syncthingServiceMock.getConfigFolders.resolves({ data: [{ id: syncFolderId, type: 'sendreceive' }] });
@@ -450,7 +452,7 @@ describe('syncthingMonitor tests', () => {
 
     it('does not re-patch an unsafe folder that is already receiveonly', async () => {
       deploymentProviderMock.listInstalledDeployments.resolves([syncDeployment]);
-      syncthingEventsConsumerMock.drainErroredFolderIds.returns([syncFolderId]);
+      syncthingEventsConsumerMock.mountVerifyPendingIds.returns([syncFolderId]);
       syncthingFolderStateMachineMock.verifyFolderMountSafety.resolves({ isSafe: false, isMounted: false, reason: 'empty_unmounted_directory' });
       volumeServiceMock.ensureAppVolumeMounted.resolves({ mounted: false, reason: 'volume_file_missing' });
       syncthingServiceMock.getConfigFolders.resolves({ data: [{ id: syncFolderId, type: 'receiveonly' }] });
