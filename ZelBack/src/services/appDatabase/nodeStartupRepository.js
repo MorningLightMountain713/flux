@@ -7,11 +7,11 @@ const dbHelper = require('../dbHelper');
 // history, both keyed by _id in nodeStartupTracker. The collection is shared —
 // appSyncOrchestrator keeps its heartbeat document here too — so every accessor
 // is explicitly keyed rather than collection-wide.
-const nodeStartupTrackerCollection = config.database.local.collections.nodeStartupTracker;
+const nodeStartupTrackerCollection = config.get('database.local.collections.nodeStartupTracker');
 
 function db() {
   const connection = dbHelper.databaseConnection();
-  return connection ? connection.db(config.database.local.database) : null;
+  return connection ? connection.db(config.get('database.local.database')) : null;
 }
 
 /**

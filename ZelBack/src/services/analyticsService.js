@@ -263,7 +263,7 @@ function startFlushTimer() {
   initialized = true;
 
   try {
-    analyticsUrlCached = config.analytics.url || '';
+    analyticsUrlCached = config.get('analytics.url') || '';
   } catch {
     analyticsUrlCached = '';
   }

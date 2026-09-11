@@ -51,7 +51,7 @@ async function createAppVolume(deployComp, res) {
   // its mountpoint on a fresh node.
   const bytesPerGb = 1024 ** 3;
   const needBytes = requiredGb * bytesPerGb;
-  const reserveBytes = config.lockedSystemResources.extrahdd * bytesPerGb;
+  const reserveBytes = config.get('lockedSystemResources.extrahdd') * bytesPerGb;
   await serviceHelper.runCommand('mkdir', { params: ['-p', appsFolderPath], runAsRoot: true });
   const useThisVolume = await deviceHelper.mountForTarget(appsFolderPath);
   if (useThisVolume.availableBytes < needBytes + reserveBytes) {

@@ -121,9 +121,9 @@ const { version: fluxVersion } = require('../../../package.json');
 // Initialize globalState caches with cacheManager
 globalState.initializeCaches(cacheManager);
 
-const apiPort = userconfig.initial.apiport || config.server.apiport;
+const apiPort = userconfig.initial.apiport || config.get('server.apiport');
 const development = userconfig.initial.development || false;
-const fluxTransactionCollection = config.database.daemon.collections.fluxTransactions;
+const fluxTransactionCollection = config.get('database.daemon.collections.fluxTransactions');
 
 const bootDelayMultiplier = config.get('fluxapps.bootDelayMultiplier');
 function bootDelay(ms) { return Math.round(ms * bootDelayMultiplier); }
@@ -327,7 +327,7 @@ async function prepareDatabaseSchema() {
  */
 async function startFluxFunctions() {
   try {
-    if (!config.server.allowedPorts.includes(+apiPort)) {
+    if (!config.get('server.allowedPorts').includes(+apiPort)) {
       log.error(`Flux port ${apiPort} is not supported. Shutting down.`);
       process.exit(systemdNotify.EXIT_CONFIG);
     }
@@ -833,7 +833,7 @@ async function startFluxFunctions() {
       log.error(`Watchdog service error: ${error.message}`);
     });
     log.info('Watchdog service check initiated');
-    const explorerDatabase = db.db(config.database.daemon.database);
+    const explorerDatabase = db.db(config.get('database.daemon.database'));
     await dbHelper.dropCollection(explorerDatabase, fluxTransactionCollection).catch((error) => {
       if (error.message !== 'ns not found') {
         log.error(error);
@@ -924,7 +924,7 @@ async function startFluxFunctions() {
     log.info('Starting setting Node Geolocation');
     geolocationService.setNodeGeolocation();
     setTimeout(() => {
-      const { daemon: { zmqport } } = config;
+      const zmqport = config.get('daemon.zmqport');
       log.info(`Ensuring zmq is enabled for fluxd on port: ${zmqport}`);
       try {
         systemService.enableFluxdZmq(`tcp://127.0.0.1:${zmqport}`);

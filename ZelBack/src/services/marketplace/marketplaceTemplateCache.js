@@ -11,15 +11,15 @@ const log = require('../../lib/log');
 // verification independent of the marketplace API being reachable.
 
 function marketplaceDb() {
-  return dbHelper.databaseConnection().db(config.database.marketplace.database);
+  return dbHelper.databaseConnection().db(config.get('database.marketplace.database'));
 }
 
 function templatesCollection() {
-  return config.database.marketplace.collections.templates;
+  return config.get('database.marketplace.collections.templates');
 }
 
 function v2Url(path) {
-  return `${config.marketplace.apiBaseUrl}/api/v2/marketplace${path}`;
+  return `${config.get('marketplace.apiBaseUrl')}/api/v2/marketplace${path}`;
 }
 
 async function cacheTemplate(template) {

@@ -35,15 +35,15 @@ const priceOracleState = require('./pricing/priceOracleState');
 const entitlementsState = require('./entitlementsState');
 const { pubKeyToAddr } = require('./utils/fluxCryptoUtils');
 
-const appsHashesCollection = config.database.daemon.collections.appsHashes;
-const scannedHeightCollection = config.database.daemon.collections.scannedHeight;
-const chainParamsMessagesCollection = config.database.chainparams.collections.chainMessages;
-const priceMessagesCollection = config.database.chainparams.collections.priceMessages;
-const rateMessagesCollection = config.database.chainparams.collections.rateMessages;
-const priceModifierMessagesCollection = config.database.chainparams.collections.priceModifierMessages;
-const oracleKeyMessagesCollection = config.database.chainparams.collections.oracleKeyMessages;
-const marketplacePricingMessagesCollection = config.database.chainparams.collections.marketplacePricingMessages;
-const policyGroupMessagesCollection = config.database.chainparams.collections.policyGroupMessages;
+const appsHashesCollection = config.get('database.daemon.collections.appsHashes');
+const scannedHeightCollection = config.get('database.daemon.collections.scannedHeight');
+const chainParamsMessagesCollection = config.get('database.chainparams.collections.chainMessages');
+const priceMessagesCollection = config.get('database.chainparams.collections.priceMessages');
+const rateMessagesCollection = config.get('database.chainparams.collections.rateMessages');
+const priceModifierMessagesCollection = config.get('database.chainparams.collections.priceModifierMessages');
+const oracleKeyMessagesCollection = config.get('database.chainparams.collections.oracleKeyMessages');
+const marketplacePricingMessagesCollection = config.get('database.chainparams.collections.marketplacePricingMessages');
+const policyGroupMessagesCollection = config.get('database.chainparams.collections.policyGroupMessages');
 
 let isInInitiationOfBP = false;
 let zelAppSpecsMigrationDone = false;
@@ -203,7 +203,7 @@ function decodeLegacyAscii(bytes) {
 
 async function storeToCollection(collectionName, doc) {
   const db = dbHelper.databaseConnection();
-  const database = db.db(config.database.chainparams.database);
+  const database = db.db(config.get('database.chainparams.database'));
   const query = { txid: doc.txid };
   const update = { $set: doc };
   const options = { upsert: true };
@@ -384,7 +384,7 @@ async function processSoftFork(txid, height, txIndex, bytes, senderIsLegacyAutho
       }
       log.info(`Legacy soft fork message: ${txid}_${height}_${ascii}`);
       const db = dbHelper.databaseConnection();
-      const database = db.db(config.database.chainparams.database);
+      const database = db.db(config.get('database.chainparams.database'));
       const query = { txid };
       const update = { $set: { txid, height, message: ascii, version } };
       const options = { upsert: true };
@@ -724,7 +724,7 @@ async function processOneBlock(blockHeight, isInsightExplorer, loopOptions) {
     const atTip = Boolean(loopOptions && loopOptions.atTip);
     await fluxEventBus.checkpoint(fluxEventBus.Checkpoint.EXPLORER_BEFORE_BLOCK);
     const db = dbHelper.databaseConnection();
-    const database = db.db(config.database.daemon.database);
+    const database = db.db(config.get('database.daemon.database'));
     // get Block information
     const verbosity = 2;
     const blockDataVerbose = await getVerboseBlock(blockHeight, verbosity);
@@ -957,7 +957,7 @@ async function cleanupDuplicateScannedHeight(database) {
 // migrated). Safe to remove, along with the gating flag, once the whole fleet
 // has run it.
 async function migrateZelAppSpecifications(databaseGlobal) {
-  const col = databaseGlobal.collection(config.database.appsglobal.collections.appsMessages);
+  const col = databaseGlobal.collection(config.get('database.appsglobal.collections.appsMessages'));
   const result = await col.updateMany(
     { zelAppSpecifications: { $exists: true } },
     { $rename: { zelAppSpecifications: 'appSpecifications' } },
@@ -1257,7 +1257,7 @@ async function bootstrapAppHashes(currentDaemonHeight) {
   const seenHashes = new Set();
   let hashBatch = [];
   const db = dbHelper.databaseConnection();
-  const database = db.db(config.database.daemon.database);
+  const database = db.db(config.get('database.daemon.database'));
 
   const BATCH_SIZE = 500;
   const INSERT_THRESHOLD = 5000;
@@ -1332,7 +1332,7 @@ async function getScannedBlockHeightFromDb(database) {
  */
 async function handleChainReorg(reorg) {
   const db = dbHelper.databaseConnection();
-  const database = db.db(config.database.daemon.database);
+  const database = db.db(config.get('database.daemon.database'));
   const scannedBlockHeight = await getScannedBlockHeightFromDb(database);
 
   if (scannedBlockHeight <= reorg.fork.height) {
@@ -1346,7 +1346,7 @@ async function handleChainReorg(reorg) {
 }
 
 async function checkAndHandleReorgs(database, scannedBlockHeight) {
-  if (scannedBlockHeight < config.daemon.chainValidHeight || lastchainTipCheck === 0 || lastchainTipCheck + 100 >= scannedBlockHeight) {
+  if (scannedBlockHeight < config.get('daemon.chainValidHeight') || lastchainTipCheck === 0 || lastchainTipCheck + 100 >= scannedBlockHeight) {
     if (lastchainTipCheck === 0) {
       lastchainTipCheck = scannedBlockHeight - 1;
     }
@@ -1456,7 +1456,7 @@ async function drainToTip() {
   pushedTipHeight = 0;
   const daemonHeight = Math.max(syncStatus.data.height, pushedTip);
   const db = dbHelper.databaseConnection();
-  const database = db.db(config.database.daemon.database);
+  const database = db.db(config.get('database.daemon.database'));
 
   // Read once. The durable cursor only moves every `cursorBatchSize()` blocks while
   // catching up, so re-reading it each time would ask the same question forever — the
@@ -1630,7 +1630,7 @@ async function recoverFromError(deepRestore) {
   await waitForDaemonSync();
 
   const db = dbHelper.databaseConnection();
-  const database = db.db(config.database.daemon.database);
+  const database = db.db(config.get('database.daemon.database'));
   const scannedBlockHeight = await getScannedBlockHeightFromDb(database);
 
   // A scan from zero starts on empty collections holding every index, however
@@ -1672,7 +1672,7 @@ async function initiateBlockProcessor(options = {}) {
     isInInitiationOfBP = true;
 
     const db = dbHelper.databaseConnection();
-    const database = db.db(config.database.daemon.database);
+    const database = db.db(config.get('database.daemon.database'));
 
     await cleanupDuplicateScannedHeight(database);
 
@@ -1680,7 +1680,7 @@ async function initiateBlockProcessor(options = {}) {
       // Wrapped so a malformed or fresh-sync DB (e.g. col.indexes() on a
       // not-yet-created collection) can't stall block-processor init.
       try {
-        const globalDb = db.db(config.database.appsglobal.database);
+        const globalDb = db.db(config.get('database.appsglobal.database'));
         await migrateZelAppSpecifications(globalDb);
         zelAppSpecsMigrationDone = true;
       } catch (error) {
@@ -1819,7 +1819,7 @@ async function reindexExplorer() {
 
   try {
     const dbopen = dbHelper.databaseConnection();
-    const database = dbopen.db(config.database.daemon.database);
+    const database = dbopen.db(config.get('database.daemon.database'));
 
     await dbHelper.dropCollection(database, scannedHeightCollection).catch((error) => {
       if (error.message !== 'ns not found') throw error;
@@ -1845,7 +1845,7 @@ async function rescanExplorer(options = {}) {
   if (blockheight < 0) throw new Error('BlockHeight lower than 0');
 
   const dbopen = dbHelper.databaseConnection();
-  const database = dbopen.db(config.database.daemon.database);
+  const database = dbopen.db(config.get('database.daemon.database'));
   const query = { generalScannedHeight: { $gte: 0 } };
   const projection = { projection: { _id: 0, generalScannedHeight: 1 } };
 

@@ -28,6 +28,12 @@ function asConfig(obj) {
   // would answer - which is also what node-config does with a deployment file
   // over default.js. Replacing it outright is how a stub ends up asserting
   // against numbers no node has.
+  //
+  // SO `undefined` IN A STUB MEANS "DO NOT OVERRIDE", NOT "ABSENT". There is no
+  // way to say absent, and that is correct: a node cannot have a setting absent
+  // either, because config ships every one and the boot reconciliation refuses
+  // to start where it does not. A test that wants "nothing configured" says the
+  // empty value - [], '', null - which is what a node would carry.
   const resolve = (key) => {
     const own = step(obj, key);
     return own === undefined ? step(production, key) : own;

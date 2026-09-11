@@ -86,15 +86,15 @@ function isArtifact(name) {
 }
 
 function documentUrl(name) {
-  return `${config.policy.baseUrl}/${DOCUMENTS[name].file}`;
+  return `${config.get('policy.baseUrl')}/${DOCUMENTS[name].file}`;
 }
 
 function timeoutFor(name) {
-  return config.policy.fetchTimeoutMs[name] ?? config.policy.fetchTimeoutMs.default;
+  return config.get('policy.fetchTimeoutMs')[name] ?? config.get('policy.fetchTimeoutMs.default');
 }
 
 function intervalFor(name) {
-  return config.policy.refreshIntervalMs[name];
+  return config.get('policy.refreshIntervalMs')[name];
 }
 
 /**

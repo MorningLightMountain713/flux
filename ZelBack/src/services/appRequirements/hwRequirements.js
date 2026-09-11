@@ -176,9 +176,9 @@ async function nodeCapacity(options = {}) {
 
   const totalSpaceOnNode = specs.ssdStorage;
   const useableSpaceOnNode = totalSpaceOnNode * 0.95
-    - config.lockedSystemResources.hdd - config.lockedSystemResources.extrahdd;
-  const useableCpu = (specs.cpuCores * 10) - config.lockedSystemResources.cpu;
-  const useableRam = specs.ram - config.lockedSystemResources.ram;
+    - config.get('lockedSystemResources.hdd') - config.get('lockedSystemResources.extrahdd');
+  const useableCpu = (specs.cpuCores * 10) - config.get('lockedSystemResources.cpu');
+  const useableRam = specs.ram - config.get('lockedSystemResources.ram');
 
   // Added back rather than measured separately: appsResources already counted
   // every pending admission, reclaimable or not, so this undoes that half. One
@@ -194,7 +194,7 @@ async function nodeCapacity(options = {}) {
     availableCpu: useableCpu - (cpusLocked * 10),
     availableRam: useableRam - resourcesLocked.data.appsRamLocked + reclaimed.memory,
     freeCores: specs.cpuCores
-      - (config.lockedSystemResources.cpu / 10)
+      - (config.get('lockedSystemResources.cpu') / 10)
       - cpusLocked,
   };
 }

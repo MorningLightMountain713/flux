@@ -121,7 +121,7 @@ async function refresh() {
   }
   if (heldSha === want.sha256) return { installed: false, attempted: false };
 
-  const url = `${config.policy.signedBaseUrl}/${want.file}`;
+  const url = `${config.get('policy.signedBaseUrl')}/${want.file}`;
   // WHY a refusal happened, as a value rather than as a sentence. Every rejection below
   // ends at the same log line, so the text cannot tell a table this build cannot read from
   // one whose bytes were swapped in transit - and those are different events, one a bad

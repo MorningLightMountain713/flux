@@ -25,7 +25,7 @@ let isDaemonInsightExplorer = null;
 let lastChainUpdateAt = null;
 
 // Long enough that an ordinary slow block is not suspicious.
-const CHAIN_STALE_AFTER_MS = config.daemon.subscriptions.chainStaleAfterMs;
+const CHAIN_STALE_AFTER_MS = config.get('daemon.subscriptions.chainStaleAfterMs');
 
 function elapsedSinceChainUpdateMs() {
   if (lastChainUpdateAt === null) return null;

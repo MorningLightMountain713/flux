@@ -106,8 +106,8 @@ async function loginPhrase(req, res) {
     }
 
     const db = dbHelper.databaseConnection();
-    const database = db.db(config.database.local.database);
-    const collection = config.database.local.collections.activeLoginPhrases;
+    const database = db.db(config.get('database.local.database'));
+    const collection = config.get('database.local.collections.activeLoginPhrases');
 
     const timestamp = Date.now();
     const validTill = timestamp + LOGIN_PHRASE_VALID_MS;
@@ -142,8 +142,8 @@ async function emergencyPhrase(req, res) {
     const phrase = timestamp + Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
 
     const db = dbHelper.databaseConnection();
-    const database = db.db(config.database.local.database);
-    const collection = config.database.local.collections.activeLoginPhrases;
+    const database = db.db(config.get('database.local.database'));
+    const collection = config.get('database.local.collections.activeLoginPhrases');
     const newLoginPhrase = {
       loginPhrase: phrase,
       createdAt: new Date(timestamp),
@@ -209,8 +209,8 @@ async function verifyLogin(req, res) {
       // Basic checks passed. First check if message is in our activeLoginPhrases collection
 
       const db = dbHelper.databaseConnection();
-      const database = db.db(config.database.local.database);
-      const collection = config.database.local.collections.activeLoginPhrases;
+      const database = db.db(config.get('database.local.database'));
+      const collection = config.get('database.local.collections.activeLoginPhrases');
       const query = { loginPhrase: message, ...UNUSED_PHRASE };
       const projection = {};
       const result = await dbHelper.findOneInDatabase(database, collection, query, projection);
@@ -245,7 +245,7 @@ async function verifyLogin(req, res) {
               throw new Error('Node is still starting and cannot establish privileges yet');
             }
             let privilage = PRIVILEGE_RESPONSE.USER;
-            if (address === config.fluxTeamFluxID || verificationHelperUtils.isFluxSupportTeamZelid(address)) {
+            if (address === config.get('fluxTeamFluxID') || verificationHelperUtils.isFluxSupportTeamZelid(address)) {
               privilage = PRIVILEGE_RESPONSE.FLUX_TEAM;
             } else if (address === adminZelid) {
               privilage = PRIVILEGE_RESPONSE.NODE_OPERATOR;
@@ -262,12 +262,12 @@ async function verifyLogin(req, res) {
             // to whoever holds the login phrase, so it is kept apart from the login,
             // in a collection whose TTL index expires it a minute after the login. It
             // is written first, so the websocket finds it as soon as it finds the login.
-            await dbHelper.insertOneToDatabase(database, config.database.local.collections.loginSignatures, {
+            await dbHelper.insertOneToDatabase(database, config.get('database.local.collections.loginSignatures'), {
               loginPhrase: message,
               signature,
               createdAt: new Date(),
             });
-            const loggedUsersCollection = config.database.local.collections.loggedUsers;
+            const loggedUsersCollection = config.get('database.local.collections.loggedUsers');
             const value = newLogin;
             await dbHelper.insertOneToDatabase(database, loggedUsersCollection, value);
             const resData = {
@@ -343,8 +343,8 @@ async function provideSign(req, res) {
       const identifier = address + message.slice(-13);
 
       const db = dbHelper.databaseConnection();
-      const database = db.db(config.database.local.database);
-      const collection = config.database.local.collections.activeSignatures;
+      const database = db.db(config.get('database.local.database'));
+      const collection = config.get('database.local.collections.activeSignatures');
       const newSignature = {
         signature,
         identifier,
@@ -375,8 +375,8 @@ async function activeLoginPhrases(req, res) {
     if (authorized === true) {
       const db = dbHelper.databaseConnection();
 
-      const database = db.db(config.database.local.database);
-      const collection = config.database.local.collections.activeLoginPhrases;
+      const database = db.db(config.get('database.local.database'));
+      const collection = config.get('database.local.collections.activeLoginPhrases');
       const query = UNUSED_PHRASE;
       const projection = {
         projection: {
@@ -407,8 +407,8 @@ async function loggedUsers(req, res) {
     const authorized = await verificationHelper.verifyPrivilege(Privilege.NODE_OPERATOR, authOf(req));
     if (authorized === true) {
       const db = dbHelper.databaseConnection();
-      const database = db.db(config.database.local.database);
-      const collection = config.database.local.collections.loggedUsers;
+      const database = db.db(config.get('database.local.database'));
+      const collection = config.get('database.local.collections.loggedUsers');
       const query = {};
       const projection = {
         projection: {
@@ -442,8 +442,8 @@ async function loggedSessions(req, res) {
 
       const auth = serviceHelper.ensureObject(authOf(req));
       const queryFluxID = auth.zelid;
-      const database = db.db(config.database.local.database);
-      const collection = config.database.local.collections.loggedUsers;
+      const database = db.db(config.get('database.local.database'));
+      const collection = config.get('database.local.collections.loggedUsers');
       const query = { zelid: queryFluxID };
       const projection = {
         projection: {
@@ -475,8 +475,8 @@ async function logoutCurrentSession(req, res) {
     if (authorized === true) {
       const auth = serviceHelper.ensureObject(authOf(req));
       const db = dbHelper.databaseConnection();
-      const database = db.db(config.database.local.database);
-      const collection = config.database.local.collections.loggedUsers;
+      const database = db.db(config.get('database.local.database'));
+      const collection = config.get('database.local.collections.loggedUsers');
       const query = { $and: [{ loginPhrase: auth.loginPhrase }, { zelid: auth.zelid }] };
       const projection = {};
       await dbHelper.findOneAndDeleteInDatabase(database, collection, query, projection);
@@ -511,8 +511,8 @@ async function logoutSpecificSession(req, res) {
         const processedBody = serviceHelper.ensureObject(body);
         const obtainedLoginPhrase = processedBody.loginPhrase;
         const db = dbHelper.databaseConnection();
-        const database = db.db(config.database.local.database);
-        const collection = config.database.local.collections.loggedUsers;
+        const database = db.db(config.get('database.local.database'));
+        const collection = config.get('database.local.collections.loggedUsers');
         const query = { loginPhrase: obtainedLoginPhrase };
         const projection = {};
         const result = await dbHelper.findOneAndDeleteInDatabase(database, collection, query, projection);
@@ -545,8 +545,8 @@ async function logoutAllSessions(req, res) {
     if (authorized === true) {
       const auth = serviceHelper.ensureObject(authOf(req));
       const db = dbHelper.databaseConnection();
-      const database = db.db(config.database.local.database);
-      const collection = config.database.local.collections.loggedUsers;
+      const database = db.db(config.get('database.local.database'));
+      const collection = config.get('database.local.collections.loggedUsers');
       const query = { zelid: auth.zelid };
       await dbHelper.removeDocumentsFromCollection(database, collection, query);
       // console.log(result)
@@ -573,8 +573,8 @@ async function logoutAllUsers(req, res) {
     const authorized = await verificationHelper.verifyPrivilege(Privilege.NODE_OPERATOR, authOf(req));
     if (authorized === true) {
       const db = dbHelper.databaseConnection();
-      const database = db.db(config.database.local.database);
-      const collection = config.database.local.collections.loggedUsers;
+      const database = db.db(config.get('database.local.database'));
+      const collection = config.get('database.local.collections.loggedUsers');
       const query = {};
       await dbHelper.removeDocumentsFromCollection(database, collection, query);
       const message = messageHelper.createSuccessMessage('Successfully logged out all users');
@@ -602,7 +602,7 @@ async function wsRespondLoginPhrase(ws, loginphrase) {
   let settled = false;
   let expiry = null;
   const noLongerValid = () => messageHelper.createErrorMessage('Signed message is no longer valid. Please request a new one.');
-  const database = dbHelper.databaseConnection().db(config.database.local.database);
+  const database = dbHelper.databaseConnection().db(config.get('database.local.database'));
   const query = { loginPhrase: loginphrase };
 
   function stop() {
@@ -641,7 +641,7 @@ async function wsRespondLoginPhrase(ws, loginphrase) {
           throw new Error('Node is still starting and cannot establish privileges yet');
         }
         let privilage = PRIVILEGE_RESPONSE.USER;
-        if (login.zelid === config.fluxTeamFluxID || verificationHelperUtils.isFluxSupportTeamZelid(login.zelid)) {
+        if (login.zelid === config.get('fluxTeamFluxID') || verificationHelperUtils.isFluxSupportTeamZelid(login.zelid)) {
           privilage = PRIVILEGE_RESPONSE.FLUX_TEAM;
         } else if (login.zelid === adminZelid) {
           privilage = PRIVILEGE_RESPONSE.NODE_OPERATOR;
@@ -727,8 +727,8 @@ async function wsRespondSignature(ws, message) {
 
   const db = dbHelper.databaseConnection();
 
-  const database = db.db(config.database.local.database);
-  const collection = config.database.local.collections.activeSignatures;
+  const database = db.db(config.get('database.local.database'));
+  const collection = config.get('database.local.collections.activeSignatures');
   const query = { identifier: message };
   const projection = {};
   async function searchDatabase() {

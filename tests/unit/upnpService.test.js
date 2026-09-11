@@ -7,6 +7,7 @@ const natUpnp = require('@runonflux/nat-upnp');
 const serviceHelper = require('../../ZelBack/src/services/serviceHelper');
 const sinon = require('sinon');
 const proxyquire = require('proxyquire');
+const { asConfig } = require('./fixtures/config');
 const log = require('../../ZelBack/src/lib/log');
 const verificationHelper = require('../../ZelBack/src/services/verificationHelper');
 const ufw = require('../../ZelBack/src/services/utils/ufw');
@@ -43,7 +44,7 @@ const fluxadmPortStub = {
 
 const upnpService = proxyquire(
   '../../ZelBack/src/services/upnpService',
-  { config, './fluxadmPort': fluxadmPortStub },
+  { config: asConfig(config), './fluxadmPort': fluxadmPortStub },
 );
 
 // the options each nat-upnp client was constructed with
@@ -56,13 +57,13 @@ class RecordingClient extends natUpnp.Client {
 }
 const recordingService = proxyquire(
   '../../ZelBack/src/services/upnpService',
-  { config, './fluxadmPort': fluxadmPortStub, '@runonflux/nat-upnp': { ...natUpnp, Client: RecordingClient } },
+  { config: asConfig(config), './fluxadmPort': fluxadmPortStub, '@runonflux/nat-upnp': { ...natUpnp, Client: RecordingClient } },
 );
 
 const GATEWAY_URL = 'http://192.168.1.1:5000/rootDesc.xml';
 const upnpServiceAtGatewayUrl = proxyquire(
   '../../ZelBack/src/services/upnpService',
-  { config: { ...config, upnp: { gatewayUrl: GATEWAY_URL, nodeIp: '192.168.1.10' } }, './fluxadmPort': fluxadmPortStub },
+  { config: asConfig({ ...config, upnp: { gatewayUrl: GATEWAY_URL, nodeIp: '192.168.1.10' } }), './fluxadmPort': fluxadmPortStub },
 );
 
 describe('upnpService tests', () => {

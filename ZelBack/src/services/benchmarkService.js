@@ -16,7 +16,7 @@ const dbHelper = require('./dbHelper');
 const { Privilege, authOf } = require('./utils/privileges');
 const { isValidAppNameAndOwner } = require('./utils/appIdentity');
 
-const { benchmark: benchmarkCollection } = config.database.local.collections;
+const { benchmark: benchmarkCollection } = config.get('database.local.collections');
 const validTiers = ['CUMULUS', 'NIMBUS', 'STRATUS'];
 const ONE_DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -55,9 +55,9 @@ async function buildBenchdClient() {
 
   const { initial: { testnet: isTestnet } } = globalThis.userconfig;
   const portId = isTestnet ? 'rpcporttestnet' : 'rpcport';
-  const rpcPort = config.benchmark[portId];
+  const rpcPort = config.get('benchmark')[portId];
 
-  const rpcHost = config.benchmark.host;
+  const rpcHost = config.get('benchmark.host');
   const client = new fluxRpc.FluxRpc(`http://${rpcHost}:${rpcPort}`, {
     auth: { username, password },
     socketPath: benchdSocketPath(),
@@ -121,7 +121,7 @@ async function storeBenchmarkToDb(benchmarkData, tierStatus) {
       return;
     }
 
-    const database = dbClient.db(config.database.local.database);
+    const database = dbClient.db(config.get('database.local.database'));
     const query = { _id: 'nodeBenchmark' };
     const update = {
       $set: {
@@ -166,7 +166,7 @@ async function getBenchmarkFromDb() {
     if (!dbClient) {
       return { benchmark: null, tier: null };
     }
-    const database = dbClient.db(config.database.local.database);
+    const database = dbClient.db(config.get('database.local.database'));
     const query = { _id: 'nodeBenchmark' };
     const result = await dbHelper.findOneInDatabase(database, benchmarkCollection, query);
     if (result && result.benchmark) {

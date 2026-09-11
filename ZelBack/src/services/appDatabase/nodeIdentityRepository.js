@@ -10,7 +10,7 @@ const dbHelper = require('../dbHelper');
 //
 // These used to live in config/userconfig.js, which is operator input owned by the
 // installer — so every rewrite of that file by its owner destroyed them.
-const nodeIdentityCollection = config.database.local.collections.nodeIdentity;
+const nodeIdentityCollection = config.get('database.local.collections.nodeIdentity');
 
 const PGP_IDENTITY_KEY = 'pgpIdentity';
 const LAST_KNOWN_IP_KEY = 'lastKnownIp';
@@ -18,7 +18,7 @@ const PLAYGROUND_FINGERPRINT_KEY = 'playgroundFingerprintSecret';
 
 function db() {
   const connection = dbHelper.databaseConnection();
-  return connection ? connection.db(config.database.local.database) : null;
+  return connection ? connection.db(config.get('database.local.database')) : null;
 }
 
 /**

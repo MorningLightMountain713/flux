@@ -9,7 +9,7 @@ const log = require('../lib/log');
 const globalState = require('./utils/globalState');
 
 const REPO = 'RunOnFlux/fluxos-frontend';
-const RELEASE_API = `${config.github.apiBaseUrl}/repos/${REPO}/releases/latest`;
+const RELEASE_API = `${config.get('github.apiBaseUrl')}/repos/${REPO}/releases/latest`;
 const PROJECT_ROOT = path.join(__dirname, '..', '..', '..');
 const CLOUDUI_DIR = path.join(PROJECT_ROOT, 'CloudUI');
 const VERSION_FILE = path.join(CLOUDUI_DIR, 'version');
@@ -150,7 +150,7 @@ function startUpdateScript() {
     // source of truth for every endpoint a node reaches, so a hardcoded URL in the script,
     // or one taken from the environment, would sit outside it and be unreachable by the
     // harness.
-    execFile('npm', ['run', 'update:cloudui', '--', config.github.apiBaseUrl], { cwd: PROJECT_ROOT, timeout: 300000 }, (error, stdout, stderr) => {
+    execFile('npm', ['run', 'update:cloudui', '--', config.get('github.apiBaseUrl')], { cwd: PROJECT_ROOT, timeout: 300000 }, (error, stdout, stderr) => {
       if (error) {
         log.error(`CloudUI update script error: ${error.message}`);
         if (stderr) {

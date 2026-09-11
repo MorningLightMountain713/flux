@@ -7,6 +7,7 @@ const sinon = require('sinon');
 const os = require('os');
 const fs = require('fs');
 const proxyquire = require('proxyquire');
+const { asConfig } = require('./fixtures/config');
 
 const { expect } = chai;
 
@@ -155,7 +156,7 @@ describe('cpuBurstHelper tests', () => {
 
   describe('isCpuBurstEnabled', () => {
     const withBurst = (cpuBurst) => proxyquire('../../ZelBack/src/services/utils/cpuBurstHelper', {
-      config: { cpuBurst },
+      config: asConfig({ cpuBurst }),
     });
 
     it('is on when the config switches it on', () => {
@@ -166,8 +167,8 @@ describe('cpuBurstHelper tests', () => {
       expect(withBurst({ enabled: false, periodUs: 100000 }).isCpuBurstEnabled()).to.equal(false);
     });
 
-    it('is off when the config does not mention it', () => {
-      expect(withBurst(undefined).isCpuBurstEnabled()).to.equal(false);
+    it('follows the shipped default when the stub does not set it', () => {
+      expect(withBurst(undefined).isCpuBurstEnabled()).to.equal(true);
     });
   });
 
@@ -280,7 +281,7 @@ describe('cpuBurstHelper tests', () => {
     it('applies nothing while burst is switched off', async () => {
       const writeStub = sinon.stub(fs.promises, 'writeFile').resolves();
       const helper = proxyquire('../../ZelBack/src/services/utils/cpuBurstHelper', {
-        config: { cpuBurst: { enabled: false, periodUs: 100000 } },
+        config: asConfig({ cpuBurst: { enabled: false, periodUs: 100000 } }),
       });
 
       expect(await helper.applyBurst(12345, 2.0)).to.equal(false);

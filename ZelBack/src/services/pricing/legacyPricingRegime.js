@@ -31,7 +31,7 @@ const log = require('../../lib/log');
  * the costume of an exact one.
  */
 
-const globalAppsInformation = config.database.appsglobal.collections.appsInformation;
+const globalAppsInformation = config.get('database.appsglobal.collections.appsInformation');
 
 const myShortCache = cacheManager.fluxRatesCache;
 const myLongCache = cacheManager.appPriceBlockedRepoCache;
@@ -191,7 +191,7 @@ async function onChainDisplayPrice(spec) {
   actualPriceToPay = Math.ceil(actualPriceToPay * 100) / 100;
 
   const db = dbHelper.databaseConnection();
-  const database = db.db(config.database.appsglobal.database);
+  const database = db.db(config.get('database.appsglobal.database'));
   const appInfoDoc = await dbHelper.findOneInDatabase(
     database, globalAppsInformation, { name: spec.name }, { projection: { _id: 0 } },
   );
@@ -280,7 +280,7 @@ async function fiatAndFluxDisplayPrice(spec, appSpecification) {
   if (myLongCache.has('appPrices')) {
     appPrices.push(myLongCache.get('appPrices'));
   } else {
-    const response = await axios.get(`${config.stats.baseUrl}/apps/getappspecsusdprice`, axiosConfig).catch((error) => log.error(error));
+    const response = await axios.get(`${config.get('stats.baseUrl')}/apps/getappspecsusdprice`, axiosConfig).catch((error) => log.error(error));
     if (response && response.data && response.data.status === 'success') {
       myLongCache.set('appPrices', response.data.data);
       appPrices.push(response.data.data);
@@ -300,7 +300,7 @@ async function fiatAndFluxDisplayPrice(spec, appSpecification) {
   actualPriceToPay = Number(actualPriceToPay).toFixed(2);
 
   const db = dbHelper.databaseConnection();
-  const database = db.db(config.database.appsglobal.database);
+  const database = db.db(config.get('database.appsglobal.database'));
   const appInfoDoc = await dbHelper.findOneInDatabase(
     database, globalAppsInformation, { name: spec.name }, { projection: { _id: 0 } },
   );
@@ -359,7 +359,7 @@ async function fiatAndFluxDisplayPrice(spec, appSpecification) {
     actualPriceToPay *= 0.8;
   }
 
-  const marketplaceResponse = await axios.get(`${config.stats.baseUrl}/marketplace/listapps`).catch((error) => log.error(error));
+  const marketplaceResponse = await axios.get(`${config.get('stats.baseUrl')}/marketplace/listapps`).catch((error) => log.error(error));
   let marketPlaceApps = [];
   if (marketplaceResponse && marketplaceResponse.data && marketplaceResponse.data.status === 'success') {
     marketPlaceApps = marketplaceResponse.data.data;
@@ -403,7 +403,7 @@ async function fiatAndFluxDisplayPrice(spec, appSpecification) {
   if (myShortCache.has('fluxRates')) {
     fluxUSDRate = myShortCache.get('fluxRates');
   } else {
-    let fiatRates = await axios.get(`${config.pricing.fluxRatesBaseUrl}/rates`, axiosConfig).catch((error) => log.error(error));
+    let fiatRates = await axios.get(`${config.get('pricing.fluxRatesBaseUrl')}/rates`, axiosConfig).catch((error) => log.error(error));
     if (fiatRates && fiatRates.data) {
       const rateObj = fiatRates.data[0].find((rate) => rate.code === 'USD');
       if (!rateObj) throw new Error('Unable to get USD rate.');
@@ -412,7 +412,7 @@ async function fiatAndFluxDisplayPrice(spec, appSpecification) {
       fluxUSDRate = rateObj.rate * btcRateforFlux;
       myShortCache.set('fluxRates', fluxUSDRate);
     } else {
-      fiatRates = await axios.get(`${config.pricing.coingeckoBaseUrl}/api/v3/simple/price?vs_currencies=usd&ids=zelcash`, axiosConfig);
+      fiatRates = await axios.get(`${config.get('pricing.coingeckoBaseUrl')}/api/v3/simple/price?vs_currencies=usd&ids=zelcash`, axiosConfig);
       if (fiatRates && fiatRates.data && fiatRates.data.zelcash && fiatRates.data.zelcash.usd) {
         fluxUSDRate = fiatRates.data.zelcash.usd;
       } else {

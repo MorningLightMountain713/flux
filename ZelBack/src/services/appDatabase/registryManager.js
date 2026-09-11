@@ -115,7 +115,7 @@ async function materializeFoundingView(specDoc) {
 async function getAppHashes(_req, res) {
   try {
     const dbopen = dbHelper.databaseConnection();
-    const database = dbopen.db(config.database.daemon.database);
+    const database = dbopen.db(config.get('database.daemon.database'));
     const query = {};
     const projection = {
       projection: {
@@ -165,7 +165,7 @@ async function appLocation(appname) {
  * @throws {Error} when scanning has not initiated
  */
 async function getScannedHeight() {
-  const daemonDb = dbHelper.databaseConnection().db(config.database.daemon.database);
+  const daemonDb = dbHelper.databaseConnection().db(config.get('database.daemon.database'));
   const result = await dbHelper.findOneInDatabase(
     daemonDb,
     scannedHeightCollection,
@@ -183,7 +183,7 @@ async function getScannedHeight() {
  */
 async function appInstallingLocation(appname) {
   const dbopen = dbHelper.databaseConnection();
-  const database = dbopen.db(config.database.appsglobal.database);
+  const database = dbopen.db(config.get('database.appsglobal.database'));
   let query = {};
   if (appname) {
     query = { name: new RegExp(`^${appname}$`, 'i') }; // case insensitive
@@ -224,7 +224,7 @@ async function appInstallingLocation(appname) {
  */
 async function installingCountsByApp() {
   const dbopen = dbHelper.databaseConnection();
-  const database = dbopen.db(config.database.appsglobal.database);
+  const database = dbopen.db(config.get('database.appsglobal.database'));
   const rows = await dbHelper.aggregateInDatabase(database, globalAppsInstallingLocations, [
     { $group: { _id: { $toLower: '$name' }, count: { $sum: 1 } } },
   ]);
@@ -238,7 +238,7 @@ async function installingCountsByApp() {
  */
 async function appInstallingErrorsLocation(appname) {
   const dbopen = dbHelper.databaseConnection();
-  const database = dbopen.db(config.database.appsglobal.database);
+  const database = dbopen.db(config.get('database.appsglobal.database'));
   let query = {};
   if (appname) {
     query = { name: new RegExp(`^${appname}$`, 'i') }; // case insensitive
@@ -348,7 +348,7 @@ async function storeAppInstallingMessage(message) {
   }
 
   const db = dbHelper.databaseConnection();
-  const database = db.db(config.database.appsglobal.database);
+  const database = db.db(config.get('database.appsglobal.database'));
 
   const newAppInstallingMessage = {
     name: message.name,
@@ -400,7 +400,7 @@ async function storeAppInstallingMessage(message) {
  */
 async function removeAppInstallingMessage(name, ip, replica = null) {
   const db = dbHelper.databaseConnection();
-  const database = db.db(config.database.appsglobal.database);
+  const database = db.db(config.get('database.appsglobal.database'));
   await dbHelper.findOneAndDeleteInDatabase(database, globalAppsInstallingLocations, { name, ip, replica }, {});
 }
 
@@ -413,7 +413,7 @@ async function removeAppInstallingMessage(name, ip, replica = null) {
  */
 async function prepareInstallingClaimsCollections() {
   const db = dbHelper.databaseConnection();
-  const database = db.db(config.database.appsglobal.database);
+  const database = db.db(config.get('database.appsglobal.database'));
 
   const broadcasts = database.collection(globalAppsInstallingBroadcasts);
   // TTL migrated from broadcastedAt to the per-document expireAt.
@@ -1017,7 +1017,7 @@ async function checkApplicationRegistrationNameConflicts(appSpecFormatted, hash)
           height: 1,
         },
       };
-      const database = dbopen.db(config.database.daemon.database);
+      const database = dbopen.db(config.get('database.daemon.database'));
       const result = await dbHelper.findOneInDatabase(database, appsHashesCollection, query, projection);
       if (!result) {
         throw new Error(`Flux App ${appSpecFormatted.name} already registered. Flux App has to be registered under different name. Hash not found in collection.`);
@@ -1136,9 +1136,9 @@ async function reindexGlobalAppsInformation() {
     log.info('Reindexing global application list');
 
     const db = dbHelper.databaseConnection();
-    const appsGlobalDb = db.db(config.database.appsglobal.database);
-    const appsLocalDb = db.db(config.database.appslocal.database);
-    const daemonDb = db.db(config.database.daemon.database);
+    const appsGlobalDb = db.db(config.get('database.appsglobal.database'));
+    const appsLocalDb = db.db(config.get('database.appslocal.database'));
+    const daemonDb = db.db(config.get('database.daemon.database'));
 
     const scannedHeightResult = await dbHelper.findOneInDatabase(
       daemonDb,
@@ -1180,8 +1180,8 @@ async function reindexGlobalAppsInformation() {
 async function reconstructAppMessagesHashCollection() {
   try {
     const db = dbHelper.databaseConnection();
-    const databaseApps = db.db(config.database.appsglobal.database);
-    const databaseDaemon = db.db(config.database.daemon.database);
+    const databaseApps = db.db(config.get('database.appsglobal.database'));
+    const databaseDaemon = db.db(config.get('database.daemon.database'));
     const query = {};
     const projection = { projection: { _id: 0 } };
 
@@ -1306,7 +1306,7 @@ async function reindexGlobalAppsInformationAPI(req, res) {
 async function rescanGlobalAppsInformation(height = 0, removeLastInformation = false) {
   try {
     const db = dbHelper.databaseConnection();
-    const database = db.db(config.database.appsglobal.database);
+    const database = db.db(config.get('database.appsglobal.database'));
 
     await dbHelper.dropCollection(database, globalAppsInformation).catch((error) => {
       if (error.message !== 'ns not found') {
@@ -1355,7 +1355,7 @@ async function rescanGlobalAppsInformationAPI(req, res) {
       }
       blockheight = serviceHelper.ensureNumber(blockheight);
       const dbopen = dbHelper.databaseConnection();
-      const database = dbopen.db(config.database.daemon.database);
+      const database = dbopen.db(config.get('database.daemon.database'));
       const query = { generalScannedHeight: { $gte: 0 } };
       const projection = {
         projection: {
@@ -1397,14 +1397,14 @@ async function rescanGlobalAppsInformationAPI(req, res) {
 
 async function countAppInstallingErrors(hash) {
   const dbopen = dbHelper.databaseConnection();
-  const database = dbopen.db(config.database.appsglobal.database);
+  const database = dbopen.db(config.get('database.appsglobal.database'));
   return dbHelper.countInDatabase(database, globalAppsInstallingErrorsLocations, { hash });
 }
 
 async function insertAppSpecifications(appSpecs) {
   try {
     const db = dbHelper.databaseConnection();
-    const database = db.db(config.database.appsglobal.database);
+    const database = db.db(config.get('database.appsglobal.database'));
     const existingHeight = await appsRepository.getGlobalAppHeight(appSpecs.name);
     if (existingHeight !== null && existingHeight >= appSpecs.height) return true;
     await storeGlobalSpec(appSpecs);
@@ -1426,7 +1426,7 @@ async function insertAppSpecifications(appSpecs) {
 async function updateAppSpecifications(appSpecs) {
   try {
     const db = dbHelper.databaseConnection();
-    const database = db.db(config.database.appsglobal.database);
+    const database = db.db(config.get('database.appsglobal.database'));
     const existingHeight = await appsRepository.getGlobalAppHeight(appSpecs.name);
     if (existingHeight === null || existingHeight >= appSpecs.height) return true;
     await storeGlobalSpec(appSpecs, { upsert: false });

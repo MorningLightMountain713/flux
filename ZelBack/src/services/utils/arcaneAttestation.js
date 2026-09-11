@@ -29,9 +29,7 @@ const config = require('config');
  * verify under another — see the pinned live signature in
  * tests/unit/arcaneAttestation.test.js.
  */
-const DEFAULT_ARCANE_APP_ATTESTATION_PUBKEY = 'ERXxzVN8fg4sCjhIPp37XRu1ealmD4TA6tU7A3o6tQM=';
-const ARCANE_APP_ATTESTATION_PUBKEY = (config.arcane && config.arcane.appAttestationPubkey)
-  ?? DEFAULT_ARCANE_APP_ATTESTATION_PUBKEY;
+const ARCANE_APP_ATTESTATION_PUBKEY = config.get('arcane.appAttestationPubkey');
 
 // DER SubjectPublicKeyInfo prefix for an Ed25519 public key. Prepended to the
 // raw 32-byte key so node:crypto can import it as a KeyObject.

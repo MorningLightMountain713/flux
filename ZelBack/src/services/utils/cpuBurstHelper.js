@@ -26,7 +26,7 @@ function isEnterpriseOwner(owner) {
  * @returns {boolean}
  */
 function isCpuBurstEnabled() {
-  return config.cpuBurst?.enabled === true;
+  return config.get('cpuBurst.enabled') === true;
 }
 
 /**
@@ -75,8 +75,8 @@ async function getCgroupBurstPath(pid) {
  * @returns {{ periodUs: number, quotaUs: number, burstUs: number }}
  */
 function calculateBurstParams(cpuCores) {
-  const periodUs = config.cpuBurst?.periodUs ?? 100000;
-  const reservedCores = config.cpuBurst?.reservedCores ?? 1;
+  const periodUs = config.get('cpuBurst.periodUs');
+  const reservedCores = config.get('cpuBurst.reservedCores');
   const quotaUs = Math.round(cpuCores * periodUs);
 
   // Start at the kernel maximum (burst == quota)

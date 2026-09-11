@@ -24,7 +24,7 @@ const { getSpecBackend } = require('../utils/specLibs');
 const log = require('../../lib/log');
 
 // Database collections
-const globalAppsMessages = config.database.appsglobal.collections.appsMessages;
+const globalAppsMessages = config.get('database.appsglobal.collections.appsMessages');
 
 /**
  * The specifications of the apps installed on this node, from its own table.
@@ -566,7 +566,7 @@ async function getApplicationOriginalOwner(req, res) {
       throw new Error('No Application Name specified');
     }
     const db = dbHelper.databaseConnection();
-    const database = db.db(config.database.appsglobal.database);
+    const database = db.db(config.get('database.appsglobal.database'));
     const projection = {
       projection: {
         _id: 0,
@@ -632,7 +632,7 @@ async function getAppsMessagesCount(req, res) {
       throw new Error('No Application Owner specified');
     }
     const db = dbHelper.databaseConnection();
-    const database = db.db(config.database.appsglobal.database);
+    const database = db.db(config.get('database.appsglobal.database'));
 
     const query = { 'appSpecifications.owner': appowner };
 

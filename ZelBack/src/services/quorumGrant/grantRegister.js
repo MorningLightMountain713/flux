@@ -26,11 +26,11 @@ const log = require('../../lib/log');
 // ever compares another machine's timestamp to this clock — holders count
 // their own safety from their own send times.
 
-const collection = () => config.database.local.collections.quorumGrants;
+const collection = () => config.get('database.local.collections.quorumGrants');
 
 function db() {
   const connection = dbHelper.databaseConnection();
-  return connection ? connection.db(config.database.local.database) : null;
+  return connection ? connection.db(config.get('database.local.database')) : null;
 }
 
 function tunables() {

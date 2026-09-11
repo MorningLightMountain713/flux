@@ -88,17 +88,17 @@ async function validateAppsCumulatively(installedApps) {
 
     // Calculate available resources
     const totalCpuOnNode = nodeSpecs.cpuCores * 10;
-    const useableCpuOnNode = totalCpuOnNode - config.lockedSystemResources.cpu;
+    const useableCpuOnNode = totalCpuOnNode - config.get('lockedSystemResources.cpu');
 
     const totalRamOnNode = nodeSpecs.ram;
-    const useableRamOnNode = totalRamOnNode - config.lockedSystemResources.ram;
+    const useableRamOnNode = totalRamOnNode - config.get('lockedSystemResources.ram');
 
     const totalSpaceOnNode = nodeSpecs.ssdStorage;
     if (totalSpaceOnNode === 0) {
       log.error('hardwareValidationService - No storage detected, cannot validate apps');
       return appsToRemove;
     }
-    const useableSpaceOnNode = totalSpaceOnNode * 0.95 - config.lockedSystemResources.hdd - config.lockedSystemResources.extrahdd;
+    const useableSpaceOnNode = totalSpaceOnNode * 0.95 - config.get('lockedSystemResources.hdd') - config.get('lockedSystemResources.extrahdd');
 
     log.info(`hardwareValidationService - Available resources: CPU=${useableCpuOnNode / 10}, RAM=${useableRamOnNode}MB, HDD=${useableSpaceOnNode}GB`);
 

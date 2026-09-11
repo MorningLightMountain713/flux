@@ -58,7 +58,7 @@ function resolveClientIp(connectingIp, headers) {
 
   if (!peer) return socketAnswer;
 
-  const trusted = config.fdmAddresses || [];
+  const trusted = config.get('fdmAddresses') || [];
   if (!trusted.includes(peer)) return socketAnswer;
 
   const raw = headers && headers['x-forwarded-for'];

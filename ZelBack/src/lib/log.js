@@ -20,7 +20,7 @@ const LEGACY_LOG_PATH = path.join(__dirname, '../../../fluxos.log');
 const LEVELS = ['fatal', 'error', 'warn', 'info', 'debug', 'trace'];
 // FLUX_LOG_LEVEL outranks config so a node can boot straight into debug;
 // an unknown value falls back rather than crashing the logger.
-const configuredLevel = process.env.FLUX_LOG_LEVEL || config.logLevel || 'info';
+const configuredLevel = process.env.FLUX_LOG_LEVEL || config.get('logLevel') || 'info';
 const level = LEVELS.includes(configuredLevel) ? configuredLevel : 'info';
 
 function buildLogger() {
@@ -42,7 +42,7 @@ function buildLogger() {
     },
     level,
   }];
-  if (config.logConsole) {
+  if (config.get('logConsole')) {
     targets.push({ target: 'pino/file', options: { destination: 1 }, level });
   }
   return pino(options, pino.transport({ targets }));

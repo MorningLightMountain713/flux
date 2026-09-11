@@ -80,7 +80,7 @@ class ConfigManager {
     // eslint-disable-next-line global-require
     const config = require('config');
     if (initial.apiport !== undefined && initial.apiport !== ''
-      && !config.server.allowedPorts.includes(Number(initial.apiport))) {
+      && !config.get('server.allowedPorts').includes(Number(initial.apiport))) {
       return `initial.apiport ${initial.apiport} is not an allowed port`;
     }
 

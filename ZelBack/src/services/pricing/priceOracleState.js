@@ -45,14 +45,14 @@ async function rebuildPriceOracleState() {
   marketplacePricingHistory = new MarketplacePricingHistory();
 
   const db = dbHelper.databaseConnection();
-  const database = db.db(config.database.chainparams.database);
+  const database = db.db(config.get('database.chainparams.database'));
 
   const projection = { projection: { _id: 0 } };
 
   // OracleKeyHistory must rebuild BEFORE RateMessageHistory
   // (future: rate validation may depend on oracle key resolution)
   const oracleKeyDocs = await dbHelper.findInDatabase(
-    database, config.database.chainparams.collections.oracleKeyMessages,
+    database, config.get('database.chainparams.collections.oracleKeyMessages'),
     {}, projection,
   );
   inChainOrder(oracleKeyDocs, 'oracleKeyMessages');
@@ -62,7 +62,7 @@ async function rebuildPriceOracleState() {
   }
 
   const priceDocs = await dbHelper.findInDatabase(
-    database, config.database.chainparams.collections.priceMessages,
+    database, config.get('database.chainparams.collections.priceMessages'),
     {}, projection,
   );
   inChainOrder(priceDocs, 'priceMessages');
@@ -71,7 +71,7 @@ async function rebuildPriceOracleState() {
   }
 
   const rateDocs = await dbHelper.findInDatabase(
-    database, config.database.chainparams.collections.rateMessages,
+    database, config.get('database.chainparams.collections.rateMessages'),
     {}, projection,
   );
   inChainOrder(rateDocs, 'rateMessages');
@@ -80,7 +80,7 @@ async function rebuildPriceOracleState() {
   }
 
   const modifierDocs = await dbHelper.findInDatabase(
-    database, config.database.chainparams.collections.priceModifierMessages,
+    database, config.get('database.chainparams.collections.priceModifierMessages'),
     {}, projection,
   );
   inChainOrder(modifierDocs, 'priceModifierMessages');
@@ -89,7 +89,7 @@ async function rebuildPriceOracleState() {
   }
 
   const marketplaceDocs = await dbHelper.findInDatabase(
-    database, config.database.chainparams.collections.marketplacePricingMessages,
+    database, config.get('database.chainparams.collections.marketplacePricingMessages'),
     {}, projection,
   );
   inChainOrder(marketplaceDocs, 'marketplacePricingMessages');

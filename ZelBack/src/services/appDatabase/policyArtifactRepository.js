@@ -14,7 +14,7 @@ const log = require('../../lib/log');
 // Bytes go to the bucket; the etag and the id of the stored file go to the ordinary
 // policyDocuments row, so there is one place to look for "what do we have and how fresh".
 const BUCKET_NAME = 'policyartifacts';
-const policyDocumentsCollection = config.database.local.collections.policyDocuments;
+const policyDocumentsCollection = config.get('database.local.collections.policyDocuments');
 
 /** Lower-case hex sha256, the form the signed bundle names artifacts by. */
 function sha256Hex(bytes) {
@@ -23,7 +23,7 @@ function sha256Hex(bytes) {
 
 function db() {
   const connection = dbHelper.databaseConnection();
-  return connection ? connection.db(config.database.local.database) : null;
+  return connection ? connection.db(config.get('database.local.database')) : null;
 }
 
 function bucket(database) {

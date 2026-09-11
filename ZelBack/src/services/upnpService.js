@@ -30,8 +30,8 @@ let client = null;
  */
 function getClient() {
   if (client) return client;
-  client = config.upnp.gatewayUrl
-    ? new natUpnp.Client({ url: config.upnp.gatewayUrl, localAddress: config.upnp.nodeIp || '127.0.0.1' })
+  client = config.get('upnp.gatewayUrl')
+    ? new natUpnp.Client({ url: config.get('upnp.gatewayUrl'), localAddress: config.get('upnp.nodeIp') || '127.0.0.1' })
     : new natUpnp.Client({ cacheGateway: true });
   return client;
 }
@@ -259,7 +259,7 @@ function isUPNP() {
   const { initial } = globalThis.userconfig;
   if (typeof initial.upnp === 'boolean') return initial.upnp;
   return Boolean(
-    (initial.apiport && Number(initial.apiport) !== config.server.apiport) || initial.routerIP,
+    (initial.apiport && Number(initial.apiport) !== config.get('server.apiport')) || initial.routerIP,
   );
 }
 
@@ -285,7 +285,7 @@ async function adjustFirewallForUPNP() {
         const rules = [
           ['prepend', 'allow', 'from', routerIP, 'port', '1900', 'to', 'any', 'proto', 'udp'],
           ['prepend', 'allow', 'from', routerIP, 'to', 'any', 'proto', 'udp'],
-          ...config.server.allowedPorts.flatMap((port) => [
+          ...config.get('server.allowedPorts').flatMap((port) => [
             ['prepend', 'allow', 'in', 'proto', 'tcp', 'from', 'any', 'to', routerIP, 'port', String(port)],
             ['prepend', 'allow', 'in', 'proto', 'udp', 'from', 'any', 'to', routerIP, 'port', String(port)],
           ]),
@@ -311,7 +311,7 @@ async function adjustFirewallForUPNP() {
  * @param {number} apiport Port number.
  * @returns {Promise<boolean>} True if port mappings can be set. Otherwise false.
  */
-async function verifyUPNPsupport(apiport = config.server.apiport) {
+async function verifyUPNPsupport(apiport = config.get('server.apiport')) {
   try {
     if (userconfig.initial.routerIP) {
       await adjustFirewallForUPNP();
@@ -439,7 +439,7 @@ async function reconcileFluxadmMapping(apiport) {
  * @param {number} apiport Port number.
  * @returns {Promise<boolean>} True if port mappings can be set. Otherwise false.
  */
-async function setupUPNP(apiport = config.server.apiport) {
+async function setupUPNP(apiport = config.get('server.apiport')) {
   try {
     const corePortMappings = [
       [+apiport, 'Flux_Backend_API'],

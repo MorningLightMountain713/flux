@@ -57,7 +57,7 @@ const { HostCertificateAction } = meshCertificates;
 // all of DNS. Google before Cloudflare: it forwards EDNS client subnet, so
 // CDN names keep geo-steering in exactly the scenario the fallbacks serve.
 const MESH_DNS_SERVERS = Object.freeze([
-  config.server.fluxDnsdServiceAddress ?? '169.254.43.53', '8.8.8.8', '1.1.1.1',
+  config.get('server.fluxDnsdServiceAddress'), '8.8.8.8', '1.1.1.1',
 ]);
 
 // The mesh DNS zone flux-dnsd serves. Member FQDNs are

@@ -1133,7 +1133,7 @@ function getRouterIP(req, res) {
  */
 function getAPIPort(req, res) {
   const { userconfig } = globalThis;
-  const apiport = userconfig.initial.apiport || config.server.apiport;
+  const apiport = userconfig.initial.apiport || config.get('server.apiport');
   const message = messageHelper.createDataMessage(apiport);
   return res ? res.json(message) : message;
 }
@@ -1177,9 +1177,9 @@ function getEnterpriseAppOwners(req, res) {
 function getMarketplaceURL(req, res) {
   const { userconfig } = globalThis;
   const development = userconfig.initial.development || false;
-  let marketPlaceUrl = `${config.stats.baseUrl}/marketplace/listapps`;
+  let marketPlaceUrl = `${config.get('stats.baseUrl')}/marketplace/listapps`;
   if (development) {
-    marketPlaceUrl = `${config.stats.baseUrl}/marketplace/listdevapps`;
+    marketPlaceUrl = `${config.get('stats.baseUrl')}/marketplace/listdevapps`;
   }
   const message = messageHelper.createDataMessage(marketPlaceUrl);
   return res ? res.json(message) : message;
@@ -2081,7 +2081,7 @@ async function streamChainPreparation(req, res) {
     // blocks to finish. Both bounds come from fluxd and are configured rather than
     // written here, because they moved at the PON upgrade and this check did not.
     const blocksSinceConfirmed = blockCount - fluxNodeInfo.last_confirmed_height;
-    const opensIn = config.confirmation.confirmWindowOpensBlocks - blocksSinceConfirmed;
+    const opensIn = config.get('confirmation.confirmWindowOpensBlocks') - blocksSinceConfirmed;
 
     if (fluxNodeInfo.status === 'CONFIRMED' && fluxNodeInfo.last_confirmed_height > 0
       && opensIn < MAINTENANCE_MARGIN_BLOCKS) {

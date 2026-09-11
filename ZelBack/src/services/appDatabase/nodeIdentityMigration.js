@@ -5,13 +5,13 @@ const dbHelper = require('../dbHelper');
 const nodeIdentityRepository = require('./nodeIdentityRepository');
 const log = require('../../lib/log');
 
-const nodeIdentityCollection = config.database.local.collections.nodeIdentity;
+const nodeIdentityCollection = config.get('database.local.collections.nodeIdentity');
 const MIGRATION_KEY = 'configMigration';
 const MIGRATION_VERSION = 1;
 
 function db() {
   const connection = dbHelper.databaseConnection();
-  return connection ? connection.db(config.database.local.database) : null;
+  return connection ? connection.db(config.get('database.local.database')) : null;
 }
 
 /**

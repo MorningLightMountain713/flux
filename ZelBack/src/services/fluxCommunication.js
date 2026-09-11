@@ -104,7 +104,13 @@ async function handleAppMessages(message, fromIP, port) {
     schedulePromotion(storeResult.promotion);
     if (storeResult.rebroadcast) {
       fluxEventBus.publish('network:appmessage', { hash: message.data.hash, type: message.data.type, name: message.data.appSpecifications?.name });
-      announceToPeers(message, `${fromIP}:${port}`);
+      const syncStatus = daemonServiceMiscRpcs.isDaemonSynced();
+      const daemonHeight = syncStatus.data.height || 0;
+      if (daemonHeight >= config.get('messagesBroadcastRefactorStart')) {
+        peerManager.broadcastHash(hash(message.data), `${fromIP}:${port}`);
+      } else {
+        fluxCommunicationMessagesSender.relay(serviceHelper.ensureString(message), `${fromIP}:${port}`);
+      }
     }
   } catch (error) {
     log.error(error);
@@ -633,7 +639,13 @@ async function handleAppInstallingMessage(message, fromIP, port) {
     const currentTimeStamp = Date.now();
     const timestampOK = fluxCommunicationUtils.verifyTimestampInFluxBroadcast(message, currentTimeStamp);
     if (rebroadcastToPeers === true && timestampOK) {
-      announceToPeers(message, `${fromIP}:${port}`);
+      const syncStatus = daemonServiceMiscRpcs.isDaemonSynced();
+      const daemonHeight = syncStatus.data.height || 0;
+      if (daemonHeight >= config.get('messagesBroadcastRefactorStart')) {
+        peerManager.broadcastHash(hash(message.data), `${fromIP}:${port}`);
+      } else {
+        fluxCommunicationMessagesSender.relay(serviceHelper.ensureString(message), `${fromIP}:${port}`);
+      }
     }
   } catch (error) {
     log.error(error);
@@ -656,7 +668,13 @@ async function handleAppInstallingErrorMessage(message, fromIP, port) {
     const currentTimeStamp = Date.now();
     const timestampOK = fluxCommunicationUtils.verifyTimestampInFluxBroadcast(message, currentTimeStamp);
     if (rebroadcastToPeers === true && timestampOK) {
-      announceToPeers(message, `${fromIP}:${port}`);
+      const syncStatus = daemonServiceMiscRpcs.isDaemonSynced();
+      const daemonHeight = syncStatus.data.height || 0;
+      if (daemonHeight >= config.get('messagesBroadcastRefactorStart')) {
+        peerManager.broadcastHash(hash(message.data), `${fromIP}:${port}`);
+      } else {
+        fluxCommunicationMessagesSender.relay(serviceHelper.ensureString(message), `${fromIP}:${port}`);
+      }
     }
   } catch (error) {
     log.error(error);
@@ -955,7 +973,7 @@ async function handleGrantGenerationMessage(message, fromIP, port) {
 
     const syncStatus = daemonServiceMiscRpcs.isDaemonSynced();
     const daemonHeight = syncStatus.data.height || 0;
-    if (daemonHeight >= config.messagesBroadcastRefactorStart) {
+    if (daemonHeight >= config.get('messagesBroadcastRefactorStart')) {
       peerManager.broadcastHash(hash(message.data), `${fromIP}:${port}`);
     } else {
       fluxCommunicationMessagesSender.relay(serviceHelper.ensureString(message), `${fromIP}:${port}`);
@@ -992,7 +1010,7 @@ async function handleMasterleaseMessage(message, fromIP, port, announcer) {
 
     const syncStatus = daemonServiceMiscRpcs.isDaemonSynced();
     const daemonHeight = syncStatus.data.height || 0;
-    if (daemonHeight >= config.messagesBroadcastRefactorStart) {
+    if (daemonHeight >= config.get('messagesBroadcastRefactorStart')) {
       peerManager.broadcastHash(hash(message.data), `${fromIP}:${port}`);
     } else {
       fluxCommunicationMessagesSender.relay(serviceHelper.ensureString(message), `${fromIP}:${port}`);
@@ -1025,7 +1043,7 @@ async function handleNodeDownMessage(message, fromIP, port) {
 
     const syncStatus = daemonServiceMiscRpcs.isDaemonSynced();
     const daemonHeight = syncStatus.data.height || 0;
-    if (daemonHeight >= config.messagesBroadcastRefactorStart) {
+    if (daemonHeight >= config.get('messagesBroadcastRefactorStart')) {
       peerManager.broadcastHash(hash(message.data), `${fromIP}:${port}`);
     } else {
       fluxCommunicationMessagesSender.relay(serviceHelper.ensureString(message), `${fromIP}:${port}`);
@@ -1549,7 +1567,7 @@ function keepConnectionsAlive() {
   peerManager.networkHealthMonitor = networkHealthMonitor;
   setInterval(() => {
     peerManager.pingAll();
-  }, config.peers.wsPingIntervalMs ?? 15000);
+  }, config.get('peers.wsPingIntervalMs'));
 }
 
 /**

@@ -8,7 +8,7 @@ const config = require('config');
 const DEVICE_ID_REQUEST_TIMEOUT_MS = 5000;
 // Tunable for tests via config.syncthing (see ZelBack/config/default.js); the
 // literal is the production default when the key is absent.
-const MONITOR_INTERVAL_MS = config.syncthing.monitorIntervalMs ?? 30 * 1000; // 30 seconds
+const MONITOR_INTERVAL_MS = config.get('syncthing.monitorIntervalMs'); // 30 seconds
 const OPERATION_DELAY_MS = 500;
 const ERROR_RETRY_DELAY_MS = 5 * 1000; // 5 seconds
 const SYNC_STATE_LOG_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
@@ -26,10 +26,10 @@ const SYNCTHING_MAX_CONFLICTS = 0;
 //   STALL_REMOVE_MIN_NUDGES nudges over at least STALL_REMOVE_MIN_WINDOW_MS with
 //   zero progress AND a connected synced peer holding the data.
 // Tunable for tests via config.syncthing; literals are the production defaults.
-const STALL_NUDGE_AFTER_MS = config.syncthing.stallNudgeAfterMs ?? 3 * 60 * 1000;
-const STALL_NUDGE_MAX_INTERVAL_MS = config.syncthing.stallNudgeMaxIntervalMs ?? 15 * 60 * 1000;
-const STALL_REMOVE_MIN_WINDOW_MS = config.syncthing.stallRemoveMinWindowMs ?? 20 * 60 * 1000;
-const STALL_REMOVE_MIN_NUDGES = config.syncthing.stallRemoveMinNudges ?? 3;
+const STALL_NUDGE_AFTER_MS = config.get('syncthing.stallNudgeAfterMs');
+const STALL_NUDGE_MAX_INTERVAL_MS = config.get('syncthing.stallNudgeMaxIntervalMs');
+const STALL_REMOVE_MIN_WINDOW_MS = config.get('syncthing.stallRemoveMinWindowMs');
+const STALL_REMOVE_MIN_NUDGES = config.get('syncthing.stallRemoveMinNudges');
 
 // Folder states in which syncthing is actively working: flat bytes are healthy
 // here (e.g. a long sync-preparing phase on a large folder)
@@ -39,13 +39,13 @@ const CLOCK_SKEW_TOLERANCE_MS = 5000; // 5 seconds tolerance for timestamp compa
 // Consecutive cycles a node must observe itself as the designated leader before
 // acting on it, so a single transient drop of a peer's running-location doesn't
 // flip a follower into self-promoting (and starting the app). Tunable for tests.
-const LEADER_CONFIRM_COUNT = config.syncthing.leaderConfirmCount ?? 2;
+const LEADER_CONFIRM_COUNT = config.get('syncthing').leaderConfirmCount ?? 2;
 
 // Edge-accelerator pacing: event bursts coalesce for the debounce window, and
 // early runs keep a minimum gap from the last completed pass so a continuous
 // event stream cannot drive back-to-back full passes. Tunable for tests.
-const EARLY_EVAL_DEBOUNCE_MS = config.syncthing.earlyEvalDebounceMs ?? 2 * 1000;
-const EARLY_EVAL_MIN_GAP_MS = config.syncthing.earlyEvalMinGapMs ?? 10 * 1000;
+const EARLY_EVAL_DEBOUNCE_MS = config.get('syncthing').earlyEvalDebounceMs ?? 2 * 1000;
+const EARLY_EVAL_MIN_GAP_MS = config.get('syncthing').earlyEvalMinGapMs ?? 10 * 1000;
 
 // Sync completion thresholds
 const SYNC_COMPLETE_PERCENTAGE = 100;

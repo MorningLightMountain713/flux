@@ -447,7 +447,7 @@ async function forEachLimited(items, limit, task) {
  * @param {string} port Port. Defaults to config.server.apiport.
  * @returns {Promise<boolean>} False unless FluxOS version meets or exceeds the minimum allowed version.
  */
-async function isFluxAvailable(ip, port = config.server.apiport) {
+async function isFluxAvailable(ip, port = config.get('server.apiport')) {
   const axiosConfig = {
     timeout: 5000,
   };
@@ -457,7 +457,7 @@ async function isFluxAvailable(ip, port = config.server.apiport) {
     if (!ipchars.test(ip)) {
       throw new Error('Invalid IP');
     }
-    if (!config.server.allowedPorts.includes(+port)) {
+    if (!config.get('server.allowedPorts').includes(+port)) {
       throw new Error('Invalid Port');
     }
     const socketAddress = normalizeSocketAddress(`${ip}:${port}`);
@@ -469,7 +469,7 @@ async function isFluxAvailable(ip, port = config.server.apiport) {
     if (fluxResponse.data.status !== 'success') return false;
 
     const fluxVersion = fluxResponse.data.data;
-    const versionMinOK = serviceHelper.semverAtLeast(fluxVersion, config.minimumFluxOSAllowedVersion);
+    const versionMinOK = serviceHelper.semverAtLeast(fluxVersion, config.get('minimumFluxOSAllowedVersion'));
     if (!versionMinOK) return false;
 
     const homePort = +port - 1;
@@ -1392,7 +1392,7 @@ function releaseDosOwnedBy(owns) {
  */
 async function checkFluxbenchVersionAllowed() {
   if (storedFluxBenchAllowed) {
-    const versionOK = serviceHelper.semverAtLeast(storedFluxBenchAllowed, config.minimumFluxBenchAllowedVersion);
+    const versionOK = serviceHelper.semverAtLeast(storedFluxBenchAllowed, config.get('minimumFluxBenchAllowedVersion'));
     if (versionOK) releaseDosOwnedBy((message) => message.startsWith(FLUXBENCH_VERSION_MESSAGE_PREFIX));
     return versionOK;
   }
@@ -1402,13 +1402,13 @@ async function checkFluxbenchVersionAllowed() {
       const benchmarkVersion = benchmarkInfoResponse.data.version;
       log.info(`Running benchmark version: ${benchmarkVersion}`);
       setStoredFluxBenchAllowed(benchmarkVersion);
-      const versionOK = serviceHelper.semverAtLeast(benchmarkVersion, config.minimumFluxBenchAllowedVersion);
+      const versionOK = serviceHelper.semverAtLeast(benchmarkVersion, config.get('minimumFluxBenchAllowedVersion'));
       if (versionOK) {
         releaseDosOwnedBy((message) => message.startsWith(FLUXBENCH_VERSION_MESSAGE_PREFIX));
         return true;
       }
       nodeDosState.addDosState(11);
-      nodeDosState.setDosMessage(`Fluxbench Version Error. Current lower version allowed is v${config.minimumFluxBenchAllowedVersion} found v${benchmarkVersion}`);
+      nodeDosState.setDosMessage(`Fluxbench Version Error. Current lower version allowed is v${config.get('minimumFluxBenchAllowedVersion')} found v${benchmarkVersion}`);
       log.error(nodeDosState.getRawDosMessage());
       return false;
     }
@@ -2535,7 +2535,7 @@ async function removeDockerContainerAccessToNonRoutable(fluxNetworkInterfaces) {
 async function allowDockerNetworksToFluxDnsd() {
   if (!await ufw.ufwEnabled()) return;
 
-  const { fluxDnsdServiceAddress } = config.server;
+  const { fluxDnsdServiceAddress } = config.get('server');
   // eslint-disable-next-line no-restricted-syntax
   for (const proto of ['udp', 'tcp']) {
     // eslint-disable-next-line no-await-in-loop

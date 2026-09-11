@@ -238,7 +238,7 @@ async function cleanupOwnershipViolations() {
   const allowedOwners = getCachedAllowedOwnersForNode() || [];
 
   const db = dbHelper.databaseConnection();
-  const appsDatabase = db.db(config.database.appslocal.database);
+  const appsDatabase = db.db(config.get('database.appslocal.database'));
   const projection = { projection: { _id: 0, name: 1, owner: 1 } };
   const apps = await dbHelper.findInDatabase(
     appsDatabase,

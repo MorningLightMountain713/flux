@@ -1341,7 +1341,7 @@ class AppSyncOrchestrator {
 
       let currentBootId = null;
       try {
-        const bootIdPath = config.system.bootIdPath ?? '/proc/sys/kernel/random/boot_id';
+        const bootIdPath = config.get('system.bootIdPath');
         currentBootId = (await fs.readFile(bootIdPath, 'utf8')).trim();
       } catch (err) {
         log.warn(`Failed to read boot_id: ${err.message}, assuming machine rebooted`);
@@ -1388,7 +1388,7 @@ class AppSyncOrchestrator {
     };
     this.#own(this.#clearShutdownReason());
     writeHeartbeat();
-    this.#heartbeatInterval = setInterval(writeHeartbeat, config.system.heartbeatIntervalMs ?? 30000);
+    this.#heartbeatInterval = setInterval(writeHeartbeat, config.get('system.heartbeatIntervalMs'));
   }
 
   static async writeShutdownReason(reason) {

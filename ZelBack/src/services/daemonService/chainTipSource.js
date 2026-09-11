@@ -35,7 +35,7 @@ function scheduleHeaderRefresh() {
     headerTimer = null;
     await refreshAuthoritative('scheduled');
     scheduleHeaderRefresh();
-  }, config.daemon.subscriptions.headerRefreshIntervalMs);
+  }, config.get('daemon.subscriptions.headerRefreshIntervalMs'));
 }
 
 /**

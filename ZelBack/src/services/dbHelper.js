@@ -14,7 +14,7 @@ const { withRegistryWrite } = require('./appDatabase/registryWriteLock');
 const appMessageChain = require('./utils/appMessageChain');
 
 const { MongoClient } = mongodb;
-const mongoUrl = `mongodb://${config.database.url}:${config.database.port}/`;
+const mongoUrl = `mongodb://${config.get('database.url')}:${config.get('database.port')}/`;
 
 /**
  * @type {mongodb.MongoClient}

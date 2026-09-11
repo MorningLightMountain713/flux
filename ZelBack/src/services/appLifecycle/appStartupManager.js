@@ -36,7 +36,7 @@ const { localAppsInformation, NODE_DOWN_GRACE_MS } = require('../utils/appConsta
 const { parseContainerName } = require('../utils/appUtilities');
 const { untilSucceeds, BOOT_STEP_RETRY_MS } = require('../utils/untilSucceeds');
 
-const SYNC_TIMEOUT_MS = config.system.bootSyncTimeoutMs ?? 300000;
+const SYNC_TIMEOUT_MS = config.get('system.bootSyncTimeoutMs');
 
 /**
  * Await a promise, giving up after a deadline. The timer is cleared however the
@@ -490,7 +490,7 @@ async function manageAppsOnBoot(bootContext) {
     }
 
     // Locations still valid — wait for daemon + sync then reconcile.
-    const DAEMON_TIMEOUT_MS = config.system.bootDaemonTimeoutMs ?? 300000;
+    const DAEMON_TIMEOUT_MS = config.get('system.bootDaemonTimeoutMs');
     try {
       await awaitWithin(globalState.waitForDaemonReady(), DAEMON_TIMEOUT_MS, 'daemon_timeout');
     } catch (error) {

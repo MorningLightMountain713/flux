@@ -153,7 +153,7 @@ async function restoreFluxPortsSupport() {
     const isUPNP = upnpService.isUPNP();
 
     const { userconfig } = globalThis;
-    const apiPort = userconfig.initial.apiport || config.server.apiport;
+    const apiPort = userconfig.initial.apiport || config.get('server.apiport');
     const homePort = +apiPort - 1;
     const apiPortSSL = +apiPort + 1;
     const syncthingPort = +apiPort + 2;
@@ -1302,7 +1302,7 @@ async function checkInstallingAppPortAvailable(portsToTest = [], appName = '') {
 async function callOtherNodeToKeepUpnpPortsOpen() {
   try {
     const { userconfig } = globalThis;
-    const apiPort = userconfig.initial.apiport || config.server.apiport;
+    const apiPort = userconfig.initial.apiport || config.get('server.apiport');
     const localSocketAddr = await fluxNetworkHelper.getLocalSocketAddress();
     if (!localSocketAddr) {
       return;

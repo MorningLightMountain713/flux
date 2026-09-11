@@ -78,7 +78,7 @@ const TURN_MS = config.fluxapps.residentialTurnMs;
 // about four hours; there is no deadline here and slower is strictly safer.
 const EVACUATION_INTERVAL_MS = config.get('fluxapps.residentialEvacuationIntervalMs');
 
-const startupCollection = config.database.local.collections.nodeStartupTracker;
+const startupCollection = config.get('database.local.collections.nodeStartupTracker');
 const SETTLE_MARKER_KEY = 'residentialDos';
 
 let timerHandle = null;
@@ -240,7 +240,7 @@ async function isResidential() {
 async function getSettleMarker() {
   const db = dbHelper.databaseConnection();
   if (!db) throw new Error('no database connection');
-  const database = db.db(config.database.local.database);
+  const database = db.db(config.get('database.local.database'));
   const marker = await dbHelper.findOneInDatabase(database, startupCollection, { _id: SETTLE_MARKER_KEY });
   return marker || null;
 }
@@ -323,7 +323,7 @@ async function noteVerdictConfirmed(now) {
   try {
     const db = dbHelper.databaseConnection();
     if (!db) return null;
-    const database = db.db(config.database.local.database);
+    const database = db.db(config.get('database.local.database'));
     await dbHelper.findOneAndUpdateInDatabase(
       database,
       startupCollection,
@@ -358,7 +358,7 @@ async function clearSettleMarker() {
   try {
     const db = dbHelper.databaseConnection();
     if (!db) throw new Error('no database connection');
-    const database = db.db(config.database.local.database);
+    const database = db.db(config.get('database.local.database'));
     await dbHelper.findOneAndDeleteInDatabase(database, startupCollection, { _id: SETTLE_MARKER_KEY }, {});
     settleMarkerUncleared = false;
     unpersistedEvacuationAt = null;
@@ -552,7 +552,7 @@ async function persistLastEvacuationAt(now) {
   try {
     const db = dbHelper.databaseConnection();
     if (!db) throw new Error('no database connection');
-    const database = db.db(config.database.local.database);
+    const database = db.db(config.get('database.local.database'));
     await dbHelper.findOneAndUpdateInDatabase(
       database,
       startupCollection,

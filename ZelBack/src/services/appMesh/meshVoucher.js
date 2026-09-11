@@ -34,7 +34,7 @@ const daemonServiceBlockchainRpcs = require('../daemonService/daemonServiceBlock
  * environment at a different keypair; production uses the constant.
  */
 const DEFAULT_MESH_ATTESTATION_PUBKEY = 'B15YMLgv8ozC3cWXPmNySiu0DuEjMVzX5qh3UYspfXE=';
-const MESH_ATTESTATION_PUBKEY = (config.arcane && config.arcane.meshAttestationPubkey)
+const MESH_ATTESTATION_PUBKEY = (config.get('arcane') && config.get('arcane').meshAttestationPubkey)
   ?? DEFAULT_MESH_ATTESTATION_PUBKEY;
 
 // Public domain separator; the signer prepends it server-side, verifiers
