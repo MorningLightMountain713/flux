@@ -272,7 +272,7 @@ class AppSyncOrchestrator {
       log.info(`AppSyncOrchestrator - Peer threshold reached (${count} peers)`);
       this.#peersAtFloor = true;
       this.#floorAttainedThisEpoch = true;
-      this.#onPeersReady();
+      this.#own(this.#onPeersReady());
     };
     this.#peersBelowHandler = (count) => {
       log.info(`AppSyncOrchestrator - Peers below threshold (${count} peers)`);
@@ -281,7 +281,7 @@ class AppSyncOrchestrator {
       // (raced the subscription or the startup seed).
       this.#floorAttainedThisEpoch = true;
       this.#peersAtFloor = false;
-      this.#evaluate();
+      this.#own(this.#evaluate());
     };
     // A CONNECTION ENDING is the announcement, not the manager's opinion about
     // whether a sync was riding on it. `syncPeerLost` was that opinion, read off
@@ -296,7 +296,7 @@ class AppSyncOrchestrator {
     // too small to fill when it opened. The peer threshold is an edge and fires
     // once, so without this a part-filled pool stays part-filled however many
     // peers arrive afterwards.
-    this.#peerConnectedHandler = () => this.#topUpSyncPeers();
+    this.#peerConnectedHandler = () => this.#own(this.#onPeersReady());
     this.#syncPeersAvailableHandler = () => this.#onSyncPeersAvailable();
     this.#peerReestablishedHandler = (info) => {
       this.#onPeerReestablished(info).catch((error) => {
@@ -360,7 +360,7 @@ class AppSyncOrchestrator {
     // The floor may already be attained here (live edge during the
     // network-state wait, or the latched-level check above), so always attempt
     // the start.
-    this.#onPeersReady();
+    this.#own(this.#onPeersReady());
   }
 
   /**
@@ -486,7 +486,7 @@ class AppSyncOrchestrator {
         appinstalling: this.#syncCompletions.appinstalling.size,
         apperrors: this.#syncCompletions.apperrors.size,
       });
-      this.#evaluate();
+      this.#own(this.#evaluate());
     }
   }
 
@@ -498,7 +498,7 @@ class AppSyncOrchestrator {
   #onSyncPeersAvailable() {
     if (this.#hashSyncComplete && this.#manifestSyncComplete) return;
     if (this.#state !== STATES.SYNCING && this.#state !== STATES.RESYNCING) return;
-    this.#advanceSync();
+    this.#own(this.#advanceSync());
   }
 
   /**
@@ -623,14 +623,38 @@ class AppSyncOrchestrator {
     this.#askPeersForTypes(peersToAsk, typesNeeded, false);
   }
 
+  /**
+   * OWN THE PROMISE.
+   *
+   * Every trigger this orchestrator has calls a pass and returns - a block
+   * arriving, a peer joining, a peer going, a retry timer - so a throw inside
+   * one is a rejection nobody is holding. node raises those to apiServer's
+   * process handler, and that handler answers by exiting: one reconcile pass
+   * that could not read the peer list takes the node down with it.
+   *
+   * A pass that could not run is a pass that did not run. It is reported, and
+   * the state it was going to change is left exactly as it was - so the next
+   * trigger runs it again, which is what the passes that already return early
+   * depend on.
+   *
+   * @param {Promise<*>} pass
+   */
+  #own(pass) {
+    Promise.resolve(pass).catch((error) => {
+      log.error(`AppSyncOrchestrator - Reconcile pass failed: ${error.message}`);
+    });
+  }
+
   async #onPeersReady() {
     if (!this.#networkReady || !this.#peersAtFloor) return;
     // The transition (DEGRADED -> RESYNCING, or nothing) belongs to the rule
     // table; this handler only wakes the I/O that peers arriving unblocks.
     await this.#evaluate();
 
-    this.#startAppRunningBroadcast();
-    this.#requestSyncs();
+    this.#own(this.#startAppRunningBroadcast());
+    // Awaited, so a failure inside it is this pass's failure and not an
+    // orphaned rejection thrown after the pass has already returned.
+    await this.#requestSyncs();
 
     // Peers arriving is also a wake-up for the permanent-plane syncs: on boot the
     // manifest round may have run before discovery connected anyone (nothing to
@@ -833,18 +857,18 @@ class AppSyncOrchestrator {
       this.#explorerSynced = true;
       log.info(`AppSyncOrchestrator - Explorer synced at block ${blockHeight}`);
       if (this.#state === STATES.INITIALIZING) {
-        this.#evaluate();
-        this.#advanceSync();
+        this.#own(this.#evaluate());
+        this.#own(this.#advanceSync());
         advanced = true;
       }
     }
     if (this.#state === STATES.SYNCING || this.#state === STATES.READY || this.#state === STATES.RESYNCING) {
       this.#blocksSinceSyncStarted += count;
       this.#superviseStateSync();
-      this.#evaluate();
-      this.#checkHashRetry(blockHeight);
-      this.#checkManifestRefresh(blockHeight);
-      this.#checkIngressRefresh(blockHeight);
+      this.#own(this.#evaluate());
+      this.#own(this.#checkHashRetry(blockHeight));
+      this.#own(this.#checkManifestRefresh(blockHeight));
+      this.#own(this.#checkIngressRefresh(blockHeight));
       // A permanent-plane step that has not latched gets another go on the next
       // block. Its own wake-ups are edges — peers crossing the threshold, peers
       // becoming askable — and a round that reached peers and simply got no index
@@ -857,7 +881,7 @@ class AppSyncOrchestrator {
       if (!advanced
         && (this.#state === STATES.SYNCING || this.#state === STATES.RESYNCING)
         && (!this.#hashSyncComplete || !this.#manifestSyncComplete)) {
-        this.#advanceSync();
+        this.#own(this.#advanceSync());
       }
     }
   }
@@ -912,7 +936,7 @@ class AppSyncOrchestrator {
     }
     // Both permanent-plane steps already converged — nothing to run, just re-evaluate.
     if (this.#hashSyncComplete && this.#manifestSyncComplete) {
-      this.#evaluate();
+      this.#own(this.#evaluate());
       return;
     }
     log.info('AppSyncOrchestrator - Sync started');
@@ -923,7 +947,7 @@ class AppSyncOrchestrator {
     await this.#runManifestSync();
     // Best-effort, never gates readiness — attribution metadata, not operational state.
     await this.#runIngressSync();
-    this.#evaluate();
+    this.#own(this.#evaluate());
   }
 
   async #checkVersionUpgrade() {
@@ -972,7 +996,7 @@ class AppSyncOrchestrator {
         log.info(`AppSyncOrchestrator - Scheduling hash sync retry in ${HASH_SYNC_RETRY_MS / 1000}s`);
         this.#hashSyncRetryTimer = setTimeout(() => {
           this.#hashSyncRetryTimer = null;
-          this.#runHashSync().then(() => this.#evaluate());
+          this.#own(this.#runHashSync().then(() => this.#evaluate()));
         }, HASH_SYNC_RETRY_MS);
       } else {
         log.warn('AppSyncOrchestrator - Hash sync retries exhausted, falling back to block timer');
@@ -1283,7 +1307,7 @@ class AppSyncOrchestrator {
       // hash is unfinished: on a peers-first recovery the RESYNCING pass completes
       // the hash sync but leaves the manifest un-reconciled, and keying the retry on
       // #hashSyncComplete alone would skip it forever.
-      this.#advanceSync();
+      this.#own(this.#advanceSync());
       // Reconnect credits stashed while incapable are spent now - the heal's
       // reconnection wave lands while the healed side's chain is still
       // catching up, before capability returns.
@@ -1292,7 +1316,7 @@ class AppSyncOrchestrator {
       });
     } else {
       log.info('AppSyncOrchestrator - Message capability lost');
-      this.#evaluate();
+      this.#own(this.#evaluate());
     }
   }
 
@@ -1366,7 +1390,7 @@ class AppSyncOrchestrator {
         log.error(`Heartbeat write failed: ${error.message}`);
       }
     };
-    this.#clearShutdownReason();
+    this.#own(this.#clearShutdownReason());
     writeHeartbeat();
     this.#heartbeatInterval = setInterval(writeHeartbeat, config.system.heartbeatIntervalMs ?? 30000);
   }

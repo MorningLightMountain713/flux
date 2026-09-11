@@ -803,15 +803,21 @@ describe('AppSyncOrchestrator', () => {
     // already return early rely on too.
     it('asks again on the next trigger after a pass has failed', async () => {
       const peers = makeEligiblePeers(3);
-      getEligibleSyncPeersStub = sinon.stub();
-      getEligibleSyncPeersStub.onFirstCall().throws(new Error('the peer list is unavailable'));
-      getEligibleSyncPeersStub.returns(peers);
+      // By state, not by call index. Several planes ask for peers in a pass and
+      // the ephemeral request is not always the first of them, so onFirstCall
+      // pins which plane fails rather than that the pass failed.
+      let peerListAvailable = false;
+      getEligibleSyncPeersStub = sinon.stub().callsFake(() => {
+        if (!peerListAvailable) throw new Error('the peer list is unavailable');
+        return peers;
+      });
 
       const orchestrator = makeOrchestrator();
       await driveToThreshold(orchestrator);
 
       expect(peers.some((p) => p.send.called), 'a pass that threw still sent requests').to.equal(false);
 
+      peerListAvailable = true;
       peerEmitter.emit('peerConnected', peers[0].key, 99);
       await clock.tickAsync(0);
 
