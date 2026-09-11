@@ -113,9 +113,14 @@ async function verifyManifest(manifest, ctx, deps = {}) {
   // decrypted one can arrive — and it has no createProvider, so the old test
   // would have thrown `spec.createProvider is not a function` rather than
   // recognising a spec it can already read.
+  //
+  // The provider is the SPEC's own. It is not accepted from the caller, unlike
+  // the sibling functions here that take `deps.provider` — theirs is the app
+  // secret provider, a different key for a different envelope, and one name for
+  // both on one module is how the wrong one gets passed in good faith. Nothing
+  // ever supplied it here.
   if (spec.sealed) {
-    const provider = deps.provider || await spec.createProvider();
-    spec = await spec.decrypt(provider);
+    spec = await spec.decrypt(await spec.createProvider());
   }
 
   assertValidContentManifest(manifest);
