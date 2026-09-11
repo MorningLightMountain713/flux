@@ -59,17 +59,30 @@ const BLOCKS_PER_MINUTE = 2;
 // request, which is this tree's shape and the one that cannot leak a timer.
 // That costs granularity - a deadline is noticed at the next block, so ~30s -
 // and the constraint above still holds at that resolution.
+// The ephemeral sync streams — each gates boot readiness, temp messages
+// included. A node that starts placing apps while blind to the registrations
+// already in flight is making its decisions on a view it knows is short, and
+// the peer that would have told it was asked and never waited for.
+//
+// The content manifest is NOT here: it is permanent data reconciled on its own
+// plane (a two-step in-band exchange via contentManifestSyncService) and gated
+// by #manifestSyncComplete, parallel to the permanent-message hash sync.
+//
+// Order is the order they go out on the wire.
+const SYNC_TYPES = Object.freeze(['apptemp', 'apprunning', 'appinstalling', 'apperrors']);
+
 /**
  * A fresh record of WHICH peers have answered which stream.
  *
  * One place, because the tally is built twice - at construction and again
  * whenever a sync starts over - and a stream present in one copy and not the
- * other reads as a stream nobody has answered, forever.
+ * other reads as a stream nobody has answered, forever. Built FROM SYNC_TYPES
+ * rather than listed again, for the same reason.
  *
- * @returns {{apprunning: Set<string>, appinstalling: Set<string>, apperrors: Set<string>}}
+ * @returns {{[syncType: string]: Set<string>}}
  */
 function freshSyncCompletions() {
-  return { apprunning: new Set(), appinstalling: new Set(), apperrors: new Set() };
+  return Object.fromEntries(SYNC_TYPES.map((type) => [type, new Set()]));
 }
 
 const FIRST_RESPONSE_MS = Math.max(1, Math.floor(SYNC_TIMEOUT_MS / 12));
@@ -107,12 +120,6 @@ const INGRESS_REFRESH_BLOCKS = config.fluxapps.ingressRefreshBlocks ?? 200;
 // publishes in flight either side of the drop.
 const RECONNECT_SYNC_SLACK_MS = config.fluxapps.reconnectSyncSlackMs ?? 120000;
 
-// The counted ephemeral sync types — each gates boot readiness. Temp messages are
-// requested with the initial batch but are best-effort and never counted toward it. The
-// content manifest is NOT here: it is permanent data reconciled on its own plane (a
-// two-step in-band exchange via contentManifestSyncService) and gated by
-// #manifestSyncComplete, parallel to the permanent-message hash sync.
-const SYNC_TYPES = Object.freeze(['apprunning', 'appinstalling', 'apperrors']);
 
 class AppSyncOrchestrator {
   #state = STATES.INITIALIZING;
@@ -473,19 +480,15 @@ class AppSyncOrchestrator {
       completions: this.#syncCompletions[syncType].size,
       required: MIN_SYNC_COMPLETIONS,
     });
-    if (this.#syncCompletions.apprunning.size >= MIN_SYNC_COMPLETIONS
-      && this.#syncCompletions.appinstalling.size >= MIN_SYNC_COMPLETIONS
-      && this.#syncCompletions.apperrors.size >= MIN_SYNC_COMPLETIONS) {
+    if (Object.values(this.#syncCompletions).every((peers) => peers.size >= MIN_SYNC_COMPLETIONS)) {
       this.#stateSyncComplete = true;
       this.#publishStateSyncAuthority();
       this.#clearSyncRequested();
       this.#peerProgress.clear();
       log.info('AppSyncOrchestrator - All state syncs complete');
-      fluxEventBus.publish('ephemeralSync:allComplete', {
-        apprunning: this.#syncCompletions.apprunning.size,
-        appinstalling: this.#syncCompletions.appinstalling.size,
-        apperrors: this.#syncCompletions.apperrors.size,
-      });
+      fluxEventBus.publish('ephemeralSync:allComplete', Object.fromEntries(
+        Object.entries(this.#syncCompletions).map(([type, peers]) => [type, peers.size]),
+      ));
       this.#own(this.#evaluate());
     }
   }
@@ -581,9 +584,7 @@ class AppSyncOrchestrator {
     if (this.#stateSyncComplete || this.#syncRoundAbandoned) return;
     if (this.#askedPeers.size === 0) return;
 
-    const pending = {
-      apprunning: 0, appinstalling: 0, apperrors: 0,
-    };
+    const pending = Object.fromEntries(SYNC_TYPES.map((type) => [type, 0]));
     let anyLivePending = false;
     for (const progress of this.#peerProgress.values()) {
       if (progress.failed) continue;
@@ -620,7 +621,7 @@ class AppSyncOrchestrator {
     const peersToAsk = fresh.slice(0, Math.min(needed, budget));
     const peerKeys = peersToAsk.map((peer) => peer.key).join(', ');
     log.info(`AppSyncOrchestrator - Replacing failed sync peers: asking ${peerKeys} for ${typesNeeded.join(', ')}`);
-    this.#askPeersForTypes(peersToAsk, typesNeeded, false);
+    this.#askPeersForTypes(peersToAsk, typesNeeded);
   }
 
   /**
@@ -690,7 +691,7 @@ class AppSyncOrchestrator {
     }
 
     const peersToAsk = eligible.slice(0, MIN_SYNC_COMPLETIONS);
-    await this.#askPeersForTypes(peersToAsk, SYNC_TYPES, true);
+    await this.#askPeersForTypes(peersToAsk, SYNC_TYPES);
   }
 
   #sendRequests(peers, label, message) {
@@ -712,10 +713,9 @@ class AppSyncOrchestrator {
    * signing fails the registered peers never receive requests; their deadline
    * expiry replaces them.
    * @param {Array<{key: string, send: Function}>} peersToAsk
-   * @param {string[]} types Counted sync types to request
-   * @param {boolean} includeTemp Also request temp messages (initial batch only)
+   * @param {string[]} types the streams to request
    */
-  async #askPeersForTypes(peersToAsk, types, includeTemp) {
+  async #askPeersForTypes(peersToAsk, types) {
     const askedAt = Date.now();
     for (const peer of peersToAsk) {
       this.#askedPeers.add(peer.key);
@@ -748,12 +748,8 @@ class AppSyncOrchestrator {
       return;
     }
 
-    if (includeTemp) {
-      const tempSig = signMsg(peerCodec.MSG_TYPE.REQUEST_TEMP_MESSAGES, 0);
-      this.#sendRequests(peersToAsk, 'temp messages', peerCodec.encodeRequestTempMessages(0, requestTs, pubkey, tempSig));
-    }
-
     const codecs = {
+      apptemp: { msgType: peerCodec.MSG_TYPE.REQUEST_TEMP_MESSAGES, encode: peerCodec.encodeRequestTempMessages },
       apprunning: { msgType: peerCodec.MSG_TYPE.REQUEST_APP_RUNNING, encode: peerCodec.encodeRequestAppRunning },
       appinstalling: { msgType: peerCodec.MSG_TYPE.REQUEST_APP_INSTALLING, encode: peerCodec.encodeRequestAppInstalling },
       apperrors: { msgType: peerCodec.MSG_TYPE.REQUEST_APP_INSTALLING_ERRORS, encode: peerCodec.encodeRequestAppInstallingErrors },

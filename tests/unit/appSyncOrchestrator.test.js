@@ -363,6 +363,7 @@ describe('AppSyncOrchestrator', () => {
         appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_COMPLETE, 'apprunning', `10.0.0.${i + 1}:16127`);
         appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_COMPLETE, 'appinstalling', `10.0.0.${i + 1}:16127`);
         appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_COMPLETE, 'apperrors', `10.0.0.${i + 1}:16127`);
+        appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_COMPLETE, 'apptemp', `10.0.0.${i + 1}:16127`);
       }
       await clock.tickAsync(0);
       expect(orchestrator.state).to.equal(STATES.READY);
@@ -380,6 +381,7 @@ describe('AppSyncOrchestrator', () => {
         appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_COMPLETE, 'apprunning', `10.0.0.${i + 1}:16127`);
         appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_COMPLETE, 'appinstalling', `10.0.0.${i + 1}:16127`);
         appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_COMPLETE, 'apperrors', `10.0.0.${i + 1}:16127`);
+        appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_COMPLETE, 'apptemp', `10.0.0.${i + 1}:16127`);
       }
       await clock.tickAsync(0);
       expect(orchestrator.state).to.equal(STATES.DEGRADED);
@@ -1830,6 +1832,7 @@ describe('AppSyncOrchestrator', () => {
         appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_COMPLETE, 'apprunning', `10.0.0.${i + 1}:16127`);
         appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_COMPLETE, 'appinstalling', `10.0.0.${i + 1}:16127`);
         appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_COMPLETE, 'apperrors', `10.0.0.${i + 1}:16127`);
+        appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_COMPLETE, 'apptemp', `10.0.0.${i + 1}:16127`);
       }
       await clock.tickAsync(0);
 
@@ -1900,6 +1903,7 @@ describe('AppSyncOrchestrator', () => {
         appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_COMPLETE, 'apprunning', `10.0.0.${i + 1}:16127`);
         appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_COMPLETE, 'appinstalling', `10.0.0.${i + 1}:16127`);
         appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_COMPLETE, 'apperrors', `10.0.0.${i + 1}:16127`);
+        appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_COMPLETE, 'apptemp', `10.0.0.${i + 1}:16127`);
       }
       await clock.tickAsync(0);
       expect(orchestrator.state).to.equal(STATES.READY);
@@ -1929,6 +1933,7 @@ describe('AppSyncOrchestrator', () => {
         appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_COMPLETE, 'apprunning', `10.0.0.${i + 1}:16127`);
         appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_COMPLETE, 'appinstalling', `10.0.0.${i + 1}:16127`);
         appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_COMPLETE, 'apperrors', `10.0.0.${i + 1}:16127`);
+        appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_COMPLETE, 'apptemp', `10.0.0.${i + 1}:16127`);
       }
       await clock.tickAsync(0);
     }
@@ -2180,6 +2185,7 @@ describe('AppSyncOrchestrator', () => {
         appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_COMPLETE, 'apprunning', `10.0.0.${i + 1}:16127`);
         appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_COMPLETE, 'appinstalling', `10.0.0.${i + 1}:16127`);
         appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_COMPLETE, 'apperrors', `10.0.0.${i + 1}:16127`);
+        appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_COMPLETE, 'apptemp', `10.0.0.${i + 1}:16127`);
       }
     }
 
@@ -2505,6 +2511,7 @@ describe('AppSyncOrchestrator', () => {
         appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_COMPLETE, 'apprunning', `10.0.0.${i + 1}:16127`);
         appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_COMPLETE, 'appinstalling', `10.0.0.${i + 1}:16127`);
         appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_COMPLETE, 'apperrors', `10.0.0.${i + 1}:16127`);
+        appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_COMPLETE, 'apptemp', `10.0.0.${i + 1}:16127`);
       }
     }
 
@@ -2618,6 +2625,7 @@ describe('AppSyncOrchestrator', () => {
       appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_COMPLETE, 'apprunning', peerKey);
       appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_COMPLETE, 'appinstalling', peerKey);
       appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_COMPLETE, 'apperrors', peerKey);
+      appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_COMPLETE, 'apptemp', peerKey);
     }
 
     beforeEach(() => {
@@ -2636,10 +2644,12 @@ describe('AppSyncOrchestrator', () => {
       await clock.tickAsync(0);
 
       // One replacement peer, asked only for what is still short after the
-      // delivered apprunning completion was banked (appinstalling, apperrors)
-      expect(peers[3].send.callCount).to.equal(2);
+      // delivered apprunning completion was banked: temp, appinstalling,
+      // apperrors. Temp is one of the four streams and the lost peer never
+      // answered it either, so it is short like the rest.
+      expect(peers[3].send.callCount).to.equal(3);
       const sentTypes = peers[3].send.args.map((args) => args[0][0]);
-      expect(sentTypes).to.deep.equal([0x22, 0x23]);
+      expect(sentTypes).to.deep.equal([0x20, 0x22, 0x23]);
       expect(peers[4].send.called).to.be.false;
     });
 
@@ -2660,13 +2670,13 @@ describe('AppSyncOrchestrator', () => {
 
       peerEmitter.emit('peerDisconnected', peers[0].key, peers[0].connectionId);
       await clock.tickAsync(0);
-      expect(peers[3].send.callCount).to.equal(3); // replacement asked all 3 types (none delivered)
+      expect(peers[3].send.callCount).to.equal(4); // all four streams, none delivered
 
       // The lost peer reconnects and is eligible again; its replacement dies too
       peerEmitter.emit('peerDisconnected', peers[3].key, peers[3].connectionId);
       await clock.tickAsync(0);
 
-      expect(peers[4].send.callCount).to.equal(3);
+      expect(peers[4].send.callCount).to.equal(4);
       expect(peers[0].send.callCount).to.equal(4); // initial ask: temp + 3 sync types
     });
 
@@ -2684,7 +2694,7 @@ describe('AppSyncOrchestrator', () => {
       // both key on it, so a reconnected peer's answer cannot close a request
       // made on the socket before it.
       sinon.assert.calledWith(completeSyncRequestStub, peers[2].connectionId);
-      expect(peers[3].send.callCount).to.equal(3); // replacement asked all 3 still-short types
+      expect(peers[3].send.callCount).to.equal(4); // all four streams still short
       // A peer that has sent NOTHING is judged on the short deadline: the only
       // work before its first batch is a signature check, one indexed query and
       // serialising a page of documents, and a peer with nothing to report still
@@ -2730,7 +2740,7 @@ describe('AppSyncOrchestrator', () => {
       blockEmitter.emit('blocksProcessed', 2555001);
       await clock.tickAsync(0);
 
-      expect(latecomer.send.callCount).to.equal(3); // asked all 3 types (none delivered)
+      expect(latecomer.send.callCount).to.equal(4); // all four streams, none delivered
     });
 
     it('should stop after the peer budget and abandon the round so the block timer takes over', async () => {
@@ -2744,8 +2754,8 @@ describe('AppSyncOrchestrator', () => {
       }
 
       // 3 initial + 2 replacements exhausts the budget of 5 distinct peers
-      expect(peers[3].send.callCount).to.equal(3);
-      expect(peers[4].send.callCount).to.equal(3);
+      expect(peers[3].send.callCount).to.equal(4);
+      expect(peers[4].send.callCount).to.equal(4);
       expect(peers[5].send.called).to.be.false;
       expect(logStub.warn.args.some((args) => String(args[0]).includes('State sync abandoned'))).to.be.true;
       expect(clearSyncRequestedStub.called).to.be.true;
