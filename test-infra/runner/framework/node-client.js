@@ -347,7 +347,6 @@ export function nodeClient(nodeNum) {
         'network:appmessage',
         'network:ingressattestation',
         'network:ipchanged',
-        'network:sigterm',
         'ephemeralSync:requested',
         'ephemeralSync:reconnectRequested',
         'ephemeralSync:peerComplete',
