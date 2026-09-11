@@ -53,7 +53,8 @@ async function resolveSpec(plainSpec) {
  * Cleartext apps return the CanonicalSpec instance; encrypted apps return the
  * DecryptedCanonicalSpec wrapper (never a raw serializable plaintext spec — the
  * decrypted spec stays inside the boundary type). Read the priced/deployed
- * fields through it; the deployment path takes decrypted.spec at its call site.
+ * fields through it - the wrapper delegates them, and reaching for an inner
+ * spec is the thing not to do.
  *
  * @param {object} instantiated - InstantiatedSpec instance
  * @returns {Promise<object|null>} CanonicalSpec | DecryptedCanonicalSpec | null on decrypt failure

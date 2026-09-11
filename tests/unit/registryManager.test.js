@@ -784,9 +784,9 @@ describe('registryManager tests', () => {
 
         // The transport provider is stubbed and never sees the spec object: it is
         // asked to seal FOR an app, and both arguments are read off the INNER
-        // cleartext spec the wrapper hands out (`decrypted.spec`), not off the
-        // wrapper itself. Assert they are the real app's, so a lost delegation
-        // seals toward `undefined` here instead of on a node.
+        // spec, read off the WRAPPER by delegation rather than by reaching for an
+        // inner spec. Assert they are the real app's, so a lost delegation seals
+        // toward `undefined` here instead of on a node.
         sinon.assert.calledOnceWithExactly(create, 'myapp', V9_SUBMISSION.owner);
 
         const sealArg = seal.firstCall.args[0];
