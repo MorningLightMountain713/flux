@@ -35,6 +35,7 @@ const { collateralOutpoint, nodesNameThisNode } = require('../utils/nodePinning'
 const geolocationRule = require('./geolocationRule');
 const ipLocationStore = require('./ipLocationStore');
 const { Privilege, authOf } = require('../utils/privileges');
+const { getSpecBackend } = require('../utils/specLibs');
 
 
 // geonames/ip-api continent convention - the same vocabulary the location
@@ -126,21 +127,55 @@ function nodeLocationMatchesGeolocation(loc, geolocation) {
 }
 
 /**
+ * The Placement for a caller that holds a submission DOCUMENT rather than a spec
+ * object - the registration check and the deploy-form advice endpoint, which are
+ * both asked about an app that does not exist yet.
+ *
+ * Everything else must pass a spec and let `spec.placement` answer.
+ * placementComputation refuses a document on purpose: reading `geolocation` and
+ * `nodes` off one is the v8 spelling, and a v9 document carries neither, so the
+ * silent answer was "no restrictions at all". Converting HERE keeps that
+ * conversion visible at the two call sites that genuinely need it, and uses the
+ * same converter the version classes use, so one parser answers for both paths.
+ * @param {object} doc A submission document (`geolocation` strings, `nodes`)
+ * @returns {Promise<object>} a Placement
+ */
+async function placementFromDocument(doc) {
+  const { Placement, convertGeolocation } = await getSpecBackend();
+  const { geoAllow, geoDeny } = convertGeolocation(doc?.geolocation ?? []);
+  const named = doc?.nodes ?? [];
+  const isOutpoint = (entry) => /^[0-9a-f]{64}:\d+$/i.test(entry);
+  return Placement.from({
+    geoAllow,
+    geoDeny,
+    targetIps: named.filter((entry) => !isOutpoint(entry)),
+    targetOutpoints: named.filter(isOutpoint),
+  });
+}
+
+/**
  * The node-list entries an app may be placed on. A spec carrying a non-empty
  * `nodes` list is a closed pool - checkAppNodesRequirements enforces it at
  * install from v7 on, and only enterprise owners may carry one from v8 on - so
  * the candidate set IS that list. Counting the whole network for such
  * an app computes a share against fault domains it can never use, which
  * strands it below its instance count.
+ * Asked of `placement` rather than of a `nodes` array: the two are the same
+ * fact spelled differently by version, and matchesTarget already knows all
+ * three ways an owner can name a node - address, collateral outpoint, and
+ * operator key, which only v9 can express.
  * @param {Array<object>} nodeList The deterministic node list
- * @param {string[]} pinned The spec's nodes entries (socket addresses or outpoints)
+ * @param {object} placement The spec's Placement
  * @returns {Array<object>}
  */
-function pooledNodes(nodeList, pinned) {
-  if (!pinned.length) return nodeList;
-  const outpoints = new Set(pinned);
-  return nodeList.filter((node) => pinned.some((entry) => socketAddressesMatch(entry, node.ip))
-    || outpoints.has(`${node.txhash}:${node.outidx}`));
+function pooledNodes(nodeList, placement) {
+  if (!placement.hasTargets()) return nodeList;
+  return nodeList.filter((node) => placement.matchesTarget({
+    ip: node.ip,
+    outpoint: `${node.txhash}:${node.outidx}`,
+    operator: node.pubkey ?? undefined,
+    ipMatcher: socketAddressesMatch,
+  }));
 }
 
 /**
@@ -168,12 +203,18 @@ function domainShareLevel(domainSizes, instances) {
  * is read ONCE here, and every domain the caller keys afterwards comes from that
  * same snapshot - so a spawn decision and the share it is measured against can
  * never be answering from two different views of the network.
- * @param {object} appSpecifications App specifications (geolocation, hw fields)
+ * Takes the SPEC OBJECT, not a serialized document. Placement lives on the
+ * spec's `placement` accessor, which every version builds - a v8 spec converts
+ * its `geolocation` strings into the same entries a v9 spec declares natively.
+ * Reading `geolocation`/`nodes` off a serialized document instead worked only
+ * for v8: a v9 document carries neither name, so every restriction read as
+ * absent and the candidate set silently became the whole network.
+ * @param {object} spec App specification object (must expose `placement`)
  * @param {number} [minInstances] Required instance count; defaults to the spec's
  * @returns {Promise<{feasibility: object, domainOf: (address: string) => string|null}>}
  */
-async function placementComputation(appSpecifications, minInstances) {
-  const instances = minInstances ?? appSpecifications.instances ?? config.fluxapps.minimumInstances;
+async function placementComputation(spec, minInstances) {
+  const instances = minInstances ?? spec.instances ?? config.fluxapps.minimumInstances;
   // Asked before the accessor rather than after: the accessor waits for the
   // list, and this is reached from a request handler that cannot wait.
   if (!networkStateService.isReady()) {
@@ -189,16 +230,21 @@ async function placementComputation(appSpecifications, minInstances) {
     error.statusCode = 503;
     throw error;
   }
+  // After the 503s on purpose: an unavailable node list is a condition the
+  // caller retries, and the spawner branches on that status. A missing
+  // placement is a programming error and must not be answered as "try again".
+  const placement = spec?.placement;
+  if (!placement) {
+    // Refusing is the point. A missing placement used to read as "no
+    // restrictions at all", which is the failure this signature exists to end.
+    throw new Error('placementComputation requires a spec object carrying placement');
+  }
   const { byIp, tableAvailable, tableGenerated } = nodeLocationView();
   const domainOf = domainFunction(byIp);
-  // Parsed once, for every node below. The spec's entries decide the rule and
-  // the node decides nothing about it, so re-deriving the terms inside the loop
-  // made one answer cost the node count times the entry count - and a spec may
-  // carry two hundred entries against six thousand nodes.
-  const geoRule = geolocationRule.parseGeolocation(
-    appSpecifications.geolocation, ipLocationStore.regionCodeForName,
-  );
-  const geoRestricted = !geoRule.unrestricted;
+  // The spec's entries decide the rule and the node decides nothing about it,
+  // so the question is asked of `placement` once here rather than re-derived
+  // per node - a spec may carry two hundred entries against six thousand nodes.
+  const geoRestricted = placement.hasGeoRestrictions();
 
   const domains = new Map(); // fault domain -> candidate count
   // Tier is deliberately NOT a filter. A tier is a collateral class, not a
@@ -207,7 +253,7 @@ async function placementComputation(appSpecifications, minInstances) {
   // figure accepts apps this arithmetic would have ruled out. Excluding on
   // the nominal figure therefore refuses deployable apps, and no bound this
   // module can compute is a proof of unfitness. Install time enforces it.
-  const candidates = pooledNodes(nodeList, appSpecifications.nodes ?? []);
+  const candidates = pooledNodes(nodeList, placement);
   let candidateCount = 0;
   // eslint-disable-next-line no-restricted-syntax
   for (const node of candidates) {
@@ -215,10 +261,16 @@ async function placementComputation(appSpecifications, minInstances) {
     if (!ip) continue; // eslint-disable-line no-continue
     if (geoRestricted && tableAvailable) {
       const doc = byIp.get(ip);
-      // a node the view does not carry has no provable location, and an
-      // unprovable location counts
-      const loc = doc ? { continentCode: doc.n ?? null, countryCode: doc.c ?? null, region: doc.r ?? null } : null;
-      if (!geolocationRule.locationSatisfiesRule(geoRule, loc)) continue; // eslint-disable-line no-continue
+      // A node the view does not carry has no provable location, and an
+      // unprovable location COUNTS - this arithmetic is deliberately
+      // optimistic so that a shortfall it reports is a proven one. That is
+      // the opposite of Placement.matches(), which refuses a node it cannot
+      // locate, so the two predicates are asked here rather than the whole
+      // matcher: same rule, this module's burden of proof.
+      const loc = doc
+        ? { continent: doc.n ?? null, country: doc.c ?? null, region: doc.r ?? null }
+        : null;
+      if (loc && (placement.isDeniedIn(loc) || !placement.isAllowedIn(loc))) continue; // eslint-disable-line no-continue
     }
     const domain = domainOf(ip);
     if (!domain) continue; // eslint-disable-line no-continue
@@ -243,14 +295,14 @@ async function placementComputation(appSpecifications, minInstances) {
 
 /**
  * Compute the placement feasibility of an app over the current network.
- * @param {object} appSpecifications App specifications (geolocation, hw fields)
+ * @param {object} spec App specification object (must expose `placement`)
  * @param {number} [minInstances] Required instance count; defaults to the spec's
  * @returns {Promise<{instances: number, candidateCount: number, domainCount: number,
  *   maxPerDomain: number, placeable: boolean, tableAvailable: boolean,
  *   tableGenerated: string|null}>}
  */
-async function placementFeasibility(appSpecifications, minInstances) {
-  const { feasibility } = await placementComputation(appSpecifications, minInstances);
+async function placementFeasibility(spec, minInstances) {
+  const { feasibility } = await placementComputation(spec, minInstances);
   return feasibility;
 }
 
@@ -274,17 +326,19 @@ async function countHeldInDomain(locations, domainKey, domainOf) {
  * Whether the app's spec names this node, by socket address or by collateral
  * outpoint. Being named is the owner's own placement choice and bypasses the
  * diversity share.
- * @param {object} appSpecifications App specifications
+ * @param {object} spec App specification object (must expose `placement`)
  * @param {string} localSocketAddr This node's ip:port
  * @returns {Promise<boolean>}
  */
-async function specNamesThisNode(appSpecifications, localSocketAddr) {
-  const nodes = appSpecifications.nodes ?? [];
-  if (!nodes.length) return false;
-  if (nodesNameThisNode(nodes, localSocketAddr)) return true;
+async function specNamesThisNode(spec, localSocketAddr) {
+  const placement = spec?.placement;
+  if (!placement || !placement.hasTargets()) return false;
+  // The address answers without a daemon call, so it is asked first and the
+  // collateral lookup only happens when the address did not settle it.
+  if (placement.isPinnedTo({ ip: localSocketAddr, ipMatcher: socketAddressesMatch })) return true;
   try {
     const collateral = await generalService.obtainNodeCollateralInformation();
-    return nodesNameThisNode(nodes, localSocketAddr, collateralOutpoint(collateral));
+    return placement.isPinnedTo({ outpoint: `${collateral.txhash}:${collateral.txindex}` });
   } catch (error) {
     log.warn(`placementFeasibility - could not resolve node collateral: ${error.message}`);
     return false;
@@ -381,7 +435,10 @@ async function checkPlacementFeasibility(appSpecFormatted, caller, previousSpec)
     synced = appSpecFormatted.version <= 3
       ? mountParser.isSyncedComponent(appSpecFormatted.containerData)
       : (appSpecFormatted.compose ?? []).some((component) => mountParser.isSyncedComponent(component.containerData));
-    feasibility = await placementFeasibility(appSpecFormatted);
+    feasibility = await placementFeasibility({
+      placement: await placementFromDocument(appSpecFormatted),
+      instances: appSpecFormatted.instances,
+    });
   } catch (error) {
     log.warn(`${caller} - placement feasibility check failed: ${error.message}`);
     return null;
@@ -634,7 +691,8 @@ async function placementAdvice(spec) {
   } else if (typeof spec.containerData === 'string') {
     synced = mountParser.isSyncedComponent(spec.containerData);
   }
-  const feasibility = await placementFeasibility({ geolocation: normalized, instances }, instances);
+  const placement = await placementFromDocument({ geolocation: normalized });
+  const feasibility = await placementFeasibility({ placement, instances }, instances);
   // the availability gate above raced the computation: a store that became
   // unreadable in between degrades the numbers to the /16 posture, which for
   // a geo-restricted question is the whole network - unavailable, not advice

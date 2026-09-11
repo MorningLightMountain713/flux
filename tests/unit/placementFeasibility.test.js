@@ -3,6 +3,11 @@ const sinon = require('sinon');
 const proxyquire = require('proxyquire').noCallThru();
 
 const cidrUtils = require('../../ZelBack/src/services/utils/cidrUtils');
+// Real specs, not object literals. placementComputation reads `spec.placement`,
+// which every version builds and no hand-written literal carries - a literal
+// with a `geolocation` key is the v8 SERIALIZED shape, and passing it is the
+// exact mistake that let a v9 spec's restrictions read as absent in production.
+const { v8Spec } = require('./fixtures/fluxSpec');
 
 function v4Int(ip) {
   return Number(cidrUtils.parseIp(ip).value);
@@ -159,7 +164,7 @@ describe('placementFeasibility tests', () => {
     // one of them used to answer that an app could be placed nowhere.
     it('refuses placementComputation with 503 rather than waiting', async () => {
       networkStateReadyStub.returns(false);
-      await placementFeasibility.placementComputation({ instances: 3 }, 3).then(
+      await placementFeasibility.placementComputation(await v8Spec({ instances: 3 }), 3).then(
         () => { throw new Error('expected rejection'); },
         (error) => {
           expect(error.statusCode).to.equal(503);
@@ -225,7 +230,7 @@ describe('placementFeasibility tests', () => {
     async function domainOf(address, nodes = [...bhNodes, ...deNodes, unresolvedNode]) {
       useTable();
       deterministicFluxListStub.resolves(nodes);
-      const { domainOf: fromSnapshot } = await placementFeasibility.placementComputation({ instances: 1 }, 1);
+      const { domainOf: fromSnapshot } = await placementFeasibility.placementComputation(await v8Spec({ instances: 1 }), 1);
       return fromSnapshot(address);
     }
 
@@ -248,7 +253,7 @@ describe('placementFeasibility tests', () => {
         generated: GENERATED,
       });
       deterministicFluxListStub.resolves([...bhNodes]);
-      const { domainOf: fromSnapshot } = await placementFeasibility.placementComputation({ instances: 1 }, 1);
+      const { domainOf: fromSnapshot } = await placementFeasibility.placementComputation(await v8Spec({ instances: 1 }), 1);
       expect(fromSnapshot('80.95.213.209:16127')).to.equal('net:80.95.0.0/16');
     });
 
@@ -260,7 +265,7 @@ describe('placementFeasibility tests', () => {
     it('reads the view once, however many addresses are keyed', async () => {
       useTable();
       deterministicFluxListStub.resolves([...bhNodes, ...deNodes]);
-      const { domainOf: fromSnapshot } = await placementFeasibility.placementComputation({ instances: 1 }, 1);
+      const { domainOf: fromSnapshot } = await placementFeasibility.placementComputation(await v8Spec({ instances: 1 }), 1);
       [...bhNodes, ...deNodes].forEach((node) => fromSnapshot(node.ip));
       expect(storeStub.nodeLocationSnapshot.callCount).to.equal(1);
       expect(storeStub.lookup.called).to.equal(false);
@@ -427,7 +432,7 @@ describe('placementFeasibility tests', () => {
     it('computes the Bahrain incident: one domain takes the whole instance count', async () => {
       useTable();
       deterministicFluxListStub.resolves([...bhNodes, bgNode, ...fiNodes, ...deNodes]);
-      const result = await placementFeasibility.placementFeasibility({ geolocation: ['acAS_BH'], instances: 3 });
+      const result = await placementFeasibility.placementFeasibility(await v8Spec({ geolocation: ['acAS_BH'], instances: 3 }));
       expect(result.candidateCount).to.equal(3);
       expect(result.domainCount).to.equal(1);
       expect(result.maxPerDomain).to.equal(3);
@@ -439,7 +444,7 @@ describe('placementFeasibility tests', () => {
     it('keeps an unrestricted app spread across many domains', async () => {
       useTable();
       deterministicFluxListStub.resolves([...bhNodes, bgNode, ...fiNodes, ...deNodes]);
-      const result = await placementFeasibility.placementFeasibility({ geolocation: [], instances: 3 });
+      const result = await placementFeasibility.placementFeasibility(await v8Spec({ geolocation: [], instances: 3 }));
       // etisalcom, bg-isp, hetzner, de-isp, and the org-less DE range on /16
       expect(result.domainCount).to.equal(5);
       expect(result.maxPerDomain).to.equal(1);
@@ -451,16 +456,16 @@ describe('placementFeasibility tests', () => {
       // ceil(3/2)=2 but BG can only absorb 1, so the level settles at 2 anyway;
       // with 4 instances the level must reach 3
       deterministicFluxListStub.resolves([...bhNodes, bgNode]);
-      const three = await placementFeasibility.placementFeasibility({ geolocation: [], instances: 3 });
+      const three = await placementFeasibility.placementFeasibility(await v8Spec({ geolocation: [], instances: 3 }));
       expect(three.domainCount).to.equal(2);
       expect(three.maxPerDomain).to.equal(2);
-      const four = await placementFeasibility.placementFeasibility({ geolocation: [], instances: 4 });
+      const four = await placementFeasibility.placementFeasibility(await v8Spec({ geolocation: [], instances: 4 }));
       expect(four.maxPerDomain).to.equal(3);
     });
 
     it('degrades to status quo when the table is missing', async () => {
       deterministicFluxListStub.resolves([...bhNodes, bgNode, ...fiNodes, ...deNodes]);
-      const result = await placementFeasibility.placementFeasibility({ geolocation: ['acAS_BH'], instances: 3 });
+      const result = await placementFeasibility.placementFeasibility(await v8Spec({ geolocation: ['acAS_BH'], instances: 3 }));
       // no geo narrowing possible: all nodes counted, /16 arithmetic domains
       expect(result.tableAvailable).to.equal(false);
       expect(result.candidateCount).to.equal(8);
@@ -474,7 +479,7 @@ describe('placementFeasibility tests', () => {
       useTable();
       storeStub.nodeLocationSnapshot.returns({ byIp: new Map(), ready: false, generated: null });
       deterministicFluxListStub.resolves([...bhNodes, bgNode, ...fiNodes, ...deNodes]);
-      const result = await placementFeasibility.placementFeasibility({ geolocation: ['acAS_BH'], instances: 3 });
+      const result = await placementFeasibility.placementFeasibility(await v8Spec({ geolocation: ['acAS_BH'], instances: 3 }));
       expect(result.candidateCount).to.equal(8);
       expect(result.domainCount).to.equal(5);
       expect(result.placeable).to.equal(true);
@@ -487,11 +492,11 @@ describe('placementFeasibility tests', () => {
       // compute a share against fault domains the app can never use
       useTable();
       deterministicFluxListStub.resolves([...bhNodes, bgNode, ...fiNodes, ...deNodes]);
-      const result = await placementFeasibility.placementFeasibility({
+      const result = await placementFeasibility.placementFeasibility(await v8Spec({
         geolocation: [],
         instances: 3,
         nodes: bhNodes.map((node) => node.ip),
-      });
+      }));
       expect(result.candidateCount).to.equal(3);
       expect(result.domainCount).to.equal(1);
       // one domain absorbs all three - the pool converges instead of stranding
@@ -504,18 +509,18 @@ describe('placementFeasibility tests', () => {
         { ...bhNodes[0], txhash: 'ab'.repeat(32), outidx: 0 },
         { ...fiNodes[0], txhash: 'cd'.repeat(32), outidx: 1 },
       ]);
-      const result = await placementFeasibility.placementFeasibility({
+      const result = await placementFeasibility.placementFeasibility(await v8Spec({
         geolocation: [],
         instances: 1,
         nodes: [`${'cd'.repeat(32)}:1`],
-      });
+      }));
       expect(result.candidateCount).to.equal(1);
     });
 
     it('reports unplaceable when no candidate matches', async () => {
       useTable();
       deterministicFluxListStub.resolves([...fiNodes, ...deNodes]);
-      const result = await placementFeasibility.placementFeasibility({ geolocation: ['acAS_BH'], instances: 3 });
+      const result = await placementFeasibility.placementFeasibility(await v8Spec({ geolocation: ['acAS_BH'], instances: 3 }));
       expect(result.candidateCount).to.equal(0);
       expect(result.domainCount).to.equal(0);
       expect(result.placeable).to.equal(false);
@@ -525,7 +530,7 @@ describe('placementFeasibility tests', () => {
       useTable();
       storeStub.nodeLocationSnapshot.returns(snapshotOf(VIEWED_IPS.filter((ip) => !ip.startsWith('80.95.2'))));
       deterministicFluxListStub.resolves([...bhNodes, ...fiNodes]);
-      const result = await placementFeasibility.placementFeasibility({ geolocation: ['acAS_BH'], instances: 3 });
+      const result = await placementFeasibility.placementFeasibility(await v8Spec({ geolocation: ['acAS_BH'], instances: 3 }));
       // the three Bahrain nodes have no document yet, so their location cannot
       // be disproved: they count, on /16 domains
       expect(result.candidateCount).to.equal(3);
@@ -551,7 +556,7 @@ describe('placementFeasibility tests', () => {
     it('keys from a computation snapshot when one is passed, without a lookup each', async () => {
       useTable();
       deterministicFluxListStub.resolves([...bhNodes, bgNode, ...fiNodes]);
-      const { domainOf } = await placementFeasibility.placementComputation({ instances: 3 }, 3);
+      const { domainOf } = await placementFeasibility.placementComputation(await v8Spec({ instances: 3 }), 3);
       storeStub.lookup.resetHistory();
       expect(await placementFeasibility.countHeldInDomain(locations, 'org:etisalcom', domainOf)).to.equal(2);
       expect(await placementFeasibility.countHeldInDomain(locations, 'org:hetzner', domainOf)).to.equal(1);
@@ -988,7 +993,7 @@ describe('placementFeasibility tests', () => {
     it('an empty node list is missing data, never zero candidates', async () => {
       useTable();
       deterministicFluxListStub.resolves([]);
-      await placementFeasibility.placementFeasibility({ geolocation: [], instances: 3 }).then(
+      await placementFeasibility.placementFeasibility(await v8Spec({ geolocation: [], instances: 3 })).then(
         () => { throw new Error('expected rejection'); },
         (error) => expect(error.statusCode).to.equal(503),
       );
@@ -1054,7 +1059,7 @@ describe('placementFeasibility tests', () => {
   describe('specNamesThisNode', () => {
     it('recognises a socket address pin', async () => {
       const pinned = await placementFeasibility.specNamesThisNode(
-        { nodes: ['1.2.3.4:16127', '80.95.213.209:16127'] },
+        await v8Spec({ nodes: ['1.2.3.4:16127', '80.95.213.209:16127'] }),
         '80.95.213.209:16127',
       );
       expect(pinned).to.equal(true);
@@ -1062,18 +1067,18 @@ describe('placementFeasibility tests', () => {
 
     it('recognises a collateral outpoint pin', async () => {
       const pinned = await placementFeasibility.specNamesThisNode(
-        { nodes: [`${'aa'.repeat(32)}:0`] },
+        await v8Spec({ nodes: [`${'aa'.repeat(32)}:0`] }),
         '80.95.213.209:16127',
       );
       expect(pinned).to.equal(true);
     });
 
     it('is false without a pin list, on no match, or when collateral is unavailable', async () => {
-      expect(await placementFeasibility.specNamesThisNode({ nodes: [] }, '1.2.3.4:16127')).to.equal(false);
-      expect(await placementFeasibility.specNamesThisNode({}, '1.2.3.4:16127')).to.equal(false);
-      expect(await placementFeasibility.specNamesThisNode({ nodes: ['9.9.9.9:16127'] }, '1.2.3.4:16127')).to.equal(false);
+      expect(await placementFeasibility.specNamesThisNode(await v8Spec({ nodes: [] }), '1.2.3.4:16127')).to.equal(false);
+      expect(await placementFeasibility.specNamesThisNode(await v8Spec({}), '1.2.3.4:16127')).to.equal(false);
+      expect(await placementFeasibility.specNamesThisNode(await v8Spec({ nodes: ['9.9.9.9:16127'] }), '1.2.3.4:16127')).to.equal(false);
       collateralStub.rejects(new Error('daemon unavailable'));
-      expect(await placementFeasibility.specNamesThisNode({ nodes: ['9.9.9.9:16127'] }, '1.2.3.4:16127')).to.equal(false);
+      expect(await placementFeasibility.specNamesThisNode(await v8Spec({ nodes: ['9.9.9.9:16127'] }), '1.2.3.4:16127')).to.equal(false);
     });
   });
 });

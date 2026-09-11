@@ -1053,9 +1053,14 @@ async function trySpawningGlobalApplication() {
     // an off-list node is subject to the share either way.
     let ownerNamedThisNode = false;
     if (syncthingApp) {
-      const pinList = appSpecifications.nodes ?? [];
-      ownerNamedThisNode = pinList.length > 0 && pinList.length <= minInstances
-        && await placementFeasibility.specNamesThisNode(appSpecifications, localSocketAddr);
+      // Asked of the spec object, not of its serialized form: `nodes` is the v8
+      // spelling and a v9 document does not carry it, so reading the serialized
+      // doc made this false for every v9 app and the bypass unreachable.
+      const { placement } = spec;
+      const namedCount = placement.targetIps.length
+        + placement.targetOutpoints.length + placement.targetOperators.length;
+      ownerNamedThisNode = namedCount > 0 && namedCount <= minInstances
+        && await placementFeasibility.specNamesThisNode(spec, localSocketAddr);
     }
 
     // A synced app may only be refused when a better-placed candidate provably
@@ -1072,7 +1077,7 @@ async function trySpawningGlobalApplication() {
       // and park this app for six hours over a table that is seconds from ready.
       let computation;
       try {
-        computation = await placementFeasibility.placementComputation(appSpecifications, minInstances);
+        computation = await placementFeasibility.placementComputation(spec, minInstances);
       } catch (error) {
         if (error.statusCode !== 503) throw error;
         log.info(`trySpawningGlobalApplication - ${appSpecifications.name} deferred: ${error.message}`);
