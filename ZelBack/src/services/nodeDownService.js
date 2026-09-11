@@ -622,7 +622,7 @@ function start(injectedTransport) {
       if (!localSocketAddress) return;
       serviceHelper.axiosGet(
         `http://${socketAddress}/flux/addoutgoingpeer/${localSocketAddress}`,
-        { timeout: 5_000 },
+        { timeout: 5000 },
       ).catch(() => { /* the far end dials back or it does not */ });
     },
     inboundCount: () => transport.peerManager.inboundCount,

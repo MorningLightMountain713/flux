@@ -121,7 +121,7 @@ describe('dockerEventStream', () => {
       streams[0].emit('end');
       streams[0].emit('close');
 
-      await clock.tickAsync(10000);
+      await clock.tickAsync(10_000);
 
       expect(dockerGetEvents.callCount).to.equal(2);
       subscription.stop();
@@ -135,7 +135,7 @@ describe('dockerEventStream', () => {
       await subscription.start();
 
       streams[0].emit('close');
-      await clock.tickAsync(10000);
+      await clock.tickAsync(10_000);
 
       expect(dockerGetEvents.callCount).to.equal(2);
       subscription.stop();
@@ -148,14 +148,14 @@ describe('dockerEventStream', () => {
       await subscription.start();
 
       streams[0].emit('end');
-      await clock.tickAsync(10000);
+      await clock.tickAsync(10_000);
       expect(dockerGetEvents.callCount).to.equal(2);
 
       // The dead stream speaks again: it must neither deliver events nor take
       // down the successor that replaced it.
       streams[0].emit('data', Buffer.from('{"id":"stale"}\n'));
       streams[0].emit('error', new Error('late'));
-      await clock.tickAsync(10000);
+      await clock.tickAsync(10_000);
 
       expect(events).to.have.lengthOf(0);
       expect(dockerGetEvents.callCount).to.equal(2);
@@ -176,7 +176,7 @@ describe('dockerEventStream', () => {
       await subscription.start();
       expect(subscription.connected()).to.equal(false);
 
-      await clock.tickAsync(10000);
+      await clock.tickAsync(10_000);
       expect(subscription.connected()).to.equal(true);
       subscription.stop();
     });
@@ -191,7 +191,7 @@ describe('dockerEventStream', () => {
       expect(onReconnect.called).to.equal(false);
 
       streams[0].emit('end');
-      await clock.tickAsync(10000);
+      await clock.tickAsync(10_000);
 
       expect(onReconnect.calledOnce).to.equal(true);
       subscription.stop();
@@ -205,7 +205,7 @@ describe('dockerEventStream', () => {
 
       streams[0].emit('end');
       subscription.stop();
-      await clock.tickAsync(60000);
+      await clock.tickAsync(60_000);
 
       expect(dockerGetEvents.callCount).to.equal(1);
     });

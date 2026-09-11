@@ -30,8 +30,8 @@ function ipAtOffset(offset) {
   const base = ((rangeBase[0] * 256 + rangeBase[1]) * 256 + rangeBase[2]) * 256 + rangeBase[3];
   const value = base + offset;
   return [
-    Math.floor(value / 16777216) % 256,
-    Math.floor(value / 65536) % 256,
+    Math.floor(value / 16_777_216) % 256,
+    Math.floor(value / 65_536) % 256,
     Math.floor(value / 256) % 256,
     value % 256,
   ].join('.');

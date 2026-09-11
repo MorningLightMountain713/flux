@@ -22,7 +22,7 @@ describe('deploymentInfoService tests', () => {
 
       sinon.stub(daemonServiceMiscRpcs, 'isDaemonSynced').returns({
         status: 'success',
-        data: { height: 100000, synced: true },
+        data: { height: 100_000, synced: true },
       });
 
       sinon.stub(chainUtilities, 'getChainParamsPriceUpdates').resolves([
@@ -101,7 +101,7 @@ describe('deploymentInfoService tests', () => {
 
       sinon.stub(daemonServiceMiscRpcs, 'isDaemonSynced').returns({
         status: 'success',
-        data: { height: 100000, synced: true },
+        data: { height: 100_000, synced: true },
       });
 
       sinon.stub(chainUtilities, 'getChainParamsPriceUpdates').resolves([
@@ -211,7 +211,7 @@ describe('deploymentInfoService tests', () => {
 
       sinon.stub(daemonServiceMiscRpcs, 'isDaemonSynced').returns({
         status: 'success',
-        data: { height: 100000, synced: true },
+        data: { height: 100_000, synced: true },
       });
 
       sinon.stub(chainUtilities, 'getChainParamsPriceUpdates').rejects(new Error('Price error'));
@@ -231,7 +231,7 @@ describe('deploymentInfoService tests', () => {
 
       sinon.stub(daemonServiceMiscRpcs, 'isDaemonSynced').returns({
         status: 'success',
-        data: { height: 100000, synced: true },
+        data: { height: 100_000, synced: true },
       });
 
       sinon.stub(chainUtilities, 'getChainParamsPriceUpdates').resolves([]);
@@ -253,7 +253,7 @@ describe('deploymentInfoService tests', () => {
 
       sinon.stub(daemonServiceMiscRpcs, 'isDaemonSynced').returns({
         status: 'success',
-        data: { height: 100000, synced: true },
+        data: { height: 100_000, synced: true },
       });
 
       sinon.stub(chainUtilities, 'getChainParamsPriceUpdates').resolves([]);
@@ -275,13 +275,13 @@ describe('deploymentInfoService tests', () => {
 
       const priceUpdates = [
         { height: 0, price: 1000 },
-        { height: 50000, price: 2000 },
-        { height: 100000, price: 3000 },
+        { height: 50_000, price: 2000 },
+        { height: 100_000, price: 3000 },
       ];
 
       sinon.stub(daemonServiceMiscRpcs, 'isDaemonSynced').returns({
         status: 'success',
-        data: { height: 100000, synced: true },
+        data: { height: 100_000, synced: true },
       });
 
       sinon.stub(chainUtilities, 'getChainParamsPriceUpdates').resolves(priceUpdates);

@@ -271,7 +271,7 @@ async function renameAppsObject(req, res) {
  * Temporary: see the shape rule at the top of this file for what has to be true
  * before this goes, and what goes with it.
  */
-const REMOVE_INLINE_DEADLINE_MS = 10000;
+const REMOVE_INLINE_DEADLINE_MS = 10_000;
 
 async function removeAppsObject(req, res) {
   try {

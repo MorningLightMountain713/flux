@@ -417,7 +417,7 @@ async function handleContentManifestIndexResponse(message, peerKey) {
     if (!contentManifestSyncService.isPeerInActiveRound(peerKey)) return;
     if (!message.data || message.data.type !== 'fluxappcontentmanifestindex') return;
     const { index } = message.data;
-    if (!Array.isArray(index) || index.length > 100000) return;
+    if (!Array.isArray(index) || index.length > 100_000) return;
     contentManifestSyncService.depositIndex(peerKey, index);
   } catch (error) {
     log.error(error);
@@ -558,7 +558,7 @@ async function handleAppRunningMessage(message, fromIP, port, announcer = null) 
       fluxEventBus.publish('network:apprunning', { ip: message.data.ip, apps: message.data.apps || [{ name: message.data.name }] });
     }
     const currentTimeStamp = Date.now();
-    const timestampOK = fluxCommunicationUtils.verifyTimestampInFluxBroadcast(message, currentTimeStamp, 240000);
+    const timestampOK = fluxCommunicationUtils.verifyTimestampInFluxBroadcast(message, currentTimeStamp, 240_000);
     if (isNewer && timestampOK) {
       const syncStatus = daemonServiceMiscRpcs.isDaemonSynced();
       const daemonHeight = syncStatus.data.height || 0;
@@ -654,7 +654,7 @@ async function handleIPChangedMessage(message, fromIP, port) {
       fluxEventBus.publish('network:ipchanged', { oldIP: message.data.oldIP, newIP: message.data.newIP });
     }
     const currentTimeStamp = Date.now();
-    const timestampOK = fluxCommunicationUtils.verifyTimestampInFluxBroadcast(message, currentTimeStamp, 240000);
+    const timestampOK = fluxCommunicationUtils.verifyTimestampInFluxBroadcast(message, currentTimeStamp, 240_000);
     if (rebroadcastToPeers && timestampOK) {
       const syncStatus = daemonServiceMiscRpcs.isDaemonSynced();
       const daemonHeight = syncStatus.data.height || 0;
@@ -686,7 +686,7 @@ async function handleAppRemovedMessage(message, fromIP, port) {
       fluxEventBus.publish('network:appremoved', { ip: message.data.ip, name: message.data.appName });
     }
     const currentTimeStamp = Date.now();
-    const timestampOK = fluxCommunicationUtils.verifyTimestampInFluxBroadcast(message, currentTimeStamp, 240000);
+    const timestampOK = fluxCommunicationUtils.verifyTimestampInFluxBroadcast(message, currentTimeStamp, 240_000);
     if (rebroadcastToPeers && timestampOK) {
       const syncStatus = daemonServiceMiscRpcs.isDaemonSynced();
       const daemonHeight = syncStatus.data.height || 0;
@@ -713,7 +713,7 @@ async function handleAppRemovedMessage(message, fromIP, port) {
 async function handleGrantGenerationMessage(message, fromIP, port) {
   try {
     const currentTimeStamp = Date.now();
-    const timestampOK = fluxCommunicationUtils.verifyTimestampInFluxBroadcast(message, currentTimeStamp, 240000);
+    const timestampOK = fluxCommunicationUtils.verifyTimestampInFluxBroadcast(message, currentTimeStamp, 240_000);
     if (!timestampOK) {
       return;
     }
@@ -750,7 +750,7 @@ async function handleGrantGenerationMessage(message, fromIP, port) {
 async function handleMasterleaseMessage(message, fromIP, port, announcer) {
   try {
     const currentTimeStamp = Date.now();
-    const timestampOK = fluxCommunicationUtils.verifyTimestampInFluxBroadcast(message, currentTimeStamp, 240000);
+    const timestampOK = fluxCommunicationUtils.verifyTimestampInFluxBroadcast(message, currentTimeStamp, 240_000);
     if (!timestampOK) {
       return;
     }
@@ -785,7 +785,7 @@ async function handleMasterleaseMessage(message, fromIP, port, announcer) {
 async function handleNodeDownMessage(message, fromIP, port) {
   try {
     const currentTimeStamp = Date.now();
-    const timestampOK = fluxCommunicationUtils.verifyTimestampInFluxBroadcast(message, currentTimeStamp, 240000);
+    const timestampOK = fluxCommunicationUtils.verifyTimestampInFluxBroadcast(message, currentTimeStamp, 240_000);
     if (!timestampOK) {
       return;
     }

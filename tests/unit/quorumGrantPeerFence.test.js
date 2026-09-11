@@ -63,7 +63,7 @@ describe('quorumGrant peer fence', () => {
 
     it('the deposed node\'s own attestation lifts the fence', async () => {
       serviceHelper.axiosPost.resolves({
-        data: { status: 'success', data: { holding: false, folderDemotedAt: 12345 } },
+        data: { status: 'success', data: { holding: false, folderDemotedAt: 12_345 } },
       });
       mastershipGrantGate.raiseFence('myapp', DEPOSED);
       mastershipGrantGate.fenceFor('myapp');
@@ -73,7 +73,7 @@ describe('quorumGrant peer fence', () => {
 
     it('an attestation from a node that still claims to hold does not lift', async () => {
       serviceHelper.axiosPost.resolves({
-        data: { status: 'success', data: { holding: true, folderDemotedAt: 12345 } },
+        data: { status: 'success', data: { holding: true, folderDemotedAt: 12_345 } },
       });
       mastershipGrantGate.raiseFence('myapp', DEPOSED);
       mastershipGrantGate.fenceFor('myapp');

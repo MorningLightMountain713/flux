@@ -186,7 +186,7 @@ describe('fluxController tests', () => {
     await stopping;
     const ranByTheStop = runs;
 
-    await clock.tickAsync(10000);
+    await clock.tickAsync(10_000);
 
     expect(runs, 'the loop outlived the stop and went on running').to.equal(ranByTheStop);
     clock.restore();
@@ -248,7 +248,7 @@ describe('fluxController tests', () => {
 
     await fc.abort();
     const ranByTheStop = iterations;
-    await clock.tickAsync(10000);
+    await clock.tickAsync(10_000);
 
     expect(iterations, 'the loop outlived the stop').to.equal(ranByTheStop);
     expect(sawSignalAfterStop, 'the signal still read as aborted, so this proves nothing').to.be.false;

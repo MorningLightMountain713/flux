@@ -5,13 +5,13 @@ const logCursor = require('../../ZelBack/src/services/utils/logCursor');
 
 describe('logCursor tests', () => {
   it('round-trips a position', () => {
-    const token = logCursor.encode({ ms: 1788508223926, count: 4 });
+    const token = logCursor.encode({ ms: 1_788_508_223_926, count: 4 });
 
-    expect(logCursor.decode(token)).to.deep.equal({ ms: 1788508223926, count: 4 });
+    expect(logCursor.decode(token)).to.deep.equal({ ms: 1_788_508_223_926, count: 4 });
   });
 
   it('is opaque, so the shape can change without every reader changing', () => {
-    const token = logCursor.encode({ ms: 1788508223926, count: 4 });
+    const token = logCursor.encode({ ms: 1_788_508_223_926, count: 4 });
 
     expect(token, 'a reader that parses this becomes a compatibility constraint').to.not.include('1788508223926');
   });

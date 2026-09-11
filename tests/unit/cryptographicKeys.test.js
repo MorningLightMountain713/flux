@@ -148,7 +148,7 @@ describe('cryptographicKeys tests', () => {
 
       const fluxID = '1ABC123XYZ';
       const appName = 'MyTestApp';
-      const blockHeight = 123456;
+      const blockHeight = 123_456;
 
       await cryptographicKeys.getAppPublicKey(fluxID, appName, blockHeight);
 
@@ -355,7 +355,7 @@ describe('cryptographicKeys tests', () => {
     it('should use daemon height when calling getAppPublicKey', async () => {
       process.env.FLUXOS_PATH = '/some/path';
       reloadModule();
-      const daemonHeight = 123456;
+      const daemonHeight = 123_456;
 
       sinon.stub(verificationHelper, 'verifyPrivilege').resolves(true);
       sinon.stub(serviceHelper, 'ensureObject').returns({
@@ -478,7 +478,7 @@ describe('cryptographicKeys tests', () => {
       req.headers.zelidauth = { zelid: CALLER, signature: 's', loginPhrase: 'p' };
       // The body even tries to name a victim fluxID — it must be ignored.
       req.body = {
-        appName: 'myapp', timestamp: 1700000000, sealed: { algorithm: 'x' }, fluxID: '1VICTIMzelidYYYYYYYYYYYYYYYYYYYYYYY',
+        appName: 'myapp', timestamp: 1_700_000_000, sealed: { algorithm: 'x' }, fluxID: '1VICTIMzelidYYYYYYYYYYYYYYYYYYYYYYY',
       };
 
       await cryptographicKeys.getBlobLocator(req, res);
@@ -493,13 +493,13 @@ describe('cryptographicKeys tests', () => {
     it('opens the sealed payload with the locator AAD ref toward the caller identity', async () => {
       stubHappyPath();
       req.headers.zelidauth = { zelid: CALLER };
-      req.body = { appName: 'myapp', timestamp: 1700000000, sealed: { algorithm: 'x' } };
+      req.body = { appName: 'myapp', timestamp: 1_700_000_000, sealed: { algorithm: 'x' } };
 
       await cryptographicKeys.getBlobLocator(req, res);
 
       const openArgs = transportHelper.openContentEnvelope.firstCall.args[1];
       expect(openArgs).to.include({
-        appName: 'myapp', owner: CALLER, ref: 'bloblocator', timestamp: 1700000000,
+        appName: 'myapp', owner: CALLER, ref: 'bloblocator', timestamp: 1_700_000_000,
       });
     });
 

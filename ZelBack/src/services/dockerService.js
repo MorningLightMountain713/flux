@@ -605,7 +605,7 @@ function countFrom(lines, ms) {
  * scheduling; larger holds the loop for longer. At 64KB an 8.47MB log decodes
  * in 130 slices and the worst slip measured on a node was 0.4ms.
  */
-const LOG_DECODE_CHUNK_BYTES = 65536;
+const LOG_DECODE_CHUNK_BYTES = 65_536;
 
 /**
  * The whole of a container's log, as `appDockerCreate` configures the daemon to
@@ -1173,8 +1173,8 @@ async function appDockerCreate(deployComp, options = {}) {
       Ulimits: [
         {
           Name: 'nofile',
-          Soft: 100000,
-          Hard: 100000,
+          Soft: 100_000,
+          Hard: 100_000,
         },
       ],
       PortBindings: publishPorts ? portBindings : {},
@@ -1250,7 +1250,7 @@ async function appDockerCreate(deployComp, options = {}) {
       const envVars = await obtainPayloadFromStorage(url, appName);
       if (Array.isArray(envVars) && envVars.length < 200) {
         envVars.forEach((parameter) => {
-          if (typeof parameter !== 'string' || parameter.length > 5000000) {
+          if (typeof parameter !== 'string' || parameter.length > 5_000_000) {
             throw new Error(`Environment parameters from Flux Storage ${fluxStorageEnv} are invalid`);
           } else if (parameter !== '--privileged') {
             containerConfig.Env.push(parameter);
@@ -1273,7 +1273,7 @@ async function appDockerCreate(deployComp, options = {}) {
       const cmdVars = await obtainPayloadFromStorage(url, appName);
       if (Array.isArray(cmdVars) && cmdVars.length < 200) {
         cmdVars.forEach((parameter) => {
-          if (typeof parameter !== 'string' || parameter.length > 5000000) {
+          if (typeof parameter !== 'string' || parameter.length > 5_000_000) {
             throw new Error(`Commands parameters from Flux Storage ${fluxStorageCmd} are invalid`);
           } else if (parameter !== '--privileged') {
             containerConfig.Cmd.push(parameter);
@@ -2771,7 +2771,7 @@ async function getAppNameByContainerIp(ip) {
 
 async function waitForDocker() {
   const RETRY_DELAY_MS = 5000;
-  const LOG_INTERVAL_MS = 60000;
+  const LOG_INTERVAL_MS = 60_000;
   let lastLogAt = 0;
 
   // eslint-disable-next-line no-constant-condition

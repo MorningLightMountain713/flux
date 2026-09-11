@@ -71,7 +71,7 @@ describe('meshOperatorService', () => {
         refuseOutpoint: stubs.refuse,
         removeRefusedOutpoint: stubs.unrefuse,
       },
-      './meshPorts': { getPort: sinon.stub().resolves(16230) },
+      './meshPorts': { getPort: sinon.stub().resolves(16_230) },
       './meshNamespace': {
         meshUnits: { nebulaActive: stubs.nebulaActive, reloadNebula: stubs.reload },
       },
@@ -107,7 +107,7 @@ describe('meshOperatorService', () => {
       const { data } = sent(res);
       expect(data.meshEnabled).to.equal(true);
       expect(data.identity).to.equal(IDENTITY);
-      expect(data.port).to.equal(16230);
+      expect(data.port).to.equal(16_230);
       expect(data.refused).to.deep.equal([OUTPOINT]);
       expect(data.unitActive).to.equal(true);
       expect(data.certificates.authority.fingerprint).to.equal('fp:ca.crt');

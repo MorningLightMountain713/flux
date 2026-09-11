@@ -47,7 +47,7 @@ describe('appReconciler tests', () => {
 
   before(async function loadLibrary() {
     // The first fromSubmission compiles the ajv schemas.
-    this.timeout(30000);
+    this.timeout(30_000);
     flux = await loadSpecLibrary();
   });
 
@@ -57,7 +57,7 @@ describe('appReconciler tests', () => {
    * submission fixture.
    */
   const v9App = (appName, components, specOverrides = {}) => {
-    let hostPort = 31000;
+    let hostPort = 31_000;
     const built = {};
     for (const [name, over] of Object.entries(components)) {
       hostPort += 1;
@@ -74,7 +74,7 @@ describe('appReconciler tests', () => {
   /** The v8 compose array for the named components — legacy containerData shapes. */
   const v8Compose = (components) => {
     const [template] = V8_SUBMISSION.compose;
-    let hostPort = 31100;
+    let hostPort = 31_100;
     return Object.entries(components).map(([name, over]) => {
       hostPort += 1;
       return {
@@ -641,7 +641,7 @@ describe('appReconciler tests', () => {
 
     it('backs off instead of restarting an unhealthy container during its cooldown', async () => {
       stubs.dockerService.dockerContainerInspect.resolves(runningUnhealthy);
-      stubs.appsRuntimeState.restartWaitMs.resolves(30000);
+      stubs.appsRuntimeState.restartWaitMs.resolves(30_000);
       await appReconciler.reconcile('www_app');
       expect(stubs.dockerService.appDockerRestart.called).to.be.false;
       expect(stubs.appsRuntimeState.recordRestart.called).to.be.false;
@@ -1250,7 +1250,7 @@ describe('appReconciler tests', () => {
       stubs.appsRuntimeState.getState.callsFake(async (id) => rtState[id] ?? null);
       stubs.appsRuntimeState.recordRestart.callsFake(async (id) => {
         rtState[id] = rtState[id] ?? {};
-        rtState[id].restartHistory = [...(rtState[id].restartHistory ?? []), Date.now() - 60000];
+        rtState[id].restartHistory = [...(rtState[id].restartHistory ?? []), Date.now() - 60_000];
       });
       stubs.appsRuntimeState.setEverStarted.callsFake(async (id) => {
         rtState[id] = { ...(rtState[id] ?? {}), hasEverStarted: true };
@@ -1274,7 +1274,7 @@ describe('appReconciler tests', () => {
       // dead container, old death evidence: trial pacing never delays
       stubs.dockerService.dockerContainerInspect.resolves({
         State: {
-          Running: false, Status: 'exited', ExitCode: 127, FinishedAt: new Date(Date.now() - 60000).toISOString(),
+          Running: false, Status: 'exited', ExitCode: 127, FinishedAt: new Date(Date.now() - 60_000).toISOString(),
         },
       });
       const convergePromise = appReconciler.awaitConvergence(['www_app']);
@@ -1313,7 +1313,7 @@ describe('appReconciler tests', () => {
       rtState.www_app = { hasSuccessfullyStarted: true, restartHistory: [1, 2, 3, 4, 5] };
       stubs.dockerService.dockerContainerInspect.resolves({
         State: {
-          Running: false, Status: 'exited', ExitCode: 137, FinishedAt: new Date(Date.now() - 60000).toISOString(),
+          Running: false, Status: 'exited', ExitCode: 137, FinishedAt: new Date(Date.now() - 60_000).toISOString(),
         },
       });
       const result = await appReconciler.awaitConvergence(['www_app']);
@@ -1325,7 +1325,7 @@ describe('appReconciler tests', () => {
       wireRuntimeStateFake();
       stubs.dockerService.dockerContainerInspect.resolves({
         State: {
-          Running: false, Status: 'exited', ExitCode: 0, FinishedAt: new Date(Date.now() - 60000).toISOString(),
+          Running: false, Status: 'exited', ExitCode: 0, FinishedAt: new Date(Date.now() - 60_000).toISOString(),
         },
       });
       await appReconciler.reconcile('www_app');
@@ -1344,7 +1344,7 @@ describe('appReconciler tests', () => {
     it('uptime past the proof window latches the proven-run marker (probe-less service)', async () => {
       wireRuntimeStateFake();
       stubs.dockerService.dockerContainerInspect.resolves({
-        State: { Running: true, Status: 'running', StartedAt: new Date(Date.now() - 61000).toISOString() },
+        State: { Running: true, Status: 'running', StartedAt: new Date(Date.now() - 61_000).toISOString() },
       });
       await appReconciler.reconcile('www_app');
       expect(rtState.www_app && rtState.www_app.hasSuccessfullyStarted).to.be.true;
@@ -1993,7 +1993,7 @@ describe('appReconciler tests', () => {
       // the container is up when the proof pass lands: it observes and latches,
       // it never re-actuates
       stubs.dockerService.dockerContainerInspect.resolves({
-        State: { Running: true, Status: 'running', StartedAt: new Date(Date.now() - 61000).toISOString() },
+        State: { Running: true, Status: 'running', StartedAt: new Date(Date.now() - 61_000).toISOString() },
       });
       clock.tick(60 * 1000);
       await new Promise((resolve) => { setImmediate(() => { setImmediate(resolve); }); });

@@ -337,7 +337,7 @@ async function upsertContentManifest(row, opts = {}) {
     await dbHelper.insertOneToDatabase(globalDb(), appContentManifests, insertDoc);
     return true;
   } catch (error) {
-    if (error && error.code === 11000) return false; // lost the fresh-insert race
+    if (error && error.code === 11_000) return false; // lost the fresh-insert race
     throw error;
   }
 }

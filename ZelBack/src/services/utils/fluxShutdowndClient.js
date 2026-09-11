@@ -25,16 +25,16 @@ const globalState = require('./globalState');
  */
 
 const SOCKET_PATH = process.env.FLUX_SHUTDOWND_SOCKET || '/run/flux-shutdownd/daemon.sock';
-const CALL_TIMEOUT_MS = 10000;
+const CALL_TIMEOUT_MS = 10_000;
 // Slack added on top of an app stop's budget: covers the daemon's reply latency
 // after the drain, and bounds how long the `stopping` LB gate is held.
-const COMPLETION_SLACK_MS = 120000;
+const COMPLETION_SLACK_MS = 120_000;
 // JSON-RPC error code the daemon returns from begin_app_stop when a node-wide
 // pipeline owns the node (mirrors shutdownd's socket reject).
-const RPC_NODE_PIPELINE_ACTIVE = -32010;
+const RPC_NODE_PIPELINE_ACTIVE = -32_010;
 // ...and when a component-scoped run of the same identity is in flight that does
 // not cover the ask — the caller retries once the in-flight drain resolves.
-const RPC_COMPONENT_STOP_BUSY = -32011;
+const RPC_COMPONENT_STOP_BUSY = -32_011;
 
 /**
  * The reasons FluxOS emits for a PER-APP stop, as kebab wire strings the daemon's

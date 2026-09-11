@@ -98,29 +98,29 @@ describe('quorumGrant grantRegister', () => {
     };
 
     it('a challenger of a lapsed row waits one lock-delay from the lift, whatever the controller stamped', async () => {
-      grantRegister.resetForTests({ startedMs: liftedAgo(1_000) });
+      grantRegister.resetForTests({ startedMs: liftedAgo(1000) });
       lapsedRow();
       const reply = await grantRegister.prepare('app/master', { epoch: 9, candidate: 'c:0' }, { servingSinceMs: Date.now() - 900_000 });
       expect(reply.code).to.equal('lock_delay');
-      expect(reply.retryAfterMs).to.be.within(lockDelayMs - 1_000 - 500, lockDelayMs - 1_000);
+      expect(reply.retryAfterMs).to.be.within(lockDelayMs - 1000 - 500, lockDelayMs - 1000);
     });
 
     it('the recorded grantee is never delayed by the lift', async () => {
-      grantRegister.resetForTests({ startedMs: liftedAgo(1_000) });
+      grantRegister.resetForTests({ startedMs: liftedAgo(1000) });
       lapsedRow();
       const reply = await grantRegister.prepare('app/master', { epoch: 9, candidate: 'a:0' }, { servingSinceMs: Date.now() - 900_000 });
       expect(reply.ok).to.equal(true);
     });
 
     it('one lock-delay after the lift the challenger is served', async () => {
-      grantRegister.resetForTests({ startedMs: liftedAgo(lockDelayMs + 2_000) });
+      grantRegister.resetForTests({ startedMs: liftedAgo(lockDelayMs + 2000) });
       lapsedRow();
       const reply = await grantRegister.prepare('app/master', { epoch: 9, candidate: 'c:0' }, { servingSinceMs: Date.now() - 900_000 });
       expect(reply.ok).to.equal(true);
     });
 
     it("the later anchor wins: a controller stamp newer than the lift is the one that binds", async () => {
-      grantRegister.resetForTests({ startedMs: liftedAgo(lockDelayMs + 2_000) });
+      grantRegister.resetForTests({ startedMs: liftedAgo(lockDelayMs + 2000) });
       lapsedRow();
       const reply = await grantRegister.prepare('app/master', { epoch: 9, candidate: 'c:0' }, { servingSinceMs: Date.now() - 100 });
       expect(reply.code).to.equal('lock_delay');
@@ -128,7 +128,7 @@ describe('quorumGrant grantRegister', () => {
     });
 
     it('the lift anchors accept too', async () => {
-      grantRegister.resetForTests({ startedMs: liftedAgo(1_000) });
+      grantRegister.resetForTests({ startedMs: liftedAgo(1000) });
       lapsedRow();
       const reply = await grantRegister.accept('app/master', {
         epoch: 9, grantee: 'c:0', mode: 'held', ttlMs: TTL,
@@ -271,7 +271,7 @@ describe('quorumGrant grantRegister', () => {
       const anchored = await grantRegister.prepare(
         'app/master',
         { epoch: 3, candidate: 'b:0' },
-        { servingSinceMs: Date.now() - 1_000 },
+        { servingSinceMs: Date.now() - 1000 },
       );
       expect(anchored.code).to.equal('lock_delay');
       expect(anchored.retryAfterMs).to.be.greaterThan(0);
@@ -280,7 +280,7 @@ describe('quorumGrant grantRegister', () => {
       const incumbent = await grantRegister.prepare(
         'app/master',
         { epoch: 4, candidate: 'a:0' },
-        { servingSinceMs: Date.now() - 1_000 },
+        { servingSinceMs: Date.now() - 1000 },
       );
       expect(incumbent.ok).to.equal(true);
     });
@@ -339,7 +339,7 @@ describe('quorumGrant grantRegister', () => {
         add: `${added.txhash}:${added.outidx}`,
         seq: 1,
         fingerprint: 'fp',
-        at: 12345,
+        at: 12_345,
       }, { key: 'app/master', membership, committeeSize: 5 });
 
       expect(reply.ok).to.equal(true);
@@ -352,7 +352,7 @@ describe('quorumGrant grantRegister', () => {
 
   describe('the cancel journal', () => {
     const cancelEntry = (seq, subject) => ({
-      seq, cancel: subject, cert: { subject, token: 'standing' }, at: 1_000,
+      seq, cancel: subject, cert: { subject, token: 'standing' }, at: 1000,
     });
     const SUBJECT = `${'9'.repeat(64)}:0`;
     const OTHER = `${'8'.repeat(64)}:0`;

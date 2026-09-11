@@ -93,7 +93,7 @@ async function getMongoDbVersion() {
  */
 async function waitForMongo() {
   const RETRY_DELAY_MS = 5000;
-  const LOG_INTERVAL_MS = 60000;
+  const LOG_INTERVAL_MS = 60_000;
   let lastLogAt = 0;
 
   // eslint-disable-next-line no-constant-condition

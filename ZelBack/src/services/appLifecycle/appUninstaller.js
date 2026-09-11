@@ -1146,7 +1146,7 @@ async function driveOwedTeardown(key) {
 const REMOVING_LEASE_WAIT_MS = 5000;
 const REMOVING_LEASE_POLL_MS = 100;
 async function acquireRemovingLease(dockerName, identifier) {
-  const budgetNs = BigInt(REMOVING_LEASE_WAIT_MS) * 1000000n;
+  const budgetNs = BigInt(REMOVING_LEASE_WAIT_MS) * 1_000_000n;
   const startNs = process.hrtime.bigint();
   for (;;) {
     const token = operationRegistry.acquire(dockerName, 'removing', 'appUninstaller', `teardown ${identifier}`);

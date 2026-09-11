@@ -39,7 +39,7 @@ describe('registryManager tests', () => {
 
   before(async function loadLibrary() {
     // The first fromSubmission compiles the ajv schemas.
-    this.timeout(30000);
+    this.timeout(30_000);
     flux = await loadSpecLibrary();
   });
 
@@ -74,7 +74,7 @@ describe('registryManager tests', () => {
    * It is therefore handed over unstored. v9 keeps its whole `encrypted` object
    * on the wire and round-trips intact.
    */
-  async function registryHolds(spec, { hash = 'storedhash', height = 1700000 } = {}) {
+  async function registryHolds(spec, { hash = 'storedhash', height = 1_700_000 } = {}) {
     const instantiated = await instantiatedSpec(spec, { hash, height });
     let stored = instantiated;
     if (!(spec instanceof flux.EncryptedSpecV8)) {
@@ -212,7 +212,7 @@ describe('registryManager tests', () => {
         name: 'InstallingApp',
         ip: '192.168.1.2:16127',
         broadcastedAt: new Date(),
-        expireAt: new Date(Date.now() + 300000),
+        expireAt: new Date(Date.now() + 300_000),
       };
 
       try {
@@ -246,7 +246,7 @@ describe('registryManager tests', () => {
         replica: 's1',
         announcedAt,
         broadcastedAt: new Date(),
-        expireAt: new Date(Date.now() + 300000),
+        expireAt: new Date(Date.now() + 300_000),
       });
 
       const result = await registryManager.appInstallingLocation('ClaimedApp');
@@ -272,7 +272,7 @@ describe('registryManager tests', () => {
     it('groups live claims by lowercased app name', async () => {
       const collection = config.database.appsglobal.collections.appsInstallingLocations;
       const row = (name, ip) => ({
-        name, ip, broadcastedAt: new Date(), expireAt: new Date(Date.now() + 300000),
+        name, ip, broadcastedAt: new Date(), expireAt: new Date(Date.now() + 300_000),
       });
       await dbHelper.insertOneToDatabase(database, collection, row('ClaimedApp', '192.168.1.2:16127'));
       await dbHelper.insertOneToDatabase(database, collection, row('claimedapp', '192.168.1.3:16127'));
@@ -474,7 +474,7 @@ describe('registryManager tests', () => {
           name: 'ColoApp', ip: '192.168.1.1:16127', replica, broadcastedAt: Date.now(),
         },
         broadcastedAt: new Date(),
-        expireAt: new Date(Date.now() + 300000),
+        expireAt: new Date(Date.now() + 300_000),
       });
       await database.collection(collection).insertOne(doc('s1'));
       // The co-located sibling's announce must coexist under the same (name, ip).
@@ -483,7 +483,7 @@ describe('registryManager tests', () => {
       let duplicateError = null;
       await database.collection(collection).insertOne(doc('s1')).catch((err) => { duplicateError = err; });
       expect(duplicateError, 'same identity must still be unique').to.exist;
-      expect(duplicateError.code).to.equal(11000);
+      expect(duplicateError.code).to.equal(11_000);
     });
 
     it('a null retract matches a legacy row stored without the replica field', async () => {
@@ -492,7 +492,7 @@ describe('registryManager tests', () => {
         name: 'LegacyRowApp',
         ip: '192.168.1.1:16127',
         broadcastedAt: new Date(),
-        expireAt: new Date(Date.now() + 300000),
+        expireAt: new Date(Date.now() + 300_000),
       });
 
       await registryManager.removeAppInstallingMessage('LegacyRowApp', '192.168.1.1:16127');
@@ -602,20 +602,20 @@ describe('registryManager tests', () => {
       compose: [
         {
           name: 'palworld', description: 'game', repotag: 'private/palworld:1',
-          ports: [30001], domains: ['pal.example.invalid'],
+          ports: [30_001], domains: ['pal.example.invalid'],
           environmentParameters: ['ADMIN_PASSWORD=hunter2'], commands: ['--token', 'abc'],
           containerPorts: [8211], containerData: 'g:/palworld/Pal/Saved',
-          cpu: 4, ram: 16000, hdd: 50, repoauth: '',
+          cpu: 4, ram: 16_000, hdd: 50, repoauth: '',
         },
         {
           name: 'sidecar', description: 'sidecar', repotag: 'private/sidecar:1',
-          ports: [30002], domains: [''], environmentParameters: [], commands: [],
+          ports: [30_002], domains: [''], environmentParameters: [], commands: [],
           containerPorts: [9000], containerData: 'r:/data',
           cpu: 1, ram: 2000, hdd: 5, repoauth: '',
         },
         {
           name: 'plain', description: 'plain', repotag: 'private/plain:1',
-          ports: [30003], domains: [''], environmentParameters: [], commands: [],
+          ports: [30_003], domains: [''], environmentParameters: [], commands: [],
           containerPorts: [9001], containerData: '/dogs/data',
           cpu: 2, ram: 1000, hdd: 5, repoauth: '',
         },
@@ -675,7 +675,7 @@ describe('registryManager tests', () => {
               mounts: { '/data': { source: 'data', destination: '/data' } },
               sync: { mode: 'activeStandby' },
             },
-            ports: { http: { containerPort: 80, hostPort: 31000 } },
+            ports: { http: { containerPort: 80, hostPort: 31_000 } },
           },
           worker: {
             name: 'worker', description: 'worker', image: 'busybox:latest',
@@ -711,7 +711,7 @@ describe('registryManager tests', () => {
 
       const { resources } = answered(res).data;
       expect(resources.cpu).to.equal(7);
-      expect(resources.memoryMb).to.equal(19000);
+      expect(resources.memoryMb).to.equal(19_000);
       expect(resources.storageGb).to.equal(60);
       expect(resources.componentCount).to.equal(3);
       // The node's real constraint, and the reason the triple is not enough.
@@ -1115,7 +1115,7 @@ describe('registryManager tests', () => {
   // branch below then asks that entry two questions (`expiresAtHeight` and
   // `serialize`) that only the real InstantiatedSpec can answer.
   describe('checkApplicationRegistrationNameConflicts tests', () => {
-    const EXISTING_HEIGHT = 1700000;
+    const EXISTING_HEIGHT = 1_700_000;
     // v8's `expire` of 88000 blocks from EXISTING_HEIGHT, as the real class
     // computes it across the PON fork — read off the object, never assumed.
     let existingExpiresAt;
@@ -1520,7 +1520,7 @@ describe('registryManager tests', () => {
 
     it('should exclude apps with newer appremoved event', async () => {
       await database.collection(eventsCollection).insertMany([
-        makeV2Event('1.2.3.4', [{ name: 'AppA', hash: 'h1' }, { name: 'AppB', hash: 'h2' }], now - 60000),
+        makeV2Event('1.2.3.4', [{ name: 'AppA', hash: 'h1' }, { name: 'AppB', hash: 'h2' }], now - 60_000),
         makeAppRemovedEvent('1.2.3.4', 'AppA', now),
       ]);
 
@@ -1531,7 +1531,7 @@ describe('registryManager tests', () => {
 
     it('should keep apps when appremoved is older than broadcast', async () => {
       await database.collection(eventsCollection).insertMany([
-        makeAppRemovedEvent('1.2.3.4', 'AppA', now - 120000),
+        makeAppRemovedEvent('1.2.3.4', 'AppA', now - 120_000),
         makeV2Event('1.2.3.4', [{ name: 'AppA', hash: 'h1' }], now),
       ]);
 
@@ -1557,7 +1557,7 @@ describe('registryManager tests', () => {
 
     it('should remap IP when ipchanged event is newer than broadcast', async () => {
       await database.collection(eventsCollection).insertMany([
-        makeV2Event('1.1.1.1', [{ name: 'AppA', hash: 'h1' }, { name: 'AppB', hash: 'h2' }], now - 60000),
+        makeV2Event('1.1.1.1', [{ name: 'AppA', hash: 'h1' }, { name: 'AppB', hash: 'h2' }], now - 60_000),
         makeIPChangedEvent('1.1.1.1', '2.2.2.2', now),
       ]);
 
@@ -1568,7 +1568,7 @@ describe('registryManager tests', () => {
 
     it('should not remap IP when ipchanged is older than broadcast', async () => {
       await database.collection(eventsCollection).insertMany([
-        makeIPChangedEvent('1.1.1.1', '2.2.2.2', now - 120000),
+        makeIPChangedEvent('1.1.1.1', '2.2.2.2', now - 120_000),
         makeV2Event('1.1.1.1', [{ name: 'AppA', hash: 'h1' }], now),
       ]);
 
@@ -1579,8 +1579,8 @@ describe('registryManager tests', () => {
 
     it('should dedup remapped apps with fresh broadcast at new IP', async () => {
       await database.collection(eventsCollection).insertMany([
-        makeV2Event('1.1.1.1', [{ name: 'AppA', hash: 'h1' }, { name: 'AppB', hash: 'h2' }], now - 120000),
-        makeIPChangedEvent('1.1.1.1', '2.2.2.2', now - 60000),
+        makeV2Event('1.1.1.1', [{ name: 'AppA', hash: 'h1' }, { name: 'AppB', hash: 'h2' }], now - 120_000),
+        makeIPChangedEvent('1.1.1.1', '2.2.2.2', now - 60_000),
         makeV2Event('2.2.2.2', [{ name: 'AppA', hash: 'h1' }, { name: 'AppB', hash: 'h2' }, { name: 'AppC', hash: 'h3' }], now),
       ]);
 
@@ -1598,8 +1598,8 @@ describe('registryManager tests', () => {
     // excluded before the query runs.
     it('drops an app the post-move announcement no longer lists', async () => {
       await database.collection(eventsCollection).insertMany([
-        makeV2Event('1.1.1.1', [{ name: 'AppA', hash: 'h1' }, { name: 'AppB', hash: 'h2' }], now - 120000),
-        makeIPChangedEvent('1.1.1.1', '2.2.2.2', now - 60000),
+        makeV2Event('1.1.1.1', [{ name: 'AppA', hash: 'h1' }, { name: 'AppB', hash: 'h2' }], now - 120_000),
+        makeIPChangedEvent('1.1.1.1', '2.2.2.2', now - 60_000),
         makeV2Event('2.2.2.2', [{ name: 'AppB', hash: 'h2' }], now),
       ]);
 
@@ -1612,8 +1612,8 @@ describe('registryManager tests', () => {
 
     it('re-addresses a node that moved but has not re-announced', async () => {
       await database.collection(eventsCollection).insertMany([
-        makeV2Event('1.1.1.1', [{ name: 'AppA', hash: 'h1' }], now - 120000),
-        makeIPChangedEvent('1.1.1.1', '2.2.2.2', now - 60000),
+        makeV2Event('1.1.1.1', [{ name: 'AppA', hash: 'h1' }], now - 120_000),
+        makeIPChangedEvent('1.1.1.1', '2.2.2.2', now - 60_000),
       ]);
 
       for (const result of [
@@ -1627,8 +1627,8 @@ describe('registryManager tests', () => {
 
     it('ignores a move that predates the announcement', async () => {
       await database.collection(eventsCollection).insertMany([
-        makeIPChangedEvent('1.1.1.1', '2.2.2.2', now - 120000),
-        makeV2Event('1.1.1.1', [{ name: 'AppA', hash: 'h1' }], now - 60000),
+        makeIPChangedEvent('1.1.1.1', '2.2.2.2', now - 120_000),
+        makeV2Event('1.1.1.1', [{ name: 'AppA', hash: 'h1' }], now - 60_000),
       ]);
 
       const result = await appsRepository.appLocationFromEvents();
@@ -1658,8 +1658,8 @@ describe('registryManager tests', () => {
         makeV2Event('1.1.1.1', [
           { name: 'AppA', hash: 'h1', replica: 'r0', state: 'active' },
           { name: 'AppA', hash: 'h1', replica: 'r1', state: 'draining' },
-        ], now - 120000),
-        makeIPChangedEvent('1.1.1.1', '2.2.2.2', now - 60000),
+        ], now - 120_000),
+        makeIPChangedEvent('1.1.1.1', '2.2.2.2', now - 60_000),
       ]);
 
       const result = await appsRepository.appLocationFromEvents({ appname: 'AppA' });
@@ -1682,7 +1682,7 @@ describe('registryManager tests', () => {
     // expireAt is read off /apps/locations by callers outside this codebase, so it is
     // derived to the same rule the materialized collection wrote it by.
     it('derives expireAt from the announcement and the running TTL', async () => {
-      const at = now - 60000;
+      const at = now - 60_000;
       await database.collection(eventsCollection).insertOne(
         makeV2Event('1.1.1.1', [{ name: 'AppA', hash: 'h1' }], at),
       );
@@ -1715,11 +1715,11 @@ describe('registryManager tests', () => {
 
     it('a certified node\'s rows expire at since + the grace while the certificate stands newer than the announcement', async () => {
       const { NODE_DOWN_GRACE_MS } = require('../../ZelBack/src/services/utils/appConstants');
-      const announcedAt = now - 60000;
-      const since = now - 30000;
+      const announcedAt = now - 60_000;
+      const since = now - 30_000;
       await database.collection(eventsCollection).insertMany([
         makeV2Event('1.1.1.1', [{ name: 'AppA', hash: 'h1' }], announcedAt),
-        makeNodeDownEvent('1.1.1.1', now - 20000, since),
+        makeNodeDownEvent('1.1.1.1', now - 20_000, since),
       ]);
 
       const result = await appsRepository.appLocationFromEvents({ appname: 'AppA' });
@@ -1787,10 +1787,10 @@ describe('registryManager tests', () => {
     });
 
     it('a legacy sigterm row does not shorten expireAt', async () => {
-      const announcedAt = now - 60000;
+      const announcedAt = now - 60_000;
       await database.collection(eventsCollection).insertMany([
         makeV2Event('1.1.1.1', [{ name: 'AppA', hash: 'h1' }], announcedAt),
-        makeSigtermEvent('1.1.1.1', now - 30000),
+        makeSigtermEvent('1.1.1.1', now - 30_000),
       ]);
 
       const result = await appsRepository.appLocationFromEvents({ appname: 'AppA' });
@@ -1966,7 +1966,7 @@ describe('registryManager tests', () => {
   describe('founding view materialization', () => {
     it('resolves the entry it just stored and maps the components off the cleartext view', async () => {
       const sealed = await sealedV9Spec({ name: 'meshapp' });
-      const stored = await registryHolds(sealed, { hash: 'hm', height: 2500000 });
+      const stored = await registryHolds(sealed, { hash: 'hm', height: 2_500_000 });
       const doc = stored.serialize();
       sinon.stub(appsRepository, 'upsertGlobalAppInfo').resolves();
       // The resolver decrypts through the benchmark channel, so it stays
@@ -1993,7 +1993,7 @@ describe('registryManager tests', () => {
       sinon.assert.calledOnce(applyComponentView);
       const [mapped] = applyComponentView.firstCall.args;
       expect(mapped.name).to.equal('meshapp');
-      expect(mapped.height).to.equal(2500000);
+      expect(mapped.height).to.equal(2_500_000);
       expect(Object.keys(mapped.components)).to.deep.equal(['web']);
       expect(doc, 'the stored row itself carries none').to.not.have.property('components');
     });

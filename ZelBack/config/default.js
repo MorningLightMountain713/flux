@@ -12,35 +12,35 @@ module.exports = {
   testEventStream: false,
   system: {
     bootIdPath: '/proc/sys/kernel/random/boot_id',
-    heartbeatIntervalMs: 30000,
-    bootSyncTimeoutMs: 300000,
-    bootDaemonTimeoutMs: 300000,
+    heartbeatIntervalMs: 30_000,
+    bootSyncTimeoutMs: 300_000,
+    bootDaemonTimeoutMs: 300_000,
   },
   peers: {
-    wsPingIntervalMs: 15000,
+    wsPingIntervalMs: 15_000,
     wsMaxMissedPongs: 3,
   },
   confirmation: {
-    pollIntervalMs: 30000,
-    daemonStaleMs: 7500000,
+    pollIntervalMs: 30_000,
+    daemonStaleMs: 7_500_000,
     // Post-PON a node must re-confirm between 500 and 640 blocks after its last
     // confirmation — fluxd's FLUXNODE_CONFIRM_UPDATE_MIN_HEIGHT_V3 and
     // FLUXNODE_CONFIRM_UPDATE_EXPIRATION_HEIGHT_V4. Expiry is a height, not a
     // duration; the block interval only estimates it when the chain view is gone.
     confirmExpirationBlocks: 640,
     confirmWindowOpensBlocks: 500,
-    blockIntervalMs: 30000,
+    blockIntervalMs: 30_000,
   },
   server: {
-    allowedPorts: [16127, 16137, 16147, 16157, 16167, 16177, 16187, 16197],
-    apiport: 16127, // homeport is -1, ssl port is +1
+    allowedPorts: [16_127, 16_137, 16_147, 16_157, 16_167, 16_177, 16_187, 16_197],
+    apiport: 16_127, // homeport is -1, ssl port is +1
     fluxNodeServiceAddress: '169.254.43.43',
     fluxDnsdServiceAddress: '169.254.43.53', // the mesh resolver (flux-dnsd), beside the node service on loopback
 
   },
   database: {
     url: '127.0.0.1',
-    port: 27017,
+    port: 27_017,
     local: {
       database: `${dbPrefix}zelfluxlocal`,
       collections: {
@@ -130,10 +130,10 @@ module.exports = {
   },
   benchmark: {
     host: '127.0.0.1',
-    port: 16225,
-    rpcport: 16224,
-    porttestnet: 26225,
-    rpcporttestnet: 26224,
+    port: 16_225,
+    rpcport: 16_224,
+    porttestnet: 26_225,
+    rpcporttestnet: 26_224,
     // Local socket to the benchmark daemon, used when one is present. Its file
     // permissions authorize the caller, so nothing is sent over it to prove who
     // we are. Installs whose daemon does not offer one simply never find it and
@@ -142,12 +142,12 @@ module.exports = {
   },
   daemon: {
     host: '127.0.0.1',
-    chainValidHeight: 1062000,
-    port: 16125,
-    rpcport: 16124,
-    porttestnet: 26125,
-    rpcporttestnet: 26124,
-    zmqport: 16123,
+    chainValidHeight: 1_062_000,
+    port: 16_125,
+    rpcport: 16_124,
+    porttestnet: 26_125,
+    rpcporttestnet: 26_124,
+    zmqport: 16_123,
     subscriptions: {
       // Shallow on purpose: falling behind becomes a sequence gap, and the gap
       // handlers resync from one RPC call. A deep queue would hide the stall.
@@ -160,29 +160,29 @@ module.exports = {
       // recovers. Lower still would start to be within reach of a badly loaded host,
       // and a teardown is not free: it resyncs from a full snapshot.
       heartbeatIntervalMs: 5000,
-      heartbeatTimeoutMs: 20000,
+      heartbeatTimeoutMs: 20_000,
       reconnectIntervalMs: 500,
-      reconnectMaxIntervalMs: 15000,
+      reconnectMaxIntervalMs: 15_000,
       connectTimeoutMs: 3000,
       // Blocks are ~30s, so this is three missed in a row before we spend an RPC.
-      silenceThresholdMs: 90000,
-      probeIntervalMs: 30000,
+      silenceThresholdMs: 90_000,
+      probeIntervalMs: 30_000,
       // Push carries the tip every block; this only keeps `headers` honest, which push
       // cannot supply — a post-IBD daemon still catching up publishes a block per
       // connection and would otherwise read as synced.
-      headerRefreshIntervalMs: 300000,
-      livenessCheckIntervalMs: 10000,
+      headerRefreshIntervalMs: 300_000,
+      livenessCheckIntervalMs: 10_000,
       // One aggregate line rather than one per block. Long enough that a healthy node is
       // quiet, short enough that the numbers still mean something when read after the fact.
-      usageReportIntervalMs: 300000,
+      usageReportIntervalMs: 300_000,
       // Ten blocks at ~30s. Past this nothing recent has arrived from either the
       // socket or RPC, so the tip we hold is no longer evidence about the chain.
-      chainStaleAfterMs: 300000,
+      chainStaleAfterMs: 300_000,
       // Shortest gap between two rebuilds caused by reconnecting. A rebuild is a full
       // snapshot, and libzmq reconnects from half a second, so a flapping link would
       // otherwise pay for one per flap. Safe to skip: a delta against a stale view
       // does not chain, and one that does not chain forces the rebuild anyway.
-      reconnectResyncMinIntervalMs: 30000,
+      reconnectResyncMinIntervalMs: 30_000,
     },
   },
   minimumFluxBenchAllowedVersion: '6.2.0',
@@ -204,13 +204,13 @@ module.exports = {
     '1NGqYirE4T9wzd1ZcGrw3HjETiuCkt6Sgy',
     '13BBPcpHxwCaC61vjQgK6qeDcprFJEGVkP',
   ],
-  deterministicNodesStart: 558000,
+  deterministicNodesStart: 558_000,
   fluxapps: {
     latestSupportedSpecVersion: 8, // version changes on app updates must target this version
     // reconciler crash-recovery backoff: ladder of waits between restart attempts,
     // and the run length that counts as stable (resets the ladder)
-    crashBackoffDelaysMs: [0, 30000, 300000, 900000, 1800000],
-    crashBackoffStableRunMs: 600000,
+    crashBackoffDelaysMs: [0, 30_000, 300_000, 900_000, 1_800_000],
+    crashBackoffStableRunMs: 600_000,
     // Backstop for images whose entrypoint discards the payload's exit status.
     // A clean exit proves nothing, so for those images restart RATE is the only
     // fault evidence left and this is the only thing that ever paces them.
@@ -226,7 +226,7 @@ module.exports = {
     // Counted as restarts ALREADY RECORDED, so at 5 the sixth restart is the one
     // that earns a rung and the seventh is the first one held back.
     restartBurstCount: 5,
-    restartBurstWindowMs: 300000,
+    restartBurstWindowMs: 300_000,
     // How long a finished operation stays readable at /apps/operations/:jobId,
     // and how long a client is told to wait between polls while one runs. A
     // RUNNING job never expires - only terminal ones are retained on a clock.
@@ -350,28 +350,28 @@ module.exports = {
     // detach must show before the destructive heal, re-check pace while the app's
     // network is missing, and the post-start attachment verify
     networkHealConfirmMs: 3000,
-    networkHealDetachedPersistMs: 60000,
-    networkHealPrunedRetryMs: 300000,
-    postStartVerifyMs: 30000,
+    networkHealDetachedPersistMs: 60_000,
+    networkHealPrunedRetryMs: 300_000,
+    postStartVerifyMs: 30_000,
     // install converge-wait (reconciler): roll an install back after this many
     // failed start attempts (a COUNT, not a clock); the backstop only stops the
     // caller hanging and never rolls back.
     convergeFailAttempts: 3,
-    convergeBackstopMs: 300000, // 5 min
+    convergeBackstopMs: 300_000, // 5 min
     // cap on a reconciler recreate's provisioning (registry verify + image pull): a
     // a pull whose progress stream goes silent this long is a dead transfer
     // (black-holed registry, half-open socket) - aborted and classed transient.
     // Total pull time is unbounded while progress keeps flowing.
-    pullStallMs: 90000,
+    pullStallMs: 90_000,
     // transient (could-not-ask) registry failures pace their re-ask on this;
     // the verification cache and the spawner's back-off both key on it, so the
     // worst-case stacked bench is 2x this value
-    registryTransientBackoffMs: 120000,
+    registryTransientBackoffMs: 120_000,
     // absolute ceiling on a recreate's provision - the stall detector owns the
     // dead-registry case, so this only guards the residual non-pull steps (a
     // sick disk mid volume-create, a hung docker create) from wedging the
     // component's reconcile single-flight; generous so no live pull ever hits it
-    recreateProvisionCapMs: 900000,
+    recreateProvisionCapMs: 900_000,
     // in flux main chain per month (blocksLasting)
     price: [
       { // any price fork can be done by adjusting object similarily.
@@ -385,7 +385,7 @@ module.exports = {
         staticip: 3, // additional price per application for targetting nodes that have static ip address
       },
       {
-        height: 983000, // height from which price spec is valid. Counts from when app was registerd on blockchain!
+        height: 983_000, // height from which price spec is valid. Counts from when app was registerd on blockchain!
         cpu: 0.3, // per 0.1 cpu core,
         ram: 0.1, // per 100mb,
         hdd: 0.05, // per 1gb,
@@ -395,7 +395,7 @@ module.exports = {
         staticip: 3, // additional price per application for targetting nodes that have static ip address
       },
       {
-        height: 1004000, // height from which price spec is valid. Counts from when app was registerd on blockchain! 1004000
+        height: 1_004_000, // height from which price spec is valid. Counts from when app was registerd on blockchain! 1004000
         cpu: 0.06, // per 0.1 cpu core,
         ram: 0.02, // per 100mb,
         hdd: 0.01, // per 1gb,
@@ -405,7 +405,7 @@ module.exports = {
         staticip: 3, // additional price per application for targetting nodes that have static ip address
       },
       {
-        height: 1288000, // height from which price spec is valid. Counts from when app was registerd on blockchain! 1004000
+        height: 1_288_000, // height from which price spec is valid. Counts from when app was registerd on blockchain! 1004000
         cpu: 0.15, // per 0.1 cpu core,
         ram: 0.05, // per 100mb,
         hdd: 0.02, // per 1gb,
@@ -416,7 +416,7 @@ module.exports = {
       },
       // soft fork 1
       {
-        height: 1594832, // height from which price spec is valid. Counts from when app was registerd on blockchain! 1004000
+        height: 1_594_832, // height from which price spec is valid. Counts from when app was registerd on blockchain! 1004000
         cpu: 0.15, // per 0.1 cpu core,
         ram: 0.05, // per 100mb,
         hdd: 0.02, // per 1gb,
@@ -427,7 +427,7 @@ module.exports = {
       },
       // soft fork 2
       {
-        height: 1597156, // height from which price spec is valid. Counts from when app was registerd on blockchain! 1004000
+        height: 1_597_156, // height from which price spec is valid. Counts from when app was registerd on blockchain! 1004000
         cpu: 0.03, // per 0.1 cpu core,
         ram: 0.01, // per 100mb,
         hdd: 0.004, // per 1gb,
@@ -455,7 +455,7 @@ module.exports = {
     // a message's own block is consulted, so entries are only ever appended: an
     // edit to one below the tip changes which signatures the past accepts.
     teamSupportAddress: [{
-      height: 1851659, // height from which address is valid
+      height: 1_851_659, // height from which address is valid
       address: '16iJqiVbHptCx87q6XQwNpKdgEZnFtKcyP',
     }, {
       // From here a fork names a list rather than one address. The address above
@@ -467,7 +467,7 @@ module.exports = {
       // reads only the fork at 1851659 and rejects a message signed by any of the
       // new addresses, so the fork has to fall after the network has had time to
       // update.
-      height: 2951000, // ~14th September 2026
+      height: 2_951_000, // ~14th September 2026
       addresses: [
         '16iJqiVbHptCx87q6XQwNpKdgEZnFtKcyP',
         '16dNCFf7nR3nx5iwn2RQMBw6KcJXkE3JC1',
@@ -481,13 +481,13 @@ module.exports = {
     appSpecsEnforcementHeights: {
       1: 0, // blockheight v1 is deprecated. Not possible to use api to update to its specs
       2: 0, // blockheight
-      3: 983000, // blockheight. Since this blockheight specification of type 3 is active. User can still submit v1 or v2. UI allows only v2, v3
-      4: 1004000, // v4 available, composition
-      5: 1142000, // v5 available adding contacts, geolocation
-      6: 1300000, // v6, expiration, app price, t3
-      7: isDevelopment ? 1390000 : 1420000, // v7, nodes selection, secrets, private images (nodes selection allows secrets, private image - scope), staticip
-      8: isDevelopment ? 1921500 : 1932380, // v8, brings enterprise apps using arcaneOS features to run these apps. // Around June 23th
-      9: isDevelopment ? 2630000 : 2791000, // v9, Bedrock spec redesign: class hierarchy, contentHash signing, named ports, placement, time-based TTL
+      3: 983_000, // blockheight. Since this blockheight specification of type 3 is active. User can still submit v1 or v2. UI allows only v2, v3
+      4: 1_004_000, // v4 available, composition
+      5: 1_142_000, // v5 available adding contacts, geolocation
+      6: 1_300_000, // v6, expiration, app price, t3
+      7: isDevelopment ? 1_390_000 : 1_420_000, // v7, nodes selection, secrets, private images (nodes selection allows secrets, private image - scope), staticip
+      8: isDevelopment ? 1_921_500 : 1_932_380, // v8, brings enterprise apps using arcaneOS features to run these apps. // Around June 23th
+      9: isDevelopment ? 2_630_000 : 2_791_000, // v9, Bedrock spec redesign: class hierarchy, contentHash signing, named ports, placement, time-based TTL
     },
     // Flux storage is the only host a storage link may address. The node
     // dereferences F_S_ENV and F_S_CMD with its own signed identity before it
@@ -506,8 +506,8 @@ module.exports = {
     // it can never be a valid mainnet receiver.
     appPaymentAddresses: [
       { address: 't1LUs6quf7TB2zVZmexqPQdnqmrFMGZGjV6', activeFromHeight: 0 },
-      { address: 't3aGJvdtd8NR6GrnqnRuVEzH6MbrXuJFLUX', activeFromHeight: 1300000, legacyMessageAuthority: true }, // v6
-      { address: 't3NryfAQLGeFs9jEoeqsxmBN2QLRaRKFLUX', activeFromHeight: 1670000, legacyMessageAuthority: true },
+      { address: 't3aGJvdtd8NR6GrnqnRuVEzH6MbrXuJFLUX', activeFromHeight: 1_300_000, legacyMessageAuthority: true }, // v6
+      { address: 't3NryfAQLGeFs9jEoeqsxmBN2QLRaRKFLUX', activeFromHeight: 1_670_000, legacyMessageAuthority: true },
       ...(isDevelopment ? [{ address: 't1Mzja9iJcEYeW5B4m4s1tJG8M42odFZ16A', activeFromHeight: 0 }] : []),
     ],
     // Authority for the v9 foundation soft-fork messages (PriceMessage,
@@ -518,17 +518,17 @@ module.exports = {
     // to the production foundation authority address before mainnet.
     // See fluxModels PRICING_ORACLE / ROLLOUT docs.
     messageAuthorityAddress: 't1eW962yoqbfCYKzFYaZJVYzeopSmhaKL4f',
-    epochstart: 694000,
-    publicepochstart: 705000,
-    portMinLegacy: 31000, // ports 30000 - 30999 are reserved for local applications
-    portMaxLegacy: 39999,
-    portBlockheightChange: isDevelopment ? 1390000 : 1420000,
+    epochstart: 694_000,
+    publicepochstart: 705_000,
+    portMinLegacy: 31_000, // ports 30000 - 30999 are reserved for local applications
+    portMaxLegacy: 39_999,
+    portBlockheightChange: isDevelopment ? 1_390_000 : 1_420_000,
     portMin: 1,
-    portMax: 65535,
-    bannedPorts: ['16100-16299', '26100-26299', '30000-30099', 8384, 27017, 22, 23, 25, 3389, 5900, 5800, 161, 512, 513, 5901, 3388, 4444, 123, 53],
+    portMax: 65_535,
+    bannedPorts: ['16100-16299', '26100-26299', '30000-30099', 8384, 27_017, 22, 23, 25, 3389, 5900, 5800, 161, 512, 513, 5901, 3388, 4444, 123, 53],
     enterprisePorts: ['0-1023', 8080, 8081, 8443, 6667],
     upnpBannedPorts: [],
-    maxImageSize: 5000000000, // 5000mb
+    maxImageSize: 5_000_000_000, // 5000mb
     // Image preflight. The component count bounds what a single call can ask the
     // node to fetch from registries and the queue depth bounds how many callers
     // can commit it at once - together with running one job at a time, that is
@@ -537,7 +537,7 @@ module.exports = {
     // the retention window is how long a finished job stays pollable.
     preflightMaxComponents: 10,
     preflightMaxQueuedJobs: 4,
-    preflightEnvelopeMaxAgeMs: 300000,
+    preflightEnvelopeMaxAgeMs: 300_000,
     // The playground: one unsigned spec, run once on this node, at the resources
     // it declares. The ceiling is an ADMISSION FILTER, never a degrade - a spec
     // above it is refused with the numbers, because running an app at resources
@@ -560,8 +560,8 @@ module.exports = {
     // is pull bandwidth, and that is what the aggregate budget bounds directly.
     // flux-spec caps a spec at 10 components anyway, which is what the session
     // subnet below is sized to hold.
-    playgroundSessionImageMaxBytes: 2000000000,
-    playgroundSessionImageTotalMaxBytes: 6000000000,
+    playgroundSessionImageMaxBytes: 2_000_000_000,
+    playgroundSessionImageTotalMaxBytes: 6_000_000_000,
     // One reserved third octet, carved into /27s. A session needs at most ten
     // container addresses plus a gateway; a /27 has 29 usable, and eight of them
     // fit in the octet against a default of one concurrent session. Reserving
@@ -578,13 +578,13 @@ module.exports = {
     // keyed on a one-way fingerprint, so a node can refuse a returning caller
     // without holding anything that says who they are.
     playgroundMinerCpuBusyFraction: 0.9,
-    playgroundMinerBlockMs: 86400000,
+    playgroundMinerBlockMs: 86_400_000,
     // The RUNNING window: containers up, owner watching. Ends on whichever comes
     // first - this deadline, a cancel, or every container stopping on its own.
     // Pulls sit outside it, which is what makes the duty cycle's arithmetic hold:
     // two sessions of fifteen running minutes is the ~30 minutes and ~1 core-hour
     // per hour a node donates.
-    playgroundSessionTtlMs: 900000,
+    playgroundSessionTtlMs: 900_000,
     // Which nodes will serve a given caller this window, by rendezvous hash over
     // the deterministic node list. Every other control here is enforced from a
     // gossiped record and so has a window a simultaneous fan-out sits inside;
@@ -598,7 +598,7 @@ module.exports = {
     playgroundServingSetSize: 32,
     // A day. Its floor is the session TTL — a shorter window would move a
     // caller's set out from under a running session.
-    playgroundServingSetWindowMs: 86400000,
+    playgroundServingSetWindowMs: 86_400_000,
     // Pin a caller's set on their resolved address rather than their FluxID.
     // The set bounds a simultaneous burst, so it keys on the thing a burster
     // cannot cheaply change: a FluxID is free to mint and each one would be a
@@ -626,32 +626,32 @@ module.exports = {
     playgroundNodeConcurrentSessions: 2,
     playgroundNodeSessionsPerHour: 2,
     playgroundCallerSessionsPerHour: 3,
-    playgroundWindowMs: 3600000,
+    playgroundWindowMs: 3_600_000,
     // Per-caller limits held by ONE node rather than by each node separately.
     // The per-node windows above cap what a single node gives away; they are
     // identity-blind across nodes, so they cap one caller across the fleet at
     // nothing. These are the fleet-wide numbers, and they are read by the node
     // holding the tally - never proposed by the node asking it.
     limitCounters: {
-      playground: { maxConcurrent: 2, maxPerWindow: 5, windowMs: 86400000 },
+      playground: { maxConcurrent: 2, maxPerWindow: 5, windowMs: 86_400_000 },
       // What the DEPUTY may allow while the counter is unreachable. Deliberately
       // meaner than the real limit: a caller can work out which node holds their
       // tally, so if losing it bought a bigger allowance they would take it down
       // on purpose. Smaller means there is nothing to gain.
-      'playground#deputy': { maxConcurrent: 1, maxPerWindow: 2, windowMs: 86400000 },
+      'playground#deputy': { maxConcurrent: 1, maxPerWindow: 2, windowMs: 86_400_000 },
     },
     // A reservation must outlive the work it covers, or it expires under a running
     // session and a second is admitted beside it. Finite so a submitter that dies
     // after reserving cannot lock its caller out until the process restarts.
-    limitCounterLeaseMs: 1800000,
+    limitCounterLeaseMs: 1_800_000,
     // How long to wait on the node holding a tally before treating it as silent.
     limitCounterAskTimeoutMs: 3000,
     limitCounterPeerAsksPerMinute: 600,
     // How long a container is given to reach a probe verdict, and how long a
     // "stayed up" pass has to stay up for. Both well inside the session TTL, so a
     // verdict is reached and reported rather than cut off by the teardown.
-    playgroundProbeTimeoutMs: 180000,
-    playgroundProbeStableMs: 30000,
+    playgroundProbeTimeoutMs: 180_000,
+    playgroundProbeStableMs: 30_000,
     // A session learns what its containers are doing from docker's event
     // stream, so these are the two questions no event can answer. Nothing
     // reports that an app has bound its port, so the TCP rung knocks; and
@@ -659,7 +659,7 @@ module.exports = {
     // detection wants an average across the window rather than fine detail,
     // which is why the sampling is coarse.
     playgroundTcpRetryMs: 2000,
-    playgroundCpuSampleMs: 15000,
+    playgroundCpuSampleMs: 15_000,
     // How many log lines a session keeps for the client - and the follow's
     // history window when it attaches, so a boot burst is retained to the same
     // bound. The log is FOLLOWED, so the poll returns numbered lines above
@@ -670,14 +670,14 @@ module.exports = {
     // How long a session's sealed audit record is kept. Long enough to answer an
     // abuse report, short enough that an operator is not indefinitely holding
     // sealed records of strangers' sessions on their own hardware.
-    playgroundAuditRetentionMs: 2592000000,
+    playgroundAuditRetentionMs: 2_592_000_000,
     // How often the node collects playground containers no live session claims.
     // Also runs once at startup, which is what cleans up after a restart: sessions
     // live in memory, so a restart abandons every container one owned.
-    playgroundReapIntervalMs: 300000,
+    playgroundReapIntervalMs: 300_000,
     minimumInstances: 3,
     minimumInstancesV8: 1,
-    minimumInstancesV8Block: 2176519, // block height where v8+ apps can have 1 instance - expected around December 19th 2025
+    minimumInstancesV8Block: 2_176_519, // block height where v8+ apps can have 1 instance - expected around December 19th 2025
     maximumInstances: 100,
     maxAppsPerNode: 200,
     minOutgoing: 8,
@@ -750,17 +750,17 @@ module.exports = {
       probability: 2, // 50%
       composedDelay: 5,
     },
-    blocksLasting: 22000, // by default registered app will live for 22000 of blocks 44000 minutes ~= 1 month
+    blocksLasting: 22_000, // by default registered app will live for 22000 of blocks 44000 minutes ~= 1 month
     minBlocksAllowance: 5000, // app can be registered for a minimum of this blocks ~ 1 week
     newMinBlocksAllowance: 100, // app can be registered for a minimum of this blocks ~ 3 hours - to allow users to cancel application subscription
-    newMinBlocksAllowanceBlock: 1630040, // block where we will start looking at new min blocks allowance. block expected on 26th of April 2024
+    newMinBlocksAllowanceBlock: 1_630_040, // block where we will start looking at new min blocks allowance. block expected on 26th of April 2024
     cancel1BlockMinBlocksAllowance: 1, // app can be registered for a minimum of 1 block for cancellation purposes
-    cancel1BlockMinBlocksAllowanceBlock: 1964447, // block where we will start allowing 1 block lifetime updates - Expected August 6th 2025
-    maxBlocksAllowance: 264000, // app can be registered up for a maximum of this blocks ~ 1 year
-    postPonMaxBlocksAllowance: 1056000, // after PON fork, chain works 4x faster, so max blocks is 4x higher ~ 1 year
-    daemonPONFork: 2020000, // block height where PON (Proof of Node) fork activates - chain works 4x faster after this block
+    cancel1BlockMinBlocksAllowanceBlock: 1_964_447, // block where we will start allowing 1 block lifetime updates - Expected August 6th 2025
+    maxBlocksAllowance: 264_000, // app can be registered up for a maximum of this blocks ~ 1 year
+    postPonMaxBlocksAllowance: 1_056_000, // after PON fork, chain works 4x faster, so max blocks is 4x higher ~ 1 year
+    daemonPONFork: 2_020_000, // block height where PON (Proof of Node) fork activates - chain works 4x faster after this block
     blocksAllowanceInterval: 1000, // ap differences can be in 1000s - more than 1 day
-    removeBlocksAllowanceIntervalBlock: 1625000, // after this block we can start having app updates without extending subscription - block expected in April 19th 2024
+    removeBlocksAllowanceIntervalBlock: 1_625_000, // after this block we can start having app updates without extending subscription - block expected in April 19th 2024
     ownerAppAllowance: 1000, // a by-name local install (fluxteam only) runs for this amount of blocks before the expiry sweep removes it
     temporaryAppAllowance: 200, // in case of any user installing some temporary app message for testing purposes, the app will run for this many blocks
     expireFluxAppsPeriod: 100, // every 100 blocks we run a check that deletes apps specifications and stops/removes the application from existence if it has been lastly updated more than 22k blocks ago
@@ -770,12 +770,12 @@ module.exports = {
     benchUpnpPeriod: 6480, // every 9 days execute upnp bench
     hddFileSystemMinimum: 10, // right now 10, to be decreased to a minimum of 5GB of free space on hdd for docker with v8 specs activation
     defaultSwap: 2, // 2gb swap memory minimum, this is in gb
-    applyMinimumPriceOn3Instances: 1691000, // after this block we use the min. usd price on prices per 3 instances.
-    applyMinimumForExtraInstances: 1890000,
+    applyMinimumPriceOn3Instances: 1_691_000, // after this block we use the min. usd price on prices per 3 instances.
+    applyMinimumForExtraInstances: 1_890_000,
     latestAppSpecification: 8,
     bootDelayMultiplier: 1,
     spawnDelayMs: 0,
-    removalSpacingMs: 60000,
+    removalSpacingMs: 60_000,
     // Per-document expiry for the ephemeral app collections, in seconds, read by
     // appConstants.js. Each record carries its own deadline and the collection
     // index is expireAt/expireAfterSeconds:0, so changing one of these takes
@@ -807,47 +807,47 @@ module.exports = {
     // drove it; that index was dropped when expiry moved per-document, and the
     // key kept the old mechanism's number for three months while nothing read
     // it. The 24h the code has actually run since is the value.
-    installErrorTtlS: 86400,
+    installErrorTtlS: 86_400,
     tempMsgTtlS: 3600, // collection-level index, serviceManager.js
-    clockSkewAllowanceMs: 120000, // how far a peer's self-reported timestamp may run AHEAD of ours before we distrust it. Bounds clock disagreement, NOT message usefulness, so it is deliberately not the 5-min staleness window in verifyTimestampInFluxBroadcast. Consumed by both the envelope guard in verifyFluxBroadcast and the broadcastedAt guard in messageStore; boundary tests in both suites are written relative to this value, so changing it moves the tested boundary with it rather than breaking them
-    hashSyncIntervalMs: 1800000,
-    cpuCheckIntervalMs: 900000,
-    statsSampleIntervalMs: 60000,
-    portRestoreIntervalMs: 600000,
+    clockSkewAllowanceMs: 120_000, // how far a peer's self-reported timestamp may run AHEAD of ours before we distrust it. Bounds clock disagreement, NOT message usefulness, so it is deliberately not the 5-min staleness window in verifyTimestampInFluxBroadcast. Consumed by both the envelope guard in verifyFluxBroadcast and the broadcastedAt guard in messageStore; boundary tests in both suites are written relative to this value, so changing it moves the tested boundary with it rather than breaking them
+    hashSyncIntervalMs: 1_800_000,
+    cpuCheckIntervalMs: 900_000,
+    statsSampleIntervalMs: 60_000,
+    portRestoreIntervalMs: 600_000,
     // How long a node waits, at most, before acting on a blocklist change. Adoption
     // reaches the fleet within seconds of itself, so a pass taken on arrival would put
     // every node's removals - and the broadcast of each one - into the same moment.
     // Each node picks a point in this window instead.
-    complianceSweepStaggerMs: 120000,
+    complianceSweepStaggerMs: 120_000,
     // Between one removal and the next on a node. The stagger above spreads the fleet;
     // this spreads one node's own.
-    complianceRemovalSpacingMs: 180000,
+    complianceRemovalSpacingMs: 180_000,
     // An application the sweep could not finish with is asked again on this, doubling
     // to the ceiling. It covers what has no event to wait on: an enterprise
     // specification that did not decrypt, and a removal that threw.
-    complianceRetryBaseMs: 60000,
-    complianceRetryMaxMs: 3600000,
-    imageComplianceIntervalMs: 3600000,
-    tamperingCheckIntervalMs: 43200000, // 12h — how often a node re-checks whether it is on the tampering blocklist
+    complianceRetryBaseMs: 60_000,
+    complianceRetryMaxMs: 3_600_000,
+    imageComplianceIntervalMs: 3_600_000,
+    tamperingCheckIntervalMs: 43_200_000, // 12h — how often a node re-checks whether it is on the tampering blocklist
     imageCacheEnabled: true, // master switch for the image-cache API + retention pin
     imageCachePerFluxIdQuotaGb: 20, // soft per-fluxId quota, accounted from real docker df() on-disk size
     imageCachePerImageBurstCapGb: 5, // per-image admission cap vs (compressed * 2); bounds the burst to ~one image
     imageCacheNodeMaxGb: 60, // node-wide cap across all owners (the only node-side guard until disk-fit integrates)
     imageCacheMaxConcurrentPulls: 3, // parallel pull bound (a congested registry link favours few-at-once)
     imageCacheMaxPullRetries: 3, // transient-failure retries before a pull is marked failed
-    imageCacheJobTtlMs: 10800000, // in-memory download-job/progress retention (3h)
-    imageReaperIntervalMs: 86400000, // cold-unused-image reaper cadence (daily; runs on ALL nodes, not gated on imageCacheEnabled)
-    adoptionStaggerStepMs: 60000, // named-replica rolling-update step (floors at the app's graceful-shutdown budget)
-    adoptionStaggerWindowMs: 300000, // loose-instance adoption spread window (bounds the fleet-wide restart stagger)
-    orphanSweepIntervalMs: 7200000, // docker-orphan janitor cadence (containers with no installed-app row)
-    dockerDebrisIntervalMs: 21600000, // docker prune cadence (stopped containers/unused networks/volumes; guarded)
-    meshReconcileIntervalMs: 1800000, // mesh reconcile cadence (membership, certs incl. aged-replacement promotion, detector)
-    backendTlsRenewalIntervalMs: 21600000, // managed backend-TLS renewal cadence (6h; the 30-day leaf is re-issued with ~10 days to spare, so the pace only bounds how fast a missing cert heals)
-    installCollisionWaitMs: 90000,
-    activeStandbyStaggerMs: 180000, // per-index delay before a history-less standby self-promotes (index * this); 6 election cycles at the 30s cadence
+    imageCacheJobTtlMs: 10_800_000, // in-memory download-job/progress retention (3h)
+    imageReaperIntervalMs: 86_400_000, // cold-unused-image reaper cadence (daily; runs on ALL nodes, not gated on imageCacheEnabled)
+    adoptionStaggerStepMs: 60_000, // named-replica rolling-update step (floors at the app's graceful-shutdown budget)
+    adoptionStaggerWindowMs: 300_000, // loose-instance adoption spread window (bounds the fleet-wide restart stagger)
+    orphanSweepIntervalMs: 7_200_000, // docker-orphan janitor cadence (containers with no installed-app row)
+    dockerDebrisIntervalMs: 21_600_000, // docker prune cadence (stopped containers/unused networks/volumes; guarded)
+    meshReconcileIntervalMs: 1_800_000, // mesh reconcile cadence (membership, certs incl. aged-replacement promotion, detector)
+    backendTlsRenewalIntervalMs: 21_600_000, // managed backend-TLS renewal cadence (6h; the 30-day leaf is re-issued with ~10 days to spare, so the pace only bounds how fast a missing cert heals)
+    installCollisionWaitMs: 90_000,
+    activeStandbyStaggerMs: 180_000, // per-index delay before a history-less standby self-promotes (index * this); 6 election cycles at the 30s cadence
     portTestPeerTimeoutMs: 5000, // per-peer reachability round-trip timeout
     portTestBindDelayMs: 5000,
-    portTestPropagationDelayMs: 10000,
+    portTestPropagationDelayMs: 10_000,
     portTestMaxAttempts: 5,
     // Asking the other Flux nodes at our own public address which ports they
     // hold. Short: they are one hop away, and a sibling that does not answer
@@ -857,13 +857,13 @@ module.exports = {
     // How long a signed sibling ask stays good for. The exchange itself is
     // bounded by siblingPortsTimeoutMs; the rest is allowance for two nodes
     // that were never required to agree on the time.
-    siblingAskValidityMs: 60000,
+    siblingAskValidityMs: 60_000,
     portTestPeerQueryCount: 3, // peers queried concurrently per round - distinct /16, excluding our own
     portTestMaxRounds: 3, // max retry rounds when a round is inconclusive (no peer answered)
     portTestPrefixLength: 16, // bits of IP prefix (whole octets) defining an "independent" peer for the reachability probe
-    contentManifestReapGraceMs: 7200000, // manifests younger than this are never reaped - covers the register window where the manifest exists before the app tx confirms on-chain
-    spawnReconfirmDelayMs: 7500000,
-    unencryptedSpawnDelayMs: 120000,
+    contentManifestReapGraceMs: 7_200_000, // manifests younger than this are never reaped - covers the register window where the manifest exists before the app tx confirms on-chain
+    spawnReconfirmDelayMs: 7_500_000,
+    unencryptedSpawnDelayMs: 120_000,
     manageCollectorLifecycle: false, // node-managed lifecycle for shareWith dependency apps (collectors). Off: the flux console owns this lifecycle and a dependency is "ready" once installed; on: FluxOS also requires the dependency to be running before a consumer installs against it.
     globalCmdDelayMs: 500,
     // How many times a global command retries a node that answers 503 while it
@@ -872,11 +872,11 @@ module.exports = {
     // booting node to settle, bounded so a genuinely wedged one is not hammered.
     globalCmdBootRetries: 8,
     discoveryAutostart: true,
-    discoveryRetryMs: 60000,
-    discoveryFailRetryMs: 120000,
+    discoveryRetryMs: 60_000,
+    discoveryFailRetryMs: 120_000,
     discoveryConnectionDelayMs: 500,
-    connectionBackoffMs: [120000, 300000, 600000, 900000],
-    nodeMonitorRemovalDelayMs: 60000,
+    connectionBackoffMs: [120_000, 300_000, 600_000, 900_000],
+    nodeMonitorRemovalDelayMs: 60_000,
     // Residential-node staging. The placement hold is immediate and is not
     // tunable; these pace only the part that moves customer data.
     residentialCheckIntervalMs: 6 * 60 * 60 * 1000, // re-evaluate the verdict
@@ -897,17 +897,17 @@ module.exports = {
     // meet. Asserted against production's own config in the unit tests.
     residentialQueueStepMs: 40 * 60 * 1000,
     spawnDeferrals: {
-      targetedNodesMs: { encrypted: 1800000, standard: 3420000 },
-      staticIpMs: { encrypted: 1620000, standard: 3420000 },
-      datacenterMs: { encrypted: 1620000, standard: 3420000 },
+      targetedNodesMs: { encrypted: 1_800_000, standard: 3_420_000 },
+      staticIpMs: { encrypted: 1_620_000, standard: 3_420_000 },
+      datacenterMs: { encrypted: 1_620_000, standard: 3_420_000 },
       capacityGap: {
-        largeMs: { encrypted: 1800000, standard: 7020000 },
-        mediumMs: { encrypted: 1260000, standard: 5220000 },
-        smallMs: { encrypted: 720000, standard: 3420000 },
+        largeMs: { encrypted: 1_800_000, standard: 7_020_000 },
+        mediumMs: { encrypted: 1_260_000, standard: 5_220_000 },
+        smallMs: { encrypted: 720_000, standard: 3_420_000 },
       },
     },
     spawnDelayMultiplier: 1,
-    daemonInfoIntervalMs: 30000,
+    daemonInfoIntervalMs: 30_000,
     // NOT how often the chain is asked. pollForNewBlocks reads a height cached
     // by daemonServiceMiscRpcs and refreshed on the daemonInfoIntervalMs timer
     // above, so this is the rate at which the node works THROUGH blocks once it
@@ -915,11 +915,11 @@ module.exports = {
     // is what decides whether a block is still the tip when it is processed,
     // and everything hung off block processing inherits that.
     explorerPollIntervalMs: 5000,
-    explorerSyncRetryMs: 120000,
+    explorerSyncRetryMs: 120_000,
     explorerDeepRestoreBlocks: 100,
-    syncTimeoutMs: 120000,
+    syncTimeoutMs: 120_000,
     hashSyncMaxRetries: 3,
-    hashSyncRetryMs: 300000,
+    hashSyncRetryMs: 300_000,
     hashSyncSettleMs: 4000,
     hashSyncResponseTimePerHashMs: 150,
     hashSyncBufferMs: 5000,
@@ -930,17 +930,17 @@ module.exports = {
     manifestRefreshBlocks: 100, // steady-state content-manifest anti-entropy cadence (~50 min)
     manifestRefreshPeers: 3, // peers sampled per steady-state manifest refresh
     manifestRefreshMinPeerUptime: 30, // refresh sync-source uptime floor (s) - token, NOT the boot sync's 2h anti-flap gate
-    networkStateMinFetchIntervalMs: 30000, // nodelist fetch throttle - block-driven refreshes inside this window serve the cache
-    syncResponseThrottleMs: 300000,
-    wsHandshakeTimeoutMs: 10000,
-    imageUpdateCheckIntervalMs: 21600000,
-    imageUpdateInitialDelayMinMs: 600000,
-    imageUpdateInitialDelayMaxMs: 1800000,
+    networkStateMinFetchIntervalMs: 30_000, // nodelist fetch throttle - block-driven refreshes inside this window serve the cache
+    syncResponseThrottleMs: 300_000,
+    wsHandshakeTimeoutMs: 10_000,
+    imageUpdateCheckIntervalMs: 21_600_000,
+    imageUpdateInitialDelayMinMs: 600_000,
+    imageUpdateInitialDelayMaxMs: 1_800_000,
     imageUpdateDelayBetweenAppsMs: 5000,
-    imageUpdateDelayAfterRedeployMs: 120000,
+    imageUpdateDelayAfterRedeployMs: 120_000,
     imageUpdateDelayBetweenComponentsMs: 1000,
-    masterSlaveIntervalMs: 30000, // masterSlave (g:) FDM election cycle
-    masterSlaveStaggerMs: 180000, // per-place wait before an instance may take an empty g: primary
+    masterSlaveIntervalMs: 30_000, // masterSlave (g:) FDM election cycle
+    masterSlaveStaggerMs: 180_000, // per-place wait before an instance may take an empty g: primary
 
     // ---- knobs whose value lived only in the reader ----
     //
@@ -953,20 +953,20 @@ module.exports = {
     // app state sync
     appSyncMaxPeers: 5, // distinct peers one sync round may ask, initial batch plus replacements
     ingressRefreshBlocks: 200, // steady-state ingress-attestation anti-entropy cadence
-    reconnectSyncSlackMs: 120000, // how far before an observed loss a scoped reconnect pull reaches back
-    manifestIndexTimeoutMs: 15000,
+    reconnectSyncSlackMs: 120_000, // how far before an observed loss a scoped reconnect pull reaches back
+    manifestIndexTimeoutMs: 15_000,
     manifestFetchSettleMs: 8000,
-    ingressIndexTimeoutMs: 15000,
+    ingressIndexTimeoutMs: 15_000,
     ingressFetchSettleMs: 8000,
 
     // app reconciler
-    convergeRetryMs: 10000, // between convergence attempts for one app
-    firstRunProofMs: 60000, // a fresh container must stay up this long to count as run
+    convergeRetryMs: 10_000, // between convergence attempts for one app
+    firstRunProofMs: 60_000, // a fresh container must stay up this long to count as run
 
     // explorer
     explorerCursorBatchSize: 500,
     explorerUnsyncedRetryMs: 5000,
-    explorerRecoveryRetryMs: 60000,
+    explorerRecoveryRetryMs: 60_000,
     explorerIdlePollMs: 5000,
 
     // peer dialling
@@ -975,7 +975,7 @@ module.exports = {
     // membership history - R1: retention MUST exceed the nodedown record
     // lifetime (6h) plus issue-to-publish slack (30m), or a standing
     // certificate stops being cold-verifiable. Change both together.
-    membershipHistoryRetentionMs: 23400000,
+    membershipHistoryRetentionMs: 23_400_000,
     membershipHistoryMaxEntries: 4000,
 
     // founding committee
@@ -984,20 +984,20 @@ module.exports = {
     founderFlipNBlocks: 720,
     founderGateLagBlocks: 240,
     founderQuietZoneBlocks: 10,
-    founderFlipEvaluateIntervalMs: 60000,
+    founderFlipEvaluateIntervalMs: 60_000,
 
     // quorum grant
     quorumGrantAskTimeoutMs: 5000,
-    quorumGrantAskFreshnessMs: 120000,
-    quorumGrantLockDelayMs: 30000,
-    quorumGrantMaxTtlMs: 300000,
-    quorumGrantDrainMs: 300000, // must not exceed quorumGrantMaxTtlMs
-    quorumGrantHeldTtlMs: 150000,
-    quorumGrantRenewIntervalMs: 20000,
-    quorumGrantRepairIntervalMs: 30000,
-    quorumGrantPursuitIntervalMs: 30000,
-    quorumGrantDemotionSlackMs: 15000,
-    quorumGrantMinHolderAgeMs: 420000,
+    quorumGrantAskFreshnessMs: 120_000,
+    quorumGrantLockDelayMs: 30_000,
+    quorumGrantMaxTtlMs: 300_000,
+    quorumGrantDrainMs: 300_000, // must not exceed quorumGrantMaxTtlMs
+    quorumGrantHeldTtlMs: 150_000,
+    quorumGrantRenewIntervalMs: 20_000,
+    quorumGrantRepairIntervalMs: 30_000,
+    quorumGrantPursuitIntervalMs: 30_000,
+    quorumGrantDemotionSlackMs: 15_000,
+    quorumGrantMinHolderAgeMs: 420_000,
     quorumGrantPeerAsksPerMinute: 600,
     quorumGrantPreWindowBlocks: 40,
     quorumGrantGenerationDrainBlocks: 20,
@@ -1055,8 +1055,8 @@ module.exports = {
     },
     ram: {
       cumulus: 7000, // 5000 available for apps
-      nimbus: 30000, // 28000 available for apps
-      stratus: 61000, // available 59000 for apps
+      nimbus: 30_000, // 28000 available for apps
+      stratus: 61_000, // available 59000 for apps
     },
     hdd: {
       cumulus: 220, // 180 for apps
@@ -1064,35 +1064,35 @@ module.exports = {
       stratus: 880, // 840 for apps
     },
     collateral: { // tbd during forks
-      cumulusold: 10000,
-      nimbusold: 25000,
-      stratusold: 100000,
+      cumulusold: 10_000,
+      nimbusold: 25_000,
+      stratusold: 100_000,
       cumulus: 1000,
-      nimbus: 12500,
-      stratus: 40000,
+      nimbus: 12_500,
+      stratus: 40_000,
     },
   },
   syncthing: { // operates on apiPort + 2
     ip: '127.0.0.1',
     port: 8384,
-    monitorIntervalMs: 30000, // syncthingApps reconfiguration/sync-readiness cycle
+    monitorIntervalMs: 30_000, // syncthingApps reconfiguration/sync-readiness cycle
     // How long a node goes without a successful health probe before it reports
     // syncthing down. Four missed passes of the 60s sentinel loop: wide enough
     // that a slow adjustSyncthing or a couple of blips cannot mark the node
     // down, short enough that a real outage is reported within minutes. It is
     // also the grace the sentinel gets to land its FIRST probe, after which
     // silence is a fault rather than an absence.
-    healthWindowMs: 300000,
+    healthWindowMs: 300_000,
     // The sentinel's own cadence. The window above is four missed passes of
     // this, so a suite that shortens one must shorten the other - shorten the
     // window alone and a healthy node goes stale between two good probes.
-    sentinelIntervalMs: 60000,
+    sentinelIntervalMs: 60_000,
     // stall ladder (receive-only convergence): wait -> device pause/resume nudge with
     // doubling backoff -> removal only with a connected synced peer, repeated nudges
     // and zero progress over the minimum window
-    stallNudgeAfterMs: 180000, // 3min idle with no byte progress before the first nudge
-    stallNudgeMaxIntervalMs: 900000, // nudge backoff cap (15min)
-    stallRemoveMinWindowMs: 1200000, // 20min minimum evidence window before removal
+    stallNudgeAfterMs: 180_000, // 3min idle with no byte progress before the first nudge
+    stallNudgeMaxIntervalMs: 900_000, // nudge backoff cap (15min)
+    stallRemoveMinWindowMs: 1_200_000, // 20min minimum evidence window before removal
     stallRemoveMinNudges: 3, // nudges that must have failed before removal
     // Where a legacy node installs syncthing from. Arcane nodes ship it in the image and
     // never reach either of these.
@@ -1128,7 +1128,7 @@ module.exports = {
     // not a host-aggregate budget — multiple burstable apps on the same host can collectively
     // oversubscribe during simultaneous spikes, which CFS handles by sharing fairly.
     enabled: true,
-    periodUs: 100000, // CFS period in microseconds (100ms, Linux default)
+    periodUs: 100_000, // CFS period in microseconds (100ms, Linux default)
     reservedCores: 1, // cores reserved for system services; bounds any single container's burst peak
   },
   registryAuth: {
@@ -1230,10 +1230,10 @@ module.exports = {
     // restart a node to approximate it - which tests the boot path instead, and leaves
     // the periodic one with no coverage at all.
     refreshIntervalMs: {
-      blockedRepositories: 21600000, // 6h
-      tamperingBlocklist: 43200000, // 12h
-      enterpriseNodes: 21600000, // 6h
-      ipLocationTable: 86400000, // 24h
+      blockedRepositories: 21_600_000, // 6h
+      tamperingBlocklist: 43_200_000, // 12h
+      enterpriseNodes: 21_600_000, // 6h
+      ipLocationTable: 86_400_000, // 24h
     },
     // How long a refresh waits for a peer to answer before falling through to the
     // source. Peers are on the local network and answer in milliseconds; this bounds how
@@ -1243,8 +1243,8 @@ module.exports = {
     // Bound on a single backstop fetch, so a boot is never stuck on one source. Absolute,
     // for the same reason as above.
     fetchTimeoutMs: {
-      default: 10000,
-      ipLocationTable: 120000,
+      default: 10_000,
+      ipLocationTable: 120_000,
     },
     // How long a FAILED backstop fetch stands as the answer before the source is asked
     // again. The decision to ask is derived from the peer picture and re-evaluated

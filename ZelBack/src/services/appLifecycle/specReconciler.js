@@ -90,7 +90,7 @@ async function adoptionDelayMs(registrySpec, localSocketAddr) {
     const deployment = await deploymentProvider.getInstalledDeployment(registrySpec.name);
     if (deployment && shutdownPlan.appRequiresDaemonShutdown(deployment)) {
       const budgetMs = shutdownPlan.appShutdownBudgetSeconds(deployment) * 1000;
-      step = Math.max(step, budgetMs + 15000);
+      step = Math.max(step, budgetMs + 15_000);
     }
     return ordinal * step;
   }

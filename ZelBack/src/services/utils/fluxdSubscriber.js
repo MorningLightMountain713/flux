@@ -14,9 +14,9 @@ const DEFAULT_ENDPOINT = 'tcp://127.0.0.1:16123';
 const DEFAULT_SOCKET_OPTIONS = {
   reconnectInterval: 500,
   reconnectMaxInterval: 15_000,
-  heartbeatInterval: 5_000,
+  heartbeatInterval: 5000,
   heartbeatTimeout: 20_000,
-  connectTimeout: 3_000,
+  connectTimeout: 3000,
 };
 
 // One block's worth of deltas is a single message, so this holds hours of them and

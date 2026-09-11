@@ -131,6 +131,7 @@
     "chai-as-promised": "~7.1.2",
     "eslint": "~8.57.1",
     "eslint-plugin-import": "~2.32.0",
+    "eslint-plugin-unicorn": "^55.0.0",
     "espree": "^9.6.1",
     "jsdoc": "~4.0.3",
     "mocha": "~11.7.1",

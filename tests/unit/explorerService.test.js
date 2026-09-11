@@ -173,11 +173,11 @@ describe('explorerService tests', () => {
                 addresses: ['t1LUs6quf7TB2zVZmexqPQdnqmrFMGZGjV6'],
                 asm: 'OP_RETURN 5468697320737472696e672069732065786163746c792036342063686172616374657273206c6f6e672e20496e636c7564696e67207468697320737472696e67',
               },
-              valueSat: 20000000,
+              valueSat: 20_000_000,
             }],
           },
         ],
-        height: 983000,
+        height: 983_000,
       };
       await explorerService.processInsight(blockVerbose, database);
 
@@ -209,7 +209,7 @@ describe('explorerService tests', () => {
             }],
           },
         ],
-        height: 983000,
+        height: 983_000,
       };
       await explorerService.processInsight(blockVerbose, database);
 
@@ -237,7 +237,7 @@ describe('explorerService tests', () => {
                 addresses: ['t1LUs6quf7TB2zVZmexqPQdnqmrFMGZGjV6'],
                 asm: 'OP_RETURN 5468697320737472696e672069732065786163746c792036342063686172616374657273206c6f6e672e20496e636c7564696e67207468697320737472696e67',
               },
-              valueSat: 20000000,
+              valueSat: 20_000_000,
             }],
           },
         ],
@@ -285,13 +285,13 @@ describe('explorerService tests', () => {
     });
 
     it('should update db if all parameters are passed correctly, block height == 695000', async () => {
-      const blockHeight = 695000;
+      const blockHeight = 695_000;
       const isInsightExplorer = true;
       dbStubUpdate.returns(true);
       sweepRegistryExpiryStub.returns(true);
       // prevent infinite func loop while testing
       dbStubCollectionStats.returns({
-        size: 10000,
+        size: 10_000,
         count: 15,
         avgObjSize: 1111,
       });
@@ -322,11 +322,11 @@ describe('explorerService tests', () => {
                   addresses: ['t1LUs6quf7TB2zVZmexqPQdnqmrFMGZGjV6'],
                   asm: 'OP_RETURN 5468697320737472696e672069732065786163746c792036342063686172616374657273206c6f6e672e20496e636c7564696e67207468697320737472696e67',
                 },
-                valueSat: 20000000,
+                valueSat: 20_000_000,
               }],
             },
           ],
-          height: 695000,
+          height: 695_000,
           confirmations: 1,
         },
       });
@@ -340,20 +340,20 @@ describe('explorerService tests', () => {
         sinon.match.object,
         'scannedheight',
         { generalScannedHeight: { $gte: 0 } },
-        { $set: { generalScannedHeight: 695000 } },
+        { $set: { generalScannedHeight: 695_000 } },
         { upsert: true },
       );
       sinon.assert.calledWith(logInfoSpy, 'Processing Explorer Block Height: 695000');
     });
 
     it('should update db if all parameters are passed correctly, height == 900009', async () => {
-      const blockHeight = 900009;
+      const blockHeight = 900_009;
       const isInsightExplorer = true;
       dbStubUpdate.returns(true);
       reconcileInstalledAppsStub.returns(true);
       // prevent infinite func loop while testing
       dbStubCollectionStats.returns({
-        size: 10000,
+        size: 10_000,
         count: 15,
         avgObjSize: 1111,
       });
@@ -384,11 +384,11 @@ describe('explorerService tests', () => {
                   addresses: ['t1LUs6quf7TB2zVZmexqPQdnqmrFMGZGjV6'],
                   asm: 'OP_RETURN 5468697320737472696e672069732065786163746c792036342063686172616374657273206c6f6e672e20496e636c7564696e67207468697320737472696e67',
                 },
-                valueSat: 20000000,
+                valueSat: 20_000_000,
               }],
             },
           ],
-          height: 900009,
+          height: 900_009,
           confirmations: 1,
         },
       });
@@ -402,19 +402,19 @@ describe('explorerService tests', () => {
         sinon.match.object,
         'scannedheight',
         { generalScannedHeight: { $gte: 0 } },
-        { $set: { generalScannedHeight: 900009 } },
+        { $set: { generalScannedHeight: 900_009 } },
         { upsert: true },
       );
     });
 
     it('should update db if all parameters are passed correctly, height == 900025', async () => {
-      const blockHeight = 900025;
+      const blockHeight = 900_025;
       const isInsightExplorer = true;
       dbStubUpdate.returns(true);
       reconcileInstalledAppsStub.returns(true);
       // prevent infinite func loop while testing
       dbStubCollectionStats.returns({
-        size: 10000,
+        size: 10_000,
         count: 15,
         avgObjSize: 1111,
       });
@@ -445,11 +445,11 @@ describe('explorerService tests', () => {
                   addresses: ['t1LUs6quf7TB2zVZmexqPQdnqmrFMGZGjV6'],
                   asm: 'OP_RETURN 5468697320737472696e672069732065786163746c792036342063686172616374657273206c6f6e672e20496e636c7564696e67207468697320737472696e67',
                 },
-                valueSat: 20000000,
+                valueSat: 20_000_000,
               }],
             },
           ],
-          height: 900025,
+          height: 900_025,
           confirmations: 1,
         },
       });
@@ -462,7 +462,7 @@ describe('explorerService tests', () => {
         sinon.match.object,
         'scannedheight',
         { generalScannedHeight: { $gte: 0 } },
-        { $set: { generalScannedHeight: 900025 } },
+        { $set: { generalScannedHeight: 900_025 } },
         { upsert: true },
       );
     });
@@ -488,7 +488,7 @@ describe('explorerService tests', () => {
       sinon.stub(dbHelper, 'insertManyToDatabase').returns(true);
       sinon.stub(dbHelper, 'updateOneInDatabase').returns(true);
       sinon.stub(dbHelper, 'collectionStats').returns({
-        size: 10000,
+        size: 10_000,
         count: 15,
         avgObjSize: 1111,
       });
@@ -515,11 +515,11 @@ describe('explorerService tests', () => {
                   addresses: ['t1LUs6quf7TB2zVZmexqPQdnqmrFMGZGjV6'],
                   asm: 'OP_RETURN 5468697320737472696e672069732065786163746c792036342063686172616374657273206c6f6e672e20496e636c7564696e67207468697320737472696e67',
                 },
-                valueSat: 20000000,
+                valueSat: 20_000_000,
               }],
             },
           ],
-          height: 695000,
+          height: 695_000,
           confirmations: 1,
         },
       });
@@ -568,7 +568,7 @@ describe('explorerService tests', () => {
       sinon.stub(dbHelper, 'databaseConnection').returns({ db: dbFake });
       getBlockCountStub.returns({
         status: 'success',
-        data: 200000,
+        data: 200_000,
       });
       sinon.stub(daemonServiceMiscRpcs, 'isInsightExplorer').returns(true);
       sinon.stub(daemonServiceUtils, 'executeCall').resolves({ status: 'success', data: [] });
@@ -593,7 +593,7 @@ describe('explorerService tests', () => {
       const collectionFake = sinon.fake.returns({ createIndex: createIndexFake, updateMany: sinon.fake.resolves({ modifiedCount: 0 }), indexes: sinon.fake.resolves([]) });
       const dbFake = sinon.fake.returns({ collection: collectionFake });
       sinon.stub(dbHelper, 'databaseConnection').returns({ db: dbFake });
-      getBlockCountStub.returns({ status: 'success', data: 200000 });
+      getBlockCountStub.returns({ status: 'success', data: 200_000 });
       sinon.stub(daemonServiceMiscRpcs, 'isInsightExplorer').returns(true);
       sinon.stub(daemonServiceUtils, 'executeCall').resolves({ status: 'error', data: { message: 'RPC unavailable' } });
 
@@ -619,7 +619,7 @@ describe('explorerService tests', () => {
       sinon.stub(dbHelper, 'databaseConnection').returns({ db: dbFake });
       getBlockCountStub.returns({
         status: 'success',
-        data: 200000,
+        data: 200_000,
       });
       sinon.stub(daemonServiceMiscRpcs, 'isInsightExplorer').returns(true);
 
@@ -649,7 +649,7 @@ describe('explorerService tests', () => {
       sinon.stub(dbHelper, 'databaseConnection').returns({ db: dbFake });
       getBlockCountStub.returns({
         status: 'success',
-        data: 200000,
+        data: 200_000,
       });
       sinon.stub(daemonServiceMiscRpcs, 'isInsightExplorer').returns(true);
 
@@ -679,7 +679,7 @@ describe('explorerService tests', () => {
       sinon.stub(dbHelper, 'databaseConnection').returns({ db: dbFake });
       getBlockCountStub.returns({
         status: 'success',
-        data: 200000,
+        data: 200_000,
       });
       sinon.stub(daemonServiceMiscRpcs, 'isInsightExplorer').returns(true);
       sinon.stub(daemonServiceUtils, 'executeCall').resolves({ status: 'success', data: [] });
@@ -701,12 +701,12 @@ describe('explorerService tests', () => {
     it('should return correct price spec via binary search', () => {
       const specs = [
         { height: -1, minPrice: 1 },
-        { height: 983000, minPrice: 0.1 },
-        { height: 1004000, minPrice: 0.01 },
+        { height: 983_000, minPrice: 0.1 },
+        { height: 1_004_000, minPrice: 0.01 },
       ];
-      expect(explorerService.getPriceSpecForHeight(specs, 500000).minPrice).to.equal(1);
-      expect(explorerService.getPriceSpecForHeight(specs, 983001).minPrice).to.equal(0.1);
-      expect(explorerService.getPriceSpecForHeight(specs, 2000000).minPrice).to.equal(0.01);
+      expect(explorerService.getPriceSpecForHeight(specs, 500_000).minPrice).to.equal(1);
+      expect(explorerService.getPriceSpecForHeight(specs, 983_001).minPrice).to.equal(0.1);
+      expect(explorerService.getPriceSpecForHeight(specs, 2_000_000).minPrice).to.equal(0.01);
     });
   });
 
@@ -717,11 +717,11 @@ describe('explorerService tests', () => {
       return {
         txid: 'abc123',
         version: 1,
-        height: 700000,
-        blocktime: 1750000000,
+        height: 700_000,
+        blocktime: 1_750_000_000,
         vin: [{ address: 't1SenderAddr' }],
         vout: [{
-          valueSat: 500000000,
+          valueSat: 500_000_000,
           scriptPubKey: {
             addresses: [config.fluxapps.appPaymentAddresses[0].address],
             asm: longAsm,
@@ -741,7 +741,7 @@ describe('explorerService tests', () => {
       expect(hashBatch[0].hash).to.have.length(64);
       expect(hashBatch[0].message).to.equal(false);
       // the confirming block's timestamp rides the row — it becomes v9 registeredAt
-      expect(hashBatch[0].blockTime).to.equal(1750000000);
+      expect(hashBatch[0].blockTime).to.equal(1_750_000_000);
     });
 
     it('should skip tx with version >= 5', () => {
@@ -784,9 +784,9 @@ describe('explorerService tests', () => {
     it('should not count multisig payment before enforcement height', () => {
       const hashBatch = [];
       const tx = makeTx({
-        height: 1200000,
+        height: 1_200_000,
         vout: [{
-          valueSat: 500000000,
+          valueSat: 500_000_000,
           scriptPubKey: {
             addresses: [config.fluxapps.appPaymentAddresses[1].address],
             asm: 'OP_RETURN 6162636465666768696a6b6c6d6e6f707172737475767778797a303132333435363738394142434445464748494a4b4c4d4e4f505152535455565758595a3031',
@@ -839,12 +839,12 @@ describe('explorerService tests', () => {
       executeBatchCallStub.resolves({
         status: 'success',
         data: [
-          { id: 0, result: makeRpcTx('tx1', 700000, config.fluxapps.appPaymentAddresses[0].address, 500000000, hashHex1), error: null },
-          { id: 1, result: makeRpcTx('tx2', 700001, config.fluxapps.appPaymentAddresses[0].address, 500000000, hashHex2), error: null },
+          { id: 0, result: makeRpcTx('tx1', 700_000, config.fluxapps.appPaymentAddresses[0].address, 500_000_000, hashHex1), error: null },
+          { id: 1, result: makeRpcTx('tx2', 700_001, config.fluxapps.appPaymentAddresses[0].address, 500_000_000, hashHex2), error: null },
         ],
       });
 
-      await explorerService.bootstrapAppHashes(2579000);
+      await explorerService.bootstrapAppHashes(2_579_000);
 
       sinon.assert.calledOnce(insertManyStub);
       const inserted = insertManyStub.getCall(0).args[2];
@@ -853,18 +853,18 @@ describe('explorerService tests', () => {
 
       sinon.assert.called(updateOneStub);
       const updateCall = updateOneStub.getCalls().find((c) => c.args[1] === config.database.daemon.collections.scannedHeight);
-      expect(updateCall.args[3].$set.generalScannedHeight).to.equal(2579000);
+      expect(updateCall.args[3].$set.generalScannedHeight).to.equal(2_579_000);
     });
 
     it('should throw on getaddresstxids failure', async () => {
       executeCallStub.resolves({ status: 'error', data: { message: 'RPC failed' } });
-      await expect(explorerService.bootstrapAppHashes(2579000)).to.be.rejectedWith('getaddresstxids failed');
+      await expect(explorerService.bootstrapAppHashes(2_579_000)).to.be.rejectedWith('getaddresstxids failed');
     });
 
     it('should throw on batch getrawtransaction failure', async () => {
       executeCallStub.resolves({ status: 'success', data: ['tx1'] });
       executeBatchCallStub.resolves({ status: 'error', data: { message: 'Batch failed' } });
-      await expect(explorerService.bootstrapAppHashes(2579000)).to.be.rejectedWith('Batch getrawtransaction failed');
+      await expect(explorerService.bootstrapAppHashes(2_579_000)).to.be.rejectedWith('Batch getrawtransaction failed');
     });
 
     it('should tolerate individual tx errors in batch', async () => {
@@ -872,12 +872,12 @@ describe('explorerService tests', () => {
       executeBatchCallStub.resolves({
         status: 'success',
         data: [
-          { id: 0, result: makeRpcTx('tx1', 700000, config.fluxapps.appPaymentAddresses[0].address, 500000000), error: null },
+          { id: 0, result: makeRpcTx('tx1', 700_000, config.fluxapps.appPaymentAddresses[0].address, 500_000_000), error: null },
           { id: 1, result: null, error: { code: -5, message: 'Not found' } },
         ],
       });
 
-      await explorerService.bootstrapAppHashes(2579000);
+      await explorerService.bootstrapAppHashes(2_579_000);
       const inserted = insertManyStub.getCall(0).args[2];
       expect(inserted).to.have.length(1);
     });
@@ -887,12 +887,12 @@ describe('explorerService tests', () => {
       executeBatchCallStub.resolves({
         status: 'success',
         data: [
-          { id: 0, result: makeRpcTx('tx1', 700000, config.fluxapps.appPaymentAddresses[0].address, 500000000), error: null },
-          { id: 1, result: makeRpcTx('tx2', 700001, config.fluxapps.appPaymentAddresses[0].address, 500000000), error: null },
+          { id: 0, result: makeRpcTx('tx1', 700_000, config.fluxapps.appPaymentAddresses[0].address, 500_000_000), error: null },
+          { id: 1, result: makeRpcTx('tx2', 700_001, config.fluxapps.appPaymentAddresses[0].address, 500_000_000), error: null },
         ],
       });
 
-      await explorerService.bootstrapAppHashes(2579000);
+      await explorerService.bootstrapAppHashes(2_579_000);
       const batchCalls = executeBatchCallStub.getCall(0).args[0];
       expect(batchCalls).to.have.length(2);
     });
@@ -909,9 +909,9 @@ describe('explorerService tests', () => {
           batch.push({
             id: j,
             result: {
-              txid: `tx${i + j}`, version: 1, height: 700000 + i + j,
+              txid: `tx${i + j}`, version: 1, height: 700_000 + i + j,
               vin: [{ address: 't1Sender' }],
-              vout: [{ valueSat: 500000000, scriptPubKey: { addresses: [config.fluxapps.appPaymentAddresses[0].address], asm: `OP_RETURN ${hexHash}` } }],
+              vout: [{ valueSat: 500_000_000, scriptPubKey: { addresses: [config.fluxapps.appPaymentAddresses[0].address], asm: `OP_RETURN ${hexHash}` } }],
             },
             error: null,
           });
@@ -921,7 +921,7 @@ describe('explorerService tests', () => {
       let callIdx = 0;
       executeBatchCallStub.callsFake(() => batchResponses[callIdx++]);
 
-      await explorerService.bootstrapAppHashes(2579000);
+      await explorerService.bootstrapAppHashes(2_579_000);
       expect(insertManyStub.callCount).to.be.greaterThan(1);
     });
   });
@@ -942,7 +942,7 @@ describe('explorerService tests', () => {
       // blockindex is the transaction's position in its block, which is what a
       // soft-fork message is ordered by; index is the input/output index within
       // the transaction, and is not it.
-      return { txid, address, satoshis, blockindex: 0, index: 0, height: 1594832 };
+      return { txid, address, satoshis, blockindex: 0, index: 0, height: 1_594_832 };
     }
 
     function makeSoftForkTx(txid, height, msgHex) {
@@ -951,7 +951,7 @@ describe('explorerService tests', () => {
         height,
         vin: [{ address: multisigA }],
         vout: [
-          { valueSat: 100000, scriptPubKey: { addresses: [multisigA], asm: '' } },
+          { valueSat: 100_000, scriptPubKey: { addresses: [multisigA], asm: '' } },
           { valueSat: 0, scriptPubKey: { addresses: [], asm: `OP_RETURN ${msgHex}` } },
         ],
       };
@@ -972,32 +972,32 @@ describe('explorerService tests', () => {
     it('should call getaddressdeltas for both multisig addresses', async () => {
       executeCallStub.resolves({ status: 'success', data: [] });
 
-      await explorerService.bootstrapSoftForks(2579000);
+      await explorerService.bootstrapSoftForks(2_579_000);
 
       sinon.assert.calledOnce(executeCallStub);
       const { args } = executeCallStub.firstCall;
       expect(args[0]).to.equal('getaddressdeltas');
       expect(args[1][0].addresses).to.include(multisigA);
       expect(args[1][0].addresses).to.include(multisigB);
-      expect(args[1][0].end).to.equal(2579000);
+      expect(args[1][0].end).to.equal(2_579_000);
     });
 
     it('should identify self-send transactions and fetch them', async () => {
       executeCallStub.resolves({
         status: 'success',
         data: [
-          makeDelta('selfTx1', multisigA, -500000),
-          makeDelta('selfTx1', multisigA, 500000),
-          makeDelta('onlySpend', multisigA, -100000),
-          makeDelta('onlyReceive', multisigB, 200000),
+          makeDelta('selfTx1', multisigA, -500_000),
+          makeDelta('selfTx1', multisigA, 500_000),
+          makeDelta('onlySpend', multisigA, -100_000),
+          makeDelta('onlyReceive', multisigB, 200_000),
         ],
       });
       executeBatchCallStub.resolves({
         status: 'success',
-        data: [{ id: 0, result: makeSoftForkTx('selfTx1', 1594832, priceForkHex), error: null }],
+        data: [{ id: 0, result: makeSoftForkTx('selfTx1', 1_594_832, priceForkHex), error: null }],
       });
 
-      await explorerService.bootstrapSoftForks(2579000);
+      await explorerService.bootstrapSoftForks(2_579_000);
 
       sinon.assert.calledOnce(executeBatchCallStub);
       const batch = executeBatchCallStub.firstCall.args[0];
@@ -1009,22 +1009,22 @@ describe('explorerService tests', () => {
       executeCallStub.resolves({
         status: 'success',
         data: [
-          makeDelta('forkTx', multisigA, -500000),
-          makeDelta('forkTx', multisigA, 500000),
+          makeDelta('forkTx', multisigA, -500_000),
+          makeDelta('forkTx', multisigA, 500_000),
         ],
       });
       executeBatchCallStub.resolves({
         status: 'success',
-        data: [{ id: 0, result: makeSoftForkTx('forkTx', 1594832, priceForkHex), error: null }],
+        data: [{ id: 0, result: makeSoftForkTx('forkTx', 1_594_832, priceForkHex), error: null }],
       });
 
-      await explorerService.bootstrapSoftForks(2579000);
+      await explorerService.bootstrapSoftForks(2_579_000);
 
       const forkWrite = updateOneStub.getCalls().find(
         (c) => c.args[2]?.txid === 'forkTx',
       );
       expect(forkWrite).to.not.be.undefined;
-      expect(forkWrite.args[3].$set.height).to.equal(1594832);
+      expect(forkWrite.args[3].$set.height).to.equal(1_594_832);
       expect(forkWrite.args[3].$set.message).to.equal(priceForkMsg);
     });
 
@@ -1037,7 +1037,7 @@ describe('explorerService tests', () => {
       executeCallStub.resolves({ status: 'success', data: deltas });
       executeBatchCallStub.resolves({ status: 'success', data: [] });
 
-      await explorerService.bootstrapSoftForks(2579000);
+      await explorerService.bootstrapSoftForks(2_579_000);
 
       expect(executeBatchCallStub.callCount).to.equal(2);
       expect(executeBatchCallStub.firstCall.args[0]).to.have.lengthOf(500);
@@ -1048,7 +1048,7 @@ describe('explorerService tests', () => {
       const logWarnStub = sinon.stub(log, 'warn');
       executeCallStub.resolves({ status: 'error', data: { message: 'RPC unavailable' } });
 
-      await explorerService.bootstrapSoftForks(2579000);
+      await explorerService.bootstrapSoftForks(2_579_000);
 
       expect(logWarnStub.calledWith(sinon.match(/getaddressdeltas failed/))).to.be.true;
       sinon.assert.notCalled(executeBatchCallStub);
@@ -1059,22 +1059,22 @@ describe('explorerService tests', () => {
       executeCallStub.resolves({
         status: 'success',
         data: [
-          makeDelta('noOpReturn', multisigA, -500000),
-          makeDelta('noOpReturn', multisigA, 500000),
+          makeDelta('noOpReturn', multisigA, -500_000),
+          makeDelta('noOpReturn', multisigA, 500_000),
         ],
       });
       const txWithoutOpReturn = {
         txid: 'noOpReturn',
-        height: 1594832,
+        height: 1_594_832,
         vin: [{ address: multisigA }],
-        vout: [{ valueSat: 500000, scriptPubKey: { addresses: [multisigA], asm: '' } }],
+        vout: [{ valueSat: 500_000, scriptPubKey: { addresses: [multisigA], asm: '' } }],
       };
       executeBatchCallStub.resolves({
         status: 'success',
         data: [{ id: 0, result: txWithoutOpReturn, error: null }],
       });
 
-      await explorerService.bootstrapSoftForks(2579000);
+      await explorerService.bootstrapSoftForks(2_579_000);
 
       sinon.assert.notCalled(updateOneStub);
     });
@@ -1106,11 +1106,11 @@ describe('explorerService tests', () => {
     // pubkey. Both authority checks require the input to commit to all outputs.
     const ALL_SCRIPTSIG = '483045022100d8a57c5364a2eb062a6fdac519d665074a1a075dff2215eb15e17c4dfb170eef02203b96971b6a07f880a2d946de2155e3a296d3ebf02d1754cba1f4a648fc2e4591012103a9329557d633a7b261290f7c3b17506d460c3fcfd0cb8fd9339b27d4f583eca7';
 
-    const KEY_HEIGHT = 2000000;
+    const KEY_HEIGHT = 2_000_000;
     // SOFT_FORK_EFFECTIVE_DEPTH is 40: a rate below its key's effective height can
     // never validate, so the rate sits comfortably past it.
     const RATE_HEIGHT = KEY_HEIGHT + 100;
-    const TIP = 2579000;
+    const TIP = 2_579_000;
 
     let executeCallStub;
     let executeBatchCallStub;
@@ -1125,14 +1125,14 @@ describe('explorerService tests', () => {
       height,
       vin: [{ address: from, scriptSig: { hex: ALL_SCRIPTSIG } }],
       vout: [
-        { valueSat: 100000, scriptPubKey: { addresses: [from], asm: '' } },
+        { valueSat: 100_000, scriptPubKey: { addresses: [from], asm: '' } },
         { valueSat: 0, scriptPubKey: { addresses: [], asm: `OP_RETURN ${msgHex}` } },
       ],
     });
 
     const selfSend = (txid, address, height) => [
-      delta(txid, address, -500000, height),
-      delta(txid, address, 500000, height),
+      delta(txid, address, -500_000, height),
+      delta(txid, address, 500_000, height),
     ];
 
     before(async () => {
@@ -1162,7 +1162,7 @@ describe('explorerService tests', () => {
     ).toString('hex');
 
     const rateHex = () => Buffer.from(
-      policy.RateMessage.encode({ timestamp: 1780000000, fluxUsdPriceE4: 691 }),
+      policy.RateMessage.encode({ timestamp: 1_780_000_000, fluxUsdPriceE4: 691 }),
     ).toString('hex');
 
     it('asks only once while no oracle key has been published', async () => {
@@ -1370,7 +1370,7 @@ describe('explorerService tests', () => {
           ]);
         });
 
-        await svc.processSoftFork('badTx', 1594832, 4, PAYLOAD, false, authorityTx());
+        await svc.processSoftFork('badTx', 1_594_832, 4, PAYLOAD, false, authorityTx());
 
         expect(warnSpy.calledWithMatch(/Rejected soft-fork message badTx/)).to.equal(true);
         expect(errorSpy.calledWithMatch(/defect/)).to.equal(false);
@@ -1386,7 +1386,7 @@ describe('explorerService tests', () => {
           throw new TypeError('PRICE_TAGS.get is not a function');
         });
 
-        await expect(svc.processSoftFork('goodTx', 1594832, 4, PAYLOAD, false, authorityTx()))
+        await expect(svc.processSoftFork('goodTx', 1_594_832, 4, PAYLOAD, false, authorityTx()))
           .to.eventually.be.rejectedWith('PRICE_TAGS.get is not a function');
 
         expect(errorSpy.calledWithMatch(/FluxOS\/spec-policy.*defect, not a bad message/)).to.equal(true);
@@ -1402,7 +1402,7 @@ describe('explorerService tests', () => {
         });
         const svc = explorerWith(() => ({ kind: 'price', message: PARSED_PRICE, firstByte: 0x02 }));
 
-        await expect(svc.processSoftFork('priceTx', 1594832, 4, PAYLOAD, false, authorityTx()))
+        await expect(svc.processSoftFork('priceTx', 1_594_832, 4, PAYLOAD, false, authorityTx()))
           .to.eventually.be.rejectedWith(/chainHeight must be a non-negative integer/);
 
         // A row the history refuses is a poison pill: rebuildPriceOracleState replays
@@ -1416,9 +1416,9 @@ describe('explorerService tests', () => {
         sinon.stub(priceOracleState, 'getPriceMessageHistory').returns({ add: addStub });
         const svc = explorerWith(() => ({ kind: 'price', message: PARSED_PRICE, firstByte: 0x02 }));
 
-        await svc.processSoftFork('priceTx', 1594832, 4, PAYLOAD, false, authorityTx());
+        await svc.processSoftFork('priceTx', 1_594_832, 4, PAYLOAD, false, authorityTx());
 
-        sinon.assert.calledOnceWithExactly(addStub, PARSED_PRICE, 1594832, 4);
+        sinon.assert.calledOnceWithExactly(addStub, PARSED_PRICE, 1_594_832, 4);
         const write = updateStub.getCalls().find((c) => c.args[2]?.txid === 'priceTx');
         expect(write, 'the price row must be stored').to.not.be.undefined;
         expect(write.args[3].$set.message).to.equal(PARSED_PRICE);
@@ -1447,7 +1447,7 @@ describe('explorerService tests', () => {
     it('swallows a failure in its own recovery rather than taking the process down', async () => {
       explorerService.setZelAppSpecsMigrationDone(true);
       const errorSpy = sinon.spy(log, 'error');
-      sinon.stub(dbHelper, 'findOneInDatabase').resolves({ generalScannedHeight: 700000 });
+      sinon.stub(dbHelper, 'findOneInDatabase').resolves({ generalScannedHeight: 700_000 });
       // The body fails...
       sinon.stub(daemonServiceBlockchainRpcs, 'getBlockCount').returns({
         status: 'error', data: { message: 'daemon is down' },
@@ -1481,8 +1481,8 @@ describe('explorerService tests', () => {
       expect(handler, 'explorer subscribes to hashblockheight').to.exist;
       // The record is synchronous at requestScan entry - assert before any
       // microtask can run the drain (which consumes the target per round).
-      handler.onMessage({ height: 2100777 });
-      expect(fresh.pushedTip(), 'the drain floors on the height the push carried').to.equal(2100777);
+      handler.onMessage({ height: 2_100_777 });
+      expect(fresh.pushedTip(), 'the drain floors on the height the push carried').to.equal(2_100_777);
       await fresh.stopScanning();
     });
   });

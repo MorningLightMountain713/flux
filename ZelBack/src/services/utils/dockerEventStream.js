@@ -3,7 +3,7 @@
 const log = require('../../lib/log');
 const dockerService = require('../dockerService');
 
-const DEFAULT_RESUBSCRIBE_DELAY_MS = 10000;
+const DEFAULT_RESUBSCRIBE_DELAY_MS = 10_000;
 
 /**
  * One Docker event subscription, with the plumbing every consumer of it needs.

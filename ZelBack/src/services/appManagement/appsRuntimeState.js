@@ -65,7 +65,7 @@ async function getState(identifier) {
 }
 
 function isDuplicateKeyError(err) {
-  return err && (err.code === 11000 || /E11000/.test(err.message || ''));
+  return err && (err.code === 11_000 || /E11000/.test(err.message || ''));
 }
 
 async function upsertState(identifier, update) {

@@ -42,7 +42,7 @@ describe('appUninstaller tombstoning teardown', () => {
 
   before(async function loadLibrary() {
     // The first fromSubmission compiles the ajv schemas.
-    this.timeout(30000);
+    this.timeout(30_000);
     flux = await loadSpecLibrary();
   });
 
@@ -52,7 +52,7 @@ describe('appUninstaller tombstoning teardown', () => {
    * submission fixture.
    */
   const v9App = (appName, components, specOverrides = {}) => {
-    let hostPort = 31000;
+    let hostPort = 31_000;
     const built = {};
     for (const [name, over] of Object.entries(components)) {
       hostPort += 1;

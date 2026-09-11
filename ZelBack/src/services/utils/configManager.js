@@ -11,7 +11,7 @@ const DEFAULT_CONFIG = {
     zelid: null,
     testnet: false,
     development: false,
-    apiport: 16127,
+    apiport: 16_127,
     routerIP: '',
   },
 };

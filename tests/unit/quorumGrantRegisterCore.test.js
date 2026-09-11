@@ -270,7 +270,7 @@ describe('quorumGrant grantRegisterCore', () => {
     it('a lapsed term with a takeover in flight renews nothing - the revival yields', () => {
       // in flight = the promise is FRESH: stamped within the lock-delay of
       // this renewal's receipt
-      const contested = { ...heldRecord({ promisedEpoch: 6 }), promisedAt: T0 + TTL - 1_000 };
+      const contested = { ...heldRecord({ promisedEpoch: 6 }), promisedAt: T0 + TTL - 1000 };
       const { reply, record } = onRenew(contested, {
         epoch: 5, grantee: 'aaaa:0', ttlMs: TTL,
       }, T0 + TTL + 1, TUNABLES);

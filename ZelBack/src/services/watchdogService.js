@@ -84,7 +84,7 @@ async function isWatchdogRunning() {
   try {
     const { stdout, error } = await serviceHelper.runCommand('pm2', {
       params: ['jlist'],
-      timeout: 30000,
+      timeout: 30_000,
     });
 
     if (error) {
@@ -127,7 +127,7 @@ async function cloneWatchdog() {
     log.info('Removing incomplete watchdog installation...');
     const { error: rmError } = await serviceHelper.runCommand('rm', {
       params: ['-rf', watchdogPath],
-      timeout: 60000,
+      timeout: 60_000,
     });
     if (rmError) {
       log.error(`Failed to remove existing watchdog directory: ${rmError.message}`);
@@ -138,7 +138,7 @@ async function cloneWatchdog() {
   const { error } = await serviceHelper.runCommand('git', {
     params: ['clone', WATCHDOG_REPO, 'watchdog'],
     cwd: homedir,
-    timeout: 120000,
+    timeout: 120_000,
   });
 
   if (error) {
@@ -162,7 +162,7 @@ async function installWatchdogDependencies() {
   const { error } = await serviceHelper.runCommand('npm', {
     params: ['install'],
     cwd: watchdogPath,
-    timeout: 300000, // 5 minutes for npm install
+    timeout: 300_000, // 5 minutes for npm install
   });
 
   if (error) {
@@ -229,7 +229,7 @@ async function startWatchdog() {
   // First, try to delete any existing watchdog process (in case it's in error state)
   await serviceHelper.runCommand('pm2', {
     params: ['delete', 'watchdog'],
-    timeout: 30000,
+    timeout: 30_000,
     logError: false, // Expected to fail if watchdog isn't running
   });
 
@@ -246,7 +246,7 @@ async function startWatchdog() {
       '--watch-delay', '20',
     ],
     cwd: watchdogPath,
-    timeout: 60000,
+    timeout: 60_000,
   });
 
   if (error) {
@@ -257,7 +257,7 @@ async function startWatchdog() {
   // Save pm2 process list
   const { error: saveError } = await serviceHelper.runCommand('pm2', {
     params: ['save'],
-    timeout: 30000,
+    timeout: 30_000,
   });
 
   if (saveError) {

@@ -41,7 +41,7 @@ async function probeOnce() {
   // found" => definitively legacy; anything else is treated as transient => retry.
   const code = response && response.data && response.data.code;
   const message = (response && response.data && response.data.message) || '';
-  if (code === -32601 || /method not found/i.test(message) || /invalid method/i.test(message)) {
+  if (code === -32_601 || /method not found/i.test(message) || /invalid method/i.test(message)) {
     return 'legacy';
   }
   return 'unreachable';

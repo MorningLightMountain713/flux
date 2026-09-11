@@ -955,12 +955,12 @@ describe('syncthingService tests', () => {
 
     it('should call adjustSyncthing on the first iteration', async () => {
       const ms = await syncthingService.runSyncthingSentinel();
-      expect(ms).to.equal(60000);
+      expect(ms).to.equal(60_000);
       sinon.assert.callCount(fakeConfigOptions, 1);
     });
 
     it('should call adjustSyncthing every eight runs under normal conditions', async () => {
-      const DEFAULT_WAIT = 60000;
+      const DEFAULT_WAIT = 60_000;
 
       const clock = sinon.useFakeTimers();
 

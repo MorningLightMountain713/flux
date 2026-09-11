@@ -293,7 +293,7 @@ async function appStats(req, res) {
  * @returns {number} Milliseconds since an arbitrary fixed origin
  */
 function monotonicMs() {
-  return Number(process.hrtime.bigint() / 1000000n);
+  return Number(process.hrtime.bigint() / 1_000_000n);
 }
 
 /**

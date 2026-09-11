@@ -53,16 +53,16 @@ describe('quorumGrant signedEnvelope', () => {
 
   describe('sign and verify', () => {
     it('round-trips through the real secp256k1 path', () => {
-      const fields = ['app-1/master', 3, 'aaaa:0', 'fp-1', 1750000000];
+      const fields = ['app-1/master', 3, 'aaaa:0', 'fp-1', 1_750_000_000];
       const signed = sign('prepare', fields, WIF);
       expect(signed).to.not.equal(null);
       expect(verify('prepare', fields, signed.signature, PUBKEY)).to.equal(true);
     });
 
     it('a signature does not survive a changed field', () => {
-      const fields = ['app-1/master', 3, 'aaaa:0', 'fp-1', 1750000000];
+      const fields = ['app-1/master', 3, 'aaaa:0', 'fp-1', 1_750_000_000];
       const signed = sign('prepare', fields, WIF);
-      const tampered = ['app-1/master', 4, 'aaaa:0', 'fp-1', 1750000000];
+      const tampered = ['app-1/master', 4, 'aaaa:0', 'fp-1', 1_750_000_000];
       expect(verify('prepare', tampered, signed.signature, PUBKEY)).to.equal(false);
     });
 

@@ -168,7 +168,7 @@ function handleRequest(line) {
   try {
     req = JSON.parse(line);
   } catch {
-    return { jsonrpc: '2.0', id: null, error: { code: -32700, message: 'parse error' } };
+    return { jsonrpc: '2.0', id: null, error: { code: -32_700, message: 'parse error' } };
   }
   const { id = null, method, params } = req;
   try {
@@ -184,9 +184,9 @@ function handleRequest(line) {
     if (method === 'app_stop_done') {
       return { jsonrpc: '2.0', id, result: handleAppStopDone(params) };
     }
-    return { jsonrpc: '2.0', id, error: { code: -32601, message: `unknown method ${method}` } };
+    return { jsonrpc: '2.0', id, error: { code: -32_601, message: `unknown method ${method}` } };
   } catch (error) {
-    return { jsonrpc: '2.0', id, error: { code: -32000, message: error.message } };
+    return { jsonrpc: '2.0', id, error: { code: -32_000, message: error.message } };
   }
 }
 

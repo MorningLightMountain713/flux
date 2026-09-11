@@ -208,7 +208,7 @@ describe('syncthingMonitor tests', () => {
 
   before(async function loadLibrary() {
     // The first fromSubmission compiles the ajv schemas.
-    this.timeout(30000);
+    this.timeout(30_000);
     flux = await loadSpecLibrary();
 
     syncDeployment = await deploymentFor('testapp', 'web', { persistentStorage: ACTIVE_STANDBY_STORAGE });
@@ -650,7 +650,7 @@ describe('syncthingMonitor tests', () => {
         mockState,
         mockGetGlobalStateFn,
       );
-      await clock.tickAsync(10000);
+      await clock.tickAsync(10_000);
 
       sinon.assert.calledWithExactly(syncthingServiceMock.adjustConfigFolders, 'patch', { type: 'receiveonly' }, syncFolderId);
       sinon.assert.notCalled(syncthingServiceMock.systemRestart);
@@ -692,7 +692,7 @@ describe('syncthingMonitor tests', () => {
       deploymentProviderMock.listInstalledDeployments.resolves([stateless]);
 
       monitorControl = syncthingMonitor.syncthingApps(mockState, mockGetGlobalStateFn);
-      await clock.tickAsync(10000);
+      await clock.tickAsync(10_000);
 
       sinon.assert.notCalled(syncthingFolderStateMachineMock.verifyFolderMountSafety);
       // The cycle got past the mount gate rather than skipping on a folder that
@@ -1008,7 +1008,7 @@ describe('syncthingMonitor tests', () => {
       handlers.onFolderActivity(syncFolderId, 'FolderSummary');
       handlers.onFolderActivity(syncFolderId, 'StateChanged');
 
-      await clock.tickAsync(15000); // well past debounce and min gap
+      await clock.tickAsync(15_000); // well past debounce and min gap
 
       expect(deploymentProviderMock.listInstalledDeployments.callCount).to.equal(runsAfterStart);
     });
@@ -1030,7 +1030,7 @@ describe('syncthingMonitor tests', () => {
       const handlers = syncthingEventsConsumerMock.start.firstCall.args[0];
       handlers.onFolderActivity('fluxweb_untracked', 'FolderErrors');
 
-      await clock.tickAsync(11000); // past the min gap from the last completed pass
+      await clock.tickAsync(11_000); // past the min gap from the last completed pass
 
       expect(deploymentProviderMock.listInstalledDeployments.callCount).to.equal(runsAfterStart + 1);
     });
@@ -1056,7 +1056,7 @@ describe('syncthingMonitor tests', () => {
       await clock.tickAsync(1);
 
       // Advance to next interval while first is still running
-      await clock.tickAsync(30000);
+      await clock.tickAsync(30_000);
 
       // First execution still not complete - should skip second call
       expect(deploymentProviderMock.listInstalledDeployments.callCount).to.equal(1);
@@ -1067,7 +1067,7 @@ describe('syncthingMonitor tests', () => {
       await clock.tickAsync(100);
 
       // Now advance to next interval - should execute again
-      await clock.tickAsync(30000);
+      await clock.tickAsync(30_000);
       await clock.tickAsync(100);
 
       expect(deploymentProviderMock.listInstalledDeployments.callCount).to.be.greaterThan(1);
@@ -1087,7 +1087,7 @@ describe('syncthingMonitor tests', () => {
       const firstCallCount = deploymentProviderMock.listInstalledDeployments.callCount;
 
       // Advance to next interval and let it complete
-      await clock.tickAsync(30000);
+      await clock.tickAsync(30_000);
       await clock.tickAsync(100);
 
       expect(deploymentProviderMock.listInstalledDeployments.callCount).to.be.greaterThan(firstCallCount);

@@ -39,7 +39,7 @@ const UPNP_MAP_RETRY_DELAY_MS = 30 * 1000;
 // appName -> { cycles, firstFailureAtMs } (monotonic ms)
 const upnpMapFailures = new Map();
 
-const monotonicMs = () => Number(process.hrtime.bigint() / 1000000n);
+const monotonicMs = () => Number(process.hrtime.bigint() / 1_000_000n);
 /**
  * The host ports the applications installed on this node hold.
  *
@@ -233,13 +233,13 @@ async function restoreAppsPortsSupport() {
 
         if (tracker.cycles < UPNP_REMOVAL_MIN_CONSECUTIVE_CYCLES || sustainedMs < UPNP_REMOVAL_MIN_WINDOW_MS) {
           log.warn(`restoreAppsPortsSupport - ${application.name} failed to map port ${failedPort} via UPNP `
-            + `(failure ${tracker.cycles}, ${Math.round(sustainedMs / 60000)}m sustained); not removing - removal requires `
-            + `${UPNP_REMOVAL_MIN_CONSECUTIVE_CYCLES} consecutive cycles over ${UPNP_REMOVAL_MIN_WINDOW_MS / 60000}m`);
+            + `(failure ${tracker.cycles}, ${Math.round(sustainedMs / 60_000)}m sustained); not removing - removal requires `
+            + `${UPNP_REMOVAL_MIN_CONSECUTIVE_CYCLES} consecutive cycles over ${UPNP_REMOVAL_MIN_WINDOW_MS / 60_000}m`);
           // eslint-disable-next-line no-continue
           continue;
         }
 
-        log.warn(`REMOVAL REASON: UPNP port mapping failure - ${application.name} failed to map port ${failedPort} via UPNP for ${tracker.cycles} consecutive cycles over ${Math.round(sustainedMs / 60000)}m (portManager)`);
+        log.warn(`REMOVAL REASON: UPNP port mapping failure - ${application.name} failed to map port ${failedPort} via UPNP for ${tracker.cycles} consecutive cycles over ${Math.round(sustainedMs / 60_000)}m (portManager)`);
         upnpMapFailures.delete(application.name);
         // Import locally to avoid circular dependency
         // eslint-disable-next-line global-require
@@ -1117,7 +1117,7 @@ async function callOtherNodeToKeepUpnpPortsOpen() {
     // ports.push(apiPort + 3);
 
     const axiosConfig = {
-      timeout: 5_000,
+      timeout: 5000,
     };
 
     const dataUPNP = {

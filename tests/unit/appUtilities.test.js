@@ -18,7 +18,7 @@ describe('appUtilities tests', () => {
   describe('getContainerStorage tests', () => {
     it('should handle containers with no mounts', async () => {
       sinon.stub(dockerService, 'dockerContainerInspect').resolves({
-        SizeRootFs: 1000000,
+        SizeRootFs: 1_000_000,
         Mounts: [],
       });
 
@@ -26,8 +26,8 @@ describe('appUtilities tests', () => {
 
       expect(result.bind).to.equal(0);
       expect(result.volume).to.equal(0);
-      expect(result.rootfs).to.equal(1000000);
-      expect(result.used).to.equal(1000000);
+      expect(result.rootfs).to.equal(1_000_000);
+      expect(result.used).to.equal(1_000_000);
       expect(result.status).to.equal('success');
     });
 

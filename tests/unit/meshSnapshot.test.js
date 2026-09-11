@@ -143,7 +143,7 @@ describe('meshSnapshot', () => {
 
     it('parks on the current generation and wakes on the next write', async () => {
       await meshSnapshot.writeSnapshot('6f6437c5', APPS);
-      const woken = meshSnapshot.waitForGeneration(1, 30000);
+      const woken = meshSnapshot.waitForGeneration(1, 30_000);
       // Give the waiter its subscribe-then-read beat, then land a write.
       await new Promise((resolve) => { setTimeout(resolve, 50); });
       await meshSnapshot.writeSnapshot('6f6437c5', APPS.map((app) => ({

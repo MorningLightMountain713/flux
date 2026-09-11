@@ -182,7 +182,7 @@ describe('asyncLock tests', () => {
         acquired = true;
       })();
 
-      await clock.tickAsync(600000);
+      await clock.tickAsync(600_000);
       expect(acquired).to.be.false;
 
       release();
@@ -234,7 +234,7 @@ describe('asyncLock tests', () => {
       release();
 
       const secondRelease = await waiter;
-      await clock.tickAsync(10000);
+      await clock.tickAsync(10_000);
 
       expect(asyncLock.locked).to.be.true;
       secondRelease();
@@ -325,7 +325,7 @@ describe('asyncLock tests', () => {
       const asyncLock = new AsyncLock(1, { maxHoldMs: 0 });
 
       await asyncLock.acquire();
-      await clock.tickAsync(600000);
+      await clock.tickAsync(600_000);
 
       expect(asyncLock.locked).to.be.true;
       expect(errorStub.called).to.be.false;

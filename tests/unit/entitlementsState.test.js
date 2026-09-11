@@ -49,7 +49,7 @@ describe('entitlementsState', () => {
 
   before(async function loadLibrary() {
     // The first fromSubmission compiles the ajv schemas.
-    this.timeout(30000);
+    this.timeout(30_000);
     flux = await loadSpecLibrary();
     ungatedSpec = await v9Spec();
     gatedSpec = await v9Spec({ network: { mesh: true } });

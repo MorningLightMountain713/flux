@@ -38,8 +38,8 @@ function serialised(fn) {
 function ipOfOffset(offset) {
   const value = RANGE_BASE + offset;
   return [
-    Math.floor(value / 16777216) % 256,
-    Math.floor(value / 65536) % 256,
+    Math.floor(value / 16_777_216) % 256,
+    Math.floor(value / 65_536) % 256,
     Math.floor(value / 256) % 256,
     value % 256,
   ].join('.');

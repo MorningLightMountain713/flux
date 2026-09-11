@@ -265,11 +265,11 @@ async function heldImageId() {
  * @returns {number}
  */
 function monotonicMs() {
-  return Number(process.hrtime.bigint() / 1000000n);
+  return Number(process.hrtime.bigint() / 1_000_000n);
 }
 
 /** How long a caller waits for an image already on its way before being told to come back. */
-const IMAGE_WAIT_MS = 10000;
+const IMAGE_WAIT_MS = 10_000;
 
 /**
  * How long a failed attempt answers callers without searching again.
@@ -279,14 +279,14 @@ const IMAGE_WAIT_MS = 10000;
  * rather than telling the user in milliseconds. The background loop owns
  * retrying; a caller only needs the answer.
  */
-const IMAGE_FAILURE_SILENCE_MS = 60000;
+const IMAGE_FAILURE_SILENCE_MS = 60_000;
 
 /** One registry attempt loses a transient error - a DNS blip, a single 503 - to bad luck. */
 const REGISTRY_ATTEMPTS = 2;
 const REGISTRY_RETRY_MS = 3000;
 
 /** Between cycles: soon enough that a node whose network returns is not stuck for an hour. */
-const ACQUIRE_BACKOFF_MS = 30000;
+const ACQUIRE_BACKOFF_MS = 30_000;
 const ACQUIRE_BACKOFF_CEILING_MS = 60 * 60 * 1000;
 
 let acquiring = null;
@@ -309,7 +309,7 @@ let acquireTimer = null;
 function imageComing(retryAfterMs) {
   const error = new Error('The file operation image is not on this node yet and is being fetched; try again shortly');
   error.kind = 'busy';
-  error.retryAfterMs = Math.min(Math.max(retryAfterMs || IMAGE_WAIT_MS, 5000), 300000);
+  error.retryAfterMs = Math.min(Math.max(retryAfterMs || IMAGE_WAIT_MS, 5000), 300_000);
   return error;
 }
 
@@ -344,7 +344,7 @@ const BUSY_RETRY_AFTER_CEILING_MS = 5 * 60 * 1000;
 const PEER_IMAGE_DRAWS = 20;
 
 /** How long a peer has to answer at all. */
-const PEER_IMAGE_TIMEOUT_MS = 120000;
+const PEER_IMAGE_TIMEOUT_MS = 120_000;
 
 /**
  * How long the transfer may go with no bytes arriving.
@@ -361,7 +361,7 @@ const PEER_IMAGE_TIMEOUT_MS = 120000;
  * still finishes: the same reasoning as the upload rate floor, in the other
  * direction.
  */
-const PEER_IMAGE_STALL_MS = 30000;
+const PEER_IMAGE_STALL_MS = 30_000;
 
 /**
  * The most this node will take from a peer before it has verified anything.
@@ -414,7 +414,7 @@ const PEER_IMAGE_SERVE_LIMIT = 4;
  * same rule pointed the other direction, and there was no two-hour backstop
  * here as there is there.
  */
-const PEER_IMAGE_SERVE_STALL_MS = 30000;
+const PEER_IMAGE_SERVE_STALL_MS = 30_000;
 
 let peerImageServes = 0;
 
@@ -439,7 +439,7 @@ let peerImageServes = 0;
  * a node that joined seconds ago can wait, and one that left is refused a
  * little late.
  */
-const FLEET_ADDRESS_WINDOW_MS = 30000;
+const FLEET_ADDRESS_WINDOW_MS = 30_000;
 
 let fleetAddresses = null;
 let fleetAddressesAt = 0;
@@ -1046,7 +1046,7 @@ async function prefetchImage() {
   if (await heldImageId()) return;
 
   const wait = prefetchDelayMs();
-  log.info(`volumeExecutor - no peer had the file operation image; the registry will be asked in ${Math.round(wait / 60000)} minute(s)`);
+  log.info(`volumeExecutor - no peer had the file operation image; the registry will be asked in ${Math.round(wait / 60_000)} minute(s)`);
   armAcquire(expected, wait);
 }
 
@@ -2077,7 +2077,7 @@ function stagingRootOf(hostPath, mount) {
 async function reclaimStaging(hostPath, exited) {
   try {
     if (exited) {
-      const graceMs = (settings().cancelGraceSeconds * 1000) + 10000;
+      const graceMs = (settings().cancelGraceSeconds * 1000) + 10_000;
       let deadline;
       const deadlinePassed = new Promise((resolve) => { deadline = setTimeout(resolve, graceMs); });
       await Promise.race([exited.catch(() => {}), deadlinePassed]);

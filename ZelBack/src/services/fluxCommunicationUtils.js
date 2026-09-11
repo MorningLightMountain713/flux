@@ -210,7 +210,7 @@ async function verifyFluxBroadcast(broadcast) {
   if (counter % 1000 === 0) {
     counter = 0;
     const nowHrtime = process.hrtime.bigint();
-    const elapsed = Number(nowHrtime - lastUpdate) / 1000_000_000;
+    const elapsed = Number(nowHrtime - lastUpdate) / 1_000_000_000;
     const rate = 1000 / elapsed;
     // rounds to 2dp
     const rounded = Math.round((rate + Number.EPSILON) * 100) / 100;
@@ -259,8 +259,8 @@ function verifyTimestampInFluxBroadcast(data, currentTimeStamp, maxOld = 300_000
   if (currentTimeStamp < (timestamp + maxOld)) { // not older than 5 mins
     return true;
   }
-  const age = Math.round((currentTimeStamp - timestamp) / 1_000);
-  const maxAge = maxOld / 1_000;
+  const age = Math.round((currentTimeStamp - timestamp) / 1000);
+  const maxAge = maxOld / 1000;
   log.warn('Unable to verify mesage. Timestamp '
     + `${timestamp} is too old: ${age}s, Max: ${maxAge}`);
 

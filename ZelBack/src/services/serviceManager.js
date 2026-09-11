@@ -233,7 +233,7 @@ async function ensureIndex(collection, spec, options = {}, recover = null) {
       await collection.createIndex(spec, options);
       return;
     }
-    const duplicate = err && (err.code === 11000 || err.codeName === 'DuplicateKey');
+    const duplicate = err && (err.code === 11_000 || err.codeName === 'DuplicateKey');
     if (duplicate && recover) {
       const removed = await recover(collection, spec, options);
       log.warn(`ensureIndex - ${collection.collectionName} (key: ${JSON.stringify(spec)}) held ${removed} row(s) violating a unique index; removed and rebuilding`);
@@ -1083,7 +1083,7 @@ async function startFluxFunctions() {
     log.error(e);
     setTimeout(() => {
       startFluxFunctions();
-    }, 15000);
+    }, 15_000);
   }
 }
 

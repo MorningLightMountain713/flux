@@ -20,7 +20,7 @@ describe('FiFoQueue tests', () => {
       expect(queue.queueFull).to.equal(false);
       // defaults
       expect(queue.retries).to.equal(5);
-      expect(queue.retryDelay).to.equal(60000);
+      expect(queue.retryDelay).to.equal(60_000);
       expect(queue.maxSize).to.equal(10);
     });
     it('should add the worker if defined at instantiation', () => {
@@ -459,7 +459,7 @@ describe('FiFoQueue tests', () => {
       expect(count).to.equal(3);
 
       // allow 5 retries for faulty task (and 6000ms for tasks)
-      await clock.tickAsync(5 * 60000 + 6000);
+      await clock.tickAsync(5 * 60_000 + 6000);
       expect(error).to.equal(1);
 
       // allow enough time that the tasks could run if the queue wasn't halted
@@ -536,7 +536,7 @@ describe('FiFoQueue tests', () => {
       ];
 
       const worker = async (item) => {
-        await new Promise((r) => { setTimeout(r, 5_000); });
+        await new Promise((r) => { setTimeout(r, 5000); });
         workDone += 1;
         return { error: null, data: item };
       };

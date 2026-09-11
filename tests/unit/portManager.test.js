@@ -66,7 +66,7 @@ function buildProxyquireMap(stubs, overrides = {}) {
   const fluxNet = overrides.fluxNetworkHelper || {};
   const upnp = overrides.upnpService || {};
   return {
-    config: asConfig({ server: { apiport: 16127 } }),
+    config: asConfig({ server: { apiport: 16_127 } }),
     axios: { post: sinon.stub().resolves({ data: { status: 'success' } }) },
     '../dbHelper': {},
     '../appDatabase/appsRepository': stubs.appsRepositoryStub,
@@ -78,7 +78,7 @@ function buildProxyquireMap(stubs, overrides = {}) {
     },
     '../utils/socketAddressUtils': {
       extractIp: (addr) => (addr ? addr.split(':')[0] : null),
-      extractPort: (addr) => (addr && addr.includes(':') ? Number(addr.split(':')[1]) : 16127),
+      extractPort: (addr) => (addr && addr.includes(':') ? Number(addr.split(':')[1]) : 16_127),
     },
     '../utils/fluxHttpTestServer': {
       FluxHttpTestServer: sinon.stub(),
@@ -135,7 +135,7 @@ describe('portManager tests', () => {
   before(() => {
     originalUserConfig = globalThis.userconfig;
     globalThis.userconfig = {
-      initial: { apiport: 16127 },
+      initial: { apiport: 16_127 },
     };
   });
 
@@ -158,10 +158,10 @@ describe('portManager tests', () => {
     // their identity says so.
     it('refuses the port when a leftover install of the PREVIOUS holder still has it', async () => {
       stubs.deploymentProviderStub.listInstalledDeployments.resolves([
-        { name: 'myapp', identity: 'myapp', version: 3, ports: [30001] },
+        { name: 'myapp', identity: 'myapp', version: 3, ports: [30_001] },
       ].map(mockDeployment));
 
-      const incoming = mockDeployment({ name: 'myapp', identity: 'a1b2c3d4e5f6', version: 3, ports: [30001] });
+      const incoming = mockDeployment({ name: 'myapp', identity: 'a1b2c3d4e5f6', version: 3, ports: [30_001] });
 
       let err;
       try {
@@ -178,14 +178,14 @@ describe('portManager tests', () => {
     // port map — a match on the app it IS, not a different one.
     it('allows a second co-located replica whose port its own global spec already lists', async () => {
       stubs.deploymentProviderStub.listInstalledDeployments.resolves([
-        { name: 'myapp', identity: 'a1b2c3d4e5f6', version: 3, ports: [36020] },
+        { name: 'myapp', identity: 'a1b2c3d4e5f6', version: 3, ports: [36_020] },
       ].map(mockDeployment));
       stubs.appsRepositoryStub.listGlobalAppInfo.resolves([
-        { name: 'myapp', identity: 'a1b2c3d4e5f6', version: 3, ports: [36020, 36021] },
+        { name: 'myapp', identity: 'a1b2c3d4e5f6', version: 3, ports: [36_020, 36_021] },
       ]);
 
       const incomingReplica = mockDeployment({
-        name: 'myapp', identity: 'a1b2c3d4e5f6', version: 3, ports: [36021],
+        name: 'myapp', identity: 'a1b2c3d4e5f6', version: 3, ports: [36_021],
       });
 
       expect(await portManager.ensureApplicationPortsNotUsed(incomingReplica, ['myapp'])).to.equal(true);
@@ -193,10 +193,10 @@ describe('portManager tests', () => {
 
     it('still allows an app to keep its own ports across an update', async () => {
       stubs.deploymentProviderStub.listInstalledDeployments.resolves([
-        { name: 'myapp', identity: 'a1b2c3d4e5f6', version: 3, ports: [30001] },
+        { name: 'myapp', identity: 'a1b2c3d4e5f6', version: 3, ports: [30_001] },
       ].map(mockDeployment));
 
-      const sameApp = mockDeployment({ name: 'myapp', identity: 'a1b2c3d4e5f6', version: 3, ports: [30001] });
+      const sameApp = mockDeployment({ name: 'myapp', identity: 'a1b2c3d4e5f6', version: 3, ports: [30_001] });
 
       expect(await portManager.ensureApplicationPortsNotUsed(sameApp, [])).to.equal(true);
     });
@@ -205,8 +205,8 @@ describe('portManager tests', () => {
   describe('assignedPortsInstalledApps tests', () => {
     it('should return ports assigned by installed apps', async () => {
       stubs.deploymentProviderStub.listInstalledDeployments.resolves([
-        { name: 'App1', version: 3, ports: [30001, 30002] },
-        { name: 'App2', version: 3, ports: [30003, 30004] },
+        { name: 'App1', version: 3, ports: [30_001, 30_002] },
+        { name: 'App2', version: 3, ports: [30_003, 30_004] },
       ].map(mockDeployment));
 
       const result = await portManager.assignedPortsInstalledApps();
@@ -214,20 +214,20 @@ describe('portManager tests', () => {
       expect(result).to.be.an('array').with.lengthOf(2);
       const app1 = result.find((app) => app.name === 'App1');
       expect(app1).to.exist;
-      expect(app1.ports).to.include(30001);
-      expect(app1.ports).to.include(30002);
+      expect(app1.ports).to.include(30_001);
+      expect(app1.ports).to.include(30_002);
     });
 
     it('should handle version 1 apps', async () => {
       stubs.deploymentProviderStub.listInstalledDeployments.resolves([
-        { name: 'OldApp', version: 1, port: 30005 },
+        { name: 'OldApp', version: 1, port: 30_005 },
       ].map(mockDeployment));
 
       const result = await portManager.assignedPortsInstalledApps();
 
       const oldApp = result.find((app) => app.name === 'OldApp');
       expect(oldApp).to.exist;
-      expect(oldApp.ports).to.include(30005);
+      expect(oldApp.ports).to.include(30_005);
     });
 
     it('should handle version 4+ compose apps', async () => {
@@ -236,8 +236,8 @@ describe('portManager tests', () => {
           name: 'ComposedApp',
           version: 4,
           compose: [
-            { name: 'Component1', ports: [30006, 30007] },
-            { name: 'Component2', ports: [30008] },
+            { name: 'Component1', ports: [30_006, 30_007] },
+            { name: 'Component2', ports: [30_008] },
           ],
         },
       ].map(mockDeployment));
@@ -246,19 +246,19 @@ describe('portManager tests', () => {
 
       const composedApp = result.find((app) => app.name === 'ComposedApp');
       expect(composedApp).to.exist;
-      expect(composedApp.ports).to.include(30006);
-      expect(composedApp.ports).to.include(30007);
-      expect(composedApp.ports).to.include(30008);
+      expect(composedApp.ports).to.include(30_006);
+      expect(composedApp.ports).to.include(30_007);
+      expect(composedApp.ports).to.include(30_008);
     });
   });
 
   describe('ensureApplicationPortsNotUsed tests', () => {
     it('should pass if ports are not used', async () => {
       stubs.deploymentProviderStub.listInstalledDeployments.resolves([
-        { name: 'ExistingApp', version: 3, ports: [30001, 30002] },
+        { name: 'ExistingApp', version: 3, ports: [30_001, 30_002] },
       ].map(mockDeployment));
 
-      const deployment = mockDeployment({ name: 'NewApp', version: 3, ports: [30010, 30011] });
+      const deployment = mockDeployment({ name: 'NewApp', version: 3, ports: [30_010, 30_011] });
       const result = await portManager.ensureApplicationPortsNotUsed(deployment, []);
 
       expect(result).to.be.true;
@@ -266,10 +266,10 @@ describe('portManager tests', () => {
 
     it('should throw error if port is already used by different app', async () => {
       stubs.deploymentProviderStub.listInstalledDeployments.resolves([
-        { name: 'ExistingApp', version: 3, ports: [30001, 30002] },
+        { name: 'ExistingApp', version: 3, ports: [30_001, 30_002] },
       ].map(mockDeployment));
 
-      const deployment = mockDeployment({ name: 'NewApp', version: 3, ports: [30001, 30011] });
+      const deployment = mockDeployment({ name: 'NewApp', version: 3, ports: [30_001, 30_011] });
 
       try {
         await portManager.ensureApplicationPortsNotUsed(deployment, []);
@@ -281,10 +281,10 @@ describe('portManager tests', () => {
 
     it('should allow same app to use its own ports', async () => {
       stubs.deploymentProviderStub.listInstalledDeployments.resolves([
-        { name: 'ExistingApp', version: 3, ports: [30001, 30002] },
+        { name: 'ExistingApp', version: 3, ports: [30_001, 30_002] },
       ].map(mockDeployment));
 
-      const deployment = mockDeployment({ name: 'ExistingApp', version: 3, ports: [30001, 30002] });
+      const deployment = mockDeployment({ name: 'ExistingApp', version: 3, ports: [30_001, 30_002] });
       const result = await portManager.ensureApplicationPortsNotUsed(deployment, []);
 
       expect(result).to.be.true;
@@ -292,10 +292,10 @@ describe('portManager tests', () => {
 
     it('should handle version 1 apps with conflicting port', async () => {
       stubs.deploymentProviderStub.listInstalledDeployments.resolves([
-        { name: 'ExistingApp', version: 3, ports: [30001, 30002] },
+        { name: 'ExistingApp', version: 3, ports: [30_001, 30_002] },
       ].map(mockDeployment));
 
-      const deployment = mockDeployment({ name: 'OldNewApp', version: 1, port: 30001 });
+      const deployment = mockDeployment({ name: 'OldNewApp', version: 1, port: 30_001 });
 
       try {
         await portManager.ensureApplicationPortsNotUsed(deployment, []);
@@ -307,15 +307,15 @@ describe('portManager tests', () => {
 
     it('should handle version 4+ compose apps with conflicting port', async () => {
       stubs.deploymentProviderStub.listInstalledDeployments.resolves([
-        { name: 'ExistingApp', version: 3, ports: [30001, 30002] },
+        { name: 'ExistingApp', version: 3, ports: [30_001, 30_002] },
       ].map(mockDeployment));
 
       const deployment = mockDeployment({
         name: 'NewComposedApp',
         version: 4,
         compose: [
-          { name: 'Component1', ports: [30001] },
-          { name: 'Component2', ports: [30020] },
+          { name: 'Component1', ports: [30_001] },
+          { name: 'Component2', ports: [30_020] },
         ],
       });
 
@@ -333,16 +333,16 @@ describe('portManager tests', () => {
   describe('getAllUsedPorts tests', () => {
     it('should return all used ports without duplicates', async () => {
       stubs.deploymentProviderStub.listInstalledDeployments.resolves([
-        { name: 'App1', version: 3, ports: [30001, 30002] },
-        { name: 'App2', version: 3, ports: [30002, 30003] },
+        { name: 'App1', version: 3, ports: [30_001, 30_002] },
+        { name: 'App2', version: 3, ports: [30_002, 30_003] },
       ].map(mockDeployment));
 
       const result = await portManager.getAllUsedPorts();
 
       expect(result).to.be.an('array');
-      expect(result).to.include(30001);
-      expect(result).to.include(30002);
-      expect(result).to.include(30003);
+      expect(result).to.include(30_001);
+      expect(result).to.include(30_002);
+      expect(result).to.include(30_003);
       expect(result.length).to.equal(new Set(result).size);
     });
   });
@@ -389,7 +389,7 @@ describe('portManager tests', () => {
   describe('restoreAppsPortsSupport tests', () => {
     it('should setup firewall for app ports when active', async () => {
       stubs.deploymentProviderStub.listInstalledDeployments.resolves([
-        { name: 'App1', version: 3, ports: [30001] },
+        { name: 'App1', version: 3, ports: [30_001] },
       ].map(mockDeployment));
 
       const fluxNetOverride = {
@@ -406,7 +406,7 @@ describe('portManager tests', () => {
 
     it('should setup UPNP for app ports when active', async () => {
       stubs.deploymentProviderStub.listInstalledDeployments.resolves([
-        { name: 'App1', version: 3, ports: [30001] },
+        { name: 'App1', version: 3, ports: [30_001] },
       ].map(mockDeployment));
 
       const upnpOverride = {
@@ -457,7 +457,7 @@ describe('portManager tests', () => {
       // the incident regression: one failed map used to escalate straight to
       // removeAppLocally(force, sendMessage) - a transient router blip nuked a
       // running app and broadcast its removal to the network
-      installApp({ name: 'App1', version: 3, ports: [30001] });
+      installApp({ name: 'App1', version: 3, ports: [30_001] });
       const { localPm, removeAppLocally } = loadUpnpFailing();
 
       await localPm.restoreAppsPortsSupport();
@@ -467,7 +467,7 @@ describe('portManager tests', () => {
     });
 
     it('should retry a failed port within the cycle and record no failure on recovery', async () => {
-      installApp({ name: 'App1', version: 3, ports: [30001] });
+      installApp({ name: 'App1', version: 3, ports: [30_001] });
       const mapUpnpPort = sinon.stub().resolves(true);
       mapUpnpPort.onFirstCall().resolves(false);
       const { localPm, removeAppLocally } = loadUpnpFailing({ mapUpnpPort });
@@ -479,7 +479,7 @@ describe('portManager tests', () => {
     });
 
     it('should not remove before the sustained window even after enough failing cycles', async () => {
-      installApp({ name: 'App1', version: 3, ports: [30001] });
+      installApp({ name: 'App1', version: 3, ports: [30_001] });
       const { localPm, removeAppLocally } = loadUpnpFailing();
 
       await localPm.restoreAppsPortsSupport();
@@ -492,9 +492,9 @@ describe('portManager tests', () => {
     });
 
     it('should remove and broadcast only after sustained failure (cycles AND window)', async () => {
-      installApp({ name: 'App1', version: 3, ports: [30001] });
+      installApp({ name: 'App1', version: 3, ports: [30_001] });
       const { localPm, removeAppLocally } = loadUpnpFailing();
-      const nowMonotonicMs = Number(process.hrtime.bigint() / 1000000n);
+      const nowMonotonicMs = Number(process.hrtime.bigint() / 1_000_000n);
       // one strike short of the cycle gate, already past the wall-clock window
       localPm.upnpMapFailures.set('App1', { cycles: 2, firstFailureAtMs: nowMonotonicMs - (31 * 60 * 1000) });
 
@@ -505,7 +505,7 @@ describe('portManager tests', () => {
     });
 
     it('should clear the failure tracker once mapping succeeds again', async () => {
-      installApp({ name: 'App1', version: 3, ports: [30001] });
+      installApp({ name: 'App1', version: 3, ports: [30_001] });
       const mapUpnpPort = sinon.stub().resolves(false);
       const { localPm, removeAppLocally } = loadUpnpFailing({ mapUpnpPort });
 
@@ -521,8 +521,8 @@ describe('portManager tests', () => {
 
     it('should pay the retry pause at most once per cycle across failing apps', async () => {
       installApp(
-        { name: 'App1', version: 3, ports: [30001] },
-        { name: 'App2', version: 3, ports: [30002] },
+        { name: 'App1', version: 3, ports: [30_001] },
+        { name: 'App2', version: 3, ports: [30_002] },
       );
       const { localPm, mapUpnpPort, delay } = loadUpnpFailing();
 

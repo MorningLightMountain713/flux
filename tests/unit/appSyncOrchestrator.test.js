@@ -242,7 +242,7 @@ describe('AppSyncOrchestrator', () => {
     it('should transition to SYNCING on first blockReceived', async () => {
       const orchestrator = makeOrchestrator();
       orchestrator.start(defaultBootContext);
-      blockEmitter.emit('blocksProcessed', 2555000);
+      blockEmitter.emit('blocksProcessed', 2_555_000);
       await clock.tickAsync(0);
       expect(orchestrator.state).to.equal(STATES.SYNCING);
     });
@@ -251,7 +251,7 @@ describe('AppSyncOrchestrator', () => {
       const orchestrator = makeOrchestrator();
       orchestrator.start(defaultBootContext);
 
-      blockEmitter.emit('blocksProcessed', 2555000);
+      blockEmitter.emit('blocksProcessed', 2_555_000);
       await clock.tickAsync(0);
       expect(logStub.info.calledWith('AppSyncOrchestrator - Sync started')).to.be.true;
     });
@@ -260,7 +260,7 @@ describe('AppSyncOrchestrator', () => {
       const orchestrator = makeOrchestrator();
       orchestrator.start(defaultBootContext);
 
-      blockEmitter.emit('blocksProcessed', 2555000);
+      blockEmitter.emit('blocksProcessed', 2_555_000);
       await clock.tickAsync(0);
       expect(syncMissingHashesStub.calledOnce).to.be.true;
     });
@@ -269,7 +269,7 @@ describe('AppSyncOrchestrator', () => {
       const orchestrator = makeOrchestrator();
       orchestrator.start(defaultBootContext);
 
-      blockEmitter.emit('blocksProcessed', 2555000);
+      blockEmitter.emit('blocksProcessed', 2_555_000);
       await clock.tickAsync(0);
       expect(reindexStub.calledOnce).to.be.true;
     });
@@ -278,7 +278,7 @@ describe('AppSyncOrchestrator', () => {
       const orchestrator = makeOrchestrator();
       orchestrator.start(defaultBootContext);
 
-      blockEmitter.emit('blocksProcessed', 2555000);
+      blockEmitter.emit('blocksProcessed', 2_555_000);
       await clock.tickAsync(0);
       expect(globalStateStub.dbReady).to.be.true;
     });
@@ -287,7 +287,7 @@ describe('AppSyncOrchestrator', () => {
       const orchestrator = makeOrchestrator();
       orchestrator.start(defaultBootContext);
 
-      blockEmitter.emit('blocksProcessed', 2555000);
+      blockEmitter.emit('blocksProcessed', 2_555_000);
       await clock.tickAsync(0);
       expect(logStub.info.calledWith('AppSyncOrchestrator - DB ready')).to.be.true;
     });
@@ -333,10 +333,10 @@ describe('AppSyncOrchestrator', () => {
       orchestrator.start(defaultBootContext);
 
 
-      blockEmitter.emit('blocksProcessed', 2555000);
+      blockEmitter.emit('blocksProcessed', 2_555_000);
       await clock.tickAsync(0);
       for (let i = 0; i < 260; i += 1) {
-        blockEmitter.emit('blocksProcessed', 2555000 + i);
+        blockEmitter.emit('blocksProcessed', 2_555_000 + i);
       }
       await clock.tickAsync(0);
 
@@ -356,7 +356,7 @@ describe('AppSyncOrchestrator', () => {
       const orchestrator = makeOrchestrator({ isEnterprise: () => true });
       orchestrator.start(defaultBootContext);
 
-      blockEmitter.emit('blocksProcessed', 2555000);
+      blockEmitter.emit('blocksProcessed', 2_555_000);
       await clock.tickAsync(0);
       peerEmitter.emit('peerThresholdReached', 12);
       await clock.tickAsync(0);
@@ -401,11 +401,11 @@ describe('AppSyncOrchestrator', () => {
       const orchestrator = makeOrchestrator();
       orchestrator.start(defaultBootContext);
 
-      blockEmitter.emit('blocksProcessed', 2555000);
+      blockEmitter.emit('blocksProcessed', 2_555_000);
       await clock.tickAsync(0);
       // appSyncFallbackMinutes (125) x 2 blocks a minute.
       for (let i = 0; i <= 250; i += 1) {
-        blockEmitter.emit('blocksProcessed', 2555000 + i);
+        blockEmitter.emit('blocksProcessed', 2_555_000 + i);
       }
       await clock.tickAsync(0);
       expect(orchestrator.state).to.equal(STATES.READY);
@@ -424,10 +424,10 @@ describe('AppSyncOrchestrator', () => {
       const spy = sinon.spy();
       appSyncEvents.on(EVENTS.READINESS_LOST, spy);
 
-      blockEmitter.emit('blocksProcessed', 2555000);
+      blockEmitter.emit('blocksProcessed', 2_555_000);
       await clock.tickAsync(0);
       for (let i = 0; i < 260; i += 1) {
-        blockEmitter.emit('blocksProcessed', 2555000 + i);
+        blockEmitter.emit('blocksProcessed', 2_555_000 + i);
       }
       await clock.tickAsync(0);
 
@@ -539,12 +539,12 @@ describe('AppSyncOrchestrator', () => {
 
 
       // Get to READY via block-count fallback
-      blockEmitter.emit('blocksProcessed', 2555000);
+      blockEmitter.emit('blocksProcessed', 2_555_000);
       await clock.tickAsync(0);
       peerEmitter.emit('peerThresholdReached', 12);
       await clock.tickAsync(0);
       for (let i = 0; i < 260; i += 1) {
-        blockEmitter.emit('blocksProcessed', 2555000 + i);
+        blockEmitter.emit('blocksProcessed', 2_555_000 + i);
       }
       await clock.tickAsync(0);
 
@@ -715,7 +715,7 @@ describe('AppSyncOrchestrator', () => {
       getEligibleSyncPeersStub = sinon.stub().returns(peers);
       const orchestrator = makeOrchestrator();
       orchestrator.start(defaultBootContext);
-      blockEmitter.emit('blocksProcessed', 2555000);
+      blockEmitter.emit('blocksProcessed', 2_555_000);
       await clock.tickAsync(0);
       peerEmitter.emit('peerThresholdReached', 12);
       await clock.tickAsync(0);
@@ -773,7 +773,7 @@ describe('AppSyncOrchestrator', () => {
   describe('a reconcile pass that fails does not take the node with it', () => {
     const driveToThreshold = async (orchestrator) => {
       orchestrator.start(defaultBootContext);
-      blockEmitter.emit('blocksProcessed', 2555000);
+      blockEmitter.emit('blocksProcessed', 2_555_000);
       await clock.tickAsync(0);
       peerEmitter.emit('peerThresholdReached', 12);
       await clock.tickAsync(0);
@@ -887,7 +887,7 @@ describe('AppSyncOrchestrator', () => {
       getEligibleSyncPeersStub = sinon.stub().returns(peers);
       const orchestrator = makeOrchestrator();
       orchestrator.start(defaultBootContext);
-      blockEmitter.emit('blocksProcessed', 2555000);
+      blockEmitter.emit('blocksProcessed', 2_555_000);
       await clock.tickAsync(0);
       peerEmitter.emit('peerThresholdReached', 12);
       await clock.tickAsync(0);
@@ -1069,7 +1069,7 @@ describe('AppSyncOrchestrator', () => {
 
       const orchestrator = makeOrchestrator();
       orchestrator.start(defaultBootContext);
-      blockEmitter.emit('blocksProcessed', 2555000);
+      blockEmitter.emit('blocksProcessed', 2_555_000);
       await clock.tickAsync(0);
       peerEmitter.emit('peerThresholdReached', 12);
       await clock.tickAsync(0);
@@ -1092,7 +1092,7 @@ describe('AppSyncOrchestrator', () => {
 
       const orchestrator = makeOrchestrator();
       orchestrator.start(defaultBootContext);
-      blockEmitter.emit('blocksProcessed', 2555000);
+      blockEmitter.emit('blocksProcessed', 2_555_000);
       await clock.tickAsync(0);
       peerEmitter.emit('peerThresholdReached', 12);
       await clock.tickAsync(0);
@@ -1147,9 +1147,9 @@ describe('AppSyncOrchestrator', () => {
 
       // 2 minutes at 2 blocks a minute, so the fourth block is past it and the
       // 250th is not the bar any more.
-      blockEmitter.emit('blocksProcessed', 2555000);
+      blockEmitter.emit('blocksProcessed', 2_555_000);
       await clock.tickAsync(0);
-      for (let i = 1; i <= 4; i += 1) blockEmitter.emit('blocksProcessed', 2555000 + i);
+      for (let i = 1; i <= 4; i += 1) blockEmitter.emit('blocksProcessed', 2_555_000 + i);
       await clock.tickAsync(0);
 
       expect(orchestrator.state).to.equal(mod.STATES.READY);
@@ -1363,8 +1363,8 @@ describe('AppSyncOrchestrator', () => {
   // the socket - by different code, cleared by different rules. Every way they
   // could disagree was a defect, and the four below are those ways.
   describe('the request record is the only account of what has been asked', () => {
-    const STALL_MS = 30000;
-    const SYNC_TIMEOUT_MS = 120000;
+    const STALL_MS = 30_000;
+    const SYNC_TIMEOUT_MS = 120_000;
 
     // FluxPeerManager.add() emits peerThresholdReached and then peerConnected from
     // the same call, so the trigger that starts the sync and one that tops it
@@ -1398,7 +1398,7 @@ describe('AppSyncOrchestrator', () => {
 
       const orchestrator = makeOrchestrator();
       orchestrator.start(defaultBootContext);
-      blockEmitter.emit('blocksProcessed', 2555000);
+      blockEmitter.emit('blocksProcessed', 2_555_000);
       peerEmitter.emit('peerThresholdReached', 12);
       await clock.tickAsync(0);
       for (const peer of peers) expect(peer.send.callCount).to.equal(4);
@@ -1432,7 +1432,7 @@ describe('AppSyncOrchestrator', () => {
 
       const orchestrator = makeOrchestrator();
       orchestrator.start(defaultBootContext);
-      blockEmitter.emit('blocksProcessed', 2555000);
+      blockEmitter.emit('blocksProcessed', 2_555_000);
       peerEmitter.emit('peerThresholdReached', 12);
       await clock.tickAsync(0);
       peerEmitter.emit('peersBelowThreshold', 1);
@@ -1554,7 +1554,7 @@ describe('AppSyncOrchestrator', () => {
       // One peer keeps sending right up to the budget, inside every stall window.
       // Each wait delivers a block: this tree notices a deadline on the next
       // processed block rather than on a timer per request (edac0249a).
-      let height = 2555000;
+      let height = 2_555_000;
       const supervise = async (ms) => {
         await clock.tickAsync(ms);
         height += 1;
@@ -1617,7 +1617,7 @@ describe('AppSyncOrchestrator', () => {
 
       const orchestrator = makeOrchestrator();
       orchestrator.start(defaultBootContext);
-      blockEmitter.emit('blocksProcessed', 2555000);
+      blockEmitter.emit('blocksProcessed', 2_555_000);
       peerEmitter.emit('peerThresholdReached', 12);
       await clock.tickAsync(0);
       await clock.tickAsync(SYNC_TIMEOUT_MS + 1000);
@@ -1703,8 +1703,8 @@ describe('AppSyncOrchestrator', () => {
   // syncTimeoutMs is 120000 here, so the first-response deadline is 10s and the
   // stall deadline 30s.
   describe('a slot is held by one peer and has its own deadline', () => {
-    const FIRST_RESPONSE_MS = 10000;
-    const STALL_MS = 30000;
+    const FIRST_RESPONSE_MS = 10_000;
+    const STALL_MS = 30_000;
 
     // HOW A DEADLINE IS NOTICED HERE. This tree supervises the open round on
     // each processed block rather than arming a timer per request (edac0249a):
@@ -1716,7 +1716,7 @@ describe('AppSyncOrchestrator', () => {
     // So passing time is only half of it: the block is what makes the pass
     // look. Every wait below goes through here, and the deadline values and the
     // outcomes asserted are development's, unchanged.
-    let supervisionHeight = 2555000;
+    let supervisionHeight = 2_555_000;
     const waitAndSupervise = async (ms) => {
       await clock.tickAsync(ms);
       supervisionHeight += 1;
@@ -1854,7 +1854,7 @@ describe('AppSyncOrchestrator', () => {
 
 
       // Start hash sync
-      blockEmitter.emit('blocksProcessed', 2555000);
+      blockEmitter.emit('blocksProcessed', 2_555_000);
       await clock.tickAsync(0);
 
       // Send sync requests
@@ -1882,7 +1882,7 @@ describe('AppSyncOrchestrator', () => {
       const orchestrator = makeOrchestrator();
       orchestrator.start(defaultBootContext);
 
-      blockEmitter.emit('blocksProcessed', 2555000);
+      blockEmitter.emit('blocksProcessed', 2_555_000);
       await clock.tickAsync(0);
 
       peerEmitter.emit('peerThresholdReached', 12);
@@ -1907,7 +1907,7 @@ describe('AppSyncOrchestrator', () => {
       orchestrator.start(defaultBootContext);
       peersUp();
 
-      blockEmitter.emit('blocksProcessed', 2555000);
+      blockEmitter.emit('blocksProcessed', 2_555_000);
       await clock.tickAsync(0);
 
       // After sync but before enough blocks, should still be SYNCING
@@ -1915,7 +1915,7 @@ describe('AppSyncOrchestrator', () => {
 
       // Past the fallback's 250 blocks, so it reaches READY on the timer
       for (let i = 0; i < 260; i += 1) {
-        blockEmitter.emit('blocksProcessed', 2555000 + i);
+        blockEmitter.emit('blocksProcessed', 2_555_000 + i);
       }
       await clock.tickAsync(0);
       expect(orchestrator.state).to.equal(STATES.READY);
@@ -1929,7 +1929,7 @@ describe('AppSyncOrchestrator', () => {
       orchestrator.start(defaultBootContext);
 
 
-      blockEmitter.emit('blocksProcessed', 2555000);
+      blockEmitter.emit('blocksProcessed', 2_555_000);
       await clock.tickAsync(0);
       peerEmitter.emit('peerThresholdReached', 12);
       await clock.tickAsync(0);
@@ -1958,10 +1958,10 @@ describe('AppSyncOrchestrator', () => {
   describe('reconnect-triggered durable sync (mechanism B)', () => {
     // formal/record-convergence: a re-established peer is the one observable
     // trigger that a RUNNING node may have missed one-shot broadcasts.
-    const RECONNECT_SLACK_MS = 120000;
+    const RECONNECT_SLACK_MS = 120_000;
 
     async function reachReady() {
-      blockEmitter.emit('blocksProcessed', 2555000);
+      blockEmitter.emit('blocksProcessed', 2_555_000);
       await clock.tickAsync(0);
       peerEmitter.emit('peerThresholdReached', 12);
       await clock.tickAsync(0);
@@ -1987,8 +1987,8 @@ describe('AppSyncOrchestrator', () => {
       const otherSends = peers[1].send.callCount;
       markStub.resetHistory();
       // a positive clock baseline, or the slack subtraction floors at zero
-      await clock.tickAsync(300000);
-      const lostAtMs = Date.now() - 60000;
+      await clock.tickAsync(300_000);
+      const lostAtMs = Date.now() - 60_000;
       peerEmitter.emit('peerReestablished', { key: peers[0].key, lostAtMs });
       await clock.tickAsync(0);
 
@@ -2010,9 +2010,9 @@ describe('AppSyncOrchestrator', () => {
       const orchestrator = makeOrchestrator({ isEnterprise: () => true, markSyncRequested: sinon.stub() });
       orchestrator.start(defaultBootContext);
       await reachReady();
-      await clock.tickAsync(300000);
+      await clock.tickAsync(300_000);
       const bootSends = peers[0].send.callCount;
-      const firstLoss = Date.now() - 60000;
+      const firstLoss = Date.now() - 60_000;
       peerEmitter.emit('peerReestablished', { key: peers[0].key, lostAtMs: firstLoss });
       await clock.tickAsync(0);
       expect(peers[0].send.callCount, 'the pull went out on the first return').to.equal(bootSends + 1);
@@ -2033,8 +2033,8 @@ describe('AppSyncOrchestrator', () => {
       const orchestrator = makeOrchestrator({ isEnterprise: () => true, markSyncRequested: sinon.stub() });
       orchestrator.start(defaultBootContext);
       await reachReady();
-      await clock.tickAsync(300000);
-      const firstLoss = Date.now() - 60000;
+      await clock.tickAsync(300_000);
+      const firstLoss = Date.now() - 60_000;
       peerEmitter.emit('peerReestablished', { key: peers[0].key, lostAtMs: firstLoss });
       await clock.tickAsync(0);
       appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_COMPLETE, 'apprunning', peers[0].key);
@@ -2055,8 +2055,8 @@ describe('AppSyncOrchestrator', () => {
       const orchestrator = makeOrchestrator({ isEnterprise: () => true, markSyncRequested: sinon.stub() });
       orchestrator.start(defaultBootContext);
       await reachReady();
-      await clock.tickAsync(300000);
-      peerEmitter.emit('peerReestablished', { key: peers[0].key, lostAtMs: Date.now() - 60000 });
+      await clock.tickAsync(300_000);
+      peerEmitter.emit('peerReestablished', { key: peers[0].key, lostAtMs: Date.now() - 60_000 });
       await clock.tickAsync(0);
 
       const heard = [];
@@ -2080,11 +2080,11 @@ describe('AppSyncOrchestrator', () => {
       getEligibleSyncPeersStub = sinon.stub().returns(peers);
       const orchestrator = makeOrchestrator({ isEnterprise: () => true });
       orchestrator.start(defaultBootContext);
-      blockEmitter.emit('blocksProcessed', 2555000);
+      blockEmitter.emit('blocksProcessed', 2_555_000);
       await clock.tickAsync(0);
       expect(orchestrator.state).to.equal(STATES.SYNCING);
 
-      peerEmitter.emit('peerReestablished', { key: peers[0].key, lostAtMs: Date.now() - 60000 });
+      peerEmitter.emit('peerReestablished', { key: peers[0].key, lostAtMs: Date.now() - 60_000 });
       await clock.tickAsync(0);
       expect(peers[0].send.callCount, 'the scoped pull fires outside READY too').to.equal(1);
     });
@@ -2094,14 +2094,14 @@ describe('AppSyncOrchestrator', () => {
       getEligibleSyncPeersStub = sinon.stub().returns(peers);
       const orchestrator = makeOrchestrator({ isEnterprise: () => true });
       orchestrator.start(defaultBootContext);
-      blockEmitter.emit('blocksProcessed', 2555000);
+      blockEmitter.emit('blocksProcessed', 2_555_000);
       await clock.tickAsync(0);
       peerEmitter.emit('peerThresholdReached', 12);
       await clock.tickAsync(0);
       const roundSends = peers[0].send.callCount;
       expect(roundSends, 'the round asked this peer').to.be.greaterThan(0);
 
-      peerEmitter.emit('peerReestablished', { key: peers[0].key, lostAtMs: Date.now() - 60000 });
+      peerEmitter.emit('peerReestablished', { key: peers[0].key, lostAtMs: Date.now() - 60_000 });
       await clock.tickAsync(0);
       expect(peers[0].send.callCount, 'the round already covers it at since=0').to.equal(roundSends);
     });
@@ -2111,13 +2111,13 @@ describe('AppSyncOrchestrator', () => {
       getEligibleSyncPeersStub = sinon.stub().returns(peers);
       const orchestrator = makeOrchestrator({ isEnterprise: () => true });
       orchestrator.start(defaultBootContext);
-      blockEmitter.emit('blocksProcessed', 2555000);
+      blockEmitter.emit('blocksProcessed', 2_555_000);
       await clock.tickAsync(0);
       peerEmitter.emit('peerThresholdReached', 12);
       await clock.tickAsync(0);
 
       // The 4th peer is outside the round; reconnect-pull it.
-      peerEmitter.emit('peerReestablished', { key: peers[3].key, lostAtMs: Date.now() - 60000 });
+      peerEmitter.emit('peerReestablished', { key: peers[3].key, lostAtMs: Date.now() - 60_000 });
       await clock.tickAsync(0);
       expect(peers[3].send.callCount).to.equal(1);
 
@@ -2150,7 +2150,7 @@ describe('AppSyncOrchestrator', () => {
       await reachReady();
       expect(orchestrator.state).to.equal(STATES.READY);
 
-      peerEmitter.emit('peerReestablished', { key: freshInbound.key, lostAtMs: Date.now() - 60000 });
+      peerEmitter.emit('peerReestablished', { key: freshInbound.key, lostAtMs: Date.now() - 60_000 });
       await clock.tickAsync(0);
       expect(freshInbound.send.callCount, 'addressed by key, never filtered by candidacy').to.equal(1);
     });
@@ -2165,11 +2165,11 @@ describe('AppSyncOrchestrator', () => {
       const orchestrator = makeOrchestrator({ isEnterprise: () => true });
       orchestrator.start(defaultBootContext);
       await reachReady();
-      await clock.tickAsync(300000);
+      await clock.tickAsync(300_000);
 
       orchestrator.onMessageCapabilityChange(false);
       const bootSends = peers[0].send.callCount;
-      const lostAtMs = Date.now() - 60000;
+      const lostAtMs = Date.now() - 60_000;
       peerEmitter.emit('peerReestablished', { key: peers[0].key, lostAtMs });
       await clock.tickAsync(0);
       expect(peers[0].send.callCount, 'nothing sent while incapable').to.equal(bootSends);
@@ -2187,12 +2187,12 @@ describe('AppSyncOrchestrator', () => {
       const orchestrator = makeOrchestrator({ isEnterprise: () => true });
       orchestrator.start(defaultBootContext);
       await reachReady();
-      await clock.tickAsync(300000);
+      await clock.tickAsync(300_000);
 
       orchestrator.onMessageCapabilityChange(false);
-      const earlyLostAt = Date.now() - 90000;
+      const earlyLostAt = Date.now() - 90_000;
       peerEmitter.emit('peerReestablished', { key: peers[0].key, lostAtMs: earlyLostAt });
-      peerEmitter.emit('peerReestablished', { key: peers[0].key, lostAtMs: Date.now() - 10000 });
+      peerEmitter.emit('peerReestablished', { key: peers[0].key, lostAtMs: Date.now() - 10_000 });
       await clock.tickAsync(0);
 
       orchestrator.onMessageCapabilityChange(true);
@@ -2209,7 +2209,7 @@ describe('AppSyncOrchestrator', () => {
       expect(orchestrator.state).to.equal(STATES.READY);
 
       const sends = peers.map((p) => p.send.callCount);
-      peerEmitter.emit('peerReestablished', { key: '10.9.9.9:16127', lostAtMs: Date.now() - 60000 });
+      peerEmitter.emit('peerReestablished', { key: '10.9.9.9:16127', lostAtMs: Date.now() - 60_000 });
       await clock.tickAsync(0);
       peers.forEach((p, i) => expect(p.send.callCount).to.equal(sends[i]));
     });
@@ -2231,7 +2231,7 @@ describe('AppSyncOrchestrator', () => {
       const orchestrator = makeOrchestrator({ isEnterprise: () => true });
       orchestrator.start(defaultBootContext);
 
-      blockEmitter.emit('blocksProcessed', 2555000);
+      blockEmitter.emit('blocksProcessed', 2_555_000);
       await clock.tickAsync(0);
       peerEmitter.emit('peerThresholdReached', 12);
       await clock.tickAsync(0);
@@ -2250,7 +2250,7 @@ describe('AppSyncOrchestrator', () => {
 
       const orchestrator = makeOrchestrator({ isEnterprise: () => true });
       orchestrator.start(defaultBootContext);
-      blockEmitter.emit('blocksProcessed', 2555000);
+      blockEmitter.emit('blocksProcessed', 2_555_000);
       await clock.tickAsync(0);
       peerEmitter.emit('peerThresholdReached', 12);
       await clock.tickAsync(0);
@@ -2276,7 +2276,7 @@ describe('AppSyncOrchestrator', () => {
 
       const orchestrator = makeOrchestrator({ isEnterprise: () => true });
       orchestrator.start(defaultBootContext);
-      blockEmitter.emit('blocksProcessed', 2555000);
+      blockEmitter.emit('blocksProcessed', 2_555_000);
       await clock.tickAsync(0);
       peerEmitter.emit('peerThresholdReached', 12);
       await clock.tickAsync(0);
@@ -2295,7 +2295,7 @@ describe('AppSyncOrchestrator', () => {
 
       const orchestrator = makeOrchestrator({ isEnterprise: () => true });
       orchestrator.start(defaultBootContext);
-      blockEmitter.emit('blocksProcessed', 2555000);
+      blockEmitter.emit('blocksProcessed', 2_555_000);
       await clock.tickAsync(0);
       peerEmitter.emit('peerThresholdReached', 12);
       await clock.tickAsync(0);
@@ -2308,7 +2308,7 @@ describe('AppSyncOrchestrator', () => {
       reconcileStub.resolves({
         peers: 3, indexesReceived: 1, requested: 2, fetched: 2,
       });
-      blockEmitter.emit('blocksProcessed', 2555001);
+      blockEmitter.emit('blocksProcessed', 2_555_001);
       await clock.tickAsync(0);
 
       expect(orchestrator.state).to.equal(STATES.READY);
@@ -2323,7 +2323,7 @@ describe('AppSyncOrchestrator', () => {
 
       const orchestrator = makeOrchestrator({ isEnterprise: () => true });
       orchestrator.start(defaultBootContext);
-      blockEmitter.emit('blocksProcessed', 2555000);
+      blockEmitter.emit('blocksProcessed', 2_555_000);
       await clock.tickAsync(0);
       peerEmitter.emit('peerThresholdReached', 12);
       await clock.tickAsync(0);
@@ -2341,13 +2341,13 @@ describe('AppSyncOrchestrator', () => {
       // nodes is gone - a node can be given priority, not information.
       const orchestrator = makeOrchestrator();
       orchestrator.start(defaultBootContext);
-      blockEmitter.emit('blocksProcessed', 2555000);
+      blockEmitter.emit('blocksProcessed', 2_555_000);
       await clock.tickAsync(0);
       expect(orchestrator.state).to.equal(STATES.SYNCING);
 
       // appSyncFallbackMinutes (125 in the unit config) x 2 blocks a minute.
       for (let i = 0; i <= 250; i += 1) {
-        blockEmitter.emit('blocksProcessed', 2555000 + i);
+        blockEmitter.emit('blocksProcessed', 2_555_000 + i);
       }
       await clock.tickAsync(0);
       expect(orchestrator.state).to.equal(STATES.READY);
@@ -2359,7 +2359,7 @@ describe('AppSyncOrchestrator', () => {
       const orchestrator = makeOrchestrator({ isEnterprise: () => true });
       orchestrator.start(defaultBootContext);
 
-      blockEmitter.emit('blocksProcessed', 2555000);
+      blockEmitter.emit('blocksProcessed', 2_555_000);
       await clock.tickAsync(0);
       // First round ran against nobody, so the manifest did not latch.
       expect(reconcileStub.calledOnce).to.be.true;
@@ -2386,7 +2386,7 @@ describe('AppSyncOrchestrator', () => {
 
       const orchestrator = makeOrchestrator({ isEnterprise: () => true });
       orchestrator.start(defaultBootContext);
-      blockEmitter.emit('blocksProcessed', 2555000);
+      blockEmitter.emit('blocksProcessed', 2_555_000);
       await clock.tickAsync(0);
       peerEmitter.emit('peerThresholdReached', 12);
       await clock.tickAsync(0);
@@ -2397,7 +2397,7 @@ describe('AppSyncOrchestrator', () => {
       // The peer set never changes again — only the chain moves.
       reconcileStub.resetHistory();
       reconcileStub.resolves({ peers: 3, indexesReceived: 3, fetched: 1 });
-      blockEmitter.emit('blocksProcessed', 2555001);
+      blockEmitter.emit('blocksProcessed', 2_555_001);
       await clock.tickAsync(0);
       await clock.tickAsync(0);
 
@@ -2411,7 +2411,7 @@ describe('AppSyncOrchestrator', () => {
       const orchestrator = makeOrchestrator({ isEnterprise: () => true });
       orchestrator.start(defaultBootContext);
 
-      blockEmitter.emit('blocksProcessed', 2555000);
+      blockEmitter.emit('blocksProcessed', 2_555_000);
       await clock.tickAsync(0);
       peerEmitter.emit('peerThresholdReached', 12);
       await clock.tickAsync(0);
@@ -2456,7 +2456,7 @@ describe('AppSyncOrchestrator', () => {
       const orchestrator = makeOrchestrator({ isEnterprise: () => true });
       orchestrator.start(defaultBootContext);
 
-      blockEmitter.emit('blocksProcessed', 2555000);
+      blockEmitter.emit('blocksProcessed', 2_555_000);
       await clock.tickAsync(0);
       peerEmitter.emit('peerThresholdReached', 12);
       await clock.tickAsync(0);
@@ -2478,7 +2478,7 @@ describe('AppSyncOrchestrator', () => {
       const orchestrator = makeOrchestrator({ isEnterprise: () => true });
       orchestrator.start(defaultBootContext);
 
-      blockEmitter.emit('blocksProcessed', 2555000);
+      blockEmitter.emit('blocksProcessed', 2_555_000);
       await clock.tickAsync(0);
       expect(orchestrator.state).to.equal(STATES.SYNCING);
 
@@ -2507,7 +2507,7 @@ describe('AppSyncOrchestrator', () => {
       orchestrator.start(defaultBootContext);
 
       // Boot to READY.
-      blockEmitter.emit('blocksProcessed', 2555000);
+      blockEmitter.emit('blocksProcessed', 2_555_000);
       await clock.tickAsync(0);
       peerEmitter.emit('peerThresholdReached', 12);
       await clock.tickAsync(0);
@@ -2556,7 +2556,7 @@ describe('AppSyncOrchestrator', () => {
       getEligibleSyncPeersStub.returns(peers);
       const orchestrator = makeOrchestrator({ isEnterprise: () => true, catchUpRunningContent });
       orchestrator.start(defaultBootContext);
-      blockEmitter.emit('blocksProcessed', 2555000);
+      blockEmitter.emit('blocksProcessed', 2_555_000);
       await clock.tickAsync(0);
       peerEmitter.emit('peerThresholdReached', 12);
       await clock.tickAsync(0);
@@ -2573,13 +2573,13 @@ describe('AppSyncOrchestrator', () => {
       catchUp.resetHistory();
 
       // Before the cadence (100 blocks) — no refresh.
-      blockEmitter.emit('blocksProcessed', 2555050);
+      blockEmitter.emit('blocksProcessed', 2_555_050);
       await clock.tickAsync(0);
       sinon.assert.notCalled(reconcileStub);
       sinon.assert.notCalled(catchUp);
 
       // At the cadence — reconcile a sample, then catch up running content.
-      blockEmitter.emit('blocksProcessed', 2555200);
+      blockEmitter.emit('blocksProcessed', 2_555_200);
       await clock.tickAsync(0);
       sinon.assert.calledOnce(reconcileStub);
       sinon.assert.calledOnce(catchUp);
@@ -2595,7 +2595,7 @@ describe('AppSyncOrchestrator', () => {
       await toReady(catchUp);
       getEligibleSyncPeersStub.resetHistory();
 
-      blockEmitter.emit('blocksProcessed', 2555200);
+      blockEmitter.emit('blocksProcessed', 2_555_200);
       await clock.tickAsync(0);
       sinon.assert.calledWith(getEligibleSyncPeersStub, 30);
       sinon.assert.neverCalledWith(getEligibleSyncPeersStub, 7500);
@@ -2606,12 +2606,12 @@ describe('AppSyncOrchestrator', () => {
       const catchUp = sinon.stub().resolves();
       const orchestrator = makeOrchestrator({ isEnterprise: () => true, catchUpRunningContent: catchUp });
       orchestrator.start(defaultBootContext);
-      blockEmitter.emit('blocksProcessed', 2555000);
+      blockEmitter.emit('blocksProcessed', 2_555_000);
       await clock.tickAsync(0);
       expect(orchestrator.state).to.equal(STATES.SYNCING);
       reconcileStub.resetHistory();
 
-      for (let i = 1; i < 120; i += 1) blockEmitter.emit('blocksProcessed', 2555000 + i);
+      for (let i = 1; i < 120; i += 1) blockEmitter.emit('blocksProcessed', 2_555_000 + i);
       await clock.tickAsync(0);
       sinon.assert.notCalled(catchUp);
     });
@@ -2625,9 +2625,9 @@ describe('AppSyncOrchestrator', () => {
       let resolveReconcile;
       reconcileStub.callsFake(() => new Promise((r) => { resolveReconcile = r; }));
 
-      blockEmitter.emit('blocksProcessed', 2555200); // triggers the refresh (hangs)
+      blockEmitter.emit('blocksProcessed', 2_555_200); // triggers the refresh (hangs)
       await clock.tickAsync(0);
-      blockEmitter.emit('blocksProcessed', 2555400); // in-flight -> skipped
+      blockEmitter.emit('blocksProcessed', 2_555_400); // in-flight -> skipped
       await clock.tickAsync(0);
       sinon.assert.calledOnce(reconcileStub);
 
@@ -2650,7 +2650,7 @@ describe('AppSyncOrchestrator', () => {
         clearSyncRequested: clearSyncRequestedStub,
       });
       orchestrator.start(defaultBootContext);
-      blockEmitter.emit('blocksProcessed', 2555000);
+      blockEmitter.emit('blocksProcessed', 2_555_000);
       await clock.tickAsync(0);
       peerEmitter.emit('peerThresholdReached', 12);
       await clock.tickAsync(0);
@@ -2728,8 +2728,8 @@ describe('AppSyncOrchestrator', () => {
       // poll at 120s finds the peer's deadline and the ROUND's budget both due,
       // so the round ends in the same pass and there is nothing left to replace
       // the peer with. A block is what makes the pass look.
-      await clock.tickAsync(11000);
-      blockEmitter.emit('blocksProcessed', 2555001);
+      await clock.tickAsync(11_000);
+      blockEmitter.emit('blocksProcessed', 2_555_001);
       await clock.tickAsync(0);
 
       // By CONNECTION, not by address: the ledger and the arriving-response gate
@@ -2753,8 +2753,8 @@ describe('AppSyncOrchestrator', () => {
       // Past the "never spoke" deadline (a twelfth of the budget) but inside the
       // stall one (a quarter of it). A peer part-way through a large answer is
       // doing exactly what was asked.
-      await clock.tickAsync(12000);
-      blockEmitter.emit('blocksProcessed', 2555001);
+      await clock.tickAsync(12_000);
+      blockEmitter.emit('blocksProcessed', 2_555_001);
       await clock.tickAsync(0);
 
       expect(
@@ -2763,8 +2763,8 @@ describe('AppSyncOrchestrator', () => {
       ).to.be.false;
 
       // Past the stall deadline too, and now it goes.
-      await clock.tickAsync(120000);
-      blockEmitter.emit('blocksProcessed', 2555002);
+      await clock.tickAsync(120_000);
+      blockEmitter.emit('blocksProcessed', 2_555_002);
       await clock.tickAsync(0);
 
       expect(logStub.warn.args.some((args) => String(args[0]).includes('stopped mid-answer'))).to.be.true;
@@ -2779,7 +2779,7 @@ describe('AppSyncOrchestrator', () => {
 
       const latecomer = makePeer('10.0.0.99:16127');
       getEligibleSyncPeersStub.returns([...peers, latecomer]);
-      blockEmitter.emit('blocksProcessed', 2555001);
+      blockEmitter.emit('blocksProcessed', 2_555_001);
       await clock.tickAsync(0);
 
       expect(latecomer.send.callCount).to.equal(4); // all four streams, none delivered
@@ -2805,7 +2805,7 @@ describe('AppSyncOrchestrator', () => {
       // The block timer remains the terminal path to readiness:
       // appSyncFallbackMinutes (125) x 2 blocks a minute.
       for (let i = 0; i <= 250; i += 1) {
-        blockEmitter.emit('blocksProcessed', 2555001 + i);
+        blockEmitter.emit('blocksProcessed', 2_555_001 + i);
       }
       await clock.tickAsync(0);
       expect(orchestrator.state).to.equal(STATES.READY);
@@ -2835,7 +2835,7 @@ describe('AppSyncOrchestrator', () => {
 
       const orchestrator = makeOrchestrator();
       orchestrator.start(defaultBootContext);
-      blockEmitter.emit('blocksProcessed', 2555000);
+      blockEmitter.emit('blocksProcessed', 2_555_000);
       await clock.tickAsync(0);
 
       expect(syncMissingHashesStub.calledOnce).to.be.true;
@@ -2851,7 +2851,7 @@ describe('AppSyncOrchestrator', () => {
       peersUp();
 
 
-      blockEmitter.emit('blocksProcessed', 2555000);
+      blockEmitter.emit('blocksProcessed', 2_555_000);
       await clock.tickAsync(0);
 
       // All 3 retries happen via timers — we can't wait for real timers in tests
@@ -2860,7 +2860,7 @@ describe('AppSyncOrchestrator', () => {
 
       // Past the fallback's 250 blocks, so the block timer fires
       for (let i = 0; i < 260; i += 1) {
-        blockEmitter.emit('blocksProcessed', 2555001 + i);
+        blockEmitter.emit('blocksProcessed', 2_555_001 + i);
       }
       await clock.tickAsync(0);
 
@@ -2875,12 +2875,12 @@ describe('AppSyncOrchestrator', () => {
       peersUp();
 
 
-      blockEmitter.emit('blocksProcessed', 2555000);
+      blockEmitter.emit('blocksProcessed', 2_555_000);
       await clock.tickAsync(0);
 
       // Past the fallback's 250 blocks
       for (let i = 1; i <= 260; i += 1) {
-        blockEmitter.emit('blocksProcessed', 2555000 + i);
+        blockEmitter.emit('blocksProcessed', 2_555_000 + i);
       }
       await clock.tickAsync(0);
 
@@ -2896,7 +2896,7 @@ describe('AppSyncOrchestrator', () => {
       orchestrator.start(defaultBootContext);
       peersUp();
 
-      blockEmitter.emit('blocksProcessed', 2555000);
+      blockEmitter.emit('blocksProcessed', 2_555_000);
       await clock.tickAsync(0);
 
       // Hash sync succeeded but DB rebuild failed
@@ -2904,7 +2904,7 @@ describe('AppSyncOrchestrator', () => {
 
       // Block timer should still allow readiness (will retry DB rebuild)
       for (let i = 1; i <= 260; i += 1) {
-        blockEmitter.emit('blocksProcessed', 2555000 + i);
+        blockEmitter.emit('blocksProcessed', 2_555_000 + i);
       }
       await clock.tickAsync(0);
 
@@ -2921,11 +2921,11 @@ describe('AppSyncOrchestrator', () => {
       orchestrator.start(defaultBootContext);
       peersUp();
 
-      blockEmitter.emit('blocksProcessed', 2555000);
+      blockEmitter.emit('blocksProcessed', 2_555_000);
       await clock.tickAsync(0);
 
       for (let i = 1; i <= 260; i += 1) {
-        blockEmitter.emit('blocksProcessed', 2555000 + i);
+        blockEmitter.emit('blocksProcessed', 2_555_000 + i);
       }
       await clock.tickAsync(0);
 
@@ -2940,11 +2940,11 @@ describe('AppSyncOrchestrator', () => {
       orchestrator.start(defaultBootContext);
       peersUp();
 
-      blockEmitter.emit('blocksProcessed', 2555000);
+      blockEmitter.emit('blocksProcessed', 2_555_000);
       await clock.tickAsync(0);
 
       for (let i = 1; i <= 260; i += 1) {
-        blockEmitter.emit('blocksProcessed', 2555000 + i);
+        blockEmitter.emit('blocksProcessed', 2_555_000 + i);
       }
       await clock.tickAsync(0);
 
@@ -2960,11 +2960,11 @@ describe('AppSyncOrchestrator', () => {
       orchestrator.start(defaultBootContext);
       peersUp();
 
-      blockEmitter.emit('blocksProcessed', 2555000);
+      blockEmitter.emit('blocksProcessed', 2_555_000);
       await clock.tickAsync(0);
 
       for (let i = 1; i <= 260; i += 1) {
-        blockEmitter.emit('blocksProcessed', 2555000 + i);
+        blockEmitter.emit('blocksProcessed', 2_555_000 + i);
       }
       await clock.tickAsync(0);
 
@@ -2975,24 +2975,24 @@ describe('AppSyncOrchestrator', () => {
 
   describe('hash retry scheduling', () => {
     it('should retry hash sync when block reaches nextRetryHeight', async () => {
-      syncMissingHashesStub.onFirstCall().resolves({ resolved: 5, missing: 2, unreachable: 0, nextRetryHeight: 2555200 });
+      syncMissingHashesStub.onFirstCall().resolves({ resolved: 5, missing: 2, unreachable: 0, nextRetryHeight: 2_555_200 });
       syncMissingHashesStub.onSecondCall().resolves({ resolved: 2, missing: 0, unreachable: 0, nextRetryHeight: null });
 
       const orchestrator = makeOrchestrator();
       orchestrator.start(defaultBootContext);
 
       // Initial sync sets nextRetryHeight to 2555200
-      blockEmitter.emit('blocksProcessed', 2555000);
+      blockEmitter.emit('blocksProcessed', 2_555_000);
       await clock.tickAsync(0);
       expect(syncMissingHashesStub.calledOnce).to.be.true;
 
       // Block before retry height — should not trigger sync
-      blockEmitter.emit('blocksProcessed', 2555100);
+      blockEmitter.emit('blocksProcessed', 2_555_100);
       await clock.tickAsync(0);
       expect(syncMissingHashesStub.calledOnce).to.be.true;
 
       // Block at retry height — should trigger sync
-      blockEmitter.emit('blocksProcessed', 2555200);
+      blockEmitter.emit('blocksProcessed', 2_555_200);
       await clock.tickAsync(0);
       expect(syncMissingHashesStub.calledTwice).to.be.true;
     });
@@ -3003,29 +3003,29 @@ describe('AppSyncOrchestrator', () => {
       const orchestrator = makeOrchestrator();
       orchestrator.start(defaultBootContext);
 
-      blockEmitter.emit('blocksProcessed', 2555000);
+      blockEmitter.emit('blocksProcessed', 2_555_000);
       await clock.tickAsync(0);
       expect(syncMissingHashesStub.calledOnce).to.be.true;
 
       // Fallback is 100 blocks — should not trigger before that
-      blockEmitter.emit('blocksProcessed', 2555050);
+      blockEmitter.emit('blocksProcessed', 2_555_050);
       await clock.tickAsync(0);
       expect(syncMissingHashesStub.calledOnce).to.be.true;
 
       // At fallback threshold — should trigger
-      blockEmitter.emit('blocksProcessed', 2555100);
+      blockEmitter.emit('blocksProcessed', 2_555_100);
       await clock.tickAsync(0);
       expect(syncMissingHashesStub.calledTwice).to.be.true;
     });
 
     it('should schedule immediate check on HASH_UNRESOLVED event', async () => {
-      syncMissingHashesStub.onFirstCall().resolves({ resolved: 0, missing: 0, unreachable: 0, nextRetryHeight: 2560000 });
+      syncMissingHashesStub.onFirstCall().resolves({ resolved: 0, missing: 0, unreachable: 0, nextRetryHeight: 2_560_000 });
       syncMissingHashesStub.onSecondCall().resolves({ resolved: 1, missing: 0, unreachable: 0, nextRetryHeight: null });
 
       const orchestrator = makeOrchestrator();
       orchestrator.start(defaultBootContext);
 
-      blockEmitter.emit('blocksProcessed', 2555000);
+      blockEmitter.emit('blocksProcessed', 2_555_000);
       await clock.tickAsync(0);
       expect(syncMissingHashesStub.calledOnce).to.be.true;
 
@@ -3033,7 +3033,7 @@ describe('AppSyncOrchestrator', () => {
       appSyncEvents.emit(EVENTS.HASH_UNRESOLVED);
 
       // Next block should trigger sync even though nextRetryHeight was 2560000
-      blockEmitter.emit('blocksProcessed', 2555001);
+      blockEmitter.emit('blocksProcessed', 2_555_001);
       await clock.tickAsync(0);
       expect(syncMissingHashesStub.calledTwice).to.be.true;
     });
@@ -3054,13 +3054,13 @@ describe('AppSyncOrchestrator', () => {
 
   describe('hashesChanged event', () => {
     it('should schedule immediate hash recheck when reconstruct changes hashes', async () => {
-      syncMissingHashesStub.onFirstCall().resolves({ resolved: 0, missing: 0, unreachable: 0, nextRetryHeight: 2560000 });
+      syncMissingHashesStub.onFirstCall().resolves({ resolved: 0, missing: 0, unreachable: 0, nextRetryHeight: 2_560_000 });
       syncMissingHashesStub.onSecondCall().resolves({ resolved: 1, missing: 0, unreachable: 0, nextRetryHeight: null });
 
       const orchestrator = makeOrchestrator();
       orchestrator.start(defaultBootContext);
 
-      blockEmitter.emit('blocksProcessed', 2555000);
+      blockEmitter.emit('blocksProcessed', 2_555_000);
       await clock.tickAsync(0);
       expect(syncMissingHashesStub.calledOnce).to.be.true;
 
@@ -3068,7 +3068,7 @@ describe('AppSyncOrchestrator', () => {
       blockEmitter.emit('hashesChanged');
 
       // Next block should trigger sync immediately
-      blockEmitter.emit('blocksProcessed', 2555001);
+      blockEmitter.emit('blocksProcessed', 2_555_001);
       await clock.tickAsync(0);
       expect(syncMissingHashesStub.calledTwice).to.be.true;
     });
@@ -3099,11 +3099,11 @@ describe('AppSyncOrchestrator', () => {
       const orchestrator = makeOrchestrator({ fluxVersion: '8.12.0' });
       orchestrator.start(defaultBootContext);
 
-      blockEmitter.emit('blocksProcessed', 2555000);
+      blockEmitter.emit('blocksProcessed', 2_555_000);
       await clock.tickAsync(0);
 
       expect(resetHashSyncForUpgradeStub.calledOnce).to.be.true;
-      expect(resetHashSyncForUpgradeStub.firstCall.args[0]).to.equal(2555000);
+      expect(resetHashSyncForUpgradeStub.firstCall.args[0]).to.equal(2_555_000);
       expect(logStub.info.calledWith(sinon.match(/Version upgrade to 8\.12\.0/))).to.be.true;
     });
 
@@ -3113,7 +3113,7 @@ describe('AppSyncOrchestrator', () => {
       const orchestrator = makeOrchestrator({ fluxVersion: '8.12.0' });
       orchestrator.start(defaultBootContext);
 
-      blockEmitter.emit('blocksProcessed', 2555000);
+      blockEmitter.emit('blocksProcessed', 2_555_000);
       await clock.tickAsync(0);
 
       expect(resetHashSyncForUpgradeStub.called).to.be.false;
@@ -3125,7 +3125,7 @@ describe('AppSyncOrchestrator', () => {
       const orchestrator = makeOrchestrator({ fluxVersion: '8.12.0' });
       orchestrator.start(defaultBootContext);
 
-      blockEmitter.emit('blocksProcessed', 2555000);
+      blockEmitter.emit('blocksProcessed', 2_555_000);
       await clock.tickAsync(0);
 
       sinon.assert.calledWith(nodeStartupRepositoryStub.setHashSyncVersionMarker, '8.12.0');
@@ -3135,7 +3135,7 @@ describe('AppSyncOrchestrator', () => {
       const orchestrator = makeOrchestrator();
       orchestrator.start(defaultBootContext);
 
-      blockEmitter.emit('blocksProcessed', 2555000);
+      blockEmitter.emit('blocksProcessed', 2_555_000);
       await clock.tickAsync(0);
 
       expect(resetHashSyncForUpgradeStub.called).to.be.false;
@@ -3169,7 +3169,7 @@ describe('AppSyncOrchestrator', () => {
   describe('readBootContext', () => {
     it('should detect machine reboot when boot_id differs', async () => {
       nodeStartupRepositoryStub.getHeartbeat.resolves({
-        lastAlive: Date.now() - 60000,
+        lastAlive: Date.now() - 60_000,
         machineBootId: 'old-boot-id',
         shutdownReason: 'sigterm',
       });
@@ -3207,7 +3207,7 @@ describe('AppSyncOrchestrator', () => {
 
     it('should detect unclean shutdown when shutdownReason is absent', async () => {
       nodeStartupRepositoryStub.getHeartbeat.resolves({
-        lastAlive: Date.now() - 120000,
+        lastAlive: Date.now() - 120_000,
         machineBootId: 'old-boot-id',
       });
 
@@ -3218,7 +3218,7 @@ describe('AppSyncOrchestrator', () => {
     });
 
     it('should compute downtime from lastAlive', async () => {
-      const fiveMinAgo = Date.now() - 300000;
+      const fiveMinAgo = Date.now() - 300_000;
       nodeStartupRepositoryStub.getHeartbeat.resolves({
         lastAlive: fiveMinAgo,
         machineBootId: 'old-boot-id',
@@ -3226,7 +3226,7 @@ describe('AppSyncOrchestrator', () => {
 
       const ctx = await AppSyncOrchestrator.readBootContext();
 
-      expect(ctx.downtimeMs).to.be.within(299000, 301000);
+      expect(ctx.downtimeMs).to.be.within(299_000, 301_000);
     });
 
     it('should return safe defaults on error', async () => {
@@ -3286,10 +3286,10 @@ describe('AppSyncOrchestrator', () => {
       orchestrator.start(defaultBootContext);
       peersUp();
 
-      blockEmitter.emit('blocksProcessed', 2555000);
+      blockEmitter.emit('blocksProcessed', 2_555_000);
       await clock.tickAsync(0);
       for (let i = 0; i < 260; i += 1) {
-        blockEmitter.emit('blocksProcessed', 2555000 + i);
+        blockEmitter.emit('blocksProcessed', 2_555_000 + i);
       }
       await clock.tickAsync(0);
 
@@ -3302,10 +3302,10 @@ describe('AppSyncOrchestrator', () => {
       peersUp();
 
       // Explorer syncs but hash sync deferred (no capability)
-      blockEmitter.emit('blocksProcessed', 2555000);
+      blockEmitter.emit('blocksProcessed', 2_555_000);
       await clock.tickAsync(0);
       for (let i = 0; i < 260; i += 1) {
-        blockEmitter.emit('blocksProcessed', 2555000 + i);
+        blockEmitter.emit('blocksProcessed', 2_555_000 + i);
       }
       await clock.tickAsync(0);
       expect(orchestrator.state).to.equal(STATES.SYNCING);
@@ -3324,10 +3324,10 @@ describe('AppSyncOrchestrator', () => {
       orchestrator.start(defaultBootContext);
       peersUp();
 
-      blockEmitter.emit('blocksProcessed', 2555000);
+      blockEmitter.emit('blocksProcessed', 2_555_000);
       await clock.tickAsync(0);
       for (let i = 0; i < 260; i += 1) {
-        blockEmitter.emit('blocksProcessed', 2555000 + i);
+        blockEmitter.emit('blocksProcessed', 2_555_000 + i);
       }
       await clock.tickAsync(0);
       expect(orchestrator.state).to.equal(STATES.READY);
@@ -3348,10 +3348,10 @@ describe('AppSyncOrchestrator', () => {
       peersUp();
 
 
-      blockEmitter.emit('blocksProcessed', 2555000);
+      blockEmitter.emit('blocksProcessed', 2_555_000);
       await clock.tickAsync(0);
       for (let i = 0; i < 260; i += 1) {
-        blockEmitter.emit('blocksProcessed', 2555000 + i);
+        blockEmitter.emit('blocksProcessed', 2_555_000 + i);
       }
       await clock.tickAsync(0);
       expect(orchestrator.state).to.equal(STATES.READY);
@@ -3379,10 +3379,10 @@ describe('AppSyncOrchestrator', () => {
       const orchestrator = makeUncapableOrchestrator();
       orchestrator.start(defaultBootContext);
 
-      blockEmitter.emit('blocksProcessed', 2555000);
+      blockEmitter.emit('blocksProcessed', 2_555_000);
       await clock.tickAsync(0);
       for (let i = 0; i < 260; i += 1) {
-        blockEmitter.emit('blocksProcessed', 2555000 + i);
+        blockEmitter.emit('blocksProcessed', 2_555_000 + i);
       }
       await clock.tickAsync(0);
 

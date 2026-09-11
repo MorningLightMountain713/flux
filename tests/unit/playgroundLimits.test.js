@@ -13,7 +13,7 @@ const CONFIG = {
     playgroundSessionImageMaxBytes: 2e9,
     playgroundNodeSessionsPerHour: 2,
     playgroundCallerSessionsPerHour: 3,
-    playgroundWindowMs: 3600000,
+    playgroundWindowMs: 3_600_000,
   },
 };
 
@@ -125,7 +125,7 @@ describe('playgroundLimits', () => {
       const refused = window.consume('k');
       expect(refused.allowed).to.equal(false);
       expect(refused.retryAfterMs).to.be.greaterThan(0);
-      expect(refused.retryAfterMs).to.be.at.most(3600000);
+      expect(refused.retryAfterMs).to.be.at.most(3_600_000);
     });
 
     it('counts each key independently', () => {

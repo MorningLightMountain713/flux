@@ -1125,7 +1125,7 @@ async function tailBenchmarkDebug(req, res) {
 const LOG_LEVEL_LABELS = {
   10: 'TRACE', 20: 'DEBUG', 30: 'INFO', 40: 'WARN', 50: 'ERROR', 60: 'FATAL',
 };
-const JOURNAL_READ_CAP = 100000; // lines; the retired files capped at 25MB
+const JOURNAL_READ_CAP = 100_000; // lines; the retired files capped at 25MB
 
 function logRecordMatches(level, record) {
   if (level === 'debug') return true;
@@ -1157,12 +1157,12 @@ function parseLogFilters(query) {
   const filters = {};
   if (q.lines !== undefined) {
     const n = Number.parseInt(q.lines, 10);
-    if (Number.isFinite(n) && n > 0) filters.tail = Math.min(n, 100000);
+    if (Number.isFinite(n) && n > 0) filters.tail = Math.min(n, 100_000);
   }
   if (q.since) {
     const rel = /^(\d+)([smhd])$/.exec(String(q.since));
     const cutoff = rel
-      ? new Date(Date.now() - Number(rel[1]) * { s: 1000, m: 60000, h: 3600000, d: 86400000 }[rel[2]])
+      ? new Date(Date.now() - Number(rel[1]) * { s: 1000, m: 60_000, h: 3_600_000, d: 86_400_000 }[rel[2]])
       : new Date(String(q.since));
     if (!Number.isNaN(cutoff.getTime())) filters.since = cutoff;
   }
@@ -1678,7 +1678,7 @@ async function getFluxInfo(req, res) {
     if (appHashes.status === 'error') {
       throw appHashes.data;
     }
-    const hashesOk = appHashes.data.filter((data) => data.height >= 694000);
+    const hashesOk = appHashes.data.filter((data) => data.height >= 694_000);
     info.appsHashesTotal = hashesOk.length;
     const mesOK = hashesOk.filter((mes) => mes.message === true);
     info.hashesPresent = mesOK.length;
@@ -1764,17 +1764,17 @@ async function getNodeTier(req, res) {
     let responseAux;
     const tier = await generalService.nodeTier();
     const nodeCollateral = await generalService.nodeCollateral();
-    if (tier === 'basic' && nodeCollateral === 10000) {
+    if (tier === 'basic' && nodeCollateral === 10_000) {
       responseAux = 'cumulus';
-    } else if (tier === 'super' && nodeCollateral === 25000) {
+    } else if (tier === 'super' && nodeCollateral === 25_000) {
       responseAux = 'nimbus';
-    } else if (tier === 'bamf' && nodeCollateral === 100000) {
+    } else if (tier === 'bamf' && nodeCollateral === 100_000) {
       responseAux = 'stratus';
     } else if (tier === 'basic' && nodeCollateral === 1000) {
       responseAux = 'cumulus_new';
-    } else if (tier === 'super' && nodeCollateral === 12500) {
+    } else if (tier === 'super' && nodeCollateral === 12_500) {
       responseAux = 'nimbus_new';
-    } else if (tier === 'bamf' && nodeCollateral === 40000) {
+    } else if (tier === 'bamf' && nodeCollateral === 40_000) {
       responseAux = 'stratus_new';
     } else {
       throw new Error('Unrecognised Flux node tier'); // shall not happen as nodeTier throws
@@ -1961,7 +1961,7 @@ async function streamChainPreparation(req, res) {
         log.info('Stream chain prep timeout hit: services already restarted or stream in progress');
       }
       prepLock = false;
-    }, 30 * 1_000);
+    }, 30 * 1000);
   }
 }
 
@@ -2144,7 +2144,7 @@ async function streamChain(req, res) {
 
       // data transfer rates are usually Megabytes per second (not Mebibytes)
       return setTimeout(() => {
-        const mbps = ((bytesTransferred / 1000 ** 2) / (timeoutMs / 1_000)) * 8;
+        const mbps = ((bytesTransferred / 1000 ** 2) / (timeoutMs / 1000)) * 8;
 
         if (mbps < thresholdMbps) {
           log.info(`Stream chain transfer rate too slow: ${mbps.toFixed(2)} Mbps, cancelling stream and disabling further streams`);

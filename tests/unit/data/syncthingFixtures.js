@@ -142,7 +142,7 @@ const configOptions = {
   ],
   globalAnnounceEnabled: false,
   localAnnounceEnabled: false,
-  localAnnouncePort: 21027,
+  localAnnouncePort: 21_027,
   localAnnounceMCAddr: '[ff12::8384]:21027',
   maxSendKbps: 0,
   maxRecvKbps: 0,

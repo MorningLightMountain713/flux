@@ -18,7 +18,7 @@ const fluxCommunicationUtils = require('./fluxCommunicationUtils');
 const { peerManager } = require('./utils/peerState');
 const { CLOSE_CODES, DIRECTION } = require('./utils/FluxPeerSocket');
 const nodeDosState = require('./nodeDosState');
-const { normalizeSocketAddress, socketAddressesMatch, parseSocketAddress } = require('./utils/socketAddressUtils');
+const { normalizeSocketAddress, socketAddressesMatch, parseSocketAddress, MAX_PORT } = require('./utils/socketAddressUtils');
 const globalState = require('./utils/globalState');
 
 
@@ -337,7 +337,7 @@ const MAX_ECHO_BYTES = 256;
  * @returns {Promise<string|null>} what it answered, or null if nothing did
  */
 async function portAnswered(ip, port, options = {}) {
-  const timeout = options.timeout || 5_000;
+  const timeout = options.timeout || 5000;
 
   return new Promise((resolve) => {
     const socket = new net.Socket();
@@ -375,7 +375,7 @@ async function portAnswered(ip, port, options = {}) {
  * @returns {Promise<boolean>} Returns true if opened, otherwise false
  */
 async function isPortOpen(ip, port, options = {}) {
-  const timeout = options.timeout || 5_000;
+  const timeout = options.timeout || 5000;
 
   const call = new Promise((resolve, reject) => {
     const socket = new net.Socket();
@@ -805,7 +805,7 @@ async function keepUPNPPortsOpen(req, res) {
     // are able to receive communcation from another node, but because of routing issues,
     // can connect back the other way. This has a timeout of 3 seconds, whereas the other end
     // has a 5 second timeout.
-    await serviceHelper.axiosGet(`http://${ip}:${apiPort}/flux/uptime`, { timeout: 3_000 }).catch(() => {
+    await serviceHelper.axiosGet(`http://${ip}:${apiPort}/flux/uptime`, { timeout: 3000 }).catch(() => {
       res.status(503).end();
       throw new Error('Unable to connect back to api port');
     });
@@ -816,7 +816,7 @@ async function keepUPNPPortsOpen(req, res) {
 
     // eslint-disable-next-line no-restricted-syntax
     for (const port of ports) {
-      tcpConnectAndDestroy(ip, port, 3_000);
+      tcpConnectAndDestroy(ip, port, 3000);
       const udpSocket = dgram.createSocket('udp4');
       udpSocket.send('D', 0, 1, port, ip, () => {
         udpSocket.close();
@@ -1637,7 +1637,7 @@ async function allowPortApi(req, res) {
     return res.json(errMessage);
   }
   if (!serviceHelper.validPort(port)) {
-    return res.json(messageHelper.createErrorMessage('Port must be a whole number between 1 and 65535'));
+    return res.json(messageHelper.createErrorMessage(`Port must be a whole number between 1 and ${MAX_PORT}`));
   }
   const authorized = await verificationHelper.verifyPrivilege(Privilege.NODE_OPERATOR_OR_FLUX_TEAM, authOf(req));
 
@@ -1705,7 +1705,7 @@ async function adjustFirewall() {
     const homePort = +apiPort - 1;
     const apiSSLPort = +apiPort + 1;
     const syncthingPort = +apiPort + 2;
-    let ports = [apiPort, homePort, apiSSLPort, syncthingPort, 80, 443, 16125];
+    let ports = [apiPort, homePort, apiSSLPort, syncthingPort, 80, 443, 16_125];
     const fluxCommunicationPorts = config.get('server.allowedPorts');
     ports = ports.concat(fluxCommunicationPorts);
     const firewallActive = await isFirewallActive();

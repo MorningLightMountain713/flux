@@ -13,8 +13,8 @@ const CONFIG = {
   fluxapps: {
     playgroundSessionImageMaxBytes: 2e9,
     playgroundSessionImageTotalMaxBytes: 6e9,
-    playgroundProbeTimeoutMs: 180000,
-    playgroundProbeStableMs: 30000,
+    playgroundProbeTimeoutMs: 180_000,
+    playgroundProbeStableMs: 30_000,
     playgroundLogLines: 200,
     playgroundLogRetainedLines: 2000,
     playgroundMinerCpuBusyFraction: 0.9,
@@ -184,7 +184,7 @@ describe('playgroundRunner', () => {
       // allocation, so a fixture without one is genuinely unmeasurable.
       cpu: 2,
       imageAuth: null,
-      portBindings: [{ containerPort: 80, hostPort: 31000, protocol: 'tcp' }],
+      portBindings: [{ containerPort: 80, hostPort: 31_000, protocol: 'tcp' }],
       ...overrides,
     };
   }
@@ -300,7 +300,7 @@ describe('playgroundRunner', () => {
     // A UDP port has no accept to observe, so connecting to it proves nothing
     // either way and is not worth reporting as evidence.
     it('does not probe UDP ports', async () => {
-      const udpOnly = component({ portBindings: [{ containerPort: 53, hostPort: 31000, protocol: 'udp' }] });
+      const udpOnly = component({ portBindings: [{ containerPort: 53, hostPort: 31_000, protocol: 'udp' }] });
       const probe = await runner.probeComponent(udpOnly, watcherWith({}, { msPerWait: 20_000 }), farDeadline());
       expect(stubs.isPortOpen.called).to.equal(false);
       expect(probe.basis).to.equal('uptime');

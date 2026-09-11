@@ -51,7 +51,7 @@ function blobMount(name, hash) {
   }];
 }
 
-function component(name, mounts, { hostPort = 31000, containerPort = 80 } = {}) {
+function component(name, mounts, { hostPort = 31_000, containerPort = 80 } = {}) {
   return {
     name,
     description: name,
@@ -220,7 +220,7 @@ describe('contentSlotService', () => {
 
   before(async function loadLibrary() {
     // The first fromSubmission compiles the ajv schemas.
-    this.timeout(30000);
+    this.timeout(30_000);
     flux = await loadSpecLibrary();
     slotSpec = cleartextSpec(webWith(slotMount('app-config')));
     twoSlotSpec = cleartextSpec(webWith(slotMount('app-config'), slotMount('tls-cert')));
@@ -1319,7 +1319,7 @@ describe('contentSlotService', () => {
     const up = async () => ({ State: { Running: true } });
 
     before(async function buildFixtures() {
-      this.timeout(30000);
+      this.timeout(30_000);
       dep = await deploymentOf(webWith(slotMount('app-config')));
       spec = slotSpecSealed;
       tenInstanceSpec = await sealedSpec(webWith(slotMount('app-config')), { instances: 10 });
@@ -1467,7 +1467,7 @@ describe('contentSlotService', () => {
       const { service } = load();
       const apply = sinon.spy();
       const computeDelay = sinon.stub().resolves(5000);
-      const sched = fakeScheduler(40000); // past activateAt + staggerSeconds
+      const sched = fakeScheduler(40_000); // past activateAt + staggerSeconds
       const m = manifest({ rollout: { strategy: 'staggered', activateAt: 2000, staggerSeconds: 30 } });
       await service.scheduleContentApplication(m, tenInstanceSpec, schedDeps(sched, { apply, computeDelay }));
       sinon.assert.calledOnce(apply);
@@ -1504,7 +1504,7 @@ describe('contentSlotService', () => {
       const { service } = load();
       // sorted collaterals: aaaa,bbbb,cccc(self),dddd → i=2 of N=4 → (2/4)*40s
       const deps = staggerDeps('cccc', { 'p1:16127': 'aaaa', 'p2:16127': 'bbbb', 'p3:16127': 'dddd' });
-      expect(await service.computeStaggerDelayMs(APP, 4, 40, deps)).to.equal(20000);
+      expect(await service.computeStaggerDelayMs(APP, 4, 40, deps)).to.equal(20_000);
     });
 
     it('returns 0 when this node\'s own collateral cannot be resolved (degenerate)', async () => {
@@ -1517,7 +1517,7 @@ describe('contentSlotService', () => {
       const { service } = load();
       // instances=2 but 4 observed (transient over-count): N=max(2,4)=4, self 'dddd' i=3 → (3/4)*40s
       const deps = staggerDeps('dddd', { 'p1:16127': 'aaaa', 'p2:16127': 'bbbb', 'p3:16127': 'cccc' });
-      expect(await service.computeStaggerDelayMs(APP, 2, 40, deps)).to.equal(30000);
+      expect(await service.computeStaggerDelayMs(APP, 2, 40, deps)).to.equal(30_000);
     });
   });
 
@@ -1555,7 +1555,7 @@ describe('contentSlotService', () => {
     before(async () => {
       twoComp = await deploymentOf({
         web: component('web', [slotMount('app-config')]),
-        db: component('db', [], { hostPort: 31001, containerPort: 5432 }),
+        db: component('db', [], { hostPort: 31_001, containerPort: 5432 }),
       });
     });
 

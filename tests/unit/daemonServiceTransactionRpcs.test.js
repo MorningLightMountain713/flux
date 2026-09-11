@@ -42,7 +42,7 @@ describe('daemonServiceTransactionRpcs tests', () => {
             addr2: '12344aaaa',
           },
           locktime: 5999,
-          expiryheight: 1234677,
+          expiryheight: 1_234_677,
         },
       };
       const res = generateResponse();
@@ -51,7 +51,7 @@ describe('daemonServiceTransactionRpcs tests', () => {
         { test: 'testtransaction', something: 'somethingelse' },
         { addr1: '1235asdf', addr2: '12344aaaa' },
         5999,
-        1234677,
+        1_234_677,
       ];
 
       expect(result).to.equal(`Response: ${execCallResult}`);
@@ -72,7 +72,7 @@ describe('daemonServiceTransactionRpcs tests', () => {
             addr2: '12344aaaa',
           },
           locktime: 5999,
-          expiryheight: 1234677,
+          expiryheight: 1_234_677,
         },
       };
       const res = generateResponse();
@@ -81,7 +81,7 @@ describe('daemonServiceTransactionRpcs tests', () => {
         { test: 'testtransaction', something: 'somethingelse' },
         { addr1: '1235asdf', addr2: '12344aaaa' },
         5999,
-        1234677,
+        1_234_677,
       ];
 
       sinon.assert.calledOnceWithExactly(res.json, execCallResult);
@@ -105,7 +105,7 @@ describe('daemonServiceTransactionRpcs tests', () => {
             addr2: '12344aaaa',
           },
           locktime: 5999,
-          expiryheight: 1234677,
+          expiryheight: 1_234_677,
         },
       };
       const res = generateResponse();
@@ -114,7 +114,7 @@ describe('daemonServiceTransactionRpcs tests', () => {
         { test: 'testtransaction', something: 'somethingelse' },
         { addr1: '1235asdf', addr2: '12344aaaa' },
         5999,
-        1234677,
+        1_234_677,
       ];
 
       sinon.assert.calledOnceWithExactly(res.json, execCallResult);
@@ -146,7 +146,7 @@ describe('daemonServiceTransactionRpcs tests', () => {
         { test: 'testtransaction', something: 'somethingelse' },
         { addr1: '1235asdf', addr2: '12344aaaa' },
         5999,
-        524342220,
+        524_342_220,
       ];
 
       sinon.assert.calledOnceWithExactly(res.json, execCallResult);
@@ -169,7 +169,7 @@ describe('daemonServiceTransactionRpcs tests', () => {
             addr1: '1235asdf',
             addr2: '12344aaaa',
           },
-          expiryheight: 1234677,
+          expiryheight: 1_234_677,
         },
       };
       const res = generateResponse();
@@ -178,7 +178,7 @@ describe('daemonServiceTransactionRpcs tests', () => {
         { test: 'testtransaction', something: 'somethingelse' },
         { addr1: '1235asdf', addr2: '12344aaaa' },
         0,
-        1234677,
+        1_234_677,
       ];
 
       sinon.assert.calledOnceWithExactly(res.json, execCallResult);
@@ -201,7 +201,7 @@ describe('daemonServiceTransactionRpcs tests', () => {
             addr1: '1235asdf',
             addr2: '12344aaaa',
           },
-          expiryheight: 1234677,
+          expiryheight: 1_234_677,
         },
       };
       const expectedResult = {
@@ -248,13 +248,13 @@ describe('daemonServiceTransactionRpcs tests', () => {
           addr2: '12344aaaa',
         },
         locktime: 5999,
-        expiryheight: 1234677,
+        expiryheight: 1_234_677,
       };
       const expectedCallParams = [
         { test: 'testtransaction', something: 'somethingelse' },
         { addr1: '1235asdf', addr2: '12344aaaa' },
         5999,
-        1234677,
+        1_234_677,
       ];
       const mockStream = new PassThrough();
       mockStream.push(JSON.stringify(params));
@@ -286,7 +286,7 @@ describe('daemonServiceTransactionRpcs tests', () => {
         { test: 'testtransaction', something: 'somethingelse' },
         { addr1: '1235asdf', addr2: '12344aaaa' },
         5999,
-        524342220,
+        524_342_220,
       ];
       const mockStream = new PassThrough();
       mockStream.push(JSON.stringify(params));
@@ -312,13 +312,13 @@ describe('daemonServiceTransactionRpcs tests', () => {
           addr1: '1235asdf',
           addr2: '12344aaaa',
         },
-        expiryheight: 1234677,
+        expiryheight: 1_234_677,
       };
       const expectedCallParams = [
         { test: 'testtransaction', something: 'somethingelse' },
         { addr1: '1235asdf', addr2: '12344aaaa' },
         0,
-        1234677,
+        1_234_677,
       ];
       const mockStream = new PassThrough();
       mockStream.push(JSON.stringify(params));
@@ -344,7 +344,7 @@ describe('daemonServiceTransactionRpcs tests', () => {
           addr1: '1235asdf',
           addr2: '12344aaaa',
         },
-        expiryheight: 1234677,
+        expiryheight: 1_234_677,
       };
       const expectedErrorMessage = {
         status: 'error',

@@ -55,7 +55,7 @@ describe('admissionControl', () => {
 
   before(async function buildDeployments() {
     // The first fromSubmission compiles the ajv schemas.
-    this.timeout(30000);
+    this.timeout(30_000);
     flux = await loadSpecLibrary();
     web = await deploymentOf({
       cpu: 2, memory: 4000, storageGb: 40, rootFsGb: 10,
@@ -185,7 +185,7 @@ describe('admissionControl', () => {
       admissionControl.reserve('paidapp', paidapp);
       admissionControl.reserve('op_s1', web, { reclaimable: true });
 
-      expect(admissionControl.pendingResources()).to.deep.equal({ cpu: 6, memory: 12000, hdd: 150 });
+      expect(admissionControl.pendingResources()).to.deep.equal({ cpu: 6, memory: 12_000, hdd: 150 });
       expect(admissionControl.reclaimableResources()).to.deep.equal({ cpu: 2, memory: 4000, hdd: 50 });
     });
 

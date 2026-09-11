@@ -20,9 +20,9 @@ let initialized = false;
 const MAX_BUFFER_SIZE = 5000;
 const FLUSH_TIMEOUT = 5000;
 const FLUSH_THRESHOLD = 15;
-const REQUEST_TIMEOUT = 10000;
-const MAX_BACKOFF = 300000; // 5 minutes
-const NODE_IP_REFRESH_INTERVAL = 600000; // 10 minutes
+const REQUEST_TIMEOUT = 10_000;
+const MAX_BACKOFF = 300_000; // 5 minutes
+const NODE_IP_REFRESH_INTERVAL = 600_000; // 10 minutes
 
 /**
  * Refresh cached node IP address.

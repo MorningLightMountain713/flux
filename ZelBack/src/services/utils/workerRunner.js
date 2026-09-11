@@ -17,7 +17,7 @@ const WORKER_DIR = path.join(__dirname, '..', 'workers');
 
 // // Jobs are short: a token exchange or a crypto operation. Well past this,
 // whatever needed the answer has failed anyway.
-const DEFAULT_TIMEOUT_MS = 30000;
+const DEFAULT_TIMEOUT_MS = 30_000;
 
 /**
  * Run a single exchange in a dedicated worker and tear it down.

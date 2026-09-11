@@ -231,10 +231,10 @@ describe('RepoAuthParser Tests', () => {
     });
 
     it('should handle very long credentials', () => {
-      const longPassword = 'p'.repeat(10000);
+      const longPassword = 'p'.repeat(10_000);
       const result = RepoAuthParser.parse(`user:${longPassword}`);
 
-      expect(result.password).to.have.lengthOf(10000);
+      expect(result.password).to.have.lengthOf(10_000);
     });
 
     it('should handle unicode characters', () => {
@@ -393,7 +393,7 @@ describe('RepoAuthParser Tests', () => {
     it('should convert non-string parameter values to strings', () => {
       const config = {
         type: 'aws-ecr',
-        numericParam: 12345,
+        numericParam: 12_345,
         boolParam: true,
       };
 

@@ -39,7 +39,7 @@ describe('appSubmission tests', () => {
 
   before(async function loadLibrary() {
     // The first fromSubmission compiles the ajv schemas.
-    this.timeout(30000);
+    this.timeout(30_000);
     flux = await loadSpecLibrary();
   });
 
@@ -201,7 +201,7 @@ describe('appSubmission tests', () => {
 
       try {
         await appSubmission.resolveSubmission(submission, {
-          contentHash: undefined, timestamp: 1, type: 'fluxappregister', daemonHeight: 2000000,
+          contentHash: undefined, timestamp: 1, type: 'fluxappregister', daemonHeight: 2_000_000,
         });
         expect.fail('a stuffed envelope was accepted');
       } catch (err) {
@@ -223,7 +223,7 @@ describe('appSubmission tests', () => {
       stubs.parseSpec.resolves(wireSpec);
 
       const result = await appSubmission.resolveSubmission(submission, {
-        contentHash: undefined, timestamp: 1, type: 'fluxappregister', daemonHeight: 2000000,
+        contentHash: undefined, timestamp: 1, type: 'fluxappregister', daemonHeight: 2_000_000,
       });
       expect(result.isEncrypted).to.equal(true);
     });

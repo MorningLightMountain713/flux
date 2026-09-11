@@ -89,9 +89,9 @@ describe('fluxShutdowndClient', () => {
       let err;
       const done = p.catch((e) => { err = e; }); // attach before the reject fires
       sockets[0].emit('connect');
-      sockets[0].emit('data', Buffer.from(errLine(-32010, 'node-pipeline-active')));
+      sockets[0].emit('data', Buffer.from(errLine(-32_010, 'node-pipeline-active')));
       await done;
-      expect(err.rpcCode).to.equal(-32010);
+      expect(err.rpcCode).to.equal(-32_010);
     });
   });
 
@@ -153,7 +153,7 @@ describe('fluxShutdowndClient', () => {
       const { client, sockets } = load();
       const p = client.beginAppStop('1own', 'app', 'redeploy', { deadline: futureDeadline() });
       sockets[0].emit('connect');
-      sockets[0].emit('data', Buffer.from(errLine(-32010, 'node-pipeline-active')));
+      sockets[0].emit('data', Buffer.from(errLine(-32_010, 'node-pipeline-active')));
       expect(await p).to.deep.equal({ outcome: 'rejected_pipeline_active' });
     });
 
@@ -187,7 +187,7 @@ describe('fluxShutdowndClient', () => {
       const { client, sockets } = load();
       const p = client.beginAppStop('1own', 'app', 'redeploy', { deadline: futureDeadline(), component: 'web' });
       sockets[0].emit('connect');
-      sockets[0].emit('data', Buffer.from(errLine(-32011, 'component-stop-busy')));
+      sockets[0].emit('data', Buffer.from(errLine(-32_011, 'component-stop-busy')));
       expect(await p).to.deep.equal({ outcome: 'component_busy' });
     });
 
@@ -207,7 +207,7 @@ describe('fluxShutdowndClient', () => {
       const { client, sockets, globalStateStub } = load();
       const p = client.beginAppStop('1own', 'app', 'ttl-expired', { deadline: futureDeadline() });
       sockets[0].emit('connect');
-      sockets[0].emit('data', Buffer.from(errLine(-32010, 'node pipeline active')));
+      sockets[0].emit('data', Buffer.from(errLine(-32_010, 'node pipeline active')));
       const res = await p;
       expect(res.outcome).to.equal('rejected_pipeline_active');
       expect(globalStateStub.clearAppShutdownPipelineState.called).to.equal(false);
@@ -251,7 +251,7 @@ describe('fluxShutdowndClient', () => {
         const { client, sockets } = load();
         const p = client.beginAppStop('1own', 'app', 'manual', { deadline: 0 }); // deadline 0 -> timeout = slack
         sockets[0].emit('connect');
-        await clock.tickAsync(120001); // past COMPLETION_SLACK_MS
+        await clock.tickAsync(120_001); // past COMPLETION_SLACK_MS
         expect(await p).to.deep.equal({ outcome: 'timeout' });
       } finally {
         clock.restore();

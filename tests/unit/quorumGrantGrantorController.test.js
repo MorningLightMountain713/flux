@@ -371,7 +371,7 @@ describe('quorumGrant grantorController', () => {
       const res = fakeRes();
       await grantorController.prepare(fakeReq(signedAsk('prepare', { mode: 'oneshot', key: ORDINAL_KEY })), res);
       expect(res.statusCode).to.equal(200);
-      expect(foundingCommittee.selfOnFoundingCommittee.calledOnceWith('myapp', 500000, FINGERPRINT, 0)).to.equal(true);
+      expect(foundingCommittee.selfOnFoundingCommittee.calledOnceWith('myapp', 500_000, FINGERPRINT, 0)).to.equal(true);
       expect(grantRegister.prepare.firstCall.args[0]).to.equal(`${ORDINAL_KEY}@0`);
     });
 
@@ -520,7 +520,7 @@ describe('quorumGrant grantorController', () => {
       const res = fakeRes();
       await grantorController.prepare(fakeReq(signedAsk('prepare', { mode: 'oneshot', key: FOUNDER_KEY })), res);
       expect(res.statusCode).to.equal(200);
-      expect(foundingCommittee.selfOnFoundingCommittee.calledOnceWith('myapp', 500000, FINGERPRINT, 0)).to.equal(true);
+      expect(foundingCommittee.selfOnFoundingCommittee.calledOnceWith('myapp', 500_000, FINGERPRINT, 0)).to.equal(true);
       expect(networkStateService.membershipAt.called).to.equal(false);
       expect(messageStore.getGrantGenerationRecord.called).to.equal(false);
     });
@@ -1073,7 +1073,7 @@ describe('quorumGrant grantorController', () => {
       wideFleet, walkKey, survivors, new Set([cancelledOutpoint]),
     );
     const CANCELS = [{
-      seq: 1, cancel: cancelledOutpoint, cert: { subject: cancelledOutpoint, token: 'standing' }, at: 1_000,
+      seq: 1, cancel: cancelledOutpoint, cert: { subject: cancelledOutpoint, token: 'standing' }, at: 1000,
     }];
 
     function selfIs(node) {
@@ -1306,7 +1306,7 @@ describe('quorumGrant grantorController', () => {
         fingerprint: FINGERPRINT,
         generation: 0,
         chain: [{
-          seq: 1, cancel: subject, cert: { subject, token: 'standing' }, at: 1_000,
+          seq: 1, cancel: subject, cert: { subject, token: 'standing' }, at: 1000,
         }],
       };
       await grantorController.noteReturnFromUnreachability();

@@ -57,7 +57,7 @@ describe('fileQueryService tests', () => {
         mtime: new Date('2024-01-02'),
       });
 
-      sinon.stub(IOUtils, 'getFolderSize').resolves(10240);
+      sinon.stub(IOUtils, 'getFolderSize').resolves(10_240);
       sinon.stub(messageHelper, 'createDataMessage').callsFake((data) => ({ status: 'success', data }));
 
       await fileQueryService.getAppsFolder(req, res);
@@ -70,7 +70,7 @@ describe('fileQueryService tests', () => {
       expect(response.data[0].isFile).to.be.true;
       expect(response.data[2].name).to.equal('folder1');
       expect(response.data[2].isDirectory).to.be.true;
-      expect(response.data[2].size).to.equal(10240);
+      expect(response.data[2].size).to.equal(10_240);
     });
 
     it('hides what the volume root holds that is not the application\'s', async () => {
@@ -349,14 +349,14 @@ describe('fileQueryService tests', () => {
         birthtime: new Date(),
         mtime: new Date(),
       });
-      const folderSizeStub = sinon.stub(IOUtils, 'getFolderSize').resolves(104857600);
+      const folderSizeStub = sinon.stub(IOUtils, 'getFolderSize').resolves(104_857_600);
       sinon.stub(messageHelper, 'createDataMessage').callsFake((data) => ({ status: 'success', data }));
 
       await fileQueryService.getAppsFolder(req, res);
 
       sinon.assert.calledOnce(folderSizeStub);
       const response = res.json.firstCall.args[0];
-      expect(response.data[0].size).to.equal(104857600);
+      expect(response.data[0].size).to.equal(104_857_600);
     });
 
     it('should handle empty folders', async () => {

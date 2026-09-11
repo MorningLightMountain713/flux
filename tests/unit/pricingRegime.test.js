@@ -71,7 +71,7 @@ describe('pricingRegime', () => {
   // What an update is priced against. Each regime answers for its own
   // economics; the promotion path asks and never chooses.
   describe('supersededMessage', () => {
-    const CONFIRMING = { height: 2000000, timestamp: 1750000000000 };
+    const CONFIRMING = { height: 2_000_000, timestamp: 1_750_000_000_000 };
 
     function loadRegimes() {
       const appsRepositoryStub = {
@@ -109,10 +109,10 @@ describe('pricingRegime', () => {
     it('v9 never uses the message timestamp, which its sender writes', async () => {
       const { v9, appsRepositoryStub } = loadRegimes();
 
-      await v9.supersededMessage('myapp', { height: 2000000, timestamp: 1 });
+      await v9.supersededMessage('myapp', { height: 2_000_000, timestamp: 1 });
 
       const [, cutoff] = appsRepositoryStub.getPermanentMessageBeforeHeight.firstCall.args;
-      expect(cutoff).to.equal(2000000);
+      expect(cutoff).to.equal(2_000_000);
     });
 
     // Legacy is bug-compatible on purpose: its resolution selects the update

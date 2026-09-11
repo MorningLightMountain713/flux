@@ -41,7 +41,7 @@ describe('chainRollback tests', () => {
     });
 
     it('should remove chain derived state above the height', async () => {
-      const height = 100000;
+      const height = 100_000;
 
       const result = await chainRollback.restoreDatabaseToBlockheightState(height);
 
@@ -53,14 +53,14 @@ describe('chainRollback tests', () => {
     });
 
     it('should leave confirmed app messages alone unless a rescan was asked for', async () => {
-      await chainRollback.restoreDatabaseToBlockheightState(100000);
+      await chainRollback.restoreDatabaseToBlockheightState(100_000);
 
       sinon.assert.neverCalledWithMatch(removeDocumentsFromCollectionStub, sinon.match.object, 'zelappsmessages');
       sinon.assert.neverCalledWithMatch(removeDocumentsFromCollectionStub, sinon.match.object, 'zelappsinformation');
     });
 
     it('should remove confirmed app messages when a rescan was asked for', async () => {
-      const height = 100000;
+      const height = 100_000;
 
       const result = await chainRollback.restoreDatabaseToBlockheightState(height, true);
 
@@ -71,36 +71,36 @@ describe('chainRollback tests', () => {
     });
 
     it('should prune the in memory histories one above the kept height, matching the query', async () => {
-      await chainRollback.restoreDatabaseToBlockheightState(100000);
+      await chainRollback.restoreDatabaseToBlockheightState(100_000);
 
-      sinon.assert.calledOnceWithExactly(entitlementsRemoveStub, 100001);
-      sinon.assert.calledOnceWithExactly(priceOracleRemoveStub, 100001);
+      sinon.assert.calledOnceWithExactly(entitlementsRemoveStub, 100_001);
+      sinon.assert.calledOnceWithExactly(priceOracleRemoveStub, 100_001);
     });
   });
 
   describe('rollbackTo ordering tests', () => {
     it('should write the cursor before deleting any data', async () => {
-      await chainRollback.rollbackTo(100000);
+      await chainRollback.rollbackTo(100_000);
 
       expect(updateOneInDatabaseStub.calledBefore(removeDocumentsFromCollectionStub)).to.equal(true);
     });
 
     it('should set the cursor to the rollback height', async () => {
-      await chainRollback.rollbackTo(100000);
+      await chainRollback.rollbackTo(100_000);
 
       sinon.assert.calledWithMatch(
         updateOneInDatabaseStub,
         sinon.match.object,
         'scannedheight',
         { generalScannedHeight: { $gte: 0 } },
-        { $set: { generalScannedHeight: 100000 } },
+        { $set: { generalScannedHeight: 100_000 } },
       );
     });
 
     it('should leave the cursor low rather than high when the deletion throws', async () => {
       removeDocumentsFromCollectionStub.rejects(new Error('test: db died mid rollback'));
 
-      await expect(chainRollback.rollbackTo(100000)).to.eventually.be.rejected;
+      await expect(chainRollback.rollbackTo(100_000)).to.eventually.be.rejected;
 
       // The cursor was already moved down, so the re-scan redoes those blocks rather
       // than skipping them forever.
@@ -108,7 +108,7 @@ describe('chainRollback tests', () => {
     });
 
     it('should pass the rescan flag through', async () => {
-      await chainRollback.rollbackTo(100000, { rescanGlobalApps: true });
+      await chainRollback.rollbackTo(100_000, { rescanGlobalApps: true });
 
       sinon.assert.calledWith(logInfoSpy, 'Rescanning Apps!');
     });

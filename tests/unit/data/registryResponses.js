@@ -89,7 +89,7 @@ const ociManifestAmd64 = {
       mediaType: 'application/vnd.oci.image.layer.v1.tar+gzip',
       digest:
         'sha256:07bc88e18c4aea4343fc16a9930da57308d4df45d3d234aebcd5b1c1833ee290',
-      size: 48994878,
+      size: 48_994_878,
     },
     {
       mediaType: 'application/vnd.oci.image.layer.v1.tar+gzip',
@@ -101,13 +101,13 @@ const ociManifestAmd64 = {
       mediaType: 'application/vnd.oci.image.layer.v1.tar+gzip',
       digest:
         'sha256:1021dda8eecff015672845c8c131d475eccb83c09569a18640c2cda4399decf2',
-      size: 983004,
+      size: 983_004,
     },
     {
       mediaType: 'application/vnd.oci.image.layer.v1.tar+gzip',
       digest:
         'sha256:fb61b56acac1145d05c716918b447019808fac364743d1232e647845748f5020',
-      size: 6711529,
+      size: 6_711_529,
     },
     {
       mediaType: 'application/vnd.oci.image.layer.v1.tar+gzip',
@@ -125,7 +125,7 @@ const ociManifestAmd64 = {
       mediaType: 'application/vnd.oci.image.layer.v1.tar+gzip',
       digest:
         'sha256:3e1b086f129564f4f57b1cf79b288cf54a9e5c3a1c43219db46a1b493d40cded',
-      size: 47215103,
+      size: 47_215_103,
     },
     {
       mediaType: 'application/vnd.oci.image.layer.v1.tar+gzip',
@@ -137,7 +137,7 @@ const ociManifestAmd64 = {
       mediaType: 'application/vnd.oci.image.layer.v1.tar+gzip',
       digest:
         'sha256:ed90f5355e12edb07b8cdaa438ef1d088e2e3121ed5b04904aaf98e79555c572',
-      size: 64786544,
+      size: 64_786_544,
     },
     {
       mediaType: 'application/vnd.oci.image.layer.v1.tar+gzip',
@@ -176,7 +176,7 @@ const ociManifestArm64 = {
       mediaType: 'application/vnd.oci.image.layer.v1.tar+gzip',
       digest:
         'sha256:da7a98631edf9304544ff835ff2891b9c7a6773ae8a8bbd8041b6ef3af01fae9',
-      size: 47651991,
+      size: 47_651_991,
     },
     {
       mediaType: 'application/vnd.oci.image.layer.v1.tar+gzip',
@@ -188,13 +188,13 @@ const ociManifestArm64 = {
       mediaType: 'application/vnd.oci.image.layer.v1.tar+gzip',
       digest:
         'sha256:2eeb0cf07c9beeda8d94a25c9e65966dd25ea12f1429af47a54670924b481a81',
-      size: 913449,
+      size: 913_449,
     },
     {
       mediaType: 'application/vnd.oci.image.layer.v1.tar+gzip',
       digest:
         'sha256:0d54108df510677120ec7ac21fcf4d0eb9453a8dd56db90cdfd435daf38da8fb',
-      size: 6312392,
+      size: 6_312_392,
     },
     {
       mediaType: 'application/vnd.oci.image.layer.v1.tar+gzip',
@@ -212,7 +212,7 @@ const ociManifestArm64 = {
       mediaType: 'application/vnd.oci.image.layer.v1.tar+gzip',
       digest:
         'sha256:4e8f1c8c168a546aca98897bb3330afc7e0075abe929da8fdd0679a7a00825c3',
-      size: 46082893,
+      size: 46_082_893,
     },
     {
       mediaType: 'application/vnd.oci.image.layer.v1.tar+gzip',
@@ -224,7 +224,7 @@ const ociManifestArm64 = {
       mediaType: 'application/vnd.oci.image.layer.v1.tar+gzip',
       digest:
         'sha256:d91dac12e95143ff54548a09769dbfad4fb1dbd593be311bc8233dd53d8cf25c',
-      size: 64959326,
+      size: 64_959_326,
     },
     {
       mediaType: 'application/vnd.oci.image.layer.v1.tar+gzip',
@@ -318,14 +318,14 @@ const distributionManifestAmd64 = {
   mediaType: 'application/vnd.docker.distribution.manifest.v2+json',
   config: {
     mediaType: 'application/vnd.docker.container.image.v1+json',
-    size: 22062,
+    size: 22_062,
     digest:
       'sha256:87a2490a12aed4100891be53b521da77508dafef1d49422f7eb5088c6eb1631a',
   },
   layers: [
     {
       mediaType: 'application/vnd.docker.image.rootfs.diff.tar.gzip',
-      size: 29150411,
+      size: 29_150_411,
       digest:
         'sha256:09f376ebb190216b0459f470e71bec7b5dfa611d66bf008492b40dcc5f1d8eae',
     },
@@ -337,7 +337,7 @@ const distributionManifestAmd64 = {
     },
     {
       mediaType: 'application/vnd.docker.image.rootfs.diff.tar.gzip',
-      size: 104357718,
+      size: 104_357_718,
       digest:
         'sha256:ceed4541c527d7a443908138f347495ec250ba7a1e70d8dd6b567464064ee115',
     },
@@ -349,7 +349,7 @@ const distributionManifestAmd64 = {
     },
     {
       mediaType: 'application/vnd.docker.image.rootfs.diff.tar.gzip',
-      size: 20329735,
+      size: 20_329_735,
       digest:
         'sha256:ff0e278869f981b14b52a6f43e6a0ce131ed2f3067de4314ed34393669549724',
     },
@@ -367,7 +367,7 @@ const distributionManifestAmd64 = {
     },
     {
       mediaType: 'application/vnd.docker.image.rootfs.diff.tar.gzip',
-      size: 12428793,
+      size: 12_428_793,
       digest:
         'sha256:43af3fe8136ad9261342f5add4a18489a3ffc70ba50f2651ea7cc1b3d0e45875',
     },
@@ -379,7 +379,7 @@ const distributionManifestAmd64 = {
     },
     {
       mediaType: 'application/vnd.docker.image.rootfs.diff.tar.gzip',
-      size: 11407606,
+      size: 11_407_606,
       digest:
         'sha256:a4ba0bdbbf0a7e73b6acc7dcd82c8dbc4635884963f73bbebcbac1a2f988cf99',
     },
@@ -403,7 +403,7 @@ const distributionManifestAmd64 = {
     },
     {
       mediaType: 'application/vnd.docker.image.rootfs.diff.tar.gzip',
-      size: 3212419,
+      size: 3_212_419,
       digest:
         'sha256:dbb7df25a76e3f547e39f1d1c6446fec585440ab4bda3ce2d3cf9a860ab7c990',
     },
@@ -415,7 +415,7 @@ const distributionManifestAmd64 = {
     },
     {
       mediaType: 'application/vnd.docker.image.rootfs.diff.tar.gzip',
-      size: 13016080,
+      size: 13_016_080,
       digest:
         'sha256:b29f15d25d619f8fdbf3f5241916c85e91a1e7f13c4ca7809f81c0c8cf43049c',
     },
@@ -440,14 +440,14 @@ const distributionManifestArm64 = {
   mediaType: 'application/vnd.docker.distribution.manifest.v2+json',
   config: {
     mediaType: 'application/vnd.docker.container.image.v1+json',
-    size: 22081,
+    size: 22_081,
     digest:
       'sha256:45f016fd20cba4a17403b716b3cf1145e57812012934a79bb80b7b4a10f5438a',
   },
   layers: [
     {
       mediaType: 'application/vnd.docker.image.rootfs.diff.tar.gzip',
-      size: 29179503,
+      size: 29_179_503,
       digest:
         'sha256:24c63b8dcb66721062f32b893ef1027404afddd62aade87f3f39a3a6e70a74d0',
     },
@@ -459,7 +459,7 @@ const distributionManifestArm64 = {
     },
     {
       mediaType: 'application/vnd.docker.image.rootfs.diff.tar.gzip',
-      size: 98132609,
+      size: 98_132_609,
       digest:
         'sha256:344cef50aac5b8a976b3c008872a172409dee8a59088b27d80f3eea602550bd1',
     },
@@ -471,7 +471,7 @@ const distributionManifestArm64 = {
     },
     {
       mediaType: 'application/vnd.docker.image.rootfs.diff.tar.gzip',
-      size: 20322465,
+      size: 20_322_465,
       digest:
         'sha256:33ffd5ecc100a124cb73cfac0e4259b830e97946a60c2cfad58e7e466e15cba7',
     },
@@ -489,7 +489,7 @@ const distributionManifestArm64 = {
     },
     {
       mediaType: 'application/vnd.docker.image.rootfs.diff.tar.gzip',
-      size: 12428430,
+      size: 12_428_430,
       digest:
         'sha256:8238673353aa1e651316a7785a8be3df8380c10e0b09544d58a02e6c8cf9e5bc',
     },
@@ -501,7 +501,7 @@ const distributionManifestArm64 = {
     },
     {
       mediaType: 'application/vnd.docker.image.rootfs.diff.tar.gzip',
-      size: 11414533,
+      size: 11_414_533,
       digest:
         'sha256:537518cc819e577b0936cb81f2beffa78563e19a75596951c080546afee7d5e2',
     },
@@ -525,7 +525,7 @@ const distributionManifestArm64 = {
     },
     {
       mediaType: 'application/vnd.docker.image.rootfs.diff.tar.gzip',
-      size: 3462603,
+      size: 3_462_603,
       digest:
         'sha256:4f99e97c6ba74f6dc3679e233e80ebe40c133681417e72301cfefe75fd9a78a4',
     },
@@ -537,7 +537,7 @@ const distributionManifestArm64 = {
     },
     {
       mediaType: 'application/vnd.docker.image.rootfs.diff.tar.gzip',
-      size: 13016151,
+      size: 13_016_151,
       digest:
         'sha256:1aee002f2df3fbb431ee148eb79ae56077ea1f922b4dcddfb736a2168fe72cf7',
     },
@@ -1076,14 +1076,14 @@ const oversizeDistributionManifestAmd64 = {
   mediaType: 'application/vnd.docker.distribution.manifest.v2+json',
   config: {
     mediaType: 'application/vnd.docker.container.image.v1+json',
-    size: 22062,
+    size: 22_062,
     digest:
       'sha256:87a2490a12aed4100891be53b521da77508dafef1d49422f7eb5088c6eb1631a',
   },
   layers: [
     {
       mediaType: 'application/vnd.docker.image.rootfs.diff.tar.gzip',
-      size: 29150411,
+      size: 29_150_411,
       digest:
         'sha256:09f376ebb190216b0459f470e71bec7b5dfa611d66bf008492b40dcc5f1d8eae',
     },
@@ -1095,7 +1095,7 @@ const oversizeDistributionManifestAmd64 = {
     },
     {
       mediaType: 'application/vnd.docker.image.rootfs.diff.tar.gzip',
-      size: 104357718,
+      size: 104_357_718,
       digest:
         'sha256:ceed4541c527d7a443908138f347495ec250ba7a1e70d8dd6b567464064ee115',
     },
@@ -1107,7 +1107,7 @@ const oversizeDistributionManifestAmd64 = {
     },
     {
       mediaType: 'application/vnd.docker.image.rootfs.diff.tar.gzip',
-      size: 20329735,
+      size: 20_329_735,
       digest:
         'sha256:ff0e278869f981b14b52a6f43e6a0ce131ed2f3067de4314ed34393669549724',
     },
@@ -1125,7 +1125,7 @@ const oversizeDistributionManifestAmd64 = {
     },
     {
       mediaType: 'application/vnd.docker.image.rootfs.diff.tar.gzip',
-      size: 12428793,
+      size: 12_428_793,
       digest:
         'sha256:43af3fe8136ad9261342f5add4a18489a3ffc70ba50f2651ea7cc1b3d0e45875',
     },
@@ -1138,7 +1138,7 @@ const oversizeDistributionManifestAmd64 = {
     {
       mediaType: 'application/vnd.docker.image.rootfs.diff.tar.gzip',
       // yuge
-      size: 1140760600000,
+      size: 1_140_760_600_000,
       digest:
         'sha256:a4ba0bdbbf0a7e73b6acc7dcd82c8dbc4635884963f73bbebcbac1a2f988cf99',
     },
@@ -1162,7 +1162,7 @@ const oversizeDistributionManifestAmd64 = {
     },
     {
       mediaType: 'application/vnd.docker.image.rootfs.diff.tar.gzip',
-      size: 3212419,
+      size: 3_212_419,
       digest:
         'sha256:dbb7df25a76e3f547e39f1d1c6446fec585440ab4bda3ce2d3cf9a860ab7c990',
     },
@@ -1174,7 +1174,7 @@ const oversizeDistributionManifestAmd64 = {
     },
     {
       mediaType: 'application/vnd.docker.image.rootfs.diff.tar.gzip',
-      size: 13016080,
+      size: 13_016_080,
       digest:
         'sha256:b29f15d25d619f8fdbf3f5241916c85e91a1e7f13c4ca7809f81c0c8cf43049c',
     },
@@ -1208,7 +1208,7 @@ const oversizeOciManifestAmd64 = {
       mediaType: 'application/vnd.oci.image.layer.v1.tar+gzip',
       digest:
         'sha256:07bc88e18c4aea4343fc16a9930da57308d4df45d3d234aebcd5b1c1833ee290',
-      size: 48994878,
+      size: 48_994_878,
     },
     {
       mediaType: 'application/vnd.oci.image.layer.v1.tar+gzip',
@@ -1220,14 +1220,14 @@ const oversizeOciManifestAmd64 = {
       mediaType: 'application/vnd.oci.image.layer.v1.tar+gzip',
       digest:
         'sha256:1021dda8eecff015672845c8c131d475eccb83c09569a18640c2cda4399decf2',
-      size: 983004,
+      size: 983_004,
     },
     {
       mediaType: 'application/vnd.oci.image.layer.v1.tar+gzip',
       digest:
         'sha256:fb61b56acac1145d05c716918b447019808fac364743d1232e647845748f5020',
       // yuge
-      size: 67115291234,
+      size: 67_115_291_234,
     },
     {
       mediaType: 'application/vnd.oci.image.layer.v1.tar+gzip',
@@ -1245,7 +1245,7 @@ const oversizeOciManifestAmd64 = {
       mediaType: 'application/vnd.oci.image.layer.v1.tar+gzip',
       digest:
         'sha256:3e1b086f129564f4f57b1cf79b288cf54a9e5c3a1c43219db46a1b493d40cded',
-      size: 47215103,
+      size: 47_215_103,
     },
     {
       mediaType: 'application/vnd.oci.image.layer.v1.tar+gzip',
@@ -1257,7 +1257,7 @@ const oversizeOciManifestAmd64 = {
       mediaType: 'application/vnd.oci.image.layer.v1.tar+gzip',
       digest:
         'sha256:ed90f5355e12edb07b8cdaa438ef1d088e2e3121ed5b04904aaf98e79555c572',
-      size: 64786544,
+      size: 64_786_544,
     },
     {
       mediaType: 'application/vnd.oci.image.layer.v1.tar+gzip',

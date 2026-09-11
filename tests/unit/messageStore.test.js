@@ -32,7 +32,7 @@ describe('messageStore tests', () => {
 
   before(async function loadLibrary() {
     // The first fromSubmission compiles the ajv schemas.
-    this.timeout(30000);
+    this.timeout(30_000);
     flux = await loadSpecLibrary();
   });
 
@@ -291,7 +291,7 @@ describe('messageStore tests', () => {
       const mockDb = { db: sinon.stub().returns('database') };
       dbHelperStub.databaseConnection.returns(mockDb);
       dbHelperStub.findOneInDatabase.resolves({
-        height: 500, txid: 'txid123', value: 10000, blockTime: 1750000000,
+        height: 500, txid: 'txid123', value: 10_000, blockTime: 1_750_000_000,
       });
       dbHelperStub.insertOneToDatabase.resolves();
 
@@ -302,8 +302,8 @@ describe('messageStore tests', () => {
         hash: 'hash123',
         txid: 'txid123',
         height: 500,
-        value: 10000,
-        blockTime: 1750000000,
+        value: 10_000,
+        blockTime: 1_750_000_000,
       });
     });
 
@@ -383,7 +383,7 @@ describe('messageStore tests', () => {
       it('reads the state at the confirming height for a message already on chain', async () => {
         const stubs = buildProxyquireStubs();
         dbHelperStub.findOneInDatabase.resolves({
-          height: 500, txid: 'txid123', value: 10000, blockTime: 1750000000,
+          height: 500, txid: 'txid123', value: 10_000, blockTime: 1_750_000_000,
         });
         messageStore = proxyquire('../../ZelBack/src/services/appMessaging/messageStore', stubs);
 
@@ -762,7 +762,7 @@ describe('messageStore tests', () => {
         signature: 'sig123',
         txid: 'txid123',
         height: 1000,
-        valueSat: 10000,
+        valueSat: 10_000,
       };
 
       const mockDb = { db: sinon.stub().returns('database') };
@@ -1495,7 +1495,7 @@ describe('messageStore tests', () => {
 
       it('is news when it advances the stored announcement', async () => {
         const now = Date.now();
-        dbHelperStub.findOneAndUpdateInDatabase.resolves({ broadcastedAt: new Date(now - 60000) });
+        dbHelperStub.findOneAndUpdateInDatabase.resolves({ broadcastedAt: new Date(now - 60_000) });
 
         const result = await messageStore.storeAppStateEvent(
           messageStore.APP_STATE_EVENT_TYPES.APPRUNNING, announcement(now),
@@ -1509,7 +1509,7 @@ describe('messageStore tests', () => {
         dbHelperStub.findOneAndUpdateInDatabase.resolves({ broadcastedAt: new Date(now) });
 
         const result = await messageStore.storeAppStateEvent(
-          messageStore.APP_STATE_EVENT_TYPES.APPRUNNING, announcement(now - 60000),
+          messageStore.APP_STATE_EVENT_TYPES.APPRUNNING, announcement(now - 60_000),
         );
 
         expect(result).to.deep.equal({ isNewer: false });

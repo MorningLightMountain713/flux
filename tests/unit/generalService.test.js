@@ -106,14 +106,14 @@ describe('generalService tests', () => {
       getRawTransactionStub.returns({
         status: 'success',
         data: {
-          vout: [{ value: 10000 }],
+          vout: [{ value: 10_000 }],
         },
       });
 
       const result = await generalService.nodeTier();
 
       expect(result).to.equal('basic');
-      expect(generalService.getStoredCollateral()).to.eql(10000);
+      expect(generalService.getStoredCollateral()).to.eql(10_000);
       sinon.assert.calledOnceWithExactly(getRawTransactionStub, {
         params: {
           txid: '6b2f0b581698337758cd045ead702f4cf6d9c96e8a0288bed526146a005ddd0d',
@@ -162,14 +162,14 @@ describe('generalService tests', () => {
       getRawTransactionStub.returns({
         status: 'success',
         data: {
-          vout: [{ value: 25000 }],
+          vout: [{ value: 25_000 }],
         },
       });
 
       const result = await generalService.nodeTier();
 
       expect(result).to.equal('super');
-      expect(generalService.getStoredCollateral()).to.eql(25000);
+      expect(generalService.getStoredCollateral()).to.eql(25_000);
       sinon.assert.calledOnceWithExactly(getRawTransactionStub, {
         params: {
           txid: '6b2f0b581698337758cd045ead702f4cf6d9c96e8a0288bed526146a005ddd0d',
@@ -190,14 +190,14 @@ describe('generalService tests', () => {
       getRawTransactionStub.returns({
         status: 'success',
         data: {
-          vout: [{ value: 12500 }],
+          vout: [{ value: 12_500 }],
         },
       });
 
       const result = await generalService.nodeTier();
 
       expect(result).to.equal('super');
-      expect(generalService.getStoredCollateral()).to.eql(12500);
+      expect(generalService.getStoredCollateral()).to.eql(12_500);
       sinon.assert.calledOnceWithExactly(getRawTransactionStub, {
         params: {
           txid: '6b2f0b581698337758cd045ead702f4cf6d9c96e8a0288bed526146a005ddd0d',
@@ -218,14 +218,14 @@ describe('generalService tests', () => {
       getRawTransactionStub.returns({
         status: 'success',
         data: {
-          vout: [{ value: 100000 }],
+          vout: [{ value: 100_000 }],
         },
       });
 
       const result = await generalService.nodeTier();
 
       expect(result).to.equal('bamf');
-      expect(generalService.getStoredCollateral()).to.eql(100000);
+      expect(generalService.getStoredCollateral()).to.eql(100_000);
       sinon.assert.calledOnceWithExactly(getRawTransactionStub, {
         params: {
           txid: '6b2f0b581698337758cd045ead702f4cf6d9c96e8a0288bed526146a005ddd0d',
@@ -246,14 +246,14 @@ describe('generalService tests', () => {
       getRawTransactionStub.returns({
         status: 'success',
         data: {
-          vout: [{ value: 40000 }],
+          vout: [{ value: 40_000 }],
         },
       });
 
       const result = await generalService.nodeTier();
 
       expect(result).to.equal('bamf');
-      expect(generalService.getStoredCollateral()).to.eql(40000);
+      expect(generalService.getStoredCollateral()).to.eql(40_000);
       sinon.assert.calledOnceWithExactly(getRawTransactionStub, {
         params: {
           txid: '6b2f0b581698337758cd045ead702f4cf6d9c96e8a0288bed526146a005ddd0d',
@@ -274,7 +274,7 @@ describe('generalService tests', () => {
       getRawTransactionStub.returns({
         status: 'success',
         data: {
-          vout: [{ value: 12345 }],
+          vout: [{ value: 12_345 }],
         },
       });
 
@@ -335,11 +335,11 @@ describe('generalService tests', () => {
     });
 
     it('should return storedCollateral if it is set', async () => {
-      generalService.setStoredCollateral(10000);
+      generalService.setStoredCollateral(10_000);
 
       const result = await generalService.nodeCollateral();
 
-      expect(result).to.equal(10000);
+      expect(result).to.equal(10_000);
     });
 
     it('should throw if getFluxnodeStatus returns error', async () => {
@@ -399,13 +399,13 @@ describe('generalService tests', () => {
       getRawTransactionStub.returns({
         status: 'success',
         data: {
-          vout: [{ value: 10000 }],
+          vout: [{ value: 10_000 }],
         },
       });
 
       const result = await generalService.nodeCollateral();
 
-      expect(result).to.equal(10000);
+      expect(result).to.equal(10_000);
       expect(generalService.getStoredTier()).to.eql('basic');
       sinon.assert.calledOnceWithExactly(getRawTransactionStub, {
         params: {
@@ -455,13 +455,13 @@ describe('generalService tests', () => {
       getRawTransactionStub.returns({
         status: 'success',
         data: {
-          vout: [{ value: 25000 }],
+          vout: [{ value: 25_000 }],
         },
       });
 
       const result = await generalService.nodeCollateral();
 
-      expect(result).to.equal(25000);
+      expect(result).to.equal(25_000);
       expect(generalService.getStoredTier()).to.eql('super');
       sinon.assert.calledOnceWithExactly(getRawTransactionStub, {
         params: {
@@ -483,13 +483,13 @@ describe('generalService tests', () => {
       getRawTransactionStub.returns({
         status: 'success',
         data: {
-          vout: [{ value: 12500 }],
+          vout: [{ value: 12_500 }],
         },
       });
 
       const result = await generalService.nodeCollateral();
 
-      expect(result).to.equal(12500);
+      expect(result).to.equal(12_500);
       expect(generalService.getStoredTier()).to.eql('super');
       sinon.assert.calledOnceWithExactly(getRawTransactionStub, {
         params: {
@@ -511,13 +511,13 @@ describe('generalService tests', () => {
       getRawTransactionStub.returns({
         status: 'success',
         data: {
-          vout: [{ value: 100000 }],
+          vout: [{ value: 100_000 }],
         },
       });
 
       const result = await generalService.nodeCollateral();
 
-      expect(result).to.equal(100000);
+      expect(result).to.equal(100_000);
       expect(generalService.getStoredTier()).to.eql('bamf');
       sinon.assert.calledOnceWithExactly(getRawTransactionStub, {
         params: {
@@ -539,13 +539,13 @@ describe('generalService tests', () => {
       getRawTransactionStub.returns({
         status: 'success',
         data: {
-          vout: [{ value: 40000 }],
+          vout: [{ value: 40_000 }],
         },
       });
 
       const result = await generalService.nodeCollateral();
 
-      expect(result).to.equal(40000);
+      expect(result).to.equal(40_000);
       expect(generalService.getStoredTier()).to.eql('bamf');
       sinon.assert.calledOnceWithExactly(getRawTransactionStub, {
         params: {
@@ -567,7 +567,7 @@ describe('generalService tests', () => {
       getRawTransactionStub.returns({
         status: 'success',
         data: {
-          vout: [{ value: 12345 }],
+          vout: [{ value: 12_345 }],
         },
       });
 

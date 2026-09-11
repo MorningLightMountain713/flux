@@ -8,7 +8,7 @@ describe('meshBroadcast', () => {
   let meshBroadcast;
   let stubs;
 
-  const ANCHOR = { height: 2843890, hash: '7413fd279058ad2088b061d719fbf59d90cd5e509a08ab0d11746b91d7c01c4c' };
+  const ANCHOR = { height: 2_843_890, hash: '7413fd279058ad2088b061d719fbf59d90cd5e509a08ab0d11746b91d7c01c4c' };
   const UUID = '5db6f53acbbd9b38e949307e96601e573bd6437ddec08707e76a33f771b358ea';
   const TXHASH = '9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08';
 
@@ -27,7 +27,7 @@ describe('meshBroadcast', () => {
       anchor: sinon.stub().resolves(ANCHOR),
       mint: sinon.stub().resolves('voucher-b64'),
       bundle: sinon.stub().resolves('CA-PEM'),
-      getPort: sinon.stub().resolves(16230),
+      getPort: sinon.stub().resolves(16_230),
     };
     meshBroadcast = proxyquire('../../ZelBack/src/services/appMesh/meshBroadcast', {
       '../generalService': { obtainNodeCollateralInformation: stubs.collateral },
@@ -51,7 +51,7 @@ describe('meshBroadcast', () => {
     const result = await meshBroadcast.meshBroadcastFields([meshApp, plainApp], views(['myblog']));
     expect(result.anchor).to.deep.equal(ANCHOR);
     expect(result.perApp.get('myblog')).to.deep.equal({
-      meshCa: 'CA-PEM', meshVoucher: 'voucher-b64', meshPort: 16230,
+      meshCa: 'CA-PEM', meshVoucher: 'voucher-b64', meshPort: 16_230,
     });
     expect(result.perApp.has('plain')).to.equal(false);
     expect(stubs.mint.firstCall.args[0]).to.deep.equal({
@@ -75,7 +75,7 @@ describe('meshBroadcast', () => {
     stubs.bundle.withArgs('ab12cd34ef56').rejects(new Error('No mesh authority exists'));
     const result = await meshBroadcast.meshBroadcastFields([meshApp, second], twoViews);
     expect(result.perApp.has('myblog')).to.equal(false);
-    expect(result.perApp.get('other')).to.include({ meshPort: 16230 });
+    expect(result.perApp.get('other')).to.include({ meshPort: 16_230 });
     expect(result.anchor).to.deep.equal(ANCHOR);
   });
 

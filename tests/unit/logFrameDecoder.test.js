@@ -113,8 +113,8 @@ describe('logFrameDecoder', () => {
     // is bounded by it, so a cap there would cut a line the caller asked for.
     const decoder = new LogFrameDecoder();
 
-    expect(decoder.push(frame('x'.repeat(70000)))).to.deep.equal([]);
-    expect(decoder.partial.length, 'the default decoder cut a line').to.equal(70000);
+    expect(decoder.push(frame('x'.repeat(70_000)))).to.deep.equal([]);
+    expect(decoder.partial.length, 'the default decoder cut a line').to.equal(70_000);
     expect(decoder.takeTruncated()).to.equal(0);
   });
 

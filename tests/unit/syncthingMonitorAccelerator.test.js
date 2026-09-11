@@ -13,7 +13,7 @@ describe('syncthingMonitorAccelerator tests', () => {
   let accelerator;
 
   const DEBOUNCE = 2000;
-  const MIN_GAP = 10000;
+  const MIN_GAP = 10_000;
 
   beforeEach(() => {
     clock = sinon.useFakeTimers();

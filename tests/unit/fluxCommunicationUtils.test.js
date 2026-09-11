@@ -24,10 +24,10 @@ describe('fluxCommunicationUtils tests', () => {
           outidx: '0',
           ip: '47.199.51.61:16137',
           network: '',
-          added_height: 1076533,
-          confirmed_height: 1076535,
-          last_confirmed_height: 1079888,
-          last_paid_height: 1077653,
+          added_height: 1_076_533,
+          confirmed_height: 1_076_535,
+          last_confirmed_height: 1_079_888,
+          last_paid_height: 1_077_653,
           tier: 'CUMULUS',
           payment_address: 't1Z6mWoCrFC2g3iTCFdFkYdTfwtG84E3y2o',
           pubkey: '04378c8585d45861c8783f9c8cd0c85478164c12ce3fd13af1b44ebc8fe1ad6c786e92b211cb9566c596b6e2454d394a06bc44f748afb3c9ee48caa096d704abac',
@@ -42,9 +42,9 @@ describe('fluxCommunicationUtils tests', () => {
           outidx: '0',
           ip: '47.199.51.61:16147',
           network: '',
-          added_height: 1079638,
-          confirmed_height: 1079642,
-          last_confirmed_height: 1079889,
+          added_height: 1_079_638,
+          confirmed_height: 1_079_642,
+          last_confirmed_height: 1_079_889,
           last_paid_height: 0,
           tier: 'CUMULUS',
           payment_address: 't1UHecy6WiSJXs4Zqt5UvVdRDF7PMbZJK7q',
@@ -60,9 +60,9 @@ describe('fluxCommunicationUtils tests', () => {
           outidx: '0',
           ip: '44.192.51.11:16147',
           network: '',
-          added_height: 123456,
-          confirmed_height: 1234567,
-          last_confirmed_height: 123456,
+          added_height: 123_456,
+          confirmed_height: 1_234_567,
+          last_confirmed_height: 123_456,
           last_paid_height: 0,
           tier: 'CUMULUS',
           payment_address: 't1UHecyqtF7PMb6WiSJXs4ZZJK7q5UvVdRD',
@@ -111,9 +111,9 @@ describe('fluxCommunicationUtils tests', () => {
               outidx: '0',
               ip: '47.199.51.61:16147',
               network: '',
-              added_height: 1079638,
-              confirmed_height: 1079642,
-              last_confirmed_height: 1079889,
+              added_height: 1_079_638,
+              confirmed_height: 1_079_642,
+              last_confirmed_height: 1_079_889,
               last_paid_height: 0,
               tier: 'CUMULUS',
               payment_address: 't1UHecy6WiSJXs4Zqt5UvVdRDF7PMbZJK7q',
@@ -129,9 +129,9 @@ describe('fluxCommunicationUtils tests', () => {
               outidx: '0',
               ip: '44.192.51.11:16147',
               network: '',
-              added_height: 123456,
-              confirmed_height: 1234567,
-              last_confirmed_height: 123456,
+              added_height: 123_456,
+              confirmed_height: 1_234_567,
+              last_confirmed_height: 123_456,
               last_paid_height: 0,
               tier: 'CUMULUS',
               payment_address: 't1UHecyqtF7PMb6WiSJXs4ZZJK7q5UvVdRD',
@@ -152,9 +152,9 @@ describe('fluxCommunicationUtils tests', () => {
           outidx: '0',
           ip: '47.199.51.61:16147',
           network: '',
-          added_height: 1079638,
-          confirmed_height: 1079642,
-          last_confirmed_height: 1079889,
+          added_height: 1_079_638,
+          confirmed_height: 1_079_642,
+          last_confirmed_height: 1_079_889,
           last_paid_height: 0,
           tier: 'CUMULUS',
           payment_address: 't1UHecy6WiSJXs4Zqt5UvVdRDF7PMbZJK7q',
@@ -170,9 +170,9 @@ describe('fluxCommunicationUtils tests', () => {
           outidx: '0',
           ip: '44.192.51.11:16147',
           network: '',
-          added_height: 123456,
-          confirmed_height: 1234567,
-          last_confirmed_height: 123456,
+          added_height: 123_456,
+          confirmed_height: 1_234_567,
+          last_confirmed_height: 123_456,
           last_paid_height: 0,
           tier: 'CUMULUS',
           payment_address: 't1UHecyqtF7PMb6WiSJXs4ZZJK7q5UvVdRD',
@@ -200,9 +200,9 @@ describe('fluxCommunicationUtils tests', () => {
           outidx: '0',
           ip: '47.199.51.61:16147',
           network: '',
-          added_height: 1079638,
-          confirmed_height: 1079642,
-          last_confirmed_height: 1079889,
+          added_height: 1_079_638,
+          confirmed_height: 1_079_642,
+          last_confirmed_height: 1_079_889,
           last_paid_height: 0,
           tier: 'CUMULUS',
           payment_address: 't1UHecy6WiSJXs4Zqt5UvVdRDF7PMbZJK7q',
@@ -218,9 +218,9 @@ describe('fluxCommunicationUtils tests', () => {
           outidx: '0',
           ip: '44.192.51.11:16147',
           network: '',
-          added_height: 123456,
-          confirmed_height: 1234567,
-          last_confirmed_height: 123456,
+          added_height: 123_456,
+          confirmed_height: 1_234_567,
+          last_confirmed_height: 123_456,
           last_paid_height: 0,
           tier: 'CUMULUS',
           payment_address: 't1UHecyqtF7PMb6WiSJXs4ZZJK7q5UvVdRD',
@@ -250,9 +250,9 @@ describe('fluxCommunicationUtils tests', () => {
           outidx: '0',
           ip: '47.199.51.61:16147',
           network: '',
-          added_height: 1079638,
-          confirmed_height: 1079642,
-          last_confirmed_height: 1079889,
+          added_height: 1_079_638,
+          confirmed_height: 1_079_642,
+          last_confirmed_height: 1_079_889,
           last_paid_height: 0,
           tier: 'CUMULUS',
           payment_address: 't1UHecy6WiSJXs4Zqt5UvVdRDF7PMbZJK7q',
@@ -268,9 +268,9 @@ describe('fluxCommunicationUtils tests', () => {
           outidx: '0',
           ip: '44.192.51.11:16147',
           network: '',
-          added_height: 123456,
-          confirmed_height: 1234567,
-          last_confirmed_height: 123456,
+          added_height: 123_456,
+          confirmed_height: 1_234_567,
+          last_confirmed_height: 123_456,
           last_paid_height: 0,
           tier: 'CUMULUS',
           payment_address: 't1UHecyqtF7PMb6WiSJXs4ZZJK7q5UvVdRD',
@@ -349,7 +349,7 @@ describe('fluxCommunicationUtils tests', () => {
     });
 
     it('should return false if the message has been sent more than 5 minutes ago, no current timestamp provided', async () => {
-      const timeStamp = Date.now() - 340000;
+      const timeStamp = Date.now() - 340_000;
       const version = 1;
       const messageToSign = version + message + timeStamp;
       const signature = await fluxCommunicationMessagesSender.getFluxMessageSignature(messageToSign, privKey);
@@ -390,7 +390,7 @@ describe('fluxCommunicationUtils tests', () => {
     });
 
     it('should return false if the message has been sent more than 5 minutes ago, current timestamp provided', async () => {
-      const timeStamp = Date.now() - 340000;
+      const timeStamp = Date.now() - 340_000;
       const version = 1;
       const messageToSign = version + message + timeStamp;
       const signature = await fluxCommunicationMessagesSender.getFluxMessageSignature(messageToSign, privKey);
@@ -459,7 +459,7 @@ describe('fluxCommunicationUtils tests', () => {
     });
 
     it('should return false if the message has timestamp greater than 120s in the future', async () => {
-      const timeStamp = Date.now() + 240000;
+      const timeStamp = Date.now() + 240_000;
       const version = 1;
       const messageToSign = version + message + timeStamp;
       const signature = await fluxCommunicationMessagesSender.getFluxMessageSignature(messageToSign, privKey);
@@ -522,7 +522,7 @@ describe('fluxCommunicationUtils tests', () => {
     });
 
     it('should return false if message timestamp is more than 5 minutes ago, current timestamp provided', async () => {
-      const timeStamp = Date.now() - 340000;
+      const timeStamp = Date.now() - 340_000;
       const providedTimestamp = Date.now() + 100;
       const data = {
         timestamp: timeStamp,
@@ -534,7 +534,7 @@ describe('fluxCommunicationUtils tests', () => {
     });
 
     it('should return false if message timestamp is more than 5 minutes ago, no current timestamp provided', async () => {
-      const timeStamp = Date.now() - 340000;
+      const timeStamp = Date.now() - 340_000;
       const data = {
         timestamp: timeStamp,
       };
@@ -735,7 +735,7 @@ describe('fluxCommunicationUtils tests', () => {
         version: 1,
       };
       const message = JSON.stringify(data);
-      const timestamp = Date.now() + 300000; // 5 minutes in future
+      const timestamp = Date.now() + 300_000; // 5 minutes in future
       const version = 1;
       const messageToSign = version + message + timestamp;
       const signature = await fluxCommunicationMessagesSender.getFluxMessageSignature(messageToSign, privKey);

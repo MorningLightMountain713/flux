@@ -203,7 +203,7 @@ class NetworkStateManager extends EventEmitter {
 
   get remainingFetchSeconds() {
     const remainingSec = (NetworkStateManager.#minFetchIntervalMs - this.lastFetchElapsedMs)
-      / 1_000;
+      / 1000;
 
     const rounded = Math.round((remainingSec + Number.EPSILON) * 100) / 100;
 
@@ -841,10 +841,10 @@ class NetworkStateManager extends EventEmitter {
       this.emit('updated');
     }
 
-    const elapsed = Number(process.hrtime.bigint() - start) / 1000000;
+    const elapsed = Number(process.hrtime.bigint() - start) / 1_000_000;
 
     // min sleep period is 1s
-    const sleepMs = Math.max(1_000, this.intervalMs - elapsed);
+    const sleepMs = Math.max(1000, this.intervalMs - elapsed);
     return sleepMs;
   }
 
@@ -1000,7 +1000,7 @@ async function main() {
   setInterval(async () => {
     // await network.search('212.71.244.159:16137', 'socketAddress');
     console.log('Search pubkey:', await network.search('045ae66321cfc172086d79252323b6cd4b83460e580e88f220582affda8a83b3ec68078ad80f7e465c42c3ef9bc01b912b3663e2ba09057bc43fbedf0afa9f3864', 'pubkey'));
-  }, 5_000);
+  }, 5000);
 }
 
 if (require.main === module) {

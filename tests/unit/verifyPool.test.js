@@ -39,7 +39,7 @@ function createSignedBroadcast(data) {
 // One test already carried a 10000 of its own - the same problem met once and
 // solved for one case. Both now read the same number, because they are the same
 // statement: this work is real, and the box is shared.
-const REAL_WORK_MS = 20000;
+const REAL_WORK_MS = 20_000;
 
 describe('verifyPool tests', () => {
   before(() => {
@@ -206,7 +206,7 @@ describe('verifyPool tests', () => {
         await verifyPool.verify(repeatedBatch(LARGE_BATCH));
         expect(verifyPool.stats().workers).to.be.above(1);
 
-        clock.tick(60001);
+        clock.tick(60_001);
 
         expect(verifyPool.stats().workers).to.equal(1);
         expect(verifyPool.stats().busy).to.equal(0);

@@ -186,7 +186,7 @@ function setAxiosDefaults(socketIoServers) {
  * @param {{delay?: number, exitCode?: number}} options
  */
 async function logErrorAndExit(msg, options = {}) {
-  const delayMs = options.delay || 1_000;
+  const delayMs = options.delay || 1000;
   const exitCode = options.exitCode || 0;
 
   if (msg) log.error(msg);

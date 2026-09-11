@@ -92,7 +92,7 @@ describe('resourceQueryService tests', () => {
 
   before(async function loadLibrary() {
     // The first fromSubmission compiles the ajv schemas.
-    this.timeout(60000);
+    this.timeout(60_000);
     flux = await loadSpecLibrary();
   });
 
@@ -118,7 +118,7 @@ describe('resourceQueryService tests', () => {
       });
       sinon.stub(hwRequirements, 'getNodeSpecs').resolves({
         cpuCores: 8,
-        ram: 16000,
+        ram: 16_000,
         ssdStorage: 500,
       });
       sinon.stub(messageHelper, 'createDataMessage').callsFake((data) => ({ status: 'success', data }));
@@ -141,7 +141,7 @@ describe('resourceQueryService tests', () => {
       });
       sinon.stub(hwRequirements, 'getNodeSpecs').resolves({
         cpuCores: 8,
-        ram: 16000,
+        ram: 16_000,
         ssdStorage: 500,
       });
       sinon.stub(messageHelper, 'createDataMessage').callsFake((data) => ({ status: 'success', data }));
@@ -179,7 +179,7 @@ describe('resourceQueryService tests', () => {
       });
       sinon.stub(hwRequirements, 'getNodeSpecs').resolves({
         cpuCores: 8,
-        ram: 16000,
+        ram: 16_000,
         ssdStorage: 500,
       });
       sinon.stub(messageHelper, 'createDataMessage').callsFake((data) => ({ status: 'success', data }));
@@ -242,7 +242,7 @@ describe('resourceQueryService tests', () => {
         description: 'readable',
         owner: OWNER,
         repotag: 'test/app1:latest',
-        ports: [30001],
+        ports: [30_001],
         containerPorts: [8080],
         domains: [''],
         enviromentParameters: [],
@@ -283,7 +283,7 @@ describe('resourceQueryService tests', () => {
           description: 'Test app 1',
           owner: OWNER,
           repotag: 'test/app1:latest',
-          ports: [30001],
+          ports: [30_001],
           containerPorts: [8080],
           domains: [''],
           enviromentParameters: [],
@@ -300,7 +300,7 @@ describe('resourceQueryService tests', () => {
           description: 'Test app 2',
           owner: OWNER,
           repotag: 'test/app2:latest',
-          ports: [30002],
+          ports: [30_002],
           containerPorts: [8081],
           domains: [''],
           enviromentParameters: [],
@@ -436,7 +436,7 @@ describe('resourceQueryService tests', () => {
               cpu: 1,
               ram: 2000,
               hdd: 20,
-              ports: [30001],
+              ports: [30_001],
               containerPorts: [8080],
               domains: [''],
               environmentParameters: [],
@@ -450,7 +450,7 @@ describe('resourceQueryService tests', () => {
               cpu: 2,
               ram: 4000,
               hdd: 30,
-              ports: [30002],
+              ports: [30_002],
               containerPorts: [8081],
               domains: [''],
               environmentParameters: [],
@@ -604,7 +604,7 @@ describe('resourceQueryService tests', () => {
               cpu: 1,
               ram: 2000,
               hdd: 10,
-              ports: [30001],
+              ports: [30_001],
               containerPorts: [8080],
               domains: [''],
               environmentParameters: [],
@@ -618,7 +618,7 @@ describe('resourceQueryService tests', () => {
               cpu: 1,
               ram: 2000,
               hdd: 10,
-              ports: [30002],
+              ports: [30_002],
               containerPorts: [8081],
               domains: [''],
               environmentParameters: [],
@@ -707,7 +707,7 @@ describe('resourceQueryService tests', () => {
         description: 'well formed',
         owner: OWNER,
         repotag: 'test/good:latest',
-        ports: [30011],
+        ports: [30_011],
         containerPorts: [8080],
         domains: [''],
         enviromentParameters: [],

@@ -202,8 +202,8 @@ const ANNOUNCE_INTERVAL_MS = Math.floor(
 const ANNOUNCE_CYCLE_WAIT_MS = 30 * 1000;
 
 // Hash sync constants (blocks, at 30s per block)
-const HASH_EXPIRY_BLOCKS = 1051200; // ~1 year — permanently flag unresolvable hashes
-const HASH_RETRY_BACKOFF = [0, 100, 500, 2500, 12500, 50000, 100000]; // ~0, 50min, 4h, 21h, 4d, 17d, 35d
+const HASH_EXPIRY_BLOCKS = 1_051_200; // ~1 year — permanently flag unresolvable hashes
+const HASH_RETRY_BACKOFF = [0, 100, 500, 2500, 12_500, 50_000, 100_000]; // ~0, 50min, 4h, 21h, 4d, 17d, 35d
 
 module.exports = {
   // Paths

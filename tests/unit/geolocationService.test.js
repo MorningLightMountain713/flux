@@ -182,7 +182,7 @@ describe('geolocationService tests', () => {
     beforeEach(() => {
       ipLocationStoreStub = {
         lookup: sinon.stub().resolves(null),
-        status: sinon.stub().returns({ ready: true, generated: 'x', rowCount: 2000000 }),
+        status: sinon.stub().returns({ ready: true, generated: 'x', rowCount: 2_000_000 }),
       };
     });
 
@@ -720,7 +720,7 @@ describe('geolocationService tests', () => {
 
       expect(geolocationService.getStaticIpState(), 'a watched change withdraws STATIC').to.equal('UNKNOWN');
       const written = dbHelperStub.updateOneInDatabase.lastCall.args[3].$set;
-      expect(Date.now() - written.lastIpChangeDate, 'the change is stamped now').to.be.below(60000);
+      expect(Date.now() - written.lastIpChangeDate, 'the change is stamped now').to.be.below(60_000);
     });
 
     // The table lookup is not stubbed by this describe's reload(), so these
@@ -736,7 +736,7 @@ describe('geolocationService tests', () => {
         './fluxNetworkHelper': fluxNetworkHelperStub,
         './appPlacement/ipLocationStore': {
           lookup: sinon.stub().resolves({ org: 'a1b2c3d4e5f6', networkClass }),
-          status: sinon.stub().returns({ ready: true, generated: 'x', rowCount: 2000000 }),
+          status: sinon.stub().returns({ ready: true, generated: 'x', rowCount: 2_000_000 }),
         },
       });
     }
@@ -846,7 +846,7 @@ describe('geolocationService tests', () => {
       serviceHelperStub.axiosGet.resolves(ipApiResponse());
       const table = {
         lookup: sinon.stub().resolves({ org: 'a1b2c3d4e5f6', networkClass: 'DATACENTER' }),
-        status: sinon.stub().returns({ ready: true, generated: 'x', rowCount: 2000000 }),
+        status: sinon.stub().returns({ ready: true, generated: 'x', rowCount: 2_000_000 }),
       };
       geolocationService = proxyquire('../../ZelBack/src/services/geolocationService', {
         'node:dns': dnsStub,
@@ -871,7 +871,7 @@ describe('geolocationService tests', () => {
       // ordering between setNodeGeolocation and the location table's restore.
       const verdicts = [];
       for (const status of [{ ready: false, generated: null, rowCount: 0 },
-        { ready: true, generated: 'x', rowCount: 2000000 }]) {
+        { ready: true, generated: 'x', rowCount: 2_000_000 }]) {
         fluxNetworkHelperStub.hasPublicIpOnInterface.resolves(false);
         serviceHelperStub.axiosGet.resolves(ipApiResponse());
         geolocationService = proxyquire('../../ZelBack/src/services/geolocationService', {
@@ -1008,7 +1008,7 @@ describe('geolocationService tests', () => {
       // abstention the node may decide for itself.
       ipLocationStoreStub = {
         lookup: sinon.stub().resolves(null),
-        status: sinon.stub().returns({ ready: true, generated: 'x', rowCount: 2000000 }),
+        status: sinon.stub().returns({ ready: true, generated: 'x', rowCount: 2_000_000 }),
       };
       // On its own evidence this address is a data centre: a hosting operator
       // and nothing suggesting an access network.
@@ -1230,7 +1230,7 @@ describe('geolocationService tests', () => {
       expect(await geolocationService.getNetworkClassification()).to.equal(null);
       const gatherCalls = serviceHelperStub.axiosGet.callCount;
 
-      ipLocationStoreStub.status.returns({ ready: true, generated: 'x', rowCount: 2000000 });
+      ipLocationStoreStub.status.returns({ ready: true, generated: 'x', rowCount: 2_000_000 });
       ipLocationStoreStub.lookup.resolves({ org: 'a1b2c3d4e5f6', networkClass: 'DATACENTER' });
 
       const verdict = await geolocationService.getNetworkClassification();
@@ -1290,7 +1290,7 @@ describe('geolocationService tests', () => {
       dbHelperStub.findOneInDatabase.resolves(null);
       tableStub = {
         lookup: sinon.stub().resolves({ org: 'a1b2c3d4e5f6', networkClass: 'DATACENTER' }),
-        status: sinon.stub().returns({ ready: true, generated: 'x', rowCount: 2000000 }),
+        status: sinon.stub().returns({ ready: true, generated: 'x', rowCount: 2_000_000 }),
       };
     });
 

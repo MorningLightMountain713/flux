@@ -263,8 +263,8 @@ describe('serviceHelper tests', () => {
   });
 
   describe('isDecimalLimit function tests', () => {
-    const falseBools = [3.123456789, '0.1234567890', 'number', undefined, NaN, '3.123.3', '7.000000000'];
-    const trueBools = [1.123, 4.12345678, '4324.123453', 4, '6', 4.00, '5.000', null];
+    const falseBools = [3.123_456_789, '0.1234567890', 'number', undefined, NaN, '3.123.3', '7.000000000'];
+    const trueBools = [1.123, 4.123_456_78, '4324.123453', 4, '6', 4.00, '5.000', null];
 
     for (const falseBool of falseBools) {
       it(`parameter ${falseBool} should return false`, () => {
@@ -291,7 +291,7 @@ describe('serviceHelper tests', () => {
     });
 
     it('custom decimal places false B', () => {
-      expect(serviceHelper.isDecimalLimit(3.2342342341, 2)).to.equal(false);
+      expect(serviceHelper.isDecimalLimit(3.234_234_234_1, 2)).to.equal(false);
     });
   });
 
@@ -457,7 +457,7 @@ describe('serviceHelper tests', () => {
       const response = await serviceHelper.runCommand('testCmd', { runAsRoot: true });
 
       expect(response).to.be.deep.equal(expected);
-      sinon.assert.calledOnceWithExactly(runCmdStub, 'sudo', ['testCmd'], { timeout: 900000 });
+      sinon.assert.calledOnceWithExactly(runCmdStub, 'sudo', ['testCmd'], { timeout: 900_000 });
       sinon.assert.calledOnceWithExactly(debugSpy, 'Run Cmd: sudo testCmd');
     });
 
@@ -474,7 +474,7 @@ describe('serviceHelper tests', () => {
       const response = await serviceHelper.runCommand('testCmd', { runAsRoot: true });
 
       expect(response).to.be.deep.equal(expected);
-      sinon.assert.calledOnceWithExactly(runCmdStub, 'testCmd', [], { timeout: 900000 });
+      sinon.assert.calledOnceWithExactly(runCmdStub, 'testCmd', [], { timeout: 900_000 });
       sinon.assert.calledOnceWithExactly(debugSpy, 'Run Cmd: testCmd ');
     });
 
@@ -531,7 +531,7 @@ describe('serviceHelper tests', () => {
       const response = await serviceHelper.runCommand('testCmd');
 
       expect(response).to.be.deep.equal(expected);
-      sinon.assert.calledOnceWithExactly(runCmdStub, 'testCmd', [], { timeout: 900000 });
+      sinon.assert.calledOnceWithExactly(runCmdStub, 'testCmd', [], { timeout: 900_000 });
       sinon.assert.calledOnceWithExactly(debugSpy, 'Run Cmd: testCmd ');
     });
 
@@ -550,7 +550,7 @@ describe('serviceHelper tests', () => {
       const response = await serviceHelper.runCommand('testCmd');
 
       expect(response).to.be.deep.equal(expected);
-      sinon.assert.calledOnceWithExactly(runCmdStub, 'testCmd', [], { timeout: 900000 });
+      sinon.assert.calledOnceWithExactly(runCmdStub, 'testCmd', [], { timeout: 900_000 });
       sinon.assert.calledOnceWithExactly(errorSpy, error);
     });
     it('should return error and not log it if command causes an error and logError is false', async () => {
@@ -568,7 +568,7 @@ describe('serviceHelper tests', () => {
       const response = await serviceHelper.runCommand('testCmd', { logError: false });
 
       expect(response).to.be.deep.equal(expected);
-      sinon.assert.calledOnceWithExactly(runCmdStub, 'testCmd', [], { timeout: 900000 });
+      sinon.assert.calledOnceWithExactly(runCmdStub, 'testCmd', [], { timeout: 900_000 });
       sinon.assert.notCalled(errorSpy);
     });
     it('should pass along any exec options to execFile', async () => {
@@ -583,7 +583,7 @@ describe('serviceHelper tests', () => {
       const response = await serviceHelper.runCommand('testCmd', { cwd: '/home/testuser' });
 
       expect(response).to.be.deep.equal(expected);
-      sinon.assert.calledOnceWithExactly(runCmdStub, 'testCmd', [], { cwd: '/home/testuser', timeout: 900000 });
+      sinon.assert.calledOnceWithExactly(runCmdStub, 'testCmd', [], { cwd: '/home/testuser', timeout: 900_000 });
       sinon.assert.notCalled(errorSpy);
     });
   });
@@ -710,7 +710,7 @@ describe('serviceHelper tests', () => {
 
   describe('parseInterval tests', () => {
     it('should parse all time intervals', () => {
-      const failureValue = 1_000;
+      const failureValue = 1000;
 
       const intervals = [
         [{ bad: 'input' }, failureValue],
@@ -900,15 +900,15 @@ describe('serviceHelper tests', () => {
   describe('validPort tests', () => {
     it('should accept ports at and inside the boundaries', () => {
       expect(serviceHelper.validPort(1)).to.equal(true);
-      expect(serviceHelper.validPort(16127)).to.equal(true);
+      expect(serviceHelper.validPort(16_127)).to.equal(true);
       expect(serviceHelper.validPort('16127')).to.equal(true);
-      expect(serviceHelper.validPort(65535)).to.equal(true);
+      expect(serviceHelper.validPort(65_535)).to.equal(true);
     });
 
     it('should reject ports outside the boundaries', () => {
       expect(serviceHelper.validPort(0)).to.equal(false);
-      expect(serviceHelper.validPort(65536)).to.equal(false);
-      expect(serviceHelper.validPort(99999999)).to.equal(false);
+      expect(serviceHelper.validPort(65_536)).to.equal(false);
+      expect(serviceHelper.validPort(99_999_999)).to.equal(false);
       expect(serviceHelper.validPort(-5)).to.equal(false);
     });
 

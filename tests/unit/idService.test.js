@@ -91,7 +91,7 @@ describe('idService tests', () => {
 
     it('should return false and log error if stratus (100000) has less than 8 cpu threads', async () => {
       tierStub.resolves('bamf');
-      collateralStub.resolves(100000);
+      collateralStub.resolves(100_000);
       osTotalmemStub.returns(30 * 1024 ** 3);
       osCpusStub.returns([1, 1, 1, 1]);
       const response = await idService.confirmNodeTierHardware();
@@ -102,7 +102,7 @@ describe('idService tests', () => {
 
     it('should return false and log error if stratus (100000) has less than 30gb ram', async () => {
       tierStub.resolves('bamf');
-      collateralStub.resolves(100000);
+      collateralStub.resolves(100_000);
       osTotalmemStub.returns(29 * 1024 ** 3);
       osCpusStub.returns([1, 1, 1, 1, 1, 1, 1, 1]);
       const response = await idService.confirmNodeTierHardware();
@@ -113,7 +113,7 @@ describe('idService tests', () => {
 
     it('should return true if stratus (100000) matches requirements', async () => {
       tierStub.resolves('bamf');
-      collateralStub.resolves(100000);
+      collateralStub.resolves(100_000);
       osTotalmemStub.returns(30 * 1024 ** 3);
       osCpusStub.returns([1, 1, 1, 1, 1, 1, 1, 1]);
       const response = await idService.confirmNodeTierHardware();
@@ -124,7 +124,7 @@ describe('idService tests', () => {
 
     it('should return false and log error if stratus (40000) has less than 16 cpu threads', async () => {
       tierStub.resolves('bamf');
-      collateralStub.resolves(40000);
+      collateralStub.resolves(40_000);
       osTotalmemStub.returns(61 * 1024 ** 3);
       osCpusStub.returns([1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]);
       const response = await idService.confirmNodeTierHardware();
@@ -135,7 +135,7 @@ describe('idService tests', () => {
 
     it('should return false and log error if stratus (40000) has less than 61gb ram', async () => {
       tierStub.resolves('bamf');
-      collateralStub.resolves(40000);
+      collateralStub.resolves(40_000);
       osTotalmemStub.returns(60 * 1024 ** 3);
       osCpusStub.returns([1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]);
       const response = await idService.confirmNodeTierHardware();
@@ -146,7 +146,7 @@ describe('idService tests', () => {
 
     it('should return true if stratus (40000) matches requirements', async () => {
       tierStub.resolves('bamf');
-      collateralStub.resolves(40000);
+      collateralStub.resolves(40_000);
       osTotalmemStub.returns(61 * 1024 ** 3);
       osCpusStub.returns([1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]);
       const response = await idService.confirmNodeTierHardware();
@@ -157,7 +157,7 @@ describe('idService tests', () => {
 
     it('should return false and log error if Nimbus (25000) has less than 4 cpu threads', async () => {
       tierStub.resolves('super');
-      collateralStub.resolves(25000);
+      collateralStub.resolves(25_000);
       osTotalmemStub.returns(7 * 1024 ** 3);
       osCpusStub.returns([1, 1, 1]);
       const response = await idService.confirmNodeTierHardware();
@@ -168,7 +168,7 @@ describe('idService tests', () => {
 
     it('should return false and log error if Nimbus (25000) has less than 7gb ram', async () => {
       tierStub.resolves('super');
-      collateralStub.resolves(25000);
+      collateralStub.resolves(25_000);
       osTotalmemStub.returns(6 * 1024 ** 3);
       osCpusStub.returns([1, 1, 1, 1]);
       const response = await idService.confirmNodeTierHardware();
@@ -179,7 +179,7 @@ describe('idService tests', () => {
 
     it('should return true if Nimbus (25000) matches requirements', async () => {
       tierStub.resolves('super');
-      collateralStub.resolves(25000);
+      collateralStub.resolves(25_000);
       osTotalmemStub.returns(8 * 1024 ** 3);
       osCpusStub.returns([1, 1, 1, 1, 1, 1, 1, 1]);
       const response = await idService.confirmNodeTierHardware();
@@ -190,7 +190,7 @@ describe('idService tests', () => {
 
     it('should return false and log error if Nimbus (12500) has less than 8 cpu threads', async () => {
       tierStub.resolves('super');
-      collateralStub.resolves(12500);
+      collateralStub.resolves(12_500);
       osTotalmemStub.returns(30 * 1024 ** 3);
       osCpusStub.returns([1, 1, 1, 1, 1, 1, 1]);
       const response = await idService.confirmNodeTierHardware();
@@ -201,7 +201,7 @@ describe('idService tests', () => {
 
     it('should return false and log error if Nimbus (12500) has less than 30gb ram', async () => {
       tierStub.resolves('super');
-      collateralStub.resolves(12500);
+      collateralStub.resolves(12_500);
       osTotalmemStub.returns(29 * 1024 ** 3);
       osCpusStub.returns([1, 1, 1, 1, 1, 1, 1, 1]);
       const response = await idService.confirmNodeTierHardware();
@@ -212,7 +212,7 @@ describe('idService tests', () => {
 
     it('should return true if Nimbus (12500) matches requirements', async () => {
       tierStub.resolves('super');
-      collateralStub.resolves(12500);
+      collateralStub.resolves(12_500);
       osTotalmemStub.returns(30 * 1024 ** 3);
       osCpusStub.returns([1, 1, 1, 1, 1, 1, 1, 1]);
       const response = await idService.confirmNodeTierHardware();
@@ -223,7 +223,7 @@ describe('idService tests', () => {
 
     it('should return false and log error if Cumulus (10000) has less than 2 cpu threads', async () => {
       tierStub.resolves('basic');
-      collateralStub.resolves(10000);
+      collateralStub.resolves(10_000);
       osTotalmemStub.returns(3 * 1024 ** 3);
       osCpusStub.returns([1]);
       const response = await idService.confirmNodeTierHardware();
@@ -234,7 +234,7 @@ describe('idService tests', () => {
 
     it('should return false and log error if Cumulus (10000) has less than 3gb ram', async () => {
       tierStub.resolves('basic');
-      collateralStub.resolves(10000);
+      collateralStub.resolves(10_000);
       osTotalmemStub.returns(2 * 1024 ** 3);
       osCpusStub.returns([1, 1]);
       const response = await idService.confirmNodeTierHardware();
@@ -245,7 +245,7 @@ describe('idService tests', () => {
 
     it('should return true if Cumulus (10000) matches requirements', async () => {
       tierStub.resolves('basic');
-      collateralStub.resolves(10000);
+      collateralStub.resolves(10_000);
       osTotalmemStub.returns(3 * 1024 ** 3);
       osCpusStub.returns([1, 1]);
       const response = await idService.confirmNodeTierHardware();
@@ -1014,7 +1014,7 @@ describe('idService tests', () => {
       const req = {
         zelid: '1Jwh4djGdRPvgLwXNGsGCoPE7uu4vihbEg',
         signature: CANONICAL_SIG,
-        message: `${timestamp - 300000}11111111111111111111111111111`,
+        message: `${timestamp - 300_000}11111111111111111111111111111`,
       };
       const mockStream = new PassThrough();
       mockStream.push(JSON.stringify(req));
@@ -1038,14 +1038,14 @@ describe('idService tests', () => {
     it('should return error if signature in database is invalid', async () => {
       const timestamp = Date.now();
       sinon.stub(dbHelper, 'findOneInDatabase').resolves({
-        loginPhrase: `${timestamp + 10000}11111111111111111111111111111`,
+        loginPhrase: `${timestamp + 10_000}11111111111111111111111111111`,
       });
       await dbHelper.initiateDB();
       dbHelper.databaseConnection();
       const req = {
         zelid: '1Jwh4djGdRPvgLwXNGsGCoPE7uu4vihbEg',
         signature: CANONICAL_SIG,
-        message: `${timestamp - 300000}11111111111111111111111111111`,
+        message: `${timestamp - 300_000}11111111111111111111111111111`,
       };
       const mockStream = new PassThrough();
       mockStream.push(JSON.stringify(req));
@@ -1070,14 +1070,14 @@ describe('idService tests', () => {
       bitcoinMessageStub.returns(false);
       const timestamp = Date.now();
       sinon.stub(dbHelper, 'findOneInDatabase').resolves({
-        loginPhrase: `${timestamp - 10000}11111111111111111111111111111`,
+        loginPhrase: `${timestamp - 10_000}11111111111111111111111111111`,
       });
       await dbHelper.initiateDB();
       dbHelper.databaseConnection();
       const req = {
         zelid: '1Jwh4djGdRPvgLwXNGsGCoPE7uu4vihbEg',
         signature: CANONICAL_SIG,
-        message: `${timestamp - 300000}11111111111111111111111111111`,
+        message: `${timestamp - 300_000}11111111111111111111111111111`,
       };
       const mockStream = new PassThrough();
       mockStream.push(JSON.stringify(req));
@@ -1102,7 +1102,7 @@ describe('idService tests', () => {
       bitcoinMessageStub.returns(true);
       const timestamp = Date.now();
       sinon.stub(dbHelper, 'findOneInDatabase').resolves({
-        loginPhrase: `${timestamp - 10000}11111111111111111111111111111`,
+        loginPhrase: `${timestamp - 10_000}11111111111111111111111111111`,
       });
       sinon.stub(dbHelper, 'insertOneToDatabase').resolves(true);
       await dbHelper.initiateDB();
@@ -1110,7 +1110,7 @@ describe('idService tests', () => {
       const req = {
         zelid: '1Jwh4djGdRPvgLwXNGsGCoPE7uu4vihbEg',
         signature: CANONICAL_SIG,
-        message: `${timestamp - 300000}11111111111111111111111111111`,
+        message: `${timestamp - 300_000}11111111111111111111111111111`,
       };
       const mockStream = new PassThrough();
       mockStream.push(JSON.stringify(req));
@@ -1319,7 +1319,7 @@ describe('idService tests', () => {
       bitcoinMessageStub.returns(true);
       const timestamp = Date.now();
       sinon.stub(dbHelper, 'findOneInDatabase').resolves({
-        loginPhrase: `${timestamp - 10000}11111111111111111111111111111`,
+        loginPhrase: `${timestamp - 10_000}11111111111111111111111111111`,
       });
       sinon.stub(dbHelper, 'insertOneToDatabase').resolves(true);
       await dbHelper.initiateDB();
@@ -1327,7 +1327,7 @@ describe('idService tests', () => {
       const req = {
         zelid: '1Jwh4djGdRPvgLwXNGsGCoPE7uu4vihbEg',
         signature: CANONICAL_SIG,
-        message: `${timestamp - 300000}11111111111111111111111111111`,
+        message: `${timestamp - 300_000}11111111111111111111111111111`,
       };
       const mockStream = new PassThrough();
       mockStream.push(JSON.stringify(req));

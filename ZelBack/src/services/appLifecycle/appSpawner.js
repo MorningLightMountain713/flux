@@ -1170,7 +1170,7 @@ async function trySpawningGlobalApplication() {
         hash: appHash,
         required: minInstances,
       };
-      log.info(`trySpawningGlobalApplication - App ${appToRun} has targets that don't match this node, will check in around ${Math.round(delayMs / 60000)}m if instances are still missing`);
+      log.info(`trySpawningGlobalApplication - App ${appToRun} has targets that don't match this node, will check in around ${Math.round(delayMs / 60_000)}m if instances are still missing`);
       globalState.appsToBeCheckedLater.push(appToCheck);
       fluxEventBus.publish('spawner:deferred', { appName: appToRun, reason: 'targeted_nodes', delayMs });
       return shortDelayTime;
@@ -1205,7 +1205,7 @@ async function trySpawningGlobalApplication() {
           hash: appHash,
           required: minInstances,
         };
-        log.info(`trySpawningGlobalApplication - App ${appToRun} does not require static IP but node has static IP, will check in around ${Math.round(delayMs / 60000)}m if instances are still missing`);
+        log.info(`trySpawningGlobalApplication - App ${appToRun} does not require static IP but node has static IP, will check in around ${Math.round(delayMs / 60_000)}m if instances are still missing`);
         globalState.appsToBeCheckedLater.push(appToCheck);
         fluxEventBus.publish('spawner:deferred', { appName: appToRun, reason: 'static_ip', delayMs });
         delay = true;
@@ -1218,7 +1218,7 @@ async function trySpawningGlobalApplication() {
           hash: appHash,
           required: minInstances,
         };
-        log.info(`trySpawningGlobalApplication - App ${appToRun} does not require datacenter but node is datacenter, will check in around ${Math.round(delayMs / 60000)}m if instances are still missing`);
+        log.info(`trySpawningGlobalApplication - App ${appToRun} does not require datacenter but node is datacenter, will check in around ${Math.round(delayMs / 60_000)}m if instances are still missing`);
         globalState.appsToBeCheckedLater.push(appToCheck);
         fluxEventBus.publish('spawner:deferred', { appName: appToRun, reason: 'datacenter', delayMs });
         delay = true;
@@ -1231,11 +1231,11 @@ async function trySpawningGlobalApplication() {
           hash: appHash,
           required: minInstances,
         };
-        log.info(`trySpawningGlobalApplication - App ${appToRun} specs are from cumulus, will check in around ${Math.round(delayMs / 60000)}m if instances are still missing`);
+        log.info(`trySpawningGlobalApplication - App ${appToRun} specs are from cumulus, will check in around ${Math.round(delayMs / 60_000)}m if instances are still missing`);
         globalState.appsToBeCheckedLater.push(appToCheck);
         fluxEventBus.publish('spawner:deferred', { appName: appToRun, reason: 'capacity_gap_large', delayMs });
         delay = true;
-      } else if (!specPlacement.hasTargets() && tier === 'bamf' && appHWrequirements.cpu < 7 && appHWrequirements.memoryMb < 29000 && appHWrequirements.storageGb < 370) {
+      } else if (!specPlacement.hasTargets() && tier === 'bamf' && appHWrequirements.cpu < 7 && appHWrequirements.memoryMb < 29_000 && appHWrequirements.storageGb < 370) {
         const deferral = config.get('fluxapps.spawnDeferrals.capacityGap.mediumMs');
         const delayMs = isEncryptedApp ? deferral.encrypted : deferral.standard;
         const appToCheck = {
@@ -1244,7 +1244,7 @@ async function trySpawningGlobalApplication() {
           hash: appHash,
           required: minInstances,
         };
-        log.info(`trySpawningGlobalApplication - App ${appToRun} specs are from nimbus, will check in around ${Math.round(delayMs / 60000)}m if instances are still missing`);
+        log.info(`trySpawningGlobalApplication - App ${appToRun} specs are from nimbus, will check in around ${Math.round(delayMs / 60_000)}m if instances are still missing`);
         globalState.appsToBeCheckedLater.push(appToCheck);
         fluxEventBus.publish('spawner:deferred', { appName: appToRun, reason: 'capacity_gap_medium', delayMs });
         delay = true;
@@ -1257,7 +1257,7 @@ async function trySpawningGlobalApplication() {
           hash: appHash,
           required: minInstances,
         };
-        log.info(`trySpawningGlobalApplication - App ${appToRun} specs are from cumulus, will check in around ${Math.round(delayMs / 60000)}m if instances are still missing`);
+        log.info(`trySpawningGlobalApplication - App ${appToRun} specs are from cumulus, will check in around ${Math.round(delayMs / 60_000)}m if instances are still missing`);
         globalState.appsToBeCheckedLater.push(appToCheck);
         fluxEventBus.publish('spawner:deferred', { appName: appToRun, reason: 'capacity_gap_small', delayMs });
         delay = true;

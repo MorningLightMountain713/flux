@@ -95,7 +95,7 @@ describe('upnpService tests', () => {
 
       const promise = upnpService.verifyUPNPsupport();
 
-      await clock.tickAsync(2_500);
+      await clock.tickAsync(2500);
       const result = await promise;
 
       expect(result).to.equal(true);
@@ -113,7 +113,7 @@ describe('upnpService tests', () => {
 
       const promise = upnpService.verifyUPNPsupport();
 
-      await clock.tickAsync(2_500);
+      await clock.tickAsync(2500);
       const result = await promise;
 
       expect(result).to.equal(false);
@@ -132,7 +132,7 @@ describe('upnpService tests', () => {
 
       const promise = upnpService.verifyUPNPsupport();
 
-      await clock.tickAsync(2_500);
+      await clock.tickAsync(2500);
       const result = await promise;
 
       expect(result).to.equal(false);
@@ -151,7 +151,7 @@ describe('upnpService tests', () => {
 
       const promise = upnpService.verifyUPNPsupport();
 
-      await clock.tickAsync(2_500);
+      await clock.tickAsync(2500);
       const result = await promise;
 
       expect(result).to.equal(false);
@@ -170,7 +170,7 @@ describe('upnpService tests', () => {
 
       const promise = upnpService.verifyUPNPsupport();
 
-      await clock.tickAsync(2_500);
+      await clock.tickAsync(2500);
       const result = await promise;
 
       expect(result).to.equal(false);
@@ -189,7 +189,7 @@ describe('upnpService tests', () => {
 
       const promise = upnpService.verifyUPNPsupport();
 
-      await clock.tickAsync(2_500);
+      await clock.tickAsync(2500);
       const result = await promise;
 
       expect(result).to.equal(false);
@@ -218,7 +218,7 @@ describe('upnpService tests', () => {
 
       const promise = upnpService.setupUPNP(123);
 
-      await clock.tickAsync(2_000);
+      await clock.tickAsync(2000);
       const result = await promise;
 
       expect(result).to.equal(true);
@@ -245,23 +245,23 @@ describe('upnpService tests', () => {
 
       const promise = upnpService.setupUPNP();
 
-      await clock.tickAsync(2_000);
+      await clock.tickAsync(2000);
       const result = await promise;
 
       expect(result).to.equal(true);
       sinon.assert.notCalled(logSpy);
       sinon.assert.callCount(createMappingSpy, 4);
       sinon.assert.calledWithExactly(createMappingSpy, {
-        public: 16127, private: 16127, ttl: 0, description: 'Flux_Backend_API',
+        public: 16_127, private: 16_127, ttl: 0, description: 'Flux_Backend_API',
       });
       sinon.assert.calledWithExactly(createMappingSpy, {
-        public: 16128, private: 16128, ttl: 0, description: 'Flux_Backend_API_SSL',
+        public: 16_128, private: 16_128, ttl: 0, description: 'Flux_Backend_API_SSL',
       });
       sinon.assert.calledWithExactly(createMappingSpy, {
-        public: 16126, private: 16126, ttl: 0, description: 'Flux_Home_UI',
+        public: 16_126, private: 16_126, ttl: 0, description: 'Flux_Home_UI',
       });
       sinon.assert.calledWithExactly(createMappingSpy, {
-        public: 16129, private: 16129, ttl: 0, description: 'Flux_Syncthing',
+        public: 16_129, private: 16_129, ttl: 0, description: 'Flux_Syncthing',
       });
     });
 
@@ -272,7 +272,7 @@ describe('upnpService tests', () => {
 
       const promise = upnpService.setupUPNP(123);
 
-      await clock.tickAsync(2_000);
+      await clock.tickAsync(2000);
       const result = await promise;
 
       expect(result).to.equal(false);
@@ -300,7 +300,7 @@ describe('upnpService tests', () => {
 
       const promise = upnpService.mapUpnpPort(123, 'some description');
 
-      await clock.tickAsync(1_000);
+      await clock.tickAsync(1000);
       const result = await promise;
 
       expect(result).to.equal(true);
@@ -329,7 +329,7 @@ describe('upnpService tests', () => {
 
       const promise = upnpService.mapUpnpPort(123);
 
-      await clock.tickAsync(1_000);
+      await clock.tickAsync(1000);
       const result = await promise;
 
       expect(result).to.equal(false);
@@ -357,7 +357,7 @@ describe('upnpService tests', () => {
 
       const promise = upnpService.removeMapUpnpPort(123, 'some description');
 
-      await clock.tickAsync(1_000);
+      await clock.tickAsync(1000);
       const result = await promise;
 
       expect(result).to.equal(true);
@@ -374,7 +374,7 @@ describe('upnpService tests', () => {
 
       const promise = upnpService.removeMapUpnpPort(123);
 
-      await clock.tickAsync(1_000);
+      await clock.tickAsync(1000);
       const result = await promise;
 
       expect(result).to.equal(false);

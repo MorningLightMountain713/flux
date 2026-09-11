@@ -79,7 +79,7 @@ class FluxTTLCache extends TTLCache {
 class FluxCacheManager {
   #controller = new FluxController();
 
-  static oneSecond = 1_000;
+  static oneSecond = 1000;
 
   static oneMinute = 60_000;
 

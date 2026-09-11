@@ -152,7 +152,7 @@ describe('quorumGrant ownerGenerationController', () => {
     it('does not refuse a re-roll', async () => {
       messageStore.getMasterleaseRecord.resolves({
         data: {
-          grantee: `${'2'.repeat(64)}:0`, mode: 'held', ttlMs: 150_000, broadcastedAt: Date.now() - 5_000,
+          grantee: `${'2'.repeat(64)}:0`, mode: 'held', ttlMs: 150_000, broadcastedAt: Date.now() - 5000,
         },
       });
       const res = fakeRes();

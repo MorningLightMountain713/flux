@@ -839,7 +839,7 @@ describe('verificationHelperUtils tests', () => {
 
     it('should reject non-string input', () => {
       expect(verificationHelperUtils.loginPhraseWithinWindow(undefined, oneHour)).to.be.false;
-      expect(verificationHelperUtils.loginPhraseWithinWindow(1644935889016, oneHour)).to.be.false;
+      expect(verificationHelperUtils.loginPhraseWithinWindow(1_644_935_889_016, oneHour)).to.be.false;
     });
   });
 });

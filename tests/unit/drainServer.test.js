@@ -125,7 +125,7 @@ describe('drainServer tests', () => {
     it('errors when drain_app omits app_name', () => {
       const response = call('drain_app', {});
 
-      expect(response.error.code).to.equal(-32000);
+      expect(response.error.code).to.equal(-32_000);
       expect(response.error.message).to.contain('app_name required');
       expect(rebroadcastStub.called).to.be.false;
     });
@@ -133,14 +133,14 @@ describe('drainServer tests', () => {
     it('errors on an unknown method', () => {
       const response = call('nope', {});
 
-      expect(response.error.code).to.equal(-32601);
+      expect(response.error.code).to.equal(-32_601);
       expect(globalState.hasAppShutdownPipelineStates()).to.be.false;
     });
 
     it('errors on malformed JSON', () => {
       const response = drainServer.handleRequest('{ not json');
 
-      expect(response.error.code).to.equal(-32700);
+      expect(response.error.code).to.equal(-32_700);
     });
   });
 

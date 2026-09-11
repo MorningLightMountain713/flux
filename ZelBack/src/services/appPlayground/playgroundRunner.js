@@ -687,7 +687,7 @@ async function observeSession(session, components, watcher, hooks, status) {
   const deadlineNs = process.hrtime.bigint() + BigInt(sessionTtlMs()) * 1_000_000n;
   const identifiers = components.map((component) => component.identifier);
   session.runningSince = Date.now();
-  status(`Running. Watching for up to ${Math.round(sessionTtlMs() / 60000)} minutes.`);
+  status(`Running. Watching for up to ${Math.round(sessionTtlMs() / 60_000)} minutes.`);
 
   while (process.hrtime.bigint() < deadlineNs) {
     throwIfCancelled(session, hooks);

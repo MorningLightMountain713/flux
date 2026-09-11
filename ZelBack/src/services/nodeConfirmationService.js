@@ -178,7 +178,7 @@ async function reconcile(previous, statusObserved) {
     // Remove apps, but messageCapable preserved (can still broadcast)
     if (elapsed > DAEMON_STALE_MS && !daemonStale) {
       daemonStale = true;
-      log.warn(`nodeConfirmationService - Daemon unreachable for ${Math.round(elapsed / 60000)} minutes, stale`);
+      log.warn(`nodeConfirmationService - Daemon unreachable for ${Math.round(elapsed / 60_000)} minutes, stale`);
       for (const cb of daemonStaleListeners) {
         try { cb(); } catch (e) { log.error(e); }
       }

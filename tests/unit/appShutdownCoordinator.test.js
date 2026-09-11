@@ -44,7 +44,7 @@ describe('appShutdownCoordinator', () => {
 
   before(async function loadLibrary() {
     // The first fromSubmission compiles the ajv schemas.
-    this.timeout(30000);
+    this.timeout(30_000);
     flux = await loadSpecLibrary();
   });
 
@@ -54,7 +54,7 @@ describe('appShutdownCoordinator', () => {
    * submission fixture.
    */
   const v9App = (appName, components) => {
-    let hostPort = 31000;
+    let hostPort = 31_000;
     const built = {};
     for (const [name, over] of Object.entries(components)) {
       hostPort += 1;
@@ -182,7 +182,7 @@ describe('appShutdownCoordinator', () => {
     // Freeze the clock so the deadline is asserted exactly rather than within a
     // fudge window. The specs are built above — the library never runs under
     // fake timers.
-    const clock = sinon.useFakeTimers({ now: 1700000000000 });
+    const clock = sinon.useFakeTimers({ now: 1_700_000_000_000 });
     const res = await coordinator.requestGracefulStop(idOf('myapp'), 'condemned');
     expect(res).to.equal(true);
     expect(stubs.fluxShutdowndClient.beginAppStop.calledOnce).to.equal(true);
@@ -195,7 +195,7 @@ describe('appShutdownCoordinator', () => {
     // The deadline is the REAL planner's budget over the REAL deployment — the
     // node's figure and the daemon's have to agree, so neither side may be a
     // constant a fixture chose.
-    expect(opts.deadline).to.equal(1700000000 + shutdownPlan.appShutdownBudgetSeconds(deployment));
+    expect(opts.deadline).to.equal(1_700_000_000 + shutdownPlan.appShutdownBudgetSeconds(deployment));
 
     // The stubbed provider received the install row: the real one reads its
     // name and identity and resolves its cleartext through isEncrypted/spec.
@@ -221,11 +221,11 @@ describe('appShutdownCoordinator', () => {
     });
     expect(shutdownPlan.appShutdownBudgetSeconds(deployment)).to.equal(65);
 
-    const clock = sinon.useFakeTimers({ now: 1700000000000 });
+    const clock = sinon.useFakeTimers({ now: 1_700_000_000_000 });
     const res = await coordinator.requestGracefulStop(idOf('gracefulapp'), 'condemned');
     expect(res).to.equal(true);
     const [, , , opts] = stubs.fluxShutdowndClient.beginAppStop.firstCall.args;
-    expect(opts.deadline).to.equal(1700000000 + 65);
+    expect(opts.deadline).to.equal(1_700_000_000 + 65);
     clock.restore();
   });
 

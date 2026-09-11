@@ -55,7 +55,7 @@ describe('daemonUsageReporter', () => {
 
   it('should report the delta window with the heights it covered', () => {
     takeAppliedSummaryStub.returns(summary({
-      deltas: 10, added: 3, removed: 1, updated: 174, fromHeight: 2840204, toHeight: 2840214,
+      deltas: 10, added: 3, removed: 1, updated: 174, fromHeight: 2_840_204, toHeight: 2_840_214,
     }));
 
     reporter.report();
@@ -88,7 +88,7 @@ describe('daemonUsageReporter', () => {
 
     reporter.start();
     reporter.start();
-    clock.tick(300000);
+    clock.tick(300_000);
 
     sinon.assert.calledOnce(logStub.info);
   });

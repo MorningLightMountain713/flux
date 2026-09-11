@@ -318,7 +318,7 @@ describe('fileSystemManager upload tests', () => {
       fileSystemManager.startSlotFloor({
         minBitsPerSecond: 0, windowMs: 1000, getBytes: () => 0, onStall,
       });
-      clock.tick(10000);
+      clock.tick(10_000);
       sinon.assert.notCalled(onStall);
     });
 

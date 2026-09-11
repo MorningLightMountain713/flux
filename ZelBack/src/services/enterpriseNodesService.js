@@ -76,7 +76,7 @@ async function getEnterpriseList() {
       const maxMaturity = 500;
       const activationTime = node.activesince * 1000;
       const timeDifference = currentTime - activationTime; // always positive integer
-      let portion = timeDifference / 31556926000; // one year
+      let portion = timeDifference / 31_556_926_000; // one year
       if (portion > 1) portion = 1;
       maturityPoints = Math.floor(maxMaturity * portion);
       let pubKeyPoints = 0;

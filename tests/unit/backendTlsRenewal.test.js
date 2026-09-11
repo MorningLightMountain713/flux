@@ -61,7 +61,7 @@ function componentsFor(roles) {
     components[name] = {
       ...V9_SUBMISSION.components.web,
       name,
-      ports: { http: { containerPort: 80, hostPort: 31000 + index } },
+      ports: { http: { containerPort: 80, hostPort: 31_000 + index } },
       loadBalancing: role === UNROUTED
         ? undefined
         : { http: { provider: 'haproxy', mode: 'http', ...role } },
@@ -93,7 +93,7 @@ describe('backendTlsRenewal.renewalSweep', () => {
 
   before(async function loadLibrary() {
     // The first fromSubmission compiles the ajv schemas.
-    this.timeout(30000);
+    this.timeout(30_000);
     flux = await loadSpecLibrary();
   });
 

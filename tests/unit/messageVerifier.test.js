@@ -43,9 +43,9 @@ function makeBaseStubs(overrides = {}) {
   const regimeSurface = () => ({
     onChainDisplayPrice: sinon.stub().resolves(1),
     fiatAndFluxDisplayPrice: sinon.stub().resolves({ usd: 1, flux: 1, fluxDiscount: 0 }),
-    registrationFee: sinon.stub().resolves(100000000n),
+    registrationFee: sinon.stub().resolves(100_000_000n),
     supersededMessage: sinon.stub().resolves(null),
-    updateFee: sinon.stub().resolves(100000000n),
+    updateFee: sinon.stub().resolves(100_000_000n),
   });
   // chainFloor, the model a v8 spec declares
   const legacyRegime = regimeSurface();
@@ -70,9 +70,9 @@ function makeBaseStubs(overrides = {}) {
         },
       },
       fluxapps: {
-        epochstart: 694000,
-        daemonPONFork: 2020000,
-        blocksLasting: 22000,
+        epochstart: 694_000,
+        daemonPONFork: 2_020_000,
+        blocksLasting: 22_000,
       },
     }),
     '../dbHelper': dbStub,
@@ -91,10 +91,10 @@ function makeBaseStubs(overrides = {}) {
       delay: sinon.stub().resolves(),
     },
     '../daemonService/daemonServiceMiscRpcs': {
-      isDaemonSynced: sinon.stub().returns({ data: { height: 2000000, synced: true } }),
+      isDaemonSynced: sinon.stub().returns({ data: { height: 2_000_000, synced: true } }),
     },
     '../daemonService/daemonServiceBlockchainRpcs': {
-      getBlock: sinon.stub().resolves({ status: 'success', data: { time: 1750000000 } }),
+      getBlock: sinon.stub().resolves({ status: 'success', data: { time: 1_750_000_000 } }),
     },
     // The real dispatcher, over doubled regimes.
     '../pricing/pricingRegime': pricingRegime,
@@ -420,7 +420,7 @@ describe('messageVerifier tests', () => {
       const { stubs } = makeBaseStubs();
       const mv = proxyquire('../../ZelBack/src/services/appMessaging/messageVerifier', stubs);
 
-      const result = await mv.checkAndRequestApp('hash', 'txid', 100, 100000000);
+      const result = await mv.checkAndRequestApp('hash', 'txid', 100, 100_000_000);
       expect(result).to.be.false;
     });
 
@@ -429,7 +429,7 @@ describe('messageVerifier tests', () => {
       stubs['../appDatabase/appsRepository'].getPermanentMessage = sinon.stub().resolves({ hash: 'existing' });
       const mv = proxyquire('../../ZelBack/src/services/appMessaging/messageVerifier', stubs);
 
-      const result = await mv.checkAndRequestApp('existing', 'txid', 2000000, 100000000);
+      const result = await mv.checkAndRequestApp('existing', 'txid', 2_000_000, 100_000_000);
       expect(result).to.be.true;
       // Should mark hash as having message
       expect(dbStub.updateOneInDatabase.calledOnce).to.be.true;
@@ -441,7 +441,7 @@ describe('messageVerifier tests', () => {
       const mv = proxyquire('../../ZelBack/src/services/appMessaging/messageVerifier', stubs);
 
       // Start at i=0, will broadcast and recurse up to i=2
-      const result = await mv.checkAndRequestApp('hash', 'txid', 2000000, 100000000, null, 0);
+      const result = await mv.checkAndRequestApp('hash', 'txid', 2_000_000, 100_000_000, null, 0);
       expect(result).to.be.false;
       // Should have broadcast twice (i=0, i=1)
       expect(broadcastStub.broadcastMessageToAll.callCount).to.equal(2);
@@ -452,7 +452,7 @@ describe('messageVerifier tests', () => {
       stubs['../appDatabase/appsRepository'].getTempMessage = sinon.stub().resolves({ hash: 'h', type: 'fluxappregister' });
       const mv = proxyquire('../../ZelBack/src/services/appMessaging/messageVerifier', stubs);
 
-      const result = await mv.checkAndRequestApp('h', 'txid', 2000000, 100000000, null, 2);
+      const result = await mv.checkAndRequestApp('h', 'txid', 2_000_000, 100_000_000, null, 2);
       expect(result).to.be.false;
       expect(logStub.error.called).to.be.true;
     });
@@ -469,7 +469,7 @@ describe('messageVerifier tests', () => {
 
       const mv = proxyquire('../../ZelBack/src/services/appMessaging/messageVerifier', stubs);
 
-      const result = await mv.checkAndRequestApp('regHash', 'txid', 2000000, 200000000, null, 2);
+      const result = await mv.checkAndRequestApp('regHash', 'txid', 2_000_000, 200_000_000, null, 2);
       expect(result).to.be.true;
       expect(storePermanentStub.calledOnce).to.be.true;
 
@@ -504,7 +504,7 @@ describe('messageVerifier tests', () => {
       v9Regime.registrationFee = sinon.stub().resolves(0n);
 
       // valueSat 0 would satisfy the old `valueSat >= 0` check and mint a free app.
-      const result = await mv.checkAndRequestApp('v9reg', 'txid', 2000000, 0, 1760000000, 2);
+      const result = await mv.checkAndRequestApp('v9reg', 'txid', 2_000_000, 0, 1_760_000_000, 2);
       expect(result).to.be.true;
       expect(insertStub.called).to.be.false;
     });
@@ -527,7 +527,7 @@ describe('messageVerifier tests', () => {
         const mv = proxyquire('../../ZelBack/src/services/appMessaging/messageVerifier', stubs);
         v9Regime.registrationFee = sinon.stub().rejects(thrown);
 
-        const result = await mv.checkAndRequestApp('v9reg', 'txid', 2000000, 200000000, 1760000000, 2);
+        const result = await mv.checkAndRequestApp('v9reg', 'txid', 2_000_000, 200_000_000, 1_760_000_000, 2);
         return {
           result, logStub, insertStub, storePermanentStub,
         };
@@ -583,10 +583,10 @@ describe('messageVerifier tests', () => {
       const getBlockStub = stubs['../daemonService/daemonServiceBlockchainRpcs'].getBlock;
       const mv = proxyquire('../../ZelBack/src/services/appMessaging/messageVerifier', stubs);
 
-      const result = await mv.checkAndRequestApp('v9reg', 'txid', 2000000, 200000000, 1751234567, 2);
+      const result = await mv.checkAndRequestApp('v9reg', 'txid', 2_000_000, 200_000_000, 1_751_234_567, 2);
 
       expect(result).to.be.true;
-      expect(insertStub.firstCall.args[0].registeredAt).to.equal(1751234567);
+      expect(insertStub.firstCall.args[0].registeredAt).to.equal(1_751_234_567);
       // block time was supplied — no daemon round-trip
       expect(getBlockStub.called).to.be.false;
     });
@@ -597,11 +597,11 @@ describe('messageVerifier tests', () => {
       const getBlockStub = stubs['../daemonService/daemonServiceBlockchainRpcs'].getBlock;
       const mv = proxyquire('../../ZelBack/src/services/appMessaging/messageVerifier', stubs);
 
-      const result = await mv.checkAndRequestApp('v9reg', 'txid', 2000000, 200000000, null, 2);
+      const result = await mv.checkAndRequestApp('v9reg', 'txid', 2_000_000, 200_000_000, null, 2);
 
       expect(result).to.be.true;
       expect(getBlockStub.calledOnce).to.be.true;
-      expect(insertStub.firstCall.args[0].registeredAt).to.equal(1750000000);
+      expect(insertStub.firstCall.args[0].registeredAt).to.equal(1_750_000_000);
     });
 
     it('leaves the hash unresolved rather than storing a v9 app without a block time', async () => {
@@ -612,7 +612,7 @@ describe('messageVerifier tests', () => {
       stubs['../daemonService/daemonServiceBlockchainRpcs'].getBlock = sinon.stub().resolves({ status: 'error', data: { message: 'no block' } });
       const mv = proxyquire('../../ZelBack/src/services/appMessaging/messageVerifier', stubs);
 
-      const result = await mv.checkAndRequestApp('v9reg', 'txid', 2000000, 200000000, null, 2);
+      const result = await mv.checkAndRequestApp('v9reg', 'txid', 2_000_000, 200_000_000, null, 2);
 
       expect(result).to.be.false;
       expect(storePermanentStub.called).to.be.false;
@@ -620,7 +620,7 @@ describe('messageVerifier tests', () => {
 
     describe('promoting an update', () => {
       // The confirming block's time, which is the term start a paid update takes.
-      const BLOCK_TIME = 1760000000;
+      const BLOCK_TIME = 1_760_000_000;
 
       // These tests assert v9 term semantics — a term start carried on the
       // projection, and an update that either renews it or inherits it. Only
@@ -645,7 +645,7 @@ describe('messageVerifier tests', () => {
         const { stubs } = await updateStubs(activeRow);
         const mv = proxyquire('../../ZelBack/src/services/appMessaging/messageVerifier', stubs);
 
-        await mv.checkAndRequestApp('updHash', 'txid', 2000000, 200000000, BLOCK_TIME, 2);
+        await mv.checkAndRequestApp('updHash', 'txid', 2_000_000, 200_000_000, BLOCK_TIME, 2);
 
         const { authorize } = stubs['./appEventVerifier'];
         sinon.assert.calledOnce(authorize);
@@ -663,7 +663,7 @@ describe('messageVerifier tests', () => {
         );
         const mv = proxyquire('../../ZelBack/src/services/appMessaging/messageVerifier', stubs);
 
-        const result = await mv.checkAndRequestApp('updHash', 'txid', 2000000, 200000000, BLOCK_TIME, 2);
+        const result = await mv.checkAndRequestApp('updHash', 'txid', 2_000_000, 200_000_000, BLOCK_TIME, 2);
 
         expect(result).to.be.false;
         expect(storePermanentStub.called).to.be.false;
@@ -683,8 +683,8 @@ describe('messageVerifier tests', () => {
         before(async () => {
           predecessor = {
             hash: 'prevHash',
-            height: 1999000,
-            registeredAt: 1750000000,
+            height: 1_999_000,
+            registeredAt: 1_750_000_000,
             appSpecifications: (await domain.v9Spec({ instances: 5 })).serialize(),
           };
         });
@@ -697,7 +697,7 @@ describe('messageVerifier tests', () => {
           v9Regime.supersededMessage = sinon.stub().resolves(
             'superseded' in overrides ? overrides.superseded : predecessor,
           );
-          v9Regime.updateFee = sinon.stub().resolves(overrides.fee ?? 100000000n);
+          v9Regime.updateFee = sinon.stub().resolves(overrides.fee ?? 100_000_000n);
           stubs['../appDatabase/registryManager'].updateAppSpecifications = sinon.stub().resolves();
           return { stubs, v9Regime };
         }
@@ -706,12 +706,12 @@ describe('messageVerifier tests', () => {
           const { stubs, v9Regime } = await pricedUpdate();
           const mv = proxyquire('../../ZelBack/src/services/appMessaging/messageVerifier', stubs);
 
-          await mv.checkAndRequestApp('updHash', 'txid', 2000000, 200000000, BLOCK_TIME, 2);
+          await mv.checkAndRequestApp('updHash', 'txid', 2_000_000, 200_000_000, BLOCK_TIME, 2);
 
           sinon.assert.calledOnce(v9Regime.supersededMessage);
           const [name, confirming] = v9Regime.supersededMessage.firstCall.args;
           expect(name).to.equal('testapp');
-          expect(confirming.height).to.equal(2000000);
+          expect(confirming.height).to.equal(2_000_000);
           expect(confirming.timestamp).to.be.a('number');
         });
 
@@ -722,7 +722,7 @@ describe('messageVerifier tests', () => {
           const { stubs, v9Regime } = await pricedUpdate();
           const mv = proxyquire('../../ZelBack/src/services/appMessaging/messageVerifier', stubs);
 
-          await mv.checkAndRequestApp('updHash', 'txid', 2000000, 200000000, BLOCK_TIME, 2);
+          await mv.checkAndRequestApp('updHash', 'txid', 2_000_000, 200_000_000, BLOCK_TIME, 2);
 
           sinon.assert.calledOnce(v9Regime.updateFee);
           const [thisSpec, prevSpec, height, prevHeight, prevRegisteredAt] = v9Regime.updateFee.firstCall.args;
@@ -730,7 +730,7 @@ describe('messageVerifier tests', () => {
           // the same app and differ only on instances, so that is the tell
           expect(prevSpec.instances).to.equal(5);
           expect(thisSpec.instances).to.equal(3);
-          expect(height).to.equal(2000000);
+          expect(height).to.equal(2_000_000);
           expect(prevHeight).to.equal(predecessor.height);
           expect(prevRegisteredAt).to.equal(predecessor.registeredAt);
           expect(prevHeight).to.not.equal(height);
@@ -745,15 +745,15 @@ describe('messageVerifier tests', () => {
         it("a free update keeps the STORED term start, never the previous message's own block", async () => {
           const { stubs } = await pricedUpdate({
             fee: 0n,
-            activeRow: { name: 'testapp', owner: 'owner1', registeredAt: 1740000000 },
+            activeRow: { name: 'testapp', owner: 'owner1', registeredAt: 1_740_000_000 },
           });
           const updateSpecs = stubs['../appDatabase/registryManager'].updateAppSpecifications;
           const mv = proxyquire('../../ZelBack/src/services/appMessaging/messageVerifier', stubs);
 
-          await mv.checkAndRequestApp('updHash', 'txid', 2000000, 200000000, BLOCK_TIME, 2);
+          await mv.checkAndRequestApp('updHash', 'txid', 2_000_000, 200_000_000, BLOCK_TIME, 2);
 
           sinon.assert.calledOnce(updateSpecs);
-          expect(updateSpecs.firstCall.args[0].registeredAt).to.equal(1740000000);
+          expect(updateSpecs.firstCall.args[0].registeredAt).to.equal(1_740_000_000);
         });
 
         // Past the free allowance a free-shaped update is REFUSED, not priced:
@@ -767,7 +767,7 @@ describe('messageVerifier tests', () => {
           const { logStub } = { logStub: stubs['../../lib/log'] };
           const mv = proxyquire('../../ZelBack/src/services/appMessaging/messageVerifier', stubs);
 
-          const result = await mv.checkAndRequestApp('updHash', 'txid', 2000000, 900000000000, BLOCK_TIME, 2);
+          const result = await mv.checkAndRequestApp('updHash', 'txid', 2_000_000, 900_000_000_000, BLOCK_TIME, 2);
 
           expect(result).to.be.true;
           sinon.assert.notCalled(updateSpecs);
@@ -776,19 +776,19 @@ describe('messageVerifier tests', () => {
         });
 
         it('applies an update that pays the fee its regime asks for', async () => {
-          const { stubs } = await pricedUpdate({ fee: 100000000n });
+          const { stubs } = await pricedUpdate({ fee: 100_000_000n });
           const mv = proxyquire('../../ZelBack/src/services/appMessaging/messageVerifier', stubs);
 
-          await mv.checkAndRequestApp('updHash', 'txid', 2000000, 100000000, BLOCK_TIME, 2);
+          await mv.checkAndRequestApp('updHash', 'txid', 2_000_000, 100_000_000, BLOCK_TIME, 2);
 
           sinon.assert.calledOnce(stubs['../appDatabase/registryManager'].updateAppSpecifications);
         });
 
         it('does not apply an underpaid update', async () => {
-          const { stubs } = await pricedUpdate({ fee: 100000000n });
+          const { stubs } = await pricedUpdate({ fee: 100_000_000n });
           const mv = proxyquire('../../ZelBack/src/services/appMessaging/messageVerifier', stubs);
 
-          await mv.checkAndRequestApp('updHash', 'txid', 2000000, 99999999, BLOCK_TIME, 2);
+          await mv.checkAndRequestApp('updHash', 'txid', 2_000_000, 99_999_999, BLOCK_TIME, 2);
 
           sinon.assert.notCalled(stubs['../appDatabase/registryManager'].updateAppSpecifications);
         });
@@ -797,7 +797,7 @@ describe('messageVerifier tests', () => {
           const { stubs } = await pricedUpdate({ fee: 0n });
           const mv = proxyquire('../../ZelBack/src/services/appMessaging/messageVerifier', stubs);
 
-          await mv.checkAndRequestApp('updHash', 'txid', 2000000, 0, BLOCK_TIME, 2);
+          await mv.checkAndRequestApp('updHash', 'txid', 2_000_000, 0, BLOCK_TIME, 2);
 
           sinon.assert.calledOnce(stubs['../appDatabase/registryManager'].updateAppSpecifications);
         });
@@ -830,23 +830,23 @@ describe('messageVerifier tests', () => {
                   swapGb: 2,
                   rootFsGb: 2,
                   persistentStorage: { sizeGb: 10, mounts: {} },
-                  ports: { tcp_80: { containerPort: 80, hostPort: 31000, protocol: 'tcp' } },
+                  ports: { tcp_80: { containerPort: 80, hostPort: 31_000, protocol: 'tcp' } },
                 },
               },
             });
             const projection = {
-              spec, hash: 'updHash', height: 2000000, registeredAt: 1760000000,
+              spec, hash: 'updHash', height: 2_000_000, registeredAt: 1_760_000_000,
             };
 
             const asConfirmed = InstantiatedSpec.fromEvent(projection);
-            const inheritingTerm = InstantiatedSpec.fromEvent({ ...projection, registeredAt: 1750000000 });
+            const inheritingTerm = InstantiatedSpec.fromEvent({ ...projection, registeredAt: 1_750_000_000 });
 
-            expect(asConfirmed.serialize().registeredAt).to.equal(1760000000);
-            expect(inheritingTerm.serialize().registeredAt).to.equal(1750000000);
+            expect(asConfirmed.serialize().registeredAt).to.equal(1_760_000_000);
+            expect(inheritingTerm.serialize().registeredAt).to.equal(1_750_000_000);
             // and the term start is what decides expiry, so inheriting it is
             // exactly declining to renew
-            expect(inheritingTerm.isExpired(1750000000 + 2_592_000 + 1, 2000000)).to.equal(true);
-            expect(asConfirmed.isExpired(1750000000 + 2_592_000 + 1, 2000000)).to.equal(false);
+            expect(inheritingTerm.isExpired(1_750_000_000 + 2_592_000 + 1, 2_000_000)).to.equal(true);
+            expect(asConfirmed.isExpired(1_750_000_000 + 2_592_000 + 1, 2_000_000)).to.equal(false);
           });
 
           function storedRow(stubs) {
@@ -856,12 +856,12 @@ describe('messageVerifier tests', () => {
           }
 
           it('starts a new term when the update paid for one', async () => {
-            const { stubs } = await pricedUpdate({ fee: 100000000n });
+            const { stubs } = await pricedUpdate({ fee: 100_000_000n });
             const mv = proxyquire('../../ZelBack/src/services/appMessaging/messageVerifier', stubs);
 
-            await mv.checkAndRequestApp('updHash', 'txid', 2000000, 100000000, 1760000000, 2);
+            await mv.checkAndRequestApp('updHash', 'txid', 2_000_000, 100_000_000, 1_760_000_000, 2);
 
-            expect(storedRow(stubs).registeredAt).to.equal(1760000000);
+            expect(storedRow(stubs).registeredAt).to.equal(1_760_000_000);
           });
 
           // Without this an owner resubmits an unchanged spec near expiry, pays
@@ -871,7 +871,7 @@ describe('messageVerifier tests', () => {
             const { stubs } = await pricedUpdate({ fee: 0n });
             const mv = proxyquire('../../ZelBack/src/services/appMessaging/messageVerifier', stubs);
 
-            await mv.checkAndRequestApp('updHash', 'txid', 2000000, 0, 1760000000, 2);
+            await mv.checkAndRequestApp('updHash', 'txid', 2_000_000, 0, 1_760_000_000, 2);
 
             expect(storedRow(stubs).registeredAt).to.equal(predecessor.registeredAt);
           });
@@ -883,9 +883,9 @@ describe('messageVerifier tests', () => {
             });
             const mv = proxyquire('../../ZelBack/src/services/appMessaging/messageVerifier', stubs);
 
-            await mv.checkAndRequestApp('updHash', 'txid', 2000000, 0, 1760000000, 2);
+            await mv.checkAndRequestApp('updHash', 'txid', 2_000_000, 0, 1_760_000_000, 2);
 
-            expect(storedRow(stubs).registeredAt).to.equal(1760000000);
+            expect(storedRow(stubs).registeredAt).to.equal(1_760_000_000);
           });
         });
 
@@ -893,7 +893,7 @@ describe('messageVerifier tests', () => {
           const { stubs, v9Regime } = await pricedUpdate({ superseded: null });
           const mv = proxyquire('../../ZelBack/src/services/appMessaging/messageVerifier', stubs);
 
-          await mv.checkAndRequestApp('updHash', 'txid', 2000000, 200000000, BLOCK_TIME, 2);
+          await mv.checkAndRequestApp('updHash', 'txid', 2_000_000, 200_000_000, BLOCK_TIME, 2);
 
           sinon.assert.notCalled(v9Regime.updateFee);
           sinon.assert.notCalled(stubs['../appDatabase/registryManager'].updateAppSpecifications);
@@ -906,7 +906,7 @@ describe('messageVerifier tests', () => {
       stubs['../appDatabase/appsRepository'].getPermanentMessage = sinon.stub().rejects(new Error('DB crash'));
       const mv = proxyquire('../../ZelBack/src/services/appMessaging/messageVerifier', stubs);
 
-      const result = await mv.checkAndRequestApp('crashHash', 'txid', 2000000, 100000000);
+      const result = await mv.checkAndRequestApp('crashHash', 'txid', 2_000_000, 100_000_000);
       expect(result).to.be.false;
       expect(logStub.error.called).to.be.true;
     });
@@ -918,7 +918,7 @@ describe('messageVerifier tests', () => {
       // Opening the blob is the one thing here that leaves the process (it needs
       // the benchmark channel), so it is the one thing stubbed. What the pricer
       // is handed is a cleartext view it can read.
-      const decryptedSpec = await domain.v8Spec({ name: 'encapp', expire: 88000 });
+      const decryptedSpec = await domain.v8Spec({ name: 'encapp', expire: 88_000 });
 
       const { stubs, legacyRegime } = makeBaseStubs();
       const resolveInstantiatedStub = sinon.stub().resolves(decryptedSpec);
@@ -928,7 +928,7 @@ describe('messageVerifier tests', () => {
       );
 
       const mv = proxyquire('../../ZelBack/src/services/appMessaging/messageVerifier', stubs);
-      const result = await mv.checkAndRequestApp('encReg', 'txid', 2000000, 200000000, null, 2);
+      const result = await mv.checkAndRequestApp('encReg', 'txid', 2_000_000, 200_000_000, null, 2);
 
       expect(result).to.be.true;
       // the held instance really is encrypted, and it is what gets decrypted

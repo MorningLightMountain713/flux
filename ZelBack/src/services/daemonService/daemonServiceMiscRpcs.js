@@ -14,7 +14,7 @@ const fluxEventBus = require('../utils/fluxEventBus');
  */
 function getDefaultDaemonHeader() {
   const isTestnet = globalThis.userconfig.initial?.testnet === true;
-  return isTestnet ? 377006 : 1136836;
+  return isTestnet ? 377_006 : 1_136_836;
 }
 
 let currentDaemonHeight = 0;
@@ -152,7 +152,7 @@ const RPC_IN_WARMUP = -28;
  */
 async function waitForDaemonRpc() {
   const POLL_INTERVAL_MS = 5000;
-  const LOG_INTERVAL_MS = 60000;
+  const LOG_INTERVAL_MS = 60_000;
   let lastLogAt = 0;
 
   // eslint-disable-next-line no-constant-condition

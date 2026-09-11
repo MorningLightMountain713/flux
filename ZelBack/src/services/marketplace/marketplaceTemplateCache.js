@@ -45,7 +45,7 @@ async function bootstrapCache() {
       log.info('marketplaceTemplateCache - already populated, skipping bootstrap');
       return;
     }
-    const response = await serviceHelper.axiosGet(v2Url('/templates/all'), { timeout: 30000 });
+    const response = await serviceHelper.axiosGet(v2Url('/templates/all'), { timeout: 30_000 });
     const templates = response && response.data && response.data.data;
     if (!Array.isArray(templates) || templates.length === 0) {
       log.warn('marketplaceTemplateCache - bootstrap returned no templates');
@@ -79,7 +79,7 @@ async function getTemplate(uuid, templateVersion) {
 
   let response;
   try {
-    response = await serviceHelper.axiosGet(v2Url(`/template/${uuid}/${templateVersion}`), { timeout: 15000 });
+    response = await serviceHelper.axiosGet(v2Url(`/template/${uuid}/${templateVersion}`), { timeout: 15_000 });
   } catch (error) {
     throw new Error(`Marketplace template ${uuid} v${templateVersion} not available, try again later`);
   }

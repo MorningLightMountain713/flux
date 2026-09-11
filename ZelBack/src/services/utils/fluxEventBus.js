@@ -207,7 +207,7 @@ class FluxEventBus extends EventEmitter {
 
     const keepalive = setInterval(() => {
       sseWrite(res, ': keepalive\n\n');
-    }, 15000);
+    }, 15_000);
 
     req.on('close', () => {
       this.removeListener('event', onEvent);

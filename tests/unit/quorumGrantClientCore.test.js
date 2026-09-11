@@ -113,7 +113,7 @@ describe('quorumGrant grantClientCore', () => {
     const cooling = (retryAfterMs) => ({ ok: false, code: 'lock_delay', retryAfterMs });
 
     it('a quorum of promises is open now', () => {
-      const outcome = openingOutcome([promise, promise, draining(100000)], 2);
+      const outcome = openingOutcome([promise, promise, draining(100_000)], 2);
       expect(outcome.open).to.equal(true);
       expect(outcome.retryAfterMs).to.equal(0);
     });
@@ -127,9 +127,9 @@ describe('quorumGrant grantClientCore', () => {
     });
 
     it('the figure a quorum opens at is the quorum-th smallest opening, not the largest taught', () => {
-      const outcome = openingOutcome([promise, draining(100000), draining(200000)], 2);
+      const outcome = openingOutcome([promise, draining(100_000), draining(200_000)], 2);
       expect(outcome.open).to.equal(false);
-      expect(outcome.retryAfterMs).to.equal(100000);
+      expect(outcome.retryAfterMs).to.equal(100_000);
     });
 
     it('a lock-delay teaches the same way a drain does', () => {
@@ -275,7 +275,7 @@ describe('quorumGrant grantClientCore', () => {
   describe('the timing inequality - slack + stop < lock-delay', () => {
     it('accepts the shipped values', () => {
       const out = timingIsSafe({
-        demotionSlackMs: 15_000, hardStopMs: 2_000, lockDelayMs: 30_000, renewIntervalMs: 20_000, askTimeoutMs: 5_000,
+        demotionSlackMs: 15_000, hardStopMs: 2000, lockDelayMs: 30_000, renewIntervalMs: 20_000, askTimeoutMs: 5000,
       });
       expect(out.safe).to.equal(true);
       expect(out.marginMs).to.equal(13_000);
@@ -283,13 +283,13 @@ describe('quorumGrant grantClientCore', () => {
 
     it('accepts what every harness suite sets', () => {
       expect(timingIsSafe({
-        demotionSlackMs: 5_000, hardStopMs: 2_000, lockDelayMs: 10_000, renewIntervalMs: 4_000, askTimeoutMs: 3_000,
+        demotionSlackMs: 5000, hardStopMs: 2000, lockDelayMs: 10_000, renewIntervalMs: 4000, askTimeoutMs: 3000,
       }).safe).to.equal(true);
     });
 
     it('REFUSES a slack that leaves no room for the stop', () => {
       const out = timingIsSafe({
-        demotionSlackMs: 28_000, hardStopMs: 2_000, lockDelayMs: 30_000, renewIntervalMs: 20_000, askTimeoutMs: 5_000,
+        demotionSlackMs: 28_000, hardStopMs: 2000, lockDelayMs: 30_000, renewIntervalMs: 20_000, askTimeoutMs: 5000,
       });
       expect(out.safe).to.equal(false);
       expect(out.marginMs).to.equal(0);
@@ -297,7 +297,7 @@ describe('quorumGrant grantClientCore', () => {
 
     it('REFUSES a slack past the lock-delay outright', () => {
       expect(timingIsSafe({
-        demotionSlackMs: 40_000, hardStopMs: 2_000, lockDelayMs: 30_000, renewIntervalMs: 20_000, askTimeoutMs: 5_000,
+        demotionSlackMs: 40_000, hardStopMs: 2000, lockDelayMs: 30_000, renewIntervalMs: 20_000, askTimeoutMs: 5000,
       }).safe).to.equal(false);
     });
 
@@ -308,7 +308,7 @@ describe('quorumGrant grantClientCore', () => {
     // hoped about — including when the term is simply absent.
     it('REFUSES a renewal interval that cannot reclaim inside the lock-delay', () => {
       expect(timingIsSafe({
-        demotionSlackMs: 15_000, hardStopMs: 2_000, lockDelayMs: 30_000, renewIntervalMs: 35_000, askTimeoutMs: 5_000,
+        demotionSlackMs: 15_000, hardStopMs: 2000, lockDelayMs: 30_000, renewIntervalMs: 35_000, askTimeoutMs: 5000,
       }).safe).to.equal(false);
     });
 
@@ -318,7 +318,7 @@ describe('quorumGrant grantClientCore', () => {
     // its rounds inside the rest, so the delivery bound must fit.
     it('REFUSES an ask timeout at or past the lock-delay - the courier\'s delivery could not fit', () => {
       const out = timingIsSafe({
-        demotionSlackMs: 15_000, hardStopMs: 2_000, lockDelayMs: 30_000, renewIntervalMs: 20_000, askTimeoutMs: 30_000,
+        demotionSlackMs: 15_000, hardStopMs: 2000, lockDelayMs: 30_000, renewIntervalMs: 20_000, askTimeoutMs: 30_000,
       });
       expect(out.safe).to.equal(false);
       expect(out.reason).to.contain('courier');
@@ -327,19 +327,19 @@ describe('quorumGrant grantClientCore', () => {
 
     it('REFUSES an absent ask timeout - the delivery bound is not hoped about', () => {
       expect(timingIsSafe({
-        demotionSlackMs: 15_000, hardStopMs: 2_000, lockDelayMs: 30_000, renewIntervalMs: 20_000,
+        demotionSlackMs: 15_000, hardStopMs: 2000, lockDelayMs: 30_000, renewIntervalMs: 20_000,
       }).safe).to.equal(false);
     });
 
     it('REFUSES an absent renewal interval — the reclaim-first claim is not hoped about', () => {
-      expect(timingIsSafe({ demotionSlackMs: 15_000, hardStopMs: 2_000, lockDelayMs: 30_000 }).safe).to.equal(false);
+      expect(timingIsSafe({ demotionSlackMs: 15_000, hardStopMs: 2000, lockDelayMs: 30_000 }).safe).to.equal(false);
     });
 
     // STRICT, not <=. At equality the stop and the challenger's grant race in
     // continuous time; the model works in whole ticks and cannot see that.
     it('REFUSES equality - the two events race at the boundary', () => {
       const out = timingIsSafe({
-        demotionSlackMs: 28_000, hardStopMs: 2_000, lockDelayMs: 30_000, renewIntervalMs: 20_000, askTimeoutMs: 5_000,
+        demotionSlackMs: 28_000, hardStopMs: 2000, lockDelayMs: 30_000, renewIntervalMs: 20_000, askTimeoutMs: 5000,
       });
       expect(out.safe).to.equal(false);
     });
@@ -348,13 +348,13 @@ describe('quorumGrant grantClientCore', () => {
     // only value carrying the clock-rate-skew budget now.
     it('REFUSES a lock-delay lowered under the shipped slack', () => {
       expect(timingIsSafe({
-        demotionSlackMs: 15_000, hardStopMs: 2_000, lockDelayMs: 15_000, renewIntervalMs: 10_000, askTimeoutMs: 5_000,
+        demotionSlackMs: 15_000, hardStopMs: 2000, lockDelayMs: 15_000, renewIntervalMs: 10_000, askTimeoutMs: 5000,
       }).safe).to.equal(false);
     });
 
     it('names every term it used, so a refusal is actionable', () => {
       const out = timingIsSafe({
-        demotionSlackMs: 40_000, hardStopMs: 2_000, lockDelayMs: 30_000, renewIntervalMs: 20_000, askTimeoutMs: 5_000,
+        demotionSlackMs: 40_000, hardStopMs: 2000, lockDelayMs: 30_000, renewIntervalMs: 20_000, askTimeoutMs: 5000,
       });
       expect(out.reason).to.contain('40000');
       expect(out.reason).to.contain('2000');
@@ -363,7 +363,7 @@ describe('quorumGrant grantClientCore', () => {
 
     it('names the renewal interval when that is the broken term', () => {
       const out = timingIsSafe({
-        demotionSlackMs: 15_000, hardStopMs: 2_000, lockDelayMs: 30_000, renewIntervalMs: 35_000, askTimeoutMs: 5_000,
+        demotionSlackMs: 15_000, hardStopMs: 2000, lockDelayMs: 30_000, renewIntervalMs: 35_000, askTimeoutMs: 5000,
       });
       expect(out.reason).to.contain('35000');
       expect(out.reason).to.contain('30000');
@@ -439,8 +439,8 @@ describe('quorumGrant grantClientCore', () => {
       const out = recoverOutcome([
         { grantee: SELF, epoch: 4, remainingMs: 10_000 },
         { grantee: SELF, epoch: 4, remainingMs: 10_000 },
-      ], SELF, 2, 1_500);
-      expect(out.safeForMs).to.equal(8_500);
+      ], SELF, 2, 1500);
+      expect(out.safeForMs).to.equal(8500);
     });
 
     // The model's MinOf({SafeRemaining}) > 0: a recovery whose discounted

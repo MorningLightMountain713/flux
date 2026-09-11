@@ -64,7 +64,7 @@ describe('imageArchitectureValidator.verifyImageRegistryAndArchitectures', () =>
           ...WEB,
           name: 'api',
           image: 'redis:latest',
-          ports: { tcp: { containerPort: 6379, hostPort: 31001 } },
+          ports: { tcp: { containerPort: 6379, hostPort: 31_001 } },
         },
       },
     });
@@ -192,10 +192,10 @@ describe('imageArchitectureValidator.verifyImageRegistryAndArchitectures', () =>
     it('verifies every image when no component has imageAuth set', async () => {
       const spec = v7Spec([
         legacyComponent({
-          name: 'a', repotag: 'nginx:latest', ports: [31443], containerPorts: [443],
+          name: 'a', repotag: 'nginx:latest', ports: [31_443], containerPorts: [443],
         }),
         legacyComponent({
-          name: 'b', repotag: 'redis:latest', ports: [31444], containerPorts: [6379],
+          name: 'b', repotag: 'redis:latest', ports: [31_444], containerPorts: [6379],
         }),
       ]);
 
@@ -215,10 +215,10 @@ describe('imageArchitectureValidator.verifyImageRegistryAndArchitectures', () =>
       const spec = await v8Spec({
         compose: [
           legacyComponent({
-            name: 'a', repotag: 'nginx:latest', ports: [31443], containerPorts: [443],
+            name: 'a', repotag: 'nginx:latest', ports: [31_443], containerPorts: [443],
           }),
           legacyComponent({
-            name: 'b', repotag: 'redis:latest', ports: [31444], containerPorts: [6379],
+            name: 'b', repotag: 'redis:latest', ports: [31_444], containerPorts: [6379],
           }),
         ],
       });

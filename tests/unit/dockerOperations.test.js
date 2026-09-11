@@ -40,7 +40,7 @@ function specWithComponents(appName, components) {
 describe('dockerOperations tests', () => {
   before(async function loadLibrary() {
     // The first fromSubmission compiles the ajv schemas.
-    this.timeout(30000);
+    this.timeout(30_000);
     flux = await loadSpecLibrary();
   });
 
@@ -134,7 +134,7 @@ describe('appOperations application lifecycle tests', () => {
   let logStub;
 
   before(async function loadLibrary() {
-    this.timeout(30000);
+    this.timeout(30_000);
     flux = await loadSpecLibrary();
   });
 
@@ -239,7 +239,7 @@ describe('appOperations application lifecycle tests', () => {
       '../utils/appConstants': {
         localAppsInformation: 'test', globalAppsInformation: 'test', globalAppsInstallingErrorsLocations: 'test', globalAppsMessages: 'test', appsFolder: APPS_FOLDER,
       },
-      config: asConfig({ fluxapps: { minimumInstances: 3, redeploy: { composedDelay: 30000 } }, database: { appsglobal: { database: 'globalapps', collections: {} } } }),
+      config: asConfig({ fluxapps: { minimumInstances: 3, redeploy: { composedDelay: 30_000 } }, database: { appsglobal: { database: 'globalapps', collections: {} } } }),
 
       // proxyquire does not recurse: every require absent from this map loads for
       // real, dragging its own dependency tree in with it. The entries below are
@@ -350,7 +350,7 @@ describe('appOperations application lifecycle tests', () => {
   async function twoComponentApp(appName = 'testapp') {
     const spec = await specWithComponents(appName, {
       web: {},
-      api: { ports: { http: { containerPort: 8080, hostPort: 31001 } } },
+      api: { ports: { http: { containerPort: 8080, hostPort: 31_001 } } },
     });
     return { spec, deployment: deploymentFor(spec) };
   }

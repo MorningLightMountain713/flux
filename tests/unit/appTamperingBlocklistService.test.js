@@ -22,7 +22,7 @@ describe('appTamperingBlocklistService tests', () => {
       // URL moved to policyStore, which is stubbed below. noCallThru means an
       // absent key is a TypeError at require time rather than a fallback.
       config: asConfig({
-        fluxapps: { tamperingCheckIntervalMs: 43200000 },
+        fluxapps: { tamperingCheckIntervalMs: 43_200_000 },
       }),
       '../lib/log': {
         info: sinon.stub(), warn: sinon.stub(), error: sinon.stub(),

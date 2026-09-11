@@ -110,12 +110,12 @@ describe('fluxdSubscriber tests', () => {
   it('should decode and dispatch a subscribed topic', async () => {
     await startAndSettle();
 
-    await publish('hashblockheight', hashBlockHeightPayload(2837899, 0x0c), WARMUP_SEQ + 1);
+    await publish('hashblockheight', hashBlockHeightPayload(2_837_899, 0x0c), WARMUP_SEQ + 1);
 
     expect(await waitFor(() => received.length === 1)).to.equal(true);
     expect(received[0].topic).to.equal('hashblockheight');
     expect(received[0].seq).to.equal(WARMUP_SEQ + 1);
-    expect(received[0].decoded).to.eql({ hash: '0c'.repeat(32), height: 2837899 });
+    expect(received[0].decoded).to.eql({ hash: '0c'.repeat(32), height: 2_837_899 });
   });
 
   it('should report the number of messages missed on a sequence gap', async () => {
@@ -294,7 +294,7 @@ describe('fluxdSubscriber tests', () => {
       expect(seen.heartbeatTimeout, 'and the rest are defaults').to.equal(20_000);
       expect(seen.reconnectInterval).to.equal(500);
       expect(seen.reconnectMaxInterval).to.equal(15_000);
-      expect(seen.connectTimeout).to.equal(3_000);
+      expect(seen.connectTimeout).to.equal(3000);
     });
   });
 });

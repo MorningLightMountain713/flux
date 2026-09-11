@@ -5,7 +5,7 @@ const config = require('config');
 const dbHelper = require('../../ZelBack/src/services/dbHelper');
 
 const mongoHost = config.database.url || '127.0.0.1';
-const mongoPort = config.database.port || 27017;
+const mongoPort = config.database.port || 27_017;
 
 let mongoAvailable = null; // null = not checked yet
 

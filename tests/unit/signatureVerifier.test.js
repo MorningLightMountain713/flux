@@ -180,7 +180,7 @@ describe('signatureVerifier tests', () => {
       expect(signatureVerifier.isValidSigningIdentity('')).to.equal(false);
       expect(signatureVerifier.isValidSigningIdentity(undefined)).to.equal(false);
       expect(signatureVerifier.isValidSigningIdentity(null)).to.equal(false);
-      expect(signatureVerifier.isValidSigningIdentity(12345)).to.equal(false);
+      expect(signatureVerifier.isValidSigningIdentity(12_345)).to.equal(false);
     });
   });
   describe('includesSigningIdentity tests', () => {

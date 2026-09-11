@@ -20,14 +20,14 @@ const CHUNK_SIZE = 256;
 // boot, so a node that never verifies anything never pays for a worker.
 const RESIDENT_WORKERS = 1;
 
-const IDLE_REAP_MS = 60000;
+const IDLE_REAP_MS = 60_000;
 
 // A chunk that keeps killing its worker is abandoned rather than retried for
 // ever, and a worker that never answers must not hold its slot for ever. Both
 // failures resolve the batch as unverified: a signature we could not check is
 // one we do not trust, so the messages are dropped rather than accepted.
 const MAX_JOB_ATTEMPTS = 3;
-const JOB_TIMEOUT_MS = 60000;
+const JOB_TIMEOUT_MS = 60_000;
 
 let slots = [];
 let queue = [];

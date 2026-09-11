@@ -16,7 +16,7 @@ const validConfig = () => ({
     development: false,
     debug: false,
     upnp: false,
-    apiport: 16127,
+    apiport: 16_127,
     routerIP: '192.168.1.1',
   },
 });

@@ -126,12 +126,12 @@ describe('appConstants tests', () => {
     };
 
     it('reproduces what production and the harness carried by hand', () => {
-      expect(derive(7500), 'production announced hourly against a 125 minute row').to.equal(3600000);
-      expect(derive(63), 'the harness announced every 30s against a 63s row').to.equal(30000);
+      expect(derive(7500), 'production announced hourly against a 125 minute row').to.equal(3_600_000);
+      expect(derive(63), 'the harness announced every 30s against a 63s row').to.equal(30_000);
     });
 
     it('fits two announcements inside one row lifetime, with slack', () => {
-      [7500, 63, 300, 86400].forEach((ttl) => {
+      [7500, 63, 300, 86_400].forEach((ttl) => {
         const expiry = ttl * 1000;
         const interval = derive(ttl);
 

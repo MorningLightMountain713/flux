@@ -43,7 +43,7 @@ const lastDaemonCallTimestamp = 0;
 // eslint-disable-next-line no-unused-vars
 const lastDaemonCallResult = [];
 // eslint-disable-next-line no-unused-vars
-const DAEMON_CALL_THROTTLE_MS = 30000; // 30 seconds
+const DAEMON_CALL_THROTTLE_MS = 30_000; // 30 seconds
 
 const fetcher = async (filter = null) => {
   // this is not how the function is supposed to be used, but it shouldn't take
@@ -351,7 +351,7 @@ async function main() {
 
   setInterval(() => {
     console.log(stateManager.search('045ae66321cfc172086d79252323b6cd4b83460e580e88f220582affda8a83b3ec68078ad80f7e465c42c3ef9bc01b912b3663e2ba09057bc43fbedf0afa9f3864', 'pubkey'));
-  }, 5_000);
+  }, 5000);
 }
 
 if (require.main === module) {

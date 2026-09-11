@@ -50,7 +50,7 @@ function validV8() {
     instances: 3,
     contacts: [],
     geolocation: [],
-    expire: 88000,
+    expire: 88_000,
     nodes: [],
     staticip: false,
     compose: [{

@@ -236,8 +236,8 @@ describe('syncthingFolderStateMachine tests', () => {
       // broadcaster has the HIGHEST IP: it must NOT win; the lowest IP is the agreed seed.
       const peers = [
         { ip: '10.0.0.3:16127', runningSince: null, broadcastedAt: 1000 },
-        { ip: '10.0.0.1:16127', runningSince: null, broadcastedAt: 50000 },
-        { ip: '10.0.0.2:16127', runningSince: null, broadcastedAt: 25000 },
+        { ip: '10.0.0.1:16127', runningSince: null, broadcastedAt: 50_000 },
+        { ip: '10.0.0.2:16127', runningSince: null, broadcastedAt: 25_000 },
       ];
 
       expect(stateMachine.isDesignatedLeader(peers, '10.0.0.1:16127')).to.be.true;
@@ -620,7 +620,7 @@ describe('syncthingFolderStateMachine tests', () => {
         { ip: '10.0.0.1:16127', runningSince: null, broadcastedAt: 1000 },
       ]);
       syncthingServiceMock.getDbStatus.resolves({
-        globalBytes: 100000, inSyncBytes: 40000, state: 'idle', receiveOnlyChangedFiles: 0,
+        globalBytes: 100_000, inSyncBytes: 40_000, state: 'idle', receiveOnlyChangedFiles: 0,
       });
 
       const result = await stateMachine.manageFolderSyncState(mockParams);
@@ -656,7 +656,7 @@ describe('syncthingFolderStateMachine tests', () => {
       // the survivor had been syncing alongside and holds a full copy - a partial
       // survivor must NOT take over (covered by the partial-copy test above)
       syncthingServiceMock.getDbStatus.resolves({
-        globalBytes: 100000, inSyncBytes: 100000, state: 'idle', receiveOnlyChangedFiles: 0,
+        globalBytes: 100_000, inSyncBytes: 100_000, state: 'idle', receiveOnlyChangedFiles: 0,
       });
 
       const result = await stateMachine.manageFolderSyncState(mockParams);
@@ -717,10 +717,10 @@ describe('syncthingFolderStateMachine tests', () => {
       axiosMock.get.rejects(new Error('connect ECONNREFUSED'));
       fluxCommunicationMock.peerResponsiveness.returns({ responding: 8, total: 8 });
       syncthingServiceMock.getDbStatus.resolves({
-        globalBytes: 100000, inSyncBytes: 100000, state: 'idle', receiveOnlyChangedFiles: 0,
+        globalBytes: 100_000, inSyncBytes: 100_000, state: 'idle', receiveOnlyChangedFiles: 0,
       });
       globalStateMock.syncthingDevicesIDCache.set('10.0.0.1:16127', 'HOLDER-DEVICE-ID');
-      syncthingServiceMock.getDbCompletion.resolves({ remoteState: 'valid', completion: 100, globalBytes: 100000 });
+      syncthingServiceMock.getDbCompletion.resolves({ remoteState: 'valid', completion: 100, globalBytes: 100_000 });
 
       const result = await stateMachine.manageFolderSyncState(mockParams);
 
@@ -1029,7 +1029,7 @@ describe('syncthingFolderStateMachine tests', () => {
       fluxCommunicationMock.peerResponsiveness.returns({ responding: 2, total: 2 });
       // the survivor holds a full copy; the proportional bar is what is under test
       syncthingServiceMock.getDbStatus.resolves({
-        globalBytes: 100000, inSyncBytes: 100000, state: 'idle', receiveOnlyChangedFiles: 0,
+        globalBytes: 100_000, inSyncBytes: 100_000, state: 'idle', receiveOnlyChangedFiles: 0,
       });
 
       const result = await stateMachine.manageFolderSyncState(mockParams);
@@ -1885,7 +1885,7 @@ describe('syncthingFolderStateMachine tests', () => {
       // housekeeping (.stignore, backup/) on disk, yet the index claims bytes -
       // sendreceive would broadcast every "missing" file as a deletion
       fsMock.promises.readdir.resolves([dirent('.stignore'), dirent('backup', false)]);
-      syncthingServiceMock.getDbStatus.resolves({ globalBytes: 500000, inSyncBytes: 500000, state: 'idle' });
+      syncthingServiceMock.getDbStatus.resolves({ globalBytes: 500_000, inSyncBytes: 500_000, state: 'idle' });
 
       const result = await stateMachine.verifySendReceiveFolderSafety('test-app', '/apps/test-app');
 
@@ -1919,7 +1919,7 @@ describe('syncthingFolderStateMachine tests', () => {
       fsMock.promises.readdir.withArgs('/apps/test-app').resolves([
         dirent('.stignore'), dirent('.stfolder', false), dirent('backup', false),
       ]);
-      syncthingServiceMock.getDbStatus.resolves({ globalBytes: 500000, inSyncBytes: 0, state: 'idle' });
+      syncthingServiceMock.getDbStatus.resolves({ globalBytes: 500_000, inSyncBytes: 0, state: 'idle' });
 
       const result = await stateMachine.verifySendReceiveFolderSafety('test-app', '/apps/test-app');
 
@@ -1937,7 +1937,7 @@ describe('syncthingFolderStateMachine tests', () => {
     });
 
     it('is safe when the disk holds real data matching a non-empty index', async () => {
-      syncthingServiceMock.getDbStatus.resolves({ globalBytes: 500000, inSyncBytes: 500000, state: 'idle' });
+      syncthingServiceMock.getDbStatus.resolves({ globalBytes: 500_000, inSyncBytes: 500_000, state: 'idle' });
 
       const result = await stateMachine.verifySendReceiveFolderSafety('test-app', '/apps/test-app');
 
@@ -1962,7 +1962,7 @@ describe('syncthingFolderStateMachine tests', () => {
         dirent('.stignore'), dirent('.stfolder', false), dirent('appdata', false),
       ]);
       syncthingServiceMock.getDbStatus.resolves({
-        globalBytes: 100000, inSyncBytes: 100000, globalFiles: 3, state: 'idle',
+        globalBytes: 100_000, inSyncBytes: 100_000, globalFiles: 3, state: 'idle',
       });
 
       const result = await stateMachine.verifySendReceiveFolderSafety('test-app', '/apps/test-app');
@@ -1994,7 +1994,7 @@ describe('syncthingFolderStateMachine tests', () => {
         dirent('.stignore'), dirent('appdata', false), dirent('config.json'),
       ]);
       syncthingServiceMock.getDbStatus.resolves({
-        globalBytes: 100000, inSyncBytes: 100000, globalFiles: 1, state: 'idle',
+        globalBytes: 100_000, inSyncBytes: 100_000, globalFiles: 1, state: 'idle',
       });
 
       const result = await stateMachine.verifySendReceiveFolderSafety('test-app', '/apps/test-app');
@@ -2014,7 +2014,7 @@ describe('syncthingFolderStateMachine tests', () => {
         dirent('.stignore'), dirent('.stfolder', false), dirent('config.yaml'), dirent('io.runonflux', false),
       ]);
       syncthingServiceMock.getDbStatus.resolves({
-        globalBytes: 100000, inSyncBytes: 0, globalFiles: 3, state: 'idle',
+        globalBytes: 100_000, inSyncBytes: 0, globalFiles: 3, state: 'idle',
       });
 
       const result = await stateMachine.verifySendReceiveFolderSafety('test-app', '/apps/test-app', {
@@ -2031,7 +2031,7 @@ describe('syncthingFolderStateMachine tests', () => {
         dirent('.stignore'), dirent('.stfolder', false), dirent('config.yaml'), dirent('io.runonflux', false),
       ]);
       syncthingServiceMock.getDbStatus.resolves({
-        globalBytes: 100000, inSyncBytes: 0, globalFiles: 3, state: 'idle',
+        globalBytes: 100_000, inSyncBytes: 0, globalFiles: 3, state: 'idle',
       });
 
       const result = await stateMachine.verifySendReceiveFolderSafety('test-app', '/apps/test-app');
@@ -2145,7 +2145,7 @@ describe('syncthingFolderStateMachine tests', () => {
       volumeServiceMock.isPathMounted.resolves(true);
       volumeServiceMock.ensureAppVolumeMounted.resolves({ mounted: true, alreadyMounted: false });
       fsMock.promises.readdir.resolves([dirent('.stignore')]);
-      syncthingServiceMock.getDbStatus.resolves({ globalBytes: 500000, inSyncBytes: 500000, state: 'idle' });
+      syncthingServiceMock.getDbStatus.resolves({ globalBytes: 500_000, inSyncBytes: 500_000, state: 'idle' });
 
       const result = await stateMachine.manageFolderSyncState(mockParams);
 

@@ -43,14 +43,14 @@ function legacyCompose(entries) {
     cpu: entry.cpu,
     ram: entry.ram,
     hdd: entry.hdd,
-    ports: entry.ports || [31443 + index],
+    ports: entry.ports || [31_443 + index],
     containerPorts: [8080 + index],
   }));
 }
 
 /** A real FluxAppSpecV8 — the class checkLegacyFreeUpdate is handed. */
 async function legacySpec({
-  name = 'TestApp', instances = 5, staticip = false, nodes = [], expire = 44000, compose,
+  name = 'TestApp', instances = 5, staticip = false, nodes = [], expire = 44_000, compose,
 }) {
   return v8Spec({
     name, instances, staticip, nodes, expire, compose: legacyCompose(compose),
@@ -88,7 +88,7 @@ function buildAppSpecHelpers(cutover) {
 describe('appSpecHelpers tests', () => {
   before(async function loadLibrary() {
     // The first fromSubmission compiles the ajv schemas.
-    this.timeout(30000);
+    this.timeout(30_000);
     flux = await loadSpecLibrary();
   });
 
@@ -126,12 +126,12 @@ describe('appSpecHelpers tests', () => {
     }];
 
     it('is not free when an update takes an enterprise port it did not have', async () => {
-      const daemonHeight = 100000;
+      const daemonHeight = 100_000;
       const spec = await legacySpec({ compose: withPorts([443]) });
-      const prev = await legacySpec({ compose: withPorts([31443]) });
+      const prev = await legacySpec({ compose: withPorts([31_443]) });
 
       sinon.stub(appsRepository, 'getGlobalAppInfo')
-        .resolves(await registered(prev, daemonHeight + 44000 - spec.expire));
+        .resolves(await registered(prev, daemonHeight + 44_000 - spec.expire));
       sinon.stub(appsRepository, 'listAppMessagesByName').resolves([]);
 
       expect(await legacyRegime.checkLegacyFreeUpdate(spec, daemonHeight)).to.equal(false);
@@ -140,24 +140,24 @@ describe('appSpecHelpers tests', () => {
     it('is still free when the enterprise port count does not change', async () => {
       // The companion. A check that called any port change growth, or that
       // counted nothing at all, would pass the test above on its own.
-      const daemonHeight = 100000;
+      const daemonHeight = 100_000;
       const spec = await legacySpec({ compose: withPorts([8443]) });
       const prev = await legacySpec({ compose: withPorts([8080]) });
 
       sinon.stub(appsRepository, 'getGlobalAppInfo')
-        .resolves(await registered(prev, daemonHeight + 44000 - spec.expire));
+        .resolves(await registered(prev, daemonHeight + 44_000 - spec.expire));
       sinon.stub(appsRepository, 'listAppMessagesByName').resolves([]);
 
       expect(await legacyRegime.checkLegacyFreeUpdate(spec, daemonHeight)).to.equal(true);
     });
 
     it('should return true for free update with no resource changes', async () => {
-      const daemonHeight = 100000;
+      const daemonHeight = 100_000;
       const spec = await legacySpec({ compose: oneComponent() });
       const prev = await legacySpec({ compose: oneComponent() });
 
       sinon.stub(appsRepository, 'getGlobalAppInfo')
-        .resolves(await registered(prev, daemonHeight + 44000 - spec.expire));
+        .resolves(await registered(prev, daemonHeight + 44_000 - spec.expire));
       sinon.stub(appsRepository, 'listAppMessagesByName').resolves([]);
 
       const result = await legacyRegime.checkLegacyFreeUpdate(spec, daemonHeight);
@@ -171,12 +171,12 @@ describe('appSpecHelpers tests', () => {
     // update paid. So read the argument back and assert the properties the real
     // collaborators read.
     it('hands the decrypt seam a registration answering what the rule reads', async () => {
-      const daemonHeight = 100000;
+      const daemonHeight = 100_000;
       const spec = await legacySpec({ compose: oneComponent() });
       const prev = await legacySpec({ compose: oneComponent() });
 
       sinon.stub(appsRepository, 'getGlobalAppInfo')
-        .resolves(await registered(prev, daemonHeight + 44000 - spec.expire));
+        .resolves(await registered(prev, daemonHeight + 44_000 - spec.expire));
       sinon.stub(appsRepository, 'listAppMessagesByName').resolves([]);
 
       await legacyRegime.checkLegacyFreeUpdate(spec, daemonHeight);
@@ -197,14 +197,14 @@ describe('appSpecHelpers tests', () => {
     // the pre-PON 120-second block time; these pin the durations so the counts
     // cannot silently drift again.
     describe('rate-limit windows are the durations they claim', () => {
-      const daemonHeight = 3000000;
+      const daemonHeight = 3_000_000;
       const BLOCKS_PER_HOUR = 3600 / 30;
 
       async function setup(updates) {
         const spec = await legacySpec({ name: 'RateApp', compose: oneComponent() });
         const prev = await legacySpec({ name: 'RateApp', compose: oneComponent() });
         sinon.stub(appsRepository, 'getGlobalAppInfo')
-          .resolves(await registered(prev, daemonHeight + 44000 - spec.expire));
+          .resolves(await registered(prev, daemonHeight + 44_000 - spec.expire));
         sinon.stub(appsRepository, 'listAppMessagesByName').resolves(updates);
         return spec;
       }
@@ -252,7 +252,7 @@ describe('appSpecHelpers tests', () => {
     });
 
     it('should allow free update when components are reordered', async () => {
-      const daemonHeight = 100000;
+      const daemonHeight = 100_000;
       const spec = await legacySpec({
         compose: [
           { name: 'B', cpu: 2, ram: 4000, hdd: 100 },
@@ -267,7 +267,7 @@ describe('appSpecHelpers tests', () => {
       });
 
       sinon.stub(appsRepository, 'getGlobalAppInfo')
-        .resolves(await registered(prev, daemonHeight + 44000 - spec.expire));
+        .resolves(await registered(prev, daemonHeight + 44_000 - spec.expire));
       sinon.stub(appsRepository, 'listAppMessagesByName').resolves([]);
 
       const result = await legacyRegime.checkLegacyFreeUpdate(spec, daemonHeight);
@@ -279,12 +279,12 @@ describe('appSpecHelpers tests', () => {
     // is false. Registered further back, the extension bar rejects them first
     // and the assertion passes without the growth check ever running.
     it('should return false when CPU increased', async () => {
-      const daemonHeight = 100000;
+      const daemonHeight = 100_000;
       const spec = await legacySpec({ compose: oneComponent(2, 2000, 50) });
       const prev = await legacySpec({ compose: oneComponent(1, 2000, 50) });
 
       sinon.stub(appsRepository, 'getGlobalAppInfo')
-        .resolves(await registered(prev, daemonHeight + 44000 - spec.expire));
+        .resolves(await registered(prev, daemonHeight + 44_000 - spec.expire));
       sinon.stub(appsRepository, 'listAppMessagesByName').resolves([]);
 
       const result = await legacyRegime.checkLegacyFreeUpdate(spec, daemonHeight);
@@ -292,12 +292,12 @@ describe('appSpecHelpers tests', () => {
     });
 
     it('should return false when RAM increased', async () => {
-      const daemonHeight = 100000;
+      const daemonHeight = 100_000;
       const spec = await legacySpec({ compose: oneComponent(1, 4000, 50) });
       const prev = await legacySpec({ compose: oneComponent(1, 2000, 50) });
 
       sinon.stub(appsRepository, 'getGlobalAppInfo')
-        .resolves(await registered(prev, daemonHeight + 44000 - spec.expire));
+        .resolves(await registered(prev, daemonHeight + 44_000 - spec.expire));
       sinon.stub(appsRepository, 'listAppMessagesByName').resolves([]);
 
       const result = await legacyRegime.checkLegacyFreeUpdate(spec, daemonHeight);
@@ -305,12 +305,12 @@ describe('appSpecHelpers tests', () => {
     });
 
     it('should return false when HDD increased', async () => {
-      const daemonHeight = 100000;
+      const daemonHeight = 100_000;
       const spec = await legacySpec({ compose: oneComponent(1, 2000, 100) });
       const prev = await legacySpec({ compose: oneComponent(1, 2000, 50) });
 
       sinon.stub(appsRepository, 'getGlobalAppInfo')
-        .resolves(await registered(prev, daemonHeight + 44000 - spec.expire));
+        .resolves(await registered(prev, daemonHeight + 44_000 - spec.expire));
       sinon.stub(appsRepository, 'listAppMessagesByName').resolves([]);
 
       const result = await legacyRegime.checkLegacyFreeUpdate(spec, daemonHeight);
@@ -318,12 +318,12 @@ describe('appSpecHelpers tests', () => {
     });
 
     it('should return false when instances changed', async () => {
-      const daemonHeight = 100000;
+      const daemonHeight = 100_000;
       const spec = await legacySpec({ instances: 10, compose: oneComponent() });
       const prev = await legacySpec({ instances: 5, compose: oneComponent() });
 
       sinon.stub(appsRepository, 'getGlobalAppInfo')
-        .resolves(await registered(prev, daemonHeight + 44000 - spec.expire));
+        .resolves(await registered(prev, daemonHeight + 44_000 - spec.expire));
       sinon.stub(appsRepository, 'listAppMessagesByName').resolves([]);
 
       const result = await legacyRegime.checkLegacyFreeUpdate(spec, daemonHeight);
@@ -331,12 +331,12 @@ describe('appSpecHelpers tests', () => {
     });
 
     it('should return false when staticip changed', async () => {
-      const daemonHeight = 100000;
+      const daemonHeight = 100_000;
       const spec = await legacySpec({ staticip: true, compose: oneComponent() });
       const prev = await legacySpec({ staticip: false, compose: oneComponent() });
 
       sinon.stub(appsRepository, 'getGlobalAppInfo')
-        .resolves(await registered(prev, daemonHeight + 44000 - spec.expire));
+        .resolves(await registered(prev, daemonHeight + 44_000 - spec.expire));
       sinon.stub(appsRepository, 'listAppMessagesByName').resolves([]);
 
       const result = await legacyRegime.checkLegacyFreeUpdate(spec, daemonHeight);
@@ -349,7 +349,7 @@ describe('appSpecHelpers tests', () => {
     // v7 and v8 REQUIRE the field, so an "undefined staticip" row at those
     // versions is not something the library will build.
     it('should treat undefined staticip as false (legacy DB records)', async () => {
-      const daemonHeight = 100000;
+      const daemonHeight = 100_000;
       const preStaticIpRow = await v1Spec();
       expect(preStaticIpRow.placement.staticIp, 'a record predating the field').to.equal(false);
 
@@ -358,7 +358,7 @@ describe('appSpecHelpers tests', () => {
 
       const prev = await legacySpec({ staticip: false, compose: oneComponent() });
       sinon.stub(appsRepository, 'getGlobalAppInfo')
-        .resolves(await registered(prev, daemonHeight + 44000 - spec.expire));
+        .resolves(await registered(prev, daemonHeight + 44_000 - spec.expire));
       sinon.stub(appsRepository, 'listAppMessagesByName').resolves([]);
 
       const result = await legacyRegime.checkLegacyFreeUpdate(spec, daemonHeight);
@@ -366,7 +366,7 @@ describe('appSpecHelpers tests', () => {
     });
 
     it('should handle PON fork adjustment for pre-fork apps (free update)', async () => {
-      const daemonHeight = 2256730;
+      const daemonHeight = 2_256_730;
       const spec = await legacySpec({
         name: 'PresearchNode',
         instances: 12,
@@ -376,14 +376,14 @@ describe('appSpecHelpers tests', () => {
       const prev = await legacySpec({
         name: 'PresearchNode',
         instances: 12,
-        expire: 244085,
+        expire: 244_085,
         compose: [{ name: 'node', cpu: 0.3, ram: 300, hdd: 2 }],
       });
-      const row = await registered(prev, 1837757);
+      const row = await registered(prev, 1_837_757);
       // The term was bought when blocks were four times slower, so the library
       // stretches the post-fork remainder — without that the update reads as
       // buying another 10,000 blocks and is charged.
-      expect(row.expiresAtHeight).to.be.greaterThan(1837757 + 244085);
+      expect(row.expiresAtHeight).to.be.greaterThan(1_837_757 + 244_085);
 
       sinon.stub(appsRepository, 'getGlobalAppInfo').resolves(row);
       sinon.stub(appsRepository, 'listAppMessagesByName').resolves([]);
@@ -393,7 +393,7 @@ describe('appSpecHelpers tests', () => {
     });
 
     it('should return false when component count changed', async () => {
-      const daemonHeight = 100000;
+      const daemonHeight = 100_000;
       const spec = await legacySpec({
         compose: [
           { name: 'a', cpu: 1, ram: 2000, hdd: 50 },
@@ -403,7 +403,7 @@ describe('appSpecHelpers tests', () => {
       const prev = await legacySpec({ compose: [{ name: 'a', cpu: 1, ram: 2000, hdd: 50 }] });
 
       sinon.stub(appsRepository, 'getGlobalAppInfo')
-        .resolves(await registered(prev, daemonHeight + 44000 - spec.expire));
+        .resolves(await registered(prev, daemonHeight + 44_000 - spec.expire));
       sinon.stub(appsRepository, 'listAppMessagesByName').resolves([]);
 
       const result = await legacyRegime.checkLegacyFreeUpdate(spec, daemonHeight);
@@ -412,7 +412,7 @@ describe('appSpecHelpers tests', () => {
 
     it('should return false when app does not exist', async () => {
       const spec = await legacySpec({ name: 'NewApp', compose: oneComponent() });
-      const daemonHeight = 100000;
+      const daemonHeight = 100_000;
 
       sinon.stub(appsRepository, 'getGlobalAppInfo').resolves(null);
 
@@ -421,11 +421,11 @@ describe('appSpecHelpers tests', () => {
     });
 
     it('should return false when blocksToExtend > 8', async () => {
-      const daemonHeight = 100000;
-      const spec = await legacySpec({ expire: 50000, compose: oneComponent() });
-      const prev = await legacySpec({ expire: 44003, compose: oneComponent() });
+      const daemonHeight = 100_000;
+      const spec = await legacySpec({ expire: 50_000, compose: oneComponent() });
+      const prev = await legacySpec({ expire: 44_003, compose: oneComponent() });
 
-      sinon.stub(appsRepository, 'getGlobalAppInfo').resolves(await registered(prev, 94003));
+      sinon.stub(appsRepository, 'getGlobalAppInfo').resolves(await registered(prev, 94_003));
       sinon.stub(appsRepository, 'listAppMessagesByName').resolves([]);
 
       const result = await legacyRegime.checkLegacyFreeUpdate(spec, daemonHeight);
@@ -433,17 +433,17 @@ describe('appSpecHelpers tests', () => {
     });
 
     it('should return false when too many updates in recent period', async () => {
-      const daemonHeight = 100000;
+      const daemonHeight = 100_000;
       const spec = await legacySpec({ compose: oneComponent() });
       const prev = await legacySpec({ compose: oneComponent() });
 
       const recentMessages = Array(11).fill({
         type: 'fluxappupdate',
-        height: 99000,
+        height: 99_000,
       });
 
       sinon.stub(appsRepository, 'getGlobalAppInfo')
-        .resolves(await registered(prev, daemonHeight + 44000 - spec.expire));
+        .resolves(await registered(prev, daemonHeight + 44_000 - spec.expire));
       sinon.stub(appsRepository, 'listAppMessagesByName').resolves(recentMessages);
 
       const result = await legacyRegime.checkLegacyFreeUpdate(spec, daemonHeight);
@@ -451,12 +451,12 @@ describe('appSpecHelpers tests', () => {
     });
 
     it('should allow resources to decrease for free update', async () => {
-      const daemonHeight = 100000;
+      const daemonHeight = 100_000;
       const spec = await legacySpec({ compose: oneComponent(0.5, 1000, 25) });
       const prev = await legacySpec({ compose: oneComponent(1, 2000, 50) });
 
       sinon.stub(appsRepository, 'getGlobalAppInfo')
-        .resolves(await registered(prev, daemonHeight + 44000 - spec.expire));
+        .resolves(await registered(prev, daemonHeight + 44_000 - spec.expire));
       sinon.stub(appsRepository, 'listAppMessagesByName').resolves([]);
 
       const result = await legacyRegime.checkLegacyFreeUpdate(spec, daemonHeight);
@@ -468,12 +468,12 @@ describe('appSpecHelpers tests', () => {
     // can never accept that update (UpdatePolicy.assertVersionTransition), so
     // the legacy rule must not offer it for free.
     it('should return false when the registered app is v9', async () => {
-      const daemonHeight = 2700000;
+      const daemonHeight = 2_700_000;
       // Lowercase because the app is registered at v9, whose name pattern is
       // ^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$ — 'TestApp' is not a name a v9
       // registration can ever have had.
       const spec = await legacySpec({
-        name: 'testapp', expire: 88000, instances: 3, compose: oneComponent(),
+        name: 'testapp', expire: 88_000, instances: 3, compose: oneComponent(),
       });
       const prev = await v9Spec({ name: 'testapp', instances: 3 });
       expect(prev.version, 'the registered app really is v9').to.equal(9);
@@ -498,10 +498,10 @@ describe('appSpecHelpers tests', () => {
     it('says so when it is the missing expire, not the version', async () => {
       // The companion. Both gates return false, so each has to name itself or
       // one of them can disappear unnoticed.
-      const daemonHeight = 100000;
+      const daemonHeight = 100_000;
       const spec = await legacySpec({ compose: oneComponent() });
       const prev = await legacySpec({ compose: oneComponent() });
-      const registration = await registered(prev, daemonHeight + 44000 - spec.expire);
+      const registration = await registered(prev, daemonHeight + 44_000 - spec.expire);
       // A legacy registration whose stored spec has no expire at all.
       sinon.stub(registration.spec, 'expire').get(() => 0);
 
@@ -562,9 +562,9 @@ describe('appSpecHelpers tests', () => {
 
     // PriceMessage rates so the engine prices the spec to a non-zero FLUX figure.
     const priceFields = {
-      cpuRate: 150000, memoryRate: 50000, storageRate: 20000,
-      stdPortRate: 0, premPortRate: 2000000, staticIpRate: 2000000,
-      minPrice: 990000, minPriceFluxSats: 1000000,
+      cpuRate: 150_000, memoryRate: 50_000, storageRate: 20_000,
+      stdPortRate: 0, premPortRate: 2_000_000, staticIpRate: 2_000_000,
+      minPrice: 990_000, minPriceFluxSats: 1_000_000,
     };
 
     beforeEach(() => {
@@ -576,7 +576,7 @@ describe('appSpecHelpers tests', () => {
       sinon.stub(appsRepository, 'getGlobalAppInfo').resolves(null);
       sinon.stub(priceOracleState, 'getPriceMessageHistory').returns({ resolveAt: () => priceFields });
       // fluxUsdPriceE4 = 10000 -> $1.00 / FLUX, so usd/flux isolates the markup factor.
-      sinon.stub(priceOracleState, 'getRateMessageHistory').returns({ resolveAt: () => ({ fluxUsdPriceE4: 10000 }) });
+      sinon.stub(priceOracleState, 'getRateMessageHistory').returns({ resolveAt: () => ({ fluxUsdPriceE4: 10_000 }) });
       sinon.stub(priceOracleState, 'getPriceModifierHistory').returns({ resolveAt: () => ({ fiatMarkupBp: 500 }) });
       sinon.stub(priceOracleState, 'getMarketplacePricingHistory').returns(null);
     });
@@ -617,11 +617,11 @@ describe('appSpecHelpers tests', () => {
     const priceOracleState = require('../../ZelBack/src/services/pricing/priceOracleState');
 
     const priceFields = {
-      cpuRate: 150000, memoryRate: 50000, storageRate: 20000,
-      stdPortRate: 0, premPortRate: 2000000, staticIpRate: 2000000,
-      minPrice: 990000, minPriceFluxSats: 1000000,
+      cpuRate: 150_000, memoryRate: 50_000, storageRate: 20_000,
+      stdPortRate: 0, premPortRate: 2_000_000, staticIpRate: 2_000_000,
+      minPrice: 990_000, minPriceFluxSats: 1_000_000,
       // A non-zero fee on a feature, so "feature added" is observable in the price.
-      meshFee: 500000,
+      meshFee: 500_000,
     };
 
     /** A real FluxAppSpecV9 for the app under quote. */
@@ -651,7 +651,7 @@ describe('appSpecHelpers tests', () => {
       sinon.stub(appsRepository, 'getGlobalAppInfo').resolves(existing);
       sinon.stub(appsRepository, 'listAppMessagesByName').resolves(messages);
       sinon.stub(priceOracleState, 'getPriceMessageHistory').returns({ resolveAt: () => priceFields });
-      sinon.stub(priceOracleState, 'getRateMessageHistory').returns({ resolveAt: () => ({ fluxUsdPriceE4: 10000 }) });
+      sinon.stub(priceOracleState, 'getRateMessageHistory').returns({ resolveAt: () => ({ fluxUsdPriceE4: 10_000 }) });
       sinon.stub(priceOracleState, 'getPriceModifierHistory').returns({ resolveAt: () => ({}) });
       sinon.stub(priceOracleState, 'getMarketplacePricingHistory').returns(null);
       return { helpers, existing, resolveInstantiatedSpec };
@@ -790,7 +790,7 @@ describe('appSpecHelpers tests', () => {
     // routed to the legacy regime — by its own pricingModel, which a real
     // FluxAppSpecV8 reports as chainFloor.
     it('v1-v8: the legacy free-update rule still decides the quote', async () => {
-      const daemonHeight = 100000;
+      const daemonHeight = 100_000;
       const legacyApp = await legacySpec({
         name: 'legacyapp',
         compose: [{ name: 'main', cpu: 1, ram: 2000, hdd: 50 }],
@@ -807,7 +807,7 @@ describe('appSpecHelpers tests', () => {
       });
       sinon.stub(daemonServiceMiscRpcs, 'isDaemonSynced').returns({ data: { synced: true, height: daemonHeight } });
       sinon.stub(appsRepository, 'getGlobalAppInfo')
-        .resolves(await registered(prev, daemonHeight + 44000 - legacyApp.expire));
+        .resolves(await registered(prev, daemonHeight + 44_000 - legacyApp.expire));
       sinon.stub(appsRepository, 'listAppMessagesByName').resolves([]);
 
       // The subscription is unextended and nothing grew, so the legacy rule

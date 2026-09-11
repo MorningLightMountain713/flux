@@ -101,7 +101,7 @@ describe('appStartupManager tests', () => {
       './appUninstaller': appUninstallerStub,
       '../utils/globalState': globalStateStub,
       '../appQuery/appQueryService': appQueryServiceStub,
-      '../utils/appConstants': { localAppsInformation: 'localAppsInformation', NODE_DOWN_GRACE_MS: 420000, RUNNING_EXPIRY_MS: 7500000 },
+      '../utils/appConstants': { localAppsInformation: 'localAppsInformation', NODE_DOWN_GRACE_MS: 420_000, RUNNING_EXPIRY_MS: 7_500_000 },
       '../utils/appUtilities': appUtilities,
       '../appMessaging/nodeDownStore': nodeDownStoreStub,
       '../nodeConfirmationService': {
@@ -150,7 +150,7 @@ describe('appStartupManager tests', () => {
         './appUninstaller': appUninstallerStub,
         '../utils/globalState': globalStateStub,
         '../appQuery/appQueryService': appQueryServiceStub,
-        '../utils/appConstants': { localAppsInformation: 'localAppsInformation', NODE_DOWN_GRACE_MS: 420000, RUNNING_EXPIRY_MS: 7500000 },
+        '../utils/appConstants': { localAppsInformation: 'localAppsInformation', NODE_DOWN_GRACE_MS: 420_000, RUNNING_EXPIRY_MS: 7_500_000 },
         '../utils/appUtilities': appUtilities,
         '../nodeConfirmationService': {
           isConfirmed: sinon.stub().returns(true),
@@ -382,7 +382,7 @@ describe('appStartupManager tests', () => {
 
     it('should remove all apps when clean shutdown and downtime > the node-down grace', async () => {
       const bootContext = {
-        machineRebooted: true, downtimeMs: 500000, cleanShutdown: true,
+        machineRebooted: true, downtimeMs: 500_000, cleanShutdown: true,
       };
       appQueryServiceStub.installedApps.resolves({
         status: 'success',
@@ -398,7 +398,7 @@ describe('appStartupManager tests', () => {
 
     it('an unclean boot past the node-down grace removes every app before the sync: the network has moved on', async () => {
       const bootContext = {
-        machineRebooted: true, downtimeMs: 500000, cleanShutdown: false,
+        machineRebooted: true, downtimeMs: 500_000, cleanShutdown: false,
       };
       appQueryServiceStub.installedApps.resolves({
         status: 'success',
@@ -412,7 +412,7 @@ describe('appStartupManager tests', () => {
     });
 
     it('sweeps the off-list register once the database is ready, and starts the apps even when the sweep fails', async () => {
-      const bootContext = { machineRebooted: true, downtimeMs: 60000, cleanShutdown: true };
+      const bootContext = { machineRebooted: true, downtimeMs: 60_000, cleanShutdown: true };
       appsRepositoryStub.sweepOffListRows.rejects(new Error('distinct failed'));
       await appStartupManager.manageAppsOnBoot(bootContext);
       expect(globalStateStub.waitForDbReady.calledOnce).to.be.true;
@@ -424,7 +424,7 @@ describe('appStartupManager tests', () => {
 
     it('should wait for dbReady then start apps when machine rebooted with valid locations', async () => {
       const bootContext = {
-        machineRebooted: true, downtimeMs: 60000, cleanShutdown: false,
+        machineRebooted: true, downtimeMs: 60_000, cleanShutdown: false,
       };
       // No stopped containers = reconcileAppsOnBoot does nothing
       dockerServiceStub.dockerListContainers.resolves([]);
@@ -444,7 +444,7 @@ describe('appStartupManager tests', () => {
 
     it('should not remove apps on clean shutdown with short downtime', async () => {
       const bootContext = {
-        machineRebooted: true, downtimeMs: 120000, cleanShutdown: true,
+        machineRebooted: true, downtimeMs: 120_000, cleanShutdown: true,
       };
       dockerServiceStub.dockerListContainers.resolves([]);
       dbHelperStub.findInDatabase.resolves([]);
@@ -481,7 +481,7 @@ describe('appStartupManager tests', () => {
       globalStateStub.bootContainerStateSettled = false;
       appQueryServiceStub.installedApps.resolves({ status: 'success', data: [] });
       await appStartupManager.manageAppsOnBoot({
-        machineRebooted: true, downtimeMs: 8000000, cleanShutdown: false,
+        machineRebooted: true, downtimeMs: 8_000_000, cleanShutdown: false,
       });
       expect(globalStateStub.bootContainerStateSettled).to.be.true;
     });

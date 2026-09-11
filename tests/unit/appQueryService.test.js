@@ -37,7 +37,7 @@ describe('appQueryService tests', () => {
 
   before(async function loadLibrary() {
     // The first fromSubmission compiles the ajv schemas.
-    this.timeout(30000);
+    this.timeout(30_000);
     flux = await loadSpecLibrary();
   });
 
@@ -392,8 +392,8 @@ describe('appQueryService tests', () => {
     Image: 'someregistry.example/private:1.2.3',
     ImageID: 'sha256:0123456789abcdef',
     Command: '/entrypoint.sh --serve',
-    Created: 1700000000,
-    Ports: [{ PrivatePort: 8080, PublicPort: 31000, Type: 'tcp' }],
+    Created: 1_700_000_000,
+    Ports: [{ PrivatePort: 8080, PublicPort: 31_000, Type: 'tcp' }],
     Labels: { 'org.opencontainers.image.revision': 'a1b2c3d4' },
     State: 'running',
     Status: 'Up 2 hours',

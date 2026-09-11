@@ -9,6 +9,7 @@ const verificationHelper = require('./verificationHelper');
 
 const log = require('../lib/log');
 const { Privilege, authOf } = require('./utils/privileges');
+const { MAX_PORT } = require('./utils/socketAddressUtils');
 
 let client = null;
 
@@ -351,7 +352,7 @@ async function mapPortApi(req, res) {
         throw new Error('No Port address specified.');
       }
       if (!serviceHelper.validPort(port)) {
-        throw new Error('Port must be a whole number between 1 and 65535');
+        throw new Error(`Port must be a whole number between 1 and ${MAX_PORT}`);
       }
       port = serviceHelper.ensureNumber(port);
       await getClient().createMapping({
@@ -401,7 +402,7 @@ async function removeMapPortApi(req, res) {
         throw new Error('No Port address specified.');
       }
       if (!serviceHelper.validPort(port)) {
-        throw new Error('Port must be a whole number between 1 and 65535');
+        throw new Error(`Port must be a whole number between 1 and ${MAX_PORT}`);
       }
       port = serviceHelper.ensureNumber(port);
       await getClient().removeMapping({

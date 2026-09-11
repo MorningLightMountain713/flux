@@ -2295,7 +2295,7 @@ async function coordinateActiveStandbyApps() {
 
     const runningAppsNames = runningContainers.map((app) => app.Names[0].slice(5));
     const agent = new https.Agent({ rejectUnauthorized: false });
-    const axiosOptions = { timeout: 10000, httpsAgent: agent };
+    const axiosOptions = { timeout: 10_000, httpsAgent: agent };
 
     const validIdentifiers = new Set();
     for (const deployment of deployments) {
@@ -2797,7 +2797,7 @@ async function getPeerAppsInstallingErrorMessages() {
       }
       log.info(`getPeerAppsInstallingErrorMessages - FluxOS uptime is ok on ${client.ip}:${client.port}`);
       axiosConfig = {
-        timeout: 30000,
+        timeout: 30_000,
       };
       log.info(`getPeerAppsInstallingErrorMessages - Getting app installing errors from ${client.ip}:${client.port}`);
       const url = `http://${client.ip}:${client.port}/apps/installingerrorslocations`;

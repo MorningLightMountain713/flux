@@ -62,7 +62,7 @@ describe('volumeExecutor tests', () => {
         prefetchWindowMs: 6 * 60 * 60 * 1000,
         maxConcurrentPerApp: 1,
         maxConcurrentPerNode: 2,
-        stallTimeoutMs: 900000,
+        stallTimeoutMs: 900_000,
         minUploadBitsPerSecond: 64 * 1000,
         memoryBytes: 512 * 1024 * 1024,
         pidsLimit: 256,
@@ -180,7 +180,7 @@ describe('volumeExecutor tests', () => {
       // does is decided by the fetch rather than by a race it did not mean to
       // run. Short waits inside the fetch - the gap between registry attempts -
       // are instant, because waiting for them is not what any test is about.
-      delay: sinon.stub().callsFake((ms) => (ms >= 10000 ? new Promise(() => {}) : Promise.resolve())),
+      delay: sinon.stub().callsFake((ms) => (ms >= 10_000 ? new Promise(() => {}) : Promise.resolve())),
     };
 
     networkStateStub = {
@@ -667,7 +667,7 @@ describe('volumeExecutor tests', () => {
       try {
         const vol = await openSession();
         const running = expect(volumeExecutor.run(vol, ['true'])).to.be.rejected;
-        await clock.tickAsync(90000);
+        await clock.tickAsync(90_000);
         await running;
       } finally {
         clock.restore();
@@ -1209,7 +1209,7 @@ describe('volumeExecutor tests', () => {
         expect(archive.pipe.called, 'the export never started').to.equal(true);
 
         // The caller takes nothing: no data ever flows.
-        await clock.tickAsync(PEER_SERVE_STALL_WINDOWS * 30000);
+        await clock.tickAsync(PEER_SERVE_STALL_WINDOWS * 30_000);
         await call;
 
         expect(archive.destroy.called, 'the export was left running').to.equal(true);
@@ -1954,9 +1954,9 @@ describe('volumeExecutor tests', () => {
     const fills = (...usedBlocks) => {
       const stub = sinon.stub();
       usedBlocks.forEach((used, i) => {
-        stub.onCall(i).resolves({ bsize: 4096, blocks: 100000, bfree: 100000 - used });
+        stub.onCall(i).resolves({ bsize: 4096, blocks: 100_000, bfree: 100_000 - used });
       });
-      stub.resolves({ bsize: 4096, blocks: 100000, bfree: 100000 - usedBlocks[usedBlocks.length - 1] });
+      stub.resolves({ bsize: 4096, blocks: 100_000, bfree: 100_000 - usedBlocks[usedBlocks.length - 1] });
       return stub;
     };
 
@@ -2027,7 +2027,7 @@ describe('volumeExecutor tests', () => {
       // 9000 bytes occupy three 4096-byte blocks, and occupied is what every
       // other figure in this progress bar is counted in - the running one is
       // the volume's own used-bytes through statfs.
-      expect(seen[seen.length - 1], 'the last figure is not the published size').to.equal(12288);
+      expect(seen[seen.length - 1], 'the last figure is not the published size').to.equal(12_288);
     });
 
     it('measures the destination for that final reading, because staging is gone by then', async () => {
@@ -2195,7 +2195,7 @@ describe('volumeExecutor tests', () => {
     });
 
     it('bounds what it keeps, so a runaway command cannot fill memory', async () => {
-      containerOutput = 'x'.repeat(50000);
+      containerOutput = 'x'.repeat(50_000);
       containerStub.wait = sinon.stub().resolves({ StatusCode: 1 });
       const vol = await openSession();
 
@@ -2225,7 +2225,7 @@ describe('volumeExecutor tests', () => {
 
   describe('run - an operation that stops getting anywhere', () => {
     const runsFor = (ms) => stoppableFor(ms);
-    const usedBlocks = (n) => ({ bsize: 4096, blocks: 100000, bfree: 100000 - n });
+    const usedBlocks = (n) => ({ bsize: 4096, blocks: 100_000, bfree: 100_000 - n });
 
     it('stops one that has written nothing for the whole window', async () => {
       // A wall clock cannot tell a wedged container from a large copy - moving
@@ -2494,7 +2494,7 @@ describe('volumeExecutor tests', () => {
       // ten minutes: this sender manages ~200 bit/s, comfortably over.
       configStub.fluxapps.volumeOperations.minUploadBitsPerSecond = 64;
       // The volume never moves: too little has arrived to fill a block.
-      fsStub.statfs = sinon.stub().resolves({ bsize: 4096, blocks: 100000, bfree: 99500 });
+      fsStub.statfs = sinon.stub().resolves({ bsize: 4096, blocks: 100_000, bfree: 99_500 });
 
       const trickle = new Readable({ read() {} });
       const sendingSlowly = setInterval(() => trickle.push('.'), 40);
@@ -2520,7 +2520,7 @@ describe('volumeExecutor tests', () => {
       configStub.fluxapps.volumeOperations.minUploadBitsPerSecond = 1000;
       // The volume never moves either, so the bytes are the only thing that
       // could have spoken for this transfer.
-      fsStub.statfs = sinon.stub().resolves({ bsize: 4096, blocks: 100000, bfree: 99500 });
+      fsStub.statfs = sinon.stub().resolves({ bsize: 4096, blocks: 100_000, bfree: 99_500 });
 
       const trickle = new Readable({ read() {} });
       const sendingSlowly = setInterval(() => trickle.push('.'), 40);

@@ -259,7 +259,7 @@ function holderStateAt(nowMs, safeUntil, demotionAt) {
 // reconciler paths use docker's DEFAULT timeout, which measured over a minute
 // on the fleet - a demotion routed through one of those breaks the inequality
 // outright, which is what makes this value load-bearing.
-const HARD_STOP_MS = 2_000;
+const HARD_STOP_MS = 2000;
 
 /**
  * The one inequality the plane rests on, checked rather than commented.

@@ -34,7 +34,7 @@ describe('limitCounterRecords tests', () => {
           : () => ({ db: () => ({ collection: stubs.collection }) }),
       },
       './limitCounterStore': {
-        limitsFor: () => ({ windowMs: opts.windowMs ?? 86400000 }),
+        limitsFor: () => ({ windowMs: opts.windowMs ?? 86_400_000 }),
         adoptWindowUsage: stubs.adoptWindowUsage,
       },
       '../../lib/log': stubs.log,
@@ -45,7 +45,7 @@ describe('limitCounterRecords tests', () => {
   afterEach(() => sinon.restore());
 
   const record = (over = {}) => ({
-    purpose: 'playground', key: KEY, sessionId: 'op_1', startedAt: Date.now(), endsAt: Date.now() + 60000, ...over,
+    purpose: 'playground', key: KEY, sessionId: 'op_1', startedAt: Date.now(), endsAt: Date.now() + 60_000, ...over,
   });
 
   describe('store', () => {

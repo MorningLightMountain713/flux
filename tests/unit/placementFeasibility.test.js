@@ -711,7 +711,7 @@ describe('placementFeasibility tests', () => {
       // already infeasible must still be renewable and cancellable
       useTable();
       deterministicFluxListStub.resolves([...fiNodes]);
-      const previous = { ...syncedBahrainSpec, expire: 22000 };
+      const previous = { ...syncedBahrainSpec, expire: 22_000 };
       const cancellation = { ...syncedBahrainSpec, expire: 1 };
       const result = await placementFeasibility.checkPlacementFeasibility(cancellation, 'testCaller', previous);
       expect(result).to.equal(null);

@@ -147,7 +147,7 @@ describe('ipLocationStore tests', () => {
 
   describe('truncation floor', () => {
     it('defaults to the production floor of 1,500,000 rows', () => {
-      expect(store.MIN_ROW_COUNT).to.equal(1500000);
+      expect(store.MIN_ROW_COUNT).to.equal(1_500_000);
     });
 
     it('rejects a short baseline at the production floor without touching the database', async () => {
@@ -185,7 +185,7 @@ describe('ipLocationStore tests', () => {
     });
 
     it('gives the thread back while it walks the rows', async function () {
-      this.timeout(30000);
+      this.timeout(30_000);
       // A real baseline is two million rows and decoding them is pure CPU: for
       // as long as it runs the process answers no request, reads no socket and
       // fires no timer.
@@ -196,7 +196,7 @@ describe('ipLocationStore tests', () => {
       // the walk actually left the thread in between - awaiting an
       // already-settled promise drains microtasks and never gets there.
       const rows = [];
-      for (let i = 0; i < 25000; i += 1) rows.push([i * 4, i * 4 + 2, 0, 0, null]);
+      for (let i = 0; i < 25_000; i += 1) rows.push([i * 4, i * 4 + 2, 0, 0, null]);
       const bytes = encodeArtifact(fixtureHeader(), rows);
 
       const order = [];
@@ -209,7 +209,7 @@ describe('ipLocationStore tests', () => {
 
       const result = await store.setArtifact(bytes);
 
-      expect(result.rowCount).to.equal(25000);
+      expect(result.rowCount).to.equal(25_000);
       expect(order.filter((entry) => entry.startsWith('batch')), 'fixture: needs more than one batch').to.have.length(3);
       // Present AND before the next batch: absent reads as "never got the
       // thread", which is the failure, not a pass.
@@ -253,7 +253,7 @@ describe('ipLocationStore tests', () => {
 
     it('batches at ten thousand rows and keeps four batches in flight', async () => {
       const rows = [];
-      for (let i = 0; i < 45000; i += 1) rows.push([i * 8, i * 8 + 3, null, null, null]);
+      for (let i = 0; i < 45_000; i += 1) rows.push([i * 8, i * 8 + 3, null, null, null]);
       const held = [];
       let capReached;
       const capped = new Promise((resolve) => { capReached = resolve; });
@@ -279,7 +279,7 @@ describe('ipLocationStore tests', () => {
 
       expect(dbHelperStub.insertManyToDatabase.callCount).to.equal(5);
       const sizes = dbHelperStub.insertManyToDatabase.getCalls().map((call) => call.args[2].length);
-      expect(sizes).to.eql([10000, 10000, 10000, 10000, 5000]);
+      expect(sizes).to.eql([10_000, 10_000, 10_000, 10_000, 5000]);
       sinon.assert.calledOnce(database.renameCollection);
     });
 
@@ -429,14 +429,14 @@ describe('ipLocationStore tests', () => {
     // end, so an out-of-order row list can only reach the reader as a range that
     // walks off the end of the address space.
     it('rejects rows that walk past the IPv4 address space', async () => {
-      const rows = [[4294967290, 4294967300, null, null, null]];
+      const rows = [[4_294_967_290, 4_294_967_300, null, null, null]];
       await expect(store.setArtifact(encodeArtifact(fixtureHeader(), rows)))
         .to.be.rejectedWith('row 0 runs past the IPv4 address space');
       expect(dbHelperStub.databaseConnection.called).to.equal(false);
     });
 
     it('rejects a gap wider than the address space', async () => {
-      const rows = [[0, 10, null, null, null], [5000000000, 5000000001, null, null, null]];
+      const rows = [[0, 10, null, null, null], [5_000_000_000, 5_000_000_001, null, null, null]];
       await expect(store.setArtifact(encodeArtifact(fixtureHeader(), rows)))
         .to.be.rejectedWith('varint wider than 32 bits');
       expect(dbHelperStub.databaseConnection.called).to.equal(false);
@@ -643,7 +643,7 @@ describe('ipLocationStore tests', () => {
     const marker = {
       _id: INGEST_MARKER_ID,
       generated: '2026-07-31T00:00:00Z',
-      rowCount: 2126447,
+      rowCount: 2_126_447,
       continents: { BH: 'AS', BG: 'EU', FI: 'EU' },
       regionNames: { 'BH|Manama': 'BH-13' },
       ingestedAt: 1,
@@ -653,7 +653,7 @@ describe('ipLocationStore tests', () => {
       dbHelperStub.findOneInDatabase.resolves(marker);
 
       expect(await store.adoptPersistedStatus()).to.equal(true);
-      expect(store.status()).to.eql({ ready: true, generated: '2026-07-31T00:00:00Z', rowCount: 2126447 });
+      expect(store.status()).to.eql({ ready: true, generated: '2026-07-31T00:00:00Z', rowCount: 2_126_447 });
       expect(store.continentForCountry('BH')).to.equal('AS');
       expect(store.continentForCountry('CZ')).to.equal(null);
       // the vocabulary rides on the marker for the same reason the continents

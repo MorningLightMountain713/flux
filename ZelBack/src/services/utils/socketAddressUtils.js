@@ -6,7 +6,13 @@
 // normalizeSocketAddress becomes a no-op and socketAddressesMatch
 // becomes ===. At that point simplify or remove this module.
 
-const DEFAULT_API_PORT = 16127;
+const DEFAULT_API_PORT = 16_127;
+
+// The highest port number there is - a TCP port is a uint16. Named because it
+// was written out at ten call sites, each of them a `1 <= p <= 65535` range
+// check, and a bare 65535 reads as a magic number rather than as the ceiling
+// the protocol sets.
+const MAX_PORT = 65_535;
 
 function normalizeSocketAddress(address) {
   if (!address) return null;
@@ -104,6 +110,7 @@ function nodeApiUrl(address) {
 
 module.exports = {
   DEFAULT_API_PORT,
+  MAX_PORT,
   NODE_API_DOMAIN,
   nodeApiUrl,
   normalizeSocketAddress,

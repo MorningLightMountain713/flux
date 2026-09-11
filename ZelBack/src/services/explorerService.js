@@ -620,9 +620,9 @@ async function processOneBlock(blockHeight, isInsightExplorer, loopOptions) {
     if (blockDataVerbose.height % 50 === 0) {
       log.info(`Processing Explorer Block Height: ${blockDataVerbose.height}`);
     }
-    if (isInsightExplorer && blockDataVerbose.height > 699420 && blockDataVerbose.height < 862002) {
+    if (isInsightExplorer && blockDataVerbose.height > 699_420 && blockDataVerbose.height < 862_002) {
       // speed up sync as there were no app messages between these two blocks
-      return 862002;
+      return 862_002;
     }
     await processInsight(blockDataVerbose, database);
 
@@ -1191,7 +1191,7 @@ async function checkAndHandleReorgs(database, scannedBlockHeight) {
   log.info(`Explorer - Checking for chain reorganisations - lastchainTipCheck: ${lastchainTipCheck} scannedBlockHeight: ${scannedBlockHeight}`);
   const daemonVersion = await getDaemonVersion();
   let daemonGetChainTips;
-  if (daemonVersion > 7020050) {
+  if (daemonVersion > 7_020_050) {
     daemonGetChainTips = await daemonServiceBlockchainRpcs.getChainTips({ params: { minheight: lastchainTipCheck + 1 } });
   } else {
     daemonGetChainTips = await daemonServiceBlockchainRpcs.getChainTips();

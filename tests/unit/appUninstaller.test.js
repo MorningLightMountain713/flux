@@ -43,8 +43,8 @@ describe('appUninstaller tests', () => {
         },
       },
       fluxapps: {
-        newMinBlocksAllowance: 22000,
-        newMinBlocksAllowanceBlock: 1000000,
+        newMinBlocksAllowance: 22_000,
+        newMinBlocksAllowanceBlock: 1_000_000,
         minBlocksAllowance: 5000,
         manageCollectorLifecycle: false,
       },

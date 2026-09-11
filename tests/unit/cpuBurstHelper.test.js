@@ -66,21 +66,21 @@ describe('cpuBurstHelper tests', () => {
 
     it('should calculate correct params for 1 CPU core (uncapped)', () => {
       const params = cpuBurstHelper.calculateBurstParams(1);
-      expect(params.periodUs).to.equal(100000);
-      expect(params.quotaUs).to.equal(100000);
-      expect(params.burstUs).to.equal(100000); // == quota
+      expect(params.periodUs).to.equal(100_000);
+      expect(params.quotaUs).to.equal(100_000);
+      expect(params.burstUs).to.equal(100_000); // == quota
     });
 
     it('should calculate correct params for 2.5 CPU cores (uncapped)', () => {
       const params = cpuBurstHelper.calculateBurstParams(2.5);
-      expect(params.quotaUs).to.equal(250000);
-      expect(params.burstUs).to.equal(250000);
+      expect(params.quotaUs).to.equal(250_000);
+      expect(params.burstUs).to.equal(250_000);
     });
 
     it('should handle fractional CPU values', () => {
       const params = cpuBurstHelper.calculateBurstParams(0.5);
-      expect(params.quotaUs).to.equal(50000);
-      expect(params.burstUs).to.equal(50000);
+      expect(params.quotaUs).to.equal(50_000);
+      expect(params.burstUs).to.equal(50_000);
     });
 
     it('burstUs equals quotaUs when host has plenty of headroom', () => {
@@ -95,29 +95,29 @@ describe('cpuBurstHelper tests', () => {
       it('cumulus (4 cores, reserved=1): 1-core app gets burst=100000, peak=2', () => {
         os.cpus.returns(new Array(4).fill({ model: 'stub', speed: 2400 }));
         const params = cpuBurstHelper.calculateBurstParams(1);
-        expect(params.quotaUs).to.equal(100000);
-        expect(params.burstUs).to.equal(100000); // not capped
+        expect(params.quotaUs).to.equal(100_000);
+        expect(params.burstUs).to.equal(100_000); // not capped
       });
 
       it('cumulus (4 cores, reserved=1): 2-core app gets burst=100000, peak=3', () => {
         os.cpus.returns(new Array(4).fill({ model: 'stub', speed: 2400 }));
         const params = cpuBurstHelper.calculateBurstParams(2);
-        expect(params.quotaUs).to.equal(200000);
-        expect(params.burstUs).to.equal(100000); // capped: maxPeak=300000, maxBurst=100000
+        expect(params.quotaUs).to.equal(200_000);
+        expect(params.burstUs).to.equal(100_000); // capped: maxPeak=300000, maxBurst=100000
       });
 
       it('cumulus (4 cores, reserved=1): 3-core app gets burst=0 (peak already at limit)', () => {
         os.cpus.returns(new Array(4).fill({ model: 'stub', speed: 2400 }));
         const params = cpuBurstHelper.calculateBurstParams(3);
-        expect(params.quotaUs).to.equal(300000);
+        expect(params.quotaUs).to.equal(300_000);
         expect(params.burstUs).to.equal(0);
       });
 
       it('nimbus (8 cores, reserved=1): 4-core app gets burst=300000, peak=7', () => {
         os.cpus.returns(new Array(8).fill({ model: 'stub', speed: 2400 }));
         const params = cpuBurstHelper.calculateBurstParams(4);
-        expect(params.quotaUs).to.equal(400000);
-        expect(params.burstUs).to.equal(300000); // capped: maxPeak=700000, maxBurst=300000
+        expect(params.quotaUs).to.equal(400_000);
+        expect(params.burstUs).to.equal(300_000); // capped: maxPeak=700000, maxBurst=300000
       });
 
       it('nimbus (8 cores, reserved=1): 7-core app gets burst=0', () => {
@@ -129,28 +129,28 @@ describe('cpuBurstHelper tests', () => {
       it('stratus (16 cores, reserved=1): 7-core app uncapped, burst=quota=700000', () => {
         os.cpus.returns(new Array(16).fill({ model: 'stub', speed: 2400 }));
         const params = cpuBurstHelper.calculateBurstParams(7);
-        expect(params.quotaUs).to.equal(700000);
-        expect(params.burstUs).to.equal(700000);
+        expect(params.quotaUs).to.equal(700_000);
+        expect(params.burstUs).to.equal(700_000);
       });
 
       it('stratus (16 cores, reserved=1): 8-core app capped, burst=700000, peak=15', () => {
         os.cpus.returns(new Array(16).fill({ model: 'stub', speed: 2400 }));
         const params = cpuBurstHelper.calculateBurstParams(8);
-        expect(params.quotaUs).to.equal(800000);
-        expect(params.burstUs).to.equal(700000); // capped
+        expect(params.quotaUs).to.equal(800_000);
+        expect(params.burstUs).to.equal(700_000); // capped
       });
 
       it('stratus (16 cores, reserved=1): 12-core app capped, burst=300000, peak=15', () => {
         os.cpus.returns(new Array(16).fill({ model: 'stub', speed: 2400 }));
         const params = cpuBurstHelper.calculateBurstParams(12);
-        expect(params.quotaUs).to.equal(1200000);
-        expect(params.burstUs).to.equal(300000); // capped
+        expect(params.quotaUs).to.equal(1_200_000);
+        expect(params.burstUs).to.equal(300_000); // capped
       });
 
       it('stratus (16 cores, reserved=1): 15-core app gets burst=0', () => {
         os.cpus.returns(new Array(16).fill({ model: 'stub', speed: 2400 }));
         const params = cpuBurstHelper.calculateBurstParams(15);
-        expect(params.quotaUs).to.equal(1500000);
+        expect(params.quotaUs).to.equal(1_500_000);
         expect(params.burstUs).to.equal(0);
       });
     });
@@ -159,7 +159,7 @@ describe('cpuBurstHelper tests', () => {
   describe('isCpuBurstSupported', () => {
     it('should return false when burst config is disabled', async () => {
       const helper = proxyquire('../../ZelBack/src/services/utils/cpuBurstHelper', {
-        config: asConfig({ cpuBurst: { enabled: false, periodUs: 100000 } }),
+        config: asConfig({ cpuBurst: { enabled: false, periodUs: 100_000 } }),
       });
       helper.resetBurstSupportCache();
       const result = await helper.isCpuBurstSupported();
@@ -206,7 +206,7 @@ describe('cpuBurstHelper tests', () => {
 
   describe('getCgroupBurstPath', () => {
     it('should resolve cpu.max.burst path from /proc/<pid>/cgroup', async () => {
-      const pid = 12345;
+      const pid = 12_345;
       const cgroupContent = '0::/system.slice/docker-abc123def456.scope\n';
       sinon.stub(fs.promises, 'readFile').callsFake((p) => {
         if (p === `/proc/${pid}/cgroup`) return Promise.resolve(cgroupContent);
@@ -221,14 +221,14 @@ describe('cpuBurstHelper tests', () => {
     it('should return null when /proc/<pid>/cgroup cannot be read', async () => {
       sinon.stub(fs.promises, 'readFile').rejects(new Error('ENOENT'));
 
-      const result = await cpuBurstHelper.getCgroupBurstPath(99999);
+      const result = await cpuBurstHelper.getCgroupBurstPath(99_999);
       expect(result).to.be.null;
     });
 
     it('should return null when cgroup file does not contain a v2 entry', async () => {
       sinon.stub(fs.promises, 'readFile').resolves('1:cpu:/something/v1/style\n');
 
-      const result = await cpuBurstHelper.getCgroupBurstPath(12345);
+      const result = await cpuBurstHelper.getCgroupBurstPath(12_345);
       expect(result).to.be.null;
     });
 
@@ -236,7 +236,7 @@ describe('cpuBurstHelper tests', () => {
       sinon.stub(fs.promises, 'readFile').resolves('0::/some/path\n');
       sinon.stub(fs.promises, 'access').rejects(new Error('ENOENT'));
 
-      const result = await cpuBurstHelper.getCgroupBurstPath(12345);
+      const result = await cpuBurstHelper.getCgroupBurstPath(12_345);
       expect(result).to.be.null;
     });
   });
@@ -247,7 +247,7 @@ describe('cpuBurstHelper tests', () => {
       sinon.stub(fs.promises, 'access').resolves();
       const writeStub = sinon.stub(fs.promises, 'writeFile').resolves();
 
-      const result = await cpuBurstHelper.setCpuBurst(12345, 200000);
+      const result = await cpuBurstHelper.setCpuBurst(12_345, 200_000);
       expect(result).to.be.true;
       expect(writeStub.calledOnce).to.be.true;
       expect(writeStub.firstCall.args[1]).to.equal('200000');
@@ -256,7 +256,7 @@ describe('cpuBurstHelper tests', () => {
     it('should return false when cgroup path not found', async () => {
       sinon.stub(fs.promises, 'readFile').rejects(new Error('ENOENT'));
 
-      const result = await cpuBurstHelper.setCpuBurst(99999, 200000);
+      const result = await cpuBurstHelper.setCpuBurst(99_999, 200_000);
       expect(result).to.be.false;
     });
 
@@ -265,7 +265,7 @@ describe('cpuBurstHelper tests', () => {
       sinon.stub(fs.promises, 'access').resolves();
       sinon.stub(fs.promises, 'writeFile').rejects(new Error('EINVAL'));
 
-      const result = await cpuBurstHelper.setCpuBurst(12345, 200000);
+      const result = await cpuBurstHelper.setCpuBurst(12_345, 200_000);
       expect(result).to.be.false;
     });
   });
@@ -277,7 +277,7 @@ describe('cpuBurstHelper tests', () => {
       readStub.withArgs('/sys/fs/cgroup/system.slice/docker-x.scope/cpu.max.burst').resolves('200000\n');
       sinon.stub(fs.promises, 'access').resolves();
 
-      const result = await cpuBurstHelper.isBurstActive(12345);
+      const result = await cpuBurstHelper.isBurstActive(12_345);
       expect(result).to.be.true;
     });
 
@@ -287,14 +287,14 @@ describe('cpuBurstHelper tests', () => {
       readStub.withArgs('/sys/fs/cgroup/system.slice/docker-x.scope/cpu.max.burst').resolves('0\n');
       sinon.stub(fs.promises, 'access').resolves();
 
-      const result = await cpuBurstHelper.isBurstActive(12345);
+      const result = await cpuBurstHelper.isBurstActive(12_345);
       expect(result).to.be.false;
     });
 
     it('should return false when cgroup path cannot be resolved', async () => {
       sinon.stub(fs.promises, 'readFile').rejects(new Error('ENOENT'));
 
-      const result = await cpuBurstHelper.isBurstActive(99999);
+      const result = await cpuBurstHelper.isBurstActive(99_999);
       expect(result).to.be.false;
     });
 
@@ -306,7 +306,7 @@ describe('cpuBurstHelper tests', () => {
 
   describe('applyBurst', () => {
     it('should return false when cpuCores is 0', async () => {
-      const result = await cpuBurstHelper.applyBurst(12345, 0);
+      const result = await cpuBurstHelper.applyBurst(12_345, 0);
       expect(result).to.be.false;
     });
 
@@ -314,7 +314,7 @@ describe('cpuBurstHelper tests', () => {
       sinon.stub(fs.promises, 'access').rejects(new Error('ENOENT'));
       cpuBurstHelper.resetBurstSupportCache();
 
-      const result = await cpuBurstHelper.applyBurst(12345, 2.0);
+      const result = await cpuBurstHelper.applyBurst(12_345, 2.0);
       expect(result).to.be.false;
     });
 
@@ -328,7 +328,7 @@ describe('cpuBurstHelper tests', () => {
       const writeStub = sinon.stub(fs.promises, 'writeFile').resolves();
       cpuBurstHelper.resetBurstSupportCache();
 
-      const result = await cpuBurstHelper.applyBurst(12345, 2.0, 'test-app');
+      const result = await cpuBurstHelper.applyBurst(12_345, 2.0, 'test-app');
       expect(result).to.be.true;
       expect(writeStub.calledOnce).to.be.true;
       // 2 cores * 100000 periodUs = 200000 quotaUs; uncapped on a 32-core host

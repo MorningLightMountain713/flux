@@ -8,7 +8,7 @@ const { asConfig } = require('./fixtures/config');
 const CONFIG = {
   fluxapps: {
     playgroundServingSetSize: 4,
-    playgroundServingSetWindowMs: 86400000,
+    playgroundServingSetWindowMs: 86_400_000,
   },
 };
 
@@ -63,7 +63,7 @@ describe('playgroundServingSet', () => {
     it('moves a caller to a different set in a different window', async () => {
       const set = load();
       const today = (await set.servingSet({ fluxId: 'zelid1' }, { now: 0 })).map((x) => x.txhash);
-      const tomorrow = (await set.servingSet({ fluxId: 'zelid1' }, { now: 86400000 })).map((x) => x.txhash);
+      const tomorrow = (await set.servingSet({ fluxId: 'zelid1' }, { now: 86_400_000 })).map((x) => x.txhash);
       expect(today).to.not.deep.equal(tomorrow);
     });
 

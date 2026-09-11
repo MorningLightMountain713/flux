@@ -23,8 +23,8 @@ const log = require('../../lib/log');
 const upnpService = require('../upnpService');
 const meshPorts = require('./meshPorts');
 
-const MESH_PORT_START = 16226;
-const MESH_PORT_END = 16299;
+const MESH_PORT_START = 16_226;
+const MESH_PORT_END = 16_299;
 const POOL_SIZE = MESH_PORT_END - MESH_PORT_START + 1;
 // How many candidate ports one allocation attempt tries before giving up —
 // enough to ride out races with co-located nodes without hammering the

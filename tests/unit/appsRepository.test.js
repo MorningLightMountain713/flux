@@ -28,7 +28,7 @@ describe('appsRepository', () => {
 
   before(async function loadLibrary() {
     // The first fromSubmission compiles the ajv schemas.
-    this.timeout(30000);
+    this.timeout(30_000);
     flux = await loadSpecLibrary();
   });
 
@@ -38,14 +38,14 @@ describe('appsRepository', () => {
    * carries none — it anchors v9's time-based TTL, and InstantiatedSpec.serialize
    * omits it when it is null.
    */
-  async function legacyDoc(spec, { hash = 'h1', height = 2550000 } = {}) {
+  async function legacyDoc(spec, { hash = 'h1', height = 2_550_000 } = {}) {
     const doc = (await instantiatedSpec(spec, { hash, height })).serialize();
     delete doc.registeredAt;
     return doc;
   }
 
   /** The stored form of a v9 app, cleartext or node-sealed. */
-  async function modernDoc(spec, { hash = 'h9', height = 2550000, registeredAt = 1751628800 } = {}) {
+  async function modernDoc(spec, { hash = 'h9', height = 2_550_000, registeredAt = 1_751_628_800 } = {}) {
     return (await instantiatedSpec(spec, { hash, height, registeredAt })).serialize();
   }
 
@@ -121,10 +121,10 @@ describe('appsRepository', () => {
         },
       },
       fluxapps: {
-        daemonPONFork: 2020000,
-        blocksLasting: 22000,
+        daemonPONFork: 2_020_000,
+        blocksLasting: 22_000,
         newMinBlocksAllowance: 100,
-        contentManifestReapGraceMs: 7200000,
+        contentManifestReapGraceMs: 7_200_000,
       },
     };
 
@@ -191,7 +191,7 @@ describe('appsRepository', () => {
       expect(result.spec).to.be.instanceOf(flux.FluxAppSpecV9);
       expect(result.name).to.equal('modern');
       // v9 is time-based, so the row carries the confirming block's timestamp
-      expect(result.registeredAt).to.equal(1751628800);
+      expect(result.registeredAt).to.equal(1_751_628_800);
     });
 
     // The double this replaced could not hydrate a sealed row at all: it hardcoded
@@ -510,7 +510,7 @@ describe('appsRepository', () => {
   describe('findUnderProvisionedApps', () => {
     it('returns nothing when no app is alive', async () => {
       dbHelperStub.aggregateInDatabase.resolves([]);
-      const result = await appsRepository.findUnderProvisionedApps(2555000, 1716000000);
+      const result = await appsRepository.findUnderProvisionedApps(2_555_000, 1_716_000_000);
       expect(result).to.deep.equal([]);
     });
 
@@ -519,7 +519,7 @@ describe('appsRepository', () => {
       dbHelperStub.aggregateInDatabase.resolves([doc]);
       runningCounts = [{ _id: 'testApp', count: 1 }];
 
-      const result = await appsRepository.findUnderProvisionedApps(2555000, 1716000000);
+      const result = await appsRepository.findUnderProvisionedApps(2_555_000, 1_716_000_000);
 
       expect(result).to.have.lengthOf(1);
       expect(result[0].instantiated.name).to.equal('testApp');
@@ -540,7 +540,7 @@ describe('appsRepository', () => {
       dbHelperStub.aggregateInDatabase.resolves([await legacyDoc(await v8Spec({ name: 'testApp', instances: 3 }))]);
       runningCounts = [{ _id: 'testApp', count: 3 }];
 
-      expect(await appsRepository.findUnderProvisionedApps(2555000, 1716000000)).to.deep.equal([]);
+      expect(await appsRepository.findUnderProvisionedApps(2_555_000, 1_716_000_000)).to.deep.equal([]);
     });
 
     // The count is keyed off the announced name; app names are matched
@@ -550,14 +550,14 @@ describe('appsRepository', () => {
       dbHelperStub.aggregateInDatabase.resolves([await legacyDoc(await v8Spec({ name: 'TestApp', instances: 3 }))]);
       runningCounts = [{ _id: 'testapp', count: 3 }];
 
-      expect(await appsRepository.findUnderProvisionedApps(2555000, 1716000000)).to.deep.equal([]);
+      expect(await appsRepository.findUnderProvisionedApps(2_555_000, 1_716_000_000)).to.deep.equal([]);
     });
 
     it('treats an app with no running replicas as fully under-provisioned', async () => {
       dbHelperStub.aggregateInDatabase.resolves([await legacyDoc(await v8Spec({ name: 'ghost', instances: 2 }))]);
       runningCounts = [];
 
-      const result = await appsRepository.findUnderProvisionedApps(2555000, 1716000000);
+      const result = await appsRepository.findUnderProvisionedApps(2_555_000, 1_716_000_000);
       expect(result).to.have.lengthOf(1);
       expect(result[0].actual).to.equal(0);
       expect(result[0].required).to.equal(2);
@@ -572,7 +572,7 @@ describe('appsRepository', () => {
       dbHelperStub.aggregateInDatabase.resolves([doc]);
       runningCounts = [{ _id: 'noinstances', count: 2 }];
 
-      const result = await appsRepository.findUnderProvisionedApps(2555000, 1716000000);
+      const result = await appsRepository.findUnderProvisionedApps(2_555_000, 1_716_000_000);
       expect(result).to.have.lengthOf(1);
       expect(result[0].required).to.equal(3);
     });
@@ -583,7 +583,7 @@ describe('appsRepository', () => {
       dbHelperStub.aggregateInDatabase.resolves([good, bad]);
       runningCounts = [];
 
-      const result = await appsRepository.findUnderProvisionedApps(2555000, 1716000000);
+      const result = await appsRepository.findUnderProvisionedApps(2_555_000, 1_716_000_000);
       expect(result).to.have.lengthOf(1);
       expect(result[0].instantiated.name).to.equal('goodApp');
     });
@@ -592,7 +592,7 @@ describe('appsRepository', () => {
     // with anything the query added fails to decrypt. Counting outside the pipeline
     // means the doc reaches hydrate exactly as stored.
     it('hands hydrate the stored doc, undecorated', async () => {
-      const doc = await modernDoc(await sealedV9Spec({ name: 'testapp' }), { hash: 'h1', height: 2550000 });
+      const doc = await modernDoc(await sealedV9Spec({ name: 'testapp' }), { hash: 'h1', height: 2_550_000 });
       const storedKeys = Object.keys(doc).sort();
       expect(
         () => flux.InstantiatedSpec.deserialize({ ...doc, _isAlive: true }),
@@ -601,7 +601,7 @@ describe('appsRepository', () => {
       dbHelperStub.aggregateInDatabase.resolves([doc]);
       runningCounts = [];
 
-      const result = await appsRepository.findUnderProvisionedApps(2555000, 1716000000);
+      const result = await appsRepository.findUnderProvisionedApps(2_555_000, 1_716_000_000);
 
       const pipeline = dbHelperStub.aggregateInDatabase.firstCall.args[2];
       // no join, and nothing left of the aliveness check
@@ -616,7 +616,7 @@ describe('appsRepository', () => {
 
     it('does not count instances inside the spec query', async () => {
       dbHelperStub.aggregateInDatabase.resolves([]);
-      await appsRepository.findUnderProvisionedApps(2555000, 1716000000);
+      await appsRepository.findUnderProvisionedApps(2_555_000, 1_716_000_000);
       const pipeline = dbHelperStub.aggregateInDatabase.firstCall.args[2];
       expect(pipeline.some((stage) => stage.$lookup)).to.be.false;
       expect(JSON.stringify(pipeline)).to.not.include('zelappslocation');
@@ -624,7 +624,7 @@ describe('appsRepository', () => {
 
     it('should pass currentHeight and nowSeconds into the pipeline', async () => {
       dbHelperStub.aggregateInDatabase.resolves([]);
-      await appsRepository.findUnderProvisionedApps(2555000, 1716000000);
+      await appsRepository.findUnderProvisionedApps(2_555_000, 1_716_000_000);
       expect(dbHelperStub.aggregateInDatabase.calledOnce).to.be.true;
       const pipeline = dbHelperStub.aggregateInDatabase.firstCall.args[2];
       expect(pipeline).to.be.an('array');
@@ -662,7 +662,7 @@ describe('appsRepository', () => {
     });
 
     it('upsert: a quarantine store holds a strictly-newer version and carries the TTL', async () => {
-      const expireAt = new Date(123456);
+      const expireAt = new Date(123_456);
       await appsRepository.upsertContentManifest(
         { appName: 'app', version: 3, data: {} }, { confirmed: false, expireAt, clearEnvelope: true },
       );
@@ -685,7 +685,7 @@ describe('appsRepository', () => {
 
     it('upsert: maps a unique-index collision (a same/higher version already won) to false', async () => {
       const err = new Error('E11000 duplicate key');
-      err.code = 11000;
+      err.code = 11_000;
       dbHelperStub.updateOneInDatabase.rejects(err);
       const ok = await appsRepository.upsertContentManifest({ appName: 'app', version: 2, data: {} });
       expect(ok).to.equal(false);
@@ -870,7 +870,7 @@ describe('appsRepository', () => {
       // Both the candidate scan and the delete carry the receivedAt cutoff (now - grace):
       // a manifest stored inside the register window is never a reap candidate, and a
       // name re-registered fresh between scan and delete survives the delete.
-      const graceMs = 7200000; // the configStub's contentManifestReapGraceMs
+      const graceMs = 7_200_000; // the configStub's contentManifestReapGraceMs
       const [, scanQuery] = distinctStub.firstCall.args;
       expect(scanQuery.confirmed).to.equal(true);
       expect(scanQuery.receivedAt.$lte).to.be.instanceOf(Date);

@@ -6,7 +6,7 @@ const proxyquire = require('proxyquire').noCallThru();
 const { asConfig } = require('./fixtures/config');
 
 const CONFIG = {
-  fluxapps: { playgroundMinerCpuBusyFraction: 0.9, playgroundMinerBlockMs: 86400000 },
+  fluxapps: { playgroundMinerCpuBusyFraction: 0.9, playgroundMinerBlockMs: 86_400_000 },
 };
 
 describe('playgroundAbuse', () => {

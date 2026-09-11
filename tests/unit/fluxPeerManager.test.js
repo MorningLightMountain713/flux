@@ -80,8 +80,8 @@ describe('FluxPeerSocket tests', () => {
     });
 
     it('should convert port to string', () => {
-      const ws = createMockWs('10.0.0.1', 16127);
-      const peer = new FluxPeerSocket(ws, '10.0.0.1', 16127, manager);
+      const ws = createMockWs('10.0.0.1', 16_127);
+      const peer = new FluxPeerSocket(ws, '10.0.0.1', 16_127, manager);
       peer.source = PEER_SOURCE.RANDOM;
       expect(peer.port).to.equal('16127');
     });
@@ -430,14 +430,14 @@ describe('FluxPeerSocket tests', () => {
       const peer = new FluxPeerSocket(ws, '10.0.0.1', '16127', manager);
       peer.source = PEER_SOURCE.RANDOM;
       peer.latency = 42;
-      peer.lastPingTime = 1700000000000;
+      peer.lastPingTime = 1_700_000_000_000;
 
       const info = peer.toPeerInfo();
       expect(info).to.deep.equal({
         ip: '10.0.0.1',
         port: '16127',
         latency: 42,
-        lastPingTime: 1700000000000,
+        lastPingTime: 1_700_000_000_000,
       });
     });
 
@@ -445,7 +445,7 @@ describe('FluxPeerSocket tests', () => {
       const ws = createMockWs();
       const peer = new FluxPeerSocket(ws, '10.0.0.1', '16127', manager);
       peer.latency = 42;
-      peer.lastPingTime = 1700000000000;
+      peer.lastPingTime = 1_700_000_000_000;
 
       const info = peer.toPeerInfo();
       expect(info).to.deep.equal({
@@ -679,7 +679,7 @@ describe('FluxPeerManager tests', () => {
       const events = [];
       manager.on('peerReestablished', (info) => events.push(info));
       const peer = manager.add(createMockWs('10.0.0.9', '16127'), '10.0.0.9', '16127', { source: PEER_SOURCE.RANDOM });
-      peer.lastPongTime = Date.now() - 45000;
+      peer.lastPongTime = Date.now() - 45_000;
       manager.remove('10.0.0.9:16127', 1006);
       manager.add(createMockWs('10.0.0.9', '16127'), '10.0.0.9', '16127', { source: PEER_SOURCE.RANDOM });
 
@@ -706,7 +706,7 @@ describe('FluxPeerManager tests', () => {
       const events = [];
       manager.on('peerReestablished', (info) => events.push(info));
       const first = manager.add(createMockWs('10.0.0.9', '16127'), '10.0.0.9', '16127', { source: PEER_SOURCE.RANDOM });
-      first.lastPongTime = Date.now() - 45000;
+      first.lastPongTime = Date.now() - 45_000;
 
       manager.add(createMockWs('10.0.0.9', '16127'), '10.0.0.9', '16127', { source: PEER_SOURCE.INBOUND });
 
@@ -762,7 +762,7 @@ describe('FluxPeerManager tests', () => {
 
     it('should convert port to string', () => {
       const ws = createMockWs('10.0.0.1', '16127');
-      const peer = manager.add(ws, '10.0.0.1', 16127, { source: PEER_SOURCE.RANDOM });
+      const peer = manager.add(ws, '10.0.0.1', 16_127, { source: PEER_SOURCE.RANDOM });
       expect(peer.port).to.equal('16127');
       expect(peer.key).to.equal('10.0.0.1:16127');
     });
@@ -1375,7 +1375,7 @@ describe('FluxPeerManager tests', () => {
     it('should return true when at max count but below unique IP threshold', () => {
       // Add 14 outbound peers all from same IP (different ports)
       for (let i = 0; i < 14; i += 1) {
-        const port = String(16127 + i);
+        const port = String(16_127 + i);
         manager.add(createMockWs('10.0.0.1', port), '10.0.0.1', port, { source: PEER_SOURCE.RANDOM });
       }
       expect(manager.outboundCount).to.equal(14);
@@ -1436,7 +1436,7 @@ describe('FluxPeerManager tests', () => {
 
   describe('validateAndAddInbound', () => {
     it('should add valid inbound peer', () => {
-      manager.numberOfFluxNodes = 10000;
+      manager.numberOfFluxNodes = 10_000;
       const ws = createMockWs('8.8.8.8', '16127');
       ws.close = sinon.stub();
 
@@ -1447,7 +1447,7 @@ describe('FluxPeerManager tests', () => {
     });
 
     it('should use default port 16127 when not provided', () => {
-      manager.numberOfFluxNodes = 10000;
+      manager.numberOfFluxNodes = 10_000;
       const ws = createMockWs('8.8.8.8', '16127');
 
       manager.validateAndAddInbound(ws, createMockReq('8.8.8.8'));
@@ -1477,7 +1477,7 @@ describe('FluxPeerManager tests', () => {
     });
 
     it('should reject private IPs', (done) => {
-      manager.numberOfFluxNodes = 10000;
+      manager.numberOfFluxNodes = 10_000;
       const ws = createMockWs('10.0.0.1', '16127');
       ws.close = sinon.stub();
 
@@ -1492,7 +1492,7 @@ describe('FluxPeerManager tests', () => {
     });
 
     it('should reject duplicate peers', (done) => {
-      manager.numberOfFluxNodes = 10000;
+      manager.numberOfFluxNodes = 10_000;
       const ws1 = createMockWs('8.8.8.8', '16127');
       manager.add(ws1, '8.8.8.8', '16127', { source: PEER_SOURCE.INBOUND });
 
@@ -1510,7 +1510,7 @@ describe('FluxPeerManager tests', () => {
     });
 
     it('should extract IPv4 from IPv6-mapped address', () => {
-      manager.numberOfFluxNodes = 10000;
+      manager.numberOfFluxNodes = 10_000;
       const ws = createMockWs('8.8.8.8', '16127');
 
       manager.validateAndAddInbound(ws, '16127', createMockReq('::ffff:8.8.8.8'));
@@ -1527,7 +1527,7 @@ describe('FluxPeerManager tests', () => {
     const settle = () => new Promise((resolve) => { setImmediate(() => setImmediate(resolve)); });
 
     it('refuses a peering inbound the gate holds out, and registers nothing', async () => {
-      manager.numberOfFluxNodes = 10000;
+      manager.numberOfFluxNodes = 10_000;
       const gate = sinon.stub().resolves({ admitted: false, reason: 'locked_out', subject: 'x:0' });
       manager.setInboundGate(gate);
       const ws = createMockWs('8.8.8.8');
@@ -1542,7 +1542,7 @@ describe('FluxPeerManager tests', () => {
     });
 
     it('what the gate tells is written before the close, in order, each flushed; nothing registers', async () => {
-      manager.numberOfFluxNodes = 10000;
+      manager.numberOfFluxNodes = 10_000;
       manager.setInboundGate(sinon.stub().resolves({
         admitted: false, reason: 'locked_out', subject: 'x:0', tell: ['row-1', 'row-2'],
       }));
@@ -1561,7 +1561,7 @@ describe('FluxPeerManager tests', () => {
       const log = require('../../ZelBack/src/lib/log');
       const info = sinon.stub(log, 'info');
       try {
-        manager.numberOfFluxNodes = 10000;
+        manager.numberOfFluxNodes = 10_000;
         const gate = sinon.stub().resolves({
           admitted: false, reason: 'locked_out', subject: 'x:0', tell: ['row-1', 'row-2'],
         });
@@ -1589,7 +1589,7 @@ describe('FluxPeerManager tests', () => {
     });
 
     it('admits what the gate admits', async () => {
-      manager.numberOfFluxNodes = 10000;
+      manager.numberOfFluxNodes = 10_000;
       manager.setInboundGate(sinon.stub().resolves({ admitted: true, reason: 'not_locked_out' }));
       const ws = createMockWs('8.8.8.8');
       manager.validateAndAddInbound(ws, '16127', createMockReq('8.8.8.8'));
@@ -1599,7 +1599,7 @@ describe('FluxPeerManager tests', () => {
     });
 
     it('a gate that fails admits: an unknown answer must not starve the node of its inbound', async () => {
-      manager.numberOfFluxNodes = 10000;
+      manager.numberOfFluxNodes = 10_000;
       manager.setInboundGate(sinon.stub().rejects(new Error('store down')));
       const ws = createMockWs('8.8.8.8');
       manager.validateAndAddInbound(ws, '16127', createMockReq('8.8.8.8'));
@@ -1608,7 +1608,7 @@ describe('FluxPeerManager tests', () => {
     });
 
     it('an ephemeral inbound never meets the gate', async () => {
-      manager.numberOfFluxNodes = 10000;
+      manager.numberOfFluxNodes = 10_000;
       const gate = sinon.stub().resolves({ admitted: false, reason: 'locked_out', subject: 'x:0' });
       manager.setInboundGate(gate);
       const ws = createMockWs('8.8.8.8');
@@ -1619,7 +1619,7 @@ describe('FluxPeerManager tests', () => {
     });
 
     it('clearing the gate restores the ungated path', () => {
-      manager.numberOfFluxNodes = 10000;
+      manager.numberOfFluxNodes = 10_000;
       manager.setInboundGate(sinon.stub().resolves({ admitted: false, reason: 'locked_out', subject: 'x:0' }));
       manager.setInboundGate(null);
       manager.validateAndAddInbound(createMockWs('8.8.8.8'), '16127', createMockReq('8.8.8.8'));
@@ -1650,7 +1650,7 @@ describe('FluxPeerManager tests', () => {
     // each other by construction - is closed as a duplicate with the frame
     // never read, and nothing is logged at either end.
     it('accepts an ephemeral-flagged inbound while the pair is held, with a reader attached', () => {
-      manager.numberOfFluxNodes = 10000;
+      manager.numberOfFluxNodes = 10_000;
       manager.add(createMockWs('8.8.8.8'), '8.8.8.8', '16127', { source: PEER_SOURCE.INBOUND });
 
       const clock = sinon.useFakeTimers();
@@ -1666,7 +1666,7 @@ describe('FluxPeerManager tests', () => {
     });
 
     it('an ephemeral inbound never registers as a peer, even when the pair is not held', () => {
-      manager.numberOfFluxNodes = 10000;
+      manager.numberOfFluxNodes = 10_000;
       const ws = createMockWs('8.8.8.8');
       manager.validateAndAddInbound(ws, '16127', createMockReq('8.8.8.8', { 'x-flux-ephemeral': '1' }));
 
@@ -1677,7 +1677,7 @@ describe('FluxPeerManager tests', () => {
     });
 
     it('caps concurrent inbound ephemerals from one ip', () => {
-      manager.numberOfFluxNodes = 10000;
+      manager.numberOfFluxNodes = 10_000;
       for (let i = 0; i < 4; i += 1) {
         manager.validateAndAddInbound(createMockWs('8.8.8.8'), '16127', createMockReq('8.8.8.8', { 'x-flux-ephemeral': '1' }));
       }
@@ -1689,7 +1689,7 @@ describe('FluxPeerManager tests', () => {
     });
 
     it('counts every refusal at the caps, so production can say whether they are tight', () => {
-      manager.numberOfFluxNodes = 10000;
+      manager.numberOfFluxNodes = 10_000;
       expect(manager.getStats().ephemeralRefusals).to.equal(0);
       for (let i = 0; i < 4; i += 1) {
         manager.validateAndAddInbound(createMockWs('8.8.8.8'), '16127', createMockReq('8.8.8.8', { 'x-flux-ephemeral': '1' }));
@@ -1700,7 +1700,7 @@ describe('FluxPeerManager tests', () => {
     });
 
     it('caps total concurrent ephemerals', () => {
-      manager.numberOfFluxNodes = 10000;
+      manager.numberOfFluxNodes = 10_000;
       for (let i = 0; i < 32; i += 1) {
         const ip = `9.9.${Math.floor(i / 4)}.${(i % 4) + 1}`;
         manager.validateAndAddInbound(createMockWs(ip), '16127', createMockReq(ip, { 'x-flux-ephemeral': '1' }));
@@ -1713,11 +1713,11 @@ describe('FluxPeerManager tests', () => {
 
     it('an inbound ephemeral that outlives its lifetime is closed', () => {
       const clock = sinon.useFakeTimers();
-      manager.numberOfFluxNodes = 10000;
+      manager.numberOfFluxNodes = 10_000;
       const ws = createMockWs('8.8.8.8');
       manager.validateAndAddInbound(ws, '16127', createMockReq('8.8.8.8', { 'x-flux-ephemeral': '1' }));
 
-      clock.tick(120000);
+      clock.tick(120_000);
       sinon.assert.calledWith(ws.close, CLOSE_CODES.EPHEMERAL_DONE, sinon.match(/lifetime/));
       clock.restore();
     });
@@ -1748,7 +1748,7 @@ describe('FluxPeerManager tests', () => {
     it('should allow attempt after backoff expires', () => {
       manager.recordFailedConnection('10.0.0.1', '16127');
       // Manually set lastAttempt to 3 minutes ago (beyond 2min first backoff)
-      manager.getFailedConnection('10.0.0.1:16127').lastAttempt = Date.now() - (3 * 60000);
+      manager.getFailedConnection('10.0.0.1:16127').lastAttempt = Date.now() - (3 * 60_000);
       expect(manager.shouldAttemptConnection('10.0.0.1', '16127')).to.equal(true);
     });
 
@@ -1756,10 +1756,10 @@ describe('FluxPeerManager tests', () => {
       manager.recordFailedConnection('10.0.0.1', '16127');
       manager.recordFailedConnection('10.0.0.1', '16127');
       // Second failure: 5min backoff. 3 minutes ago should still be blocked.
-      manager.getFailedConnection('10.0.0.1:16127').lastAttempt = Date.now() - (3 * 60000);
+      manager.getFailedConnection('10.0.0.1:16127').lastAttempt = Date.now() - (3 * 60_000);
       expect(manager.shouldAttemptConnection('10.0.0.1', '16127')).to.equal(false);
       // 6 minutes ago should be allowed
-      manager.getFailedConnection('10.0.0.1:16127').lastAttempt = Date.now() - (6 * 60000);
+      manager.getFailedConnection('10.0.0.1:16127').lastAttempt = Date.now() - (6 * 60_000);
       expect(manager.shouldAttemptConnection('10.0.0.1', '16127')).to.equal(true);
     });
 
@@ -1768,10 +1768,10 @@ describe('FluxPeerManager tests', () => {
         manager.recordFailedConnection('10.0.0.1', '16127');
       }
       // 14 minutes ago — should still be blocked (cap is 15min)
-      manager.getFailedConnection('10.0.0.1:16127').lastAttempt = Date.now() - (14 * 60000);
+      manager.getFailedConnection('10.0.0.1:16127').lastAttempt = Date.now() - (14 * 60_000);
       expect(manager.shouldAttemptConnection('10.0.0.1', '16127')).to.equal(false);
       // 16 minutes ago — should be allowed
-      manager.getFailedConnection('10.0.0.1:16127').lastAttempt = Date.now() - (16 * 60000);
+      manager.getFailedConnection('10.0.0.1:16127').lastAttempt = Date.now() - (16 * 60_000);
       expect(manager.shouldAttemptConnection('10.0.0.1', '16127')).to.equal(true);
     });
 
@@ -1887,7 +1887,7 @@ describe('FluxPeerManager tests', () => {
 
   describe('validateAndAddInbound stale replacement', () => {
     it('should replace stale connection instead of rejecting', () => {
-      manager.numberOfFluxNodes = 10000;
+      manager.numberOfFluxNodes = 10_000;
       const ws1 = createMockWs('8.8.8.8', '16127');
       const peer1 = manager.add(ws1, '8.8.8.8', '16127', { source: PEER_SOURCE.INBOUND });
       // Make stale
@@ -1905,7 +1905,7 @@ describe('FluxPeerManager tests', () => {
 
   describe('verifyOrReplace (reconnect duplicate handling)', () => {
     it('should replace existing connection when pong does not arrive within timeout', (done) => {
-      manager.numberOfFluxNodes = 10000;
+      manager.numberOfFluxNodes = 10_000;
       const ws1 = createMockWs('8.8.8.8', '16127');
       manager.add(ws1, '8.8.8.8', '16127', { source: PEER_SOURCE.INBOUND });
 
@@ -1922,7 +1922,7 @@ describe('FluxPeerManager tests', () => {
     });
 
     it('should reject new connection when existing responds to pong', (done) => {
-      manager.numberOfFluxNodes = 10000;
+      manager.numberOfFluxNodes = 10_000;
       const ws1 = createMockWs('8.8.8.8', '16127');
       manager.add(ws1, '8.8.8.8', '16127', { source: PEER_SOURCE.INBOUND });
 
@@ -1944,7 +1944,7 @@ describe('FluxPeerManager tests', () => {
     });
 
     it('should replace immediately when ping throws', () => {
-      manager.numberOfFluxNodes = 10000;
+      manager.numberOfFluxNodes = 10_000;
       const ws1 = createMockWs('8.8.8.8', '16127');
       ws1.ping = sinon.stub().throws(new Error('socket dead'));
       manager.add(ws1, '8.8.8.8', '16127', { source: PEER_SOURCE.INBOUND });
@@ -1958,7 +1958,7 @@ describe('FluxPeerManager tests', () => {
     });
 
     it('should reject immediately when no X-Flux-Reconnect header', () => {
-      manager.numberOfFluxNodes = 10000;
+      manager.numberOfFluxNodes = 10_000;
       const ws1 = createMockWs('8.8.8.8', '16127');
       manager.add(ws1, '8.8.8.8', '16127', { source: PEER_SOURCE.INBOUND });
 
@@ -3046,7 +3046,7 @@ describe('FluxPeerManager — a stopping process closes its held connections wit
     // then the far end holds it as a peer. A stop that begins inside that
     // second used to exit before the refusal landed, and the holder read
     // 1006 on a stop that was announced everywhere else.
-    manager.numberOfFluxNodes = 10000;
+    manager.numberOfFluxNodes = 10_000;
     manager.allowConnections();
     const held = closingWs('8.8.8.8');
     manager.add(held, '8.8.8.8', '16127', { source: PEER_SOURCE.INBOUND });

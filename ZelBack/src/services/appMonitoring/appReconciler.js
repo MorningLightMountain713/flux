@@ -335,7 +335,7 @@ function trackSilentHold(identifier, reason) {
     let detail = 'no masterSlave/syncthing decider has declared a desired state for it';
     if (reason === 'awaitingDependency') detail = 'a dependsOn target has not reached its condition';
     if (reason === 'awaitingAppDependency') detail = 'a dependency app has not reached its edge condition on this node';
-    log.warn(`appReconciler - ${identifier} held at ${reason} for ${Math.round(heldMs / 60000)}m - ${detail}`);
+    log.warn(`appReconciler - ${identifier} held at ${reason} for ${Math.round(heldMs / 60_000)}m - ${detail}`);
     fluxEventBus.publish('reconciler:actuated', { identifier, action: 'silentHoldWarned', reason, heldMs });
   }
 }

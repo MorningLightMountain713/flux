@@ -162,7 +162,7 @@ describe('registryGovernor tests', () => {
         headers: { 'retry-after': '900' },
       });
 
-      expect(registryGovernor.cooldownRemaining('registry-1.docker.io')).to.be.closeTo(900000, 50);
+      expect(registryGovernor.cooldownRemaining('registry-1.docker.io')).to.be.closeTo(900_000, 50);
     });
 
     it('falls back to the reset header, then to a bounded default', async () => {
@@ -171,13 +171,13 @@ describe('registryGovernor tests', () => {
         status: 429,
         headers: { 'ratelimit-reset': '120' },
       });
-      expect(registryGovernor.cooldownRemaining('ghcr.io')).to.be.closeTo(120000, 50);
+      expect(registryGovernor.cooldownRemaining('ghcr.io')).to.be.closeTo(120_000, 50);
 
       await registryGovernor.acquire('registry-1.docker.io').then((r) => r());
       registryGovernor.recordResponse('registry-1.docker.io', { status: 429, headers: {} });
       // Minutes, not hours: a cooldown is a could-not-ask answer that expires
       // with the registry's window, not a verdict on the image.
-      expect(registryGovernor.cooldownRemaining('registry-1.docker.io')).to.be.closeTo(900000, 50);
+      expect(registryGovernor.cooldownRemaining('registry-1.docker.io')).to.be.closeTo(900_000, 50);
     });
 
     it('caps an implausible Retry-After rather than believing it', async () => {
@@ -187,7 +187,7 @@ describe('registryGovernor tests', () => {
         headers: { 'retry-after': '86400' },
       });
 
-      expect(registryGovernor.cooldownRemaining('ghcr.io')).to.be.closeTo(3600000, 50);
+      expect(registryGovernor.cooldownRemaining('ghcr.io')).to.be.closeTo(3_600_000, 50);
     });
 
     it('does not cool down on a non-429', async () => {
@@ -230,7 +230,7 @@ describe('registryGovernor tests', () => {
       // Transient: it says the registry could not be asked, never that the
       // image is bad. Classing it permanent would cache a throttle as a verdict.
       expect(error.registryErrorClass).to.equal('transient');
-      expect(error.retryAfterMs).to.be.closeTo(900000, 50);
+      expect(error.retryAfterMs).to.be.closeTo(900_000, 50);
     });
   });
 
@@ -245,7 +245,7 @@ describe('registryGovernor tests', () => {
       });
 
       expect(registryGovernor.budgetFor('registry-1.docker.io')).to.deep.equal({
-        limit: 100, remaining: 87, windowSeconds: 21600,
+        limit: 100, remaining: 87, windowSeconds: 21_600,
       });
     });
 

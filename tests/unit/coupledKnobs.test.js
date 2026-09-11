@@ -111,7 +111,7 @@ describe('coupled harness knobs track production', () => {
     // The state suite 55 shipped in: a step chosen against a 250ms poll, left
     // behind when the poll moved to 833ms.
     const fluxapps = {
-      removeFluxAppsPeriod: 4, explorerPollIntervalMs: 833, residentialQueueStepMs: 15000,
+      removeFluxAppsPeriod: 4, explorerPollIntervalMs: 833, residentialQueueStepMs: 15_000,
     };
 
     expect(() => knobs.assertCoupledRatios(fluxapps)).to.throw(/too short/);
@@ -181,7 +181,7 @@ describe('coupled harness knobs track production', () => {
     expect(knobs.departureCycleMs(fluxapps, 5)).to.equal(interval + 1000 + (4 * step));
     // And it must exceed what driveUntil used to default to, which is the whole
     // reason the waits are derived now.
-    expect(knobs.departureCycleMs(fluxapps, 5)).to.be.above(120000);
+    expect(knobs.departureCycleMs(fluxapps, 5)).to.be.above(120_000);
   });
 
   it('grows a departure wait with the instance count', () => {
@@ -208,7 +208,7 @@ describe('coupled harness knobs track production', () => {
     // poll-only model of 13.3s. Without this the factor can be edited freely -
     // dropping it to 1.0 derives a 25s step instead of 30s, still above one but
     // below production's ratio, and nothing else in this file notices.
-    const MEASURED_PASS_MS = 15900; // cindy, 2026-08-20, suite 55
+    const MEASURED_PASS_MS = 15_900; // cindy, 2026-08-20, suite 55
     const modelled = knobs.giveUpPassMs(
       { removeFluxAppsPeriod: 4 },
       knobs.harnessBlockCostMs({ explorerPollIntervalMs: 833 }),

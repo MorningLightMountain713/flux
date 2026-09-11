@@ -81,8 +81,8 @@ describe('meshDerivation', () => {
     it('matches the golden vectors', () => {
       expect(meshDerivation.memberAddress(UUID1, `${TX1}:0`, 0)).to.equal('fdb2:8fa9:3450:76a8:bd32:a312::');
       expect(meshDerivation.memberAddress(UUID1, `${TX1}:0`, 43)).to.equal('fdb2:8fa9:3450:76a8:bd32:a312:0:2b');
-      expect(meshDerivation.memberAddress(UUID1, `${TX1}:0`, 4294967295)).to.equal('fdb2:8fa9:3450:76a8:bd32:a312:ffff:ffff');
-      expect(meshDerivation.memberAddress(UUID1, `${TX1}:0`, 191014375)).to.equal('fdb2:8fa9:3450:76a8:bd32:a312:b62:a5e7');
+      expect(meshDerivation.memberAddress(UUID1, `${TX1}:0`, 4_294_967_295)).to.equal('fdb2:8fa9:3450:76a8:bd32:a312:ffff:ffff');
+      expect(meshDerivation.memberAddress(UUID1, `${TX1}:0`, 191_014_375)).to.equal('fdb2:8fa9:3450:76a8:bd32:a312:b62:a5e7');
       expect(meshDerivation.memberAddress(UUID1, `${TX2}:0`, 0)).to.equal('fdb2:8fa9:3450:9d94:6853:4b74::');
       expect(meshDerivation.memberAddress(UUID2, `${TX1}:0`, 0)).to.equal('fd82:31ca:2eb1:da6d:6f91:e55a::');
     });

@@ -10,7 +10,7 @@ const {
 describe('appEvacuationSafety tests', () => {
   before(async function loadLibrary() {
     // The first fromSubmission compiles the ajv schemas.
-    this.timeout(30000);
+    this.timeout(30_000);
     await loadSpecLibrary();
   });
 
@@ -61,7 +61,7 @@ describe('appEvacuationSafety tests', () => {
   }
 
   function locations(...ips) {
-    return ips.map((ip, index) => ({ ip, runningSince: new Date(1700000000000 + index) }));
+    return ips.map((ip, index) => ({ ip, runningSince: new Date(1_700_000_000_000 + index) }));
   }
 
   beforeEach(() => {
@@ -252,8 +252,8 @@ describe('appEvacuationSafety tests', () => {
       deps.getApplicationGlobalSpecifications.resolves(await statefulSpec({
         instances: 2,
         compose: [
-          { ...V8_SUBMISSION.compose[0], name: 'server', containerData: 'g:/data', ports: [31001] },
-          { ...V8_SUBMISSION.compose[0], name: 'db', containerData: 'r:/var/lib/mysql', ports: [31002] },
+          { ...V8_SUBMISSION.compose[0], name: 'server', containerData: 'g:/data', ports: [31_001] },
+          { ...V8_SUBMISSION.compose[0], name: 'db', containerData: 'r:/var/lib/mysql', ports: [31_002] },
         ],
       }));
       deps.appLocation.resolves(locations(LOCAL, '5.6.7.8:16127'));

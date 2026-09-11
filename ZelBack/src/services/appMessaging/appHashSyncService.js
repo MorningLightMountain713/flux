@@ -146,7 +146,7 @@ async function bulkFetchStreamAndProcess(peerIp, peerPort, missingSet, onProgres
   log.info(`syncMissingHashes - Streaming permanent messages from ${peerIp}:${peerPort} (${missingSet.size} missing)`);
   const response = await serviceHelper.axiosGet(
     `http://${peerIp}:${peerPort}/apps/permanentmessages`,
-    { responseType: 'stream', timeout: 120000, headers: { 'Accept-Encoding': 'gzip' }, decompress: false },
+    { responseType: 'stream', timeout: 120_000, headers: { 'Accept-Encoding': 'gzip' }, decompress: false },
   ).catch((error) => { log.error(error); return null; });
   if (!response || !response.data) {
     return { processed: 0, skipped: 0, streamed: 0 };
@@ -568,7 +568,7 @@ async function syncMissingHashes(options = {}) {
 
     // Check local permanent messages before fetching from peers
     const appsGlobalDb = db.db(config.get('database.appsglobal.database'));
-    const CHUNK_SIZE = 10000;
+    const CHUNK_SIZE = 10_000;
     let localResolved = 0;
     for (let i = 0; i < missingHashes.length; i += CHUNK_SIZE) {
       const chunk = missingHashes.slice(i, i + CHUNK_SIZE);

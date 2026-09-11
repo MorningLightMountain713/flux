@@ -56,13 +56,13 @@ const IPV4_MAX = 0xffffffff;
 // table. A fleet-integrity invariant, deliberately NOT configuration: a knob
 // would let a single node (or a config-generation defect) switch the
 // protection off. The harness publishes padded real-scale artifacts instead.
-const MIN_ROW_COUNT = 1500000;
-const INSERT_BATCH_SIZE = 10000;
+const MIN_ROW_COUNT = 1_500_000;
+const INSERT_BATCH_SIZE = 10_000;
 const MAX_BATCHES_IN_FLIGHT = 4;
 // Rows decoded between handing the thread back. Small enough that no single
 // stretch is noticeable (a few milliseconds), large enough that two million rows
 // cost a couple of hundred yields rather than one per row.
-const ROWS_PER_YIELD = 10000;
+const ROWS_PER_YIELD = 10_000;
 // Bounds what one artifact string can cost in a document. Not a vocabulary
 // check - the vocabularies are the publisher's, and rejecting a token this
 // build has not seen would take the whole fleet's table down with it.

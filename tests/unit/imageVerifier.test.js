@@ -557,7 +557,7 @@ describe('imageVerifier tests', () => {
       expect(result).to.equal(true);
       expect(() => verifier.throwIfError()).to.not.throw();
       // compressed layer sum surfaced for the early rootFs-fit reject
-      expect(verifier.imageSizeBytes).to.equal(193911453);
+      expect(verifier.imageSizeBytes).to.equal(193_911_453);
     });
 
     it('should throw if a docker manifest arch does not match the Flux network', async () => {
@@ -1063,7 +1063,7 @@ describe('imageVerifier tests', () => {
     it('leaves the image unmeasured on an unknown layer media type, and stops reading', async () => {
       serveManifest(
         manifestOf([
-          { mediaType: 'application/vnd.oci.image.layer.v1.tar', size: 1_000, digest: layerDigest },
+          { mediaType: 'application/vnd.oci.image.layer.v1.tar', size: 1000, digest: layerDigest },
           { mediaType: gzipMediaType, size: 3_630_321, digest: secondLayerDigest },
         ]),
         { [secondLayerDigest]: { status: 206, data: gzipTrailer(8_092_160) } },
@@ -1174,7 +1174,7 @@ describe('imageVerifier tests', () => {
     it('keeps the Range header across the redirect to object storage', async () => {
       sinon.stub(serviceHelper, 'axiosInstance').returns(axios.create({
         baseURL: `http://127.0.0.1:${registry.address().port}/v2/`,
-        timeout: 5_000,
+        timeout: 5000,
       }));
 
       const verifier = new ImageVerifier('megachips/ipshow:web');

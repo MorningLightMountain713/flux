@@ -192,7 +192,7 @@ describe('appEventVerifier', () => {
   describe('resolveTeamSupportAddresses', () => {
     it('returns nothing when no forks are active at the given height', () => {
       chainUtilitiesStub.getChainTeamSupportAddressUpdates.returns([
-        { address: 'teamA', height: 2000000 },
+        { address: 'teamA', height: 2_000_000 },
       ]);
       const { resolveTeamSupportAddresses } = proxyquire(
         '../../ZelBack/src/services/appMessaging/appEventVerifier',
@@ -203,13 +203,13 @@ describe('appEventVerifier', () => {
           '../utils/chainUtilities': chainUtilitiesStub,
         },
       )._internal;
-      expect(resolveTeamSupportAddresses(1000000)).to.deep.equal([]);
+      expect(resolveTeamSupportAddresses(1_000_000)).to.deep.equal([]);
     });
 
     it('returns the most recent fork at or below the given height', () => {
       chainUtilitiesStub.getChainTeamSupportAddressUpdates.returns([
-        { address: 'teamA', height: 1000000 },
-        { address: 'teamB', height: 2000000 },
+        { address: 'teamA', height: 1_000_000 },
+        { address: 'teamB', height: 2_000_000 },
       ]);
       const { resolveTeamSupportAddresses } = proxyquire(
         '../../ZelBack/src/services/appMessaging/appEventVerifier',
@@ -220,14 +220,14 @@ describe('appEventVerifier', () => {
           '../utils/chainUtilities': chainUtilitiesStub,
         },
       )._internal;
-      expect(resolveTeamSupportAddresses(1500000)).to.deep.equal(['teamA']);
-      expect(resolveTeamSupportAddresses(2500000)).to.deep.equal(['teamB']);
+      expect(resolveTeamSupportAddresses(1_500_000)).to.deep.equal(['teamA']);
+      expect(resolveTeamSupportAddresses(2_500_000)).to.deep.equal(['teamB']);
     });
 
     it('reads a fork that names a list, and one that names a single address', () => {
       chainUtilitiesStub.getChainTeamSupportAddressUpdates.returns([
-        { address: 'teamA', height: 1000000 },
-        { addresses: ['teamB', 'teamC'], height: 2000000 },
+        { address: 'teamA', height: 1_000_000 },
+        { addresses: ['teamB', 'teamC'], height: 2_000_000 },
       ]);
       const { resolveTeamSupportAddresses } = proxyquire(
         '../../ZelBack/src/services/appMessaging/appEventVerifier',
@@ -239,8 +239,8 @@ describe('appEventVerifier', () => {
         },
       )._internal;
       // A fork replaces its predecessor, so past its height only the list signs.
-      expect(resolveTeamSupportAddresses(1500000)).to.deep.equal(['teamA']);
-      expect(resolveTeamSupportAddresses(2500000)).to.deep.equal(['teamB', 'teamC']);
+      expect(resolveTeamSupportAddresses(1_500_000)).to.deep.equal(['teamA']);
+      expect(resolveTeamSupportAddresses(2_500_000)).to.deep.equal(['teamB', 'teamC']);
     });
   });
 
@@ -310,7 +310,7 @@ describe('appEventVerifier', () => {
 
     it('adds the team-support address as an allowed signer for marketplace apps', async () => {
       chainUtilitiesStub.getChainTeamSupportAddressUpdates.returns([
-        { address: 'teamSupport', height: 1000000 },
+        { address: 'teamSupport', height: 1_000_000 },
       ]);
       appEventVerifier = proxyquire(
         '../../ZelBack/src/services/appMessaging/appEventVerifier',
@@ -330,15 +330,15 @@ describe('appEventVerifier', () => {
       const result = await appEventVerifier.authorize({
         appEvent,
         previousState: { owner: 'ownerA' },
-        daemonHeight: 2000000,
+        daemonHeight: 2_000_000,
       });
       expect(result.signer).to.equal('teamSupport');
     });
 
     it('lets any address a list fork names sign a marketplace update', async () => {
       chainUtilitiesStub.getChainTeamSupportAddressUpdates.returns([
-        { address: 'teamSupport', height: 1000000 },
-        { addresses: ['teamOne', 'teamTwo'], height: 2000000 },
+        { address: 'teamSupport', height: 1_000_000 },
+        { addresses: ['teamOne', 'teamTwo'], height: 2_000_000 },
       ]);
       appEventVerifier = proxyquire(
         '../../ZelBack/src/services/appMessaging/appEventVerifier',
@@ -358,14 +358,14 @@ describe('appEventVerifier', () => {
       const result = await appEventVerifier.authorize({
         appEvent,
         previousState: { owner: 'ownerA' },
-        daemonHeight: 2500000,
+        daemonHeight: 2_500_000,
       });
       expect(result.signer).to.equal('teamTwo');
     });
 
     it('does not offer team-support as a signer before its activation height', async () => {
       chainUtilitiesStub.getChainTeamSupportAddressUpdates.returns([
-        { address: 'teamSupport', height: 2000000 },
+        { address: 'teamSupport', height: 2_000_000 },
       ]);
       appEventVerifier = proxyquire(
         '../../ZelBack/src/services/appMessaging/appEventVerifier',
@@ -385,7 +385,7 @@ describe('appEventVerifier', () => {
       await expect(appEventVerifier.authorize({
         appEvent,
         previousState: { owner: 'ownerA' },
-        daemonHeight: 1000000,
+        daemonHeight: 1_000_000,
       })).to.be.rejectedWith(/does not correspond with Flux App owner/);
     });
 
@@ -530,7 +530,7 @@ describe('appEventVerifier', () => {
         type: 'fluxappregister',
         envelopeVersion: 1,
         specBlob: { name: 'myapp', version: 8 },
-        timestamp: 12345,
+        timestamp: 12_345,
         signature: 'sig',
       });
       expect(hash).to.equal('v1-hash-abc');
@@ -539,7 +539,7 @@ describe('appEventVerifier', () => {
       expect(backend.computeMessageHash.calledOnce).to.be.true;
       const { args } = backend.computeMessageHash.firstCall;
       expect(args).to.deep.equal([
-        'fluxappregister', 1, { name: 'myapp', version: 8 }, 12345, 'sig',
+        'fluxappregister', 1, { name: 'myapp', version: 8 }, 12_345, 'sig',
       ]);
     });
 
@@ -548,7 +548,7 @@ describe('appEventVerifier', () => {
         type: 'fluxappregister',
         envelopeVersion: 2,
         contentHash: 'deadbeef',
-        timestamp: 12345,
+        timestamp: 12_345,
         extend: true,
         signature: 'sig',
       });
@@ -560,7 +560,7 @@ describe('appEventVerifier', () => {
       // extend must sit between timestamp and signature — its omission was a real
       // hash-mismatch bug (signature landed in the extend slot).
       expect(args).to.deep.equal([
-        'fluxappregister', 2, 'deadbeef', 12345, true, 'sig',
+        'fluxappregister', 2, 'deadbeef', 12_345, true, 'sig',
       ]);
     });
 
@@ -568,7 +568,7 @@ describe('appEventVerifier', () => {
       await expect(appEventVerifier.computeOutboundHash({
         type: 'fluxappregister',
         envelopeVersion: 1,
-        timestamp: 12345,
+        timestamp: 12_345,
         signature: 'sig',
       })).to.be.rejectedWith(/envelope v1 requires specBlob/);
     });
@@ -577,7 +577,7 @@ describe('appEventVerifier', () => {
       await expect(appEventVerifier.computeOutboundHash({
         type: 'fluxappregister',
         envelopeVersion: 2,
-        timestamp: 12345,
+        timestamp: 12_345,
         signature: 'sig',
       })).to.be.rejectedWith(/envelope v2 requires contentHash/);
     });
@@ -665,7 +665,7 @@ describe('appEventVerifier', () => {
       const result = await appEventVerifier.authorize({
         appEvent,
         previousState: { owner: '1GygtXKccaXPbJfB5ZZg2Xu9ukCG7tkrUs' },
-        daemonHeight: 1880961,
+        daemonHeight: 1_880_961,
       });
       expect(result.signer).to.equal(RACE_SIGNER);
     });
@@ -684,7 +684,7 @@ describe('appEventVerifier', () => {
       await expect(appEventVerifier.authorize({
         appEvent,
         previousState: { owner: 'currentOwner' },
-        daemonHeight: 2831782,
+        daemonHeight: 2_831_782,
       })).to.be.rejectedWith(/does not correspond with Flux App owner/);
     });
 
@@ -698,7 +698,7 @@ describe('appEventVerifier', () => {
       await expect(appEventVerifier.authorize({
         appEvent,
         previousState: { owner: 'currentOwner' },
-        daemonHeight: 2831782,
+        daemonHeight: 2_831_782,
       })).to.be.rejectedWith(/does not correspond with Flux App owner/);
     });
   });

@@ -42,7 +42,7 @@ const LEGACY_MIN_PEER_UPTIME_SECONDS = config.get('fluxapps.appSyncMinPeerUptime
 // (a partition is exactly when verdicts fly) leaks its socket forever.
 const INBOUND_EPHEMERAL_MAX_TOTAL = 32;
 const INBOUND_EPHEMERAL_MAX_PER_IP = 4;
-const INBOUND_EPHEMERAL_LIFETIME_MS = 120000;
+const INBOUND_EPHEMERAL_LIFETIME_MS = 120_000;
 
 class FluxPeerManager extends EventEmitter {
   // Keyed by CONNECTION, not by ip:port. A peer that reconnects keeps its

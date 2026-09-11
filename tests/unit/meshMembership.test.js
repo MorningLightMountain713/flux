@@ -16,7 +16,7 @@ describe('meshMembership', () => {
   const OWN = '9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08:0';
   const PEER = '9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08:1';
   const ANCHOR_HASH = '7413fd279058ad2088b061d719fbf59d90cd5e509a08ab0d11746b91d7c01c4c';
-  const TIP = 2843890;
+  const TIP = 2_843_890;
 
   const { publicKey, privateKey } = crypto.generateKeyPairSync('ed25519');
   const publicKeyB64 = publicKey.export({ format: 'der', type: 'spki' }).subarray(-32).toString('base64');
@@ -44,7 +44,7 @@ describe('meshMembership', () => {
     meshVoucher: signVoucher({
       meshCa: 'PEER-CA-PEM', appUuid: APP_UUID, outpoint: PEER, blockHash: ANCHOR_HASH,
     }),
-    meshPort: 16230,
+    meshPort: 16_230,
     meshAnchor: { height: TIP - 5, hash: ANCHOR_HASH },
     ...overrides,
   });

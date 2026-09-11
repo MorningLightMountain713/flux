@@ -66,35 +66,35 @@ async function confirmNodeTierHardware() {
     log.info(`Node Collateral: ${collateral}`);
     log.info(`Node Total Ram: ${nodeRam}`);
     log.info(`Node Cpu Threads: ${nodeCpuThreads}`);
-    if (tier === 'bamf' && collateral === 100000) {
+    if (tier === 'bamf' && collateral === 100_000) {
       if (nodeRam < 30) {
         throw new Error(`Node Total Ram (${nodeRam}) below Stratus requirements`);
       }
       if (nodeCpuThreads < 8) {
         throw new Error(`Node Cpu Threads (${nodeCpuThreads}) below Stratus requirements`);
       }
-    } else if (tier === 'super' && collateral === 25000) {
+    } else if (tier === 'super' && collateral === 25_000) {
       if (nodeRam < 7) {
         throw new Error(`Node Total Ram (${nodeRam}) below Nimbus requirements`);
       }
       if (nodeCpuThreads < 4) {
         throw new Error(`Node Cpu Threads (${nodeCpuThreads}) below Nimbus requirements`);
       }
-    } else if (tier === 'basic' && collateral === 10000) {
+    } else if (tier === 'basic' && collateral === 10_000) {
       if (nodeRam < 3) {
         throw new Error(`Node Total Ram (${nodeRam}) below Cumulus requirements`);
       }
       if (nodeCpuThreads < 2) {
         throw new Error(`Node Cpu Threads (${nodeCpuThreads}) below Cumulus requirements`);
       }
-    } else if (tier === 'bamf' && collateral === 40000) {
+    } else if (tier === 'bamf' && collateral === 40_000) {
       if (nodeRam < 61) {
         throw new Error(`Node Total Ram (${nodeRam}) below new Stratus requirements`);
       }
       if (nodeCpuThreads < 16) {
         throw new Error(`Node Cpu Threads (${nodeCpuThreads}) below new Stratus requirements`);
       }
-    } else if (tier === 'super' && collateral === 12500) {
+    } else if (tier === 'super' && collateral === 12_500) {
       if (nodeRam < 30) {
         throw new Error(`Node Total Ram (${nodeRam}) below new Nimbus requirements`);
       }
@@ -385,7 +385,7 @@ async function verifyLogin(req, res) {
         throw new Error('Signed message is not valid');
       }
 
-      if (+message.substring(0, 13) < (timestamp - 900000) || +message.substring(0, 13) > timestamp) {
+      if (+message.substring(0, 13) < (timestamp - 900_000) || +message.substring(0, 13) > timestamp) {
         throw new Error('Signed message is not valid');
       }
 
@@ -462,7 +462,7 @@ async function verifyLogin(req, res) {
                 upsert: false,
               };
               await dbHelper.updateOneInDatabase(database, loggedUsersCollection, query, update, options);
-            }, 60000);
+            }, 60_000);
           } else {
             throw new Error('Invalid signature');
           }

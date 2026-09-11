@@ -208,7 +208,7 @@ describe('fluxCommunication tests', () => {
       };
       const type = 'fluxappregister';
       const version = 1;
-      const timestamp = 1592988806887;
+      const timestamp = 1_592_988_806_887;
       const messageToSign = type + version + JSON.stringify(appSpecifications) + timestamp;
       const signature = verificationHelper.signMessage(messageToSign, privateKey);
       const messageToHash = type + version + JSON.stringify(appSpecifications) + timestamp + signature;
@@ -250,7 +250,7 @@ describe('fluxCommunication tests', () => {
       await fluxCommunication.handleAppMessages(message, fromIp, port);
 
       sinon.assert.calledOnceWithExactly(relaySpy, messageString, `${fromIp}:${port}`);
-    }).timeout(10000);
+    }).timeout(10_000);
 
     it('should not send broadcast if signature is invalid', async () => {
       const fromIp = '127.0.0.5';
@@ -289,7 +289,7 @@ describe('fluxCommunication tests', () => {
       };
       const type = 'fluxappregister';
       const version = 1;
-      const timestamp = 1592988806887;
+      const timestamp = 1_592_988_806_887;
       const signature = 'testing1234invalidsignature';
       const messageToHash = type + version + JSON.stringify(appSpecifications) + timestamp + signature;
       const hash = await generalService.messageHash(messageToHash);
@@ -319,7 +319,7 @@ describe('fluxCommunication tests', () => {
       };
       const type = 'fluxappregister';
       const version = 1;
-      const timestamp = 1592988806887;
+      const timestamp = 1_592_988_806_887;
       const messageToSign = type + version + JSON.stringify(appSpecifications) + timestamp;
       const signature = verificationHelper.signMessage(messageToSign, privateKey);
       const messageToHash = type + version + JSON.stringify(appSpecifications) + timestamp + signature;
@@ -389,7 +389,7 @@ describe('fluxCommunication tests', () => {
       await fluxCommunication.handleAppRunningMessage(message, fromIp, port);
 
       sinon.assert.calledOnceWithExactly(relaySpy, messageString, `${fromIp}:${port}`);
-    }).timeout(10000);
+    }).timeout(10_000);
 
     it('should not send broadcast if message is older than 3900 seconds', async () => {
       const fromIp = '127.0.0.5';
@@ -397,7 +397,7 @@ describe('fluxCommunication tests', () => {
       const type = 'fluxappregister';
       const name = 'myApp';
       const version = 1;
-      const timestamp = 1592988806887;
+      const timestamp = 1_592_988_806_887;
       const broadcastedAt = Date.now() - (80 * 60 * 1000);
       const messageToHash = type + version + name + timestamp;
       const hash = await generalService.messageHash(messageToHash);
@@ -597,7 +597,7 @@ describe('fluxCommunication tests', () => {
       const req = {
         params: {
           ip: '127.0.3.1',
-          port: 16127,
+          port: 16_127,
         },
       };
 
@@ -630,7 +630,7 @@ describe('fluxCommunication tests', () => {
         },
         query: {
           ip: '127.0.3.1',
-          port: 16127,
+          port: 16_127,
         },
       };
 
@@ -662,7 +662,7 @@ describe('fluxCommunication tests', () => {
       const req = {
         params: {
           ip: '127.0.3.1',
-          port: 16127,
+          port: 16_127,
         },
       };
 
@@ -724,7 +724,7 @@ describe('fluxCommunication tests', () => {
       const req = {
         params: {
           ip: '127.0.3.1',
-          port: 16127,
+          port: 16_127,
         },
       };
 
@@ -781,7 +781,7 @@ describe('fluxCommunication tests', () => {
       const req = {
         params: {
           ip: '127.0.3.1',
-          port: 16127,
+          port: 16_127,
         },
       };
 
@@ -814,7 +814,7 @@ describe('fluxCommunication tests', () => {
         },
         query: {
           ip: '127.0.3.1',
-          port: 16127,
+          port: 16_127,
         },
       };
 
@@ -844,7 +844,7 @@ describe('fluxCommunication tests', () => {
       const req = {
         params: {
           ip: '127.0.4.1',
-          port: 16127,
+          port: 16_127,
         },
       };
 
@@ -1056,7 +1056,7 @@ describe('fluxCommunication tests', () => {
         };
       });
       const ip = '127.0.0.2';
-      wsserver = new WebSocket.Server({ host: '127.0.0.2', port: 16127 });
+      wsserver = new WebSocket.Server({ host: '127.0.0.2', port: 16_127 });
       daemonServiceMiscRpcsStub.returns({
         data:
         {
@@ -1090,7 +1090,7 @@ describe('fluxCommunication tests', () => {
         };
       });
       const ip = '127.0.0.2';
-      wsserver = new WebSocket.Server({ host: '127.0.0.2', port: 16127 });
+      wsserver = new WebSocket.Server({ host: '127.0.0.2', port: 16_127 });
       daemonServiceMiscRpcsStub.returns({
         data:
         {
@@ -1142,7 +1142,7 @@ describe('fluxCommunication tests', () => {
         };
       });
       const ip = '127.0.0.2';
-      wsserver = new WebSocket.Server({ host: '127.0.0.2', port: 16127 });
+      wsserver = new WebSocket.Server({ host: '127.0.0.2', port: 16_127 });
       daemonServiceMiscRpcsStub.returns({
         data:
         {
@@ -1181,7 +1181,7 @@ describe('fluxCommunication tests', () => {
         };
       });
       const ip = '127.0.0.2';
-      wsserver = new WebSocket.Server({ host: '127.0.0.2', port: 16127 });
+      wsserver = new WebSocket.Server({ host: '127.0.0.2', port: 16_127 });
       daemonServiceMiscRpcsStub.returns({
         data:
         {
@@ -1232,7 +1232,7 @@ describe('fluxCommunication tests', () => {
           };
         });
         const ip = '127.0.0.2';
-        wsserver = new WebSocket.Server({ host: '127.0.0.2', port: 16127 });
+        wsserver = new WebSocket.Server({ host: '127.0.0.2', port: 16_127 });
         lruRateLimitStub.returns(true);
         sinon.stub(FluxTTLCache.prototype, 'has').returns(false);
         const verifyFluxBroadcastStub = sinon.stub(fluxCommunicationUtils, 'verifyFluxBroadcast').returns({ result: fluxCommunicationUtils.VerifyResult.OK, announcer: null });
@@ -1280,7 +1280,7 @@ describe('fluxCommunication tests', () => {
           };
         });
         const ip = '127.0.0.2';
-        wsserver = new WebSocket.Server({ host: '127.0.0.2', port: 16127 });
+        wsserver = new WebSocket.Server({ host: '127.0.0.2', port: 16_127 });
         lruRateLimitStub.returns(true);
         sinon.stub(FluxTTLCache.prototype, 'has').returns(false);
         const verifyFluxBroadcast = sinon.stub(fluxCommunicationUtils, 'verifyFluxBroadcast').returns({ result: fluxCommunicationUtils.VerifyResult.OK, announcer: null });
@@ -1328,7 +1328,7 @@ describe('fluxCommunication tests', () => {
           };
         });
         const ip = '127.0.0.2';
-        wsserver = new WebSocket.Server({ host: '127.0.0.2', port: 16127 });
+        wsserver = new WebSocket.Server({ host: '127.0.0.2', port: 16_127 });
         lruRateLimitStub.returns(true);
         sinon.stub(FluxTTLCache.prototype, 'has').returns(false);
         const verifyFluxBroadcast = sinon.stub(fluxCommunicationUtils, 'verifyFluxBroadcast').returns({ result: fluxCommunicationUtils.VerifyResult.OK, announcer: null });
@@ -1681,7 +1681,7 @@ describe('fluxCommunication tests', () => {
           messages: [{
             type: 'apprunning',
             envelope: {
-              version: 1, pubKey: 'unknownnodepubkey', timestamp: 1700000000000, signature: 'sig',
+              version: 1, pubKey: 'unknownnodepubkey', timestamp: 1_700_000_000_000, signature: 'sig',
             },
             data: { type: 'fluxapprunning', name: 'someapp', ip: '1.2.3.4' },
           }],
@@ -1816,7 +1816,7 @@ describe('fluxCommunication tests', () => {
         subject: 'bb:0',
         data: { certificate: { subject: 'bb:0', height: 100, fingerprint: 'fp', verdicts: [] } },
         envelope: {
-          version: 1, pubKey: 'pk', timestamp: 1700000000000, signature: 'sig',
+          version: 1, pubKey: 'pk', timestamp: 1_700_000_000_000, signature: 'sig',
         },
       };
 
@@ -1857,7 +1857,7 @@ describe('fluxCommunication tests', () => {
       const peerKey = '10.20.30.42:16127';
       const unsigned = [
         { type: 'evicted', ip: '1.2.3.4', createdAt: '2026-09-05T00:00:00.000Z', envelope: null },
-        { type: 'appremoved', ip: '1.2.3.4', data: { appName: 'a', broadcastedAt: 1700000000000 } },
+        { type: 'appremoved', ip: '1.2.3.4', data: { appName: 'a', broadcastedAt: 1_700_000_000_000 } },
         { type: 'apprunning', ip: '1.2.3.4', data: { apps: [{ name: 'a', hash: 'h' }] } },
       ];
 

@@ -15,16 +15,16 @@ describe('policyStore tests', () => {
 
   const BASE_URL = 'https://policy.example/documents';
   // Timings live in config now, so the suite declares them rather than reading production's.
-  const ARTIFACT_TIMEOUT_MS = 120000;
+  const ARTIFACT_TIMEOUT_MS = 120_000;
   const POLICY_CONFIG = {
     baseUrl: BASE_URL,
     refreshIntervalMs: {
-      blockedRepositories: 6 * 3600000,
-      tamperingBlocklist: 12 * 3600000,
-      enterpriseNodes: 6 * 3600000,
-      ipLocationTable: 24 * 3600000,
+      blockedRepositories: 6 * 3_600_000,
+      tamperingBlocklist: 12 * 3_600_000,
+      enterpriseNodes: 6 * 3_600_000,
+      ipLocationTable: 24 * 3_600_000,
     },
-    fetchTimeoutMs: { default: 10000, ipLocationTable: ARTIFACT_TIMEOUT_MS },
+    fetchTimeoutMs: { default: 10_000, ipLocationTable: ARTIFACT_TIMEOUT_MS },
   };
 
   // Every document is loaded and refreshed by the same code path, so the layer tests use

@@ -37,13 +37,13 @@ describe('specReconciler tests', () => {
   // Expiry is the REAL v9 rule — registeredAt + ttl < tipBlockTime — never a
   // stubbed predicate. V9_SUBMISSION's ttl is 30 days, so a row registered here
   // is long past it against wall-clock time, and one registered "now" is not.
-  const LONG_EXPIRED_AT = 1751628800;
+  const LONG_EXPIRED_AT = 1_751_628_800;
 
   let flux;
 
   before(async function loadLibrary() {
     // The first fromSubmission compiles the ajv schemas.
-    this.timeout(30000);
+    this.timeout(30_000);
     flux = await loadSpecLibrary();
   });
 
@@ -89,7 +89,7 @@ describe('specReconciler tests', () => {
    * let a test claim an update where it had handed over the same spec twice.
    */
   async function specWith(targetsBlob, {
-    name = 'myapp', height = 2550000, expired = false, instances = 1,
+    name = 'myapp', height = 2_550_000, expired = false, instances = 1,
     cpu, preStop = false, hash,
   } = {}) {
     const placement = { targetIps: [], targetOutpoints: [], targetOperators: [] };
@@ -151,7 +151,7 @@ describe('specReconciler tests', () => {
     sinon.stub(globalState, 'dbReady').get(() => dbReady);
     sinon.stub(appsRepository, 'listInstalledApps').resolves(installed);
     sinon.stub(appsRepository, 'listGlobalAppInfo').resolves(globalRows);
-    sinon.stub(registryManager, 'getScannedHeight').resolves(1000000);
+    sinon.stub(registryManager, 'getScannedHeight').resolves(1_000_000);
     // The per-identity diff enumerates this app's containers; no real docker in
     // unit tests (and none of these fixtures have containers).
     sinon.stub(dockerService, 'getAppContainerObjects').resolves([]);
@@ -436,7 +436,7 @@ describe('specReconciler tests', () => {
 
       await specReconciler.requestFullConvergence({ reason: 'test' });
       expect(uninstallStub.called).to.equal(false);
-      await clock.tickAsync(300000);
+      await clock.tickAsync(300_000);
       expect(getInstalled.called, 'nothing is scheduled for an unchanged spec').to.equal(false);
       expect(reconcileAppStub.called).to.equal(false);
     });
@@ -490,7 +490,7 @@ describe('specReconciler tests', () => {
 
       // Both requests land within the loose stagger window; only the LAST
       // scheduled spec fires, once.
-      await clock.tickAsync(300000);
+      await clock.tickAsync(300_000);
       expect(reconcileAppStub.calledOnce, 'one adoption for the latest spec').to.equal(true);
       expect(reconcileAppStub.firstCall.args[1].hash).to.equal(v3.hash);
     });
@@ -510,7 +510,7 @@ describe('specReconciler tests', () => {
 
       await specReconciler.requestAppConvergence('myapp', { reason: 'test' });
       expect(getInstalled.callCount, 'the convergence pass read the installed row once').to.equal(1);
-      await clock.tickAsync(300000);
+      await clock.tickAsync(300_000);
       // The second read is fireAdoption's own: an adoption really was scheduled
       // and really did re-check, rather than never having been scheduled at all.
       expect(getInstalled.callCount, 'the timer fired and re-read the installed row').to.equal(2);
@@ -530,7 +530,7 @@ describe('specReconciler tests', () => {
       // feature, so the step keeps the configured 60s.
       sinon.stub(appsRepository, 'getInstalledApp').resolves(registryRow);
       const delay = await specReconciler.adoptionDelayMs(registryRow, LOCAL_IP);
-      expect(delay).to.equal(60000);
+      expect(delay).to.equal(60_000);
     });
 
     it('floors the named step at the graceful-shutdown budget', async () => {
@@ -544,7 +544,7 @@ describe('specReconciler tests', () => {
       }, { preStop: true });
       sinon.stub(appsRepository, 'getInstalledApp').resolves(registryRow);
       const delay = await specReconciler.adoptionDelayMs(registryRow, LOCAL_IP);
-      expect(delay).to.equal(120000 + 15000); // ordinal 1 x (budget + start margin)
+      expect(delay).to.equal(120_000 + 15_000); // ordinal 1 x (budget + start margin)
     });
 
     it('bounds a loose instance inside the stagger window, deterministically', async () => {
@@ -553,7 +553,7 @@ describe('specReconciler tests', () => {
       const b = await specReconciler.adoptionDelayMs(registryRow, LOCAL_IP);
       expect(a).to.equal(b);
       expect(a).to.be.at.least(0);
-      expect(a).to.be.below(300000);
+      expect(a).to.be.below(300_000);
     });
   });
 

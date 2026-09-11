@@ -111,7 +111,7 @@ describe('appTamperingRepository tests', () => {
     });
 
     it('retries once when two concurrent upserts race the unique index', async () => {
-      const duplicate = Object.assign(new Error('duplicate key'), { code: 11000 });
+      const duplicate = Object.assign(new Error('duplicate key'), { code: 11_000 });
       dbHelperStub.findOneAndUpdateInDatabase.onFirstCall().rejects(duplicate);
       dbHelperStub.findOneAndUpdateInDatabase.onSecondCall().resolves({ _id: 'existing' });
 

@@ -14,6 +14,7 @@ const path = require('node:path');
 
 const meshDerivation = require('./meshDerivation');
 const { MESH_STATE_ROOT, TRUST_BUNDLE_FILE } = require('./meshCertificates');
+const { MAX_PORT } = require('../utils/socketAddressUtils');
 
 // The overlay tun carries 1420 so that the IPv4 face's 1400 always fits after
 // the 20-byte IPv6 growth — with both faces fixed, no packet can ever exceed
@@ -102,7 +103,7 @@ function assertMembers(members) {
 function nebulaConfig({
   instance, appUuid, outpoint, listenPort, members, sshClientPublicKey,
 }) {
-  if (!Number.isInteger(listenPort) || listenPort < 1 || listenPort > 65535) {
+  if (!Number.isInteger(listenPort) || listenPort < 1 || listenPort > MAX_PORT) {
     throw new TypeError('listenPort must be a valid port number');
   }
   if (typeof sshClientPublicKey !== 'string' || sshClientPublicKey === ''
@@ -236,7 +237,7 @@ function firewallRules({
   if (typeof externalInterface !== 'string' || externalInterface === '') {
     throw new TypeError('externalInterface must be a non-empty string');
   }
-  if (!Number.isInteger(meshPort) || meshPort < 1 || meshPort > 65535) {
+  if (!Number.isInteger(meshPort) || meshPort < 1 || meshPort > MAX_PORT) {
     throw new TypeError('meshPort must be a valid port number');
   }
   if (typeof transitSubnet !== 'string' || !transitSubnet.includes('/')) {

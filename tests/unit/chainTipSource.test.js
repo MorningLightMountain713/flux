@@ -99,9 +99,9 @@ describe('chainTipSource tests', () => {
       await chainTipSource.start();
       const handler = subscribeStub.firstCall.args[1];
 
-      handler.onMessage({ height: 2837899, hash: 'ab'.repeat(32) });
+      handler.onMessage({ height: 2_837_899, hash: 'ab'.repeat(32) });
 
-      sinon.assert.calledOnceWithExactly(recordChainTipStub, 2837899);
+      sinon.assert.calledOnceWithExactly(recordChainTipStub, 2_837_899);
     });
 
     it('should refresh authoritatively when messages were missed', async () => {
@@ -129,10 +129,10 @@ describe('chainTipSource tests', () => {
         await chainTipSource.start();
         blockchainInfoStub.resetHistory();
 
-        await clock.tickAsync(300000);
+        await clock.tickAsync(300_000);
         sinon.assert.calledOnce(blockchainInfoStub);
 
-        await clock.tickAsync(300000);
+        await clock.tickAsync(300_000);
         sinon.assert.calledTwice(blockchainInfoStub);
       } finally {
         clock.restore();
@@ -147,7 +147,7 @@ describe('chainTipSource tests', () => {
         blockchainInfoStub.resetHistory();
         chainTipSource.stop();
 
-        await clock.tickAsync(900000);
+        await clock.tickAsync(900_000);
 
         sinon.assert.notCalled(blockchainInfoStub);
       } finally {
@@ -163,8 +163,8 @@ describe('chainTipSource tests', () => {
         blockchainInfoStub.resetHistory();
         blockchainInfoStub.resolves(false);
 
-        await clock.tickAsync(300000);
-        await clock.tickAsync(300000);
+        await clock.tickAsync(300_000);
+        await clock.tickAsync(300_000);
 
         sinon.assert.calledTwice(blockchainInfoStub);
       } finally {

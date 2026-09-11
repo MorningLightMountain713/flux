@@ -63,7 +63,7 @@ function getLocalVersionHash() {
 async function getRemoteVersionInfo() {
   try {
     const response = await axios.get(RELEASE_API, {
-      timeout: 30000,
+      timeout: 30_000,
       headers: {
         'User-Agent': 'FluxOS',
       },
@@ -150,7 +150,7 @@ function startUpdateScript() {
     // source of truth for every endpoint a node reaches, so a hardcoded URL in the script,
     // or one taken from the environment, would sit outside it and be unreachable by the
     // harness.
-    execFile('npm', ['run', 'update:cloudui', '--', config.get('github.apiBaseUrl')], { cwd: PROJECT_ROOT, timeout: 300000 }, (error, stdout, stderr) => {
+    execFile('npm', ['run', 'update:cloudui', '--', config.get('github.apiBaseUrl')], { cwd: PROJECT_ROOT, timeout: 300_000 }, (error, stdout, stderr) => {
       if (error) {
         log.error(`CloudUI update script error: ${error.message}`);
         if (stderr) {

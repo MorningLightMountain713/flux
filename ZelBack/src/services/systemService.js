@@ -191,7 +191,7 @@ async function updateAptCache(options = {}) {
 
   // for testing, if you want to reset the lastUpdate time, you can run:
   //  sudo touch -d '2007-01-31 8:46:26' /var/lib/apt/periodic/update-success-stamp
-  const oneDay = 86400 * 1000;
+  const oneDay = 86_400 * 1000;
   const lastUpdate = await cacheUpdateTime();
 
   if (force || lastUpdate + oneDay < Date.now()) {
@@ -280,7 +280,7 @@ async function addGpgKey(url, keyringName) {
   while (!keyring && remainingAttempts) {
     remainingAttempts -= 1;
     // eslint-disable-next-line no-await-in-loop
-    const { data } = await axios.get(url, { responseType: 'arraybuffer', timeout: 10000 }).catch(async () => {
+    const { data } = await axios.get(url, { responseType: 'arraybuffer', timeout: 10_000 }).catch(async () => {
       // eslint-disable-next-line no-await-in-loop
       await serviceHelper.delay(30 * 1000);
       return { data: null };
@@ -563,7 +563,7 @@ async function monitorSyncthingPackage() {
         data: { data },
       } = await axios
         .get(`${config.get('stats.baseUrl')}/getmodulesminimumversions`, {
-          timeout: 10000,
+          timeout: 10_000,
         })
         .catch((error) => {
           log.error(error);
@@ -706,13 +706,13 @@ async function monitorAptCache(event) {
   if (waitForLockFailed) {
     // they've had enough time with the lock, time to move then on.
     const termParams = ['-k', '-TERM', dpkgLock, dpkgLockFrontend];
-    const opts = { runAsRoot: true, timeout: 10000, params: termParams };
+    const opts = { runAsRoot: true, timeout: 10_000, params: termParams };
     const { error: fuserError } = await serviceHelper.runCommand('fuser', opts);
     if (fuserError) {
       // tests do weird stuff if you mutate the call properties
       const killParams = termParams.slice();
       killParams[1] = '-KILL';
-      await serviceHelper.runCommand('fuser', { runAsRoot: true, timeout: 10000, params: killParams });
+      await serviceHelper.runCommand('fuser', { runAsRoot: true, timeout: 10_000, params: killParams });
     }
   }
 
@@ -823,7 +823,7 @@ async function mongoDBConfig() {
         path: '/var/log/mongodb/mongod.log',
       },
       net: {
-        port: 27017,
+        port: 27_017,
         bindIp: '127.0.0.1',
       },
       processManagement: {

@@ -16,10 +16,10 @@ describe('networkStateManager tests', () => {
       outidx: '0',
       ip: '47.199.51.61:16137',
       network: '',
-      added_height: 1076533,
-      confirmed_height: 1076535,
-      last_confirmed_height: 1079888,
-      last_paid_height: 1077653,
+      added_height: 1_076_533,
+      confirmed_height: 1_076_535,
+      last_confirmed_height: 1_079_888,
+      last_paid_height: 1_077_653,
       tier: 'CUMULUS',
       payment_address: 't1Z6mWoCrFC2g3iTCFdFkYdTfwtG84E3y2o',
       pubkey: '04378c8585d45861c8783f9c8cd0c85478164c12ce3fd13af1b44ebc8fe1ad6c786e92b211cb9566c596b6e2454d394a06bc44f748afb3c9ee48caa096d704abac',
@@ -34,9 +34,9 @@ describe('networkStateManager tests', () => {
       outidx: '0',
       ip: '47.199.51.61:16147',
       network: '',
-      added_height: 1079638,
-      confirmed_height: 1079642,
-      last_confirmed_height: 1079889,
+      added_height: 1_079_638,
+      confirmed_height: 1_079_642,
+      last_confirmed_height: 1_079_889,
       last_paid_height: 0,
       tier: 'CUMULUS',
       payment_address: 't1UHecy6WiSJXs4Zqt5UvVdRDF7PMbZJK7q',
@@ -52,9 +52,9 @@ describe('networkStateManager tests', () => {
       outidx: '0',
       ip: '44.192.51.11:16147',
       network: '',
-      added_height: 123456,
-      confirmed_height: 1234567,
-      last_confirmed_height: 123456,
+      added_height: 123_456,
+      confirmed_height: 1_234_567,
+      last_confirmed_height: 123_456,
       last_paid_height: 0,
       tier: 'CUMULUS',
       payment_address: 't1UHecyqtF7PMb6WiSJXs4ZZJK7q5UvVdRD',
@@ -134,7 +134,7 @@ describe('networkStateManager tests', () => {
     await nsm.start();
     sinon.assert.calledOnce(fetcher);
 
-    blockEmitter.emit('syncProgress', 500000);
+    blockEmitter.emit('syncProgress', 500_000);
     await new Promise((r) => { setImmediate(r); });
 
     sinon.assert.calledTwice(fetcher);
@@ -194,7 +194,7 @@ describe('networkStateManager tests', () => {
 
     sinon.assert.calledOnce(fetcher);
 
-    blockEmitter.emit('blocksProcessed', 1946562);
+    blockEmitter.emit('blocksProcessed', 1_946_562);
     // we yield to the event queue here so the state fetcher has a chance to run
     await new Promise((r) => { setImmediate(r); });
 
@@ -212,9 +212,9 @@ describe('networkStateManager tests', () => {
             outidx: '0',
             ip: '47.199.51.61:16147',
             network: '',
-            added_height: 1079638,
-            confirmed_height: 1079642,
-            last_confirmed_height: 1079889,
+            added_height: 1_079_638,
+            confirmed_height: 1_079_642,
+            last_confirmed_height: 1_079_889,
             last_paid_height: 0,
             tier: 'CUMULUS',
             payment_address: 't1UHecy6WiSJXs4Zqt5UvVdRDF7PMbZJK7q',
@@ -233,9 +233,9 @@ describe('networkStateManager tests', () => {
             outidx: '0',
             ip: '44.192.51.11:16147',
             network: '',
-            added_height: 123456,
-            confirmed_height: 1234567,
-            last_confirmed_height: 123456,
+            added_height: 123_456,
+            confirmed_height: 1_234_567,
+            last_confirmed_height: 123_456,
             last_paid_height: 0,
             tier: 'CUMULUS',
             payment_address: 't1UHecyqtF7PMb6WiSJXs4ZZJK7q5UvVdRD',
@@ -276,9 +276,9 @@ describe('networkStateManager tests', () => {
       outidx: '0',
       ip: '44.192.51.11:16147',
       network: '',
-      added_height: 123456,
-      confirmed_height: 1234567,
-      last_confirmed_height: 123456,
+      added_height: 123_456,
+      confirmed_height: 1_234_567,
+      last_confirmed_height: 123_456,
       last_paid_height: 0,
       tier: 'CUMULUS',
       payment_address: 't1UHecyqtF7PMb6WiSJXs4ZZJK7q5UvVdRD',
@@ -771,9 +771,9 @@ describe('networkStateManager tests', () => {
       outidx: '0',
       ip: '44.192.51.11:16147',
       network: '',
-      added_height: 123456,
-      confirmed_height: 1234567,
-      last_confirmed_height: 123456,
+      added_height: 123_456,
+      confirmed_height: 1_234_567,
+      last_confirmed_height: 123_456,
       last_paid_height: 0,
       tier: 'CUMULUS',
       payment_address: 't1UHecyqtF7PMb6WiSJXs4ZZJK7q5UvVdRD',
@@ -846,7 +846,7 @@ describe('networkStateManager tests', () => {
 
     // This may not be 100% correct - but it's pretty close (and works)
 
-    blockEmitter.emit('blocksProcessed', 1946562);
+    blockEmitter.emit('blocksProcessed', 1_946_562);
     await new Promise((r) => { setImmediate(r); });
 
     expect(nsm.indexesReady).to.be.equal(false);
@@ -863,9 +863,9 @@ describe('networkStateManager tests', () => {
       outidx: '0',
       ip: '44.192.51.11:16147',
       network: '',
-      added_height: 123456,
-      confirmed_height: 1234567,
-      last_confirmed_height: 123456,
+      added_height: 123_456,
+      confirmed_height: 1_234_567,
+      last_confirmed_height: 123_456,
       last_paid_height: 0,
       tier: 'CUMULUS',
       payment_address: 't1UHecyqtF7PMb6WiSJXs4ZZJK7q5UvVdRD',
@@ -884,9 +884,9 @@ describe('networkStateManager tests', () => {
       outidx: '0',
       ip: '1.2.3.4:16147',
       network: '',
-      added_height: 123456,
-      confirmed_height: 1234567,
-      last_confirmed_height: 123456,
+      added_height: 123_456,
+      confirmed_height: 1_234_567,
+      last_confirmed_height: 123_456,
       last_paid_height: 0,
       tier: 'CUMULUS',
       payment_address: 't1UHecyqtF7PMb6WiSJXs4ZZJK7q5UvVdRD',
@@ -935,7 +935,7 @@ describe('networkStateManager tests', () => {
 
     const indexBefore = await nsm.search('04d50620a31f045c61be42bad44b7a9424ffb6de37bf256b88f00e118e59736165255f2f4585b36c7e1f8f3e20db4fa4e55e61cc01dc7a5cd2b2ed0153627588dc', 'pubkey');
 
-    blockEmitter.emit('blocksProcessed', 1946562);
+    blockEmitter.emit('blocksProcessed', 1_946_562);
     await new Promise((r) => { setImmediate(r); });
 
     expect(nsm.indexesReady).to.be.equal(false);
@@ -955,9 +955,9 @@ describe('networkStateManager tests', () => {
       outidx: '0',
       ip: networkIps[0],
       network: '',
-      added_height: 123456,
-      confirmed_height: 1234567,
-      last_confirmed_height: 123456,
+      added_height: 123_456,
+      confirmed_height: 1_234_567,
+      last_confirmed_height: 123_456,
       last_paid_height: 0,
       tier: 'CUMULUS',
       payment_address: 't1UHecyqtF7PMb6WiSJXs4ZZJK7q5UvVdRD',
@@ -986,7 +986,7 @@ describe('networkStateManager tests', () => {
 
     fetcher.callsFake(nodeFetcher);
 
-    let blockCount = 1234567;
+    let blockCount = 1_234_567;
 
     const clock = sinon.useFakeTimers({ toFake: ['setTimeout'] });
 

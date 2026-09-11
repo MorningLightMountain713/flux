@@ -43,7 +43,7 @@ describe('appInspector tests', () => {
       // The sampler's own cadence. Absent, config.fluxapps throws the moment the
       // interval is armed, which is why nothing had ever entered the loop body.
       fluxapps: {
-        statsSampleIntervalMs: 60000,
+        statsSampleIntervalMs: 60_000,
       },
     };
 
@@ -174,7 +174,7 @@ describe('appInspector tests', () => {
       dockerServiceStub.dockerContainerInspect.resolves({ State: { Running: true, Paused: false }, HostConfig: { NanoCpus: 2e9 } });
       clock = sinon.useFakeTimers();
       appInspector.startAppMonitoring('myapp');
-      await clock.tickAsync(60000);
+      await clock.tickAsync(60_000);
       const [stored] = globalStateStub.appsMonitored.myapp.statsStore;
       appInspector.stopAppMonitoring('myapp', false);
       return stored;
@@ -198,7 +198,7 @@ describe('appInspector tests', () => {
       appInspector.startAppMonitoring('myapp');
       await clock.tickAsync(1000);
       const early = globalStateStub.appsMonitored.myapp.statsStore.length;
-      await clock.tickAsync(59000);
+      await clock.tickAsync(59_000);
       const afterAMinute = globalStateStub.appsMonitored.myapp.statsStore.length;
       appInspector.stopAppMonitoring('myapp', false);
 
@@ -218,7 +218,7 @@ describe('appInspector tests', () => {
       appInspector.startAppMonitoring('myapp');
       await clock.tickAsync(1000);
       const early = globalStateStub.appsMonitored.myapp.statsStore.length;
-      await clock.tickAsync(59000);
+      await clock.tickAsync(59_000);
       const afterAMinute = globalStateStub.appsMonitored.myapp.statsStore.length;
       appInspector.stopAppMonitoring('myapp', false);
 
@@ -231,13 +231,13 @@ describe('appInspector tests', () => {
     // harness runs this sampler at two seconds, so the config being read is
     // itself a property something must pin.
     it('samples on the configured cadence, not the fallback', async () => {
-      configStub.fluxapps.statsSampleIntervalMs = 30000;
+      configStub.fluxapps.statsSampleIntervalMs = 30_000;
       dockerServiceStub.dockerContainerStats = sinon.stub().resolves(reading({}));
       dockerServiceStub.dockerContainerInspect.resolves({ State: { Running: true, Paused: false }, HostConfig: { NanoCpus: 2e9 } });
       clock = sinon.useFakeTimers();
 
       appInspector.startAppMonitoring('myapp');
-      await clock.tickAsync(29000);
+      await clock.tickAsync(29_000);
       const beforeTick = globalStateStub.appsMonitored.myapp.statsStore.length;
       await clock.tickAsync(1000);
       const afterTick = globalStateStub.appsMonitored.myapp.statsStore.length;
@@ -256,13 +256,13 @@ describe('appInspector tests', () => {
       dockerServiceStub.dockerContainerStats = sinon.stub().resolves(reading({}));
       dockerServiceStub.dockerContainerInspect.resolves({ State: { Running: true, Paused: false }, HostConfig: { NanoCpus: 2e9 } });
       appUtilitiesStub.getContainerStorage
-        .onFirstCall().resolves({ used: 41943040, status: 'success' })
+        .onFirstCall().resolves({ used: 41_943_040, status: 'success' })
         .onSecondCall().resolves({ used: 1024, status: 'partial', unmeasured: ['/data'] });
       clock = sinon.useFakeTimers();
 
       appInspector.startAppMonitoring('myapp');
-      await clock.tickAsync(60000);
-      await clock.tickAsync(60000);
+      await clock.tickAsync(60_000);
+      await clock.tickAsync(60_000);
       const { statsStore } = globalStateStub.appsMonitored.myapp;
       appInspector.stopAppMonitoring('myapp', false);
 
@@ -270,7 +270,7 @@ describe('appInspector tests', () => {
       expect(
         statsStore[1].disk.used,
         'the partial reading was charted - a drop the disk never had',
-      ).to.equal(41943040);
+      ).to.equal(41_943_040);
       expect(
         statsStore[1].disk.status,
         'the carried copy kept claiming success - a permanent failure would chart as fresh forever',
@@ -285,22 +285,22 @@ describe('appInspector tests', () => {
       dockerServiceStub.dockerContainerStats = sinon.stub().resolves(reading({}));
       dockerServiceStub.dockerContainerInspect.resolves({ State: { Running: true, Paused: false }, HostConfig: { NanoCpus: 2e9 } });
       appUtilitiesStub.getContainerStorage
-        .onFirstCall().resolves({ used: 41943040, status: 'success' })
+        .onFirstCall().resolves({ used: 41_943_040, status: 'success' })
         .onSecondCall().resolves({
           bind: 0, volume: 0, rootfs: 0, used: 0, status: 'error', message: 'docker is busy',
         });
       clock = sinon.useFakeTimers();
 
       appInspector.startAppMonitoring('myapp');
-      await clock.tickAsync(60000);
-      await clock.tickAsync(60000);
+      await clock.tickAsync(60_000);
+      await clock.tickAsync(60_000);
       const { statsStore } = globalStateStub.appsMonitored.myapp;
       appInspector.stopAppMonitoring('myapp', false);
 
       expect(
         statsStore[1].disk.used,
         'a failed reading charted as zero - the very drop the carry-forward exists to prevent',
-      ).to.equal(41943040);
+      ).to.equal(41_943_040);
       expect(
         statsStore[1].disk.status,
         'the carried copy kept claiming success - a permanent failure would chart as fresh forever',
@@ -317,7 +317,7 @@ describe('appInspector tests', () => {
       clock = sinon.useFakeTimers();
 
       appInspector.startAppMonitoring('myapp');
-      await clock.tickAsync(60000);
+      await clock.tickAsync(60_000);
       const { statsStore } = globalStateStub.appsMonitored.myapp;
       appInspector.stopAppMonitoring('myapp', false);
 
@@ -400,7 +400,7 @@ describe('appInspector tests', () => {
       clock = sinon.useFakeTimers();
 
       appInspector.startAppMonitoring('myapp');
-      await clock.tickAsync(60000);
+      await clock.tickAsync(60_000);
       const [stored] = globalStateStub.appsMonitored.myapp.statsStore;
       appInspector.stopAppMonitoring('myapp', false);
 
@@ -458,7 +458,7 @@ describe('appInspector tests', () => {
     const ticks = async (n) => {
       for (let i = 0; i < n; i += 1) {
         // eslint-disable-next-line no-await-in-loop
-        await clock.tickAsync(60000);
+        await clock.tickAsync(60_000);
       }
     };
 
@@ -535,7 +535,7 @@ describe('appInspector tests', () => {
       // sample in the store it is green on a coverage report and unproven in fact.
       arm();
       globalStateStub.appsMonitored.myapp.statsStore.push(
-        { timestamp: 1, elapsed: -SEVEN_DAYS - 60000, memoryUsage: 1 },
+        { timestamp: 1, elapsed: -SEVEN_DAYS - 60_000, memoryUsage: 1 },
         { timestamp: 2, elapsed: -1000, memoryUsage: 2 },
       );
 
@@ -1199,7 +1199,7 @@ describe('appInspector tests', () => {
     // took the same three docker readings again on every five-second poll and threw
     // them away, so the copy that was kept was the one nothing read.
     describe('serving a held reading', () => {
-      const monotonicNow = () => Number(process.hrtime.bigint() / 1000000n);
+      const monotonicNow = () => Number(process.hrtime.bigint() / 1_000_000n);
       let req;
       let res;
 
@@ -1383,18 +1383,18 @@ describe('appInspector tests', () => {
       };
     }
 
-    const stats = [sample(1_000), sample(2_000)];
+    const stats = [sample(1000), sample(2000)];
 
     it('should return every collected sample when no range is given', () => {
       globalStateStub.appsMonitored = { test_myapp: { statsStore: stats } };
 
       const result = appInspector.appMonitor('test_myapp');
 
-      expect(result.map((s) => s.timestamp)).to.deep.equal([1_000, 2_000]);
+      expect(result.map((s) => s.timestamp)).to.deep.equal([1000, 2000]);
     });
 
     it('should report a sample in the shape consumers parse', () => {
-      globalStateStub.appsMonitored = { test_myapp: { statsStore: [sample(1_000)] } };
+      globalStateStub.appsMonitored = { test_myapp: { statsStore: [sample(1000)] } };
 
       const [{ data }] = appInspector.appMonitor('test_myapp');
 
@@ -1417,7 +1417,7 @@ describe('appInspector tests', () => {
     // the stack. Reporting the totals as a read and a write entry gives the same
     // sum, and gives a caller that reads only the first entry the true figure.
     it('should report summed disk io as one read and one write entry', () => {
-      globalStateStub.appsMonitored = { test_myapp: { statsStore: [sample(1_000)] } };
+      globalStateStub.appsMonitored = { test_myapp: { statsStore: [sample(1000)] } };
 
       const [{ data }] = appInspector.appMonitor('test_myapp');
 
@@ -1429,7 +1429,7 @@ describe('appInspector tests', () => {
 
     it('should report absent disk io as absent rather than zero', () => {
       globalStateStub.appsMonitored = {
-        test_myapp: { statsStore: [sample(1_000, { ioRead: null, ioWrite: null })] },
+        test_myapp: { statsStore: [sample(1000, { ioRead: null, ioWrite: null })] },
       };
 
       const [{ data }] = appInspector.appMonitor('test_myapp');
@@ -1440,21 +1440,21 @@ describe('appInspector tests', () => {
     it('should drop samples older than the requested range', () => {
       const now = Date.now();
       globalStateStub.appsMonitored = {
-        test_myapp: { statsStore: [sample(now - 60_000), sample(now - 1_000)] },
+        test_myapp: { statsStore: [sample(now - 60_000), sample(now - 1000)] },
       };
 
       const result = appInspector.appMonitor('test_myapp', 30_000);
 
-      expect(result.map((s) => s.timestamp)).to.deep.equal([now - 1_000]);
+      expect(result.map((s) => s.timestamp)).to.deep.equal([now - 1000]);
     });
 
     it('should accept a range given as a string', () => {
       const now = Date.now();
-      globalStateStub.appsMonitored = { test_myapp: { statsStore: [sample(now - 1_000)] } };
+      globalStateStub.appsMonitored = { test_myapp: { statsStore: [sample(now - 1000)] } };
 
       const result = appInspector.appMonitor('test_myapp', '30000');
 
-      expect(result.map((s) => s.timestamp)).to.deep.equal([now - 1_000]);
+      expect(result.map((s) => s.timestamp)).to.deep.equal([now - 1000]);
     });
 
     it('should throw if no app name was passed', () => {
@@ -2032,7 +2032,7 @@ describe('appInspector tests', () => {
     // fraction of one core-second: 1 is saturated, 0.5 is half loaded.
     // elapsed is the monotonic clock the decision window filters on; timestamp is
     // the wall clock the charts plot
-    const monotonicNow = () => Number(process.hrtime.bigint() / 1000000n);
+    const monotonicNow = () => Number(process.hrtime.bigint() / 1_000_000n);
 
     // The monotonic clock counts from system boot, so a sample described as five
     // minutes old is only expressible on a host that has been up that long - on a
@@ -2047,7 +2047,7 @@ describe('appInspector tests', () => {
     beforeEach(() => {
       realHrtimeBigint = process.hrtime.bigint;
       const origin = realHrtimeBigint();
-      process.hrtime.bigint = () => BigInt(hostUpMs) * 1000000n + (realHrtimeBigint() - origin);
+      process.hrtime.bigint = () => BigInt(hostUpMs) * 1_000_000n + (realHrtimeBigint() - origin);
     });
 
     afterEach(() => {

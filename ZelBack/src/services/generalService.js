@@ -76,17 +76,17 @@ async function nodeTier() {
   }
   // get collateralInformation.txindex vout
   const { value } = txInformation.data.vout[collateralInformation.txindex];
-  if (value === 10000 || value === 1000) {
+  if (value === 10_000 || value === 1000) {
     storedTier = 'basic';
     storedCollateral = value;
     return storedTier;
   }
-  if (value === 25000 || value === 12500) {
+  if (value === 25_000 || value === 12_500) {
     storedTier = 'super';
     storedCollateral = value;
     return storedTier;
   }
-  if (value === 100000 || value === 40000) {
+  if (value === 100_000 || value === 40_000) {
     storedTier = 'bamf';
     storedCollateral = value;
     return storedTier;
@@ -137,17 +137,17 @@ async function nodeCollateral() {
   }
   // get collateralInformation.txindex vout
   const { value } = txInformation.data.vout[collateralInformation.txindex];
-  if (value === 10000 || value === 1000) {
+  if (value === 10_000 || value === 1000) {
     storedTier = 'basic';
     storedCollateral = value;
     return storedCollateral;
   }
-  if (value === 100000 || value === 40000) {
+  if (value === 100_000 || value === 40_000) {
     storedTier = 'bamf';
     storedCollateral = value;
     return storedCollateral;
   }
-  if (value === 25000 || value === 12500) {
+  if (value === 25_000 || value === 12_500) {
     storedTier = 'super';
     storedCollateral = value;
     return storedCollateral;

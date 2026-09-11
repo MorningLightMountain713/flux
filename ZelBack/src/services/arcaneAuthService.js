@@ -155,7 +155,7 @@ async function configSyncHandler(req, res) {
       return res.status(400).json(errMessage);
     }
 
-    if (JSON.stringify(configData).length > 16384) {
+    if (JSON.stringify(configData).length > 16_384) {
       const errMessage = messageHelper.createErrorMessage(
         'configData exceeds maximum size (16KB)',
         'BadRequest',

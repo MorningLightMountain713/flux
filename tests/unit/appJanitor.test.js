@@ -38,14 +38,14 @@ describe('appJanitor tests', () => {
 
   // What registryManager.getScannedHeight() reports below. v1-v8 expiry is
   // measured against THIS, never against wall-clock time.
-  const SCANNED_HEIGHT = 1000000;
+  const SCANNED_HEIGHT = 1_000_000;
   // V9_SUBMISSION's ttl is 30 days, so a row registered at this timestamp
   // (2025-07-04) is long past it against wall-clock time.
-  const LONG_EXPIRED_AT = 1751628800;
+  const LONG_EXPIRED_AT = 1_751_628_800;
 
   before(async function loadLibrary() {
     // The first fromSubmission compiles the ajv schemas.
-    this.timeout(30000);
+    this.timeout(30_000);
     flux = await loadSpecLibrary();
   });
 
@@ -56,7 +56,7 @@ describe('appJanitor tests', () => {
    * {state},{clock} pair the inner spec wants - the adaptation the sweep
    * depends on and a literal cannot have.
    */
-  async function v9Row(name, { registeredAt = LONG_EXPIRED_AT, height = 2500000 } = {}) {
+  async function v9Row(name, { registeredAt = LONG_EXPIRED_AT, height = 2_500_000 } = {}) {
     return instantiatedSpec(await v9Spec({ name }), { registeredAt, height });
   }
 
@@ -255,8 +255,8 @@ describe('appJanitor tests', () => {
       // expire is 88000). Both rows below carry the SAME stale registeredAt, so
       // a sweep that measured them the v9 way would expire both.
       appsRepositoryStub.listGlobalAppInfo.resolves([
-        await v8Row('deadapp', { height: SCANNED_HEIGHT - 88000 - 1 }),
-        await v8Row('liveapp', { height: SCANNED_HEIGHT - 88000 + 1 }),
+        await v8Row('deadapp', { height: SCANNED_HEIGHT - 88_000 - 1 }),
+        await v8Row('liveapp', { height: SCANNED_HEIGHT - 88_000 + 1 }),
       ]);
 
       const result = await appJanitor.sweepRegistryExpiry();
@@ -269,7 +269,7 @@ describe('appJanitor tests', () => {
       // Registered at a height whose v8 lease ran out long ago, and freshly
       // registered in time. The version, not the caller, picks the rule.
       appsRepositoryStub.listGlobalAppInfo.resolves([
-        await v9Row('liveapp', { registeredAt: Math.floor(Date.now() / 1000), height: 100000 }),
+        await v9Row('liveapp', { registeredAt: Math.floor(Date.now() / 1000), height: 100_000 }),
       ]);
 
       const result = await appJanitor.sweepRegistryExpiry();

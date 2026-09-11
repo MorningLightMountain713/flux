@@ -45,7 +45,7 @@ describe('ipLocationSync tests', () => {
       sweepOrphanedArtifacts: sinon.stub().resolves(0),
     };
     storeStub = {
-      setArtifact: sinon.stub().resolves({ generated: '2026-07-31T00:00:00Z', rowCount: 2126447 }),
+      setArtifact: sinon.stub().resolves({ generated: '2026-07-31T00:00:00Z', rowCount: 2_126_447 }),
       adoptPersistedStatus: sinon.stub().resolves(false),
       refreshNodeLocations: sinon.stub().resolves({ refreshed: 0, dropped: 0 }),
       status: sinon.stub().returns({ ready: false, generated: null, rowCount: 0 }),
@@ -85,7 +85,7 @@ describe('ipLocationSync tests', () => {
     expect(repositoryStub.writeArtifactBytes.calledOnceWith('ipLocationTable', sinon.match.instanceOf(Buffer))).to.equal(true);
     const options = axiosGetStub.firstCall.args[1];
     expect(options.responseType).to.equal('arraybuffer');
-    expect(options.timeout).to.equal(120000);
+    expect(options.timeout).to.equal(120_000);
     expect(options.maxContentLength, 'the declared size is a ceiling too').to.equal(BYTES.length);
   });
 
@@ -153,7 +153,7 @@ describe('ipLocationSync tests', () => {
       // rebuild. It must reach the table and touch the network for nothing, or
       // it is no longer the cheap half.
       storeStub.adoptPersistedStatus.resolves(true);
-      storeStub.status.returns({ ready: true, generated: '2026-07-31T00:00:00Z', rowCount: 2126447 });
+      storeStub.status.returns({ ready: true, generated: '2026-07-31T00:00:00Z', rowCount: 2_126_447 });
       repositoryStub.getArtifactRecord.resolves({ fileId: 'id1', sha256: SHA, fetchedAt: 1 });
 
       await ipLocationSync.restoreCachedTable();
@@ -165,7 +165,7 @@ describe('ipLocationSync tests', () => {
 
     it('leaves the digest ready, so the fetch half has nothing to download', async () => {
       storeStub.adoptPersistedStatus.resolves(true);
-      storeStub.status.returns({ ready: true, generated: '2026-07-31T00:00:00Z', rowCount: 2126447 });
+      storeStub.status.returns({ ready: true, generated: '2026-07-31T00:00:00Z', rowCount: 2_126_447 });
       repositoryStub.getArtifactRecord.resolves({ fileId: 'id1', sha256: SHA, fetchedAt: 1 });
 
       await ipLocationSync.restoreCachedTable();
@@ -202,7 +202,7 @@ describe('ipLocationSync tests', () => {
     // the rows are already in mongo under the marker's baseline; the digest still comes from
     // the record, so the daily refresh finds it already holds what the bundle names
     storeStub.adoptPersistedStatus.resolves(true);
-    storeStub.status.returns({ ready: true, generated: '2026-07-31T00:00:00Z', rowCount: 2126447 });
+    storeStub.status.returns({ ready: true, generated: '2026-07-31T00:00:00Z', rowCount: 2_126_447 });
     repositoryStub.getArtifactRecord.resolves({ fileId: 'id1', sha256: SHA, fetchedAt: 1 });
     repositoryStub.readArtifactBytes.resolves(Buffer.from('stored bytes'));
 
@@ -262,7 +262,7 @@ describe('ipLocationSync tests', () => {
   // an arbitrary bound on them - one they exceed on a loaded box while testing
   // nothing about wall-clock speed.
   it('retries with backoff while the node holds no table, then stops', async function () {
-    this.timeout(20000);
+    this.timeout(20_000);
     const clock = sinon.useFakeTimers();
     try {
       axiosGetStub.rejects(new Error('dns not up yet'));
@@ -285,12 +285,12 @@ describe('ipLocationSync tests', () => {
   });
 
   it('stops retrying as soon as a table is held', async function () {
-    this.timeout(20000);
+    this.timeout(20_000);
     const clock = sinon.useFakeTimers();
     try {
       axiosGetStub.rejects(new Error('dns not up yet'));
       await ipLocationSync.startSync();
-      storeStub.status.returns({ ready: true, generated: '2026-07-31T00:00:00Z', rowCount: 2126447 });
+      storeStub.status.returns({ ready: true, generated: '2026-07-31T00:00:00Z', rowCount: 2_126_447 });
       await clock.tickAsync(10 * 60 * 1000);
       const afterTable = axiosGetStub.callCount;
       await clock.tickAsync(60 * 60 * 1000);
@@ -319,7 +319,7 @@ describe('ipLocationSync tests', () => {
 
     it('refreshes the node locations after adopting the stored ingest', async () => {
       storeStub.adoptPersistedStatus.resolves(true);
-      storeStub.status.returns({ ready: true, generated: '2026-07-31T00:00:00Z', rowCount: 2126447 });
+      storeStub.status.returns({ ready: true, generated: '2026-07-31T00:00:00Z', rowCount: 2_126_447 });
       axiosGetStub.resolves({ status: 304, data: null, headers: {} });
       await ipLocationSync.startSync();
       await settle();
@@ -331,7 +331,7 @@ describe('ipLocationSync tests', () => {
       const clock = sinon.useFakeTimers();
       try {
         storeStub.adoptPersistedStatus.resolves(true);
-        storeStub.status.returns({ ready: true, generated: '2026-07-31T00:00:00Z', rowCount: 2126447 });
+        storeStub.status.returns({ ready: true, generated: '2026-07-31T00:00:00Z', rowCount: 2_126_447 });
         axiosGetStub.resolves({ status: 304, data: null, headers: {} });
         await ipLocationSync.startSync();
         const atBoot = storeStub.refreshNodeLocations.callCount;

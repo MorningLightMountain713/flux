@@ -191,7 +191,7 @@ async function pullWithRetry(job, image, onProgress) {
       if (attempt > maxRetries) break;
       log.warn(`imageCache - pull ${image.repotag} failed (attempt ${attempt}/${maxRetries}): ${err.message}, retrying`);
       // eslint-disable-next-line no-await-in-loop
-      await serviceHelper.delay(Math.min(60000, 2 ** attempt * 1000));
+      await serviceHelper.delay(Math.min(60_000, 2 ** attempt * 1000));
     }
   }
   throw lastErr;
