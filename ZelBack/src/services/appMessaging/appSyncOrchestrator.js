@@ -455,6 +455,14 @@ class AppSyncOrchestrator {
       return;
     }
     if (this.#stateSyncComplete) return;
+    // A completion is a PEER. The response handlers have the key and always had
+    // it, so one arriving without it means that path stopped saying - and
+    // banking it anyway is how the count went back to being a tally of answers,
+    // which one peer answering three times satisfies.
+    if (!peerKey) {
+      log.error(`AppSyncOrchestrator - ${syncType} sync completed with no peer, refusing to count it`);
+      return;
+    }
     if (this.#syncCompletions[syncType] === undefined) return;
     const progress = this.#peerProgress.get(peerKey);
     if (progress && !progress.failed) progress.done.add(syncType);
