@@ -18,7 +18,6 @@ const { obtainPayloadFromStorage } = require('./utils/fluxStorageRefs');
 const { UTILITY_ROLE_LABEL } = require('./utils/appConstants');
 const cpuBurstHelper = require('./utils/cpuBurstHelper');
 const LogFrameDecoder = require('./utils/logFrameDecoder');
-const shutdownPlan = require('./appLifecycle/shutdownPlan');
 
 
 const operationRegistry = require('./utils/operationRegistry');
@@ -1125,7 +1124,7 @@ async function appDockerCreate(deployComp, options = {}) {
     uuid: options.uuid || null,
   });
   const budgetLabels = options.requiresEncryption
-    ? shutdownBudgetLabels(deployComp, shutdownPlan.maxDrainTimeout(deployComp))
+    ? shutdownBudgetLabels(deployComp, deployComp.maxDrainTimeoutSeconds())
     : null;
   // Identity is merged LAST so it always wins. A caller-supplied label that
   // happened to reuse an identity key would otherwise silently retag the
