@@ -748,11 +748,13 @@ describe('AppSyncOrchestrator', () => {
     it('refuses a completion that cannot be attributed to a peer', async () => {
       const orchestrator = await driveToRequests();
 
+      // No peer. Nine answers, enough to complete the round if they were
+      // counted - and nothing to say they came from more than one node.
       for (let i = 0; i < 3; i += 1) {
-        appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_COMPLETE, 'apprunning', `10.0.0.${i + 1}:16127`);
-        appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_COMPLETE, 'appinstalling', `10.0.0.${i + 1}:16127`);
-        appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_COMPLETE, 'apperrors', `10.0.0.${i + 1}:16127`);
-        appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_COMPLETE, 'apptemp', `10.0.0.${i + 1}:16127`);
+        appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_COMPLETE, 'apprunning');
+        appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_COMPLETE, 'appinstalling');
+        appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_COMPLETE, 'apperrors');
+        appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_COMPLETE, 'apptemp');
       }
       await clock.tickAsync(0);
 
