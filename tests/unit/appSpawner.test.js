@@ -495,6 +495,29 @@ describe('appSpawner tests', () => {
       expect(logStub.info.args.some((a) => a[0]?.includes?.('selected to try to spawn'))).to.be.true;
     });
 
+    it('skips only the app whose placement cannot be decided, and spawns the rest', async () => {
+      // A legacy spec whose region name the location table cannot resolve
+      // refuses the geo question rather than widening the pin to its whole
+      // country. That refusal reaches this filter as a throw, and an unguarded
+      // filter callback would abandon the whole pass - every app skipped this
+      // cycle because one spec was unreadable. The companion assertion is the
+      // second candidate: it must still be selected, or "skips the bad app"
+      // and "skips everything" look identical here.
+      const poisoned = await makeCandidate({ placement: { geoAllow: [{ continent: 'NA' }] } });
+      Object.defineProperty(poisoned.instantiated.spec, 'placement', {
+        get() {
+          throw new Error("placement.matches: this spec's geolocation cannot be resolved ('Uusimaa' in FI)");
+        },
+      });
+      const healthy = await makeCandidate({ placement: { geoAllow: [{ continent: 'NA' }] } });
+      buildModule({ candidates: [poisoned, healthy] });
+
+      await appSpawner.trySpawningGlobalApplication().catch(() => {});
+
+      expect(logStub.warn.args.some((a) => a[0]?.includes?.('cannot decide placement')), 'warned about the one it skipped').to.be.true;
+      expect(logStub.info.args.some((a) => a[0]?.includes?.('selected to try to spawn')), 'the other app still reached selection').to.be.true;
+    });
+
     it('skips the install trial when 5+ nodes report genuine failures (the re-armed network gate)', async () => {
       // only permanent verdicts are stored/broadcast now, so the count means the
       // app itself is broken - the node must not burn a trial rediscovering it

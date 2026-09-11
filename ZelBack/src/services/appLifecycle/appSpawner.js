@@ -550,7 +550,22 @@ async function trySpawningGlobalApplication() {
         && !appsToBeCheckedLater.some((appAux) => appAux.appName === c.instantiated.name)));
       survivors.afterAlreadyHeldOrTried = globalAppNamesLocation.length;
       stages.push(['afterAlreadyHeldOrTried', nameSet()]);
-      globalAppNamesLocation = globalAppNamesLocation.filter((c) => c.instantiated.spec.placement.matches(nodeInfo));
+      globalAppNamesLocation = globalAppNamesLocation.filter((c) => {
+        try {
+          return c.instantiated.spec.placement.matches(nodeInfo);
+        } catch (error) {
+          // Per app, not per pass. A legacy spec whose region name the location
+          // table cannot resolve refuses the geo question rather than widening
+          // the pin to its whole country, and an unguarded throw here would
+          // leave the whole filter — and so this entire spawn cycle, for every
+          // app — abandoned by one unreadable spec. Not spawning the app whose
+          // placement cannot be decided is the answer; not spawning anything is
+          // not. The node retries each cycle, and recovers by itself once the
+          // table arrives.
+          log.warn(`trySpawningGlobalApplication - cannot decide placement for ${c.instantiated.name}, skipping it this cycle: ${error.message}`);
+          return false;
+        }
+      });
       survivors.afterGeolocation = globalAppNamesLocation.length;
       stages.push(['afterGeolocation', nameSet()]);
       globalAppNamesLocation = globalAppNamesLocation.filter((c) => {
