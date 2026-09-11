@@ -169,9 +169,8 @@ describe('appInspector tests', () => {
     });
 
     const tickOnce = async (memStats) => {
-      dockerServiceStub.getDockerContainerOnly = sinon.stub().resolves({ State: 'running' });
       dockerServiceStub.dockerContainerStats = sinon.stub().resolves(reading(memStats));
-      dockerServiceStub.dockerContainerInspect.resolves({ HostConfig: { NanoCpus: 2e9 } });
+      dockerServiceStub.dockerContainerInspect.resolves({ State: { Running: true, Paused: false }, HostConfig: { NanoCpus: 2e9 } });
       clock = sinon.useFakeTimers();
       appInspector.startAppMonitoring('myapp');
       await clock.tickAsync(60000);
@@ -191,9 +190,8 @@ describe('appInspector tests', () => {
     // for stats on every monitored component. This key has gone missing before.
     it('samples on a sane cadence when the interval is missing from config', async () => {
       delete configStub.fluxapps.statsSampleIntervalMs;
-      dockerServiceStub.getDockerContainerOnly = sinon.stub().resolves({ State: 'running' });
       dockerServiceStub.dockerContainerStats = sinon.stub().resolves(reading({}));
-      dockerServiceStub.dockerContainerInspect.resolves({ HostConfig: { NanoCpus: 2e9 } });
+      dockerServiceStub.dockerContainerInspect.resolves({ State: { Running: true, Paused: false }, HostConfig: { NanoCpus: 2e9 } });
       clock = sinon.useFakeTimers();
 
       appInspector.startAppMonitoring('myapp');
@@ -212,9 +210,8 @@ describe('appInspector tests', () => {
     // same ~1ms storm the fallback exists to prevent.
     it('samples on a sane cadence when the configured interval is present but wrong', async () => {
       configStub.fluxapps.statsSampleIntervalMs = 0;
-      dockerServiceStub.getDockerContainerOnly = sinon.stub().resolves({ State: 'running' });
       dockerServiceStub.dockerContainerStats = sinon.stub().resolves(reading({}));
-      dockerServiceStub.dockerContainerInspect.resolves({ HostConfig: { NanoCpus: 2e9 } });
+      dockerServiceStub.dockerContainerInspect.resolves({ State: { Running: true, Paused: false }, HostConfig: { NanoCpus: 2e9 } });
       clock = sinon.useFakeTimers();
 
       appInspector.startAppMonitoring('myapp');
@@ -234,9 +231,8 @@ describe('appInspector tests', () => {
     // itself a property something must pin.
     it('samples on the configured cadence, not the fallback', async () => {
       configStub.fluxapps.statsSampleIntervalMs = 30000;
-      dockerServiceStub.getDockerContainerOnly = sinon.stub().resolves({ State: 'running' });
       dockerServiceStub.dockerContainerStats = sinon.stub().resolves(reading({}));
-      dockerServiceStub.dockerContainerInspect.resolves({ HostConfig: { NanoCpus: 2e9 } });
+      dockerServiceStub.dockerContainerInspect.resolves({ State: { Running: true, Paused: false }, HostConfig: { NanoCpus: 2e9 } });
       clock = sinon.useFakeTimers();
 
       appInspector.startAppMonitoring('myapp');
@@ -256,9 +252,8 @@ describe('appInspector tests', () => {
     // customer's disk chart from it, so a single short reading rendered as a
     // week-long cliff on a disk that never changed.
     it('does not chart a partial disk reading as a real drop', async () => {
-      dockerServiceStub.getDockerContainerOnly = sinon.stub().resolves({ State: 'running' });
       dockerServiceStub.dockerContainerStats = sinon.stub().resolves(reading({}));
-      dockerServiceStub.dockerContainerInspect.resolves({ HostConfig: { NanoCpus: 2e9 } });
+      dockerServiceStub.dockerContainerInspect.resolves({ State: { Running: true, Paused: false }, HostConfig: { NanoCpus: 2e9 } });
       appUtilitiesStub.getContainerStorage
         .onFirstCall().resolves({ used: 41943040, status: 'success' })
         .onSecondCall().resolves({ used: 1024, status: 'partial', unmeasured: ['/data'] });
@@ -286,9 +281,8 @@ describe('appInspector tests', () => {
     // and storing that charts a drop to the FLOOR, which is worse than the
     // partial dip the guard was written for.
     it('does not chart a failed disk reading as a drop to zero either', async () => {
-      dockerServiceStub.getDockerContainerOnly = sinon.stub().resolves({ State: 'running' });
       dockerServiceStub.dockerContainerStats = sinon.stub().resolves(reading({}));
-      dockerServiceStub.dockerContainerInspect.resolves({ HostConfig: { NanoCpus: 2e9 } });
+      dockerServiceStub.dockerContainerInspect.resolves({ State: { Running: true, Paused: false }, HostConfig: { NanoCpus: 2e9 } });
       appUtilitiesStub.getContainerStorage
         .onFirstCall().resolves({ used: 41943040, status: 'success' })
         .onSecondCall().resolves({
@@ -316,9 +310,8 @@ describe('appInspector tests', () => {
     // `disk_stats.used || 0`, so an absent figure charts as zero - a drop to the
     // floor rather than a partial one.
     it('does not blank the disk figure when there is nothing to carry forward', async () => {
-      dockerServiceStub.getDockerContainerOnly = sinon.stub().resolves({ State: 'running' });
       dockerServiceStub.dockerContainerStats = sinon.stub().resolves(reading({}));
-      dockerServiceStub.dockerContainerInspect.resolves({ HostConfig: { NanoCpus: 2e9 } });
+      dockerServiceStub.dockerContainerInspect.resolves({ State: { Running: true, Paused: false }, HostConfig: { NanoCpus: 2e9 } });
       appUtilitiesStub.getContainerStorage.resolves({ used: 1024, status: 'partial' });
       clock = sinon.useFakeTimers();
 
@@ -396,14 +389,13 @@ describe('appInspector tests', () => {
     // declares networkWith. Reading eth0 alone made that traffic vanish from a
     // reading the base returned in full, and no chart could ever show it again.
     it('keeps every network interface, not only eth0', async () => {
-      dockerServiceStub.getDockerContainerOnly = sinon.stub().resolves({ State: 'running' });
       const twoInterfaces = reading({ stats: { inactive_file: 512 } });
       twoInterfaces.networks = {
         eth0: { rx_bytes: 30, tx_bytes: 40, rx_packets: 9 },
         eth1: { rx_bytes: 700, tx_bytes: 800, rx_packets: 11 },
       };
       dockerServiceStub.dockerContainerStats = sinon.stub().resolves(twoInterfaces);
-      dockerServiceStub.dockerContainerInspect.resolves({ HostConfig: { NanoCpus: 2e9 } });
+      dockerServiceStub.dockerContainerInspect.resolves({ State: { Running: true, Paused: false }, HostConfig: { NanoCpus: 2e9 } });
       clock = sinon.useFakeTimers();
 
       appInspector.startAppMonitoring('myapp');
@@ -446,10 +438,18 @@ describe('appInspector tests', () => {
       networks: { eth0: { rx_bytes: 30, tx_bytes: 40 } },
     });
 
-    const arm = ({ container = { State: 'running' } } = {}) => {
-      dockerServiceStub.getDockerContainerOnly = sinon.stub().resolves(container);
+    // One inspect answers both questions the tick asks - is it running, and what
+    // is it allocated - so the container option shapes the inspect rather than a
+    // separate listing lookup. `container: null` is a container that is gone.
+    const arm = ({ container = { State: 'running' }, nanoCpus = 2e9 } = {}) => {
+      const inspect = container === null
+        ? null
+        : {
+          State: { Running: container.State === 'running', Paused: container.State === 'paused' },
+          HostConfig: { NanoCpus: nanoCpus },
+        };
       dockerServiceStub.dockerContainerStats = sinon.stub().resolves(healthyReading());
-      dockerServiceStub.dockerContainerInspect.resolves({ HostConfig: { NanoCpus: 2e9 } });
+      dockerServiceStub.dockerContainerInspect.resolves(inspect);
       clock = sinon.useFakeTimers();
       appInspector.startAppMonitoring('myapp');
     };
@@ -501,7 +501,7 @@ describe('appInspector tests', () => {
 
       await ticks(1);
 
-      expect(dockerServiceStub.getDockerContainerOnly.called, 'sampled an app that is no longer monitored').to.be.false;
+      expect(dockerServiceStub.dockerContainerInspect.called, 'sampled an app that is no longer monitored').to.be.false;
       expect(logStub.error.calledWithMatch(/already stopped/)).to.be.true;
     });
 
@@ -512,8 +512,21 @@ describe('appInspector tests', () => {
       arm();
       await ticks(4);
 
-      expect(dockerServiceStub.dockerContainerInspect.callCount, 'inspected on ticks 1 and 4 only').to.equal(2);
-      expect(stored().map((sample) => sample.nanoCpus)).to.deep.equal([2e9, 2e9, 2e9, 2e9]);
+      // The cadence is asserted on the VALUE, not on the inspect call count: one
+      // inspect now answers the run-state check too, so it happens every tick and
+      // counting calls would measure the plumbing rather than the rule.
+      //
+      // Move the allocation after tick 4 and nothing notices until tick 7 - the
+      // re-read lands on ticks 1, 4, 7, and the two samples in between carry the
+      // value rather than reporting null. A test that only proved "all four the
+      // same" would pass against a tick that re-read every time.
+      dockerServiceStub.dockerContainerInspect.resolves({
+        State: { Running: true, Paused: false }, HostConfig: { NanoCpus: 5e9 },
+      });
+      await ticks(3);
+
+      expect(stored().map((sample) => sample.nanoCpus), 'carried in between, re-read on tick 7')
+        .to.deep.equal([2e9, 2e9, 2e9, 2e9, 2e9, 2e9, 5e9]);
     });
 
     it('drops samples older than seven days and keeps the rest', async () => {
@@ -570,7 +583,10 @@ describe('appInspector tests', () => {
       // allocation unknown. Null says so; a zero would read as "no cpu allotted"
       // and the throttler divides by it.
       arm();
-      dockerServiceStub.dockerContainerInspect.resolves({});
+      // Running, so the tick samples - but carrying no HostConfig. The run state
+      // and the allocation come from the same inspect now, so this has to answer
+      // the first question to get as far as the second.
+      dockerServiceStub.dockerContainerInspect.resolves({ State: { Running: true, Paused: false } });
 
       await ticks(1);
 
@@ -1216,7 +1232,7 @@ describe('appInspector tests', () => {
           precpu_stats: { cpu_usage: { total_usage: 0 }, system_cpu_usage: 0 },
           memory_stats: { usage: 1, limit: 2 },
         });
-        dockerServiceStub.dockerContainerInspect.resolves({ HostConfig: { NanoCpus: 1e9 } });
+        dockerServiceStub.dockerContainerInspect.resolves({ State: { Running: true, Paused: false }, HostConfig: { NanoCpus: 1e9 } });
       });
 
       it('should read what the sampler already collected rather than docker', async () => {

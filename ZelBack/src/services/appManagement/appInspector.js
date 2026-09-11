@@ -603,8 +603,14 @@ function startAppMonitoring(appName) {
         log.error(`Monitoring of ${appName} already stopped`);
         return;
       }
-      const dockerContainer = await dockerService.getDockerContainer(appName);
-      if (!dockerContainer) {
+      // Inspected, not listed. getDockerContainer resolves the listing entry and
+      // then returns a dockerode HANDLE built from its id - an object carrying
+      // modem, id and defaultOptions and nothing else - so reading `.State` off
+      // it was always undefined, and `undefined !== 'running'` returned from
+      // every tick before a sample was ever taken. The store stayed empty and
+      // the cpu throttler, which needs five samples, never moved an allocation.
+      const inspect = await dockerService.dockerContainerInspect(appName);
+      if (!inspect) {
         log.error(`Monitoring of ${appName} not possible. App does not exist. Forcing stopping of monitoring`);
         // eslint-disable-next-line no-use-before-define
         stopAppMonitoring(appName, true);
@@ -612,8 +618,8 @@ function startAppMonitoring(appName) {
       }
       // a container that is created, exited or dead reports no usage; sampling it
       // fills the store with empty readings and gives the throttler nothing to
-      // read. The listing above already carries the state, so this costs nothing.
-      if (dockerContainer.State !== 'running') {
+      // read. Paused counts as not running, exactly as the reconciler reads it.
+      if (!inspect.State?.Running || inspect.State.Paused) {
         return;
       }
       appsMonitored[appName].run += 1;
@@ -622,7 +628,8 @@ function startAppMonitoring(appName) {
       // the allocation only moves when the throttler moves it, so it is read on
       // the same cadence as before and carried onto the samples in between
       if (appsMonitored[appName].run % 3 === 1) {
-        const inspect = await dockerService.dockerContainerInspect(appName);
+        // the inspect above answers this too - the run-state check costs one
+        // already, so re-reading it here would be a second call for a fact in hand
         appsMonitored[appName].nanoCpus = inspect?.HostConfig?.NanoCpus ?? null;
       }
       statsNow.nanoCpus = appsMonitored[appName].nanoCpus;
