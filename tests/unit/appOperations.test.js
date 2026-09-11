@@ -1529,6 +1529,76 @@ describe('appOperations tests', () => {
       expect(removeFolder.calledWith('bkapp'), 'the bare app name matches no composed folder').to.be.false;
     });
 
+    it('refuses to archive when a container did not actually stop', async () => {
+      const clock = sinon.useFakeTimers({ toFake: ['setTimeout'] });
+      sinon.stub(verificationHelper, 'verifyPrivilege').resolves(true);
+      const deployment = await oneComponentDeployment('bkapp', 'comp1');
+      sinon.stub(deploymentProvider, 'getInstalledDeployment').resolves(deployment);
+      sinon.stub(appsRepository, 'getGlobalAppInfo').resolves(await instantiatedSpec(await v9Spec({ name: 'bkapp' })));
+      sinon.stub(deploymentProvider, 'buildDeployment').resolves(deployment);
+      // drive() awaits convergence but ANSWERS whether it happened. A component
+      // that ran out the converge backstop comes back unconverged, and archiving
+      // then reads a volume the app is still writing to.
+      const drive = sinon.stub(appReconciler, 'drive');
+      drive.withArgs(['comp1_bkapp'], 'stopped').resolves({ converged: false, failed: ['comp1_bkapp'] });
+      drive.withArgs(['comp1_bkapp'], 'running').resolves({ converged: true, failed: [] });
+      sinon.stub(volumeService, 'listComponentVolumeMounts').resolves([{ replica: null, mount: '/vol' }]);
+      const createTarGz = sinon.stub(IOUtils, 'createTarGz').resolves({ status: true });
+      sinon.stub(IOUtils, 'checkFileExists').resolves(false);
+      sinon.stub(IOUtils, 'removeFile').resolves();
+
+      const req = { body: { appname: 'bkapp', backup: [{ component: 'comp1', backup: true }] } };
+      const pending = appOperations.appendBackupTask(req, makeRes());
+      await clock.tickAsync(120000);
+      const result = await pending;
+      clock.restore();
+
+      expect(result).to.be.false;
+      expect(createTarGz.called, 'nothing may be archived from a volume still being written').to.be.false;
+      expect(drive.calledWith(['comp1_bkapp'], 'running'), 'and the app is given back').to.be.true;
+      expect(operationRegistry.isHeld('bkapp')).to.be.false;
+    });
+
+    // The isHeld check at the top runs BEFORE the awaited privilege call, so two
+    // requests for one app both cleared it. acquire is the synchronous
+    // test-and-set only one can win; its answer was being dropped.
+    it('refuses the loser of a concurrent claim instead of archiving alongside it', async () => {
+      const clock = sinon.useFakeTimers({ toFake: ['setTimeout'] });
+      // THE RACE, reproduced where it actually happens: the winner takes the lease
+      // DURING the loser's awaited privilege call - after its isHeld check has
+      // already passed. Taking it before the call would be caught by that check
+      // instead, and would prove nothing about the claim.
+      sinon.stub(verificationHelper, 'verifyPrivilege').callsFake(async () => {
+        operationRegistry.acquire('bkapp', 'backup', 'someoneElse', 'the winner');
+        return true;
+      });
+      // Everything downstream is made to SUCCEED, so the claim check is the only
+      // thing that can stop the archive - otherwise the case passes by failing
+      // somewhere else, which is what it did on the first attempt.
+      const deployment = await oneComponentDeployment('bkapp', 'comp1');
+      sinon.stub(deploymentProvider, 'getInstalledDeployment').resolves(deployment);
+      sinon.stub(appsRepository, 'getGlobalAppInfo').resolves(await instantiatedSpec(await v9Spec({ name: 'bkapp' })));
+      sinon.stub(deploymentProvider, 'buildDeployment').resolves(deployment);
+      sinon.stub(volumeService, 'listComponentVolumeMounts').resolves([{ replica: null, mount: '/vol' }]);
+      sinon.stub(IOUtils, 'checkFileExists').resolves(false);
+      sinon.stub(IOUtils, 'removeFile').resolves();
+      const createTarGz = sinon.stub(IOUtils, 'createTarGz').resolves({ status: true });
+      sinon.stub(appReconciler, 'drive').resolves({ converged: true, failed: [] });
+
+      const req = { body: { appname: 'bkapp', backup: [{ component: 'comp1', backup: true }] } };
+      const pending = appOperations.appendBackupTask(req, makeRes());
+      await clock.tickAsync(120000);
+      const result = await pending;
+      clock.restore();
+
+      expect(result).to.be.false;
+      expect(createTarGz.called, 'the loser must not archive the same volume').to.be.false;
+      // The winner still holds it: a refused claim must never release a lease it
+      // does not own.
+      expect(operationRegistry.get('bkapp')?.owner).to.equal('someoneElse');
+      operationRegistry.clear();
+    });
+
     it('drives the app back to running when the archive fails after the stop', async () => {
       const clock = sinon.useFakeTimers({ toFake: ['setTimeout'] });
       sinon.stub(verificationHelper, 'verifyPrivilege').resolves(true);
