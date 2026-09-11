@@ -88,19 +88,13 @@ describe('appQueryService tests', () => {
 
     dockerServiceStub = {
       dockerListContainers: sinon.stub(),
-      // Mirrors the real predicate rather than returning a constant: these
-      // tests assert which containers survive the filter, so a stub that
-      // waved everything through would stop testing anything. The real one
-      // is pinned by its own cases in dockerService.test.js.
-      isAppContainer: (container) => {
-        const role = container.Labels && container.Labels['runonflux.role'];
-        if (role) return role === 'app';
-        const [name = ''] = container.Names || [];
-        return name.slice(1, 4) === 'zel' || name.slice(1, 5) === 'flux';
-      },
-      // Namespacing, for the same reason: heldComponents is compared against a
-      // docker name by the peer that reads it, so an identity stub would hide a
-      // missing prefix and pass on an answer no caller could match.
+      // Namespacing, rather than returning a constant: these tests assert which
+      // containers survive the filter, so a stub that waved everything through
+      // would stop testing anything. The real one is pinned by its own cases in
+      // dockerService.test.js.
+      // heldComponents is compared against a docker name by the peer that reads
+      // it, so an identity stub would hide a missing prefix and pass on an
+      // answer no caller could match.
       getAppIdentifier: (appName) => (appName.startsWith('zel') || appName.startsWith('flux') ? appName : `flux${appName}`),
       // mirrors the real ownership test: the identity label is authoritative, the
       // name test survives only for containers created before labels shipped
