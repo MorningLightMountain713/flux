@@ -412,7 +412,6 @@ export function nodeClient(nodeNum) {
         'network:appmessage',
         'network:ingressattestation',
         'network:ipchanged',
-        'network:sigterm',
         'shutdown:started',
         'shutdown:drained',
         'ephemeralSync:requested',
