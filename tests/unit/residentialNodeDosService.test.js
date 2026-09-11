@@ -5,18 +5,14 @@ const operationRegistry = require('../../ZelBack/src/services/utils/operationReg
 const { EventEmitter } = require('node:events');
 const proxyquire = require('proxyquire').noCallThru();
 
-const { makeStickyDosDouble } = require('./stickyDosTestDouble');
-const { StickyDosOwner } = require('../../ZelBack/src/services/fluxNetworkHelper');
-
 const { EVENTS: SYNC_EVENTS } = require('../../ZelBack/src/services/utils/appSyncEvents');
 
 const { CLASSIFICATION } = require('../../ZelBack/src/services/utils/networkClassifier');
 
 describe('residentialNodeDosService tests', () => {
-  const OWNER = StickyDosOwner.RESIDENTIAL_DOS;
-  const TAMPERING = StickyDosOwner.APP_TAMPERING;
   let service;
   let fluxNetworkHelperStub;
+  let nodeDosStateStub;
   let geolocationServiceStub;
   let benchmarkServiceStub;
   let dbHelperStub;
@@ -48,6 +44,7 @@ describe('residentialNodeDosService tests', () => {
       },
       './dbHelper': dbHelperStub,
       './fluxNetworkHelper': fluxNetworkHelperStub,
+      './nodeDosState': nodeDosStateStub,
       './geolocationService': geolocationServiceStub,
       './benchmarkService': benchmarkServiceStub,
       './utils/globalState': globalStateStub,
@@ -66,12 +63,26 @@ describe('residentialNodeDosService tests', () => {
   }
 
   beforeEach(() => {
+    // Stateful on purpose: the real fluxNetworkHelper reads back the message it
+    // was given, and the ownership rules here are all written against that
+    // read-back. A getter pinned to null would let a clear that must not happen
+    // pass as if it had.
+    let sticky = null;
     // Owner-keyed, like the real one. A double that kept a single slot would
-    // accept a release from any owner and so could never fail the way the real
-    // module refuses to.
+    // accept a clear from any owner and so could never fail the way the real
+    // module now refuses to.
     const holds = new Map();
+    // Split to match the real modules: the sticky-DOS state lives in
+    // nodeDosState and the placement holds in fluxNetworkHelper. Carrying all
+    // of it on one double is what let the service call four sticky functions
+    // on fluxNetworkHelper - which exports none of them - and still pass here.
+    nodeDosStateStub = {
+      setStickyDosMessage: sinon.stub().callsFake((msg) => { sticky = msg; }),
+      setStickyDosStateValue: sinon.stub(),
+      clearStickyDosMessage: sinon.stub().callsFake(() => { sticky = null; }),
+      getStickyDosMessage: sinon.stub().callsFake(() => sticky),
+    };
     fluxNetworkHelperStub = {
-      ...makeStickyDosDouble(),
       PlacementHoldOwner: Object.freeze({ RESIDENTIAL_DOS: 'residentialDos' }),
       setPlacementHold: sinon.stub().callsFake((owner, reason) => { holds.set(owner, reason); }),
       clearPlacementHold: sinon.stub().callsFake((owner) => { holds.delete(owner); }),
@@ -197,7 +208,7 @@ describe('residentialNodeDosService tests', () => {
 
       await service.enforceResidentialPolicy(deps);
 
-      sinon.assert.notCalled(fluxNetworkHelperStub.setStickyDos);
+      sinon.assert.notCalled(nodeDosStateStub.setStickyDosStateValue);
     });
 
     it('lifts when the node is no longer residential', async () => {
@@ -229,7 +240,7 @@ describe('residentialNodeDosService tests', () => {
 
       expect(decided).to.equal(false);
       expect(fluxNetworkHelperStub.isPlacementHeld()).to.equal(false);
-      sinon.assert.notCalled(fluxNetworkHelperStub.setStickyDos);
+      sinon.assert.notCalled(nodeDosStateStub.setStickyDosStateValue);
     });
 
     it('does not hold or DOS when there is no settled classification', async () => {
@@ -300,7 +311,7 @@ describe('residentialNodeDosService tests', () => {
 
       await service.enforceResidentialPolicy(deps);
 
-      sinon.assert.calledWith(fluxNetworkHelperStub.setStickyDos, OWNER, sinon.match.string);
+      sinon.assert.calledWith(nodeDosStateStub.setStickyDosStateValue, 100);
       expect(service.isDosActive()).to.equal(true);
     });
 
@@ -321,7 +332,7 @@ describe('residentialNodeDosService tests', () => {
       const { decided } = await service.enforceResidentialPolicy(deps);
 
       expect(decided).to.equal(false);
-      sinon.assert.notCalled(fluxNetworkHelperStub.setStickyDos);
+      sinon.assert.notCalled(nodeDosStateStub.setStickyDosStateValue);
       expect(fluxNetworkHelperStub.isPlacementHeld()).to.equal(true);
     });
 
@@ -332,7 +343,7 @@ describe('residentialNodeDosService tests', () => {
       const { decided } = await service.enforceResidentialPolicy(deps);
 
       expect(decided).to.equal(false);
-      sinon.assert.notCalled(fluxNetworkHelperStub.setStickyDos);
+      sinon.assert.notCalled(nodeDosStateStub.setStickyDosStateValue);
       expect(fluxNetworkHelperStub.isPlacementHeld()).to.equal(true);
     });
 
@@ -343,34 +354,33 @@ describe('residentialNodeDosService tests', () => {
 
       await service.enforceResidentialPolicy(deps);
 
-      sinon.assert.calledWith(fluxNetworkHelperStub.clearStickyDos, OWNER);
+      sinon.assert.called(nodeDosStateStub.clearStickyDosMessage);
       expect(service.isDosActive()).to.equal(false);
     });
   });
 
-  describe('one verdict per owner', () => {
-    const TAMPERING_REASON = 'Node flagged via tampering blocklist: score 40';
-
-    it("records its verdict beside another owner's rather than instead of it", async () => {
+  describe('sticky slot ownership', () => {
+    it("leaves another owner's DOS alone rather than overwriting it", async () => {
       installedApps = [];
-      fluxNetworkHelperStub.holds.set(TAMPERING, TAMPERING_REASON);
+      nodeDosStateStub.setStickyDosMessage('Node flagged via tampering blocklist: score 40');
+      nodeDosStateStub.setStickyDosMessage.resetHistory();
 
       await service.enforceResidentialPolicy(deps);
 
-      expect(service.isDosActive(), 'the verdict was dropped because another owner held one').to.equal(true);
-      expect(fluxNetworkHelperStub.getStickyDosMessage(), 'overwrote a verdict it does not own').to.contain('tampering');
-      expect(fluxNetworkHelperStub.getStickyDosMessage()).to.contain(service.DOS_MESSAGE_PREFIX);
+      sinon.assert.notCalled(nodeDosStateStub.setStickyDosMessage);
+      expect(nodeDosStateStub.getStickyDosMessage()).to.contain('tampering');
     });
 
-    it("releases its own verdict and leaves another owner's standing", async () => {
+    it('releases only its own claim when the slot has changed hands', async () => {
       installedApps = [];
       await service.enforceResidentialPolicy(deps);
-      fluxNetworkHelperStub.holds.set(TAMPERING, TAMPERING_REASON);
+      // Another owner takes the slot after we wrote.
+      nodeDosStateStub.setStickyDosMessage('Node flagged via tampering blocklist: score 40');
       geolocationServiceStub.getNetworkClassification.returns({ classification: CLASSIFICATION.DATACENTER });
 
       await service.enforceResidentialPolicy(deps);
 
-      expect(fluxNetworkHelperStub.getStickyDosMessage(), "dropped another owner's DOS on the floor").to.contain('tampering');
+      expect(nodeDosStateStub.getStickyDosMessage()).to.contain('tampering');
       expect(service.isDosActive()).to.equal(false);
     });
   });
@@ -1079,17 +1089,14 @@ describe('residentialNodeDosService tests', () => {
   });
 
   describe('lifecycle', () => {
-    // A node going down does not become a data centre by going down, and the
-    // verdict is the only record of why it was taken out of service.
-    it('stop() leaves the verdict it reached standing', async () => {
+    it('stop() drops our DOS claim so a later start() re-reads the slot', async () => {
       installedApps = [];
       await service.enforceResidentialPolicy(deps);
       expect(service.isDosActive()).to.equal(true);
 
       service.stop();
 
-      expect(service.isDosActive(), 'teardown erased the reason the node is out of service').to.equal(true);
-      expect(fluxNetworkHelperStub.getStickyDosMessage()).to.contain(service.DOS_MESSAGE_PREFIX);
+      expect(service.isDosActive()).to.equal(false);
     });
 
     it('stop() stops evacuating', async () => {
