@@ -77,6 +77,58 @@ describe('config reconciliation at boot', () => {
     }
   });
 
+  // The sweep can only see a read that names its key. Two spellings do:
+  // `config.fluxapps.someKey`, and `const { someKey } = config.fluxapps`. A name
+  // bound to the object itself does not, and there is no third thing it buys.
+  it('nothing binds config.fluxapps to a name, which would hide every read through it', () => {
+    const aliases = [...reconciliation.aliasesOfFluxapps()]
+      .map(([file, names]) => `${file} binds it to ${names.join(', ')}`);
+    expect(aliases, 'a knob read through one of these is a knob nothing checks')
+      .to.deep.equal([]);
+  });
+
+  it('finds an alias when there is one, so the check above is not passing on an empty sweep', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fluxcfg-'));
+    try {
+      fs.writeFileSync(path.join(dir, 'aliasing.js'), 'const data = config.fluxapps;\nmodule.exports = data.someKnob;\n');
+      expect([...reconciliation.aliasesOfFluxapps(dir)]).to.deep.equal([['aliasing.js', ['data']]]);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // The four access forms this tree writes, all of which must be seen. A regex
+  // over `config.fluxapps.x` saw one of them.
+  it('reads a destructure, a multi-line destructure, an alias and a nested path', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fluxcfg-'));
+    try {
+      fs.writeFileSync(path.join(dir, 'forms.js'), [
+        'const { plainDestructure } = config.fluxapps;',
+        'const {',
+        '  acrossLines, andAnother,',
+        '} = config.fluxapps;',
+        'const renamed = config.fluxapps.directRead;',
+        'const deep = config.fluxapps.anObject.aNestedKey;',
+        'const aliased = config.fluxapps;',
+        'const throughAlias = aliased.viaTheAlias;',
+        "const bracketed = config.fluxapps['byStringLiteral'];",
+        'module.exports = { plainDestructure, acrossLines, andAnother, renamed, deep, throughAlias, bracketed };',
+      ].join('\n'));
+      const keys = [...reconciliation.keysRead(dir).keys()].sort();
+      expect(keys).to.deep.equal([
+        'acrossLines',
+        'anObject.aNestedKey',
+        'andAnother',
+        'byStringLiteral',
+        'directRead',
+        'plainDestructure',
+        'viaTheAlias',
+      ]);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it('lets a knob whose absence is a real setting be absent, and says why', () => {
     // Each of these reads the value through a guard that gives absence a
     // meaning. A key added here without a reason is a key nobody is checking.
