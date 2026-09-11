@@ -21,6 +21,7 @@ const messageVerifier = require('./appMessaging/messageVerifier');
 const { appPaymentPositions } = require('./appPaymentPositions');
 const appJanitor = require('./appLifecycle/appJanitor');
 const specReconciler = require('./appLifecycle/specReconciler');
+const appGiveUp = require('./appLifecycle/appGiveUp');
 const benchmarkService = require('./benchmarkService');
 const fluxNetworkhelper = require('./fluxNetworkHelper');
 const { extractIp } = require('./utils/socketAddressUtils');
@@ -773,6 +774,29 @@ async function processOneBlock(blockHeight, isInsightExplorer, loopOptions) {
           // so it cannot stall the block loop; removing an expired LOCAL
           // install is the reconciler's job (the convergence call above).
           await appJanitor.sweepRegistryExpiry();
+        }
+        const giveUpPeriod = config.fluxapps.removeFluxAppsPeriod * speedMultiplier;
+        if (blockWorkDue('checkAndRemoveApplicationInstance', blockHeight, giveUpPeriod)) {
+          // The give-up-an-app pass, on the chain's cadence so every node
+          // evaluates the same pass. It decides nothing unless this node is
+          // already evacuating, and hands back at most one app per pass. Never
+          // throws: a give-up that cannot decide must not stall the block loop.
+          try {
+            // Lazily required: both sit downstream of this module in the load
+            // graph, and requiring them at the top would close the cycle.
+            // eslint-disable-next-line global-require
+            const appQueryService = require('./appQuery/appQueryService');
+            // eslint-disable-next-line global-require
+            const appOperations = require('./appLifecycle/appOperations');
+            await appGiveUp.checkAndGiveUpAnApp({
+              installedAppsFn: appQueryService.installedApps,
+              isElectedPrimary: async (name) => appOperations.isElectedPrimaryHere(
+                name, await fluxNetworkhelper.getLocalSocketAddress(),
+              ),
+            });
+          } catch (error) {
+            log.error(`give-up pass error: ${error.message}`);
+          }
         }
       }
       const benchPeriod = config.fluxapps.benchUpnpPeriod * speedMultiplier;
