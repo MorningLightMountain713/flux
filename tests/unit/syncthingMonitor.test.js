@@ -458,6 +458,40 @@ describe('syncthingMonitor tests', () => {
           .to.have.members(['10.0.0.7:16127', '10.0.0.8:16127', '10.0.0.7:16127']);
       });
 
+      // SENDRECEIVE IS THE ONLY MODE THAT CAN BROADCAST A DELETION, so it is the
+      // only mode where a stale index over an empty volume has to be refused
+      // rather than noted - which is what the deeper verifier does. The flag
+      // saying which folders syncthing holds sendreceive was never passed to the
+      // mount check, so it defaulted to false and the deeper check never ran on
+      // any folder, ever.
+      it('verifies a sendreceive folder at the deeper level, and a receiveonly one at the shallow', async () => {
+        deploymentProviderMock.listInstalledDeployments.resolves([syncDeployment]);
+        syncthingEventsConsumerMock.mountVerifyPendingIds.returns([syncFolderId]);
+        syncthingServiceMock.getConfigFolders.resolves({
+          data: [{ id: syncFolderId, type: 'sendreceive', path: syncComp.dir }],
+        });
+
+        monitorControl = syncthingMonitor.syncthingApps(mockState, mockGetGlobalStateFn);
+        await clock.tickAsync(100);
+
+        sinon.assert.called(syncthingFolderStateMachineMock.verifySendReceiveFolderSafety);
+        sinon.assert.notCalled(syncthingFolderStateMachineMock.verifyFolderMountSafety);
+      });
+
+      it('leaves a receiveonly folder to the shallow check, which is all it can do harm with', async () => {
+        deploymentProviderMock.listInstalledDeployments.resolves([syncDeployment]);
+        syncthingEventsConsumerMock.mountVerifyPendingIds.returns([syncFolderId]);
+        syncthingServiceMock.getConfigFolders.resolves({
+          data: [{ id: syncFolderId, type: 'receiveonly', path: syncComp.dir }],
+        });
+
+        monitorControl = syncthingMonitor.syncthingApps(mockState, mockGetGlobalStateFn);
+        await clock.tickAsync(100);
+
+        sinon.assert.called(syncthingFolderStateMachineMock.verifyFolderMountSafety);
+        sinon.assert.notCalled(syncthingFolderStateMachineMock.verifySendReceiveFolderSafety);
+      });
+
       // AN APP THIS NODE COULD NOT READ IS NOT AN APP THAT IS NOT INSTALLED.
       // The sweep deletes any folder no installed app owns, and a deployment
       // list drops an app whose spec failed to decrypt - so the folder of an
@@ -484,6 +518,28 @@ describe('syncthingMonitor tests', () => {
           .map((call) => call.args[2]);
         expect(deleted, 'a folder was kept or removed on the wrong side of readability')
           .to.deep.equal(['fluxweb_gone']);
+      });
+
+      // Protected from the SWEEP, not from the mount check. The verdict derives
+      // entirely from the folder id, so a folder whose owning app cannot be read
+      // is verified all the same - one held sendreceive over a vanished mount
+      // broadcasts its emptiness whether or not this node can read the spec that
+      // named it.
+      it('still mount-checks the folder of an app it could not read', async () => {
+        deploymentProviderMock.listInstalledDeploymentsDetailed.resolves({
+          deployments: [],
+          unreadableAppNames: new Set(['sealed']),
+        });
+        syncthingServiceMock.getConfigFolders.resolves({
+          data: [{ id: 'fluxweb_sealed', type: 'sendreceive' }],
+        });
+
+        monitorControl = syncthingMonitor.syncthingApps(mockState, mockGetGlobalStateFn);
+        await clock.tickAsync(100);
+
+        const checked = syncthingFolderStateMachineMock.verifySendReceiveFolderSafety
+          .getCalls().map((call) => call.args[0]);
+        expect(checked, 'an unreadable app\'s folder went unverified').to.include('fluxweb_sealed');
       });
 
       // THE IGNORE POLICY IS CONVERGED THROUGH SYNCTHING, which owns .stignore
@@ -583,7 +639,11 @@ describe('syncthingMonitor tests', () => {
       syncthingServiceMock.getConfigFolders.resolves({
         data: [{ id: syncFolderId, path: syncComp.dir, type: 'sendreceive' }],
       });
+      // The folder is sendreceive, so the mount check takes the DEEPER verifier -
+      // that is the only mode that can broadcast a deletion, so it is the only
+      // one where a stale index over an empty volume must be refused.
       syncthingFolderStateMachineMock.verifyFolderMountSafety.resolves({ isSafe: false, reason: 'not mounted' });
+      syncthingFolderStateMachineMock.verifySendReceiveFolderSafety.resolves({ isSafe: false, reason: 'not mounted' });
       deploymentProviderMock.listInstalledDeployments.resolves([syncDeployment]);
 
       monitorControl = syncthingMonitor.syncthingApps(
@@ -598,10 +658,13 @@ describe('syncthingMonitor tests', () => {
       // The folder-id the demotion targets is derived from the real component's
       // identifier, and the app name rolled up with it from the real deployment -
       // both stay stubbed collaborator inputs, so read them back.
-      const [checkedId, checkedFolder, checkedAppName] = syncthingFolderStateMachineMock.verifyFolderMountSafety.firstCall.args;
+      // Read off the DEEPER verifier: this folder is sendreceive, so that is the
+      // one the mount check consults, and the shallow one is never called.
+      const [checkedId, checkedFolder, checkedOpts] = syncthingFolderStateMachineMock
+        .verifySendReceiveFolderSafety.firstCall.args;
       expect(checkedId, 'the mount check is keyed by the docker identifier').to.equal(syncFolderId);
       expect(checkedFolder, 'and the folder is that identifier under the apps folder').to.equal(`${appsFolder}${syncFolderId}`);
-      expect(checkedAppName, 'the owning app, for incident roll-up').to.equal('testapp');
+      expect(checkedOpts.appName, 'the owning app, for incident roll-up').to.equal('testapp');
     });
 
     // A stateless component has no volume by design — appVolumeService returns
@@ -644,6 +707,8 @@ describe('syncthingMonitor tests', () => {
       deploymentProviderMock.listInstalledDeployments.resolves([syncDeployment]);
       syncthingEventsConsumerMock.mountVerifyPendingIds.returns([syncFolderId]);
       syncthingFolderStateMachineMock.verifyFolderMountSafety.resolves({ isSafe: false, isMounted: false, reason: 'unmounted_with_content' });
+      // sendreceive, so the DEEPER verifier is the one consulted.
+      syncthingFolderStateMachineMock.verifySendReceiveFolderSafety.resolves({ isSafe: false, isMounted: false, reason: 'unmounted_with_content' });
       volumeServiceMock.ensureAppVolumeMounted.resolves({ mounted: false, reason: 'volume_file_missing' });
       syncthingServiceMock.getConfigFolders.resolves({ data: [{ id: syncFolderId, type: 'sendreceive' }] });
 
@@ -674,6 +739,8 @@ describe('syncthingMonitor tests', () => {
       syncthingEventsConsumerMock.mountVerifyPendingIds.returns([syncFolderId]);
       syncthingFolderStateMachineMock.verifyFolderMountSafety.resolves({ isSafe: false, isMounted: false, reason: 'unmounted_with_content' });
       volumeServiceMock.ensureAppVolumeMounted.resolves({ mounted: false, reason: 'volume_file_missing' });
+      // receiveonly, so the SHALLOW verifier is the one consulted - the deeper
+      // check exists for the mode that can broadcast a deletion.
       syncthingServiceMock.getConfigFolders.resolves({ data: [{ id: syncFolderId, type: 'receiveonly' }] });
 
       monitorControl = syncthingMonitor.syncthingApps(
@@ -855,8 +922,14 @@ describe('syncthingMonitor tests', () => {
       );
       await clock.tickAsync(100);
 
-      sinon.assert.calledOnce(syncthingFolderStateMachineMock.verifySendReceiveFolderSafety);
-      const [scannedId, scannedPath, opts] = syncthingFolderStateMachineMock.verifySendReceiveFolderSafety.firstCall.args;
+      // TWO calls on a first run, and they are different questions: the mount
+      // check asks about every folder it verifies, and the startup safety scan
+      // asks about each sendreceive folder with the component's injected
+      // excludes. Only the scan carries those, so that is the call read here.
+      const scanCall = syncthingFolderStateMachineMock.verifySendReceiveFolderSafety
+        .getCalls().find((call) => call.args[2] && 'injectedExcludePaths' in call.args[2]);
+      expect(scanCall, 'the startup safety scan never ran').to.not.equal(undefined);
+      const [scannedId, scannedPath, opts] = scanCall.args;
       expect(scannedId).to.equal(syncFolderId);
       expect(scannedPath).to.equal(syncComp.dir);
       expect(opts.injectedExcludePaths, 'resolved from the component the folder id belongs to')
