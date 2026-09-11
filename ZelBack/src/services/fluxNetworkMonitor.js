@@ -138,7 +138,7 @@ async function adjustExternalIP(ip) {
       const oldIP = normalizeSocketAddress(`${oldUserConfigIp}:${userconfig.initial.apiport}`);
       log.info(`New public Ip detected: ${newIP}, old Ip: ${oldIP} , updating the FluxNode info on the network`);
       const measuredUptime = fluxNetworkHelper.fluxUptime();
-      if (await ipChangesOverLimit() && measuredUptime.status === 'success' && measuredUptime.data > config.fluxapps.minUpTime) {
+      if (await ipChangesOverLimit() && measuredUptime.status === 'success' && measuredUptime.data > config.get('fluxapps.minUpTime')) {
         log.info('IP changes over the limit allowed, one in 20 hours');
         nodeDosState.addDosState(11);
         nodeDosState.setDosMessage('IP changes over the limit allowed, one in 20 hours');
@@ -357,11 +357,11 @@ async function checkMyFluxAvailability(retryNumber = 0) {
     return false;
   }
   const measuredUptime = fluxNetworkHelper.fluxUptime();
-  if (measuredUptime.status === 'success' && measuredUptime.data > config.fluxapps.minUpTime) { // node has been running for 30 minutes. Upon starting a node, there can be dos that needs resetting
+  if (measuredUptime.status === 'success' && measuredUptime.data > config.get('fluxapps.minUpTime')) { // node has been running for 30 minutes. Upon starting a node, there can be dos that needs resetting
     const found = await fluxCommunicationUtils.getFluxnodeFromFluxList(fluxNetworkHelper.getCachedLocalSocketAddress());
     const nodeCount = await fluxCommunicationUtils.getNodeCount();
 
-    if (nodeCount > config.fluxapps.minIncoming + config.fluxapps.minOutgoing && found) { // our node MUST be in confirmed list in order to have some peers
+    if (nodeCount > config.get('fluxapps.minIncoming') + config.get('fluxapps.minOutgoing') && found) { // our node MUST be in confirmed list in order to have some peers
       // check sufficient connections
       const connectionInfo = fluxNetworkHelper.isCommunicationEstablished();
       if (connectionInfo.status === 'error') {
@@ -526,11 +526,11 @@ async function checkDeterministicNodesCollisions() {
         return;
       }
       // early stages of the network or testnet
-      if (nodeList.length > config.fluxapps.minIncoming + config.fluxapps.minOutgoing) {
+      if (nodeList.length > config.get('fluxapps.minIncoming') + config.get('fluxapps.minOutgoing')) {
         await checkMyFluxAvailability();
       } else { // sufficient amount of nodes has to appear on the network within 6 hours
         const measuredUptime = fluxNetworkHelper.fluxUptime();
-        if (measuredUptime.status === 'success' && measuredUptime.data > (config.fluxapps.minUpTime * 12)) {
+        if (measuredUptime.status === 'success' && measuredUptime.data > (config.get('fluxapps.minUpTime') * 12)) {
           await checkMyFluxAvailability();
         } else if (measuredUptime.status === 'error') {
           log.error('Flux uptime unavailable');
@@ -544,7 +544,7 @@ async function checkDeterministicNodesCollisions() {
         log.error(nodeDosState.getRawDosMessage());
       } else {
         const measuredUptime = fluxNetworkHelper.fluxUptime();
-        if (measuredUptime.status === 'success' && measuredUptime.data > (config.fluxapps.minUpTime)) {
+        if (measuredUptime.status === 'success' && measuredUptime.data > (config.get('fluxapps.minUpTime'))) {
           const benchIpResponse = await benchmarkService.getPublicIp();
           if (benchIpResponse.status === 'success') {
             log.info(`FluxBench was previoulsy without ip and now reported public IP: ${benchIpResponse.data}`);

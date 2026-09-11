@@ -53,7 +53,7 @@ const { normalizeSocketAddress } = require('../utils/socketAddressUtils');
 // Two blocks of fork or skew plus one capped fetch is 90 s at 30 s blocks;
 // 120 s is the first round figure above it, four blocks. A harness with
 // shorter blocks carries the same figure in its own blocks.
-const OFF_LIST_GRACE_MS = (config.fluxapps.offListGraceS ?? 120) * 1000;
+const OFF_LIST_GRACE_MS = (config.get('fluxapps.offListGraceS')) * 1000;
 const MASS_DEPARTURE_FRACTION = 0.1;
 const DEFAULT_PORT_SUFFIX = ':16127';
 

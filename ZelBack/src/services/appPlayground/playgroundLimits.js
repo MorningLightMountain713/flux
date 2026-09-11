@@ -20,21 +20,20 @@ const config = require('config');
 // who is trying. What actually bounds the node is that it runs one session at a
 // time and two per hour whoever asks.
 
-const MS_PER_HOUR = 3_600_000;
 const NS_PER_MS = 1_000_000n;
 
 function sessionCeiling() {
   return {
-    cpu: config.fluxapps.playgroundSessionCpu ?? 2,
-    memoryMb: config.fluxapps.playgroundSessionMemoryMb ?? 4096,
-    rootFsGb: config.fluxapps.playgroundSessionRootFsGb ?? 10,
-    imageMaxBytes: config.fluxapps.playgroundSessionImageMaxBytes ?? 2e9,
-    imageTotalMaxBytes: config.fluxapps.playgroundSessionImageTotalMaxBytes ?? 6e9,
+    cpu: config.get('fluxapps.playgroundSessionCpu'),
+    memoryMb: config.get('fluxapps.playgroundSessionMemoryMb'),
+    rootFsGb: config.get('fluxapps.playgroundSessionRootFsGb'),
+    imageMaxBytes: config.get('fluxapps.playgroundSessionImageMaxBytes'),
+    imageTotalMaxBytes: config.get('fluxapps.playgroundSessionImageTotalMaxBytes'),
   };
 }
 
 function windowMs() {
-  return config.fluxapps.playgroundWindowMs ?? MS_PER_HOUR;
+  return config.get('fluxapps.playgroundWindowMs');
 }
 
 /**
@@ -161,8 +160,8 @@ class RollingWindow {
 // A slot is spent when a session is ACCEPTED, not when it finishes, and is never
 // handed back. Otherwise a caller whose sessions fail fast pays nothing for the
 // work the node already did pulling and starting their image.
-const nodeWindow = new RollingWindow(config.fluxapps.playgroundNodeSessionsPerHour ?? 2);
-const callerWindow = new RollingWindow(config.fluxapps.playgroundCallerSessionsPerHour ?? 3);
+const nodeWindow = new RollingWindow(config.get('fluxapps.playgroundNodeSessionsPerHour'));
+const callerWindow = new RollingWindow(config.get('fluxapps.playgroundCallerSessionsPerHour'));
 
 const NODE_KEY = 'node';
 

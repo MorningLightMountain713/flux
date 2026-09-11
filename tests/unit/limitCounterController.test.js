@@ -3,6 +3,7 @@
 const { expect } = require('chai');
 const sinon = require('sinon');
 const proxyquire = require('proxyquire').noCallThru();
+const { asConfig } = require('./fixtures/config');
 
 describe('limitCounterController tests', () => {
   let controller;
@@ -18,12 +19,12 @@ describe('limitCounterController tests', () => {
       release: sinon.stub().returns(true),
     };
     return proxyquire('../../ZelBack/src/services/utils/limitCounterController', {
-      config: {
+      config: asConfig({
         fluxapps: {
           limitCounters: { playground: {}, 'playground#deputy': {} },
           limitCounterPeerAsksPerMinute: opts.peerAsks ?? 600,
         },
-      },
+      }),
       '../messageHelper': {
         createErrorMessage: (message) => ({ status: 'error', data: { message } }),
         createDataMessage: (data) => ({ status: 'success', data }),

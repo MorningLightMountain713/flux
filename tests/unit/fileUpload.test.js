@@ -3,6 +3,7 @@ const sinon = require('sinon');
 const proxyquire = require('proxyquire').noCallThru();
 const { Readable, PassThrough, Writable } = require('node:stream');
 const pathSecurity = require('../../ZelBack/src/services/utils/pathSecurity');
+const { asConfig } = require('./fixtures/config');
 
 // Receiving an upload, driven through a REAL multipart body and a real parser.
 //
@@ -63,7 +64,7 @@ describe('fileSystemManager upload tests', () => {
   });
 
   const loadManager = (volumeOperations) => proxyquire('../../ZelBack/src/services/appSystem/fileSystemManager', {
-    config: { fluxapps: { volumeOperations } },
+    config: asConfig({ fluxapps: { volumeOperations } }),
     '../messageHelper': {
       createSuccessMessage: sinon.stub().callsFake((message) => ({ status: 'success', data: { message } })),
       createErrorMessage: sinon.stub().callsFake((message) => ({ status: 'error', data: { message } })),
@@ -267,7 +268,7 @@ describe('fileSystemManager upload tests', () => {
         '../syncthingService': { getConfigFolders: sinon.stub().resolves([{ id: 'fluxcomp_myapp', type: 'receiveonly' }]) },
       });
       return proxyquire('../../ZelBack/src/services/appSystem/fileSystemManager', {
-        config: { fluxapps: { volumeOperations: { minUploadBitsPerSecond: 64 * 1000, stallTimeoutMs: 10 * 60 * 1000 } } },
+        config: asConfig({ fluxapps: { volumeOperations: { minUploadBitsPerSecond: 64 * 1000, stallTimeoutMs: 10 * 60 * 1000 } } }),
         '../messageHelper': {
           createSuccessMessage: sinon.stub().callsFake((message) => ({ status: 'success', data: { message } })),
           createErrorMessage: sinon.stub().callsFake((message, name, code) => ({ status: 'error', data: { message, name, code } })),
@@ -415,7 +416,7 @@ describe('fileSystemManager upload tests', () => {
 
   it('refuses before taking a slot when the caller is not the owner', async () => {
     fileSystemManager = proxyquire('../../ZelBack/src/services/appSystem/fileSystemManager', {
-      config: { fluxapps: { volumeOperations: { minUploadBitsPerSecond: 64 * 1000, stallTimeoutMs: 10 * 60 * 1000 } } },
+      config: asConfig({ fluxapps: { volumeOperations: { minUploadBitsPerSecond: 64 * 1000, stallTimeoutMs: 10 * 60 * 1000 } } }),
       '../messageHelper': {
         createErrorMessage: sinon.stub().callsFake((message, name, code) => ({ status: 'error', data: { message, name, code } })),
         createSuccessMessage: sinon.stub(),

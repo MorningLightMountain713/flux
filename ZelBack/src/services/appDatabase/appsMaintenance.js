@@ -139,8 +139,8 @@ async function repairNanInAppsMessagesDb() {
  * @returns {object} mongo aggregation expression
  */
 function expireHeightExpr(heightField, expireField) {
-  const PON_FORK = config.fluxapps.daemonPONFork;
-  const PRE_FORK_DEFAULT_EXPIRE = config.fluxapps.blocksLasting;
+  const PON_FORK = config.get('fluxapps.daemonPONFork');
+  const PRE_FORK_DEFAULT_EXPIRE = config.get('fluxapps.blocksLasting');
   const POST_FORK_DEFAULT_EXPIRE = PRE_FORK_DEFAULT_EXPIRE * 4;
 
   return {

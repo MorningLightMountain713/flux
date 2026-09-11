@@ -34,11 +34,11 @@ function networkNameFor(sessionId) {
 }
 
 function networkOctet() {
-  return config.fluxapps.playgroundNetworkOctet ?? 255;
+  return config.get('fluxapps.playgroundNetworkOctet');
 }
 
 function networkPrefix() {
-  return config.fluxapps.playgroundNetworkPrefix ?? 27;
+  return config.get('fluxapps.playgroundNetworkPrefix');
 }
 
 /** Addresses in one session subnet: 32 at /27. */

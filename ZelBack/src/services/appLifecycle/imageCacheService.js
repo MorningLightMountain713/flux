@@ -41,8 +41,8 @@ let pumping = false;
 let pumpAgain = false;
 
 function nowNs() { return process.hrtime.bigint(); }
-function jobTtlNs() { return BigInt(config.fluxapps.imageCacheJobTtlMs) * 1_000_000n; }
-function maxConcurrentPulls() { return Math.max(1, config.fluxapps.imageCacheMaxConcurrentPulls); }
+function jobTtlNs() { return BigInt(config.get('fluxapps.imageCacheJobTtlMs')) * 1_000_000n; }
+function maxConcurrentPulls() { return Math.max(1, config.get('fluxapps.imageCacheMaxConcurrentPulls')); }
 
 function isTerminal(image) { return TERMINAL_STATES.includes(image.state); }
 function jobSettled(job) { return job.images.every(isTerminal); }
@@ -159,7 +159,7 @@ async function imageIsPresent(repotag) {
 // Tracks the live image instead. No-op when the repotag carries no live pin; best-effort
 // (the caller wraps it so an update never fails on a cache reconcile error).
 async function reconcilePinnedImage(repotag) {
-  if (!config.fluxapps.imageCacheEnabled || !repotag) return;
+  if (!config.get('fluxapps.imageCacheEnabled') || !repotag) return;
   const pins = await imageCacheStore.findPinsForRepotag(repotag);
   const active = (pins || []).filter((pin) => pin.state === 'pinned');
   if (!active.length) return;
@@ -175,7 +175,7 @@ async function reconcilePinnedImage(repotag) {
 }
 
 async function pullWithRetry(job, image, onProgress) {
-  const maxRetries = config.fluxapps.imageCacheMaxPullRetries;
+  const maxRetries = config.get('fluxapps.imageCacheMaxPullRetries');
   let attempt = 0;
   let lastErr;
   while (attempt <= maxRetries) {

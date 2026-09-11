@@ -35,7 +35,7 @@ function collection() {
 }
 
 function retentionMs() {
-  return config.fluxapps.playgroundAuditRetentionMs ?? 30 * 24 * 60 * 60 * 1000;
+  return config.get('fluxapps.playgroundAuditRetentionMs');
 }
 
 /**

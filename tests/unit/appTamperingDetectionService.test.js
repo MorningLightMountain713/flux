@@ -3,6 +3,7 @@
 const { expect } = require('chai');
 const sinon = require('sinon');
 const proxyquire = require('proxyquire').noCallThru();
+const { asConfig } = require('./fixtures/config');
 
 describe('appTamperingDetectionService tests', () => {
   let service;
@@ -120,7 +121,7 @@ describe('appTamperingDetectionService tests', () => {
       updateOneInDatabase: sinon.stub().resolves(),
     };
     service = proxyquire('../../ZelBack/src/services/appTamperingDetectionService', {
-      config: {
+      config: asConfig({
         database: {
           local: {
             database: 'zelfluxlocal',
@@ -137,7 +138,7 @@ describe('appTamperingDetectionService tests', () => {
         system: {
           bootIdPath: '/proc/sys/kernel/random/boot_id',
         },
-      },
+      }),
       fs: {
         promises: { readFile: fsReadFileStub },
       },

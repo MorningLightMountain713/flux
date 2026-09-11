@@ -24,7 +24,7 @@ const {
   STAGING_ROOT, OPERATION_ID, isLegacyStagingName,
 } = require('./volumeReservedNames');
 
-const settings = () => config.fluxapps.volumeOperations;
+const settings = () => config.get('fluxapps.volumeOperations');
 
 
 

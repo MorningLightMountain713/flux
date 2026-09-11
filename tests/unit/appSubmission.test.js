@@ -11,6 +11,7 @@ const {
   loadSpecLibrary, V9_SUBMISSION, V8_SUBMISSION, v8Spec, sealedV9Spec, assertAnswers,
 } = require('./fixtures/fluxSpec');
 const { FluxPeerManager, PEER_SOURCE } = require('../../ZelBack/src/services/utils/FluxPeerManager');
+const { asConfig } = require('./fixtures/config');
 
 // The spec library is real here, not stubbed — see tests/unit/fixtures/fluxSpec.js
 // for why. What stays stubbed is I/O and FluxOS policy.
@@ -51,7 +52,7 @@ describe('appSubmission tests', () => {
 
   function load(overrides = {}) {
     return proxyquire('../../ZelBack/src/services/appRequirements/appSubmission', {
-      config: { fluxapps: { latestSupportedSpecVersion: 9, minOutgoing: 0, minIncoming: 0 } },
+      config: asConfig({ fluxapps: { latestSupportedSpecVersion: 9, minOutgoing: 0, minIncoming: 0 } }),
       '../appLifecycle/contentBlobService': stubs.contentBlobService,
       '../utils/transportHelper': stubs.transportHelper,
       '../utils/specCutover': stubs.specCutover,
@@ -684,7 +685,7 @@ describe('appSubmission tests', () => {
     // submission reached.
     async function registerEmptyBody() {
       const appSubmission = load({
-        config: { fluxapps: { latestSupportedSpecVersion: 9, minOutgoing: MIN_OUTGOING, minIncoming: MIN_INCOMING } },
+        config: asConfig({ fluxapps: { latestSupportedSpecVersion: 9, minOutgoing: MIN_OUTGOING, minIncoming: MIN_INCOMING } }),
         '../utils/peerState': { peerManager: manager },
         '../verificationHelper': { verifyPrivilege: sinon.stub().resolves(true) },
       });

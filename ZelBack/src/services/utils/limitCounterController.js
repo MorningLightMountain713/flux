@@ -34,7 +34,7 @@ const KEY_PATTERN = /^[0-9a-f]{64}$/;
 // callers is the normal case, and the number only has to make grinding slower
 // than simply waiting.
 const PEER_WINDOW_MS = 60 * 1000;
-const PEER_MAX_ASKS = config.fluxapps.limitCounterPeerAsksPerMinute ?? 600;
+const PEER_MAX_ASKS = config.get('fluxapps.limitCounterPeerAsksPerMinute');
 const peerAsks = new Map(); // peer -> { windowStart, count }
 
 function peerAllowed(peer) {
@@ -49,7 +49,7 @@ function peerAllowed(peer) {
 }
 
 function configuredPurpose(purpose) {
-  return typeof purpose === 'string' && Object.hasOwn(config.fluxapps.limitCounters ?? {}, purpose);
+  return typeof purpose === 'string' && Object.hasOwn(config.get('fluxapps.limitCounters'), purpose);
 }
 
 /**

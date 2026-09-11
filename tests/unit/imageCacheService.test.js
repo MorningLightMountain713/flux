@@ -5,6 +5,7 @@ const sinon = require('sinon');
 const proxyquire = require('proxyquire').noCallThru();
 
 const jobRegistry = require('../../ZelBack/src/services/utils/jobRegistry');
+const { asConfig } = require('./fixtures/config');
 
 describe('imageCacheService tests', () => {
   let stubs;
@@ -34,7 +35,7 @@ describe('imageCacheService tests', () => {
       nodeQuotaInfo: sinon.stub().returns({ usedBytes: 0, capBytes: 60_000_000_000, remainingBytes: 60_000_000_000 }),
     };
     return proxyquire('../../ZelBack/src/services/appLifecycle/imageCacheService', {
-      config: { fluxapps: { imageCacheEnabled: true, imageCacheJobTtlMs: 10_800_000, imageCacheMaxConcurrentPulls: 3, imageCacheMaxPullRetries: 1 } },
+      config: asConfig({ fluxapps: { imageCacheEnabled: true, imageCacheJobTtlMs: 10_800_000, imageCacheMaxConcurrentPulls: 3, imageCacheMaxPullRetries: 1 } }),
       '../../lib/log': { info: sinon.stub(), warn: sinon.stub(), error: sinon.stub() },
       '../serviceHelper': { delay: stubs.delay },
       '../dockerService': {

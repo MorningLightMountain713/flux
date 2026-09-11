@@ -129,7 +129,8 @@ async function runAvailabilityCheckOnce(dosState, portsNotWorking, failedNodesTe
       // eslint-disable-next-line no-param-reassign
       dosState.testingPort = dosState.nextTestingPort;
     } else {
-      const { fluxapps: { portMin, portMax } } = config;
+      const portMin = config.get('fluxapps.portMin');
+      const portMax = config.get('fluxapps.portMax');
       // eslint-disable-next-line no-param-reassign
       dosState.testingPort = Math.floor(Math.random() * (portMax - portMin) + portMin);
     }

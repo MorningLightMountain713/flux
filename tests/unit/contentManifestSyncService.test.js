@@ -3,11 +3,12 @@
 const { expect } = require('chai');
 const sinon = require('sinon');
 const proxyquire = require('proxyquire').noCallThru();
+const { asConfig } = require('./fixtures/config');
 
 // Pass a publish stub to assert on what a round reports; the default discards it.
 function load(publish = sinon.stub()) {
   return proxyquire('../../ZelBack/src/services/appMessaging/contentManifestSyncService', {
-    config: { fluxapps: {} },
+    config: asConfig({ fluxapps: {} }),
     '../serviceHelper': { delay: sinon.stub().resolves() },
     '../appDatabase/appsRepository': { listConfirmedContentManifestVersions: sinon.stub().resolves([]) },
     '../utils/fluxBroadcastHelper': { serialiseAndSignFluxBroadcast: sinon.stub().callsFake(async (m) => m) },

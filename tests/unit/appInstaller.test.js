@@ -5,6 +5,7 @@ const sinon = require('sinon');
 const proxyquire = require('proxyquire').noCallThru();
 // Real registry singleton - un-stubbed in proxyquire, so the installer and the test share it.
 const operationRegistry = require('../../ZelBack/src/services/utils/operationRegistry');
+const { asConfig } = require('./fixtures/config');
 const {
   loadSpecLibrary, v9Spec, sealedV9Spec, instantiatedSpec, assertAnswers,
 } = require('./fixtures/fluxSpec');
@@ -113,7 +114,7 @@ describe('appInstaller tests', () => {
     // Proxy require
     appInstaller = proxyquire('../../ZelBack/src/services/appLifecycle/appInstaller', {
       '../appMonitoring/appReconciler': { awaitConvergence: sinon.stub().resolves({ converged: true, failed: [] }) },
-      config: configStub,
+      config: asConfig(configStub),
       '../verificationHelper': verificationHelperStub,
       '../messageHelper': messageHelperStub,
       '../serviceHelper': {
@@ -388,7 +389,7 @@ describe('appInstaller tests', () => {
       const insertInstalledApp = sinon.stub().resolves({ insertedId: 'id1' });
 
       const appInstallerFresh = proxyquire.noCallThru().load('../../ZelBack/src/services/appLifecycle/appInstaller', {
-        config: configStub,
+        config: asConfig(configStub),
         '../verificationHelper': verificationHelperStub,
         '../messageHelper': messageHelperStub,
         '../serviceHelper': { ensureString: sinon.stub().returnsArg(0), ensureNumber: sinon.stub().returnsArg(0), delay: sinon.stub().resolves() },

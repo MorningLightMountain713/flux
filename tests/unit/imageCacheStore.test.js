@@ -3,6 +3,7 @@
 const { expect } = require('chai');
 const sinon = require('sinon');
 const proxyquire = require('proxyquire').noCallThru();
+const { asConfig } = require('./fixtures/config');
 
 describe('imageCacheStore tests', () => {
   let dbHelperStub;
@@ -33,7 +34,7 @@ describe('imageCacheStore tests', () => {
       },
     };
     return proxyquire('../../ZelBack/src/services/appLifecycle/imageCacheStore', {
-      config: configStub,
+      config: asConfig(configStub),
       '../../lib/log': logStub,
       '../dbHelper': dbHelperStub,
     });

@@ -379,7 +379,7 @@ async function releaseInstallingClaims(message) {
     if (!message.apps || !Array.isArray(message.apps)) {
       return new Error('Invalid Flux App Running message for storing');
     }
-    if (message.apps.length > config.fluxapps.maxAppsPerNode) {
+    if (message.apps.length > config.get('fluxapps.maxAppsPerNode')) {
       return new Error('Invalid Flux App Running message: apps array exceeds maxAppsPerNode');
     }
     const { stored, refused } = appRunningEntries(message.apps);
@@ -928,7 +928,7 @@ async function handleMasterleaseEvent({ message, envelope, announcer }) {
     const membership = networkStateService.membershipAt(message.fingerprint);
     if (membership) {
       const proved = rosterOverlay.verifyTermCredential(membership, `${message.appName}/${message.role}`, carried, {
-        committeeSize: config.fluxapps.quorumGrantHeldCommitteeSize ?? 9,
+        committeeSize: config.get('fluxapps.quorumGrantHeldCommitteeSize'),
         candidate: message.grantee,
         expectedGeneration: carried.generation,
       });

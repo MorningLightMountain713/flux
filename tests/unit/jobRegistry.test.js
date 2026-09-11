@@ -7,6 +7,7 @@ const proxyquire = require('proxyquire').noCallThru();
 const { expect } = chai;
 
 const jobRegistry = require('../../ZelBack/src/services/utils/jobRegistry');
+const { asConfig } = require('./fixtures/config');
 
 describe('jobRegistry tests', () => {
   afterEach(() => {
@@ -232,7 +233,7 @@ describe('jobRegistry tests', () => {
   describe('retention', () => {
     it('drops a terminal operation once its retention window passes', () => {
       const registry = proxyquire('../../ZelBack/src/services/utils/jobRegistry', {
-        config: { fluxapps: { operationRetentionMs: 1000 } },
+        config: asConfig({ fluxapps: { operationRetentionMs: 1000 } }),
       });
       const clock = sinon.useFakeTimers();
 
@@ -246,7 +247,7 @@ describe('jobRegistry tests', () => {
 
     it('never expires an operation that is still running', () => {
       const registry = proxyquire('../../ZelBack/src/services/utils/jobRegistry', {
-        config: { fluxapps: { operationRetentionMs: 1000 } },
+        config: asConfig({ fluxapps: { operationRetentionMs: 1000 } }),
       });
       const clock = sinon.useFakeTimers();
 

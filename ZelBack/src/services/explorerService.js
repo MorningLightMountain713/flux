@@ -116,7 +116,7 @@ function scanning() {
  * @returns {number} Batch size.
  */
 function cursorBatchSize() {
-  return config.fluxapps.explorerCursorBatchSize ?? 500;
+  return config.get('fluxapps.explorerCursorBatchSize');
 }
 
 
@@ -306,7 +306,7 @@ function resolveOracleAddress(height) {
 }
 
 function isMessageAuthority(tx) {
-  const authAddr = config.fluxapps.messageAuthorityAddress;
+  const authAddr = config.get('fluxapps.messageAuthorityAddress');
   if (!authAddr) return false;
   return tx.vin.some((vin) => vin.address === authAddr && inputSignsAllOutputs(vin));
 }
@@ -336,7 +336,7 @@ function isLegacyMessageAuthority(address) {
 function isRecognizedMessageSigner(address, height) {
   if (!address) return false;
   if (isLegacyMessageAuthority(address)) return true;
-  if (address === config.fluxapps.messageAuthorityAddress) return true;
+  if (address === config.get('fluxapps.messageAuthorityAddress')) return true;
   return address === resolveOracleAddress(height);
 }
 
@@ -519,7 +519,7 @@ async function processInsight(blockDataVerbose, database) {
         const intervals = appPrices.filter((i) => i.height < blockDataVerbose.height);
         const priceSpecifications = intervals[intervals.length - 1]; // filter does not change order
         // MAY contain App transaction. Store it.
-        if (isFluxAppMessageValue >= (priceSpecifications.minPrice * 1e8) && message.length === 64 && blockDataVerbose.height >= config.fluxapps.epochstart) { // min of X flux had to be paid for us bothering checking
+        if (isFluxAppMessageValue >= (priceSpecifications.minPrice * 1e8) && message.length === 64 && blockDataVerbose.height >= config.get('fluxapps.epochstart')) { // min of X flux had to be paid for us bothering checking
           const appTxRecord = {
             txid: tx.txid, height: blockDataVerbose.height, txIndex, hash: message, value: isFluxAppMessageValue, message: false, // message is boolean saying if we already have it stored as permanent message
             blockTime: blockDataVerbose.time, // confirming block timestamp — v9 registeredAt
@@ -739,7 +739,7 @@ async function processOneBlock(blockHeight, isInsightExplorer, loopOptions) {
     await processInsight(blockDataVerbose, database);
 
     // After fork block, chain runs 4x faster, so multiply periods by 4
-    const speedMultiplier = blockHeight >= config.fluxapps.daemonPONFork ? 4 : 1;
+    const speedMultiplier = blockHeight >= config.get('fluxapps.daemonPONFork') ? 4 : 1;
 
     const scannedHeight = blockDataVerbose.height;
     // update scanned Height in scannedBlockHeightCollection
@@ -762,7 +762,7 @@ async function processOneBlock(blockHeight, isInsightExplorer, loopOptions) {
     // as being at the tip and took the tip path.
     isSynced = atTip;
     if (isSynced) {
-      if (globalState.dbReady && blockDataVerbose.height >= config.fluxapps.epochstart) {
+      if (globalState.dbReady && blockDataVerbose.height >= config.get('fluxapps.epochstart')) {
         // Desired-state convergence at every tip block: cheap (this node's
         // handful of installed rows), level-triggered, and the reconciler
         // staggers any actual redeploys itself — so evaluating every block
@@ -775,7 +775,7 @@ async function processOneBlock(blockHeight, isInsightExplorer, loopOptions) {
           // install is the reconciler's job (the convergence call above).
           await appJanitor.sweepRegistryExpiry();
         }
-        const giveUpPeriod = config.fluxapps.removeFluxAppsPeriod * speedMultiplier;
+        const giveUpPeriod = config.get('fluxapps.removeFluxAppsPeriod') * speedMultiplier;
         if (blockWorkDue('checkAndRemoveApplicationInstance', blockHeight, giveUpPeriod)) {
           // The give-up-an-app pass, on the chain's cadence so every node
           // evaluates the same pass. It decides nothing unless this node is
@@ -799,7 +799,7 @@ async function processOneBlock(blockHeight, isInsightExplorer, loopOptions) {
           }
         }
       }
-      const benchPeriod = config.fluxapps.benchUpnpPeriod * speedMultiplier;
+      const benchPeriod = config.get('fluxapps.benchUpnpPeriod') * speedMultiplier;
       if (blockWorkDue('benchUpnp', blockDataVerbose.height, benchPeriod)) {
         await scheduleUpnpBench(blockDataVerbose, benchPeriod);
       }
@@ -1170,11 +1170,11 @@ function discoverOracleAddresses(alreadyScanned) {
 async function bootstrapSoftForks(currentDaemonHeight) {
   const staticSigners = [
     ...chainUtilities.legacyMessageAuthorities(),
-    config.fluxapps.messageAuthorityAddress,
+    config.get('fluxapps.messageAuthorityAddress'),
   ].filter(Boolean);
 
   await scanForSoftForks(
-    staticSigners, config.fluxapps.epochstart, currentDaemonHeight, 'phase 1 (foundation)',
+    staticSigners, config.get('fluxapps.epochstart'), currentDaemonHeight, 'phase 1 (foundation)',
   );
 
   // Only now can the oracle's addresses be known: phase 1 is what read the messages
@@ -1226,7 +1226,7 @@ function processBootstrapTx(tx, priceSpecs, seenHashes, hashBatch, txIndex) {
   if (appValue > 0) {
     const priceSpec = getPriceSpecForHeight(priceSpecs, height);
     if (appValue >= (priceSpec.minPrice * 1e8) && message.length === 64
-      && height >= config.fluxapps.epochstart && !seenHashes.has(message)) {
+      && height >= config.get('fluxapps.epochstart') && !seenHashes.has(message)) {
       seenHashes.add(message);
       hashBatch.push({
         txid: tx.txid, height, txIndex, hash: message, value: appValue,
@@ -1245,8 +1245,8 @@ function processBootstrapTx(tx, priceSpecs, seenHashes, hashBatch, txIndex) {
  * @param {number} currentDaemonHeight
  */
 async function bootstrapAppHashes(currentDaemonHeight) {
-  log.info(`Bootstrap: Fetching app payments from height ${config.fluxapps.epochstart} to ${currentDaemonHeight}`);
-  const positions = await appPaymentPositions(config.fluxapps.epochstart, currentDaemonHeight);
+  log.info(`Bootstrap: Fetching app payments from height ${config.get('fluxapps.epochstart')} to ${currentDaemonHeight}`);
+  const positions = await appPaymentPositions(config.get('fluxapps.epochstart'), currentDaemonHeight);
   const allTxids = [...positions.keys()].sort((a, b) => positions.get(a).height - positions.get(b).height
     || positions.get(a).txIndex - positions.get(b).txIndex);
   log.info(`Bootstrap: ${allTxids.length} unique txids to process`);
@@ -1304,7 +1304,7 @@ async function bootstrapAppHashes(currentDaemonHeight) {
 }
 
 async function waitForDaemonSync() {
-  const retryMs = config.fluxapps.explorerSyncRetryMs ?? 120000;
+  const retryMs = config.get('fluxapps.explorerSyncRetryMs');
   while (!daemonServiceMiscRpcs.isDaemonSynced().data.synced) {
     log.info(`Explorer - Daemon not synced, retrying in ${retryMs / 1000}s`);
     await serviceHelper.delay(retryMs);
@@ -1448,7 +1448,7 @@ async function drainToTip() {
   const syncStatus = daemonServiceMiscRpcs.isDaemonSynced();
 
   if (!syncStatus.data.synced) {
-    scheduleScan(config.fluxapps.explorerUnsyncedRetryMs ?? 5000, 'daemon unsynced');
+    scheduleScan(config.get('fluxapps.explorerUnsyncedRetryMs'), 'daemon unsynced');
     return;
   }
 
@@ -1546,7 +1546,7 @@ async function requestScan(reason = 'requested', { toHeight = null } = {}) {
 
       // Backed off rather than retried immediately: a database that is gone stays
       // gone for a while, and an immediate retry is a busy loop.
-      scheduleScan(config.fluxapps.explorerRecoveryRetryMs ?? 60000, 'after error');
+      scheduleScan(config.get('fluxapps.explorerRecoveryRetryMs'), 'after error');
     } finally {
       scanDraining = false;
       scanDrainPromise = null;
@@ -1561,7 +1561,7 @@ async function requestScan(reason = 'requested', { toHeight = null } = {}) {
       // Skipped when a timer already exists so the error backoff above, which is
       // deliberately much longer, is not replaced by the short idle interval.
       if (scanFallbackPolling && !scanStopped && !scanTimer) {
-        scheduleScan(config.fluxapps.explorerIdlePollMs ?? 5000, 'fallback poll');
+        scheduleScan(config.get('fluxapps.explorerIdlePollMs'), 'fallback poll');
       }
     }
   })();
@@ -1640,7 +1640,7 @@ async function recoverFromError(deepRestore) {
     return;
   }
 
-  const deepRestoreBlocks = config.fluxapps.explorerDeepRestoreBlocks ?? 100;
+  const deepRestoreBlocks = config.get('fluxapps.explorerDeepRestoreBlocks');
 
   if (deepRestore && deepRestoreBlocks > 0) {
     log.info('Deep restoring of database...');
@@ -1706,7 +1706,7 @@ async function initiateBlockProcessor(options = {}) {
 
     if (daemonHeight > scannedBlockHeight) {
       if (scannedBlockHeight !== 0 && restoreDatabase) {
-        const deepRestoreBlocks = config.fluxapps.explorerDeepRestoreBlocks ?? 100;
+        const deepRestoreBlocks = config.get('fluxapps.explorerDeepRestoreBlocks');
         if (deepRestore && deepRestoreBlocks > 0) {
           log.info('Deep restoring of database...');
           scannedBlockHeight = Math.max(scannedBlockHeight - deepRestoreBlocks, 0);
@@ -1745,10 +1745,10 @@ async function initiateBlockProcessor(options = {}) {
       } catch (error) {
         log.error('Bootstrap failed, falling back to block-by-block scan');
         log.error(error);
-        await chainRollback.setScannedHeight(database, config.fluxapps.epochstart - 1);
+        await chainRollback.setScannedHeight(database, config.get('fluxapps.epochstart') - 1);
       }
-    } else if (isInsightExplorer && scannedBlockHeight < config.fluxapps.epochstart - 1) {
-      await chainRollback.setScannedHeight(database, config.fluxapps.epochstart - 1);
+    } else if (isInsightExplorer && scannedBlockHeight < config.get('fluxapps.epochstart') - 1) {
+      await chainRollback.setScannedHeight(database, config.get('fluxapps.epochstart') - 1);
     }
 
     // The loop reads the cursor itself, so everything above only has to leave the

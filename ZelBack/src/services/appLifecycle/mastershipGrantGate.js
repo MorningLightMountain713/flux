@@ -58,7 +58,7 @@ const ROLE = 'master';
 // scheduled yet and the plane stays inert.
 function activationHeight() {
   if (testOverrides.activationHeight !== null) return testOverrides.activationHeight;
-  const height = config.fluxapps.quorumGrantActivationHeight;
+  const height = config.get('fluxapps.quorumGrantActivationHeight');
   return Number.isInteger(height) && height > 0 ? height : null;
 }
 
@@ -106,11 +106,11 @@ function activationHeight() {
 let timingWarned = false;
 function timingSafe() {
   const outcome = grantClientCore.timingIsSafe({
-    demotionSlackMs: config.fluxapps.quorumGrantDemotionSlackMs ?? 15_000,
+    demotionSlackMs: config.get('fluxapps.quorumGrantDemotionSlackMs'),
     hardStopMs: grantClientCore.HARD_STOP_MS,
-    lockDelayMs: config.fluxapps.quorumGrantLockDelayMs ?? 30_000,
-    renewIntervalMs: config.fluxapps.quorumGrantRenewIntervalMs ?? 20_000,
-    askTimeoutMs: config.fluxapps.quorumGrantAskTimeoutMs ?? 5_000,
+    lockDelayMs: config.get('fluxapps.quorumGrantLockDelayMs'),
+    renewIntervalMs: config.get('fluxapps.quorumGrantRenewIntervalMs'),
+    askTimeoutMs: config.get('fluxapps.quorumGrantAskTimeoutMs'),
   });
   if (!outcome.safe && !timingWarned) {
     timingWarned = true;
@@ -127,7 +127,7 @@ function timingSafe() {
  * not be the one deciding the plane has started.
  */
 function planeView() {
-  if (config.fluxapps.quorumGrantMastership !== true) return null;
+  if (config.get('fluxapps.quorumGrantMastership') !== true) return null;
   if (!timingSafe()) return null;
   const activateAt = activationHeight();
   if (!activateAt) return null;
@@ -137,7 +137,7 @@ function planeView() {
 }
 
 function preWindowBlocks() {
-  return config.fluxapps.quorumGrantPreWindowBlocks ?? 40;
+  return config.get('fluxapps.quorumGrantPreWindowBlocks');
 }
 
 /**
@@ -182,7 +182,7 @@ function featureEnabled() {
 }
 
 function pursuitIntervalMs() {
-  return config.fluxapps.quorumGrantPursuitIntervalMs ?? 30_000;
+  return config.get('fluxapps.quorumGrantPursuitIntervalMs');
 }
 
 /**
@@ -222,11 +222,11 @@ async function localComponentState(identifier) {
 }
 
 function heldTtlMs() {
-  return config.fluxapps.quorumGrantHeldTtlMs ?? 150_000;
+  return config.get('fluxapps.quorumGrantHeldTtlMs');
 }
 
 function askTimeoutMs() {
-  return config.fluxapps.quorumGrantAskTimeoutMs ?? 5_000;
+  return config.get('fluxapps.quorumGrantAskTimeoutMs');
 }
 
 const testOverrides = { enabled: null, activationHeight: null };

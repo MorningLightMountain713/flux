@@ -15,7 +15,7 @@ const { Privilege, authOf } = require('../utils/privileges');
 // The transient re-ask pace, shared with the spawner's spawn-cache back-off so
 // the two layers stack to a bounded, config-visible ceiling (2x this value).
 function registryTransientBackoffMs() {
-  return config.fluxapps.registryTransientBackoffMs ?? 2 * 60 * 1000;
+  return config.get('fluxapps.registryTransientBackoffMs');
 }
 
 /**
@@ -110,7 +110,7 @@ async function verifyRepository(repotag, options = {}) {
   }
 
   const imgVerifier = new imageVerifier.ImageVerifier(repotag, {
-    maxImageSize: config.fluxapps.maxImageSize,
+    maxImageSize: config.get('fluxapps.maxImageSize'),
     architecture,
     architectureSet: supportedArchitectures,
   });

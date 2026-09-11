@@ -57,7 +57,7 @@ const STOP_REASON_BY_CODE = new Map([
 
 // How long the probe waits for the pong. The same bound as the handshake:
 // a node that accepted the connection and then says nothing is not there.
-const PROBE_ANSWER_MS = config.fluxapps.wsHandshakeTimeoutMs ?? 10000;
+const PROBE_ANSWER_MS = config.get('fluxapps.wsHandshakeTimeoutMs');
 
 // The records this node has seen standing, by subject: its own observation,
 // kept so that a record's lapse — gone unrefuted — is an edge it can act on.

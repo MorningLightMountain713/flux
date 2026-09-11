@@ -428,7 +428,7 @@ async function handleExpiredApp(name) {
  */
 async function checkAndRequestApp(hash, txid, height, valueSat, blockTime = null, i = 0) {
   try {
-    if (height < config.fluxapps.epochstart) return false;
+    if (height < config.get('fluxapps.epochstart')) return false;
 
     const existing = await appsRepository.getPermanentMessage(hash);
     if (existing) {
@@ -640,7 +640,7 @@ async function checkAndRequestApp(hash, txid, height, valueSat, blockTime = null
 async function checkAndRequestMultipleApps(apps, i = 1) {
   try {
     const numberOfPeers = fluxNetworkHelper.getNumberOfPeers();
-    if (numberOfPeers < config.fluxapps.minHashSyncPeers) {
+    if (numberOfPeers < config.get('fluxapps.minHashSyncPeers')) {
       log.info('checkAndRequestMultipleApps - Not enough connected peers to request missing Flux App messages');
       return;
     }
@@ -682,7 +682,7 @@ async function continuousFluxAppHashesCheck(force = false) {
     log.info('Requesting missing Flux App messages');
     continuousFluxAppHashesCheckRunning = true;
     const numberOfPeers = fluxNetworkHelper.getNumberOfPeers();
-    if (numberOfPeers < config.fluxapps.minHashSyncPeers) {
+    if (numberOfPeers < config.get('fluxapps.minHashSyncPeers')) {
       log.info('Not enough connected peers to request missing Flux App messages');
       continuousFluxAppHashesCheckRunning = false;
       return;
@@ -742,7 +742,7 @@ async function continuousFluxAppHashesCheck(force = false) {
         if (heightDifference < 0) {
           heightDifference = 0;
         }
-        let maturity = Math.round(heightDifference / config.fluxapps.blocksLasting);
+        let maturity = Math.round(heightDifference / config.get('fluxapps.blocksLasting'));
         if (maturity > 12) {
           maturity = 16; // maturity of max 16 representing its older than 1 year. Old messages will only be searched 3 times, newer messages more oftenly
         }

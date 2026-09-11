@@ -2,13 +2,14 @@
 
 const { expect } = require('chai');
 const proxyquire = require('proxyquire').noCallThru();
+const { asConfig } = require('./fixtures/config');
 
 // A valid 32-byte x25519 public key (base64), distinct from the source default.
 const OVERRIDE_PUBKEY_B64 = Buffer.alloc(32, 7).toString('base64');
 
 function load(configStub) {
   return proxyquire('../../ZelBack/src/services/utils/ingressEncryptionKey', {
-    config: configStub,
+    config: asConfig(configStub),
   });
 }
 

@@ -861,7 +861,7 @@ async function uninstallApplication(appName, options = {}) {
     // cascade. Runs before this app's teardown record exists, so each nested
     // removal is an ordinary standalone removal. Gated off in production: the
     // flux console owns the collector lifecycle.
-    if (config.fluxapps.manageCollectorLifecycle && cascade && replica === undefined) {
+    if (config.get('fluxapps.manageCollectorLifecycle') && cascade && replica === undefined) {
       const workloadsRemoved = await removeRequiringWorkloadsFirst(appName, { forceKill, operatorForce });
       if (!workloadsRemoved) {
         // A consumer that still requires this follower could not be removed yet
@@ -1048,7 +1048,7 @@ async function uninstallApplication(appName, options = {}) {
     // can orphan sibling collectors. Sweep orphans once this removal settles -
     // deferred direct call, not an event subscription (the event bus is
     // publish-only test observability). Gated off in production.
-    if (config.fluxapps.manageCollectorLifecycle
+    if (config.get('fluxapps.manageCollectorLifecycle')
       && (!await relationshipResolver.isPureFollowerApp(spec) || !forceKill)) {
       setImmediate(() => {
         removeUnrequiredDependencies().catch((error) => log.error(`Dependency cleanup trigger failed: ${error.message}`));

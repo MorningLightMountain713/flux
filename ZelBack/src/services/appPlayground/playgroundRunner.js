@@ -50,29 +50,29 @@ const dockerPullStreamPromise = util.promisify(dockerService.dockerPullStream);
 const pullLock = new AsyncLock(1, { maxHoldMs: 0 });
 
 function probeTimeoutMs() {
-  return config.fluxapps.playgroundProbeTimeoutMs ?? 180_000;
+  return config.get('fluxapps.playgroundProbeTimeoutMs');
 }
 
 function probeStableMs() {
-  return config.fluxapps.playgroundProbeStableMs ?? 30_000;
+  return config.get('fluxapps.playgroundProbeStableMs');
 }
 
 // How often to knock on a declared port while waiting for a component with no
 // health check to start serving. Nothing reports "the app has bound its port",
 // so this rung has to ask.
 function tcpRetryMs() {
-  return config.fluxapps.playgroundTcpRetryMs ?? 2_000;
+  return config.get('fluxapps.playgroundTcpRetryMs');
 }
 
 // How often to sample CPU. The only genuine timer left in a session: docker
 // reports state transitions but nothing reports how busy a container is, and
 // mining detection wants an average across the window rather than fine detail.
 function cpuSampleMs() {
-  return config.fluxapps.playgroundCpuSampleMs ?? 15_000;
+  return config.get('fluxapps.playgroundCpuSampleMs');
 }
 
 function logRetainedLines() {
-  return config.fluxapps.playgroundLogRetainedLines ?? 2000;
+  return config.get('fluxapps.playgroundLogRetainedLines');
 }
 
 // Bounds the teardown's final log read. Not load-bearing for the case the read
@@ -80,19 +80,19 @@ function logRetainedLines() {
 // milliseconds - it only closes the tap on a still-running container, whose
 // bytes arrive immediately but whose stream would otherwise stay open.
 function finalLogReadMs() {
-  return config.fluxapps.playgroundFinalLogReadMs ?? 2000;
+  return config.get('fluxapps.playgroundFinalLogReadMs');
 }
 
 function sessionTtlMs() {
-  return config.fluxapps.playgroundSessionTtlMs ?? 900_000;
+  return config.get('fluxapps.playgroundSessionTtlMs');
 }
 
 function imageMaxBytes() {
-  return config.fluxapps.playgroundSessionImageMaxBytes ?? 2e9;
+  return config.get('fluxapps.playgroundSessionImageMaxBytes');
 }
 
 function imageTotalMaxBytes() {
-  return config.fluxapps.playgroundSessionImageTotalMaxBytes ?? 6e9;
+  return config.get('fluxapps.playgroundSessionImageTotalMaxBytes');
 }
 
 /**
@@ -635,7 +635,7 @@ async function runSession(session, hooks = {}) {
   // One accumulator for the whole session rather than per component: the
   // question is whether this SESSION sat at full tilt, and a miner with a
   // sidecar would otherwise dilute its own reading.
-  const cpu = cpuAccumulator(config.fluxapps.playgroundMinerCpuBusyFraction ?? 0.9);
+  const cpu = cpuAccumulator(config.get('fluxapps.playgroundMinerCpuBusyFraction'));
   // Runs for the probe AND the window that follows: the question is what this
   // session did overall, so the sampling must not stop when the verdict lands.
   const stopCpuSampler = startCpuSampler(components, session.watcher, cpu);

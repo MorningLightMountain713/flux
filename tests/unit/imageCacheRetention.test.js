@@ -3,6 +3,7 @@
 const { expect } = require('chai');
 const sinon = require('sinon');
 const proxyquire = require('proxyquire').noCallThru();
+const { asConfig } = require('./fixtures/config');
 
 describe('imageCacheRetention tests', () => {
   let storeStub;
@@ -12,7 +13,7 @@ describe('imageCacheRetention tests', () => {
     storeStub = { findPinsForRepotag: sinon.stub() };
     configStub = { fluxapps: { imageCacheEnabled: enabled } };
     return proxyquire('../../ZelBack/src/services/appLifecycle/imageCacheRetention', {
-      config: configStub,
+      config: asConfig(configStub),
       './imageCacheStore': storeStub,
     });
   }

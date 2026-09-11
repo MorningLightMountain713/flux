@@ -10,6 +10,7 @@ const { expect } = chai;
 const verificationHelper = require('../../ZelBack/src/services/verificationHelper');
 const serviceHelper = require('../../ZelBack/src/services/serviceHelper');
 const verifyPool = require('../../ZelBack/src/services/utils/verifyPool');
+const { asConfig } = require('./fixtures/config');
 
 const TEST_PUBKEY = '0474eb4690689bb408139249eda7f361b7881c4254ccbe303d3b4d58c2b48897d0f070b44944941998551f9ea0e1befd96f13adf171c07c885e62d0c2af56d3dab';
 const TEST_PRIVKEY = '5JTeg79dTLzzHXoJPALMWuoGDM8QmLj4n5f6MeFjx8dzsirvjAh';
@@ -422,7 +423,7 @@ describe('verifyPool sizing', () => {
     }
     const pool = proxyquire('../../ZelBack/src/services/utils/verifyPool', {
       worker_threads: { Worker: FakeWorker },
-      config: { fluxapps },
+      config: asConfig({ fluxapps }),
       os: { cpus: () => new Array(cores) },
       '../../lib/log': { info: sinon.stub(), warn: sinon.stub(), error: sinon.stub() },
     });

@@ -36,12 +36,12 @@ const handbackTurns = require('./utils/handbackTurns');
 const DOS_MESSAGE_PREFIX = 'Residential node not running ArcaneOS';
 const HOLD_REASON = 'residential node not running ArcaneOS';
 
-const CHECK_INTERVAL_MS = config.fluxapps.residentialCheckIntervalMs;
+const CHECK_INTERVAL_MS = config.get('fluxapps.residentialCheckIntervalMs');
 const RETRY_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
 // Before the first app is given up, the verdict must have held this long.
 // The placement hold deletes nothing and needs no window; this paces only the
 // part that moves customer data, so a momentary misread can correct itself.
-const SETTLE_MS = config.fluxapps.residentialSettleMs;
+const SETTLE_MS = config.get('fluxapps.residentialSettleMs');
 // The window counts time this node OBSERVED the verdict, not time that passed.
 // A tick that cannot decide - an unreadable bench, a table that will not load -
 // returns without touching state, so measuring from the first verdict alone let
@@ -76,7 +76,7 @@ const TURN_MS = config.fluxapps.residentialTurnMs;
 // Minimum gap between this node's departures. The give-up-an-app pass runs every
 // 11 blocks (~22 min), which unpaced would empty the busiest node in the fleet in
 // about four hours; there is no deadline here and slower is strictly safer.
-const EVACUATION_INTERVAL_MS = config.fluxapps.residentialEvacuationIntervalMs;
+const EVACUATION_INTERVAL_MS = config.get('fluxapps.residentialEvacuationIntervalMs');
 
 const startupCollection = config.database.local.collections.nodeStartupTracker;
 const SETTLE_MARKER_KEY = 'residentialDos';

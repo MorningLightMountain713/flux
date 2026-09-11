@@ -4,6 +4,7 @@ const { expect } = require('chai');
 const sinon = require('sinon');
 const proxyquire = require('proxyquire').noCallThru();
 const openpgp = require('openpgp');
+const { asConfig } = require('./fixtures/config');
 
 // The keypair is the operator's: it is the one that enterprise app registry credentials
 // are encrypted to, so losing it is unrecoverable. These tests cover the boots where the
@@ -73,11 +74,11 @@ describe('node identity adoption', () => {
       },
     };
     repository = proxyquire('../../ZelBack/src/services/appDatabase/nodeIdentityRepository', {
-      config: configStub,
+      config: asConfig(configStub),
       '../dbHelper': dbHelperStub,
     });
     migration = proxyquire('../../ZelBack/src/services/appDatabase/nodeIdentityMigration', {
-      config: configStub,
+      config: asConfig(configStub),
       '../dbHelper': dbHelperStub,
       './nodeIdentityRepository': repository,
       '../../lib/log': logStub,

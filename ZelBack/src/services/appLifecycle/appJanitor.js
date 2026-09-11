@@ -272,7 +272,7 @@ function start() {
   if (started) return;
   started = true;
 
-  const bootDelay = (ms) => Math.round(ms * config.fluxapps.bootDelayMultiplier);
+  const bootDelay = (ms) => Math.round(ms * config.get('fluxapps.bootDelayMultiplier'));
   const schedule = (name, initialMs, intervalMs) => {
     setTimeout(() => {
       runSweep(name);
@@ -280,13 +280,13 @@ function start() {
     }, bootDelay(initialMs));
   };
 
-  schedule('dockerOrphans', 30 * 60 * 1000, config.fluxapps.orphanSweepIntervalMs);
-  schedule('dockerDebris', 45 * 60 * 1000, config.fluxapps.dockerDebrisIntervalMs);
+  schedule('dockerOrphans', 30 * 60 * 1000, config.get('fluxapps.orphanSweepIntervalMs'));
+  schedule('dockerDebris', 45 * 60 * 1000, config.get('fluxapps.dockerDebrisIntervalMs'));
   // Much earlier than the other two: sessions live only in memory, so at this
   // point every playground container on the node belongs to a session that no
   // longer exists. Waiting half an hour to collect them would leave a restarted
   // node running strangers' containers with nothing watching them.
-  schedule('playgroundOrphans', 2 * 60 * 1000, config.fluxapps.playgroundReapIntervalMs);
+  schedule('playgroundOrphans', 2 * 60 * 1000, config.get('fluxapps.playgroundReapIntervalMs'));
 
   // Every entry into READY (first sync and every resync recovery): the node
   // just (re)gained an authoritative view, so clear what the registry says is

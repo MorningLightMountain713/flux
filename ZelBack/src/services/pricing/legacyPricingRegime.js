@@ -69,9 +69,9 @@ const FREE_UPDATE_WINDOWS = [
  * @returns {number} blocks
  */
 function getDefaultExpire(height) {
-  return height >= config.fluxapps.daemonPONFork
-    ? config.fluxapps.blocksLasting * 4
-    : config.fluxapps.blocksLasting;
+  return height >= config.get('fluxapps.daemonPONFork')
+    ? config.get('fluxapps.blocksLasting') * 4
+    : config.get('fluxapps.blocksLasting');
 }
 
 function countEnterprisePortsOn(component) {
@@ -183,8 +183,8 @@ async function onChainDisplayPrice(spec) {
   const intervals = appPrices.filter((i) => i.height < daemonHeight);
   const priceSpecifications = intervals[intervals.length - 1];
 
-  const blockHeightMultiplier = daemonHeight >= config.fluxapps.daemonPONFork ? 4 : 1;
-  const defaultExpire = config.fluxapps.blocksLasting * blockHeightMultiplier;
+  const blockHeightMultiplier = daemonHeight >= config.get('fluxapps.daemonPONFork') ? 4 : 1;
+  const defaultExpire = config.get('fluxapps.blocksLasting') * blockHeightMultiplier;
 
   let actualPriceToPay = await appPricePerMonth(spec, daemonHeight, appPrices);
   const expireIn = spec.expire || defaultExpire;
@@ -200,20 +200,20 @@ async function onChainDisplayPrice(spec) {
     const prevSpec = await resolveSpec(appInfoDoc);
     let previousSpecsPrice = await appPricePerMonth(prevSpec, daemonHeight, appPrices);
 
-    const previousBlockHeightMultiplier = appInfoDoc.height >= config.fluxapps.daemonPONFork ? 4 : 1;
-    const previousDefaultExpire = config.fluxapps.blocksLasting * previousBlockHeightMultiplier;
+    const previousBlockHeightMultiplier = appInfoDoc.height >= config.get('fluxapps.daemonPONFork') ? 4 : 1;
+    const previousDefaultExpire = config.get('fluxapps.blocksLasting') * previousBlockHeightMultiplier;
 
     let previousExpireIn = previousSpecsPrice.expire || previousDefaultExpire;
     if (daemonHeight > 1315000) {
       previousExpireIn = prevSpec.expire || previousDefaultExpire;
     }
 
-    if (appInfoDoc.height < config.fluxapps.daemonPONFork) {
+    if (appInfoDoc.height < config.get('fluxapps.daemonPONFork')) {
       const originalExpireHeight = appInfoDoc.height + previousExpireIn;
-      if (originalExpireHeight > config.fluxapps.daemonPONFork) {
-        const blocksAfterFork = originalExpireHeight - config.fluxapps.daemonPONFork;
+      if (originalExpireHeight > config.get('fluxapps.daemonPONFork')) {
+        const blocksAfterFork = originalExpireHeight - config.get('fluxapps.daemonPONFork');
         const adjustedBlocksAfterFork = blocksAfterFork * 4;
-        const adjustedExpireHeight = config.fluxapps.daemonPONFork + adjustedBlocksAfterFork;
+        const adjustedExpireHeight = config.get('fluxapps.daemonPONFork') + adjustedBlocksAfterFork;
         previousExpireIn = adjustedExpireHeight - appInfoDoc.height;
       }
     }
@@ -222,9 +222,9 @@ async function onChainDisplayPrice(spec) {
     previousSpecsPrice = Math.ceil(previousSpecsPrice * 100) / 100;
 
     let heightDifference = daemonHeight - appInfoDoc.height;
-    if (appInfoDoc.height < config.fluxapps.daemonPONFork && daemonHeight >= config.fluxapps.daemonPONFork) {
-      const blocksBeforeFork = config.fluxapps.daemonPONFork - appInfoDoc.height;
-      const blocksAfterFork = daemonHeight - config.fluxapps.daemonPONFork;
+    if (appInfoDoc.height < config.get('fluxapps.daemonPONFork') && daemonHeight >= config.get('fluxapps.daemonPONFork')) {
+      const blocksBeforeFork = config.get('fluxapps.daemonPONFork') - appInfoDoc.height;
+      const blocksAfterFork = daemonHeight - config.get('fluxapps.daemonPONFork');
       heightDifference = blocksBeforeFork + (blocksAfterFork * 4);
     }
 
@@ -286,14 +286,14 @@ async function fiatAndFluxDisplayPrice(spec, appSpecification) {
       myLongCache.set('appPrices', response.data.data);
       appPrices.push(response.data.data);
     } else {
-      const fallback = config.fluxapps.usdprice;
+      const fallback = config.get('fluxapps.usdprice');
       myLongCache.set('appPrices', fallback);
       appPrices.push(fallback);
     }
   }
 
-  const blockHeightMultiplier = daemonHeight >= config.fluxapps.daemonPONFork ? 4 : 1;
-  const defaultExpire = config.fluxapps.blocksLasting * blockHeightMultiplier;
+  const blockHeightMultiplier = daemonHeight >= config.get('fluxapps.daemonPONFork') ? 4 : 1;
+  const defaultExpire = config.get('fluxapps.blocksLasting') * blockHeightMultiplier;
 
   let actualPriceToPay = await appPricePerMonth(spec, daemonHeight, appPrices);
   const expireIn = spec.expire || defaultExpire;
@@ -309,20 +309,20 @@ async function fiatAndFluxDisplayPrice(spec, appSpecification) {
     const prevSpec = await resolveSpec(appInfoDoc);
     let previousSpecsPrice = await appPricePerMonth(prevSpec, daemonHeight, appPrices);
 
-    const previousBlockHeightMultiplier = appInfoDoc.height >= config.fluxapps.daemonPONFork ? 4 : 1;
-    const previousDefaultExpire = config.fluxapps.blocksLasting * previousBlockHeightMultiplier;
+    const previousBlockHeightMultiplier = appInfoDoc.height >= config.get('fluxapps.daemonPONFork') ? 4 : 1;
+    const previousDefaultExpire = config.get('fluxapps.blocksLasting') * previousBlockHeightMultiplier;
 
     let previousExpireIn = previousSpecsPrice.expire || previousDefaultExpire;
     if (daemonHeight > 1315000) {
       previousExpireIn = prevSpec.expire || previousDefaultExpire;
     }
 
-    if (appInfoDoc.height < config.fluxapps.daemonPONFork) {
+    if (appInfoDoc.height < config.get('fluxapps.daemonPONFork')) {
       const originalExpireHeight = appInfoDoc.height + previousExpireIn;
-      if (originalExpireHeight > config.fluxapps.daemonPONFork) {
-        const blocksAfterFork = originalExpireHeight - config.fluxapps.daemonPONFork;
+      if (originalExpireHeight > config.get('fluxapps.daemonPONFork')) {
+        const blocksAfterFork = originalExpireHeight - config.get('fluxapps.daemonPONFork');
         const adjustedBlocksAfterFork = blocksAfterFork * 4;
-        const adjustedExpireHeight = config.fluxapps.daemonPONFork + adjustedBlocksAfterFork;
+        const adjustedExpireHeight = config.get('fluxapps.daemonPONFork') + adjustedBlocksAfterFork;
         previousExpireIn = adjustedExpireHeight - appInfoDoc.height;
       }
     }
@@ -331,9 +331,9 @@ async function fiatAndFluxDisplayPrice(spec, appSpecification) {
     previousSpecsPrice = Number(previousSpecsPrice).toFixed(2);
 
     let heightDifference = daemonHeight - appInfoDoc.height;
-    if (appInfoDoc.height < config.fluxapps.daemonPONFork && daemonHeight >= config.fluxapps.daemonPONFork) {
-      const blocksBeforeFork = config.fluxapps.daemonPONFork - appInfoDoc.height;
-      const blocksAfterFork = daemonHeight - config.fluxapps.daemonPONFork;
+    if (appInfoDoc.height < config.get('fluxapps.daemonPONFork') && daemonHeight >= config.get('fluxapps.daemonPONFork')) {
+      const blocksBeforeFork = config.get('fluxapps.daemonPONFork') - appInfoDoc.height;
+      const blocksAfterFork = daemonHeight - config.get('fluxapps.daemonPONFork');
       heightDifference = blocksBeforeFork + (blocksAfterFork * 4);
     }
 
@@ -417,7 +417,7 @@ async function fiatAndFluxDisplayPrice(spec, appSpecification) {
       if (fiatRates && fiatRates.data && fiatRates.data.zelcash && fiatRates.data.zelcash.usd) {
         fluxUSDRate = fiatRates.data.zelcash.usd;
       } else {
-        ({ fluxUSDRate } = config.fluxapps);
+        fluxUSDRate = config.get('fluxapps.fluxUSDRate');
       }
       myShortCache.set('fluxRates', fluxUSDRate);
     }

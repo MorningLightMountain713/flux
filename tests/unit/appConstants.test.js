@@ -8,6 +8,7 @@ const os = require('os');
 const { expect } = require('chai');
 const path = require('path');
 const { resolvedPath } = require('../../ZelBack/src/services/utils/appConstants');
+const { asConfig } = require('./fixtures/config');
 
 describe('appConstants tests', () => {
   let originalFluxOSPath;
@@ -122,7 +123,7 @@ describe('appConstants tests', () => {
       const real = require('config');
 
       return proxyquire('../../ZelBack/src/services/utils/appConstants', {
-        config: { ...real, fluxapps: { ...real.fluxapps, locationTtlS } },
+        config: asConfig({ ...real, fluxapps: { ...real.fluxapps, locationTtlS } }),
       }).ANNOUNCE_INTERVAL_MS;
     };
 

@@ -3,6 +3,7 @@
 const { expect } = require('chai');
 const sinon = require('sinon');
 const proxyquire = require('proxyquire').noCallThru();
+const { asConfig } = require('./fixtures/config');
 
 const CONFIG = { fluxapps: { playgroundEgressKbit: 1000 } };
 
@@ -18,7 +19,7 @@ describe('playgroundEgress', () => {
   function load(behaviour = () => ({ error: null })) {
     runCommand = sinon.stub().callsFake(async (bin, opts) => behaviour(bin, opts.params));
     egress = proxyquire.load('../../ZelBack/src/services/appPlayground/playgroundEgress', {
-      config: CONFIG,
+      config: asConfig(CONFIG),
       '../../lib/log': {
         info: sinon.stub(), warn: sinon.stub(), error: sinon.stub(),
       },

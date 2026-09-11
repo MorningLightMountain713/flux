@@ -3,6 +3,7 @@
 const { expect } = require('chai');
 const sinon = require('sinon');
 const proxyquire = require('proxyquire').noCallThru();
+const { asConfig } = require('./fixtures/config');
 
 describe('playgroundAudit tests', () => {
   let dbHelperStub;
@@ -32,7 +33,7 @@ describe('playgroundAudit tests', () => {
       fluxapps: { playgroundAuditRetentionMs: 2592000000 },
     };
     return proxyquire('../../ZelBack/src/services/appPlayground/playgroundAudit', {
-      config: configStub,
+      config: asConfig(configStub),
       '../../lib/log': logStub,
       '../dbHelper': dbHelperStub,
       '../fluxNetworkHelper': { getFluxNodePublicKey: sinon.stub().resolves('nodepubkey') },

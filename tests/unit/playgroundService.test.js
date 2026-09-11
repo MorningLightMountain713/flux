@@ -87,6 +87,7 @@ const KEEPS_STORAGE = { ...SUBMISSION, components: V9_SUBMISSION.components };
 // The real registry: the concurrency gate and the janitor's protection both read
 // it, so stubbing it would hide the thing several of these tests are about.
 const sessionRegistry = require('../../ZelBack/src/services/appPlayground/playgroundSessionRegistry');
+const { asConfig } = require('./fixtures/config');
 
 describe('playgroundService', () => {
   let stubs;
@@ -106,7 +107,7 @@ describe('playgroundService', () => {
   // module loads and drags its flux-spec loader in with it.
   function resolver(fdmAddresses = [BALANCER]) {
     return proxyquire.load('../../ZelBack/src/services/utils/ingressCapture', {
-      config: { fdmAddresses },
+      config: asConfig({ fdmAddresses }),
       './specLibs': { getSpecBackend: async () => flux },
     });
   }
@@ -126,7 +127,7 @@ describe('playgroundService', () => {
   });
 
   function load(opts = {}) {
-    limits = proxyquire.load('../../ZelBack/src/services/appPlayground/playgroundLimits', { config: CONFIG });
+    limits = proxyquire.load('../../ZelBack/src/services/appPlayground/playgroundLimits', { config: asConfig(CONFIG) });
     limits.reset();
 
     stubs = {
@@ -170,7 +171,7 @@ describe('playgroundService', () => {
     };
 
     return proxyquire.load('../../ZelBack/src/services/appPlayground/playgroundService', {
-      config: CONFIG,
+      config: asConfig(CONFIG),
       '../utils/ingressCapture': resolver(opts.fdmAddresses),
       '../../lib/log': {
         info: sinon.stub(), warn: sinon.stub(), error: sinon.stub(),
@@ -469,7 +470,7 @@ describe('playgroundService', () => {
       // already reserved capacity — the window the release has to cover.
       const refusing = { ...limits, consumeSessionSlot: () => ({ allowed: false, scope: 'caller', retryAfterMs: 1000, message: 'over' }) };
       service = proxyquire.load('../../ZelBack/src/services/appPlayground/playgroundService', {
-        config: CONFIG,
+        config: asConfig(CONFIG),
         '../../lib/log': { info: sinon.stub(), warn: sinon.stub(), error: sinon.stub() },
         '../messageHelper': { createErrorMessage: (m) => m, errUnauthorizedMessage: () => 'unauth', createDataMessage: (d) => d },
         '../serviceHelper': { ensureObject: (o) => o },

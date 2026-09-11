@@ -200,7 +200,7 @@ function filterAppsByOwnership(apps, isEnterprise) {
  * exists, otherwise 5m/5m.
  */
 function getSpawnDelays(isEnterprise, appsAvailable) {
-  const multiplier = config.fluxapps.spawnDelayMultiplier ?? 1;
+  const multiplier = config.get('fluxapps.spawnDelayMultiplier');
   if (isEnterprise) {
     return { shortDelayTime: 30 * 1000 * multiplier, delayTime: 60 * 1000 * multiplier };
   }

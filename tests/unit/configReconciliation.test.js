@@ -67,7 +67,7 @@ describe('config reconciliation at boot', () => {
     try {
       fs.writeFileSync(
         path.join(dir, 'someService.js'),
-        'const x = config.fluxapps.aKnobNobodyShips ?? 5;\nmodule.exports = { x };\n',
+        "const x = config.get('fluxapps.aKnobNobodyShips');\nmodule.exports = { x };\n",
       );
       const missing = reconciliation.missingKeys(production.fluxapps, dir);
       expect(missing.map((m) => m.key)).to.deep.equal(['aKnobNobodyShips']);
@@ -80,74 +80,57 @@ describe('config reconciliation at boot', () => {
   // The sweep can only see a read that names its key. Two spellings do:
   // `config.fluxapps.someKey`, and `const { someKey } = config.fluxapps`. A name
   // bound to the object itself does not, and there is no third thing it buys.
-  it('nothing binds config.fluxapps to a name, which would hide every read through it', () => {
-    const aliases = [...reconciliation.aliasesOfFluxapps()]
-      .map(([file, names]) => `${file} binds it to ${names.join(', ')}`);
-    expect(aliases, 'a knob read through one of these is a knob nothing checks')
-      .to.deep.equal([]);
+  // ONE FORM. Property access has four spellings, none of them distinguishable
+  // without resolving bindings, and every one answers undefined on a key nobody
+  // ships. config.get throws by name instead, which is the whole point.
+  it('nothing reads a knob by property access, which would answer undefined in silence', () => {
+    const offenders = reconciliation.propertyReads()
+      .map((r) => `${r.file}:${r.line}  ${r.text}`);
+    expect(offenders, 'these read a knob in a way that cannot fail loudly').to.deep.equal([]);
   });
 
-  it('finds an alias when there is one, so the check above is not passing on an empty sweep', () => {
+  it('finds a property read when there is one, so the check above is not passing on an empty sweep', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fluxcfg-'));
     try {
-      fs.writeFileSync(path.join(dir, 'aliasing.js'), 'const data = config.fluxapps;\nmodule.exports = data.someKnob;\n');
-      expect([...reconciliation.aliasesOfFluxapps(dir)]).to.deep.equal([['aliasing.js', ['data']]]);
+      fs.writeFileSync(path.join(dir, 'sneaky.js'), [
+        "const a = config.fluxapps.direct;",
+        "const { viaDestructure } = config.fluxapps;",
+        "const { fluxapps: { viaNested } } = config;",
+        "const aliased = config.fluxapps;",
+        'module.exports = { a, viaDestructure, viaNested, aliased };',
+      ].join('\n'));
+      const lines = reconciliation.propertyReads(dir).map((r) => r.line);
+      expect(lines, 'a spelling of property access went unreported').to.deep.equal([1, 2, 3, 4]);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
   });
 
-  // The four access forms this tree writes, all of which must be seen. A regex
-  // over `config.fluxapps.x` saw one of them.
-  it('reads a destructure, a multi-line destructure, an alias and a nested path', () => {
+  it('reads the key out of config.get, and only out of config.get', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fluxcfg-'));
     try {
       fs.writeFileSync(path.join(dir, 'forms.js'), [
-        'const { plainDestructure } = config.fluxapps;',
-        'const {',
-        '  acrossLines, andAnother,',
-        '} = config.fluxapps;',
-        'const renamed = config.fluxapps.directRead;',
-        'const deep = config.fluxapps.anObject.aNestedKey;',
-        'const aliased = config.fluxapps;',
-        'const throughAlias = aliased.viaTheAlias;',
-        "const bracketed = config.fluxapps['byStringLiteral'];",
-        'module.exports = { plainDestructure, acrossLines, andAnother, renamed, deep, throughAlias, bracketed };',
+        "const a = config.get('fluxapps.plain');",
+        "const b = config.get('fluxapps.nested.deeper');",
+        "const c = config.get( 'fluxapps.spaced' );",
+        "const d = config.get('server.apiport');",
+        'module.exports = { a, b, c, d };',
       ].join('\n'));
-      const keys = [...reconciliation.keysRead(dir).keys()].sort();
-      expect(keys).to.deep.equal([
-        'acrossLines',
-        'anObject.aNestedKey',
-        'andAnother',
-        'byStringLiteral',
-        'directRead',
-        'plainDestructure',
-        'viaTheAlias',
-      ]);
+      expect([...reconciliation.keysRead(dir).keys()].sort())
+        .to.deep.equal(['nested.deeper', 'plain', 'spaced']);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
   });
 
-  it('lets a knob whose absence is a real setting be absent, and says why', () => {
-    // Each of these reads the value through a guard that gives absence a
-    // meaning. A key added here without a reason is a key nobody is checking.
-    expect([...reconciliation.OPTIONAL.keys()]).to.deep.equal([
-      'quorumGrantActivationHeight',
-      'quorumGrantMastership',
-      'restartAlwaysOwners',
-      'verifyPoolSize',
-    ]);
-    reconciliation.OPTIONAL.forEach((why, key) => {
-      expect(why, `${key} is exempt with no reason recorded`).to.be.a('string').with.length.greaterThan(20);
-    });
-
-    // The exemption is what keeps them out of the refusal, not luck: they are
-    // named in the source and config does not ship them.
-    const named = [...reconciliation.keysRead().keys()];
-    reconciliation.OPTIONAL.forEach((why, key) => {
-      expect(named, `${key} is exempt but nothing reads it - drop the exemption`).to.include(key);
-      expect(production.fluxapps[key], `${key} is shipped now, so the exemption is stale`).to.equal(undefined);
-    });
+  // The four knobs whose absence used to be the setting now ship the value that
+  // says it, so there is no exempt list left to keep honest - only a check that
+  // they really are shipped, because a guard reading undefined and a guard
+  // reading null behave the same right up until one of them does not.
+  it('ships a value for the knobs whose absence used to be the setting', () => {
+    expect(production.fluxapps.quorumGrantActivationHeight, 'null = not scheduled').to.equal(null);
+    expect(production.fluxapps.quorumGrantMastership, 'false = the gate is off').to.equal(false);
+    expect(production.fluxapps.restartAlwaysOwners, 'empty = nobody').to.deep.equal([]);
+    expect(production.fluxapps.verifyPoolSize, 'null = cpus-1').to.equal(null);
   });
 });

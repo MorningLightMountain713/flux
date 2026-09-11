@@ -201,7 +201,7 @@ async function discoveredBasis(appName, anchor) {
   } catch (error) {
     return null;
   }
-  const timeout = config.fluxapps.quorumGrantAskTimeoutMs ?? 5_000;
+  const timeout = config.get('fluxapps.quorumGrantAskTimeoutMs');
   for (const location of locations ?? []) {
     if (typeof location?.ip !== 'string' || !location.ip) continue; // eslint-disable-line no-continue
     try {

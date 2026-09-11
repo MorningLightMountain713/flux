@@ -3,6 +3,7 @@
 const { expect } = require('chai');
 const sinon = require('sinon');
 const proxyquire = require('proxyquire').noCallThru();
+const { asConfig } = require('./fixtures/config');
 const {
   loadSpecLibrary, V8_SUBMISSION, V9_SUBMISSION, v8Spec, v9Spec, instantiatedSpec,
 } = require('./fixtures/fluxSpec');
@@ -186,7 +187,7 @@ function buildHw(opts = {}) {
       cpus: sinon.stub().returns(new Array(cpucores)),
       totalmem: sinon.stub().returns(ram * 1024 * 1024),
     },
-    config: {
+    config: asConfig({
       fluxSpecifics: {
         cpu: { cumulus: 2, nimbus: 4, stratus: 8 },
         ram: { cumulus: 4000, nimbus: 8000, stratus: 16000 },
@@ -195,7 +196,7 @@ function buildHw(opts = {}) {
       lockedSystemResources: {
         cpu: lockedCpu, ram: lockedRam, hdd: lockedHdd, extrahdd: lockedExtrahdd,
       },
-    },
+    }),
   });
 }
 

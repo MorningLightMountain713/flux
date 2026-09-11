@@ -25,15 +25,15 @@ const STATES = Object.freeze({
   RESYNCING: 'RESYNCING',
 });
 
-const MIN_SYNC_COMPLETIONS = config.fluxapps.appSyncMinCompletions ?? 3;
+const MIN_SYNC_COMPLETIONS = config.get('fluxapps.appSyncMinCompletions');
 // Per-peer deadline: each asked peer gets this long, from the moment it is
 // asked, to deliver all sync types before it is failed and replaced.
-const SYNC_TIMEOUT_MS = config.fluxapps.syncTimeoutMs ?? 120000;
+const SYNC_TIMEOUT_MS = config.get('fluxapps.syncTimeoutMs');
 // Total distinct peers a sync round may ask (initial batch + replacements).
 // Bounds the worst case to (1 + MAX - MIN) sequential deadlines before the
 // block timer remains the only path to readiness.
-const MAX_SYNC_PEERS = config.fluxapps.appSyncMaxPeers ?? 5;
-const FALLBACK_MINUTES = config.fluxapps.appSyncFallbackMinutes ?? 125;
+const MAX_SYNC_PEERS = config.get('fluxapps.appSyncMaxPeers');
+const FALLBACK_MINUTES = config.get('fluxapps.appSyncFallbackMinutes');
 // A chain fact, not a policy: blocks are 30 seconds since the PON fork
 // (config.fluxapps.daemonPONFork), so two a minute. Not a knob - a node that
 // disagrees with the chain about this converts appSyncFallbackMinutes into the
@@ -87,15 +87,15 @@ function freshSyncCompletions() {
 
 const FIRST_RESPONSE_MS = Math.max(1, Math.floor(SYNC_TIMEOUT_MS / 12));
 const STALL_MS = Math.max(1, Math.floor(SYNC_TIMEOUT_MS / 4));
-const MIN_UPTIME_SECONDS = config.fluxapps.appSyncMinPeerUptime ?? 7500;
-const HASH_SYNC_MAX_RETRIES = config.fluxapps.hashSyncMaxRetries ?? 3;
-const HASH_SYNC_RETRY_MS = config.fluxapps.hashSyncRetryMs ?? 300000;
-const FALLBACK_RECHECK_BLOCKS = config.fluxapps.hashSyncFallbackRecheckBlocks ?? 100;
+const MIN_UPTIME_SECONDS = config.get('fluxapps.appSyncMinPeerUptime');
+const HASH_SYNC_MAX_RETRIES = config.get('fluxapps.hashSyncMaxRetries');
+const HASH_SYNC_RETRY_MS = config.get('fluxapps.hashSyncRetryMs');
+const FALLBACK_RECHECK_BLOCKS = config.get('fluxapps.hashSyncFallbackRecheckBlocks');
 // Steady-state manifest anti-entropy: how often a READY node re-checks its content register
 // against a few peers, and how many it samples. Bounds how long a node that silently missed
 // an update (a partial partition above the degrade floor) can serve stale content.
-const MANIFEST_REFRESH_BLOCKS = config.fluxapps.manifestRefreshBlocks ?? 100;
-const MANIFEST_REFRESH_PEERS = config.fluxapps.manifestRefreshPeers ?? 3;
+const MANIFEST_REFRESH_BLOCKS = config.get('fluxapps.manifestRefreshBlocks');
+const MANIFEST_REFRESH_PEERS = config.get('fluxapps.manifestRefreshPeers');
 // The refresh's own peer-uptime floor, deliberately far below the boot hash sync's
 // MIN_UPTIME_SECONDS anti-flap gate: manifests are owner-signed and the register only
 // moves to a higher signed version, so a young peer can at worst waste one tiny
@@ -104,7 +104,7 @@ const MANIFEST_REFRESH_PEERS = config.fluxapps.manifestRefreshPeers ?? 3;
 // blind the refresh to every peer for hours after a heal, quietly stretching the
 // backstop's staleness ceiling from ~50 min to ~2.5 h. The token floor only skips
 // sockets still mid-handshake or dying instantly.
-const MANIFEST_REFRESH_MIN_PEER_UPTIME_SECONDS = config.fluxapps.manifestRefreshMinPeerUptime ?? 30;
+const MANIFEST_REFRESH_MIN_PEER_UPTIME_SECONDS = config.get('fluxapps.manifestRefreshMinPeerUptime');
 
 // Steady-state ingress-attestation anti-entropy, on its own (slower) cadence. Attestations
 // are a forensic backstop — live gossip is the fast path and nothing is served from them —
@@ -113,12 +113,12 @@ const MANIFEST_REFRESH_MIN_PEER_UPTIME_SECONDS = config.fluxapps.manifestRefresh
 // round (O(set size)); fine at current scale, a shared bucketed-digest reconcile is the
 // planned upgrade for both once the confirmed set grows large. Reuses the manifest refresh's
 // peer count and uptime floor.
-const INGRESS_REFRESH_BLOCKS = config.fluxapps.ingressRefreshBlocks ?? 200;
+const INGRESS_REFRESH_BLOCKS = config.get('fluxapps.ingressRefreshBlocks');
 
 // Mechanism B's slack (fluxModels formal/record-convergence): how far before
 // the observed loss the scoped reconnect pull reaches back, covering
 // publishes in flight either side of the drop.
-const RECONNECT_SYNC_SLACK_MS = config.fluxapps.reconnectSyncSlackMs ?? 120000;
+const RECONNECT_SYNC_SLACK_MS = config.get('fluxapps.reconnectSyncSlackMs');
 
 
 class AppSyncOrchestrator {

@@ -4,6 +4,7 @@ const chaiAsPromised = require('chai-as-promised');
 const sinon = require('sinon');
 const proxyquire = require('proxyquire').noCallThru();
 const cidrUtils = require('../../ZelBack/src/services/utils/cidrUtils');
+const { asConfig } = require('./fixtures/config');
 
 chai.use(chaiAsPromised);
 const { expect } = chai;
@@ -104,7 +105,7 @@ describe('ipLocationStore tests', () => {
 
   function loadStore() {
     return proxyquire('../../ZelBack/src/services/appPlacement/ipLocationStore', {
-      config: {
+      config: asConfig({
         database: {
           local: {
             database: 'zelfluxlocal',
@@ -115,7 +116,7 @@ describe('ipLocationStore tests', () => {
             },
           },
         },
-      },
+      }),
       '../../lib/log': logStub,
       '../dbHelper': dbHelperStub,
     });

@@ -41,7 +41,7 @@ const log = require('../../lib/log');
 // late anyone computes it. Dead referees still never wedge a register; they
 // just stop being able to wedge anyone else's view of WHICH register.
 
-const ONESHOT_COMMITTEE_SIZE = () => config.fluxapps.quorumGrantOneshotCommitteeSize ?? 9;
+const ONESHOT_COMMITTEE_SIZE = () => config.get('fluxapps.quorumGrantOneshotCommitteeSize');
 
 // The flip dials. Code fallbacks like every other plane tunable. The dial
 // rule (§8.5, David's catch): the gate's earliest fire — rot observed plus
@@ -49,10 +49,10 @@ const ONESHOT_COMMITTEE_SIZE = () => config.fluxapps.quorumGrantOneshotCommittee
 // node removes its own apps), and delisting itself takes deconfirmation
 // (≈5.3 h), so the defaults keep the pocket's world long dead before any
 // successor basis can exist.
-const FLIP_N = () => config.fluxapps.founderFlipNBlocks ?? 720; // rung grid, ~24 h
-const GATE_LAG = () => config.fluxapps.founderGateLagBlocks ?? 240; // sustained rot, ~8 h
-const QUIET_ZONE = () => config.fluxapps.founderQuietZoneBlocks ?? 10; // pre-flip, ~20 min
-const FLIP_EVALUATE_MS = () => config.fluxapps.founderFlipEvaluateIntervalMs ?? 60_000;
+const FLIP_N = () => config.get('fluxapps.founderFlipNBlocks'); // rung grid, ~24 h
+const GATE_LAG = () => config.get('fluxapps.founderGateLagBlocks'); // sustained rot, ~8 h
+const QUIET_ZONE = () => config.get('fluxapps.founderQuietZoneBlocks'); // pre-flip, ~20 min
+const FLIP_EVALUATE_MS = () => config.get('fluxapps.founderFlipEvaluateIntervalMs');
 
 const collection = () => config.database.local.collections.foundingCommittees;
 

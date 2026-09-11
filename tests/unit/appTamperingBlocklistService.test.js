@@ -4,6 +4,7 @@ const { expect } = require('chai');
 const sinon = require('sinon');
 const { EventEmitter } = require('events');
 const proxyquire = require('proxyquire').noCallThru();
+const { asConfig } = require('./fixtures/config');
 
 describe('appTamperingBlocklistService tests', () => {
   let service;
@@ -20,9 +21,9 @@ describe('appTamperingBlocklistService tests', () => {
       // Everything this module reads from config, and nothing else: the document
       // URL moved to policyStore, which is stubbed below. noCallThru means an
       // absent key is a TypeError at require time rather than a fallback.
-      config: {
+      config: asConfig({
         fluxapps: { tamperingCheckIntervalMs: 43200000 },
-      },
+      }),
       '../lib/log': {
         info: sinon.stub(), warn: sinon.stub(), error: sinon.stub(),
       },

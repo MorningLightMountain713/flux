@@ -3,6 +3,7 @@
 const { expect } = require('chai');
 const sinon = require('sinon');
 const proxyquire = require('proxyquire').noCallThru();
+const { asConfig } = require('./fixtures/config');
 
 const CONFIG = {
   fluxapps: { playgroundMinerCpuBusyFraction: 0.9, playgroundMinerBlockMs: 86400000 },
@@ -17,7 +18,7 @@ describe('playgroundAbuse', () => {
       'secret' in opts ? opts.secret : mint()
     ));
     abuse = proxyquire.load('../../ZelBack/src/services/appPlayground/playgroundAbuse', {
-      config: CONFIG,
+      config: asConfig(CONFIG),
       '../../lib/log': { info: sinon.stub(), warn: sinon.stub(), error: sinon.stub() },
       '../appDatabase/nodeIdentityRepository': {
         getOrCreatePlaygroundFingerprintSecret: getSecret,

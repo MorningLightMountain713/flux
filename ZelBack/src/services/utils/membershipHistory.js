@@ -28,22 +28,22 @@ const config = require('config');
 // and refusing is the honest answer (strict verification, no tolerance
 // matching).
 
-const { RECORD_LIFETIME_MS } = require('./nodeDownCertificates');
-
 const OUTPOINT = (triple) => `${triple.txhash}:${triple.outidx}`;
 
-// The R1 inequality, satisfied by construction: shrinking retention below the
-// record lifetime, or growing the record past the retention, breaks cold
-// verification of a still-standing certificate — change both together.
-const ISSUE_TO_PUBLISH_SLACK_MS = 30 * 60 * 1000;
+// THE R1 INEQUALITY lives with the value now, in config/default.js beside
+// membershipHistoryRetentionMs: retention must exceed nodeDownCertificates'
+// RECORD_LIFETIME_MS plus the 30-minute issue-to-publish slack, or a standing
+// certificate stops being cold-verifiable. It was expressed here as the
+// fallback expression `RECORD_LIFETIME_MS + ISSUE_TO_PUBLISH_SLACK_MS`, which
+// stated the constraint only for a node whose config was missing the key -
+// which is to say, never.
 
 function retentionMs() {
-  return config.fluxapps.membershipHistoryRetentionMs
-    ?? RECORD_LIFETIME_MS + ISSUE_TO_PUBLISH_SLACK_MS;
+  return config.get('fluxapps.membershipHistoryRetentionMs');
 }
 
 function maxEntries() {
-  return config.fluxapps.membershipHistoryMaxEntries ?? 4000;
+  return config.get('fluxapps.membershipHistoryMaxEntries');
 }
 
 /**

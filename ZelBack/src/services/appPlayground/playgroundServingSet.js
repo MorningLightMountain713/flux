@@ -41,11 +41,11 @@ const AXIS = Object.freeze({
 const SERVING_TIERS = Object.freeze(['NIMBUS', 'STRATUS']);
 
 function setSize() {
-  return config.fluxapps.playgroundServingSetSize ?? 32;
+  return config.get('fluxapps.playgroundServingSetSize');
 }
 
 function windowMs() {
-  return config.fluxapps.playgroundServingSetWindowMs ?? 24 * 60 * 60 * 1000;
+  return config.get('fluxapps.playgroundServingSetWindowMs');
 }
 
 /**
@@ -58,7 +58,7 @@ function windowMs() {
  * so to one set, which is not a weaker control, it is an outage.
  */
 function addressAxisEnabled() {
-  return config.fluxapps.playgroundServingSetAddressAxis === true;
+  return config.get('fluxapps.playgroundServingSetAddressAxis') === true;
 }
 
 /**

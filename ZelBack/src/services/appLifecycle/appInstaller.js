@@ -325,7 +325,7 @@ async function installApplication(instantiated, options = {}) {
       const burstEligible = owner
         && cpuBurstHelper.isEnterpriseOwner(owner)
         && await cpuBurstHelper.isCpuBurstSupported();
-      const restartAlwaysOwners = config.fluxapps.restartAlwaysOwners || [];
+      const restartAlwaysOwners = config.get('fluxapps.restartAlwaysOwners') || [];
       const restartPolicy = (owner && restartAlwaysOwners.includes(owner)) ? 'always' : null;
 
       // App-wide feature check computed once: gates the per-container budget labels

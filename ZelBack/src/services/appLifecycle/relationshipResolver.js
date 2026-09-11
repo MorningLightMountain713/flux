@@ -483,7 +483,7 @@ async function verifyDependencies(appName, owner, entries) {
     // to be actually running — not merely installed — so this app's
     // docker-network attach and log routing land on a live container. Tagged
     // transient so callers defer and retry rather than hard-failing.
-    if (config.fluxapps.manageCollectorLifecycle) {
+    if (config.get('fluxapps.manageCollectorLifecycle')) {
       // eslint-disable-next-line no-await-in-loop
       const running = await isAppRunning(targetName);
       if (!running) {

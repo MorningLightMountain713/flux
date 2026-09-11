@@ -3,6 +3,7 @@
 const { expect } = require('chai');
 const sinon = require('sinon');
 const proxyquire = require('proxyquire').noCallThru();
+const { asConfig } = require('./fixtures/config');
 
 // Self-defence: this node removes every app it runs the moment it is no longer
 // a member. Three events, no loop; a sweep re-lists until nothing is left and
@@ -24,7 +25,7 @@ describe('nodeSelfDefense', () => {
     listeners = { confirmation: null, stale: null, dos: null };
 
     nodeSelfDefense = proxyquire('../../ZelBack/src/services/appMonitoring/nodeSelfDefense', {
-      config: { fluxapps: { nodeMonitorRemovalDelayMs: 0 } },
+      config: asConfig({ fluxapps: { nodeMonitorRemovalDelayMs: 0 } }),
       '../serviceHelper': { delay: sinon.stub().resolves() },
       '../nodeDosState': { onNodeDos: (cb) => { listeners.dos = cb; } },
       '../nodeConfirmationService': {

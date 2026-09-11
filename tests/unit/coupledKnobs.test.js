@@ -1,5 +1,6 @@
 const { expect } = require('chai');
 const proxyquire = require('proxyquire').noCallThru();
+const { asConfig } = require('./fixtures/config');
 
 // coupled-knobs.js holds production's side of every harness ratio as constants,
 // because ZelBack/config/default.js requires the gitignored config/userconfig.js
@@ -85,7 +86,7 @@ describe('coupled harness knobs track production', () => {
   it('holds the announcement cadence the product announces at', () => {
     const { fluxapps } = productionConfig();
     const appConstants = proxyquire('../../ZelBack/src/services/utils/appConstants', {
-      config: { fluxapps, database: productionConfig().database },
+      config: asConfig({ fluxapps, database: productionConfig().database }),
     });
 
     expect(knobs.announcementLeftAtRenewalMs(fluxapps.locationTtlS))

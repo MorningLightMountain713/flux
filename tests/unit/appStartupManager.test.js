@@ -4,6 +4,7 @@ const { expect } = require('chai');
 const sinon = require('sinon');
 const { resetGlobalState } = require('./fixtures/globalState');
 const proxyquire = require('proxyquire').noCallThru();
+const { asConfig } = require('./fixtures/config');
 
 describe('appStartupManager tests', () => {
   let appStartupManager;
@@ -138,7 +139,7 @@ describe('appStartupManager tests', () => {
       // eslint-disable-next-line global-require
       const realConfig = require('config');
       const flaggedStartupManager = proxyquire('../../ZelBack/src/services/appLifecycle/appStartupManager', {
-        config: { ...realConfig, fluxapps: { ...realConfig.fluxapps, manageCollectorLifecycle: true } },
+        config: asConfig({ ...realConfig, fluxapps: { ...realConfig.fluxapps, manageCollectorLifecycle: true } }),
         '../../lib/log': logStub,
         '../dockerService': dockerServiceStub,
         '../serviceHelper': { delay: sinon.stub().resolves() },

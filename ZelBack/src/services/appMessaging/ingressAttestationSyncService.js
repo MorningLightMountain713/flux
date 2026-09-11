@@ -15,8 +15,8 @@ const { serialiseAndSignFluxBroadcast } = require('../utils/fluxBroadcastHelper'
 // is pulled and stored (each verified by its own node signature in the receive path). No
 // rebroadcast — this is a targeted backfill.
 
-const DIGEST_TIMEOUT_MS = config.fluxapps.ingressIndexTimeoutMs ?? 15000;
-const FETCH_SETTLE_MS = config.fluxapps.ingressFetchSettleMs ?? 8000;
+const DIGEST_TIMEOUT_MS = config.get('fluxapps.ingressIndexTimeoutMs');
+const FETCH_SETTLE_MS = config.get('fluxapps.ingressFetchSettleMs');
 
 const DIGEST_REQUEST = 'fluxappingressindexrequest';
 const FETCH_REQUEST = 'fluxappingressrequest';

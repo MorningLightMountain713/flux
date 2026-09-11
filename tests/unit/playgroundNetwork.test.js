@@ -3,6 +3,7 @@
 const { expect } = require('chai');
 const sinon = require('sinon');
 const proxyquire = require('proxyquire').noCallThru();
+const { asConfig } = require('./fixtures/config');
 
 const CONFIG = { fluxapps: { playgroundNetworkOctet: 255, playgroundNetworkPrefix: 27 } };
 
@@ -20,7 +21,7 @@ describe('playgroundNetwork', () => {
     };
 
     net = proxyquire.load('../../ZelBack/src/services/appPlayground/playgroundNetwork', {
-      config: CONFIG,
+      config: asConfig(CONFIG),
       '../../lib/log': {
         info: sinon.stub(), warn: sinon.stub(), error: sinon.stub(),
       },

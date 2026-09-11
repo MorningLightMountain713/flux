@@ -9,6 +9,7 @@ const { appsFolder } = require('../../ZelBack/src/services/utils/appConstants');
 // the budget stamped on the durable record can be compared against the library's
 // own answer rather than a number copied into the fixture.
 const shutdownPlan = require('../../ZelBack/src/services/appLifecycle/shutdownPlan');
+const { asConfig } = require('./fixtures/config');
 const {
   loadSpecLibrary, V9_SUBMISSION, v9Spec, instantiatedSpec, assertAnswers,
 } = require('./fixtures/fluxSpec');
@@ -223,13 +224,13 @@ describe('appUninstaller tombstoning teardown', () => {
     };
 
     appUninstaller = proxyquire('../../ZelBack/src/services/appLifecycle/appUninstaller', {
-      config: {
+      config: asConfig({
         fluxapps: { manageCollectorLifecycle: false },
         database: {
           appslocal: { database: 'localapps', collections: { appsInformation: 'zelappsinformation', pendingAppTeardowns: 'zelappspendingteardowns' } },
           appsglobal: { database: 'globalapps', collections: { appsInformation: 'zelappsinformation', appsMessages: 'zelappsmessages' } },
         },
-      },
+      }),
       crontab: { load: (cb) => cb(null, fakeCrontab) },
       '../../lib/log': stubs.log,
       '../dockerService': stubs.dockerService,

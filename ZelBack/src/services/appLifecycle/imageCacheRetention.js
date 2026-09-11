@@ -22,7 +22,7 @@ const imageCacheStore = require('./imageCacheStore');
  *   reclaimed on a later pass.
  */
 async function shouldRetainImage(repotag) {
-  if (!config.fluxapps.imageCacheEnabled) return false;
+  if (!config.get('fluxapps.imageCacheEnabled')) return false;
   if (!repotag) return false;
   const pins = await imageCacheStore.findPinsForRepotag(repotag);
   if (pins === null) return true; // fail-safe: cannot verify, keep the image

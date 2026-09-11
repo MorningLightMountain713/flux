@@ -3,6 +3,7 @@
 const { expect } = require('chai');
 const sinon = require('sinon');
 const proxyquire = require('proxyquire').noCallThru();
+const { asConfig } = require('./fixtures/config');
 
 describe('nodeStartupRepository tests', () => {
   let repository;
@@ -12,14 +13,14 @@ describe('nodeStartupRepository tests', () => {
 
   function loadRepository() {
     return proxyquire('../../ZelBack/src/services/appDatabase/nodeStartupRepository', {
-      config: {
+      config: asConfig({
         database: {
           local: {
             database: 'zelfluxlocal',
             collections: { nodeStartupTracker: STARTUP_COLLECTION },
           },
         },
-      },
+      }),
       '../dbHelper': dbHelperStub,
     });
   }

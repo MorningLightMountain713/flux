@@ -3,6 +3,7 @@
 const { expect } = require('chai');
 const sinon = require('sinon');
 const proxyquire = require('proxyquire').noCallThru();
+const { asConfig } = require('./fixtures/config');
 
 const GB = 1_000_000_000;
 
@@ -15,7 +16,7 @@ describe('imageCacheQuota tests', () => {
       listAllImages: sinon.stub(),
     };
     return proxyquire('../../ZelBack/src/services/appLifecycle/imageCacheQuota', {
-      config: { fluxapps: { imageCachePerFluxIdQuotaGb: 20, imageCachePerImageBurstCapGb: 5, imageCacheNodeMaxGb: 60 } },
+      config: asConfig({ fluxapps: { imageCachePerFluxIdQuotaGb: 20, imageCachePerImageBurstCapGb: 5, imageCacheNodeMaxGb: 60 } }),
       './imageCacheStore': storeStub,
     });
   }

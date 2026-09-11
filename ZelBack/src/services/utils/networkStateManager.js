@@ -35,7 +35,7 @@ class NetworkStateManager extends EventEmitter {
   // serve the cached list. Config-backed so the harness can run a fast poll;
   // everything reacting to nodelist changes (confirmation, capability) inherits
   // this cadence as its detection latency.
-  static #minFetchIntervalMs = config.fluxapps.networkStateMinFetchIntervalMs ?? 30_000;
+  static #minFetchIntervalMs = config.get('fluxapps.networkStateMinFetchIntervalMs');
 
   /**
    * @type {Array<Fluxnode>}

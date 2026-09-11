@@ -62,23 +62,23 @@ const log = require('../../lib/log');
 // monotonic clock and setTimeout.
 
 function renewIntervalMs() {
-  return config.fluxapps.quorumGrantRenewIntervalMs ?? 20_000;
+  return config.get('fluxapps.quorumGrantRenewIntervalMs');
 }
 
 function defaultTtlMs() {
-  return config.fluxapps.quorumGrantHeldTtlMs ?? 150_000;
+  return config.get('fluxapps.quorumGrantHeldTtlMs');
 }
 
 function demotionSlackMs() {
-  return config.fluxapps.quorumGrantDemotionSlackMs ?? 15_000;
+  return config.get('fluxapps.quorumGrantDemotionSlackMs');
 }
 
 function lockDelayMs() {
-  return config.fluxapps.quorumGrantLockDelayMs ?? 30_000;
+  return config.get('fluxapps.quorumGrantLockDelayMs');
 }
 
 function askTimeoutMs() {
-  return config.fluxapps.quorumGrantAskTimeoutMs ?? 5_000;
+  return config.get('fluxapps.quorumGrantAskTimeoutMs');
 }
 
 /**
@@ -103,14 +103,14 @@ function askTimeoutMs() {
  * could pack the committee. Not droppable, but not a safety brake either.
  */
 function repairIntervalMs() {
-  return config.fluxapps.quorumGrantRepairIntervalMs ?? 30_000;
+  return config.get('fluxapps.quorumGrantRepairIntervalMs');
 }
 
 
 function committeeSizeFor(mode) {
-  if (mode === 'oneshot') return config.fluxapps.quorumGrantOneshotCommitteeSize ?? 9;
+  if (mode === 'oneshot') return config.get('fluxapps.quorumGrantOneshotCommitteeSize');
   // nine referees, majority five — the grantor side derives the same size
-  return config.fluxapps.quorumGrantHeldCommitteeSize ?? 9;
+  return config.get('fluxapps.quorumGrantHeldCommitteeSize');
 }
 
 /** Full jitter, the §7 mandate: dueling proposers are the expected case. */
@@ -1940,7 +1940,7 @@ let courierSchedule = (fn, ms) => {
 let courierCancel = (timer) => clearTimeout(timer);
 
 function courierHorizonMs() {
-  return config.fluxapps.quorumGrantMaxTtlMs ?? 300_000;
+  return config.get('fluxapps.quorumGrantMaxTtlMs');
 }
 
 async function selfOutpoint() {

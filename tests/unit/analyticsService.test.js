@@ -6,6 +6,7 @@ const { expect } = require('chai');
 const sinon = require('sinon');
 const proxyquire = require('proxyquire').noCallThru();
 const realConfig = require('config');
+const { asConfig } = require('./fixtures/config');
 
 // trackTerminalSession reports which container a terminal was opened into. It
 // used to take the app and component separately and rebuild
@@ -35,7 +36,7 @@ describe('analyticsService: terminal session identity', () => {
     postStub = sinon.stub().resolves({ data: {} });
     analyticsService = proxyquire('../../ZelBack/src/services/analyticsService', {
       axios: { post: postStub },
-      config: { ...realConfig, analytics: { url: 'http://analytics.test' } },
+      config: asConfig({ ...realConfig, analytics: { url: 'http://analytics.test' } }),
       // Startup stamps the node's address on every event; unstubbed that is a
       // real RPC to the benchmark daemon.
       './fluxNetworkHelper': { getLocalSocketAddress: sinon.stub().resolves('127.0.0.1:16127') },

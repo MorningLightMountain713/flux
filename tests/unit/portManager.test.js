@@ -3,6 +3,7 @@
 const { expect } = require('chai');
 const sinon = require('sinon');
 const proxyquire = require('proxyquire').noCallThru();
+const { asConfig } = require('./fixtures/config');
 
 // ── Mock helpers ──────────────────────────────────────────────────
 
@@ -65,7 +66,7 @@ function buildProxyquireMap(stubs, overrides = {}) {
   const fluxNet = overrides.fluxNetworkHelper || {};
   const upnp = overrides.upnpService || {};
   return {
-    config: { server: { apiport: 16127 } },
+    config: asConfig({ server: { apiport: 16127 } }),
     axios: { post: sinon.stub().resolves({ data: { status: 'success' } }) },
     '../dbHelper': {},
     '../appDatabase/appsRepository': stubs.appsRepositoryStub,

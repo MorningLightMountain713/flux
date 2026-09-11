@@ -29,11 +29,11 @@ const nodeIdentityRepository = require('../appDatabase/nodeIdentityRepository');
 // core for its whole life while never answering anything is already unambiguous.
 
 function cpuBusyThreshold() {
-  return config.fluxapps.playgroundMinerCpuBusyFraction ?? 0.9;
+  return config.get('fluxapps.playgroundMinerCpuBusyFraction');
 }
 
 function blockMs() {
-  return config.fluxapps.playgroundMinerBlockMs ?? 24 * 60 * 60 * 1000;
+  return config.get('fluxapps.playgroundMinerBlockMs');
 }
 
 /**

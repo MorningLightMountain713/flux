@@ -90,22 +90,22 @@ const PEER_WINDOW_MS = 60 * 1000;
 const peerAsks = new Map(); // host -> { windowStart, count }
 
 function peerMaxAsks() {
-  return config.fluxapps.quorumGrantPeerAsksPerMinute ?? 600;
+  return config.get('fluxapps.quorumGrantPeerAsksPerMinute');
 }
 
 function askFreshnessMs() {
-  return config.fluxapps.quorumGrantAskFreshnessMs ?? 120_000;
+  return config.get('fluxapps.quorumGrantAskFreshnessMs');
 }
 
 function committeeSize(mode) {
-  if (mode === 'oneshot') return config.fluxapps.quorumGrantOneshotCommitteeSize ?? 9;
+  if (mode === 'oneshot') return config.get('fluxapps.quorumGrantOneshotCommitteeSize');
   // nine referees, majority five: with self-healing rosters reclaiming dark
   // seats, the wider committee prices nothing and cuts static dark exposure
-  return config.fluxapps.quorumGrantHeldCommitteeSize ?? 9;
+  return config.get('fluxapps.quorumGrantHeldCommitteeSize');
 }
 
 function minHolderAgeMs() {
-  return config.fluxapps.quorumGrantMinHolderAgeMs ?? 420_000;
+  return config.get('fluxapps.quorumGrantMinHolderAgeMs');
 }
 
 // Keys whose cells must re-fetch the published record before answering again
@@ -167,7 +167,7 @@ function syncReady() {
 function servingSinceFor(key) {
   const cleared = resyncClearedMs.get(key) ?? 0;
   // a stamp older than the lock-delay can never bind again — drop it
-  if (cleared && Date.now() - cleared > (config.fluxapps.quorumGrantLockDelayMs ?? 30_000)) {
+  if (cleared && Date.now() - cleared > (config.get('fluxapps.quorumGrantLockDelayMs'))) {
     resyncClearedMs.delete(key);
   }
   // the generation stamp stays: it must remember WHICH generation it served,
@@ -271,7 +271,7 @@ async function refuse(res, code, message, key) {
  * renewing, its rows lapse within one TTL regardless.
  */
 function generationDrainBlocks() {
-  return config.fluxapps.quorumGrantGenerationDrainBlocks ?? 20;
+  return config.get('fluxapps.quorumGrantGenerationDrainBlocks');
 }
 
 // The plane's birth is the other height-gated serve: a register that served
@@ -288,7 +288,7 @@ function resetActivationForTests(options = {}) {
 
 function activationHeight() {
   if (activationOverrides.activateAt !== null) return activationOverrides.activateAt;
-  const height = config.fluxapps.quorumGrantActivationHeight;
+  const height = config.get('fluxapps.quorumGrantActivationHeight');
   return Number.isInteger(height) && height > 0 ? height : null;
 }
 
@@ -299,7 +299,7 @@ function activationHeight() {
 // askTimeoutMs, i.e. 1,200 s against 300,000 + retry + 15,000 ms.
 function preWindowBlocks() {
   if (activationOverrides.preWindowBlocks !== null) return activationOverrides.preWindowBlocks;
-  return config.fluxapps.quorumGrantPreWindowBlocks ?? 40;
+  return config.get('fluxapps.quorumGrantPreWindowBlocks');
 }
 
 function bad(code, message) {
@@ -651,7 +651,7 @@ async function adoptStandingTerm(ask, committee) {
       const response = await serviceHelper.axiosGet(
         `http://${extractIp(node.ip)}:${extractPort(node.ip)}/flux/quorumgrant/record`
           + `?key=${encodeURIComponent(ask.key)}`,
-        { timeout: config.fluxapps.quorumGrantAskTimeoutMs ?? 5_000 },
+        { timeout: config.get('fluxapps.quorumGrantAskTimeoutMs') },
       );
       const data = response?.data?.data;
       if (!data) return null;
@@ -709,7 +709,7 @@ async function resyncReturnedKey(ask) {
       const response = await serviceHelper.axiosGet(
         `http://${extractIp(node.ip)}:${extractPort(node.ip)}/flux/quorumgrant/record`
           + `?key=${encodeURIComponent(ask.key)}`,
-        { timeout: config.fluxapps.quorumGrantAskTimeoutMs ?? 5_000 },
+        { timeout: config.get('fluxapps.quorumGrantAskTimeoutMs') },
       );
       const data = response?.data?.data;
       if (!data) return null;
@@ -944,7 +944,7 @@ async function serve(req, res, type, operate) {
       carried = carriedIncumbent ? 'verified' : 'refused';
       const anchor = servingSinceFor(ask.key);
       seatWaitMs = anchor
-        ? Math.max(0, anchor + (config.fluxapps.quorumGrantLockDelayMs ?? 30_000) - Date.now())
+        ? Math.max(0, anchor + (config.get('fluxapps.quorumGrantLockDelayMs')) - Date.now())
         : 0;
     }
     const reply = await operate(ask, {

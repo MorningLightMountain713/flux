@@ -95,7 +95,7 @@ function writerIdentifier(spec) {
  */
 async function surplusVerdict(app, locations, localSocketAddr, deps) {
   const { runningLocally, liveness } = deps;
-  const minInstances = app.instances || config.fluxapps.minimumInstances;
+  const minInstances = app.instances || config.get('fluxapps.minimumInstances');
   if (locations.length <= minInstances) {
     return { giveUp: false, code: null, detail: '' };
   }
@@ -181,7 +181,7 @@ function evacuationVerdict(app, locations, localSocketAddr) {
   if (!residentialNodeDosService.isEvacuating()) {
     return { giveUp: false, code: null, detail: '' };
   }
-  const minInstances = app.instances || config.fluxapps.minimumInstances;
+  const minInstances = app.instances || config.get('fluxapps.minimumInstances');
   const verdict = residentialNodeDosService.mayEvacuateApp(
     app.name, locations, localSocketAddr, minInstances,
   );

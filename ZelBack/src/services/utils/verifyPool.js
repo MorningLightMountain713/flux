@@ -45,7 +45,7 @@ let workerPath = DEFAULT_WORKER_PATH;
 // holds on the scale-up path as well as at start; production leaves it unset
 // and keeps cpus-1.
 function maxWorkers() {
-  const configured = config.fluxapps.verifyPoolSize;
+  const configured = config.get('fluxapps.verifyPoolSize');
   if (Number.isInteger(configured) && configured > 0) return Math.max(RESIDENT_WORKERS, configured);
   return Math.max(RESIDENT_WORKERS, os.cpus().length - 1);
 }

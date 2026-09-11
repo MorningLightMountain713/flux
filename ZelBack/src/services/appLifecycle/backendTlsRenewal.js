@@ -157,10 +157,10 @@ function start() {
   if (started) return;
   started = true;
 
-  const bootDelay = (ms) => Math.round(ms * config.fluxapps.bootDelayMultiplier);
+  const bootDelay = (ms) => Math.round(ms * config.get('fluxapps.bootDelayMultiplier'));
   setTimeout(() => {
     runSweep();
-    setInterval(runSweep, config.fluxapps.backendTlsRenewalIntervalMs);
+    setInterval(runSweep, config.get('fluxapps.backendTlsRenewalIntervalMs'));
   }, bootDelay(20 * 60 * 1000));
 }
 

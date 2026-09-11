@@ -33,7 +33,7 @@ const BRIDGE_PREFIX = 'flxpg';
 const BRIDGE_MATCH = `${BRIDGE_PREFIX}+`;
 
 function egressRateKbit() {
-  return config.fluxapps.playgroundEgressKbit ?? 1000;
+  return config.get('fluxapps.playgroundEgressKbit');
 }
 
 async function iptables(params) {

@@ -148,7 +148,7 @@ async function daemonBlockchainInfoService() {
     setTimeout(async () => {
       await pollAndEmit();
       scheduleNext();
-    }, config.fluxapps.daemonInfoIntervalMs ?? 30000);
+    }, config.get('fluxapps.daemonInfoIntervalMs'));
   }
   scheduleNext();
 }

@@ -25,8 +25,8 @@ const fluxEventBus = require('../utils/fluxEventBus');
 // done — it promotes when the spec confirms, and re-fetching from another peer would
 // hit the same local spec gate. Only the index SERVED to peers is confirmed-only.
 
-const INDEX_TIMEOUT_MS = config.fluxapps.manifestIndexTimeoutMs ?? 15000;
-const FETCH_SETTLE_MS = config.fluxapps.manifestFetchSettleMs ?? 8000;
+const INDEX_TIMEOUT_MS = config.get('fluxapps.manifestIndexTimeoutMs');
+const FETCH_SETTLE_MS = config.get('fluxapps.manifestFetchSettleMs');
 
 const INDEX_REQUEST = 'fluxappcontentmanifestindexrequest';
 const FETCH_REQUEST = 'fluxappcontentmanifestrequest';
