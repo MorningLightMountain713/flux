@@ -586,109 +586,161 @@ describe('registryManager tests', () => {
   });
 
   describe('getApplicationComponentNamesAPI tests', () => {
-    const composedApp = {
+    // A composed legacy app carrying the three cases the classifier has to
+    // separate: an activeStandby (`g:`) component, a component that IS synced
+    // but in a different mode (`r:` is syncFirst, and only activeStandby holds
+    // an election), and a plain path whose directory name merely contains the
+    // flag letter - the false positive a substring search gives.
+    //
+    // Development's fixture had a fourth, with the flag on a NON-primary mount.
+    // It is not reproduced because it cannot be built: the real class refuses
+    // the whole spec at construction (`Unknown mount syntax at index 1`), so an
+    // app in that state cannot be stored for this endpoint to be asked about.
+    // Its raw-document fixture could hold it only by never meeting the class.
+    const composed = {
       name: 'NamesApp',
-      version: 8,
-      enterprise: 'encrypted-blob',
-      owner: '1CbErtneaX2QVyUfwU7JGB7VzvPgrgc3uC',
-      hash: 'nameshash',
-      height: 100,
       compose: [
         {
-          name: 'palworld', containerData: 'g:/palworld/Pal/Saved', cpu: 4, ram: 16000, hdd: 50,
-          repotag: 'private/palworld:1', repoauth: 'secret-token',
-          environmentParameters: ['ADMIN_PASSWORD=hunter2'], secrets: 'sealed', commands: ['--token', 'abc'],
+          name: 'palworld', description: 'game', repotag: 'private/palworld:1',
           ports: [30001], domains: ['pal.example.invalid'],
+          environmentParameters: ['ADMIN_PASSWORD=hunter2'], commands: ['--token', 'abc'],
+          containerPorts: [8211], containerData: 'g:/palworld/Pal/Saved',
+          cpu: 4, ram: 16000, hdd: 50, repoauth: '',
         },
         {
-          name: 'sidecar', containerData: '/data', cpu: 1, ram: 2000, hdd: 5,
-          repotag: 'private/sidecar:1', repoauth: '', environmentParameters: [],
+          name: 'sidecar', description: 'sidecar', repotag: 'private/sidecar:1',
+          ports: [30002], domains: [''], environmentParameters: [], commands: [],
+          containerPorts: [9000], containerData: 'r:/data',
+          cpu: 1, ram: 2000, hdd: 5, repoauth: '',
         },
         {
-          // A sync flag counts only on the primary mount, so this component is
-          // not election managed and the election does not treat it as one. It
-          // reads as one to a substring search, which is what separates the
-          // classifier from a search. Its invalid second mount is rejected by
-          // the parser, which logs - that rejection IS the answer.
-          name: 'misplaced', containerData: '/data|g:/db', cpu: 2, ram: 1000, hdd: 5,
-          repotag: 'private/misplaced:1', repoauth: '', environmentParameters: [],
+          name: 'plain', description: 'plain', repotag: 'private/plain:1',
+          ports: [30003], domains: [''], environmentParameters: [], commands: [],
+          containerPorts: [9001], containerData: '/dogs/data',
+          cpu: 2, ram: 1000, hdd: 5, repoauth: '',
         },
       ],
     };
 
-    function subjectWithPrivilege(verifyPrivilege) {
-      return proxyquire('../../ZelBack/src/services/appDatabase/registryManager', {
-        '../utils/enterpriseHelper': { checkAndDecryptAppSpecs: async (spec) => spec },
-        '../utils/appUtilities': { specificationFormatter: (spec) => spec },
-        '../verificationHelper': { verifyPrivilege },
-      });
+    function answered(res) {
+      return res.json.firstCall.args[0];
     }
-
-    beforeEach(async () => {
-      const collection = config.database.appsglobal.collections.appsInformation;
-
-      await dbHelper.insertOneToDatabase(database, collection, composedApp);
-    });
 
     // fluxteam, not appownerorfluxteam: the owner reads the specification itself,
     // and the node operator is not a party to a customer's app at all.
     it('is refused to anyone the flux-team privilege refuses', async () => {
-      const verifyPrivilege = sinon.stub().resolves(false);
+      const verify = sinon.stub(verificationHelper, 'verifyPrivilege').resolves(false);
+      await registryHolds(await v8Spec(composed));
       const req = { params: { appname: 'NamesApp' }, query: {} };
       const res = { json: sinon.fake((param) => param) };
 
-      await subjectWithPrivilege(verifyPrivilege).getApplicationComponentNamesAPI(req, res);
+      await registryManager.getApplicationComponentNamesAPI(req, res);
 
-      sinon.assert.calledOnceWithExactly(verifyPrivilege, Privilege.FLUX_TEAM, authOf(req));
-      expect(res.json.firstCall.args[0].status).to.equal('error');
+      sinon.assert.calledOnceWithExactly(verify, Privilege.FLUX_TEAM, authOf(req));
+      expect(answered(res).status).to.equal('error');
     });
 
     it('answers with component names and their election mode', async () => {
+      sinon.stub(verificationHelper, 'verifyPrivilege').resolves(true);
+      await registryHolds(await v8Spec(composed));
       const req = { params: { appname: 'NamesApp' }, query: {} };
       const res = { json: sinon.fake((param) => param) };
 
-      await subjectWithPrivilege(sinon.stub().resolves(true))
-        .getApplicationComponentNamesAPI(req, res);
+      await registryManager.getApplicationComponentNamesAPI(req, res);
 
-      const { status, data } = res.json.firstCall.args[0];
-
+      const { status, data } = answered(res);
       expect(status).to.equal('success');
       expect(data.components).to.deep.equal([
         { name: 'palworld', masterSlave: true },
         { name: 'sidecar', masterSlave: false },
-        { name: 'misplaced', masterSlave: false },
+        { name: 'plain', masterSlave: false },
+      ]);
+    });
+
+    // The reason both answers are asked of the CLASS. A v9 document carries no
+    // `compose` and no `containerData`, so a reader written to the v8 spelling
+    // does not fail here - it reports every v9 component as not election
+    // managed, and sums nothing. Remove the class call and this is the test
+    // that goes red while the v8 one above stays green.
+    it('answers the same way for a v9 app, which spells none of it the same', async () => {
+      sinon.stub(verificationHelper, 'verifyPrivilege').resolves(true);
+      await registryHolds(await v9Spec({
+        name: 'namesapp9',
+        components: {
+          web: {
+            name: 'web', description: 'nginx', image: 'nginx:latest',
+            cpu: 0.5, memory: 300, rootFsGb: 2,
+            persistentStorage: {
+              sizeGb: 5,
+              mounts: { '/data': { source: 'data', destination: '/data' } },
+              sync: { mode: 'activeStandby' },
+            },
+            ports: { http: { containerPort: 80, hostPort: 31000 } },
+          },
+          worker: {
+            name: 'worker', description: 'worker', image: 'busybox:latest',
+            cpu: 0.5, memory: 200, rootFsGb: 1,
+          },
+        },
+      }));
+      const req = { params: { appname: 'namesapp9' }, query: {} };
+      const res = { json: sinon.fake((param) => param) };
+
+      await registryManager.getApplicationComponentNamesAPI(req, res);
+
+      const { status, data } = answered(res);
+      expect(status).to.equal('success');
+      expect(data.components).to.deep.equal([
+        { name: 'web', masterSlave: true },
+        { name: 'worker', masterSlave: false },
       ]);
     });
 
     // Totals, which v9 keeps outside the sealed envelope precisely so a node can
-    // read them without decrypting. Summed, not per-component.
-    it('answers with the app total, not per-component sizing', async () => {
+    // read them without decrypting. The spec library's one shape for the sum, in
+    // field names that state their units - NOT development's {cpu, ram, hdd},
+    // which names no units and omits the container root filesystem and swap, so
+    // it understates what the node must reserve.
+    it('answers with the app total, in the units-bearing shape', async () => {
+      sinon.stub(verificationHelper, 'verifyPrivilege').resolves(true);
+      const stored = await registryHolds(await v8Spec(composed));
       const req = { params: { appname: 'NamesApp' }, query: {} };
       const res = { json: sinon.fake((param) => param) };
 
-      await subjectWithPrivilege(sinon.stub().resolves(true))
-        .getApplicationComponentNamesAPI(req, res);
+      await registryManager.getApplicationComponentNamesAPI(req, res);
 
-      expect(res.json.firstCall.args[0].data.resources)
-        .to.deep.equal({ cpu: 7, ram: 19000, hdd: 60 });
+      const { resources } = answered(res).data;
+      expect(resources.cpu).to.equal(7);
+      expect(resources.memoryMb).to.equal(19000);
+      expect(resources.storageGb).to.equal(60);
+      expect(resources.componentCount).to.equal(3);
+      // The node's real constraint, and the reason the triple is not enough.
+      expect(resources.hostDiskGb)
+        .to.equal(resources.storageGb + resources.rootFsGb + resources.swapGb);
+      // The same question the spec itself answers, not a second sum beside it.
+      expect(resources).to.deep.equal(stored.spec.resourceTotals());
     });
 
     // The whole reason this endpoint exists rather than a redacted spec. Asserted
     // over the serialised response so a field nested anywhere in it still fails.
     it('carries nothing that could configure or impersonate the app', async () => {
+      sinon.stub(verificationHelper, 'verifyPrivilege').resolves(true);
+      await registryHolds(await v8Spec(composed));
       const req = { params: { appname: 'NamesApp' }, query: {} };
       const res = { json: sinon.fake((param) => param) };
 
-      await subjectWithPrivilege(sinon.stub().resolves(true))
-        .getApplicationComponentNamesAPI(req, res);
+      await registryManager.getApplicationComponentNamesAPI(req, res);
 
-      const serialised = JSON.stringify(res.json.firstCall.args[0]);
+      // Asserted before the absences: an ERROR response contains none of these
+      // either, so without this the whole case passes by failing.
+      expect(answered(res).status, JSON.stringify(answered(res))).to.equal('success');
+      const serialised = JSON.stringify(answered(res));
 
-      ['secret-token', 'ADMIN_PASSWORD', 'hunter2', 'sealed', 'private/palworld', 'pal.example.invalid', '30001']
-        .forEach((withheld) => expect(serialised).to.not.contain(withheld));
+      ['ADMIN_PASSWORD', 'hunter2', 'private/palworld', 'pal.example.invalid', '30001', '--token']
+        .forEach((withheld) => expect(serialised, withheld).to.not.contain(withheld));
       // and no key by which one could be reintroduced
       ['repoauth', 'environmentParameters', 'secrets', 'commands', 'repotag', 'domains', 'ports', 'containerData', 'compose']
-        .forEach((key) => expect(serialised).to.not.contain(key));
+        .forEach((key) => expect(serialised, key).to.not.contain(key));
     });
   });
 

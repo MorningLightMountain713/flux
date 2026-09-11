@@ -801,6 +801,102 @@ async function appConvertApi(req, res) {
 }
 
 /**
+ * The component names of an app, and their election mode, for the flux team.
+ *
+ * Two different claims, which is why they are two fields:
+ *
+ * `resources` is public information that happens to be sealed on a v8 app. v9
+ * keeps the totals OUTSIDE the encrypted envelope on purpose — a node has to
+ * judge whether it can host an app without being able to read it — and binds
+ * them into the AAD so a relayer cannot understate them. Returning them here is
+ * that same decision, extended to the versions that have not shipped it.
+ *
+ * `components` is not. v9 seals the component list and publishes only a count,
+ * so handing over the names is a deliberate exception rather than a claim they
+ * are harmless: the container tools address a component as `<component>_<app>`,
+ * so logs, terminal, monitoring and file changes cannot function without them.
+ * The exception is granted to an authenticated flux team caller, on a node that
+ * can read the plaintext, and to nobody else.
+ *
+ * Both answers are asked of the spec CLASS rather than read off the stored
+ * document. A v9 document carries no `compose`, no `containerData` and no
+ * `ram`/`hdd`, so a reader written to the v8 spelling does not fail on one — it
+ * answers `masterSlave: false` for every component of every v9 app and sums
+ * nothing, which is the shape of defect `28023e1fc` fixed in placement.
+ *
+ * `resources` is `resourceTotals()`, which is the spec library's one shape for
+ * "how big is this app" and is what a sealed v9 container publishes in the
+ * clear. It is deliberately NOT development's `{cpu, ram, hdd}`: those names do
+ * not say their units, which the spec library refuses for this exact sum, and
+ * the triple omits the container root filesystem and swap — so it understates
+ * what the node must actually reserve.
+ *
+ * Withheld either way: environment parameters, repository credentials, secrets,
+ * commands, image tags, ports and domains. Nothing is stripped to achieve that
+ * — the response is BUILT from the two fields above, so a field added to a spec
+ * in future is withheld by default rather than by being remembered here.
+ *
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
+ */
+async function getApplicationComponentNamesAPI(req, res) {
+  try {
+    let { appname } = req.params;
+    appname = appname || req.query.appname;
+
+    if (!appname) {
+      throw new Error('No Application Name specified');
+    }
+
+    const mainAppName = appname.split('_')[1] || appname;
+
+    // fluxteam, not appownerorfluxteam: an owner reads the specification itself
+    // and has no use for this, and the node operator is not a party to a
+    // customer's app at all.
+    const authorized = await verificationHelper.verifyPrivilege(Privilege.FLUX_TEAM, authOf(req));
+    if (!authorized) {
+      return res.json(messageHelper.errUnauthorizedMessage());
+    }
+
+    const instantiated = await appsRepository.getGlobalAppInfo(mainAppName);
+    if (!instantiated) {
+      throw new Error(`Application: ${mainAppName} not found`);
+    }
+
+    let { spec } = instantiated;
+    if (instantiated.isEncrypted) {
+      // Node-side, with the node's own key. A node that cannot read the spec
+      // cannot name its components, and says so rather than answering an empty
+      // list that reads as "this app has none".
+      const provider = await spec.createProvider();
+      spec = await spec.decrypt(provider);
+    }
+
+    const response = messageHelper.createDataMessage({
+      components: Object.values(spec.components || {}).map((component) => ({
+        name: component.name,
+        // The classifier the election itself uses, asked of the component. A
+        // sync flag counts only on the primary mount, so this agrees with what
+        // decides the component's fate rather than with anywhere the letters
+        // happen to appear.
+        masterSlave: component.hasActiveStandbySyncthing(),
+      })),
+      resources: spec.resourceTotals(),
+    });
+
+    return res.json(response);
+  } catch (error) {
+    log.error(error);
+    const errorResponse = messageHelper.createErrorMessage(
+      error.message || error,
+      error.name,
+      error.code,
+    );
+    return res.json(errorResponse);
+  }
+}
+
+/**
  * Get application owner via API
  * @param {import('express').Request} req
  * @param {import('express').Response} res
@@ -1385,6 +1481,7 @@ module.exports = {
   getApplicationSpecificationAPI,
   convertApplicationSpecification,
   appConvertApi,
+  getApplicationComponentNamesAPI,
   getApplicationOwner,
   getApplicationOwnerAPI,
   getGlobalAppsSpecifications,
