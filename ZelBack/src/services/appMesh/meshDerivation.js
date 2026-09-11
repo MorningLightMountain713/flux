@@ -56,8 +56,18 @@ function assertOutpoint(outpoint) {
  * The canonical outpoint string every mesh derivation keys on:
  * lowercase 64-hex txhash, a colon, the output index in decimal.
  *
- * The daemon reports `outidx` as a string despite its typedef (its RPC help
- * types are unreliable), so both representations are accepted and normalised.
+ * Both halves are normalised because the pair arrives from two kinds of source
+ * with different guarantees, and the keys have to match across them.
+ *
+ * A txhash out of a v9 spec is already lowercase — the schema pattern is
+ * `^[0-9a-f]{64}:\d{1,5}$`, so nothing else validates. One resolved from the
+ * daemon carries whatever case the daemon reports, and this is the only place
+ * that settles it: a mesh outpoint is compared against both, so an unfolded
+ * hash from either side matches nothing on the other.
+ *
+ * `outidx` is normalised for the same reason in the other direction — the
+ * daemon reports it as a string despite its typedef, its RPC help types being
+ * unreliable, so both representations are accepted.
  *
  * @param {string} txhash collateral transaction hash, 64 hex chars
  * @param {(string|number)} outidx collateral output index
