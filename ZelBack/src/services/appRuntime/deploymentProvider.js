@@ -206,8 +206,19 @@ async function installedDeployments(instantiated) {
   return deployments.filter((d) => installed.has(d.replica ?? null));
 }
 
-async function listInstalledDeployments() {
-  const installed = await appsRepository.listInstalledApps();
+/**
+ * Every installed app's deployments.
+ *
+ * `installedSpecs` lets a caller that has already listed the installed apps hand
+ * them over instead of having them read and deserialized a second time. The
+ * resource check does exactly that, and it runs on every admission decision and
+ * every spawn cycle — so the read it saves is the one that happens most.
+ *
+ * @param {Array<object>|null} [installedSpecs] - already-listed InstantiatedSpecs
+ * @returns {Promise<Array<object>>}
+ */
+async function listInstalledDeployments(installedSpecs = null) {
+  const installed = installedSpecs ?? await appsRepository.listInstalledApps();
   const deployments = [];
   for (const inst of installed) {
     try {

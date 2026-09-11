@@ -113,6 +113,28 @@ describe('deploymentProvider tests', () => {
     });
   });
 
+  describe('listInstalledDeployments', () => {
+    it('builds from the specs it is handed, without listing them again', async () => {
+      // The resource check lists the installed apps to find the rows it cannot
+      // read, then needs their deployments. Given the specs it already has, this
+      // must not read and deserialize the same collection a second time — it
+      // runs on every admission decision and every spawn cycle. Nothing about
+      // the ANSWER changes, so only the read itself can be asserted.
+      const appsRepository = require('../../ZelBack/src/services/appDatabase/appsRepository');
+      const listed = sinon.stub(appsRepository, 'listInstalledApps').resolves([]);
+
+      const deployments = await deploymentProvider.listInstalledDeployments([]);
+
+      expect(deployments).to.deep.equal([]);
+      sinon.assert.notCalled(listed);
+
+      // The companion: with nothing handed over it still reads, so this is a
+      // shortcut rather than a listing that stopped working.
+      await deploymentProvider.listInstalledDeployments();
+      sinon.assert.calledOnce(listed);
+    });
+  });
+
   describe('localIdentities (what a teardown owes)', () => {
     let dockerStub;
 
