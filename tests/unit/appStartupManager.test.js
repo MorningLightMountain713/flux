@@ -146,7 +146,7 @@ describe('appStartupManager tests', () => {
         '../fluxNetworkHelper': fluxNetworkHelperStub,
         '../nodeDosState': { isNodeDos: sinon.stub().returns(false) },
         '../appMonitoring/appReconciler': appReconcilerStub,
-      '../appDatabase/appsRepository': appsRepositoryStub,
+        '../appDatabase/appsRepository': appsRepositoryStub,
         './appUninstaller': appUninstallerStub,
         '../utils/globalState': globalStateStub,
         '../appQuery/appQueryService': appQueryServiceStub,

@@ -194,7 +194,7 @@ describe('appInstaller tests', () => {
       // Opens a unix socket to the daemon.
       '../utils/fluxShutdowndClient': { upsertAppPlanBestEffort: sinon.stub().resolves() },
       'node:fs/promises': { chmod: sinon.stub().resolves(), writeFile: sinon.stub().resolves() },
-});
+    });
   });
 
   afterEach(() => {

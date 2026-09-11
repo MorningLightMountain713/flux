@@ -955,8 +955,8 @@ describe('fileSystemManager tests', () => {
           '../verificationHelper': { verifyPrivilege },
           '../serviceHelper': serviceHelperStub,
           // The download handlers resolve their volume by identity now; the rule
-      // itself is covered in volumeTarget.test.js.
-      './volumeTarget': { resolveVolumeTarget: sinon.stub().resolves({ mount: '/mnt/appvolumes/fluxweb_myapp' }) },
+          // itself is covered in volumeTarget.test.js.
+          './volumeTarget': { resolveVolumeTarget: sinon.stub().resolves({ mount: '/mnt/appvolumes/fluxweb_myapp' }) },
           '../../lib/log': { error: sinon.stub(), info: sinon.stub(), warn: sinon.stub() },
           '../utils/pathSecurity': { sanitizePath: sinon.stub(), verifyRealPath: sinon.stub() },
           './volumeSession': volumeSessionStub,

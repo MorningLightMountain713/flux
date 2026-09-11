@@ -28,7 +28,6 @@ const geolocationService = require('./geolocationService');
 const benchmarkService = require('./benchmarkService');
 const { CLASSIFICATION } = require('./utils/networkClassifier');
 const { appSyncEvents, EVENTS: SYNC_EVENTS } = require('./utils/appSyncEvents');
-const globalState = require('./utils/globalState');
 const operationRegistry = require('./utils/operationRegistry');
 const { compareInstanceSeniority } = require('./utils/instanceOrdering');
 const { socketAddressesMatch } = require('./utils/socketAddressUtils');

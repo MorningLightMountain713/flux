@@ -224,7 +224,6 @@ describe('appReconciler tests', () => {
           const us = bare.indexOf('_');
           return us === -1 ? bare : bare.slice(us + 1);
         },
-        getBaseAppName: (dockerName) => (dockerName.startsWith('flux') ? dockerName.slice(4) : dockerName),
         // Default: a benign, attached container (not detached), so the network-detach
         // heal stays dormant unless a test opts in.
         classifyContainerNetworkAttachment: sinon.stub().returns({

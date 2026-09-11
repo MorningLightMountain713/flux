@@ -25,12 +25,12 @@ describe('containerEventBridge', () => {
           if (name.startsWith('zel')) return name.slice(3);
           return name;
         },
-      isManagedContainer: ({ labels, name }, labelKeys) => {
-        if (labels && labels[labelKeys.IDENTIFIER]) return true;
-        if (!name) return false;
-        const bare = name.startsWith('/') ? name.slice(1) : name;
-        return bare.startsWith('flux') || bare.startsWith('zel');
-      },
+        isManagedContainer: ({ labels, name }, labelKeys) => {
+          if (labels && labels[labelKeys.IDENTIFIER]) return true;
+          if (!name) return false;
+          const bare = name.startsWith('/') ? name.slice(1) : name;
+          return bare.startsWith('flux') || bare.startsWith('zel');
+        },
       },
       dockerEventStream: {
         createDockerEventStream: sinon.stub().callsFake((options) => {

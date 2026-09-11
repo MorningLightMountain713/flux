@@ -3,7 +3,6 @@
 const config = require('config');
 const crypto = require('node:crypto');
 const axios = require('axios');
-const dbHelper = require('../dbHelper');
 const fluxNetworkHelper = require('../fluxNetworkHelper');
 const networkStateService = require('../networkStateService');
 const verificationHelper = require('../verificationHelper');
@@ -17,7 +16,6 @@ const meshPortAllocator = require('../appMesh/meshPortAllocator');
 const meshReconciler = require('../appMesh/meshReconciler');
 const peerNotification = require('../appMessaging/peerNotification');
 const deploymentProvider = require('../appRuntime/deploymentProvider');
-const { localAppsInformation, globalAppsInformation } = require('../utils/appConstants');
 const { extractIp, extractPort } = require('../utils/socketAddressUtils');
 const { Privilege, authOf } = require('../utils/privileges');
 const fluxCaching = require('../utils/cacheManager');

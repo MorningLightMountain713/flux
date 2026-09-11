@@ -164,30 +164,11 @@ describe('monitoringOrchestrator tests', () => {
     sinon.restore();
   });
 
-  /**
-   * The deployment provider stays stubbed, so nothing here exercises what the
-   * real one does with what it is handed. It is handed `app.name` and looks the
-   * app up by it, so assert the NAME arrived — off the real spec, as a usable
-   * string. An app object with no `name` reaches the real provider as
-   * `getInstalledApp(undefined)`, which finds nothing and reports the app as
-   * simply not installed here.
-   */
-  function assertLookedUpByName(specs) {
-    const handed = getInstalledDeploymentsStub.getCalls().map((call) => call.args[0]);
-    handed.forEach((name) => {
-      expect(name, 'the provider is looked up by a real name string').to.be.a('string');
-      expect(name).to.have.length.above(0);
-    });
-    expect(handed).to.deep.equal(specs.map((spec) => spec.name));
-  }
 
   /** The identifiers monitoring was started for, in call order. */
   const startedIdentifiers = () => appInspectorStub.startAppMonitoring
     .getCalls().map((call) => call.args[0]);
 
-  /** The identifiers monitoring was stopped for, in call order. */
-  const stoppedIdentifiers = () => appInspectorStub.stopAppMonitoring
-    .getCalls().map((call) => call.args[0]);
 
   describe('startMonitoringOfApps tests', () => {
     it('should start monitoring for single-component apps', async () => {
@@ -241,7 +222,6 @@ describe('monitoringOrchestrator tests', () => {
     });
 
     it('should handle errors gracefully', async () => {
-      const spec = legacySpec('App1');
       getInstalledDeploymentsStub.rejects(new Error('deployment resolution failed'));
 
       await monitoringOrchestrator.startMonitoringOfApps([{ name: 'App1' }]);
