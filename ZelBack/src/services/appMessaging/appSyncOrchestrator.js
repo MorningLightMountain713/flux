@@ -11,6 +11,7 @@ const peerNotification = require('./peerNotification');
 const registryManager = require('../appDatabase/registryManager');
 const globalState = require('../utils/globalState');
 const peerCodec = require('../utils/peerCodec');
+const { nodeSigner } = require('../utils/nodeSigner');
 const fluxNetworkHelper = require('../fluxNetworkHelper');
 const verificationHelper = require('../verificationHelper');
 const { appSyncEvents, EVENTS } = require('../utils/appSyncEvents');
@@ -169,6 +170,8 @@ class AppSyncOrchestrator {
   #ingressSyncComplete = false;
   #stateSyncComplete = false;
   #syncRoundAbandoned = false;
+  #askInFlight = false;
+  #askDirty = false;
   #peerDisconnectedHandler = null;
   #peerConnectedHandler = null;
   #ephemeralRefusedHandler = null;
@@ -246,6 +249,11 @@ class AppSyncOrchestrator {
     if (this.#stateSyncComplete) return false;
     const progress = this.#peerProgress.get(peer.key);
     if (!progress || progress.failed) return false;
+    // A peer that has delivered every stream it was asked for is not being
+    // waited on any more. Read off `done` rather than tracked separately, so a
+    // stream added to SYNC_TYPES is one a peer has to be seen answering before
+    // this stops wanting it.
+    if (SYNC_TYPES.every((type) => progress.done.has(type))) return false;
     const connectionId = peer.connectionId ?? null;
     // Either end not naming a connection is the pre-connectionId case and
     // cannot be told apart, so it is admitted on the address alone.
@@ -357,6 +365,15 @@ class AppSyncOrchestrator {
 
     fluxEventBus.publish('orchestrator:started', { state: this.#state, bootContext });
 
+    // SAY WHAT THIS NODE CAN ANSWER, FROM THE MOMENT IT CAN ANSWER IT. The
+    // verdict is knowable here - the block budget is configured and none of it
+    // has been spent - but the only publications were on a block arriving and
+    // on peers reaching the floor, so a node whose budget is zero sat at
+    // globalState's initial false and refused every sync request it was asked
+    // until one of those happened. On a fleet where every node is still
+    // starting, that is every node declining every other.
+    this.#publishStateSyncAuthority();
+
     if (this.#waitForNetworkState) {
       await this.#waitForNetworkState();
       this.#networkReady = true;
@@ -386,7 +403,7 @@ class AppSyncOrchestrator {
     // The deficit decides. A pool that is already whole asks nobody, so this is
     // unconditional rather than guarded - a guard here would only be a second
     // way of saying the same thing, and one no test could tell from its absence.
-    this.#topUpSyncPeers();
+    this.#own(this.#runRequestPass());
     return true;
   }
 
@@ -472,7 +489,15 @@ class AppSyncOrchestrator {
     }
     if (this.#syncCompletions[syncType] === undefined) return;
     const progress = this.#peerProgress.get(peerKey);
-    if (progress && !progress.failed) progress.done.add(syncType);
+    if (progress && !progress.failed) {
+      progress.done.add(syncType);
+      // Its answer is in, so the slot it held is free and nothing more is
+      // wanted from it. The record STANDS - that is what stops a peer that has
+      // already given its whole view being asked again in the next breath.
+      if (SYNC_TYPES.every((type) => progress.done.has(type))) {
+        this.#completeSyncRequest(progress.connectionId);
+      }
+    }
     this.#syncCompletions[syncType].add(peerKey);
     log.info(`AppSyncOrchestrator - ${syncType} sync complete from ${peerKey} (${this.#syncCompletions[syncType].size}/${MIN_SYNC_COMPLETIONS} peers)`);
     fluxEventBus.publish('ephemeralSync:peerComplete', {
@@ -539,7 +564,7 @@ class AppSyncOrchestrator {
     this.#completeSyncRequest(progress.connectionId);
     log.warn(`AppSyncOrchestrator - Sync peer ${key} disconnected mid-sync (missing: ${missing.join(', ')})`);
     fluxEventBus.publish('ephemeralSync:peerDisconnected', { peer: key, connectionId, missing });
-    this.#topUpSyncPeers();
+    this.#own(this.#runRequestPass());
   }
 
   /**
@@ -569,7 +594,7 @@ class AppSyncOrchestrator {
       // findings about a peer and a reader acts on them differently.
       fluxEventBus.publish('ephemeralSync:peerTimedOut', { peer: key, reason: why, missing });
     }
-    this.#topUpSyncPeers();
+    this.#own(this.#runRequestPass());
   }
 
   /**
@@ -655,7 +680,7 @@ class AppSyncOrchestrator {
     this.#own(this.#startAppRunningBroadcast());
     // Awaited, so a failure inside it is this pass's failure and not an
     // orphaned rejection thrown after the pass has already returned.
-    await this.#requestSyncs();
+    await this.#runRequestPass();
 
     // Peers arriving is also a wake-up for the permanent-plane syncs: on boot the
     // manifest round may have run before discovery connected anyone (nothing to
@@ -663,6 +688,38 @@ class AppSyncOrchestrator {
     // resync against. #advanceSync runs only the steps still incomplete.
     if (this.#state === STATES.SYNCING || this.#state === STATES.RESYNCING) {
       await this.#advanceSync();
+    }
+  }
+
+  /**
+   * ONE PASS AT A TIME, AND ONE MORE IF THE TABLE MOVED UNDER IT.
+   *
+   * A pass counts the deficit, then awaits this node's signing key before it
+   * can reserve anything. Two things go wrong in that window.
+   *
+   * A second trigger admitted into it counts the SAME deficit and fills it
+   * twice, so the pool overshoots its cap - and on a boot every peer arriving
+   * is a trigger, so the burst also fetches the key once per arrival. The
+   * guard holds both: one arrival, one key.
+   *
+   * And the table can change while the pass is held: a deadline firing or a
+   * peer leaving closes a request and widens the deficit the pass already
+   * counted. Those triggers mark it dirty rather than acting, and this re-runs
+   * for the shortfall they left. Without the re-run the peer that went is not
+   * replaced until something else happens to trigger, which on a quiet fleet
+   * is the block timer - 125 minutes.
+   */
+  async #runRequestPass() {
+    if (this.#askInFlight) { this.#askDirty = true; return; }
+    this.#askInFlight = true;
+    try {
+      do {
+        this.#askDirty = false;
+        // eslint-disable-next-line no-await-in-loop
+        await this.#requestSyncs();
+      } while (this.#askDirty);
+    } finally {
+      this.#askInFlight = false;
     }
   }
 
@@ -716,6 +773,46 @@ class AppSyncOrchestrator {
    * @param {string[]} types the streams to request
    */
   async #askPeersForTypes(peersToAsk, types) {
+    const codecs = {
+      apptemp: { msgType: peerCodec.MSG_TYPE.REQUEST_TEMP_MESSAGES, encode: peerCodec.encodeRequestTempMessages },
+      apprunning: { msgType: peerCodec.MSG_TYPE.REQUEST_APP_RUNNING, encode: peerCodec.encodeRequestAppRunning },
+      appinstalling: { msgType: peerCodec.MSG_TYPE.REQUEST_APP_INSTALLING, encode: peerCodec.encodeRequestAppInstalling },
+      apperrors: { msgType: peerCodec.MSG_TYPE.REQUEST_APP_INSTALLING_ERRORS, encode: peerCodec.encodeRequestAppInstallingErrors },
+    };
+
+    // EVERY SIGNATURE IS IN HAND BEFORE THE FIRST RECORD OPENS. Signing is the
+    // last thing that can fail before a request leaves, and it answers null
+    // rather than throwing. A record opened ahead of one is a peer marked asked
+    // with a deadline armed against a request that was never sent - so the pool
+    // spends a slot and a whole deadline waiting out an attempt it never made,
+    // and the peer is never asked again because it is already in the ledger.
+    // Through nodeSigner, which is the one place that asks whether this node can
+    // speak as itself. Asked here rather than hand-rolled from the two key
+    // accessors, because those answer a failure WITH A VALUE - pubKey could be
+    // an Error object, truthy, not a string, and `{}` once stringified - and a
+    // request carrying that is refused by every node that receives it, a long
+    // way from where the key went missing.
+    let signer;
+    let requestTs;
+    let messages;
+    try {
+      signer = await nodeSigner();
+      if (!signer) throw new Error('this node cannot sign as itself');
+      requestTs = Date.now();
+      messages = types.map((type) => {
+        const { msgType, encode } = codecs[type];
+        const sig = signer.sign(peerCodec.buildSyncSignatureMessage(msgType, 0, requestTs));
+        return { type, sig, encode };
+      });
+    } catch (error) {
+      log.error(`AppSyncOrchestrator - Failed to sign sync requests: ${error.message}`);
+      return;
+    }
+    if (messages.some(({ sig }) => !sig)) {
+      log.error('AppSyncOrchestrator - Failed to sign sync requests: a signature could not be made');
+      return;
+    }
+
     const askedAt = Date.now();
     for (const peer of peersToAsk) {
       this.#askedPeers.add(peer.key);
@@ -732,33 +829,9 @@ class AppSyncOrchestrator {
       this.#reconnectPulls.delete(peer.key);
     }
 
-    let pubkey;
-    let requestTs;
-    let signMsg;
-    try {
-      pubkey = await fluxNetworkHelper.getFluxNodePublicKey();
-      const privkey = await fluxNetworkHelper.getFluxNodePrivateKey();
-      requestTs = Date.now();
-      signMsg = (type, sinceTs) => {
-        const msg = peerCodec.buildSyncSignatureMessage(type, sinceTs, requestTs);
-        return verificationHelper.signMessage(msg, privkey);
-      };
-    } catch (error) {
-      log.error(`AppSyncOrchestrator - Failed to sign sync requests: ${error.message}`);
-      return;
-    }
-
-    const codecs = {
-      apptemp: { msgType: peerCodec.MSG_TYPE.REQUEST_TEMP_MESSAGES, encode: peerCodec.encodeRequestTempMessages },
-      apprunning: { msgType: peerCodec.MSG_TYPE.REQUEST_APP_RUNNING, encode: peerCodec.encodeRequestAppRunning },
-      appinstalling: { msgType: peerCodec.MSG_TYPE.REQUEST_APP_INSTALLING, encode: peerCodec.encodeRequestAppInstalling },
-      apperrors: { msgType: peerCodec.MSG_TYPE.REQUEST_APP_INSTALLING_ERRORS, encode: peerCodec.encodeRequestAppInstallingErrors },
-    };
-    for (const type of types) {
-      const { msgType, encode } = codecs[type];
-      const sig = signMsg(msgType, 0);
-      this.#sendRequests(peersToAsk, type, encode(0, requestTs, pubkey, sig));
-    }
+    messages.forEach(({ type, sig, encode }) => {
+      this.#sendRequests(peersToAsk, type, encode(0, requestTs, signer.pubKey, sig));
+    });
 
     fluxEventBus.publish('ephemeralSync:requested', {
       peerCount: peersToAsk.length,
