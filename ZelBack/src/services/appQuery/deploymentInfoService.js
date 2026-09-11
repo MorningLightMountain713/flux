@@ -41,6 +41,13 @@ async function deploymentInformation(req, res) {
       minBlocksAllowance: config.get('fluxapps.minBlocksAllowance'),
       maxBlocksAllowance: maxAllowance,
       blocksAllowanceInterval: config.get('fluxapps.blocksAllowanceInterval'),
+      // The fork height itself, not just its effect above. maxBlocksAllowance
+      // answers "how long may an app be paid for NOW"; a client working out
+      // what an EXISTING app's expiry is has to ask the same question at that
+      // app's own registration height, and rescale a term that straddles the
+      // fork. It cannot do either without the height, and a client that
+      // hardcodes it is keeping a second copy of a chain fact.
+      daemonPONFork: config.get('fluxapps.daemonPONFork'),
     };
     const respondPrice = messageHelper.createDataMessage(information);
     res.json(respondPrice);

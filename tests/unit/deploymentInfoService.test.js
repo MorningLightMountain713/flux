@@ -128,6 +128,12 @@ describe('deploymentInfoService tests', () => {
       expect(response.data).to.have.property('minBlocksAllowance');
       expect(response.data).to.have.property('maxBlocksAllowance');
       expect(response.data).to.have.property('blocksAllowanceInterval');
+      // A client resolving an EXISTING app's expiry has to ask the allowance
+      // question at that app's own registration height, so it needs the fork
+      // height and not only the answer this node computed for the current one.
+      expect(response.data).to.have.property('daemonPONFork');
+      expect(response.data.daemonPONFork, 'the shipped fork height is what is served')
+        .to.equal(config.fluxapps.daemonPONFork);
     });
 
     it('should use post-PON max blocks allowance after fork', async () => {
