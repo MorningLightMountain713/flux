@@ -671,7 +671,8 @@ async function getApplicationSpecificationAPI(req, res) {
  * @returns {Promise<object>} A draft for owner review: cleartext
  *   { encrypted:false, spec, complete, errors, warnings } or sealed
  *   { encrypted:true, appName, timestamp, transportEncrypted, complete, errors, warnings }.
- *   complete:false means the draft is missing required fields (listed in errors)
+ *   complete:false means the draft is missing required fields, or carries a
+ *   region name this node's location table cannot resolve (both listed in errors)
  *   that the owner must fill before it can be signed.
  */
 async function convertApplicationSpecification(appname, opts = {}) {
@@ -697,7 +698,7 @@ async function convertApplicationSpecification(appname, opts = {}) {
   const { fromLegacy } = await getSpecBackend();
   const { FluxAppSpecV9, buildSpecViewAad, SPEC_VIEW_INFO } = await getSpec();
 
-  const { spec: v9Blob, warnings } = fromLegacy(legacySpec, { confirmationHeight: instantiated.height });
+  const { spec: v9Blob, warnings, unresolvedRegions } = fromLegacy(legacySpec, { confirmationHeight: instantiated.height });
 
   const inlinedSensitive = await resolveStorageRefs(v9Blob.components, instantiated.name);
 
@@ -706,13 +707,32 @@ async function convertApplicationSpecification(appname, opts = {}) {
   // for the owner to complete, not a hard failure. Strict fromSubmission stays
   // at sign-time submission, which requires a valid canonical form anyway.
   const { valid, errors } = FluxAppSpecV9.validateSchema(v9Blob);
+
+  // A region name the location table cannot spell is a gap of exactly the kind
+  // this endpoint exists to hand back: the owner is the only party who knows
+  // which region they meant, and they can pick it here. It is not in the draft
+  // — converting it to the whole country would be the draft agreeing with a
+  // warning about itself, on the document they are about to sign — so it is an
+  // error that blocks completion rather than a warning beside a value. The
+  // schema cannot catch it: the entry is simply absent, and a placement with
+  // one fewer geoAllow entry is perfectly valid.
+  const regionErrors = (unresolvedRegions || []).map((u) => ({
+    path: ['placement', 'geoAllow'],
+    code: 'region_unresolved',
+    message: `Region '${u.region}' in ${u.country} could not be resolved to an ISO 3166-2 code`
+      + `${u.supplied ? '' : ' (no region vocabulary is loaded on this node yet)'}`
+      + '. Choose the region again before signing — it is not carried into this draft.',
+    value: u.region,
+  }));
+  const allErrors = [...errors, ...regionErrors];
+  const complete = valid && regionErrors.length === 0;
   const draft = valid ? FluxAppSpecV9.fromSubmission(v9Blob).toCanonical() : v9Blob;
   const { name, owner } = v9Blob;
 
   const mustEncrypt = instantiated.isEncrypted || inlinedSensitive;
   if (!mustEncrypt) {
     return {
-      encrypted: false, spec: draft, complete: valid, errors, warnings,
+      encrypted: false, spec: draft, complete, errors: allErrors, warnings,
     };
   }
 
@@ -729,7 +749,7 @@ async function convertApplicationSpecification(appname, opts = {}) {
   });
   const transportEncrypted = envelope.toJSON();
   return {
-    encrypted: true, appName: name, timestamp, transportEncrypted, complete: valid, errors, warnings,
+    encrypted: true, appName: name, timestamp, transportEncrypted, complete, errors: allErrors, warnings,
   };
 }
 

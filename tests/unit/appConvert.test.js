@@ -140,6 +140,40 @@ describe('appConvert (registryManager) tests', () => {
     expect(held.spec, 'fromLegacy converts .spec').to.be.an.instanceOf(flux.FluxAppSpecV8);
   });
 
+  it('hands back a region it cannot resolve as a gap to fill, not a widened pin', async () => {
+    // The node has no location table in a unit run, so no region name resolves.
+    // The pin is NOT converted to the whole of Finland: it is absent from the
+    // draft and named in errors, because the draft is what the owner signs and
+    // a widened pin would leave nothing for them to disagree with.
+    await registryHolds(await v8Spec({
+      name: 'convertme', contacts: ['ops@example.com'], geolocation: ['acEU_FI_Uusimaa'],
+    }));
+
+    const result = await registryManager.convertApplicationSpecification('convertme', {});
+
+    expect(result.complete, 'a dropped pin must not read as a finished draft').to.equal(false);
+    const regionError = result.errors.find((e) => e.code === 'region_unresolved');
+    expect(regionError, 'the owner is told which name, so they can pick it again').to.exist;
+    expect(regionError.value).to.equal('Uusimaa');
+    // Not widened to the country it was pinned inside.
+    const geoAllow = result.spec.placement?.geoAllow ?? null;
+    expect(geoAllow === null || geoAllow.every((g) => g.region)).to.equal(true);
+  });
+
+  it('still converts an app with no region pin at all, completely', async () => {
+    // The control. A conversion that had simply stopped completing anything
+    // would satisfy the test above just as well.
+    await registryHolds(await v8Spec({
+      name: 'convertme', contacts: ['ops@example.com'], geolocation: ['acEU_FI'],
+    }));
+
+    const result = await registryManager.convertApplicationSpecification('convertme', {});
+
+    expect(result.complete).to.equal(true);
+    expect(result.errors.some((e) => e.code === 'region_unresolved')).to.equal(false);
+    expect(result.spec.placement.geoAllow).to.deep.equal([{ continent: 'EU', country: 'FI' }]);
+  });
+
   it('returns a fillable draft with inline errors when the converted spec is incomplete', async () => {
     // The shared v8 fixture carries no contacts, which v9 requires. This is the
     // documented fixable gap the endpoint returns rather than rejects — and it
