@@ -41,7 +41,14 @@ const dns = require('dns');
 
 // External fixtures the unit tier legitimately uses: mongo (tests/init's db
 // config). The docker daemon is a unix socket, matched separately.
-const ALLOWED_PORTS = new Set([27_017]);
+//
+// Port 1 on loopback is the one destination a test needs to be CLOSED rather
+// than open: portAnswered's "nothing listening is not a port to install on"
+// case can only be proved against a port with nothing on it, and nothing binds
+// port 1 without root. Declared here because the alternative is a test that
+// looks like a violation forever, and a violation nobody can fix is how the
+// whole report starts being skimmed.
+const ALLOWED_PORTS = new Set([1, 27_017]);
 
 // Ports this process is listening on — its own test servers.
 const ownPorts = new Set();

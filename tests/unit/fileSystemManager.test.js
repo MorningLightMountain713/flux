@@ -7,6 +7,14 @@ const proxyquire = require('proxyquire').noCallThru();
 // a broken handle shape through.
 const jobRegistry = require('../../ZelBack/src/services/utils/jobRegistry');
 const { Privilege, authOf } = require('../../ZelBack/src/services/utils/privileges');
+// The 202 handler builds an absolute status URL, which asks fluxNetworkHelper
+// for this node's socket address - and that asks the BENCHMARK DAEMON over RPC.
+// Reached through operationsController rather than directly, so proxyquire on
+// the module under test cannot see it; the shared module object is stubbed
+// instead. Unstubbed it was 34 real dials to 127.0.0.1:26224 a run, refused
+// because nothing listens there, which is an unstubbed dependency that got
+// lucky rather than a passing test.
+const fluxNetworkHelper = require('../../ZelBack/src/services/fluxNetworkHelper');
 
 describe('fileSystemManager tests', () => {
   const MOUNT = '/test/apps/folder/fluxcomp_myapp';
@@ -121,6 +129,7 @@ describe('fileSystemManager tests', () => {
     // still take their operands as path params.
     req = { params: { appname: 'myapp', component: 'comp' }, query: {}, body: {} };
 
+    sinon.stub(fluxNetworkHelper, 'getLocalSocketAddress').resolves('127.0.0.1:16127');
     fileSystemManager = proxyquire('../../ZelBack/src/services/appSystem/fileSystemManager', {
       '../messageHelper': messageHelperStub,
       '../verificationHelper': { verifyPrivilege: sinon.stub().resolves(true) },
@@ -916,10 +925,30 @@ describe('fileSystemManager tests', () => {
 
       expect(res.statusCode).to.equal(202);
       expect(acceptedBody().jobId).to.match(/^op_/);
-      expect(acceptedBody().statusUrl).to.equal(`/apps/operations/${acceptedBody().jobId}`);
+      // ABSOLUTE, against this node's own DNS name. An operation is node-local,
+      // so a poll that lands anywhere else answers 404, and the address the
+      // client used may have been the load balancer. This asserted the RELATIVE
+      // form, which is the fallback for a node that cannot resolve its own
+      // address - true here only because getLocalSocketAddress was unstubbed and
+      // its RPC to the benchmark daemon was refused. It pinned the failure path.
+      expect(acceptedBody().statusUrl)
+        .to.equal(`https://127-0-0-1-16127.node.api.runonflux.io/apps/operations/${acceptedBody().jobId}`);
       expect(acceptedBody().status).to.equal('Running');
       expect(res.setHeader.calledWith('Location', acceptedBody().statusUrl)).to.equal(true);
       expect(res.setHeader.calledWith('Retry-After', '2')).to.equal(true);
+    });
+
+    // The fallback the previous expectation was accidentally testing, asserted
+    // on purpose: a caller that already reached this node can still follow a
+    // relative path, which beats a URL built from an address we could not
+    // confirm.
+    it('falls back to a relative status path when this node cannot resolve its own address', async () => {
+      fluxNetworkHelper.getLocalSocketAddress.rejects(new Error('benchmark unreachable'));
+      req.body.source = 'a';
+      req.body.destination = 'b';
+      await fileSystemManager.copyAppsObject(req, res);
+
+      expect(acceptedBody().statusUrl).to.equal(`/apps/operations/${acceptedBody().jobId}`);
     });
 
     it('marks the job Succeeded once the work finishes', async () => {

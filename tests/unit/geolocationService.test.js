@@ -19,6 +19,13 @@ describe('geolocationService tests', () => {
   // with a wildcard carrying `client`, `server`, `cloud` or `pool` inverts the
   // tests asserting UNKNOWN and DATACENTER. Tests that want a PTR set it here.
   let dnsStub;
+  // benchmarkService was NOT stubbed either, so every setNodeGeolocation() test
+  // reached benchLinkSpeeds -> getBenchmarks -> a real RPC to the benchmark
+  // daemon on 127.0.0.1:26224 - forty-nine dials a run. Nothing listens there in
+  // CI so it was refused and the tests passed, which is the same "unstubbed
+  // dependency that got lucky" the dns note above describes. It is required
+  // lazily INSIDE benchLinkSpeeds; proxyquire intercepts that like any other.
+  let benchmarkServiceStub;
   let clock;
 
   const mockGeolocationData = {
@@ -52,6 +59,7 @@ describe('geolocationService tests', () => {
         reverse: sinon.stub().rejects(Object.assign(new Error('getaddrinfo ENOTFOUND'), { code: 'ENOTFOUND' })),
       },
     };
+    benchmarkServiceStub = { getBenchmarks: sinon.stub().resolves({ status: 'error', data: null }) };
     // The service reschedules itself with setTimeout on every path it takes,
     // including a ten-second retry when no IP is detected. A real timer there
     // outlives this file and re-enters the service against restored stubs, so
@@ -115,6 +123,7 @@ describe('geolocationService tests', () => {
       './dbHelper': dbHelperStub,
       './serviceHelper': serviceHelperStub,
       './fluxNetworkHelper': fluxNetworkHelperStub,
+      './benchmarkService': benchmarkServiceStub,
     });
   });
 
@@ -175,6 +184,7 @@ describe('geolocationService tests', () => {
         './dbHelper': dbHelperStub,
         './serviceHelper': serviceHelperStub,
         './fluxNetworkHelper': fluxNetworkHelperStub,
+      './benchmarkService': benchmarkServiceStub,
         './appPlacement/ipLocationStore': ipLocationStoreStub,
       });
     }
@@ -541,6 +551,7 @@ describe('geolocationService tests', () => {
         './dbHelper': dbHelperStub,
         './serviceHelper': serviceHelperStub,
         './fluxNetworkHelper': fluxNetworkHelperStub,
+      './benchmarkService': benchmarkServiceStub,
       });
     }
 
@@ -745,6 +756,7 @@ describe('geolocationService tests', () => {
         './dbHelper': dbHelperStub,
         './serviceHelper': serviceHelperStub,
         './fluxNetworkHelper': fluxNetworkHelperStub,
+      './benchmarkService': benchmarkServiceStub,
         './appPlacement/ipLocationStore': {
           lookup: sinon.stub().resolves({ org: 'a1b2c3d4e5f6', networkClass }),
           status: sinon.stub().returns({ ready: true, generated: 'x', rowCount: 2_000_000 }),
@@ -866,6 +878,7 @@ describe('geolocationService tests', () => {
         './dbHelper': dbHelperStub,
         './serviceHelper': serviceHelperStub,
         './fluxNetworkHelper': fluxNetworkHelperStub,
+      './benchmarkService': benchmarkServiceStub,
         './appPlacement/ipLocationStore': table,
       });
 
@@ -892,6 +905,7 @@ describe('geolocationService tests', () => {
           './dbHelper': dbHelperStub,
           './serviceHelper': serviceHelperStub,
           './fluxNetworkHelper': fluxNetworkHelperStub,
+      './benchmarkService': benchmarkServiceStub,
           './appPlacement/ipLocationStore': {
             lookup: sinon.stub().resolves({ org: 'a1b2c3d4e5f6', networkClass: 'DATACENTER' }),
             status: sinon.stub().returns(status),
@@ -1006,6 +1020,7 @@ describe('geolocationService tests', () => {
         './dbHelper': dbHelperStub,
         './serviceHelper': serviceHelperStub,
         './fluxNetworkHelper': fluxNetworkHelperStub,
+      './benchmarkService': benchmarkServiceStub,
         './appPlacement/ipLocationStore': ipLocationStoreStub,
       });
     }
@@ -1291,6 +1306,7 @@ describe('geolocationService tests', () => {
         './dbHelper': dbHelperStub,
         './serviceHelper': serviceHelperStub,
         './fluxNetworkHelper': fluxNetworkHelperStub,
+      './benchmarkService': benchmarkServiceStub,
         './appPlacement/ipLocationStore': tableStub,
       });
     }
