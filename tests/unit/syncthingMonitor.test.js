@@ -450,6 +450,44 @@ describe('syncthingMonitor tests', () => {
       sinon.assert.notCalled(syncthingServiceMock.getDeviceId);
     });
 
+    it('keeps a mount-verify flag standing while the mount is still unsafe', async () => {
+      // The flag is the node's memory that this folder's mount is in question.
+      // Clearing it by READING it - which is what the old drainErroredFolderIds
+      // did in one call - loses that memory the moment the pass looks, so a pass
+      // that dies before it acts never retries the folder it was asked about.
+      // Only a completed outcome resolves it, and "still unsafe" is not one.
+      deploymentProviderMock.listInstalledDeployments.resolves([syncDeployment]);
+      syncthingEventsConsumerMock.mountVerifyPendingIds.returns([syncFolderId]);
+      syncthingFolderStateMachineMock.verifyFolderMountSafety.resolves({ isSafe: false, isMounted: false, reason: 'unmounted_with_content' });
+      volumeServiceMock.ensureAppVolumeMounted.resolves({ mounted: false, reason: 'volume_file_missing' });
+      syncthingServiceMock.getConfigFolders.resolves({ data: [{ id: syncFolderId, type: 'receiveonly' }] });
+
+      monitorControl = syncthingMonitor.syncthingApps(
+        mockState,
+        mockGetGlobalStateFn,
+      );
+      await clock.tickAsync(100);
+
+      sinon.assert.notCalled(syncthingEventsConsumerMock.resolveMountVerify);
+    });
+
+    it('resolves a mount-verify flag once that folder verifies safe', async () => {
+      // The other half, and the one that proves the assertion above is not
+      // vacuous: the same path DOES clear the flag when the question is answered.
+      deploymentProviderMock.listInstalledDeployments.resolves([syncDeployment]);
+      syncthingEventsConsumerMock.mountVerifyPendingIds.returns([syncFolderId]);
+      syncthingFolderStateMachineMock.verifyFolderMountSafety.resolves({ isSafe: true, isMounted: true });
+      volumeServiceMock.ensureAppVolumeMounted.resolves({ mounted: true, alreadyMounted: true });
+
+      monitorControl = syncthingMonitor.syncthingApps(
+        mockState,
+        mockGetGlobalStateFn,
+      );
+      await clock.tickAsync(100);
+
+      sinon.assert.calledWith(syncthingEventsConsumerMock.resolveMountVerify, syncFolderId);
+    });
+
     it('does not re-patch an unsafe folder that is already receiveonly', async () => {
       deploymentProviderMock.listInstalledDeployments.resolves([syncDeployment]);
       syncthingEventsConsumerMock.mountVerifyPendingIds.returns([syncFolderId]);

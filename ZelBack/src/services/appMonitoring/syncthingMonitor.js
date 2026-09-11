@@ -135,6 +135,12 @@ function appComponents(installedApp) {
  */
 async function checkAppFolderMounts(deployments) {
   const unmountedApps = [];
+  // The verdict is two-sided and both sides are needed: an unsafe mount is a
+  // fault to act on, and a SAFE one is the condition a standing mount-verify
+  // flag exists for, now gone. Returning only the faults meant the caller had
+  // to clear flags by reading them, which loses the retry on a pass that dies
+  // between reading and acting.
+  const verifiedSafeIds = [];
 
   // eslint-disable-next-line no-restricted-syntax
   for (const deployment of deployments) {
@@ -160,6 +166,7 @@ async function checkAppFolderMounts(deployments) {
       const appFolder = `${appsFolder}${appId}`;
       // eslint-disable-next-line no-await-in-loop
       const mountSafety = await verifyAppFolderMountWithRepair(appId, appFolder, deployment.appName);
+      if (mountSafety.isSafe) verifiedSafeIds.push(appId);
       if (!mountSafety.isSafe) {
         // Folder exists but mount is not safe (empty and not mounted - likely unmounted loop device)
         // identifier travels alongside appId: the reconciler is keyed by the bare form
@@ -171,7 +178,7 @@ async function checkAppFolderMounts(deployments) {
     }
   }
 
-  return unmountedApps;
+  return { unmountedApps, verifiedSafeIds };
 }
 
 /**
@@ -524,17 +531,13 @@ async function syncthingAppsCore(state, getGlobalStateFn) {
     // flagged - never as a steady-state sweep of every folder. A vanished mount
     // takes the folder's .stfolder marker with it and raises FolderErrors, so the
     // flagged set catches real mount loss without re-walking healthy folders.
-    // Read, then clear - which is what the old drainErroredFolderIds() did in one
-    // call. It no longer exists: the consumer now splits the two, so that a flag
-    // is cleared by a completed OUTCOME rather than by the act of reading it, and
-    // a pass that dies mid-action leaves the flag standing for the next one.
-    // Taking that property needs the per-folder resolve points that go with it,
-    // which land with the rest of the syncthing pass port (D13). Until then this
-    // keeps the behaviour the surrounding code was written against, rather than
-    // half of it.
+    // Read only. The flag is cleared where the mount question is ANSWERED -
+    // below, on the folders that verified safe - not here by the act of reading
+    // it. The old drainErroredFolderIds() did both in one call, so a pass that
+    // died between the read and the action forgot what it had been asked to
+    // check and never retried it.
     const pendingFolderIds = syncthingEventsConsumer.mountVerifyPendingIds();
     const erroredFolderIds = new Set(pendingFolderIds);
-    pendingFolderIds.forEach((id) => syncthingEventsConsumer.resolveMountVerify(id));
     const deploymentsToVerify = state.syncthingAppsFirstRun
       ? deployments
       : deploymentsMatchingFolderIds(deployments, erroredFolderIds);
@@ -545,9 +548,13 @@ async function syncthingAppsCore(state, getGlobalStateFn) {
 
     // CRITICAL: Check if app folder mounts are ready before processing
     // This prevents syncthing operations when loop devices aren't mounted after reboot
-    const unmountedApps = deploymentsToVerify.length > 0
+    const { unmountedApps, verifiedSafeIds } = deploymentsToVerify.length > 0
       ? await checkAppFolderMounts(deploymentsToVerify)
-      : [];
+      : { unmountedApps: [], verifiedSafeIds: [] };
+    // A safe mount is the condition the flag was raised for, resolved. Anything
+    // else keeps its flag standing for the next pass - including a pass that
+    // dies below this line, which is the whole point of not clearing on read.
+    verifiedSafeIds.forEach((id) => syncthingEventsConsumer.resolveMountVerify(id));
     if (unmountedApps.length > 0) {
       const unmountedList = unmountedApps.map((app) => app.appId).join(', ');
       log.warn(`syncthingAppsCore - Skipping processing: ${unmountedApps.length} app folders not mounted yet: ${unmountedList}`);
