@@ -1,5 +1,10 @@
 // First, and above every other require: the environment this process answers from.
 require('./ZelBack/pinEnvironment');
+// Second, and above everything that reads config: every fluxapps knob this code
+// names must be one config ships. A key that is missing is not a default - it is
+// a value nobody can see and nobody can set - so the node says which one and
+// stops rather than running on numbers that are not written down anywhere.
+require('./ZelBack/configReconciliation').reconcile();
 
 const log = require('./ZelBack/src/lib/log');
 const path = require('path');
