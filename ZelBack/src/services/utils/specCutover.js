@@ -3,15 +3,27 @@
 const { getSpec, getSpecBackend } = require('./specLibs');
 const legacyCryptoProvider = require('../providers/FluxOSLegacyCryptoProvider');
 const cryptoProvider = require('../providers/FluxOSCryptoProvider');
+const ipLocationStore = require('../appPlacement/ipLocationStore');
 const log = require('../../lib/log');
 
 let providersRegistered = false;
 
 async function ensureProvidersRegistered() {
   if (providersRegistered) return;
-  const { EncryptedSpecV8, EncryptedSpecV9 } = await getSpecBackend();
+  const { EncryptedSpecV8, EncryptedSpecV9, registerRegionResolver } = await getSpecBackend();
   EncryptedSpecV8.registerProvider((name, owner) => legacyCryptoProvider.create(name, owner));
   EncryptedSpecV9.registerProvider((name, owner) => cryptoProvider.create(name, owner));
+  // A v1-v8 spec names its regions the way ip-api does; v9 carries the
+  // published table's ISO 3166-2 codes. Only the table connects the two, and it
+  // is ours, not the spec library's - so the library is handed the lookup here,
+  // exactly as it is handed the crypto providers above. Registered in the same
+  // place because the sites that reach deserializeSpec off the backend directly
+  // (appsRepository, appSubmission) bypass this module's wrapper but not this
+  // function, and a resolver wired anywhere narrower would silently miss them.
+  //
+  // Without it a legacy region pin does not widen to its country, it refuses -
+  // so this registration is what keeps 118 region-pinned apps placeable.
+  registerRegionResolver(ipLocationStore.regionCodeForName);
   providersRegistered = true;
 }
 
