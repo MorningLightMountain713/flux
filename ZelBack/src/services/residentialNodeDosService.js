@@ -84,10 +84,9 @@ const SETTLE_MARKER_KEY = 'residentialDos';
 let timerHandle = null;
 let started = false;
 let stopping = false;
+let ourDosActive = false;
 let inconclusiveStreak = 0;
 // Whether the settling window has elapsed and departures may begin.
-const OWNER = nodeDosState.StickyDosOwner.RESIDENTIAL_DOS;
-
 let evacuating = false;
 // What /flux/info reports, and DELIBERATELY not derived from `evacuating`.
 //
@@ -158,11 +157,12 @@ function monotonicMs() {
 }
 
 /**
- * True while this service's own verdict holds the node out of service.
- * @returns {boolean}
+ * True when the current sticky DOS message was set by this service.
+ * Identified by the DOS_MESSAGE_PREFIX we always prepend when we set it.
  */
-function isOurDosHeld() {
-  return nodeDosState.isStickyDosHeldBy(OWNER);
+function isOurStickyDos() {
+  const msg = nodeDosState.getStickyDosMessage();
+  return typeof msg === 'string' && msg.startsWith(DOS_MESSAGE_PREFIX);
 }
 
 /**
@@ -569,22 +569,43 @@ async function persistLastEvacuationAt(now) {
 }
 
 /**
- * Give up the DOS this service is holding. Every other owner's verdict stands.
+/**
+ * Give up the DOS this service is holding. The slot is only cleared when the
+ * message in it is still ours: another owner may have taken it since we wrote,
+ * and clearing that would drop their DOS on the floor.
  * @param {string} reason Logged context for the release.
  */
 function releaseOurDos(reason) {
-  if (!isOurDosHeld()) return;
-  log.info(`residentialNodeDos - clearing sticky DOS (${reason})`);
-  nodeDosState.clearStickyDos(OWNER);
+  if (isOurStickyDos()) {
+    log.info(`residentialNodeDos - clearing sticky DOS (${reason})`);
+    nodeDosState.clearStickyDosMessage();
+    ourDosActive = false;
+    return;
+  }
+  if (ourDosActive) {
+    log.info(`residentialNodeDos - our DOS was replaced by another owner, releasing our claim only (${reason})`);
+    ourDosActive = false;
+  }
 }
 
 /**
  * Put the node fully out of service. Only ever reached once it holds no apps.
  */
 function applyDos() {
-  if (isOurDosHeld()) return;
+  const sticky = nodeDosState.getStickyDosMessage();
+  if (sticky && !isOurStickyDos()) {
+    // Another owner's DOS already has this node out of service for its own
+    // reason, and taking the single slot would leave it unable to recognise or
+    // release its own state.
+    log.info('residentialNodeDos - another sticky DOS is active, not overwriting it');
+    return;
+  }
+  if (isOurStickyDos()) return;
   const message = `${DOS_MESSAGE_PREFIX}. Migrate this node to ArcaneOS or move it to a data center connection.`;
-  nodeDosState.setStickyDos(OWNER, message);
+  nodeDosState.setStickyDosMessage(message);
+  nodeDosState.setStickyDosStateValue(100);
+  ourDosActive = true;
+  log.error(message);
 }
 
 /**
@@ -817,6 +838,9 @@ async function start(deps) {
 function stop() {
   stopping = true;
   started = false;
+  // Cleared with the timer: a later start() must not inherit a claim from the
+  // previous run and skip the read-back that decides whether the slot is ours.
+  ourDosActive = false;
   evacuating = false;
   enforcing = false;
   observedWindowMs = 0;
@@ -827,7 +851,7 @@ function stop() {
 }
 
 function isDosActive() {
-  return isOurDosHeld();
+  return ourDosActive;
 }
 
 module.exports = {
