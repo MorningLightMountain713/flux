@@ -597,9 +597,18 @@ class AppSyncOrchestrator {
     }
 
     const eligible = this.#getEligibleSyncPeers(MIN_UPTIME_SECONDS);
-    if (eligible.length < MIN_SYNC_COMPLETIONS) {
-      log.info(`AppSyncOrchestrator - Only ${eligible.length} eligible sync peers (need ${MIN_SYNC_COMPLETIONS}), falling back to block timer`);
+    if (eligible.length === 0) {
+      log.info('AppSyncOrchestrator - No eligible sync peers yet, waiting for peers to arrive');
       return;
+    }
+
+    // A pool that cannot be filled yet is still worth part-filling. Waiting for
+    // MIN_SYNC_COMPLETIONS candidates before asking ANY of them sent nothing at
+    // all on a small or slowly-arriving fleet, and the answers it declined to
+    // collect are exactly the ones that would have been banked by the time the
+    // rest of the fleet showed up. The shortfall is asked of whoever joins next.
+    if (eligible.length < MIN_SYNC_COMPLETIONS) {
+      log.info(`AppSyncOrchestrator - Only ${eligible.length} eligible sync peers (need ${MIN_SYNC_COMPLETIONS}), asking them and topping up as peers arrive`);
     }
 
     const peersToAsk = eligible.slice(0, MIN_SYNC_COMPLETIONS);
