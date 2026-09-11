@@ -108,8 +108,15 @@ function hasResourceGrowth(spec, prevSpec) {
  * @returns {Promise<boolean>}
  */
 async function checkLegacyFreeUpdate(spec, daemonHeight) {
+  // Every exit from here says why. An operator reading "NOT FREE" with nothing
+  // else in the log cannot tell a rate limit from a spec this rule was never
+  // able to price, and the three silent returns were the ones a caller is most
+  // likely to hit by mistake.
   const instantiated = await appsRepository.getGlobalAppInfo(spec.name);
-  if (!instantiated) return false;
+  if (!instantiated) {
+    log.info(`[checkLegacyFreeUpdate] App: ${spec.name}, RESULT: NOT FREE - no registration to update`);
+    return false;
+  }
 
   const prevSpec = await resolveInstantiatedSpec(instantiated);
 
@@ -117,9 +124,18 @@ async function checkLegacyFreeUpdate(spec, daemonHeight) {
   // another v9 spec (UpdatePolicy.assertVersionTransition), so a legacy spec
   // quoted against one is not an update this rule can price. The new spec is
   // legacy by this function's contract.
-  if (prevSpec.version >= 9) return false;
+  if (prevSpec.version >= 9) {
+    log.info(`[checkLegacyFreeUpdate] App: ${spec.name}, RESULT: NOT FREE - registered at v${prevSpec.version}, which a legacy spec cannot update`);
+    return false;
+  }
 
-  if (!spec.expire || !prevSpec.expire) return false;
+  // Separate from the gate above rather than folded into it: a v9 spec carries
+  // no `expire` at all, so this would refuse the same spec for a second reason
+  // and neither the log nor a test could tell which rule did it.
+  if (!spec.expire || !prevSpec.expire) {
+    log.info(`[checkLegacyFreeUpdate] App: ${spec.name}, RESULT: NOT FREE - no expire on the submitted or the registered spec`);
+    return false;
+  }
 
   // A free update must not buy more subscription. expiresAtHeight carries the
   // PON fork adjustment for a term bought when blocks were four times slower.

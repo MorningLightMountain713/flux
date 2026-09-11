@@ -99,13 +99,18 @@ describe('appSpecHelpers tests', () => {
   describe('checkLegacyFreeUpdate tests', () => {
     let legacyRegime;
     let resolveInstantiatedSpecStub;
+    let logInfo;
 
     beforeEach(() => {
       // The seam that decrypts the held registration. Cleartext resolves to the
       // row's own spec, which is what the real one returns for a cleartext app.
       resolveInstantiatedSpecStub = sinon.stub().callsFake(async (inst) => inst.spec);
+      // The refusals are only distinguishable by what they say, so the log is
+      // part of this function's contract here rather than incidental output.
+      logInfo = sinon.stub();
       legacyRegime = proxyquire('../../ZelBack/src/services/pricing/legacyPricingRegime', {
         '../utils/specCutover': { resolveInstantiatedSpec: resolveInstantiatedSpecStub },
+        '../../lib/log': { info: logInfo, warn: sinon.stub(), error: sinon.stub() },
       });
     });
 
@@ -479,6 +484,33 @@ describe('appSpecHelpers tests', () => {
 
       const result = await legacyRegime.checkLegacyFreeUpdate(spec, daemonHeight);
       expect(result).to.be.false;
+
+      // WHICH rule refused it. A v9 spec carries no `expire`, so the very next
+      // gate would refuse this same spec for a different reason and a bare
+      // `false` cannot tell the two apart — the assertion above passes whether
+      // the version gate exists or not.
+      expect(
+        logInfo.args.some(([line]) => /registered at v9, which a legacy spec cannot update/.test(line)),
+        `the version gate is what refused it; lines seen: ${JSON.stringify(logInfo.args.map(([l]) => l))}`,
+      ).to.be.true;
+    });
+
+    it('says so when it is the missing expire, not the version', async () => {
+      // The companion. Both gates return false, so each has to name itself or
+      // one of them can disappear unnoticed.
+      const daemonHeight = 100000;
+      const spec = await legacySpec({ compose: oneComponent() });
+      const prev = await legacySpec({ compose: oneComponent() });
+      const registration = await registered(prev, daemonHeight + 44000 - spec.expire);
+      // A legacy registration whose stored spec has no expire at all.
+      sinon.stub(registration.spec, 'expire').get(() => 0);
+
+      sinon.stub(appsRepository, 'getGlobalAppInfo').resolves(registration);
+      sinon.stub(appsRepository, 'listAppMessagesByName').resolves([]);
+
+      expect(await legacyRegime.checkLegacyFreeUpdate(spec, daemonHeight)).to.be.false;
+      expect(logInfo.args.some(([line]) => /no expire on the submitted or the registered spec/.test(line)))
+        .to.be.true;
     });
   });
 
