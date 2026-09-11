@@ -924,12 +924,18 @@ describe('fluxCommunication tests', () => {
   });
 
   describe('initiateAndHandleConnection refuses this node itself', () => {
+    let selfRefusalServer;
+
     beforeEach(() => {
       peerManager.reset();
       sinon.stub(fluxNetworkHelper, 'getLocalSocketAddress').returns('44.192.51.11:16127');
     });
 
     afterEach(() => {
+      if (selfRefusalServer) {
+        selfRefusalServer.close();
+        selfRefusalServer = null;
+      }
       sinon.restore();
       peerManager.reset();
     });
@@ -949,12 +955,29 @@ describe('fluxCommunication tests', () => {
       expect(peerManager.isPending('44.192.51.11:16127'), 'left itself marked pending').to.equal(false);
     });
 
+    // The control: without it, "refuses its own address" passes just as well on
+    // a node that refuses EVERY address.
+    //
+    // Against a server this process started, not a public one. It used to dial
+    // 44.192.51.12:16127 - a real address on the internet - and then assert only
+    // that this node had not marked ITSELF, which is true whether the dial
+    // connected, was refused, or never happened. A local server makes the
+    // control say what it means: the other node is actually connected to.
     it('still connects to a different node at the same port', async () => {
       peerManager.reset();
+      sinon.stub(daemonServiceMiscRpcs, 'isDaemonSynced').returns({ data: { synced: false, height: 0 } });
+      // An ephemeral port on 127.0.0.1, because 127.0.0.2 is not bound by
+      // default on macOS. The guard allows any port THIS process is listening
+      // on, which is the whole point of dialling our own server.
+      selfRefusalServer = new WebSocket.Server({ host: '127.0.0.1', port: 0 });
+      await new Promise((resolve) => { selfRefusalServer.on('listening', resolve); });
+      const target = `127.0.0.1:${selfRefusalServer.address().port}`;
 
-      await fluxCommunication.initiateAndHandleConnection('44.192.51.12:16127').catch(() => {});
+      await fluxCommunication.initiateAndHandleConnection(target);
+      await waitFor(() => peerManager.outboundCount === 1);
 
-      expect(peerManager.has('44.192.51.11:16127')).to.equal(false);
+      expect(peerManager.has(target), 'a different node was refused too').to.equal(true);
+      expect(peerManager.has('44.192.51.11:16127'), 'connected to itself after all').to.equal(false);
     });
 
   });
