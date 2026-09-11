@@ -78,13 +78,25 @@ async function fluxUsage(req, res) {
 async function appsResources() {
   log.info('Checking appsResources');
   try {
-    const installed = await appsRepository.listInstalledApps();
-    const deployments = await deploymentProvider.listInstalledDeployments();
+    // One read of the collection, not two: the deployments are built from these
+    // same specs rather than from a second listing that hydrates every row
+    // again. This runs on every admission decision and every spawn cycle.
+    const { specs: installed, unreadable: unhydrated } = await appsRepository
+      .listInstalledAppsAndUnreadable();
+    const deployments = await deploymentProvider.listInstalledDeployments(installed);
     // An app whose deployment could not be built (its components are inside a
     // blob this node cannot read) is absent from `deployments`, not zero-sized:
     // it is named, so the caller can tell unaccountable from unused.
+    //
+    // A row that could not be deserialized at all never reaches `installed`, so
+    // it is absent from both sides of that comparison and the subtraction comes
+    // out clean. It is the same condition — an app this node holds and cannot
+    // size — and it joins the same list.
     const built = new Set(deployments.map((deployment) => deployment.appName));
-    const unreadable = installed.filter((inst) => !built.has(inst.name));
+    const unreadable = [
+      ...installed.filter((inst) => !built.has(inst.name)).map((inst) => inst.name),
+      ...unhydrated,
+    ];
     let appsCpusLocked = 0;
     let appsRamLocked = 0;
     let appsHddLocked = 0;
@@ -110,7 +122,7 @@ async function appsResources() {
       appsCpusLocked,
       appsRamLocked,
       appsHddLocked,
-      unreadable: unreadable.map((app) => app.name),
+      unreadable,
     };
     return messageHelper.createDataMessage(appsUsage);
   } catch (error) {

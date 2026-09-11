@@ -28,7 +28,7 @@ const { departures } = require('./offListDepartures');
 
 // One-row-per-app content-slot manifest register (latest-wins). Not in appConstants
 // because only the content-manifest plane touches it.
-const { appContentManifests } = config.database.appsglobal.collections;
+const { appContentManifests } = config.get('database.appsglobal.collections');
 
 let storageProviderInstance;
 
@@ -65,15 +65,15 @@ async function hydrate(doc) {
 }
 
 function chainDb() {
-  return dbHelper.databaseConnection().db(config.database.daemon.database);
+  return dbHelper.databaseConnection().db(config.get('database.daemon.database'));
 }
 
 function globalDb() {
-  return dbHelper.databaseConnection().db(config.database.appsglobal.database);
+  return dbHelper.databaseConnection().db(config.get('database.appsglobal.database'));
 }
 
 function localDb() {
-  return dbHelper.databaseConnection().db(config.database.appslocal.database);
+  return dbHelper.databaseConnection().db(config.get('database.appslocal.database'));
 }
 
 // ── Spawner Queries ──────────────────────────────────────────────────
@@ -802,11 +802,29 @@ async function existsInstalledApp(name) {
  * capacity gate. Callers needing per-identity views go through the deployment
  * layer, which fans an app's spec out across its identities.
  */
-async function listInstalledApps({ filter = {} } = {}) {
+/**
+ * The installed specs, AND the rows this node could not read.
+ *
+ * A row it cannot deserialize is not an app it does not have: the containers are
+ * running, the volumes are on disk and the ports are bound. Dropping it silently
+ * makes the node's committed totals smaller than its real commitment, and that
+ * total is what new work is admitted against — so the space it believes is free
+ * includes space already spoken for.
+ *
+ * The name is what the caller needs. Resource accounting already distinguishes
+ * an app it cannot size from one that reserves nothing, and the spawner already
+ * refuses new work while any exist; this is the other way a node ends up holding
+ * one, and it reaches the same place.
+ *
+ * @param {{filter?: object}} [options]
+ * @returns {Promise<{specs: Array<object>, unreadable: string[]}>}
+ */
+async function listInstalledAppsAndUnreadable({ filter = {} } = {}) {
   const docs = await dbHelper.findInDatabase(
     localDb(), localAppsInformation, filter, { projection: { _id: 0 } },
   );
   const specs = [];
+  const unreadable = [];
   const seen = new Set();
   for (const doc of docs) {
     const key = String(doc.name).toLowerCase();
@@ -815,7 +833,13 @@ async function listInstalledApps({ filter = {} } = {}) {
     // eslint-disable-next-line no-await-in-loop
     const spec = await hydrate(doc);
     if (spec) specs.push(spec);
+    else unreadable.push(doc.name);
   }
+  return { specs, unreadable };
+}
+
+async function listInstalledApps(options = {}) {
+  const { specs } = await listInstalledAppsAndUnreadable(options);
   return specs;
 }
 
@@ -1540,7 +1564,7 @@ async function resolveAddressMoves(collection, now) {
  */
 async function sweepOffListRows() {
   const dbopen = dbHelper.databaseConnection();
-  const database = dbopen.db(config.database.appsglobal.database);
+  const database = dbopen.db(config.get('database.appsglobal.database'));
   const collection = database.collection(globalAppStateEvents);
   const now = new Date();
   const addresses = await collection.distinct('ip', { type: 'apprunning', expireAt: { $gt: now } });
@@ -1551,7 +1575,7 @@ async function sweepOffListRows() {
 async function appLocationFromEvents(options = {}) {
   const { appname = null, ip = null, host = null } = options;
   const dbopen = dbHelper.databaseConnection();
-  const database = dbopen.db(config.database.appsglobal.database);
+  const database = dbopen.db(config.get('database.appsglobal.database'));
   const collection = database.collection(globalAppStateEvents);
   const now = new Date();
 
@@ -1582,7 +1606,7 @@ async function appLocationFromEvents(options = {}) {
  */
 async function countRunningByApp() {
   const dbopen = dbHelper.databaseConnection();
-  const database = dbopen.db(config.database.appsglobal.database);
+  const database = dbopen.db(config.get('database.appsglobal.database'));
   const collection = database.collection(globalAppStateEvents);
   const now = new Date();
 
@@ -1728,6 +1752,7 @@ module.exports = {
   countInstalledApps,
   existsInstalledApp,
   listInstalledApps,
+  listInstalledAppsAndUnreadable,
   listInstalledAppNames,
   removeInstalledApp,
   insertInstalledApp,

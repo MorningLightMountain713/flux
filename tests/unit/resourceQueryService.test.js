@@ -230,6 +230,46 @@ describe('resourceQueryService tests', () => {
       return installed;
     }
 
+    it('names a row it cannot read instead of forgetting the app', async () => {
+      // A row the deserializer refuses used to be dropped by listInstalledApps
+      // and was then missing from BOTH sides of the deployments comparison, so
+      // the subtraction came out clean and the app was invisible. Its containers
+      // are still running, so the node believed it had headroom that was already
+      // spoken for — and that total is what new work is admitted against.
+      const good = legacyRow({
+        version: 3,
+        name: 'ReadableApp',
+        description: 'readable',
+        owner: OWNER,
+        repotag: 'test/app1:latest',
+        ports: [30001],
+        containerPorts: [8080],
+        domains: [''],
+        enviromentParameters: [],
+        commands: [],
+        containerData: '',
+        cpu: 2,
+        ram: 4000,
+        hdd: 50,
+        instances: 3,
+      });
+      // Written straight to the collection, bypassing the fixture guard: a spec
+      // version nothing registers is exactly what an unreadable row is.
+      const bad = { ...good, name: 'UnreadableApp', version: 99 };
+      await dbHelper.insertManyToDatabase(database, collection, [good, bad]);
+
+      sinon.stub(messageHelper, 'createDataMessage').callsFake((data) => ({ status: 'success', data }));
+
+      const response = await resourceQueryService.appsResources();
+
+      expect(response.data.unreadable, 'the node says which app it cannot account for')
+        .to.include('UnreadableApp');
+      // The companion: the readable app is still counted, so this is not a
+      // listing that gave up on everything.
+      expect(response.data.appsCpusLocked).to.equal(2);
+      expect(resourceQueryService.unaccountedApps(response)).to.include('UnreadableApp');
+    });
+
     it('should calculate resources for version 3 non-tiered apps', async () => {
       const req = {};
       const res = {
