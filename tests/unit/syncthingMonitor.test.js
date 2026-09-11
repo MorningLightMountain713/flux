@@ -345,6 +345,97 @@ describe('syncthingMonitor tests', () => {
       sinon.assert.called(deploymentProviderMock.listInstalledDeployments);
     });
 
+    // This file stubs through proxyquire and has no sinon.restore, so the bus
+    // stub is taken and given back here rather than leaking into the next test.
+    describe('the pass says it ran', () => {
+      // eslint-disable-next-line global-require
+      const fluxEventBus = require('../../ZelBack/src/services/utils/fluxEventBus');
+      let publish;
+
+      beforeEach(() => {
+        publish = sinon.stub(fluxEventBus, 'publish');
+        // The pass returns early unless syncthing answers both config reads -
+        // the guard that stops it acting on a half-loaded config - and it needs
+        // this node's own identity to build a device list at all.
+        syncthingServiceMock.getConfigFolders.resolves({ data: [] });
+        syncthingServiceMock.getConfigDevices.resolves({ data: [] });
+        syncthingServiceMock.getDeviceId.resolves('DEVICE-ID');
+        fluxNetworkHelperMock.getLocalSocketAddress.resolves('10.0.0.1:16127');
+      });
+
+      afterEach(() => {
+        publish.restore();
+      });
+
+      const passes = () => publish.getCalls()
+        .filter((c) => c.args[0] === 'syncthing:passComplete').map((c) => c.args[1]);
+
+      // A pass with nothing to change writes nothing and logs nothing, so "the
+      // pass ran and had nothing to do" and "the pass never ran" are the same
+      // silence. The harness has waited on this event since the replay and
+      // nothing published it - the unused fluxEventBus import in this file was
+      // the only trace it was ever meant to.
+      it('announces that the pass reached the folder write', async () => {
+        deploymentProviderMock.listInstalledDeployments.resolves([]);
+
+        monitorControl = syncthingMonitor.syncthingApps(mockState, mockGetGlobalStateFn);
+        await clock.tickAsync(100);
+
+        expect(passes(), 'exactly one per pass').to.have.lengthOf(1);
+        expect(passes()[0]).to.have.all.keys('wrote', 'heldForBusy');
+      });
+
+      // promotedFolderIds had two readers and NO writer, so it stayed null,
+      // /apps/promotedfolders answered ready:false forever, and every folder
+      // with at least one peer was blocked from promotion fleet-wide.
+      it('publishes which folders this node holds writable', async () => {
+        // eslint-disable-next-line global-require
+        const globalStateModule = require('../../ZelBack/src/services/utils/globalState');
+        globalStateModule.promotedFolderIds = null;
+        deploymentProviderMock.listInstalledDeployments.resolves([]);
+        syncthingServiceMock.getConfigFolders.resolves({
+          data: [
+            { id: 'fluxweb_writable', type: 'sendreceive' },
+            { id: 'fluxweb_readonly', type: 'receiveonly' },
+          ],
+        });
+
+        monitorControl = syncthingMonitor.syncthingApps(mockState, mockGetGlobalStateFn);
+        await clock.tickAsync(100);
+
+        expect(globalStateModule.promotedFolderIds, 'null is "this node has not answered yet"').to.not.equal(null);
+        expect([...globalStateModule.promotedFolderIds]).to.deep.equal(['fluxweb_writable']);
+      });
+
+      // Set only from a validated read, so a failed one leaves the last good
+      // answer standing rather than momentarily claiming this node holds nothing.
+      it('leaves the last good answer standing when syncthing does not answer', async () => {
+        // eslint-disable-next-line global-require
+        const globalStateModule = require('../../ZelBack/src/services/utils/globalState');
+        globalStateModule.promotedFolderIds = new Set(['fluxweb_previous']);
+        syncthingServiceMock.getConfigFolders.resolves(undefined);
+
+        monitorControl = syncthingMonitor.syncthingApps(mockState, mockGetGlobalStateFn);
+        await clock.tickAsync(100);
+
+        expect([...globalStateModule.promotedFolderIds]).to.deep.equal(['fluxweb_previous']);
+      });
+
+      it('names the folders it held back for a busy app, not just the ones it wrote', async () => {
+        // Backup is per-app, so the cycle RUNS and this one app is left alone.
+        // Saying so is the difference between "left alone" and "not reached".
+        deploymentProviderMock.listInstalledDeployments.resolves([syncDeployment]);
+        operationRegistry.acquire('testapp', 'backup', 'test');
+
+        monitorControl = syncthingMonitor.syncthingApps(mockState, mockGetGlobalStateFn);
+        await clock.tickAsync(100);
+
+        expect(passes()).to.have.lengthOf(1);
+        expect(passes()[0].heldForBusy).to.deep.equal([syncFolderId]);
+        expect(passes()[0].wrote, 'a held app contributes nothing to the write').to.not.include(syncFolderId);
+      });
+    });
+
     it('should not run if already running', async () => {
       mockState.updateSyncthingRunning = true;
 

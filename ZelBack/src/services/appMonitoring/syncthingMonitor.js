@@ -612,6 +612,26 @@ async function syncthingAppsCore(state, getGlobalStateFn) {
       return;
     }
 
+    // Publish which folders this node holds WRITABLE, for the peers that ask
+    // before promoting one of their own. Recorded here rather than read on
+    // demand: the answer is a byproduct of a pass the monitor already makes, so
+    // serving it costs nothing, where an endpoint calling syncthing per request
+    // would be an unauthenticated amplifier into it.
+    //
+    // It had no writer at all, so it stayed null, /apps/promotedfolders answered
+    // ready:false forever, and every folder with at least one peer was blocked
+    // from promotion fleet-wide.
+    //
+    // Set only from a VALIDATED response - the guard above - so a failed read
+    // leaves the last good answer standing rather than momentarily claiming this
+    // node holds nothing writable. Published as a COPY: the reconciliation at the
+    // end of the pass mutates the published set as writes land, while this stays
+    // what the scan observed.
+    const sendingFolderIds = new Set(
+      allFoldersResp.data.filter((folder) => folder.type === 'sendreceive').map((folder) => folder.id),
+    );
+    globalState.promotedFolderIds = new Set(sendingFolderIds);
+
     if (!allDevicesResp || !allDevicesResp.data || !Array.isArray(allDevicesResp.data)) {
       if (state.syncthingAppsFirstRun) {
         log.warn('syncthingAppsCore - Syncthing device configuration not ready yet on first run. Waiting for next cycle to avoid data loss.');
@@ -710,6 +730,8 @@ async function syncthingAppsCore(state, getGlobalStateFn) {
     // Process every component of every installed app. componentEntries() and
     // deployComp.identifier are polymorphic over the spec version, so there is
     // no v1-3-vs-v4+ branching here.
+    // Folder ids left untouched this cycle because their app is mid-operation.
+    const heldForBusy = [];
     // eslint-disable-next-line no-restricted-syntax
     for (const deployment of deployments) {
       const { appName } = deployment;
@@ -719,6 +741,12 @@ async function syncthingAppsCore(state, getGlobalStateFn) {
       // on it. Its folders are simply left untouched this cycle.
       if (operationRegistry.isHeld(appName)) {
         log.info(`syncthingAppsCore - operation in progress for ${appName}, syncthing skipped this cycle`);
+        // Recorded so the pass can say what it held back as well as what it
+        // wrote: "nothing was written for this app" and "this app was never
+        // reached" are the same silence otherwise.
+        for (const [, heldComp] of deployment.componentEntries()) {
+          heldForBusy.push(dockerService.getAppIdentifier(heldComp.identifier));
+        }
         // eslint-disable-next-line no-continue
         continue;
       }
@@ -782,8 +810,27 @@ async function syncthingAppsCore(state, getGlobalStateFn) {
     if (devicesConfiguration.length > 0) {
       await syncthingService.adjustConfigDevices('put', devicesConfiguration);
     }
+    // Inert in production - the bus is a no-op unless the harness enables it -
+    // and the only way anything outside can tell a pass that reached the folder
+    // write from one that never ran. A pass with nothing to change writes
+    // nothing and logs nothing, so the two silences are identical without this.
+    fluxEventBus.publish('syncthing:passComplete', {
+      wrote: newFoldersConfiguration.map((folder) => folder.id),
+      heldForBusy,
+    });
+
     if (newFoldersConfiguration.length > 0) {
       await syncthingService.adjustConfigFolders('put', newFoldersConfiguration);
+      // Reconciled in BOTH directions the moment the write lands, not left to
+      // the next pass. The published set is what a peer reads before promoting a
+      // folder of its own, and a promotion applied on the line above is absent
+      // from it until syncthing is read again - so two nodes promoting in one
+      // cycle would each advertise nothing, neither would block the other, and
+      // that is the collision the check exists to catch.
+      for (const folder of newFoldersConfiguration) {
+        if (folder.type === 'sendreceive') globalState.promotedFolderIds.add(folder.id);
+        else globalState.promotedFolderIds.delete(folder.id);
+      }
     }
 
     // Check for folder errors in parallel
