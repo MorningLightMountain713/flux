@@ -209,6 +209,8 @@ describe('appSubmission tests', () => {
       sinon.assert.calledWith(validateContents, { purpose: 'submission' });
       sinon.assert.calledWith(stubs.specLibs.assertVersionActivated, 8, 100);
       // A decrypted spec has no wire form at all; the real class enforces that.
+      // `result.spec` is the wrapper itself here, not an inner spec reached
+      // through it - the wrapper is what resolveSubmission hands back.
       expect(() => result.spec.serialize()).to.throw();
       // the entitlements gate runs for every version now (no version branch); v8
       // carries no gated features, so it is a no-op rather than skipped

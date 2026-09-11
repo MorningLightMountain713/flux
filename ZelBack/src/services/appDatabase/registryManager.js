@@ -570,7 +570,7 @@ async function getApplicationSpecification(appname, opts = {}) {
     // v9 transport layer: seal the canonical cleartext toward the caller's
     // ephemeral pubkey so the owner's frontend gets the full form to re-sign.
     const { buildSpecViewAad, SPEC_VIEW_INFO, canonicalJson } = await getSpec();
-    const viewSpec = decrypted.spec;
+    const viewSpec = decrypted;
     const timestamp = Date.now();
     const aad = buildSpecViewAad({ appName: viewSpec.name, timestamp });
     const provider = await transportCryptoProvider.create(viewSpec.name, viewSpec.owner);
@@ -691,7 +691,7 @@ async function convertApplicationSpecification(appname, opts = {}) {
   if (instantiated.isEncrypted) {
     const backendProvider = await instantiated.spec.createProvider();
     const decrypted = await instantiated.spec.decrypt(backendProvider);
-    legacySpec = decrypted.spec;
+    legacySpec = decrypted;
   }
 
   const { fromLegacy } = await getSpecBackend();
