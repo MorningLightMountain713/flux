@@ -208,9 +208,17 @@ describe('appSubmission tests', () => {
       // separately — the node owns enforcement heights, flux-spec does not.
       sinon.assert.calledWith(validateContents, { purpose: 'submission' });
       sinon.assert.calledWith(stubs.specLibs.assertVersionActivated, 8, 100);
-      // A decrypted spec has no wire form at all; the real class enforces that.
-      // `result.spec` is the wrapper itself here, not an inner spec reached
-      // through it - the wrapper is what resolveSubmission hands back.
+      // A decrypted spec has no wire form. `result.spec` is the WRAPPER -
+      // resolveSubmission returns it as a plain property - not an inner spec
+      // reached through it, so this survives flux-spec dropping its `spec`
+      // accessor and is not a guard on that.
+      //
+      // What refuses is the wrapper not carrying `serialize` at all: flux-spec
+      // withholds it deliberately and its own completeness test fails if it is
+      // ever delegated by accident. So this throws a TypeError, NOT the inner
+      // spec's "no wire form: reencrypt() it for storage" error - measured, not
+      // assumed. Left without a message argument on purpose: the guarantee
+      // asserted is that no wire form is reachable here by any route.
       expect(() => result.spec.serialize()).to.throw();
       // the entitlements gate runs for every version now (no version branch); v8
       // carries no gated features, so it is a no-op rather than skipped
