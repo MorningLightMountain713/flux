@@ -12,6 +12,7 @@ const { Privilege, authOf } = require('../utils/privileges');
 const deploymentProvider = require('../appRuntime/deploymentProvider');
 const globalCommand = require('./globalCommand');
 const mastershipGrantGate = require('../appLifecycle/mastershipGrantGate');
+const { getSpecBackend } = require('../utils/specLibs');
 
 /**
  * Start an application
@@ -564,8 +565,11 @@ async function requestAppRestart(appname) {
 async function stopAllNonFluxRunningApps() {
   try {
     log.info('Running non Flux apps check...');
+    const { LABEL_KEYS } = await getSpecBackend();
     let apps = await dockerService.dockerListContainers(false);
-    apps = apps.filter((app) => !dockerService.isFluxOwnedContainer(app));
+    apps = apps.filter(
+      (app) => !dockerService.isFluxOwnedContainer({ labels: app.Labels, name: app.Names?.[0] }, LABEL_KEYS),
+    );
     if (apps.length > 0) {
       log.info(`Found ${apps.length} apps to be stopped...`);
       // eslint-disable-next-line no-restricted-syntax

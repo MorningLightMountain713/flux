@@ -75,6 +75,15 @@ describe('volumeExecutor tests', () => {
     appsFolder: APPS_FOLDER,
     APP_NAME_REGEX: /^[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?$/,
     APP_NAME_REGEX_LEGACY: /^[a-zA-Z0-9]+$/,
+    // Taken from the real module rather than restated. It is the KEY the
+    // executor's labels are built under, so a stub that omitted it would label
+    // every container `undefined` and fail nowhere, and one that repeated the
+    // literal would keep passing after the real constant changed - which is the
+    // drift the shared constant exists to prevent. The VALUE 'fileop' is
+    // asserted literally below, deliberately: that one is a contract with
+    // containers already running.
+    // eslint-disable-next-line global-require
+    UTILITY_ROLE_LABEL: require('../../ZelBack/src/services/utils/appConstants').UTILITY_ROLE_LABEL,
   };
 
   const mountRow = (target) => ({

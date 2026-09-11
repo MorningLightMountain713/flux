@@ -15,6 +15,7 @@ const { extractIp } = require('./utils/socketAddressUtils');
 const { storageLinkOf } = require('./utils/fluxStorage');
 const { getSpec, getSpecBackend } = require('./utils/specLibs');
 const { obtainPayloadFromStorage } = require('./utils/fluxStorageRefs');
+const { UTILITY_ROLE_LABEL } = require('./utils/appConstants');
 const cpuBurstHelper = require('./utils/cpuBurstHelper');
 const LogFrameDecoder = require('./utils/logFrameDecoder');
 const shutdownPlan = require('./appLifecycle/shutdownPlan');
@@ -987,81 +988,27 @@ async function createContainer(options) {
 }
 
 /**
- * Whether a container summary is one of this node's APPLICATION containers.
- *
- * The `runonflux.role` label is authoritative when present: FluxOS runs
- * containers for its own purposes too, and those must stay invisible to
- * anything that reclaims apps. `forceAppRemovals` derives an app name from a
- * container name by slicing a prefix and splitting on the underscore, so a
- * container that is not shaped `flux<component>_<app>` yields a
- * plausible-looking wrong name which is then handed to removeAppLocally.
- *
- * The name-prefix test remains for containers created before the labels shipped
- * and not recreated since.
- *
- * @param {object} container - a container summary from dockerListContainers
- * @returns {boolean}
- */
-function isAppContainer(container) {
-  const role = container.Labels && container.Labels['runonflux.role'];
-  if (role) return role === 'app';
-
-  const name = (container.Names && container.Names[0]) || '';
-  return name.slice(1, 4) === 'zel' || name.slice(1, 5) === 'flux';
-}
-
-/**
  * Whether a container summary is one FluxOS put there, in ANY role.
  *
- * The broader question than isAppContainer, and the one a sweep that stops
+ * The broader question than isManagedContainer, and the one a sweep that stops
  * foreign containers has to ask. A file-operation container is emphatically not
- * an application, so isAppContainer answers no about it - and a sweep phrased
- * as "stop everything that is not an app" would therefore stop the node's own
- * work mid-copy.
+ * an application, so isManagedContainer answers no about it - and a sweep
+ * phrased as "stop everything that is not an app" would therefore stop the
+ * node's own work mid-copy.
  *
  * A container FluxOS runs for itself is created with no name, because a name it
  * does not need is one more thing that can collide with a tenant's. Docker then
- * assigns a random one, which no prefix test can recognise - so the label is
- * the only thing that can answer this question at all.
+ * assigns a random one, which no prefix test can recognise, and it carries no
+ * identity label either - it has no component to take one from. So the role
+ * label is the only thing that can answer this question about it at all.
  *
- * @param {object} container - a container summary from dockerListContainers
+ * @param {{labels: object|undefined, name: string|undefined}} container
+ * @param {object} labelKeys the label schema
  * @returns {boolean}
  */
-function isFluxOwnedContainer(container) {
-  if (container.Labels && container.Labels['runonflux.role']) return true;
-
-  const name = (container.Names && container.Names[0]) || '';
-  return name.slice(1, 4) === 'zel' || name.slice(1, 5) === 'flux';
-}
-
-/**
- * The identity of a container, stamped as docker labels when it is created.
- *
- * The container NAME already encodes this (`flux<component>_<app>`), but a name
- * is a string every caller has to re-parse, and the parsers have drifted - some
- * slice a fixed prefix width, some split on the underscore, and a container
- * whose name does not fit that shape yields a plausible-looking wrong answer
- * rather than an error. A label is read back verbatim.
- *
- * `role` separates an application container from one FluxOS runs for its own
- * purposes, so a sweep that reclaims orphaned apps can select what it owns
- * instead of inferring it from a name prefix.
- *
- * @param {string} appName
- * @param {string} componentName - the component, or the app name for the
- *   single-component flat form which has no separate component
- * @param {string|null} owner - the app owner's id, when the caller has the
- *   full spec in scope
- * @returns {Object<string, string>}
- */
-function componentIdentityLabels(appName, componentName, owner) {
-  const labels = {
-    'runonflux.app': appName,
-    'runonflux.component': componentName,
-    'runonflux.role': 'app',
-  };
-  if (owner) labels['runonflux.owner'] = owner;
-  return labels;
+function isFluxOwnedContainer({ labels, name }, labelKeys) {
+  if (isManagedContainer({ labels, name }, labelKeys)) return true;
+  return Boolean(labels && labels[UTILITY_ROLE_LABEL]);
 }
 
 /**
@@ -2943,7 +2890,6 @@ module.exports = {
   fluxDockerNetworkExists,
   getAppContainerNames,
   getAppContainerObjects,
-  isAppContainer,
   isFluxOwnedContainer,
   createContainer,
   getAppNameByContainerIp,

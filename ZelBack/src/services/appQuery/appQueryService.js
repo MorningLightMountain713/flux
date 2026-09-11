@@ -222,9 +222,12 @@ function publicContainerView(containers) {
  * @returns {Array<object>} docker container objects
  */
 async function listRunningContainers() {
+  const { LABEL_KEYS: labelKeys } = await getSpecBackend();
   let apps = await dockerService.dockerListContainers(false);
   if (apps.length > 0) {
-    apps = apps.filter((app) => dockerService.isAppContainer(app));
+    apps = apps.filter(
+      (app) => dockerService.isManagedContainer({ labels: app.Labels, name: app.Names?.[0] }, labelKeys),
+    );
   }
 
   // Apps mid backup/restore appear stopped but must still be surfaced as present.
@@ -234,10 +237,9 @@ async function listRunningContainers() {
 
   if (appsInBackupRestore.length > 0) {
     // Get all containers including stopped ones
-    const { LABEL_KEYS } = await getSpecBackend();
     const allContainers = await dockerService.dockerListContainers(true);
     const fluxContainers = allContainers.filter(
-      (app) => dockerService.isManagedContainer({ labels: app.Labels, name: app.Names?.[0] }, LABEL_KEYS),
+      (app) => dockerService.isManagedContainer({ labels: app.Labels, name: app.Names?.[0] }, labelKeys),
     );
 
     // Find stopped containers that are in backup/restore and add them to running list
@@ -248,7 +250,7 @@ async function listRunningContainers() {
       // segment, which is not a name for anything registered since identity
       // minting and so would match nothing.
       const mainAppName = dockerService.containerAppName(
-        { labels: container.Labels, name: container.Names?.[0] }, LABEL_KEYS,
+        { labels: container.Labels, name: container.Names?.[0] }, labelKeys,
       );
 
       // If this app is in backup/restore and not already in running list, add it
@@ -430,9 +432,12 @@ async function promotedFolders(req, res) {
  */
 async function listAllApps() {
   try {
+    const { LABEL_KEYS } = await getSpecBackend();
     let apps = await dockerService.dockerListContainers(true);
     if (apps.length > 0) {
-      apps = apps.filter((app) => dockerService.isAppContainer(app));
+      apps = apps.filter(
+        (app) => dockerService.isManagedContainer({ labels: app.Labels, name: app.Names?.[0] }, LABEL_KEYS),
+      );
     }
     const modifiedApps = [];
     apps.forEach((app) => {

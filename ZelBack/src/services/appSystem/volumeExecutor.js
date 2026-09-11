@@ -16,7 +16,7 @@ const { Writable, pipeline } = require('node:stream');
 const { createWriteStream, createReadStream } = require('node:fs');
 const { AsyncLock } = require('../utils/asyncLock');
 const { measureTree } = require('../utils/treeSize');
-const { appsFolder } = require('../utils/appConstants');
+const { appsFolder, UTILITY_ROLE_LABEL } = require('../utils/appConstants');
 const {
   VolumePath, VolumeSession, WORK_ROOT,
 } = require('./volumeSession');
@@ -36,7 +36,7 @@ const settings = () => config.fluxapps.volumeOperations;
  * container it does not recognise produces a plausible-looking wrong name. The
  * label answers the question directly instead.
  */
-const EXECUTOR_LABELS = { 'runonflux.role': 'fileop' };
+const EXECUTOR_LABELS = { [UTILITY_ROLE_LABEL]: 'fileop' };
 
 // One slot per concurrent operation. Refusing rather than queueing is
 // deliberate: a queued request holds its connection open behind someone else's
@@ -1305,6 +1305,11 @@ function containerOptions(session, argv, image, workingDir = WORK_ROOT, withInpu
     Image: image,
     Cmd: argv,
     WorkingDir: workingDir,
+    // The second label is provenance for a human reading `docker inspect` on a
+    // container docker named at random - nothing reads it. Deliberately NOT the
+    // schema's APP key: stamping that would make containerAppName answer for a
+    // file-operation container, and every consumer keyed on it would treat the
+    // node's own work as one of the app's containers.
     Labels: { ...EXECUTOR_LABELS, 'runonflux.app': session.identifier },
     AttachStdout: true,
     AttachStderr: true,
@@ -2113,7 +2118,7 @@ async function reapOrphanedContainers() {
 
   const orphans = (containers || []).filter(
     (container) => container.Labels
-      && container.Labels['runonflux.role'] === 'fileop'
+      && container.Labels[UTILITY_ROLE_LABEL] === 'fileop'
       && !liveContainerIds.has(container.Id),
   );
 

@@ -24,6 +24,38 @@ const legacyAppVolumesPath = `${fluxDirPath}appvolumes`;
 const contentStorePath = process.env.FLUX_CONTENT_STORE
   || path.join(path.dirname(appsFolderPath), 'flux-content');
 
+/**
+ * The role label on a container FluxOS runs for its OWN purposes, rather than
+ * for a tenant.
+ *
+ * It answers the single question isManagedContainer cannot: a container with no
+ * identity label and no name of ours is either the node's own work or a
+ * stranger's, and a sweep that stops strangers has to tell them apart.
+ *
+ * Deliberately NOT in the spec library's LABEL_KEYS, and deliberately not
+ * namespaced to look as though it were. Every key in that registry is stamped
+ * by identityLabels() on every app container, which is what lets a key's
+ * ABSENCE mean "not one of ours". This one inverts that - present only on
+ * containers that have no IDENTIFIER, absent on every real app - so admitting
+ * it would turn the registry from "the keys describing an app container" into
+ * "the keys used somewhere", and a later reader could no longer tell which kind
+ * it was looking at. Both its ends are in FluxOS (volumeExecutor writes it, the
+ * non-flux sweep reads it), so one constant here gives it the single definition
+ * the cross-repo registry exists to provide. It moves into that registry if
+ * something outside FluxOS ever has to read it, and not before.
+ *
+ * It lives here rather than beside its reader in dockerService because a
+ * consumer that stubs dockerService would otherwise get `undefined` as the
+ * label KEY at module load, which writes a container labelled `undefined` and
+ * fails nowhere.
+ *
+ * The name stays in the pre-unification namespace: the containers carrying it
+ * are short-lived and in flight across an upgrade - a copy started by 8.18.0 is
+ * still running when v9 takes over the sweep, and renaming the key would make
+ * the new sweep stop it.
+ */
+const UTILITY_ROLE_LABEL = 'runonflux.role';
+
 // Database collections - Daemon
 const scannedHeightCollection = config.database.daemon.collections.scannedHeight;
 const appsHashesCollection = config.database.daemon.collections.appsHashes;
@@ -221,6 +253,8 @@ module.exports = {
   INSTALLING_ERRORS_EXPIRY_MS,
   NODE_DOWN_GRACE_MS,
   RESTART_GRACE_MS,
+
+  UTILITY_ROLE_LABEL,
 
   // Hash sync
   HASH_EXPIRY_BLOCKS,
