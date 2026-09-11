@@ -188,6 +188,10 @@ describe('appReconciler tests', () => {
         // The app-level edge gate resolves its TARGET app through this. Null by
         // default — no dependency app is installed unless a test says so.
         getInstalledDeployment: sinon.stub().resolves(null),
+        // componentIdsOf asks this per app. Empty by default: the real one
+        // answers empty for an app whose spec will not resolve, which is the
+        // branch that then falls through to the container listing.
+        getInstalledDeployments: sinon.stub().resolves([]),
       },
       appVolumeService: { ensureMountSourcesExist: sinon.stub().resolves() },
       volumeService: {
@@ -207,6 +211,20 @@ describe('appReconciler tests', () => {
         appDockerRestart: sinon.stub().resolves(),
         appDockerKill: sinon.stub().resolves(),
         appDockerForceRemove: sinon.stub().resolves(),
+        // Mirrors the real helpers rather than returning a constant: componentIdsOf
+        // selects containers by the app LABEL and falls back to the name, and a stub
+        // that answered either way for everything would stop testing the selection.
+        containerAppName: ({ labels, name }, labelKeys) => {
+          const labelled = labels && labels[labelKeys.APP];
+          if (labelled) return labelled;
+          if (!name) return null;
+          let bare = name.startsWith('/') ? name.slice(1) : name;
+          if (bare.startsWith('flux')) bare = bare.slice(4);
+          else if (bare.startsWith('zel')) bare = bare.slice(3);
+          const us = bare.indexOf('_');
+          return us === -1 ? bare : bare.slice(us + 1);
+        },
+        getBaseAppName: (dockerName) => (dockerName.startsWith('flux') ? dockerName.slice(4) : dockerName),
         // Default: a benign, attached container (not detached), so the network-detach
         // heal stays dormant unless a test opts in.
         classifyContainerNetworkAttachment: sinon.stub().returns({
@@ -260,7 +278,6 @@ describe('appReconciler tests', () => {
         clearNetworkHeal: sinon.stub().resolves(),
       },
       appQueryService: {
-        decryptEnterpriseApps: sinon.stub().callsFake(async (arr) => arr),
         installedApps: sinon.stub().resolves({ status: 'success', data: [] }),
       },
       containerHealthMonitor: { recreateMissingContainers: sinon.stub().resolves() },
@@ -2914,6 +2931,89 @@ describe('appReconciler tests', () => {
       } finally {
         clock.restore();
       }
+    });
+  });
+
+  describe('componentIdsOf', () => {
+    // The identity is what container identifiers are NAMED from, and it stops
+    // being the app's name the moment one is minted. Everything here turns on
+    // that: the ids this produces are the keys appsRuntimeState and the
+    // reconciler queue are indexed by, so an id built from the NAME addresses
+    // nothing, and the restart it was asked for is recorded and never happens.
+    const MINTED = 'a1b2c3d4';
+
+    it('takes the identifiers the deployment already carries, not ones built from the app name', async () => {
+      const deployment = await installApp(
+        await v9App('myapp', { web: {}, db: {} }),
+        { identity: MINTED },
+      );
+      stubs.deploymentProvider.getInstalledDeployments.withArgs('myapp').resolves([deployment]);
+
+      const ids = await appReconciler.componentIdsOf([{ name: 'myapp' }]);
+
+      expect(ids).to.deep.equal(Object.values(deployment.components).map((c) => c.identifier));
+      // and they are the identity's, which is the whole point
+      ids.forEach((id) => expect(id).to.contain(MINTED));
+      expect(ids.some((id) => id.endsWith('_myapp'))).to.equal(false);
+    });
+
+    it('one app that will not resolve does not cost the others their components', async () => {
+      const deployment = await installApp(
+        await v9App('good', { web: {} }),
+        { identity: MINTED },
+      );
+      stubs.deploymentProvider.getInstalledDeployments.withArgs('good').resolves([deployment]);
+      stubs.deploymentProvider.getInstalledDeployments.withArgs('sealed').resolves([]);
+      stubs.dockerService.dockerListContainers.resolves([]);
+
+      const ids = await appReconciler.componentIdsOf([{ name: 'sealed' }, { name: 'good' }]);
+
+      expect(ids).to.deep.equal(Object.values(deployment.components).map((c) => c.identifier));
+    });
+
+    it('enumerates an unresolvable app from its containers, selected by label', async () => {
+      stubs.deploymentProvider.getInstalledDeployments.resolves([]);
+      stubs.dockerService.dockerListContainers.resolves([
+        {
+          Names: [`/fluxweb_${MINTED}`],
+          Labels: { 'io.runonflux.app': 'sealed', 'io.runonflux.identifier': `web_${MINTED}` },
+        },
+        {
+          Names: [`/fluxapi_${MINTED}`],
+          Labels: { 'io.runonflux.app': 'sealed', 'io.runonflux.identifier': `api_${MINTED}` },
+        },
+        // someone else's, and it must not be swept in
+        { Names: ['/fluxweb_other'], Labels: { 'io.runonflux.app': 'other', 'io.runonflux.identifier': 'web_other' } },
+      ]);
+
+      const ids = await appReconciler.componentIdsOf([{ name: 'sealed' }]);
+
+      expect(ids).to.deep.equal([`web_${MINTED}`, `api_${MINTED}`]);
+    });
+
+    it('falls back to the container name for one created before the labels shipped', async () => {
+      stubs.deploymentProvider.getInstalledDeployments.resolves([]);
+      stubs.dockerService.dockerListContainers.resolves([
+        { Names: ['/fluxweb_sealed'], Labels: {} },
+      ]);
+
+      expect(await appReconciler.componentIdsOf([{ name: 'sealed' }]))
+        .to.deep.equal(['web_sealed']);
+    });
+
+    it('returns the list short rather than refusing when docker cannot be listed', async () => {
+      const deployment = await installApp(
+        await v9App('good', { web: {} }),
+        { identity: MINTED },
+      );
+      stubs.deploymentProvider.getInstalledDeployments.withArgs('good').resolves([deployment]);
+      stubs.deploymentProvider.getInstalledDeployments.withArgs('sealed').resolves([]);
+      stubs.dockerService.dockerListContainers.rejects(new Error('docker is down'));
+
+      // One app's failure must not cost the resolved apps their sweep.
+      const ids = await appReconciler.componentIdsOf([{ name: 'good' }, { name: 'sealed' }]);
+
+      expect(ids).to.deep.equal(Object.values(deployment.components).map((c) => c.identifier));
     });
   });
 });
