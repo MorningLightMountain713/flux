@@ -18,6 +18,7 @@ const appReconciler = require('../../ZelBack/src/services/appMonitoring/appRecon
 const deploymentProvider = require('../../ZelBack/src/services/appRuntime/deploymentProvider');
 const mastershipGrantGate = require('../../ZelBack/src/services/appLifecycle/mastershipGrantGate');
 const generalService = require('../../ZelBack/src/services/generalService');
+const fluxEventBus = require('../../ZelBack/src/services/utils/fluxEventBus');
 
 const fluxNetworkHelper = require('../../ZelBack/src/services/fluxNetworkHelper');
 const { requireMongo } = require('./dbTestHelper');
@@ -48,6 +49,7 @@ const THIS_NODE = '192.168.1.3:16127';
 const NODE_OUTPOINT_TXID = 'a'.repeat(64);
 
 describe('appController tests', () => {
+  let dockerActualStub;
   before(requireMongo);
 
   before(async function loadLibrary() {
@@ -131,8 +133,42 @@ describe('appController tests', () => {
     return sinon.stub(appsRepository, 'getGlobalAppInfo').resolves(instantiated);
   }
 
+  /**
+   * The handlers drive intent through reconcilerQueue.applyIntent, which holds
+   * the component's slot across the write and enqueues on release. Stubbed with
+   * a fake that RUNS the mutate - the lock assertions are about what the mutate
+   * writes - and records the identifier, so "enqueues the reconciler" keeps
+   * asserting the same thing through the function that now does it.
+   *
+   * Stubbing reconcilerQueue.enqueueComponent no longer sees these: the real
+   * applyIntent calls its own module-local binding, not the exported property.
+   */
+  function stubApplyIntent() {
+    const enqueued = sinon.stub();
+    sinon.stub(reconcilerQueue, 'applyIntent').callsFake(async (id, mutate) => {
+      await mutate();
+      enqueued(id);
+      return true;
+    });
+    return enqueued;
+  }
+
+  /** What the settle probe reads. Running by default; the stop and kill blocks say otherwise. */
+  function containersAre({ running }) {
+    dockerActualStub.resolves({
+      reachable: true, exists: true, running, exitCode: null, health: null,
+    });
+  }
+
   beforeEach(async () => {
     await dbHelper.initiateDB();
+
+    // The four run-state handlers probe what actually happened before they
+    // answer, so this is reached on every one of them. Unstubbed it inspects
+    // real containers.
+    dockerActualStub = sinon.stub(appReconciler, 'dockerActual').resolves({
+      reachable: true, exists: true, running: true, exitCode: null, health: null,
+    });
 
     // Setup common stubs
     // eslint-disable-next-line global-require
@@ -156,7 +192,7 @@ describe('appController tests', () => {
     let enqueueComponent;
     let setOperatorStopped;
     beforeEach(() => {
-      enqueueComponent = sinon.stub(reconcilerQueue, 'enqueueComponent');
+      enqueueComponent = stubApplyIntent();
       setOperatorStopped = sinon.stub(appsRuntimeState, 'setOperatorStopped').resolves();
     });
 
@@ -309,7 +345,7 @@ describe('appController tests', () => {
     let enqueueComponent;
     let setOperatorStopped;
     beforeEach(() => {
-      enqueueComponent = sinon.stub(reconcilerQueue, 'enqueueComponent');
+      enqueueComponent = stubApplyIntent();
       setOperatorStopped = sinon.stub(appsRuntimeState, 'setOperatorStopped').resolves();
     });
 
@@ -381,7 +417,7 @@ describe('appController tests', () => {
     let setOperatorStopped;
     let yieldMastership;
     beforeEach(() => {
-      enqueueComponent = sinon.stub(reconcilerQueue, 'enqueueComponent');
+      enqueueComponent = stubApplyIntent();
       setOperatorStopped = sinon.stub(appsRuntimeState, 'setOperatorStopped').resolves();
       yieldMastership = sinon.stub(mastershipGrantGate, 'yieldMastership').resolves({ held: true });
     });
@@ -458,7 +494,7 @@ describe('appController tests', () => {
     let setOperatorStopped;
     let requestRestart;
     beforeEach(() => {
-      enqueueComponent = sinon.stub(reconcilerQueue, 'enqueueComponent');
+      enqueueComponent = stubApplyIntent();
       setOperatorStopped = sinon.stub(appsRuntimeState, 'setOperatorStopped').resolves();
       requestRestart = sinon.stub(appsRuntimeState, 'requestRestart').resolves();
     });
@@ -615,7 +651,7 @@ describe('appController tests', () => {
     let enqueueComponent;
     let setOperatorStopped;
     beforeEach(() => {
-      enqueueComponent = sinon.stub(reconcilerQueue, 'enqueueComponent');
+      enqueueComponent = stubApplyIntent();
       setOperatorStopped = sinon.stub(appsRuntimeState, 'setOperatorStopped').resolves();
     });
 
@@ -681,6 +717,180 @@ describe('appController tests', () => {
       expect(result.status).to.equal('error');
       expect(result.data.message).to.include('Application not found');
       sinon.assert.notCalled(enqueueComponent);
+    });
+  });
+
+  describe('the order a composed app moves in, and what the operator is told', () => {
+    let setOperatorStopped;
+    let enqueued;
+    let published;
+
+    beforeEach(() => {
+      enqueued = stubApplyIntent();
+      setOperatorStopped = sinon.stub(appsRuntimeState, 'setOperatorStopped').resolves();
+      sinon.stub(appsRuntimeState, 'requestRestart').resolves();
+      sinon.stub(appReconciler, 'clearControllerDesired');
+      published = sinon.stub(fluxEventBus, 'publish');
+      verificationHelperStub.resolves(true);
+    });
+
+    const reqFor = (appname) => ({ params: { appname }, query: {} });
+    const res = () => ({ json: sinon.fake((param) => param) });
+    // Pinned by INDEX, never by calledWith: calledWith holds whichever way round
+    // the components are addressed, so an order assertion written that way stays
+    // green under its own title while the order is wrong.
+    const orderOf = (stub) => stub.getCalls().map((c) => c.args[0]);
+
+    it('takes a composed app down in the reverse of the order it comes up', async () => {
+      registryHolds(await composedApp('ComposedApp', ['Component1', 'Component2']));
+      containersAre({ running: false });
+
+      await appController.appStop(reqFor('ComposedApp'), res());
+
+      // The database stops after the server it serves, not before it.
+      expect(orderOf(enqueued)).to.deep.equal(['Component2_ComposedApp', 'Component1_ComposedApp']);
+      expect(orderOf(setOperatorStopped)).to.deep.equal(['Component2_ComposedApp', 'Component1_ComposedApp']);
+    });
+
+    it('kills in the same reverse order', async () => {
+      registryHolds(await composedApp('ComposedApp', ['Component1', 'Component2']));
+      containersAre({ running: false });
+
+      await appController.appKill(reqFor('ComposedApp'), res());
+
+      expect(orderOf(enqueued)).to.deep.equal(['Component2_ComposedApp', 'Component1_ComposedApp']);
+    });
+
+    // The control. A blanket reverse would satisfy both cases above while
+    // inverting startup, so the forward direction is pinned too.
+    it('brings it back up in compose order', async () => {
+      registryHolds(await composedApp('ComposedApp', ['Component1', 'Component2']));
+
+      await appController.appStart(reqFor('ComposedApp'), res());
+
+      expect(orderOf(enqueued)).to.deep.equal(['Component1_ComposedApp', 'Component2_ComposedApp']);
+    });
+
+    it('restarts in compose order too', async () => {
+      registryHolds(await composedApp('ComposedApp', ['Component1', 'Component2']));
+
+      await appController.appRestart(reqFor('ComposedApp'), res());
+
+      expect(orderOf(enqueued)).to.deep.equal(['Component1_ComposedApp', 'Component2_ComposedApp']);
+    });
+
+    it('does not reorder the caller\'s id array, which it goes on to probe', async () => {
+      registryHolds(await composedApp('ComposedApp', ['Component1', 'Component2']));
+      containersAre({ running: false });
+      const probed = [];
+      dockerActualStub.callsFake(async (id) => {
+        probed.push(id);
+        return { reachable: true, exists: true, running: false };
+      });
+
+      await appController.appStop(reqFor('ComposedApp'), res());
+
+      // Reversed on a copy: the probe still walks the resolved order.
+      expect(probed).to.deep.equal(['Component1_ComposedApp', 'Component2_ComposedApp']);
+    });
+
+    describe('app:operatorIntent', () => {
+      const intentsOf = () => published.getCalls()
+        .filter((c) => c.args[0] === 'app:operatorIntent')
+        .map((c) => c.args[1]);
+
+      it('announces a stop, carrying the force mode and the bare identifier', async () => {
+        registryHolds(await flatApp('TestApp'));
+        containersAre({ running: false });
+
+        await appController.appKill(reqFor('TestApp'), res());
+
+        expect(intentsOf()).to.deep.equal([{
+          // The bare form the reconciler publishes reconciler:actuated under -
+          // an event carrying a different spelling of the same component cannot
+          // be ordered against them, which is the only thing this is for.
+          identifier: 'TestApp', stopped: true, force: true, restartRequested: false,
+        }]);
+      });
+
+      it('announces a start, and a restart as a start that asked for one', async () => {
+        registryHolds(await flatApp('TestApp'));
+
+        await appController.appStart(reqFor('TestApp'), res());
+        await appController.appRestart(reqFor('TestApp'), res());
+
+        expect(intentsOf()).to.deep.equal([
+          { identifier: 'TestApp', stopped: false, force: false, restartRequested: false },
+          { identifier: 'TestApp', stopped: false, force: false, restartRequested: true },
+        ]);
+      });
+
+      it('is published AFTER the write, so it cannot claim an intent that did not persist', async () => {
+        registryHolds(await flatApp('TestApp'));
+        containersAre({ running: false });
+
+        await appController.appStop(reqFor('TestApp'), res());
+
+        sinon.assert.callOrder(setOperatorStopped, published);
+      });
+    });
+
+    describe('accepted, not applied', () => {
+      it('does not report a stop that has not happened', async () => {
+        registryHolds(await flatApp('TestApp'));
+        containersAre({ running: true }); // the reconciler has not got to it
+
+        const response = res();
+        await appController.appStop(reqFor('TestApp'), response);
+
+        expect(response.json.firstCall.args[0].data)
+          .to.contain('will be stopped: the reconciler has not stopped it yet');
+      });
+
+      it('names an election as the reason a start did not run it, not a failure', async () => {
+        registryHolds(await flatApp('TestApp'));
+        containersAre({ running: false });
+        sinon.stub(appReconciler, 'desiredRunState').resolves({ desired: null, reason: 'awaitingController' });
+
+        const response = res();
+        await appController.appStart(reqFor('TestApp'), response);
+
+        expect(response.json.firstCall.args[0].data)
+          .to.contain('will be started: waiting for the election');
+      });
+
+      // This tree's reconciler answers eight reasons development's map never
+      // carried, and each is a settled state that "not yet" misdescribes.
+      it('names this tree\'s own reasons rather than falling back', async () => {
+        registryHolds(await flatApp('TestApp'));
+        containersAre({ running: false });
+        const desired = sinon.stub(appReconciler, 'desiredRunState');
+
+        const cases = {
+          condemned: 'it is being removed from this node',
+          operationHold: 'an operation on this app is holding it',
+          shutdownPipeline: 'this node is going down',
+          boundToDependencyDown: 'the component it is bound to is not running',
+          awaitingAppDependency: 'waiting for an app it depends on',
+        };
+        for (const [reason, phrase] of Object.entries(cases)) {
+          desired.resolves({ desired: false, reason });
+          const response = res();
+          // eslint-disable-next-line no-await-in-loop
+          await appController.appStart(reqFor('TestApp'), response);
+          expect(response.json.firstCall.args[0].data, reason).to.contain(phrase);
+        }
+      });
+
+      it('reports a stop that did happen plainly', async () => {
+        registryHolds(await flatApp('TestApp'));
+        containersAre({ running: false });
+
+        const response = res();
+        await appController.appStop(reqFor('TestApp'), response);
+
+        expect(response.json.firstCall.args[0].data).to.equal('Application TestApp stopped');
+      });
     });
   });
 
