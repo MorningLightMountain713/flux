@@ -1082,6 +1082,32 @@ describe('registryManager tests', () => {
       expect(result.data.code).to.equal(401);
       sinon.assert.notCalled(getInfo);
     });
+
+    // THE OWNER ALONE. This hands back the stored spec whole - a decrypted
+    // enterprise spec, environmentParameters and repoauth included - so the
+    // question it asks has to be APP_OWNER and not the wider privilege that
+    // admits the flux team. It was written as two checks, the second of them
+    // `appownerabove`, and was closed only because both threw on the old
+    // calling convention; converting those strings without reading what the
+    // endpoint returns would have opened a customer's secrets to the team.
+    it('asks for the owner alone, not a privilege that admits the flux team', async () => {
+      sinon.stub(daemonServiceMiscRpcs, 'isDaemonSynced').returns({ data: { synced: true, height: 1000 } });
+      const verify = sinon.stub(verificationHelper, 'verifyPrivilege').resolves(false);
+      const res = { json: sinon.fake((param) => param) };
+
+      await registryManager.appConvertApi(
+        { params: { appname: 'component_convertme' }, query: {}, headers: { zelidauth: 'auth' } },
+        res,
+      );
+
+      sinon.assert.calledOnce(verify);
+      const [privilege, auth, options] = verify.firstCall.args;
+      expect(privilege, 'a wider privilege would admit the flux team to a decrypted spec')
+        .to.equal(Privilege.APP_OWNER);
+      expect(auth, 'the header value, not the request it arrived in').to.equal('auth');
+      expect(options, 'app-scoped, and scoped to the main app rather than the component')
+        .to.deep.equal({ appName: 'convertme' });
+    });
   });
 
   // The row seeded here is a real STORED spec, not a hand-assembled document:

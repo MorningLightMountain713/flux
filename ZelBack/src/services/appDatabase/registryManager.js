@@ -771,15 +771,20 @@ async function appConvertApi(req, res) {
       throw new Error('No Application Name specified');
     }
 
-    // Conversion can expose secrets (a decrypted enterprise spec or inlined
-    // storage-ref values), so gate it to the app owner / flux team, mirroring
-    // the encrypted spec-view endpoint.
+    // The owner alone, as for the decrypt path in getApplicationSpecificationAPI.
+    // This upgrades the stored spec and hands it back whole - a decrypted
+    // enterprise spec, environmentParameters and repoauth included, or inlined
+    // storage-ref values - which is the spec its owner is about to re-sign, and
+    // nobody else's business. The flux team decrypts out of band instead, which
+    // keeps a decryption a deliberate act by a named person rather than a side
+    // effect of opening a page.
     const mainAppName = appname.split('_')[1] || appname;
-    const ownerAuthorized = await verificationHelper.verifyPrivilege('appowner', req, mainAppName);
-    const fluxTeamAuthorized = ownerAuthorized === true
-      ? false
-      : await verificationHelper.verifyPrivilege('appownerabove', req, mainAppName);
-    if (ownerAuthorized !== true && fluxTeamAuthorized !== true) {
+    const authorized = await verificationHelper.verifyPrivilege(
+      Privilege.APP_OWNER,
+      authOf(req),
+      { appName: mainAppName },
+    );
+    if (authorized !== true) {
       res.json(messageHelper.errUnauthorizedMessage());
       return null;
     }
