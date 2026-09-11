@@ -2015,61 +2015,82 @@ async function reconcile(identifier) {
 /**
  * The component identifiers of a set of installed apps.
  *
- * Enterprise specs are stored encrypted (compose: []) and the component names
- * live INSIDE the blob, so the set is decrypted first - leniently: one app
- * failing to decrypt must not cost the rest their components. An app that stays
- * encrypted is enumerated from the containers docker is already holding for it,
- * matched on the `_<appname>` suffix, so it is never silently skipped. That
+ * Asked of the deployment view, one app at a time, because that is what decides
+ * every container name on this node: an identifier's second segment is the app's
+ * IDENTITY, not its name, and the two stop being equal the moment an identity is
+ * minted. Building `<component>_<appname>` from the row instead produced ids that
+ * matched no container for exactly those apps, so the restart they were asked for
+ * was recorded against a key nothing reads and silently never happened. The
+ * deployment carries the identifier already built, so there is nothing here to
+ * spell.
+ *
+ * Lenient, per app: getInstalledDeployments logs and answers empty for one whose
+ * spec cannot be resolved, which must not cost the rest their components.
+ *
+ * An app that cannot be resolved is enumerated from the containers docker is
+ * already holding for it - selected by the app LABEL rather than by a suffix on
+ * the name, for the same reason as above: the name carries the identity, so a
+ * suffix test against the app's name matches nothing for a minted one. That
  * source can only see components that EXIST, which is the most that can be known
  * about such an app anyway: a vanished component of one cannot be recreated
  * either, because recreating it needs the spec.
  *
- * The listing is taken once for the whole set, and only if something failed to
- * decrypt.
+ * The listing is taken once for the whole set, and only if something failed.
  *
  * @param {Array<object>} installed Records from appQueryService.installedApps().
- * @returns {Promise<string[]>} Bare component identifiers (`<component>_<app>`,
- *   or `<app>` for v1-3) across every app given - one spelling whichever source
- *   they came from.
+ * @returns {Promise<string[]>} Bare component identifiers across every app given
+ *   - one spelling whichever source they came from, and the same one the
+ *   reconciler queue and appsRuntimeState are keyed on.
  */
 async function componentIdsOf(installed) {
-  const { readable, unreadable } = await appQueryService.decryptEnterpriseApps(installed, { formatSpecs: false });
   const ids = [];
+  const unresolved = [];
 
-  readable.forEach((app) => {
-    if (app.version >= 4 && Array.isArray(app.compose)) {
-      app.compose.forEach((c) => ids.push(`${c.name}_${app.name}`));
-    } else {
-      ids.push(app.name);
+  // eslint-disable-next-line no-restricted-syntax
+  for (const app of installed) {
+    // eslint-disable-next-line no-await-in-loop
+    const deployments = await deploymentProvider.getInstalledDeployments(app.name);
+    if (!deployments.length) {
+      unresolved.push(app);
+      // eslint-disable-next-line no-continue
+      continue;
     }
-  });
+    deployments.forEach((deployment) => {
+      // Keyed by component name, not an array.
+      Object.values(deployment.components).forEach((component) => ids.push(component.identifier));
+    });
+  }
 
-  if (!unreadable.length) return ids;
+  if (!unresolved.length) return ids;
 
-  let dockerNames;
+  let containers;
   try {
-    const containers = await dockerService.dockerListContainers(true);
-    dockerNames = containers.map((c) => (c.Names && c.Names[0] ? c.Names[0].slice(1) : ''));
+    containers = await dockerService.dockerListContainers(true);
   } catch (err) {
     // The list is returned short rather than refused, so one app's failure
-    // cannot cost the readable apps their sweep. Named at error level because a
+    // cannot cost the resolved apps their sweep. Named at error level because a
     // short list is indistinguishable from a complete one at every call site:
     // the app is simply absent from what the caller acts on.
-    log.error(`appReconciler - cannot list containers, dropping undecryptable apps [${unreadable.map((app) => app.name).join(', ')}]: ${err.message}`);
+    log.error(`appReconciler - cannot list containers, dropping unresolvable apps [${unresolved.map((app) => app.name).join(', ')}]: ${err.message}`);
     return ids;
   }
-  unreadable.forEach((app) => {
-    const suffix = `_${app.name}`;
-    // Docker holds the namespaced name (`flux<component>_<app>`); the readable
-    // branch above produces the bare one. One list carries one spelling, so a
-    // consumer that compares it against a component name an operator typed
-    // matches it, rather than refusing every component of an app whose spec
-    // will not decrypt. The consumers that canonicalise on ingest cannot tell
-    // the two apart, which is why they coexisted unnoticed.
-    // A docker NAME converted at this boundary, which is where the conversion
-    // belongs: this producer knows it holds one, and the queue it feeds cannot.
-    dockerNames.filter((name) => name.endsWith(suffix))
-      .forEach((name) => ids.push(dockerService.getBaseAppName(name)));
+
+  const { LABEL_KEYS, readLabel } = await specLibs.getSpecBackend();
+  const wanted = new Set(unresolved.map((app) => app.name));
+  containers.forEach((container) => {
+    const row = { labels: container.Labels, name: container.Names && container.Names[0] };
+    if (!wanted.has(dockerService.containerAppName(row, LABEL_KEYS))) return;
+    // The identifier label IS the bare form this returns - the exact join key
+    // against a DeploymentSpec. A container created before the labels shipped
+    // carries none, and its name is the only source left; getBaseAppName is the
+    // conversion, made at this boundary because this producer knows it holds a
+    // docker name and the queue it feeds cannot.
+    const labelled = readLabel(container.Labels, LABEL_KEYS.IDENTIFIER);
+    if (labelled) {
+      ids.push(labelled);
+      return;
+    }
+    if (row.name) ids.push(dockerService.getBaseAppName(row.name.replace(/^\//, '')));
   });
   return ids;
 }

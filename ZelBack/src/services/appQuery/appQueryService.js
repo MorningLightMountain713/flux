@@ -8,11 +8,6 @@ const dockerService = require('../dockerService');
 const registryManager = require('../appDatabase/registryManager');
 const appsRuntimeState = require('../appManagement/appsRuntimeState');
 const appsRepository = require('../appDatabase/appsRepository');
-// decryptEnterpriseApps survives this migration: the reconciler depends on it
-// (throwOnError) until the decrypt path is re-routed through the domain provider
-const { checkAndDecryptAppSpecs } = require('../utils/enterpriseHelper');
-const { specificationFormatter } = require('../utils/appSpecHelpers');
-const fluxCaching = require('../utils/cacheManager');
 const serviceHelper = require('../serviceHelper');
 const verificationHelper = require('../verificationHelper');
 const { Privilege, authOf } = require('../utils/privileges');
@@ -24,124 +19,6 @@ const log = require('../../lib/log');
 
 // Database collections
 const globalAppsMessages = config.database.appsglobal.collections.appsMessages;
-
-// Decryption is delegated to fluxbenchd, and many callers can ask about the
-// same spec at once (every component's reconcile retry, sweeps, listings). To
-// keep that from hammering benchd while it is down or hung: one in-flight
-// attempt per spec is shared by concurrent callers, and a failure is
-// remembered for a short window during which callers are answered from it
-// (lenient callers get the spec back encrypted, strict callers get the
-// rethrow) without another benchd call. Failures are deliberately NOT cached
-// longer - a long-lived failure cache would delay recovery; successes live in
-// the 7-day enterpriseAppDecryptionCache.
-const DECRYPT_FAILURE_WINDOW_MS = 60 * 1000;
-const decryptFailures = new Map(); // spec hash -> { error, at }
-const decryptInFlight = new Map(); // spec hash -> Promise<decrypted spec>
-
-/**
- * Resolves the decrypted spec for one enterprise app via cache, the failure
- * window, or a (shared) fluxbenchd attempt. Throws the decrypt error on
- * failure - the caller decides lenient vs strict handling.
- * @param {object} spec - Enterprise app specification (encrypted)
- * @returns {Promise<object>} Decrypted specification (unformatted)
- */
-async function decryptEnterpriseSpec(spec) {
-  const cacheKey = spec.hash;
-  const cache = fluxCaching.default.enterpriseAppDecryptionCache;
-
-  const cached = cache.get(cacheKey);
-  if (cached) {
-    log.info(`Using cached decrypted app for ${spec.name} (${cacheKey})`);
-    return cached;
-  }
-
-  const failure = decryptFailures.get(cacheKey);
-  if (failure && Date.now() - failure.at < DECRYPT_FAILURE_WINDOW_MS) {
-    throw failure.error;
-  }
-
-  let inFlight = decryptInFlight.get(cacheKey);
-  if (!inFlight) {
-    inFlight = (async () => {
-      try {
-        const decrypted = await checkAndDecryptAppSpecs(spec);
-        // Store unformatted in cache with 7-day TTL (configured in cacheManager)
-        cache.set(cacheKey, decrypted);
-        decryptFailures.delete(cacheKey);
-        log.info(`Cached decrypted app for ${spec.name} (${cacheKey})`);
-        return decrypted;
-      } catch (error) {
-        decryptFailures.set(cacheKey, { error, at: Date.now() });
-        throw error;
-      } finally {
-        decryptInFlight.delete(cacheKey);
-      }
-    })();
-    decryptInFlight.set(cacheKey, inFlight);
-  }
-  return inFlight;
-}
-
-/**
- * Decrypt enterprise apps, reporting the ones that could not be read.
- *
- * An enterprise spec carries its components inside the encrypted blob, so a
- * failed decrypt leaves a spec with no components - which is not a valid app
- * and must never be handed out as though it were. Every caller that enumerates
- * components would act on it as "this app has none": the sweep would delete its
- * folders, the blocked-image scan would find no images to block, the update
- * check would find nothing to update. All silent.
- *
- * So the result offers two views of one decryption, and the caller says at the
- * point of use which it needs:
- *
- *   readable   only the specs whose components can be read. What a caller that
- *              ACTS on components takes - it cannot be handed an invalid spec.
- *   unreadable the specs that did not decrypt, to report or defer.
- *   inPlace    every spec in the order asked about, unreadable ones left as
- *              they arrived. What a caller that only DISPLAYS or counts takes -
- *              an app missing from that list would read as uninstalled.
- *
- * One name with named views rather than two near-identical exports: picking the
- * wrong one of those is silent, and a caller that reaches for the whole result
- * where an array is meant fails loudly on the first array method instead.
- * @param {Array} apps - Array of app specifications
- * @param {Object} options - Options for decryption
- * @param {boolean} options.formatSpecs - Whether to format specs (strips metadata like hash, height). Default: true
- * @returns {Promise<{readable: Array, unreadable: Array, inPlace: Array}>}
- */
-async function decryptEnterpriseApps(apps, options = {}) {
-  const { formatSpecs = true } = options;
-  const readable = [];
-  const unreadable = [];
-  const inPlace = [];
-
-  // eslint-disable-next-line no-restricted-syntax
-  for (const spec of apps) {
-    const isEnterprise = Boolean(
-      spec.version >= 8 && spec.enterprise,
-    );
-    if (isEnterprise) {
-      try {
-        // eslint-disable-next-line no-await-in-loop
-        const decrypted = await decryptEnterpriseSpec(spec);
-
-        // Apply formatting if requested
-        const result = formatSpecs ? specificationFormatter(decrypted) : decrypted;
-        readable.push(result);
-        inPlace.push(result);
-      } catch (error) {
-        log.error(`Failed to decrypt enterprise app ${spec.name}: ${error.message}`);
-        unreadable.push(spec);
-        inPlace.push(spec);
-      }
-    } else {
-      readable.push(spec);
-      inPlace.push(spec);
-    }
-  }
-  return { readable, unreadable, inPlace };
-}
 
 /**
  * To list installed apps. Returns apps from local database.
@@ -716,7 +593,6 @@ async function promotedFolderHoldings(req, res) {
 }
 
 module.exports = {
-  decryptEnterpriseApps,
   publicContainerView,
   installedApps,
   listRunningContainers,

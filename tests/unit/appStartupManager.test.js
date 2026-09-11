@@ -82,7 +82,6 @@ describe('appStartupManager tests', () => {
 
     appQueryServiceStub = {
       installedApps: sinon.stub().resolves({ status: 'success', data: [] }),
-      decryptEnterpriseApps: sinon.stub().callsFake(async (apps) => ({ readable: apps, unreadable: [], inPlace: apps })),
     };
 
     appUtilities = proxyquire('../../ZelBack/src/services/utils/appUtilities', {
