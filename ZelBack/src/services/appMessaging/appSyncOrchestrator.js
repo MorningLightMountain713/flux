@@ -121,6 +121,9 @@ class AppSyncOrchestrator {
   #stateSyncComplete = false;
   #syncRoundAbandoned = false;
   #syncPeerLostHandler = null;
+  #ephemeralRefusedHandler = null;
+  #ephemeralUnverifiedHandler = null;
+  #ephemeralProgressHandler = null;
   #syncPeersAvailableHandler = null;
   #peerReestablishedHandler = null;
   // Peers with a scoped reconnect pull in flight, each with the loss its pull
@@ -233,6 +236,19 @@ class AppSyncOrchestrator {
     this.#ephemeralSyncHandler = (syncType, peerKey) => this.#onEphemeralSyncComplete(syncType, peerKey);
     appSyncEvents.on(EVENTS.EPHEMERAL_SYNC_COMPLETE, this.#ephemeralSyncHandler);
 
+    // The other three answers a peer can give. fluxCommunication has always
+    // emitted them - a refusal, an unverifiable response, and any sign of life
+    // mid-answer - and nothing listened, so the round waited out the full
+    // deadline on a peer that had already said no.
+    this.#ephemeralRefusedHandler = (syncType, peerKey) => this.#onEphemeralSyncRefused(syncType, peerKey);
+    appSyncEvents.on(EVENTS.EPHEMERAL_SYNC_REFUSED, this.#ephemeralRefusedHandler);
+
+    this.#ephemeralUnverifiedHandler = (peerKey) => this.#onEphemeralSyncUnverified(peerKey);
+    appSyncEvents.on(EVENTS.EPHEMERAL_SYNC_UNVERIFIED, this.#ephemeralUnverifiedHandler);
+
+    this.#ephemeralProgressHandler = (peerKey) => this.#onEphemeralSyncProgress(peerKey);
+    appSyncEvents.on(EVENTS.EPHEMERAL_SYNC_PROGRESS, this.#ephemeralProgressHandler);
+
     this.#hashUnresolvedHandler = () => this.#onHashUnresolved();
     appSyncEvents.on(EVENTS.HASH_UNRESOLVED, this.#hashUnresolvedHandler);
 
@@ -259,7 +275,87 @@ class AppSyncOrchestrator {
     this.#onPeersReady();
   }
 
-  #onEphemeralSyncComplete(syncType, peerKey) {
+/**
+   * End one peer's request without counting it, and get another peer asked.
+   *
+   * @param {string} peerKey ip:port
+   * @param {string} outcome for the log
+   * @returns {boolean} whether this call was the one that ended it
+   */
+  #endRequest(peerKey, outcome) {
+    const progress = this.#peerProgress.get(peerKey);
+    if (!progress || progress.failed) return false;
+    progress.failed = true;
+    this.#completeSyncRequest(progress.connectionId);
+    log.info(`AppSyncOrchestrator - ${peerKey} ${outcome}, asking another peer`);
+    // The deficit decides. A pool that is already whole asks nobody, so this is
+    // unconditional rather than guarded - a guard here would only be a second
+    // way of saying the same thing, and one no test could tell from its absence.
+    this.#topUpSyncPeers();
+    return true;
+  }
+
+  /**
+   * A peer answered by DECLINING, which is not a completion.
+   *
+   * A node whose own app state is not authoritative yet says so rather than
+   * sending a fraction of the network's view. Its request ends here, so it
+   * stops being a candidate and the pool shows a deficit the next pass fills
+   * from a peer that may actually know something.
+   *
+   * A peer refuses all four streams when it refuses any, and only the first of
+   * those closes the request - so the log says once what happened once.
+   *
+   * @param {string} syncType apptemp | apprunning | appinstalling | apperrors
+   * @param {string} peerKey ip:port of the peer that declined
+   */
+  #onEphemeralSyncRefused(syncType, peerKey) {
+    if (this.#stateSyncComplete) return;
+    if (!peerKey) {
+      log.error(`AppSyncOrchestrator - ${syncType} sync declined with no peer, cannot replace it`);
+      return;
+    }
+    this.#endRequest(peerKey, `declined the ${syncType} sync`);
+  }
+
+  /**
+   * A peer sent something this node cannot attribute to it.
+   *
+   * Its request ends here rather than on a deadline, because the answer is
+   * already known: a stream with a hole in it is not a survey, and waiting the
+   * peer out would spend one of very few slots on an answer that cannot be
+   * counted whatever else arrives.
+   *
+   * @param {string} peerKey ip:port of the peer whose response failed
+   */
+  #onEphemeralSyncUnverified(peerKey) {
+    if (this.#stateSyncComplete) return;
+    if (!peerKey) {
+      log.error('AppSyncOrchestrator - An unverifiable sync response named no peer, cannot replace it');
+      return;
+    }
+    if (this.#endRequest(peerKey, 'sent a response this node could not verify')) {
+      fluxEventBus.publish('ephemeralSync:peerUnverified', { peer: peerKey });
+    }
+  }
+
+  /**
+   * Anything arriving from a peer proves it is working, so its clock restarts.
+   *
+   * A peer part-way through a large answer is doing exactly what was asked and
+   * may legitimately pause between batches. Which stream it arrived on does not
+   * matter - the question this answers is whether the peer is still there, and
+   * any of its responses says so.
+   *
+   * @param {string} peerKey ip:port
+   */
+  #onEphemeralSyncProgress(peerKey) {
+    const progress = this.#peerProgress.get(peerKey);
+    if (!progress || progress.failed) return;
+    progress.askedAt = Date.now();
+  }
+
+    #onEphemeralSyncComplete(syncType, peerKey) {
     // A scoped reconnect pull completing is the pull's own business - it
     // answered from a since bound, not the round's since=0. It is announced:
     // a node back from unreachability runs its placement check on it.
@@ -282,6 +378,7 @@ class AppSyncOrchestrator {
       && this.#syncCompletions.appinstalling >= MIN_SYNC_COMPLETIONS
       && this.#syncCompletions.apperrors >= MIN_SYNC_COMPLETIONS) {
       this.#stateSyncComplete = true;
+      this.#publishStateSyncAuthority();
       this.#clearSyncRequested();
       this.#peerProgress.clear();
       log.info('AppSyncOrchestrator - All state syncs complete');
@@ -608,6 +705,7 @@ class AppSyncOrchestrator {
     };
     this.#manifestSyncComplete = false;
     this.#stateSyncComplete = false;
+    this.#publishStateSyncAuthority();
     this.#syncRoundAbandoned = false;
     this.#hashSyncAttempts = 0;
     if (this.#hashSyncRetryTimer) {
@@ -861,7 +959,26 @@ class AppSyncOrchestrator {
     return this.#blocksSinceSyncStarted >= this.#blockThreshold;
   }
 
-  #isStateSyncReady() {
+/**
+   * Mirror the state-sync verdict where the SYNC RESPONDER can read it.
+   *
+   * Called wherever an input to #isStateSyncReady moves, so the value never
+   * disagrees with the rule. A peer asking this node for app state gets a
+   * refusal while it is false, because an empty answer from a node that does
+   * not yet know is indistinguishable from an empty answer from a node that
+   * does - and the asker counts both as a completed survey.
+   *
+   * globalState.appStateAuthoritative had two readers in
+   * fluxCommunicationMessagesSender and NO writer, so it sat at its initial
+   * false for the life of the process and every node refused every ephemeral
+   * state-sync request it was ever asked.
+   * @returns {void}
+   */
+  #publishStateSyncAuthority() {
+    globalState.appStateAuthoritative = this.#isStateSyncReady();
+  }
+
+    #isStateSyncReady() {
     if (this.#stateSyncComplete) return true;
     return this.#isBlockTimerExpired();
   }
@@ -941,6 +1058,9 @@ class AppSyncOrchestrator {
     if (this.#state !== STATES.SYNCING && this.#state !== STATES.RESYNCING) return;
 
     const blockTimerExpired = this.#isBlockTimerExpired();
+    // The timer is the other input to the rule: once it has expired this node
+    // answers from what it has rather than refusing forever.
+    this.#publishStateSyncAuthority();
     if (!this.#hashSyncComplete && !blockTimerExpired) return;
     if (!this.#dbRebuilt && !blockTimerExpired) return;
     // The permanent manifest register must converge before the spawner starts a slot app
@@ -1146,12 +1266,19 @@ class AppSyncOrchestrator {
 
   async stop() {
     this.#started = false;
+    // A stopped orchestrator is not authoritative about anything. Left true, a
+    // node mid-shutdown goes on answering surveys from a view it is no longer
+    // maintaining.
+    globalState.appStateAuthoritative = false;
     if (this.#heartbeatInterval) {
       clearInterval(this.#heartbeatInterval);
       this.#heartbeatInterval = null;
     }
     if (this.#ephemeralSyncHandler) {
       appSyncEvents.removeListener(EVENTS.EPHEMERAL_SYNC_COMPLETE, this.#ephemeralSyncHandler);
+      appSyncEvents.removeListener(EVENTS.EPHEMERAL_SYNC_REFUSED, this.#ephemeralRefusedHandler);
+      appSyncEvents.removeListener(EVENTS.EPHEMERAL_SYNC_UNVERIFIED, this.#ephemeralUnverifiedHandler);
+      appSyncEvents.removeListener(EVENTS.EPHEMERAL_SYNC_PROGRESS, this.#ephemeralProgressHandler);
     }
     if (this.#hashUnresolvedHandler) {
       appSyncEvents.removeListener(EVENTS.HASH_UNRESOLVED, this.#hashUnresolvedHandler);
