@@ -510,6 +510,9 @@ async function appLogsHandler(socket) {
         return;
       }
 
+      // getDockerContainer answers null for an absent container; the catch is for
+      // the other failure - an unreachable daemon - which reaches the client as the
+      // same "not found". Log the cause so the two are distinguishable.
       const container = await dockerService.getDockerContainer(nameOrId).catch((error) => {
         log.error(`appLogsHandler: container lookup failed for ${nameOrId}: ${error.message}`);
         return null;
