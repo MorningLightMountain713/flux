@@ -107,7 +107,21 @@ async function listComponentVolumeMounts(appName, componentName) {
   // folder differs between node layouts (Arcane sets FLUX_APPS_FOLDER, a legacy
   // node does not), and a volume is this component's because of what it is
   // called, not because of where the layout happens to put it.
-  const byName = new Map(filesystems.map((entry) => [path.basename(entry.target), entry]));
+  //
+  // Never last-wins. Building the Map straight from the list would let two rows
+  // sharing a directory name silently resolve to whichever came second, and
+  // every caller here addresses real data - reading from the wrong one is
+  // confusing, writing into it overwrites what is live. One name meaning two
+  // filesystems breaks the assumption the lookup rests on, so it is an error.
+  const byName = new Map();
+  for (const entry of filesystems) {
+    const name = path.basename(entry.target);
+    const seen = byName.get(name);
+    if (seen) {
+      throw new Error(`${name} is mounted at both ${seen.target} and ${entry.target}; refusing to guess which is ${appName}'s`);
+    }
+    byName.set(name, entry);
+  }
 
   return replicas.flatMap((replica) => {
     // Two shapes are possible and only one exists on disk. A v4+ component is

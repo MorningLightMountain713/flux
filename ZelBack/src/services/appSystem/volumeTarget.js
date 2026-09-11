@@ -46,34 +46,62 @@ async function resolveVolumeTarget(req, { requireComponent = true } = {}) {
 
   // The v1-3 flat form has no component: its identifier is the bare app name.
   const volumes = await volumeService.listComponentVolumeMounts(appname, component || appname);
+  const volume = selectVolumeByReplica(volumes, replica, appname);
 
+  return {
+    appname,
+    component,
+    // What the caller named when it named one, and what resolved when it did
+    // not - the two are the same value for every app that is not co-located.
+    replica: replica !== null ? replica : volume.replica,
+    mount: volume.mount,
+    volume,
+  };
+}
+
+/**
+ * Which of an identity's mounted volumes the caller named.
+ *
+ * The identity rule, in one place, because the volume session resolves the same
+ * question for the eight write endpoints and a second copy would be a second
+ * chance to answer it differently. Pure: the caller does the lookup and this
+ * decides, so it is the same decision whichever list it is handed.
+ *
+ * Ambiguity is an error, not a guess. With no `replica` given, one volume
+ * resolves it and several do not: a co-located app must be addressed by
+ * replica, and saying so beats picking - reading files from an arbitrary
+ * replica is confusing, and writing into one overwrites live data. Apps that
+ * are not co-located keep working untouched, which is why omitting the
+ * parameter stays valid.
+ *
+ * The refusals NAME what is present, because a caller that has to be told to
+ * pick cannot pick without knowing the choices.
+ *
+ * @param {Array<{replica: string|null, mount: string}>} volumes
+ * @param {string|null} replica - null when the caller named none
+ * @param {string} appname - for the message only
+ * @returns {{replica: string|null, mount: string}} the one row
+ */
+function selectVolumeByReplica(volumes, replica, appname) {
   if (!volumes.length) throw new Error('Application volume not found');
 
-  if (replica !== null) {
+  if (replica !== null && replica !== undefined) {
     const match = volumes.find((volume) => volume.replica === replica);
     if (!match) {
       throw new Error(`Application volume not found for replica ${replica} (present: ${describeReplicas(volumes)})`);
     }
-    return {
-      appname, component, replica, mount: match.mount, volume: match,
-    };
+    return match;
   }
 
   if (volumes.length > 1) {
     throw new Error(`${appname} is co-located on this node — specify which replica with ?replica= (present: ${describeReplicas(volumes)})`);
   }
 
-  return {
-    appname,
-    component,
-    replica: volumes[0].replica,
-    mount: volumes[0].mount,
-    volume: volumes[0],
-  };
+  return volumes[0];
 }
 
 function describeReplicas(volumes) {
   return volumes.map((volume) => volume.replica ?? 'unnamed').join(', ');
 }
 
-module.exports = { resolveVolumeTarget };
+module.exports = { resolveVolumeTarget, selectVolumeByReplica };

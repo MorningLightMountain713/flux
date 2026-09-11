@@ -1,7 +1,8 @@
 const path = require('node:path');
 const crypto = require('node:crypto');
 const fs = require('node:fs/promises');
-const deviceHelper = require('../deviceHelper');
+const volumeService = require('../utils/volumeService');
+const { selectVolumeByReplica } = require('./volumeTarget');
 const serviceHelper = require('../serviceHelper');
 const verificationHelper = require('../verificationHelper');
 const {
@@ -72,23 +73,37 @@ class VolumePath {
 }
 
 /**
- * Resolve which volume an (app, component) pair names, WITHOUT authorising.
+ * Resolve which volume an (app, component, replica) names, WITHOUT authorising.
  *
  * Internal callers - backup, restore, the reconciler, the boot sweep - act with
  * no request and no user, so they need this. Request paths must use openVolume
  * instead; see the note there for why that split exists rather than an
  * authorise-or-not flag on one function.
  *
+ * Resolved FORWARD, through the app's own installed row, rather than by
+ * building `flux<component>_<appname>` and matching it against the mount table.
+ * That spelling answers for exactly one kind of app: it names nothing for a
+ * co-located pair, where one volume is mounted per replica and neither is
+ * called that, and it names nothing for any app whose stored identity is not
+ * its name, which is every app registered since identities were minted. Both
+ * failed closed - "Application volume not found" on create, rename, move, copy,
+ * compress, extract, upload and remove - so the endpoints were not dangerous,
+ * they were unusable.
+ *
  * @param {string} appname
  * @param {string} component - the component, or 'null' for the flat
  *   single-component form whose identifier is the bare app name
- * @returns {Promise<{mount: string, availableBytes: number, identifier: string}>}
+ * @param {string|null} [replica] - which replica, or null when the caller named
+ *   none. Null is not "any": an app with several is refused by name rather than
+ *   resolved to one of them.
+ * @returns {Promise<{mount: string, availableBytes: number, identifier: string,
+ *   replica: string|null}>}
  */
-async function resolveVolumeMount(appname, component) {
+async function resolveVolumeMount(appname, component, replica = null) {
   if (!appname) throw new Error('appname parameter is mandatory');
   if (!component) throw new Error('component parameter is mandatory');
 
-  // Validated before either value reaches a comparison or a path. The charsets
+  // Validated before either value reaches a lookup or a path. The charsets
   // happen to make the identifier unambiguous - neither may contain the
   // underscore that separates them - but that is a property to assert, not one
   // to rely on silently.
@@ -99,32 +114,29 @@ async function resolveVolumeMount(appname, component) {
     throw new Error('component contains disallowed characters');
   }
 
-  const identifier = component === 'null' ? `flux${appname}` : `flux${component}_${appname}`;
+  // Still SELECTED from the kernel's mount table rather than built with
+  // path.join - listComponentVolumeMounts derives the identifiers this app's
+  // row says it owns and looks them up in findmnt's output. FluxOS holds the
+  // docker socket, so whatever decides a bind source decides host access; a
+  // request can only ever name a filesystem already mounted as an app volume,
+  // and the worst a hostile appname achieves is matching nothing.
+  const volumes = await volumeService.listComponentVolumeMounts(
+    appname, component === 'null' ? appname : component,
+  );
+  const volume = selectVolumeByReplica(volumes, replica, appname);
 
-  // SELECTED from the kernel's mount table, never built with path.join. FluxOS
-  // holds the docker socket, so whatever decides a bind source decides host
-  // access; sourcing the candidates from findmnt means a request can only ever
-  // name a filesystem that is already mounted as an app volume. The worst a
-  // hostile appname achieves is matching nothing.
-  const mounts = await deviceHelper.listMountedFilesystems();
-  const matched = mounts.filter((mount) => path.basename(mount.target) === identifier);
-
-  if (!matched.length) throw new Error('Application volume not found');
-  // Never [0]. One identifier resolving to several mounts means the assumption
-  // behind this lookup no longer holds, and picking one silently operates on
-  // arbitrary data - a restore into the wrong one overwrites what is live.
-  if (matched.length > 1) {
-    throw new Error(`${identifier} resolves to ${matched.length} mounts; refusing to guess`);
-  }
-
-  const [volume] = matched;
   // A mount table row that is not under the apps folder is not an app volume,
   // whatever its basename looks like.
-  if (!volume.target.startsWith(appsFolder)) {
-    throw new Error(`${identifier} is mounted outside the apps folder; refusing to use it`);
+  if (!volume.mount.startsWith(appsFolder)) {
+    throw new Error(`${volume.identifier} is mounted outside the apps folder; refusing to use it`);
   }
 
-  return { mount: volume.target, availableBytes: volume.availableBytes, identifier };
+  return {
+    mount: volume.mount,
+    availableBytes: volume.availableBytes,
+    identifier: volume.identifier,
+    replica: volume.replica,
+  };
 }
 
 /**
@@ -599,6 +611,11 @@ async function openVolume(req, options = {}) {
   const body = serviceHelper.ensureObject(req.body) || {};
   const appname = req.params.appname || req.query.appname || body.appname || '';
   const component = req.params.component || req.query.component || body.component || '';
+  // Read from the same three places as the other two, so ?replica= works on the
+  // GET endpoints and a POSTed body carries it on the rest. Null, not '', when
+  // absent: selectVolumeByReplica reads null as "the caller named none" and
+  // refuses a co-located app rather than resolving it to a sibling.
+  const replica = req.params.replica || req.query.replica || body.replica || null;
 
   const authorized = await verificationHelper.verifyPrivilege(privilege, authOf(req), { appName: appname });
   if (!authorized) {
@@ -612,7 +629,7 @@ async function openVolume(req, options = {}) {
     throw error;
   }
 
-  const { mount, availableBytes, identifier } = await resolveVolumeMount(appname, component);
+  const { mount, availableBytes, identifier } = await resolveVolumeMount(appname, component, replica);
   // Read after authorisation succeeded, so this is the identity that passed it.
   const auth = serviceHelper.ensureObject(authOf(req));
   const owner = (auth && auth.zelid) || null;

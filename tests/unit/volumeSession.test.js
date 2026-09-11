@@ -16,6 +16,7 @@ describe('volumeSession tests', () => {
   const MOUNT = `${APPS_FOLDER}fluxcomp_myapp`;
 
   let deviceHelperStub;
+  let volumeServiceStub;
   let verificationHelperStub;
   let IOUtilsStub;
   let fsStub;
@@ -29,8 +30,16 @@ describe('volumeSession tests', () => {
     source: '/dev/loop3', target, fstype: 'ext4', sizeBytes: 2e9, usedBytes: 1e9, availableBytes, usePercent: 50,
   });
 
+  // What listComponentVolumeMounts returns: rows already resolved forward from
+  // the app's own installed row, so they carry the replica and the identifier
+  // the mount table alone cannot supply.
+  const volumeRow = (mount, replica = null, identifier = 'comp_myapp', availableBytes = 1e9) => ({
+    replica, identifier, mount, filesystem: '/dev/loop3', sizeBytes: 2e9, usedBytes: 1e9, availableBytes, capacity: 0.5,
+  });
+
   beforeEach(() => {
     deviceHelperStub = { listMountedFilesystems: sinon.stub().resolves([mountRow(MOUNT)]) };
+    volumeServiceStub = { listComponentVolumeMounts: sinon.stub().resolves([volumeRow(MOUNT)]) };
     verificationHelperStub = { verifyPrivilege: sinon.stub().resolves(true) };
     IOUtilsStub = {
       getFolderSize: sinon.stub().resolves(1000),
@@ -42,6 +51,7 @@ describe('volumeSession tests', () => {
 
     volumeSession = proxyquire('../../ZelBack/src/services/appSystem/volumeSession', {
       '../deviceHelper': deviceHelperStub,
+      '../utils/volumeService': volumeServiceStub,
       '../verificationHelper': verificationHelperStub,
       '../IOUtils': IOUtilsStub,
       '../utils/pathSecurity': pathSecurity,
@@ -64,23 +74,28 @@ describe('volumeSession tests', () => {
   });
 
   describe('resolveVolumeMount', () => {
-    it('selects the mount whose basename is the app identifier', async () => {
+    it('resolves the volume the app\'s own row says it owns', async () => {
       const result = await volumeSession.resolveVolumeMount('myapp', 'comp');
       expect(result.mount).to.equal(MOUNT);
       expect(result.availableBytes).to.equal(1e9);
+      expect(result.replica).to.equal(null);
+      // Asked FORWARD, of the app, rather than decoded back out of a path.
+      sinon.assert.calledOnceWithExactly(
+        volumeServiceStub.listComponentVolumeMounts, 'myapp', 'comp',
+      );
     });
 
     it('uses the bare app name for the flat single-component form', async () => {
-      deviceHelperStub.listMountedFilesystems.resolves([mountRow(`${APPS_FOLDER}fluxmyapp`)]);
-      const result = await volumeSession.resolveVolumeMount('myapp', 'null');
-      expect(result.mount).to.equal(`${APPS_FOLDER}fluxmyapp`);
+      await volumeSession.resolveVolumeMount('myapp', 'null');
+      sinon.assert.calledOnceWithExactly(
+        volumeServiceStub.listComponentVolumeMounts, 'myapp', 'myapp',
+      );
     });
 
-    it('rejects an appname outside the allowed charset before it reaches a comparison', async () => {
+    it('rejects an appname outside the allowed charset before it reaches a lookup', async () => {
       await expect(volumeSession.resolveVolumeMount('my_app', 'comp'))
         .to.be.rejectedWith('appname contains disallowed characters');
-      // and never consulted the mount table
-      expect(deviceHelperStub.listMountedFilesystems.called).to.equal(false);
+      expect(volumeServiceStub.listComponentVolumeMounts.called).to.equal(false);
     });
 
     it('rejects a component outside the allowed charset', async () => {
@@ -88,21 +103,47 @@ describe('volumeSession tests', () => {
         .to.be.rejectedWith('component contains disallowed characters');
     });
 
-    it('refuses to guess when one identifier resolves to several mounts', async () => {
-      // Never [0]: picking one silently operates on arbitrary data.
-      deviceHelperStub.listMountedFilesystems.resolves([mountRow(MOUNT), mountRow(MOUNT)]);
+    // The reason D16 exists. One volume is mounted per replica, so (app,
+    // component) stopped naming a single thing.
+    it('resolves the named replica of a co-located app', async () => {
+      volumeServiceStub.listComponentVolumeMounts.resolves([
+        volumeRow(`${APPS_FOLDER}fluxcomp_myapp_s1`, 's1'),
+        volumeRow(`${APPS_FOLDER}fluxcomp_myapp_s2`, 's2'),
+      ]);
+      const result = await volumeSession.resolveVolumeMount('myapp', 'comp', 's2');
+      expect(result.mount).to.equal(`${APPS_FOLDER}fluxcomp_myapp_s2`);
+      expect(result.replica).to.equal('s2');
+    });
+
+    it('refuses a co-located app addressed by no replica, and names them', async () => {
+      volumeServiceStub.listComponentVolumeMounts.resolves([
+        volumeRow(`${APPS_FOLDER}fluxcomp_myapp_s1`, 's1'),
+        volumeRow(`${APPS_FOLDER}fluxcomp_myapp_s2`, 's2'),
+      ]);
+      // Never [0]: picking one silently operates on arbitrary data - reading
+      // from a sibling is confusing, writing into it overwrites what is live.
       await expect(volumeSession.resolveVolumeMount('myapp', 'comp'))
-        .to.be.rejectedWith('refusing to guess');
+        .to.be.rejectedWith(/co-located on this node.*s1, s2/);
+    });
+
+    it('refuses a replica this node does not hold, and names the ones it does', async () => {
+      volumeServiceStub.listComponentVolumeMounts.resolves([
+        volumeRow(`${APPS_FOLDER}fluxcomp_myapp_s1`, 's1'),
+      ]);
+      await expect(volumeSession.resolveVolumeMount('myapp', 'comp', 's9'))
+        .to.be.rejectedWith(/not found for replica s9.*present: s1/);
     });
 
     it('refuses a mount that is not under the apps folder', async () => {
-      deviceHelperStub.listMountedFilesystems.resolves([mountRow('/elsewhere/fluxcomp_myapp')]);
+      volumeServiceStub.listComponentVolumeMounts.resolves([
+        volumeRow('/elsewhere/fluxcomp_myapp'),
+      ]);
       await expect(volumeSession.resolveVolumeMount('myapp', 'comp'))
         .to.be.rejectedWith('mounted outside the apps folder');
     });
 
-    it('reports not found when nothing in the mount table matches', async () => {
-      deviceHelperStub.listMountedFilesystems.resolves([mountRow(`${APPS_FOLDER}fluxother_app`)]);
+    it('reports not found when the app owns no mounted volume', async () => {
+      volumeServiceStub.listComponentVolumeMounts.resolves([]);
       await expect(volumeSession.resolveVolumeMount('myapp', 'comp'))
         .to.be.rejectedWith('Application volume not found');
     });
@@ -511,7 +552,7 @@ describe('volumeSession tests', () => {
     });
 
     it('fails closed when free space is unknown', async () => {
-      deviceHelperStub.listMountedFilesystems.resolves([mountRow(MOUNT, NaN)]);
+      volumeServiceStub.listComponentVolumeMounts.resolves([volumeRow(MOUNT, null, 'comp_myapp', NaN)]);
       const vol = await volumeSession.openVolume(reqFor());
       expect(() => vol.requireSpace(1)).to.throw('Unable to determine free space');
     });
@@ -531,9 +572,11 @@ describe('volumeSession tests', () => {
       await realFs.mkdir(mount);
 
       deviceHelperStub.listMountedFilesystems = sinon.stub().resolves([mountRow(mount)]);
+      volumeServiceStub.listComponentVolumeMounts = sinon.stub().resolves([volumeRow(mount)]);
       // The real node:fs/promises, so a symlink on disk is what answers.
       const onDisk = proxyquire('../../ZelBack/src/services/appSystem/volumeSession', {
         '../deviceHelper': deviceHelperStub,
+        '../utils/volumeService': volumeServiceStub,
         '../verificationHelper': verificationHelperStub,
         '../IOUtils': IOUtilsStub,
         '../utils/pathSecurity': pathSecurity,

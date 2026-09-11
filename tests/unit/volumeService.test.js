@@ -17,6 +17,7 @@ describe('volumeService tests', () => {
   let fsStub;
   let deviceHelperStub;
   let logStub;
+  let appsRepositoryStub;
   let volumeService;
 
   beforeEach(() => {
@@ -28,6 +29,10 @@ describe('volumeService tests', () => {
     // isPathMounted describe covers the mountinfo path with real fixtures
     fsStub = { promises: { access: sinon.stub(), readdir: sinon.stub().resolves([]), readFile: sinon.stub().rejects(new Error('no mountinfo')) } };
     deviceHelperStub = { listMountedFilesystems: sinon.stub().resolves([]), mountForTarget: sinon.stub() };
+    appsRepositoryStub = {
+      getInstalledApp: sinon.stub().resolves(null),
+      listInstalledIdentities: sinon.stub().resolves([null]),
+    };
     logStub = {
       info: sinon.stub(), warn: sinon.stub(), error: sinon.stub(), debug: sinon.stub(),
     };
@@ -46,6 +51,18 @@ describe('volumeService tests', () => {
       },
       '../../lib/log': logStub,
       '../deviceHelper': deviceHelperStub,
+      '../appDatabase/appsRepository': appsRepositoryStub,
+      // The real containerIdentifierFor: this is the forward derivation under
+      // test, so a stub would be the test naming the paths it then finds.
+      './specLibs': {
+        getSpecBackend: async () => ({
+          DeploymentSpec: {
+            containerIdentifierFor: (component, identity, replica) => (
+              replica != null ? `${component}_${identity}_${replica}` : `${component}_${identity}`
+            ),
+          },
+        }),
+      },
       fs: { promises: fsStub.promises },
     });
   });
@@ -460,6 +477,67 @@ describe('volumeService tests', () => {
         .to.be.rejectedWith(/Read-only file system/);
     });
   });
+  describe('listComponentVolumeMounts tests', () => {
+    const mountRow = (target) => ({
+      source: '/dev/loop3', target, fstype: 'ext4', sizeBytes: 2e9, usedBytes: 1e9, availableBytes: 1e9, usePercent: 50,
+    });
+
+    beforeEach(() => {
+      dockerServiceStub.getAppIdentifier.callsFake((id) => `flux${id}`);
+    });
+
+    it('answers nothing for an app this node has not installed', async () => {
+      expect(await volumeService.listComponentVolumeMounts('myapp', 'web')).to.deep.equal([]);
+      expect(deviceHelperStub.listMountedFilesystems.called).to.equal(false);
+    });
+
+    it('resolves each installed replica to its own mount', async () => {
+      appsRepositoryStub.getInstalledApp.resolves({ name: 'myapp', identity: 'myapp' });
+      appsRepositoryStub.listInstalledIdentities.resolves(['s1', 's2']);
+      deviceHelperStub.listMountedFilesystems.resolves([
+        mountRow(`${APPS_FOLDER}fluxweb_myapp_s1`),
+        mountRow(`${APPS_FOLDER}fluxweb_myapp_s2`),
+      ]);
+
+      const volumes = await volumeService.listComponentVolumeMounts('myapp', 'web');
+
+      expect(volumes.map((v) => v.replica)).to.deep.equal(['s1', 's2']);
+      expect(volumes.map((v) => v.mount)).to.deep.equal([
+        `${APPS_FOLDER}fluxweb_myapp_s1`, `${APPS_FOLDER}fluxweb_myapp_s2`,
+      ]);
+    });
+
+    // The identity is what the volumes were NAMED from, and it stops being the
+    // app's name the moment one is minted. Reading the app name instead finds
+    // nothing - which is the half of D16 the entry did not record.
+    it('reads the stored identity, not the app name', async () => {
+      appsRepositoryStub.getInstalledApp.resolves({ name: 'myapp', identity: 'a1b2c3' });
+      appsRepositoryStub.listInstalledIdentities.resolves([null]);
+      deviceHelperStub.listMountedFilesystems.resolves([
+        mountRow(`${APPS_FOLDER}fluxweb_a1b2c3`),
+        mountRow(`${APPS_FOLDER}fluxweb_myapp`),
+      ]);
+
+      const volumes = await volumeService.listComponentVolumeMounts('myapp', 'web');
+
+      expect(volumes).to.have.lengthOf(1);
+      expect(volumes[0].mount).to.equal(`${APPS_FOLDER}fluxweb_a1b2c3`);
+    });
+
+    it('refuses to guess when one directory name is mounted twice', async () => {
+      // Never last-wins. Two filesystems sharing a directory name break the
+      // assumption the lookup rests on, and every caller addresses real data.
+      appsRepositoryStub.getInstalledApp.resolves({ name: 'myapp', identity: 'myapp' });
+      deviceHelperStub.listMountedFilesystems.resolves([
+        mountRow(`${APPS_FOLDER}fluxweb_myapp`),
+        mountRow(`/elsewhere/fluxweb_myapp`),
+      ]);
+
+      await expect(volumeService.listComponentVolumeMounts('myapp', 'web'))
+        .to.be.rejectedWith(/mounted at both .* refusing to guess/);
+    });
+  });
+
   describe('appVolumeFilesystemId tests', () => {
     const APP_ID = 'fluxcomp_myapp';
     const MOUNT_PATH = `${APPS_FOLDER}${APP_ID}`;

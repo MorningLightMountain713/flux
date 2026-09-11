@@ -36,6 +36,7 @@ describe('volumeExecutor tests', () => {
 
   let dockerServiceStub;
   let deviceHelperStub;
+  let volumeServiceStub;
   let serviceHelperStub;
   let containerStub;
   let fsStub;
@@ -90,6 +91,28 @@ describe('volumeExecutor tests', () => {
     source: '/dev/loop3', target, fstype: 'ext4', sizeBytes: 2e9, usedBytes: 1e9, availableBytes: 1e9, usePercent: 50,
   });
 
+  // Mirrors the real resolution rather than returning a constant: it derives the
+  // identifier the app's row would name and finds it in the SAME mount table the
+  // executor's own bind assertion reads, so a case that repoints the mounts moves
+  // both together. A constant would decouple them and the mount-assertion cases
+  // would stop testing anything.
+  const volumeMountsFor = async (appName, componentName) => {
+    const identifier = componentName === appName ? appName : `${componentName}_${appName}`;
+    const mounts = await deviceHelperStub.listMountedFilesystems();
+    return (mounts || [])
+      .filter((entry) => nodePath.basename(entry.target) === `flux${identifier}`)
+      .map((entry) => ({
+        replica: null,
+        identifier,
+        mount: entry.target,
+        filesystem: entry.source,
+        sizeBytes: entry.sizeBytes,
+        usedBytes: entry.usedBytes,
+        availableBytes: entry.availableBytes,
+        capacity: entry.usePercent / 100,
+      }));
+  };
+
   const openSession = async () => volumeSession.openVolume({ params: { appname: 'myapp', component: 'comp' }, query: {} });
 
   // A container that exits 0 after ms, or 143 once it is stopped - what flux-op
@@ -108,6 +131,7 @@ describe('volumeExecutor tests', () => {
   beforeEach(() => {
     configStub = freshConfig();
     deviceHelperStub = { listMountedFilesystems: sinon.stub().resolves([mountRow(MOUNT)]) };
+    volumeServiceStub = { listComponentVolumeMounts: sinon.stub().callsFake(volumeMountsFor) };
 
     // What the command "writes". demuxStream is stubbed to push it into the
     // sinks the executor supplies, which is what dockerode's does after
@@ -208,6 +232,7 @@ describe('volumeExecutor tests', () => {
 
     volumeSession = proxyquire('../../ZelBack/src/services/appSystem/volumeSession', {
       '../deviceHelper': deviceHelperStub,
+      '../utils/volumeService': volumeServiceStub,
       '../verificationHelper': { verifyPrivilege: sinon.stub().resolves(true) },
       '../IOUtils': { getFolderSize: sinon.stub(), getFileSize: sinon.stub() },
       '../utils/appConstants': appConstantsStub,
@@ -1751,6 +1776,7 @@ describe('volumeExecutor tests', () => {
 
       const sessions = proxyquire('../../ZelBack/src/services/appSystem/volumeSession', {
         '../deviceHelper': deviceHelperStub,
+        '../utils/volumeService': volumeServiceStub,
         '../verificationHelper': { verifyPrivilege: sinon.stub().resolves(true) },
         '../IOUtils': { getFolderSize: sinon.stub(), getFileSize: sinon.stub() },
         '../utils/appConstants': constants,
