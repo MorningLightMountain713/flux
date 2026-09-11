@@ -7,31 +7,17 @@
  * read through domain-class getters — no raw `instantiated.spec.components[...]`
  * reach-ins.
  *
+ * The shutdown ARITHMETIC is not done here either. Drain, budget and whether a
+ * component needs the daemon at all are declared by the spec, so they are the
+ * component's own answers — `maxDrainTimeoutSeconds`, `shutdownBudgetSeconds`,
+ * `requiresDaemonShutdown`. What is FluxOS's is the fold across an app's
+ * components and the plan's wire shape.
+ *
  * The container LABELS are not built here. Their keys are a contract with
  * flux-shutdownd, which reads them off containers to know what to drain, so
  * they are defined once in flux-spec (`containerLabels`) alongside the forward
  * naming rather than spelled out at each end.
  */
-
-/** Longest drain timeout across a component's load-balanced ports (0 if none). */
-function maxDrainTimeout(deployComp) {
-  const lb = deployComp.loadBalancing;
-  if (!lb) return 0;
-  let max = 0;
-  for (const provider of Object.values(lb)) {
-    const timeout = provider && provider.drain ? provider.drain.timeout : undefined;
-    if (typeof timeout === 'number' && timeout > max) max = timeout;
-  }
-  return max;
-}
-
-/** Per-component shutdown budget: drain + preStop + graceful (10s default). */
-function componentBudgetSeconds(deployComp) {
-  const drain = maxDrainTimeout(deployComp);
-  const preStop = deployComp.preStop ? deployComp.preStop.timeout : 0;
-  const graceful = deployComp.shutdown ? deployComp.shutdown.gracefulTimeout : 10;
-  return drain + preStop + graceful;
-}
 
 /**
  * The app-wide graceful-shutdown budget (seconds): the sum of every component's
@@ -44,7 +30,7 @@ function componentBudgetSeconds(deployComp) {
 function appShutdownBudgetSeconds(deployment) {
   let budget = 0;
   for (const [, deployComp] of deployment.componentEntries()) {
-    budget += componentBudgetSeconds(deployComp);
+    budget += deployComp.shutdownBudgetSeconds();
   }
   return budget;
 }
@@ -70,10 +56,7 @@ function appShutdownBudgetSeconds(deployment) {
  * @returns {boolean}
  */
 function appRequiresDaemonShutdown(deployment) {
-  return deployment.componentEntries().some(([, deployComp]) => {
-    if (deployComp.shutdown || deployComp.preStop) return true;
-    return maxDrainTimeout(deployComp) > 0;
-  });
+  return deployment.componentEntries().some(([, deployComp]) => deployComp.requiresDaemonShutdown());
 }
 
 function buildPorts(deployComp) {
@@ -111,7 +94,7 @@ function buildShutdownPlan(instantiated, deployment) {
   const components = [];
   let budget = 0;
   for (const [, deployComp] of deployment.componentEntries()) {
-    budget += componentBudgetSeconds(deployComp);
+    budget += deployComp.shutdownBudgetSeconds();
     components.push({
       name: deployComp.name,
       shutdown: deployComp.shutdown
@@ -139,7 +122,6 @@ function buildShutdownPlan(instantiated, deployment) {
 }
 
 module.exports = {
-  maxDrainTimeout,
   buildShutdownPlan,
   appShutdownBudgetSeconds,
   appRequiresDaemonShutdown,

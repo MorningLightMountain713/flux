@@ -102,45 +102,11 @@ describe('shutdownPlan', () => {
     return deployment.getComponent('web');
   }
 
-  // The label BUILDERS live in flux-spec, where the keys are defined and tested
-  // (containerLabels). What stays here is the arithmetic over a component's
-  // load-balanced ports that feeds them.
-  describe('maxDrainTimeout', () => {
-    it('takes the longest drain across a component load-balanced ports', async () => {
-      // Two genuinely load-balanced ports, so "longest across ports" is a real
-      // maximum rather than the only value present.
-      const component = await componentOf({
-        ports: {
-          http: { containerPort: 80, hostPort: 31000 },
-          admin: { containerPort: 8080, hostPort: 31001 },
-        },
-        loadBalancing: {
-          http: {
-            provider: 'haproxy', mode: 'http', drain: { timeout: 180, waitForConnections: true },
-          },
-          admin: {
-            provider: 'haproxy', mode: 'http', drain: { timeout: 120, waitForConnections: false },
-          },
-        },
-      });
-
-      expect(shutdownPlan.maxDrainTimeout(component)).to.equal(180);
-    });
-
-    it('is zero for a component with no load balancing at all', async () => {
-      expect(shutdownPlan.maxDrainTimeout(await componentOf(PLAIN))).to.equal(0);
-    });
-
-    it('agrees with the component own maxDrainTimeoutSeconds (guards drift)', async () => {
-      // flux-spec carries the same arithmetic on DeploymentComponent. Two copies
-      // of one rule can only be held together by comparing them on a real object.
-      for (const role of [GRACEFUL, PLAIN, DRAIN_ONLY]) {
-        const component = await componentOf(role);
-        expect(shutdownPlan.maxDrainTimeout(component))
-          .to.equal(component.maxDrainTimeoutSeconds());
-      }
-    });
-  });
+  // The drain arithmetic is not FluxOS's. A component answers for its own drain,
+  // budget and whether it needs the daemon at all, and this file used to carry a
+  // second copy of all three with drift guards holding them together. There is
+  // one copy now, tested in flux-spec against the class that owns it, so what is
+  // left here is the fold across an app's components and the plan's wire shape.
 
   describe('buildShutdownPlan', () => {
     it('builds the plan from instantiated + deployment via domain getters', async () => {
@@ -218,9 +184,9 @@ describe('shutdownPlan', () => {
       // and per component, the four fields the plan is assembled from
       for (const [, component] of deployment.componentEntries()) {
         expect(component.name).to.be.a('string');
-        expect(component, 'componentBudgetSeconds reads comp.shutdown').to.have.property('shutdown');
-        expect(component, 'componentBudgetSeconds reads comp.preStop').to.have.property('preStop');
-        expect(component, 'maxDrainTimeout reads comp.loadBalancing').to.have.property('loadBalancing');
+        expect(component, 'shutdownBudgetSeconds reads comp.shutdown').to.have.property('shutdown');
+        expect(component, 'shutdownBudgetSeconds reads comp.preStop').to.have.property('preStop');
+        expect(component, 'maxDrainTimeoutSeconds reads comp.loadBalancing').to.have.property('loadBalancing');
         expect(component.ports, 'buildPorts iterates comp.ports').to.be.an('object');
       }
     });
@@ -284,17 +250,6 @@ describe('shutdownPlan', () => {
       // worker: 0+0+10, web: 180+30+60 → 280
       const deployment = await deploymentOf({ worker: PLAIN, web: GRACEFUL });
       expect(shutdownPlan.appShutdownBudgetSeconds(deployment)).to.equal(280);
-    });
-
-    it('agrees with the components own shutdownBudgetSeconds (guards drift)', async () => {
-      // Same duplicated rule as maxDrainTimeout: flux-spec's DeploymentComponent
-      // budgets a component too, and the daemon deadline is only trustworthy while
-      // the two agree.
-      const deployment = await deploymentOf({ worker: PLAIN, web: GRACEFUL, edge: DRAIN_ONLY });
-      const fromLibrary = deployment.componentEntries()
-        .reduce((sum, [, component]) => sum + component.shutdownBudgetSeconds(), 0);
-
-      expect(shutdownPlan.appShutdownBudgetSeconds(deployment)).to.equal(fromLibrary);
     });
   });
 });
