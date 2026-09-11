@@ -820,11 +820,18 @@ async function startApplication(appname) {
  * @returns {Promise<void>}
  */
 async function stopApplication(appname) {
-  try {
-    const ids = await componentIdentifiersFor(appname);
-    await appReconciler.drive(ids, 'stopped');
-  } catch (error) {
-    log.error(error);
+  const ids = await componentIdentifiersFor(appname);
+  const { converged, failed } = await appReconciler.drive(ids, 'stopped');
+  // The verdict is the whole point, and it used to be discarded: drive() awaits
+  // convergence but ANSWERS whether it happened, and a component that failed to
+  // stop - or that ran out the converge backstop and settled 'provisional' -
+  // came back indistinguishable from one that is down. Both callers are
+  // backup and restore, immediately before they read or replace the volume, so
+  // a container still writing had its data archived or overwritten underneath
+  // it. The throw reaches each caller's catch, which restarts the app and
+  // releases the lease.
+  if (!converged) {
+    throw new Error(`Refusing to touch ${appname}'s data: ${failed.join(', ')} did not stop`);
   }
 }
 
@@ -959,6 +966,15 @@ async function appendBackupTask(req, res) {
       // backup is an app-scoped lease on the same key as install/remove/
       // reconcile, so it's mutually exclusive with them (no feature carve-out).
       taskToken = operationRegistry.acquire(appname, 'backup', 'appOperations', `backup ${appname}`);
+      // The claim is the isHeld check above made atomic. That check runs BEFORE
+      // the awaited privilege call, so two requests for one app both passed it
+      // and archived the same volume at once; acquire is a synchronous
+      // test-and-set that only one of them can win, and its answer was being
+      // dropped. Refusing here also keeps the catch honest: with a null token
+      // the loser would neither hold the lease nor restart the app it stopped.
+      if (!taskToken) {
+        throw new Error('An operation is already in progress for this app...');
+      }
       const backupDeployment = await deploymentProvider.getInstalledDeployment(appname);
       // Syncthing folders are registered per component as flux<identifier> —
       // the bare app name matches nothing for a composed app, so the folder
@@ -1104,6 +1120,11 @@ async function appendRestoreTask(req, res) {
       // restore is an app-scoped lease on the same key as backup/install/
       // remove/reconcile.
       taskToken = operationRegistry.acquire(appname, 'restore', 'appOperations', `restore ${appname}`);
+      // See appendBackupTask: the isHeld check above is not the claim, and a
+      // restore that loses the race would replace the volume under the winner.
+      if (!taskToken) {
+        throw new Error('An operation is already in progress for this app...');
+      }
       const restoreDeployment = await deploymentProvider.getInstalledDeployment(appname);
       // Per-component removal for the same reason as backup: composed apps'
       // folders are flux<identifier>, never flux<appname>.
