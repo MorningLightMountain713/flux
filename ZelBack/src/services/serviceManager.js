@@ -639,18 +639,18 @@ async function startFluxFunctions() {
       catchUpRunningContent: () => contentSlotService.applyBehindContentApps(),
       fluxVersion,
     });
-    // Whether an arriving sync response is still wanted. The record of what this
-    // node asked for is the peer manager's own asked-peers ledger, written by the
-    // orchestrator through markSyncRequested and cleared by completeSyncRequest, so
-    // that is what the question is answered from.
+    // Whether an arriving sync response is still wanted. THE ROUND ANSWERS IT.
+    // Only the orchestrator knows what it asked of whom, and on which socket,
+    // and what has since ended that request - a completion, a refusal, an
+    // unverifiable chunk, a deadline, a close. The manager keeps a marks set in
+    // step with it for the socket-level fast path, but the definition of the
+    // question lives with the record, not with a copy of it.
     //
     // Per CONNECTION. A peer that reconnects keeps its ip:port while becoming a
     // different connection, so nothing arriving on the new one answers a request
     // written into the old one - asked by address, a stale view is counted as
-    // this round's completion. The ledger is keyed by connectionId and the
-    // orchestrator records the connection it asked on, so both ends of the
-    // question agree.
-    peerManager.syncResponseWanted = (peerSocket) => peerManager.isSyncRequested(peerSocket.connectionId);
+    // this round's completion.
+    peerManager.syncResponseWanted = (peerSocket) => orchestrator.isSyncResponseWanted(peerSocket);
 
     // The other half of the peer-gated fallback. The orchestrator stops a node
     // whose peer set keeps collapsing from ever reaching READY, which is silent;
