@@ -2672,7 +2672,37 @@ describe('AppSyncOrchestrator', () => {
       // made on the socket before it.
       sinon.assert.calledWith(completeSyncRequestStub, peers[2].connectionId);
       expect(peers[3].send.callCount).to.equal(3); // replacement asked all 3 still-short types
-      expect(logStub.warn.args.some((args) => String(args[0]).includes('missed the 120s deadline'))).to.be.true;
+      // A peer that has sent NOTHING is judged on the short deadline: the only
+      // work before its first batch is a signature check, one indexed query and
+      // serialising a page of documents, and a peer with nothing to report still
+      // sends an empty final batch.
+      expect(logStub.warn.args.some((args) => String(args[0]).includes('said nothing within its'))).to.be.true;
+    });
+
+    it('gives a peer that started answering the longer stall deadline', async () => {
+      const peers = makeEligiblePeers(5);
+      await startWithAskedPeers(peers);
+      // It spoke: one stream arrived, the rest have not.
+      appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_PROGRESS, peers[2].key);
+
+      // Past the "never spoke" deadline (a twelfth of the budget) but inside the
+      // stall one (a quarter of it). A peer part-way through a large answer is
+      // doing exactly what was asked.
+      await clock.tickAsync(12000);
+      blockEmitter.emit('blocksProcessed', 2555001);
+      await clock.tickAsync(0);
+
+      expect(
+        logStub.warn.args.some((args) => String(args[0]).includes(peers[2].key)),
+        'a peer that is still delivering must not be replaced on the short deadline',
+      ).to.be.false;
+
+      // Past the stall deadline too, and now it goes.
+      await clock.tickAsync(120000);
+      blockEmitter.emit('blocksProcessed', 2555002);
+      await clock.tickAsync(0);
+
+      expect(logStub.warn.args.some((args) => String(args[0]).includes('stopped mid-answer'))).to.be.true;
     });
 
     it('should retry the replacement on a later block when no fresh peer existed at failure time', async () => {

@@ -39,6 +39,28 @@ const FALLBACK_MINUTES = config.fluxapps.appSyncFallbackMinutes ?? 125;
 // disagrees with the chain about this converts appSyncFallbackMinutes into the
 // wrong number of blocks and waits the wrong length of time in silence.
 const BLOCKS_PER_MINUTE = 2;
+// THE TWO WAYS A PEER CAN BE QUIET, and they mean different things.
+//
+// A slot must be able to fail and its replacement still finish inside the
+// budget, so with S as a healthy peer's completion time - about a minute on our
+// fleet - both of these have to satisfy `deadline + S <= SYNC_TIMEOUT_MS`.
+//
+// FIRST_RESPONSE is "never spoke". The only work between our send and the peer's
+// first batch is a signature check, one indexed query and serialising 2000
+// documents, so a twelfth of the budget is about an order of magnitude more than
+// it needs - and a peer that has sent NOTHING is unambiguous, because a peer
+// with nothing to report still sends an empty final batch.
+//
+// STALL is "spoke, then stopped", which needs more room because a peer may
+// legitimately be working between batches. A quarter caps what a stalled peer
+// can spend.
+//
+// Both are enforced by the per-block supervision rather than by a timer per
+// request, which is this tree's shape and the one that cannot leak a timer.
+// That costs granularity - a deadline is noticed at the next block, so ~30s -
+// and the constraint above still holds at that resolution.
+const FIRST_RESPONSE_MS = Math.max(1, Math.floor(SYNC_TIMEOUT_MS / 12));
+const STALL_MS = Math.max(1, Math.floor(SYNC_TIMEOUT_MS / 4));
 const MIN_UPTIME_SECONDS = config.fluxapps.appSyncMinPeerUptime ?? 7500;
 const HASH_SYNC_MAX_RETRIES = config.fluxapps.hashSyncMaxRetries ?? 3;
 const HASH_SYNC_RETRY_MS = config.fluxapps.hashSyncRetryMs ?? 300000;
@@ -357,7 +379,10 @@ class AppSyncOrchestrator {
   #onEphemeralSyncProgress(peerKey) {
     const progress = this.#peerProgress.get(peerKey);
     if (!progress || progress.failed) return;
-    progress.askedAt = Date.now();
+    // The first arrival moves it off the short "never spoke" deadline and onto
+    // the longer stall one, and every arrival restarts the clock.
+    progress.spoken = true;
+    progress.lastHeardAt = Date.now();
   }
 
     #onEphemeralSyncComplete(syncType, peerKey) {
@@ -458,14 +483,19 @@ class AppSyncOrchestrator {
       if (progress.failed) continue;
       const missing = SYNC_TYPES.filter((type) => !progress.done.has(type));
       if (missing.length === 0) continue;
-      if (now - progress.askedAt < SYNC_TIMEOUT_MS) continue;
+      // Which silence this is. A peer that has said nothing is judged on the
+      // short deadline; one that spoke and stopped gets the longer one, because
+      // it may legitimately be working between batches.
+      const deadline = progress.spoken ? STALL_MS : FIRST_RESPONSE_MS;
+      const why = progress.spoken ? 'stopped mid-answer' : 'said nothing';
+      if (now - progress.lastHeardAt < deadline) continue;
       progress.failed = true;
       this.#completeSyncRequest(progress.connectionId);
-      log.warn(`AppSyncOrchestrator - Sync peer ${key} missed the ${Math.round(SYNC_TIMEOUT_MS / 1000)}s deadline (missing: ${missing.join(', ')})`);
+      log.warn(`AppSyncOrchestrator - Sync peer ${key} ${why} within its ${Math.round(deadline / 1000)}s deadline (missing: ${missing.join(', ')})`);
       // Named for what happened, not for the fact that something did: a
       // deadline, a disconnection and an unverifiable answer are three different
       // findings about a peer and a reader acts on them differently.
-      fluxEventBus.publish('ephemeralSync:peerTimedOut', { peer: key, reason: 'deadline', missing });
+      fluxEventBus.publish('ephemeralSync:peerTimedOut', { peer: key, reason: why, missing });
     }
     this.#topUpSyncPeers();
   }
@@ -594,7 +624,7 @@ class AppSyncOrchestrator {
       // request - and so a response arriving on a newer socket is not counted
       // against a request made on the old one.
       this.#peerProgress.set(peer.key, {
-        askedAt, connectionId, done: new Set(), failed: false,
+        askedAt, lastHeardAt: askedAt, spoken: false, connectionId, done: new Set(), failed: false,
       });
       // round membership wins: this peer's next completion is the round's
       this.#reconnectPulls.delete(peer.key);
