@@ -343,7 +343,11 @@ class FluxPeerManager extends EventEmitter {
     const peer = this.#peers.get(key);
     if (!peer) return null;
 
-    const syncWasInFlight = this.#syncRequestedPeers.delete(peer.connectionId);
+    // The connection is going, so nothing arriving on it is wanted any more.
+    // This is the gate's cleanup and nothing else: WHO was waiting on an answer
+    // from it, and whether they want a replacement, is the requester's own
+    // record to read - see the peerDisconnected announcement below.
+    this.#syncRequestedPeers.delete(peer.connectionId);
     this.#removeTracking(peer);
 
     // Clean up peer exchange topology and notify others
@@ -407,18 +411,18 @@ class FluxPeerManager extends EventEmitter {
         deliberate: this.#deliberateTeardown,
       });
     }
-    // Announce after all cleanup (and after any degraded transition, which
-    // resets the sync round and makes the loss moot): an in-flight sync died
-    // with this connection and its requester may want a replacement peer.
-    if (syncWasInFlight) {
-      // The connection, not just the address: the requester compares it against
-      // the one it asked on, so a loss announced for a connection it has already
-      // replaced cannot cancel the live request.
-      this.emit('syncPeerLost', { key, connectionId: peer.connectionId });
-    }
-    // The counterpart of peerConnected. A listener waiting on this peer for an
-    // answer now knows the answer is never coming, which is a fact rather than
-    // something to be inferred from a deadline passing.
+    // The counterpart of peerConnected, announced after all cleanup (and after
+    // any degraded transition, which resets the sync round and makes the loss
+    // moot). A listener waiting on this peer for an answer now knows the answer
+    // is never coming, which is a fact rather than something to be inferred
+    // from a deadline passing.
+    //
+    // The connection, not just the address: a listener compares it against the
+    // one it asked on, so a loss announced for a connection it has already
+    // replaced cannot cancel the live request. That comparison is the
+    // listener's, against its own record of what it asked - this manager once
+    // made it here too, from a second copy of that record, and stayed silent
+    // when the copy disagreed.
     this.emit('peerDisconnected', key, peer.connectionId);
     this.refreshSyncAvailability();
     return peer;

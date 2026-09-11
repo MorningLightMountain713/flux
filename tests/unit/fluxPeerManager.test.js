@@ -831,16 +831,13 @@ describe('FluxPeerManager tests', () => {
   });
 
   describe('sync peer loss announcements', () => {
-    it('should announce a removed peer whose sync request was still in flight', () => {
+    it('announces the connection that ended, naming it', () => {
       const ws = createMockWs('10.0.0.1', '16127');
       manager.add(ws, '10.0.0.1', '16127', { source: PEER_SOURCE.RANDOM });
-      // The ledger is keyed by CONNECTION: a peer that reconnects keeps its
-      // ip:port while becoming a different connection, and a response on the new
-      // one must not answer a request written into the old.
       const peer = manager.get('10.0.0.1:16127');
       manager.markSyncRequested(peer.connectionId);
       const lost = [];
-      manager.on('syncPeerLost', (info) => lost.push(info));
+      manager.on('peerDisconnected', (key, connectionId) => lost.push({ key, connectionId }));
 
       manager.remove('10.0.0.1:16127');
 
@@ -886,28 +883,40 @@ describe('FluxPeerManager tests', () => {
       expect(manager.isSyncRequested(secondConnection)).to.equal(true);
     });
 
-    it('should stay silent when the removed peer had no sync request in flight', () => {
+    // The announcement says a connection ended. It does NOT say whether anyone
+    // was waiting on it, because this manager is not the one that knows: the
+    // requester holds that record, and a manager that answered from its own
+    // copy of it stayed silent exactly when the two disagreed - which is every
+    // duplicate-peer replacement, where remove() never runs at all.
+    it('announces a loss whether or not a sync was riding on the connection', () => {
       const ws = createMockWs('10.0.0.1', '16127');
       manager.add(ws, '10.0.0.1', '16127', { source: PEER_SOURCE.RANDOM });
+      const peer = manager.get('10.0.0.1:16127');
       const lost = [];
-      manager.on('syncPeerLost', (key) => lost.push(key));
+      manager.on('peerDisconnected', (key, connectionId) => lost.push({ key, connectionId }));
 
       manager.remove('10.0.0.1:16127');
 
-      expect(lost).to.deep.equal([]);
+      expect(lost, 'nothing was asked of it, and its loss still happened')
+        .to.deep.equal([{ key: '10.0.0.1:16127', connectionId: peer.connectionId }]);
     });
 
-    it('should stay silent when the sync request was completed before removal', () => {
-      const ws = createMockWs('10.0.0.1', '16127');
-      manager.add(ws, '10.0.0.1', '16127', { source: PEER_SOURCE.RANDOM });
-      manager.markSyncRequested('10.0.0.1:16127');
-      manager.completeSyncRequest('10.0.0.1:16127');
+    it('a connection replaced by a fresh dial is announced as lost', () => {
+      const first = createMockWs('10.0.0.3', '16127');
+      manager.add(first, '10.0.0.3', '16127', { source: PEER_SOURCE.RANDOM });
+      const firstConnection = manager.get('10.0.0.3:16127').connectionId;
+      manager.markSyncRequested(firstConnection);
       const lost = [];
-      manager.on('syncPeerLost', (key) => lost.push(key));
+      manager.on('peerDisconnected', (key, connectionId) => lost.push({ key, connectionId }));
 
-      manager.remove('10.0.0.1:16127');
+      // Same address dials again. remove() never runs, the key never leaves the
+      // map and the count does not move - and the request written into the old
+      // socket is as dead as one whose peer went away.
+      const second = createMockWs('10.0.0.3', '16127');
+      manager.add(second, '10.0.0.3', '16127', { source: PEER_SOURCE.RANDOM });
 
-      expect(lost).to.deep.equal([]);
+      expect(lost, 'a replaced connection died in silence')
+        .to.deep.equal([{ key: '10.0.0.3:16127', connectionId: firstConnection }]);
     });
   });
 
