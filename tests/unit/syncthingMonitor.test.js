@@ -114,7 +114,17 @@ const appsRepositoryMock = {
 };
 
 // Load module with mocked dependencies
+// Peer liveness, observed rather than performed: the real one probes peers over
+// the network, and what this file needs to see is WHICH peers a pass decides to
+// ask and how many times it asks.
+const livenessMock = {
+  read: sinon.stub().resolves({ reachable: true, answerable: true, ready: true, folders: [] }),
+  prewarm: sinon.stub().resolves(),
+  localConnectivity: sinon.stub().returns({ connected: true, responding: 1, total: 1 }),
+};
+
 const syncthingMonitor = proxyquire('../../ZelBack/src/services/appMonitoring/syncthingMonitor', {
+  './peerFolderLiveness': { createPeerFolderLiveness: () => livenessMock },
   '../serviceHelper': serviceHelperMock,
   '../dockerService': dockerServiceMock,
   '../fluxNetworkHelper': fluxNetworkHelperMock,
@@ -260,6 +270,8 @@ describe('syncthingMonitor tests', () => {
     syncthingMonitorHelpersMock.folderNeedsUpdate.resetHistory();
     appsRepositoryMock.appLocationFromEvents.reset();
     appsRepositoryMock.appLocationFromEvents.resolves([]);
+    livenessMock.prewarm.resetHistory();
+    livenessMock.read.resetHistory();
     appReconcilerMock.setControllerDesired.reset();
 
     // Default stub behaviors
@@ -405,6 +417,41 @@ describe('syncthingMonitor tests', () => {
 
         expect(globalStateModule.promotedFolderIds, 'null is "this node has not answered yet"').to.not.equal(null);
         expect([...globalStateModule.promotedFolderIds]).to.deep.equal(['fluxweb_writable']);
+      });
+
+      // ONE TIMEOUT FOR THE PASS. Both promotion decisions ask the same peers
+      // the same question, and the folder loop is sequential - asked inside it,
+      // one unreachable holder costs its full timeout again for every folder
+      // that elects it. prewarm existed on peerFolderLiveness with no caller.
+      it('asks the holders of a folder awaiting promotion once, for the whole pass', async () => {
+        deploymentProviderMock.listInstalledDeployments.resolves([syncDeployment]);
+        mockState.receiveOnlySyncthingAppsCache.set(syncFolderId, { numberOfExecutions: 1 });
+        appsRepositoryMock.appLocationFromEvents.resolves([
+          { ip: '10.0.0.7:16127' }, { ip: '10.0.0.8:16127' },
+          // the same holder twice, and this node itself: neither is worth asking
+          { ip: '10.0.0.7:16127' }, { ip: '10.0.0.1:16127' },
+        ]);
+
+        monitorControl = syncthingMonitor.syncthingApps(mockState, mockGetGlobalStateFn);
+        await clock.tickAsync(100);
+
+        sinon.assert.calledOnce(livenessMock.prewarm);
+        const asked = [...livenessMock.prewarm.firstCall.args[0]];
+        expect(asked, 'this node probed itself, or a holder was not probed')
+          .to.have.members(['10.0.0.7:16127', '10.0.0.8:16127', '10.0.0.7:16127']);
+      });
+
+      // A node whose synced apps are all running has nothing waiting on a peer,
+      // and must keep asking nobody - the probe is not free.
+      it('asks nobody when no folder is awaiting promotion', async () => {
+        deploymentProviderMock.listInstalledDeployments.resolves([syncDeployment]);
+        mockState.receiveOnlySyncthingAppsCache.set(syncFolderId, { restarted: true });
+        appsRepositoryMock.appLocationFromEvents.resolves([{ ip: '10.0.0.7:16127' }]);
+
+        monitorControl = syncthingMonitor.syncthingApps(mockState, mockGetGlobalStateFn);
+        await clock.tickAsync(100);
+
+        sinon.assert.notCalled(livenessMock.prewarm);
       });
 
       // Set only from a validated read, so a failed one leaves the last good

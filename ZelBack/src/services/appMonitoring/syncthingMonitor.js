@@ -30,15 +30,13 @@ const {
   buildDeviceConfiguration,
   createSyncthingFolderConfig,
   ensureStfolderExists,
-  getContainerDataFlags,
-  requiresSyncing,
   folderNeedsUpdate,
 } = require('./syncthingMonitorHelpers');
 const { ensureStignoreCovers } = require('../appSystem/syncthingIgnorePolicy');
 const volumeService = require('../utils/volumeService');
 const appTamperingDetectionService = require('../appTamperingDetectionService');
 const mastershipGrantGate = require('../appLifecycle/mastershipGrantGate');
-const { extractIp } = require('../utils/socketAddressUtils');
+const { extractIp, socketAddressesMatch } = require('../utils/socketAddressUtils');
 const appReconciler = require('./appReconciler');
 const {
   manageFolderSyncState,
@@ -103,25 +101,6 @@ async function verifyAppFolderMountWithRepair(appId, appFolder, appName, sending
   return mountSafety;
 }
 
-/**
- * The components of one installed app, each as its docker app identifier (which
- * IS its syncthing folder id) paired with the containerData that decides
- * whether it syncs. A version <= 3 app is a single component - itself.
- * @param {object} installedApp - Installed app specification
- * @returns {Array<{appId: string, containerData: string}>} The app's components
- */
-function appComponents(installedApp) {
-  if (installedApp.version <= 3) {
-    return [{
-      appId: dockerService.getAppIdentifier(installedApp.name),
-      containerData: installedApp.containerData,
-    }];
-  }
-  return (installedApp.compose || []).map((component) => ({
-    appId: dockerService.getAppIdentifier(`${component.name}_${installedApp.name}`),
-    containerData: component.containerData,
-  }));
-}
 
 /**
  * Check if app folders are properly mounted
@@ -178,94 +157,8 @@ async function checkAppFolderMounts(deployments) {
   return { unmountedApps, verifiedSafeIds };
 }
 
-/**
- * The apps holding at least one syncing folder still awaiting a promotion
- * decision. Only those folders ask a peer anything, so only their holders are
- * worth asking about: a node whose synced apps are all running probes nothing,
- * and must keep probing nothing.
- * @param {Array} appsInstalled - List of installed apps (decrypted)
- * @param {Set<string>} suspendedAppNames - Apps under backup or restore
- * @param {Map} receiveOnlySyncthingAppsCache - Per-folder transition state
- * @returns {Set<string>} App names
- */
-// NOT CALLED HERE, AND THAT IS THE FINDING - not lint debt.
-//
-// This and the two below are development's, ported whole and correct, and
-// development calls all three inside syncthingAppsCore. The port brought the
-// functions and left the call sites behind, so the behaviour they implement is
-// simply absent on this tree while the code for it sits here looking maintained.
-//
-// Where development calls them (ZelBack/src/services/appMonitoring/syncthingMonitor.js
-// on origin/development):
-//   appsAwaitingPromotion  :684  the promotion wait, against the receive-only cache
-//   appsMatchingFolderIds  :575  narrowing a non-first-run pass to flagged folders
-//   syncingFolderOwnerIds  :465  the owned-folder set the skip-gate and the
-//                                end-of-pass sweep both decide by
-//
-// Wiring them is D13's pass redesign, which needs the surrounding model
-// (unreadableAppNames, mountVerifyPendingIds, the skip-gate) rather than three
-// insertions. Disabled rather than deleted so the port is not lost, and stated
-// rather than silenced so it is not mistaken for a tidy-up.
-// eslint-disable-next-line no-unused-vars
-function appsAwaitingPromotion(appsInstalled, suspendedAppNames, receiveOnlySyncthingAppsCache) {
-  const names = new Set();
-  appsInstalled.forEach((installedApp) => {
-    if (suspendedAppNames.has(installedApp.name)) return;
-    appComponents(installedApp).forEach(({ appId, containerData }) => {
-      const primaryContainer = (containerData ?? '').split('|')[0];
-      if (!requiresSyncing(getContainerDataFlags(primaryContainer))) return;
-      const cache = receiveOnlySyncthingAppsCache.get(appId);
-      if (cache && !cache.restarted) names.add(installedApp.name);
-    });
-  });
-  return names;
-}
 
-/**
- * Installed apps having at least one component whose docker app identifier is
- * in the given folder-id list (syncthing folder ids ARE the app identifiers).
- * @param {Array} appsInstalled - List of installed apps
- * @param {string[]} folderIds - Syncthing folder ids to match
- * @returns {Array} Matching installed apps
- */
-// Not called here - see appsAwaitingPromotion above.
-// eslint-disable-next-line no-unused-vars
-function appsMatchingFolderIds(appsInstalled, folderIds) {
-  if (folderIds.length === 0) return [];
-  const wanted = new Set(folderIds);
-  return appsInstalled.filter(
-    (installedApp) => appComponents(installedApp).some(({ appId }) => wanted.has(appId)),
-  );
-}
 
-/**
- * The syncthing folder ids this node's installed apps own. A folder is owned
- * when an installed component whose primary mount carries a sync flag (g:/r:/s:)
- * maps to it - ownership is a property of the installed specification, not of
- * what any one pass managed to process.
- *
- * An app under backup or restore owns its folders like any other. It used to be
- * exempt, on the grounds that those flows deleted and rebuilt their own folder
- * configs, so a folder had to be neither kept nor re-added underneath them.
- * Neither flow deletes a folder any more - both pause it and resume it, and for
- * a restore the resume IS the propagation. Sweeping it mid-operation takes the
- * index, the peer devices and any standing safety demotion with it, and leaves
- * the resume addressing a folder that no longer exists.
- * @param {Array} appsInstalled - List of installed apps (decrypted)
- * @returns {Set<string>} Owned folder ids
- */
-// Not called here - see appsAwaitingPromotion above.
-// eslint-disable-next-line no-unused-vars
-function syncingFolderOwnerIds(appsInstalled) {
-  const ownerIds = new Set();
-  appsInstalled.forEach((installedApp) => {
-    appComponents(installedApp).forEach(({ appId, containerData }) => {
-      const primaryContainer = (containerData ?? '').split('|')[0];
-      if (requiresSyncing(getContainerDataFlags(primaryContainer))) ownerIds.add(appId);
-    });
-  });
-  return ownerIds;
-}
 
 /**
  * Installed app deployments having at least one component whose docker app
@@ -276,6 +169,42 @@ function syncingFolderOwnerIds(appsInstalled) {
  * @param {Set<string>} folderIds - Syncthing folder ids that need verifying
  * @returns {Array} Matching deployments
  */
+/**
+ * The apps holding at least one syncing folder still awaiting a promotion
+ * decision. Only those folders ask a peer anything, so only their holders are
+ * worth asking about: a node whose synced apps are all running probes nothing,
+ * and must keep probing nothing.
+ *
+ * Asked of the deployment, not of a stored document. The version of this that
+ * read `installedApp.compose` and `containerData` answered EMPTY for every v9
+ * app without failing - those keys are the v8 spelling and a v9 spec carries
+ * neither - so it would have prewarmed nothing on the fleet it was written for.
+ *
+ * An app mid-operation is skipped for the same reason the pass skips it: nothing
+ * will promote its folders this cycle, so there is nothing to ask about.
+ *
+ * @param {Array} deployments - Installed app deployments
+ * @param {Map} receiveOnlySyncthingAppsCache - Per-folder transition state
+ * @returns {Set<string>} App names
+ */
+function deploymentsAwaitingPromotion(deployments, receiveOnlySyncthingAppsCache) {
+  const names = new Set();
+  // eslint-disable-next-line no-restricted-syntax
+  for (const deployment of deployments) {
+    if (operationRegistry.isHeld(deployment.appName)) continue;
+    // eslint-disable-next-line no-restricted-syntax
+    for (const [, deployComp] of deployment.componentEntries()) {
+      // hasSyncthing() is exactly the old requiresSyncing() gate - the folder is
+      // minted only for activeStandby (g:) and syncFirst (r:).
+      if (!deployComp.hasSyncthing()) continue;
+      const appId = dockerService.getAppIdentifier(deployComp.identifier);
+      const cache = receiveOnlySyncthingAppsCache.get(appId);
+      if (cache && !cache.restarted) names.add(deployment.appName);
+    }
+  }
+  return names;
+}
+
 function deploymentsMatchingFolderIds(deployments, folderIds) {
   if (folderIds.size === 0) return [];
   return deployments.filter((deployment) => {
@@ -730,6 +659,27 @@ async function syncthingAppsCore(state, getGlobalStateFn) {
     const folderIds = [];
     const foldersConfiguration = [];
     const newFoldersConfiguration = [];
+
+    // ONE TIMEOUT FOR THE PASS, NOT ONE PER FOLDER. Both promotion decisions ask
+    // the same peers the same question and the folder loop is sequential, so a
+    // peer asked inside it costs its full timeout again for every folder that
+    // elects it - and past a handful the pass outruns its own interval and the
+    // next cycle is dropped for every folder on the node. Asking the whole set
+    // at once costs one timeout however many folders wait on it.
+    //
+    // Nothing is probed unless a folder is actually awaiting promotion, so a
+    // node whose synced apps are all running asks nobody anything. prewarm
+    // existed on peerFolderLiveness with no caller, which is why the pass has
+    // been paying per folder.
+    const awaitingPromotion = deploymentsAwaitingPromotion(deployments, state.receiveOnlySyncthingAppsCache);
+    if (awaitingPromotion.size) {
+      const peerLists = await Promise.all([...awaitingPromotion].map((name) => appLocation(name)));
+      await liveness.prewarm(
+        peerLists.flat()
+          .map((entry) => entry?.ip)
+          .filter((ip) => ip && !socketAddressesMatch(ip, localSocketAddr)),
+      );
+    }
 
     // Shared parameters for processing
     const sharedParams = {
