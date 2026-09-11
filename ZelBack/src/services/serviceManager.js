@@ -629,9 +629,9 @@ async function startFluxFunctions() {
       onPeerEvent: (event, cb) => peerManager.on(event, cb),
       offPeerEvent: (event, cb) => peerManager.removeListener(event, cb),
       peerCountIfAboveThreshold: () => peerManager.peerCountIfAboveThreshold(),
-      markSyncRequested: (key) => peerManager.markSyncRequested(key),
+      markSyncRequested: (connectionId) => peerManager.markSyncRequested(connectionId),
       clearSyncRequested: () => peerManager.clearSyncRequested(),
-      completeSyncRequest: (key) => peerManager.completeSyncRequest(key),
+      completeSyncRequest: (connectionId) => peerManager.completeSyncRequest(connectionId),
       isEnterprise: () => enterpriseNetwork.getCachedEnterpriseIdentity(),
       networkStateReady: () => networkStateService.waitStarted(),
       // The steady-state manifest refresh's apply half: catch up any running container whose
@@ -644,14 +644,13 @@ async function startFluxFunctions() {
     // orchestrator through markSyncRequested and cleared by completeSyncRequest, so
     // that is what the question is answered from.
     //
-    // REBASE-ADAPTER (D12): development answers this from the orchestrator, per
-    // CONNECTION - a peer that reconnects keeps its ip:port while becoming a
-    // different connection, and nothing arriving on the new one answers a request
-    // written into the old one. That rule belongs to #1797's orchestrator, which is
-    // not the one this branch runs; until D12 ports it, the answer is keyed by
-    // ip:port like every other v9 caller of the ledger. Replace this line when D12
-    // lands, not before.
-    peerManager.syncResponseWanted = (peerSocket) => peerManager.isSyncRequested(peerSocket.key);
+    // Per CONNECTION. A peer that reconnects keeps its ip:port while becoming a
+    // different connection, so nothing arriving on the new one answers a request
+    // written into the old one - asked by address, a stale view is counted as
+    // this round's completion. The ledger is keyed by connectionId and the
+    // orchestrator records the connection it asked on, so both ends of the
+    // question agree.
+    peerManager.syncResponseWanted = (peerSocket) => peerManager.isSyncRequested(peerSocket.connectionId);
 
     // The other half of the peer-gated fallback. The orchestrator stops a node
     // whose peer set keeps collapsing from ever reaching READY, which is silent;

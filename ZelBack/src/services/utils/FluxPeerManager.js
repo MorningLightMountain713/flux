@@ -45,6 +45,10 @@ const INBOUND_EPHEMERAL_MAX_PER_IP = 4;
 const INBOUND_EPHEMERAL_LIFETIME_MS = 120000;
 
 class FluxPeerManager extends EventEmitter {
+  // Keyed by CONNECTION, not by ip:port. A peer that reconnects keeps its
+  // ip:port while becoming a different connection, so a response arriving on the
+  // new one would otherwise answer a request written into the old one - and the
+  // node would count a stale view as this round's completion.
   #syncRequestedPeers = new Set();
   static CONNECTION_BACKOFF_MS = config.fluxapps.connectionBackoffMs ?? [2 * 60000, 5 * 60000, 10 * 60000, 15 * 60000];
 
@@ -339,7 +343,7 @@ class FluxPeerManager extends EventEmitter {
     const peer = this.#peers.get(key);
     if (!peer) return null;
 
-    const syncWasInFlight = this.#syncRequestedPeers.delete(key);
+    const syncWasInFlight = this.#syncRequestedPeers.delete(peer.connectionId);
     this.#removeTracking(peer);
 
     // Clean up peer exchange topology and notify others
@@ -407,7 +411,10 @@ class FluxPeerManager extends EventEmitter {
     // resets the sync round and makes the loss moot): an in-flight sync died
     // with this connection and its requester may want a replacement peer.
     if (syncWasInFlight) {
-      this.emit('syncPeerLost', key);
+      // The connection, not just the address: the requester compares it against
+      // the one it asked on, so a loss announced for a connection it has already
+      // replaced cannot cancel the live request.
+      this.emit('syncPeerLost', { key, connectionId: peer.connectionId });
     }
     // The counterpart of peerConnected. A listener waiting on this peer for an
     // answer now knows the answer is never coming, which is a fact rather than
@@ -2053,11 +2060,11 @@ class FluxPeerManager extends EventEmitter {
     this.#historyCount = 0;
   }
 
-  markSyncRequested(key) { this.#syncRequestedPeers.add(key); }
+  markSyncRequested(connectionId) { this.#syncRequestedPeers.add(connectionId); }
 
-  isSyncRequested(key) { return this.#syncRequestedPeers.has(key); }
+  isSyncRequested(connectionId) { return this.#syncRequestedPeers.has(connectionId); }
 
-  completeSyncRequest(key) { this.#syncRequestedPeers.delete(key); }
+  completeSyncRequest(connectionId) { this.#syncRequestedPeers.delete(connectionId); }
 
   clearSyncRequested() { this.#syncRequestedPeers.clear(); }
 

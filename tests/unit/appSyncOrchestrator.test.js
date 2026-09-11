@@ -1961,7 +1961,7 @@ describe('AppSyncOrchestrator', () => {
       await clock.tickAsync(0);
       expect(peers[0].send.callCount, 'the pull went out on the first return').to.equal(bootSends + 1);
 
-      peerEmitter.emit('syncPeerLost', peers[0].key); // the far end refused the socket
+      peerEmitter.emit('syncPeerLost', { key: peers[0].key, connectionId: peers[0].connectionId }); // the far end refused the socket
       await clock.tickAsync(1000);
       const laterLoss = Date.now() - 500;
       peerEmitter.emit('peerReestablished', { key: peers[0].key, lostAtMs: laterLoss });
@@ -1984,7 +1984,7 @@ describe('AppSyncOrchestrator', () => {
       appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_COMPLETE, 'apprunning', peers[0].key);
       await clock.tickAsync(0);
 
-      peerEmitter.emit('syncPeerLost', peers[0].key);
+      peerEmitter.emit('syncPeerLost', { key: peers[0].key, connectionId: peers[0].connectionId });
       await clock.tickAsync(1000);
       const laterLoss = Date.now() - 500;
       peerEmitter.emit('peerReestablished', { key: peers[0].key, lostAtMs: laterLoss });
@@ -2612,7 +2612,7 @@ describe('AppSyncOrchestrator', () => {
       expect(peers[3].send.called).to.be.false;
 
       appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_COMPLETE, 'apprunning', peers[0].key);
-      peerEmitter.emit('syncPeerLost', peers[0].key);
+      peerEmitter.emit('syncPeerLost', { key: peers[0].key, connectionId: peers[0].connectionId });
       await clock.tickAsync(0);
 
       // One replacement peer, asked only for what is still short after the
@@ -2628,7 +2628,7 @@ describe('AppSyncOrchestrator', () => {
       await startWithAskedPeers(peers);
 
       completeAllTypes(peers[0].key);
-      peerEmitter.emit('syncPeerLost', peers[0].key);
+      peerEmitter.emit('syncPeerLost', { key: peers[0].key, connectionId: peers[0].connectionId });
       await clock.tickAsync(0);
 
       expect(peers[3].send.called).to.be.false;
@@ -2638,12 +2638,12 @@ describe('AppSyncOrchestrator', () => {
       const peers = makeEligiblePeers(5);
       await startWithAskedPeers(peers);
 
-      peerEmitter.emit('syncPeerLost', peers[0].key);
+      peerEmitter.emit('syncPeerLost', { key: peers[0].key, connectionId: peers[0].connectionId });
       await clock.tickAsync(0);
       expect(peers[3].send.callCount).to.equal(3); // replacement asked all 3 types (none delivered)
 
       // The lost peer reconnects and is eligible again; its replacement dies too
-      peerEmitter.emit('syncPeerLost', peers[3].key);
+      peerEmitter.emit('syncPeerLost', { key: peers[3].key, connectionId: peers[3].connectionId });
       await clock.tickAsync(0);
 
       expect(peers[4].send.callCount).to.equal(3);
@@ -2660,7 +2660,10 @@ describe('AppSyncOrchestrator', () => {
       blockEmitter.emit('blocksProcessed', 2555001);
       await clock.tickAsync(0);
 
-      sinon.assert.calledWith(completeSyncRequestStub, peers[2].key);
+      // By CONNECTION, not by address: the ledger and the arriving-response gate
+      // both key on it, so a reconnected peer's answer cannot close a request
+      // made on the socket before it.
+      sinon.assert.calledWith(completeSyncRequestStub, peers[2].connectionId);
       expect(peers[3].send.callCount).to.equal(3); // replacement asked all 3 still-short types
       expect(logStub.warn.args.some((args) => String(args[0]).includes('missed the 120s deadline'))).to.be.true;
     });
@@ -2669,7 +2672,7 @@ describe('AppSyncOrchestrator', () => {
       const peers = makeEligiblePeers(3);
       await startWithAskedPeers(peers);
 
-      peerEmitter.emit('syncPeerLost', peers[0].key);
+      peerEmitter.emit('syncPeerLost', { key: peers[0].key, connectionId: peers[0].connectionId });
       await clock.tickAsync(0);
 
       const latecomer = makePeer('10.0.0.99:16127');
@@ -2685,7 +2688,7 @@ describe('AppSyncOrchestrator', () => {
       const orchestrator = await startWithAskedPeers(peers);
 
       for (const idx of [0, 1, 2, 3, 4]) {
-        peerEmitter.emit('syncPeerLost', peers[idx].key);
+        peerEmitter.emit('syncPeerLost', { key: peers[idx].key, connectionId: peers[idx].connectionId });
         // eslint-disable-next-line no-await-in-loop
         await clock.tickAsync(0);
       }
@@ -2716,7 +2719,7 @@ describe('AppSyncOrchestrator', () => {
       expect(orchestrator.state).to.equal(STATES.READY);
       expect(clearSyncRequestedStub.called).to.be.true;
 
-      peerEmitter.emit('syncPeerLost', peers[1].key);
+      peerEmitter.emit('syncPeerLost', { key: peers[1].key, connectionId: peers[1].connectionId });
       await clock.tickAsync(0);
       expect(peers[3].send.called).to.be.false;
     });

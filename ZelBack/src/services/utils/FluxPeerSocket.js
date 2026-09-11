@@ -535,7 +535,11 @@ class FluxPeerSocket {
         || syncType === 'fluxapprunningsync'
         || syncType === 'fluxappinstallingsync'
         || syncType === 'fluxappinstallingerrorssync') {
-        if (manager.syncResponseDispatcher && manager.isSyncRequested(this.key)) {
+        // THIS connection's request, not this address's. The sibling gate in
+        // serviceManager asks the same question the same way; asked by key, a
+        // response on a reconnected socket answers a request made on the socket
+        // before it.
+        if (manager.syncResponseDispatcher && manager.isSyncRequested(this.connectionId)) {
           setImmediate(() => manager.syncResponseDispatcher(msgObj, this));
           return;
         }

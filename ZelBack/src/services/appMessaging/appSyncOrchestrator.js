@@ -206,7 +206,7 @@ class AppSyncOrchestrator {
       this.#peersAtFloor = false;
       this.#evaluate();
     };
-    this.#syncPeerLostHandler = (key) => this.#onSyncPeerLost(key);
+    this.#syncPeerLostHandler = (info) => this.#onSyncPeerLost(info);
     this.#syncPeersAvailableHandler = () => this.#onSyncPeersAvailable();
     this.#peerReestablishedHandler = (info) => {
       this.#onPeerReestablished(info).catch((error) => {
@@ -311,7 +311,7 @@ class AppSyncOrchestrator {
    * delivered types stay banked in the completion counts.
    * @param {string} key ip:port of the lost peer
    */
-  #onSyncPeerLost(key) {
+  #onSyncPeerLost({ key, connectionId = null }) {
     // A scoped pull that dies with its socket was never answered: its loss
     // goes back to the credits, so the next re-establishment pulls from the
     // earliest gap and not from the connect time of a socket the far end
@@ -326,11 +326,20 @@ class AppSyncOrchestrator {
     if (this.#stateSyncComplete) return;
     const progress = this.#peerProgress.get(key);
     if (!progress || progress.failed) return;
+    // Only the connection this round is actually waiting on. A peer that
+    // reconnects keeps its ip:port, so a loss announced for the socket BEFORE
+    // the one in use would otherwise cancel the live request and replace a peer
+    // that is answering perfectly well.
+    if (connectionId !== null && progress.connectionId !== null
+      && progress.connectionId !== connectionId) {
+      return;
+    }
     const missing = SYNC_TYPES.filter((type) => !progress.done.has(type));
     if (missing.length === 0) return;
     progress.failed = true;
+    this.#completeSyncRequest(progress.connectionId);
     log.warn(`AppSyncOrchestrator - Sync peer ${key} disconnected mid-sync (missing: ${missing.join(', ')})`);
-    fluxEventBus.publish('ephemeralSync:peerFailed', { peer: key, reason: 'disconnected', missing });
+    fluxEventBus.publish('ephemeralSync:peerDisconnected', { peer: key, connectionId, missing });
     this.#topUpSyncPeers();
   }
 
@@ -349,9 +358,12 @@ class AppSyncOrchestrator {
       if (missing.length === 0) continue;
       if (now - progress.askedAt < SYNC_TIMEOUT_MS) continue;
       progress.failed = true;
-      this.#completeSyncRequest(key);
+      this.#completeSyncRequest(progress.connectionId);
       log.warn(`AppSyncOrchestrator - Sync peer ${key} missed the ${Math.round(SYNC_TIMEOUT_MS / 1000)}s deadline (missing: ${missing.join(', ')})`);
-      fluxEventBus.publish('ephemeralSync:peerFailed', { peer: key, reason: 'deadline', missing });
+      // Named for what happened, not for the fact that something did: a
+      // deadline, a disconnection and an unverifiable answer are three different
+      // findings about a peer and a reader acts on them differently.
+      fluxEventBus.publish('ephemeralSync:peerTimedOut', { peer: key, reason: 'deadline', missing });
     }
     this.#topUpSyncPeers();
   }
@@ -473,8 +485,15 @@ class AppSyncOrchestrator {
     const askedAt = Date.now();
     for (const peer of peersToAsk) {
       this.#askedPeers.add(peer.key);
-      this.#markSyncRequested(peer.key);
-      this.#peerProgress.set(peer.key, { askedAt, done: new Set(), failed: false });
+      const connectionId = peer.connectionId ?? null;
+      this.#markSyncRequested(connectionId);
+      // The CONNECTION this peer was asked on, carried so a loss announced for
+      // a connection this round has already replaced cannot cancel the live
+      // request - and so a response arriving on a newer socket is not counted
+      // against a request made on the old one.
+      this.#peerProgress.set(peer.key, {
+        askedAt, connectionId, done: new Set(), failed: false,
+      });
       // round membership wins: this peer's next completion is the round's
       this.#reconnectPulls.delete(peer.key);
     }
