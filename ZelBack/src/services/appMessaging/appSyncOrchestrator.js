@@ -317,7 +317,7 @@ class AppSyncOrchestrator {
     this.#onPeersReady();
   }
 
-/**
+  /**
    * End one peer's request without counting it, and get another peer asked.
    *
    * @param {string} peerKey ip:port
@@ -400,7 +400,7 @@ class AppSyncOrchestrator {
     progress.lastHeardAt = Date.now();
   }
 
-    #onEphemeralSyncComplete(syncType, peerKey) {
+  #onEphemeralSyncComplete(syncType, peerKey) {
     // A scoped reconnect pull completing is the pull's own business - it
     // answered from a since bound, not the round's since=0. It is announced:
     // a node back from unreachability runs its placement check on it.
@@ -1021,7 +1021,7 @@ class AppSyncOrchestrator {
     return this.#blocksSinceSyncStarted >= FALLBACK_MINUTES * BLOCKS_PER_MINUTE;
   }
 
-/**
+  /**
    * Mirror the state-sync verdict where the SYNC RESPONDER can read it.
    *
    * Called wherever an input to #isStateSyncReady moves, so the value never
@@ -1040,7 +1040,7 @@ class AppSyncOrchestrator {
     globalState.appStateAuthoritative = this.#isStateSyncReady();
   }
 
-    #isStateSyncReady() {
+  #isStateSyncReady() {
     if (this.#stateSyncComplete) return true;
     return this.#isBlockTimerExpired();
   }
