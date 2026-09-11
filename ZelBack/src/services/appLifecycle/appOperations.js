@@ -322,6 +322,22 @@ async function redeployComponent(appName, componentName, options = {}) {
       });
 
       status(`Component ${deployComp.identifier} ${operation} complete`);
+      // One component replaced in place, the app left installed. Nothing
+      // observing the node could previously tell a component redeploy from its
+      // never having been asked for - the app's own state is the same either
+      // way - which is how this endpoint failing on every call went unnoticed.
+      //
+      // `hard` is the consequence that differs between the two operations: a
+      // rebuild recreated the component's volume, so its data on this node is
+      // gone. Published per COMPONENT rather than per app, because a co-located
+      // pair rolls one identity's copy at a time and an observer waiting on the
+      // app would not know which.
+      fluxEventBus.publish('app:componentRedeployed', {
+        name: appName,
+        component: componentName,
+        identifier: deployComp.identifier,
+        hard: createVolumes,
+      });
     }
     operationRegistry.release(appName, redeployToken);
     appReconciler.enqueueApp(appName);
@@ -825,6 +841,18 @@ async function promoteApplicationToPrimary(appname, appId) {
     // is the reconciler's to enforce; re-running the workflow would only re-chmod
     // the tree and cycle the syncthing folder mode.
     if (appReconciler.getControllerDesired(appname) === 'running') return;
+
+    // A fact: this node has decided to become primary and is committing to it.
+    // Published AFTER the idempotence backstop above, not before it as
+    // development does - dev has no such backstop, and announcing ahead of it
+    // would claim a promotion that then returns without doing anything.
+    //
+    // The cadence around this decision is a COUNTER, not an event: a pass that
+    // considered promotion twenty times a minute would drown the stream, and
+    // what a reader wants from it is the number. See the rule at the top of
+    // fluxEventBus.js.
+    fluxEventBus.publish('masterSlave:started', { identifier: appname });
+    fluxEventBus.count('masterSlave:decision', appname, 'started');
 
     log.info(`Promoting ${appname} to primary (permissions fix + syncthing folder cycle)`);
 
@@ -2576,4 +2604,9 @@ module.exports = {
   getPeerAppsInstallingErrorMessages,
   startApplication,
   stopApplication,
+  // The promote workflow, exported so its decision can be asserted directly.
+  // Its five call sites are all inside coordinateActiveStandbyApps and all
+  // fire-and-forget, so driving it through the election would assert the
+  // election rather than the promotion.
+  promoteApplicationToPrimary,
 };
