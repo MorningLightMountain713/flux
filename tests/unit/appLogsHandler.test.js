@@ -8,7 +8,7 @@ const { expect } = chai;
 
 describe('appLogsHandler tests', () => {
   let verifyPrivilege;
-  let getDockerContainerByIdOrName;
+  let getDockerContainer;
   let appLogsHandler;
   let logStream;
   let container;
@@ -76,10 +76,10 @@ describe('appLogsHandler tests', () => {
     logStream.destroy = sinon.stub();
     container = { id: 'abc123', logs: sinon.stub().resolves(logStream) };
     verifyPrivilege = sinon.stub().resolves(true);
-    getDockerContainerByIdOrName = sinon.stub().resolves(container);
+    getDockerContainer = sinon.stub().resolves(container);
     appLogsHandler = proxyquire('../../ZelBack/src/lib/socketIoHandlers/appLogsHandler', {
       '../../services/verificationHelper': { verifyPrivilege },
-      '../../services/dockerService': { getDockerContainerByIdOrName },
+      '../../services/dockerService': { getDockerContainer },
     });
   });
 
@@ -135,7 +135,7 @@ describe('appLogsHandler tests', () => {
       await subscribe(socket);
 
       expect(socket.emit.calledWith('error', 'Not authorized.')).to.be.true;
-      expect(getDockerContainerByIdOrName.called).to.be.false;
+      expect(getDockerContainer.called).to.be.false;
     });
 
     it('asks for the privilege by the app name, not the component name', async () => {
@@ -148,7 +148,7 @@ describe('appLogsHandler tests', () => {
     });
 
     it('answers a container that is not there rather than opening a feed', async () => {
-      getDockerContainerByIdOrName.rejects(new Error('Container nope not found'));
+      getDockerContainer.rejects(new Error('Container nope not found'));
       const socket = makeSocket('s1', makeNamespace());
       appLogsHandler(socket);
 
@@ -281,7 +281,7 @@ describe('appLogsHandler tests', () => {
       appLogsHandler(socket);
       await subscribe(socket);
 
-      getDockerContainerByIdOrName.resolves({ id: 'def456', logs: sinon.stub().resolves(second) });
+      getDockerContainer.resolves({ id: 'def456', logs: sinon.stub().resolves(second) });
       await subscribe(socket, 'fluxother_app2');
 
       expect(socket.emit.calledWith('subscribed', { container: 'abc123' })).to.be.true;
@@ -306,7 +306,7 @@ describe('appLogsHandler tests', () => {
     it('refuses the container past the limit, before it costs a signature check', async () => {
       const socket = makeSocket('s1', makeNamespace());
       appLogsHandler(socket);
-      getDockerContainerByIdOrName.callsFake(async (name) => ({
+      getDockerContainer.callsFake(async (name) => ({
         id: `container-${name}`,
         logs: sinon.stub().callsFake(async () => {
           const stream = new EventEmitter();
@@ -335,7 +335,7 @@ describe('appLogsHandler tests', () => {
       const socket = makeSocket('s1', makeNamespace());
       appLogsHandler(socket);
 
-      getDockerContainerByIdOrName.resolves(null);
+      getDockerContainer.resolves(null);
       await subscribe(socket, 'fluxa_myapp');
       expect(socket.emit.calledWith('error', 'Container not found.', 'fluxa_myapp')).to.be.true;
 
@@ -383,7 +383,7 @@ describe('appLogsHandler tests', () => {
       // run those in parallel and be refused afterwards.
       const socket = makeSocket('s1', makeNamespace());
       appLogsHandler(socket);
-      getDockerContainerByIdOrName.callsFake(async (name) => ({
+      getDockerContainer.callsFake(async (name) => ({
         id: `container-${name}`,
         logs: sinon.stub().callsFake(async () => {
           const stream = new EventEmitter();
@@ -414,7 +414,7 @@ describe('appLogsHandler tests', () => {
       appLogsHandler(socket);
 
       let opening = false;
-      getDockerContainerByIdOrName.callsFake(async (name) => ({
+      getDockerContainer.callsFake(async (name) => ({
         id: `container-${name}`,
         logs: sinon.stub().callsFake(() => {
           if (name === 'flux0_myapp') {
@@ -450,7 +450,7 @@ describe('appLogsHandler tests', () => {
       second.destroy = sinon.stub();
       appLogsHandler(socket);
       await subscribe(socket);
-      getDockerContainerByIdOrName.resolves({ id: 'def456', logs: sinon.stub().resolves(second) });
+      getDockerContainer.resolves({ id: 'def456', logs: sinon.stub().resolves(second) });
       await subscribe(socket, 'fluxother_app2');
 
       await socket.fire('unsubscribe', 'fluxother_app2');
@@ -483,7 +483,7 @@ describe('appLogsHandler tests', () => {
         fluxa_myapp: { id: 'containerA', logs: sinon.stub().callsFake(async () => newStream()) },
         fluxb_myapp: { id: 'containerB', logs: sinon.stub().callsFake(async () => newStream()) },
       };
-      getDockerContainerByIdOrName.callsFake(async (name) => byName[name]);
+      getDockerContainer.callsFake(async (name) => byName[name]);
       return streams;
     };
 
@@ -547,14 +547,14 @@ describe('appLogsHandler tests', () => {
     });
 
     it('holds nothing when the container is not there, so the connection can ask again', async () => {
-      getDockerContainerByIdOrName.resolves(null);
+      getDockerContainer.resolves(null);
       const socket = makeSocket('s1', makeNamespace());
       appLogsHandler(socket);
 
       await subscribe(socket);
       expect(socket.emit.calledWith('error', 'Container not found.')).to.be.true;
 
-      getDockerContainerByIdOrName.resolves(container);
+      getDockerContainer.resolves(container);
       await subscribe(socket);
 
       expect(
@@ -1011,7 +1011,7 @@ describe('appLogsHandler tests', () => {
       logStream.emit('end');
       expect(appLogsHandler.feeds.has('abc123'), 'the container stopped and the feed closed with it').to.be.false;
 
-      getDockerContainerByIdOrName.resolves({ id: 'def456', logs: sinon.stub().resolves(freshStream()) });
+      getDockerContainer.resolves({ id: 'def456', logs: sinon.stub().resolves(freshStream()) });
       await subscribe(socket, 'fluxother_app2');
 
       expect(
@@ -1023,7 +1023,7 @@ describe('appLogsHandler tests', () => {
       // And the container that stopped can be taken again, which is the dead
       // entry being replaced rather than merely ignored.
       container.logs = sinon.stub().resolves(freshStream());
-      getDockerContainerByIdOrName.resolves(container);
+      getDockerContainer.resolves(container);
       await subscribe(socket);
 
       expect(socket.emit.calledWith('subscribed', { container: 'abc123' })).to.be.true;
@@ -1046,7 +1046,7 @@ describe('appLogsHandler tests', () => {
 
       // The record is gone at THAT moment, not on the next subscribe: every one
       // of the connection's places is free, each for a different container.
-      getDockerContainerByIdOrName.callsFake(async (name) => ({
+      getDockerContainer.callsFake(async (name) => ({
         id: `container-${name}`,
         logs: sinon.stub().callsFake(async () => freshStream()),
       }));

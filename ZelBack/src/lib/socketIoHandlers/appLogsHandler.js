@@ -510,7 +510,13 @@ async function appLogsHandler(socket) {
         return;
       }
 
-      const container = await dockerService.getDockerContainerByIdOrName(nameOrId).catch((error) => {
+      // getDockerContainer answers null for an absent container; the catch is for
+      // the other failure - an unreachable daemon - which reaches the client as the
+      // same "not found". Log the cause so the two are distinguishable. This
+      // replaced getDockerContainerByIdOrName, which this tree does not export:
+      // the call threw synchronously, before the promise the catch is attached to
+      // existed, so every subscribe failed for every container.
+      const container = await dockerService.getDockerContainer(nameOrId).catch((error) => {
         log.error(`appLogsHandler: container lookup failed for ${nameOrId}: ${error.message}`);
         return null;
       });
