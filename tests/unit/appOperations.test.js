@@ -28,6 +28,7 @@ const syncthingService = require('../../ZelBack/src/services/syncthingService');
 const config = require('config');
 const proxyquire = require('proxyquire');
 const { appsFolder } = require('../../ZelBack/src/services/utils/appConstants');
+const { Privilege } = require('../../ZelBack/src/services/utils/privileges');
 const {
   loadSpecLibrary, V9_SUBMISSION, v9Spec, instantiatedSpec, assertAnswers,
 } = require('./fixtures/fluxSpec');
@@ -224,7 +225,10 @@ describe('appOperations tests', () => {
       await appOperations.redeployComponentAPI(req, res);
 
       expect(res.json.calledOnce).to.be.true;
-      expect(verificationHelper.verifyPrivilege.calledWith('appownerabove', req, 'myapp')).to.be.true;
+      expect(
+        verificationHelper.verifyPrivilege.calledWith(Privilege.APP_OWNER_OR_FLUX_TEAM, null, { appName: 'myapp' }),
+        'the privilege member, the auth the request carries, and the app name as { appName }',
+      ).to.be.true;
     });
 
     it('should handle force parameter from query string', async () => {

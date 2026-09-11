@@ -153,7 +153,7 @@ async function getTransportPublicKey(req, res) {
  */
 async function getBlobLocator(req, res) {
   try {
-    const authorized = await verificationHelper.verifyPrivilege('user', req);
+    const authorized = await verificationHelper.verifyPrivilege(Privilege.USER, authOf(req));
     if (!authorized) {
       res.json(messageHelper.errUnauthorizedMessage());
       return;

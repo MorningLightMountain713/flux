@@ -753,7 +753,7 @@ async function startDaemon(req, res) {
  * @returns {Promise<object>} Message.
  */
 async function adjustLogLevel(req, res) {
-  const authorized = await verificationHelper.verifyPrivilege('adminandfluxteam', req);
+  const authorized = await verificationHelper.verifyPrivilege(Privilege.NODE_OPERATOR_OR_FLUX_TEAM, authOf(req));
   if (authorized !== true) {
     const errMessage = messageHelper.errUnauthorizedMessage();
     return res ? res.json(errMessage) : errMessage;

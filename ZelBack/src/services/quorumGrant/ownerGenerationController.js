@@ -9,6 +9,7 @@ const fluxCommunicationMessagesSender = require('../fluxCommunicationMessagesSen
 const messageStore = require('../appMessaging/messageStore');
 const ownerGenerationRecord = require('./ownerGenerationRecord');
 const log = require('../../lib/log');
+const { Privilege, authOf } = require('../utils/privileges');
 
 // The owner's way in: how a signed generation record actually reaches the
 // fleet. The dashboard flow is read, sign, submit — the read surface tells
@@ -55,7 +56,7 @@ async function submit(req, res) {
       return res.status(400).json(messageHelper.createErrorMessage('malformed generation record'));
     }
 
-    const authorized = await verificationHelper.verifyPrivilege('appownerabove', req, record.appName);
+    const authorized = await verificationHelper.verifyPrivilege(Privilege.APP_OWNER_OR_FLUX_TEAM, authOf(req), { appName: record.appName });
     if (authorized !== true) {
       return res.status(401).json(messageHelper.errUnauthorizedMessage());
     }

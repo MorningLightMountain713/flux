@@ -25,6 +25,7 @@ const meshPorts = require('./meshPorts');
 const meshNamespace = require('./meshNamespace');
 const meshSsh = require('./meshSsh');
 const meshReconciler = require('./meshReconciler');
+const { Privilege, authOf } = require('../utils/privileges');
 
 /**
  * Resolve a request's app name to its mesh identity. Throws on an app that is
@@ -104,7 +105,7 @@ async function meshAppStatusAPI(req, res) {
     // Authorization first, against the name alone — resolving before the
     // check would let an unauthorized caller probe which apps exist here.
     const appName = deploymentProvider.appNameFromRequest(appname);
-    const authorized = await verificationHelper.verifyPrivilege('appownerorfluxteam', req, appName);
+    const authorized = await verificationHelper.verifyPrivilege(Privilege.APP_OWNER_OR_FLUX_TEAM, authOf(req), { appName });
     if (!authorized) {
       const errMessage = messageHelper.errUnauthorizedMessage();
       return res ? res.json(errMessage) : errMessage;
@@ -142,7 +143,7 @@ async function meshAppStatusAPI(req, res) {
 }
 
 async function authorizedFluxTeamLever(req, res) {
-  const authorized = await verificationHelper.verifyPrivilege('fluxteam', req);
+  const authorized = await verificationHelper.verifyPrivilege(Privilege.FLUX_TEAM, authOf(req));
   if (!authorized) {
     const errMessage = messageHelper.errUnauthorizedMessage();
     if (res) res.json(errMessage);
