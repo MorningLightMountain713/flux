@@ -394,66 +394,56 @@ async function appKill(req, res) {
 }
 
 /**
- * Pause an application
+ * Pause and unpause were removed, and the routes answer 410 rather than 404 so a
+ * caller learns WHY instead of thinking it mistyped the path.
+ *
+ * The reason is docker's: it reports a paused container as running. The
+ * reconciler and the load balancer both read that as healthy and keep routing
+ * to it, while nothing in FluxOS can see that it is frozen - so a pause looks
+ * like a working app that answers nothing. On this tree the reconciler is the
+ * SOLE starter and owns container state outright, which makes an out-of-band
+ * freeze it cannot observe worse, not better.
+ *
+ * It answers an ERROR rather than a success, deliberately: a caller must not be
+ * told the container stopped when it has not. appstop is the supported verb.
+ *
  * @param {import('express').Request} req
  * @param {import('express').Response} res
  * @returns {object} Response message
  */
-async function appPause(req, res) {
+async function deprecatedPauseResponse(req, res) {
   try {
     let { appname } = req.params;
     appname = appname || req.query.appname;
-    // eslint-disable-next-line global-require
-    let { global } = req.params;
-    global = global || req.query.global || false;
-    global = serviceHelper.ensureBoolean(global);
 
-    if (!appname) {
-      throw new Error('No Flux App specified');
-    }
-
-    const mainAppName = deploymentProvider.appNameFromRequest(appname);
-
-    // Use dynamic require to avoid circular dependency
-    // eslint-disable-next-line global-require
-    const verificationHelper = require('../verificationHelper');
-    const authorized = await verificationHelper.verifyPrivilege(Privilege.APP_OWNER_OR_FLUX_TEAM, authOf(req), { appName: mainAppName });
-    if (!authorized) {
-      const errMessage = messageHelper.errUnauthorizedMessage();
-      return res ? res.json(errMessage) : errMessage;
-    }
-
-    const replica = req.query.replica || null;
-
-    if (global) {
-      globalCommand.executeAppGlobalCommand(appname, 'apppause', req.headers.zelidauth, undefined, undefined, replica); // do not wait
-      const appResponse = messageHelper.createSuccessMessage(`${appname} queried for global pause`);
-      return res ? res.json(appResponse) : appResponse;
-    }
-
-    const isComponent = appname.includes('_');
-    let appRes;
-
-    if (isComponent) {
-      // the request names a component of an app; its container identifier is built
-      // from the app's stored identity, so it is resolved rather than assumed
-      const identifier = await deploymentProvider.resolveRequestContainer(appname, { replica });
-      appRes = await dockerService.appDockerPause(identifier);
-    } else {
-      const resolved = await deploymentProvider.resolveRequestTargets(appname, { replica });
-      for (const deployment of resolved.deployments) {
-        for (const [, deployComp] of deployment.componentEntries({ reverse: true })) {
-          // eslint-disable-next-line no-await-in-loop
-          await dockerService.appDockerPause(deployComp.identifier);
-        }
+    if (appname) {
+      // Validated before anything is done with it. Express's default extended
+      // query parser turns ?appname=a&appname=b into an ARRAY and ?appname[x]=1
+      // into an object, neither of which has .split - and this runs ahead of
+      // verifyPrivilege because the app name is what the privilege is scoped to,
+      // so it is reachable unauthenticated from the open internet.
+      if (typeof appname !== 'string') {
+        throw new Error('Invalid Flux App name specified');
       }
-      appRes = replica != null
-        ? `Replica ${replica} of ${resolved.instantiated.name} paused`
-        : `Application ${resolved.instantiated.name} paused`;
+      const mainAppName = deploymentProvider.appNameFromRequest(appname);
+      // Use dynamic require to avoid circular dependency
+      // eslint-disable-next-line global-require
+      const verificationHelper = require('../verificationHelper');
+      const authorized = await verificationHelper.verifyPrivilege(
+        Privilege.APP_OWNER_OR_FLUX_TEAM, authOf(req), { appName: mainAppName },
+      );
+      if (!authorized) {
+        const errMessage = messageHelper.errUnauthorizedMessage();
+        return res ? res.json(errMessage) : errMessage;
+      }
     }
 
-    const appResponse = messageHelper.createDataMessage(appRes);
-    return res ? res.json(appResponse) : appResponse;
+    const errorResponse = messageHelper.createErrorMessage(
+      'Pausing applications is no longer supported. Use appstop to stop an application.',
+      'Deprecated',
+      410,
+    );
+    return res ? res.json(errorResponse) : errorResponse;
   } catch (error) {
     log.error(error);
     const errorResponse = messageHelper.createErrorMessage(
@@ -466,75 +456,23 @@ async function appPause(req, res) {
 }
 
 /**
- * Unpause an application
+ * Pause an application - deprecated, see deprecatedPauseResponse.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
+ * @returns {object} Response message
+ */
+async function appPause(req, res) {
+  return deprecatedPauseResponse(req, res);
+}
+
+/**
+ * Unpause an application - deprecated, see deprecatedPauseResponse.
  * @param {import('express').Request} req
  * @param {import('express').Response} res
  * @returns {object} Response message
  */
 async function appUnpause(req, res) {
-  try {
-    // eslint-disable-next-line global-require
-    let { appname } = req.params;
-    appname = appname || req.query.appname;
-    let { global } = req.params;
-    global = global || req.query.global || false;
-    global = serviceHelper.ensureBoolean(global);
-
-    if (!appname) {
-      throw new Error('No Flux App specified');
-    }
-
-    const mainAppName = deploymentProvider.appNameFromRequest(appname);
-
-    // Use dynamic require to avoid circular dependency
-    // eslint-disable-next-line global-require
-    const verificationHelper = require('../verificationHelper');
-    const authorized = await verificationHelper.verifyPrivilege(Privilege.APP_OWNER_OR_FLUX_TEAM, authOf(req), { appName: mainAppName });
-    if (!authorized) {
-      const errMessage = messageHelper.errUnauthorizedMessage();
-      return res ? res.json(errMessage) : errMessage;
-    }
-
-    const replica = req.query.replica || null;
-
-    if (global) {
-      globalCommand.executeAppGlobalCommand(appname, 'appunpause', req.headers.zelidauth, undefined, undefined, replica); // do not wait
-      const appResponse = messageHelper.createSuccessMessage(`${appname} queried for global unpase`);
-      return res ? res.json(appResponse) : appResponse;
-    }
-
-    const isComponent = appname.includes('_');
-    let appRes;
-
-    if (isComponent) {
-      // the request names a component of an app; its container identifier is built
-      // from the app's stored identity, so it is resolved rather than assumed
-      const identifier = await deploymentProvider.resolveRequestContainer(appname, { replica });
-      appRes = await dockerService.appDockerUnpause(identifier);
-    } else {
-      const resolved = await deploymentProvider.resolveRequestTargets(appname, { replica });
-      for (const deployment of resolved.deployments) {
-        for (const [, deployComp] of deployment.componentEntries()) {
-          // eslint-disable-next-line no-await-in-loop
-          await dockerService.appDockerUnpause(deployComp.identifier);
-        }
-      }
-      appRes = replica != null
-        ? `Replica ${replica} of ${resolved.instantiated.name} unpaused`
-        : `Application ${resolved.instantiated.name} unpaused`;
-    }
-
-    const appResponse = messageHelper.createDataMessage(appRes);
-    return res ? res.json(appResponse) : appResponse;
-  } catch (error) {
-    log.error(error);
-    const errorResponse = messageHelper.createErrorMessage(
-      error.message || error,
-      error.name,
-      error.code,
-    );
-    return res ? res.json(errorResponse) : errorResponse;
-  }
+  return deprecatedPauseResponse(req, res);
 }
 
 /**

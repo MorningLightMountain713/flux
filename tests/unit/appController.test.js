@@ -684,98 +684,63 @@ describe('appController tests', () => {
     });
   });
 
-  describe('appPause tests', () => {
-    beforeEach(() => {
-      sinon.stub(dockerService, 'appDockerPause').resolves('Flux App TestApp successfully paused.');
+  describe('pause and unpause are retired', () => {
+    // The reason they are gone is docker's: a paused container still reports as
+    // running, so the reconciler and the load balancer keep routing to it while
+    // nothing in FluxOS can see it is frozen. An ERROR, not a success - a caller
+    // must not be told the container stopped when it has not.
+    ['appPause', 'appUnpause'].forEach((verb) => {
+      it(`${verb} answers 410 and names the supported verb instead`, async () => {
+        verificationHelperStub.resolves(true);
+        const res = { json: sinon.fake((param) => param) };
+
+        await appController[verb]({ params: { appname: 'TestApp' }, query: {} }, res);
+
+        const result = res.json.firstCall.args[0];
+        expect(result.status).to.equal('error');
+        expect(result.data.code).to.equal(410);
+        expect(result.data.name).to.equal('Deprecated');
+        expect(result.data.message).to.contain('appstop');
+      });
+
+      it(`${verb} refuses a caller the privilege refuses, before saying anything else`, async () => {
+        verificationHelperStub.resolves(false);
+        const res = { json: sinon.fake((param) => param) };
+
+        await appController[verb]({ params: { appname: 'TestApp' }, query: {} }, res);
+
+        expect(res.json.firstCall.args[0].data.message).to.contain('Unauthorized');
+      });
+
+      // Express's extended query parser turns ?appname=a&appname=b into an ARRAY,
+      // which has no .split. This runs ahead of the privilege check because the
+      // app name is what the privilege is scoped to, so it is reachable
+      // unauthenticated - and unguarded the rejection was dropped and the socket
+      // left open with nothing to answer it.
+      it(`${verb} refuses an appname that is not a string`, async () => {
+        verificationHelperStub.resolves(true);
+        const res = { json: sinon.fake((param) => param) };
+
+        await appController[verb]({ params: {}, query: { appname: ['a', 'b'] } }, res);
+
+        const result = res.json.firstCall.args[0];
+        expect(result.status).to.equal('error');
+        expect(result.data.message).to.contain('Invalid Flux App name');
+      });
     });
 
-    it('should pause app and return success message', async () => {
+    it('drives no container, and asks docker for nothing', async () => {
       verificationHelperStub.resolves(true);
-      registryHolds(await flatApp('TestApp'));
+      const res = { json: sinon.fake((param) => param) };
 
-      const req = {
-        params: { appname: 'TestApp' },
-        query: {},
-      };
-      const res = {
-        json: sinon.fake((param) => param),
-      };
+      await appController.appPause({ params: { appname: 'TestApp' }, query: {} }, res);
+      await appController.appUnpause({ params: { appname: 'TestApp' }, query: {} }, res);
 
-      await appController.appPause(req, res);
-
-      const result = res.json.firstCall.args[0];
-      expect(result.status).to.equal('success');
-      sinon.assert.calledOnceWithExactly(dockerService.appDockerPause, 'TestApp');
-    });
-
-    it('should pause all components for version 4+ apps', async () => {
-      verificationHelperStub.resolves(true);
-      registryHolds(await composedApp('ComposedApp', ['Component1', 'Component2']));
-
-      const req = {
-        params: { appname: 'ComposedApp' },
-        query: {},
-      };
-      const res = {
-        json: sinon.fake((param) => param),
-      };
-
-      await appController.appPause(req, res);
-
-      const result = res.json.firstCall.args[0];
-      expect(result.status).to.equal('success');
-      sinon.assert.calledTwice(dockerService.appDockerPause);
-      // Pause walks the REVERSE startup order — the real DeploymentSpec's
-      // topological order, which is what makes `{ reverse: true }` mean anything.
-      expect(dockerService.appDockerPause.getCalls().map((c) => c.args[0]))
-        .to.deep.equal(['Component2_ComposedApp', 'Component1_ComposedApp']);
-    });
-  });
-
-  describe('appUnpause tests', () => {
-    beforeEach(() => {
-      sinon.stub(dockerService, 'appDockerUnpause').resolves('Flux App TestApp successfully unpaused.');
-    });
-
-    it('should unpause app and return success message', async () => {
-      verificationHelperStub.resolves(true);
-      registryHolds(await flatApp('TestApp'));
-
-      const req = {
-        params: { appname: 'TestApp' },
-        query: {},
-      };
-      const res = {
-        json: sinon.fake((param) => param),
-      };
-
-      await appController.appUnpause(req, res);
-
-      const result = res.json.firstCall.args[0];
-      expect(result.status).to.equal('success');
-      sinon.assert.calledOnceWithExactly(dockerService.appDockerUnpause, 'TestApp');
-    });
-
-    it('should unpause all components for version 4+ apps', async () => {
-      verificationHelperStub.resolves(true);
-      registryHolds(await composedApp('ComposedApp', ['Component1', 'Component2']));
-
-      const req = {
-        params: { appname: 'ComposedApp' },
-        query: {},
-      };
-      const res = {
-        json: sinon.fake((param) => param),
-      };
-
-      await appController.appUnpause(req, res);
-
-      const result = res.json.firstCall.args[0];
-      expect(result.status).to.equal('success');
-      sinon.assert.calledTwice(dockerService.appDockerUnpause);
-      // Unpause walks the startup order forwards — the mirror of pause.
-      expect(dockerService.appDockerUnpause.getCalls().map((c) => c.args[0]))
-        .to.deep.equal(['Component1_ComposedApp', 'Component2_ComposedApp']);
+      // The old handlers called dockerService.appDockerPause/Unpause, which this
+      // tree retired with the rest of pause - so they threw on every request and
+      // the global path answered SUCCESS after broadcasting to every host.
+      expect(dockerService.appDockerPause).to.equal(undefined);
+      expect(dockerService.appDockerUnpause).to.equal(undefined);
     });
   });
 
