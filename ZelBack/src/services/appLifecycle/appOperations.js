@@ -74,6 +74,7 @@ const {
 const globalState = require('../utils/globalState');
 const contentBlobService = require('./contentBlobService');
 const operationRegistry = require('../utils/operationRegistry');
+const { Privilege, authOf } = require('../utils/privileges');
 
 // Active-standby app tracking
 const activePrimaryByIdentifier = new Map();
@@ -569,7 +570,7 @@ async function redeployComponentAPI(req, res) {
     force = serviceHelper.ensureBoolean(force);
 
     // Authorization check - must be app owner or above
-    const authorized = await verificationHelper.verifyPrivilege('appownerabove', req, appname);
+    const authorized = await verificationHelper.verifyPrivilege(Privilege.APP_OWNER_OR_FLUX_TEAM, authOf(req), { appName: appname });
     if (!authorized) {
       const errMessage = messageHelper.errUnauthorizedMessage();
       res.json(errMessage);
@@ -626,7 +627,7 @@ async function redeployApplicationAPI(req, res) {
     force = force || req.query.force || false;
     force = serviceHelper.ensureBoolean(force);
 
-    const authorized = await verificationHelper.verifyPrivilege('appownerabove', req, appname);
+    const authorized = await verificationHelper.verifyPrivilege(Privilege.APP_OWNER_OR_FLUX_TEAM, authOf(req), { appName: appname });
     if (!authorized) {
       const errMessage = messageHelper.errUnauthorizedMessage();
       res.json(errMessage);
@@ -966,7 +967,7 @@ async function appendBackupTask(req, res) {
     return false;
   }
   try {
-    const authorized = res ? await verificationHelper.verifyPrivilege('appownerabove', req, appname) : true;
+    const authorized = res ? await verificationHelper.verifyPrivilege(Privilege.APP_OWNER_OR_FLUX_TEAM, authOf(req), { appName: appname }) : true;
     if (authorized === true) {
       // backup is an app-scoped lease on the same key as install/remove/
       // reconcile, so it's mutually exclusive with them (no feature carve-out).
@@ -1164,7 +1165,7 @@ async function appendRestoreTask(req, res) {
     return false;
   }
   try {
-    const authorized = res ? await verificationHelper.verifyPrivilege('appownerabove', req, appname) : true;
+    const authorized = res ? await verificationHelper.verifyPrivilege(Privilege.APP_OWNER_OR_FLUX_TEAM, authOf(req), { appName: appname }) : true;
     if (authorized === true) {
       const componentItem = restore.map((restoreItem) => restoreItem);
       // restore is an app-scoped lease on the same key as backup/install/
@@ -1618,7 +1619,7 @@ async function updateAppGlobaly(params) {
  * success/unauthorized; validation failures throw to the caller's handler.
  */
 async function submitAppUpdate(req, res, processedBody, contentCtx) {
-  const authorized = await verificationHelper.verifyPrivilege('user', req);
+  const authorized = await verificationHelper.verifyPrivilege(Privilege.USER, authOf(req));
   if (!authorized) {
     res.json(messageHelper.errUnauthorizedMessage());
     return;

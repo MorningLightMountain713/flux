@@ -11,6 +11,7 @@ const imageManager = require('./imageManager');
 const jobRegistry = require('../utils/jobRegistry');
 const operationsController = require('../appManagement/operationsController');
 const log = require('../../lib/log');
+const { Privilege, authOf } = require('../utils/privileges');
 
 // Mirrors flux-spec's imageFit BYTES_PER_GB (decimal GB, matching registry
 // manifest sums and docker inspect .Size). The fit VERDICT is flux-spec's own
@@ -404,7 +405,7 @@ function getPreflight(jobId, fluxId = null) {
  */
 async function submitPreflightAPI(req, res) {
   try {
-    const authorized = await verificationHelper.verifyPrivilege('user', req);
+    const authorized = await verificationHelper.verifyPrivilege(Privilege.USER, authOf(req));
     if (!authorized) {
       return res.status(401).json(messageHelper.errUnauthorizedMessage());
     }

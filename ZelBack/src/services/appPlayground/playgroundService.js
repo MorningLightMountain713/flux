@@ -23,6 +23,7 @@ const playgroundSessionRegistry = require('./playgroundSessionRegistry');
 const playgroundServingSet = require('./playgroundServingSet');
 const playgroundAudit = require('./playgroundAudit');
 const playgroundAbuse = require('./playgroundAbuse');
+const { Privilege, authOf } = require('../utils/privileges');
 
 // The playground: an owner watches their own spec boot on a real node, at the
 // resources it declares, before anything is registered, signed or paid for.
@@ -622,7 +623,7 @@ function getSession(jobId, fluxId = null) {
  */
 async function submitSessionAPI(req, res) {
   try {
-    const authorized = await verificationHelper.verifyPrivilege('user', req);
+    const authorized = await verificationHelper.verifyPrivilege(Privilege.USER, authOf(req));
     if (!authorized) {
       return res.status(401).json(messageHelper.errUnauthorizedMessage());
     }
@@ -681,7 +682,7 @@ function reset() {
  */
 async function servingSetAPI(req, res) {
   try {
-    const authorized = await verificationHelper.verifyPrivilege('user', req);
+    const authorized = await verificationHelper.verifyPrivilege(Privilege.USER, authOf(req));
     if (!authorized) {
       return res.status(401).json(messageHelper.errUnauthorizedMessage());
     }

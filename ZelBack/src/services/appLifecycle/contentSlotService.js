@@ -23,6 +23,7 @@ const volumeService = require('../utils/volumeService');
 const globalState = require('../utils/globalState');
 const fluxEventBus = require('../utils/fluxEventBus');
 const { getSpec } = require('../utils/specLibs');
+const { Privilege, authOf } = require('../utils/privileges');
 
 const MANIFEST_GOSSIP_TYPE = 'fluxappcontentmanifest';
 
@@ -1520,7 +1521,7 @@ async function parseContentUpdate(req) {
  */
 async function submitContentUpdateApi(req, res) {
   try {
-    const authorized = await verificationHelper.verifyPrivilege('user', req);
+    const authorized = await verificationHelper.verifyPrivilege(Privilege.USER, authOf(req));
     if (!authorized) {
       res.json(messageHelper.errUnauthorizedMessage());
       return;

@@ -3,6 +3,7 @@
 const { expect } = require('chai');
 const sinon = require('sinon');
 const proxyquire = require('proxyquire');
+const { Privilege } = require('../../ZelBack/src/services/utils/privileges');
 
 // Handlers judged at their seams: authorization is checked before anything is
 // touched, the status shape assembles from the retained pass + disk reads,
@@ -115,8 +116,8 @@ describe('meshOperatorService', () => {
       expect(data.certificates.host.notAfter).to.equal('2027-01-01T00:00:00.000Z');
       expect(data.lastPass).to.deep.equal({ at: 123, members: [], rejected: [] });
       // Owner + flux team, never the node operator.
-      expect(stubs.privilege.firstCall.args).to.deep.equal(['appownerorfluxteam',
-        { params: { appname: APP_NAME }, query: {} }, APP_NAME]);
+      expect(stubs.privilege.firstCall.args).to.deep.equal([
+        Privilege.APP_OWNER_OR_FLUX_TEAM, null, { appName: APP_NAME }]);
     });
 
     it('accepts the component form of a name', async () => {
