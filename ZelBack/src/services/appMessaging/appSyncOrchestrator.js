@@ -216,6 +216,37 @@ class AppSyncOrchestrator {
     return this.#state;
   }
 
+  /**
+   * Whether a sync response arriving on this connection is still wanted.
+   *
+   * The round's own record answers it. What this node asked for, and of which
+   * CONNECTION, is written here when the request goes out and unwritten when
+   * the request ends - by a completion, a refusal, an unverifiable chunk, a
+   * deadline or the socket closing. A second copy of that record elsewhere is
+   * a second answer to one question, and the two disagree exactly where it
+   * matters: on the peer that dropped and came back.
+   *
+   * Per connection, not per address. A peer that reconnects keeps its ip:port,
+   * so a response on the new socket would otherwise be accepted against a
+   * request written into the old one - a stale view counted as this round's
+   * survey.
+   *
+   * @param {{key: string, connectionId?: number|null}} peer the socket a response arrived on
+   * @returns {boolean}
+   */
+  isSyncResponseWanted(peer) {
+    if (!peer || !peer.key) return false;
+    if (this.#stateSyncComplete) return false;
+    const progress = this.#peerProgress.get(peer.key);
+    if (!progress || progress.failed) return false;
+    const connectionId = peer.connectionId ?? null;
+    // Either end not naming a connection is the pre-connectionId case and
+    // cannot be told apart, so it is admitted on the address alone.
+    if (connectionId !== null && progress.connectionId !== null
+      && progress.connectionId !== connectionId) return false;
+    return true;
+  }
+
   #setState(newState) {
     const prevState = this.#state;
     if (prevState === newState) return;
