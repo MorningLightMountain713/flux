@@ -560,6 +560,108 @@ describe('appOperations tests', () => {
     });
   });
 
+  describe('the redeploy announces itself', () => {
+    beforeEach(() => {
+      operationRegistry.clear();
+    });
+
+    /**
+     * A redeploy that runs all the way to reinstall. Nothing observing the node
+     * could otherwise tell one from its never having been asked for - the app's
+     * own state is the same either way, which is how this endpoint failing on
+     * every call went unnoticed.
+     */
+    async function runRedeploy({ createVolumes }) {
+      // eslint-disable-next-line global-require
+      const componentProvisioner2 = require('../../ZelBack/src/services/appLifecycle/componentProvisioner');
+      // eslint-disable-next-line global-require
+      const hwRequirements = require('../../ZelBack/src/services/appRequirements/hwRequirements');
+      const deployment = await oneComponentDeployment('myapp', 'frontend', { image: 'myrepo/app:v1' });
+      sinon.stub(deploymentProvider, 'getInstalledDeployment').resolves(deployment);
+      sinon.stub(deploymentProvider, 'buildDeployment').resolves(deployment);
+      sinon.stub(componentProvisioner, 'verifyComponentImage').resolves();
+      sinon.stub(componentProvisioner2, 'installComponent').resolves();
+      sinon.stub(hwRequirements, 'checkNodeResourcesReclaiming').resolves();
+      sinon.stub(serviceHelper, 'delay').resolves();
+      sinon.stub(appsRepository, 'getInstalledApp').resolves(await instantiatedSpec(await v9Spec()));
+      sinon.stub(appUninstaller, 'uninstallComponent').resolves();
+      sinon.stub(appReconciler, 'enqueueApp');
+      const publish = sinon.stub(fluxEventBus, 'publish');
+
+      await appOperations.redeployComponent('myapp', 'frontend', { createVolumes, onStatus: () => {} });
+
+      return {
+        deployment,
+        redeployed: publish.getCalls()
+          .filter((c) => c.args[0] === 'app:componentRedeployed')
+          .map((c) => c.args[1]),
+      };
+    }
+
+    it('says which component was replaced, and that the data survived', async () => {
+      const { deployment, redeployed } = await runRedeploy({ createVolumes: false });
+
+      expect(redeployed).to.deep.equal([{
+        name: 'myapp',
+        component: 'frontend',
+        identifier: deployment.getComponent('frontend').identifier,
+        hard: false,
+      }]);
+    });
+
+    // `hard` is the consequence that differs: a rebuild recreated the volume, so
+    // the component's data on this node is gone. An observer that cannot tell
+    // the two apart cannot tell a redeploy from a data loss.
+    it('marks a rebuild hard, because its volume was recreated', async () => {
+      const { redeployed } = await runRedeploy({ createVolumes: true });
+
+      expect(redeployed).to.have.lengthOf(1);
+      expect(redeployed[0].hard).to.equal(true);
+    });
+
+    it('says nothing when the redeploy never got past its checks', async () => {
+      sinon.stub(deploymentProvider, 'getInstalledDeployment').resolves(null);
+      sinon.stub(appReconciler, 'enqueueApp');
+      const publish = sinon.stub(fluxEventBus, 'publish');
+
+      await appOperations.redeployComponent('myapp', 'frontend', { onStatus: () => {} });
+
+      expect(publish.getCalls().filter((c) => c.args[0] === 'app:componentRedeployed')).to.have.lengthOf(0);
+    });
+  });
+
+  describe('promoteApplicationToPrimary announces the decision', () => {
+    it('publishes the decision and counts it, once this node is committing to it', async () => {
+      sinon.stub(appReconciler, 'getControllerDesired').returns(null);
+      // Fails the permissions fix straight after, so the workflow stops there:
+      // the event is about the DECISION, which is already made by then.
+      sinon.stub(serviceHelper, 'runCommand').resolves({ error: new Error('nope') });
+      const publish = sinon.stub(fluxEventBus, 'publish');
+      const count = sinon.stub(fluxEventBus, 'count');
+
+      await appOperations.promoteApplicationToPrimary('primaryapp', 'primaryapp_fid');
+
+      expect(publish.getCalls().filter((c) => c.args[0] === 'masterSlave:started').map((c) => c.args[1]))
+        .to.deep.equal([{ identifier: 'primaryapp' }]);
+      // The cadence around the decision is a TALLY, not a stream.
+      sinon.assert.calledWithExactly(count, 'masterSlave:decision', 'primaryapp', 'started');
+    });
+
+    // Development publishes at the top of the function; this tree has an
+    // idempotence backstop above it, and announcing ahead of that would claim a
+    // promotion that then returns having done nothing.
+    it('says nothing when the promotion is already in effect', async () => {
+      sinon.stub(appReconciler, 'getControllerDesired').returns('running');
+      const publish = sinon.stub(fluxEventBus, 'publish');
+      const count = sinon.stub(fluxEventBus, 'count');
+
+      await appOperations.promoteApplicationToPrimary('primaryapp', 'primaryapp_fid');
+
+      expect(publish.getCalls().filter((c) => c.args[0] === 'masterSlave:started')).to.have.lengthOf(0);
+      expect(count.called).to.equal(false);
+    });
+  });
+
   describe('ensureMountSourcesExist tests', () => {
     let serviceHelperStub;
     let logStub;
