@@ -394,12 +394,14 @@ describe('AppSyncOrchestrator', () => {
       const peers = makeEligiblePeers(3);
       getEligibleSyncPeersStub = sinon.stub().returns(peers);
 
-      const orchestrator = makeOrchestrator({ isEnterprise: () => true });
+      // The enterprise halving is gone: one fallback for every node.
+      const orchestrator = makeOrchestrator();
       orchestrator.start(defaultBootContext);
 
       blockEmitter.emit('blocksProcessed', 2555000);
       await clock.tickAsync(0);
-      for (let i = 0; i < 130; i += 1) {
+      // appSyncFallbackMinutes (125) x 2 blocks a minute.
+      for (let i = 0; i <= 250; i += 1) {
         blockEmitter.emit('blocksProcessed', 2555000 + i);
       }
       await clock.tickAsync(0);
@@ -2278,13 +2280,18 @@ describe('AppSyncOrchestrator', () => {
 
     it('lets the block timer release readiness when the manifest never converges', async () => {
       getEligibleSyncPeersStub.returns([]); // never any peer to reconcile against
-      const orchestrator = makeOrchestrator({ isEnterprise: () => true });
+      // No enterprise flag: the fallback is how long before a node assumes it
+      // knows what the network looks like, and there is no advantage in
+      // assuming it sooner. The halving that used to shorten it for enterprise
+      // nodes is gone - a node can be given priority, not information.
+      const orchestrator = makeOrchestrator();
       orchestrator.start(defaultBootContext);
       blockEmitter.emit('blocksProcessed', 2555000);
       await clock.tickAsync(0);
       expect(orchestrator.state).to.equal(STATES.SYNCING);
 
-      for (let i = 0; i < 130; i += 1) {
+      // appSyncFallbackMinutes (125 in the unit config) x 2 blocks a minute.
+      for (let i = 0; i <= 250; i += 1) {
         blockEmitter.emit('blocksProcessed', 2555000 + i);
       }
       await clock.tickAsync(0);
@@ -2700,8 +2707,9 @@ describe('AppSyncOrchestrator', () => {
       expect(logStub.warn.args.some((args) => String(args[0]).includes('State sync abandoned'))).to.be.true;
       expect(clearSyncRequestedStub.called).to.be.true;
 
-      // The block timer remains the terminal path to readiness
-      for (let i = 0; i < 130; i += 1) {
+      // The block timer remains the terminal path to readiness:
+      // appSyncFallbackMinutes (125) x 2 blocks a minute.
+      for (let i = 0; i <= 250; i += 1) {
         blockEmitter.emit('blocksProcessed', 2555001 + i);
       }
       await clock.tickAsync(0);

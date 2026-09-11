@@ -33,6 +33,12 @@ const SYNC_TIMEOUT_MS = config.fluxapps.syncTimeoutMs ?? 120000;
 // Bounds the worst case to (1 + MAX - MIN) sequential deadlines before the
 // block timer remains the only path to readiness.
 const MAX_SYNC_PEERS = config.fluxapps.appSyncMaxPeers ?? 5;
+const FALLBACK_MINUTES = config.fluxapps.appSyncFallbackMinutes ?? 125;
+// A chain fact, not a policy: blocks are 30 seconds since the PON fork
+// (config.fluxapps.daemonPONFork), so two a minute. Not a knob - a node that
+// disagrees with the chain about this converts appSyncFallbackMinutes into the
+// wrong number of blocks and waits the wrong length of time in silence.
+const BLOCKS_PER_MINUTE = 2;
 const MIN_UPTIME_SECONDS = config.fluxapps.appSyncMinPeerUptime ?? 7500;
 const HASH_SYNC_MAX_RETRIES = config.fluxapps.hashSyncMaxRetries ?? 3;
 const HASH_SYNC_RETRY_MS = config.fluxapps.hashSyncRetryMs ?? 300000;
@@ -98,7 +104,6 @@ class AppSyncOrchestrator {
   #hashSyncComplete = false;
   #dbRebuilt = false;
   #blocksSinceSyncStarted = 0;
-  #blockThreshold = 0;
   #blockReceivedHandler = null;
   #peerThresholdHandler = null;
   #peersBelowHandler = null;
@@ -944,19 +949,24 @@ class AppSyncOrchestrator {
     }
   }
 
-  #ensureBlockThreshold() {
-    if (this.#blockThreshold === 0) {
-      const enterprise = this.#isEnterprise();
-      const blocksPerMinute = 2;
-      this.#blockThreshold = enterprise
-        ? 62 * blocksPerMinute
-        : 125 * blocksPerMinute;
-    }
-  }
-
+  // ONE NUMBER, and it is not a preference. FALLBACK_MINUTES is the lifetime of
+  // a running-app location record, so it is the point at which every holder has
+  // had to announce itself at least once: wait it out and what this node holds
+  // is a full view, whether or not a sync ever completed.
+  //
+  // It was 125 hardcoded, times a hardcoded 2 - the same 250 blocks whatever
+  // config said, so appSyncFallbackMinutes had no reader at all and the harness
+  // set it to 5 and to 0 and was ignored both times.
+  //
+  // There used to be a second, shorter value for enterprise nodes, halved in the
+  // manner of the spawner's enterprise deferrals. Those are a PRIORITY - how
+  // long before a node may compete for an app - and halving one grants an
+  // advantage. This is not that: it is how long before a node assumes it knows
+  // what the network looks like, and there is no advantage in assuming it
+  // sooner. A node can be given priority; it cannot be given information it has
+  // not received.
   #isBlockTimerExpired() {
-    this.#ensureBlockThreshold();
-    return this.#blocksSinceSyncStarted >= this.#blockThreshold;
+    return this.#blocksSinceSyncStarted >= FALLBACK_MINUTES * BLOCKS_PER_MINUTE;
   }
 
 /**
@@ -1025,7 +1035,6 @@ class AppSyncOrchestrator {
     if (!this.#explorerSynced) return;
     if (this.#state === STATES.INITIALIZING) {
       this.#setState(STATES.SYNCING);
-      this.#ensureBlockThreshold();
     }
 
     // An attained-then-lost floor is an incident, whatever the machine was doing.
