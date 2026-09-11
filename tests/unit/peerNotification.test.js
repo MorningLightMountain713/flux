@@ -46,7 +46,7 @@ describe('peerNotification tests', () => {
 
   before(async function loadLibrary() {
     // The first fromSubmission compiles the ajv schemas.
-    this.timeout(30000);
+    this.timeout(30_000);
     await loadSpecLibrary();
   });
 
@@ -59,7 +59,7 @@ describe('peerNotification tests', () => {
   const moduleStubs = () => ({
     config: asConfig({
       fluxapps: {
-        peerNotifyIntervalMs: 3600000,
+        peerNotifyIntervalMs: 3_600_000,
       },
     }),
     '../fluxNetworkHelper': {
@@ -199,10 +199,10 @@ describe('peerNotification tests', () => {
       listInstalledAppsStub.resolves([
         await installedRow(await v9Spec({ name: 'app1', network: { mesh: true } })),
       ]);
-      const anchor = { height: 2843890, hash: 'a'.repeat(64) };
+      const anchor = { height: 2_843_890, hash: 'a'.repeat(64) };
       meshFieldsStub.resolves({
         anchor,
-        perApp: new Map([['app1', { meshCa: 'CA-PEM', meshVoucher: 'v-b64', meshPort: 16230 }]]),
+        perApp: new Map([['app1', { meshCa: 'CA-PEM', meshVoucher: 'v-b64', meshPort: 16_230 }]]),
       });
 
       await peerNotification.checkAndNotifyPeersOfRunningApps();
@@ -217,7 +217,7 @@ describe('peerNotification tests', () => {
       const broadcast = broadcastAllStub.firstCall.args[0];
       expect(broadcast.meshAnchor).to.deep.equal(anchor);
       expect(broadcast.apps[0]).to.include({
-        name: 'app1', meshCa: 'CA-PEM', meshVoucher: 'v-b64', meshPort: 16230,
+        name: 'app1', meshCa: 'CA-PEM', meshVoucher: 'v-b64', meshPort: 16_230,
       });
     });
 

@@ -85,7 +85,7 @@ describe('the pre-install port test, end to end', () => {
   // The peer relays bytes it read from a stranger's port, so what it will carry
   // has to be bounded - otherwise a node can be asked to shuttle a payload.
   it('caps what it will carry back from a port', async function () {
-    this.timeout(20000);
+    this.timeout(20_000);
     const flood = http.createServer((req, res) => {
       res.writeHead(200, { 'Content-Type': 'text/plain' });
       res.end('x'.repeat(512 * 1024));
@@ -247,7 +247,7 @@ describe('checkAppAvailability probes the address that asked', () => {
   it('ignores an address in the body and tests the one that connected', async () => {
     const answer = await ask(
       {
-        ip: HERE, port: 16127, ports: [port], pubKey: 'k', signature: 's', echo: true,
+        ip: HERE, port: 16_127, ports: [port], pubKey: 'k', signature: 's', echo: true,
       },
       SOMEWHERE_ELSE,
     );
@@ -259,7 +259,7 @@ describe('checkAppAvailability probes the address that asked', () => {
   it('answers the honest caller, whose body address is the one it dialled from', async () => {
     const answer = await ask(
       {
-        ip: HERE, port: 16127, ports: [port], pubKey: 'k', signature: 's', echo: true,
+        ip: HERE, port: 16_127, ports: [port], pubKey: 'k', signature: 's', echo: true,
       },
       HERE,
     );
@@ -273,7 +273,7 @@ describe('checkAppAvailability probes the address that asked', () => {
   it('reads an IPv4-mapped remote address as the address it is', async () => {
     const answer = await ask(
       {
-        ip: HERE, port: 16127, ports: [port], pubKey: 'k', signature: 's', echo: true,
+        ip: HERE, port: 16_127, ports: [port], pubKey: 'k', signature: 's', echo: true,
       },
       `::ffff:${HERE}`,
     );
@@ -286,7 +286,7 @@ describe('checkAppAvailability probes the address that asked', () => {
 
     const answer = await ask(
       {
-        ip: HERE, port: 16127, ports: [port], pubKey: 'k', signature: 's', echo: true,
+        ip: HERE, port: 16_127, ports: [port], pubKey: 'k', signature: 's', echo: true,
       },
       SOMEWHERE_ELSE,
     );
@@ -302,7 +302,7 @@ describe('checkAppAvailability probes the address that asked', () => {
   it('asks for Flux team, not for a privilege every node operator holds', async () => {
     await ask(
       {
-        ip: HERE, port: 16127, ports: [port], pubKey: 'k', signature: 's', echo: true,
+        ip: HERE, port: 16_127, ports: [port], pubKey: 'k', signature: 's', echo: true,
       },
       SOMEWHERE_ELSE,
     );
@@ -321,7 +321,7 @@ describe('checkAppAvailability probes the address that asked', () => {
 
     const answer = await ask(
       {
-        ip: HERE, port: 16127, ports: [port], pubKey: 'k', signature: 's', echo: true, protocols: ['tcp', 'udp'],
+        ip: HERE, port: 16_127, ports: [port], pubKey: 'k', signature: 's', echo: true, protocols: ['tcp', 'udp'],
       },
       HERE,
     );
@@ -341,7 +341,7 @@ describe('checkAppAvailability probes the address that asked', () => {
 
     const answer = await ask(
       {
-        ip: '::1', port: 16127, ports: [v6Port], pubKey: 'k', signature: 's', echo: true, protocols: ['tcp', 'udp'],
+        ip: '::1', port: 16_127, ports: [v6Port], pubKey: 'k', signature: 's', echo: true, protocols: ['tcp', 'udp'],
       },
       '::1',
     );
@@ -360,7 +360,7 @@ describe('checkAppAvailability probes the address that asked', () => {
     const udpOnly = udpServer.address().port;
     const answer = await ask(
       {
-        ip: HERE, port: 16127, ports: [udpOnly], pubKey: 'k', signature: 's', echo: true, protocols: ['udp'],
+        ip: HERE, port: 16_127, ports: [udpOnly], pubKey: 'k', signature: 's', echo: true, protocols: ['udp'],
       },
       HERE,
     );
@@ -374,7 +374,7 @@ describe('checkAppAvailability probes the address that asked', () => {
   it('refuses protocols other than tcp and udp', async () => {
     const answer = await ask(
       {
-        ip: HERE, port: 16127, ports: [port], pubKey: 'k', signature: 's', echo: true, protocols: ['sctp'],
+        ip: HERE, port: 16_127, ports: [port], pubKey: 'k', signature: 's', echo: true, protocols: ['sctp'],
       },
       HERE,
     );
@@ -386,7 +386,7 @@ describe('checkAppAvailability probes the address that asked', () => {
   it('probes no UDP for a caller that does not ask', async () => {
     const answer = await ask(
       {
-        ip: HERE, port: 16127, ports: [port], pubKey: 'k', signature: 's', echo: true,
+        ip: HERE, port: 16_127, ports: [port], pubKey: 'k', signature: 's', echo: true,
       },
       HERE,
     );
@@ -403,7 +403,7 @@ describe('checkAppAvailability probes the address that asked', () => {
 
     const answer = await ask(
       {
-        ip: HERE, port: 16127, ports: [closedPort, port], pubKey: 'k', signature: 's', echo: true, everyPort: true,
+        ip: HERE, port: 16_127, ports: [closedPort, port], pubKey: 'k', signature: 's', echo: true, everyPort: true,
       },
       HERE,
     );
@@ -421,7 +421,7 @@ describe('checkAppAvailability probes the address that asked', () => {
 
     const answer = await ask(
       {
-        ip: HERE, port: 16127, ports: [closedPort, port], pubKey: 'k', signature: 's', echo: true,
+        ip: HERE, port: 16_127, ports: [closedPort, port], pubKey: 'k', signature: 's', echo: true,
       },
       HERE,
     );
@@ -434,7 +434,7 @@ describe('checkAppAvailability probes the address that asked', () => {
   // probe's full deadline, and all of them have to be answered for inside the
   // time the requester waits for this peer.
   it('answers for 50 ports silent over UDP inside the requester\'s wait', async function () {
-    this.timeout(60000);
+    this.timeout(60_000);
     const servers = await Promise.all(Array.from({ length: 50 }, async () => {
       const s = new FluxHttpTestServer(TOKEN);
       await new Promise((resolve) => s.listen(0, HERE, resolve));
@@ -445,7 +445,7 @@ describe('checkAppAvailability probes the address that asked', () => {
     const started = Date.now();
     const answer = await ask(
       {
-        ip: HERE, port: 16127, ports, pubKey: 'k', signature: 's', echo: true, protocols: ['tcp', 'udp'],
+        ip: HERE, port: 16_127, ports, pubKey: 'k', signature: 's', echo: true, protocols: ['tcp', 'udp'],
       },
       HERE,
     );
@@ -464,11 +464,11 @@ describe('checkAppAvailability probes the address that asked', () => {
   // maxComponents (10) x ports per component (5) in appValidator. Each port
   // costs a connect timeout and they are tested in sequence.
   it('refuses more ports than an application could hold', async () => {
-    const tooMany = Array.from({ length: 51 }, (unused, i) => 40000 + i);
+    const tooMany = Array.from({ length: 51 }, (unused, i) => 40_000 + i);
 
     const answer = await ask(
       {
-        ip: HERE, port: 16127, ports: tooMany, pubKey: 'k', signature: 's', echo: true,
+        ip: HERE, port: 16_127, ports: tooMany, pubKey: 'k', signature: 's', echo: true,
       },
       HERE,
     );
@@ -507,7 +507,7 @@ describe('keepUPNPPortsOpen pokes the address that asked', () => {
 
   const signedBody = (overrides = {}) => ({
     ip: SOMEWHERE_ELSE,
-    apiPort: 16127,
+    apiPort: 16_127,
     ports: [],
     pubKey: 'k',
     signature: 's',
@@ -561,7 +561,7 @@ describe('keepUPNPPortsOpen pokes the address that asked', () => {
   // on how long one request can keep this node poking, and the honest list can
   // be that long.
   it('refuses more ports than a node could hold', async () => {
-    const tooMany = Array.from({ length: fluxNetworkHelper.MAX_KEEPALIVE_PORTS + 1 }, (unused, i) => 20000 + i);
+    const tooMany = Array.from({ length: fluxNetworkHelper.MAX_KEEPALIVE_PORTS + 1 }, (unused, i) => 20_000 + i);
 
     const res = await ask(signedBody({ ports: tooMany }), HERE);
 
@@ -578,7 +578,7 @@ describe('keepUPNPPortsOpen pokes the address that asked', () => {
     sandbox.stub(dgram, 'createSocket').returns(udp);
     sandbox.stub(net.Socket.prototype, 'connect');
     sandbox.stub(serviceHelper, 'delay').resolves();
-    const servicePorts = [16126, 16122, 16128, 16129];
+    const servicePorts = [16_126, 16_122, 16_128, 16_129];
 
     await ask(signedBody({ ports: servicePorts }), HERE);
 

@@ -78,7 +78,7 @@ async function legacyMessage({
 describe('appHashSyncService tests', () => {
   before(async function loadLibrary() {
     // The first fromSubmission compiles the ajv schemas.
-    this.timeout(30000);
+    this.timeout(30_000);
     flux = await loadSpecLibrary();
   });
 
@@ -124,7 +124,7 @@ describe('appHashSyncService tests', () => {
         getSpec: sinon.stub().callsFake(async () => flux),
         getSpecBackend: sinon.stub().callsFake(async () => flux),
       },
-      '../daemonService/daemonServiceMiscRpcs': { isDaemonSynced: sinon.stub().returns({ data: { height: 2555000 } }) },
+      '../daemonService/daemonServiceMiscRpcs': { isDaemonSynced: sinon.stub().returns({ data: { height: 2_555_000 } }) },
       '../utils/fluxBroadcastHelper': fluxBroadcastHelperStub,
       '../invalidMessages': { invalidMessages: [] },
       '../utils/peerState': { peerManager: peerManagerStub },
@@ -353,7 +353,7 @@ describe('appHashSyncService tests', () => {
         return Promise.resolve({ data: { status: 'success', data: true } });
       });
 
-      dbHelperStub.findOneInDatabase.resolves({ generalScannedHeight: 2555000 });
+      dbHelperStub.findOneInDatabase.resolves({ generalScannedHeight: 2_555_000 });
 
       await appHashSyncService.syncMissingHashes();
 
@@ -404,7 +404,7 @@ describe('appHashSyncService tests', () => {
         }
         return Promise.resolve([]);
       });
-      dbHelperStub.findOneInDatabase.resolves({ generalScannedHeight: 2555000 });
+      dbHelperStub.findOneInDatabase.resolves({ generalScannedHeight: 2_555_000 });
 
       // Bulk fetch: 3 peers x 2 calls each (explorer check + permanent messages)
       serviceHelperStub.axiosGet.callsFake((url) => {
@@ -447,7 +447,7 @@ describe('appHashSyncService tests', () => {
         }
         return Promise.resolve([]);
       });
-      dbHelperStub.findOneInDatabase.resolves({ generalScannedHeight: 2555000 });
+      dbHelperStub.findOneInDatabase.resolves({ generalScannedHeight: 2_555_000 });
 
       serviceHelperStub.axiosGet.callsFake((url) => {
         if (url.includes('permanentmessages')) return Promise.resolve(makeStreamResponse(bulkFetchResult));
@@ -480,7 +480,7 @@ describe('appHashSyncService tests', () => {
       // First call returns missing, subsequent calls return empty (simulates resolution)
       dbHelperStub.findInDatabase.onFirstCall().resolves(missing);
       dbHelperStub.findInDatabase.resolves([]);
-      dbHelperStub.findOneInDatabase.resolves({ generalScannedHeight: 2555000 });
+      dbHelperStub.findOneInDatabase.resolves({ generalScannedHeight: 2_555_000 });
 
       await appHashSyncService.syncMissingHashes();
 
@@ -511,7 +511,7 @@ describe('appHashSyncService tests', () => {
         if (callCount <= 3) return Promise.resolve(missing);
         return Promise.resolve([]);
       });
-      dbHelperStub.findOneInDatabase.resolves({ generalScannedHeight: 2555000 });
+      dbHelperStub.findOneInDatabase.resolves({ generalScannedHeight: 2_555_000 });
 
       await appHashSyncService.syncMissingHashes();
 
@@ -539,7 +539,7 @@ describe('appHashSyncService tests', () => {
       ];
 
       dbHelperStub.findInDatabase.resolves(missing);
-      dbHelperStub.findOneInDatabase.resolves({ generalScannedHeight: 2555000 });
+      dbHelperStub.findOneInDatabase.resolves({ generalScannedHeight: 2_555_000 });
 
       await appHashSyncService.syncMissingHashes();
 
@@ -562,7 +562,7 @@ describe('appHashSyncService tests', () => {
       ];
 
       dbHelperStub.findInDatabase.resolves(missing);
-      dbHelperStub.findOneInDatabase.resolves({ generalScannedHeight: 2555000 });
+      dbHelperStub.findOneInDatabase.resolves({ generalScannedHeight: 2_555_000 });
 
       await appHashSyncService.syncMissingHashes();
 
@@ -592,7 +592,7 @@ describe('appHashSyncService tests', () => {
       ];
 
       dbHelperStub.findInDatabase.resolves(missing);
-      dbHelperStub.findOneInDatabase.resolves({ generalScannedHeight: 2555000 });
+      dbHelperStub.findOneInDatabase.resolves({ generalScannedHeight: 2_555_000 });
 
       await appHashSyncService.syncMissingHashes();
 
@@ -614,7 +614,7 @@ describe('appHashSyncService tests', () => {
       // Return missing once then empty (resolved after first poll)
       dbHelperStub.findInDatabase.onFirstCall().resolves(missing);
       dbHelperStub.findInDatabase.resolves([]);
-      dbHelperStub.findOneInDatabase.resolves({ generalScannedHeight: 2555000 });
+      dbHelperStub.findOneInDatabase.resolves({ generalScannedHeight: 2_555_000 });
 
       await appHashSyncService.syncMissingHashes();
 
@@ -633,7 +633,7 @@ describe('appHashSyncService tests', () => {
       const mockDatabase = { collection: sinon.stub().returns(collectionStubLocal) };
       dbHelperStub.databaseConnection.returns({ db: sinon.stub().returns(mockDatabase) });
 
-      const result = await appHashSyncService.resetHashSyncForUpgrade(2555000);
+      const result = await appHashSyncService.resetHashSyncForUpgrade(2_555_000);
 
       expect(result).to.equal(10);
       expect(updateManyStub.calledTwice).to.be.true;
@@ -641,7 +641,7 @@ describe('appHashSyncService tests', () => {
       // First call: hashes with retryFromHeight — one retry, keep syncAttempts
       expect(updateManyStub.firstCall.args[0]).to.deep.equal({ message: false, retryFromHeight: { $exists: true } });
       expect(updateManyStub.firstCall.args[1].$set.messageNotFound).to.equal(false);
-      expect(updateManyStub.firstCall.args[1].$set.nextRetryHeight).to.equal(2555000);
+      expect(updateManyStub.firstCall.args[1].$set.nextRetryHeight).to.equal(2_555_000);
       expect(updateManyStub.firstCall.args[1].$set).to.not.have.property('syncAttempts');
       expect(updateManyStub.firstCall.args[1].$set).to.not.have.property('retryFromHeight');
 
@@ -649,8 +649,8 @@ describe('appHashSyncService tests', () => {
       expect(updateManyStub.secondCall.args[0]).to.deep.equal({ message: false, retryFromHeight: { $exists: false } });
       expect(updateManyStub.secondCall.args[1].$set.messageNotFound).to.equal(false);
       expect(updateManyStub.secondCall.args[1].$set.syncAttempts).to.equal(0);
-      expect(updateManyStub.secondCall.args[1].$set.nextRetryHeight).to.equal(2555000);
-      expect(updateManyStub.secondCall.args[1].$set.retryFromHeight).to.equal(2555000);
+      expect(updateManyStub.secondCall.args[1].$set.nextRetryHeight).to.equal(2_555_000);
+      expect(updateManyStub.secondCall.args[1].$set.retryFromHeight).to.equal(2_555_000);
     });
 
     it('should return 0 when no documents match', async () => {
@@ -659,7 +659,7 @@ describe('appHashSyncService tests', () => {
       const mockDatabase = { collection: sinon.stub().returns(collectionStubLocal) };
       dbHelperStub.databaseConnection.returns({ db: sinon.stub().returns(mockDatabase) });
 
-      const result = await appHashSyncService.resetHashSyncForUpgrade(2555000);
+      const result = await appHashSyncService.resetHashSyncForUpgrade(2_555_000);
 
       expect(result).to.equal(0);
     });
@@ -668,9 +668,9 @@ describe('appHashSyncService tests', () => {
   describe('hash sync backoff', () => {
     it('should exclude hashes with future nextRetryHeight from getMissingHashes', async () => {
       const missing = [
-        { hash: 'h1', txid: 'tx1', height: 2555000, value: 10, message: false },
-        { hash: 'h2', txid: 'tx2', height: 2555001, value: 10, message: false, nextRetryHeight: 9999999 },
-        { hash: 'h3', txid: 'tx3', height: 2555002, value: 10, message: false, nextRetryHeight: 1000000 },
+        { hash: 'h1', txid: 'tx1', height: 2_555_000, value: 10, message: false },
+        { hash: 'h2', txid: 'tx2', height: 2_555_001, value: 10, message: false, nextRetryHeight: 9_999_999 },
+        { hash: 'h3', txid: 'tx3', height: 2_555_002, value: 10, message: false, nextRetryHeight: 1_000_000 },
       ];
       dbHelperStub.findInDatabase.resolves(missing);
       // getMissingHashes adds $or filter for nextRetryHeight, but since we stub findInDatabase
@@ -705,13 +705,13 @@ describe('appHashSyncService tests', () => {
       return {
         // Hash mined 2 years ago, retryFromHeight set recently (version upgrade) — should NOT expire
         recentRetry: {
-          hash: 'ancient_recent', txid: 'tx1', height: 500000, value: 10, message: false,
-          syncAttempts: 0, retryFromHeight: 2554000, nextRetryHeight: 2555000,
+          hash: 'ancient_recent', txid: 'tx1', height: 500_000, value: 10, message: false,
+          syncAttempts: 0, retryFromHeight: 2_554_000, nextRetryHeight: 2_555_000,
         },
         // Hash mined 2 years ago, retryFromHeight also old (exhausted its window) — should expire
         oldRetry: {
-          hash: 'ancient_old', txid: 'tx2', height: 500000, value: 10, message: false,
-          syncAttempts: 6, retryFromHeight: 500000, nextRetryHeight: 2555000,
+          hash: 'ancient_old', txid: 'tx2', height: 500_000, value: 10, message: false,
+          syncAttempts: 6, retryFromHeight: 500_000, nextRetryHeight: 2_555_000,
         },
       };
     }
@@ -738,7 +738,7 @@ describe('appHashSyncService tests', () => {
 
       advanceDateOnDelay();
       try {
-        await appHashSyncService.syncMissingHashes({ currentHeight: 2555000 });
+        await appHashSyncService.syncMissingHashes({ currentHeight: 2_555_000 });
       } finally {
         Date.now.restore();
       }
@@ -749,8 +749,8 @@ describe('appHashSyncService tests', () => {
     it('should use retryFromHeight for expiry via bulk fetch path', async () => {
       const { recentRetry, oldRetry } = makeExpiryTestHashes();
       const padding = Array(500).fill(null).map((_, i) => ({
-        hash: `pad${i}`, txid: `ptx${i}`, height: 500000, value: 10, message: false,
-        syncAttempts: 0, retryFromHeight: 500000, nextRetryHeight: 2555000,
+        hash: `pad${i}`, txid: `ptx${i}`, height: 500_000, value: 10, message: false,
+        syncAttempts: 0, retryFromHeight: 500_000, nextRetryHeight: 2_555_000,
       }));
 
       dbHelperStub.findInDatabase.onFirstCall().resolves([recentRetry, oldRetry, ...padding]);
@@ -763,7 +763,7 @@ describe('appHashSyncService tests', () => {
 
       advanceDateOnDelay();
       try {
-        await appHashSyncService.syncMissingHashes({ currentHeight: 2555000 });
+        await appHashSyncService.syncMissingHashes({ currentHeight: 2_555_000 });
       } finally {
         Date.now.restore();
       }
@@ -828,7 +828,7 @@ describe('appHashSyncService tests', () => {
           getSpec: sinon.stub().callsFake(async () => flux),
           getSpecBackend: sinon.stub().callsFake(async () => flux),
         },
-        '../daemonService/daemonServiceMiscRpcs': { isDaemonSynced: sinon.stub().returns({ data: { height: 2555000 } }) },
+        '../daemonService/daemonServiceMiscRpcs': { isDaemonSynced: sinon.stub().returns({ data: { height: 2_555_000 } }) },
         '../utils/fluxBroadcastHelper': fluxBroadcastHelperStub,
         '../invalidMessages': { invalidMessages: [] },
         '../utils/peerState': { peerManager: peerManagerStub },
@@ -863,7 +863,7 @@ describe('appHashSyncService tests', () => {
         if (getMissingCalls === 1) return Promise.resolve(manyMissing);
         return Promise.resolve([]);
       });
-      localDbHelperStub.findOneInDatabase.resolves({ generalScannedHeight: 2555000 });
+      localDbHelperStub.findOneInDatabase.resolves({ generalScannedHeight: 2_555_000 });
 
       // Bulk fetch returns our two update messages from all peers
       serviceHelperStub.axiosGet.callsFake((url) => {
@@ -931,7 +931,7 @@ describe('appHashSyncService tests', () => {
         calls += 1;
         return Promise.resolve(calls === 1 ? manyMissing : []);
       });
-      localDbHelperStub.findOneInDatabase.resolves({ generalScannedHeight: 2555000 });
+      localDbHelperStub.findOneInDatabase.resolves({ generalScannedHeight: 2_555_000 });
       serviceHelperStub.axiosGet.callsFake((url) => (url.includes('permanentmessages')
         ? Promise.resolve(makeStreamResponse(bulkMessages))
         : Promise.resolve({ data: { status: 'success', data: true } })));
@@ -966,7 +966,7 @@ describe('appHashSyncService tests', () => {
         valueSat: 1e8,
         txid: 'tx1',
         height: 2000,
-        registeredAt: 1751628800,
+        registeredAt: 1_751_628_800,
       }];
       const manyMissing = Array(600).fill(null).map((_, i) => ({
         hash: `hash${i}`, txid: `tx${i}`, height: 1000 + i, value: 100, message: false,
@@ -976,7 +976,7 @@ describe('appHashSyncService tests', () => {
         calls += 1;
         return Promise.resolve(calls === 1 ? manyMissing : []);
       });
-      localDbHelperStub.findOneInDatabase.resolves({ generalScannedHeight: 2555000 });
+      localDbHelperStub.findOneInDatabase.resolves({ generalScannedHeight: 2_555_000 });
       serviceHelperStub.axiosGet.callsFake((url) => (url.includes('permanentmessages')
         ? Promise.resolve(makeStreamResponse(bulkMessages))
         : Promise.resolve({ data: { status: 'success', data: true } })));
@@ -1014,7 +1014,7 @@ describe('appHashSyncService tests', () => {
         if (getMissingCalls === 1) return Promise.resolve(manyMissing);
         return Promise.resolve([]);
       });
-      localDbHelperStub.findOneInDatabase.resolves({ generalScannedHeight: 2555000 });
+      localDbHelperStub.findOneInDatabase.resolves({ generalScannedHeight: 2_555_000 });
 
       serviceHelperStub.axiosGet.callsFake((url) => {
         if (url.includes('permanentmessages')) {
@@ -1054,7 +1054,7 @@ describe('appHashSyncService tests', () => {
 
       dbHelperStub.findInDatabase.onFirstCall().resolves(missing);
       dbHelperStub.findInDatabase.resolves([]);
-      dbHelperStub.findOneInDatabase.resolves({ generalScannedHeight: 2555000 });
+      dbHelperStub.findOneInDatabase.resolves({ generalScannedHeight: 2_555_000 });
 
       const result = await appHashSyncService.syncMissingHashes();
 
@@ -1070,12 +1070,12 @@ describe('appHashSyncService tests', () => {
       serviceHelperStub.delay = (ms) => { clock.tick(ms); return Promise.resolve(); };
 
       const missing3 = [
-        { hash: 'h1', txid: 'tx1', height: 2555000, value: 10, message: false },
-        { hash: 'h2', txid: 'tx2', height: 2555001, value: 10, message: false },
-        { hash: 'h3', txid: 'tx3', height: 2555002, value: 10, message: false },
+        { hash: 'h1', txid: 'tx1', height: 2_555_000, value: 10, message: false },
+        { hash: 'h2', txid: 'tx2', height: 2_555_001, value: 10, message: false },
+        { hash: 'h3', txid: 'tx3', height: 2_555_002, value: 10, message: false },
       ];
       const missing1 = [
-        { hash: 'h3', txid: 'tx3', height: 2555002, value: 10, message: false },
+        { hash: 'h3', txid: 'tx3', height: 2_555_002, value: 10, message: false },
       ];
 
       // Emit HASH_RESPONSE_RECEIVED every 2 seconds to keep settle alive.
@@ -1095,7 +1095,7 @@ describe('appHashSyncService tests', () => {
         if (findCallCount > 5) return Promise.resolve(missing1);
         return Promise.resolve(missing3);
       });
-      dbHelperStub.findOneInDatabase.resolves({ generalScannedHeight: 2555000 });
+      dbHelperStub.findOneInDatabase.resolves({ generalScannedHeight: 2_555_000 });
 
       const result = await appHashSyncService.syncMissingHashes();
 
@@ -1113,12 +1113,12 @@ describe('appHashSyncService tests', () => {
 
 
       const missing3 = [
-        { hash: 'h1', txid: 'tx1', height: 2555000, value: 10, message: false },
-        { hash: 'h2', txid: 'tx2', height: 2555001, value: 10, message: false },
-        { hash: 'h3', txid: 'tx3', height: 2555002, value: 10, message: false },
+        { hash: 'h1', txid: 'tx1', height: 2_555_000, value: 10, message: false },
+        { hash: 'h2', txid: 'tx2', height: 2_555_001, value: 10, message: false },
+        { hash: 'h3', txid: 'tx3', height: 2_555_002, value: 10, message: false },
       ];
       const missing1 = [
-        { hash: 'h3', txid: 'tx3', height: 2555002, value: 10, message: false },
+        { hash: 'h3', txid: 'tx3', height: 2_555_002, value: 10, message: false },
       ];
 
       // Initial call: 3 missing. First poll in waitForResolution: drops to 1.
@@ -1130,7 +1130,7 @@ describe('appHashSyncService tests', () => {
         if (findCallCount === 1) return Promise.resolve(missing3);
         return Promise.resolve(missing1);
       });
-      dbHelperStub.findOneInDatabase.resolves({ generalScannedHeight: 2555000 });
+      dbHelperStub.findOneInDatabase.resolves({ generalScannedHeight: 2_555_000 });
 
       const result = await appHashSyncService.syncMissingHashes();
 

@@ -16,7 +16,7 @@ const { measureTree } = require('../../ZelBack/src/services/utils/treeSize');
 // The work is not incidental setup - the width and the depth ARE the
 // assertions - so shrinking it to fit the default would delete what the tests
 // are for.
-const REAL_WORK_MS = 20000;
+const REAL_WORK_MS = 20_000;
 
 describe('treeSize tests', () => {
   const ROOT = '/vol';
@@ -183,7 +183,7 @@ describe('treeSize tests', () => {
     // compress for that app permanently. V8's argument limit sits between
     // 100k and 200k, so a spread of one readdir's names into push() is a
     // crash dressed as a size.
-    const WIDTH = 200000;
+    const WIDTH = 200_000;
     const names = [];
     for (let i = 0; i < WIDTH; i += 1) names.push(`f${i}`);
     const fs = {

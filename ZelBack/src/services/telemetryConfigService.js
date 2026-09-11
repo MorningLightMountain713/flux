@@ -74,7 +74,7 @@ async function systemctl(action) {
   const result = await serviceHelper.runCommand('systemctl', {
     runAsRoot: true,
     params: [action, SERVICE_NAME],
-    timeout: 30000,
+    timeout: 30_000,
     logError: false,
   });
   if (result.error) {
@@ -119,7 +119,7 @@ async function ensureNode() {
   const status = await serviceHelper.runCommand('systemctl', {
     runAsRoot: true,
     params: ['is-active', SERVICE_NAME],
-    timeout: 10000,
+    timeout: 10_000,
     logError: false,
   });
 

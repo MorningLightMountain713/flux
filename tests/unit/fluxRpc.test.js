@@ -74,10 +74,10 @@ describe('fluxRpc tests', () => {
 
     postStub.resolves({ status: 200, data: 'blah' });
 
-    await rpc.run('getblockhash', { params: [12345] });
+    await rpc.run('getblockhash', { params: [12_345] });
 
     sinon.assert.calledOnceWithMatch(postStub, '/', {
-      jsonrpc: '2.0', id: 0, method: 'getblockhash', params: [12345],
+      jsonrpc: '2.0', id: 0, method: 'getblockhash', params: [12_345],
     }, sinon.match.any);
   });
 
@@ -86,7 +86,7 @@ describe('fluxRpc tests', () => {
 
     postStub.resolves({ status: 200, data: { result: 'RPC RES HERE' } });
 
-    const res = await rpc.run('getblockhash', { params: [12345] });
+    const res = await rpc.run('getblockhash', { params: [12_345] });
     expect(res).to.equal('RPC RES HERE');
   });
 
@@ -144,10 +144,10 @@ describe('fluxRpc tests', () => {
 
     postStub.resolves({ status: 200, data: { result: '' } });
 
-    await rpc.run('getblockhash', { params: [12345] });
+    await rpc.run('getblockhash', { params: [12_345] });
 
     sinon.assert.calledOnceWithMatch(postStub, '/', {
-      jsonrpc: '2.0', id: 0, method: 'getblockhash', params: [12345],
+      jsonrpc: '2.0', id: 0, method: 'getblockhash', params: [12_345],
     }, sinon.match.any);
 
     const first500 = Array(500).fill(0).map(() => rpc.run('getblockcount'));
@@ -176,7 +176,7 @@ describe('fluxRpc tests', () => {
         status: 200,
         data: [
           { id: 0, result: 'hash123', error: null },
-          { id: 1, result: 500000, error: null },
+          { id: 1, result: 500_000, error: null },
         ],
       });
       const rpc = new FluxRpc(goodUrl);
@@ -186,7 +186,7 @@ describe('fluxRpc tests', () => {
       ]);
       expect(result).to.have.length(2);
       expect(result[0].result).to.equal('hash123');
-      expect(result[1].result).to.equal(500000);
+      expect(result[1].result).to.equal(500_000);
       const payload = postStub.getCall(0).args[1];
       expect(payload).to.be.an('array').with.length(2);
       expect(payload[0].method).to.equal('getblockhash');

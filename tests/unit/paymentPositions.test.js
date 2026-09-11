@@ -17,7 +17,7 @@ const { requireMongo } = require('./dbTestHelper');
 chai.use(chaiAsPromised);
 const { expect } = chai;
 
-const delta = (txid, height, blockindex, satoshis = 500000000) => ({
+const delta = (txid, height, blockindex, satoshis = 500_000_000) => ({
   txid, height, blockindex, satoshis, index: 0, address: config.fluxapps.appPaymentAddresses[0].address,
 });
 
@@ -56,7 +56,7 @@ describe('app payment positions', () => {
     });
 
     it('ignores a transaction that only spends from a payment address', async () => {
-      executeCall.resolves({ status: 'success', data: [delta('spend', 100, 2, -500000000)] });
+      executeCall.resolves({ status: 'success', data: [delta('spend', 100, 2, -500_000_000)] });
       expect((await appPaymentPositions(90, 200)).size).to.equal(0);
     });
 

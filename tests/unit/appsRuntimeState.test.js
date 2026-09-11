@@ -602,7 +602,7 @@ describe('appsRuntimeState tests', () => {
 
     it('retries once when the upsert loses a concurrent-insert race (E11000)', async () => {
       const dup = new Error('E11000 duplicate key error');
-      dup.code = 11000;
+      dup.code = 11_000;
       updateStub.onFirstCall().rejects(dup);
       updateStub.onSecondCall().resolves();
 
@@ -615,7 +615,7 @@ describe('appsRuntimeState tests', () => {
 
     it('gives up after one retry on a persistent duplicate-key failure and surfaces it', async () => {
       const dup = new Error('E11000 duplicate key error');
-      dup.code = 11000;
+      dup.code = 11_000;
       updateStub.rejects(dup);
 
       let thrown = null;

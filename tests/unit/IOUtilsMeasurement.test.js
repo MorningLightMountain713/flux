@@ -93,7 +93,7 @@ describe('IOUtils streamed measurement', () => {
 
       const bytes = await IOUtils.getDirectorySizeBytes('/mnt/appdata/myapp');
 
-      expect(bytes).to.equal(208896);
+      expect(bytes).to.equal(208_896);
     });
 
     it('walks with -b so the traversal is observable, and is bounded by silence', async () => {

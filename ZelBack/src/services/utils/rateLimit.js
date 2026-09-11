@@ -37,7 +37,7 @@ function lruRateLimit(ip, limitPerSecond = 20) {
   // down to 7ms, you will get rate limited for the last part of the second, until
   // you get more tokens, if you send @ 6ms, you would get rate limited for more
   // of the second, etc.
-  if (elapsedMs >= 1_000) {
+  if (elapsedMs >= 1000) {
     rateLimit.tokenBucket = limitPerSecond;
     rateLimit.lastUpdate = now;
   }
@@ -49,7 +49,7 @@ function lruRateLimit(ip, limitPerSecond = 20) {
 
   // we log on the trigger edge only
   if (tokenBucket === 0) {
-    const remaining = Math.round(((1_000 - elapsedMs) + Number.EPSILON) * 100) / 100;
+    const remaining = Math.round(((1000 - elapsedMs) + Number.EPSILON) * 100) / 100;
     log.warn(`${ip}: Rate Limited for: ${remaining} ms`);
   }
 

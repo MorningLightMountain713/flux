@@ -39,11 +39,11 @@ function fleet(count) {
 // answers whether the subject's alive announcement supersedes the cert. The
 // token fields stand in for the store's own cryptography — the contract under
 // test is that this layer believes NOTHING it did not delegate.
-function certFor(node, issuedAt = 1_000) {
+function certFor(node, issuedAt = 1000) {
   return { subject: outpointOf(node), issuedAt, token: 'standing' };
 }
 
-function refutationFor(cert, broadcastedAt = 2_000) {
+function refutationFor(cert, broadcastedAt = 2000) {
   return { subject: cert.subject, broadcastedAt, token: 'alive' };
 }
 
@@ -64,13 +64,13 @@ describe('quorumGrant cancelOverlay', () => {
 
   function cancelEntry(seq, node) {
     return {
-      seq, cancel: outpointOf(node), cert: certFor(node), at: 1_000,
+      seq, cancel: outpointOf(node), cert: certFor(node), at: 1000,
     };
   }
 
   function reinstateEntry(seq, node, cert) {
     return {
-      seq, reinstate: outpointOf(node), refutation: refutationFor(cert), at: 2_000,
+      seq, reinstate: outpointOf(node), refutation: refutationFor(cert), at: 2000,
     };
   }
 
@@ -90,7 +90,7 @@ describe('quorumGrant cancelOverlay', () => {
       expect(rosterOverlay.cancelChainWellFormed([
         { ...cancel, reinstate: cancel.cancel },
       ])).to.equal(false);
-      expect(rosterOverlay.cancelChainWellFormed([{ seq: 1, at: 1_000 }])).to.equal(false);
+      expect(rosterOverlay.cancelChainWellFormed([{ seq: 1, at: 1000 }])).to.equal(false);
       const long = Array.from({ length: 33 }, (unused, i) => cancelEntry(i + 1, base.members[0]));
       expect(rosterOverlay.cancelChainWellFormed(long)).to.equal(false);
     });
@@ -151,7 +151,7 @@ describe('quorumGrant cancelOverlay', () => {
         seq: 2,
         reinstate: outpointOf(target),
         refutation: { ...refutationFor(cancel.cert), broadcastedAt: cancel.cert.issuedAt - 1 },
-        at: 2_000,
+        at: 2000,
       };
       expect(rosterOverlay.verifyCancelChain(
         membership, [cancel, staleRefutation], verifiers,
@@ -329,7 +329,7 @@ describe('quorumGrant cancelOverlay', () => {
       expect(rosterOverlay.extendsCancelChain([first], fork)).to.equal(false);
       // same seq, same subject, different KIND is still a fork
       const kindFork = [{
-        seq: 1, reinstate: outpointOf(target), refutation: refutationFor(first.cert), at: 1_000,
+        seq: 1, reinstate: outpointOf(target), refutation: refutationFor(first.cert), at: 1000,
       }];
       expect(rosterOverlay.extendsCancelChain([first], kindFork)).to.equal(false);
     });

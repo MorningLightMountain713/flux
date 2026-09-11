@@ -219,7 +219,7 @@ async function onChainDisplayPrice(spec) {
     const previousDefaultExpire = config.get('fluxapps.blocksLasting') * previousBlockHeightMultiplier;
 
     let previousExpireIn = previousSpecsPrice.expire || previousDefaultExpire;
-    if (daemonHeight > 1315000) {
+    if (daemonHeight > 1_315_000) {
       previousExpireIn = prevSpec.expire || previousDefaultExpire;
     }
 
@@ -255,7 +255,7 @@ async function onChainDisplayPrice(spec) {
   const { cpu, memoryMb: memory, storageGb: storage } = spec.resourceTotals();
   if (cpu < 3 && memory < 6000 && storage < 150) {
     actualPriceToPay *= 0.8;
-  } else if (cpu < 7 && memory < 29000 && storage < 370) {
+  } else if (cpu < 7 && memory < 29_000 && storage < 370) {
     actualPriceToPay *= 0.9;
   }
 
@@ -328,7 +328,7 @@ async function fiatAndFluxDisplayPrice(spec, appSpecification) {
     const previousDefaultExpire = config.get('fluxapps.blocksLasting') * previousBlockHeightMultiplier;
 
     let previousExpireIn = previousSpecsPrice.expire || previousDefaultExpire;
-    if (daemonHeight > 1315000) {
+    if (daemonHeight > 1_315_000) {
       previousExpireIn = prevSpec.expire || previousDefaultExpire;
     }
 
@@ -366,7 +366,7 @@ async function fiatAndFluxDisplayPrice(spec, appSpecification) {
   if (applyHWDiscount) {
     if (cpu < 3 && memory < 6000 && storage < 150) {
       actualPriceToPay *= 0.8;
-    } else if (cpu < 7 && memory < 29000 && storage < 370) {
+    } else if (cpu < 7 && memory < 29_000 && storage < 370) {
       actualPriceToPay *= 0.9;
     }
   }

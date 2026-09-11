@@ -51,7 +51,7 @@ describe('networkDefaults tests', () => {
 
       networkDefaults.applyNetworkDefaults();
 
-      expect(net.getDefaultAutoSelectFamilyAttemptTimeout()).to.equal(2_000);
+      expect(net.getDefaultAutoSelectFamilyAttemptTimeout()).to.equal(2000);
       expect(dns.getDefaultResultOrder()).to.equal('ipv4first');
     });
   });

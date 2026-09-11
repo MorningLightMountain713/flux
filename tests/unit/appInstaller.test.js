@@ -35,7 +35,7 @@ describe('appInstaller tests', () => {
   let arcaneInstantiated; // node-sealed v9 over the same app — genuinely Arcane-only
 
   before(async function loadLibrary() {
-    this.timeout(60000);
+    this.timeout(60_000);
     flux = await loadSpecLibrary();
     testappInstantiated = await instantiatedSpec(await v9Spec({ name: 'testapp' }), { hash: 'hash0' });
     newappSpec = await v9Spec({ name: 'newapp' });
@@ -74,11 +74,11 @@ describe('appInstaller tests', () => {
         },
       },
       fluxapps: {
-        blocksLasting: 22000,
+        blocksLasting: 22_000,
         latestAppSpecification: 1,
         ownerAppAllowance: 100,
         temporaryAppAllowance: 200,
-        maxImageSize: 10000000000,
+        maxImageSize: 10_000_000_000,
       },
     };
 
@@ -101,7 +101,7 @@ describe('appInstaller tests', () => {
       checkNodeResources: sinon.stub().resolves(),
       // The admission gate reads capacity and decides for itself, so it can tell
       // "does not fit" from "does not fit only because a session is holding it".
-      nodeCapacity: sinon.stub().resolves({ availableSpace: 500, availableCpu: 100, availableRam: 30000 }),
+      nodeCapacity: sinon.stub().resolves({ availableSpace: 500, availableCpu: 100, availableRam: 30_000 }),
       capacityShortfall: sinon.stub().returns(null),
     };
 

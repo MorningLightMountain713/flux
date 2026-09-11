@@ -281,13 +281,13 @@ describe('BasicAuthProvider Tests', () => {
       const config = {
         registryUrl: 'registry.example.com',
         username: 'myuser',
-        password: 'p'.repeat(10000),
+        password: 'p'.repeat(10_000),
       };
 
       const provider = new BasicAuthProvider(config);
       const credentials = await provider.getCredentials();
 
-      expect(credentials.password).to.have.lengthOf(10000);
+      expect(credentials.password).to.have.lengthOf(10_000);
     });
 
     it('should handle unicode characters in credentials', async () => {

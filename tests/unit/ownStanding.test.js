@@ -21,7 +21,7 @@ const BENCH_PUBLIC_IP = 'Error getting publicIp from FluxBench';
 const IP_DETECTION_FAILED = 'Flux IP detection failed';
 
 const listing = (ip, collateral = COLLATERAL) => ({
-  collateral, ip, confirmed_height: 1076535, pubkey: '04ab',
+  collateral, ip, confirmed_height: 1_076_535, pubkey: '04ab',
 });
 
 const reachable = { data: { status: 'success', data: { message: 'Asking Flux is available' } } };
@@ -206,7 +206,7 @@ describe('fluxNetworkHelper own standing tests', () => {
       sinon.stub(peerManager, 'inboundValues').callsFake(() => peers(config.fluxapps.minUniqueIpsIncoming).values());
     };
     const minutesLater = (minutes) => sinon.stub(process.hrtime, 'bigint')
-      .returns(process.hrtime.bigint.wrappedMethod() + BigInt(minutes) * 60000n * 1000000n);
+      .returns(process.hrtime.bigint.wrappedMethod() + BigInt(minutes) * 60_000n * 1_000_000n);
 
     it('clears its own "not reachable" once reachable, though this node has too few peers', async () => {
       await unreachableEverywhere();
@@ -444,7 +444,7 @@ describe('fluxNetworkHelper own standing tests', () => {
       records = dbHelper.databaseConnection().db(config.database.local.database).collection(config.database.local.collections.ownAddress);
       await records.deleteMany({});
       originalUserConfig = globalThis.userconfig;
-      globalThis.userconfig = { initial: { ipaddress: '129.3.3.3', apiport: 16157, zelid: '', kadena: '' } };
+      globalThis.userconfig = { initial: { ipaddress: '129.3.3.3', apiport: 16_157, zelid: '', kadena: '' } };
       sinon.stub(fs, 'writeFile').resolves();
       sinon.stub(appQueryService, 'installedApps').resolves({ status: 'success', data: [] });
       moved = sinon.stub().resolves();

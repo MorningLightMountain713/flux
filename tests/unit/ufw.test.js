@@ -33,7 +33,7 @@ describe('ufw runner', () => {
       runAsRoot: true,
       logError: false,
       params: [ufw.UFW_HELPER, '--wait', '30', '--command', '["allow","from","::/0","to","any","port","31000"]'],
-      timeout: 60000,
+      timeout: 60_000,
     });
     expect(result).to.deep.equal({ error: null, stdout: 'Rule added\n', stderr: '', locked: false });
   });
@@ -56,7 +56,7 @@ describe('ufw runner', () => {
 
     sinon.assert.calledTwice(runCommand);
     sinon.assert.calledWithExactly(runCommand.secondCall, 'ufw', {
-      runAsRoot: true, logError: false, params: ['allow', '31000'], timeout: 30000,
+      runAsRoot: true, logError: false, params: ['allow', '31000'], timeout: 30_000,
     });
     expect(result).to.deep.equal({ error: null, stdout: 'Rule added\n', stderr: '', locked: false });
   });
@@ -87,7 +87,7 @@ describe('ufw runner', () => {
         runAsRoot: true,
         logError: false,
         params: [ufw.UFW_HELPER, '--wait', '30', '--keep-outbound', '--rules', JSON.stringify(commands)],
-        timeout: 60000,
+        timeout: 60_000,
       });
     });
 

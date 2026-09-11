@@ -30,8 +30,8 @@ describe('daemonServiceAddressRpcs tests', () => {
       daemonServiceUtilsStub.resolves('success');
       const params = {
         addresses: '12QSasdfggYy4sditOpQzsee',
-        start: 1670654443,
-        end: 167068000,
+        start: 1_670_654_443,
+        end: 167_068_000,
       };
       const mockStream = new PassThrough();
       mockStream.push(JSON.stringify(params));
@@ -81,8 +81,8 @@ describe('daemonServiceAddressRpcs tests', () => {
       const req = {
         params: {
           address: '12QSasdfggYy4sditOpQzsee',
-          start: 1670654443,
-          end: 167068000,
+          start: 1_670_654_443,
+          end: 167_068_000,
         },
       };
       daemonServiceUtilsStub.returns('success');
@@ -105,8 +105,8 @@ describe('daemonServiceAddressRpcs tests', () => {
         },
         query: {
           address: '12QSasdfggYy4sditOpQzsee',
-          start: 1670654443,
-          end: 167068000,
+          start: 1_670_654_443,
+          end: 167_068_000,
         },
       };
       daemonServiceUtilsStub.returns('success');
@@ -285,15 +285,15 @@ describe('daemonServiceAddressRpcs tests', () => {
       daemonServiceUtilsStub.resolves('success');
       const params = {
         addresses: '12QSasdfggYy4sditOpQzsee',
-        start: 1670654443,
-        end: 167068000,
+        start: 1_670_654_443,
+        end: 167_068_000,
         chaininfo: true,
       };
 
       const expectedParams = {
         addresses: '12QSasdfggYy4sditOpQzsee',
-        start: 1670654443,
-        end: 167068000,
+        start: 1_670_654_443,
+        end: 167_068_000,
         chainInfo: true,
       };
       const mockStream = new PassThrough();
@@ -346,8 +346,8 @@ describe('daemonServiceAddressRpcs tests', () => {
       const req = {
         params: {
           address: '12QSasdfggYy4sditOpQzsee',
-          start: 1670654443,
-          end: 167068000,
+          start: 1_670_654_443,
+          end: 167_068_000,
           chaininfo: true,
         },
       };
@@ -373,8 +373,8 @@ describe('daemonServiceAddressRpcs tests', () => {
         },
         query: {
           address: '12QSasdfggYy4sditOpQzsee',
-          start: 1670654443,
-          end: 167068000,
+          start: 1_670_654_443,
+          end: 167_068_000,
           chaininfo: true,
         },
       };

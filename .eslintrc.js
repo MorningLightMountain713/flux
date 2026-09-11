@@ -16,8 +16,29 @@ module.exports = {
   // The rules below include import/* ones, which only exist while this plugin is
   // registered — without it every file fails with "Definition for rule ... was not
   // found" before a single real rule runs.
-  plugins: ['import'],
+  plugins: ['import', 'unicorn'],
   rules: {
+    // ONE WAY TO WRITE A NUMBER. A duration or a size past four digits is
+    // read by counting zeros otherwise, and 86400000 and 8640000 differ by a
+    // glance. Autofixable, so this is enforced rather than asked for.
+    //
+    // It reaches ports and the uint16 ceiling as well, which read wrongly with
+    // separators - so those are not written out any more: 65535 is MAX_PORT in
+    // socketAddressUtils, and the API port is DEFAULT_API_PORT beside it. No
+    // per-site exemptions, because an exemption is where the next one hides.
+    // Decimal only. A hex or binary literal is almost always a value copied
+    // verbatim from a spec, a reference implementation or a wire format, and
+    // grouping it makes it HARDER to check against its source - 0x9e3779b9 is
+    // recognisable, 0x9e3779b9 is not, and 0x100000000 grouped from the right
+    // leaves a dangling digit. Left alone unless someone deliberately writes a
+    // separator in one, in which case the grouping is made consistent.
+    'unicorn/numeric-separators-style': ['error', {
+      onlyIfContainsSeparator: false,
+      number: { minimumDigits: 5, groupLength: 3 },
+      binary: { onlyIfContainsSeparator: true, groupLength: 4 },
+      octal: { onlyIfContainsSeparator: true, groupLength: 4 },
+      hexadecimal: { onlyIfContainsSeparator: true, groupLength: 2 },
+    }],
     'max-len': [
       'error',
       {

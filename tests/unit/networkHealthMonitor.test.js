@@ -127,7 +127,7 @@ describe('NetworkHealthMonitor', () => {
       }
       monitor.recordConnect();
       expect(monitor.getStatus()).to.equal(HEALTH_STATUS.HEALTHY);
-    }).timeout(10000);
+    }).timeout(10_000);
 
     it('should not reset to HEALTHY with too few peers', async () => {
       // Drive monitor to NETWORK_LOSS via diagnosis
@@ -144,7 +144,7 @@ describe('NetworkHealthMonitor', () => {
       manager.add(peerWs, '45.0.0.1', '16127', { source: 'random' });
       monitor.recordConnect();
       expect(monitor.getStatus()).to.equal(HEALTH_STATUS.NETWORK_LOSS);
-    }).timeout(10000);
+    }).timeout(10_000);
   });
 
   describe('recordDisconnect / velocity filtering', () => {
@@ -155,19 +155,19 @@ describe('NetworkHealthMonitor', () => {
     });
 
     it('should ignore policy close codes', () => {
-      const oldConnect = Date.now() - 60000; // 60s ago
+      const oldConnect = Date.now() - 60_000; // 60s ago
       monitor.recordDisconnect(oldConnect, CLOSE_CODES.BLOCKED_INBOUND);
       expect(monitor.velocityCount).to.equal(0);
     });
 
     it('should record established unexpected disconnects', () => {
-      const oldConnect = Date.now() - 60000;
+      const oldConnect = Date.now() - 60_000;
       monitor.recordDisconnect(oldConnect, undefined);
       expect(monitor.velocityCount).to.equal(1);
     });
 
     it('should record DEAD_CONNECTION disconnects', () => {
-      const oldConnect = Date.now() - 60000;
+      const oldConnect = Date.now() - 60_000;
       monitor.recordDisconnect(oldConnect, CLOSE_CODES.DEAD_CONNECTION);
       expect(monitor.velocityCount).to.equal(1);
     });
@@ -175,7 +175,7 @@ describe('NetworkHealthMonitor', () => {
 
   describe('velocity calculation', () => {
     it('should count disconnects within window', () => {
-      const oldConnect = Date.now() - 60000;
+      const oldConnect = Date.now() - 60_000;
       for (let i = 0; i < 3; i++) {
         monitor.recordDisconnect(oldConnect, undefined);
       }
@@ -185,7 +185,7 @@ describe('NetworkHealthMonitor', () => {
 
   describe('diagnosis gating', () => {
     it('should not trigger before steady state', () => {
-      const oldConnect = Date.now() - 60000;
+      const oldConnect = Date.now() - 60_000;
       for (let i = 0; i < VELOCITY_THRESHOLD_COUNT + 1; i++) {
         monitor.recordDisconnect(oldConnect, undefined);
       }
@@ -204,7 +204,7 @@ describe('NetworkHealthMonitor', () => {
 
       // Now try to trigger via velocity — should be blocked by cooldown
       const statusBefore = monitor.getStatus();
-      const oldConnect = Date.now() - 60000;
+      const oldConnect = Date.now() - 60_000;
       for (let i = 0; i < VELOCITY_THRESHOLD_COUNT + 1; i++) {
         monitor.recordDisconnect(oldConnect, undefined);
       }
@@ -224,7 +224,7 @@ describe('NetworkHealthMonitor', () => {
       const diagPromise = monitor.diagnose(5);
 
       // While diagnosing, try to trigger via velocity
-      const oldConnect = Date.now() - 60000;
+      const oldConnect = Date.now() - 60_000;
       for (let i = 0; i < VELOCITY_THRESHOLD_COUNT + 1; i++) {
         monitor.recordDisconnect(oldConnect, undefined);
       }
@@ -232,7 +232,7 @@ describe('NetworkHealthMonitor', () => {
 
       // Let diagnosis complete
       await diagPromise;
-    }).timeout(10000);
+    }).timeout(10_000);
 
     it('should trigger when velocity exceeds threshold in steady state', async () => {
       enterSteadyState(monitor, clock);
@@ -242,7 +242,7 @@ describe('NetworkHealthMonitor', () => {
       ws.ping = () => { setImmediate(() => ws.emit('pong')); };
       manager.add(ws, '44.0.0.1', '16127', { source: 'random' });
 
-      const oldConnect = Date.now() - 60000;
+      const oldConnect = Date.now() - 60_000;
       for (let i = 0; i < VELOCITY_THRESHOLD_COUNT; i++) {
         monitor.recordDisconnect(oldConnect, undefined);
       }
@@ -281,7 +281,7 @@ describe('NetworkHealthMonitor', () => {
       await monitor.diagnose(5);
 
       expect(monitor.getStatus()).to.equal(HEALTH_STATUS.NETWORK_LOSS);
-    }).timeout(10000);
+    }).timeout(10_000);
   });
 
   describe('diagnose — DEGRADED', () => {
@@ -354,6 +354,6 @@ describe('NetworkHealthMonitor', () => {
       expect(monitor.isInSteadyState()).to.be.false;
       expect(monitor.getStatus()).to.equal(HEALTH_STATUS.HEALTHY);
       expect(monitor.getDiagnosisHistory()).to.have.length(0);
-    }).timeout(10000);
+    }).timeout(10_000);
   });
 });

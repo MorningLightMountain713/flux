@@ -289,7 +289,7 @@ describe('dockerTerminalHandler tests', () => {
   describe('arguments the client chose', () => {
     const malformed = [
       { what: 'no container at all', args: ['zelidauth'], answer: 'No container specified.' },
-      { what: 'a container that is a number', args: ['zelidauth', 12345], answer: 'No container specified.' },
+      { what: 'a container that is a number', args: ['zelidauth', 12_345], answer: 'No container specified.' },
       { what: 'a container that is an object', args: ['zelidauth', { name: 'x' }], answer: 'No container specified.' },
       { what: 'an auth that is an object', args: [{ zelidauth: 'x' }, 'fluxcomp_myapp'], answer: 'Not authorized.' },
     ];

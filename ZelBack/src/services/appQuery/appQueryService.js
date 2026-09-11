@@ -423,7 +423,7 @@ async function heldComponentsAnswer(req, res) {
       peerIdentityService.AnswerPurpose.HELD_COMPONENTS,
       serviceHelper.ensureObject(req?.body) || {},
     );
-    const now = Number(process.hrtime.bigint() / 1000000n);
+    const now = Number(process.hrtime.bigint() / 1_000_000n);
     if (!heldForPeers || now - heldForPeers.at >= HELD_FOR_PEERS_TTL_MS) {
       const account = await holdingsAccount();
       if (!account) return res.json(notKnownYet());

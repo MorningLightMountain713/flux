@@ -149,8 +149,8 @@ describe('peerCodec', () => {
       const out = [];
       const inb = [];
       for (let i = 0; i < 30; i++) {
-        out.push(`${i}.${i % 256}.${(i * 3) % 256}.${(i * 7) % 256}:${16127 + i}`);
-        inb.push(`${i + 100}.${i % 256}.${(i * 5) % 256}.${(i * 11) % 256}:${16127 + i}`);
+        out.push(`${i}.${i % 256}.${(i * 3) % 256}.${(i * 7) % 256}:${16_127 + i}`);
+        inb.push(`${i + 100}.${i % 256}.${(i * 5) % 256}.${(i * 11) % 256}:${16_127 + i}`);
       }
       const buf = encodePeerExchange(out, inb);
       expect(buf.length).to.equal(5 + 60 * 6);
@@ -250,14 +250,14 @@ describe('peerCodec', () => {
   describe('sync messages', () => {
     const testPubkey = '04abc123def456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890ab';
     const testSig = 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=';
-    const testRequestTs = 1777626100000;
+    const testRequestTs = 1_777_626_100_000;
 
     it('should encode and decode REQUEST_TEMP_MESSAGES', () => {
-      const buf = encodeRequestTempMessages(1777626000000, testRequestTs, testPubkey, testSig);
+      const buf = encodeRequestTempMessages(1_777_626_000_000, testRequestTs, testPubkey, testSig);
       expect(buf[0]).to.equal(MSG_TYPE.REQUEST_TEMP_MESSAGES);
       const decoded = decodeSignedSyncRequest(buf);
       expect(decoded.type).to.equal(MSG_TYPE.REQUEST_TEMP_MESSAGES);
-      expect(decoded.sinceTimestamp).to.equal(1777626000000);
+      expect(decoded.sinceTimestamp).to.equal(1_777_626_000_000);
       expect(decoded.requestTimestamp).to.equal(testRequestTs);
       expect(decoded.pubkey).to.equal(testPubkey);
       expect(decoded.signature).to.equal(testSig);
@@ -271,27 +271,27 @@ describe('peerCodec', () => {
     });
 
     it('should encode and decode REQUEST_APP_RUNNING', () => {
-      const buf = encodeRequestAppRunning(1777626000000, testRequestTs, testPubkey, testSig);
+      const buf = encodeRequestAppRunning(1_777_626_000_000, testRequestTs, testPubkey, testSig);
       expect(buf[0]).to.equal(MSG_TYPE.REQUEST_APP_RUNNING);
       const decoded = decodeSignedSyncRequest(buf);
       expect(decoded.type).to.equal(MSG_TYPE.REQUEST_APP_RUNNING);
-      expect(decoded.sinceTimestamp).to.equal(1777626000000);
+      expect(decoded.sinceTimestamp).to.equal(1_777_626_000_000);
     });
 
     it('should encode and decode REQUEST_APP_INSTALLING', () => {
-      const buf = encodeRequestAppInstalling(1777626000000, testRequestTs, testPubkey, testSig);
+      const buf = encodeRequestAppInstalling(1_777_626_000_000, testRequestTs, testPubkey, testSig);
       expect(buf[0]).to.equal(MSG_TYPE.REQUEST_APP_INSTALLING);
       const decoded = decodeSignedSyncRequest(buf);
       expect(decoded.type).to.equal(MSG_TYPE.REQUEST_APP_INSTALLING);
-      expect(decoded.sinceTimestamp).to.equal(1777626000000);
+      expect(decoded.sinceTimestamp).to.equal(1_777_626_000_000);
     });
 
     it('should encode and decode REQUEST_APP_INSTALLING_ERRORS', () => {
-      const buf = encodeRequestAppInstallingErrors(1777626000000, testRequestTs, testPubkey, testSig);
+      const buf = encodeRequestAppInstallingErrors(1_777_626_000_000, testRequestTs, testPubkey, testSig);
       expect(buf[0]).to.equal(MSG_TYPE.REQUEST_APP_INSTALLING_ERRORS);
       const decoded = decodeSignedSyncRequest(buf);
       expect(decoded.type).to.equal(MSG_TYPE.REQUEST_APP_INSTALLING_ERRORS);
-      expect(decoded.sinceTimestamp).to.equal(1777626000000);
+      expect(decoded.sinceTimestamp).to.equal(1_777_626_000_000);
     });
 
     it('should return null for too-short buffer', () => {

@@ -1036,7 +1036,7 @@ async function startFluxFunctions() {
     log.error(e);
     setTimeout(() => {
       startFluxFunctions();
-    }, 15000);
+    }, 15_000);
   }
 }
 

@@ -20,22 +20,22 @@ const scannedHeightCollection = config.get('database.daemon.collections.scannedH
  * hardware a node must have to serve as that tier.
  */
 const COLLATERAL_TIERS = Object.freeze({
-  10000: Object.freeze({
+  10_000: Object.freeze({
     tier: 'basic', nodeTier: 'cumulus', label: 'Cumulus', minRamGb: 3, minCpuThreads: 2,
   }),
-  25000: Object.freeze({
+  25_000: Object.freeze({
     tier: 'super', nodeTier: 'nimbus', label: 'Nimbus', minRamGb: 7, minCpuThreads: 4,
   }),
-  100000: Object.freeze({
+  100_000: Object.freeze({
     tier: 'bamf', nodeTier: 'stratus', label: 'Stratus', minRamGb: 30, minCpuThreads: 8,
   }),
   1000: Object.freeze({
     tier: 'basic', nodeTier: 'cumulus_new', label: 'new Cumulus', minRamGb: 3, minCpuThreads: 4,
   }),
-  12500: Object.freeze({
+  12_500: Object.freeze({
     tier: 'super', nodeTier: 'nimbus_new', label: 'new Nimbus', minRamGb: 30, minCpuThreads: 8,
   }),
-  40000: Object.freeze({
+  40_000: Object.freeze({
     tier: 'bamf', nodeTier: 'stratus_new', label: 'new Stratus', minRamGb: 61, minCpuThreads: 16,
   }),
 });

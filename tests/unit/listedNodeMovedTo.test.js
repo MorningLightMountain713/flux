@@ -40,40 +40,40 @@ describe('registryManager listedNodeMovedTo tests', () => {
   });
 
   it('finds the listed node at the address its own move leads to', async () => {
-    await move(A, B, Date.now() - 60000, OWN_KEY);
+    await move(A, B, Date.now() - 60_000, OWN_KEY);
 
     expect(await registryManager.listedNodeMovedTo(B, [listed])).to.equal(listed);
   });
 
   it('does not follow a move another key signed', async () => {
-    await move(A, B, Date.now() - 60000, OTHER_KEY);
+    await move(A, B, Date.now() - 60_000, OTHER_KEY);
 
     expect(await registryManager.listedNodeMovedTo(B, [listed])).to.equal(null);
   });
 
   it('follows the node through each of its moves', async () => {
-    await move(A, B, Date.now() - 120000, OWN_KEY);
-    await move(B, C, Date.now() - 60000, OWN_KEY);
+    await move(A, B, Date.now() - 120_000, OWN_KEY);
+    await move(B, C, Date.now() - 60_000, OWN_KEY);
 
     expect(await registryManager.listedNodeMovedTo(C, [listed])).to.equal(listed);
   });
 
   it('does not take an address the node moved on from as the node', async () => {
-    await move(A, B, Date.now() - 120000, OWN_KEY);
-    await move(B, C, Date.now() - 60000, OWN_KEY);
+    await move(A, B, Date.now() - 120_000, OWN_KEY);
+    await move(B, C, Date.now() - 60_000, OWN_KEY);
 
     expect(await registryManager.listedNodeMovedTo(B, [listed])).to.equal(null);
   });
 
   it('does not follow a move older than the one before it', async () => {
-    await move(A, B, Date.now() - 60000, OWN_KEY);
-    await move(B, C, Date.now() - 120000, OWN_KEY);
+    await move(A, B, Date.now() - 60_000, OWN_KEY);
+    await move(B, C, Date.now() - 120_000, OWN_KEY);
 
     expect(await registryManager.listedNodeMovedTo(C, [listed])).to.equal(null);
   });
 
   it('answers null for an address no listed node moved to', async () => {
-    await move(A, B, Date.now() - 60000, OWN_KEY);
+    await move(A, B, Date.now() - 60_000, OWN_KEY);
 
     expect(await registryManager.listedNodeMovedTo(C, [listed])).to.equal(null);
   });

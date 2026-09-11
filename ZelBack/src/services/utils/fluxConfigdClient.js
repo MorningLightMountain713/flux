@@ -21,7 +21,7 @@ async function callFluxConfigdRPC(method, params = {}) {
     const ws = new WebSocket(`ws+${connectionUri}`);
 
     const id = currentId;
-    currentId = (currentId + 1) % 1000000;
+    currentId = (currentId + 1) % 1_000_000;
 
     const request = {
       jsonrpc: '2.0',
@@ -35,7 +35,7 @@ async function callFluxConfigdRPC(method, params = {}) {
     const timeout = setTimeout(() => {
       ws.close();
       reject(new Error('flux-configd RPC timeout'));
-    }, 10000);
+    }, 10_000);
 
     ws.on('open', () => {
       // flux-configd requires an auth handshake before accepting RPC calls

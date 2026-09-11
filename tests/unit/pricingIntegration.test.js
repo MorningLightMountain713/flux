@@ -39,7 +39,7 @@ describe('pricing integration — chain messages through PricingEngine', () => {
     version: 9,
     name: 'testapp',
     instances: 3,
-    ttl: 2592000, // 30 days in seconds
+    ttl: 2_592_000, // 30 days in seconds
     placement: { staticIp: false, dataCenter: false, geoAllow: null, geoDeny: null },
     network: { mesh: false },
     telemetry: null,
@@ -51,7 +51,7 @@ describe('pricing integration — chain messages through PricingEngine', () => {
         swapGb: 0,
         persistentStorage: { sizeGb: 5, sync: null, mounts: {} },
         ports: {
-          http: { hostPort: 31000, containerPort: 80, protocol: 'tcp' },
+          http: { hostPort: 31_000, containerPort: 80, protocol: 'tcp' },
         },
         loadBalancing: null,
         shutdown: null,
@@ -148,10 +148,10 @@ describe('pricing integration — chain messages through PricingEngine', () => {
     it('resolves the per-template multiplier from MarketplacePricingHistory', () => {
       const chainHeight = 100;
       const queryHeight = chainHeight + SOFT_FORK_EFFECTIVE_DEPTH;
-      sinon.stub(priceOracleState, 'getMarketplacePricingHistory').returns(buildMarketplaceHistory(chainHeight, 12000));
+      sinon.stub(priceOracleState, 'getMarketplacePricingHistory').returns(buildMarketplaceHistory(chainHeight, 12_000));
 
       const spec = { ...testSpec, marketplace: { templateId: TEMPLATE_UUID, templateVersion: 1, configId: null } };
-      expect(resolveMarketplacePricingCtx(spec, queryHeight)).to.deep.equal({ marketplaceMultiplier: 12000 });
+      expect(resolveMarketplacePricingCtx(spec, queryHeight)).to.deep.equal({ marketplaceMultiplier: 12_000 });
     });
 
     it('cascades to the global-default entry when no per-template message exists', () => {
@@ -186,7 +186,7 @@ describe('pricing integration — chain messages through PricingEngine', () => {
     });
 
     it('dispatches encoded RateMessage to kind=rate with fluxUsdPriceE4', () => {
-      const bytes = RateMessage.encode({ timestamp: 1700000000, fluxUsdPriceE4: 577 });
+      const bytes = RateMessage.encode({ timestamp: 1_700_000_000, fluxUsdPriceE4: 577 });
       const result = dispatch(bytes);
       expect(result.kind).to.equal('rate');
       expect(result.message.fluxUsdPriceE4).to.equal(577);
@@ -470,7 +470,7 @@ describe('pricing integration — chain messages through PricingEngine', () => {
             swapGb: 2,
             rootFsGb: 2,
             persistentStorage: { sizeGb: 10, mounts: { '/data': { source: 'data', destination: '/data' } } },
-            ports: { tcp_80: { containerPort: 80, hostPort: 31000, protocol: 'tcp' } },
+            ports: { tcp_80: { containerPort: 80, hostPort: 31_000, protocol: 'tcp' } },
           },
         },
       });
@@ -541,7 +541,7 @@ describe('pricing integration — chain messages through PricingEngine', () => {
             swapGb: 2,
             rootFsGb: 2,
             persistentStorage: { sizeGb: 10, mounts: { '/data': { source: 'data', destination: '/data' } } },
-            ports: { tcp_80: { containerPort: 80, hostPort: 31000, protocol: 'tcp' } },
+            ports: { tcp_80: { containerPort: 80, hostPort: 31_000, protocol: 'tcp' } },
             ...overrides,
           },
         },

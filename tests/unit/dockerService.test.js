@@ -1504,9 +1504,9 @@ describe('dockerService tests', () => {
         toDockerPortBindings: () => ({ '30333/tcp': [{ HostPort: '31113' }], '9933/tcp': [{ HostPort: '31112' }] }),
         toDockerExposedPorts: () => ({ '30333/tcp': {}, '9933/tcp': {} }),
         toDockerEnv: () => [],
-        toDockerNanoCpus: () => 800000000,
-        toDockerMemoryBytes: () => 1887436800,
-        toDockerMemorySwapBytes: () => 1887436800 + (2 * 1024 * 1024 * 1024),
+        toDockerNanoCpus: () => 800_000_000,
+        toDockerMemoryBytes: () => 1_887_436_800,
+        toDockerMemorySwapBytes: () => 1_887_436_800 + (2 * 1024 * 1024 * 1024),
         restartPolicyName: () => 'unless-stopped',
         platformEnv: () => ({ FLUX_APP_NAME: 'fluxwebsite' }),
         ...overrides,
@@ -1540,8 +1540,8 @@ describe('dockerService tests', () => {
       expect(actualConfig.Image).to.equal('runonflux/website');
       expect(actualConfig.name).to.equal('fluxwebsite_fluxwebsite');
       expect(actualConfig.Hostname).to.equal('website');
-      expect(actualConfig.HostConfig.NanoCPUs).to.equal(800000000);
-      expect(actualConfig.HostConfig.Memory).to.equal(1887436800);
+      expect(actualConfig.HostConfig.NanoCPUs).to.equal(800_000_000);
+      expect(actualConfig.HostConfig.Memory).to.equal(1_887_436_800);
     });
 
     it('should set up mounts from DeploymentComponent', async () => {
@@ -1637,10 +1637,10 @@ describe('dockerService tests', () => {
       const actualConfig = dockerStub.firstCall.args[0];
       expect(actualConfig.Healthcheck).to.deep.equal({
         Test: ['CMD', 'pg_isready', '-U', 'app'],
-        Interval: 30000000000,
-        Timeout: 5000000000,
+        Interval: 30_000_000_000,
+        Timeout: 5_000_000_000,
         Retries: 3,
-        StartPeriod: 10000000000,
+        StartPeriod: 10_000_000_000,
       });
     });
 

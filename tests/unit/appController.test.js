@@ -54,7 +54,7 @@ describe('appController tests', () => {
 
   before(async function loadLibrary() {
     // The first fromSubmission compiles the ajv schemas.
-    this.timeout(30000);
+    this.timeout(30_000);
     await loadSpecLibrary();
   });
 
@@ -82,7 +82,7 @@ describe('appController tests', () => {
       compose: componentNames.map((component, index) => ({
         ...V8_SUBMISSION.compose[0],
         name: component,
-        ports: [31000 + index],
+        ports: [31_000 + index],
         containerPorts: [80 + index],
       })),
     });
@@ -101,7 +101,7 @@ describe('appController tests', () => {
     const base = V9_SUBMISSION.components.web;
     const replicaOverrides = {};
     replicas.slice(1).forEach((replica, index) => {
-      replicaOverrides[replica] = { ports: { http: { hostPort: 31001 + index } } };
+      replicaOverrides[replica] = { ports: { http: { hostPort: 31_001 + index } } };
     });
     const spec = await v9Spec({
       name,

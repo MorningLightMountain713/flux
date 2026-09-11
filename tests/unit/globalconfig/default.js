@@ -38,28 +38,28 @@ const harnessOverrides = {
   testEventStream: false,
   system: {
     bootIdPath: '/proc/sys/kernel/random/boot_id',
-    heartbeatIntervalMs: 30000,
-    bootSyncTimeoutMs: 300000,
-    bootDaemonTimeoutMs: 300000,
+    heartbeatIntervalMs: 30_000,
+    bootSyncTimeoutMs: 300_000,
+    bootDaemonTimeoutMs: 300_000,
   },
   peers: {
-    wsPingIntervalMs: 15000,
+    wsPingIntervalMs: 15_000,
     wsMaxMissedPongs: 3,
   },
   confirmation: {
-    pollIntervalMs: 30000,
-    daemonStaleMs: 7500000,
+    pollIntervalMs: 30_000,
+    daemonStaleMs: 7_500_000,
     // Post-PON a node must re-confirm between 500 and 640 blocks after its last
     // confirmation — fluxd's FLUXNODE_CONFIRM_UPDATE_MIN_HEIGHT_V3 and
     // FLUXNODE_CONFIRM_UPDATE_EXPIRATION_HEIGHT_V4. Expiry is a height, not a
     // duration; the block interval only estimates it when the chain view is gone.
     confirmExpirationBlocks: 640,
     confirmWindowOpensBlocks: 500,
-    blockIntervalMs: 30000,
+    blockIntervalMs: 30_000,
   },
   server: {
-    allowedPorts: [11, 13, 16127, 16137, 16147, 16157, 16167, 16177, 16187, 16197],
-    apiport: 16127, // homeport is -1, ssl port is +1
+    allowedPorts: [11, 13, 16_127, 16_137, 16_147, 16_157, 16_167, 16_177, 16_187, 16_197],
+    apiport: 16_127, // homeport is -1, ssl port is +1
     fluxNodeServiceAddress: '169.254.43.43',
     fluxDnsdServiceAddress: '169.254.43.53',
   },
@@ -76,7 +76,7 @@ const harnessOverrides = {
   },
   database: {
     url: database,
-    port: 27017,
+    port: 27_017,
     // How long one round trip, or the wait for a pooled connection, may take
     // before the call fails. callTimeoutMs bounds every call on the main client:
     // over four times the slowest healthy round trip seen on the fleet.
@@ -163,19 +163,19 @@ const harnessOverrides = {
   },
   benchmark: {
     host: '127.0.0.1',
-    port: 16225,
-    rpcport: 16224,
-    porttestnet: 26225,
-    rpcporttestnet: 26224,
+    port: 16_225,
+    rpcport: 16_224,
+    porttestnet: 26_225,
+    rpcporttestnet: 26_224,
   },
   daemon: {
     host: '127.0.0.1',
-    chainValidHeight: 1062000,
-    port: 16125,
-    rpcport: 16124,
-    porttestnet: 26125,
-    rpcporttestnet: 26124,
-    zmqport: 16123,
+    chainValidHeight: 1_062_000,
+    port: 16_125,
+    rpcport: 16_124,
+    porttestnet: 26_125,
+    rpcporttestnet: 26_124,
+    zmqport: 16_123,
     subscriptions: {
       receiveHighWaterMark: 400,
       // fluxd answers ZMTP heartbeats but never initiates them, so this side decides
@@ -186,28 +186,28 @@ const harnessOverrides = {
       // recovers. Lower still would start to be within reach of a badly loaded host,
       // and a teardown is not free: it resyncs from a full snapshot.
       heartbeatIntervalMs: 5000,
-      heartbeatTimeoutMs: 20000,
+      heartbeatTimeoutMs: 20_000,
       reconnectIntervalMs: 500,
-      reconnectMaxIntervalMs: 15000,
+      reconnectMaxIntervalMs: 15_000,
       connectTimeoutMs: 3000,
-      silenceThresholdMs: 90000,
-      probeIntervalMs: 30000,
+      silenceThresholdMs: 90_000,
+      probeIntervalMs: 30_000,
       // Push carries the tip every block; this only keeps `headers` honest, which push
       // cannot supply — a post-IBD daemon still catching up publishes a block per
       // connection and would otherwise read as synced.
-      headerRefreshIntervalMs: 300000,
-      livenessCheckIntervalMs: 10000,
+      headerRefreshIntervalMs: 300_000,
+      livenessCheckIntervalMs: 10_000,
       // One aggregate line rather than one per block. Long enough that a healthy node is
       // quiet, short enough that the numbers still mean something when read after the fact.
-      usageReportIntervalMs: 300000,
+      usageReportIntervalMs: 300_000,
       // Ten blocks at ~30s. Past this nothing recent has arrived from either the
       // socket or RPC, so the tip we hold is no longer evidence about the chain.
-      chainStaleAfterMs: 300000,
+      chainStaleAfterMs: 300_000,
       // Shortest gap between two rebuilds caused by reconnecting. A rebuild is a full
       // snapshot, and libzmq reconnects from half a second, so a flapping link would
       // otherwise pay for one per flap. Safe to skip: a delta against a stale view
       // does not chain, and one that does not chain forces the rebuild anyway.
-      reconnectResyncMinIntervalMs: 30000,
+      reconnectResyncMinIntervalMs: 30_000,
     },
   },
   minimumFluxBenchAllowedVersion: '6.2.0',
@@ -218,29 +218,29 @@ const harnessOverrides = {
   minimumMongoDbAllowedVersion: '6.0.27',
   fluxTeamFluxID: '1NH9BP155Rp3HSf5ef6NpUbE8JcyLRruAM',
   fluxSupportTeamFluxID: ['16iJqiVbHptCx87q6XQwNpKdgEZnFtKcyP'],
-  deterministicNodesStart: 558000,
+  deterministicNodesStart: 558_000,
   fluxapps: {
     storageHost: 'storage.runonflux.io',
-    crashBackoffDelaysMs: [0, 30000, 300000, 900000, 1800000],
-    crashBackoffStableRunMs: 600000,
+    crashBackoffDelaysMs: [0, 30_000, 300_000, 900_000, 1_800_000],
+    crashBackoffStableRunMs: 600_000,
     restartBurstCount: 5,
-    restartBurstWindowMs: 300000,
+    restartBurstWindowMs: 300_000,
     networkHealConfirmMs: 3000,
-    networkHealDetachedPersistMs: 60000,
-    networkHealPrunedRetryMs: 300000,
-    postStartVerifyMs: 30000,
+    networkHealDetachedPersistMs: 60_000,
+    networkHealPrunedRetryMs: 300_000,
+    postStartVerifyMs: 30_000,
     convergeFailAttempts: 3,
-    convergeBackstopMs: 300000,
-    convergeRetryMs: 10000,
-    firstRunProofMs: 60000,
+    convergeBackstopMs: 300_000,
+    convergeRetryMs: 10_000,
+    firstRunProofMs: 60_000,
     // small so the hung-provision cap test observes the cap without a long wait;
     // only ever reached by a provision stub that deliberately never resolves
     recreateProvisionCapMs: 250,
     // pull-stall watchdog window; unit pull tests pass stallMs per-call, this
     // mirrors the prod key so config reads never fall through to the fallback
-    pullStallMs: 90000,
+    pullStallMs: 90_000,
     // transient registry back-off mirror (prod value, so TTL tests assert prod math)
-    registryTransientBackoffMs: 120000,
+    registryTransientBackoffMs: 120_000,
     // in flux main chain per month (blocksLasting)
     price: [
       { // any price fork can be done by adjusting object similarily.
@@ -254,7 +254,7 @@ const harnessOverrides = {
         staticip: 3, // additional price per application for targetting nodes that have static ip address
       },
       {
-        height: 983000, // height from which price spec is valid. Counts from when app was registerd on blockchain!
+        height: 983_000, // height from which price spec is valid. Counts from when app was registerd on blockchain!
         cpu: 0.3, // per 0.1 cpu core,
         ram: 0.1, // per 100mb,
         hdd: 0.05, // per 1gb,
@@ -264,7 +264,7 @@ const harnessOverrides = {
         staticip: 3, // additional price per application for targetting nodes that have static ip address
       },
       {
-        height: 1004000, // height from which price spec is valid. Counts from when app was registerd on blockchain! 1004000
+        height: 1_004_000, // height from which price spec is valid. Counts from when app was registerd on blockchain! 1004000
         cpu: 0.06, // per 0.1 cpu core,
         ram: 0.02, // per 100mb,
         hdd: 0.01, // per 1gb,
@@ -274,7 +274,7 @@ const harnessOverrides = {
         staticip: 3, // additional price per application for targetting nodes that have static ip address
       },
       {
-        height: 1288000, // height from which price spec is valid. Counts from when app was registerd on blockchain! 1004000
+        height: 1_288_000, // height from which price spec is valid. Counts from when app was registerd on blockchain! 1004000
         cpu: 0.15, // per 0.1 cpu core,
         ram: 0.05, // per 100mb,
         hdd: 0.02, // per 1gb,
@@ -285,7 +285,7 @@ const harnessOverrides = {
       },
       // soft fork 1
       {
-        height: 1594832, // height from which price spec is valid. Counts from when app was registerd on blockchain! 1004000
+        height: 1_594_832, // height from which price spec is valid. Counts from when app was registerd on blockchain! 1004000
         cpu: 0.15, // per 0.1 cpu core,
         ram: 0.05, // per 100mb,
         hdd: 0.02, // per 1gb,
@@ -296,7 +296,7 @@ const harnessOverrides = {
       },
       // soft fork 2
       {
-        height: 1597156, // height from which price spec is valid. Counts from when app was registerd on blockchain! 1004000
+        height: 1_597_156, // height from which price spec is valid. Counts from when app was registerd on blockchain! 1004000
         cpu: 0.03, // per 0.1 cpu core,
         ram: 0.01, // per 100mb,
         hdd: 0.004, // per 1gb,
@@ -321,7 +321,7 @@ const harnessOverrides = {
       minUSDPrice: 0.99, // min. usd price that can be paid with stripe/paypal.
     },
     teamSupportAddress: [{
-      height: 1851659, // height from which address is valid
+      height: 1_851_659, // height from which address is valid
       address: '16iJqiVbHptCx87q6XQwNpKdgEZnFtKcyP',
     }],
     usersToExtend: ['1MCBJn6qsy3YRY2YasdYMYdJcdhy1ev8Rd'], // addresses that can extend applications on behalf of app owners (expire-only updates) addresses cannot be deleted over time, just adding new ones
@@ -329,34 +329,34 @@ const harnessOverrides = {
     appSpecsEnforcementHeights: {
       1: 0, // blockheight v1 is deprecated. Not possible to use api to update to its specs
       2: 0, // blockheight
-      3: 983000, // blockheight. Since this blockheight specification of type 3 is active. User can still submit v1 or v2. UI allows only v2, v3
-      4: 1004000, // v4 available, composition
-      5: 1142000, // v5 available adding contacts, geolocation
-      6: 1300000, // v6, expiration, app price, t3
-      7: 1420000, // v7, nodes selection, secrets, private images (nodes selection allows secrets, private image - scope), staticip
-      8: 1932380, // v8, brings enterprise apps using arcaneOS features to run these apps. // Around June 23th
-      9: 2791000, // v9, Bedrock spec redesign: class hierarchy, contentHash signing, named ports, placement, time-based TTL
+      3: 983_000, // blockheight. Since this blockheight specification of type 3 is active. User can still submit v1 or v2. UI allows only v2, v3
+      4: 1_004_000, // v4 available, composition
+      5: 1_142_000, // v5 available adding contacts, geolocation
+      6: 1_300_000, // v6, expiration, app price, t3
+      7: 1_420_000, // v7, nodes selection, secrets, private images (nodes selection allows secrets, private image - scope), staticip
+      8: 1_932_380, // v8, brings enterprise apps using arcaneOS features to run these apps. // Around June 23th
+      9: 2_791_000, // v9, Bedrock spec redesign: class hierarchy, contentHash signing, named ports, placement, time-based TTL
     },
     appPaymentAddresses: [
       { address: 't1LUs6quf7TB2zVZmexqPQdnqmrFMGZGjV6', activeFromHeight: 0 },
-      { address: 't3aGJvdtd8NR6GrnqnRuVEzH6MbrXuJFLUX', activeFromHeight: 1300000, legacyMessageAuthority: true },
-      { address: 't3NryfAQLGeFs9jEoeqsxmBN2QLRaRKFLUX', activeFromHeight: 1670000, legacyMessageAuthority: true },
+      { address: 't3aGJvdtd8NR6GrnqnRuVEzH6MbrXuJFLUX', activeFromHeight: 1_300_000, legacyMessageAuthority: true },
+      { address: 't3NryfAQLGeFs9jEoeqsxmBN2QLRaRKFLUX', activeFromHeight: 1_670_000, legacyMessageAuthority: true },
     ],
     messageAuthorityAddress: 't1eW962yoqbfCYKzFYaZJVYzeopSmhaKL4f',
-    epochstart: 694000,
-    publicepochstart: 705000,
-    portMinLegacy: 31000, // ports 30000 - 30999 are reserved for local applications
-    portMaxLegacy: 39999,
-    portBlockheightChange: 1420000,
+    epochstart: 694_000,
+    publicepochstart: 705_000,
+    portMinLegacy: 31_000, // ports 30000 - 30999 are reserved for local applications
+    portMaxLegacy: 39_999,
+    portBlockheightChange: 1_420_000,
     portMin: 1,
-    portMax: 65535,
-    bannedPorts: ['16100-16299', '26100-26299', '30000-30099', 8384, 27017, 22, 23, 25, 3389, 5900, 5800, 161, 512, 513, 5901, 3388, 4444, 123, 53],
+    portMax: 65_535,
+    bannedPorts: ['16100-16299', '26100-26299', '30000-30099', 8384, 27_017, 22, 23, 25, 3389, 5900, 5800, 161, 512, 513, 5901, 3388, 4444, 123, 53],
     upnpBannedPorts: ['81-442', 2189],
     enterprisePorts: ['0-1023', 8080, 8081, 8443, 6667],
-    maxImageSize: 5000000000, // 5000mb
+    maxImageSize: 5_000_000_000, // 5000mb
     minimumInstances: 3,
     minimumInstancesV8: 1,
-    minimumInstancesV8Block: 2176519, // block height where v8+ apps can have 1 instance - expected around December 19th 2025
+    minimumInstancesV8Block: 2_176_519, // block height where v8+ apps can have 1 instance - expected around December 19th 2025
     maximumInstances: 100,
     maxAppsPerNode: 200,
     minOutgoing: 8,
@@ -364,14 +364,14 @@ const harnessOverrides = {
     minIncoming: 4,
     minUniqueIpsIncoming: 3,
     minUpTime: 1800, // 30 mins
-    availabilityCheckIntervalMs: 300000,
-    availabilityRecheckMs: 60000,
+    availabilityCheckIntervalMs: 300_000,
+    availabilityRecheckMs: 60_000,
     peerShortfallDosPerMinute: 0.13,
-    publicIpAskIntervalMs: 15000,
+    publicIpAskIntervalMs: 15_000,
     publicIpAsksBeforeDos: 48,
     appsPortCheck: {
       timeoutsMs: {
-        default: 3600000, error: 60000, failure: 15000, dos: 300000, appError: 240000,
+        default: 3_600_000, error: 60_000, failure: 15_000, dos: 300_000, appError: 240_000,
       },
       thresholds: { dos: 100, portsHighEdge: 100, portsLowEdge: 80 },
     },
@@ -392,74 +392,74 @@ const harnessOverrides = {
       probability: 2, // 50%
       composedDelay: 5,
     },
-    blocksLasting: 22000, // by default registered app will live for 22000 of blocks 44000 minutes ~= 1 month
+    blocksLasting: 22_000, // by default registered app will live for 22000 of blocks 44000 minutes ~= 1 month
     minBlocksAllowance: 5000, // app can be registered for a minimum of this blocks ~ 1 week
     newMinBlocksAllowance: 100, // app can be registered for a minimum of this blocks ~ 3 hours - to allow users to cancel application subscription
-    newMinBlocksAllowanceBlock: 1630040, // block where we will start looking at new min blocks allowance. block expected on 26th of April 2024
+    newMinBlocksAllowanceBlock: 1_630_040, // block where we will start looking at new min blocks allowance. block expected on 26th of April 2024
     cancel1BlockMinBlocksAllowance: 1, // app can be registered for a minimum of 1 block for cancellation purposes
-    cancel1BlockMinBlocksAllowanceBlock: 1964447, // block where we will start allowing 1 block lifetime updates - Expected August 6th 2025
-    maxBlocksAllowance: 264000, // app can be registered up for a maximum of this blocks ~ 1 year
-    postPonMaxBlocksAllowance: 1056000, // after PON fork, chain works 4x faster, so max blocks is 4x higher ~ 1 year
-    daemonPONFork: 2020000, // block height where PON (Proof of Node) fork activates - chain works 4x faster after this block
+    cancel1BlockMinBlocksAllowanceBlock: 1_964_447, // block where we will start allowing 1 block lifetime updates - Expected August 6th 2025
+    maxBlocksAllowance: 264_000, // app can be registered up for a maximum of this blocks ~ 1 year
+    postPonMaxBlocksAllowance: 1_056_000, // after PON fork, chain works 4x faster, so max blocks is 4x higher ~ 1 year
+    daemonPONFork: 2_020_000, // block height where PON (Proof of Node) fork activates - chain works 4x faster after this block
     blocksAllowanceInterval: 1000, // ap differences can be in 1000s - more than 1 day
-    removeBlocksAllowanceIntervalBlock: 1625000, // after this block we can start having app updates without extending subscription - block expected in April 19th 2024
+    removeBlocksAllowanceIntervalBlock: 1_625_000, // after this block we can start having app updates without extending subscription - block expected in April 19th 2024
     expireFluxAppsPeriod: 100, // every 100 blocks we run a check that deletes apps specifications and stops/removes the application from existence if it has been lastly updated more than 22k blocks ago
     updateFluxAppsPeriod: 9, // every 9 blocks we check for reinstalling of old application versions
     removeFluxAppsPeriod: 11, // every 11 blocks we check for more than maximum number of instances of an application
     benchUpnpPeriod: 6480, // every 9 days execute upnp bench
     hddFileSystemMinimum: 10, // right now 10, to be decreased to a minimum of 5GB of free space on hdd for docker with v8 specs activation
     defaultSwap: 2, // 2gb swap memory minimum, this is in gb
-    applyMinimumPriceOn3Instances: 1691000, // after this block we use the min. usd price on prices per 3 instances.
-    applyMinimumForExtraInstances: 1890000,
+    applyMinimumPriceOn3Instances: 1_691_000, // after this block we use the min. usd price on prices per 3 instances.
+    applyMinimumForExtraInstances: 1_890_000,
     minHashSyncPeers: 12,
     bootDelayMultiplier: 1,
     spawnDelayMs: 0,
-    removalSpacingMs: 60000,
+    removalSpacingMs: 60_000,
     // How long one app's removal may take, when every app is removed, before the
     // next app's starts. A removal past it keeps running.
     appRemovalDeadlineMs: 5 * 60 * 1000,
     locationTtlS: 7500,
     installingTtlS: 900,
     installingRenewalS: 720,
-    installErrorTtlS: 86400,
+    installErrorTtlS: 86_400,
     tempMsgTtlS: 3600,
     gossipValidityS: 300,
     sigtermExpiryS: 420,
-    clockSkewAllowanceMs: 120000,
-    hashSyncIntervalMs: 1800000,
-    cpuCheckIntervalMs: 900000,
-    statsSampleIntervalMs: 60000,
-    portRestoreIntervalMs: 600000,
-    complianceSweepStaggerMs: 120000,
-    complianceRemovalSpacingMs: 180000,
-    complianceRetryBaseMs: 60000,
-    complianceRetryMaxMs: 3600000,
-    imageComplianceIntervalMs: 3600000,
-    tamperingCheckIntervalMs: 43200000, // 12h — how often a node re-checks whether it is on the tampering blocklist
+    clockSkewAllowanceMs: 120_000,
+    hashSyncIntervalMs: 1_800_000,
+    cpuCheckIntervalMs: 900_000,
+    statsSampleIntervalMs: 60_000,
+    portRestoreIntervalMs: 600_000,
+    complianceSweepStaggerMs: 120_000,
+    complianceRemovalSpacingMs: 180_000,
+    complianceRetryBaseMs: 60_000,
+    complianceRetryMaxMs: 3_600_000,
+    imageComplianceIntervalMs: 3_600_000,
+    tamperingCheckIntervalMs: 43_200_000, // 12h — how often a node re-checks whether it is on the tampering blocklist
     imageCacheEnabled: true,
     imageCachePerFluxIdQuotaGb: 20,
     imageCachePerImageBurstCapGb: 5,
     imageCacheNodeMaxGb: 60,
     imageCacheMaxConcurrentPulls: 3,
     imageCacheMaxPullRetries: 3,
-    imageCacheJobTtlMs: 10800000,
-    imageReaperIntervalMs: 86400000,
-    adoptionStaggerStepMs: 60000,
-    adoptionStaggerWindowMs: 300000,
-    orphanSweepIntervalMs: 7200000,
-    dockerDebrisIntervalMs: 21600000,
-    meshReconcileIntervalMs: 1800000,
-    backendTlsRenewalIntervalMs: 21600000,
-    installCollisionWaitMs: 90000,
+    imageCacheJobTtlMs: 10_800_000,
+    imageReaperIntervalMs: 86_400_000,
+    adoptionStaggerStepMs: 60_000,
+    adoptionStaggerWindowMs: 300_000,
+    orphanSweepIntervalMs: 7_200_000,
+    dockerDebrisIntervalMs: 21_600_000,
+    meshReconcileIntervalMs: 1_800_000,
+    backendTlsRenewalIntervalMs: 21_600_000,
+    installCollisionWaitMs: 90_000,
     portTestPeerTimeoutMs: 5000, // per-peer reachability round-trip timeout
     portTestBindDelayMs: 5000,
-    portTestPropagationDelayMs: 10000,
+    portTestPropagationDelayMs: 10_000,
     portTestMaxAttempts: 5,
     siblingPortsTimeoutMs: 5000,
     // How long a signed sibling ask stays good for. The exchange itself is
     // bounded by siblingPortsTimeoutMs; the rest is allowance for two nodes
     // that were never required to agree on the time.
-    siblingAskValidityMs: 60000,
+    siblingAskValidityMs: 60_000,
     // Which Flux node answers when this node dials an address (peerIdentityService).
     // A verified identity is reused for longest, since it changes only when an
     // address changes hands; a misroute is rechecked soon, since the fault is on
@@ -479,33 +479,33 @@ const harnessOverrides = {
     portTestPeerQueryCount: 3, // peers queried concurrently per round - distinct /16, excluding our own
     portTestMaxRounds: 3, // max retry rounds when a round is inconclusive (no peer answered)
     portTestPrefixLength: 16, // bits of IP prefix (whole octets) defining an "independent" peer for the reachability probe
-    contentManifestReapGraceMs: 7200000, // manifests younger than this are never reaped - covers the register window where the manifest exists before the app tx confirms on-chain
-    spawnReconfirmDelayMs: 7500000,
+    contentManifestReapGraceMs: 7_200_000, // manifests younger than this are never reaped - covers the register window where the manifest exists before the app tx confirms on-chain
+    spawnReconfirmDelayMs: 7_500_000,
     manageCollectorLifecycle: false, // node-managed lifecycle for shareWith dependency apps (collectors). Off: the flux console owns this lifecycle and a dependency is "ready" once installed; on: FluxOS also requires the dependency to be running before a consumer installs against it.
     globalCmdDelayMs: 500,
     discoveryAutostart: true,
-    discoveryRetryMs: 60000,
-    discoveryFailRetryMs: 120000,
-    connectionBackoffMs: [120000, 300000, 600000, 900000],
+    discoveryRetryMs: 60_000,
+    discoveryFailRetryMs: 120_000,
+    connectionBackoffMs: [120_000, 300_000, 600_000, 900_000],
     spawnDeferrals: {
-      targetedNodesMs: { encrypted: 1800000, standard: 3420000 },
-      staticIpMs: { encrypted: 1620000, standard: 3420000 },
-      datacenterMs: { encrypted: 1620000, standard: 3420000 },
+      targetedNodesMs: { encrypted: 1_800_000, standard: 3_420_000 },
+      staticIpMs: { encrypted: 1_620_000, standard: 3_420_000 },
+      datacenterMs: { encrypted: 1_620_000, standard: 3_420_000 },
       capacityGap: {
-        largeMs: { encrypted: 1800000, standard: 7020000 },
-        mediumMs: { encrypted: 1260000, standard: 5220000 },
-        smallMs: { encrypted: 720000, standard: 3420000 },
+        largeMs: { encrypted: 1_800_000, standard: 7_020_000 },
+        mediumMs: { encrypted: 1_260_000, standard: 5_220_000 },
+        smallMs: { encrypted: 720_000, standard: 3_420_000 },
       },
-      domainShareMs: { enterprise: 1920000, standard: 1920000 },
+      domainShareMs: { enterprise: 1_920_000, standard: 1_920_000 },
     },
     spawnDelayMultiplier: 1,
-    daemonInfoIntervalMs: 30000,
+    daemonInfoIntervalMs: 30_000,
     explorerPollIntervalMs: 5000,
-    explorerSyncRetryMs: 120000,
+    explorerSyncRetryMs: 120_000,
     explorerDeepRestoreBlocks: 100,
-    syncTimeoutMs: 120000,
+    syncTimeoutMs: 120_000,
     hashSyncMaxRetries: 3,
-    hashSyncRetryMs: 300000,
+    hashSyncRetryMs: 300_000,
     hashSyncSettleMs: 4000,
     hashSyncResponseTimePerHashMs: 150,
     hashSyncBufferMs: 5000,
@@ -513,28 +513,28 @@ const harnessOverrides = {
     hashSyncPeersPerRound: 3,
     hashSyncEphemeralPeers: 5,
     hashSyncFallbackRecheckBlocks: 100,
-    syncResponseThrottleMs: 300000,
-    wsHandshakeTimeoutMs: 10000,
+    syncResponseThrottleMs: 300_000,
+    wsHandshakeTimeoutMs: 10_000,
     discoveryConnectionDelayMs: 500,
-    nodeMonitorRemovalDelayMs: 60000,
+    nodeMonitorRemovalDelayMs: 60_000,
     // events per message of an answer to a peer's state sync
     syncAnswerBatchSize: 2000,
-    residentialCheckIntervalMs: 21600000,
-    residentialSettleMs: 86400000,
-    residentialEvacuationIntervalMs: 21600000,
-    residentialTurnMs: 3600000, // 60m - must hold two 22m give-up passes, see ZelBack/config/default.js
-    imageUpdateCheckIntervalMs: 21600000,
-    imageUpdateInitialDelayMinMs: 600000,
-    imageUpdateInitialDelayMaxMs: 1800000,
+    residentialCheckIntervalMs: 21_600_000,
+    residentialSettleMs: 86_400_000,
+    residentialEvacuationIntervalMs: 21_600_000,
+    residentialTurnMs: 3_600_000, // 60m - must hold two 22m give-up passes, see ZelBack/config/default.js
+    imageUpdateCheckIntervalMs: 21_600_000,
+    imageUpdateInitialDelayMinMs: 600_000,
+    imageUpdateInitialDelayMaxMs: 1_800_000,
     imageUpdateDelayBetweenAppsMs: 5000,
-    imageUpdateDelayAfterRedeployMs: 120000,
+    imageUpdateDelayAfterRedeployMs: 120_000,
     imageUpdateDelayBetweenComponentsMs: 1000,
-    masterSlaveIntervalMs: 30000,
+    masterSlaveIntervalMs: 30_000,
     // Deliberately NOT the production 180000. The code falls back to 3 minutes
     // when the key is missing, so a config value equal to the fallback cannot
     // tell "read from config" from "key misspelled and silently defaulted" -
     // which is exactly how statsSampleIntervalMs came to read undefined.
-    activeStandbyStaggerMs: 30000,
+    activeStandbyStaggerMs: 30_000,
   },
   lockedSystemResources: {
     cpu: 10, // 1 cpu core
@@ -550,8 +550,8 @@ const harnessOverrides = {
     },
     ram: {
       cumulus: 7000, // 5000 available for apps
-      nimbus: 30000, // 28000 available for apps
-      stratus: 61000, // available 59000 for apps
+      nimbus: 30_000, // 28000 available for apps
+      stratus: 61_000, // available 59000 for apps
     },
     hdd: {
       cumulus: 220, // 180 for apps
@@ -559,30 +559,30 @@ const harnessOverrides = {
       stratus: 880, // 840 for apps
     },
     collateral: { // tbd during forks
-      cumulusold: 10000,
-      nimbusold: 25000,
-      stratusold: 100000,
+      cumulusold: 10_000,
+      nimbusold: 25_000,
+      stratusold: 100_000,
       cumulus: 1000,
-      nimbus: 12500,
-      stratus: 40000,
+      nimbus: 12_500,
+      stratus: 40_000,
     },
   },
   syncthing: { // operates on apiPort + 2
     ip: '127.0.0.1', // local
     port: 8384, // local
-    monitorIntervalMs: 30000,
-    healthWindowMs: 300000,
-    sentinelIntervalMs: 60000,
-    stallNudgeAfterMs: 180000,
-    stallNudgeMaxIntervalMs: 900000,
-    stallRemoveMinWindowMs: 1200000,
+    monitorIntervalMs: 30_000,
+    healthWindowMs: 300_000,
+    sentinelIntervalMs: 60_000,
+    stallNudgeAfterMs: 180_000,
+    stallNudgeMaxIntervalMs: 900_000,
+    stallRemoveMinWindowMs: 1_200_000,
     stallRemoveMinNudges: 3,
     aptSourceUrl: 'https://apt.syncthing.net/',
     releaseKeyUrl: 'https://syncthing.net/release-key.gpg',
   },
   cpuBurst: {
     enabled: true,
-    periodUs: 100000,
+    periodUs: 100_000,
     reservedCores: 1,
   },
   enterprisePublicKeys: [ // list of whitelisted nodes indentity public keys. Most trusted node operators that are publicly known, kyc. Eg Flux team members, Titan.
@@ -603,15 +603,15 @@ const harnessOverrides = {
       '739ca41408f66c75d6cb4bc1d5c044ca5a118de190081da68e5a7d6839fb69f8',
     ],
     refreshIntervalMs: {
-      blockedRepositories: 21600000,
-      tamperingBlocklist: 43200000,
-      enterpriseNodes: 21600000,
-      ipLocationTable: 86400000,
+      blockedRepositories: 21_600_000,
+      tamperingBlocklist: 43_200_000,
+      enterpriseNodes: 21_600_000,
+      ipLocationTable: 86_400_000,
     },
     peerWindowMs: 3 * 1000,
     fetchTimeoutMs: {
-      default: 10000,
-      ipLocationTable: 120000,
+      default: 10_000,
+      ipLocationTable: 120_000,
     },
     minConfirmingPeers: 4,
     backstopRetryIntervalMs: 60 * 1000,

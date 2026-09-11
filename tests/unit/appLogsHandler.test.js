@@ -343,7 +343,7 @@ describe('appLogsHandler tests', () => {
       await subscribe(socket, 'fluxb_myapp');
       expect(socket.emit.calledWith('error', 'Not authorized.', 'fluxb_myapp')).to.be.true;
 
-      await socket.fire('subscribe', 12345, 'fluxc_myapp');
+      await socket.fire('subscribe', 12_345, 'fluxc_myapp');
       expect(socket.emit.calledWith('error', 'Not authorized.', 'fluxc_myapp')).to.be.true;
     });
 
@@ -780,7 +780,7 @@ describe('appLogsHandler tests', () => {
       appLogsHandler(socket);
       await subscribe(socket);
 
-      const written = 200000;
+      const written = 200_000;
       logStream.emit('data', frame('a\n'.repeat(written)));
 
       const feed = appLogsHandler.feeds.get('abc123');

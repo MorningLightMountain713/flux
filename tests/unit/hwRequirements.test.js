@@ -129,7 +129,7 @@ let enterpriseNetworkStub;
 function buildHw(opts = {}) {
   const {
     cpucores = 16,
-    ram = 32000,
+    ram = 32_000,
     ssd = 500,
     appsCpusLocked = 0,
     appsRamLocked = 0,
@@ -190,7 +190,7 @@ function buildHw(opts = {}) {
     config: asConfig({
       fluxSpecifics: {
         cpu: { cumulus: 2, nimbus: 4, stratus: 8 },
-        ram: { cumulus: 4000, nimbus: 8000, stratus: 16000 },
+        ram: { cumulus: 4000, nimbus: 8000, stratus: 16_000 },
         hdd: { cumulus: 220, nimbus: 440, stratus: 880 },
       },
       lockedSystemResources: {
@@ -203,7 +203,7 @@ function buildHw(opts = {}) {
 describe('hwRequirements', () => {
   before(async function loadLibrary() {
     // The first fromSubmission compiles the ajv schemas.
-    this.timeout(60000);
+    this.timeout(60_000);
     flux = await loadSpecLibrary();
   });
 
@@ -440,7 +440,7 @@ describe('hwRequirements', () => {
 
   describe('checkNodeResources', () => {
     it('passes when node has enough resources', async () => {
-      const hw = buildHw({ ssd: 500, cpucores: 16, ram: 32000 });
+      const hw = buildHw({ ssd: 500, cpucores: 16, ram: 32_000 });
       const deployment = await deploymentOfSize({ cpu: 1, memory: 500, storageGb: 10 });
       expect(deployment.resourceTotals(), 'the real library sized the app we asked for')
         .to.include({ cpu: 1, memoryMb: 500, hostDiskGb: 12 });
@@ -660,7 +660,7 @@ describe('hwRequirements', () => {
       expect(threw.message).to.include('components.web.cpu');
 
       threw = null;
-      await v9Spec({ components: sizedComponents({ memory: 64000 }) }).catch((e) => { threw = e; });
+      await v9Spec({ components: sizedComponents({ memory: 64_000 }) }).catch((e) => { threw = e; });
       expect(threw, 'a 64000 MB component').to.be.an('error');
       expect(threw.message).to.include('components.web.memory');
     });

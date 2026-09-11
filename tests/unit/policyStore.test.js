@@ -1718,7 +1718,7 @@ describe('policyStore', () => {
 
     it('asks the source the first time its peers cannot settle it', async () => {
       const axiosGet = sinon.stub().rejects(new Error('offline'));
-      const { module: m } = load({ serviceHelper: { axiosGet }, backstopRetryIntervalMs: 60000 });
+      const { module: m } = load({ serviceHelper: { axiosGet }, backstopRetryIntervalMs: 60_000 });
       await m.start();
       m.setPeerTransport(incapablePeers);
 
@@ -1730,7 +1730,7 @@ describe('policyStore', () => {
 
     it('does not ask again inside the interval, however much the peer set changes', async () => {
       const axiosGet = sinon.stub().rejects(new Error('offline'));
-      const { module: m } = load({ serviceHelper: { axiosGet }, backstopRetryIntervalMs: 60000 });
+      const { module: m } = load({ serviceHelper: { axiosGet }, backstopRetryIntervalMs: 60_000 });
       await m.start();
       m.setPeerTransport(incapablePeers);
 
@@ -1805,7 +1805,7 @@ describe('policyStore', () => {
     // ask again straight away.
     it('a refusal the periodic refresh provoked paces the next peer event too', async () => {
       const axiosGet = sinon.stub().rejects(new Error('offline'));
-      const { module: m } = load({ serviceHelper: { axiosGet }, backstopRetryIntervalMs: 60000 });
+      const { module: m } = load({ serviceHelper: { axiosGet }, backstopRetryIntervalMs: 60_000 });
       await m.start();
       m.setPeerTransport(incapablePeers);
 
@@ -1837,7 +1837,7 @@ describe('policyStore', () => {
       // the state the interval is for, and a retry keyed on "did we get bytes" would let the
       // next peer event straight back through.
       const axiosGet = sinon.stub().resolves({ data: bundle(7, undefined, OTHER.privateKey) });
-      const { module: m, state } = load({ serviceHelper: { axiosGet }, backstopRetryIntervalMs: 60000 });
+      const { module: m, state } = load({ serviceHelper: { axiosGet }, backstopRetryIntervalMs: 60_000 });
       await m.start();
       m.setPeerTransport(incapablePeers);
 
@@ -1854,7 +1854,7 @@ describe('policyStore', () => {
     // exactly the window a restart wave makes both most likely and most expensive.
     it('is not ended by the wall clock jumping forward', async () => {
       const axiosGet = sinon.stub().rejects(new Error('offline'));
-      const { module: m } = load({ serviceHelper: { axiosGet }, backstopRetryIntervalMs: 60000 });
+      const { module: m } = load({ serviceHelper: { axiosGet }, backstopRetryIntervalMs: 60_000 });
       await m.start();
       m.setPeerTransport(incapablePeers);
 
@@ -1871,7 +1871,7 @@ describe('policyStore', () => {
       // reaches confirmation without the source being asked at all, so the interval is
       // never what is being measured there.
       const axiosGet = sinon.stub().rejects(new Error('offline'));
-      const { module: m, state } = load({ serviceHelper: { axiosGet }, backstopRetryIntervalMs: 60000 });
+      const { module: m, state } = load({ serviceHelper: { axiosGet }, backstopRetryIntervalMs: 60_000 });
       await m.start();
       m.setPeerTransport(answering((key, seq, id) => { m.offerBundle(bundle(5), key, id); }));
 

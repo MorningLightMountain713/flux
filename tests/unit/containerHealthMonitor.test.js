@@ -58,7 +58,7 @@ describe('containerHealthMonitor tests', () => {
 
   before(async function loadLibrary() {
     // The first fromSubmission compiles the ajv schemas.
-    this.timeout(30000);
+    this.timeout(30_000);
     flux = await loadSpecLibrary();
 
     ({ instantiated, deployment } = await appFor({
@@ -70,7 +70,7 @@ describe('containerHealthMonitor tests', () => {
         name: 'db',
         description: 'postgres',
         image: 'postgres:16',
-        ports: { pg: { containerPort: 5432, hostPort: 31001 } },
+        ports: { pg: { containerPort: 5432, hostPort: 31_001 } },
       },
     }));
     webComp = deployment.getComponent('web');

@@ -22,7 +22,7 @@ describe('updateAppGlobaly tests', () => {
     description: 'submission test',
     owner,
     repotag: 'test/image:latest',
-    port: 30001,
+    port: 30_001,
     containerPort: 7396,
     enviromentParameters: [],
     commands: [],
@@ -55,7 +55,7 @@ describe('updateAppGlobaly tests', () => {
     await database.collection(appsInformation).deleteMany({ name });
     // registered at 3003000 for 1000 blocks: alive until 3004000
     await database.collection(appsMessages).insertOne({
-      type: 'fluxappregister', hash: 'reg', height: 3003000, timestamp: 1, appSpecifications: { ...spec, expire: 1000 },
+      type: 'fluxappregister', hash: 'reg', height: 3_003_000, timestamp: 1, appSpecifications: { ...spec, expire: 1000 },
     });
     sinon.stub(appValidator, 'verifyAppSpecifications').resolves();
     signatureCheck = sinon.stub(messageVerifier, 'verifyAppMessageUpdateSignature').rejects(new Error('signature checked'));
@@ -66,9 +66,9 @@ describe('updateAppGlobaly tests', () => {
   });
 
   it('should judge an update of a live app against the app', async () => {
-    sinon.stub(daemonServiceMiscRpcs, 'isDaemonSynced').returns({ data: { synced: true, height: 3003100 } });
+    sinon.stub(daemonServiceMiscRpcs, 'isDaemonSynced').returns({ data: { synced: true, height: 3_003_100 } });
     await database.collection(config.database.appsglobal.collections.appsInformation).insertOne({
-      ...spec, expire: 1000, height: 3003000, hash: 'reg',
+      ...spec, expire: 1000, height: 3_003_000, hash: 'reg',
     });
 
     const [, , , , , appOwner, , previousSpec] = await submitToSignatureCheck();
@@ -78,7 +78,7 @@ describe('updateAppGlobaly tests', () => {
   });
 
   it('should take a renewal of an app that has expired and been removed here', async () => {
-    sinon.stub(daemonServiceMiscRpcs, 'isDaemonSynced').returns({ data: { synced: true, height: 3010000 } });
+    sinon.stub(daemonServiceMiscRpcs, 'isDaemonSynced').returns({ data: { synced: true, height: 3_010_000 } });
 
     const [, , , , , appOwner, , previousSpec] = await submitToSignatureCheck();
 
@@ -87,9 +87,9 @@ describe('updateAppGlobaly tests', () => {
   });
 
   it('should need the new owner\'s signature once someone else has registered the name', async () => {
-    sinon.stub(daemonServiceMiscRpcs, 'isDaemonSynced').returns({ data: { synced: true, height: 3010000 } });
+    sinon.stub(daemonServiceMiscRpcs, 'isDaemonSynced').returns({ data: { synced: true, height: 3_010_000 } });
     await database.collection(config.database.appsglobal.collections.appsMessages).insertOne({
-      type: 'fluxappregister', hash: 'taken', height: 3005000, timestamp: 2, appSpecifications: { ...spec, owner: otherOwner, expire: 88000 },
+      type: 'fluxappregister', hash: 'taken', height: 3_005_000, timestamp: 2, appSpecifications: { ...spec, owner: otherOwner, expire: 88_000 },
     });
 
     const [, , , , , appOwner] = await submitToSignatureCheck();
@@ -98,7 +98,7 @@ describe('updateAppGlobaly tests', () => {
   });
 
   it('should refuse an update of a name that was never registered', async () => {
-    sinon.stub(daemonServiceMiscRpcs, 'isDaemonSynced').returns({ data: { synced: true, height: 3003100 } });
+    sinon.stub(daemonServiceMiscRpcs, 'isDaemonSynced').returns({ data: { synced: true, height: 3_003_100 } });
     await database.collection(config.database.appsglobal.collections.appsMessages).deleteMany({ 'appSpecifications.name': name });
 
     await submit().then(
@@ -113,7 +113,7 @@ describe('updateAppGlobaly tests', () => {
     ['an invalid owner', { owner: 'my-owner' }],
   ].forEach(([description, change]) => {
     it(`should refuse an enterprise update with ${description} before reading the spec`, async () => {
-      sinon.stub(daemonServiceMiscRpcs, 'isDaemonSynced').returns({ data: { synced: true, height: 3003100 } });
+      sinon.stub(daemonServiceMiscRpcs, 'isDaemonSynced').returns({ data: { synced: true, height: 3_003_100 } });
 
       await advancedWorkflows.updateAppGlobaly({
         appSpecification: {

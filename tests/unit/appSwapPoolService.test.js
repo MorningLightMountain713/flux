@@ -27,7 +27,7 @@ describe('appSwapPoolService tests', () => {
 
   before(async function loadLibrary() {
     // The first fromSubmission compiles the ajv schemas.
-    this.timeout(30000);
+    this.timeout(30_000);
     flux = await loadSpecLibrary();
   });
 
@@ -37,7 +37,7 @@ describe('appSwapPoolService tests', () => {
    * may not share a hostPort, so each gets its own.
    */
   async function v9Deployment(appName, swapGbs) {
-    let hostPort = 31000;
+    let hostPort = 31_000;
     const components = {};
     swapGbs.forEach((swapGb, i) => {
       hostPort += 1;
@@ -56,7 +56,7 @@ describe('appSwapPoolService tests', () => {
   /** A real DeploymentSpec for a legacy v8 app — swap is not a field it carries. */
   async function v8Deployment(appName, componentNames) {
     const [template] = V8_SUBMISSION.compose;
-    let hostPort = 31100;
+    let hostPort = 31_100;
     const compose = componentNames.map((name) => {
       hostPort += 1;
       return { ...template, name, ports: [hostPort] };

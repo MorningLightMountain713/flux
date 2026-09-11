@@ -55,7 +55,7 @@ describe('fluxCommunicationMessagesSender tests', () => {
     // by the answer rather than by silence at the far end.
     it('broadcastMessageToAll relays nothing and answers null when this node cannot sign', async () => {
       sinon.stub(fluxNetworkHelper, 'getFluxNodePublicKey').resolves(null);
-      const ws1 = generateWebsocket('127.0.0.1', 16127, WebSocket.OPEN, { source: PEER_SOURCE.RANDOM });
+      const ws1 = generateWebsocket('127.0.0.1', 16_127, WebSocket.OPEN, { source: PEER_SOURCE.RANDOM });
 
       const answer = await fluxCommunicationMessagesSender.broadcastMessageToAll({ type: 'fluxapprunning' });
 
@@ -65,8 +65,8 @@ describe('fluxCommunicationMessagesSender tests', () => {
 
     it('should send data to all peers (both directions)', async () => {
       const data = 'test-message';
-      const ws1 = generateWebsocket('127.0.0.1', 16127, WebSocket.OPEN, { source: PEER_SOURCE.RANDOM });
-      const ws2 = generateWebsocket('127.0.0.2', 16127, WebSocket.OPEN, { source: PEER_SOURCE.INBOUND });
+      const ws1 = generateWebsocket('127.0.0.1', 16_127, WebSocket.OPEN, { source: PEER_SOURCE.RANDOM });
+      const ws2 = generateWebsocket('127.0.0.2', 16_127, WebSocket.OPEN, { source: PEER_SOURCE.INBOUND });
 
       await fluxCommunicationMessagesSender.relay(data);
 
@@ -76,8 +76,8 @@ describe('fluxCommunicationMessagesSender tests', () => {
 
     it('should exclude a peer by key', async () => {
       const data = 'test-message';
-      const ws1 = generateWebsocket('127.0.0.1', 16127, WebSocket.OPEN, { source: PEER_SOURCE.RANDOM });
-      const ws2 = generateWebsocket('127.0.0.2', 16127, WebSocket.OPEN, { source: PEER_SOURCE.RANDOM });
+      const ws1 = generateWebsocket('127.0.0.1', 16_127, WebSocket.OPEN, { source: PEER_SOURCE.RANDOM });
+      const ws2 = generateWebsocket('127.0.0.2', 16_127, WebSocket.OPEN, { source: PEER_SOURCE.RANDOM });
 
       await fluxCommunicationMessagesSender.relay(data, '127.0.0.1:16127');
 
@@ -87,8 +87,8 @@ describe('fluxCommunicationMessagesSender tests', () => {
 
     it('should close peer on send failure and continue to others', async () => {
       const data = 'test-message';
-      const ws1 = generateWebsocket('127.0.0.1', 16127, WebSocket.CLOSED, { source: PEER_SOURCE.RANDOM });
-      const ws2 = generateWebsocket('127.0.0.2', 16127, WebSocket.OPEN, { source: PEER_SOURCE.RANDOM });
+      const ws1 = generateWebsocket('127.0.0.1', 16_127, WebSocket.CLOSED, { source: PEER_SOURCE.RANDOM });
+      const ws2 = generateWebsocket('127.0.0.2', 16_127, WebSocket.OPEN, { source: PEER_SOURCE.RANDOM });
 
       await fluxCommunicationMessagesSender.relay(data);
 
@@ -572,7 +572,7 @@ describe('fluxCommunicationMessagesSender tests', () => {
       };
       const type = 'fluxappregister';
       const version = 1;
-      const timestamp = 1592988806887;
+      const timestamp = 1_592_988_806_887;
       const messageToSign = type + version + JSON.stringify(appSpecifications) + timestamp;
       const signature = verificationHelper.signMessage(messageToSign, privateKey);
       const messageToHash = type + version + JSON.stringify(appSpecifications) + timestamp + signature;
@@ -617,7 +617,7 @@ describe('fluxCommunicationMessagesSender tests', () => {
         version: 1,
         data: {
           type: 'fluxapprequest',
-          hash: 312313,
+          hash: 312_313,
           version: 1,
         },
       };
@@ -635,7 +635,7 @@ describe('fluxCommunicationMessagesSender tests', () => {
         version: 1,
         data: {
           type: 'fluxapprequest',
-          hashes: 312313,
+          hashes: 312_313,
           version: 2,
         },
       };
@@ -727,7 +727,7 @@ describe('fluxCommunicationMessagesSender tests', () => {
         description: 'v9 serve fixture',
         owner: '13ienDRfUwFEgfZxm5dk4drTQsmj5hDGwL',
         instances: 3,
-        ttl: 86400,
+        ttl: 86_400,
         contacts: { email: ['admin@example.com'] },
         components: {
           web: {
@@ -738,7 +738,7 @@ describe('fluxCommunicationMessagesSender tests', () => {
             memory: 300,
             rootFsGb: 2,
             persistentStorage: { sizeGb: 10, mounts: {} },
-            ports: { http: { containerPort: 80, hostPort: 31000 } },
+            ports: { http: { containerPort: 80, hostPort: 31_000 } },
           },
         },
       });
@@ -881,7 +881,7 @@ describe('fluxCommunicationMessagesSender tests', () => {
         },
       };
       const res = generateResponse();
-      const websocket = generateWebsocket('127.0.0.1', 16127, WebSocket.OPEN);
+      const websocket = generateWebsocket('127.0.0.1', 16_127, WebSocket.OPEN);
       const expectedSuccessMessage = {
         status: 'success',
         data: {
@@ -922,7 +922,7 @@ describe('fluxCommunicationMessagesSender tests', () => {
         },
       };
       const res = generateResponse();
-      const websocket = generateWebsocket('127.0.0.1', 16127, WebSocket.OPEN);
+      const websocket = generateWebsocket('127.0.0.1', 16_127, WebSocket.OPEN);
       const expectedSuccessMessage = {
         status: 'success',
         data: {
@@ -963,7 +963,7 @@ describe('fluxCommunicationMessagesSender tests', () => {
         },
       };
       const res = generateResponse();
-      const websocket = generateWebsocket('127.0.0.1', 16127, WebSocket.OPEN);
+      const websocket = generateWebsocket('127.0.0.1', 16_127, WebSocket.OPEN);
       const expectedErrorMessage = {
         status: 'error',
         data: {
@@ -997,7 +997,7 @@ describe('fluxCommunicationMessagesSender tests', () => {
         },
       };
       const res = generateResponse();
-      const websocket = generateWebsocket('127.0.0.1', 16127, WebSocket.OPEN);
+      const websocket = generateWebsocket('127.0.0.1', 16_127, WebSocket.OPEN);
       const expectedErrorMessage = {
         status: 'error',
         data: {
@@ -1064,7 +1064,7 @@ describe('fluxCommunicationMessagesSender tests', () => {
         },
       };
       const res = generateResponse();
-      const websocket = generateWebsocket('127.0.0.1', 16127, WebSocket.OPEN);
+      const websocket = generateWebsocket('127.0.0.1', 16_127, WebSocket.OPEN);
       const expectedSuccessMessage = {
         status: 'success',
         data: {
@@ -1105,7 +1105,7 @@ describe('fluxCommunicationMessagesSender tests', () => {
         },
       };
       const res = generateResponse();
-      const websocket = generateWebsocket('127.0.0.1', 16127, WebSocket.OPEN);
+      const websocket = generateWebsocket('127.0.0.1', 16_127, WebSocket.OPEN);
       const expectedSuccessMessage = {
         status: 'success',
         data: {
@@ -1146,7 +1146,7 @@ describe('fluxCommunicationMessagesSender tests', () => {
         },
       };
       const res = generateResponse();
-      const websocket = generateWebsocket('127.0.0.1', 16127, WebSocket.OPEN);
+      const websocket = generateWebsocket('127.0.0.1', 16_127, WebSocket.OPEN);
       const expectedErrorMessage = {
         status: 'error',
         data: {
@@ -1180,7 +1180,7 @@ describe('fluxCommunicationMessagesSender tests', () => {
         },
       };
       const res = generateResponse();
-      const websocket = generateWebsocket('127.0.0.1', 16127, WebSocket.OPEN);
+      const websocket = generateWebsocket('127.0.0.1', 16_127, WebSocket.OPEN);
       const expectedErrorMessage = {
         status: 'error',
         data: {
@@ -1263,8 +1263,8 @@ describe('fluxCommunicationMessagesSender tests', () => {
         },
       };
       const res = generateResponse();
-      const websocketIn = generateIncomingWebsocket('127.0.0.1', 16127, WebSocket.OPEN);
-      const websocketOut = generateOutgoingWebsocket('127.0.0.2', 16127, WebSocket.OPEN);
+      const websocketIn = generateIncomingWebsocket('127.0.0.1', 16_127, WebSocket.OPEN);
+      const websocketOut = generateOutgoingWebsocket('127.0.0.2', 16_127, WebSocket.OPEN);
       const expectedSuccessMessage = {
         status: 'success',
         data: {
@@ -1313,8 +1313,8 @@ describe('fluxCommunicationMessagesSender tests', () => {
         },
       };
       const res = generateResponse();
-      const websocketIn = generateIncomingWebsocket('127.0.0.1', 16127, WebSocket.OPEN);
-      const websocketOut = generateOutgoingWebsocket('127.0.0.2', 16127, WebSocket.OPEN);
+      const websocketIn = generateIncomingWebsocket('127.0.0.1', 16_127, WebSocket.OPEN);
+      const websocketOut = generateOutgoingWebsocket('127.0.0.2', 16_127, WebSocket.OPEN);
       const expectedSuccessMessage = {
         status: 'success',
         data: {
@@ -1363,8 +1363,8 @@ describe('fluxCommunicationMessagesSender tests', () => {
         },
       };
       const res = generateResponse();
-      const websocketIn = generateIncomingWebsocket('127.0.0.1', 16127, WebSocket.OPEN);
-      const websocketOut = generateOutgoingWebsocket('127.0.0.2', 16127, WebSocket.OPEN);
+      const websocketIn = generateIncomingWebsocket('127.0.0.1', 16_127, WebSocket.OPEN);
+      const websocketOut = generateOutgoingWebsocket('127.0.0.2', 16_127, WebSocket.OPEN);
       const expectedErrorMessage = {
         status: 'error',
         data: {
@@ -1399,8 +1399,8 @@ describe('fluxCommunicationMessagesSender tests', () => {
         },
       };
       const res = generateResponse();
-      const websocketIn = generateIncomingWebsocket('127.0.0.1', 16127, WebSocket.OPEN);
-      const websocketOut = generateOutgoingWebsocket('127.0.0.2', 16127, WebSocket.OPEN);
+      const websocketIn = generateIncomingWebsocket('127.0.0.1', 16_127, WebSocket.OPEN);
+      const websocketOut = generateOutgoingWebsocket('127.0.0.2', 16_127, WebSocket.OPEN);
       const expectedErrorMessage = {
         status: 'error',
         data: {
@@ -1472,7 +1472,7 @@ describe('fluxCommunicationMessagesSender tests', () => {
       mockStream.push(JSON.stringify(req));
       mockStream.end();
       const res = generateResponse();
-      const websocket = generateWebsocket('127.0.0.1', 16127, WebSocket.OPEN);
+      const websocket = generateWebsocket('127.0.0.1', 16_127, WebSocket.OPEN);
 
       const expectedSuccessMessage = {
         status: 'success',
@@ -1520,7 +1520,7 @@ describe('fluxCommunicationMessagesSender tests', () => {
       mockStream.push(JSON.stringify(req));
       mockStream.end();
       const res = generateResponse();
-      const websocket = generateWebsocket('127.0.0.1', 16127, WebSocket.OPEN);
+      const websocket = generateWebsocket('127.0.0.1', 16_127, WebSocket.OPEN);
       const expectedSuccessMessage = {
         status: 'success',
         data: {
@@ -1567,7 +1567,7 @@ describe('fluxCommunicationMessagesSender tests', () => {
       mockStream.push(JSON.stringify(req));
       mockStream.end();
       const res = generateResponse();
-      const websocket = generateWebsocket('127.0.0.1', 16127, WebSocket.OPEN);
+      const websocket = generateWebsocket('127.0.0.1', 16_127, WebSocket.OPEN);
       const expectedErrorMessage = {
         status: 'error',
         data: {
@@ -1594,7 +1594,7 @@ describe('fluxCommunicationMessagesSender tests', () => {
       const mockStream = new PassThrough();
       mockStream.end();
       const res = generateResponse();
-      const websocket = generateWebsocket('127.0.0.1', 16127, WebSocket.OPEN);
+      const websocket = generateWebsocket('127.0.0.1', 16_127, WebSocket.OPEN);
       const expectedErrorMessage = {
         status: 'error',
         data: {
@@ -1668,7 +1668,7 @@ describe('fluxCommunicationMessagesSender tests', () => {
       mockStream.push(JSON.stringify(req));
       mockStream.end();
       const res = generateResponse();
-      const websocket = generateWebsocket('127.0.0.1', 16127, WebSocket.OPEN);
+      const websocket = generateWebsocket('127.0.0.1', 16_127, WebSocket.OPEN);
 
       const expectedSuccessMessage = {
         status: 'success',
@@ -1716,7 +1716,7 @@ describe('fluxCommunicationMessagesSender tests', () => {
       mockStream.push(JSON.stringify(req));
       mockStream.end();
       const res = generateResponse();
-      const websocket = generateWebsocket('127.0.0.1', 16127, WebSocket.OPEN);
+      const websocket = generateWebsocket('127.0.0.1', 16_127, WebSocket.OPEN);
       const expectedSuccessMessage = {
         status: 'success',
         data: {
@@ -1763,7 +1763,7 @@ describe('fluxCommunicationMessagesSender tests', () => {
       mockStream.push(JSON.stringify(req));
       mockStream.end();
       const res = generateResponse();
-      const websocket = generateWebsocket('127.0.0.1', 16127, WebSocket.OPEN);
+      const websocket = generateWebsocket('127.0.0.1', 16_127, WebSocket.OPEN);
       const expectedErrorMessage = {
         status: 'error',
         data: {
@@ -1790,7 +1790,7 @@ describe('fluxCommunicationMessagesSender tests', () => {
       const mockStream = new PassThrough();
       mockStream.end();
       const res = generateResponse();
-      const websocket = generateWebsocket('127.0.0.1', 16127, WebSocket.OPEN);
+      const websocket = generateWebsocket('127.0.0.1', 16_127, WebSocket.OPEN);
       const expectedErrorMessage = {
         status: 'error',
         data: {
@@ -1880,8 +1880,8 @@ describe('fluxCommunicationMessagesSender tests', () => {
       mockStream.push(JSON.stringify(req));
       mockStream.end();
       const res = generateResponse();
-      const websocketIn = generateIncomingWebsocket('127.0.0.1', 16127, WebSocket.OPEN);
-      const websocketOut = generateOutgoingWebsocket('127.0.0.2', 16127, WebSocket.OPEN);
+      const websocketIn = generateIncomingWebsocket('127.0.0.1', 16_127, WebSocket.OPEN);
+      const websocketOut = generateOutgoingWebsocket('127.0.0.2', 16_127, WebSocket.OPEN);
       const expectedSuccessMessage = {
         status: 'success',
         data: {
@@ -1936,8 +1936,8 @@ describe('fluxCommunicationMessagesSender tests', () => {
       mockStream.push(JSON.stringify(req));
       mockStream.end();
       const res = generateResponse();
-      const websocketIn = generateIncomingWebsocket('127.0.0.1', 16127, WebSocket.OPEN);
-      const websocketOut = generateOutgoingWebsocket('127.0.0.2', 16127, WebSocket.OPEN);
+      const websocketIn = generateIncomingWebsocket('127.0.0.1', 16_127, WebSocket.OPEN);
+      const websocketOut = generateOutgoingWebsocket('127.0.0.2', 16_127, WebSocket.OPEN);
       const expectedSuccessMessage = {
         status: 'success',
         data: {
@@ -1992,8 +1992,8 @@ describe('fluxCommunicationMessagesSender tests', () => {
       mockStream.push(JSON.stringify(req));
       mockStream.end();
       const res = generateResponse();
-      const websocketIn = generateIncomingWebsocket('127.0.0.1', 16127, WebSocket.OPEN);
-      const websocketOut = generateOutgoingWebsocket('127.0.0.2', 16127, WebSocket.OPEN);
+      const websocketIn = generateIncomingWebsocket('127.0.0.1', 16_127, WebSocket.OPEN);
+      const websocketOut = generateOutgoingWebsocket('127.0.0.2', 16_127, WebSocket.OPEN);
       const expectedErrorMessage = {
         status: 'error',
         data: {
@@ -2021,8 +2021,8 @@ describe('fluxCommunicationMessagesSender tests', () => {
       const mockStream = new PassThrough();
       mockStream.end();
       const res = generateResponse();
-      const websocketIn = generateIncomingWebsocket('127.0.0.1', 16127, WebSocket.OPEN);
-      const websocketOut = generateOutgoingWebsocket('127.0.0.2', 16127, WebSocket.OPEN);
+      const websocketIn = generateIncomingWebsocket('127.0.0.1', 16_127, WebSocket.OPEN);
+      const websocketOut = generateOutgoingWebsocket('127.0.0.2', 16_127, WebSocket.OPEN);
       const expectedErrorMessage = {
         status: 'error',
         data: {
@@ -2097,11 +2097,11 @@ describe('fluxCommunicationMessagesSender tests', () => {
           specs2: 'some specs 2',
         },
         hash: '12346789asdfghj',
-        timestamp: 168732333,
+        timestamp: 168_732_333,
         signature: 'signature12345',
       };
-      const websocketIn = generateIncomingWebsocket('127.0.0.1', 16127, WebSocket.OPEN);
-      const websocketOut = generateOutgoingWebsocket('127.0.0.3', 16127, WebSocket.OPEN);
+      const websocketIn = generateIncomingWebsocket('127.0.0.1', 16_127, WebSocket.OPEN);
+      const websocketOut = generateOutgoingWebsocket('127.0.0.3', 16_127, WebSocket.OPEN);
 
       await fluxCommunicationMessagesSender.broadcastTemporaryAppMessage(temporaryAppMessage);
 
@@ -2135,8 +2135,8 @@ describe('fluxCommunicationMessagesSender tests', () => {
 
     it('should throw an error if the message is not an object', async () => {
       const temporaryAppMessage = 'test';
-      const websocketIn = generateIncomingWebsocket('127.0.0.1', 16127, WebSocket.OPEN);
-      const websocketOut = generateOutgoingWebsocket('127.0.0.3', 16127, WebSocket.OPEN);
+      const websocketIn = generateIncomingWebsocket('127.0.0.1', 16_127, WebSocket.OPEN);
+      const websocketOut = generateOutgoingWebsocket('127.0.0.3', 16_127, WebSocket.OPEN);
 
       await expect(fluxCommunicationMessagesSender.broadcastTemporaryAppMessage(temporaryAppMessage)).to.eventually.be.rejectedWith('Invalid Flux App message for storing');
 
@@ -2153,11 +2153,11 @@ describe('fluxCommunicationMessagesSender tests', () => {
           specs2: 'some specs 2',
         },
         hash: '12346789asdfghj',
-        timestamp: 168732333,
+        timestamp: 168_732_333,
         signature: 'signature12345',
       };
-      const websocketIn = generateIncomingWebsocket('127.0.0.1', 16127, WebSocket.OPEN);
-      const websocketOut = generateOutgoingWebsocket('127.0.0.3', 16127, WebSocket.OPEN);
+      const websocketIn = generateIncomingWebsocket('127.0.0.1', 16_127, WebSocket.OPEN);
+      const websocketOut = generateOutgoingWebsocket('127.0.0.3', 16_127, WebSocket.OPEN);
 
       await expect(fluxCommunicationMessagesSender.broadcastTemporaryAppMessage(temporaryAppMessage)).to.eventually.be.rejectedWith('Invalid Flux App message for storing');
 
@@ -2174,11 +2174,11 @@ describe('fluxCommunicationMessagesSender tests', () => {
           specs2: 'some specs 2',
         },
         hash: '12346789asdfghj',
-        timestamp: 168732333,
+        timestamp: 168_732_333,
         signature: 'signature12345',
       };
-      const websocketIn = generateIncomingWebsocket('127.0.0.1', 16127, WebSocket.OPEN);
-      const websocketOut = generateOutgoingWebsocket('127.0.0.3', 16127, WebSocket.OPEN);
+      const websocketIn = generateIncomingWebsocket('127.0.0.1', 16_127, WebSocket.OPEN);
+      const websocketOut = generateOutgoingWebsocket('127.0.0.3', 16_127, WebSocket.OPEN);
 
       await expect(fluxCommunicationMessagesSender.broadcastTemporaryAppMessage(temporaryAppMessage)).to.eventually.be.rejectedWith('Invalid Flux App message for storing');
 
@@ -2192,11 +2192,11 @@ describe('fluxCommunicationMessagesSender tests', () => {
         version: 3,
         appSpecifications: 'test',
         hash: '12346789asdfghj',
-        timestamp: 168732333,
+        timestamp: 168_732_333,
         signature: 'signature12345',
       };
-      const websocketIn = generateIncomingWebsocket('127.0.0.1', 16127, WebSocket.OPEN);
-      const websocketOut = generateOutgoingWebsocket('127.0.0.3', 16127, WebSocket.OPEN);
+      const websocketIn = generateIncomingWebsocket('127.0.0.1', 16_127, WebSocket.OPEN);
+      const websocketOut = generateOutgoingWebsocket('127.0.0.3', 16_127, WebSocket.OPEN);
 
       await expect(fluxCommunicationMessagesSender.broadcastTemporaryAppMessage(temporaryAppMessage)).to.eventually.be.rejectedWith('Invalid Flux App message for storing');
 
@@ -2213,11 +2213,11 @@ describe('fluxCommunicationMessagesSender tests', () => {
           specs2: 'some specs 2',
         },
         hash: 2,
-        timestamp: 168732333,
+        timestamp: 168_732_333,
         signature: 'signature12345',
       };
-      const websocketIn = generateIncomingWebsocket('127.0.0.1', 16127, WebSocket.OPEN);
-      const websocketOut = generateOutgoingWebsocket('127.0.0.3', 16127, WebSocket.OPEN);
+      const websocketIn = generateIncomingWebsocket('127.0.0.1', 16_127, WebSocket.OPEN);
+      const websocketOut = generateOutgoingWebsocket('127.0.0.3', 16_127, WebSocket.OPEN);
 
       await expect(fluxCommunicationMessagesSender.broadcastTemporaryAppMessage(temporaryAppMessage)).to.eventually.be.rejectedWith('Invalid Flux App message for storing');
 
@@ -2237,8 +2237,8 @@ describe('fluxCommunicationMessagesSender tests', () => {
         timestamp: '168732333',
         signature: 'signature12345',
       };
-      const websocketIn = generateIncomingWebsocket('127.0.0.1', 16127, WebSocket.OPEN);
-      const websocketOut = generateOutgoingWebsocket('127.0.0.3', 16127, WebSocket.OPEN);
+      const websocketIn = generateIncomingWebsocket('127.0.0.1', 16_127, WebSocket.OPEN);
+      const websocketOut = generateOutgoingWebsocket('127.0.0.3', 16_127, WebSocket.OPEN);
 
       await expect(fluxCommunicationMessagesSender.broadcastTemporaryAppMessage(temporaryAppMessage)).to.eventually.be.rejectedWith('Invalid Flux App message for storing');
 
@@ -2255,11 +2255,11 @@ describe('fluxCommunicationMessagesSender tests', () => {
           specs2: 'some specs 2',
         },
         hash: 2,
-        timestamp: 168732333,
+        timestamp: 168_732_333,
         signature: 2,
       };
-      const websocketIn = generateIncomingWebsocket('127.0.0.1', 16127, WebSocket.OPEN);
-      const websocketOut = generateOutgoingWebsocket('127.0.0.3', 16127, WebSocket.OPEN);
+      const websocketIn = generateIncomingWebsocket('127.0.0.1', 16_127, WebSocket.OPEN);
+      const websocketOut = generateOutgoingWebsocket('127.0.0.3', 16_127, WebSocket.OPEN);
 
       await expect(fluxCommunicationMessagesSender.broadcastTemporaryAppMessage(temporaryAppMessage)).to.eventually.be.rejectedWith('Invalid Flux App message for storing');
 

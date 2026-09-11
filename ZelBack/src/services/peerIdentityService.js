@@ -136,7 +136,7 @@ function replied(error) {
  * @returns {number}
  */
 function monotonicMs() {
-  return Number(process.hrtime.bigint() / 1000000n);
+  return Number(process.hrtime.bigint() / 1_000_000n);
 }
 
 /**

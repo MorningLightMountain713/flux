@@ -64,21 +64,21 @@ describe('appSpawner tests', () => {
       },
       fluxapps: {
         installation: { delay: 300 },
-        daemonPONFork: 2020000,
-        blocksLasting: 22000,
+        daemonPONFork: 2_020_000,
+        blocksLasting: 22_000,
         newMinBlocksAllowance: 100,
         maxAppsPerNode: 200,
         installCollisionWaitMs: 5000,
-        spawnReconfirmDelayMs: 10000,
-        unencryptedSpawnDelayMs: 120000,
+        spawnReconfirmDelayMs: 10_000,
+        unencryptedSpawnDelayMs: 120_000,
         spawnDeferrals: {
-          targetedNodesMs: { standard: 300000, encrypted: 60000 },
-          staticIpMs: { standard: 300000, encrypted: 60000 },
-          datacenterMs: { standard: 300000, encrypted: 60000 },
+          targetedNodesMs: { standard: 300_000, encrypted: 60_000 },
+          staticIpMs: { standard: 300_000, encrypted: 60_000 },
+          datacenterMs: { standard: 300_000, encrypted: 60_000 },
           capacityGap: {
-            largeMs: { standard: 300000, encrypted: 60000 },
-            mediumMs: { standard: 300000, encrypted: 60000 },
-            smallMs: { standard: 300000, encrypted: 60000 },
+            largeMs: { standard: 300_000, encrypted: 60_000 },
+            mediumMs: { standard: 300_000, encrypted: 60_000 },
+            smallMs: { standard: 300_000, encrypted: 60_000 },
           },
         },
         ...overrides,
@@ -103,7 +103,7 @@ describe('appSpawner tests', () => {
 
   before(async function loadLibrary() {
     // The first fromSubmission compiles the ajv schemas.
-    this.timeout(60000);
+    this.timeout(60_000);
     flux = await loadSpecLibrary();
   });
 
@@ -199,7 +199,7 @@ describe('appSpawner tests', () => {
     delayStub.onSecondCall().rejects(new Error('break recursion'));
     delayStub.rejects(new Error('break recursion'));
     daemonSyncStub = sinon.stub().returns({
-      data: { height: opts.daemonHeight || 2555563, synced: true },
+      data: { height: opts.daemonHeight || 2_555_563, synced: true },
     });
     ensureProvidersRegisteredStub = sinon.stub().resolves();
     registryManagerStub = {
@@ -220,7 +220,7 @@ describe('appSpawner tests', () => {
       // opts.nodeCapacity shrinks it to exercise the screen.
       nodeCapacity: opts.nodeCapacityStub ?? sinon.stub().resolves(opts.nodeCapacity ?? {
         totalSpaceOnNode: 1000, availableSpace: 500, availableCpu: 200,
-        availableRam: 100000, freeCores: 32,
+        availableRam: 100_000, freeCores: 32,
       }),
       capacityShortfall: opts.capacityShortfall ?? hwRequirementsActual.capacityShortfall,
       burstHeadroomShortfall: opts.burstHeadroomShortfall
@@ -328,12 +328,12 @@ describe('appSpawner tests', () => {
       },
       '../utils/enterpriseNetwork': {
         getCachedEnterpriseIdentity: sinon.stub().returns(opts.getCachedEnterpriseIdentity ?? false),
-        getSpawnDelays: sinon.stub().returns({ shortDelayTime: 60000, delayTime: 60000 }),
+        getSpawnDelays: sinon.stub().returns({ shortDelayTime: 60_000, delayTime: 60_000 }),
         filterAppsByOwnership: sinon.stub().callsFake((apps) => apps),
         isEnterpriseAppOwner: opts.isEnterpriseAppOwner || sinon.stub().returns(false),
       },
       '../utils/cacheManager': {
-        FluxCacheManager: { oneHour: 3600000 },
+        FluxCacheManager: { oneHour: 3_600_000 },
       },
       '../appRuntime/deploymentProvider': {
         // [null] = loose placement (the single untagged claim); named tests
@@ -420,7 +420,7 @@ describe('appSpawner tests', () => {
       await appSpawner.trySpawningGlobalApplication();
       expect(findUnderProvisionedStub.calledOnce).to.be.true;
       const [height, nowSeconds] = findUnderProvisionedStub.firstCall.args;
-      expect(height).to.equal(2555563);
+      expect(height).to.equal(2_555_563);
       expect(nowSeconds).to.be.a('number');
       expect(nowSeconds).to.be.closeTo(Math.floor(Date.now() / 1000), 2);
     });
@@ -888,7 +888,7 @@ describe('appSpawner tests', () => {
       // a spike — a distinct rule from "does it fit".
       const roomyNode = {
         totalSpaceOnNode: 1000, availableSpace: 500, availableCpu: 200,
-        availableRam: 100000, freeCores: 8,
+        availableRam: 100_000, freeCores: 8,
       };
       const candidate = await makeCandidate({ name: 'burst', hash: 'hb', size: { cpu: 5 } });
       // It genuinely fits — the rule that rejects it is the headroom one alone.
@@ -927,7 +927,7 @@ describe('appSpawner tests', () => {
 
     it('screens nothing when node capacity cannot be read', async () => {
       buildModule({
-        candidates: [await makeCandidate({ name: 'huge', hash: 'h1', size: { memory: 57000, cpu: 14 } })],
+        candidates: [await makeCandidate({ name: 'huge', hash: 'h1', size: { memory: 57_000, cpu: 14 } })],
         nodeCapacityStub: sinon.stub().rejects(new Error('benchmark unavailable')),
       });
       await appSpawner.trySpawningGlobalApplication().catch(() => {});
@@ -1262,8 +1262,8 @@ describe('appSpawner tests', () => {
 
   describe('expiration math (pure logic)', () => {
     function evaluateExpiration(height, expire, currentHeight) {
-      const ponFork = 2020000;
-      const blocksLasting = 22000;
+      const ponFork = 2_020_000;
+      const blocksLasting = 22_000;
       const minBlocksAllowance = 100;
 
       const expireIn = expire ?? (height >= ponFork ? blocksLasting * 4 : blocksLasting);
@@ -1285,32 +1285,32 @@ describe('appSpawner tests', () => {
       };
     }
 
-    const currentHeight = 2555563;
+    const currentHeight = 2_555_563;
 
     it('should reject post-PON app with expire=100 (cancellation)', () => {
-      const result = evaluateExpiration(2555500, 100, currentHeight);
+      const result = evaluateExpiration(2_555_500, 100, currentHeight);
       expect(result.wouldInstall).to.be.false;
     });
 
     it('should accept post-PON app with 101+ blocks remaining', () => {
-      const result = evaluateExpiration(2555500, 164, currentHeight);
+      const result = evaluateExpiration(2_555_500, 164, currentHeight);
       expect(result.wouldInstall).to.be.true;
     });
 
     it('should accept post-PON app with default expire (88000)', () => {
-      const result = evaluateExpiration(2550000, 88000, currentHeight);
+      const result = evaluateExpiration(2_550_000, 88_000, currentHeight);
       expect(result.wouldInstall).to.be.true;
     });
 
     it('should apply 4x multiplier to blocks after PON fork', () => {
-      const result = evaluateExpiration(2000000, 22000, currentHeight);
-      expect(result.actualExpirationHeight).to.equal(2028000);
+      const result = evaluateExpiration(2_000_000, 22_000, currentHeight);
+      expect(result.actualExpirationHeight).to.equal(2_028_000);
       expect(result.wouldInstall).to.be.false;
     });
 
     it('should accept pre-PON app with long lease', () => {
-      const result = evaluateExpiration(2000000, 264000, currentHeight);
-      expect(result.actualExpirationHeight).to.equal(2996000);
+      const result = evaluateExpiration(2_000_000, 264_000, currentHeight);
+      expect(result.actualExpirationHeight).to.equal(2_996_000);
       expect(result.wouldInstall).to.be.true;
     });
   });
@@ -1320,7 +1320,7 @@ describe('appSpawner tests', () => {
       const now = Date.now();
       const queue = [
         { timeToCheck: now - 1000, appName: 'ready', hash: 'abc', required: 3 },
-        { timeToCheck: now + 60000, appName: 'notReady', hash: 'def', required: 3 },
+        { timeToCheck: now + 60_000, appName: 'notReady', hash: 'def', required: 3 },
       ];
       const index = queue.findIndex((app) => app.timeToCheck <= now);
       expect(index).to.equal(0);
@@ -1330,7 +1330,7 @@ describe('appSpawner tests', () => {
     it('findIndex should not match apps whose timeToCheck is in the future', () => {
       const now = Date.now();
       const queue = [
-        { timeToCheck: now + 60000, appName: 'notReady', hash: 'abc', required: 3 },
+        { timeToCheck: now + 60_000, appName: 'notReady', hash: 'abc', required: 3 },
       ];
       const index = queue.findIndex((app) => app.timeToCheck <= now);
       expect(index).to.equal(-1);
@@ -1338,7 +1338,7 @@ describe('appSpawner tests', () => {
 
     it('Array.some should correctly filter apps already in deferred queue', () => {
       const queue = [
-        { appName: 'myApp', hash: 'abc', required: 3, timeToCheck: Date.now() + 60000 },
+        { appName: 'myApp', hash: 'abc', required: 3, timeToCheck: Date.now() + 60_000 },
       ];
       const apps = [
         { name: 'myApp', hash: 'abc' },
@@ -1698,7 +1698,7 @@ describe('appSpawner tests', () => {
         broadcastAllStub,
         globalStateOverrides: {
           appsToBeCheckedLater: [{
-            appName: 'conapp', hash: 'con1', required: 1, timeToCheck: Date.now() - 1000, collisionDeferred: true, announcedAt: Date.now() - 60000, replicas: ['s1'],
+            appName: 'conapp', hash: 'con1', required: 1, timeToCheck: Date.now() - 1000, collisionDeferred: true, announcedAt: Date.now() - 60_000, replicas: ['s1'],
           }],
         },
       });

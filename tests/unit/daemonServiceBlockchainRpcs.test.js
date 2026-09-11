@@ -814,12 +814,12 @@ describe('daemonServiceBlockchainRpcs tests', () => {
 
       const expectedResponse = 'success';
 
-      const req = { params: { minheight: 55555 } };
+      const req = { params: { minheight: 55_555 } };
 
       const result = await daemonServiceBlockchainRpcs.getChainTips(req);
 
       expect(result).to.equal(expectedResponse);
-      sinon.assert.calledOnceWithExactly(daemonServiceUtilsStub, 'getChainTips', [55555]);
+      sinon.assert.calledOnceWithExactly(daemonServiceUtilsStub, 'getChainTips', [55_555]);
     });
 
     it('should trigger rpc, response passed', async () => {

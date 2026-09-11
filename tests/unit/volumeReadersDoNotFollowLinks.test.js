@@ -32,7 +32,7 @@ describe('readers of an app volume do not follow links', () => {
     secret = path.join(outside, 'SECRET');
     // Long enough that a size read through the link cannot be mistaken for the
     // handful of bytes a link's own path measures.
-    await fs.writeFile(secret, 'x'.repeat(65536));
+    await fs.writeFile(secret, 'x'.repeat(65_536));
 
     volume = await fs.mkdtemp(path.join(os.tmpdir(), 'flux-volume-'));
     await fs.writeFile(path.join(volume, 'mine.txt'), 'mine');
@@ -76,7 +76,7 @@ describe('readers of an app volume do not follow links', () => {
 
     // The 64KB behind the link is not in the figure; a few blocks for the real
     // entries are.
-    expect(measured).to.be.below(65536);
+    expect(measured).to.be.below(65_536);
   });
 
   it('lists backup files without reading through one', async () => {

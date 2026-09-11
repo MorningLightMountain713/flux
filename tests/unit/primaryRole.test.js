@@ -62,7 +62,7 @@ function loadRole({
     }),
     patchFolder: sinon.spy(async (id, fields) => { note('patch')(id, fields); return { status: 'success' }; }),
     folderConfig: sinon.stub().resolves(folder),
-    FOLDER_TYPE_SETTLE_MS: 60000,
+    FOLDER_TYPE_SETTLE_MS: 60_000,
   };
   const bus = {
     publish: sinon.stub(),

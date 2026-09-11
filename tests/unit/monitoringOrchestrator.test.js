@@ -44,7 +44,7 @@ function legacySpec(name) {
     description: `${name} under test`,
     owner: '1CbErtneaX2QVyUfwU7JGB7VzvPgrgc3uC',
     repotag: 'test/app:latest',
-    ports: [30001],
+    ports: [30_001],
     containerPorts: [8080],
     domains: [''],
     enviromentParameters: [],
@@ -72,7 +72,7 @@ function composedSpec(name, componentNames) {
       ...template,
       name: componentName,
       description: componentName,
-      ports: [31443 + index],
+      ports: [31_443 + index],
       containerPorts: [443 + index],
     })),
     owner: LEGACY_OWNER,
@@ -90,7 +90,7 @@ function composedSpec(name, componentNames) {
  */
 async function coLocatedSpec() {
   const components = JSON.parse(JSON.stringify(V9_SUBMISSION.components));
-  components.web.replicaOverrides = { r2: { ports: { http: { hostPort: 31001 } } } };
+  components.web.replicaOverrides = { r2: { ports: { http: { hostPort: 31_001 } } } };
   return v9Spec({
     components,
     assignment: { targetIps: { '1.2.3.4:16127': ['r1', 'r2'] } },
@@ -119,7 +119,7 @@ describe('monitoringOrchestrator tests', () => {
 
   before(async function loadLibrary() {
     // The first fromSubmission compiles the ajv schemas.
-    this.timeout(60000);
+    this.timeout(60_000);
     flux = await loadSpecLibrary();
   });
 

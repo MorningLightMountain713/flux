@@ -372,7 +372,7 @@ describe('quorumGrant grantClient', () => {
     sinon.stub(foundingCommittee, 'refereeCommittee').resolves({
       repinned: false,
       generation: 0,
-      anchor: 500000,
+      anchor: 500_000,
       fingerprint,
       quorum: founderCommittee.quorum,
       members: founderCommittee.members,
@@ -549,14 +549,14 @@ describe('quorumGrant grantClient', () => {
       foundingCommittee.refereeCommittee.resolves({
         repinned: false,
         generation: 2,
-        anchor: 500000,
+        anchor: 500_000,
         fingerprint: photoFp,
         quorum: founderCommittee.quorum,
         members: founderCommittee.members,
       });
       const outcome = await grantClient.acquire(FOUNDER_KEY, holderOptions({ mode: 'oneshot' }));
       expect(outcome.granted).to.equal(true);
-      expect(foundingCommittee.refereeCommittee.calledWith('myapp', 500000)).to.equal(true);
+      expect(foundingCommittee.refereeCommittee.calledWith('myapp', 500_000)).to.equal(true);
       const published = masterleasePublisher.publishMasterlease.firstCall.args[0];
       expect(published.fingerprint).to.equal(photoFp);
       expect(published.generation).to.equal(2);
@@ -798,7 +798,7 @@ describe('quorumGrant grantClient', () => {
 
     it('re-learns the term from a quorum of registers and re-installs the holder', async () => {
       await seatThenRestart();
-      clockNow += 5_000;
+      clockNow += 5000;
 
       const relearned = await grantClient.relearn(KEY, holderOptions());
       expect(relearned.recovered).to.equal(true);
@@ -810,7 +810,7 @@ describe('quorumGrant grantClient', () => {
       const { holder } = await seatThenRestart();
       const other = `${'7'.repeat(64)}:0`;
       committeeHosts.forEach((host) => { registers.get(host).get(KEY).accepted.grantee = other; });
-      clockNow += 5_000;
+      clockNow += 5000;
       const relearned = await grantClient.relearn(KEY, holderOptions());
       expect(relearned.recovered).to.equal(false);
       expect(relearned.term.grantee, 'the registers name another node').to.equal(other);
@@ -822,7 +822,7 @@ describe('quorumGrant grantClient', () => {
     // originally held - never later.
     it('the recovered term is a duration, and never longer than a full TTL', async () => {
       await seatThenRestart();
-      clockNow += 5_000;
+      clockNow += 5000;
 
       const relearned = await grantClient.relearn(KEY, holderOptions());
       expect(relearned.recovered).to.equal(true);
@@ -856,7 +856,7 @@ describe('quorumGrant grantClient', () => {
       await seatThenRestart();
       registers.forEach((store) => {
         const row = store.get(KEY);
-        if (row?.accepted) row.accepted.expiresAt = Date.now() - 1_000;
+        if (row?.accepted) row.accepted.expiresAt = Date.now() - 1000;
       });
 
       const relearned = await grantClient.relearn(KEY, holderOptions());
@@ -879,7 +879,7 @@ describe('quorumGrant grantClient', () => {
       const slow = await grantClient.relearn(KEY, holderOptions());
       expect(slow.recovered).to.equal(true);
       const slowRemaining = slow.holder.safeUntil() - clockNow;
-      expect(fastRemaining - slowRemaining).to.be.at.least(4_000);
+      expect(fastRemaining - slowRemaining).to.be.at.least(4000);
     });
 
     // D3. §7's demotion alarm is STANDING - it fires ON the deadline without
@@ -889,7 +889,7 @@ describe('quorumGrant grantClient', () => {
     // gets wrong today.
     it('arms the demotion alarm at the moment it re-learns, not at the first renewal', async () => {
       await seatThenRestart();
-      clockNow += 5_000;
+      clockNow += 5000;
       const scheduled = [];
       const relearned = await grantClient.relearn(KEY, {
         ...holderOptions(),
@@ -1173,11 +1173,11 @@ describe('quorumGrant grantClient', () => {
       const holder = await acquireThenDarken();
 
       // silent, but not yet for a full term: no heal
-      clockNow += TTL - 1_000;
+      clockNow += TTL - 1000;
       await holder.renewOnce();
       expect(masterleasePublisher.publishMasterlease.lastCall.args[0].roster).to.equal(undefined);
 
-      clockNow += 2_000;
+      clockNow += 2000;
       await holder.renewOnce();
 
       // the record now carries the healed roster, every acceptance from the
@@ -1206,7 +1206,7 @@ describe('quorumGrant grantClient', () => {
 
     it('one seat per rate window — the second dark referee waits it out, then heals too', async () => {
       const holder = await acquireThenDarken();
-      clockNow += TTL + 1_000;
+      clockNow += TTL + 1000;
       await holder.renewOnce();
       expect(masterleasePublisher.publishMasterlease.lastCall.args[0].roster.chain).to.have.length(1);
 
@@ -1214,7 +1214,7 @@ describe('quorumGrant grantClient', () => {
       const secondDark = committee.members[1];
       dark.add(secondDark.ip.split(':')[0]);
 
-      clockNow += TTL + 1_000; // dark long enough, but inside the rate window
+      clockNow += TTL + 1000; // dark long enough, but inside the rate window
       await holder.renewOnce();
       expect(masterleasePublisher.publishMasterlease.lastCall.args[0].roster.chain).to.have.length(1);
 
@@ -1271,7 +1271,7 @@ describe('quorumGrant grantClient', () => {
 
     it('a challenger acquires from the healed committee through the published record', async () => {
       const holder = await acquireThenDarken();
-      clockNow += TTL + 1_000;
+      clockNow += TTL + 1000;
       await holder.renewOnce();
       const published = masterleasePublisher.publishMasterlease.lastCall.args[0];
       expect(published.roster.chain).to.have.length(1);
@@ -1434,7 +1434,7 @@ describe('quorumGrant grantClient', () => {
       // roster proposal at it, because the grantors judge tier-1 entries
       // against the base-plus-chain roster the replacement is not on
       dark.add(replacement.ip.split(':')[0]);
-      clockNow += TTL + 1_000;
+      clockNow += TTL + 1000;
       await outcome.holder.renewOnce();
       expect(askedHosts('roster')).to.have.length(0);
       expect(outcome.holder.state).to.equal('held');
@@ -1628,7 +1628,7 @@ describe('quorumGrant grantClient', () => {
         taughtRecord = null;
         const holder = reroll(await acquireHolder());
         refuseAccept = true;
-        clockNow += 1_000;
+        clockNow += 1000;
         await holder.renewOnce();
         expect(holder.generation).to.equal(0);
       });
@@ -1638,7 +1638,7 @@ describe('quorumGrant grantClient', () => {
         const demoted = [];
         const holder = reroll(await acquireHolder({ onDemoted: (reason) => demoted.push(reason) }));
         const publishedBefore = masterleasePublisher.publishMasterlease.callCount;
-        clockNow += 1_000;
+        clockNow += 1000;
         await holder.renewOnce();
         expect(holder.state).to.equal('held');
         expect(holder.generation, 'the holder now holds under the new generation').to.equal(1);
@@ -1651,7 +1651,7 @@ describe('quorumGrant grantClient', () => {
         expect(masterleasePublisher.publishMasterlease.callCount).to.equal(publishedBefore + 1);
         expect(masterleasePublisher.publishMasterlease.lastCall.args[0]).to.deep.include({ key: KEY, grantee: SELF, generation: 1 });
         // and it renews there from now on
-        clockNow += 1_000;
+        clockNow += 1000;
         await holder.renewOnce();
         expect(holder.state).to.equal('held');
         expect(holder.generation).to.equal(1);
@@ -1663,7 +1663,7 @@ describe('quorumGrant grantClient', () => {
         const holder = await acquireHolder();
         expect(holder.credential()).to.equal(null);
         reroll(holder);
-        clockNow += 1_000;
+        clockNow += 1000;
         await holder.renewOnce();
         expect(holder.generation).to.equal(0);
         // the old world's rows on the cells the two committees share are not a seat in the new one
@@ -1682,7 +1682,7 @@ describe('quorumGrant grantClient', () => {
         expect(granted.acceptances.length, 'a quorum of the granting committee').to.be.at.least(oldCommittee.quorum);
         granted.acceptances.forEach((a) => expect(outpointsOf(oldCommittee)).to.include(a.grantor));
         reroll(holder);
-        clockNow += 1_000;
+        clockNow += 1000;
         await holder.renewOnce();
         const stepped = masterleasePublisher.publishMasterlease.lastCall.args[0];
         expect(stepped.generation).to.equal(1);

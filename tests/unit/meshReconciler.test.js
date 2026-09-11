@@ -72,7 +72,7 @@ describe('meshReconciler', () => {
 
   before(async function loadLibrary() {
     // The first fromSubmission compiles the ajv schemas.
-    this.timeout(30000);
+    this.timeout(30_000);
     flux = await loadSpecLibrary();
     SLOT = flux.meshComponentSlot('myblog', 'web');
   });
@@ -119,7 +119,7 @@ describe('meshReconciler', () => {
         broadcastedAt: 1,
         meshCa: 'PEM-PEER\n',
         meshVoucher: 'sig',
-        meshPort: 16240,
+        meshPort: 16_240,
         meshAnchor: { height: 995, hash: ANCHOR_HASH },
       }],
       evaluateCandidates: sinon.stub().resolves({ members: [PEER_MEMBER], rejected: [] }),
@@ -271,7 +271,7 @@ describe('meshReconciler', () => {
         }),
       },
       './meshPortAllocator': {
-        ensureTransportPort: sinon.stub().resolves(16230),
+        ensureTransportPort: sinon.stub().resolves(16_230),
         releaseTransportPort: record('releaseTransportPort'),
         allocatedInstances: sinon.stub().callsFake(async () => stubs.portInstances),
       },
@@ -666,7 +666,7 @@ describe('meshReconciler', () => {
       await meshReconciler.reconcileAllMeshApps();
       const status = meshReconciler.lastPassStatus('myblog');
       expect(status.error).to.equal(null);
-      expect(status.meshPort).to.equal(16230);
+      expect(status.meshPort).to.equal(16_230);
       expect(status.members).to.have.length(1);
       expect(status.members[0].outpoint).to.equal(PEER_OUTPOINT);
       expect(status.members[0]).to.not.have.property('meshCa');
@@ -849,7 +849,7 @@ describe('meshReconciler', () => {
           mysql: {
             ...V9_SUBMISSION.components.web,
             name: 'mysql',
-            ports: { db: { containerPort: 3306, hostPort: 31001 } },
+            ports: { db: { containerPort: 3306, hostPort: 31_001 } },
             meshPorts: {
               galera: { containerPort: 4567, protocol: 'tcp' },
               sst: { containerPort: 4444 },

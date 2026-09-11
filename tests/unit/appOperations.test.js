@@ -41,7 +41,7 @@ let flux;
 describe('appOperations tests', () => {
   before(async function loadLibrary() {
     // The first fromSubmission compiles the ajv schemas.
-    this.timeout(30000);
+    this.timeout(30_000);
     flux = await loadSpecLibrary();
   });
 
@@ -801,7 +801,7 @@ describe('appOperations tests', () => {
      */
     async function mixedGDeployment(appName, asComponent) {
       const spec = await specWithComponents(appName, {
-        db: { ports: { pg: { containerPort: 5432, hostPort: 31001 } } },
+        db: { ports: { pg: { containerPort: 5432, hostPort: 31_001 } } },
         [asComponent]: { persistentStorage: AS_STORAGE },
       });
       return deploymentFor(spec);
@@ -1646,7 +1646,7 @@ describe('appOperations tests', () => {
             sync: { mode: 'sync' },
           },
         },
-        worker: { ports: { rpc: { containerPort: 9000, hostPort: 31001 } } },
+        worker: { ports: { rpc: { containerPort: 9000, hostPort: 31_001 } } },
       }));
       expect(composed.getComponent('web').hasSyncthing()).to.be.true;
       expect(composed.getComponent('worker').hasSyncthing()).to.be.false;
@@ -1663,7 +1663,7 @@ describe('appOperations tests', () => {
 
       const req = { body: { appname: 'bkapp', backup: [{ component: 'web', backup: true }] } };
       const pending = appOperations.appendBackupTask(req, makeRes());
-      await clock.tickAsync(120000);
+      await clock.tickAsync(120_000);
       await pending;
       clock.restore();
 
@@ -1703,7 +1703,7 @@ describe('appOperations tests', () => {
 
         const req = { body: { appname: 'bkapp', backup: [{ component: 'web', backup: true }], ...(force ? { force: true } : {}) } };
         const pending = appOperations.appendBackupTask(req, res);
-        await clock.tickAsync(120000);
+        await clock.tickAsync(120_000);
         const result = await pending;
         clock.restore();
         const said = res.write.getCalls().map((c) => c.args[0]).join('');
@@ -1800,7 +1800,7 @@ describe('appOperations tests', () => {
 
       const req = { body: { appname: 'bkapp', backup: [{ component: 'comp1', backup: true }] } };
       const pending = appOperations.appendBackupTask(req, makeRes());
-      await clock.tickAsync(120000);
+      await clock.tickAsync(120_000);
       const result = await pending;
       clock.restore();
 
@@ -1838,7 +1838,7 @@ describe('appOperations tests', () => {
 
       const req = { body: { appname: 'bkapp', backup: [{ component: 'comp1', backup: true }] } };
       const pending = appOperations.appendBackupTask(req, makeRes());
-      await clock.tickAsync(120000);
+      await clock.tickAsync(120_000);
       const result = await pending;
       clock.restore();
 
@@ -1867,7 +1867,7 @@ describe('appOperations tests', () => {
 
       const req = { body: { appname: 'bkapp', backup: [{ component: 'comp1', backup: true }] } };
       const pending = appOperations.appendBackupTask(req, makeRes());
-      await clock.tickAsync(120000); // flush sendChunk's per-chunk timers + delays
+      await clock.tickAsync(120_000); // flush sendChunk's per-chunk timers + delays
       const result = await pending;
       clock.restore();
 
@@ -1896,7 +1896,7 @@ describe('appOperations tests', () => {
             sync: { mode: 'activeStandby' },
           },
         },
-        worker: { ports: { rpc: { containerPort: 9000, hostPort: 31001 } } },
+        worker: { ports: { rpc: { containerPort: 9000, hostPort: 31_001 } } },
       }));
       expect(composed.getComponent('web').hasActiveStandbySyncthing(), 'fixture must be activeStandby').to.be.true;
       expect(composed.getComponent('worker').hasActiveStandbySyncthing()).to.be.false;
@@ -1912,7 +1912,7 @@ describe('appOperations tests', () => {
 
       const req = { body: { appname: 'bkapp', backup: [{ component: 'web', backup: true }] } };
       const pending = appOperations.appendBackupTask(req, makeRes());
-      await clock.tickAsync(120000);
+      await clock.tickAsync(120_000);
       await pending;
       clock.restore();
 
@@ -1930,7 +1930,7 @@ describe('appOperations tests', () => {
 
       const req = { body: { appname: 'bkapp', backup: [{ component: 'comp1', backup: true }] } };
       const pending = appOperations.appendBackupTask(req, makeRes());
-      await clock.tickAsync(120000);
+      await clock.tickAsync(120_000);
       const result = await pending;
       clock.restore();
 
@@ -1966,7 +1966,7 @@ describe('appOperations tests', () => {
 
         const req = { body: { appname: 'bkapp', backup: [{ component: 'web', backup: true }] } };
         const pending = appOperations.appendBackupTask(req, makeRes());
-        await clock.tickAsync(120000);
+        await clock.tickAsync(120_000);
         await pending;
         clock.restore();
 
@@ -1981,7 +1981,7 @@ describe('appOperations tests', () => {
 
         const req = { body: { appname: 'bkapp', backup: [{ component: 'web', backup: true, replica: 's2' }] } };
         const pending = appOperations.appendBackupTask(req, makeRes());
-        await clock.tickAsync(120000);
+        await clock.tickAsync(120_000);
         await pending;
         clock.restore();
 
@@ -1995,7 +1995,7 @@ describe('appOperations tests', () => {
 
         const req = { body: { appname: 'bkapp', backup: [{ component: 'web', backup: true, replica: 's9' }] } };
         const pending = appOperations.appendBackupTask(req, makeRes());
-        await clock.tickAsync(120000);
+        await clock.tickAsync(120_000);
         const result = await pending;
         clock.restore();
 

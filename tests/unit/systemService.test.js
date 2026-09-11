@@ -72,7 +72,7 @@ describe('system Services tests', () => {
   // walks five retries a minute apart, which is not what is under test here.
   describe('dpkgFrontendLocked tests', () => {
     // /var/lib/dpkg/lock-frontend: device 8:2, inode 114071576.
-    const lockFile = { dev: 0x802n, ino: 114071576n };
+    const lockFile = { dev: 0x802n, ino: 114_071_576n };
     const held = '14: POSIX  ADVISORY  WRITE 2132266 08:02:114071576 0 EOF\n';
     let statStub;
     let readFileStub;
@@ -311,7 +311,7 @@ describe('system Services tests', () => {
     });
 
     it('should return mtime of update-success-stamp if it exists', async () => {
-      const testTime = 1713858779721.123;
+      const testTime = 1_713_858_779_721.123;
 
       stubFake = sinon.fake(async (path) => {
         if (path === '/var/lib/apt/periodic/update-success-stamp') {
@@ -327,7 +327,7 @@ describe('system Services tests', () => {
     });
 
     it('should return mtime of lists if stamp does not exist and lists does', async () => {
-      const testTime = 1713858779721.123;
+      const testTime = 1_713_858_779_721.123;
 
       stubFake = sinon.fake(async (path) => {
         if (path === '/var/lib/apt/periodic/update-success-stamp') {
@@ -358,14 +358,14 @@ describe('system Services tests', () => {
     });
 
     it('should skip updating if last update was within 24 hours', async () => {
-      const now = 1713858779721;
+      const now = 1_713_858_779_721;
 
       sinon.useFakeTimers({
         now,
       });
 
       // 10 seconds ago
-      statStub.resolves({ mtimeMs: now - 10000 });
+      statStub.resolves({ mtimeMs: now - 10_000 });
 
       const cacheUpdateError = await systemService.updateAptCache();
 
@@ -374,8 +374,8 @@ describe('system Services tests', () => {
     });
 
     it('should update cache if last update was over 24 hours ago', async () => {
-      const now = 1713858779721;
-      const oneDay = 86400 * 1000;
+      const now = 1_713_858_779_721;
+      const oneDay = 86_400 * 1000;
 
       runCmdStub.resolves({ error: null });
 
@@ -409,8 +409,8 @@ describe('system Services tests', () => {
 
     it('should upgrade syncthing', async () => {
       // it checks for version first with dpkg, check that
-      const now = 1713858779721;
-      const oneDay = 86400 * 1000;
+      const now = 1_713_858_779_721;
+      const oneDay = 86_400 * 1000;
 
       runCmdStub.resolves({ error: null });
 
@@ -468,7 +468,7 @@ describe('system Services tests', () => {
 
       await systemService.monitorSyncthingPackage();
 
-      sinon.assert.calledOnceWithExactly(axiosStub, statsEndpoint, { timeout: 10000 });
+      sinon.assert.calledOnceWithExactly(axiosStub, statsEndpoint, { timeout: 10_000 });
       sinon.assert.calledWith(logSpy, `Checking package syncthing is updated to version ${statsVersion}`);
     });
 
@@ -485,7 +485,7 @@ describe('system Services tests', () => {
 
       await systemService.monitorSyncthingPackage();
 
-      sinon.assert.calledOnceWithExactly(axiosStub, statsEndpoint, { timeout: 10000 });
+      sinon.assert.calledOnceWithExactly(axiosStub, statsEndpoint, { timeout: 10_000 });
       sinon.assert.calledWith(logSpy, `Checking package syncthing is updated to version ${localVersion}`);
     });
 
@@ -502,7 +502,7 @@ describe('system Services tests', () => {
 
       await systemService.monitorSyncthingPackage();
 
-      sinon.assert.calledOnceWithExactly(axiosStub, statsEndpoint, { timeout: 10000 });
+      sinon.assert.calledOnceWithExactly(axiosStub, statsEndpoint, { timeout: 10_000 });
       sinon.assert.calledWith(logSpy, `Checking package syncthing is updated to version ${localVersion}`);
     });
 
@@ -519,12 +519,12 @@ describe('system Services tests', () => {
 
       await systemService.monitorSyncthingPackage();
 
-      sinon.assert.calledOnceWithExactly(axiosStub, statsEndpoint, { timeout: 10000 });
+      sinon.assert.calledOnceWithExactly(axiosStub, statsEndpoint, { timeout: 10_000 });
       sinon.assert.calledWith(logSpy, `Checking package syncthing is updated to version ${localVersion}`);
     });
 
     it('should upgrade syncthing immediately if on lower version', async () => {
-      const now = 1713858779721;
+      const now = 1_713_858_779_721;
 
       const statsVersion = '2.2.2';
 
@@ -563,7 +563,7 @@ describe('system Services tests', () => {
     });
 
     it('should upgrade syncthing immediately if correct version present but uninstalled', async () => {
-      const now = 1713858779721;
+      const now = 1_713_858_779_721;
 
       const statsVersion = '2.2.2';
 
@@ -608,7 +608,7 @@ describe('system Services tests', () => {
       // sources rewrite cannot read a file that does not exist, and its
       // failure must not stand between this node and the file being created:
       // that ordering leaves the node warning once a day, forever.
-      const now = 1713858779721;
+      const now = 1_713_858_779_721;
       const statsVersion = '2.2.2';
 
       sinon.stub(axios, 'get').callsFake(async (url) => {
@@ -639,7 +639,7 @@ describe('system Services tests', () => {
     });
 
     it('should not call upgradeSyncthing if on correct version', async () => {
-      const now = 1713858779721;
+      const now = 1_713_858_779_721;
 
       const statsVersion = '2.2.2';
       const dpgkVersion = '2.2.2|install ok installed';
@@ -789,8 +789,8 @@ describe('system Services tests', () => {
 
       await promise;
       expect(checkCount).to.equal(4);
-      sinon.assert.calledWith(runCmdStub, 'fuser', { runAsRoot: true, timeout: 10000, params: ['-k', '-TERM', '/var/lib/dpkg/lock', '/var/lib/dpkg/lock-frontend'] });
-      sinon.assert.calledWith(runCmdStub, 'fuser', { runAsRoot: true, timeout: 10000, params: ['-k', '-KILL', '/var/lib/dpkg/lock', '/var/lib/dpkg/lock-frontend'] });
+      sinon.assert.calledWith(runCmdStub, 'fuser', { runAsRoot: true, timeout: 10_000, params: ['-k', '-TERM', '/var/lib/dpkg/lock', '/var/lib/dpkg/lock-frontend'] });
+      sinon.assert.calledWith(runCmdStub, 'fuser', { runAsRoot: true, timeout: 10_000, params: ['-k', '-KILL', '/var/lib/dpkg/lock', '/var/lib/dpkg/lock-frontend'] });
       sinon.assert.notCalled(errorSpy);
     });
 
@@ -980,7 +980,7 @@ describe('system Services tests', () => {
       await systemService.addSyncthingRepository();
 
       sinon.assert.calledWithExactly(statStub, '/etc/apt/sources.list.d/syncthing.list');
-      sinon.assert.calledOnceWithExactly(axiosStub, 'https://syncthing.net/release-key.gpg', { responseType: 'arraybuffer', timeout: 10000 });
+      sinon.assert.calledOnceWithExactly(axiosStub, 'https://syncthing.net/release-key.gpg', { responseType: 'arraybuffer', timeout: 10_000 });
       sinon.assert.calledWithExactly(accessStub, '/usr/share/keyrings', 6);
       sinon.assert.calledWithExactly(writeStub, expectedPath, Buffer.from(axiosRes.data, 'binary'));
     });
@@ -1016,12 +1016,12 @@ describe('system Services tests', () => {
 
       const promise = systemService.addSyncthingRepository();
 
-      await clock.tickAsync(30000);
+      await clock.tickAsync(30_000);
 
       await promise;
 
       sinon.assert.calledWithExactly(statStub, '/etc/apt/sources.list.d/syncthing.list');
-      sinon.assert.calledWithExactly(axiosStub, 'https://syncthing.net/release-key.gpg', { responseType: 'arraybuffer', timeout: 10000 });
+      sinon.assert.calledWithExactly(axiosStub, 'https://syncthing.net/release-key.gpg', { responseType: 'arraybuffer', timeout: 10_000 });
       expect(calls).to.equal(2);
       sinon.assert.calledWithExactly(accessStub, '/usr/share/keyrings', 6);
       sinon.assert.calledWithExactly(writeStub, expectedPath, Buffer.from(axiosRes.data, 'binary'));
@@ -1046,7 +1046,7 @@ describe('system Services tests', () => {
 
       const promise = systemService.addSyncthingRepository();
 
-      await clock.tickAsync(3 * 30000);
+      await clock.tickAsync(3 * 30_000);
       await promise;
 
       sinon.assert.calledThrice(axiosStub);
@@ -1076,7 +1076,7 @@ describe('system Services tests', () => {
     });
 
     it('should force update cache if source added, even if cache was just updated', async () => {
-      const now = 1713858779721;
+      const now = 1_713_858_779_721;
       const oneMinute = 60 * 1000;
 
       sinon.useFakeTimers({

@@ -13,7 +13,7 @@ describe('requestHistory tests', () => {
   });
 
   it('should instantiate and set maxAge correctly', () => {
-    const testAge = 5_000;
+    const testAge = 5000;
     const historyDefault = new RequestHistory();
     const history = new RequestHistory({ maxAge: testAge });
 
@@ -94,7 +94,7 @@ describe('requestHistory tests', () => {
     history.on('parseError', () => { emitted = true; });
 
     const id = history.storeRequest({
-      url: 'badurl', verb: 'get', timeout: 1_000, timestamp: 0,
+      url: 'badurl', verb: 'get', timeout: 1000, timestamp: 0,
     });
 
     expect(id).to.equal(null);
@@ -114,7 +114,7 @@ describe('requestHistory tests', () => {
       timestamp: 0,
     };
 
-    const history = new RequestHistory({ maxAge: 5_000 });
+    const history = new RequestHistory({ maxAge: 5000 });
 
     history.on('requestRemoved', () => { removeEmitted = true; });
 
@@ -124,7 +124,7 @@ describe('requestHistory tests', () => {
     history.clear();
     expect(Object.keys(history.allHistory).length).to.equal(0);
 
-    await clock.tickAsync(6_000);
+    await clock.tickAsync(6000);
     expect(removeEmitted).to.equal(false);
   });
 
@@ -140,12 +140,12 @@ describe('requestHistory tests', () => {
       timestamp: 0,
     };
 
-    const history = new RequestHistory({ maxAge: 5_000 });
+    const history = new RequestHistory({ maxAge: 5000 });
 
     history.on('requestRemoved', () => { removeEmitted = true; });
 
     history.storeRequest(request);
-    await clock.tickAsync(6_000);
+    await clock.tickAsync(6000);
     expect(removeEmitted).to.equal(true);
   });
 });

@@ -45,7 +45,7 @@ const BACKSTOP_RETRY_INTERVAL_MS = config.policy.backstopRetryIntervalMs;
  * @returns {number}
  */
 function monotonicMs() {
-  return Number(process.hrtime.bigint() / 1000000n);
+  return Number(process.hrtime.bigint() / 1_000_000n);
 }
 
 // The verified payload, or null when this node has never obtained one, and the bytes it was

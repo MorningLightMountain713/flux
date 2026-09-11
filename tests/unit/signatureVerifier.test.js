@@ -180,7 +180,7 @@ describe('signatureVerifier tests', () => {
       expect(signatureVerifier.isValidSigningIdentity('')).to.equal(false);
       expect(signatureVerifier.isValidSigningIdentity(undefined)).to.equal(false);
       expect(signatureVerifier.isValidSigningIdentity(null)).to.equal(false);
-      expect(signatureVerifier.isValidSigningIdentity(12345)).to.equal(false);
+      expect(signatureVerifier.isValidSigningIdentity(12_345)).to.equal(false);
     });
   });
   describe('includesSigningIdentity tests', () => {
@@ -208,7 +208,7 @@ describe('signatureVerifier tests', () => {
 
     // Callers grant a privilege on a true, so anything it cannot read is a false.
     it('answers false for a list that is not one', () => {
-      [null, undefined, 'not-a-list', 12345].forEach((notAList) => {
+      [null, undefined, 'not-a-list', 12_345].forEach((notAList) => {
         expect(signatureVerifier.includesSigningIdentity(notAList, ETH)).to.equal(false);
       });
     });
@@ -240,7 +240,7 @@ describe('signatureVerifier tests', () => {
     });
 
     it('should answer false for anything missing, since callers grant on a true', () => {
-      [['', ''], [FLUX_ID, ''], [undefined, undefined], [null, FLUX_ID], [FLUX_ID, 12345]]
+      [['', ''], [FLUX_ID, ''], [undefined, undefined], [null, FLUX_ID], [FLUX_ID, 12_345]]
         .forEach(([a, b]) => expect(signatureVerifier.sameSigningIdentity(a, b), `${a} ${b}`).to.equal(false));
     });
   });

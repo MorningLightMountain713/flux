@@ -376,7 +376,7 @@ describe('fileSystemManager upload tests', () => {
   // still settling the request's floor stops it too. That second stop reaches the
   // parser, whose promise rejects with it - and an unhandled rejection exits FluxOS.
   it('settles an upload the request floor stops while the executor is still stopping it', async function () {
-    this.timeout(10000);
+    this.timeout(10_000);
     const escaped = [];
     const onRejection = (reason) => escaped.push(reason);
     process.on('unhandledRejection', onRejection);
@@ -487,7 +487,7 @@ describe('fileSystemManager upload tests', () => {
       fileSystemManager.startSlotFloor({
         minBitsPerSecond: 0, windowMs: 1000, getBytes: () => 0, onStall,
       });
-      clock.tick(10000);
+      clock.tick(10_000);
       sinon.assert.notCalled(onStall);
     });
 

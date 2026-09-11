@@ -89,7 +89,7 @@ describe('outboundPathService', () => {
 
       await t.service.checkOnce();
 
-      sinon.assert.calledWith(t.networkStateService.getRandomExternalObserver, LOCAL, { port: 16157, exclude: [] });
+      sinon.assert.calledWith(t.networkStateService.getRandomExternalObserver, LOCAL, { port: 16_157, exclude: [] });
       sinon.assert.calledWith(t.identity.verifyPeer, '1.1.1.1:16157', { fresh: true });
     });
 
@@ -101,7 +101,7 @@ describe('outboundPathService', () => {
 
       const status = t.service.getStatus();
       expect(status.state).to.equal(t.service.OutboundPath.CLEAR);
-      expect(status.port).to.equal(16157);
+      expect(status.port).to.equal(16_157);
       expect(status.since).to.be.a('string');
       sinon.assert.calledWith(t.events.publish, 'outboundPath:clear', sinon.match({ observer: '1.1.1.1:16157', previous: 'unknown' }));
     });
@@ -127,7 +127,7 @@ describe('outboundPathService', () => {
       sinon.assert.calledWith(
         t.networkStateService.getRandomExternalObserver.secondCall,
         LOCAL,
-        { port: 16157, exclude: ['94.59.60.29:16157'] },
+        { port: 16_157, exclude: ['94.59.60.29:16157'] },
       );
     });
 
@@ -146,7 +146,7 @@ describe('outboundPathService', () => {
         ['94.59.60.29:16157', '119.246.12.164:16147'],
         ['1.1.1.1:16157', '119.246.12.164:16157'],
       ]);
-      sinon.assert.calledWith(t.events.publish, 'outboundPath:redirected', sinon.match({ port: 16157 }));
+      sinon.assert.calledWith(t.events.publish, 'outboundPath:redirected', sinon.match({ port: 16_157 }));
       sinon.assert.calledWith(t.log.error, sinon.match(/port 16157.*119\.246\.12\.164:16147, 119\.246\.12\.164:16157/));
     });
 

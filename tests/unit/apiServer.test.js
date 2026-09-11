@@ -535,12 +535,12 @@ describe('handleSigterm drains syncthing folders before it exits', () => {
   // containers included, spends one budget that leaves time to exit.
   it('gives the drain what is left of the stop budget once the containers are stopped', async () => {
     const now = sinon.stub(performance, 'now').returns(1000);
-    stopStub.callsFake(async () => { now.returns(21000); });
+    stopStub.callsFake(async () => { now.returns(21_000); });
 
     await apiServer.handleSigterm();
 
     const budget = PM2_KILL_TIMEOUT_MS - 5000;
-    expect(drainStub.firstCall.args[0], 'the budget less the 20 s the containers took').to.equal(budget - 20000);
+    expect(drainStub.firstCall.args[0], 'the budget less the 20 s the containers took').to.equal(budget - 20_000);
   });
 
   it('gives the drain nothing when the containers took the whole budget', async () => {

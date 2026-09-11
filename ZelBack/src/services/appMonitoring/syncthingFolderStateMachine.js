@@ -31,7 +31,7 @@ const {
 const volumeService = require('../utils/volumeService');
 const { isPathMounted } = volumeService;
 
-const monotonicMs = () => Number(process.hrtime.bigint() / 1000000n);
+const monotonicMs = () => Number(process.hrtime.bigint() / 1_000_000n);
 
 // Per-folder mount-safety observation log gate: a persistent condition writes
 // one line when first seen (re-logged at most every OBSERVATION_RELOG_MS while
@@ -1208,7 +1208,7 @@ async function handleReceiveOnlyTransition(params) {
     }
 
     if (nudgeCount >= STALL_REMOVE_MIN_NUDGES && now - cache.evidenceSince >= STALL_REMOVE_MIN_WINDOW_MS) {
-      log.error(`handleReceiveOnlyTransition - ${appId}: ${nudgeCount} nudges over ${Math.round((now - cache.evidenceSince) / 60000)}m with zero progress and a connected synced peer; this node cannot ingest the data - removing locally (data preserved on peers)`);
+      log.error(`handleReceiveOnlyTransition - ${appId}: ${nudgeCount} nudges over ${Math.round((now - cache.evidenceSince) / 60_000)}m with zero progress and a connected synced peer; this node cannot ingest the data - removing locally (data preserved on peers)`);
       // The whole app, by the name the caller resolved from the installed row: a
       // component identifier here routes removeAppLocally into a component-scoped
       // removal that leaves the app's installed-DB row behind (still broadcast as
@@ -1223,7 +1223,7 @@ async function handleReceiveOnlyTransition(params) {
       return { syncthingFolder, cache };
     }
 
-    log.warn(`handleReceiveOnlyTransition - ${appId} idle with no sync progress for ${Math.round((now - cache.lastProgressAt) / 60000)}m and a connected synced peer; nudging the folder devices (pause/resume #${nudgeCount + 1})`);
+    log.warn(`handleReceiveOnlyTransition - ${appId} idle with no sync progress for ${Math.round((now - cache.lastProgressAt) / 60_000)}m and a connected synced peer; nudging the folder devices (pause/resume #${nudgeCount + 1})`);
     await nudgeFolderDevices(appId);
     cache.nudgeCount = nudgeCount + 1;
     cache.lastNudgeAt = now;
@@ -1236,7 +1236,7 @@ async function handleReceiveOnlyTransition(params) {
     // an operator, or recovery of the status endpoint, resolves it.
     cache.statusUnreadableSince = cache.statusUnreadableSince || Date.now();
     const unreadableMs = Date.now() - cache.statusUnreadableSince;
-    log.warn(`handleReceiveOnlyTransition - ${appId} sync status unreadable for ${Math.round(unreadableMs / 60000)}m; staying receiveonly (will not start on unverified data, will not remove without evidence)`);
+    log.warn(`handleReceiveOnlyTransition - ${appId} sync status unreadable for ${Math.round(unreadableMs / 60_000)}m; staying receiveonly (will not start on unverified data, will not remove without evidence)`);
   }
 
   return { syncthingFolder, cache };

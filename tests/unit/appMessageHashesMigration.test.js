@@ -19,9 +19,9 @@ describe('app message hash boot steps', () => {
   let messages;
   let startup;
   const record = (hash, fields) => ({
-    hash, txid: `tx${hash}`, height: 990548, value: 1, syncAttempts: 0, ...fields,
+    hash, txid: `tx${hash}`, height: 990_548, value: 1, syncAttempts: 0, ...fields,
   });
-  const message = (hash) => ({ type: 'fluxappregister', hash, height: 990548 });
+  const message = (hash) => ({ type: 'fluxappregister', hash, height: 990_548 });
 
   beforeEach(async () => {
     const db = dbHelper.databaseConnection();
@@ -62,9 +62,9 @@ describe('app message hash boot steps', () => {
   describe('restartRetryWindows', () => {
     it('gives every payment not stored a year from its next look, once', async () => {
       await hashes.insertMany([
-        record('givenUp', { message: false, messageNotFound: true, retryFromHeight: 990548, nextRetryHeight: 3068388 }),
-        record('waiting', { message: false, messageNotFound: false, retryFromHeight: 990548, nextRetryHeight: 3068388, syncAttempts: 4 }),
-        record('stored', { message: true, retryFromHeight: 990548 }),
+        record('givenUp', { message: false, messageNotFound: true, retryFromHeight: 990_548, nextRetryHeight: 3_068_388 }),
+        record('waiting', { message: false, messageNotFound: false, retryFromHeight: 990_548, nextRetryHeight: 3_068_388, syncAttempts: 4 }),
+        record('stored', { message: true, retryFromHeight: 990_548 }),
       ]);
 
       expect(await restartRetryWindows()).to.equal(2);
@@ -78,9 +78,9 @@ describe('app message hash boot steps', () => {
         expect(restarted, `${hash} keeps a year counted from its payment`).to.not.have.property('retryFromHeight');
         expect(restarted).to.not.have.property('nextRetryHeight');
       }
-      expect((await hashes.findOne({ hash: 'stored' })).retryFromHeight).to.equal(990548);
+      expect((await hashes.findOne({ hash: 'stored' })).retryFromHeight).to.equal(990_548);
 
-      await hashes.updateOne({ hash: 'givenUp' }, { $set: { messageNotFound: true, retryFromHeight: 3100000 } });
+      await hashes.updateOne({ hash: 'givenUp' }, { $set: { messageNotFound: true, retryFromHeight: 3_100_000 } });
       expect(await restartRetryWindows(), 'restarted again at the next boot').to.equal(0);
       expect((await hashes.findOne({ hash: 'givenUp' })).messageNotFound).to.equal(true);
     });

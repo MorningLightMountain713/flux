@@ -27,8 +27,8 @@ const crypto = require('node:crypto');
 // users, then the top of the range (nobody, distroless nonroot), then the rest.
 const ID_ORDER = Object.freeze([
   [0, 2047],
-  [65520, 65535],
-  [2048, 65519],
+  [65_520, 65_535],
+  [2048, 65_519],
 ]);
 
 // sha256 over the passwd bytes followed by the group bytes.

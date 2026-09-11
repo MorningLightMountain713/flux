@@ -199,7 +199,7 @@ function carryForward(threads, nowMs) {
  * @returns {string}
  */
 function describe(thread) {
-  const minutes = Math.round((thread.intervals * READ_INTERVAL_MS) / 60000);
+  const minutes = Math.round((thread.intervals * READ_INTERVAL_MS) / 60_000);
   return `${thread.process} thread ${thread.tid} has been held in the kernel at ${thread.wchan} for ${minutes} minutes`;
 }
 

@@ -2056,7 +2056,7 @@ describe('fluxService tests', () => {
       Image: 'someregistry.example/private:1.2.3',
       ImageID: 'sha256:0123456789abcdef',
       Command: '/entrypoint.sh --serve',
-      Ports: [{ PrivatePort: 8080, PublicPort: 31000, Type: 'tcp' }],
+      Ports: [{ PrivatePort: 8080, PublicPort: 31_000, Type: 'tcp' }],
       Labels: { 'org.opencontainers.image.revision': 'a1b2c3d4' },
       State: 'running',
       Status: 'Up 2 hours',
@@ -2081,7 +2081,7 @@ describe('fluxService tests', () => {
       // on the projection rather than on the field it is about.
       appsServiceListRunningAppsStub.returns({ status: 'success', data: [runningContainer] });
       appsServiceAppsResourcesStub.returns({ status: 'success', data: { ...lockedResources } });
-      appsServiceGetAppHashesStub.returns({ status: 'success', data: [{ height: 694000, message: true }] });
+      appsServiceGetAppHashesStub.returns({ status: 'success', data: [{ height: 694_000, message: true }] });
       explorerServiceStub.returns({ status: 'success', data: 'getScannedHeight data' });
       fluxCommunicationStub.returns({ status: 'success', data: 'connectedPeersInfo data' });
       fluxNetworkHelperStub.returns({ status: 'success', data: 'getIncomingConnectionsInfo data' });
@@ -2101,7 +2101,7 @@ describe('fluxService tests', () => {
       appsServiceFluxUsageStub.returns({ status: 'success', data: 'usage data' });
       appsServiceListRunningAppsStub.returns({ status: 'success', data: [runningContainer] });
       appsServiceAppsResourcesStub.returns({ status: 'success', data: { ...lockedResources } });
-      appsServiceGetAppHashesStub.returns({ status: 'success', data: [{ height: 694000, message: true }] });
+      appsServiceGetAppHashesStub.returns({ status: 'success', data: [{ height: 694_000, message: true }] });
       explorerServiceStub.returns({ status: 'success', data: 'getScannedHeight data' });
       fluxCommunicationStub.returns({ status: 'success', data: 'connectedPeersInfo data' });
       fluxNetworkHelperStub.returns({ status: 'success', data: 'getIncomingConnectionsInfo data' });
@@ -2150,7 +2150,7 @@ describe('fluxService tests', () => {
       appsServiceFluxUsageStub.returns({ status: 'success', data: 'usage data' });
       appsServiceListRunningAppsStub.returns({ status: 'success', data: [runningContainer] });
       appsServiceAppsResourcesStub.returns({ status: 'success', data: { ...lockedResources } });
-      appsServiceGetAppHashesStub.returns({ status: 'success', data: [{ height: 694000, message: true }] });
+      appsServiceGetAppHashesStub.returns({ status: 'success', data: [{ height: 694_000, message: true }] });
       explorerServiceStub.returns({ status: 'success', data: 'getScannedHeight data' });
       fluxCommunicationStub.returns({ status: 'success', data: 'connectedPeersInfo data' });
       fluxNetworkHelperStub.returns({ status: 'success', data: 'getIncomingConnectionsInfo data' });
@@ -2202,7 +2202,7 @@ describe('fluxService tests', () => {
       appsServiceFluxUsageStub.returns({ status: 'success', data: 'usage data' });
       appsServiceListRunningAppsStub.returns({ status: 'success', data: [runningContainer] });
       appsServiceAppsResourcesStub.returns({ status: 'success', data: { ...lockedResources } });
-      appsServiceGetAppHashesStub.returns({ status: 'success', data: [{ height: 694000, message: true }] });
+      appsServiceGetAppHashesStub.returns({ status: 'success', data: [{ height: 694_000, message: true }] });
       explorerServiceStub.returns({ status: 'success', data: 'getScannedHeight data' });
       fluxCommunicationStub.returns({ status: 'success', data: 'connectedPeersInfo data' });
       fluxNetworkHelperStub.returns({ status: 'success', data: 'getIncomingConnectionsInfo data' });
@@ -2226,7 +2226,7 @@ describe('fluxService tests', () => {
       appsServiceFluxUsageStub.returns({ status: 'success', data: 'usage data' });
       appsServiceListRunningAppsStub.returns({ status: 'success', data: [runningContainer] });
       appsServiceAppsResourcesStub.returns({ status: 'success', data: { ...lockedResources } });
-      appsServiceGetAppHashesStub.returns({ status: 'success', data: [{ height: 694000, message: true }] });
+      appsServiceGetAppHashesStub.returns({ status: 'success', data: [{ height: 694_000, message: true }] });
       explorerServiceStub.returns({ status: 'success', data: 'getScannedHeight data' });
       fluxCommunicationStub.returns({ status: 'success', data: 'connectedPeersInfo data' });
       fluxNetworkHelperStub.returns({ status: 'success', data: 'getIncomingConnectionsInfo data' });
@@ -2248,7 +2248,7 @@ describe('fluxService tests', () => {
       appsServiceFluxUsageStub.returns({ status: 'success', data: 'usage data' });
       appsServiceListRunningAppsStub.returns({ status: 'success', data: [runningContainer] });
       appsServiceAppsResourcesStub.returns({ status: 'success', data: { ...lockedResources } });
-      appsServiceGetAppHashesStub.returns({ status: 'success', data: [{ height: 694000, message: true }] });
+      appsServiceGetAppHashesStub.returns({ status: 'success', data: [{ height: 694_000, message: true }] });
       explorerServiceStub.returns({ status: 'success', data: 'getScannedHeight data' });
       fluxCommunicationStub.returns({ status: 'success', data: 'connectedPeersInfo data' });
       fluxNetworkHelperStub.returns({ status: 'success', data: 'getIncomingConnectionsInfo data' });
@@ -2273,7 +2273,7 @@ describe('fluxService tests', () => {
       appsServiceFluxUsageStub.returns({ status: 'success', data: 'usage data' });
       appsServiceListRunningAppsStub.returns({ status: 'success', data: [runningContainer] });
       appsServiceAppsResourcesStub.returns({ status: 'success', data: { ...lockedResources } });
-      appsServiceGetAppHashesStub.returns({ status: 'success', data: [{ height: 694000, message: true }] });
+      appsServiceGetAppHashesStub.returns({ status: 'success', data: [{ height: 694_000, message: true }] });
       explorerServiceStub.returns({ status: 'success', data: 'getScannedHeight data' });
       fluxCommunicationStub.returns({ status: 'success', data: 'connectedPeersInfo data' });
       fluxNetworkHelperStub.returns({ status: 'success', data: 'getIncomingConnectionsInfo data' });
@@ -2298,7 +2298,7 @@ describe('fluxService tests', () => {
       appsServiceFluxUsageStub.returns({ status: 'success', data: 'usage data' });
       appsServiceListRunningAppsStub.returns({ status: 'success', data: [runningContainer] });
       appsServiceAppsResourcesStub.returns({ status: 'success', data: { ...lockedResources } });
-      appsServiceGetAppHashesStub.returns({ status: 'success', data: [{ height: 694000, message: true }] });
+      appsServiceGetAppHashesStub.returns({ status: 'success', data: [{ height: 694_000, message: true }] });
       explorerServiceStub.returns({ status: 'success', data: 'getScannedHeight data' });
       fluxCommunicationStub.returns({ status: 'success', data: 'connectedPeersInfo data' });
       fluxNetworkHelperStub.returns({ status: 'success', data: 'getIncomingConnectionsInfo data' });
@@ -2323,7 +2323,7 @@ describe('fluxService tests', () => {
       appsServiceFluxUsageStub.returns({ status: 'success', data: 'usage data' });
       appsServiceListRunningAppsStub.returns({ status: 'success', data: [runningContainer] });
       appsServiceAppsResourcesStub.returns({ status: 'success', data: { ...lockedResources } });
-      appsServiceGetAppHashesStub.returns({ status: 'success', data: [{ height: 694000, message: true }] });
+      appsServiceGetAppHashesStub.returns({ status: 'success', data: [{ height: 694_000, message: true }] });
       explorerServiceStub.returns({ status: 'success', data: 'getScannedHeight data' });
       fluxCommunicationStub.returns({ status: 'success', data: 'connectedPeersInfo data' });
       fluxNetworkHelperStub.returns({ status: 'success', data: 'getIncomingConnectionsInfo data' });
@@ -2348,7 +2348,7 @@ describe('fluxService tests', () => {
       appsServiceFluxUsageStub.returns({ status: 'success', data: 'usage data' });
       appsServiceListRunningAppsStub.returns({ status: 'success', data: [runningContainer] });
       appsServiceAppsResourcesStub.returns({ status: 'success', data: { ...lockedResources } });
-      appsServiceGetAppHashesStub.returns({ status: 'success', data: [{ height: 694000, message: true }] });
+      appsServiceGetAppHashesStub.returns({ status: 'success', data: [{ height: 694_000, message: true }] });
       explorerServiceStub.returns({ status: 'success', data: 'getScannedHeight data' });
       fluxCommunicationStub.returns({ status: 'success', data: 'connectedPeersInfo data' });
       fluxNetworkHelperStub.returns({ status: 'success', data: 'getIncomingConnectionsInfo data' });
@@ -2373,7 +2373,7 @@ describe('fluxService tests', () => {
       appsServiceFluxUsageStub.returns({ status: 'error', data: 'usage data' });
       appsServiceListRunningAppsStub.returns({ status: 'success', data: [runningContainer] });
       appsServiceAppsResourcesStub.returns({ status: 'success', data: { ...lockedResources } });
-      appsServiceGetAppHashesStub.returns({ status: 'success', data: [{ height: 694000, message: true }] });
+      appsServiceGetAppHashesStub.returns({ status: 'success', data: [{ height: 694_000, message: true }] });
       explorerServiceStub.returns({ status: 'success', data: 'getScannedHeight data' });
       fluxCommunicationStub.returns({ status: 'success', data: 'connectedPeersInfo data' });
       fluxNetworkHelperStub.returns({ status: 'success', data: 'getIncomingConnectionsInfo data' });
@@ -2398,7 +2398,7 @@ describe('fluxService tests', () => {
       appsServiceFluxUsageStub.returns({ status: 'success', data: 'usage data' });
       appsServiceListRunningAppsStub.returns({ status: 'error', data: 'listRunningApps data' });
       appsServiceAppsResourcesStub.returns({ status: 'success', data: { ...lockedResources } });
-      appsServiceGetAppHashesStub.returns({ status: 'success', data: [{ height: 694000, message: true }] });
+      appsServiceGetAppHashesStub.returns({ status: 'success', data: [{ height: 694_000, message: true }] });
       explorerServiceStub.returns({ status: 'success', data: 'getScannedHeight data' });
       fluxCommunicationStub.returns({ status: 'success', data: 'connectedPeersInfo data' });
       fluxNetworkHelperStub.returns({ status: 'success', data: 'getIncomingConnectionsInfo data' });
@@ -2423,7 +2423,7 @@ describe('fluxService tests', () => {
       appsServiceFluxUsageStub.returns({ status: 'success', data: 'usage data' });
       appsServiceListRunningAppsStub.returns({ status: 'success', data: [runningContainer] });
       appsServiceAppsResourcesStub.rejects(new Error('appsResources data'));
-      appsServiceGetAppHashesStub.returns({ status: 'success', data: [{ height: 694000, message: true }] });
+      appsServiceGetAppHashesStub.returns({ status: 'success', data: [{ height: 694_000, message: true }] });
       explorerServiceStub.returns({ status: 'success', data: 'getScannedHeight data' });
       fluxCommunicationStub.returns({ status: 'success', data: 'connectedPeersInfo data' });
       fluxNetworkHelperStub.returns({ status: 'success', data: 'getIncomingConnectionsInfo data' });
@@ -2473,7 +2473,7 @@ describe('fluxService tests', () => {
       appsServiceFluxUsageStub.returns({ status: 'success', data: 'usage data' });
       appsServiceListRunningAppsStub.returns({ status: 'success', data: [runningContainer] });
       appsServiceAppsResourcesStub.returns({ status: 'success', data: { ...lockedResources } });
-      appsServiceGetAppHashesStub.returns({ status: 'success', data: [{ height: 694000, message: true }] });
+      appsServiceGetAppHashesStub.returns({ status: 'success', data: [{ height: 694_000, message: true }] });
       explorerServiceStub.returns({ status: 'error', data: 'getScannedHeight data' });
       fluxCommunicationStub.returns({ status: 'success', data: 'connectedPeersInfo data' });
       fluxNetworkHelperStub.returns({ status: 'success', data: 'getIncomingConnectionsInfo data' });
@@ -2498,7 +2498,7 @@ describe('fluxService tests', () => {
       appsServiceFluxUsageStub.returns({ status: 'success', data: 'usage data' });
       appsServiceListRunningAppsStub.returns({ status: 'success', data: [runningContainer] });
       appsServiceAppsResourcesStub.returns({ status: 'success', data: { ...lockedResources } });
-      appsServiceGetAppHashesStub.returns({ status: 'success', data: [{ height: 694000, message: true }] });
+      appsServiceGetAppHashesStub.returns({ status: 'success', data: [{ height: 694_000, message: true }] });
       explorerServiceStub.returns({ status: 'success', data: 'getScannedHeight data' });
       fluxCommunicationStub.returns({ status: 'error', data: 'connectedPeersInfo data' });
       fluxNetworkHelperStub.returns({ status: 'success', data: 'getIncomingConnectionsInfo data' });
@@ -2523,7 +2523,7 @@ describe('fluxService tests', () => {
       appsServiceFluxUsageStub.returns({ status: 'success', data: 'usage data' });
       appsServiceListRunningAppsStub.returns({ status: 'success', data: [runningContainer] });
       appsServiceAppsResourcesStub.returns({ status: 'success', data: { ...lockedResources } });
-      appsServiceGetAppHashesStub.returns({ status: 'success', data: [{ height: 694000, message: true }] });
+      appsServiceGetAppHashesStub.returns({ status: 'success', data: [{ height: 694_000, message: true }] });
       explorerServiceStub.returns({ status: 'success', data: 'getScannedHeight data' });
       fluxCommunicationStub.returns({ status: 'success', data: 'connectedPeersInfo data' });
       fluxNetworkHelperStub.returns({ status: 'error', data: 'getIncomingConnectionsInfo data' });
@@ -2594,12 +2594,12 @@ describe('fluxService tests', () => {
     // test at all. A port distinct from the fixture default, because asserting
     // the default would pass whether or not the value was ever read.
     it('should read back the configured api port', () => {
-      globalThis.userconfig = testUserconfig({ apiport: 26127 });
+      globalThis.userconfig = testUserconfig({ apiport: 26_127 });
       const res = generateResponse();
 
       fluxService.getAPIPort(undefined, res);
 
-      sinon.assert.calledOnceWithMatch(res.json, { status: 'success', data: 26127 });
+      sinon.assert.calledOnceWithMatch(res.json, { status: 'success', data: 26_127 });
     });
 
     // The port also lives in fluxbench's own config, which FluxOS cannot write, and
@@ -2608,7 +2608,7 @@ describe('fluxService tests', () => {
     it('should refuse to adjust the api port, naming where it is set', async () => {
       const res = generateResponse();
 
-      await fluxService.adjustAPIPort({ params: { apiport: 16137 } }, res);
+      await fluxService.adjustAPIPort({ params: { apiport: 16_137 } }, res);
 
       sinon.assert.calledOnce(res.json);
       const [reply] = res.json.firstCall.args;
@@ -2692,7 +2692,7 @@ describe('fluxService tests', () => {
     });
 
     it('should return cumulus for a collateral of 10000', async () => {
-      collateralTierStub.resolves({ collateral: 10000, tier: generalService.COLLATERAL_TIERS[10000] });
+      collateralTierStub.resolves({ collateral: 10_000, tier: generalService.COLLATERAL_TIERS[10_000] });
       const res = generateResponse();
       const expectedResponse = { status: 'success', data: 'cumulus' };
 
@@ -2702,7 +2702,7 @@ describe('fluxService tests', () => {
     });
 
     it('should return nimbus for a collateral of 25000', async () => {
-      collateralTierStub.resolves({ collateral: 25000, tier: generalService.COLLATERAL_TIERS[25000] });
+      collateralTierStub.resolves({ collateral: 25_000, tier: generalService.COLLATERAL_TIERS[25_000] });
       const res = generateResponse();
       const expectedResponse = { status: 'success', data: 'nimbus' };
 
@@ -2712,7 +2712,7 @@ describe('fluxService tests', () => {
     });
 
     it('should return stratus for a collateral of 100000', async () => {
-      collateralTierStub.resolves({ collateral: 100000, tier: generalService.COLLATERAL_TIERS[100000] });
+      collateralTierStub.resolves({ collateral: 100_000, tier: generalService.COLLATERAL_TIERS[100_000] });
       const res = generateResponse();
       const expectedResponse = { status: 'success', data: 'stratus' };
 
@@ -2732,7 +2732,7 @@ describe('fluxService tests', () => {
     });
 
     it('should return nimbus_new for a collateral of 12500', async () => {
-      collateralTierStub.resolves({ collateral: 12500, tier: generalService.COLLATERAL_TIERS[12500] });
+      collateralTierStub.resolves({ collateral: 12_500, tier: generalService.COLLATERAL_TIERS[12_500] });
       const res = generateResponse();
       const expectedResponse = { status: 'success', data: 'nimbus_new' };
 
@@ -2742,7 +2742,7 @@ describe('fluxService tests', () => {
     });
 
     it('should return stratus_new for a collateral of 40000', async () => {
-      collateralTierStub.resolves({ collateral: 40000, tier: generalService.COLLATERAL_TIERS[40000] });
+      collateralTierStub.resolves({ collateral: 40_000, tier: generalService.COLLATERAL_TIERS[40_000] });
       const res = generateResponse();
       const expectedResponse = { status: 'success', data: 'stratus_new' };
 
@@ -2870,7 +2870,7 @@ describe('fluxService tests', () => {
 
       osStub.returns('/home/testuser');
       fsPromisesStubs.stat.resolves({ isDirectory: () => true });
-      daemonServiceUtilsStub.resolves({ run: async () => 123456 });
+      daemonServiceUtilsStub.resolves({ run: async () => 123_456 });
 
       await fluxService.streamChain(req, res);
 
@@ -2911,7 +2911,7 @@ describe('fluxService tests', () => {
       });
 
       const folderCount = 3;
-      const testFileSize = 1048576;
+      const testFileSize = 1_048_576;
       const testFiles = [...Array(50).keys()].map((x) => createFile(x.toString()));
       const headerSize = testFiles.length * 512 * folderCount;
       const eof = 1024;
@@ -3519,7 +3519,7 @@ describe('fluxService tests', () => {
 
     it('leaves FluxOS running when the checkout did not move', async () => {
       expect(await fluxService.runNewCode('aaa1111')).to.equal(false);
-      await clock.tickAsync(10000);
+      await clock.tickAsync(10_000);
       expect(pm2Restarts()).to.have.length(0);
     });
 
@@ -3528,7 +3528,7 @@ describe('fluxService tests', () => {
       heads = ['bbb2222'];
 
       expect(await fluxService.runNewCode('aaa1111')).to.equal(false);
-      await clock.tickAsync(10000);
+      await clock.tickAsync(10_000);
       expect(pm2Restarts()).to.have.length(0);
     });
 

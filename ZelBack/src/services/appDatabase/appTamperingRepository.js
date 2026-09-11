@@ -60,7 +60,7 @@ async function upsertIncident(query, update) {
       database, tamperingEventsCollection, query, update, { upsert: true },
     );
   } catch (error) {
-    if (error && error.code === 11000) {
+    if (error && error.code === 11_000) {
       result = await dbHelper.findOneAndUpdateInDatabase(
         database, tamperingEventsCollection, query, update, { upsert: true },
       );

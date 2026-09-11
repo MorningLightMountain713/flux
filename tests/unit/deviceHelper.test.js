@@ -45,13 +45,13 @@ describe('deviceHelper tests', () => {
     const findmntJson = JSON.stringify({
       filesystems: [
         {
-          source: '/dev/mapper/os_crypt', target: '/mnt/root', fstype: 'ext4', size: 16780226560, used: 5301342208, avail: 10603954176, 'use%': '32%',
+          source: '/dev/mapper/os_crypt', target: '/mnt/root', fstype: 'ext4', size: 16_780_226_560, used: 5_301_342_208, avail: 10_603_954_176, 'use%': '32%',
         },
         {
-          source: '/dev/mapper/flux_crypt', target: '/dat', fstype: 'xfs', size: 926165774336, used: 349526016000, avail: 576639758336, 'use%': '38%',
+          source: '/dev/mapper/flux_crypt', target: '/dat', fstype: 'xfs', size: 926_165_774_336, used: 349_526_016_000, avail: 576_639_758_336, 'use%': '38%',
         },
         {
-          source: '/dev/loop2', target: '/dat/var/lib/fluxos/flux-apps/fluxnode_PresearchNode1', fstype: 'ext4', size: 2040373248, used: 565248, avail: 1915658240, 'use%': '0%',
+          source: '/dev/loop2', target: '/dat/var/lib/fluxos/flux-apps/fluxnode_PresearchNode1', fstype: 'ext4', size: 2_040_373_248, used: 565_248, avail: 1_915_658_240, 'use%': '0%',
         },
       ],
     });
@@ -67,13 +67,13 @@ describe('deviceHelper tests', () => {
       });
       expect(response).to.eql([
         {
-          source: '/dev/mapper/os_crypt', target: '/mnt/root', fstype: 'ext4', sizeBytes: 16780226560, usedBytes: 5301342208, availableBytes: 10603954176, usePercent: 32,
+          source: '/dev/mapper/os_crypt', target: '/mnt/root', fstype: 'ext4', sizeBytes: 16_780_226_560, usedBytes: 5_301_342_208, availableBytes: 10_603_954_176, usePercent: 32,
         },
         {
-          source: '/dev/mapper/flux_crypt', target: '/dat', fstype: 'xfs', sizeBytes: 926165774336, usedBytes: 349526016000, availableBytes: 576639758336, usePercent: 38,
+          source: '/dev/mapper/flux_crypt', target: '/dat', fstype: 'xfs', sizeBytes: 926_165_774_336, usedBytes: 349_526_016_000, availableBytes: 576_639_758_336, usePercent: 38,
         },
         {
-          source: '/dev/loop2', target: '/dat/var/lib/fluxos/flux-apps/fluxnode_PresearchNode1', fstype: 'ext4', sizeBytes: 2040373248, usedBytes: 565248, availableBytes: 1915658240, usePercent: 0,
+          source: '/dev/loop2', target: '/dat/var/lib/fluxos/flux-apps/fluxnode_PresearchNode1', fstype: 'ext4', sizeBytes: 2_040_373_248, usedBytes: 565_248, availableBytes: 1_915_658_240, usePercent: 0,
         },
       ]);
     });

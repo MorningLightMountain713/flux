@@ -29,7 +29,7 @@ describe('numericIdTables', () => {
     expect(misnamedPasswd, 'passwd lines not named by their id').to.deep.equal([]);
     expect(misnamedGroup, 'group lines not named by their id').to.deep.equal([]);
 
-    const every = Array.from({ length: 65536 }, (_, id) => id);
+    const every = Array.from({ length: 65_536 }, (_, id) => id);
     const ids = (lines, field) => lines.map((line) => Number(line.split(':')[field])).sort((a, b) => a - b);
     expect(ids(numbered(passwdLines), 2)).to.deep.equal(every);
     expect(ids(numbered(groupLines), 2)).to.deep.equal(every);
@@ -48,9 +48,9 @@ describe('numericIdTables', () => {
     const position = (id) => numbered(passwdLines).findIndex((line) => line.startsWith(`${id}:`));
     expect(position(0)).to.equal(0);
     expect(position(2047)).to.equal(2047);
-    expect(position(65534), 'nobody').to.equal(2048 + 14);
+    expect(position(65_534), 'nobody').to.equal(2048 + 14);
     expect(position(2048)).to.equal(2048 + 16);
-    expect(ID_ORDER).to.deep.equal([[0, 2047], [65520, 65535], [2048, 65519]]);
+    expect(ID_ORDER).to.deep.equal([[0, 2047], [65_520, 65_535], [2048, 65_519]]);
   });
 
   it('gives each line the seven passwd fields and four group fields a reader requires', () => {

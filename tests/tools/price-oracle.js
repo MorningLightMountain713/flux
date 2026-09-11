@@ -87,21 +87,21 @@ for (const f of [CORPUS, V9_CORPUS]) {
     process.exit(2);
   }
 }
-const HEIGHT = 2700000;
-const PREV_HEIGHT = 2699000;
-const FIXED_NOW = 1750000000000; // pinned so Date.now() cannot vary the dump
+const HEIGHT = 2_700_000;
+const PREV_HEIGHT = 2_699_000;
+const FIXED_NOW = 1_750_000_000_000; // pinned so Date.now() cannot vary the dump
 
 // Rates rich enough to exercise every branch of the v9 engine.
 const V9_RATES = {
-  cpuRate: 142857,
-  memoryRate: 47619,
-  storageRate: 19048,
+  cpuRate: 142_857,
+  memoryRate: 47_619,
+  storageRate: 19_048,
   stdPortRate: 0,
-  premPortRate: 1904762,
-  staticIpRate: 1904762,
-  minPrice: 942857,
-  minPriceFluxSats: 1000000,
-  standardPeriodSeconds: 2640000,
+  premPortRate: 1_904_762,
+  staticIpRate: 1_904_762,
+  minPrice: 942_857,
+  minPriceFluxSats: 1_000_000,
+  standardPeriodSeconds: 2_640_000,
 };
 
 async function main() {
@@ -118,7 +118,7 @@ async function main() {
   sinon.stub(priceOracleState, 'getPriceMessageHistory')
     .returns({ resolveAt: () => V9_RATES });
   sinon.stub(priceOracleState, 'getRateMessageHistory')
-    .returns({ resolveAt: () => ({ fluxUsdPriceE4: 10000 }) });
+    .returns({ resolveAt: () => ({ fluxUsdPriceE4: 10_000 }) });
   sinon.stub(priceOracleState, 'getPriceModifierHistory')
     .returns({ resolveAt: () => ({ fiatMarkupBp: 500, updateDiscountBp: 250 }) });
   sinon.stub(priceOracleState, 'getMarketplacePricingHistory').returns(null);
@@ -138,7 +138,7 @@ async function main() {
     }
     if (url.includes('marketplace/listapps')) return { data: { status: 'success', data: [] } };
     // fiat rates: [ [ {code, rate} ], { FLUX } ]
-    return { data: [[{ code: 'USD', rate: 60000 }], { FLUX: 0.00001 }] };
+    return { data: [[{ code: 'USD', rate: 60_000 }], { FLUX: 0.000_01 }] };
   });
 
   const appSpecHelpers = require(REPO + '/ZelBack/src/services/utils/appSpecHelpers');

@@ -316,7 +316,7 @@ describe('syncthing folder writes', () => {
 
       await syncthingFolderWrites.changeSyncthingFolderType('fluxprobe_app', 'receiveonly', { scanFirst: true });
 
-      sinon.assert.calledOnceWithExactly(scan, 'fluxprobe_app', { timeoutMs: 600000 });
+      sinon.assert.calledOnceWithExactly(scan, 'fluxprobe_app', { timeoutMs: 600_000 });
     });
 
     it('does not hold the folder\'s other writes while it scans', async () => {

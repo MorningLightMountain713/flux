@@ -55,7 +55,7 @@ describe('nodeCapabilities tests', () => {
 
     it('treats a method-not-found from an older daemon as a definitive legacy verdict', async () => {
       sinon.stub(benchmarkService, 'getStatus').resolves({ status: 'success', data: {} });
-      sinon.stub(benchmarkService, 'getNodeType').resolves({ status: 'error', data: { code: -32601, message: 'Method not found' } });
+      sinon.stub(benchmarkService, 'getNodeType').resolves({ status: 'error', data: { code: -32_601, message: 'Method not found' } });
 
       const result = await nodeCapabilities.probeOnce();
 

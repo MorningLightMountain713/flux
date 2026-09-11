@@ -248,7 +248,7 @@ describe('fluxCommunication tests', () => {
       };
       const type = 'fluxappregister';
       const version = 1;
-      const timestamp = 1592988806887;
+      const timestamp = 1_592_988_806_887;
       const messageToSign = type + version + JSON.stringify(appSpecifications) + timestamp;
       const signature = verificationHelper.signMessage(messageToSign, privateKey);
       const messageToHash = type + version + JSON.stringify(appSpecifications) + timestamp + signature;
@@ -290,7 +290,7 @@ describe('fluxCommunication tests', () => {
       await fluxCommunication.handleAppMessages(message, fromIp, port);
 
       sinon.assert.calledOnceWithExactly(relaySpy, messageString, `${fromIp}:${port}`);
-    }).timeout(10000);
+    }).timeout(10_000);
 
     it('should not send broadcast if signature is invalid', async () => {
       const fromIp = '127.0.0.5';
@@ -329,7 +329,7 @@ describe('fluxCommunication tests', () => {
       };
       const type = 'fluxappregister';
       const version = 1;
-      const timestamp = 1592988806887;
+      const timestamp = 1_592_988_806_887;
       const signature = 'testing1234invalidsignature';
       const messageToHash = type + version + JSON.stringify(appSpecifications) + timestamp + signature;
       const hash = await generalService.messageHash(messageToHash);
@@ -359,7 +359,7 @@ describe('fluxCommunication tests', () => {
       };
       const type = 'fluxappregister';
       const version = 1;
-      const timestamp = 1592988806887;
+      const timestamp = 1_592_988_806_887;
       const messageToSign = type + version + JSON.stringify(appSpecifications) + timestamp;
       const signature = verificationHelper.signMessage(messageToSign, privateKey);
       const messageToHash = type + version + JSON.stringify(appSpecifications) + timestamp + signature;
@@ -429,7 +429,7 @@ describe('fluxCommunication tests', () => {
       await fluxCommunication.handleAppRunningMessage(message, fromIp, port);
 
       sinon.assert.calledOnceWithExactly(relaySpy, messageString, `${fromIp}:${port}`);
-    }).timeout(10000);
+    }).timeout(10_000);
 
     it('should not send broadcast if message is older than 3900 seconds', async () => {
       const fromIp = '127.0.0.5';
@@ -437,7 +437,7 @@ describe('fluxCommunication tests', () => {
       const type = 'fluxappregister';
       const name = 'myApp';
       const version = 1;
-      const timestamp = 1592988806887;
+      const timestamp = 1_592_988_806_887;
       const broadcastedAt = Date.now() - (80 * 60 * 1000);
       const messageToHash = type + version + name + timestamp;
       const hash = await generalService.messageHash(messageToHash);
@@ -758,7 +758,7 @@ describe('fluxCommunication tests', () => {
       const req = {
         params: {
           ip: '127.0.3.1',
-          port: 16127,
+          port: 16_127,
         },
       };
 
@@ -791,7 +791,7 @@ describe('fluxCommunication tests', () => {
         },
         query: {
           ip: '127.0.3.1',
-          port: 16127,
+          port: 16_127,
         },
       };
 
@@ -823,7 +823,7 @@ describe('fluxCommunication tests', () => {
       const req = {
         params: {
           ip: '127.0.3.1',
-          port: 16127,
+          port: 16_127,
         },
       };
 
@@ -885,7 +885,7 @@ describe('fluxCommunication tests', () => {
       const req = {
         params: {
           ip: '127.0.3.1',
-          port: 16127,
+          port: 16_127,
         },
       };
 
@@ -942,7 +942,7 @@ describe('fluxCommunication tests', () => {
       const req = {
         params: {
           ip: '127.0.3.1',
-          port: 16127,
+          port: 16_127,
         },
       };
 
@@ -975,7 +975,7 @@ describe('fluxCommunication tests', () => {
         },
         query: {
           ip: '127.0.3.1',
-          port: 16127,
+          port: 16_127,
         },
       };
 
@@ -1005,7 +1005,7 @@ describe('fluxCommunication tests', () => {
       const req = {
         params: {
           ip: '127.0.4.1',
-          port: 16127,
+          port: 16_127,
         },
       };
 
@@ -1327,7 +1327,7 @@ describe('fluxCommunication tests', () => {
         };
       });
       const ip = '127.0.0.2';
-      wsserver = new WebSocket.Server({ host: '127.0.0.2', port: 16127 });
+      wsserver = new WebSocket.Server({ host: '127.0.0.2', port: 16_127 });
       daemonServiceMiscRpcsStub.returns({
         data:
         {
@@ -1361,7 +1361,7 @@ describe('fluxCommunication tests', () => {
         };
       });
       const ip = '127.0.0.2';
-      wsserver = new WebSocket.Server({ host: '127.0.0.2', port: 16127 });
+      wsserver = new WebSocket.Server({ host: '127.0.0.2', port: 16_127 });
       daemonServiceMiscRpcsStub.returns({
         data:
         {
@@ -1413,7 +1413,7 @@ describe('fluxCommunication tests', () => {
         };
       });
       const ip = '127.0.0.2';
-      wsserver = new WebSocket.Server({ host: '127.0.0.2', port: 16127 });
+      wsserver = new WebSocket.Server({ host: '127.0.0.2', port: 16_127 });
       daemonServiceMiscRpcsStub.returns({
         data:
         {
@@ -1452,7 +1452,7 @@ describe('fluxCommunication tests', () => {
         };
       });
       const ip = '127.0.0.2';
-      wsserver = new WebSocket.Server({ host: '127.0.0.2', port: 16127 });
+      wsserver = new WebSocket.Server({ host: '127.0.0.2', port: 16_127 });
       daemonServiceMiscRpcsStub.returns({
         data:
         {
@@ -1503,7 +1503,7 @@ describe('fluxCommunication tests', () => {
           };
         });
         const ip = '127.0.0.2';
-        wsserver = new WebSocket.Server({ host: '127.0.0.2', port: 16127 });
+        wsserver = new WebSocket.Server({ host: '127.0.0.2', port: 16_127 });
         lruRateLimitStub.returns(true);
         sinon.stub(FluxTTLCache.prototype, 'has').returns(false);
         const verifyFluxBroadcastStub = sinon.stub(fluxCommunicationUtils, 'verifyFluxBroadcast').returns({ result: fluxCommunicationUtils.VerifyResult.OK, announcer: null });
@@ -1551,7 +1551,7 @@ describe('fluxCommunication tests', () => {
           };
         });
         const ip = '127.0.0.2';
-        wsserver = new WebSocket.Server({ host: '127.0.0.2', port: 16127 });
+        wsserver = new WebSocket.Server({ host: '127.0.0.2', port: 16_127 });
         lruRateLimitStub.returns(true);
         sinon.stub(FluxTTLCache.prototype, 'has').returns(false);
         const verifyFluxBroadcast = sinon.stub(fluxCommunicationUtils, 'verifyFluxBroadcast').returns({ result: fluxCommunicationUtils.VerifyResult.OK, announcer: null });
@@ -1599,7 +1599,7 @@ describe('fluxCommunication tests', () => {
           };
         });
         const ip = '127.0.0.2';
-        wsserver = new WebSocket.Server({ host: '127.0.0.2', port: 16127 });
+        wsserver = new WebSocket.Server({ host: '127.0.0.2', port: 16_127 });
         lruRateLimitStub.returns(true);
         sinon.stub(FluxTTLCache.prototype, 'has').returns(false);
         const verifyFluxBroadcast = sinon.stub(fluxCommunicationUtils, 'verifyFluxBroadcast').returns({ result: fluxCommunicationUtils.VerifyResult.OK, announcer: null });
@@ -1974,7 +1974,7 @@ describe('fluxCommunication tests', () => {
     it('records a synced move, as a move that arrives by gossip is', async () => {
       const NEW = '198.51.100.40:16127';
       const data = {
-        type: 'fluxipchanged', version: 1, oldIP: SENDER, newIP: NEW, broadcastedAt: Date.now() - 60000,
+        type: 'fluxipchanged', version: 1, oldIP: SENDER, newIP: NEW, broadcastedAt: Date.now() - 60_000,
       };
 
       await fluxCommunication.handleAppRunningSyncResponse({
@@ -1988,7 +1988,7 @@ describe('fluxCommunication tests', () => {
       const NEW = '198.51.100.40:16127';
       networkStateService.getFluxnodeBySocketAddress.callsFake(async (address) => (address === NEW ? { pubkey: 'PUB' } : { pubkey: 'OTHER' }));
       const data = {
-        type: 'fluxipchanged', version: 1, oldIP: SENDER, newIP: NEW, broadcastedAt: Date.now() - 60000,
+        type: 'fluxipchanged', version: 1, oldIP: SENDER, newIP: NEW, broadcastedAt: Date.now() - 60_000,
       };
 
       await fluxCommunication.handleAppRunningSyncResponse({
@@ -2570,7 +2570,7 @@ describe('fluxCommunication tests', () => {
           messages: [{
             type: 'apprunning',
             envelope: {
-              version: 1, pubKey: 'unknownnodepubkey', timestamp: 1700000000000, signature: 'sig',
+              version: 1, pubKey: 'unknownnodepubkey', timestamp: 1_700_000_000_000, signature: 'sig',
             },
             data: { type: 'fluxapprunning', name: 'someapp', ip: '1.2.3.4' },
           }],
@@ -2609,25 +2609,25 @@ describe('fluxCommunication tests', () => {
 
     it('stores its own move as the signed ipchanged event its peers store, and carries its rows to the new address', async () => {
       sinon.stub(fluxCommunicationMessagesSender, 'serialiseAndSignFluxBroadcast').callsFake(async (data) => JSON.stringify({
-        version: 1, timestamp: 1791698455000, pubKey: '04own', signature: 'sig', data,
+        version: 1, timestamp: 1_791_698_455_000, pubKey: '04own', signature: 'sig', data,
       }));
 
-      await fluxCommunication.recordOwnAddressMove(OLD, NEW, 1791698450000);
+      await fluxCommunication.recordOwnAddressMove(OLD, NEW, 1_791_698_450_000);
 
       sinon.assert.calledOnce(storeEvent);
       const [type, { message, envelope }] = storeEvent.firstCall.args;
       expect(type).to.equal(messageStore.APP_STATE_EVENT_TYPES.IPCHANGED);
       expect(message).to.deep.equal({
-        type: 'fluxipchanged', version: 1, oldIP: OLD, newIP: NEW, broadcastedAt: 1791698450000,
+        type: 'fluxipchanged', version: 1, oldIP: OLD, newIP: NEW, broadcastedAt: 1_791_698_450_000,
       });
       expect(envelope).to.deep.equal({
-        version: 1, timestamp: 1791698455000, pubKey: '04own', signature: 'sig',
+        version: 1, timestamp: 1_791_698_455_000, pubKey: '04own', signature: 'sig',
       });
       sinon.assert.calledOnceWithExactly(storeMove, message);
     });
 
     describe('handleOwnAddressMove', () => {
-      const AT = 1791698450000;
+      const AT = 1_791_698_450_000;
       let drop;
 
       beforeEach(() => {
@@ -2883,7 +2883,7 @@ describe('fluxCommunication tests', () => {
     });
 
     it('at startup, sends the moves it signed to the address it holds now, as they were made, and no others', async () => {
-      const at = Date.now() - 60000;
+      const at = Date.now() - 60_000;
       registryManager.addressMovesTo.withArgs(NEW).resolves(new Map([
         [OLD, { to: NEW, at, signer: '04own' }],
         ['72.89.45.237:16137', { to: NEW, at: at - 1000, signer: '04previous' }],
@@ -2897,7 +2897,7 @@ describe('fluxCommunication tests', () => {
     });
 
     it('at startup, sends a move that is both recorded and pending once', async () => {
-      registryManager.addressMovesTo.withArgs(NEW).resolves(new Map([[OLD, { to: NEW, at: Date.now() - 60000, signer: '04own' }]]));
+      registryManager.addressMovesTo.withArgs(NEW).resolves(new Map([[OLD, { to: NEW, at: Date.now() - 60_000, signer: '04own' }]]));
 
       fluxCommunication.announceRecordedOwnMovesWhenConnected();
       fluxCommunication.announceOwnAddressMove(OLD, NEW, Date.now());
@@ -2908,7 +2908,7 @@ describe('fluxCommunication tests', () => {
 
     it('at startup, reads the recorded moves again on the next connection when the read fails', async () => {
       registryManager.addressMovesTo.withArgs(NEW).onFirstCall().rejects(new Error('connection timed out'));
-      registryManager.addressMovesTo.withArgs(NEW).onSecondCall().resolves(new Map([[OLD, { to: NEW, at: Date.now() - 60000, signer: '04own' }]]));
+      registryManager.addressMovesTo.withArgs(NEW).onSecondCall().resolves(new Map([[OLD, { to: NEW, at: Date.now() - 60_000, signer: '04own' }]]));
 
       fluxCommunication.announceRecordedOwnMovesWhenConnected();
 
@@ -3040,7 +3040,7 @@ describe('fluxCommunication tests', () => {
         subject: 'bb:0',
         data: { certificate: { subject: 'bb:0', height: 100, fingerprint: 'fp', verdicts: [] } },
         envelope: {
-          version: 1, pubKey: 'pk', timestamp: 1700000000000, signature: 'sig',
+          version: 1, pubKey: 'pk', timestamp: 1_700_000_000_000, signature: 'sig',
         },
       };
 
@@ -3081,7 +3081,7 @@ describe('fluxCommunication tests', () => {
       const peerKey = '10.20.30.42:16127';
       const unsigned = [
         { type: 'evicted', ip: '1.2.3.4', createdAt: '2026-09-05T00:00:00.000Z', envelope: null },
-        { type: 'appremoved', ip: '1.2.3.4', data: { appName: 'a', broadcastedAt: 1700000000000 } },
+        { type: 'appremoved', ip: '1.2.3.4', data: { appName: 'a', broadcastedAt: 1_700_000_000_000 } },
         { type: 'apprunning', ip: '1.2.3.4', data: { apps: [{ name: 'a', hash: 'h' }] } },
       ];
 

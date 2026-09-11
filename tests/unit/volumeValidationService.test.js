@@ -101,7 +101,7 @@ describe('volumeValidationService tests', () => {
     });
 
     it('should return false for non-string input', () => {
-      const result = volumeValidationService.hasIncorrectFluxPath(12345);
+      const result = volumeValidationService.hasIncorrectFluxPath(12_345);
 
       expect(result).to.be.false;
     });

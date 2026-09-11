@@ -41,7 +41,7 @@ const dns = require('dns');
 
 // External fixtures the unit tier legitimately uses: mongo (tests/init's db
 // config). The docker daemon is a unix socket, matched separately.
-const ALLOWED_PORTS = new Set([27017]);
+const ALLOWED_PORTS = new Set([27_017]);
 
 // Ports this process is listening on — its own test servers.
 const ownPorts = new Set();

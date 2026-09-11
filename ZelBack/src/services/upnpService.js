@@ -11,6 +11,7 @@ const log = require('../lib/log');
 const ufw = require('./utils/ufw');
 const fluxadmPort = require('./fluxadmPort');
 const { Privilege, authOf } = require('./utils/privileges');
+const { MAX_PORT } = require('./utils/socketAddressUtils');
 
 let client = null;
 
@@ -134,7 +135,7 @@ const CLEANUP_REMOVAL_RESERVE_MS = 15 * 1000;
 // alone took 0.2 s.
 const BOOT_LISTING_STAGGER_MS = 5 * 1000;
 
-const monotonicMs = () => Number(process.hrtime.bigint() / 1000000n);
+const monotonicMs = () => Number(process.hrtime.bigint() / 1_000_000n);
 
 const NO_SUCH_ENTRY = 714;
 
@@ -203,7 +204,7 @@ function mapsHere(mapping, port) {
  *   whether the refusal is the router's own rather than the port's.
  */
 async function mapProtocol(port, protocol, description, { counted = true } = {}) {
-  if (!Number.isInteger(port) || port < 1 || port > 65535) {
+  if (!Number.isInteger(port) || port < 1 || port > MAX_PORT) {
     return {
       mapped: false, code: null, reason: `${protocol} ${port} not mapped: not a port`, routerWide: false,
     };
@@ -815,7 +816,7 @@ async function mapPortApi(req, res) {
         throw new Error('No Port address specified.');
       }
       if (!serviceHelper.validPort(port)) {
-        throw new Error('Port must be a whole number between 1 and 65535');
+        throw new Error(`Port must be a whole number between 1 and ${MAX_PORT}`);
       }
       port = serviceHelper.ensureNumber(port);
       await getClient().createMapping({
@@ -865,7 +866,7 @@ async function removeMapPortApi(req, res) {
         throw new Error('No Port address specified.');
       }
       if (!serviceHelper.validPort(port)) {
-        throw new Error('Port must be a whole number between 1 and 65535');
+        throw new Error(`Port must be a whole number between 1 and ${MAX_PORT}`);
       }
       port = serviceHelper.ensureNumber(port);
       await getClient().removeMapping({

@@ -98,7 +98,7 @@ async function sshExec(instance, command) {
   const result = await serviceHelper.runCommand('ip', {
     runAsRoot: true,
     logError: false,
-    timeout: 15000,
+    timeout: 15_000,
     params: [
       'netns', 'exec', meshNamespace.netnsName(instance),
       'ssh',

@@ -28,7 +28,7 @@ const SELF_TXHASH = 'a'.repeat(64);
 const SELF = `${SELF_TXHASH}:0`;
 const OTHER = `${'b'.repeat(64)}:0`;
 const THIRD = `${'d'.repeat(64)}:1`;
-const RUNG = 500000;
+const RUNG = 500_000;
 const COMMITTEE = {
   fingerprint: 'c'.repeat(64),
   quorum: 5,
@@ -219,11 +219,11 @@ describe('quorumGrant ordinalRegister', () => {
   // to vacate at all.
   describe("vacateOrdinal — reclaim by certificate at the derivation's edge", () => {
     const CERT = {
-      subject: OTHER, fingerprint: 'c'.repeat(64), height: 100, verdicts: [], since: 1_000, reason: 'unannounced',
+      subject: OTHER, fingerprint: 'c'.repeat(64), height: 100, verdicts: [], since: 1000, reason: 'unannounced',
     };
 
     it('vacates a certified holder the derivation no longer places, carrying the certificate, and publishes its row released', async () => {
-      downCertificates.standingCertificateFor.resolves({ ...CERT, broadcastedAt: 5_000 });
+      downCertificates.standingCertificateFor.resolves({ ...CERT, broadcastedAt: 5000 });
       grantClient.probeOneshot.resolves({ decided: true, holder: OTHER, epoch: 2 });
       expect(await ordinalRegister.vacateOrdinal('myapp', 1, OTHER)).to.deep.equal({ vacated: true });
       expect(downCertificates.standingCertificateFor.calledOnceWith(OTHER)).to.equal(true);
@@ -244,7 +244,7 @@ describe('quorumGrant ordinalRegister', () => {
     });
 
     it("a certified holder the derivation still places is not vacated — the edge is the view's, not a clock's", async () => {
-      downCertificates.standingCertificateFor.resolves({ ...CERT, broadcastedAt: 5_000 });
+      downCertificates.standingCertificateFor.resolves({ ...CERT, broadcastedAt: 5000 });
       registryManager.appLocation.resolves([{ ip: '10.0.0.7:16127' }, { ip: '10.0.0.5:16127' }]);
       expect(await ordinalRegister.vacateOrdinal('myapp', 1, OTHER)).to.deep.equal({ vacated: false, reason: 'still placed' });
       expect(grantClient.vacateOneshot.called).to.equal(false);
@@ -252,7 +252,7 @@ describe('quorumGrant ordinalRegister', () => {
     });
 
     it('a vacate without a quorum publishes nothing', async () => {
-      downCertificates.standingCertificateFor.resolves({ ...CERT, broadcastedAt: 5_000 });
+      downCertificates.standingCertificateFor.resolves({ ...CERT, broadcastedAt: 5000 });
       grantClient.probeOneshot.resolves({ decided: true, holder: OTHER, epoch: 2 });
       grantClient.vacateOneshot.resolves(false);
       expect(await ordinalRegister.vacateOrdinal('myapp', 1, OTHER)).to.deep.equal({ vacated: false, reason: 'no vacate quorum' });
@@ -261,7 +261,7 @@ describe('quorumGrant ordinalRegister', () => {
     });
 
     it("the register's own word decides: another holder vacates nothing, a free row needs no vacate, undecided waits", async () => {
-      downCertificates.standingCertificateFor.resolves({ ...CERT, broadcastedAt: 5_000 });
+      downCertificates.standingCertificateFor.resolves({ ...CERT, broadcastedAt: 5000 });
       grantClient.probeOneshot.resolves({ decided: true, holder: THIRD, epoch: 3 });
       expect(await ordinalRegister.vacateOrdinal('myapp', 1, OTHER)).to.deep.equal({ vacated: false, reason: `held by ${THIRD}` });
       grantClient.probeOneshot.resolves({ decided: true, holder: null, epoch: 0 });
@@ -272,7 +272,7 @@ describe('quorumGrant ordinalRegister', () => {
     });
 
     it('a holder no longer on the node list is not placed; an unresolvable membership fails closed', async () => {
-      downCertificates.standingCertificateFor.resolves({ ...CERT, broadcastedAt: 5_000 });
+      downCertificates.standingCertificateFor.resolves({ ...CERT, broadcastedAt: 5000 });
       grantClient.probeOneshot.resolves({ decided: true, holder: OTHER, epoch: 2 });
       networkStateService.membershipAt.returns([{ txhash: SELF_TXHASH, outidx: 0, ip: '10.0.0.5:16127' }]);
       expect(await ordinalRegister.vacateOrdinal('myapp', 1, OTHER)).to.deep.equal({ vacated: true });

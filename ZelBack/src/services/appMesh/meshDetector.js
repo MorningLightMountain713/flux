@@ -24,7 +24,7 @@ const meshRefuseSet = require('./meshRefuseSet');
 // An evicted peer's tunnel drops within ~5 s (nebula's connection manager
 // re-checks certificates on that cadence); the window is double that plus
 // slack, so a pass never gives up on a converging eviction.
-const CONVERGE_TIMEOUT_MS = 12000;
+const CONVERGE_TIMEOUT_MS = 12_000;
 const CONVERGE_POLL_MS = 2000;
 
 /**

@@ -144,7 +144,7 @@ describe('policySignature', () => {
       expect(verifyBundle(notText, { publicKeys: [key.publicHex], onReject })).to.equal(null);
       expect(rejections[0]).to.include('not text');
       expect(verifyBundle(() => {}, { publicKeys: [key.publicHex], onReject })).to.equal(null);
-      expect(verifyBundle(12345, { publicKeys: [key.publicHex], onReject })).to.equal(null);
+      expect(verifyBundle(12_345, { publicKeys: [key.publicHex], onReject })).to.equal(null);
     });
 
     it('refuses when no pinned key is usable', () => {

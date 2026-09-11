@@ -68,7 +68,7 @@ describe('hostStallService tests', () => {
     fs.symlinkSync('pid:[4026531836]', path.join(procRoot, 'self', 'ns', 'pid'));
     fs.writeFileSync(path.join(procRoot, 'self', 'status'), 'Name:\tnode\nNSpid:\t4242\n');
     paths = { procRoot, stateFile: path.join(procRoot, 'flux-host-stall.json') };
-    setUptime(1000000);
+    setUptime(1_000_000);
   });
 
   afterEach(async () => {
@@ -569,7 +569,7 @@ describe('hostStallService tests', () => {
     });
 
     it('goes out of service only once the thread has been held for the configured intervals, however often FluxOS restarts', async () => {
-      const RESTART_EVERY_MS = 15000;
+      const RESTART_EVERY_MS = 15_000;
       stuckMongod();
       await read();
       const heldSince = uptimeMs;

@@ -20,8 +20,8 @@ describe('imagePreflight tests', () => {
     fluxapps: {
       preflightMaxComponents: 3,
       preflightMaxQueuedJobs: 2,
-      preflightEnvelopeMaxAgeMs: 300000,
-      preflightJobRetentionMs: 600000,
+      preflightEnvelopeMaxAgeMs: 300_000,
+      preflightJobRetentionMs: 600_000,
     },
   };
 
@@ -338,7 +338,7 @@ describe('imagePreflight tests', () => {
         name: 'myapp',
         owner: '1FluxOwner',
         contentHash: 'abc123',
-        timestamp: Date.now() - 400000,
+        timestamp: Date.now() - 400_000,
         transportEncrypted: { algorithm: 'x', ciphertext: 'y' },
       }, CALLER)).to.be.rejectedWith(/outside the accepted window/);
       expect(openTransportEnvelopeStub.called).to.equal(false);

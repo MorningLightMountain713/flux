@@ -43,7 +43,7 @@ function chownedPaths(runCmdStub) {
 
 function advanceMonotonic(ms) {
   const real = process.hrtime.bigint;
-  process.hrtime.bigint = () => real() + BigInt(ms) * 1000000n;
+  process.hrtime.bigint = () => real() + BigInt(ms) * 1_000_000n;
   return () => { process.hrtime.bigint = real; };
 }
 
@@ -169,7 +169,7 @@ describe('syncthingService tests', () => {
     // which copy of an owner's data survives an election, so a caller reading one
     // page reads a prefix of any larger folder - and two nodes each totalling their
     // own prefix produce figures that no longer order by how much each holds.
-    const PAGE = 65536;
+    const PAGE = 65_536;
     const MAX_PAGES = 16;
     const entry = (i) => ({ name: `f${i}`, type: 'FILE_INFO_TYPE_FILE', size: 1, deleted: false, modified: '2026-09-16T10:00:00Z' });
     const pageOf = (n) => Array.from({ length: n }, (_, i) => entry(i));
@@ -1148,7 +1148,7 @@ describe('syncthingService tests', () => {
       const warnSpy = sinon.spy(log, 'warn');
 
       const promise = syncthingService.stopSyncthing();
-      await clock.tickAsync(14000);
+      await clock.tickAsync(14_000);
       sinon.assert.neverCalledWith(runCmdStub, 'pkill', KILL);
       await clock.tickAsync(2000);
       await promise;
@@ -1167,7 +1167,7 @@ describe('syncthingService tests', () => {
       runCmdStub.callsFake(host.runCommand);
 
       const promise = syncthingService.stopSyncthing().then(() => null, (error) => error);
-      await clock.tickAsync(25000);
+      await clock.tickAsync(25_000);
       const error = await promise;
 
       expect(error).to.equal(null);
@@ -1180,7 +1180,7 @@ describe('syncthingService tests', () => {
       syncthingExitsAfter(Infinity);
 
       const promise = syncthingService.stopSyncthing().then(() => null, (error) => error);
-      await clock.tickAsync(25000);
+      await clock.tickAsync(25_000);
       const error = await promise;
 
       expect(error?.message).to.match(/still running 5s after SIGKILL; not starting another/);
@@ -1301,7 +1301,7 @@ describe('syncthingService tests', () => {
     // refuses nobody - for as long as boot kept failing.
     it('takes the question on once, so a retrying boot cannot restart the window', async function () {
       // The first start runs a full sentinel pass, whose repair path sleeps.
-      this.timeout(30000);
+      this.timeout(30_000);
       syncthingService.setSyncthingUnmeasured();
 
       const started = syncthingService.startSyncthingSentinel();
@@ -1352,12 +1352,12 @@ describe('syncthingService tests', () => {
 
     it('should call adjustSyncthing on the first iteration', async () => {
       const ms = await syncthingService.runSyncthingSentinel();
-      expect(ms).to.equal(60000);
+      expect(ms).to.equal(60_000);
       sinon.assert.callCount(fakeConfigOptions, 1);
     });
 
     it('should call adjustSyncthing every eight runs under normal conditions', async () => {
-      const DEFAULT_WAIT = 60000;
+      const DEFAULT_WAIT = 60_000;
 
       const clock = sinon.useFakeTimers();
 

@@ -67,14 +67,14 @@ describe('the location table and the event-derived view agree', () => {
 
   // Running report at `runningAt`; `event` applied after it, at `eventAt`.
   const cases = [
-    { title: 'an older shutdown', event: shutDown, offset: -30000, running: true },
-    { title: 'a newer shutdown, inside its grace', event: shutDown, offset: 30000, running: true },
-    { title: 'an older removal', event: remove, offset: -30000, running: true },
+    { title: 'an older shutdown', event: shutDown, offset: -30_000, running: true },
+    { title: 'a newer shutdown, inside its grace', event: shutDown, offset: 30_000, running: true },
+    { title: 'an older removal', event: remove, offset: -30_000, running: true },
     { title: 'a removal at the same instant', event: remove, offset: 0, running: false },
-    { title: 'a newer removal', event: remove, offset: 30000, running: false },
-    { title: 'an older eviction', event: evict, offset: -30000, running: true },
+    { title: 'a newer removal', event: remove, offset: 30_000, running: false },
+    { title: 'an older eviction', event: evict, offset: -30_000, running: true },
     { title: 'an eviction at the same instant', event: evict, offset: 0, running: true },
-    { title: 'a newer eviction', event: evict, offset: 30000, running: false },
+    { title: 'a newer eviction', event: evict, offset: 30_000, running: false },
   ];
 
   cases.forEach(({
@@ -84,7 +84,7 @@ describe('the location table and the event-derived view agree', () => {
       const ip = `203.0.113.${100 + index}:16127`;
       const appName = `viewsagree${index}`;
       ips.push(ip);
-      const runningAt = Date.now() - 60000;
+      const runningAt = Date.now() - 60_000;
 
       await reportRunning(ip, appName, runningAt);
       if (event === remove) await event(ip, appName, runningAt + offset);
@@ -271,21 +271,21 @@ describe('the location table and the event-derived view agree', () => {
     it('a shutdown made before the move shortens the row at the new address', async () => {
       ips.push(A, B);
       const now = Date.now();
-      await reportRunning(A, appName, now - 240000);
-      await move(A, B, now - 160000);
-      await shutDown(A, now - 200000);
+      await reportRunning(A, appName, now - 240_000);
+      await move(A, B, now - 160_000);
+      await shutDown(A, now - 200_000);
 
       const [row] = await registryManager.appLocation(appName);
       const stored = await locations.findOne({ name: appName, ip: row.ip });
       expect(row.ip).to.equal(B);
-      expect(stored.expireAt.getTime()).to.equal(now - 200000 + SIGTERM_EXPIRY_MS);
+      expect(stored.expireAt.getTime()).to.equal(now - 200_000 + SIGTERM_EXPIRY_MS);
     });
 
     it('an ipchanged event that is not a move is not followed', async () => {
       ips.push(A, B);
       const now = Date.now();
-      await reportRunning(A, appName, now - 240000);
-      const notAMove = { type: 'fluxipchanged', version: 2, oldIP: A, newIP: B, broadcastedAt: now - 160000 };
+      await reportRunning(A, appName, now - 240_000);
+      const notAMove = { type: 'fluxipchanged', version: 2, oldIP: A, newIP: B, broadcastedAt: now - 160_000 };
       await messageStore.storeAppStateEvent(messageStore.APP_STATE_EVENT_TYPES.IPCHANGED, { message: notAMove, envelope });
 
       expect((await appsRepository.appLocationFromEvents({ appname: appName })).map((row) => row.ip)).to.deep.equal([A]);
@@ -298,13 +298,13 @@ describe('the location table and the event-derived view agree', () => {
         ...envelope,
         data: {
           type: 'fluxapprunning', version: 2, ip: A, broadcastedAt, osUptime: 1, staticIp: false,
-          apps: apps.map((name) => ({ name, hash: `hash-${name}`, runningSince: new Date(now - 300000).toISOString() })),
+          apps: apps.map((name) => ({ name, hash: `hash-${name}`, runningSince: new Date(now - 300_000).toISOString() })),
         },
       });
-      await messageStore.storeBatchAppRunningMessages([report([appName, `${appName}gone`], now - 280000)]);
-      await move(A, B, now - 160000);
-      await messageStore.storeBatchAppRunningMessages([report([appName], now - 240000)]);
-      await messageStore.pruneAppRunningLocations(new Map([[A, { names: [appName], broadcastedAt: now - 240000 }]]));
+      await messageStore.storeBatchAppRunningMessages([report([appName, `${appName}gone`], now - 280_000)]);
+      await move(A, B, now - 160_000);
+      await messageStore.storeBatchAppRunningMessages([report([appName], now - 240_000)]);
+      await messageStore.pruneAppRunningLocations(new Map([[A, { names: [appName], broadcastedAt: now - 240_000 }]]));
 
       expect((await registryManager.appLocation(`${appName}gone`)).map((row) => row.ip)).to.deep.equal([]);
       expect((await appsRepository.appLocationFromEvents({ appname: `${appName}gone` })).map((row) => row.ip)).to.deep.equal([]);
@@ -314,8 +314,8 @@ describe('the location table and the event-derived view agree', () => {
     it('a move leaves what was reported at the old address after it', async () => {
       ips.push(A, B);
       const now = Date.now();
-      await reportRunning(A, appName, now - 80000);
-      await move(A, B, now - 160000);
+      await reportRunning(A, appName, now - 80_000);
+      await move(A, B, now - 160_000);
 
       expect((await registryManager.appLocation(appName)).map((row) => row.ip)).to.deep.equal([A]);
     });
@@ -323,19 +323,19 @@ describe('the location table and the event-derived view agree', () => {
     it('a report made before a move meets the node\'s row at its new address: the earlier runningSince stays', async () => {
       ips.push(A, B);
       const now = Date.now();
-      await move(A, B, now - 160000);
-      await reportRunning(B, appName, now - 80000);
-      await reportByGossip(A, appName, now - 240000);
+      await move(A, B, now - 160_000);
+      await reportRunning(B, appName, now - 80_000);
+      await reportByGossip(A, appName, now - 240_000);
 
       const [row] = await registryManager.appLocation(appName);
-      expect(new Date(row.runningSince).getTime()).to.equal(now - 240000);
+      expect(new Date(row.runningSince).getTime()).to.equal(now - 240_000);
     });
 
     it('a node that moved here is found by its address, by what it said before the move', async () => {
       ips.push(A, B);
       const now = Date.now();
-      await reportRunning(A, appName, now - 240000);
-      await move(A, B, now - 160000);
+      await reportRunning(A, appName, now - 240_000);
+      await move(A, B, now - 160_000);
 
       expect((await appsRepository.appLocationFromEvents({ ip: B })).map((row) => row.ip)).to.deep.equal([B]);
       expect(await appsRepository.appLocationFromEvents({ ip: A })).to.deep.equal([]);

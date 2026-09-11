@@ -37,7 +37,7 @@ describe('dbHelper ensureIndex', () => {
 
   const duplicateError = () => {
     const err = new Error('E11000 duplicate key error collection');
-    err.code = 11000;
+    err.code = 11_000;
     err.codeName = 'DuplicateKey';
     return err;
   };
@@ -273,7 +273,7 @@ describe('dbHelper ensureIndexes', () => {
 
   it('falls back to one at a time when the batch is refused, and still heals', async () => {
     const duplicate = new Error('E11000 duplicate key error collection');
-    duplicate.code = 11000;
+    duplicate.code = 11_000;
     duplicate.codeName = 'DuplicateKey';
 
     const createIndex = sinon.stub();

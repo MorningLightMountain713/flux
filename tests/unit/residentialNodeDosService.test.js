@@ -651,20 +651,20 @@ describe('residentialNodeDosService tests', () => {
       const wall = sinon.stub(Date, 'now');
       try {
         dbHelperStub.findOneAndUpdateInDatabase.onFirstCall().rejects(new Error('marker write failed'));
-        wall.returns(1000000);
+        wall.returns(1_000_000);
         service.noteEvacuated('someapp');
         await new Promise((resolve) => { setImmediate(resolve); });
-        wall.returns(2000000);
+        wall.returns(2_000_000);
         service.noteEvacuated('otherapp');
         await new Promise((resolve) => { setImmediate(resolve); });
-        expect(markerStore.get('residentialDos').lastEvacuationAt, 'the newer departure was not recorded').to.equal(2000000);
+        expect(markerStore.get('residentialDos').lastEvacuationAt, 'the newer departure was not recorded').to.equal(2_000_000);
 
         await service.enforceResidentialPolicy(deps);
       } finally {
         wall.restore();
       }
 
-      expect(markerStore.get('residentialDos').lastEvacuationAt, 'an older departure replaced a newer one').to.equal(2000000);
+      expect(markerStore.get('residentialDos').lastEvacuationAt, 'an older departure replaced a newer one').to.equal(2_000_000);
     });
 
     it('keeps the newer departure time when an older write lands after it', async () => {
@@ -676,9 +676,9 @@ describe('residentialNodeDosService tests', () => {
       });
       const wall = sinon.stub(Date, 'now');
       try {
-        wall.returns(1000000);
+        wall.returns(1_000_000);
         service.noteEvacuated('someapp');
-        wall.returns(2000000);
+        wall.returns(2_000_000);
         service.noteEvacuated('otherapp');
         await new Promise((resolve) => { setImmediate(resolve); });
         landOlder();
@@ -687,7 +687,7 @@ describe('residentialNodeDosService tests', () => {
         wall.restore();
       }
 
-      expect(markerStore.get('residentialDos').lastEvacuationAt, 'an older departure replaced a newer one').to.equal(2000000);
+      expect(markerStore.get('residentialDos').lastEvacuationAt, 'an older departure replaced a newer one').to.equal(2_000_000);
     });
 
     it('refuses to drain on a settle comparison that is not a number', async () => {
@@ -871,7 +871,7 @@ describe('residentialNodeDosService tests', () => {
       const timeMs = (turn * service.TURN_MS) + offsetMs;
       return { timeMs, previousTimeMs: timeMs - PASS_MS };
     };
-    const START = 500000;
+    const START = 500_000;
 
     beforeEach(async () => {
       installedApps = [{ name: 'someapp' }];

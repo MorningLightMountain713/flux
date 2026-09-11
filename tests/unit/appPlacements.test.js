@@ -119,7 +119,7 @@ describe('appPlacements', () => {
 
   describe('backfillPlacements', () => {
     const row = (name, ip, runningSince) => ({
-      name, ip, hash: `${name}hash`, broadcastedAt: new Date(), expireAt: new Date(Date.now() + 3600000), runningSince,
+      name, ip, hash: `${name}hash`, broadcastedAt: new Date(), expireAt: new Date(Date.now() + 3_600_000), runningSince,
     });
 
     // Seeding from the row keeps every app where the network already ranks it, so

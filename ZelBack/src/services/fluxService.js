@@ -249,16 +249,16 @@ async function runNewCode(before, { always = false } = {}) {
 // folders drained to peers, is taken from it. pm2's systemd unit stops through
 // `pm2 kill`, which waits this long, inside systemd's 90s default stop timeout.
 // The multitool registers new nodes with the same value.
-const PM2_KILL_TIMEOUT_MS = 60000;
+const PM2_KILL_TIMEOUT_MS = 60_000;
 
 // pm2's commands wait on its daemon with no time limit of their own, so a daemon
 // that has stopped answering holds a command, and whatever waits on it, for good.
 // How long pm2 has to list its processes.
-const PM2_LIST_TIMEOUT_MS = 30000;
+const PM2_LIST_TIMEOUT_MS = 30_000;
 // How long FluxOS waits for pm2 to restart it with the new kill timeout: the
 // longest a working pm2 takes to stop it, which is under the new kill timeout,
 // and its own command around that.
-const PM2_RESTART_WAIT_MS = PM2_KILL_TIMEOUT_MS + 30000;
+const PM2_RESTART_WAIT_MS = PM2_KILL_TIMEOUT_MS + 30_000;
 
 // Where FluxOS records the machine boot on which it last asked pm2 for the
 // kill timeout, as that boot's id.
@@ -1312,7 +1312,7 @@ async function tailBenchmarkDebug(req, res) {
 const LOG_LEVEL_LABELS = {
   10: 'TRACE', 20: 'DEBUG', 30: 'INFO', 40: 'WARN', 50: 'ERROR', 60: 'FATAL',
 };
-const JOURNAL_READ_CAP = 100000; // lines; the retired files capped at 25MB
+const JOURNAL_READ_CAP = 100_000; // lines; the retired files capped at 25MB
 
 function logRecordMatches(level, record) {
   if (level === 'debug') return true;
@@ -1344,12 +1344,12 @@ function parseLogFilters(query) {
   const filters = {};
   if (q.lines !== undefined) {
     const n = Number.parseInt(q.lines, 10);
-    if (Number.isFinite(n) && n > 0) filters.tail = Math.min(n, 100000);
+    if (Number.isFinite(n) && n > 0) filters.tail = Math.min(n, 100_000);
   }
   if (q.since) {
     const rel = /^(\d+)([smhd])$/.exec(String(q.since));
     const cutoff = rel
-      ? new Date(Date.now() - Number(rel[1]) * { s: 1000, m: 60000, h: 3600000, d: 86400000 }[rel[2]])
+      ? new Date(Date.now() - Number(rel[1]) * { s: 1000, m: 60_000, h: 3_600_000, d: 86_400_000 }[rel[2]])
       : new Date(String(q.since));
     if (!Number.isNaN(cutoff.getTime())) filters.since = cutoff;
   }
@@ -1867,7 +1867,7 @@ async function getFluxInfo(req, res) {
     if (appHashes.status === 'error') {
       throw appHashes.data;
     }
-    const hashesOk = appHashes.data.filter((data) => data.height >= 694000);
+    const hashesOk = appHashes.data.filter((data) => data.height >= 694_000);
     info.appsHashesTotal = hashesOk.length;
     const mesOK = hashesOk.filter((mes) => mes.message === true);
     info.hashesPresent = mesOK.length;
@@ -2135,7 +2135,7 @@ async function streamChainPreparation(req, res) {
         log.info('Stream chain prep timeout hit: services already restarted or stream in progress');
       }
       prepLock = false;
-    }, 30 * 1_000);
+    }, 30 * 1000);
   }
 }
 
@@ -2318,7 +2318,7 @@ async function streamChain(req, res) {
 
       // data transfer rates are usually Megabytes per second (not Mebibytes)
       return setTimeout(() => {
-        const mbps = ((bytesTransferred / 1000 ** 2) / (timeoutMs / 1_000)) * 8;
+        const mbps = ((bytesTransferred / 1000 ** 2) / (timeoutMs / 1000)) * 8;
 
         if (mbps < thresholdMbps) {
           log.info(`Stream chain transfer rate too slow: ${mbps.toFixed(2)} Mbps, cancelling stream and disabling further streams`);

@@ -14,7 +14,7 @@
 // the pass ends. If the event stream dies entirely, behavior degrades to the
 // interval cadence - latency, never correctness.
 
-const monotonicMs = () => Number(process.hrtime.bigint() / 1000000n);
+const monotonicMs = () => Number(process.hrtime.bigint() / 1_000_000n);
 
 /**
  * @param {object} options

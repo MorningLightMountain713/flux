@@ -26,7 +26,7 @@ const ufw = require('./utils/ufw');
 const ufwHelper = require('./utils/ufwHelper');
 const { UDP_PROBE_MAGIC, UDP_PROBE_BYTES } = require('./utils/fluxUdpTestServer');
 const {
-  normalizeSocketAddress, socketAddressesMatch, parseSocketAddress,
+  normalizeSocketAddress, socketAddressesMatch, parseSocketAddress, MAX_PORT,
 } = require('./utils/socketAddressUtils');
 const globalState = require('./utils/globalState');
 
@@ -270,7 +270,7 @@ const MAX_ECHO_BYTES = 256;
  * @returns {Promise<string|null>} what it answered, or null if nothing did
  */
 async function portAnswered(ip, port, options = {}) {
-  const timeout = options.timeout || 5_000;
+  const timeout = options.timeout || 5000;
 
   return new Promise((resolve) => {
     const socket = new net.Socket();
@@ -308,7 +308,7 @@ async function portAnswered(ip, port, options = {}) {
  * @returns {Promise<boolean>} Returns true if opened, otherwise false
  */
 async function isPortOpen(ip, port, options = {}) {
-  const timeout = options.timeout || 5_000;
+  const timeout = options.timeout || 5000;
 
   const call = new Promise((resolve, reject) => {
     const socket = new net.Socket();
@@ -356,7 +356,7 @@ async function isPortOpen(ip, port, options = {}) {
 const UDP_PROBE_SCHEDULE_MS = [0, 250, 750, 1750];
 
 /** How long a UDP probe waits for a reply after its first datagram. */
-const UDP_PROBE_DEADLINE_MS = 3_000;
+const UDP_PROBE_DEADLINE_MS = 3000;
 
 /**
  * What a UDP port answered, capped, for the requester to judge - the UDP twin
@@ -870,7 +870,7 @@ async function keepUPNPPortsOpen(req, res) {
     // are able to receive communcation from another node, but because of routing issues,
     // can connect back the other way. This has a timeout of 3 seconds, whereas the other end
     // has a 5 second timeout.
-    await serviceHelper.axiosGet(`http://${ip}:${apiPort}/flux/uptime`, { timeout: 3_000 }).catch(() => {
+    await serviceHelper.axiosGet(`http://${ip}:${apiPort}/flux/uptime`, { timeout: 3000 }).catch(() => {
       res.status(503).end();
       throw new Error('Unable to connect back to api port');
     });
@@ -881,7 +881,7 @@ async function keepUPNPPortsOpen(req, res) {
 
     // eslint-disable-next-line no-restricted-syntax
     for (const port of ports) {
-      tcpConnectAndDestroy(ip, port, 3_000);
+      tcpConnectAndDestroy(ip, port, 3000);
       const udpSocket = dgram.createSocket('udp4');
       udpSocket.send('D', 0, 1, port, ip, () => {
         udpSocket.close();
@@ -1911,7 +1911,7 @@ async function allowPortApi(req, res) {
     return res.json(errMessage);
   }
   if (!serviceHelper.validPort(port)) {
-    return res.json(messageHelper.createErrorMessage('Port must be a whole number between 1 and 65535'));
+    return res.json(messageHelper.createErrorMessage(`Port must be a whole number between 1 and ${MAX_PORT}`));
   }
   const authorized = await verificationHelper.verifyPrivilege(Privilege.NODE_OPERATOR_OR_FLUX_TEAM, authOf(req));
 
@@ -2017,7 +2017,7 @@ function reportUfwLocked() {
  */
 async function nodeFirewallRules() {
   const apiPort = userconfig.initial.apiport || config.server.apiport;
-  const ports = [apiPort, +apiPort - 1, +apiPort + 1, +apiPort + 2, 80, 443, 16125, ...config.server.allowedPorts];
+  const ports = [apiPort, +apiPort - 1, +apiPort + 1, +apiPort + 2, 80, 443, 16_125, ...config.server.allowedPorts];
   const rules = [['delete', 'allow', 'in', 'proto', 'udp', 'to', 'any', 'port', '53']];
   // this should also be limit, but existing nodes use allow (needs to be updated)
   if (globalState.isArcane()) rules.push(['prepend', 'allow', 'to', 'any', 'app', 'FluxadmSSH']);

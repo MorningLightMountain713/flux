@@ -3,6 +3,7 @@
 const serviceHelper = require('../serviceHelper');
 const { guardedRequestOptions, BLOCKED_ADDRESS_CODE } = require('./urlSecurity');
 const registryGovernor = require('./registryGovernor');
+const { MAX_PORT } = require('./socketAddressUtils');
 
 /**
  * Docker Architecture
@@ -418,7 +419,7 @@ class ImageVerifier {
     } = match;
 
     const port = matchedProvider?.match(/:(\d+)$/)?.[1];
-    if (port !== undefined && (Number(port) < 1 || Number(port) > 65535)) {
+    if (port !== undefined && (Number(port) < 1 || Number(port) > MAX_PORT)) {
       return { error: `Image tag: ${rawImageTag} has registry port ${port}, which is not in 1-65535` };
     }
 

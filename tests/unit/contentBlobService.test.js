@@ -47,7 +47,7 @@ function blobMount(name, hash) {
   }];
 }
 
-function component(name, mounts, { hostPort = 31000, containerPort = 80 } = {}) {
+function component(name, mounts, { hostPort = 31_000, containerPort = 80 } = {}) {
   return {
     name,
     description: name,
@@ -138,7 +138,7 @@ function memStore(seed = {}) {
 describe('contentBlobService', () => {
   before(async function loadLibrary() {
     // The first fromSubmission compiles the ajv schemas.
-    this.timeout(30000);
+    this.timeout(30_000);
     flux = await loadSpecLibrary();
   });
 
@@ -227,7 +227,7 @@ describe('contentBlobService', () => {
     let priorC; // decrypted, declares hc
 
     before(async function buildSpecs() {
-      this.timeout(30000);
+      this.timeout(30_000);
       specA = await submissionSpec(blobMount('cfg', ha));
       specAB = await submissionSpec(blobMount('cfg', ha), blobMount('seed', hb));
       priorA = await priorSpecOf(blobMount('cfg', ha));
@@ -506,13 +506,13 @@ describe('contentBlobService', () => {
     let mounts; // [{ source, hash }] as flux-spec derived them
 
     before(async function buildDeployment() {
-      this.timeout(30000);
+      this.timeout(30_000);
       const decrypted = await decryptedV9Spec({
         components: {
           web: component('web', [blobMount('config', hCfg), blobMount('seed', hSeed)]),
           // A second component declaring no content: contentBlobMounts() is empty
           // and the loop must skip it rather than fail on it.
-          db: component('db', [], { hostPort: 31001, containerPort: 5432 }),
+          db: component('db', [], { hostPort: 31_001, containerPort: 5432 }),
         },
       });
       deployment = flux.DeploymentSpec.fromSpec(decrypted, APPS_FOLDER, { replica: null });

@@ -149,8 +149,8 @@ describe('quorumGrant mastershipGrantGate', () => {
           fluxapps: {
             quorumGrantMastership: flag,
             quorumGrantActivationHeight: activateAt,
-            quorumGrantPursuitIntervalMs: 30000,
-            quorumGrantHeldTtlMs: 150000,
+            quorumGrantPursuitIntervalMs: 30_000,
+            quorumGrantHeldTtlMs: 150_000,
           },
         }),
         '../daemonService/daemonServiceMiscRpcs': {
@@ -160,7 +160,7 @@ describe('quorumGrant mastershipGrantGate', () => {
     }
 
     it('governs once the chain reaches the activation height', async () => {
-      const gate = gateWith({ flag: true, activateAt: 2100000, height: 2100000 });
+      const gate = gateWith({ flag: true, activateAt: 2_100_000, height: 2_100_000 });
       const verdict = await gate.grantVerdict(IDENTIFIER, activeStandbyComp());
       expect(verdict, 'the plane engaged').to.not.equal(null);
       // The pursuit is fire-and-forget and now asks docker whether this node is the
@@ -173,19 +173,19 @@ describe('quorumGrant mastershipGrantGate', () => {
       // The boundary, both sides. A height comparison off by one engages a whole
       // fleet a block early - which is a block in which some nodes grant and the
       // rest still elect.
-      const gate = gateWith({ flag: true, activateAt: 2100000, height: 2099999 });
+      const gate = gateWith({ flag: true, activateAt: 2_100_000, height: 2_099_999 });
       expect(await gate.grantVerdict(IDENTIFIER, activeStandbyComp())).to.equal(null);
       expect(grantClient.acquire.called).to.equal(false);
     });
 
     it('stays inert while no height is scheduled yet', async () => {
-      const gate = gateWith({ flag: true, activateAt: null, height: 9999999 });
+      const gate = gateWith({ flag: true, activateAt: null, height: 9_999_999 });
       expect(await gate.grantVerdict(IDENTIFIER, activeStandbyComp())).to.equal(null);
       expect(grantClient.acquire.called).to.equal(false);
     });
 
     it('stays inert while the flag is off, however far past the height', async () => {
-      const gate = gateWith({ flag: false, activateAt: 2100000, height: 9999999 });
+      const gate = gateWith({ flag: false, activateAt: 2_100_000, height: 9_999_999 });
       expect(await gate.grantVerdict(IDENTIFIER, activeStandbyComp())).to.equal(null);
       expect(grantClient.acquire.called).to.equal(false);
     });
@@ -195,11 +195,11 @@ describe('quorumGrant mastershipGrantGate', () => {
       // stale or absent tip as 'reached' would engage exactly the node least able
       // to know, and a node that is behind is the one most likely to be behind on
       // the grant records too.
-      const unsynced = gateWith({ flag: true, activateAt: 2100000, height: 2100000, synced: false });
+      const unsynced = gateWith({ flag: true, activateAt: 2_100_000, height: 2_100_000, synced: false });
       expect(await unsynced.grantVerdict(IDENTIFIER, activeStandbyComp())).to.equal(null);
 
       grantClient.acquire.resetHistory();
-      const noHeight = gateWith({ flag: true, activateAt: 2100000, height: undefined });
+      const noHeight = gateWith({ flag: true, activateAt: 2_100_000, height: undefined });
       expect(await noHeight.grantVerdict(IDENTIFIER, activeStandbyComp())).to.equal(null);
       expect(grantClient.acquire.called).to.equal(false);
     });
@@ -214,7 +214,7 @@ describe('quorumGrant mastershipGrantGate', () => {
   // referee majority restarting inside one term) is re-acquired, never a
   // docker stop: the plane stops nothing it does not yet govern.
   describe('the window: the register opens before the plane governs', () => {
-    const ACTIVATE_AT = 2100000;
+    const ACTIVATE_AT = 2_100_000;
     const PRE_WINDOW = 40;
 
     function windowGate({ height, synced = true, extraConfig = {} }) {
@@ -224,8 +224,8 @@ describe('quorumGrant mastershipGrantGate', () => {
             quorumGrantMastership: true,
             quorumGrantActivationHeight: ACTIVATE_AT,
             quorumGrantPreWindowBlocks: PRE_WINDOW,
-            quorumGrantPursuitIntervalMs: 30000,
-            quorumGrantHeldTtlMs: 150000,
+            quorumGrantPursuitIntervalMs: 30_000,
+            quorumGrantHeldTtlMs: 150_000,
             ...extraConfig,
           },
         }),
@@ -323,7 +323,7 @@ describe('quorumGrant mastershipGrantGate', () => {
   // come. There is no head start and no clock: the fact the 45 s timer stood
   // in for was local all along.
   describe('below the height the docker rule is the whole rule; at it, a cold key is first come', () => {
-    const ACTIVATE_AT = 2100000;
+    const ACTIVATE_AT = 2_100_000;
 
     function windowGate({ height }) {
       return proxyquire('../../ZelBack/src/services/appLifecycle/mastershipGrantGate', {
@@ -332,8 +332,8 @@ describe('quorumGrant mastershipGrantGate', () => {
             quorumGrantMastership: true,
             quorumGrantActivationHeight: ACTIVATE_AT,
             quorumGrantPreWindowBlocks: 40,
-            quorumGrantPursuitIntervalMs: 30000,
-            quorumGrantHeldTtlMs: 150000,
+            quorumGrantPursuitIntervalMs: 30_000,
+            quorumGrantHeldTtlMs: 150_000,
           },
         }),
         '../daemonService/daemonServiceMiscRpcs': {
@@ -465,7 +465,7 @@ describe('quorumGrant mastershipGrantGate', () => {
   // keep the jittered pursuit for steady-state work; that was never the
   // problem.
   describe('the retry inside the window: at the taught time, or a re-probe after one ask timeout, never at random', () => {
-    const ACTIVATE_AT = 2100000;
+    const ACTIVATE_AT = 2_100_000;
     const ASK_TIMEOUT = 5000;
     let clock;
 
@@ -476,8 +476,8 @@ describe('quorumGrant mastershipGrantGate', () => {
             quorumGrantMastership: true,
             quorumGrantActivationHeight: ACTIVATE_AT,
             quorumGrantPreWindowBlocks: 40,
-            quorumGrantPursuitIntervalMs: 30000,
-            quorumGrantHeldTtlMs: 150000,
+            quorumGrantPursuitIntervalMs: 30_000,
+            quorumGrantHeldTtlMs: 150_000,
             quorumGrantAskTimeoutMs: ASK_TIMEOUT,
           },
         }),
@@ -609,16 +609,16 @@ describe('quorumGrant mastershipGrantGate', () => {
         config: asConfig({
           fluxapps: {
             quorumGrantMastership: true,
-            quorumGrantActivationHeight: 2100000,
-            quorumGrantPursuitIntervalMs: 30000,
-            quorumGrantHeldTtlMs: 150000,
+            quorumGrantActivationHeight: 2_100_000,
+            quorumGrantPursuitIntervalMs: 30_000,
+            quorumGrantHeldTtlMs: 150_000,
             quorumGrantDemotionSlackMs: slack,
             quorumGrantLockDelayMs: lockDelay,
             ...(askTimeout !== undefined ? { quorumGrantAskTimeoutMs: askTimeout } : {}),
           },
         }),
         '../daemonService/daemonServiceMiscRpcs': {
-          isDaemonSynced: () => ({ data: { height: 2100000, synced: true } }),
+          isDaemonSynced: () => ({ data: { height: 2_100_000, synced: true } }),
         },
       });
     }
@@ -678,7 +678,7 @@ describe('quorumGrant mastershipGrantGate', () => {
       expect(await mastershipGrantGate.grantVerdict(IDENTIFIER, activeStandbyComp()))
         .to.deep.equal({ desired: false, reason: 'no quorum of registers names this node' });
       grantClient.relearn.resolves({
-        recovered: false, holder: null, reason: 'no quorum of registers names this node', term: { grantee: 'other:0', epoch: 2, remainingMs: 1_000 },
+        recovered: false, holder: null, reason: 'no quorum of registers names this node', term: { grantee: 'other:0', epoch: 2, remainingMs: 1000 },
       });
       expect(await mastershipGrantGate.grantVerdict(IDENTIFIER, activeStandbyComp()))
         .to.deep.equal({ desired: false, reason: 'peerHoldsGrant' });

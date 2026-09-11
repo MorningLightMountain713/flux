@@ -15,7 +15,7 @@ describe('messageStore address move tests', () => {
 
   // reported a minute before the move that carries it
   const row = (name, ip, runningSince) => ({
-    name, hash: 'h', ip, runningSince: new Date(runningSince), broadcastedAt: new Date(Date.now() - 60000), expireAt: new Date(Date.now() + HOUR),
+    name, hash: 'h', ip, runningSince: new Date(runningSince), broadcastedAt: new Date(Date.now() - 60_000), expireAt: new Date(Date.now() + HOUR),
   });
   const moved = () => messageStore.storeIPChangedMessage({
     type: 'fluxipchanged', version: 1, oldIP: OLD, newIP: NEW, broadcastedAt: Date.now(),

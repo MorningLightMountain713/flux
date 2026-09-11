@@ -40,9 +40,9 @@ describe('imageManager tests', () => {
         addCredentials: sinon.stub(),
         supported: true,
         supportedArchitectures: ['amd64', 'arm64'],
-        imageSizeBytes: 12345,
-        decompressedSizeBytes: 45678,
-        decompressedSizeClearanceBytes: 45678,
+        imageSizeBytes: 12_345,
+        decompressedSizeBytes: 45_678,
+        decompressedSizeClearanceBytes: 45_678,
         errorMeta: null,
       });
     });
@@ -55,7 +55,7 @@ describe('imageManager tests', () => {
       sinon.assert.calledOnce(instance.verifyImage);
       sinon.assert.calledOnce(instance.throwIfError);
       // compressed image size surfaced for the early rootFs-fit reject
-      expect(result.imageSizeBytes).to.equal(12345);
+      expect(result.imageSizeBytes).to.equal(12_345);
     });
 
     it('should surface the measured decompressed size and its clearance figure', async () => {
@@ -278,7 +278,7 @@ describe('imageManager tests', () => {
       // We can't directly test TTL without waiting, but we test classification logic
       // eslint-disable-next-line global-require
       const { FluxCacheManager } = require('../../ZelBack/src/services/utils/cacheManager');
-      expect(FluxCacheManager.oneHour).to.equal(3600000); // 1 hour in ms
+      expect(FluxCacheManager.oneHour).to.equal(3_600_000); // 1 hour in ms
     });
 
     it('should classify rate limit errors with 2 hour TTL', async () => {
@@ -302,7 +302,7 @@ describe('imageManager tests', () => {
 
       // eslint-disable-next-line global-require
       const { FluxCacheManager } = require('../../ZelBack/src/services/utils/cacheManager');
-      expect(2 * FluxCacheManager.oneHour).to.equal(7200000); // 2 hours in ms
+      expect(2 * FluxCacheManager.oneHour).to.equal(7_200_000); // 2 hours in ms
     });
 
     it('should classify permanent errors with 7 day TTL', async () => {
@@ -326,7 +326,7 @@ describe('imageManager tests', () => {
 
       // eslint-disable-next-line global-require
       const { FluxCacheManager } = require('../../ZelBack/src/services/utils/cacheManager');
-      expect(7 * FluxCacheManager.oneDay).to.equal(604800000); // 7 days in ms
+      expect(7 * FluxCacheManager.oneDay).to.equal(604_800_000); // 7 days in ms
     });
   });
 

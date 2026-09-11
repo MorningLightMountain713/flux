@@ -875,7 +875,7 @@ describe('dbHelper tests', () => {
 
   describe('rebuilding globalAppsInformation from the message log', () => {
     const { appsglobal, appslocal, daemon } = config.database;
-    const scannedHeight = 3008000;
+    const scannedHeight = 3_008_000;
     let client;
     let appsGlobalDb;
 
@@ -896,23 +896,23 @@ describe('dbHelper tests', () => {
       await client.db(daemon.database).collection(daemon.collections.scannedHeight).insertOne({ generalScannedHeight: scannedHeight });
       await appsGlobalDb.collection(appsglobal.collections.appsMessages).insertMany([
         // dragonwilds1790467903997: renewed 15 blocks after its cancellation ran out
-        message('IncidentApp', 'fluxappregister', 'i1', 2985989, 20160),
-        message('IncidentApp', 'fluxappupdate', 'i2', 3003260, 100),
-        message('IncidentApp', 'fluxappupdate', 'i3', 3003310, 56),
-        message('IncidentApp', 'fluxappupdate', 'i4', 3003381, 88072),
+        message('IncidentApp', 'fluxappregister', 'i1', 2_985_989, 20_160),
+        message('IncidentApp', 'fluxappupdate', 'i2', 3_003_260, 100),
+        message('IncidentApp', 'fluxappupdate', 'i3', 3_003_310, 56),
+        message('IncidentApp', 'fluxappupdate', 'i4', 3_003_381, 88_072),
         // an ordinary app renewed in time
-        message('RenewedApp', 'fluxappregister', 'r1', 2990000, 20000),
-        message('RenewedApp', 'fluxappupdate', 'r2', 3005000, 88000),
+        message('RenewedApp', 'fluxappregister', 'r1', 2_990_000, 20_000),
+        message('RenewedApp', 'fluxappupdate', 'r2', 3_005_000, 88_000),
         // an app that simply expired
-        message('ExpiredApp', 'fluxappregister', 'e1', 2990000, 1000),
+        message('ExpiredApp', 'fluxappregister', 'e1', 2_990_000, 1000),
         // owncast: renewed 57 blocks late in 2022, renewed in time since
-        message('LegacyApp', 'fluxappregister', 'l1', 1306201, 22000),
-        message('LegacyApp', 'fluxappupdate', 'l2', 1328258, 22000),
-        message('LegacyApp', 'fluxappupdate', 'l3', 2938092, 88000),
+        message('LegacyApp', 'fluxappregister', 'l1', 1_306_201, 22_000),
+        message('LegacyApp', 'fluxappupdate', 'l2', 1_328_258, 22_000),
+        message('LegacyApp', 'fluxappupdate', 'l3', 2_938_092, 88_000),
         // two updates paid in one block, the earlier-signed one stored first
-        message('TiedApp', 'fluxappregister', 't1', 3000000, 88000),
-        message('TiedApp', 'fluxappupdate', 'tz', 3005000, 88000, 10),
-        message('TiedApp', 'fluxappupdate', 'ta', 3005000, 88000, 20),
+        message('TiedApp', 'fluxappregister', 't1', 3_000_000, 88_000),
+        message('TiedApp', 'fluxappupdate', 'tz', 3_005_000, 88_000, 10),
+        message('TiedApp', 'fluxappupdate', 'ta', 3_005_000, 88_000, 20),
       ]);
     });
 

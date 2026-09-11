@@ -110,7 +110,7 @@ describe('cpuThrottleExemption', () => {
       const { module: m } = load(PREFIXES);
       expect(m.isCpuThrottleExempt(undefined, NOW)).to.equal(false);
       expect(m.isCpuThrottleExempt(null, NOW)).to.equal(false);
-      expect(m.isCpuThrottleExempt(1792177003381, NOW)).to.equal(false);
+      expect(m.isCpuThrottleExempt(1_792_177_003_381, NOW)).to.equal(false);
     });
 
     it('treats an empty list as known, with nothing exempt', () => {

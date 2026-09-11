@@ -16,7 +16,7 @@ describe('a stored message follows this node\'s payment record', () => {
   const { appsMessages, appsInformation } = config.database.appsglobal.collections;
   const { appsHashes } = config.database.daemon.collections;
   const owner = '1CbErtneaX2QVyUfwU7JGB7VzvPgrgc3uC';
-  const HEIGHT = 3000000;
+  const HEIGHT = 3_000_000;
   let globalDb;
   let daemonDb;
 
@@ -30,7 +30,7 @@ describe('a stored message follows this node\'s payment record', () => {
     height: chain.height,
     valueSat: chain.valueSat,
     appSpecifications: {
-      name, version: 3, owner, expire: 100000,
+      name, version: 3, owner, expire: 100_000,
     },
   });
   const payment = (hash, chain) => ({

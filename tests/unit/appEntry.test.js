@@ -85,7 +85,7 @@ function loadEntryPoint(entryFile) {
 
   return new Promise((resolve, reject) => {
     const env = { ...process.env, ...HOSTILE_ENV };
-    execFile(process.execPath, ['-e', script], { env, timeout: 60000 }, (error, stdout, stderr) => {
+    execFile(process.execPath, ['-e', script], { env, timeout: 60_000 }, (error, stdout, stderr) => {
       if (error && !stdout) {
         reject(new Error(`${entryFile} could not be loaded: ${error.message}\n${stderr}`));
         return;
@@ -122,7 +122,7 @@ describe('which files are entry points', () => {
 
 ENTRY_POINTS.forEach(({ name, file }) => {
   describe(`the entry point: ${name}`, function () {
-    this.timeout(90000);
+    this.timeout(90_000);
 
     let loaded;
 
@@ -179,7 +179,7 @@ ENTRY_POINTS.forEach(({ name, file }) => {
 });
 
 describe('a process that loads no entry point', function () {
-  this.timeout(90000);
+  this.timeout(90_000);
 
   // Canary for the network assertion above: the same probe in a child that loads nothing
   // reads Node's own defaults, so a match there comes from the entry point.

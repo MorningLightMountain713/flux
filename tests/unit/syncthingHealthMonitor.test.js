@@ -455,8 +455,8 @@ describe('syncthingHealthMonitor tests', () => {
       mockFolderHealthCache.set('fluxmyapp', {
         isolatedSince: null,
         cannotSyncSince: null,
-        peersBehindSince: Date.now() - 60000, // 1 minute ago
-        lastHealthyTimestamp: Date.now() - 60000,
+        peersBehindSince: Date.now() - 60_000, // 1 minute ago
+        lastHealthyTimestamp: Date.now() - 60_000,
         lastAction: 'none',
         appWasStopped: false,
       });
@@ -966,9 +966,9 @@ describe('syncthingHealthMonitor tests', () => {
         isolatedSince: null,
         cannotSyncSince: null,
         peersBehindSince: null,
-        lastHealthyTimestamp: Date.now() - 10000,
+        lastHealthyTimestamp: Date.now() - 10_000,
         lastAction: 'nudged',
-        lastNudgeAt: Date.now() - 10000,
+        lastNudgeAt: Date.now() - 10_000,
       });
 
       syncthingServiceMock.getPeerSyncDiagnostics.resolves({

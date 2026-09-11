@@ -80,7 +80,7 @@ describe('chainReadApi tests', () => {
       getSingleAddressUtxosStub.resolves({
         status: 'success',
         data: [{
-          address: '1Z123', txid: 'tx1', outputIndex: 0, height: 40, satoshis: 1, script: 'cc', confirmations: 99999,
+          address: '1Z123', txid: 'tx1', outputIndex: 0, height: 40, satoshis: 1, script: 'cc', confirmations: 99_999,
         }],
       });
 
@@ -151,11 +151,11 @@ describe('chainReadApi tests', () => {
 
     it('should return the balance the daemon reports', async () => {
       const res = generateResponse();
-      getSingleAddressBalanceStub.resolves({ status: 'success', data: { balance: 12345 } });
+      getSingleAddressBalanceStub.resolves({ status: 'success', data: { balance: 12_345 } });
 
       await chainReadApi.getAddressBalance({ params: { address: '1Z123' }, query: {} }, res);
 
-      sinon.assert.calledOnceWithExactly(res.json, { status: 'success', data: 12345 });
+      sinon.assert.calledOnceWithExactly(res.json, { status: 'success', data: 12_345 });
     });
   });
 
@@ -183,24 +183,24 @@ describe('chainReadApi tests', () => {
 
     it('should return the cursor when a response is passed', async () => {
       const res = generateResponse();
-      findOneInDatabaseStub.returns({ generalScannedHeight: 200000 });
+      findOneInDatabaseStub.returns({ generalScannedHeight: 200_000 });
 
       await chainReadApi.getScannedHeight(undefined, res);
 
       sinon.assert.calledOnceWithExactly(res.json, {
         status: 'success',
-        data: { generalScannedHeight: 200000 },
+        data: { generalScannedHeight: 200_000 },
       });
     });
 
     it('should return the cursor directly when no response is passed', async () => {
-      findOneInDatabaseStub.returns({ generalScannedHeight: 200000 });
+      findOneInDatabaseStub.returns({ generalScannedHeight: 200_000 });
 
       const result = await chainReadApi.getScannedHeight();
 
       expect(result).to.eql({
         status: 'success',
-        data: { generalScannedHeight: 200000 },
+        data: { generalScannedHeight: 200_000 },
       });
     });
   });

@@ -15,7 +15,7 @@ describe('syncthingMonitorConstants tests', () => {
 
     it('should have MONITOR_INTERVAL_MS defined', () => {
       expect(constants.MONITOR_INTERVAL_MS).to.be.a('number');
-      expect(constants.MONITOR_INTERVAL_MS).to.equal(30000);
+      expect(constants.MONITOR_INTERVAL_MS).to.equal(30_000);
     });
 
     it('should have OPERATION_DELAY_MS defined', () => {

@@ -116,14 +116,14 @@ describe('meshRuntimeConfig', () => {
   describe('nebulaConfig', () => {
     it('matches the golden config, members sorted by address, one rule pair per authority', () => {
       const text = meshRuntimeConfig.nebulaConfig({
-        ...APP, listenPort: 16230, members: PEERS, sshClientPublicKey: CLIENT_PUBKEY,
+        ...APP, listenPort: 16_230, members: PEERS, sshClientPublicKey: CLIENT_PUBKEY,
       });
       expect(text).to.equal(GOLDEN_NEBULA);
     });
 
     it('static_host_map keys each peer base, and unsafe_routes send its block via that base', () => {
       const text = meshRuntimeConfig.nebulaConfig({
-        ...APP, listenPort: 16230, members: PEERS, sshClientPublicKey: CLIENT_PUBKEY,
+        ...APP, listenPort: 16_230, members: PEERS, sshClientPublicKey: CLIENT_PUBKEY,
       });
       for (const p of PEERS) {
         expect(text).to.include(`"${p.address}": ["${p.endpoint}"]`);
@@ -137,7 +137,7 @@ describe('meshRuntimeConfig', () => {
 
     it('every firewall rule in both directions carries local_cidr', () => {
       const text = meshRuntimeConfig.nebulaConfig({
-        ...APP, listenPort: 16230, members: PEERS, sshClientPublicKey: CLIENT_PUBKEY,
+        ...APP, listenPort: 16_230, members: PEERS, sshClientPublicKey: CLIENT_PUBKEY,
       });
       const rules = text.split('\n').filter((l) => l.includes('ca_sha:')).length;
       const localCidrs = text.split('\n').filter((l) => l.includes('local_cidr:')).length;
@@ -147,7 +147,7 @@ describe('meshRuntimeConfig', () => {
 
     it('emits empty lists for a member with no peers yet, sshd still on', () => {
       const text = meshRuntimeConfig.nebulaConfig({
-        ...APP, listenPort: 16230, members: [], sshClientPublicKey: CLIENT_PUBKEY,
+        ...APP, listenPort: 16_230, members: [], sshClientPublicKey: CLIENT_PUBKEY,
       });
       expect(text).to.include('unsafe_routes: []');
       expect(text).to.include('outbound: []');
@@ -161,21 +161,21 @@ describe('meshRuntimeConfig', () => {
         ...APP, listenPort: 0, members: [], sshClientPublicKey: CLIENT_PUBKEY,
       })).to.throw(TypeError);
       expect(() => meshRuntimeConfig.nebulaConfig({
-        ...APP, listenPort: 16230, members: [{}], sshClientPublicKey: CLIENT_PUBKEY,
+        ...APP, listenPort: 16_230, members: [{}], sshClientPublicKey: CLIENT_PUBKEY,
       })).to.throw(TypeError);
       const singular = { ...PEERS[1], caShas: undefined, caSha: 'aaaa' };
       expect(() => meshRuntimeConfig.nebulaConfig({
-        ...APP, listenPort: 16230, members: [singular], sshClientPublicKey: CLIENT_PUBKEY,
+        ...APP, listenPort: 16_230, members: [singular], sshClientPublicKey: CLIENT_PUBKEY,
       })).to.throw(TypeError);
       const emptyShas = { ...PEERS[1], caShas: [] };
       expect(() => meshRuntimeConfig.nebulaConfig({
-        ...APP, listenPort: 16230, members: [emptyShas], sshClientPublicKey: CLIENT_PUBKEY,
+        ...APP, listenPort: 16_230, members: [emptyShas], sshClientPublicKey: CLIENT_PUBKEY,
       })).to.throw(TypeError);
       expect(() => meshRuntimeConfig.nebulaConfig({
-        ...APP, listenPort: 16230, members: [], sshClientPublicKey: 'a\nb',
+        ...APP, listenPort: 16_230, members: [], sshClientPublicKey: 'a\nb',
       })).to.throw(TypeError);
       expect(() => meshRuntimeConfig.nebulaConfig({
-        ...APP, listenPort: 16230, members: [],
+        ...APP, listenPort: 16_230, members: [],
       })).to.throw(TypeError);
     });
   });
@@ -201,7 +201,7 @@ describe('meshRuntimeConfig', () => {
     it('matches the golden rules', () => {
       const rules = meshRuntimeConfig.firewallRules({
         externalInterface: 'eth0',
-        meshPort: 16230,
+        meshPort: 16_230,
         transitSubnet: '169.254.108.0/30',
         transitNamespaceIp: '169.254.108.2',
       });
@@ -220,10 +220,10 @@ describe('meshRuntimeConfig', () => {
 
     it('rejects missing scoping inputs', () => {
       expect(() => meshRuntimeConfig.firewallRules({
-        externalInterface: '', meshPort: 16230, transitSubnet: '169.254.108.0/30', transitNamespaceIp: '169.254.108.2',
+        externalInterface: '', meshPort: 16_230, transitSubnet: '169.254.108.0/30', transitNamespaceIp: '169.254.108.2',
       })).to.throw(TypeError);
       expect(() => meshRuntimeConfig.firewallRules({
-        externalInterface: 'eth0', meshPort: 16230, transitSubnet: 'nope', transitNamespaceIp: '169.254.108.2',
+        externalInterface: 'eth0', meshPort: 16_230, transitSubnet: 'nope', transitNamespaceIp: '169.254.108.2',
       })).to.throw(TypeError);
     });
   });

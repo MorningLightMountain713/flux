@@ -50,7 +50,7 @@ describe('coupled harness knobs track production', () => {
     const shared = knobs.loadSharedConfig().peers;
 
     expect(knobs.peerDeathMs(shared)).to.equal(shared.wsPingIntervalMs * (shared.wsMaxMissedPongs + 1));
-    expect(knobs.peerDeathMs(knobs.PARTITION_PEERS)).to.equal(12000);
+    expect(knobs.peerDeathMs(knobs.PARTITION_PEERS)).to.equal(12_000);
     // No production fallback. It would return 60s where the shared fleet's real
     // answer is 6s, and an over-long budget passes every wait it is given, so the
     // caller's omission would never surface.
@@ -140,7 +140,7 @@ describe('coupled harness knobs track production', () => {
     // poll-only model of 13.3s. Without this the factor can be edited freely -
     // dropping it to 1.0 derives a 25s step instead of 30s, still above one but
     // below production's ratio, and nothing else in this file notices.
-    const MEASURED_PASS_MS = 15900; // cindy, 2026-08-20, suite 55
+    const MEASURED_PASS_MS = 15_900; // cindy, 2026-08-20, suite 55
     const modelled = knobs.giveUpPassMs(
       { removeFluxAppsPeriod: 4 },
       knobs.harnessBlockCostMs({ explorerPollIntervalMs: 833 }),

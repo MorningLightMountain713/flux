@@ -59,7 +59,7 @@ describe('specLibs — how a spec validation failure reaches the caller', () => 
   // difference between those two errors is the assertion.
   describe('version activation height', () => {
     // v9 activates at 2,791,000 in the test config.
-    const V9_ACTIVATION = 2791000;
+    const V9_ACTIVATION = 2_791_000;
     const incompleteV9 = { version: 9, name: 'x' };
 
     for (const [label, validate] of [
@@ -127,7 +127,7 @@ describe('specLibs — how a spec validation failure reaches the caller', () => 
       description: 'x',
       owner: '16dNCFf7nR3nx5iwn2RQMBw6KcJXkE3JC1',
       instances: 3,
-      ttl: 86400,
+      ttl: 86_400,
       contacts: { email: ['admin@example.com'] },
       components: {
         web: {

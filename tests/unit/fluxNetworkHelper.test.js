@@ -8,7 +8,7 @@ globalThis.userconfig = {
     kadena: 'kadena:3a2e6166907d0c2fb28a16cd6966a705de129e8358b9872d9cefe694e910d5b2?chainid=0',
     testnet: false,
     development: false,
-    apiport: 16127,
+    apiport: 16_127,
     routerIP: '',
     pgpPrivateKey: '',
     pgpPublicKey: '',
@@ -1084,7 +1084,7 @@ describe('fluxNetworkHelper tests', () => {
     it('should return status: false if the command response does not include words "udpdated", "existing" or "added"', async () => {
       sinon.stub(serviceHelper, 'runCommand').resolves({ error: null, stdout: 'testing' });
 
-      const result = await fluxNetworkHelper.allowPort(12345);
+      const result = await fluxNetworkHelper.allowPort(12_345);
 
       expect(result.status).to.eql(false);
     }).timeout(5000);
@@ -1140,7 +1140,7 @@ describe('fluxNetworkHelper tests', () => {
       sinon.restore();
       sinon.stub(serviceHelper, 'runCommand').resolves({ error: null, stdout: 'testing' });
 
-      const result = await fluxNetworkHelper.denyPort(12345);
+      const result = await fluxNetworkHelper.denyPort(12_345);
 
       expect(result.status).to.eql(false);
     }).timeout(5000);
@@ -1361,7 +1361,7 @@ describe('fluxNetworkHelper tests', () => {
 
     let runCommandStub;
     let logSpy;
-    const ports = [16127, 16126, 16128, 16129, 80, 443, 16125, 11, 13];
+    const ports = [16_127, 16_126, 16_128, 16_129, 80, 443, 16_125, 11, 13];
 
     // ufw status decides whether any rules are applied at all, and `ip route` supplies the
     // router address, so both are given their own behaviour
@@ -1605,12 +1605,12 @@ describe('fluxNetworkHelper tests', () => {
   describe('parseChronyOffset tests', () => {
     it('should parse slow offset', () => {
       const output = 'System time     : 0.000012345 seconds slow of NTP time';
-      expect(fluxNetworkHelper.parseChronyOffset(output)).to.equal(-0.000012345);
+      expect(fluxNetworkHelper.parseChronyOffset(output)).to.equal(-0.000_012_345);
     });
 
     it('should parse fast offset', () => {
       const output = 'System time     : 0.000054321 seconds fast of NTP time';
-      expect(fluxNetworkHelper.parseChronyOffset(output)).to.equal(0.000054321);
+      expect(fluxNetworkHelper.parseChronyOffset(output)).to.equal(0.000_054_321);
     });
 
     it('should return null for unparseable output', () => {
@@ -1621,12 +1621,12 @@ describe('fluxNetworkHelper tests', () => {
   describe('parseTimesyncOffset tests', () => {
     it('should parse millisecond offset', () => {
       const output = 'Offset: +1.234ms';
-      expect(fluxNetworkHelper.parseTimesyncOffset(output)).to.be.closeTo(0.001234, 1e-9);
+      expect(fluxNetworkHelper.parseTimesyncOffset(output)).to.be.closeTo(0.001_234, 1e-9);
     });
 
     it('should parse microsecond offset', () => {
       const output = 'Offset: -567us';
-      expect(fluxNetworkHelper.parseTimesyncOffset(output)).to.be.closeTo(-0.000567, 1e-9);
+      expect(fluxNetworkHelper.parseTimesyncOffset(output)).to.be.closeTo(-0.000_567, 1e-9);
     });
 
     it('should parse second offset', () => {
@@ -1661,7 +1661,7 @@ describe('fluxNetworkHelper tests', () => {
       const result = await fluxNetworkHelper.getClockDrift();
 
       expect(result.source).to.equal('chrony');
-      expect(result.offset).to.equal(0.000003456);
+      expect(result.offset).to.equal(0.000_003_456);
       expect(result.time).to.be.a('number');
       // detection call + drift call
       sinon.assert.calledTwice(runCommandStub);
@@ -1681,7 +1681,7 @@ describe('fluxNetworkHelper tests', () => {
       const result = await fluxNetworkHelper.getClockDrift();
 
       expect(result.source).to.equal('timesyncd');
-      expect(result.offset).to.be.closeTo(0.001234, 1e-9);
+      expect(result.offset).to.be.closeTo(0.001_234, 1e-9);
     });
 
     it('should return source none when neither is available', async () => {
@@ -1751,7 +1751,7 @@ describe('fluxNetworkHelper tests', () => {
       const response = res.json.firstCall.args[0];
       expect(response.status).to.equal('success');
       expect(response.data.source).to.equal('chrony');
-      expect(response.data.offset).to.equal(0.000005);
+      expect(response.data.offset).to.equal(0.000_005);
       expect(response.data.time).to.be.a('number');
     });
 

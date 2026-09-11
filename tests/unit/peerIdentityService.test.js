@@ -132,7 +132,7 @@ describe('peerIdentityService', () => {
 
     [
       ['absent', undefined],
-      ['not a string', 12345],
+      ['not a string', 12_345],
       ['upper case', CHALLENGE.toUpperCase()],
       ['one short', CHALLENGE.slice(1)],
       ['one long', `${CHALLENGE}0`],

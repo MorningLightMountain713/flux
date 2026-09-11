@@ -32,8 +32,8 @@ describe('arcaneAuthService proxy tests', () => {
     it('should successfully proxy challenge generation to flux-configd', async () => {
       const mockChallenge = {
         challenge: 'a'.repeat(64),
-        blockHeight: 12345,
-        expiresAt: Date.now() + 30000,
+        blockHeight: 12_345,
+        expiresAt: Date.now() + 30_000,
       };
 
       callFluxConfigdRPCStub.resolves(mockChallenge);
@@ -65,8 +65,8 @@ describe('arcaneAuthService proxy tests', () => {
     it('should extract IP from connection.remoteAddress if req.ip is not available', async () => {
       const mockChallenge = {
         challenge: 'b'.repeat(64),
-        blockHeight: 54321,
-        expiresAt: Date.now() + 30000,
+        blockHeight: 54_321,
+        expiresAt: Date.now() + 30_000,
       };
 
       callFluxConfigdRPCStub.resolves(mockChallenge);
@@ -92,8 +92,8 @@ describe('arcaneAuthService proxy tests', () => {
     it('should extract IP from x-forwarded-for header', async () => {
       const mockChallenge = {
         challenge: 'c'.repeat(64),
-        blockHeight: 99999,
-        expiresAt: Date.now() + 30000,
+        blockHeight: 99_999,
+        expiresAt: Date.now() + 30_000,
       };
 
       callFluxConfigdRPCStub.resolves(mockChallenge);
@@ -382,7 +382,7 @@ describe('arcaneAuthService proxy tests', () => {
           challenge: 'a'.repeat(64),
           encryptedChallenge: 'base64encrypted==',
           signature: 'ab'.repeat(65),
-          configData: { huge: 'x'.repeat(16385) },
+          configData: { huge: 'x'.repeat(16_385) },
         },
       };
 
@@ -507,8 +507,8 @@ describe('arcaneAuthService proxy tests', () => {
       // Step 1: Generate challenge
       const mockChallenge = {
         challenge: 'a'.repeat(64),
-        blockHeight: 12345,
-        expiresAt: Date.now() + 30000,
+        blockHeight: 12_345,
+        expiresAt: Date.now() + 30_000,
       };
 
       callFluxConfigdRPCStub.onFirstCall().resolves(mockChallenge);

@@ -235,7 +235,7 @@ async function getFileSize(filePath) {
 async function getRemoteFileSize(fileurl, multiplier, decimal, number = false) {
   try {
     // Use validated redirect-following request to prevent SSRF via redirects
-    const response = await requestWithValidatedRedirects(fileurl, 'HEAD', { timeout: 15000 });
+    const response = await requestWithValidatedRedirects(fileurl, 'HEAD', { timeout: 15_000 });
     const contentLengthHeader = response.headers['content-length'] || response.headers['Content-Length'];
     const fileSizeInBytes = parseInt(contentLengthHeader, 10);
     if (!Number.isFinite(fileSizeInBytes)) {
@@ -521,7 +521,7 @@ async function downloadFileFromUrl(url, localpath, component, rename = false, op
       // eslint-disable-next-line no-await-in-loop
       const response = await requestWithValidatedRedirects(url, 'GET', {
         responseType: 'stream',
-        timeout: 15000,
+        timeout: 15_000,
         decompress: false,
         headers,
       });

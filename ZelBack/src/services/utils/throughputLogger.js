@@ -57,8 +57,8 @@ class InterfaceInfo {
     const bitsPerSec = (bytesUsed * 8) / elapsedSec;
 
     const kbps = Math.round(
-      ((bitsPerSec / 1000) + Number.EPSILON) * 1_000,
-    ) / 1_000;
+      ((bitsPerSec / 1000) + Number.EPSILON) * 1000,
+    ) / 1000;
 
     return kbps;
   }
@@ -220,7 +220,7 @@ class ThroughputLogger {
 module.exports = { ThroughputLogger };
 
 async function main() {
-  const logger = new ThroughputLogger((result) => console.log(result), { intervalMs: 2_000, matchInterfaces: ['ens18'] });
+  const logger = new ThroughputLogger((result) => console.log(result), { intervalMs: 2000, matchInterfaces: ['ens18'] });
   await logger.start();
 }
 

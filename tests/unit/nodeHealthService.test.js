@@ -43,7 +43,7 @@ describe('nodeHealthService tests', () => {
     });
 
     it('should return fail if stratus (100000) has less than 8 cpu threads', async () => {
-      collateralTierStub.resolves({ collateral: 100000, tier: generalService.COLLATERAL_TIERS[100000] });
+      collateralTierStub.resolves({ collateral: 100_000, tier: generalService.COLLATERAL_TIERS[100_000] });
       osTotalmemStub.returns(30 * 1024 ** 3);
       osCpusStub.returns([1, 1, 1, 1]);
       const response = await nodeHealthService.confirmNodeTierHardware();
@@ -52,7 +52,7 @@ describe('nodeHealthService tests', () => {
     });
 
     it('should return fail if stratus (100000) has less than 30gb ram', async () => {
-      collateralTierStub.resolves({ collateral: 100000, tier: generalService.COLLATERAL_TIERS[100000] });
+      collateralTierStub.resolves({ collateral: 100_000, tier: generalService.COLLATERAL_TIERS[100_000] });
       osTotalmemStub.returns(29 * 1024 ** 3);
       osCpusStub.returns([1, 1, 1, 1, 1, 1, 1, 1]);
       const response = await nodeHealthService.confirmNodeTierHardware();
@@ -61,7 +61,7 @@ describe('nodeHealthService tests', () => {
     });
 
     it('should return ok if stratus (100000) matches requirements', async () => {
-      collateralTierStub.resolves({ collateral: 100000, tier: generalService.COLLATERAL_TIERS[100000] });
+      collateralTierStub.resolves({ collateral: 100_000, tier: generalService.COLLATERAL_TIERS[100_000] });
       osTotalmemStub.returns(30 * 1024 ** 3);
       osCpusStub.returns([1, 1, 1, 1, 1, 1, 1, 1]);
       const response = await nodeHealthService.confirmNodeTierHardware();
@@ -71,7 +71,7 @@ describe('nodeHealthService tests', () => {
     });
 
     it('should return fail if stratus (40000) has less than 16 cpu threads', async () => {
-      collateralTierStub.resolves({ collateral: 40000, tier: generalService.COLLATERAL_TIERS[40000] });
+      collateralTierStub.resolves({ collateral: 40_000, tier: generalService.COLLATERAL_TIERS[40_000] });
       osTotalmemStub.returns(61 * 1024 ** 3);
       osCpusStub.returns([1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]);
       const response = await nodeHealthService.confirmNodeTierHardware();
@@ -80,7 +80,7 @@ describe('nodeHealthService tests', () => {
     });
 
     it('should return fail if stratus (40000) has less than 61gb ram', async () => {
-      collateralTierStub.resolves({ collateral: 40000, tier: generalService.COLLATERAL_TIERS[40000] });
+      collateralTierStub.resolves({ collateral: 40_000, tier: generalService.COLLATERAL_TIERS[40_000] });
       osTotalmemStub.returns(60 * 1024 ** 3);
       osCpusStub.returns([1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]);
       const response = await nodeHealthService.confirmNodeTierHardware();
@@ -89,7 +89,7 @@ describe('nodeHealthService tests', () => {
     });
 
     it('should return ok if stratus (40000) matches requirements', async () => {
-      collateralTierStub.resolves({ collateral: 40000, tier: generalService.COLLATERAL_TIERS[40000] });
+      collateralTierStub.resolves({ collateral: 40_000, tier: generalService.COLLATERAL_TIERS[40_000] });
       osTotalmemStub.returns(61 * 1024 ** 3);
       osCpusStub.returns([1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]);
       const response = await nodeHealthService.confirmNodeTierHardware();
@@ -99,7 +99,7 @@ describe('nodeHealthService tests', () => {
     });
 
     it('should return fail if Nimbus (25000) has less than 4 cpu threads', async () => {
-      collateralTierStub.resolves({ collateral: 25000, tier: generalService.COLLATERAL_TIERS[25000] });
+      collateralTierStub.resolves({ collateral: 25_000, tier: generalService.COLLATERAL_TIERS[25_000] });
       osTotalmemStub.returns(7 * 1024 ** 3);
       osCpusStub.returns([1, 1, 1]);
       const response = await nodeHealthService.confirmNodeTierHardware();
@@ -108,7 +108,7 @@ describe('nodeHealthService tests', () => {
     });
 
     it('should return fail if Nimbus (25000) has less than 7gb ram', async () => {
-      collateralTierStub.resolves({ collateral: 25000, tier: generalService.COLLATERAL_TIERS[25000] });
+      collateralTierStub.resolves({ collateral: 25_000, tier: generalService.COLLATERAL_TIERS[25_000] });
       osTotalmemStub.returns(6 * 1024 ** 3);
       osCpusStub.returns([1, 1, 1, 1]);
       const response = await nodeHealthService.confirmNodeTierHardware();
@@ -117,7 +117,7 @@ describe('nodeHealthService tests', () => {
     });
 
     it('should return ok if Nimbus (25000) matches requirements', async () => {
-      collateralTierStub.resolves({ collateral: 25000, tier: generalService.COLLATERAL_TIERS[25000] });
+      collateralTierStub.resolves({ collateral: 25_000, tier: generalService.COLLATERAL_TIERS[25_000] });
       osTotalmemStub.returns(8 * 1024 ** 3);
       osCpusStub.returns([1, 1, 1, 1, 1, 1, 1, 1]);
       const response = await nodeHealthService.confirmNodeTierHardware();
@@ -127,7 +127,7 @@ describe('nodeHealthService tests', () => {
     });
 
     it('should return fail if Nimbus (12500) has less than 8 cpu threads', async () => {
-      collateralTierStub.resolves({ collateral: 12500, tier: generalService.COLLATERAL_TIERS[12500] });
+      collateralTierStub.resolves({ collateral: 12_500, tier: generalService.COLLATERAL_TIERS[12_500] });
       osTotalmemStub.returns(30 * 1024 ** 3);
       osCpusStub.returns([1, 1, 1, 1, 1, 1, 1]);
       const response = await nodeHealthService.confirmNodeTierHardware();
@@ -136,7 +136,7 @@ describe('nodeHealthService tests', () => {
     });
 
     it('should return fail if Nimbus (12500) has less than 30gb ram', async () => {
-      collateralTierStub.resolves({ collateral: 12500, tier: generalService.COLLATERAL_TIERS[12500] });
+      collateralTierStub.resolves({ collateral: 12_500, tier: generalService.COLLATERAL_TIERS[12_500] });
       osTotalmemStub.returns(29 * 1024 ** 3);
       osCpusStub.returns([1, 1, 1, 1, 1, 1, 1, 1]);
       const response = await nodeHealthService.confirmNodeTierHardware();
@@ -145,7 +145,7 @@ describe('nodeHealthService tests', () => {
     });
 
     it('should return ok if Nimbus (12500) matches requirements', async () => {
-      collateralTierStub.resolves({ collateral: 12500, tier: generalService.COLLATERAL_TIERS[12500] });
+      collateralTierStub.resolves({ collateral: 12_500, tier: generalService.COLLATERAL_TIERS[12_500] });
       osTotalmemStub.returns(30 * 1024 ** 3);
       osCpusStub.returns([1, 1, 1, 1, 1, 1, 1, 1]);
       const response = await nodeHealthService.confirmNodeTierHardware();
@@ -155,7 +155,7 @@ describe('nodeHealthService tests', () => {
     });
 
     it('should return fail if Cumulus (10000) has less than 2 cpu threads', async () => {
-      collateralTierStub.resolves({ collateral: 10000, tier: generalService.COLLATERAL_TIERS[10000] });
+      collateralTierStub.resolves({ collateral: 10_000, tier: generalService.COLLATERAL_TIERS[10_000] });
       osTotalmemStub.returns(3 * 1024 ** 3);
       osCpusStub.returns([1]);
       const response = await nodeHealthService.confirmNodeTierHardware();
@@ -164,7 +164,7 @@ describe('nodeHealthService tests', () => {
     });
 
     it('should return fail if Cumulus (10000) has less than 3gb ram', async () => {
-      collateralTierStub.resolves({ collateral: 10000, tier: generalService.COLLATERAL_TIERS[10000] });
+      collateralTierStub.resolves({ collateral: 10_000, tier: generalService.COLLATERAL_TIERS[10_000] });
       osTotalmemStub.returns(2 * 1024 ** 3);
       osCpusStub.returns([1, 1]);
       const response = await nodeHealthService.confirmNodeTierHardware();
@@ -173,7 +173,7 @@ describe('nodeHealthService tests', () => {
     });
 
     it('should return ok if Cumulus (10000) matches requirements', async () => {
-      collateralTierStub.resolves({ collateral: 10000, tier: generalService.COLLATERAL_TIERS[10000] });
+      collateralTierStub.resolves({ collateral: 10_000, tier: generalService.COLLATERAL_TIERS[10_000] });
       osTotalmemStub.returns(3 * 1024 ** 3);
       osCpusStub.returns([1, 1]);
       const response = await nodeHealthService.confirmNodeTierHardware();
@@ -292,10 +292,10 @@ describe('nodeHealthService tests', () => {
   });
 
   describe('confirmNodeTierHardware at the edge of a tier', () => {
-    const nimbus = generalService.COLLATERAL_TIERS[25000];
+    const nimbus = generalService.COLLATERAL_TIERS[25_000];
 
     beforeEach(() => {
-      sinon.stub(generalService, 'nodeCollateralTier').resolves({ collateral: 25000, tier: nimbus });
+      sinon.stub(generalService, 'nodeCollateralTier').resolves({ collateral: 25_000, tier: nimbus });
     });
 
     afterEach(() => {
@@ -394,7 +394,7 @@ describe('nodeHealthService tests', () => {
     // reports it and refuses nobody for it.
     it('reports UDP as unmeasured, ok or degraded, and stays fit on each', async () => {
       healthyHardware();
-      const readings = [[null, 'unmeasured'], [{ reachable: true }, 'ok'], [{ reachable: false, port: 31000, peers: ['a', 'b'] }, 'degraded']];
+      const readings = [[null, 'unmeasured'], [{ reachable: true }, 'ok'], [{ reachable: false, port: 31_000, peers: ['a', 'b'] }, 'degraded']];
       const getUdp = sinon.stub(fluxNetworkHelper, 'getUdpReachability');
 
       // eslint-disable-next-line no-restricted-syntax

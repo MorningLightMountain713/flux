@@ -15,16 +15,16 @@ describe('IOUtils getVolumeInfo tests', () => {
   // app volumes whose mount path ends with flux<component>_<appname>.
   const filesystems = [
     {
-      source: '/dev/mapper/flux_crypt', target: '/dat', fstype: 'xfs', sizeBytes: 926165774336, usedBytes: 349526016000, availableBytes: 576639758336, usePercent: 38,
+      source: '/dev/mapper/flux_crypt', target: '/dat', fstype: 'xfs', sizeBytes: 926_165_774_336, usedBytes: 349_526_016_000, availableBytes: 576_639_758_336, usePercent: 38,
     },
     {
-      source: '/dev/loop2', target: '/dat/var/lib/fluxos/flux-apps/fluxweb_myapp', fstype: 'ext4', sizeBytes: 2000000000, usedBytes: 500000000, availableBytes: 1500000000, usePercent: 25,
+      source: '/dev/loop2', target: '/dat/var/lib/fluxos/flux-apps/fluxweb_myapp', fstype: 'ext4', sizeBytes: 2_000_000_000, usedBytes: 500_000_000, availableBytes: 1_500_000_000, usePercent: 25,
     },
     {
-      source: '/dev/loop3', target: '/dat/var/lib/fluxos/flux-apps/fluxdb_myapp', fstype: 'ext4', sizeBytes: 4000000000, usedBytes: 1000000000, availableBytes: 3000000000, usePercent: 25,
+      source: '/dev/loop3', target: '/dat/var/lib/fluxos/flux-apps/fluxdb_myapp', fstype: 'ext4', sizeBytes: 4_000_000_000, usedBytes: 1_000_000_000, availableBytes: 3_000_000_000, usePercent: 25,
     },
     {
-      source: '/dev/loop4', target: '/dat/var/lib/fluxos/flux-apps/fluxsingleapp', fstype: 'ext4', sizeBytes: 1000000000, usedBytes: 250000000, availableBytes: 750000000, usePercent: 25,
+      source: '/dev/loop4', target: '/dat/var/lib/fluxos/flux-apps/fluxsingleapp', fstype: 'ext4', sizeBytes: 1_000_000_000, usedBytes: 250_000_000, availableBytes: 750_000_000, usePercent: 25,
     },
   ];
 
@@ -78,7 +78,7 @@ describe('IOUtils getVolumeInfo tests', () => {
 
   it('reports raw bytes for the B multiplier', async () => {
     const result = await IOUtils.getVolumeInfo('myapp', 'web', 'B', 0, 'size,available');
-    expect(result).to.eql({ error: null, mounts: [{ size: 2000000000, available: 1500000000 }] });
+    expect(result).to.eql({ error: null, mounts: [{ size: 2_000_000_000, available: 1_500_000_000 }] });
   });
 
   it('answers "not mounted" - empty mounts, no error - when nothing matches', async () => {

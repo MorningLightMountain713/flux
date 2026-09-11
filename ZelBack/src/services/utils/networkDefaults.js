@@ -49,7 +49,7 @@ const dns = require('node:dns');
 const path = require('node:path');
 const { Worker } = require('node:worker_threads');
 
-const CONNECT_ATTEMPT_TIMEOUT_MS = 2_000;
+const CONNECT_ATTEMPT_TIMEOUT_MS = 2000;
 const DNS_RESULT_ORDER = 'ipv4first';
 
 const WORKER_BOOTSTRAP = path.join(__dirname, 'workerBootstrap.js');

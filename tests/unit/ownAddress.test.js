@@ -29,7 +29,7 @@ describe('fluxNetworkHelper own address tests', () => {
   let originalUserConfig;
 
   const configure = (ipaddress) => {
-    globalThis.userconfig = { initial: { ipaddress, apiport: 16127, zelid: '', kadena: '' } };
+    globalThis.userconfig = { initial: { ipaddress, apiport: 16_127, zelid: '', kadena: '' } };
   };
   const adopt = (socketAddress, movedFrom = null) => records.insertOne({ _id: 'own', socketAddress, movedFrom });
   const record = () => records.findOne({ _id: 'own' }, { projection: { _id: 0, socketAddress: 1, movedFrom: 1 } });

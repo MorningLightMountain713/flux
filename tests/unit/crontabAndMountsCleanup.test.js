@@ -119,7 +119,7 @@ describe('crontabAndMountsCleanup tests', () => {
   });
 
   before(async function loadLibrary() {
-    this.timeout(30000);
+    this.timeout(30_000);
     flux = await loadSpecLibrary();
 
     // v1 is the only stored form whose docker identifier is the BARE app name -
@@ -131,14 +131,14 @@ describe('crontabAndMountsCleanup tests', () => {
     composedWordpress = await appFixture(await v9Spec({
       name: 'wordpress123',
       components: {
-        wp: componentOn('wp', 31001, 80),
-        mysql: componentOn('mysql', 31002, 3306),
-        operator: componentOn('operator', 31003, 8080),
+        wp: componentOn('wp', 31_001, 80),
+        mysql: componentOn('mysql', 31_002, 3306),
+        operator: componentOn('operator', 31_003, 8080),
       },
     }));
     soloWordpress = await appFixture(await v9Spec({
       name: 'wordpress123',
-      components: { wp: componentOn('wp', 31001, 80) },
+      components: { wp: componentOn('wp', 31_001, 80) },
     }));
 
     // The enterprise shape, built the way production holds it: the row carries
@@ -226,8 +226,8 @@ describe('crontabAndMountsCleanup tests', () => {
       const mixed = await appFixture(await v9Spec({
         name: 'mixedapp',
         components: {
-          web: componentOn('web', 31001, 80),
-          sidecar: { ...componentOn('sidecar', 31002, 8080), persistentStorage: { sizeGb: 0 } },
+          web: componentOn('web', 31_001, 80),
+          sidecar: { ...componentOn('sidecar', 31_002, 8080), persistentStorage: { sizeGb: 0 } },
         },
       }));
       expect(mixed.deployment.getComponent('sidecar').isStateless, 'fixture must be stateless').to.be.true;

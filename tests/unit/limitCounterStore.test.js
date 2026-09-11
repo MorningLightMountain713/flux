@@ -16,10 +16,10 @@ describe('limitCounterStore tests', () => {
             playground: {
               maxConcurrent: opts.maxConcurrent ?? 1,
               maxPerWindow: opts.maxPerWindow ?? 5,
-              windowMs: opts.windowMs ?? 86400000,
+              windowMs: opts.windowMs ?? 86_400_000,
             },
           },
-          limitCounterLeaseMs: opts.leaseMs ?? 1800000,
+          limitCounterLeaseMs: opts.leaseMs ?? 1_800_000,
         },
       }),
       '../../lib/log': {

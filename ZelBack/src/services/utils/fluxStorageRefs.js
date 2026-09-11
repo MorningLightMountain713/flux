@@ -6,7 +6,7 @@ const serviceHelper = require('../serviceHelper');
 // A single Flux Storage payload is an array of short strings ("KEY=value" for
 // env, individual argv items for cmd). Match the install-time limits.
 const FS_MAX_ITEMS = 200;
-const FS_MAX_ITEM_LENGTH = 5000000;
+const FS_MAX_ITEM_LENGTH = 5_000_000;
 
 /**
  * Fetch a Flux Storage payload via a signed request. Resolves the legacy
@@ -38,7 +38,7 @@ async function obtainPayloadFromStorage(url, appName) {
         'flux-signature': signature,
         'flux-app': appName,
       },
-      timeout: 20000,
+      timeout: 20_000,
     };
     const response = await serviceHelper.axiosGet(url, axiosConfig);
     return response.data;

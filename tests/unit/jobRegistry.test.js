@@ -115,12 +115,12 @@ describe('jobRegistry tests', () => {
     it('carries a coded failure through, so a caller can act on it', () => {
       const handle = jobRegistry.start({ kind: 'test' });
       jobRegistry.fail(handle.jobId, {
-        title: 'Registry rate limited', status: 429, detail: 'cooling', code: 'REGISTRY_BUSY', retryAfterMs: 900000,
+        title: 'Registry rate limited', status: 429, detail: 'cooling', code: 'REGISTRY_BUSY', retryAfterMs: 900_000,
       });
 
       const { error } = jobRegistry.get(handle.jobId);
       expect(error.code).to.equal('REGISTRY_BUSY');
-      expect(error.retryAfterMs).to.equal(900000);
+      expect(error.retryAfterMs).to.equal(900_000);
       expect(error.status).to.equal(429);
     });
 
@@ -252,7 +252,7 @@ describe('jobRegistry tests', () => {
       const clock = sinon.useFakeTimers();
 
       const handle = registry.start({ kind: 'test' });
-      clock.tick(600000);
+      clock.tick(600_000);
 
       expect(registry.get(handle.jobId)).to.not.equal(null);
     });

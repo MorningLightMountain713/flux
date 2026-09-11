@@ -47,7 +47,7 @@ function getOracleFluxUsdRate() {
   if (!syncStatus.data.synced) return null;
   const rateMsg = rateHistory.resolveAt(syncStatus.data.height);
   if (!rateMsg || !rateMsg.fluxUsdPriceE4) return null;
-  return rateMsg.fluxUsdPriceE4 / 10000;
+  return rateMsg.fluxUsdPriceE4 / 10_000;
 }
 
 /**
@@ -205,7 +205,7 @@ async function fiatAndFluxDisplayPrice(spec) {
   const fiatMarkupBp = getFiatMarkupBp();
   const fluxUsd = fluxUsdRate != null ? fluxPrice * fluxUsdRate : null;
   const usd = fluxUsd != null
-    ? Number((fluxUsd * (1 + fiatMarkupBp / 10000)).toFixed(2))
+    ? Number((fluxUsd * (1 + fiatMarkupBp / 10_000)).toFixed(2))
     : null;
 
   return {

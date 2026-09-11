@@ -16,7 +16,7 @@ const {
 describe('socketAddressUtils tests', () => {
   describe('DEFAULT_API_PORT', () => {
     it('should be 16127', () => {
-      expect(DEFAULT_API_PORT).to.equal(16127);
+      expect(DEFAULT_API_PORT).to.equal(16_127);
     });
   });
 
@@ -70,23 +70,23 @@ describe('socketAddressUtils tests', () => {
 
   describe('extractPort', () => {
     it('should return default port for null', () => {
-      expect(extractPort(null)).to.equal(16127);
+      expect(extractPort(null)).to.equal(16_127);
     });
 
     it('should return default port for undefined', () => {
-      expect(extractPort(undefined)).to.equal(16127);
+      expect(extractPort(undefined)).to.equal(16_127);
     });
 
     it('should return default port for bare IP', () => {
-      expect(extractPort('1.2.3.4')).to.equal(16127);
+      expect(extractPort('1.2.3.4')).to.equal(16_127);
     });
 
     it('should return default port when explicitly present', () => {
-      expect(extractPort('1.2.3.4:16127')).to.equal(16127);
+      expect(extractPort('1.2.3.4:16127')).to.equal(16_127);
     });
 
     it('should return non-default port', () => {
-      expect(extractPort('1.2.3.4:16137')).to.equal(16137);
+      expect(extractPort('1.2.3.4:16137')).to.equal(16_137);
     });
 
     it('should return port as a number', () => {
@@ -95,11 +95,11 @@ describe('socketAddressUtils tests', () => {
     });
 
     it('should return default port for trailing colon', () => {
-      expect(extractPort('1.2.3.4:')).to.equal(16127);
+      expect(extractPort('1.2.3.4:')).to.equal(16_127);
     });
 
     it('should return default port for non-numeric port', () => {
-      expect(extractPort('1.2.3.4:abc')).to.equal(16127);
+      expect(extractPort('1.2.3.4:abc')).to.equal(16_127);
     });
   });
 
@@ -113,7 +113,7 @@ describe('socketAddressUtils tests', () => {
     });
 
     it('should return null for non-string', () => {
-      expect(parseSocketAddress(12345)).to.be.null;
+      expect(parseSocketAddress(12_345)).to.be.null;
     });
 
     it('should return null for invalid IP', () => {
@@ -146,7 +146,7 @@ describe('socketAddressUtils tests', () => {
 
     it('should accept port 65535', () => {
       const result = parseSocketAddress('1.2.3.4:65535');
-      expect(result).to.deep.equal({ ip: '1.2.3.4', port: 65535 });
+      expect(result).to.deep.equal({ ip: '1.2.3.4', port: 65_535 });
     });
 
     it('should reject port 65536', () => {
@@ -155,12 +155,12 @@ describe('socketAddressUtils tests', () => {
 
     it('should parse bare IP with default port', () => {
       const result = parseSocketAddress('1.2.3.4');
-      expect(result).to.deep.equal({ ip: '1.2.3.4', port: 16127 });
+      expect(result).to.deep.equal({ ip: '1.2.3.4', port: 16_127 });
     });
 
     it('should parse ip:port', () => {
       const result = parseSocketAddress('85.159.213.248:16147');
-      expect(result).to.deep.equal({ ip: '85.159.213.248', port: 16147 });
+      expect(result).to.deep.equal({ ip: '85.159.213.248', port: 16_147 });
     });
 
     it('should return port as a number', () => {

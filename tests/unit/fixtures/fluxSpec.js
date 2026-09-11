@@ -73,7 +73,7 @@ const V9_SUBMISSION = Object.freeze({
   description: 'submission under test',
   owner: '16dNCFf7nR3nx5iwn2RQMBw6KcJXkE3JC1',
   instances: 3,
-  ttl: 2592000,
+  ttl: 2_592_000,
   components: {
     web: {
       name: 'web',
@@ -86,7 +86,7 @@ const V9_SUBMISSION = Object.freeze({
         sizeGb: 5,
         mounts: { '/usr/share/nginx/html': { source: 'html', destination: '/usr/share/nginx/html' } },
       },
-      ports: { http: { containerPort: 80, hostPort: 31000 } },
+      ports: { http: { containerPort: 80, hostPort: 31_000 } },
     },
   },
   contacts: { email: ['ops@example.com'] },
@@ -102,7 +102,7 @@ const V8_SUBMISSION = Object.freeze({
     name: 'web',
     description: 'web',
     repotag: 'nginx:latest',
-    ports: [31443],
+    ports: [31_443],
     domains: [''],
     environmentParameters: [],
     commands: [],
@@ -116,7 +116,7 @@ const V8_SUBMISSION = Object.freeze({
   instances: 3,
   contacts: [],
   geolocation: [],
-  expire: 88000,
+  expire: 88_000,
   nodes: [],
   staticip: false,
 });
@@ -220,8 +220,8 @@ async function instantiatedSpec(spec, state = {}) {
   return flux.InstantiatedSpec.fromEvent({
     spec,
     hash: state.hash ?? 'a'.repeat(64),
-    height: state.height ?? 2500000,
-    registeredAt: state.registeredAt ?? 1751628800,
+    height: state.height ?? 2_500_000,
+    registeredAt: state.registeredAt ?? 1_751_628_800,
     identity: state.identity ?? null,
     uuid: state.uuid ?? null,
   });

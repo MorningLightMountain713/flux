@@ -5,7 +5,7 @@ const ufwHelper = require('./ufwHelper');
 // How long FluxOS waits on ufw's lock. ufw's slowest ordinary hold, a reload
 // of ~100 rules, is under 2 s, so a lock held this long is held by a command
 // that is not ending.
-const UFW_LOCK_WAIT_MS = 30000;
+const UFW_LOCK_WAIT_MS = 30_000;
 // The exit code of a ufw helper that found the lock held past its wait.
 const UFW_LOCK_UNAVAILABLE = 75;
 // The helper's exit code when ufw's library cannot be used.

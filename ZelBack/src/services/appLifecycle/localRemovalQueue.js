@@ -8,7 +8,7 @@
 const log = require('../../lib/log');
 const serviceHelper = require('../serviceHelper');
 
-const REMOVAL_SPACING_MS = 5_000;
+const REMOVAL_SPACING_MS = 5000;
 
 const queued = new Set();
 let removing = null;

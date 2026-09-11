@@ -13,7 +13,7 @@ const fluxHttpTestServer = require('../utils/fluxHttpTestServer');
 const appsRepository = require('../appDatabase/appsRepository');
 const deploymentProvider = require('../appRuntime/deploymentProvider');
 const log = require('../../lib/log');
-const { extractIp, extractPort } = require('../utils/socketAddressUtils');
+const { extractIp, extractPort, MAX_PORT } = require('../utils/socketAddressUtils');
 const { nodeSigner } = require('../utils/nodeSigner');
 
 // Helper function to handle test shutdown
@@ -293,8 +293,8 @@ async function runAvailabilityCheckOnce(dosState, portsNotWorking, failedNodesTe
         // eslint-disable-next-line no-param-reassign
         dosState.originalPortFailed = dosState.testingPort;
         // eslint-disable-next-line no-param-reassign
-        dosState.nextTestingPort = dosState.testingPort < 65535 ? dosState.testingPort + 1 : dosState.testingPort - 1;
-      } else if (dosState.testingPort >= dosState.originalPortFailed && dosState.testingPort + 1 <= 65535) {
+        dosState.nextTestingPort = dosState.testingPort < MAX_PORT ? dosState.testingPort + 1 : dosState.testingPort - 1;
+      } else if (dosState.testingPort >= dosState.originalPortFailed && dosState.testingPort + 1 <= MAX_PORT) {
         // eslint-disable-next-line no-param-reassign
         dosState.nextTestingPort = dosState.testingPort + 1;
       } else if (dosState.testingPort - 1 > 0) {

@@ -33,13 +33,13 @@ describe('node identity adoption', () => {
       zelid: null,
       testnet: false,
       development: false,
-      apiport: 16127,
+      apiport: 16_127,
       routerIP: '',
     },
   };
 
   before(async function generateOperatorKey() {
-    this.timeout(30000);
+    this.timeout(30_000);
     operatorKeypair = await openpgp.generateKey({
       type: 'ecc',
       curve: 'curve25519',
@@ -106,7 +106,7 @@ describe('node identity adoption', () => {
         zelid: '1CbErtneaX2QVyUfwU7JGB7VzvPgrgc3uC',
         testnet: false,
         development: false,
-        apiport: 16127,
+        apiport: 16_127,
         routerIP: '',
         pgpPrivateKey: operatorKeypair.privateKey,
         pgpPublicKey: operatorKeypair.publicKey,
@@ -116,7 +116,7 @@ describe('node identity adoption', () => {
 
   describe('generateIdentity', () => {
     it('adopts the keypair still held in the config file rather than generating a new one', async function adopt() {
-      this.timeout(30000);
+      this.timeout(30_000);
       globalThis.userconfig = configWithOperatorKey();
 
       await loadPgpService().generateIdentity();
@@ -128,7 +128,7 @@ describe('node identity adoption', () => {
     });
 
     it('generates when the config file holds no keypair', async function fresh() {
-      this.timeout(30000);
+      this.timeout(30_000);
       globalThis.userconfig = FALLBACK_CONFIG;
 
       await loadPgpService().generateIdentity();
@@ -139,7 +139,7 @@ describe('node identity adoption', () => {
     });
 
     it('leaves an identity already in the database alone', async function dbWins() {
-      this.timeout(30000);
+      this.timeout(30_000);
       await repository.setPgpIdentity({
         privateKey: operatorKeypair.privateKey,
         publicKey: operatorKeypair.publicKey,

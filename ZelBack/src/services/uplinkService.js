@@ -81,7 +81,7 @@ const TUNNEL_LINK_TYPES = new Map([
   [823, 'ip6gre'],
 ]);
 // ARPHRD_NONE: a layer-3 tun device, or WireGuard.
-const LINK_TYPE_NONE = 65534;
+const LINK_TYPE_NONE = 65_534;
 
 /**
  * @returns {object} A record with nothing measured.

@@ -8,6 +8,7 @@ const fsp = require('node:fs/promises');
 const path = require('node:path');
 
 const { MESH_STATE_ROOT } = require('./meshCertificates');
+const { MAX_PORT } = require('../utils/socketAddressUtils');
 
 const PORTS_FILE = path.join(MESH_STATE_ROOT, 'ports.json');
 
@@ -45,7 +46,7 @@ async function getPort(instance) {
  * @param {number} port
  */
 async function setPort(instance, port) {
-  if (!Number.isInteger(port) || port < 1 || port > 65535) {
+  if (!Number.isInteger(port) || port < 1 || port > MAX_PORT) {
     throw new TypeError('port must be a valid port number');
   }
   const ports = await readAll();

@@ -152,7 +152,7 @@ appSyncEvents.on(SYNC_EVENTS.READINESS_LOST, () => { nodeReady = false; });
  * @returns {number} Milliseconds since an arbitrary fixed origin.
  */
 function monotonicMs() {
-  return Number(process.hrtime.bigint() / 1000000n);
+  return Number(process.hrtime.bigint() / 1_000_000n);
 }
 
 /**
@@ -478,7 +478,7 @@ function isEvacuating() {
 function mayEvacuateApp(holders, ownKey, minInstances, pass, now = monotonicMs()) {
   if (!evacuating) return { ok: false, code: 'NOT_EVACUATING', reason: 'node is not evacuating' };
   if (lastEvacuationAt !== null && now - lastEvacuationAt < EVACUATION_INTERVAL_MS) {
-    const wait = Math.round((EVACUATION_INTERVAL_MS - (now - lastEvacuationAt)) / 60000);
+    const wait = Math.round((EVACUATION_INTERVAL_MS - (now - lastEvacuationAt)) / 60_000);
     return { ok: false, code: 'DEPARTURE_INTERVAL', reason: `next departure in ${wait}m` };
   }
   const holderKeys = holders.map((holder) => holder.key);
@@ -539,7 +539,7 @@ function noteEvacuated(appName, now = monotonicMs()) {
   // one's monotonic origin, so the only thing worth recording is an instant it
   // can convert back into "how long ago".
   persistLastEvacuationAt(Date.now()).catch(() => {});
-  log.info(`residentialNodeDos - ${appName} handed back; next departure no sooner than ${EVACUATION_INTERVAL_MS / 3600000}h`);
+  log.info(`residentialNodeDos - ${appName} handed back; next departure no sooner than ${EVACUATION_INTERVAL_MS / 3_600_000}h`);
 }
 
 /**

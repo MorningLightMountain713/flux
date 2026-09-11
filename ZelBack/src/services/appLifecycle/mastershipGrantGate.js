@@ -673,7 +673,7 @@ async function pollFenceLift(appName, fence) {
   liftPolls.set(appName, nowMs());
   try {
     const url = `http://${extractIp(fence.address)}:${extractPort(fence.address)}/flux/quorumgrant/witness`;
-    const response = await serviceHelper.axiosPost(url, { key: keyFor(appName) }, { timeout: 5_000 });
+    const response = await serviceHelper.axiosPost(url, { key: keyFor(appName) }, { timeout: 5000 });
     const answer = response?.data?.data;
     if (answer && answer.folderDemotedAt !== null && answer.folderDemotedAt !== undefined && !answer.holding) {
       liftFence(appName, 'the deposed node attests it demoted and reverted');

@@ -121,11 +121,11 @@ describe('fluxdZmqDecoders tests', () => {
   describe('decodeHashBlockHeight tests', () => {
     it('should decode hash and height without reversing the hash', () => {
       const hash = Buffer.from('ab'.repeat(32), 'hex');
-      const payload = Buffer.concat([hash, uint32(2837899)]);
+      const payload = Buffer.concat([hash, uint32(2_837_899)]);
 
       const result = decoders.decodeHashBlockHeight(payload);
 
-      expect(result.height).to.equal(2837899);
+      expect(result.height).to.equal(2_837_899);
       expect(result.hash).to.equal('ab'.repeat(32));
     });
 
@@ -256,7 +256,7 @@ describe('fluxdZmqDecoders tests', () => {
 
   describe('decodeFluxnodeStatus tests', () => {
     function statusBytes({
-      blockHeight = 2837899,
+      blockHeight = 2_837_899,
       status = 3,
       tier = 2,
       confirmedHeight = 100,
@@ -282,7 +282,7 @@ describe('fluxdZmqDecoders tests', () => {
       const result = decoders.decodeFluxnodeStatus(statusBytes());
 
       expect(result).to.eql({
-        blockHeight: 2837899,
+        blockHeight: 2_837_899,
         status: 'CONFIRMED',
         tier: 'NIMBUS',
         confirmedHeight: 100,

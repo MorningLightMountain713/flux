@@ -30,7 +30,7 @@ describe('playgroundAudit tests', () => {
           collections: { playgroundSessions: 'playgroundsessions' },
         },
       },
-      fluxapps: { playgroundAuditRetentionMs: 2592000000 },
+      fluxapps: { playgroundAuditRetentionMs: 2_592_000_000 },
     };
     return proxyquire('../../ZelBack/src/services/appPlayground/playgroundAudit', {
       config: asConfig(configStub),

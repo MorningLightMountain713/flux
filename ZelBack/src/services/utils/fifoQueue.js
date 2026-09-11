@@ -12,7 +12,7 @@ class FifoQueue extends EventEmitter {
   // Class constants
   static get defaultRetries() { return 5; }
 
-  static get defaultRetryDelay() { return 60000; } // 1m
+  static get defaultRetryDelay() { return 60_000; } // 1m
 
   static get defaultMaxSize() { return 10; }
 

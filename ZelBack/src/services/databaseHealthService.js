@@ -35,7 +35,7 @@ let timedOut = [];
 let releaseTimer = null;
 
 function monotonicMs() {
-  return Number(process.hrtime.bigint() / 1000000n);
+  return Number(process.hrtime.bigint() / 1_000_000n);
 }
 
 /** Every round trip it counted is a full window old by now, so none is left to count. */
@@ -58,7 +58,7 @@ function recordTimeout(what) {
   if (!held) {
     fluxNetworkHelper.setPlacementHold(
       OWNER,
-      `Database calls are timing out: ${SUSPECT_ROUND_TRIPS} round trips ran out within ${SUSPECT_WINDOW_MS / 60000} minutes`,
+      `Database calls are timing out: ${SUSPECT_ROUND_TRIPS} round trips ran out within ${SUSPECT_WINDOW_MS / 60_000} minutes`,
     );
   }
   clearTimeout(releaseTimer);

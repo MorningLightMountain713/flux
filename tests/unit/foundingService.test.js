@@ -22,7 +22,7 @@ const SELF = `${SELF_TXHASH}:0`;
 const COMMITTEE = {
   repinned: false,
   generation: 2,
-  anchor: 500000,
+  anchor: 500_000,
   fingerprint: 'c'.repeat(64),
   quorum: 5,
   members: [],
@@ -40,7 +40,7 @@ function recordRow(rung, grantee, generation = 2) {
 describe('foundingService', () => {
   beforeEach(() => {
     sinon.stub(foundingCommittee, 'componentWorld').resolves({
-      intro: 500000, rungs: [500000], armed: false,
+      intro: 500_000, rungs: [500_000], armed: false,
     });
     sinon.stub(foundingCommittee, 'refereeCommittee').resolves(COMMITTEE);
     sinon.stub(daemonServiceMiscRpcs, 'isDaemonSynced').returns({ status: 'success', data: { synced: true } });
@@ -62,7 +62,7 @@ describe('foundingService', () => {
     foundingCommittee.componentWorld.resolves(null);
     expect(await foundingService.founderAsk('myapp', 'db')).to.deep.equal({ answer: 'wait' });
 
-    foundingCommittee.componentWorld.resolves({ intro: 500000, rungs: [500000], armed: false });
+    foundingCommittee.componentWorld.resolves({ intro: 500_000, rungs: [500_000], armed: false });
     foundingCommittee.refereeCommittee.resolves(null);
     expect(await foundingService.founderAsk('myapp', 'db')).to.deep.equal({ answer: 'wait' });
     expect(grantClient.acquire.called).to.equal(false);
@@ -73,16 +73,16 @@ describe('foundingService', () => {
     expect(await foundingService.founderAsk('myapp', 'db')).to.deep.equal({ answer: 'wait' });
 
     daemonServiceMiscRpcs.isDaemonSynced.returns({ status: 'success', data: { synced: true } });
-    foundingCommittee.componentWorld.resolves({ intro: 500000, rungs: [500000], armed: true });
+    foundingCommittee.componentWorld.resolves({ intro: 500_000, rungs: [500_000], armed: true });
     expect(await foundingService.founderAsk('myapp', 'db')).to.deep.equal({ answer: 'wait' });
     expect(grantClient.acquire.called).to.equal(false);
   });
 
   it('newest-decided-wins: a higher rung record retires a lower rung yes', async () => {
-    foundingCommittee.componentWorld.resolves({ intro: 500000, rungs: [500000, 500720], armed: false });
+    foundingCommittee.componentWorld.resolves({ intro: 500_000, rungs: [500_000, 500_720], armed: false });
     messageStore.getMasterleaseRecordsByRolePrefix.resolves([
-      recordRow(500720, 'other:0'),
-      recordRow(500000, SELF),
+      recordRow(500_720, 'other:0'),
+      recordRow(500_000, SELF),
     ]);
     expect(await foundingService.founderAsk('myapp', 'db')).to.deep.equal({ answer: 'no' });
     expect(grantClient.acquire.called).to.equal(false);
@@ -113,10 +113,10 @@ describe('foundingService', () => {
   });
 
   it('the synced record answers without a wire round — yes for the recorded founder, no for anyone else', async () => {
-    messageStore.getMasterleaseRecordsByRolePrefix.resolves([recordRow(500000, SELF)]);
+    messageStore.getMasterleaseRecordsByRolePrefix.resolves([recordRow(500_000, SELF)]);
     expect(await foundingService.founderAsk('myapp', 'db')).to.deep.equal({ answer: 'yes' });
 
-    messageStore.getMasterleaseRecordsByRolePrefix.resolves([recordRow(500000, 'other:0')]);
+    messageStore.getMasterleaseRecordsByRolePrefix.resolves([recordRow(500_000, 'other:0')]);
     expect(await foundingService.founderAsk('myapp', 'db')).to.deep.equal({ answer: 'no' });
 
     expect(messageStore.getMasterleaseRecordsByRolePrefix.alwaysCalledWith('myapp', `founder-${TOKEN_DB}@`)).to.equal(true);
@@ -124,7 +124,7 @@ describe('foundingService', () => {
   });
 
   it('a retired generation record is the dead world talking — the round runs fresh', async () => {
-    messageStore.getMasterleaseRecordsByRolePrefix.resolves([recordRow(500000, 'other:0', 1)]);
+    messageStore.getMasterleaseRecordsByRolePrefix.resolves([recordRow(500_000, 'other:0', 1)]);
     const reply = await foundingService.founderAsk('myapp', 'db');
     expect(reply).to.deep.equal({ answer: 'yes' });
     expect(grantClient.acquire.calledOnce).to.equal(true);
@@ -135,10 +135,10 @@ describe('foundingService', () => {
   // photo-less late joiner answering wait for an app founded long ago.
   it('a photo-less node still answers from the synced record — record before photo', async () => {
     foundingCommittee.refereeCommittee.resolves(null);
-    messageStore.getMasterleaseRecordsByRolePrefix.resolves([recordRow(500000, 'other:0')]);
+    messageStore.getMasterleaseRecordsByRolePrefix.resolves([recordRow(500_000, 'other:0')]);
     expect(await foundingService.founderAsk('myapp', 'db')).to.deep.equal({ answer: 'no' });
 
-    messageStore.getMasterleaseRecordsByRolePrefix.resolves([recordRow(500000, SELF)]);
+    messageStore.getMasterleaseRecordsByRolePrefix.resolves([recordRow(500_000, SELF)]);
     expect(await foundingService.founderAsk('myapp', 'db')).to.deep.equal({ answer: 'yes' });
     expect(grantClient.acquire.called).to.equal(false);
   });
@@ -148,7 +148,7 @@ describe('foundingService', () => {
     // newest owner-record view judges the record, so the retired world's
     // record stays dead even where a stale photo would have believed it.
     messageStore.getGrantGenerationRecord.resolves({ data: { generation: 3 } });
-    messageStore.getMasterleaseRecordsByRolePrefix.resolves([recordRow(500000, 'other:0')]);
+    messageStore.getMasterleaseRecordsByRolePrefix.resolves([recordRow(500_000, 'other:0')]);
     const reply = await foundingService.founderAsk('myapp', 'db');
     expect(reply.answer).to.not.equal('no');
   });
@@ -158,8 +158,8 @@ describe('foundingService', () => {
     // old committee stands again); ONLY the synced record can retire its
     // founding. The scan is knowledge-driven, not ladder-driven.
     messageStore.getMasterleaseRecordsByRolePrefix.resolves([
-      recordRow(500000, SELF),
-      recordRow(500720, 'other:0'),
+      recordRow(500_000, SELF),
+      recordRow(500_720, 'other:0'),
     ]);
     expect(await foundingService.founderAsk('myapp', 'db')).to.deep.equal({ answer: 'no' });
     expect(grantClient.acquire.called).to.equal(false);
@@ -192,7 +192,7 @@ describe('foundingService', () => {
     });
 
     it('an undecided round runs on a peer-discovered basis', async () => {
-      serviceHelper.axiosGet.resolves({ data: { status: 'success', data: { rung: 500000, basis: DISCOVERED } } });
+      serviceHelper.axiosGet.resolves({ data: { status: 'success', data: { rung: 500_000, basis: DISCOVERED } } });
       const reply = await foundingService.founderAsk('myapp', 'db');
       expect(reply).to.deep.equal({ answer: 'yes' });
       expect(grantClient.acquire.calledOnce).to.equal(true);
@@ -202,7 +202,7 @@ describe('foundingService', () => {
     });
 
     it('discovery of a NEWER rung moves the ask there — a missed flip window heals', async () => {
-      serviceHelper.axiosGet.resolves({ data: { status: 'success', data: { rung: 500720, basis: DISCOVERED } } });
+      serviceHelper.axiosGet.resolves({ data: { status: 'success', data: { rung: 500_720, basis: DISCOVERED } } });
       const reply = await foundingService.founderAsk('myapp', 'db');
       expect(reply).to.deep.equal({ answer: 'yes' });
       const [key] = grantClient.acquire.firstCall.args;
@@ -210,11 +210,11 @@ describe('foundingService', () => {
     });
 
     it('a malformed discovered basis is a non-answer, never a minted basis', async () => {
-      serviceHelper.axiosGet.resolves({ data: { status: 'success', data: { rung: 500000, basis: { fingerprint: 'x', members: [] } } } });
+      serviceHelper.axiosGet.resolves({ data: { status: 'success', data: { rung: 500_000, basis: { fingerprint: 'x', members: [] } } } });
       expect(await foundingService.founderAsk('myapp', 'db')).to.deep.equal({ answer: 'wait' });
       expect(grantClient.acquire.called).to.equal(false);
 
-      serviceHelper.axiosGet.resolves({ data: { status: 'success', data: { rung: 499000, basis: DISCOVERED } } });
+      serviceHelper.axiosGet.resolves({ data: { status: 'success', data: { rung: 499_000, basis: DISCOVERED } } });
       expect(await foundingService.founderAsk('myapp', 'db')).to.deep.equal({ answer: 'wait' });
       expect(grantClient.acquire.called).to.equal(false);
     });

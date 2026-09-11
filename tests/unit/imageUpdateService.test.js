@@ -466,10 +466,10 @@ describe('imageUpdateService tests', () => {
         name: 'ComposedApp',
         compose: [
           legacyComponent({
-            name: 'web', repotag: 'nginx:latest', ports: [31443], containerPorts: [443],
+            name: 'web', repotag: 'nginx:latest', ports: [31_443], containerPorts: [443],
           }),
           legacyComponent({
-            name: 'api', repotag: 'node:18', ports: [31444], containerPorts: [8080],
+            name: 'api', repotag: 'node:18', ports: [31_444], containerPorts: [8080],
           }),
         ],
       }));
@@ -594,10 +594,10 @@ describe('imageUpdateService tests', () => {
         name: 'TestApp',
         compose: [
           legacyComponent({
-            name: 'web', repotag: 'nginx:latest', ports: [31443], containerPorts: [443],
+            name: 'web', repotag: 'nginx:latest', ports: [31_443], containerPorts: [443],
           }),
           legacyComponent({
-            name: 'api', repotag: 'node:18', ports: [31444], containerPorts: [8080],
+            name: 'api', repotag: 'node:18', ports: [31_444], containerPorts: [8080],
           }),
         ],
       }));

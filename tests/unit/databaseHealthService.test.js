@@ -141,7 +141,7 @@ describe('databaseHealthService tests', () => {
     });
 
     it('counts one stuck read as two round trips, so two stuck reads hold the node', async function stuckReads() {
-      this.timeout(10000);
+      this.timeout(10_000);
       const ranOut = sinon.spy(log, 'warn');
       const collection = real.db(config.database.local.database).collection('databasehealthprobe');
       await collection.insertOne({ probe: 1 });

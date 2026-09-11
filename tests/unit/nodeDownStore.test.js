@@ -95,7 +95,7 @@ describe('nodeDownStore', () => {
   let collection;
 
   before(async function bootstrap() {
-    this.timeout(30000);
+    this.timeout(30_000);
     await dbHelper.initiateDB();
     collection = dbHelper.databaseConnection()
       .db(config.database.appsglobal.database)
@@ -349,7 +349,7 @@ describe('nodeDownStore', () => {
       // the same death, certified by another juror a few seconds later,
       // arriving after the return that refuted the record
       const other = await store.handleNodeDownEvent({
-        message: { certificate: world.certificate(['j2', 'j3', 'j4', 'j5'], { height: 1002, death: 1 }), broadcastedAt: at + 5_000 },
+        message: { certificate: world.certificate(['j2', 'j3', 'j4', 'j5'], { height: 1002, death: 1 }), broadcastedAt: at + 5000 },
       });
       expect(other).to.deep.equal({ accepted: false, rebroadcast: false, reason: 'same_death' });
       expect((await store.placementFreezeFor(S)).count).to.equal(1);
@@ -373,7 +373,7 @@ describe('nodeDownStore', () => {
       world.height = 1050;
       const dAgain = world.certificate(['j2', 'j3', 'j4', 'j5'], { height: 1050, death: 2 });
       const other = await store.handleNodeDownEvent({
-        message: { certificate: dAgain, broadcastedAt: first + 60_000 + 5_000 },
+        message: { certificate: dAgain, broadcastedAt: first + 60_000 + 5000 },
       });
       expect(other.reason).to.equal('same_death');
       expect(other.accepted).to.equal(false);
@@ -606,7 +606,7 @@ describe('nodeDownStore — the record carries since and reason (R4)', () => {
   let collection;
 
   before(async function bootstrap() {
-    this.timeout(30000);
+    this.timeout(30_000);
     await dbHelper.initiateDB();
     collection = dbHelper.databaseConnection()
       .db(config.database.appsglobal.database)

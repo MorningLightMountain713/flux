@@ -25,7 +25,7 @@ const BATCH_MS = 250;
  * unbounded queue turns a loud container into the node's memory problem. What
  * was dropped is counted and reported, never passed over in silence.
  */
-const MAX_QUEUED_LINES = 20000;
+const MAX_QUEUED_LINES = 20_000;
 
 /**
  * How much history a subscriber is sent before the live lines, so a viewer opens

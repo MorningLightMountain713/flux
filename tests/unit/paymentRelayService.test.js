@@ -287,7 +287,7 @@ describe('paymentRelayService tests', () => {
       req.destroy = sinon.fake();
 
       paymentRelayService.receivePaymentCallback(req, res);
-      req.emit('data', 'a'.repeat(20000));
+      req.emit('data', 'a'.repeat(20_000));
 
       sinon.assert.calledWith(res.status, 413);
       sinon.assert.notCalled(req.destroy);
@@ -299,7 +299,7 @@ describe('paymentRelayService tests', () => {
     it('refuses a body too large to be a callback, and answers 413', async () => {
       const paymentId = issueId();
 
-      const { res, body } = await callWithBody(JSON.stringify({ txid: 'a'.repeat(20000) }), { paymentid: paymentId });
+      const { res, body } = await callWithBody(JSON.stringify({ txid: 'a'.repeat(20_000) }), { paymentid: paymentId });
 
       sinon.assert.calledWith(res.status, 413);
       expect(body.status).to.equal('error');

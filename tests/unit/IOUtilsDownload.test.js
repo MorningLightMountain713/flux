@@ -82,7 +82,7 @@ describe('IOUtils downloadFileFromUrl', () => {
   });
 
   it('abandons a body that goes silent and resumes it from the bytes on disk', async () => {
-    handler = (req, res, n) => serve(req, res, n === 1 ? { stallAt: 20000 } : {});
+    handler = (req, res, n) => serve(req, res, n === 1 ? { stallAt: 20_000 } : {});
 
     const result = await IOUtils.downloadFileFromUrl(baseUrl, dir, 'COMP', true, fast);
 
@@ -92,7 +92,7 @@ describe('IOUtils downloadFileFromUrl', () => {
   });
 
   it('settles when the connection dies mid-body, and resumes', async () => {
-    handler = (req, res, n) => serve(req, res, n === 1 ? { cutAt: 30000 } : {});
+    handler = (req, res, n) => serve(req, res, n === 1 ? { cutAt: 30_000 } : {});
 
     const result = await IOUtils.downloadFileFromUrl(baseUrl, dir, 'COMP', true, fast);
 
@@ -102,7 +102,7 @@ describe('IOUtils downloadFileFromUrl', () => {
   });
 
   it('starts over when the server ignores the range', async () => {
-    handler = (req, res, n) => serve(req, res, n === 1 ? { stallAt: 20000 } : { honourRange: false });
+    handler = (req, res, n) => serve(req, res, n === 1 ? { stallAt: 20_000 } : { honourRange: false });
 
     const result = await IOUtils.downloadFileFromUrl(baseUrl, dir, 'COMP', true, fast);
 
@@ -129,7 +129,7 @@ describe('IOUtils downloadFileFromUrl', () => {
 
   it('sends If-Range on a resume, and starts over when the file changed meanwhile', async () => {
     const changed = Buffer.from(body).reverse();
-    handler = (req, res, n) => serve(req, res, n === 1 ? { stallAt: 20000 } : { etag: '"v2"', content: changed });
+    handler = (req, res, n) => serve(req, res, n === 1 ? { stallAt: 20_000 } : { etag: '"v2"', content: changed });
 
     const result = await IOUtils.downloadFileFromUrl(baseUrl, dir, 'COMP', true, fast);
 
@@ -145,7 +145,7 @@ describe('IOUtils downloadFileFromUrl', () => {
         res.end();
         return;
       }
-      serve(req, res, n === 1 ? { stallAt: 20000 } : {});
+      serve(req, res, n === 1 ? { stallAt: 20_000 } : {});
     };
 
     const result = await IOUtils.downloadFileFromUrl(baseUrl, dir, 'COMP', true, fast);

@@ -25,11 +25,11 @@ const CONFIG = {
     playgroundSessionMemoryMb: 4096,
     playgroundSessionRootFsGb: 10,
     playgroundSessionMaxComponents: 3,
-    playgroundSessionTtlMs: 900000,
+    playgroundSessionTtlMs: 900_000,
     playgroundNodeConcurrentSessions: 1,
     playgroundNodeSessionsPerHour: 2,
     playgroundCallerSessionsPerHour: 3,
-    playgroundWindowMs: 3600000,
+    playgroundWindowMs: 3_600_000,
   },
 };
 
@@ -139,7 +139,7 @@ describe('playgroundService', () => {
           : { serves: true, candidates: [] },
       ),
       installedApps: sinon.stub().resolves({ status: 'success', data: opts.installed ?? [] }),
-      nodeCapacity: sinon.stub().resolves({ availableSpace: 500, availableCpu: 100, availableRam: 30000 }),
+      nodeCapacity: sinon.stub().resolves({ availableSpace: 500, availableCpu: 100, availableRam: 30_000 }),
       capacityShortfall: sinon.stub().returns(opts.shortfall ?? null),
       burstShortfall: sinon.stub().returns(null),
       reserve: sinon.stub(),
@@ -161,7 +161,7 @@ describe('playgroundService', () => {
       }),
       fleetRelease: sinon.stub().resolves(),
       fleetAnnounce: sinon.stub().resolves(),
-      windowIndex: sinon.stub().returns(20347),
+      windowIndex: sinon.stub().returns(20_347),
       // A spy over the real validator, not a double of it: the tests below read
       // what the service asked, and the answer is whatever flux-spec really
       // returns for that submission - a FluxAppSpecV9, or a throw.
@@ -946,7 +946,7 @@ describe('playgroundService', () => {
 
       await svc.servingSetAPI({ headers: { zelidauth: { zelid: '1CallerZelId' } }, params: {} }, res);
 
-      expect(res.captured.body.data.window).to.equal(20347);
+      expect(res.captured.body.data.window).to.equal(20_347);
     });
 
     it('drops a node the list carries with no address', async () => {

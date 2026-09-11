@@ -15,6 +15,7 @@ const asyncLock = require('./utils/asyncLock');
 const log = require('../lib/log');
 
 const fluxController = require('./utils/fluxController');
+const { MAX_PORT } = require('./utils/socketAddressUtils');
 
 /**
  * The Service Helper controller
@@ -37,23 +38,23 @@ const locks = new Map();
  * @returns {Array}
  */
 function cyrb128(initializer) {
-  let h1 = 1779033703;
-  let h2 = 3144134277;
-  let h3 = 1013904242;
-  let h4 = 2773480762;
+  let h1 = 1_779_033_703;
+  let h2 = 3_144_134_277;
+  let h3 = 1_013_904_242;
+  let h4 = 2_773_480_762;
 
   for (let i = 0, k; i < initializer.length; i += 1) {
     k = initializer.charCodeAt(i);
-    h1 = h2 ^ Math.imul(h1 ^ k, 597399067);
-    h2 = h3 ^ Math.imul(h2 ^ k, 2869860233);
-    h3 = h4 ^ Math.imul(h3 ^ k, 951274213);
-    h4 = h1 ^ Math.imul(h4 ^ k, 2716044179);
+    h1 = h2 ^ Math.imul(h1 ^ k, 597_399_067);
+    h2 = h3 ^ Math.imul(h2 ^ k, 2_869_860_233);
+    h3 = h4 ^ Math.imul(h3 ^ k, 951_274_213);
+    h4 = h1 ^ Math.imul(h4 ^ k, 2_716_044_179);
   }
 
-  h1 = Math.imul(h3 ^ (h1 >>> 18), 597399067);
-  h2 = Math.imul(h4 ^ (h2 >>> 22), 2869860233);
-  h3 = Math.imul(h1 ^ (h3 >>> 17), 951274213);
-  h4 = Math.imul(h2 ^ (h4 >>> 19), 2716044179);
+  h1 = Math.imul(h3 ^ (h1 >>> 18), 597_399_067);
+  h2 = Math.imul(h4 ^ (h2 >>> 22), 2_869_860_233);
+  h3 = Math.imul(h1 ^ (h3 >>> 17), 951_274_213);
+  h4 = Math.imul(h2 ^ (h4 >>> 19), 2_716_044_179);
 
   h1 ^= (h2 ^ h3 ^ h4);
   h2 ^= h1;
@@ -81,7 +82,7 @@ function splitmix32(seed) {
     t ^= t >>> 15;
     t = Math.imul(t, 0x735a2d97);
 
-    const value = ((t ^= t >>> 15) >>> 0) / 4294967296;
+    const value = ((t ^= t >>> 15) >>> 0) / 4_294_967_296;
 
     return value;
   };
@@ -112,7 +113,7 @@ function splitmix32(seed) {
 function parseInterval(userInterval) {
   // we use a default interval here of 1 second, instead of 0. This is in case of
   // user error where there is a function in a loop, this will prevent cpu @ 100%
-  const defaultInterval = 1_000;
+  const defaultInterval = 1000;
 
   if (typeof userInterval !== 'string' && typeof userInterval !== 'number') {
     log.warn(`Unparsable time value received: ${userInterval}, returning 1000ms`);
@@ -153,7 +154,7 @@ function parseInterval(userInterval) {
       case 'secs':
       case 'second':
       case 'seconds':
-        ms += measure * 1_000;
+        ms += measure * 1000;
         break;
       case 'm':
       case 'min':
@@ -470,7 +471,7 @@ function validPort(port) {
   if (!/^\d+$/.test(String(port))) return false;
 
   const asNumber = Number(port);
-  return asNumber >= 1 && asNumber <= 65535;
+  return asNumber >= 1 && asNumber <= MAX_PORT;
 }
 
 /**

@@ -235,7 +235,7 @@ describe('deploymentProvider tests', () => {
             swapGb: 2,
             rootFsGb: 2,
             persistentStorage: { sizeGb: 10, mounts: { '/data': { source: 'data', destination: '/data' } } },
-            ports: { tcp_80: { containerPort: 80, hostPort: 31000, protocol: 'tcp' } },
+            ports: { tcp_80: { containerPort: 80, hostPort: 31_000, protocol: 'tcp' } },
           },
         },
       });

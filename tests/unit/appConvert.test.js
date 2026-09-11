@@ -37,7 +37,7 @@ let suite;
 describe('appConvert (registryManager) tests', () => {
   before(async function loadLibrary() {
     // The first fromSubmission compiles the ajv schemas.
-    this.timeout(30000);
+    this.timeout(30_000);
     flux = await loadSpecLibrary();
     const {
       CipherSuite, DhkemX25519HkdfSha256, HkdfSha256, Aes256Gcm,
@@ -54,7 +54,7 @@ describe('appConvert (registryManager) tests', () => {
    * InstantiatedSpec over a real stored spec. Only the mongo read is stubbed.
    * @returns {Promise<object>} the InstantiatedSpec the stub will return
    */
-  async function registryHolds(spec, { height = 1700000 } = {}) {
+  async function registryHolds(spec, { height = 1_700_000 } = {}) {
     const held = await instantiatedSpec(spec, { height });
     sinon.stub(appsRepository, 'getGlobalAppInfo').resolves(held);
     return held;
@@ -135,7 +135,7 @@ describe('appConvert (registryManager) tests', () => {
     // converting at height undefined — with no error anywhere.
     expect(held.version, 'convert routes on .version').to.equal(8);
     expect(held.isEncrypted, 'convert routes on .isEncrypted').to.equal(false);
-    expect(held.height, 'fromLegacy is given .height as confirmationHeight').to.equal(1700000);
+    expect(held.height, 'fromLegacy is given .height as confirmationHeight').to.equal(1_700_000);
     expect(held.name, 'storage refs are resolved against .name').to.equal('convertme');
     expect(held.spec, 'fromLegacy converts .spec').to.be.an.instanceOf(flux.FluxAppSpecV8);
   });

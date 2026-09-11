@@ -156,7 +156,7 @@ async function getMongoDbVersion() {
  */
 async function waitForMongo() {
   const RETRY_DELAY_MS = 5000;
-  const LOG_INTERVAL_MS = 60000;
+  const LOG_INTERVAL_MS = 60_000;
   let lastLogAt = 0;
 
   // eslint-disable-next-line no-constant-condition
@@ -283,7 +283,7 @@ async function buildIndex(collection, spec, options, recover) {
   try {
     await collection.createIndex(spec, options);
   } catch (err) {
-    const duplicate = err && (err.code === 11000 || err.codeName === 'DuplicateKey');
+    const duplicate = err && (err.code === 11_000 || err.codeName === 'DuplicateKey');
     if (!duplicate || !recover) throw err;
     const removed = await recover(collection, spec, options);
     log.warn(`ensureIndex - ${collection.collectionName} (key: ${JSON.stringify(spec)}) held ${removed} row(s) violating a unique index; removed and rebuilding`);
