@@ -170,6 +170,7 @@ class AppSyncOrchestrator {
   #ingressSyncComplete = false;
   #stateSyncComplete = false;
   #syncRoundAbandoned = false;
+  #roundStartedAt = null;
   #askInFlight = false;
   #askDirty = false;
   #peerDisconnectedHandler = null;
@@ -594,6 +595,28 @@ class AppSyncOrchestrator {
       // findings about a peer and a reader acts on them differently.
       fluxEventBus.publish('ephemeralSync:peerTimedOut', { peer: key, reason: why, missing });
     }
+
+    // THE ROUND'S OWN BUDGET, after the per-peer pass and not before it. These
+    // were kept apart once: the budget cleared the asked-marks and left the
+    // deadlines armed, so a peer that was streaming perfectly went quiet only
+    // because this node had stopped listening - and was then recorded as having
+    // stalled, a false accusation that outlives the round that made it.
+    //
+    // After, because one poll can find a peer's deadline and the round's budget
+    // both due - a timer would have fired the peer's deadline long before - and
+    // a peer that really did go silent should still be recorded as such. A peer
+    // still delivering is not judged by the loop above at all, which is what
+    // keeps it unaccused here.
+    if (this.#roundStartedAt !== null && now - this.#roundStartedAt >= SYNC_TIMEOUT_MS) {
+      const answered = Object.entries(this.#syncCompletions)
+        .map(([type, peers]) => `${type}=${peers.size}`).join(' ');
+      log.warn(`AppSyncOrchestrator - Sync budget spent, peers answered: ${answered}`);
+      this.#syncRoundAbandoned = true;
+      this.#clearSyncRequested();
+      this.#peerProgress.clear();
+      return;
+    }
+
     this.#own(this.#runRequestPass());
   }
 
@@ -814,6 +837,9 @@ class AppSyncOrchestrator {
     }
 
     const askedAt = Date.now();
+    // The round's own clock starts at its FIRST ask and is not restarted by a
+    // replacement - the budget bounds the attempt, not each peer's turn in it.
+    if (this.#roundStartedAt === null) this.#roundStartedAt = askedAt;
     for (const peer of peersToAsk) {
       this.#askedPeers.add(peer.key);
       const connectionId = peer.connectionId ?? null;
@@ -900,6 +926,7 @@ class AppSyncOrchestrator {
 
   #resetSyncState() {
     this.#askedPeers.clear();
+    this.#roundStartedAt = null;
     this.#peerProgress.clear();
     this.#clearSyncRequested();
     // The block timer is EPOCH state: it backstops the sync that is starting,
