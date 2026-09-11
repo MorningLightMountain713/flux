@@ -30,6 +30,7 @@ const {
   buildDeviceConfiguration,
   createSyncthingFolderConfig,
   ensureStfolderExists,
+  ensureStignoreCovers,
   folderNeedsUpdate,
 } = require('./syncthingMonitorHelpers');
 const { ensureStignoreCovers } = require('../appSystem/syncthingIgnorePolicy');
@@ -344,6 +345,23 @@ async function processContainerData(params) {
   const syncthingFolder = createSyncthingFolderConfig(id, label, folder, devices);
   const syncFolder = allFoldersResp.data.find((x) => x.id === id);
 
+  // CONVERGE THE IGNORE POLICY, through syncthing's own API - it owns .stignore
+  // and writes it atomically. Only once syncthing knows the folder: a brand-new
+  // one had its .stignore seeded at volume creation, and an existing one was
+  // configured in a prior pass and persists across restarts. So this reaches
+  // every folder whose ignores predate a policy line, and skips the single pass
+  // where a fresh install is not yet configured. A converged folder posts
+  // nothing and triggers no rescan.
+  //
+  // Nothing called this. The policy is `/backup` and `/<staging>*`: without it
+  // every byte a copy, extract or upload stages replicates to every peer only
+  // to be deleted again on publish - and a peer's boot sweep can delete a
+  // replicated staging directory that a live operation on another node still
+  // needs.
+  if (syncFolder) {
+    await ensureStignoreCovers(id);
+  }
+
   // activeStandby (the election decides which instance runs) and syncFirst (the
   // sync-readiness decider starts it once data is complete) are the decider-owned
   // modes that drive the folder state machine.
@@ -472,7 +490,28 @@ async function syncthingAppsCore(state, getGlobalStateFn) {
   try {
     // Installed app deployments, resolved (and decrypted for enterprise apps)
     // through the domain provider - no version branching, no separate decrypt.
-    const deployments = await deploymentProvider.listInstalledDeployments();
+    //
+    // AN APP THIS NODE COULD NOT READ IS NOT AN APP THAT IS NOT INSTALLED, and
+    // the deployment list alone cannot tell those apart. The pass acts on the
+    // specification, and an app whose spec cannot be read tells us nothing about
+    // which folders it owns - so its folders are protected from the sweep below
+    // rather than swept as orphans. Everything that DID resolve is managed
+    // normally: aborting the whole pass instead would stop folder registration,
+    // mount safety, promotion and error draining for every app on the node, and
+    // stop publishing the writable-folder answer its peers block on, for as long
+    // as one app stayed unreadable.
+    const {
+      deployments, unreadableAppNames,
+    } = await deploymentProvider.listInstalledDeploymentsDetailed();
+    if (unreadableAppNames.size) {
+      log.warn(`syncthingAppsCore - folders of unreadable apps are protected this pass: ${[...unreadableAppNames].join(', ')}`);
+    }
+    // A folder id is the component identifier, which ends in _<appName> - and an
+    // app name cannot contain an underscore - so a folder always names the app
+    // that owns it, even when that app's components cannot be read.
+    const ownedByUnreadableApp = (folderId) => unreadableAppNames.has(
+      folderId.slice(folderId.lastIndexOf('_') + 1),
+    );
 
     // Drain the folders syncthing flagged with errors since the last cycle. Mount
     // safety is verified only at decision points - the first pass after start (the
@@ -752,7 +791,8 @@ async function syncthingAppsCore(state, getGlobalStateFn) {
     }
     const nonUsedFolders = allFoldersResp.data.filter(
       (syncthingFolder) => !folderIds.includes(syncthingFolder.id)
-        && !installedFolderIds.has(syncthingFolder.id),
+        && !installedFolderIds.has(syncthingFolder.id)
+        && !ownedByUnreadableApp(syncthingFolder.id),
     );
     const nonUsedDevices = allDevicesResp.data.filter(
       (syncthingDevice) => !devicesIds.includes(syncthingDevice.deviceID) && syncthingDevice.deviceID !== localDeviceId,
