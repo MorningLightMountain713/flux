@@ -97,20 +97,6 @@ const noPrimaryAnnounced = new Set();
 
 const fluxDirPath = process.env.FLUXOS_PATH || path.join(process.env.HOME, 'zelflux');
 
-// We need to avoid circular dependency, so we'll implement getInstalledAppsForDocker locally
-// eslint-disable-next-line no-unused-vars
-function getInstalledAppsForDocker() {
-  try {
-    return dockerService.dockerListContainers({
-      all: true,
-      filters: { name: [config.fluxapps.appNamePrefix] },
-    });
-  } catch (error) {
-    log.error('Error getting installed apps:', error);
-    return [];
-  }
-}
-
 /**
  * Get the FDM index based on app name first letter (distributes across 4 servers)
  * @param {string} appName - Application name

@@ -12,15 +12,36 @@
 // at either and has to answer the same way whichever it began at.
 
 const { expect } = require('chai');
+const fs = require('fs');
 const path = require('path');
 const { execFile } = require('child_process');
 
 const repoRoot = path.join(__dirname, '..', '..');
 
-const ENTRY_POINTS = [
-  { name: 'app.js', file: path.join(repoRoot, 'app.js') },
-  { name: 'apiServer.js', file: path.join(repoRoot, 'apiServer.js') },
-];
+// WHAT AN ENTRY POINT IS, rather than a list of the ones we remembered.
+//
+// A hand-written list is the rot: a third entry point added later is covered by
+// nothing and nothing fails, and the pins are exactly the kind of thing whose
+// absence is invisible until a node is disclosing stack traces in production.
+//
+// A root-level file that reaches into ZelBack is a file a process can begin at
+// and that pulls the service tree with it, so it has to settle the environment
+// before it does. Everything else at the root is named below with its reason.
+const NOT_AN_ENTRY_POINT = new Map([
+  ['init.js', 'writes config/userconfig.js with inquirer and never reads node-config'],
+  ['sampleUserConfig.js', 'a data file - the template init.js writes from'],
+  ['test.js', 'a stray one-line console.log, not reachable from any script'],
+]);
+
+// Dotfiles are tooling configuration, read by eslint and never by node as a
+// program - they are not files a process can begin at.
+const rootJsFiles = fs.readdirSync(repoRoot)
+  .filter((name) => name.endsWith('.js') && !name.startsWith('.'))
+  .sort();
+
+const ENTRY_POINTS = rootJsFiles
+  .filter((name) => !NOT_AN_ENTRY_POINT.has(name))
+  .map((name) => ({ name, file: path.join(repoRoot, name) }));
 
 // The child starts with every one of these already set, and set wrongly. A value taken
 // from the environment changes what the node discloses without any file saying so, which
@@ -60,6 +81,31 @@ function loadEntryPoint(entryFile) {
   });
 }
 
+describe('which files are entry points', () => {
+  // There is deliberately no test that "every root file is covered": the list
+  // below IS every root file minus the exemptions, so such a test cannot fail
+  // and would only look like cover. What makes a new entry point safe is the
+  // derivation itself - a file dropped at the root is described and run through
+  // every assertion in this file without anyone adding it to a list. Verified
+  // by planting one: it was picked up and failed the require-order check.
+  //
+  // So the only thing left to check is the escape hatch.
+  it('names a reason for every root file it does not treat as an entry point', () => {
+    NOT_AN_ENTRY_POINT.forEach((why, name) => {
+      expect(rootJsFiles, `${name} is exempt but no longer exists - drop the exemption`).to.include(name);
+      expect(why, `${name} is exempt with no reason recorded`).to.be.a('string').with.length.greaterThan(20);
+      expect(
+        fs.readFileSync(path.join(repoRoot, name), 'utf8'),
+        `${name} now reaches into ZelBack, so the reason it was exempt no longer holds`,
+      ).to.not.contain("require('./ZelBack/");
+    });
+  });
+
+  it('found entry points at all, so an empty list cannot pass every check below', () => {
+    expect(ENTRY_POINTS.map((e) => e.name)).to.include.members(['app.js', 'apiServer.js']);
+  });
+});
+
 ENTRY_POINTS.forEach(({ name, file }) => {
   describe(`the entry point: ${name}`, function () {
     this.timeout(90000);
@@ -95,6 +141,21 @@ ENTRY_POINTS.forEach(({ name, file }) => {
     it('pins the config directory and closes the one that is merged over it', () => {
       expect(loaded.env.NODE_CONFIG_DIR).to.equal(`${repoRoot}/ZelBack/config/`);
       expect(loaded.env.NODE_CONFIG).to.equal(null);
+    });
+
+    // Both of these are order-dependent and neither fails visibly when the order
+    // is wrong: node-config, express and apicache read the environment as they
+    // load, so a require placed above the pins answers the question first, and
+    // the reconciliation has to run before anything reads a knob rather than
+    // after something has already read undefined.
+    //
+    // Asserted on the source because the damage is silent in the end state: the
+    // variables are still set afterwards either way.
+    it('pins the environment and reconciles config before it requires anything else', () => {
+      const source = fs.readFileSync(file, 'utf8');
+      const requires = [...source.matchAll(/require\('([^']+)'\)/g)].map((m) => m[1]);
+      expect(requires[0], 'something is required above the environment pins').to.equal('./ZelBack/pinEnvironment');
+      expect(requires[1], 'a knob could be read before the config reconciliation runs').to.equal('./ZelBack/configReconciliation');
     });
   });
 });

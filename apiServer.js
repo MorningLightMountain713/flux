@@ -2,6 +2,11 @@
 // file runs as an entry point of its own under `require.main === module`, so it settles
 // the environment rather than relying on whoever required it having done so.
 require('./ZelBack/pinEnvironment');
+// Second, and above everything that reads config: every fluxapps knob this code
+// names must be one config ships. Same refusal as the userconfig check below,
+// for the half of the configuration that ships with the node rather than being
+// written by the operator.
+require('./ZelBack/configReconciliation').reconcile();
 
 const configManager = require('./ZelBack/src/services/utils/configManager');
 
