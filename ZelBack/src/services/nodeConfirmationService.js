@@ -10,9 +10,9 @@ const { AsyncGate } = require('./utils/asyncGate');
 const fluxEventBus = require('./utils/fluxEventBus');
 const log = require('../lib/log');
 
-const DAEMON_STALE_MS = config.confirmation.daemonStaleMs;
-const CONFIRM_EXPIRATION_BLOCKS = config.confirmation.confirmExpirationBlocks;
-const BLOCK_INTERVAL_MS = config.confirmation.blockIntervalMs;
+const DAEMON_STALE_MS = config.get('confirmation.daemonStaleMs');
+const CONFIRM_EXPIRATION_BLOCKS = config.get('confirmation.confirmExpirationBlocks');
+const BLOCK_INTERVAL_MS = config.get('confirmation.blockIntervalMs');
 
 let ourPubkey = null;
 let nodeStatus = null;
@@ -335,7 +335,7 @@ function scheduleNext() {
   pollTimer = setTimeout(async () => {
     await poll();
     scheduleNext();
-  }, config.confirmation.pollIntervalMs);
+  }, config.get('confirmation.pollIntervalMs'));
 }
 
 /**

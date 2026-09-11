@@ -106,7 +106,7 @@ const MAX_TICKET_GAP_MS = QUEUE_STEP_MS * 2;
 // about four hours; there is no deadline here and slower is strictly safer.
 const EVACUATION_INTERVAL_MS = config.get('fluxapps.residentialEvacuationIntervalMs');
 
-const startupCollection = config.database.local.collections.nodeStartupTracker;
+const startupCollection = config.get('database.local.collections.nodeStartupTracker');
 const SETTLE_MARKER_KEY = 'residentialDos';
 
 let timerHandle = null;
@@ -271,7 +271,7 @@ async function getSettleMarker() {
   try {
     const db = dbHelper.databaseConnection();
     if (!db) return null;
-    const database = db.db(config.database.local.database);
+    const database = db.db(config.get('database.local.database'));
     const marker = await dbHelper.findOneInDatabase(database, startupCollection, { _id: SETTLE_MARKER_KEY });
     return marker || null;
   } catch (error) {
@@ -352,7 +352,7 @@ async function noteVerdictConfirmed(now) {
   try {
     const db = dbHelper.databaseConnection();
     if (!db) return null;
-    const database = db.db(config.database.local.database);
+    const database = db.db(config.get('database.local.database'));
     await dbHelper.findOneAndUpdateInDatabase(
       database,
       startupCollection,
@@ -385,7 +385,7 @@ async function clearSettleMarker() {
   try {
     const db = dbHelper.databaseConnection();
     if (!db) return;
-    const database = db.db(config.database.local.database);
+    const database = db.db(config.get('database.local.database'));
     await dbHelper.findOneAndDeleteInDatabase(database, startupCollection, { _id: SETTLE_MARKER_KEY }, {});
   } catch (error) {
     log.warn(`residentialNodeDos - could not clear settle marker: ${error.message}`);
@@ -561,7 +561,7 @@ async function persistLastEvacuationAt(now) {
   try {
     const db = dbHelper.databaseConnection();
     if (!db) return;
-    const database = db.db(config.database.local.database);
+    const database = db.db(config.get('database.local.database'));
     await dbHelper.findOneAndUpdateInDatabase(
       database,
       startupCollection,

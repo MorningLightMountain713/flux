@@ -28,8 +28,8 @@ async function decryptAesKeyWithRsaKey(appName, daemonHeight, enterpriseKey, own
   }
 
   const db = dbHelper.databaseConnection();
-  const database = db.db(config.database.appsglobal.database);
-  const globalAppsMessages = config.database.appsglobal.collections.appsMessages;
+  const database = db.db(config.get('database.appsglobal.database'));
+  const globalAppsMessages = config.get('database.appsglobal.collections.appsMessages');
   const projection = {
     projection: {
       _id: 0,
@@ -163,8 +163,8 @@ async function checkAndDecryptAppSpecs(appSpec, options = {}) {
   let appOwner = options.owner || null;
 
   const db = dbHelper.databaseConnection();
-  const database = db.db(config.database.appsglobal.database);
-  const globalAppsMessages = config.database.appsglobal.collections.appsMessages;
+  const database = db.db(config.get('database.appsglobal.database'));
+  const globalAppsMessages = config.get('database.appsglobal.collections.appsMessages');
   const projection = {
     projection: {
       _id: 0,
@@ -300,8 +300,8 @@ async function encryptEnterpriseWithAes(enterprise, appName, daemonHeight = null
   }
 
   const db = dbHelper.databaseConnection();
-  const database = db.db(config.database.appsglobal.database);
-  const globalAppsMessages = config.database.appsglobal.collections.appsMessages;
+  const database = db.db(config.get('database.appsglobal.database'));
+  const globalAppsMessages = config.get('database.appsglobal.collections.appsMessages');
   const projection = {
     projection: {
       _id: 0,

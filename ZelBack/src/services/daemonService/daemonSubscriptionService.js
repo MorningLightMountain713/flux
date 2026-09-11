@@ -150,8 +150,8 @@ function start() {
   if (started) return availableTopics.length > 0;
   started = true;
 
-  const settings = config.daemon.subscriptions;
-  const endpoint = `tcp://${config.daemon.host}:${config.daemon.zmqport}`;
+  const settings = config.get('daemon.subscriptions');
+  const endpoint = `tcp://${config.get('daemon.host')}:${config.get('daemon.zmqport')}`;
 
   availableTopics = Object.values(TOPICS).filter(isTopicAvailable);
 

@@ -142,7 +142,7 @@ async function storeAppTemporaryMessage(message, options = {}) {
       blockTime: 1,
     },
   };
-  let database = db.db(config.database.daemon.database);
+  let database = db.db(config.get('database.daemon.database'));
   const result = await dbHelper.findOneInDatabase(database, appsHashesCollection, query, projection);
   const syncStatus = daemonServiceMiscRpcs.isDaemonSynced();
   const daemonHeight = syncStatus.data.height;
@@ -261,7 +261,7 @@ async function storeAppTemporaryMessage(message, options = {}) {
     value.extend = serialized.extend;
   }
 
-  database = db.db(config.database.appsglobal.database);
+  database = db.db(config.get('database.appsglobal.database'));
   await dbHelper.insertOneToDatabase(database, globalAppsTempMessages, value).catch((error) => {
     log.error(error);
     throw error;
@@ -300,7 +300,7 @@ async function storeAppPermanentMessage(message) {
   }
 
   const db = dbHelper.databaseConnection();
-  const database = db.db(config.database.appsglobal.database);
+  const database = db.db(config.get('database.appsglobal.database'));
   await dbHelper.insertOneToDatabase(database, globalAppsMessages, message).catch((error) => {
     log.error(error);
     throw error;
@@ -378,7 +378,7 @@ async function releaseInstallingClaims(message) {
   }
 
   const db = dbHelper.databaseConnection();
-  const database = db.db(config.database.appsglobal.database);
+  const database = db.db(config.get('database.appsglobal.database'));
 
   // A v2 announcement with no apps says the node holds nothing: every seat it
   // reserved is released, not just the ones it named.
@@ -479,7 +479,7 @@ async function storeAppInstallingMessage(message) {
   }
 
   const db = dbHelper.databaseConnection();
-  const database = db.db(config.database.appsglobal.database);
+  const database = db.db(config.get('database.appsglobal.database'));
 
   // Peer input: normalize the identity tag tolerantly (a malformed tag degrades to
   // the untagged row) - the local writer's store (registryManager) is the strict one.
@@ -627,7 +627,7 @@ async function storeAppInstallingErrorMessage(message) {
   }
 
   const db = dbHelper.databaseConnection();
-  const database = db.db(config.database.appsglobal.database);
+  const database = db.db(config.get('database.appsglobal.database'));
 
   const newAppInstallingErrorMessage = {
     name: message.name,
@@ -725,7 +725,7 @@ async function handleAppRunningEvent({ signedBroadcast, announcer = null }) {
     if (!broadcastedAtUsable(data.broadcastedAt, GOSSIP_VALIDITY_MS)) return { isNewer: false };
 
     const db = dbHelper.databaseConnection();
-    const database = db.db(config.database.appsglobal.database);
+    const database = db.db(config.get('database.appsglobal.database'));
 
     if (data.version === 2 && (!data.apps || data.apps.length === 0)) {
       const existing = await database.collection(globalAppStateEvents).findOne({ ip: data.ip, type: APP_STATE_EVENT_TYPES.APPRUNNING });
@@ -761,7 +761,7 @@ async function handleAppRemovedStateEvent({ message, envelope }) {
   if (!message || !message.ip || !message.appName || !message.broadcastedAt) return;
   try {
     const db = dbHelper.databaseConnection();
-    const database = db.db(config.database.appsglobal.database);
+    const database = db.db(config.get('database.appsglobal.database'));
     await database.collection(globalAppStateEvents).updateOne(
       { ip: message.ip, type: APP_STATE_EVENT_TYPES.APPREMOVED, dedupKey: `appremoved:${message.appName}` },
       buildConditionalUpsert(message.broadcastedAt, {
@@ -781,7 +781,7 @@ async function handleIPChangedEvent({ message, envelope }) {
   if (!message || !message.oldIP || !message.newIP || !message.broadcastedAt) return;
   try {
     const db = dbHelper.databaseConnection();
-    const database = db.db(config.database.appsglobal.database);
+    const database = db.db(config.get('database.appsglobal.database'));
     await database.collection(globalAppStateEvents).updateOne(
       { ip: message.oldIP, type: APP_STATE_EVENT_TYPES.IPCHANGED, dedupKey: 'ipchanged' },
       buildConditionalUpsert(message.broadcastedAt, {
@@ -916,7 +916,7 @@ async function handleMasterleaseEvent({ message, envelope, announcer }) {
   }
   try {
     const db = dbHelper.databaseConnection();
-    const database = db.db(config.database.appsglobal.database);
+    const database = db.db(config.get('database.appsglobal.database'));
     const dedupKey = `masterlease:${message.appName}/${message.role}`;
     // One row per app/role — the record names the MASTER, not a node, so the
     // query carries no ip: a successor's record replaces the deposed
@@ -1011,7 +1011,7 @@ async function handleGrantGenerationEvent({ message, envelope }) {
     }
 
     const db = dbHelper.databaseConnection();
-    const database = db.db(config.database.appsglobal.database);
+    const database = db.db(config.get('database.appsglobal.database'));
     const dedupKey = `grantgeneration:${message.appName}/${message.role}`;
     // Durable and generation-newer-wins: a lower generation can never un-seat
     // a higher one, a replay refreshes nothing, and a re-pinned committee
@@ -1065,7 +1065,7 @@ async function handleGrantGenerationEvent({ message, envelope }) {
  */
 async function getGrantGenerationRecord(appName, role) {
   const db = dbHelper.databaseConnection();
-  const database = db.db(config.database.appsglobal.database);
+  const database = db.db(config.get('database.appsglobal.database'));
   return database.collection(globalAppStateEvents).findOne(
     { type: APP_STATE_EVENT_TYPES.GRANTGENERATION, dedupKey: `grantgeneration:${appName}/${role}` },
     { projection: { _id: 0 } },
@@ -1078,7 +1078,7 @@ async function getGrantGenerationRecord(appName, role) {
  */
 async function getMasterleaseRecord(appName, role) {
   const db = dbHelper.databaseConnection();
-  const database = db.db(config.database.appsglobal.database);
+  const database = db.db(config.get('database.appsglobal.database'));
   return database.collection(globalAppStateEvents).findOne(
     { type: APP_STATE_EVENT_TYPES.MASTERLEASE, dedupKey: `masterlease:${appName}/${role}` },
     { projection: { _id: 0 } },
@@ -1106,7 +1106,7 @@ async function getMasterleaseRecord(appName, role) {
  */
 async function getMasterleaseRecordsByGrantee(rolePrefix, grantee) {
   const db = dbHelper.databaseConnection();
-  const database = db.db(config.database.appsglobal.database);
+  const database = db.db(config.get('database.appsglobal.database'));
   const escaped = rolePrefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   return database.collection(globalAppStateEvents)
     .find(
@@ -1122,7 +1122,7 @@ async function getMasterleaseRecordsByGrantee(rolePrefix, grantee) {
 
 async function getMasterleaseRecordsByRolePrefix(appName, rolePrefix) {
   const db = dbHelper.databaseConnection();
-  const database = db.db(config.database.appsglobal.database);
+  const database = db.db(config.get('database.appsglobal.database'));
   const escaped = `masterlease:${appName}/${rolePrefix}`.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   return database.collection(globalAppStateEvents)
     .find(
@@ -1146,7 +1146,7 @@ function storeAppStateEvent(type, payload) {
 async function storeBatchAppRunningEvents(verifiedBroadcasts, announcers = new Map()) {
   if (verifiedBroadcasts.length === 0) return { stored: 0 };
   const db = dbHelper.databaseConnection();
-  const database = db.db(config.database.appsglobal.database);
+  const database = db.db(config.get('database.appsglobal.database'));
 
   const ops = [];
 
@@ -1191,7 +1191,7 @@ function storeSignedAppInstallingBroadcast(signedBroadcast) {
   if (data.cleared === true || data.withdrawn === true) return;
   if (data.broadcastedAt + INSTALLING_EXPIRY_MS < Date.now()) return;
   const db = dbHelper.databaseConnection();
-  const database = db.db(config.database.appsglobal.database);
+  const database = db.db(config.get('database.appsglobal.database'));
   const doc = {
     version: signedBroadcast.version,
     timestamp: signedBroadcast.timestamp,
@@ -1215,7 +1215,7 @@ function storeSignedAppInstallingBroadcast(signedBroadcast) {
 async function storeBatchAppInstallingMessages(verifiedBroadcasts) {
   if (verifiedBroadcasts.length === 0) return { stored: 0 };
   const db = dbHelper.databaseConnection();
-  const database = db.db(config.database.appsglobal.database);
+  const database = db.db(config.get('database.appsglobal.database'));
 
   const signedOps = [];
   const locationOps = [];
@@ -1337,7 +1337,7 @@ function storeSignedAppInstallingErrorBroadcast(signedBroadcast) {
   if (!data || !data.ip || !data.name || !data.hash || !data.broadcastedAt) return;
   if (data.broadcastedAt + INSTALLING_ERRORS_EXPIRY_MS < Date.now()) return;
   const db = dbHelper.databaseConnection();
-  const database = db.db(config.database.appsglobal.database);
+  const database = db.db(config.get('database.appsglobal.database'));
   const doc = {
     version: signedBroadcast.version,
     timestamp: signedBroadcast.timestamp,
@@ -1359,7 +1359,7 @@ function storeSignedAppInstallingErrorBroadcast(signedBroadcast) {
 async function storeBatchAppInstallingErrorMessages(verifiedBroadcasts) {
   if (verifiedBroadcasts.length === 0) return { stored: 0 };
   const db = dbHelper.databaseConnection();
-  const database = db.db(config.database.appsglobal.database);
+  const database = db.db(config.get('database.appsglobal.database'));
 
   const signedOps = [];
   const locationOps = [];

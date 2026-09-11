@@ -18,7 +18,7 @@ const serviceHelper = require('./serviceHelper');
 const verificationHelper = require('./verificationHelper');
 const { Privilege, authOf } = require('./utils/privileges');
 
-const syncthingURL = `http://${config.syncthing.ip}:${config.syncthing.port}`;
+const syncthingURL = `http://${config.get('syncthing.ip')}:${config.get('syncthing.port')}`;
 
 // Sent rather than inherited, so the page size a caller totals against is the one
 // it asked for. syncthing's own default is this value; a default is not a contract.
@@ -1639,7 +1639,7 @@ async function adjustSyncthing() {
     const currentConfigOptions = await getConfigOptions().catch(() => null);
     const currentDefaultsFolderOptions = await getConfigDefaultsFolder().catch(() => null);
     // use env so can run this module as standalone for testing
-    const apiPort = process.env.FLUX_APIPORT || userconfig?.initial.apiport || config.server?.apiport;
+    const apiPort = process.env.FLUX_APIPORT || userconfig?.initial.apiport || config.get('server.apiport');
     const myPort = +apiPort + 2; // end with 9 eg 16139
     // adjust configuration
     const newConfig = {
@@ -1681,7 +1681,7 @@ async function adjustSyncthing() {
       await adjustConfigFolders('delete', undefined, 'default');
     }
     // enable gui debugging for development nodes only
-    if (config.development) {
+    if (config.get('development')) {
       const currentGUIOptions = await getConfigGui();
       if (currentGUIOptions.status === 'success') {
         const newGUIOptions = currentGUIOptions.data;

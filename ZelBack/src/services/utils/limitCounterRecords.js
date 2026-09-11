@@ -25,8 +25,8 @@ const log = require('../../lib/log');
 // Gossip is too slow to bound a burst - that is what the counter is for - and
 // this is not trying to. It only has to arrive before the next restart.
 
-const { database } = config.database.appsglobal;
-const collection = config.database.appsglobal.collections.limitCounterRecords;
+const { database } = config.get('database.appsglobal');
+const collection = config.get('database.appsglobal.collections.limitCounterRecords');
 
 function db() {
   const connection = dbHelper.databaseConnection();

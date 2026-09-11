@@ -107,7 +107,7 @@ async function requestAppMessageAPI(req, res) {
  */
 async function appHashHasMessage(hash) {
   const db = dbHelper.databaseConnection();
-  const database = db.db(config.database.daemon.database);
+  const database = db.db(config.get('database.daemon.database'));
   const query = { hash };
   const update = { $set: { message: true, messageNotFound: false } };
   const options = {};
@@ -122,7 +122,7 @@ async function appHashHasMessage(hash) {
  */
 async function appHashHasMessageNotFound(hash) {
   const db = dbHelper.databaseConnection();
-  const database = db.db(config.database.daemon.database);
+  const database = db.db(config.get('database.daemon.database'));
   const query = { hash };
   const update = { $set: { messageNotFound: true } };
   const options = {};
@@ -139,7 +139,7 @@ async function getAppsTemporaryMessages(req, res) {
   try {
     const db = dbHelper.databaseConnection();
 
-    const database = db.db(config.database.appsglobal.database);
+    const database = db.db(config.get('database.appsglobal.database'));
     let query = {};
     let { hash } = req.params;
     hash = hash || req.query.hash;
@@ -169,7 +169,7 @@ async function getAppsTemporaryMessages(req, res) {
 async function getAppsPermanentMessages(req, res) {
   try {
     const db = dbHelper.databaseConnection();
-    const database = db.db(config.database.appsglobal.database);
+    const database = db.db(config.get('database.appsglobal.database'));
     const query = {};
     let { hash } = req.params;
     hash = hash || req.query.hash;
@@ -703,7 +703,7 @@ async function continuousFluxAppHashesCheck(force = false) {
     }
 
     const dbopen = dbHelper.databaseConnection();
-    const database = dbopen.db(config.database.daemon.database);
+    const database = dbopen.db(config.get('database.daemon.database'));
     const queryHeight = { generalScannedHeight: { $gte: 0 } };
     const projectionHeight = {
       projection: {

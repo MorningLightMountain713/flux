@@ -16,13 +16,8 @@ const log = require('../../lib/log');
 const dbHelper = require('../dbHelper');
 
 async function findValueSatNanInAppsMessages() {
-  const {
-    database: {
-      appsglobal: {
-        database: dbName, collections: { appsMessages: collectionName },
-      },
-    },
-  } = config;
+  const dbName = config.get('database.appsglobal.database');
+  const collectionName = config.get('database.appsglobal.collections.appsMessages');
 
   const client = dbHelper.databaseConnection();
   const db = client.db(dbName);
@@ -38,13 +33,8 @@ async function findValueSatNanInAppsMessages() {
 }
 
 async function findValueSatInAppsHashes() {
-  const {
-    database: {
-      daemon: {
-        database: dbName, collections: { appsHashes: collectionName },
-      },
-    },
-  } = config;
+  const dbName = config.get('database.daemon.database');
+  const collectionName = config.get('database.daemon.collections.appsHashes');
 
   const client = dbHelper.databaseConnection();
   const db = client.db(dbName);
@@ -63,13 +53,8 @@ async function findValueSatInAppsHashes() {
 }
 
 async function updateValueSatInAppsMessages(brokenHashes, hashMap) {
-  const {
-    database: {
-      appsglobal: {
-        database: dbName, collections: { appsMessages: collectionName },
-      },
-    },
-  } = config;
+  const dbName = config.get('database.appsglobal.database');
+  const collectionName = config.get('database.appsglobal.collections.appsMessages');
 
   const client = dbHelper.databaseConnection();
   const db = client.db(dbName);
@@ -529,28 +514,14 @@ async function reindexGlobalAppsInformation(
 async function validateAppsInformation() {
   const response = { validated: false, reindexed: false, appsToRemove: [] };
 
-  const {
-    database: {
-      appsglobal: {
-        database: appsGlobalDbName,
-        collections: {
-          appsInformation: globalAppsInformationCol,
-          appsMessages: globalAppsMessagesCol,
-          appsInstallingErrorsLocations: globalAppsInstallingErrorsLocationsCol,
-        },
-      },
-      appslocal: {
-        database: appsLocalDbName,
-        collections: {
-          appsInformation: localAppsInformationCol,
-        },
-      },
-      daemon: {
-        database: daemonDbName,
-        collections: { scannedHeight: scannedHeightCol },
-      },
-    },
-  } = config;
+  const appsGlobalDbName = config.get('database.appsglobal.database');
+  const globalAppsInformationCol = config.get('database.appsglobal.collections.appsInformation');
+  const globalAppsMessagesCol = config.get('database.appsglobal.collections.appsMessages');
+  const globalAppsInstallingErrorsLocationsCol = config.get('database.appsglobal.collections.appsInstallingErrorsLocations');
+  const appsLocalDbName = config.get('database.appslocal.database');
+  const localAppsInformationCol = config.get('database.appslocal.collections.appsInformation');
+  const daemonDbName = config.get('database.daemon.database');
+  const scannedHeightCol = config.get('database.daemon.collections.scannedHeight');
 
   const client = dbHelper.databaseConnection();
 

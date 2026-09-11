@@ -12,7 +12,7 @@ const config = require('config');
 const serviceHelper = require('./serviceHelper');
 
 const { MongoClient } = mongodb;
-const mongoUrl = `mongodb://${config.database.url}:${config.database.port}/`;
+const mongoUrl = `mongodb://${config.get('database.url')}:${config.get('database.port')}/`;
 
 /**
  * @type {mongodb.MongoClient}

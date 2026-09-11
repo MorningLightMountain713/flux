@@ -1,6 +1,6 @@
 'use strict';
 
-// EVERY KNOB THIS CODE READS MUST BE ONE CONFIG SHIPS, AND THIS SAYS SO AT BOOT.
+// EVERY SETTING THIS CODE READS MUST BE ONE CONFIG SHIPS, AND THIS SAYS SO AT BOOT.
 //
 // The failure this exists for is silent. `config.fluxapps.x ?? 5000` on a key
 // config/default.js does not ship is not a fallback protecting against a broken
@@ -78,10 +78,10 @@ function keysRead(dir = SRC) {
   jsFiles(dir).forEach((file) => {
     const where = path.relative(dir, file);
     const text = fs.readFileSync(file, 'utf8');
-    const pattern = /config\.get\(\s*'(fluxapps\.[A-Za-z0-9_.]+)'\s*\)/g;
+    const pattern = /config\.get\(\s*'([A-Za-z0-9_.]+)'\s*\)/g;
     let match = pattern.exec(text);
     while (match) {
-      const key = match[1].slice('fluxapps.'.length);
+      const key = match[1];
       if (!keys.has(key)) keys.set(key, []);
       if (!keys.get(key).includes(where)) keys.get(key).push(where);
       match = pattern.exec(text);
@@ -94,23 +94,83 @@ function keysRead(dir = SRC) {
 /**
  * Reads that go round config.get and will therefore answer undefined in silence.
  *
- * `config.fluxapps.x` in any of its spellings. There is no legitimate one left:
- * the four knobs whose absence used to be a setting now ship the value that says
- * so - null, false, [] - so every read has an answer and get() is the way to ask
- * for it.
+ * PARSED, not matched. Three regex attempts at this each looked clean and each
+ * was wrong: one missed multi-line destructures, one missed destructuring
+ * straight off the module (`const { daemon: { zmqport } } = config`, which names
+ * no property so a rule looking for a dot cannot see it), and one reported a
+ * local named `config` that was an axios request options object. The parser is
+ * loaded lazily because this runs from the tests, not at boot.
  *
  * @param {string} [dir] source root, for tests
  * @returns {Array<{file: string, line: number, text: string}>}
  */
 function propertyReads(dir = SRC) {
+  // eslint-disable-next-line global-require
+  const espree = require('espree');
+  const FN = new Set(['FunctionDeclaration', 'FunctionExpression', 'ArrowFunctionExpression']);
   const found = [];
-  jsFiles(dir).forEach((file) => {
-    const where = path.relative(dir, file);
-    fs.readFileSync(file, 'utf8').split('\n').forEach((line, i) => {
-      const code = line.replace(/\/\/.*$/, '').replace(/^\s*\*.*$/, '');
-      if (!/\bconfig\s*\.\s*fluxapps\b/.test(code) && !/\bfluxapps\s*:\s*\{/.test(code)) return;
-      found.push({ file: where, line: i + 1, text: line.trim() });
+
+  // Whether `config` here is the module, or a local wearing the same name.
+  const walk = (node, visit, shadowed) => {
+    if (!node || typeof node.type !== 'string') return;
+    let shade = shadowed;
+    if (FN.has(node.type)) {
+      if (node.params.some((param) => param.type === 'Identifier' && param.name === 'config')) shade = true;
+      if (!shade && node.body && node.body.type === 'BlockStatement') {
+        node.body.body.forEach((st) => {
+          if (st.type !== 'VariableDeclaration') return;
+          st.declarations.forEach((d) => {
+            if (d.id.type !== 'Identifier' || d.id.name !== 'config') return;
+            const fromModule = d.init && d.init.type === 'CallExpression'
+              && d.init.callee.name === 'require'
+              && d.init.arguments[0] && d.init.arguments[0].value === 'config';
+            if (!fromModule) shade = true;
+          });
+        });
+      }
+    }
+    visit(node, shade);
+    Object.keys(node).forEach((key) => {
+      if (key === 'range' || key === 'loc') return;
+      const child = node[key];
+      if (Array.isArray(child)) child.forEach((c) => walk(c, visit, shade));
+      else if (child && typeof child.type === 'string') walk(child, visit, shade);
     });
+  };
+
+  jsFiles(dir).forEach((file) => {
+    const text = fs.readFileSync(file, 'utf8');
+    // A file that never required the module cannot be reading a setting from
+    // it, whatever it calls its own variables. Three registry auth providers
+    // and the syncthing folder state machine all take a parameter named
+    // `config` that is somebody else's object.
+    if (!/\bconfig\s*=\s*require\(\s*'config'\s*\)/.test(text)) return;
+    let ast;
+    try {
+      ast = espree.parse(text, { ecmaVersion: 'latest', sourceType: 'script', loc: true });
+    } catch (error) { return; }
+    const where = path.relative(dir, file);
+    const lines = text.split('\n');
+    const report = (node) => found.push({
+      file: where, line: node.loc.start.line, text: lines[node.loc.start.line - 1].trim(),
+    });
+
+    walk(ast, (node, shadowed) => {
+      if (shadowed) return;
+      // config.something - but not get/has/util, and not a WRITE, since
+      // node-config is immutable and an assignment means a different object.
+      if (node.type === 'MemberExpression' && !node.computed
+        && node.object.type === 'Identifier' && node.object.name === 'config'
+        && node.property.type === 'Identifier'
+        && !['get', 'has', 'util'].includes(node.property.name)) {
+        report(node);
+      }
+      // const { x } = config - names no property at all
+      if (node.type === 'VariableDeclarator' && node.id.type === 'ObjectPattern'
+        && node.init && node.init.type === 'Identifier' && node.init.name === 'config') {
+        report(node);
+      }
+    }, false);
   });
   return found;
 }
@@ -131,13 +191,13 @@ function resolve(root, dotted) {
  * Every one of them, not the first: an operator fixing a config wants the whole
  * list, and stopping at the first turns one restart into several.
  *
- * @param {object} fluxapps the effective config.fluxapps
+ * @param {object} effective the effective config
  * @param {string} [dir] source root, for tests
  * @returns {Array<{key: string, files: string[]}>}
  */
-function missingKeys(fluxapps, dir = SRC) {
+function missingKeys(effective, dir = SRC) {
   return [...keysRead(dir).entries()]
-    .filter(([key]) => resolve(fluxapps, key) === undefined)
+    .filter(([key]) => resolve(effective, key) === undefined)
     .map(([key, files]) => ({ key, files }))
     .sort((a, b) => a.key.localeCompare(b.key));
 }
@@ -168,15 +228,14 @@ function reconcile(io = {}) {
   const write = io.write || ((line) => process.stderr.write(`${line}\n`));
 
   // eslint-disable-next-line global-require
-  const fluxapps = io.fluxapps || require('config').fluxapps || {};
-  const missing = missingKeys(fluxapps, io.dir);
+  const effective = io.config || require('config');
+  const missing = missingKeys(effective, io.dir);
   if (!missing.length) return missing;
 
-  write('FluxOS will not start: config/default.js does not ship every fluxapps key this code reads.');
+  write('FluxOS will not start: config/default.js does not ship every setting this code reads.');
   write('A missing key is not a default - it is a value nobody can see and nobody can change.');
-  missing.forEach(({ key, files }) => write(`  fluxapps.${key}   read by ${files.join(', ')}`));
-  write('Ship each key in ZelBack/config/default.js, or if absence is a real setting,');
-  write('add it to OPTIONAL in ZelBack/configReconciliation.js with the reason.');
+  missing.forEach(({ key, files }) => write(`  ${key}   read by ${files.join(', ')}`));
+  write('Ship each one in ZelBack/config/default.js.');
   exit(1);
   return missing;
 }

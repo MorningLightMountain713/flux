@@ -19,9 +19,6 @@ const config = require('config');
  * with a new `kid`, ship the new public key in a release, and the old records
  * stay readable via the retained private key their stamped `kid` names.
  */
-const DEFAULT_INGRESS_ENCRYPTION_KID = 'ft-2026a';
-const DEFAULT_INGRESS_ENCRYPTION_PUBKEY = 'O01u/HX30SEtJFDqPOLhoReQCKEpbKNSqOP9cQo0txk=';
-
 const X25519_KEY_LEN = 32;
 
 /**
@@ -31,9 +28,8 @@ const X25519_KEY_LEN = 32;
  * @throws {Error} if the configured public key is not a 32-byte x25519 key
  */
 function current() {
-  const kid = (config.ingress && config.ingress.encryptionKid) ?? DEFAULT_INGRESS_ENCRYPTION_KID;
-  const publicKeyB64 = (config.ingress && config.ingress.encryptionPubkey)
-    ?? DEFAULT_INGRESS_ENCRYPTION_PUBKEY;
+  const kid = config.get('ingress.encryptionKid');
+  const publicKeyB64 = config.get('ingress.encryptionPubkey');
 
   const raw = Buffer.from(publicKeyB64, 'base64');
   if (raw.length !== X25519_KEY_LEN) {
@@ -44,6 +40,4 @@ function current() {
 
 module.exports = {
   current,
-  DEFAULT_INGRESS_ENCRYPTION_KID,
-  DEFAULT_INGRESS_ENCRYPTION_PUBKEY,
 };

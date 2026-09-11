@@ -12,7 +12,7 @@ const daemonServiceTransactionRpcs = require('./daemonService/daemonServiceTrans
 const messageHelper = require('./messageHelper');
 const dbHelper = require('./dbHelper');
 
-const scannedHeightCollection = config.database.daemon.collections.scannedHeight;
+const scannedHeightCollection = config.get('database.daemon.collections.scannedHeight');
 
 let storedTier = null;
 let storedCollateral = null;
@@ -172,7 +172,7 @@ async function checkSynced() {
     }
     const daemonHeight = serviceHelper.ensureNumber(syncStatus.data.height);
     const dbopen = dbHelper.databaseConnection();
-    const database = dbopen.db(config.database.daemon.database);
+    const database = dbopen.db(config.get('database.daemon.database'));
     const query = { generalScannedHeight: { $gte: 0 } };
     const projection = {
       projection: {

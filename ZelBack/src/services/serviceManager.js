@@ -106,9 +106,9 @@ const { version: fluxVersion } = require('../../../package.json');
 // Initialize globalState caches with cacheManager
 globalState.initializeCaches(cacheManager);
 
-const apiPort = userconfig.initial.apiport || config.server.apiport;
+const apiPort = userconfig.initial.apiport || config.get('server.apiport');
 const development = userconfig.initial.development || false;
-const fluxTransactionCollection = config.database.daemon.collections.fluxTransactions;
+const fluxTransactionCollection = config.get('database.daemon.collections.fluxTransactions');
 
 const bootDelayMultiplier = config.get('fluxapps.bootDelayMultiplier');
 function bootDelay(ms) { return Math.round(ms * bootDelayMultiplier); }
@@ -290,7 +290,7 @@ async function ensureIndexes(collection, specs) {
  */
 async function startFluxFunctions() {
   try {
-    if (!config.server.allowedPorts.includes(+apiPort)) {
+    if (!config.get('server.allowedPorts').includes(+apiPort)) {
       log.error(`Flux port ${apiPort} is not supported. Shutting down.`);
       process.exit();
     }
@@ -365,18 +365,18 @@ async function startFluxFunctions() {
     log.info('System service initiated');
     log.info('Preparing local database...');
     const db = dbHelper.databaseConnection();
-    const database = db.db(config.database.local.database);
-    await dbHelper.dropCollection(database, config.database.local.collections.loggedUsers).catch((error) => { // drop currently logged users
+    const database = db.db(config.get('database.local.database'));
+    await dbHelper.dropCollection(database, config.get('database.local.collections.loggedUsers')).catch((error) => { // drop currently logged users
       if (error.message !== 'ns not found') {
         log.error(error);
       }
     });
-    await dbHelper.dropCollection(database, config.database.local.collections.activeLoginPhrases).catch((error) => {
+    await dbHelper.dropCollection(database, config.get('database.local.collections.activeLoginPhrases')).catch((error) => {
       if (error.message !== 'ns not found') {
         log.error(error);
       }
     });
-    await dbHelper.dropCollection(database, config.database.local.collections.activeSignatures).catch((error) => {
+    await dbHelper.dropCollection(database, config.get('database.local.collections.activeSignatures')).catch((error) => {
       if (error.message !== 'ns not found') {
         log.error(error);
       }
@@ -391,20 +391,20 @@ async function startFluxFunctions() {
           log.error(error);
         }
       })));
-    await ensureIndexes(database.collection(config.database.local.collections.loggedUsers), [
+    await ensureIndexes(database.collection(config.get('database.local.collections.loggedUsers')), [
       { key: { createdAt: 1 }, expireAfterSeconds: 14 * 24 * 60 * 60 },
     ]);
-    await ensureIndexes(database.collection(config.database.local.collections.activeLoginPhrases), [
+    await ensureIndexes(database.collection(config.get('database.local.collections.activeLoginPhrases')), [
       { key: { createdAt: 1 }, expireAfterSeconds: 900 },
     ]);
-    await ensureIndexes(database.collection(config.database.local.collections.activeSignatures), [
+    await ensureIndexes(database.collection(config.get('database.local.collections.activeSignatures')), [
       { key: { createdAt: 1 }, expireAfterSeconds: 900 },
     ]);
     // legacy pre-incident-schema rows expire via detectedAt; current incident
     // documents expire via lastSeen. The tamper service purges pre-schema
     // rows at startup, so the detectedAt pair only matters where old code
     // still writes; drop it once the fleet is past the incident schema.
-    await ensureIndexes(database.collection(config.database.local.collections.appTamperingEvents), [
+    await ensureIndexes(database.collection(config.get('database.local.collections.appTamperingEvents')), [
       { key: { detectedAt: 1 }, expireAfterSeconds: 30 * 24 * 60 * 60, name: 'detectedAt_ttl' }, // 30 days
       { key: { appName: 1, detectedAt: -1 }, name: 'appName_detectedAt' },
       { key: { lastSeen: 1 }, expireAfterSeconds: 30 * 24 * 60 * 60, name: 'lastSeen_ttl' }, // 30 days
@@ -455,8 +455,8 @@ async function startFluxFunctions() {
     log.info('Local database prepared');
     log.info('Preparing temporary database...');
     // no need to drop temporary messages
-    const databaseTemp = db.db(config.database.appsglobal.database);
-    await ensureIndexes(databaseTemp.collection(config.database.appsglobal.collections.appsTemporaryMessages), [
+    const databaseTemp = db.db(config.get('database.appsglobal.database'));
+    await ensureIndexes(databaseTemp.collection(config.get('database.appsglobal.collections.appsTemporaryMessages')), [
       { key: { receivedAt: 1 }, expireAfterSeconds: tempMsgTtlS },
     ]);
     log.info('Temporary database prepared');
@@ -472,7 +472,7 @@ async function startFluxFunctions() {
 
     // we have to create this index again here, as we need it to repair the db. As we were deleting this on every reboot (and it was only created when scannedHeight was 0)
     // Creating an index that already exists is a no-op
-    await ensureIndexes(databaseTemp.collection(config.database.appsglobal.collections.appsMessages), [
+    await ensureIndexes(databaseTemp.collection(config.get('database.appsglobal.collections.appsMessages')), [
       { key: { hash: 1 }, name: 'query for getting zelapp message based on hash', unique: true, recover: dedupeByKey },
       { key: { 'appSpecifications.version': 1 }, name: 'query for getting app message based on version' },
       { key: { 'appSpecifications.nodes': 1 }, name: 'query for getting app message based on nodes' },
@@ -483,7 +483,7 @@ async function startFluxFunctions() {
     // per-minute TTL sweep - indefinitely. Named literally: the config key is gone, and
     // a drop of a collection that is not there is a no-op, so this self-retires.
     await databaseTemp.collection('zelappslocation').drop().catch(() => {});
-    await ensureIndexes(databaseTemp.collection(config.database.appsglobal.collections.appStateEvents), [
+    await ensureIndexes(databaseTemp.collection(config.get('database.appsglobal.collections.appStateEvents')), [
       { key: { expireAt: 1 }, expireAfterSeconds: 0 },
       { key: { ip: 1, type: 1, dedupKey: 1 }, unique: true, recover: dedupeByKey },
       { key: { broadcastedAt: 1 } },
@@ -491,17 +491,17 @@ async function startFluxFunctions() {
     ]);
     log.info('App state events collection prepared');
     await registryManager.prepareInstallingClaimsCollections();
-    await databaseTemp.collection(config.database.appsglobal.collections.appsInstallingErrorsLocations).dropIndex('cachedAt_1').catch(() => {});
-    await databaseTemp.collection(config.database.appsglobal.collections.appsInstallingErrorsLocations).dropIndex('broadcastedAt_1').catch(() => {});
-    await ensureIndexes(databaseTemp.collection(config.database.appsglobal.collections.appsInstallingErrorsLocations), [
+    await databaseTemp.collection(config.get('database.appsglobal.collections.appsInstallingErrorsLocations')).dropIndex('cachedAt_1').catch(() => {});
+    await databaseTemp.collection(config.get('database.appsglobal.collections.appsInstallingErrorsLocations')).dropIndex('broadcastedAt_1').catch(() => {});
+    await ensureIndexes(databaseTemp.collection(config.get('database.appsglobal.collections.appsInstallingErrorsLocations')), [
       { key: { expireAt: 1 }, expireAfterSeconds: 0 },
       { key: { name: 1 }, name: 'query for getting flux app install errors location based on specs name' },
       { key: { name: 1, hash: 1 }, name: 'query for getting flux app install errors location based on specs name and hash' },
       { key: { name: 1, hash: 1, ip: 1 }, name: 'query for getting flux app install errors location based on specs name and hash and node ip' },
     ]);
     log.info('App installing errors locations prepared');
-    await databaseTemp.collection(config.database.appsglobal.collections.appsInstallingErrorsBroadcasts).dropIndex('broadcastedAt_1').catch(() => {});
-    await ensureIndexes(databaseTemp.collection(config.database.appsglobal.collections.appsInstallingErrorsBroadcasts), [
+    await databaseTemp.collection(config.get('database.appsglobal.collections.appsInstallingErrorsBroadcasts')).dropIndex('broadcastedAt_1').catch(() => {});
+    await ensureIndexes(databaseTemp.collection(config.get('database.appsglobal.collections.appsInstallingErrorsBroadcasts')), [
       { key: { expireAt: 1 }, expireAfterSeconds: 0 },
       { key: { broadcastedAt: 1 } },
       { key: { 'data.name': 1, 'data.hash': 1, 'data.ip': 1 }, unique: true, recover: dedupeByKey },
@@ -512,8 +512,8 @@ async function startFluxFunctions() {
     // compare-and-set guard storeManifest relies on), plus a PARTIAL TTL that
     // auto-reaps quarantined (unverified, confirmed:false) rows by their expireAt;
     // confirmed rows carry no expireAt and persist.
-    await ensureIndex(databaseTemp.collection(config.database.appsglobal.collections.appContentManifests), { appName: 1 }, { name: 'appName', unique: true });
-    await ensureIndex(databaseTemp.collection(config.database.appsglobal.collections.appContentManifests), { expireAt: 1 }, { expireAfterSeconds: 0, partialFilterExpression: { confirmed: false }, name: 'manifest_quarantine_ttl' });
+    await ensureIndex(databaseTemp.collection(config.get('database.appsglobal.collections.appContentManifests')), { appName: 1 }, { name: 'appName', unique: true });
+    await ensureIndex(databaseTemp.collection(config.get('database.appsglobal.collections.appContentManifests')), { expireAt: 1 }, { expireAfterSeconds: 0, partialFilterExpression: { confirmed: false }, name: 'manifest_quarantine_ttl' });
     log.info('App content manifests collection prepared');
 
     // Ingress attestations: one node-signed record per (hash, node) — where a
@@ -521,11 +521,11 @@ async function startFluxFunctions() {
     // different ingress nodes coexist without collision or merge. The TTL reaps
     // attestations whose message never confirmed (those still carry expireAt);
     // confirmation unsets expireAt so real attributions persist.
-    await ensureIndex(databaseTemp.collection(config.database.appsglobal.collections.appsIngressAttestations), { hash: 1, node: 1 }, { unique: true, name: 'ingress attestation identity' });
-    await ensureIndex(databaseTemp.collection(config.database.appsglobal.collections.appsIngressAttestations), { hash: 1 }, { name: 'query ingress attestations by hash' });
+    await ensureIndex(databaseTemp.collection(config.get('database.appsglobal.collections.appsIngressAttestations')), { hash: 1, node: 1 }, { unique: true, name: 'ingress attestation identity' });
+    await ensureIndex(databaseTemp.collection(config.get('database.appsglobal.collections.appsIngressAttestations')), { hash: 1 }, { name: 'query ingress attestations by hash' });
     // Serves the reconcile bucket fetch and per-bucket digest recompute (confirmed members of a bucket) as an indexed lookup.
-    await ensureIndex(databaseTemp.collection(config.database.appsglobal.collections.appsIngressAttestations), { bucket: 1, expireAt: 1 }, { name: 'ingress attestations by bucket' });
-    await ensureIndex(databaseTemp.collection(config.database.appsglobal.collections.appsIngressAttestations), { expireAt: 1 }, { expireAfterSeconds: 0, name: 'ingress_attestation_orphan_ttl' });
+    await ensureIndex(databaseTemp.collection(config.get('database.appsglobal.collections.appsIngressAttestations')), { bucket: 1, expireAt: 1 }, { name: 'ingress attestations by bucket' });
+    await ensureIndex(databaseTemp.collection(config.get('database.appsglobal.collections.appsIngressAttestations')), { expireAt: 1 }, { expireAfterSeconds: 0, name: 'ingress_attestation_orphan_ttl' });
     log.info('App ingress attestations collection prepared');
 
     // This fixes an issue where the appsMessage db has NaN for valueSat. Once db is repaired on all nodes,
@@ -881,7 +881,7 @@ async function startFluxFunctions() {
       log.error(`Watchdog service error: ${error.message}`);
     });
     log.info('Watchdog service check initiated');
-    const explorerDatabase = db.db(config.database.daemon.database);
+    const explorerDatabase = db.db(config.get('database.daemon.database'));
     await dbHelper.dropCollection(explorerDatabase, fluxTransactionCollection).catch((error) => {
       if (error.message !== 'ns not found') {
         log.error(error);
@@ -971,7 +971,7 @@ async function startFluxFunctions() {
     log.info('Starting setting Node Geolocation');
     geolocationService.setNodeGeolocation();
     setTimeout(() => {
-      const { daemon: { zmqport } } = config;
+      const zmqport = config.get('daemon.zmqport');
       log.info(`Ensuring zmq is enabled for fluxd on port: ${zmqport}`);
       try {
         systemService.enableFluxdZmq(`tcp://127.0.0.1:${zmqport}`);

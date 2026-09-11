@@ -15,15 +15,15 @@ const priceOracleState = require('./pricing/priceOracleState');
  * is easy to get wrong when it lives inside the loop that also advances the cursor.
  */
 
-const appsHashesCollection = config.database.daemon.collections.appsHashes;
-const scannedHeightCollection = config.database.daemon.collections.scannedHeight;
-const chainParamsMessagesCollection = config.database.chainparams.collections.chainMessages;
-const policyGroupMessagesCollection = config.database.chainparams.collections.policyGroupMessages;
-const priceMessagesCollection = config.database.chainparams.collections.priceMessages;
-const rateMessagesCollection = config.database.chainparams.collections.rateMessages;
-const priceModifierMessagesCollection = config.database.chainparams.collections.priceModifierMessages;
-const oracleKeyMessagesCollection = config.database.chainparams.collections.oracleKeyMessages;
-const marketplacePricingMessagesCollection = config.database.chainparams.collections.marketplacePricingMessages;
+const appsHashesCollection = config.get('database.daemon.collections.appsHashes');
+const scannedHeightCollection = config.get('database.daemon.collections.scannedHeight');
+const chainParamsMessagesCollection = config.get('database.chainparams.collections.chainMessages');
+const policyGroupMessagesCollection = config.get('database.chainparams.collections.policyGroupMessages');
+const priceMessagesCollection = config.get('database.chainparams.collections.priceMessages');
+const rateMessagesCollection = config.get('database.chainparams.collections.rateMessages');
+const priceModifierMessagesCollection = config.get('database.chainparams.collections.priceModifierMessages');
+const oracleKeyMessagesCollection = config.get('database.chainparams.collections.oracleKeyMessages');
+const marketplacePricingMessagesCollection = config.get('database.chainparams.collections.marketplacePricingMessages');
 
 /**
  * Moves the durable scan cursor.
@@ -54,14 +54,14 @@ async function restoreDatabaseToBlockheightState(height, rescanGlobalApps = fals
     throw new Error('No blockheight for restoring provided');
   }
   const dbopen = dbHelper.databaseConnection();
-  const database = dbopen.db(config.database.daemon.database);
+  const database = dbopen.db(config.get('database.daemon.database'));
 
   const query = { height: { $gt: height } };
 
   await dbHelper.removeDocumentsFromCollection(database, appsHashesCollection, query);
   log.info('Rescanning Blockchain Parameters!');
-  const databaseGlobal = dbopen.db(config.database.appsglobal.database);
-  const databaseUpdates = dbopen.db(config.database.chainparams.database);
+  const databaseGlobal = dbopen.db(config.get('database.appsglobal.database'));
+  const databaseUpdates = dbopen.db(config.get('database.chainparams.database'));
   await dbHelper.removeDocumentsFromCollection(databaseUpdates, chainParamsMessagesCollection, query);
   await dbHelper.removeDocumentsFromCollection(databaseUpdates, policyGroupMessagesCollection, query);
   entitlementsState.removeAtHeight(height + 1);
@@ -73,8 +73,8 @@ async function restoreDatabaseToBlockheightState(height, rescanGlobalApps = fals
   priceOracleState.removeAtHeight(height + 1);
   if (rescanGlobalApps === true) {
     log.info('Rescanning Apps!');
-    await dbHelper.removeDocumentsFromCollection(databaseGlobal, config.database.appsglobal.collections.appsMessages, query);
-    await dbHelper.removeDocumentsFromCollection(databaseGlobal, config.database.appsglobal.collections.appsInformation, query);
+    await dbHelper.removeDocumentsFromCollection(databaseGlobal, config.get('database.appsglobal.collections.appsMessages'), query);
+    await dbHelper.removeDocumentsFromCollection(databaseGlobal, config.get('database.appsglobal.collections.appsInformation'), query);
   }
   log.info('Rescan completed');
   return true;
@@ -106,7 +106,7 @@ async function rollbackTo(height, options = {}) {
   }
 
   const dbopen = dbHelper.databaseConnection();
-  const database = dbopen.db(config.database.daemon.database);
+  const database = dbopen.db(config.get('database.daemon.database'));
 
   log.info(`Rolling chain state back to ${height}`);
 

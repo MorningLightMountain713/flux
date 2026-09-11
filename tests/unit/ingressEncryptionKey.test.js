@@ -4,7 +4,9 @@ const { expect } = require('chai');
 const proxyquire = require('proxyquire').noCallThru();
 const { asConfig } = require('./fixtures/config');
 
-// A valid 32-byte x25519 public key (base64), distinct from the source default.
+const production = require('../../ZelBack/config/default');
+
+// A valid 32-byte x25519 public key (base64), distinct from the shipped one.
 const OVERRIDE_PUBKEY_B64 = Buffer.alloc(32, 7).toString('base64');
 
 function load(configStub) {
@@ -14,12 +16,15 @@ function load(configStub) {
 }
 
 describe('ingressEncryptionKey tests', () => {
-  it('falls back to the baked-in default key and kid when config is absent', () => {
+  // There is no baked-in default any more. The key is a verification identity
+  // and it lives in config/default.js, where it can be read and rotated; a copy
+  // in the reader was a value nobody could see and nobody could change.
+  it('uses the key and kid config ships', () => {
     const mod = load({});
     const { kid, publicKey } = mod.current();
-    expect(kid).to.equal(mod.DEFAULT_INGRESS_ENCRYPTION_KID);
+    expect(kid).to.equal(production.ingress.encryptionKid);
     expect(publicKey).to.be.instanceOf(Uint8Array).with.length(32);
-    expect(Buffer.from(publicKey).toString('base64')).to.equal(mod.DEFAULT_INGRESS_ENCRYPTION_PUBKEY);
+    expect(Buffer.from(publicKey).toString('base64')).to.equal(production.ingress.encryptionPubkey);
   });
 
   it('honours a config override for the key and kid', () => {
@@ -34,8 +39,7 @@ describe('ingressEncryptionKey tests', () => {
     expect(() => mod.current()).to.throw(/32 bytes/);
   });
 
-  it('exposes a 32-byte default public key', () => {
-    const mod = load({});
-    expect(Buffer.from(mod.DEFAULT_INGRESS_ENCRYPTION_PUBKEY, 'base64')).to.have.length(32);
+  it('ships a 32-byte public key', () => {
+    expect(Buffer.from(production.ingress.encryptionPubkey, 'base64')).to.have.length(32);
   });
 });

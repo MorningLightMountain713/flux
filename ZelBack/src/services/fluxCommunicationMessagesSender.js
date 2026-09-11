@@ -491,9 +491,9 @@ async function respondWithTempMessages(peer, sinceTimestamp = 0) {
       return;
     }
 
-    const globalAppsTempMessages = config.database.appsglobal.collections.appsTemporaryMessages;
+    const globalAppsTempMessages = config.get('database.appsglobal.collections.appsTemporaryMessages');
     const db = dbHelper.databaseConnection();
-    const database = db.db(config.database.appsglobal.database);
+    const database = db.db(config.get('database.appsglobal.database'));
     const query = sinceTimestamp > 0 ? { receivedAt: { $gt: new Date(sinceTimestamp) } } : {};
     const cursor = database.collection(globalAppsTempMessages)
       .find(query, { projection: { _id: 0, receivedAt: 0, expireAt: 0 } })
@@ -541,7 +541,7 @@ async function streamBatchedSync(peer, { sinceTimestamp, collectionName, validit
     }
 
     const db = dbHelper.databaseConnection();
-    const database = db.db(config.database.appsglobal.database);
+    const database = db.db(config.get('database.appsglobal.database'));
 
     const adjustedTimestamp = sinceTimestamp > 0
       ? new Date(sinceTimestamp - (peer.remoteClockOffsetMs || 0))
@@ -576,7 +576,7 @@ async function streamBatchedSync(peer, { sinceTimestamp, collectionName, validit
 async function respondWithAppRunningMessages(peer, sinceTimestamp = 0) {
   return streamBatchedSync(peer, {
     sinceTimestamp,
-    collectionName: config.database.appsglobal.collections.appStateEvents,
+    collectionName: config.get('database.appsglobal.collections.appStateEvents'),
     validityMs: 125 * 60 * 1000,
     // The freshness floor fits the hourly apprunning gossip; masterlease and
     // grantgeneration records are DURABLE and published once (change-driven),
@@ -608,7 +608,7 @@ async function respondWithAppRunningMessages(peer, sinceTimestamp = 0) {
 async function respondWithAppInstallingMessages(peer, sinceTimestamp = 0) {
   return streamBatchedSync(peer, {
     sinceTimestamp,
-    collectionName: config.database.appsglobal.collections.appsInstallingBroadcasts,
+    collectionName: config.get('database.appsglobal.collections.appsInstallingBroadcasts'),
     validityMs: 15 * 60 * 1000,
     messageType: 'fluxappinstallingsync',
     label: 'respondWithAppInstallingMessages',
@@ -618,7 +618,7 @@ async function respondWithAppInstallingMessages(peer, sinceTimestamp = 0) {
 async function respondWithAppInstallingErrorsMessages(peer, sinceTimestamp = 0) {
   return streamBatchedSync(peer, {
     sinceTimestamp,
-    collectionName: config.database.appsglobal.collections.appsInstallingErrorsBroadcasts,
+    collectionName: config.get('database.appsglobal.collections.appsInstallingErrorsBroadcasts'),
     validityMs: 24 * 60 * 60 * 1000,
     projection: { _id: 0 },
     messageType: 'fluxappinstallingerrorssync',

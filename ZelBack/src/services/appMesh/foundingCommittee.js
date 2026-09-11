@@ -54,13 +54,13 @@ const GATE_LAG = () => config.get('fluxapps.founderGateLagBlocks'); // sustained
 const QUIET_ZONE = () => config.get('fluxapps.founderQuietZoneBlocks'); // pre-flip, ~20 min
 const FLIP_EVALUATE_MS = () => config.get('fluxapps.founderFlipEvaluateIntervalMs');
 
-const collection = () => config.database.local.collections.foundingCommittees;
+const collection = () => config.get('database.local.collections.foundingCommittees');
 
 const DURABLE = { writeConcern: { w: 1, j: true } };
 
 function db() {
   const connection = dbHelper.databaseConnection();
-  return connection ? connection.db(config.database.local.database) : null;
+  return connection ? connection.db(config.get('database.local.database')) : null;
 }
 
 function outpointOf(member) {
@@ -294,7 +294,7 @@ async function applyGenerationRecord(record) {
 async function newestGenerationRecord(appName) {
   const connection = dbHelper.databaseConnection();
   if (!connection) return null;
-  const database = connection.db(config.database.appsglobal.database);
+  const database = connection.db(config.get('database.appsglobal.database'));
   const row = await dbHelper.findOneInDatabase(
     database,
     globalAppStateEvents,

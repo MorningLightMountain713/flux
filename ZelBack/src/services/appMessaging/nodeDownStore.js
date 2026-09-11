@@ -108,7 +108,7 @@ function verifyNodeDownCertificate(certificate) {
 
 function eventsCollection() {
   const db = dbHelper.databaseConnection();
-  return db.db(config.database.appsglobal.database).collection(globalAppStateEvents);
+  return db.db(config.get('database.appsglobal.database')).collection(globalAppStateEvents);
 }
 
 /**

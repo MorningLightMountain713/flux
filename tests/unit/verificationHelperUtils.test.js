@@ -784,9 +784,15 @@ describe('verificationHelperUtils tests', () => {
       expect(utils.isFluxSupportTeamZelid('1aaa')).to.be.true;
     });
 
-    it('should grant no one when unset, empty, or asked about a falsy id', () => {
-      expect(withSupportConfig(undefined).fluxSupportTeamZelids()).to.deep.equal([]);
+    // "Unset" is no longer a state: config ships the key and the boot
+    // reconciliation refuses to start a node where it does not, so an empty
+    // support team is an empty list. `undefined` in a stub means "do not
+    // override" and reads the shipped list, which is the opposite of the
+    // question this asks.
+    it('should grant no one when empty, or asked about a falsy id', () => {
       expect(withSupportConfig([]).fluxSupportTeamZelids()).to.deep.equal([]);
+      expect(withSupportConfig('').fluxSupportTeamZelids()).to.deep.equal([]);
+      expect(withSupportConfig(null).fluxSupportTeamZelids()).to.deep.equal([]);
       expect(withSupportConfig(['1aaa', '', null]).fluxSupportTeamZelids()).to.deep.equal(['1aaa']);
       expect(withSupportConfig(['1aaa']).isFluxSupportTeamZelid(undefined)).to.be.false;
       expect(withSupportConfig([]).isFluxSupportTeamZelid('')).to.be.false;

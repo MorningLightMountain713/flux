@@ -10,7 +10,7 @@ const daemonServiceFluxnodeRpcs = require('./daemonService/daemonServiceFluxnode
 // prepareIncidentRollup is development's and still reaches the collection directly;
 // the repository has no equivalent for it. Everything else here goes through one.
 const dbHelper = require('./dbHelper');
-const tamperingEventsCollection = config.database.local.collections.appTamperingEvents;
+const tamperingEventsCollection = config.get('database.local.collections.appTamperingEvents');
 const appTamperingRepository = require('./appDatabase/appTamperingRepository');
 const nodeStartupRepository = require('./appDatabase/nodeStartupRepository');
 const appsRepository = require('./appDatabase/appsRepository');
@@ -405,7 +405,7 @@ async function checkNodeReboot() {
 
     let bootId = null;
     try {
-      const bootIdPath = config.system?.bootIdPath ?? '/proc/sys/kernel/random/boot_id';
+      const bootIdPath = config.get('system.bootIdPath');
       bootId = (await fs.readFile(bootIdPath, 'utf8')).trim();
     } catch (error) {
       bootId = null;
@@ -471,7 +471,7 @@ async function prepareIncidentRollup() {
       log.warn('appTamperingDetection - DB not available, skipping incident rollup preparation');
       return;
     }
-    const database = db.db(config.database.local.database);
+    const database = db.db(config.get('database.local.database'));
     const rollups = await dbHelper.findInDatabase(database, tamperingEventsCollection, { incidentKey: { $exists: true } });
 
     const byKey = new Map();

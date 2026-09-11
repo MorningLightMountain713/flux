@@ -12,8 +12,8 @@ const dbHelper = require('../dbHelper');
 // has fully finished (every condemned stamp dropped). Boot recovery re-drives any
 // doc that survives a crash, so a teardown interrupted by a reboot always completes.
 
-const appsLocalDatabase = config.database.appslocal.database;
-const { pendingAppTeardowns } = config.database.appslocal.collections;
+const appsLocalDatabase = config.get('database.appslocal.database');
+const { pendingAppTeardowns } = config.get('database.appslocal.collections');
 
 function collection() {
   const db = dbHelper.databaseConnection();

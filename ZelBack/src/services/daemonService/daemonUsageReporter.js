@@ -59,7 +59,7 @@ function report() {
 function start() {
   if (timer) return;
 
-  timer = setInterval(report, config.daemon.subscriptions.usageReportIntervalMs);
+  timer = setInterval(report, config.get('daemon.subscriptions.usageReportIntervalMs'));
   // The report is a diagnostic; it must never be the reason a node stays awake.
   if (timer.unref) timer.unref();
 }

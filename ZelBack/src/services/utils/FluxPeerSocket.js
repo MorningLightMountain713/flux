@@ -143,7 +143,7 @@ class FluxPeerSocket {
      * was answering perfectly.
      */
     this.pingOutstanding = false;
-    this.maxMissedPongs = config.peers.wsMaxMissedPongs ?? 3;
+    this.maxMissedPongs = config.get('peers.wsMaxMissedPongs');
     /**
      * When anything was last heard from this peer, on the monotonic clock.
      *
@@ -163,7 +163,7 @@ class FluxPeerSocket {
      * genuinely silent peer is dropped on the same schedule as before and only a talking one is
      * treated differently.
      */
-    this.livenessWindowMs = (config.peers.wsPingIntervalMs ?? 15000) * this.maxMissedPongs;
+    this.livenessWindowMs = (config.get('peers.wsPingIntervalMs')) * this.maxMissedPongs;
     // The far end has sent a frame: a pong or a message. A handshake alone
     // is not a return — a node refusing at the door completes it and hangs
     // up before it says anything — so the jury's hold is noted on the first

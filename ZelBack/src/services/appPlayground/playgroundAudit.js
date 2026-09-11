@@ -27,11 +27,11 @@ const playgroundAbuse = require('./playgroundAbuse');
 const AUDIT_DOMAIN = 'FLUX_PLAYGROUND_AUDIT_v1';
 
 function localDb() {
-  return dbHelper.databaseConnection().db(config.database.appslocal.database);
+  return dbHelper.databaseConnection().db(config.get('database.appslocal.database'));
 }
 
 function collection() {
-  return config.database.appslocal.collections.playgroundSessions;
+  return config.get('database.appslocal.collections.playgroundSessions');
 }
 
 function retentionMs() {

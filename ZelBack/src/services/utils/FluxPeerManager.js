@@ -16,7 +16,7 @@ const HISTORY_BUFFER_SIZE = 1000;
 const PEER_EXCHANGE_MAX_PEERS = 60;
 const PEER_TOPOLOGY_MAX_REPORTERS = 100;
 const PEER_UPDATE_DEBOUNCE_MS = 2000;
-const allowedPortsSet = new Set(config.server.allowedPorts);
+const allowedPortsSet = new Set(config.get('server.allowedPorts'));
 
 function isValidPeerKey(key) {
   if (typeof key !== 'string') return false;

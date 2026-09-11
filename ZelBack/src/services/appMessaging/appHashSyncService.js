@@ -25,8 +25,8 @@ const log = require('../../lib/log');
 const { invalidMessages } = require('../invalidMessages');
 const { Privilege, authOf } = require('../utils/privileges');
 
-const appsHashesCollection = config.database.daemon.collections.appsHashes;
-const globalAppsMessages = config.database.appsglobal.collections.appsMessages;
+const appsHashesCollection = config.get('database.daemon.collections.appsHashes');
+const globalAppsMessages = config.get('database.appsglobal.collections.appsMessages');
 
 const SETTLE_TIME_MS = config.get('fluxapps.hashSyncSettleMs');
 const RESPONSE_TIME_PER_HASH_MS = config.get('fluxapps.hashSyncResponseTimePerHashMs');
@@ -51,7 +51,7 @@ function findPrevMessage(messages, height) {
 async function getMissingHashes(options = {}) {
   const { force = false, currentHeight = 0 } = options;
   const db = dbHelper.databaseConnection();
-  const database = db.db(config.database.daemon.database);
+  const database = db.db(config.get('database.daemon.database'));
   const query = { message: false };
   if (!force) {
     query.messageNotFound = { $ne: true };
@@ -228,8 +228,8 @@ async function bulkFetchStreamAndProcess(peerIp, peerPort, missingSet, onProgres
 
 async function processMessages(messages, onProgress) {
   const db = dbHelper.databaseConnection();
-  const appsGlobalDb = db.db(config.database.appsglobal.database);
-  const daemonDb = db.db(config.database.daemon.database);
+  const appsGlobalDb = db.db(config.get('database.appsglobal.database'));
+  const daemonDb = db.db(config.get('database.daemon.database'));
   let processed = 0;
   let skipped = 0;
   let failed = 0;
@@ -557,7 +557,7 @@ async function syncMissingHashes(options = {}) {
   syncRunning = true;
   try {
     const db = dbHelper.databaseConnection();
-    const daemonDb = db.db(config.database.daemon.database);
+    const daemonDb = db.db(config.get('database.daemon.database'));
 
     let missingHashes = await getMissingHashes({ force, currentHeight });
     log.info(`syncMissingHashes - Found ${missingHashes.length} missing hashes`);
@@ -567,7 +567,7 @@ async function syncMissingHashes(options = {}) {
     }
 
     // Check local permanent messages before fetching from peers
-    const appsGlobalDb = db.db(config.database.appsglobal.database);
+    const appsGlobalDb = db.db(config.get('database.appsglobal.database'));
     const CHUNK_SIZE = 10000;
     let localResolved = 0;
     for (let i = 0; i < missingHashes.length; i += CHUNK_SIZE) {
@@ -722,7 +722,7 @@ async function triggerAppHashesCheckAPI(req, res) {
 
 async function resetHashSyncForUpgrade(currentHeight) {
   const db = dbHelper.databaseConnection();
-  const database = db.db(config.database.daemon.database);
+  const database = db.db(config.get('database.daemon.database'));
 
   // Hashes already seen by the new retry system — one retry with new code
   const existingResult = await database.collection(appsHashesCollection).updateMany(

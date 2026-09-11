@@ -422,7 +422,7 @@ async function isPortOpen(ip, port, options = {}) {
  * @param {string} port Port. Defaults to config.server.apiport.
  * @returns {Promise<boolean>} False unless FluxOS version meets or exceeds the minimum allowed version.
  */
-async function isFluxAvailable(ip, port = config.server.apiport) {
+async function isFluxAvailable(ip, port = config.get('server.apiport')) {
   const axiosConfig = {
     timeout: 5000,
   };
@@ -432,7 +432,7 @@ async function isFluxAvailable(ip, port = config.server.apiport) {
     if (!ipchars.test(ip)) {
       throw new Error('Invalid IP');
     }
-    if (!config.server.allowedPorts.includes(+port)) {
+    if (!config.get('server.allowedPorts').includes(+port)) {
       throw new Error('Invalid Port');
     }
     const socketAddress = normalizeSocketAddress(`${ip}:${port}`);
@@ -444,7 +444,7 @@ async function isFluxAvailable(ip, port = config.server.apiport) {
     if (fluxResponse.data.status !== 'success') return false;
 
     const fluxVersion = fluxResponse.data.data;
-    const versionMinOK = serviceHelper.minVersionSatisfy(fluxVersion, config.minimumFluxOSAllowedVersion);
+    const versionMinOK = serviceHelper.minVersionSatisfy(fluxVersion, config.get('minimumFluxOSAllowedVersion'));
     if (!versionMinOK) return false;
 
     const homePort = +port - 1;
@@ -1108,7 +1108,7 @@ function checkNodeJsVersionAllowed() {
  */
 async function checkFluxbenchVersionAllowed() {
   if (storedFluxBenchAllowed) {
-    const versionOK = serviceHelper.minVersionSatisfy(storedFluxBenchAllowed, config.minimumFluxBenchAllowedVersion);
+    const versionOK = serviceHelper.minVersionSatisfy(storedFluxBenchAllowed, config.get('minimumFluxBenchAllowedVersion'));
     return versionOK;
   }
   try {
@@ -1117,12 +1117,12 @@ async function checkFluxbenchVersionAllowed() {
       const benchmarkVersion = benchmarkInfoResponse.data.version;
       log.info(`Running benchmark version: ${benchmarkVersion}`);
       setStoredFluxBenchAllowed(benchmarkVersion);
-      const versionOK = serviceHelper.minVersionSatisfy(benchmarkVersion, config.minimumFluxBenchAllowedVersion);
+      const versionOK = serviceHelper.minVersionSatisfy(benchmarkVersion, config.get('minimumFluxBenchAllowedVersion'));
       if (versionOK) {
         return true;
       }
       nodeDosState.addDosState(11);
-      nodeDosState.setDosMessage(`Fluxbench Version Error. Current lower version allowed is v${config.minimumFluxBenchAllowedVersion} found v${benchmarkVersion}`);
+      nodeDosState.setDosMessage(`Fluxbench Version Error. Current lower version allowed is v${config.get('minimumFluxBenchAllowedVersion')} found v${benchmarkVersion}`);
       log.error(nodeDosState.getRawDosMessage());
       return false;
     }
@@ -1702,12 +1702,12 @@ function resetFirewallActiveCache() {
  */
 async function adjustFirewall() {
   try {
-    const apiPort = userconfig.initial.apiport || config.server.apiport;
+    const apiPort = userconfig.initial.apiport || config.get('server.apiport');
     const homePort = +apiPort - 1;
     const apiSSLPort = +apiPort + 1;
     const syncthingPort = +apiPort + 2;
     let ports = [apiPort, homePort, apiSSLPort, syncthingPort, 80, 443, 16125];
-    const fluxCommunicationPorts = config.server.allowedPorts;
+    const fluxCommunicationPorts = config.get('server.allowedPorts');
     ports = ports.concat(fluxCommunicationPorts);
     const firewallActive = await isFirewallActive();
     if (firewallActive) {
@@ -2019,7 +2019,7 @@ async function allowOnlyDockerNetworksToFluxNodeService() {
   if (!firewallActive) return;
 
   const fluxAppDockerNetworks = '172.23.0.0/16';
-  const { fluxNodeServiceAddress } = config.server;
+  const { fluxNodeServiceAddress } = config.get('server');
   // have to use iptables here as ufw won't filter loopback
   const denyRule = ['INPUT', '-i', 'lo', '!', '-s', fluxAppDockerNetworks, '-d', `${fluxNodeServiceAddress}/32`, '-j', 'DROP'];
 
@@ -2073,7 +2073,7 @@ async function allowDockerNetworksToFluxDnsd() {
   if (!firewallActive) return;
 
   const fluxAppDockerNetworks = '172.23.0.0/16';
-  const { fluxDnsdServiceAddress } = config.server;
+  const { fluxDnsdServiceAddress } = config.get('server');
   // eslint-disable-next-line no-restricted-syntax
   for (const proto of ['udp', 'tcp']) {
     // eslint-disable-next-line no-await-in-loop
@@ -2090,7 +2090,7 @@ async function allowDockerNetworksToFluxDnsd() {
 async function addFluxNodeServiceIpToLoopback() {
   // could also check exists first with:
   //   ip -f inet addr show lo | grep 169.254.43.43/32
-  const ip = config.server.fluxNodeServiceAddress;
+  const ip = config.get('server.fluxNodeServiceAddress');
 
   const { error } = await serviceHelper.runCommand('ip', {
     runAsRoot: true,

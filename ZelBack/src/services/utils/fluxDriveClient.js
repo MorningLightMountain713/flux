@@ -8,7 +8,7 @@ const config = require('config');
 // URL is a deploy-time config value (config.fluxDrive.blobApiUrl).
 
 function blobApiBase(override) {
-  const url = override || (config.fluxDrive && config.fluxDrive.blobApiUrl);
+  const url = override || (config.get('fluxDrive') && config.get('fluxDrive.blobApiUrl'));
   if (!url) throw new Error('fluxDrive.blobApiUrl is not configured');
   return url.replace(/\/+$/, '');
 }

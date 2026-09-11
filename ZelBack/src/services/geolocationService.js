@@ -9,7 +9,7 @@ const serviceHelper = require('./serviceHelper');
 const dbHelper = require('./dbHelper');
 const networkClassifier = require('./utils/networkClassifier');
 
-const { geolocation: geolocationCollection } = config.database.local.collections;
+const { geolocation: geolocationCollection } = config.get('database.local.collections');
 
 let storedGeolocation = null;
 let storedIp = null;
@@ -57,7 +57,7 @@ async function storeGeolocationToDb(geolocation, isStaticIp, isDataCenter, ipCha
       log.warn('Database connection not available for storing geolocation');
       return;
     }
-    const database = dbClient.db(config.database.local.database);
+    const database = dbClient.db(config.get('database.local.database'));
     const query = { _id: 'nodeGeolocation' };
     const update = {
       $set: {
@@ -91,7 +91,7 @@ async function getGeolocationFromDb() {
     if (!dbClient) {
       return { geolocation: null, staticIp: false, dataCenter: false, lastIpChangeDate: null };
     }
-    const database = dbClient.db(config.database.local.database);
+    const database = dbClient.db(config.get('database.local.database'));
     const query = { _id: 'nodeGeolocation' };
     const result = await dbHelper.findOneInDatabase(database, geolocationCollection, query);
     if (result && result.geolocation) {
@@ -305,7 +305,7 @@ async function runGeolocationPass() {
       // with who registered a /29: across the fleet 227 ASNs separate hosting
       // from access networks with only 8 carrying both, against 87 distinct
       // `org` strings for the 329 nodes this decides about.
-      const ipApiUrl = `${config.geolocation.ipApiBaseUrl}/json/${localIp}?fields=status,continent,continentCode,country,countryCode,region,regionName,lat,lon,query,org,isp,as,proxy,hosting,mobile`;
+      const ipApiUrl = `${config.get('geolocation.ipApiBaseUrl')}/json/${localIp}?fields=status,continent,continentCode,country,countryCode,region,regionName,lat,lon,query,org,isp,as,proxy,hosting,mobile`;
       const ipRes = await serviceHelper.axiosGet(ipApiUrl);
       if (ipRes.data.status === 'success' && ipRes.data.query !== '') {
         storedGeolocation = {
@@ -328,7 +328,7 @@ async function runGeolocationPass() {
           dataCenter: ipRes.data.hosting,
         };
       } else {
-        const statsApiUrl = `${config.stats.baseUrl}/fluxlocation/${localIp}`;
+        const statsApiUrl = `${config.get('stats.baseUrl')}/fluxlocation/${localIp}`;
         const statsRes = await serviceHelper.axiosGet(statsApiUrl);
         if (statsRes.data.status === 'success' && statsRes.data.data) {
           storedGeolocation = {

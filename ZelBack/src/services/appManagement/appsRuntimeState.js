@@ -11,8 +11,8 @@ const dbHelper = require('../dbHelper');
 // election/sync-derived `controllerDesired` is NOT here — it is in-memory,
 // re-derived from live truth each cycle (see the reconcile workqueue).
 
-const appsLocalDatabase = config.database.appslocal.database;
-const { appsRuntimeState } = config.database.appslocal.collections;
+const appsLocalDatabase = config.get('database.appslocal.database');
+const { appsRuntimeState } = config.get('database.appslocal.collections');
 
 // crash-recovery backoff ladder: immediate, 30s, 5m, 15m, 30m cap. Tunable via
 // config (harness compression); the literals are the production defaults.

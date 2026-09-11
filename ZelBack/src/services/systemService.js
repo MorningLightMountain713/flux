@@ -367,12 +367,12 @@ async function addSyncthingRepository() {
   const packageName = 'syncthing';
   // syncthing does this weird
   const dist = 'syncthing';
-  const sourceUrl = config.syncthing.aptSourceUrl;
+  const sourceUrl = config.get('syncthing.aptSourceUrl');
   const components = ['stable-v2'];
   const sourceOptions = ['signed-by=/usr/share/keyrings/syncthing-archive-keyring.gpg'];
 
   // keyring vars
-  const keyUrl = config.syncthing.releaseKeyUrl;
+  const keyUrl = config.get('syncthing.releaseKeyUrl');
   const keyringName = 'syncthing-archive-keyring.gpg';
 
   // this will log errors
@@ -562,7 +562,7 @@ async function monitorSyncthingPackage() {
       const {
         data: { data },
       } = await axios
-        .get(`${config.stats.baseUrl}/getmodulesminimumversions`, {
+        .get(`${config.get('stats.baseUrl')}/getmodulesminimumversions`, {
           timeout: 10000,
         })
         .catch((error) => {
@@ -570,7 +570,7 @@ async function monitorSyncthingPackage() {
           return { data: { data: {} } };
         });
 
-      const minSyncthingVersion = data.syncthing || config.minimumSyncthingAllowedVersion;
+      const minSyncthingVersion = data.syncthing || config.get('minimumSyncthingAllowedVersion');
 
       const currentSyncthingVersion = await getPackageVersion('syncthing');
 
@@ -857,7 +857,7 @@ async function mongodGpgKeyVeryfity() {
     const versionMatch = stdout.match(/MongoDB (\d+\.\d+) Release Signing Key/);
     if (expiredMatch) {
       if (versionMatch) {
-        const keyUrl = `${config.mongodb.signingKeyBaseUrl}/server-${versionMatch[1]}.asc`;
+        const keyUrl = `${config.get('mongodb.signingKeyBaseUrl')}/server-${versionMatch[1]}.asc`;
         const filePath = '/usr/share/keyrings/mongodb-archive-keyring.gpg';
         log.info(`MongoDB version: ${versionMatch[1]}`);
         log.info(`GPG URL: ${keyUrl}`);

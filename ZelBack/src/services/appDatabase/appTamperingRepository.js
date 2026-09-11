@@ -7,13 +7,13 @@ const dbHelper = require('../dbHelper');
 // (appName, eventType, incidentKey), carrying a severity stamped at write time.
 // Pre-schema rows are row-per-observation noise with no severity or dedup; every
 // read here excludes them and purgePreSchemaIncidents removes them at startup.
-const tamperingEventsCollection = config.database.local.collections.appTamperingEvents;
+const tamperingEventsCollection = config.get('database.local.collections.appTamperingEvents');
 
 // The tampering collections live in the `local` database, NOT `appslocal` —
 // appsRepository's localDb() is a different database entirely.
 function db() {
   const connection = dbHelper.databaseConnection();
-  return connection ? connection.db(config.database.local.database) : null;
+  return connection ? connection.db(config.get('database.local.database')) : null;
 }
 
 /**

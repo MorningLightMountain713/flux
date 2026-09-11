@@ -1183,7 +1183,7 @@ async function appDockerCreate(deployComp, options = {}) {
       },
       NetworkMode: networkName,
       LogConfig: logConfig,
-      ExtraHosts: [`fluxnode.service:${config.server.fluxNodeServiceAddress}`],
+      ExtraHosts: [`fluxnode.service:${config.get('server.fluxNodeServiceAddress')}`],
       ...(Array.isArray(options.dns) && options.dns.length > 0 && { Dns: options.dns }),
       // A bare `web` is resolved against EVERY network the container is attached to,
       // and docker walks them in network-name order — which is identity-derived, so

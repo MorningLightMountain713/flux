@@ -34,10 +34,10 @@ async function rebuildPolicyGroupState() {
   featureEntitlements = new FeatureEntitlements({ groupHistory: policyGroupHistory });
 
   const db = dbHelper.databaseConnection();
-  const database = db.db(config.database.chainparams.database);
+  const database = db.db(config.get('database.chainparams.database'));
 
   const docs = await dbHelper.findInDatabase(
-    database, config.database.chainparams.collections.policyGroupMessages,
+    database, config.get('database.chainparams.collections.policyGroupMessages'),
     {}, { projection: { _id: 0 } },
   );
   inChainOrder(docs, 'policyGroupMessages');

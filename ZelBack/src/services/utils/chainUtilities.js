@@ -11,8 +11,8 @@ const log = require('../../lib/log');
 async function getChainParamsPriceUpdates() {
   try {
     const db = dbHelper.databaseConnection();
-    const database = db.db(config.database.chainparams.database);
-    const chainParamsMessagesCollection = config.database.chainparams.collections.chainMessages;
+    const database = db.db(config.get('database.chainparams.database'));
+    const chainParamsMessagesCollection = config.get('database.chainparams.collections.chainMessages');
     const query = { version: 'p' };
     const projection = {
       projection: {

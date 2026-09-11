@@ -15,7 +15,7 @@ const fluxRpc = require('./utils/fluxRpc');
 const dbHelper = require('./dbHelper');
 const { Privilege, authOf } = require('./utils/privileges');
 
-const { benchmark: benchmarkCollection } = config.database.local.collections;
+const { benchmark: benchmarkCollection } = config.get('database.local.collections');
 const validTiers = ['CUMULUS', 'NIMBUS', 'STRATUS'];
 const ONE_DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -43,7 +43,7 @@ async function buildBenchdClient() {
   // that doesn't offer one leaves no socket to find, which is what keeps this
   // a no-op on installs that predate it -- there is no version to detect and
   // no order the two have to be upgraded in.
-  const socketPath = config.benchmark.socketPath || null;
+  const socketPath = config.get('benchmark.socketPath') || null;
   const socketUsable = socketPath
     ? await fs.stat(socketPath).then((s) => s.isSocket()).catch(() => false)
     : false;
@@ -53,7 +53,7 @@ async function buildBenchdClient() {
     // the credential path -- a daemon exposing a socket withholds the shared
     // password, so falling back would only turn a clear failure into a
     // confusing one.
-    benchdClient = new fluxRpc.FluxRpc(`http://${config.benchmark.host}`, {
+    benchdClient = new fluxRpc.FluxRpc(`http://${config.get('benchmark.host')}`, {
       socketPath, timeout: 10_000, mode: 'fluxbenchd',
     });
     return benchdClient;
@@ -65,9 +65,9 @@ async function buildBenchdClient() {
   const password = `${prefix}benchpassword`;
 
   const portId = isTestnet ? 'rpcporttestnet' : 'rpcport';
-  const rpcPort = config.benchmark[portId];
+  const rpcPort = config.get('benchmark')[portId];
 
-  const rpcHost = config.benchmark.host;
+  const rpcHost = config.get('benchmark.host');
   const client = new fluxRpc.FluxRpc(`http://${rpcHost}:${rpcPort}`, {
     auth: { username, password }, timeout: 10_000, mode: 'fluxbenchd',
   });
@@ -134,7 +134,7 @@ async function storeBenchmarkToDb(benchmarkData, tierStatus) {
       return;
     }
 
-    const database = dbClient.db(config.database.local.database);
+    const database = dbClient.db(config.get('database.local.database'));
     const query = { _id: 'nodeBenchmark' };
     const update = {
       $set: {
@@ -179,7 +179,7 @@ async function getBenchmarkFromDb() {
     if (!dbClient) {
       return { benchmark: null, tier: null };
     }
-    const database = dbClient.db(config.database.local.database);
+    const database = dbClient.db(config.get('database.local.database'));
     const query = { _id: 'nodeBenchmark' };
     const result = await dbHelper.findOneInDatabase(database, benchmarkCollection, query);
     if (result && result.benchmark) {

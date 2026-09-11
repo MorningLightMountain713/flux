@@ -76,10 +76,10 @@ const INGEST_MARKER_ID = 'ipLocationTableIngest';
 // worth of node locations in about a second without crowding the API's queries.
 const NODE_LOOKUP_CONCURRENCY = 8;
 
-const ipRangesCollection = config.database.local.collections.ipRanges;
+const ipRangesCollection = config.get('database.local.collections.ipRanges');
 const ipRangesNextCollection = `${ipRangesCollection}_next`;
-const nodeLocationsCollection = config.database.local.collections.nodeLocations;
-const policyDocumentsCollection = config.database.local.collections.policyDocuments;
+const nodeLocationsCollection = config.get('database.local.collections.nodeLocations');
+const policyDocumentsCollection = config.get('database.local.collections.policyDocuments');
 
 let status = { ready: false, generated: null, rowCount: 0 };
 // country -> continent, from the header of whatever baseline this node holds
@@ -156,7 +156,7 @@ function isStoreUnavailable(error) {
  */
 function db() {
   const connection = dbHelper.databaseConnection();
-  return connection ? connection.db(config.database.local.database) : null;
+  return connection ? connection.db(config.get('database.local.database')) : null;
 }
 
 /**

@@ -31,9 +31,9 @@ function getClient() {
 
   client = new natUpnp.Client();
 
-  if (config.upnp.gatewayUrl) {
-    const { gatewayUrl } = config.upnp;
-    const nodeIp = config.upnp.nodeIp || '127.0.0.1';
+  if (config.get('upnp.gatewayUrl')) {
+    const { gatewayUrl } = config.get('upnp');
+    const nodeIp = config.get('upnp.nodeIp') || '127.0.0.1';
     client.getGateway = async () => ({
       gateway: new Device(gatewayUrl),
       address: nodeIp,
@@ -63,7 +63,7 @@ function isUPNP() {
   const { initial } = globalThis.userconfig;
   if (typeof initial.upnp === 'boolean') return initial.upnp;
   return Boolean(
-    (initial.apiport && Number(initial.apiport) !== config.server.apiport) || initial.routerIP,
+    (initial.apiport && Number(initial.apiport) !== config.get('server.apiport')) || initial.routerIP,
   );
 }
 
@@ -111,7 +111,7 @@ async function adjustFirewallForUPNP() {
         await ufw(['insert', '1', 'allow', 'out', 'from', 'any', 'to', routerIP, 'proto', 'tcp']);
         await ufw(['insert', '1', 'allow', 'from', routerIP, 'to', 'any', 'proto', 'udp']);
 
-        const fluxCommunicationPorts = config.server.allowedPorts;
+        const fluxCommunicationPorts = config.get('server.allowedPorts');
         // eslint-disable-next-line no-restricted-syntax
         for (const port of fluxCommunicationPorts) {
           // create rule for hone nodes ws connections
@@ -156,7 +156,7 @@ async function adjustFirewallForUPNP() {
  * @param {number} apiport Port number.
  * @returns {Promise<boolean>} True if port mappings can be set. Otherwise false.
  */
-async function verifyUPNPsupport(apiport = config.server.apiport) {
+async function verifyUPNPsupport(apiport = config.get('server.apiport')) {
   try {
     if (userconfig.initial.routerIP) {
       await adjustFirewallForUPNP();
@@ -228,7 +228,7 @@ async function verifyUPNPsupport(apiport = config.server.apiport) {
  * @param {number} apiport Port number.
  * @returns {Promise<boolean>} True if port mappings can be set. Otherwise false.
  */
-async function setupUPNP(apiport = config.server.apiport) {
+async function setupUPNP(apiport = config.get('server.apiport')) {
   try {
     await getClient().createMapping({
       public: +apiport,

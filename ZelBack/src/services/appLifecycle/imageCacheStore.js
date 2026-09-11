@@ -21,8 +21,8 @@ const dbHelper = require('../dbHelper');
 // the correct safe default: accounting/admission FAILS CLOSED on null (refuse the
 // download), the retention gate FAILS SAFE on null (keep the image).
 
-const appsLocalDatabase = config.database.appslocal.database;
-const { cachedImages } = config.database.appslocal.collections;
+const appsLocalDatabase = config.get('database.appslocal.database');
+const { cachedImages } = config.get('database.appslocal.collections');
 
 function collection() {
   const db = dbHelper.databaseConnection();

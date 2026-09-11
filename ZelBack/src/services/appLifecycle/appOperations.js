@@ -127,7 +127,7 @@ function getFdmIndex(appName) {
  */
 async function getMasterIpFromFdm(appName, axiosOptions) {
   const fdmIndex = getFdmIndex(appName);
-  const fdmRegions = config.fdm.regions.map((region) => ({
+  const fdmRegions = config.get('fdm.regions').map((region) => ({
     name: region.name,
     baseUrl: region.baseUrlTemplate.replace('%i', fdmIndex),
   }));

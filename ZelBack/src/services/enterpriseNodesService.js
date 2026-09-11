@@ -87,7 +87,7 @@ async function getEnterpriseList() {
         pubKeyPoints = Math.floor(points);
       }
       let enterprisePoints = 0;
-      const enterpriseNodesPubKees = config.enterprisePublicKeys;
+      const enterpriseNodesPubKees = config.get('enterprisePublicKeys');
       if (enterpriseNodesPubKees.includes(nodeInfo.pubkey)) {
         enterprisePoints = 2000;
       }

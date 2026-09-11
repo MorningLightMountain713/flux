@@ -57,23 +57,23 @@ const contentStorePath = process.env.FLUX_CONTENT_STORE
 const UTILITY_ROLE_LABEL = 'runonflux.role';
 
 // Database collections - Daemon
-const scannedHeightCollection = config.database.daemon.collections.scannedHeight;
-const appsHashesCollection = config.database.daemon.collections.appsHashes;
+const scannedHeightCollection = config.get('database.daemon.collections.scannedHeight');
+const appsHashesCollection = config.get('database.daemon.collections.appsHashes');
 
 // Database collections - Local apps
-const localAppsInformation = config.database.appslocal.collections.appsInformation;
+const localAppsInformation = config.get('database.appslocal.collections.appsInformation');
 
 // Database collections - Global apps
-const globalAppsMessages = config.database.appsglobal.collections.appsMessages;
-const globalAppsInformation = config.database.appsglobal.collections.appsInformation;
-const globalAppsTempMessages = config.database.appsglobal.collections.appsTemporaryMessages;
-const globalAppsInstallingLocations = config.database.appsglobal.collections.appsInstallingLocations;
-const globalAppsInstallingBroadcasts = config.database.appsglobal.collections.appsInstallingBroadcasts;
-const globalAppStateEvents = config.database.appsglobal.collections.appStateEvents;
-const globalAppsInstallingErrorsLocations = config.database.appsglobal.collections.appsInstallingErrorsLocations;
-const globalAppsInstallingErrorsBroadcasts = config.database.appsglobal.collections.appsInstallingErrorsBroadcasts;
-const globalAppsIngressAttestations = config.database.appsglobal.collections.appsIngressAttestations;
-const globalAppsIngressAttestationDigests = config.database.appsglobal.collections.appsIngressAttestationDigests;
+const globalAppsMessages = config.get('database.appsglobal.collections.appsMessages');
+const globalAppsInformation = config.get('database.appsglobal.collections.appsInformation');
+const globalAppsTempMessages = config.get('database.appsglobal.collections.appsTemporaryMessages');
+const globalAppsInstallingLocations = config.get('database.appsglobal.collections.appsInstallingLocations');
+const globalAppsInstallingBroadcasts = config.get('database.appsglobal.collections.appsInstallingBroadcasts');
+const globalAppStateEvents = config.get('database.appsglobal.collections.appStateEvents');
+const globalAppsInstallingErrorsLocations = config.get('database.appsglobal.collections.appsInstallingErrorsLocations');
+const globalAppsInstallingErrorsBroadcasts = config.get('database.appsglobal.collections.appsInstallingErrorsBroadcasts');
+const globalAppsIngressAttestations = config.get('database.appsglobal.collections.appsIngressAttestations');
+const globalAppsIngressAttestationDigests = config.get('database.appsglobal.collections.appsIngressAttestationDigests');
 
 // App / component name validation regexes.
 // v8+ app names allow internal hyphens; v<=7 app names and all component names are strictly alphanumeric.

@@ -12,11 +12,11 @@ const dbHelper = require('../dbHelper');
 //
 // One singleton document per policy name, keyed by _id, the same shape geolocation,
 // benchmark and nodeIdentity use in this database.
-const policyDocumentsCollection = config.database.local.collections.policyDocuments;
+const policyDocumentsCollection = config.get('database.local.collections.policyDocuments');
 
 function db() {
   const connection = dbHelper.databaseConnection();
-  return connection ? connection.db(config.database.local.database) : null;
+  return connection ? connection.db(config.get('database.local.database')) : null;
 }
 
 /**

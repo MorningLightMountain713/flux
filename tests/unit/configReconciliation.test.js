@@ -14,22 +14,23 @@ describe('config reconciliation at boot', () => {
   // below is worthless if the sweep is not actually reaching the source.
   it('reads the service layer at all, so an empty sweep cannot pass the check below', () => {
     const keys = reconciliation.keysRead();
-    expect(keys.size, 'the sweep found no config.fluxapps reads at all').to.be.greaterThan(100);
-    expect([...keys.keys()], 'a key every node reads was not found').to.include('appSyncMinCompletions');
+    expect(keys.size, 'the sweep found no config.get reads at all').to.be.greaterThan(300);
+    expect([...keys.keys()], 'a setting every node reads was not found')
+      .to.include.members(['fluxapps.appSyncMinCompletions', 'server.apiport']);
   });
 
-  it('every fluxapps key the service layer names is one config ships', () => {
-    const missing = reconciliation.missingKeys(production.fluxapps);
-    const named = missing.map((m) => `fluxapps.${m.key} (read by ${m.files.join(', ')})`);
+  it('every setting the service layer names is one config ships', () => {
+    const missing = reconciliation.missingKeys(production);
+    const named = missing.map((m) => `${m.key} (read by ${m.files.join(', ')})`);
     expect(named, 'config/default.js does not ship these, so the code reads undefined and nothing says so').to.deep.equal([]);
   });
 
   it('names every missing key, not just the first, and exits 1', () => {
     const lines = [];
     const exits = [];
-    const short = { ...production.fluxapps };
-    delete short.appSyncMinCompletions;
-    delete short.syncTimeoutMs;
+    const short = { ...production, fluxapps: { ...production.fluxapps }, server: { ...production.server } };
+    delete short.fluxapps.appSyncMinCompletions;
+    delete short.server.apiport;
 
     // The real reconcile() reads the real config, which is complete - so the
     // refusal path is driven through missingKeys with a config that is not.
@@ -37,24 +38,24 @@ describe('config reconciliation at boot', () => {
     const keys = missing.map((m) => m.key);
 
     expect(keys, 'an operator fixing a config needs the whole list, not one restart per key')
-      .to.deep.equal(['appSyncMinCompletions', 'syncTimeoutMs']);
+      .to.deep.equal(['fluxapps.appSyncMinCompletions', 'server.apiport']);
     expect(missing[0].files, 'the report does not say who reads it').to.not.be.empty;
 
     // And the refusal itself: writes every name, then exits non-zero.
     reconciliation.reconcile({
-      fluxapps: short,
+      config: short,
       exit: (code) => exits.push(code),
       write: (line) => lines.push(line),
     });
     expect(exits, 'a node with an unreadable knob kept running').to.deep.equal([1]);
     expect(lines.some((l) => l.includes('fluxapps.appSyncMinCompletions')), 'the first missing key was not named').to.equal(true);
-    expect(lines.some((l) => l.includes('fluxapps.syncTimeoutMs')), 'the report stopped at the first missing key').to.equal(true);
+    expect(lines.some((l) => l.includes('server.apiport')), 'the report stopped at the first missing key').to.equal(true);
 
     // And it says nothing, and stops nothing, when the config is complete.
     const quiet = [];
     const quietExits = [];
     reconciliation.reconcile({
-      fluxapps: production.fluxapps,
+      config: production,
       exit: (code) => quietExits.push(code),
       write: (line) => quiet.push(line),
     });
@@ -69,8 +70,8 @@ describe('config reconciliation at boot', () => {
         path.join(dir, 'someService.js'),
         "const x = config.get('fluxapps.aKnobNobodyShips');\nmodule.exports = { x };\n",
       );
-      const missing = reconciliation.missingKeys(production.fluxapps, dir);
-      expect(missing.map((m) => m.key)).to.deep.equal(['aKnobNobodyShips']);
+      const missing = reconciliation.missingKeys(production, dir);
+      expect(missing.map((m) => m.key)).to.deep.equal(['fluxapps.aKnobNobodyShips']);
       expect(missing[0].files).to.deep.equal(['someService.js']);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
@@ -83,7 +84,7 @@ describe('config reconciliation at boot', () => {
   // ONE FORM. Property access has four spellings, none of them distinguishable
   // without resolving bindings, and every one answers undefined on a key nobody
   // ships. config.get throws by name instead, which is the whole point.
-  it('nothing reads a knob by property access, which would answer undefined in silence', () => {
+  it('nothing reads a setting by property access, which would answer undefined in silence', () => {
     const offenders = reconciliation.propertyReads()
       .map((r) => `${r.file}:${r.line}  ${r.text}`);
     expect(offenders, 'these read a knob in a way that cannot fail loudly').to.deep.equal([]);
@@ -93,6 +94,7 @@ describe('config reconciliation at boot', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fluxcfg-'));
     try {
       fs.writeFileSync(path.join(dir, 'sneaky.js'), [
+        "const config = require('config');",
         "const a = config.fluxapps.direct;",
         "const { viaDestructure } = config.fluxapps;",
         "const { fluxapps: { viaNested } } = config;",
@@ -100,7 +102,7 @@ describe('config reconciliation at boot', () => {
         'module.exports = { a, viaDestructure, viaNested, aliased };',
       ].join('\n'));
       const lines = reconciliation.propertyReads(dir).map((r) => r.line);
-      expect(lines, 'a spelling of property access went unreported').to.deep.equal([1, 2, 3, 4]);
+      expect(lines, 'a spelling of property access went unreported').to.deep.equal([2, 3, 4, 5]);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
@@ -117,7 +119,7 @@ describe('config reconciliation at boot', () => {
         'module.exports = { a, b, c, d };',
       ].join('\n'));
       expect([...reconciliation.keysRead(dir).keys()].sort())
-        .to.deep.equal(['nested.deeper', 'plain', 'spaced']);
+        .to.deep.equal(['fluxapps.nested.deeper', 'fluxapps.plain', 'fluxapps.spaced', 'server.apiport']);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
