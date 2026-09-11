@@ -29,9 +29,10 @@ let flux;
 
 /**
  * Real v8 compose entries, derived from V8_SUBMISSION's own so the shape stays
- * in step with the fixture. Ports are assigned per index because two components
- * of one app may not share a host port; the free-update rule compares port
- * COUNTS per component, so the specific numbers do not matter.
+ * in step with the fixture. Ports default per index because two components of
+ * one app may not share a host port, and for most rules here the numbers do not
+ * matter. They matter for one: the free-update check counts how many of a
+ * component's host ports are ENTERPRISE, so an entry can name its own.
  */
 function legacyCompose(entries) {
   const [base] = V8_SUBMISSION.compose;
@@ -42,7 +43,7 @@ function legacyCompose(entries) {
     cpu: entry.cpu,
     ram: entry.ram,
     hdd: entry.hdd,
-    ports: [31443 + index],
+    ports: entry.ports || [31443 + index],
     containerPorts: [8080 + index],
   }));
 }
@@ -112,6 +113,38 @@ describe('appSpecHelpers tests', () => {
     const oneComponent = (cpu = 1, ram = 2000, hdd = 50) => [{
       name: 'main', cpu, ram, hdd,
     }];
+
+    // 0-1023, 8080, 8081, 8443 and 6667 are enterprise in the test config; 31443
+    // is not. An update that buys one is a resource increase and is not free.
+    const withPorts = (ports) => [{
+      name: 'main', cpu: 1, ram: 2000, hdd: 50, ports,
+    }];
+
+    it('is not free when an update takes an enterprise port it did not have', async () => {
+      const daemonHeight = 100000;
+      const spec = await legacySpec({ compose: withPorts([443]) });
+      const prev = await legacySpec({ compose: withPorts([31443]) });
+
+      sinon.stub(appsRepository, 'getGlobalAppInfo')
+        .resolves(await registered(prev, daemonHeight + 44000 - spec.expire));
+      sinon.stub(appsRepository, 'listAppMessagesByName').resolves([]);
+
+      expect(await legacyRegime.checkLegacyFreeUpdate(spec, daemonHeight)).to.equal(false);
+    });
+
+    it('is still free when the enterprise port count does not change', async () => {
+      // The companion. A check that called any port change growth, or that
+      // counted nothing at all, would pass the test above on its own.
+      const daemonHeight = 100000;
+      const spec = await legacySpec({ compose: withPorts([8443]) });
+      const prev = await legacySpec({ compose: withPorts([8080]) });
+
+      sinon.stub(appsRepository, 'getGlobalAppInfo')
+        .resolves(await registered(prev, daemonHeight + 44000 - spec.expire));
+      sinon.stub(appsRepository, 'listAppMessagesByName').resolves([]);
+
+      expect(await legacyRegime.checkLegacyFreeUpdate(spec, daemonHeight)).to.equal(true);
+    });
 
     it('should return true for free update with no resource changes', async () => {
       const daemonHeight = 100000;
