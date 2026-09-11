@@ -1113,30 +1113,6 @@ async function getRunningAppIpList(ip) {
 }
 
 /**
- * Get registration information for Flux apps
- * @param {object} _req - Request object (unused)
- * @param {import('express').Response} res
- * @returns {void} Registration information
- */
-function registrationInformation(_req, res) {
-  try {
-    // Read here rather than bound to a name: a name standing in for the whole
-    // config is the one access form the boot reconciliation cannot follow, so
-    // nothing would notice a knob read through it going missing.
-    const response = messageHelper.createDataMessage(config.get('fluxapps'));
-    res.json(response);
-  } catch (error) {
-    log.error(error);
-    const errorResponse = messageHelper.createErrorMessage(
-      error.message || error,
-      error.name,
-      error.code,
-    );
-    res.json(errorResponse);
-  }
-}
-
-/**
  * Rebuild the global apps information collection from messages collection.
  *
  * Thin wrapper around appsMaintenance.reindexGlobalAppsInformation, which
@@ -1494,7 +1470,6 @@ module.exports = {
   getAllAppsInformation,
   getRunningApps,
   getRunningAppIpList,
-  registrationInformation,
   reindexGlobalAppsInformation,
   rescanGlobalAppsInformation,
   reconstructAppMessagesHashCollection,

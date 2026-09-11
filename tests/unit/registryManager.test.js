@@ -1319,20 +1319,6 @@ describe('registryManager tests', () => {
     });
   });
 
-  describe('registrationInformation tests', () => {
-    it('should return registration information from config', () => {
-      const res = {
-        json: sinon.fake((param) => param),
-      };
-
-      registryManager.registrationInformation(undefined, res);
-
-      const result = res.json.firstCall.args[0];
-      expect(result.status).to.equal('success');
-      expect(result.data).to.exist;
-    });
-  });
-
   describe('getRunningApps tests', () => {
     it('should return running apps from global locations', async () => {
       const result = await registryManager.getRunningApps();
