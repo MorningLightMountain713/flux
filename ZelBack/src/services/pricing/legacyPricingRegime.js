@@ -75,11 +75,10 @@ function getDefaultExpire(height) {
 }
 
 function countEnterprisePortsOn(component) {
-  const hostPorts = new Set();
-  for (const p of Object.values(component.ports || {})) {
-    if (p && p.hostPort != null) hostPorts.add(p.hostPort);
-  }
-  return [...hostPorts].filter((p) => fluxNetworkHelper.isPortEnterprise(p)).length;
+  // The component dedupes its own host ports — every version's class inherits
+  // `hostPorts()` from AppComponentBase. What is priced here is how many of them
+  // are enterprise, which is the node's question and not the spec's.
+  return component.hostPorts().filter((p) => fluxNetworkHelper.isPortEnterprise(p)).length;
 }
 
 function hasResourceGrowth(spec, prevSpec) {
