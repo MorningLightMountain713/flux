@@ -11,13 +11,16 @@ const dockerService = require('../dockerService');
 const generalService = require('../generalService');
 const fluxNetworkHelper = require('../fluxNetworkHelper');
 const globalState = require('../utils/globalState');
-const { compareInstanceSeniority, describeRanking } = require('../utils/instanceOrdering');
-const { socketAddressesMatch } = require('../utils/socketAddressUtils');
 const { getSpecBackend } = require('../utils/specLibs');
 const imageManager = require('../appSecurity/imageManager');
 const shutdownPlan = require('./shutdownPlan');
 const appUninstaller = require('./appUninstaller');
 const appOperations = require('./appOperations');
+const appGiveUp = require('./appGiveUp');
+const appEvacuationSafety = require('./appEvacuationSafety');
+const fluxEventBus = require('../utils/fluxEventBus');
+const peerFolderLiveness = require('../appMonitoring/peerFolderLiveness');
+const syncthingFolderStateMachine = require('../appMonitoring/syncthingFolderStateMachine');
 
 // The single owner of one question: does what this node RUNS match what the
 // chain says it should run? Every trigger — a block processed at the tip, a
@@ -213,23 +216,64 @@ async function convergeApp(installed, registrySpec, ctx) {
     // election overshoot trims in a single cycle. Graceful: trimming surplus
     // is never an emergency, so it defers on any in-flight operation and
     // drains rather than force-kills.
-    const required = installed.spec.instances || config.fluxapps.minimumInstances;
     const runningAppList = await registryManager.appLocation(installed.name);
-    if (runningAppList.length > required) {
-      // development's shared ordering, not a local copy: it normalises Date and
-      // string timestamps to epoch ms, and — load-bearing here — breaks a tie on
-      // ip. Without that tiebreak two instances sharing a runningSince rank
-      // differently on different nodes, and "every surplus node self-identifies
-      // in one pass" stops being true: the same seat can be kept by both or by
-      // neither.
-      runningAppList.sort(compareInstanceSeniority);
-      const rank = runningAppList.findIndex((x) => socketAddressesMatch(x.ip, ctx.localSocketAddr));
-      if (rank + 1 > required) {
-        log.warn(`REMOVAL REASON: Exceeded required instances - ${installed.name} runs ${runningAppList.length} of ${required}; this instance ranks ${rank + 1} (instances: ${describeRanking(runningAppList, 'runningSince')})`);
+    // The decision is appGiveUp's, and the ordering inside it is development's
+    // shared one - it normalises Date and string timestamps to epoch ms and,
+    // load-bearing, breaks a tie on ip. Without that tiebreak two instances
+    // sharing a runningSince rank differently on different nodes, and "every
+    // surplus node self-identifies in one pass" stops being true.
+    //
+    // This USED to be the whole rule: rank the instances, and if this node is
+    // past the required count, delete. A count cannot tell a redundant copy
+    // from the last one holding the data, and it cannot tell a spare copy from
+    // the one currently being WRITTEN to - the election may seat the writer
+    // anywhere in the order. Both questions are asked now, and the second gate
+    // is the predicate appEvacuationSafety was written to be.
+    const liveness = peerFolderLiveness.createPeerFolderLiveness();
+    const verdict = await appGiveUp.surplusVerdict(
+      { name: installed.name, spec: installed.spec, instances: installed.spec.instances },
+      runningAppList, ctx.localSocketAddr,
+      { runningLocally: appGiveUp.isComponentRunningLocally, liveness },
+    );
+    if (verdict.code) {
+      // Declining IS a decision: without this, "there is a surplus and I will
+      // not act on a guess" reaches a reader identically to "there is nothing
+      // here to trim".
+      fluxEventBus.publish('giveUp:considered', {
+        appName: installed.name,
+        giveUp: verdict.giveUp,
+        reason: appGiveUp.GiveUpReason.SURPLUS,
+        code: verdict.code,
+        detail: verdict.detail,
+      });
+    }
+    if (verdict.giveUp) {
+      const safety = await appEvacuationSafety.canSafelyRemoveApp(installed.name, {
+        appLocation: registryManager.appLocation,
+        // The CLASS, not the stored document: syncedComponents reads a v9 spec
+        // through it, and a document answers the v8 spelling only.
+        getApplicationGlobalSpecifications: async (name) => {
+          const row = await appsRepository.getGlobalAppInfo(name);
+          return row ? row.spec : null;
+        },
+        findSyncedPeer: syncthingFolderStateMachine.findSyncedPeer,
+        isElectedPrimary: async (name) => appOperations.isElectedPrimaryHere(name, ctx.localSocketAddr),
+        isComponentRunningLocally: appGiveUp.isComponentRunningLocally,
+      });
+      fluxEventBus.publish('giveUp:safety', {
+        appName: installed.name,
+        reason: appGiveUp.GiveUpReason.SURPLUS,
+        safe: safety.safe,
+        code: safety.code,
+        detail: safety.reason,
+      });
+      if (safety.safe) {
+        log.warn(`REMOVAL REASON: SURPLUS - ${installed.name} (${verdict.detail}; ${safety.reason})`);
         if (installed.hash && globalState.trySpawningGlobalAppCache) globalState.trySpawningGlobalAppCache.delete(installed.hash);
         await appUninstaller.uninstallApplication(installed.name, { broadcastRemoval: true });
         return 'removed';
       }
+      log.info(`specReconciler - ${installed.name} surplus not trimmed: ${safety.reason}`);
     }
   }
 

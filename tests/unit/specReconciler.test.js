@@ -302,6 +302,17 @@ describe('specReconciler tests', () => {
   describe('loose over-instance (rank by runningSince)', () => {
     const looseBlob = { targetIps: { [LOCAL_TARGET]: null, [OTHER_TARGET]: null } };
 
+    // The trim asks two questions now, and a count answers neither: is this copy
+    // the one being WRITTEN to, and does the data provably exist elsewhere. The
+    // second is appEvacuationSafety, which used to be asked by nothing at all.
+    let safetyStub;
+    beforeEach(() => {
+      // eslint-disable-next-line global-require
+      const appEvacuationSafety = require('../../ZelBack/src/services/appLifecycle/appEvacuationSafety');
+      safetyStub = sinon.stub(appEvacuationSafety, 'canSafelyRemoveApp')
+        .resolves({ safe: true, code: 'STATELESS', reason: 'stateless app, 1 other host(s) hold it' });
+    });
+
     it('removes a surplus instance when this node ranks past the requirement', async () => {
       // instances is the spec's own field, read off the real class as
       // installed.spec.instances — one seat, two claimants.
@@ -315,6 +326,25 @@ describe('specReconciler tests', () => {
       ]);
       await specReconciler.requestFullConvergence({ reason: 'test' });
       expect(uninstallStub.calledOnceWith('myapp', sinon.match({ broadcastRemoval: true }))).to.equal(true);
+    });
+
+    // The gate appEvacuationSafety's own header says surplus removal should have
+    // been asking all along - it names surplus removal as one of two paths that
+    // have already destroyed customer volumes.
+    it('does not trim a surplus copy the safety gate refuses', async () => {
+      safetyStub.resolves({ safe: false, code: 'NO_SYNCED_PEER', reason: 'no connected peer holds fluxweb_myapp in full' });
+      setup({
+        installed: [await specWith(looseBlob, { instances: 1 })],
+        globalRows: [await specWith(looseBlob, { instances: 1 })],
+      });
+      appLocationStub.resolves([
+        { ip: '9.9.9.9:16127', runningSince: 1 },
+        { ip: LOCAL_IP, runningSince: 9 },
+      ]);
+
+      await specReconciler.requestFullConvergence({ reason: 'test' });
+
+      expect(uninstallStub.called, 'a count said trim; the data said no').to.equal(false);
     });
 
     it('keeps an instance that ranks within the requirement', async () => {
