@@ -16,9 +16,7 @@
 const config = require('config');
 const log = require('../../lib/log');
 const dockerService = require('../dockerService');
-const globalState = require('../utils/globalState');
 const operationRegistry = require('../utils/operationRegistry');
-const mountParser = require('../utils/mountParser');
 const fluxNetworkHelper = require('../fluxNetworkHelper');
 const { socketAddressesMatch, extractIp } = require('../utils/socketAddressUtils');
 
@@ -37,19 +35,37 @@ function requiredInstances(spec) {
 /**
  * The components of an app that keep synced state, with the syncthing folder id
  * each one owns. Folder ids ARE app identifiers.
- * @param {object} spec Global app specification.
- * @returns {Array<{name: string, syncMode: string, folderId: string}>}
+ *
+ * Asked of the spec CLASS, never of a stored document. This read
+ * `spec.version >= 4 && Array.isArray(spec.compose)` and each component's
+ * `containerData` - the v8 spelling, which a v9 spec does not carry. It did not
+ * fail on one: it returned an EMPTY list, and an empty list here means
+ * "stateless", which is answered `safe: true` before the only-host check is ever
+ * reached. Every v9 app was therefore judged to have no data worth keeping.
+ *
+ * The class answers for both versions - FluxAppSpecV8's component parses its own
+ * containerData into persistentStorage.sync, so `hasSyncthing()` resolves `g:`
+ * and `sync.mode` alike.
+ *
+ * @param {object} spec A spec class (FluxAppSpecV8/V9 or an InstantiatedSpec's
+ *   `.spec`), NOT a stored document.
+ * @returns {Array<{name: string, syncMode: string, identifier: string, folderId: string}>}
  */
 function syncedComponents(spec) {
-  const components = spec.version >= 4 && Array.isArray(spec.compose) ? spec.compose : [spec];
+  const components = Object.values(spec.components || {});
   return components.reduce((acc, component) => {
-    const syncMode = mountParser.getComponentSyncMode(component.containerData || '');
-    if (!syncMode) return acc;
-    const identifier = spec.version >= 4 && Array.isArray(spec.compose)
-      ? `${component.name}_${spec.name}`
-      : spec.name;
+    if (!component.hasSyncthing || !component.hasSyncthing()) return acc;
+    // The election only distinguishes activeStandby ('g:'); the other modes are
+    // synced but hold no writer. Kept as the same vocabulary the caller's
+    // `syncMode === 'g'` test already uses.
+    const syncMode = component.hasActiveStandbySyncthing() ? 'g' : 'sync';
+    // The v1-3 flat form IS its single component, so its identifier is the bare
+    // app name; v4 and up (v9 included) join component and app. Read from the
+    // spec's VERSION, which is a format fact, rather than from the presence of a
+    // `compose` array, which is a v8 spelling a v9 spec does not carry.
+    const identifier = spec.version >= 4 ? `${component.name}_${spec.name}` : spec.name;
     acc.push({
-      name: component.name || spec.name,
+      name: component.name,
       syncMode,
       // The key masterSlaveApps elects on, and the name the container carries
       // once the prefix is stripped - so a caller can ask whether THIS node is

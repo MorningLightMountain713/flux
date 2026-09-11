@@ -3,8 +3,17 @@ const sinon = require('sinon');
 const { resetGlobalState } = require('./fixtures/globalState');
 const operationRegistry = require('../../ZelBack/src/services/utils/operationRegistry');
 const proxyquire = require('proxyquire').noCallThru();
+const {
+  loadSpecLibrary, V8_SUBMISSION, V9_SUBMISSION, v8Spec, v9Spec,
+} = require('./fixtures/fluxSpec');
 
 describe('appEvacuationSafety tests', () => {
+  before(async function loadLibrary() {
+    // The first fromSubmission compiles the ajv schemas.
+    this.timeout(30000);
+    await loadSpecLibrary();
+  });
+
   let appEvacuationSafety;
   let fluxNetworkHelperStub;
   let globalStateStub;
@@ -12,22 +21,43 @@ describe('appEvacuationSafety tests', () => {
 
   const LOCAL = '1.2.3.4:16127';
 
-  function statelessSpec(overrides = {}) {
-    return {
+  // REAL spec classes, not stored documents. This module asks the class - a
+  // document answers the v8 spelling only, and a v9 app read that way reports no
+  // synced components at all, which this function's caller reads as "stateless"
+  // and clears for removal.
+  async function statelessSpec(overrides = {}) {
+    return v8Spec({
       name: 'plainapp',
-      version: 8,
-      compose: [{ name: 'web', containerData: '/data' }],
+      compose: [{ ...V8_SUBMISSION.compose[0], name: 'web', containerData: '/data' }],
       ...overrides,
-    };
+    });
   }
 
-  function statefulSpec(overrides = {}) {
-    return {
+  async function statefulSpec(overrides = {}) {
+    return v8Spec({
       name: 'palworld1',
-      version: 8,
-      compose: [{ name: 'server', containerData: 'g:/data' }],
+      compose: [{ ...V8_SUBMISSION.compose[0], name: 'server', containerData: 'g:/data' }],
       ...overrides,
-    };
+    });
+  }
+
+  /** The same stateful app as a v9 spec: no compose, no containerData. */
+  async function statefulSpecV9(overrides = {}) {
+    return v9Spec({
+      name: 'palworld1',
+      components: {
+        server: {
+          ...V9_SUBMISSION.components.web,
+          name: 'server',
+          persistentStorage: {
+            sizeGb: 5,
+            mounts: { '/data': { source: 'data', destination: '/data' } },
+            sync: { mode: 'activeStandby' },
+          },
+        },
+      },
+      ...overrides,
+    });
   }
 
   function locations(...ips) {
@@ -99,7 +129,7 @@ describe('appEvacuationSafety tests', () => {
       // populated and the guard gone, otherHostCount compares against an
       // undefined address, never matches this node, and counts this node as
       // another host holding the app.
-      deps.getApplicationGlobalSpecifications.resolves(statelessSpec());
+      deps.getApplicationGlobalSpecifications.resolves(await statelessSpec());
       deps.appLocation.resolves(locations(LOCAL, '5.6.7.8:16127'));
       fluxNetworkHelperStub.getLocalSocketAddress.resolves(null);
 
@@ -111,7 +141,7 @@ describe('appEvacuationSafety tests', () => {
     });
 
     it('refuses on an empty location list rather than reading it as "runs nowhere"', async () => {
-      deps.getApplicationGlobalSpecifications.resolves(statelessSpec());
+      deps.getApplicationGlobalSpecifications.resolves(await statelessSpec());
       deps.appLocation.resolves([]);
 
       const result = await appEvacuationSafety.canSafelyRemoveApp('plainapp', deps);
@@ -132,7 +162,7 @@ describe('appEvacuationSafety tests', () => {
 
   describe('the app must be at full strength', () => {
     it('refuses while the app is already short, because another move is in flight', async () => {
-      deps.getApplicationGlobalSpecifications.resolves(statelessSpec({ instances: 3 }));
+      deps.getApplicationGlobalSpecifications.resolves(await statelessSpec({ instances: 3 }));
       deps.appLocation.resolves(locations(LOCAL, '5.6.7.8:16127'));
 
       const result = await appEvacuationSafety.canSafelyRemoveApp('plainapp', deps);
@@ -142,7 +172,7 @@ describe('appEvacuationSafety tests', () => {
     });
 
     it('allows when the app is exactly at its instance count', async () => {
-      deps.getApplicationGlobalSpecifications.resolves(statelessSpec({ instances: 3 }));
+      deps.getApplicationGlobalSpecifications.resolves(await statelessSpec({ instances: 3 }));
       deps.appLocation.resolves(locations(LOCAL, '5.6.7.8:16127', '9.9.9.9:16127'));
 
       const result = await appEvacuationSafety.canSafelyRemoveApp('plainapp', deps);
@@ -153,7 +183,7 @@ describe('appEvacuationSafety tests', () => {
     it('falls back to the configured minimum when the spec names no instance count', async () => {
       // Must match the spawner's own `$ifNull: [instances, 3]`, or the departure
       // creates a deficit the spawner does not agree exists.
-      deps.getApplicationGlobalSpecifications.resolves(statelessSpec());
+      deps.getApplicationGlobalSpecifications.resolves(await statelessSpec());
       deps.appLocation.resolves(locations(LOCAL, '5.6.7.8:16127'));
 
       const result = await appEvacuationSafety.canSafelyRemoveApp('plainapp', deps);
@@ -167,7 +197,7 @@ describe('appEvacuationSafety tests', () => {
     it('may be given up even as the only instance, because there is no data to lose', async () => {
       // The 57 single-instance apps on residential nodes are all stateless. The
       // container is rebuilt from the specification elsewhere.
-      deps.getApplicationGlobalSpecifications.resolves(statelessSpec({ instances: 1 }));
+      deps.getApplicationGlobalSpecifications.resolves(await statelessSpec({ instances: 1 }));
       deps.appLocation.resolves(locations(LOCAL));
 
       const result = await appEvacuationSafety.canSafelyRemoveApp('plainapp', deps);
@@ -177,7 +207,7 @@ describe('appEvacuationSafety tests', () => {
     });
 
     it('never consults syncthing', async () => {
-      deps.getApplicationGlobalSpecifications.resolves(statelessSpec({ instances: 1 }));
+      deps.getApplicationGlobalSpecifications.resolves(await statelessSpec({ instances: 1 }));
       deps.appLocation.resolves(locations(LOCAL));
 
       await appEvacuationSafety.canSafelyRemoveApp('plainapp', deps);
@@ -188,7 +218,7 @@ describe('appEvacuationSafety tests', () => {
 
   describe('stateful apps', () => {
     it('is refused when no other host holds it', async () => {
-      deps.getApplicationGlobalSpecifications.resolves(statefulSpec({ instances: 1 }));
+      deps.getApplicationGlobalSpecifications.resolves(await statefulSpec({ instances: 1 }));
       deps.appLocation.resolves(locations(LOCAL));
 
       const result = await appEvacuationSafety.canSafelyRemoveApp('palworld1', deps);
@@ -198,7 +228,7 @@ describe('appEvacuationSafety tests', () => {
     });
 
     it('is refused when no connected peer holds the folder in full', async () => {
-      deps.getApplicationGlobalSpecifications.resolves(statefulSpec({ instances: 2 }));
+      deps.getApplicationGlobalSpecifications.resolves(await statefulSpec({ instances: 2 }));
       deps.appLocation.resolves(locations(LOCAL, '5.6.7.8:16127'));
       deps.findSyncedPeer.resolves(null);
 
@@ -209,7 +239,7 @@ describe('appEvacuationSafety tests', () => {
     });
 
     it('is allowed when a connected peer holds every synced folder', async () => {
-      deps.getApplicationGlobalSpecifications.resolves(statefulSpec({ instances: 2 }));
+      deps.getApplicationGlobalSpecifications.resolves(await statefulSpec({ instances: 2 }));
       deps.appLocation.resolves(locations(LOCAL, '5.6.7.8:16127'));
 
       const result = await appEvacuationSafety.canSafelyRemoveApp('palworld1', deps);
@@ -219,11 +249,11 @@ describe('appEvacuationSafety tests', () => {
     });
 
     it('requires EVERY synced component to be held, not just the first', async () => {
-      deps.getApplicationGlobalSpecifications.resolves(statefulSpec({
+      deps.getApplicationGlobalSpecifications.resolves(await statefulSpec({
         instances: 2,
         compose: [
-          { name: 'server', containerData: 'g:/data' },
-          { name: 'db', containerData: 'r:/var/lib/mysql' },
+          { ...V8_SUBMISSION.compose[0], name: 'server', containerData: 'g:/data', ports: [31001] },
+          { ...V8_SUBMISSION.compose[0], name: 'db', containerData: 'r:/var/lib/mysql', ports: [31002] },
         ],
       }));
       deps.appLocation.resolves(locations(LOCAL, '5.6.7.8:16127'));
@@ -239,7 +269,7 @@ describe('appEvacuationSafety tests', () => {
       // Not a removal and not a dead end: everything else has passed, so the
       // only thing left is that this node is the one writing. It stops, and the
       // next pass finds the component running elsewhere.
-      deps.getApplicationGlobalSpecifications.resolves(statefulSpec({ instances: 2 }));
+      deps.getApplicationGlobalSpecifications.resolves(await statefulSpec({ instances: 2 }));
       deps.appLocation.resolves(locations(LOCAL, '5.6.7.8:16127'));
       deps.isElectedPrimary = sinon.stub().resolves(true);
 
@@ -254,7 +284,7 @@ describe('appEvacuationSafety tests', () => {
       // The caller stops what this returns, so a component already stopped must
       // not appear - stopping it again is noise, and marking it unelectable is
       // wrong for something this node is not running.
-      deps.getApplicationGlobalSpecifications.resolves(statefulSpec({ instances: 2 }));
+      deps.getApplicationGlobalSpecifications.resolves(await statefulSpec({ instances: 2 }));
       deps.appLocation.resolves(locations(LOCAL, '5.6.7.8:16127'));
       deps.isElectedPrimary = sinon.stub().resolves(true);
       deps.isComponentRunningLocally = sinon.stub().resolves(false);
@@ -269,7 +299,7 @@ describe('appEvacuationSafety tests', () => {
       // The ordering IS the safety property. If the synced-peer check ran after
       // the election, a primary with no complete peer would stop writing and
       // then discover it cannot leave - an app stopped here and running nowhere.
-      deps.getApplicationGlobalSpecifications.resolves(statefulSpec({ instances: 2 }));
+      deps.getApplicationGlobalSpecifications.resolves(await statefulSpec({ instances: 2 }));
       deps.appLocation.resolves(locations(LOCAL, '5.6.7.8:16127'));
       deps.isElectedPrimary = sinon.stub().resolves(true);
       deps.findSyncedPeer.resolves(null);
@@ -283,8 +313,8 @@ describe('appEvacuationSafety tests', () => {
   });
 
   describe('an election that cannot answer is not an election that said no', () => {
-    beforeEach(() => {
-      deps.getApplicationGlobalSpecifications.resolves(statefulSpec({ instances: 2 }));
+    beforeEach(async () => {
+      deps.getApplicationGlobalSpecifications.resolves(await statefulSpec({ instances: 2 }));
       deps.appLocation.resolves(locations(LOCAL, '5.6.7.8:16127'));
     });
 
@@ -371,7 +401,7 @@ describe('appEvacuationSafety tests', () => {
     it('does not treat a second slot on our own machine as another copy', async () => {
       // 329 target slots sit on 148 machines. Two locations at one address fail
       // together and are being evacuated together, so they were never two copies.
-      deps.getApplicationGlobalSpecifications.resolves(statefulSpec({ instances: 2 }));
+      deps.getApplicationGlobalSpecifications.resolves(await statefulSpec({ instances: 2 }));
       deps.appLocation.resolves(locations(LOCAL, '1.2.3.4:16137'));
 
       const result = await appEvacuationSafety.canSafelyRemoveApp('palworld1', deps);
@@ -401,8 +431,47 @@ describe('appEvacuationSafety tests', () => {
       expect(components).to.be.empty;
     });
 
-    it('names the folder id each synced component owns', () => {
-      const components = appEvacuationSafety.syncedComponents(statefulSpec());
+    // THE CASE THIS MODULE WAS BLIND TO. It read spec.compose and each
+    // component's containerData - the v8 spelling. A v9 spec carries neither, so
+    // it did not fail on one: it returned an EMPTY list, which canSafelyRemoveApp
+    // reads as "stateless" and clears for removal BEFORE the only-host check is
+    // ever reached. Every v9 app was judged to have no data worth keeping.
+    it('sees a v9 app\'s synced components, which carry no compose and no containerData', async () => {
+      const spec = await statefulSpecV9();
+      expect(spec.compose, 'a v9 spec has no compose at all').to.equal(undefined);
+
+      const components = appEvacuationSafety.syncedComponents(spec);
+
+      expect(components).to.have.lengthOf(1);
+      expect(components[0].folderId).to.equal('fluxserver_palworld1');
+      expect(components[0].syncMode).to.equal('g');
+    });
+
+    it('refuses to hand back a stateful v9 app that no peer holds', async () => {
+      deps.getApplicationGlobalSpecifications.resolves(await statefulSpecV9({ instances: 2 }));
+      deps.appLocation.resolves(locations(LOCAL, '5.6.7.8:16127'));
+      deps.findSyncedPeer.resolves(null);
+
+      const result = await appEvacuationSafety.canSafelyRemoveApp('palworld1', deps);
+
+      // Read as stateless it answered safe:true here, and the only-host check
+      // below never ran.
+      expect(result.safe).to.equal(false);
+      expect(result.code).to.equal('NO_SYNCED_PEER');
+    });
+
+    it('refuses a stateful v9 app when this node is its only host', async () => {
+      deps.getApplicationGlobalSpecifications.resolves(await statefulSpecV9({ instances: 1 }));
+      deps.appLocation.resolves(locations(LOCAL));
+
+      const result = await appEvacuationSafety.canSafelyRemoveApp('palworld1', deps);
+
+      expect(result.safe).to.equal(false);
+      expect(result.code).to.equal('ONLY_HOST');
+    });
+
+    it('names the folder id each synced component owns', async () => {
+      const components = appEvacuationSafety.syncedComponents(await statefulSpec());
 
       expect(components).to.have.lengthOf(1);
       expect(components[0].folderId).to.equal('fluxserver_palworld1');
