@@ -52,7 +52,7 @@ async function appPricePerMonth(spec, height, suppliedPrices) {
   if (spec.version <= 3) {
     let totalPrice = cpuPrice + ramPrice + hddPrice + portPrice;
     if (priceSpecifications.minUSDPrice
-      && height >= config.fluxapps.applyMinimumPriceOn3Instances
+      && height >= config.get('fluxapps.applyMinimumPriceOn3Instances')
       && totalPrice < priceSpecifications.minUSDPrice) {
       totalPrice = Number(priceSpecifications.minUSDPrice).toFixed(2);
     }
@@ -70,7 +70,7 @@ async function appPricePerMonth(spec, height, suppliedPrices) {
   const pricePerInstance = totalPrice / 3;
   let appPrice = Number(Math.ceil(pricePerInstance * 100) / 100);
   const instancesAdditional = spec.instances - 1;
-  if (instancesAdditional > 0 && height >= config.fluxapps.applyMinimumForExtraInstances) {
+  if (instancesAdditional > 0 && height >= config.get('fluxapps.applyMinimumForExtraInstances')) {
     if (appPrice < 0.50 && instancesAdditional > 2) {
       appPrice += (instancesAdditional * 0.50);
     } else {
@@ -80,7 +80,7 @@ async function appPricePerMonth(spec, height, suppliedPrices) {
   }
 
   if (priceSpecifications.minUSDPrice
-    && height >= config.fluxapps.applyMinimumPriceOn3Instances
+    && height >= config.get('fluxapps.applyMinimumPriceOn3Instances')
     && appPrice < priceSpecifications.minUSDPrice) {
     appPrice = Number(priceSpecifications.minUSDPrice).toFixed(2);
   }

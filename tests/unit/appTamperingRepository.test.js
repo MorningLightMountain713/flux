@@ -3,6 +3,7 @@
 const { expect } = require('chai');
 const sinon = require('sinon');
 const proxyquire = require('proxyquire').noCallThru();
+const { asConfig } = require('./fixtures/config');
 
 describe('appTamperingRepository tests', () => {
   let repository;
@@ -12,14 +13,14 @@ describe('appTamperingRepository tests', () => {
 
   function loadRepository() {
     return proxyquire('../../ZelBack/src/services/appDatabase/appTamperingRepository', {
-      config: {
+      config: asConfig({
         database: {
           local: {
             database: 'zelfluxlocal',
             collections: { appTamperingEvents: TAMPERING_COLLECTION },
           },
         },
-      },
+      }),
       '../dbHelper': dbHelperStub,
     });
   }

@@ -32,7 +32,7 @@ function kindToStatus(kind) {
  * @returns {Promise<{fluxId:string}|{error:{status:number,message:string}}>}
  */
 async function authorizeOwner(req) {
-  if (!config.fluxapps.imageCacheEnabled || !isArcane || enterpriseNetwork.getCachedEnterpriseIdentity() !== true) {
+  if (!config.get('fluxapps.imageCacheEnabled') || !isArcane || enterpriseNetwork.getCachedEnterpriseIdentity() !== true) {
     return { error: { status: 403, message: 'Image cache is not available on this node' } };
   }
   const authorized = await verificationHelper.verifyPrivilege(Privilege.USER, authOf(req));

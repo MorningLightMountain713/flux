@@ -229,7 +229,7 @@ async function reconcileAppsOnBoot() {
     // restarted, so the stopped-container early-return below must not skip it).
     // Detached and best-effort; boot recovery must not block on removals. Gated
     // off in production: the flux console owns the collector lifecycle.
-    if (config.fluxapps.manageCollectorLifecycle) {
+    if (config.get('fluxapps.manageCollectorLifecycle')) {
       appUninstaller.removeUnrequiredDependencies()
         .catch((error) => log.error(`appStartupManager - boot dependency cleanup failed: ${error.message}`));
     }

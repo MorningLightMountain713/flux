@@ -590,7 +590,7 @@ function startAppMonitoring(appName) {
   // before; the test config's own comment still names the incident. ?? alone
   // covers only the missing key, so a value that is present but wrong - zero,
   // negative, a string - is refused here too, loudly.
-  const configuredInterval = config.fluxapps.statsSampleIntervalMs;
+  const configuredInterval = config.get('fluxapps.statsSampleIntervalMs');
   const sampleIntervalMs = Number.isFinite(configuredInterval) && configuredInterval >= 1000
     ? configuredInterval
     : 60 * 1000;

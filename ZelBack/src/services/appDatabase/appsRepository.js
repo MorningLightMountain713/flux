@@ -79,7 +79,7 @@ function localDb() {
 // ── Spawner Queries ──────────────────────────────────────────────────
 
 async function findUnderProvisionedApps(currentHeight, nowSeconds) {
-  const minBlocksAllowance = config.fluxapps.newMinBlocksAllowance;
+  const minBlocksAllowance = config.get('fluxapps.newMinBlocksAllowance');
   const minTimeAllowance = minBlocksAllowance * 30;
 
   const pipeline = [
@@ -412,7 +412,7 @@ async function listConfirmedContentManifestBroadcasts(appNames) {
  * @returns {Promise<{reaped: number, orphans: string[]}>}
  */
 async function reapOrphanedContentManifests() {
-  const cutoff = new Date(Date.now() - config.fluxapps.contentManifestReapGraceMs);
+  const cutoff = new Date(Date.now() - config.get('fluxapps.contentManifestReapGraceMs'));
   const names = await globalDb().collection(appContentManifests)
     .distinct('appName', { confirmed: true, receivedAt: { $lte: cutoff } });
   if (!names.length) return { reaped: 0, orphans: [] };

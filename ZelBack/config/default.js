@@ -1008,6 +1008,20 @@ module.exports = {
     // Registry pull governor OVERRIDES, keyed by provider. Empty ships the
     // policies compiled into registryGovernor; an entry here replaces one.
     registryGovernor: {},
+
+    // ---- knobs whose ABSENCE used to be the setting ----
+    //
+    // These four were read with no value shipped, and "not set" was how each
+    // said something: the grant plane is not scheduled, mastership is off,
+    // nobody is on the restart list, the verify pool takes its own default.
+    // Absence is a poor way to say anything - it cannot be read, cannot be
+    // grepped, and is indistinguishable from a key that was dropped by mistake.
+    // Each now ships the value that says the same thing out loud, and every
+    // guard that read them treats these identically to undefined.
+    quorumGrantActivationHeight: null, // null = not scheduled; the plane stays inert
+    quorumGrantMastership: false, // the mastership gate is off until this is true
+    restartAlwaysOwners: [], // FluxIDs whose apps always restart; nobody by default
+    verifyPoolSize: null, // null = cpus-1, which is what production runs
   },
   lockedSystemResources: {
     cpu: 10, // 1 cpu core

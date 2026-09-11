@@ -110,13 +110,15 @@ const apiPort = userconfig.initial.apiport || config.server.apiport;
 const development = userconfig.initial.development || false;
 const fluxTransactionCollection = config.database.daemon.collections.fluxTransactions;
 
-const { bootDelayMultiplier } = config.fluxapps;
+const bootDelayMultiplier = config.get('fluxapps.bootDelayMultiplier');
 function bootDelay(ms) { return Math.round(ms * bootDelayMultiplier); }
 
-const {
-  portRestoreIntervalMs, cpuCheckIntervalMs, imageComplianceIntervalMs, tempMsgTtlS,
-  imageReaperIntervalMs, imageCacheEnabled,
-} = config.fluxapps;
+const portRestoreIntervalMs = config.get('fluxapps.portRestoreIntervalMs');
+const cpuCheckIntervalMs = config.get('fluxapps.cpuCheckIntervalMs');
+const imageComplianceIntervalMs = config.get('fluxapps.imageComplianceIntervalMs');
+const tempMsgTtlS = config.get('fluxapps.tempMsgTtlS');
+const imageReaperIntervalMs = config.get('fluxapps.imageReaperIntervalMs');
+const imageCacheEnabled = config.get('fluxapps.imageCacheEnabled');
 
 // State objects for monitoring services
 const dosState = {
@@ -822,7 +824,7 @@ async function startFluxFunctions() {
     fluxCommunication.initializeDiscovery();
     await fluxnodeStatusSource.start();
     daemonUsageReporter.start();
-    if (config.fluxapps.discoveryAutostart !== false) {
+    if (config.get('fluxapps.discoveryAutostart') !== false) {
       fluxCommunication.startDiscovery();
       log.info('Flux Discovery started');
     }

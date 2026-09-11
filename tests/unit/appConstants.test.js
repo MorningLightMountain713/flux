@@ -6,6 +6,7 @@ process.env.NODE_CONFIG_DIR = `${process.cwd()}/tests/unit/globalconfig`;
 const { expect } = require('chai');
 // eslint-disable-next-line no-unused-vars
 const path = require('path');
+const { asConfig } = require('./fixtures/config');
 
 describe('appConstants tests', () => {
   let originalFluxOSPath;
@@ -120,7 +121,7 @@ describe('appConstants tests', () => {
       const real = require('config');
 
       return proxyquire('../../ZelBack/src/services/utils/appConstants', {
-        config: { ...real, fluxapps: { ...real.fluxapps, locationTtlS } },
+        config: asConfig({ ...real, fluxapps: { ...real.fluxapps, locationTtlS } }),
       }).ANNOUNCE_INTERVAL_MS;
     };
 

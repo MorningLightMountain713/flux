@@ -57,7 +57,7 @@ async function getSpecPolicy() { return load(); }
  */
 function assertVersionActivated(version, height) {
   if (height === undefined) return;
-  const activationHeight = config.fluxapps.appSpecsEnforcementHeights[version];
+  const activationHeight = config.get('fluxapps.appSpecsEnforcementHeights')[version];
   if (activationHeight === undefined) {
     throw new Error(`Unsupported Flux App specification version: ${version}`);
   }

@@ -3,6 +3,7 @@
 const { expect } = require('chai');
 const sinon = require('sinon');
 const proxyquire = require('proxyquire').noCallThru();
+const { asConfig } = require('./fixtures/config');
 
 describe('imageCacheController tests', () => {
   let stubs;
@@ -39,7 +40,7 @@ describe('imageCacheController tests', () => {
       deleteImage: sinon.stub(),
     };
     return proxyquire('../../ZelBack/src/services/appManagement/imageCacheController', {
-      config: { fluxapps: { imageCacheEnabled: true } },
+      config: asConfig({ fluxapps: { imageCacheEnabled: true } }),
       '../messageHelper': {
         createErrorMessage: (message) => ({ status: 'error', data: { message } }),
         createDataMessage: (data) => ({ status: 'success', data }),

@@ -3,6 +3,7 @@
 const { expect } = require('chai');
 const sinon = require('sinon');
 const proxyquire = require('proxyquire').noCallThru();
+const { asConfig } = require('./fixtures/config');
 
 describe('pendingTeardownStore tests', () => {
   let store; // key -> doc
@@ -31,7 +32,7 @@ describe('pendingTeardownStore tests', () => {
       removeDocumentsFromCollection: async (_db, _coll, query) => { guard(); store.delete(query.key); },
     };
     pendingTeardownStore = proxyquire('../../ZelBack/src/services/appLifecycle/pendingTeardownStore', {
-      config: { database: { appslocal: { database: 'localapps', collections: { pendingAppTeardowns: 'zelappspendingteardowns' } } } },
+      config: asConfig({ database: { appslocal: { database: 'localapps', collections: { pendingAppTeardowns: 'zelappspendingteardowns' } } } }),
       '../../lib/log': logStub,
       '../dbHelper': dbHelperStub,
     });

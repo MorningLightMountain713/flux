@@ -5,6 +5,7 @@ const sinon = require('sinon');
 const proxyquire = require('proxyquire').noCallThru();
 // Real registry singleton - un-stubbed in proxyquire, so the uninstaller and the test share it.
 const operationRegistry = require('../../ZelBack/src/services/utils/operationRegistry');
+const { asConfig } = require('./fixtures/config');
 
 describe('appUninstaller tests', () => {
   let appUninstaller;
@@ -125,7 +126,7 @@ describe('appUninstaller tests', () => {
     };
 
     appUninstaller = proxyquire('../../ZelBack/src/services/appLifecycle/appUninstaller', {
-      config: configStub,
+      config: asConfig(configStub),
       '../verificationHelper': verificationHelperStub,
       '../messageHelper': messageHelperStub,
       '../serviceHelper': {

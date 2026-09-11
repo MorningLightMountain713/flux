@@ -9,6 +9,7 @@ const path = require('node:path');
 
 const serviceHelper = require('../../ZelBack/src/services/serviceHelper');
 const appVolumeService = require('../../ZelBack/src/services/appLifecycle/appVolumeService');
+const { asConfig } = require('./fixtures/config');
 
 describe('appVolumeService.writeStignore', () => {
   let tmp;
@@ -142,7 +143,7 @@ describe('appVolumeService.createAppVolume (findmnt disk selection + in-lock rec
   function load({ mount, condemned = false, teardownOwed = false } = {}) {
     const runCommand = sinon.stub().resolves({ error: null });
     const svc = proxyquire('../../ZelBack/src/services/appLifecycle/appVolumeService', {
-      config: { lockedSystemResources: { extrahdd: 5 } },
+      config: asConfig({ lockedSystemResources: { extrahdd: 5 } }),
       '../serviceHelper': { ensureString: (x) => x, runCommand },
       '../dockerService': { getAppIdentifier: (id) => id },
       '../deviceHelper': { mountForTarget: sinon.stub().resolves(mount) },

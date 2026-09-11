@@ -3,6 +3,7 @@
 const { expect } = require('chai');
 const sinon = require('sinon');
 const proxyquire = require('proxyquire').noCallThru();
+const { asConfig } = require('./fixtures/config');
 
 // Listeners enterpriseNetwork registers with policyStore, so a test can fire the bundle
 // event without reaching into the module.
@@ -59,7 +60,7 @@ function loadModule(overrides = {}) {
 
   bundleListeners.length = 0;
   const stubs = {
-    config: overrides.config || defaultConfig,
+    config: asConfig(overrides.config || defaultConfig),
     './enterpriseConfig': overrides.enterpriseConfig || {
       isPolicyKnown: () => true,
       getEnterpriseAppOwners: () => OWNERS,

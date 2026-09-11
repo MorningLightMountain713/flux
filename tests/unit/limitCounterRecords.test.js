@@ -3,6 +3,7 @@
 const { expect } = require('chai');
 const sinon = require('sinon');
 const proxyquire = require('proxyquire').noCallThru();
+const { asConfig } = require('./fixtures/config');
 
 describe('limitCounterRecords tests', () => {
   let records;
@@ -22,11 +23,11 @@ describe('limitCounterRecords tests', () => {
       log: { info: sinon.stub(), warn: sinon.stub(), error: sinon.stub() },
     };
     return proxyquire('../../ZelBack/src/services/utils/limitCounterRecords', {
-      config: {
+      config: asConfig({
         database: {
           appsglobal: { database: 'g', collections: { limitCounterRecords: 'limitcounterrecords' } },
         },
-      },
+      }),
       '../dbHelper': {
         databaseConnection: opts.noDb
           ? () => null

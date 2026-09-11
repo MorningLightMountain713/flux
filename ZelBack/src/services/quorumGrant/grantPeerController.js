@@ -38,7 +38,7 @@ const PEER_WINDOW_MS = 60 * 1000;
 const peerAsks = new Map(); // host -> { windowStart, count }
 
 function peerMaxAsks() {
-  return config.fluxapps.quorumGrantPeerAsksPerMinute ?? 600;
+  return config.get('fluxapps.quorumGrantPeerAsksPerMinute');
 }
 
 function peerAllowed(host) {

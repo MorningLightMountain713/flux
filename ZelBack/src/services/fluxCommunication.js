@@ -52,7 +52,7 @@ const { Privilege, authOf } = require('./utils/privileges');
 // Upper bound of the random delay before each reconciler dial. Reciprocal
 // duties make simultaneous crossing dials the common case; the jitter breaks
 // the symmetry so a crossing loss cannot repeat in lockstep.
-const DIAL_JITTER_MS = config.fluxapps.dialJitterMs ?? 250;
+const DIAL_JITTER_MS = config.get('fluxapps.dialJitterMs');
 
 // How a dial resolved, for the reconciler's settle callback. HELD: the pair
 // holds a live connection (this dial's, or the survivor of a crossing race).
@@ -282,7 +282,7 @@ async function handleAppRunningSyncResponse(message, peerSocket) {
           // intake. The envelope is provenance only — a locally-assembled row
           // carries none — so these bypass the envelope filter below.
           nodeDownEvents.push(event);
-                } else if (event.envelope) {
+        } else if (event.envelope) {
           otherBroadcasts.push(event);
         }
       }
@@ -1200,7 +1200,7 @@ peerManager.hashHandlers = {
   handleTempMessagesRequest: (peer, decoded) => {
     const now = Date.now();
     const last = peer.lastTempSyncResponse || 0;
-    if (now - last < (config.fluxapps.syncResponseThrottleMs ?? 300000)) return;
+    if (now - last < (config.get('fluxapps.syncResponseThrottleMs'))) return;
     peer.lastTempSyncResponse = now;
     setImmediate(async () => {
       if (!await verifySyncRequest(peer, decoded)) return;
@@ -1210,7 +1210,7 @@ peerManager.hashHandlers = {
   handleAppRunningRequest: (peer, decoded) => {
     const now = Date.now();
     const last = peer.lastAppRunningSyncResponse || 0;
-    if (now - last < (config.fluxapps.syncResponseThrottleMs ?? 300000)) return;
+    if (now - last < (config.get('fluxapps.syncResponseThrottleMs'))) return;
     peer.lastAppRunningSyncResponse = now;
     setImmediate(async () => {
       if (!await verifySyncRequest(peer, decoded)) return;
@@ -1220,7 +1220,7 @@ peerManager.hashHandlers = {
   handleAppInstallingRequest: (peer, decoded) => {
     const now = Date.now();
     const last = peer.lastAppInstallingSyncResponse || 0;
-    if (now - last < (config.fluxapps.syncResponseThrottleMs ?? 300000)) return;
+    if (now - last < (config.get('fluxapps.syncResponseThrottleMs'))) return;
     peer.lastAppInstallingSyncResponse = now;
     setImmediate(async () => {
       if (!await verifySyncRequest(peer, decoded)) return;
@@ -1230,7 +1230,7 @@ peerManager.hashHandlers = {
   handleAppInstallingErrorsRequest: (peer, decoded) => {
     const now = Date.now();
     const last = peer.lastAppInstallingErrorsSyncResponse || 0;
-    if (now - last < (config.fluxapps.syncResponseThrottleMs ?? 300000)) return;
+    if (now - last < (config.get('fluxapps.syncResponseThrottleMs'))) return;
     peer.lastAppInstallingErrorsSyncResponse = now;
     setImmediate(async () => {
       if (!await verifySyncRequest(peer, decoded)) return;
@@ -1556,7 +1556,7 @@ async function initiateAndHandleConnection(connection, source = PEER_SOURCE.RAND
       return;
     }
     const options = {
-      handshakeTimeout: config.fluxapps.wsHandshakeTimeoutMs ?? 10000,
+      handshakeTimeout: config.get('fluxapps.wsHandshakeTimeoutMs'),
       perMessageDeflate: {
         zlibDeflateOptions: {
         // See zlib defaults.
@@ -1638,7 +1638,7 @@ function openEphemeralConnection(connection) {
         return;
       }
       const options = {
-        handshakeTimeout: config.fluxapps.wsHandshakeTimeoutMs ?? 10000,
+        handshakeTimeout: config.get('fluxapps.wsHandshakeTimeoutMs'),
         headers: {
           'X-Flux-Capabilities': FLUX_CAPABILITIES.join(','),
           'X-Flux-Version': FLUX_VERSION,
@@ -1927,12 +1927,12 @@ async function fluxDiscovery() {
 
     setTimeout(() => {
       fluxDiscovery();
-    }, config.fluxapps.discoveryRetryMs ?? 60000);
+    }, config.get('fluxapps.discoveryRetryMs'));
   } catch (error) {
     log.warn(error.message || error);
     setTimeout(() => {
       fluxDiscovery();
-    }, config.fluxapps.discoveryFailRetryMs ?? 120000);
+    }, config.get('fluxapps.discoveryFailRetryMs'));
   }
 }
 

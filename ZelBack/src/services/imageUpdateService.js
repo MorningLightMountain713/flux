@@ -21,12 +21,12 @@ const imageReaper = require('./appLifecycle/imageReaper');
 const operationRegistry = require('./utils/operationRegistry');
 const fluxEventBus = require('./utils/fluxEventBus');
 
-const CHECK_INTERVAL = config.fluxapps.imageUpdateCheckIntervalMs || 6 * 60 * 60 * 1000;
-const DELAY_BETWEEN_APPS = config.fluxapps.imageUpdateDelayBetweenAppsMs || 5000;
-const DELAY_AFTER_REDEPLOY = config.fluxapps.imageUpdateDelayAfterRedeployMs || 2 * 60 * 1000;
-const INITIAL_DELAY_MIN = config.fluxapps.imageUpdateInitialDelayMinMs || 10 * 60 * 1000;
-const INITIAL_DELAY_MAX = config.fluxapps.imageUpdateInitialDelayMaxMs || 30 * 60 * 1000;
-const DELAY_BETWEEN_COMPONENTS = config.fluxapps.imageUpdateDelayBetweenComponentsMs || 1000;
+const CHECK_INTERVAL = config.get('fluxapps.imageUpdateCheckIntervalMs') || 6 * 60 * 60 * 1000;
+const DELAY_BETWEEN_APPS = config.get('fluxapps.imageUpdateDelayBetweenAppsMs') || 5000;
+const DELAY_AFTER_REDEPLOY = config.get('fluxapps.imageUpdateDelayAfterRedeployMs') || 2 * 60 * 1000;
+const INITIAL_DELAY_MIN = config.get('fluxapps.imageUpdateInitialDelayMinMs') || 10 * 60 * 1000;
+const INITIAL_DELAY_MAX = config.get('fluxapps.imageUpdateInitialDelayMaxMs') || 30 * 60 * 1000;
+const DELAY_BETWEEN_COMPONENTS = config.get('fluxapps.imageUpdateDelayBetweenComponentsMs') || 1000;
 
 // The schedule: an initial-delay timeout, then a repeating interval. `schedule`
 // counts start() and stop() calls so a timeout callback that fires later — after

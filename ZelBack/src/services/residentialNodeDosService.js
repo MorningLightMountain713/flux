@@ -37,12 +37,12 @@ const fluxEventBus = require('./utils/fluxEventBus');
 const DOS_MESSAGE_PREFIX = 'Residential node not running ArcaneOS';
 const HOLD_REASON = 'residential node not running ArcaneOS';
 
-const CHECK_INTERVAL_MS = config.fluxapps.residentialCheckIntervalMs;
+const CHECK_INTERVAL_MS = config.get('fluxapps.residentialCheckIntervalMs');
 const RETRY_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
 // Before the first app is given up, the verdict must have held this long.
 // The placement hold deletes nothing and needs no window; this paces only the
 // part that moves customer data, so a momentary misread can correct itself.
-const SETTLE_MS = config.fluxapps.residentialSettleMs;
+const SETTLE_MS = config.get('fluxapps.residentialSettleMs');
 // The window counts time this node OBSERVED the verdict, not time that passed.
 // A tick that cannot decide - an unreadable bench, a table that will not load -
 // returns without touching state, so measuring from the first verdict alone let
@@ -61,8 +61,8 @@ const MAX_CONFIRMATION_GAP_MS = CHECK_INTERVAL_MS * 2;
 // base + position * step. Position in the shared instance order is a DELAY,
 // never a veto: a rule of "only the most junior may leave" deadlocks, because
 // the replacement is itself the most junior and does not want to leave.
-const QUEUE_BASE_MS = config.fluxapps.residentialQueueBaseMs;
-const QUEUE_STEP_MS = config.fluxapps.residentialQueueStepMs;
+const QUEUE_BASE_MS = config.get('fluxapps.residentialQueueBaseMs');
+const QUEUE_STEP_MS = config.get('fluxapps.residentialQueueStepMs');
 // The ticket is served against an UNINTERRUPTED observation - the wait means
 // nothing if it can be accumulated across periods this node was not watching -
 // and this is what counts as the interruption. A gap longer than one queue step
@@ -104,7 +104,7 @@ const MAX_TICKET_GAP_MS = QUEUE_STEP_MS * 2;
 // Minimum gap between this node's departures. The give-up-an-app pass runs every
 // 11 blocks (~22 min), which unpaced would empty the busiest node in the fleet in
 // about four hours; there is no deadline here and slower is strictly safer.
-const EVACUATION_INTERVAL_MS = config.fluxapps.residentialEvacuationIntervalMs;
+const EVACUATION_INTERVAL_MS = config.get('fluxapps.residentialEvacuationIntervalMs');
 
 const startupCollection = config.database.local.collections.nodeStartupTracker;
 const SETTLE_MARKER_KEY = 'residentialDos';

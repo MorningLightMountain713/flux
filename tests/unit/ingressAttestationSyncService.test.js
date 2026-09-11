@@ -4,10 +4,11 @@ const { expect } = require('chai');
 const sinon = require('sinon');
 const proxyquire = require('proxyquire').noCallThru();
 const setReconciler = require('../../ZelBack/src/services/appMessaging/setReconciler');
+const { asConfig } = require('./fixtures/config');
 
 function load() {
   return proxyquire('../../ZelBack/src/services/appMessaging/ingressAttestationSyncService', {
-    config: { fluxapps: {} },
+    config: asConfig({ fluxapps: {} }),
     '../serviceHelper': { delay: sinon.stub().resolves() },
     './setReconciler': setReconciler,
     '../appDatabase/appsRepository': { listIngressAttestationDigests: sinon.stub().resolves([]) },

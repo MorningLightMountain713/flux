@@ -54,7 +54,7 @@ const NS_PER_MS = 1_000_000n;
 const providers = new Map();
 
 function governorConfig() {
-  return config.fluxapps.registryGovernor ?? {};
+  return config.get('fluxapps.registryGovernor');
 }
 
 /**

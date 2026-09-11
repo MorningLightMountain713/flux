@@ -161,18 +161,18 @@ const convergeBackstops = new Map(); // id -> backstop timer
 // rollback after this many total container-start attempts (initial + retries) for
 // a component that has never proven a run; a COUNT not a wall clock, so a node
 // issue (docker down: no attempt is ever made) never rolls back.
-const CONVERGE_FAIL_ATTEMPTS = config.fluxapps.convergeFailAttempts ?? 3;
-const CONVERGE_BACKSTOP_MS = config.fluxapps.convergeBackstopMs ?? 5 * 60 * 1000;
+const CONVERGE_FAIL_ATTEMPTS = config.get('fluxapps.convergeFailAttempts');
+const CONVERGE_BACKSTOP_MS = config.get('fluxapps.convergeBackstopMs');
 // Pacing between install-trial start attempts. The crash ladder protects a node
 // from an ESTABLISHED app gone bad - its minutes-long rungs would starve the
 // bounded "can this run at all?" trial, so unproven converging components retry
 // on this fixed pace instead; the ladder owns pacing from the first proven run.
-const CONVERGE_RETRY_MS = config.fluxapps.convergeRetryMs ?? 10 * 1000;
+const CONVERGE_RETRY_MS = config.get('fluxapps.convergeRetryMs');
 // A probe-less service proves its first run by staying up this long. Probed
 // components prove on the first healthy report; run-to-completion ones on a
 // clean exit. Until proven, the install converge stays open - docker accepting
 // a start is not proof (an exit-127 container "starts" a second before dying).
-const FIRST_RUN_PROOF_MS = config.fluxapps.firstRunProofMs ?? 60 * 1000;
+const FIRST_RUN_PROOF_MS = config.get('fluxapps.firstRunProofMs');
 
 // serviceManager wires this to appShutdownCoordinator.requestGracefulStop. When set and
 // it returns true, the daemon owns a graceful stop-but-keep of the app and this
@@ -211,7 +211,7 @@ const VOLUME_MOUNT_RETRY_MS = 30 * 1000;
 // retry re-drives it. A capped provision that completes detached later is harmless:
 // the next pass finds the container and starts it (the same level-based contract as
 // the recreate-failed-but-container-exists re-check).
-const RECREATE_PROVISION_CAP_MS = config.fluxapps.recreateProvisionCapMs ?? 3 * 60 * 1000;
+const RECREATE_PROVISION_CAP_MS = config.get('fluxapps.recreateProvisionCapMs');
 
 // identifiers whose missing backing image was already recorded as a tampering
 // event, so the paced retries don't re-record it every cycle
@@ -257,7 +257,7 @@ const volumeFaultNoted = new Map();
 // app). That lives in appsRuntimeState.networkHealRemoval, not here.
 // Windows tunable via config (harness compression); the literals are the
 // production defaults - same idiom as the crash-backoff ladder.
-const NETWORK_DETACH_CONFIRM_MS = config.fluxapps.networkHealConfirmMs ?? 3000;
+const NETWORK_DETACH_CONFIRM_MS = config.get('fluxapps.networkHealConfirmMs');
 // ...and the detach must ALSO have persisted for this long since we first saw it.
 // A dockerd restart with live-restore can answer an inspect before libnetwork has
 // re-populated endpoint IPs on running containers - and the event-stream reconnect
@@ -265,7 +265,7 @@ const NETWORK_DETACH_CONFIRM_MS = config.fluxapps.networkHealConfirmMs ?? 3000;
 // would rebuild every container on the node. This is wall-clock since the first
 // sighting, NOT a count of reconcile passes (two passes can land in the same
 // instant), so it is a real settle window whatever the trigger cadence.
-const DETACHED_PERSIST_MS = config.fluxapps.networkHealDetachedPersistMs ?? 60 * 1000;
+const DETACHED_PERSIST_MS = config.get('fluxapps.networkHealDetachedPersistMs');
 // id -> ms epoch of the first detached sighting of the current episode
 const detachedSince = new Map();
 // One container detached is a stale endpoint. Several at once is the daemon, not
@@ -273,13 +273,13 @@ const detachedSince = new Map();
 const DETACH_STORM_THRESHOLD = 3;
 // a pruned network cannot be repaired by recreating the container - re-check on a
 // slow pace so a restored network is picked up without an hour's wait
-const NETWORK_PRUNED_RETRY_MS = config.fluxapps.networkHealPrunedRetryMs ?? 5 * 60 * 1000;
+const NETWORK_PRUNED_RETRY_MS = config.get('fluxapps.networkHealPrunedRetryMs');
 // a container is normally verified attached only on the reconcile after its start,
 // i.e. the hourly sweep. But this pathology is BORN at start time, so re-check
 // shortly after every start/recreate we perform: detached-at-boot then heals in
 // under a minute, with the sweep as the backstop. (Docker network events cannot
 // cover this: a container born detached never emits a disconnect.)
-const POST_START_VERIFY_MS = config.fluxapps.postStartVerifyMs ?? 30 * 1000;
+const POST_START_VERIFY_MS = config.get('fluxapps.postStartVerifyMs');
 
 // identifiers whose detach/prune was already recorded as a tampering event, so the
 // paced retries record it once per episode rather than once per attempt (the count

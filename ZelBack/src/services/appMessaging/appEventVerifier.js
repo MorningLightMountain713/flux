@@ -145,7 +145,7 @@ async function authorize({
     const { UpdatePolicy } = await getSpec();
     const verdict = await appEvent.assessRenewal(previousState);
     if (UpdatePolicy.extensionSignerPermitted(verdict)) {
-      const usersToExtend = (config.fluxapps && config.fluxapps.usersToExtend) || [];
+      const usersToExtend = config.get('fluxapps.usersToExtend');
       if (usersToExtend.length > 0) {
         result = await appEvent.verifySignature(verify, usersToExtend);
         if (result.valid) return result;

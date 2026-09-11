@@ -29,7 +29,7 @@ const { socketAddressesMatch, extractIp } = require('../utils/socketAddressUtils
  * @returns {number}
  */
 function requiredInstances(spec) {
-  return spec.instances ?? config.fluxapps.minimumInstances;
+  return spec.instances ?? config.get('fluxapps.minimumInstances');
 }
 
 /**

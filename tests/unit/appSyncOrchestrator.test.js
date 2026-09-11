@@ -5,6 +5,7 @@ const sinon = require('sinon');
 const { resetGlobalState } = require('./fixtures/globalState');
 const { EventEmitter } = require('events');
 const proxyquire = require('proxyquire').noCallThru();
+const { asConfig } = require('./fixtures/config');
 
 describe('AppSyncOrchestrator', () => {
   let AppSyncOrchestrator;
@@ -216,11 +217,11 @@ describe('AppSyncOrchestrator', () => {
       const realConfig = require('config');
       return proxyquire('../../ZelBack/src/services/appMessaging/appSyncOrchestrator', {
         ...proxyquireMap,
-        config: {
+        config: asConfig({
           ...realConfig,
           database: realConfig.database,
           fluxapps: { ...realConfig.fluxapps, ...fluxappsOverrides },
-        },
+        }),
       });
     };
 

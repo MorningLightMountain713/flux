@@ -15,6 +15,7 @@ const dockerService = require('../../ZelBack/src/services/dockerService');
 const grantClient = require('../../ZelBack/src/services/quorumGrant/grantClient');
 const mastershipGrantGate = require('../../ZelBack/src/services/appLifecycle/mastershipGrantGate');
 const log = require('../../ZelBack/src/lib/log');
+const { asConfig } = require('./fixtures/config');
 
 // The reconciler's one question — "does the grant veto this component?" —
 // answered veto-only. What matters most here is what the gate does NOT do:
@@ -144,14 +145,14 @@ describe('quorumGrant mastershipGrantGate', () => {
     // read as undefined rather than fail.
     function gateWith({ flag, activateAt, height, synced = true }) {
       return proxyquire('../../ZelBack/src/services/appLifecycle/mastershipGrantGate', {
-        config: {
+        config: asConfig({
           fluxapps: {
             quorumGrantMastership: flag,
             quorumGrantActivationHeight: activateAt,
             quorumGrantPursuitIntervalMs: 30000,
             quorumGrantHeldTtlMs: 150000,
           },
-        },
+        }),
         '../daemonService/daemonServiceMiscRpcs': {
           isDaemonSynced: () => ({ data: { height, synced } }),
         },
@@ -218,7 +219,7 @@ describe('quorumGrant mastershipGrantGate', () => {
 
     function windowGate({ height, synced = true, extraConfig = {} }) {
       return proxyquire('../../ZelBack/src/services/appLifecycle/mastershipGrantGate', {
-        config: {
+        config: asConfig({
           fluxapps: {
             quorumGrantMastership: true,
             quorumGrantActivationHeight: ACTIVATE_AT,
@@ -227,7 +228,7 @@ describe('quorumGrant mastershipGrantGate', () => {
             quorumGrantHeldTtlMs: 150000,
             ...extraConfig,
           },
-        },
+        }),
         '../daemonService/daemonServiceMiscRpcs': {
           isDaemonSynced: () => ({ data: { height, synced } }),
         },
@@ -326,7 +327,7 @@ describe('quorumGrant mastershipGrantGate', () => {
 
     function windowGate({ height }) {
       return proxyquire('../../ZelBack/src/services/appLifecycle/mastershipGrantGate', {
-        config: {
+        config: asConfig({
           fluxapps: {
             quorumGrantMastership: true,
             quorumGrantActivationHeight: ACTIVATE_AT,
@@ -334,7 +335,7 @@ describe('quorumGrant mastershipGrantGate', () => {
             quorumGrantPursuitIntervalMs: 30000,
             quorumGrantHeldTtlMs: 150000,
           },
-        },
+        }),
         '../daemonService/daemonServiceMiscRpcs': {
           isDaemonSynced: () => ({ data: { height, synced: true } }),
         },
@@ -470,7 +471,7 @@ describe('quorumGrant mastershipGrantGate', () => {
 
     function windowGate({ height }) {
       return proxyquire('../../ZelBack/src/services/appLifecycle/mastershipGrantGate', {
-        config: {
+        config: asConfig({
           fluxapps: {
             quorumGrantMastership: true,
             quorumGrantActivationHeight: ACTIVATE_AT,
@@ -479,7 +480,7 @@ describe('quorumGrant mastershipGrantGate', () => {
             quorumGrantHeldTtlMs: 150000,
             quorumGrantAskTimeoutMs: ASK_TIMEOUT,
           },
-        },
+        }),
         '../daemonService/daemonServiceMiscRpcs': {
           isDaemonSynced: () => ({ data: { height, synced: true } }),
         },
@@ -605,7 +606,7 @@ describe('quorumGrant mastershipGrantGate', () => {
   describe('the timing inequality is checked before the plane governs anything', () => {
     function gateWithTiming({ slack, lockDelay, askTimeout }) {
       return proxyquire('../../ZelBack/src/services/appLifecycle/mastershipGrantGate', {
-        config: {
+        config: asConfig({
           fluxapps: {
             quorumGrantMastership: true,
             quorumGrantActivationHeight: 2100000,
@@ -615,7 +616,7 @@ describe('quorumGrant mastershipGrantGate', () => {
             quorumGrantLockDelayMs: lockDelay,
             ...(askTimeout !== undefined ? { quorumGrantAskTimeoutMs: askTimeout } : {}),
           },
-        },
+        }),
         '../daemonService/daemonServiceMiscRpcs': {
           isDaemonSynced: () => ({ data: { height: 2100000, synced: true } }),
         },

@@ -54,7 +54,7 @@ async function inspectImage(repotag, repoauth, opts = {}) {
     const architecture = await systemArchitecture();
     const credentials = await resolveCredentials(repotag, repoauth, opts.fluxId);
     const verifier = new ImageVerifier(repotag, {
-      maxImageSize: config.fluxapps.maxImageSize,
+      maxImageSize: config.get('fluxapps.maxImageSize'),
       architecture,
       architectureSet: supportedArchitectures,
       ...(credentials ? { credentials } : {}),

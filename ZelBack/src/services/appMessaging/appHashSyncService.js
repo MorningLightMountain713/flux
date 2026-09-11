@@ -28,12 +28,12 @@ const { Privilege, authOf } = require('../utils/privileges');
 const appsHashesCollection = config.database.daemon.collections.appsHashes;
 const globalAppsMessages = config.database.appsglobal.collections.appsMessages;
 
-const SETTLE_TIME_MS = config.fluxapps.hashSyncSettleMs ?? 4000;
-const RESPONSE_TIME_PER_HASH_MS = config.fluxapps.hashSyncResponseTimePerHashMs ?? 150;
-const BUFFER_MS = config.fluxapps.hashSyncBufferMs ?? 5000;
-const MAX_ROUNDS = config.fluxapps.hashSyncMaxRounds ?? 4;
-const PEERS_PER_ROUND = config.fluxapps.hashSyncPeersPerRound ?? 3;
-const EPHEMERAL_PEERS_COUNT = config.fluxapps.hashSyncEphemeralPeers ?? 5;
+const SETTLE_TIME_MS = config.get('fluxapps.hashSyncSettleMs');
+const RESPONSE_TIME_PER_HASH_MS = config.get('fluxapps.hashSyncResponseTimePerHashMs');
+const BUFFER_MS = config.get('fluxapps.hashSyncBufferMs');
+const MAX_ROUNDS = config.get('fluxapps.hashSyncMaxRounds');
+const PEERS_PER_ROUND = config.get('fluxapps.hashSyncPeersPerRound');
+const EPHEMERAL_PEERS_COUNT = config.get('fluxapps.hashSyncEphemeralPeers');
 
 let syncRunning = false;
 

@@ -862,8 +862,8 @@ let started = false;
 function start() {
   if (started) return;
   started = true;
-  const intervalMs = config.fluxapps.meshReconcileIntervalMs ?? 30 * 60 * 1000;
-  const initialMs = Math.round((5 * 60 * 1000) * (config.fluxapps.bootDelayMultiplier ?? 1));
+  const intervalMs = config.get('fluxapps.meshReconcileIntervalMs');
+  const initialMs = Math.round((5 * 60 * 1000) * (config.get('fluxapps.bootDelayMultiplier')));
   const run = () => reconcileAllMeshApps().catch((error) => {
     log.error(`meshReconciler - sweep failed: ${error.message}`);
   });

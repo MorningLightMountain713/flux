@@ -13,6 +13,7 @@ const {
 // re-implement them — and a re-implementation is free to drift from the rule
 // the spawner actually applies in production.
 const hwRequirementsActual = require('../../ZelBack/src/services/appRequirements/hwRequirements');
+const { asConfig } = require('./fixtures/config');
 
 // The spec library is real here, not stubbed — see tests/unit/fixtures/fluxSpec.js
 // for why. Every candidate the spawner screens, targets, decrypts and installs is a
@@ -231,7 +232,7 @@ describe('appSpawner tests', () => {
     };
 
     appSpawner = proxyquire('../../ZelBack/src/services/appLifecycle/appSpawner', {
-      config: configStub,
+      config: asConfig(configStub),
       '../utils/specCutover': {
         ensureProvidersRegistered: ensureProvidersRegisteredStub,
       },

@@ -1167,7 +1167,7 @@ async function uploadAppsFiles(req, res) {
   // The floor covers the whole request, not just a part body: the executor's
   // floor never sees a request that sends no file part, and that request held
   // the slot until the 2h request timeout.
-  const { minUploadBitsPerSecond, stallTimeoutMs } = config.fluxapps.volumeOperations;
+  const { minUploadBitsPerSecond, stallTimeoutMs } = config.get('fluxapps.volumeOperations');
   stopSlotFloor = startSlotFloor({
     minBitsPerSecond: minUploadBitsPerSecond,
     windowMs: stallTimeoutMs,

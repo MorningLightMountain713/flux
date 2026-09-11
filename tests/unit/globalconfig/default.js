@@ -1,9 +1,40 @@
 'use strict';
 
+// THE HARNESS CONFIG IS OVERRIDES, NOT A SECOND CONFIG.
+//
+// It used to be a standalone copy, and a copy of a 239-key object goes short:
+// 80 fluxapps keys the service layer reads were absent from it, along with
+// whole sections (registryAuth, marketplace, fluxDrive, analytics). Every one
+// of those reads took its `?? literal` under test and the shipped value was
+// never exercised - which is the exact opposite of what the harness is for, and
+// is why a fallback that had drifted from config could sit here unnoticed.
+//
+// So production is the base and this file is what the harness changes about it.
+// A key it does not mention is the one a node runs with, and it cannot be
+// missing.
+const production = require('../../../ZelBack/config/default');
+
+/**
+ * Overrides over production, deeply. An array replaces rather than merges - a
+ * harness that wants three FDM regions means three, not three appended to
+ * production's.
+ * @param {*} base
+ * @param {*} override
+ * @returns {*}
+ */
+function merge(base, override) {
+  if (Array.isArray(override) || override === null) return override;
+  if (typeof override !== 'object') return override;
+  if (typeof base !== 'object' || base === null || Array.isArray(base)) return override;
+  const out = { ...base };
+  Object.keys(override).forEach((key) => { out[key] = merge(base[key], override[key]); });
+  return out;
+}
+
 // So you can set host.docker.internal (mac) or container name
 const database = process.env.FLUX_DATABASE || '127.0.0.1';
 
-module.exports = {
+const harnessOverrides = {
   testEventStream: false,
   system: {
     bootIdPath: '/proc/sys/kernel/random/boot_id',
@@ -548,3 +579,5 @@ module.exports = {
     ],
   },
 };
+
+module.exports = merge(production, harnessOverrides);

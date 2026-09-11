@@ -137,7 +137,7 @@ function keyHash(purpose, axis, axisValue) {
 }
 
 function askTimeoutMs() {
-  return config.fluxapps.limitCounterAskTimeoutMs ?? 3000;
+  return config.get('fluxapps.limitCounterAskTimeoutMs');
 }
 
 /**

@@ -29,6 +29,7 @@ const verificationHelperUtils = proxyquire(
 
 const { signMessage } = require('../../ZelBack/src/services/verificationHelper');
 const { requireMongo } = require('./dbTestHelper');
+const { asConfig } = require('./fixtures/config');
 
 const insertUsers = [
   {
@@ -766,7 +767,7 @@ describe('verificationHelperUtils tests', () => {
     // support out of itself entirely.
     const withSupportConfig = (value) => proxyquire(
       '../../ZelBack/src/services/verificationHelperUtils',
-      { config: { ...config, fluxSupportTeamFluxID: value } },
+      { config: asConfig({ ...config, fluxSupportTeamFluxID: value }) },
     );
 
     it('should read a list of ids', () => {

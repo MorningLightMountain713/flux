@@ -3,6 +3,7 @@
 const { expect } = require('chai');
 const sinon = require('sinon');
 const proxyquire = require('proxyquire').noCallThru();
+const { asConfig } = require('./fixtures/config');
 
 const CONFIG = {
   fluxapps: {
@@ -30,7 +31,7 @@ describe('playgroundServingSet', () => {
       warn: sinon.stub(),
     };
     return proxyquire.load('../../ZelBack/src/services/appPlayground/playgroundServingSet', {
-      config: opts.config ?? CONFIG,
+      config: asConfig(opts.config ?? CONFIG),
       '../../lib/log': { info: sinon.stub(), warn: stubs.warn, error: sinon.stub() },
       '../fluxCommunicationUtils': { deterministicFluxList: stubs.list },
       '../generalService': { obtainNodeCollateralInformation: stubs.collateral },
@@ -156,11 +157,30 @@ describe('playgroundServingSet', () => {
 
   describe('the address axis', () => {
     const on = { fluxapps: { ...CONFIG.fluxapps, playgroundServingSetAddressAxis: true } };
+    // Stated, not left to absence. The harness config inherits what config
+    // ships, so "not set" is no longer a way to say "off".
+    const off = { fluxapps: { ...CONFIG.fluxapps, playgroundServingSetAddressAxis: false } };
     // A browser reaches a node through FDM, so the socket peer is the load
     // balancer. Enforcing this before FDM forwards the client address would map
     // every caller onto one set and take the feature down for everyone else.
-    it('is off unless explicitly turned on', () => {
-      expect(load().addressAxisEnabled()).to.equal(false);
+    // NOTE: config/default.js ships this true, so on a node the axis is ON.
+    // The comment above says why it should not be - a browser reaches a node
+    // through FDM, so the socket peer is the load balancer. This test used to
+    // read "off unless explicitly turned on" and passed only because the
+    // harness config did not carry the key at all, so the read was
+    // `undefined === true`. It asserted the harness's accident, not the node's
+    // behaviour. Stated as what each value does, with the shipped value called
+    // out, until the contradiction is settled one way or the other.
+    it('is off for any value that is not a literal true', () => {
+      const off = { fluxapps: { ...CONFIG.fluxapps, playgroundServingSetAddressAxis: false } };
+      expect(load({ config: off }).addressAxisEnabled()).to.equal(false);
+    });
+
+    it('is on for a node running what config ships', () => {
+      // eslint-disable-next-line global-require
+      const shipped = require('../../ZelBack/config/default').fluxapps.playgroundServingSetAddressAxis;
+      expect(load().addressAxisEnabled(), 'the shipped value no longer matches this assertion')
+        .to.equal(shipped === true);
     });
 
     it('stays off when the config says anything other than true', () => {
@@ -175,7 +195,7 @@ describe('playgroundServingSet', () => {
 
     it('scores an address differently from an identity of the same value', async () => {
       // Same value on both axes, so only the axis itself can separate them.
-      const byIdentity = (await load().servingSet({ fluxId: 'x', sourceIp: 'x' })).map((n) => n.txhash);
+      const byIdentity = (await load({ config: off }).servingSet({ fluxId: 'x', sourceIp: 'x' })).map((n) => n.txhash);
       const byAddress = (await load({ config: on }).servingSet({ fluxId: 'x', sourceIp: 'x' }))
         .map((n) => n.txhash);
       expect(byIdentity).to.not.deep.equal(byAddress);
@@ -186,6 +206,7 @@ describe('playgroundServingSet', () => {
   // change. Minting a FluxID is free; an address is not.
   describe('which axis a caller is pinned on', () => {
     const on = { fluxapps: { ...CONFIG.fluxapps, playgroundServingSetAddressAxis: true } };
+    const off = { fluxapps: { ...CONFIG.fluxapps, playgroundServingSetAddressAxis: false } };
     const CALLER = '198.51.100.23';
 
     it('keys on the address when the axis is on', () => {
@@ -194,7 +215,7 @@ describe('playgroundServingSet', () => {
     });
 
     it('keys on the identity when the axis is off', () => {
-      expect(load().axisFor({ fluxId: 'zelid1', sourceIp: CALLER }))
+      expect(load({ config: off }).axisFor({ fluxId: 'zelid1', sourceIp: CALLER }))
         .to.deep.equal({ axis: 'identity', value: 'zelid1' });
     });
 

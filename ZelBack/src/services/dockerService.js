@@ -353,7 +353,7 @@ function dockerPullStream(pullConfig, res, callback) {
   // forever. The caller's own abortSignal (cancel-during-install) chains into
   // the same controller and keeps its meaning - its error shape is a cancel,
   // never tagged transient.
-  const stallWindowMs = stallMs ?? config.fluxapps.pullStallMs ?? 90_000;
+  const stallWindowMs = stallMs ?? config.get('fluxapps.pullStallMs');
   const stallController = new AbortController();
   let stallTimer = null;
   let settled = false;

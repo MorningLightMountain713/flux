@@ -3,6 +3,7 @@
 const { expect } = require('chai');
 const sinon = require('sinon');
 const proxyquire = require('proxyquire').noCallThru();
+const { asConfig } = require('./fixtures/config');
 const {
   loadSpecLibrary, v8Spec, v9Spec, sealedV8Spec, sealedV9Spec, instantiatedSpec, assertAnswers,
 } = require('./fixtures/fluxSpec');
@@ -83,7 +84,7 @@ describe('messageStore tests', () => {
 
   function buildProxyquireStubs(overrides = {}) {
     return {
-      config: configStub,
+      config: asConfig(configStub),
       '../dbHelper': dbHelperStub,
       '../appDatabase/appsRepository': appsRepositoryStub,
       './appEventVerifier': appEventVerifierStub,

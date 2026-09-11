@@ -3,6 +3,7 @@
 const { expect } = require('chai');
 const sinon = require('sinon');
 const proxyquire = require('proxyquire').noCallThru();
+const { asConfig } = require('./fixtures/config');
 
 const CONFIG = {
   fluxapps: {
@@ -18,7 +19,7 @@ const CONFIG = {
 
 function loadLimits() {
   return proxyquire.load('../../ZelBack/src/services/appPlayground/playgroundLimits', {
-    config: CONFIG,
+    config: asConfig(CONFIG),
   });
 }
 
@@ -193,7 +194,7 @@ describe('playgroundLimits', () => {
       caller.reset();
 
       const cfg = { ...CONFIG, fluxapps: { ...CONFIG.fluxapps, playgroundCallerSessionsPerHour: 1, playgroundNodeSessionsPerHour: 5 } };
-      const scoped = proxyquire.load('../../ZelBack/src/services/appPlayground/playgroundLimits', { config: cfg });
+      const scoped = proxyquire.load('../../ZelBack/src/services/appPlayground/playgroundLimits', { config: asConfig(cfg) });
       scoped.reset();
 
       expect(scoped.consumeSessionSlot('zelid1', '1.2.3.4').allowed).to.equal(true);

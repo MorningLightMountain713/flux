@@ -214,7 +214,7 @@ function domainShareLevel(domainSizes, instances) {
  * @returns {Promise<{feasibility: object, domainOf: (address: string) => string|null}>}
  */
 async function placementComputation(spec, minInstances) {
-  const instances = minInstances ?? spec.instances ?? config.fluxapps.minimumInstances;
+  const instances = minInstances ?? spec.instances ?? config.get('fluxapps.minimumInstances');
   // Asked before the accessor rather than after: the accessor waits for the
   // list, and this is reached from a request handler that cannot wait.
   if (!networkStateService.isReady()) {
@@ -671,8 +671,8 @@ async function placementAdvice(spec) {
   if (!spec || typeof spec !== 'object' || Array.isArray(spec) || Object.keys(spec).length === 0) {
     throw new Error('Empty or unparsed request body - send JSON with Content-Type: application/json');
   }
-  const instances = serviceHelper.ensureNumber(spec.instances ?? config.fluxapps.minimumInstances);
-  if (!Number.isInteger(instances) || instances < 1 || instances > config.fluxapps.maximumInstances) {
+  const instances = serviceHelper.ensureNumber(spec.instances ?? config.get('fluxapps.minimumInstances'));
+  if (!Number.isInteger(instances) || instances < 1 || instances > config.get('fluxapps.maximumInstances')) {
     throw new Error('Invalid instances specified');
   }
   const { normalized, coarsened } = normalizeGeolocation(geolocationEntries(spec));

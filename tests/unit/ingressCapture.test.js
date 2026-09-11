@@ -2,6 +2,7 @@
 
 const { expect } = require('chai');
 const proxyquire = require('proxyquire').noCallThru();
+const { asConfig } = require('./fixtures/config');
 
 // RFC 5737 / RFC 3849 documentation ranges throughout: a fixture that carries a
 // real address invites someone to treat it as one.
@@ -14,7 +15,7 @@ const CALLER_V6 = '2001:db8::103';
 
 function build(fdmAddresses) {
   return proxyquire('../../ZelBack/src/services/utils/ingressCapture', {
-    config: { fdmAddresses },
+    config: asConfig({ fdmAddresses }),
   });
 }
 

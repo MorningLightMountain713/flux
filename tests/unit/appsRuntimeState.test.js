@@ -3,6 +3,7 @@
 const { expect } = require('chai');
 const sinon = require('sinon');
 const proxyquire = require('proxyquire').noCallThru();
+const { asConfig } = require('./fixtures/config');
 
 describe('appsRuntimeState tests', () => {
   let appsRuntimeState;
@@ -536,7 +537,7 @@ describe('appsRuntimeState tests', () => {
       const tuned = proxyquire('../../ZelBack/src/services/appManagement/appsRuntimeState', {
         '../../lib/log': logStub,
         '../dbHelper': {},
-        config: {
+        config: asConfig({
           database: { appslocal: { database: 'localzelapps', collections: { appsRuntimeState: 'zelappsruntimestate' } } },
           fluxapps: {
             crashBackoffDelaysMs: [0, 1000, 2000],
@@ -544,7 +545,7 @@ describe('appsRuntimeState tests', () => {
             restartBurstCount: 3,
             restartBurstWindowMs: 2000,
           },
-        },
+        }),
       });
       expect(tuned.BACKOFF_DELAYS_MS).to.deep.equal([0, 1000, 2000]);
       expect(tuned.STABLE_RUN_MS).to.equal(5000);

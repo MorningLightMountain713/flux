@@ -8,6 +8,7 @@ const realFs = require('node:fs/promises');
 const nodeCrypto = require('node:crypto');
 const { EventEmitter } = require('node:events');
 const { Readable, Writable } = require('node:stream');
+const { asConfig } = require('./fixtures/config');
 
 chai.use(chaiAsPromised);
 const { expect } = chai;
@@ -239,7 +240,7 @@ describe('volumeExecutor tests', () => {
     });
 
     volumeExecutor = proxyquire('../../ZelBack/src/services/appSystem/volumeExecutor', {
-      config: configStub,
+      config: asConfig(configStub),
       'node:fs/promises': fsStub,
       'node:fs': nodeFsStub,
       '../dockerService': dockerServiceStub,
@@ -1784,7 +1785,7 @@ describe('volumeExecutor tests', () => {
 
       // No fs stub on this one - that is the whole point of the block.
       sweeper = proxyquire('../../ZelBack/src/services/appSystem/volumeExecutor', {
-        config: configStub,
+        config: asConfig(configStub),
         '../dockerService': dockerServiceStub,
         '../deviceHelper': deviceHelperStub,
         '../serviceHelper': serviceHelperStub,

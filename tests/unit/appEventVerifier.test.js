@@ -5,6 +5,7 @@ const chaiAsPromised = require('chai-as-promised');
 const sinon = require('sinon');
 const proxyquire = require('proxyquire').noCallThru();
 const domain = require('./fixtures/appDomain');
+const { asConfig } = require('./fixtures/config');
 
 chai.use(chaiAsPromised);
 const { expect } = chai;
@@ -127,7 +128,7 @@ describe('appEventVerifier', () => {
     appEventVerifier = proxyquire(
       '../../ZelBack/src/services/appMessaging/appEventVerifier',
       {
-        config: configStub,
+        config: asConfig(configStub),
         '../utils/specLibs': specLibsStub,
         '../signatureVerifier': signatureVerifierStub,
         '../benchmarkService': benchmarkServiceStub,
@@ -196,7 +197,7 @@ describe('appEventVerifier', () => {
       const { resolveTeamSupportAddresses } = proxyquire(
         '../../ZelBack/src/services/appMessaging/appEventVerifier',
         {
-          config: configStub,
+          config: asConfig(configStub),
           '../utils/specLibs': specLibsStub,
           '../signatureVerifier': signatureVerifierStub,
           '../utils/chainUtilities': chainUtilitiesStub,
@@ -213,7 +214,7 @@ describe('appEventVerifier', () => {
       const { resolveTeamSupportAddresses } = proxyquire(
         '../../ZelBack/src/services/appMessaging/appEventVerifier',
         {
-          config: configStub,
+          config: asConfig(configStub),
           '../utils/specLibs': specLibsStub,
           '../signatureVerifier': signatureVerifierStub,
           '../utils/chainUtilities': chainUtilitiesStub,
@@ -231,7 +232,7 @@ describe('appEventVerifier', () => {
       const { resolveTeamSupportAddresses } = proxyquire(
         '../../ZelBack/src/services/appMessaging/appEventVerifier',
         {
-          config: configStub,
+          config: asConfig(configStub),
           '../utils/specLibs': specLibsStub,
           '../signatureVerifier': signatureVerifierStub,
           '../utils/chainUtilities': chainUtilitiesStub,
@@ -314,7 +315,7 @@ describe('appEventVerifier', () => {
       appEventVerifier = proxyquire(
         '../../ZelBack/src/services/appMessaging/appEventVerifier',
         {
-          config: configStub,
+          config: asConfig(configStub),
           '../utils/specLibs': specLibsStub,
           '../signatureVerifier': signatureVerifierStub,
           '../utils/chainUtilities': chainUtilitiesStub,
@@ -342,7 +343,7 @@ describe('appEventVerifier', () => {
       appEventVerifier = proxyquire(
         '../../ZelBack/src/services/appMessaging/appEventVerifier',
         {
-          config: configStub,
+          config: asConfig(configStub),
           '../utils/specLibs': specLibsStub,
           '../signatureVerifier': signatureVerifierStub,
           '../utils/chainUtilities': chainUtilitiesStub,
@@ -369,7 +370,7 @@ describe('appEventVerifier', () => {
       appEventVerifier = proxyquire(
         '../../ZelBack/src/services/appMessaging/appEventVerifier',
         {
-          config: configStub,
+          config: asConfig(configStub),
           '../utils/specLibs': specLibsStub,
           '../signatureVerifier': signatureVerifierStub,
           '../utils/chainUtilities': chainUtilitiesStub,

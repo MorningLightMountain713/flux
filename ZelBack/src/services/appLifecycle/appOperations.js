@@ -301,7 +301,7 @@ async function redeployComponent(appName, componentName, options = {}) {
 
       status(`Component ${deployComp.identifier} removed. Awaiting installation...`);
       // eslint-disable-next-line no-await-in-loop
-      await serviceHelper.delay(config.fluxapps.redeploy.composedDelay * 1000);
+      await serviceHelper.delay(config.get('fluxapps.redeploy.composedDelay') * 1000);
 
       // eslint-disable-next-line no-await-in-loop
       const instantiated = await appsRepository.getInstalledApp(appName);
@@ -455,11 +455,11 @@ async function redeployApplication(appName, options = {}) {
           onStatus,
         });
         // eslint-disable-next-line no-await-in-loop
-        await serviceHelper.delay(config.fluxapps.redeploy.composedDelay * 1000);
+        await serviceHelper.delay(config.get('fluxapps.redeploy.composedDelay') * 1000);
       }
       status(`${unitLabel} removed. Awaiting installation...`);
       // eslint-disable-next-line no-await-in-loop
-      await serviceHelper.delay(config.fluxapps.redeploy.delay * 1000);
+      await serviceHelper.delay(config.get('fluxapps.redeploy.delay') * 1000);
 
       // eslint-disable-next-line no-await-in-loop
       const instantiated = await appsRepository.getInstalledApp(appName);
@@ -500,7 +500,7 @@ async function redeployApplication(appName, options = {}) {
           deployComp.identifier, freshDeployment, deployComp.qualifiedNetworkAliases,
         );
         // eslint-disable-next-line no-await-in-loop
-        await serviceHelper.delay(config.fluxapps.redeploy.composedDelay * 1000);
+        await serviceHelper.delay(config.get('fluxapps.redeploy.composedDelay') * 1000);
       }
 
       // Refresh this identity's shutdown plan for graceful apps only (a redeploy
@@ -1531,7 +1531,7 @@ async function updateAppGlobaly(params) {
     appEvent, previousState: appInfo, daemonHeight, verifyHash: false,
   });
 
-  const { latestSupportedSpecVersion } = config.fluxapps;
+  const latestSupportedSpecVersion = config.get('fluxapps.latestSupportedSpecVersion');
   const { UpdatePolicy } = await getSpec();
   UpdatePolicy.assertVersionTransition(previousSpec, spec, latestSupportedSpecVersion);
   UpdatePolicy.assertCompatible(previousSpec, spec);
@@ -1628,7 +1628,7 @@ async function submitAppUpdate(req, res, processedBody, contentCtx) {
   // Direction-agnostic on purpose — see the registration gate: duty pairs
   // are reciprocal and the outbound label is a dial-race outcome, so what
   // safety needs is enough distinct peers HELD, whoever dialed.
-  if (peerManager.getNumberOfPeers() < config.fluxapps.minOutgoing + config.fluxapps.minIncoming) {
+  if (peerManager.getNumberOfPeers() < config.get('fluxapps.minOutgoing') + config.get('fluxapps.minIncoming')) {
     throw new Error('Sorry, This Flux does not hold enough peer connections for safe application update');
   }
 
@@ -1816,7 +1816,7 @@ async function reconcileComponents(appName, oldDeployment, newDeployment, regist
       // eslint-disable-next-line no-await-in-loop
       await appUninstaller.uninstallComponent(deployComp, { removeVolumes, skipPorts: true, stopHandled });
       // eslint-disable-next-line no-await-in-loop
-      await serviceHelper.delay(config.fluxapps.redeploy.composedDelay * 1000);
+      await serviceHelper.delay(config.get('fluxapps.redeploy.composedDelay') * 1000);
     }
   }
 
@@ -1888,7 +1888,7 @@ async function reconcileComponents(appName, oldDeployment, newDeployment, regist
         requiresEncryption,
       });
       // eslint-disable-next-line no-await-in-loop
-      await serviceHelper.delay(config.fluxapps.redeploy.composedDelay * 1000);
+      await serviceHelper.delay(config.get('fluxapps.redeploy.composedDelay') * 1000);
     }
   }
 
@@ -2646,7 +2646,7 @@ async function coordinateActiveStandbyApps() {
                   }
                 } else if (index > 0 && !activePrimaryByIdentifier.has(identifier) && !scheduledPrimaryStart.has(identifier)) {
                   // Non-primary node with no history - schedule start based on index
-                  const timetoStartApp = Date.now() + (index * config.fluxapps.activeStandbyStaggerMs);
+                  const timetoStartApp = Date.now() + (index * config.get('fluxapps.activeStandbyStaggerMs'));
                   log.info(`activeStandby: scheduling app:${appName} index: ${index} to start at ${timetoStartApp.toString()}`);
                   scheduledPrimaryStart.set(identifier, timetoStartApp);
                 } else {
@@ -2737,7 +2737,7 @@ let coordinatorPassInFlight = false;
  * @returns {NodeJS.Timeout} the interval handle
  */
 function startActiveStandbyCoordinator() {
-  const intervalMs = config.fluxapps.masterSlaveIntervalMs ?? 30 * 1000;
+  const intervalMs = config.get('fluxapps.masterSlaveIntervalMs');
   return setInterval(async () => {
     if (coordinatorPassInFlight) {
       log.info('activeStandby: previous pass still in flight, skipping this tick');

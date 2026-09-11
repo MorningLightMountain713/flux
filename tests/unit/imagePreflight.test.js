@@ -9,6 +9,7 @@ chai.use(chaiAsPromised);
 const { expect } = chai;
 
 const jobRegistry = require('../../ZelBack/src/services/utils/jobRegistry');
+const { asConfig } = require('./fixtures/config');
 
 describe('imagePreflight tests', () => {
   let verifyRepositoryStub;
@@ -37,7 +38,7 @@ describe('imagePreflight tests', () => {
     ));
 
     return proxyquire('../../ZelBack/src/services/appSecurity/imagePreflight', {
-      config: configOverride || preflightConfig,
+      config: asConfig(configOverride || preflightConfig),
       './imageManager': { verifyRepository: verifyRepositoryStub },
       '../utils/transportHelper': { openTransportEnvelope: openTransportEnvelopeStub },
       '../utils/imageVerifier': { ImageVerifier: { parseImageReference: parseImageReferenceStub } },

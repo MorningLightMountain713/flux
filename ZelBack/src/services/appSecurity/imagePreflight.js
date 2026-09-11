@@ -28,15 +28,15 @@ const queue = [];
 let running = null;
 
 function preflightMaxComponents() {
-  return config.fluxapps.preflightMaxComponents ?? 10;
+  return config.get('fluxapps.preflightMaxComponents');
 }
 
 function preflightEnvelopeMaxAgeMs() {
-  return config.fluxapps.preflightEnvelopeMaxAgeMs ?? 5 * 60 * 1000;
+  return config.get('fluxapps.preflightEnvelopeMaxAgeMs');
 }
 
 function preflightMaxQueuedJobs() {
-  return config.fluxapps.preflightMaxQueuedJobs ?? 4;
+  return config.get('fluxapps.preflightMaxQueuedJobs');
 }
 
 /**

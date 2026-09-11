@@ -3,6 +3,7 @@
 const { expect } = require('chai');
 const sinon = require('sinon');
 const proxyquire = require('proxyquire').noCallThru();
+const { asConfig } = require('./fixtures/config');
 
 describe('imageCacheDownloader tests', () => {
   let getCredentialsStub;
@@ -53,7 +54,7 @@ describe('imageCacheDownloader tests', () => {
       supportedArchitectures: ['amd64'],
     };
     return proxyquire('../../ZelBack/src/services/appLifecycle/imageCacheDownloader', {
-      config: { fluxapps: { maxImageSize: 5_000_000_000 } },
+      config: asConfig({ fluxapps: { maxImageSize: 5_000_000_000 } }),
       '../dockerService': { dockerPullStream: dockerPullStreamStub },
       '../utils/imageVerifier': { ImageVerifier: FakeVerifier },
       '../utils/registryCredentialHelper': { getCredentials: getCredentialsStub },

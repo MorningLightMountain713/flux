@@ -1123,7 +1123,7 @@ function registrationInformation(_req, res) {
     // Read here rather than bound to a name: a name standing in for the whole
     // config is the one access form the boot reconciliation cannot follow, so
     // nothing would notice a knob read through it going missing.
-    const response = messageHelper.createDataMessage(config.fluxapps);
+    const response = messageHelper.createDataMessage(config.get('fluxapps'));
     res.json(response);
   } catch (error) {
     log.error(error);

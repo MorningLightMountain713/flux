@@ -378,7 +378,7 @@ async function portsInUseApi(req, res) {
 
     if (claimsSignature) {
       const drift = Math.abs(Date.now() - askedAt);
-      if (!Number.isFinite(askedAt) || drift > config.fluxapps.siblingAskValidityMs) {
+      if (!Number.isFinite(askedAt) || drift > config.get('fluxapps.siblingAskValidityMs')) {
         throw new Error('Request is stale or carries no timestamp');
       }
     }
@@ -509,7 +509,7 @@ async function askSiblingsForHeldPort(appPorts, localSocketAddress) {
   const siblings = siblingSocketAddresses(localSocketAddress);
   if (!siblings || !siblings.length) return null;
 
-  const timeout = config.fluxapps.siblingPortsTimeoutMs;
+  const timeout = config.get('fluxapps.siblingPortsTimeoutMs');
 
   // Signed for the sibling to verify, the same way the port test signs what it
   // sends to /flux/checkappavailability.
@@ -677,7 +677,7 @@ function portNotOurs(portsToTest, answered, token) {
   if (!token) return null;
 
   const at = portsToTest.findIndex((port) => {
-    const probed = port >= config.fluxapps.portMin && port <= config.fluxapps.portMax;
+    const probed = port >= config.get('fluxapps.portMin') && port <= config.get('fluxapps.portMax');
     if (!probed) return false;
 
     const reply = answered?.[port] ?? answered?.[String(port)];
@@ -764,7 +764,7 @@ async function checkInstallingAppPortAvailable(portsToTest = []) {
       const testHttpServer = new fluxHttpTestServer.FluxHttpTestServer(portTestToken);
 
       // eslint-disable-next-line no-await-in-loop
-      await serviceHelper.delay(config.fluxapps.portTestBindDelayMs);
+      await serviceHelper.delay(config.get('fluxapps.portTestBindDelayMs'));
 
       beforeAppInstallTestingServers.push(testHttpServer);
 
@@ -791,8 +791,8 @@ async function checkInstallingAppPortAvailable(portsToTest = []) {
       if (error) throw error;
     }
 
-    await serviceHelper.delay(config.fluxapps.portTestPropagationDelayMs);
-    const timeout = config.fluxapps.portTestPeerTimeoutMs;
+    await serviceHelper.delay(config.get('fluxapps.portTestPropagationDelayMs'));
+    const timeout = config.get('fluxapps.portTestPeerTimeoutMs');
     const axiosConfig = {
       timeout,
     };
@@ -838,7 +838,7 @@ async function checkInstallingAppPortAvailable(portsToTest = []) {
     let sawUnreadablePeer = false;
     let sawSilentPeer = false;
 
-    while (decision === null && i < config.fluxapps.portTestMaxAttempts) {
+    while (decision === null && i < config.get('fluxapps.portTestMaxAttempts')) {
       i += 1;
       // eslint-disable-next-line no-await-in-loop
       const randomSocketAddress = await networkStateService.getRandomExternalObserver(

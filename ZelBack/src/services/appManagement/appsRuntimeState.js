@@ -16,8 +16,8 @@ const { appsRuntimeState } = config.database.appslocal.collections;
 
 // crash-recovery backoff ladder: immediate, 30s, 5m, 15m, 30m cap. Tunable via
 // config (harness compression); the literals are the production defaults.
-const BACKOFF_DELAYS_MS = config.fluxapps.crashBackoffDelaysMs ?? [0, 30 * 1000, 5 * 60 * 1000, 15 * 60 * 1000, 30 * 60 * 1000];
-const STABLE_RUN_MS = config.fluxapps.crashBackoffStableRunMs ?? 10 * 60 * 1000;
+const BACKOFF_DELAYS_MS = config.get('fluxapps.crashBackoffDelaysMs');
+const STABLE_RUN_MS = config.get('fluxapps.crashBackoffStableRunMs');
 // only the count (capped by the ladder) and the last timestamp are ever read,
 // so the persisted history never needs to grow beyond the ladder length
 const MAX_HISTORY = BACKOFF_DELAYS_MS.length;
@@ -32,8 +32,8 @@ const MAX_HISTORY = BACKOFF_DELAYS_MS.length;
 // The count is of restarts already behind it, so at 5 the SIXTH restart is the
 // one that earns a rung and the seventh is the first one held back. Six free
 // restarts from a knob that reads as five is worth knowing before tuning it.
-const RESTART_BURST_COUNT = config.fluxapps.restartBurstCount ?? 5;
-const RESTART_BURST_WINDOW_MS = config.fluxapps.restartBurstWindowMs ?? 5 * 60 * 1000;
+const RESTART_BURST_COUNT = config.get('fluxapps.restartBurstCount');
+const RESTART_BURST_WINDOW_MS = config.get('fluxapps.restartBurstWindowMs');
 
 function collection() {
   const db = dbHelper.databaseConnection();

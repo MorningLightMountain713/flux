@@ -9,6 +9,7 @@ const sinon = require('sinon');
 const proxyquire = require('proxyquire');
 const log = require('../../ZelBack/src/lib/log');
 const verificationHelper = require('../../ZelBack/src/services/verificationHelper');
+const { asConfig } = require('./fixtures/config');
 
 const { expect } = chai;
 
@@ -29,7 +30,7 @@ const generateResponse = () => {
 
 const upnpService = proxyquire(
   '../../ZelBack/src/services/upnpService',
-  { config },
+  { config: asConfig(config) },
 );
 
 describe('upnpService tests', () => {
@@ -56,7 +57,7 @@ describe('upnpService tests', () => {
     it('uses the configured gateway instead of discovering one', async () => {
       const scoped = proxyquire(
         '../../ZelBack/src/services/upnpService',
-        { config: { apiport: '5550', upnp: { gatewayUrl: 'http://10.10.10.1:5000/rootDesc.xml', nodeIp: '10.10.10.5' } } },
+        { config: asConfig({ apiport: '5550', upnp: { gatewayUrl: 'http://10.10.10.1:5000/rootDesc.xml', nodeIp: '10.10.10.5' } }) },
       );
       sinon.stub(verificationHelper, 'verifyPrivilege').resolves(true);
       // deliberately NOT stubbed on the prototype: the instance override must win,

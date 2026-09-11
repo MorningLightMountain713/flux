@@ -3,13 +3,14 @@
 const { expect } = require('chai');
 const sinon = require('sinon');
 const proxyquire = require('proxyquire').noCallThru();
+const { asConfig } = require('./fixtures/config');
 
 describe('limitCounterStore tests', () => {
   let store;
 
   function load(opts = {}) {
     return proxyquire('../../ZelBack/src/services/utils/limitCounterStore', {
-      config: {
+      config: asConfig({
         fluxapps: {
           limitCounters: {
             playground: {
@@ -20,7 +21,7 @@ describe('limitCounterStore tests', () => {
           },
           limitCounterLeaseMs: opts.leaseMs ?? 1800000,
         },
-      },
+      }),
       '../../lib/log': {
         info: sinon.stub(), warn: sinon.stub(), error: sinon.stub(), debug: sinon.stub(),
       },

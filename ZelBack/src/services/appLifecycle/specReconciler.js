@@ -58,8 +58,8 @@ const pendingAdoptions = new Map(); // appName -> { timer, hash }
 
 function staggerConfig() {
   return {
-    stepMs: config.fluxapps.adoptionStaggerStepMs,
-    windowMs: config.fluxapps.adoptionStaggerWindowMs,
+    stepMs: config.get('fluxapps.adoptionStaggerStepMs'),
+    windowMs: config.get('fluxapps.adoptionStaggerWindowMs'),
   };
 }
 
@@ -330,7 +330,7 @@ async function requestFullConvergence({ reason, includeCompliance = false } = {}
         outcomes[outcome] += 1;
         if (outcome === 'removed') {
           // eslint-disable-next-line no-await-in-loop
-          await serviceHelper.delay(config.fluxapps.removal.delay * 1000);
+          await serviceHelper.delay(config.get('fluxapps.removal.delay') * 1000);
         }
       } catch (error) {
         log.error(`specReconciler: convergence failed for ${installed.name}: ${error.message}`);

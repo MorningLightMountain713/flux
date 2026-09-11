@@ -4,6 +4,7 @@ const chai = require('chai');
 const chaiAsPromised = require('chai-as-promised');
 const sinon = require('sinon');
 const proxyquire = require('proxyquire').noCallThru();
+const { asConfig } = require('./fixtures/config');
 
 chai.use(chaiAsPromised);
 const { expect } = chai;
@@ -82,7 +83,7 @@ describe('relationshipResolver tests', () => {
       '../../lib/log': logStub,
     };
     if (fluxappsOverrides) {
-      stubs.config = { fluxapps: fluxappsOverrides };
+      stubs.config = asConfig({ fluxapps: fluxappsOverrides });
     }
     return proxyquire('../../ZelBack/src/services/appLifecycle/relationshipResolver', stubs);
   }

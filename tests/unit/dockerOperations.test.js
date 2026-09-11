@@ -6,6 +6,7 @@ const path = require('node:path');
 const { expect } = require('chai');
 const sinon = require('sinon');
 const proxyquire = require('proxyquire').noCallThru();
+const { asConfig } = require('./fixtures/config');
 const {
   loadSpecLibrary, V9_SUBMISSION, v9Spec, instantiatedSpec,
 } = require('./fixtures/fluxSpec');
@@ -238,7 +239,7 @@ describe('appOperations application lifecycle tests', () => {
       '../utils/appConstants': {
         localAppsInformation: 'test', globalAppsInformation: 'test', globalAppsInstallingErrorsLocations: 'test', globalAppsMessages: 'test', appsFolder: APPS_FOLDER,
       },
-      config: { fluxapps: { minimumInstances: 3, redeploy: { composedDelay: 30000 } }, database: { appsglobal: { database: 'globalapps', collections: {} } } },
+      config: asConfig({ fluxapps: { minimumInstances: 3, redeploy: { composedDelay: 30000 } }, database: { appsglobal: { database: 'globalapps', collections: {} } } }),
 
       // proxyquire does not recurse: every require absent from this map loads for
       // real, dragging its own dependency tree in with it. The entries below are

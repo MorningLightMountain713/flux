@@ -86,9 +86,9 @@ const fluxEventBus = require('../utils/fluxEventBus');
 
 let appsCountAvailableToInstallOnMyNode = 0;
 
-const collisionWaitMs = config.fluxapps.installCollisionWaitMs;
-const { spawnReconfirmDelayMs } = config.fluxapps;
-const unencryptedSpawnDelayMs = config.fluxapps.unencryptedSpawnDelayMs ?? 2 * 60 * 1000;
+const collisionWaitMs = config.get('fluxapps.installCollisionWaitMs');
+const spawnReconfirmDelayMs = config.get('fluxapps.spawnReconfirmDelayMs');
+const unencryptedSpawnDelayMs = config.get('fluxapps.unencryptedSpawnDelayMs');
 
 let spawnLoopRunning = false;
 
@@ -323,7 +323,7 @@ async function broadcastInstallingCleared(name, ip, replica = null) {
  * @returns {Promise<void>}
  */
 async function trySpawningGlobalApplication() {
-  const installDelay = config.fluxapps.installation.delay * 1000;
+  const installDelay = config.get('fluxapps.installation.delay') * 1000;
   // Acquisition waits on the network policy the way it waits on the database. Until the
   // node->owners map has been obtained this node cannot tell "I am not an enterprise node"
   // from "I do not know yet", and the two demand opposite behaviour: the first may take
@@ -434,8 +434,8 @@ async function trySpawningGlobalApplication() {
     // per-app unit: a running-container count over-counts multi-component apps and
     // miscounts during the install->settle window.
     const installedApps = await appsRepository.listInstalledApps();
-    if (installedApps.length >= config.fluxapps.maxAppsPerNode) {
-      log.info(`trySpawningGlobalApplication - Node at max apps capacity (${installedApps.length}/${config.fluxapps.maxAppsPerNode})`);
+    if (installedApps.length >= config.get('fluxapps.maxAppsPerNode')) {
+      log.info(`trySpawningGlobalApplication - Node at max apps capacity (${installedApps.length}/${config.get('fluxapps.maxAppsPerNode')})`);
       return delayTime;
     }
 
@@ -637,7 +637,7 @@ async function trySpawningGlobalApplication() {
       // registry-read failure, fall back to not suppressing rather than
       // aborting. Gated off in production: the flux console owns the
       // collector lifecycle.
-      if (config.fluxapps.manageCollectorLifecycle) {
+      if (config.get('fluxapps.manageCollectorLifecycle')) {
         try {
           const requiredDependencyNames = await relationshipResolver.getRequiredDependencyNamesForNode({
             ip: localSocketAddr, outpoint: nodeOutpoint, operator: nodeOperator,
@@ -770,8 +770,8 @@ async function trySpawningGlobalApplication() {
 
       const pool = ipTargeted.length > 0 ? ipTargeted
         : outpointTargeted.length > 0 ? outpointTargeted
-        : operatorTargeted.length > 0 ? operatorTargeted
-        : globalAppNamesLocation;
+          : operatorTargeted.length > 0 ? operatorTargeted
+            : globalAppNamesLocation;
 
       selectedCandidate = pool[Math.floor(Math.random() * pool.length)];
 
@@ -859,7 +859,7 @@ async function trySpawningGlobalApplication() {
     // set above so it is reconsidered promptly once a workload that needs it
     // arrives. Best-effort: a registry-read failure falls back to allowing the
     // spawn.
-    if (config.fluxapps.manageCollectorLifecycle
+    if (config.get('fluxapps.manageCollectorLifecycle')
       && await relationshipResolver.isPureFollowerApp(instantiated)) {
       let requiredDeps = null;
       try {
@@ -1162,7 +1162,7 @@ async function trySpawningGlobalApplication() {
 
     if (!appFromAppsToBeCheckedLater && !appFromAppsSyncthingToBeCheckedLater
       && specPlacement.hasTargets() && !specPlacement.matchesTarget(targetInfo)) {
-      const deferral = config.fluxapps.spawnDeferrals.targetedNodesMs;
+      const deferral = config.get('fluxapps.spawnDeferrals.targetedNodesMs');
       const delayMs = isEncryptedApp ? deferral.encrypted : deferral.standard;
       const appToCheck = {
         timeToCheck: Date.now() + delayMs,
@@ -1197,7 +1197,7 @@ async function trySpawningGlobalApplication() {
         fluxEventBus.publish('spawner:deferred', { appName: appToRun, reason: 'unencrypted_on_arcane', delayMs: unencryptedSpawnDelayMs });
         delay = true;
       } else if (!specPlacement.staticIp && geolocationService.isStaticIP()) {
-        const deferral = config.fluxapps.spawnDeferrals.staticIpMs;
+        const deferral = config.get('fluxapps.spawnDeferrals.staticIpMs');
         const delayMs = isEncryptedApp ? deferral.encrypted : deferral.standard;
         const appToCheck = {
           timeToCheck: Date.now() + delayMs,
@@ -1210,7 +1210,7 @@ async function trySpawningGlobalApplication() {
         fluxEventBus.publish('spawner:deferred', { appName: appToRun, reason: 'static_ip', delayMs });
         delay = true;
       } else if (!specPlacement.dataCenter && geolocationService.isDataCenter()) {
-        const deferral = config.fluxapps.spawnDeferrals.datacenterMs;
+        const deferral = config.get('fluxapps.spawnDeferrals.datacenterMs');
         const delayMs = isEncryptedApp ? deferral.encrypted : deferral.standard;
         const appToCheck = {
           timeToCheck: Date.now() + delayMs,
@@ -1223,7 +1223,7 @@ async function trySpawningGlobalApplication() {
         fluxEventBus.publish('spawner:deferred', { appName: appToRun, reason: 'datacenter', delayMs });
         delay = true;
       } else if (!specPlacement.hasTargets() && tier === 'bamf' && appHWrequirements.cpu < 3 && appHWrequirements.memoryMb < 6000 && appHWrequirements.storageGb < 150) {
-        const deferral = config.fluxapps.spawnDeferrals.capacityGap.largeMs;
+        const deferral = config.get('fluxapps.spawnDeferrals.capacityGap.largeMs');
         const delayMs = isEncryptedApp ? deferral.encrypted : deferral.standard;
         const appToCheck = {
           timeToCheck: Date.now() + delayMs,
@@ -1236,7 +1236,7 @@ async function trySpawningGlobalApplication() {
         fluxEventBus.publish('spawner:deferred', { appName: appToRun, reason: 'capacity_gap_large', delayMs });
         delay = true;
       } else if (!specPlacement.hasTargets() && tier === 'bamf' && appHWrequirements.cpu < 7 && appHWrequirements.memoryMb < 29000 && appHWrequirements.storageGb < 370) {
-        const deferral = config.fluxapps.spawnDeferrals.capacityGap.mediumMs;
+        const deferral = config.get('fluxapps.spawnDeferrals.capacityGap.mediumMs');
         const delayMs = isEncryptedApp ? deferral.encrypted : deferral.standard;
         const appToCheck = {
           timeToCheck: Date.now() + delayMs,
@@ -1249,7 +1249,7 @@ async function trySpawningGlobalApplication() {
         fluxEventBus.publish('spawner:deferred', { appName: appToRun, reason: 'capacity_gap_medium', delayMs });
         delay = true;
       } else if (!specPlacement.hasTargets() && tier === 'super' && appHWrequirements.cpu < 3 && appHWrequirements.memoryMb < 6000 && appHWrequirements.storageGb < 150) {
-        const deferral = config.fluxapps.spawnDeferrals.capacityGap.smallMs;
+        const deferral = config.get('fluxapps.spawnDeferrals.capacityGap.smallMs');
         const delayMs = isEncryptedApp ? deferral.encrypted : deferral.standard;
         const appToCheck = {
           timeToCheck: Date.now() + delayMs,
@@ -1285,7 +1285,7 @@ async function trySpawningGlobalApplication() {
         // cache entry must exist before the rethrow, or the outer catch would
         // draw its 6h pre-install back-off instead.
         const transient = error.registryErrorClass === 'transient';
-        const ttl = transient ? (config.fluxapps.registryTransientBackoffMs ?? 2 * 60 * 1000) : FluxCacheManager.oneHour;
+        const ttl = transient ? (config.get('fluxapps.registryTransientBackoffMs')) : FluxCacheManager.oneHour;
         log.warn(`trySpawningGlobalApplication - Docker Hub verification failed for ${appToRun}: ${error.message}${transient ? ' (transient; retrying in minutes)' : ''}`);
         globalState.trySpawningGlobalAppCache.set(appHash, '', { ttl });
         throttleIntended = true; // a deliberate Docker-Hub back-off; keep it through the finally

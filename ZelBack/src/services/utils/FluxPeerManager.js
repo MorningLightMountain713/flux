@@ -33,7 +33,7 @@ const CLOSE_CODE_NAMES = Object.freeze(
 
 // Only for peers whose build cannot refuse a sync request. Deleted with the
 // last of them, along with the branch in getEligibleSyncPeers.
-const LEGACY_MIN_PEER_UPTIME_SECONDS = config.fluxapps.appSyncMinPeerUptime ?? 7500;
+const LEGACY_MIN_PEER_UPTIME_SECONDS = config.get('fluxapps.appSyncMinPeerUptime');
 
 // Inbound ephemeral acceptance bounds. An ephemeral connection is transient
 // by contract — the dialer closes it after one exchange — so nothing else
@@ -50,7 +50,7 @@ class FluxPeerManager extends EventEmitter {
   // new one would otherwise answer a request written into the old one - and the
   // node would count a stale view as this round's completion.
   #syncRequestedPeers = new Set();
-  static CONNECTION_BACKOFF_MS = config.fluxapps.connectionBackoffMs ?? [2 * 60000, 5 * 60000, 10 * 60000, 15 * 60000];
+  static CONNECTION_BACKOFF_MS = config.get('fluxapps.connectionBackoffMs');
 
   /** @type {Map<string, FluxPeerSocket>} */
   #peers = new Map();
@@ -172,8 +172,8 @@ class FluxPeerManager extends EventEmitter {
   constructor() {
     super();
 
-    this.#syncPeerThreshold = config.fluxapps.appSyncPeerThreshold;
-    this.#syncDegradedThreshold = config.fluxapps.appSyncDegradedThreshold;
+    this.#syncPeerThreshold = config.get('fluxapps.appSyncPeerThreshold');
+    this.#syncDegradedThreshold = config.get('fluxapps.appSyncDegradedThreshold');
     this.#aboveThreshold = false;
 
     /**
@@ -1452,10 +1452,10 @@ class FluxPeerManager extends EventEmitter {
 
   /** Capacity, then the duplicate-peer policy, then registration. */
   #admitInbound(ws, ipv4Peer, port, metadata, req) {
-    const maxPeers = 4 * config.fluxapps.minIncoming;
-    const maxNumberOfConnections = this.numberOfFluxNodes / 160 < 9 * config.fluxapps.minIncoming
+    const maxPeers = 4 * config.get('fluxapps.minIncoming');
+    const maxNumberOfConnections = this.numberOfFluxNodes / 160 < 9 * config.get('fluxapps.minIncoming')
       ? this.numberOfFluxNodes / 160
-      : 9 * config.fluxapps.minIncoming;
+      : 9 * config.get('fluxapps.minIncoming');
     const maxCon = Math.max(maxPeers, maxNumberOfConnections);
     if (this.inboundCount > maxCon) {
       this.#deferRefusal(ws, CLOSE_CODES.MAX_CONNECTIONS, `Max number of incomming connections ${maxCon} reached`);

@@ -134,13 +134,13 @@ const defaultNodeSpecs = {
 // as the rest of the block: the harness compresses the TTLs these messages are
 // stamped against, and a validity window that does not move with them makes peers
 // refuse each other's perfectly current broadcasts.
-const GOSSIP_VALIDITY_MS = (config.fluxapps.gossipValidityS ?? 300) * 1000;
-const RUNNING_EXPIRY_MS = (config.fluxapps.locationTtlS ?? 7500) * 1000;
-const INSTALLING_EXPIRY_MS = (config.fluxapps.installingTtlS ?? 900) * 1000;
+const GOSSIP_VALIDITY_MS = (config.get('fluxapps.gossipValidityS')) * 1000;
+const RUNNING_EXPIRY_MS = (config.get('fluxapps.locationTtlS')) * 1000;
+const INSTALLING_EXPIRY_MS = (config.get('fluxapps.installingTtlS')) * 1000;
 // Bounds clock disagreement, not message usefulness — see the config comment.
 // Defaulted, not read bare: consumed in arithmetic, so a missing key would become NaN
 // and silently disable every comparison that uses it.
-const CLOCK_SKEW_ALLOWANCE_MS = config.fluxapps.clockSkewAllowanceMs ?? 120_000;
+const CLOCK_SKEW_ALLOWANCE_MS = config.get('fluxapps.clockSkewAllowanceMs');
 // Renewal cadence for a long-running install's fluxappinstalling claim: re-broadcast
 // before INSTALLING_EXPIRY_MS lapses so a live install keeps its seat, with slack for
 // gossip propagation. A dead node stops renewing and its claim expires on the TTL.
@@ -153,10 +153,10 @@ const CLOCK_SKEW_ALLOWANCE_MS = config.fluxapps.clockSkewAllowanceMs ?? 120_000;
 //
 // An explicit key wins where one is set (the harness tunes it against a compressed
 // TTL); the derivation is the fallback, so an absent key can never invert the pair.
-const INSTALLING_RENEWAL_MS = config.fluxapps.installingRenewalS
-  ? config.fluxapps.installingRenewalS * 1000
+const INSTALLING_RENEWAL_MS = config.get('fluxapps.installingRenewalS')
+  ? config.get('fluxapps.installingRenewalS') * 1000
   : Math.floor(INSTALLING_EXPIRY_MS * 0.8);
-const INSTALLING_ERRORS_EXPIRY_MS = (config.fluxapps.installErrorTtlS ?? 86400) * 1000;
+const INSTALLING_ERRORS_EXPIRY_MS = (config.get('fluxapps.installErrorTtlS')) * 1000;
 // The grace every stop gets, announced or not. A juror that saw a
 // SHUTTING_DOWN close waits this long before it looks; the derivation
 // negates a certified node's rows this long after the certificate's since;
@@ -165,10 +165,10 @@ const INSTALLING_ERRORS_EXPIRY_MS = (config.fluxapps.installErrorTtlS ?? 86400) 
 // — a node whose value differed would replace apps the rest of the fleet
 // still believes placed. Production's 420 s is the default; a harness
 // fleet scales it for every node together, at its block cadence's factor.
-const NODE_DOWN_GRACE_MS = (config.fluxapps.nodeDownGraceS ?? 420) * 1000;
+const NODE_DOWN_GRACE_MS = (config.get('fluxapps.nodeDownGraceS')) * 1000;
 // A FluxOS restart is back in seconds; a juror that saw a RESTARTING close
 // waits only this long.
-const RESTART_GRACE_MS = (config.fluxapps.restartGraceS ?? 120) * 1000;
+const RESTART_GRACE_MS = (config.get('fluxapps.restartGraceS')) * 1000;
 
 /**
  * How often a node announces the apps it is running.

@@ -46,11 +46,11 @@ const playgroundAbuse = require('./playgroundAbuse');
 const ELIGIBLE_TIERS = ['nimbus', 'stratus'];
 
 function sessionTtlMs() {
-  return config.fluxapps.playgroundSessionTtlMs ?? 900_000;
+  return config.get('fluxapps.playgroundSessionTtlMs');
 }
 
 function maxConcurrent() {
-  return config.fluxapps.playgroundNodeConcurrentSessions ?? 1;
+  return config.get('fluxapps.playgroundNodeConcurrentSessions');
 }
 
 /**

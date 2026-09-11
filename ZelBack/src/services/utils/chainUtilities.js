@@ -21,7 +21,7 @@ async function getChainParamsPriceUpdates() {
     };
     const priceMessages = await dbHelper.findInDatabase(database, chainParamsMessagesCollection, query, projection);
     const priceForks = [];
-    config.fluxapps.price.forEach((price) => {
+    config.get('fluxapps.price').forEach((price) => {
       priceForks.push(price);
     });
     priceMessages.forEach((data) => {
@@ -72,7 +72,7 @@ function getChainTeamSupportAddressUpdates() {
     const priceMessages = await dbHelper.findInDatabase(database, chainParamsMessagesCollection, query, projection);
     */
     const addressForks = [];
-    config.fluxapps.teamSupportAddress.forEach((address) => {
+    config.get('fluxapps.teamSupportAddress').forEach((address) => {
       addressForks.push(address);
     });
     // sort priceForks depending on height
@@ -98,7 +98,7 @@ function getChainTeamSupportAddressUpdates() {
  * @returns {boolean}
  */
 function isAppPaymentReceiver(address, height) {
-  return config.fluxapps.appPaymentAddresses.some(
+  return config.get('fluxapps.appPaymentAddresses').some(
     (entry) => entry.address === address && height >= entry.activeFromHeight,
   );
 }
@@ -111,7 +111,7 @@ function isAppPaymentReceiver(address, height) {
  * @returns {string}
  */
 function currentAppPaymentAddress(daemonHeight) {
-  const active = config.fluxapps.appPaymentAddresses.filter((entry) => daemonHeight >= entry.activeFromHeight);
+  const active = config.get('fluxapps.appPaymentAddresses').filter((entry) => daemonHeight >= entry.activeFromHeight);
   const latest = active.reduce(
     (best, entry) => (entry.activeFromHeight > best.activeFromHeight ? entry : best),
     active[0],
@@ -126,7 +126,7 @@ function currentAppPaymentAddress(daemonHeight) {
  * @returns {string[]}
  */
 function legacyMessageAuthorities() {
-  return config.fluxapps.appPaymentAddresses
+  return config.get('fluxapps.appPaymentAddresses')
     .filter((entry) => entry.legacyMessageAuthority)
     .map((entry) => entry.address);
 }

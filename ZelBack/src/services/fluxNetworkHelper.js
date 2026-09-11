@@ -240,7 +240,7 @@ async function hasPublicIpOnInterface() {
  * @returns {boolean} Returns true if enterprise
  */
 function isPortEnterprise(port) {
-  const { enterprisePorts } = config.fluxapps;
+  const enterprisePorts = config.get('fluxapps.enterprisePorts');
   let portEnterprise = false;
   enterprisePorts.forEach((portOrInterval) => {
     if (typeof portOrInterval === 'string') { // '0-10'
@@ -261,7 +261,7 @@ function isPortEnterprise(port) {
  * @returns {boolean} Returns true if port is banned
  */
 function isPortBanned(port) {
-  const { bannedPorts } = config.fluxapps;
+  const bannedPorts = config.get('fluxapps.bannedPorts');
   let portBanned = false;
 
   bannedPorts.forEach((portOrInterval) => {
@@ -285,7 +285,7 @@ function isPortBanned(port) {
  */
 function isPortUPNPBanned(port) {
   let portBanned = false;
-  const { upnpBannedPorts } = config.fluxapps;
+  const upnpBannedPorts = config.get('fluxapps.upnpBannedPorts');
   upnpBannedPorts.forEach((portOrInterval) => {
     if (typeof portOrInterval === 'string') { // '0-10'
       const minPort = Number(portOrInterval.split('-')[0]);
@@ -551,7 +551,7 @@ const MAX_TESTABLE_PORTS = 50;
 // how long one request can keep this node poking, and nothing tighter: the
 // honest list really can be that long.
 const NODE_SERVICE_PORTS_KEPT_ALIVE = 4;
-const MAX_KEEPALIVE_PORTS = config.fluxapps.maxAppsPerNode * MAX_TESTABLE_PORTS + NODE_SERVICE_PORTS_KEPT_ALIVE;
+const MAX_KEEPALIVE_PORTS = config.get('fluxapps.maxAppsPerNode') * MAX_TESTABLE_PORTS + NODE_SERVICE_PORTS_KEPT_ALIVE;
 
 /**
  * The address a peer endpoint acts on: the one the caller connected from, or the
@@ -640,7 +640,8 @@ async function checkAppAvailability(req, res) {
         throw new Error(`Too many ports to test. Maximum of ${MAX_TESTABLE_PORTS} allowed.`);
       }
 
-      const { fluxapps: { portMin: minPort, portMax: maxPort } } = config;
+      const minPort = config.get('fluxapps.portMin');
+      const maxPort = config.get('fluxapps.portMax');
 
       // A requester that wants proof asks for it. One that does not - an older
       // node - gets exactly the check it always got.
@@ -1334,20 +1335,20 @@ async function clockDrift(req, res) {
 function isCommunicationEstablished(req, res) {
   const { outboundCount, inboundCount } = peerManager;
   let message;
-  if (outboundCount < config.fluxapps.minOutgoing) { // easier to establish
-    message = messageHelper.createErrorMessage(`Not enough outgoing connections established to Flux network. Minimum required ${config.fluxapps.minOutgoing} found ${outboundCount}`);
-  } else if (inboundCount < config.fluxapps.minIncoming) { // depends on other nodes successfully connecting to my node, todo enforcement
-    message = messageHelper.createErrorMessage(`Not enough incoming connections from Flux network. Minimum required ${config.fluxapps.minIncoming} found ${inboundCount}`);
+  if (outboundCount < config.get('fluxapps.minOutgoing')) { // easier to establish
+    message = messageHelper.createErrorMessage(`Not enough outgoing connections established to Flux network. Minimum required ${config.get('fluxapps.minOutgoing')} found ${outboundCount}`);
+  } else if (inboundCount < config.get('fluxapps.minIncoming')) { // depends on other nodes successfully connecting to my node, todo enforcement
+    message = messageHelper.createErrorMessage(`Not enough incoming connections from Flux network. Minimum required ${config.get('fluxapps.minIncoming')} found ${inboundCount}`);
   } else {
     const uniqueOutboundIps = new Set();
     for (const peer of peerManager.outboundValues()) uniqueOutboundIps.add(peer.ip);
-    if (uniqueOutboundIps.size < config.fluxapps.minUniqueIpsOutgoing) {
-      message = messageHelper.createErrorMessage(`Not enough outgoing unique ip's connections established to Flux network. Minimum required ${config.fluxapps.minUniqueIpsOutgoing} found ${uniqueOutboundIps.size}`);
+    if (uniqueOutboundIps.size < config.get('fluxapps.minUniqueIpsOutgoing')) {
+      message = messageHelper.createErrorMessage(`Not enough outgoing unique ip's connections established to Flux network. Minimum required ${config.get('fluxapps.minUniqueIpsOutgoing')} found ${uniqueOutboundIps.size}`);
     } else {
       const uniqueInboundIps = new Set();
       for (const peer of peerManager.inboundValues()) uniqueInboundIps.add(peer.ip);
-      if (uniqueInboundIps.size < config.fluxapps.minUniqueIpsIncoming) {
-        message = messageHelper.createErrorMessage(`Not enough incoming unique ip's connections from Flux network. Minimum required ${config.fluxapps.minUniqueIpsIncoming} found ${uniqueInboundIps.size}`);
+      if (uniqueInboundIps.size < config.get('fluxapps.minUniqueIpsIncoming')) {
+        message = messageHelper.createErrorMessage(`Not enough incoming unique ip's connections from Flux network. Minimum required ${config.get('fluxapps.minUniqueIpsIncoming')} found ${uniqueInboundIps.size}`);
       } else {
         message = messageHelper.createSuccessMessage('Communication to Flux network is properly established');
       }
@@ -1513,7 +1514,7 @@ async function denyPort(port) {
     return cmdStat;
   }
   const portBanned = isPortBanned(+port);
-  if (portBanned || +port < config.fluxapps.portMin || +port > config.fluxapps.portMax) {
+  if (portBanned || +port < config.get('fluxapps.portMin') || +port > config.get('fluxapps.portMax')) {
     cmdStat.message = 'Port out of deletable app ports range';
     return cmdStat;
   }
@@ -1547,7 +1548,7 @@ async function deleteAllowPortRule(port) {
     return cmdStat;
   }
   const portBanned = isPortBanned(+port);
-  if (portBanned || +port < config.fluxapps.portMin || +port > config.fluxapps.portMax) {
+  if (portBanned || +port < config.get('fluxapps.portMin') || +port > config.get('fluxapps.portMax')) {
     cmdStat.message = 'Port out of deletable app ports range';
     return cmdStat;
   }
@@ -1578,7 +1579,7 @@ async function deleteDenyPortRule(port) {
     return cmdStat;
   }
   const portBanned = isPortBanned(+port);
-  if (portBanned || +port < config.fluxapps.portMin || +port > config.fluxapps.portMax) {
+  if (portBanned || +port < config.get('fluxapps.portMin') || +port > config.get('fluxapps.portMax')) {
     cmdStat.message = 'Port out of deletable app ports range';
     return cmdStat;
   }
@@ -1609,7 +1610,7 @@ async function deleteAllowOutPortRule(port) {
     return cmdStat;
   }
   const portBanned = isPortBanned(+port);
-  if (portBanned || +port < config.fluxapps.portMin || +port > config.fluxapps.portMax) {
+  if (portBanned || +port < config.get('fluxapps.portMin') || +port > config.get('fluxapps.portMax')) {
     cmdStat.message = 'Port out of deletable app ports range';
     return cmdStat;
   }

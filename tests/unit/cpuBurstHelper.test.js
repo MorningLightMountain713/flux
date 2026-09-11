@@ -7,6 +7,7 @@ const sinon = require('sinon');
 const os = require('os');
 const fs = require('fs');
 const proxyquire = require('proxyquire');
+const { asConfig } = require('./fixtures/config');
 
 const { expect } = chai;
 
@@ -158,7 +159,7 @@ describe('cpuBurstHelper tests', () => {
   describe('isCpuBurstSupported', () => {
     it('should return false when burst config is disabled', async () => {
       const helper = proxyquire('../../ZelBack/src/services/utils/cpuBurstHelper', {
-        config: { cpuBurst: { enabled: false, periodUs: 100000 } },
+        config: asConfig({ cpuBurst: { enabled: false, periodUs: 100000 } }),
       });
       helper.resetBurstSupportCache();
       const result = await helper.isCpuBurstSupported();

@@ -304,7 +304,7 @@ async function validateAppUpdate(appSpecification, meta = {}) {
   // Registration-locked invariants (e.g. referral) — compare cleartext specs.
   await assertUpdateInvariants(previousSpec, spec);
 
-  const { latestSupportedSpecVersion } = config.fluxapps;
+  const latestSupportedSpecVersion = config.get('fluxapps.latestSupportedSpecVersion');
   const { UpdatePolicy } = await getSpec();
   UpdatePolicy.assertVersionTransition(previousSpec, spec, latestSupportedSpecVersion);
 
@@ -349,7 +349,7 @@ async function submitAppRegistration(req, res, processedBody, contentCtx) {
   // race — a well-connected node can hold every pair inbound-labelled.
   // What safety needs is that enough distinct peers hold a connection to
   // this node; counting by direction undercounts exactly the healthy case.
-  if (peerManager.getNumberOfPeers() < config.fluxapps.minOutgoing + config.fluxapps.minIncoming) {
+  if (peerManager.getNumberOfPeers() < config.get('fluxapps.minOutgoing') + config.get('fluxapps.minIncoming')) {
     throw new Error('Sorry, This Flux does not hold enough peer connections for safe application registration');
   }
 

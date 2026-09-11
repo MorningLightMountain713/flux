@@ -9,7 +9,7 @@ const daemonServiceMiscRpcs = require('./daemonService/daemonServiceMiscRpcs');
 const globalState = require('./utils/globalState');
 const policyStore = require('./policy/policyStore');
 
-const CHECK_INTERVAL_MS = config.fluxapps.tamperingCheckIntervalMs ?? 12 * 60 * 60 * 1000;
+const CHECK_INTERVAL_MS = config.get('fluxapps.tamperingCheckIntervalMs');
 // How often to look at the DOS slot while waiting for another owner to let go
 // of it. Purely local - it reads the slot and nothing else, so it costs no
 // blocklist fetch and no benchmark call, which is why it can run this often

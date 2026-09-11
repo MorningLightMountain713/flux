@@ -3,6 +3,7 @@
 const { expect } = require('chai');
 const sinon = require('sinon');
 const proxyquire = require('proxyquire').noCallThru();
+const { asConfig } = require('./fixtures/config');
 
 describe('geolocationService tests', () => {
   let geolocationService;
@@ -109,7 +110,7 @@ describe('geolocationService tests', () => {
     // Load module with stubs
     geolocationService = proxyquire('../../ZelBack/src/services/geolocationService', {
       'node:dns': dnsStub,
-      config: configStub,
+      config: asConfig(configStub),
       '../lib/log': logStub,
       './dbHelper': dbHelperStub,
       './serviceHelper': serviceHelperStub,
@@ -169,7 +170,7 @@ describe('geolocationService tests', () => {
     function reload() {
       return proxyquire('../../ZelBack/src/services/geolocationService', {
         'node:dns': dnsStub,
-        config: configStub,
+        config: asConfig(configStub),
         '../lib/log': logStub,
         './dbHelper': dbHelperStub,
         './serviceHelper': serviceHelperStub,
@@ -536,7 +537,7 @@ describe('geolocationService tests', () => {
     function reload() {
       return proxyquire('../../ZelBack/src/services/geolocationService', {
         'node:dns': dnsStub,
-        config: configStub,
+        config: asConfig(configStub),
         '../lib/log': logStub,
         './dbHelper': dbHelperStub,
         './serviceHelper': serviceHelperStub,
@@ -728,7 +729,7 @@ describe('geolocationService tests', () => {
     function reloadWithTable(networkClass) {
       return proxyquire('../../ZelBack/src/services/geolocationService', {
         'node:dns': dnsStub,
-        config: configStub,
+        config: asConfig(configStub),
         '../lib/log': logStub,
         './dbHelper': dbHelperStub,
         './serviceHelper': serviceHelperStub,
@@ -849,7 +850,7 @@ describe('geolocationService tests', () => {
       };
       geolocationService = proxyquire('../../ZelBack/src/services/geolocationService', {
         'node:dns': dnsStub,
-        config: configStub,
+        config: asConfig(configStub),
         '../lib/log': logStub,
         './dbHelper': dbHelperStub,
         './serviceHelper': serviceHelperStub,
@@ -875,7 +876,7 @@ describe('geolocationService tests', () => {
         serviceHelperStub.axiosGet.resolves(ipApiResponse());
         geolocationService = proxyquire('../../ZelBack/src/services/geolocationService', {
           'node:dns': dnsStub,
-          config: configStub,
+          config: asConfig(configStub),
           '../lib/log': logStub,
           './dbHelper': dbHelperStub,
           './serviceHelper': serviceHelperStub,
@@ -989,7 +990,7 @@ describe('geolocationService tests', () => {
     function reload() {
       return proxyquire('../../ZelBack/src/services/geolocationService', {
         'node:dns': dnsStub,
-        config: configStub,
+        config: asConfig(configStub),
         '../lib/log': logStub,
         './dbHelper': dbHelperStub,
         './serviceHelper': serviceHelperStub,
@@ -1274,7 +1275,7 @@ describe('geolocationService tests', () => {
     function reload() {
       return proxyquire('../../ZelBack/src/services/geolocationService', {
         'node:dns': dnsStub,
-        config: configStub,
+        config: asConfig(configStub),
         '../lib/log': logStub,
         './dbHelper': dbHelperStub,
         './serviceHelper': serviceHelperStub,

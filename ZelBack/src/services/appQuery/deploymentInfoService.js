@@ -20,26 +20,27 @@ async function deploymentInformation(req, res) {
     const deployAddr = chainUtilities.currentAppPaymentAddress(daemonHeight);
     // search in chainparams db for chainmessages of p version
     const appPrices = await chainUtilities.getChainParamsPriceUpdates();
-    const { fluxapps: { portMin, portMax } } = config;
+    const portMin = config.get('fluxapps.portMin');
+    const portMax = config.get('fluxapps.portMax');
     // After fork block, chain works 4x faster, so we use the new max blocks allowance
-    const maxAllowance = daemonHeight >= config.fluxapps.daemonPONFork
-      ? config.fluxapps.postPonMaxBlocksAllowance
-      : config.fluxapps.maxBlocksAllowance;
+    const maxAllowance = daemonHeight >= config.get('fluxapps.daemonPONFork')
+      ? config.get('fluxapps.postPonMaxBlocksAllowance')
+      : config.get('fluxapps.maxBlocksAllowance');
     const information = {
       price: appPrices,
-      appSpecsEnforcementHeights: config.fluxapps.appSpecsEnforcementHeights,
+      appSpecsEnforcementHeights: config.get('fluxapps.appSpecsEnforcementHeights'),
       address: deployAddr,
       portMin,
       portMax,
-      enterprisePorts: config.fluxapps.enterprisePorts,
-      bannedPorts: config.fluxapps.bannedPorts,
-      maxImageSize: config.fluxapps.maxImageSize,
-      minimumInstances: config.fluxapps.minimumInstances,
-      maximumInstances: config.fluxapps.maximumInstances,
-      blocksLasting: config.fluxapps.blocksLasting,
-      minBlocksAllowance: config.fluxapps.minBlocksAllowance,
+      enterprisePorts: config.get('fluxapps.enterprisePorts'),
+      bannedPorts: config.get('fluxapps.bannedPorts'),
+      maxImageSize: config.get('fluxapps.maxImageSize'),
+      minimumInstances: config.get('fluxapps.minimumInstances'),
+      maximumInstances: config.get('fluxapps.maximumInstances'),
+      blocksLasting: config.get('fluxapps.blocksLasting'),
+      minBlocksAllowance: config.get('fluxapps.minBlocksAllowance'),
       maxBlocksAllowance: maxAllowance,
-      blocksAllowanceInterval: config.fluxapps.blocksAllowanceInterval,
+      blocksAllowanceInterval: config.get('fluxapps.blocksAllowanceInterval'),
     };
     const respondPrice = messageHelper.createDataMessage(information);
     res.json(respondPrice);
@@ -62,7 +63,7 @@ async function deploymentInformation(req, res) {
  */
 async function getAppSpecsUSDPrice(req, res) {
   try {
-    const resMessage = messageHelper.createDataMessage(config.fluxapps.usdprice);
+    const resMessage = messageHelper.createDataMessage(config.get('fluxapps.usdprice'));
     res.json(resMessage);
   } catch (error) {
     const errMessage = messageHelper.createErrorMessage(error.message, error.name, error.code);

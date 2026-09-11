@@ -4,6 +4,7 @@ const { expect } = require('chai');
 const sinon = require('sinon');
 const proxyquire = require('proxyquire').noCallThru();
 const domain = require('./fixtures/appDomain');
+const { asConfig } = require('./fixtures/config');
 
 // Shared stubs used by every proxyquire call
 function makeBaseStubs(overrides = {}) {
@@ -56,7 +57,7 @@ function makeBaseStubs(overrides = {}) {
   });
 
   const stubs = {
-    config: {
+    config: asConfig({
       database: {
         url: 'mongodb://localhost:27017',
         daemon: { database: 'daemondb' },
@@ -73,7 +74,7 @@ function makeBaseStubs(overrides = {}) {
         daemonPONFork: 2020000,
         blocksLasting: 22000,
       },
-    },
+    }),
     '../dbHelper': dbStub,
     '../../lib/log': logStub,
     '../messageHelper': messageHelperStub,

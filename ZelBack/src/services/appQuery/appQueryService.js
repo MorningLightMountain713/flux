@@ -359,7 +359,7 @@ async function listAllAppsApi(req, res) {
  * @param {import('express').Response} res
  */
 async function getlatestApplicationSpecificationAPI(req, res) {
-  const latestSpec = config.fluxapps.latestAppSpecification || 1;
+  const latestSpec = config.get('fluxapps.latestAppSpecification') || 1;
 
   const message = messageHelper.createDataMessage(latestSpec);
 

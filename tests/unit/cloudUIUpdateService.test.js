@@ -3,6 +3,7 @@
 const chai = require('chai');
 const sinon = require('sinon');
 const proxyquire = require('proxyquire');
+const { asConfig } = require('./fixtures/config');
 
 const { expect } = chai;
 
@@ -51,7 +52,7 @@ describe('cloudUIUpdateService tests', () => {
         // Deliberately NOT the production value: asserting against
         // config.github.apiBaseUrl would pass whether the service read config or kept
         // the hardcoded https://api.github.com, because they are the same string.
-        config: { github: { apiBaseUrl: STUB_API_BASE } },
+        config: asConfig({ github: { apiBaseUrl: STUB_API_BASE } }),
         '../lib/log': logStub,
         './utils/globalState': { isArcane: () => arcane },
       },

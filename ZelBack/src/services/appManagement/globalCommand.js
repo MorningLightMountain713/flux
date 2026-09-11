@@ -8,12 +8,12 @@ const log = require('../../lib/log');
 const appsRepository = require('../appDatabase/appsRepository');
 const { extractIp, extractPort } = require('../utils/socketAddressUtils');
 
-const { globalCmdDelayMs } = config.fluxapps;
+const globalCmdDelayMs = config.get('fluxapps.globalCmdDelayMs');
 // Guaranteed a finite non-negative integer, so a missing or malformed config
 // value can never spin the retry loop below forever.
-const globalCmdBootRetries = (Number.isInteger(config.fluxapps.globalCmdBootRetries)
-  && config.fluxapps.globalCmdBootRetries >= 0)
-  ? config.fluxapps.globalCmdBootRetries
+const globalCmdBootRetries = (Number.isInteger(config.get('fluxapps.globalCmdBootRetries'))
+  && config.get('fluxapps.globalCmdBootRetries') >= 0)
+  ? config.get('fluxapps.globalCmdBootRetries')
   : 8;
 
 // A node still reconciling its apps after boot refuses these routes with 15s.

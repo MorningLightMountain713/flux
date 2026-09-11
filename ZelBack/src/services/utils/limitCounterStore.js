@@ -28,7 +28,7 @@ const DEFAULTS = Object.freeze({ maxConcurrent: 1, maxPerWindow: 5, windowMs: 24
 // and a second one is admitted beside it. It must also be finite, or a submitter
 // that dies after reserving locks its caller out until the process restarts. The
 // released-on-completion path is the normal one; this is only the backstop.
-const LEASE_MS = config.fluxapps.limitCounterLeaseMs ?? 30 * 60 * 1000;
+const LEASE_MS = config.get('fluxapps.limitCounterLeaseMs');
 
 // The caller is a HASH by the time it reaches here - a tally has to recognise the
 // same caller twice and never has to know who they are, so the identity does not
@@ -37,7 +37,7 @@ const LEASE_MS = config.fluxapps.limitCounterLeaseMs ?? 30 * 60 * 1000;
 const tallies = new Map();
 
 function limitsFor(purpose) {
-  const configured = (config.fluxapps.limitCounters ?? {})[purpose] ?? {};
+  const configured = (config.get('fluxapps.limitCounters'))[purpose] ?? {};
   return { ...DEFAULTS, ...configured };
 }
 

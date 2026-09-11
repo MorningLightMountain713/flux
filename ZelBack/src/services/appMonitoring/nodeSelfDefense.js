@@ -67,7 +67,7 @@ async function removeAllAppsLocally(reason) {
           remaining.push({ name: app.name, status: result.status, reason: result.reason ?? null });
         }
         // eslint-disable-next-line no-await-in-loop
-        await serviceHelper.delay(config.fluxapps.nodeMonitorRemovalDelayMs ?? 60000);
+        await serviceHelper.delay(config.get('fluxapps.nodeMonitorRemovalDelayMs'));
       }
       removed += removedThisPass;
       if (removedThisPass === 0) break;

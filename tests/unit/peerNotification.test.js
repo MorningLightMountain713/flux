@@ -3,6 +3,7 @@
 const { expect } = require('chai');
 const sinon = require('sinon');
 const proxyquire = require('proxyquire').noCallThru();
+const { asConfig } = require('./fixtures/config');
 const {
   loadSpecLibrary, v9Spec, sealedV8Spec, instantiatedSpec, assertAnswers,
 } = require('./fixtures/fluxSpec');
@@ -56,11 +57,11 @@ describe('peerNotification tests', () => {
 
   /** The stub map every load of the module under test shares. */
   const moduleStubs = () => ({
-    config: {
+    config: asConfig({
       fluxapps: {
         peerNotifyIntervalMs: 3600000,
       },
-    },
+    }),
     '../fluxNetworkHelper': {
       getLocalSocketAddress: sinon.stub().resolves('192.168.1.1:16127'),
     },

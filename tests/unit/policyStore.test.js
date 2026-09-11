@@ -3,6 +3,7 @@
 const { expect } = require('chai');
 const sinon = require('sinon');
 const proxyquire = require('proxyquire').noCallThru();
+const { asConfig } = require('./fixtures/config');
 
 describe('policyStore tests', () => {
   let store;
@@ -34,7 +35,7 @@ describe('policyStore tests', () => {
 
   function loadStore() {
     return proxyquire('../../ZelBack/src/services/policy/policyStore', {
-      config: { policy: POLICY_CONFIG },
+      config: asConfig({ policy: POLICY_CONFIG }),
       fs: { promises: fsStub },
       '../../lib/log': logStub,
       '../serviceHelper': serviceHelperStub,

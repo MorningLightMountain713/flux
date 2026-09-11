@@ -6,6 +6,7 @@ const { resetGlobalState } = require('./fixtures/globalState');
 const proxyquire = require('proxyquire').noCallThru();
 
 const { Privilege, authOf } = require('../../ZelBack/src/services/utils/privileges');
+const { asConfig } = require('./fixtures/config');
 
 // The seam appInspector resolves a container through. Callers name an app, or one
 // of its components as `<component>_<app>`; the container identifier is whatever
@@ -86,7 +87,7 @@ describe('appInspector tests', () => {
 
     appInspector = proxyquire('../../ZelBack/src/services/appManagement/appInspector', {
       '../appRuntime/deploymentProvider': deploymentProviderStub(),
-      config: configStub,
+      config: asConfig(configStub),
       '../utils/globalState': globalStateStub,
       '../dockerService': dockerServiceStub,
       '../messageHelper': messageHelperStub,
@@ -1551,7 +1552,7 @@ describe('appInspector tests', () => {
     // passes just as well when the check is gone.
     function buildWithPrivilege(authorized) {
       return proxyquire('../../ZelBack/src/services/appManagement/appInspector', {
-        config: configStub,
+        config: asConfig(configStub),
         '../utils/globalState': globalStateStub,
         '../dockerService': dockerServiceStub,
         '../messageHelper': messageHelperStub,
@@ -1601,7 +1602,7 @@ describe('appInspector tests', () => {
     it('should scope the privilege check to the parent app of a component', async () => {
       const verifyPrivilege = sinon.stub().resolves(true);
       const inspector = proxyquire('../../ZelBack/src/services/appManagement/appInspector', {
-        config: configStub,
+        config: asConfig(configStub),
         '../utils/globalState': globalStateStub,
         '../dockerService': dockerServiceStub,
         '../messageHelper': messageHelperStub,
@@ -2407,7 +2408,7 @@ describe('appInspector tests', () => {
       it(`${handler} asks for the privilege that refuses the node operator`, async () => {
         const verifyPrivilege = sinon.stub().resolves(false);
         const inspector = proxyquire('../../ZelBack/src/services/appManagement/appInspector', {
-          config: configStub,
+          config: asConfig(configStub),
           '../utils/globalState': globalStateStub,
           '../dockerService': dockerServiceStub,
           '../messageHelper': messageHelperStub,
@@ -2440,7 +2441,7 @@ describe('appInspector tests', () => {
     it('asks for the privilege the container terminal asks for', async () => {
       const verifyPrivilege = sinon.stub().resolves(false);
       const inspector = proxyquire('../../ZelBack/src/services/appManagement/appInspector', {
-        config: configStub,
+        config: asConfig(configStub),
         '../utils/globalState': globalStateStub,
         '../dockerService': dockerServiceStub,
         '../messageHelper': messageHelperStub,
@@ -2479,7 +2480,7 @@ describe('appInspector tests', () => {
         dockerContainerExec: sinon.stub().callsFake((c, cmd, env, res, cb) => cb(new Error('no such exec'))),
       };
       const inspector = proxyquire('../../ZelBack/src/services/appManagement/appInspector', {
-        config: configStub,
+        config: asConfig(configStub),
         '../utils/globalState': globalStateStub,
         '../dockerService': dockerStub,
         // The shared stub returns undefined here, which would make this test

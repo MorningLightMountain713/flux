@@ -4,6 +4,7 @@ const { expect } = require('chai');
 const sinon = require('sinon');
 const proxyquire = require('proxyquire').noCallThru();
 const { PassThrough } = require('stream');
+const { asConfig } = require('./fixtures/config');
 
 /** Let the follow's data events reach the buffer before asserting on it. */
 const settle = () => new Promise((resolve) => { setImmediate(resolve); });
@@ -92,7 +93,7 @@ describe('playgroundRunner', () => {
     stubs.logError = sinon.stub();
 
     return proxyquire.load('../../ZelBack/src/services/appPlayground/playgroundRunner', {
-      config: CONFIG,
+      config: asConfig(CONFIG),
       '../../lib/log': {
         info: sinon.stub(), warn: sinon.stub(), error: stubs.logError,
       },
@@ -146,7 +147,7 @@ describe('playgroundRunner', () => {
     const saved = load({ logs });
     saved.__cfg = cfg;
     return proxyquire.load('../../ZelBack/src/services/appPlayground/playgroundRunner', {
-      config: cfg,
+      config: asConfig(cfg),
       '../../lib/log': { info: sinon.stub(), warn: sinon.stub(), error: sinon.stub() },
       '../dockerService': {
         dockerContainerInspect: stubs.inspect,

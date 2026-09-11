@@ -27,9 +27,9 @@ const ESTIMATE_MULTIPLIER = 2; // compressed -> on-disk admission/reservation es
 const reservations = new Map();
 let reservationSeq = 0;
 
-function quotaBytes() { return config.fluxapps.imageCachePerFluxIdQuotaGb * GB; }
-function perImageBurstCapBytes() { return config.fluxapps.imageCachePerImageBurstCapGb * GB; }
-function nodeMaxBytes() { return config.fluxapps.imageCacheNodeMaxGb * GB; }
+function quotaBytes() { return config.get('fluxapps.imageCachePerFluxIdQuotaGb') * GB; }
+function perImageBurstCapBytes() { return config.get('fluxapps.imageCachePerImageBurstCapGb') * GB; }
+function nodeMaxBytes() { return config.get('fluxapps.imageCacheNodeMaxGb') * GB; }
 
 function reservedForFluxId(fluxId) {
   return [...reservations.values()]

@@ -35,11 +35,9 @@ function db() {
 
 function tunables() {
   return {
-    lockDelayMs: config.fluxapps.quorumGrantLockDelayMs ?? 30_000,
-    maxTtlMs: config.fluxapps.quorumGrantMaxTtlMs ?? 300_000,
-    drainMs: config.fluxapps.quorumGrantDrainMs
-      ?? config.fluxapps.quorumGrantMaxTtlMs
-      ?? 300_000,
+    lockDelayMs: config.get('fluxapps.quorumGrantLockDelayMs'),
+    maxTtlMs: config.get('fluxapps.quorumGrantMaxTtlMs'),
+    drainMs: config.get('fluxapps.quorumGrantDrainMs'),
   };
 }
 

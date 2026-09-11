@@ -46,12 +46,12 @@ function mintJobId() {
 }
 
 function retentionMs() {
-  return config.fluxapps.operationRetentionMs ?? 60 * 60 * 1000;
+  return config.get('fluxapps.operationRetentionMs');
 }
 
 /** How long a client should wait before polling again, while a job is running. */
 function retryAfterSeconds() {
-  return config.fluxapps.operationRetryAfterSeconds ?? 2;
+  return config.get('fluxapps.operationRetryAfterSeconds');
 }
 
 function isTerminal(status) {
