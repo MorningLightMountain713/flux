@@ -2,13 +2,27 @@
 
 const { expect } = require('chai');
 
+// Every module that requires globalState binds the instance it was handed at
+// load, and mocha loads every test file before it runs any test. So swapping the
+// cache entry for a fresh instance leaves this file talking to an object nothing
+// else in the process holds - and a later file that requires globalState reads
+// THAT one while the code it is testing still writes to the original. The entry
+// is therefore put back after every test.
+const globalStatePath = require.resolve('../../ZelBack/src/services/utils/globalState');
+require('../../ZelBack/src/services/utils/globalState');
+const liveGlobalStateEntry = require.cache[globalStatePath];
+
 describe('globalState tests', () => {
   let globalState;
 
   beforeEach(() => {
     // Clear the module cache to get a fresh instance for each test
-    delete require.cache[require.resolve('../../ZelBack/src/services/utils/globalState')];
+    delete require.cache[globalStatePath];
     globalState = require('../../ZelBack/src/services/utils/globalState');
+  });
+
+  afterEach(() => {
+    require.cache[globalStatePath] = liveGlobalStateEntry;
   });
 
   describe('runningAppsCache tests', () => {
