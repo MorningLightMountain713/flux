@@ -218,18 +218,44 @@ async function installedDeployments(instantiated) {
  * @returns {Promise<Array<object>>}
  */
 async function listInstalledDeployments(installedSpecs = null) {
+  const { deployments } = await listInstalledDeploymentsDetailed(installedSpecs);
+  return deployments;
+}
+
+/**
+ * The same, and the apps it could not build.
+ *
+ * AN APP THAT COULD NOT BE READ IS NOT AN APP THAT IS NOT INSTALLED. The list
+ * alone cannot tell those apart: an enterprise app this node cannot decrypt
+ * right now is simply absent from it, exactly as an uninstalled one is - and a
+ * caller that acts on absence acts on the wrong fact. syncthingMonitor's sweep
+ * deletes any folder no installed app owns, so an app that failed to decrypt
+ * had its folder removed, taking the index, the peer device list and any
+ * standing safety demotion with it, and it does not come back until the app is
+ * readable again.
+ *
+ * The names are enough: a folder id ends in _<appName> and an app name cannot
+ * contain an underscore, so a folder names its owner even when that owner's
+ * components cannot be read.
+ *
+ * @param {Array<object>|null} [installedSpecs] - already-listed InstantiatedSpecs
+ * @returns {Promise<{deployments: Array<object>, unreadableAppNames: Set<string>}>}
+ */
+async function listInstalledDeploymentsDetailed(installedSpecs = null) {
   const installed = installedSpecs ?? await appsRepository.listInstalledApps();
   const deployments = [];
+  const unreadableAppNames = new Set();
   for (const inst of installed) {
     try {
       // eslint-disable-next-line no-await-in-loop
       const appDeployments = await toDeployments(inst);
       deployments.push(...appDeployments);
     } catch (err) {
+      unreadableAppNames.add(inst.name);
       log.error(`deploymentProvider: failed to build deployment for ${inst.name}: ${err.message}`);
     }
   }
-  return deployments;
+  return { deployments, unreadableAppNames };
 }
 
 /**
@@ -366,6 +392,7 @@ module.exports = {
   resolveRequestTargets,
   resolveRequestContainer,
   listInstalledDeployments,
+  listInstalledDeploymentsDetailed,
   getInstalledDeployment,
   getInstalledDeployments,
   resolveLocalReplicas,

@@ -76,6 +76,8 @@ const syncthingMonitorHelpersMock = {
   })),
   // Creates the .stfolder marker on disk - I/O. True means the marker is ready.
   ensureStfolderExists: sinon.stub().resolves(true),
+  // Converges .stignore through syncthing's API - I/O.
+  ensureStignoreCovers: sinon.stub().resolves(),
   getContainerFolderPath: sinon.stub().returns(''),
   folderNeedsUpdate: sinon.stub().returns(false),
 };
@@ -89,7 +91,16 @@ const syncthingHealthMonitorMock = {
 
 const deploymentProviderMock = {
   listInstalledDeployments: sinon.stub().resolves([]),
+  // The pass asks the DETAILED form, because an app it could not read is not an
+  // app that is not installed and the plain list cannot tell those apart. This
+  // answers from the same stub so a test that only cares about deployments says
+  // one thing, and overrides it where the distinction is the point.
+  listInstalledDeploymentsDetailed: sinon.stub(),
 };
+deploymentProviderMock.listInstalledDeploymentsDetailed.callsFake(async () => ({
+  deployments: await deploymentProviderMock.listInstalledDeployments(),
+  unreadableAppNames: new Set(),
+}));
 
 const syncthingEventsConsumerMock = {
   start: sinon.stub(),
@@ -231,6 +242,11 @@ describe('syncthingMonitor tests', () => {
     // Reset all mocked services
     deploymentProviderMock.listInstalledDeployments.reset();
     deploymentProviderMock.listInstalledDeployments.resolves([]);
+    deploymentProviderMock.listInstalledDeploymentsDetailed.resetHistory();
+    deploymentProviderMock.listInstalledDeploymentsDetailed.callsFake(async () => ({
+      deployments: await deploymentProviderMock.listInstalledDeployments(),
+      unreadableAppNames: new Set(),
+    }));
     syncthingServiceMock.getDeviceId.reset();
     syncthingServiceMock.getConfigFolders.reset();
     syncthingServiceMock.getConfigDevices.reset();
@@ -263,6 +279,7 @@ describe('syncthingMonitor tests', () => {
       syncthingFolder: { type: 'sendreceive' },
       cache: null,
     });
+    syncthingMonitorHelpersMock.ensureStignoreCovers.resetHistory();
     syncthingMonitorHelpersMock.ensureStfolderExists.reset();
     syncthingMonitorHelpersMock.ensureStfolderExists.resolves(true);
     syncthingMonitorHelpersMock.createSyncthingFolderConfig.resetHistory();
@@ -339,7 +356,7 @@ describe('syncthingMonitor tests', () => {
       // Wait for first execution to complete
       await clock.tickAsync(100);
 
-      sinon.assert.notCalled(deploymentProviderMock.listInstalledDeployments);
+      sinon.assert.notCalled(deploymentProviderMock.listInstalledDeploymentsDetailed);
       expect(mockState.updateSyncthingRunning).to.be.false;
     });
 
@@ -439,6 +456,65 @@ describe('syncthingMonitor tests', () => {
         const asked = [...livenessMock.prewarm.firstCall.args[0]];
         expect(asked, 'this node probed itself, or a holder was not probed')
           .to.have.members(['10.0.0.7:16127', '10.0.0.8:16127', '10.0.0.7:16127']);
+      });
+
+      // AN APP THIS NODE COULD NOT READ IS NOT AN APP THAT IS NOT INSTALLED.
+      // The sweep deletes any folder no installed app owns, and a deployment
+      // list drops an app whose spec failed to decrypt - so the folder of an
+      // enterprise app this node cannot read right now was removed as an
+      // orphan, taking the index, the peer device list and any standing safety
+      // demotion with it, and not coming back until the app is readable again.
+      it('protects the folders of an app it could not read from the sweep', async () => {
+        deploymentProviderMock.listInstalledDeploymentsDetailed.resolves({
+          deployments: [],
+          unreadableAppNames: new Set(['sealed']),
+        });
+        syncthingServiceMock.getConfigFolders.resolves({
+          data: [
+            { id: 'fluxweb_sealed', type: 'sendreceive' },
+            { id: 'fluxweb_gone', type: 'sendreceive' },
+          ],
+        });
+
+        monitorControl = syncthingMonitor.syncthingApps(mockState, mockGetGlobalStateFn);
+        await clock.tickAsync(100);
+
+        const deleted = syncthingServiceMock.adjustConfigFolders.getCalls()
+          .filter((call) => call.args[0] === 'delete')
+          .map((call) => call.args[2]);
+        expect(deleted, 'a folder was kept or removed on the wrong side of readability')
+          .to.deep.equal(['fluxweb_gone']);
+      });
+
+      // THE IGNORE POLICY IS CONVERGED THROUGH SYNCTHING, which owns .stignore
+      // and writes it atomically. Nothing called this: without it every byte a
+      // copy, extract or upload stages replicates to every peer only to be
+      // deleted again on publish, and a peer's boot sweep can delete a
+      // replicated staging directory a live operation elsewhere still needs.
+      it('converges the ignore policy on a folder syncthing already knows', async () => {
+        deploymentProviderMock.listInstalledDeployments.resolves([syncDeployment]);
+        syncthingServiceMock.getConfigFolders.resolves({
+          data: [{ id: syncFolderId, type: 'sendreceive', path: `${appsFolder}${syncFolderId}` }],
+        });
+
+        monitorControl = syncthingMonitor.syncthingApps(mockState, mockGetGlobalStateFn);
+        await clock.tickAsync(100);
+
+        sinon.assert.calledWith(syncthingMonitorHelpersMock.ensureStignoreCovers, syncFolderId);
+      });
+
+      // The one pass where a fresh install is not yet configured. Its .stignore
+      // was seeded at volume creation, and posting ignores for a folder
+      // syncthing does not have is not a no-op - it is an error per folder,
+      // every pass, until the folder is added.
+      it('leaves a folder syncthing does not know yet alone', async () => {
+        deploymentProviderMock.listInstalledDeployments.resolves([syncDeployment]);
+        syncthingServiceMock.getConfigFolders.resolves({ data: [] });
+
+        monitorControl = syncthingMonitor.syncthingApps(mockState, mockGetGlobalStateFn);
+        await clock.tickAsync(100);
+
+        sinon.assert.notCalled(syncthingMonitorHelpersMock.ensureStignoreCovers);
       });
 
       // A node whose synced apps are all running has nothing waiting on a peer,
