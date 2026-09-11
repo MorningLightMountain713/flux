@@ -162,7 +162,8 @@ class AppSyncOrchestrator {
   #ingressSyncComplete = false;
   #stateSyncComplete = false;
   #syncRoundAbandoned = false;
-  #syncPeerLostHandler = null;
+  #peerDisconnectedHandler = null;
+  #peerConnectedHandler = null;
   #ephemeralRefusedHandler = null;
   #ephemeralUnverifiedHandler = null;
   #ephemeralProgressHandler = null;
@@ -251,7 +252,20 @@ class AppSyncOrchestrator {
       this.#peersAtFloor = false;
       this.#evaluate();
     };
-    this.#syncPeerLostHandler = (info) => this.#onSyncPeerLost(info);
+    // A CONNECTION ENDING is the announcement, not the manager's opinion about
+    // whether a sync was riding on it. `syncPeerLost` was that opinion, read off
+    // a SECOND copy of the asked-peer record kept inside FluxPeerManager - and
+    // it is not emitted at all when a peer re-dials under the same key, where
+    // the manager's own comment says a request written into that socket is as
+    // dead as one whose peer went away. The orchestrator holds the record that
+    // decides, and #onSyncPeerLost already ignores a connection it was not
+    // waiting on, so it takes the unfiltered event and answers for itself.
+    this.#peerDisconnectedHandler = (key, connectionId = null) => this.#onSyncPeerLost({ key, connectionId });
+    // The counterpart, and the only thing that completes a round the fleet was
+    // too small to fill when it opened. The peer threshold is an edge and fires
+    // once, so without this a part-filled pool stays part-filled however many
+    // peers arrive afterwards.
+    this.#peerConnectedHandler = () => this.#topUpSyncPeers();
     this.#syncPeersAvailableHandler = () => this.#onSyncPeersAvailable();
     this.#peerReestablishedHandler = (info) => {
       this.#onPeerReestablished(info).catch((error) => {
@@ -260,7 +274,8 @@ class AppSyncOrchestrator {
     };
     this.#onPeerEvent('peerThresholdReached', this.#peerThresholdHandler);
     this.#onPeerEvent('peersBelowThreshold', this.#peersBelowHandler);
-    this.#onPeerEvent('syncPeerLost', this.#syncPeerLostHandler);
+    this.#onPeerEvent('peerDisconnected', this.#peerDisconnectedHandler);
+    this.#onPeerEvent('peerConnected', this.#peerConnectedHandler);
     this.#onPeerEvent('syncPeersAvailable', this.#syncPeersAvailableHandler);
     this.#onPeerEvent('peerReestablished', this.#peerReestablishedHandler);
 
@@ -1356,8 +1371,11 @@ class AppSyncOrchestrator {
     if (this.#peersBelowHandler) {
       this.#offPeerEvent('peersBelowThreshold', this.#peersBelowHandler);
     }
-    if (this.#syncPeerLostHandler) {
-      this.#offPeerEvent('syncPeerLost', this.#syncPeerLostHandler);
+    if (this.#peerDisconnectedHandler) {
+      this.#offPeerEvent('peerDisconnected', this.#peerDisconnectedHandler);
+    }
+    if (this.#peerConnectedHandler) {
+      this.#offPeerEvent('peerConnected', this.#peerConnectedHandler);
     }
     if (this.#syncPeersAvailableHandler) {
       this.#offPeerEvent('syncPeersAvailable', this.#syncPeersAvailableHandler);
