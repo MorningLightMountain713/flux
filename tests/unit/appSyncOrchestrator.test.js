@@ -360,9 +360,9 @@ describe('AppSyncOrchestrator', () => {
       peerEmitter.emit('peerThresholdReached', 12);
       await clock.tickAsync(0);
       for (let i = 0; i < 3; i += 1) {
-        appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_COMPLETE, 'apprunning');
-        appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_COMPLETE, 'appinstalling');
-        appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_COMPLETE, 'apperrors');
+        appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_COMPLETE, 'apprunning', `10.0.0.${i + 1}:16127`);
+        appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_COMPLETE, 'appinstalling', `10.0.0.${i + 1}:16127`);
+        appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_COMPLETE, 'apperrors', `10.0.0.${i + 1}:16127`);
       }
       await clock.tickAsync(0);
       expect(orchestrator.state).to.equal(STATES.READY);
@@ -377,9 +377,9 @@ describe('AppSyncOrchestrator', () => {
       peerEmitter.emit('peersBelowThreshold', 0);
       // ...and the rounds already in flight then complete anyway.
       for (let i = 0; i < 3; i += 1) {
-        appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_COMPLETE, 'apprunning');
-        appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_COMPLETE, 'appinstalling');
-        appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_COMPLETE, 'apperrors');
+        appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_COMPLETE, 'apprunning', `10.0.0.${i + 1}:16127`);
+        appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_COMPLETE, 'appinstalling', `10.0.0.${i + 1}:16127`);
+        appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_COMPLETE, 'apperrors', `10.0.0.${i + 1}:16127`);
       }
       await clock.tickAsync(0);
       expect(orchestrator.state).to.equal(STATES.DEGRADED);
@@ -749,10 +749,10 @@ describe('AppSyncOrchestrator', () => {
       const orchestrator = await driveToRequests();
 
       for (let i = 0; i < 3; i += 1) {
-        appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_COMPLETE, 'apprunning');
-        appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_COMPLETE, 'appinstalling');
-        appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_COMPLETE, 'apperrors');
-        appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_COMPLETE, 'apptemp');
+        appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_COMPLETE, 'apprunning', `10.0.0.${i + 1}:16127`);
+        appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_COMPLETE, 'appinstalling', `10.0.0.${i + 1}:16127`);
+        appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_COMPLETE, 'apperrors', `10.0.0.${i + 1}:16127`);
+        appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_COMPLETE, 'apptemp', `10.0.0.${i + 1}:16127`);
       }
       await clock.tickAsync(0);
 
@@ -1815,11 +1815,14 @@ describe('AppSyncOrchestrator', () => {
       peerEmitter.emit('peerThresholdReached', 12);
       await clock.tickAsync(0);
 
-      // Complete all syncs from 3 peers
+      // Complete all syncs from 3 DISTINCT peers. Three answers from one peer are
+      // one peer's view of the network, and the minimum exists to prevent exactly
+      // that from satisfying it.
       for (let i = 0; i < 3; i += 1) {
-        appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_COMPLETE, 'apprunning');
-        appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_COMPLETE, 'appinstalling');
-        appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_COMPLETE, 'apperrors');      }
+        appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_COMPLETE, 'apprunning', `10.0.0.${i + 1}:16127`);
+        appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_COMPLETE, 'appinstalling', `10.0.0.${i + 1}:16127`);
+        appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_COMPLETE, 'apperrors', `10.0.0.${i + 1}:16127`);
+      }
       await clock.tickAsync(0);
 
       expect(orchestrator.state).to.equal(STATES.READY);
@@ -1843,7 +1846,8 @@ describe('AppSyncOrchestrator', () => {
       appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_COMPLETE, 'apprunning');
       for (let i = 0; i < 3; i += 1) {
         appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_COMPLETE, 'appinstalling');
-        appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_COMPLETE, 'apperrors');      }
+        appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_COMPLETE, 'apperrors', `10.0.0.${i + 1}:16127`);
+      }
       await clock.tickAsync(0);
 
       expect(orchestrator.state).to.equal(STATES.SYNCING);
@@ -1883,11 +1887,12 @@ describe('AppSyncOrchestrator', () => {
       peerEmitter.emit('peerThresholdReached', 12);
       await clock.tickAsync(0);
 
-      // Complete all syncs → READY
+      // Complete all syncs → READY, from three distinct peers.
       for (let i = 0; i < 3; i += 1) {
-        appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_COMPLETE, 'apprunning');
-        appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_COMPLETE, 'appinstalling');
-        appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_COMPLETE, 'apperrors');      }
+        appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_COMPLETE, 'apprunning', `10.0.0.${i + 1}:16127`);
+        appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_COMPLETE, 'appinstalling', `10.0.0.${i + 1}:16127`);
+        appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_COMPLETE, 'apperrors', `10.0.0.${i + 1}:16127`);
+      }
       await clock.tickAsync(0);
       expect(orchestrator.state).to.equal(STATES.READY);
 
@@ -1913,9 +1918,9 @@ describe('AppSyncOrchestrator', () => {
       peerEmitter.emit('peerThresholdReached', 12);
       await clock.tickAsync(0);
       for (let i = 0; i < 3; i += 1) {
-        appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_COMPLETE, 'apprunning');
-        appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_COMPLETE, 'appinstalling');
-        appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_COMPLETE, 'apperrors');
+        appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_COMPLETE, 'apprunning', `10.0.0.${i + 1}:16127`);
+        appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_COMPLETE, 'appinstalling', `10.0.0.${i + 1}:16127`);
+        appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_COMPLETE, 'apperrors', `10.0.0.${i + 1}:16127`);
       }
       await clock.tickAsync(0);
     }
@@ -2074,8 +2079,8 @@ describe('AppSyncOrchestrator', () => {
         appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_COMPLETE, 'apprunning');
       }
       for (let i = 0; i < 3; i += 1) {
-        appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_COMPLETE, 'appinstalling');
-        appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_COMPLETE, 'apperrors');
+        appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_COMPLETE, 'appinstalling', `10.0.0.${i + 1}:16127`);
+        appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_COMPLETE, 'apperrors', `10.0.0.${i + 1}:16127`);
       }
       await clock.tickAsync(0);
       expect(orchestrator.state, 'a scoped answer must not stand in for a full one').to.equal(STATES.SYNCING);
@@ -2164,9 +2169,9 @@ describe('AppSyncOrchestrator', () => {
   describe('manifest reconcile readiness gate', () => {
     function completeEphemeral() {
       for (let i = 0; i < 3; i += 1) {
-        appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_COMPLETE, 'apprunning');
-        appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_COMPLETE, 'appinstalling');
-        appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_COMPLETE, 'apperrors');
+        appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_COMPLETE, 'apprunning', `10.0.0.${i + 1}:16127`);
+        appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_COMPLETE, 'appinstalling', `10.0.0.${i + 1}:16127`);
+        appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_COMPLETE, 'apperrors', `10.0.0.${i + 1}:16127`);
       }
     }
 
@@ -2489,9 +2494,9 @@ describe('AppSyncOrchestrator', () => {
   describe('steady-state manifest refresh (F3 anti-entropy)', () => {
     function completeEphemeral() {
       for (let i = 0; i < 3; i += 1) {
-        appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_COMPLETE, 'apprunning');
-        appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_COMPLETE, 'appinstalling');
-        appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_COMPLETE, 'apperrors');
+        appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_COMPLETE, 'apprunning', `10.0.0.${i + 1}:16127`);
+        appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_COMPLETE, 'appinstalling', `10.0.0.${i + 1}:16127`);
+        appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_COMPLETE, 'apperrors', `10.0.0.${i + 1}:16127`);
       }
     }
 

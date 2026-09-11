@@ -59,6 +59,19 @@ const BLOCKS_PER_MINUTE = 2;
 // request, which is this tree's shape and the one that cannot leak a timer.
 // That costs granularity - a deadline is noticed at the next block, so ~30s -
 // and the constraint above still holds at that resolution.
+/**
+ * A fresh record of WHICH peers have answered which stream.
+ *
+ * One place, because the tally is built twice - at construction and again
+ * whenever a sync starts over - and a stream present in one copy and not the
+ * other reads as a stream nobody has answered, forever.
+ *
+ * @returns {{apprunning: Set<string>, appinstalling: Set<string>, apperrors: Set<string>}}
+ */
+function freshSyncCompletions() {
+  return { apprunning: new Set(), appinstalling: new Set(), apperrors: new Set() };
+}
+
 const FIRST_RESPONSE_MS = Math.max(1, Math.floor(SYNC_TIMEOUT_MS / 12));
 const STALL_MS = Math.max(1, Math.floor(SYNC_TIMEOUT_MS / 4));
 const MIN_UPTIME_SECONDS = config.fluxapps.appSyncMinPeerUptime ?? 7500;
@@ -140,9 +153,11 @@ class AppSyncOrchestrator {
   // (disconnected or past its deadline) keeps its delivered types counted in
   // #syncCompletions; only what it never delivered is re-asked elsewhere.
   #peerProgress = new Map();
-  #syncCompletions = {
-    apprunning: 0, appinstalling: 0, apperrors: 0,
-  };
+  // WHICH peers answered, not how many answers arrived. Three responses from one
+  // peer are one peer's view of the network, and counting them as three
+  // satisfied the requirement without ever asking anyone else - which is the
+  // whole thing the minimum exists to prevent.
+  #syncCompletions = freshSyncCompletions();
   #manifestSyncComplete = false;
   #ingressSyncComplete = false;
   #stateSyncComplete = false;
@@ -397,25 +412,25 @@ class AppSyncOrchestrator {
     if (this.#syncCompletions[syncType] === undefined) return;
     const progress = this.#peerProgress.get(peerKey);
     if (progress && !progress.failed) progress.done.add(syncType);
-    this.#syncCompletions[syncType] += 1;
-    log.info(`AppSyncOrchestrator - ${syncType} sync complete (${this.#syncCompletions[syncType]}/${MIN_SYNC_COMPLETIONS})`);
+    this.#syncCompletions[syncType].add(peerKey);
+    log.info(`AppSyncOrchestrator - ${syncType} sync complete from ${peerKey} (${this.#syncCompletions[syncType].size}/${MIN_SYNC_COMPLETIONS} peers)`);
     fluxEventBus.publish('ephemeralSync:peerComplete', {
       syncType,
-      completions: this.#syncCompletions[syncType],
+      completions: this.#syncCompletions[syncType].size,
       required: MIN_SYNC_COMPLETIONS,
     });
-    if (this.#syncCompletions.apprunning >= MIN_SYNC_COMPLETIONS
-      && this.#syncCompletions.appinstalling >= MIN_SYNC_COMPLETIONS
-      && this.#syncCompletions.apperrors >= MIN_SYNC_COMPLETIONS) {
+    if (this.#syncCompletions.apprunning.size >= MIN_SYNC_COMPLETIONS
+      && this.#syncCompletions.appinstalling.size >= MIN_SYNC_COMPLETIONS
+      && this.#syncCompletions.apperrors.size >= MIN_SYNC_COMPLETIONS) {
       this.#stateSyncComplete = true;
       this.#publishStateSyncAuthority();
       this.#clearSyncRequested();
       this.#peerProgress.clear();
       log.info('AppSyncOrchestrator - All state syncs complete');
       fluxEventBus.publish('ephemeralSync:allComplete', {
-        apprunning: this.#syncCompletions.apprunning,
-        appinstalling: this.#syncCompletions.appinstalling,
-        apperrors: this.#syncCompletions.apperrors,
+        apprunning: this.#syncCompletions.apprunning.size,
+        appinstalling: this.#syncCompletions.appinstalling.size,
+        apperrors: this.#syncCompletions.apperrors.size,
       });
       this.#evaluate();
     }
@@ -526,7 +541,7 @@ class AppSyncOrchestrator {
       }
     }
     const typesNeeded = SYNC_TYPES.filter(
-      (type) => this.#syncCompletions[type] + pending[type] < MIN_SYNC_COMPLETIONS,
+      (type) => this.#syncCompletions[type].size + pending[type] < MIN_SYNC_COMPLETIONS,
     );
     if (typesNeeded.length === 0) return;
 
@@ -546,7 +561,7 @@ class AppSyncOrchestrator {
     if (fresh.length === 0) return; // re-checked on every processed block
 
     const needed = Math.max(...typesNeeded.map(
-      (type) => MIN_SYNC_COMPLETIONS - this.#syncCompletions[type] - pending[type],
+      (type) => MIN_SYNC_COMPLETIONS - this.#syncCompletions[type].size - pending[type],
     ));
     const peersToAsk = fresh.slice(0, Math.min(needed, budget));
     const peerKeys = peersToAsk.map((peer) => peer.key).join(', ');
@@ -735,9 +750,7 @@ class AppSyncOrchestrator {
     // and one carried over from before the degrade is already expired — which
     // would promote the recovery straight to READY without a sync running.
     this.#blocksSinceSyncStarted = 0;
-    this.#syncCompletions = {
-      apprunning: 0, appinstalling: 0, apperrors: 0,
-    };
+    this.#syncCompletions = freshSyncCompletions();
     this.#manifestSyncComplete = false;
     this.#stateSyncComplete = false;
     this.#publishStateSyncAuthority();
