@@ -445,9 +445,6 @@ module.exports = (app) => {
   app.get('/apps/appsresources', cache('30 seconds'), asyncRoute((req, res) => {
     return resourceQueryService.appsResourcesApi(req, res);
   }));
-  app.get('/apps/registrationinformation', cache('30 seconds'), asyncRoute((req, res) => {
-    return registryManager.registrationInformation(req, res);
-  }));
   app.get('/apps/temporarymessages/:hash?', cache('5 seconds'), asyncRoute((req, res) => {
     return messageVerifier.getAppsTemporaryMessages(req, res);
   }));
