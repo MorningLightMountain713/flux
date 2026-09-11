@@ -160,17 +160,21 @@ describe('playgroundServingSet', () => {
     // Stated, not left to absence. The harness config inherits what config
     // ships, so "not set" is no longer a way to say "off".
     const off = { fluxapps: { ...CONFIG.fluxapps, playgroundServingSetAddressAxis: false } };
-    // A browser reaches a node through FDM, so the socket peer is the load
-    // balancer. Enforcing this before FDM forwards the client address would map
-    // every caller onto one set and take the feature down for everyone else.
-    // NOTE: config/default.js ships this true, so on a node the axis is ON.
-    // The comment above says why it should not be - a browser reaches a node
-    // through FDM, so the socket peer is the load balancer. This test used to
-    // read "off unless explicitly turned on" and passed only because the
-    // harness config did not carry the key at all, so the read was
-    // `undefined === true`. It asserted the harness's accident, not the node's
-    // behaviour. Stated as what each value does, with the shipped value called
-    // out, until the contradiction is settled one way or the other.
+    // Why the axis waited: a browser reaches a node through FDM, so the socket
+    // peer is the load balancer, and enforcing on it before the client address
+    // was resolvable would have mapped every caller onto one set - an outage
+    // rather than a weaker control. resolveClientIp is what answered that.
+    // THE AXIS IS ON, and has been since f9f7c85d1 (2026-08-07), which turned it
+    // on in the same commit that wired ingressCapture.resolveClientIp into the
+    // playground - so the socket peer is no longer what a caller is keyed on,
+    // and the hazard described above was answered rather than accepted.
+    //
+    // This test used to read "off unless explicitly turned on", and passed only
+    // because the harness config did not carry the key, making the read
+    // `undefined === true`. It asserted the harness's accident, and went on
+    // asserting it for a month after the node stopped behaving that way.
+    // Each value's behaviour is stated now, and the shipped one is read from
+    // config rather than assumed.
     it('is off for any value that is not a literal true', () => {
       const off = { fluxapps: { ...CONFIG.fluxapps, playgroundServingSetAddressAxis: false } };
       expect(load({ config: off }).addressAxisEnabled()).to.equal(false);
