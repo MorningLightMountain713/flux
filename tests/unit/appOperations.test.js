@@ -1612,8 +1612,20 @@ describe('appOperations tests', () => {
     const volumeService = require('../../ZelBack/src/services/utils/volumeService');
     // eslint-disable-next-line global-require
     const syncthingMonitorHelpers = require('../../ZelBack/src/services/appMonitoring/syncthingMonitorHelpers');
+    // eslint-disable-next-line global-require
+    const syncthingFolderStateMachine = require('../../ZelBack/src/services/appMonitoring/syncthingFolderStateMachine');
 
     const makeRes = () => ({ write: sinon.stub(), end: sinon.stub() });
+
+    /**
+     * What the completeness gate reads. A backup is refused unless this instance
+     * holds a whole copy, so any synced-component case has to say which it is.
+     */
+    const copyIs = (complete) => sinon.stub(syncthingFolderStateMachine, 'probeFolderSyncCompletion').resolves(
+      complete
+        ? { status: { isSynced: true, globalBytes: 100, inSyncBytes: 100, syncPercentage: 100 }, reason: 'ok' }
+        : { status: { isSynced: false, globalBytes: 100, inSyncBytes: 40, syncPercentage: 40 }, reason: 'ok' },
+    );
 
     it('removes the syncthing folder per synced component identifier, never by bare app name', async () => {
       const clock = sinon.useFakeTimers({ toFake: ['setTimeout'] });
@@ -1635,6 +1647,7 @@ describe('appOperations tests', () => {
       expect(composed.getComponent('web').hasSyncthing()).to.be.true;
       expect(composed.getComponent('worker').hasSyncthing()).to.be.false;
       sinon.stub(deploymentProvider, 'getInstalledDeployment').resolves(composed);
+      copyIs(true);
       const removeFolder = sinon.stub(syncthingMonitorHelpers, 'removeSyncthingFolder').resolves();
       sinon.stub(appsRepository, 'getGlobalAppInfo').resolves(await instantiatedSpec(await v9Spec({ name: 'bkapp' })));
       sinon.stub(deploymentProvider, 'buildDeployment').resolves(composed);
@@ -1653,6 +1666,114 @@ describe('appOperations tests', () => {
       expect(removeFolder.calledWith('web_bkapp'), 'the synced component folder must be removed').to.be.true;
       expect(removeFolder.calledWith('worker_bkapp'), 'unsynced components must be untouched').to.be.false;
       expect(removeFolder.calledWith('bkapp'), 'the bare app name matches no composed folder').to.be.false;
+    });
+
+    describe('an incomplete copy is not archived', () => {
+      /**
+       * A synced app whose whole path to the archive is clear, so the ONLY thing
+       * that can refuse is the completeness gate.
+       */
+      async function backupSyncedApp({ probe, force }) {
+        const clock = sinon.useFakeTimers({ toFake: ['setTimeout'] });
+        sinon.stub(verificationHelper, 'verifyPrivilege').resolves(true);
+        const composed = deploymentFor(await specWithComponents('bkapp', {
+          web: {
+            persistentStorage: {
+              sizeGb: 5,
+              mounts: { '/data': { source: 'data', destination: '/data' } },
+              sync: { mode: 'sync' },
+            },
+          },
+        }));
+        sinon.stub(deploymentProvider, 'getInstalledDeployment').resolves(composed);
+        sinon.stub(appsRepository, 'getGlobalAppInfo').resolves(await instantiatedSpec(await v9Spec({ name: 'bkapp' })));
+        sinon.stub(deploymentProvider, 'buildDeployment').resolves(composed);
+        sinon.stub(syncthingFolderStateMachine, 'probeFolderSyncCompletion').resolves(probe);
+        sinon.stub(syncthingMonitorHelpers, 'removeSyncthingFolder').resolves();
+        sinon.stub(appReconciler, 'drive').resolves({ converged: true, failed: [] });
+        sinon.stub(volumeService, 'listComponentVolumeMounts').resolves([{ replica: null, mount: '/vol' }]);
+        sinon.stub(IOUtils, 'checkFileExists').resolves(false);
+        sinon.stub(IOUtils, 'removeFile').resolves();
+        const createTarGz = sinon.stub(IOUtils, 'createTarGz').resolves({ status: true });
+        const res = makeRes();
+
+        const req = { body: { appname: 'bkapp', backup: [{ component: 'web', backup: true }], ...(force ? { force: true } : {}) } };
+        const pending = appOperations.appendBackupTask(req, res);
+        await clock.tickAsync(120000);
+        const result = await pending;
+        clock.restore();
+        const said = res.write.getCalls().map((c) => c.args[0]).join('');
+        return { result, createTarGz, said, drive: appReconciler.drive };
+      }
+
+      const behind = { status: { isSynced: false, globalBytes: 1000, inSyncBytes: 400, syncPercentage: 40 }, reason: 'ok' };
+
+      it('refuses a copy that is behind, and says by how much', async () => {
+        const { result, createTarGz, said } = await backupSyncedApp({ probe: behind });
+
+        expect(result).to.be.false;
+        expect(createTarGz.called, 'a short archive must never be written').to.be.false;
+        expect(said).to.contain('40.00% synced (400/1000 bytes)');
+      });
+
+      // The refusal must not cost a healthy app an outage: it is checked before
+      // anything is stopped.
+      it('refuses before stopping the app', async () => {
+        const { drive } = await backupSyncedApp({ probe: behind });
+
+        // Asserted on the STOP specifically: the catch hands the app back with a
+        // 'running' drive, which is correct and would mask a bare .called check.
+        const stops = drive.getCalls().filter((c) => c.args[1] === 'stopped');
+        expect(stops, 'nothing may be stopped for a backup that is going to be refused').to.have.lengthOf(0);
+      });
+
+      it('reports a folder that was never configured as never synced', async () => {
+        const { said, createTarGz } = await backupSyncedApp({ probe: { status: null, reason: 'absent' } });
+
+        expect(createTarGz.called).to.be.false;
+        expect(said).to.contain('never synced');
+      });
+
+      // Syncthing not answering says nothing about the data. Refusing is still
+      // right, but the reason has to be the one that actually happened - telling
+      // an operator their instance has never synced, when a daemon was merely
+      // restarting, is a false statement about their data.
+      it('tells a silent syncthing apart from a folder that is absent', async () => {
+        const { said } = await backupSyncedApp({ probe: { status: null, reason: 'unknown' } });
+
+        expect(said).to.contain('syncthing did not answer');
+        expect(said).to.not.contain('never synced');
+      });
+
+      // With nothing in the global index there is nothing to be a fraction of and
+      // the percentage defaults to 100 - which would call the copy complete in the
+      // same breath as refusing it.
+      it('does not call an empty index a complete copy', async () => {
+        const { said } = await backupSyncedApp({
+          probe: { status: { isSynced: false, globalBytes: 0, inSyncBytes: 0, syncPercentage: 100 }, reason: 'ok' },
+        });
+
+        expect(said).to.contain('nothing in the sync index yet');
+        expect(said).to.not.contain('100.00% synced');
+      });
+
+      it('archives a complete copy without comment', async () => {
+        const { result, createTarGz, said } = await backupSyncedApp({
+          probe: { status: { isSynced: true, globalBytes: 1000, inSyncBytes: 1000, syncPercentage: 100 }, reason: 'ok' },
+        });
+
+        expect(result).to.be.true;
+        expect(createTarGz.called).to.be.true;
+        expect(said).to.not.contain('incomplete');
+      });
+
+      it('archives an incomplete copy when the caller says force, and warns', async () => {
+        const { result, createTarGz, said } = await backupSyncedApp({ probe: behind, force: true });
+
+        expect(result).to.be.true;
+        expect(createTarGz.called, 'force means archive what is on disk anyway').to.be.true;
+        expect(said).to.contain('WARNING: backing up an incomplete copy');
+      });
     });
 
     it('refuses to archive when a container did not actually stop', async () => {
@@ -1762,6 +1883,7 @@ describe('appOperations tests', () => {
     it('does not restart an activeStandby component after a synced backup', async () => {
       const clock = sinon.useFakeTimers({ toFake: ['setTimeout'] });
       sinon.stub(verificationHelper, 'verifyPrivilege').resolves(true);
+      copyIs(true);
       const composed = deploymentFor(await specWithComponents('bkapp', {
         web: {
           persistentStorage: {

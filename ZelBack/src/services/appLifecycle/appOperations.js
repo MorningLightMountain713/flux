@@ -46,6 +46,7 @@ const { listRunningContainers } = appQueryService;
 const deploymentProvider = require('../appRuntime/deploymentProvider');
 const appReconciler = require('../appMonitoring/appReconciler');
 const syncthingMonitorHelpers = require('../appMonitoring/syncthingMonitorHelpers');
+const syncthingFolderStateMachine = require('../appMonitoring/syncthingFolderStateMachine');
 // Accessed through the module object, not destructured: a destructured binding
 // is fixed at load and cannot be substituted, so the two-writer rule could not be
 // exercised against a stated silence verdict.
@@ -939,6 +940,7 @@ async function taskVolumes(appname, componentName, replica) {
 async function appendBackupTask(req, res) {
   let appname;
   let backup;
+  let force = false;
   // Hoisted so the catch releases ONLY a lease this call acquired (null = no-op).
   let taskToken = null;
   try {
@@ -947,6 +949,10 @@ async function appendBackupTask(req, res) {
     appname = processedBody.appname;
     // eslint-disable-next-line prefer-destructuring
     backup = processedBody.backup;
+    // Archive an incomplete copy anyway. Deliberately explicit rather than a
+    // default: the refusal below exists because the archive it prevents looks
+    // fine now and loses data when it is restored months later.
+    force = processedBody.force === true || processedBody.force === 'true';
     log.info(`Backup task requested for app ${appname}`);
     if (!appname || !backup) {
       throw new Error('appname and backup parameters are mandatory');
@@ -986,6 +992,51 @@ async function appendBackupTask(req, res) {
       const backupSynced = backupDeployment
         ? backupDeployment.componentEntries().filter(([, comp]) => comp.hasSyncthing()).map(([, comp]) => comp)
         : [];
+
+      // An archive is only worth keeping if this instance holds a COMPLETE copy.
+      // A synced app's data lives on every instance, and a backup is deliberately
+      // taken from a standby - the quiescent one - so the question is never "is
+      // this the primary" but "is this copy whole". An index that is behind, or
+      // absent entirely (a folder syncthing was never configured with), yields an
+      // archive of whatever happens to be on disk, which can be nothing at all.
+      //
+      // Checked BEFORE anything is stopped: a refusal must not cost a healthy app
+      // an outage. Only the components actually being archived are checked - a
+      // partial copy of a component nobody asked for is not this request's
+      // problem.
+      const requested = new Set(backup.filter((item) => item.backup).map((item) => item.component));
+      const incomplete = [];
+      for (const comp of backupSynced.filter((c) => requested.has(c.name))) {
+        const folderId = dockerService.getAppIdentifier(comp.identifier);
+        // eslint-disable-next-line no-await-in-loop
+        const { status: syncStatus, reason } = await syncthingFolderStateMachine
+          .probeFolderSyncCompletion(folderId);
+        if (reason === 'absent') {
+          incomplete.push(`${comp.name}: no syncthing folder - this instance has never synced`);
+        } else if (reason === 'unknown') {
+          // Syncthing not answering says nothing about the data. Refusing is still
+          // right - an archive of an unverified copy is the thing that looks fine
+          // now and loses data when it is restored months later - but the reason
+          // given has to be the one that actually happened.
+          incomplete.push(`${comp.name}: syncthing did not answer - sync state could not be determined`);
+        } else if (syncStatus.globalBytes === 0) {
+          // With nothing in the global index there is nothing to be a fraction of,
+          // and the percentage defaults to 100 - which would tell an operator the
+          // copy is complete in the same breath as refusing it.
+          incomplete.push(`${comp.name}: nothing in the sync index yet - cannot confirm this copy holds the data`);
+        } else if (!syncStatus.isSynced) {
+          incomplete.push(`${comp.name}: ${syncStatus.syncPercentage.toFixed(2)}% synced (${syncStatus.inSyncBytes}/${syncStatus.globalBytes} bytes)`);
+        }
+      }
+      if (incomplete.length > 0) {
+        const summary = incomplete.join('; ');
+        if (!force) {
+          throw new Error(`Refusing to back up an incomplete copy - ${summary}. Back up from a fully synced instance, or repeat with force to archive what is on disk anyway.`);
+        }
+        log.warn(`appendBackupTask - ${appname} forced over an incomplete copy - ${summary}`);
+        await sendChunk(res, `WARNING: backing up an incomplete copy - ${summary}\n`);
+      }
+
       if (backupSynced.length) {
         await sendChunk(res, `Stopping syncthing for ${appname}\n`);
         for (const comp of backupSynced) {
