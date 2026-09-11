@@ -744,7 +744,7 @@ describe('quorumGrant grantorController', () => {
     // A fleet with real keypairs: the chain that reshapes the committee is
     // verified against these registered keys, so the entries are signed by
     // a real quorum of the base committee — never a fixture waved through.
-        function keypairFor(index) {
+    function keypairFor(index) {
       const priv = Buffer.alloc(32);
       priv.writeUInt32BE(index + 1, 28);
       return {

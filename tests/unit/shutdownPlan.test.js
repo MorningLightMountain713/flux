@@ -96,11 +96,6 @@ describe('shutdownPlan', () => {
     return deploymentFor(await specFor(roles, overrides), opts);
   }
 
-  /** The one real DeploymentComponent of a single-component app. */
-  async function componentOf(role) {
-    const deployment = await deploymentOf({ web: role });
-    return deployment.getComponent('web');
-  }
 
   // The drain arithmetic is not FluxOS's. A component answers for its own drain,
   // budget and whether it needs the daemon at all, and this file used to carry a

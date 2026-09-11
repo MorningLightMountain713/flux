@@ -20,7 +20,6 @@ const fluxCommunicationUtils = require('./fluxCommunicationUtils');
 const { peerManager } = require('./utils/peerState');
 const { CLOSE_CODES, DIRECTION } = require('./utils/FluxPeerSocket');
 const fluxEventBus = require('./utils/fluxEventBus');
-const cacheManager = require('./utils/cacheManager').default;
 const nodeDosState = require('./nodeDosState');
 const { NON_PUBLIC_IPV4 } = require('./utils/nonPublicNetworks');
 const ufw = require('./utils/ufw');

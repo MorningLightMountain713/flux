@@ -8,7 +8,6 @@ const dockerService = require('../dockerService');
 const operationRegistry = require('../utils/operationRegistry');
 const appCaches = require('../utils/appCaches');
 const fluxNetworkHelper = require('../fluxNetworkHelper');
-const messageHelper = require('../messageHelper');
 const syncthingService = require('../syncthingService');
 const globalState = require('../utils/globalState');
 const fluxEventBus = require('../utils/fluxEventBus');
@@ -26,8 +25,6 @@ const {
 } = require('./syncthingMonitorConstants');
 const { createMonitorAccelerator } = require('./syncthingMonitorAccelerator');
 const { createPeerFolderLiveness } = require('./peerFolderLiveness');
-const { socketAddressesMatch } = require('../utils/socketAddressUtils');
-const mountParser = require('../utils/mountParser');
 const {
   sortAndFilterLocations,
   buildDeviceConfiguration,
@@ -191,6 +188,25 @@ async function checkAppFolderMounts(deployments) {
  * @param {Map} receiveOnlySyncthingAppsCache - Per-folder transition state
  * @returns {Set<string>} App names
  */
+// NOT CALLED HERE, AND THAT IS THE FINDING - not lint debt.
+//
+// This and the two below are development's, ported whole and correct, and
+// development calls all three inside syncthingAppsCore. The port brought the
+// functions and left the call sites behind, so the behaviour they implement is
+// simply absent on this tree while the code for it sits here looking maintained.
+//
+// Where development calls them (ZelBack/src/services/appMonitoring/syncthingMonitor.js
+// on origin/development):
+//   appsAwaitingPromotion  :684  the promotion wait, against the receive-only cache
+//   appsMatchingFolderIds  :575  narrowing a non-first-run pass to flagged folders
+//   syncingFolderOwnerIds  :465  the owned-folder set the skip-gate and the
+//                                end-of-pass sweep both decide by
+//
+// Wiring them is D13's pass redesign, which needs the surrounding model
+// (unreadableAppNames, mountVerifyPendingIds, the skip-gate) rather than three
+// insertions. Disabled rather than deleted so the port is not lost, and stated
+// rather than silenced so it is not mistaken for a tidy-up.
+// eslint-disable-next-line no-unused-vars
 function appsAwaitingPromotion(appsInstalled, suspendedAppNames, receiveOnlySyncthingAppsCache) {
   const names = new Set();
   appsInstalled.forEach((installedApp) => {
@@ -212,6 +228,8 @@ function appsAwaitingPromotion(appsInstalled, suspendedAppNames, receiveOnlySync
  * @param {string[]} folderIds - Syncthing folder ids to match
  * @returns {Array} Matching installed apps
  */
+// Not called here - see appsAwaitingPromotion above.
+// eslint-disable-next-line no-unused-vars
 function appsMatchingFolderIds(appsInstalled, folderIds) {
   if (folderIds.length === 0) return [];
   const wanted = new Set(folderIds);
@@ -236,6 +254,8 @@ function appsMatchingFolderIds(appsInstalled, folderIds) {
  * @param {Array} appsInstalled - List of installed apps (decrypted)
  * @returns {Set<string>} Owned folder ids
  */
+// Not called here - see appsAwaitingPromotion above.
+// eslint-disable-next-line no-unused-vars
 function syncingFolderOwnerIds(appsInstalled) {
   const ownerIds = new Set();
   appsInstalled.forEach((installedApp) => {

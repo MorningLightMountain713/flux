@@ -748,7 +748,7 @@ describe('appInspector tests', () => {
 
     it('should return error if user has no appowner privileges', async () => {
       const appInspectorWithAuth = proxyquire('../../ZelBack/src/services/appManagement/appInspector', {
-      '../appRuntime/deploymentProvider': deploymentProviderStub(),
+        '../appRuntime/deploymentProvider': deploymentProviderStub(),
         '../dockerService': dockerServiceStub,
         '../messageHelper': messageHelperStub,
         '../../lib/log': logStub,
@@ -791,7 +791,7 @@ describe('appInspector tests', () => {
 
     it('should return error if user has no appowner privileges, appQueryService unstubbed', async () => {
       const appInspectorWithAuth = proxyquire('../../ZelBack/src/services/appManagement/appInspector', {
-      '../appRuntime/deploymentProvider': deploymentProviderStub(),
+        '../appRuntime/deploymentProvider': deploymentProviderStub(),
         '../dockerService': dockerServiceStub,
         '../messageHelper': messageHelperStub,
         '../../lib/log': logStub,
@@ -948,7 +948,7 @@ describe('appInspector tests', () => {
 
     it('should return error if user has no appowner privileges', async () => {
       const appInspectorWithAuth = proxyquire('../../ZelBack/src/services/appManagement/appInspector', {
-      '../appRuntime/deploymentProvider': deploymentProviderStub(),
+        '../appRuntime/deploymentProvider': deploymentProviderStub(),
         '../dockerService': dockerServiceStub,
         '../messageHelper': messageHelperStub,
         '../../lib/log': logStub,
@@ -992,7 +992,7 @@ describe('appInspector tests', () => {
 
     it('should log app, underscore in the name', async () => {
       const appInspectorWithHelper = proxyquire('../../ZelBack/src/services/appManagement/appInspector', {
-      '../appRuntime/deploymentProvider': deploymentProviderStub(),
+        '../appRuntime/deploymentProvider': deploymentProviderStub(),
         '../dockerService': {
           ...dockerServiceStub,
           dockerContainerLogs: sinon.stub().resolves('some data'),
@@ -1036,7 +1036,7 @@ describe('appInspector tests', () => {
 
     it('should log app, no underscore in the name', async () => {
       const appInspectorWithHelper = proxyquire('../../ZelBack/src/services/appManagement/appInspector', {
-      '../appRuntime/deploymentProvider': deploymentProviderStub(),
+        '../appRuntime/deploymentProvider': deploymentProviderStub(),
         '../dockerService': {
           ...dockerServiceStub,
           dockerContainerLogs: sinon.stub().resolves('some data'),
@@ -1080,7 +1080,7 @@ describe('appInspector tests', () => {
 
     it('should log app, no underscore in the name, no lines param', async () => {
       const appInspectorWithHelper = proxyquire('../../ZelBack/src/services/appManagement/appInspector', {
-      '../appRuntime/deploymentProvider': deploymentProviderStub(),
+        '../appRuntime/deploymentProvider': deploymentProviderStub(),
         '../dockerService': {
           ...dockerServiceStub,
           dockerContainerLogs: sinon.stub().resolves('some data'),
@@ -1153,7 +1153,7 @@ describe('appInspector tests', () => {
 
     it('should return error if user has no appowner privileges', async () => {
       const appInspectorWithAuth = proxyquire('../../ZelBack/src/services/appManagement/appInspector', {
-      '../appRuntime/deploymentProvider': deploymentProviderStub(),
+        '../appRuntime/deploymentProvider': deploymentProviderStub(),
         '../dockerService': dockerServiceStub,
         '../messageHelper': messageHelperStub,
         '../../lib/log': logStub,
@@ -1649,7 +1649,7 @@ describe('appInspector tests', () => {
 
     it('should return error if user has no appowner privileges', async () => {
       const appInspectorWithAuth = proxyquire('../../ZelBack/src/services/appManagement/appInspector', {
-      '../appRuntime/deploymentProvider': deploymentProviderStub(),
+        '../appRuntime/deploymentProvider': deploymentProviderStub(),
         '../dockerService': dockerServiceStub,
         '../messageHelper': messageHelperStub,
         '../../lib/log': logStub,
@@ -1804,7 +1804,7 @@ describe('appInspector tests', () => {
 
     it('should return error if user has no appowner privileges', async () => {
       const appInspectorWithAuth = proxyquire('../../ZelBack/src/services/appManagement/appInspector', {
-      '../appRuntime/deploymentProvider': deploymentProviderStub(),
+        '../appRuntime/deploymentProvider': deploymentProviderStub(),
         '../dockerService': dockerServiceStub,
         '../messageHelper': messageHelperStub,
         '../../lib/log': logStub,
