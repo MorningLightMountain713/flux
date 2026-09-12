@@ -119,6 +119,20 @@ const volumeServiceMock = {
   ensureAppVolumeMounted: sinon.stub().resolves({ mounted: true, alreadyMounted: true }),
 };
 
+// The real setSyncedMark stamps the mark with the volume's filesystem id, which
+// is a findmnt call. The stamp is appCaches' own concern and has its own tests;
+// what this file needs to see is WHICH mark a pass writes for a folder. The
+// double stores it the way the real one does, with an unreadable stamp - which
+// is what an unmounted volume really answers.
+const appCachesMock = {
+  setSyncedMark: sinon.stub().callsFake(async (marks, appId, cache) => {
+    const stamped = { ...cache, volumeUuid: null };
+    marks.set(appId, stamped);
+    return stamped;
+  }),
+  syncedMark: sinon.stub().callsFake(async (marks, appId) => marks.get(appId) || null),
+};
+
 const appReconcilerMock = {
   setControllerDesired: sinon.stub(),
 };
@@ -166,6 +180,7 @@ const syncthingMonitor = proxyquire('../../ZelBack/src/services/appMonitoring/sy
   './syncthingHealthMonitor': syncthingHealthMonitorMock,
   './syncthingEventsConsumer': syncthingEventsConsumerMock,
   '../utils/volumeService': volumeServiceMock,
+  '../utils/appCaches': appCachesMock,
   '../../lib/log': logMock,
 });
 
@@ -312,6 +327,7 @@ describe('syncthingMonitor tests', () => {
     livenessMock.prewarm.resetHistory();
     livenessMock.read.resetHistory();
     appReconcilerMock.setControllerDesired.reset();
+    appCachesMock.setSyncedMark.resetHistory();
     logMock.error.resetHistory();
     logMock.warn.resetHistory();
     logMock.info.resetHistory();
@@ -781,6 +797,71 @@ describe('syncthingMonitor tests', () => {
       expect(appReconcilerMock.setControllerDesired.calledWith('testapp'), 'never acts by app name').to.be.false;
       // the cycle itself was skipped - per-app processing never ran
       sinon.assert.notCalled(syncthingServiceMock.getDeviceId);
+    });
+
+    // A SAFETY ACTION IS NOT CONDITIONED ON A CALL THAT CAN FAIL. Which folders
+    // syncthing holds sendreceive is read once a pass, at the top, where a
+    // failure returns before anything is judged by it - and the demotion reads
+    // that observation off the entry. Asked again here, a failed read answers
+    // "no such folder", which is indistinguishable from "nothing to protect":
+    // the demotion is skipped, the container is not held, and the folder keeps
+    // broadcasting its vanished disk state with nothing logged.
+    it('demotes without asking syncthing a second time, so a failed read cannot skip the safety action', async () => {
+      deploymentProviderMock.listInstalledDeployments.resolves([syncDeployment]);
+      syncthingEventsConsumerMock.mountVerifyPendingIds.returns([syncFolderId]);
+      syncthingFolderStateMachineMock.verifySendReceiveFolderSafety.resolves({ isSafe: false, isMounted: false, reason: 'unmounted_with_content' });
+      volumeServiceMock.ensureAppVolumeMounted.resolves({ mounted: false, reason: 'volume_file_missing' });
+      // the pass's own read succeeds; any second one does not
+      syncthingServiceMock.getConfigFolders.rejects(new Error('the folder configuration is read once a pass'));
+      syncthingServiceMock.getConfigFolders.onFirstCall().resolves([{ id: syncFolderId, type: 'sendreceive' }]);
+
+      monitorControl = syncthingMonitor.syncthingApps(mockState, mockGetGlobalStateFn);
+      await clock.tickAsync(100);
+
+      expect(syncthingServiceMock.getConfigFolders.callCount, 'the folder configuration is read once').to.equal(1);
+      sinon.assert.calledWithExactly(syncthingServiceMock.adjustConfigFolders, { method: 'patch', config: { type: 'receiveonly' }, id: syncFolderId });
+      sinon.assert.calledWith(appReconcilerMock.setControllerDesired, syncComp.identifier, 'stopped');
+    });
+
+    // A demoted folder re-enters the promotion machinery from the start. Left
+    // where it stood, a folder moments from promotion resumes there once the
+    // mount returns, on a sync state established before the volume went away.
+    it('restarts the promotion count when it demotes', async () => {
+      deploymentProviderMock.listInstalledDeployments.resolves([syncDeployment]);
+      mockState.receiveOnlySyncthingAppsCache.set(syncFolderId, { numberOfExecutions: 9 });
+      syncthingEventsConsumerMock.mountVerifyPendingIds.returns([syncFolderId]);
+      syncthingFolderStateMachineMock.verifySendReceiveFolderSafety.resolves({ isSafe: false, isMounted: false, reason: 'unmounted_with_content' });
+      volumeServiceMock.ensureAppVolumeMounted.resolves({ mounted: false, reason: 'volume_file_missing' });
+      syncthingServiceMock.getConfigFolders.resolves([{ id: syncFolderId, type: 'sendreceive' }]);
+
+      monitorControl = syncthingMonitor.syncthingApps(mockState, mockGetGlobalStateFn);
+      await clock.tickAsync(100);
+
+      const mark = mockState.receiveOnlySyncthingAppsCache.get(syncFolderId);
+      expect(mark.numberOfExecutions, 'the count restarts').to.equal(0);
+      expect(mark.mountSafetyBlocked, 'and says why it is parked').to.be.true;
+      expect(mark.blockedReason).to.equal('unmounted_with_content');
+      // written through appCaches, so the volume stamp cannot be forgotten here
+      sinon.assert.calledWith(appCachesMock.setSyncedMark, mockState.receiveOnlySyncthingAppsCache, syncFolderId);
+    });
+
+    // The mark describes a DEMOTED folder. Writing it for one that is still
+    // sendreceive is the same lie as logging that it was switched.
+    it('does not restart the promotion count when the demotion failed', async () => {
+      deploymentProviderMock.listInstalledDeployments.resolves([syncDeployment]);
+      mockState.receiveOnlySyncthingAppsCache.set(syncFolderId, { numberOfExecutions: 9 });
+      syncthingEventsConsumerMock.mountVerifyPendingIds.returns([syncFolderId]);
+      syncthingFolderStateMachineMock.verifySendReceiveFolderSafety.resolves({ isSafe: false, isMounted: false, reason: 'unmounted_with_content' });
+      volumeServiceMock.ensureAppVolumeMounted.resolves({ mounted: false, reason: 'volume_file_missing' });
+      syncthingServiceMock.getConfigFolders.resolves([{ id: syncFolderId, type: 'sendreceive' }]);
+      syncthingServiceMock.adjustConfigFolders.resolves({ status: 'error', data: { code: 'ECONNREFUSED', message: 'connect ECONNREFUSED 127.0.0.1:8384' } });
+
+      monitorControl = syncthingMonitor.syncthingApps(mockState, mockGetGlobalStateFn);
+      await clock.tickAsync(100);
+
+      sinon.assert.calledWithExactly(syncthingServiceMock.adjustConfigFolders, { method: 'patch', config: { type: 'receiveonly' }, id: syncFolderId });
+      expect(mockState.receiveOnlySyncthingAppsCache.get(syncFolderId).numberOfExecutions, 'untouched').to.equal(9);
+      sinon.assert.notCalled(appCachesMock.setSyncedMark);
     });
 
     it('keeps a mount-verify flag standing while the mount is still unsafe', async () => {
