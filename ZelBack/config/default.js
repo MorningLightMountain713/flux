@@ -839,6 +839,11 @@ module.exports = {
     imageReaperIntervalMs: 86_400_000, // cold-unused-image reaper cadence (daily; runs on ALL nodes, not gated on imageCacheEnabled)
     adoptionStaggerStepMs: 60_000, // named-replica rolling-update step (floors at the app's graceful-shutdown budget)
     adoptionStaggerWindowMs: 300_000, // loose-instance adoption spread window (bounds the fleet-wide restart stagger)
+    // A probe that cannot answer in seconds is a wedged daemon. `docker stop` is
+    // legitimately silent for its whole SIGKILL deadline, so its bound is that
+    // deadline plus slack and is never used alone.
+    dockerProbeTimeoutMs: 20_000,
+    dockerStopSlackMs: 30_000,
     orphanSweepIntervalMs: 7_200_000, // docker-orphan janitor cadence (containers with no installed-app row)
     dockerDebrisIntervalMs: 21_600_000, // docker prune cadence (stopped containers/unused networks/volumes; guarded)
     meshReconcileIntervalMs: 1_800_000, // mesh reconcile cadence (membership, certs incl. aged-replacement promotion, detector)

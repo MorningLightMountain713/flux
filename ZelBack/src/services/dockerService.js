@@ -25,6 +25,32 @@ const globalState = require('./utils/globalState');
 
 const docker = new Docker();
 
+const PROBE_TIMEOUT_MS = config.get('fluxapps.dockerProbeTimeoutMs');
+const STOP_SLACK_MS = config.get('fluxapps.dockerStopSlackMs');
+// docker's own default when a stop is asked without one.
+const DEFAULT_STOP_SECONDS = 10;
+
+/**
+ * A deadline for one docker call, as the abort signal docker-modem threads onto
+ * the request.
+ *
+ * Per call rather than on the client: the calls are not alike. A probe that
+ * cannot answer in seconds means the daemon is wedged, while `docker stop` is
+ * silent for its whole SIGKILL deadline by design, and a transfer is silent for
+ * as long as the image takes. One client-wide value is either short enough to
+ * kill a healthy stop or long enough to catch nothing.
+ *
+ * An unbounded call is the reason a wedged daemon is invisible: every retry
+ * count in this tree is counted in ANSWERS, so a daemon that gives none never
+ * reaches a second attempt.
+ *
+ * @param {number} ms
+ * @returns {AbortSignal}
+ */
+function deadline(ms) {
+  return AbortSignal.timeout(ms);
+}
+
 /**
  * Creates a docker container object with a given ID.
  *
@@ -267,6 +293,7 @@ async function getDockerContainer(identifier, options = {}) {
     const containers = await docker.listContainers({
       all: true,
       filters: JSON.stringify({ id: [identifier] }),
+      abortSignal: deadline(PROBE_TIMEOUT_MS),
     });
     match = containers.find((container) => container.Id === identifier);
   } else {
@@ -274,6 +301,7 @@ async function getDockerContainer(identifier, options = {}) {
     const containers = await docker.listContainers({
       all: true,
       filters: JSON.stringify({ name: [getAppIdentifier(identifier)] }),
+      abortSignal: deadline(PROBE_TIMEOUT_MS),
     });
     match = containers.find((container) => container.Names[0] === dockerName);
   }
@@ -294,7 +322,10 @@ async function dockerContainerInspect(idOrName, options = {}) {
   const { identifierType, ...inspectOptions } = options;
   const dockerContainer = await getDockerContainer(idOrName, { identifierType });
   if (!dockerContainer) return null;
-  const response = await dockerContainer.inspect(inspectOptions);
+  const response = await dockerContainer.inspect({
+    ...inspectOptions,
+    abortSignal: deadline(PROBE_TIMEOUT_MS),
+  });
   return response;
 }
 
@@ -1499,7 +1530,12 @@ async function appDockerStop(idOrName, timeout) {
   const token = acquireTransitionLease(dockerName, 'stopping', `stop ${dockerName}`);
 
   try {
+    // The bound is this stop's own SIGKILL deadline plus slack: the daemon
+    // answers nothing until the container exits, so anything shorter aborts a
+    // healthy stop.
+    const stopSeconds = timeout !== undefined ? timeout : DEFAULT_STOP_SECONDS;
     const opts = timeout !== undefined ? { t: timeout } : {};
+    opts.abortSignal = deadline((stopSeconds * 1000) + STOP_SLACK_MS);
     await dockerContainer.stop(opts);
   } finally {
     operationRegistry.release(dockerName, token);
@@ -2006,7 +2042,7 @@ function isContainerDetachedFromNetwork(attachment) {
  * call may have failed while docker is fine - and the caller acts destructively
  * on the answer, so absence is never inferred from an error. On an inspect
  * failure we probe the daemon with a list call and use its ANSWER, not just its
- * success (the same pattern the reconciler's dockerActual uses):
+ * success (the same pattern the reconciler's observedContainerState uses):
  *   - list throws          -> 'unknown'  (docker is unhappy: the caller defers)
  *   - the network IS listed -> 'exists'  (the inspect failure was transient)
  *   - NOT listed            -> 'absent'  (docker itself confirms absence)

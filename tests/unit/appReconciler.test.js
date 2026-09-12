@@ -201,7 +201,7 @@ describe('appReconciler tests', () => {
       },
       dockerService: {
         dockerContainerInspect: sinon.stub().resolves({ State: { Running: false, Status: 'exited', ExitCode: 1 } }),
-        // reachability probe used by dockerActual on an inspect failure; resolves => docker up
+        // reachability probe used by observedContainerState on an inspect failure; resolves => docker up
         dockerListContainers: sinon.stub().resolves([]),
         // final existence re-check before the remove-on-recreate-failure fallback
         // (real getDockerContainer resolves null when the container is absent)

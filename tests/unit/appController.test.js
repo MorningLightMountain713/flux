@@ -49,7 +49,7 @@ const THIS_NODE = '192.168.1.3:16127';
 const NODE_OUTPOINT_TXID = 'a'.repeat(64);
 
 describe('appController tests', () => {
-  let dockerActualStub;
+  let observedStateStub;
   before(requireMongo);
 
   before(async function loadLibrary() {
@@ -155,7 +155,7 @@ describe('appController tests', () => {
 
   /** What the settle probe reads. Running by default; the stop and kill blocks say otherwise. */
   function containersAre({ running }) {
-    dockerActualStub.resolves({
+    observedStateStub.resolves({
       reachable: true, exists: true, running, exitCode: null, health: null,
     });
   }
@@ -166,7 +166,7 @@ describe('appController tests', () => {
     // The four run-state handlers probe what actually happened before they
     // answer, so this is reached on every one of them. Unstubbed it inspects
     // real containers.
-    dockerActualStub = sinon.stub(appReconciler, 'dockerActual').resolves({
+    observedStateStub = sinon.stub(appReconciler, 'observedContainerState').resolves({
       reachable: true, exists: true, running: true, exitCode: null, health: null,
     });
 
@@ -783,7 +783,7 @@ describe('appController tests', () => {
       registryHolds(await composedApp('ComposedApp', ['Component1', 'Component2']));
       containersAre({ running: false });
       const probed = [];
-      dockerActualStub.callsFake(async (id) => {
+      observedStateStub.callsFake(async (id) => {
         probed.push(id);
         return { reachable: true, exists: true, running: false };
       });

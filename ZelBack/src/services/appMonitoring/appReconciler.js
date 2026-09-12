@@ -464,7 +464,7 @@ async function getLocalComponentSpec(identifier, inst) {
  *                               healthy app.
  *   - container NOT listed   -> docker itself confirms absence: vanished.
  */
-async function dockerActual(identifier) {
+async function observedContainerState(identifier) {
   try {
     const info = await dockerService.dockerContainerInspect(identifier);
     // null is dockerContainerInspect's contract for "docker's own container list
@@ -658,7 +658,7 @@ async function appDependencyConditionMet(targetAppName, condition) {
   if (!entries.length) return false;
   for (const [, comp] of entries) {
     // eslint-disable-next-line no-await-in-loop
-    const actual = await dockerActual(comp.identifier);
+    const actual = await observedContainerState(comp.identifier);
     if (!actual.running) return false;
     if (condition === 'healthy' && actual.health !== null && actual.health !== 'healthy') return false;
   }
@@ -737,7 +737,7 @@ async function effectiveDesiredRunning(identifier, spec, exitCode) {
       // eslint-disable-next-line no-continue
       if (!depComp) continue;
       // eslint-disable-next-line no-await-in-loop
-      const depActual = await dockerActual(depComp.identifier);
+      const depActual = await observedContainerState(depComp.identifier);
       // eslint-disable-next-line no-await-in-loop
       const met = await dependencyConditionMet(condition, depComp.identifier, depActual);
       if (!met) {
@@ -800,7 +800,7 @@ async function desiredRunState(identifier) {
   const spec = await getLocalComponentSpec(identifier);
   if (!spec) return { desired: false, reason: 'notInstalled', force: false };
   if (spec.invalidSpec) return { desired: false, reason: 'invalidSpec', force: false };
-  const actual = await dockerActual(identifier);
+  const actual = await observedContainerState(identifier);
   return effectiveDesiredRunning(identifier, spec, actual.exitCode);
 }
 
@@ -1023,7 +1023,7 @@ async function healDetachedNetwork(identifier, app, networkName = null) {
   // only destroy on a state that survived the gap.
   log.warn(`appReconciler - ${identifier} appears detached from its docker network; confirming before acting`);
   await serviceHelper.delay(NETWORK_DETACH_CONFIRM_MS);
-  const confirmed = await dockerActual(identifier);
+  const confirmed = await observedContainerState(identifier);
   if (!confirmed.reachable || confirmed.indeterminate || !confirmed.exists || !confirmed.running) {
     // docker went unhappy, or the container is no longer running: nothing here can
     // be justified on this read. The next pass reconciles whatever it actually is.
@@ -1316,7 +1316,7 @@ async function reconcile(identifier) {
     // unenforceable - the incident's app kept running through the gutted
     // window exactly this way. Honor a pending stop; defer everything else.
     //
-    // Paused counts: dockerActual reports a paused container as not running,
+    // Paused counts: observedContainerState reports a paused container as not running,
     // and this branch returns before the paused normalisation below is ever
     // reached - skipping the stop here would leave a frozen container over the
     // missing volume with nothing left to release it. docker stop works on a
@@ -1334,7 +1334,7 @@ async function reconcile(identifier) {
     const grantLost = (await mastershipGrantGate.grantVerdict(identifier, spec.comp))?.desired === false;
     if (operatorStop.stopped || controllerDesired.get(identifier) === 'stopped' || grantLost) {
       try {
-        const actualNow = await dockerActual(identifier);
+        const actualNow = await observedContainerState(identifier);
         if (actualNow.reachable && !actualNow.indeterminate && (actualNow.running || actualNow.paused)) {
           // Only an operator asks for a hard kill; every other stop reason is a
           // drain. Carried through here too, or an appkill against an unmounted
@@ -1386,7 +1386,7 @@ async function reconcile(identifier) {
     fluxEventBus.publish('reconciler:actuated', { identifier, action: 'volumeMounted' });
   }
 
-  const actual = await dockerActual(identifier);
+  const actual = await observedContainerState(identifier);
 
   // docker unreachable (e.g. dockerd restarting): defer rather than misread the
   // container as vanished and recreate/uninstall it. A reconnect sweep and this
@@ -1576,7 +1576,7 @@ async function reconcile(identifier) {
     // an unclean reboot). It then runs with no IP, no embedded DNS (cannot
     // resolve sibling components by name) and no published ports, and no future
     // `docker start` repairs it - only a recreate clears the stale endpoint.
-    // Verify the attachment (from the inspect dockerActual already did) before
+    // Verify the attachment (from the inspect observedContainerState already did) before
     // trusting "running"; heal by recreating, confirmed in-pass and paced. This
     // check runs before everything below: a detached container can only be
     // fixed by the heal (no restart repairs a stale endpoint, and converging
@@ -2524,7 +2524,7 @@ module.exports = {
   // daemon rather than pattern-matching an inspect error, so it can tell docker
   // being unreachable from the container being gone. Anything that acts on a
   // container's run state needs that distinction, not just the reconciler.
-  dockerActual,
+  observedContainerState,
   // What the reconciler would do with this component now, for a caller that has
   // to report an operator command's outcome truthfully.
   desiredRunState,

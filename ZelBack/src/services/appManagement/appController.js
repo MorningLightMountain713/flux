@@ -98,9 +98,9 @@ async function containersReachedStopped(ids) {
   // eslint-disable-next-line no-restricted-syntax
   for (const id of ids) {
     // eslint-disable-next-line no-await-in-loop
-    const actual = await appReconciler.dockerActual(id);
+    const actual = await appReconciler.observedContainerState(id);
     if (!actual.reachable) return { settled: false, reason: 'docker is not reachable' };
-    // Nothing there is not the same as stopped: dockerActual distinguishes the
+    // Nothing there is not the same as stopped: observedContainerState distinguishes the
     // two, and reading the pair as one answers "stopped" for something that was
     // never running.
     if (!actual.exists) return { settled: false, reason: 'it is not installed on this node' };
@@ -147,7 +147,7 @@ async function containersReachedRunning(ids) {
   // eslint-disable-next-line no-restricted-syntax
   for (const id of ids) {
     // eslint-disable-next-line no-await-in-loop
-    const actual = await appReconciler.dockerActual(id);
+    const actual = await appReconciler.observedContainerState(id);
     if (!actual.reachable) return { settled: false, reason: 'docker is not reachable' };
     // eslint-disable-next-line no-continue
     if (actual.running) continue;
