@@ -26,6 +26,7 @@ function deploymentProviderStub(overrides = {}) {
 
 describe('appInspector tests', () => {
   let appInspector;
+  let deploymentProviderInstance;
   let dockerServiceStub;
   let messageHelperStub;
   let logStub;
@@ -85,8 +86,12 @@ describe('appInspector tests', () => {
       verifyPrivilege: sinon.stub().resolves(true),
     };
 
+    // Hoisted so a test can say which deployments this node has installed.
+    // checkApplicationsCpuUSage reads them from here and from nowhere else.
+    deploymentProviderInstance = deploymentProviderStub();
+
     appInspector = proxyquire('../../ZelBack/src/services/appManagement/appInspector', {
-      '../appRuntime/deploymentProvider': deploymentProviderStub(),
+      '../appRuntime/deploymentProvider': deploymentProviderInstance,
       config: asConfig(configStub),
       '../utils/globalState': globalStateStub,
       '../dockerService': dockerServiceStub,
@@ -2052,6 +2057,15 @@ describe('appInspector tests', () => {
 
     afterEach(() => {
       process.hrtime.bigint = realHrtimeBigint;
+      // Every test here asks the throttler to decide about at least one installed
+      // component, and it inspects each one before deciding anything. Without this,
+      // a test that forgets to install a deployment still passes whenever it
+      // asserts appDockerUpdateCpu was NOT called - which is how seven of them
+      // passed while the list was empty for all of them.
+      expect(
+        dockerServiceStub.dockerContainerInspect.called,
+        'no deployment reached the decision: this test asserts nothing',
+      ).to.be.true;
     });
 
     function cpuSample(ratio, minutesAgo) {
@@ -2072,11 +2086,27 @@ describe('appInspector tests', () => {
 
     // nanoCpus over cpu over 1e9 is the allocation the node has actually applied
     // against what the spec asked for: 2e9 on a 2-cpu app is the full share.
-    function installedAppsReturning(app) {
-      return sinon.stub().resolves({ status: 'success', data: [app] });
+    //
+    // The throttler asks deploymentProvider what this node has installed and walks
+    // each deployment's componentEntries(), reading the identifier it monitors by
+    // and the cpu the spec asked for. It takes no app list as an argument. These
+    // tests used to pass one - the v8 shape, {status, data:[{name, cpu}]} - which
+    // the function ignored, so every deployment list was empty: eight tests failed
+    // and the seven asserting appDockerUpdateCpu was NOT called passed for the one
+    // reason that proves nothing, there being no app to decide about.
+    function installedDeployments(...apps) {
+      deploymentProviderInstance.listInstalledDeployments.resolves(apps.map((app) => ({
+        appName: app.name,
+        // A loose single-component app monitors under the app's own name; a
+        // composed one qualifies each component, which is what appsMonitored is
+        // keyed by in both cases.
+        componentEntries: () => (app.compose
+          ? app.compose.map((c) => [c.name, { identifier: `${c.name}_${app.name}`, cpu: c.cpu }])
+          : [[app.name, { identifier: app.name, cpu: app.cpu }]]),
+      })));
     }
 
-    const simpleApp = { name: 'myapp', version: 3, cpu: 2 };
+    const simpleApp = { name: 'myapp', cpu: 2 };
 
     beforeEach(() => {
       dockerServiceStub.dockerContainerInspect.resolves({
@@ -2088,10 +2118,8 @@ describe('appInspector tests', () => {
     it('lowers cpu when load was high on at least 80% of the window', async () => {
       globalStateStub.appsMonitored = { myapp: { statsStore: window([1, 1, 1, 1, 1]) } };
 
-      await appInspector.checkApplicationsCpuUSage(
-        globalStateStub.appsMonitored,
-        installedAppsReturning(simpleApp),
-      );
+      installedDeployments(simpleApp);
+      await appInspector.checkApplicationsCpuUSage(globalStateStub.appsMonitored);
 
       expect(dockerServiceStub.appDockerUpdateCpu.calledOnceWithExactly('myapp', 1.8e9)).to.be.true;
     });
@@ -2111,15 +2139,9 @@ describe('appInspector tests', () => {
         if (name === 'appone') delete globalStateStub.appsMonitored.appone;
         return { HostConfig: { NanoCpus: 2e9 }, State: { Pid: 1234 } };
       });
-      const twoApps = sinon.stub().resolves({
-        status: 'success',
-        data: [
-          { name: 'appone', version: 3, cpu: 2 },
-          { name: 'apptwo', version: 3, cpu: 2 },
-        ],
-      });
+      installedDeployments({ name: 'appone', cpu: 2 }, { name: 'apptwo', cpu: 2 });
 
-      await appInspector.checkApplicationsCpuUSage(globalStateStub.appsMonitored, twoApps);
+      await appInspector.checkApplicationsCpuUSage(globalStateStub.appsMonitored);
 
       expect(
         dockerServiceStub.appDockerUpdateCpu.calledWith('apptwo', 1.8e9),
@@ -2141,10 +2163,8 @@ describe('appInspector tests', () => {
         return { HostConfig: { NanoCpus: 2e9 }, State: { Pid: 1234 } };
       });
 
-      await appInspector.checkApplicationsCpuUSage(
-        globalStateStub.appsMonitored,
-        installedAppsReturning(simpleApp),
-      );
+      installedDeployments(simpleApp);
+      await appInspector.checkApplicationsCpuUSage(globalStateStub.appsMonitored);
 
       expect(midFlight, 'the sample really did arrive mid-decision').to.not.be.undefined;
       expect(globalStateStub.appsMonitored.myapp.lastCpuDecisionAt)
@@ -2154,10 +2174,8 @@ describe('appInspector tests', () => {
     it('leaves cpu alone when load was high on less than 80% of the window', async () => {
       globalStateStub.appsMonitored = { myapp: { statsStore: window([1, 1, 1, 0.5, 0.5]) } };
 
-      await appInspector.checkApplicationsCpuUSage(
-        globalStateStub.appsMonitored,
-        installedAppsReturning(simpleApp),
-      );
+      installedDeployments(simpleApp);
+      await appInspector.checkApplicationsCpuUSage(globalStateStub.appsMonitored);
 
       expect(dockerServiceStub.appDockerUpdateCpu.called).to.be.false;
     });
@@ -2169,10 +2187,8 @@ describe('appInspector tests', () => {
       });
       globalStateStub.appsMonitored = { myapp: { statsStore: window([0.5, 0.5, 0.5, 0.5, 0.5]) } };
 
-      await appInspector.checkApplicationsCpuUSage(
-        globalStateStub.appsMonitored,
-        installedAppsReturning(simpleApp),
-      );
+      installedDeployments(simpleApp);
+      await appInspector.checkApplicationsCpuUSage(globalStateStub.appsMonitored);
 
       expect(dockerServiceStub.appDockerUpdateCpu.calledOnceWithExactly('myapp', 1.7e9)).to.be.true;
     });
@@ -2180,10 +2196,8 @@ describe('appInspector tests', () => {
     it('makes no decision on four or fewer samples, and keeps them for the next pass', async () => {
       globalStateStub.appsMonitored = { myapp: { statsStore: window([1, 1, 1, 1]) } };
 
-      await appInspector.checkApplicationsCpuUSage(
-        globalStateStub.appsMonitored,
-        installedAppsReturning(simpleApp),
-      );
+      installedDeployments(simpleApp);
+      await appInspector.checkApplicationsCpuUSage(globalStateStub.appsMonitored);
 
       expect(dockerServiceStub.appDockerUpdateCpu.called).to.be.false;
       expect(globalStateStub.appsMonitored.myapp.statsStore).to.have.lengthOf(4);
@@ -2192,15 +2206,11 @@ describe('appInspector tests', () => {
     it('does not reuse a sample in a later decision', async () => {
       globalStateStub.appsMonitored = { myapp: { statsStore: window([1, 1, 1, 1, 1]) } };
 
-      await appInspector.checkApplicationsCpuUSage(
-        globalStateStub.appsMonitored,
-        installedAppsReturning(simpleApp),
-      );
+      installedDeployments(simpleApp);
+      await appInspector.checkApplicationsCpuUSage(globalStateStub.appsMonitored);
       dockerServiceStub.appDockerUpdateCpu.resetHistory();
-      await appInspector.checkApplicationsCpuUSage(
-        globalStateStub.appsMonitored,
-        installedAppsReturning(simpleApp),
-      );
+      installedDeployments(simpleApp);
+      await appInspector.checkApplicationsCpuUSage(globalStateStub.appsMonitored);
 
       expect(dockerServiceStub.appDockerUpdateCpu.called).to.be.false;
     });
@@ -2209,19 +2219,15 @@ describe('appInspector tests', () => {
       cpuBurstHelperStub.isBurstActive.resolves(true);
       globalStateStub.appsMonitored = { myapp: { statsStore: window([1, 1, 1, 1, 1]) } };
 
-      await appInspector.checkApplicationsCpuUSage(
-        globalStateStub.appsMonitored,
-        installedAppsReturning(simpleApp),
-      );
+      installedDeployments(simpleApp);
+      await appInspector.checkApplicationsCpuUSage(globalStateStub.appsMonitored);
 
       expect(dockerServiceStub.appDockerUpdateCpu.called).to.be.false;
 
       // burst ends, but the samples it declined to judge are spent
       cpuBurstHelperStub.isBurstActive.resolves(false);
-      await appInspector.checkApplicationsCpuUSage(
-        globalStateStub.appsMonitored,
-        installedAppsReturning(simpleApp),
-      );
+      installedDeployments(simpleApp);
+      await appInspector.checkApplicationsCpuUSage(globalStateStub.appsMonitored);
 
       expect(dockerServiceStub.appDockerUpdateCpu.called).to.be.false;
     });
@@ -2230,10 +2236,8 @@ describe('appInspector tests', () => {
       dockerServiceStub.dockerContainerInspect.resolves(null);
       globalStateStub.appsMonitored = { myapp: { statsStore: window([1, 1, 1, 1, 1]) } };
 
-      await appInspector.checkApplicationsCpuUSage(
-        globalStateStub.appsMonitored,
-        installedAppsReturning(simpleApp),
-      );
+      installedDeployments(simpleApp);
+      await appInspector.checkApplicationsCpuUSage(globalStateStub.appsMonitored);
 
       expect(dockerServiceStub.appDockerUpdateCpu.called).to.be.false;
       expect(globalStateStub.appsMonitored.myapp.statsStore).to.have.lengthOf(5);
@@ -2251,10 +2255,8 @@ describe('appInspector tests', () => {
     it('does not advance the watermark when it makes no decision', async () => {
       globalStateStub.appsMonitored = { myapp: { statsStore: window([1, 1, 1, 1]), lastCpuDecisionAt: 0 } };
 
-      await appInspector.checkApplicationsCpuUSage(
-        globalStateStub.appsMonitored,
-        installedAppsReturning(simpleApp),
-      );
+      installedDeployments(simpleApp);
+      await appInspector.checkApplicationsCpuUSage(globalStateStub.appsMonitored);
 
       expect(dockerServiceStub.appDockerUpdateCpu.called).to.be.false;
       expect(
@@ -2267,18 +2269,14 @@ describe('appInspector tests', () => {
     // length assertion could never show.
     it('counts the samples it declined to act on in the next decision', async () => {
       globalStateStub.appsMonitored = { myapp: { statsStore: window([1, 1, 1, 1]), lastCpuDecisionAt: 0 } };
-      await appInspector.checkApplicationsCpuUSage(
-        globalStateStub.appsMonitored,
-        installedAppsReturning(simpleApp),
-      );
+      installedDeployments(simpleApp);
+      await appInspector.checkApplicationsCpuUSage(globalStateStub.appsMonitored);
       expect(dockerServiceStub.appDockerUpdateCpu.called).to.be.false;
 
       // one more sample arrives; the four above must still be in the window
       globalStateStub.appsMonitored.myapp.statsStore.push(cpuSample(1, 0));
-      await appInspector.checkApplicationsCpuUSage(
-        globalStateStub.appsMonitored,
-        installedAppsReturning(simpleApp),
-      );
+      installedDeployments(simpleApp);
+      await appInspector.checkApplicationsCpuUSage(globalStateStub.appsMonitored);
 
       expect(dockerServiceStub.appDockerUpdateCpu.calledWith('myapp', 1.8e9)).to.be.true;
     });
@@ -2297,10 +2295,8 @@ describe('appInspector tests', () => {
         },
       };
 
-      await appInspector.checkApplicationsCpuUSage(
-        globalStateStub.appsMonitored,
-        installedAppsReturning(simpleApp),
-      );
+      installedDeployments(simpleApp);
+      await appInspector.checkApplicationsCpuUSage(globalStateStub.appsMonitored);
 
       expect(
         dockerServiceStub.appDockerUpdateCpu.called,
@@ -2316,10 +2312,8 @@ describe('appInspector tests', () => {
         myapp: { statsStore: samples, lastCpuDecisionAt: samples[0].elapsed },
       };
 
-      await appInspector.checkApplicationsCpuUSage(
-        globalStateStub.appsMonitored,
-        installedAppsReturning(simpleApp),
-      );
+      installedDeployments(simpleApp);
+      await appInspector.checkApplicationsCpuUSage(globalStateStub.appsMonitored);
 
       expect(
         dockerServiceStub.appDockerUpdateCpu.called,
@@ -2344,10 +2338,8 @@ describe('appInspector tests', () => {
         return { HostConfig: { NanoCpus: 2e9 }, State: { Pid: 1234 } };
       });
 
-      await appInspector.checkApplicationsCpuUSage(
-        globalStateStub.appsMonitored,
-        installedAppsReturning(composed),
-      );
+      installedDeployments(composed);
+      await appInspector.checkApplicationsCpuUSage(globalStateStub.appsMonitored);
 
       expect(
         dockerServiceStub.appDockerUpdateCpu.calledWith('web_myapp', 1.8e9),
@@ -2366,10 +2358,8 @@ describe('appInspector tests', () => {
         web_myapp: { statsStore: window([0.5, 0.5, 0.5, 0.5, 0.5]) },
       };
 
-      await appInspector.checkApplicationsCpuUSage(
-        globalStateStub.appsMonitored,
-        installedAppsReturning(composed),
-      );
+      installedDeployments(composed);
+      await appInspector.checkApplicationsCpuUSage(globalStateStub.appsMonitored);
 
       expect(dockerServiceStub.appDockerUpdateCpu.calledOnceWithExactly('db_myapp', 1.8e9)).to.be.true;
     });
