@@ -345,12 +345,17 @@ describe('dockerService tests', () => {
       expect(inspect.calledOnce).to.equal(true);
     });
 
-    it('passes inspect options through untouched', async () => {
+    it('passes the caller\'s inspect options through, under a deadline', async () => {
       const inspect = sinon.stub(Dockerode.Container.prototype, 'inspect').resolves({});
 
       await dockerService.dockerContainerInspect('website', { size: true });
 
-      expect(inspect.firstCall.args[0]).to.deep.equal({ size: true });
+      const { abortSignal, ...passed } = inspect.firstCall.args[0];
+      expect(passed).to.deep.equal({ size: true });
+      // An unbounded probe is how a wedged daemon stays invisible: every retry
+      // count in this tree is counted in answers, and a daemon that gives none
+      // never reaches a second attempt.
+      expect(abortSignal, 'the probe is bounded').to.be.an.instanceOf(AbortSignal);
     });
 
     it('should throw error if the container does not exist', async () => {
@@ -772,21 +777,29 @@ describe('dockerService tests', () => {
 
   describe('appDockerStop tests', () => {
     const appName = 'website';
+    // AbortSignal.timeout exposes no duration, so the budget is read where it is
+    // asked for.
+    let timeoutSpy;
     let dockerStopStub;
     let dockerInspectStub;
     let getContainerSpy;
 
     beforeEach(() => {
+      timeoutSpy = sinon.spy(AbortSignal, 'timeout');
       dockerStopStub = sinon.stub(Dockerode.Container.prototype, 'stop').returns(Promise.resolve('stopped'));
       dockerInspectStub = sinon.stub(Dockerode.Container.prototype, 'inspect').returns(Promise.resolve({ State: { Running: true } }));
       getContainerSpy = sinon.spy(Dockerode.prototype, 'getContainer');
     });
 
     afterEach(() => {
+      timeoutSpy.restore();
       dockerStopStub.restore();
       dockerInspectStub.restore();
       getContainerSpy.restore();
     });
+
+    // The budget asked for on the stop itself, not the probe that precedes it.
+    const stopBudgetMs = () => timeoutSpy.lastCall.args[0];
 
     it('should call a docker stop command when container is running', async () => {
       const stopResult = await dockerService.appDockerStop(appName);
@@ -795,6 +808,28 @@ describe('dockerService tests', () => {
       sinon.assert.calledOnce(dockerStopStub);
       sinon.assert.calledOnceWithExactly(getContainerSpy, sinon.match.string);
       expect(stopResult).to.equal('Flux App website successfully stopped.');
+    });
+
+    // THE DAEMON ANSWERS NOTHING UNTIL THE CONTAINER EXITS, so a stop's bound is
+    // its own SIGKILL deadline plus slack. A bound shorter than the deadline the
+    // same call is asking for aborts a healthy stop.
+    it('bounds a stop by its own SIGKILL deadline, not by a shared value', async () => {
+      await dockerService.appDockerStop(appName, 120);
+
+      const opts = dockerStopStub.firstCall.args[0];
+      expect(opts.t, 'the deadline the caller asked docker for').to.equal(120);
+      expect(opts.abortSignal).to.be.an.instanceOf(AbortSignal);
+      // 120s + 30s slack, so the bound cannot fire before the stop it bounds
+      expect(stopBudgetMs()).to.equal(150_000);
+    });
+
+    it('bounds a stop given no deadline by docker\'s own default', async () => {
+      await dockerService.appDockerStop(appName);
+
+      const opts = dockerStopStub.firstCall.args[0];
+      expect(opts.t, 'nothing invented for docker').to.equal(undefined);
+      // docker's own default 10s + 30s slack
+      expect(stopBudgetMs()).to.equal(40_000);
     });
 
     it('should not call docker stop when container is already stopped', async () => {
