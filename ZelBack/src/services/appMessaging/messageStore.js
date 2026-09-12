@@ -414,9 +414,9 @@ async function releaseInstallingClaims(message) {
  *
  * A node claims an app before it knows whether it is needed - the claim is what
  * lets every contender see the contention - so losing that race is ordinary and
- * has to be retractable. Version 2 carries that retraction - `withdrawn: true`
- * in development's 8.18.0 spelling, `cleared: true` in v9's; both are accepted,
- * and either removes the sender's claim instead of recording one.
+ * has to be retractable. Version 2 carries that retraction as `withdrawn: true`,
+ * which is what 8.18.0 already puts on the wire, and it removes the sender's claim
+ * instead of recording one.
  *
  * v9 also uses version 2 for a RENEWABLE claim (announcedAt + periodic
  * re-broadcast), announced only to appInstallingClaims-capable peers, so a
@@ -447,11 +447,10 @@ async function storeAppInstallingMessage(message) {
   *   renewals, so elections must order contenders by announcedAt
   * @param replica string (optional) - the claimed identity for named placement; rows
   *   key on (name, ip, replica ?? null), one seat per replica
-  * @param cleared boolean (optional) - retract the claim with no verdict on the app,
+  * @param withdrawn boolean (optional) - retract the claim with no verdict on the app,
   *   unlike fluxappinstallingerror which also feeds peers' error counting; tagged
-  *   clears release exactly their replica's seat, untagged release every (name, ip) row.
-  *   `withdrawn: true` is the same fact under development's spelling, which shipped in
-  *   8.18.0 and is on the wire today; both are accepted, and a retraction carries no
+  *   withdrawals release exactly their replica's seat, untagged release every
+  *   (name, ip) row. A retraction carries no
   *   announcedAt because it asserts no claim.
   */
   if (!message || typeof message !== 'object' || typeof message.type !== 'string' || typeof message.version !== 'number'
@@ -464,12 +463,12 @@ async function storeAppInstallingMessage(message) {
   }
 
   // A v2 message is either a CLAIM (announcedAt required - it is the election key) or a
-  // RETRACTION. Development's 8.18.0 spells the retraction `withdrawn` and v9 spells it
-  // `cleared`; both are accepted so a mixed fleet does not reject half its own traffic,
-  // and neither carries announcedAt.
-  const cleared = message.version === 2 && (message.cleared === true || message.withdrawn === true);
+  // RETRACTION, spelled `withdrawn` - 8.18.0's spelling, and the only one, so that the
+  // two halves of this file cannot disagree about which is which. Neither carries
+  // announcedAt.
+  const withdrawn = message.version === 2 && message.withdrawn === true;
 
-  if (message.version === 2 && !cleared && typeof message.announcedAt !== 'number') {
+  if (message.version === 2 && !withdrawn && typeof message.announcedAt !== 'number') {
     return new Error('Invalid Flux App Installing message for storing announcedAt required for version 2');
   }
 
@@ -485,7 +484,7 @@ async function storeAppInstallingMessage(message) {
   // the untagged row) - the local writer's store (registryManager) is the strict one.
   const replica = message.version === 2 && typeof message.replica === 'string' ? message.replica : null;
 
-  if (cleared) {
+  if (withdrawn) {
     // A replica-tagged clear releases exactly its own claim; untagged releases
     // every (name, ip) claim - the v1/loose whole-app semantics.
     const clearQuery = replica !== null
@@ -1186,9 +1185,9 @@ async function storeBatchAppRunningEvents(verifiedBroadcasts, announcers = new M
 function storeSignedAppInstallingBroadcast(signedBroadcast) {
   const { data } = signedBroadcast;
   if (!data || !data.ip || !data.name || !data.broadcastedAt) return;
-  // A retraction, under either spelling: storeAppInstallingMessage already deleted the
-  // archived announce, and archiving the clear would re-serve a dead claim over sync.
-  if (data.cleared === true || data.withdrawn === true) return;
+  // A retraction: storeAppInstallingMessage already deleted the archived announce,
+  // and archiving the withdrawal would re-serve a dead claim over sync.
+  if (data.withdrawn === true) return;
   if (data.broadcastedAt + INSTALLING_EXPIRY_MS < Date.now()) return;
   const db = dbHelper.databaseConnection();
   const database = db.db(config.get('database.appsglobal.database'));
@@ -1224,7 +1223,6 @@ async function storeBatchAppInstallingMessages(verifiedBroadcasts) {
 
   for (const broadcast of verifiedBroadcasts) {
     const { data } = broadcast;
-    if (data.cleared === true) continue;
     if (!broadcastedAtUsable(data.broadcastedAt, INSTALLING_EXPIRY_MS)) continue;
     const validTill = data.broadcastedAt + INSTALLING_EXPIRY_MS;
 
@@ -1232,13 +1230,18 @@ async function storeBatchAppInstallingMessages(verifiedBroadcasts) {
     // null (loose / v1) matches legacy docs stored without the field.
     const replica = typeof data.replica === 'string' ? data.replica : null;
 
-    // A v2 RETRACTION, under either spelling - development ships `withdrawn`, v9
-    // ships `cleared`, both accepted so a mixed fleet interoperates (F15). Reaching
-    // the claim path with one would archive the very claim it retracts, so it is
-    // deleted here instead - and only where the stored claim is older, so a
-    // retraction arriving after the sender has claimed again cannot erase the newer
-    // claim. Anything else at v2 is a CLAIM and is stored below.
-    if (data.version === 2 && (data.withdrawn === true || data.cleared === true)) {
+    // A v2 RETRACTION. Reaching the claim path with one would archive the very claim
+    // it retracts, so it is deleted here instead - and only where the stored claim is
+    // older, so a retraction arriving after the sender has claimed again cannot erase
+    // the newer claim. Anything else at v2 is a CLAIM and is stored below.
+    //
+    // There used to be a `data.cleared === true` skip ABOVE this, from the side of the
+    // merge that had no retraction handling at all. It shadowed this branch for one of
+    // the two spellings: a `withdrawn` retraction deleted the claim here, a `cleared`
+    // one was skipped and silently dropped, while the comment called the pair
+    // symmetric. One spelling makes that unconstructible, which is the argument for
+    // the rename rather than a patch.
+    if (data.version === 2 && data.withdrawn === true) {
       withdrawalOps.push({
         // deleteMANY: a tagged retraction releases exactly its replica's seat, an
         // untagged one releases every (name, ip) row - the v1/loose whole-app

@@ -1137,15 +1137,20 @@ class FluxPeerManager extends EventEmitter {
    * @param {string} [options.exclude] - peer key to skip
    * @param {number} [options.delayMs=25] - delay between sends
    * @param {string} [options.requireCapability] - only send to peers advertising this capability
+   * @param {string} [options.excludeCapability] - skip peers advertising this capability, so a
+   *   message and its capability-gated replacement can be sent to disjoint sets
    */
   async broadcast(data, options = {}) {
-    const { direction, exclude, delayMs = 25, requireCapability } = options;
+    const {
+      direction, exclude, delayMs = 25, requireCapability, excludeCapability,
+    } = options;
+    const capabilities = { requireCapability, excludeCapability };
     if (direction) {
-      await this.#broadcastToGroup(data, direction, exclude, delayMs, requireCapability);
+      await this.#broadcastToGroup(data, direction, exclude, delayMs, capabilities);
     } else {
-      await this.#broadcastToGroup(data, DIRECTION.OUTBOUND, exclude, delayMs, requireCapability);
+      await this.#broadcastToGroup(data, DIRECTION.OUTBOUND, exclude, delayMs, capabilities);
       await serviceHelper.delay(500);
-      await this.#broadcastToGroup(data, DIRECTION.INBOUND, exclude, delayMs, requireCapability);
+      await this.#broadcastToGroup(data, DIRECTION.INBOUND, exclude, delayMs, capabilities);
     }
   }
 
@@ -1155,10 +1160,11 @@ class FluxPeerManager extends EventEmitter {
    * @param {string} direction - DIRECTION.INBOUND or DIRECTION.OUTBOUND
    * @param {string} [exclude] - peer key to skip
    * @param {number} delayMs - delay between sends
-   * @param {string} [requireCapability] - only send to peers advertising this capability
+   * @param {object} [capabilities] - {requireCapability, excludeCapability}
    * @private
    */
-  async #broadcastToGroup(data, direction, exclude, delayMs, requireCapability) {
+  async #broadcastToGroup(data, direction, exclude, delayMs, capabilities = {}) {
+    const { requireCapability, excludeCapability } = capabilities;
     // The keys are taken once, and each is looked up again at the moment it is
     // sent to. This loop awaits between sends, so the peer map is free to change
     // under it - a peer dropped by the monitor, a peer this loop evicts itself -
@@ -1171,6 +1177,10 @@ class FluxPeerManager extends EventEmitter {
       const peer = this.#peers.get(key);
       if (!peer) continue;
       if (requireCapability && !peer.remoteCapabilities.has(requireCapability)) continue;
+      // The negative gate. A peer that can read the replacement must not also be
+      // sent the thing it replaces: two messages for one fact, converging only by
+      // a timestamp offset arranged for that purpose.
+      if (excludeCapability && peer.remoteCapabilities.has(excludeCapability)) continue;
       try {
         await serviceHelper.delay(delayMs);
         if (!peer.send(data)) {

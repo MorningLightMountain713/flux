@@ -1319,6 +1319,29 @@ describe('FluxPeerManager tests', () => {
       sinon.assert.notCalled(ws2.send);
       sinon.assert.calledOnce(ws3.send);
     });
+
+    // The complement of the gate above, and the two together are what let a
+    // message and its capability-gated replacement reach disjoint sets: the
+    // spawner sends the v1 installing announce with excludeCapability and the v2
+    // claim with requireCapability, so no peer receives both for one install.
+    it('should skip peers advertising the excluded capability', async () => {
+      const ws1 = createMockWs('10.0.0.1', '16127');
+      const ws2 = createMockWs('10.0.0.2', '16127');
+      const ws3 = createMockWs('10.0.0.3', '16127');
+      ws1.readyState = 1;
+      ws2.readyState = 1;
+      ws3.readyState = 1;
+      manager.add(ws1, '10.0.0.1', '16127', { source: PEER_SOURCE.RANDOM, remoteCapabilities: ['appInstallingClaims'] });
+      manager.add(ws2, '10.0.0.2', '16127', { source: PEER_SOURCE.INBOUND });
+      manager.add(ws3, '10.0.0.3', '16127', { source: PEER_SOURCE.INBOUND, remoteCapabilities: ['binaryMessages'] });
+
+      await manager.broadcast('hello', { excludeCapability: 'appInstallingClaims' });
+
+      sinon.assert.notCalled(ws1.send);
+      sinon.assert.calledOnce(ws2.send);
+      // Another capability is not this one.
+      sinon.assert.calledOnce(ws3.send);
+    });
   });
 
   describe('getIpGroup', () => {

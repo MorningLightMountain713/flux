@@ -286,7 +286,7 @@ function startInstallingRenewal(name, ip, announcedAt, replicas) {
  * seat immediately instead of counting a phantom install until the TTL, but must not
  * count an app failure. v1 peers reject the message and fall back to the TTL.
  *
- * Spelled `withdrawn`, not `cleared`, and sent to EVERY peer rather than only the
+ * Sent to EVERY peer rather than only the
  * appInstallingClaims-capable ones. The capability gate belongs on the CLAIM, which
  * only a capable peer can interpret; a retraction has to reach everyone holding the
  * row, or an 8.18.0 peer keeps the seat reserved until the TTL - which is the exact
@@ -307,8 +307,8 @@ async function broadcastInstallingCleared(name, ip, replica = null) {
     name,
     ip,
     ...(replica != null ? { replica } : {}),
-    // development's spelling of the retraction: it shipped in 8.18.0 and is what
-    // is on the wire today (F15 / stop 153). The store accepts `cleared` too.
+    // The retraction, in the spelling 8.18.0 put on the wire and the only one the
+    // store accepts (F15 / stop 153, F30).
     withdrawn: true,
     broadcastedAt: Date.now(),
   };
@@ -1402,10 +1402,14 @@ async function trySpawningGlobalApplication() {
       broadcastedAt,
     };
     // The renewable v2 claims, for appInstallingClaims-capable peers: announcedAt is
-    // the immutable election key (renewals move only broadcastedAt), and the +1 makes
-    // a claim strictly newer than the v1 announce so a store that receives both
-    // versions converges on the announcedAt-bearing row regardless of arrival order
-    // (only the loose claim has a v1 sibling; the offset is kept uniform).
+    // the immutable election key, and renewals move only broadcastedAt.
+    //
+    // These used to carry `broadcastedAt + 1`, so that a peer receiving BOTH the v1
+    // announce and the v2 claim converged on the announcedAt-bearing row whatever
+    // order they arrived in. No peer receives both any more - the announce below
+    // excludes the capable ones - so the offset has nothing left to arrange, and
+    // retiring v1 once the fleet is past 8.18.0 is now deleting a branch rather than
+    // unpicking a convergence rule.
     const installingClaims = assignedReplicas.map((replica) => ({
       type: 'fluxappinstalling',
       version: 2,
@@ -1413,7 +1417,7 @@ async function trySpawningGlobalApplication() {
       ip: localSocketAddr,
       ...(replica != null ? { replica } : {}),
       announcedAt,
-      broadcastedAt: broadcastedAt + 1,
+      broadcastedAt,
     }));
     const storeOwnClaims = async () => {
       for (const claim of installingClaims) {
@@ -1426,8 +1430,15 @@ async function trySpawningGlobalApplication() {
       // races them) and no pre-claims node can parse a named app - while an untagged
       // v1 row beside the per-replica claim rows would over-count this node's seats
       // on capable peers.
+      //
+      // And it goes ONLY to peers that cannot read the claim. A capable peer used to
+      // receive both messages for one install and rely on a timestamp offset to pick
+      // the right one; the two sets are disjoint now, which is what the offset was
+      // standing in for.
       if (looseIdentity) {
-        await fluxCommunicationMessagesSender.broadcastMessageToAll(newAppInstallingMessage);
+        await fluxCommunicationMessagesSender.broadcastMessageToAll(
+          newAppInstallingMessage, { excludeCapability: 'appInstallingClaims' },
+        );
       }
       for (const claim of installingClaims) {
         // eslint-disable-next-line no-await-in-loop
