@@ -703,6 +703,13 @@ function portNotOurs(portsToTest, answered, token) {
  *   readings?: object, asked?: string[], silent?: boolean}>}
  */
 async function checkInstallingAppPortAvailable(portsToTest = []) {
+  // Nothing to probe, so nothing to be unreachable. The probe below can spend
+  // every round's timeout and still answer "nothing was learned", and for an app
+  // with no ports there is nothing that answer could be about - its install must
+  // not hinge on reaching a random peer. (v8 668081f38, restored as F4.3/D15.)
+  if (!Array.isArray(portsToTest) || portsToTest.length === 0) {
+    return { ok: true, reason: 'noPorts', port: null };
+  }
   const beforeAppInstallTestingServers = [];
   // One secret for this whole test run, published by our own test servers and
   // never sent to the peer. The peer returns what it read; we compare.
@@ -809,8 +816,8 @@ async function checkInstallingAppPortAvailable(portsToTest = []) {
     // eslint-disable-next-line no-await-in-loop
     const signature = signer.sign(stringData);
     data.signature = signature;
-    // Every attempt does one of two things: it DECIDES, or it records what it
-    // learned and asks somebody else. Running out - of attempts, of peers, of
+    // Every round does one of two things: it DECIDES, or it records what it
+    // learned and asks somebody else. Running out - of rounds, of peers, of
     // anyone willing to answer - is resolved once, after the loop.
     //
     // It used to be resolved in three places inside it, each a variation on the
@@ -819,7 +826,13 @@ async function checkInstallingAppPortAvailable(portsToTest = []) {
     // `false` the answer was initialised with, and refused the install having
     // said nothing. A verdict and "nobody has decided yet" must never be the
     // same value, or the next exit somebody adds inherits that too.
-    let i = 0;
+    //
+    // ASKED IN PARALLEL, a round at a time (D15). Reachability is external, so
+    // the peer round-trip is the only signal and there is nothing local to wait
+    // for - asking one peer at a time spends a full timeout per silent peer, and
+    // a node behind a slow or half-dead sample paid all of them in series before
+    // its install could start. What a peer's answer MEANS is unchanged: the
+    // token comparison below happens here, against a secret no peer was given.
 
     // Peer address -> the port that peer said is not serving this node. Keyed by
     // peer so that redrawing the same one does not read as a second opinion.
@@ -836,46 +849,25 @@ async function checkInstallingAppPortAvailable(portsToTest = []) {
     let sawUnreadablePeer = false;
     let sawSilentPeer = false;
 
-    while (decision === null && i < config.get('fluxapps.portTestMaxAttempts')) {
-      i += 1;
-      // eslint-disable-next-line no-await-in-loop
-      const randomSocketAddress = await networkStateService.getRandomExternalObserver(
-        localSocketAddress,
-        { exclude: asked },
-      );
+    /**
+     * What one peer's answer was, classified. No decision is taken here: this
+     * says what arrived, and the rules below say what it means.
+     * @param {string} peerSocketAddress
+     * @returns {Promise<{kind: string, ip: string, port?: number}>}
+     */
+    const askOnePeer = async (peerSocketAddress) => {
+      const askingIP = extractIp(peerSocketAddress);
+      const askingIpPort = extractPort(peerSocketAddress);
 
-      // Nobody outside this address left to ask. A Flux node sharing our public
-      // address is not outside it: its packets never leave the router, so what
-      // it can reach says nothing about what the internet can reach. Answering
-      // nothing is honest, and the resolution below takes it the same way it
-      // takes every other "nothing was learned" - which is the check this node
-      // made before the token existed.
-      if (!randomSocketAddress) {
-        ranOutOfObservers = true;
-        break;
-      }
-
-      const askingIP = extractIp(randomSocketAddress);
-      const askingIpPort = extractPort(randomSocketAddress);
-      asked.push(randomSocketAddress);
-
-      // first check against our IP address
-      // eslint-disable-next-line no-await-in-loop
       const resMyAppAvailability = await axios.post(`http://${askingIP}:${askingIpPort}/flux/checkappavailability`, JSON.stringify(data), axiosConfig).catch((error) => {
         log.error(`${askingIP} for app availability is not reachable`);
         log.error(error);
       });
 
-      // What this attempt learned about one of our ports, or null when it
-      // learned nothing at all. Only a port recorded here counts as a witness.
-      let reportedPort = null;
-
       if (!resMyAppAvailability) {
         // The peer never answered us. That is a fact about the peer, not about
         // our ports.
-        sawSilentPeer = true;
-        // eslint-disable-next-line no-continue
-        continue;
+        return { kind: 'silent', ip: askingIP };
       }
 
       if (resMyAppAvailability.data.status === 'error') {
@@ -892,9 +884,7 @@ async function checkInstallingAppPortAvailable(portsToTest = []) {
 
         if (!(failedPort > 0)) {
           log.warn(`checkInstallingAppPortAvailable - ${askingIP} would not answer the question (${failure || 'no reason given'}); asking another peer`);
-          sawSilentPeer = true;
-          // eslint-disable-next-line no-continue
-          continue;
+          return { kind: 'silent', ip: askingIP };
         }
 
         // One peer's report that a port did not answer it. Evidence, and it goes
@@ -902,17 +892,17 @@ async function checkInstallingAppPortAvailable(portsToTest = []) {
         // token coming back settles a port on one peer's say-so, because only
         // this node could have produced it.
         log.warn(`checkInstallingAppPortAvailable - ${askingIP} could not reach port ${failedPort}`);
-        reportedPort = failedPort;
-      } else if (resMyAppAvailability.data.status === 'success') {
+        return { kind: 'reported', ip: askingIP, port: failedPort };
+      }
+
+      if (resMyAppAvailability.data.status === 'success') {
         const { answered } = resMyAppAvailability.data.data || {};
 
         if (!answered) {
           // This peer is on older code: it reached the ports but did not read
           // them, so it has told us nothing we can act on. Ask someone else.
           log.info(`checkInstallingAppPortAvailable - ${askingIP} cannot read ports back, asking another peer`);
-          sawUnreadablePeer = true;
-          // eslint-disable-next-line no-continue
-          continue;
+          return { kind: 'unreadable', ip: askingIP };
         }
 
         const notOurs = portNotOurs(portsToTest, answered, portTestToken);
@@ -920,25 +910,77 @@ async function checkInstallingAppPortAvailable(portsToTest = []) {
         if (notOurs === null) {
           // Our own token came back. Proof, not report - only this node could
           // have produced it - so one peer settles it.
-          decision = { ok: true, reason: 'proven', port: null };
-          break;
+          return { kind: 'proof', ip: askingIP };
         }
 
         log.info(`checkInstallingAppPortAvailable - ${askingIP} read something other than this node on port ${notOurs}`);
-        reportedPort = notOurs;
-      } else {
-        // An answer in a shape this node does not understand is not an answer.
-        sawSilentPeer = true;
-        // eslint-disable-next-line no-continue
-        continue;
+        return { kind: 'reported', ip: askingIP, port: notOurs };
       }
 
-      disagreements.set(askingIP, reportedPort);
+      // An answer in a shape this node does not understand is not an answer.
+      return { kind: 'silent', ip: askingIP };
+    };
+
+    const peerQueryCount = config.get('fluxapps.portTestPeerQueryCount');
+    const prefixLength = config.get('fluxapps.portTestPrefixLength');
+
+    // Two bounds, and they are different questions. maxRounds is how many times
+    // this is willing to go back for a fresh, diverse sample when a round taught
+    // it nothing; maxAttempts is the total number of peers it will ever ask, so
+    // a fleet can compress the whole probe without also flattening the retry
+    // structure - which is what the harness does with it.
+    const maxPeers = config.get('fluxapps.portTestMaxAttempts');
+    for (let round = 0; decision === null && round < config.get('fluxapps.portTestMaxRounds'); round += 1) {
+      if (asked.length >= maxPeers) {
+        ranOutOfObservers = false;
+        break;
+      }
+      // Distinct prefixes, and never our own - a Flux node sharing our public
+      // address is not outside it: its packets never leave the router, so what
+      // it can reach says nothing about what the internet can reach. The sample
+      // excludes our whole prefix, which is the same rule with room to spare.
+      // Drawn wide enough that peers already asked can be filtered out and a
+      // full round still remains.
+      // eslint-disable-next-line no-await-in-loop
+      const sample = await networkStateService.getRandomSocketAddressSample(
+        peerQueryCount + asked.length,
+        { excludeSocketAddress: localSocketAddress, distinctPrefixes: true, prefixLength },
+      );
+      const peers = (sample || []).filter((peer) => !asked.includes(peer))
+        .slice(0, Math.min(peerQueryCount, maxPeers - asked.length));
+
+      // Nobody outside this address left to ask. Answering nothing is honest,
+      // and the resolution below takes it the same way it takes every other
+      // "nothing was learned" - which is the check this node made before the
+      // token existed.
+      if (!peers.length) {
+        ranOutOfObservers = true;
+        break;
+      }
+
+      asked.push(...peers);
+      // eslint-disable-next-line no-await-in-loop
+      const outcomes = await Promise.all(peers.map(askOnePeer));
+
+      // Proof outranks everything in the round: a token can only have come from
+      // this node, so no number of peers reading something else outweighs it.
+      if (outcomes.some((outcome) => outcome.kind === 'proof')) {
+        decision = { ok: true, reason: 'proven', port: null };
+        break;
+      }
+
+      outcomes.forEach((outcome) => {
+        if (outcome.kind === 'silent') sawSilentPeer = true;
+        else if (outcome.kind === 'unreadable') sawUnreadablePeer = true;
+        else if (outcome.kind === 'reported') disagreements.set(outcome.ip, outcome.port);
+      });
 
       const refused = refusedPort(disagreements, PORT_TEST_CORROBORATION);
 
       if (refused === null) {
-        log.info(`checkInstallingAppPortAvailable - one peer so far says port ${reportedPort} is not ours; asking another before refusing`);
+        if (disagreements.size) {
+          log.info(`checkInstallingAppPortAvailable - one peer so far says port ${[...disagreements.values()][0]} is not ours; asking another before refusing`);
+        }
         // eslint-disable-next-line no-continue
         continue;
       }

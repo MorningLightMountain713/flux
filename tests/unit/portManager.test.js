@@ -66,8 +66,22 @@ function buildProxyquireMap(stubs, overrides = {}) {
   const fluxNet = overrides.fluxNetworkHelper || {};
   const upnp = overrides.upnpService || {};
   return {
-    config: asConfig({ server: { apiport: 16_127 } }),
-    axios: { post: sinon.stub().resolves({ data: { status: 'success' } }) },
+    config: asConfig({
+      server: { apiport: 16_127 },
+      fluxapps: {
+        // The reachability probe's knobs. Read through config.get, so a probe
+        // test without them throws rather than silently taking a default.
+        portTestPeerTimeoutMs: 5,
+        portTestBindDelayMs: 0,
+        portTestPropagationDelayMs: 0,
+        portTestMaxAttempts: 5,
+        portTestPeerQueryCount: 3,
+        portTestMaxRounds: 3,
+        portTestPrefixLength: 16,
+        ...(overrides.fluxapps || {}),
+      },
+    }),
+    axios: overrides.axios || { post: sinon.stub().resolves({ data: { status: 'success' } }) },
     '../dbHelper': {},
     '../appDatabase/appsRepository': stubs.appsRepositoryStub,
     '../appRuntime/deploymentProvider': stubs.deploymentProviderStub,
@@ -81,7 +95,20 @@ function buildProxyquireMap(stubs, overrides = {}) {
       extractPort: (addr) => (addr && addr.includes(':') ? Number(addr.split(':')[1]) : 16_127),
     },
     '../utils/fluxHttpTestServer': {
-      FluxHttpTestServer: sinon.stub(),
+      // The real one listens on the port and serves the token back. These tests
+      // are about what the probe CONCLUDES from peer answers, so the bind is
+      // faked - but it has to emit 'listening', or the probe never gets past it.
+      FluxHttpTestServer: overrides.FluxHttpTestServer || class {
+        constructor(token) { this.token = token; this.handlers = {}; }
+
+        once(event, handler) { this.handlers[event] = handler; return this; }
+
+        removeAllListeners() { return this; }
+
+        listen() { setImmediate(() => this.handlers.listening && this.handlers.listening()); }
+
+        close(cb) { if (cb) cb(); }
+      },
     },
     '../fluxNetworkHelper': {
       getLocalSocketAddress: sinon.stub().resolves('127.0.0.1:16127'),
@@ -104,7 +131,16 @@ function buildProxyquireMap(stubs, overrides = {}) {
     '../verificationHelper': stubs.verificationHelperStub,
     '../networkStateService': {
       getRandomSocketAddress: sinon.stub().resolves('192.168.1.1:16127'),
+      getRandomExternalObserver: sinon.stub().resolves('192.168.1.1:16127'),
+      // The reachability probe draws a diverse SAMPLE per round, not one peer.
+      getRandomSocketAddressSample: sinon.stub().resolves([]),
+      ...(overrides.networkStateService || {}),
     },
+    '../utils/nodeSigner': {
+      nodeSigner: sinon.stub().resolves({ pubKey: 'testpubkey', sign: () => 'testsig' }),
+      ...(overrides.nodeSigner || {}),
+    },
+    '../utils/fluxEventBus': { publish: sinon.stub(), ...(overrides.fluxEventBus || {}) },
     '../serviceHelper': {
       ensureNumber: (v) => Number(v),
       delay: sinon.stub().resolves(),
@@ -534,6 +570,183 @@ describe('portManager tests', () => {
       expect(mapUpnpPort.callCount).to.equal(4);
       expect(localPm.upnpMapFailures.get('App1').cycles).to.equal(1);
       expect(localPm.upnpMapFailures.get('App2').cycles).to.equal(1);
+    });
+  });
+
+  // THE REACHABILITY PROBE. This file had no coverage of it at all, which is how
+  // a rewrite of it could look safe. The property it exists to hold: the peer
+  // reads each port and hands back what it found, and the comparison happens
+  // HERE against a token the peer was never given - so a neighbour at the same
+  // public address cannot pass itself off as this node, and a peer that is old,
+  // broken or lying cannot manufacture a token it never saw.
+  describe('checkInstallingAppPortAvailable', () => {
+    // The peer echoes what it read on each port. Our own token coming back is
+    // the proof; anything else is one peer's report.
+    const echoes = (ports, token) => ({
+      status: 'success',
+      data: { answered: Object.fromEntries(ports.map((port) => [port, token])) },
+    });
+
+    it('probes nothing at all for an app with no ports', async () => {
+      const axiosPost = sinon.stub().resolves({ data: { status: 'success' } });
+      const sample = sinon.stub().resolves(['10.1.0.1:16127']);
+      portManager = loadPortManager(stubs, {
+        axios: { post: axiosPost },
+        networkStateService: { getRandomSocketAddressSample: sample },
+      });
+
+      const verdict = await portManager.checkInstallingAppPortAvailable([]);
+
+      // A portless app has nothing that a peer's silence could be about, and the
+      // probe can spend every round's timeout before answering "nothing was
+      // learned". Its install must not hinge on reaching a random peer.
+      expect(verdict.ok).to.equal(true);
+      expect(verdict.reason).to.equal('noPorts');
+      sinon.assert.notCalled(sample);
+      sinon.assert.notCalled(axiosPost);
+    });
+
+    it('one peer returning this node\'s own token settles it', async () => {
+      let token = null;
+      const FakeServer = class {
+        constructor(t) { token = t; this.handlers = {}; }
+
+        once(event, handler) { this.handlers[event] = handler; return this; }
+
+        removeAllListeners() { return this; }
+
+        listen() { setImmediate(() => this.handlers.listening()); }
+
+        close(cb) { if (cb) cb(); }
+      };
+      const axiosPost = sinon.stub().callsFake(async () => ({ data: echoes([31_000], token) }));
+      portManager = loadPortManager(stubs, {
+        FluxHttpTestServer: FakeServer,
+        axios: { post: axiosPost },
+        networkStateService: {
+          getRandomSocketAddressSample: sinon.stub().resolves(['10.1.0.1:16127']),
+        },
+      });
+
+      const verdict = await portManager.checkInstallingAppPortAvailable([31_000]);
+
+      expect(verdict.ok).to.equal(true);
+      expect(verdict.reason).to.equal('proven');
+    });
+
+    it('asks a whole round of peers at once, not one at a time', async () => {
+      const peers = ['10.1.0.1:16127', '10.2.0.1:16127', '10.3.0.1:16127'];
+      let concurrent = 0;
+      let peak = 0;
+      const axiosPost = sinon.stub().callsFake(async () => {
+        concurrent += 1;
+        peak = Math.max(peak, concurrent);
+        await new Promise((resolve) => { setImmediate(resolve); });
+        concurrent -= 1;
+        return null;
+      });
+      const sample = sinon.stub().resolves(peers);
+      portManager = loadPortManager(stubs, {
+        axios: { post: axiosPost },
+        networkStateService: { getRandomSocketAddressSample: sample },
+        fluxapps: { portTestMaxRounds: 1 },
+      });
+
+      await portManager.checkInstallingAppPortAvailable([31_000]);
+
+      // Reachability is external, so the peer round-trip is the only signal and
+      // there is nothing local to wait for. Serially, a round of silent peers
+      // costs their timeouts end to end before the install can start.
+      expect(peak, 'the round was asked in series').to.equal(3);
+      expect(sample.firstCall.args[1]).to.include({ distinctPrefixes: true });
+      expect(sample.firstCall.args[1].excludeSocketAddress).to.equal('127.0.0.1:16127');
+    });
+
+    it('two peers reading something other than this node refuses the install', async () => {
+      const axiosPost = sinon.stub().resolves({ data: echoes([31_000], 'someone-elses-token') });
+      portManager = loadPortManager(stubs, {
+        axios: { post: axiosPost },
+        networkStateService: {
+          getRandomSocketAddressSample: sinon.stub().resolves(['10.1.0.1:16127', '10.2.0.1:16127']),
+        },
+      });
+
+      const verdict = await portManager.checkInstallingAppPortAvailable([31_000]);
+
+      expect(verdict.ok).to.equal(false);
+      expect(verdict.reason).to.equal('notOurs');
+      expect(verdict.port).to.equal(31_000);
+      expect(verdict.peers).to.have.lengthOf(2);
+    });
+
+    it('one peer alone is a witness, not a verdict', async () => {
+      const axiosPost = sinon.stub().resolves({ data: echoes([31_000], 'someone-elses-token') });
+      portManager = loadPortManager(stubs, {
+        axios: { post: axiosPost },
+        networkStateService: {
+          // one peer this round, and none left after it
+          getRandomSocketAddressSample: sinon.stub().resolves(['10.1.0.1:16127']),
+        },
+      });
+
+      const verdict = await portManager.checkInstallingAppPortAvailable([31_000]);
+
+      // What was not corroborated does not refuse an install - that is what
+      // stops the first nodes to upgrade refusing everything while the rest of
+      // the network catches up.
+      expect(verdict.ok).to.equal(true);
+      expect(verdict.reason).to.equal('noOtherObserver');
+      expect(verdict.port).to.equal(31_000);
+    });
+
+    it('peers that never answer decide nothing', async () => {
+      const axiosPost = sinon.stub().rejects(new Error('unreachable'));
+      portManager = loadPortManager(stubs, {
+        axios: { post: axiosPost },
+        networkStateService: {
+          getRandomSocketAddressSample: sinon.stub().resolves(['10.1.0.1:16127', '10.2.0.1:16127']),
+        },
+        // One round, so the loop ends on its own bound. Left to run, it would
+        // redraw the same two peers, filter them as already asked and end on
+        // "nobody left to ask" - which is a different fact and reads as one.
+        fluxapps: { portTestMaxRounds: 1 },
+      });
+
+      const verdict = await portManager.checkInstallingAppPortAvailable([31_000]);
+
+      expect(verdict.ok).to.equal(true);
+      expect(verdict.reason).to.equal('noneAnswered');
+      expect(verdict.silent).to.equal(true);
+    });
+
+    it('a peer on older code that cannot read ports back is not a witness', async () => {
+      const axiosPost = sinon.stub().resolves({ data: { status: 'success', data: {} } });
+      portManager = loadPortManager(stubs, {
+        axios: { post: axiosPost },
+        networkStateService: {
+          getRandomSocketAddressSample: sinon.stub().resolves(['10.1.0.1:16127', '10.2.0.1:16127']),
+        },
+        fluxapps: { portTestMaxRounds: 1 },
+      });
+
+      const verdict = await portManager.checkInstallingAppPortAvailable([31_000]);
+
+      expect(verdict.ok).to.equal(true);
+      expect(verdict.reason).to.equal('noReader');
+    });
+
+    it('a banned port is refused before any peer is asked', async () => {
+      const sample = sinon.stub().resolves(['10.1.0.1:16127']);
+      portManager = loadPortManager(stubs, {
+        fluxNetworkHelper: { isPortBanned: sinon.stub().returns(true) },
+        networkStateService: { getRandomSocketAddressSample: sample },
+      });
+
+      const verdict = await portManager.checkInstallingAppPortAvailable([31_000]);
+
+      expect(verdict.ok).to.equal(false);
+      expect(verdict.reason).to.equal('portBanned');
+      sinon.assert.notCalled(sample);
     });
   });
 });
