@@ -363,6 +363,19 @@ describe('appSpawner tests', () => {
       },
       '../utils/fluxEventBus': {
         publish: sinon.stub(),
+        // The harness tally. Absent from this map it was undefined, and the
+        // no-candidates pass threw on it - only ever seen in a full-suite run,
+        // because standalone these tests supply candidates.
+        count: sinon.stub(),
+      },
+      // Node-local accounting, and it reaches mongo unstubbed. That made this
+      // suite's verdicts depend on rows other suites had left in the shared
+      // database: a run alongside resourceQueryService's fixtures found an app
+      // it could not read and stood every spawn down, which is exactly what the
+      // gate is for and nothing to do with what these tests state.
+      '../appQuery/resourceQueryService': {
+        appsResources: sinon.stub().resolves(opts.appsResources ?? { status: 'success', data: {} }),
+        unaccountedApps: sinon.stub().returns(opts.unaccountedApps ?? []),
       },
       '../appMessaging/nodeDownStore': {
         placementFreezeForAddress: opts.freezeStub ?? sinon.stub().resolves({ frozen: false, count: 0, liftsAt: null }),
