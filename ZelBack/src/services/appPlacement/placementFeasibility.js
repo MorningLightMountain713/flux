@@ -374,16 +374,32 @@ function placementCategory(feasibility, syncedApp) {
  * @returns {string} A comparable digest
  */
 function placementShape(spec) {
-  const components = spec.version <= 3
-    ? [{ cpu: spec.cpu, ram: spec.ram, hdd: spec.hdd, tiered: spec.tiered }]
-    : (spec.compose ?? []).map((c) => ({
-      cpu: c.cpu, ram: c.ram, hdd: c.hdd, tiered: c.tiered,
-    }));
+  // EXACTLY what placementComputation reads, and nothing else. It is asked
+  // `pooledNodes(nodeList, placement)` and an instance count; resources never
+  // reach it, because tier is deliberately not a filter here - install time
+  // sizes an app against the node's real hardware. A shape carrying component
+  // sizes would gate an update that only grew a disk, and if the network had
+  // shrunk since registration that renewal would be refused over a number this
+  // gate cannot act on. Which is the harm changesPlacement exists to prevent.
   return JSON.stringify({
     instances: spec.instances ?? null,
-    geolocation: [...(spec.geolocation ?? [])].sort(),
-    components,
+    placement: spec.placement ? spec.placement.toCanonical() : null,
   });
+}
+
+/**
+ * How many machines a spec names. A pinned spec may only ever use the nodes it
+ * names, so this is the ceiling on its instance count - and the two shortfalls
+ * read differently to an owner, which is why the count is asked separately from
+ * the candidate count.
+ * @param {object} placement A Placement
+ * @returns {number}
+ */
+function placementPinCount(placement) {
+  if (!placement) return 0;
+  return placement.targetIps.length
+    + placement.targetOutpoints.length
+    + placement.targetOperators.length;
 }
 
 /**
@@ -398,14 +414,12 @@ function placementShape(spec) {
  */
 function changesPlacement(next, previous) {
   if (!previous) return true; // nothing to compare against - gate it
-  // An enterprise spec is stored with its compose stripped, and a previous
-  // spec that could not be decrypted arrives here in that stripped form. It
-  // is not comparable, and reading the difference as a placement change would
-  // gate exactly the renewals and cancellations this exists to let through.
-  const strippedPrevious = previous.version >= 8
-    && (previous.compose ?? []).length === 0
-    && (next.compose ?? []).length > 0;
-  if (strippedPrevious) return false;
+  // A previous spec this node could not read carries no placement to compare
+  // against. Reading that absence as a change would gate exactly the renewals
+  // and cancellations this exists to let through - so an unreadable previous
+  // is treated as unchanged, which is the direction that cannot strand an
+  // owner with an app they can neither renew nor cancel.
+  if (!previous.placement) return false;
   return placementShape(next) !== placementShape(previous);
 }
 
@@ -420,33 +434,37 @@ function changesPlacement(next, previous) {
  *
  * On an update path, pass the previous specifications: an update that does
  * not change placement is never gated (see changesPlacement).
- * @param {object} appSpecFormatted Formatted app specifications
+ *
+ * Takes a SPEC, not a submission document. It read `compose`, `geolocation` and
+ * `nodes` and converted through placementFromDocument, which is the v8 spelling:
+ * a v9 spec carries none of those, so it would not have failed - it would have
+ * built a Placement with no restrictions at all and reported every spec
+ * feasible, for every caller, silently. The spec's own Placement answers
+ * instead, and placementFeasibility refuses a spec that has none rather than
+ * reading the absence as "unrestricted". placementFromDocument stays for the
+ * advice endpoint, which really is asked about an app that does not exist yet.
+ * @param {object} spec An app specification object carrying `placement`
  * @param {string} caller Log prefix identifying the calling path
  * @param {object} [previousSpec] The specifications an update replaces
  * @returns {Promise<object|null>} The feasibility, or null when it could not
  *   be computed or the check did not apply
  * @throws When the spec provably cannot reach its instance count
  */
-async function checkPlacementFeasibility(appSpecFormatted, caller, previousSpec) {
-  if (previousSpec && !changesPlacement(appSpecFormatted, previousSpec)) return null;
+async function checkPlacementFeasibility(spec, caller, previousSpec) {
+  if (previousSpec && !changesPlacement(spec, previousSpec)) return null;
   let synced;
   let feasibility;
   try {
-    synced = appSpecFormatted.version <= 3
-      ? mountParser.isSyncedComponent(appSpecFormatted.containerData)
-      : (appSpecFormatted.compose ?? []).some((component) => mountParser.isSyncedComponent(component.containerData));
-    feasibility = await placementFeasibility({
-      placement: await placementFromDocument(appSpecFormatted),
-      instances: appSpecFormatted.instances,
-    });
+    synced = spec.hasSyncthing();
+    feasibility = await placementFeasibility(spec);
   } catch (error) {
     log.warn(`${caller} - placement feasibility check failed: ${error.message}`);
     return null;
   }
   const category = placementCategory(feasibility, synced);
-  const geoRestricted = (appSpecFormatted.geolocation ?? []).length > 0;
-  const pinned = appSpecFormatted.nodes ?? [];
-  if (category === 'impossible' && pinned.length >= feasibility.instances) {
+  const geoRestricted = spec.placement.hasGeoRestrictions();
+  const pinCount = placementPinCount(spec.placement);
+  if (category === 'impossible' && pinCount >= feasibility.instances) {
     // A pinned spec names the only machines it may ever use, and the owner
     // holds them. Named enough of them and the shortfall is that some are not
     // in the confirmed list at this moment - a node rebooting, one that missed
@@ -454,7 +472,7 @@ async function checkPlacementFeasibility(appSpecFormatted, caller, previousSpec)
     // spec, and it is the owner's to resolve, so this reports rather than
     // refuses. Naming FEWER machines than instances is the other thing entirely
     // and still refuses below: no wait fixes arithmetic.
-    log.warn(`${caller} - App ${appSpecFormatted.name} requests ${feasibility.instances} instances and names ${pinned.length} node(s), of which ${feasibility.candidateCount} are in the confirmed node list right now; it will run below its instance count until the rest confirm`);
+    log.warn(`${caller} - App ${spec.name} requests ${feasibility.instances} instances and names ${pinCount} node(s), of which ${feasibility.candidateCount} are in the confirmed node list right now; it will run below its instance count until the rest confirm`);
     return feasibility;
   }
   if (category === 'impossible') {
@@ -472,25 +490,26 @@ async function checkPlacementFeasibility(appSpecFormatted, caller, previousSpec)
     // whose installer would accept - registering it sells a deployment that
     // provably cannot start. Same source on both ends turns the miss into
     // proof, and proof rejects.
-    const { allows } = geolocationRule.parseGeolocation(
-      appSpecFormatted.geolocation, ipLocationStore.regionCodeForName,
-    );
+    // Asked of the Placement's own allow entries rather than re-parsed from
+    // geolocation strings the spec no longer carries: an entry is a region pin
+    // exactly when it names one.
+    const allows = spec.placement.geoAllow ?? [];
     const allTableRegionPins = allows.length > 0
-      && allows.every((term) => term.granularity === 'region');
+      && allows.every((entry) => Boolean(entry.region));
     if (geoRestricted && feasibility.candidateCount === 0 && !allTableRegionPins) {
-      log.warn(`${caller} - App ${appSpecFormatted.name} resolves no eligible node for its geolocation; the location table may not cover it, so the registration is allowed`);
+      log.warn(`${caller} - App ${spec.name} resolves no eligible node for its geolocation; the location table may not cover it, so the registration is allowed`);
       return feasibility;
     }
     // Two different shortfalls, and telling an owner the wrong one sends them to
     // edit a field that was never the problem: a pinned spec has no allowed
     // locations to widen, and the machines it may use are the ones it names.
-    if (pinned.length) {
-      throw new Error(`App ${appSpecFormatted.name} requests ${feasibility.instances} instances but names only ${pinned.length} node(s), so it can never reach that count. Name at least ${feasibility.instances} nodes or lower the instance count.`);
+    if (pinCount) {
+      throw new Error(`App ${spec.name} requests ${feasibility.instances} instances but names only ${pinCount} node(s), so it can never reach that count. Name at least ${feasibility.instances} nodes or lower the instance count.`);
     }
-    throw new Error(`App ${appSpecFormatted.name} requests ${feasibility.instances} instances but only ${feasibility.candidateCount} eligible nodes exist for its geolocation and tier requirements. Widen the allowed locations or lower the instance count.`);
+    throw new Error(`App ${spec.name} requests ${feasibility.instances} instances but only ${feasibility.candidateCount} eligible nodes exist for its geolocation and tier requirements. Widen the allowed locations or lower the instance count.`);
   }
   if (category === 'constrained') {
-    log.warn(`${caller} - App ${appSpecFormatted.name} requests ${feasibility.instances} instances across ${feasibility.domainCount} fault domain(s); synced instances will co-locate up to ${feasibility.maxPerDomain} per domain`);
+    log.warn(`${caller} - App ${spec.name} requests ${feasibility.instances} instances across ${feasibility.domainCount} fault domain(s); synced instances will co-locate up to ${feasibility.maxPerDomain} per domain`);
   }
   return feasibility;
 }
@@ -865,6 +884,7 @@ module.exports = {
   placementFeasibility,
   placementCategory,
   changesPlacement,
+  placementPinCount,
   countHeldInDomain,
   specNamesThisNode,
   checkPlacementFeasibility,

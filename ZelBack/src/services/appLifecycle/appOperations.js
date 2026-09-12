@@ -40,6 +40,7 @@ const registryManager = require('../appDatabase/registryManager');
 const https = require('https');
 const { getSpec, getSpecBackend, assertUpdateInvariants } = require('../utils/specLibs');
 const appEventVerifier = require('../appMessaging/appEventVerifier');
+const placementFeasibility = require('../appPlacement/placementFeasibility');
 const messageVerifier = require('../appMessaging/messageVerifier');
 const appQueryService = require('../appQuery/appQueryService');
 const { listRunningContainers } = appQueryService;
@@ -1531,6 +1532,14 @@ async function updateAppGlobaly(params) {
     ? await previousSpec.decrypt(await previousSpec.createProvider())
     : previousSpec;
   await assertUpdateInvariants(priorCleartext, spec);
+
+  // Placement feasibility applies to updates too: a narrowed geolocation, a
+  // raised instance count or a shrunk pin set must not buy a spec the network
+  // provably cannot satisfy. The previous spec is passed so an update that
+  // changes nothing placement-relevant - a renewal, a cancellation - is not
+  // gated at all, and an unreadable prior counts as unchanged rather than as a
+  // change. A failure to COMPUTE never refuses.
+  await placementFeasibility.checkPlacementFeasibility(spec, 'updateAppGlobaly', priorCleartext);
 
   const appEvent = await appEventVerifier.deserializeTempMessage({
     type: cleanMessageType,

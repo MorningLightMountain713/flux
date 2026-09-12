@@ -11,6 +11,7 @@ const daemonServiceMiscRpcs = require('../daemonService/daemonServiceMiscRpcs');
 const fluxCommunicationMessagesSender = require('../fluxCommunicationMessagesSender');
 const ingressAttestationService = require('../appMessaging/ingressAttestationService');
 const registryManager = require('../appDatabase/registryManager');
+const placementFeasibility = require('../appPlacement/placementFeasibility');
 const messageVerifier = require('../appMessaging/messageVerifier');
 const appEventVerifier = require('../appMessaging/appEventVerifier');
 const { verifyImageRegistryAndArchitectures } = require('../appSecurity/imageArchitectureValidator');
@@ -263,6 +264,12 @@ async function verifyAppRegistrationParameters(req, res) {
 
     await registryManager.checkApplicationRegistrationNameConflicts(spec);
 
+    // Placement feasibility at the front door, while the spec is in hand: a spec
+    // the network provably cannot place is refused before it is paid for, and a
+    // diversity-constrained one is accepted with a warning. A failure to COMPUTE
+    // never refuses - without the computation there is no proof.
+    await placementFeasibility.checkPlacementFeasibility(spec, 'verifyAppRegistrationParameters');
+
     const respondPrice = messageHelper.createDataMessage(broadcastBlob);
     res.json(respondPrice);
   } catch (error) {
@@ -307,6 +314,11 @@ async function validateAppUpdate(appSpecification, meta = {}) {
   const latestSupportedSpecVersion = config.get('fluxapps.latestSupportedSpecVersion');
   const { UpdatePolicy } = await getSpec();
   UpdatePolicy.assertVersionTransition(previousSpec, spec, latestSupportedSpecVersion);
+
+  // The same gate the submission applies, so a preflight cannot pass an update
+  // the submission then refuses. Passing the previous spec keeps a renewal or a
+  // cancellation - anything that changes nothing placement-relevant - ungated.
+  await placementFeasibility.checkPlacementFeasibility(spec, 'validateAppUpdate', previousSpec);
 
   return broadcastBlob;
 }
@@ -396,6 +408,11 @@ async function submitAppRegistration(req, res, processedBody, contentCtx) {
   });
 
   await registryManager.checkApplicationRegistrationNameConflicts(spec);
+
+  // The preflight applies this too, but the preflight is advisory - a client can
+  // skip it. This is the path that stores and gossips the spec, so the refusal
+  // has to stand here as well.
+  await placementFeasibility.checkPlacementFeasibility(spec, 'registerAppGlobalyApi');
 
   // Content rides as ONE HPKE-sealed envelope — never plaintext in transit. Open it
   // toward this node's per-app transport key and upload synchronously so it is

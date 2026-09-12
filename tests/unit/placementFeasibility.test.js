@@ -7,7 +7,9 @@ const cidrUtils = require('../../ZelBack/src/services/utils/cidrUtils');
 // which every version builds and no hand-written literal carries - a literal
 // with a `geolocation` key is the v8 SERIALIZED shape, and passing it is the
 // exact mistake that let a v9 spec's restrictions read as absent in production.
-const { v8Spec } = require('./fixtures/fluxSpec');
+const {
+  v8Spec, v9Spec, loadSpecLibrary, V9_SUBMISSION,
+} = require('./fixtures/fluxSpec');
 
 function v4Int(ip) {
   return Number(cidrUtils.parseIp(ip).value);
@@ -577,13 +579,33 @@ describe('placementFeasibility tests', () => {
   });
 
   describe('checkPlacementFeasibility', () => {
-    const syncedBahrainSpec = {
-      name: 'wordpressLike',
-      version: 7,
-      instances: 3,
-      geolocation: ['acAS_BH'],
-      compose: [{ name: 'wp', containerData: 'r:/var/www/html' }],
+    // REAL specs, because the gate reads a spec's own Placement now. It used to
+    // read `geolocation`, `compose` and `nodes` off a submission document and
+    // convert them - the v8 spelling - and a v9 spec carries none of those, so
+    // it would not have thrown: placementFromDocument would have built a
+    // Placement with no restrictions and reported every spec feasible. A
+    // document-shaped fixture cannot tell those two apart, which is why these
+    // build the thing production hands it.
+    const componentsThat = (synced) => {
+      const components = JSON.parse(JSON.stringify(V9_SUBMISSION.components));
+      if (synced) components.web.persistentStorage.sync = { mode: 'sync' };
+      else delete components.web.persistentStorage.sync;
+      return components;
     };
+    const specOf = ({
+      name, instances, placement, synced = true,
+    }) => v9Spec({
+      name, instances, ...(placement ? { placement } : {}), components: componentsThat(synced),
+    });
+    const BAHRAIN = { geoAllow: [{ continent: 'AS', country: 'BH' }] };
+    let syncedBahrainSpec;
+
+    before(async function buildSpecs() {
+      // the first fromSubmission compiles the schemas
+      this.timeout(60_000);
+      await loadSpecLibrary();
+      syncedBahrainSpec = await specOf({ name: 'wordpresslike', instances: 3, placement: BAHRAIN });
+    });
 
     it('warns when a synced app spans fewer domains than instances and returns the feasibility', async () => {
       useTable();
@@ -623,9 +645,11 @@ describe('placementFeasibility tests', () => {
       // proof, not mistrust - registering it sells a deployment that cannot start
       useTable();
       deterministicFluxListStub.resolves([...fiNodes, ...deNodes]);
-      await placementFeasibility.checkPlacementFeasibility({
-        name: 'regionPinned', version: 7, instances: 2, geolocation: ['acEU_FI_FI-18'], compose: [{ containerData: 'r:/data' }],
-      }, 'testCaller').then(
+      await placementFeasibility.checkPlacementFeasibility(await specOf({
+        name: 'regionpinned',
+        instances: 2,
+        placement: { geoAllow: [{ continent: 'EU', country: 'FI', region: 'FI-18' }] },
+      }), 'testCaller').then(
         () => { throw new Error('expected rejection'); },
         (error) => expect(error.message).to.include('Widen the allowed locations'),
       );
@@ -634,9 +658,16 @@ describe('placementFeasibility tests', () => {
     it('keeps the zero-candidate allowance when any allow entry is not a region pin', async () => {
       useTable();
       deterministicFluxListStub.resolves([...fiNodes, ...deNodes]);
-      const result = await placementFeasibility.checkPlacementFeasibility({
-        name: 'mixedPin', version: 7, instances: 2, geolocation: ['acEU_FI_FI-18', 'acAS_BH'], compose: [{ containerData: 'r:/data' }],
-      }, 'testCaller');
+      const result = await placementFeasibility.checkPlacementFeasibility(await specOf({
+        name: 'mixedpin',
+        instances: 2,
+        placement: {
+          geoAllow: [
+            { continent: 'EU', country: 'FI', region: 'FI-18' },
+            { continent: 'AS', country: 'BH' },
+          ],
+        },
+      }), 'testCaller');
       expect(result.candidateCount).to.equal(0);
       expect(logStub.warn.args.some((a) => a[0].includes('may not cover it'))).to.equal(true);
     });
@@ -644,9 +675,9 @@ describe('placementFeasibility tests', () => {
     it('rejects an impossible non-synced spec too', async () => {
       useTable();
       deterministicFluxListStub.resolves([bhNodes[0], ...fiNodes]);
-      await placementFeasibility.checkPlacementFeasibility({
-        name: 'plain', version: 7, instances: 3, geolocation: ['acAS_BH'], compose: [{ containerData: '/data' }],
-      }, 'testCaller').then(
+      await placementFeasibility.checkPlacementFeasibility(await specOf({
+        name: 'plain', instances: 3, placement: BAHRAIN, synced: false,
+      }), 'testCaller').then(
         () => { throw new Error('expected rejection'); },
         (error) => expect(error.message).to.include('eligible nodes'),
       );
@@ -660,13 +691,11 @@ describe('placementFeasibility tests', () => {
       // explain.
       useTable();
       deterministicFluxListStub.resolves([...bhNodes]);
-      const result = await placementFeasibility.checkPlacementFeasibility({
-        name: 'pinnedShort',
-        version: 7,
+      const result = await placementFeasibility.checkPlacementFeasibility(await specOf({
+        name: 'pinnedshort',
         instances: 3,
-        nodes: [bhNodes[0].ip, bhNodes[1].ip, '203.0.113.77:16127'],
-        compose: [{ containerData: 'r:/data' }],
-      }, 'testCaller');
+        placement: { targetIps: [bhNodes[0].ip, bhNodes[1].ip, '203.0.113.77:16127'] },
+      }), 'testCaller');
 
       expect(result.candidateCount).to.equal(2);
       expect(logStub.warn.args.some((a) => a[0].includes('are in the confirmed node list right now'))).to.equal(true);
@@ -677,13 +706,11 @@ describe('placementFeasibility tests', () => {
       // because a pinned spec has no allowed locations to widen.
       useTable();
       deterministicFluxListStub.resolves([...bhNodes]);
-      await placementFeasibility.checkPlacementFeasibility({
-        name: 'pinnedTooFew',
-        version: 7,
+      await placementFeasibility.checkPlacementFeasibility(await specOf({
+        name: 'pinnedtoofew',
         instances: 3,
-        nodes: [bhNodes[0].ip, bhNodes[1].ip],
-        compose: [{ containerData: 'r:/data' }],
-      }, 'testCaller').then(
+        placement: { targetIps: [bhNodes[0].ip, bhNodes[1].ip] },
+      }), 'testCaller').then(
         () => { throw new Error('expected rejection'); },
         (error) => {
           expect(error.message).to.include('names only 2 node(s)');
@@ -695,13 +722,13 @@ describe('placementFeasibility tests', () => {
     it('accepts non-synced and unconstrained placements without warning', async () => {
       useTable();
       deterministicFluxListStub.resolves([...bhNodes, ...fiNodes, ...deNodes, bgNode]);
-      const nonSynced = await placementFeasibility.checkPlacementFeasibility({
-        name: 'plain', version: 7, instances: 3, geolocation: ['acAS_BH'], compose: [{ containerData: '/data' }],
-      }, 'testCaller');
+      const nonSynced = await placementFeasibility.checkPlacementFeasibility(await specOf({
+        name: 'plain', instances: 3, placement: BAHRAIN, synced: false,
+      }), 'testCaller');
       expect(nonSynced.candidateCount).to.equal(3);
-      const spread = await placementFeasibility.checkPlacementFeasibility({
-        ...syncedBahrainSpec, geolocation: [],
-      }, 'testCaller');
+      const spread = await placementFeasibility.checkPlacementFeasibility(await specOf({
+        name: 'wordpresslike', instances: 3,
+      }), 'testCaller');
       expect(spread.domainCount).to.be.greaterThan(2);
       expect(logStub.warn.called).to.equal(false);
     });
@@ -711,8 +738,11 @@ describe('placementFeasibility tests', () => {
       // already infeasible must still be renewable and cancellable
       useTable();
       deterministicFluxListStub.resolves([...fiNodes]);
-      const previous = { ...syncedBahrainSpec, expire: 22_000 };
-      const cancellation = { ...syncedBahrainSpec, expire: 1 };
+      // Two specs with the same placement and instance count: an expire-only
+      // edit is exactly what must not be gated, and expire is not part of what
+      // placement is computed from.
+      const previous = await specOf({ name: 'wordpresslike', instances: 3, placement: BAHRAIN });
+      const cancellation = await specOf({ name: 'wordpresslike', instances: 3, placement: BAHRAIN });
       const result = await placementFeasibility.checkPlacementFeasibility(cancellation, 'testCaller', previous);
       expect(result).to.equal(null);
       expect(deterministicFluxListStub.called).to.equal(false);
@@ -721,27 +751,46 @@ describe('placementFeasibility tests', () => {
     it('gates an update that narrows placement', async () => {
       useTable();
       deterministicFluxListStub.resolves([bhNodes[0], ...fiNodes]);
-      const previous = { ...syncedBahrainSpec, geolocation: [] };
+      const previous = await specOf({ name: 'wordpresslike', instances: 3 });
       await placementFeasibility.checkPlacementFeasibility(syncedBahrainSpec, 'testCaller', previous).then(
         () => { throw new Error('expected rejection'); },
         (error) => expect(error.message).to.include('eligible nodes'),
       );
     });
 
-    it('changesPlacement sees geolocation, instances and sizing, and ignores the rest', () => {
-      const base = {
-        version: 7, instances: 3, geolocation: ['acEU'], compose: [{ cpu: 1, ram: 100, hdd: 1 }],
-      };
+    it('changesPlacement sees the placement and the instance count, and nothing else', async () => {
       const { changesPlacement } = placementFeasibility;
-      expect(changesPlacement(base, { ...base, expire: 5000 })).to.equal(false);
-      expect(changesPlacement(base, { ...base, geolocation: ['acEU'] })).to.equal(false);
-      // order alone is not a change
-      expect(changesPlacement({ ...base, geolocation: ['acEU', 'acNA'] }, { ...base, geolocation: ['acNA', 'acEU'] })).to.equal(false);
-      expect(changesPlacement(base, { ...base, instances: 5 })).to.equal(true);
-      expect(changesPlacement(base, { ...base, geolocation: ['acAS_BH'] })).to.equal(true);
-      expect(changesPlacement(base, { ...base, compose: [{ cpu: 8, ram: 100, hdd: 1 }] })).to.equal(true);
+      const base = await specOf({ name: 'baseapp', instances: 3, placement: { geoAllow: [{ continent: 'EU' }] } });
+      const same = await specOf({ name: 'baseapp', instances: 3, placement: { geoAllow: [{ continent: 'EU' }] } });
+      const moreInstances = await specOf({ name: 'baseapp', instances: 5, placement: { geoAllow: [{ continent: 'EU' }] } });
+      const elsewhere = await specOf({ name: 'baseapp', instances: 3, placement: BAHRAIN });
+      // Same placement, different component sizing. Resources are deliberately
+      // NOT part of the shape: placementComputation never reads them, so gating
+      // on one would refuse a renewal over a number this gate cannot act on.
+      const bigger = await v9Spec({
+        name: 'baseapp',
+        instances: 3,
+        placement: { geoAllow: [{ continent: 'EU' }] },
+        components: (() => {
+          const c = JSON.parse(JSON.stringify(V9_SUBMISSION.components));
+          c.web.cpu = 4;
+          return c;
+        })(),
+      });
+      const notSynced = await specOf({
+        name: 'baseapp', instances: 3, placement: { geoAllow: [{ continent: 'EU' }] }, synced: false,
+      });
+
+      expect(changesPlacement(base, same)).to.equal(false);
+      expect(changesPlacement(base, bigger)).to.equal(false);
+      expect(changesPlacement(base, notSynced)).to.equal(false);
+      expect(changesPlacement(base, moreInstances)).to.equal(true);
+      expect(changesPlacement(base, elsewhere)).to.equal(true);
       // no previous spec to compare against - gate it
       expect(changesPlacement(base, null)).to.equal(true);
+      // a previous spec this node could not read carries no placement; treating
+      // that as a change would gate the renewals this exists to let through
+      expect(changesPlacement(base, { name: 'baseapp' })).to.equal(false);
     });
 
     it('a failed computation logs and returns null - only proven impossibility rejects', async () => {
