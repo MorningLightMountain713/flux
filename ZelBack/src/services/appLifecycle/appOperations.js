@@ -48,6 +48,7 @@ const deploymentProvider = require('../appRuntime/deploymentProvider');
 const appReconciler = require('../appMonitoring/appReconciler');
 const syncthingMonitorHelpers = require('../appMonitoring/syncthingMonitorHelpers');
 const syncthingFolderStateMachine = require('../appMonitoring/syncthingFolderStateMachine');
+const { ConfigMethod } = require('../utils/syncthingConstants');
 // Accessed through the module object, not destructured: a destructured binding
 // is fixed at load and cannot be substituted, so the two-writer rule could not be
 // exercised against a stated silence verdict.
@@ -716,8 +717,11 @@ async function changeSyncthingFolderType(folderId, folderType) {
     }
 
     // Update folder type using PATCH
-    const patchData = { type: folderType };
-    const updateResponse = await syncthingService.adjustConfigFolders('patch', patchData, folder.id);
+    const updateResponse = await syncthingService.adjustConfigFolders({
+      method: ConfigMethod.PATCH,
+      config: { type: folderType },
+      id: folder.id,
+    });
 
     if (updateResponse.status === 'success') {
       log.debug(`Successfully changed syncthing folder ${folderId} to ${folderType} mode`);

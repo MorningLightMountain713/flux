@@ -9,6 +9,7 @@ const operationRegistry = require('../utils/operationRegistry');
 const appCaches = require('../utils/appCaches');
 const fluxNetworkHelper = require('../fluxNetworkHelper');
 const syncthingService = require('../syncthingService');
+const { ConfigMethod } = require('../utils/syncthingConstants');
 const globalState = require('../utils/globalState');
 const fluxEventBus = require('../utils/fluxEventBus');
 const deploymentProvider = require('../appRuntime/deploymentProvider');
@@ -55,6 +56,32 @@ const syncthingEventsConsumer = require('./syncthingEventsConsumer');
 const fluxDirPath = process.env.FLUXOS_PATH || path.join(process.env.HOME, 'zelflux');
 const appsFolderPath = process.env.FLUX_APPS_FOLDER || path.join(fluxDirPath, 'ZelApps');
 const appsFolder = `${appsFolderPath}/`;
+
+/**
+ * Whether syncthing applied a configuration WRITE, and a loud line when it did not.
+ *
+ * THE TWO HALVES OF syncthingService ANSWER DIFFERENTLY. The reads -
+ * getConfigFolders, getConfigDevices - go through `request` and answer rows or
+ * throw. The writes - adjustConfigFolders, adjustConfigDevices - go through
+ * `performRequest`, which turns every axios failure into an ENVELOPE and never
+ * rejects, so a `.catch()` on one is dead code and a bare `await` discards the
+ * answer. Every write in this file goes through here, and a refused demotion,
+ * folder write or orphan sweep is distinguishable from a completed one.
+ *
+ * A throw is handled too rather than assumed away: a caller that must not itself
+ * fail should not depend on which of the two arrives.
+ *
+ * @param {Promise<{status: string, data: object}>} write - an adjustConfig* call in flight
+ * @param {string} what - what was being applied, for the log line
+ * @returns {Promise<boolean>} true only when syncthing accepted it
+ */
+async function syncthingApplied(write, what) {
+  const response = await write.catch((error) => ({ status: 'error', data: { message: error.message } }));
+  if (response && response.status === 'success') return true;
+  const reason = (response && response.data && response.data.message) || 'unknown error';
+  log.error(`syncthingAppsCore - ${what} FAILED: ${reason}`);
+  return false;
+}
 
 /**
  * Verify one app folder's mount safety, repairing an unmounted volume on the
@@ -281,11 +308,16 @@ async function reconcileFenceAutoAccept(appName, locations, allDevices, fence) {
     }
   });
   const applied = patches.map(async (patch) => {
-    try {
-      await syncthingService.adjustConfigDevices('patch', { autoAcceptFolders: patch.autoAcceptFolders }, patch.deviceID);
+    const ok = await syncthingApplied(
+      syncthingService.adjustConfigDevices({
+        method: ConfigMethod.PATCH,
+        config: { autoAcceptFolders: patch.autoAcceptFolders },
+        id: patch.deviceID,
+      }),
+      `${appName}: autoAcceptFolders ${patch.autoAcceptFolders} for device ${patch.deviceID.slice(0, 12)}`,
+    );
+    if (ok) {
       log.info(`syncthingMonitor - ${appName}: autoAcceptFolders ${patch.autoAcceptFolders} for device ${patch.deviceID.slice(0, 12)}`);
-    } catch (error) {
-      log.warn(`syncthingMonitor - ${appName}: autoAccept patch failed for ${patch.deviceID.slice(0, 12)}: ${error.message}`);
     }
   });
   await Promise.all(applied);
@@ -650,11 +682,21 @@ async function syncthingAppsCore(state, getGlobalStateFn) {
       for (const { appId, identifier, reason } of unmountedApps) {
         const folder = folders.find((f) => f.id === appId);
         if (folder && folder.type === 'sendreceive') {
-          log.error(`syncthingAppsCore - SAFETY BLOCK: ${appId} folder is sendreceive over an unsafe mount (${reason}); switching to receiveonly and holding the container`);
           // eslint-disable-next-line no-await-in-loop
-          await syncthingService.adjustConfigFolders('patch', { type: 'receiveonly' }, appId).catch((err) => {
-            log.error(`syncthingAppsCore - Failed to switch ${appId} to receiveonly: ${err.message}`);
-          });
+          const demoted = await syncthingApplied(
+            syncthingService.adjustConfigFolders({ method: ConfigMethod.PATCH, config: { type: 'receiveonly' }, id: appId }),
+            `SAFETY BLOCK: demoting ${appId} to receiveonly over an unsafe mount (${reason})`,
+          );
+          if (demoted) {
+            log.error(`syncthingAppsCore - SAFETY BLOCK: ${appId} folder was sendreceive over an unsafe mount (${reason}); switched to receiveonly and holding the container`);
+          } else {
+            log.error(`syncthingAppsCore - SAFETY BLOCK: ${appId} is STILL sendreceive over an unsafe mount (${reason}); holding the container and retrying the demotion next pass`);
+          }
+          // The container is held whether or not the demotion landed: the harm
+          // is this node's copy writing to a bad mount, which a failed demotion
+          // does not make less likely. The flag is untouched here - it resolves
+          // only where the mount question is ANSWERED - so the next pass comes
+          // back to this folder.
           appReconciler.setControllerDesired(identifier, 'stopped', `mount safety block: ${reason}`);
         }
       }
@@ -742,9 +784,10 @@ async function syncthingAppsCore(state, getGlobalStateFn) {
 
             // Immediately switch to receiveonly mode
             // eslint-disable-next-line no-await-in-loop
-            await syncthingService.adjustConfigFolders('patch', { type: 'receiveonly' }, folder.id).catch((err) => {
-              log.error(`syncthingAppsCore - Failed to switch ${folder.id} to receiveonly: ${err.message}`);
-            });
+            await syncthingApplied(
+              syncthingService.adjustConfigFolders({ method: ConfigMethod.PATCH, config: { type: 'receiveonly' }, id: folder.id }),
+              `STARTUP SAFETY: demoting ${folder.id} to receiveonly`,
+            );
           } else {
             log.info(`syncthingAppsCore - Folder ${appId} mount is safe (mounted=${mountSafety.isMounted}, files=${mountSafety.fileCount})`);
           }
@@ -868,15 +911,17 @@ async function syncthingAppsCore(state, getGlobalStateFn) {
     const cleanupPromises = [
       ...nonUsedFolders.map((folder) => {
         log.info(`syncthingAppsCore - Removing unused Syncthing folder ${folder.id}`);
-        return syncthingService.adjustConfigFolders('delete', undefined, folder.id).catch((err) => {
-          log.error(`Failed to remove folder ${folder.id}: ${err.message}`);
-        });
+        return syncthingApplied(
+          syncthingService.adjustConfigFolders({ method: ConfigMethod.DELETE, id: folder.id }),
+          `removing unused folder ${folder.id}`,
+        );
       }),
       ...nonUsedDevices.map((device) => {
         log.info(`syncthingAppsCore - Removing unused Syncthing device ${device.deviceID}`);
-        return syncthingService.adjustConfigDevices('delete', undefined, device.deviceID).catch((err) => {
-          log.error(`Failed to remove device ${device.deviceID}: ${err.message}`);
-        });
+        return syncthingApplied(
+          syncthingService.adjustConfigDevices({ method: ConfigMethod.DELETE, id: device.deviceID }),
+          `removing unused device ${device.deviceID}`,
+        );
       }),
     ];
 
@@ -884,7 +929,10 @@ async function syncthingAppsCore(state, getGlobalStateFn) {
 
     // Apply new configuration
     if (devicesConfiguration.length > 0) {
-      await syncthingService.adjustConfigDevices('put', devicesConfiguration);
+      await syncthingApplied(
+        syncthingService.adjustConfigDevices({ method: ConfigMethod.PUT, config: devicesConfiguration }),
+        `writing ${devicesConfiguration.length} device(s)`,
+      );
     }
     // Inert in production - the bus is a no-op unless the harness enables it -
     // and the only way anything outside can tell a pass that reached the folder
@@ -896,16 +944,28 @@ async function syncthingAppsCore(state, getGlobalStateFn) {
     });
 
     if (newFoldersConfiguration.length > 0) {
-      await syncthingService.adjustConfigFolders('put', newFoldersConfiguration);
+      const wrote = await syncthingApplied(
+        syncthingService.adjustConfigFolders({ method: ConfigMethod.PUT, config: newFoldersConfiguration }),
+        `writing ${newFoldersConfiguration.length} folder(s)`,
+      );
       // Reconciled in BOTH directions the moment the write lands, not left to
       // the next pass. The published set is what a peer reads before promoting a
       // folder of its own, and a promotion applied on the line above is absent
       // from it until syncthing is read again - so two nodes promoting in one
       // cycle would each advertise nothing, neither would block the other, and
       // that is the collision the check exists to catch.
-      for (const folder of newFoldersConfiguration) {
-        if (folder.type === 'sendreceive') globalState.promotedFolderIds.add(folder.id);
-        else globalState.promotedFolderIds.delete(folder.id);
+      //
+      // ONLY when the write landed. This is an ASSERTION about syncthing's state
+      // made without re-reading it, and it is what peers act on: applied to a
+      // write syncthing refused, this node advertises folders it does not hold
+      // writable and a peer stands down from a promotion nothing is serving. A
+      // refused write leaves the scan at the top of this pass standing, and the
+      // next pass re-derives it.
+      if (wrote) {
+        for (const folder of newFoldersConfiguration) {
+          if (folder.type === 'sendreceive') globalState.promotedFolderIds.add(folder.id);
+          else globalState.promotedFolderIds.delete(folder.id);
+        }
       }
     }
 

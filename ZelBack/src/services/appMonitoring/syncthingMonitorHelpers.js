@@ -8,6 +8,7 @@ const log = require('../../lib/log');
 const serviceHelper = require('../serviceHelper');
 const dockerService = require('../dockerService');
 const syncthingService = require('../syncthingService');
+const { ConfigMethod } = require('../utils/syncthingConstants');
 const volumeService = require('../utils/volumeService');
 const { SYNCTHING_IGNORE_LINES } = require('../appSystem/volumeReservedNames');
 const {
@@ -358,9 +359,8 @@ async function removeSyncthingFolder(appComponentName, res) {
     const identifier = appComponentName;
     const appId = dockerService.getAppIdentifier(identifier);
     const folder = `${appsFolder + appId}`;
-    // getConfigFolders answers the rows, or throws. It has never answered an
-    // envelope to an internal caller, so `.status` was undefined here and this
-    // guard could not fire; a failed read now leaves through the catch below.
+    // getConfigFolders answers the rows, or throws; a failed read leaves through
+    // the catch below.
     const allSyncthingFolders = await syncthingService.getConfigFolders();
     if (!Array.isArray(allSyncthingFolders)) {
       return;
@@ -371,8 +371,18 @@ async function removeSyncthingFolder(appComponentName, res) {
         folderId = syncthingFolder.id;
       }
       if (folderId) {
+        // adjustConfigFolders answers an ENVELOPE and never rejects - it goes
+        // through performRequest, where the read above goes through `request`
+        // and throws. Only a removal syncthing accepted is reported as one.
         // eslint-disable-next-line no-await-in-loop
-        await syncthingService.adjustConfigFolders('delete', undefined, folderId);
+        const removal = await syncthingService.adjustConfigFolders({ method: ConfigMethod.DELETE, id: folderId });
+        if (removal.status !== 'success') {
+          log.error(`removeSyncthingFolder - failed to remove folder ${folderId}: ${removal.data?.message || 'unknown error'}`);
+          emitFolderStatus(res, { status: `Syncthing folder ${syncthingFolder.path} could not be removed` });
+          folderId = null;
+          // eslint-disable-next-line no-continue
+          continue;
+        }
         // eslint-disable-next-line no-await-in-loop
         const restartRequired = await syncthingService.getConfigRestartRequired();
         if (restartRequired.status === 'success' && restartRequired.data.requiresRestart === true) {

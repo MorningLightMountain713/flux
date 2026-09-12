@@ -41,6 +41,7 @@ function advanceMonotonic(ms) {
   process.hrtime.bigint = () => real() + BigInt(ms) * 1000000n;
   return () => { process.hrtime.bigint = real; };
 }
+const { ConfigMethod } = require('../../ZelBack/src/services/utils/syncthingConstants');
 
 describe('syncthingService tests', () => {
   // The gui config carries syncthing's apikey - the credential that authenticates
@@ -320,6 +321,69 @@ describe('syncthingService tests', () => {
 
       const res = await syncthingService.getDeviceId();
       expect(res).to.be.equal(null);
+    });
+  });
+
+  describe('adjustConfigFolders / adjustConfigDevices shape', () => {
+    let fakeInstance;
+
+    beforeEach(() => {
+      sinon.stub(serviceHelper, 'runCommand').resolves({ error: null });
+      sinon.stub(fs, 'readFile').resolves(syncthingFixtures.configFile);
+      fakeInstance = {
+        get: sinon.stub().resolves({ data: {} }),
+        put: sinon.stub().resolves({ data: {} }),
+        post: sinon.stub().resolves({ data: {} }),
+        patch: sinon.stub().resolves({ data: {} }),
+        delete: sinon.stub().resolves({ data: {} }),
+      };
+      sinon.stub(axios, 'create').returns(fakeInstance);
+    });
+
+    afterEach(async () => {
+      syncthingService.getAxiosCache().reset();
+      await syncthingService.syncthingController().abort();
+      sinon.restore();
+    });
+
+    it('addresses one folder by id, and the whole collection without one', async () => {
+      await syncthingService.adjustConfigFolders({ method: ConfigMethod.DELETE, id: 'fluxweb_app' });
+      sinon.assert.calledWith(fakeInstance.delete, '/rest/config/folders/fluxweb_app');
+
+      await syncthingService.adjustConfigFolders({ method: ConfigMethod.PUT, config: [{ id: 'fluxweb_app' }] });
+      sinon.assert.calledWith(fakeInstance.put, '/rest/config/folders', [{ id: 'fluxweb_app' }]);
+    });
+
+    it('carries the body on a patch, and sends none when there is none to send', async () => {
+      await syncthingService.adjustConfigDevices({ method: ConfigMethod.PATCH, config: { autoAcceptFolders: false }, id: 'PEER-DEVICE' });
+      sinon.assert.calledWith(fakeInstance.patch, '/rest/config/devices/PEER-DEVICE', { autoAcceptFolders: false });
+
+      // no positional `undefined` standing in for a body a delete does not have -
+      // the key is simply absent, and absence is what reaches the wire. A literal
+      // null would not be the same request: axios sends one as a body.
+      await syncthingService.adjustConfigDevices({ method: ConfigMethod.DELETE, id: 'PEER-DEVICE' });
+      expect(fakeInstance.delete.lastCall.args[1], 'a delete carries no body').to.equal(undefined);
+    });
+
+    it('refuses a method that is not one syncthing accepts, without asking it', async () => {
+      const answer = await syncthingService.adjustConfigFolders({ method: 'destroy', id: 'fluxweb_app' });
+
+      expect(answer.status).to.equal('error');
+      expect(answer.data.message).to.contain('destroy');
+      Object.values(fakeInstance).forEach((verb) => sinon.assert.notCalled(verb));
+    });
+
+    it('refuses an id that is not a syncthing id, without asking it', async () => {
+      const answer = await syncthingService.adjustConfigFolders({ method: ConfigMethod.DELETE, id: '../../rest/system/shutdown' });
+
+      expect(answer.status).to.equal('error');
+      expect(answer.data.message).to.equal('Invalid ID supplied');
+      Object.values(fakeInstance).forEach((verb) => sinon.assert.notCalled(verb));
+    });
+
+    it('is a frozen set - a caller cannot add a method to it', () => {
+      expect(Object.isFrozen(ConfigMethod)).to.be.true;
+      expect(() => { ConfigMethod.DESTROY = 'destroy'; }).to.throw();
     });
   });
 
