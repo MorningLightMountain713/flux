@@ -121,18 +121,26 @@ describe('IOUtils streamed measurement', () => {
     // { error, mounts }: an empty mounts is an answer ("not mounted"), an error
     // is a failure to answer. Callers must not read [0].mount off either, and a
     // destructive caller must refuse on error rather than treat it as "absent".
-    const loadWithMounts = (listMountedFilesystems) => proxyquire('../../ZelBack/src/services/IOUtils', {
-      './deviceHelper': { listMountedFilesystems },
+    // getVolumeInfo resolves through volumeService, which is where the mount
+    // table is read and matched to an identity. IOUtils has not required
+    // deviceHelper for some time, so stubbing it here substituted a module the
+    // target never asks for - proxyquire does that silently - and the real
+    // lookup ran instead. These tests are about the {error, mounts} contract,
+    // so the resolution is stubbed at the seam that answers it.
+    const loadWithMounts = (listComponentVolumeMounts) => proxyquire('../../ZelBack/src/services/IOUtils', {
+      './utils/volumeService': { listComponentVolumeMounts },
     });
 
     it('reports the matching mount with error null', async () => {
       const IOUtils = loadWithMounts(sinon.stub().resolves([{
-        target: '/mnt/appdata/fluxcomp_app',
-        source: '/dev/loop0',
+        replica: null,
+        identifier: 'fluxcomp_app',
+        mount: '/mnt/appdata/fluxcomp_app',
+        filesystem: '/dev/loop0',
         sizeBytes: 1000,
         usedBytes: 400,
         availableBytes: 600,
-        usePercent: 40,
+        capacity: 0.4,
       }]));
 
       const { error, mounts } = await IOUtils.getVolumeInfo('app', 'comp', 'B', 0, 'mount');
@@ -143,7 +151,7 @@ describe('IOUtils streamed measurement', () => {
     });
 
     it('reports an empty mounts, not an error, when nothing matches', async () => {
-      const IOUtils = loadWithMounts(sinon.stub().resolves([{ target: '/mnt/appdata/fluxother_thing' }]));
+      const IOUtils = loadWithMounts(sinon.stub().resolves([]));
 
       const { error, mounts } = await IOUtils.getVolumeInfo('app', 'comp', 'B', 0, 'mount');
 
