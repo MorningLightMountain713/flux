@@ -317,7 +317,7 @@ describe('availabilityChecker tests', () => {
       sinon.stub(fluxNetworkHelper, 'isPortBanned').returns(false);
       // Reached only if the "in use" branch does NOT fire, so leaving this
       // stubbed proves the branch by what it does not do.
-      const peerPicker = sinon.stub(networkStateService, 'getRandomSocketAddress').resolves(null);
+      const peerPicker = sinon.stub(networkStateService, 'getRandomExternalObserver').resolves(null);
 
       waitMs = await availabilityChecker.runAvailabilityCheckOnce(
         mockDosState,
@@ -348,7 +348,7 @@ describe('availabilityChecker tests', () => {
       sinon.stub(nodeConfirmationService, 'isConfirmed').returns(true);
       sinon.stub(fluxNetworkHelper, 'getLocalSocketAddress').resolves('192.168.1.100:16127');
       sinon.stub(fluxNetworkHelper, 'isPortBanned').returns(false);
-      const peerPicker = sinon.stub(networkStateService, 'getRandomSocketAddress').resolves(null);
+      const peerPicker = sinon.stub(networkStateService, 'getRandomExternalObserver').resolves(null);
 
       waitMs = await availabilityChecker.runAvailabilityCheckOnce(
         mockDosState,
@@ -387,7 +387,7 @@ describe('availabilityChecker tests', () => {
       sinon.stub(nodeConfirmationService, 'isConfirmed').returns(true);
       sinon.stub(fluxNetworkHelper, 'getLocalSocketAddress').resolves('192.168.1.100:16127');
       sinon.stub(fluxNetworkHelper, 'isPortBanned').returns(false);
-      const peerPicker = sinon.stub(networkStateService, 'getRandomSocketAddress').resolves(null);
+      const peerPicker = sinon.stub(networkStateService, 'getRandomExternalObserver').resolves(null);
 
       waitMs = await availabilityChecker.runAvailabilityCheckOnce(
         mockDosState,
