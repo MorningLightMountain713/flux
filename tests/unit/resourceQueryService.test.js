@@ -317,7 +317,7 @@ describe('resourceQueryService tests', () => {
 
       sinon.stub(messageHelper, 'createDataMessage').callsFake((data) => ({ status: 'success', data }));
 
-      await resourceQueryService.appsResources(req, res);
+      await resourceQueryService.appsResourcesApi(req, res);
 
       sinon.assert.calledOnce(res.json);
       const response = res.json.firstCall.args[0];
@@ -360,7 +360,7 @@ describe('resourceQueryService tests', () => {
 
       admissionControl.reserve('PendingApp', pending);
 
-      const response = await resourceQueryService.appsResources(null, null);
+      const response = await resourceQueryService.appsResources();
 
       expect(response.data.appsCpusLocked).to.equal(2);
       expect(response.data.appsRamLocked).to.equal(4000);
@@ -405,7 +405,7 @@ describe('resourceQueryService tests', () => {
 
       sinon.stub(messageHelper, 'createDataMessage').callsFake((data) => ({ status: 'success', data }));
 
-      await resourceQueryService.appsResources(req, res);
+      await resourceQueryService.appsResourcesApi(req, res);
 
       sinon.assert.calledOnce(res.json);
       const response = res.json.firstCall.args[0];
@@ -465,7 +465,7 @@ describe('resourceQueryService tests', () => {
 
       sinon.stub(messageHelper, 'createDataMessage').callsFake((data) => ({ status: 'success', data }));
 
-      await resourceQueryService.appsResources(req, res);
+      await resourceQueryService.appsResourcesApi(req, res);
 
       sinon.assert.calledOnce(res.json);
       const response = res.json.firstCall.args[0];
@@ -532,7 +532,7 @@ describe('resourceQueryService tests', () => {
 
       sinon.stub(messageHelper, 'createDataMessage').callsFake((data) => ({ status: 'success', data }));
 
-      await resourceQueryService.appsResources(req, res);
+      await resourceQueryService.appsResourcesApi(req, res);
 
       sinon.assert.calledOnce(res.json);
       const response = res.json.firstCall.args[0];
@@ -546,7 +546,7 @@ describe('resourceQueryService tests', () => {
     it('should work without response object', async () => {
       sinon.stub(messageHelper, 'createDataMessage').callsFake((data) => ({ status: 'success', data }));
 
-      const result = await resourceQueryService.appsResources(null, null);
+      const result = await resourceQueryService.appsResources();
 
       expect(result.status).to.equal('success');
       expect(result.data.appsCpusLocked).to.equal(0);
@@ -561,7 +561,7 @@ describe('resourceQueryService tests', () => {
 
       sinon.stub(messageHelper, 'createDataMessage').callsFake((data) => ({ status: 'success', data }));
 
-      await resourceQueryService.appsResources(req, res);
+      await resourceQueryService.appsResourcesApi(req, res);
 
       sinon.assert.calledOnce(res.json);
       const response = res.json.firstCall.args[0];
@@ -577,7 +577,7 @@ describe('resourceQueryService tests', () => {
       sinon.stub(dbHelper, 'databaseConnection').throws(new Error('Database connection error'));
       sinon.stub(messageHelper, 'createErrorMessage').returns({ status: 'error' });
 
-      await resourceQueryService.appsResources(req, res);
+      await resourceQueryService.appsResourcesApi(req, res);
 
       sinon.assert.calledOnce(res.json);
       expect(res.json.firstCall.args[0].status).to.equal('error');
@@ -633,7 +633,7 @@ describe('resourceQueryService tests', () => {
 
       sinon.stub(messageHelper, 'createDataMessage').callsFake((data) => ({ status: 'success', data }));
 
-      await resourceQueryService.appsResources(req, res);
+      await resourceQueryService.appsResourcesApi(req, res);
 
       sinon.assert.calledOnce(res.json);
       const response = res.json.firstCall.args[0];
@@ -672,7 +672,7 @@ describe('resourceQueryService tests', () => {
 
       sinon.stub(messageHelper, 'createDataMessage').callsFake((data) => ({ status: 'success', data }));
 
-      const response = await resourceQueryService.appsResources(null, null);
+      const response = await resourceQueryService.appsResources();
 
       expect(response.data.appsCpusLocked).to.equal(0);
       expect(response.data.appsRamLocked).to.equal(0);
@@ -726,7 +726,7 @@ describe('resourceQueryService tests', () => {
 
       sinon.stub(messageHelper, 'createDataMessage').callsFake((data) => ({ status: 'success', data }));
 
-      const response = await resourceQueryService.appsResources(null, null);
+      const response = await resourceQueryService.appsResources();
 
       // The totals are the surviving app's, exactly - so a 0 here could not be
       // mistaken for "the malformed row counted as nothing".
