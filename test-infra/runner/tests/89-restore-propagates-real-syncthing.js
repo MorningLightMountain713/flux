@@ -7,7 +7,7 @@ import { buildSeedableSyncthingApp } from '../framework/seed-helper.js';
 import { waitFor, waitForReconcileActuated, waitForUp } from '../framework/wait.js';
 import { bootAndPeer, installOnNodes, seedSyncScopedData } from '../framework/reconciler-suite.js';
 import {
-  isDaemonUp, getDeviceId, getVersion, getConnectedDevices, listFolderFiles,
+  isDaemonUp, getDeviceId, getVersion, getConnectedDevices, listFolderFiles, getFolders,
 } from '../framework/syncthing-real.js';
 import { authenticate } from '../auth.js';
 import { appOwnerKey } from '../framework/keys.js';
@@ -100,6 +100,18 @@ describe('a restore reaches the other instances through syncthing', function () 
     // not the harness's
     await waitFor(async () => (await getConnectedDevices(a)).includes(ids[1]), {
       timeout: 240000, interval: 5000, label: 'node 0 connected to node 1',
+    });
+
+    // ...and they share THIS APP'S FOLDER, which is a different fact from being
+    // connected devices. Syncthing carrying the restore is the mechanism under
+    // test, and it carries nothing over a folder the peer does not hold or does
+    // not share with the restoring node - every assertion below would then time
+    // out without saying why.
+    await waitFor(async () => {
+      const row = (await getFolders(b)).find((f) => f.id === folder);
+      return Boolean(row) && (row.devices || []).some((d) => d.deviceID === ids[0]);
+    }, {
+      timeout: 240000, interval: 5000, label: `node 1 holds folder ${folder} and shares it with node 0`,
     });
   });
 
