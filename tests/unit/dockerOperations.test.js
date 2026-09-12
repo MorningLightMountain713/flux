@@ -390,12 +390,21 @@ describe('appOperations application lifecycle tests', () => {
       sinon.assert.notCalled(appsRepositoryStub.getGlobalAppInfo);
     });
 
-    it('should log error and not drive when app specs not found for whole app', async () => {
+    // These two used to assert that a failure here was logged and swallowed.
+    // It is raised now, and deliberately: both callers are backup and restore,
+    // which call this immediately before reading or replacing the volume. A
+    // swallowed failure told them the app was down when it was not, and a
+    // container still writing had its data archived or overwritten underneath
+    // it. The throw reaches each caller's catch, which restarts the app and
+    // releases the lease.
+    it('refuses the whole app rather than reporting it stopped, when its specs are not found', async () => {
       appsRepositoryStub.getGlobalAppInfo.resolves(null);
 
-      await appOperations.stopApplication('testapp');
+      let raised = null;
+      await appOperations.stopApplication('testapp').catch((error) => { raised = error; });
 
-      sinon.assert.calledOnce(logStub.error);
+      expect(raised, 'a caller about to touch the volume must not be told this succeeded').to.be.an('Error');
+      expect(raised.message).to.equal('Application not found');
       sinon.assert.notCalled(appReconcilerStub.drive);
     });
 
@@ -425,14 +434,16 @@ describe('appOperations application lifecycle tests', () => {
         .to.deep.equal(identifiers);
     });
 
-    it('should handle reconciler errors gracefully', async () => {
+    it('raises a reconciler failure rather than reporting the component stopped', async () => {
       const { deployment } = await twoComponentApp();
       const [[, web]] = deployment.componentEntries();
       appReconcilerStub.drive.rejects(new Error('converge failed'));
 
-      await appOperations.stopApplication(web.identifier);
+      let raised = null;
+      await appOperations.stopApplication(web.identifier).catch((error) => { raised = error; });
 
-      sinon.assert.calledOnce(logStub.error);
+      expect(raised, 'the reconciler could not answer, so nothing may act as though it did').to.be.an('Error');
+      expect(raised.message).to.equal('converge failed');
     });
   });
 
