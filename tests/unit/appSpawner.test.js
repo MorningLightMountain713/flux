@@ -1607,7 +1607,7 @@ describe('appSpawner tests', () => {
     // 2 real pins, 1 required instance -> real contention.
     const contendedPlacement = () => ({ targetIps: [MY_ADDR, '10.0.0.7'] });
 
-    it('announces v1 to everyone and the v2 claim to claim-capable peers, storing the claim locally', async () => {
+    it('announces v1 and the v2 claim to DISJOINT peer sets, storing the claim locally', async () => {
       const broadcastAllStub = sinon.stub().resolves();
       buildModule({ candidates: [await makeCandidate()], broadcastAllStub });
 
@@ -1616,16 +1616,22 @@ describe('appSpawner tests', () => {
       const stored = registryManagerStub.storeAppInstallingMessage.firstCall.args[0];
       expect(stored.version).to.equal(2);
       expect(stored.announcedAt).to.be.a('number');
-      expect(stored.broadcastedAt).to.equal(stored.announcedAt + 1);
+      // The claim used to be stamped announcedAt + 1, so that a peer receiving the
+      // v1 announce AND the v2 claim converged on the announcedAt-bearing row. No
+      // peer receives both now, so the two carry the same time and the offset is
+      // gone with the thing it arranged.
+      expect(stored.broadcastedAt).to.equal(stored.announcedAt);
 
       const calls = broadcastAllStub.getCalls();
       const v1Call = calls.find((c) => c.args[0].version === 1);
       const v2Call = calls.find((c) => c.args[0].version === 2 && !c.args[0].withdrawn);
-      expect(v1Call, 'v1 announce must broadcast unfiltered').to.exist;
-      expect(v1Call.args[1]).to.equal(undefined);
+      expect(v1Call, 'the v1 announce must still be sent').to.exist;
       expect(v2Call, 'v2 claim must broadcast capability-filtered').to.exist;
-      expect(v2Call.args[0].announcedAt).to.equal(v1Call.args[0].broadcastedAt);
+      // THE PROPERTY: the two gates are complements, so no peer is in both sets.
+      // A capable peer reads the claim; anyone else gets the announce.
+      expect(v1Call.args[1]).to.deep.equal({ excludeCapability: 'appInstallingClaims' });
       expect(v2Call.args[1]).to.deep.equal({ requireCapability: 'appInstallingClaims' });
+      expect(v2Call.args[0].announcedAt).to.equal(v1Call.args[0].broadcastedAt);
     });
 
     it('a named app announces one tagged v2 claim per assigned replica and no v1', async () => {

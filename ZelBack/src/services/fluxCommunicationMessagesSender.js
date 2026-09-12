@@ -268,11 +268,15 @@ async function relay(data, excludeKey) {
  * @param {object} dataToBroadcast Data to broadcast.
  * @param {object} [options]
  * @param {string} [options.requireCapability] Only send to peers advertising this capability.
+ * @param {string} [options.excludeCapability] Skip peers advertising this capability.
  */
 async function broadcastMessageToAll(dataToBroadcast, options = {}) {
   const serialisedData = await serialiseAndSignFluxBroadcast(dataToBroadcast);
   if (!serialisedData) return null;
-  await peerManager.broadcast(serialisedData, { requireCapability: options.requireCapability });
+  await peerManager.broadcast(serialisedData, {
+    requireCapability: options.requireCapability,
+    excludeCapability: options.excludeCapability,
+  });
   return JSON.parse(serialisedData);
 }
 

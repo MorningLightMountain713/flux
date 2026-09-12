@@ -172,11 +172,14 @@ describe('installing claims: election losers release their seats by cleared broa
       { timeout: 60000, interval: 2000, label: `${appName} claims all released without TTL` },
     );
 
-    // The cleared message itself was seen on the wire: receivers republish it
-    // on the event bus (harness observability of the v2 clear).
-    const clearedSeen = env.clients.some((c) => c.getEventBuffer().some(
-      (e) => e.event === 'network:appinstalling' && e.data?.name === appName && e.data?.cleared === true,
+    // The retraction itself was seen on the wire: receivers republish it on the
+    // event bus (harness observability of the v2 withdrawal). The field is
+    // `withdrawn` - this read `cleared`, which the emitter has never sent and the
+    // bus has never published, so the assertion could not pass. Nothing noticed
+    // because this suite has not run.
+    const withdrawalSeen = env.clients.some((c) => c.getEventBuffer().some(
+      (e) => e.event === 'network:appinstalling' && e.data?.name === appName && e.data?.withdrawn === true,
     ));
-    expect(clearedSeen, 'some node must have received a cleared claim broadcast').to.equal(true);
+    expect(withdrawalSeen, 'some node must have received a withdrawn claim broadcast').to.equal(true);
   });
 });

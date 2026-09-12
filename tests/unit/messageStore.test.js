@@ -1095,13 +1095,13 @@ describe('messageStore tests', () => {
       expect(dbHelperStub.updateOneInDatabase.called).to.be.false;
     });
 
-    it('should delete the row and archived broadcast on cleared', async () => {
+    it('should delete the row and archived broadcast on a withdrawal', async () => {
       const broadcastedAt = Date.now();
       const message = {
         type: 'fluxappinstalling',
         version: 2,
         name: 'testapp',
-        cleared: true,
+        withdrawn: true,
         broadcastedAt,
         ip: '192.168.1.1',
       };
@@ -1132,7 +1132,7 @@ describe('messageStore tests', () => {
         version: 2,
         name: 'testapp',
         replica: 's1',
-        cleared: true,
+        withdrawn: true,
         broadcastedAt,
         ip: '192.168.1.1',
       };
@@ -1150,13 +1150,13 @@ describe('messageStore tests', () => {
       expect(dbHelperStub.removeDocumentsFromCollection.secondCall.args[2]).to.deep.equal({ 'data.name': 'testapp', 'data.ip': '192.168.1.1', 'data.replica': 's1', ...clearGuard });
     });
 
-    it('should ignore a stale cleared that arrives after a newer announce', async () => {
+    it('should ignore a stale withdrawal that arrives after a newer announce', async () => {
       const broadcastedAt = Date.now() - 60 * 1000;
       const message = {
         type: 'fluxappinstalling',
         version: 2,
         name: 'testapp',
-        cleared: true,
+        withdrawn: true,
         broadcastedAt,
         ip: '192.168.1.1',
       };
@@ -1171,12 +1171,12 @@ describe('messageStore tests', () => {
       expect(dbHelperStub.removeDocumentsFromCollection.called).to.be.false;
     });
 
-    it('should relay a cleared with no stored row (peers may still hold one)', async () => {
+    it('should relay a withdrawal with no stored row (peers may still hold one)', async () => {
       const message = {
         type: 'fluxappinstalling',
         version: 2,
         name: 'testapp',
-        cleared: true,
+        withdrawn: true,
         broadcastedAt: Date.now(),
         ip: '192.168.1.1',
       };
@@ -1231,13 +1231,13 @@ describe('messageStore tests', () => {
       });
     });
 
-    it('should not archive a cleared broadcast', async () => {
+    it('should not archive a withdrawn broadcast', async () => {
       await messageStore.storeSignedAppInstallingBroadcast({
         version: 1,
         timestamp: Date.now(),
         pubKey: 'pub',
         signature: 'sig',
-        data: { name: 'testapp', ip: '192.168.1.1', broadcastedAt: Date.now(), cleared: true },
+        data: { name: 'testapp', ip: '192.168.1.1', broadcastedAt: Date.now(), withdrawn: true },
       });
 
       expect(dbHelperStub.updateOneInDatabase.called).to.be.false;
@@ -1282,6 +1282,55 @@ describe('messageStore tests', () => {
       expect(locationOps[0].updateOne.update[0].$set.broadcastedAt).to.have.property('$cond');
       expect(locationOps[0].updateOne.update[0].$set.expireAt).to.have.property('$cond');
       expect(locationOps[0].updateOne.update[0].$set.announcedAt).to.have.property('$cond');
+    });
+
+    // The batch path's retraction handling had NO test, which is how a skip line
+    // above it - left by the side of the merge that had no retraction handling at
+    // all - shadowed it unnoticed for one spelling. Nothing constructed a batch
+    // retraction, so nothing could see that it was dropped.
+    it('a withdrawal in a batch deletes the claim rather than archiving it', async () => {
+      const broadcastedAt = Date.now();
+      const bulkWriteStub = sinon.stub().resolves();
+      const mockDatabase = { collection: sinon.stub().returns({ bulkWrite: bulkWriteStub }) };
+      const mockDb = { db: sinon.stub().returns(mockDatabase) };
+      dbHelperStub.databaseConnection.returns(mockDb);
+
+      const result = await messageStore.storeBatchAppInstallingMessages([{
+        version: 2,
+        timestamp: broadcastedAt,
+        pubKey: 'pub',
+        signature: 'sig',
+        receivedAt: broadcastedAt,
+        // version 2 on the DATA, not only the envelope: the envelope's version is
+        // the broadcast format and the message's own is what says claim vs
+        // retraction. No announcedAt - a retraction asserts no claim.
+        data: {
+          version: 2,
+          name: 'testapp',
+          ip: '192.168.1.1',
+          replica: 's1',
+          broadcastedAt,
+          withdrawn: true,
+        },
+      }]);
+
+      // `stored` counts what was APPLIED, claims stored and withdrawals applied
+      // alike - so a retraction that reached the delete counts, and one skipped
+      // before it would not.
+      expect(result).to.deep.equal({ stored: 1 });
+
+      const calls = bulkWriteStub.getCalls().map((c) => c.args[0]);
+      const deletes = calls.flat().filter((op) => op.deleteMany);
+      expect(deletes, 'the retraction must reach the delete, not be skipped').to.not.be.empty;
+      // Its own replica's seat, and only a claim older than the retraction - one
+      // arriving after the sender claimed again must not erase the newer claim.
+      expect(deletes[0].deleteMany.filter).to.include({
+        name: 'testapp', ip: '192.168.1.1', replica: 's1',
+      });
+      expect(deletes[0].deleteMany.filter.broadcastedAt).to.have.property('$lt');
+      // And nothing archived it: archiving a retraction re-serves a dead claim.
+      const upserts = calls.flat().filter((op) => op.updateOne);
+      expect(upserts, 'a retraction is not a claim to store').to.be.empty;
     });
   });
 
