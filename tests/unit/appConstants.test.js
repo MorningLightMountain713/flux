@@ -370,8 +370,15 @@ describe('appConstants tests', () => {
       expect(appConstants.INSTALLING_ERRORS_EXPIRY_MS).to.equal(24 * 60 * 60 * 1000);
     });
 
-    it('expires an evicted record with the location record that named it', () => {
-      expect(appConstants.EVICTED_EXPIRY_MS).to.equal(appConstants.RUNNING_EXPIRY_MS);
+    // An `evicted` app-state row, and the EVICTED_EXPIRY_MS that aged it out
+    // with the location record that named it, are development's. This tree has
+    // no such row - APP_STATE_EVENT_TYPES carries NODEDOWN where development
+    // carries EVICTED and SIGTERM - and the grace that governs it is
+    // NODE_DOWN_GRACE_MS, pinned at 420s in nodeDownJuror.test.js and exercised
+    // against the running expiry in nodeDownService.test.js. Asserting the
+    // retired constant here only ever said it was absent.
+    it('keeps the node-down grace inside the location record it must not outlive', () => {
+      expect(appConstants.NODE_DOWN_GRACE_MS).to.be.below(appConstants.RUNNING_EXPIRY_MS);
     });
   });
 });

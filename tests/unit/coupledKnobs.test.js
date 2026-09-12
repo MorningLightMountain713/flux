@@ -217,14 +217,19 @@ describe('coupled harness knobs track production', () => {
     expect(Math.abs(modelled - MEASURED_PASS_MS) / MEASURED_PASS_MS).to.be.below(0.05);
   });
 
-  it('holds the sigterm window below the running expiry, in production', () => {
+  it('holds the node-down grace below the running expiry, in production', () => {
     const { fluxapps } = productionConfig();
 
-    expect(knobs.PRODUCTION.sigtermExpiryS).to.equal(fluxapps.sigtermExpiryS);
+    // This asserted sigtermExpiryS, which production no longer defines - the
+    // node-down port replaced the two-constant rule ((cleanShutdown && downtime
+    // > sigterm) || downtime > running) with one grace that every stop gets,
+    // announced or not. The drift this file exists to catch is exactly that, so
+    // it now tracks the key appStartupManager actually reads.
+    expect(knobs.PRODUCTION.nodeDownGraceS).to.equal(fluxapps.nodeDownGraceS);
     expect(knobs.PRODUCTION.locationTtlS).to.equal(fluxapps.locationTtlS);
-    // The ordering IS the property: appStartupManager expires on
-    // (cleanShutdown && downtime > sigterm) || downtime > running.
-    expect(fluxapps.sigtermExpiryS).to.be.below(fluxapps.locationTtlS);
+    // The ordering IS the property: a grace at or past the running expiry means
+    // the fleet has already replaced the node's apps before the grace is up.
+    expect(fluxapps.nodeDownGraceS).to.be.below(fluxapps.locationTtlS);
   });
 
   it('rejects a fleet where the running expiry pre-empts the sigterm window', () => {

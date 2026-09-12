@@ -48,6 +48,18 @@ export const PRODUCTION = Object.freeze({
   residentialQueueBaseMs: 30 * 60 * 1000,
   residentialQueueStepMs: 40 * 60 * 1000,
   locationTtlS: 7500,
+  // The grace a node gets before the fleet treats its apps as gone. It used to
+  // be two constants - a clean-shutdown window and the running expiry - and the
+  // node-down port replaced them with this one, on the stated ground that every
+  // stop gets the same grace whether it was announced or not. Same 420 under the
+  // name FluxOS now reads.
+  nodeDownGraceS: 420,
+  // RETIRED ON THE NODE SIDE. Nothing under ZelBack/src reads
+  // fluxapps.sigtermExpiryS any more and production's config no longer defines
+  // it, so the harness writing it into a fleet's config has no effect and the
+  // assertions below are about a knob nothing consults. Left in place rather
+  // than pulled out blind: the gate has never run, and retiring a harness knob
+  // is a change to fleet timing that should be made where it can be watched.
   sigtermExpiryS: 420,
   // The peer-flap DOS: how far back the tally looks, and how often the sweep
   // that releases it runs. One decision at two scales - a suite that shortens
