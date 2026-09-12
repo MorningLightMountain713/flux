@@ -50,6 +50,73 @@ describe('specLibs — how a spec validation failure reaches the caller', () => 
     });
   });
 
+  // THE OWNER IS THE ONLY KEY THAT CAN EVER MANAGE THE APP AGAIN. An address one
+  // character off its own checksum is as unsignable as a username, and a
+  // registration carrying one orphans the app at the moment it is created -
+  // which is the incident that produced the rule (owner set to the literal
+  // string "TrippleCore", restored on-chain at height 2861184).
+  //
+  // The rule lives in flux-spec, where isValidSigningIdentity and
+  // FluxAppSpecV9.validateSemantics both have their own tests. What has no test
+  // there and cannot have one is whether THIS NODE'S live submission path still
+  // reaches it. The rule is a semantic one precisely because the schema accepts
+  // the shape, so a seam that stopped calling validateSemantics - or built the
+  // spec some other way - would refuse nothing, and every flux-spec suite would
+  // stay green.
+  describe('an owner no signature can be verified against', () => {
+    const withOwner = (owner) => ({
+      version: 9,
+      name: 'ownertest',
+      description: 'x',
+      owner,
+      instances: 3,
+      ttl: 86_400,
+      contacts: { email: ['admin@example.com'] },
+      components: {
+        web: {
+          name: 'web',
+          image: 'nginx:latest',
+          cpu: 0.5,
+          memory: 300,
+          rootFsGb: 2,
+          persistentStorage: { sizeGb: 5, mounts: { '/data': { source: 'data', destination: '/data' } }, sync: null },
+        },
+      },
+    });
+
+    const refusal = async (owner) => validateSubmissionSpec(withOwner(owner)).then(() => null, (err) => err);
+
+    it('accepts the spec when the owner is a Flux ID, so the refusals below are about the owner', async () => {
+      const spec = await validateSubmissionSpec(withOwner('16dNCFf7nR3nx5iwn2RQMBw6KcJXkE3JC1'));
+      expect(spec.owner).to.equal('16dNCFf7nR3nx5iwn2RQMBw6KcJXkE3JC1');
+    });
+
+    it('refuses a Flux ID whose checksum does not hold, which only decoding can see', async () => {
+      // the accepted id above with its last character changed: same length,
+      // same alphabet, same shape - the schema cannot tell them apart
+      const err = await refusal('16dNCFf7nR3nx5iwn2RQMBw6KcJXkE3JC2');
+      expect(err, 'a submission path that no longer reaches validateSemantics refuses nothing')
+        .to.be.instanceOf(ValidationError);
+      expect(err.errors.map((e) => e.code)).to.include('UNSIGNABLE_IDENTITY');
+      expect(err.errors.some((e) => String(e.field).includes('owner')), `no error names owner: ${JSON.stringify(err.errors)}`).to.equal(true);
+    });
+
+    // The two layers, and why the semantic rule has to exist. The incident's
+    // own value is refused by the SCHEMA - wrong length, wrong alphabet - and a
+    // shape check is enough for it. The checksum case above is the one no
+    // pattern can reach, and it is the one that would otherwise reach the chain.
+    it('refuses a username at the schema, which needs no decoding', async () => {
+      const err = await refusal('TrippleCore');
+      expect(err).to.be.instanceOf(ValidationError);
+      expect(err.errors.map((e) => e.code)).to.include('INVALID_VALUE');
+    });
+
+    it('accepts an Ethereum address, so the rule is the identity and not the Flux ID alphabet', async () => {
+      const spec = await validateSubmissionSpec(withOwner('0x52908400098527886E0F7030069857D2E4169EE7'));
+      expect(spec.owner).to.equal('0x52908400098527886E0F7030069857D2E4169EE7');
+    });
+  });
+
   // The version-activation gate — chain policy, and until now completely
   // untested: removing it from both wrappers broke nothing across 31 suites.
   //
