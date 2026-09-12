@@ -7,6 +7,17 @@ const proxyquire = require('proxyquire').noCallThru();
 
 const { Privilege, authOf } = require('../../ZelBack/src/services/utils/privileges');
 const { asConfig } = require('./fixtures/config');
+const { loadSpecLibrary, V9_SUBMISSION, v9Spec } = require('./fixtures/fluxSpec');
+
+// F23. Development's appInspector test file was taken whole at stop 312, and
+// with it went the v9 commit's conversion of these to real spec classes. What a
+// hand-written deployment answers is decided by whoever wrote it: the two in the
+// writable-layer block state `identifier` and `containerDiskGb()` and nothing
+// else, so anything reading another member of a component - `image`, say - is
+// unreachable through them. monitorSharedDBApps reads exactly that, and had no
+// test at all.
+const APPS_FOLDER = '/tmp/apps';
+let flux;
 
 // The seam appInspector resolves a container through. Callers name an app, or one
 // of its components as `<component>_<app>`; the container identifier is whatever
@@ -27,6 +38,34 @@ function deploymentProviderStub(overrides = {}) {
 describe('appInspector tests', () => {
   let appInspector;
   let deploymentProviderInstance;
+
+  before(async function loadLibrary() {
+    // the first fromSubmission compiles the schemas
+    this.timeout(60_000);
+    flux = await loadSpecLibrary();
+  });
+
+  /**
+   * A real DeploymentSpec - what deploymentProvider hands appInspector in
+   * production. Sizes and image come from the component, so `containerDiskGb()`
+   * is rootFsGb + swapGb as the class derives it rather than as a test asserts.
+   */
+  async function deploymentOf({
+    name, componentName = 'web', image, rootFsGb = 2, swapGb = 0, cpu = 0.5, hostPort,
+  }) {
+    const components = JSON.parse(JSON.stringify(V9_SUBMISSION.components));
+    const component = components.web;
+    delete components.web;
+    components[componentName] = component;
+    component.name = componentName;
+    component.rootFsGb = rootFsGb;
+    component.swapGb = swapGb;
+    component.cpu = cpu;
+    if (image) component.image = image;
+    if (hostPort) component.ports = { api: { containerPort: 8080, hostPort } };
+    const spec = await v9Spec({ name, components });
+    return flux.DeploymentSpec.fromSpec(spec, APPS_FOLDER, { replica: null });
+  }
   let dockerServiceStub;
   let messageHelperStub;
   let logStub;
@@ -621,6 +660,119 @@ describe('appInspector tests', () => {
     });
   });
 
+  // A DESTRUCTIVE PATH WITH NO TEST. monitorSharedDBApps walks every installed
+  // deployment, asks a shared-db component's own API for its operator status,
+  // and UNINSTALLS the customer's app when it answers UNINSTALL. It finds that
+  // component by `comp.image`, which no hand-written deployment in this file
+  // ever stated - so it could not have been exercised through one, and it was
+  // not exercised at all. (F23.)
+  describe('monitorSharedDBApps', () => {
+    let listInstalledDeploymentsStub;
+    let uninstallStub;
+    let axiosGetStub;
+    let isHeldStub;
+
+    function load() {
+      listInstalledDeploymentsStub = sinon.stub().resolves([]);
+      uninstallStub = sinon.stub().resolves();
+      axiosGetStub = sinon.stub().resolves(null);
+      isHeldStub = sinon.stub().returns(false);
+      return proxyquire('../../ZelBack/src/services/appManagement/appInspector', {
+        '../appRuntime/deploymentProvider': { listInstalledDeployments: listInstalledDeploymentsStub },
+        '../appLifecycle/appUninstaller': { uninstallApplication: uninstallStub },
+        '../utils/operationRegistry': { isHeld: isHeldStub },
+        '../messageHelper': messageHelperStub,
+        '../../lib/log': logStub,
+        // The pass RE-ARMS ITSELF: its finally awaits a five-minute delay and
+        // then calls itself again. So the delay is what ends a run, not a return
+        // - resolved, it recurses without bound, and the function's own promise
+        // never settles either way. A delay that never resolves parks the
+        // re-arm after exactly one pass, which is the pass under test.
+        '../serviceHelper': {
+          ensureString: sinon.stub().returnsArg(0),
+          delay: sinon.stub().returns(new Promise(() => {})),
+          axiosGet: axiosGetStub,
+        },
+        '../verificationHelper': { verifyPrivilege: sinon.stub().resolves(true) },
+        '../utils/appUtilities': { getContainerStorage: sinon.stub().returns(0) },
+        '../dockerService': dockerServiceStub,
+      });
+    }
+
+    const sharedDb = (name) => deploymentOf({
+      name, componentName: 'db', image: 'runonflux/shared-db:latest', hostPort: 31_001,
+    });
+
+    /** One pass: fired, then drained. It cannot be awaited - see load(). */
+    const onePass = async (inspector) => {
+      inspector.monitorSharedDBApps();
+      for (let i = 0; i < 8; i += 1) {
+        // eslint-disable-next-line no-await-in-loop
+        await new Promise((resolve) => { setImmediate(resolve); });
+      }
+    };
+
+    it('uninstalls the app when its operator answers UNINSTALL', async () => {
+      const inspector = load();
+      listInstalledDeploymentsStub.resolves([await sharedDb('shareddbapp')]);
+      axiosGetStub.resolves({ data: { status: 'UNINSTALL' } });
+
+      await onePass(inspector);
+
+      // Asked the component's OWN api port, on localhost.
+      expect(axiosGetStub.firstCall.args[0]).to.equal('http://localhost:31001/status');
+      sinon.assert.calledOnce(uninstallStub);
+      expect(uninstallStub.firstCall.args[0]).to.equal('shareddbapp');
+    });
+
+    it('leaves the app alone on any other status', async () => {
+      const inspector = load();
+      listInstalledDeploymentsStub.resolves([await sharedDb('shareddbapp')]);
+      axiosGetStub.resolves({ data: { status: 'OK' } });
+
+      await onePass(inspector);
+
+      sinon.assert.notCalled(uninstallStub);
+    });
+
+    it('leaves the app alone when the operator cannot be reached', async () => {
+      // An unreachable operator says nothing about whether the app should go.
+      const inspector = load();
+      listInstalledDeploymentsStub.resolves([await sharedDb('shareddbapp')]);
+      axiosGetStub.rejects(new Error('connection refused'));
+
+      await onePass(inspector);
+
+      sinon.assert.notCalled(uninstallStub);
+    });
+
+    it('does not touch an app that is mid-operation', async () => {
+      // The action here is a destructive uninstall; it must not race a lifecycle
+      // operation holding that app's lease.
+      const inspector = load();
+      listInstalledDeploymentsStub.resolves([await sharedDb('shareddbapp')]);
+      axiosGetStub.resolves({ data: { status: 'UNINSTALL' } });
+      isHeldStub.returns(true);
+
+      await onePass(inspector);
+
+      sinon.assert.notCalled(axiosGetStub);
+      sinon.assert.notCalled(uninstallStub);
+    });
+
+    it('asks nothing of an app that is not a shared-db app', async () => {
+      const inspector = load();
+      listInstalledDeploymentsStub.resolves([
+        await deploymentOf({ name: 'ordinary', image: 'nginx:latest' }),
+      ]);
+
+      await onePass(inspector);
+
+      sinon.assert.notCalled(axiosGetStub);
+      sinon.assert.notCalled(uninstallStub);
+    });
+  });
+
   describe('enforceWritableLayerLimit', () => {
     let clock;
     let listInstalledDeploymentsStub;
@@ -660,10 +812,12 @@ describe('appInspector tests', () => {
 
     it('flags a non-managed app whose container exceeds its per-component budget', async () => {
       const inspector = load();
-      listInstalledDeploymentsStub.resolves([{
-        appName: 'big',
-        componentEntries: () => [['web', { identifier: 'web_big', containerDiskGb: () => 3 }]],
-      }]);
+      // A real component, so the budget is rootFsGb + swapGb as the class derives
+      // it - not a number this test asserted and the class might no longer agree
+      // with.
+      listInstalledDeploymentsStub.resolves([
+        await deploymentOf({ name: 'big', rootFsGb: 2, swapGb: 1 }),
+      ]);
       // budget = (2 + 1) * 1e9 = 3e9; the container reports 5e9 on disk → violation
       dockerGetUsageStub.resolves({ Containers: [{ Names: ['/web_big'], SizeRootFs: 5e9 }] });
       const violations = [];
@@ -673,10 +827,9 @@ describe('appInspector tests', () => {
 
     it('does not flag a non-managed app within its per-component budget', async () => {
       const inspector = load();
-      listInstalledDeploymentsStub.resolves([{
-        appName: 'small',
-        componentEntries: () => [['web', { identifier: 'web_small', containerDiskGb: () => 12 }]],
-      }]);
+      listInstalledDeploymentsStub.resolves([
+        await deploymentOf({ name: 'small', rootFsGb: 10, swapGb: 2 }),
+      ]);
       // budget = (10 + 2) * 1e9 = 12e9; the container reports 4e9 on disk → fits
       dockerGetUsageStub.resolves({ Containers: [{ Names: ['/web_small'], SizeRootFs: 4e9 }] });
       const violations = [];

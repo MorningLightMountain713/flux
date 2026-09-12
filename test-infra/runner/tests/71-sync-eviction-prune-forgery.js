@@ -15,9 +15,23 @@ import { getSubnetConfig } from '../framework/subnet-config.js';
 const subnet = getSubnetConfig();
 
 // A sync response is carried through in slices, so a response has to be longer
-// than one slice for these to mean anything.
+// than one slice for these to mean anything - a forged event landing inside the
+// first slice proves nothing about the slice boundary this suite is here for.
+//
+// SLICE mirrors fluxCommunication's SYNC_EVENTS_PER_SLICE. It was stated here
+// and then never read, so the reason above was a claim rather than a condition:
+// lowering FILLER_EVENTS below it would have left every assertion in this file
+// passing over a single-slice response. Asserted at load, where it costs
+// nothing and cannot be skipped.
 const SLICE = 250;
 const FILLER_EVENTS = 320;
+
+if (FILLER_EVENTS <= SLICE) {
+  throw new Error(
+    `71-sync-eviction-prune-forgery: FILLER_EVENTS (${FILLER_EVENTS}) must exceed one slice `
+    + `(${SLICE}) or the response never crosses a slice boundary and this suite proves nothing`,
+  );
+}
 
 const socketAddr = (nodeNum) => `${subnet.nodeIp(nodeNum)}:16127`;
 
