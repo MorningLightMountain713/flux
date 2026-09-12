@@ -1870,7 +1870,11 @@ describe('fluxCommunication tests', () => {
       // carry the envelope of the node that produced it, or it is not stored —
       // there is no type the intake takes on the relaying peer's say-so. (The
       // eviction event was exactly that, and it is gone.)
-      sinon.stub(peerManager, 'isSyncRequested').returns(true);
+      //
+      // The gate is isSyncResponseWanted(socket), as its two siblings above say:
+      // isSyncRequested(key) is the ephemeral one, so the handler returned before
+      // any of this and the round was never marked done.
+      sinon.stub(peerManager, 'isSyncResponseWanted').returns(true);
       sinon.stub(fluxCommunicationUtils, 'verifyFluxBroadcast')
         .resolves({ result: fluxCommunicationUtils.VerifyResult.OK });
       const intake = sinon.stub(nodeDownService, 'onCertificateSyncEvent').resolves();
@@ -1888,7 +1892,10 @@ describe('fluxCommunication tests', () => {
       const onComplete = (...args) => completed.push(args);
       appSyncEvents.on(SYNC_EVENTS.EPHEMERAL_SYNC_COMPLETE, onComplete);
       try {
-        await peerManager.syncResponseDispatcher(
+        // The handler directly, as its siblings above do: syncResponseDispatcher
+        // is null until the peer manager is wired at boot, so driving through it
+        // here reached nothing.
+        await fluxCommunication.handleAppRunningSyncResponse(
           { data: { type: 'fluxapprunningsync', done: true, messages: unsigned } },
           { key: peerKey },
         );

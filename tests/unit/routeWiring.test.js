@@ -228,7 +228,6 @@ describe('route wiring', () => {
       { method: 'get', path: '/apps/appunpause/:appname?/:global?' },
       { method: 'get', path: '/apps/appremove/:appname?/:force?/:global?' },
       { method: 'get', path: '/apps/installapplocally/:appname?' },
-      { method: 'get', path: '/apps/testappinstall/:appname?' },
       { method: 'get', path: '/apps/redeploy/:appname?/:force?/:global?' },
       { method: 'get', path: '/apps/redeploycomponent/:appname?/:component?/:force?' },
       { method: 'post', path: '/ioutils/fileupload/:type?/:appname?/:component?/:folder?/:filename?' },
@@ -247,6 +246,18 @@ describe('route wiring', () => {
         expect(route, `${path} is not registered as a ${method.toUpperCase()}`).to.not.equal(undefined);
         expect(route.chain).to.include(requireBootSettled);
       });
+    });
+
+    // The one install-shaped route that must NOT be gated, asserted rather than
+    // left as an absence from the list above: it installs nothing, and the
+    // frontend gates its payment step on this call succeeding, so a boot-time
+    // caller answered "not ready" cannot reach payment at all. Stated here so
+    // adding it back to the list is a conversation rather than a one-line edit.
+    it('GET /apps/testappinstall/:appname? is deliberately NOT held', () => {
+      const route = table.find((entry) => entry.path === '/apps/testappinstall/:appname?' && entry.method === 'get');
+
+      expect(route, 'testappinstall is not registered as a GET').to.not.equal(undefined);
+      expect(route.chain).to.not.include(requireBootSettled);
     });
   });
   // Every route hands its failures to express, which answers 500 - so a failure
