@@ -221,10 +221,18 @@ function locationSatisfiesRule(rule, loc) {
   if (rule.unrestricted) return true;
   if (!loc || !loc.countryCode || !loc.continentCode) return true;
   if (rule.denies.some((geoTerm) => termCoversLocation(geoTerm, loc))) return false;
+  // BEFORE the allow list, not after it. Install-time applies the `b<CC>` pin
+  // unconditionally - there is no `geoC.length` guard on it, unlike the `a<CONT>`
+  // pin below - so a country pin ANDs with an `ac` allow rather than being
+  // replaced by it. Behind the early return it was unreachable whenever any
+  // modern entry was present: ['acEU','bFR'] counted every node in Europe while
+  // the installer took only France. Over-counting, so the registration gate was
+  // optimistic rather than unsafe, and no spec on chain has ever carried both -
+  // but this function claims to match install-time, and it did not.
+  if (rule.legacyCountry !== null && rule.legacyCountry !== loc.countryCode) return false;
   if (rule.allows.length) {
     return rule.allows.some((geoTerm) => termCoversLocation(geoTerm, loc));
   }
-  if (rule.legacyCountry !== null && rule.legacyCountry !== loc.countryCode) return false;
   if (rule.denies.length === 0
     && rule.legacyContinent !== null && rule.legacyContinent !== loc.continentCode) {
     return false;

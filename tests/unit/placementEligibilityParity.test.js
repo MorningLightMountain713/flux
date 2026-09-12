@@ -280,7 +280,7 @@ describe('placement eligibility parity with install-time geolocation', () => {
     expect(overCounted, `candidate filter counted nodes the installer refuses:\n  ${overCounted.join('\n  ')}`).to.deep.equal([]);
   });
 
-  // THE ONE DIVERGENCE THIS DIFFERENTIAL FOUND, pinned in the direction it runs
+  // THE DIVERGENCES THIS DIFFERENTIAL FOUND, pinned in the direction they run
   // rather than left as a failing grid.
   //
   // `aEU` and `bFI` in one spec is the pre-`ac` spelling of "in Europe, and in
@@ -313,6 +313,43 @@ describe('placement eligibility parity with install-time geolocation', () => {
     expect(
       placementFeasibility.nodeLocationMatchesGeolocation(filterLocation(inGermany), spec),
       'the filter ANDs them, which is what the pins meant',
+    ).to.equal(false);
+  });
+
+  // The second one, and it is the same root: convertLegacyPin's treatment of a
+  // legacy pin beside a modern entry.
+  //
+  // Install-time applies `b<CC>` UNCONDITIONALLY - development's gate guards the
+  // continent pin on `!geoC.length && !geoCForbidden.length` and puts no guard at
+  // all on the country pin - so `['acEU','bFI']` is "in Europe AND in Finland".
+  // convertLegacyPin drops the b pin outright whenever any ac or a!c entry
+  // exists, so the Placement the installer asks carries EU alone.
+  //
+  // The filter reads it correctly as of this commit; it did not before, for the
+  // mirror-image reason (its allow list returned early and the country pin was
+  // never reached). So the two were wrong together, which is why the grids above
+  // never showed it.
+  //
+  // Corpus, measured by the flux-spec session over all 65,732 permanent
+  // messages: no spec has ever carried a legacy pin beside a modern entry, and
+  // of the 60 messages carrying a+b together the continent is the country's own
+  // continent in every one. So nothing on chain moves either way - which is what
+  // makes it safe to fix, not a reason to leave it.
+  it('a legacy country pin beside a modern allow: the filter ANDs it and the installer drops it', async () => {
+    const spec = ['acEU', 'bFI'];
+    const inFinland = NODE_LOCATIONS.find((n) => n.countryCode === 'FI' && n.tableRegion === 'FI-18');
+    const inGermany = NODE_LOCATIONS.find((n) => n.countryCode === 'DE' && n.tableRegion === 'DE-BY');
+
+    // Both take the node the pins actually name.
+    expect(await installerAccepts(spec, inFinland)).to.equal(true);
+    expect(placementFeasibility.nodeLocationMatchesGeolocation(filterLocation(inFinland), spec)).to.equal(true);
+
+    // And disagree on one the country pin excludes - this time with the
+    // INSTALLER as the looser side, which is the unsafe direction.
+    expect(await installerAccepts(spec, inGermany), 'convertLegacyPin dropped the country pin').to.equal(true);
+    expect(
+      placementFeasibility.nodeLocationMatchesGeolocation(filterLocation(inGermany), spec),
+      'the filter applies it, as install-time does',
     ).to.equal(false);
   });
 
