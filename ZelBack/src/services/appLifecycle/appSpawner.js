@@ -879,7 +879,16 @@ async function trySpawningGlobalApplication() {
     if (instantiated.isEncrypted) {
       try {
         const provider = await spec.createProvider();
-        ({ spec } = await spec.decrypt(provider));
+        // The decrypted view itself, not something reached through it. decrypt()
+        // answers a DecryptedCanonicalSpec, which delegates the version's whole
+        // surface - components, placement, componentEntries, hasSyncthing - and
+        // deliberately exposes no accessor for the instance inside it. This line
+        // predates that: it was written as `.spec` when the accessor existed, and
+        // was restyled into a destructure later without being re-read, so it has
+        // been binding `undefined` for every encrypted app. DeploymentSpec.fromSpec
+        // then threw "spec has no components" a few lines below, the outer catch
+        // filed the hash for six hours, and no enterprise app could spawn at all.
+        spec = await spec.decrypt(provider);
       } catch (error) {
         // Decrypt failures are node-local state (provider registration, the
         // benchmark channel), never a verdict on the app — caching the hash
@@ -909,7 +918,6 @@ async function trySpawningGlobalApplication() {
     // Images are spec-level — identical across identities — so any view answers
     // for the blocklist.
     const deployment = deployments[0];
-    const appSpecifications = spec.serialize();
     const appPorts = [...new Set(deployments.flatMap((d) => d.allHostPorts()))];
 
     // verify app compliance
@@ -995,12 +1003,12 @@ async function trySpawningGlobalApplication() {
     // because nothing changes here until the sibling gives the port up.
     const sibling = await portManager.siblingHoldingPort(appPorts, localSocketAddr);
     if (sibling) {
-      log.error(`trySpawningGlobalApplication - ${appSpecifications.name} port ${sibling.port} is held by the Flux node at ${sibling.address}, which shares this public address. Installation aborted.`);
+      log.error(`trySpawningGlobalApplication - ${instantiated.name} port ${sibling.port} is held by the Flux node at ${sibling.address}, which shares this public address. Installation aborted.`);
       // A deferral, published as one: this stands the node down and returns
       // shortDelayTime exactly as the seven reasons below it do, so it belongs
       // in that vocabulary rather than in an event of its own.
       fluxEventBus.publish('spawner:deferred', {
-        appName: appSpecifications.name,
+        appName: instantiated.name,
         reason: 'sibling_holds_port',
         delayMs: shortDelayTime,
         port: sibling.port,
@@ -1095,7 +1103,7 @@ async function trySpawningGlobalApplication() {
         computation = await placementFeasibility.placementComputation(spec, minInstances);
       } catch (error) {
         if (error.statusCode !== 503) throw error;
-        log.info(`trySpawningGlobalApplication - ${appSpecifications.name} deferred: ${error.message}`);
+        log.info(`trySpawningGlobalApplication - ${instantiated.name} deferred: ${error.message}`);
         return shortDelayTime;
       }
       placementShare = computation.feasibility;
@@ -1349,7 +1357,7 @@ async function trySpawningGlobalApplication() {
         const withdrawal = {
           type: 'fluxappinstalling',
           version: 2,
-          name: appSpecifications.name,
+          name: instantiated.name,
           ip: localSocketAddr,
           broadcastedAt: Date.now(),
           withdrawn: true,

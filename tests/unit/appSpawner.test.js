@@ -1137,8 +1137,18 @@ describe('appSpawner tests', () => {
 
       sinon.assert.called(installStub);
       const [handedSpec] = deploymentFromSpecStub.firstCall.args;
-      expect(handedSpec.sealed, 'DeploymentSpec.fromSpec refuses a still-sealed spec').to.not.be.true;
-      expect(handedSpec.constructor.name).to.equal('FluxAppSpecV9');
+      expect(handedSpec.sealed, 'DeploymentSpec.fromSpec refuses a still-sealed spec').to.be.false;
+      // The wrapper, not the instance inside it: DecryptedCanonicalSpec exposes no
+      // accessor for that instance, and the pair it answers - isEncrypted true,
+      // sealed false - is the whole distinction, an encrypted app whose contents
+      // are readable right now. Asserting the inner class name is what let the
+      // spawner bind undefined here unnoticed.
+      expect(handedSpec.constructor.name).to.equal('DecryptedCanonicalSpec');
+      expect(handedSpec.isEncrypted, 'the app is still an encrypted app').to.be.true;
+      // and it answers for the spec it wraps, which is why nothing downstream
+      // needs to reach past it.
+      expect(handedSpec.name).to.equal('testapp');
+      expect(Object.keys(handedSpec.components)).to.not.be.empty;
     });
   });
 
