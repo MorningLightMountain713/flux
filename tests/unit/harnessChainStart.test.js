@@ -105,7 +105,11 @@ describe('harness chain start', () => {
           walk(entry, at);
           return;
         }
-        // A height held as a string is still a height.
+        // A height held as a string is still a height. A boolean is not: `true`
+        // numbers as 1, which counted every flag in the config as a gate at
+        // height 1 - below every start, so harmless, but it inflates the floor
+        // this scan is measured against.
+        if (typeof entry === 'boolean') return;
         const height = typeof entry === 'number' ? entry : Number(entry);
         if (!Number.isFinite(height)) return;
         if (MILLISECONDS.test(at) || BYTES.test(at) || BLOCK_COUNTS.has(at)) return;
@@ -148,7 +152,12 @@ describe('harness chain start', () => {
 
     expect(scanned).to.include.members([
       'deterministicNodesStart',
-      'fluxapps.multisigAddressChange',
+      // Was fluxapps.multisigAddressChange. This tree replaced the flat
+      // addressMultisigB / multisigAddressChange pair with a table of payment
+      // addresses each carrying the height it becomes active, so the gate is the
+      // same 1670000 written as a row - and reaching it means walking into an
+      // array, which is the harder half of what this test is for.
+      'fluxapps.appPaymentAddresses.2.activeFromHeight',
       'fluxapps.epochstart',
       'fluxapps.publicepochstart',
       'fluxapps.applyMinimumPriceOn3Instances',

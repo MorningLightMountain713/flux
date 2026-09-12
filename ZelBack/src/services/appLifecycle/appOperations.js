@@ -970,7 +970,12 @@ async function appendBackupTask(req, res) {
     return false;
   }
   try {
-    const authorized = res ? await verificationHelper.verifyPrivilege(Privilege.APP_OWNER_OR_FLUX_TEAM, authOf(req), { appName: appname }) : true;
+    // Unconditional. It read `res ? await verifyPrivilege(...) : true`, which
+    // authorises whoever arrives without a response object - and the only thing
+    // standing between that and a real bypass was that nothing calls these two
+    // except the router. They cannot be called without a res anyway: the catch
+    // above already writes to it.
+    const authorized = await verificationHelper.verifyPrivilege(Privilege.APP_OWNER_OR_FLUX_TEAM, authOf(req), { appName: appname });
     if (authorized === true) {
       // backup is an app-scoped lease on the same key as install/remove/
       // reconcile, so it's mutually exclusive with them (no feature carve-out).
@@ -1168,7 +1173,12 @@ async function appendRestoreTask(req, res) {
     return false;
   }
   try {
-    const authorized = res ? await verificationHelper.verifyPrivilege(Privilege.APP_OWNER_OR_FLUX_TEAM, authOf(req), { appName: appname }) : true;
+    // Unconditional. It read `res ? await verifyPrivilege(...) : true`, which
+    // authorises whoever arrives without a response object - and the only thing
+    // standing between that and a real bypass was that nothing calls these two
+    // except the router. They cannot be called without a res anyway: the catch
+    // above already writes to it.
+    const authorized = await verificationHelper.verifyPrivilege(Privilege.APP_OWNER_OR_FLUX_TEAM, authOf(req), { appName: appname });
     if (authorized === true) {
       const componentItem = restore.map((restoreItem) => restoreItem);
       // restore is an app-scoped lease on the same key as backup/install/
