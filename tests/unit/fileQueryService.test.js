@@ -85,7 +85,7 @@ describe('fileQueryService tests', () => {
       const res = { json: sinon.stub() };
 
       sinon.stub(verificationHelper, 'verifyPrivilege').resolves(true);
-      sinon.stub(IOUtils, 'getVolumeInfo').resolves({ error: null, mounts: [{ mount }] });
+      sinon.stub(volumeService, 'listComponentVolumeMounts').resolves([{ replica: null, mount }]);
       sinon.stub(fs, 'readdir').resolves([
         'appdata', 'backup', '.flux-op-backups',
         '.stfolder', '.stignore', 'lost+found',
@@ -119,7 +119,7 @@ describe('fileQueryService tests', () => {
       const res = { json: sinon.stub() };
 
       sinon.stub(verificationHelper, 'verifyPrivilege').resolves(true);
-      sinon.stub(IOUtils, 'getVolumeInfo').resolves({ error: null, mounts: [{ mount }] });
+      sinon.stub(volumeService, 'listComponentVolumeMounts').resolves([{ replica: null, mount }]);
       sinon.stub(fs, 'readdir').resolves(['.stignore', 'notes.txt']);
       sinon.stub(fs, 'lstat').resolves({
         isDirectory: () => false,
