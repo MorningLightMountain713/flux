@@ -797,6 +797,12 @@ describe('fileSystemManager tests', () => {
 
   describe('how an operation settles', () => {
     const jobIdOf = () => acceptedBody().jobId;
+    // Inside the worker there is no response to read yet: copy answers inline
+    // when it is quick, so the handler does not write to res until the work has
+    // either finished or outlived its deadline. Asking the registry which job is
+    // running for this app is the only way to name it from in there - which is
+    // what the cancelling caller does too.
+    const runningJobId = () => jobRegistry.runningForApp('fluxcomp_myapp').jobId;
 
     it('is Succeeded when the work finished, even though a cancel was asked for', async () => {
       // Cancellation is cooperative: the flag is raised and the worker stops at
@@ -806,7 +812,7 @@ describe('fileSystemManager tests', () => {
       // tells the caller nothing happened, about the one operation where
       // something irreversibly did.
       executorStub.run.callsFake(async () => {
-        jobRegistry.requestCancel(jobIdOf());
+        jobRegistry.requestCancel(runningJobId());
       });
       req.body = { source: 'photos', destination: 'copied' };
       await fileSystemManager.copyAppsObject(req, res);
@@ -819,7 +825,7 @@ describe('fileSystemManager tests', () => {
       // flux-op traps the signal and exits 143, so a cancel that took effect
       // reaches here as a throw rather than as a resolved operation.
       executorStub.run.callsFake(async () => {
-        jobRegistry.requestCancel(jobIdOf());
+        jobRegistry.requestCancel(runningJobId());
         throw new Error('File operation failed with exit code 143');
       });
       req.body = { source: 'photos', destination: 'copied' };
