@@ -336,13 +336,14 @@ const fluxDirPath = process.env.FLUXOS_PATH || path.join(process.env.HOME, 'zelf
 const appsFolderPath = process.env.FLUX_APPS_FOLDER || path.join(fluxDirPath, 'ZelApps');
 const appsFolder = `${appsFolderPath}/`;
 
-function emitFolderStatus(res, status) {
-  // the human text goes to the journal; the object shape is the stream's contract
-  log.info(typeof status === 'string' ? status : status.status);
-  if (res) {
-    res.write(serviceHelper.ensureString(status));
-    if (res.flush) res.flush();
-  }
+/**
+ * @param {function(string): void} [report] - told what the removal is doing
+ * @param {string|object} status
+ */
+function emitFolderStatus(report, status) {
+  const text = typeof status === 'string' ? status : status.status;
+  log.info(text);
+  if (report) report(text);
 }
 
 /**
@@ -353,9 +354,9 @@ function emitFolderStatus(res, status) {
  * the bare app name matches nothing for them.
  *
  * @param {string} appComponentName - component identifier (flat app name for v1-3 specs)
- * @param {object} [res] - optional response stream for status lines
+ * @param {function(string): void} [report] - told what the removal is doing
  */
-async function removeSyncthingFolder(appComponentName, res) {
+async function removeSyncthingFolder(appComponentName, report) {
   try {
     const identifier = appComponentName;
     const appId = dockerService.getAppIdentifier(identifier);
@@ -379,7 +380,7 @@ async function removeSyncthingFolder(appComponentName, res) {
         const removal = await syncthingService.adjustConfigFolders({ method: ConfigMethod.DELETE, id: folderId });
         if (removal.status !== 'success') {
           log.error(`removeSyncthingFolder - failed to remove folder ${folderId}: ${removal.data?.message || 'unknown error'}`);
-          emitFolderStatus(res, { status: `Syncthing folder ${syncthingFolder.path} could not be removed` });
+          emitFolderStatus(report, { status: `Syncthing folder ${syncthingFolder.path} could not be removed` });
           folderId = null;
           // eslint-disable-next-line no-continue
           continue;
@@ -391,8 +392,8 @@ async function removeSyncthingFolder(appComponentName, res) {
           // eslint-disable-next-line no-await-in-loop
           await syncthingService.systemRestart();
         }
-        emitFolderStatus(res, { status: `Stopping syncthing on folder ${syncthingFolder.path}...` });
-        emitFolderStatus(res, { status: 'Syncthing adjusted' });
+        emitFolderStatus(report, { status: `Stopping syncthing on folder ${syncthingFolder.path}...` });
+        emitFolderStatus(report, { status: 'Syncthing adjusted' });
       }
       folderId = null;
     }

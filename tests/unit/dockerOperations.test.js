@@ -174,6 +174,13 @@ describe('appOperations application lifecycle tests', () => {
     appReconcilerStub = {
       drive: sinon.stub().resolves({ converged: true, failed: [] }),
       setControllerDesired: sinon.stub(),
+      // The container is DOWN by default. A stop's convergence verdict does not
+      // establish that - the anti-hang backstop answers 'provisional' after five
+      // minutes and `converged` stays true - so the callers about to replace the
+      // volume ask docker itself.
+      observedContainerState: sinon.stub().resolves({
+        reachable: true, exists: true, running: false, indeterminate: false,
+      }),
     };
 
     logStub = {
@@ -406,6 +413,99 @@ describe('appOperations application lifecycle tests', () => {
       expect(raised, 'a caller about to touch the volume must not be told this succeeded').to.be.an('Error');
       expect(raised.message).to.equal('Application not found');
       sinon.assert.notCalled(appReconcilerStub.drive);
+    });
+
+    // CONVERGENCE IS NOT THE FACT THESE CALLERS NEED. awaitConvergence counts
+    // only the 'failed' verdict; the anti-hang backstop answers 'provisional'
+    // after convergeBackstopMs (five minutes) and that is not counted, so
+    // `converged` comes back true. Five minutes is nothing against a stop - the
+    // stopping lease is held for its duration, legitimately hours under a
+    // graceful drain - so 'provisional' ordinarily means STILL STOPPING.
+    it('proves the container is down with docker, not with the convergence verdict', async () => {
+      const { deployment } = await twoComponentApp();
+      const [[, web]] = deployment.componentEntries();
+
+      await appOperations.stopApplication(web.identifier);
+
+      sinon.assert.calledWith(appReconcilerStub.observedContainerState, web.identifier);
+    });
+
+    it('refuses when docker says the container is still running, though the drive converged', async () => {
+      const { deployment } = await twoComponentApp();
+      const [[, web]] = deployment.componentEntries();
+      appReconcilerStub.drive.resolves({ converged: true, failed: [] });
+      appReconcilerStub.observedContainerState.resolves({
+        reachable: true, exists: true, running: true, indeterminate: false,
+      });
+
+      let raised = null;
+      await appOperations.stopApplication(web.identifier).catch((error) => { raised = error; });
+
+      expect(raised, 'a container still writing must not have its volume replaced').to.be.an('Error');
+      expect(raised.message).to.contain('is still running');
+    });
+
+    // A container that is draining answers "running", so it refuses at once
+    // rather than spending the daemon budget. The wait exists for a daemon that
+    // cannot answer, not for a container that is taking its time.
+    it('does not wait on a container that is merely still stopping', async () => {
+      const { deployment } = await twoComponentApp();
+      const [[, web]] = deployment.componentEntries();
+      appReconcilerStub.observedContainerState.resolves({
+        reachable: true, exists: true, running: true, indeterminate: false,
+      });
+
+      await appOperations.stopApplication(web.identifier).catch(() => {});
+
+      sinon.assert.calledOnce(appReconcilerStub.observedContainerState);
+    });
+
+    // "I asked, and the container is up" and "docker did not answer" are
+    // different facts, and only one of them is about the container. A dockerd
+    // restart clears in seconds, so it is waited out - bounded, and then refused
+    // as what it is rather than as a container that refused to stop.
+    it('waits out a daemon that cannot answer, then refuses naming the daemon', async () => {
+      const { deployment } = await twoComponentApp();
+      const [[, web]] = deployment.componentEntries();
+      appReconcilerStub.observedContainerState.resolves({ reachable: false });
+      const progress = [];
+
+      let raised = null;
+      await appOperations.stopApplication(web.identifier, (line) => { progress.push(line); })
+        .catch((error) => { raised = error; });
+
+      expect(raised).to.be.an('Error');
+      expect(raised.message).to.contain('docker never became able to answer');
+      expect(raised.message, 'never blamed on the container').to.not.contain('did not stop');
+      expect(appReconcilerStub.observedContainerState.callCount, 'bounded, not forever').to.equal(12);
+      expect(progress.length, 'a 200 already went out, so silence risks the connection').to.equal(11);
+    });
+
+    // The daemon answered but that one inspect failed - docker is fine and the
+    // run-state is unknown. Unknown is not down.
+    it('waits out an indeterminate answer rather than reading it as stopped', async () => {
+      const { deployment } = await twoComponentApp();
+      const [[, web]] = deployment.componentEntries();
+      appReconcilerStub.observedContainerState.resolves({
+        reachable: true, exists: true, running: false, indeterminate: true,
+      });
+
+      let raised = null;
+      await appOperations.stopApplication(web.identifier).catch((error) => { raised = error; });
+
+      expect(raised, 'an unknown run-state must not read as down').to.be.an('Error');
+      expect(raised.message).to.contain('docker never became able to answer');
+    });
+
+    // A container docker confirms is gone cannot write either.
+    it('accepts a container docker confirms is gone', async () => {
+      const { deployment } = await twoComponentApp();
+      const [[, web]] = deployment.componentEntries();
+      appReconcilerStub.observedContainerState.resolves({
+        reachable: true, exists: false, running: false, indeterminate: false,
+      });
+
+      await appOperations.stopApplication(web.identifier);
     });
 
     it('should drive all components of a whole app to stopped', async () => {

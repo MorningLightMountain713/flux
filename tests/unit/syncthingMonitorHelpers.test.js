@@ -388,7 +388,7 @@ describe('syncthingMonitorHelpers tests', () => {
       const restart = sandbox.stub(syncthingService, 'getConfigRestartRequired').resolves({ status: 'success', data: { requiresRestart: true } });
       const emitted = [];
 
-      await helpers.removeSyncthingFolder('web_app', { write: (line) => emitted.push(String(line)) });
+      await helpers.removeSyncthingFolder('web_app', (line) => emitted.push(String(line)));
 
       sinon.assert.calledOnceWithExactly(adjust, { method: 'delete', id: 'fluxweb_app' });
       expect(emitted.some((line) => line.includes('Syncthing adjusted')), `a refused removal was reported as done: ${JSON.stringify(emitted)}`).to.be.false;
