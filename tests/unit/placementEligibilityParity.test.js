@@ -79,6 +79,21 @@ const GEO_SPECS = [
   ['a!cNA_US_US-HI'],
   ['acEU_FI_FI-18', 'acAS_BH'],
   ['acEU', 'a!cEU_FI_FI-18'],
+  // Legacy pins, which compose as AND: a country pin applies unconditionally at
+  // install time and a continent pin only when no modern entry is present. All
+  // three of these diverged until flux-spec `787ed39` and this tree's
+  // `936cace58` - convertLegacyPin ORed the first, dropped the country pin of
+  // the second, and made the third the union of two constraints the owner asked
+  // for the intersection of. They were pinned individually while that was true;
+  // now that both sides agree they belong in the grid with everything else.
+  ['acEU', 'bFI'],
+  ['aNA', 'bDE'],
+  // Pins naming a country and a continent that do not exist. Install time
+  // compares them against every node and matches none, so the app is placeable
+  // nowhere; the conversion said "unconstrained" until `787ed39`. `a=EU` is on
+  // chain, a typo on a v8 test app.
+  ['bZZ'],
+  ['a=EU'],
 ];
 
 // Node locations spanning both sides of every boundary above.
@@ -214,13 +229,6 @@ async function installerAccepts(geolocation, nodeGeo) {
 
 let flux;
 
-// A legacy continent pin and a legacy country pin in the SAME spec compose
-// differently on the two sides, and the pinning test below is where that is
-// stated. Held out of the three grids so the divergence is asserted once, in
-// the direction it actually runs, rather than reported as fourteen pairs.
-const isLegacyComposition = (entries) => entries.some((e) => /^a[A-Z]{2}$/.test(e))
-  && entries.some((e) => /^b[A-Z]{2}$/.test(e));
-
 describe('placement eligibility parity with install-time geolocation', () => {
   before(async function loadLibrary() {
     // The first schema compile is slow; every later call is free.
@@ -234,7 +242,7 @@ describe('placement eligibility parity with install-time geolocation', () => {
   it('counts every node the installer would accept, for every geolocation shape', async () => {
     const underCounted = [];
     // eslint-disable-next-line no-restricted-syntax
-    for (const geolocation of GEO_SPECS.filter((e) => !isLegacyComposition(e))) {
+    for (const geolocation of GEO_SPECS) {
       // eslint-disable-next-line no-restricted-syntax
       for (const nodeGeo of NODE_LOCATIONS) {
         // eslint-disable-next-line no-await-in-loop
@@ -253,7 +261,7 @@ describe('placement eligibility parity with install-time geolocation', () => {
     // resolve the spec's granularity (region). At continent and country
     // granularity the two must agree, or the advice numbers are fiction.
     const overCounted = [];
-    const resolvable = GEO_SPECS.filter((entries) => !isLegacyComposition(entries)).filter((entries) => entries.every((entry) => {
+    const resolvable = GEO_SPECS.filter((entries) => entries.every((entry) => {
       const body = entry.startsWith('a!c') ? entry.slice(3) : entry.slice(2);
       // a region part - including _NONE, which install-time treats as one -
       // is granularity the table cannot resolve, so divergence there is the
@@ -280,127 +288,12 @@ describe('placement eligibility parity with install-time geolocation', () => {
     expect(overCounted, `candidate filter counted nodes the installer refuses:\n  ${overCounted.join('\n  ')}`).to.deep.equal([]);
   });
 
-  // THE DIVERGENCES THIS DIFFERENTIAL FOUND, pinned in the direction they run
-  // rather than left as a failing grid.
-  //
-  // `aEU` and `bFI` in one spec is the pre-`ac` spelling of "in Europe, and in
-  // Finland". The filter reads it that way - geolocationRule keeps legacyCountry
-  // and legacyContinent as separate terms and requires both, under a comment
-  // saying it matches install-time.
-  //
-  // It no longer does. The installer asks the spec's Placement, which is built by
-  // convertGeolocation, and convertLegacyPin pushes {continent:'EU'} and
-  // {continent:'EU',country:'FI'} into one allow list that isAllowedIn evaluates
-  // with `.some`. So the installer reads the same pair as "in Europe, OR in
-  // Finland" and will place in Germany an app whose owner pinned it to Finland.
-  //
-  // Widening is the unsafe side here: the filter under-counting only makes the
-  // registration gate pessimistic, while the installer over-accepting puts the
-  // app somewhere the spec excluded. The fix belongs in flux-spec's
-  // convertLegacyPin, which is not this repo. Pinned meanwhile so that neither
-  // side can move without this saying so.
-  it('legacy continent+country pins: the filter ANDs them and the installer ORs them', async () => {
-    const spec = ['aEU', 'bFI'];
-    const inFinland = NODE_LOCATIONS.find((n) => n.countryCode === 'FI' && n.tableRegion === 'FI-18');
-    const inGermany = NODE_LOCATIONS.find((n) => n.countryCode === 'DE' && n.tableRegion === 'DE-BY');
-
-    // Both agree on the node the pins actually name.
-    expect(await installerAccepts(spec, inFinland)).to.equal(true);
-    expect(placementFeasibility.nodeLocationMatchesGeolocation(filterLocation(inFinland), spec)).to.equal(true);
-
-    // And disagree on one the country pin excludes.
-    expect(await installerAccepts(spec, inGermany), 'the installer ORs the two pins').to.equal(true);
-    expect(
-      placementFeasibility.nodeLocationMatchesGeolocation(filterLocation(inGermany), spec),
-      'the filter ANDs them, which is what the pins meant',
-    ).to.equal(false);
-  });
-
-  // The second one, and it is the same root: convertLegacyPin's treatment of a
-  // legacy pin beside a modern entry.
-  //
-  // Install-time applies `b<CC>` UNCONDITIONALLY - development's gate guards the
-  // continent pin on `!geoC.length && !geoCForbidden.length` and puts no guard at
-  // all on the country pin - so `['acEU','bFI']` is "in Europe AND in Finland".
-  // convertLegacyPin drops the b pin outright whenever any ac or a!c entry
-  // exists, so the Placement the installer asks carries EU alone.
-  //
-  // The filter reads it correctly as of this commit; it did not before, for the
-  // mirror-image reason (its allow list returned early and the country pin was
-  // never reached). So the two were wrong together, which is why the grids above
-  // never showed it.
-  //
-  // Corpus, measured by the flux-spec session over all 65,732 permanent
-  // messages: no spec has ever carried a legacy pin beside a modern entry, and
-  // of the 60 messages carrying a+b together the continent is the country's own
-  // continent in every one. So nothing on chain moves either way - which is what
-  // makes it safe to fix, not a reason to leave it.
-  it('a legacy country pin beside a modern allow: the filter ANDs it and the installer drops it', async () => {
-    const spec = ['acEU', 'bFI'];
-    const inFinland = NODE_LOCATIONS.find((n) => n.countryCode === 'FI' && n.tableRegion === 'FI-18');
-    const inGermany = NODE_LOCATIONS.find((n) => n.countryCode === 'DE' && n.tableRegion === 'DE-BY');
-
-    // Both take the node the pins actually name.
-    expect(await installerAccepts(spec, inFinland)).to.equal(true);
-    expect(placementFeasibility.nodeLocationMatchesGeolocation(filterLocation(inFinland), spec)).to.equal(true);
-
-    // And disagree on one the country pin excludes - this time with the
-    // INSTALLER as the looser side, which is the unsafe direction.
-    expect(await installerAccepts(spec, inGermany), 'convertLegacyPin dropped the country pin').to.equal(true);
-    expect(
-      placementFeasibility.nodeLocationMatchesGeolocation(filterLocation(inGermany), spec),
-      'the filter applies it, as install-time does',
-    ).to.equal(false);
-  });
-
-  // The case that decides what the conversion RULE is, rather than what the
-  // corpus happens to contain.
-  //
-  // `aNA` + `bDE` contradict: install-time enforces both pins, so no node
-  // satisfies it and the app places nowhere. convertLegacyPin emits
-  // {continent:'NA'} and {continent:'EU',country:'DE'} into one allow list read
-  // with `.some`, so the installer takes every node in North America AND every
-  // node in Germany - the union of two things the spec's owner asked for the
-  // intersection of.
-  //
-  // It is also why "drop the continent entry when a country entry is present"
-  // is not the fix, however well it fits the 60 messages on chain that carry
-  // both: given this pair it emits Germany, discarding the owner's North
-  // America and placing the app exactly where install-time refuses it. The
-  // generic operation is intersection over the location hierarchy - where two
-  // constraints both name a level they must agree or the result is empty, and
-  // where only one names a level that one stands.
-  //
-  // This tree's filter already answers it correctly, by enforcing both pins
-  // independently. Pinned because neither side had a case for it.
-  it('contradictory legacy pins: the filter places nowhere, the installer takes the union', async () => {
-    const spec = ['aNA', 'bDE'];
-    const inGermany = NODE_LOCATIONS.find((n) => n.countryCode === 'DE' && n.tableRegion === 'DE-BY');
-    const inAmerica = NODE_LOCATIONS.find((n) => n.countryCode === 'US' && n.tableRegion === 'US-CA');
-
-    expect(
-      placementFeasibility.nodeLocationMatchesGeolocation(filterLocation(inGermany), spec),
-      'Germany is not in North America',
-    ).to.equal(false);
-    expect(
-      placementFeasibility.nodeLocationMatchesGeolocation(filterLocation(inAmerica), spec),
-      'California is not Germany',
-    ).to.equal(false);
-
-    // The installer takes both, which is the union of the two pins rather than
-    // their intersection. Expected to become false on both once the conversion
-    // intersects - an allow list that matches no location, which is a different
-    // thing from an absent one.
-    expect(await installerAccepts(spec, inGermany), 'the b pin alone admits Germany').to.equal(true);
-    expect(await installerAccepts(spec, inAmerica), 'the a pin alone admits California').to.equal(true);
-  });
-
   it('agrees with the installer exactly at table-resolvable region granularity', async () => {
     // For region entries in the table's own vocabulary, on nodes whose region
     // the table knows, filter and installer read the same table - so they must
     // agree in BOTH directions. Divergence here is not over-inclusion, it is
     // one of the two implementations misreading the shared vocabulary.
-    const isoRegionSpecs = GEO_SPECS.filter((entries) => !isLegacyComposition(entries)).filter((entries) => entries.length
+    const isoRegionSpecs = GEO_SPECS.filter((entries) => entries.length
       && entries.every((entry) => {
         const body = entry.startsWith('a!c') ? entry.slice(3) : entry.slice(2);
         const parts = body.split('_');
