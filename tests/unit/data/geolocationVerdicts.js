@@ -63,6 +63,12 @@ const GEO_SPECS = [
   // carried a legacy pin beside a modern entry - which is why nothing caught
   // the rule reading it as Europe alone.
   ['acEU', 'bFI'],
+  // Pins that CONTRADICT. Install-time enforces both, so no node satisfies this
+  // at all - the four unprovable locations aside, which the count includes by
+  // design. Never registered, and that is not a licence to assume it cannot be:
+  // the rule is intersection over the location hierarchy, and this is the case
+  // that separates intersection from "prefer the more specific pin".
+  ['aNA', 'bDE'],
 ];
 
 // Both sides of every boundary above, including the two kinds of unprovable
