@@ -1121,12 +1121,14 @@ describe('syncthingMonitor tests', () => {
         sinon.assert.calledWith(appReconcilerMock.setControllerDesired, syncComp.identifier, 'stopped');
       });
 
-      // globalState.promotedFolderIds is an ASSERTION about syncthing's state,
-      // made without re-reading it, and what a peer reads before promoting a
-      // folder of its own. A folder named there that syncthing did not accept
-      // advertises this node as holding it writable, and its peers stand down
-      // from a promotion nothing serves.
-      it('does not publish a folder it could not write as one this node holds writable', async () => {
+      // Everything below the configuration write acts on what it applied: the
+      // folder-error scan reads the folders just written, the restart check asks
+      // whether they need one, and globalState.promotedFolderIds is published
+      // from them - an ASSERTION about syncthing's state made without re-reading
+      // it, and what a peer reads before promoting a folder of its own. A
+      // refused write leaves all of it describing a configuration syncthing does
+      // not hold, so the pass ends and the level loop reassembles next pass.
+      it('ends the pass rather than acting on a configuration syncthing refused', async () => {
         // eslint-disable-next-line global-require
         const globalStateModule = require('../../ZelBack/src/services/utils/globalState');
         globalStateModule.promotedFolderIds = null;
@@ -1144,7 +1146,13 @@ describe('syncthingMonitor tests', () => {
 
         sinon.assert.calledWith(syncthingServiceMock.adjustConfigFolders, sinon.match({ method: 'put' }));
         expect([...globalStateModule.promotedFolderIds], 'a refused write publishes nothing').to.deep.equal([]);
-        expect(loggedErrors().some((line) => line.includes('FAILED')), 'and it is loud').to.be.true;
+        // nothing below the write ran on a configuration that was not applied
+        sinon.assert.notCalled(syncthingServiceMock.getFolderIdErrors);
+        sinon.assert.notCalled(syncthingServiceMock.getConfigRestartRequired);
+        expect(
+          loggedErrors().some((line) => line.includes('Error in sync monitoring') && line.includes('ECONNREFUSED')),
+          `the pass ended silently: ${JSON.stringify(loggedErrors())}`,
+        ).to.be.true;
       });
 
       // The other half, which is what keeps the assertion above from being true
