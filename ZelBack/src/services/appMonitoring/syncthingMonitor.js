@@ -143,6 +143,11 @@ async function verifyAppFolderMountWithRepair(appId, appFolder, appName, sending
  * @param {Array<{appId: string, appName: string}>} [extraFolders] - Folder
  *  entries verified by id alone, for folders whose owning app's spec cannot be
  *  read this pass
+ * Each unmounted entry carries `sending`, the folder's mode as the pass's own
+ * folder read observed it. The demotion below needs that fact and nothing else,
+ * and reading it a second time would put a SAFETY ACTION behind a call that can
+ * fail - where a failure reads as "no folder, nothing to protect".
+ *
  * @returns {Promise<{unmountedApps: Array, verifiedSafeIds: string[]}>}
  */
 async function checkAppFolderMounts(deployments, sendingFolderIds, extraFolders = []) {
@@ -186,7 +191,11 @@ async function checkAppFolderMounts(deployments, sendingFolderIds, extraFolders 
         // identifier travels alongside appId: the reconciler is keyed by the bare form
         // and this loop already holds it, so nothing downstream has to recover it.
         unmountedApps.push({
-          appId, identifier: deployComp.identifier, appName: deployment.appName, reason: mountSafety.reason,
+          appId,
+          identifier: deployComp.identifier,
+          appName: deployment.appName,
+          reason: mountSafety.reason,
+          sending: sendingFolderIds.has(appId),
         });
       }
     }
@@ -205,7 +214,11 @@ async function checkAppFolderMounts(deployments, sendingFolderIds, extraFolders 
       appId, appFolder, appName, sendingFolderIds.has(appId),
     );
     if (mountSafety.isSafe) verifiedSafeIds.push(appId);
-    else unmountedApps.push({ appId, identifier: appId, appName, reason: mountSafety.reason });
+    else {
+      unmountedApps.push({
+        appId, identifier: appId, appName, reason: mountSafety.reason, sending: sendingFolderIds.has(appId),
+      });
+    }
   }
 
   return { unmountedApps, verifiedSafeIds };
@@ -676,29 +689,45 @@ async function syncthingAppsCore(state, getGlobalStateFn) {
       // (leaked or missing) disk state to the healthy peers. Demote those
       // folders and hold their containers before bailing - idempotent, and the
       // normal receiveonly machinery re-promotes once the mount is healthy.
-      const foldersResp = await syncthingService.getConfigFolders().catch(() => null);
-      const folders = Array.isArray(foldersResp) ? foldersResp : [];
+      // Which folders are sendreceive is the pass's own observation, carried on
+      // the entry. The folder configuration is read ONCE per pass, at the top,
+      // where a failure returns before anything is judged by it.
       // eslint-disable-next-line no-restricted-syntax
-      for (const { appId, identifier, reason } of unmountedApps) {
-        const folder = folders.find((f) => f.id === appId);
-        if (folder && folder.type === 'sendreceive') {
+      for (const { appId, identifier, reason, sending } of unmountedApps) {
+        // eslint-disable-next-line no-continue
+        if (!sending) continue;
+        // eslint-disable-next-line no-await-in-loop
+        const demoted = await syncthingApplied(
+          syncthingService.adjustConfigFolders({ method: ConfigMethod.PATCH, config: { type: 'receiveonly' }, id: appId }),
+          `SAFETY BLOCK: demoting ${appId} to receiveonly over an unsafe mount (${reason})`,
+        );
+        if (demoted) {
+          log.error(`syncthingAppsCore - SAFETY BLOCK: ${appId} folder was sendreceive over an unsafe mount (${reason}); switched to receiveonly and holding the container`);
+          // A demoted folder re-enters the promotion machinery from the start.
+          // Left where it stood, a folder moments from promotion resumes there
+          // once the mount returns, on a sync state established before the
+          // volume went away. The mark is the one manageFolderSyncState writes
+          // on this same condition, so both paths describe a blocked folder the
+          // same way.
           // eslint-disable-next-line no-await-in-loop
-          const demoted = await syncthingApplied(
-            syncthingService.adjustConfigFolders({ method: ConfigMethod.PATCH, config: { type: 'receiveonly' }, id: appId }),
-            `SAFETY BLOCK: demoting ${appId} to receiveonly over an unsafe mount (${reason})`,
-          );
-          if (demoted) {
-            log.error(`syncthingAppsCore - SAFETY BLOCK: ${appId} folder was sendreceive over an unsafe mount (${reason}); switched to receiveonly and holding the container`);
-          } else {
-            log.error(`syncthingAppsCore - SAFETY BLOCK: ${appId} is STILL sendreceive over an unsafe mount (${reason}); holding the container and retrying the demotion next pass`);
-          }
-          // The container is held whether or not the demotion landed: the harm
-          // is this node's copy writing to a bad mount, which a failed demotion
-          // does not make less likely. The flag is untouched here - it resolves
-          // only where the mount question is ANSWERED - so the next pass comes
-          // back to this folder.
-          appReconciler.setControllerDesired(identifier, 'stopped', `mount safety block: ${reason}`);
+          await appCaches.setSyncedMark(state.receiveOnlySyncthingAppsCache, appId, {
+            numberOfExecutions: 0,
+            mountSafetyBlocked: true,
+            blockedReason: reason,
+            blockedAt: Date.now(),
+          });
+        } else {
+          // The mark is not written for a folder that is still sendreceive: it
+          // describes a demoted folder, and claiming one that was not demoted is
+          // the same class of lie the log line above avoids.
+          log.error(`syncthingAppsCore - SAFETY BLOCK: ${appId} is STILL sendreceive over an unsafe mount (${reason}); holding the container and retrying the demotion next pass`);
         }
+        // The container is held whether or not the demotion landed: the harm is
+        // this node's copy writing to a bad mount, which a failed demotion does
+        // not make less likely. The flag is untouched here - it resolves only
+        // where the mount question is ANSWERED - so the next pass comes back to
+        // this folder.
+        appReconciler.setControllerDesired(identifier, 'stopped', `mount safety block: ${reason}`);
       }
       return;
     }
