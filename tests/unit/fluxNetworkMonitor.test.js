@@ -541,6 +541,7 @@ describe('fluxNetworkMonitor tests', () => {
     let deterministicFluxListStub;
     let getNodeStatusStub;
     let isDaemonReachableStub;
+    let isReadyStub;
     let deterministicFluxnodeListResponse;
 
     beforeEach(() => {
@@ -583,6 +584,12 @@ describe('fluxNetworkMonitor tests', () => {
       deterministicFluxListStub = sinon.stub(fluxCommunicationUtils, 'deterministicFluxList');
       getNodeStatusStub = sinon.stub(nodeConfirmationService, 'getNodeStatus');
       isDaemonReachableStub = sinon.stub(nodeConfirmationService, 'isDaemonReachable').returns(true);
+      // The list accessors wait for the network state to arrive, so the check
+      // returns and re-arms until it has. Unstubbed that is false for the whole
+      // suite: five collision tests failed on a DOS state nothing had set, and
+      // the daemon-unreachable test below passed without reaching the gate it
+      // names. The ordinary state is a node whose list is in.
+      isReadyStub = sinon.stub(networkStateService, 'isReady').returns(true);
       nodeDosState.setDosMessage(null);
       nodeDosState.setDosStateValue(0);
     });
@@ -604,6 +611,20 @@ describe('fluxNetworkMonitor tests', () => {
 
       // Both inputs come from the daemon; without a current answer the check would
       // only restate last cycle's conclusion.
+      sinon.assert.notCalled(deterministicFluxListStub);
+      sinon.assert.notCalled(getNodeStatusStub);
+      expect(nodeDosState.getDosMessage()).to.be.null;
+    });
+
+    it('should skip the check entirely until the network state is ready', async () => {
+      isDaemonSyncedStub.returns({ data: { synced: true } });
+      isReadyStub.returns(false);
+
+      await fluxNetworkMonitor.checkDeterministicNodesCollisions();
+
+      // Reading an unknown list is worse than not reading one: every branch below
+      // concludes this node is not in the confirmed list and skips the
+      // availability check that is the only thing which clears its DOS state.
       sinon.assert.notCalled(deterministicFluxListStub);
       sinon.assert.notCalled(getNodeStatusStub);
       expect(nodeDosState.getDosMessage()).to.be.null;
