@@ -184,7 +184,7 @@ describe('geolocationService tests', () => {
         './dbHelper': dbHelperStub,
         './serviceHelper': serviceHelperStub,
         './fluxNetworkHelper': fluxNetworkHelperStub,
-      './benchmarkService': benchmarkServiceStub,
+        './benchmarkService': benchmarkServiceStub,
         './appPlacement/ipLocationStore': ipLocationStoreStub,
       });
     }
@@ -552,7 +552,7 @@ describe('geolocationService tests', () => {
         './dbHelper': dbHelperStub,
         './serviceHelper': serviceHelperStub,
         './fluxNetworkHelper': fluxNetworkHelperStub,
-      './benchmarkService': benchmarkServiceStub,
+        './benchmarkService': benchmarkServiceStub,
       });
     }
 
@@ -745,7 +745,7 @@ describe('geolocationService tests', () => {
         './dbHelper': dbHelperStub,
         './serviceHelper': serviceHelperStub,
         './fluxNetworkHelper': fluxNetworkHelperStub,
-      './benchmarkService': benchmarkServiceStub,
+        './benchmarkService': benchmarkServiceStub,
         './appPlacement/ipLocationStore': {
           lookup: sinon.stub().resolves({ org: 'a1b2c3d4e5f6', networkClass }),
           status: sinon.stub().returns({ ready: true, generated: 'x', rowCount: 2_000_000 }),
@@ -867,7 +867,7 @@ describe('geolocationService tests', () => {
         './dbHelper': dbHelperStub,
         './serviceHelper': serviceHelperStub,
         './fluxNetworkHelper': fluxNetworkHelperStub,
-      './benchmarkService': benchmarkServiceStub,
+        './benchmarkService': benchmarkServiceStub,
         './appPlacement/ipLocationStore': table,
       });
 
@@ -894,7 +894,7 @@ describe('geolocationService tests', () => {
           './dbHelper': dbHelperStub,
           './serviceHelper': serviceHelperStub,
           './fluxNetworkHelper': fluxNetworkHelperStub,
-      './benchmarkService': benchmarkServiceStub,
+          './benchmarkService': benchmarkServiceStub,
           './appPlacement/ipLocationStore': {
             lookup: sinon.stub().resolves({ org: 'a1b2c3d4e5f6', networkClass: 'DATACENTER' }),
             status: sinon.stub().returns(status),
@@ -1009,7 +1009,7 @@ describe('geolocationService tests', () => {
         './dbHelper': dbHelperStub,
         './serviceHelper': serviceHelperStub,
         './fluxNetworkHelper': fluxNetworkHelperStub,
-      './benchmarkService': benchmarkServiceStub,
+        './benchmarkService': benchmarkServiceStub,
         './appPlacement/ipLocationStore': ipLocationStoreStub,
       });
     }
@@ -1295,7 +1295,7 @@ describe('geolocationService tests', () => {
         './dbHelper': dbHelperStub,
         './serviceHelper': serviceHelperStub,
         './fluxNetworkHelper': fluxNetworkHelperStub,
-      './benchmarkService': benchmarkServiceStub,
+        './benchmarkService': benchmarkServiceStub,
         './appPlacement/ipLocationStore': tableStub,
       });
     }
