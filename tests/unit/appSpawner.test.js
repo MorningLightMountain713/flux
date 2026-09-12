@@ -53,6 +53,7 @@ describe('appSpawner tests', () => {
   let daemonSyncStub;
   let ensureProvidersRegisteredStub;
   let hwRequirementsStub;
+  let messageStoreStub;
   let portManagerStub;
 
   function createConfigStub(overrides = {}) {
@@ -226,6 +227,9 @@ describe('appSpawner tests', () => {
       burstHeadroomShortfall: opts.burstHeadroomShortfall
         ?? hwRequirementsActual.burstHeadroomShortfall,
     };
+    messageStoreStub = {
+      storeAppInstallingMessage: sinon.stub().resolves(true),
+    };
     portManagerStub = {
       ensureApplicationPortsNotUsed: sinon.stub().resolves(),
       // The real function answers {ok, reason, port}; `true` satisfied the
@@ -288,6 +292,12 @@ describe('appSpawner tests', () => {
       },
       '../../lib/log': logStub,
       '../appDatabase/registryManager': registryManagerStub,
+      // The retraction path writes through messageStore, not registryManager, and
+      // deliberately: registryManager is the strict local-claim writer and throws
+      // on a v2 row with no announcedAt, which is exactly what a withdrawal is.
+      // Unstubbed it reached the real database, threw on a null connection, and
+      // took the fleet-wide clear down with it before it was ever broadcast.
+      '../appMessaging/messageStore': messageStoreStub,
       '../appDatabase/appsRepository': {
         findUnderProvisionedApps: findUnderProvisionedStub,
         getGlobalAppInfo: opts.globalAppInfoStub ?? sinon.stub().resolves(null),
