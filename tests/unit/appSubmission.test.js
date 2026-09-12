@@ -61,6 +61,7 @@ describe('appSubmission tests', () => {
       '../entitlementsState': stubs.entitlementsState,
       '../marketplace/marketplaceTemplateCache': stubs.marketplaceTemplateCache,
       '../appDatabase/registryManager': stubs.registryManager,
+      '../appPlacement/placementFeasibility': stubs.placementFeasibility,
       '../daemonService/daemonServiceMiscRpcs': stubs.daemonServiceMiscRpcs,
       '../appDatabase/appsRepository': stubs.appsRepository,
       '../appMessaging/messageVerifier': {},
@@ -75,6 +76,11 @@ describe('appSubmission tests', () => {
 
   beforeEach(() => {
     stubs = {
+      // The placement gate. Unstubbed the real one loads, finds no node list and
+      // answers null by its own never-refuse-on-a-failed-computation rule - so a
+      // suite that did not stub it could not tell a wired gate from an absent
+      // one, which is how it went uncalled for the life of this branch.
+      placementFeasibility: { checkPlacementFeasibility: sinon.stub().resolves(null) },
       contentBlobService: {
         maxContentBytes: sinon.stub().resolves(64 * 1024 * 1024),
         maxBlobBytes: sinon.stub().resolves(2 * 1024 * 1024),
@@ -441,6 +447,86 @@ describe('appSubmission tests', () => {
       // the gate is delegated to flux-spec with the prior spec, the proposed
       // spec, and the network's latest supported version.
       sinon.assert.calledOnceWithExactly(assertVersionTransition, previousSpec, updateSpec, 9);
+    });
+  });
+
+  describe('the placement gate is reached', () => {
+    // D9. The gate was written, exported and fully tested, and no production
+    // path called it: a spec the network provably cannot place was registered
+    // and paid for. These assert the caller exists, which is the whole of it.
+    it('validateAppUpdate asks it, and passes the previous spec so a renewal is not gated', async () => {
+      appSubmission = load();
+      const spec = v9Spec();
+      const previous = v9Spec();
+      stubs.transportHelper.openTransportEnvelope.resolves({ version: 9 });
+      stubs.parseSpec.resolves({ isEncrypted: false });
+      stubs.specLibs.validateSubmissionSpec.resolves(spec);
+      stubs.appsRepository.getGlobalAppInfo.resolves({ spec: previous });
+
+      await appSubmission.validateAppUpdate({ version: 9 }, {});
+
+      sinon.assert.calledOnce(stubs.placementFeasibility.checkPlacementFeasibility);
+      const [handed, caller, handedPrevious] = stubs.placementFeasibility.checkPlacementFeasibility.firstCall.args;
+      expect(handed, 'the spec itself - the gate reads its Placement').to.equal(spec);
+      expect(caller).to.equal('validateAppUpdate');
+      expect(handedPrevious, 'without this every renewal is gated').to.equal(previous);
+    });
+
+    it('a refusal stops the update rather than being logged', async () => {
+      appSubmission = load();
+      const spec = v9Spec();
+      stubs.transportHelper.openTransportEnvelope.resolves({ version: 9 });
+      stubs.parseSpec.resolves({ isEncrypted: false });
+      stubs.specLibs.validateSubmissionSpec.resolves(spec);
+      stubs.appsRepository.getGlobalAppInfo.resolves({ spec: v9Spec() });
+      stubs.placementFeasibility.checkPlacementFeasibility
+        .rejects(new Error('App x requests 5 instances but only 2 eligible nodes exist'));
+
+      await appSubmission.validateAppUpdate({ version: 9 }, {}).then(
+        () => { throw new Error('expected rejection'); },
+        (error) => expect(error.message).to.include('eligible nodes exist'),
+      );
+    });
+
+    it('the registration preflight asks it before quoting a price', async () => {
+      appSubmission = load({
+        '../daemonService/daemonServiceMiscRpcs': {
+          isDaemonSynced: () => ({ data: { synced: true, height: 2_000_000 } }),
+        },
+      });
+      const spec = v9Spec();
+      stubs.transportHelper.openTransportEnvelope.resolves({ version: 9 });
+      stubs.parseSpec.resolves({ isEncrypted: false });
+      stubs.specLibs.validateSubmissionSpec.resolves(spec);
+      const res = { json: sinon.stub() };
+
+      await appSubmission.verifyAppRegistrationParameters({ body: { version: 9 } }, res);
+
+      sinon.assert.calledOnce(stubs.placementFeasibility.checkPlacementFeasibility);
+      expect(stubs.placementFeasibility.checkPlacementFeasibility.firstCall.args[1])
+        .to.equal('verifyAppRegistrationParameters');
+      // and the price was quoted, not an error
+      expect(res.json.firstCall.args[0].status).to.equal('success');
+    });
+
+    it('a refused registration is answered as an error, with the reason', async () => {
+      appSubmission = load({
+        '../daemonService/daemonServiceMiscRpcs': {
+          isDaemonSynced: () => ({ data: { synced: true, height: 2_000_000 } }),
+        },
+      });
+      stubs.transportHelper.openTransportEnvelope.resolves({ version: 9 });
+      stubs.parseSpec.resolves({ isEncrypted: false });
+      stubs.specLibs.validateSubmissionSpec.resolves(v9Spec());
+      stubs.placementFeasibility.checkPlacementFeasibility
+        .rejects(new Error('App x requests 5 instances but names only 2 node(s)'));
+      const res = { json: sinon.stub() };
+
+      await appSubmission.verifyAppRegistrationParameters({ body: { version: 9 } }, res);
+
+      const answered = res.json.firstCall.args[0];
+      expect(answered.status).to.equal('error');
+      expect(answered.data.message).to.include('names only 2 node(s)');
     });
   });
 

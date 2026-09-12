@@ -147,13 +147,6 @@ function compareClaimRows(a, b) {
   return 0;
 }
 
-function placementPinCount(placement) {
-  if (!placement) return 0;
-  return placement.targetIps.length
-    + placement.targetOutpoints.length
-    + placement.targetOperators.length;
-}
-
 /**
  * A node-pinned app whose pin set is no larger than its required instance count has
  * no installation contention: every pinned node is a mandatory installer, so the
@@ -166,7 +159,7 @@ function placementPinCount(placement) {
  * @returns {boolean}
  */
 function isSoleRequiredInstaller(placement, minInstances) {
-  const pinCount = placementPinCount(placement);
+  const pinCount = placementFeasibility.placementPinCount(placement);
   return pinCount > 0 && pinCount <= minInstances;
 }
 
@@ -182,7 +175,7 @@ function isSoleRequiredInstaller(placement, minInstances) {
  * @returns {boolean}
  */
 function isPinnedContended(placement, minInstances) {
-  const pinCount = placementPinCount(placement);
+  const pinCount = placementFeasibility.placementPinCount(placement);
   return pinCount > 0 && pinCount > minInstances;
 }
 
