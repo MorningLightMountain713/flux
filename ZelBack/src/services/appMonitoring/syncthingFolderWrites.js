@@ -7,6 +7,7 @@ const fluxEventBus = require('../utils/fluxEventBus');
 const { appsFolder } = require('../utils/appConstants');
 const { OWNED_FOLDER_SETTINGS } = require('./syncthingMonitorHelpers');
 const volumeService = require('../utils/volumeService');
+const { ConfigMethod } = require('../utils/syncthingConstants');
 
 // Every write FluxOS makes to an app folder's syncthing config goes through this
 // module, one at a time per folder.
@@ -250,7 +251,7 @@ function volumeMounted(folderId) {
 async function patchNow(folderId, fields) {
   if (globalState.shutdownInProgress && fields.paused === false) return SHUTDOWN_REFUSAL;
   if (fields.type === 'sendreceive' && !(await volumeMounted(folderId))) return UNMOUNTED_REFUSAL;
-  const response = await syncthingService.adjustConfigFolders('patch', fields, folderId);
+  const response = await syncthingService.adjustConfigFolders({ method: ConfigMethod.PATCH, config: fields, id: folderId });
   if (response.status === 'success' && fields.type) recordType(folderId, fields.type);
   return response;
 }
@@ -273,7 +274,7 @@ async function putFolders(folders) {
   }
   const response = await exclusive(folders.map((folder) => folder.id), async () => {
     if (globalState.shutdownInProgress) return SHUTDOWN_REFUSAL;
-    const put = await syncthingService.adjustConfigFolders('put', folders);
+    const put = await syncthingService.adjustConfigFolders({ method: ConfigMethod.PUT, config: folders });
     if (put.status === 'success') folders.forEach((folder) => recordType(folder.id, folder.type));
     return put;
   });
@@ -301,7 +302,7 @@ async function patchFolder(folderId, fields) {
  */
 function deleteFolder(folderId) {
   return exclusive([folderId], async () => {
-    const response = await syncthingService.adjustConfigFolders('delete', undefined, folderId);
+    const response = await syncthingService.adjustConfigFolders({ method: ConfigMethod.DELETE, id: folderId });
     if (response.status === 'success') {
       globalState.promotedFolderIds?.delete(folderId);
       recordedTypes.delete(folderId);

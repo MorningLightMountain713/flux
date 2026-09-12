@@ -31,8 +31,8 @@ describe('changeSyncthingFolderType', () => {
     const changed = await syncthingFolderWrites.changeSyncthingFolderType('fluxprobe_app', 'sendreceive');
 
     expect(changed).to.equal(true);
-    sinon.assert.calledOnceWithExactly(adjust, 'patch', { type: 'sendreceive', ...OWNED_FOLDER_SETTINGS }, 'fluxprobe_app');
-    expect(adjust.firstCall.args[1].maxConflicts, 'a type change that omits maxConflicts hands the folder syncthing\'s default').to.equal(0);
+    sinon.assert.calledOnceWithExactly(adjust, { method: 'patch', config: { type: 'sendreceive', ...OWNED_FOLDER_SETTINGS }, id: 'fluxprobe_app' });
+    expect(adjust.firstCall.args[0].config.maxConflicts, 'a type change that omits maxConflicts hands the folder syncthing\'s default').to.equal(0);
   });
 
   it('writes nothing when the folder already has the type', async () => {
@@ -57,7 +57,7 @@ describe('changeSyncthingFolderType', () => {
       const changed = await syncthingFolderWrites.changeSyncthingFolderType('fluxprobe_app', 'receiveonly', { unpause: true });
 
       expect(changed).to.equal(true);
-      sinon.assert.calledOnceWithExactly(adjust, 'patch', { type: 'receiveonly', ...OWNED_FOLDER_SETTINGS, paused: false }, 'fluxprobe_app');
+      sinon.assert.calledOnceWithExactly(adjust, { method: 'patch', config: { type: 'receiveonly', ...OWNED_FOLDER_SETTINGS, paused: false }, id: 'fluxprobe_app' });
     });
 
     it('unpauses a paused folder that already has the type', async () => {
@@ -68,7 +68,7 @@ describe('changeSyncthingFolderType', () => {
 
       expect(await syncthingFolderWrites.changeSyncthingFolderType('fluxprobe_app', 'receiveonly', { unpause: true })).to.equal(true);
 
-      sinon.assert.calledOnceWithExactly(adjust, 'patch', { type: 'receiveonly', ...OWNED_FOLDER_SETTINGS, paused: false }, 'fluxprobe_app');
+      sinon.assert.calledOnceWithExactly(adjust, { method: 'patch', config: { type: 'receiveonly', ...OWNED_FOLDER_SETTINGS, paused: false }, id: 'fluxprobe_app' });
     });
 
     it('writes nothing for an unpaused folder that already has the type', async () => {
@@ -90,7 +90,7 @@ describe('changeSyncthingFolderType', () => {
 
       await syncthingFolderWrites.changeSyncthingFolderType('fluxprobe_app', 'receiveonly');
 
-      sinon.assert.calledOnceWithExactly(adjust, 'patch', { type: 'receiveonly', ...OWNED_FOLDER_SETTINGS }, 'fluxprobe_app');
+      sinon.assert.calledOnceWithExactly(adjust, { method: 'patch', config: { type: 'receiveonly', ...OWNED_FOLDER_SETTINGS }, id: 'fluxprobe_app' });
     });
   });
 
@@ -184,7 +184,7 @@ describe('syncthing folder writes', () => {
 
       first.answer();
       await Promise.all(writes);
-      expect(adjust.getCalls().map((c) => c.args[1])).to.deep.equal([{ devices: [] }, { paused: true }]);
+      expect(adjust.getCalls().map((c) => c.args[0].config)).to.deep.equal([{ devices: [] }, { paused: true }]);
     });
 
     it('does not hold a write to one folder behind a write to another', async () => {
@@ -292,7 +292,7 @@ describe('syncthing folder writes', () => {
 
       expect(await syncthingFolderWrites.changeSyncthingFolderType('fluxprobe_app', 'receiveonly', { scanFirst: true })).to.equal(true);
 
-      expect(adjust.firstCall.args[1].type).to.equal('receiveonly');
+      expect(adjust.firstCall.args[0].config.type).to.equal('receiveonly');
     });
 
     it('leaves the type unchanged when the scan does not finish', async () => {
@@ -332,7 +332,7 @@ describe('syncthing folder writes', () => {
       expect(scanned, 'fixture: the scan is in progress').to.be.a('function');
       await syncthingFolderWrites.patchFolder('fluxprobe_app', { devices: [] });
 
-      sinon.assert.calledOnceWithExactly(adjust, 'patch', { devices: [] }, 'fluxprobe_app');
+      sinon.assert.calledOnceWithExactly(adjust, { method: 'patch', config: { devices: [] }, id: 'fluxprobe_app' });
       scanned();
       expect(await change).to.equal(true);
     });
@@ -425,7 +425,7 @@ describe('syncthing folder writes', () => {
       await syncthingFolderWrites.patchFolder('fluxprobe_app', { type: 'receiveonly' });
 
       sinon.assert.calledTwice(adjust);
-      expect(adjust.secondCall.args[1]).to.deep.equal({ type: 'receiveonly' });
+      expect(adjust.secondCall.args[0].config).to.deep.equal({ type: 'receiveonly' });
       held.answer();
       await syncthingFolderWrites.whenCovered('fluxprobe_app');
     });
@@ -628,7 +628,7 @@ describe('a folder whose volume is not mounted', () => {
     syncthingService.getConfigFolders.resolves([{ id: folder, path, type: 'sendreceive' }]);
 
     expect(await syncthingFolderWrites.changeSyncthingFolderType(folder, 'receiveonly')).to.equal(true);
-    sinon.assert.calledWithMatch(adjust, 'patch', { type: 'receiveonly' }, folder);
+    sinon.assert.calledWithMatch(adjust, { method: 'patch', config: { type: 'receiveonly' }, id: folder });
   });
 
   it('refuses a patch that would make it send', async () => {
@@ -650,7 +650,7 @@ describe('a folder whose volume is not mounted', () => {
     volumeService.isPathMounted.withArgs(path).resolves(true);
 
     expect(await syncthingFolderWrites.changeSyncthingFolderType(folder, 'sendreceive')).to.equal(true);
-    sinon.assert.calledWithMatch(adjust, 'patch', { type: 'sendreceive' }, folder);
+    sinon.assert.calledWithMatch(adjust, { method: 'patch', config: { type: 'sendreceive' }, id: folder });
   });
 });
 
@@ -754,16 +754,16 @@ describe('pauseAllFolders', () => {
   it('pauses every folder syncthing holds, and names those it could not', async () => {
     sinon.stub(syncthingService, 'getConfigFolders').resolves([{ id: 'fluxa_one' }, { id: 'fluxb_two' }, { id: 'fluxc_three' }]);
     const adjust = sinon.stub(syncthingService, 'adjustConfigFolders').resolves({ status: 'success' });
-    adjust.withArgs('patch', { paused: true }, 'fluxb_two').resolves({ status: 'error', data: { message: 'refused' } });
-    adjust.withArgs('patch', { paused: true }, 'fluxc_three').rejects(new Error('no answer'));
+    adjust.withArgs({ method: 'patch', config: { paused: true }, id: 'fluxb_two' }).resolves({ status: 'error', data: { message: 'refused' } });
+    adjust.withArgs({ method: 'patch', config: { paused: true }, id: 'fluxc_three' }).rejects(new Error('no answer'));
 
     const result = await syncthingFolderWrites.pauseAllFolders();
 
     expect(result).to.deep.equal({ paused: ['fluxa_one'], failed: ['fluxb_two', 'fluxc_three'] });
-    expect(adjust.getCalls().map((call) => call.args)).to.have.deep.members([
-      ['patch', { paused: true }, 'fluxa_one'],
-      ['patch', { paused: true }, 'fluxb_two'],
-      ['patch', { paused: true }, 'fluxc_three'],
+    expect(adjust.getCalls().map((call) => call.args[0])).to.have.deep.members([
+      { method: 'patch', config: { paused: true }, id: 'fluxa_one' },
+      { method: 'patch', config: { paused: true }, id: 'fluxb_two' },
+      { method: 'patch', config: { paused: true }, id: 'fluxc_three' },
     ]);
   });
 });

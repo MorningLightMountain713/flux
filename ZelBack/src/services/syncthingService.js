@@ -24,6 +24,7 @@ const messageHelper = require('./messageHelper');
 const serviceHelper = require('./serviceHelper');
 const verificationHelper = require('./verificationHelper');
 const { Privilege, authOf } = require('./utils/privileges');
+const { ConfigMethod } = require('./utils/syncthingConstants');
 
 const syncthingURL = `http://${config.get('syncthing.ip')}:${config.get('syncthing.port')}`;
 
@@ -169,6 +170,37 @@ const parserOptions = {
 const parser = new XMLParser(parserOptions);
 
 const goodSyncthingChars = /^[a-zA-Z0-9-_]+$/;
+
+const configMethods = new Set(Object.values(ConfigMethod));
+
+/**
+ * The shared body of the two /rest/config collection endpoints, which differ
+ * only in their path.
+ *
+ * The body defaults to `undefined`, not null: it is an HTTP body, where absent
+ * and empty are different requests and axios sends a literal null as one. A
+ * delete carries no body and says so by omitting the key.
+ *
+ * @param {string} collection - 'folders' or 'devices'
+ * @param {object} [options]
+ * @param {string} options.method - one of ConfigMethod
+ * @param {object|Array} [options.config] - the request body; omitted for a delete
+ * @param {string} [options.id] - a single folder/device to address, or the whole collection
+ * @returns {Promise<{status: string, data: object}>} An envelope - this never throws
+ */
+async function adjustConfigCollection(collection, { method, config: newConfig = undefined, id = null } = {}) {
+  if (!configMethods.has(method)) {
+    return messageHelper.createErrorMessage(`Invalid method supplied: ${method}`);
+  }
+  let apiPath = `/rest/config/${collection}`;
+  if (id) {
+    if (!goodSyncthingChars.test(id)) {
+      return messageHelper.createErrorMessage('Invalid ID supplied');
+    }
+    apiPath += `/${id}`;
+  }
+  return performRequest(method, apiPath, newConfig);
+}
 
 /**
  * Syncthing controller
@@ -581,51 +613,51 @@ function writesOwnership(folderConfig) {
 }
 
 /**
- * To modify config for folders. PUT replaces the entire config, PATCH replaces only the given child objects and DELETE removes the folder
+ * Whether a restart of syncthing is required for the current config to take effect.
+ *
+ * The envelope, not the bare row, and it does not throw: both callers reconcile
+ * syncthing's configuration and then ask this, and a failed ask means "not known
+ * to need a restart", which is the state they already treat as ordinary.
+ * @returns {Promise<object>} Message
+ */
+async function getConfigRestartRequired() {
+  return performRequest('get', '/rest/config/restart-required');
+}
+
+/**
+ * To modify config for folders. PUT replaces the entire config, PATCH replaces
+ * only the given child objects and DELETE removes the folder.
  *
  * A write that turns ownership sync on is refused until ownersTravelByNumber():
  * a syncthing that resolves the host's names would send them, and a peer gives
  * the file whatever id that name has on its own host.
- * @param {string} method Request method.
- * @param {string} newConfig new config to be replaced.
- * @param {string} id folder ID.
- * @returns {object} Message
+ *
+ * @param {object} [options]
+ * @param {string} options.method - one of ConfigMethod
+ * @param {object|Array} [options.config] - the folder(s) to write; omitted for a delete
+ * @param {string} [options.id] - one folder, or the whole collection when absent
+ * @returns {Promise<{status: string, data: object}>} An envelope - this never throws
  */
-async function adjustConfigFolders(method, newConfig, id) {
-  let apiPath = '/rest/config/folders';
-  if (id) {
-    if (!goodSyncthingChars.test(id)) {
-      const response = messageHelper.createErrorMessage('Invalid ID supplied');
-      return response;
-    }
-    apiPath += `/${id}`;
-  }
-  if (writesOwnership(newConfig) && !(await ownersTravelByNumber())) {
+async function adjustConfigFolders(options = {}) {
+  if (writesOwnership(options.config) && !(await ownersTravelByNumber())) {
     fluxEventBus.count('syncthing:ownershipWriteRefused');
     return messageHelper.createErrorMessage('Folder ownership is not written until syncthing resolves owners against the numeric id tables');
   }
-  const response = await performRequest(method, apiPath, newConfig);
-  return response;
+  return adjustConfigCollection('folders', options);
 }
 
 /**
- * To modify config for devices. PUT replaces the entire config, PATCH replaces only the given child objects and DELETE removes the device
- * @param {string} method Request method.
- * @param {string} newConfig new config.
- * @param {string} id device ID.
- * @returns {object} Message
+ * To modify config for devices. PUT replaces the entire config, PATCH replaces
+ * only the given child objects and DELETE removes the device.
+ *
+ * @param {object} [options]
+ * @param {string} options.method - one of ConfigMethod
+ * @param {object|Array} [options.config] - the device(s) to write; omitted for a delete
+ * @param {string} [options.id] - one device, or the whole collection when absent
+ * @returns {Promise<{status: string, data: object}>} An envelope - this never throws
  */
-async function adjustConfigDevices(method, newConfig, id) {
-  let apiPath = '/rest/config/devices';
-  if (id) {
-    if (!goodSyncthingChars.test(id)) {
-      const response = messageHelper.createErrorMessage('Invalid ID supplied');
-      return response;
-    }
-    apiPath += `/${id}`;
-  }
-  const response = await performRequest(method, apiPath, newConfig);
-  return response;
+async function adjustConfigDevices(options) {
+  return adjustConfigCollection('devices', options);
 }
 
 /**
@@ -1412,7 +1444,7 @@ async function adjustSyncthing() {
     // in place, exactly as an unsuccessful read did before
     const allFolders = await getConfigFolders().catch(() => []);
     if (allFolders.find((syncthingFolder) => syncthingFolder.id === 'default')) {
-      await adjustConfigFolders('delete', undefined, 'default');
+      await adjustConfigFolders({ method: ConfigMethod.DELETE, id: 'default' });
     }
     // enable gui debugging for development nodes only
     if (config.get('development')) {
@@ -2750,6 +2782,7 @@ module.exports = {
   getConfig,
   getConfigFolders,
   getConfigDevices,
+  getConfigRestartRequired,
   // Cluster
   // Folder
   getFolderIdErrors,

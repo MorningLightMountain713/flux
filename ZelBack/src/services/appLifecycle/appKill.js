@@ -27,14 +27,16 @@ const log = require('../../lib/log');
 const serviceHelper = require('../serviceHelper');
 const appSlice = require('./appSlice');
 const { getAppIdentifier } = require('../dockerService');
-const { isArcane } = require('../utils/appConstants');
+const globalState = require('../utils/globalState');
 
 const SIGKILL_MASK = 1n << 8n;
 
 const DEFAULT_PATHS = {
   cgroupRoot: '/sys/fs/cgroup',
   procRoot: '/proc',
-  dockerRoot: isArcane ? '/dat/var/lib/docker' : '/var/lib/docker',
+  // null: docker's data root follows the node's kind, read when it is used -
+  // Arcane keeps it under /dat. Given, it replaces that.
+  dockerRoot: null,
 };
 let paths = { ...DEFAULT_PATHS };
 
@@ -45,6 +47,15 @@ let paths = { ...DEFAULT_PATHS };
 function usePaths(options) {
   paths = { ...paths, ...options };
   appSlice.useCgroupRoot(paths.cgroupRoot);
+}
+
+/**
+ * Where docker keeps its containers' state on this node.
+ * @returns {string}
+ */
+function dockerRoot() {
+  if (paths.dockerRoot) return paths.dockerRoot;
+  return globalState.isArcane() ? '/dat/var/lib/docker' : '/var/lib/docker';
 }
 
 /**
@@ -96,14 +107,14 @@ function belongsTo({ name, app }, appName) {
  * @returns {Promise<ContainerRecord[]|null>} Null when the records cannot be listed.
  */
 async function readContainers() {
-  const listing = await serviceHelper.runCommand('ls', { runAsRoot: true, params: ['-1', path.join(paths.dockerRoot, 'containers')] });
+  const listing = await serviceHelper.runCommand('ls', { runAsRoot: true, params: ['-1', path.join(dockerRoot(), 'containers')] });
   if (listing.error) return null;
   const ids = listing.stdout.split('\n').map((line) => line.trim()).filter((id) => /^[0-9a-f]{64}$/.test(id));
   const containers = [];
   // eslint-disable-next-line no-restricted-syntax
   for (const id of ids) {
     // eslint-disable-next-line no-await-in-loop
-    const text = await readAsRoot(path.join(paths.dockerRoot, 'containers', id, 'config.v2.json'));
+    const text = await readAsRoot(path.join(dockerRoot(), 'containers', id, 'config.v2.json'));
     let parsed = null;
     try {
       parsed = JSON.parse(text ?? 'null');

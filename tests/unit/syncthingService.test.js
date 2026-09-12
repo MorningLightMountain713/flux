@@ -46,6 +46,7 @@ function advanceMonotonic(ms) {
   process.hrtime.bigint = () => real() + BigInt(ms) * 1_000_000n;
   return () => { process.hrtime.bigint = real; };
 }
+const { ConfigMethod } = require('../../ZelBack/src/services/utils/syncthingConstants');
 
 const HOST_SYNCTHING = ['-x', 'syncthing', '--ns', '1', '--nslist', 'pid'];
 
@@ -618,6 +619,69 @@ describe('syncthingService tests', () => {
       const result = await syncthingService.getDbStatusInFileBytes(folder).catch((err) => err);
 
       expect(result).to.be.an('error');
+    });
+  });
+
+  describe('adjustConfigFolders / adjustConfigDevices shape', () => {
+    let fakeInstance;
+
+    beforeEach(() => {
+      sinon.stub(serviceHelper, 'runCommand').resolves({ error: null });
+      sinon.stub(fs, 'readFile').resolves(syncthingFixtures.configFile);
+      fakeInstance = {
+        get: sinon.stub().resolves({ data: {} }),
+        put: sinon.stub().resolves({ data: {} }),
+        post: sinon.stub().resolves({ data: {} }),
+        patch: sinon.stub().resolves({ data: {} }),
+        delete: sinon.stub().resolves({ data: {} }),
+      };
+      sinon.stub(axios, 'create').returns(fakeInstance);
+    });
+
+    afterEach(async () => {
+      syncthingService.getAxiosCache().reset();
+      await syncthingService.syncthingController().abort();
+      sinon.restore();
+    });
+
+    it('addresses one folder by id, and the whole collection without one', async () => {
+      await syncthingService.adjustConfigFolders({ method: ConfigMethod.DELETE, id: 'fluxweb_app' });
+      sinon.assert.calledWith(fakeInstance.delete, '/rest/config/folders/fluxweb_app');
+
+      await syncthingService.adjustConfigFolders({ method: ConfigMethod.PUT, config: [{ id: 'fluxweb_app' }] });
+      sinon.assert.calledWith(fakeInstance.put, '/rest/config/folders', [{ id: 'fluxweb_app' }]);
+    });
+
+    it('carries the body on a patch, and sends none when there is none to send', async () => {
+      await syncthingService.adjustConfigDevices({ method: ConfigMethod.PATCH, config: { autoAcceptFolders: false }, id: 'PEER-DEVICE' });
+      sinon.assert.calledWith(fakeInstance.patch, '/rest/config/devices/PEER-DEVICE', { autoAcceptFolders: false });
+
+      // no positional `undefined` standing in for a body a delete does not have -
+      // the key is simply absent, and absence is what reaches the wire. A literal
+      // null would not be the same request: axios sends one as a body.
+      await syncthingService.adjustConfigDevices({ method: ConfigMethod.DELETE, id: 'PEER-DEVICE' });
+      expect(fakeInstance.delete.lastCall.args[1], 'a delete carries no body').to.equal(undefined);
+    });
+
+    it('refuses a method that is not one syncthing accepts, without asking it', async () => {
+      const answer = await syncthingService.adjustConfigFolders({ method: 'destroy', id: 'fluxweb_app' });
+
+      expect(answer.status).to.equal('error');
+      expect(answer.data.message).to.contain('destroy');
+      Object.values(fakeInstance).forEach((verb) => sinon.assert.notCalled(verb));
+    });
+
+    it('refuses an id that is not a syncthing id, without asking it', async () => {
+      const answer = await syncthingService.adjustConfigFolders({ method: ConfigMethod.DELETE, id: '../../rest/system/shutdown' });
+
+      expect(answer.status).to.equal('error');
+      expect(answer.data.message).to.equal('Invalid ID supplied');
+      Object.values(fakeInstance).forEach((verb) => sinon.assert.notCalled(verb));
+    });
+
+    it('is a frozen set - a caller cannot add a method to it', () => {
+      expect(Object.isFrozen(ConfigMethod)).to.be.true;
+      expect(() => { ConfigMethod.DESTROY = 'destroy'; }).to.throw();
     });
   });
 
@@ -1897,10 +1961,10 @@ describe('syncthingService tests', () => {
     });
 
     it('refuses a folder list that turns ownership on for any folder while syncthing resolves the host\'s names, and sends nothing', async () => {
-      const response = await syncthingService.adjustConfigFolders('put', [
+      const response = await syncthingService.adjustConfigFolders({ method: 'put', config: [
         { id: 'fluxa_app', type: 'receiveonly' },
         { id: 'fluxb_app', type: 'sendreceive', syncOwnership: true },
-      ]);
+      ] });
 
       expect(response.status).to.equal('error');
       expect(response.data.message).to.equal('Folder ownership is not written until syncthing resolves owners against the numeric id tables');
@@ -1911,7 +1975,7 @@ describe('syncthingService tests', () => {
     it('refuses a patch that turns ownership on while no syncthing runs', async () => {
       pids = '';
 
-      const response = await syncthingService.adjustConfigFolders('patch', { type: 'sendreceive', syncOwnership: true }, 'fluxa_app');
+      const response = await syncthingService.adjustConfigFolders({ method: 'patch', config: { type: 'sendreceive', syncOwnership: true }, id: 'fluxa_app' });
 
       expect(response.status).to.equal('error');
       sinon.assert.notCalled(fakeInstance.patch);
@@ -1920,16 +1984,16 @@ describe('syncthingService tests', () => {
     it('reads the running syncthing at the write, so an earlier announcement cannot let ownership through', async () => {
       syncthingService.setOwnersByNumberAnnounced(true);
 
-      const response = await syncthingService.adjustConfigFolders('put', [{ id: 'fluxb_app', syncOwnership: true }]);
+      const response = await syncthingService.adjustConfigFolders({ method: 'put', config: [{ id: 'fluxb_app', syncOwnership: true }] });
 
       expect(response.status).to.equal('error');
       sinon.assert.notCalled(fakeInstance.put);
     });
 
     it('still demotes, pauses and deletes while syncthing resolves the host\'s names', async () => {
-      const demote = await syncthingService.adjustConfigFolders('patch', { type: 'receiveonly' }, 'fluxa_app');
-      const pause = await syncthingService.adjustConfigFolders('patch', { paused: true }, 'fluxa_app');
-      const remove = await syncthingService.adjustConfigFolders('delete', undefined, 'fluxa_app');
+      const demote = await syncthingService.adjustConfigFolders({ method: 'patch', config: { type: 'receiveonly' }, id: 'fluxa_app' });
+      const pause = await syncthingService.adjustConfigFolders({ method: 'patch', config: { paused: true }, id: 'fluxa_app' });
+      const remove = await syncthingService.adjustConfigFolders({ method: 'delete', id: 'fluxa_app' });
 
       expect([demote.status, pause.status, remove.status]).to.deep.equal(['success', 'success', 'success']);
       sinon.assert.calledTwice(fakeInstance.patch);
@@ -1940,9 +2004,9 @@ describe('syncthingService tests', () => {
     it('writes ownership while every syncthing process has the tables as its passwd and group', async () => {
       identities = '8:100\n8:101\n8:100\n8:101\n';
 
-      const response = await syncthingService.adjustConfigFolders('put', [
+      const response = await syncthingService.adjustConfigFolders({ method: 'put', config: [
         { id: 'fluxb_app', type: 'sendreceive', syncOwnership: true },
-      ]);
+      ] });
 
       expect(response.status).to.equal('success');
       sinon.assert.calledOnce(fakeInstance.put);
@@ -1951,9 +2015,9 @@ describe('syncthingService tests', () => {
     it('writes ownership while an app container runs a syncthing that sees its own names', async () => {
       serviceHelper.runCommand.callsFake(hostAndContainerSyncthing().runCommand);
 
-      const response = await syncthingService.adjustConfigFolders('put', [
+      const response = await syncthingService.adjustConfigFolders({ method: 'put', config: [
         { id: 'fluxb_app', type: 'sendreceive', syncOwnership: true },
-      ]);
+      ] });
 
       expect(response.status).to.equal('success');
       sinon.assert.calledOnce(fakeInstance.put);

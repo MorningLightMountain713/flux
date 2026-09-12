@@ -43,8 +43,12 @@ const syncthingServiceMock = {
   getDeviceId: sinon.stub(),
   getConfigFolders: sinon.stub(),
   getConfigDevices: sinon.stub(),
-  adjustConfigDevices: sinon.stub().resolves(),
-  adjustConfigFolders: sinon.stub().resolves(),
+  // The WRITE half answers an envelope and never rejects - adjustConfig* goes
+  // through performRequest, where the read half goes through `request` and
+  // throws. These answer the envelope, so a call site reading the result as a
+  // throw is visible from here.
+  adjustConfigDevices: sinon.stub().resolves({ status: 'success', data: {} }),
+  adjustConfigFolders: sinon.stub().resolves({ status: 'success', data: {} }),
   getFolderIdErrors: sinon.stub(),
   systemRestart: sinon.stub().resolves(),
   getDbStatus: sinon.stub(),
@@ -119,6 +123,20 @@ const appReconcilerMock = {
   setControllerDesired: sinon.stub(),
 };
 
+// LOUDNESS IS A BEHAVIOUR on the safety paths: a demotion this node could not
+// apply leaves a folder broadcasting a bad mount, and the pass saying so is the
+// only signal anything gets. The real logger cannot be asserted on.
+const logMock = {
+  error: sinon.stub(),
+  warn: sinon.stub(),
+  info: sinon.stub(),
+  debug: sinon.stub(),
+  child: sinon.stub(),
+};
+logMock.child.returns(logMock);
+const loggedErrors = () => logMock.error.getCalls()
+  .map((call) => String(call.args[0]));
+
 // Where an app runs is a mongo read - I/O, stubbed.
 const appsRepositoryMock = {
   appLocationFromEvents: sinon.stub().resolves([]),
@@ -148,6 +166,7 @@ const syncthingMonitor = proxyquire('../../ZelBack/src/services/appMonitoring/sy
   './syncthingHealthMonitor': syncthingHealthMonitorMock,
   './syncthingEventsConsumer': syncthingEventsConsumerMock,
   '../utils/volumeService': volumeServiceMock,
+  '../../lib/log': logMock,
 });
 
 /**
@@ -251,9 +270,9 @@ describe('syncthingMonitor tests', () => {
     syncthingServiceMock.getConfigFolders.reset();
     syncthingServiceMock.getConfigDevices.reset();
     syncthingServiceMock.adjustConfigDevices.reset();
-    syncthingServiceMock.adjustConfigDevices.resolves();
+    syncthingServiceMock.adjustConfigDevices.resolves({ status: 'success', data: {} });
     syncthingServiceMock.adjustConfigFolders.reset();
-    syncthingServiceMock.adjustConfigFolders.resolves();
+    syncthingServiceMock.adjustConfigFolders.resolves({ status: 'success', data: {} });
     syncthingServiceMock.getFolderIdErrors.reset();
     syncthingServiceMock.systemRestart.reset();
     syncthingServiceMock.getDbStatus.reset();
@@ -284,12 +303,19 @@ describe('syncthingMonitor tests', () => {
     syncthingMonitorHelpersMock.ensureStfolderExists.resolves(true);
     syncthingMonitorHelpersMock.createSyncthingFolderConfig.resetHistory();
     syncthingMonitorHelpersMock.buildDeviceConfiguration.resetHistory();
-    syncthingMonitorHelpersMock.folderNeedsUpdate.resetHistory();
+    // reset(), not resetHistory(): a test that drives this true must not leak
+    // it into every test after it
+    syncthingMonitorHelpersMock.folderNeedsUpdate.reset();
+    syncthingMonitorHelpersMock.folderNeedsUpdate.returns(false);
     appsRepositoryMock.appLocationFromEvents.reset();
     appsRepositoryMock.appLocationFromEvents.resolves([]);
     livenessMock.prewarm.resetHistory();
     livenessMock.read.resetHistory();
     appReconcilerMock.setControllerDesired.reset();
+    logMock.error.resetHistory();
+    logMock.warn.resetHistory();
+    logMock.info.resetHistory();
+    logMock.debug.resetHistory();
 
     // Default stub behaviors
     syncthingServiceMock.getConfigFolders.resolves([]);
@@ -547,8 +573,9 @@ describe('syncthingMonitor tests', () => {
         await clock.tickAsync(100);
 
         const deleted = syncthingServiceMock.adjustConfigFolders.getCalls()
-          .filter((call) => call.args[0] === 'delete')
-          .map((call) => call.args[2]);
+          .map((call) => call.args[0])
+          .filter((options) => options.method === 'delete')
+          .map((options) => options.id);
         expect(deleted, 'a folder was kept or removed on the wrong side of readability')
           .to.deep.equal(['fluxweb_gone']);
       });
@@ -679,7 +706,7 @@ describe('syncthingMonitor tests', () => {
       );
       await clock.tickAsync(10_000);
 
-      sinon.assert.calledWithExactly(syncthingServiceMock.adjustConfigFolders, 'patch', { type: 'receiveonly' }, syncFolderId);
+      sinon.assert.calledWithExactly(syncthingServiceMock.adjustConfigFolders, { method: 'patch', config: { type: 'receiveonly' }, id: syncFolderId });
       sinon.assert.notCalled(syncthingServiceMock.systemRestart);
 
       // The folder-id the demotion targets is derived from the real component's
@@ -745,7 +772,7 @@ describe('syncthingMonitor tests', () => {
       );
       await clock.tickAsync(100);
 
-      sinon.assert.calledWithExactly(syncthingServiceMock.adjustConfigFolders, 'patch', { type: 'receiveonly' }, syncFolderId);
+      sinon.assert.calledWithExactly(syncthingServiceMock.adjustConfigFolders, { method: 'patch', config: { type: 'receiveonly' }, id: syncFolderId });
       // The reconciler is keyed by the BARE component identifier, never the
       // docker-prefixed folder id and never the app name. That value comes off
       // the real DeploymentComponent, and the reconciler stays stubbed.
@@ -924,7 +951,7 @@ describe('syncthingMonitor tests', () => {
       sinon.assert.notCalled(syncthingFolderStateMachineMock.manageFolderSyncState);
       sinon.assert.notCalled(syncthingMonitorHelpersMock.createSyncthingFolderConfig);
       // ...and the orphaned folder is removed.
-      expect(syncthingServiceMock.adjustConfigFolders.calledWith('delete', undefined, syncFolderId)).to.be.true;
+      expect(syncthingServiceMock.adjustConfigFolders.calledWith({ method: 'delete', id: syncFolderId })).to.be.true;
     });
 
     it('hands the startup safety scan the real component injected excludes and app name', async () => {
@@ -958,7 +985,124 @@ describe('syncthingMonitor tests', () => {
       expect(opts.injectedExcludePaths).to.have.lengthOf(1);
       expect(opts.appName, 'the owning app, for incident roll-up').to.equal('testapp');
       // A safe folder is left alone - no demotion.
-      sinon.assert.neverCalledWith(syncthingServiceMock.adjustConfigFolders, 'patch', { type: 'receiveonly' }, syncFolderId);
+      sinon.assert.neverCalledWith(syncthingServiceMock.adjustConfigFolders, { method: 'patch', config: { type: 'receiveonly' }, id: syncFolderId });
+    });
+
+    // THE TWO HALVES OF syncthingService ANSWER DIFFERENTLY.
+    // getConfigFolders/getConfigDevices go through `request`: rows, or a throw.
+    // adjustConfigFolders/adjustConfigDevices go through `performRequest`, which
+    // turns every axios failure into an ENVELOPE and NEVER rejects - so a
+    // `.catch()` on one is dead code and a bare `await` discards the answer.
+    // These say what a refusal must look like from outside.
+    describe('a configuration write syncthing refused', () => {
+      const refused = (message) => ({ status: 'error', data: { code: 'ECONNREFUSED', message } });
+
+      // The demotion is the one that costs data: a folder left sendreceive over
+      // a vanished mount keeps broadcasting its (missing) disk state to healthy
+      // peers, so nothing may report it as switched unless it was.
+      it('says so when the mount-safety demotion could not be applied', async () => {
+        deploymentProviderMock.listInstalledDeployments.resolves([syncDeployment]);
+        syncthingEventsConsumerMock.mountVerifyPendingIds.returns([syncFolderId]);
+        syncthingFolderStateMachineMock.verifySendReceiveFolderSafety.resolves({ isSafe: false, isMounted: false, reason: 'unmounted_with_content' });
+        volumeServiceMock.ensureAppVolumeMounted.resolves({ mounted: false, reason: 'volume_file_missing' });
+        syncthingServiceMock.getConfigFolders.resolves([{ id: syncFolderId, type: 'sendreceive' }]);
+        syncthingServiceMock.adjustConfigFolders.resolves(refused('connect ECONNREFUSED 127.0.0.1:8384'));
+
+        monitorControl = syncthingMonitor.syncthingApps(mockState, mockGetGlobalStateFn);
+        await clock.tickAsync(100);
+
+        // the pass reached the demotion at all - without this the assertions
+        // below are true of a pass that never got here
+        sinon.assert.calledWithExactly(syncthingServiceMock.adjustConfigFolders, { method: 'patch', config: { type: 'receiveonly' }, id: syncFolderId });
+        const errors = loggedErrors();
+        expect(errors.some((line) => line.includes('FAILED') && line.includes(syncFolderId)), `the refusal is not reported: ${JSON.stringify(errors)}`).to.be.true;
+        expect(errors.some((line) => line.includes('STILL sendreceive')), 'and the folder is reported as still broadcasting').to.be.true;
+        expect(errors.some((line) => line.includes('switched to receiveonly')), 'nothing may claim the demotion landed').to.be.false;
+      });
+
+      // The flag is this node's memory that the folder's mount is in question.
+      // A failed demotion is not an answer to it, so it stands and the next pass
+      // comes back - and the container is held now either way, because the harm
+      // is this node writing to a bad mount and a failed demotion does not make
+      // that less likely.
+      it('keeps the flag standing when the demotion fails, so the next pass retries', async () => {
+        deploymentProviderMock.listInstalledDeployments.resolves([syncDeployment]);
+        syncthingEventsConsumerMock.mountVerifyPendingIds.returns([syncFolderId]);
+        syncthingFolderStateMachineMock.verifySendReceiveFolderSafety.resolves({ isSafe: false, isMounted: false, reason: 'unmounted_with_content' });
+        volumeServiceMock.ensureAppVolumeMounted.resolves({ mounted: false, reason: 'volume_file_missing' });
+        syncthingServiceMock.getConfigFolders.resolves([{ id: syncFolderId, type: 'sendreceive' }]);
+        syncthingServiceMock.adjustConfigFolders.resolves(refused('connect ECONNREFUSED 127.0.0.1:8384'));
+
+        monitorControl = syncthingMonitor.syncthingApps(mockState, mockGetGlobalStateFn);
+        await clock.tickAsync(100);
+
+        sinon.assert.calledWithExactly(syncthingServiceMock.adjustConfigFolders, { method: 'patch', config: { type: 'receiveonly' }, id: syncFolderId });
+        sinon.assert.notCalled(syncthingEventsConsumerMock.resolveMountVerify);
+        sinon.assert.calledWith(appReconcilerMock.setControllerDesired, syncComp.identifier, 'stopped');
+      });
+
+      // globalState.promotedFolderIds is an ASSERTION about syncthing's state,
+      // made without re-reading it, and it is what a peer reads before promoting
+      // a folder of its own. Applied to a write syncthing refused, this node
+      // advertises folders it does not hold writable and its peers stand down
+      // from a promotion nothing is serving.
+      it('does not publish a folder it could not write as one this node holds writable', async () => {
+        // eslint-disable-next-line global-require
+        const globalStateModule = require('../../ZelBack/src/services/utils/globalState');
+        globalStateModule.promotedFolderIds = null;
+        deploymentProviderMock.listInstalledDeployments.resolves([syncDeployment]);
+        syncthingServiceMock.getConfigFolders.resolves([]);
+        syncthingServiceMock.getConfigDevices.resolves([]);
+        syncthingServiceMock.getDeviceId.resolves('DEVICE-ID');
+        fluxNetworkHelperMock.getLocalSocketAddress.resolves('10.0.0.1:16127');
+        // syncthing does not have this folder yet, so the pass has one to write
+        syncthingMonitorHelpersMock.folderNeedsUpdate.returns(true);
+        syncthingServiceMock.adjustConfigFolders.resolves(refused('connect ECONNREFUSED 127.0.0.1:8384'));
+
+        monitorControl = syncthingMonitor.syncthingApps(mockState, mockGetGlobalStateFn);
+        await clock.tickAsync(100);
+
+        sinon.assert.calledWith(syncthingServiceMock.adjustConfigFolders, sinon.match({ method: 'put' }));
+        expect([...globalStateModule.promotedFolderIds], 'a refused write publishes nothing').to.deep.equal([]);
+        expect(loggedErrors().some((line) => line.includes('FAILED')), 'and it is loud').to.be.true;
+      });
+
+      // The other half, which is what keeps the assertion above from being true
+      // of a pass that simply never wrote anything.
+      it('publishes it when the write lands', async () => {
+        // eslint-disable-next-line global-require
+        const globalStateModule = require('../../ZelBack/src/services/utils/globalState');
+        globalStateModule.promotedFolderIds = null;
+        deploymentProviderMock.listInstalledDeployments.resolves([syncDeployment]);
+        syncthingServiceMock.getConfigFolders.resolves([]);
+        syncthingServiceMock.getConfigDevices.resolves([]);
+        syncthingServiceMock.getDeviceId.resolves('DEVICE-ID');
+        fluxNetworkHelperMock.getLocalSocketAddress.resolves('10.0.0.1:16127');
+        syncthingMonitorHelpersMock.folderNeedsUpdate.returns(true);
+
+        monitorControl = syncthingMonitor.syncthingApps(mockState, mockGetGlobalStateFn);
+        await clock.tickAsync(100);
+
+        sinon.assert.calledWith(syncthingServiceMock.adjustConfigFolders, sinon.match({ method: 'put' }));
+        expect([...globalStateModule.promotedFolderIds]).to.deep.equal([syncFolderId]);
+      });
+
+      // The sweep logs "Removing unused Syncthing folder" before asking, so a
+      // refusal that says nothing reads as a completed sweep.
+      it('says so when an orphan sweep could not be applied', async () => {
+        deploymentProviderMock.listInstalledDeployments.resolves([]);
+        syncthingServiceMock.getConfigFolders.resolves([{ id: 'fluxweb_gone', type: 'receiveonly' }]);
+        syncthingServiceMock.getConfigDevices.resolves([]);
+        syncthingServiceMock.getDeviceId.resolves('DEVICE-ID');
+        fluxNetworkHelperMock.getLocalSocketAddress.resolves('10.0.0.1:16127');
+        syncthingServiceMock.adjustConfigFolders.resolves(refused('connect ECONNREFUSED 127.0.0.1:8384'));
+
+        monitorControl = syncthingMonitor.syncthingApps(mockState, mockGetGlobalStateFn);
+        await clock.tickAsync(100);
+
+        sinon.assert.calledWithExactly(syncthingServiceMock.adjustConfigFolders, { method: 'delete', id: 'fluxweb_gone' });
+        expect(loggedErrors().some((line) => line.includes('FAILED') && line.includes('fluxweb_gone')), `the refusal is not reported: ${JSON.stringify(loggedErrors())}`).to.be.true;
+      });
     });
 
     it('should start the events consumer (edge accelerator) and stop it on shutdown', async () => {
