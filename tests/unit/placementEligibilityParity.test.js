@@ -353,6 +353,48 @@ describe('placement eligibility parity with install-time geolocation', () => {
     ).to.equal(false);
   });
 
+  // The case that decides what the conversion RULE is, rather than what the
+  // corpus happens to contain.
+  //
+  // `aNA` + `bDE` contradict: install-time enforces both pins, so no node
+  // satisfies it and the app places nowhere. convertLegacyPin emits
+  // {continent:'NA'} and {continent:'EU',country:'DE'} into one allow list read
+  // with `.some`, so the installer takes every node in North America AND every
+  // node in Germany - the union of two things the spec's owner asked for the
+  // intersection of.
+  //
+  // It is also why "drop the continent entry when a country entry is present"
+  // is not the fix, however well it fits the 60 messages on chain that carry
+  // both: given this pair it emits Germany, discarding the owner's North
+  // America and placing the app exactly where install-time refuses it. The
+  // generic operation is intersection over the location hierarchy - where two
+  // constraints both name a level they must agree or the result is empty, and
+  // where only one names a level that one stands.
+  //
+  // This tree's filter already answers it correctly, by enforcing both pins
+  // independently. Pinned because neither side had a case for it.
+  it('contradictory legacy pins: the filter places nowhere, the installer takes the union', async () => {
+    const spec = ['aNA', 'bDE'];
+    const inGermany = NODE_LOCATIONS.find((n) => n.countryCode === 'DE' && n.tableRegion === 'DE-BY');
+    const inAmerica = NODE_LOCATIONS.find((n) => n.countryCode === 'US' && n.tableRegion === 'US-CA');
+
+    expect(
+      placementFeasibility.nodeLocationMatchesGeolocation(filterLocation(inGermany), spec),
+      'Germany is not in North America',
+    ).to.equal(false);
+    expect(
+      placementFeasibility.nodeLocationMatchesGeolocation(filterLocation(inAmerica), spec),
+      'California is not Germany',
+    ).to.equal(false);
+
+    // The installer takes both, which is the union of the two pins rather than
+    // their intersection. Expected to become false on both once the conversion
+    // intersects - an allow list that matches no location, which is a different
+    // thing from an absent one.
+    expect(await installerAccepts(spec, inGermany), 'the b pin alone admits Germany').to.equal(true);
+    expect(await installerAccepts(spec, inAmerica), 'the a pin alone admits California').to.equal(true);
+  });
+
   it('agrees with the installer exactly at table-resolvable region granularity', async () => {
     // For region entries in the table's own vocabulary, on nodes whose region
     // the table knows, filter and installer read the same table - so they must
