@@ -264,11 +264,11 @@ async function appLocation(appName) {
  *
  * @param {string} appName
  * @param {Array} locations app locations (hosts the app's devices belong to)
- * @param {object} allDevicesResp syncthing's current device configs
+ * @param {Array} allDevices syncthing's current device configs
  * @param {{host: string}|null} fence the standing fence, if any
  */
-async function reconcileFenceAutoAccept(appName, locations, allDevicesResp, fence) {
-  const rows = Array.isArray(allDevicesResp?.data) ? allDevicesResp.data : [];
+async function reconcileFenceAutoAccept(appName, locations, allDevices, fence) {
+  const rows = Array.isArray(allDevices) ? allDevices : [];
   const appHosts = new Set((locations || []).map((row) => extractIp(row.ip)));
   const patches = [];
   rows.forEach((device) => {
@@ -308,8 +308,8 @@ async function processContainerData(params) {
     localDeviceId,
     state,
     erroredFolderIds,
-    allFoldersResp,
-    allDevicesResp,
+    allFolders,
+    allDevices,
     devicesConfiguration,
     devicesIds,
     folderIds,
@@ -353,7 +353,7 @@ async function processContainerData(params) {
   const fence = deployComp.hasActiveStandbySyncthing()
     ? mastershipGrantGate.fenceFor(installedAppName)
     : null;
-  await reconcileFenceAutoAccept(installedAppName, locations, allDevicesResp, fence);
+  await reconcileFenceAutoAccept(installedAppName, locations, allDevices, fence);
 
   // Build device configuration (parallelized internally)
   const devices = await buildDeviceConfiguration(
@@ -363,13 +363,13 @@ async function processContainerData(params) {
     state.syncthingDevicesIDCache,
     devicesConfiguration,
     devicesIds,
-    allDevicesResp,
+    allDevices,
     fence?.host ?? null,
   );
 
   // Create base folder configuration
   const syncthingFolder = createSyncthingFolderConfig(id, label, folder, devices);
-  const syncFolder = allFoldersResp.data.find((x) => x.id === id);
+  const syncFolder = allFolders.find((x) => x.id === id);
 
   // CONVERGE THE IGNORE POLICY, through syncthing's own API - it owns .stignore
   // and writes it atomically. Only once syncthing knows the folder: a brand-new
@@ -565,16 +565,31 @@ async function syncthingAppsCore(state, getGlobalStateFn) {
     // sendreceive, because that is the only mode that can broadcast a deletion -
     // so it is the only mode where a stale index over an empty volume has to be
     // rejected rather than merely noted.
-    const allFoldersResp = await syncthingService.getConfigFolders();
+    //
+    // getConfigFolders answers the rows themselves, or throws. Caught here and
+    // not shared with the device read below: a pass that cannot read devices
+    // must not withhold a folder list it already has, or every peer asking is
+    // told to wait for as long as the device read keeps failing.
+    let allFolders;
+    try {
+      allFolders = await syncthingService.getConfigFolders();
+    } catch (error) {
+      if (state.syncthingAppsFirstRun) {
+        log.warn('syncthingAppsCore - Syncthing configuration not ready yet on first run. Waiting for next cycle to avoid data loss.');
+      } else {
+        log.error(`syncthingAppsCore - Failed to get Syncthing folder configuration: ${error.message}`);
+      }
+      return;
+    }
 
     // CRITICAL: Validate Syncthing configuration is loaded before proceeding
     // On system restart, Syncthing API might be available but config not fully loaded
     // This prevents data deletion during the race condition window
-    if (!allFoldersResp || !allFoldersResp.data || !Array.isArray(allFoldersResp.data)) {
+    if (!Array.isArray(allFolders)) {
       if (state.syncthingAppsFirstRun) {
         log.warn('syncthingAppsCore - Syncthing folder configuration not ready yet on first run. Waiting for next cycle to avoid data loss.');
       } else {
-        log.error('syncthingAppsCore - Failed to get Syncthing folders configuration');
+        log.error('syncthingAppsCore - Failed to get Syncthing folders configuration: malformed response');
       }
       return;
     }
@@ -595,14 +610,14 @@ async function syncthingAppsCore(state, getGlobalStateFn) {
     // end of the pass mutates the published set as writes land, while this stays
     // what the scan observed.
     const sendingFolderIds = new Set(
-      allFoldersResp.data.filter((folder) => folder.type === 'sendreceive').map((folder) => folder.id),
+      allFolders.filter((folder) => folder.type === 'sendreceive').map((folder) => folder.id),
     );
     globalState.promotedFolderIds = new Set(sendingFolderIds);
 
     // An unreadable app's folders are protected from the SWEEP, not from the
     // mount check: the verdict derives entirely from the folder id, so a folder
     // whose owning app's spec cannot be read this pass is verified all the same.
-    const unreadableFolderEntries = unreadableAppNames.size === 0 ? [] : allFoldersResp.data
+    const unreadableFolderEntries = unreadableAppNames.size === 0 ? [] : allFolders
       .filter((folder) => folder.type === 'sendreceive' && ownedByUnreadableApp(folder.id))
       .map((folder) => ({
         appId: folder.id,
@@ -629,8 +644,8 @@ async function syncthingAppsCore(state, getGlobalStateFn) {
       // (leaked or missing) disk state to the healthy peers. Demote those
       // folders and hold their containers before bailing - idempotent, and the
       // normal receiveonly machinery re-promotes once the mount is healthy.
-      const foldersResp = await syncthingService.getConfigFolders();
-      const folders = Array.isArray(foldersResp?.data) ? foldersResp.data : [];
+      const foldersResp = await syncthingService.getConfigFolders().catch(() => null);
+      const folders = Array.isArray(foldersResp) ? foldersResp : [];
       // eslint-disable-next-line no-restricted-syntax
       for (const { appId, identifier, reason } of unmountedApps) {
         const folder = folders.find((f) => f.id === appId);
@@ -659,14 +674,23 @@ async function syncthingAppsCore(state, getGlobalStateFn) {
       return;
     }
 
-    const allDevicesResp = await syncthingService.getConfigDevices();
-
-
-    if (!allDevicesResp || !allDevicesResp.data || !Array.isArray(allDevicesResp.data)) {
+    let allDevices;
+    try {
+      allDevices = await syncthingService.getConfigDevices();
+    } catch (error) {
       if (state.syncthingAppsFirstRun) {
         log.warn('syncthingAppsCore - Syncthing device configuration not ready yet on first run. Waiting for next cycle to avoid data loss.');
       } else {
-        log.error('syncthingAppsCore - Failed to get Syncthing devices configuration');
+        log.error(`syncthingAppsCore - Failed to get Syncthing devices configuration: ${error.message}`);
+      }
+      return;
+    }
+
+    if (!Array.isArray(allDevices)) {
+      if (state.syncthingAppsFirstRun) {
+        log.warn('syncthingAppsCore - Syncthing device configuration not ready yet on first run. Waiting for next cycle to avoid data loss.');
+      } else {
+        log.error('syncthingAppsCore - Failed to get Syncthing devices configuration: malformed response');
       }
       return;
     }
@@ -676,7 +700,7 @@ async function syncthingAppsCore(state, getGlobalStateFn) {
 
     // CRITICAL STARTUP SAFETY CHECK: Verify all sendreceive folders have safe mounts
     // This prevents data loss when loop mounts aren't ready after reboot
-    if (state.syncthingAppsFirstRun && allFoldersResp.data.length > 0) {
+    if (state.syncthingAppsFirstRun && allFolders.length > 0) {
       log.info('syncthingAppsCore - First run detected, performing mount safety verification on existing folders');
       let unsafeFoldersCount = 0;
 
@@ -700,7 +724,7 @@ async function syncthingAppsCore(state, getGlobalStateFn) {
       }
 
       // eslint-disable-next-line no-restricted-syntax
-      for (const folder of allFoldersResp.data) {
+      for (const folder of allFolders) {
         if (folder.type === 'sendreceive') {
           const appId = folder.id;
           const folderPath = folder.path;
@@ -769,8 +793,8 @@ async function syncthingAppsCore(state, getGlobalStateFn) {
       localDeviceId,
       state,
       erroredFolderIds,
-      allFoldersResp,
-      allDevicesResp,
+      allFolders,
+      allDevices,
       devicesConfiguration,
       devicesIds,
       folderIds,
@@ -831,12 +855,12 @@ async function syncthingAppsCore(state, getGlobalStateFn) {
         }
       }
     }
-    const nonUsedFolders = allFoldersResp.data.filter(
+    const nonUsedFolders = allFolders.filter(
       (syncthingFolder) => !folderIds.includes(syncthingFolder.id)
         && !installedFolderIds.has(syncthingFolder.id)
         && !ownedByUnreadableApp(syncthingFolder.id),
     );
-    const nonUsedDevices = allDevicesResp.data.filter(
+    const nonUsedDevices = allDevices.filter(
       (syncthingDevice) => !devicesIds.includes(syncthingDevice.deviceID) && syncthingDevice.deviceID !== localDeviceId,
     );
 

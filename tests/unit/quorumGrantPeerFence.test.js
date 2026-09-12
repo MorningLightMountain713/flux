@@ -107,7 +107,7 @@ describe('quorumGrant peer fence', () => {
         deviceCache,
         devicesConfiguration,
         devicesIds,
-        { data: [] },
+        [],
         fencedHost,
       );
     }

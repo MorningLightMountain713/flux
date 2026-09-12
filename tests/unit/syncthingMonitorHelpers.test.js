@@ -364,10 +364,10 @@ describe('syncthingMonitorHelpers tests', () => {
     const appsBase = `${process.env.FLUX_APPS_FOLDER || path.join(process.env.HOME, 'zelflux', 'ZelApps')}/`;
 
     it('removes a composed component folder matched by its identifier-derived path', async () => {
-      sandbox.stub(syncthingService, 'getConfigFolders').resolves({
-        status: 'success',
-        data: [{ id: 'fluxweb_app', path: `${appsBase}fluxweb_app` }],
-      });
+      // getConfigFolders answers the rows themselves; the envelope goes back on
+      // only in the Api half.
+      sandbox.stub(syncthingService, 'getConfigFolders')
+        .resolves([{ id: 'fluxweb_app', path: `${appsBase}fluxweb_app` }]);
       const adjust = sandbox.stub(syncthingService, 'adjustConfigFolders').resolves({});
       sandbox.stub(syncthingService, 'getConfigRestartRequired').resolves({ status: 'success', data: { requiresRestart: false } });
 
@@ -377,10 +377,10 @@ describe('syncthingMonitorHelpers tests', () => {
     });
 
     it('does not match a composed folder by the bare app name', async () => {
-      sandbox.stub(syncthingService, 'getConfigFolders').resolves({
-        status: 'success',
-        data: [{ id: 'fluxweb_app', path: `${appsBase}fluxweb_app` }],
-      });
+      // getConfigFolders answers the rows themselves; the envelope goes back on
+      // only in the Api half.
+      sandbox.stub(syncthingService, 'getConfigFolders')
+        .resolves([{ id: 'fluxweb_app', path: `${appsBase}fluxweb_app` }]);
       const adjust = sandbox.stub(syncthingService, 'adjustConfigFolders').resolves({});
       sandbox.stub(syncthingService, 'getConfigRestartRequired').resolves({ status: 'success', data: { requiresRestart: false } });
 

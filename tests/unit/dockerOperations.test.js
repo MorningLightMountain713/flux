@@ -281,7 +281,7 @@ describe('appOperations application lifecycle tests', () => {
       '../fluxCommunicationMessagesSender': { broadcastTemporaryAppMessage: sinon.stub().resolves() },
       '../syncthingService': {
         getHealth: sinon.stub().resolves({ status: 'success', data: { status: 'OK' } }),
-        getConfigFolders: sinon.stub().resolves({ status: 'success', data: [] }),
+        getConfigFolders: sinon.stub().resolves([]),
         adjustConfigFolders: sinon.stub().resolves({ status: 'success' }),
       },
       '../telemetrySinkCache': { extractSink: sinon.stub().returns(null), setSink: sinon.stub() },

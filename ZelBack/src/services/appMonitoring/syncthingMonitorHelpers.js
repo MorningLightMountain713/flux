@@ -358,12 +358,15 @@ async function removeSyncthingFolder(appComponentName, res) {
     const identifier = appComponentName;
     const appId = dockerService.getAppIdentifier(identifier);
     const folder = `${appsFolder + appId}`;
+    // getConfigFolders answers the rows, or throws. It has never answered an
+    // envelope to an internal caller, so `.status` was undefined here and this
+    // guard could not fire; a failed read now leaves through the catch below.
     const allSyncthingFolders = await syncthingService.getConfigFolders();
-    if (allSyncthingFolders.status === 'error') {
+    if (!Array.isArray(allSyncthingFolders)) {
       return;
     }
     let folderId = null;
-    for (const syncthingFolder of allSyncthingFolders.data) {
+    for (const syncthingFolder of allSyncthingFolders) {
       if (syncthingFolder.path === folder || syncthingFolder.path.includes(`${folder}/`)) {
         folderId = syncthingFolder.id;
       }
