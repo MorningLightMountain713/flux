@@ -689,16 +689,19 @@ async function changeSyncthingFolderType(folderId, folderType) {
     log.debug(`Changing syncthing folder ${folderId} to ${folderType} mode`);
 
     // Get current folder configuration
-    const foldersResponse = await syncthingService.getConfigFolders();
-    if (foldersResponse.status !== 'success') {
-      log.error(`Failed to get syncthing folders: ${JSON.stringify(foldersResponse)}`);
+    // getConfigFolders answers the rows themselves, or throws - the envelope is
+    // put back on only by the Api half. Read as an envelope, `.status` was
+    // undefined, so this refused every folder change it was ever asked to make.
+    const folders = await syncthingService.getConfigFolders();
+    if (!Array.isArray(folders)) {
+      log.error(`Failed to get syncthing folders: ${JSON.stringify(folders)}`);
       return false;
     }
 
     // Find the folder by path
     // Syncthing syncs the entire appId folder (includes all subdirectories)
     const folderPath = `${appsFolder}${folderId}`;
-    const folder = foldersResponse.data.find((f) => f.path === folderPath);
+    const folder = folders.find((f) => f.path === folderPath);
 
     if (!folder) {
       log.error(`Syncthing folder not found for path: ${folderPath}`);
@@ -2449,11 +2452,11 @@ async function coordinateActiveStandbyApps() {
                     const syncthingService = require('../syncthingService');
                     // eslint-disable-next-line no-await-in-loop
                     const allSyncthingFolders = await syncthingService.getConfigFolders();
-                    if (allSyncthingFolders.status === 'success') {
+                    if (Array.isArray(allSyncthingFolders)) {
                       // Syncthing syncs the entire appId folder (includes all subdirectories)
                       const folder = `${appsFolder}${appId}`;
                       // eslint-disable-next-line no-restricted-syntax
-                      for (const syncthingFolder of allSyncthingFolders.data) {
+                      for (const syncthingFolder of allSyncthingFolders) {
                         if (syncthingFolder.path === folder && syncthingFolder.type === 'sendreceive') {
                           log.info(`activeStandby: app:${appName} folder is already in sendreceive mode, treating as ready`);
                           isReady = true;
@@ -2681,11 +2684,11 @@ async function coordinateActiveStandbyApps() {
                     const syncthingService = require('../syncthingService');
                     // eslint-disable-next-line no-await-in-loop
                     const allSyncthingFolders = await syncthingService.getConfigFolders();
-                    if (allSyncthingFolders.status === 'success') {
+                    if (Array.isArray(allSyncthingFolders)) {
                       // Syncthing syncs the entire appId folder (includes all subdirectories)
                       const folder = `${appsFolder}${appId}`;
                       // eslint-disable-next-line no-restricted-syntax
-                      for (const syncthingFolder of allSyncthingFolders.data) {
+                      for (const syncthingFolder of allSyncthingFolders) {
                         if (syncthingFolder.path === folder && syncthingFolder.type === 'sendreceive') {
                           log.info(`activeStandby: app:${appName} folder is already in sendreceive mode, treating as ready`);
                           isReady = true;

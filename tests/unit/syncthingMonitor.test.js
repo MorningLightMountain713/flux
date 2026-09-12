@@ -292,8 +292,8 @@ describe('syncthingMonitor tests', () => {
     appReconcilerMock.setControllerDesired.reset();
 
     // Default stub behaviors
-    syncthingServiceMock.getConfigFolders.resolves({ data: [] });
-    syncthingServiceMock.getConfigDevices.resolves({ data: [] });
+    syncthingServiceMock.getConfigFolders.resolves([]);
+    syncthingServiceMock.getConfigDevices.resolves([]);
     syncthingServiceMock.getConfigRestartRequired.resolves({
       status: 'success',
       data: { requiresRestart: false },
@@ -386,8 +386,8 @@ describe('syncthingMonitor tests', () => {
         // The pass returns early unless syncthing answers both config reads -
         // the guard that stops it acting on a half-loaded config - and it needs
         // this node's own identity to build a device list at all.
-        syncthingServiceMock.getConfigFolders.resolves({ data: [] });
-        syncthingServiceMock.getConfigDevices.resolves({ data: [] });
+        syncthingServiceMock.getConfigFolders.resolves([]);
+        syncthingServiceMock.getConfigDevices.resolves([]);
         syncthingServiceMock.getDeviceId.resolves('DEVICE-ID');
         fluxNetworkHelperMock.getLocalSocketAddress.resolves('10.0.0.1:16127');
       });
@@ -422,12 +422,10 @@ describe('syncthingMonitor tests', () => {
         const globalStateModule = require('../../ZelBack/src/services/utils/globalState');
         globalStateModule.promotedFolderIds = null;
         deploymentProviderMock.listInstalledDeployments.resolves([]);
-        syncthingServiceMock.getConfigFolders.resolves({
-          data: [
-            { id: 'fluxweb_writable', type: 'sendreceive' },
-            { id: 'fluxweb_readonly', type: 'receiveonly' },
-          ],
-        });
+        syncthingServiceMock.getConfigFolders.resolves([
+          { id: 'fluxweb_writable', type: 'sendreceive' },
+          { id: 'fluxweb_readonly', type: 'receiveonly' },
+        ]);
 
         monitorControl = syncthingMonitor.syncthingApps(mockState, mockGetGlobalStateFn);
         await clock.tickAsync(100);
@@ -467,9 +465,7 @@ describe('syncthingMonitor tests', () => {
       it('verifies a sendreceive folder at the deeper level, and a receiveonly one at the shallow', async () => {
         deploymentProviderMock.listInstalledDeployments.resolves([syncDeployment]);
         syncthingEventsConsumerMock.mountVerifyPendingIds.returns([syncFolderId]);
-        syncthingServiceMock.getConfigFolders.resolves({
-          data: [{ id: syncFolderId, type: 'sendreceive', path: syncComp.dir }],
-        });
+        syncthingServiceMock.getConfigFolders.resolves([{ id: syncFolderId, type: 'sendreceive', path: syncComp.dir }]);
 
         monitorControl = syncthingMonitor.syncthingApps(mockState, mockGetGlobalStateFn);
         await clock.tickAsync(100);
@@ -481,9 +477,7 @@ describe('syncthingMonitor tests', () => {
       it('leaves a receiveonly folder to the shallow check, which is all it can do harm with', async () => {
         deploymentProviderMock.listInstalledDeployments.resolves([syncDeployment]);
         syncthingEventsConsumerMock.mountVerifyPendingIds.returns([syncFolderId]);
-        syncthingServiceMock.getConfigFolders.resolves({
-          data: [{ id: syncFolderId, type: 'receiveonly', path: syncComp.dir }],
-        });
+        syncthingServiceMock.getConfigFolders.resolves([{ id: syncFolderId, type: 'receiveonly', path: syncComp.dir }]);
 
         monitorControl = syncthingMonitor.syncthingApps(mockState, mockGetGlobalStateFn);
         await clock.tickAsync(100);
@@ -503,12 +497,10 @@ describe('syncthingMonitor tests', () => {
           deployments: [],
           unreadableAppNames: new Set(['sealed']),
         });
-        syncthingServiceMock.getConfigFolders.resolves({
-          data: [
-            { id: 'fluxweb_sealed', type: 'sendreceive' },
-            { id: 'fluxweb_gone', type: 'sendreceive' },
-          ],
-        });
+        syncthingServiceMock.getConfigFolders.resolves([
+          { id: 'fluxweb_sealed', type: 'sendreceive' },
+          { id: 'fluxweb_gone', type: 'sendreceive' },
+        ]);
 
         monitorControl = syncthingMonitor.syncthingApps(mockState, mockGetGlobalStateFn);
         await clock.tickAsync(100);
@@ -530,9 +522,7 @@ describe('syncthingMonitor tests', () => {
           deployments: [],
           unreadableAppNames: new Set(['sealed']),
         });
-        syncthingServiceMock.getConfigFolders.resolves({
-          data: [{ id: 'fluxweb_sealed', type: 'sendreceive' }],
-        });
+        syncthingServiceMock.getConfigFolders.resolves([{ id: 'fluxweb_sealed', type: 'sendreceive' }]);
 
         monitorControl = syncthingMonitor.syncthingApps(mockState, mockGetGlobalStateFn);
         await clock.tickAsync(100);
@@ -549,9 +539,7 @@ describe('syncthingMonitor tests', () => {
       // replicated staging directory a live operation elsewhere still needs.
       it('converges the ignore policy on a folder syncthing already knows', async () => {
         deploymentProviderMock.listInstalledDeployments.resolves([syncDeployment]);
-        syncthingServiceMock.getConfigFolders.resolves({
-          data: [{ id: syncFolderId, type: 'sendreceive', path: `${appsFolder}${syncFolderId}` }],
-        });
+        syncthingServiceMock.getConfigFolders.resolves([{ id: syncFolderId, type: 'sendreceive', path: `${appsFolder}${syncFolderId}` }]);
 
         monitorControl = syncthingMonitor.syncthingApps(mockState, mockGetGlobalStateFn);
         await clock.tickAsync(100);
@@ -565,7 +553,7 @@ describe('syncthingMonitor tests', () => {
       // every pass, until the folder is added.
       it('leaves a folder syncthing does not know yet alone', async () => {
         deploymentProviderMock.listInstalledDeployments.resolves([syncDeployment]);
-        syncthingServiceMock.getConfigFolders.resolves({ data: [] });
+        syncthingServiceMock.getConfigFolders.resolves([]);
 
         monitorControl = syncthingMonitor.syncthingApps(mockState, mockGetGlobalStateFn);
         await clock.tickAsync(100);
@@ -636,9 +624,7 @@ describe('syncthingMonitor tests', () => {
       mockState.syncthingAppsFirstRun = true;
       syncthingServiceMock.getDeviceId.resolves('DEVICE-ID');
       fluxNetworkHelperMock.getLocalSocketAddress.resolves('10.0.0.1:16127');
-      syncthingServiceMock.getConfigFolders.resolves({
-        data: [{ id: syncFolderId, path: syncComp.dir, type: 'sendreceive' }],
-      });
+      syncthingServiceMock.getConfigFolders.resolves([{ id: syncFolderId, path: syncComp.dir, type: 'sendreceive' }]);
       // The folder is sendreceive, so the mount check takes the DEEPER verifier -
       // that is the only mode that can broadcast a deletion, so it is the only
       // one where a stale index over an empty volume must be refused.
@@ -710,7 +696,7 @@ describe('syncthingMonitor tests', () => {
       // sendreceive, so the DEEPER verifier is the one consulted.
       syncthingFolderStateMachineMock.verifySendReceiveFolderSafety.resolves({ isSafe: false, isMounted: false, reason: 'unmounted_with_content' });
       volumeServiceMock.ensureAppVolumeMounted.resolves({ mounted: false, reason: 'volume_file_missing' });
-      syncthingServiceMock.getConfigFolders.resolves({ data: [{ id: syncFolderId, type: 'sendreceive' }] });
+      syncthingServiceMock.getConfigFolders.resolves([{ id: syncFolderId, type: 'sendreceive' }]);
 
       monitorControl = syncthingMonitor.syncthingApps(
         mockState,
@@ -741,7 +727,7 @@ describe('syncthingMonitor tests', () => {
       volumeServiceMock.ensureAppVolumeMounted.resolves({ mounted: false, reason: 'volume_file_missing' });
       // receiveonly, so the SHALLOW verifier is the one consulted - the deeper
       // check exists for the mode that can broadcast a deletion.
-      syncthingServiceMock.getConfigFolders.resolves({ data: [{ id: syncFolderId, type: 'receiveonly' }] });
+      syncthingServiceMock.getConfigFolders.resolves([{ id: syncFolderId, type: 'receiveonly' }]);
 
       monitorControl = syncthingMonitor.syncthingApps(
         mockState,
@@ -774,7 +760,7 @@ describe('syncthingMonitor tests', () => {
       syncthingEventsConsumerMock.mountVerifyPendingIds.returns([syncFolderId]);
       syncthingFolderStateMachineMock.verifyFolderMountSafety.resolves({ isSafe: false, isMounted: false, reason: 'empty_unmounted_directory' });
       volumeServiceMock.ensureAppVolumeMounted.resolves({ mounted: false, reason: 'volume_file_missing' });
-      syncthingServiceMock.getConfigFolders.resolves({ data: [{ id: syncFolderId, type: 'receiveonly' }] });
+      syncthingServiceMock.getConfigFolders.resolves([{ id: syncFolderId, type: 'receiveonly' }]);
 
       monitorControl = syncthingMonitor.syncthingApps(
         mockState,
@@ -860,9 +846,7 @@ describe('syncthingMonitor tests', () => {
       syncthingServiceMock.getDeviceId.resolves('DEVICE-ID');
       fluxNetworkHelperMock.getLocalSocketAddress.resolves('10.0.0.1:16127');
       deploymentProviderMock.listInstalledDeployments.resolves([syncDeployment]);
-      syncthingServiceMock.getConfigFolders.resolves({
-        data: [{ id: syncFolderId, path: syncComp.dir, type: 'sendreceive' }],
-      });
+      syncthingServiceMock.getConfigFolders.resolves([{ id: syncFolderId, path: syncComp.dir, type: 'sendreceive' }]);
       syncthingFolderStateMachineMock.manageFolderSyncState.resolves({
         syncthingFolder: { type: 'receiveonly' },
         cache: null,
@@ -887,9 +871,7 @@ describe('syncthingMonitor tests', () => {
       syncthingServiceMock.getDeviceId.resolves('DEVICE-ID');
       fluxNetworkHelperMock.getLocalSocketAddress.resolves('10.0.0.1:16127');
       deploymentProviderMock.listInstalledDeployments.resolves([plainDeployment]);
-      syncthingServiceMock.getConfigFolders.resolves({
-        data: [{ id: syncFolderId, path: syncComp.dir, type: 'sendreceive' }],
-      });
+      syncthingServiceMock.getConfigFolders.resolves([{ id: syncFolderId, path: syncComp.dir, type: 'sendreceive' }]);
 
       monitorControl = syncthingMonitor.syncthingApps(
         mockState,
@@ -912,9 +894,7 @@ describe('syncthingMonitor tests', () => {
       syncthingServiceMock.getDeviceId.resolves('DEVICE-ID');
       fluxNetworkHelperMock.getLocalSocketAddress.resolves('10.0.0.1:16127');
       deploymentProviderMock.listInstalledDeployments.resolves([syncDeployment]);
-      syncthingServiceMock.getConfigFolders.resolves({
-        data: [{ id: syncFolderId, path: syncComp.dir, type: 'sendreceive' }],
-      });
+      syncthingServiceMock.getConfigFolders.resolves([{ id: syncFolderId, path: syncComp.dir, type: 'sendreceive' }]);
 
       monitorControl = syncthingMonitor.syncthingApps(
         mockState,
