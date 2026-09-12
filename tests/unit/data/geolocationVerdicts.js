@@ -57,6 +57,12 @@ const GEO_SPECS = [
   ['acEU_FI_fi-18'],
   ['xyz'],
   ['acEU', 'xyz'],
+  // A country pin beside a modern allow. Install-time applies `b<CC>`
+  // unconditionally, so this is "in Europe AND in Finland" and the recorded row
+  // is the same as ['aEU', 'bFI'] above. Zero on chain - no spec has ever
+  // carried a legacy pin beside a modern entry - which is why nothing caught
+  // the rule reading it as Europe alone.
+  ['acEU', 'bFI'],
 ];
 
 // Both sides of every boundary above, including the two kinds of unprovable
