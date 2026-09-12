@@ -434,6 +434,47 @@ describe('syncthingMonitor tests', () => {
         expect([...globalStateModule.promotedFolderIds]).to.deep.equal(['fluxweb_writable']);
       });
 
+      // THE TWO READS ARE CAUGHT SEPARATELY, and these say why that is not
+      // tidiness. Sharing one try meant the device read throwing returned the
+      // pass, and the folders it had ALREADY READ went unpublished - so every
+      // peer asking which folders this node holds writable was told to wait,
+      // for as long as the device read kept failing. Ported from development,
+      // which has had this coverage all along; this tree gained the behaviour
+      // when the envelope-shaped reads were corrected and gained no test with it.
+      it('publishes the folders it read even though the device read threw', async () => {
+        // eslint-disable-next-line global-require
+        const globalStateModule = require('../../ZelBack/src/services/utils/globalState');
+        globalStateModule.promotedFolderIds = null;
+        deploymentProviderMock.listInstalledDeployments.resolves([]);
+        syncthingServiceMock.getConfigFolders.resolves([
+          { id: 'fluxweb_writable', type: 'sendreceive' },
+          { id: 'fluxweb_readonly', type: 'receiveonly' },
+        ]);
+        syncthingServiceMock.getConfigDevices.rejects(new Error('simulated unreadable device configuration'));
+
+        monitorControl = syncthingMonitor.syncthingApps(mockState, mockGetGlobalStateFn);
+        await clock.tickAsync(100);
+
+        expect(globalStateModule.promotedFolderIds, 'the pass withheld folders it had read').to.not.equal(null);
+        expect([...globalStateModule.promotedFolderIds]).to.deep.equal(['fluxweb_writable']);
+      });
+
+      // A folder read it could not complete is the other case: there is then
+      // nothing to publish, and the last good answer must stand rather than be
+      // replaced by a claim that this node holds nothing writable.
+      it('leaves the last good answer standing when the folder read itself threw', async () => {
+        // eslint-disable-next-line global-require
+        const globalStateModule = require('../../ZelBack/src/services/utils/globalState');
+        globalStateModule.promotedFolderIds = new Set(['fluxweb_writable']);
+        deploymentProviderMock.listInstalledDeployments.resolves([]);
+        syncthingServiceMock.getConfigFolders.rejects(new Error('simulated unreadable folder configuration'));
+
+        monitorControl = syncthingMonitor.syncthingApps(mockState, mockGetGlobalStateFn);
+        await clock.tickAsync(100);
+
+        expect([...globalStateModule.promotedFolderIds]).to.deep.equal(['fluxweb_writable']);
+      });
+
       // ONE TIMEOUT FOR THE PASS. Both promotion decisions ask the same peers
       // the same question, and the folder loop is sequential - asked inside it,
       // one unreachable holder costs its full timeout again for every folder
