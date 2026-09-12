@@ -724,10 +724,20 @@ async function syncthingAppsCore(state, getGlobalStateFn) {
     // else keeps its flag standing for the next pass - including a pass that
     // dies below this line, which is the whole point of not clearing on read.
     verifiedSafeIds.forEach((id) => syncthingEventsConsumer.resolveMountVerify(id));
+    // AN UNSAFE MOUNT IS AN APP-LEVEL FAULT. The folders named here are held out
+    // of this pass and every other app is processed normally. Ending the whole
+    // pass instead strands the node: an app whose volume can never be mounted
+    // keeps this set non-empty on every cycle, so nothing below ever runs - no
+    // folder registration, no promotion, no error draining, and no writable-
+    // folder answer for the peers that block on it - for any app on the node,
+    // permanently. The first-run flag never clears either, so the full sweep and
+    // the startup safety scan repeat every cycle. The flag set gates the g:
+    // primary election node-wide, so one unmountable app stops every masterSlave
+    // app on the node from electing.
+    const unsafeFolderIds = new Set();
     if (unmountedApps.length > 0) {
       const unmountedList = unmountedApps.map((app) => app.appId).join(', ');
-      log.warn(`syncthingAppsCore - Skipping processing: ${unmountedApps.length} app folders not mounted yet: ${unmountedList}`);
-      log.warn('syncthingAppsCore - Waiting for app folders to be mounted before syncthing processing');
+      log.warn(`syncthingAppsCore - Holding ${unmountedApps.length} app folders out of this pass, not mounted: ${unmountedList}`);
 
       // Never leave an unsafe-mount folder sendreceive while processing is
       // skipped: the syncthing daemon keeps running as configured, so an
@@ -742,6 +752,7 @@ async function syncthingAppsCore(state, getGlobalStateFn) {
       for (const {
         appId, identifier, reason, sending, known, syncing,
       } of unmountedApps) {
+        unsafeFolderIds.add(appId);
         if (!sending) {
           // A folder syncthing holds RECEIVEONLY over a bad mount is already in
           // the state this block exists to put it in - nothing to demote, and
@@ -792,7 +803,6 @@ async function syncthingAppsCore(state, getGlobalStateFn) {
         // this folder.
         appReconciler.setControllerDesired(identifier, 'stopped', `mount safety block: ${reason}`);
       }
-      return;
     }
 
     // Get required IDs and configurations
@@ -963,6 +973,13 @@ async function syncthingAppsCore(state, getGlobalStateFn) {
 
       // eslint-disable-next-line no-restricted-syntax
       for (const [, deployComp] of deployment.componentEntries()) {
+        // The component whose mount is unsafe is the one held out - its folder
+        // has already been demoted and its container held above. Its siblings
+        // and every other app are processed normally.
+        if (unsafeFolderIds.has(dockerService.getAppIdentifier(deployComp.identifier))) {
+          // eslint-disable-next-line no-continue
+          continue;
+        }
         // eslint-disable-next-line no-await-in-loop
         await processContainerData({
           ...sharedParams,
@@ -995,7 +1012,12 @@ async function syncthingAppsCore(state, getGlobalStateFn) {
         && !installedFolderIds.has(syncthingFolder.id)
         && !ownedByUnreadableApp(syncthingFolder.id),
     );
-    const nonUsedDevices = allDevices.filter(
+    // A peer device is attributed to an app by DOING that app's work, so while
+    // anything is held out this pass's view of who is still needed is
+    // incomplete - sweeping on it would drop a live peer of the very app whose
+    // data is waiting to be healed. The folders survive on ownership, which is a
+    // separate guarantee: never visited is not unused.
+    const nonUsedDevices = unsafeFolderIds.size > 0 ? [] : allDevices.filter(
       (syncthingDevice) => !devicesIds.includes(syncthingDevice.deviceID) && syncthingDevice.deviceID !== localDeviceId,
     );
 
