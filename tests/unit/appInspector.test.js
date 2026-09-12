@@ -2466,11 +2466,17 @@ describe('appInspector tests', () => {
         ...dockerServiceStub,
         dockerListContainers: sinon.stub().resolves([{ Id: 'abc', Names: ['/fluxmycomponent_myapp'] }]),
         getAppDockerNameIdentifier: sinon.stub().returns('/fluxmycomponent_myapp'),
-        getDockerContainer: sinon.stub().returns({}),
+        // The handle, not the record: appExec asks getDockerContainerHandle, and
+        // dockerService exports both, so stubbing the other one left the real
+        // handle lookup to run against no docker at all.
+        getDockerContainerHandle: sinon.stub().returns({}),
         dockerContainerExec: sinon.stub().callsFake((c, cmd, env, res, cb) => cb(new Error('no such exec'))),
       };
       const inspector = proxyquire('../../ZelBack/src/services/appManagement/appInspector', {
         config: asConfig(configStub),
+        // Left out, this endpoint resolved its container through the real
+        // provider and never reached the exec whose failure the test is about.
+        '../appRuntime/deploymentProvider': deploymentProviderStub(),
         '../utils/globalState': globalStateStub,
         '../dockerService': dockerStub,
         // The shared stub returns undefined here, which would make this test
