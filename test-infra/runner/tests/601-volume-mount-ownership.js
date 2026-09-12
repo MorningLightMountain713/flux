@@ -205,12 +205,23 @@ describe('FluxOS-owned volume mounting (no crontab) + inert unmounted app dirs',
     // The namespace probe broke nothing, so the self-heal needs a real unmount of
     // its own. Raced by nobody: the assertion is that the repair HAPPENS, which is
     // the repair being fast working for the test rather than against it.
+    const inodeBefore = (await execInContainer(client.container, `stat -c %i ${vol}`)).stdout.trim();
+    expect(inodeBefore, `no backing image to remount: ${vol}`).to.match(/^\d+$/);
+
     await execInContainer(client.container,
       `docker stop ${appId(syncName)} >/dev/null 2>&1; umount ${dir} || true`);
 
     // FluxOS remounts the volume (reconciler / monitor repair) and restarts the app
     await waitFor(() => isMountpoint(client.container, dir), { timeout: 60000, interval: 2000, label: 'volume remounted (self-heal)' });
     await waitFor(() => isUp(client, syncName), { timeout: 90000, interval: 2000, label: 'app running again after self-heal' });
+
+    // THE SAME IMAGE, not a new one. ensureAppVolumeMounted mounts the file
+    // getVolumeFilePath names and answers volume_file_missing when there is
+    // none - it never mints one. A repair that produced a fresh image would
+    // satisfy both waits above while the app came back over an empty volume,
+    // which is the loss this suite exists for.
+    const inodeAfter = (await execInContainer(client.container, `stat -c %i ${vol}`)).stdout.trim();
+    expect(inodeAfter, 'the self-heal remounted the existing backing image').to.equal(inodeBefore);
   });
 
   it('removes a legacy @reboot mount entry on FluxOS start and leaves the mount intact', async function () {
