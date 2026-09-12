@@ -31,7 +31,7 @@ describe('fluxNetworkMonitor tests', () => {
   });
 
   describe('checkMyFluxAvailability tests', () => {
-    let getRandomSocketAddress;
+    let getRandomExternalObserver;
 
     before(requireMongo);
 
@@ -61,7 +61,13 @@ describe('fluxNetworkMonitor tests', () => {
       sinon.stub(fluxCommunicationUtils, 'deterministicFluxList').returns(deterministicFluxnodeListResponse);
       sinon.stub(daemonServiceWalletRpcs, 'createConfirmationTransaction').returns(true);
       sinon.stub(serviceHelper, 'delay').returns(true);
-      getRandomSocketAddress = sinon.stub(networkStateService, 'getRandomSocketAddress');
+      // The peer this asks is an EXTERNAL observer, not any random node:
+      // a node sharing our public address cannot answer whether the outside
+      // world can reach us, because reaching us means leaving the router and
+      // being sent straight back in. networkStateService exports both, and the
+      // suite stubbed the other one - so the real observer lookup ran, found
+      // nobody, and the function returned false before any of this mattered.
+      getRandomExternalObserver = sinon.stub(networkStateService, 'getRandomExternalObserver');
     });
 
     afterEach(() => {
@@ -87,7 +93,7 @@ describe('fluxNetworkMonitor tests', () => {
     it('should return false if axsiosGet throws error', async () => {
       sinon.stub(serviceHelper, 'axiosGet').rejects();
 
-      getRandomSocketAddress.resolves('1.2.3.4:16127');
+      getRandomExternalObserver.resolves('1.2.3.4:16127');
 
       const result = await fluxNetworkMonitor.checkMyFluxAvailability();
 
@@ -97,7 +103,7 @@ describe('fluxNetworkMonitor tests', () => {
     it('should return false if axsiosGet resolves null', async () => {
       sinon.stub(serviceHelper, 'axiosGet').resolves(null);
 
-      getRandomSocketAddress.resolves('1.2.3.4:16127');
+      getRandomExternalObserver.resolves('1.2.3.4:16127');
 
       const result = await fluxNetworkMonitor.checkMyFluxAvailability();
 
@@ -114,7 +120,7 @@ describe('fluxNetworkMonitor tests', () => {
         },
       };
 
-      getRandomSocketAddress.resolves('1.2.3.4:16127');
+      getRandomExternalObserver.resolves('1.2.3.4:16127');
       sinon.stub(serviceHelper, 'axiosGet').resolves(axiosGetResponse);
 
       const result = await fluxNetworkMonitor.checkMyFluxAvailability();
@@ -157,7 +163,7 @@ describe('fluxNetworkMonitor tests', () => {
         },
       };
 
-      getRandomSocketAddress.resolves('1.2.3.4:16127');
+      getRandomExternalObserver.resolves('1.2.3.4:16127');
       sinon.stub(serviceHelper, 'axiosGet').resolves(axiosGetResponse);
 
       const result = await fluxNetworkMonitor.checkMyFluxAvailability();
@@ -248,7 +254,7 @@ describe('fluxNetworkMonitor tests', () => {
     let appQueryServiceStub;
     let registryManagerStub;
     let appUninstallerStub;
-    let appControllerStub;
+    let onAddressChangedStub;
     let specCutoverStub;
     let geolocationServiceStub;
     let fluxCommunicationMessagesSenderStub;
@@ -302,9 +308,7 @@ describe('fluxNetworkMonitor tests', () => {
       };
 
       // Stub appController
-      appControllerStub = {
-        requestAppRestart: sinon.stub().resolves(),
-      };
+      onAddressChangedStub = sinon.stub().resolves();
 
       // Stub specCutover
       specCutoverStub = {
@@ -327,7 +331,6 @@ describe('fluxNetworkMonitor tests', () => {
         './appQuery/appQueryService': appQueryServiceStub,
         './appDatabase/registryManager': registryManagerStub,
         './appLifecycle/appUninstaller': appUninstallerStub,
-        './appManagement/appController': appControllerStub,
         './utils/specCutover': specCutoverStub,
         './geolocationService': geolocationServiceStub,
         './fluxCommunicationMessagesSender': fluxCommunicationMessagesSenderStub,
@@ -335,15 +338,20 @@ describe('fluxNetworkMonitor tests', () => {
         './serviceHelper': serviceHelper,
       });
 
+      fluxNetworkMonitorWithStubs.setOnAddressChanged(onAddressChangedStub);
+
       await fluxNetworkMonitorWithStubs.adjustExternalIP(newIp);
 
       // Verify static IP app was uninstalled
       sinon.assert.calledOnce(appUninstallerStub.uninstallApplication);
       sinon.assert.calledWith(appUninstallerStub.uninstallApplication, 'staticApp');
 
-      // Verify normal app was restarted (not uninstalled)
-      sinon.assert.calledOnce(appControllerStub.requestAppRestart);
-      sinon.assert.calledWith(appControllerStub.requestAppRestart, 'normalApp');
+      // The apps that stay are handed over ONCE, as a set. What an app is made of
+      // - a composed one's containers, an enterprise one's names inside a blob
+      // this layer cannot read - is knowledge the reconciler holds and this one
+      // does not, which is why it is no longer a restart call per app.
+      sinon.assert.calledOnce(onAddressChangedStub);
+      expect(onAddressChangedStub.firstCall.args[0].map((a) => a.name)).to.deep.equal(['normalApp']);
 
       // Verify geolocation service was called
       sinon.assert.calledOnce(geolocationServiceStub.setNodeGeolocation);
@@ -372,9 +380,7 @@ describe('fluxNetworkMonitor tests', () => {
         uninstallApplication: sinon.stub().resolves(),
       };
 
-      appControllerStub = {
-        requestAppRestart: sinon.stub().resolves(),
-      };
+      onAddressChangedStub = sinon.stub().resolves();
 
       // Stub specCutover to return decrypted specs with staticip: true
       specCutoverStub = {
@@ -399,13 +405,14 @@ describe('fluxNetworkMonitor tests', () => {
         './appQuery/appQueryService': appQueryServiceStub,
         './appDatabase/registryManager': registryManagerStub,
         './appLifecycle/appUninstaller': appUninstallerStub,
-        './appManagement/appController': appControllerStub,
         './utils/specCutover': specCutoverStub,
         './geolocationService': geolocationServiceStub,
         './fluxCommunicationMessagesSender': fluxCommunicationMessagesSenderStub,
         './daemonService/daemonServiceWalletRpcs': daemonServiceWalletRpcs,
         './serviceHelper': serviceHelper,
       });
+
+      fluxNetworkMonitorWithStubs.setOnAddressChanged(onAddressChangedStub);
 
       await fluxNetworkMonitorWithStubs.adjustExternalIP(newIp);
 
@@ -439,9 +446,7 @@ describe('fluxNetworkMonitor tests', () => {
         uninstallApplication: sinon.stub().resolves(),
       };
 
-      appControllerStub = {
-        requestAppRestart: sinon.stub().resolves(),
-      };
+      onAddressChangedStub = sinon.stub().resolves();
 
       // Stub specCutover to throw error
       specCutoverStub = {
@@ -461,7 +466,6 @@ describe('fluxNetworkMonitor tests', () => {
         './appQuery/appQueryService': appQueryServiceStub,
         './appDatabase/registryManager': registryManagerStub,
         './appLifecycle/appUninstaller': appUninstallerStub,
-        './appManagement/appController': appControllerStub,
         './utils/specCutover': specCutoverStub,
         './geolocationService': geolocationServiceStub,
         './fluxCommunicationMessagesSender': fluxCommunicationMessagesSenderStub,
@@ -469,11 +473,15 @@ describe('fluxNetworkMonitor tests', () => {
         './serviceHelper': serviceHelper,
       });
 
+      fluxNetworkMonitorWithStubs.setOnAddressChanged(onAddressChangedStub);
+
       await fluxNetworkMonitorWithStubs.adjustExternalIP(newIp);
 
       // Should skip the app entirely when decryption fails - neither uninstall nor restart
       sinon.assert.notCalled(appUninstallerStub.uninstallApplication);
-      sinon.assert.notCalled(appControllerStub.requestAppRestart);
+      // Nothing stayed: the app whose spec could not be read is skipped entirely,
+      // neither removed nor handed on.
+      sinon.assert.notCalled(onAddressChangedStub);
     });
 
     it('should not uninstall v6 apps even with staticip field', async () => {
@@ -498,9 +506,7 @@ describe('fluxNetworkMonitor tests', () => {
         uninstallApplication: sinon.stub().resolves(),
       };
 
-      appControllerStub = {
-        requestAppRestart: sinon.stub().resolves(),
-      };
+      onAddressChangedStub = sinon.stub().resolves();
 
       specCutoverStub = {
         resolveSpec: sinon.stub().callsFake((app) => Promise.resolve(app)),
@@ -519,7 +525,6 @@ describe('fluxNetworkMonitor tests', () => {
         './appQuery/appQueryService': appQueryServiceStub,
         './appDatabase/registryManager': registryManagerStub,
         './appLifecycle/appUninstaller': appUninstallerStub,
-        './appManagement/appController': appControllerStub,
         './utils/specCutover': specCutoverStub,
         './geolocationService': geolocationServiceStub,
         './fluxCommunicationMessagesSender': fluxCommunicationMessagesSenderStub,
@@ -527,11 +532,13 @@ describe('fluxNetworkMonitor tests', () => {
         './serviceHelper': serviceHelper,
       });
 
+      fluxNetworkMonitorWithStubs.setOnAddressChanged(onAddressChangedStub);
+
       await fluxNetworkMonitorWithStubs.adjustExternalIP(newIp);
 
       // v6 apps should not be checked for staticip (only v7+)
       sinon.assert.notCalled(appUninstallerStub.uninstallApplication);
-      sinon.assert.calledOnce(appControllerStub.requestAppRestart);
+      sinon.assert.calledOnce(onAddressChangedStub);
     });
   });
 
