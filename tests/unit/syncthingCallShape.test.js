@@ -79,49 +79,131 @@ function externalCalls() {
       if (node.type !== 'CallExpression' || node.callee.type !== 'MemberExpression') return;
       const { object, property } = node.callee;
       if (object.type !== 'Identifier' || !aliases.has(object.name)) return;
+      // the nearest enclosing function, which is as far as a binding can be read
+      const fnBody = parents.find((p) => /Function(Declaration|Expression)|ArrowFunctionExpression/.test(p.type));
       calls.push({
         name: property.name,
         where: `${rel}:${node.loc.start.line}`,
         rel,
         how: consumption(node, parents, src),
+        reads: propertiesRead(node, parents, fnBody),
       });
     });
   }
   return calls;
 }
 
-// Which transport each service function is built on, following delegation to a
-// sibling (the two adjustConfig* wrappers share one collection helper).
-// ENVELOPE answers {status, data} and never rejects; THROWS answers the rows;
-// NONE reaches neither transport and so has neither contract to get wrong.
+// The contract a service function answers on, from what it RETURNS - not from
+// what it calls. A function that consumes performRequest internally and answers
+// its own object (getPeerSyncDiagnostics) throws like any other function, and
+// classifying it by the call would make a live catch on it read as dead.
+//
+// ENVELOPE: a {status, data} value, from performRequest or a messageHelper
+// constructor. THROWS: the rows, from `request`. VALUE: anything else - such a
+// function has neither contract to get wrong.
 function serviceContracts() {
   const src = fs.readFileSync(nodePath.join(ROOT, SERVICE), 'utf8');
-  const bodies = new Map();
+  const fns = new Map();
   for (const node of parse(src).body) {
-    if (node.type !== 'FunctionDeclaration' || !node.id) continue;
-    bodies.set(node.id.name, src.slice(node.body.range[0], node.body.range[1]));
+    if (node.type === 'FunctionDeclaration' && node.id) fns.set(node.id.name, node);
   }
-  const resolve = (name, seen = new Set()) => {
-    if (!bodies.has(name) || seen.has(name)) return null;
-    seen.add(name);
-    const body = bodies.get(name);
-    const perform = /\bperformRequest\(/.test(body);
-    const throwing = /(?<!perform)\brequest\(/.test(body);
-    if (perform && !throwing) return 'ENVELOPE';
-    if (throwing && !perform) return 'THROWS';
-    for (const [, callee] of body.matchAll(/return (?:await )?([A-Za-z0-9_]+)\(/g)) {
-      const answer = resolve(callee, seen);
-      if (answer) return answer;
+
+  // the returned expressions of one function, skipping any nested function
+  const returnsOf = (fn) => {
+    const found = [];
+    const descend = (node) => {
+      if (!node || typeof node.type !== 'string') return;
+      if (node !== fn && /Function(Declaration|Expression)|ArrowFunctionExpression/.test(node.type)) return;
+      if (node.type === 'ReturnStatement' && node.argument) found.push(node.argument);
+      for (const key of Object.keys(node)) {
+        if (key === 'loc' || key === 'range') continue;
+        const value = node[key];
+        if (Array.isArray(value)) value.forEach(descend);
+        else if (value && typeof value.type === 'string') descend(value);
+      }
+    };
+    descend(fn);
+    return found;
+  };
+
+  // what an expression evaluates to, following `const x = <expr>` one step and
+  // delegation to a sibling any number of steps
+  const kindOf = (expr, fn, seen) => {
+    if (!expr) return null;
+    if (expr.type === 'AwaitExpression') return kindOf(expr.argument, fn, seen);
+    if (expr.type === 'CallExpression') {
+      const { callee } = expr;
+      if (callee.type === 'Identifier') {
+        if (callee.name === 'performRequest') return 'ENVELOPE';
+        if (callee.name === 'request') return 'THROWS';
+        if (fns.has(callee.name)) return resolve(callee.name, seen); // eslint-disable-line no-use-before-define
+      }
+      if (callee.type === 'MemberExpression' && /^create(Data|Error|Success|Warning)Message$/.test(callee.property.name)) return 'ENVELOPE';
+      if (callee.type === 'MemberExpression' && callee.property.name === 'errUnauthorizedMessage') return 'ENVELOPE';
+      return null;
+    }
+    if (expr.type === 'Identifier') {
+      // the binding it was last assigned from, within this function
+      let assigned = null;
+      const descend = (node) => {
+        if (!node || typeof node.type !== 'string') return;
+        if (node.type === 'VariableDeclarator' && node.id.type === 'Identifier' && node.id.name === expr.name) assigned = node.init;
+        if (node.type === 'AssignmentExpression' && node.left.type === 'Identifier' && node.left.name === expr.name) assigned = node.right;
+        for (const key of Object.keys(node)) {
+          if (key === 'loc' || key === 'range') continue;
+          const value = node[key];
+          if (Array.isArray(value)) value.forEach(descend);
+          else if (value && typeof value.type === 'string') descend(value);
+        }
+      };
+      descend(fn);
+      return assigned ? kindOf(assigned, fn, seen) : null;
     }
     return null;
   };
+
+  function resolve(name, seen = new Set()) {
+    if (!fns.has(name) || seen.has(name)) return null;
+    seen.add(name);
+    const fn = fns.get(name);
+    const kinds = new Set(returnsOf(fn).map((expr) => kindOf(expr, fn, seen)).filter(Boolean));
+    // a function with even one envelope return can hand a caller one
+    if (kinds.has('ENVELOPE')) return 'ENVELOPE';
+    if (kinds.has('THROWS')) return 'THROWS';
+    return null;
+  }
+
   const contracts = new Map();
-  for (const name of bodies.keys()) contracts.set(name, resolve(name) || 'NONE');
+  for (const name of fns.keys()) contracts.set(name, resolve(name) || 'VALUE');
   return contracts;
 }
 
 // How a call site consumes what it gets back. A `.catch()` and a discarded
 // `await` are the two readings that treat an envelope as a throw.
+// The properties a call's answer is read through, when it is bound to a name.
+// Null when it is not bound - an adapter argument, or a value passed straight on.
+function propertiesRead(node, parents, fnBody) {
+  const [p1, p2] = parents;
+  const binding = p1 && p1.type === 'AwaitExpression' && p2 && p2.type === 'VariableDeclarator'
+    && p2.id.type === 'Identifier' ? p2.id.name : null;
+  if (!binding || !fnBody) return null;
+  const props = new Set();
+  const descend = (n) => {
+    if (!n || typeof n.type !== 'string') return;
+    if (n.type === 'MemberExpression' && n.object.type === 'Identifier' && n.object.name === binding) {
+      props.add(n.property.name || '<computed>');
+    }
+    for (const key of Object.keys(n)) {
+      if (key === 'loc' || key === 'range') continue;
+      const value = n[key];
+      if (Array.isArray(value)) value.forEach(descend);
+      else if (value && typeof value.type === 'string') descend(value);
+    }
+  };
+  descend(fnBody);
+  return [...props];
+}
+
 function consumption(node, parents, src) {
   const [p1, p2, p3] = parents;
   const isDataOrThrow = (call) => call && call.type === 'CallExpression'
@@ -198,16 +280,17 @@ describe('syncthing call shape', () => {
     expect(offenders, 'an internal caller has no request and no response to give').to.deep.equal([]);
   });
 
-  it('classifies every function the service exports', () => {
+  it('classifies every function by what it returns', () => {
     const unresolved = [...contracts.entries()].filter(([, c]) => !c).map(([name]) => name);
     expect(unresolved, 'a function this sweep cannot classify is a failure, not a skip').to.deep.equal([]);
-    // both halves are populated, so a classifier that answered one thing for
-    // everything would not pass the assertions below by default
-    const kinds = new Set(contracts.values());
-    expect(kinds.has('ENVELOPE'), 'the service has envelope-returning functions').to.be.true;
-    expect(kinds.has('THROWS'), 'and functions that throw').to.be.true;
+    // a classifier that answered one thing for everything would pass the
+    // assertions below by default, so pin one of each - including the function
+    // that CALLS performRequest and returns its own object, which throws
     expect(contracts.get('adjustConfigFolders'), 'through its collection helper').to.equal('ENVELOPE');
+    expect(contracts.get('getConfigRestartRequired')).to.equal('ENVELOPE');
     expect(contracts.get('getConfigFolders')).to.equal('THROWS');
+    expect(contracts.get('getPeerSyncDiagnostics'), 'consumes performRequest, answers its own object').to.equal('VALUE');
+    expect(contracts.get('getDeviceId'), 'answers a device id or null').to.equal('VALUE');
   });
 
   // A `.catch()` on a function that never rejects never runs. The failure it
@@ -227,6 +310,17 @@ describe('syncthing call shape', () => {
       .filter((c) => contracts.get(c.name) === 'ENVELOPE' && c.how === 'discarded')
       .map((c) => `${c.where} -> ${c.name}() answers {status, data} and the answer is discarded`);
     expect(discarded, 'the only report of a failure is the value').to.deep.equal([]);
+  });
+
+  // The third reading, and the one that survives both rules above: the value is
+  // taken and its SHAPE is tested. An error envelope has no rows on it, so
+  // `!answer.data` or a missing field reads as "empty" rather than "failed", and
+  // the caller acts on an absence that is really a failure.
+  it('nothing tests the shape of an answer without testing its status', () => {
+    const shapeOnly = internalSites
+      .filter((c) => contracts.get(c.name) === 'ENVELOPE' && c.how === 'read' && c.reads && !c.reads.includes('status'))
+      .map((c) => `${c.where} -> ${c.name}() is read as ${c.reads.map((r) => `.${r}`).join(', ')} and never .status`);
+    expect(shapeOnly, 'an error envelope carries no rows, so shape cannot tell failure from empty').to.deep.equal([]);
   });
 
   // The sweep resolves nothing if `how` never populates, which would pass both

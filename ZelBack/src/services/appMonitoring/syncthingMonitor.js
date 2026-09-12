@@ -9,6 +9,7 @@ const operationRegistry = require('../utils/operationRegistry');
 const appCaches = require('../utils/appCaches');
 const fluxNetworkHelper = require('../fluxNetworkHelper');
 const syncthingService = require('../syncthingService');
+const messageHelper = require('../messageHelper');
 const { ConfigMethod } = require('../utils/syncthingConstants');
 const globalState = require('../utils/globalState');
 const fluxEventBus = require('../utils/fluxEventBus');
@@ -66,6 +67,11 @@ const appsFolder = `${appsFolderPath}/`;
  * `performRequest`, which turns every axios failure into an ENVELOPE and never
  * rejects, so a `.catch()` on one is dead code and a bare `await` discards the
  * answer. Every write in this file goes through here.
+ *
+ * This is the report-and-continue reading, for a write whose failure must not
+ * end the pass - a per-app safety action, or one folder of a parallel sweep.
+ * A write whose failure invalidates everything below it goes through
+ * messageHelper.dataOrThrow instead and leaves through the outer catch.
  *
  * A throw is handled as well as an envelope: a caller that must not itself fail
  * should not depend on which of the two arrives.
@@ -955,10 +961,15 @@ async function syncthingAppsCore(state, getGlobalStateFn) {
     await Promise.all(cleanupPromises);
 
     // Apply new configuration
+    // THE CONFIGURATION WRITES ABORT THE PASS. Everything below acts on the
+    // configuration these apply - the folder-error scan reads the folders just
+    // written, the restart check asks whether they need one, and the promoted
+    // set is published from them. A refused write leaves all of it describing a
+    // configuration syncthing does not hold, so it leaves through the outer
+    // catch and the level loop reassembles next pass.
     if (devicesConfiguration.length > 0) {
-      await syncthingApplied(
-        syncthingService.adjustConfigDevices({ method: ConfigMethod.PUT, config: devicesConfiguration }),
-        `writing ${devicesConfiguration.length} device(s)`,
+      messageHelper.dataOrThrow(
+        await syncthingService.adjustConfigDevices({ method: ConfigMethod.PUT, config: devicesConfiguration }),
       );
     }
     // Inert in production - the bus is a no-op unless the harness enables it -
@@ -971,9 +982,8 @@ async function syncthingAppsCore(state, getGlobalStateFn) {
     });
 
     if (newFoldersConfiguration.length > 0) {
-      const wrote = await syncthingApplied(
-        syncthingService.adjustConfigFolders({ method: ConfigMethod.PUT, config: newFoldersConfiguration }),
-        `writing ${newFoldersConfiguration.length} folder(s)`,
+      messageHelper.dataOrThrow(
+        await syncthingService.adjustConfigFolders({ method: ConfigMethod.PUT, config: newFoldersConfiguration }),
       );
       // Reconciled in BOTH directions the moment the write lands, not left to
       // the next pass. The published set is what a peer reads before promoting a
@@ -982,17 +992,14 @@ async function syncthingAppsCore(state, getGlobalStateFn) {
       // cycle would each advertise nothing, neither would block the other, and
       // that is the collision the check exists to catch.
       //
-      // ONLY when the write landed. This is an ASSERTION about syncthing's state
-      // made without re-reading it, and it is what peers act on: a folder named
-      // here that syncthing did not accept advertises this node as holding it
-      // writable, and a peer stands down from a promotion nothing serves. A
-      // refused write leaves the scan at the top of this pass standing, and the
-      // next pass re-derives it.
-      if (wrote) {
-        for (const folder of newFoldersConfiguration) {
-          if (folder.type === 'sendreceive') globalState.promotedFolderIds.add(folder.id);
-          else globalState.promotedFolderIds.delete(folder.id);
-        }
+      // Reached only on a write that landed - the line above throws otherwise.
+      // This is an ASSERTION about syncthing's state made without re-reading it,
+      // and it is what peers act on: a folder named here that syncthing did not
+      // accept advertises this node as holding it writable, and a peer stands
+      // down from a promotion nothing serves.
+      for (const folder of newFoldersConfiguration) {
+        if (folder.type === 'sendreceive') globalState.promotedFolderIds.add(folder.id);
+        else globalState.promotedFolderIds.delete(folder.id);
       }
     }
 
