@@ -6,7 +6,7 @@
  * made, so a bad method names itself rather than arriving as a generic failure.
  *
  * It lives here rather than on syncthingService because both the service and
- * its callers need it, and a caller destructuring it from the service reads
+ * its callers need it: a caller destructuring it from the service reads
  * undefined wherever that service is stubbed.
  */
 const ConfigMethod = Object.freeze({

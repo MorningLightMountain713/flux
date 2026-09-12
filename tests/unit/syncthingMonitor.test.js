@@ -45,8 +45,8 @@ const syncthingServiceMock = {
   getConfigDevices: sinon.stub(),
   // The WRITE half answers an envelope and never rejects - adjustConfig* goes
   // through performRequest, where the read half goes through `request` and
-  // throws. These answer the envelope, so a call site reading the result as a
-  // throw is visible from here.
+  // throws. These answer the envelope, so a call site reading one as a throw is
+  // visible from here.
   adjustConfigDevices: sinon.stub().resolves({ status: 'success', data: {} }),
   adjustConfigFolders: sinon.stub().resolves({ status: 'success', data: {} }),
   getFolderIdErrors: sinon.stub(),
@@ -120,10 +120,9 @@ const volumeServiceMock = {
 };
 
 // The real setSyncedMark stamps the mark with the volume's filesystem id, which
-// is a findmnt call. The stamp is appCaches' own concern and has its own tests;
-// what this file needs to see is WHICH mark a pass writes for a folder. The
-// double stores it the way the real one does, with an unreadable stamp - which
-// is what an unmounted volume really answers.
+// is a findmnt call. The stamp belongs to appCaches; what this file needs to see
+// is WHICH mark a pass writes. This stores it as the real one does, with the
+// unreadable stamp an unmounted volume answers.
 const appCachesMock = {
   setSyncedMark: sinon.stub().callsFake(async (marks, appId, cache) => {
     const stamped = { ...cache, volumeUuid: null };
@@ -801,11 +800,11 @@ describe('syncthingMonitor tests', () => {
 
     // A SAFETY ACTION IS NOT CONDITIONED ON A CALL THAT CAN FAIL. Which folders
     // syncthing holds sendreceive is read once a pass, at the top, where a
-    // failure returns before anything is judged by it - and the demotion reads
-    // that observation off the entry. Asked again here, a failed read answers
-    // "no such folder", which is indistinguishable from "nothing to protect":
-    // the demotion is skipped, the container is not held, and the folder keeps
-    // broadcasting its vanished disk state with nothing logged.
+    // failure returns before anything is judged by it; the demotion reads that
+    // off the entry. Asked again here, a failed read answers "no such folder",
+    // which is indistinguishable from "nothing to protect" - so the demotion is
+    // skipped, the container is not held, and the folder keeps broadcasting its
+    // vanished disk state with nothing logged.
     it('demotes without asking syncthing a second time, so a failed read cannot skip the safety action', async () => {
       deploymentProviderMock.listInstalledDeployments.resolves([syncDeployment]);
       syncthingEventsConsumerMock.mountVerifyPendingIds.returns([syncFolderId]);
@@ -823,7 +822,7 @@ describe('syncthingMonitor tests', () => {
       sinon.assert.calledWith(appReconcilerMock.setControllerDesired, syncComp.identifier, 'stopped');
     });
 
-    // A demoted folder re-enters the promotion machinery from the start. Left
+    // A demoted folder re-enters the promotion machinery from the start: left
     // where it stood, a folder moments from promotion resumes there once the
     // mount returns, on a sync state established before the volume went away.
     it('restarts the promotion count when it demotes', async () => {
@@ -845,8 +844,8 @@ describe('syncthingMonitor tests', () => {
       sinon.assert.calledWith(appCachesMock.setSyncedMark, mockState.receiveOnlySyncthingAppsCache, syncFolderId);
     });
 
-    // The mark describes a DEMOTED folder. Writing it for one that is still
-    // sendreceive is the same lie as logging that it was switched.
+    // The mark describes a DEMOTED folder, so a folder still sendreceive has
+    // none.
     it('does not restart the promotion count when the demotion failed', async () => {
       deploymentProviderMock.listInstalledDeployments.resolves([syncDeployment]);
       mockState.receiveOnlySyncthingAppsCache.set(syncFolderId, { numberOfExecutions: 9 });
@@ -1074,13 +1073,13 @@ describe('syncthingMonitor tests', () => {
     // adjustConfigFolders/adjustConfigDevices go through `performRequest`, which
     // turns every axios failure into an ENVELOPE and NEVER rejects - so a
     // `.catch()` on one is dead code and a bare `await` discards the answer.
-    // These say what a refusal must look like from outside.
+    // These state what a refusal looks like from outside.
     describe('a configuration write syncthing refused', () => {
       const refused = (message) => ({ status: 'error', data: { code: 'ECONNREFUSED', message } });
 
-      // The demotion is the one that costs data: a folder left sendreceive over
-      // a vanished mount keeps broadcasting its (missing) disk state to healthy
-      // peers, so nothing may report it as switched unless it was.
+      // A folder left sendreceive over a vanished mount keeps broadcasting its
+      // missing disk state to healthy peers, so nothing may report it as
+      // switched unless it was.
       it('says so when the mount-safety demotion could not be applied', async () => {
         deploymentProviderMock.listInstalledDeployments.resolves([syncDeployment]);
         syncthingEventsConsumerMock.mountVerifyPendingIds.returns([syncFolderId]);
@@ -1123,10 +1122,10 @@ describe('syncthingMonitor tests', () => {
       });
 
       // globalState.promotedFolderIds is an ASSERTION about syncthing's state,
-      // made without re-reading it, and it is what a peer reads before promoting
-      // a folder of its own. Applied to a write syncthing refused, this node
-      // advertises folders it does not hold writable and its peers stand down
-      // from a promotion nothing is serving.
+      // made without re-reading it, and what a peer reads before promoting a
+      // folder of its own. A folder named there that syncthing did not accept
+      // advertises this node as holding it writable, and its peers stand down
+      // from a promotion nothing serves.
       it('does not publish a folder it could not write as one this node holds writable', async () => {
         // eslint-disable-next-line global-require
         const globalStateModule = require('../../ZelBack/src/services/utils/globalState');

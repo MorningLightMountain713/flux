@@ -11,6 +11,7 @@ const path = require('node:path');
 const serviceHelper = require('../../ZelBack/src/services/serviceHelper');
 const volumeService = require('../../ZelBack/src/services/utils/volumeService');
 const helpers = require('../../ZelBack/src/services/appMonitoring/syncthingMonitorHelpers');
+const log = require('../../ZelBack/src/lib/log');
 const peerIdentityService = require('../../ZelBack/src/services/peerIdentityService');
 const fluxEventBus = require('../../ZelBack/src/services/utils/fluxEventBus');
 
@@ -595,10 +596,10 @@ describe('syncthingMonitorHelpers tests', () => {
       sinon.assert.calledOnceWithExactly(adjust, { method: 'delete', id: 'fluxweb_app' });
     });
 
-    // adjustConfigFolders goes through performRequest: it answers an ENVELOPE and
-    // never rejects, where the getConfigFolders above goes through `request` and
-    // throws. Only a removal syncthing accepted may be reported as one - an
-    // uninstall otherwise claims a folder deregistered that syncthing still holds.
+    // adjustConfigFolders goes through performRequest: it answers an ENVELOPE
+    // and never rejects, where the getConfigFolders above goes through `request`
+    // and throws. Only a removal syncthing accepted is reported as one - an
+    // uninstall otherwise claims a folder deregistered that syncthing holds.
     it('does not report a removal syncthing refused', async () => {
       sandbox.stub(syncthingService, 'getConfigFolders')
         .resolves([{ id: 'fluxweb_app', path: `${appsBase}fluxweb_app` }]);
@@ -640,9 +641,13 @@ describe('syncthingMonitorHelpers tests', () => {
     });
 
     it('swallows a failed scan request (the watcher/rescan remains the fallback)', async () => {
-      sandbox.stub(syncthingService, 'scanFolder').rejects(new Error('syncthing down'));
+      const scanFolder = sandbox.stub(syncthingService, 'scanFolder').rejects(new Error('syncthing down'));
+      const logWarn = sandbox.stub(log, 'warn');
 
       await helpers.requestFolderScan('web_app');
+
+      sinon.assert.calledOnceWithExactly(scanFolder, 'fluxweb_app');
+      sinon.assert.calledWithMatch(logWarn, /scan request for web_app failed - syncthing down/);
     });
   });
 });
