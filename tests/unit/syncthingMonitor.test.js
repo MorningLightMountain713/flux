@@ -595,6 +595,28 @@ describe('syncthingMonitor tests', () => {
           .to.deep.equal(['fluxweb_gone']);
       });
 
+      // The single-app case, and the property the two-folder test above cannot
+      // show: an app this node cannot read costs its own folders' sweep and
+      // NOTHING ELSE. Standing the whole pass down instead would stop folder
+      // registration, mount safety, promotion and error draining for every app
+      // on the node, for as long as one app stayed sealed.
+      it('deletes nothing when an enterprise spec cannot be decrypted, and finishes the pass', async () => {
+        deploymentProviderMock.listInstalledDeploymentsDetailed.resolves({
+          deployments: [],
+          unreadableAppNames: new Set(['sealed']),
+        });
+        syncthingServiceMock.getConfigFolders.resolves([{ id: 'fluxweb_sealed', type: 'sendreceive' }]);
+
+        monitorControl = syncthingMonitor.syncthingApps(mockState, mockGetGlobalStateFn);
+        await clock.tickAsync(100);
+
+        const deleted = syncthingServiceMock.adjustConfigFolders.getCalls()
+          .map((call) => call.args[0])
+          .filter((options) => options.method === 'delete');
+        expect(deleted, 'the only folder belongs to an app whose spec says nothing').to.deep.equal([]);
+        expect(passes(), 'and the pass ran to the folder write anyway').to.have.lengthOf(1);
+      });
+
       // Protected from the SWEEP, not from the mount check. The verdict derives
       // entirely from the folder id, so a folder whose owning app cannot be read
       // is verified all the same - one held sendreceive over a vanished mount
@@ -886,6 +908,47 @@ describe('syncthingMonitor tests', () => {
       sinon.assert.notCalled(syncthingEventsConsumerMock.resolveMountVerify);
     });
 
+    // A flag nothing downstream can match is re-read every pass forever:
+    // checkAppFolderMounts walks deployments, and no deployment carries this id.
+    // The uninstall that removed the component already removed whatever the flag
+    // protected.
+    it('resolves a flagged folder no installed component carries', async () => {
+      deploymentProviderMock.listInstalledDeployments.resolves([syncDeployment]);
+      syncthingEventsConsumerMock.mountVerifyPendingIds.returns(['fluxweb_uninstalled']);
+      syncthingServiceMock.getDeviceId.resolves('DEVICE-ID');
+      fluxNetworkHelperMock.getLocalSocketAddress.resolves('10.0.0.1:16127');
+
+      monitorControl = syncthingMonitor.syncthingApps(mockState, mockGetGlobalStateFn);
+      await clock.tickAsync(100);
+
+      sinon.assert.calledWith(syncthingEventsConsumerMock.resolveMountVerify, 'fluxweb_uninstalled');
+      // the installed component's own folder is not swept up with it
+      sinon.assert.neverCalledWith(syncthingEventsConsumerMock.resolveMountVerify, syncFolderId);
+    });
+
+    // The guard on the resolution above, and the reason it needs one. An app
+    // this node could not read carries nothing HERE, for a reason that says
+    // nothing about the folder - resolving on that drops a live protection over
+    // a mount nobody has checked.
+    it('keeps a safety flag standing when its folder belongs to an app it cannot decrypt', async () => {
+      deploymentProviderMock.listInstalledDeploymentsDetailed.resolves({
+        deployments: [],
+        unreadableAppNames: new Set(['sealed']),
+      });
+      syncthingEventsConsumerMock.mountVerifyPendingIds.returns(['fluxweb_sealed', 'fluxweb_gone']);
+      syncthingServiceMock.getConfigFolders.resolves([]);
+      syncthingServiceMock.getDeviceId.resolves('DEVICE-ID');
+      fluxNetworkHelperMock.getLocalSocketAddress.resolves('10.0.0.1:16127');
+
+      monitorControl = syncthingMonitor.syncthingApps(mockState, mockGetGlobalStateFn);
+      await clock.tickAsync(100);
+
+      sinon.assert.neverCalledWith(syncthingEventsConsumerMock.resolveMountVerify, 'fluxweb_sealed');
+      // the same pass resolved the one that is genuinely gone, so the assertion
+      // above is about readability and not about the pass never getting here
+      sinon.assert.calledWith(syncthingEventsConsumerMock.resolveMountVerify, 'fluxweb_gone');
+    });
+
     it('resolves a mount-verify flag once that folder verifies safe', async () => {
       // The other half, and the one that proves the assertion above is not
       // vacuous: the same path DOES clear the flag when the question is answered.
@@ -918,6 +981,48 @@ describe('syncthingMonitor tests', () => {
 
       sinon.assert.notCalled(syncthingServiceMock.adjustConfigFolders);
       sinon.assert.notCalled(appReconcilerMock.setControllerDesired);
+    });
+
+    // A COMPONENT THAT SYNCS, A MOUNT THAT IS UNSAFE, AND NO FOLDER: that is a
+    // contradiction, not an answer, and it is the one case where "syncthing does
+    // not hold it" must not read as "nothing to protect". Nothing is recreated
+    // here - the level loop rebuilds the folder once the mount is healthy - but
+    // the container is writing to a bad mount now.
+    it('holds the container and keeps the flag when an owned folder is unknown to syncthing', async () => {
+      deploymentProviderMock.listInstalledDeployments.resolves([syncDeployment]);
+      syncthingEventsConsumerMock.mountVerifyPendingIds.returns([syncFolderId]);
+      syncthingFolderStateMachineMock.verifyFolderMountSafety.resolves({ isSafe: false, isMounted: false, reason: 'unmounted_with_content' });
+      volumeServiceMock.ensureAppVolumeMounted.resolves({ mounted: false, reason: 'volume_file_missing' });
+      // syncthing holds a folder, just not this component's
+      syncthingServiceMock.getConfigFolders.resolves([{ id: 'fluxweb_someotherapp', type: 'sendreceive' }]);
+
+      monitorControl = syncthingMonitor.syncthingApps(mockState, mockGetGlobalStateFn);
+      await clock.tickAsync(100);
+
+      sinon.assert.calledWith(appReconcilerMock.setControllerDesired, syncComp.identifier, 'stopped');
+      // nothing to demote, and nothing is recreated from here
+      sinon.assert.notCalled(syncthingServiceMock.adjustConfigFolders);
+      // the mount question is unanswered, so the flag stands
+      sinon.assert.notCalled(syncthingEventsConsumerMock.resolveMountVerify);
+    });
+
+    // The other side, and what keeps the assertion above from being about any
+    // folderless component: one that declares no sync has no folder to be
+    // missing, so its absence from syncthing says nothing at all.
+    it('leaves a component that declares no sync alone when syncthing has no folder for it', async () => {
+      const plainFolderId = `flux${plainDeployment.getComponent('web').identifier}`;
+      deploymentProviderMock.listInstalledDeployments.resolves([plainDeployment]);
+      syncthingEventsConsumerMock.mountVerifyPendingIds.returns([plainFolderId]);
+      syncthingFolderStateMachineMock.verifyFolderMountSafety.resolves({ isSafe: false, isMounted: false, reason: 'unmounted_with_content' });
+      volumeServiceMock.ensureAppVolumeMounted.resolves({ mounted: false, reason: 'volume_file_missing' });
+      syncthingServiceMock.getConfigFolders.resolves([]);
+
+      monitorControl = syncthingMonitor.syncthingApps(mockState, mockGetGlobalStateFn);
+      await clock.tickAsync(100);
+
+      expect(plainDeployment.getComponent('web').hasSyncthing(), 'fixture must declare no sync').to.be.false;
+      sinon.assert.notCalled(appReconcilerMock.setControllerDesired);
+      sinon.assert.notCalled(syncthingServiceMock.adjustConfigFolders);
     });
 
     it('does not sweep mounts in steady state (no FolderErrors, not first run)', async () => {
