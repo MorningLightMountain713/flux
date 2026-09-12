@@ -69,6 +69,13 @@ const GEO_SPECS = [
   // the rule is intersection over the location hierarchy, and this is the case
   // that separates intersection from "prefer the more specific pin".
   ['aNA', 'bDE'],
+  // A well-formed pin naming a country, and a continent, that do not exist.
+  // Install time compares them against every node and matches none, so the app
+  // is placeable nowhere. `a=EU` is on chain - a typo on test-orbit-db, v8 -
+  // and was placeable nowhere before anyone noticed; what changed is that the
+  // converted spec now says so instead of reading as unconstrained.
+  ['bZZ'],
+  ['a=EU'],
 ];
 
 // Both sides of every boundary above, including the two kinds of unprovable
