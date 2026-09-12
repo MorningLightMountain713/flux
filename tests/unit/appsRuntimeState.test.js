@@ -401,7 +401,7 @@ describe('appsRuntimeState tests', () => {
     it('restarts a clean exit immediately and leaves the ladder untouched', async () => {
       await appsRuntimeState.recordRestart('www_App', false);
       expect(store.get('www_App').restartHistory, 'no ladder entry for a clean exit').to.be.undefined;
-      expect(await appsRuntimeState.restartWaitMs('www_App', null, false)).to.equal(0);
+      expect(await appsRuntimeState.restartWaitMs('www_App')).to.equal(0);
     });
 
     // An operator restart is not "a clean exit" - it is appStart/appRestart
@@ -441,14 +441,14 @@ describe('appsRuntimeState tests', () => {
       await appsRuntimeState.recordExit(id, 0);
 
       expect(store.get(id).restartHistory, 'the ladder survived its own wait').to.have.lengthOf(4);
-      expect(await appsRuntimeState.restartWaitMs(id, Date.now()), 'and it climbs instead of starting over').to.be.above(0);
+      expect(await appsRuntimeState.restartWaitMs(id, { lastFinishedAtMs: Date.now() }), 'and it climbs instead of starting over').to.be.above(0);
     });
 
     it('paces a container restarting faster than the burst window, whatever the exit code says', async () => {
       const id = 'www_App';
       for (let i = 0; i < appsRuntimeState.RESTART_BURST_COUNT; i += 1) {
         // eslint-disable-next-line no-await-in-loop
-        expect(await appsRuntimeState.restartWaitMs(id, null, false), `restart ${i} is free`).to.equal(0);
+        expect(await appsRuntimeState.restartWaitMs(id), `restart ${i} is free`).to.equal(0);
         // eslint-disable-next-line no-await-in-loop
         await appsRuntimeState.recordRestart(id, false);
         clock.tick(1000);
@@ -461,10 +461,10 @@ describe('appsRuntimeState tests', () => {
       // one straight back; the rung is earned on its way past. Asserted because
       // every comment describing the ceiling describes this step, and reordering
       // the two calls would change it with nothing to object.
-      expect(await appsRuntimeState.restartWaitMs(id, null, false), 'the restart that crosses the line is not itself held').to.equal(0);
+      expect(await appsRuntimeState.restartWaitMs(id), 'the restart that crosses the line is not itself held').to.equal(0);
       await appsRuntimeState.recordRestart(id, false);
       expect(store.get(id).restartHistory, 'the trip is recorded as a crash would be').to.have.lengthOf(1);
-      expect(await appsRuntimeState.restartWaitMs(id, null, false)).to.equal(appsRuntimeState.BACKOFF_DELAYS_MS[1]);
+      expect(await appsRuntimeState.restartWaitMs(id)).to.equal(appsRuntimeState.BACKOFF_DELAYS_MS[1]);
     });
 
     it('never trips on restarts spaced wider than the window', async () => {
@@ -472,7 +472,7 @@ describe('appsRuntimeState tests', () => {
       for (let i = 0; i < appsRuntimeState.RESTART_BURST_COUNT * 2; i += 1) {
         clock.tick(appsRuntimeState.RESTART_BURST_WINDOW_MS);
         // eslint-disable-next-line no-await-in-loop
-        expect(await appsRuntimeState.restartWaitMs(id, null, false), `restart ${i}`).to.equal(0);
+        expect(await appsRuntimeState.restartWaitMs(id), `restart ${i}`).to.equal(0);
         // eslint-disable-next-line no-await-in-loop
         await appsRuntimeState.recordRestart(id, false);
       }
@@ -486,7 +486,7 @@ describe('appsRuntimeState tests', () => {
     const spacingIsPaced = async (id, spacingMs) => {
       for (let i = 0; i < appsRuntimeState.RESTART_BURST_COUNT * 3; i += 1) {
         // eslint-disable-next-line no-await-in-loop
-        if (await appsRuntimeState.restartWaitMs(id, null, false) > 0) return true;
+        if (await appsRuntimeState.restartWaitMs(id) > 0) return true;
         // eslint-disable-next-line no-await-in-loop
         await appsRuntimeState.recordRestart(id, false);
         clock.tick(spacingMs);
@@ -528,7 +528,7 @@ describe('appsRuntimeState tests', () => {
       }
       await appsRuntimeState.setOperatorStopped('www_App', false);
       expect(store.get('www_App').autoRestartWindow).to.deep.equal([]);
-      expect(await appsRuntimeState.restartWaitMs('www_App', null, false), 'starts from clean').to.equal(0);
+      expect(await appsRuntimeState.restartWaitMs('www_App'), 'starts from clean').to.equal(0);
     });
   });
 
