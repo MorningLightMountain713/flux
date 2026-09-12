@@ -744,34 +744,12 @@ describe('registryManager tests', () => {
     });
   });
 
-  describe('updateApplicationSpecificationAPI tests', () => {
-    // The response carries the whole spec encrypted to a session key the CALLER
-    // supplies, and nothing is stripped from it, so it discloses more of a
-    // customer's enterprise app than the decrypt endpoint above. Same privilege
-    // for the same reason: the owner alone.
-    it('gates a spec upgrade on the owner, and nobody else', async () => {
-      sinon.stub(daemonServiceMiscRpcs, 'isDaemonSynced').returns({
-        data: { synced: true, height: 1000 },
-      });
-      const collection = config.database.appsglobal.collections.appsInformation;
-      await dbHelper.insertOneToDatabase(database, collection, {
-        name: 'UpgradeSpecApp',
-        version: 3,
-        owner: '1CbErtneaX2QVyUfwU7JGB7VzvPgrgc3uC',
-        repotag: 'test/app:latest',
-        hash: 'upgradespechash',
-        height: 100,
-      });
-
-      const req = { params: { appname: 'UpgradeSpecApp' }, query: {}, headers: {} };
-      const res = { json: sinon.fake((param) => param) };
-
-      const verifyPrivilege = sinon.stub(verificationHelper, 'verifyPrivilege').resolves(false);
-
-      await registryManager.updateApplicationSpecificationAPI(req, res);
-
-      sinon.assert.calledOnceWithExactly(verifyPrivilege, Privilege.APP_OWNER, authOf(req), { appName: 'UpgradeSpecApp' });
-    });
+  // The spec upgrade this used to name is appConvertApi here: development's
+  // /apps/updatetolatestspecs is /apps/appconvert on v9, same daemon-sync gate
+  // and the same owner-alone privilege, with a transport pubkey where v8 took an
+  // enterprise-key header. Its privilege test lives with the other appConvert
+  // ones below, which assert the same call and also what the refusal returns.
+  describe('the encrypted spec view, and the channel it is sealed over', () => {
 
     // The doubles these replaced carried `version` and `isEncrypted` as writable
     // literals, so a "v8 test" and a "v9 test" differed by an assignment rather
@@ -793,6 +771,11 @@ describe('registryManager tests', () => {
       });
 
       beforeEach(() => {
+        // The endpoint refuses before it reads anything while the daemon is
+        // unsynced, so without this every test here asserts that refusal instead
+        // of the channel negotiation it describes. It was standing on a stub
+        // another test left behind, which is why it depended on what else ran.
+        sinon.stub(daemonServiceMiscRpcs, 'isDaemonSynced').returns({ data: { synced: true, height: 1000 } });
         sinon.stub(verificationHelper, 'verifyPrivilege').resolves(true);
         // The instances are Object.freeze'd, so the call counters go on the
         // prototypes; sinon.restore() in the outer afterEach puts them back.
