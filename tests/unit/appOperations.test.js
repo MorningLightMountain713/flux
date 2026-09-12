@@ -163,6 +163,8 @@ describe('appOperations tests', () => {
         flush: sinon.stub(),
         setHeader: sinon.stub(),
       };
+      // express returns the response from status() so the call chains
+      res.status = sinon.stub().returns(res);
     });
 
     it('should return error if appname is not provided', async () => {
@@ -237,6 +239,7 @@ describe('appOperations tests', () => {
       req.query.force = 'true';
 
       sinon.stub(verificationHelper, 'verifyPrivilege').resolves(true);
+      sinon.stub(fluxNetworkHelper, 'getLocalSocketAddress').resolves('192.168.1.5:16137');
       sinon.stub(dbHelper, 'databaseConnection').returns({
         db: () => ({}),
       });
@@ -244,8 +247,31 @@ describe('appOperations tests', () => {
 
       await appOperations.redeployComponentAPI(req, res);
 
-      // Should attempt to rebuild the component but will fail because app not found
-      expect(res.json.calledOnce).to.be.true;
+      expect(res.status.calledWith(202), 'the redeploy outlives the request').to.be.true;
+    });
+
+    // The work outlives the request, so the answer is a handle rather than the
+    // outcome: the caller reads progress and the verdict at the status resource.
+    it('answers 202 with a job handle the caller can poll', async () => {
+      req.params.appname = 'myapp';
+      req.params.component = 'frontend';
+
+      sinon.stub(verificationHelper, 'verifyPrivilege').resolves(true);
+      sinon.stub(fluxNetworkHelper, 'getLocalSocketAddress').resolves('192.168.1.5:16137');
+      sinon.stub(dbHelper, 'databaseConnection').returns({ db: () => ({}) });
+      sinon.stub(dbHelper, 'findOneInDatabase').resolves(null);
+
+      await appOperations.redeployComponentAPI(req, res);
+
+      expect(res.status.calledWith(202)).to.be.true;
+      const body = res.json.firstCall.args[0];
+      expect(body.data.jobId, 'the handle').to.match(/^op_/);
+      expect(body.data.statusUrl).to.contain('/apps/operations/');
+      expect(body.data.status).to.equal('Running');
+      // Location and Retry-After are how a client follows it without reading the body
+      expect(res.setHeader.calledWith('Location', body.data.statusUrl)).to.be.true;
+      expect(res.setHeader.calledWith('Operation-Id', body.data.jobId)).to.be.true;
+      sinon.assert.calledWith(res.setHeader, 'Retry-After', sinon.match.string);
     });
   });
 
@@ -1608,6 +1634,19 @@ describe('appOperations tests', () => {
   // releases the registry lease leaves operationDesired='stopped' for the life of
   // the process - the app is stranded down and no decider can outrank the hold.
   describe('appendBackupTask hold unwind', () => {
+    // The archive itself, which is what these assert. The endpoint's half is the
+    // validation, the privilege check and the 202; the work runs past both.
+    let reported = [];
+    const runBackup = (request) => appOperations.runBackupTask(
+      request.body.appname,
+      request.body.backup,
+      request.body.force === true || request.body.force === 'true',
+      (line) => reported.push(String(line)),
+    ).then(() => true, (error) => {
+      reported.push(String(error.message));
+      return false;
+    });
+    beforeEach(() => { reported = []; });
     // eslint-disable-next-line global-require
     const verificationHelper = require('../../ZelBack/src/services/verificationHelper');
     // eslint-disable-next-line global-require
@@ -1618,8 +1657,6 @@ describe('appOperations tests', () => {
     const syncthingMonitorHelpers = require('../../ZelBack/src/services/appMonitoring/syncthingMonitorHelpers');
     // eslint-disable-next-line global-require
     const syncthingFolderStateMachine = require('../../ZelBack/src/services/appMonitoring/syncthingFolderStateMachine');
-
-    const makeRes = () => ({ write: sinon.stub(), end: sinon.stub() });
 
     /**
      * What the completeness gate reads. A backup is refused unless this instance
@@ -1656,13 +1693,19 @@ describe('appOperations tests', () => {
       sinon.stub(appsRepository, 'getGlobalAppInfo').resolves(await instantiatedSpec(await v9Spec({ name: 'bkapp' })));
       sinon.stub(deploymentProvider, 'buildDeployment').resolves(composed);
       sinon.stub(appReconciler, 'drive').resolves({ converged: true, failed: [] });
+      // The stop is proved against docker, not against the drive's verdict: the
+      // converge backstop answers 'provisional' and that is not counted, so
+      // `converged` is true of a container nobody has looked at.
+      sinon.stub(appReconciler, 'observedContainerState').resolves({
+        reachable: true, exists: true, running: false, indeterminate: false,
+      });
       sinon.stub(volumeService, 'listComponentVolumeMounts').resolves([{ replica: null, mount: '/vol' }]);
       sinon.stub(IOUtils, 'checkFileExists').resolves(false);
       sinon.stub(IOUtils, 'removeFile').resolves();
       sinon.stub(IOUtils, 'createTarGz').resolves({ status: false, error: 'No space left on device' });
 
       const req = { body: { appname: 'bkapp', backup: [{ component: 'web', backup: true }] } };
-      const pending = appOperations.appendBackupTask(req, makeRes());
+      const pending = runBackup(req);
       await clock.tickAsync(120_000);
       await pending;
       clock.restore();
@@ -1695,18 +1738,23 @@ describe('appOperations tests', () => {
         sinon.stub(syncthingFolderStateMachine, 'probeFolderSyncCompletion').resolves(probe);
         sinon.stub(syncthingMonitorHelpers, 'removeSyncthingFolder').resolves();
         sinon.stub(appReconciler, 'drive').resolves({ converged: true, failed: [] });
+        // The stop is proved against docker, not against the drive's verdict: the
+        // converge backstop answers 'provisional' and that is not counted, so
+        // `converged` is true of a container nobody has looked at.
+        sinon.stub(appReconciler, 'observedContainerState').resolves({
+          reachable: true, exists: true, running: false, indeterminate: false,
+        });
         sinon.stub(volumeService, 'listComponentVolumeMounts').resolves([{ replica: null, mount: '/vol' }]);
         sinon.stub(IOUtils, 'checkFileExists').resolves(false);
         sinon.stub(IOUtils, 'removeFile').resolves();
         const createTarGz = sinon.stub(IOUtils, 'createTarGz').resolves({ status: true });
-        const res = makeRes();
 
         const req = { body: { appname: 'bkapp', backup: [{ component: 'web', backup: true }], ...(force ? { force: true } : {}) } };
-        const pending = appOperations.appendBackupTask(req, res);
+        const pending = runBackup(req);
         await clock.tickAsync(120_000);
         const result = await pending;
         clock.restore();
-        const said = res.write.getCalls().map((c) => c.args[0]).join('');
+        const said = reported.join('');
         return { result, createTarGz, said, drive: appReconciler.drive };
       }
 
@@ -1799,7 +1847,7 @@ describe('appOperations tests', () => {
       sinon.stub(IOUtils, 'removeFile').resolves();
 
       const req = { body: { appname: 'bkapp', backup: [{ component: 'comp1', backup: true }] } };
-      const pending = appOperations.appendBackupTask(req, makeRes());
+      const pending = runBackup(req);
       await clock.tickAsync(120_000);
       const result = await pending;
       clock.restore();
@@ -1815,14 +1863,12 @@ describe('appOperations tests', () => {
     // test-and-set only one can win; its answer was being dropped.
     it('refuses the loser of a concurrent claim instead of archiving alongside it', async () => {
       const clock = sinon.useFakeTimers({ toFake: ['setTimeout'] });
-      // THE RACE, reproduced where it actually happens: the winner takes the lease
-      // DURING the loser's awaited privilege call - after its isHeld check has
-      // already passed. Taking it before the call would be caught by that check
-      // instead, and would prove nothing about the claim.
-      sinon.stub(verificationHelper, 'verifyPrivilege').callsFake(async () => {
-        operationRegistry.acquire('bkapp', 'backup', 'someoneElse', 'the winner');
-        return true;
-      });
+      // THE RACE, reproduced where it actually happens. The endpoint's isHeld
+      // check passes, then it answers 202 and the archive starts - so the lease
+      // can be taken in between, and the claim inside the archive is the only
+      // thing left that can refuse.
+      operationRegistry.acquire('bkapp', 'backup', 'someoneElse', 'the winner');
+      sinon.stub(verificationHelper, 'verifyPrivilege').resolves(true);
       // Everything downstream is made to SUCCEED, so the claim check is the only
       // thing that can stop the archive - otherwise the case passes by failing
       // somewhere else, which is what it did on the first attempt.
@@ -1835,9 +1881,15 @@ describe('appOperations tests', () => {
       sinon.stub(IOUtils, 'removeFile').resolves();
       const createTarGz = sinon.stub(IOUtils, 'createTarGz').resolves({ status: true });
       sinon.stub(appReconciler, 'drive').resolves({ converged: true, failed: [] });
+      // The stop is proved against docker, not against the drive's verdict: the
+      // converge backstop answers 'provisional' and that is not counted, so
+      // `converged` is true of a container nobody has looked at.
+      sinon.stub(appReconciler, 'observedContainerState').resolves({
+        reachable: true, exists: true, running: false, indeterminate: false,
+      });
 
       const req = { body: { appname: 'bkapp', backup: [{ component: 'comp1', backup: true }] } };
-      const pending = appOperations.appendBackupTask(req, makeRes());
+      const pending = runBackup(req);
       await clock.tickAsync(120_000);
       const result = await pending;
       clock.restore();
@@ -1860,13 +1912,19 @@ describe('appOperations tests', () => {
       sinon.stub(appsRepository, 'getGlobalAppInfo').resolves(await instantiatedSpec(await v9Spec({ name: 'bkapp' })));
       sinon.stub(deploymentProvider, 'buildDeployment').resolves(deployment);
       const drive = sinon.stub(appReconciler, 'drive').resolves({ converged: true, failed: [] });
+      // The stop is proved against docker, not against the drive's verdict: the
+      // converge backstop answers 'provisional' and that is not counted, so
+      // `converged` is true of a container nobody has looked at.
+      sinon.stub(appReconciler, 'observedContainerState').resolves({
+        reachable: true, exists: true, running: false, indeterminate: false,
+      });
       sinon.stub(volumeService, 'listComponentVolumeMounts').resolves([{ replica: null, mount: '/vol' }]);
       sinon.stub(IOUtils, 'checkFileExists').resolves(false);
       sinon.stub(IOUtils, 'removeFile').resolves();
       sinon.stub(IOUtils, 'createTarGz').resolves({ status: false, error: 'No space left on device' });
 
       const req = { body: { appname: 'bkapp', backup: [{ component: 'comp1', backup: true }] } };
-      const pending = appOperations.appendBackupTask(req, makeRes());
+      const pending = runBackup(req);
       await clock.tickAsync(120_000); // flush sendChunk's per-chunk timers + delays
       const result = await pending;
       clock.restore();
@@ -1904,6 +1962,12 @@ describe('appOperations tests', () => {
       sinon.stub(appsRepository, 'getGlobalAppInfo').resolves(await instantiatedSpec(await v9Spec({ name: 'bkapp' })));
       sinon.stub(deploymentProvider, 'buildDeployment').resolves(composed);
       const drive = sinon.stub(appReconciler, 'drive').resolves({ converged: true, failed: [] });
+      // The stop is proved against docker, not against the drive's verdict: the
+      // converge backstop answers 'provisional' and that is not counted, so
+      // `converged` is true of a container nobody has looked at.
+      sinon.stub(appReconciler, 'observedContainerState').resolves({
+        reachable: true, exists: true, running: false, indeterminate: false,
+      });
       sinon.stub(volumeService, 'listComponentVolumeMounts').resolves([{ replica: null, mount: '/vol' }]);
       sinon.stub(syncthingMonitorHelpers, 'removeSyncthingFolder').resolves();
       sinon.stub(IOUtils, 'checkFileExists').resolves(false);
@@ -1911,7 +1975,7 @@ describe('appOperations tests', () => {
       sinon.stub(IOUtils, 'createTarGz').resolves({ status: true });
 
       const req = { body: { appname: 'bkapp', backup: [{ component: 'web', backup: true }] } };
-      const pending = appOperations.appendBackupTask(req, makeRes());
+      const pending = runBackup(req);
       await clock.tickAsync(120_000);
       await pending;
       clock.restore();
@@ -1926,10 +1990,16 @@ describe('appOperations tests', () => {
     it('never drives run-state when a foreign operation already holds the app', async () => {
       const clock = sinon.useFakeTimers({ toFake: ['setTimeout'] });
       const drive = sinon.stub(appReconciler, 'drive').resolves({ converged: true, failed: [] });
+      // The stop is proved against docker, not against the drive's verdict: the
+      // converge backstop answers 'provisional' and that is not counted, so
+      // `converged` is true of a container nobody has looked at.
+      sinon.stub(appReconciler, 'observedContainerState').resolves({
+        reachable: true, exists: true, running: false, indeterminate: false,
+      });
       operationRegistry.acquire('bkapp', 'install', 'test', 'concurrent install');
 
       const req = { body: { appname: 'bkapp', backup: [{ component: 'comp1', backup: true }] } };
-      const pending = appOperations.appendBackupTask(req, makeRes());
+      const pending = runBackup(req);
       await clock.tickAsync(120_000);
       const result = await pending;
       clock.restore();
@@ -1954,6 +2024,12 @@ describe('appOperations tests', () => {
         // componentIdentifiersFor resolves and builds from it for real.
         sinon.stub(appsRepository, 'getGlobalAppInfo').resolves(await instantiatedSpec(await v9Spec({ name: 'bkapp' })));
         sinon.stub(appReconciler, 'drive').resolves({ converged: true, failed: [] });
+        // The stop is proved against docker, not against the drive's verdict: the
+        // converge backstop answers 'provisional' and that is not counted, so
+        // `converged` is true of a container nobody has looked at.
+        sinon.stub(appReconciler, 'observedContainerState').resolves({
+          reachable: true, exists: true, running: false, indeterminate: false,
+        });
         sinon.stub(volumeService, 'listComponentVolumeMounts').resolves(volumes);
         sinon.stub(IOUtils, 'checkFileExists').resolves(false);
         sinon.stub(IOUtils, 'removeFile').resolves();
@@ -1965,7 +2041,7 @@ describe('appOperations tests', () => {
         const createTarGz = await setupBackup(coLocated);
 
         const req = { body: { appname: 'bkapp', backup: [{ component: 'web', backup: true }] } };
-        const pending = appOperations.appendBackupTask(req, makeRes());
+        const pending = runBackup(req);
         await clock.tickAsync(120_000);
         await pending;
         clock.restore();
@@ -1980,7 +2056,7 @@ describe('appOperations tests', () => {
         const createTarGz = await setupBackup(coLocated);
 
         const req = { body: { appname: 'bkapp', backup: [{ component: 'web', backup: true, replica: 's2' }] } };
-        const pending = appOperations.appendBackupTask(req, makeRes());
+        const pending = runBackup(req);
         await clock.tickAsync(120_000);
         await pending;
         clock.restore();
@@ -1994,7 +2070,7 @@ describe('appOperations tests', () => {
         const createTarGz = await setupBackup(coLocated);
 
         const req = { body: { appname: 'bkapp', backup: [{ component: 'web', backup: true, replica: 's9' }] } };
-        const pending = appOperations.appendBackupTask(req, makeRes());
+        const pending = runBackup(req);
         await clock.tickAsync(120_000);
         const result = await pending;
         clock.restore();
