@@ -791,10 +791,10 @@ describe('syncthingMonitor tests', () => {
       sinon.assert.called(syncthingServiceMock.getDeviceId);
     });
 
-    it('demotes a sendreceive folder over an unrepairable mount while skipping the cycle', async () => {
-      // repair fails (backing image gone) so the whole cycle is skipped, but a
-      // folder left sendreceive over the bad mount could still broadcast its disk
-      // state - it must be demoted and its container held before bailing.
+    it('demotes a sendreceive folder over an unrepairable mount and holds it out of the pass', async () => {
+      // repair fails (backing image gone), so the folder is demoted and its
+      // container held - and the pass carries on. An unsafe mount is an APP-level
+      // fault, not a node-level one.
       deploymentProviderMock.listInstalledDeployments.resolves([syncDeployment]);
       syncthingEventsConsumerMock.mountVerifyPendingIds.returns([syncFolderId]);
       syncthingFolderStateMachineMock.verifyFolderMountSafety.resolves({ isSafe: false, isMounted: false, reason: 'unmounted_with_content' });
@@ -816,8 +816,60 @@ describe('syncthingMonitor tests', () => {
       sinon.assert.calledWith(appReconcilerMock.setControllerDesired, syncComp.identifier, 'stopped');
       expect(appReconcilerMock.setControllerDesired.firstCall.args[0]).to.equal('web_testapp');
       expect(appReconcilerMock.setControllerDesired.calledWith('testapp'), 'never acts by app name').to.be.false;
-      // the cycle itself was skipped - per-app processing never ran
-      sinon.assert.notCalled(syncthingServiceMock.getDeviceId);
+      // the pass carried on past the app it held out
+      sinon.assert.called(syncthingServiceMock.getDeviceId);
+    });
+
+    // ONE APP'S DEAD VOLUME MUST NOT TAKE THE NODE'S SYNCTHING WITH IT. An app
+    // whose backing image is gone can never be mounted, so ending the pass on it
+    // ends every pass: no folder registration, no promotion, no error draining
+    // and no writable-folder answer for any app on the node, permanently - and
+    // the first-run flag never clears, so the full sweep repeats every cycle.
+    it('processes healthy apps, and clears the first-run flag, when another app can never mount', async () => {
+      const healthy = await deploymentFor('healthyapp', 'web', { persistentStorage: ACTIVE_STANDBY_STORAGE });
+      const healthyId = `flux${healthy.getComponent('web').identifier}`;
+      mockState.syncthingAppsFirstRun = true;
+      deploymentProviderMock.listInstalledDeployments.resolves([syncDeployment, healthy]);
+      const brokenMount = async (appId) => (appId === syncFolderId
+        ? { isSafe: false, isMounted: false, reason: 'volume_file_missing' }
+        : { isSafe: true, isMounted: true, fileCount: 1 });
+      syncthingFolderStateMachineMock.verifyFolderMountSafety.callsFake(brokenMount);
+      syncthingFolderStateMachineMock.verifySendReceiveFolderSafety.callsFake(brokenMount);
+      volumeServiceMock.ensureAppVolumeMounted.resolves({ mounted: false, reason: 'volume_file_missing' });
+      syncthingServiceMock.getConfigFolders.resolves([]);
+      syncthingServiceMock.getConfigDevices.resolves([]);
+      syncthingServiceMock.getDeviceId.resolves('DEVICE-ID');
+      fluxNetworkHelperMock.getLocalSocketAddress.resolves('10.0.0.1:16127');
+
+      monitorControl = syncthingMonitor.syncthingApps(mockState, mockGetGlobalStateFn);
+      await clock.tickAsync(100);
+
+      const configured = syncthingMonitorHelpersMock.ensureStfolderExists.getCalls().map((call) => String(call.args[0]));
+      expect(configured.some((dir) => dir.endsWith(healthyId)), 'the healthy app was configured').to.be.true;
+      expect(configured.some((dir) => dir.endsWith(syncFolderId)), 'the broken one was held out').to.be.false;
+      expect(mockState.syncthingAppsFirstRun, 'the first-run flag cleared, so the full sweep does not repeat forever').to.be.false;
+    });
+
+    // While an app is held out, this pass never did its work - so it never saw
+    // that app's peers and cannot tell a peer that is gone from one it simply
+    // did not visit.
+    it('stands the device sweep down while an app is held out of the pass', async () => {
+      deploymentProviderMock.listInstalledDeployments.resolves([syncDeployment]);
+      syncthingEventsConsumerMock.mountVerifyPendingIds.returns([syncFolderId]);
+      syncthingFolderStateMachineMock.verifyFolderMountSafety.resolves({ isSafe: false, isMounted: false, reason: 'volume_file_missing' });
+      syncthingFolderStateMachineMock.verifySendReceiveFolderSafety.resolves({ isSafe: false, isMounted: false, reason: 'volume_file_missing' });
+      volumeServiceMock.ensureAppVolumeMounted.resolves({ mounted: false, reason: 'volume_file_missing' });
+      syncthingServiceMock.getConfigFolders.resolves([{ id: syncFolderId, type: 'sendreceive' }]);
+      syncthingServiceMock.getConfigDevices.resolves([{ deviceID: 'PEER-DEVICE' }]);
+      syncthingServiceMock.getDeviceId.resolves('DEVICE-ID');
+      fluxNetworkHelperMock.getLocalSocketAddress.resolves('10.0.0.1:16127');
+
+      monitorControl = syncthingMonitor.syncthingApps(mockState, mockGetGlobalStateFn);
+      await clock.tickAsync(100);
+
+      const deletes = syncthingServiceMock.adjustConfigDevices.getCalls()
+        .map((call) => call.args[0]).filter((options) => options.method === 'delete');
+      expect(deletes, 'a peer of the very app waiting to be healed').to.deep.equal([]);
     });
 
     // A SAFETY ACTION IS NOT CONDITIONED ON A CALL THAT CAN FAIL. Which folders
