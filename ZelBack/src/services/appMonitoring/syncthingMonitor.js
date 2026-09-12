@@ -140,6 +140,7 @@ async function verifyAppFolderMountWithRepair(appId, appFolder, appName, sending
  * Returns list of apps whose folders are not mounted yet
  * Uses verifyFolderMountSafety to detect folders that exist but aren't properly mounted
  * @param {Array} deployments - Installed app deployments
+ * @param {Set<string>} knownFolderIds - Every folder id syncthing holds, in any mode
  * @param {Set<string>} sendingFolderIds - Folder ids syncthing currently holds
  *  sendreceive. The deeper verification belongs exactly there and nowhere else:
  *  sendreceive is the only mode that can BROADCAST a deletion, so it is the only
@@ -149,13 +150,19 @@ async function verifyAppFolderMountWithRepair(appId, appFolder, appName, sending
  *  entries verified by id alone, for folders whose owning app's spec cannot be
  *  read this pass
  * Each unmounted entry carries `sending`, the folder's mode as this pass's own
- * folder read observed it. The demotion reads that fact off the entry: A SAFETY
- * ACTION MUST NOT DEPEND ON A CALL THAT CAN FAIL, and a failed read of the
- * folder list is indistinguishable from "no such folder, nothing to protect".
+ * folder read observed it, and `syncing`, whether the component declares sync at
+ * all. The demotion reads both off the entry: A SAFETY ACTION MUST NOT DEPEND ON
+ * A CALL THAT CAN FAIL, and a failed read of the folder list is
+ * indistinguishable from "no such folder, nothing to protect".
+ *
+ * `known` is the third, and the one that keeps the other two honest: a folder
+ * syncthing holds RECEIVEONLY is not sendreceive and needs nothing done, where a
+ * folder syncthing does not hold AT ALL, declared by a component that syncs, is
+ * a contradiction. Both are `sending` false and they are not the same case.
  *
  * @returns {Promise<{unmountedApps: Array, verifiedSafeIds: string[]}>}
  */
-async function checkAppFolderMounts(deployments, sendingFolderIds, extraFolders = []) {
+async function checkAppFolderMounts(deployments, sendingFolderIds, knownFolderIds, extraFolders = []) {
   const unmountedApps = [];
   // The verdict is two-sided and both sides are needed: an unsafe mount is a
   // fault to act on, and a SAFE one is the condition a standing mount-verify
@@ -201,6 +208,8 @@ async function checkAppFolderMounts(deployments, sendingFolderIds, extraFolders 
           appName: deployment.appName,
           reason: mountSafety.reason,
           sending: sendingFolderIds.has(appId),
+          known: knownFolderIds.has(appId),
+          syncing: deployComp.hasSyncthing(),
         });
       }
     }
@@ -220,8 +229,10 @@ async function checkAppFolderMounts(deployments, sendingFolderIds, extraFolders 
     );
     if (mountSafety.isSafe) verifiedSafeIds.push(appId);
     else {
+      // These entries come from syncthing's own folder list, filtered to
+      // sendreceive, so both are true by construction.
       unmountedApps.push({
-        appId, identifier: appId, appName, reason: mountSafety.reason, sending: sendingFolderIds.has(appId),
+        appId, identifier: appId, appName, reason: mountSafety.reason, sending: true, known: true, syncing: true,
       });
     }
   }
@@ -606,6 +617,33 @@ async function syncthingAppsCore(state, getGlobalStateFn) {
       ? deployments
       : deploymentsMatchingFolderIds(deployments, erroredFolderIds);
 
+    // A FLAG NO INSTALLED COMPONENT CARRIES CAN NEVER BE ACTED ON. Nothing
+    // downstream matches it - checkAppFolderMounts walks deployments - so it is
+    // re-read every pass forever and the pending set only grows. The uninstall
+    // that removed the component already removed whatever the flag protected,
+    // so resolving it is the answer rather than a loss.
+    //
+    // AN APP THIS NODE COULD NOT READ IS NOT AN APP THAT CARRIES NOTHING. It
+    // carries nothing HERE, for a reason that says nothing about the folder, so
+    // resolving on that would drop a live protection over a mount nobody has
+    // checked. Those flags stand and resolve through a completed outcome like
+    // any other, once the spec can be read.
+    if (!state.syncthingAppsFirstRun && pendingFolderIds.length > 0) {
+      const carried = new Set();
+      deployments.forEach((deployment) => {
+        // eslint-disable-next-line no-restricted-syntax
+        for (const [, deployComp] of deployment.componentEntries()) {
+          carried.add(dockerService.getAppIdentifier(deployComp.identifier));
+        }
+      });
+      pendingFolderIds
+        .filter((id) => !carried.has(id) && !ownedByUnreadableApp(id))
+        .forEach((id) => {
+          log.info(`syncthingAppsCore - resolving mount-verify flag for ${id}: no installed component carries it`);
+          syncthingEventsConsumer.resolveMountVerify(id);
+        });
+    }
+
     // Peer liveness, answered once for the whole pass: two folders must not reach
     // opposite conclusions about whether a silence is a peer's or this node's own.
     const liveness = createPeerFolderLiveness();
@@ -662,6 +700,9 @@ async function syncthingAppsCore(state, getGlobalStateFn) {
     const sendingFolderIds = new Set(
       allFolders.filter((folder) => folder.type === 'sendreceive').map((folder) => folder.id),
     );
+    // Every folder syncthing holds, in any mode. Absence from this is the
+    // 404 the demotion would otherwise have to ask for.
+    const knownFolderIds = new Set(allFolders.map((folder) => folder.id));
     globalState.promotedFolderIds = new Set(sendingFolderIds);
 
     // An unreadable app's folders are protected from the SWEEP, not from the
@@ -677,7 +718,7 @@ async function syncthingAppsCore(state, getGlobalStateFn) {
     // CRITICAL: Check if app folder mounts are ready before processing
     // This prevents syncthing operations when loop devices aren't mounted after reboot
     const { unmountedApps, verifiedSafeIds } = deploymentsToVerify.length > 0 || unreadableFolderEntries.length > 0
-      ? await checkAppFolderMounts(deploymentsToVerify, sendingFolderIds, unreadableFolderEntries)
+      ? await checkAppFolderMounts(deploymentsToVerify, sendingFolderIds, knownFolderIds, unreadableFolderEntries)
       : { unmountedApps: [], verifiedSafeIds: [] };
     // A safe mount is the condition the flag was raised for, resolved. Anything
     // else keeps its flag standing for the next pass - including a pass that
@@ -698,9 +739,27 @@ async function syncthingAppsCore(state, getGlobalStateFn) {
       // configuration is read ONCE per pass, at the top, where a failure returns
       // before anything is judged by it.
       // eslint-disable-next-line no-restricted-syntax
-      for (const { appId, identifier, reason, sending } of unmountedApps) {
-        // eslint-disable-next-line no-continue
-        if (!sending) continue;
+      for (const {
+        appId, identifier, reason, sending, known, syncing,
+      } of unmountedApps) {
+        if (!sending) {
+          // A folder syncthing holds RECEIVEONLY over a bad mount is already in
+          // the state this block exists to put it in - nothing to demote, and
+          // its container is left to the normal machinery.
+          //
+          // A folder syncthing does not hold AT ALL, declared by a component
+          // that syncs, is a contradiction rather than an answer. Nothing is
+          // recreated from here - the level loop rebuilds the folder once the
+          // mount is healthy - but the mount is unsafe either way, so the
+          // container is held now and the flag stands for the next pass. A
+          // component that declares no sync has no folder to be missing.
+          if (!known && syncing) {
+            log.error(`syncthingAppsCore - SAFETY BLOCK: ${appId} is over an unsafe mount (${reason}) and syncthing holds no folder for it though the component syncs; holding the container, flag stands`);
+            appReconciler.setControllerDesired(identifier, 'stopped', `mount safety block: ${reason}`);
+          }
+          // eslint-disable-next-line no-continue
+          continue;
+        }
         // eslint-disable-next-line no-await-in-loop
         const demoted = await syncthingApplied(
           syncthingService.adjustConfigFolders({ method: ConfigMethod.PATCH, config: { type: 'receiveonly' }, id: appId }),
