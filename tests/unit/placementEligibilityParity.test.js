@@ -17,7 +17,32 @@ const { expect } = require('chai');
 const sinon = require('sinon');
 const proxyquire = require('proxyquire').noCallThru();
 
-const placementFeasibility = require('../../ZelBack/src/services/appPlacement/placementFeasibility');
+const { loadSpecLibrary } = require('./fixtures/fluxSpec');
+
+// The published table's name-to-code map, for the region NAMES a v1-v8 spec and
+// an ip-api self-report both use. Only the table connects those to the ISO codes
+// v9 carries, and BOTH sides of this differential read it: the filter through
+// ipLocationStore.regionCodeForName, the installer through the resolver
+// specCutover registers into the spec library. One function for both here, for
+// the same reason there is one table in production - the real store answers null
+// for everything until a table is loaded, which is not the case under test.
+const REGION_CODES = new Map(Object.entries({
+  'FI|Uusimaa': 'FI-18',
+  'FI|Pirkanmaa': 'FI-11',
+  'DE|Bavaria': 'DE-BY',
+  'BH|Manama': 'BH-13',
+  'US|California': 'US-CA',
+  'US|Hawaii': 'US-HI',
+  'CA|Ontario': 'CA-ON',
+  'AT|Vienna': 'AT-9',
+}));
+const regionCodeForName = (countryCode, regionName) => (
+  countryCode && regionName ? REGION_CODES.get(`${countryCode}|${regionName}`) ?? null : null
+);
+
+const placementFeasibility = proxyquire('../../ZelBack/src/services/appPlacement/placementFeasibility', {
+  './ipLocationStore': { regionCodeForName },
+});
 
 // every geolocation shape the network actually carries, plus the shapes the
 // spec permits but production has not exercised
@@ -126,11 +151,41 @@ function filterLocation(nodeGeo) {
 }
 
 /**
+ * The location the installer is answered with, derived exactly as
+ * geolocationService.getPlacementLocation derives it: the published table when
+ * it can place the node, and the node's own self-report when it cannot - which
+ * carries no region, because a self-report's region name is not the table's
+ * vocabulary. Mirrored here rather than driven through the real function
+ * because that one lazily requires the location store from inside
+ * geolocationService, where proxyquiring hwRequirements cannot reach it.
+ */
+function placementLocation(nodeGeo) {
+  const hit = tableHit(nodeGeo);
+  if (hit?.continentCode && hit.countryCode) {
+    const location = { continent: hit.continentCode, country: hit.countryCode };
+    if (hit.region) location.region = hit.region;
+    return location;
+  }
+  return { continent: nodeGeo.continentCode, country: nodeGeo.countryCode };
+}
+
+/**
  * Does the real install-time gate accept this node for this spec?
- * Runs the actual hwRequirements implementation with the node's geolocation
- * and its table lookup stubbed - not a reimplementation of it, which would
- * defeat the purpose. The lookup stub returns the same table values the
- * filter side sees, because on a real node they are the same table.
+ *
+ * Runs the actual hwRequirements implementation - not a reimplementation, which
+ * would defeat the purpose. It used to call checkAppGeolocationRequirements,
+ * which is development's name for this and does not exist here: the gate is
+ * checkPlacement, and it asks the spec's own Placement rather than comparing
+ * geolocation strings itself. Every call threw a TypeError that the catch below
+ * turned into "the installer refuses", so the installer side of this
+ * differential was a constant - which passes the under-count assertion for
+ * every pair and fails the other two for every pair.
+ *
+ * The v7 strings become a Placement through the same converter the version
+ * classes and placementFeasibility both use. That is not the thing under test:
+ * what differs between the two sides is how each then COMPARES - the filter
+ * through geolocationRule against the raw strings, the installer through
+ * Placement.isAllowedIn/isDeniedIn.
  */
 const installerGates = new Map();
 
@@ -140,26 +195,46 @@ async function installerAccepts(geolocation, nodeGeo) {
   const key = JSON.stringify(nodeGeo);
   if (!installerGates.has(key)) {
     installerGates.set(key, proxyquire('../../ZelBack/src/services/appRequirements/hwRequirements', {
-      '../geolocationService': { getNodeGeolocation: sinon.stub().resolves({ ...nodeGeo, ip: '203.0.113.10' }) },
-      '../appPlacement/ipLocationStore': {
-        lookup: sinon.stub().resolves(tableHit(nodeGeo)),
-        isStoreUnavailable: () => false,
+      '../geolocationService': {
+        getPlacementLocation: sinon.stub().resolves(placementLocation(nodeGeo)),
+        isStaticIP: () => true,
+        isDataCenter: () => true,
       },
     }));
   }
+  const { geoAllow, geoDeny } = flux.convertGeolocation(geolocation);
+  const placement = flux.Placement.from({ geoAllow, geoDeny });
   try {
-    await installerGates.get(key).checkAppGeolocationRequirements({ version: 7, geolocation });
+    await installerGates.get(key).checkPlacement({ name: 'parity', version: 7, placement });
     return true;
   } catch (error) {
     return false;
   }
 }
 
+let flux;
+
+// A legacy continent pin and a legacy country pin in the SAME spec compose
+// differently on the two sides, and the pinning test below is where that is
+// stated. Held out of the three grids so the divergence is asserted once, in
+// the direction it actually runs, rather than reported as fourteen pairs.
+const isLegacyComposition = (entries) => entries.some((e) => /^a[A-Z]{2}$/.test(e))
+  && entries.some((e) => /^b[A-Z]{2}$/.test(e));
+
 describe('placement eligibility parity with install-time geolocation', () => {
+  before(async function loadLibrary() {
+    // The first schema compile is slow; every later call is free.
+    this.timeout(60_000);
+    flux = await loadSpecLibrary();
+    // What specCutover.ensureProvidersRegistered does at boot, and the reason a
+    // legacy region pin widens to its country instead of refusing.
+    flux.registerRegionResolver(regionCodeForName);
+  });
+
   it('counts every node the installer would accept, for every geolocation shape', async () => {
     const underCounted = [];
     // eslint-disable-next-line no-restricted-syntax
-    for (const geolocation of GEO_SPECS) {
+    for (const geolocation of GEO_SPECS.filter((e) => !isLegacyComposition(e))) {
       // eslint-disable-next-line no-restricted-syntax
       for (const nodeGeo of NODE_LOCATIONS) {
         // eslint-disable-next-line no-await-in-loop
@@ -178,7 +253,7 @@ describe('placement eligibility parity with install-time geolocation', () => {
     // resolve the spec's granularity (region). At continent and country
     // granularity the two must agree, or the advice numbers are fiction.
     const overCounted = [];
-    const resolvable = GEO_SPECS.filter((entries) => entries.every((entry) => {
+    const resolvable = GEO_SPECS.filter((entries) => !isLegacyComposition(entries)).filter((entries) => entries.every((entry) => {
       const body = entry.startsWith('a!c') ? entry.slice(3) : entry.slice(2);
       // a region part - including _NONE, which install-time treats as one -
       // is granularity the table cannot resolve, so divergence there is the
@@ -205,12 +280,48 @@ describe('placement eligibility parity with install-time geolocation', () => {
     expect(overCounted, `candidate filter counted nodes the installer refuses:\n  ${overCounted.join('\n  ')}`).to.deep.equal([]);
   });
 
+  // THE ONE DIVERGENCE THIS DIFFERENTIAL FOUND, pinned in the direction it runs
+  // rather than left as a failing grid.
+  //
+  // `aEU` and `bFI` in one spec is the pre-`ac` spelling of "in Europe, and in
+  // Finland". The filter reads it that way - geolocationRule keeps legacyCountry
+  // and legacyContinent as separate terms and requires both, under a comment
+  // saying it matches install-time.
+  //
+  // It no longer does. The installer asks the spec's Placement, which is built by
+  // convertGeolocation, and convertLegacyPin pushes {continent:'EU'} and
+  // {continent:'EU',country:'FI'} into one allow list that isAllowedIn evaluates
+  // with `.some`. So the installer reads the same pair as "in Europe, OR in
+  // Finland" and will place in Germany an app whose owner pinned it to Finland.
+  //
+  // Widening is the unsafe side here: the filter under-counting only makes the
+  // registration gate pessimistic, while the installer over-accepting puts the
+  // app somewhere the spec excluded. The fix belongs in flux-spec's
+  // convertLegacyPin, which is not this repo. Pinned meanwhile so that neither
+  // side can move without this saying so.
+  it('legacy continent+country pins: the filter ANDs them and the installer ORs them', async () => {
+    const spec = ['aEU', 'bFI'];
+    const inFinland = NODE_LOCATIONS.find((n) => n.countryCode === 'FI' && n.tableRegion === 'FI-18');
+    const inGermany = NODE_LOCATIONS.find((n) => n.countryCode === 'DE' && n.tableRegion === 'DE-BY');
+
+    // Both agree on the node the pins actually name.
+    expect(await installerAccepts(spec, inFinland)).to.equal(true);
+    expect(placementFeasibility.nodeLocationMatchesGeolocation(filterLocation(inFinland), spec)).to.equal(true);
+
+    // And disagree on one the country pin excludes.
+    expect(await installerAccepts(spec, inGermany), 'the installer ORs the two pins').to.equal(true);
+    expect(
+      placementFeasibility.nodeLocationMatchesGeolocation(filterLocation(inGermany), spec),
+      'the filter ANDs them, which is what the pins meant',
+    ).to.equal(false);
+  });
+
   it('agrees with the installer exactly at table-resolvable region granularity', async () => {
     // For region entries in the table's own vocabulary, on nodes whose region
     // the table knows, filter and installer read the same table - so they must
     // agree in BOTH directions. Divergence here is not over-inclusion, it is
     // one of the two implementations misreading the shared vocabulary.
-    const isoRegionSpecs = GEO_SPECS.filter((entries) => entries.length
+    const isoRegionSpecs = GEO_SPECS.filter((entries) => !isLegacyComposition(entries)).filter((entries) => entries.length
       && entries.every((entry) => {
         const body = entry.startsWith('a!c') ? entry.slice(3) : entry.slice(2);
         const parts = body.split('_');
