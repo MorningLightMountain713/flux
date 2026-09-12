@@ -228,7 +228,18 @@ describe('appSpawner tests', () => {
     };
     portManagerStub = {
       ensureApplicationPortsNotUsed: sinon.stub().resolves(),
-      checkInstallingAppPortAvailable: sinon.stub().resolves(true),
+      // The real function answers {ok, reason, port}; `true` satisfied the
+      // `ok === false` gate only because `true.ok` is undefined, so no test could
+      // state the not-available deferral at all.
+      checkInstallingAppPortAvailable: sinon.stub().resolves(
+        opts.portVerdict ?? { ok: true, reason: 'proven', port: null },
+      ),
+      // The sibling port ask, added to the spawner after this suite's stub map was
+      // written - the same gap as isPlacementHeld above, and it threw a TypeError
+      // at every announce that the tests' .catch(() => {}) swallowed. The ordinary
+      // state is that no neighbour at this address holds one of the ports, which
+      // the real function answers as null.
+      siblingHoldingPort: sinon.stub().resolves(opts.siblingHoldingPort ?? null),
     };
 
     appSpawner = proxyquire('../../ZelBack/src/services/appLifecycle/appSpawner', {
