@@ -773,7 +773,7 @@ describe('FluxPeerManager tests', () => {
       // An open-then-refuse recorded no failure, and a pass runs on every
       // removal, so a refusing node was dialed once a second for minutes.
       // MAX_CONNECTIONS stays retryable by shouldReconnect's own rule and is not backed off here
-      for (const code of [CLOSE_CODES.NODE_UNCONFIRMED, CLOSE_CODES.DUPLICATE_PEER, CLOSE_CODES.LOCKED_OUT]) {
+      for (const code of [CLOSE_CODES.DUPLICATE_PEER, CLOSE_CODES.LOCKED_OUT]) {
         const ws = createMockWs('10.0.0.9');
         manager.add(ws, '10.0.0.9', '16127', { source: PEER_SOURCE.RANDOM });
         manager.remove('10.0.0.9:16127', code);
@@ -784,6 +784,17 @@ describe('FluxPeerManager tests', () => {
       manager.add(ws, '10.0.0.8', '16127', { source: PEER_SOURCE.RANDOM });
       manager.remove('10.0.0.8:16127', CLOSE_CODES.RESTARTING);
       expect(manager.shouldAttemptConnection('10.0.0.8', '16127'), 'a coded stop is dialed again as normal').to.equal(true);
+      // NODE_UNCONFIRMED moved to this side: it says the remote has not opened
+      // its application gate yet, which is a statement about when rather than
+      // about us, and it is the one refusal certain to stop applying - on the
+      // fleet the same node dialled back 150ms later. Backing off on it held a
+      // booting peer out for the whole ladder.
+      manager.reset();
+      const wsBooting = createMockWs('10.0.0.6');
+      manager.add(wsBooting, '10.0.0.6', '16127', { source: PEER_SOURCE.RANDOM });
+      manager.remove('10.0.0.6:16127', CLOSE_CODES.NODE_UNCONFIRMED);
+      expect(manager.shouldAttemptConnection('10.0.0.6', '16127'), 'a peer that is still booting is dialed again').to.equal(true);
+      manager.reset();
       const ws2 = createMockWs('10.0.0.7');
       manager.add(ws2, '10.0.0.7', '16127', { source: PEER_SOURCE.INBOUND });
       manager.remove('10.0.0.7:16127', CLOSE_CODES.DUPLICATE_PEER);
