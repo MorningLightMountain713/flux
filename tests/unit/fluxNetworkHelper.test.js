@@ -517,12 +517,16 @@ describe('fluxNetworkHelper tests', () => {
       sinon.assert.calledWithExactly(daemonStub, 'zelnodeprivkey');
     });
 
-    it('Should throw error if private key is invalid', async () => {
+    it('Should answer null, not an Error, if the private key is invalid', async () => {
       const privateKey = 'asdf';
 
       const result = await fluxNetworkHelper.getFluxNodePublicKey(privateKey);
 
-      expect(result).to.be.an('Error');
+      // An Error here is the worst of both: truthy, so a guard on the value
+      // passes, and `{}` once JSON.stringify reaches it - which is how a node
+      // with a briefly unreadable key went on broadcasting messages every peer
+      // silently refused.
+      expect(result).to.be.null;
     });
   });
 
@@ -1149,6 +1153,11 @@ describe('fluxNetworkHelper tests', () => {
   describe('allowPortApi tests', () => {
     let verifyPrivilegeStub;
     const port = '5555';
+    // What the handler forwards is the zelidauth header, not the request: the
+    // privilege check has no business reading params, query or anything else on
+    // it. A req without headers therefore forwards null, which is what these
+    // tests were asserting against the request object itself.
+    const ZELIDAUTH = 'zelid:sig:msg';
     const generateResponse = () => {
       const res = { test: 'testing' };
       res.status = sinon.stub().returns(res);
@@ -1170,6 +1179,7 @@ describe('fluxNetworkHelper tests', () => {
       verifyPrivilegeStub.returns(true);
       const res = generateResponse();
       const req = {
+        headers: { zelidauth: ZELIDAUTH },
         params: {
           port,
         },
@@ -1186,7 +1196,7 @@ describe('fluxNetworkHelper tests', () => {
       const result = await fluxNetworkHelper.allowPortApi(req, res);
 
       expect(result).to.eql(expectedResult);
-      sinon.assert.calledOnceWithExactly(verifyPrivilegeStub, 'adminandfluxteam', req);
+      sinon.assert.calledOnceWithExactly(verifyPrivilegeStub, 'adminandfluxteam', ZELIDAUTH);
     });
 
     // These all coerce to a number, so the Number.isNaN(+port) check inside allowPort
@@ -1217,6 +1227,7 @@ describe('fluxNetworkHelper tests', () => {
       verifyPrivilegeStub.returns(true);
       const res = generateResponse();
       const req = {
+        headers: { zelidauth: ZELIDAUTH },
         params: {
           testing: 'testing',
         },
@@ -1236,13 +1247,14 @@ describe('fluxNetworkHelper tests', () => {
       const result = await fluxNetworkHelper.allowPortApi(req, res);
 
       expect(result).to.eql(expectedResult);
-      sinon.assert.calledOnceWithExactly(verifyPrivilegeStub, 'adminandfluxteam', req);
+      sinon.assert.calledOnceWithExactly(verifyPrivilegeStub, 'adminandfluxteam', ZELIDAUTH);
     });
 
     it('should return an unauthorized message if privilege is not right', async () => {
       verifyPrivilegeStub.returns(false);
       const res = generateResponse();
       const req = {
+        headers: { zelidauth: ZELIDAUTH },
         params: {
           port,
         },
@@ -1259,7 +1271,7 @@ describe('fluxNetworkHelper tests', () => {
       const result = await fluxNetworkHelper.allowPortApi(req, res);
 
       expect(result).to.eql(expectedResult);
-      sinon.assert.calledOnceWithExactly(verifyPrivilegeStub, 'adminandfluxteam', req);
+      sinon.assert.calledOnceWithExactly(verifyPrivilegeStub, 'adminandfluxteam', ZELIDAUTH);
     });
 
     it('should return an error message if allowPort status is false', async () => {
@@ -1273,6 +1285,7 @@ describe('fluxNetworkHelper tests', () => {
       verifyPrivilegeStub.returns(true);
       const res = generateResponse();
       const req = {
+        headers: { zelidauth: ZELIDAUTH },
         params: {
           port,
         },
@@ -1289,7 +1302,7 @@ describe('fluxNetworkHelper tests', () => {
       const result = await fluxNetworkHelper.allowPortApi(req, res);
 
       expect(result).to.eql(expectedResult);
-      sinon.assert.calledOnceWithExactly(verifyPrivilegeStub, 'adminandfluxteam', req);
+      sinon.assert.calledOnceWithExactly(verifyPrivilegeStub, 'adminandfluxteam', ZELIDAUTH);
     });
   });
 
