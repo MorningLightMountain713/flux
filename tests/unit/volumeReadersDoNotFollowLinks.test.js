@@ -6,6 +6,7 @@ const path = require('path');
 
 const fileQueryService = require('../../ZelBack/src/services/appQuery/fileQueryService');
 const IOUtils = require('../../ZelBack/src/services/IOUtils');
+const volumeService = require('../../ZelBack/src/services/utils/volumeService');
 const verificationHelper = require('../../ZelBack/src/services/verificationHelper');
 
 /**
@@ -48,7 +49,10 @@ describe('readers of an app volume do not follow links', () => {
 
   it('lists a link as a link, with its own size rather than its target', async () => {
     sinon.stub(verificationHelper, 'verifyPrivilege').resolves(true);
-    sinon.stub(IOUtils, 'getVolumeInfo').resolves({ error: null, mounts: [{ mount: volume }] });
+    // getAppsFolder resolves its mount through volumeService, not through
+    // IOUtils.getVolumeInfo - stubbing the latter left the real lookup running,
+    // which found no volume and answered an error envelope.
+    sinon.stub(volumeService, 'listComponentVolumeMounts').resolves([{ replica: null, mount: volume }]);
 
     const res = { json: sinon.stub() };
     await fileQueryService.getAppsFolder(
