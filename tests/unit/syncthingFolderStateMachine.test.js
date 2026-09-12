@@ -7,6 +7,10 @@ const { expect } = require('chai');
 const sinon = require('sinon');
 const { globalState } = require('./fixtures/globalState');
 const proxyquire = require('proxyquire').noCallThru();
+// Not stubbed through proxyquire: the module under test reaches the same
+// singleton, so the grant plane's answer is set on the real object.
+const mastershipGrantGate = require('../../ZelBack/src/services/appLifecycle/mastershipGrantGate');
+const log = require('../../ZelBack/src/lib/log');
 
 // Create mocks for dependencies
 const syncthingServiceMock = {
@@ -431,6 +435,50 @@ describe('syncthingFolderStateMachine tests', () => {
       sinon.assert.calledWith(appReconcilerMock.setControllerDesired, 'bare-app', 'running');
       expect(result.cache).to.deep.equal({ restarted: true, marker: 'kept' });
       expect(result.syncthingFolder).to.equal(mockParams.syncthingFolder);
+    });
+
+    // The cooperative self-fence: a sendreceive folder on a node the grant plane
+    // says is not the master demotes itself and reverts, so every local change
+    // carries FlagLocalReceiveOnly and an empty version vector and can never win
+    // against the true master's data.
+    describe('the deposed node fences itself', () => {
+      let leaderIsSelf;
+
+      beforeEach(() => {
+        leaderIsSelf = sinon.stub(mastershipGrantGate, 'leaderIsSelf').resolves(false);
+        sinon.stub(mastershipGrantGate, 'noteFolderDemoted');
+        mockParams.syncFolder = { type: 'sendreceive' };
+        dockerServiceMock.dockerContainerInspect.resolves({ State: { Running: true } });
+      });
+
+      afterEach(() => {
+        leaderIsSelf.restore();
+        mastershipGrantGate.noteFolderDemoted.restore();
+      });
+
+      it('demotes and reverts the local changes', async () => {
+        const result = await stateMachine.manageFolderSyncState(mockParams);
+
+        expect(result.syncthingFolder.type).to.equal('receiveonly');
+        sinon.assert.calledOnceWithExactly(syncthingServiceMock.dbRevert, 'test-app');
+        expect(result.cache.grantDemoted).to.be.true;
+      });
+
+      // dbRevert reports a failure IN-BAND, so a refused revert must reach the
+      // caller through the value. The demotion stands either way - it is what
+      // stops the divergent copy reaching a peer - and the local changes keep
+      // promotion blocked until a later pass reverts them.
+      it('says so when the revert is refused, and still demotes', async () => {
+        const logWarn = sinon.stub(log, 'warn');
+        syncthingServiceMock.dbRevert.resolves({ status: 'error', data: { message: 'syncthing api down' } });
+
+        const result = await stateMachine.manageFolderSyncState(mockParams);
+
+        sinon.assert.calledOnceWithExactly(syncthingServiceMock.dbRevert, 'test-app');
+        sinon.assert.calledWithMatch(logWarn, /revert after demotion failed, local changes stand: syncthing api down/);
+        expect(result.syncthingFolder.type, 'the demotion stands').to.equal('receiveonly');
+        logWarn.restore();
+      });
     });
 
     it('leaves an already-running container alone when the folder is already syncing', async () => {
@@ -1253,7 +1301,8 @@ describe('syncthingFolderStateMachine tests', () => {
         receiveOnlyChangedFiles: 2,
         receiveOnlyChangedBytes: 555,
       });
-      syncthingServiceMock.dbRevert.rejects(new Error('syncthing api down'));
+      // dbRevert answers an envelope and never rejects
+      syncthingServiceMock.dbRevert.resolves({ status: 'error', data: { message: 'syncthing api down' } });
 
       const result = await stateMachine.manageFolderSyncState(mockParams);
 

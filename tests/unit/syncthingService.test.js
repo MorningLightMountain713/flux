@@ -324,6 +324,12 @@ describe('syncthingService tests', () => {
     });
   });
 
+  // The two config collection endpoints take an OPTIONS OBJECT: the id and the
+  // body are each optional, so a caller that has neither omits them rather than
+  // spelling them positionally. The method is a closed set on syncthing's side
+  // and a closed set here, checked before a request is made - handed to the
+  // axios instance instead, a bad one resolves `instance[method]` to undefined
+  // and returns a failure naming neither the method nor the caller.
   describe('adjustConfigFolders / adjustConfigDevices shape', () => {
     let fakeInstance;
 

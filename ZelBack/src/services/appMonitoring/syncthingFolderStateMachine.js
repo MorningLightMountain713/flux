@@ -1377,9 +1377,15 @@ async function manageFolderSyncState(params) {
     if (grantSaysLeader === false) {
       log.warn(`manageFolderSyncState - ${appId} holds a sendreceive folder without the grant; demoting to receiveonly and reverting local changes`);
       syncthingFolder.type = 'receiveonly';
-      await syncthingService.dbRevert(appId).catch((error) => {
-        log.warn(`manageFolderSyncState - ${appId} revert after demotion failed: ${error.message}`);
-      });
+      try {
+        // dbRevert answers in-band, so the catch below needs dataOrThrow to
+        // reach. A failed revert leaves the local changes on a receiveonly
+        // folder, where receiveOnlyChangedFiles blocks promotion until a later
+        // pass reverts them.
+        messageHelper.dataOrThrow(await syncthingService.dbRevert(appId));
+      } catch (error) {
+        log.warn(`manageFolderSyncState - ${appId} revert after demotion failed, local changes stand: ${error.message}`);
+      }
       mastershipGrantGate.noteFolderDemoted(installedAppName);
       const cache = { numberOfExecutions: 0, grantDemoted: true, demotedAt: Date.now() };
       await appCaches.setSyncedMark(receiveOnlySyncthingAppsCache, appId, cache);

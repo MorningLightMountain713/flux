@@ -8,6 +8,7 @@ const log = require('../../lib/log');
 const serviceHelper = require('../serviceHelper');
 const dockerService = require('../dockerService');
 const syncthingService = require('../syncthingService');
+const messageHelper = require('../messageHelper');
 const { ConfigMethod } = require('../utils/syncthingConstants');
 const volumeService = require('../utils/volumeService');
 const { SYNCTHING_IGNORE_LINES } = require('../appSystem/volumeReservedNames');
@@ -410,7 +411,8 @@ async function removeSyncthingFolder(appComponentName, res) {
  */
 async function requestFolderScan(appComponentName) {
   try {
-    await syncthingService.dbScan(dockerService.getAppIdentifier(appComponentName));
+    // dbScan answers in-band, so the catch below needs dataOrThrow to reach.
+    messageHelper.dataOrThrow(await syncthingService.dbScan(dockerService.getAppIdentifier(appComponentName)));
   } catch (error) {
     log.warn(`requestFolderScan: syncthing scan request for ${appComponentName} failed - ${error.message ?? error}`);
   }

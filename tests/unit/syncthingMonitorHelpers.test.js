@@ -376,10 +376,10 @@ describe('syncthingMonitorHelpers tests', () => {
       sinon.assert.calledOnceWithExactly(adjust, { method: 'delete', id: 'fluxweb_app' });
     });
 
-    // adjustConfigFolders goes through performRequest: it answers an ENVELOPE and
-    // never rejects, where the getConfigFolders above goes through `request` and
-    // throws. Only a removal syncthing accepted may be reported as one - an
-    // uninstall otherwise claims a folder deregistered that syncthing still holds.
+    // adjustConfigFolders goes through performRequest: it answers an ENVELOPE
+    // and never rejects, where the getConfigFolders above goes through `request`
+    // and throws. Only a removal syncthing accepted is reported as one - an
+    // uninstall otherwise claims a folder deregistered that syncthing holds.
     it('does not report a removal syncthing refused', async () => {
       sandbox.stub(syncthingService, 'getConfigFolders')
         .resolves([{ id: 'fluxweb_app', path: `${appsBase}fluxweb_app` }]);
@@ -420,10 +420,17 @@ describe('syncthingMonitorHelpers tests', () => {
       sinon.assert.calledOnceWithExactly(dbScan, 'fluxweb_app');
     });
 
-    it('swallows a failed scan request (the watcher/rescan remains the fallback)', async () => {
-      sandbox.stub(syncthingService, 'dbScan').rejects(new Error('syncthing down'));
+    // dbScan reports a failure IN-BAND - it answers an envelope and never
+    // rejects - so a refusal must reach the caller through the value.
+    it('swallows a refused scan request (the watcher/rescan remains the fallback)', async () => {
+      const dbScan = sandbox.stub(syncthingService, 'dbScan')
+        .resolves({ status: 'error', data: { message: 'syncthing down' } });
+      const logWarn = sandbox.stub(log, 'warn');
 
       await helpers.requestFolderScan('web_app');
+
+      sinon.assert.calledOnceWithExactly(dbScan, 'fluxweb_app');
+      sinon.assert.calledWithMatch(logWarn, /scan request for web_app failed - syncthing down/);
     });
   });
 });

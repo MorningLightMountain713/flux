@@ -65,11 +65,10 @@ const appsFolder = `${appsFolderPath}/`;
  * throw. The writes - adjustConfigFolders, adjustConfigDevices - go through
  * `performRequest`, which turns every axios failure into an ENVELOPE and never
  * rejects, so a `.catch()` on one is dead code and a bare `await` discards the
- * answer. Every write in this file goes through here, and a refused demotion,
- * folder write or orphan sweep is distinguishable from a completed one.
+ * answer. Every write in this file goes through here.
  *
- * A throw is handled too rather than assumed away: a caller that must not itself
- * fail should not depend on which of the two arrives.
+ * A throw is handled as well as an envelope: a caller that must not itself fail
+ * should not depend on which of the two arrives.
  *
  * @param {Promise<{status: string, data: object}>} write - an adjustConfig* call in flight
  * @param {string} what - what was being applied, for the log line
@@ -143,10 +142,10 @@ async function verifyAppFolderMountWithRepair(appId, appFolder, appName, sending
  * @param {Array<{appId: string, appName: string}>} [extraFolders] - Folder
  *  entries verified by id alone, for folders whose owning app's spec cannot be
  *  read this pass
- * Each unmounted entry carries `sending`, the folder's mode as the pass's own
- * folder read observed it. The demotion below needs that fact and nothing else,
- * and reading it a second time would put a SAFETY ACTION behind a call that can
- * fail - where a failure reads as "no folder, nothing to protect".
+ * Each unmounted entry carries `sending`, the folder's mode as this pass's own
+ * folder read observed it. The demotion reads that fact off the entry: A SAFETY
+ * ACTION MUST NOT DEPEND ON A CALL THAT CAN FAIL, and a failed read of the
+ * folder list is indistinguishable from "no such folder, nothing to protect".
  *
  * @returns {Promise<{unmountedApps: Array, verifiedSafeIds: string[]}>}
  */
@@ -689,9 +688,9 @@ async function syncthingAppsCore(state, getGlobalStateFn) {
       // (leaked or missing) disk state to the healthy peers. Demote those
       // folders and hold their containers before bailing - idempotent, and the
       // normal receiveonly machinery re-promotes once the mount is healthy.
-      // Which folders are sendreceive is the pass's own observation, carried on
-      // the entry. The folder configuration is read ONCE per pass, at the top,
-      // where a failure returns before anything is judged by it.
+      // Which folders are sendreceive is carried on the entry. The folder
+      // configuration is read ONCE per pass, at the top, where a failure returns
+      // before anything is judged by it.
       // eslint-disable-next-line no-restricted-syntax
       for (const { appId, identifier, reason, sending } of unmountedApps) {
         // eslint-disable-next-line no-continue
@@ -703,8 +702,8 @@ async function syncthingAppsCore(state, getGlobalStateFn) {
         );
         if (demoted) {
           log.error(`syncthingAppsCore - SAFETY BLOCK: ${appId} folder was sendreceive over an unsafe mount (${reason}); switched to receiveonly and holding the container`);
-          // A demoted folder re-enters the promotion machinery from the start.
-          // Left where it stood, a folder moments from promotion resumes there
+          // A demoted folder re-enters the promotion machinery from the start:
+          // left where it stood, a folder moments from promotion resumes there
           // once the mount returns, on a sync state established before the
           // volume went away. The mark is the one manageFolderSyncState writes
           // on this same condition, so both paths describe a blocked folder the
@@ -717,9 +716,8 @@ async function syncthingAppsCore(state, getGlobalStateFn) {
             blockedAt: Date.now(),
           });
         } else {
-          // The mark is not written for a folder that is still sendreceive: it
-          // describes a demoted folder, and claiming one that was not demoted is
-          // the same class of lie the log line above avoids.
+          // No mark: it describes a DEMOTED folder, and this one is still
+          // sendreceive.
           log.error(`syncthingAppsCore - SAFETY BLOCK: ${appId} is STILL sendreceive over an unsafe mount (${reason}); holding the container and retrying the demotion next pass`);
         }
         // The container is held whether or not the demotion landed: the harm is
@@ -985,9 +983,9 @@ async function syncthingAppsCore(state, getGlobalStateFn) {
       // that is the collision the check exists to catch.
       //
       // ONLY when the write landed. This is an ASSERTION about syncthing's state
-      // made without re-reading it, and it is what peers act on: applied to a
-      // write syncthing refused, this node advertises folders it does not hold
-      // writable and a peer stands down from a promotion nothing is serving. A
+      // made without re-reading it, and it is what peers act on: a folder named
+      // here that syncthing did not accept advertises this node as holding it
+      // writable, and a peer stands down from a promotion nothing serves. A
       // refused write leaves the scan at the top of this pass standing, and the
       // next pass re-derives it.
       if (wrote) {
