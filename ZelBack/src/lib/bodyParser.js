@@ -93,6 +93,13 @@ function ensureBodyObject(req, res, next) {
  * ensureObject it; everything else keeps the legacy json-only behaviour.
  */
 function bodyParser(req, res, next) {
+  // /v2 owns its body parsing. Draining the stream here is exactly the hang
+  // this gate exists to manage, and the v2 router declares its own parser so
+  // that a route needing raw bytes is not fighting one that already ran.
+  if (req.path.startsWith('/v2/') || req.path === '/v2') {
+    next();
+    return;
+  }
   if (!MIGRATED_ROUTES.has(req.path)) {
     legacyJson(req, res, next);
     return;
