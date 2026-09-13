@@ -320,12 +320,12 @@ describe('peerCodec', () => {
       // Run together, a one-digit type beside a timestamp starting with the
       // second digit built the same bytes as a two-digit type, so a signature
       // over one request read as a signature over another.
-      const a = buildSyncSignatureMessage(3, 31000, 2000);
+      const a = buildSyncSignatureMessage(3, 31_000, 2000);
       const b = buildSyncSignatureMessage(33, 1000, 2000);
       expect(a).to.not.equal(b);
       // The control: the legacy form still collides, which is what says the
       // pair above is the right pair to be testing.
-      expect(buildSyncSignatureMessage(3, 31000, 2000, { legacy: true }))
+      expect(buildSyncSignatureMessage(3, 31_000, 2000, { legacy: true }))
         .to.equal(buildSyncSignatureMessage(33, 1000, 2000, { legacy: true }));
     });
 
