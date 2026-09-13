@@ -43,7 +43,7 @@ describe('localChangeCheck tests', () => {
     syncthingServiceMock.getDbFile.reset();
     syncthingServiceMock.getDbFile.resolves({ global: { localFlags: 0 } });
     syncthingServiceMock.dbRevert.reset();
-    syncthingServiceMock.dbRevert.resolves({ status: 'success', data: {} });
+    syncthingServiceMock.dbRevert.resolves({});
     syncthingServiceMock.getDbStatus.reset();
     syncthingServiceMock.getDbStatus.resolves(FOLDER_STATUS);
     syncthingServiceMock.getConfigFolders.reset();
@@ -289,7 +289,7 @@ describe('localChangeCheck tests', () => {
     it('keeps the answer when syncthing refuses the revert, and says nothing was reverted', async () => {
       const entry = await checked();
       const answer = entry.localChangeCheck;
-      syncthingServiceMock.dbRevert.resolves({ status: 'error', data: { message: 'folder is not running' } });
+      syncthingServiceMock.dbRevert.rejects(new Error('folder is not running'));
       const publish = sinon.stub(fluxEventBus, 'publish');
       try {
         localChangeCheck.revert('fluxr_r', entry, answer, () => true, CHANGED);

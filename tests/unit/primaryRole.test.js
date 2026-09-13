@@ -46,7 +46,7 @@ function loadRole({
       if (state === 'stopped') reconciler.committed = [];
       return true;
     }),
-    dockerActual: sinon.stub().resolves({ reachable: true, exists: true, running: false }),
+    observedContainerState: sinon.stub().resolves({ reachable: true, exists: true, running: false }),
     // Records a verdict where none is held; what it answers is the reconciler's.
     adoptControllerDesired: sinon.stub().resolves(true),
     hasControllerOpinion: sinon.stub().returns(false),
@@ -260,7 +260,7 @@ describe('primaryRole', () => {
     ].forEach(([when, actual]) => {
       it(`keeps the folder sending when ${when}`, async () => {
         const t = loadRole({ primary: true });
-        t.reconciler.dockerActual.resolves(actual);
+        t.reconciler.observedContainerState.resolves(actual);
 
         t.role.standDown(APP, FOLDER, { running: true });
         await t.role.whenSettled(APP);

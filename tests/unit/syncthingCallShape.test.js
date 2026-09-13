@@ -64,6 +64,26 @@ function serviceFunctions() {
 }
 
 // every syncthingService.<name>( call outside the service itself, with its file
+// Whether the enclosing function ever names ABSENT. A symbol can only be
+// recognised by comparing against it, so a caller of an absence-capable
+// function that never mentions it cannot be handling the case.
+function namesAbsent(fnBody) {
+  if (!fnBody) return false;
+  let found = false;
+  const descend = (n) => {
+    if (found || !n || typeof n.type !== 'string') return;
+    if (n.type === 'Identifier' && n.name === 'ABSENT') { found = true; return; }
+    for (const key of Object.keys(n)) {
+      if (key === 'loc' || key === 'range') continue;
+      const value = n[key];
+      if (Array.isArray(value)) value.forEach(descend);
+      else if (value && typeof value.type === 'string') descend(value);
+    }
+  };
+  descend(fnBody);
+  return found;
+}
+
 function externalCalls() {
   const calls = [];
   for (const rel of sourceFiles()) {
@@ -85,8 +105,9 @@ function externalCalls() {
         name: property.name,
         where: `${rel}:${node.loc.start.line}`,
         rel,
-        how: consumption(node, parents, src),
+        how: consumption(node, parents),
         reads: propertiesRead(node, parents, fnBody),
+        testsAbsence: namesAbsent(fnBody),
       });
     });
   }
@@ -135,6 +156,7 @@ function serviceContracts() {
       const { callee } = expr;
       if (callee.type === 'Identifier') {
         if (callee.name === 'performRequest') return 'ENVELOPE';
+        if (callee.name === 'requestAllowingAbsence') return 'ABSENT';
         if (callee.name === 'request') return 'THROWS';
         if (fns.has(callee.name)) return resolve(callee.name, seen); // eslint-disable-line no-use-before-define
       }
@@ -167,8 +189,10 @@ function serviceContracts() {
     seen.add(name);
     const fn = fns.get(name);
     const kinds = new Set(returnsOf(fn).map((expr) => kindOf(expr, fn, seen)).filter(Boolean));
-    // a function with even one envelope return can hand a caller one
+    // a function with even one envelope return can hand a caller one, and one
+    // with even one absence-capable return can hand a caller ABSENT
     if (kinds.has('ENVELOPE')) return 'ENVELOPE';
+    if (kinds.has('ABSENT')) return 'ABSENT';
     if (kinds.has('THROWS')) return 'THROWS';
     return null;
   }
@@ -204,17 +228,13 @@ function propertiesRead(node, parents, fnBody) {
   return [...props];
 }
 
-function consumption(node, parents, src) {
+function consumption(node, parents) {
   const [p1, p2, p3] = parents;
-  const isDataOrThrow = (call) => call && call.type === 'CallExpression'
-    && /dataOrThrow/.test(src.slice(call.callee.range[0], call.callee.range[1]));
   const settles = (m, call) => m && m.type === 'MemberExpression'
     && ['catch', 'then'].includes(m.property.name) && call && call.type === 'CallExpression';
   if (settles(p1, p2) && p1.object === node) return `.${p1.property.name}()`;
-  if (isDataOrThrow(p1)) return 'dataOrThrow';
   if (p1 && p1.type === 'AwaitExpression') {
     if (p2 && p2.type === 'ExpressionStatement') return 'discarded';
-    if (isDataOrThrow(p2)) return 'dataOrThrow';
     if (settles(p2, p3)) return `.${p2.property.name}()`;
   }
   return 'read';
@@ -286,51 +306,43 @@ describe('syncthing call shape', () => {
     // a classifier that answered one thing for everything would pass the
     // assertions below by default, so pin one of each - including the function
     // that CALLS performRequest and returns its own object, which throws
-    expect(contracts.get('adjustConfigFolders'), 'through its collection helper').to.equal('ENVELOPE');
-    expect(contracts.get('getConfigRestartRequired')).to.equal('ENVELOPE');
+    expect(contracts.get('adjustConfigFolders'), 'its delete answers null, not ABSENT').to.equal('THROWS');
+    expect(contracts.get('getDbStatus'), 'the one read that asks whether the folder exists').to.equal('ABSENT');
+    expect(contracts.get('getConfigRestartRequired')).to.equal('THROWS');
     expect(contracts.get('getConfigFolders')).to.equal('THROWS');
     expect(contracts.get('getPeerSyncDiagnostics'), 'consumes performRequest, answers its own object').to.equal('VALUE');
     expect(contracts.get('getDeviceId'), 'answers a device id or null').to.equal('VALUE');
   });
 
-  // A `.catch()` on a function that never rejects never runs. The failure it
-  // was written to report is discarded and the caller continues as though the
-  // call had succeeded.
-  it('nothing catches a function that cannot reject', () => {
-    const dead = internalSites
-      .filter((c) => contracts.get(c.name) === 'ENVELOPE' && c.how.startsWith('.catch'))
-      .map((c) => `${c.where} -> ${c.name}().catch() is dead code; read response.status or messageHelper.dataOrThrow`);
-    expect(dead, 'an envelope-returning call answers in-band').to.deep.equal([]);
+  // ONE CONTRACT. The envelope is a wire shape: performRequest builds it and an
+  // Api handler serialises it. Nothing above that line should ever see one -
+  // an unchecked envelope is a truthy object carrying no rows, so a failure
+  // reads as an absence and the caller acts on it.
+  it('no internal caller consumes an envelope', () => {
+    const leaked = internalSites
+      .filter((c) => contracts.get(c.name) === 'ENVELOPE')
+      .map((c) => `${c.where} -> ${c.name}() answers {status, data}; it should answer rows and throw`);
+    expect(leaked, 'the envelope belongs at the wire').to.deep.equal([]);
   });
 
-  // A bare `await` on one throws the answer away, so a refused write is
-  // indistinguishable from an applied one.
-  it('nothing discards the answer of a function that reports in-band', () => {
-    const discarded = internalSites
-      .filter((c) => contracts.get(c.name) === 'ENVELOPE' && c.how === 'discarded')
-      .map((c) => `${c.where} -> ${c.name}() answers {status, data} and the answer is discarded`);
-    expect(discarded, 'the only report of a failure is the value').to.deep.equal([]);
+  // The one thing a caller must still tell apart, and the reason ABSENT is a
+  // symbol: syncthing answering "no such folder" is a FACT, and failing to
+  // reach syncthing at all is not. A caller of an absence-capable function that
+  // never names ABSENT is treating the two as one.
+  it('every caller of an absence-capable function tests for absence', () => {
+    const blind = internalSites
+      .filter((c) => contracts.get(c.name) === 'ABSENT' && !c.testsAbsence)
+      .map((c) => `${c.where} -> ${c.name}() can answer ABSENT and this caller never names it`);
+    expect(blind, 'absence is an answer and has to be read as one').to.deep.equal([]);
   });
 
-  // The third reading, and the one that survives both rules above: the value is
-  // taken and its SHAPE is tested. An error envelope has no rows on it, so
-  // `!answer.data` or a missing field reads as "empty" rather than "failed", and
-  // the caller acts on an absence that is really a failure.
-  it('nothing tests the shape of an answer without testing its status', () => {
-    const shapeOnly = internalSites
-      .filter((c) => contracts.get(c.name) === 'ENVELOPE' && c.how === 'read' && c.reads && !c.reads.includes('status'))
-      .map((c) => `${c.where} -> ${c.name}() is read as ${c.reads.map((r) => `.${r}`).join(', ')} and never .status`);
-    expect(shapeOnly, 'an error envelope carries no rows, so shape cannot tell failure from empty').to.deep.equal([]);
-  });
-
-  // The sweep resolves nothing if `how` never populates, which would pass both
-  // assertions above silently.
+  // The sweep resolves nothing if `how` never populates, which would pass every
+  // assertion above silently.
   it('reads how each internal call site consumes its answer', () => {
-    const envelopeSites = internalSites.filter((c) => contracts.get(c.name) === 'ENVELOPE');
-    expect(envelopeSites.length, 'envelope-returning calls outside the router').to.be.greaterThan(10);
-    expect(envelopeSites.every((c) => ['read', 'dataOrThrow'].includes(c.how)), 'every one is read').to.be.true;
-    const viaDataOrThrow = envelopeSites.filter((c) => c.how === 'dataOrThrow');
-    expect(viaDataOrThrow.length, 'and the adapter is in use, so that branch is reached').to.be.greaterThan(0);
+    expect(internalSites.length, 'internal call sites found at all').to.be.greaterThan(30);
+    expect(internalSites.every((c) => c.how), 'every site classified').to.be.true;
+    const absenceSites = internalSites.filter((c) => contracts.get(c.name) === 'ABSENT');
+    expect(absenceSites.length, 'and the absence contract is in use, so that branch is reached').to.be.greaterThan(0);
   });
 
   it('inside the service, only an Api handler calls a function that takes req or res', () => {

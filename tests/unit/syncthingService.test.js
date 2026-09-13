@@ -17,7 +17,9 @@ const { appsFolderPath } = require('../../ZelBack/src/services/utils/appConstant
 
 // Testing imports
 const chai = require('chai');
+const chaiAsPromised = require('chai-as-promised');
 
+chai.use(chaiAsPromised);
 const { expect } = chai;
 const proxyquire = require('proxyquire');
 const sinon = require('sinon');
@@ -670,18 +672,14 @@ describe('syncthingService tests', () => {
     });
 
     it('refuses a method that is not one syncthing accepts, without asking it', async () => {
-      const answer = await syncthingService.adjustConfigFolders({ method: 'destroy', id: 'fluxweb_app' });
-
-      expect(answer.status).to.equal('error');
-      expect(answer.data.message).to.contain('destroy');
+      await expect(syncthingService.adjustConfigFolders({ method: 'destroy', id: 'fluxweb_app' }))
+        .to.eventually.be.rejectedWith(/destroy/);
       Object.values(fakeInstance).forEach((verb) => sinon.assert.notCalled(verb));
     });
 
     it('refuses an id that is not a syncthing id, without asking it', async () => {
-      const answer = await syncthingService.adjustConfigFolders({ method: ConfigMethod.DELETE, id: '../../rest/system/shutdown' });
-
-      expect(answer.status).to.equal('error');
-      expect(answer.data.message).to.equal('Invalid ID supplied');
+      await expect(syncthingService.adjustConfigFolders({ method: ConfigMethod.DELETE, id: '../../rest/system/shutdown' }))
+        .to.eventually.be.rejectedWith('Invalid ID supplied');
       Object.values(fakeInstance).forEach((verb) => sinon.assert.notCalled(verb));
     });
 
@@ -1967,13 +1965,13 @@ describe('syncthingService tests', () => {
     });
 
     it('refuses a folder list that turns ownership on for any folder while syncthing resolves the host\'s names, and sends nothing', async () => {
-      const response = await syncthingService.adjustConfigFolders({ method: 'put', config: [
+      const refusal = await syncthingService.adjustConfigFolders({ method: 'put', config: [
         { id: 'fluxa_app', type: 'receiveonly' },
         { id: 'fluxb_app', type: 'sendreceive', syncOwnership: true },
-      ] });
+      ] }).then(() => null, (error) => error);
 
-      expect(response.status).to.equal('error');
-      expect(response.data.message).to.equal('Folder ownership is not written until syncthing resolves owners against the numeric id tables');
+      expect(refusal, 'the write was refused').to.be.an('error');
+      expect(refusal.message).to.equal('Folder ownership is not written until syncthing resolves owners against the numeric id tables');
       sinon.assert.notCalled(fakeInstance.put);
       sinon.assert.calledWithExactly(countStub, 'syncthing:ownershipWriteRefused');
     });
@@ -1981,27 +1979,26 @@ describe('syncthingService tests', () => {
     it('refuses a patch that turns ownership on while no syncthing runs', async () => {
       pids = '';
 
-      const response = await syncthingService.adjustConfigFolders({ method: 'patch', config: { type: 'sendreceive', syncOwnership: true }, id: 'fluxa_app' });
+      const refusal = await syncthingService.adjustConfigFolders({ method: 'patch', config: { type: 'sendreceive', syncOwnership: true }, id: 'fluxa_app' }).then(() => null, (error) => error);
 
-      expect(response.status).to.equal('error');
+      expect(refusal, 'the write was refused').to.be.an('error');
       sinon.assert.notCalled(fakeInstance.patch);
     });
 
     it('reads the running syncthing at the write, so an earlier announcement cannot let ownership through', async () => {
       syncthingService.setOwnersByNumberAnnounced(true);
 
-      const response = await syncthingService.adjustConfigFolders({ method: 'put', config: [{ id: 'fluxb_app', syncOwnership: true }] });
+      const refusal = await syncthingService.adjustConfigFolders({ method: 'put', config: [{ id: 'fluxb_app', syncOwnership: true }] }).then(() => null, (error) => error);
 
-      expect(response.status).to.equal('error');
+      expect(refusal, 'the write was refused').to.be.an('error');
       sinon.assert.notCalled(fakeInstance.put);
     });
 
     it('still demotes, pauses and deletes while syncthing resolves the host\'s names', async () => {
-      const demote = await syncthingService.adjustConfigFolders({ method: 'patch', config: { type: 'receiveonly' }, id: 'fluxa_app' });
-      const pause = await syncthingService.adjustConfigFolders({ method: 'patch', config: { paused: true }, id: 'fluxa_app' });
-      const remove = await syncthingService.adjustConfigFolders({ method: 'delete', id: 'fluxa_app' });
+      await syncthingService.adjustConfigFolders({ method: 'patch', config: { type: 'receiveonly' }, id: 'fluxa_app' });
+      await syncthingService.adjustConfigFolders({ method: 'patch', config: { paused: true }, id: 'fluxa_app' });
+      await syncthingService.adjustConfigFolders({ method: 'delete', id: 'fluxa_app' });
 
-      expect([demote.status, pause.status, remove.status]).to.deep.equal(['success', 'success', 'success']);
       sinon.assert.calledTwice(fakeInstance.patch);
       sinon.assert.calledOnce(fakeInstance.delete);
       sinon.assert.notCalled(countStub);
@@ -2010,22 +2007,20 @@ describe('syncthingService tests', () => {
     it('writes ownership while every syncthing process has the tables as its passwd and group', async () => {
       identities = '8:100\n8:101\n8:100\n8:101\n';
 
-      const response = await syncthingService.adjustConfigFolders({ method: 'put', config: [
+      await syncthingService.adjustConfigFolders({ method: 'put', config: [
         { id: 'fluxb_app', type: 'sendreceive', syncOwnership: true },
       ] });
 
-      expect(response.status).to.equal('success');
       sinon.assert.calledOnce(fakeInstance.put);
     });
 
     it('writes ownership while an app container runs a syncthing that sees its own names', async () => {
       serviceHelper.runCommand.callsFake(hostAndContainerSyncthing().runCommand);
 
-      const response = await syncthingService.adjustConfigFolders({ method: 'put', config: [
+      await syncthingService.adjustConfigFolders({ method: 'put', config: [
         { id: 'fluxb_app', type: 'sendreceive', syncOwnership: true },
       ] });
 
-      expect(response.status).to.equal('success');
       sinon.assert.calledOnce(fakeInstance.put);
     });
   });

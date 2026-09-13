@@ -23,8 +23,8 @@ describe('syncthingIgnorePolicy tests', () => {
   // handing each other a folder that has already had its attempt.
     let ID;
     let folderCounter = 0;
-    const ok = (data) => ({ status: 'success', data });
-    const err = (message) => ({ status: 'error', data: { message } });
+    // syncthingService answers the rows, or throws when syncthing did not do it.
+    const ok = (data) => data;
 
     beforeEach(() => {
       folderCounter += 1;
@@ -141,9 +141,7 @@ describe('syncthingIgnorePolicy tests', () => {
     });
 
     it('logs and posts nothing when the read fails, rather than failing the pass', async () => {
-    // Every syncthing call returns its outcome in-band and never throws, so a
-    // missed status check would silently skip the converge - it is checked.
-      sandbox.stub(syncthingService, 'getFolderIgnores').resolves(err('syncthing restarting'));
+      sandbox.stub(syncthingService, 'getFolderIgnores').rejects(new Error('syncthing restarting'));
       const set = sandbox.stub(syncthingService, 'setFolderIgnores').resolves(ok({}));
       const logError = sandbox.stub(log, 'error');
 
@@ -155,7 +153,7 @@ describe('syncthingIgnorePolicy tests', () => {
 
     it('logs when the write fails, rather than failing the pass', async () => {
       sandbox.stub(syncthingService, 'getFolderIgnores').resolves(ok({ ignore: [] }));
-      sandbox.stub(syncthingService, 'setFolderIgnores').resolves(err('folder paused'));
+      sandbox.stub(syncthingService, 'setFolderIgnores').rejects(new Error('folder paused'));
       const logError = sandbox.stub(log, 'error');
 
       await policy.ensureStignoreCovers(ID);

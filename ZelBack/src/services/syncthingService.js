@@ -24,7 +24,7 @@ const messageHelper = require('./messageHelper');
 const serviceHelper = require('./serviceHelper');
 const verificationHelper = require('./verificationHelper');
 const { Privilege, authOf } = require('./utils/privileges');
-const { ConfigMethod } = require('./utils/syncthingConstants');
+const { ConfigMethod, ABSENT } = require('./utils/syncthingConstants');
 
 const syncthingURL = `http://${config.get('syncthing.ip')}:${config.get('syncthing.port')}`;
 
@@ -186,20 +186,30 @@ const configMethods = new Set(Object.values(ConfigMethod));
  * @param {string} options.method - one of ConfigMethod
  * @param {object|Array} [options.config] - the request body; omitted for a delete
  * @param {string} [options.id] - a single folder/device to address, or the whole collection
- * @returns {Promise<{status: string, data: object}>} An envelope - this never throws
+ * @returns {Promise<*>} What syncthing answered; null when a delete found
+ *   nothing to delete. Throws on any failure to reach or satisfy it.
  */
 async function adjustConfigCollection(collection, { method, config: newConfig = undefined, id = null } = {}) {
   if (!configMethods.has(method)) {
-    return messageHelper.createErrorMessage(`Invalid method supplied: ${method}`);
+    throw new Error(`Invalid method supplied: ${method}`);
   }
   let apiPath = `/rest/config/${collection}`;
   if (id) {
     if (!goodSyncthingChars.test(id)) {
-      return messageHelper.createErrorMessage('Invalid ID supplied');
+      throw new Error('Invalid ID supplied');
     }
     apiPath += `/${id}`;
   }
-  return performRequest(method, apiPath, newConfig);
+  // A delete is idempotent: 404 means the folder or device is not there, which
+  // is the state the caller asked for, so it answers rather than throws. No
+  // caller needs to tell that from having removed it. Every other failure means
+  // the write did not happen, and an orphan sweep that reported the two alike
+  // would call its own finished work a failure.
+  if (method === ConfigMethod.DELETE) {
+    const answer = await requestAllowingAbsence(method, apiPath, newConfig);
+    return answer === ABSENT ? null : answer;
+  }
+  return request(method, apiPath, newConfig);
 }
 
 /**
@@ -467,6 +477,42 @@ async function request(method, urlpath, data, config) {
 }
 
 /**
+ * A syncthing request whose 404 is an answer: its data, ABSENT, or a throw.
+ *
+ * Only for calls where absence is a state the caller asked about - reading a
+ * folder that may not be configured, or deleting one that may already be gone.
+ * A call that needs its subject to exist uses `request` and lets the 404 throw.
+ *
+ * @param {string} method HTTP method.
+ * @param {string} urlpath Syncthing REST path.
+ * @param {object} [data] Request body.
+ * @param {object} [config] Axios config.
+ * @returns {Promise<*|symbol>} The response data, or ABSENT.
+ */
+async function requestAllowingAbsence(method, urlpath, data, config) {
+  try {
+    return await request(method, urlpath, data, config);
+  } catch (error) {
+    if (error.httpStatus === 404) return ABSENT;
+    throw error;
+  }
+}
+
+/**
+ * The error envelope for a handler whose work threw.
+ *
+ * A SyncthingError carries the status its request failed with, which has always
+ * been on the wire for these endpoints; a validation error raised before any
+ * request went out has no status and never carried the key.
+ * @param {Error} error The thrown error.
+ * @returns {object} Message
+ */
+function errorEnvelope(error) {
+  const response = messageHelper.createErrorMessage(error.message, error.name, error.code);
+  if (error instanceof SyncthingError) response.data.httpStatus = error.httpStatus;
+  return response;
+}
+/**
  * To get meta
  * @param {import('express').Request} req
  * @param {import('express').Response} res
@@ -558,6 +604,15 @@ async function getConfig() {
 }
 
 /**
+ * Whether a restart of syncthing is required for the current config to take
+ * effect. The rows, or a throw, like every other read here.
+ * @returns {Promise<object>}
+ */
+async function getConfigRestartRequired() {
+  return request('get', '/rest/config/restart-required');
+}
+
+/**
  * The configured folders, or the one folder with the given id.
  * @param {string} [id] Folder ID. Omitted, every folder.
  * @returns {Promise<Array|object>} The folder configuration.
@@ -613,18 +668,6 @@ function writesOwnership(folderConfig) {
 }
 
 /**
- * Whether a restart of syncthing is required for the current config to take effect.
- *
- * The envelope, not the bare row, and it does not throw: both callers reconcile
- * syncthing's configuration and then ask this, and a failed ask means "not known
- * to need a restart", which is the state they already treat as ordinary.
- * @returns {Promise<object>} Message
- */
-async function getConfigRestartRequired() {
-  return performRequest('get', '/rest/config/restart-required');
-}
-
-/**
  * To modify config for folders. PUT replaces the entire config, PATCH replaces
  * only the given child objects and DELETE removes the folder.
  *
@@ -636,12 +679,12 @@ async function getConfigRestartRequired() {
  * @param {string} options.method - one of ConfigMethod
  * @param {object|Array} [options.config] - the folder(s) to write; omitted for a delete
  * @param {string} [options.id] - one folder, or the whole collection when absent
- * @returns {Promise<{status: string, data: object}>} An envelope - this never throws
+ * @returns {Promise<object>} syncthing's answer; throws when the write did not happen
  */
 async function adjustConfigFolders(options = {}) {
   if (writesOwnership(options.config) && !(await ownersTravelByNumber())) {
     fluxEventBus.count('syncthing:ownershipWriteRefused');
-    return messageHelper.createErrorMessage('Folder ownership is not written until syncthing resolves owners against the numeric id tables');
+    throw new Error('Folder ownership is not written until syncthing resolves owners against the numeric id tables');
   }
   return adjustConfigCollection('folders', options);
 }
@@ -678,7 +721,7 @@ async function getConfigDefaultsFolder() {
  */
 async function adjustConfigDefaultsFolder(method, newConfig) {
   log.info('Patching Syncthing defaults for folder configuration...');
-  const response = await performRequest(method, '/rest/config/defaults/folder', newConfig);
+  const response = await request(method, '/rest/config/defaults/folder', newConfig);
   log.info('Syncthing defaults for folder configuration patched...');
   return response;
 }
@@ -709,7 +752,7 @@ async function getConfigGui() {
  */
 async function adjustConfigOptions(method, newConfig) {
   log.info('Patching Syncthing configuration...');
-  const response = await performRequest(method, '/rest/config/options', newConfig);
+  const response = await request(method, '/rest/config/options', newConfig);
   log.info('Syncthing configuration patched...');
   return response;
 }
@@ -730,7 +773,7 @@ async function getFolderIdErrors(folderid) {
   } else {
     throw new Error('folder parameter is mandatory');
   }
-  return performRequest('get', apiPath);
+  return request('get', apiPath);
 }
 
 // === DATABASE ENDPOINTS ===
@@ -761,7 +804,7 @@ async function getDbCompletion({ folder, device } = {}) {
  * @returns {Promise<object>} message
  */
 async function getFolderIgnores(folderId) {
-  return performRequest('get', `/rest/db/ignores?folder=${encodeURIComponent(folderId)}`);
+  return request('get', `/rest/db/ignores?folder=${encodeURIComponent(folderId)}`);
 }
 
 /**
@@ -775,7 +818,7 @@ async function getFolderIgnores(folderId) {
  * @returns {Promise<object>} message
  */
 async function setFolderIgnores(folderId, lines) {
-  return performRequest('post', `/rest/db/ignores?folder=${encodeURIComponent(folderId)}`, { ignore: lines });
+  return request('post', `/rest/db/ignores?folder=${encodeURIComponent(folderId)}`, { ignore: lines });
 }
 
 /**
@@ -790,7 +833,12 @@ async function getDbStatus(folder) {
   if (!folder) {
     throw new Error('folder parameter is mandatory');
   }
-  return request('get', `/rest/db/status?folder=${folder}`);
+  // The one read whose caller is asking WHETHER the folder is configured, not
+  // only how far it has synced. A folder syncthing does not hold is ABSENT; a
+  // syncthing that cannot be reached throws, and those must not be one answer -
+  // acting on "absent" when the truth is "unknown" is how a folder nobody has
+  // checked gets treated as one that is known to be gone.
+  return requestAllowingAbsence('get', `/rest/db/status?folder=${folder}`);
 }
 
 // What syncthing adds to a folder's byte counts for each entry that is not a file.
@@ -871,11 +919,13 @@ function statusInFileBytes(status, entry) {
  * The status is read before the version: a restart between the two can only pair
  * an older daemon's counts with a newer daemon's version, which takes nothing off.
  * @param {string} folder Folder ID.
- * @returns {Promise<object>} db/status, plus globalFileBytes, needFileBytes and inSyncFileBytes.
+ * @returns {Promise<object|symbol>} db/status, plus globalFileBytes, needFileBytes and
+ *   inSyncFileBytes; ABSENT for a folder syncthing does not hold.
  * @throws What getDbStatus throws, and when the version cannot be read.
  */
 async function getDbStatusInFileBytes(folder) {
   const status = await getDbStatus(folder);
+  if (status === ABSENT) return ABSENT;
   return statusInFileBytes(status, await nonFileEntryBytes());
 }
 
@@ -1085,7 +1135,7 @@ async function dbRevert(folder) {
   } else {
     throw new Error('folder parameter is mandatory');
   }
-  return performRequest('post', apiPath);
+  return request('post', apiPath);
 }
 
 // === DEBUG ===
@@ -2209,7 +2259,7 @@ async function collectSyncthingMetrics() {
                 // cannot flood the log.
                 // eslint-disable-next-line no-await-in-loop
                 const folderErrorsResponse = await getFolderIdErrors(folderId);
-                const fileErrors = folderErrorsResponse.status === 'success' ? (folderErrorsResponse.data?.errors ?? []) : [];
+                const fileErrors = folderErrorsResponse?.errors ?? [];
                 const shown = fileErrors.slice(0, 5);
                 shown.forEach((fileError) => {
                   log.error(`Syncthing folder ${folder.label || folderId}: ${fileError.path}: ${fileError.error}`);

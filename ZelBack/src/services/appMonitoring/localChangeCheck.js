@@ -1,9 +1,9 @@
 const crypto = require('crypto');
 const log = require('../../lib/log');
 const syncthingService = require('../syncthingService');
-const messageHelper = require('../messageHelper');
 const fluxEventBus = require('../utils/fluxEventBus');
 const syncthingFolderWrites = require('./syncthingFolderWrites');
+const { ABSENT } = require('../utils/syncthingConstants');
 
 // Whether a receive-only folder's local changes include the only copy of data another
 // device wrote, decided off the monitor pass.
@@ -180,6 +180,8 @@ async function runCheck(check) {
 async function currentStamp(folderId) {
   try {
     const [status, folder] = await Promise.all([syncthingService.getDbStatus(folderId), syncthingService.getConfigFolders(folderId)]);
+    // A folder syncthing does not hold has no stamp to compare.
+    if (status === ABSENT) return null;
     return Array.isArray(folder?.devices) ? stampOf(status, folder.devices) : null;
   } catch (error) {
     log.warn(`localChangeCheck - ${folderId}: ${error.message}`);
@@ -217,8 +219,7 @@ async function runRevert(job) {
     await fluxEventBus.checkpoint(fluxEventBus.Checkpoint.SYNCTHING_BEFORE_LOCAL_CHANGE_REVERT_SENT, folderId);
     log.warn(`localChangeCheck - ${folderId} is synced but the receive-only folder has local changes (${job.files} files, ${job.directories} directories); reverting to the cluster's version`);
     try {
-      // dataOrThrow: dbRevert answers in-band; without it a failed revert reads as reverted
-      messageHelper.dataOrThrow(await syncthingService.dbRevert(folderId));
+      await syncthingService.dbRevert(folderId);
       // eslint-disable-next-line no-param-reassign
       delete entry.localChangeCheck;
       fluxEventBus.publish('syncthing:localChangesReverted', { folder: folderId, files: job.files, directories: job.directories });

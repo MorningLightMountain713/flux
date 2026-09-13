@@ -136,7 +136,7 @@ async function stopThenReceive(identifier, appId) {
   await appReconciler.setControllerDesiredAndWait(identifier, 'stopped', 'masterSlave standby');
   // Docker unreachable and a state it cannot read both answer running: false, and
   // neither is a stopped container.
-  const actual = await appReconciler.dockerActual(identifier);
+  const actual = await appReconciler.observedContainerState(identifier);
   if (!actual.reachable || actual.indeterminate || actual.running) {
     log.warn(`primaryRole - ${identifier} is not confirmed stopped; its folder keeps sending until it is`);
     return { to: Role.PRIMARY, reason: 'the container is not confirmed stopped' };

@@ -241,6 +241,26 @@ const SHUTDOWN_REFUSAL = Object.freeze({ status: 'error', data: { message: 'this
 const UNMOUNTED_REFUSAL = Object.freeze({ status: 'error', data: { message: 'its volume is not mounted: the folder does not send' } });
 
 /**
+ * A syncthing configuration write, answered in the shape this module's callers
+ * read: syncthingService throws when the write did not happen, and its error
+ * carries `httpStatus` - null when syncthing did not answer at all.
+ * @param {Promise<*>} write
+ * @returns {Promise<{status: string, data: object|null}>}
+ */
+async function written(write) {
+  try {
+    return { status: 'success', data: await write };
+  } catch (error) {
+    return {
+      status: 'error',
+      data: {
+        message: error.message, name: error.name, code: error.code, httpStatus: error.httpStatus,
+      },
+    };
+  }
+}
+
+/**
  * @param {string} folderId
  * @returns {Promise<boolean>} whether the folder's app directory has its volume mounted
  */
@@ -251,7 +271,7 @@ function volumeMounted(folderId) {
 async function patchNow(folderId, fields) {
   if (globalState.shutdownInProgress && fields.paused === false) return SHUTDOWN_REFUSAL;
   if (fields.type === 'sendreceive' && !(await volumeMounted(folderId))) return UNMOUNTED_REFUSAL;
-  const response = await syncthingService.adjustConfigFolders({ method: ConfigMethod.PATCH, config: fields, id: folderId });
+  const response = await written(syncthingService.adjustConfigFolders({ method: ConfigMethod.PATCH, config: fields, id: folderId }));
   if (response.status === 'success' && fields.type) recordType(folderId, fields.type);
   return response;
 }
@@ -274,7 +294,7 @@ async function putFolders(folders) {
   }
   const response = await exclusive(folders.map((folder) => folder.id), async () => {
     if (globalState.shutdownInProgress) return SHUTDOWN_REFUSAL;
-    const put = await syncthingService.adjustConfigFolders({ method: ConfigMethod.PUT, config: folders });
+    const put = await written(syncthingService.adjustConfigFolders({ method: ConfigMethod.PUT, config: folders }));
     if (put.status === 'success') folders.forEach((folder) => recordType(folder.id, folder.type));
     return put;
   });
@@ -302,7 +322,7 @@ async function patchFolder(folderId, fields) {
  */
 function deleteFolder(folderId) {
   return exclusive([folderId], async () => {
-    const response = await syncthingService.adjustConfigFolders({ method: ConfigMethod.DELETE, id: folderId });
+    const response = await written(syncthingService.adjustConfigFolders({ method: ConfigMethod.DELETE, id: folderId }));
     if (response.status === 'success') {
       globalState.promotedFolderIds?.delete(folderId);
       recordedTypes.delete(folderId);

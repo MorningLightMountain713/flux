@@ -2574,7 +2574,7 @@ async function adoptControllerDesired(identifier, state, reason) {
       log.warn(`appReconciler - ${identifier}: not adopting ${state}, the operator lock could not be read: ${error.message}`);
       return;
     }
-    const actual = await dockerActual(identifier);
+    const actual = await observedContainerState(identifier);
     // An unreachable daemon reports the container absent.
     if (!actual.exists || actual.indeterminate) return;
     if (actual.running !== (state === 'running')) return;

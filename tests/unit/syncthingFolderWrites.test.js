@@ -15,6 +15,11 @@ const syncthingFolderWrites = require('../../ZelBack/src/services/appMonitoring/
 // Every app directory here has its volume mounted unless a test says otherwise.
 const mountEveryVolume = () => sinon.stub(volumeService, 'isPathMounted').resolves(true);
 
+
+// syncthingService throws when a write did not happen; its error carries the
+// HTTP status syncthing answered with, null when it did not answer.
+const refused = ({ message = 'refused', code, httpStatus } = {}) => Object.assign(new Error(message), { code, httpStatus });
+
 describe('changeSyncthingFolderType', () => {
   beforeEach(mountEveryVolume);
 
@@ -95,7 +100,7 @@ describe('changeSyncthingFolderType', () => {
   });
 
   describe('a write syncthing did not answer', () => {
-    const unanswered = { status: 'error', data: { code: 'ECONNABORTED', httpStatus: null } };
+    const unanswered = refused({ code: 'ECONNABORTED', httpStatus: null });
     const folderOfType = (type) => [{ id: 'fluxprobe_app', path: `${appsFolder}fluxprobe_app`, type }];
 
     beforeEach(() => {
@@ -106,7 +111,7 @@ describe('changeSyncthingFolderType', () => {
       const read = sinon.stub(syncthingService, 'getConfigFolders');
       read.onFirstCall().resolves(folderOfType('receiveonly'));
       read.resolves(folderOfType('sendreceive'));
-      sinon.stub(syncthingService, 'adjustConfigFolders').resolves(unanswered);
+      sinon.stub(syncthingService, 'adjustConfigFolders').rejects(unanswered);
 
       const changed = await syncthingFolderWrites.changeSyncthingFolderType('fluxprobe_app', 'sendreceive', { settleMs: 1000 });
 
@@ -115,7 +120,7 @@ describe('changeSyncthingFolderType', () => {
 
     it('fails when the type never shows within the wait', async () => {
       sinon.stub(syncthingService, 'getConfigFolders').resolves(folderOfType('receiveonly'));
-      sinon.stub(syncthingService, 'adjustConfigFolders').resolves(unanswered);
+      sinon.stub(syncthingService, 'adjustConfigFolders').rejects(unanswered);
 
       const changed = await syncthingFolderWrites.changeSyncthingFolderType('fluxprobe_app', 'sendreceive', { settleMs: 50 });
 
@@ -124,7 +129,7 @@ describe('changeSyncthingFolderType', () => {
 
     it('fails at once without a wait', async () => {
       const read = sinon.stub(syncthingService, 'getConfigFolders').resolves(folderOfType('receiveonly'));
-      sinon.stub(syncthingService, 'adjustConfigFolders').resolves(unanswered);
+      sinon.stub(syncthingService, 'adjustConfigFolders').rejects(unanswered);
 
       const changed = await syncthingFolderWrites.changeSyncthingFolderType('fluxprobe_app', 'sendreceive');
 
@@ -134,7 +139,7 @@ describe('changeSyncthingFolderType', () => {
 
     it('a write syncthing refused fails at once, even with a wait', async () => {
       const read = sinon.stub(syncthingService, 'getConfigFolders').resolves(folderOfType('receiveonly'));
-      sinon.stub(syncthingService, 'adjustConfigFolders').resolves({ status: 'error', data: { httpStatus: 400 } });
+      sinon.stub(syncthingService, 'adjustConfigFolders').rejects(refused({ httpStatus: 400 }));
 
       const changed = await syncthingFolderWrites.changeSyncthingFolderType('fluxprobe_app', 'sendreceive', { settleMs: 1000 });
 
@@ -232,7 +237,7 @@ describe('syncthing folder writes', () => {
         { id: 'fluxprobe_app', path: `${appsFolder}fluxprobe_app`, type: applied ? 'sendreceive' : 'receiveonly' },
       ]);
       const adjust = sinon.stub(syncthingService, 'adjustConfigFolders');
-      adjust.onFirstCall().resolves({ status: 'error', data: { code: 'ECONNABORTED', httpStatus: null } });
+      adjust.onFirstCall().rejects(refused({ code: 'ECONNABORTED', httpStatus: null }));
       adjust.resolves({ status: 'success' });
 
       const change = syncthingFolderWrites.changeSyncthingFolderType('fluxprobe_app', 'sendreceive', { settleMs: 1000 });
@@ -482,7 +487,7 @@ describe('syncthing folder writes', () => {
       const folders = sinon.stub(syncthingService, 'getConfigFolders');
       folders.onFirstCall().resolves(folderOf('receiveonly'));
       folders.resolves(folderOf('sendreceive'));
-      sinon.stub(syncthingService, 'adjustConfigFolders').resolves({ status: 'error', data: { httpStatus: null } });
+      sinon.stub(syncthingService, 'adjustConfigFolders').rejects(refused({ httpStatus: null }));
       const scan = sinon.stub(syncthingService, 'scanFolder').resolves({ status: 'success' });
 
       expect(await syncthingFolderWrites.changeSyncthingFolderType('fluxprobe_app', 'sendreceive', { settleMs: 5000 })).to.equal(true);
@@ -572,7 +577,7 @@ describe('syncthing folder writes', () => {
       const publish = sinon.stub(fluxEventBus, 'publish');
       const adjust = sinon.stub(syncthingService, 'adjustConfigFolders');
       adjust.onFirstCall().resolves({ status: 'success' });
-      adjust.onSecondCall().resolves({ status: 'error', data: { httpStatus: 500 } });
+      adjust.onSecondCall().rejects(refused({ httpStatus: 500 }));
       const mark = syncthingFolderWrites.mark();
 
       await syncthingFolderWrites.patchFolder('fluxprobe_app', { devices: [] });
@@ -754,7 +759,7 @@ describe('pauseAllFolders', () => {
   it('pauses every folder syncthing holds, and names those it could not', async () => {
     sinon.stub(syncthingService, 'getConfigFolders').resolves([{ id: 'fluxa_one' }, { id: 'fluxb_two' }, { id: 'fluxc_three' }]);
     const adjust = sinon.stub(syncthingService, 'adjustConfigFolders').resolves({ status: 'success' });
-    adjust.withArgs({ method: 'patch', config: { paused: true }, id: 'fluxb_two' }).resolves({ status: 'error', data: { message: 'refused' } });
+    adjust.withArgs({ method: 'patch', config: { paused: true }, id: 'fluxb_two' }).rejects(refused({ message: 'refused' }));
     adjust.withArgs({ method: 'patch', config: { paused: true }, id: 'fluxc_three' }).rejects(new Error('no answer'));
 
     const result = await syncthingFolderWrites.pauseAllFolders();

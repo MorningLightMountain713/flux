@@ -11,6 +11,7 @@ const proxyquire = require('proxyquire').noCallThru();
 // singleton, so the grant plane's answer is set on the real object.
 const mastershipGrantGate = require('../../ZelBack/src/services/appLifecycle/mastershipGrantGate');
 const log = require('../../ZelBack/src/lib/log');
+const { ABSENT } = require('../../ZelBack/src/services/utils/syncthingConstants');
 
 // Create mocks for dependencies
 const syncthingServiceMock = {
@@ -141,7 +142,7 @@ describe('syncthingFolderStateMachine tests', () => {
     syncthingServiceMock.getConfigDevices.resolves([]);
     globalStateMock.syncthingDevicesIDCache.clear();
     syncthingServiceMock.dbRevert.reset();
-    syncthingServiceMock.dbRevert.resolves({ status: 'success' });
+    syncthingServiceMock.dbRevert.resolves({});
     syncthingServiceMock.systemPause.reset();
     syncthingServiceMock.systemPause.resolves({ status: 'success' });
     syncthingServiceMock.systemResume.reset();
@@ -266,10 +267,7 @@ describe('syncthingFolderStateMachine tests', () => {
     // these to an operator as a fact about their data, so they must not arrive
     // here as the same thing.
     it('calls a 404 absent - syncthing answered, and the folder is not there', async () => {
-      syncthingServiceMock.getDbStatus.rejects(syncthingFailure(
-        'Request failed with status code 404',
-        { code: 'ERR_BAD_REQUEST', httpStatus: 404 },
-      ));
+      syncthingServiceMock.getDbStatus.resolves(ABSENT);
 
       const result = await stateMachine.probeFolderSyncCompletion('test-folder');
 
@@ -464,13 +462,12 @@ describe('syncthingFolderStateMachine tests', () => {
         expect(result.cache.grantDemoted).to.be.true;
       });
 
-      // dbRevert reports a failure IN-BAND, so a refused revert must reach the
-      // caller through the value. The demotion stands either way - it is what
-      // stops the divergent copy reaching a peer - and the local changes keep
+      // The demotion stands whether or not the revert lands - it is what stops
+      // the divergent copy reaching a peer - and the local changes keep
       // promotion blocked until a later pass reverts them.
       it('says so when the revert is refused, and still demotes', async () => {
         const logWarn = sinon.stub(log, 'warn');
-        syncthingServiceMock.dbRevert.resolves({ status: 'error', data: { message: 'syncthing api down' } });
+        syncthingServiceMock.dbRevert.rejects(new Error('syncthing api down'));
 
         const result = await stateMachine.manageFolderSyncState(mockParams);
 
@@ -1301,8 +1298,7 @@ describe('syncthingFolderStateMachine tests', () => {
         receiveOnlyChangedFiles: 2,
         receiveOnlyChangedBytes: 555,
       });
-      // dbRevert answers an envelope and never rejects
-      syncthingServiceMock.dbRevert.resolves({ status: 'error', data: { message: 'syncthing api down' } });
+      syncthingServiceMock.dbRevert.rejects(new Error('syncthing api down'));
 
       const result = await stateMachine.manageFolderSyncState(mockParams);
 

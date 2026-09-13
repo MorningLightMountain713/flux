@@ -48,8 +48,8 @@ const sameLines = (left, right) => left.length === right.length
  * line that stopped round-tripping would show as this folder being set on every
  * pass, in the log below.
  *
- * Every syncthing call returns its outcome in-band and never throws, so status is
- * checked rather than caught.
+ * A syncthing call that did not happen throws; that is reported here and dropped,
+ * and the next pass converges.
  *
  * Call only for a folder syncthing already knows (the caller checks); on an
  * unknown folder the API would answer with an error and nothing would converge.
@@ -66,21 +66,19 @@ const sameLines = (left, right) => left.length === right.length
  * @param {string[]} unsyncedSubdirs - volume-root names the component declared with ml:
  */
 async function ensureStignoreCovers(folderId, unsyncedSubdirs = []) {
-  const read = await syncthingService.getFolderIgnores(folderId);
-  if (read.status !== 'success') {
-    log.error(`ensureStignoreCovers - could not read ignores for ${folderId}: ${read.data?.message ?? 'unknown error'}`);
-    return;
-  }
-  const desired = syncthingIgnoreLines(unsyncedSubdirs);
-  const current = Array.isArray(read.data?.ignore) ? read.data.ignore : [];
-  if (sameLines(desired, current)) return;
+  try {
+    const read = await syncthingService.getFolderIgnores(folderId);
+    const desired = syncthingIgnoreLines(unsyncedSubdirs);
+    const current = Array.isArray(read?.ignore) ? read.ignore : [];
+    if (sameLines(desired, current)) return;
 
-  const written = await syncthingService.setFolderIgnores(folderId, desired);
-  if (written.status !== 'success') {
-    log.error(`ensureStignoreCovers - could not set ignores for ${folderId}: ${written.data?.message ?? 'unknown error'}`);
-    return;
+    await syncthingService.setFolderIgnores(folderId, desired);
+    log.info(`ensureStignoreCovers - ${folderId} ignores set to ${desired.join(', ')}`);
+  } catch (error) {
+    // Reported and dropped: the ignore policy converges on the next pass, and
+    // one folder's unreadable ignores must not end the caller's sweep.
+    log.error(`ensureStignoreCovers - could not converge ignores for ${folderId}: ${error.message}`);
   }
-  log.info(`ensureStignoreCovers - ${folderId} ignores set to ${desired.join(', ')}`);
 }
 
 module.exports = {

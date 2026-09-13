@@ -43,12 +43,10 @@ const syncthingServiceMock = {
   getDeviceId: sinon.stub(),
   getConfigFolders: sinon.stub(),
   getConfigDevices: sinon.stub(),
-  // The WRITE half answers an envelope and never rejects - adjustConfig* goes
-  // through performRequest, where the read half goes through `request` and
-  // throws. These answer the envelope, so a call site reading one as a throw is
-  // visible from here.
-  adjustConfigDevices: sinon.stub().resolves({ status: 'success', data: {} }),
-  adjustConfigFolders: sinon.stub().resolves({ status: 'success', data: {} }),
+  // These answer rows, as the service does, so a call site reading one as an
+  // envelope is visible from here.
+  adjustConfigDevices: sinon.stub().resolves({}),
+  adjustConfigFolders: sinon.stub().resolves({}),
   getFolderIdErrors: sinon.stub(),
   systemRestart: sinon.stub().resolves(),
   getDbStatus: sinon.stub(),
@@ -284,9 +282,9 @@ describe('syncthingMonitor tests', () => {
     syncthingServiceMock.getConfigFolders.reset();
     syncthingServiceMock.getConfigDevices.reset();
     syncthingServiceMock.adjustConfigDevices.reset();
-    syncthingServiceMock.adjustConfigDevices.resolves({ status: 'success', data: {} });
+    syncthingServiceMock.adjustConfigDevices.resolves({});
     syncthingServiceMock.adjustConfigFolders.reset();
-    syncthingServiceMock.adjustConfigFolders.resolves({ status: 'success', data: {} });
+    syncthingServiceMock.adjustConfigFolders.resolves({});
     syncthingServiceMock.getFolderIdErrors.reset();
     syncthingServiceMock.systemRestart.reset();
     syncthingServiceMock.getDbStatus.reset();
@@ -335,10 +333,7 @@ describe('syncthingMonitor tests', () => {
     // Default stub behaviors
     syncthingServiceMock.getConfigFolders.resolves([]);
     syncthingServiceMock.getConfigDevices.resolves([]);
-    syncthingServiceMock.getConfigRestartRequired.resolves({
-      status: 'success',
-      data: { requiresRestart: false },
-    });
+    syncthingServiceMock.getConfigRestartRequired.resolves({ requiresRestart: false });
     syncthingHealthMonitorMock.monitorFolderHealth.resolves({
       actions: [],
       summary: { healthy: 0, warnings: 0, issues: 0 },
@@ -927,7 +922,7 @@ describe('syncthingMonitor tests', () => {
       syncthingFolderStateMachineMock.verifySendReceiveFolderSafety.resolves({ isSafe: false, isMounted: false, reason: 'unmounted_with_content' });
       volumeServiceMock.ensureAppVolumeMounted.resolves({ mounted: false, reason: 'volume_file_missing' });
       syncthingServiceMock.getConfigFolders.resolves([{ id: syncFolderId, type: 'sendreceive' }]);
-      syncthingServiceMock.adjustConfigFolders.resolves({ status: 'error', data: { code: 'ECONNREFUSED', message: 'connect ECONNREFUSED 127.0.0.1:8384' } });
+      syncthingServiceMock.adjustConfigFolders.rejects(Object.assign(new Error('connect ECONNREFUSED 127.0.0.1:8384'), { code: 'ECONNREFUSED' }));
 
       monitorControl = syncthingMonitor.syncthingApps(mockState, mockGetGlobalStateFn);
       await clock.tickAsync(100);
@@ -1225,14 +1220,10 @@ describe('syncthingMonitor tests', () => {
       sinon.assert.neverCalledWith(syncthingServiceMock.adjustConfigFolders, { method: 'patch', config: { type: 'receiveonly' }, id: syncFolderId });
     });
 
-    // THE TWO HALVES OF syncthingService ANSWER DIFFERENTLY.
-    // getConfigFolders/getConfigDevices go through `request`: rows, or a throw.
-    // adjustConfigFolders/adjustConfigDevices go through `performRequest`, which
-    // turns every axios failure into an ENVELOPE and NEVER rejects - so a
-    // `.catch()` on one is dead code and a bare `await` discards the answer.
-    // These state what a refusal looks like from outside.
+    // syncthingService answers rows or throws. These state what a refusal
+    // looks like from outside: reported, and never reported as applied.
     describe('a configuration write syncthing refused', () => {
-      const refused = (message) => ({ status: 'error', data: { code: 'ECONNREFUSED', message } });
+      const refused = (message) => Object.assign(new Error(message), { code: 'ECONNREFUSED' });
 
       // A folder left sendreceive over a vanished mount keeps broadcasting its
       // missing disk state to healthy peers, so nothing may report it as
@@ -1243,7 +1234,7 @@ describe('syncthingMonitor tests', () => {
         syncthingFolderStateMachineMock.verifySendReceiveFolderSafety.resolves({ isSafe: false, isMounted: false, reason: 'unmounted_with_content' });
         volumeServiceMock.ensureAppVolumeMounted.resolves({ mounted: false, reason: 'volume_file_missing' });
         syncthingServiceMock.getConfigFolders.resolves([{ id: syncFolderId, type: 'sendreceive' }]);
-        syncthingServiceMock.adjustConfigFolders.resolves(refused('connect ECONNREFUSED 127.0.0.1:8384'));
+        syncthingServiceMock.adjustConfigFolders.rejects(refused('connect ECONNREFUSED 127.0.0.1:8384'));
 
         monitorControl = syncthingMonitor.syncthingApps(mockState, mockGetGlobalStateFn);
         await clock.tickAsync(100);
@@ -1268,7 +1259,7 @@ describe('syncthingMonitor tests', () => {
         syncthingFolderStateMachineMock.verifySendReceiveFolderSafety.resolves({ isSafe: false, isMounted: false, reason: 'unmounted_with_content' });
         volumeServiceMock.ensureAppVolumeMounted.resolves({ mounted: false, reason: 'volume_file_missing' });
         syncthingServiceMock.getConfigFolders.resolves([{ id: syncFolderId, type: 'sendreceive' }]);
-        syncthingServiceMock.adjustConfigFolders.resolves(refused('connect ECONNREFUSED 127.0.0.1:8384'));
+        syncthingServiceMock.adjustConfigFolders.rejects(refused('connect ECONNREFUSED 127.0.0.1:8384'));
 
         monitorControl = syncthingMonitor.syncthingApps(mockState, mockGetGlobalStateFn);
         await clock.tickAsync(100);
@@ -1296,7 +1287,7 @@ describe('syncthingMonitor tests', () => {
         fluxNetworkHelperMock.getLocalSocketAddress.resolves('10.0.0.1:16127');
         // syncthing does not have this folder yet, so the pass has one to write
         syncthingMonitorHelpersMock.folderNeedsUpdate.returns(true);
-        syncthingServiceMock.adjustConfigFolders.resolves(refused('connect ECONNREFUSED 127.0.0.1:8384'));
+        syncthingServiceMock.adjustConfigFolders.rejects(refused('connect ECONNREFUSED 127.0.0.1:8384'));
 
         monitorControl = syncthingMonitor.syncthingApps(mockState, mockGetGlobalStateFn);
         await clock.tickAsync(100);
@@ -1340,7 +1331,7 @@ describe('syncthingMonitor tests', () => {
         syncthingServiceMock.getConfigDevices.resolves([]);
         syncthingServiceMock.getDeviceId.resolves('DEVICE-ID');
         fluxNetworkHelperMock.getLocalSocketAddress.resolves('10.0.0.1:16127');
-        syncthingServiceMock.adjustConfigFolders.resolves(refused('connect ECONNREFUSED 127.0.0.1:8384'));
+        syncthingServiceMock.adjustConfigFolders.rejects(refused('connect ECONNREFUSED 127.0.0.1:8384'));
 
         monitorControl = syncthingMonitor.syncthingApps(mockState, mockGetGlobalStateFn);
         await clock.tickAsync(100);
