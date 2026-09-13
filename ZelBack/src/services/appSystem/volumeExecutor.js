@@ -10,6 +10,7 @@ const networkStateService = require('../networkStateService');
 const { bareIp, extractPort } = require('../utils/socketAddressUtils');
 const fluxNetworkHelper = require('../fluxNetworkHelper');
 const jobRegistry = require('../utils/jobRegistry');
+const fileOperationStore = require('./fileOperationStore');
 const fluxEventBus = require('../utils/fluxEventBus');
 const log = require('../../lib/log');
 const { Writable, pipeline } = require('node:stream');
@@ -1566,7 +1567,7 @@ async function run(session, argv, options = {}) {
     onProgress = null, isCanceled = null, status = 'Working...',
     publish = null, mkdirStaging = false, maxBytes = 0, maxFileBytes = 0, dataOnly = false,
     noReplace = false, merge = false, onBytes = null, workingDir = null, input = null,
-    slotHeld = false,
+    slotHeld = false, jobId = null,
   } = options;
 
   if (!(session instanceof VolumeSession)) {
@@ -1753,6 +1754,19 @@ async function run(session, argv, options = {}) {
     );
     registeredContainerId = container.id;
     liveContainerIds.add(registeredContainerId);
+    // The same fact as liveContainerIds, written where a restart cannot lose
+    // it. Without it, boot recovery cannot tell this container from debris and
+    // force-removes an operation that is still running.
+    // Awaited so the record exists before the container is started, and caught
+    // so it can never fail the operation: the store logs its own failure, and
+    // losing the row costs the adoption and nothing else.
+    await fileOperationStore.recordOperation({
+      containerId: registeredContainerId,
+      jobId,
+      stagingRoot: registeredStaging,
+      identifier: session.identifier,
+      kind: status,
+    }).catch(() => {});
 
     // Opened BEFORE start, and on next-exit rather than the default. The
     // default condition is "not-running", which a created container already
@@ -1946,7 +1960,13 @@ async function run(session, argv, options = {}) {
     // while the slot released below lets another operation start on the same
     // app. A container that has already exited reaps itself.
     if (container && !settled) stopContainer();
-    if (registeredContainerId) liveContainerIds.delete(registeredContainerId);
+    if (registeredContainerId) {
+      liveContainerIds.delete(registeredContainerId);
+      // Not awaited: the operation is over either way, and a slow mongo must
+      // not hold the slot. A row left behind is read at the next boot, finds no
+      // container, and is dropped there.
+      fileOperationStore.forgetOperation(registeredContainerId);
+    }
     // Deregistered by the reclaim once it has run, not here: a sweep running
     // while the reclaim waits out the container must still skip this path.
     if (registeredStaging) reclaimStaging(registeredStaging, exited);
@@ -2107,6 +2127,60 @@ async function reclaimStaging(hostPath, exited) {
  *
  * @returns {Promise<number>} how many were removed
  */
+/**
+ * Take over a file-operation container a PREVIOUS process started.
+ *
+ * The container is detached from whoever created it, so a FluxOS restart does
+ * not interrupt the work: flux-op is still copying, and it publishes its own
+ * result by exchanging staging with the destination. What the restart lost is
+ * the knowledge that this container is legitimate, which is the only thing
+ * standing between it and the reaper.
+ *
+ * So this re-registers it as live - reap and sweep skip it again - re-opens the
+ * caller's job under its ORIGINAL id so a poll that was answered "no such job"
+ * starts answering again, and waits on the exit to settle that job.
+ *
+ * Progress detail does not come back. The status lines the previous process
+ * wrote went with it, and the byte figure is measured from the staging
+ * directory by a ticker this does not restart. The job reports that it is
+ * running and then how it ended, which is the part a caller cannot recover for
+ * itself.
+ *
+ * @param {object} record - a fileOperationStore row
+ * @returns {Promise<void>}
+ */
+async function adoptOperation(record) {
+  const { containerId, stagingRoot, jobId } = record;
+
+  liveContainerIds.add(containerId);
+  if (stagingRoot) liveStagingPaths.add(stagingRoot);
+
+  const handle = jobId ? jobRegistry.start({ kind: record.kind || 'fileoperation', jobId }) : null;
+  if (handle) jobRegistry.progress(jobId, 'Resumed after a FluxOS restart; progress detail is not carried over');
+
+  const container = dockerService.getDockerContainerHandle(containerId);
+  // next-exit, not the default: the default condition is "not-running", which a
+  // container that is still working does not satisfy - but one that exited
+  // between the listing above and here does, and asking for its next exit would
+  // then wait forever. wait() on an already-exited container answers its code.
+  container.wait()
+    .then((result) => {
+      const code = result?.StatusCode ?? 0;
+      if (!jobId) return;
+      if (code === 0) jobRegistry.succeed(jobId);
+      else jobRegistry.fail(jobId, new Error(`file operation exited ${code}`));
+    })
+    .catch((error) => {
+      if (jobId) jobRegistry.fail(jobId, error);
+      log.warn(`volumeExecutor - adopted container ${containerId} could not be waited on: ${error.message}`);
+    })
+    .finally(() => {
+      liveContainerIds.delete(containerId);
+      if (stagingRoot) liveStagingPaths.delete(stagingRoot);
+      fileOperationStore.forgetOperation(containerId);
+    });
+}
+
 async function reapOrphanedContainers() {
   let containers;
   try {
@@ -2241,6 +2315,7 @@ module.exports = {
   assertCapacity,
   reapOrphanedContainers,
   sweepStagingDirectories,
+  adoptOperation,
   acquireSlot,
   EXECUTOR_LABELS,
 };

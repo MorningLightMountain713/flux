@@ -663,6 +663,10 @@ function startOperation(res, volume, meta, work, { inlineDeadlineMs = 0 } = {}) 
   const running = Promise.resolve()
     .then(() => work({
       status: meta.status,
+      // Carried into the executor so the operation's durable record names the
+      // job a caller is polling, and a restart can re-open that job rather than
+      // answering "no such job" for work that is still running.
+      jobId: handle.jobId,
       onProgress: (message) => jobRegistry.progress(handle.jobId, message),
       isCanceled: () => jobRegistry.isCanceled(handle.jobId),
       ...(meta.trackBytes ? { onBytes: (bytes) => { bytesDone = bytes; } } : {}),

@@ -36,6 +36,7 @@ describe('volumeExecutor tests', () => {
   const INDEX_ID = 'sha256:9999999999999999999999999999999999999999999999999999999999999999';
 
   let dockerServiceStub;
+  let fileOperationStoreStub;
   let deviceHelperStub;
   let volumeServiceStub;
   let serviceHelperStub;
@@ -161,6 +162,7 @@ describe('volumeExecutor tests', () => {
       createContainer: sinon.stub().resolves(containerStub),
       dockerListContainers: sinon.stub().resolves([]),
       appDockerForceRemove: sinon.stub().resolves(),
+      getDockerContainerHandle: sinon.stub().callsFake(() => containerStub),
       // Present by default, so the tests that are not about fetching it do not
       // have to say so. A stub missing either of these resolves to undefined at
       // the CALL rather than at load, and the failure lands inside a try.
@@ -170,6 +172,12 @@ describe('volumeExecutor tests', () => {
       // What this node's own serve path produces: an archive addressed by id,
       // which declares no names at all.
       archiveNames: sinon.stub().resolves([]),
+    };
+
+    fileOperationStoreStub = {
+      recordOperation: sinon.stub().resolves(),
+      forgetOperation: sinon.stub().resolves(),
+      listOperations: sinon.stub().resolves([]),
     };
 
     serviceHelperStub = {
@@ -244,6 +252,7 @@ describe('volumeExecutor tests', () => {
       'node:fs/promises': fsStub,
       'node:fs': nodeFsStub,
       '../dockerService': dockerServiceStub,
+      './fileOperationStore': fileOperationStoreStub,
       '../deviceHelper': deviceHelperStub,
       '../serviceHelper': serviceHelperStub,
       '../networkStateService': networkStateStub,
@@ -1535,6 +1544,95 @@ describe('volumeExecutor tests', () => {
 
       await expect(volumeExecutor.run(vol, ['true'])).to.be.rejectedWith('no longer mounted');
       expect(dockerServiceStub.createContainer.called).to.equal(false);
+    });
+  });
+
+  describe('an operation that must survive a FluxOS restart', () => {
+    // The container is detached from this process. A restart does not stop it -
+    // flux-op keeps copying and publishes its own result - but it wipes
+    // liveContainerIds, and the reaper force-removes every file-operation
+    // container it does not recognise. This record is the only thing that
+    // tells the next process which ones are legitimate.
+    it('records the container and its staging directory while it runs', async () => {
+      const vol = await openSession();
+      await volumeExecutor.run(vol, ['true'], { jobId: 'op_42' });
+
+      sinon.assert.calledOnce(fileOperationStoreStub.recordOperation);
+      const [doc] = fileOperationStoreStub.recordOperation.firstCall.args;
+      expect(doc.containerId).to.equal('container-1');
+      expect(doc.jobId, 'the job the caller is polling').to.equal('op_42');
+      expect(doc.identifier).to.equal(vol.identifier);
+    });
+
+    it('forgets it once the operation has settled', async () => {
+      const vol = await openSession();
+      await volumeExecutor.run(vol, ['true']);
+
+      sinon.assert.calledOnceWithExactly(fileOperationStoreStub.forgetOperation, 'container-1');
+    });
+
+    // Fail-open: a record that cannot be written costs the adoption and nothing
+    // else. Refusing the operation because mongo said no would be worse than
+    // the problem it prevents.
+    it('runs anyway when the record cannot be written', async () => {
+      fileOperationStoreStub.recordOperation.rejects(new Error('db down'));
+      const vol = await openSession();
+
+      await expect(volumeExecutor.run(vol, ['true'])).to.not.be.rejected;
+    });
+  });
+
+  describe('adopting an operation a previous process started', () => {
+    const record = {
+      containerId: 'container-1', jobId: 'op_7', stagingRoot: `${MOUNT}/.flux-op-7`, identifier: 'app', kind: 'Copying...',
+    };
+
+    it('re-opens the caller\'s job under its original id', async () => {
+      const jobRegistry = require('../../ZelBack/src/services/utils/jobRegistry');
+      jobRegistry.reset();
+      containerStub.wait.returns(new Promise(() => {}));
+
+      await volumeExecutor.adoptOperation(record);
+
+      const job = jobRegistry.get('op_7');
+      expect(job, 'a poll that was answered "no such job" answers again').to.not.equal(null);
+      expect(job.status).to.equal('Running');
+    });
+
+    it('settles the job on the container it adopted exiting', async () => {
+      const jobRegistry = require('../../ZelBack/src/services/utils/jobRegistry');
+      jobRegistry.reset();
+      containerStub.wait.resolves({ StatusCode: 0 });
+
+      await volumeExecutor.adoptOperation(record);
+      await new Promise((resolve) => { setImmediate(resolve); });
+
+      expect(jobRegistry.get('op_7').status).to.equal('Succeeded');
+    });
+
+    it('fails the job when the adopted container exits non-zero', async () => {
+      const jobRegistry = require('../../ZelBack/src/services/utils/jobRegistry');
+      jobRegistry.reset();
+      containerStub.wait.resolves({ StatusCode: 2 });
+
+      await volumeExecutor.adoptOperation(record);
+      await new Promise((resolve) => { setImmediate(resolve); });
+
+      expect(jobRegistry.get('op_7').status).to.equal('Failed');
+    });
+
+    // The whole point of adopting: the reaper must stop seeing it as debris.
+    it('marks it live, so the reap that follows leaves it alone', async () => {
+      containerStub.wait.returns(new Promise(() => {}));
+      dockerServiceStub.dockerListContainers.resolves([
+        { Id: 'container-1', Labels: { 'flux.utility.role': 'fileop' } },
+      ]);
+
+      await volumeExecutor.adoptOperation(record);
+      const reaped = await volumeExecutor.reapOrphanedContainers();
+
+      expect(reaped, 'an adopted container is not debris').to.equal(0);
+      sinon.assert.notCalled(dockerServiceStub.appDockerForceRemove);
     });
   });
 
