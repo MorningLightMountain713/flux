@@ -1056,6 +1056,45 @@ describe('syncthingMonitor tests', () => {
     // The other side, and what keeps the assertion above from being about any
     // folderless component: one that declares no sync has no folder to be
     // missing, so its absence from syncthing says nothing at all.
+    // Development resolves this through the 404 its unconditional patch gets
+    // back; the same question is answered here by absence from knownFolderIds.
+    // Left standing, the flag is re-read every pass forever, pendingFolderIds
+    // never empties, and the node sweeps every mount on every cycle - so
+    // "does not sweep mounts in steady state" can never hold for it again.
+    it('resolves the flag of a non-syncing component syncthing holds no folder for', async () => {
+      const plainFolderId = `flux${plainDeployment.getComponent('web').identifier}`;
+      deploymentProviderMock.listInstalledDeployments.resolves([plainDeployment]);
+      syncthingEventsConsumerMock.mountVerifyPendingIds.returns([plainFolderId]);
+      syncthingFolderStateMachineMock.verifyFolderMountSafety.resolves({ isSafe: false, isMounted: false, reason: 'unmounted_with_content' });
+      volumeServiceMock.ensureAppVolumeMounted.resolves({ mounted: false, reason: 'volume_file_missing' });
+      syncthingServiceMock.getConfigFolders.resolves([]);
+
+      monitorControl = syncthingMonitor.syncthingApps(mockState, mockGetGlobalStateFn);
+      await clock.tickAsync(100);
+
+      expect(plainDeployment.getComponent('web').hasSyncthing(), 'fixture must declare no sync').to.be.false;
+      sinon.assert.calledWith(syncthingEventsConsumerMock.resolveMountVerify, plainFolderId);
+    });
+
+    // The other half, and without it the resolution above could be unconditional:
+    // a component that DOES sync and whose folder syncthing has lost is a
+    // contradiction, not an answer - its flag stands and its container is held.
+    it('keeps the flag of a syncing component whose folder syncthing has lost', async () => {
+      const syncFolderIdLocal = `flux${syncDeployment.getComponent('web').identifier}`;
+      deploymentProviderMock.listInstalledDeployments.resolves([syncDeployment]);
+      syncthingEventsConsumerMock.mountVerifyPendingIds.returns([syncFolderIdLocal]);
+      syncthingFolderStateMachineMock.verifyFolderMountSafety.resolves({ isSafe: false, isMounted: false, reason: 'unmounted_with_content' });
+      syncthingFolderStateMachineMock.verifySendReceiveFolderSafety.resolves({ isSafe: false, isMounted: false, reason: 'unmounted_with_content' });
+      volumeServiceMock.ensureAppVolumeMounted.resolves({ mounted: false, reason: 'volume_file_missing' });
+      syncthingServiceMock.getConfigFolders.resolves([]);
+
+      monitorControl = syncthingMonitor.syncthingApps(mockState, mockGetGlobalStateFn);
+      await clock.tickAsync(100);
+
+      sinon.assert.neverCalledWith(syncthingEventsConsumerMock.resolveMountVerify, syncFolderIdLocal);
+      sinon.assert.calledWith(appReconcilerMock.setControllerDesired, sinon.match.any, 'stopped', sinon.match(/mount safety block/));
+    });
+
     it('leaves a component that declares no sync alone when syncthing has no folder for it', async () => {
       const plainFolderId = `flux${plainDeployment.getComponent('web').identifier}`;
       deploymentProviderMock.listInstalledDeployments.resolves([plainDeployment]);

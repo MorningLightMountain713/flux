@@ -698,7 +698,14 @@ async function processOneBlock(blockHeight, isInsightExplorer, loopOptions) {
         if (blockDataVerbose.height % (config.get('fluxapps.reconstructAppMessagesHashPeriod') * speedMultiplier) === 0) {
           try {
             const reconstructResult = await registryManager.reconstructAppMessagesHashCollection();
-            log.info(`Validation of App Messages Hash Collection — ${reconstructResult}`);
+            log.info(`Validation of App Messages Hash Collection — ${reconstructResult.changed} corrected`);
+            // THE PRODUCER. The orchestrator subscribes to this and brings its
+            // next hash retry forward to the current block; without it the
+            // audit repaired rows that nothing then went looking for until
+            // their own scheduled height came round again.
+            if (reconstructResult.changed > 0) {
+              blockEmitter.emit('hashesChanged');
+            }
           } catch (error) {
             log.error(error);
           }

@@ -1,6 +1,8 @@
 'use strict';
 
 const sinon = require('sinon');
+const config = require('config');
+const registryManager = require('../../ZelBack/src/services/appDatabase/registryManager');
 const daemonSubscriptionService = require('../../ZelBack/src/services/daemonService/daemonSubscriptionService');
 const proxyquire = require('proxyquire');
 const explorerService = require('../../ZelBack/src/services/explorerService');
@@ -465,6 +467,70 @@ describe('explorerService tests', () => {
         { $set: { generalScannedHeight: 900_025 } },
         { upsert: true },
       );
+    });
+  });
+
+  // THE PRODUCER. appSyncOrchestrator subscribes to hashesChanged and brings its
+  // next hash retry forward to the current block. Without the emit the audit
+  // repaired rows that nothing then went looking for until their own scheduled
+  // height came round again - a listener with no producer, which is how it was.
+  describe('the reconstruct audit announces what it corrected', () => {
+    // The audit runs on a block that is BOTH past epochstart and a multiple of
+    // the period, and only when the block is the tip - which is what carries
+    // everything gated below it.
+    const PERIOD = config.get('fluxapps.reconstructAppMessagesHashPeriod');
+    const EPOCH = config.get('fluxapps.epochstart');
+    const HEIGHT = Math.ceil(EPOCH / PERIOD) * PERIOD;
+    let reconstructStub;
+    let heard;
+
+    beforeEach(async () => {
+      sinon.useFakeTimers({ toFake: ['setTimeout'], shouldAdvanceTime: true });
+      sinon.stub(dbHelper, 'findOneInDatabase');
+      sinon.stub(dbHelper, 'insertManyToDatabase');
+      sinon.stub(dbHelper, 'updateOneInDatabase').returns(true);
+      sinon.stub(dbHelper, 'collectionStats').returns({ size: 10_000, count: 15, avgObjSize: 1111 });
+      sinon.stub(appJanitor, 'sweepRegistryExpiry').returns(true);
+      sinon.stub(specReconciler, 'requestFullConvergence');
+      sinon.stub(portManager, 'restorePortsSupport');
+      await dbHelper.initiateDB();
+      dbHelper.databaseConnection();
+      sinon.stub(daemonServiceMiscRpcs, 'isDaemonSynced').returns({ data: { synced: true, height: HEIGHT } });
+      sinon.stub(daemonServiceBlockchainRpcs, 'getBlock').returns({
+        status: 'success',
+        data: { height: HEIGHT, tx: [], confirmations: 1 },
+      });
+      reconstructStub = sinon.stub(registryManager, 'reconstructAppMessagesHashCollection');
+      globalState.dbReady = true;
+
+      heard = 0;
+      explorerService.getBlockEmitter().on('hashesChanged', () => { heard += 1; });
+    });
+
+    afterEach(() => {
+      globalState.dbReady = false;
+      explorerService.getBlockEmitter().removeAllListeners('hashesChanged');
+      sinon.restore();
+    });
+
+    it('announces a corrected hash, so the retry comes forward', async () => {
+      reconstructStub.resolves({ changed: 3 });
+
+      await explorerService.processOneBlock(HEIGHT, true, { atTip: true });
+
+      sinon.assert.calledOnce(reconstructStub);
+      expect(heard, 'the orchestrator was never told').to.equal(1);
+    });
+
+    // Announcing an audit that corrected nothing would bring the retry forward
+    // on every pass, which is the schedule the retry heights exist to set.
+    it('says nothing when the audit corrected nothing', async () => {
+      reconstructStub.resolves({ changed: 0 });
+
+      await explorerService.processOneBlock(HEIGHT, true, { atTip: true });
+
+      sinon.assert.calledOnce(reconstructStub);
+      expect(heard).to.equal(0);
     });
   });
 

@@ -761,11 +761,23 @@ async function syncthingAppsCore(state, getGlobalStateFn) {
           // that syncs, is a contradiction rather than an answer. Nothing is
           // recreated from here - the level loop rebuilds the folder once the
           // mount is healthy - but the mount is unsafe either way, so the
-          // container is held now and the flag stands for the next pass. A
-          // component that declares no sync has no folder to be missing.
+          // container is held now and the flag stands for the next pass.
           if (!known && syncing) {
             log.error(`syncthingAppsCore - SAFETY BLOCK: ${appId} is over an unsafe mount (${reason}) and syncthing holds no folder for it though the component syncs; holding the container, flag stands`);
             appReconciler.setControllerDesired(identifier, 'stopped', `mount safety block: ${reason}`);
+          }
+          // A component that declares no sync has no folder to be missing, and
+          // syncthing holds none for it: there is nothing here for the mount
+          // question to be answered ABOUT, this pass or any later one. Left
+          // standing the flag is re-read forever, the pending set only grows,
+          // and deploymentsMatchingFolderIds keeps handing this deployment back
+          // - so the node never reaches steady state and sweeps every mount on
+          // every cycle. The unsafe mount itself is still a fault; it is the
+          // reconciler's, and holding a container this monitor has no folder
+          // for is not this block's call.
+          if (!known && !syncing) {
+            log.info(`syncthingAppsCore - resolving mount-verify flag for ${appId}: the component declares no sync and syncthing holds no folder for it`);
+            syncthingEventsConsumer.resolveMountVerify(appId);
           }
           // eslint-disable-next-line no-continue
           continue;

@@ -47,6 +47,56 @@ const { socketAddressesMatch } = require('../utils/socketAddressUtils');
 // nothing else.
 const GiveUpReason = Object.freeze({ SURPLUS: 'SURPLUS', EVACUATION: 'EVACUATION', NONE: 'NONE' });
 
+// App name -> when this node FIRST refused to hand it back, unbroken.
+//
+// A NODE STUCK HERE IS INVISIBLE WITHOUT IT. The refusal is one info line, so a
+// node whose safety gate has refused the same app for a week reads exactly like
+// one that had nothing to hand back - both are quiet. The app is over-served
+// rather than down, so nothing alerts; the node simply never finishes draining
+// and nobody finds out.
+//
+// A timestamp, so the line says HOW LONG. That is the question being asked, and
+// it needs no threshold to answer: every line carries it, so one grep separates
+// a node on its first refusal from one on its four hundredth.
+//
+// NO REMOVAL EVER FOLLOWS, however long it lasts, and that is deliberate. Every
+// reason the gate refuses is a reason removing would be wrong: either the peers
+// really are incomplete, so this copy is one of the few that is not, or this
+// node cannot see them, which is not evidence about them. Deleting after a
+// timeout does not fix a wedged folder, it loses the data more slowly.
+//
+// In memory: a restart forgets that the node was stuck, and the duration starts
+// again from the next refusal. Worth knowing when reading it, and not worth a
+// collection - what it answers is "is this node stuck right now", which the
+// next pass re-establishes.
+const refusedSince = new Map();
+
+/**
+ * Say that this pass refused to hand `appName` back, and for how long that has
+ * now been true.
+ *
+ * @param {string} appName
+ * @param {string} detail what to say
+ */
+function noteRefusal(appName, detail) {
+  const since = refusedSince.get(appName) ?? Date.now();
+  refusedSince.set(appName, since);
+  const minutes = Math.round((Date.now() - since) / 60_000);
+  log.info(`giveUp - ${appName} ${detail} (refused for ${minutes}m)`);
+}
+
+/**
+ * Forget an app that is no longer being refused, so the duration is an UNBROKEN
+ * stretch rather than the time since the first refusal ever. Called where the
+ * refusal stops mattering: the app was handed back, or this pass no longer
+ * wants to.
+ *
+ * @param {string} appName
+ */
+function clearRefusals(appName) {
+  refusedSince.delete(appName);
+}
+
 /**
  * Whether this node is running a component right now, by container identifier.
  * A local fact, needing neither FDM nor the election.
@@ -258,7 +308,15 @@ async function checkAndGiveUpAnApp(deps = {}) {
       code: decision.code,
       detail: decision.detail,
     });
-    if (!decision.giveUp) continue;
+    if (!decision.giveUp) {
+      // No longer a candidate, so any streak ends here. Without this the count
+      // is a lifetime total across intermittent candidacy, and the escalation
+      // fires on an app that has been refused twelve times over a month rather
+      // than one that is stuck.
+      clearRefusals(appName);
+      // eslint-disable-next-line no-continue
+      continue;
+    }
 
     // The SAFETY half, asked separately and independently: both must agree.
     // eslint-disable-next-line no-await-in-loop
@@ -297,13 +355,14 @@ async function checkAndGiveUpAnApp(deps = {}) {
           // the standby coming up against the election's intent.
           appReconciler.setControllerDesired(identifier, 'stopped', 'giveUp:standDown');
         }
-        log.info(`giveUp - ${appName}: standing down ${safety.standDown.join(', ')} before handing it back`);
+        noteRefusal(appName, `standing down ${safety.standDown.join(', ')} before handing it back`);
       } else {
-        log.info(`giveUp - ${appName} not handed back yet: ${safety.reason}`);
+        noteRefusal(appName, `not handed back yet: ${safety.reason}`);
       }
       continue;
     }
 
+    clearRefusals(appName);
     log.warn(`REMOVAL REASON: ${decision.reason} - ${appName} (${decision.detail}; ${safety.reason})`);
     // eslint-disable-next-line no-await-in-loop
     const result = await appUninstaller.uninstallApplication(appName, { broadcastRemoval: true });
@@ -321,6 +380,8 @@ async function checkAndGiveUpAnApp(deps = {}) {
 }
 
 module.exports = {
+  noteRefusal,
+  clearRefusals,
   checkAndGiveUpAnApp, surplusVerdict, evacuationVerdict, writerIdentifier,
   isComponentRunningLocally, GiveUpReason,
 };
