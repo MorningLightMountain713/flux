@@ -113,9 +113,22 @@ function recordRegistrations() {
       return null;
     }));
 
+    // app.use(path, router) MOUNTS a sub-surface; it is not a route with a
+    // handler. Its own routes are that router's, and are guarded where they
+    // live - /v2's in routesV2.test.js. Recorded rather than skipped so the
+    // assertions below can prove each one really is a mount of a module this
+    // test can name, and the exemption cannot hide a route.
+    const mounts = node.callee.property.name === 'use'
+      && chain.length === 1
+      && chain[0].type === 'Identifier'
+      && modules.has(chain[0].name)
+      ? modules.get(chain[0].name)
+      : null;
+
     registrations.push({
       method: node.callee.property.name,
       path: node.arguments[0].value,
+      mounts,
       cached: chain.some((arg) => arg.type === 'CallExpression' && arg.callee.name === 'cache'),
       wrapped: handler.type === 'CallExpression' && handler.callee.type === 'Identifier'
         && handler.callee.name === 'asyncRoute',
@@ -404,6 +417,7 @@ describe('route wiring', () => {
     // silently exempt from the assertion that matters.
     it('resolves every route to exactly one handler', () => {
       const unresolved = registrations
+        .filter((route) => !route.mounts)
         .filter((route) => route.handlers.length !== 1)
         .map((route) => `${route.method} ${route.path} (${route.handlers.length} handlers)`);
 
@@ -412,6 +426,7 @@ describe('route wiring', () => {
 
     it('reads every module a route hands off to', () => {
       const unreadable = [...new Set(registrations
+        .filter((route) => !route.mounts)
         .filter((route) => route.handlers.length === 1)
         .map((route) => route.handlers[0].module)
         .filter((modulePath) => checkersIn(modulePath) === null))];
@@ -461,10 +476,26 @@ describe('route wiring', () => {
 
     it('answer the caller, rather than taking the node down with them', () => {
       const dropped = registrations
+        .filter((route) => !route.mounts)
         .filter((route) => !route.wrapped)
         .map((route) => `${route.method} ${route.path}`);
 
       expect(dropped, 'these discard the promise their handler returns').to.deep.equal([]);
+    });
+
+    // The exemption above is only honest while a mount really is one. A router
+    // owns its own error handling - asyncRoute wraps a handler, not a surface -
+    // so what has to be true is that each mount names a module, and that the
+    // one mount this file makes is the v2 surface.
+    it('mounts only routers, and /v2 is one of them', () => {
+      const mounted = registrations.filter((route) => route.mounts);
+      expect(mounted.length, 'a mount was expected; if none is registered the exemption is dead code').to.be.greaterThan(0);
+      mounted.forEach((route) => {
+        expect(route.method, `${route.path} is exempted as a mount but registered with ${route.method}`).to.equal('use');
+      });
+      const v2 = mounted.find((route) => route.path === '/v2');
+      expect(v2, 'the v2 surface is not mounted').to.not.equal(undefined);
+      expect(v2.mounts).to.match(/routesV2/);
     });
   });
   // The daemon RPCs a node publishes, as a whole list rather than a set of

@@ -65,8 +65,14 @@ const enterpriseNodesService = require('./services/enterpriseNodesService');
 const backupRestoreService = require('./services/backupRestoreService');
 const arcaneAuthService = require('./services/arcaneAuthService');
 const appTamperingDetectionService = require('./services/appTamperingDetectionService');
+const routesV2 = require('./routesV2');
 
 module.exports = (app) => {
+  // Mounted FIRST, and it terminates its own surface with a 404, so nothing
+  // under /v2 can fall through into the frozen v1 routes below and answer in
+  // the wrong envelope. Everything below this line is v1 and stays as it is.
+  app.use('/v2', routesV2);
+
   // GET PUBLIC methods
   app.get('/daemon/help/:command?', cache('1 hour'), asyncRoute((req, res) => { // accept both help/command and ?command=getinfo. If ommited, default help will be displayed. Other calls works in similar way
     return daemonServiceControlRpcs.help(req, res);

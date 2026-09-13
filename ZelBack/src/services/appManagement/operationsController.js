@@ -142,6 +142,31 @@ function readCursor(req) {
  * @param {import('express').Request} req
  * @param {import('express').Response} res
  */
+/**
+ * An operation's view for a caller, or null when there is nothing they may see.
+ *
+ * No req and no res: this is what BOTH surfaces read an operation through, and
+ * each formats the answer in its own envelope. Unknown, expired and not-yours
+ * are deliberately one answer - a jobId must not tell a caller whether someone
+ * else has an operation running.
+ *
+ * @param {object} params
+ * @param {string} params.jobId
+ * @param {string|null} [params.callerId] the FluxID the caller is authenticated as
+ * @param {number|null} [params.sinceSeq] progress cursor
+ * @returns {Promise<object|null>}
+ */
+async function readOperation({ jobId, callerId = null, sinceSeq = null }) {
+  const view = jobRegistry.get(jobId, callerId, { sinceSeq });
+  if (!view) return null;
+  // The problem-detail `instance` is the same status resource under another
+  // name, so it is absolute for the same reason.
+  if (view.error && view.error.instance) {
+    return { ...view, error: { ...view.error, instance: await absoluteStatusUrl(view.error.instance) } };
+  }
+  return view;
+}
+
 async function getOperation(req, res) {
   try {
     const jobId = req.params.jobId || (req.query && req.query.jobId);
@@ -149,9 +174,9 @@ async function getOperation(req, res) {
       return res.status(400).json(messageHelper.createErrorMessage('Missing jobId'));
     }
 
-    const view = jobRegistry.get(jobId, await callerFluxId(req), { sinceSeq: readCursor(req) });
-    // Unknown, expired and not-yours are one answer: a jobId must not tell a
-    // caller whether someone else has an operation running.
+    const view = await readOperation({
+      jobId, callerId: await callerFluxId(req), sinceSeq: readCursor(req),
+    });
     if (!view) {
       return res.status(404).json(messageHelper.createErrorMessage('Operation not found'));
     }
@@ -165,11 +190,6 @@ async function getOperation(req, res) {
       res.setHeader('Retry-After', String(jobRegistry.retryAfterSeconds()));
     }
 
-    // The problem-detail `instance` is the same status resource under another
-    // name, so it is absolute for the same reason.
-    if (view.error && view.error.instance) {
-      view.error = { ...view.error, instance: await absoluteStatusUrl(view.error.instance) };
-    }
     return res.json(messageHelper.createDataMessage(view));
   } catch (error) {
     log.error(`operationsController getOperation: ${error.message}`);
@@ -209,6 +229,8 @@ async function cancelOperation(req, res) {
 }
 
 module.exports = {
+  readOperation,
+  callerFluxId,
   completed,
   absoluteStatusUrl,
   accepted,
