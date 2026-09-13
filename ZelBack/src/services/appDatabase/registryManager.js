@@ -1174,36 +1174,82 @@ async function reindexGlobalAppsInformation() {
 }
 
 /**
- * Reconstruct app messages hash collection by validating hash records against actual messages
- * @returns {Promise<string>} Success message
+ * Reconstruct app messages hash collection by validating hash records against
+ * actual messages.
+ *
+ * A REPAIRED HASH IS RE-SOUGHT, not merely re-labelled. Marking a row
+ * `message: false` says this node does not hold the message; leaving the retry
+ * fields alone leaves it scheduled at whatever height it last failed at, so the
+ * audit that found the gap does not cause anyone to go and close it. Resetting
+ * `syncAttempts` and pointing `nextRetryHeight` back at the row's own origin is
+ * what makes the next sync pass pick it up.
+ *
+ * Only rows whose state is WRONG are written, so the count is a count of
+ * corrections rather than of documents examined - which is what the caller
+ * decides whether to announce on.
+ *
+ * @returns {Promise<{changed: number}>} how many rows were corrected
  */
 async function reconstructAppMessagesHashCollection() {
   try {
     const db = dbHelper.databaseConnection();
     const databaseApps = db.db(config.get('database.appsglobal.database'));
     const databaseDaemon = db.db(config.get('database.daemon.database'));
+    const syncStatus = daemonServiceMiscRpcs.isDaemonSynced();
+    const currentHeight = syncStatus.data.height || 0;
     const query = {};
     const projection = { projection: { _id: 0 } };
 
     const permanentMessages = await dbHelper.findInDatabase(databaseApps, globalAppsMessages, query, projection);
     const appHashes = await dbHelper.findInDatabase(databaseDaemon, appsHashesCollection, query, projection);
+    // A set, not a find() per row: the scan was quadratic in the number of
+    // hashes, and both collections are whole-chain.
+    const permanentHashes = new Set(permanentMessages.map((message) => message.hash));
 
+    const ops = [];
     // eslint-disable-next-line no-restricted-syntax
     for (const appHash of appHashes) {
-      const options = {};
-      const queryUpdate = {
-        hash: appHash.hash,
-        txid: appHash.txid,
-      };
+      const filter = { hash: appHash.hash, txid: appHash.txid };
+      const hasPermanent = permanentHashes.has(appHash.hash);
+      // Back to where the row itself began, so a re-sought hash is asked for
+      // from its own origin rather than from wherever the chain is now.
+      const retryFrom = appHash.retryFromHeight ?? appHash.height;
 
-      const permanentMessageFound = permanentMessages.find((message) => message.hash === appHash.hash);
-
-      const update = { $set: { message: !!permanentMessageFound, messageNotFound: false } };
-      // eslint-disable-next-line no-await-in-loop
-      await dbHelper.updateOneInDatabase(databaseDaemon, appsHashesCollection, queryUpdate, update, options);
+      if (hasPermanent && (!appHash.message || appHash.messageNotFound)) {
+        ops.push({
+          updateOne: {
+            filter,
+            update: {
+              $set: {
+                message: true, messageNotFound: false, syncAttempts: 0, nextRetryHeight: retryFrom, retryFromHeight: retryFrom,
+              },
+            },
+          },
+        });
+      } else if (!hasPermanent && appHash.message) {
+        // The row claims a message this node does not hold. Sought again from
+        // the current height: the message is missing NOW, whatever the row's
+        // own origin says.
+        ops.push({
+          updateOne: {
+            filter,
+            update: {
+              $set: {
+                message: false, messageNotFound: false, syncAttempts: 0, nextRetryHeight: currentHeight, retryFromHeight: currentHeight,
+              },
+            },
+          },
+        });
+      }
     }
 
-    return 'Reconstruct success';
+    let changed = 0;
+    if (ops.length > 0) {
+      const result = await databaseDaemon.collection(appsHashesCollection).bulkWrite(ops, { ordered: false });
+      changed += result.modifiedCount;
+    }
+
+    return { changed };
   } catch (error) {
     log.error(error);
     throw error;

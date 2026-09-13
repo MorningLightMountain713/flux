@@ -3,6 +3,7 @@
 const chai = require('chai');
 const chaiAsPromised = require('chai-as-promised');
 const sinon = require('sinon');
+const log = require('../../ZelBack/src/lib/log');
 
 const fluxEventBus = require('../../ZelBack/src/services/utils/fluxEventBus');
 const operationRegistry = require('../../ZelBack/src/services/utils/operationRegistry');
@@ -117,6 +118,62 @@ describe('appGiveUp - handing an app back', () => {
       const verdicts = eventsOf('giveUp:safety');
       expect(verdicts[0]).to.include({ appName: 'appone', safe: false, code: 'NO_SYNCED_PEER' });
       expect(uninstall.called, 'an unsafe app is not removed').to.be.false;
+    });
+  });
+
+  // A NODE STUCK HERE IS INVISIBLE WITHOUT THIS. The refusal is one info line,
+  // so a node that has refused the same app for a week reads exactly like one
+  // that had nothing to hand back. The duration is what separates them, and it
+  // is on every line rather than behind a threshold.
+  describe('a refusal says how long it has been refusing', () => {
+    let clock;
+
+    beforeEach(() => {
+      safety.resolves({ safe: false, code: 'PEER_INCOMPLETE', reason: 'no peer holds a complete copy' });
+      appGiveUp.clearRefusals('appone');
+      appGiveUp.clearRefusals('apptwo');
+      clock = sinon.useFakeTimers({ now: Date.now(), toFake: ['Date'] });
+    });
+
+    afterEach(() => clock.restore());
+
+    it('says nothing has elapsed on the first refusal', async () => {
+      const info = sinon.stub(log, 'info');
+
+      await appGiveUp.checkAndGiveUpAnApp(deps());
+
+      const line = info.getCalls().map((c) => c.args[0]).find((l) => /appone not handed back yet/.test(l));
+      expect(line, 'the refusal was not reported').to.not.equal(undefined);
+      expect(line).to.include('(refused for 0m)');
+    });
+
+    it('reports the whole unbroken stretch, not the time since the last pass', async () => {
+      await appGiveUp.checkAndGiveUpAnApp(deps());
+      clock.tick(3 * 60 * 60 * 1000);
+      const info = sinon.stub(log, 'info');
+
+      await appGiveUp.checkAndGiveUpAnApp(deps());
+
+      const line = info.getCalls().map((c) => c.args[0]).find((l) => /appone not handed back yet/.test(l));
+      expect(line, 'a node stuck for hours must not read like one on its first pass').to.include('(refused for 180m)');
+    });
+
+    // The duration is an UNBROKEN stretch. Measured from the first refusal ever,
+    // a node that refused once last month and is fine now reads as stuck.
+    it('starts again when the app stops being a candidate', async () => {
+      await appGiveUp.checkAndGiveUpAnApp(deps());
+      clock.tick(3 * 60 * 60 * 1000);
+
+      // Nothing to hand back this pass, which ends the stretch.
+      mayEvacuate.returns(notYet);
+      await appGiveUp.checkAndGiveUpAnApp(deps());
+      mayEvacuate.returns(ok);
+
+      const info = sinon.stub(log, 'info');
+      await appGiveUp.checkAndGiveUpAnApp(deps());
+
+      const line = info.getCalls().map((c) => c.args[0]).find((l) => /appone not handed back yet/.test(l));
+      expect(line).to.include('(refused for 0m)');
     });
   });
 

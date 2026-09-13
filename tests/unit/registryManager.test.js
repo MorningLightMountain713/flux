@@ -154,6 +154,73 @@ describe('registryManager tests', () => {
 
   // appLocation reads the app state event log, not the materialized locations
   // collection - so these seed a node's running-announcement.
+  // The audit that repairs a hash row must also cause someone to go and fetch
+  // what it now says is missing. Marking the row and leaving its retry schedule
+  // alone means nothing re-seeks it until the height it last failed at.
+  describe('reconstructAppMessagesHashCollection tests', () => {
+    const hashes = config.database.daemon.collections.appsHashes;
+    const messages = config.database.appsglobal.collections.appsMessages;
+
+    beforeEach(async () => {
+      const db = dbHelper.databaseConnection();
+      await db.db(config.database.daemon.database).collection(hashes).deleteMany({});
+      await db.db(config.database.appsglobal.database).collection(messages).deleteMany({});
+      sinon.stub(daemonServiceMiscRpcs, 'isDaemonSynced').returns({ status: 'success', data: { height: 5000, synced: true } });
+    });
+
+    it('re-seeks a row it marked as holding the message, from the row own origin', async () => {
+      const db = dbHelper.databaseConnection();
+      await db.db(config.database.daemon.database).collection(hashes).insertOne({
+        hash: 'h1', txid: 't1', height: 900, message: false, messageNotFound: true, syncAttempts: 7, nextRetryHeight: 4000, retryFromHeight: 900,
+      });
+      await db.db(config.database.appsglobal.database).collection(messages).insertOne({ hash: 'h1' });
+
+      const result = await registryManager.reconstructAppMessagesHashCollection();
+
+      expect(result.changed).to.equal(1);
+      const row = await db.db(config.database.daemon.database).collection(hashes).findOne({ hash: 'h1' });
+      expect(row.message, 'the message is held after all').to.equal(true);
+      expect(row.messageNotFound).to.equal(false);
+      expect(row.syncAttempts, 'the attempts that failed do not count against the repaired row').to.equal(0);
+      expect(row.nextRetryHeight, 'sought from its own origin, not from where the chain is now').to.equal(900);
+    });
+
+    it('re-seeks a row whose message this node does not hold, from the current height', async () => {
+      const db = dbHelper.databaseConnection();
+      await db.db(config.database.daemon.database).collection(hashes).insertOne({
+        hash: 'h2', txid: 't2', height: 900, message: true, messageNotFound: false, syncAttempts: 3, nextRetryHeight: 4000, retryFromHeight: 900,
+      });
+
+      const result = await registryManager.reconstructAppMessagesHashCollection();
+
+      expect(result.changed).to.equal(1);
+      const row = await db.db(config.database.daemon.database).collection(hashes).findOne({ hash: 'h2' });
+      expect(row.message).to.equal(false);
+      expect(row.syncAttempts).to.equal(0);
+      expect(row.nextRetryHeight, 'missing NOW, whatever the row own origin says').to.equal(5000);
+    });
+
+    // The count is what the caller announces on, so it has to count
+    // CORRECTIONS. Counting documents examined would fire the recheck on every
+    // audit, whether or not anything was wrong.
+    it('counts corrections, not rows examined', async () => {
+      const db = dbHelper.databaseConnection();
+      await db.db(config.database.daemon.database).collection(hashes).insertMany([
+        {
+          hash: 'ok1', txid: 't1', height: 900, message: true, messageNotFound: false,
+        },
+        {
+          hash: 'ok2', txid: 't2', height: 901, message: false, messageNotFound: false,
+        },
+      ]);
+      await db.db(config.database.appsglobal.database).collection(messages).insertOne({ hash: 'ok1' });
+
+      const result = await registryManager.reconstructAppMessagesHashCollection();
+
+      expect(result.changed, 'both rows already say what they should').to.equal(0);
+    });
+  });
+
   describe('appLocation tests', () => {
     beforeEach(async () => {
       const collection = config.database.appsglobal.collections.appStateEvents;

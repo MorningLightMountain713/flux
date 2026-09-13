@@ -268,12 +268,16 @@ async function convergeApp(installed, registrySpec, ctx) {
         detail: safety.reason,
       });
       if (safety.safe) {
+        appGiveUp.clearRefusals(installed.name);
         log.warn(`REMOVAL REASON: SURPLUS - ${installed.name} (${verdict.detail}; ${safety.reason})`);
         if (installed.hash && globalState.trySpawningGlobalAppCache) globalState.trySpawningGlobalAppCache.delete(installed.hash);
         await appUninstaller.uninstallApplication(installed.name, { broadcastRemoval: true });
         return 'removed';
       }
-      log.info(`specReconciler - ${installed.name} surplus not trimmed: ${safety.reason}`);
+      // The same counter the give-up pass keeps, because it is the same
+      // question refused for the same reasons - a node stuck on one is stuck on
+      // both, and two separate streaks would each escalate at half the rate.
+      appGiveUp.noteRefusal(installed.name, `surplus not trimmed: ${safety.reason}`);
     }
   }
 
