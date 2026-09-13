@@ -763,19 +763,16 @@ async function changeSyncthingFolderType(folderId, folderType) {
       return true;
     }
 
-    // Update folder type using PATCH
-    const updateResponse = await syncthingService.adjustConfigFolders({
+    // Update folder type using PATCH. It answers or throws, and the catch
+    // below is the only place a refusal is reported from.
+    await syncthingService.adjustConfigFolders({
       method: ConfigMethod.PATCH,
       config: { type: folderType },
       id: folder.id,
     });
 
-    if (updateResponse.status === 'success') {
-      log.debug(`Successfully changed syncthing folder ${folderId} to ${folderType} mode`);
-      return true;
-    }
-    log.error(`Failed to change syncthing folder type: ${JSON.stringify(updateResponse)}`);
-    return false;
+    log.debug(`Successfully changed syncthing folder ${folderId} to ${folderType} mode`);
+    return true;
   } catch (error) {
     log.error(`Error changing syncthing folder type for ${folderId}: ${error.message}`);
     return false;

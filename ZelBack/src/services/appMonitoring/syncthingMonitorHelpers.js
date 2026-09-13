@@ -8,7 +8,6 @@ const log = require('../../lib/log');
 const serviceHelper = require('../serviceHelper');
 const dockerService = require('../dockerService');
 const syncthingService = require('../syncthingService');
-const messageHelper = require('../messageHelper');
 const { ConfigMethod } = require('../utils/syncthingConstants');
 const volumeService = require('../utils/volumeService');
 const { SYNCTHING_IGNORE_LINES } = require('../appSystem/volumeReservedNames');
@@ -304,32 +303,30 @@ function folderNeedsUpdate(existingFolder, newFolder) {
  * is built FROM the current one and only duplicate copies of our own lines drop
  * out. Nothing is posted when the folder already reads that way, so a converged
  * folder is neither rewritten nor rescanned - which is what makes this safe on
- * every monitor pass. Every syncthing call returns its outcome in-band and never
- * throws, so status is checked rather than caught.
+ * every monitor pass.
  *
  * Call only for a folder syncthing already knows (the caller checks); on an
- * unknown folder the API would answer with an error and nothing would converge.
+ * unknown folder the read throws and the converge is abandoned rather than run
+ * against an ignore list this node never read.
  *
  * @param {string} folderId - the syncthing folder id (the app identifier)
  */
 async function ensureStignoreCovers(folderId) {
-  const read = await syncthingService.getFolderIgnores(folderId);
-  if (read.status !== 'success') {
-    log.error(`ensureStignoreCovers - could not read ignores for ${folderId}: ${read.data?.message ?? 'unknown error'}`);
-    return;
+  try {
+    const read = await syncthingService.getFolderIgnores(folderId);
+    const current = Array.isArray(read?.ignore) ? read.ignore : [];
+    const rest = current.filter((line) => !SYNCTHING_IGNORE_LINES.includes(line));
+    const desired = [...SYNCTHING_IGNORE_LINES, ...rest];
+    const converged = desired.length === current.length
+      && desired.every((line, index) => line === current[index]);
+    if (converged) return;
+    await syncthingService.setFolderIgnores(folderId, desired);
+    log.info(`ensureStignoreCovers - ${folderId} ignores now lead with ${SYNCTHING_IGNORE_LINES.join(', ')}`);
+  } catch (error) {
+    // Reported and dropped: the ignore policy converges on the next pass, and
+    // one folder's unreadable ignores must not end the caller's sweep.
+    log.error(`ensureStignoreCovers - could not converge ignores for ${folderId}: ${error.message}`);
   }
-  const current = Array.isArray(read.data?.ignore) ? read.data.ignore : [];
-  const rest = current.filter((line) => !SYNCTHING_IGNORE_LINES.includes(line));
-  const desired = [...SYNCTHING_IGNORE_LINES, ...rest];
-  const converged = desired.length === current.length
-    && desired.every((line, index) => line === current[index]);
-  if (converged) return;
-  const written = await syncthingService.setFolderIgnores(folderId, desired);
-  if (written.status !== 'success') {
-    log.error(`ensureStignoreCovers - could not set ignores for ${folderId}: ${written.data?.message ?? 'unknown error'}`);
-    return;
-  }
-  log.info(`ensureStignoreCovers - ${folderId} ignores now lead with ${SYNCTHING_IGNORE_LINES.join(', ')}`);
 }
 
 const fluxDirPath = process.env.FLUXOS_PATH || path.join(process.env.HOME, 'zelflux');
@@ -373,21 +370,25 @@ async function removeSyncthingFolder(appComponentName, report) {
         folderId = syncthingFolder.id;
       }
       if (folderId) {
-        // adjustConfigFolders answers an ENVELOPE and never rejects - it goes
-        // through performRequest, where the read above goes through `request`
-        // and throws. Only a removal syncthing accepted is reported as one.
-        // eslint-disable-next-line no-await-in-loop
-        const removal = await syncthingService.adjustConfigFolders({ method: ConfigMethod.DELETE, id: folderId });
-        if (removal.status !== 'success') {
-          log.error(`removeSyncthingFolder - failed to remove folder ${folderId}: ${removal.data?.message || 'unknown error'}`);
+        // Only a removal syncthing accepted is reported as one. A delete is
+        // idempotent, so a folder already gone answers rather than throws.
+        let removed = true;
+        try {
+          // eslint-disable-next-line no-await-in-loop
+          await syncthingService.adjustConfigFolders({ method: ConfigMethod.DELETE, id: folderId });
+        } catch (error) {
+          log.error(`removeSyncthingFolder - failed to remove folder ${folderId}: ${error.message}`);
           emitFolderStatus(report, { status: `Syncthing folder ${syncthingFolder.path} could not be removed` });
+          removed = false;
+        }
+        if (!removed) {
           folderId = null;
           // eslint-disable-next-line no-continue
           continue;
         }
         // eslint-disable-next-line no-await-in-loop
         const restartRequired = await syncthingService.getConfigRestartRequired();
-        if (restartRequired.status === 'success' && restartRequired.data.requiresRestart === true) {
+        if (restartRequired?.requiresRestart === true) {
           log.info('Syncthing restart required, restarting...');
           // eslint-disable-next-line no-await-in-loop
           await syncthingService.systemRestart();
@@ -412,8 +413,7 @@ async function removeSyncthingFolder(appComponentName, report) {
  */
 async function requestFolderScan(appComponentName) {
   try {
-    // dbScan answers in-band, so the catch below needs dataOrThrow to reach.
-    messageHelper.dataOrThrow(await syncthingService.dbScan(dockerService.getAppIdentifier(appComponentName)));
+    await syncthingService.dbScan(dockerService.getAppIdentifier(appComponentName));
   } catch (error) {
     log.warn(`requestFolderScan: syncthing scan request for ${appComponentName} failed - ${error.message ?? error}`);
   }

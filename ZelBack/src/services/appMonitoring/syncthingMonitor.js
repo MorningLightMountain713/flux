@@ -9,8 +9,7 @@ const operationRegistry = require('../utils/operationRegistry');
 const appCaches = require('../utils/appCaches');
 const fluxNetworkHelper = require('../fluxNetworkHelper');
 const syncthingService = require('../syncthingService');
-const messageHelper = require('../messageHelper');
-const { ConfigMethod } = require('../utils/syncthingConstants');
+const { ConfigMethod, ABSENT } = require('../utils/syncthingConstants');
 const globalState = require('../utils/globalState');
 const fluxEventBus = require('../utils/fluxEventBus');
 const deploymentProvider = require('../appRuntime/deploymentProvider');
@@ -61,31 +60,26 @@ const appsFolder = `${appsFolderPath}/`;
 /**
  * Whether syncthing applied a configuration WRITE, and a loud line when it did not.
  *
- * THE TWO HALVES OF syncthingService ANSWER DIFFERENTLY. The reads -
- * getConfigFolders, getConfigDevices - go through `request` and answer rows or
- * throw. The writes - adjustConfigFolders, adjustConfigDevices - go through
- * `performRequest`, which turns every axios failure into an ENVELOPE and never
- * rejects, so a `.catch()` on one is dead code and a bare `await` discards the
- * answer. Every write in this file goes through here.
+ * syncthingService answers ONE WAY: rows, or a throw. The envelope is a wire
+ * shape that an Api handler puts back on, and nothing above that line sees one.
  *
  * This is the report-and-continue reading, for a write whose failure must not
  * end the pass - a per-app safety action, or one folder of a parallel sweep.
- * A write whose failure invalidates everything below it goes through
- * messageHelper.dataOrThrow instead and leaves through the outer catch.
+ * A write whose failure invalidates everything below it is awaited directly and
+ * leaves through the outer catch.
  *
- * A throw is handled as well as an envelope: a caller that must not itself fail
- * should not depend on which of the two arrives.
- *
- * @param {Promise<{status: string, data: object}>} write - an adjustConfig* call in flight
+ * @param {Promise<*>} write - an adjustConfig* call in flight
  * @param {string} what - what was being applied, for the log line
  * @returns {Promise<boolean>} true only when syncthing accepted it
  */
 async function syncthingApplied(write, what) {
-  const response = await write.catch((error) => ({ status: 'error', data: { message: error.message } }));
-  if (response && response.status === 'success') return true;
-  const reason = (response && response.data && response.data.message) || 'unknown error';
-  log.error(`syncthingAppsCore - ${what} FAILED: ${reason}`);
-  return false;
+  try {
+    await write;
+    return true;
+  } catch (error) {
+    log.error(`syncthingAppsCore - ${what} FAILED: ${error.message || 'unknown error'}`);
+    return false;
+  }
 }
 
 /**
@@ -514,7 +508,12 @@ async function logSyncState(foldersConfiguration) {
   // Get sync status for all folders in parallel
   const syncStatusPromises = foldersConfiguration.map(async (folder) => {
     try {
-      const { globalBytes = 0, inSyncBytes = 0, state: syncState } = await syncthingService.getDbStatus(folder.id);
+      const answer = await syncthingService.getDbStatus(folder.id);
+      // Syncthing holds no such folder. Destructuring the answer anyway would
+      // read every field as undefined and log it as 100% synced.
+      if (answer === ABSENT) return { id: folder.id, type: folder.type, error: 'no such folder' };
+
+      const { globalBytes = 0, inSyncBytes = 0, state: syncState } = answer;
       const syncPercentage = globalBytes > 0 ? (inSyncBytes / globalBytes) * 100 : 100;
 
       return {
@@ -1049,9 +1048,7 @@ async function syncthingAppsCore(state, getGlobalStateFn) {
     // configuration syncthing does not hold, so it leaves through the outer
     // catch and the level loop reassembles next pass.
     if (devicesConfiguration.length > 0) {
-      messageHelper.dataOrThrow(
-        await syncthingService.adjustConfigDevices({ method: ConfigMethod.PUT, config: devicesConfiguration }),
-      );
+      await syncthingService.adjustConfigDevices({ method: ConfigMethod.PUT, config: devicesConfiguration });
     }
     // Inert in production - the bus is a no-op unless the harness enables it -
     // and the only way anything outside can tell a pass that reached the folder
@@ -1063,9 +1060,7 @@ async function syncthingAppsCore(state, getGlobalStateFn) {
     });
 
     if (newFoldersConfiguration.length > 0) {
-      messageHelper.dataOrThrow(
-        await syncthingService.adjustConfigFolders({ method: ConfigMethod.PUT, config: newFoldersConfiguration }),
-      );
+      await syncthingService.adjustConfigFolders({ method: ConfigMethod.PUT, config: newFoldersConfiguration });
       // Reconciled in BOTH directions the moment the write lands, not left to
       // the next pass. The published set is what a peer reads before promoting a
       // folder of its own, and a promotion applied on the line above is absent
@@ -1089,7 +1084,7 @@ async function syncthingAppsCore(state, getGlobalStateFn) {
       foldersConfiguration.map(async (folder) => {
         try {
           const folderError = await syncthingService.getFolderIdErrors(folder.id);
-          if (folderError?.status === 'success' && folderError.data.errors?.length > 0) {
+          if (folderError?.errors?.length > 0) {
             return { folder, error: folderError };
           }
         } catch (error) {
@@ -1145,7 +1140,7 @@ async function syncthingAppsCore(state, getGlobalStateFn) {
 
     // Check if Syncthing restart is needed
     const restartRequired = await syncthingService.getConfigRestartRequired();
-    if (restartRequired?.status === 'success' && restartRequired.data.requiresRestart === true) {
+    if (restartRequired?.requiresRestart === true) {
       log.info('syncthingAppsCore - New configuration applied. Syncthing restart required, restarting...');
       await syncthingService.systemRestart();
     }

@@ -7,11 +7,11 @@ const log = require('../../lib/log');
 const dockerService = require('../dockerService');
 const appReconciler = require('./appReconciler');
 const appUninstaller = require('../appLifecycle/appUninstaller');
-const messageHelper = require('../messageHelper');
 const syncthingService = require('../syncthingService');
 const serviceHelper = require('../serviceHelper');
 const appCaches = require('../utils/appCaches');
 const { appsFolder } = require('../utils/appConstants');
+const { ABSENT } = require('../utils/syncthingConstants');
 const appTamperingDetectionService = require('../appTamperingDetectionService');
 const mastershipGrantGate = require('../appLifecycle/mastershipGrantGate');
 const { socketAddressesMatch, extractIp } = require('../utils/socketAddressUtils');
@@ -366,9 +366,9 @@ async function fixAppdataPermissions(appId) {
  * is a false statement about their data at the moment they are trying to protect
  * it.
  *
- * Only an HTTP status proves syncthing replied at all, and performRequest keeps
- * it in the error message, so that is what separates the two. Anything that is
- * not a plain 404 - a transport failure, a 500, an unreadable api key - is
+ * Only syncthing's own 404 proves it replied at all, and getDbStatus answers
+ * ABSENT for exactly that, so the two arrive as different things. Everything
+ * else - a transport failure, a 500, an unreadable api key - throws, and is
  * unknown rather than absent, because none of them are the folder telling us
  * anything.
  *
@@ -377,12 +377,19 @@ async function fixAppdataPermissions(appId) {
  */
 async function probeFolderSyncCompletion(folderId) {
   try {
+    const answer = await syncthingService.getDbStatus(folderId);
+    // Syncthing replied, and what it said is that it holds no such folder.
+    if (answer === ABSENT) {
+      log.warn(`No syncthing folder ${folderId}`);
+      return { status: null, reason: 'absent' };
+    }
+
     const {
       globalBytes = 0, inSyncBytes = 0, state, receiveOnlyChangedFiles = 0,
       // null (not 0) when absent, so the phantom guard can tell "no files
       // claimed" apart from "field not reported" and fall back safely
       globalFiles = null,
-    } = await syncthingService.getDbStatus(folderId);
+    } = answer;
 
     const syncPercentage = globalBytes > 0 ? (inSyncBytes / globalBytes) * 100 : 100;
 
@@ -408,13 +415,9 @@ async function probeFolderSyncCompletion(folderId) {
 
     return { status, reason: 'ok' };
   } catch (error) {
-    // A 404 is syncthing answering that it holds no such folder. Anything else -
-    // transport, a refused key, a malformed reply - leaves the folder's state
-    // unknown, which is a different claim and must never read as absence.
-    if (error.httpStatus === 404) {
-      log.warn(`No syncthing folder ${folderId}`);
-      return { status: null, reason: 'absent' };
-    }
+    // Nothing that reaches here is the folder telling us anything - a transport
+    // failure, a 500, an unreadable api key. The folder's state is UNKNOWN,
+    // which is a different claim from absent and must never read as one.
     log.warn(`Could not read sync status for folder ${folderId}: ${error.message}`);
     return { status: null, reason: 'unknown' };
   }
@@ -1128,9 +1131,7 @@ async function handleReceiveOnlyTransition(params) {
     if (syncStatus.isSynced && syncStatus.receiveOnlyChangedFiles > 0) {
       log.warn(`handleReceiveOnlyTransition - ${appId} is synced but the receive-only folder has ${syncStatus.receiveOnlyChangedFiles} locally changed item(s); reverting local changes instead of promoting (promotion would propagate them to the cluster)`);
       try {
-        // dataOrThrow: dbRevert answers in-band; without it this catch is
-        // dead code and a failed revert reads as reverted
-        messageHelper.dataOrThrow(await syncthingService.dbRevert(appId));
+        await syncthingService.dbRevert(appId);
       } catch (error) {
         log.error(`handleReceiveOnlyTransition - revert of local changes for ${appId} failed: ${error.message}`);
       }
@@ -1378,11 +1379,10 @@ async function manageFolderSyncState(params) {
       log.warn(`manageFolderSyncState - ${appId} holds a sendreceive folder without the grant; demoting to receiveonly and reverting local changes`);
       syncthingFolder.type = 'receiveonly';
       try {
-        // dbRevert answers in-band, so the catch below needs dataOrThrow to
-        // reach. A failed revert leaves the local changes on a receiveonly
-        // folder, where receiveOnlyChangedFiles blocks promotion until a later
-        // pass reverts them.
-        messageHelper.dataOrThrow(await syncthingService.dbRevert(appId));
+        // A failed revert leaves the local changes on a receiveonly folder,
+        // where receiveOnlyChangedFiles blocks promotion until a later pass
+        // reverts them.
+        await syncthingService.dbRevert(appId);
       } catch (error) {
         log.warn(`manageFolderSyncState - ${appId} revert after demotion failed, local changes stand: ${error.message}`);
       }

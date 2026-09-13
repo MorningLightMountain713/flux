@@ -13,7 +13,9 @@ const serviceHelper = require('../../ZelBack/src/services/serviceHelper');
 
 // Testing imports
 const chai = require('chai');
+const chaiAsPromised = require('chai-as-promised');
 
+chai.use(chaiAsPromised);
 const { expect } = chai;
 const proxyquire = require('proxyquire');
 const sinon = require('sinon');
@@ -372,18 +374,14 @@ describe('syncthingService tests', () => {
     });
 
     it('refuses a method that is not one syncthing accepts, without asking it', async () => {
-      const answer = await syncthingService.adjustConfigFolders({ method: 'destroy', id: 'fluxweb_app' });
-
-      expect(answer.status).to.equal('error');
-      expect(answer.data.message).to.contain('destroy');
+      await expect(syncthingService.adjustConfigFolders({ method: 'destroy', id: 'fluxweb_app' }))
+        .to.eventually.be.rejectedWith(/destroy/);
       Object.values(fakeInstance).forEach((verb) => sinon.assert.notCalled(verb));
     });
 
     it('refuses an id that is not a syncthing id, without asking it', async () => {
-      const answer = await syncthingService.adjustConfigFolders({ method: ConfigMethod.DELETE, id: '../../rest/system/shutdown' });
-
-      expect(answer.status).to.equal('error');
-      expect(answer.data.message).to.equal('Invalid ID supplied');
+      await expect(syncthingService.adjustConfigFolders({ method: ConfigMethod.DELETE, id: '../../rest/system/shutdown' }))
+        .to.eventually.be.rejectedWith('Invalid ID supplied');
       Object.values(fakeInstance).forEach((verb) => sinon.assert.notCalled(verb));
     });
 

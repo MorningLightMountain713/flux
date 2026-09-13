@@ -10,6 +10,8 @@ const fsp = require('node:fs/promises');
 const path = require('node:path');
 const serviceHelper = require('../../ZelBack/src/services/serviceHelper');
 const volumeService = require('../../ZelBack/src/services/utils/volumeService');
+const syncthingService = require('../../ZelBack/src/services/syncthingService');
+const log = require('../../ZelBack/src/lib/log');
 const helpers = require('../../ZelBack/src/services/appMonitoring/syncthingMonitorHelpers');
 
 describe('syncthingMonitorHelpers tests', () => {
@@ -314,6 +316,118 @@ describe('syncthingMonitorHelpers tests', () => {
     });
   });
 
+  describe('ensureStignoreCovers', () => {
+    const ID = 'fluxcomp_app';
+
+    it('posts the current ignores plus the missing policy lines', async () => {
+      // syncthing owns .stignore and writes it atomically; FluxOS sets the
+      // patterns through it rather than touching the file. POST replaces the
+      // whole set, so the current lines are kept and the missing ones appended.
+      sandbox.stub(syncthingService, 'getFolderIgnores').resolves({ ignore: ['/backup'] });
+      const set = sandbox.stub(syncthingService, 'setFolderIgnores').resolves({});
+
+      await helpers.ensureStignoreCovers(ID);
+
+      sinon.assert.calledOnceWithExactly(set, ID, ['/backup', '/.flux-op-*']);
+    });
+
+    it('seeds both lines when the folder has no ignores yet', async () => {
+      sandbox.stub(syncthingService, 'getFolderIgnores').resolves({ ignore: null });
+      const set = sandbox.stub(syncthingService, 'setFolderIgnores').resolves({});
+
+      await helpers.ensureStignoreCovers(ID);
+
+      sinon.assert.calledOnceWithExactly(set, ID, ['/backup', '/.flux-op-*']);
+    });
+
+    it('posts nothing when every policy line is already present', async () => {
+      sandbox.stub(syncthingService, 'getFolderIgnores').resolves({ ignore: ['/backup', '/.flux-op-*'] });
+      const set = sandbox.stub(syncthingService, 'setFolderIgnores').resolves({});
+
+      await helpers.ensureStignoreCovers(ID);
+
+      sinon.assert.notCalled(set);
+    });
+
+    it('keeps ignores it did not write, below its own', async () => {
+      // An owner can add patterns of their own; asserting OUR lines does not mean
+      // destroying theirs. They move below ours rather than away.
+      sandbox.stub(syncthingService, 'getFolderIgnores').resolves({ ignore: ['/backup', 'cache/**'] });
+      const set = sandbox.stub(syncthingService, 'setFolderIgnores').resolves({});
+
+      await helpers.ensureStignoreCovers(ID);
+
+      sinon.assert.calledOnceWithExactly(set, ID, ['/backup', '/.flux-op-*', 'cache/**']);
+    });
+
+    it('lifts a policy line that sits below a pattern of the owners', async () => {
+      // Presence is not the guarantee - position is. syncthing takes the FIRST
+      // pattern that matches, so a policy line below anything is a policy line
+      // something else can answer for.
+      sandbox.stub(syncthingService, 'getFolderIgnores').resolves({ ignore: ['cache/**', '/backup', '/.flux-op-*'] });
+      const set = sandbox.stub(syncthingService, 'setFolderIgnores').resolves({});
+
+      await helpers.ensureStignoreCovers(ID);
+
+      sinon.assert.calledOnceWithExactly(set, ID, ['/backup', '/.flux-op-*', 'cache/**']);
+    });
+
+    it('demotes a negation that would otherwise answer for a policy line', async () => {
+      // The case the position rule exists for: !/backup above /backup un-ignores
+      // the backup directory, and the old presence test called that converged.
+      // The negation is kept - it is the owner's - it just stops winning.
+      sandbox.stub(syncthingService, 'getFolderIgnores').resolves({ ignore: ['!/backup', '/backup', '/.flux-op-*'] });
+      const set = sandbox.stub(syncthingService, 'setFolderIgnores').resolves({});
+
+      await helpers.ensureStignoreCovers(ID);
+
+      sinon.assert.calledOnceWithExactly(set, ID, ['/backup', '/.flux-op-*', '!/backup']);
+    });
+
+    it('collapses a policy line the folder holds more than once', async () => {
+      sandbox.stub(syncthingService, 'getFolderIgnores').resolves({ ignore: ['/backup', 'cache/**', '/backup'] });
+      const set = sandbox.stub(syncthingService, 'setFolderIgnores').resolves({});
+
+      await helpers.ensureStignoreCovers(ID);
+
+      sinon.assert.calledOnceWithExactly(set, ID, ['/backup', '/.flux-op-*', 'cache/**']);
+    });
+
+    it('posts nothing on a folder already led by the policy lines', async () => {
+      // Idempotent: a converged folder is neither rewritten nor rescanned, which
+      // is what keeps this safe to run on every monitor pass.
+      sandbox.stub(syncthingService, 'getFolderIgnores').resolves({ ignore: ['/backup', '/.flux-op-*', 'cache/**'] });
+      const set = sandbox.stub(syncthingService, 'setFolderIgnores').resolves({});
+
+      await helpers.ensureStignoreCovers(ID);
+
+      sinon.assert.notCalled(set);
+    });
+
+    it('logs and posts nothing when the read fails, rather than failing the pass', async () => {
+      // The read throws, and the converge is abandoned rather than run against
+      // an ignore list this node never actually read.
+      sandbox.stub(syncthingService, 'getFolderIgnores').rejects(new Error('syncthing restarting'));
+      const set = sandbox.stub(syncthingService, 'setFolderIgnores').resolves({});
+      const logError = sandbox.stub(log, 'error');
+
+      await helpers.ensureStignoreCovers(ID);
+
+      sinon.assert.notCalled(set);
+      sinon.assert.calledOnce(logError);
+    });
+
+    it('logs when the write fails, rather than failing the pass', async () => {
+      sandbox.stub(syncthingService, 'getFolderIgnores').resolves({ ignore: [] });
+      sandbox.stub(syncthingService, 'setFolderIgnores').rejects(new Error('folder paused'));
+      const logError = sandbox.stub(log, 'error');
+
+      await helpers.ensureStignoreCovers(ID);
+
+      sinon.assert.calledOnce(logError);
+    });
+  });
+
   describe('ensureStfolderExists', () => {
     it('refuses to create the marker on an unmounted dir (the rootfs-leak regression)', async () => {
       // a .stfolder created on the bare mountpoint re-arms syncthing onto the
@@ -376,16 +490,14 @@ describe('syncthingMonitorHelpers tests', () => {
       sinon.assert.calledOnceWithExactly(adjust, { method: 'delete', id: 'fluxweb_app' });
     });
 
-    // adjustConfigFolders goes through performRequest: it answers an ENVELOPE
-    // and never rejects, where the getConfigFolders above goes through `request`
-    // and throws. Only a removal syncthing accepted is reported as one - an
-    // uninstall otherwise claims a folder deregistered that syncthing holds.
+    // Only a removal syncthing accepted is reported as one - an uninstall
+    // otherwise claims a folder deregistered that syncthing still holds.
     it('does not report a removal syncthing refused', async () => {
       sandbox.stub(syncthingService, 'getConfigFolders')
         .resolves([{ id: 'fluxweb_app', path: `${appsBase}fluxweb_app` }]);
       const adjust = sandbox.stub(syncthingService, 'adjustConfigFolders')
-        .resolves({ status: 'error', data: { code: 'ECONNREFUSED', message: 'connect ECONNREFUSED 127.0.0.1:8384' } });
-      const restart = sandbox.stub(syncthingService, 'getConfigRestartRequired').resolves({ status: 'success', data: { requiresRestart: true } });
+        .rejects(Object.assign(new Error('connect ECONNREFUSED 127.0.0.1:8384'), { code: 'ECONNREFUSED' }));
+      const restart = sandbox.stub(syncthingService, 'getConfigRestartRequired').resolves({ requiresRestart: true });
       const emitted = [];
 
       await helpers.removeSyncthingFolder('web_app', (line) => emitted.push(String(line)));
@@ -420,11 +532,11 @@ describe('syncthingMonitorHelpers tests', () => {
       sinon.assert.calledOnceWithExactly(dbScan, 'fluxweb_app');
     });
 
-    // dbScan reports a failure IN-BAND - it answers an envelope and never
-    // rejects - so a refusal must reach the caller through the value.
+    // A refused scan is reported and dropped: syncthing's own watcher and its
+    // periodic rescan remain the fallback, so this must not end the caller.
     it('swallows a refused scan request (the watcher/rescan remains the fallback)', async () => {
       const dbScan = sandbox.stub(syncthingService, 'dbScan')
-        .resolves({ status: 'error', data: { message: 'syncthing down' } });
+        .rejects(new Error('syncthing down'));
       const logWarn = sandbox.stub(log, 'warn');
 
       await helpers.requestFolderScan('web_app');
