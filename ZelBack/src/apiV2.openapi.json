@@ -3,18 +3,25 @@
   "info": {
     "title": "FluxOS API v2",
     "version": "2.0.0-scaffold",
-    "description": "The versioned FluxOS HTTP surface. v1 stays frozen and byte-identical for as long as it serves clients; v2 is additive and each endpoint is ported one at a time. Every v2 route lands with its entry here, and this file is the contract rather than a description of one.\n\nPath style is the subset express 4 and express 5 both accept: required path parameters only, no optional groups, no bare wildcards. An express 5 optional group registers on express 4 without throwing and then matches nothing, so the rule is enforced by tests/unit/routesV2.test.js."
+    "description": "The versioned FluxOS HTTP surface. v1 stays frozen and byte-identical for as long as it serves clients; v2 is additive and each endpoint is ported one at a time. Every v2 route lands with its entry here, and this file is the contract rather than a description of one.\n\nNO CUSTOM VERBS. A state you can be IN is a state; a thing that HAPPENS is an operation. So run state is PUT to /apps/{name}/state, and everything else is created as an operation by POSTing to /apps/{name}/operations, read at /operations/{id} and cancelled by DELETEing it. PUT and POST already carry the difference: pressing stop twice is one state, pressing redeploy twice is two operations.\n\nPath style is the subset express 4 and express 5 both accept: required path parameters only, no optional groups, no bare wildcards. An express 5 optional group registers on express 4 without throwing and then matches nothing, so the rule is enforced by tests/unit/routesV2.test.js."
   },
   "servers": [
-    { "url": "/v2" }
+    {
+      "url": "/v2"
+    }
   ],
   "tags": [
-    { "name": "operations", "description": "The status resource every long-running v2 operation points at." }
+    {
+      "name": "operations",
+      "description": "The status resource every long-running v2 operation points at."
+    }
   ],
   "paths": {
     "/operations/{id}": {
       "get": {
-        "tags": ["operations"],
+        "tags": [
+          "operations"
+        ],
         "operationId": "getOperation",
         "summary": "Read a long-running operation",
         "description": "A running operation answers 200 with a non-terminal state. Completion is read from the body, never inferred from the status code: a failed operation is still a successful poll.\n\nUnknown, expired and not-yours are deliberately one answer, so a caller cannot learn from the status code that someone else has an operation running.",
@@ -24,49 +31,75 @@
             "in": "path",
             "required": true,
             "description": "The operation id, as returned in a 202.",
-            "schema": { "type": "string" }
+            "schema": {
+              "type": "string"
+            }
           },
           {
             "name": "since",
             "in": "query",
             "required": false,
             "description": "Progress cursor. Only entries after this sequence number are returned.",
-            "schema": { "type": "integer", "minimum": 0 }
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            }
           },
           {
             "name": "X-Request-Id",
             "in": "header",
             "required": false,
             "description": "Echoed back on the response and in meta.requestId. Minted when absent.",
-            "schema": { "type": "string" }
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
           "200": {
             "description": "The operation.",
             "headers": {
-              "X-Request-Id": { "schema": { "type": "string" } },
+              "X-Request-Id": {
+                "schema": {
+                  "type": "string"
+                }
+              },
               "Retry-After": {
                 "description": "Present while the operation is still running.",
-                "schema": { "type": "integer" }
+                "schema": {
+                  "type": "integer"
+                }
               }
             },
             "content": {
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "required": ["data", "meta"],
+                  "required": [
+                    "data",
+                    "meta"
+                  ],
                   "properties": {
-                    "data": { "$ref": "#/components/schemas/Operation" },
-                    "meta": { "$ref": "#/components/schemas/Meta" }
+                    "data": {
+                      "$ref": "#/components/schemas/Operation"
+                    },
+                    "meta": {
+                      "$ref": "#/components/schemas/Meta"
+                    }
                   }
                 }
               }
             }
           },
-          "400": { "$ref": "#/components/responses/Error" },
-          "404": { "$ref": "#/components/responses/Error" },
-          "500": { "$ref": "#/components/responses/Error" }
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
         }
       }
     }
@@ -83,54 +116,95 @@
     "schemas": {
       "Meta": {
         "type": "object",
-        "required": ["requestId"],
+        "required": [
+          "requestId"
+        ],
         "properties": {
           "requestId": {
             "type": "string",
             "description": "On every answer, success or error, and echoed in the X-Request-Id header."
           },
-          "pagination": { "$ref": "#/components/schemas/Pagination" }
+          "pagination": {
+            "$ref": "#/components/schemas/Pagination"
+          }
         }
       },
       "Pagination": {
         "type": "object",
         "description": "Present on collections only.",
         "properties": {
-          "total": { "type": "integer" },
-          "limit": { "type": "integer" },
-          "offset": { "type": "integer" },
-          "next": { "type": ["string", "null"] }
+          "total": {
+            "type": "integer"
+          },
+          "limit": {
+            "type": "integer"
+          },
+          "offset": {
+            "type": "integer"
+          },
+          "next": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
         }
       },
       "Operation": {
         "type": "object",
-        "required": ["jobId", "status"],
+        "required": [
+          "jobId",
+          "status"
+        ],
         "properties": {
-          "jobId": { "type": "string" },
-          "kind": { "type": "string" },
+          "jobId": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
           "status": {
             "type": "string",
             "description": "Running, Succeeded, Failed or Canceled. Terminal status is read from here, not from the HTTP code."
           },
-          "createdAt": { "type": "integer" },
-          "lastUpdatedAt": { "type": "integer" },
+          "createdAt": {
+            "type": "integer"
+          },
+          "lastUpdatedAt": {
+            "type": "integer"
+          },
           "progress": {
             "type": "array",
             "description": "Append-only. Use the since cursor to read only what is new.",
-            "items": { "type": "object" }
+            "items": {
+              "type": "object"
+            }
           },
-          "detail": { "type": "object" },
-          "error": { "type": ["object", "null"] }
+          "detail": {
+            "type": "object"
+          },
+          "error": {
+            "type": [
+              "object",
+              "null"
+            ]
+          }
         }
       },
       "Error": {
         "type": "object",
-        "required": ["error", "meta"],
+        "required": [
+          "error",
+          "meta"
+        ],
         "description": "Mutually exclusive with data: an answer carries one or the other, never both.",
         "properties": {
           "error": {
             "type": "object",
-            "required": ["code", "message"],
+            "required": [
+              "code",
+              "message"
+            ],
             "properties": {
               "code": {
                 "type": "string",
@@ -149,39 +223,73 @@
                   "UNAVAILABLE"
                 ]
               },
-              "message": { "type": "string" },
-              "details": { "type": "object" },
-              "fields": { "type": "object" }
+              "message": {
+                "type": "string"
+              },
+              "details": {
+                "type": "object"
+              },
+              "fields": {
+                "type": "object"
+              }
             }
           },
-          "meta": { "$ref": "#/components/schemas/Meta" }
+          "meta": {
+            "$ref": "#/components/schemas/Meta"
+          }
         }
       },
       "Accepted": {
         "type": "object",
         "description": "The 202 every long-running v2 action answers with. Location carries the same statusUrl.",
-        "required": ["data", "meta"],
+        "required": [
+          "data",
+          "meta"
+        ],
         "properties": {
           "data": {
             "type": "object",
-            "required": ["operationId", "state", "statusUrl"],
+            "required": [
+              "operationId",
+              "state",
+              "statusUrl"
+            ],
             "properties": {
-              "operationId": { "type": "string" },
-              "state": { "type": "string", "enum": ["pending"] },
-              "statusUrl": { "type": "string" }
+              "operationId": {
+                "type": "string"
+              },
+              "state": {
+                "type": "string",
+                "enum": [
+                  "pending"
+                ]
+              },
+              "statusUrl": {
+                "type": "string"
+              }
             }
           },
-          "meta": { "$ref": "#/components/schemas/Meta" }
+          "meta": {
+            "$ref": "#/components/schemas/Meta"
+          }
         }
       }
     },
     "responses": {
       "Error": {
         "description": "An error, in the one envelope.",
-        "headers": { "X-Request-Id": { "schema": { "type": "string" } } },
+        "headers": {
+          "X-Request-Id": {
+            "schema": {
+              "type": "string"
+            }
+          }
+        },
         "content": {
           "application/json": {
-            "schema": { "$ref": "#/components/schemas/Error" }
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
           }
         }
       }

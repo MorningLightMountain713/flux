@@ -85,6 +85,26 @@ describe('routesV2 - the /v2 surface', () => {
       expect(offenders, 'express 5 needs `/*name`, and drops inline regex params').to.deep.equal([]);
     });
 
+    // NO CUSTOM VERBS (design §4a-bis). A state you can be IN is a state, and a
+    // thing that HAPPENS is an operation, so every v2 mutation is PUT a state
+    // or POST into a collection. A path whose last segment is a verb is the
+    // shape this replaced, and it erodes one endpoint at a time unless the rule
+    // is enforced rather than written down.
+    it('declares no path ending in a verb', () => {
+      const VERBS = /^(stop|start|restart|pause|unpause|resume|redeploy|rebuild|install|uninstall|remove|update|cancel|exec|backup|restore|reindex|rescan|enable|disable|create|delete|kill|reboot)$/i;
+      const offenders = paths
+        .filter((p) => VERBS.test(p.path.split('/').filter(Boolean).pop() || ''))
+        .map((p) => `${SOURCE}:${p.line} ${p.method.toUpperCase()} ${p.path}`);
+      expect(offenders, 'a state is PUT to /state; anything else is POSTed to /operations').to.deep.equal([]);
+    });
+
+    // The same rule from the other side: /actions/ was the shape this replaced.
+    it('declares no /actions/ segment', () => {
+      const offenders = paths.filter((p) => p.path.split('/').includes('actions'))
+        .map((p) => `${SOURCE}:${p.line} ${p.method.toUpperCase()} ${p.path}`);
+      expect(offenders, 'v2 has no custom verbs - see design §4a-bis').to.deep.equal([]);
+    });
+
     // The proof that the subset above is really the intersection: every path
     // this surface declares is accepted by express's own parser as it stands.
     it('registers on the express in this tree without matching nothing', () => {
@@ -240,7 +260,7 @@ describe('routesV2 - the /v2 surface', () => {
     });
   });
 
-  describe('requireTier', () => {
+  describe('requireTier / requireAppTier', () => {
     let verifyPrivilege;
     let routerModule;
     let app;
@@ -257,9 +277,12 @@ describe('routesV2 - the /v2 surface', () => {
 
       const probe = express.Router();
       probe.use(routerModule.envelope);
-      probe.get('/guarded/:appname', routerModule.requireTier(
+      probe.get('/guarded/:appname', routerModule.requireAppTier(
         routerModule.Privilege.APP_OWNER,
-        (req) => ({ appName: req.params.appname }),
+        (req) => req.params.appname,
+      ), (req, res) => res.ok({ reached: true }));
+      probe.get('/unscoped', routerModule.requireTier(
+        routerModule.Privilege.FLUX_TEAM,
       ), (req, res) => res.ok({ reached: true }));
 
       app = express();
@@ -277,6 +300,17 @@ describe('routesV2 - the /v2 surface', () => {
       await supertest(app).get('/v2/guarded/myapp').set('zelidauth', 'the-header-value');
 
       sinon.assert.calledOnceWithExactly(verifyPrivilege, 'appowner', 'the-header-value', { appName: 'myapp' });
+    });
+
+    // The app-scoped form is separate rather than an optional argument, so
+    // privilegeCallShape can see which call sites carry an app name. A computed
+    // options object is an expression it cannot read.
+    it('passes no app name for a privilege that reads none', async () => {
+      verifyPrivilege.resolves(true);
+
+      await supertest(app).get('/v2/unscoped').set('zelidauth', 'the-header-value');
+
+      sinon.assert.calledOnceWithExactly(verifyPrivilege, 'fluxteam', 'the-header-value');
     });
 
     it('answers 401 and does not reach the handler when the tier is refused', async () => {
