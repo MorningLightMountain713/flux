@@ -674,6 +674,21 @@ describe('syncthingMonitor tests', () => {
         sinon.assert.notCalled(livenessMock.prewarm);
       });
 
+      // A backup or restore rebuilds the app's folders itself and holds an
+      // operation lease while it works, so no promotion decision is being made
+      // underneath it and the peers must not be probed on its behalf.
+      it('asks nothing about an app suspended for backup', async () => {
+        deploymentProviderMock.listInstalledDeployments.resolves([syncDeployment]);
+        mockState.receiveOnlySyncthingAppsCache.set(syncFolderId, { numberOfExecutions: 1 });
+        appsRepositoryMock.appLocationFromEvents.resolves([{ ip: '10.0.0.7:16127' }]);
+        operationRegistry.acquire(syncDeployment.appName, 'backup', 'test');
+
+        monitorControl = syncthingMonitor.syncthingApps(mockState, mockGetGlobalStateFn);
+        await clock.tickAsync(100);
+
+        sinon.assert.notCalled(livenessMock.prewarm);
+      });
+
       // Set only from a validated read, so a failed one leaves the last good
       // answer standing rather than momentarily claiming this node holds nothing.
       it('leaves the last good answer standing when syncthing does not answer', async () => {
@@ -1056,8 +1071,6 @@ describe('syncthingMonitor tests', () => {
     // The other side, and what keeps the assertion above from being about any
     // folderless component: one that declares no sync has no folder to be
     // missing, so its absence from syncthing says nothing at all.
-    // Development resolves this through the 404 its unconditional patch gets
-    // back; the same question is answered here by absence from knownFolderIds.
     // Left standing, the flag is re-read every pass forever, pendingFolderIds
     // never empties, and the node sweeps every mount on every cycle - so
     // "does not sweep mounts in steady state" can never hold for it again.
@@ -1225,8 +1238,6 @@ describe('syncthingMonitor tests', () => {
       expect(syncthingServiceMock.adjustConfigFolders.calledWith({ method: 'delete', id: syncFolderId })).to.be.true;
     });
 
-    // D13, ported from development's set. The behaviours are v9's already; what
-    // was missing was anything holding them.
     it('keeps the folder of a component skipped for an unmounted volume', async () => {
       // A DIFFERENT TRIGGER from the state-machine deferral above: the volume is
       // not mounted, so ensureStfolderExists refuses and the pass returns before
