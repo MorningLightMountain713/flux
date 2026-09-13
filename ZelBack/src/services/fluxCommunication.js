@@ -1205,7 +1205,17 @@ async function verifySyncRequest(peer, decoded) {
     log.warn(`Sync request from ${peer.key} rejected: pubkey not in node list`);
     return false;
   }
-  const msg = buildSyncSignatureMessage(decoded.type, sinceTimestamp, requestTimestamp);
+  // Which payload the peer signed is settled by what it advertised at the
+  // handshake, not by trying both: a node that claims the domain-separated form
+  // is held to it, so the run-together one stops being accepted the moment a
+  // peer stops offering it. A peer lying about its capabilities only fails to
+  // verify.
+  const legacy = !peer.remoteCapabilities?.has('syncSigV2');
+  const msg = buildSyncSignatureMessage(decoded.type, sinceTimestamp, requestTimestamp, { legacy });
+  if (msg === null) {
+    log.warn(`Sync request from ${peer.key} rejected: fields cannot be encoded for signing`);
+    return false;
+  }
   const verified = verificationHelper.verifyMessage(msg, pubkey, signature);
   if (!verified) {
     log.warn(`Sync request from ${peer.key} rejected: bad signature`);

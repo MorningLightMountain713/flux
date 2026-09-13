@@ -822,16 +822,22 @@ class AppSyncOrchestrator {
       signer = await nodeSigner();
       if (!signer) throw new Error('this node cannot sign as itself');
       requestTs = Date.now();
+      // Both forms are signed once for the round rather than once per peer:
+      // which one a peer is sent is settled by its handshake capability, and
+      // the fan-out is wider than the two signatures cost.
       messages = types.map((type) => {
         const { msgType, encode } = codecs[type];
         const sig = signer.sign(peerCodec.buildSyncSignatureMessage(msgType, 0, requestTs));
-        return { type, sig, encode };
+        const legacySig = signer.sign(
+          peerCodec.buildSyncSignatureMessage(msgType, 0, requestTs, { legacy: true }),
+        );
+        return { type, sig, legacySig, encode };
       });
     } catch (error) {
       log.error(`AppSyncOrchestrator - Failed to sign sync requests: ${error.message}`);
       return;
     }
-    if (messages.some(({ sig }) => !sig)) {
+    if (messages.some(({ sig, legacySig }) => !sig || !legacySig)) {
       log.error('AppSyncOrchestrator - Failed to sign sync requests: a signature could not be made');
       return;
     }
@@ -855,8 +861,15 @@ class AppSyncOrchestrator {
       this.#reconnectPulls.delete(peer.key);
     }
 
-    messages.forEach(({ type, sig, encode }) => {
-      this.#sendRequests(peersToAsk, type, encode(0, requestTs, signer.pubKey, sig));
+    const v2Peers = peersToAsk.filter((peer) => peer.remoteCapabilities?.has('syncSigV2'));
+    const legacyPeers = peersToAsk.filter((peer) => !peer.remoteCapabilities?.has('syncSigV2'));
+    messages.forEach(({ type, sig, legacySig, encode }) => {
+      if (v2Peers.length) {
+        this.#sendRequests(v2Peers, type, encode(0, requestTs, signer.pubKey, sig));
+      }
+      if (legacyPeers.length) {
+        this.#sendRequests(legacyPeers, type, encode(0, requestTs, signer.pubKey, legacySig));
+      }
     });
 
     fluxEventBus.publish('ephemeralSync:requested', {
@@ -905,7 +918,10 @@ class AppSyncOrchestrator {
       // eslint-disable-next-line no-await-in-loop
       const privkey = await fluxNetworkHelper.getFluxNodePrivateKey();
       const requestTs = Date.now();
-      const msg = peerCodec.buildSyncSignatureMessage(peerCodec.MSG_TYPE.REQUEST_APP_RUNNING, sinceTs, requestTs);
+      const msg = peerCodec.buildSyncSignatureMessage(
+        peerCodec.MSG_TYPE.REQUEST_APP_RUNNING, sinceTs, requestTs,
+        { legacy: !peer.remoteCapabilities?.has('syncSigV2') },
+      );
       const sig = verificationHelper.signMessage(msg, privkey);
       this.#pendingReconnectPulls.delete(key);
       this.#reconnectPulls.set(key, lostAtMs);

@@ -571,6 +571,10 @@ const FLUX_CAPABILITIES = Object.freeze([
   'appInstallingClaims',
   'limitCounterRecords',
   'masterlease',
+  // This build signs a sync request over a domain-separated payload, where the
+  // field boundaries are in the encoding rather than in the values. A peer that
+  // does not claim it is sent, and held to, the run-together form.
+  'syncSigV2',
 ]);
 
 module.exports = { FluxPeerSocket, CLOSE_CODES, PEER_SOURCE, DIRECTION, FLUX_VERSION, FLUX_CAPABILITIES };

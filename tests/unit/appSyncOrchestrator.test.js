@@ -472,6 +472,37 @@ describe('AppSyncOrchestrator', () => {
       }
     });
 
+    it('signs each peer the payload that peer has said it reads', async () => {
+      // The two forms are a contract per peer, not a leniency: a node that
+      // advertises syncSigV2 is sent the domain-separated payload and is held
+      // to it at the other end, and one that does not still gets the
+      // run-together form. Signing the wrong one for either is a request every
+      // node of that kind refuses, with the cause a handshake away.
+      const modern = makePeer('10.0.0.1:16127');
+      modern.remoteCapabilities = new Set(['syncSigV2']);
+      const ancient = makePeer('10.0.0.2:16127');
+      ancient.remoteCapabilities = new Set();
+      getEligibleSyncPeersStub = sinon.stub().returns([modern, ancient]);
+
+      buildSyncSigStub.callsFake((type, since, request, options = {}) => (options.legacy
+        ? `legacy:${type}` : `v2:${type}`));
+      signMessageStub.callsFake((message) => `sig(${message})`);
+      encodeAppRunningStub.callsFake((since, ts, pubkey, sig) => Buffer.from(sig));
+
+      const orchestrator = makeOrchestrator();
+      orchestrator.start(defaultBootContext);
+      peerEmitter.emit('peerThresholdReached', 12);
+      await clock.tickAsync(0);
+
+      const sent = (peer) => peer.send.args.map(([buf]) => buf.toString());
+      expect(sent(modern), 'a peer claiming syncSigV2 is sent the v2 signature')
+        .to.include('sig(v2:33)');
+      expect(sent(modern)).to.not.include('sig(legacy:33)');
+      expect(sent(ancient), 'a peer that claims nothing still gets the legacy one')
+        .to.include('sig(legacy:33)');
+      expect(sent(ancient)).to.not.include('sig(v2:33)');
+    });
+
     // A node asks one peer, the connection dies before the bytes leave, and the
     // request is lost silently - a send into a closing socket does not throw. The
     // peer was recorded as asked, so every later pass filtered it out, logged
