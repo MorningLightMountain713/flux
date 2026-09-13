@@ -1572,7 +1572,15 @@ describe('quorumGrant grantClient', () => {
     // with its credential — the retired committee's signed acceptances — and
     // its container never stops. Without the credential the fresh seats hold
     // it like any stranger and it falls back to today's path.
-    describe('step-across', () => {
+    describe('step-across', function () {
+      // Forty peers with real keys, two hash-drawn committees and a signature
+      // on every acceptance: the four heaviest tests here cost ~700 ms of CPU
+      // each on an idle box, against the 2 s default the full-suite path runs
+      // under. On a saturated one they cross it, and the failure reads as a
+      // hang in the step-across rather than as the budget it is. Same reasoning
+      // and same budget as the heal walk above; a genuine hang still fails.
+      this.timeout(30_000);
+
       // A WIDE world: with 13 peers and committees of nine, any two committees
       // share at least a quorum of cells, and on a shared cell the master is
       // exempt by its own row — the credential would never be needed (the
