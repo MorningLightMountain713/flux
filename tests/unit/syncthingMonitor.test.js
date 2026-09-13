@@ -1199,7 +1199,7 @@ describe('syncthingMonitor tests', () => {
       await clock.tickAsync(100);
 
       expect(
-        syncthingServiceMock.adjustConfigFolders.calledWith('delete', undefined, syncFolderId),
+        syncthingServiceMock.adjustConfigFolders.calledWith({ method: 'delete', id: syncFolderId }),
         'an installed component owns its folder even when the pass skipped it',
       ).to.be.false;
     });
@@ -1223,6 +1223,107 @@ describe('syncthingMonitor tests', () => {
       sinon.assert.notCalled(syncthingMonitorHelpersMock.createSyncthingFolderConfig);
       // ...and the orphaned folder is removed.
       expect(syncthingServiceMock.adjustConfigFolders.calledWith({ method: 'delete', id: syncFolderId })).to.be.true;
+    });
+
+    // D13, ported from development's set. The behaviours are v9's already; what
+    // was missing was anything holding them.
+    it('keeps the folder of a component skipped for an unmounted volume', async () => {
+      // A DIFFERENT TRIGGER from the state-machine deferral above: the volume is
+      // not mounted, so ensureStfolderExists refuses and the pass returns before
+      // the folder is configured. Ownership is what spares it, and ownership is
+      // not "was reached this pass".
+      syncthingServiceMock.getDeviceId.resolves('DEVICE-ID');
+      fluxNetworkHelperMock.getLocalSocketAddress.resolves('10.0.0.1:16127');
+      deploymentProviderMock.listInstalledDeployments.resolves([syncDeployment]);
+      syncthingServiceMock.getConfigFolders.resolves([{ id: syncFolderId, path: syncComp.dir, type: 'sendreceive' }]);
+      syncthingMonitorHelpersMock.ensureStfolderExists.resolves(false);
+
+      monitorControl = syncthingMonitor.syncthingApps(mockState, mockGetGlobalStateFn);
+      await clock.tickAsync(100);
+
+      expect(
+        syncthingServiceMock.adjustConfigFolders.calledWith({ method: 'delete', id: syncFolderId }),
+        'a live app folder was deleted because its volume was not mounted',
+      ).to.be.false;
+    });
+
+    it('does not touch the ignore file of a folder whose volume is not mounted', async () => {
+      // Writing ignores through syncthing for an unmounted folder writes them
+      // to the bare host directory under the mountpoint, which is the same
+      // class of harm the mount-safety block exists for.
+      syncthingServiceMock.getDeviceId.resolves('DEVICE-ID');
+      fluxNetworkHelperMock.getLocalSocketAddress.resolves('10.0.0.1:16127');
+      deploymentProviderMock.listInstalledDeployments.resolves([syncDeployment]);
+      syncthingServiceMock.getConfigFolders.resolves([{ id: syncFolderId, type: 'sendreceive', path: syncComp.dir }]);
+      syncthingMonitorHelpersMock.ensureStfolderExists.resolves(false);
+
+      monitorControl = syncthingMonitor.syncthingApps(mockState, mockGetGlobalStateFn);
+      await clock.tickAsync(100);
+
+      sinon.assert.notCalled(syncthingMonitorHelpersMock.ensureStignoreCovers);
+    });
+
+    it('deletes the folder of an installed component that no longer syncs', async () => {
+      // Ownership is hasSyncthing() on the CURRENT component, not "the app is
+      // installed". A spec update that drops the sync block leaves a folder
+      // replicating data nothing claims any more.
+      syncthingServiceMock.getDeviceId.resolves('DEVICE-ID');
+      fluxNetworkHelperMock.getLocalSocketAddress.resolves('10.0.0.1:16127');
+      deploymentProviderMock.listInstalledDeployments.resolves([plainDeployment]);
+      const staleFolderId = `flux${plainDeployment.getComponent('web').identifier}`;
+      syncthingServiceMock.getConfigFolders.resolves([{ id: staleFolderId, path: plainDeployment.getComponent('web').dir, type: 'sendreceive' }]);
+
+      monitorControl = syncthingMonitor.syncthingApps(mockState, mockGetGlobalStateFn);
+      await clock.tickAsync(100);
+
+      expect(plainDeployment.getComponent('web').hasSyncthing(), 'fixture must declare no sync').to.be.false;
+      expect(
+        syncthingServiceMock.adjustConfigFolders.calledWith({ method: 'delete', id: staleFolderId }),
+        'the component is installed but no longer syncs, so its folder is not owned',
+      ).to.be.true;
+    });
+
+    it('keeps the folder of an app under backup, and of one under restore', async () => {
+      // A backup removes the syncthing folder itself and holds an operation
+      // lease while it works. The pass leaves the whole app alone rather than
+      // re-adding what the backup just took away - and must not read "not
+      // processed" as "not owned" and delete it.
+      syncthingServiceMock.getDeviceId.resolves('DEVICE-ID');
+      fluxNetworkHelperMock.getLocalSocketAddress.resolves('10.0.0.1:16127');
+      deploymentProviderMock.listInstalledDeployments.resolves([syncDeployment]);
+      syncthingServiceMock.getConfigFolders.resolves([{ id: syncFolderId, path: syncComp.dir, type: 'sendreceive' }]);
+      operationRegistry.acquire(syncDeployment.appName, 'backup', 'test');
+
+      monitorControl = syncthingMonitor.syncthingApps(mockState, mockGetGlobalStateFn);
+      await clock.tickAsync(100);
+
+      sinon.assert.notCalled(syncthingFolderStateMachineMock.manageFolderSyncState);
+      expect(
+        syncthingServiceMock.adjustConfigFolders.calledWith({ method: 'delete', id: syncFolderId }),
+        'the folder of an app mid-backup was swept',
+      ).to.be.false;
+    });
+
+    it('leaves an unreadable app folder alone when its mount is healthy', async () => {
+      // The other half of "still mount-checks the folder of an app it could not
+      // read": the check runs, and a HEALTHY verdict means nothing is demoted
+      // and no container is held. Without this the protection could be a block
+      // that acts on every unreadable folder regardless of what it found.
+      deploymentProviderMock.listInstalledDeploymentsDetailed.resolves({
+        deployments: [],
+        unreadableAppNames: new Set(['sealed']),
+      });
+      syncthingServiceMock.getConfigFolders.resolves([{ id: 'fluxweb_sealed', type: 'sendreceive' }]);
+      syncthingFolderStateMachineMock.verifySendReceiveFolderSafety.resolves({ isSafe: true, isMounted: true, reason: 'ok' });
+
+      monitorControl = syncthingMonitor.syncthingApps(mockState, mockGetGlobalStateFn);
+      await clock.tickAsync(100);
+
+      sinon.assert.neverCalledWith(
+        syncthingServiceMock.adjustConfigFolders,
+        sinon.match({ method: 'patch', id: 'fluxweb_sealed' }),
+      );
+      sinon.assert.notCalled(appReconcilerMock.setControllerDesired);
     });
 
     it('hands the startup safety scan the real component injected excludes and app name', async () => {
