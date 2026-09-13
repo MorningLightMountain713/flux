@@ -4,7 +4,6 @@ const bs58check = require('bs58check');
 const { pubKeyToAddr } = require('./utils/fluxCryptoUtils');
 const bitcoinMessage = require('bitcoinjs-message');
 const { getSpecBackend } = require('./utils/specLibs');
-const ethereumHelper = require('./ethereumHelper');
 const log = require('../lib/log');
 
 const base58Chars = /^[1-9a-km-zA-HJ-NP-Z]+$/;
@@ -95,8 +94,8 @@ function includesSigningIdentity(identities, identity) {
  * be re-encoded while still verifying gives one signed message several
  * identities — each accepted as genuinely signed, none deduplicated against
  * the others, and all mintable by anyone who observed the first without the
- * owner's key. `bitcoinjs-message` accepts the high-S twin; nano-ethereum-signer
- * accepts that and the bare 0/1 spelling of `v`.
+ * owner's key. `bitcoinjs-message` accepts the high-S twin, and the bare 0/1
+ * spelling of `v` is accepted by most Ethereum recovery code.
  *
  * The rule itself lives in flux-spec (`signature/canonical.js`) and is reached
  * through the CJS bridge, so this verifier and the library's enforce identical
@@ -126,18 +125,23 @@ async function verifySignature(message, address, signature, options = {}) {
       throw new Error('Missing parameters for message verification');
     }
 
+    const { isCanonicalSignature, verifyEthMessage } = await getSpecBackend();
+
     if (!allowLegacyEncoding) {
-      const { isCanonicalSignature } = await getSpecBackend();
       if (!isCanonicalSignature(signature, address.startsWith('0x') ? 'eth' : 'btc')) {
         throw new Error('Signature is not in canonical form');
       }
     }
 
     if (address.startsWith('0x')) {
-      const messageSigner = ethereumHelper.recoverSigner(message, signature);
-      if (messageSigner.toLowerCase() === address.toLowerCase()) {
-        isValid = true;
-      }
+      // The library owns the Ethereum digest. It is the UTF-8 byte string
+      // EIP-191 defines and every wallet signs, and holding one definition is
+      // what stops the two sides answering differently about who signed.
+      //
+      // The replay flag is not leniency: the encoding question was settled
+      // above for both address types, so what is asked for here is recovery
+      // alone.
+      isValid = await verifyEthMessage(message, address, signature, { allowLegacyEncoding: true });
     } else {
       if (address.length > 36) {
         // bitcoin

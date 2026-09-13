@@ -2,10 +2,10 @@
 
 const chai = require('chai');
 const sinon = require('sinon');
+const proxyquire = require('proxyquire');
 const bitcoinMessage = require('bitcoinjs-message');
 
 const signatureVerifier = require('../../ZelBack/src/services/signatureVerifier');
-const ethereumHelper = require('../../ZelBack/src/services/ethereumHelper');
 const { getSpecBackend } = require('../../ZelBack/src/services/utils/specLibs');
 
 const { expect } = chai;
@@ -22,21 +22,39 @@ const BTC_ADDRESS = '1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa';
 const ETH_ADDRESS = '0x0000000000000000000000000000000000000001';
 
 describe('signatureVerifier canonical-form gate', () => {
-  // The gate runs before the underlying library, so these stub the library to
+  // The gate runs before whatever verifies, so these stub the verifier to
   // report success. Anything still rejected was rejected by the gate — and
   // anything accepted proves the gate does not over-reject a well-formed
   // signature. Real end-to-end verification is covered in flux-spec's suite.
+  //
+  // The Ethereum side is the library's `verifyEthMessage`, reached through a
+  // frozen namespace, so the seam is the accessor that hands it over. The
+  // `before` hook asserts both names exist on the real namespace first: a stub
+  // for an export that is not there would sit under every assertion below
+  // reporting success for a door nothing called.
   let btcStub;
   let ethStub;
+  let verifier;
+  let specBackend;
 
   before(async () => {
     // Warm the CJS bridge: its first call dynamically imports the ESM packages.
-    await getSpecBackend();
+    specBackend = await getSpecBackend();
+    expect(specBackend.verifyEthMessage).to.be.a('function');
+    expect(specBackend.isCanonicalSignature).to.be.a('function');
   });
 
   beforeEach(() => {
     btcStub = sinon.stub(bitcoinMessage, 'verify').returns(true);
-    ethStub = sinon.stub(ethereumHelper, 'recoverSigner').returns(ETH_ADDRESS);
+    ethStub = sinon.stub().resolves(true);
+    verifier = proxyquire('../../ZelBack/src/services/signatureVerifier', {
+      './utils/specLibs': {
+        getSpecBackend: async () => ({
+          isCanonicalSignature: specBackend.isCanonicalSignature,
+          verifyEthMessage: ethStub,
+        }),
+      },
+    });
   });
 
   afterEach(() => {
@@ -45,16 +63,16 @@ describe('signatureVerifier canonical-form gate', () => {
 
   describe('bitcoin', () => {
     it('accepts a canonical compressed-P2PKH signature', async () => {
-      expect(await signatureVerifier.verifySignature('msg', BTC_ADDRESS, btcSig(31))).to.equal(true);
+      expect(await verifier.verifySignature('msg', BTC_ADDRESS, btcSig(31))).to.equal(true);
       sinon.assert.calledOnce(btcStub);
     });
 
     it('accepts an uncompressed-P2PKH header', async () => {
-      expect(await signatureVerifier.verifySignature('msg', BTC_ADDRESS, btcSig(27))).to.equal(true);
+      expect(await verifier.verifySignature('msg', BTC_ADDRESS, btcSig(27))).to.equal(true);
     });
 
     it('rejects the high-S twin without consulting the library', async () => {
-      expect(await signatureVerifier.verifySignature('msg', BTC_ADDRESS, btcSig(31, HIGH_S)))
+      expect(await verifier.verifySignature('msg', BTC_ADDRESS, btcSig(31, HIGH_S)))
         .to.equal(false);
       sinon.assert.notCalled(btcStub);
     });
@@ -62,32 +80,32 @@ describe('signatureVerifier canonical-form gate', () => {
     it('rejects segwit header bytes', async () => {
       for (const header of [35, 36, 37, 38, 39, 40, 41, 42]) {
         // eslint-disable-next-line no-await-in-loop
-        const valid = await signatureVerifier.verifySignature('msg', BTC_ADDRESS, btcSig(header));
+        const valid = await verifier.verifySignature('msg', BTC_ADDRESS, btcSig(header));
         expect(valid, `header ${header}`).to.equal(false);
       }
       sinon.assert.notCalled(btcStub);
     });
 
     it('rejects a signature that is not 65 bytes', async () => {
-      expect(await signatureVerifier.verifySignature('msg', BTC_ADDRESS, '1234356asdf')).to.equal(false);
+      expect(await verifier.verifySignature('msg', BTC_ADDRESS, '1234356asdf')).to.equal(false);
       sinon.assert.notCalled(btcStub);
     });
   });
 
   describe('ethereum', () => {
     it('accepts a canonical signature', async () => {
-      expect(await signatureVerifier.verifySignature('msg', ETH_ADDRESS, ethSig(27))).to.equal(true);
+      expect(await verifier.verifySignature('msg', ETH_ADDRESS, ethSig(27))).to.equal(true);
       sinon.assert.calledOnce(ethStub);
     });
 
     it('rejects the bare 0/1 spelling of v', async () => {
-      expect(await signatureVerifier.verifySignature('msg', ETH_ADDRESS, ethSig(0))).to.equal(false);
-      expect(await signatureVerifier.verifySignature('msg', ETH_ADDRESS, ethSig(1))).to.equal(false);
+      expect(await verifier.verifySignature('msg', ETH_ADDRESS, ethSig(0))).to.equal(false);
+      expect(await verifier.verifySignature('msg', ETH_ADDRESS, ethSig(1))).to.equal(false);
       sinon.assert.notCalled(ethStub);
     });
 
     it('rejects the high-S twin', async () => {
-      expect(await signatureVerifier.verifySignature('msg', ETH_ADDRESS, ethSig(27, HIGH_S)))
+      expect(await verifier.verifySignature('msg', ETH_ADDRESS, ethSig(27, HIGH_S)))
         .to.equal(false);
       sinon.assert.notCalled(ethStub);
     });
@@ -102,14 +120,14 @@ describe('signatureVerifier canonical-form gate', () => {
     const REPLAY = { allowLegacyEncoding: true };
 
     it('lets the bare 0/1 spelling of v reach the library', async () => {
-      expect(await signatureVerifier.verifySignature('msg', ETH_ADDRESS, ethSig(0), REPLAY)).to.equal(true);
-      expect(await signatureVerifier.verifySignature('msg', ETH_ADDRESS, ethSig(1), REPLAY)).to.equal(true);
+      expect(await verifier.verifySignature('msg', ETH_ADDRESS, ethSig(0), REPLAY)).to.equal(true);
+      expect(await verifier.verifySignature('msg', ETH_ADDRESS, ethSig(1), REPLAY)).to.equal(true);
       sinon.assert.calledTwice(ethStub);
     });
 
     it('lets the high-S twin reach the library, on either curve', async () => {
-      expect(await signatureVerifier.verifySignature('msg', ETH_ADDRESS, ethSig(27, HIGH_S), REPLAY)).to.equal(true);
-      expect(await signatureVerifier.verifySignature('msg', BTC_ADDRESS, btcSig(31, HIGH_S), REPLAY)).to.equal(true);
+      expect(await verifier.verifySignature('msg', ETH_ADDRESS, ethSig(27, HIGH_S), REPLAY)).to.equal(true);
+      expect(await verifier.verifySignature('msg', BTC_ADDRESS, btcSig(31, HIGH_S), REPLAY)).to.equal(true);
       sinon.assert.calledOnce(ethStub);
       sinon.assert.calledOnce(btcStub);
     });
@@ -117,15 +135,15 @@ describe('signatureVerifier canonical-form gate', () => {
     it('does not decide the answer itself — the signer still has to be right', async () => {
       // The property leniency must not touch. It widens how a signature may be
       // spelled, never whose it is.
-      ethStub.returns('0x00000000000000000000000000000000000000ff');
+      ethStub.resolves(false);
       btcStub.returns(false);
-      expect(await signatureVerifier.verifySignature('msg', ETH_ADDRESS, ethSig(0), REPLAY)).to.equal(false);
-      expect(await signatureVerifier.verifySignature('msg', BTC_ADDRESS, btcSig(31), REPLAY)).to.equal(false);
+      expect(await verifier.verifySignature('msg', ETH_ADDRESS, ethSig(0), REPLAY)).to.equal(false);
+      expect(await verifier.verifySignature('msg', BTC_ADDRESS, btcSig(31), REPLAY)).to.equal(false);
     });
 
     it('is opt-in: the same signatures are refused at the ingress door', async () => {
-      expect(await signatureVerifier.verifySignature('msg', ETH_ADDRESS, ethSig(0))).to.equal(false);
-      expect(await signatureVerifier.verifySignature('msg', BTC_ADDRESS, btcSig(31, HIGH_S))).to.equal(false);
+      expect(await verifier.verifySignature('msg', ETH_ADDRESS, ethSig(0))).to.equal(false);
+      expect(await verifier.verifySignature('msg', BTC_ADDRESS, btcSig(31, HIGH_S))).to.equal(false);
       sinon.assert.notCalled(ethStub);
       sinon.assert.notCalled(btcStub);
     });
@@ -133,11 +151,43 @@ describe('signatureVerifier canonical-form gate', () => {
 
   describe('missing parameters', () => {
     it('rejects empty inputs without consulting either library', async () => {
-      expect(await signatureVerifier.verifySignature('', '', '')).to.equal(false);
-      expect(await signatureVerifier.verifySignature(null, null, null)).to.equal(false);
+      expect(await verifier.verifySignature('', '', '')).to.equal(false);
+      expect(await verifier.verifySignature(null, null, null)).to.equal(false);
       sinon.assert.notCalled(btcStub);
       sinon.assert.notCalled(ethStub);
     });
+  });
+});
+
+describe('a real wallet signature, through the deployed path', () => {
+  // Nothing is stubbed here. These two signatures were produced by a wallet
+  // and carry the address it recovered to, so they say whether this verifier
+  // agrees with what actually signs Ethereum messages — the question a stub
+  // cannot be asked. The digest is the UTF-8 byte string EIP-191 defines, and
+  // a message altered by one character has to stop verifying under it.
+  const SIGNER = '0xfaA2cA6454F2815C0900da1d4BfbD53072C736eb';
+  const SIGNED = [
+    ['testmessage123',
+      '0xaaa09d14433ec40513a4ad70d6945ec8459cad37b7fe3102e443d91210fc5d3847fe0e262043a8b8bbeb33698970ab69dd759ddd52d0f2985b6d80f2e1c119ec1b'],
+    ['01231asodimaiosd(**(@#ndasd>??asd!2',
+      '0xe244f84b5cff70e11bd23bb3132103dc72d3e77658155b459978c4287ced73036e20efe70c3166a74c7b847bd260d9af848a9a68dae1a7d1881250bb6a4593941b'],
+  ];
+
+  SIGNED.forEach(([message, signature]) => {
+    it(`verifies ${JSON.stringify(message).slice(0, 24)} against the address that signed it`, async () => {
+      expect(await signatureVerifier.verifySignature(message, SIGNER, signature)).to.equal(true);
+    });
+  });
+
+  it('refuses the same signature against another address', async () => {
+    const [message, signature] = SIGNED[0];
+    expect(await signatureVerifier.verifySignature(message, '0x0000000000000000000000000000000000000001', signature))
+      .to.equal(false);
+  });
+
+  it('refuses a message altered under a real signature', async () => {
+    const [, signature] = SIGNED[0];
+    expect(await signatureVerifier.verifySignature('testmessage124', SIGNER, signature)).to.equal(false);
   });
 });
 
