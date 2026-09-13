@@ -93,6 +93,7 @@ module.exports = {
         nodeLocations: 'nodelocations', // per-node view derived from the baseline, invalidated when a new baseline lands
         ownAddress: 'ownaddress', // the address this node last adopted as its own, and the one it moved from
         quorumGrants: 'quorumgrants', // the grantor's per-key register: promised epochs and accepted grants, journaled before any reply
+        fileOperations: 'fileoperations', // in-flight file operations: the container and staging directory each one owns, so boot recovery can tell a live operation from a previous process's debris
         foundingCommittees: 'foundingcommittees', // the materialized founding committee per mesh app: the photo, not the album
       },
     },
