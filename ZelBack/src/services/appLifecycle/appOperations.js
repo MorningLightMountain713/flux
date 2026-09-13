@@ -46,8 +46,6 @@ const appQueryService = require('../appQuery/appQueryService');
 const { listRunningContainers } = appQueryService;
 const deploymentProvider = require('../appRuntime/deploymentProvider');
 const appReconciler = require('../appMonitoring/appReconciler');
-const jobRegistry = require('../utils/jobRegistry');
-const operationsController = require('../appManagement/operationsController');
 const syncthingMonitorHelpers = require('../appMonitoring/syncthingMonitorHelpers');
 const syncthingFolderStateMachine = require('../appMonitoring/syncthingFolderStateMachine');
 const { ConfigMethod } = require('../utils/syncthingConstants');
@@ -353,7 +351,13 @@ async function redeployComponent(appName, componentName, options = {}) {
     // missing containers and, if they can't be rebuilt, applies the §14.5 gate — a
     // has-run app degrades to down + retry; only a never-ran one is removed. No
     // direct uninstall, no fleet-wide removal broadcast over a bad update.
-    log.warn(`${operation} of ${appName} failed (${error.message}); releasing and handing recovery to the reconciler`);
+    // Told to the caller, not only to the log. Returning quietly closes the
+    // stream on whatever the teardown last wrote - a progress line - so a
+    // redeploy that did not happen answers 200 and reads as one that did.
+    status(messageHelper.createErrorMessage(
+      `${operation} of ${appName} failed: ${error.message}. `
+      + 'No forced uninstall - convergence is left to the reconciler.',
+    ));
     operationRegistry.release(appName, redeployToken);
     appReconciler.enqueueApp(appName);
   }
@@ -530,8 +534,12 @@ async function redeployApplication(appName, options = {}) {
   } catch (error) {
     log.error(error);
     // See redeployComponent: never destroy on a redeploy failure — hand recovery to
-    // the reconciler (the §14.5 gate decides down-vs-remove on the rebuild attempt).
-    log.warn(`${operation} of ${appName} failed (${error.message}); releasing and handing recovery to the reconciler`);
+    // the reconciler (the §14.5 gate decides down-vs-remove on the rebuild attempt),
+    // and say so to the caller rather than closing the stream on a progress line.
+    status(messageHelper.createErrorMessage(
+      `${operation} of ${appName} failed: ${error.message}. `
+      + 'No forced uninstall - convergence is left to the reconciler.',
+    ));
     operationRegistry.release(appName, redeployToken);
     appReconciler.enqueueApp(appName);
   }
@@ -581,28 +589,15 @@ async function redeployComponentAPI(req, res) {
       return;
     }
 
-    // The redeploy outlives the request: it stops, rebuilds and restarts a
-    // component, and the caller reads its progress and its outcome at
-    // /apps/operations/:jobId rather than off a connection held open for the
-    // duration.
-    const handle = jobRegistry.start({
-      kind: 'redeploycomponent',
-      detail: () => ({ app: appname, component }),
-    });
-    const report = operationReporter(handle.jobId);
+    // The connection stays open for the rebuild and carries its progress. The
+    // stream is message objects with no separator between them, so the type is
+    // what it holds rather than what frames it.
+    res.setHeader('Content-Type', 'application/json');
 
-    redeployComponent(appname, component, {
+    return await redeployComponent(appname, component, {
       createVolumes: force,
-      onStatus: report,
-    }).then(
-      () => jobRegistry.succeed(handle.jobId),
-      (error) => {
-        log.error(error);
-        jobRegistry.fail(handle.jobId, error);
-      },
-    );
-
-    return await operationsController.accepted(res, handle, { appname, component });
+      onStatus: messageReporter(res),
+    });
   } catch (error) {
     log.error(error);
     const errorResponse = messageHelper.createErrorMessage(
@@ -610,7 +605,18 @@ async function redeployComponentAPI(req, res) {
       error.name,
       error.code,
     );
-    res.json(errorResponse);
+    // Once the stream has started the status line is already spent, so the
+    // error goes into it as one more message rather than as a fresh body.
+    if (res.headersSent) {
+      res.write(serviceHelper.ensureString(errorResponse));
+    } else {
+      res.json(errorResponse);
+    }
+  } finally {
+    // The redeploy writes progress, this closes. Its internal guards return
+    // without closing, and a failure after the stream has started leaves
+    // nothing else that can.
+    if (!res.writableEnded) res.end();
   }
 }
 
@@ -661,24 +667,12 @@ async function redeployApplicationAPI(req, res) {
       return;
     }
 
-    const handle = jobRegistry.start({
-      kind: 'redeploy',
-      detail: () => ({ app: appname }),
-    });
-    const report = operationReporter(handle.jobId);
+    res.setHeader('Content-Type', 'application/json');
 
-    redeployApplication(appname, {
+    return await redeployApplication(appname, {
       createVolumes: force,
-      onStatus: report,
-    }).then(
-      () => jobRegistry.succeed(handle.jobId),
-      (error) => {
-        log.error(error);
-        jobRegistry.fail(handle.jobId, error);
-      },
-    );
-
-    return await operationsController.accepted(res, handle, { appname });
+      onStatus: messageReporter(res),
+    });
   } catch (error) {
     log.error(error);
     const errorResponse = messageHelper.createErrorMessage(
@@ -686,22 +680,47 @@ async function redeployApplicationAPI(req, res) {
       error.name,
       error.code,
     );
-    res.json(errorResponse);
+    if (res.headersSent) {
+      res.write(serviceHelper.ensureString(errorResponse));
+    } else {
+      res.json(errorResponse);
+    }
+  } finally {
+    if (!res.writableEnded) res.end();
   }
 }
 
 /**
- * Says what an operation is doing, for a caller that is no longer on the other
- * end of a connection. The lines land on the operation and are read at
- * /apps/operations/:jobId.
+ * Says what an operation is doing, to a caller holding the connection open.
  *
- * @param {string} jobId
- * @returns {function(string|object): void}
+ * The flush is what makes a line arrive: the compression middleware buffers
+ * small writes to build compressible chunks, so a progress stream without it
+ * sits in that buffer instead of reaching the caller.
+ *
+ * @param {import('express').Response} res
+ * @returns {function(string): void}
  */
-function operationReporter(jobId) {
+function lineReporter(res) {
   return (message) => {
-    const line = serviceHelper.ensureString(message).trim();
-    if (line) jobRegistry.progress(jobId, line);
+    if (res.writableEnded) return;
+    res.write(`${serviceHelper.ensureString(message)}\n`);
+    if (res.flush) res.flush();
+  };
+}
+
+/**
+ * The same, for the redeploy routes, whose stream carries message OBJECTS with
+ * no separator between them - a reader splits it on `}{`. A newline here would
+ * land inside the value a caller parses.
+ *
+ * @param {import('express').Response} res
+ * @returns {function(object): void}
+ */
+function messageReporter(res) {
+  return (message) => {
+    if (res.writableEnded) return;
+    res.write(serviceHelper.ensureString(message));
+    if (res.flush) res.flush();
   };
 }
 
@@ -1084,20 +1103,21 @@ async function appendBackupTask(req, res) {
     return false;
   }
 
-  // An archive stops the app, reads its volumes and starts it again. The caller
-  // reads how far it has got, and whether it worked, at /apps/operations/:jobId.
-  const handle = jobRegistry.start({
-    kind: 'backup',
-    detail: () => ({ app: appname }),
-  });
-  runBackupTask(appname, backup, force, operationReporter(handle.jobId)).then(
-    (ok) => (ok ? jobRegistry.succeed(handle.jobId) : undefined),
-    (error) => {
-      log.error(error);
-      jobRegistry.fail(handle.jobId, error);
-    },
-  );
-  return operationsController.accepted(res, handle, { appname });
+  // An archive stops the app, reads its volumes and starts it again, and the
+  // caller reads how far it has got off this connection. The work throws rather
+  // than writing into the response, so a failure arrives as one chunk from here.
+  const report = lineReporter(res);
+  try {
+    return await runBackupTask(appname, backup, force, report);
+  } catch (error) {
+    log.error(error);
+    report(`${error?.message}\n`);
+    return false;
+  } finally {
+    // The archive writes progress; this closes. A failure after the stream has
+    // started leaves nothing else that can.
+    if (!res.writableEnded) res.end();
+  }
 }
 
 /**
@@ -1106,7 +1126,7 @@ async function appendBackupTask(req, res) {
  * @param {string} appname
  * @param {Array<object>} backup - the components to archive
  * @param {boolean} force - archive an incomplete copy anyway
- * @param {function(string): void} report - progress, for the operation's reader
+ * @param {function(string): void} report - progress, written to the caller's stream
  * @returns {Promise<boolean>}
  */
 async function runBackupTask(appname, backup, force, report) {
@@ -1310,21 +1330,18 @@ async function appendRestoreTask(req, res) {
     return false;
   }
 
-  // A restore stops the app, replaces its volumes and starts it again. The
-  // caller reads how far it has got, and whether it worked, at
-  // /apps/operations/:jobId.
-  const handle = jobRegistry.start({
-    kind: 'restore',
-    detail: () => ({ app: appname }),
-  });
-  runRestoreTask(appname, restore, type, req.headers.zelidauth, operationReporter(handle.jobId)).then(
-    (ok) => (ok ? jobRegistry.succeed(handle.jobId) : undefined),
-    (error) => {
-      log.error(error);
-      jobRegistry.fail(handle.jobId, error);
-    },
-  );
-  return operationsController.accepted(res, handle, { appname });
+  // A restore stops the app, replaces its volumes and starts it again, and the
+  // caller reads how far it has got off this connection.
+  const report = lineReporter(res);
+  try {
+    return await runRestoreTask(appname, restore, type, req.headers.zelidauth, report);
+  } catch (error) {
+    log.error(error);
+    report(`${error?.message}\n`);
+    return false;
+  } finally {
+    if (!res.writableEnded) res.end();
+  }
 }
 
 /**
@@ -1334,7 +1351,7 @@ async function appendRestoreTask(req, res) {
  * @param {Array<object>} restore - the components to restore
  * @param {string} type - where the archive comes from
  * @param {string} zelidauth - the caller's auth, for the peer redeploy it triggers
- * @param {function(string): void} report - progress, for the operation's reader
+ * @param {function(string): void} report - progress, written to the caller's stream
  * @returns {Promise<boolean>}
  */
 async function runRestoreTask(appname, restore, type, zelidauth, report) {

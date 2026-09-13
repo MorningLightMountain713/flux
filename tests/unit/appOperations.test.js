@@ -162,6 +162,12 @@ describe('appOperations tests', () => {
         write: sinon.stub(),
         flush: sinon.stub(),
         setHeader: sinon.stub(),
+        end: sinon.stub(),
+        // The endpoints stream, so they read both before writing and before
+        // closing. A double without them reports every response as already
+        // finished and no assertion below could see a write.
+        writableEnded: false,
+        headersSent: false,
       };
       // express returns the response from status() so the call chains
       res.status = sinon.stub().returns(res);
@@ -245,14 +251,18 @@ describe('appOperations tests', () => {
       });
       sinon.stub(dbHelper, 'findOneInDatabase').resolves(null);
 
+      const acquire = sinon.spy(operationRegistry, 'acquire');
+
       await appOperations.redeployComponentAPI(req, res);
 
-      expect(res.status.calledWith(202), 'the redeploy outlives the request').to.be.true;
+      // force is what separates a rebuild from a redeploy, and the lease is
+      // where that word first has an effect.
+      sinon.assert.calledWith(acquire, 'myapp', 'rebuild');
     });
 
-    // The work outlives the request, so the answer is a handle rather than the
-    // outcome: the caller reads progress and the verdict at the status resource.
-    it('answers 202 with a job handle the caller can poll', async () => {
+    // The caller holds the connection open and reads progress off it, so the
+    // stream declares what it carries and something always closes it.
+    it('streams the redeploy and closes the response', async () => {
       req.params.appname = 'myapp';
       req.params.component = 'frontend';
 
@@ -263,15 +273,23 @@ describe('appOperations tests', () => {
 
       await appOperations.redeployComponentAPI(req, res);
 
-      expect(res.status.calledWith(202)).to.be.true;
-      const body = res.json.firstCall.args[0];
-      expect(body.data.jobId, 'the handle').to.match(/^op_/);
-      expect(body.data.statusUrl).to.contain('/apps/operations/');
-      expect(body.data.status).to.equal('Running');
-      // Location and Retry-After are how a client follows it without reading the body
-      expect(res.setHeader.calledWith('Location', body.data.statusUrl)).to.be.true;
-      expect(res.setHeader.calledWith('Operation-Id', body.data.jobId)).to.be.true;
-      sinon.assert.calledWith(res.setHeader, 'Retry-After', sinon.match.string);
+      expect(res.setHeader.calledWith('Content-Type', 'application/json')).to.be.true;
+      expect(res.end.calledOnce, 'the redeploy writes progress, the endpoint closes').to.be.true;
+    });
+
+    // A refusal is an answer, and it arrives before the stream starts, so it is
+    // a body rather than a chunk. Returning without writing left the caller on
+    // an open connection until server.requestTimeout.
+    it('answers a refusal as a body, not as a chunk', async () => {
+      req.params.appname = 'myapp';
+      req.params.component = 'frontend';
+      operationRegistry.acquire('myapp', 'install', 'test');
+
+      await appOperations.redeployComponentAPI(req, res);
+
+      expect(res.json.calledOnce, 'the refusal is answered').to.be.true;
+      expect(res.json.firstCall.args[0].status).to.equal('warning');
+      expect(res.write.called, 'nothing was streamed').to.be.false;
     });
   });
 
@@ -286,6 +304,23 @@ describe('appOperations tests', () => {
       await appOperations.redeployComponent('myapp', 'frontend', { onStatus: (msg) => messages.push(msg) });
       expect(messages).to.have.lengthOf(1);
       expect(messages[0]).to.include('Another operation is in progress');
+    });
+
+    // Development's c721c79f1 fixed this and the replay reverted the reporting
+    // half of it: the failure reached the log and nothing else, so the stream
+    // closed on the last progress line and a redeploy that did not happen
+    // answered 200 and read as one that did.
+    it('tells the caller when the redeploy fails, not only the log', async () => {
+      deploymentProvider.getInstalledDeployments.resolves([]);
+      sinon.stub(appReconciler, 'enqueueApp');
+      const messages = [];
+
+      await appOperations.redeployComponent('myapp', 'frontend', { onStatus: (msg) => messages.push(msg) });
+
+      const failure = messages.find((msg) => msg && msg.status === 'error');
+      expect(failure, 'the failure reached the caller').to.not.equal(undefined);
+      expect(failure.data.message).to.include('myapp');
+      expect(failure.data.message).to.include('No forced uninstall');
     });
 
     it('holds a redeploy lease during the redeploy and releases it', async () => {
