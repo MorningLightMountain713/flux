@@ -238,8 +238,44 @@ function decodeSignedSyncRequest(buf) {
   return { type, sinceTimestamp, requestTimestamp, pubkey, signature };
 }
 
-function buildSyncSignatureMessage(type, sinceTimestamp, requestTimestamp) {
-  return `${type}${sinceTimestamp}${requestTimestamp}`;
+// The domain and separator a signed sync request is encoded with, in the same
+// form the quorum-grant envelopes and the node-down verdicts use. The domain
+// keeps a signature over one protocol's message from reading as another's; the
+// separator is what makes the field boundaries visible.
+const SYNC_SIG_DOMAIN = 'fluxsyncrequest';
+const SYNC_SIG_SEPARATOR = '|';
+
+/**
+ * The string a signed sync request commits to.
+ *
+ * `${type}${since}${request}` ran the three fields together, so the boundaries
+ * were readable only from the values: a one-digit type beside a timestamp
+ * starting with the second digit builds the same bytes as a two-digit type, and
+ * a signature over one request then reads as a signature over another. Nothing
+ * reachable could do it — the dispatcher only ever verifies types 0x20-0x23,
+ * which all render as two digits, and the freshness window pins the request
+ * timestamp to thirteen — but neither guard was put there for this, and the
+ * format cannot be changed once a signature exists over it.
+ *
+ * Legacy form kept for peers that have not advertised `syncSigV2`. Both sides
+ * pick the form from that capability, so there is no flag day: this is not a
+ * leniency, it is which contract the two nodes share.
+ *
+ * @param {number} type - MSG_TYPE of the request
+ * @param {number} sinceTimestamp
+ * @param {number} requestTimestamp
+ * @param {{legacy?: boolean}} [options]
+ * @returns {string|null} null when a field cannot be encoded unambiguously
+ */
+function buildSyncSignatureMessage(type, sinceTimestamp, requestTimestamp, options = {}) {
+  if (options.legacy) return `${type}${sinceTimestamp}${requestTimestamp}`;
+
+  const fields = [sinceTimestamp, requestTimestamp];
+  if (!Number.isInteger(type) || type < 0) return null;
+  for (const field of fields) {
+    if (!Number.isInteger(field) || field < 0) return null;
+  }
+  return `${SYNC_SIG_DOMAIN}-${type}:${fields.join(SYNC_SIG_SEPARATOR)}`;
 }
 
 function encodeRequestTempMessages(sinceTimestamp, requestTimestamp, pubkey, signature) {
@@ -281,6 +317,8 @@ module.exports = {
   encodeSignedSyncRequest,
   decodeSignedSyncRequest,
   buildSyncSignatureMessage,
+  SYNC_SIG_DOMAIN,
+  SYNC_SIG_SEPARATOR,
   encodeRequestTempMessages,
   encodeRequestAppRunning,
   encodeRequestAppInstalling,

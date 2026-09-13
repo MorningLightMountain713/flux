@@ -312,9 +312,31 @@ describe('peerCodec', () => {
       expect(decoded.requestTimestamp).to.equal(testRequestTs);
     });
 
-    it('should build signature message consistently', () => {
-      const msg = buildSyncSignatureMessage(0x21, 1000, 2000);
-      expect(msg).to.equal('3310002000');
+    it('builds a signature message whose field boundaries are in the encoding', () => {
+      expect(buildSyncSignatureMessage(0x21, 1000, 2000)).to.equal('fluxsyncrequest-33:1000|2000');
+    });
+
+    it('gives two different requests two different payloads', () => {
+      // Run together, a one-digit type beside a timestamp starting with the
+      // second digit built the same bytes as a two-digit type, so a signature
+      // over one request read as a signature over another.
+      const a = buildSyncSignatureMessage(3, 31000, 2000);
+      const b = buildSyncSignatureMessage(33, 1000, 2000);
+      expect(a).to.not.equal(b);
+      // The control: the legacy form still collides, which is what says the
+      // pair above is the right pair to be testing.
+      expect(buildSyncSignatureMessage(3, 31000, 2000, { legacy: true }))
+        .to.equal(buildSyncSignatureMessage(33, 1000, 2000, { legacy: true }));
+    });
+
+    it('still builds the legacy payload for a peer that has not claimed syncSigV2', () => {
+      expect(buildSyncSignatureMessage(0x21, 1000, 2000, { legacy: true })).to.equal('3310002000');
+    });
+
+    it('refuses a field it cannot encode unambiguously', () => {
+      expect(buildSyncSignatureMessage(0x21, 1.5, 2000)).to.equal(null);
+      expect(buildSyncSignatureMessage(0x21, -1, 2000)).to.equal(null);
+      expect(buildSyncSignatureMessage('21', 1000, 2000)).to.equal(null);
     });
   });
 });
