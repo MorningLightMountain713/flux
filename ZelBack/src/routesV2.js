@@ -107,6 +107,23 @@ router.use(envelope);
 router.use(express.json({ limit: BODY_LIMIT }));
 
 /**
+ * Answer a privilege verdict, or explain why there is not one.
+ *
+ * A check that THREW is not a check that said no: answering 401 for it would
+ * tell a caller their credentials are wrong when the node is broken.
+ */
+async function decide(req, res, next, verdict) {
+  try {
+    const authorized = await verdict;
+    if (!authorized) return res.fail('UNAUTHORIZED', 'insufficient privilege');
+    return next();
+  } catch (error) {
+    log.error(`routesV2 privilege check: ${error.message}`);
+    return res.fail('INTERNAL', 'privilege check failed');
+  }
+}
+
+/**
  * Auth as middleware rather than the first ten lines of every handler.
  *
  * It wraps the SAME verificationHelper.verifyPrivilege v1 calls, so zelidauth
@@ -115,20 +132,34 @@ router.use(express.json({ limit: BODY_LIMIT }));
  * throws a TypeError on a request object, deliberately, so a wiring mistake
  * cannot arrive wearing the face of a failed check.
  *
+ * For a privilege that reads no app name. The app-scoped form is separate
+ * rather than an optional argument here, so that BOTH are visible in the source
+ * to privilegeCallShape.test.js: a computed options object is an expression
+ * that guard cannot read, and its whole job is to see which call sites carry an
+ * app name and which do not.
+ *
  * @param {string} privilege one of Privilege
- * @param {function(import('express').Request): object} [options] app scoping
  */
-function requireTier(privilege, options = () => ({})) {
-  return async (req, res, next) => {
-    try {
-      const authorized = await verificationHelper.verifyPrivilege(privilege, authOf(req), options(req));
-      if (!authorized) return res.fail('UNAUTHORIZED', 'insufficient privilege');
-      return next();
-    } catch (error) {
-      log.error(`routesV2 requireTier: ${error.message}`);
-      return res.fail('INTERNAL', 'privilege check failed');
-    }
-  };
+function requireTier(privilege) {
+  return async (req, res, next) => decide(
+    req, res, next,
+    verificationHelper.verifyPrivilege(privilege, authOf(req)),
+  );
+}
+
+/**
+ * The same, for a privilege whose verdict depends on WHICH app is being asked
+ * about. The name is resolved from the request here and passed as `{ appName }`
+ * at the call, which is the one shape the verifier reads.
+ *
+ * @param {string} privilege one of Privilege, app-scoped
+ * @param {function(import('express').Request): string} appNameOf
+ */
+function requireAppTier(privilege, appNameOf) {
+  return async (req, res, next) => decide(
+    req, res, next,
+    verificationHelper.verifyPrivilege(privilege, authOf(req), { appName: appNameOf(req) }),
+  );
 }
 
 /**
@@ -192,6 +223,7 @@ router.use((error, req, res, next) => {
 module.exports = router;
 module.exports.CODE_TO_STATUS = CODE_TO_STATUS;
 module.exports.requireTier = requireTier;
+module.exports.requireAppTier = requireAppTier;
 module.exports.Privilege = Privilege;
 // Exported so a test can mount the surface's pieces without reaching into the
 // router's middleware stack by index, which changes whenever the order does.
