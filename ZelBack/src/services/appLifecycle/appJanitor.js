@@ -123,9 +123,26 @@ async function registryExpirySweep() {
 
   const nowSeconds = Math.floor(Date.now() / 1000);
   const candidates = await appsRepository.listGlobalAppInfo();
-  const appsToExpire = candidates.filter(
-    (spec) => spec.isExpired(nowSeconds, explorerHeight),
-  );
+
+  // One unjudgeable row must not stop every other app expiring. The library
+  // refuses a height, expire or ttl it cannot do arithmetic on rather than
+  // returning the false a NaN comparison produces, so the refusal is a throw
+  // and this sweep is a single pass over the whole registry.
+  //
+  // Such a row is kept, never expired: removing a global registration on a
+  // verdict nothing could compute is the worse of the two wrong answers, and it
+  // cannot be undone. The warn is what makes it visible, since keeping it is
+  // otherwise indistinguishable from the app being alive.
+  const unjudgeable = [];
+  const appsToExpire = candidates.filter((spec) => {
+    try {
+      return spec.isExpired(nowSeconds, explorerHeight);
+    } catch (error) {
+      unjudgeable.push(spec.name);
+      log.warn(`appJanitor - cannot determine expiry for ${spec.name}, keeping it: ${error.message}`);
+      return false;
+    }
+  });
 
   // eslint-disable-next-line no-restricted-syntax
   for (const app of appsToExpire) {
@@ -139,7 +156,14 @@ async function registryExpirySweep() {
   const { reaped } = await appsRepository.reapOrphanedContentManifests();
   if (reaped > 0) log.info(`appJanitor - reaped ${reaped} content manifest(s) for removed apps`);
 
-  return { expired: appsToExpire.length, manifestsReaped: reaped };
+  return {
+    expired: appsToExpire.length,
+    manifestsReaped: reaped,
+    // Reported as well as logged, so a caller sees an incomplete pass without
+    // reading the log for it.
+    unjudgeable: unjudgeable.length,
+    unjudgeableApps: unjudgeable,
+  };
 }
 
 /**

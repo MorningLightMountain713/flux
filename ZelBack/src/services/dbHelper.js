@@ -1395,6 +1395,7 @@ module.exports = {
   isReindexAppsInformationRequired,
   reindexGlobalAppsInformation,
   removeDocumentsFromCollection,
+  repairNanInAppsMessagesDb,
   replaceOneInDatabase,
   updateInDatabase,
   updateOneInDatabase,

@@ -24,10 +24,17 @@ const repoRoot = join(__dirname, '..', '..', '..');
 
 export const NODE_IMAGE = 'flux-e2e-fluxos-01';
 
+// One box hosts more than one branch's harness work, and the image names are
+// fixed, so a run carries its lineage in the tag. The guard has to inspect the
+// image the suite will actually boot: untagged, it reads :latest and can pass a
+// tagged run on another branch's bake, or fail one whose own image is current.
+export const IMAGE_TAG = process.env.FLUX_E2E_TAG || 'latest';
+const TAGGED_NODE_IMAGE = `${NODE_IMAGE}:${IMAGE_TAG}`;
+
 const PIN_PATH = join(repoRoot, 'test-infra', 'flux-spec', 'pin');
 const VENDOR_REF_PATH = join(repoRoot, 'test-infra', 'flux-spec', 'dist', '.vendored-ref');
 const VENDOR_CMD = 'bash test-infra/flux-spec/vendor.sh';
-const IMAGE_CMD = `docker build -f test-infra/Dockerfile.fluxos -t ${NODE_IMAGE} .`;
+const IMAGE_CMD = `FLUX_E2E_TAG=${IMAGE_TAG} ./test-infra/build-images.sh fluxos-01`;
 
 const readRef = (path) => (existsSync(path) ? readFileSync(path, 'utf-8').trim() : null);
 
@@ -37,7 +44,7 @@ function imageVendorRef() {
   try {
     return execFileSync(
       'docker',
-      ['run', '--rm', '--entrypoint', 'cat', NODE_IMAGE, '/flux-spec/.vendored-ref'],
+      ['run', '--rm', '--entrypoint', 'cat', TAGGED_NODE_IMAGE, '/flux-spec/.vendored-ref'],
       { encoding: 'utf-8', stdio: ['ignore', 'pipe', 'pipe'] },
     ).trim();
   } catch {
@@ -79,7 +86,7 @@ export function assertFluxSpecVendorCurrent() {
   const image = imageVendorRef();
   if (image !== pin) {
     throw new Error(
-      `node image ${NODE_IMAGE} baked flux-spec ${image ? image.slice(0, 12) : '(unknown)'}, `
+      `node image ${TAGGED_NODE_IMAGE} baked flux-spec ${image ? image.slice(0, 12) : '(unknown)'}, `
       + `pin requires ${short}.\n  run: ${IMAGE_CMD}`,
     );
   }

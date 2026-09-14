@@ -424,7 +424,17 @@ async function prepareInstallingClaimsCollections() {
   // per replica under the same (name, ip); the two-field unique index would
   // reject the sibling's announce.
   await broadcasts.dropIndex('data.name_1_data.ip_1').catch(() => {});
-  await dbHelper.ensureIndex(broadcasts, { 'data.name': 1, 'data.ip': 1, 'data.replica': 1 }, { unique: true });
+  // With a recovery, because this runs in the awaited stretch of boot: a node
+  // upgrading with rows that already violate the key fails the build, and the
+  // throw re-runs the whole boot 15 seconds later, forever. dedupeByKey makes
+  // the data conform to what the index declares, and the key IS the row's
+  // identity here - one announce per (app, node, replica).
+  await dbHelper.ensureIndex(
+    broadcasts,
+    { 'data.name': 1, 'data.ip': 1, 'data.replica': 1 },
+    { unique: true },
+    dbHelper.dedupeByKey,
+  );
 
   const locations = database.collection(globalAppsInstallingLocations);
   await locations.dropIndex('broadcastedAt_1').catch(() => {});
