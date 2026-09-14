@@ -1580,6 +1580,25 @@ describe('dockerService tests', () => {
       expect(actualConfig.HostConfig.Memory).to.equal(1_887_436_800);
     });
 
+    // The log a read is sized against and the log the daemon is told to keep are
+    // one fact, and this is the only place that says so. They had drifted: the
+    // read used the constants while the create wrote 1x20m, and docker discards
+    // a FULL file - so a rotation took the whole history instead of a quarter.
+    it('configures the log the reader is sized for, not a second opinion', async () => {
+      const deployComp = makeDeployComp();
+
+      await dockerService.appDockerCreate(deployComp);
+
+      const { LogConfig } = dockerStub.firstCall.args[0].HostConfig;
+      expect(LogConfig.Type).to.equal('json-file');
+      expect(LogConfig.Config['max-file'], 'more than one file, or a rotation takes everything')
+        .to.equal(String(dockerService.LOG_MAX_FILES));
+      expect(LogConfig.Config['max-size'])
+        .to.equal(`${dockerService.LOG_MAX_FILE_MB}m`);
+      expect(Number(LogConfig.Config['max-file']), 'one file means no history survives a rotation')
+        .to.be.above(1);
+    });
+
     it('should set up mounts from DeploymentComponent', async () => {
       const deployComp = makeDeployComp();
 
