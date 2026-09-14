@@ -105,8 +105,8 @@ async function listComponentVolumeMounts(appName, componentName) {
   const filesystems = await deviceHelper.listMountedFilesystems();
   // Matched on the mount's own directory name, not on its full path: the apps
   // folder differs between node layouts (Arcane sets FLUX_APPS_FOLDER, a legacy
-  // node does not), and a volume is this component's because of what it is
-  // called, not because of where the layout happens to put it.
+  // node does not), so which component a row belongs to is decided by what it
+  // is called.
   //
   // Never last-wins. Building the Map straight from the list would let two rows
   // sharing a directory name silently resolve to whichever came second, and
@@ -136,6 +136,12 @@ async function listComponentVolumeMounts(appName, componentName) {
     const identifier = candidates.find((id) => byName.has(dockerService.getAppIdentifier(id)));
     if (!identifier) return [];
     const entry = byName.get(dockerService.getAppIdentifier(identifier));
+    // A row outside the apps folder is not an app volume, whatever its basename
+    // says. Refused rather than skipped: every caller here addresses real data,
+    // and "no volume" would read as an app with nothing mounted.
+    if (!entry.target.startsWith(appsFolder)) {
+      throw new Error(`${identifier} is mounted at ${entry.target}, outside the apps folder; refusing to use it`);
+    }
     return [{
       replica,
       identifier,

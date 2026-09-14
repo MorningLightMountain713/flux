@@ -536,6 +536,26 @@ describe('volumeService tests', () => {
       await expect(volumeService.listComponentVolumeMounts('myapp', 'web'))
         .to.be.rejectedWith(/mounted at both .* refusing to guess/);
     });
+
+    it('refuses a mount carrying the identifier from outside the apps folder', async () => {
+      appsRepositoryStub.getInstalledApp.resolves({ name: 'myapp', identity: 'myapp' });
+      deviceHelperStub.listMountedFilesystems.resolves([mountRow('/elsewhere/fluxweb_myapp')]);
+
+      await expect(volumeService.listComponentVolumeMounts('myapp', 'web'))
+        .to.be.rejectedWith(/outside the apps folder/);
+    });
+
+    // Containment is a directory, not a string prefix: a sibling whose name
+    // merely begins with the apps folder's is a different directory.
+    it('refuses a mount under a sibling directory sharing the apps folder prefix', async () => {
+      appsRepositoryStub.getInstalledApp.resolves({ name: 'myapp', identity: 'myapp' });
+      deviceHelperStub.listMountedFilesystems.resolves([
+        mountRow(`${APPS_FOLDER.replace(/\/$/, '')}-backup/fluxweb_myapp`),
+      ]);
+
+      await expect(volumeService.listComponentVolumeMounts('myapp', 'web'))
+        .to.be.rejectedWith(/outside the apps folder/);
+    });
   });
 
   describe('appVolumeFilesystemId tests', () => {
