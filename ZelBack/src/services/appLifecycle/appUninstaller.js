@@ -1020,7 +1020,7 @@ async function uninstallApplication(appName, options = {}) {
       // what stops a teardown that fails part way being read as tampering.
       // A sibling replica keeps the row, so the records keep the reader that
       // makes them worth holding: only the last identity's removal clears them.
-      dockerService.clearFluxRemovedContainers(appName);
+      dockerService.clearFluxRemovedContainers(components.map((c) => c.appId));
       status('Database cleaned');
     }
 

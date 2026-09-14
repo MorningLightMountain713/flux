@@ -1614,9 +1614,9 @@ async function appDockerKill(idOrName) {
  * missing because FluxOS removed it, or because something else did? It only ever
  * asks about app containers, by identifier. A container addressed by raw docker
  * id is an orphan the reconciler never asks about - so the entry can never be
- * read, and it can never be dropped either, because clearFluxRemovedContainers
- * matches on the app name a hex id does not carry. Not writing it is the whole
- * fix; there is nothing about it worth remembering.
+ * read, and no uninstall clears it either, since it belongs to no app's
+ * component list. Not writing it is the whole fix; there is nothing about it
+ * worth remembering.
  *
  * @param {string} idOrName
  * @returns {boolean}
@@ -1663,28 +1663,24 @@ async function appDockerForceRemove(idOrName, removeVolumes = true) {
 }
 
 /**
- * Drop every fluxRemovedContainers entry belonging to an app. Called when the
- * app's local row goes: nothing reconciles an app with no row, so there is no
+ * Drop the fluxRemovedContainers entries for the containers named. Called when
+ * an app's local row goes: nothing reconciles an app with no row, so there is no
  * absence left to attribute, and an entry with no reader would otherwise outlive
  * the app for the life of the process.
  *
- * Every entry belongs to an app, because a removal addressed by raw docker id is
- * not recorded at all - it would carry no app name for this to match, and no
- * reader to want it.
+ * Takes the identifiers rather than an app name, because a name cannot reach
+ * them. Entries are keyed on the CONTAINER IDENTIFIER, which is built from the
+ * app's minted identity - so for any app registered since identities were minted
+ * the name does not appear in the key at all, and a replica's
+ * `<component>_<identity>_<replica>` matches no rule written over the name. The
+ * caller has removed these containers one by one and knows exactly which; this
+ * takes that answer instead of trying to reconstruct it.
  *
- * Lives here because the entries are keyed by docker name and this module owns
- * that naming: a component is `flux<component>_<app>`, a v<=3 app is `flux<app>`,
- * and an app name never contains an underscore (the codebase splits component
- * identifiers on it throughout).
- *
- * @param {string} appName - bare app name
+ * @param {Iterable<string>} dockerNames - docker names, as getDockerName builds them
  */
-function clearFluxRemovedContainers(appName) {
-  const appDockerName = getDockerName(appName);
-  for (const container of globalState.fluxRemovedContainers) {
-    if (container === appDockerName || container.endsWith(`_${appName}`)) {
-      globalState.fluxRemovedContainers.delete(container);
-    }
+function clearFluxRemovedContainers(dockerNames) {
+  for (const name of dockerNames) {
+    globalState.fluxRemovedContainers.delete(name);
   }
 }
 
