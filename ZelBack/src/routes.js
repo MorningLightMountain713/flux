@@ -310,6 +310,12 @@ module.exports = (app) => {
   app.get('/flux/apiport', cache('1 day'), asyncRoute((req, res) => {
     return fluxService.getAPIPort(req, res);
   }));
+  // Withdrawn, answering 410 rather than 404 so a caller learns the list moved
+  // instead of reading a dead path as a broken node. Their setters answer the same
+  // way beside adjustapiport below.
+  app.get('/flux/kadena', asyncRoute((req, res) => {
+    return fluxService.getFluxKadena(req, res);
+  }));
   app.get('/flux/enterpriseappowners', cache('1 hour'), asyncRoute((req, res) => {
     return fluxService.getEnterpriseAppOwners(req, res);
   }));
@@ -318,6 +324,9 @@ module.exports = (app) => {
   }));
   app.get('/flux/restart', asyncRoute((req, res) => {
     return fluxService.restartFluxOS(req, res);
+  }));
+  app.get('/flux/dosstate', cache('30 seconds'), asyncRoute((req, res) => {
+    return fluxNetworkHelper.getDOSState(req, res);
   }));
   app.get('/flux/health', cache('30 seconds'), asyncRoute((req, res) => {
     return idService.nodeHealth(req, res);
@@ -664,6 +673,9 @@ module.exports = (app) => {
   app.get('/apps/placementlocations', rejectQueryParameters, cache('30 seconds'), asyncRoute((req, res) => { // node, fault-domain and tier counts per continent/country
     return placementFeasibility.placementLocationsAPI(req, res);
   }));
+  app.get('/apps/registrationinformation', asyncRoute((req, res) => {
+    return registryManager.registrationInformation(req, res);
+  }));
   app.get('/apps/deploymentinformation', cache('30 seconds'), asyncRoute((req, res) => {
     return deploymentInfoService.deploymentInformation(req, res);
   }));
@@ -685,6 +697,9 @@ module.exports = (app) => {
   }));
   app.get('/explorer/balance/:address?', cache('30 seconds'), asyncRoute((req, res) => {
     return chainReadApi.getAddressBalance(req, res);
+  }));
+  app.get('/explorer/fusion/coinbase/:address?', asyncRoute((req, res) => {
+    return explorerService.getAddressFusionCoinbase(req, res);
   }));
   app.get('/explorer/scannedheight', cache('30 seconds'), asyncRoute((req, res) => {
     return chainReadApi.getScannedHeight(req, res);
@@ -849,6 +864,9 @@ module.exports = (app) => {
 
   // Withdrawn settings: kept so callers get a reasoned error rather than a 404.
   // Remove at the next major version.
+  app.get('/flux/adjustkadena/:account?/:chainid?', asyncRoute((req, res) => {
+    return fluxService.adjustKadenaAccount(req, res);
+  }));
   app.get('/flux/adjustrouterip/:routerip?', asyncRoute((req, res) => { // note this essentially rebuilds flux use with caution!
     return fluxService.adjustRouterIP(req, res);
   }));
@@ -1056,6 +1074,9 @@ module.exports = (app) => {
     return explorerService.rescanExplorerApi(req, res);
   }));
 
+  app.get('/apps/updatetolatestspecs/:appname', asyncRoute((req, res) => {
+    return registryManager.updateApplicationSpecificationAPI(req, res);
+  }));
   app.get('/apps/appconvert/:appname', asyncRoute((req, res) => {
     return registryManager.appConvertApi(req, res);
   }));

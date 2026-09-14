@@ -1912,6 +1912,20 @@ daemonSubscriptionService.subscribe(daemonSubscriptionService.TOPICS.hashBlockHe
   onMessage: (decoded) => onNewBlock(decoded.height),
 });
 
+/**
+ * The fusion coinbase lookup was already marked deprecated before it was removed,
+ * and its sibling bulk dumps had been commented out for years. Nothing replaced
+ * it: a caller wanting an address's transactions asks /explorer/transactions.
+ *
+ * @param {import('express').Request} _req
+ * @param {import('express').Response} res
+ */
+function getAddressFusionCoinbase(_req, res) {
+  const message = 'The fusion coinbase lookup has been withdrawn. Use '
+    + '/explorer/transactions/{address} for an address\'s transactions.';
+  return res.json(messageHelper.createErrorMessage(message, 'Gone', 410));
+}
+
 module.exports = {
   // exported for tests
   pushedTip: () => pushedTipHeight,
@@ -1949,4 +1963,5 @@ module.exports = {
   isMessageAuthority,
 
   isExplorerSynced,
+  getAddressFusionCoinbase,
 };

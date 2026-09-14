@@ -1712,19 +1712,19 @@ async function getFluxInfo(req, res) {
 }
 
 /**
- * Reports that a withdrawn setting can no longer be changed here.
+ * Reports that a withdrawn endpoint is gone, and says where its subject went.
  *
- * An error rather than a success no-op: every one of these endpoints exists to make
- * something take effect, so a caller told `status: success` believes it did. Most
- * clients branch on that, which makes an error the only reply that actually informs
- * them. The routes stay until the next major version so callers get this rather than a
- * 404. Their privilege checks do not: the reply is a fixed string, and there is no
- * longer any state behind it to protect.
+ * An error rather than a success no-op: a setter exists to make something take
+ * effect, so a caller told `status: success` believes it did, and a reader handed an
+ * empty success believes the answer is "none". Most clients branch on status, which
+ * makes an error the only reply that actually informs them. The routes stay so
+ * callers get this rather than a 404. Their privilege checks do not: the reply is a
+ * fixed string, and there is no longer any state behind it to protect.
  *
- * @param {string} detail What replaced it.
+ * @param {string} detail What replaced it, or why it is gone.
  * @returns {Function} Express handler
  */
-function withdrawnSetting(detail) {
+function withdrawnEndpoint(detail) {
   return async (req, res) => {
     const errMessage = messageHelper.createErrorMessage(detail, 'Gone', 410);
     res.json(errMessage);
@@ -1736,10 +1736,22 @@ function withdrawnSetting(detail) {
  * fluxbench's copy is the one the network resolves this node by — so changing it here
  * only ever produced a node listening on one port and announcing another.
  */
-const adjustAPIPort = withdrawnSetting(
+const adjustAPIPort = withdrawnEndpoint(
   'The API port is set by the node installer, not FluxOS. Change it in the ArcaneOS '
   + 'configuration TUI, or in fluxbench.conf on a legacy node, so FluxOS and fluxbench agree.',
 );
+
+/**
+ * The kadena account was a userconfig field that went with the rest of the settings
+ * withdrawn when userconfig.js became operator input with one writer per platform.
+ * Nothing in FluxOS reads it now, so neither endpoint has an answer to give.
+ */
+const KADENA_WITHDRAWN = 'FluxOS no longer holds a kadena account. The field was '
+  + 'withdrawn from userconfig.js and nothing reads it.';
+
+const getFluxKadena = withdrawnEndpoint(KADENA_WITHDRAWN);
+
+const adjustKadenaAccount = withdrawnEndpoint(KADENA_WITHDRAWN);
 
 /**
  * The router address is installer-recorded network topology, and it is one field of a
@@ -1749,7 +1761,7 @@ const adjustAPIPort = withdrawnSetting(
  * elsewhere it was the last thing FluxOS wrote to config/userconfig.js, which is now
  * operator input with no runtime writer at all.
  */
-const adjustRouterIP = withdrawnSetting(
+const adjustRouterIP = withdrawnEndpoint(
   'The router address is set by the node installer, not FluxOS. Change it in the ArcaneOS '
   + 'configuration TUI, or in config/userconfig.js on a legacy node, and restart FluxOS.',
 );
@@ -2212,6 +2224,8 @@ async function isArcaneOs(req, res) {
 
 module.exports = {
   adjustAPIPort,
+  adjustKadenaAccount,
+  getFluxKadena,
   adjustRouterIP,
   benchmarkDebug,
   checkoutBranch,
