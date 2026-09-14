@@ -7,6 +7,7 @@ const daemonServiceMiscRpcs = require('../daemonService/daemonServiceMiscRpcs');
 const appsRepository = require('../appDatabase/appsRepository');
 const fluxNetworkHelper = require('../fluxNetworkHelper');
 const { resolveSpec, resolveInstantiatedSpec } = require('../utils/specCutover');
+const { getSpec } = require('../utils/specLibs');
 const { appPricePerMonth } = require('../utils/appUtilities');
 const { getChainParamsPriceUpdates } = require('../utils/chainUtilities');
 const cacheManager = require('../utils/cacheManager').default;
@@ -25,10 +26,11 @@ const log = require('../../lib/log');
  * display price and there is only one figure.
  *
  * Subscriptions here are denominated in blocks: the app dies when the chain
- * reaches height + expire, whatever wall clock that turns out to be. Nothing in
- * this module converts blocks to seconds — the 30-second block is difficulty's
- * target, not a guarantee, so a converted figure would be an estimate wearing
- * the costume of an exact one.
+ * reaches height + expire, whatever wall clock that turns out to be. The one
+ * place that leaves block space is the early-update credit, which is a fraction
+ * of a price quoted per MONTH — see unusedSubscriptionFraction. A block count
+ * is not a duration across a rate change, and that credit is the only figure
+ * here that has to be one.
  */
 
 const globalAppsInformation = config.get('database.appsglobal.collections.appsInformation');
@@ -60,6 +62,36 @@ const FREE_UPDATE_WINDOWS = [
   { hours: 48, max: 8 },
   { hours: 24, max: 5 },
 ];
+
+/**
+ * The unused fraction of a subscription, measured in TIME.
+ *
+ * This decides the credit an early update gets back, and it has to be a time
+ * fraction because the price it scales is per month: appPricePerMonth is a rate
+ * per unit time, so a fraction of BLOCKS buys the wrong amount of it across a
+ * rate change. An app registered at 2,000,000 for 40,000 blocks and updated at
+ * 2,060,000 has 40% of its blocks left and 25% of its time - all the remaining
+ * blocks are post-fork ones, which are a quarter as long.
+ *
+ * Seconds also remove the fork from the arithmetic entirely. The three call
+ * sites each carried their own block-space conversion and no two agreed: the
+ * two display prices scaled the subscription across the fork but then inflated
+ * ELAPSED by the same factor, so elapsed could exceed the span it is subtracted
+ * from; updateFee did neither, comparing a raw block budget against real
+ * heights. All three returned a negative fraction for the same app and paid
+ * nothing back.
+ *
+ * @param {number} registeredHeight - the height the previous spec was confirmed at
+ * @param {number} expire - the previous subscription, in blocks
+ * @param {number} daemonHeight - the height the update is being priced at
+ * @returns {Promise<number>} the unused fraction, negative once the subscription is spent
+ */
+async function unusedSubscriptionFraction(registeredHeight, expire, daemonHeight) {
+  const { subscriptionSeconds, secondsBetweenHeights } = await getSpec();
+  const paid = subscriptionSeconds({ height: registeredHeight, expire });
+  const elapsed = secondsBetweenHeights(registeredHeight, daemonHeight);
+  return (paid - elapsed) / paid;
+}
 
 /**
  * The default subscription length in blocks at a given height. The PON fork
@@ -236,14 +268,9 @@ async function onChainDisplayPrice(spec) {
     previousSpecsPrice *= multiplierPrevious;
     previousSpecsPrice = Math.ceil(previousSpecsPrice * 100) / 100;
 
-    let heightDifference = daemonHeight - appInfoDoc.height;
-    if (appInfoDoc.height < config.get('fluxapps.daemonPONFork') && daemonHeight >= config.get('fluxapps.daemonPONFork')) {
-      const blocksBeforeFork = config.get('fluxapps.daemonPONFork') - appInfoDoc.height;
-      const blocksAfterFork = daemonHeight - config.get('fluxapps.daemonPONFork');
-      heightDifference = blocksBeforeFork + (blocksAfterFork * 4);
-    }
-
-    const perc = (previousExpireIn - heightDifference) / previousExpireIn;
+    const perc = await unusedSubscriptionFraction(
+      appInfoDoc.height, prevSpec.expire || previousDefaultExpire, daemonHeight,
+    );
     if (perc > 0) {
       actualPriceToPay -= (perc * previousSpecsPrice);
     }
@@ -345,14 +372,9 @@ async function fiatAndFluxDisplayPrice(spec, appSpecification) {
     previousSpecsPrice *= multiplierPrevious;
     previousSpecsPrice = Number(previousSpecsPrice).toFixed(2);
 
-    let heightDifference = daemonHeight - appInfoDoc.height;
-    if (appInfoDoc.height < config.get('fluxapps.daemonPONFork') && daemonHeight >= config.get('fluxapps.daemonPONFork')) {
-      const blocksBeforeFork = config.get('fluxapps.daemonPONFork') - appInfoDoc.height;
-      const blocksAfterFork = daemonHeight - config.get('fluxapps.daemonPONFork');
-      heightDifference = blocksBeforeFork + (blocksAfterFork * 4);
-    }
-
-    const perc = (previousExpireIn - heightDifference) / previousExpireIn;
+    const perc = await unusedSubscriptionFraction(
+      appInfoDoc.height, prevSpec.expire || previousDefaultExpire, daemonHeight,
+    );
     if (perc > 0) {
       actualPriceToPay -= (perc * previousSpecsPrice);
     }
@@ -514,8 +536,7 @@ async function updateFee(spec, prevSpec, height, prevHeight) {
   appPrice = Math.ceil(appPrice * 100) / 100;
   previousSpecsPrice *= previousExpireIn / defaultExpirePrevious;
   previousSpecsPrice = Math.ceil(previousSpecsPrice * 100) / 100;
-  const heightDifference = height - prevHeight;
-  const perc = (previousExpireIn - heightDifference) / previousExpireIn;
+  const perc = await unusedSubscriptionFraction(prevHeight, previousExpireIn, height);
   let actualPriceToPay = appPrice * 0.9;
   if (perc > 0) {
     actualPriceToPay = (appPrice - (perc * previousSpecsPrice)) * 0.9;
@@ -537,4 +558,5 @@ module.exports = {
   updateFee,
   checkLegacyFreeUpdate,
   getDefaultExpire,
+  unusedSubscriptionFraction,
 };
