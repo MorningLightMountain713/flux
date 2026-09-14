@@ -62,6 +62,10 @@ const fetcher = async (filter = null) => {
 /**
  * Waits for the manager to fill itself by fetching, driven either by block events or
  * by its own timer. Used when the daemon does not publish the delta topic.
+ *
+ * Only the WAIT is here. Readiness is announced by start(), off the same event,
+ * because a caller asking whether the list is usable is not asking how it
+ * arrived.
  * @param {number} waitTimeoutMs How long to wait before giving up, 0 for forever.
  * @returns {Promise<void>} Resolves once the state is populated.
  */
@@ -74,7 +78,6 @@ function startByFetching(waitTimeoutMs) {
 
     stateManager.once('populated', () => {
       clearTimeout(timeout);
-      resolveStarted();
       resolve();
     });
 
@@ -127,6 +130,12 @@ async function start(options = {}) {
     // holder left the list reads as free at this cell once the grace has run
     delistedHolders.noteList(listed);
   });
+
+  // Readiness is a fact about the STATE, not about the route that filled it.
+  // The manager emits this from applySnapshot and from fetchNetworkState alike,
+  // so every way of populating the list announces itself here and a new one
+  // cannot forget to: populating IS the announcement.
+  stateManager.once('populated', () => resolveStarted());
 
   const usingDeltas = await nodeListSource.start({ stateManager, listFetcher: fetcher });
 
