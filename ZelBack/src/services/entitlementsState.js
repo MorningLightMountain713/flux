@@ -2,7 +2,7 @@
 
 const config = require('config');
 const { inChainOrder } = require('./utils/softForkRows');
-const bs58check = require('bs58check');
+const bs58check = require('bs58check').default;
 const dbHelper = require('./dbHelper');
 const log = require('../lib/log');
 const { getSpecPolicy } = require('./utils/specLibs');

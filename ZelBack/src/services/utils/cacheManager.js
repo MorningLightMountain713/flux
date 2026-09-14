@@ -2,7 +2,7 @@
 
 /* eslint max-classes-per-file: ["error", 2] */
 
-const TTLCache = require('@isaacs/ttlcache');
+const { TTLCache } = require('@isaacs/ttlcache');
 const log = require('../../lib/log');
 const { FluxController } = require('./fluxController');
 

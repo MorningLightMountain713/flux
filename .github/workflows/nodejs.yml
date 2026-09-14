@@ -115,6 +115,10 @@ jobs:
           npm -v
       - name: npm ci
         run: npm ci
+      # Before the suite, because a dependency that cannot run on the oldest node
+      # in the fleet is not something the tests would notice on this runner.
+      - name: Runtime dependencies run on the declared Node floor
+        run: npm run check:engines
       - name: configure
         run: npm run ciconfig
       - name: prebuild

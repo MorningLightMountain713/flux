@@ -1,6 +1,6 @@
 'use strict';
 
-const bs58check = require('bs58check');
+const bs58check = require('bs58check').default;
 const { pubKeyToAddr } = require('./utils/fluxCryptoUtils');
 const bitcoinMessage = require('bitcoinjs-message');
 const { getSpecBackend } = require('./utils/specLibs');

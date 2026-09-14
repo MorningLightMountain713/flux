@@ -2,7 +2,7 @@
 
 const { expect } = require('chai');
 const secp256k1 = require('secp256k1');
-const bs58check = require('bs58check');
+const bs58check = require('bs58check').default;
 
 const rosterOverlay = require('../../ZelBack/src/services/quorumGrant/rosterOverlay');
 const signedEnvelope = require('../../ZelBack/src/services/quorumGrant/signedEnvelope');
