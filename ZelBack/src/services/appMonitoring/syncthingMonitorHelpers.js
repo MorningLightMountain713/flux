@@ -344,6 +344,60 @@ function emitFolderStatus(report, status) {
 }
 
 /**
+ * Freeze or unfreeze one component's syncthing folder.
+ *
+ * Pausing stops that folder's runner, and so every write into its directory,
+ * while leaving the folder's configuration in place. That is what an operation
+ * taking a consistent copy needs, and it is REVERSIBLE: removing the folder
+ * instead discards the config, and the only thing that ever rebuilds it is the
+ * monitor's per-app pass - so on a node where that pass cannot complete, the app
+ * keeps running and silently stops being replicated.
+ *
+ * Scoped to the one folder: the daemon and every other folder keep running, and
+ * a paused folder never sets syncthing's restart-required latch, so no process
+ * restart is involved.
+ *
+ * Reports rather than throws. A caller pausing is about to do the work anyway
+ * and needs to know it is unprotected; a caller resuming is usually in a catch,
+ * where throwing would replace the error that brought it there.
+ *
+ * @param {string} appComponentName - component identifier (flat app name for v1-3 specs)
+ * @param {boolean} paused - the state to leave the folder in
+ * @param {function(string): void} [report] - told what happened
+ * @returns {Promise<boolean>} whether syncthing accepted it
+ */
+async function setSyncthingFolderPaused(appComponentName, paused, report) {
+  const verb = paused ? 'pause' : 'resume';
+  try {
+    const appId = dockerService.getAppIdentifier(appComponentName);
+    const folder = `${appsFolder + appId}`;
+    const allSyncthingFolders = await syncthingService.getConfigFolders();
+    if (!Array.isArray(allSyncthingFolders)) return false;
+
+    const match = allSyncthingFolders.find(
+      (f) => f.path === folder || f.path.includes(`${folder}/`),
+    );
+    if (!match) {
+      // Nothing configured is not a failure to pause - there is no sync to
+      // stop - but a resume that finds nothing means the folder went while the
+      // operation held it, which the caller cannot fix and should see.
+      if (!paused) emitFolderStatus(report, { status: `Syncthing folder for ${appComponentName} is gone; nothing to resume` });
+      return false;
+    }
+
+    await syncthingService.adjustConfigFolders({
+      method: ConfigMethod.PATCH, config: { paused }, id: match.id,
+    });
+    emitFolderStatus(report, { status: `Syncthing ${paused ? 'paused' : 'resumed'} for ${appComponentName}` });
+    return true;
+  } catch (error) {
+    log.error(`setSyncthingFolderPaused - could not ${verb} ${appComponentName}: ${error.message}`);
+    emitFolderStatus(report, { status: `Syncthing could not be ${paused ? 'paused' : 'resumed'} for ${appComponentName}` });
+    return false;
+  }
+}
+
+/**
  * Remove a component's syncthing folder registration (config-plane only — the
  * on-disk volume is untouched; the monitor re-adds the folder while the spec
  * still declares sync). Folders are registered per component as
@@ -423,5 +477,6 @@ module.exports = {
   getContainerFolderPath,
   folderNeedsUpdate,
   removeSyncthingFolder,
+  setSyncthingFolderPaused,
   requestFolderScan,
 };

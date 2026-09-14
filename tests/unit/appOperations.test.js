@@ -1724,7 +1724,7 @@ describe('appOperations tests', () => {
       expect(composed.getComponent('worker').hasSyncthing()).to.be.false;
       sinon.stub(deploymentProvider, 'getInstalledDeployment').resolves(composed);
       copyIs(true);
-      const removeFolder = sinon.stub(syncthingMonitorHelpers, 'removeSyncthingFolder').resolves();
+      const pauseFolder = sinon.stub(syncthingMonitorHelpers, 'setSyncthingFolderPaused').resolves(true);
       sinon.stub(appsRepository, 'getGlobalAppInfo').resolves(await instantiatedSpec(await v9Spec({ name: 'bkapp' })));
       sinon.stub(deploymentProvider, 'buildDeployment').resolves(composed);
       sinon.stub(appReconciler, 'drive').resolves({ converged: true, failed: [] });
@@ -1745,9 +1745,37 @@ describe('appOperations tests', () => {
       await pending;
       clock.restore();
 
-      expect(removeFolder.calledWith('web_bkapp'), 'the synced component folder must be removed').to.be.true;
-      expect(removeFolder.calledWith('worker_bkapp'), 'unsynced components must be untouched').to.be.false;
-      expect(removeFolder.calledWith('bkapp'), 'the bare app name matches no composed folder').to.be.false;
+      expect(pauseFolder.calledWith('web_bkapp', true), 'the synced component folder must be paused').to.be.true;
+      expect(pauseFolder.calledWith('worker_bkapp', true), 'unsynced components must be untouched').to.be.false;
+      expect(pauseFolder.calledWith('bkapp', true), 'the bare app name matches no composed folder').to.be.false;
+      // This backup FAILED - createTarGz answers ENOSPC above - and the folder is
+      // still given back. Pausing without this would be worse than the removal it
+      // replaced, because nothing else would ever resume it.
+      expect(pauseFolder.calledWith('web_bkapp', false), 'a failed backup must resume what it paused').to.be.true;
+    });
+
+    // The completeness gate reads the deployment's synced components. The
+    // provider answers null both for an app that is not installed and for one
+    // whose deployment could not be BUILT, and reading either as "no synced
+    // components" is what turned the gate off without saying so - archiving
+    // whatever was on disk in the one case where least is known about the app.
+    it('refuses a backup it cannot resolve a deployment for, before stopping anything', async () => {
+      sinon.stub(verificationHelper, 'verifyPrivilege').resolves(true);
+      const stopped = sinon.stub(appReconciler, 'setControllerDesired').resolves();
+      // What a failed BUILD looks like from here: indistinguishable from absent.
+      sinon.stub(deploymentProvider, 'getInstalledDeployment').resolves(null);
+      const pauseFolder = sinon.stub(syncthingMonitorHelpers, 'setSyncthingFolderPaused').resolves(true);
+      const tar = sinon.stub(IOUtils, 'createTarGz').resolves({ status: true });
+
+      const req = { body: { appname: 'bkapp', backup: [{ component: 'web', backup: true }] } };
+      const ok = await runBackup(req);
+
+      expect(ok, 'the backup must refuse').to.be.false;
+      expect(reported.join(' ')).to.include('no deployment could be resolved');
+      // A refusal must not cost a healthy app an outage, and must not archive.
+      sinon.assert.notCalled(tar);
+      sinon.assert.notCalled(pauseFolder);
+      sinon.assert.notCalled(stopped);
     });
 
     describe('an incomplete copy is not archived', () => {
@@ -1771,7 +1799,7 @@ describe('appOperations tests', () => {
         sinon.stub(appsRepository, 'getGlobalAppInfo').resolves(await instantiatedSpec(await v9Spec({ name: 'bkapp' })));
         sinon.stub(deploymentProvider, 'buildDeployment').resolves(composed);
         sinon.stub(syncthingFolderStateMachine, 'probeFolderSyncCompletion').resolves(probe);
-        sinon.stub(syncthingMonitorHelpers, 'removeSyncthingFolder').resolves();
+        sinon.stub(syncthingMonitorHelpers, 'setSyncthingFolderPaused').resolves(true);
         sinon.stub(appReconciler, 'drive').resolves({ converged: true, failed: [] });
         // The stop is proved against docker, not against the drive's verdict: the
         // converge backstop answers 'provisional' and that is not counted, so
@@ -2004,7 +2032,7 @@ describe('appOperations tests', () => {
         reachable: true, exists: true, running: false, indeterminate: false,
       });
       sinon.stub(volumeService, 'listComponentVolumeMounts').resolves([{ replica: null, mount: '/vol' }]);
-      sinon.stub(syncthingMonitorHelpers, 'removeSyncthingFolder').resolves();
+      sinon.stub(syncthingMonitorHelpers, 'setSyncthingFolderPaused').resolves(true);
       sinon.stub(IOUtils, 'checkFileExists').resolves(false);
       sinon.stub(IOUtils, 'removeFile').resolves();
       sinon.stub(IOUtils, 'createTarGz').resolves({ status: true });

@@ -1118,6 +1118,28 @@ async function appendBackupTask(req, res) {
 }
 
 /**
+ * Give back the syncthing folders an operation paused.
+ *
+ * Owed on every exit, success or failure, for the reason the pause exists: a
+ * folder left paused replicates nothing and says nothing, and only the monitor's
+ * per-app pass would ever notice - the same pass whose absence makes removing
+ * the folder unsafe in the first place.
+ *
+ * Never throws. It is called from a catch, where a throw would replace the error
+ * that brought the caller there.
+ *
+ * @param {Array<object>} syncedComponents - the components whose folders were paused
+ * @param {function(string): void} [report]
+ */
+async function resumeBackupSync(syncedComponents, report) {
+  if (!syncedComponents || !syncedComponents.length) return;
+  // eslint-disable-next-line no-restricted-syntax
+  for (const comp of syncedComponents) {
+    // eslint-disable-next-line no-await-in-loop
+    await syncthingMonitorHelpers.setSyncthingFolderPaused(comp.identifier, false, report);
+  }
+}
+/**
  * Archive an app's volumes: stop it, read them, start it again.
  *
  * @param {string} appname
@@ -1127,8 +1149,11 @@ async function appendBackupTask(req, res) {
  * @returns {Promise<boolean>}
  */
 async function runBackupTask(appname, backup, force, report) {
-  // Hoisted so the catch releases ONLY a lease this call acquired (null = no-op).
+  // Hoisted so the catch releases ONLY a lease this call acquired (null = no-op),
+  // and beside it the folders this call paused, for the same reason: the catch
+  // owes back what the try took.
   let taskToken = null;
+  let pausedSynced = [];
   try {
     // backup is an app-scoped lease on the same key as install/remove/
     // reconcile, so it's mutually exclusive with them (no feature carve-out).
@@ -1143,12 +1168,23 @@ async function runBackupTask(appname, backup, force, report) {
       throw new Error('An operation is already in progress for this app...');
     }
     const backupDeployment = await deploymentProvider.getInstalledDeployment(appname);
+    // Refused here, before anything is stopped or paused, so a refusal never
+    // costs a healthy app an outage.
+    //
+    // The provider answers null for two different facts - the app is not
+    // installed here, and its deployment could not be BUILT (it logs the build
+    // error and returns null either way). Treating that as "no synced
+    // components" is what switched the completeness gate off silently: the one
+    // case where least is known about the app is the case the safety check
+    // skipped. Neither fact permits a backup, so both refuse.
+    if (!backupDeployment) {
+      throw new Error(`Refused: no deployment could be resolved for ${appname}`);
+    }
     // Syncthing folders are registered per component as flux<identifier> —
     // the bare app name matches nothing for a composed app, so the folder
     // must be removed component by component (same as the uninstaller).
-    const backupSynced = backupDeployment
-      ? backupDeployment.componentEntries().filter(([, comp]) => comp.hasSyncthing()).map(([, comp]) => comp)
-      : [];
+    const backupSynced = backupDeployment.componentEntries()
+      .filter(([, comp]) => comp.hasSyncthing()).map(([, comp]) => comp);
 
     // An archive is only worth keeping if this instance holds a COMPLETE copy.
     // A synced app's data lives on every instance, and a backup is deliberately
@@ -1195,10 +1231,15 @@ async function runBackupTask(appname, backup, force, report) {
     }
 
     if (backupSynced.length) {
-      report(`Stopping syncthing for ${appname}\n`);
+      report(`Pausing syncthing for ${appname}\n`);
+      pausedSynced = backupSynced;
       for (const comp of backupSynced) {
+        // Paused, not removed. Removing discards the folder config, and only the
+        // monitor's per-app pass ever rebuilds it - so on a node where that pass
+        // cannot complete, the app keeps running and silently stops being
+        // replicated. Given back on every exit, including the catch.
         // eslint-disable-next-line no-await-in-loop
-        await syncthingMonitorHelpers.removeSyncthingFolder(comp.identifier, report);
+        await syncthingMonitorHelpers.setSyncthingFolderPaused(comp.identifier, true, report);
       }
     }
 
@@ -1262,6 +1303,7 @@ async function runBackupTask(appname, backup, force, report) {
     }
     report('Finalizing...\n');
     await serviceHelper.delay(5 * 1000);
+    await resumeBackupSync(backupSynced, report);
     operationRegistry.release(appname, taskToken);
     return true;
   } catch (error) {
@@ -1273,6 +1315,10 @@ async function runBackupTask(appname, backup, force, report) {
     // operation's hold. startApplication settles on legitimate holds (operator
     // lock, controller), so this never force-starts.
     if (taskToken) await startApplication(appname);
+    // Owed back exactly as the run state above is: a failed operation must not
+    // leave an app replicating nothing. Never throws, so it cannot replace the
+    // error that brought us here.
+    await resumeBackupSync(pausedSynced, report);
     operationRegistry.release(appname, taskToken);
     throw error;
   }
@@ -1353,8 +1399,11 @@ async function appendRestoreTask(req, res) {
  */
 async function runRestoreTask(appname, restore, type, zelidauth, report) {
   const componentItem = restore.map((restoreItem) => restoreItem);
-  // Hoisted so the catch releases ONLY a lease this call acquired (null = no-op).
+  // Hoisted so the catch releases ONLY a lease this call acquired (null = no-op),
+  // and beside it the folders this call paused, for the same reason: the catch
+  // owes back what the try took.
   let taskToken = null;
+  let pausedSynced = [];
   try {
     // restore is an app-scoped lease on the same key as backup/install/
     // remove/reconcile.
@@ -1365,16 +1414,32 @@ async function runRestoreTask(appname, restore, type, zelidauth, report) {
       throw new Error('An operation is already in progress for this app...');
     }
     const restoreDeployment = await deploymentProvider.getInstalledDeployment(appname);
+    // Refused here, before anything is stopped or paused, so a refusal never
+    // costs a healthy app an outage.
+    //
+    // The provider answers null for two different facts - the app is not
+    // installed here, and its deployment could not be BUILT (it logs the build
+    // error and returns null either way). Treating that as "no synced
+    // components" is what switched the completeness gate off silently: the one
+    // case where least is known about the app is the case the safety check
+    // skipped. Neither fact permits a restore, so both refuse.
+    if (!restoreDeployment) {
+      throw new Error(`Refused: no deployment could be resolved for ${appname}`);
+    }
     // Per-component removal for the same reason as backup: composed apps'
     // folders are flux<identifier>, never flux<appname>.
-    const restoreSynced = restoreDeployment
-      ? restoreDeployment.componentEntries().filter(([, comp]) => comp.hasSyncthing()).map(([, comp]) => comp)
-      : [];
+    const restoreSynced = restoreDeployment.componentEntries()
+      .filter(([, comp]) => comp.hasSyncthing()).map(([, comp]) => comp);
     if (restoreSynced.length) {
-      report(`Stopping syncthing for ${appname}\n`);
+      report(`Pausing syncthing for ${appname}\n`);
+      pausedSynced = restoreSynced;
       for (const comp of restoreSynced) {
+        // Paused, not removed. Removing discards the folder config, and only the
+        // monitor's per-app pass ever rebuilds it - so on a node where that pass
+        // cannot complete, the app keeps running and silently stops being
+        // replicated. Given back on every exit, including the catch.
         // eslint-disable-next-line no-await-in-loop
-        await syncthingMonitorHelpers.removeSyncthingFolder(comp.identifier, report);
+        await syncthingMonitorHelpers.setSyncthingFolderPaused(comp.identifier, true, report);
       }
     }
     report('Stopping application...\n');
@@ -1482,6 +1547,7 @@ async function runRestoreTask(appname, restore, type, zelidauth, report) {
     }
     report('Finalizing...\n');
     await serviceHelper.delay(5 * 1000);
+    await resumeBackupSync(restoreSynced, report);
     operationRegistry.release(appname, taskToken);
     return true;
   } catch (error) {
@@ -1489,6 +1555,10 @@ async function runRestoreTask(appname, restore, type, zelidauth, report) {
     // The stop hold is run-state this operation owes back: a failed restore must
     // never strand the app stopped. Only when this call owned the operation.
     if (taskToken) await startApplication(appname);
+    // Owed back exactly as the run state above is: a failed operation must not
+    // leave an app replicating nothing. Never throws, so it cannot replace the
+    // error that brought us here.
+    await resumeBackupSync(pausedSynced, report);
     operationRegistry.release(appname, taskToken);
     throw error;
   }

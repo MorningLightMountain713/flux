@@ -966,10 +966,10 @@ async function syncthingAppsCore(state, getGlobalStateFn) {
     // eslint-disable-next-line no-restricted-syntax
     for (const deployment of deployments) {
       const { appName } = deployment;
-      // Skip this app if it holds any operation lease (per-app). A backup/restore
-      // already removed its syncthing folder, so processing it would wrongly
-      // re-add it; folding in the other lease types defers it during any operation
-      // on it. Its folders are simply left untouched this cycle.
+      // Skip this app if it holds any operation lease (per-app). An operation
+      // owns its folders for its duration - a backup pauses them and gives them
+      // back - so a pass that rewrote the folder config underneath it would
+      // clear the pause mid-archive. Its folders are left untouched this cycle.
       if (operationRegistry.isHeld(appName)) {
         log.info(`syncthingAppsCore - operation in progress for ${appName}, syncthing skipped this cycle`);
         // Recorded so the pass can say what it held back as well as what it
