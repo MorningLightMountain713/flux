@@ -247,7 +247,9 @@ describe('appJanitor tests', () => {
 
       sinon.assert.calledOnceWithExactly(appsRepositoryStub.removeGlobalAppInfo, 'deadapp');
       sinon.assert.calledOnceWithExactly(appsRepositoryStub.removeAppInstallingErrorRecords, 'deadapp');
-      expect(result).to.deep.equal({ expired: 1, manifestsReaped: 2 });
+      expect(result).to.deep.equal({
+        expired: 1, manifestsReaped: 2, unjudgeable: 0, unjudgeableApps: [],
+      });
     });
 
     it('expires a v1-v8 row by block height, not by wall-clock time', async () => {
@@ -300,6 +302,48 @@ describe('appJanitor tests', () => {
       expect(handed.name, 'and the sweep removes rows by this').to.equal('deadapp');
       // Last, because assertAnswers invokes the member it is checking.
       assertAnswers(handed, ['isExpired']);
+    });
+
+    it('keeps a row it cannot judge, and expires every other row in the pass', async () => {
+      // The library refuses a height, expire or ttl it cannot do arithmetic on
+      // rather than returning the false a NaN comparison produces. That refusal
+      // is a throw and this sweep is one pass over the whole registry, so
+      // unguarded a single malformed row stops EVERY app on the node expiring.
+      //
+      // The bad row is a real InstantiatedSpec carrying a string height, which
+      // is what a malformed registry document looks like: the library decides
+      // it cannot be judged, not a stub asserting it.
+      appsRepositoryStub.listGlobalAppInfo.resolves([
+        await v8Row('unjudgeable', { height: 'notaheight' }),
+        await v9Row('deadapp', { registeredAt: LONG_EXPIRED_AT }),
+      ]);
+
+      const result = await appJanitor.sweepRegistryExpiry();
+
+      // The other row still expires — the whole point.
+      sinon.assert.calledOnceWithExactly(appsRepositoryStub.removeGlobalAppInfo, 'deadapp');
+      expect(result.expired).to.equal(1);
+      // The unjudgeable one is KEPT: removing a global registration on a verdict
+      // nothing could compute is the worse wrong answer, and it cannot be undone.
+      expect(result.unjudgeableApps).to.deep.equal(['unjudgeable']);
+      expect(logStub.warn.calledWithMatch(/unjudgeable/)).to.be.true;
+    });
+
+    it('throws nothing out of the pass when every row is unjudgeable', async () => {
+      // The degenerate case still completes and still reaps manifests, rather
+      // than taking the whole registry hygiene pass down.
+      appsRepositoryStub.listGlobalAppInfo.resolves([
+        await v8Row('bad1', { height: 'notaheight' }),
+        await v8Row('bad2', { height: 'notaheight' }),
+      ]);
+      appsRepositoryStub.reapOrphanedContentManifests.resolves({ reaped: 1, orphans: ['x'] });
+
+      const result = await appJanitor.sweepRegistryExpiry();
+
+      expect(result.expired).to.equal(0);
+      expect(result.unjudgeable).to.equal(2);
+      expect(result.manifestsReaped).to.equal(1);
+      expect(appsRepositoryStub.removeGlobalAppInfo.called).to.be.false;
     });
 
     it('never uninstalls anything - expired local installs are the reconciler\'s', async () => {

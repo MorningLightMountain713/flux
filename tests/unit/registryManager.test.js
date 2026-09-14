@@ -553,6 +553,33 @@ describe('registryManager tests', () => {
       expect(duplicateError.code).to.equal(11_000);
     });
 
+    // The prep runs in the awaited stretch of boot, so a throw here is not a
+    // missing index - startFluxFunctions re-runs the whole boot 15s later,
+    // forever. An upgrading node holding rows from before the index existed is
+    // exactly the state that would wedge it.
+    it('prepareInstallingClaimsCollections: repairs duplicates a node upgraded into, rather than looping its boot', async () => {
+      const collection = config.database.appsglobal.collections.appsInstallingBroadcasts;
+      try {
+        await database.collection(collection).drop();
+      } catch (err) {
+        // collection doesn't exist
+      }
+
+      const doc = () => ({
+        data: {
+          name: 'DupApp', ip: '192.168.1.1:16127', replica: 's1', broadcastedAt: Date.now(),
+        },
+        broadcastedAt: new Date(),
+        expireAt: new Date(Date.now() + 300_000),
+      });
+      await database.collection(collection).insertMany([doc(), doc()]);
+
+      await registryManager.prepareInstallingClaimsCollections();
+
+      const rows = await database.collection(collection).find({ 'data.name': 'DupApp' }).toArray();
+      expect(rows).to.have.lengthOf(1);
+    });
+
     it('a null retract matches a legacy row stored without the replica field', async () => {
       const collection = config.database.appsglobal.collections.appsInstallingLocations;
       await dbHelper.insertOneToDatabase(database, collection, {

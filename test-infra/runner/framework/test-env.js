@@ -51,7 +51,7 @@ import { fluxTeamKey, nodeKey } from './keys.js';
 import policySigning from '../../external-http-stub/policy-signing.js';
 import chainStart from './chain-start.cjs';
 import { assertCoupledRatios, loadSharedConfig } from './coupled-knobs.js';
-import { assertFluxSpecVendorCurrent, NODE_IMAGE } from './flux-spec-vendor.js';
+import { assertFluxSpecVendorCurrent, NODE_IMAGE, IMAGE_TAG } from './flux-spec-vendor.js';
 import { assertNodeConfigsCurrent } from './node-configs.js';
 import { statelessRegex } from './log-reader.js';
 import {
@@ -240,14 +240,9 @@ const FLUXDRIVE_IP = subnet.fluxDrive;
 const RUN_LABEL = process.env.E2E_RUN_LABEL || '';
 const runLabels = () => (RUN_LABEL ? { 'flux-e2e-run': RUN_LABEL } : {});
 
-// Image tag for every image this harness builds and runs. One box hosts more
-// than one branch's harness work at a time, and the image names are fixed, so
-// an untagged rebuild silently replaces whatever the other branch had built -
-// the "assume all images are the other branch's" trap. Build with
-// `FLUX_E2E_TAG=<slug> ./build-images.sh` and run with the same value set;
-// the default keeps single-branch use exactly as it was.
-const IMAGE_TAG = process.env.FLUX_E2E_TAG || 'latest';
-
+// One definition, in flux-spec-vendor: the vendor guard has to inspect the same
+// image this boots, and two copies of the expression are two things that can
+// disagree about which branch's bake a run is testing.
 const image = (name) => `${name}:${IMAGE_TAG}`;
 
 // Where this run's log output lives. run-all.sh exports the resolved value; a
@@ -904,17 +899,15 @@ async function seedMongo(mongoIp, nodeCount, bootContext = 'running', { dataCent
           { upsert: true },
         );
       } else if (typeof bootContext === 'object') {
-        // downtimeMs (v9) and lastAliveAgoMs (development) are the same fixture idea
-        // under two names, and both are in use in the tree: pin the downtime the node
-        // will MEASURE rather than a wall clock, because an absolute lastAlive computed
-        // in a before-hook rots for the whole boot-lock queue (minutes under a parallel
-        // gate) while this seed runs after the lock with only the node's own boot ahead.
-        // Both accepted until one is swept; downtimeMs wins if a caller sets both.
+        // Pin the downtime the node will MEASURE rather than a wall clock: an
+        // absolute lastAlive computed in a before-hook rots for the whole boot-lock
+        // queue (minutes under a parallel gate) while this seed runs after the lock
+        // with only the node's own boot ahead.
         //
         // Boot latency after this point still counts, and it only ever makes the observed
         // downtime LONGER - so a fixture targeting a window must anchor near that window's
         // lower bound, never its middle.
-        const downtimeAgoMs = bootContext.downtimeMs ?? bootContext.lastAliveAgoMs;
+        const downtimeAgoMs = bootContext.downtimeMs;
         const lastAlive = downtimeAgoMs != null
           ? Date.now() - downtimeAgoMs
           : (bootContext.lastAlive ?? Date.now());

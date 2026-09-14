@@ -204,7 +204,7 @@ describe('Boundary: clean shutdown within SIGTERM_EXPIRY', function () {
     env = await createTestEnv({ hookCtx: this,
       nodes: 1,
       tickerAutostart: false,
-      bootContext: { lastAliveAgoMs: 1000, machineBootId: 'old-boot-id', shutdownReason: 'sigterm' },
+      bootContext: { downtimeMs: 1000, machineBootId: 'old-boot-id', shutdownReason: 'sigterm' },
     });
     await waitForDaemonReady(env.clients[0]);
   });
@@ -233,7 +233,7 @@ describe('Boundary: clean shutdown beyond SIGTERM_EXPIRY', function () {
     env = await createTestEnv({ hookCtx: this,
       nodes: 1,
       tickerAutostart: false,
-      bootContext: { lastAliveAgoMs: 500000, machineBootId: 'old-boot-id', shutdownReason: 'sigterm' },
+      bootContext: { downtimeMs: 500000, machineBootId: 'old-boot-id', shutdownReason: 'sigterm' },
     });
   });
 

@@ -13,10 +13,10 @@ const sinon = require('sinon');
 chai.use(chaiAsPromised);
 const { expect } = chai;
 
-const { ensureIndex, ensureIndexes, dedupeByKey } = require('../../ZelBack/src/services/serviceManager');
+const { ensureIndex, ensureIndexes, dedupeByKey } = require('../../ZelBack/src/services/dbHelper');
 const log = require('../../ZelBack/src/lib/log');
 
-describe('serviceManager ensureIndex', () => {
+describe('dbHelper ensureIndex', () => {
   let logErrorSpy;
 
   beforeEach(() => {
@@ -126,7 +126,7 @@ describe('serviceManager ensureIndex', () => {
   });
 });
 
-describe('serviceManager dedupeByKey', () => {
+describe('dbHelper dedupeByKey', () => {
   function stubCollection(groups) {
     return {
       collectionName: 'somecollection',
@@ -186,7 +186,7 @@ describe('serviceManager dedupeByKey', () => {
 // is the fast path only: anything that fails falls back to ensureIndex, because
 // the healing above has to know WHICH index failed and a batch rejection does
 // not say.
-describe('serviceManager ensureIndexes', () => {
+describe('dbHelper ensureIndexes', () => {
   afterEach(() => {
     sinon.restore();
   });
