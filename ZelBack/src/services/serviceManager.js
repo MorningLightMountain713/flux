@@ -48,7 +48,6 @@ const foundingCommittee = require('./appMesh/foundingCommittee');
 const backendTlsRenewal = require('./appLifecycle/backendTlsRenewal');
 const containerMountRecovery = require('./appLifecycle/containerMountRecovery');
 const fileOperationRecovery = require('./appSystem/fileOperationRecovery');
-const networkRecovery = require('./appSystem/networkRecovery');
 const volumeExecutor = require('./appSystem/volumeExecutor');
 const appStartupManager = require('./appLifecycle/appStartupManager');
 const contentSlotService = require('./appLifecycle/contentSlotService');
@@ -709,16 +708,6 @@ async function startFluxFunctions() {
       log.error(`File operation recovery error: ${error.message}`);
     });
 
-    // At boot, before anything installs: an app network is created per app and
-    // removed only by the uninstaller, so an uninstall interrupted between the
-    // container going and the network going leaves one behind for ever. Each
-    // holds an octet that getFreeFluxAppNetworkOctet cannot hand out again, and
-    // when the last of 255 is gone nothing can be installed on the node.
-    //
-    // Here rather than on a schedule because a sweep must not meet an install
-    // in progress: at boot the expected names are simply what the database
-    // holds, with no window in which an app has a network and no record yet.
-    await networkRecovery.reclaimOrphanedAppNetworks();
     // Awaited: generating an identity rewrites config/userconfig.js, and that
     // write is not atomic - a reload landing inside it leaves the process with
     // no userconfig.initial at all. A node that already has an identity returns
