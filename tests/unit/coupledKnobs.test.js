@@ -94,7 +94,7 @@ describe('coupled harness knobs track production', () => {
   });
 
   it('rejects a turn holding fewer passes than production\'s', () => {
-    const fleet = { removeFluxAppsPeriod: 2, explorerPollIntervalMs: 833, locationTtlS: 63 };
+    const fleet = { removeFluxAppsPeriod: 2, explorerIdlePollMs: 833, locationTtlS: 63 };
     const pass = knobs.giveUpPassMs(fleet, knobs.harnessBlockCostMs(fleet));
 
     expect(() => knobs.assertTurnPacing({ ...fleet, residentialTurnMs: Math.floor(2 * pass) }))
@@ -102,7 +102,7 @@ describe('coupled harness knobs track production', () => {
   });
 
   it('accepts what the derivation produces for suite 55\'s fleet', () => {
-    const fleet = { removeFluxAppsPeriod: 2, explorerPollIntervalMs: 833, locationTtlS: 63 };
+    const fleet = { removeFluxAppsPeriod: 2, explorerIdlePollMs: 833, locationTtlS: 63 };
 
     expect(() => knobs.assertTurnPacing({ ...fleet, residentialTurnMs: knobs.derivedTurnMs(fleet) })).to.not.throw();
   });
@@ -111,7 +111,7 @@ describe('coupled harness knobs track production', () => {
     // One pass separates two holders acting, so the pass itself has to outlast
     // what a departure costs to become visible: 1 x 4 blocks at 300ms is a
     // 1440ms pass.
-    const fleet = { removeFluxAppsPeriod: 1, explorerPollIntervalMs: 300 };
+    const fleet = { removeFluxAppsPeriod: 1, explorerIdlePollMs: 300 };
     expect(knobs.giveUpPassMs(fleet, knobs.harnessBlockCostMs(fleet))).to.be.below(knobs.DEPARTURE_ANNOUNCE_MS);
 
     expect(() => knobs.assertTurnPacing({ ...fleet, residentialTurnMs: knobs.derivedTurnMs(fleet) }))
@@ -120,7 +120,7 @@ describe('coupled harness knobs track production', () => {
 
   it('rejects a turn that a renewed announcement does not outlast', () => {
     // No holder would act: each refuses a turn its own announcement lapses in.
-    const fleet = { removeFluxAppsPeriod: 2, explorerPollIntervalMs: 833, locationTtlS: 63 };
+    const fleet = { removeFluxAppsPeriod: 2, explorerIdlePollMs: 833, locationTtlS: 63 };
 
     expect(() => knobs.assertTurnPacing({
       ...fleet, residentialTurnMs: knobs.announcementLeftAtRenewalMs(63),
@@ -128,22 +128,22 @@ describe('coupled harness knobs track production', () => {
   });
 
   it('moves the derived turn when the poll moves', () => {
-    const slow = knobs.derivedTurnMs({ removeFluxAppsPeriod: 4, explorerPollIntervalMs: 833 });
-    const fast = knobs.derivedTurnMs({ removeFluxAppsPeriod: 4, explorerPollIntervalMs: 250 });
+    const slow = knobs.derivedTurnMs({ removeFluxAppsPeriod: 4, explorerIdlePollMs: 833 });
+    const fast = knobs.derivedTurnMs({ removeFluxAppsPeriod: 4, explorerIdlePollMs: 250 });
 
     expect(slow).to.be.above(fast);
   });
 
   it('models the pass close to the one that was measured', () => {
     // BLOCK_COST_OVERHEAD is calibrated, not chosen: nine consecutive give-up
-    // passes on cindy at explorerPollIntervalMs 833 ran 15.9s apart, against a
+    // passes on cindy at explorerIdlePollMs 833 ran 15.9s apart, against a
     // poll-only model of 13.3s. Without this the factor can be edited freely -
     // dropping it to 1.0 derives a 25s step instead of 30s, still above one but
     // below production's ratio, and nothing else in this file notices.
     const MEASURED_PASS_MS = 15_900; // cindy, 2026-08-20, suite 55
     const modelled = knobs.giveUpPassMs(
       { removeFluxAppsPeriod: 4 },
-      knobs.harnessBlockCostMs({ explorerPollIntervalMs: 833 }),
+      knobs.harnessBlockCostMs({ explorerIdlePollMs: 833 }),
     );
 
     expect(Math.abs(modelled - MEASURED_PASS_MS) / MEASURED_PASS_MS).to.be.below(0.05);
@@ -187,7 +187,7 @@ describe('coupled harness knobs track production', () => {
   it('leaves a turn longer than production needs alone', () => {
     // A suite that does not compress this at all is slow, not wrong, and the
     // check must not push anyone toward a tighter number than they wanted.
-    const fleet = { removeFluxAppsPeriod: 4, explorerPollIntervalMs: 833 };
+    const fleet = { removeFluxAppsPeriod: 4, explorerIdlePollMs: 833 };
 
     expect(() => knobs.assertCoupledRatios({ ...fleet, residentialTurnMs: 60 * 60 * 1000 })).to.not.throw();
   });

@@ -327,7 +327,7 @@ module.exports = {
     // derivedTurnMs, and assertCoupledRatios refuses a fleet where the ratio no
     // longer holds.
     removeFluxAppsPeriod: 4,
-    explorerPollIntervalMs: 833,
+    explorerIdlePollMs: 833,
     explorerSyncRetryMs: 5000,
     explorerDeepRestoreBlocks: 0,
     imageUpdateCheckIntervalMs: 5000,

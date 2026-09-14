@@ -36,8 +36,8 @@ export const subnet = getSubnetConfig();
 // measurably did not - the other node evaluated twice more before
 // network:appremoved arrived and both holders left.
 export const PASS_PERIOD_BLOCKS = 2;
-const SHARED_POLL_MS = loadSharedConfig().fluxapps.explorerPollIntervalMs;
-const PACING_FLEET = { removeFluxAppsPeriod: PASS_PERIOD_BLOCKS, explorerPollIntervalMs: SHARED_POLL_MS };
+const SHARED_POLL_MS = loadSharedConfig().fluxapps.explorerIdlePollMs;
+const PACING_FLEET = { removeFluxAppsPeriod: PASS_PERIOD_BLOCKS, explorerIdlePollMs: SHARED_POLL_MS };
 export const PASS_MS = giveUpPassMs(PACING_FLEET, harnessBlockCostMs(PACING_FLEET));
 // The pacing these fleets run on. test-env asserts it on every node of every
 // fleet before boot. The departure interval only paces one node's own
@@ -291,7 +291,7 @@ export async function bootResidentialFleet(hookCtx) {
         daemonInfoIntervalMs: 1000,
         residentialCheckIntervalMs: 3000,
         // The give-up pass runs every removeFluxAppsPeriod * 4 blocks, and a
-        // block costs one explorerPollIntervalMs. A departure has to be VISIBLE
+        // block costs one explorerIdlePollMs. A departure has to be VISIBLE
         // to the other holders within one pass, because one pass is what
         // separates two holders acting. Set from PASS_PERIOD_BLOCKS above.
         removeFluxAppsPeriod: PASS_PERIOD_BLOCKS,
@@ -301,7 +301,7 @@ export async function bootResidentialFleet(hookCtx) {
         // only later gives an app up - is the property under test.
         residentialSettleMs: 600000,
         // DERIVED, never written as a literal: the turn has to hold two passes
-        // and the pass is a function of explorerPollIntervalMs. coupled-knobs
+        // and the pass is a function of explorerIdlePollMs. coupled-knobs
         // carries the derivation and test-env asserts it on every fleet boot.
         residentialTurnMs: RESIDENTIAL_PACING.residentialTurnMs,
         residentialEvacuationIntervalMs: RESIDENTIAL_PACING.residentialEvacuationIntervalMs,

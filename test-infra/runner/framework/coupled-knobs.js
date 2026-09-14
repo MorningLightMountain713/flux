@@ -5,7 +5,7 @@
 // faster - it inverts, and the suite that was written to prove it goes green
 // while proving the opposite.
 //
-// The give-up pass is a function of explorerPollIntervalMs - a block costs one
+// The give-up pass is a function of explorerIdlePollMs - a block costs one
 // poll - so a knob written against "the pass" as a literal stops tracking it the
 // moment the poll moves.
 //
@@ -171,7 +171,7 @@ export const PON_SPEED_MULTIPLIER = 4;
 
 // A block costs at least one poll, and in practice more: processing, the
 // database write and the maintenance hung off it all land between polls.
-// Measured on cindy 2026-08-20 at explorerPollIntervalMs 833 - modelled pass
+// Measured on cindy 2026-08-20 at explorerIdlePollMs 833 - modelled pass
 // 13.3s, observed 15.9s over nine consecutive give-up passes. Applied so the
 // model is not optimistic, because optimism here derives a step that is too
 // SHORT, which is the direction that loses the property.
@@ -194,7 +194,7 @@ export function giveUpPassMs(fluxapps, blockCostMs) {
 
 /** What one block costs the harness: a poll, plus what processing adds. */
 export function harnessBlockCostMs(fluxapps) {
-  return fluxapps.explorerPollIntervalMs * BLOCK_COST_OVERHEAD;
+  return fluxapps.explorerIdlePollMs * BLOCK_COST_OVERHEAD;
 }
 
 /**
@@ -243,7 +243,7 @@ export function announcementLeftAtRenewalMs(locationTtlS) {
 /**
  * The handback turn a suite should use, derived rather than chosen: production's
  * passes per turn at this fleet's pass.
- * @param {{removeFluxAppsPeriod: number, explorerPollIntervalMs: number}} fluxapps
+ * @param {{removeFluxAppsPeriod: number, explorerIdlePollMs: number}} fluxapps
  * @returns {number} residentialTurnMs, in milliseconds.
  */
 export function derivedTurnMs(fluxapps) {
@@ -277,7 +277,7 @@ export function assertTurnPacing(fluxapps) {
       'coupled-knobs: residentialTurnMs holds too few give-up passes.\n'
       + `  pass    ${Math.round(pass)}ms  (removeFluxAppsPeriod ${fluxapps.removeFluxAppsPeriod}`
       + ` x ${PON_SPEED_MULTIPLIER} blocks, each costing ${Math.round(blockCost)}ms`
-      + ` at explorerPollIntervalMs ${fluxapps.explorerPollIntervalMs})\n`
+      + ` at explorerIdlePollMs ${fluxapps.explorerIdlePollMs})\n`
       + `  turn    ${turn}ms  -> ${(turn / pass).toFixed(2)} passes\n`
       + `  needed  ${Math.round(pass * required)}ms  -> production's ${required.toFixed(2)} passes\n`
       + '  A holder acts only on the second pass of its turn. Use derivedTurnMs(fluxapps).',
