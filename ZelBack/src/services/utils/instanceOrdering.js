@@ -41,6 +41,11 @@ function epochMs(value) {
  * `announcedAt` is the immutable first-announce time and never moves. A v1 row
  * carries no `announcedAt`, but its `broadcastedAt` never moves either, so the
  * two keys are directly comparable and mixed fleets rank consistently.
+ *
+ * Address then replica, because a co-located app claims once per replica from
+ * one address: without the second term those rows tie, and every contender
+ * reads its seat off this ranking - a tie is a seat two nodes can both believe
+ * is theirs.
  * @param {{ip: string, announcedAt?: Date|number|string, broadcastedAt?: Date|number|string}} a Installing claim.
  * @param {{ip: string, announcedAt?: Date|number|string, broadcastedAt?: Date|number|string}} b Installing claim.
  * @returns {number} Comparator result for Array.prototype.sort.
@@ -55,6 +60,14 @@ function compareInstallingClaims(a, b) {
     return -1;
   }
   if (a.ip > b.ip) {
+    return 1;
+  }
+  const aReplica = a.replica ?? '';
+  const bReplica = b.replica ?? '';
+  if (aReplica < bReplica) {
+    return -1;
+  }
+  if (aReplica > bReplica) {
     return 1;
   }
   return 0;

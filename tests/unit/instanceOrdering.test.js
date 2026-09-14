@@ -8,6 +8,47 @@ const ips = (list) => list.map((entry) => entry.ip);
 
 describe('instanceOrdering tests', () => {
   describe('compareInstallingClaims', () => {
+    // The election is run independently on every contender over the same rows,
+    // and each reads its own seat off the result. Two rows that tie are a seat
+    // two nodes can both believe is theirs.
+    it('ranks co-located replicas of one address deterministically', () => {
+      const rows = [
+        { ip: '10.0.0.1:16127', announcedAt: 1000, replica: 's2' },
+        { ip: '10.0.0.1:16127', announcedAt: 1000, replica: 's1' },
+      ];
+      const one = [...rows].sort(compareInstallingClaims).map((r) => r.replica);
+      const other = [...rows].reverse().sort(compareInstallingClaims).map((r) => r.replica);
+      expect(one).to.eql(['s1', 's2']);
+      expect(one, 'the ranking is input-order independent').to.eql(other);
+    });
+
+    // The lower address deliberately has NO timestamp: if the time rule were
+    // skipped the address tie-break would rank it first, so this states the
+    // time rule rather than agreeing with the tie-break by accident.
+    it('ranks a timestamped claim ahead of an untimed one with a lower address', () => {
+      const rows = [
+        { ip: '10.0.0.1:16127' },
+        { ip: '10.0.0.9:16127', announcedAt: 2000 },
+      ];
+      const expected = ['10.0.0.9:16127', '10.0.0.1:16127'];
+      expect(ips([...rows].sort(compareInstallingClaims))).to.eql(expected);
+      expect(ips([...rows].reverse().sort(compareInstallingClaims))).to.eql(expected);
+    });
+
+    // Rows reach the election from mongo and from the wire, so one claim's time
+    // can be a string while another's is a number. Those two compare false in
+    // BOTH directions, which reads as equal - a tie is a seat two nodes can
+    // each believe is theirs. Date-vs-number is not the hazard: it coerces.
+    it('ranks a string timestamp against a numeric one by their actual times', () => {
+      const rows = [
+        { ip: '10.0.0.1:16127', announcedAt: '1970-01-01T00:00:03.000Z' },
+        { ip: '10.0.0.9:16127', announcedAt: 1000 },
+      ];
+      const expected = ['10.0.0.9:16127', '10.0.0.1:16127'];
+      expect(ips([...rows].sort(compareInstallingClaims))).to.eql(expected);
+      expect(ips([...rows].reverse().sort(compareInstallingClaims))).to.eql(expected);
+    });
+
     it('ranks the earliest broadcastedAt first regardless of address order', () => {
       const claims = [
         { ip: '10.0.0.1:16127', broadcastedAt: 3000 },
