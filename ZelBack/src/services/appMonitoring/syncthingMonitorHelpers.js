@@ -386,13 +386,6 @@ async function removeSyncthingFolder(appComponentName, report) {
           // eslint-disable-next-line no-continue
           continue;
         }
-        // eslint-disable-next-line no-await-in-loop
-        const restartRequired = await syncthingService.getConfigRestartRequired();
-        if (restartRequired?.requiresRestart === true) {
-          log.info('Syncthing restart required, restarting...');
-          // eslint-disable-next-line no-await-in-loop
-          await syncthingService.systemRestart();
-        }
         emitFolderStatus(report, { status: `Stopping syncthing on folder ${syncthingFolder.path}...` });
         emitFolderStatus(report, { status: 'Syncthing adjusted' });
       }

@@ -497,7 +497,6 @@ describe('syncthingMonitorHelpers tests', () => {
         .resolves([{ id: 'fluxweb_app', path: `${appsBase}fluxweb_app` }]);
       const adjust = sandbox.stub(syncthingService, 'adjustConfigFolders')
         .rejects(Object.assign(new Error('connect ECONNREFUSED 127.0.0.1:8384'), { code: 'ECONNREFUSED' }));
-      const restart = sandbox.stub(syncthingService, 'getConfigRestartRequired').resolves({ requiresRestart: true });
       const emitted = [];
 
       await helpers.removeSyncthingFolder('web_app', (line) => emitted.push(String(line)));
@@ -505,8 +504,6 @@ describe('syncthingMonitorHelpers tests', () => {
       sinon.assert.calledOnceWithExactly(adjust, { method: 'delete', id: 'fluxweb_app' });
       expect(emitted.some((line) => line.includes('Syncthing adjusted')), `a refused removal was reported as done: ${JSON.stringify(emitted)}`).to.be.false;
       expect(emitted.some((line) => line.includes('could not be removed')), 'and the caller is told').to.be.true;
-      // nothing downstream of the removal runs on a removal that did not happen
-      sinon.assert.notCalled(restart);
     });
 
     it('does not match a composed folder by the bare app name', async () => {

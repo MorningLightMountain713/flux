@@ -1149,13 +1149,6 @@ async function syncthingAppsCore(state, getGlobalStateFn) {
         log.error(`syncthingAppsCore - Health monitoring error: ${healthError.message}`);
       }
     }
-
-    // Check if Syncthing restart is needed
-    const restartRequired = await syncthingService.getConfigRestartRequired();
-    if (restartRequired?.requiresRestart === true) {
-      log.info('syncthingAppsCore - New configuration applied. Syncthing restart required, restarting...');
-      await syncthingService.systemRestart();
-    }
   } catch (error) {
     log.error(`syncthingAppsCore - Error in sync monitoring: ${error.message}`);
     log.error(error.stack);

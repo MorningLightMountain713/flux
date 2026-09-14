@@ -754,7 +754,6 @@ describe('syncthingMonitor tests', () => {
       await clock.tickAsync(10_000);
 
       sinon.assert.calledWithExactly(syncthingServiceMock.adjustConfigFolders, { method: 'patch', config: { type: 'receiveonly' }, id: syncFolderId });
-      sinon.assert.notCalled(syncthingServiceMock.systemRestart);
 
       // The folder-id the demotion targets is derived from the real component's
       // identifier, and the app name rolled up with it from the real deployment -
