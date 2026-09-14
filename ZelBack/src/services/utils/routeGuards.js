@@ -1,3 +1,5 @@
+'use strict';
+
 // Guards that answer a request before it reaches a handler.
 
 const apicache = require('apicache');

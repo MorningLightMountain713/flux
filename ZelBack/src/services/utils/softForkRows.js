@@ -1,3 +1,5 @@
+'use strict';
+
 /**
  * Ordering for stored soft-fork message rows.
  *

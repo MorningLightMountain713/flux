@@ -1,3 +1,5 @@
+'use strict';
+
 const verificationHelper = require('../../services/verificationHelper');
 const { Privilege } = require('../../services/utils/privileges');
 const dockerService = require('../../services/dockerService');

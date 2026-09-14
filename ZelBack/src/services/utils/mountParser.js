@@ -1,3 +1,5 @@
+'use strict';
+
 /**
  * Mount Parser Module
  *

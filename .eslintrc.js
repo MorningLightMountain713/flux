@@ -88,6 +88,16 @@ module.exports = {
   },
   overrides: [
     {
+      // Every module FluxOS ships runs strict. A sweep alone does not hold it:
+      // the directive was applied across the tree once and the files written
+      // afterwards simply did not have it, with nothing to say so. Scoped to
+      // the shipped source — a test is not loaded by a node.
+      files: ['ZelBack/src/**/*.js'],
+      rules: {
+        strict: ['error', 'global'],
+      },
+    },
+    {
       files: [
         '**/__tests__/*.{j,t}s?(x)',
       ],

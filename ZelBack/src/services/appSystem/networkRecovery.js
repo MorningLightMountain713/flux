@@ -1,3 +1,5 @@
+'use strict';
+
 const dockerService = require('../dockerService');
 const appQueryService = require('../appQuery/appQueryService');
 const log = require('../../lib/log');

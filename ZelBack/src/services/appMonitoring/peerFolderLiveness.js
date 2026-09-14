@@ -1,3 +1,5 @@
+'use strict';
+
 // One answer per peer per monitor pass to "are you there, and which folders do
 // you hold?"
 //

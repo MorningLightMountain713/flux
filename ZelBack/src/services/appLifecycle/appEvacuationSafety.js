@@ -1,3 +1,5 @@
+'use strict';
+
 // Whether this node may give up an app right now.
 //
 // "Evacuation" is a node shedding the apps it holds. Deliberately not called

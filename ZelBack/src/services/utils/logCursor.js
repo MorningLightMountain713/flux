@@ -1,3 +1,5 @@
+'use strict';
+
 /**
  * The position a log reader has reached, as an opaque token.
  *

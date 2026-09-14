@@ -1,3 +1,5 @@
+'use strict';
+
 const deviceHelper = require('../deviceHelper');
 const log = require('../../lib/log');
 const { appsFolder } = require('../utils/appConstants');

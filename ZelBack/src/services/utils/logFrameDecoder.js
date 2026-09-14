@@ -1,3 +1,5 @@
+'use strict';
+
 /**
  * Docker's log framing, decoded as it arrives rather than all at once.
  *

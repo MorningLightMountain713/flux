@@ -1,3 +1,5 @@
+'use strict';
+
 const config = require('config');
 const path = require('node:path');
 const crypto = require('node:crypto');

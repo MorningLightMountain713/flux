@@ -1,3 +1,5 @@
+'use strict';
+
 /**
  * Azure ACR auth worker - obtains an Azure AD access token for a service principal.
  *

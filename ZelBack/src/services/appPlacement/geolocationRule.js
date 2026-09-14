@@ -1,3 +1,5 @@
+'use strict';
+
 // The app geolocation rule, parsed once.
 //
 // A spec's geolocation array decides which nodes may run the app, and three
