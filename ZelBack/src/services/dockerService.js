@@ -1131,8 +1131,13 @@ async function appDockerCreate(deployComp, options = {}) {
   const logConfig = {
     Type: 'json-file',
     Config: {
-      'max-file': '1',
-      'max-size': '20m',
+      // The constants, not a second copy of them: a read is sized against what a
+      // log can hold, so the two have to be one fact. Four files rather than one
+      // of the same total, because docker discards a FULL file - at max-file 1 a
+      // rotation takes the entire history, and a 400-line log was measured
+      // retaining 20 lines against 107 across four.
+      'max-file': `${LOG_MAX_FILES}`,
+      'max-size': `${LOG_MAX_FILE_MB}m`,
     },
   };
   const autoAssignedIP = await getNextAvailableIPForApp(appName, networkName);
@@ -2814,6 +2819,8 @@ module.exports = {
   appDockerRemove,
   appDockerForceRemove,
   clearFluxRemovedContainers,
+  LOG_MAX_FILES,
+  LOG_MAX_FILE_MB,
   appDockerRestart,
   appDockerStart,
   appDockerStop,
