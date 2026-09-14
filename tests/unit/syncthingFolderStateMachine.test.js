@@ -576,12 +576,6 @@ describe('syncthingFolderStateMachine tests', () => {
 
       expect(result.syncthingFolder.type).to.equal('sendreceive');
       expect(result.cache.restarted).to.be.true;
-      // The state machine only DECIDES: it records intent, and the monitor
-      // raises designatedLeader once the folder batch is applied. Raised here,
-      // masterSlaveApps could start a primary against a folder whose
-      // promotion has not reached syncthing yet.
-      expect(result.cache.designationPending).to.be.true;
-      expect(result.cache.designatedLeader).to.not.equal(true);
       // the start is now declared to the reconciler, not done imperatively here
       sinon.assert.calledWith(appReconcilerMock.setControllerDesired, 'bare-app', 'running');
     });
@@ -608,7 +602,6 @@ describe('syncthingFolderStateMachine tests', () => {
       const result = await stateMachine.manageFolderSyncState(mockParams);
 
       expect(result.syncthingFolder.type).to.not.equal('sendreceive');
-      expect(result.cache.designatedLeader).to.not.equal(true);
       sinon.assert.neverCalledWith(appReconcilerMock.setControllerDesired, 'bare-app', 'running');
       // The confirmation itself must not survive isolation: a heal is followed
       // by LEADER_CONFIRM_COUNT clean passes, not an instant seed on stale wins.
@@ -646,7 +639,6 @@ describe('syncthingFolderStateMachine tests', () => {
         if (pass === 1) expect(result.syncthingFolder.type).to.not.equal('sendreceive');
       }
       expect(result.syncthingFolder.type).to.equal('sendreceive');
-      expect(result.cache.designationPending).to.be.true;
     });
 
     it('does not seed a partial copy: a confirmed leader mid-sync stays receiveonly', async () => {
@@ -737,8 +729,6 @@ describe('syncthingFolderStateMachine tests', () => {
       const result = await stateMachine.manageFolderSyncState(mockParams);
 
       expect(result.syncthingFolder.type).to.not.equal('sendreceive');
-      expect(result.cache.designationPending).to.not.equal(true);
-      expect(result.cache.designatedLeader).to.not.equal(true);
     });
 
     it('leaves a holder whose syncthing is still connected in the election - its FluxOS is restarting, not gone', async () => {
@@ -770,10 +760,12 @@ describe('syncthingFolderStateMachine tests', () => {
       const result = await stateMachine.manageFolderSyncState(mockParams);
 
       // The holder stays in the election, so this node does not win it. Asserted
-      // on the designation rather than on the folder type, because a synced
-      // follower reaches sendreceive by its own route and that route is not what
-      // this guard governs.
-      expect(result.cache.designatedLeader).to.not.equal(true);
+      // on the streak rather than on the folder type, because a synced follower
+      // reaches sendreceive by its own route and that route is not what this
+      // guard governs. It went in on a streak of 5; a pass it does not win
+      // resets it.
+      expect(result.cache.leaderStreak).to.equal(0);
+
       // Asked about THIS folder: the completion endpoint's aggregate form never
       // sets remoteState, so a query without one reports 'unknown' and would
       // veto nothing.
@@ -880,12 +872,10 @@ describe('syncthingFolderStateMachine tests', () => {
       sinon.assert.notCalled(appReconcilerMock.setControllerDesired);
     });
 
-    it('withdraws the designation when a gate turns the winner back', async () => {
-      // masterSlaveApps reads this flag to skip the primary-selection index
-      // stagger and start the container, so it has to mean "is the writable
-      // holder". A node that wins the election and then stands down - here
-      // because a peer already holds the copy - is not, and leaving the flag up
-      // starts its primary against a folder it deliberately left receiveonly.
+    it('leaves the folder receiveonly when a gate turns the winner back', async () => {
+      // Winning the election is not the last word: a node that then stands down
+      // - here because a peer already holds the copy - must not promote. The
+      // folder type is what says so, and it is what syncthing acts on.
       mockParams.receiveOnlySyncthingAppsCache.set('test-app', {
         restarted: false,
         numberOfExecutions: 1,
@@ -899,7 +889,8 @@ describe('syncthingFolderStateMachine tests', () => {
 
       const result = await stateMachine.manageFolderSyncState(mockParams);
 
-      expect(result.cache.designatedLeader).to.not.equal(true);
+      expect(result.syncthingFolder.type).to.equal('receiveonly');
+      sinon.assert.notCalled(appReconcilerMock.setControllerDesired);
     });
 
     it('waits on a peer that has not determined its own folder state yet', async () => {
@@ -1120,19 +1111,16 @@ describe('syncthingFolderStateMachine tests', () => {
       sinon.assert.neverCalledWith(appReconcilerMock.setControllerDesired, sinon.match.any, 'running');
       expect(result.cache.restarted).to.not.equal(true);
       expect(result.cache.leaderStreak).to.equal(1);
-      // unconfirmed leadership must not claim the stagger skip
-      expect(result.cache.designatedLeader).to.be.false;
     });
 
-    it('withdraws the designated-leader claim when the election is lost', async () => {
-      // a node that was on a leader streak but loses the election (a peer now
-      // serves) must retract designatedLeader - a stale claim would let it
-      // skip the primary-selection stagger it no longer deserves
+    it('resets the leader streak when the election is lost', async () => {
+      // a node on a leader streak that loses the election - a peer now serves -
+      // starts again from zero rather than carrying its progress toward a
+      // confirmation it no longer deserves
       mockParams.receiveOnlySyncthingAppsCache.set('test-app', {
         restarted: false,
         numberOfExecutions: 1,
         leaderStreak: 3,
-        designatedLeader: false,
       });
       mockParams.appLocation.resolves([
         { ip: '9.0.0.1:16127', runningSince: 1000, broadcastedAt: 900 },
@@ -1143,7 +1131,6 @@ describe('syncthingFolderStateMachine tests', () => {
       const result = await stateMachine.manageFolderSyncState(mockParams);
 
       expect(result.cache.leaderStreak).to.equal(0);
-      expect(result.cache.designatedLeader).to.be.false;
     });
 
     it('should let a confirmed leader start even while stall evidence is accumulating', async () => {
