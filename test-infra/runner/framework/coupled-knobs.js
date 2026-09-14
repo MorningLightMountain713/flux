@@ -7,7 +7,7 @@
 //
 // That is not hypothetical here. residentialQueueStepMs was set to 15s against
 // a pass the comment beside it called "about 4s", giving an apparent 3.75x
-// margin. The pass is a function of explorerPollIntervalMs - a block costs one
+// margin. The pass is a function of explorerIdlePollMs - a block costs one
 // poll - and when that moved 250ms -> 833ms the pass moved with it to ~16s.
 // Nothing re-derived the step, so the harness ended up at 0.94x, BELOW one,
 // while production sits at 1.8x. Two nodes then matured on the same pass and
@@ -137,7 +137,7 @@ export const PON_SPEED_MULTIPLIER = 4;
 
 // A block costs at least one poll, and in practice more: processing, the
 // database write and the maintenance hung off it all land between polls.
-// Measured on cindy 2026-08-20 at explorerPollIntervalMs 833 - modelled pass
+// Measured on cindy 2026-08-20 at explorerIdlePollMs 833 - modelled pass
 // 13.3s, observed 15.9s over nine consecutive give-up passes. Applied so the
 // model is not optimistic, because optimism here derives a step that is too
 // SHORT, which is the direction that loses the property.
@@ -160,7 +160,7 @@ export function giveUpPassMs(fluxapps, blockCostMs) {
 
 /** What one block costs the harness: a poll, plus what processing adds. */
 export function harnessBlockCostMs(fluxapps) {
-  return fluxapps.explorerPollIntervalMs * BLOCK_COST_OVERHEAD;
+  return fluxapps.explorerIdlePollMs * BLOCK_COST_OVERHEAD;
 }
 
 /**
@@ -178,10 +178,10 @@ export function productionQueueRatio() {
 /**
  * The queue step a suite should use, derived rather than chosen.
  *
- * Call this instead of writing a number: it moves when explorerPollIntervalMs
+ * Call this instead of writing a number: it moves when explorerIdlePollMs
  * or removeFluxAppsPeriod moves, which is the whole failure this file exists
  * for.
- * @param {{removeFluxAppsPeriod: number, explorerPollIntervalMs: number}} fluxapps
+ * @param {{removeFluxAppsPeriod: number, explorerIdlePollMs: number}} fluxapps
  * @returns {number} residentialQueueStepMs, in milliseconds.
  */
 // How many queue steps a ticket tolerates going unobserved before it starts
@@ -244,7 +244,7 @@ export function derivedQueueStepMs(fluxapps) {
  * below is: the ticket's tolerance is MAX_TICKET_GAP_MS, which IS the queue
  * step. One extra pass on top, so the restart cannot land ambiguously on the
  * pass grid.
- * @param {{removeFluxAppsPeriod: number, explorerPollIntervalMs: number, residentialQueueStepMs: number}} fluxapps
+ * @param {{removeFluxAppsPeriod: number, explorerIdlePollMs: number, residentialQueueStepMs: number}} fluxapps
  * @returns {number} residentialEvacuationIntervalMs, in milliseconds.
  */
 export function derivedEvacuationIntervalMs(fluxapps) {
@@ -408,7 +408,7 @@ export function assertCoupledRatios(fluxapps) {
     'coupled-knobs: residentialQueueStepMs is too short for this fleet\'s give-up pass.\n'
     + `  pass    ${Math.round(pass)}ms  (removeFluxAppsPeriod ${fluxapps.removeFluxAppsPeriod}`
     + ` x ${PON_SPEED_MULTIPLIER} blocks, each costing ${Math.round(blockCost)}ms`
-    + ` at explorerPollIntervalMs ${fluxapps.explorerPollIntervalMs})\n`
+    + ` at explorerIdlePollMs ${fluxapps.explorerIdlePollMs})\n`
     + `  step    ${fluxapps.residentialQueueStepMs}ms  -> ratio ${ratio.toFixed(2)}\n`
     + `  needed  ${Math.round(pass * required)}ms  -> production's ratio ${required.toFixed(2)}\n`
     + '  Two holders of one app mature on the same pass at this ratio and both hand it\n'

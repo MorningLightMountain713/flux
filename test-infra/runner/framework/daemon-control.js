@@ -68,7 +68,7 @@ export async function advanceBlocks(count) {
  * budget counted in blocks means nothing: the deadline is therefore in
  * milliseconds. The chain's actual rate is not this function's to set - a block
  * is not processed until the node's next explorer poll, so
- * `explorerPollIntervalMs` is the floor, and that floor is what fixes how long a
+ * `explorerIdlePollMs` is the floor, and that floor is what fixes how long a
  * give-up pass takes in wall-clock, which is what the queue step has to outlast.
  * Changing one without the other is what quietly deletes the ordering those
  * tests exist to check.
@@ -121,7 +121,7 @@ export async function driveUntil(node, condition, {
     // expires first rather than by the one the caller reasoned about.
     throw new Error('driveUntil: exactly one of `blocks` or `timeoutMs` is required');
   }
-  const interval = blockIntervalMs ?? loadSharedConfig().fluxapps.explorerPollIntervalMs;
+  const interval = blockIntervalMs ?? loadSharedConfig().fluxapps.explorerIdlePollMs;
   const deadline = budgetedInBlocks ? Infinity : Date.now() + timeoutMs;
   let blocks = 0;
   while (budgetedInBlocks ? blocks < blockBudget : Date.now() < deadline) {

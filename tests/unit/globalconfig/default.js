@@ -442,7 +442,6 @@ const harnessOverrides = {
     },
     spawnDelayMultiplier: 1,
     daemonInfoIntervalMs: 30_000,
-    explorerPollIntervalMs: 5000,
     explorerSyncRetryMs: 120_000,
     explorerDeepRestoreBlocks: 100,
     syncTimeoutMs: 120_000,

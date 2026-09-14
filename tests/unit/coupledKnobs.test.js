@@ -111,14 +111,14 @@ describe('coupled harness knobs track production', () => {
     // The state suite 55 shipped in: a step chosen against a 250ms poll, left
     // behind when the poll moved to 833ms.
     const fluxapps = {
-      removeFluxAppsPeriod: 4, explorerPollIntervalMs: 833, residentialQueueStepMs: 15_000,
+      removeFluxAppsPeriod: 4, explorerIdlePollMs: 833, residentialQueueStepMs: 15_000,
     };
 
     expect(() => knobs.assertCoupledRatios(fluxapps)).to.throw(/too short/);
   });
 
   it('accepts what the derivation produces for that same fleet', () => {
-    const fleet = { removeFluxAppsPeriod: 4, explorerPollIntervalMs: 833 };
+    const fleet = { removeFluxAppsPeriod: 4, explorerIdlePollMs: 833 };
 
     expect(() => knobs.assertCoupledRatios({
       ...fleet, residentialQueueStepMs: knobs.derivedQueueStepMs(fleet),
@@ -130,7 +130,7 @@ describe('coupled harness knobs track production', () => {
     // interval against a ~29s step. The block stops reading as a gap, tickets
     // carry straight across it, and the suite goes green on a queue that has
     // stopped separating anything after the first departure.
-    const fleet = { removeFluxAppsPeriod: 4, explorerPollIntervalMs: 833 };
+    const fleet = { removeFluxAppsPeriod: 4, explorerIdlePollMs: 833 };
     const fluxapps = {
       ...fleet,
       residentialQueueStepMs: knobs.derivedQueueStepMs(fleet),
@@ -141,7 +141,7 @@ describe('coupled harness knobs track production', () => {
   });
 
   it('accepts the departure interval its own derivation produces', () => {
-    const fleet = { removeFluxAppsPeriod: 4, explorerPollIntervalMs: 833 };
+    const fleet = { removeFluxAppsPeriod: 4, explorerIdlePollMs: 833 };
     const fluxapps = { ...fleet, residentialQueueStepMs: knobs.derivedQueueStepMs(fleet) };
 
     expect(() => knobs.assertCoupledRatios({
@@ -159,7 +159,7 @@ describe('coupled harness knobs track production', () => {
       .to.be.above(fluxapps.residentialQueueStepMs);
     expect(() => knobs.assertDepartureOutlivesTicket({
       removeFluxAppsPeriod: fluxapps.removeFluxAppsPeriod,
-      explorerPollIntervalMs: fluxapps.explorerPollIntervalMs,
+      explorerIdlePollMs: fluxapps.explorerIdlePollMs,
       residentialQueueStepMs: fluxapps.residentialQueueStepMs,
       residentialEvacuationIntervalMs: fluxapps.residentialEvacuationIntervalMs,
     })).to.not.throw();
@@ -171,7 +171,7 @@ describe('coupled harness knobs track production', () => {
     // is an interval PLUS a full queue ticket served again, so the typed number
     // quietly stopped covering one and the suite timed out on a node that was
     // working correctly.
-    const fleet = { removeFluxAppsPeriod: 4, explorerPollIntervalMs: 833, residentialQueueBaseMs: 1000 };
+    const fleet = { removeFluxAppsPeriod: 4, explorerIdlePollMs: 833, residentialQueueBaseMs: 1000 };
     const step = knobs.derivedQueueStepMs(fleet);
     const withStep = { ...fleet, residentialQueueStepMs: step };
     const interval = knobs.derivedEvacuationIntervalMs(withStep);
@@ -185,7 +185,7 @@ describe('coupled harness knobs track production', () => {
   });
 
   it('grows a departure wait with the instance count', () => {
-    const fleet = { removeFluxAppsPeriod: 4, explorerPollIntervalMs: 833, residentialQueueBaseMs: 1000 };
+    const fleet = { removeFluxAppsPeriod: 4, explorerIdlePollMs: 833, residentialQueueBaseMs: 1000 };
     const step = knobs.derivedQueueStepMs(fleet);
     const fluxapps = { ...fleet, residentialQueueStepMs: step };
 
@@ -196,22 +196,22 @@ describe('coupled harness knobs track production', () => {
 
   it('moves the derived step when the poll moves', () => {
     // The whole failure in one assertion: a literal does not do this.
-    const slow = knobs.derivedQueueStepMs({ removeFluxAppsPeriod: 4, explorerPollIntervalMs: 833 });
-    const fast = knobs.derivedQueueStepMs({ removeFluxAppsPeriod: 4, explorerPollIntervalMs: 250 });
+    const slow = knobs.derivedQueueStepMs({ removeFluxAppsPeriod: 4, explorerIdlePollMs: 833 });
+    const fast = knobs.derivedQueueStepMs({ removeFluxAppsPeriod: 4, explorerIdlePollMs: 250 });
 
     expect(slow).to.be.above(fast);
   });
 
   it('models the pass close to the one that was measured', () => {
     // BLOCK_COST_OVERHEAD is calibrated, not chosen: nine consecutive give-up
-    // passes on cindy at explorerPollIntervalMs 833 ran 15.9s apart, against a
+    // passes on cindy at explorerIdlePollMs 833 ran 15.9s apart, against a
     // poll-only model of 13.3s. Without this the factor can be edited freely -
     // dropping it to 1.0 derives a 25s step instead of 30s, still above one but
     // below production's ratio, and nothing else in this file notices.
     const MEASURED_PASS_MS = 15_900; // cindy, 2026-08-20, suite 55
     const modelled = knobs.giveUpPassMs(
       { removeFluxAppsPeriod: 4 },
-      knobs.harnessBlockCostMs({ explorerPollIntervalMs: 833 }),
+      knobs.harnessBlockCostMs({ explorerIdlePollMs: 833 }),
     );
 
     expect(Math.abs(modelled - MEASURED_PASS_MS) / MEASURED_PASS_MS).to.be.below(0.05);
@@ -233,7 +233,7 @@ describe('coupled harness knobs track production', () => {
   it('leaves a step longer than production needs alone', () => {
     // A suite that does not compress this at all is slow, not wrong, and the
     // check must not push anyone toward a tighter number than they wanted.
-    const fleet = { removeFluxAppsPeriod: 4, explorerPollIntervalMs: 833 };
+    const fleet = { removeFluxAppsPeriod: 4, explorerIdlePollMs: 833 };
 
     expect(() => knobs.assertCoupledRatios({ ...fleet, residentialQueueStepMs: 40 * 60 * 1000 })).to.not.throw();
   });

@@ -35,7 +35,7 @@ const subnet = getSubnetConfig();
 // apart - the departure interval is a function OF the queue step, and writing
 // either as a literal is what broke this suite before. test-env asserts both
 // relationships on every node of every fleet before boot.
-const SHARED_POLL_MS = loadSharedConfig().fluxapps.explorerPollIntervalMs;
+const SHARED_POLL_MS = loadSharedConfig().fluxapps.explorerIdlePollMs;
 // THE PASS PERIOD, and everything about this suite's cost hangs off it. The
 // give-up pass runs every `removeFluxAppsPeriod x 4` blocks, a block costs one
 // explorer poll, and the queue step, the ticket tolerance and the departure
@@ -53,7 +53,7 @@ const PASS_PERIOD_BLOCKS = 2;
 const RESIDENTIAL_PACING = (() => {
   const fleet = {
     removeFluxAppsPeriod: PASS_PERIOD_BLOCKS,
-    explorerPollIntervalMs: SHARED_POLL_MS,
+    explorerIdlePollMs: SHARED_POLL_MS,
   };
   const residentialQueueStepMs = derivedQueueStepMs(fleet);
   const residentialEvacuationIntervalMs = derivedEvacuationIntervalMs({ ...fleet, residentialQueueStepMs });
@@ -70,7 +70,7 @@ const DEPARTURE_WAIT_MS = 2 * departureCycleMs(
   {
     ...RESIDENTIAL_PACING,
     removeFluxAppsPeriod: PASS_PERIOD_BLOCKS,
-    explorerPollIntervalMs: SHARED_POLL_MS,
+    explorerIdlePollMs: SHARED_POLL_MS,
     residentialQueueBaseMs: 1000,
   },
   5,
@@ -293,7 +293,7 @@ async function bootResidentialFleet(hookCtx) {
         daemonInfoIntervalMs: 1000,
         residentialCheckIntervalMs: 3000,
         // The give-up pass runs every removeFluxAppsPeriod * 4 blocks, and a
-        // block costs one explorerPollIntervalMs. There is a three-way
+        // block costs one explorerIdlePollMs. There is a three-way
         // relationship here and all three have to hold, or the serialisation
         // this suite checks cannot happen:
         //
@@ -308,7 +308,7 @@ async function bootResidentialFleet(hookCtx) {
         //
         // Set from PASS_PERIOD_BLOCKS at the top of this file, which explains
         // what it costs and what bounds it from below. What it costs in wall
-        // time is set by explorerPollIntervalMs, not by this number.
+        // time is set by explorerIdlePollMs, not by this number.
         removeFluxAppsPeriod: PASS_PERIOD_BLOCKS,
         // Left LONG on purpose, and opened by the test when it is ready. A
         // short window would let evacuation start while the hold is still
@@ -322,7 +322,7 @@ async function bootResidentialFleet(hookCtx) {
         // departure is visible to it.
         //
         // DERIVED, never written as a literal. The step has to outlast a pass
-        // and the pass is a function of explorerPollIntervalMs - a block costs
+        // and the pass is a function of explorerIdlePollMs - a block costs
         // one poll - so a literal here silently stops tracking the pass the
         // moment that knob moves. It did: 15000 was chosen against a pass this
         // comment called "about 4s", the poll went 250ms -> 833ms, the pass

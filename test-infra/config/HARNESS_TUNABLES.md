@@ -11,7 +11,7 @@ carry the SAME factor, or the property between them is deleted or inverted.
 ## Pairs checked at fleet boot
 
 The rule above was written here and broken anyway, because the two halves of a
-pair need not live in the same layer: `explorerPollIntervalMs` is in `shared.js`
+pair need not live in the same layer: `explorerIdlePollMs` is in `shared.js`
 and `residentialQueueStepMs` was a literal in one suite's overrides. Nothing
 related them, so moving the poll 250ms -> 833ms moved the pass 4s -> 16s and
 left the step at 15s - below the pass, where the property inverts. Two holders
@@ -24,7 +24,7 @@ wrong. Under throws.
 
 | property | harness pair | production ratio | how the harness gets it |
 |---|---|---:|---|
-| two holders of one app cannot mature on the same give-up pass | `residentialQueueStepMs` : `removeFluxAppsPeriod` x 4 x `explorerPollIntervalMs` | 1.82 | `derivedQueueStepMs(fluxapps)` - never a literal |
+| two holders of one app cannot mature on the same give-up pass | `residentialQueueStepMs` : `removeFluxAppsPeriod` x 4 x `explorerIdlePollMs` | 1.82 | `derivedQueueStepMs(fluxapps)` - never a literal |
 | a departure restarts the other holders' queue tickets | `residentialEvacuationIntervalMs` : `residentialQueueStepMs` x `TICKET_GAP_STEPS` | 4.5 | `derivedEvacuationIntervalMs(fluxapps)` - never a literal |
 | a suite's wait covers a whole departure | `driveUntil` timeout : interval + base + position x step | - | `departureCycleMs(fluxapps, instances)` - never a literal |
 
@@ -84,7 +84,7 @@ loses the property, so the factor is pinned by a unit test.
 | `fluxapps.discoveryFailRetryMs` | 120000 | 5000 | 24.0x |
 | `fluxapps.discoveryRetryMs` | 60000 | 5000 | 12.0x |
 | `fluxapps.explorerDeepRestoreBlocks` | 100 | 0 | n/a |
-| `fluxapps.explorerPollIntervalMs` | 5000 | 833 | 6.0x |
+| `fluxapps.explorerIdlePollMs` | 5000 | 833 | 6.0x |
 | `fluxapps.explorerSyncRetryMs` | 120000 | 5000 | 24.0x |
 | `fluxapps.forceRemovalIntervalMs` | 7200000 | 120000 | 60.0x |
 | `fluxapps.globalCmdDelayMs` | 500 | 100 | 5.0x |
