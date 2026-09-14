@@ -6,6 +6,7 @@ const { EventEmitter } = require('node:events');
 
 const networkStateService = require('../../ZelBack/src/services/networkStateService');
 const daemonServiceFluxnodeRpcs = require('../../ZelBack/src/services/daemonService/daemonServiceFluxnodeRpcs');
+const nodeListSource = require('../../ZelBack/src/services/nodeListSource');
 
 describe('networkStateService tests', () => {
   let fluxnodeRpcStub;
@@ -120,6 +121,36 @@ describe('networkStateService tests', () => {
     expect(state).to.be.deep.equal(defaultNetworkState.data);
 
     await startPromise;
+
+    await networkStateService.stop();
+  });
+
+  // The list can be filled two ways and a caller asking whether it is usable is
+  // not asking which one ran. When readiness was announced from inside the fetch
+  // routine, a node whose daemon publishes fluxnodelistdelta - which FluxOS
+  // configures itself - never resolved it: every waitStarted() caller hung for
+  // the life of the process, AppSyncOrchestrator.start() among them, so the node
+  // never synced app state.
+  it('resolves waitStarted on the delta path, which does not fetch', async () => {
+    const snapshot = defaultNetworkState.data;
+    // The delta path anchors itself with a snapshot and reports that it owns the
+    // list; nothing fetches.
+    sinon.stub(nodeListSource, 'start').callsFake(async ({ stateManager }) => {
+      await stateManager.applySnapshot(snapshot, 100, 'anchorhash');
+      return true;
+    });
+    sinon.stub(nodeListSource, 'stop');
+
+    await networkStateService.start({});
+
+    const settled = await Promise.race([
+      networkStateService.waitStarted().then(() => 'resolved'),
+      new Promise((resolve) => { setTimeout(() => resolve('pending'), 1000); }),
+    ]);
+
+    expect(settled, 'waitStarted never resolved on the delta path').to.equal('resolved');
+    expect(networkStateService.nodeCount()).to.equal(snapshot.length);
+    sinon.assert.notCalled(fluxnodeRpcStub);
 
     await networkStateService.stop();
   });
