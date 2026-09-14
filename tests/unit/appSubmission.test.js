@@ -123,7 +123,11 @@ describe('appSubmission tests', () => {
     // statement of that shape, and the test would keep passing after the real
     // one changed underneath it.
     stubs.specLibs.getSpecBackend.resolves({
-      deserializeSpec: stubs.parseSpec, EncryptedSpecV8: flux.EncryptedSpecV8,
+      deserializeSpec: stubs.parseSpec,
+      EncryptedSpecV8: flux.EncryptedSpecV8,
+      // Real, for the same reason as the class above: the expire ceiling is the
+      // library's rule, and a stand-in here would be a second statement of it.
+      assertExpireWithinAllowance: flux.assertExpireWithinAllowance,
     });
   });
 
@@ -153,6 +157,68 @@ describe('appSubmission tests', () => {
         .to.have.property('web');
       expect(result.broadcastBlob).to.not.have.property('encrypted');
       sinon.assert.calledOnce(stubs.entitlementsState.assertSpecEntitled);
+    });
+
+    // The ceiling is a year's worth of blocks, and flux-spec derives the
+    // post-fork figure from the pre-fork one because the policy is a year and
+    // only the block rate changed. The REAL implementation is stubbed in, not a
+    // stand-in: a hand-written one would be a second statement of the rule and
+    // would keep passing after the library's changed.
+    it('refuses a legacy submission whose expire buys more than the ceiling allows', async () => {
+      appSubmission = load();
+      const spec = await v8Spec({ expire: 1_056_001 });
+      const submission = { ...V8_SUBMISSION, expire: 1_056_001 };
+      stubs.transportHelper.openTransportEnvelope.resolves(submission);
+      stubs.parseSpec.resolves({ isEncrypted: false });
+      stubs.specLibs.validateSubmissionSpec.resolves(spec);
+
+      let refused = null;
+      await appSubmission.resolveSubmission(submission, {
+        timestamp: 1, type: 'fluxappregister', daemonHeight: 2_500_000,
+      }).catch((err) => { refused = err; });
+
+      expect(refused, 'the submission was accepted').to.not.equal(null);
+
+      sinon.assert.notCalled(stubs.entitlementsState.assertSpecEntitled);
+    });
+
+    it('accepts a legacy submission at exactly the ceiling', async () => {
+      appSubmission = load();
+      const spec = await v8Spec({ expire: 1_056_000 });
+      const submission = { ...V8_SUBMISSION, expire: 1_056_000 };
+      stubs.transportHelper.openTransportEnvelope.resolves(submission);
+      stubs.parseSpec.resolves({ isEncrypted: false });
+      stubs.specLibs.validateSubmissionSpec.resolves(spec);
+
+      await appSubmission.resolveSubmission(submission, {
+        timestamp: 1, type: 'fluxappregister', daemonHeight: 2_500_000,
+      });
+
+      sinon.assert.calledOnce(stubs.entitlementsState.assertSpecEntitled);
+    });
+
+    // v9 carries ttl, not expire, and the library refuses to judge a missing
+    // input rather than skipping - so the version gate is what keeps a v9
+    // submission out of the rule instead of it throwing on an absent field.
+    it('does not hold a v9 submission to the legacy expire ceiling', async () => {
+      appSubmission = load();
+      const spec = v9Spec();
+      const submission = { version: 9, name: 'myapp', owner: 'owner1' };
+      stubs.transportHelper.openTransportEnvelope.resolves(submission);
+      stubs.parseSpec.resolves({ isEncrypted: false });
+      stubs.specLibs.validateSubmissionSpec.resolves(spec);
+      const assertExpire = sinon.stub().throws(new Error('must not be consulted for v9'));
+      stubs.specLibs.getSpecBackend.resolves({
+        deserializeSpec: stubs.parseSpec,
+        EncryptedSpecV8: flux.EncryptedSpecV8,
+        assertExpireWithinAllowance: assertExpire,
+      });
+
+      await appSubmission.resolveSubmission(submission, {
+        contentHash: spec.contentHash(), timestamp: 1, type: 'fluxappregister', daemonHeight: 2_500_000,
+      });
+
+      sinon.assert.notCalled(assertExpire);
     });
 
     it('backend-encrypts a transport-encrypted v9 submission and never broadcasts cleartext', async () => {
