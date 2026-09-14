@@ -202,8 +202,15 @@ describe('Boundary: clean shutdown within SIGTERM_EXPIRY', function () {
 
   before(async function () {
     this.timeout(120000);
-    // 1s pinned: inside the window by everything but the boot that lands in the
-    // measurement.
+    // 1s pinned, which the node reads as ~17s - within the harness's 70s
+    // nodeDownGraceS, the one grace every stop now gets.
+    //
+    // The pin is not what the node measures. lastAlive is seeded just before
+    // the container starts and the downtime is computed when the node reads it
+    // at boot, so ONE BOOT lands inside the measurement: a 300s pin was read as
+    // 316s on cindy under a full gate. That 16s is why this window cannot be
+    // compressed at production's ratio - 420s at 120x is 3.5s, smaller than the
+    // drift, and nothing could ever land inside it. See coupled-knobs.js.
     env = await createTestEnv({ hookCtx: this,
       configOverrides: PRODUCTION_EXPIRIES,
       nodes: 1,
