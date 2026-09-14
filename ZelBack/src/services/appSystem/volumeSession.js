@@ -594,7 +594,7 @@ class VolumeSession {
  * reads as safe. Two names, one of which is the only thing request paths may
  * use, is the same shape django and rails settled on.
  *
- * @param {object} req - express request. appname and component are read from
+ * @param {import('express').Request} req - express request. appname and component are read from
  *   the JSON body for the endpoints that POST one, and from params or query for
  *   the older GET endpoints that still take them there.
  * @param {{privilege?: string}} [options]

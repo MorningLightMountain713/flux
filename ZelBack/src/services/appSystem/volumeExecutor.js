@@ -725,8 +725,8 @@ async function fetchImageFromPeer(expected) {
  * handle. Only an address the network state recognises is answered, and only a
  * couple at a time.
  *
- * @param {object} req
- * @param {object} res
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  * @returns {Promise<void>}
  */
 async function serveImageToPeer(req, res) {

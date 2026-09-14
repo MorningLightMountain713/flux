@@ -5,8 +5,8 @@ const messageHelper = require('../services/messageHelper');
 /**
  * Express middleware rejecting a route when the connection is not TLS.
  *
- * @param {object} req - Request object
- * @param {object} res - Response object
+ * @param {import('express').Request} req - Request object
+ * @param {import('express').Response} res - Response object
  * @param {Function} next - Next middleware
  * @returns {void}
  */

@@ -771,7 +771,7 @@ async function logoutAllUsers(req, res) {
 /**
  * To check if a login phrase is currently active. The user's Flux ID, login phrase, signature and privilege level are returned if the login phrase is active.
  * @param {object} ws Web socket.
- * @param {object} req Request.
+ * @param {import('express').Request} req Request.
  */
 async function wsRespondLoginPhrase(ws, loginphrase) {
   // console.log(loginphrase)
@@ -869,7 +869,7 @@ async function wsRespondLoginPhrase(ws, loginphrase) {
 /**
  * To check if a signature exists.
  * @param {object} ws Web socket.
- * @param {object} req Request.
+ * @param {import('express').Request} req Request.
  */
 async function wsRespondSignature(ws, message) {
   console.log(message);

@@ -343,8 +343,8 @@ async function portsInUse() {
  * An operator asking by hand is accepted on the usual privilege, so the endpoint
  * stays usable directly.
  *
- * @param {object} req Request.
- * @param {object} res Response.
+ * @param {import('express').Request} req Request.
+ * @param {import('express').Response} res Response.
  * @returns {Promise<void>}
  */
 async function portsInUseApi(req, res) {

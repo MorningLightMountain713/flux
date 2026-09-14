@@ -569,7 +569,7 @@ const MAX_KEEPALIVE_PORTS = config.get('fluxapps.maxAppsPerNode') * MAX_TESTABLE
  * An IPv4 connection to a dual-stack listener arrives as ::ffff:a.b.c.d, and an
  * address that does not match itself would refuse every honest caller.
  *
- * @param {object} req
+ * @param {import('express').Request} req
  * @param {string|undefined} namedAddress - what the body says, if anything
  * @param {boolean} mayName - whether this caller may choose the address
  * @returns {string} the address, or '' when there is none to act on
@@ -750,8 +750,8 @@ function tcpConnectAndDestroy(host, port, timeout) {
  * and plus two - and every one of those sits inside the banned 16100-16299
  * block. The filter that is right there would silently end the keep-alive here.
  *
- * @param {object} req
- * @param {object} res
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  */
 async function keepUPNPPortsOpen(req, res) {
   try {

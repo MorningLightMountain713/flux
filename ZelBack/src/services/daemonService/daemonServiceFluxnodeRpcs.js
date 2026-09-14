@@ -10,8 +10,6 @@ let response = messageHelper.createErrorMessage();
 
 /**
  * To get node status.
- * @param {object} req Request.
- * @param {object} res Response.
  * @returns {object} Message.
  */
 async function getFluxNodeStatus() {

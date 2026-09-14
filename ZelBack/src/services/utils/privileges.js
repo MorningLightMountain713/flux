@@ -49,7 +49,7 @@ const APP_SCOPED = Object.freeze([Privilege.APP_OWNER, Privilege.APP_OWNER_OR_FL
  *
  * Lives here so a route reads `verifyPrivilege(Privilege.X, authOf(req))`: the
  * privilege it requires, and where the identity comes from, in one line.
- * @param {object} req - express request
+ * @param {import('express').Request} req - express request
  * @returns {string|null} the zelidauth header value
  */
 const authOf = (req) => req?.headers?.zelidauth || null;

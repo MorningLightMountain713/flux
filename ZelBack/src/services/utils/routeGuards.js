@@ -37,8 +37,8 @@ const POLICY_RETRY_AFTER_SECONDS = 30;
  * A refusal rather than a wait: the boot chain can run to its daemon timeout, and
  * holding a request open that long serves the caller worse than telling them when
  * to come back.
- * @param {object} req Request
- * @param {object} res Response
+ * @param {import('express').Request} req Request
+ * @param {import('express').Response} res Response
  * @param {Function} next Next handler
  * @returns {*} next(), or a 503 carrying a Retry-After
  */
@@ -110,8 +110,8 @@ function requirePolicyReady(req, res, next) {
  * Rejecting rather than ignoring is the point. A caller sending parameters an
  * endpoint does not accept has made a mistake, and quietly serving them an
  * answer hides it - while still costing a cache entry apiece.
- * @param {object} req Request
- * @param {object} res Response
+ * @param {import('express').Request} req Request
+ * @param {import('express').Response} res Response
  * @param {Function} next Next handler
  * @returns {*} next(), or a 400
  */
@@ -156,7 +156,7 @@ apicache.options({ statusCodes: { include: [200], exclude: [] } });
  * apicache evaluates this when the response ends - and on a hit, before the
  * handler runs, where nothing has been recorded and the stored answer is served.
  * @param {object} _req Request, unused
- * @param {object} res Response
+ * @param {import('express').Response} res Response
  * @returns {boolean} false if the handler reported a failure
  */
 function answeredWithoutFailure(_req, res) {

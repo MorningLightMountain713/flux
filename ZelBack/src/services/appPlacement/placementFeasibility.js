@@ -749,8 +749,8 @@ async function placementAdvice(spec) {
  * check a spec before there is a signature to gate on. Every caller does send a
  * different spec, so no shared cache bounds this the way one bounds the
  * placement geography - but that is a fact about caching, not a reason to gate.
- * @param {object} req Request
- * @param {object} res Response
+ * @param {import('express').Request} req Request
+ * @param {import('express').Response} res Response
  */
 async function placementFeasibilityAPI(req, res) {
   try {
@@ -864,8 +864,8 @@ async function placementLocations() {
 
 /**
  * API handler: GET /apps/placementlocations.
- * @param {object} req Request
- * @param {object} res Response
+ * @param {import('express').Request} req Request
+ * @param {import('express').Response} res Response
  */
 async function placementLocationsAPI(req, res) {
   try {
