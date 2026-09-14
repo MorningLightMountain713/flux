@@ -156,27 +156,6 @@ async function listComponentVolumeMounts(appName, componentName) {
 }
 
 /**
- * The one mounted volume belonging to a single identity, or null.
- *
- * The replica is required and nullable (null for loose placement) rather than
- * optional: every caller addresses real data, and silently picking a sibling is
- * the failure this exists to prevent — a restore into the wrong replica
- * overwrites live data.
- *
- * @param {string} appName
- * @param {string} componentName
- * @param {string|null} replica
- * @returns {Promise<object|null>}
- */
-async function volumeMountForIdentity(appName, componentName, replica) {
-  if (replica === undefined) {
-    throw new Error(`volumeMountForIdentity for ${componentName} of ${appName} requires an explicit replica (null for loose placement)`);
-  }
-  const mounts = await listComponentVolumeMounts(appName, componentName);
-  return mounts.find((mount) => mount.replica === (replica ?? null)) || null;
-}
-
-/**
  * Whether a path currently has a filesystem mounted on it. Reads
  * /proc/self/mountinfo - one silent file read instead of forking
  * mountpoint(1), so callers can probe freely without process-spawn cost or
@@ -483,5 +462,4 @@ module.exports = {
   ensureAppVolumeMounted,
   clearAppVolumeData,
   listComponentVolumeMounts,
-  volumeMountForIdentity,
 };
