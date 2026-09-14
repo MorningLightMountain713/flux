@@ -1,3 +1,5 @@
+'use strict';
+
 // Mongo-backed store for the IP location baseline published in
 // RunOnFlux/fluxos-network-policy (iplocation.bin.gz, format 2).
 //

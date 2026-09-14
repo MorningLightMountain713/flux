@@ -1,3 +1,5 @@
+'use strict';
+
 // Interim fetch-and-restore for the iplocation artifact.
 //
 // This branch ships before the policy store (feat/userconfig-rearchitecture),

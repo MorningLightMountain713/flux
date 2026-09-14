@@ -1,3 +1,5 @@
+'use strict';
+
 // A node on a residential connection is only fit to serve the network when it
 // runs ArcaneOS. This service moves such a node off the network in three stages:
 //

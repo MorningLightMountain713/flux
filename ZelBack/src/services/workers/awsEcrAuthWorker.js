@@ -1,3 +1,5 @@
+'use strict';
+
 /**
  * AWS ECR auth worker - runs one ECR call for the provider.
  *

@@ -1,3 +1,5 @@
+'use strict';
+
 /**
  * Google GAR auth worker - mints an OAuth access token for a service account.
  *

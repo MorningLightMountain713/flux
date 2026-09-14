@@ -1,3 +1,5 @@
+'use strict';
+
 // Placement feasibility for synced apps.
 //
 // A placement constraint may only reject a node when a better-placed candidate

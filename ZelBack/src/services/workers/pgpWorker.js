@@ -1,3 +1,5 @@
+'use strict';
+
 /**
  * PGP worker - runs one openpgp operation for pgpService.
  *

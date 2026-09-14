@@ -1,3 +1,5 @@
+'use strict';
+
 // Is this node's address on an access (consumer) network, or in a data centre?
 //
 // The question `isDataCenter()` answers today is "did anything tell me this was

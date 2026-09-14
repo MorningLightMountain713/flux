@@ -1,3 +1,5 @@
+'use strict';
+
 /**
  * The privileges a route may require.
  *

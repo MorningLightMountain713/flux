@@ -1,3 +1,5 @@
+'use strict';
+
 const log = require('../../lib/log');
 const { openNoFollow } = require('./pathSecurity');
 

@@ -1,3 +1,5 @@
+'use strict';
+
 /**
  * workerRunner - runs one job in a throwaway worker
  *

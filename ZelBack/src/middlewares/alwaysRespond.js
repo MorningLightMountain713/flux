@@ -1,3 +1,5 @@
+'use strict';
+
 /**
  * Express middleware for endpoints that act on every call.
  *

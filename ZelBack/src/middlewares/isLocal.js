@@ -1,3 +1,5 @@
+'use strict';
+
 /**
  * Express middleware restricting a route to callers on the node itself.
  *

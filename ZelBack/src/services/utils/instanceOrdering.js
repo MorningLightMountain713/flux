@@ -1,3 +1,5 @@
+'use strict';
+
 // Deterministic ordering shared by every code path that ranks an app's
 // installing claims or running instances to decide which node keeps the app
 // and which stands aside. Each node sorts values carried inside the broadcast
