@@ -51,6 +51,7 @@
   "homepage": "https://github.com/runonflux/flux#readme",
   "scripts": {
     "check:engines": "node scripts/check-runtime-engines.js",
+    "export:pricing-rows": "node --max-old-space-size=4096 scripts/export-pricing-rows.js",
     "lint": "eslint --ext .js ./",
     "lint:fix": "eslint --ext .js ./ --fix",
     "test:zelback:unit": "env NODE_CONFIG_DIR=$PWD/tests/unit/globalconfig nyc --reporter=lcov mocha 'tests/unit/**/*.test.js' --exit",
