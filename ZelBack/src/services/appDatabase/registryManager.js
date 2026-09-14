@@ -445,6 +445,38 @@ async function prepareInstallingClaimsCollections() {
 }
 
 /**
+ * `/apps/registrationinformation` served the whole fluxapps config block.
+ * `/apps/deploymentinformation` is the maintained answer to the same question -
+ * it reports the prices, port range, instance bounds and banned ports a caller
+ * needs, computed at the current height rather than read raw out of config.
+ *
+ * @param {import('express').Request} _req
+ * @param {import('express').Response} res
+ */
+function registrationInformation(_req, res) {
+  const message = 'Registration information has moved. Use /apps/deploymentinformation, '
+    + 'which reports the same limits and prices resolved at the current block height.';
+  return res.json(messageHelper.createErrorMessage(message, 'Gone', 410));
+}
+
+/**
+ * `/apps/updatetolatestspecs` upgraded a stored spec through a hand-written
+ * v1-to-v8 converter and handed it back for the owner to sign.
+ * `/apps/appconvert` does that job through the spec library, and reports the
+ * regions it could not spell rather than silently widening a pin the owner is
+ * still paying for.
+ *
+ * @param {import('express').Request} _req
+ * @param {import('express').Response} res
+ */
+function updateApplicationSpecificationAPI(_req, res) {
+  const message = 'Updating to the latest specification has moved. Use '
+    + '/apps/appconvert/{appname}, which converts a v1-v8 specification to v9 for '
+    + 'the owner to sign.';
+  return res.json(messageHelper.createErrorMessage(message, 'Gone', 410));
+}
+
+/**
  * To return the owner of a FluxOS application.
  * @param {string} appName Name of app.
  * @returns {string|null} Owner.
@@ -1512,6 +1544,8 @@ module.exports = {
   storeAppInstallingMessage,
   removeAppInstallingMessage,
   prepareInstallingClaimsCollections,
+  registrationInformation,
+  updateApplicationSpecificationAPI,
   getAppsLocations,
   getAppsLocation,
   getAppInstallingLocation,
