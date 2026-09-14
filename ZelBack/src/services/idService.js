@@ -708,7 +708,7 @@ async function wsRespondLoginPhrase(ws, loginphrase) {
 /**
  * To check if a signature exists.
  * @param {object} ws Web socket.
- * @param {object} req Request.
+ * @param {import('express').Request} req Request.
  */
 async function wsRespondSignature(ws, message) {
   console.log(message);

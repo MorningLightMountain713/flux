@@ -3,8 +3,8 @@
 /**
  * Express middleware restricting a route to callers on the node itself.
  *
- * @param {object} req - Request object
- * @param {object} res - Response object
+ * @param {import('express').Request} req - Request object
+ * @param {import('express').Response} res - Response object
  * @param {Function} next - Next middleware
  * @returns {void}
  */

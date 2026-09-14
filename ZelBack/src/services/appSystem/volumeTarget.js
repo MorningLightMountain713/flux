@@ -30,7 +30,7 @@ const volumeService = require('../utils/volumeService');
  */
 
 /**
- * @param {object} req - express request
+ * @param {import('express').Request} req - express request
  * @param {{requireComponent?: boolean}} [opts]
  * @returns {Promise<{appname: string, component: string, replica: string|null,
  *   mount: string, volume: object}>} `volume` is the resolved row, so a caller

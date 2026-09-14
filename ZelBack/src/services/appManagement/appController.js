@@ -16,12 +16,6 @@ const fluxEventBus = require('../utils/fluxEventBus');
 const { getSpecBackend } = require('../utils/specLibs');
 
 /**
- * Start an application
- * @param {object} req - Request object
- * @param {object} res - Response object
- * @returns {object} Response message
- */
-/**
  * Apply an operator run-state command to the target components THROUGH the
  * reconciler (the sole actuator): record the durable intent, then enqueue so the
  * reconciler converges the container to it. Intent is recorded BEFORE the enqueue

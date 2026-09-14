@@ -9,8 +9,8 @@
  * the request validator opts these routes out of conditional-GET handling, and no-store
  * keeps the client from caching the answer for next time.
  *
- * @param {object} req - Request object
- * @param {object} res - Response object
+ * @param {import('express').Request} req - Request object
+ * @param {import('express').Response} res - Response object
  * @param {Function} next - Next middleware
  * @returns {void}
  */
