@@ -54,13 +54,6 @@ export const PRODUCTION = Object.freeze({
   // stop gets the same grace whether it was announced or not. Same 420 under the
   // name FluxOS now reads.
   nodeDownGraceS: 420,
-  // RETIRED ON THE NODE SIDE. Nothing under ZelBack/src reads
-  // fluxapps.sigtermExpiryS any more and production's config no longer defines
-  // it, so the harness writing it into a fleet's config has no effect and the
-  // assertions below are about a knob nothing consults. Left in place rather
-  // than pulled out blind: the gate has never run, and retiring a harness knob
-  // is a change to fleet timing that should be made where it can be watched.
-  sigtermExpiryS: 420,
   // The peer-flap DOS: how far back the tally looks, and how often the sweep
   // that releases it runs. One decision at two scales - a suite that shortens
   // the window without shortening the tick is measuring the tick.
@@ -137,13 +130,6 @@ export const PARTITION_PEERS = Object.freeze({
 export function peerSetSweepsPerWindow() {
   return (PRODUCTION.peerSetDipWindowMinutes * 60 * 1000) / PRODUCTION.peerSetDipEvaluateMs;
 }
-
-// What one node boot costs, measured: a suite-19 fixture pinning 300s of
-// downtime was read by the node as 316s, on cindy under a MAXN=6 gate - so this
-// is a loaded figure, not an idle-box one. Any window a fixture has to be
-// measured INSIDE must clear it with room, because the boot lands in the middle
-// of the measurement and no ratio shrinks it.
-export const BOOT_DRIFT_MS = 16000;
 
 // explorerService.js:610. Applies to both sides, so it cancels out of the
 // ratio - named anyway, because the pass interval is not readable without it.
@@ -291,51 +277,6 @@ export function departureCycleMs(fluxapps, instances) {
   return interval + base + (Math.max(instances - 1, 0) * step);
 }
 
-/**
- * Refuse to boot a fleet whose coupled knobs do not hold production's ratios.
- *
- * Runs on the EFFECTIVE config - shared.js plus whatever the suite overrode -
- * because the override is where this went wrong, not the shared file. Throws
- * rather than warning: a fleet configured this way produces a green suite that
- * has stopped testing its property, which is worse than no run.
- *
- * Over production's ratio is fine and is not flagged. A suite may deliberately
- * leave a knob uncompressed, and a step longer than it needs only costs time.
- * UNDER is the failure, because that is where the property inverts.
- * @param {object} fluxapps Effective fluxapps config for the fleet.
- * @throws {Error} When a ratio is below production's.
- */
-export function assertSigtermOrdering(fluxapps) {
-  const sigtermMs = (fluxapps.sigtermExpiryS ?? PRODUCTION.sigtermExpiryS) * 1000;
-  const runningMs = (fluxapps.locationTtlS ?? PRODUCTION.locationTtlS) * 1000;
-
-  // appStartupManager: (cleanShutdown && downtime > sigterm) || downtime >
-  // running. Above the running expiry this window is unreachable and a clean
-  // shutdown gets no grace, which is the opposite of what it is for. Production
-  // holds 420s under 7500s.
-  if (sigtermMs >= runningMs) {
-    throw new Error(
-      'coupled-knobs: sigtermExpiryS is not below locationTtlS.\n'
-      + `  sigterm ${sigtermMs}ms, running ${runningMs}ms\n`
-      + '  appStartupManager expires on (cleanShutdown && downtime > sigterm) || downtime >\n'
-      + '  running, so at this ordering the running expiry fires first and the clean-shutdown\n'
-      + '  grace can never be reached.',
-    );
-  }
-
-  // A fixture asserting "within the window" is measured across a node boot, and
-  // the boot lands inside the measurement. A window at or under the drift can
-  // never be tested from the inside, whatever the fixture pins.
-  if (sigtermMs <= BOOT_DRIFT_MS) {
-    throw new Error(
-      'coupled-knobs: sigtermExpiryS is at or below one node boot.\n'
-      + `  sigterm ${sigtermMs}ms, measured boot drift ${BOOT_DRIFT_MS}ms\n`
-      + '  A fixture pinning any downtime is read by the node as that downtime PLUS a boot,\n'
-      + '  so nothing can land inside this window. It is bounded by what it must outlive,\n'
-      + '  not by production\'s ratio - a boot is not a compressed clock.',
-    );
-  }
-}
 
 /**
  * Refuse to boot a fleet whose departure interval is shorter than the gap its
@@ -448,7 +389,6 @@ export function assertRenewalUndercutsTtl(fluxapps) {
  */
 export function assertCoupledRatios(fluxapps) {
   if (!fluxapps) return;
-  assertSigtermOrdering(fluxapps);
   assertRenewalUndercutsTtl(fluxapps);
   if (!fluxapps.residentialQueueStepMs) return;
   assertDepartureOutlivesTicket(fluxapps);

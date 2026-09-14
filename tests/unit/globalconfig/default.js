@@ -383,7 +383,6 @@ const harnessOverrides = {
     installErrorTtlS: 86_400,
     tempMsgTtlS: 3600,
     gossipValidityS: 300,
-    sigtermExpiryS: 420,
     clockSkewAllowanceMs: 120_000,
     hashSyncIntervalMs: 1_800_000,
     cpuCheckIntervalMs: 900_000,

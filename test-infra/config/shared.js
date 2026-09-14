@@ -207,18 +207,6 @@ module.exports = {
     // pairing this file has to hold. 63s gives a 30s announce, the value this
     // file used to carry by hand.
     locationTtlS: 63,
-    // NOT the announce ratio, deliberately. What locationTtlS is coupled to is
-    // a compressed clock; what this is measured across is a NODE BOOT, and the
-    // harness does not compress boots. Measured on cindy under a MAXN=6 gate: a
-    // fixture pinning 300s of downtime was read by the node as 316s, so a boot
-    // costs 16s of drift. At production's 120x this key would be 3.5s - smaller
-    // than the drift - and the within-the-window test could never pass.
-    //
-    // So it is bounded by what it must outlive, like installingTtlS below:
-    // comfortably above the 16s drift, comfortably below locationTtlS's 63s so
-    // the ordering holds and a clean shutdown still gets a grace the running
-    // expiry does not pre-empt. coupled-knobs.js asserts both ends.
-    sigtermExpiryS: 30,
     // The node-down graces at the block cadence's factor: the stub ticks a
     // block every 5 s against production's 30 s, and the graces are written
     // in blocks (the off-list grace is two blocks of fork plus a capped

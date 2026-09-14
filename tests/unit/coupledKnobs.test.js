@@ -220,39 +220,14 @@ describe('coupled harness knobs track production', () => {
   it('holds the node-down grace below the running expiry, in production', () => {
     const { fluxapps } = productionConfig();
 
-    // This asserted sigtermExpiryS, which production no longer defines - the
-    // node-down port replaced the two-constant rule ((cleanShutdown && downtime
-    // > sigterm) || downtime > running) with one grace that every stop gets,
-    // announced or not. The drift this file exists to catch is exactly that, so
-    // it now tracks the key appStartupManager actually reads.
+    // One grace, which every stop gets whether it was announced or not. The
+    // drift this file exists to catch is a harness constant parting from the
+    // production key it models, so it tracks the key appStartupManager reads.
     expect(knobs.PRODUCTION.nodeDownGraceS).to.equal(fluxapps.nodeDownGraceS);
     expect(knobs.PRODUCTION.locationTtlS).to.equal(fluxapps.locationTtlS);
     // The ordering IS the property: a grace at or past the running expiry means
     // the fleet has already replaced the node's apps before the grace is up.
     expect(fluxapps.nodeDownGraceS).to.be.below(fluxapps.locationTtlS);
-  });
-
-  it('rejects a fleet where the running expiry pre-empts the sigterm window', () => {
-    // What making locationTtlS live did: 420s against 63s, so the clean-shutdown
-    // grace became unreachable and a node down 300s deleted its apps.
-    expect(() => knobs.assertSigtermOrdering({ sigtermExpiryS: 420, locationTtlS: 63 }))
-      .to.throw(/not below locationTtlS/);
-  });
-
-  it('rejects a sigterm window no fixture could land inside', () => {
-    // Production's 120x would give 3.5s, and one node boot is 16s. A window
-    // smaller than the boot cannot be tested from the inside at all - which is
-    // the trap in compressing a knob measured across real work.
-    expect(() => knobs.assertSigtermOrdering({ sigtermExpiryS: 3.5, locationTtlS: 63 }))
-      .to.throw(/at or below one node boot/);
-  });
-
-  it('accepts the harness pair as shipped', () => {
-    const shared = knobs.loadSharedConfig().fluxapps;
-
-    expect(shared.sigtermExpiryS).to.be.above(knobs.BOOT_DRIFT_MS / 1000);
-    expect(shared.sigtermExpiryS).to.be.below(shared.locationTtlS);
-    expect(() => knobs.assertSigtermOrdering(shared)).to.not.throw();
   });
 
   it('leaves a step longer than production needs alone', () => {

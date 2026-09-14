@@ -192,8 +192,8 @@ describe('Boundary: clean shutdown within SIGTERM_EXPIRY', function () {
 
   before(async function () {
     this.timeout(120000);
-    // 1s pinned, which the node reads as ~17s - within the harness's 30s
-    // sigtermExpiryS.
+    // 1s pinned, which the node reads as ~17s - within the harness's 70s
+    // nodeDownGraceS, the one grace every stop now gets.
     //
     // The pin is not what the node measures. lastAlive is seeded just before
     // the container starts and the downtime is computed when the node reads it
