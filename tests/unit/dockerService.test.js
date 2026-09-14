@@ -13,6 +13,7 @@ const dockerService = require('../../ZelBack/src/services/dockerService');
 const operationRegistry = require('../../ZelBack/src/services/utils/operationRegistry');
 const appVolumeService = require('../../ZelBack/src/services/appLifecycle/appVolumeService');
 const fluxNetworkHelper = require('../../ZelBack/src/services/fluxNetworkHelper');
+const globalState = require('../../ZelBack/src/services/utils/globalState');
 
 chai.use(chaiAsPromised);
 const { expect } = chai;
@@ -1930,6 +1931,33 @@ describe('dockerService tests', () => {
       shapes.forEach((err) => {
         expect(dockerService.tagIfRegistryUnreachable(err).registryErrorClass, err.message).to.equal(undefined);
       });
+    });
+  });
+
+  describe('clearFluxRemovedContainers', () => {
+    // The entries are keyed on the container identifier, which is built from the
+    // app's minted identity. A replica's is `<component>_<identity>_<replica>`,
+    // so nothing written over the app NAME reaches it - which is why the caller
+    // passes the identifiers it removed rather than the name.
+    beforeEach(() => { globalState.fluxRemovedContainers.clear(); });
+    afterEach(() => { globalState.fluxRemovedContainers.clear(); });
+
+    it('drops a replica-qualified entry no app name could match', () => {
+      const entries = ['fluxweb_a1b2c3_s1', 'fluxweb_a1b2c3_s2'];
+      entries.forEach((e) => globalState.fluxRemovedContainers.add(e));
+
+      dockerService.clearFluxRemovedContainers(entries);
+
+      expect([...globalState.fluxRemovedContainers]).to.deep.equal([]);
+    });
+
+    it('leaves an entry it was not given', () => {
+      globalState.fluxRemovedContainers.add('fluxweb_mine');
+      globalState.fluxRemovedContainers.add('fluxweb_theirs');
+
+      dockerService.clearFluxRemovedContainers(['fluxweb_mine']);
+
+      expect([...globalState.fluxRemovedContainers]).to.deep.equal(['fluxweb_theirs']);
     });
   });
 });
