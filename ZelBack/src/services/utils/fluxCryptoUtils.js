@@ -1,6 +1,6 @@
 'use strict';
 
-const bs58check = require('bs58check');
+const bs58check = require('bs58check').default;
 const secp256k1 = require('secp256k1');
 const createHash = require('create-hash');
 

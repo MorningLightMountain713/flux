@@ -3,7 +3,7 @@
 const { expect } = require('chai');
 const sinon = require('sinon');
 const secp256k1 = require('secp256k1');
-const bs58check = require('bs58check');
+const bs58check = require('bs58check').default;
 
 const serviceHelper = require('../../ZelBack/src/services/serviceHelper');
 const generalService = require('../../ZelBack/src/services/generalService');

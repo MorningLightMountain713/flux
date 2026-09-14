@@ -13,7 +13,7 @@ const networkStateService = require('../../ZelBack/src/services/networkStateServ
 const signedEnvelope = require('../../ZelBack/src/services/quorumGrant/signedEnvelope');
 const rosterOverlay = require('../../ZelBack/src/services/quorumGrant/rosterOverlay');
 const { selectCommittee } = require('../../ZelBack/src/services/utils/committeeSelector');
-const bs58check = require('bs58check');
+const bs58check = require('bs58check').default;
 const secp256k1 = require('secp256k1');
 
 // The published grant record on the app-state event plane: one row per app

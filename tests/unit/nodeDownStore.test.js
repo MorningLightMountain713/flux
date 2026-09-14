@@ -5,7 +5,7 @@ process.env.NODE_CONFIG_DIR = `${process.cwd()}/tests/unit/globalconfig`;
 const { expect } = require('chai');
 const proxyquire = require('proxyquire').noCallThru();
 const secp256k1 = require('secp256k1');
-const bs58check = require('bs58check');
+const bs58check = require('bs58check').default;
 const config = require('config');
 
 const dbHelper = require('../../ZelBack/src/services/dbHelper');
