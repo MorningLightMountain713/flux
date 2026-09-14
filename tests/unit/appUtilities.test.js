@@ -50,7 +50,6 @@ describe('appUtilities tests', () => {
 
   describe('module exports tests', () => {
     it('should export all required functions', () => {
-      expect(appUtilities.appPricePerMonth).to.be.a('function');
       expect(appUtilities.getContainerStorage).to.be.a('function');
       expect(appUtilities.findCommonArchitectures).to.be.a('function');
     });

@@ -1,93 +1,11 @@
 'use strict';
 
 const fs = require('fs/promises');
-const config = require('config');
 const log = require('../../lib/log');
 const serviceHelper = require('../serviceHelper');
 const dockerService = require('../dockerService');
-const { getChainParamsPriceUpdates } = require('./chainUtilities');
 const appConstants = require('./appConstants');
-const { appsFolder } = appConstants;
 const fluxCaching = require('./cacheManager');
-const { getSpecBackend, getSpecPolicy } = require('./specLibs');
-
-
-
-/**
- * Calculate app price per month.
- *
- * Accepts whatever `specCutover.resolveSpec()` returns: a cleartext
- * FluxAppSpecBase instance, or a DecryptedCanonicalSpec for an encrypted app
- * (read through its delegates — DeploymentSpec.fromSpec projects readable
- * views without extracting the inner spec). The class owns aggregation via
- * DeploymentSpec.resourceTotals() + allHostPorts(); this function reduces to
- * the version-specific pricing formula, nothing else.
- *
- * @param {import('@runonflux/flux-spec').FluxAppSpecBase} spec - Class instance (or DecryptedCanonicalSpec)
- * @param {number} height - Block height
- * @param {Array} [suppliedPrices] - Optional pre-fetched price schedule
- * @returns {Promise<number>} Monthly price
- */
-async function appPricePerMonth(spec, height, suppliedPrices) {
-  if (!spec) throw new Error('Application specification not provided');
-  const { classifyPort, PORT_TIER } = await getSpecPolicy();
-  const { DeploymentSpec } = await getSpecBackend();
-
-  const appPrices = suppliedPrices || await getChainParamsPriceUpdates();
-  const priceSpecifications = appPrices.filter((i) => i.height < height).at(-1);
-
-  // Declared view deliberately: price is a property of the submitted spec that
-  // every node must agree on, never one node's replica view.
-  const deployment = DeploymentSpec.fromSpec(spec, appsFolder, { replica: null });
-  const { cpu, memoryMb: memory, storageGb: storage } = deployment.resourceTotals();
-  const premPortCount = deployment.allHostPorts()
-    .filter((p) => classifyPort(p) === PORT_TIER.PREMIUM).length;
-
-  const cpuPrice = cpu * priceSpecifications.cpu * 10;
-  const ramPrice = (memory * priceSpecifications.ram) / 100;
-  const hddPrice = storage * priceSpecifications.hdd;
-  const portPrice = premPortCount * priceSpecifications.port;
-
-  // v1-v3: flat per-app pricing, no scope/staticip/instance multiplier
-  if (spec.version <= 3) {
-    let totalPrice = cpuPrice + ramPrice + hddPrice + portPrice;
-    if (priceSpecifications.minUSDPrice
-      && height >= config.get('fluxapps.applyMinimumPriceOn3Instances')
-      && totalPrice < priceSpecifications.minUSDPrice) {
-      totalPrice = Number(priceSpecifications.minUSDPrice).toFixed(2);
-    }
-    let appPrice = Number(Math.ceil(totalPrice * 100) / 100);
-    if (appPrice < priceSpecifications.minPrice) appPrice = priceSpecifications.minPrice;
-    return appPrice;
-  }
-
-  // v4+: scope fee (nodes/enterprise), staticip fee, per-3-instances pricing
-  let totalPrice = cpuPrice + ramPrice + hddPrice + portPrice;
-  const { nodes } = spec;
-  if ((nodes && nodes.length) || spec.enterprise) totalPrice += priceSpecifications.scope;
-  if (spec.staticip) totalPrice += priceSpecifications.staticip;
-
-  const pricePerInstance = totalPrice / 3;
-  let appPrice = Number(Math.ceil(pricePerInstance * 100) / 100);
-  const instancesAdditional = spec.instances - 1;
-  if (instancesAdditional > 0 && height >= config.get('fluxapps.applyMinimumForExtraInstances')) {
-    if (appPrice < 0.50 && instancesAdditional > 2) {
-      appPrice += (instancesAdditional * 0.50);
-    } else {
-      const additionalPrice = appPrice * instancesAdditional;
-      appPrice = (Math.ceil(additionalPrice * 100) + Math.ceil(appPrice * 100)) / 100;
-    }
-  }
-
-  if (priceSpecifications.minUSDPrice
-    && height >= config.get('fluxapps.applyMinimumPriceOn3Instances')
-    && appPrice < priceSpecifications.minUSDPrice) {
-    appPrice = Number(priceSpecifications.minUSDPrice).toFixed(2);
-  }
-
-  return appPrice;
-}
-
 
 /**
  * Bytes used on the filesystem a mount source sits on, when that filesystem belongs to
@@ -383,7 +301,6 @@ function parseContainerName(containerName) {
 }
 
 module.exports = {
-  appPricePerMonth,
   findCommonArchitectures,
   getAppPorts,
   getContainerStorage,

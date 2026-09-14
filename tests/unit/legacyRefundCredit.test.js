@@ -106,18 +106,35 @@ describe('the early-update credit', () => {
   describe('updateFee, which is what the node charges', () => {
     const proxyquire = require('proxyquire').noCallThru();
 
-    // One flat price per month, so the fee moves only with the credit.
+    // One rate card, priced off storage alone, so the monthly figure is a
+    // known constant and the fee moves only with the credit. A near-zero
+    // minPrice keeps the floor from hiding the subtraction.
+    const CARD = {
+      height: 0, cpu: 0, ram: 0, hdd: 100, port: 0, scope: 0, staticip: 0, minPrice: 0.001,
+    };
     const loadRegime = () => proxyquire('../../ZelBack/src/services/pricing/legacyPricingRegime', {
-      '../utils/appUtilities': { appPricePerMonth: async () => 100 },
-      '../utils/chainUtilities': {
-        getChainParamsPriceUpdates: async () => [{ height: 0, minPrice: 0.001 }],
+      '../utils/chainUtilities': { getChainParamsPriceUpdates: async () => [CARD] },
+    });
+
+    // Answers only what pricing asks. 30GB at 100 FLUX/GB is 3000 a month,
+    // quoted a third at a time, so 1000.
+    const specOf = (expire) => ({
+      expire,
+      version: 8,
+      instances: 1,
+      pricesFlatPerApp: false,
+      isEncrypted: false,
+      placement: {
+        staticIp: false, targetIps: [], targetOutpoints: [], targetOperators: [],
       },
+      resourceTotals: () => ({ cpu: 0, memoryMb: 0, storageGb: 30 }),
+      componentEntries: () => [],
     });
 
     const feeFor = async (registeredHeight, expire, atHeight) => {
       const regime = loadRegime();
       const fee = await regime.updateFee(
-        { expire }, { expire }, atHeight, registeredHeight,
+        specOf(expire), specOf(expire), atHeight, registeredHeight,
       );
       return Number(fee) / 1e8;
     };
@@ -138,20 +155,15 @@ describe('the early-update credit', () => {
     // floor never binds, or the subtraction would be invisible.
     it('subtracts exactly the credit the rule states', async () => {
       const registered = FORK - 20_000;
-      const regime = proxyquire('../../ZelBack/src/services/pricing/legacyPricingRegime', {
-        '../utils/appUtilities': { appPricePerMonth: async () => 1000 },
-        '../utils/chainUtilities': {
-          getChainParamsPriceUpdates: async () => [{ height: 0, minPrice: 0.001 }],
-        },
-      });
+      const regime = loadRegime();
       const fee = async (atHeight) => Number(
-        await regime.updateFee({ expire: 40_000 }, { expire: 40_000 }, atHeight, registered),
+        await regime.updateFee(specOf(40_000), specOf(40_000), atHeight, registered),
       ) / 1e8;
 
       const credited = await fee(FORK + 40_000);
       const spent = await fee(FORK + 500_000);
 
-      const previousSpecsPrice = 1000 * (40_000 / regime.getDefaultExpire(registered));
+      const previousSpecsPrice = 1000 * (40_000 / spec.legacyDefaultExpire(registered));
       const expectedCredit = creditFor(registered, 40_000, FORK + 40_000) * previousSpecsPrice * 0.9;
 
       expect(spent - credited).to.be.closeTo(expectedCredit, 0.02);

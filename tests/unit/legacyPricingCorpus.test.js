@@ -9,7 +9,6 @@ const path = require('path');
 const proxyquire = require('proxyquire').noCallThru();
 const { load } = require('@runonflux/flux-spec-cjs');
 
-const regime = require('../../ZelBack/src/services/pricing/legacyPricingRegime');
 
 // Every update message the chain has ever carried, projected to the three
 // numbers pricing reads: the height the replaced spec was confirmed at, its
@@ -62,7 +61,7 @@ describe('the early-update credit, over every update on chain', function corpus(
 
   // A v1-v5 spec carries no expire; pricing substitutes the default for the
   // height it was registered at, which is what these rows are priced from.
-  const expireOf = (row) => row.prevExpire ?? regime.getDefaultExpire(row.prevHeight);
+  const expireOf = (row) => row.prevExpire ?? spec.legacyDefaultExpire(row.prevHeight);
 
   it('never reports a credit above the whole subscription', () => {
     const bad = rows.filter((r) => credit(r, expireOf(r)) > 1);
@@ -125,9 +124,36 @@ describe('the early-update credit, over every update on chain', function corpus(
     // Loads the regime with the spec library wrapped, so every question the
     // credit asks is recorded. Everything else is stubbed to the same values
     // for all three, so the only thing that can differ is the credit.
+    // Priced off storage alone, so the monthly figure is a constant and only
+    // the credit can move the answer.
+    const CARD = {
+      height: 0, cpu: 0, ram: 0, hdd: 100, port: 0, scope: 0, staticip: 0, minPrice: 0.001,
+    };
+    const APP = {
+      name: 'app',
+      owner: 'o',
+      expire: EXPIRE,
+      version: 8,
+      instances: 1,
+      pricesFlatPerApp: false,
+      isEncrypted: false,
+      placement: {
+        staticIp: false, targetIps: [], targetOutpoints: [], targetOperators: [],
+      },
+      resourceTotals: () => ({ cpu: 0, memoryMb: 0, storageGb: 30 }),
+      componentEntries: () => [],
+      hasActiveStandbySyncthing: () => false,
+      resourceTotalsFor: () => ({ cpu: 0, memoryMb: 0, storageGb: 30 }),
+    };
+
     const loadRecording = (asked) => proxyquire('../../ZelBack/src/services/pricing/legacyPricingRegime', {
       '../utils/specLibs': {
+        // The real library, with the two credit helpers wrapped to record what
+        // they were asked. Spread rather than listed, because the regime also
+        // reaches for the discount helpers and a stub that names only what this
+        // test cares about breaks every time the regime uses one more.
         getSpec: async () => ({
+          ...spec,
           subscriptionSeconds: (args) => {
             asked.push(`subscription ${args.height}/${args.expire}`);
             return spec.subscriptionSeconds(args);
@@ -138,13 +164,12 @@ describe('the early-update credit, over every update on chain', function corpus(
           },
         }),
       },
-      '../utils/appUtilities': { appPricePerMonth: async () => 1000 },
       '../utils/chainUtilities': {
-        getChainParamsPriceUpdates: async () => [{ height: 0, minPrice: 0.001 }],
+        getChainParamsPriceUpdates: async () => [CARD],
       },
       '../utils/specCutover': {
-        resolveSpec: async () => ({ expire: EXPIRE, name: 'app', owner: 'o' }),
-        resolveInstantiatedSpec: async () => ({ expire: EXPIRE, name: 'app', owner: 'o' }),
+        resolveSpec: async () => APP,
+        resolveInstantiatedSpec: async () => APP,
       },
       '../daemonService/daemonServiceMiscRpcs': {
         isDaemonSynced: () => ({ data: { synced: true, height: UPDATE_HEIGHT } }),
@@ -155,25 +180,41 @@ describe('the early-update credit, over every update on chain', function corpus(
       },
     });
 
-    it('the charged fee and the displayed price ask the credit the same question', async () => {
-      const chargeAsked = [];
-      await loadRecording(chargeAsked).updateFee(
-        { expire: EXPIRE }, { expire: EXPIRE }, UPDATE_HEIGHT, PREV_HEIGHT,
-      );
+    it('the charged fee and the displayed price credit the same fraction', async () => {
+      // Asserted on the answers, not on which helper each path called. There is
+      // one implementation of the credit now, inside the engine, so a test that
+      // watched for three sites asking the same question would pass by
+      // construction and say nothing.
+      const regime = loadRecording([]);
+      const asked = [];
+      const credited = loadRecording(asked);
 
-      const displayAsked = [];
-      await loadRecording(displayAsked).onChainDisplayPrice({
-        expire: EXPIRE,
-        name: 'app',
-        owner: 'o',
-        resourceTotals: () => ({ cpu: 1, memoryMb: 1000, storageGb: 10 }),
-        hasActiveStandbySyncthing: () => false,
+      const withCredit = Number(await credited.onChainDisplayPrice(APP));
+      const feeWithCredit = Number(await regime.updateFee(APP, APP, UPDATE_HEIGHT, PREV_HEIGHT));
+
+      // The same app with no prior registration: the price before any credit.
+      const noPrevious = proxyquire('../../ZelBack/src/services/pricing/legacyPricingRegime', {
+        '../utils/chainUtilities': { getChainParamsPriceUpdates: async () => [CARD] },
+        '../utils/specCutover': { resolveSpec: async () => APP, resolveInstantiatedSpec: async () => APP },
+        '../daemonService/daemonServiceMiscRpcs': {
+          isDaemonSynced: () => ({ data: { synced: true, height: UPDATE_HEIGHT } }),
+        },
+        '../dbHelper': {
+          databaseConnection: () => ({ db: () => ({}) }),
+          findOneInDatabase: async () => null,
+        },
       });
+      const displayGross = Number(await noPrevious.onChainDisplayPrice(APP));
+      const feeGross = Number(await noPrevious.registrationFee(APP, UPDATE_HEIGHT));
 
-      expect(chargeAsked, 'the fee path consulted the credit').to.not.be.empty;
-      expect(displayAsked, 'the display path consulted the credit').to.not.be.empty;
-      expect(displayAsked, 'display and charge must price the same update identically')
-        .to.deep.equal(chargeAsked);
+      const displayFraction = (displayGross - withCredit) / displayGross;
+      // The fee carries a 0.9 both sides of the subtraction, so it cancels.
+      const feeFraction = (Number(feeGross) - Number(feeWithCredit) / 0.9) / Number(feeGross);
+
+      expect(displayFraction, 'the display path credited something').to.be.above(0);
+      expect(feeFraction, 'display and charge credit the same fraction')
+        // Both paths ceil to cents, so they agree to the cent and not beyond.
+        .to.be.closeTo(displayFraction, 1e-4);
     });
   });
 });

@@ -7,7 +7,7 @@ const path = require('path');
 const { expect } = require('chai');
 const sinon = require('sinon');
 const config = require('config');
-const { appPricePerMonth } = require('../../ZelBack/src/services/utils/appUtilities');
+const { getSpecPolicy } = require('../../ZelBack/src/services/utils/specLibs');
 const { resolveSpec } = require('../../ZelBack/src/services/utils/specCutover');
 const benchmarkService = require('../../ZelBack/src/services/benchmarkService');
 
@@ -18,8 +18,9 @@ const allSpecs = fs.existsSync(FIXTURE_PATH)
 
 describe('pricing equivalence — BigInt comparison produces same result as float', () => {
   let chainPrices;
+  let engine;
 
-  before(function () {
+  before(async function () {
     if (allSpecs.length === 0) {
       // Say so. This file generates one test per fixture spec, so an absent
       // fixture is not one skipped test - it is several hundred that never
@@ -38,6 +39,8 @@ describe('pricing equivalence — BigInt comparison produces same result as floa
     }
     chainPrices = [...config.fluxapps.price];
     chainPrices.sort((a, b) => a.height - b.height);
+    const { LegacyPricingEngine } = await getSpecPolicy();
+    engine = new LegacyPricingEngine({ chainRates: chainPrices });
     // The encrypted fixtures cannot be decrypted without the node's benchmark
     // daemon, and each attempt was a real RPC to it. They are skipped either
     // way; this makes the failure local instead of a network round trip.
@@ -78,7 +81,7 @@ describe('pricing equivalence — BigInt comparison produces same result as floa
       const { height } = rawSpec;
       let appPrice;
       try {
-        appPrice = await appPricePerMonth(spec, height, chainPrices);
+        appPrice = engine.monthlyPrice(spec, height);
       } catch {
         this.skip();
         return;
