@@ -19,13 +19,16 @@ const regime = require('../../ZelBack/src/services/pricing/legacyPricingRegime')
 //   cd ~/code/flux/flux-spec/packages/spec-backend
 //   npm run fetch-fixtures && npm run export-pricing-rows
 //
-// SKIPPED when absent, never failed. A developer without the corpus gets a
-// green suite that says so; a suite that fails on a missing fixture is one
-// people learn to ignore.
-const ROWS_PATH = path.join(
+// SKIPPED when absent for a developer, REQUIRED in CI. A suite that fails on a
+// missing fixture is one people learn to ignore; a suite that skips silently
+// where it is meant to run is worse, because a green CI then says the corpus
+// was checked when it was not. FLUX_CORPUS_REQUIRED is what tells the two
+// apart, and CI sets it.
+const ROWS_PATH = process.env.FLUX_PRICING_ROWS || path.join(
   __dirname, '..', '..', '..', 'flux-spec', 'packages', 'spec-backend',
   'test', 'fixtures', 'pricing-update-rows.json',
 );
+const CORPUS_REQUIRED = process.env.FLUX_CORPUS_REQUIRED === '1';
 
 describe('the early-update credit, over every update on chain', function corpus() {
   this.timeout(120_000);
@@ -34,7 +37,16 @@ describe('the early-update credit, over every update on chain', function corpus(
   let spec;
 
   before(async function loadCorpus() {
-    if (!fs.existsSync(ROWS_PATH)) this.skip();
+    if (!fs.existsSync(ROWS_PATH)) {
+      if (CORPUS_REQUIRED) {
+        throw new Error(
+          `FLUX_CORPUS_REQUIRED is set and the pricing corpus is absent at ${ROWS_PATH}.\n`
+          + '  Generate it:  cd ~/code/flux/flux-spec/packages/spec-backend\n'
+          + '                npm run fetch-fixtures && npm run export-pricing-rows',
+        );
+      }
+      this.skip();
+    }
     this.timeout(120_000);
     spec = await load();
     rows = JSON.parse(fs.readFileSync(ROWS_PATH, 'utf8'));
