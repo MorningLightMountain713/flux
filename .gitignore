@@ -417,3 +417,8 @@ ZelBack/config/local-*.js
 # flux-spec vendored for harness image builds, beside the other pinned build
 # artifacts above - never commit it
 test-infra/flux-spec/dist/
+
+# Derived from the chain, not from this repo: scripts/export-pricing-rows.js
+# rebuilds it, and its content changes whenever the chain does. The suite that
+# reads it skips when it is absent.
+tests/unit/fixtures/pricing-update-rows.json
