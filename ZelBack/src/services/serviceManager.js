@@ -468,13 +468,24 @@ async function startFluxFunctions() {
     // Initialize app sync orchestrator and spawner
     const orchestrator = new AppSyncOrchestrator({
       blockEmitter: explorerService.getBlockEmitter(),
+      // remoteCapabilities travels with the peer: the orchestrator picks which
+      // signature form to send from it, and a projection without it reads as a
+      // peer that claims nothing - so every request goes out in the legacy form
+      // and every peer holding the sender to what it advertised refuses it.
       getEligibleSyncPeers: () => peerManager.getEligibleSyncPeers()
-        .map((p) => ({ key: p.key, connectionId: p.connectionId, send: (msg) => p.send(msg) })),
+        .map((p) => ({
+          key: p.key,
+          connectionId: p.connectionId,
+          remoteCapabilities: p.remoteCapabilities,
+          send: (msg) => p.send(msg),
+        })),
       // By key, unfiltered: the reconnect pull addresses a specific peer that
       // may not be a sync candidate yet (no reported uptime at add() time).
       getPeerByKey: (key) => {
         const p = peerManager.get(key);
-        return p ? { key: p.key, send: (msg) => p.send(msg) } : null;
+        return p
+          ? { key: p.key, remoteCapabilities: p.remoteCapabilities, send: (msg) => p.send(msg) }
+          : null;
       },
       onPeerEvent: (event, cb) => peerManager.on(event, cb),
       offPeerEvent: (event, cb) => peerManager.removeListener(event, cb),
