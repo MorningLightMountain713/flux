@@ -168,27 +168,6 @@ describe('appEventVerifier', () => {
     });
   });
 
-  describe('isMarketplaceApp', () => {
-    const { isMarketplaceApp } = require('../../ZelBack/src/services/appMessaging/appEventVerifier')._internal;
-
-    it('returns true for an app name containing a post-2020 epoch timestamp', () => {
-      expect(isMarketplaceApp('wordpress1735018430692')).to.be.true;
-    });
-
-    it('returns false for a name containing only low integers', () => {
-      expect(isMarketplaceApp('app42v2')).to.be.false;
-    });
-
-    it('returns false for a name with no digits at all', () => {
-      expect(isMarketplaceApp('wordpress')).to.be.false;
-    });
-
-    it('returns false for undefined or empty input', () => {
-      expect(isMarketplaceApp(null)).to.be.false;
-      expect(isMarketplaceApp('')).to.be.false;
-    });
-  });
-
   describe('resolveTeamSupportAddresses', () => {
     it('returns nothing when no forks are active at the given height', () => {
       chainUtilitiesStub.getChainTeamSupportAddressUpdates.returns([

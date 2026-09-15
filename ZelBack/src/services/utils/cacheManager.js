@@ -129,6 +129,13 @@ class FluxCacheManager {
       max: 50,
       ttl: 5 * FluxCacheManager.oneMinute,
     },
+    // The marketplace template list, which carries the per-template price
+    // multiplier. One answer per node, and an operator catalogue rather than
+    // chain state, so it is read far more often than it changes.
+    marketplaceAppsCache: {
+      max: 1,
+      ttl: 30 * FluxCacheManager.oneMinute,
+    },
     dockerHubVerificationCache: {
       max: 200,
       ttl: FluxCacheManager.oneHour,

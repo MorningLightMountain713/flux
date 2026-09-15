@@ -8,6 +8,7 @@ const appsRepository = require('../appDatabase/appsRepository');
 const { resolveSpec, resolveInstantiatedSpec } = require('../utils/specCutover');
 const { getSpec } = require('../utils/specLibs');
 const { getChainParamsPriceUpdates } = require('../utils/chainUtilities');
+const { isMarketplaceApp } = require('../utils/appIdentity');
 const cacheManager = require('../utils/cacheManager').default;
 const log = require('../../lib/log');
 
@@ -30,6 +31,17 @@ const globalAppsInformation = config.get('database.appsglobal.collections.appsIn
 
 const myShortCache = cacheManager.fluxRatesCache;
 const myLongCache = cacheManager.appPriceBlockedRepoCache;
+const marketplaceCache = cacheManager.marketplaceAppsCache;
+
+// How long a failed marketplace fetch serves the last good list before asking
+// again. Without it a quote taken during an outage waits out the timeout, and
+// every quote does so. Well inside the cache lifetime, so a recovered stats
+// server is picked up long before the list would have gone stale anyway.
+const marketplaceRetryHoldMs = 60 * 1000;
+
+// The list the last successful fetch returned, or null on a node that has never
+// read one. Deliberately without expiry: see marketplaceApps.
+let lastGoodMarketplaceApps = null;
 
 /** The height the daemon is synced to, or a refusal to price without one. */
 function syncedHeight() {
@@ -56,21 +68,60 @@ async function usdRates() {
   return table;
 }
 
-/**
- * The marketplace templates, carrying the per-template price multiplier.
- *
- * Fetched per quote and uncached, as this has always behaved. A failure is
- * silent by design: the quote goes out without the multiplier rather than not
- * at all.
- */
-async function marketplaceApps() {
-  const response = await axios
-    .get(`${config.get('stats.baseUrl')}/marketplace/listapps`)
-    .catch((error) => log.error(error));
+/** The marketplace list, or null when it could not be read. */
+async function fetchMarketplaceApps() {
+  try {
+    const response = await axios.get(
+      `${config.get('stats.baseUrl')}/marketplace/listapps`, { timeout: 5000 },
+    );
+    if (response.data && response.data.status === 'success') return response.data.data;
+  } catch (error) {
+    log.error(error);
+  }
+  return null;
+}
 
-  if (response && response.data && response.data.status === 'success') return response.data.data;
+/**
+ * The marketplace templates for an app whose name could carry one, and nothing
+ * for an app whose name could not.
+ *
+ * The list is an operator catalogue rather than chain state, so it is cached and
+ * read far more often than it is fetched. Most quotes never read it at all: a
+ * name with no marketplace timestamp cannot match a template, so there is
+ * nothing to look up.
+ *
+ * A quote that misses the multiplier undercharges a marketplace app and says
+ * nothing, so a failed fetch answers with the last list that succeeded rather
+ * than with none. That fallback does not expire, because a stale multiplier is
+ * a slightly wrong price where an empty list is a certainly wrong one. A
+ * failure holds it briefly rather than asking again on the very next quote.
+ *
+ * A node that has never read the list refuses instead. It cannot tell what a
+ * marketplace app costs and will not guess, so the caller gets an error rather
+ * than a price that is wrong by the multiplier. It keeps asking on every quote
+ * while that is true, because a refusal is what the next answer replaces.
+ *
+ * @param {string} name - app name, as registered
+ * @returns {Promise<Array<object>>}
+ */
+async function marketplaceApps(name) {
+  if (!isMarketplaceApp(name)) return [];
+
+  if (marketplaceCache.has('list')) return marketplaceCache.get('list');
+
+  const fetched = await fetchMarketplaceApps();
+  if (fetched) {
+    lastGoodMarketplaceApps = fetched;
+    marketplaceCache.set('list', fetched);
+    return fetched;
+  }
+
   log.error('Unable to get marketplace information');
-  return [];
+  if (!lastGoodMarketplaceApps) {
+    throw new Error('Marketplace pricing is unavailable, try again shortly.');
+  }
+  marketplaceCache.set('list', lastGoodMarketplaceApps, { ttl: marketplaceRetryHoldMs });
+  return lastGoodMarketplaceApps;
 }
 
 /** USD per FLUX, from the rates feed, falling back to coingecko then config. */
@@ -114,13 +165,13 @@ async function storedRegistration(name) {
 }
 
 /** The engine, built with whatever this call needs fetched. */
-async function engineFor({ quote = false } = {}) {
+async function engineFor({ quote = false, name = null } = {}) {
   const { LegacyPricingEngine } = await getSpec();
   const chainRates = await getChainParamsPriceUpdates();
   if (!quote) return new LegacyPricingEngine({ chainRates });
 
   const [usd, marketplace, rate] = await Promise.all([
-    usdRates(), marketplaceApps(), fluxUsdRate(),
+    usdRates(), marketplaceApps(name), fluxUsdRate(),
   ]);
   return new LegacyPricingEngine({
     chainRates, usdRates: usd, marketplaceApps: marketplace, fluxUsdRate: rate,
@@ -184,7 +235,7 @@ async function fiatAndFluxDisplayPrice(spec, appSpecification) {
   const height = syncedHeight();
   if (await checkLegacyFreeUpdate(spec, height)) return { usd: 0, flux: 0, fluxDiscount: 0 };
 
-  const engine = await engineFor({ quote: true });
+  const engine = await engineFor({ quote: true, name: spec.name });
   const previous = await storedRegistration(spec.name);
   return engine.quote(spec, { height, previous, priceUSD: appSpecification.priceUSD });
 }
