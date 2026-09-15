@@ -5,6 +5,8 @@ import { createRequire } from 'node:module';
 import { createTestEnv } from '../framework/test-env.js';
 import { bootAndPeer } from '../framework/reconciler-suite.js';
 import { waitFor } from '../framework/wait.js';
+import { partition, healPartition } from '../framework/partition.js';
+import { getSubnetConfig } from '../framework/subnet-config.js';
 
 // The set the fleet declares, so this suite covers whatever is in it rather
 // than whatever somebody remembered to write a case for.
@@ -154,6 +156,64 @@ describe('Peer capabilities', function () {
       ));
 
       expect(answeredAFleetNode, 'no fleet node answered another fleet node').to.equal(true);
+    });
+
+    // The SECOND place a peer is handed to the sync orchestrator. A peer that
+    // comes back is asked to fill the gap over a projection built separately
+    // from the one the boot round uses, so a field carried through one and not
+    // the other leaves this path signing a form its peer refuses - and every
+    // case above would still pass.
+    it('is accepted when a peer that dropped is asked to fill the gap', async function () {
+      this.timeout(300000);
+      const cfg = getSubnetConfig();
+      const stubIps = [MODERN_STUB, LEGACY_STUB].map((i) => env.stubPeerClients.get(i).ip);
+      const dropped = REAL_NODES[REAL_NODES.length - 1];
+      const droppedIp = cfg.nodeIp(dropped + 1);
+      // Anchored, because the buffer already holds reconnect requests from the
+      // peer churn at boot: an unanchored wait is answered by one of those and
+      // never requires this partition to have caused anything.
+      const anchors = REAL_NODES.map((i) => env.clients[i].getLastEventId());
+
+      // The drop has to land before it is healed, or nothing is ever lost and
+      // no reconnect is ever pulled. Not swallowed: a partition that did not
+      // take means this case proved nothing.
+      await partition(env, [dropped]);
+      await waitFor(
+        async () => !(await env.clients[0].getPeers()).data
+          .some((peer) => String(peer).includes(droppedIp)),
+        { timeout: 120000, label: `node 0 lost ${droppedIp}` },
+      );
+      await healPartition(env, [dropped]);
+
+      // Held to a pull aimed at a FLEET node: a pull at a stub proves nothing
+      // about the form, because a stub verifies nothing.
+      const pull = await Promise.race(REAL_NODES.map(
+        (i, n) => env.clients[i].waitForEvent(
+          'ephemeralSync:reconnectRequested',
+          (data) => !stubIps.some((ip) => String(data.peer).includes(ip)),
+          180000,
+          { afterId: anchors[n] },
+        ).then((event) => ({ asker: i, peer: String(event.data.peer) })),
+      ));
+
+      const askerIp = cfg.nodeIp(pull.asker + 1);
+      const target = REAL_NODES.find((i) => pull.peer.includes(cfg.nodeIp(i + 1)));
+      expect(target, `reconnect pull aimed at ${pull.peer}, which is no fleet node`).to.not.equal(undefined);
+
+      const linesFrom = (needle) => env.nodeLogLines(target)
+        .filter((line) => line.includes(needle) && line.includes(askerIp)).length;
+      const answeredBefore = linesFrom('Sending final');
+      const refusedBefore = linesFrom('rejected: bad signature');
+
+      // THE EVENT SAYS THE REQUEST LEFT, NOT THAT IT LANDED. The verdict is the
+      // peer's, taken after the frame crosses the wire, so reading the refusal
+      // count the moment the event fires reads it before it could exist.
+      await waitFor(() => linesFrom('Sending final') > answeredBefore
+        || linesFrom('rejected: bad signature') > refusedBefore,
+      { timeout: 120000, label: `node ${target} acted on the reconnect pull from ${askerIp}` });
+
+      expect(linesFrom('rejected: bad signature'), 'the reconnect pull was refused').to.equal(refusedBefore);
+      expect(linesFrom('Sending final')).to.be.greaterThan(answeredBefore);
     });
 
     it('refuses a peer whose signature contradicts its own advertisement', async function () {
