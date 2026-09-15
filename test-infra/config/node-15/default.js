@@ -20,6 +20,7 @@ module.exports = {
             "ipRanges": "ipranges",
             "nodeLocations": "nodelocations",
             "quorumGrants": "quorumgrants",
+            "fileOperations": "fileoperations",
             "foundingCommittees": "foundingcommittees"
         }
     },
