@@ -3,7 +3,8 @@
 const { match } = require('path-to-regexp');
 const WebSocketServer = require('ws').Server;
 const log = require('./log');
-const { FLUX_VERSION, FLUX_CAPABILITIES } = require('../services/utils/FluxPeerSocket');
+const { FLUX_VERSION } = require('../services/utils/FluxPeerSocket');
+const { FLUX_CAPABILITIES } = require('../services/utils/peerCapabilities');
 
 class FluxWebsocketServer {
   static defautlErrorHandler = () => { };

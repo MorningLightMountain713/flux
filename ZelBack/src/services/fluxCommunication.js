@@ -47,7 +47,8 @@ const { announcementSeen, announcementStore, wsPeerCache } = cacheManager;
 
 const testListCache = new LRUCache(LRUTest); */
 
-const { DIRECTION, FLUX_VERSION, FLUX_CAPABILITIES } = require('./utils/FluxPeerManager');
+const { DIRECTION, FLUX_VERSION } = require('./utils/FluxPeerManager');
+const { FLUX_CAPABILITIES } = require('./utils/peerCapabilities');
 const { NAK_REASON, buildSyncSignatureMessage, encodeHashRequest } = require('./utils/peerCodec');
 const { networkHealthMonitor } = require('./utils/NetworkHealthMonitor');
 const verifyPool = require('./utils/verifyPool');
