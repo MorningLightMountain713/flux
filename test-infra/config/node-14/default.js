@@ -22,6 +22,7 @@ module.exports = {
             "nodeLocations": "nodelocations",
             "ownAddress": "ownaddress",
             "quorumGrants": "quorumgrants",
+            "fileOperations": "fileoperations",
             "foundingCommittees": "foundingcommittees"
         }
     },
