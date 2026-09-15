@@ -28,11 +28,16 @@ describe('Peer capabilities', function () {
     env = await createTestEnv({ hookCtx: this,
       nodes: 6,
       stubPeers: [MODERN_STUB, LEGACY_STUB],
-      // One peer that claims everything this build claims, and one that claims
-      // only what every release has always claimed. A fleet runs one image, so
-      // this pairing is the only place a mixed release exists.
+      // One peer that claims syncSigV2 and one that claims nothing, which is the
+      // only pairing that matters here. A fleet runs one image, so a peer whose
+      // claim differs from the fleet's exists nowhere else.
+      //
+      // Neither claims a capability it does not implement. A stub advertising
+      // binaryMessages is answered in a frame it never decodes, and one
+      // advertising appStateSync is asked a question it never answers - which
+      // reads as the node failing to respond.
       stubCapabilities: {
-        [MODERN_STUB]: FLUX_CAPABILITIES,
+        [MODERN_STUB]: ['peerExchange', 'syncSigV2'],
         [LEGACY_STUB]: ['peerExchange'],
       },
       // A node stamps its per-peer response throttle on arrival, before the
@@ -62,12 +67,20 @@ describe('Peer capabilities', function () {
       this.timeout(60000);
       // A real node's own header, not a stub's: a stub advertises whatever this
       // suite told it to, and only a fleet node proves the declared list
-      // reaches the wire.
+      // survives the wire intact. It cannot catch a wrong list - both ends read
+      // the same constant - only one that arrives short.
+      //
+      // Whichever node holds a fleet peer: which ones peer with which is a dial
+      // race, and this is a claim about the header, not about node 0.
       const stubIps = [MODERN_STUB, LEGACY_STUB].map((i) => env.stubPeerClients.get(i).ip);
-      const peers = (await env.clients[0].getPeerDetails()).data;
-      const fleetPeer = peers.find((p) => !stubIps.includes(p.ip));
+      let fleetPeer = null;
+      for (const i of REAL_NODES) {
+        const peers = (await env.clients[i].getPeerDetails()).data;
+        fleetPeer = peers.find((p) => !stubIps.includes(p.ip));
+        if (fleetPeer) break;
+      }
 
-      expect(fleetPeer, 'node 0 holds no fleet peer').to.exist;
+      expect(fleetPeer, 'no fleet node holds another fleet node').to.exist;
       expect([...fleetPeer.capabilities].sort()).to.deep.equal([...FLUX_CAPABILITIES].sort());
     });
 
@@ -128,12 +141,34 @@ describe('Peer capabilities', function () {
       expect(answered).to.equal(sent);
     });
 
+    // The fleet asking ITSELF, which is what a stub cannot stand in for: a stub
+    // signs whichever form the suite names, so it exercises the verifier and
+    // never the sender's own choice of form. A node that picks the wrong one
+    // for every peer is refused by every peer, and nothing above would notice.
+    it('is accepted when one fleet node asks another', async function () {
+      this.timeout(60000);
+      const stubIps = [MODERN_STUB, LEGACY_STUB].map((i) => env.stubPeerClients.get(i).ip);
+      const answeredAFleetNode = REAL_NODES.some((i) => env.nodeLogLines(i).some(
+        (line) => line.includes('Sending final')
+          && !stubIps.some((ip) => line.includes(ip)),
+      ));
+
+      expect(answeredAFleetNode, 'no fleet node answered another fleet node').to.equal(true);
+    });
+
     it('refuses a peer whose signature contradicts its own advertisement', async function () {
       this.timeout(60000);
-      // The stub asks every node holding it, so the refusal lands wherever the
-      // contradicting request did. Both cases above sent one.
-      const refused = REAL_NODES.some((i) => env.nodeHasLog(i, 'rejected: bad signature'));
-      expect(refused, 'no node logged a refusal').to.equal(true);
+      // Named, because a bad signature from ANYONE satisfies the bare line -
+      // including a node refusing every peer it has, which is the failure this
+      // suite exists to catch. Only a refusal of the stub that contradicted
+      // itself says the rule fired for the stated reason.
+      const stubIps = [MODERN_STUB, LEGACY_STUB].map((i) => env.stubPeerClients.get(i).ip);
+      const refusedTheStub = REAL_NODES.some((i) => env.nodeLogLines(i).some(
+        (line) => line.includes('rejected: bad signature')
+          && stubIps.some((ip) => line.includes(ip)),
+      ));
+
+      expect(refusedTheStub, 'no node refused the contradicting stub').to.equal(true);
     });
   });
 });
