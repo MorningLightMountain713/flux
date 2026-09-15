@@ -138,4 +138,199 @@ describe('pricingRegime', () => {
       expect(await v9.supersededMessage('myapp', CONFIRMING)).to.be.null;
     });
   });
+
+  // The marketplace list carries the per-template price multiplier, so a quote
+  // taken without it undercharges a marketplace app and says nothing. The list
+  // comes from the operator's stats server, which can be slow or unreachable.
+  describe('the marketplace multiplier survives a stats server that stops answering', () => {
+    const TEMPLATES = [{ name: 'myapp', multiplier: 2 }];
+    const MARKETPLACE_NAME = 'myapp1735018430692';
+    const HEIGHT = 1_800_000;
+    const CACHE_KEY = 'list';
+
+    const cacheManager = require('../../ZelBack/src/services/utils/cacheManager').default;
+    const { v8Spec } = require('./fixtures/fluxSpec');
+    const config = require('config');
+
+    let spec;
+    let ordinarySpec;
+    let marketplaceReply;
+
+    before(async function loadFixtures() {
+      this.timeout(30_000);
+      spec = await v8Spec({ name: MARKETPLACE_NAME });
+      ordinarySpec = await v8Spec();
+    });
+
+    beforeEach(() => {
+      cacheManager.marketplaceAppsCache.clear();
+      cacheManager.appPriceBlockedRepoCache.clear();
+      cacheManager.fluxRatesCache.clear();
+    });
+
+    function succeeds() {
+      return Promise.resolve({ data: { status: 'success', data: TEMPLATES } });
+    }
+
+    function fails() {
+      return Promise.reject(new Error('stats server unreachable'));
+    }
+
+    /** The regime with only its outbound calls replaced. */
+    function loadRegime() {
+      const get = sinon.stub();
+      get.withArgs(sinon.match('getappspecsusdprice')).resolves(
+        { data: { status: 'success', data: config.get('fluxapps.usdprice') } },
+      );
+      get.withArgs(sinon.match('/rates')).resolves(
+        { data: [[{ code: 'USD', rate: 1 }], { FLUX: 0.5 }] },
+      );
+      get.withArgs(sinon.match('/marketplace/listapps')).callsFake(
+        function marketplaceCall() { return marketplaceReply(); },
+      );
+
+      const regime = proxyquire('../../ZelBack/src/services/pricing/legacyPricingRegime', {
+        axios: { get },
+        '../dbHelper': {
+          databaseConnection: () => ({ db: () => ({}) }),
+          findOneInDatabase: sinon.stub().resolves(null),
+        },
+        '../daemonService/daemonServiceMiscRpcs': {
+          isDaemonSynced: () => ({ data: { synced: true, height: HEIGHT } }),
+        },
+        '../appDatabase/appsRepository': {
+          getGlobalAppInfo: sinon.stub().resolves(null),
+          listAppMessagesByName: sinon.stub().resolves([]),
+          getPreviousPermanentMessage: sinon.stub().resolves(null),
+        },
+        '../utils/chainUtilities': {
+          getChainParamsPriceUpdates: sinon.stub().resolves(config.get('fluxapps.price')),
+        },
+        '../utils/specCutover': {
+          resolveSpec: sinon.stub().resolves(null),
+          resolveInstantiatedSpec: sinon.stub().resolves(null),
+        },
+      });
+      return { regime, get };
+    }
+
+    const quote = (regime, subject = spec) => regime.fiatAndFluxDisplayPrice(subject, {});
+    const marketplaceCalls = (get) => get.args.filter(
+      ([url]) => url.includes('/marketplace/listapps'),
+    ).length;
+
+    // The multiplier has to be visible in the quote before any of this means
+    // anything: if the USD floor swallowed it, every assertion below would pass
+    // on a number the multiplier never touched.
+    it('prices a marketplace app above the same app without a template', async () => {
+      marketplaceReply = succeeds;
+      const withTemplate = await quote(loadRegime().regime);
+
+      cacheManager.marketplaceAppsCache.clear();
+      marketplaceReply = () => Promise.resolve({ data: { status: 'success', data: [] } });
+      const withNone = await quote(loadRegime().regime);
+
+      expect(withTemplate.usd).to.be.greaterThan(withNone.usd);
+    });
+
+    it('keeps the multiplier when the fetch fails, instead of quoting without it', async () => {
+      const { regime } = loadRegime();
+      marketplaceReply = succeeds;
+      const fresh = await quote(regime);
+
+      // The cached list has aged out; the stats server is now down.
+      cacheManager.marketplaceAppsCache.delete(CACHE_KEY);
+      marketplaceReply = fails;
+      const afterFailure = await quote(regime);
+
+      expect(afterFailure.usd).to.equal(fresh.usd);
+    });
+
+    // A node that has never read the list cannot tell what a marketplace app
+    // costs. Answering anyway means charging the resource price for an app that
+    // owes the multiplier, with nothing in the response to say so.
+    it('refuses rather than quote a marketplace app it cannot price', async () => {
+      const { regime } = loadRegime();
+      marketplaceReply = fails;
+
+      let error;
+      await quote(regime).catch((err) => { error = err; });
+
+      expect(error).to.be.an('error');
+      expect(error.message).to.include('Marketplace pricing is unavailable');
+    });
+
+    it('prices normally once it has read the list, however the server behaves after', async () => {
+      const { regime } = loadRegime();
+      marketplaceReply = succeeds;
+      const first = await quote(regime);
+
+      cacheManager.marketplaceAppsCache.delete(CACHE_KEY);
+      marketplaceReply = fails;
+
+      expect((await quote(regime)).usd).to.equal(first.usd);
+    });
+
+    // An ordinary name cannot match a template, so the list has no bearing on
+    // its price and a stats outage must not touch it.
+    it('never reads the list for an app whose name carries no marketplace stamp', async () => {
+      const { regime, get } = loadRegime();
+      marketplaceReply = fails;
+
+      const priced = await quote(regime, ordinarySpec);
+
+      expect(marketplaceCalls(get)).to.equal(0);
+      expect(priced.usd).to.be.a('number').and.be.greaterThan(0);
+    });
+
+    it('reads the list once for many quotes rather than once per quote', async () => {
+      const { regime, get } = loadRegime();
+      marketplaceReply = succeeds;
+
+      await quote(regime);
+      expect(marketplaceCalls(get), 'the first quote must actually fetch').to.equal(1);
+
+      await quote(regime);
+      await quote(regime);
+      expect(marketplaceCalls(get)).to.equal(1);
+    });
+
+    // A failure holds the last good list briefly, so an outage costs one fetch
+    // per hold rather than one — and one timeout — per quote.
+    it('pauses before asking again once it has a list to serve', async () => {
+      const { regime, get } = loadRegime();
+      marketplaceReply = succeeds;
+      await quote(regime);
+
+      cacheManager.marketplaceAppsCache.delete(CACHE_KEY);
+      marketplaceReply = fails;
+      await quote(regime);
+      await quote(regime);
+
+      expect(marketplaceCalls(get)).to.equal(2);
+    });
+
+    // That pause is only affordable because the fallback is truthful. A node
+    // that has never read the list is quoting marketplace apps without their
+    // multiplier, so it must not stop asking while that is true.
+    it('keeps asking while it has no list to fall back on', async () => {
+      const { regime, get } = loadRegime();
+      marketplaceReply = fails;
+
+      await quote(regime).catch(() => {});
+      await quote(regime).catch(() => {});
+
+      expect(marketplaceCalls(get)).to.equal(2);
+    });
+
+    it('bounds the fetch with a timeout, so a stalled server cannot hold a quote open', async () => {
+      const { regime, get } = loadRegime();
+      marketplaceReply = succeeds;
+
+      await quote(regime);
+
+      const [, options] = get.args.find(([url]) => url.includes('/marketplace/listapps'));
+      expect(options.timeout).to.be.a('number').and.be.greaterThan(0);
+    });
+  });
 });

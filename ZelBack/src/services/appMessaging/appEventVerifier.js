@@ -6,6 +6,7 @@ const signatureVerifier = require('../signatureVerifier');
 const benchmarkService = require('../benchmarkService');
 const { ARCANE_APP_ATTESTATION_PUBKEY, verifyAttestationSignature } = require('../utils/arcaneAttestation');
 const { getChainTeamSupportAddressUpdates } = require('../utils/chainUtilities');
+const { isMarketplaceApp } = require('../utils/appIdentity');
 const { ownerChangeRaceSigner } = require('./ownerChangeRaces');
 
 async function deserializeMessage(message) {
@@ -45,14 +46,6 @@ function verifierFor(allowLegacyEncoding) {
   return async (payload, address, signature) => signatureVerifier.verifySignature(
     payload, address, signature, { allowLegacyEncoding: true },
   );
-}
-
-function isMarketplaceApp(appName) {
-  if (!appName) return false;
-  const nums = appName.match(/\d+/g);
-  if (!nums) return false;
-  const epoch2020 = Date.parse('2020-01-01');
-  return nums.some((n) => Number(n) > epoch2020);
 }
 
 /**
@@ -244,7 +237,6 @@ module.exports = {
   verifyAttestation,
   computeOutboundHash,
   _internal: {
-    isMarketplaceApp,
     resolveTeamSupportAddresses,
     verifyFn,
     verifierFor,
