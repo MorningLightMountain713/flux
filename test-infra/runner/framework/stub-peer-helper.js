@@ -241,6 +241,25 @@ export function stubPeerClient(ip) {
       });
     },
 
+    // Ask a node for a sync, signed in the form named. A node verifies against
+    // the form this peer advertised, so contradicting it reaches the dishonest
+    // peer - the case no real node of any version produces.
+    async requestSync({ type = 0x21, form = 'v2', sinceTimestamp = 0 } = {}) {
+      const res = await controlFetch(`${controlUrl}/sync-request`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ type, form, sinceTimestamp }),
+      });
+      return res.json();
+    },
+
+    // How many sync answers this peer has been sent. A refusal is silent on the
+    // wire, so this is the only positive evidence a request verified.
+    async syncResponsesReceived() {
+      const stats = await this.getStats();
+      return stats.syncResponsesReceived ?? 0;
+    },
+
     async clear() {
       const res = await controlFetch(`${controlUrl}/clear`, { method: 'POST' });
       return res.json();

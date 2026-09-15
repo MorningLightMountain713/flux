@@ -950,7 +950,7 @@ function nodeReadyWaitStrategy(nodeIp) {
 // nothing else should.
 export async function createTestEnv({
   hookCtx = null, nodes = 1, deferredNodes = 0, legacyNodes = [], unprivilegedNodes = [], stubPeers = [], syncedNodes = null, silentSyncPeers = [],
-  unverifiableSyncPeers = [], policyUnawarePeers = [], stubPeeredWith = null,
+  unverifiableSyncPeers = [], policyUnawarePeers = [], stubCapabilities = {}, stubPeeredWith = null,
   configOverrides = null, nodeConfigOverrides = {}, nodeTiers = null, dataCenter = true,
   timing = null,
   tickerAutostart = false, discoveryAutostart = false, nodeStatusOverrides = {},
@@ -1125,6 +1125,14 @@ export async function createTestEnv({
       throw new Error(`createTestEnv: policyUnawarePeers index ${index} is not one of stubPeers [${stubPeers.join(', ')}]`);
     }
   }
+  // A stub whose advertised capability set is the test input. The fleet runs one
+  // image, so every node in it claims the same set and a pairing where the two
+  // ends differ - what a rollout is made of - exists nowhere else.
+  for (const index of Object.keys(stubCapabilities)) {
+    if (!stubPeers.includes(Number(index))) {
+      throw new Error(`createTestEnv: stubCapabilities names ${index}, which is not one of stubPeers [${stubPeers.join(', ')}]`);
+    }
+  }
   const syncedOverrides = {};
   for (const index of establishedNodes) {
     syncedOverrides[index] = mergeConfigs(
@@ -1262,7 +1270,7 @@ export async function createTestEnv({
     // mongo starts, i.e. inside the fleet boot, where the waits at risk are the
     // boot's own.
     await startInfraDeathWatch(env);
-    await _buildEnv(env, nodes, deferredNodes, legacyNodes, unprivilegedNodes, stubPeers, silentSyncPeers, unverifiableSyncPeers, policyUnawarePeers, stubPeerings, mergedOverrides, mergedNodeOverrides, nodeTiers, dataCenter, tickerAutostart, discoveryAutostart, nodeStatusOverrides, rpcFailures, bootContext, initialHeight, syncthing, aptSeeded, aptBadSource, geolocation, locationTable, staticIp, policy, policySeeds, policyReachable, arcane, shutdowndMock, telemetrydMock, systemdMode, telemetrydReal, shutdowndReal, dnsdReal, zmqTopics, nodeZmqTopics, { perNodeZmq, seedPolicyGrant });
+    await _buildEnv(env, nodes, deferredNodes, legacyNodes, unprivilegedNodes, stubPeers, silentSyncPeers, unverifiableSyncPeers, policyUnawarePeers, stubPeerings, mergedOverrides, mergedNodeOverrides, nodeTiers, dataCenter, tickerAutostart, discoveryAutostart, nodeStatusOverrides, rpcFailures, bootContext, initialHeight, syncthing, aptSeeded, aptBadSource, geolocation, locationTable, staticIp, policy, policySeeds, policyReachable, arcane, shutdowndMock, telemetrydMock, systemdMode, telemetrydReal, shutdowndReal, dnsdReal, zmqTopics, nodeZmqTopics, { perNodeZmq, seedPolicyGrant }, stubCapabilities);
     return env;
   } catch (err) {
     // Boot failed: the env owns everything started so far. The shared teardown
@@ -1300,6 +1308,7 @@ async function _buildEnv(
   policy = null, policySeeds = null, policyReachable = false, arcane = false,
   shutdowndMock = false, telemetrydMock = false, systemdMode = false, telemetrydReal = false,
   shutdowndReal = false, dnsdReal = false, zmqTopics, nodeZmqTopics, zmqOptions = {},
+  stubCapabilities,
 ) {
   const { perNodeZmq = false, seedPolicyGrant = true } = zmqOptions;
   // Everything built here registers onto the env shell as it comes up, so a
@@ -1944,6 +1953,7 @@ async function _buildEnv(
         SILENT_APP_STATE_SYNC: String(silentSyncPeers.includes(stubIdx)),
         UNVERIFIABLE_APP_STATE_SYNC: String(unverifiableSyncPeers.includes(stubIdx)),
         POLICY_UNAWARE: String(policyUnawarePeers.includes(stubIdx)),
+        PEER_CAPABILITIES: (stubCapabilities[stubIdx] ?? []).join(','),
         // Every stub asks, for the nodes it is declared a peer of. It repeats
         // on an interval, so a node held back at boot is asked once it starts.
         DIAL_TARGETS: (stubPeerings.get(stubIdx) ?? [])

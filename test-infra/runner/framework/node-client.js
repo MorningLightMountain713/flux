@@ -558,6 +558,10 @@ export function nodeClient(nodeNum) {
     getEventBuffer: () => [...eventBuffer],
     getVersion: () => get('/flux/version'),
     getPeers: () => get('/flux/connectedpeers', { noCache: true }),
+    // Per-peer detail, including the capability set that peer advertised —
+    // which is what decides the form this node sends it. Both directions
+    // unfiltered; 'outbound' or 'inbound' narrows it.
+    getPeerDetails: (filter = '') => get(`/flux/peers/${filter}`, { noCache: true }),
     getIncomingPeers: () => get('/flux/incomingconnections', { noCache: true }),
     getNodeStatus: () => get('/daemon/getzelnodestatus'),
     getBlockchainInfo: () => get('/daemon/getblockchaininfo'),

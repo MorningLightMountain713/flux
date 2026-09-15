@@ -23,6 +23,12 @@ const UNVERIFIABLE_APP_STATE_SYNC = process.env.UNVERIFIABLE_APP_STATE_SYNC === 
 // node in the first wave of a rollout.
 const POLICY_UNAWARE = process.env.POLICY_UNAWARE === 'true';
 const DIAL_TARGETS = (process.env.DIAL_TARGETS || '').split(',').filter(Boolean);
+// What this peer advertises at the handshake, which is the only thing deciding
+// which form a node sends it. The fleet runs one image, so every pairing where
+// the two ends claim different sets is unreachable without this. Unset keeps
+// the peerExchange default.
+const DECLARED_CAPABILITIES = (process.env.PEER_CAPABILITIES || '')
+  .split(',').map((c) => c.trim()).filter(Boolean);
 const { PRIVATE_KEY, PUBLIC_KEY, NODE_IP } = process.env;
 
 if (!PRIVATE_KEY || !PUBLIC_KEY) {
@@ -56,7 +62,14 @@ let policyAsksAnswered = 0;
 // only way a suite can see the difference.
 let policyAnnouncementsReceived = 0;
 let unverifiableResponsesSent = 0;
+let syncRequestsSent = 0;
+let syncResponsesReceived = 0;
 const requestLog = [];
+
+// The four names a node answers a sync request with. An answer arriving is the
+// only positive evidence the request verified: a refusal is silent on the wire
+// and reads exactly like a peer that had nothing to say.
+const SYNC_RESPONSE_TYPES = Object.freeze(new Set(Object.values(SYNC_REQUEST_RESPONSES)));
 
 // What this peer answers when a node asks what it is holding, and when it was
 // asked. The arrival times are the point: a node decides promotion for every
@@ -164,6 +177,39 @@ async function serialiseUnverifiableSyncResponse(type) {
   return JSON.stringify({ version, timestamp, pubKey: PUBLIC_KEY, signature, data });
 }
 
+/**
+ * The payload a signed sync request commits to. `v2` is domain-separated;
+ * `legacy` runs the fields together and is what a peer without syncSigV2 is
+ * held to. Named independently of what this peer advertises, so a suite can
+ * send the form the advertisement contradicts.
+ *
+ * @param {number} type
+ * @param {number} sinceTimestamp
+ * @param {number} requestTimestamp
+ * @param {'v2'|'legacy'} form
+ * @returns {string}
+ */
+function syncSignaturePayload(type, sinceTimestamp, requestTimestamp, form) {
+  if (form === 'legacy') return `${type}${sinceTimestamp}${requestTimestamp}`;
+  return `fluxsyncrequest-${type}:${sinceTimestamp}|${requestTimestamp}`;
+}
+
+/** The binary frame a signed sync request travels in. */
+function encodeSignedSyncRequest(type, sinceTimestamp, requestTimestamp, pubkey, signature) {
+  const pubkeyBuf = Buffer.from(pubkey, 'hex');
+  const sigBuf = Buffer.from(signature, 'base64');
+  const buf = Buffer.allocUnsafe(1 + 8 + 8 + 1 + pubkeyBuf.length + 1 + sigBuf.length);
+  let offset = 0;
+  buf[offset] = type; offset += 1;
+  buf.writeBigUInt64BE(BigInt(sinceTimestamp), offset); offset += 8;
+  buf.writeBigUInt64BE(BigInt(requestTimestamp), offset); offset += 8;
+  buf[offset] = pubkeyBuf.length; offset += 1;
+  pubkeyBuf.copy(buf, offset); offset += pubkeyBuf.length;
+  buf[offset] = sigBuf.length; offset += 1;
+  sigBuf.copy(buf, offset);
+  return buf;
+}
+
 async function handleSyncRequest(ws, rawData) {
   const responseType = SYNC_REQUEST_RESPONSES[rawData[0]];
   if (!responseType) return;
@@ -209,6 +255,11 @@ async function handleMessage(ws, rawData) {
         correlationId: data.correlationId,
       }));
       policyAsksAnswered += 1;
+      return;
+    }
+
+    if (data && SYNC_RESPONSE_TYPES.has(data.type)) {
+      syncResponsesReceived++;
       return;
     }
 
@@ -268,11 +319,13 @@ wss.on('headers', (headers) => {
   // day of a rollout. A node does not ask it and does not announce to it, and a node whose
   // peers are all this must still reach the published source.
   const answersAppStateSync = SILENT_APP_STATE_SYNC || UNVERIFIABLE_APP_STATE_SYNC;
-  const capabilities = [
-    'peerExchange',
-    ...(answersAppStateSync ? ['appStateSync'] : []),
-    ...(POLICY_UNAWARE ? [] : ['policyBundle']),
-  ].join(',');
+  const capabilities = DECLARED_CAPABILITIES.length
+    ? DECLARED_CAPABILITIES.join(',')
+    : [
+      'peerExchange',
+      ...(answersAppStateSync ? ['appStateSync'] : []),
+      ...(POLICY_UNAWARE ? [] : ['policyBundle']),
+    ].join(',');
   headers.push(`X-Flux-Capabilities: ${capabilities}`);
   headers.push('X-Flux-Version: 8.0.0');
   headers.push('X-Flux-Uptime: 1000');
@@ -515,6 +568,9 @@ const controlServer = http.createServer(async (req, res) => {
         requestsReceived,
         messagesServed,
         unverifiableResponsesSent,
+        syncRequestsSent,
+        syncResponsesReceived,
+        capabilities: DECLARED_CAPABILITIES,
         messagesLoaded: messages.size,
         requestLog,
         promotedFolderRequests,
@@ -543,6 +599,26 @@ const controlServer = http.createServer(async (req, res) => {
       broadcastsSent += sent;
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ status: 'ok', sent, connected: connectedNodes.size }));
+      return;
+    }
+
+    // Ask a node for a sync, signed in the form named. The form is separate
+    // from the advertisement so a suite can contradict it - a peer whose bytes
+    // do not match its own claim is what the capability check exists to refuse,
+    // and no real node of any version produces it.
+    if (req.method === 'POST' && req.url === '/sync-request') {
+      const { type = 0x21, form = 'v2', sinceTimestamp = 0 } = JSON.parse(await readBody(req));
+      const requestTimestamp = Date.now();
+      const payload = syncSignaturePayload(type, sinceTimestamp, requestTimestamp, form);
+      const signature = await signBtcMessage(payload, PRIVATE_KEY);
+      const frame = encodeSignedSyncRequest(type, sinceTimestamp, requestTimestamp, PUBLIC_KEY, signature);
+      let sent = 0;
+      for (const ws of connectedNodes) {
+        if (ws.readyState === 1) { ws.send(frame); sent++; }
+      }
+      syncRequestsSent += sent;
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ status: 'ok', sent, form, type, connected: connectedNodes.size }));
       return;
     }
 
