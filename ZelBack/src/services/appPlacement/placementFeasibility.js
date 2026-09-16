@@ -30,7 +30,6 @@ const generalService = require('../generalService');
 const messageHelper = require('../messageHelper');
 const serviceHelper = require('../serviceHelper');
 const cidrUtils = require('../utils/cidrUtils');
-const mountParser = require('../utils/mountParser');
 const verificationHelper = require('../verificationHelper');
 const { bareIp, socketAddressesMatch } = require('../utils/socketAddressUtils');
 const ipLocationStore = require('./ipLocationStore');
@@ -598,6 +597,34 @@ async function normalizeGeolocation(entries) {
 }
 
 /**
+ * Whether any component of a submission document replicates its storage.
+ *
+ * Asked of the library, which answers for either version: a v9 component says
+ * so in `persistentStorage.sync`, and a legacy one spells the same thing as a
+ * flag on its primary mount, which the conversion reads into that field.
+ *
+ * A component whose storage cannot be read is not synced rather than an error.
+ * This is advice about a spec the caller has not registered yet, and an
+ * unreadable mount string is refused where it matters — at the submission door,
+ * by the owner, before anything is signed.
+ * @param {object} doc A submission document, legacy or v9 shaped
+ * @returns {Promise<boolean>}
+ */
+async function anyComponentSynced(doc) {
+  const { parseContainerData } = await getSpecBackend();
+  const isSynced = (containerData) => {
+    if (typeof containerData !== 'string') return false;
+    try {
+      return parseContainerData(containerData, 0, [], new Map(), 0).persistentStorage.sync !== null;
+    } catch {
+      return false;
+    }
+  };
+  if (Array.isArray(doc.compose)) return doc.compose.some((c) => isSynced(c?.containerData));
+  return isSynced(doc.containerData);
+}
+
+/**
  * The geolocation input of a prospective spec, in either accepted shape: the
  * spec's flat geolocation array (spec strings and/or structured entries), or
  * the v9 placement shape - geoAllow/geoDeny arrays of structured entries,
@@ -682,12 +709,7 @@ async function placementAdvice(spec) {
     error.statusCode = 503;
     throw error;
   }
-  let synced = true;
-  if (Array.isArray(spec.compose)) {
-    synced = spec.compose.some((component) => mountParser.isSyncedComponent(component?.containerData));
-  } else if (typeof spec.containerData === 'string') {
-    synced = mountParser.isSyncedComponent(spec.containerData);
-  }
+  const synced = await anyComponentSynced(spec);
   const placement = await placementFromDocument({ geolocation: normalized });
   const feasibility = await placementFeasibility({ placement, instances }, instances);
   // the availability gate above raced the computation: a store that became
