@@ -140,6 +140,18 @@ async function v8Spec(overrides = {}) {
   return flux.FluxAppSpecV8.fromSubmission({ ...V8_SUBMISSION, ...overrides });
 }
 
+/** A real FluxAppSpecV8 off the chain door rather than the submission door.
+ *
+ * The two doors differ on `containerData`: a mount layout this library cannot
+ * read is refused at submission, but accepted on replay, because a node that
+ * will not read a permanent message forks off the network. Use this only where
+ * the subject is a stored spec carrying such a layout — a node has to act on
+ * one whatever it says. */
+async function v8SpecFromChain(overrides = {}) {
+  const flux = await loadSpecLibrary();
+  return flux.FluxAppSpecV8.deserialize({ ...V8_SUBMISSION, ...overrides });
+}
+
 /**
  * A real FluxAppSpecV1 — the oldest stored form, and the only one that carries
  * no `instances` field at all. That absence is not trivia: appsRepository reads
@@ -270,6 +282,7 @@ module.exports = {
   V8_SUBMISSION,
   v9Spec,
   v8Spec,
+  v8SpecFromChain,
   v1Spec,
   sealedV9Spec,
   sealedV8Spec,

@@ -12,7 +12,8 @@ const fluxEventBus = require('../../ZelBack/src/services/utils/fluxEventBus');
 const meshIdentityDrift = require('../../ZelBack/src/services/appMesh/meshIdentityDrift');
 const { appsFolder } = require('../../ZelBack/src/services/utils/appConstants');
 const {
-  loadSpecLibrary, V9_SUBMISSION, V8_SUBMISSION, v1Spec, v8Spec, v9Spec, sealedV8Spec,
+  loadSpecLibrary, V9_SUBMISSION, V8_SUBMISSION, v1Spec, v8Spec, v8SpecFromChain, v9Spec,
+  sealedV8Spec,
   instantiatedSpec, assertAnswers,
 } = require('./fixtures/fluxSpec');
 
@@ -83,8 +84,10 @@ describe('appReconciler tests', () => {
     });
   };
 
-  /** A real FluxAppSpecV8 with the named components. */
-  const v8App = (appName, components) => v8Spec({ name: appName, compose: v8Compose(components) });
+  /** A real FluxAppSpecV8 with the named components, read off the chain rather
+   * than submitted — the mount layouts under test here are ones the submission
+   * door refuses and a stored spec can still carry. */
+  const v8AppFromChain = (appName, components) => v8SpecFromChain({ name: appName, compose: v8Compose(components) });
 
   /**
    * The persistent-storage shapes the sync modes are declared through. The legacy
@@ -1022,11 +1025,13 @@ describe('appReconciler tests', () => {
       // mount model (real prod shape: roundcube). The reconciler must not attempt a start
       // (volume construction would throw) and must surface it, not silently loop "not ready".
       //
-      // The spec itself validates — the refusal comes from the deployment projection,
-      // which is where the mount model lives. So the build here is the REAL one: it
-      // throws flux-spec's own error over a CLEARTEXT row, which is exactly the
-      // structural (never-retryable) shape this branch classifies.
-      const badSpec = await v8App('app', { www: { containerData: '/data|g:/var/roundcube/db' } });
+      // The submission door refuses this layout, so the spec is read off the chain, which
+      // is the only way a node meets one: stored specs carrying it predate the door. The
+      // refusal under test comes from the deployment projection, which is where the mount
+      // model lives. So the build here is the REAL one: it throws flux-spec's own error
+      // over a CLEARTEXT row, which is exactly the structural (never-retryable) shape
+      // this branch classifies.
+      const badSpec = await v8AppFromChain('app', { www: { containerData: '/data|g:/var/roundcube/db' } });
       localInst = await instantiatedSpec(badSpec);
       localDeployment = null;
       stubs.deploymentProvider.buildDeployment.callsFake(
