@@ -33,8 +33,6 @@ const cidrUtils = require('../utils/cidrUtils');
 const mountParser = require('../utils/mountParser');
 const verificationHelper = require('../verificationHelper');
 const { bareIp, socketAddressesMatch } = require('../utils/socketAddressUtils');
-const { collateralOutpoint, nodesNameThisNode } = require('../utils/nodePinning');
-const geolocationRule = require('./geolocationRule');
 const ipLocationStore = require('./ipLocationStore');
 const { Privilege, authOf } = require('../utils/privileges');
 const { getSpecBackend } = require('../utils/specLibs');
@@ -112,21 +110,6 @@ async function faultDomain(address) {
   return netDomain(ip);
 }
 
-/**
- * Whether a node location satisfies an app's geolocation specification, for
- * the callers that answer about a single node. A candidate count parses the
- * spec once through geolocationRule and reuses the rule instead - deriving the
- * terms per node costs the product of the node count and the entry count.
- * @param {{continentCode: string|null, countryCode: string|null,
- *   region: string|null}} loc Node location
- * @param {string[]} geolocation App spec geolocation entries
- * @returns {boolean}
- */
-function nodeLocationMatchesGeolocation(loc, geolocation) {
-  return geolocationRule.locationSatisfiesGeolocation(
-    loc, geolocation, ipLocationStore.regionCodeForName,
-  );
-}
 
 /**
  * The Placement for a caller that holds a submission DOCUMENT rather than a spec
@@ -587,30 +570,20 @@ function normalizeStructuredEntry(entry) {
 
 /**
  * Normalise a mixed geolocation array: spec strings pass through verbatim,
- * structured entries become spec strings. Also reports which normalised
- * entries carry a region part placement can only honour at country
- * granularity - which is a part the table can resolve NEITHER way: not an
- * ISO 3166-2 code, and not a name the published vocabulary maps to one.
- * Resolved through the same call the rule itself uses, because an entry the
+ * structured entries become spec strings. Also reports which normalised entries
+ * carry a region part placement can only honour at country granularity.
+ *
+ * Which entries those are is flux-spec's answer, not one computed here: the
+ * library reports every entry whose region it could not read, and an entry the
  * count honours exactly must never be reported as widened. Structured entries
  * always emit table-vocabulary regions, so they are never coarsened.
  * @param {Array<string|object>} entries Geolocation entries, either syntax
- * @returns {{normalized: string[], coarsened: string[]}}
+ * @returns {Promise<{normalized: string[], coarsened: string[]}>}
  */
-function normalizeGeolocation(entries) {
-  const coarsened = [];
+async function normalizeGeolocation(entries) {
   const normalized = entries.map((entry) => {
     if (typeof entry === 'string') {
       if (entry.length > 50) throw new Error('Invalid geolocation specified');
-      // a spec string the caller already holds keeps its region part - it is
-      // theirs to register - but a legacy-shaped part is answered at country
-      // granularity, so report it
-      const body = entry.startsWith('a!c') ? entry.slice(3) : (entry.startsWith('ac') ? entry.slice(2) : null);
-      const parts = body ? body.split('_') : [];
-      if (parts.length >= 3 && parts[2] !== 'ALL' && parts[2] !== 'NONE'
-        && !geolocationRule.regionCodeOf(parts, ipLocationStore.regionCodeForName)) {
-        coarsened.push(entry);
-      }
       return entry;
     }
     if (entry && typeof entry === 'object' && !Array.isArray(entry)) {
@@ -618,6 +591,9 @@ function normalizeGeolocation(entries) {
     }
     throw new Error('Invalid geolocation specified');
   });
+  const { convertGeolocation } = await getSpecBackend();
+  const { unresolved } = convertGeolocation(normalized);
+  const coarsened = (unresolved || []).map((u) => u.entry);
   return { normalized, coarsened };
 }
 
@@ -696,7 +672,7 @@ async function placementAdvice(spec) {
   if (!Number.isInteger(instances) || instances < 1 || instances > config.get('fluxapps.maximumInstances')) {
     throw new Error('Invalid instances specified');
   }
-  const { normalized, coarsened } = normalizeGeolocation(geolocationEntries(spec));
+  const { normalized, coarsened } = await normalizeGeolocation(geolocationEntries(spec));
   // advice differs from enforcement here: the registration gate stays
   // permissive without a table (nothing is provable), but serving a
   // geo-restricted ANSWER computed over the whole network would advise a
@@ -881,7 +857,6 @@ async function placementLocationsAPI(req, res) {
 
 module.exports = {
   faultDomain,
-  nodeLocationMatchesGeolocation,
   placementComputation,
   placementFeasibility,
   placementCategory,

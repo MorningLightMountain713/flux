@@ -274,66 +274,25 @@ describe('placementFeasibility tests', () => {
     });
   });
 
-  describe('nodeLocationMatchesGeolocation', () => {
-    const bh = { continentCode: 'AS', countryCode: 'BH' };
-    const fi = { continentCode: 'EU', countryCode: 'FI' };
-    const de = { continentCode: 'EU', countryCode: 'DE' };
-
-    it('accepts everything when unrestricted or location unknown', () => {
-      expect(placementFeasibility.nodeLocationMatchesGeolocation(fi, [])).to.equal(true);
-      expect(placementFeasibility.nodeLocationMatchesGeolocation(fi, undefined)).to.equal(true);
-      expect(placementFeasibility.nodeLocationMatchesGeolocation(null, ['acAS_BH'])).to.equal(true);
-    });
-
-    it('matches allowed entries at continent and country granularity', () => {
-      expect(placementFeasibility.nodeLocationMatchesGeolocation(bh, ['acAS_BH'])).to.equal(true);
-      expect(placementFeasibility.nodeLocationMatchesGeolocation(fi, ['acAS_BH'])).to.equal(false);
-      expect(placementFeasibility.nodeLocationMatchesGeolocation(fi, ['acEU'])).to.equal(true);
-      expect(placementFeasibility.nodeLocationMatchesGeolocation(bh, ['acEU'])).to.equal(false);
-      expect(placementFeasibility.nodeLocationMatchesGeolocation(fi, ['acAS_BH', 'acEU_FI'])).to.equal(true);
-    });
-
-    it('honours the _ALL variants', () => {
-      expect(placementFeasibility.nodeLocationMatchesGeolocation(de, ['acALL'])).to.equal(true);
-      expect(placementFeasibility.nodeLocationMatchesGeolocation(de, ['acEU_ALL'])).to.equal(true);
-      expect(placementFeasibility.nodeLocationMatchesGeolocation(bh, ['acEU_ALL'])).to.equal(false);
-    });
-
-    it('matches region-granularity pins at country granularity', () => {
-      expect(placementFeasibility.nodeLocationMatchesGeolocation(fi, ['acEU_FI_Uusimaa'])).to.equal(true);
-      expect(placementFeasibility.nodeLocationMatchesGeolocation(de, ['acEU_FI_Uusimaa'])).to.equal(false);
-      expect(placementFeasibility.nodeLocationMatchesGeolocation(fi, ['acEU_FI_NONE'])).to.equal(true);
-    });
-
-    it('applies forbidden entries at resolvable granularity only', () => {
-      expect(placementFeasibility.nodeLocationMatchesGeolocation(de, ['a!cEU_DE'])).to.equal(false);
-      expect(placementFeasibility.nodeLocationMatchesGeolocation(fi, ['a!cEU_DE'])).to.equal(true);
-      expect(placementFeasibility.nodeLocationMatchesGeolocation(fi, ['a!cEU'])).to.equal(false);
-      // a region-level ban cannot be proven to cover the node - do not exclude
-      expect(placementFeasibility.nodeLocationMatchesGeolocation(de, ['a!cEU_DE_Bavaria'])).to.equal(true);
-      // _NONE is a region part: install-time compares it against the node's
-      // real region name and bans nothing, so neither may this
-      expect(placementFeasibility.nodeLocationMatchesGeolocation(de, ['a!cEU_DE_NONE'])).to.equal(true);
-    });
-
-    it('supports the legacy aXX/bXX style', () => {
-      expect(placementFeasibility.nodeLocationMatchesGeolocation(bh, ['bBH'])).to.equal(true);
-      expect(placementFeasibility.nodeLocationMatchesGeolocation(fi, ['bBH'])).to.equal(false);
-      expect(placementFeasibility.nodeLocationMatchesGeolocation(fi, ['aEU'])).to.equal(true);
-      expect(placementFeasibility.nodeLocationMatchesGeolocation(bh, ['aEU'])).to.equal(false);
-    });
-  });
 
   describe('normalizeGeolocation', () => {
-    it('passes spec strings through verbatim, including legacy styles', () => {
-      const { normalized, coarsened } = placementFeasibility.normalizeGeolocation(['acAS_BH', 'a!cEU_DE', 'aEU', 'bFR', '']);
+    // The message of the rejection, or a legible stand-in when there was none.
+    const rejection = async (entries) => {
+      try {
+        await placementFeasibility.normalizeGeolocation(entries);
+        return 'no rejection';
+      } catch (error) { return error.message; }
+    };
+
+    it('passes spec strings through verbatim, including legacy styles', async () => {
+      const { normalized, coarsened } = await placementFeasibility.normalizeGeolocation(['acAS_BH', 'a!cEU_DE', 'aEU', 'bFR', '']);
       expect(normalized).to.deep.equal(['acAS_BH', 'a!cEU_DE', 'aEU', 'bFR', '']);
       expect(coarsened).to.deep.equal([]);
     });
 
-    it('normalises structured entries, upcasing and prefixing', () => {
+    it('normalises structured entries, upcasing and prefixing', async () => {
       useTable();
-      const { normalized } = placementFeasibility.normalizeGeolocation([
+      const { normalized } = await placementFeasibility.normalizeGeolocation([
         { continent: 'EU' },
         { continent: 'eu', country: 'fi' },
         { country: 'BH', forbidden: true },
@@ -341,92 +300,52 @@ describe('placementFeasibility tests', () => {
       expect(normalized).to.deep.equal(['acEU', 'acEU_FI', 'a!cAS_BH']);
     });
 
-    it('derives the continent from the table and rejects contradictions', () => {
+    it('derives the continent from the table and rejects contradictions', async () => {
       useTable();
-      expect(placementFeasibility.normalizeGeolocation([{ country: 'FI' }]).normalized).to.deep.equal(['acEU_FI']);
-      expect(() => placementFeasibility.normalizeGeolocation([{ continent: 'AS', country: 'FI' }]))
-        .to.throw('is in EU, not AS');
-      expect(() => placementFeasibility.normalizeGeolocation([{ country: 'CZ' }]))
-        .to.throw('unknown country code CZ');
+      const { normalized } = await placementFeasibility.normalizeGeolocation([{ country: 'FI' }]);
+      expect(normalized).to.deep.equal(['acEU_FI']);
+      expect(await rejection([{ continent: 'AS', country: 'FI' }])).to.include('is in EU, not AS');
+      expect(await rejection([{ country: 'CZ' }])).to.include('unknown country code CZ');
     });
 
-    it('needs an explicit continent when no table can derive it', () => {
-      expect(() => placementFeasibility.normalizeGeolocation([{ country: 'CZ' }]))
-        .to.throw('include continent');
+    it('needs an explicit continent when no table can derive it', async () => {
+      expect(await rejection([{ country: 'CZ' }])).to.include('include continent');
       // with the continent given, an unverifiable country passes through
-      expect(placementFeasibility.normalizeGeolocation([{ continent: 'EU', country: 'CZ' }]).normalized)
-        .to.deep.equal(['acEU_CZ']);
+      const { normalized } = await placementFeasibility
+        .normalizeGeolocation([{ continent: 'EU', country: 'CZ' }]);
+      expect(normalized).to.deep.equal(['acEU_CZ']);
     });
 
-    it('emits table-vocabulary regions and coarsens only legacy-shaped parts', () => {
+    it('emits table-vocabulary regions and coarsens only what no vocabulary reads', async () => {
       useTable();
-      const { normalized, coarsened } = placementFeasibility.normalizeGeolocation([
+      const { normalized, coarsened } = await placementFeasibility.normalizeGeolocation([
         { country: 'FI', region: 'FI-18' },
         'acEU_FI_Uusimaa',
         'acEU_FI_ALL',
         'a!cNA_US_US-HI',
+        'acEU_DE_Geneva',
       ]);
-      // the ISO region IS emitted - placement and the installer both resolve
-      // it through the published table; only legacy-shaped parts (ip-api
-      // names) are answered at country granularity and reported as coarsened
-      expect(normalized).to.deep.equal(['acEU_FI_FI-18', 'acEU_FI_Uusimaa', 'acEU_FI_ALL', 'a!cNA_US_US-HI']);
-      expect(coarsened).to.deep.equal(['acEU_FI_Uusimaa']);
-      expect(() => placementFeasibility.normalizeGeolocation([{ region: 'FI-18' }])).to.throw('requires its country');
-      expect(() => placementFeasibility.normalizeGeolocation([{ country: 'DE', region: 'FI-18' }])).to.throw('does not belong to DE');
-      expect(() => placementFeasibility.normalizeGeolocation([{ country: 'FI', region: 'Uusimaa' }])).to.throw('not an ISO 3166-2');
-    });
-
-    it('does not report a name the vocabulary resolves as coarsened', () => {
-      // The count honours such an entry exactly - it resolves the name through
-      // the published vocabulary and filters on the region. Reporting it as
-      // widened to the country contradicts the answer alongside it, and tells a
-      // caller their region pin did not take when it did.
-      useTable();
-      storeStub.regionCodeForName.callsFake(
-        (country, name) => (country === 'FI' && name === 'Uusimaa' ? 'FI-18' : null),
-      );
-
-      const { coarsened } = placementFeasibility.normalizeGeolocation([
-        'acEU_FI_Uusimaa',
-        'acEU_FI_Pirkanmaa',
+      // An ISO region and a name the vocabulary carries are both honoured
+      // exactly. `DE|Geneva` is from the chain and no vocabulary can read it -
+      // the region is not in the country named - so only that is coarsened.
+      expect(normalized).to.deep.equal([
+        'acEU_FI_FI-18', 'acEU_FI_Uusimaa', 'acEU_FI_ALL', 'a!cNA_US_US-HI', 'acEU_DE_Geneva',
       ]);
-
-      expect(coarsened, 'only the name no vocabulary resolves is coarsened').to.deep.equal(['acEU_FI_Pirkanmaa']);
+      expect(coarsened).to.deep.equal(['acEU_DE_Geneva']);
+      expect(await rejection([{ region: 'FI-18' }])).to.include('requires its country');
+      expect(await rejection([{ country: 'DE', region: 'FI-18' }])).to.include('does not belong to DE');
+      expect(await rejection([{ country: 'FI', region: 'Uusimaa' }])).to.include('not an ISO 3166-2');
     });
 
-    it('matches table-vocabulary regions at region granularity', () => {
-      const matches = placementFeasibility.nodeLocationMatchesGeolocation;
-      const inRegion = { continentCode: 'EU', countryCode: 'FI', region: 'FI-18' };
-      const outOfRegion = { continentCode: 'EU', countryCode: 'FI', region: 'FI-11' };
-      const regionUnknown = { continentCode: 'EU', countryCode: 'FI', region: null };
-      // allow: a pin is a promise, matched on proof only - unknown region is
-      // not a candidate for a region pin
-      expect(matches(inRegion, ['acEU_FI_FI-18'])).to.equal(true);
-      expect(matches(outOfRegion, ['acEU_FI_FI-18'])).to.equal(false);
-      expect(matches(regionUnknown, ['acEU_FI_FI-18'])).to.equal(false);
-      // deny: applies only where provable
-      expect(matches(inRegion, ['acEU', 'a!cEU_FI_FI-18'])).to.equal(false);
-      expect(matches(outOfRegion, ['acEU', 'a!cEU_FI_FI-18'])).to.equal(true);
-      expect(matches(regionUnknown, ['acEU', 'a!cEU_FI_FI-18'])).to.equal(true);
-      // legacy-shaped parts keep country granularity in both directions
-      expect(matches(outOfRegion, ['acEU_FI_Uusimaa'])).to.equal(true);
-      expect(matches(inRegion, ['acEU', 'a!cEU_FI_Uusimaa'])).to.equal(true);
-      // _NONE is never a table region part and never widens a ban
-      expect(matches(inRegion, ['acEU', 'a!cEU_FI_NONE'])).to.equal(true);
-      // a region part belonging to a different country than the entry names is
-      // legacy-shaped, not a table pin
-      expect(matches(outOfRegion, ['acEU_FI_DE-BY'])).to.equal(true);
-    });
-
-    it('rejects malformed entries', () => {
-      expect(() => placementFeasibility.normalizeGeolocation([42])).to.throw('Invalid geolocation');
-      expect(() => placementFeasibility.normalizeGeolocation([null])).to.throw('Invalid geolocation');
-      expect(() => placementFeasibility.normalizeGeolocation([[]])).to.throw('Invalid geolocation');
-      expect(() => placementFeasibility.normalizeGeolocation([{}])).to.throw('continent or country is required');
-      expect(() => placementFeasibility.normalizeGeolocation([{ continent: 'XX' }])).to.throw('unknown continent code XX');
-      expect(() => placementFeasibility.normalizeGeolocation([{ country: 'FIN' }])).to.throw('not an ISO 3166-1');
-      expect(() => placementFeasibility.normalizeGeolocation([{ continent: 'EU', forbidden: 'yes' }])).to.throw('forbidden must be a boolean');
-      expect(() => placementFeasibility.normalizeGeolocation([`ac${'X'.repeat(60)}`])).to.throw('Invalid geolocation specified');
+    it('rejects malformed entries', async () => {
+      expect(await rejection([42])).to.include('Invalid geolocation');
+      expect(await rejection([null])).to.include('Invalid geolocation');
+      expect(await rejection([[]])).to.include('Invalid geolocation');
+      expect(await rejection([{}])).to.include('continent or country is required');
+      expect(await rejection([{ continent: 'XX' }])).to.include('unknown continent code XX');
+      expect(await rejection([{ country: 'FIN' }])).to.include('not an ISO 3166-1');
+      expect(await rejection([{ continent: 'EU', forbidden: 'yes' }])).to.include('forbidden must be a boolean');
+      expect(await rejection([`ac${'X'.repeat(60)}`])).to.include('Invalid geolocation specified');
     });
   });
 
