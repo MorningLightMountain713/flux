@@ -190,15 +190,13 @@ describe('appSpecHelpers tests', () => {
       expect(handed.expiresAtHeight).to.equal(daemonHeight + spec.expire);
     });
 
-    // The caps are durations (5 in 24h, 8 in 48h, 10 in 120h) — the same the v9
-    // rule applies. They are measured in blocks, so at the current 30-second
-    // block time 24h is 2880 blocks, 48h is 5760 and 120h is 14400. Written out
-    // as literals they were 720/1440/3600, which are those durations only at
-    // the pre-PON 120-second block time; these pin the durations so the counts
-    // cannot silently drift again.
-    describe('rate-limit windows are the durations they claim', () => {
+    // The caps are block counts — 5 in 720 blocks, 8 in 1440, 10 in 3600 — because
+    // that is what the network enforces, and a node answering differently charges an
+    // owner what its neighbours do not. At the 30-second block they are six, twelve
+    // and thirty hours; deriving them from those durations instead widens every
+    // window fourfold and refuses updates the rest of the fleet grants.
+    describe('rate-limit windows are the block counts the network enforces', () => {
       const daemonHeight = 3_000_000;
-      const BLOCKS_PER_HOUR = 3600 / 30;
 
       async function setup(updates) {
         const spec = await legacySpec({ name: 'RateApp', compose: oneComponent() });
@@ -209,38 +207,38 @@ describe('appSpecHelpers tests', () => {
         return spec;
       }
 
-      // `hoursAgo` back from the tip, in blocks.
-      const updatesAgo = (count, hoursAgo) => Array.from({ length: count }, () => ({
+      // `blocksAgo` back from the tip.
+      const updatesAgo = (count, blocksAgo) => Array.from({ length: count }, () => ({
         type: 'fluxappupdate',
-        height: daemonHeight - Math.round(hoursAgo * BLOCKS_PER_HOUR),
+        height: daemonHeight - blocksAgo,
       }));
 
-      it('allows 5 updates inside 24 hours but not 6', async () => {
-        expect(await legacyRegime.checkLegacyFreeUpdate(await setup(updatesAgo(5, 12)), daemonHeight)).to.equal(true);
+      it('allows 5 updates inside 720 blocks but not 6', async () => {
+        expect(await legacyRegime.checkLegacyFreeUpdate(await setup(updatesAgo(5, 360)), daemonHeight)).to.equal(true);
         sinon.restore();
-        expect(await legacyRegime.checkLegacyFreeUpdate(await setup(updatesAgo(6, 12)), daemonHeight)).to.equal(false);
+        expect(await legacyRegime.checkLegacyFreeUpdate(await setup(updatesAgo(6, 360)), daemonHeight)).to.equal(false);
       });
 
-      // 6 updates would breach the 24h cap, so placing them 30h back proves the
-      // 24h window really ends at 24h and not at the old 6h.
-      it('counts a 30-hour-old update as outside the 24-hour window', async () => {
-        expect(await legacyRegime.checkLegacyFreeUpdate(await setup(updatesAgo(6, 30)), daemonHeight)).to.equal(true);
+      // 6 updates would breach the 720-block cap, so placing them 900 back proves that
+      // window ends at 720 and is not being read as one of the wider two.
+      it('counts a 900-block-old update as outside the 720-block window', async () => {
+        expect(await legacyRegime.checkLegacyFreeUpdate(await setup(updatesAgo(6, 900)), daemonHeight)).to.equal(true);
       });
 
-      it('allows 8 updates inside 48 hours but not 9', async () => {
-        expect(await legacyRegime.checkLegacyFreeUpdate(await setup(updatesAgo(8, 36)), daemonHeight)).to.equal(true);
+      it('allows 8 updates inside 1440 blocks but not 9', async () => {
+        expect(await legacyRegime.checkLegacyFreeUpdate(await setup(updatesAgo(8, 1080)), daemonHeight)).to.equal(true);
         sinon.restore();
-        expect(await legacyRegime.checkLegacyFreeUpdate(await setup(updatesAgo(9, 36)), daemonHeight)).to.equal(false);
+        expect(await legacyRegime.checkLegacyFreeUpdate(await setup(updatesAgo(9, 1080)), daemonHeight)).to.equal(false);
       });
 
-      it('allows 10 updates inside 120 hours but not 11', async () => {
-        expect(await legacyRegime.checkLegacyFreeUpdate(await setup(updatesAgo(10, 100)), daemonHeight)).to.equal(true);
+      it('allows 10 updates inside 3600 blocks but not 11', async () => {
+        expect(await legacyRegime.checkLegacyFreeUpdate(await setup(updatesAgo(10, 3000)), daemonHeight)).to.equal(true);
         sinon.restore();
-        expect(await legacyRegime.checkLegacyFreeUpdate(await setup(updatesAgo(11, 100)), daemonHeight)).to.equal(false);
+        expect(await legacyRegime.checkLegacyFreeUpdate(await setup(updatesAgo(11, 3000)), daemonHeight)).to.equal(false);
       });
 
       it('ignores updates older than the widest window', async () => {
-        expect(await legacyRegime.checkLegacyFreeUpdate(await setup(updatesAgo(50, 200)), daemonHeight)).to.equal(true);
+        expect(await legacyRegime.checkLegacyFreeUpdate(await setup(updatesAgo(50, 5000)), daemonHeight)).to.equal(true);
       });
 
       it('counts only update messages, not the original registration', async () => {
