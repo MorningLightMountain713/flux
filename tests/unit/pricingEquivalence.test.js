@@ -44,6 +44,13 @@ describe('pricing equivalence — BigInt comparison produces same result as floa
     // The encrypted fixtures cannot be decrypted without the node's benchmark
     // daemon, and each attempt was a real RPC to it. They are skipped either
     // way; this makes the failure local instead of a network round trip.
+    //
+    // Every sealed spec in the fixture therefore skips — several hundred of the
+    // 1,481, so a large block of this file reports pending on any unit run.
+    // That is a boundary, not a gap: sealed specs are priced against what the
+    // live network charges in flux-spec's
+    // packages/flux-spec-cjs/test/integration/legacy-pricing.test.js, which
+    // opens them with a node's crypto provider and so only runs on a node.
     sinon.stub(benchmarkService, 'decryptRSAMessage').resolves({
       status: 'error',
       data: { message: 'benchmark unavailable in unit tests' },
