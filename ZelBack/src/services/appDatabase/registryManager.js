@@ -761,9 +761,8 @@ async function convertApplicationSpecification(appname, opts = {}) {
   const regionErrors = (unresolvedRegions || []).map((u) => ({
     path: ['placement', 'geoAllow'],
     code: 'region_unresolved',
-    message: `Region '${u.region}' in ${u.country} could not be resolved to an ISO 3166-2 code`
-      + `${u.supplied ? '' : ' (no region vocabulary is loaded on this node yet)'}`
-      + '. Choose the region again before signing — it is not carried into this draft.',
+    message: `Region '${u.region}' in ${u.country} could not be resolved to an ISO 3166-2 code.`
+      + ' Choose the region again before signing — it is not carried into this draft.',
     value: u.region,
   }));
   const allErrors = [...errors, ...regionErrors];

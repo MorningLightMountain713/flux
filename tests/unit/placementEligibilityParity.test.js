@@ -234,9 +234,7 @@ describe('placement eligibility parity with install-time geolocation', () => {
     // The first schema compile is slow; every later call is free.
     this.timeout(60_000);
     flux = await loadSpecLibrary();
-    // What specCutover.ensureProvidersRegistered does at boot, and the reason a
-    // legacy region pin widens to its country instead of refusing.
-    flux.registerRegionResolver(regionCodeForName);
+
   });
 
   it('counts every node the installer would accept, for every geolocation shape', async () => {
