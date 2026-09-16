@@ -141,12 +141,12 @@ describe('appConvert (registryManager) tests', () => {
   });
 
   it('hands back a region it cannot resolve as a gap to fill, not a widened pin', async () => {
-    // The node has no location table in a unit run, so no region name resolves.
-    // The pin is NOT converted to the whole of Finland: it is absent from the
-    // draft and named in errors, because the draft is what the owner signs and
-    // a widened pin would leave nothing for them to disagree with.
+    // `DE|Geneva`, from the chain: the region is not in the country named, so no
+    // vocabulary can map it. The pin is NOT converted to the whole of Germany —
+    // it is absent from the draft and named in errors, because the draft is what
+    // the owner signs and a widened pin would leave nothing to disagree with.
     await registryHolds(await v8Spec({
-      name: 'convertme', contacts: ['ops@example.com'], geolocation: ['acEU_FI_Uusimaa'],
+      name: 'convertme', contacts: ['ops@example.com'], geolocation: ['acEU_DE_Geneva'],
     }));
 
     const result = await registryManager.convertApplicationSpecification('convertme', {});
@@ -154,7 +154,7 @@ describe('appConvert (registryManager) tests', () => {
     expect(result.complete, 'a dropped pin must not read as a finished draft').to.equal(false);
     const regionError = result.errors.find((e) => e.code === 'region_unresolved');
     expect(regionError, 'the owner is told which name, so they can pick it again').to.exist;
-    expect(regionError.value).to.equal('Uusimaa');
+    expect(regionError.value).to.equal('Geneva');
     // Not widened to the country it was pinned inside.
     const geoAllow = result.spec.placement?.geoAllow ?? null;
     expect(geoAllow === null || geoAllow.every((g) => g.region)).to.equal(true);
