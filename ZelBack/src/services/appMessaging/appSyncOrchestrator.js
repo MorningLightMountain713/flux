@@ -129,9 +129,6 @@ class AppSyncOrchestrator {
   #getPeerByKey = null;
   #onPeerEvent = null;
   #offPeerEvent = null;
-  #markSyncRequested = null;
-  #clearSyncRequested = null;
-  #completeSyncRequest = null;
   #isEnterprise = null;
   #waitForNetworkState = null;
   #networkReady = false;
@@ -222,9 +219,6 @@ class AppSyncOrchestrator {
     this.#getPeerByKey = options.getPeerByKey ?? (() => null);
     this.#onPeerEvent = options.onPeerEvent;
     this.#offPeerEvent = options.offPeerEvent;
-    this.#markSyncRequested = options.markSyncRequested ?? (() => {});
-    this.#clearSyncRequested = options.clearSyncRequested ?? (() => {});
-    this.#completeSyncRequest = options.completeSyncRequest ?? (() => {});
     this.#isEnterprise = options.isEnterprise ?? (() => false);
     this.#peerCountIfAboveThreshold = options.peerCountIfAboveThreshold ?? (() => 0);
     this.#catchUpRunningContent = options.catchUpRunningContent ?? (async () => {});
@@ -256,6 +250,10 @@ class AppSyncOrchestrator {
    */
   isSyncResponseWanted(peer) {
     if (!peer || !peer.key) return false;
+    // A reconnect pull is wanted in any state - the degraded window is its
+    // whole point - and there is one outstanding per address, answered on the
+    // socket that came back.
+    if (this.#reconnectPulls.has(peer.key)) return true;
     if (this.#stateSyncComplete) return false;
     const progress = this.#peerProgress.get(peer.key);
     if (!progress || progress.failed) return false;
@@ -408,7 +406,6 @@ class AppSyncOrchestrator {
     const progress = this.#peerProgress.get(peerKey);
     if (!progress || progress.failed) return false;
     progress.failed = true;
-    this.#completeSyncRequest(progress.connectionId);
     log.info(`AppSyncOrchestrator - ${peerKey} ${outcome}, asking another peer`);
     // The deficit decides. A pool that is already whole asks nobody, so this is
     // unconditional rather than guarded - a guard here would only be a second
@@ -500,13 +497,10 @@ class AppSyncOrchestrator {
     if (this.#syncCompletions[syncType] === undefined) return;
     const progress = this.#peerProgress.get(peerKey);
     if (progress && !progress.failed) {
+      // The record STANDS with its answer in: that is what stops a peer that
+      // has already given its whole view being asked again in the next breath,
+      // and what says nothing more is wanted from it.
       progress.done.add(syncType);
-      // Its answer is in, so the slot it held is free and nothing more is
-      // wanted from it. The record STANDS - that is what stops a peer that has
-      // already given its whole view being asked again in the next breath.
-      if (SYNC_TYPES.every((type) => progress.done.has(type))) {
-        this.#completeSyncRequest(progress.connectionId);
-      }
     }
     this.#syncCompletions[syncType].add(peerKey);
     log.info(`AppSyncOrchestrator - ${syncType} sync complete from ${peerKey} (${this.#syncCompletions[syncType].size}/${MIN_SYNC_COMPLETIONS} peers)`);
@@ -518,7 +512,6 @@ class AppSyncOrchestrator {
     if (Object.values(this.#syncCompletions).every((peers) => peers.size >= MIN_SYNC_COMPLETIONS)) {
       this.#stateSyncComplete = true;
       this.#publishStateSyncAuthority();
-      this.#clearSyncRequested();
       this.#peerProgress.clear();
       log.info('AppSyncOrchestrator - All state syncs complete');
       fluxEventBus.publish('ephemeralSync:allComplete', Object.fromEntries(
@@ -571,7 +564,6 @@ class AppSyncOrchestrator {
     const missing = SYNC_TYPES.filter((type) => !progress.done.has(type));
     if (missing.length === 0) return;
     progress.failed = true;
-    this.#completeSyncRequest(progress.connectionId);
     log.warn(`AppSyncOrchestrator - Sync peer ${key} disconnected mid-sync (missing: ${missing.join(', ')})`);
     fluxEventBus.publish('ephemeralSync:peerDisconnected', { peer: key, connectionId, missing });
     this.#own(this.#runRequestPass());
@@ -597,7 +589,6 @@ class AppSyncOrchestrator {
       const why = progress.spoken ? 'stopped mid-answer' : 'said nothing';
       if (now - progress.lastHeardAt < deadline) continue;
       progress.failed = true;
-      this.#completeSyncRequest(progress.connectionId);
       log.warn(`AppSyncOrchestrator - Sync peer ${key} ${why} within its ${Math.round(deadline / 1000)}s deadline (missing: ${missing.join(', ')})`);
       // Named for what happened, not for the fact that something did: a
       // deadline, a disconnection and an unverifiable answer are three different
@@ -621,7 +612,6 @@ class AppSyncOrchestrator {
         .map(([type, peers]) => `${type}=${peers.size}`).join(' ');
       log.warn(`AppSyncOrchestrator - Sync budget spent, peers answered: ${answered}`);
       this.#syncRoundAbandoned = true;
-      this.#clearSyncRequested();
       this.#peerProgress.clear();
       return;
     }
@@ -661,7 +651,6 @@ class AppSyncOrchestrator {
     if (budget <= 0) {
       if (!anyLivePending) {
         this.#syncRoundAbandoned = true;
-        this.#clearSyncRequested();
         this.#peerProgress.clear();
         log.warn(`AppSyncOrchestrator - State sync abandoned after ${this.#askedPeers.size} peers, block timer will force readiness`);
       }
@@ -858,7 +847,6 @@ class AppSyncOrchestrator {
     for (const peer of peersToAsk) {
       this.#askedPeers.add(peer.key);
       const connectionId = peer.connectionId ?? null;
-      this.#markSyncRequested(connectionId);
       // The CONNECTION this peer was asked on, carried so a loss announced for
       // a connection this round has already replaced cannot cancel the live
       // request - and so a response arriving on a newer socket is not counted
@@ -934,7 +922,6 @@ class AppSyncOrchestrator {
       const sig = verificationHelper.signMessage(msg, privkey);
       this.#pendingReconnectPulls.delete(key);
       this.#reconnectPulls.set(key, lostAtMs);
-      this.#markSyncRequested(key);
       this.#sendRequests([peer], 'apprunning (reconnect)', peerCodec.encodeRequestAppRunning(sinceTs, requestTs, pubkey, sig));
       fluxEventBus.publish('ephemeralSync:reconnectRequested', { peer: key, sinceTimestamp: sinceTs });
     }
@@ -953,7 +940,6 @@ class AppSyncOrchestrator {
     this.#askedPeers.clear();
     this.#roundStartedAt = null;
     this.#peerProgress.clear();
-    this.#clearSyncRequested();
     // The block timer is EPOCH state: it backstops the sync that is starting,
     // and one carried over from before the degrade is already expired — which
     // would promote the recovery straight to READY without a sync running.

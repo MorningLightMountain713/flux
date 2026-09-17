@@ -101,6 +101,14 @@ const DIRECTION = Object.freeze({
   OUTBOUND: 'outbound',
 });
 
+// Answers to this node's own asks, never relayed: the four boot-sync streams
+// and the two reconcile services' index and sync answers.
+const SYNC_RESPONSE_TYPES = new Set([
+  'fluxapptempsync', 'fluxapprunningsync', 'fluxappinstallingsync', 'fluxappinstallingerrorssync',
+  'fluxappcontentmanifestindex', 'fluxappcontentmanifestsync',
+  'fluxappingressindex', 'fluxappingresssync',
+]);
+
 class FluxPeerSocket {
   /**
    * Distinguishes one connection to an address from the next one to it.
@@ -517,32 +525,16 @@ class FluxPeerSocket {
         return;
       }
 
-      // Route sync responses directly — bypass the gossip pipeline
-      const syncType = msgObj.data?.type;
-      // Reconcile responses (content-manifest and ingress-attestation) ride their own
-      // request/response and are gated by the reconcile service's active round downstream,
-      // not the ephemeral isSyncRequested flag.
-      if (syncType === 'fluxappcontentmanifestindex'
-        || syncType === 'fluxappcontentmanifestsync'
-        || syncType === 'fluxappingressindex'
-        || syncType === 'fluxappingresssync') {
+      // A sync response is never gossip. Every one goes to the sync dispatcher,
+      // which asks the requester whether this connection's answer is still
+      // wanted and drops the rest there - a refusal arriving after the first of
+      // a peer's four has already ended its request, or a stream outliving the
+      // round.
+      if (SYNC_RESPONSE_TYPES.has(msgObj.data?.type)) {
         if (manager.syncResponseDispatcher) {
           setImmediate(() => manager.syncResponseDispatcher(msgObj, this));
-          return;
         }
-      }
-      if (syncType === 'fluxapptempsync'
-        || syncType === 'fluxapprunningsync'
-        || syncType === 'fluxappinstallingsync'
-        || syncType === 'fluxappinstallingerrorssync') {
-        // THIS connection's request, not this address's. The sibling gate in
-        // serviceManager asks the same question the same way; asked by key, a
-        // response on a reconnected socket answers a request made on the socket
-        // before it.
-        if (manager.syncResponseDispatcher && manager.isSyncRequested(this.connectionId)) {
-          setImmediate(() => manager.syncResponseDispatcher(msgObj, this));
-          return;
-        }
+        return;
       }
 
       // Dispatch to the manager's message handler (gossip pipeline)

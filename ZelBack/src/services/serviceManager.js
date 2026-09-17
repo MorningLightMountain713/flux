@@ -484,15 +484,14 @@ async function startFluxFunctions() {
       getPeerByKey: (key) => {
         const p = peerManager.get(key);
         return p
-          ? { key: p.key, remoteCapabilities: p.remoteCapabilities, send: (msg) => p.send(msg) }
+          ? {
+            key: p.key, connectionId: p.connectionId, remoteCapabilities: p.remoteCapabilities, send: (msg) => p.send(msg),
+          }
           : null;
       },
       onPeerEvent: (event, cb) => peerManager.on(event, cb),
       offPeerEvent: (event, cb) => peerManager.removeListener(event, cb),
       peerCountIfAboveThreshold: () => peerManager.peerCountIfAboveThreshold(),
-      markSyncRequested: (connectionId) => peerManager.markSyncRequested(connectionId),
-      clearSyncRequested: () => peerManager.clearSyncRequested(),
-      completeSyncRequest: (connectionId) => peerManager.completeSyncRequest(connectionId),
       isEnterprise: () => enterpriseNetwork.getCachedEnterpriseIdentity(),
       networkStateReady: () => networkStateService.waitStarted(),
       // The steady-state manifest refresh's apply half: catch up any running container whose

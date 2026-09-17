@@ -42,7 +42,7 @@ let reconcileInFlight = null;
 let activeRound = null;
 
 /** Whether a peer's manifest-reconcile response is solicited (it's in the live round) —
- *  the gate that replaces isSyncRequested for the two manifest response types. */
+ *  the counterpart of the orchestrator's isSyncResponseWanted for the two manifest response types. */
 function isPeerInActiveRound(peerKey) {
   return !!activeRound && activeRound.peerKeys.has(peerKey);
 }

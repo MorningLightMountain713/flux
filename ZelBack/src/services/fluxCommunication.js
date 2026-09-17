@@ -412,7 +412,7 @@ function announceToPeers(message, excludeKey) {
 
 // A peer's index of (appName, version) for every confirmed manifest — step 1 of the
 // two-step reconcile. Accepted only from a peer we asked this round (the reconcile
-// service owns the round, replacing the ephemeral isSyncRequested gate).
+// service owns the round, as the orchestrator's isSyncResponseWanted owns the boot-sync one).
 async function handleContentManifestIndexResponse(message, peerKey) {
   try {
     if (!contentManifestSyncService.isPeerInActiveRound(peerKey)) return;
@@ -427,7 +427,7 @@ async function handleContentManifestIndexResponse(message, peerKey) {
 
 // A peer's bucket digests for its confirmed attestation set — step 1 of the two-step
 // ingress reconcile. Accepted only from a peer we asked this round (the reconcile
-// service owns the round, replacing the ephemeral isSyncRequested gate).
+// service owns the round, as the orchestrator's isSyncResponseWanted owns the boot-sync one).
 async function handleIngressIndexResponse(message, peerKey) {
   try {
     if (!ingressAttestationSyncService.isPeerInActiveRound(peerKey)) return;
@@ -1072,9 +1072,9 @@ async function verifySyncEnvelope(msgObj) {
 async function dispatchSyncResponse(msgObj, peerSocket) {
   try {
     const peerKey = peerSocket.key;
-    // The two manifest-reconcile response types ride their own request/response and are
-    // gated by the reconcile service's active round (checked in their handlers), not the
-    // ephemeral isSyncRequested flag the boot-sync types use.
+    // The reconcile response types ride their own request/response and are gated
+    // by the reconcile service's active round (checked in their handlers), not by
+    // the requester's isSyncResponseWanted the boot-sync types are gated by.
     const type = msgObj.data?.type;
     const isReconcile = type === 'fluxappcontentmanifestindex' || type === 'fluxappcontentmanifestsync'
       || type === 'fluxappingressindex' || type === 'fluxappingresssync';

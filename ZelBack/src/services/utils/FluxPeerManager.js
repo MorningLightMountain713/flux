@@ -49,7 +49,6 @@ class FluxPeerManager extends EventEmitter {
   // ip:port while becoming a different connection, so a response arriving on the
   // new one would otherwise answer a request written into the old one - and the
   // node would count a stale view as this round's completion.
-  #syncRequestedPeers = new Set();
   static CONNECTION_BACKOFF_MS = config.get('fluxapps.connectionBackoffMs');
 
   /** @type {Map<string, FluxPeerSocket>} */
@@ -343,11 +342,6 @@ class FluxPeerManager extends EventEmitter {
     const peer = this.#peers.get(key);
     if (!peer) return null;
 
-    // The connection is going, so nothing arriving on it is wanted any more.
-    // This is the gate's cleanup and nothing else: WHO was waiting on an answer
-    // from it, and whether they want a replacement, is the requester's own
-    // record to read - see the peerDisconnected announcement below.
-    this.#syncRequestedPeers.delete(peer.connectionId);
     this.#removeTracking(peer);
 
     // Clean up peer exchange topology and notify others
@@ -2073,14 +2067,6 @@ class FluxPeerManager extends EventEmitter {
     this.#historyIndex = 0;
     this.#historyCount = 0;
   }
-
-  markSyncRequested(connectionId) { this.#syncRequestedPeers.add(connectionId); }
-
-  isSyncRequested(connectionId) { return this.#syncRequestedPeers.has(connectionId); }
-
-  completeSyncRequest(connectionId) { this.#syncRequestedPeers.delete(connectionId); }
-
-  clearSyncRequested() { this.#syncRequestedPeers.clear(); }
 
   // --- Liveness ---
 
