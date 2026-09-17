@@ -27,7 +27,7 @@ let reconcileRunning = false;
 let activeRound = null;
 
 /** Whether a peer's ingress-reconcile response is solicited (it's in the live round) —
- *  the gate that replaces isSyncRequested for the two ingress response types. */
+ *  the counterpart of the orchestrator's isSyncResponseWanted for the two ingress response types. */
 function isPeerInActiveRound(peerKey) {
   return !!activeRound && activeRound.peerKeys.has(peerKey);
 }

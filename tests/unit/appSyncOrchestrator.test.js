@@ -2232,15 +2232,13 @@ describe('AppSyncOrchestrator', () => {
     it('a re-established peer gets one scoped apprunning pull from its loss time', async () => {
       const peers = makeEligiblePeers(3);
       getEligibleSyncPeersStub = sinon.stub().returns(peers);
-      const markStub = sinon.stub();
-      const orchestrator = makeOrchestrator({ isEnterprise: () => true, markSyncRequested: markStub });
+      const orchestrator = makeOrchestrator({ isEnterprise: () => true });
       orchestrator.start(defaultBootContext);
       await reachReady();
       expect(orchestrator.state).to.equal(STATES.READY);
 
       const bootSends = peers[0].send.callCount;
       const otherSends = peers[1].send.callCount;
-      markStub.resetHistory();
       // a positive clock baseline, or the slack subtraction floors at zero
       await clock.tickAsync(300_000);
       const lostAtMs = Date.now() - 60_000;
@@ -2249,10 +2247,17 @@ describe('AppSyncOrchestrator', () => {
 
       expect(peers[0].send.callCount, 'one pull to the returned peer').to.equal(bootSends + 1);
       expect(peers[1].send.callCount, 'nobody else asked').to.equal(otherSends);
-      expect(markStub.calledWith(peers[0].key), 'response gate opened for the peer').to.equal(true);
+      // Wanted on whatever socket came back, in READY, where the round's
+      // record is closed.
+      const returned = { key: peers[0].key, connectionId: peers[0].connectionId + 1000 };
+      expect(orchestrator.isSyncResponseWanted(returned), 'the pull\'s answer was refused').to.equal(true);
       const expectedSince = lostAtMs - RECONNECT_SLACK_MS;
       expect(buildSyncSigStub.calledWith(0x21, expectedSince), 'the signed ask names the scoped since').to.equal(true);
       expect(encodeAppRunningStub.calledWith(expectedSince), 'the frame carries the scoped since').to.equal(true);
+
+      appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_COMPLETE, 'apprunning', peers[0].key);
+      await clock.tickAsync(0);
+      expect(orchestrator.isSyncResponseWanted(returned), 'an answered pull still wanted more').to.equal(false);
     });
 
     it('a pull whose socket dies unanswered hands its loss back: the next re-establishment pulls from the original gap', async () => {
@@ -2262,7 +2267,7 @@ describe('AppSyncOrchestrator', () => {
       // refused socket's connect time.
       const peers = makeEligiblePeers(3);
       getEligibleSyncPeersStub = sinon.stub().returns(peers);
-      const orchestrator = makeOrchestrator({ isEnterprise: () => true, markSyncRequested: sinon.stub() });
+      const orchestrator = makeOrchestrator({ isEnterprise: () => true });
       orchestrator.start(defaultBootContext);
       await reachReady();
       await clock.tickAsync(300_000);
@@ -2285,7 +2290,7 @@ describe('AppSyncOrchestrator', () => {
     it('a pull that was answered hands nothing back: a later loss starts its own gap', async () => {
       const peers = makeEligiblePeers(3);
       getEligibleSyncPeersStub = sinon.stub().returns(peers);
-      const orchestrator = makeOrchestrator({ isEnterprise: () => true, markSyncRequested: sinon.stub() });
+      const orchestrator = makeOrchestrator({ isEnterprise: () => true });
       orchestrator.start(defaultBootContext);
       await reachReady();
       await clock.tickAsync(300_000);
@@ -2307,7 +2312,7 @@ describe('AppSyncOrchestrator', () => {
     it('a scoped pull completing is announced on appSyncEvents, so a returning node can run its placement check after it; a round completion is not', async () => {
       const peers = makeEligiblePeers(3);
       getEligibleSyncPeersStub = sinon.stub().returns(peers);
-      const orchestrator = makeOrchestrator({ isEnterprise: () => true, markSyncRequested: sinon.stub() });
+      const orchestrator = makeOrchestrator({ isEnterprise: () => true });
       orchestrator.start(defaultBootContext);
       await reachReady();
       await clock.tickAsync(300_000);
@@ -2894,18 +2899,11 @@ describe('AppSyncOrchestrator', () => {
   });
 
   describe('sync peer failure and replacement', () => {
-    let completeSyncRequestStub;
-    let clearSyncRequestedStub;
-
     // Boots an orchestrator to the point where the initial batch of 3 sync
     // peers has been asked (mainnet topology: appSyncMinCompletions = 3).
     async function startWithAskedPeers(peers) {
       getEligibleSyncPeersStub = sinon.stub().returns(peers);
-      const orchestrator = makeOrchestrator({
-        isEnterprise: () => true,
-        completeSyncRequest: completeSyncRequestStub,
-        clearSyncRequested: clearSyncRequestedStub,
-      });
+      const orchestrator = makeOrchestrator({ isEnterprise: () => true });
       orchestrator.start(defaultBootContext);
       blockEmitter.emit('blocksProcessed', 2_555_000);
       await clock.tickAsync(0);
@@ -2920,11 +2918,6 @@ describe('AppSyncOrchestrator', () => {
       appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_COMPLETE, 'apperrors', peerKey);
       appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_COMPLETE, 'apptemp', peerKey);
     }
-
-    beforeEach(() => {
-      completeSyncRequestStub = sinon.stub();
-      clearSyncRequestedStub = sinon.stub();
-    });
 
     it('should replace a disconnected peer with one fresh peer asking only the undelivered types', async () => {
       const peers = makeEligiblePeers(5);
@@ -2975,7 +2968,7 @@ describe('AppSyncOrchestrator', () => {
 
     it('should fail a silent peer at its deadline, stop accepting it, and replace it', async () => {
       const peers = makeEligiblePeers(5);
-      await startWithAskedPeers(peers);
+      const orchestrator = await startWithAskedPeers(peers);
       completeAllTypes(peers[0].key);
       completeAllTypes(peers[1].key);
 
@@ -2989,10 +2982,7 @@ describe('AppSyncOrchestrator', () => {
       blockEmitter.emit('blocksProcessed', 2_555_001);
       await clock.tickAsync(0);
 
-      // By CONNECTION, not by address: the ledger and the arriving-response gate
-      // both key on it, so a reconnected peer's answer cannot close a request
-      // made on the socket before it.
-      sinon.assert.calledWith(completeSyncRequestStub, peers[2].connectionId);
+      expect(orchestrator.isSyncResponseWanted(peers[2]), 'a deadline-failed peer could still answer').to.equal(false);
       expect(peers[3].send.callCount).to.equal(4); // all four streams still short
       // A peer that has sent NOTHING is judged on the short deadline: the only
       // work before its first batch is a signature check, one indexed query and
@@ -3057,7 +3047,7 @@ describe('AppSyncOrchestrator', () => {
       expect(peers[4].send.callCount).to.equal(4);
       expect(peers[5].send.called).to.be.false;
       expect(logStub.warn.args.some((args) => String(args[0]).includes('State sync abandoned'))).to.be.true;
-      expect(clearSyncRequestedStub.called).to.be.true;
+      expect(peers.slice(0, 5).some((peer) => orchestrator.isSyncResponseWanted(peer)), 'an abandoned round still wanted an answer').to.equal(false);
 
       // The block timer remains the terminal path to readiness:
       // appSyncFallbackMinutes (125) x 2 blocks a minute.
@@ -3077,7 +3067,7 @@ describe('AppSyncOrchestrator', () => {
       }
       await clock.tickAsync(0);
       expect(orchestrator.state).to.equal(STATES.READY);
-      expect(clearSyncRequestedStub.called).to.be.true;
+      expect(peers.slice(0, 3).some((peer) => orchestrator.isSyncResponseWanted(peer)), 'a finished round still wanted an answer').to.equal(false);
 
       peerEmitter.emit('peerDisconnected', peers[1].key, peers[1].connectionId);
       await clock.tickAsync(0);

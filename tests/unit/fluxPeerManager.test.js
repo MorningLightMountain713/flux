@@ -1066,7 +1066,6 @@ describe('FluxPeerManager tests', () => {
       const ws = createMockWs('10.0.0.1', '16127');
       manager.add(ws, '10.0.0.1', '16127', { source: PEER_SOURCE.RANDOM });
       const peer = manager.get('10.0.0.1:16127');
-      manager.markSyncRequested(peer.connectionId);
       const lost = [];
       manager.on('peerDisconnected', (key, connectionId) => lost.push({ key, connectionId }));
 
@@ -1077,16 +1076,10 @@ describe('FluxPeerManager tests', () => {
       expect(lost).to.deep.equal([{ key: '10.0.0.1:16127', connectionId: peer.connectionId }]);
     });
 
-    // THE POINT OF KEYING BY CONNECTION. A peer that drops and reconnects keeps
-    // its ip:port and becomes a different connection. Keyed by address, the
-    // request written for the OLD socket is still outstanding, so a response
-    // arriving on the new one is accepted as this round's completion - a stale
-    // view counted as a fresh survey.
-    it('does not answer a reconnected peer\'s request from the connection before it', () => {
+    it('a reconnect is a different connection', () => {
       const first = createMockWs('10.0.0.1', '16127');
       manager.add(first, '10.0.0.1', '16127', { source: PEER_SOURCE.RANDOM });
       const firstConnection = manager.get('10.0.0.1:16127').connectionId;
-      manager.markSyncRequested(firstConnection);
       manager.remove('10.0.0.1:16127');
 
       // Same address, new socket.
@@ -1094,24 +1087,7 @@ describe('FluxPeerManager tests', () => {
       manager.add(second, '10.0.0.1', '16127', { source: PEER_SOURCE.RANDOM });
       const secondConnection = manager.get('10.0.0.1:16127').connectionId;
 
-      expect(secondConnection, 'a reconnect is a different connection').to.not.equal(firstConnection);
-      expect(manager.isSyncRequested(secondConnection), 'nothing was asked of this connection').to.equal(false);
-    });
-
-    it('a loss of a replaced connection does not cancel the live request', () => {
-      const first = createMockWs('10.0.0.2', '16127');
-      manager.add(first, '10.0.0.2', '16127', { source: PEER_SOURCE.RANDOM });
-      const firstConnection = manager.get('10.0.0.2:16127').connectionId;
-      manager.remove('10.0.0.2:16127');
-
-      const second = createMockWs('10.0.0.2', '16127');
-      manager.add(second, '10.0.0.2', '16127', { source: PEER_SOURCE.RANDOM });
-      const secondConnection = manager.get('10.0.0.2:16127').connectionId;
-      manager.markSyncRequested(secondConnection);
-
-      // The requester compares what it asked on against what was lost.
-      expect(manager.isSyncRequested(firstConnection)).to.equal(false);
-      expect(manager.isSyncRequested(secondConnection)).to.equal(true);
+      expect(secondConnection).to.not.equal(firstConnection);
     });
 
     // The announcement says a connection ended. It does NOT say whether anyone
@@ -1136,7 +1112,6 @@ describe('FluxPeerManager tests', () => {
       const first = createMockWs('10.0.0.3', '16127');
       manager.add(first, '10.0.0.3', '16127', { source: PEER_SOURCE.RANDOM });
       const firstConnection = manager.get('10.0.0.3:16127').connectionId;
-      manager.markSyncRequested(firstConnection);
       const lost = [];
       manager.on('peerDisconnected', (key, connectionId) => lost.push({ key, connectionId }));
 
