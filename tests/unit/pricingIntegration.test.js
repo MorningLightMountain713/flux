@@ -492,7 +492,7 @@ describe('pricing integration — chain messages through PricingEngine', () => {
       return engine.priceUpdate(spec, spec, {
         height: h.queryHeight,
         duration: spec.ttl,
-        now: Date.now(),
+        asOf: Date.now(),
         recentEvents: [],
         oldScaledPriceMicrodollars: oldBreakdown.marketplaceAdjustedMicrodollars,
         oldMetered,
@@ -562,7 +562,7 @@ describe('pricing integration — chain messages through PricingEngine', () => {
       return engine.priceUpdate(previous, grown, {
         height: h.queryHeight,
         duration: grown.ttl,
-        now: Date.now(),
+        asOf: Date.now(),
         recentEvents: [],
         oldScaledPriceMicrodollars: oldBreakdown.marketplaceAdjustedMicrodollars,
         oldMetered: meteredQuantities(oldBreakdown),
