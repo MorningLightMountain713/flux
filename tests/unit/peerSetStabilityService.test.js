@@ -27,7 +27,7 @@ describe('peerSetStabilityService', () => {
     return proxyquire('../../ZelBack/src/services/peerSetStabilityService', {
       config: asConfig({ fluxapps: fluxappsOverrides }),
       '../lib/log': logStub,
-      './fluxNetworkHelper': fluxNetworkHelperStub,
+      './nodeDosState': fluxNetworkHelperStub,
       './utils/fluxEventBus': { publish: sinon.stub() },
     });
   }
