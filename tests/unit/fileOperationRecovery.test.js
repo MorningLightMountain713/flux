@@ -74,6 +74,9 @@ describe('fileOperationRecovery tests', () => {
 
       const result = await recovery.recoverInterruptedFileOperations();
 
+      // The record holds a container ID, and the inspect resolves by app name
+      // unless told otherwise.
+      sinon.assert.calledWith(dockerStub.dockerContainerInspect, record.containerId, { identifierType: 'id' });
       sinon.assert.calledOnceWithExactly(executorStub.adoptOperation, record);
       sinon.assert.notCalled(storeStub.forgetOperation);
       expect(result.adopted).to.equal(1);

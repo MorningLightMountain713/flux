@@ -1655,11 +1655,12 @@ async function appDockerRemove(idOrName) {
  *
  * @param {string} idOrName
  * @param {boolean} removeVolumes - Also remove anonymous volumes
+ * @param {object} [options]
+ * @param {'name'|'id'} [options.identifierType='name'] - how idOrName is resolved
  * @returns {string} message
  */
-async function appDockerForceRemove(idOrName, removeVolumes = true) {
-  // container ID or name
-  const dockerContainer = await getDockerContainer(idOrName);
+async function appDockerForceRemove(idOrName, removeVolumes = true, options = {}) {
+  const dockerContainer = await getDockerContainer(idOrName, { identifierType: options.identifierType });
   if (!dockerContainer) throw new Error(`Container ${idOrName} not found`);
   // Lease-free: see appDockerRemove — the teardown owns the 'removing' lease.
   await dockerContainer.remove({ force: true, v: removeVolumes });

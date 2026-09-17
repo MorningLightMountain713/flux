@@ -1799,7 +1799,8 @@ describe('volumeExecutor tests', () => {
       const removed = await volumeExecutor.reapOrphanedContainers();
 
       expect(removed).to.equal(1);
-      expect(dockerServiceStub.appDockerForceRemove.calledOnceWith('fileop-1', false)).to.equal(true);
+      // A listing yields container IDs, and the removal resolves by app name unless told otherwise.
+      expect(dockerServiceStub.appDockerForceRemove.calledOnceWith('fileop-1', false, { identifierType: 'id' })).to.equal(true);
     });
 
     it('leaves a container whose operation is still running', async () => {
@@ -1821,7 +1822,7 @@ describe('volumeExecutor tests', () => {
       const removed = await volumeExecutor.reapOrphanedContainers();
 
       expect(removed).to.equal(1);
-      expect(dockerServiceStub.appDockerForceRemove.calledWith('orphan-1', false)).to.equal(true);
+      expect(dockerServiceStub.appDockerForceRemove.calledWith('orphan-1', false, { identifierType: 'id' })).to.equal(true);
       expect(dockerServiceStub.appDockerForceRemove.calledWith('container-1', false)).to.equal(false);
 
       finish({ StatusCode: 0 });

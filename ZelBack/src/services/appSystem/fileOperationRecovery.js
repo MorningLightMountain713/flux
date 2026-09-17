@@ -76,7 +76,7 @@ async function adoptRunningOperations() {
     let running = false;
     try {
       // eslint-disable-next-line no-await-in-loop
-      const state = await dockerService.dockerContainerInspect(record.containerId);
+      const state = await dockerService.dockerContainerInspect(record.containerId, { identifierType: 'id' });
       running = Boolean(state?.State?.Running);
     } catch (error) {
       // No such container: it finished and reaped itself, or it is gone.

@@ -2203,7 +2203,7 @@ async function reapOrphanedContainers() {
   for (const orphan of orphans) {
     try {
       // eslint-disable-next-line no-await-in-loop
-      await dockerService.appDockerForceRemove(orphan.Id, false);
+      await dockerService.appDockerForceRemove(orphan.Id, false, { identifierType: 'id' });
       removed += 1;
     } catch (error) {
       log.warn(`volumeExecutor - could not remove orphaned container ${orphan.Id}: ${error.message}`);
