@@ -120,8 +120,10 @@ export function buildV9ContentSpec({
 
 // The canonical contentHash flux-spec computes — fromSubmission canonicalizes, then
 // contentHash() hashes the canonical lexicographic JSON. Never hand-serialized.
+// Declared as a spec that will be broadcast sealed: fields that must never travel
+// in the clear (a contentSlot) are refused on a cleartext registration.
 export function contentHashOf(submissionSpec) {
-  return FluxAppSpecV9.fromSubmission(submissionSpec).contentHash();
+  return FluxAppSpecV9.fromSubmission(submissionSpec, { encrypted: true }).contentHash();
 }
 
 // Sign the AppEventV2 payload (type + "2" + contentHash + timestamp + extend) with
