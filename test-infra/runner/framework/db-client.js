@@ -473,21 +473,33 @@ export function dbClient(nodeNum) {
     // Where an app runs is a derivation over the app state event log, so seeding a
     // location means asserting the apprunning event the derivation reads. There is no
     // materialized row to write; writing one would seed a shape nothing consults.
+    // One v2 apprunning event per holder, as the wire carries it: a second app
+    // seeded on the same holder joins that event's apps rather than becoming a
+    // second event the unique index refuses.
     async seedAppLocation({ name, ip, hash, broadcastedAt, runningSince }) {
       const globalDb = await db('appsGlobal');
       const ts = broadcastedAt ?? Date.now();
+      const entry = { name, hash, runningSince: runningSince ?? ts };
+      const key = { type: 'apprunning', ip, dedupKey: 'v2' };
+      const held = await globalDb.collection('appstateevents').findOne(key);
+      if (held) {
+        await globalDb.collection('appstateevents').updateOne(key, {
+          $push: { 'data.apps': entry },
+          $set: {
+            broadcastedAt: new Date(ts),
+            expireAt: new Date(ts + 125 * 60 * 1000),
+            receivedAt: new Date(ts),
+            'data.broadcastedAt': ts,
+          },
+        });
+        return;
+      }
       await globalDb.collection('appstateevents').insertOne({
-        type: 'apprunning',
-        ip,
-        dedupKey: 'v2',
+        ...key,
         broadcastedAt: new Date(ts),
         expireAt: new Date(ts + 125 * 60 * 1000),
         receivedAt: new Date(ts),
-        data: {
-          apps: [{ name, hash, runningSince: runningSince ?? ts }],
-          ip,
-          broadcastedAt: ts,
-        },
+        data: { apps: [entry], ip, broadcastedAt: ts },
       });
     },
 
