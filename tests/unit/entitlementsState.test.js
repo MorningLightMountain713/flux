@@ -35,6 +35,9 @@ describe('entitlementsState', () => {
   // membership grant to one must not reach the other.
   const OWNER = V9_SUBMISSION.owner;
   const OTHER_OWNER = V8_SUBMISSION.owner;
+  // An owner in the other address form the network accepts. Its resolve key
+  // is 20 bytes, from the same conversion a membership is published with.
+  const ETH_OWNER = '0xdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef';
 
   const GRANT_HEIGHT = 1000;
   const MEMBER_GROUP = 7;
@@ -211,6 +214,23 @@ describe('entitlementsState', () => {
 
       await expect(entitlementsState.assertSpecEntitled(gatedSpec, OTHER_OWNER, effectiveHeight))
         .to.be.rejectedWith(/mesh/);
+    });
+
+    it('passes an Ethereum owner whose spec uses no gated feature', async () => {
+      await entitlementsState.rebuildPolicyGroupState();
+      await entitlementsState.assertSpecEntitled(ungatedSpec, ETH_OWNER, effectiveHeight);
+      expect(checkSpy.firstCall.returnValue.allowed).to.equal(true);
+    });
+
+    it('grants through a group membership published for an Ethereum owner', async () => {
+      docs = [
+        definitionDoc({ groupId: MEMBER_GROUP, features: { mesh: true } }),
+        membershipDoc({ owner: ETH_OWNER }),
+      ];
+      await entitlementsState.rebuildPolicyGroupState();
+
+      await entitlementsState.assertSpecEntitled(gatedSpec, ETH_OWNER, effectiveHeight);
+      expect(checkSpy.firstCall.returnValue.allowed).to.equal(true);
     });
 
     it('throws when the owner address cannot be decoded to a fluxid', async () => {
