@@ -115,7 +115,6 @@ describe('a delisted node is negated by every other node\'s own derivation, with
         name: appName,
         description: 'node-down delisting e2e component',
         repotag: `${REGISTRY_REPO_HOST}/${appName}:v1`,
-        ports: [31314],
         domains: [''],
         environmentParameters: [],
         commands: [],
