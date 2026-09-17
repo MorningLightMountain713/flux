@@ -134,6 +134,12 @@ async function getMasterIpFromFdm(appName, axiosOptions) {
     baseUrl: region.baseUrlTemplate.replace('%i', fdmIndex),
   }));
 
+  // Whether any region SAID something - a primary, none, or that the app is
+  // unknown to it. A region that could not be reached, or was still starting,
+  // said nothing, and a node that heard nothing from anyone must not read the
+  // silence as "there is no primary".
+  let answered = false;
+
   for (const region of fdmRegions) {
     try {
       const url = `${region.baseUrl}/appips/${appName}`;
@@ -141,6 +147,7 @@ async function getMasterIpFromFdm(appName, axiosOptions) {
       const response = await serviceHelper.axiosGet(url, axiosOptions);
 
       if (response.data && response.data.status === 'success' && response.data.data) {
+        answered = true;
         const { ips } = response.data.data;
         if (ips && ips.length > 0) {
           // Return the first IP, stripping the port if present
@@ -153,6 +160,7 @@ async function getMasterIpFromFdm(appName, axiosOptions) {
       log.debug(`getMasterIpFromFdm: No IPs returned from ${region.name} FDM for app ${appName}`);
     } catch (error) {
       if (error.response && error.response.status === 404) {
+        answered = true;
         log.debug(`getMasterIpFromFdm: App ${appName} not found in ${region.name} FDM`);
       } else if (error.response && error.response.status === 503) {
         log.debug(`getMasterIpFromFdm: ${region.name} FDM service starting up for app ${appName}`);
@@ -163,8 +171,7 @@ async function getMasterIpFromFdm(appName, axiosOptions) {
     }
   }
 
-  // All regions failed or returned no IPs
-  return { ip: null, fdmOk: true };
+  return { ip: null, fdmOk: answered };
 }
 
 /**
