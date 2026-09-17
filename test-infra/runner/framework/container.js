@@ -224,10 +224,53 @@ export async function appComponentIdentifier(container, appName, componentName, 
   return match?.identifier ?? null;
 }
 
-/** The syncthing folder id for one component: `flux<identifier>`. */
+/**
+ * The syncthing folder id an identifier registers: `flux<identifier>`. For a preset a
+ * suite has to make before any container exists; once one does, read
+ * appSyncthingFolderId off it.
+ */
+export function syncthingFolderIdOf(identifier) {
+  return `flux${identifier}`;
+}
+
+/** The syncthing folder id for one component, read off its container. */
 export async function appSyncthingFolderId(container, appName, componentName, replica = null) {
   const identifier = await appComponentIdentifier(container, appName, componentName, replica);
-  return identifier ? `flux${identifier}` : null;
+  return identifier ? syncthingFolderIdOf(identifier) : null;
+}
+
+// Same, for the helpers that need the artifact to exist: a path that resolves to
+// nothing is a broken fixture, not a directory to create.
+export async function requireAppComponentIdentifier(container, appName, componentName = appName, replica = null) {
+  const identifier = await appComponentIdentifier(container, appName, componentName, replica);
+  if (!identifier) {
+    throw new NotPresentError(`no container on this node for app ${appName} component ${componentName}`
+      + `${replica ? ` replica ${replica}` : ''}`);
+  }
+  return identifier;
+}
+
+/** The directory one component's data lives under: `/mnt/appdata/flux-apps/flux<identifier>`. */
+export async function appDataRoot(container, appName, componentName = appName, replica = null) {
+  return `/mnt/appdata/flux-apps/flux${await requireAppComponentIdentifier(container, appName, componentName, replica)}`;
+}
+
+/** The loop-mount image behind that directory: `/mnt/appdata/flux<identifier>FLUXFSVOL`. */
+export async function appVolumeFile(container, appName, componentName = appName, replica = null) {
+  return `/mnt/appdata/flux${await requireAppComponentIdentifier(container, appName, componentName, replica)}FLUXFSVOL`;
+}
+
+/**
+ * The identifier of a component of a SEEDED spec, which carries no minted
+ * identity: `<component>_<app>`. Only for what has to be named before any
+ * container exists - an event wait on the install itself, or a stub preset the
+ * install must find in place. A spec registered through the chain may mint an
+ * identity; its identifier is read off its container's label
+ * (appComponentIdentifier) or its registration row (db-client appFolderId), and
+ * nothing physical is ever spelled from a name.
+ */
+export function componentIdentifier(appName, componentName = appName) {
+  return `${componentName}_${appName}`;
 }
 
 export async function appComponentIdentifiers(container, appName) {

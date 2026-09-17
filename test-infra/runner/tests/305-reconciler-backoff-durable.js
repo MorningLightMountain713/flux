@@ -2,7 +2,7 @@
 import { describe, it, before, after } from 'mocha';
 import { expect } from 'chai';
 import { createTestEnv } from '../framework/test-env.js';
-import { getAppContainerStatus, crashAppContainer } from '../framework/container.js';
+import { componentIdentifier, crashAppContainer, getAppContainerStatus } from '../framework/container.js';
 import { waitFor, waitForReconcileActuated } from '../framework/wait.js';
 import { bootAndPeer, seedSimpleApp } from '../framework/reconciler-suite.js';
 
@@ -26,7 +26,7 @@ describe('reconciler backoff escalates and survives a FluxOS restart', function 
   let env;
   let idx;
   const appName = `e2ebackoff${Date.now()}`;
-  const identifier = `${appName}_${appName}`;
+  const identifier = componentIdentifier(appName);
 
   before(async function () {
     this.timeout(300000);

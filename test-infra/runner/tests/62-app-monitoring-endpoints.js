@@ -26,6 +26,7 @@ import {
   waitForAppInstalled, waitForAppSpecStored,
 } from '../framework/wait.js';
 import { dumpLogsOnFailure } from '../framework/log-on-failure.js';
+import { componentIdentifier } from '../framework/container.js';
 
 function localRegistryCompose(appName) {
   return [{
@@ -64,7 +65,7 @@ describe('App monitoring endpoints', function () {
   let env;
   dumpLogsOnFailure(() => env);
   const appName = `e2emon${Date.now()}`;
-  const component = `${appName}_${appName}`;
+  const component = componentIdentifier(appName);
   let node;
   let ownerAuth;
 

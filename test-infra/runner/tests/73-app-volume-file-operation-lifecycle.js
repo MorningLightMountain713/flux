@@ -33,7 +33,7 @@ describe('app volume file operations - lifecycle', function () {
 
   const ts = Date.now();
   const appName = `e2efilelife${ts}`;
-  const root = volumeRoot(appName);
+  let root;
 
   const post = (path, body) => node.request('POST', path, { body, headers: { zelidauth: auth.zelidauth } });
 
@@ -100,6 +100,7 @@ describe('app volume file operations - lifecycle', function () {
     await installOnNodes(env, app, [0]);
 
     node = env.clients[0];
+    root = await volumeRoot(node.container, appName);
     auth = await authenticate(node.url, appOwnerKey());
     await waitFor(async () => exists(node.container, root), {
       timeout: 60000, interval: 2000, label: 'app volume mounted',

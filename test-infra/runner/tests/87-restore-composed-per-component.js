@@ -1,7 +1,7 @@
 import { describe, it, before, after, beforeEach } from 'mocha';
 import { expect } from 'chai';
 import { createTestEnv } from '../framework/test-env.js';
-import { execInContainer } from '../framework/container.js';
+import { appDataRoot, appSyncthingFolderId, componentIdentifier, execInContainer } from '../framework/container.js';
 import { pushImage } from '../framework/registry-helper.js';
 import { buildSeedableApp } from '../framework/seed-helper.js';
 import { REGISTRY_REPO_HOST, getSubnetConfig } from '../framework/subnet-config.js';
@@ -46,8 +46,12 @@ describe('a restore acts on the components it was asked for, by their own folder
   const compA = `${appName}a`;
   const compB = `${appName}b`;
 
-  const folderOf = (comp) => `flux${comp}_${appName}`;
-  const dirOf = (comp) => `/mnt/appdata/flux-apps/${folderOf(comp)}`;
+  // Each component's folder id and directory are read off its container once
+  // the app is installed, never spelled.
+  const folders = new Map();
+  const dirs = new Map();
+  const folderOf = (comp) => folders.get(comp);
+  const dirOf = (comp) => dirs.get(comp);
   const appLevelFolderId = `flux${appName}`;
 
   let auth;
@@ -96,11 +100,17 @@ describe('a restore acts on the components it was asked for, by their own folder
     // appdata - which removes the directory - and the component's next start
     // has recreated it; written before that, the marker has nowhere to land.
     const cleared = await Promise.all([compA, compB].map((comp) => waitForReconcileActuated(
-      env.clients[0], `${comp}_${appName}`, 'dataCleared', 90000, { afterId: installAfter },
+      env.clients[0], componentIdentifier(appName, comp), 'dataCleared', 90000, { afterId: installAfter },
     )));
     await Promise.all([compA, compB].map((comp, i) => waitForReconcileActuated(
-      env.clients[0], `${comp}_${appName}`, START_ACTIONS, 90000, { afterId: cleared[i].id },
+      env.clients[0], componentIdentifier(appName, comp), START_ACTIONS, 90000, { afterId: cleared[i].id },
     )));
+    for (const comp of [compA, compB]) {
+      // eslint-disable-next-line no-await-in-loop
+      folders.set(comp, await appSyncthingFolderId(env.clients[0].container, appName, comp));
+      // eslint-disable-next-line no-await-in-loop
+      dirs.set(comp, await appDataRoot(env.clients[0].container, appName, comp));
+    }
     for (const comp of [compA, compB]) {
       // eslint-disable-next-line no-await-in-loop
       const r = await execInContainer(env.clients[0].container,

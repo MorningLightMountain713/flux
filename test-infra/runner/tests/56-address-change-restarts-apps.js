@@ -3,7 +3,7 @@ import { expect } from 'chai';
 import { createTestEnv } from '../framework/test-env.js';
 import { pushImage } from '../framework/registry-helper.js';
 import { buildSeedableApp } from '../framework/seed-helper.js';
-import { getAppContainerStatus, moveNodeAddress } from '../framework/container.js';
+import { componentIdentifier, getAppContainerStatus, moveNodeAddress } from '../framework/container.js';
 import { setNodeAddress, clearNodeAddress } from '../framework/daemon-control.js';
 import { REGISTRY_REPO_HOST, getSubnetConfig } from '../framework/subnet-config.js';
 import { waitFor, waitForReconcileActuated } from '../framework/wait.js';
@@ -64,8 +64,8 @@ describe('a node whose address changed restarts the apps that stay', function ()
   let peerIdx;
   let peerBaseline;
   const appName = `e2eipchg${Date.now()}`;
-  const idA = `${COMPONENT_A}_${appName}`;
-  const idB = `${COMPONENT_B}_${appName}`;
+  const idA = componentIdentifier(appName, COMPONENT_A);
+  const idB = componentIdentifier(appName, COMPONENT_B);
 
   async function isUp(client, component) {
     const status = await getAppContainerStatus(client.container, appName, { component });

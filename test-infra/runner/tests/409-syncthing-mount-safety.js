@@ -2,7 +2,7 @@
 import { describe, it, before, after } from 'mocha';
 import { expect } from 'chai';
 import { createTestEnv } from '../framework/test-env.js';
-import { execInContainer, getAppContainerStatus } from '../framework/container.js';
+import { appDataRoot, appVolumeFile, execInContainer, getAppContainerStatus } from '../framework/container.js';
 import {
   setSyncState, setSynced, setSyncing, getSyncthingState, resetSyncState,
   injectSyncthingEvent,
@@ -46,9 +46,6 @@ const subnet = getSubnetConfig();
 // such rows (prepareInstalledAppsCollection's backfill rule; 310's captures
 // show the containers spelled fluxe2eopstop..._e2eopstop...). Deterministic by
 // construction - a registration-row read here races the seeding it precedes.
-const appId = (name) => `flux${name}_${name}`;
-const appDir = (name) => `/mnt/appdata/flux-apps/${appId(name)}`;
-const volFile = (name) => `/mnt/appdata/${appId(name)}FLUXFSVOL`;
 
 async function isUp(client, appName) {
   const status = await getAppContainerStatus(client.container, appName);
@@ -74,6 +71,8 @@ describe('syncthing mount-safety guard demotes unsafe sendreceive folders', func
   let phantomFolder;
   let leakIdentifier;
   let phantomIdentifier;
+  let leakDir; let leakVol;
+  let phantomDir;
   const ip0 = subnet.nodeIp(1);
   const ip1 = subnet.nodeIp(2);
 
@@ -82,11 +81,6 @@ describe('syncthing mount-safety guard demotes unsafe sendreceive folders', func
     env = await createTestEnv({ hookCtx: this, nodes: 10, tickerAutostart: false });
     await bootAndPeer(env);
     await resetSyncState();
-    leakFolder = appId(leakName);
-    phantomFolder = appId(phantomName);
-    leakIdentifier = leakFolder.replace(/^flux/, '');
-    phantomIdentifier = phantomFolder.replace(/^flux/, '');
-
     // both apps are r: leaders on their own nodes: they seed, promote to
     // sendreceive and start - the state every test here begins from.
     // Order matters: the sync layer's first-run reset clears local appdata, so
@@ -94,13 +88,16 @@ describe('syncthing mount-safety guard demotes unsafe sendreceive folders', func
     // if the index ever claims bytes over an empty disk, the phantom guard
     // (correctly) demotes and holds, and the app never reaches the premise.
     const leakInstallAfter = env.clients[0].getLastEventId();
-    await seedSyncthingApp(env, { name: leakName, syncMode: 'syncFirst', index: 0 });
+    ({ folder: leakFolder, identifier: leakIdentifier } = await seedSyncthingApp(env, { name: leakName, syncMode: 'syncFirst', index: 0 }));
+    leakDir = await appDataRoot(env.clients[0].container, leakName);
+    leakVol = await appVolumeFile(env.clients[0].container, leakName);
     await waitForReconcileActuated(env.clients[0], leakIdentifier, 'dataCleared', 60000, { afterId: leakInstallAfter });
     await seedSyncScopedData(env, leakName, 0);
     await setSynced({ ip: ip0, folder: leakFolder });
 
     const phantomInstallAfter = env.clients[1].getLastEventId();
-    await seedSyncthingApp(env, { name: phantomName, syncMode: 'syncFirst', index: 1 });
+    ({ folder: phantomFolder, identifier: phantomIdentifier } = await seedSyncthingApp(env, { name: phantomName, syncMode: 'syncFirst', index: 1 }));
+    phantomDir = await appDataRoot(env.clients[1].container, phantomName);
     await waitForReconcileActuated(env.clients[1], phantomIdentifier, 'dataCleared', 60000, { afterId: phantomInstallAfter });
     await seedSyncScopedData(env, phantomName, 1);
     await setSynced({ ip: ip1, folder: phantomFolder });
@@ -143,7 +140,7 @@ describe('syncthing mount-safety guard demotes unsafe sendreceive folders', func
     // wipe the app's data inside the MOUNTED volume and report an empty index:
     // disk and index agree, so there is nothing a sendreceive folder could
     // wrongly delete - the guard must leave it alone
-    await execInContainer(client.container, `sh -c 'rm -rf ${appDir(phantomName)}/appdata/* 2>/dev/null; true'`);
+    await execInContainer(client.container, `sh -c 'rm -rf ${phantomDir}/appdata/* 2>/dev/null; true'`);
     await setSyncState({ ip: ip1, folder: phantomFolder, state: 'idle', globalBytes: 0, inSyncBytes: 0 });
 
     // several 3s monitor cycles must pass without a demotion
@@ -190,7 +187,7 @@ describe('syncthing mount-safety guard demotes unsafe sendreceive folders', func
   it('demotes a sendreceive folder over an unmounted dir even when it HAS content (leak regression)', async function () {
     this.timeout(120000);
     const client = env.clients[0];
-    const dir = appDir(leakName);
+    const dir = leakDir;
 
     // premise, asserted so drift fails fast instead of timing out downstream: a
     // genuinely running sendreceive leader (an idle seeded leader with an empty
@@ -209,7 +206,7 @@ describe('syncthing mount-safety guard demotes unsafe sendreceive folders', func
     // unmount detaches the dir under the running container instead; stopping
     // the app is then the GUARD's job, which is exactly what this test is for.
     const r = await execInContainer(client.container,
-      `umount -l ${dir} && chattr -i ${dir} && touch ${dir}/leaked.db && rm -f ${volFile(leakName)}`);
+      `umount -l ${dir} && chattr -i ${dir} && touch ${dir}/leaked.db && rm -f ${leakVol}`);
     expect(r.exitCode, `leak-state setup failed: ${r.output}`).to.equal(0);
 
     // the vanished mount took the .stfolder marker with it - real syncthing
@@ -239,7 +236,7 @@ describe('syncthing mount-safety guard demotes unsafe sendreceive folders', func
   it('never recreates the .stfolder marker on the bare unmounted dir', async function () {
     this.timeout(60000);
     const client = env.clients[0];
-    const dir = appDir(leakName);
+    const dir = leakDir;
 
     // give the monitor several cycles; the marker must not reappear on the
     // bare dir (old code recreated it every cycle, re-arming sync onto the

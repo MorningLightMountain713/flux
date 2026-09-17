@@ -6,7 +6,12 @@ import { pushImage } from '../framework/registry-helper.js';
 import { authenticate } from '../auth.js';
 import { appOwnerKey } from '../framework/keys.js';
 import { buildSeedableSyncthingApp } from '../framework/seed-helper.js';
-import { getAppContainerStatus, restartFluxos } from '../framework/container.js';
+import {
+  componentIdentifier,
+  getAppContainerStatus,
+  requireAppContainerName,
+  restartFluxos,
+} from '../framework/container.js';
 import { resetFdm, clearMaster, electMaster } from '../framework/fdm-control.js';
 import {
   waitFor, waitForReconcileActuated, waitForElectionDecisions, electionDecisionCount,
@@ -63,7 +68,7 @@ describe('masterSlave recovery after an operator stop', function () {
   let env;
   let holders;
   const appName = `e2eopstop${Date.now()}`;
-  const identifier = `${appName}_${appName}`;
+  const identifier = componentIdentifier(appName);
 
   const runningFlags = async () => Promise.all(holders.map((i) => isUp(env.clients[i], appName)));
   const runningCount = async () => (await runningFlags()).filter(Boolean).length;
@@ -262,7 +267,8 @@ describe('masterSlave recovery after an operator stop', function () {
     // the safe answer, because a peer reads a refusal as "cannot be ruled out".
     await waitFor(async () => {
       const res = await primaryClient.get('/apps/heldcomponents').catch(() => null);
-      return Array.isArray(res?.data) && res.data.includes(`flux${identifier}`);
+      const held = await requireAppContainerName(primaryClient.container, appName, appName);
+      return Array.isArray(res?.data) && res.data.includes(held);
     }, { timeout: 45000, interval: 2000, label: 'the restarted node still reports the stopped component as held' });
 
     // And the standby acts on it. Asserted on the standby's own recorded decision

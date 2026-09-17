@@ -2,7 +2,7 @@
 import { describe, it, before, after } from 'mocha';
 import { expect } from 'chai';
 import { createTestEnv } from '../framework/test-env.js';
-import { getAppContainerStatus, restartDockerd } from '../framework/container.js';
+import { componentIdentifier, getAppContainerStatus, restartDockerd } from '../framework/container.js';
 import { authenticate } from '../auth.js';
 import { appOwnerKey } from '../framework/keys.js';
 import { bootAndPeer, seedSimpleApp } from '../framework/reconciler-suite.js';
@@ -24,7 +24,7 @@ import {
 describe('deliberate stop during an event-stream outage neither wedges nor flaps', function () {
   let env;
   const appName = `e2estreamout${Date.now()}`;
-  const identifier = `${appName}_${appName}`;
+  const identifier = componentIdentifier(appName);
   let idx;
 
   before(async function () {

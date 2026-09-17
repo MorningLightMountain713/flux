@@ -1,7 +1,7 @@
 import { describe, it, before, after } from 'mocha';
 import { expect } from 'chai';
 import { createTestEnv } from '../framework/test-env.js';
-import { execInContainer } from '../framework/container.js';
+import { appDataRoot, appSyncthingFolderId, componentIdentifier, execInContainer } from '../framework/container.js';
 import { pushImage } from '../framework/registry-helper.js';
 import { buildSeedableSyncthingApp } from '../framework/seed-helper.js';
 import { waitFor, waitForReconcileActuated, waitForUp } from '../framework/wait.js';
@@ -25,16 +25,17 @@ import { dumpLogsOnFailure } from '../framework/log-on-failure.js';
 // and a few hundred bytes of data. FluxOS configures the folders and devices
 // itself, the same way it does on a node.
 
-const appDir = (name) => `/mnt/appdata/flux-apps/flux${name}_${name}`;
-
 describe('a restore reaches the other instances through syncthing', function () {
   let env;
   dumpLogsOnFailure(() => env);
 
   const ts = Date.now();
   const appName = `e2ereal${ts}`;
-  const identifier = `${appName}_${appName}`;
-  const folder = `flux${appName}_${appName}`;
+  const identifier = componentIdentifier(appName);
+  // The app's folder id and directory are the same on every holder; read off
+  // node 0's container once it is installed, never spelled.
+  let folder;
+  let appDirPath;
 
   let auth;
 
@@ -71,6 +72,8 @@ describe('a restore reaches the other instances through syncthing', function () 
       await waitForReconcileActuated(env.clients[i], identifier, 'dataCleared', 120000, { afterId: installAfters[k] });
       await seedSyncScopedData(env, appName, i);
     }));
+    folder = await appSyncthingFolderId(env.clients[0].container, appName, appName);
+    appDirPath = await appDataRoot(env.clients[0].container, appName);
 
     auth = await authenticate(env.clients[0].url, appOwnerKey());
   });
@@ -143,13 +146,13 @@ describe('a restore reaches the other instances through syncthing', function () 
 
     // an archive holding one identifiable file, so its arrival on the peer is
     // unambiguous rather than inferred from a byte count
-    const target = `${appDir(appName)}/backup/local/backup_${appName}.tar.gz`;
+    const target = `${appDirPath}/backup/local/backup_${appName}.tar.gz`;
     const staged = await execInContainer(a.container,
       `rm -rf /tmp/stage && mkdir -p /tmp/stage && printf 'the-restored-world\\n' > /tmp/stage/world.sav `
-      + `&& mkdir -p ${appDir(appName)}/backup/local && tar -czf ${target} -C /tmp/stage .`);
+      + `&& mkdir -p ${appDirPath}/backup/local && tar -czf ${target} -C /tmp/stage .`);
     expect(staged.exitCode, `staging failed: ${staged.output}`).to.equal(0);
 
-    const peerBefore = await listFolderFiles(b, `${appDir(appName)}/appdata`);
+    const peerBefore = await listFolderFiles(b, `${appDirPath}/appdata`);
     expect(peerBefore, 'the peer starts with the seeded data, not the restore').to.not.contain('world.sav');
 
     const body = await a.appendRestoreTask(
@@ -158,14 +161,14 @@ describe('a restore reaches the other instances through syncthing', function () 
     expect(body).to.match(/Finalizing/);
 
     // the restoring node took it
-    await waitFor(async () => (await listFolderFiles(a, `${appDir(appName)}/appdata`)) === 'world.sav', {
+    await waitFor(async () => (await listFolderFiles(a, `${appDirPath}/appdata`)) === 'world.sav', {
       timeout: 180000, interval: 3000, label: 'restore applied on node 0',
     });
 
     // ...and the peer received it, through syncthing alone. Nothing asked it to
     // redeploy, and its volume was never touched.
     await waitFor(async () => {
-      const content = await execInContainer(b.container, `cat ${appDir(appName)}/appdata/world.sav 2>/dev/null || echo missing`);
+      const content = await execInContainer(b.container, `cat ${appDirPath}/appdata/world.sav 2>/dev/null || echo missing`);
       return content.stdout.trim() === 'the-restored-world';
     }, { timeout: 300000, interval: 5000, label: 'restored file arrived on the peer' });
   });

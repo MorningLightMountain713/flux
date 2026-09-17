@@ -2,7 +2,7 @@
 import { describe, it, before, after } from 'mocha';
 import { expect } from 'chai';
 import { createTestEnv } from '../framework/test-env.js';
-import { getAppContainerStatus } from '../framework/container.js';
+import { componentIdentifier, getAppContainerStatus, syncthingFolderIdOf } from '../framework/container.js';
 import {
   setSyncState, setNoPeerData, resetSyncState,
 } from '../framework/syncthing-control.js';
@@ -82,8 +82,8 @@ describe('reconciler cold start - fresh multi-node placement, no seeded source',
 
     // A SEEDED app's folder id is its own name (no minted identity on a seeded
     // spec) - and this must run before install, when there is no row to ask.
-    await pinColdStart(holders, `flux${rApp}_${rApp}`);
-    await pinColdStart(holders, `flux${gApp}_${gApp}`);
+    await pinColdStart(holders, syncthingFolderIdOf(componentIdentifier(rApp)));
+    await pinColdStart(holders, syncthingFolderIdOf(componentIdentifier(gApp)));
 
     // place both apps on every holder AT ONCE (installOnNodes installs in parallel) so
     // they all broadcast placement before any confirms leadership - the standoff shape

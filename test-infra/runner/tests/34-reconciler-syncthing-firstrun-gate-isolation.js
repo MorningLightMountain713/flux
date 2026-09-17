@@ -1,7 +1,16 @@
 import { describe, it, before, after } from 'mocha';
 import { expect } from 'chai';
 import { createTestEnv } from '../framework/test-env.js';
-import { execInContainer, getAppContainerStatus, restartFluxos } from '../framework/container.js';
+import {
+  appDataRoot,
+  appSyncthingFolderId,
+  appVolumeFile,
+  componentIdentifier,
+  execInContainer,
+  getAppContainerStatus,
+  requireAppContainerName,
+  restartFluxos,
+} from '../framework/container.js';
 import { pushImage } from '../framework/registry-helper.js';
 import { buildSeedableApp, buildSeedableSyncthingApp } from '../framework/seed-helper.js';
 import { electMaster, resetFdm } from '../framework/fdm-control.js';
@@ -34,9 +43,6 @@ import { dumpLogsOnFailure } from '../framework/log-on-failure.js';
 
 const subnet = getSubnetConfig();
 
-const appId = (name) => `flux${name}_${name}`;
-const appDir = (name) => `/mnt/appdata/flux-apps/${appId(name)}`;
-const volFile = (name) => `/mnt/appdata/${appId(name)}FLUXFSVOL`;
 
 async function isUp(client, appName) {
   const status = await getAppContainerStatus(client.container, appName);
@@ -50,9 +56,11 @@ describe('one unmountable app does not block g: election node-wide', function ()
   const ts = Date.now();
   const jamName = `e2ejam${ts}`; // plain app on node 0, volume demolished
   const gName = `e2egate${ts}`; // g: app held by nodes 0 and 1
-  const jamIdentifier = `${jamName}_${jamName}`;
-  const gIdentifier = `${gName}_${gName}`;
-  const gFolder = appId(gName);
+  const jamIdentifier = componentIdentifier(jamName);
+  const gIdentifier = componentIdentifier(gName);
+  // Everything physical is named from the identity the container carries, so it
+  // is read off the container once the app is installed, never spelled.
+  let jamDir;
 
   before(async function () {
     this.timeout(480000);
@@ -73,6 +81,7 @@ describe('one unmountable app does not block g: election node-wide', function ()
       await waitForReconcileActuated(env.clients[i], gIdentifier, 'dataCleared', 60000, { afterId: installAfters[k] });
       await seedSyncScopedData(env, gName, i);
     }));
+    const gFolder = await appSyncthingFolderId(env.clients[0].container, gName, gName);
     await Promise.all([0, 1].map((i) => setSynced({ ip: subnet.nodeIp(i + 1), folder: gFolder })));
 
     // the jammer: a plain app sharing node 0
@@ -120,8 +129,11 @@ describe('one unmountable app does not block g: election node-wide', function ()
     // lazy unmount detaches the dir under the running container silently, and
     // deleting the backing image makes the repair permanently impossible -
     // which is what makes the old gate latch rather than merely stall.
+    jamDir = await appDataRoot(client.container, jamName);
+    const jamVol = await appVolumeFile(client.container, jamName);
+    const jamContainer = await requireAppContainerName(client.container, jamName, jamName);
     const r = await execInContainer(client.container,
-      `umount -l ${appDir(jamName)} && rm -f ${volFile(jamName)} && docker stop ${appId(jamName)} >/dev/null 2>&1`);
+      `umount -l ${jamDir} && rm -f ${jamVol} && docker stop ${jamContainer} >/dev/null 2>&1`);
     expect(r.exitCode, `jam setup failed: ${r.output}`).to.equal(0);
     await waitForReconcileActuated(client, jamIdentifier, 'volumeUnavailable', 90000, { afterId });
 
@@ -153,7 +165,7 @@ describe('one unmountable app does not block g: election node-wide', function ()
     const client = env.clients[0];
 
     expect(await isUp(client, jamName)).to.equal(false);
-    const probe = await execInContainer(client.container, `find ${appDir(jamName)} -mindepth 1 2>/dev/null | head -5 | wc -l`);
+    const probe = await execInContainer(client.container, `find ${jamDir} -mindepth 1 2>/dev/null | head -5 | wc -l`);
     expect(probe.stdout.trim()).to.equal('0');
   });
 

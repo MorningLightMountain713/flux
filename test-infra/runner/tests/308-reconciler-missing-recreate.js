@@ -1,7 +1,7 @@
 // weight: heavy
 import { describe, it, before, after } from 'mocha';
 import { createTestEnv } from '../framework/test-env.js';
-import { getAppContainerStatus, killAppContainer, removeAppImage } from '../framework/container.js';
+import { componentIdentifier, getAppContainerStatus, killAppContainer, removeAppImage } from '../framework/container.js';
 import { waitFor, waitForReconcileActuated } from '../framework/wait.js';
 import { bootAndPeer, seedSimpleApp } from '../framework/reconciler-suite.js';
 import { REGISTRY_REPO_HOST } from '../framework/subnet-config.js';
@@ -28,7 +28,7 @@ describe('reconciler recreates a missing container', function () {
   let env;
   let idx;
   const appName = `e2emissing${Date.now()}`;
-  const identifier = `${appName}_${appName}`;
+  const identifier = componentIdentifier(appName);
 
   before(async function () {
     this.timeout(300000);

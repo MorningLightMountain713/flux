@@ -38,7 +38,7 @@ describe('app volume file upload', function () {
 
   const ts = Date.now();
   const appName = `e2eupload${ts}`;
-  const root = volumeRoot(appName);
+  let root;
 
   // The app owner, not the flux team: the endpoint authorises at the OBJECT
   // level - is this caller the owner of THIS app.
@@ -160,6 +160,7 @@ describe('app volume file upload', function () {
     await installOnNodes(env, app, [0]);
 
     node = env.clients[0];
+    root = await volumeRoot(node.container, appName);
     auth = await authenticate(node.url, appOwnerKey());
 
     await waitFor(async () => exists(node.container, root), {
@@ -287,7 +288,7 @@ describe('app volume file upload', function () {
       const { body } = await uploadTo('photos', { '../../escaped.txt': 'x' });
 
       expect(failureIn(body), body).to.not.equal(null);
-      expect(await exists(node.container, `${volumeRoot(appName)}/../escaped.txt`)).to.equal(false);
+      expect(await exists(node.container, `${root}/../escaped.txt`)).to.equal(false);
       expect(await artefacts()).to.deep.equal([]);
     });
 

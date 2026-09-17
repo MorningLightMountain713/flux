@@ -1,7 +1,7 @@
 import { describe, it, before, after } from 'mocha';
 import { expect } from 'chai';
 import { createTestEnv } from '../framework/test-env.js';
-import { execInContainer, getAppContainerStatus } from '../framework/container.js';
+import { appDataRoot, execInContainer, getAppContainerStatus } from '../framework/container.js';
 import { pushImage } from '../framework/registry-helper.js';
 import { buildSeedableLegacyApp } from '../framework/seed-helper.js';
 import { waitFor } from '../framework/wait.js';
@@ -27,8 +27,8 @@ describe('a restore of a legacy app, which has no compose array', function () {
 
   const ts = Date.now();
   const appName = `e2eleg${ts}`;
-  // a v<=3 app's directory and folder id are the app name, with no component
-  const dir = `/mnt/appdata/flux-apps/flux${appName}`;
+  // a v<=3 app has no component; its directory is read off its one container
+  let dir;
 
   let auth;
   let client;
@@ -62,6 +62,7 @@ describe('a restore of a legacy app, which has no compose array', function () {
       const status = await getAppContainerStatus(client.container, appName);
       return Boolean(status && /up/i.test(status.status ?? ''));
     }, { timeout: 180000, interval: 3000, label: 'legacy app container running' });
+    dir = await appDataRoot(client.container, appName, null);
 
     auth = await authenticate(client.url, appOwnerKey());
   });

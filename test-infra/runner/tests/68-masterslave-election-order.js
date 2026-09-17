@@ -5,7 +5,7 @@ import { pushImage } from '../framework/registry-helper.js';
 import { authenticate } from '../auth.js';
 import { appOwnerKey } from '../framework/keys.js';
 import { buildSeedableSyncthingApp } from '../framework/seed-helper.js';
-import { getAppContainerStatus } from '../framework/container.js';
+import { appSyncthingFolderId, componentIdentifier, getAppContainerStatus } from '../framework/container.js';
 import { electMaster, clearMaster, resetFdm } from '../framework/fdm-control.js';
 import {
   setSynced, setPeerHasData, resetSyncState, setFolderPatchDelay, getSyncthingState,
@@ -77,7 +77,7 @@ describe('primary election under a divergent placement order', function () {
   // separate decisions, made by different code on different orderings, and the
   // failure this suite exists for is two nodes owning the data.
   const writableHolders = async (appName) => {
-    const folder = `flux${appName}_${appName}`;
+    const folder = await appSyncthingFolderId(env.clients[placementOrder[0]].container, appName, appName);
     const state = await getSyncthingState();
     return (state.nodes || [])
       .filter((node) => (node.folders || []).some((f) => f.id === folder && f.type === 'sendreceive'))
@@ -89,8 +89,7 @@ describe('primary election under a divergent placement order', function () {
     const app = await buildSeedableSyncthingApp({ name: appName, mode: 'g' });
     await placeGAppInOrder(env, app, {
       placementOrder,
-      folder: `flux${appName}_${appName}`,
-      identifier: `${appName}_${appName}`,
+      identifier: componentIdentifier(appName),
     });
     return app;
   };
@@ -210,7 +209,7 @@ describe('primary election under a divergent placement order', function () {
     // the data and are connected to one another, and the connection to the node whose
     // FluxOS is about to go away is the whole evidence the probe reads while its API
     // is silent.
-    const orderFolder = `flux${orderApp}_${orderApp}`;
+    const orderFolder = await appSyncthingFolderId(env.clients[holders[0]].container, orderApp, orderApp);
     await Promise.all(holders.map((i) => setSynced({ ip: subnet.nodeIp(i + 1), folder: orderFolder })));
     await Promise.all(holders.map((i) => setPeerHasData({ ip: subnet.nodeIp(i + 1), folder: orderFolder })));
 
@@ -250,8 +249,9 @@ describe('primary election under a divergent placement order', function () {
     // The standbys have genuinely synced from the seed by now, so pin them synced (over
     // the data seeded at install) to make them election-eligible - otherwise nothing
     // could take over and this would pass for the wrong reason.
+    const orderFolder = await appSyncthingFolderId(env.clients[seedIndex].container, orderApp, orderApp);
     await Promise.all(holders.filter((i) => i !== seedIndex).map(
-      (i) => setSynced({ ip: subnet.nodeIp(i + 1), folder: `flux${orderApp}_${orderApp}` }),
+      (i) => setSynced({ ip: subnet.nodeIp(i + 1), folder: orderFolder }),
     ));
 
     // Release the primary the way an operator does: appstop takes it down and locks it
@@ -325,8 +325,7 @@ describe('primary election under a divergent placement order', function () {
     await pushImage(pairApp, 'v1');
     await placeGAppInOrder(env, app, {
       placementOrder: placementOrderWithSeedAt([0, 1], 1),
-      folder: `flux${pairApp}_${pairApp}`,
-      identifier: `${pairApp}_${pairApp}`,
+      identifier: componentIdentifier(pairApp),
     });
 
     const position = await electionIndexOf(env, pairApp, seedIndex);
@@ -412,7 +411,7 @@ describe('primary election under a divergent placement order', function () {
     const position = await electionIndexOf(env, fdmApp, seedIndex);
     expect(position, 'fixture: seed must be off index 0').to.be.greaterThan(0);
 
-    const folder = `flux${fdmApp}_${fdmApp}`;
+    const folder = await appSyncthingFolderId(env.clients[holders[0]].container, fdmApp, fdmApp);
     await Promise.all(holders.map((i) => setSynced({ ip: subnet.nodeIp(i + 1), folder })));
 
     // FDM is named AFTER discovering which holder actually runs it, because that is

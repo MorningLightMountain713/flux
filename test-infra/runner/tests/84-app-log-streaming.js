@@ -31,7 +31,7 @@ import { createTestEnv } from '../framework/test-env.js';
 import { pushTestApp } from '../framework/registry-helper.js';
 import { buildSeedableApp } from '../framework/seed-helper.js';
 import { REGISTRY_REPO_HOST } from '../framework/subnet-config.js';
-import { listAppContainers, getAppContainerId } from '../framework/container.js';
+import { componentIdentifier, getAppContainerId, listAppContainers } from '../framework/container.js';
 import { waitFor } from '../framework/wait.js';
 import { bootAndPeer, installOnNodes } from '../framework/reconciler-suite.js';
 import { authenticate } from '../auth.js';
@@ -57,16 +57,16 @@ describe('an app log stream loses nothing and is shared between viewers', functi
 
   const appName = `e2elogstream${Date.now()}`;
   const component = `${appName}a`;
-  const identifier = `${component}_${appName}`;
+  const identifier = componentIdentifier(appName, component);
   // A second component, because one connection following several containers is
   // part of the contract and a single-component app cannot exercise it.
   const secondComponent = `${appName}b`;
-  const secondIdentifier = `${secondComponent}_${appName}`;
+  const secondIdentifier = componentIdentifier(appName, secondComponent);
   // A third, which writes the line no reader can hold. Its own container because
   // every other test here watches one whose entire output is its numbered lines,
   // and a megabyte arriving every few seconds is not that.
   const blobComponent = `${appName}c`;
-  const blobIdentifier = `${blobComponent}_${appName}`;
+  const blobIdentifier = componentIdentifier(appName, blobComponent);
   let holder;
   let auth;
 
@@ -165,7 +165,7 @@ describe('an app log stream loses nothing and is shared between viewers', functi
       async () => {
         const containers = await listAppContainers(holder.container, { all: true });
         return [identifier, secondIdentifier, blobIdentifier].every(
-          (name) => containers.find((c) => c.name === `flux${name}`)?.status?.startsWith('Up'),
+          (id) => containers.find((c) => c.identifier === id)?.status?.startsWith('Up'),
         );
       },
       { timeout: 240000, interval: 2000, label: 'every log-writing component is running' },
@@ -628,7 +628,7 @@ describe('an app log stream loses nothing and is shared between viewers', functi
     await waitFor(
       async () => {
         const containers = await listAppContainers(holder.container, { all: true });
-        return containers.find((c) => c.name === `flux${identifier}`)?.status?.startsWith('Up');
+        return containers.find((c) => c.identifier === identifier)?.status?.startsWith('Up');
       },
       { timeout: 120000, interval: 2000, label: 'the container is running again' },
     );

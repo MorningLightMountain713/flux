@@ -6,7 +6,7 @@ import { pushImage } from '../framework/registry-helper.js';
 import { authenticate } from '../auth.js';
 import { appOwnerKey } from '../framework/keys.js';
 import { buildSeedableSyncthingApp } from '../framework/seed-helper.js';
-import { getAppContainerStatus, execInContainer } from '../framework/container.js';
+import { appDataRoot, componentIdentifier, execInContainer, getAppContainerStatus } from '../framework/container.js';
 import { electMaster, resetFdm } from '../framework/fdm-control.js';
 import { setSynced, resetSyncState } from '../framework/syncthing-control.js';
 import { getSubnetConfig } from '../framework/subnet-config.js';
@@ -42,7 +42,7 @@ describe('reconciler enforces masterSlave g: election', function () {
   let env;
   let holders; // node indices that installed the app
   const appName = `e2egw${Date.now()}`;
-  const identifier = `${appName}_${appName}`;
+  const identifier = componentIdentifier(appName);
 
   before(async function () {
     this.timeout(360000);
@@ -138,7 +138,7 @@ describe('reconciler enforces masterSlave g: election', function () {
     // bulk appdata so the tar phase is a real window (same shape as suite 44)
     const bulk = await execInContainer(
       a.container,
-      `sh -c "d=\\$(ls -d /mnt/appdata/flux-apps/flux${appName}* | head -1) && dd if=/dev/urandom of=\\$d/appdata/bulk.bin bs=1M count=200 && ls -l \\$d/appdata/bulk.bin"`,
+      `sh -c "d=${await appDataRoot(a.container, appName)} && dd if=/dev/urandom of=\\$d/appdata/bulk.bin bs=1M count=200 && ls -l \\$d/appdata/bulk.bin"`,
     );
     if (bulk.exitCode !== 0) {
       throw new Error(`appdata bulk-up failed (backup window would be too small): ${bulk.stderr || bulk.output}`);

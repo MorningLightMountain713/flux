@@ -10,8 +10,13 @@ import { REGISTRY_REPO_HOST } from '../framework/subnet-config.js';
 import { queueAppTx, advanceBlocks } from '../framework/daemon-control.js';
 import { setSynced } from '../framework/syncthing-control.js';
 import {
-  getAppContainerStatus, appComponentIdentifiers, execInContainer,
-  pauseHostContainer, unpauseHostContainer,
+  appComponentIdentifiers,
+  appDataRoot,
+  appSyncthingFolderId,
+  execInContainer,
+  getAppContainerStatus,
+  pauseHostContainer,
+  unpauseHostContainer,
 } from '../framework/container.js';
 import { waitFor, waitForAppInstalled } from '../framework/wait.js';
 import { authenticate } from '../auth.js';
@@ -171,11 +176,11 @@ describe('encrypted mastership: a sealed spec holds and fails over a term', func
     // Synced-on-every-holder before the term forms, by IDENTIFIER — the stall
     // ladder otherwise removes the standbys mid-test (see 1209's before).
     await Promise.all(hosts.map(async (i) => {
-      const appDataDir = `/mnt/appdata/flux-apps/flux${identifiers.get(i)}/appdata`;
+      const appDataDir = `${await appDataRoot(env.clients[i].container, name, null)}/appdata`;
       const r = await execInContainer(env.clients[i].container, `sh -c 'mkdir -p ${appDataDir} && echo seeded > ${appDataDir}/seed-data'`);
       expect(r.exitCode, `seed data written on node ${i}: ${r.output}`).to.equal(0);
     }));
-    await setSynced({ folder: `flux${identifiers.get(hosts[0])}` });
+    await setSynced({ folder: await appSyncthingFolderId(env.clients[hosts[0]].container, name, null) });
   });
 
   after(async function () {

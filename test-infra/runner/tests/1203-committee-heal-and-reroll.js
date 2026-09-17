@@ -7,7 +7,12 @@ import { bootAndPeer, installOnNodes, seedGlobalSpec, seedSyncScopedData } from 
 import { buildSeedableSyncthingApp } from '../framework/seed-helper.js';
 import { pushImage } from '../framework/registry-helper.js';
 import { setSynced } from '../framework/syncthing-control.js';
-import { pauseHostContainer, unpauseHostContainer } from '../framework/container.js';
+import {
+  appSyncthingFolderId,
+  componentIdentifier,
+  pauseHostContainer,
+  unpauseHostContainer,
+} from '../framework/container.js';
 import { waitFor, waitForAppInstalled, waitForReconcileActuated, assertNoEvent } from '../framework/wait.js';
 import { dbClient } from '../framework/db-client.js';
 import { getState, advanceBlock, stopTicker, startTicker } from '../framework/daemon-control.js';
@@ -139,10 +144,10 @@ describe('the committee heals its dark seat, and the owner re-deals the walk', f
     // claimed-bytes index over an empty volume - written only AFTER each
     // holder's first-run reset, which clears anything seeded earlier.
     await Promise.all(HOLDERS.map(async (i, k) => {
-      await waitForReconcileActuated(env.clients[i], `${name}_${name}`, 'dataCleared', 60000, { afterId: installAfters[k] });
+      await waitForReconcileActuated(env.clients[i], componentIdentifier(name), 'dataCleared', 60000, { afterId: installAfters[k] });
       await seedSyncScopedData(env, name, i);
     }));
-    await setSynced({ folder: `flux${name}_${name}` });
+    await setSynced({ folder: await appSyncthingFolderId(env.clients[HOLDERS[0]].container, name, name) });
 
     outpoints = {};
     for (let i = 0; i < env.clients.length; i += 1) {
@@ -333,7 +338,7 @@ describe('the committee heals its dark seat, and the owner re-deals the walk', f
     expect(yielded.status).to.equal(200);
     await env.clients[masterIndex].waitForEvent('quorumGrant:yielded', (d) => d.key === `${name}/master`, 60000, { afterId: markers[masterIndex] });
     await Promise.all(HOLDERS.map((i) => waitForReconcileActuated(
-      env.clients[i], `${name}_${name}`, 'settledStopped', 90000, { afterId: markers[i] },
+      env.clients[i], componentIdentifier(name), 'settledStopped', 90000, { afterId: markers[i] },
     )));
     const submitted = await submitReroll(1);
     const submittedBody = await submitted.text();
@@ -429,7 +434,7 @@ describe('the committee heals its dark seat, and the owner re-deals the walk', f
         return rows.length > 0 && rows.every((c) => c.accepted.released === true);
       }, { timeout: 60000, interval: 5000, label: 'every generation-1 row naming the master is released' });
       await Promise.all(HOLDERS.map((i) => waitForReconcileActuated(
-        env.clients[i], `${name}_${name}`, 'settledStopped', 90000, { afterId: markers[i] },
+        env.clients[i], componentIdentifier(name), 'settledStopped', 90000, { afterId: markers[i] },
       )));
 
       // restart into the drain: nothing at generation 2 while the chain stands still

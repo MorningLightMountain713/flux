@@ -1,7 +1,7 @@
 import { describe, it, before, after } from 'mocha';
 import { expect } from 'chai';
 import { createTestEnv } from '../framework/test-env.js';
-import { execInContainer } from '../framework/container.js';
+import { appDataRoot, appSyncthingFolderId, componentIdentifier, execInContainer } from '../framework/container.js';
 import { pushImage } from '../framework/registry-helper.js';
 import { buildSeedableApp } from '../framework/seed-helper.js';
 import { REGISTRY_REPO_HOST, getSubnetConfig } from '../framework/subnet-config.js';
@@ -47,10 +47,12 @@ describe('a restore fetches its archive from where it was told', function () {
   const ts = Date.now();
   const appName = `e2erem${ts}`;
   const comp = `${appName}c`;
-  const folderId = `flux${comp}_${appName}`;
-  const dir = `/mnt/appdata/flux-apps/${folderId}`;
-  const remoteArchive = `${dir}/backup/remote/backup_${comp.toLowerCase()}.tar.gz`;
-  const uploadArchive = `${dir}/backup/upload/backup_${comp.toLowerCase()}.tar.gz`;
+  // The component's folder id and directory are read off its container once it
+  // is installed, never spelled.
+  let folderId;
+  let dir;
+  let remoteArchive;
+  let uploadArchive;
 
   let auth;
   let nodeIp;
@@ -119,7 +121,11 @@ describe('a restore fetches its archive from where it was told', function () {
 
     const installAfter = client.getLastEventId();
     await installOnNodes(env, app, [0]);
-    await waitForReconcileActuated(client, `${comp}_${appName}`, 'dataCleared', 90000, { afterId: installAfter });
+    await waitForReconcileActuated(client, componentIdentifier(appName, comp), 'dataCleared', 90000, { afterId: installAfter });
+    folderId = await appSyncthingFolderId(client.container, appName, comp);
+    dir = await appDataRoot(client.container, appName, comp);
+    remoteArchive = `${dir}/backup/remote/backup_${comp.toLowerCase()}.tar.gz`;
+    uploadArchive = `${dir}/backup/upload/backup_${comp.toLowerCase()}.tar.gz`;
     await setSynced({ ip: nodeIp, folder: folderId });
 
     auth = await authenticate(client.url, appOwnerKey());

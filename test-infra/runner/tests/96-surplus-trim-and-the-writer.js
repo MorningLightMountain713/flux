@@ -4,7 +4,7 @@ import { createTestEnv } from '../framework/test-env.js';
 import { pushImage } from '../framework/registry-helper.js';
 import { buildSeedableSyncthingApp } from '../framework/seed-helper.js';
 import { getSubnetConfig } from '../framework/subnet-config.js';
-import { execInContainer } from '../framework/container.js';
+import { componentIdentifier, execInContainer, syncthingFolderIdOf } from '../framework/container.js';
 import {
   bootAndPeer, placeGAppInOrder, electionOrder, installedInstanceIndices,
 } from '../framework/reconciler-suite.js';
@@ -118,10 +118,10 @@ describe('a surplus copy that is also the writer', function () {
     app = await buildSeedableSyncthingApp({
       name: appName, mode: 'g', instances: 3,
     });
-    identifier = `${appName}_${appName}`;
-    folder = `flux${identifier}`;
+    identifier = componentIdentifier(appName);
+    folder = syncthingFolderIdOf(identifier);
     order = await placeGAppInOrder(env, app, {
-      placementOrder: PLACEMENT_ORDER, folder, identifier,
+      placementOrder: PLACEMENT_ORDER, identifier,
     });
 
     // Every holder's folder complete and a connected peer holding it, or the

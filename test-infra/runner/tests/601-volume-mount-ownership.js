@@ -2,7 +2,16 @@
 import { describe, it, before, after } from 'mocha';
 import { expect } from 'chai';
 import { createTestEnv } from '../framework/test-env.js';
-import { execInContainer, getAppContainerStatus, restartFluxos } from '../framework/container.js';
+import {
+  appDataRoot,
+  appSyncthingFolderId,
+  appVolumeFile,
+  componentIdentifier,
+  execInContainer,
+  getAppContainerStatus,
+  requireAppContainerName,
+  restartFluxos,
+} from '../framework/container.js';
 import { pushImage } from '../framework/registry-helper.js';
 import { buildSeedableApp, buildSeedableEnterpriseApp } from '../framework/seed-helper.js';
 import {
@@ -45,9 +54,6 @@ const subnet = getSubnetConfig();
 // such rows (prepareInstalledAppsCollection's backfill rule; 310's captures
 // show the containers spelled fluxe2eopstop..._e2eopstop...). Deterministic by
 // construction - a registration-row read here races the seeding it precedes.
-const appId = (name) => `flux${name}_${name}`;
-const appDir = (name) => `/mnt/appdata/flux-apps/${appId(name)}`;
-const volFile = (name) => `/mnt/appdata/${appId(name)}FLUXFSVOL`;
 
 async function isMountpoint(container, dir) {
   const r = await execInContainer(container, `mountpoint -q ${dir}`);
@@ -104,17 +110,18 @@ describe('FluxOS-owned volume mounting (no crontab) + inert unmounted app dirs',
   const rmName = `e2evolrm${ts}`; // plain app on node 3 (uninstall deletes image)
   const entName = `e2evolent${ts}`; // ENTERPRISE app on node 4 (reboot remount for the encrypted-compose class)
   // Named from the app's minted identity, so resolved in before() rather than spelled.
-  let syncIdentifier;
-  let inertIdentifier;
+  const syncIdentifier = componentIdentifier(syncName);
+  const inertIdentifier = componentIdentifier(inertName);
+  let syncDir; let syncVol; let syncContainer;
+  let rebootDir;
+  let inertDir; let inertVol; let inertContainer;
+  let rmVol; let rmDir;
 
   before(async function () {
     this.timeout(480000);
     env = await createTestEnv({ hookCtx: this, nodes: 10, tickerAutostart: false });
     await bootAndPeer(env);
     await resetSyncState();
-    syncIdentifier = appId(syncName).replace(/^flux/, '');
-    inertIdentifier = appId(inertName).replace(/^flux/, '');
-
     // first-run reset first, real data on disk second, pin synced LAST - an
     // index claiming bytes over an empty disk is the phantom state the guard
     // demotes, and the demote/hold would latch the app down mid-suite
@@ -123,10 +130,19 @@ describe('FluxOS-owned volume mounting (no crontab) + inert unmounted app dirs',
     await waitForReconcileActuated(env.clients[0], syncIdentifier, 'dataCleared', 60000, { afterId: syncInstallAfter });
     await seedSyncScopedData(env, syncName, 0);
     // pin the folder synced so the leader promotes and the app runs steadily
-    await setSynced({ ip: subnet.nodeIp(1), folder: appId(syncName) });
+    await setSynced({ ip: subnet.nodeIp(1), folder: await appSyncthingFolderId(env.clients[0].container, syncName, syncName) });
     await installPlainApp(env, rebootName, 1);
     await installPlainApp(env, inertName, 2);
     await installPlainApp(env, rmName, 3);
+    syncDir = await appDataRoot(env.clients[0].container, syncName);
+    syncVol = await appVolumeFile(env.clients[0].container, syncName);
+    syncContainer = await requireAppContainerName(env.clients[0].container, syncName, syncName);
+    rebootDir = await appDataRoot(env.clients[1].container, rebootName);
+    inertDir = await appDataRoot(env.clients[2].container, inertName);
+    inertVol = await appVolumeFile(env.clients[2].container, inertName);
+    inertContainer = await requireAppContainerName(env.clients[2].container, inertName, inertName);
+    rmVol = await appVolumeFile(env.clients[3].container, rmName);
+    rmDir = await appDataRoot(env.clients[3].container, rmName);
 
     await pushImage(entName, 'v1');
     const entApp = await buildSeedableEnterpriseApp({
@@ -159,8 +175,8 @@ describe('FluxOS-owned volume mounting (no crontab) + inert unmounted app dirs',
   it('install loop-mounts the volume and creates NO @reboot crontab entry', async function () {
     this.timeout(120000);
     const c0 = env.clients[0].container;
-    await waitFor(() => isMountpoint(c0, appDir(syncName)), { timeout: 30000, interval: 2000, label: 'volume mounted after install' });
-    expect(await fileExists(c0, volFile(syncName))).to.equal(true);
+    await waitFor(() => isMountpoint(c0, syncDir), { timeout: 30000, interval: 2000, label: 'volume mounted after install' });
+    expect(await fileExists(c0, syncVol)).to.equal(true);
     expect(await crontabVolumeEntries(c0)).to.equal(0);
     expect(await crontabVolumeEntries(env.clients[1].container)).to.equal(0);
     await waitFor(() => isUp(env.clients[0], syncName), { timeout: 90000, interval: 2000, label: 'r: app running' });
@@ -169,8 +185,8 @@ describe('FluxOS-owned volume mounting (no crontab) + inert unmounted app dirs',
   it('rejects writes to the unmounted app dir (EPERM) and self-heals the mount without a restart', async function () {
     this.timeout(120000);
     const client = env.clients[0];
-    const dir = appDir(syncName);
-    const vol = volFile(syncName);
+    const dir = syncDir;
+    const vol = syncVol;
 
     // THE PROBE RUNS IN A PRIVATE MOUNT NAMESPACE, so FluxOS never sees the
     // volume go away and there is nothing to outrun.
@@ -210,7 +226,7 @@ describe('FluxOS-owned volume mounting (no crontab) + inert unmounted app dirs',
     expect(inodeBefore, `no backing image to remount: ${vol}`).to.match(/^\d+$/);
 
     await execInContainer(client.container,
-      `docker stop ${appId(syncName)} >/dev/null 2>&1; umount ${dir} || true`);
+      `docker stop ${syncContainer} >/dev/null 2>&1; umount ${dir} || true`);
 
     // FluxOS remounts the volume (reconciler / monitor repair) and restarts the app
     await waitFor(() => isMountpoint(client.container, dir), { timeout: 60000, interval: 2000, label: 'volume remounted (self-heal)' });
@@ -229,21 +245,21 @@ describe('FluxOS-owned volume mounting (no crontab) + inert unmounted app dirs',
     this.timeout(180000);
     const client = env.clients[0];
     const c0 = client.container;
-    const entry = `@reboot while [ ! -f ${volFile(syncName)} ]; do sleep 5; done && sudo mount -o loop ${volFile(syncName)} ${appDir(syncName)} #${appId(syncName)}`;
+    const entry = `@reboot while [ ! -f ${syncVol} ]; do sleep 5; done && sudo mount -o loop ${syncVol} ${syncDir} #${syncContainer}`;
     await execInContainer(c0, `(crontab -l 2>/dev/null; echo '${entry}') | crontab -`);
     expect(await crontabVolumeEntries(c0)).to.equal(1);
 
     await restartFluxos(c0);
 
     await waitFor(async () => (await crontabVolumeEntries(c0)) === 0, { timeout: 120000, interval: 3000, label: 'legacy crontab entry removed' });
-    expect(await isMountpoint(c0, appDir(syncName))).to.equal(true);
+    expect(await isMountpoint(c0, syncDir)).to.equal(true);
     await waitFor(() => isUp(client, syncName), { timeout: 90000, interval: 2000, label: 'app running after FluxOS restart' });
   });
 
   it('remounts the volume after a machine reboot with an EMPTY crontab (incident regression)', async function () {
     this.timeout(300000);
     let client = env.clients[1];
-    const dir = appDir(rebootName);
+    const dir = rebootDir;
     await waitFor(() => isUp(client, rebootName), { timeout: 60000, interval: 2000, label: 'running before reboot' });
     expect(await isMountpoint(client.container, dir)).to.equal(true);
 
@@ -262,7 +278,7 @@ describe('FluxOS-owned volume mounting (no crontab) + inert unmounted app dirs',
   it('holds an app inert when its backing image is missing: no start, nothing written to the bare dir', async function () {
     this.timeout(180000);
     const client = env.clients[2];
-    const dir = appDir(inertName);
+    const dir = inertDir;
     await waitFor(() => isUp(client, inertName), { timeout: 60000, interval: 2000, label: 'running before image loss' });
 
     const afterId = client.getLastEventId();
@@ -272,7 +288,7 @@ describe('FluxOS-owned volume mounting (no crontab) + inert unmounted app dirs',
     // the self-heal instead of reported unavailable). The lazy unmount detaches
     // the host dir under the running container without emitting any event.
     const r = await execInContainer(client.container,
-      `umount -l ${dir} && rm -f ${volFile(inertName)} && docker stop ${appId(inertName)} >/dev/null 2>&1`);
+      `umount -l ${dir} && rm -f ${inertVol} && docker stop ${inertContainer} >/dev/null 2>&1`);
     expect(r.exitCode, `teardown failed: ${r.output}`).to.equal(0);
 
     // the reconciler must report the unavailable volume and never start
@@ -293,7 +309,7 @@ describe('FluxOS-owned volume mounting (no crontab) + inert unmounted app dirs',
     // demonstrably works, and here it demonstrably cannot.
     const client = env.clients[2];
     const c2 = client.container;
-    const entry = `@reboot while [ ! -f ${volFile(inertName)} ]; do sleep 5; done && sudo mount -o loop ${volFile(inertName)} ${appDir(inertName)} #${appId(inertName)}`;
+    const entry = `@reboot while [ ! -f ${inertVol} ]; do sleep 5; done && sudo mount -o loop ${inertVol} ${inertDir} #${inertContainer}`;
     await execInContainer(c2, `(crontab -l 2>/dev/null; echo '${entry}') | crontab -`);
     expect(await crontabVolumeEntries(c2)).to.equal(1);
 
@@ -312,7 +328,7 @@ describe('FluxOS-owned volume mounting (no crontab) + inert unmounted app dirs',
   it('uninstall deletes the discovered backing image with NO crontab entry to parse (orphan regression)', async function () {
     this.timeout(180000);
     const client = env.clients[3];
-    expect(await fileExists(client.container, volFile(rmName))).to.equal(true);
+    expect(await fileExists(client.container, rmVol)).to.equal(true);
     // old code recovered the image path by parsing the crontab entry; make sure
     // there is none, as in the incident
     await execInContainer(client.container, 'crontab -r 2>/dev/null || true');
@@ -322,15 +338,15 @@ describe('FluxOS-owned volume mounting (no crontab) + inert unmounted app dirs',
     await res.text(); // streamed progress; completion is confirmed via the event
     await waitForAppRemoved(client, rmName, 120000);
 
-    await waitFor(async () => !(await fileExists(client.container, volFile(rmName))), { timeout: 30000, interval: 2000, label: 'backing image deleted' });
-    expect(await fileExists(client.container, appDir(rmName))).to.equal(false);
+    await waitFor(async () => !(await fileExists(client.container, rmVol)), { timeout: 30000, interval: 2000, label: 'backing image deleted' });
+    expect(await fileExists(client.container, rmDir)).to.equal(false);
   });
 
   it('remounts an ENTERPRISE app volume after a reboot with an empty crontab (incident app class)', async function () {
     this.timeout(300000);
     let client = env.clients[4];
-    const dir = appDir(entName);
     await waitFor(() => isUp(client, entName), { timeout: 120000, interval: 2000, label: 'enterprise app running' });
+    const dir = await appDataRoot(client.container, entName);
     expect(await isMountpoint(client.container, dir)).to.equal(true);
 
     // the local row must be in the production enterprise shape: compose emptied,

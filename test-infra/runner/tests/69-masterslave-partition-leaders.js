@@ -3,7 +3,7 @@ import { expect } from 'chai';
 import { createTestEnv } from '../framework/test-env.js';
 import { pushImage } from '../framework/registry-helper.js';
 import { buildSeedableSyncthingApp } from '../framework/seed-helper.js';
-import { getAppContainerStatus } from '../framework/container.js';
+import { appSyncthingFolderId, componentIdentifier, getAppContainerStatus } from '../framework/container.js';
 import { resetFdm } from '../framework/fdm-control.js';
 import { setSynced, resetSyncState } from '../framework/syncthing-control.js';
 import { getSubnetConfig } from '../framework/subnet-config.js';
@@ -51,7 +51,8 @@ describe('a g: app with holders on both sides of a partition', function () {
   let env;
   dumpLogsOnFailure(() => env);
   const appName = `e2epart${Date.now()}`;
-  const folder = `flux${appName}_${appName}`;
+  // The folder id is read off a holder's container once the app is placed.
+  let folder;
   const holders = [0, 1, 2];
   // The seed is the lowest address among the holders and the election does not
   // choose it - g-app-placement.js owns that rule, so this suite states the
@@ -95,8 +96,9 @@ describe('a g: app with holders on both sides of a partition', function () {
     await pushImage(appName, 'v1');
     const app = await buildSeedableSyncthingApp({ name: appName, mode: 'g' });
     await placeGAppInOrder(env, app, {
-      placementOrder, folder, identifier: `${appName}_${appName}`,
+      placementOrder, identifier: componentIdentifier(appName),
     });
+    folder = await appSyncthingFolderId(env.clients[holders[0]].container, appName, appName);
   });
 
   after(async function () {

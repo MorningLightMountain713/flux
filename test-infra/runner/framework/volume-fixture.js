@@ -11,7 +11,7 @@
 // clean passes. A fixture that silently did not happen turns an assertion into
 // decoration, so the check belongs next to the write, not in the test.
 
-import { execInContainer } from './container.js';
+import { appDataRoot, execInContainer } from './container.js';
 
 // A plausible application uid: an app runs as something like www-data, not as
 // root, and its files belong to that user. Copies MUST keep belonging to it -
@@ -23,8 +23,10 @@ import { execInContainer } from './container.js';
 export const APP_UID = 33;
 export const APP_GID = 33;
 
-export const appId = (name) => `flux${name}_${name}`;
-export const volumeRoot = (name) => `/mnt/appdata/flux-apps/${appId(name)}`;
+/** The app's volume root on this node, read off the container that carries its identity. */
+export async function volumeRoot(container, name) {
+  return appDataRoot(container, name, name);
+}
 
 // Single-quote for the shell. Fixture content is chosen by the suites, but a
 // literal $ or backtick in one must stay a literal rather than becoming
@@ -111,7 +113,7 @@ export async function isSymlink(container, path) {
  * @returns {Promise<string>} the volume root the files were written under
  */
 export async function seedVolumeTree(container, name, files) {
-  const root = volumeRoot(name);
+  const root = await volumeRoot(container, name);
   const paths = Object.keys(files);
 
   for (const relative of paths) {
@@ -149,7 +151,7 @@ export async function seedVolumeTree(container, name, files) {
  * that was renamed - silently carries it into the next one.
  */
 export async function resetVolume(container, name, { keep = ['appdata'] } = {}) {
-  const root = volumeRoot(name);
+  const root = await volumeRoot(container, name);
   const exclusions = keep.map((k) => `! -name ${sq(k)}`).join(' ');
   await run(container, `find ${sq(root)} -mindepth 1 -maxdepth 1 ${exclusions} -exec rm -rf {} +`, `reset ${root}`);
 }
@@ -167,7 +169,7 @@ export async function resetVolume(container, name, { keep = ['appdata'] } = {}) 
  * @param {number} megabytes
  */
 export async function seedLargeFile(container, name, relative, megabytes) {
-  const root = volumeRoot(name);
+  const root = await volumeRoot(container, name);
   const path = `${root}/${relative}`;
   await run(
     container,
@@ -191,7 +193,7 @@ export async function seedLargeFile(container, name, relative, megabytes) {
  * nothing.
  */
 export async function seedSymlink(container, name, relative, target) {
-  const root = volumeRoot(name);
+  const root = await volumeRoot(container, name);
   const path = `${root}/${relative}`;
   await run(container, `mkdir -p "$(dirname ${sq(path)})" && ln -sfn ${sq(target)} ${sq(path)}`, `link ${relative}`);
 

@@ -1,7 +1,16 @@
 import { describe, it, before, after } from 'mocha';
 import { expect } from 'chai';
 import { createTestEnv } from '../framework/test-env.js';
-import { execInContainer } from '../framework/container.js';
+import { NotPresentError } from '../framework/errors.js';
+import {
+  appDataRoot,
+  appSyncthingFolderId,
+  appVolumeFile,
+  componentIdentifier,
+  execInContainer,
+  isAppContainerRunning,
+  requireAppContainerName,
+} from '../framework/container.js';
 import { pushImage } from '../framework/registry-helper.js';
 import { buildSeedableSyncthingApp } from '../framework/seed-helper.js';
 import { electMaster, resetFdm } from '../framework/fdm-control.js';
@@ -33,12 +42,17 @@ import { dumpLogsOnFailure } from '../framework/log-on-failure.js';
 
 const subnet = getSubnetConfig();
 
-const appId = (name) => `flux${name}_${name}`;
-const appDir = (name) => `/mnt/appdata/flux-apps/${appId(name)}`;
-const volFile = (name) => `/mnt/appdata/${appId(name)}FLUXFSVOL`;
-
+// 'none' when the node holds no container for the app: a restore that
+// destroyed it must read as a change, not as an error in the probe.
 async function containerId(client, name) {
-  const r = await execInContainer(client.container, `docker inspect -f '{{.Id}}' ${appId(name)} 2>/dev/null || echo none`);
+  let containerName;
+  try {
+    containerName = await requireAppContainerName(client.container, name, name);
+  } catch (error) {
+    if (error instanceof NotPresentError) return 'none';
+    throw error;
+  }
+  const r = await execInContainer(client.container, `docker inspect -f '{{.Id}}' ${containerName} 2>/dev/null || echo none`);
   return r.stdout.trim();
 }
 
@@ -48,28 +62,28 @@ async function pathExists(client, path) {
 }
 
 async function containerRunning(client, name) {
-  const r = await execInContainer(client.container, `docker inspect -f '{{.State.Running}}' ${appId(name)} 2>/dev/null || echo false`);
-  return r.stdout.trim() === 'true';
+  return isAppContainerRunning(client.container, name);
 }
 
 async function readMarker(client, name) {
-  const r = await execInContainer(client.container, `cat ${appDir(name)}/appdata/marker.txt 2>/dev/null || echo missing`);
+  const r = await execInContainer(client.container, `cat ${await appDataRoot(client.container, name)}/appdata/marker.txt 2>/dev/null || echo missing`);
   return r.stdout.trim();
 }
 
 async function listAppdata(client, name) {
-  const r = await execInContainer(client.container, `ls -A ${appDir(name)}/appdata 2>/dev/null | sort | tr '\\n' ' '`);
+  const r = await execInContainer(client.container, `ls -A ${await appDataRoot(client.container, name)}/appdata 2>/dev/null | sort | tr '\\n' ' '`);
   return r.stdout.trim();
 }
 
 // Write an archive into the app's local backup directory, which is where a
 // `type: local` restore reads it from.
 async function stageArchive(client, name, { corrupt = false } = {}) {
-  const target = `${appDir(name)}/backup/local/backup_${name}.tar.gz`;
+  const dir = await appDataRoot(client.container, name);
+  const target = `${dir}/backup/local/backup_${name}.tar.gz`;
   const cmd = corrupt
-    ? `mkdir -p ${appDir(name)}/backup/local && head -c 4096 /dev/urandom > ${target} && ls -l ${target}`
+    ? `mkdir -p ${dir}/backup/local && head -c 4096 /dev/urandom > ${target} && ls -l ${target}`
     : `rm -rf /tmp/stage && mkdir -p /tmp/stage/Config && printf 'Difficulty=None\\n' > /tmp/stage/Config/settings.ini `
-      + `&& mkdir -p ${appDir(name)}/backup/local && tar -czf ${target} -C /tmp/stage . && ls -l ${target}`;
+      + `&& mkdir -p ${dir}/backup/local && tar -czf ${target} -C /tmp/stage . && ls -l ${target}`;
   const r = await execInContainer(client.container, cmd);
   expect(r.exitCode, `staging the archive failed: ${r.output}`).to.equal(0);
   return target;
@@ -81,8 +95,7 @@ describe('a restore does not reach the other instances data', function () {
 
   const ts = Date.now();
   const appName = `e2erestore${ts}`;
-  const identifier = `${appName}_${appName}`;
-  const folder = appId(appName);
+  const identifier = componentIdentifier(appName);
 
   let auth;
   let peerContainerBefore;
@@ -105,18 +118,20 @@ describe('a restore does not reach the other instances data', function () {
       await waitForReconcileActuated(env.clients[i], identifier, 'dataCleared', 60000, { afterId: installAfters[k] });
       await seedSyncScopedData(env, appName, i);
     }));
+    const folder = await appSyncthingFolderId(env.clients[0].container, appName, appName);
     await Promise.all([0, 1].map((i) => setSynced({ ip: subnet.nodeIp(i + 1), folder })));
 
     // something identifiable in each copy, so "untouched" is checkable rather
     // than inferred from the directory still existing
-    await Promise.all([0, 1].map((i) => execInContainer(
+    await Promise.all([0, 1].map(async (i) => execInContainer(
       env.clients[i].container,
-      `printf 'node-${i}-world\\n' > ${appDir(appName)}/appdata/marker.txt`,
+      `printf 'node-${i}-world\\n' > ${await appDataRoot(env.clients[i].container, appName)}/appdata/marker.txt`,
     )));
 
     await electMaster(appName, env.clients[0].ip);
     await waitForReconcilerDesiredChanged(env.clients[0], identifier, 'running', 90000);
-    await waitFor(() => pathExists(env.clients[1], volFile(appName)), {
+    const peerVol = await appVolumeFile(env.clients[1].container, appName);
+    await waitFor(() => pathExists(env.clients[1], peerVol), {
       timeout: 60000, interval: 2000, label: 'peer volume present before any restore',
     });
 
@@ -195,8 +210,8 @@ describe('a restore does not reach the other instances data', function () {
     // these four are the assertion - deliberately outcomes on disk rather than
     // the absence of a request in a log, which is only as trustworthy as the
     // lookup behind it and reads as a pass when that lookup is wrong.
-    expect(await pathExists(peer, volFile(appName)), 'peer FLUXFSVOL').to.equal(true);
-    expect(await pathExists(peer, appDir(appName)), 'peer app directory').to.equal(true);
+    expect(await pathExists(peer, await appVolumeFile(peer.container, appName)), 'peer FLUXFSVOL').to.equal(true);
+    expect(await pathExists(peer, await appDataRoot(peer.container, appName)), 'peer app directory').to.equal(true);
     expect(await readMarker(peer, appName)).to.equal('node-1-world');
     expect(await containerId(peer, appName)).to.equal(peerContainerBefore);
   });
@@ -209,8 +224,7 @@ describe('a restore does not reach the other instances data', function () {
   // fleet is the expensive part and stays shared; a second app is cheap.
   describe('a restore on a node the election did not choose', () => {
     const ownName = `e2eelect${ts}`;
-    const ownIdentifier = `${ownName}_${ownName}`;
-    const ownFolder = appId(ownName);
+    const ownIdentifier = componentIdentifier(ownName);
 
     before(async function () {
       this.timeout(420000);
@@ -222,6 +236,7 @@ describe('a restore does not reach the other instances data', function () {
         await waitForReconcileActuated(env.clients[i], ownIdentifier, 'dataCleared', 60000, { afterId: afters[k] });
         await seedSyncScopedData(env, ownName, i);
       }));
+      const ownFolder = await appSyncthingFolderId(env.clients[0].container, ownName, ownName);
       await Promise.all([0, 1].map((i) => setSynced({ ip: subnet.nodeIp(i + 1), folder: ownFolder })));
       // node 0 holds it, so node 1 is a standby the election has stopped - which
       // is the state a restore must not undo

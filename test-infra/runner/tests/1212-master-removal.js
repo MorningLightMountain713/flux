@@ -7,7 +7,7 @@ import { bootAndPeer, installOnNodes, seedSyncScopedData } from '../framework/re
 import { buildSeedableSyncthingApp } from '../framework/seed-helper.js';
 import { pushImage } from '../framework/registry-helper.js';
 import { setSynced } from '../framework/syncthing-control.js';
-import { getAppContainerStatus } from '../framework/container.js';
+import { appSyncthingFolderId, componentIdentifier, getAppContainerStatus } from '../framework/container.js';
 import { waitFor, waitForAppInstalled, waitForReconcileActuated } from '../framework/wait.js';
 import { authenticate } from '../auth.js';
 import { appOwnerKey } from '../framework/keys.js';
@@ -100,10 +100,10 @@ describe('removing the master\'s app from a live node', function () {
     // Synced-on-every-holder before anything else — the stall ladder otherwise
     // removes the standbys mid-test (see 1209's before for the full account).
     await Promise.all(HOLDERS.map(async (i, k) => {
-      await waitForReconcileActuated(env.clients[i], `${name}_${name}`, 'dataCleared', 60000, { afterId: installAfters[k] });
+      await waitForReconcileActuated(env.clients[i], componentIdentifier(name), 'dataCleared', 60000, { afterId: installAfters[k] });
       await seedSyncScopedData(env, name, i);
     }));
-    await setSynced({ folder: `flux${name}_${name}` });
+    await setSynced({ folder: await appSyncthingFolderId(env.clients[HOLDERS[0]].container, name, name) });
 
     holderOutpoints = {};
     ownerAuths = new Map();
