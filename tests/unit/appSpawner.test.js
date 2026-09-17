@@ -274,7 +274,6 @@ describe('appSpawner tests', () => {
       },
       '../fluxNetworkHelper': {
         isPortOpen: sinon.stub().resolves(true),
-        isPortUserBlocked: sinon.stub().returns(false),
         getFluxNodePublicKey: sinon.stub().returns(MY_OPERATOR),
         // Development's placement hold (#1774/#1784), added to the spawner after this
         // suite's stub map was written. Unstubbed it is undefined, so the FIRST thing

@@ -1448,7 +1448,7 @@ async function _buildEnv(
   containers.fdmStub = fdmStub;
   watchInfra(env, 'fdmStub', fdmStub);
 
-  const fluxDriveStub = await new StaticIpContainer('flux-e2e-fluxdrive-stub')
+  const fluxDriveStub = await new StaticIpContainer(image('flux-e2e-fluxdrive-stub'))
     .withStaticIp(networkName, FLUXDRIVE_IP)
     .withEnvironment({ FLUXDRIVE_PORT: '16140', CONTROL_PORT: '16141' })
     .withWaitStrategy(new HttpPollWaitStrategy(`http://${FLUXDRIVE_IP}:16141/health`))
