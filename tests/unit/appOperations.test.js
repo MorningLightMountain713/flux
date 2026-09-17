@@ -1719,6 +1719,23 @@ describe('appOperations tests', () => {
   // BACK: an error after the stop (ENOSPC on the archive is the classic) that only
   // releases the registry lease leaves operationDesired='stopped' for the life of
   // the process - the app is stranded down and no decider can outrank the hold.
+  describe('appendBackupTask validation', () => {
+    it('refuses a backup that is not a list of components, in those words', async () => {
+      // eslint-disable-next-line global-require
+      const verificationHelper = require('../../ZelBack/src/services/verificationHelper');
+      sinon.stub(verificationHelper, 'verifyPrivilege').resolves(true);
+      const req = { body: { appname: 'myapp', backup: 'web' }, headers: {} };
+      const res = { json: sinon.stub(), status: sinon.stub().returnsThis(), setHeader: sinon.stub() };
+
+      await appOperations.appendBackupTask(req, res);
+
+      expect(res.json.calledOnce).to.be.true;
+      const response = res.json.firstCall.args[0];
+      expect(response.status).to.equal('error');
+      expect(response.data.message).to.equal('backup must be a list of components');
+    });
+  });
+
   describe('appendBackupTask hold unwind', () => {
     // The archive itself, which is what these assert. The endpoint's half is the
     // validation, the privilege check and the 202; the work runs past both.

@@ -1083,6 +1083,9 @@ async function appendBackupTask(req, res) {
     if (!appname || !backup) {
       throw new Error('appname and backup parameters are mandatory');
     }
+    if (!Array.isArray(backup)) {
+      throw new Error('backup must be a list of components');
+    }
     if (operationRegistry.isHeld(appname)) {
       throw new Error('An operation is already in progress for this app...');
     }
