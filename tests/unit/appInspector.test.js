@@ -2692,7 +2692,10 @@ describe('appInspector tests', () => {
         '../utils/appUtilities': { getContainerStorage: sinon.stub().returns(0) },
         '../utils/cpuBurstHelper': { isBurstActive: sinon.stub().resolves(false) },
         'node-cmd': { run: sinon.stub() },
-        '../appRuntime/deploymentProvider': { resolveRequestContainer: sinon.stub().resolves('mycomponent_myapp') },
+        '../appRuntime/deploymentProvider': {
+          appNameFromRequest: sinon.stub().returns('myapp'),
+          resolveRequestContainer: sinon.stub().resolves('mycomponent_myapp'),
+        },
       });
 
       const handlers = {};
