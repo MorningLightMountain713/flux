@@ -85,6 +85,13 @@ const evictedEvent = (nodeNum) => ({
   createdAt: new Date(),
 });
 
+// Where apps run on one holder, as the joiner derives it from its app state
+// event log and serves it.
+async function locationsByIp(client, ip) {
+  const res = await client.getAllAppLocations();
+  return (Array.isArray(res?.data) ? res.data : []).filter((row) => row.ip === ip);
+}
+
 async function bootAndPeer(env, nodeIndices) {
   const clients = nodeIndices.map((i) => env.clients[i]).filter(Boolean);
   for (const client of clients) await waitForDaemonReady(client);
@@ -256,7 +263,7 @@ describe('Sync response: eviction, pruning and forged events', function () {
     // inside the window, the response never carried them.
     const windowMs = loadSharedConfig().fluxapps.locationTtlS * 1000;
     const spent = Date.now() - stamp;
-    const seeded = await dbClient(11).getAppLocationsByIp(socketAddr(PRUNE_NODE));
+    const seeded = await locationsByIp(env.clients[10], socketAddr(PRUNE_NODE));
     expect(seeded.map((row) => row.name), spent > windowMs
       ? `setup spent ${spent}ms of the ${windowMs}ms acceptance window, so the seeded `
         + 'broadcasts expired before the joiner read them'
@@ -272,7 +279,7 @@ describe('Sync response: eviction, pruning and forged events', function () {
 
   it('should keep an evicted node evicted, even when a later slice reports it running', async function () {
     this.timeout(60000);
-    const rows = await dbClient(11).getAppLocationsByIp(socketAddr(EVICTED_NODE));
+    const rows = await locationsByIp(env.clients[10], socketAddr(EVICTED_NODE));
 
     expect(rows, 'evicted node has location rows again').to.be.an('array').with.length(0);
   });
@@ -290,7 +297,7 @@ describe('Sync response: eviction, pruning and forged events', function () {
     // flight, it does not wait for one that is not coming.
     let names = [];
     await waitFor(async () => {
-      names = (await dbClient(11).getAppLocationsByIp(socketAddr(PRUNE_NODE))).map((r) => r.name);
+      names = (await locationsByIp(env.clients[10], socketAddr(PRUNE_NODE))).map((r) => r.name);
       return names.includes('keptapp') && !names.includes('droppedapp');
     }, {
       timeout: 45000,
@@ -304,7 +311,7 @@ describe('Sync response: eviction, pruning and forged events', function () {
 
   it('should never let a forged broadcast delete a location row', async function () {
     this.timeout(60000);
-    const rows = await dbClient(11).getAppLocationsByIp(socketAddr(FORGERY_NODE));
+    const rows = await locationsByIp(env.clients[10], socketAddr(FORGERY_NODE));
     const names = rows.map((r) => r.name);
 
     // The forged event names only realapp and carries the newest timestamp, so
