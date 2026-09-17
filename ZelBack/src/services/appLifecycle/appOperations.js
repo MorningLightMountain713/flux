@@ -2504,6 +2504,7 @@ async function peerComponentState({
     const held = heldResponse?.data?.data;
     if (Array.isArray(held)) {
       if (held.includes(appId)) {
+        fluxEventBus.count('masterSlave:decision', identifier, 'heldOnPeer');
         log.info(`activeStandby: component:${identifier} is held on peer (${label}) at ${ipToCheck}, will not start`);
         return PeerComponent.RUNNING;
       }
@@ -2673,6 +2674,9 @@ async function coordinateActiveStandbyApps() {
         // operator explicitly stopped this g: component; don't elect or act on it
         // eslint-disable-next-line no-await-in-loop
         if (await appsRuntimeState.isOperatorStopped(identifier)) {
+          // Every pass that honours the stop is tallied; the announcement below
+          // is the state change, made once.
+          fluxEventBus.count('masterSlave:decision', identifier, 'operatorStopped');
           // Announced on entry rather than every cycle: an operator stop is durable, so
           // at a 30s cadence a per-pass line is noise while silence is worse - the
           // component sits unelected indefinitely with the loop emitting nothing about
@@ -2972,6 +2976,8 @@ async function coordinateActiveStandbyApps() {
                 }
               }
             } else {
+              // This pass read a primary off FDM: the loop's cadence, tallied.
+              fluxEventBus.count('masterSlave:decision', identifier, 'primaryObserved');
               noPrimaryAnnounced.delete(identifier);
               activePrimaryByIdentifier.set(identifier, ip);
               primaryElectionCheckedAt.set(identifier, Date.now());

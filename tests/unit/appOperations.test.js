@@ -979,9 +979,13 @@ describe('appOperations tests', () => {
       sinon.stub(dockerService, 'getAppIdentifier').returns('appid');
       const appReconciler = require('../../ZelBack/src/services/appMonitoring/appReconciler');
       const setDesiredStub = sinon.stub(appReconciler, 'setControllerDesired');
+      const count = sinon.stub(fluxEventBus, 'count');
 
       await appOps.coordinateActiveStandbyApps();
       await new Promise((r) => { setImmediate(r); }); // flush the fire-and-forget hand-off
+
+      // a pass that read a primary off FDM is tallied, whichever node it names
+      sinon.assert.calledWithExactly(count, 'masterSlave:decision', identifier, 'primaryObserved');
 
       // IP-granular standby stop hands the active-standby component identifier
       // to the reconciler (the single actuator) - never the app name or a sibling.
@@ -1039,11 +1043,16 @@ describe('appOperations tests', () => {
       sinon.stub(dockerService, 'getAppIdentifier').returns(`flux${identifier}`);
       const publish = sinon.stub(fluxEventBus, 'publish');
 
+      const count = sinon.stub(fluxEventBus, 'count');
+
       await appOperations.coordinateActiveStandbyApps();
       await appOperations.coordinateActiveStandbyApps();
 
       // silence here is indistinguishable from a dead loop, but a line every 30s is noise
       expect(decisionsFor(publish, identifier, 'operatorStopExcluded')).to.have.lengthOf(1);
+      // the tally reports every pass that honoured the stop
+      expect(count.getCalls().filter((c) => c.args[1] === identifier && c.args[2] === 'operatorStopped'),
+        'each pass that left the stopped component alone is counted').to.have.lengthOf(2);
     });
 
     it('announces again after the operator lock is lifted and re-applied', async () => {
@@ -1218,7 +1227,9 @@ describe('appOperations tests', () => {
 
     it('holds the start when the peer holds the component', async () => {
       sinon.stub(axios, 'get').resolves(held([APP_ID, 'fluxother_app']));
+      const count = sinon.stub(fluxEventBus, 'count');
       expect(await ask()).to.equal(PeerComponent.RUNNING);
+      sinon.assert.calledWithExactly(count, 'masterSlave:decision', 'web_gapp', 'heldOnPeer');
     });
 
     it('clears the start only when the peer answers and does not hold it', async () => {
