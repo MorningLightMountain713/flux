@@ -1719,6 +1719,43 @@ describe('appOperations tests', () => {
   // BACK: an error after the stop (ENOSPC on the archive is the classic) that only
   // releases the registry lease leaves operationDesired='stopped' for the life of
   // the process - the app is stranded down and no decider can outrank the hold.
+  describe('runRestoreTask hold on a failed clear', () => {
+    // eslint-disable-next-line global-require
+    const IOUtils = require('../../ZelBack/src/services/IOUtils');
+    // eslint-disable-next-line global-require
+    const volumeService = require('../../ZelBack/src/services/utils/volumeService');
+
+    // A clear that fails leaves the directory neither copy: the component is
+    // held stopped rather than started on it, and the caller is told why.
+    it('holds the component whose appdata could not be cleared, in those words', async () => {
+      const deployment = await oneComponentDeployment('myapp', 'web');
+      sinon.stub(deploymentProvider, 'getInstalledDeployment').resolves(deployment);
+      sinon.stub(appsRepository, 'getGlobalAppInfo').resolves(await instantiatedSpec(await v9Spec({ name: 'myapp' })));
+      sinon.stub(deploymentProvider, 'buildDeployment').resolves(deployment);
+      const drive = sinon.stub(appReconciler, 'drive').resolves({ converged: true, failed: [] });
+      sinon.stub(appReconciler, 'observedContainerState').resolves({
+        reachable: true, exists: true, running: false, indeterminate: false,
+      });
+      const hold = sinon.stub(appReconciler, 'setControllerDesired');
+      sinon.stub(serviceHelper, 'delay').resolves();
+      sinon.stub(volumeService, 'listComponentVolumeMounts').resolves([{ replica: null, mount: '/vol', identifier: 'web_myapp' }]);
+      sinon.stub(IOUtils, 'removeDirectory').resolves(false);
+      const reported = [];
+
+      let failure = null;
+      try {
+        await appOperations.runRestoreTask('myapp', [{ component: 'web', restore: true }], 'local', 'auth', (line) => reported.push(String(line)));
+      } catch (error) {
+        failure = error;
+      }
+
+      expect(failure?.message, 'the caller is told the clear failed').to.match(/could not clear/i);
+      expect(hold.calledWith('web_myapp', 'stopped'), 'the half-cleared component is held stopped').to.be.true;
+      const startedAgain = drive.getCalls().some((c) => c.args[1] === 'running' && c.args[0].includes('web_myapp'));
+      expect(startedAgain, 'a component whose appdata is neither copy was started').to.equal(false);
+    });
+  });
+
   describe('appendBackupTask validation', () => {
     it('refuses a backup that is not a list of components, in those words', async () => {
       // eslint-disable-next-line global-require
