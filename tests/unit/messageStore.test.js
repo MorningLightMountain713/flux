@@ -89,6 +89,7 @@ describe('messageStore tests', () => {
       '../appDatabase/appsRepository': appsRepositoryStub,
       './appEventVerifier': appEventVerifierStub,
       './messageVerifier': { checkAndRequestApp: sinon.stub().resolves() },
+      '../utils/specCutover': { ensureProvidersRegistered: sinon.stub().resolves() },
       '../../lib/log': logStub,
       '../fluxService': { isSystemSecure: sinon.stub().resolves(false) },
       '../daemonService/daemonServiceMiscRpcs': {
@@ -733,6 +734,37 @@ describe('messageStore tests', () => {
         expect(result, `unexpected: ${result && result.message}`).to.deep.equal({ rebroadcast: true });
         expect(decrypt.calledOnce, 'the envelope is opened').to.be.true;
         expect(dbHelperStub.insertOneToDatabase.calledOnce).to.be.true;
+      });
+
+      // The providers are registered lazily, by the first local spec
+      // resolution; a node whose first sealed message arrives before that has
+      // none. The relay path needs one, so it asks for the registration.
+      it('registers the crypto providers itself when nothing else has yet', async () => {
+        const legacyMessage = { ...secureMessage, version: 1 };
+        const event = legacyEvent(legacyMessage, await sealedV8Spec({ name: 'enc-app' }));
+        appEventVerifierStub.deserializeTempMessage.resolves(event);
+        const registration = sinon.stub().callsFake(async () => loadSpecLibrary());
+        messageStore = proxyquire(
+          '../../ZelBack/src/services/appMessaging/messageStore',
+          buildProxyquireStubs({
+            '../benchmarkService': { isSystemSecure: sinon.stub().resolves(true) },
+            '../utils/specLibs': {
+              getSpec: sinon.stub().callsFake(async () => flux),
+              assertVersionActivated: sinon.stub(),
+            },
+            '../utils/specCutover': { ensureProvidersRegistered: registration },
+          }),
+        );
+        flux.EncryptedSpecV8.registerProvider(null);
+        try {
+          const result = await messageStore.storeAppTemporaryMessage(legacyMessage);
+
+          expect(result, `unexpected: ${result && result.message}`).to.deep.equal({ rebroadcast: true });
+          expect(registration.calledOnce, 'the registration is asked for').to.be.true;
+          expect(dbHelperStub.insertOneToDatabase.calledOnce).to.be.true;
+        } finally {
+          await loadSpecLibrary();
+        }
       });
 
       // A bad message is a rejection; a TypeError in this block is our own bug.
