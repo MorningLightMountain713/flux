@@ -8,7 +8,7 @@ import { REGISTRY_REPO_HOST, getSubnetConfig } from '../framework/subnet-config.
 import {
   setSynced, resetSyncState, resetFolderWrites, getPauseWrites, getFolderWrites,
 } from '../framework/syncthing-control.js';
-import { waitFor, waitForReconcileActuated } from '../framework/wait.js';
+import { START_ACTIONS, waitFor, waitForReconcileActuated } from '../framework/wait.js';
 import { bootAndPeer, installOnNodes } from '../framework/reconciler-suite.js';
 import { authenticate } from '../auth.js';
 import { appOwnerKey } from '../framework/keys.js';
@@ -93,9 +93,13 @@ describe('a restore acts on the components it was asked for, by their own folder
     const installAfter = env.clients[0].getLastEventId();
     await installOnNodes(env, app, [0]);
     // data goes down only after the sync layer's first-run reset has cleared
-    // appdata, or the phantom-index guard holds the components down
-    await Promise.all([compA, compB].map((comp) => waitForReconcileActuated(
+    // appdata - which removes the directory - and the component's next start
+    // has recreated it; written before that, the marker has nowhere to land.
+    const cleared = await Promise.all([compA, compB].map((comp) => waitForReconcileActuated(
       env.clients[0], `${comp}_${appName}`, 'dataCleared', 90000, { afterId: installAfter },
+    )));
+    await Promise.all([compA, compB].map((comp, i) => waitForReconcileActuated(
+      env.clients[0], `${comp}_${appName}`, START_ACTIONS, 90000, { afterId: cleared[i].id },
     )));
     for (const comp of [compA, compB]) {
       // eslint-disable-next-line no-await-in-loop
