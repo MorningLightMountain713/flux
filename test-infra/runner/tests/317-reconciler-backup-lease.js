@@ -131,11 +131,14 @@ describe('backup leases the whole app against the reconciler', function () {
     // paused - which proves a pass ran, not that one ran while it was held.
     const afterId = client.getLastEventId();
 
-    // a real monitor pass runs inside the window (the event proves it ran, so the
-    // assertion below is not vacuously green on a pass that never happened), and
-    // its write set must not carry the held folder - un-pausing it mid-backup is
-    // the propagated-deletion incident this whole change exists to prevent
-    const pass = await client.waitForEvent('syncthing:passComplete', () => true, 120000, { afterId });
+    // a real monitor pass runs inside the window: the pass reports the folder
+    // it held, so a pass that completed after the backup released cannot
+    // satisfy this and the writes read below are the window's own. Its write
+    // set must not carry the held folder - un-pausing it mid-backup is the
+    // propagated-deletion incident this whole change exists to prevent
+    const pass = await client.waitForEvent(
+      'syncthing:passComplete', (d) => d.heldForBusy?.includes(app.folder), 120000, { afterId },
+    );
     expect(pass.data.wrote, 'the monitor pass must not write the folder a backup is holding')
       .to.not.include(app.folder);
 

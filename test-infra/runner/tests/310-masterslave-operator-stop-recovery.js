@@ -131,7 +131,7 @@ describe('masterSlave recovery after an operator stop', function () {
     expect(res.status).to.equal('success');
     expect(res.data, 'a node the election is holding must never be told its app started')
       .to.not.equal(`Application ${appName} started`);
-    expect(res.data, 'and the operator is told which of the two it is').to.match(
+    expect(res.data, `and the operator is told which of the two it is: ${res.data}`).to.match(
       new RegExp(`^Application ${appName} will be started: .*election`),
     );
 
