@@ -10,3 +10,5 @@ warn.log
 .mypy_cache
 audit
 .claude
+fluxos.log
+fluxos.*.log
