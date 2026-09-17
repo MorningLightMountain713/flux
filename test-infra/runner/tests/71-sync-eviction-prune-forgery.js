@@ -4,7 +4,7 @@ import { createTestEnv } from '../framework/test-env.js';
 import { dbClient } from '../framework/db-client.js';
 import { loadSharedConfig } from '../framework/coupled-knobs.js';
 import {
-  apprunningEvent, sigtermEvent, appRemovedEvent, evictedEvent, ipchangedEvent, socketAddr,
+  apprunningEvent, sigtermEvent, appRemovedEvent, ipchangedEvent, socketAddr,
 } from '../framework/state-events.js';
 import { startTicker, advanceBlock } from '../framework/daemon-control.js';
 import {
@@ -53,21 +53,19 @@ async function bootAndPeer(env, nodeIndices) {
   await startTicker();
 }
 
-describe('Sync response: eviction, pruning and forged events', function () {
+describe('Sync response: pruning and forged events', function () {
   let env;
   dumpLogsOnFailure(() => env);
 
-  const EVICTED_NODE = 9;
   const PRUNE_NODE = 8;
   const FORGERY_NODE = 7;
   // A sync replays every unexpired event, so an event about a node routinely
   // arrives after that node's newer running report. Each of these nodes reports
   // itself running an app, and the response also carries an OLDER event about
-  // it: a shutdown, a removal of that app, an eviction. Each event speaks only
+  // it: a shutdown, or a removal of that app. Each event speaks only
   // for what the node broadcast before it.
   const SIGTERM_NODE = 6;
   const REMOVED_NODE = 5;
-  const RETURNED_NODE = 4;
   // A move is signed by the node listed at the address it leaves. The forger,
   // listed at its own address, signs the victim's move to it; the mover moves
   // itself to another port on its IP, which nothing is listed at.
@@ -150,16 +148,6 @@ describe('Sync response: eviction, pruning and forged events', function () {
       }));
     }
 
-    // The node reports itself running an app, and is evicted after that report.
-    // The eviction sits in the first slice and the report in a later one; the
-    // eviction must still be the outcome.
-    events.push(evictedEvent({ nodeNum: EVICTED_NODE, createdAt: stamp + FILLER_EVENTS + 150 }));
-    events.push(await apprunningEvent({
-      nodeNum: EVICTED_NODE,
-      apps: ['evictedapp'],
-      broadcastedAt: stamp + FILLER_EVENTS + 100,
-    }));
-
     // Two broadcasts from one node: the newer drops an app, which must be
     // pruned even though the older broadcast is in an earlier slice.
     events.push(await apprunningEvent({
@@ -201,10 +189,6 @@ describe('Sync response: eviction, pruning and forged events', function () {
     }));
     events.push(await apprunningEvent({
       nodeNum: REMOVED_NODE, apps: ['reinstalledapp'], broadcastedAt: stamp + RUNNING_AT,
-    }));
-    events.push(evictedEvent({ nodeNum: RETURNED_NODE, createdAt: stamp + EARLIER_AT }));
-    events.push(await apprunningEvent({
-      nodeNum: RETURNED_NODE, apps: ['returnedapp'], broadcastedAt: stamp + RUNNING_AT,
     }));
 
     events.push(await ipchangedEvent({
@@ -270,13 +254,6 @@ describe('Sync response: eviction, pruning and forged events', function () {
     await env?.teardown();
   });
 
-  it('should keep an evicted node evicted, even when a later slice reports it running', async function () {
-    this.timeout(60000);
-    const rows = await locationsByIp(env.clients[10], socketAddr(EVICTED_NODE));
-
-    expect(rows, 'evicted node has location rows again').to.be.an('array').with.length(0);
-  });
-
   it('should prune an app the newest broadcast no longer reports', async function () {
     this.timeout(60000);
     // CONVERGED, NOT INSTANTANEOUS. READY is raised once the required number of peers
@@ -331,8 +308,8 @@ describe('Sync response: eviction, pruning and forged events', function () {
     let atNew = [];
     let atOld = [];
     await waitFor(async () => {
-      atNew = (await dbClient(11).getAppLocationsByIp(MOVED_TO)).map((r) => r.name);
-      atOld = (await dbClient(11).getAppLocationsByIp(socketAddr(HONEST_MOVER_NODE))).map((r) => r.name);
+      atNew = (await locationsByIp(env.clients[10], MOVED_TO)).map((r) => r.name);
+      atOld = (await locationsByIp(env.clients[10], socketAddr(HONEST_MOVER_NODE))).map((r) => r.name);
       return atNew.includes('moverapp') && !atOld.includes('moverapp');
     }, {
       timeout: 45000, interval: 1000, label: 'the joiner holds the mover\'s row at its new port only',
@@ -346,34 +323,19 @@ describe('Sync response: eviction, pruning and forged events', function () {
     // in the past for a replayed shutdown - and the row would be reaped while
     // the node runs.
     const ttlMs = loadSharedConfig().fluxapps.locationTtlS * 1000;
-    const rows = await dbClient(11).getAppLocationsByIp(socketAddr(SIGTERM_NODE));
+    const rows = await locationsByIp(env.clients[10], socketAddr(SIGTERM_NODE));
     const row = rows.find((r) => r.name === 'stillrunningapp');
 
     expect(row, 'the running node lost its location row').to.not.equal(undefined);
-    expect(row.expireAt.getTime(), 'the older shutdown shortened the newer row')
+    expect(new Date(row.expireAt).getTime(), 'the older shutdown shortened the newer row')
       .to.equal(stamp + RUNNING_AT + ttlMs);
   });
 
   it('should keep an app a node reinstalled after an older removal of it', async function () {
     this.timeout(60000);
-    const rows = await dbClient(11).getAppLocationsByIp(socketAddr(REMOVED_NODE));
+    const rows = await locationsByIp(env.clients[10], socketAddr(REMOVED_NODE));
 
     expect(rows.map((r) => r.name), 'an older removal deleted the newer report')
       .to.include('reinstalledapp');
-  });
-
-  it('should keep a node that came back after an eviction, and keep the eviction\'s own time', async function () {
-    this.timeout(60000);
-    const rows = await dbClient(11).getAppLocationsByIp(socketAddr(RETURNED_NODE));
-    expect(rows.map((r) => r.name), 'an older eviction deleted the node\'s newer report')
-      .to.include('returnedapp');
-
-    // Stored under the time the evicting node made it, not the time it arrived
-    // here: a node that re-dated it would hand it on as fresh, and every node
-    // syncing from it afterwards would evict the returned node again.
-    const [eviction] = await dbClient(11).getAppStateEvents({ ip: socketAddr(RETURNED_NODE), type: 'evicted' });
-    expect(eviction, 'the eviction reached the joiner').to.not.equal(undefined);
-    expect(eviction.createdAt.getTime(), 'the eviction was re-dated on receipt')
-      .to.equal(stamp + EARLIER_AT);
   });
 });

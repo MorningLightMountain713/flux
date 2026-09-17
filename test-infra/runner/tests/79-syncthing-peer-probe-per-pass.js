@@ -102,6 +102,13 @@ describe('syncthing asks a peer once per pass, not once per folder', function ()
     stub = env.stubPeerClients.get(stubIndex);
     await stub.clear();
 
+    // Claiming both folders is what holds the subject in the deciding state: a
+    // peer that already has the writable copy blocks promotion, so the subject
+    // stays receiveonly and asks again every pass instead of promoting once and
+    // falling silent. Claimed before either app installs: an app that reaches
+    // its election before the claim is in place wins it and promotes.
+    await stub.setPromotedFolders({ ready: true, folders: heldFolders });
+
     // Two r: apps on one node, both waiting on sync before they may start. No
     // forceNonLeader: the subject must WIN its elections here, so that it reaches
     // the "does anyone already hold this?" question the stub answers.
@@ -113,12 +120,6 @@ describe('syncthing asks a peer once per pass, not once per folder', function ()
       // eslint-disable-next-line no-await-in-loop
       await dbClient(subject + 1).seedAppLocation({ name, ip: stubIp });
     }
-
-    // Claiming both folders is what holds the subject in the deciding state: a
-    // peer that already has the writable copy blocks promotion, so the subject
-    // stays receiveonly and asks again every pass instead of promoting once and
-    // falling silent.
-    await stub.setPromotedFolders({ ready: true, folders: heldFolders });
   });
 
   after(async function () {
