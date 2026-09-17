@@ -19,7 +19,7 @@ import { createTestEnv } from '../framework/test-env.js';
 import { nodeKey } from '../framework/keys.js';
 import { buildAppSpec, registerAndConfirm } from '../framework/app-helper.js';
 import { pushTestApp } from '../framework/registry-helper.js';
-import { execInContainer } from '../framework/container.js';
+import { execInContainer, requireAppContainerName } from '../framework/container.js';
 import { REGISTRY_REPO_HOST } from '../framework/subnet-config.js';
 import { startTicker, advanceBlock } from '../framework/daemon-control.js';
 import {
@@ -72,10 +72,13 @@ async function bootAndPeer(env) {
   await startTicker();
 }
 
-async function nanoCpus(container, component) {
+// The container's docker name is minted from the app's identity, so it is
+// looked up through the labels rather than derived from the component name.
+async function nanoCpus(container, appName) {
+  const name = await requireAppContainerName(container, appName, appName);
   const { stdout } = await execInContainer(
     container,
-    `docker inspect --format '{{.HostConfig.NanoCpus}}' flux${component}`,
+    `docker inspect --format '{{.HostConfig.NanoCpus}}' ${name}`,
   );
   return Number(stdout.trim());
 }
@@ -84,7 +87,6 @@ describe('CPU throttling', function () {
   let env;
   dumpLogsOnFailure(() => env);
   const appName = `e2ecpu${Date.now()}`;
-  const component = `${appName}_${appName}`;
   let node;
 
   before(async function () {
@@ -123,7 +125,7 @@ describe('CPU throttling', function () {
   });
 
   it('should start the container at the allocation the spec asked for', async function () {
-    const applied = await nanoCpus(node.container, component);
+    const applied = await nanoCpus(node.container, appName);
 
     expect(applied, 'container started without a cpu limit').to.be.greaterThan(0);
     expect(applied).to.equal(SPEC_CPU * 1e9);
@@ -137,14 +139,14 @@ describe('CPU throttling', function () {
     // statsSampleIntervalMs each, and decides every cpuCheckIntervalMs
     this.timeout(180000);
 
-    const before = await nanoCpus(node.container, component);
+    const before = await nanoCpus(node.container, appName);
 
     await waitFor(
-      async () => await nanoCpus(node.container, component) < before,
+      async () => await nanoCpus(node.container, appName) < before,
       { timeout: 150000, interval: 5000, label: 'cpu allocation lowered' },
     );
 
-    const after = await nanoCpus(node.container, component);
+    const after = await nanoCpus(node.container, appName);
     expect(after, 'allocation should drop, not rise').to.be.lessThan(before);
     // an app over 1 cpu and at its full allocation is lowered to 90% of spec
     expect(after).to.equal(Math.round(SPEC_CPU * 1e9 * 0.9));
@@ -155,16 +157,16 @@ describe('CPU throttling', function () {
   it('should restore the allocation once the load stops', async function () {
     this.timeout(180000);
 
-    const lowered = await nanoCpus(node.container, component);
+    const lowered = await nanoCpus(node.container, appName);
     expect(lowered).to.be.lessThan(SPEC_CPU * 1e9);
 
     // the container goes idle on its own after BURN_FOR_S, still running, so the
     // sampler keeps feeding the throttler a window that no longer looks busy
     await waitFor(
-      async () => await nanoCpus(node.container, component) > lowered,
+      async () => await nanoCpus(node.container, appName) > lowered,
       { timeout: 180000, interval: 5000, label: 'cpu allocation restored' },
     );
 
-    expect(await nanoCpus(node.container, component)).to.be.greaterThan(lowered);
+    expect(await nanoCpus(node.container, appName)).to.be.greaterThan(lowered);
   });
 });
