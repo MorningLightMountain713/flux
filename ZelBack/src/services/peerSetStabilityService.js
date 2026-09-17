@@ -30,6 +30,8 @@
  * different: one is what the node did wrong, the other is what it has shown.
  */
 
+'use strict';
+
 const config = require('config');
 const log = require('../lib/log');
 const nodeDosState = require('./nodeDosState');

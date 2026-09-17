@@ -499,27 +499,10 @@ async function requestAllowingAbsence(method, urlpath, data, config) {
 }
 
 /**
- * The error envelope for a handler whose work threw.
- *
- * A SyncthingError carries the status its request failed with, which has always
- * been on the wire for these endpoints; a validation error raised before any
- * request went out has no status and never carried the key.
- * @param {Error} error The thrown error.
- * @returns {object} Message
- */
-function errorEnvelope(error) {
-  const response = messageHelper.createErrorMessage(error.message, error.name, error.code);
-  if (error instanceof SyncthingError) response.data.httpStatus = error.httpStatus;
-  return response;
-}
-/**
- * To get meta
- * @param {import('express').Request} req
- * @param {import('express').Response} res
- * @returns {object} Message.
+ * Syncthing's metadata page: the device id it runs as, in a script body.
+ * @returns {Promise<string>}
  */
 async function getMeta() {
-  // "var metadata = {\"deviceID\":\"K6VOO4G-5RLTF3B-JTUFMHH-JWITKGM-63DTTMT-I6BMON6-7E3LVFW-V5WAIAO\"};\n"
   return request('get', '/meta.js');
 }
 
