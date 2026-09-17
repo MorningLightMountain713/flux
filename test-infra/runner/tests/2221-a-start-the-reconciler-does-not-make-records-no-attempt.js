@@ -6,7 +6,7 @@ import { buildSeedableSyncthingApp } from '../framework/seed-helper.js';
 import { getAppContainerStatus, crashAppContainer } from '../framework/container.js';
 import { resetFdm, electMaster } from '../framework/fdm-control.js';
 import {
-  waitFor, waitForReconcileActuated, waitForReconcilerDesiredChanged, waitForElectionDecisions, electionDecisionCount,
+  START_ACTIONS, waitFor, waitForReconcileActuated, waitForReconcilerDesiredChanged, waitForElectionDecisions, electionDecisionCount,
   assertNoEvent,
 } from '../framework/wait.js';
 import { setSynced, resetSyncState, injectSyncthingEvent } from '../framework/syncthing-control.js';
@@ -98,7 +98,7 @@ describe('a start the reconciler does not make records no attempt', function () 
     const beforeRelease = client.getLastEventId();
     await client.releaseCheckpoint(BEFORE_START, identifier);
 
-    await assertNoEvent(client, 'reconciler:actuated', (d) => d.identifier === identifier && d.action === 'started', 20000, { afterId: beforeRelease });
+    await assertNoEvent(client, 'reconciler:actuated', (d) => d.identifier === identifier && START_ACTIONS.includes(d.action), 20000, { afterId: beforeRelease });
     expect(await isUp(client, appName), 'the held pass started the container').to.equal(false);
     expect(await dbClient(primary + 1).restartAttempts(identifier), 'a start the pass did not make was recorded as an attempt').to.deep.equal(before);
   });

@@ -54,11 +54,6 @@ const subnet = getSubnetConfig();
 const COMPONENT_A = 'alpha';
 const COMPONENT_B = 'beta';
 
-async function isUp(client, identifier) {
-  const status = await getAppContainerStatus(client.container, identifier);
-  return Boolean(status && status.status.startsWith('Up'));
-}
-
 describe('a node whose address changed restarts the apps that stay', function () {
   let env;
   dumpLogsOnFailure(() => env);
@@ -71,6 +66,11 @@ describe('a node whose address changed restarts the apps that stay', function ()
   const appName = `e2eipchg${Date.now()}`;
   const idA = `${COMPONENT_A}_${appName}`;
   const idB = `${COMPONENT_B}_${appName}`;
+
+  async function isUp(client, component) {
+    const status = await getAppContainerStatus(client.container, appName, { component });
+    return Boolean(status && status.status.startsWith('Up'));
+  }
 
   before(async function () {
     this.timeout(360000);
@@ -109,7 +109,7 @@ describe('a node whose address changed restarts the apps that stay', function ()
     movedIp = nodeIp.replace(/\.\d+$/, '.240');
 
     const client = env.clients[idx];
-    await waitFor(async () => (await isUp(client, idA)) && (await isUp(client, idB)), {
+    await waitFor(async () => (await isUp(client, COMPONENT_A)) && (await isUp(client, COMPONENT_B)), {
       timeout: 120000,
       interval: 3000,
       label: 'both components running before the address moves',
@@ -189,7 +189,7 @@ describe('a node whose address changed restarts the apps that stay', function ()
     await waitForReconcileActuated(client, idA, 'restarted', 240000, { afterId: baseline });
     await waitForReconcileActuated(client, idB, 'restarted', 240000, { afterId: baseline });
 
-    await waitFor(async () => (await isUp(client, idA)) && (await isUp(client, idB)), {
+    await waitFor(async () => (await isUp(client, COMPONENT_A)) && (await isUp(client, COMPONENT_B)), {
       timeout: 120000,
       interval: 3000,
       label: 'both components running again after the address moved',
@@ -229,7 +229,7 @@ describe('a node whose address changed restarts the apps that stay', function ()
     );
 
     expect(seen.data.newIP.split(':')[0], 'the peer was told the new address').to.equal(movedIp);
-    expect(await isUp(env.clients[idx], idA), 'and the app is still running').to.equal(true);
+    expect(await isUp(env.clients[idx], COMPONENT_A), 'and the app is still running').to.equal(true);
   });
 });
 

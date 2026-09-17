@@ -8,7 +8,7 @@ import {
   setPeerDisconnected, setPeerHasData, getNudges, resetSyncState,
 } from '../framework/syncthing-control.js';
 import { getSubnetConfig } from '../framework/subnet-config.js';
-import { waitFor } from '../framework/wait.js';
+import { START_ACTIONS, waitFor } from '../framework/wait.js';
 import { bootAndPeer, seedSyncthingApp } from '../framework/reconciler-suite.js';
 
 // MUST-PASS data-safety gate (B1). The promotion FSM's isSynced is percentage-
@@ -171,7 +171,7 @@ describe('syncthing promotion gate never reverts/promotes against an empty globa
     await setPeerHasData({ ip, folder: aSource.folder });
 
     let startedSeen = false;
-    client.waitForEvent('reconciler:actuated', (d) => d.identifier === aSource.identifier && d.action === 'started', 45000)
+    client.waitForEvent('reconciler:actuated', (d) => d.identifier === aSource.identifier && START_ACTIONS.includes(d.action), 45000)
       .then(() => { startedSeen = true; }).catch(() => {});
 
     const windowMs = 45000;

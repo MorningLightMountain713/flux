@@ -1,7 +1,7 @@
 import { describe, it, before, after } from 'mocha';
 import { expect } from 'chai';
 import { createTestEnv } from '../framework/test-env.js';
-import { waitForReconcileActuated } from '../framework/wait.js';
+import { START_ACTIONS, waitForReconcileActuated } from '../framework/wait.js';
 import { bootAndPeer, seedTestApp } from '../framework/reconciler-suite.js';
 import { dumpLogsOnFailure } from '../framework/log-on-failure.js';
 
@@ -97,7 +97,7 @@ describe('reconciler ceiling paces a container that restarts too fast to be heal
     const priorStarts = client.getEventBuffer().filter((e) => e.event === 'reconciler:actuated'
       && e.id < backoff.id
       && e.data.identifier === identifier
-      && e.data.action === 'started');
+      && START_ACTIONS.includes(e.data.action));
     const priorBackoffs = client.getEventBuffer().filter((e) => e.event === 'reconciler:actuated'
       && e.id < backoff.id
       && e.data.identifier === identifier
@@ -147,7 +147,7 @@ describe('reconciler ceiling paces a container that restarts too fast to be heal
     // follows either holds its place on the ladder or starts over.
     await client.waitForEvent(
       'reconciler:actuated',
-      (d) => d.identifier === identifier && d.action === 'started',
+      (d) => d.identifier === identifier && START_ACTIONS.includes(d.action),
       DEEP_RUNG_MS + 60000,
       { afterId: deep.id },
     );

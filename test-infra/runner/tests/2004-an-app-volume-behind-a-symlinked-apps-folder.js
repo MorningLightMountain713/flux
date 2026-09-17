@@ -21,7 +21,7 @@ import { REGISTRY_REPO_HOST } from '../framework/subnet-config.js';
 import { bootAndPeer, installOnNodes } from '../framework/reconciler-suite.js';
 import { crashAppContainer, execInContainer, getAppContainerId } from '../framework/container.js';
 import { volumeRoot } from '../framework/volume-fixture.js';
-import { waitFor, waitForReconcileActuated } from '../framework/wait.js';
+import { START_ACTIONS, waitFor, waitForReconcileActuated } from '../framework/wait.js';
 import { dumpLogsOnFailure } from '../framework/log-on-failure.js';
 
 const APPS_FOLDER_LINK = '/mnt/appdata/flux-apps-link';
@@ -112,7 +112,7 @@ describe('an app volume behind a symlinked apps folder', function () {
     this.timeout(120000);
     const afterId = holder.getLastEventId();
     await crashAppContainer(holder.container, appName);
-    await waitForReconcileActuated(holder, identifier, 'started', 90000, { afterId });
+    await waitForReconcileActuated(holder, identifier, START_ACTIONS, 90000, { afterId });
     expect(await mountCount(holder), 'mounts at the volume\'s real path').to.equal(1);
   });
 

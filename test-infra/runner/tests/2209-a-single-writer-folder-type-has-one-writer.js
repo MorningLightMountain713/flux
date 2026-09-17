@@ -17,7 +17,7 @@ import {
 } from '../framework/syncthing-control.js';
 import { getSubnetConfig } from '../framework/subnet-config.js';
 import {
-  waitFor, electionDecisionCount, waitForReconcilerDesiredChanged,
+  START_ACTIONS, waitFor, electionDecisionCount, waitForReconcilerDesiredChanged,
 } from '../framework/wait.js';
 import { bootAndPeer, placeGAppInOrder, seedSyncScopedData } from '../framework/reconciler-suite.js';
 import { destroyVolume } from '../framework/volume-fixture.js';
@@ -214,7 +214,7 @@ describe('a single-writer folder type has one writer', function () {
     await passesFromNow([target], (i) => electionCount(i, a.appName, 'evaluated'), 'election');
     expect((await writesTo(target, a.folder)).slice(writesBefore).map((w) => w.body?.type),
       'the folder over the unsafe volume was made to send').to.not.include('sendreceive');
-    expect(eventsSince(target, from, 'reconciler:actuated', (d) => d.identifier === a.identifier && d.action === 'started'),
+    expect(eventsSince(target, from, 'reconciler:actuated', (d) => d.identifier === a.identifier && START_ACTIONS.includes(d.action)),
       'the component started over the unsafe volume').to.deep.equal([]);
     expect(await isUp(client, a.appName)).to.equal(false);
   });
@@ -261,7 +261,7 @@ describe('a single-writer folder type has one writer', function () {
     expect(ended.data.to, 'the promotion was not stood down').to.equal('standby');
     expect(ended.data.reason).to.equal('stood down before it ran');
     await passesFromNow([target], (i) => electionCount(i, a.appName, 'evaluated'), 'election');
-    expect(eventsSince(target, from, 'reconciler:actuated', (d) => d.identifier === a.identifier && d.action === 'started'),
+    expect(eventsSince(target, from, 'reconciler:actuated', (d) => d.identifier === a.identifier && START_ACTIONS.includes(d.action)),
       'the stood-down node started the component').to.deep.equal([]);
     expect(await isUp(client, a.appName)).to.equal(false);
     expect((await getFolderConfig(ipOf(target), a.folder))?.type, 'the stood-down node\'s folder').to.equal('receiveonly');
@@ -324,7 +324,7 @@ describe('a single-writer folder type has one writer', function () {
     await waitFor(async () => !(await isUp(client, a.appName)), {
       timeout: 120000, interval: 2000, label: 'the component over the unsafe volume is stopped',
     });
-    expect(eventsSince(target, heldStopped.id, 'reconciler:actuated', (d) => d.identifier === a.identifier && d.action === 'started'),
+    expect(eventsSince(target, heldStopped.id, 'reconciler:actuated', (d) => d.identifier === a.identifier && START_ACTIONS.includes(d.action)),
       'the component started over the unsafe volume').to.deep.equal([]);
   });
 

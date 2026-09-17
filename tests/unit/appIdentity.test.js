@@ -3,7 +3,7 @@
 const { expect } = require('chai');
 
 const {
-  isValidAppNameAndOwner, verifyAppNameAndOwner, mintAppUuid, identityFromUuid,
+  isValidAppNameAndOwner, verifyAppNameAndOwner, mintAppUuid, identityFromUuid, isMarketplaceApp,
 } = require('../../ZelBack/src/services/utils/appIdentity');
 
 describe('appIdentity tests', () => {
@@ -117,8 +117,6 @@ describe('appIdentity tests', () => {
   // team may sign for an app, and whether a quote needs the marketplace price
   // multiplier.
   describe('isMarketplaceApp', () => {
-    const { isMarketplaceApp } = appIdentity;
-
     it('returns true for an app name containing a post-2020 epoch timestamp', () => {
       expect(isMarketplaceApp('wordpress1735018430692')).to.be.true;
     });

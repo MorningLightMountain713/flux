@@ -7,7 +7,7 @@ import {
   execInContainer, getAppContainerStatus, crashFluxos, releaseFluxos, fluxosPid,
 } from '../framework/container.js';
 import {
-  waitFor, waitForUp, waitForDown, waitForOperatorIntent, waitForBootSettled, assertNoEvent,
+  START_ACTIONS, waitFor, waitForUp, waitForDown, waitForOperatorIntent, waitForBootSettled, assertNoEvent,
 } from '../framework/wait.js';
 import { bootAndPeer, seedSimpleApp } from '../framework/reconciler-suite.js';
 import { holdCommands, releaseCommands } from '../framework/mongo-control.js';
@@ -150,7 +150,7 @@ describe('a database that stops answering takes nothing down', function () {
     it('keeps the operator-stopped component stopped', async function () {
       this.timeout(30000);
       const client = env.clients[stoppedIdx];
-      await assertNoEvent(client, 'reconciler:actuated', (d) => d.identifier === `${stoppedName}_${stoppedName}` && d.action === 'started', 1, { afterId: anchors[stoppedIdx] });
+      await assertNoEvent(client, 'reconciler:actuated', (d) => d.identifier === `${stoppedName}_${stoppedName}` && START_ACTIONS.includes(d.action), 1, { afterId: anchors[stoppedIdx] });
       const stopped = await getAppContainerStatus(client.container, stoppedName, { all: true });
       expect(stopped && stopped.status.startsWith('Up'), 'the stopped component was started').to.not.equal(true);
     });
