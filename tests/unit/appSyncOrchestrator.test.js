@@ -331,6 +331,8 @@ describe('AppSyncOrchestrator', () => {
     it('should transition to DEGRADED on peersBelowThreshold when READY', async () => {
       const orchestrator = makeOrchestrator();
       orchestrator.start(defaultBootContext);
+      peerEmitter.emit('peerThresholdReached', 12);
+      await clock.tickAsync(0);
 
 
       blockEmitter.emit('blocksProcessed', 2_555_000);
@@ -400,6 +402,8 @@ describe('AppSyncOrchestrator', () => {
       // The enterprise halving is gone: one fallback for every node.
       const orchestrator = makeOrchestrator();
       orchestrator.start(defaultBootContext);
+      peerEmitter.emit('peerThresholdReached', 12);
+      await clock.tickAsync(0);
 
       blockEmitter.emit('blocksProcessed', 2_555_000);
       await clock.tickAsync(0);
@@ -1292,11 +1296,13 @@ describe('AppSyncOrchestrator', () => {
 
       peerEmitter.emit('peersBelowThreshold', 2);
       await clock.tickAsync(0);
-      expect(orchestrator.state, 'a second loss is meant to be invisible to the state machine').to.equal(mod.STATES.RESYNCING);
+      // The state is computed from the peer level, so a second loss reads as the
+      // first did; what the loss must not do is let the budget keep advancing.
+      expect(orchestrator.state).to.equal(mod.STATES.DEGRADED);
 
       await driveBlocks(2_555_003, FALLBACK_BLOCKS * 5);
 
-      expect(orchestrator.state, 'a node with no peers reached READY through RESYNCING').to.equal(mod.STATES.RESYNCING);
+      expect(orchestrator.state, 'a node with no peers reached READY').to.equal(mod.STATES.DEGRADED);
       expect(globalStateStub.appStateAuthoritative).to.equal(false);
     });
 
@@ -2372,6 +2378,8 @@ describe('AppSyncOrchestrator', () => {
       // nodes is gone - a node can be given priority, not information.
       const orchestrator = makeOrchestrator();
       orchestrator.start(defaultBootContext);
+      peerEmitter.emit('peerThresholdReached', 12);
+      await clock.tickAsync(0);
       blockEmitter.emit('blocksProcessed', 2_555_000);
       await clock.tickAsync(0);
       expect(orchestrator.state).to.equal(STATES.SYNCING);

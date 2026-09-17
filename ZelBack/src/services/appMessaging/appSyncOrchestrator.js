@@ -147,6 +147,15 @@ class AppSyncOrchestrator {
   #hashSyncComplete = false;
   #dbRebuilt = false;
   #blocksSinceSyncStarted = 0;
+
+  /**
+   * Whether the readiness budget is standing still for want of peers. Carried so
+   * the condition is announced on its edges rather than on every block: a node
+   * that never reaches the threshold fires neither peer event and would otherwise
+   * simply never accrue, with nothing anywhere saying so.
+   * @type {boolean}
+   */
+  #budgetStalled = false;
   #blockReceivedHandler = null;
   #peerThresholdHandler = null;
   #peersBelowHandler = null;
@@ -974,8 +983,23 @@ class AppSyncOrchestrator {
         advanced = true;
       }
     }
+    // The fallback is a bound on a sync attempt that is not finishing, so it is
+    // time spent WITH peers: a block that arrives while the peer set is below
+    // the floor counts for nothing, and a node that never reaches the floor
+    // cannot reach READY on the budget. Announced on the edges only.
+    if (this.#state !== STATES.INITIALIZING) {
+      if (this.#peersAtFloor) {
+        this.#blocksSinceSyncStarted += count;
+        if (this.#budgetStalled) {
+          this.#budgetStalled = false;
+          log.info('AppSyncOrchestrator - Peer threshold met, the readiness budget is advancing again');
+        }
+      } else if (!this.#budgetStalled) {
+        this.#budgetStalled = true;
+        log.warn('AppSyncOrchestrator - Readiness budget not advancing: the peer set is below appSyncPeerThreshold, so this node cannot reach READY');
+      }
+    }
     if (this.#state === STATES.SYNCING || this.#state === STATES.READY || this.#state === STATES.RESYNCING) {
-      this.#blocksSinceSyncStarted += count;
       this.#superviseStateSync();
       this.#own(this.#evaluate());
       this.#own(this.#checkHashRetry(blockHeight));
