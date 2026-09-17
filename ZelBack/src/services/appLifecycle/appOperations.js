@@ -1401,6 +1401,33 @@ async function appendRestoreTask(req, res) {
 }
 
 /**
+ * A restore that failed after clearing a component's appdata leaves that
+ * directory neither copy. The component is held stopped, its synced folder
+ * demoted to receiveonly so the partial copy is never offered to the peers, and
+ * the rest of the app restarts on data the restore never touched.
+ * @param {string} appname
+ * @param {Array<{identifier: string, synced: boolean}>} swaps components whose clear began
+ */
+async function holdPartialRestore(appname, swaps) {
+  for (const swap of swaps) {
+    if (swap.synced) {
+      const folderId = dockerService.getAppIdentifier(swap.identifier);
+      // eslint-disable-next-line no-await-in-loop
+      const demoted = await changeSyncthingFolderType(folderId, 'receiveonly');
+      if (!demoted) {
+        log.error(`restore - SAFETY: ${folderId} holds partial data and could not be demoted to receiveonly`);
+      }
+      // eslint-disable-next-line no-await-in-loop
+      await appCaches.setSyncedMark(appCaches.receiveOnlySyncthingAppsCache, folderId, { restarted: false, numberOfExecutions: 0 });
+    }
+    appReconciler.setControllerDesired(swap.identifier, 'stopped', 'restore did not complete');
+  }
+  const held = new Set(swaps.map((swap) => swap.identifier));
+  const others = (await componentIdentifiersFor(appname)).filter((identifier) => !held.has(identifier));
+  if (others.length) await appReconciler.drive(others, 'running');
+}
+
+/**
  * Replace an app's volumes from an archive: stop it, restore them, start it again.
  *
  * @param {string} appname
@@ -1417,6 +1444,10 @@ async function runRestoreTask(appname, restore, type, zelidauth, report) {
   // owes back what the try took.
   let taskToken = null;
   let pausedSynced = [];
+  // Components whose appdata clear has begun: until every unpack lands, their
+  // directories are neither copy, and a failure in between holds them rather
+  // than starting them on it.
+  const swapsInFlight = [];
   try {
     // restore is an app-scoped lease on the same key as backup/install/
     // remove/reconcile.
@@ -1465,6 +1496,8 @@ async function runRestoreTask(appname, restore, type, zelidauth, report) {
       if (component.restore) {
         // eslint-disable-next-line no-await-in-loop
         const volumes = await taskVolumes(appname, component.component, component.replica);
+        const synced = Boolean(restoreDeployment.componentEntries()
+          .find(([name]) => name === component.component)?.[1]?.hasSyncthing());
         // eslint-disable-next-line no-restricted-syntax
         for (const volume of volumes) {
           const forWhich = volume.replica ? `${component.component} (replica ${volume.replica})` : component.component;
@@ -1472,8 +1505,12 @@ async function runRestoreTask(appname, restore, type, zelidauth, report) {
           report(`Removing ${forWhich} component data...\n`);
           // eslint-disable-next-line no-await-in-loop
           await serviceHelper.delay(2 * 1000);
+          swapsInFlight.push({ identifier: volume.identifier, synced });
           // eslint-disable-next-line no-await-in-loop
-          await IOUtils.removeDirectory(`${volume.mount}/appdata`, true);
+          const cleared = await IOUtils.removeDirectory(`${volume.mount}/appdata`, true);
+          if (cleared !== true) {
+            throw new Error(`Error: could not clear ${forWhich} appdata before unpacking`);
+          }
         }
       }
     }
@@ -1550,6 +1587,8 @@ async function runRestoreTask(appname, restore, type, zelidauth, report) {
         }
       }
     }
+    // Every unpack landed: the directories are whole copies again.
+    swapsInFlight.length = 0;
     await serviceHelper.delay(1 * 5 * 1000);
     report('Starting application...\n');
     await startApplication(appname);
@@ -1566,8 +1605,16 @@ async function runRestoreTask(appname, restore, type, zelidauth, report) {
   } catch (error) {
     log.error(error);
     // The stop hold is run-state this operation owes back: a failed restore must
-    // never strand the app stopped. Only when this call owned the operation.
-    if (taskToken) await startApplication(appname);
+    // never strand the app stopped on data it never touched, and must never
+    // start a component whose appdata it had begun to replace. Only when this
+    // call owned the operation.
+    if (taskToken) {
+      if (swapsInFlight.length) {
+        await holdPartialRestore(appname, swapsInFlight);
+      } else {
+        await startApplication(appname);
+      }
+    }
     // Owed back exactly as the run state above is: a failed operation must not
     // leave an app replicating nothing. Never throws, so it cannot replace the
     // error that brought us here.
