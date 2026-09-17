@@ -39,6 +39,11 @@ const path = require('node:path');
 
 const SRC = path.join(__dirname, 'src');
 
+// The block time the activation window is denominated in. Not a setting: it is
+// what the chain does, and a node that disagrees with the chain about it is
+// wrong rather than configured differently.
+const BLOCK_TIME_MS = 30_000;
+
 let reconciled = false;
 // Parsing the service layer costs most of a second, and both entry points plus
 // the tests ask for the same answer about the same tree. The source does not
@@ -203,6 +208,66 @@ function missingKeys(effective, dir = SRC) {
 }
 
 /**
+ * Relations between shipped values, which no single key can state.
+ *
+ * A key can be present, and individually sane, and still be wrong against
+ * another one: the activation window is set in blocks and spent in
+ * milliseconds, and the two sides of it are edited by different hands at
+ * different times. Each relation carries the arithmetic that decides it, so a
+ * refusal names the numbers rather than the rule.
+ *
+ * `armed` is whether the relation governs this node as configured. An unarmed
+ * relation that fails is reported and does not stop the boot, because the plane
+ * it belongs to reaches nothing until a height schedules it.
+ *
+ * @param {object} effective the effective config
+ * @returns {Array<{name: string, ok: boolean, armed: boolean, detail: string}>}
+ */
+function relations(effective) {
+  const get = (key) => resolve(effective, `fluxapps.${key}`);
+  const preWindowBlocks = get('quorumGrantPreWindowBlocks');
+  const drainMs = get('quorumGrantDrainMs');
+  const askTimeoutMs = get('quorumGrantAskTimeoutMs');
+  const maxTtlMs = get('quorumGrantMaxTtlMs');
+  const windowMs = preWindowBlocks * BLOCK_TIME_MS;
+  // A refused running node inside the window retries at the figure the referee
+  // taught it, or one ask timeout later when the refusal taught nothing.
+  const retryMs = askTimeoutMs;
+  const needMs = drainMs + retryMs + 3 * askTimeoutMs;
+  // Below the activation height the plane governs nothing, so neither relation
+  // can reach a container until a height is set. A height that is not a number
+  // schedules nothing, which is what null says and what an absent key means.
+  const scheduled = Number.isFinite(get('quorumGrantActivationHeight'));
+
+  return [
+    {
+      name: 'the activation window outlasts a referee restart met inside it',
+      ok: windowMs > needMs,
+      armed: scheduled,
+      detail: `quorumGrantPreWindowBlocks ${preWindowBlocks} x ${BLOCK_TIME_MS} = ${windowMs} ms`
+        + ' must exceed quorumGrantDrainMs + retry + 3 x quorumGrantAskTimeoutMs'
+        + ` = ${drainMs} + ${retryMs} + 3 x ${askTimeoutMs} = ${needMs} ms`,
+    },
+    {
+      name: 'a drain ends inside the lease it drains',
+      ok: drainMs <= maxTtlMs,
+      armed: scheduled,
+      detail: `quorumGrantDrainMs ${drainMs} must not exceed quorumGrantMaxTtlMs ${maxTtlMs}`,
+    },
+  ];
+}
+
+/**
+ * The relations the shipped values do not satisfy.
+ *
+ * @param {object} effective the effective config
+ * @returns {Array<{name: string, ok: boolean, armed: boolean, detail: string}>}
+ */
+function brokenRelations(effective) {
+  return relations(effective).filter((r) => !r.ok);
+}
+
+/**
  * Run the reconciliation and stop the process if it fails.
  *
  * Writes to stderr directly rather than through the logger: this runs before
@@ -230,16 +295,32 @@ function reconcile(io = {}) {
   // eslint-disable-next-line global-require
   const effective = io.config || require('config');
   const missing = missingKeys(effective, io.dir);
-  if (!missing.length) return missing;
+  if (missing.length) {
+    write('FluxOS will not start: config/default.js does not ship every setting this code reads.');
+    write('A missing key is not a default - it is a value nobody can see and nobody can change.');
+    missing.forEach(({ key, files }) => write(`  ${key}   read by ${files.join(', ')}`));
+    write('Ship each one in ZelBack/config/default.js.');
+    exit(1);
+    return missing;
+  }
 
-  write('FluxOS will not start: config/default.js does not ship every setting this code reads.');
-  write('A missing key is not a default - it is a value nobody can see and nobody can change.');
-  missing.forEach(({ key, files }) => write(`  ${key}   read by ${files.join(', ')}`));
-  write('Ship each one in ZelBack/config/default.js.');
-  exit(1);
+  // Relations are checked second because they read the values a missing key
+  // does not have.
+  const broken = brokenRelations(effective);
+  const arming = broken.filter((r) => r.armed);
+  if (broken.length) {
+    write(arming.length
+      ? 'FluxOS will not start: settings config ships contradict each other.'
+      : 'Settings config ships contradict each other, on a plane no height has scheduled:');
+    broken.forEach((r) => {
+      write(`  ${r.name}${r.armed ? '' : '   (nothing is scheduled to reach this yet)'}`);
+      write(`    ${r.detail}`);
+    });
+  }
+  if (arming.length) exit(1);
   return missing;
 }
 
 module.exports = {
-  keysRead, propertyReads, missingKeys, reconcile,
+  keysRead, propertyReads, missingKeys, relations, brokenRelations, reconcile,
 };
