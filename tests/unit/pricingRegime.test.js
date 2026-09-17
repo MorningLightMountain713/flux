@@ -139,6 +139,56 @@ describe('pricingRegime', () => {
     });
   });
 
+  // The free-update rate limit is decided inside priceUpdate from the history
+  // and the clock the regime hands it. Both come from the chain: the confirming
+  // block's time, and only the messages confirmed below its height. A node's
+  // own clock would give every node its own window, and a replaying node an
+  // empty one; a cutoff at the confirming height would count the update itself.
+  describe('v9 updateFee counts the free-update allowance from the confirming block', () => {
+    const HEIGHT = 2_000_000;
+    const BLOCK_TIME = 1_750_000_000;
+    const history = [
+      { hash: 'earlier', height: HEIGHT - 5, timestamp: BLOCK_TIME * 1000 - 3_600_000, type: 'fluxappupdate' },
+      { hash: 'this', height: HEIGHT, timestamp: BLOCK_TIME * 1000 - 60_000, type: 'fluxappupdate' },
+      { hash: 'later', height: HEIGHT + 1, timestamp: BLOCK_TIME * 1000 + 60_000, type: 'fluxappupdate' },
+    ];
+    const spec = { name: 'myapp', ttl: 2_592_000, isEncrypted: false };
+
+    function loadV9() {
+      const priceUpdate = sinon.stub().resolves({ free: true });
+      const engine = {
+        price: sinon.stub().resolves({ marketplaceAdjustedMicrodollars: 0 }),
+        priceUpdate,
+      };
+      const v9 = proxyquire('../../ZelBack/src/services/pricing/v9PricingRegime', {
+        '../appDatabase/appsRepository': { listAppMessagesByName: sinon.stub().resolves(history) },
+        './buildPricingEngine': {
+          buildPricingEngine: sinon.stub().resolves(engine),
+          resolveMarketplacePricingCtx: sinon.stub().returns({}),
+        },
+        './priceOracleState': { getPriceModifierHistory: () => null },
+        '../utils/specLibs': { getSpecPolicy: sinon.stub().resolves({ meteredQuantities: () => new Map() }) },
+      });
+      return { v9, priceUpdate };
+    }
+
+    async function contextHandedToTheRule() {
+      const { v9, priceUpdate } = loadV9();
+      await v9.updateFee(spec, spec, HEIGHT, HEIGHT - 5, BLOCK_TIME - 3600, BLOCK_TIME);
+      return priceUpdate.firstCall.args[2];
+    }
+
+    it('hands the rule the block time, not the clock of the node reading it', async () => {
+      const ctx = await contextHandedToTheRule();
+      expect(ctx.asOf).to.equal(BLOCK_TIME * 1000);
+    });
+
+    it('counts only the messages confirmed below the update, never the update itself', async () => {
+      const ctx = await contextHandedToTheRule();
+      expect(ctx.recentEvents.map((message) => message.hash)).to.deep.equal(['earlier']);
+    });
+  });
+
   // The marketplace list carries the per-template price multiplier, so a quote
   // taken without it undercharges a marketplace app and says nothing. The list
   // comes from the operator's stats server, which can be slow or unreachable.

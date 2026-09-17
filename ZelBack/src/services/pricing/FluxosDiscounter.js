@@ -35,7 +35,7 @@ class FluxosDiscounter {
       oldMetered: ctx.oldMetered,
       newMetered: ctx.newMetered,
       recentEvents: ctx.recentEvents || [],
-      now: ctx.now || Date.now(),
+      asOf: ctx.asOf,
     });
     // The helper returns a rich result on EVERY outcome; the Discounter
     // contract is "result on free, refusal result on free-shaped-but-refused,

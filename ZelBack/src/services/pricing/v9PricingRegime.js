@@ -116,13 +116,15 @@ async function onChainDisplayUpdatePrice(spec, existing, daemonHeight) {
   // The app's register + update history. The free-update rule rate-limits on
   // it (5 in 24h, 8 in 48h, 10 in 120h); passing an empty list would silently
   // disable that cap and quote free for an owner consensus is about to charge.
+  // A quote has no confirming block yet, so its windows end at the moment it
+  // is asked.
   const recentEvents = await appsRepository.listAppMessagesByName(spec.name);
 
   const engine = await buildPricingEngine(daemonHeight);
   const result = await engine.priceUpdate(prevSpec, spec, {
     height: daemonHeight,
     duration: spec.ttl || 0,
-    now: Date.now(),
+    asOf: Date.now(),
     recentEvents,
     oldScaledPriceMicrodollars,
     oldMetered,
@@ -257,6 +259,21 @@ async function supersededMessage(name, confirming) {
 }
 
 /**
+ * The app's permanent messages confirmed below a height. The update being
+ * priced is stored before it is priced, so a cutoff at its own height would
+ * hand the rate limit the update itself; it cannot precede its confirming
+ * height.
+ *
+ * @param {string} name - App name
+ * @param {number} height - the update's confirming height
+ * @returns {Promise<object[]>}
+ */
+async function messagesConfirmedBefore(name, height) {
+  const messages = await appsRepository.listAppMessagesByName(name);
+  return messages.filter((message) => message.height < height);
+}
+
+/**
  * Consensus update fee in satoshis. Returns 0n when priceUpdate rules the
  * update free.
  *
@@ -300,16 +317,19 @@ async function updateFee(spec, prevSpec, height, prevHeight, prevRegisteredAt, n
   const modParams = modifierHistory ? modifierHistory.resolveAt(height) : null;
   const updateDiscountBp = (modParams && modParams.updateDiscountBp) || 0;
 
-  // The app's register + update history, so the free-update rate limit can
-  // actually count something. With an empty list the cap (5 in 24h, 8 in 48h,
-  // 10 in 120h) never fires and free updates are unbounded — every one of
-  // which the whole network must relay, verify and store permanently.
-  const recentEvents = await appsRepository.listAppMessagesByName(spec.name);
+  // The app's history as the chain had it when this message confirmed. The
+  // free-update rate limit (5 in 24h, 8 in 48h, 10 in 120h) counts the update
+  // events among them, so the list and the clock both come from the block:
+  // every node counts the same events against the same window, however late
+  // it reads the block. With an empty list the cap never fires and free
+  // updates are unbounded — every one of which the whole network must relay,
+  // verify and store permanently.
+  const recentEvents = await messagesConfirmedBefore(spec.name, height);
 
   const result = await engine.priceUpdate(prevSpec, spec, {
     height,
     duration: spec.ttl || 0,
-    now: Date.now(),
+    asOf: nowBlockTime * 1000,
     recentEvents,
     oldScaledPriceMicrodollars,
     oldMetered,
