@@ -176,6 +176,26 @@ describe('specReconciler tests', () => {
       await specReconciler.requestFullConvergence({ reason: 'test' });
       expect(uninstallStub.called).to.equal(false);
     });
+
+    it('declines a full pass while one is still running', async () => {
+      // Two passes over one app destroy it: the second asks docker to remove
+      // the container the first has already begun removing, and the failure
+      // that lands in the first pass's cleanup takes the whole app with it.
+      let finish;
+      const gate = new Promise((resolve) => { finish = resolve; });
+      setup({ installed: [await specWith({}, { expired: true })] });
+      uninstallStub.callsFake(() => gate.then(() => ({ status: appUninstaller.UninstallStatus.REMOVED })));
+
+      const first = specReconciler.requestFullConvergence({ reason: 'first' });
+      await new Promise((resolve) => { setImmediate(resolve); });
+      const second = specReconciler.requestFullConvergence({ reason: 'second' });
+      await new Promise((resolve) => { setImmediate(resolve); });
+      expect(uninstallStub.callCount, 'a second pass tore down what the first was already removing').to.equal(1);
+
+      finish();
+      await Promise.all([first, second]);
+      expect(uninstallStub.callCount).to.equal(1);
+    });
   });
 
   describe('expiry', () => {
