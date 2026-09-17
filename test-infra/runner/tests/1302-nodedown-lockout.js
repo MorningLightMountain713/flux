@@ -137,7 +137,6 @@ describe('node-down placement freeze and lockout end to end', function () {
         name: appName,
         description: 'node-down lockout e2e component',
         repotag: `${REGISTRY_REPO_HOST}/${appName}:v1`,
-        ports: [31312],
         domains: [''],
         environmentParameters: [],
         commands: [],

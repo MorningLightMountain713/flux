@@ -53,7 +53,6 @@ describe('Spawner: a registry outage during install defers, never fails or broad
         name: appName,
         description: 'app seeded across a registry outage',
         repotag: `${REGISTRY_REPO_HOST}/${appName}:v1`,
-        ports: [39333],
         domains: [''],
         environmentParameters: [],
         commands: [],
