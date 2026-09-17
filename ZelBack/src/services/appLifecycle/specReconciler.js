@@ -4,6 +4,7 @@ const crypto = require('node:crypto');
 const config = require('config');
 const serviceHelper = require('../serviceHelper');
 const log = require('../../lib/log');
+const { AsyncLock } = require('../utils/asyncLock');
 const appsRepository = require('../appDatabase/appsRepository');
 const registryManager = require('../appDatabase/registryManager');
 const deploymentProvider = require('../appRuntime/deploymentProvider');
@@ -307,11 +308,20 @@ async function convergenceAllowed() {
   return synced === true;
 }
 
+// A full pass is not re-entrant: two passes over one app destroy it. A pass that
+// arrives while one runs is declined rather than queued - the next block asks again.
+const fullPassLock = new AsyncLock();
+
 /**
  * Converge every installed app. `includeCompliance` runs the image-compliance step (needs full deployment views, so the per-block pass skips it).
  * @param {{ reason: string, includeCompliance?: boolean }} opts
  */
 async function requestFullConvergence({ reason, includeCompliance = false } = {}) {
+  const release = fullPassLock.tryAcquire({ label: 'specReconciler' });
+  if (!release) {
+    log.info(`specReconciler(${reason}): a full pass is already running, leaving this one to it`);
+    return;
+  }
   try {
     if (!await convergenceAllowed()) return;
     const installedApps = await appsRepository.listInstalledApps();
@@ -345,6 +355,8 @@ async function requestFullConvergence({ reason, includeCompliance = false } = {}
     }
   } catch (error) {
     log.error(`specReconciler(${reason}): ${error.message}`);
+  } finally {
+    release();
   }
 }
 
