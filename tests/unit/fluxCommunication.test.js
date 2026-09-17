@@ -1727,6 +1727,62 @@ describe('fluxCommunication tests', () => {
     });
   });
 
+  describe('a sync response is admitted on the verdict of its envelope check', () => {
+    afterEach(() => {
+      sinon.restore();
+    });
+
+    function recordSyncEvents() {
+      const seen = { progress: [], unverified: [], completed: [] };
+      const onProgress = (key) => seen.progress.push(key);
+      const onUnverified = (key) => seen.unverified.push(key);
+      const onComplete = (...args) => seen.completed.push(args);
+      appSyncEvents.on(SYNC_EVENTS.EPHEMERAL_SYNC_PROGRESS, onProgress);
+      appSyncEvents.on(SYNC_EVENTS.EPHEMERAL_SYNC_UNVERIFIED, onUnverified);
+      appSyncEvents.on(SYNC_EVENTS.EPHEMERAL_SYNC_COMPLETE, onComplete);
+      const stop = () => {
+        appSyncEvents.off(SYNC_EVENTS.EPHEMERAL_SYNC_PROGRESS, onProgress);
+        appSyncEvents.off(SYNC_EVENTS.EPHEMERAL_SYNC_UNVERIFIED, onUnverified);
+        appSyncEvents.off(SYNC_EVENTS.EPHEMERAL_SYNC_COMPLETE, onComplete);
+      };
+      return { seen, stop };
+    }
+
+    it('a chunk whose envelope verifies is progress, and its stream is handled', async () => {
+      sinon.stub(peerManager, 'isSyncResponseWanted').returns(true);
+      sinon.stub(fluxCommunicationUtils, 'verifyFluxBroadcast')
+        .resolves({ result: fluxCommunicationUtils.VerifyResult.OK, announcer: null });
+      const peerKey = '10.20.30.42:16127';
+      const chunk = { data: { type: 'fluxapptempsync', done: true, messages: [] } };
+      const { seen, stop } = recordSyncEvents();
+      try {
+        await fluxCommunication.dispatchSyncResponse(chunk, { key: peerKey });
+      } finally {
+        stop();
+      }
+      expect(seen.progress).to.deep.equal([peerKey]);
+      expect(seen.unverified).to.deep.equal([]);
+      expect(seen.completed).to.deep.equal([['apptemp', peerKey]]);
+    });
+
+    it('a chunk whose envelope does not verify ends the request, and its stream is not handled', async () => {
+      sinon.stub(peerManager, 'isSyncResponseWanted').returns(true);
+      sinon.stub(fluxCommunicationUtils, 'verifyFluxBroadcast')
+        .resolves({ result: fluxCommunicationUtils.VerifyResult.BAD_SIGNATURE, announcer: null });
+      const peerKey = '10.20.30.43:16127';
+      const chunk = { data: { type: 'fluxapptempsync', done: true, messages: [] } };
+      const { seen, stop } = recordSyncEvents();
+      try {
+        await fluxCommunication.dispatchSyncResponse(chunk, { key: peerKey });
+      } finally {
+        stop();
+      }
+      expect(seen.progress).to.deep.equal([]);
+      expect(seen.unverified).to.deep.equal([peerKey]);
+      expect(seen.completed).to.deep.equal([]);
+    });
+  });
+
   describe('the crossing-dial rule: first connection wins, the newcomer loses', () => {
     afterEach(() => {
       peerManager.reset();

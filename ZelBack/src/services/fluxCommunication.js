@@ -1061,7 +1061,8 @@ async function processSyncChunk(msgObj, peerSocket) {
  */
 async function verifySyncEnvelope(msgObj) {
   try {
-    return await fluxCommunicationUtils.verifyFluxBroadcast(msgObj);
+    const { result } = await fluxCommunicationUtils.verifyFluxBroadcast(msgObj);
+    return result;
   } catch (error) {
     log.error(error);
     return null;
@@ -2205,6 +2206,7 @@ module.exports = {
   handleAppRunningSyncResponse,
   handleAppInstallingSyncResponse,
   handleAppInstallingErrorsSyncResponse,
+  dispatchSyncResponse,
   handleIPChangedMessage,
   handleAppRemovedMessage,
   initiateAndHandleConnection,
