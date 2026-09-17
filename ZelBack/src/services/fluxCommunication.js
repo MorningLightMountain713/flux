@@ -2441,6 +2441,7 @@ module.exports = {
   handleAppRunningSyncResponse,
   handleAppInstallingSyncResponse,
   handleAppInstallingErrorsSyncResponse,
+  dispatchSyncResponse,
   handleIPChangedMessage,
   recordOwnAddressMove,
   announceOwnAddressMove,
