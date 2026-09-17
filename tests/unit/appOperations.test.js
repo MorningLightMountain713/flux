@@ -877,10 +877,7 @@ describe('appOperations tests', () => {
       sinon.stub(appsRuntimeState, 'isOperatorStopped').resolves(false);
       sinon.stub(serviceHelper, 'delay').resolves();
 
-      sinon.stub(syncthingService, 'getHealth').resolves({
-        status: 'success',
-        data: { status: 'OK' },
-      });
+      sinon.stub(syncthingService, 'getHealth').resolves({ status: 'OK' });
 
       deploymentProviderStub = sinon.stub(deploymentProvider, 'listInstalledDeployments').resolves([]);
 
@@ -888,6 +885,14 @@ describe('appOperations tests', () => {
 
       sinon.stub(dbHelper, 'databaseConnection').returns({ db: () => ({}) });
       sinon.stub(dbHelper, 'findOneInDatabase').resolves(null);
+    });
+
+    it('skips the cycle while syncthing does not answer its health check with OK', async () => {
+      syncthingService.getHealth.resolves({ status: 'starting' });
+
+      await appOperations.coordinateActiveStandbyApps();
+
+      expect(deploymentProviderStub.called).to.be.false;
     });
 
     it('should skip execution while a folder-set-changing operation is in flight', async () => {
