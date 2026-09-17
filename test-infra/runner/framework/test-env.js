@@ -2139,10 +2139,19 @@ async function _buildEnv(
       const sinceSeconds = Math.floor(Date.now() / 1000);
       const saved = container.waitStrategy;
       container.waitStrategy = nodeReadyWaitStrategy(fluxNodes[index].ip);
+      // The build-time log consumer dies with the stopped process and never
+      // re-attaches, so a restart's second boot is captured by re-attaching the
+      // SAME collector through the container's own logs API (demuxed by the
+      // library) - whether or not the boot answered on its API in time.
+      const cfg = nodeConfigs.find((n) => n.index === index);
+      const since = Math.floor(Date.now() / 1000);
       try {
         await container.restart({ timeout });
       } finally {
         container.waitStrategy = saved;
+        if (cfg?.logCollector) {
+          await container.logs({ since }).then(cfg.logCollector, () => {});
+        }
       }
       // RE-ATTACH THE LOG COLLECTOR. withLogConsumer's stream is a following read of the
       // container's log, and a restart ENDS it - the collector records [LOG_STREAM_ENDED]
@@ -2166,14 +2175,6 @@ async function _buildEnv(
           .catch((err) => logCollector.note(`[LOG_STREAM_REATTACH_FAILED: ${err.message}]`));
       }
       if (clients[index]) await clients[index].connectEventStream();
-      // The build-time log consumer dies with the stopped process and never
-      // re-attaches, so every restart suite's capture ended at the stop and
-      // the second boot was a black box. Re-attach the SAME collector through
-      // the container's own logs API (demuxed by the library).
-      const cfg = nodeConfigs.find((n) => n.index === index);
-      if (cfg?.logCollector) {
-        cfg.logCollector(await container.logs({ since: Math.floor(Date.now() / 1000) }));
-      }
       return clients[index];
     },
 
