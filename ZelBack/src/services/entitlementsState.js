@@ -2,7 +2,6 @@
 
 const config = require('config');
 const { inChainOrder } = require('./utils/softForkRows');
-const bs58check = require('bs58check').default;
 const dbHelper = require('./dbHelper');
 const log = require('../lib/log');
 const { getSpecPolicy } = require('./utils/specLibs');
@@ -80,9 +79,12 @@ async function assertSpecEntitled(canonicalSpec, owner, height, isEncrypted) {
     return;
   }
 
+  // The resolve key is the bytes a membership carries on chain, so it comes
+  // from the same conversion that publishes one, for either address type.
+  const { PolicyGroupMessage } = await getSpecPolicy();
   let fluxidBytes;
   try {
-    fluxidBytes = new Uint8Array(bs58check.decode(owner));
+    fluxidBytes = PolicyGroupMessage.encodeFluxid(owner).bytes;
   } catch (error) {
     throw new Error(`Owner address '${owner}' is not a valid fluxid for feature entitlement checks`);
   }
