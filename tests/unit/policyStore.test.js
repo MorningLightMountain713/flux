@@ -305,9 +305,9 @@ describe('policyStore tests', () => {
         await store.startSync();
         const callsAfterStart = serviceHelperStub.axiosGet.callCount;
 
-        // 6h advances the two documents on that interval, not the 12h tampering blocklist.
+        // 6h advances the three documents on that interval - blocklist, blockedRepositories,
+        // enterpriseNodes - not the 12h tampering blocklist.
         await clock.tickAsync(6 * 60 * 60 * 1000 + 1000);
-        // the three documents on the six-hour interval: blocklist, blockedRepositories, enterpriseNodes
         expect(serviceHelperStub.axiosGet.callCount).to.equal(callsAfterStart + 3);
 
         store.stopSync();

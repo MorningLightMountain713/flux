@@ -624,6 +624,73 @@ describe('FluxPeerSocket tests', () => {
     });
   });
 
+  describe('liveness credited from any traffic', () => {
+    // A pong is an ordinary frame and queues behind everything else that peer sent, so the busier
+    // a peer is talking to us the later its pong is read. Crediting only pongs therefore fires the
+    // heartbeat first on the connections we have the most evidence are alive. Measured in the peer
+    // simulator at 3,000 nodes: 245,936 messages read in one minute, of which 13 were pings, and
+    // 45s later every node terminated every peer — then rebuilt and did it again, indefinitely.
+
+    it('should not terminate a peer that missed pongs but sent other traffic', () => {
+      const ws = createMockWs();
+      const peer = new FluxPeerSocket(ws, '10.0.0.1', '16127', manager);
+      peer.source = PEER_SOURCE.RANDOM;
+      const terminate = sinon.stub(peer, 'terminate');
+
+      peer.ws.onmessage({ data: 'anything' });
+      // One ping more than the threshold: the first is in flight, and each ping
+      // after it is what makes the one before it overdue.
+      for (let i = 0; i <= peer.maxMissedPongs; i += 1) peer.onPingSent();
+
+      expect(peer.missedPongs).to.be.at.least(peer.maxMissedPongs);
+      sinon.assert.notCalled(terminate);
+      expect(peer.isAlive).to.equal(true);
+    });
+
+    it('should still terminate a peer that has sent nothing at all', () => {
+      const ws = createMockWs();
+      const peer = new FluxPeerSocket(ws, '10.0.0.1', '16127', manager);
+      peer.source = PEER_SOURCE.RANDOM;
+      const terminate = sinon.stub(peer, 'terminate');
+
+      expect(peer.lastMessageMono).to.equal(null);
+      expect(peer.heardFromRecently).to.equal(false);
+      // One ping more than the threshold: the first is in flight, and each ping
+      // after it is what makes the one before it overdue.
+      for (let i = 0; i <= peer.maxMissedPongs; i += 1) peer.onPingSent();
+      sinon.assert.called(terminate);
+    });
+
+    it('should stop crediting traffic older than the window the pong count allows', () => {
+      const ws = createMockWs();
+      const peer = new FluxPeerSocket(ws, '10.0.0.1', '16127', manager);
+      peer.source = PEER_SOURCE.RANDOM;
+
+      peer.ws.onmessage({ data: 'anything' });
+      expect(peer.heardFromRecently).to.equal(true);
+
+      // Older than pingInterval * maxMissedPongs — the same window a silent peer already gets.
+      peer.lastMessageMono -= peer.livenessWindowMs + 1;
+      expect(peer.heardFromRecently).to.equal(false);
+    });
+
+    it('should measure the window on a clock the system cannot move', () => {
+      const ws = createMockWs();
+      const peer = new FluxPeerSocket(ws, '10.0.0.1', '16127', manager);
+      peer.source = PEER_SOURCE.RANDOM;
+      peer.ws.onmessage({ data: 'anything' });
+
+      // A wall clock jumping forward — NTP correction, a manual set — must not age a peer out.
+      const realNow = Date.now;
+      Date.now = () => realNow() + 3_600_000;
+      try {
+        expect(peer.heardFromRecently).to.equal(true);
+      } finally {
+        Date.now = realNow;
+      }
+    });
+  });
+
   describe('onNakReceived', () => {
 
 
@@ -765,6 +832,30 @@ describe('FluxPeerManager tests', () => {
       const peer = manager.add(ws, '10.0.0.1', 16_127, { source: PEER_SOURCE.RANDOM });
       expect(peer.port).to.equal('16127');
       expect(peer.key).to.equal('10.0.0.1:16127');
+    });
+
+    // `peerThresholdReached` is a latched edge, cleared only below the DEGRADED
+    // level, so after it has fired it says nothing about a pool that has since
+    // lost a member. A listener that has to top such a pool back up hears about
+    // every join or it hears about none of the ones that matter.
+    it('announces every connection, not only the one that crosses the threshold', () => {
+      const joined = [];
+      const crossings = [];
+      manager.on('peerConnected', (key) => joined.push(key));
+      manager.on('peerThresholdReached', (count) => crossings.push(count));
+
+      // appSyncPeerThreshold is 12, so the edge fires on the twelfth and the
+      // three after it are the ones a latched edge cannot report.
+      const total = 15;
+      for (let i = 1; i <= total; i += 1) {
+        manager.add(createMockWs(`10.0.0.${i}`, '16127'), `10.0.0.${i}`, '16127', { source: PEER_SOURCE.RANDOM });
+      }
+
+      expect(joined.length, 'a connection went unannounced').to.equal(total);
+      expect(crossings, 'the threshold is an edge and fires once').to.deep.equal([12]);
+      expect(joined.slice(12), 'the connections after the edge were not announced').to.deep.equal([
+        '10.0.0.13:16127', '10.0.0.14:16127', '10.0.0.15:16127',
+      ]);
     });
   });
 
@@ -928,6 +1019,135 @@ describe('FluxPeerManager tests', () => {
 
       expect(lost, 'a replaced connection died in silence')
         .to.deep.equal([{ key: '10.0.0.3:16127', connectionId: firstConnection }]);
+    });
+  });
+
+  // A node that syncs from itself learns nothing it does not already hold, and
+  // this asks for a fixed small number of peers - so drawing self spends one of
+  // very few attempts on a guaranteed non-answer. On a small fleet that is the
+  // difference between the spawner starting and never starting: observed, a
+  // node asked its own address, timed out at zero completions, and never
+  // published SPAWNER_READY.
+  describe('getEligibleSyncPeers', () => {
+    // A current build: it can refuse, so it is asked whatever its uptime.
+    const eligible = (m, ip) => {
+      const ws = createMockWs(ip, '16127');
+      const peer = m.add(ws, ip, '16127', { source: PEER_SOURCE.RANDOM });
+      peer.remoteCapabilities.add('appStateSync');
+      peer.remoteCapabilities.add('appStateSyncRefusal');
+      return peer;
+    };
+
+    // A build that answers a request it cannot serve with an empty batch, which
+    // reads as a completed survey of an empty network.
+    const legacy = (m, ip, uptimeSeconds) => {
+      const ws = createMockWs(ip, '16127');
+      const peer = m.add(ws, ip, '16127', { source: PEER_SOURCE.RANDOM });
+      peer.remoteCapabilities.add('appStateSync');
+      peer.remoteFluxUptime = uptimeSeconds;
+      return peer;
+    };
+
+    it('never offers this node its own address', () => {
+      eligible(manager, '10.0.0.1');
+      eligible(manager, '10.0.0.2');
+      manager.setOwnSocketAddress('10.0.0.1:16127');
+
+      const keys = manager.getEligibleSyncPeers().map((p) => p.key);
+
+      expect(keys, 'a node was offered itself to sync from').to.not.include('10.0.0.1:16127');
+      expect(keys).to.include('10.0.0.2:16127');
+    });
+
+    it('offers every peer when this node does not know its own address yet', () => {
+      eligible(manager, '10.0.0.1');
+      eligible(manager, '10.0.0.2');
+
+      expect(manager.getEligibleSyncPeers()).to.have.lengthOf(2);
+    });
+
+    // There is no uptime bar any more. It was 7500 seconds - the same 125
+    // minutes as the block fallback - so it only ever admitted peers that had
+    // already become authoritative the slow way, and it was read from a header
+    // the peer sets itself. A node that has just started is now asked like any
+    // other, and answers for itself: it refuses if it has not caught up.
+    it('offers a peer that has only just started but can refuse', () => {
+      const peer = eligible(manager, '10.0.0.1');
+      peer.remoteFluxUptime = 1;
+
+      expect(manager.getEligibleSyncPeers().map((p) => p.key)).to.deep.equal(['10.0.0.1:16127']);
+    });
+
+    it('offers a peer that can refuse and never said how long it had been up', () => {
+      const peer = eligible(manager, '10.0.0.1');
+      peer.remoteFluxUptime = null;
+
+      expect(manager.getEligibleSyncPeers().map((p) => p.key)).to.deep.equal(['10.0.0.1:16127']);
+    });
+
+    // THE MIXED FLEET. An older build cannot say it has nothing worth
+    // surveying: it answers with an empty batch, and the asker counts that as
+    // one of the three peers it needs. Asking young ones would put the original
+    // defect back during exactly the window that makes it likely - a rolling
+    // upgrade, when a great many nodes are young at once.
+    it('does not offer a young peer that cannot refuse', () => {
+      legacy(manager, '10.0.0.1', 60);
+
+      expect(manager.getEligibleSyncPeers()).to.have.lengthOf(0);
+    });
+
+    it('offers an old peer that cannot refuse, because it has caught up by the slow road', () => {
+      legacy(manager, '10.0.0.1', 8000);
+
+      expect(manager.getEligibleSyncPeers().map((p) => p.key)).to.deep.equal(['10.0.0.1:16127']);
+    });
+
+    it('does not offer a peer that cannot refuse and never said how long it had been up', () => {
+      legacy(manager, '10.0.0.1', null);
+
+      expect(manager.getEligibleSyncPeers()).to.have.lengthOf(0);
+    });
+
+    // Which peers have been asked, and how they answered, belongs to whoever
+    // issued the requests and holds their deadlines. The manager offers every
+    // connected peer that could serve one and asks that owner whether an
+    // arriving answer is still wanted.
+    // THE WINDOW AFTER EVERY PING. pingAll() pings the whole fleet in one loop,
+    // so when a ping in flight counted as a missed pong, EVERY peer failed this
+    // bar at the same moment and the pool went empty once per ping interval
+    // however healthy the fleet was. A sync reconcile landing in that window was
+    // told there was nobody to ask, and left its slot empty with nothing to
+    // re-examine it - which stranded a state sync outright (suite 83, test 9).
+    it('still offers every peer immediately after pinging all of them', () => {
+      eligible(manager, '10.0.0.1');
+      eligible(manager, '10.0.0.2');
+
+      manager.pingAll();
+
+      const keys = manager.getEligibleSyncPeers().map((p) => p.key).sort();
+      expect(keys, 'pinging the fleet emptied the pool of peers to sync from').to.deep.equal(['10.0.0.1:16127', '10.0.0.2:16127']);
+    });
+
+    // And the bar still bites when a pong is genuinely missed: the second ping
+    // goes out with the first still unanswered, which is one real miss.
+    it('does not offer a peer that left a ping unanswered for a whole interval', () => {
+      const silent = eligible(manager, '10.0.0.1');
+      const answering = eligible(manager, '10.0.0.2');
+
+      manager.pingAll();
+      answering.onPongReceived();
+      manager.pingAll();
+
+      expect(silent.missedPongs, 'a genuinely missed pong was not counted').to.equal(1);
+      expect(manager.getEligibleSyncPeers().map((p) => p.key)).to.deep.equal(['10.0.0.2:16127']);
+    });
+
+    it('offers every capable peer, leaving who has been asked to the asker', () => {
+      eligible(manager, '10.0.0.1');
+      eligible(manager, '10.0.0.2');
+
+      const keys = manager.getEligibleSyncPeers().map((p) => p.key).sort();
+      expect(keys).to.deep.equal(['10.0.0.1:16127', '10.0.0.2:16127']);
     });
   });
 

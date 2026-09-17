@@ -200,6 +200,42 @@ describe('appUninstaller tests', () => {
   });
 
   describe('removeAppLocallyApi', () => {
+    it('refuses a missing appname by name, rather than dereferencing it', async () => {
+      const req = {
+        params: {},
+        query: {},
+      };
+      const res = {
+        json: sinon.stub(),
+      };
+
+      messageHelperStub.createErrorMessage.returns({ status: 'error' });
+
+      await appUninstaller.removeAppLocallyApi(req, res);
+
+      expect(res.json.calledOnce).to.be.true;
+      expect(logStub.error.called).to.be.true;
+      expect(messageHelperStub.createErrorMessage.firstCall.args[0]).to.equal('No Flux App specified');
+      expect(messageHelperStub.createErrorMessage.firstCall.args[1]).to.not.equal('TypeError');
+    });
+
+    it('rejects a component name without dereferencing an absent appname first', async () => {
+      const req = {
+        params: { appname: 'component_app' },
+        query: {},
+      };
+      const res = {
+        json: sinon.stub(),
+      };
+
+      messageHelperStub.createErrorMessage.returns({ status: 'error' });
+
+      await appUninstaller.removeAppLocallyApi(req, res);
+
+      expect(messageHelperStub.createErrorMessage.firstCall.args[0]).to.equal('Components cannot be removed manually');
+      expect(verificationHelperStub.verifyPrivilege.called).to.be.false;
+    });
+
     it('should reject unauthorized users', async () => {
       const req = {
         params: { appname: 'testapp' },
