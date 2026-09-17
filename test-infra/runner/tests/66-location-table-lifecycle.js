@@ -626,7 +626,7 @@ describe('the location table survives restarts and refuses bad publications', fu
     expect(refused.data.message).to.include('Widen the allowed locations');
   });
 
-  it('never gates an expire-only update, and still gates one that changes placement', async function () {
+  it('never gates an update that leaves placement alone, and still gates one that changes it', async function () {
     this.timeout(120000);
     // The owner of the app above can no longer register it. They must still be
     // able to renew it and to cancel it: refusing those would strand them with
@@ -638,18 +638,18 @@ describe('the location table survives restarts and refuses bad publications', fu
     const cancellation = await verifyUpdate({ ...registeredSpec, expire: 1 });
     expect(cancellation.status, JSON.stringify(cancellation.data)).to.equal('success');
 
-    // Identical instance count, identical geography, identical everything except
-    // one component's disk - which placement DOES depend on. That is the whole
-    // difference between this and the renewal above, and it is enough for the
-    // gate to apply and the narrowed table to refuse.
+    // A component's disk is not something placement reads: tier is not a
+    // filter, install time sizes an app against the node's real hardware. So a
+    // grown disk passes the narrowed table the way a renewal does, rather than
+    // being refused over a number the gate cannot act on.
     const resized = await verifyUpdate({
       ...registeredSpec,
       compose: [{ ...registeredSpec.compose[0], hdd: registeredSpec.compose[0].hdd + 1 }],
     });
-    expect(resized.status).to.equal('error');
-    expect(resized.data.message).to.include('eligible nodes');
+    expect(resized.status, JSON.stringify(resized.data)).to.equal('success');
 
-    // And the plainest placement change of all.
+    // The instance count is what placement reads, so raising it is the
+    // plainest placement change of all.
     const bumped = await verifyUpdate({ ...registeredSpec, instances: instanceCount + 1 });
     expect(bumped.status).to.equal('error');
     expect(bumped.data.message).to.include('eligible nodes');
