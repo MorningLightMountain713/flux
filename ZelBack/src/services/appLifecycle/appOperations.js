@@ -710,16 +710,19 @@ function lineReporter(res) {
 
 /**
  * The same, for the redeploy routes, whose stream carries message OBJECTS with
- * no separator between them - a reader splits it on `}{`. A newline here would
- * land inside the value a caller parses.
+ * no separator between them - a reader splits it on `}{`. A progress line
+ * arrives as a success envelope and a failure as the error envelope the
+ * redeploy built, so the last object's status says how it ended. A newline
+ * here would land inside the value a caller parses.
  *
  * @param {import('express').Response} res
- * @returns {function(object): void}
+ * @returns {function(string|object): void}
  */
 function messageReporter(res) {
   return (message) => {
     if (res.writableEnded) return;
-    res.write(serviceHelper.ensureString(message));
+    const chunk = typeof message === 'string' ? messageHelper.createSuccessMessage(message) : message;
+    res.write(serviceHelper.ensureString(chunk));
     if (res.flush) res.flush();
   };
 }
