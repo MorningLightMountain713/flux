@@ -524,6 +524,19 @@ describe('volumeService tests', () => {
       expect(volumes[0].mount).to.equal(`${APPS_FOLDER}fluxweb_a1b2c3`);
     });
 
+    // A v1-3 app has no compose array and one implicit component, addressed as
+    // the literal 'null' by every caller that speaks the v1 API.
+    it("resolves a flat app addressed as the literal 'null' to its bare-identity mount", async () => {
+      appsRepositoryStub.getInstalledApp.resolves({ name: 'legacyapp', identity: null });
+      appsRepositoryStub.listInstalledIdentities.resolves([null]);
+      deviceHelperStub.listMountedFilesystems.resolves([mountRow(`${APPS_FOLDER}fluxlegacyapp`)]);
+
+      const volumes = await volumeService.listComponentVolumeMounts('legacyapp', 'null');
+
+      expect(volumes).to.have.lengthOf(1);
+      expect(volumes[0].mount).to.equal(`${APPS_FOLDER}fluxlegacyapp`);
+    });
+
     it('refuses to guess when one directory name is mounted twice', async () => {
       // Never last-wins. Two filesystems sharing a directory name break the
       // assumption the lookup rests on, and every caller addresses real data.

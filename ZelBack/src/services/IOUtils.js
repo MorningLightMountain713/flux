@@ -324,9 +324,7 @@ function formatVolumeInfo(volumes, { multiplier, decimal, fields } = {}) {
  */
 async function getVolumeInfo(appname, component, multiplier, decimal, fields) {
   try {
-    // 'null' is the v1-3 flat form, whose identifier is the bare app name.
-    const resolvedComponent = component === 'null' ? appname : component;
-    const volumes = await volumeService.listComponentVolumeMounts(appname, resolvedComponent);
+    const volumes = await volumeService.listComponentVolumeMounts(appname, component);
     // `{ error, mounts }`, not the array-or-false this replaced: development's
     // e1a906c9f retired that three-type union and six callers destructure this.
     return { error: null, mounts: formatVolumeInfo(volumes, { multiplier, decimal, fields }) };

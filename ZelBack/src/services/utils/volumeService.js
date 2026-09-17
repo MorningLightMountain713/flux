@@ -96,6 +96,11 @@ async function listComponentVolumeMounts(appName, componentName) {
   const installed = await appsRepository.getInstalledApp(appName);
   if (!installed) return [];
 
+  // 'null' is the v1-3 flat form's address: an app with no compose array is
+  // its own single component, and every caller that speaks the v1 API names
+  // that component so.
+  const component = componentName === 'null' ? appName : componentName;
+
   // Null identity is an app installed before identities were stored: its
   // artifacts are named from the app name, which is exactly what fromSpec falls
   // back to, so the same expression covers both.
@@ -129,8 +134,8 @@ async function listComponentVolumeMounts(appName, componentName) {
     // identifier is the bare identity. The two are told apart by looking, not by
     // guessing from the name — a compose app may legitimately have a component
     // named after itself, which no rule about the string can distinguish.
-    const candidates = [DeploymentSpec.containerIdentifierFor(componentName, identity, replica)];
-    if (componentName === appName) {
+    const candidates = [DeploymentSpec.containerIdentifierFor(component, identity, replica)];
+    if (component === appName) {
       candidates.push(replica != null ? `${identity}_${replica}` : identity);
     }
     const identifier = candidates.find((id) => byName.has(dockerService.getAppIdentifier(id)));
