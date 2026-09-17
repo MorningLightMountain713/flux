@@ -306,7 +306,7 @@ async function getBlocklist() {
     return cachedResponse;
   }
   try {
-    const response = await serviceHelper.axiosGet(`${config.policy.baseUrl}/blocklist.json`);
+    const response = await serviceHelper.axiosGet(`${config.get('policy.baseUrl')}/blocklist.json`);
     // Every element must be a typed entry, and there must be at least one. A
     // response that is merely array-shaped is the flat document or an error page,
     // and taking it would answer "nothing is blocked" from something that never

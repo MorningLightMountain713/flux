@@ -64,7 +64,7 @@ function supervisesSyncthing(syncthingIp, arcane) {
   return SYNCTHING_LOCAL_ADDRESSES.includes(syncthingIp) && !arcane;
 }
 
-const fluxosSupervisesSyncthing = supervisesSyncthing(config.syncthing.ip, isArcane);
+const fluxosSupervisesSyncthing = supervisesSyncthing(config.get('syncthing.ip'), isArcane);
 
 /**
  * If the binary is executable
@@ -128,8 +128,8 @@ let lastReportedHealth = SYNCTHING_HEALTH.UNMEASURED;
 function monotonicMs() {
   return Number(process.hrtime.bigint() / 1_000_000n);
 }
-const SYNCTHING_HEALTH_WINDOW_MS = config.syncthing.healthWindowMs;
-const SYNCTHING_SENTINEL_INTERVAL_MS = config.syncthing.sentinelIntervalMs;
+const SYNCTHING_HEALTH_WINDOW_MS = config.get('syncthing.healthWindowMs');
+const SYNCTHING_SENTINEL_INTERVAL_MS = config.get('syncthing.sentinelIntervalMs');
 // The device id is the SHA-256 of syncthing's cert (protocol.NewDeviceID); it is
 // fixed for the life of the install, so it is read once and served from here.
 // Cleared when syncthing is stopped, the only point a new cert could appear.

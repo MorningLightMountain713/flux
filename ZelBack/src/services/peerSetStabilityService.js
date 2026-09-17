@@ -46,12 +46,12 @@ const DOS_MESSAGE_PREFIX = 'Peer set unstable';
 // Whether this service's own verdict is the one on the sticky slot.
 let ourDosActive = false;
 
-const DIP_THRESHOLD = config.fluxapps.peerSetDipDosThreshold ?? 5;
-const WINDOW_MS = (config.fluxapps.peerSetDipWindowMinutes ?? 120) * 60 * 1000;
+const DIP_THRESHOLD = config.get('fluxapps.peerSetDipDosThreshold');
+const WINDOW_MS = config.get('fluxapps.peerSetDipWindowMinutes') * 60 * 1000;
 // Only the release needs a clock - a dip evaluates on arrival. A node that has
 // stabilised produces no events at all, so without this it would hold the DOS
 // until something unrelated happened to it.
-const EVALUATE_INTERVAL_MS = config.fluxapps.peerSetDipEvaluateMs ?? 60 * 1000;
+const EVALUATE_INTERVAL_MS = config.get('fluxapps.peerSetDipEvaluateMs');
 
 /**
  * Dip timestamps, newest last, never more than DIP_THRESHOLD of them.
