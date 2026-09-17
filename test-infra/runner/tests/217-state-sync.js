@@ -7,8 +7,12 @@ import { dbClient } from '../framework/db-client.js';
 import { buildSeedableApp } from '../framework/seed-helper.js';
 import { startTicker, advanceBlock, queueAppTx } from '../framework/daemon-control.js';
 import {
-  waitForDaemonReady, waitForNodeStatus, waitForBlockProcessed,
-  waitForAppInstalled, waitForOrchestratorState,
+  waitFor,
+  waitForAppInstalled,
+  waitForBlockProcessed,
+  waitForDaemonReady,
+  waitForNodeStatus,
+  waitForOrchestratorState,
 } from '../framework/wait.js';
 import { getSubnetConfig, REGISTRY_REPO_HOST } from '../framework/subnet-config.js';
 import { fluxTeamKey } from '../framework/keys.js';
@@ -373,10 +377,12 @@ describe('State sync: failed sync peer is replaced', function () {
 
     await queueAppTx(app.hash);
     await advanceBlock();
-    await Promise.any(
-      clients.map((c) => c.waitForEvent('network:apprunning',
-        (d) => d.apps?.some((a) => a.name === appName), 60000)),
-    );
+    // A seeded location is a row in the source's event log, not a broadcast, so
+    // each source is asked for the location it derives rather than listened to.
+    await Promise.all(clients.map((c) => waitFor(async () => {
+      const res = await c.getAppLocations(appName);
+      return Array.isArray(res?.data) && res.data.length > 0;
+    }, { timeout: 60000, interval: 2000, label: `${c.ip} derives the seeded location` })));
     await waitForOrchestratorState(clients[0], 'READY', 120000);
 
     // Poison one source: ALL its appstateevents reads fail until cleared, so
