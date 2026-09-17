@@ -2531,7 +2531,7 @@ async function coordinateActiveStandbyApps() {
       // eslint-disable-next-line global-require
       const syncthingService = require('../syncthingService');
       const syncthingHealth = await syncthingService.getHealth();
-      if (syncthingHealth.status !== 'success' || !syncthingHealth.data || syncthingHealth.data.status !== 'OK') {
+      if (syncthingHealth?.status !== 'OK') {
         log.warn('activeStandby: Syncthing is not available or not healthy, skipping this cycle');
         return;
       }
