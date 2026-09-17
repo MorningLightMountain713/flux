@@ -2704,7 +2704,7 @@ describe('appInspector tests', () => {
 
       sinon.assert.calledWith(
         messageHelperStub.createErrorMessage,
-        'Application mycomponent_myapp is not installed on this node',
+        'Application not found',
       );
       sinon.assert.notCalled(dockerStub.dockerContainerExec);
     });

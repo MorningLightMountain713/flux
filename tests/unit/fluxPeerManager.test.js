@@ -2922,8 +2922,10 @@ describe('sync peer availability', () => {
     const spy = sinon.spy();
     manager.on('syncPeersAvailable', spy);
 
-    // pingAll takes every peer out of candidacy at once - this is the window a
-    // sync round can land in and find nobody to ask.
+    // A ping in flight is not a missed pong: candidacy goes only once a ping has
+    // gone unanswered for a whole interval, which is the window a sync round can
+    // land in and find nobody to ask.
+    peer.onPingSent();
     peer.onPingSent();
     manager.refreshSyncAvailability();
     expect(manager.hasSyncCandidate(), 'unanswered ping is not askable').to.equal(false);

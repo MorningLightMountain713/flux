@@ -30,7 +30,6 @@ const repoRoot = path.join(__dirname, '..', '..');
 const NOT_AN_ENTRY_POINT = new Map([
   ['init.js', 'writes config/userconfig.js with inquirer and never reads node-config'],
   ['sampleUserConfig.js', 'a data file - the template init.js writes from'],
-  ['test.js', 'a stray one-line console.log, not reachable from any script'],
 ]);
 
 // Dotfiles are tooling configuration, read by eslint and never by node as a
