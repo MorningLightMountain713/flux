@@ -14,6 +14,7 @@ const ownerGenerationRecord = require('../quorumGrant/ownerGenerationRecord');
 const rosterOverlay = require('../quorumGrant/rosterOverlay');
 const networkStateService = require('../networkStateService');
 const { getSpec, assertVersionActivated } = require('../utils/specLibs');
+const { ensureProvidersRegistered } = require('../utils/specCutover');
 const { getStateBeforeHeight } = require('../appDatabase/appSpecHistory');
 const globalState = require('../utils/globalState');
 const {
@@ -175,6 +176,9 @@ async function storeAppTemporaryMessage(message, options = {}) {
     if (appEvent.isEncrypted) {
       if (await benchmarkService.isSystemSecure()) {
         try {
+          // The providers are registered by the first local spec resolution; a
+          // sealed message can arrive before one has happened.
+          await ensureProvidersRegistered();
           const provider = await appEvent.spec.createProvider();
           // A v9 signature commits to a contentHash, so opening the envelope
           // says nothing about whether what came out is what the owner signed
