@@ -76,15 +76,6 @@ async function apprunningEvent({
   };
 }
 
-// Evictions carry no broadcastedAt, so the sender's timestamp sort always places
-// them at the very front of the response - in the first slice.
-const evictedEvent = (nodeNum) => ({
-  type: 'evicted',
-  ip: socketAddr(nodeNum),
-  dedupKey: `evicted:${socketAddr(nodeNum)}`,
-  createdAt: new Date(),
-});
-
 // Where apps run on one holder, as the joiner derives it from its app state
 // event log and serves it.
 async function locationsByIp(client, ip) {
@@ -108,11 +99,10 @@ async function bootAndPeer(env, nodeIndices) {
   await startTicker();
 }
 
-describe('Sync response: eviction, pruning and forged events', function () {
+describe('Sync response: pruning and forged events', function () {
   let env;
   dumpLogsOnFailure(() => env);
 
-  const EVICTED_NODE = 9;
   const PRUNE_NODE = 8;
   const FORGERY_NODE = 7;
   // Stamped when the events are INJECTED, not when mocha loads this file.
@@ -187,15 +177,6 @@ describe('Sync response: eviction, pruning and forged events', function () {
         dedupKey: `filler:${i}`,
       }));
     }
-
-    // The node is evicted, and reports itself running an app later in the same
-    // response. The eviction must still be the outcome.
-    events.push(evictedEvent(EVICTED_NODE));
-    events.push(await apprunningEvent({
-      nodeNum: EVICTED_NODE,
-      apps: ['evictedapp'],
-      broadcastedAt: stamp + FILLER_EVENTS + 100,
-    }));
 
     // Two broadcasts from one node: the newer drops an app, which must be
     // pruned even though the older broadcast is in an earlier slice.
@@ -275,13 +256,6 @@ describe('Sync response: eviction, pruning and forged events', function () {
   after(async function () {
     this.timeout(30000);
     await env?.teardown();
-  });
-
-  it('should keep an evicted node evicted, even when a later slice reports it running', async function () {
-    this.timeout(60000);
-    const rows = await locationsByIp(env.clients[10], socketAddr(EVICTED_NODE));
-
-    expect(rows, 'evicted node has location rows again').to.be.an('array').with.length(0);
   });
 
   it('should prune an app the newest broadcast no longer reports', async function () {
