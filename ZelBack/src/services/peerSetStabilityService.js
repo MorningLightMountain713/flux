@@ -30,6 +30,8 @@
  * different: one is what the node did wrong, the other is what it has shown.
  */
 
+'use strict';
+
 const config = require('config');
 const log = require('../lib/log');
 const fluxNetworkHelper = require('./fluxNetworkHelper');
@@ -41,6 +43,8 @@ const fluxEventBus = require('./utils/fluxEventBus');
 // message can neither refuse to overwrite someone else's nor release only its
 // own.
 const DOS_MESSAGE_PREFIX = 'Peer set unstable';
+// Whether this service's own verdict is the one on the sticky slot.
+let ourDosActive = false;
 
 const DIP_THRESHOLD = config.fluxapps.peerSetDipDosThreshold ?? 5;
 const WINDOW_MS = (config.fluxapps.peerSetDipWindowMinutes ?? 120) * 60 * 1000;
@@ -102,8 +106,11 @@ function pruneDips(now) {
 function applyDos(count) {
   if (isOurDosHeld()) return;
   const message = `${DOS_MESSAGE_PREFIX}: lost every peer ${count} times in the last `
-    + `${WINDOW_MS / 60000} minutes. Check this node's network connection.`;
-  fluxNetworkHelper.setStickyDos(OWNER, message);
+    + `${WINDOW_MS / 60_000} minutes. Check this node's network connection.`;
+  fluxNetworkHelper.setStickyDosMessage(message);
+  fluxNetworkHelper.setStickyDosStateValue(100);
+  ourDosActive = true;
+  log.error(message);
   fluxEventBus.publish('peerSetStability:dos', { dips: count, windowMs: WINDOW_MS });
 }
 
@@ -173,7 +180,7 @@ function noteDip(count, info) {
   // questions this list is asked, so older ones are not information.
   if (dips.length > DIP_THRESHOLD) dips = dips.slice(dips.length - DIP_THRESHOLD);
   log.warn(`peerSetStability - peer set collapsed to ${count} peers `
-    + `(${remaining}/${DIP_THRESHOLD} in the last ${WINDOW_MS / 60000} minutes)`);
+    + `(${remaining}/${DIP_THRESHOLD} in the last ${WINDOW_MS / 60_000} minutes)`);
   evaluate();
 }
 
@@ -203,7 +210,7 @@ function start(injected) {
     upSince = Date.now();
   }
   timerHandle = setInterval(evaluate, EVALUATE_INTERVAL_MS);
-  log.info(`peerSetStability - watching for ${DIP_THRESHOLD} peer-set collapses in ${WINDOW_MS / 60000} minutes`);
+  log.info(`peerSetStability - watching for ${DIP_THRESHOLD} peer-set collapses in ${WINDOW_MS / 60_000} minutes`);
 }
 
 function stop() {

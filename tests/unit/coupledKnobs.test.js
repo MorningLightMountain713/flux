@@ -50,7 +50,7 @@ describe('coupled harness knobs track production', () => {
     const shared = knobs.loadSharedConfig().peers;
 
     expect(knobs.peerDeathMs(shared)).to.equal(shared.wsPingIntervalMs * (shared.wsMaxMissedPongs + 1));
-    expect(knobs.peerDeathMs(knobs.PARTITION_PEERS)).to.equal(12000);
+    expect(knobs.peerDeathMs(knobs.PARTITION_PEERS)).to.equal(12_000);
     // No production fallback. It would return 60s where the shared fleet's real
     // answer is 6s, and an over-long budget passes every wait it is given, so the
     // caller's omission would never surface.

@@ -40,7 +40,7 @@ function chownedPaths(runCmdStub) {
 
 function advanceMonotonic(ms) {
   const real = process.hrtime.bigint;
-  process.hrtime.bigint = () => real() + BigInt(ms) * 1000000n;
+  process.hrtime.bigint = () => real() + BigInt(ms) * 1_000_000n;
   return () => { process.hrtime.bigint = real; };
 }
 const { ConfigMethod } = require('../../ZelBack/src/services/utils/syncthingConstants');
@@ -988,7 +988,7 @@ describe('syncthingService tests', () => {
     // refuses nobody - for as long as boot kept failing.
     it('takes the question on once, so a retrying boot cannot restart the window', async function () {
       // The first start runs a full sentinel pass, whose repair path sleeps.
-      this.timeout(30000);
+      this.timeout(30_000);
       syncthingService.setSyncthingUnmeasured();
 
       const started = syncthingService.startSyncthingSentinel();

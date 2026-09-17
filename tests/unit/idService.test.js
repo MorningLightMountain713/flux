@@ -341,9 +341,9 @@ describe('idService tests', () => {
       osTotalmemStub.returns(8 * 1024 ** 3);
       osCpusStub.returns([1, 1, 1, 1]);
       getDosDataStub.returns({
-          dosState: 11,
-          dosMessage: 'Flux IP detection failed',
-        });
+        dosState: 11,
+        dosMessage: 'Flux IP detection failed',
+      });
 
       const expectedResponse = {
         status: 'error',
@@ -366,9 +366,9 @@ describe('idService tests', () => {
       osTotalmemStub.returns(8 * 1024 ** 3);
       osCpusStub.returns([1, 1, 1, 1]);
       getDosDataStub.returns({
-          dosState: 11,
-          dosMessage: 'Flux collision detection. Another ip:port is confirmed on flux network with the same collateral transaction information.',
-        });
+        dosState: 11,
+        dosMessage: 'Flux collision detection. Another ip:port is confirmed on flux network with the same collateral transaction information.',
+      });
 
       const expectedResponse = {
         status: 'error',
@@ -391,9 +391,9 @@ describe('idService tests', () => {
       osTotalmemStub.returns(8 * 1024 ** 3);
       osCpusStub.returns([1, 1, 1, 1]);
       getDosDataStub.returns({
-          dosState: 11,
-          dosMessage: 'test',
-        });
+        dosState: 11,
+        dosMessage: 'test',
+      });
 
       const expectedResponse = {
         status: 'error',
@@ -425,9 +425,9 @@ describe('idService tests', () => {
       osTotalmemStub.returns(8 * 1024 ** 3);
       osCpusStub.returns([1, 1, 1, 1]);
       getDosDataStub.returns({
-          dosState: 11,
-          dosMessage: null,
-        });
+        dosState: 11,
+        dosMessage: null,
+      });
 
       await idService.loginPhrase(undefined, res);
 
@@ -446,9 +446,9 @@ describe('idService tests', () => {
       osTotalmemStub.returns(8 * 1024 ** 3);
       osCpusStub.returns([1, 1, 1, 1]);
       getDosDataStub.returns({
-          dosState: 0,
-          dosMessage: 'Flux IP detection failed',
-        });
+        dosState: 0,
+        dosMessage: 'Flux IP detection failed',
+      });
 
       await idService.loginPhrase(undefined, res);
 
@@ -468,9 +468,9 @@ describe('idService tests', () => {
       osTotalmemStub.returns(8 * 1024 ** 3);
       osCpusStub.returns([1, 1, 1, 1]);
       getDosDataStub.returns({
-          dosState: 0,
-          dosMessage: null,
-        });
+        dosState: 0,
+        dosMessage: null,
+      });
 
       await idService.loginPhrase(undefined, res);
 

@@ -1222,7 +1222,7 @@ describe('AppSyncOrchestrator', () => {
 
       // Ten times the budget. The hash sync and DB rebuild both succeed here, so
       // the ONLY thing left between this node and READY is the fallback.
-      await driveBlocks(2555000, FALLBACK_BLOCKS * 10);
+      await driveBlocks(2_555_000, FALLBACK_BLOCKS * 10);
 
       expect(orchestrator.state, 'a node with no peers reached spawning readiness').to.equal(mod.STATES.SYNCING);
       expect(globalStateStub.appStateAuthoritative, 'it also offered to answer peers about app state').to.equal(false);
@@ -1234,10 +1234,10 @@ describe('AppSyncOrchestrator', () => {
       peersUp();
       await clock.tickAsync(0);
 
-      await driveBlocks(2555000, FALLBACK_BLOCKS - 1);
+      await driveBlocks(2_555_000, FALLBACK_BLOCKS - 1);
       expect(orchestrator.state, 'three blocks is not four').to.equal(mod.STATES.SYNCING);
 
-      await driveBlocks(2555000 + FALLBACK_BLOCKS - 1, 1);
+      await driveBlocks(2_555_000 + FALLBACK_BLOCKS - 1, 1);
       expect(orchestrator.state).to.equal(mod.STATES.READY);
     });
 
@@ -1247,7 +1247,7 @@ describe('AppSyncOrchestrator', () => {
       peersUp();
       await clock.tickAsync(0);
 
-      await driveBlocks(2555000, 3);
+      await driveBlocks(2_555_000, 3);
       expect(orchestrator.state).to.equal(mod.STATES.SYNCING);
 
       peerEmitter.emit('peersBelowThreshold', 3);
@@ -1263,10 +1263,10 @@ describe('AppSyncOrchestrator', () => {
       // Contiguous with the three above: #onBlocksProcessed credits the
       // DIFFERENCE between heights, so a gap in the numbers is a gap in blocks
       // and would hand this node the budget it is supposed to have lost.
-      await driveBlocks(2555003, 3);
+      await driveBlocks(2_555_003, 3);
       expect(orchestrator.state, 'credit accumulated across a gap with no peers').to.equal(mod.STATES.RESYNCING);
 
-      await driveBlocks(2555006, 1);
+      await driveBlocks(2_555_006, 1);
       expect(orchestrator.state).to.equal(mod.STATES.READY);
     });
 
@@ -1282,7 +1282,7 @@ describe('AppSyncOrchestrator', () => {
       await orchestrator.start(defaultBootContext);
       peersUp();
       await clock.tickAsync(0);
-      await driveBlocks(2555000, 3);
+      await driveBlocks(2_555_000, 3);
 
       peerEmitter.emit('peersBelowThreshold', 3);
       await clock.tickAsync(0);
@@ -1294,7 +1294,7 @@ describe('AppSyncOrchestrator', () => {
       await clock.tickAsync(0);
       expect(orchestrator.state, 'a second loss is meant to be invisible to the state machine').to.equal(mod.STATES.RESYNCING);
 
-      await driveBlocks(2555003, FALLBACK_BLOCKS * 5);
+      await driveBlocks(2_555_003, FALLBACK_BLOCKS * 5);
 
       expect(orchestrator.state, 'a node with no peers reached READY through RESYNCING').to.equal(mod.STATES.RESYNCING);
       expect(globalStateStub.appStateAuthoritative).to.equal(false);
@@ -1311,7 +1311,7 @@ describe('AppSyncOrchestrator', () => {
       peersUp();
       await clock.tickAsync(0);
 
-      await driveBlocks(2555000, FALLBACK_BLOCKS - 1);
+      await driveBlocks(2_555_000, FALLBACK_BLOCKS - 1);
 
       for (let i = 0; i < 6; i += 1) {
         peerEmitter.emit('peerDisconnected', `10.0.0.${i + 1}:16127`, i + 1);
@@ -1319,7 +1319,7 @@ describe('AppSyncOrchestrator', () => {
       }
       await clock.tickAsync(0);
 
-      await driveBlocks(2555000 + FALLBACK_BLOCKS - 1, 1);
+      await driveBlocks(2_555_000 + FALLBACK_BLOCKS - 1, 1);
       expect(orchestrator.state, 'peer churn short of the degraded threshold reset the budget').to.equal(mod.STATES.READY);
     });
 
@@ -1339,13 +1339,13 @@ describe('AppSyncOrchestrator', () => {
         .filter((c) => /readiness budget is advancing again/.test(c.args[0])).length;
 
       // Never above the threshold: no peer event has fired and none will.
-      await driveBlocks(2555000, 40);
+      await driveBlocks(2_555_000, 40);
       expect(stalls(), 'the stall was not reported, or was reported per block').to.equal(1);
       expect(resumes()).to.equal(0);
 
       peersUp();
       await clock.tickAsync(0);
-      await driveBlocks(2555040, 5);
+      await driveBlocks(2_555_040, 5);
       expect(resumes(), 'the budget resumed without saying so, or said so repeatedly').to.equal(1);
       expect(stalls(), 'the stall was re-reported while peers were up').to.equal(1);
 
@@ -1360,7 +1360,7 @@ describe('AppSyncOrchestrator', () => {
       peerEmitter.emit('peersBelowThreshold', 2);
       await clock.tickAsync(0);
 
-      await driveBlocks(2555045, 5);
+      await driveBlocks(2_555_045, 5);
       expect(stalls(), 'a second stall went unreported').to.equal(2);
       expect(resumes()).to.equal(1);
     });
@@ -1376,7 +1376,7 @@ describe('AppSyncOrchestrator', () => {
       peersUp();
       await clock.tickAsync(0);
 
-      await driveBlocks(2555000, FALLBACK_BLOCKS);
+      await driveBlocks(2_555_000, FALLBACK_BLOCKS);
       expect(orchestrator.state).to.equal(mod.STATES.READY);
       expect(globalStateStub.appStateAuthoritative).to.equal(true);
 
