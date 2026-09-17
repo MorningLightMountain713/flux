@@ -42,6 +42,7 @@ const fluxNetworkHelperMock = {
 const syncthingServiceMock = {
   getDeviceId: sinon.stub(),
   getConfigFolders: sinon.stub(),
+  getConfigRestartRequired: sinon.stub(),
   getConfigDevices: sinon.stub(),
   // These answer rows, as the service does, so a call site reading one as an
   // envelope is visible from here.

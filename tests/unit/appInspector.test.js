@@ -2792,6 +2792,7 @@ describe('appInspector tests', () => {
         '../utils/appUtilities': { getContainerStorage: sinon.stub().returns(0) },
         '../utils/cpuBurstHelper': { isBurstActive: sinon.stub().resolves(false) },
         'node-cmd': { run: sinon.stub() },
+        '../appRuntime/deploymentProvider': { resolveRequestContainer: sinon.stub().resolves('mycomponent_myapp') },
       });
 
       const handlers = {};
@@ -2804,7 +2805,7 @@ describe('appInspector tests', () => {
 
       sinon.assert.calledWith(
         messageHelperStub.createErrorMessage,
-        'Application not found',
+        'Application mycomponent_myapp is not installed on this node',
       );
       sinon.assert.notCalled(dockerStub.dockerContainerExec);
     });
