@@ -620,6 +620,30 @@ describe('placementFeasibility tests', () => {
       expect(logStub.warn.args.some((a) => a[0].includes('are in the confirmed node list right now'))).to.equal(true);
     });
 
+    it('counts every replica an assignment seats on one node, not the node once', async () => {
+      // Co-location is the assignment's own shape: three named replicas on one
+      // node are three seats there. Counting the node once reads the app as
+      // asking for more nodes than it names, and refuses what it could run.
+      useTable();
+      deterministicFluxListStub.resolves([...bhNodes]);
+      const result = await placementFeasibility.checkPlacementFeasibility(await v9Spec({
+        name: 'colocated',
+        assignment: { targetIps: { [bhNodes[0].ip]: ['d1', 'd2', 'd3'] } },
+        components: {
+          web: {
+            ...componentsThat(false).web,
+            replicaOverrides: {
+              d2: { ports: { http: { hostPort: 31_001 } } },
+              d3: { ports: { http: { hostPort: 31_002 } } },
+            },
+          },
+        },
+      }), 'testCaller');
+
+      expect(result.instances).to.equal(3);
+      expect(result.candidateCount).to.equal(3);
+    });
+
     it('refuses a pinned spec that names fewer nodes than instances, and says which it is', async () => {
       // No wait fixes arithmetic - and the message must not blame geolocation,
       // because a pinned spec has no allowed locations to widen.

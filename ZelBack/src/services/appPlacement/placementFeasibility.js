@@ -258,8 +258,12 @@ async function placementComputation(spec, minInstances) {
     }
     const domain = domainOf(ip);
     if (!domain) continue; // eslint-disable-line no-continue
-    candidateCount += 1;
-    domains.set(domain, (domains.get(domain) ?? 0) + 1);
+    // A node the assignment names seats every replica assigned to it: three
+    // co-located replicas on one node are three candidates there, not one.
+    const assigned = spec.assignment?.replicasFor({ ip: node.ip, ipMatcher: socketAddressesMatch }).length ?? 0;
+    const seats = Math.max(1, assigned);
+    candidateCount += seats;
+    domains.set(domain, (domains.get(domain) ?? 0) + seats);
   }
 
   const domainCount = domains.size;
