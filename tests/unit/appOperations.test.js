@@ -277,6 +277,34 @@ describe('appOperations tests', () => {
       expect(res.end.calledOnce, 'the redeploy writes progress, the endpoint closes').to.be.true;
     });
 
+    // Every chunk on the stream is an envelope, so a reader that splits the
+    // stream on `}{` reads how the redeploy ended off the last one.
+    it('streams every progress line as a success envelope, and the last one says it finished', async () => {
+      req.params.appname = 'myapp';
+      req.params.component = 'frontend';
+      // eslint-disable-next-line global-require
+      const hwRequirements = require('../../ZelBack/src/services/appRequirements/hwRequirements');
+      const deployment = await oneComponentDeployment('myapp', 'frontend', { image: 'myrepo/app:v1' });
+      sinon.stub(verificationHelper, 'verifyPrivilege').resolves(true);
+      sinon.stub(deploymentProvider, 'getInstalledDeployment').resolves(deployment);
+      sinon.stub(componentProvisioner, 'verifyComponentImage').resolves();
+      sinon.stub(serviceHelper, 'delay').resolves();
+      sinon.stub(appsRepository, 'getInstalledApp').resolves(await instantiatedSpec(await v9Spec()));
+      sinon.stub(deploymentProvider, 'buildDeployment').resolves(await oneComponentDeployment('myapp', 'frontend', { image: 'myrepo/app:v1' }));
+      sinon.stub(hwRequirements, 'checkNodeResourcesReclaiming').resolves();
+      sinon.stub(appUninstaller, 'uninstallComponent').resolves();
+      sinon.stub(componentProvisioner, 'installComponent').resolves();
+      sinon.stub(appReconciler, 'enqueueApp');
+
+      await appOperations.redeployComponentAPI(req, res);
+
+      expect(res.write.called, 'the redeploy wrote progress').to.be.true;
+      const chunks = res.write.args.map(([chunk]) => JSON.parse(chunk));
+      expect(chunks.every((chunk) => typeof chunk.status === 'string'), 'every chunk is an envelope').to.be.true;
+      expect(chunks[chunks.length - 1].status).to.equal('success');
+      expect(chunks[chunks.length - 1].data.message).to.include('redeploy complete');
+    });
+
     // A refusal is an answer, and it arrives before the stream starts, so it is
     // a body rather than a chunk. Returning without writing left the caller on
     // an open connection until server.requestTimeout.
