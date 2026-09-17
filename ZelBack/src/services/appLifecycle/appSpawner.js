@@ -494,6 +494,24 @@ async function trySpawningGlobalApplication() {
       const nameSet = () => new Set(globalAppNamesLocation.map((c) => c.instantiated.name));
       const stages = [['found', nameSet()]];
 
+      // A blocked application is short of instances forever - it has none and can
+      // never be given one - and the aggregation above asks only whether an
+      // application is short. Without this filter it is drawn, refused at the
+      // compliance check below, and drawn again each time this node's error cache
+      // expires. Only what an application IS can be judged here: an enterprise
+      // application carries no repotags in the clear, so an image or namespace
+      // ban remains the install-time check's to make.
+      const blocklist = imageManager.getBlocklist();
+      if (blocklist) {
+        globalAppNamesLocation = globalAppNamesLocation.filter(
+          (c) => !imageManager.blockedReasonFor(blocklist, {
+            name: c.instantiated.name, owner: c.instantiated.owner, hash: c.instantiated.hash, images: null,
+          }),
+        );
+      }
+      survivors.afterBlocklist = globalAppNamesLocation.length;
+      stages.push(['afterBlocklist', nameSet()]);
+
       // Being installed here does not mean this node owes nothing: a node
       // already running one replica can be assigned another, and dropping the
       // candidate by app name would refuse that seat forever — the spec would
