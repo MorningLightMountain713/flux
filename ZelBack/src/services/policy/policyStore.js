@@ -41,6 +41,14 @@ function isStringArray(value) {
   return Array.isArray(value) && value.every((entry) => typeof entry === 'string');
 }
 
+// Every element names what it refuses and the value it refuses it by. An empty
+// list is a valid document that lists nothing.
+function isTypedEntryArray(value) {
+  return Array.isArray(value) && value.every(
+    (entry) => entry && typeof entry.kind === 'string' && typeof entry.value === 'string',
+  );
+}
+
 /**
  * A valid node->owners map is a plain object whose every value is an array of strings.
  * Anything else is rejected wholesale rather than coerced — a single malformed value would
@@ -62,6 +70,9 @@ function isValidNodeOwnerMap(value) {
 // been edited since September 2024. An entry here means every node polls for it, so a document
 // earns one only when something demonstrably reads it and acts on what it says.
 const DOCUMENTS = {
+  // The typed blocklist: each entry states the field it refuses on. blockedRepositories is the
+  // flat form it supersedes, still served for releases that read only that.
+  blocklist: { kind: 'document', file: 'blocklist.json', validate: isTypedEntryArray },
   blockedRepositories: { kind: 'document', file: 'blockedrepositories.json', validate: isStringArray },
   tamperingBlocklist: { kind: 'document', file: 'tamperingblockednodes.json', validate: isStringArray },
   enterpriseNodes: { kind: 'document', file: 'enterprisenodes.json', validate: isValidNodeOwnerMap },
