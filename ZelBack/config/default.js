@@ -1200,6 +1200,7 @@ module.exports = {
     // restart a node to approximate it - which tests the boot path instead, and leaves
     // the periodic one with no coverage at all.
     refreshIntervalMs: {
+      blocklist: 21_600_000, // 6h
       blockedRepositories: 21_600_000, // 6h
       tamperingBlocklist: 43_200_000, // 12h
       enterpriseNodes: 21_600_000, // 6h

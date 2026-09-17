@@ -218,46 +218,19 @@ function stripTag(imageRef) {
   return parsed.error ? imageRef : parsed.reference;
 }
 
-function extractNamespace(repository) {
-  const lastSlash = repository.lastIndexOf('/');
-  return lastSlash > -1 ? repository.substring(0, lastSlash) : repository;
-}
-
 async function isImageBlocked(appName, images, options = {}) {
   const { owner = null, hash = null } = options;
 
-  const repos = getBlockedRepositories();
-
-  // A null list means no copy could be obtained from any layer — not "nothing is
-  // blocked" — so install gates defer rather than admit an image they could not check.
-  // An empty list ([]) is a real "obtained, nothing blocked".
-  const undetermined = repos === null;
-
-  if (!repos) {
-    return { blocked: false, reason: null, undetermined };
+  const entries = getBlocklist();
+  if (!entries) {
+    return { blocked: false, reason: null, undetermined: true };
   }
-
-  const blocked = repos.map(stripTag);
-
-  if (owner && blocked.includes(owner)) {
-    return { blocked: true, reason: `${owner} is not allowed to run applications` };
-  }
-  if (hash && blocked.includes(hash)) {
-    return { blocked: true, reason: `${hash} is not allowed to be spawned` };
-  }
-
-  for (const imageRef of images) {
-    const repo = stripTag(imageRef);
-    if (blocked.includes(repo)) {
-      return { blocked: true, reason: `Image ${repo} is blocked. Application ${appName} cannot be spawned.` };
-    }
-    const ns = extractNamespace(repo);
-    if (blocked.includes(ns)) {
-      return { blocked: true, reason: `Organisation ${ns} is blocked. Application ${appName} cannot be spawned.` };
-    }
-  }
-
-  return { blocked: false, reason: null, undetermined };
+  const reason = blockedReasonFor(entries, {
+    name: appName, owner, hash, images,
+  });
+  return reason
+    ? { blocked: true, reason }
+    : { blocked: false, reason: null, undetermined: false };
 }
 
 /**
@@ -267,8 +240,7 @@ async function isImageBlocked(appName, images, options = {}) {
  * @returns {string}
  */
 function repositoryOf(repotag) {
-  const separator = repotag.lastIndexOf(':');
-  return separator > -1 ? repotag.substring(0, separator) : repotag;
+  return stripTag(repotag);
 }
 
 /**
@@ -289,48 +261,19 @@ function namespaceOf(repository) {
  * application name, an owner, an image or a namespace - so an entry is compared
  * against exactly one field. `blockedrepositories.json` cannot: there an entry is
  * a bare string tested against all of them, so `grafana` refuses both the
- * application called grafana and every image under the grafana namespace, and
- * whoever wrote it had no way to say which was meant.
+ * application called grafana and every image under the grafana namespace.
  *
- * The flat document is the fallback, and its entries keep that older meaning -
- * they are marked `legacy` rather than guessed at, because guessing a kind is the
- * ambiguity this reader exists to remove.
- *
- * Null means the list could not be obtained from either document. That is not
- * "nothing is blocked": callers refuse or defer on it.
- * @returns {Promise<Array<{kind: string, value: string}>|null>}
+ * The typed document wins when it lists anything; the flat document is the
+ * fallback and its entries keep that older meaning, marked `legacy` rather than
+ * guessed at. policyStore owns fetching, validating, caching and last-known-good,
+ * so null means no layer holds either document. That is not "nothing is
+ * blocked": callers refuse or defer on it.
+ * @returns {Array<{kind: string, value: string}>|null}
  */
-async function getBlocklist() {
-  const cachedResponse = fluxCaching.blockedRepositoriesCache.get('blocklist');
-  if (cachedResponse) {
-    return cachedResponse;
-  }
-  try {
-    const response = await serviceHelper.axiosGet(`${config.get('policy.baseUrl')}/blocklist.json`);
-    // Every element must be a typed entry, and there must be at least one. A
-    // response that is merely array-shaped is the flat document or an error page,
-    // and taking it would answer "nothing is blocked" from something that never
-    // said so - discarding entries and reading as success. An empty answer falls
-    // through to the flat document, which is generated from this one and so
-    // carries the same verdict.
-    const { data } = response;
-    const typed = Array.isArray(data) && data.length
-      && data.every((entry) => entry && typeof entry.kind === 'string' && typeof entry.value === 'string');
-    if (typed) {
-      fluxCaching.blockedRepositoriesCache.set('blocklist', data);
-      return data;
-    }
-  } catch (error) {
-    // An absent or unreachable typed document is not a failure while releases
-    // that predate it are still being served the flat one.
-    log.info(`Typed blocklist unavailable (${error.message}); falling back to blockedrepositories.json`);
-  }
-  // Anything that is not a list is "could not ask", not "nothing is blocked". The flat
-  // document is fetched and cached on whether the response was truthy, so an error page
-  // served as 200 is held for six hours - and mapping over it throws a TypeError that no
-  // caller recognises, which in the spawner reads as a permanently unspawnable application
-  // rather than as a policy source that could not be read.
-  const repos = await getBlockedRepositories();
+function getBlocklist() {
+  const typed = policyStore.get('blocklist');
+  if (Array.isArray(typed) && typed.length) return typed;
+  const repos = getBlockedRepositories();
   if (!Array.isArray(repos)) return null;
   return repos.map((value) => ({ kind: 'legacy', value }));
 }
@@ -396,20 +339,6 @@ function blockedReasonFor(entries, subject) {
   return null;
 }
 
-/**
- * The repositories an application's components run, or null when they cannot be
- * read - an enterprise specification carries them inside its encrypted blob.
- * @param {object} appSpecs
- * @returns {string[]|null}
- */
-function imagesOf(appSpecs) {
-  if (appSpecs.version <= 3) {
-    return appSpecs.repotag ? [appSpecs.repotag] : null;
-  }
-  if (!Array.isArray(appSpecs.compose) || !appSpecs.compose.length) return null;
-  return appSpecs.compose.map((component) => component.repotag).filter((repotag) => repotag);
-}
-
 
 /**
  * Check Docker accessibility for repository
@@ -458,7 +387,6 @@ module.exports = {
   getBlockedRepositories,
   getBlocklist,
   blockedReasonFor,
-  imagesOf,
   isImageBlocked,
   checkDockerAccessibility,
 };

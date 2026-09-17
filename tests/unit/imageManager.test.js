@@ -478,6 +478,131 @@ describe('imageManager tests', () => {
     });
   });
 
+  describe('blockedReasonFor tests', () => {
+    // An entry reaches the one field its kind names and no other. Both
+    // directions are asserted: blocking too much and blocking too little are
+    // indistinguishable from either side alone.
+    const namedGrafana = {
+      name: 'grafana', owner: '1SomeOwner', hash: 'a'.repeat(64), images: ['unrelated/image:latest'],
+    };
+    const publishedByGrafana = {
+      name: 'dashboards', owner: '1SomeOwner', hash: 'b'.repeat(64), images: ['grafana/dashboards:latest'],
+    };
+
+    it('a name entry blocks the application of that name', () => {
+      const reason = imageManager.blockedReasonFor([{ kind: 'name', value: 'grafana' }], namedGrafana);
+      expect(reason).to.equal('Application grafana is not allowed to run');
+    });
+
+    it('a name entry does NOT block an application whose image namespace is that word', () => {
+      const reason = imageManager.blockedReasonFor([{ kind: 'name', value: 'grafana' }], publishedByGrafana);
+      expect(reason).to.equal(null);
+    });
+
+    it('an org entry blocks every application publishing under that namespace', () => {
+      const reason = imageManager.blockedReasonFor([{ kind: 'org', value: 'grafana' }], publishedByGrafana);
+      expect(reason).to.contain('Organisation grafana is blocked');
+    });
+
+    it('an org entry does NOT block an application merely named that word', () => {
+      const reason = imageManager.blockedReasonFor([{ kind: 'org', value: 'grafana' }], namedGrafana);
+      expect(reason).to.equal(null);
+    });
+
+    it('a hash entry matches the hash and nothing else', () => {
+      const entries = [{ kind: 'hash', value: 'a'.repeat(64) }];
+      expect(imageManager.blockedReasonFor(entries, namedGrafana)).to.contain('is not allowed to be spawned');
+      expect(imageManager.blockedReasonFor(entries, publishedByGrafana)).to.equal(null);
+    });
+
+    it('an owner entry matches the owner and nothing else', () => {
+      const entries = [{ kind: 'owner', value: '1SomeOwner' }];
+      expect(imageManager.blockedReasonFor(entries, namedGrafana)).to.contain('is not allowed to run applications');
+      expect(imageManager.blockedReasonFor([{ kind: 'owner', value: 'grafana' }], namedGrafana)).to.equal(null);
+    });
+
+    it('an image entry matches the whole repository, not its namespace', () => {
+      expect(imageManager.blockedReasonFor([{ kind: 'image', value: 'grafana/dashboards' }], publishedByGrafana))
+        .to.contain('Image grafana/dashboards is blocked');
+      expect(imageManager.blockedReasonFor([{ kind: 'image', value: 'grafana' }], publishedByGrafana))
+        .to.equal(null);
+    });
+
+    it('a kind this release does not understand blocks nothing', () => {
+      // A newer document ships before the reader that understands it, so an
+      // unknown kind is inert rather than an error.
+      const entries = [{ kind: 'somethingNewer', value: 'grafana' }];
+      expect(imageManager.blockedReasonFor(entries, namedGrafana)).to.equal(null);
+      expect(imageManager.blockedReasonFor(entries, publishedByGrafana)).to.equal(null);
+    });
+
+    it('a legacy entry keeps its four-field meaning', () => {
+      // A flat-document entry is one string against the hash, the owner, the
+      // repository and the namespace. Narrowing it would stop enforcing bans
+      // that are in force.
+      const entries = [{ kind: 'legacy', value: 'grafana' }];
+      expect(imageManager.blockedReasonFor(entries, publishedByGrafana)).to.contain('Organisation grafana is blocked');
+      expect(imageManager.blockedReasonFor([{ kind: 'legacy', value: 'a'.repeat(64) }], namedGrafana))
+        .to.contain('is not allowed to be spawned');
+      expect(imageManager.blockedReasonFor([{ kind: 'legacy', value: '1SomeOwner' }], namedGrafana))
+        .to.contain('is not allowed to run applications');
+    });
+
+    it('answers the identity questions when the images cannot be read', () => {
+      // An enterprise application carries its components inside its encrypted
+      // blob; name, owner and hash sit on the stored record regardless.
+      const sealed = {
+        name: 'grafana', owner: '1SomeOwner', hash: 'a'.repeat(64), images: null,
+      };
+      expect(imageManager.blockedReasonFor([{ kind: 'name', value: 'grafana' }], sealed))
+        .to.equal('Application grafana is not allowed to run');
+      expect(imageManager.blockedReasonFor([{ kind: 'org', value: 'grafana' }], sealed)).to.equal(null);
+    });
+  });
+
+
+  describe('getBlocklist tests', () => {
+    const typed = [{ kind: 'name', value: 'dowz', reason: 'why', added: '2026-09-12' }];
+
+    it('prefers the typed document', () => {
+      sinon.stub(policyStore, 'get').withArgs('blocklist').returns(typed);
+      policyStore.get.withArgs('blockedRepositories').returns(['legacy-entry']);
+
+      expect(imageManager.getBlocklist()).to.deep.equal(typed);
+    });
+
+    it('falls back to the flat document when the typed one is empty', () => {
+      // Nothing listed in the typed document is not "nothing is blocked" while
+      // the flat document, generated from the same source, still carries entries.
+      sinon.stub(policyStore, 'get').withArgs('blocklist').returns([]);
+      policyStore.get.withArgs('blockedRepositories').returns(['blocked-org']);
+
+      expect(imageManager.getBlocklist()).to.deep.equal([{ kind: 'legacy', value: 'blocked-org' }]);
+    });
+
+    it('falls back when the typed document is absent', () => {
+      sinon.stub(policyStore, 'get').withArgs('blocklist').returns(null);
+      policyStore.get.withArgs('blockedRepositories').returns(['blocked-org']);
+
+      expect(imageManager.getBlocklist()).to.deep.equal([{ kind: 'legacy', value: 'blocked-org' }]);
+    });
+
+    it('is null, not empty, when no layer holds either document', () => {
+      sinon.stub(policyStore, 'get').returns(null);
+
+      expect(imageManager.getBlocklist()).to.equal(null);
+    });
+
+    it('a name entry reaches isImageBlocked for an app whose images cannot be read', async () => {
+      sinon.stub(policyStore, 'get').withArgs('blocklist').returns([{ kind: 'name', value: 'grafana' }]);
+
+      const result = await imageManager.isImageBlocked('grafana', [], { owner: '1SomeOwner', hash: 'a'.repeat(64) });
+
+      expect(result.blocked).to.equal(true);
+      expect(result.reason).to.equal('Application grafana is not allowed to run');
+    });
+  });
+
   describe('checkDockerAccessibility tests', () => {
     it('should return success when authorized', async () => {
       const req = {

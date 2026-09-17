@@ -546,6 +546,7 @@ const harnessOverrides = {
       '739ca41408f66c75d6cb4bc1d5c044ca5a118de190081da68e5a7d6839fb69f8',
     ],
     refreshIntervalMs: {
+      blocklist: 21_600_000, // 6h
       blockedRepositories: 21_600_000,
       tamperingBlocklist: 43_200_000,
       enterpriseNodes: 21_600_000,

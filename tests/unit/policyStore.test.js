@@ -19,6 +19,7 @@ describe('policyStore tests', () => {
   const POLICY_CONFIG = {
     baseUrl: BASE_URL,
     refreshIntervalMs: {
+      blocklist: 6 * 3_600_000,
       blockedRepositories: 6 * 3_600_000,
       tamperingBlocklist: 12 * 3_600_000,
       enterpriseNodes: 6 * 3_600_000,
@@ -306,7 +307,8 @@ describe('policyStore tests', () => {
 
         // 6h advances the two documents on that interval, not the 12h tampering blocklist.
         await clock.tickAsync(6 * 60 * 60 * 1000 + 1000);
-        expect(serviceHelperStub.axiosGet.callCount).to.equal(callsAfterStart + 2);
+        // the three documents on the six-hour interval: blocklist, blockedRepositories, enterpriseNodes
+        expect(serviceHelperStub.axiosGet.callCount).to.equal(callsAfterStart + 3);
 
         store.stopSync();
         const callsAfterStop = serviceHelperStub.axiosGet.callCount;
