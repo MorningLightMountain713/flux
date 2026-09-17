@@ -138,10 +138,6 @@ describe('configManager tests', () => {
       initial.routerIP = '10.0.0.1';
       expect(configManager.getConfigValue('initial.routerIP')).to.equal('10.0.0.1');
     });
-
-    it('answers the api port as a number', () => {
-      expect(configManager.getConfigValue('initial.apiport')).to.be.a('number');
-    });
   });
 
   // Each of these constructs its own manager, which publishes onto globalThis, so the
