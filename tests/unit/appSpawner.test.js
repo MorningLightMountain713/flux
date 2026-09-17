@@ -3,6 +3,7 @@
 const { expect } = require('chai');
 const sinon = require('sinon');
 const proxyquire = require('proxyquire').noCallThru();
+const realImageManager = require('../../ZelBack/src/services/appSecurity/imageManager');
 const {
   loadSpecLibrary, V9_SUBMISSION, v9Spec, sealedV9Spec, sealedV8Spec, instantiatedSpec,
   assertAnswers,
@@ -327,6 +328,11 @@ describe('appSpawner tests', () => {
       '../appSecurity/imageManager': {
         isImageBlocked: opts.imageBlockedStub ?? sinon.stub().resolves({ blocked: false }),
         verifyRepository: sinon.stub().resolves(),
+        // No blocklist by default, so the candidate filter is inert unless a test
+        // supplies one. The matcher is the real implementation: a double of it
+        // would let a test pass on matching rules the node does not have.
+        getBlocklist: sinon.stub().returns(opts.blocklist ?? null),
+        blockedReasonFor: realImageManager.blockedReasonFor,
       },
       '../appRequirements/hwRequirements': hwRequirementsStub,
       '../appNetwork/portManager': portManagerStub,
@@ -2086,4 +2092,62 @@ describe('appSpawner tests', () => {
       expect(installStub.called, 'a rejected awaited broadcast must abort before install').to.equal(false);
     });
   });
+
+  describe('blocklist selection filter', () => {
+    const HASH = 'a'.repeat(64);
+    const blocked = (kind, value) => [{ kind, value, reason: 'test', added: '2026-09-12' }];
+    const selectionLogged = (substr) => logStub.info.getCalls()
+      .some((c) => typeof c.args[0] === 'string' && c.args[0].includes(substr));
+    // The blocklist may name the candidate's owner, which the fixture decides.
+    const draw = async (blocklistFor) => {
+      const candidate = await makeCandidate({ name: 'orbitapp', hash: HASH, required: 1 });
+      const blocklist = typeof blocklistFor === 'function' ? blocklistFor(candidate.instantiated) : blocklistFor;
+      buildModule({ candidates: [candidate], blocklist });
+      await appSpawner.trySpawningGlobalApplication().catch(() => {});
+    };
+
+    it('does not select an app blocked by hash', async () => {
+      await draw(blocked('hash', HASH));
+      expect(selectionLogged('selected to try to spawn')).to.be.false;
+      expect(selectionLogged('No app currently to be processed')).to.be.true;
+    });
+
+    it('does not select an app blocked by name', async () => {
+      await draw(blocked('name', 'orbitapp'));
+      expect(selectionLogged('selected to try to spawn')).to.be.false;
+    });
+
+    it('does not select an app whose owner is blocked', async () => {
+      await draw((instantiated) => blocked('owner', instantiated.owner));
+      expect(selectionLogged('selected to try to spawn')).to.be.false;
+    });
+
+    it('names the blocklist in the candidacy breakdown', async () => {
+      // The pass ends in "No app currently to be processed" whichever filter took
+      // the candidates, so the stage has to appear in the tally or a blocked pool
+      // is indistinguishable from an empty one.
+      await draw(blocked('hash', HASH));
+      const tally = logStub.info.getCalls().map((c) => c.args[0])
+        .find((line) => typeof line === 'string' && line.includes('No app currently to be processed'));
+      expect(tally).to.contain('"afterBlocklist":0');
+    });
+
+    it('still selects an app the blocklist does not name', async () => {
+      await draw(blocked('hash', 'b'.repeat(64)));
+      expect(selectionLogged('selected to try to spawn')).to.be.true;
+    });
+
+    it('selects as usual when the blocklist cannot be obtained', async () => {
+      // An unreachable document must not stop the node spawning anything; the
+      // install-time compliance check is still ahead of it.
+      await draw(null);
+      expect(selectionLogged('selected to try to spawn')).to.be.true;
+    });
+
+    it('does not filter on an image entry here, where no repotag is in the clear', async () => {
+      await draw(blocked('image', 'blocked/repo'));
+      expect(selectionLogged('selected to try to spawn')).to.be.true;
+    });
+  });
+
 });
