@@ -166,8 +166,8 @@ describe('Sync response: pruning and forged events', function () {
 
     const events = [];
 
-    // Filler, so the response spans several slices. These sit between the
-    // eviction at the front and the events that matter at the back.
+    // Filler, so the response spans several slices, with the events that
+    // matter at the back.
     for (let i = 0; i < FILLER_EVENTS; i++) {
       // eslint-disable-next-line no-await-in-loop
       events.push(await apprunningEvent({
@@ -235,7 +235,7 @@ describe('Sync response: pruning and forged events', function () {
     // messageStore refuses a broadcast older than locationTtlS and skips it
     // without a word, so seeded events that expire before the joiner reads them
     // leave an empty location list rather than a rejected message - and the
-    // eviction assertion below passes on an empty store either way.
+    // assertions below pass on an empty store either way.
     //
     // Judged by whether the joiner holds them, so an idle box and a loaded one
     // are held to the same standard: elapsed time is a property of the box, and
