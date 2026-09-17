@@ -176,10 +176,14 @@ async function storeAppTemporaryMessage(message, options = {}) {
       if (await benchmarkService.isSystemSecure()) {
         try {
           const provider = await appEvent.spec.createProvider();
-          // decryptAndVerify, not decrypt: the signature commits to a contentHash,
-          // so opening the envelope says nothing about whether what came out is
-          // what the owner signed for.
-          const decrypted = await appEvent.decryptAndVerify(provider);
+          // A v9 signature commits to a contentHash, so opening the envelope
+          // says nothing about whether what came out is what the owner signed
+          // for: decryptAndVerify opens and reconciles in one call. A legacy
+          // signature commits to the ciphertext itself, so opening it is the
+          // whole check.
+          const decrypted = message.version === 2
+            ? await appEvent.decryptAndVerify(provider)
+            : await appEvent.spec.decrypt(provider);
           // Validated through the wrapper: a decrypted spec has no wire form, so
           // there is no blob to hand a validator. Same rules, no plaintext bytes.
           assertVersionActivated(decrypted.version, block);

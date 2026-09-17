@@ -717,6 +717,24 @@ describe('messageStore tests', () => {
         expect(dbHelperStub.insertOneToDatabase.calledOnce).to.be.true;
       });
 
+      // A legacy signature commits to the ciphertext itself, so a sealed v8
+      // message is opened and stored on a secure node; there is no separate
+      // reconciliation, and the class has none.
+      it('stores a sealed v8 (envelope version 1) message on a secure node', async () => {
+        const decrypt = sinon.spy(flux.EncryptedSpecV8.prototype, 'decrypt');
+        const legacyMessage = { ...secureMessage, version: 1 };
+        appEventVerifierStub.deserializeTempMessage.resolves(
+          legacyEvent(legacyMessage, await sealedV8Spec({ name: 'enc-app' })),
+        );
+        messageStore = buildSecure();
+
+        const result = await messageStore.storeAppTemporaryMessage(legacyMessage);
+
+        expect(result, `unexpected: ${result && result.message}`).to.deep.equal({ rebroadcast: true });
+        expect(decrypt.calledOnce, 'the envelope is opened').to.be.true;
+        expect(dbHelperStub.insertOneToDatabase.calledOnce).to.be.true;
+      });
+
       // A bad message is a rejection; a TypeError in this block is our own bug.
       // Returning it would report a defect as a stream of peer rejections and
       // hide it — which is exactly what happened while writing these tests, when
