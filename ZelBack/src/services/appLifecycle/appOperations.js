@@ -2656,6 +2656,7 @@ async function coordinateActiveStandbyApps() {
       let activeStandbyComp = null;
       if (operationRegistry.isHeld(appName)) {
         log.info(`activeStandby: operation in progress for ${appName}, skipping`);
+        fluxEventBus.count('masterSlave:decision', appName, 'skippedBusy');
         // eslint-disable-next-line no-continue
         continue;
       }

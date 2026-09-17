@@ -1072,6 +1072,23 @@ describe('appOperations tests', () => {
       expect(decisionsFor(publish, identifier, 'operatorStopExcluded')).to.have.lengthOf(2);
     });
 
+    // An app under an operation (backup, restore, install...) is left alone for
+    // the cycle, and the skip is tallied so an observer can tell a pass that
+    // considered the busy app from one that never ran.
+    it('leaves a held app alone for the cycle and tallies the skip', async () => {
+      const identifier = 'held_appq';
+      deploymentProviderStub.resolves([await gDeployment('appq', identifier)]);
+      operationRegistry.acquire('appq', 'backup', 'test', 'backup appq');
+      const publish = sinon.stub(fluxEventBus, 'publish');
+      const count = sinon.stub(fluxEventBus, 'count');
+
+      await appOperations.coordinateActiveStandbyApps();
+
+      sinon.assert.calledWithExactly(count, 'masterSlave:decision', 'appq', 'skippedBusy');
+      const decisions = publish.getCalls().filter((c) => c.args[0] === 'masterSlave:decision' && c.args[1]?.identifier === identifier);
+      expect(decisions, 'an election decision was made on a held app').to.deep.equal([]);
+    });
+
     // FDM's silence is not FDM saying there is no primary. A node that heard
     // nothing from any region must not read the silence as an invitation.
     it('skips primary selection for the cycle when no FDM region answers', async () => {
