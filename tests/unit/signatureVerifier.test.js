@@ -3,7 +3,6 @@
 const chai = require('chai');
 const sinon = require('sinon');
 const proxyquire = require('proxyquire');
-const bitcoinMessage = require('bitcoinjs-message');
 
 const signatureVerifier = require('../../ZelBack/src/services/signatureVerifier');
 const { getSpecBackend } = require('../../ZelBack/src/services/utils/specLibs');
@@ -27,11 +26,11 @@ describe('signatureVerifier canonical-form gate', () => {
   // anything accepted proves the gate does not over-reject a well-formed
   // signature. Real end-to-end verification is covered in flux-spec's suite.
   //
-  // The Ethereum side is the library's `verifyEthMessage`, reached through a
-  // frozen namespace, so the seam is the accessor that hands it over. The
-  // `before` hook asserts both names exist on the real namespace first: a stub
-  // for an export that is not there would sit under every assertion below
-  // reporting success for a door nothing called.
+  // Both sides are the library's, `verifyBtcMessage` and `verifyEthMessage`,
+  // reached through a frozen namespace, so the seam is the accessor that
+  // hands them over. The `before` hook asserts every name exists on the real
+  // namespace first: a stub for an export that is not there would sit under
+  // every assertion below reporting success for a door nothing called.
   let btcStub;
   let ethStub;
   let verifier;
@@ -41,17 +40,19 @@ describe('signatureVerifier canonical-form gate', () => {
     // Warm the CJS bridge: its first call dynamically imports the ESM packages.
     specBackend = await getSpecBackend();
     expect(specBackend.verifyEthMessage).to.be.a('function');
+    expect(specBackend.verifyBtcMessage).to.be.a('function');
     expect(specBackend.isCanonicalSignature).to.be.a('function');
   });
 
   beforeEach(() => {
-    btcStub = sinon.stub(bitcoinMessage, 'verify').returns(true);
+    btcStub = sinon.stub().resolves(true);
     ethStub = sinon.stub().resolves(true);
     verifier = proxyquire('../../ZelBack/src/services/signatureVerifier', {
       './utils/specLibs': {
         getSpecBackend: async () => ({
           isCanonicalSignature: specBackend.isCanonicalSignature,
           verifyEthMessage: ethStub,
+          verifyBtcMessage: btcStub,
         }),
       },
     });
@@ -136,7 +137,7 @@ describe('signatureVerifier canonical-form gate', () => {
       // The property leniency must not touch. It widens how a signature may be
       // spelled, never whose it is.
       ethStub.resolves(false);
-      btcStub.returns(false);
+      btcStub.resolves(false);
       expect(await verifier.verifySignature('msg', ETH_ADDRESS, ethSig(0), REPLAY)).to.equal(false);
       expect(await verifier.verifySignature('msg', BTC_ADDRESS, btcSig(31), REPLAY)).to.equal(false);
     });
@@ -188,6 +189,65 @@ describe('a real wallet signature, through the deployed path', () => {
   it('refuses a message altered under a real signature', async () => {
     const [, signature] = SIGNED[0];
     expect(await signatureVerifier.verifySignature('testmessage124', SIGNER, signature)).to.equal(false);
+  });
+});
+
+describe('a real Bitcoin signature, through the deployed path', () => {
+  // Nothing is stubbed here. The foundation's own rates app registration, the
+  // first message of its kind on chain, replayed the way a node replays it:
+  // the legacy event rebuilds the text its owner signed and hands it to this
+  // verifier. It says whether the library's Bitcoin recovery agrees with what
+  // signed the chain, and a message altered by one value has to stop.
+  const MESSAGE = {
+    type: 'zelappregister',
+    version: 1,
+    appSpecifications: {
+      version: 1,
+      name: 'rates',
+      description: 'Rates API is an application used for ZelCore rates services and markets',
+      owner: '1hjy4bCYBJr4mny4zCE85J94RXa8W6q37',
+      repotag: 'zelcash/rates-api:latest',
+      port: 38_726,
+      enviromentParameters: [],
+      commands: [],
+      containerPort: 3333,
+      containerData: '/usr/src/app',
+      cpu: 0.1,
+      ram: 100,
+      hdd: 1,
+      tiered: false,
+    },
+    hash: '1095512c05827830b16f701d2db9e073bfe1dc4292d3140ce030595b06e98664',
+    timestamp: 1_601_669_128_573,
+    signature: 'H7LoT6Tg+axpXfwzuPByyZIpQIYjRP0rKo/X7bjEEVk6NdR7Ji0OIo2rJ+E3plY7ljBV9dCe6PgIAIwr1eVew74=',
+    txid: 'aa1ebb4199cd08ec96ea38c87ff097d11ffbb6691f65cbea6f205e3f0238051b',
+    height: 699_420,
+    valueSat: 450_000_000,
+  };
+  const replay = (message, address, signature) => signatureVerifier.verifySignature(
+    message, address, signature, { allowLegacyEncoding: true },
+  );
+  let AppEventLegacy;
+
+  before(async () => {
+    ({ AppEventLegacy } = await getSpecBackend());
+  });
+
+  it('verifies the message against the owner that signed it', async () => {
+    const result = await AppEventLegacy.deserialize(MESSAGE).verifySignature(replay, [MESSAGE.appSpecifications.owner]);
+    expect(result.valid).to.equal(true);
+    expect(result.signer).to.equal(MESSAGE.appSpecifications.owner);
+  });
+
+  it('refuses the same signature for another owner', async () => {
+    const result = await AppEventLegacy.deserialize(MESSAGE).verifySignature(replay, ['16dNCFf7nR3nx5iwn2RQMBw6KcJXkE3JC1']);
+    expect(result.valid).to.equal(false);
+  });
+
+  it('refuses a message altered under the real signature', async () => {
+    const altered = { ...MESSAGE, timestamp: MESSAGE.timestamp + 1 };
+    const result = await AppEventLegacy.deserialize(altered).verifySignature(replay, [MESSAGE.appSpecifications.owner]);
+    expect(result.valid).to.equal(false);
   });
 });
 

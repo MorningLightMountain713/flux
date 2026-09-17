@@ -6,7 +6,7 @@ const sinon = require('sinon');
 const { Privilege } = require('../../ZelBack/src/services/utils/privileges');
 const chaiAsPromised = require('chai-as-promised');
 const os = require('os');
-const bitcoinMessage = require('bitcoinjs-message');
+const signatureVerifier = require('../../ZelBack/src/services/signatureVerifier');
 const proxyquire = require('proxyquire');
 const { PassThrough } = require('stream');
 const log = require('../../ZelBack/src/lib/log');
@@ -42,12 +42,11 @@ const idService = proxyquire(
 chai.use(chaiAsPromised);
 const { expect } = chai;
 
-// A structurally CANONICAL signature: 65 bytes, P2PKH header 31, low-S. These
-// tests stub the underlying bitcoinjs-message verify, so the value never has to
-// be a real signature — but it does have to be well-formed, because signature
-// verification now rejects a non-canonical encoding before reaching that stub.
-// A malformed placeholder here would only pass by virtue of the stub, which is
-// the phantom-stub trap: it would assert that garbage verifies.
+// A structurally canonical signature: 65 bytes, P2PKH header 31, low-S. These
+// tests are about the login flow, so the verifier's verdict is stubbed at this
+// node's own boundary; signature verification is the library's and is tested
+// there. The placeholder is still well-formed, so nothing here asserts that
+// garbage logs in.
 const CANONICAL_SIG = Buffer.concat([Buffer.from([0x1f]), Buffer.alloc(32, 1), Buffer.alloc(32, 1)]).toString('base64');
 
 const generateResponse = () => {
@@ -774,14 +773,14 @@ describe('idService tests', () => {
   });
 
   describe('verifyLogin tests', () => {
-    let bitcoinMessageStub;
+    let verdictStub;
 
     beforeEach(() => {
       // A successful login defers stripping the signature from the database by
       // a minute. Left real, that timer outlives this file and writes to the
       // database against restored stubs.
       sinon.useFakeTimers({ toFake: ['setTimeout'], shouldAdvanceTime: true });
-      bitcoinMessageStub = sinon.stub(bitcoinMessage, 'verify');
+      verdictStub = sinon.stub(signatureVerifier, 'verifySignature');
     });
 
     afterEach(() => {
@@ -1067,7 +1066,7 @@ describe('idService tests', () => {
     });
 
     it('should return error if signature verification failed', async () => {
-      bitcoinMessageStub.returns(false);
+      verdictStub.resolves(false);
       const timestamp = Date.now();
       sinon.stub(dbHelper, 'findOneInDatabase').resolves({
         loginPhrase: `${timestamp - 10_000}11111111111111111111111111111`,
@@ -1099,7 +1098,7 @@ describe('idService tests', () => {
     });
 
     it('should return success message if everything is okay', async () => {
-      bitcoinMessageStub.returns(true);
+      verdictStub.resolves(true);
       const timestamp = Date.now();
       sinon.stub(dbHelper, 'findOneInDatabase').resolves({
         loginPhrase: `${timestamp - 10_000}11111111111111111111111111111`,
@@ -1135,10 +1134,10 @@ describe('idService tests', () => {
   });
 
   describe('provideSign tests', () => {
-    let bitcoinMessageStub;
+    let verdictStub;
 
     beforeEach(() => {
-      bitcoinMessageStub = sinon.stub(bitcoinMessage, 'verify');
+      verdictStub = sinon.stub(signatureVerifier, 'verifySignature');
     });
 
     afterEach(() => {
@@ -1316,7 +1315,7 @@ describe('idService tests', () => {
     });
 
     it('should return success message if everything is okay', async () => {
-      bitcoinMessageStub.returns(true);
+      verdictStub.resolves(true);
       const timestamp = Date.now();
       sinon.stub(dbHelper, 'findOneInDatabase').resolves({
         loginPhrase: `${timestamp - 10_000}11111111111111111111111111111`,

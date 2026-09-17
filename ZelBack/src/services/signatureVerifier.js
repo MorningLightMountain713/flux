@@ -2,7 +2,6 @@
 
 const bs58check = require('bs58check').default;
 const { pubKeyToAddr } = require('./utils/fluxCryptoUtils');
-const bitcoinMessage = require('bitcoinjs-message');
 const { getSpecBackend } = require('./utils/specLibs');
 const log = require('../lib/log');
 
@@ -125,7 +124,7 @@ async function verifySignature(message, address, signature, options = {}) {
       throw new Error('Missing parameters for message verification');
     }
 
-    const { isCanonicalSignature, verifyEthMessage } = await getSpecBackend();
+    const { isCanonicalSignature, verifyEthMessage, verifyBtcMessage } = await getSpecBackend();
 
     if (!allowLegacyEncoding) {
       if (!isCanonicalSignature(signature, address.startsWith('0x') ? 'eth' : 'btc')) {
@@ -144,12 +143,15 @@ async function verifySignature(message, address, signature, options = {}) {
       isValid = await verifyEthMessage(message, address, signature, { allowLegacyEncoding: true });
     } else {
       if (address.length > 36) {
-        // bitcoin
+        // An owner given as a public key signs as its P2PKH address.
         const btcPubKeyHash = '00';
-        const sigAddress = pubKeyToAddr(address, btcPubKeyHash);
-        signingAddress = sigAddress;
+        signingAddress = pubKeyToAddr(address, btcPubKeyHash);
       }
-      isValid = bitcoinMessage.verify(message, signingAddress, signature);
+      // The library owns Bitcoin recovery as it owns Ethereum's: one definition
+      // of the message digest and the header rules, held against every
+      // Bitcoin-signed message on chain by its corpus replay suite. The replay
+      // flag asks for recovery alone, as above.
+      isValid = await verifyBtcMessage(message, signingAddress, signature, { allowLegacyEncoding: true });
     }
   } catch (e) {
     log.error(e);
