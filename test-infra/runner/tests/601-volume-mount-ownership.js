@@ -6,6 +6,7 @@ import { execInContainer, getAppContainerStatus, restartFluxos } from '../framew
 import { pushImage } from '../framework/registry-helper.js';
 import { buildSeedableApp, buildSeedableEnterpriseApp } from '../framework/seed-helper.js';
 import {
+  START_ACTIONS,
   waitFor, waitForReconcileActuated, waitForAppRemoved, assertNoEvent,
 } from '../framework/wait.js';
 import { bootAndPeer, seedSyncthingApp, seedSyncScopedData, installOnNodes } from '../framework/reconciler-suite.js';
@@ -276,7 +277,7 @@ describe('FluxOS-owned volume mounting (no crontab) + inert unmounted app dirs',
 
     // the reconciler must report the unavailable volume and never start
     await waitForReconcileActuated(client, inertIdentifier, 'volumeUnavailable', 90000, { afterId });
-    await assertNoEvent(client, 'reconciler:actuated', (d) => d.identifier === inertIdentifier && d.action === 'started', 15000);
+    await assertNoEvent(client, 'reconciler:actuated', (d) => d.identifier === inertIdentifier && START_ACTIONS.includes(d.action), 15000);
     expect(await isUp(client, inertName)).to.equal(false);
 
     // nothing recreated structure on the bare mountpoint (it stays empty)

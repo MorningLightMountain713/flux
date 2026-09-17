@@ -8,6 +8,7 @@ import { electMaster, resetFdm } from '../framework/fdm-control.js';
 import { setSynced, resetSyncState } from '../framework/syncthing-control.js';
 import { getSubnetConfig, REGISTRY_REPO_HOST } from '../framework/subnet-config.js';
 import {
+  START_ACTIONS,
   waitFor, waitForReconcileActuated, waitForReconcilerDesiredChanged,
 } from '../framework/wait.js';
 import { bootAndPeer, installOnNodes, seedSyncScopedData } from '../framework/reconciler-suite.js';
@@ -143,7 +144,7 @@ describe('one unmountable app does not block g: election node-wide', function ()
     await waitForReconcilerDesiredChanged(a, gIdentifier, 'stopped', 120000);
     await waitFor(async () => !(await isUp(a, gName)), { timeout: 90000, interval: 2000, label: 'stale primary stopped on the jammed node' });
 
-    await waitForReconcileActuated(b, gIdentifier, 'started', 120000);
+    await waitForReconcileActuated(b, gIdentifier, START_ACTIONS, 120000);
     await waitFor(() => isUp(b, gName), { timeout: 90000, interval: 2000, label: 'new primary running after failover' });
   });
 

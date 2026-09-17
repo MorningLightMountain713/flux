@@ -11,6 +11,7 @@ import { electMaster, resetFdm } from '../framework/fdm-control.js';
 import { setSynced, resetSyncState } from '../framework/syncthing-control.js';
 import { getSubnetConfig } from '../framework/subnet-config.js';
 import {
+  START_ACTIONS,
   waitFor, waitForReconcileActuated, waitForReconcilerDesiredChanged, assertNoEvent,
 } from '../framework/wait.js';
 import { bootAndPeer, installOnNodes, seedSyncScopedData } from '../framework/reconciler-suite.js';
@@ -131,7 +132,7 @@ describe('reconciler enforces masterSlave g: election', function () {
     // off globalState at the decision; a boot-time capture stayed empty forever
     // and this test is the wiring's end-to-end proof.
     await electMaster(appName, a.ip);
-    await waitForReconcileActuated(a, identifier, 'started', 60000);
+    await waitForReconcileActuated(a, identifier, START_ACTIONS, 60000);
     await waitForUp(a, appName, 'primary running before backup');
 
     // bulk appdata so the tar phase is a real window (same shape as suite 44)

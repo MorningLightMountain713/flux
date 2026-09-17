@@ -495,10 +495,19 @@ export async function electionDecisionCount(node, identifier, decision) {
 //               (a transition deferred because a conflicting container operation held the lease)
 //   removal:    'removed' (an owed teardown converged - the app is fully gone) |
 //               'removalDeferred' (an owed teardown re-driven but not yet converged)
+// The two actuations that put a component's container up: its first start after
+// install, and every start after an exit.
+export const START_ACTIONS = ['firstStart', 'restart'];
+
+export function isActuation(action) {
+  return Array.isArray(action) ? (d) => action.includes(d.action) : (d) => d.action === action;
+}
+
 export async function waitForReconcileActuated(node, identifier, action, timeout = 60000, opts) {
+  const matches = action ? isActuation(action) : () => true;
   return node.waitForEvent(
     'reconciler:actuated',
-    (d) => d.identifier === identifier && (!action || d.action === action),
+    (d) => d.identifier === identifier && matches(d),
     timeout,
     opts,
   );

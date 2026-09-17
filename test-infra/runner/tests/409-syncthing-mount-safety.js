@@ -8,6 +8,7 @@ import {
   injectSyncthingEvent,
 } from '../framework/syncthing-control.js';
 import {
+  START_ACTIONS,
   waitFor, waitForReconcilerDesiredChanged, waitForReconcileActuated, assertNoEvent,
 } from '../framework/wait.js';
 import { bootAndPeer, seedSyncthingApp, seedSyncScopedData } from '../framework/reconciler-suite.js';
@@ -232,7 +233,7 @@ describe('syncthing mount-safety guard demotes unsafe sendreceive folders', func
 
     await waitForReconcilerDesiredChanged(client, leakIdentifier, 'stopped', 60000, { afterId });
     await waitFor(async () => !(await isUp(client, leakName)), { timeout: 60000, interval: 2000, label: 'leak app container held (stopped)' });
-    await assertNoEvent(client, 'reconciler:actuated', (d) => d.identifier === leakIdentifier && d.action === 'started', 15000);
+    await assertNoEvent(client, 'reconciler:actuated', (d) => d.identifier === leakIdentifier && START_ACTIONS.includes(d.action), 15000);
   });
 
   it('never recreates the .stfolder marker on the bare unmounted dir', async function () {
