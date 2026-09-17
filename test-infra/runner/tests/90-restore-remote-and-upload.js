@@ -7,7 +7,7 @@ import { buildSeedableApp } from '../framework/seed-helper.js';
 import { REGISTRY_REPO_HOST, getSubnetConfig } from '../framework/subnet-config.js';
 import { setSynced, resetSyncState } from '../framework/syncthing-control.js';
 import { stageArtifact, artifactUrl } from '../framework/external-http-control.js';
-import { waitForReconcileActuated } from '../framework/wait.js';
+import { START_ACTIONS, waitForReconcileActuated } from '../framework/wait.js';
 import { bootAndPeer, installOnNodes } from '../framework/reconciler-suite.js';
 import { authenticate } from '../auth.js';
 import { appOwnerKey } from '../framework/keys.js';
@@ -121,7 +121,10 @@ describe('a restore fetches its archive from where it was told', function () {
 
     const installAfter = client.getLastEventId();
     await installOnNodes(env, app, [0]);
-    await waitForReconcileActuated(client, componentIdentifier(appName, comp), 'dataCleared', 90000, { afterId: installAfter });
+    // The first-run reset removes the appdata directory and the component's
+    // next start recreates it; the tests seed appdata only after that start.
+    const cleared = await waitForReconcileActuated(client, componentIdentifier(appName, comp), 'dataCleared', 90000, { afterId: installAfter });
+    await waitForReconcileActuated(client, componentIdentifier(appName, comp), START_ACTIONS, 90000, { afterId: cleared.id });
     folderId = await appSyncthingFolderId(client.container, appName, comp);
     dir = await appDataRoot(client.container, appName, comp);
     remoteArchive = `${dir}/backup/remote/backup_${comp.toLowerCase()}.tar.gz`;

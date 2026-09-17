@@ -14,7 +14,7 @@ import { REGISTRY_REPO_HOST, getSubnetConfig } from '../framework/subnet-config.
 import {
   setSynced, setSyncing, setStatusUnreadable, setSyncState, resetSyncState,
 } from '../framework/syncthing-control.js';
-import { waitFor, waitForReconcileActuated } from '../framework/wait.js';
+import { START_ACTIONS, waitFor, waitForReconcileActuated } from '../framework/wait.js';
 import { bootAndPeer, installOnNodes } from '../framework/reconciler-suite.js';
 import { authenticate } from '../auth.js';
 import { appOwnerKey } from '../framework/keys.js';
@@ -99,7 +99,10 @@ describe('a backup refuses to archive a copy that is not there', function () {
 
     const after = client.getLastEventId();
     await installOnNodes(env, app, [0]);
-    await waitForReconcileActuated(client, componentIdentifier(appName, comp), 'dataCleared', 120000, { afterId: after });
+    // The first-run reset removes the appdata directory and the component's
+    // next start recreates it; the marker is written after that start.
+    const cleared = await waitForReconcileActuated(client, componentIdentifier(appName, comp), 'dataCleared', 120000, { afterId: after });
+    await waitForReconcileActuated(client, componentIdentifier(appName, comp), START_ACTIONS, 120000, { afterId: cleared.id });
     folderId = await appSyncthingFolderId(client.container, appName, comp);
     dir = await appDataRoot(client.container, appName, comp);
     archive = `${dir}/backup/local/backup_${comp.toLowerCase()}.tar.gz`;
