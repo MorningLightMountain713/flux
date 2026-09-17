@@ -137,7 +137,9 @@ describe('app volume file operations - the contract', function () {
       });
 
       const { jobId } = accepted.data.data;
-      expect(accepted.headers.location).to.equal(`/apps/operations/${jobId}`);
+      // Location is absolute: the node's own API address, so a client can
+      // follow it from anywhere.
+      expect(new URL(accepted.headers.location).pathname).to.equal(`/apps/operations/${jobId}`);
       expect(accepted.headers['operation-id']).to.equal(jobId);
       expect(accepted.headers['retry-after']).to.equal('2');
       expect(accepted.data.data.status).to.equal('Running');

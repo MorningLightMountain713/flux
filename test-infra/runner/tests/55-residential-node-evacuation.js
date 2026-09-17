@@ -20,6 +20,13 @@ import {
 } from '../framework/residential-fleet.js';
 import { keysOf, turnOwner, untilOwnedTurnEndsMs } from '../framework/handback-turns.js';
 
+// Where an app runs, as node 2 derives it from its app state event log and
+// serves it: rows carry the holder's ip:port.
+async function locationsOf(env, name) {
+  const res = await env.clients[2].getAppLocations(name);
+  return Array.isArray(res?.data) ? res.data : [];
+}
+
 describe('Residential node evacuation', function () {
   let env;
   dumpLogsOnFailure(() => env);
@@ -281,11 +288,11 @@ describe('Residential node evacuation', function () {
     // satisfied before anything had happened.
     const targetIp = subnet.nodeIp(TARGET);
     await waitFor(async () => {
-      const current = await dbClient(2).getAppLocations('residentapp');
+      const current = await locationsOf(env, 'residentapp');
       return !current.map((l) => l.ip.split(':')[0]).includes(targetIp);
     }, { timeout: 240000, label: 'the departure reaches the other nodes' });
 
-    const locations = await dbClient(2).getAppLocations('residentapp');
+    const locations = await locationsOf(env, 'residentapp');
     expect(locations.length).to.be.at.least(4);
   });
 
@@ -346,7 +353,7 @@ describe('Residential node evacuation', function () {
     // app that is already short - that is the serialisation gate, and it fires
     // BEFORE the data check, so a test that starts too early proves nothing
     // about the data check at all.
-    await waitFor(async () => (await dbClient(2).getAppLocations('worldapp')).length >= 5,
+    await waitFor(async () => (await locationsOf(env, 'worldapp')).length >= 5,
       { timeout: 300000, label: 'worldapp reaches its instance count across the fleet' });
 
     // Now take the evidence away: the data was there, and no peer can be shown
@@ -409,7 +416,7 @@ describe('Residential node evacuation', function () {
 
     await whenGone(env, TARGET, 'worldapp', 120000);
 
-    const locations = await dbClient(2).getAppLocations('worldapp');
+    const locations = await locationsOf(env, 'worldapp');
     expect(locations.map((l) => l.ip.split(':')[0])).to.not.include(subnet.nodeIp(TARGET));
   });
 
@@ -490,7 +497,7 @@ describe('Residential node evacuation: one holder at a time', function () {
 
     await seedApp(env, 'sharedapp', { instances: 5 });
     await advanceBlocks(3);
-    await waitFor(async () => (await dbClient(2).getAppLocations('sharedapp')).length >= 5,
+    await waitFor(async () => (await locationsOf(env, 'sharedapp')).length >= 5,
       { timeout: 300000, label: 'sharedapp reaches its instance count across the fleet' });
 
     await setSystemSecure(subnet.nodeIp(TARGET), false);
@@ -597,7 +604,7 @@ describe('Residential node evacuation: standing down as the elected primary', fu
     await setSynced({ folder: 'fluxprimaryapp_primaryapp' });
     await setPeerHasData({ folder: 'fluxprimaryapp_primaryapp' });
     await advanceBlocks(3);
-    await waitFor(async () => (await dbClient(2).getAppLocations('primaryapp')).length >= 5,
+    await waitFor(async () => (await locationsOf(env, 'primaryapp')).length >= 5,
       { timeout: 300000, label: 'primaryapp reaches its instance count across the fleet' });
     // Only the node running the g: component is the writer, so only it can be
     // asked to stand down.
@@ -699,10 +706,10 @@ describe('Residential node evacuation: standing down as the elected primary', fu
     expect(turn.data.previousTurn, 'removed on the first pass of its turn').to.equal(turn.data.turn);
 
     await waitFor(async () => {
-      const locations = await dbClient(2).getAppLocations('primaryapp');
+      const locations = await locationsOf(env, 'primaryapp');
       return !locations.map((l) => l.ip.split(':')[0]).includes(subnet.nodeIp(TARGET));
     }, { timeout: 120000, label: 'the departure reaches the rest of the fleet' });
-    const locations = await dbClient(2).getAppLocations('primaryapp');
+    const locations = await locationsOf(env, 'primaryapp');
     expect(locations.length).to.be.greaterThan(0);
   });
 
@@ -733,7 +740,7 @@ describe('Residential node evacuation: standing down as the elected primary', fu
     await setSynced({ folder: 'fluxlockedapp_lockedapp' });
     await setPeerHasData({ folder: 'fluxlockedapp_lockedapp' });
     await advanceBlocks(3);
-    await waitFor(async () => (await dbClient(2).getAppLocations('lockedapp')).length >= 5,
+    await waitFor(async () => (await locationsOf(env, 'lockedapp')).length >= 5,
       { timeout: 300000, label: 'lockedapp reaches its instance count across the fleet' });
 
     // A peer holds the folder in full, so the synced-peer loop PASSES and the
