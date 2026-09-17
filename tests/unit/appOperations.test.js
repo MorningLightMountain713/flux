@@ -1072,6 +1072,24 @@ describe('appOperations tests', () => {
       expect(decisionsFor(publish, identifier, 'operatorStopExcluded')).to.have.lengthOf(2);
     });
 
+    // FDM's silence is not FDM saying there is no primary. A node that heard
+    // nothing from any region must not read the silence as an invitation.
+    it('skips primary selection for the cycle when no FDM region answers', async () => {
+      const identifier = 'fdmsilent_appq';
+      deploymentProviderStub.resolves([await gDeployment('appq', identifier)]);
+      sinon.stub(dockerService, 'getAppIdentifier').returns(`flux${identifier}`);
+      sinon.stub(fluxNetworkHelper, 'getLocalSocketAddress').resolves('192.168.1.5:16137');
+      sinon.stub(serviceHelper, 'axiosGet').rejects(Object.assign(new Error('connect ECONNREFUSED'), { code: 'ECONNREFUSED' }));
+      const publish = sinon.stub(fluxEventBus, 'publish');
+      const warn = sinon.stub(log, 'warn');
+
+      await appOperations.coordinateActiveStandbyApps();
+
+      expect(warn.args.some(([message]) => String(message).includes('All FDM services failed')), 'the silence was named').to.equal(true);
+      const decisions = publish.getCalls().filter((c) => c.args[0] === 'masterSlave:decision' && c.args[1]?.identifier === identifier);
+      expect(decisions, 'an election decision was made on silence').to.deep.equal([]);
+    });
+
     it('is driven by an interval at the configured cadence, not by re-arming itself', async () => {
       // The loop used to re-arm only from its own finally, so a pass that never settled
       // stopped election on the node permanently until FluxOS restarted.
