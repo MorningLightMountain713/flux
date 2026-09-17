@@ -8,7 +8,7 @@ import {
 import { buildSeedableApp } from '../framework/seed-helper.js';
 import { waitFor, waitForOperation } from '../framework/wait.js';
 import { bootAndPeer, installOnNodes } from '../framework/reconciler-suite.js';
-import { REGISTRY_REPO_HOST } from '../framework/subnet-config.js';
+import { REGISTRY_ALIAS, REGISTRY_REPO_HOST } from '../framework/subnet-config.js';
 import { dumpLogsOnFailure } from '../framework/log-on-failure.js';
 import { authenticate } from '../auth.js';
 import { appOwnerKey } from '../framework/keys.js';
@@ -108,12 +108,12 @@ describe('app volume file operations - where the image comes from', function () 
   // REJECT rather than DROP: an unreachable registry is the condition under
   // test, and a silently dropped packet only tests how long a pull waits.
   async function cutOffRegistry(index) {
-    const r = await inNode(index, 'iptables -I OUTPUT -d $(getent hosts fluxregistry | awk \'{print $1}\') -j REJECT');
+    const r = await inNode(index, `iptables -I OUTPUT -d $(getent hosts ${REGISTRY_ALIAS} | awk '{print $1}') -j REJECT`);
     expect(r.exitCode, `FIXTURE: could not cut node ${index} off from the registry`).to.equal(0);
   }
 
   async function restoreRegistry(index) {
-    await inNode(index, 'iptables -D OUTPUT -d $(getent hosts fluxregistry | awk \'{print $1}\') -j REJECT || true');
+    await inNode(index, `iptables -D OUTPUT -d $(getent hosts ${REGISTRY_ALIAS} | awk '{print $1}') -j REJECT || true`);
   }
 
   before(async function () {
