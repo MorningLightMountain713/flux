@@ -1042,6 +1042,28 @@ describe('dockerService tests', () => {
     });
   });
 
+  describe('appDockerForceRemove by container id', () => {
+    const containerId = '46274c58c9a969e93c1f91a057f0a371c7b952e31a7aec73839afe1433fdee94';
+    let removeStub;
+
+    beforeEach(() => {
+      removeStub = sinon.stub(Dockerode.Container.prototype, 'remove').resolves('removed');
+      // A listing filtered by id answers the one container, named nothing an
+      // app would be called.
+      stubListing([{ Id: containerId, Names: ['/quirky_hopper'], State: 'running' }]);
+    });
+
+    it('resolves the container by its id when told the identifier is one', async () => {
+      const result = await dockerService.appDockerForceRemove(containerId, false, { identifierType: 'id' });
+
+      sinon.assert.calledOnce(removeStub);
+      sinon.assert.calledWith(removeStub, { force: true, v: false });
+      const { filters } = Dockerode.prototype.listContainers.lastCall.args[0];
+      expect(JSON.parse(filters), 'the listing is filtered by id, not by name').to.deep.equal({ id: [containerId] });
+      expect(result).to.equal(`Flux App ${containerId} successfully force removed.`);
+    });
+  });
+
   describe('appDockerRemove tests', () => {
     const appName = 'website';
     let dockerStub;
