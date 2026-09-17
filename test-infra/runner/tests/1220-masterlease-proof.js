@@ -9,7 +9,12 @@ import {
 import { buildSeedableSyncthingApp } from '../framework/seed-helper.js';
 import { pushImage } from '../framework/registry-helper.js';
 import { setSynced } from '../framework/syncthing-control.js';
-import { getAppContainerStatus, getAppContainerId } from '../framework/container.js';
+import {
+  appSyncthingFolderId,
+  componentIdentifier,
+  getAppContainerId,
+  getAppContainerStatus,
+} from '../framework/container.js';
 import {
   waitFor, waitForAppInstalled, waitForReconcileActuated, assertNoEvent,
 } from '../framework/wait.js';
@@ -133,10 +138,10 @@ describe('masterlease proof: a listed node\'s claim without the committee\'s sig
     await seedGlobalSpec(env, app, REAL.filter((i) => !HOLDERS.includes(i)));
     await Promise.all(HOLDERS.map((i) => waitForAppInstalled(env.clients[i], name, 240000)));
     await Promise.all(HOLDERS.map(async (i, k) => {
-      await waitForReconcileActuated(env.clients[i], `${name}_${name}`, 'dataCleared', 60000, { afterId: installAfters[k] });
+      await waitForReconcileActuated(env.clients[i], componentIdentifier(name), 'dataCleared', 60000, { afterId: installAfters[k] });
       await seedSyncScopedData(env, name, i);
     }));
-    await setSynced({ folder: `flux${name}_${name}` });
+    await setSynced({ folder: await appSyncthingFolderId(env.clients[HOLDERS[0]].container, name, name) });
 
     outpoints = {};
     for (const i of REAL) {

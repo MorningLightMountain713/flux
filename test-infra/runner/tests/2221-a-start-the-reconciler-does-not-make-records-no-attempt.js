@@ -3,7 +3,9 @@ import { expect } from 'chai';
 import { createTestEnv } from '../framework/test-env.js';
 import { pushImage } from '../framework/registry-helper.js';
 import { buildSeedableSyncthingApp } from '../framework/seed-helper.js';
-import { getAppContainerStatus, crashAppContainer } from '../framework/container.js';
+import {
+  componentIdentifier, crashAppContainer, getAppContainerStatus, syncthingFolderIdOf,
+} from '../framework/container.js';
 import { resetFdm, electMaster } from '../framework/fdm-control.js';
 import {
   START_ACTIONS, waitFor, waitForReconcileActuated, waitForReconcilerDesiredChanged, waitForElectionDecisions, electionDecisionCount,
@@ -13,7 +15,7 @@ import { setSynced, resetSyncState, injectSyncthingEvent } from '../framework/sy
 import { getSubnetConfig } from '../framework/subnet-config.js';
 import { bootAndPeer, installOnNodes, seedSyncScopedData } from '../framework/reconciler-suite.js';
 import { dbClient } from '../framework/db-client.js';
-import { appId, destroyVolume } from '../framework/volume-fixture.js';
+import { destroyVolume } from '../framework/volume-fixture.js';
 import { dumpLogsOnFailure } from '../framework/log-on-failure.js';
 
 // A reconcile pass that does not start a component records no restart attempt.
@@ -37,8 +39,8 @@ describe('a start the reconciler does not make records no attempt', function () 
   dumpLogsOnFailure(() => env);
   let holders;
   const appName = `e2enoattempt${Date.now()}`;
-  const identifier = `${appName}_${appName}`;
-  const folder = appId(appName);
+  const identifier = componentIdentifier(appName);
+  const folder = syncthingFolderIdOf(identifier);
 
   const runningFlags = async () => Promise.all(holders.map((i) => isUp(env.clients[i], appName)));
 

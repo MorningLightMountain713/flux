@@ -48,7 +48,12 @@ import { pushImage } from '../framework/registry-helper.js';
 import { buildSeedableApp } from '../framework/seed-helper.js';
 import { REGISTRY_REPO_HOST } from '../framework/subnet-config.js';
 import {
-  execInContainer, getAppContainerId, killAppContainer, listAppContainers,
+  appDataRoot,
+  componentIdentifier,
+  execInContainer,
+  getAppContainerId,
+  killAppContainer,
+  listAppContainers,
 } from '../framework/container.js';
 import { exists } from '../framework/volume-fixture.js';
 import { waitFor, waitForComponentRedeployed, waitForReconcileActuated } from '../framework/wait.js';
@@ -83,23 +88,21 @@ describe('a component redeploy replaces that component and leaves the app alone'
     return res.data;
   }
 
-  // By EXACT container name. getAppContainerStatus matches on a substring of the
-  // app name, so with two components it answers about whichever docker lists
-  // first - which is not a question this suite ever wants to ask.
+  // By the app AND component labels: with two components, a lookup on the app
+  // alone answers about whichever docker lists first.
   async function componentStatus(client, componentName) {
     const containers = await listAppContainers(client.container, { all: true });
-    return containers.find((c) => c.name === `flux${componentName}_${appName}`) ?? null;
+    return containers.find((c) => c.app === appName && c.component === componentName) ?? null;
   }
 
-  // Each component has its own volume under its own identifier. volume-fixture's
-  // volumeRoot builds the single-component form, which is a different directory.
-  const componentVolume = (componentName) => `/mnt/appdata/flux-apps/flux${componentName}_${appName}`;
-  const markerPath = (componentName) => `${componentVolume(componentName)}/appdata/redeploy-marker`;
+  // Each component has its own volume under its own identifier, read off its
+  // container on the node that holds it.
+  const markerPath = async (container, componentName) => `${await appDataRoot(container, appName, componentName)}/appdata/redeploy-marker`;
 
   // A marker that was never written makes "the data is gone" true for the wrong
   // reason.
   async function seedMarker(client, componentName) {
-    const path = markerPath(componentName);
+    const path = await markerPath(client.container, componentName);
     const r = await execInContainer(client.container, `printf '%s' ${componentName} > ${path}`);
     if (r.exitCode !== 0) throw new Error(`could not seed ${path}: ${r.output}`);
     if (!await exists(client.container, path)) throw new Error(`${path} was not written`);
@@ -273,11 +276,11 @@ describe('a component redeploy replaces that component and leaves the app alone'
       { timeout: 120000, interval: 2000, label: `${subject} running after the hard redeploy` },
     );
     expect(
-      await exists(holder.container, markerPath(subject)),
+      await exists(holder.container, await markerPath(holder.container, subject)),
       'a hard redeploy left the component data it is supposed to destroy',
     ).to.equal(false);
     expect(
-      await exists(holder.container, markerPath(sibling)),
+      await exists(holder.container, await markerPath(holder.container, sibling)),
       "a hard redeploy of one component destroyed the other component's data",
     ).to.equal(true);
 
@@ -308,7 +311,7 @@ describe('a component redeploy replaces that component and leaves the app alone'
     const killed = await killAppContainer(holder.container, appName, sibling);
     expect(killed.exitCode, `could not remove the container: ${killed.output}`).to.equal(0);
 
-    await waitForReconcileActuated(holder, `${sibling}_${appName}`, 'recreated', 180000, { afterId: from });
+    await waitForReconcileActuated(holder, componentIdentifier(appName, sibling), 'recreated', 180000, { afterId: from });
 
     // Polled rather than read once: the recreate and the event write are separate
     // steps, and the event is what the tamper score is computed from.

@@ -1,7 +1,15 @@
 import { describe, it, before, after, beforeEach } from 'mocha';
 import { expect } from 'chai';
 import { createTestEnv } from '../framework/test-env.js';
-import { execInContainer } from '../framework/container.js';
+import { NotPresentError } from '../framework/errors.js';
+import {
+  appDataRoot,
+  appSyncthingFolderId,
+  appVolumeFile,
+  componentIdentifier,
+  execInContainer,
+  requireAppContainerName,
+} from '../framework/container.js';
 import { pushImage } from '../framework/registry-helper.js';
 import { buildSeedableSyncthingApp } from '../framework/seed-helper.js';
 import { getSubnetConfig } from '../framework/subnet-config.js';
@@ -30,12 +38,18 @@ import { dumpLogsOnFailure } from '../framework/log-on-failure.js';
 
 const subnet = getSubnetConfig();
 
-const appDir = (name) => `/mnt/appdata/flux-apps/flux${name}_${name}`;
-const volFile = (name) => `/mnt/appdata/flux${name}_${name}FLUXFSVOL`;
-
+// 'none' when the node holds no container for the app: a restore that
+// destroyed it must read as a change, not as an error in the probe.
 async function inspectField(client, name, field) {
+  let containerName;
+  try {
+    containerName = await requireAppContainerName(client.container, name, name);
+  } catch (error) {
+    if (error instanceof NotPresentError) return 'none';
+    throw error;
+  }
   const r = await execInContainer(client.container,
-    `docker inspect -f '{{${field}}}' flux${name}_${name} 2>/dev/null || echo none`);
+    `docker inspect -f '{{${field}}}' ${containerName} 2>/dev/null || echo none`);
   return r.stdout.trim();
 }
 
@@ -50,16 +64,20 @@ describe('a restore restarts the other instances and never rebuilds them', funct
 
   const ts = Date.now();
   const appName = `e2erpeer${ts}`;
-  const identifier = `${appName}_${appName}`;
-  const folder = `flux${appName}_${appName}`;
+  const identifier = componentIdentifier(appName);
+  // The app's folder id and paths are the same on every holder; read off node
+  // 0's container once it is installed, never spelled.
+  let folder;
+  let appDirPath;
+  let volFilePath;
 
   let auth;
 
   async function stageArchive(client) {
-    const target = `${appDir(appName)}/backup/local/backup_${appName}.tar.gz`;
+    const target = `${appDirPath}/backup/local/backup_${appName}.tar.gz`;
     const r = await execInContainer(client.container,
       `rm -rf /tmp/stage && mkdir -p /tmp/stage && printf 'restored\\n' > /tmp/stage/restored.txt `
-      + `&& mkdir -p ${appDir(appName)}/backup/local && tar -czf ${target} -C /tmp/stage .`);
+      + `&& mkdir -p ${appDirPath}/backup/local && tar -czf ${target} -C /tmp/stage .`);
     expect(r.exitCode, `staging the archive failed: ${r.output}`).to.equal(0);
   }
 
@@ -80,6 +98,9 @@ describe('a restore restarts the other instances and never rebuilds them', funct
       await waitForReconcileActuated(env.clients[i], identifier, 'dataCleared', 90000, { afterId: installAfters[k] });
       await seedSyncScopedData(env, appName, i);
     }));
+    folder = await appSyncthingFolderId(env.clients[0].container, appName, appName);
+    appDirPath = await appDataRoot(env.clients[0].container, appName);
+    volFilePath = await appVolumeFile(env.clients[0].container, appName);
     await Promise.all(nodes.map((i) => setSynced({ ip: subnet.nodeIp(i + 1), folder })));
 
     // The fan-out walks the app's LOCATION records, not the local install
@@ -101,7 +122,7 @@ describe('a restore restarts the other instances and never rebuilds them', funct
   after(async function () {
     this.timeout(60000);
     // the immutable bit is set by the failure test; clear it whatever happened
-    await execInContainer(env.clients[0].container, `chattr -i ${appDir(appName)}/appdata 2>/dev/null || true`).catch(() => {});
+    await execInContainer(env.clients[0].container, `chattr -i ${appDirPath}/appdata 2>/dev/null || true`).catch(() => {});
     await resetSyncState().catch(() => {});
     await env?.teardown();
   });
@@ -142,11 +163,11 @@ describe('a restore restarts the other instances and never rebuilds them', funct
       // eslint-disable-next-line no-await-in-loop
       expect(await inspectField(p, appName, '.Id'), `peer ${i + 1} container identity`).to.equal(before[i].id);
       // eslint-disable-next-line no-await-in-loop
-      expect(await pathExists(p, volFile(appName)), `peer ${i + 1} FLUXFSVOL`).to.equal(true);
+      expect(await pathExists(p, volFilePath), `peer ${i + 1} FLUXFSVOL`).to.equal(true);
       // eslint-disable-next-line no-await-in-loop
-      expect(await pathExists(p, appDir(appName)), `peer ${i + 1} app directory`).to.equal(true);
+      expect(await pathExists(p, appDirPath), `peer ${i + 1} app directory`).to.equal(true);
       // eslint-disable-next-line no-await-in-loop
-      expect(await execInContainer(p.container, `cat ${appDir(appName)}/appdata/seed-data 2>/dev/null || echo missing`)
+      expect(await execInContainer(p.container, `cat ${appDirPath}/appdata/seed-data 2>/dev/null || echo missing`)
         .then((r) => r.stdout.trim()), `peer ${i + 1} data`).to.equal('seeded');
     }
   });
@@ -158,7 +179,7 @@ describe('a restore restarts the other instances and never rebuilds them', funct
     // Make clearing appdata fail the way a volume that has gone read-only under
     // an ext4 error does: the operation reports failure having possibly removed
     // some of it, so what is on disk can no longer be called either copy.
-    const lock = await execInContainer(client.container, `chattr +i ${appDir(appName)}/appdata`);
+    const lock = await execInContainer(client.container, `chattr +i ${appDirPath}/appdata`);
     expect(lock.exitCode, `could not make appdata immutable: ${lock.output}`).to.equal(0);
 
     // the hold is applied during the restore, so the mark has to be taken
@@ -181,7 +202,7 @@ describe('a restore restarts the other instances and never rebuilds them', funct
       // ...and held, so its container is not started on it either
       await waitForReconcilerDesiredChanged(client, identifier, 'stopped', 120000, { afterId });
     } finally {
-      await execInContainer(client.container, `chattr -i ${appDir(appName)}/appdata 2>/dev/null || true`);
+      await execInContainer(client.container, `chattr -i ${appDirPath}/appdata 2>/dev/null || true`);
     }
   });
 });

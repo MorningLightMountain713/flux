@@ -4,7 +4,7 @@ import { expect } from 'chai';
 import { createTestEnv } from '../framework/test-env.js';
 import { authenticate } from '../auth.js';
 import { appOwnerKey, nodeKey } from '../framework/keys.js';
-import { getAppContainerStatus } from '../framework/container.js';
+import { componentIdentifier, getAppContainerStatus } from '../framework/container.js';
 import {
   waitFor, waitForReconcileActuated, assertNoEvent, waitForOperatorIntent,
 } from '../framework/wait.js';
@@ -33,7 +33,7 @@ describe('reconciler honours a durable operator stop', function () {
   let env;
   let idx;
   const appName = `e2eopstop${Date.now()}`;
-  const identifier = `${appName}_${appName}`;
+  const identifier = componentIdentifier(appName);
 
   before(async function () {
     this.timeout(300000);

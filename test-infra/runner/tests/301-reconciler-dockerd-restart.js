@@ -2,7 +2,7 @@
 import { describe, it, before, after } from 'mocha';
 import { createTestEnv } from '../framework/test-env.js';
 import { pushImage } from '../framework/registry-helper.js';
-import { getAppContainerStatus, restartDockerd } from '../framework/container.js';
+import { componentIdentifier, getAppContainerStatus, restartDockerd } from '../framework/container.js';
 import { startTicker, advanceBlock } from '../framework/daemon-control.js';
 import { dbClient } from '../framework/db-client.js';
 import { buildSeedableApp } from '../framework/seed-helper.js';
@@ -73,7 +73,7 @@ describe('reconciler recovers orphaned containers after a dockerd restart', func
   let env;
   let installedOnIndex;
   const appName = `e2edockerd${Date.now()}`;
-  const identifier = `${appName}_${appName}`; // bare component id the reconciler uses
+  const identifier = componentIdentifier(appName); // bare component id the reconciler uses
 
   before(async function () {
     this.timeout(300000);

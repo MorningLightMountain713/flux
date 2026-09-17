@@ -1,7 +1,13 @@
 import { describe, it, before, after } from 'mocha';
 import { expect } from 'chai';
 import { createTestEnv } from '../framework/test-env.js';
-import { execInContainer, getAppContainerStatus } from '../framework/container.js';
+import {
+  appDataRoot,
+  componentIdentifier,
+  execInContainer,
+  getAppContainerStatus,
+  syncthingFolderIdOf,
+} from '../framework/container.js';
 import { pushImage } from '../framework/registry-helper.js';
 import { buildSeedableApp } from '../framework/seed-helper.js';
 import { REGISTRY_REPO_HOST, getSubnetConfig } from '../framework/subnet-config.js';
@@ -37,9 +43,11 @@ describe('a restore with no peer to fall back on', function () {
   const syncedApp = `e2esolo${ts}`;
   const plainApp = `e2eplain${ts}`;
 
-  const idOf = (app) => `${app}c_${app}`;
-  const folderOf = (app) => `flux${app}c_${app}`;
-  const dirOf = (app) => `/mnt/appdata/flux-apps/${folderOf(app)}`;
+  // Seeded specs carry no minted identity, so the identifier and folder id are
+  // known before install; the directory is read off the container afterwards.
+  const idOf = (app) => componentIdentifier(app, `${app}c`);
+  const folderOf = (app) => syncthingFolderIdOf(idOf(app));
+  const dirOf = async (app) => appDataRoot(client.container, app, `${app}c`);
 
   let auth;
   let client;
@@ -63,10 +71,10 @@ describe('a restore with no peer to fall back on', function () {
   }
 
   async function stageArchive(app) {
-    const target = `${dirOf(app)}/backup/local/backup_${app.toLowerCase()}c.tar.gz`;
+    const target = `${await dirOf(app)}/backup/local/backup_${app.toLowerCase()}c.tar.gz`;
     const r = await execInContainer(client.container,
       `rm -rf /tmp/s-${app} && mkdir -p /tmp/s-${app} && printf 'restored\\n' > /tmp/s-${app}/restored.txt `
-      + `&& mkdir -p ${dirOf(app)}/backup/local && tar -czf ${target} -C /tmp/s-${app} .`);
+      + `&& mkdir -p ${await dirOf(app)}/backup/local && tar -czf ${target} -C /tmp/s-${app} .`);
     expect(r.exitCode, `staging ${app} archive failed: ${r.output}`).to.equal(0);
   }
 
@@ -113,7 +121,7 @@ describe('a restore with no peer to fall back on', function () {
         }, { timeout: 120000, interval: 3000, label: `${app} container running` });
       }
       // eslint-disable-next-line no-await-in-loop
-      await execInContainer(client.container, `mkdir -p ${dirOf(app)}/appdata && printf 'original\\n' > ${dirOf(app)}/appdata/marker.txt`);
+      await execInContainer(client.container, `mkdir -p ${await dirOf(app)}/appdata && printf 'original\\n' > ${await dirOf(app)}/appdata/marker.txt`);
     }
     await setSynced({ ip: subnet.nodeIp(1), folder: folderOf(syncedApp) });
 
@@ -124,7 +132,7 @@ describe('a restore with no peer to fall back on', function () {
     this.timeout(60000);
     for (const app of [syncedApp, plainApp]) {
       // eslint-disable-next-line no-await-in-loop
-      await execInContainer(client.container, `chattr -i ${dirOf(app)}/appdata 2>/dev/null || true`).catch(() => {});
+      await execInContainer(client.container, `chattr -i ${await dirOf(app)}/appdata 2>/dev/null || true`).catch(() => {});
     }
     await resetSyncState().catch(() => {});
     await env?.teardown();
@@ -134,7 +142,7 @@ describe('a restore with no peer to fall back on', function () {
     this.timeout(300000);
     await stageArchive(syncedApp);
     // the clear fails the way a volume gone read-only under an ext4 error does
-    const lock = await execInContainer(client.container, `chattr +i ${dirOf(syncedApp)}/appdata`);
+    const lock = await execInContainer(client.container, `chattr +i ${await dirOf(syncedApp)}/appdata`);
     expect(lock.exitCode, `could not make appdata immutable: ${lock.output}`).to.equal(0);
 
     const afterId = client.getLastEventId();
@@ -154,14 +162,14 @@ describe('a restore with no peer to fall back on', function () {
       // Suite 88 covers the write, from a folder that was sendreceive.
       await waitForReconcilerDesiredChanged(client, idOf(syncedApp), 'stopped', 120000, { afterId });
     } finally {
-      await execInContainer(client.container, `chattr -i ${dirOf(syncedApp)}/appdata 2>/dev/null || true`);
+      await execInContainer(client.container, `chattr -i ${await dirOf(syncedApp)}/appdata 2>/dev/null || true`);
     }
   });
 
   it('holds an unsynced component too, which has no folder and no healing at all', async function () {
     this.timeout(300000);
     await stageArchive(plainApp);
-    const lock = await execInContainer(client.container, `chattr +i ${dirOf(plainApp)}/appdata`);
+    const lock = await execInContainer(client.container, `chattr +i ${await dirOf(plainApp)}/appdata`);
     expect(lock.exitCode, `could not make appdata immutable: ${lock.output}`).to.equal(0);
 
     const afterId = client.getLastEventId();
@@ -177,7 +185,7 @@ describe('a restore with no peer to fall back on', function () {
       // state over the wreckage.
       await waitForReconcilerDesiredChanged(client, idOf(plainApp), 'stopped', 120000, { afterId });
     } finally {
-      await execInContainer(client.container, `chattr -i ${dirOf(plainApp)}/appdata 2>/dev/null || true`);
+      await execInContainer(client.container, `chattr -i ${await dirOf(plainApp)}/appdata 2>/dev/null || true`);
     }
   });
 });

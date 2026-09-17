@@ -2,7 +2,7 @@
 import { describe, it, before, after } from 'mocha';
 import { expect } from 'chai';
 import { createTestEnv } from '../framework/test-env.js';
-import { getAppContainerStatus, restartDockerd } from '../framework/container.js';
+import { componentIdentifier, getAppContainerStatus, restartDockerd } from '../framework/container.js';
 import { buildSeedableEnterpriseApp } from '../framework/seed-helper.js';
 import { pushImage } from '../framework/registry-helper.js';
 import { bootAndPeer, installOnNodes } from '../framework/reconciler-suite.js';
@@ -31,7 +31,7 @@ describe('reconnect sweep covers enterprise apps (encrypted at rest)', function 
     await pushImage(appName, 'v1');
     const app = await buildSeedableEnterpriseApp({ name: appName });
     await installOnNodes(env, app, [0]);
-    identifier = `${appName}_${appName}`;
+    identifier = componentIdentifier(appName);
   });
 
   after(async function () {

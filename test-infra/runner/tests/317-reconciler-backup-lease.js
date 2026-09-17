@@ -2,7 +2,7 @@
 import { describe, it, before, after } from 'mocha';
 import { expect } from 'chai';
 import { createTestEnv } from '../framework/test-env.js';
-import { getAppContainerStatus, restartDockerd, execInContainer } from '../framework/container.js';
+import { appDataRoot, execInContainer, getAppContainerStatus, restartDockerd } from '../framework/container.js';
 import {
   setSynced, resetSyncState, resetFolderWrites, getPauseWrites,
 } from '../framework/syncthing-control.js';
@@ -55,7 +55,7 @@ describe('backup leases the whole app against the reconciler', function () {
     // (FLUX_APPS_FOLDER relocates the apps dir in the harness image)
     const bulk = await execInContainer(
       env.clients[0].container,
-      `sh -c "d=\\$(ls -d /mnt/appdata/flux-apps/flux${appName}* | head -1) && dd if=/dev/urandom of=\\$d/appdata/bulk.bin bs=1M count=512 && ls -l \\$d/appdata/bulk.bin"`,
+      `sh -c "d=${await appDataRoot(env.clients[0].container, appName)} && dd if=/dev/urandom of=\\$d/appdata/bulk.bin bs=1M count=512 && ls -l \\$d/appdata/bulk.bin"`,
     );
     if (bulk.exitCode !== 0) {
       throw new Error(`appdata bulk-up failed (lease window would be too small): ${bulk.stderr || bulk.output}`);

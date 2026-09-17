@@ -7,7 +7,13 @@ import { bootAndPeer, installOnNodes, seedSyncScopedData } from '../framework/re
 import { buildSeedableSyncthingApp } from '../framework/seed-helper.js';
 import { pushImage } from '../framework/registry-helper.js';
 import { setSynced } from '../framework/syncthing-control.js';
-import { getAppContainerStatus, pauseHostContainer, unpauseHostContainer } from '../framework/container.js';
+import {
+  appSyncthingFolderId,
+  componentIdentifier,
+  getAppContainerStatus,
+  pauseHostContainer,
+  unpauseHostContainer,
+} from '../framework/container.js';
 import { waitFor, waitForAppInstalled, waitForReconcileActuated, assertNoEvent } from '../framework/wait.js';
 
 // A chain stall must coast every master, never demote one. When no node's
@@ -102,10 +108,10 @@ describe('a chain stall coasts every master and demotes none', function () {
     await installOnNodes(env, app, HOLDERS);
     await Promise.all(HOLDERS.map((i) => waitForAppInstalled(env.clients[i], name, 240000)));
     await Promise.all(HOLDERS.map(async (i, k) => {
-      await waitForReconcileActuated(env.clients[i], `${name}_${name}`, 'dataCleared', 60000, { afterId: installAfters[k] });
+      await waitForReconcileActuated(env.clients[i], componentIdentifier(name), 'dataCleared', 60000, { afterId: installAfters[k] });
       await seedSyncScopedData(env, name, i);
     }));
-    await setSynced({ folder: `flux${name}_${name}` });
+    await setSynced({ folder: await appSyncthingFolderId(env.clients[HOLDERS[0]].container, name, name) });
 
     outpoints = {};
     for (let i = 0; i < env.clients.length; i += 1) {

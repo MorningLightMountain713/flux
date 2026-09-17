@@ -6,7 +6,11 @@ import { createTestEnv } from '../framework/test-env.js';
 import { authenticate } from '../auth.js';
 import { appOwnerKey } from '../framework/keys.js';
 import {
-  execInContainer, getAppContainerStatus, fluxosPid, appComponentIdentifier,
+  appComponentIdentifier,
+  execInContainer,
+  fluxosPid,
+  getAppContainerStatus,
+  requireAppContainerName,
 } from '../framework/container.js';
 import { waitFor } from '../framework/wait.js';
 import { bootAndPeer, seedSimpleApp } from '../framework/reconciler-suite.js';
@@ -152,7 +156,7 @@ describe('docker terminal fails cleanly and never crashes the node', function ()
       try {
         await opened;
         for (let i = 0; i < 8; i += 1) socket.emit('cmd', 'x'.repeat(131072));
-        await execInContainer(client.container, `docker kill flux${identifier}`);
+        await execInContainer(client.container, `docker kill ${await requireAppContainerName(client.container, appName, appName)}`);
         await new Promise((res) => { setTimeout(res, 2000); });
       } finally {
         clearInterval(typer);

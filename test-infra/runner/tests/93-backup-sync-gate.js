@@ -1,7 +1,13 @@
 import { describe, it, before, after, beforeEach } from 'mocha';
 import { expect } from 'chai';
 import { createTestEnv } from '../framework/test-env.js';
-import { execInContainer, getAppContainerStatus } from '../framework/container.js';
+import {
+  appDataRoot,
+  appSyncthingFolderId,
+  componentIdentifier,
+  execInContainer,
+  getAppContainerStatus,
+} from '../framework/container.js';
 import { pushImage } from '../framework/registry-helper.js';
 import { buildSeedableApp } from '../framework/seed-helper.js';
 import { REGISTRY_REPO_HOST, getSubnetConfig } from '../framework/subnet-config.js';
@@ -35,9 +41,11 @@ describe('a backup refuses to archive a copy that is not there', function () {
   const ts = Date.now();
   const appName = `e2egate${ts}`;
   const comp = `${appName}c`;
-  const folderId = `flux${comp}_${appName}`;
-  const dir = `/mnt/appdata/flux-apps/${folderId}`;
-  const archive = `${dir}/backup/local/backup_${comp.toLowerCase()}.tar.gz`;
+  // The component's folder id and directory are read off its container once it
+  // is installed, never spelled.
+  let folderId;
+  let dir;
+  let archive;
 
   let auth;
   let client;
@@ -91,7 +99,10 @@ describe('a backup refuses to archive a copy that is not there', function () {
 
     const after = client.getLastEventId();
     await installOnNodes(env, app, [0]);
-    await waitForReconcileActuated(client, `${comp}_${appName}`, 'dataCleared', 120000, { afterId: after });
+    await waitForReconcileActuated(client, componentIdentifier(appName, comp), 'dataCleared', 120000, { afterId: after });
+    folderId = await appSyncthingFolderId(client.container, appName, comp);
+    dir = await appDataRoot(client.container, appName, comp);
+    archive = `${dir}/backup/local/backup_${comp.toLowerCase()}.tar.gz`;
     await execInContainer(client.container, `printf 'the-real-world\\n' > ${dir}/appdata/marker.txt`);
 
     auth = await authenticate(client.url, appOwnerKey());

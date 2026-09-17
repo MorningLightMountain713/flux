@@ -2,7 +2,13 @@
 import { describe, it, before, after } from 'mocha';
 import { expect } from 'chai';
 import { createTestEnv } from '../framework/test-env.js';
-import { getAppContainerStatus, killAppContainer, execInContainer } from '../framework/container.js';
+import {
+  appDataRoot,
+  execInContainer,
+  getAppContainerStatus,
+  killAppContainer,
+  requireAppContainerName,
+} from '../framework/container.js';
 import { getSyncthingState } from '../framework/syncthing-control.js';
 import {
   waitFor, waitForReconcileActuated, assertNoEvent,
@@ -64,7 +70,8 @@ describe('plain-sync (s:) components run like normal components', function () {
   it('is recreated by the reconciler with its data intact (no controller opinion needed)', async function () {
     this.timeout(150000);
     const client = env.clients[idx];
-    const mountDir = `/mnt/appdata/flux-apps/flux${identifier}/appdata`;
+    const dir = await appDataRoot(client.container, appName);
+    const mountDir = `${dir}/appdata`;
 
     await execInContainer(client.container, `sh -c "echo persisted > ${mountDir}/e2e-marker"`);
 
@@ -77,11 +84,11 @@ describe('plain-sync (s:) components run like normal components', function () {
 
     // the recreated container carries the bind mount (this is the assertion
     // that catches a deployment producing zero binds) and the data survived
-    const inspect = await execInContainer(client.container, `docker inspect flux${identifier} --format '{{json .Mounts}}'`);
+    const inspect = await execInContainer(client.container, `docker inspect ${await requireAppContainerName(client.container, appName, appName)} --format '{{json .Mounts}}'`);
     const mounts = JSON.parse(inspect.stdout.trim());
     const appdata = mounts.find((m) => m.Destination === '/appdata');
     expect(appdata, 'bind mount present in the recreated container').to.not.equal(undefined);
-    expect(appdata.Source).to.include(`flux${identifier}`);
+    expect(appdata.Source).to.include(dir);
 
     const marker = await execInContainer(client.container, `cat ${mountDir}/e2e-marker`);
     expect(marker.stdout).to.include('persisted');

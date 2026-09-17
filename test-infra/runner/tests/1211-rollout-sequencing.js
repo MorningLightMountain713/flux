@@ -7,7 +7,7 @@ import { bootAndPeer, installOnNodes, seedSyncScopedData } from '../framework/re
 import { buildSeedableSyncthingApp } from '../framework/seed-helper.js';
 import { pushImage } from '../framework/registry-helper.js';
 import { setSynced } from '../framework/syncthing-control.js';
-import { getAppContainerStatus } from '../framework/container.js';
+import { appSyncthingFolderId, componentIdentifier, getAppContainerStatus } from '../framework/container.js';
 import { waitFor, waitForAppInstalled, waitForReconcileActuated, assertNoEvent } from '../framework/wait.js';
 
 // The rollout's sequencing claim (§13.6): the plane ships everywhere INERT and
@@ -70,10 +70,10 @@ describe('rollout sequencing: the plane stays inert below the activation height'
     await installOnNodes(env, app, HOLDERS);
     await Promise.all(HOLDERS.map((i) => waitForAppInstalled(env.clients[i], name, 240000)));
     await Promise.all(HOLDERS.map(async (i, k) => {
-      await waitForReconcileActuated(env.clients[i], `${name}_${name}`, 'dataCleared', 60000, { afterId: installAfters[k] });
+      await waitForReconcileActuated(env.clients[i], componentIdentifier(name), 'dataCleared', 60000, { afterId: installAfters[k] });
       await seedSyncScopedData(env, name, i);
     }));
-    await setSynced({ folder: `flux${name}_${name}` });
+    await setSynced({ folder: await appSyncthingFolderId(env.clients[HOLDERS[0]].container, name, name) });
   });
 
   after(async function () {

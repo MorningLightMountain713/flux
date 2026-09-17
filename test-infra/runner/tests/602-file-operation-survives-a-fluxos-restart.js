@@ -39,7 +39,7 @@ describe('a file operation survives a FluxOS restart', function () {
 
   const ts = Date.now();
   const appName = `e2eopsurvive${ts}`;
-  const root = volumeRoot(appName);
+  let root;
 
   // Big enough that compressing it outlives a FluxOS restart, and small enough
   // to fit the 1GB volume beside its own output. Random bytes do not compress,
@@ -103,6 +103,7 @@ describe('a file operation survives a FluxOS restart', function () {
     await installOnNodes(env, app, [0]);
 
     node = env.clients[0];
+    root = await volumeRoot(node.container, appName);
     auth = await authenticate(node.url, appOwnerKey());
 
     await waitFor(async () => exists(node.container, root), {

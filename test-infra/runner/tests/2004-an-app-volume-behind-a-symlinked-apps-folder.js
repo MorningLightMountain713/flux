@@ -19,7 +19,9 @@ import { pushImage } from '../framework/registry-helper.js';
 import { buildSeedableApp } from '../framework/seed-helper.js';
 import { REGISTRY_REPO_HOST } from '../framework/subnet-config.js';
 import { bootAndPeer, installOnNodes } from '../framework/reconciler-suite.js';
-import { crashAppContainer, execInContainer, getAppContainerId } from '../framework/container.js';
+import {
+  componentIdentifier, crashAppContainer, execInContainer, getAppContainerId,
+} from '../framework/container.js';
 import { volumeRoot } from '../framework/volume-fixture.js';
 import { START_ACTIONS, waitFor, waitForReconcileActuated } from '../framework/wait.js';
 import { dumpLogsOnFailure } from '../framework/log-on-failure.js';
@@ -32,21 +34,23 @@ describe('an app volume behind a symlinked apps folder', function () {
   dumpLogsOnFailure(() => env);
 
   const appName = `e2evollink${Date.now()}`;
-  const identifier = `${appName}_${appName}`;
+  const identifier = componentIdentifier(appName);
   let holder;
 
   // How many mounts the mount table lists at the volume's real path.
   async function mountCount(client) {
-    const r = await execInContainer(client.container, `grep -c " ${volumeRoot(appName)} " /proc/self/mountinfo; true`);
+    const root = await volumeRoot(client.container, appName);
+    const r = await execInContainer(client.container, `grep -c " ${root} " /proc/self/mountinfo; true`);
     return Number(r.output.trim());
   }
 
   // The direct I/O flag of the loop device the volume's mount point resolves
   // through; null when it is not mounted from a loop device.
   async function volumeDirectIo(client) {
+    const root = await volumeRoot(client.container, appName);
     const r = await execInContainer(
       client.container,
-      `src=$(findmnt -no SOURCE ${volumeRoot(appName)} | tail -1); `
+      `src=$(findmnt -no SOURCE ${root} | tail -1); `
       + 'case "$src" in /dev/loop*) cat "/sys/block/${src#/dev/}/loop/dio";; *) echo none;; esac',
     );
     const out = r.output.trim();

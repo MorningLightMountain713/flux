@@ -3,7 +3,7 @@ import { expect } from 'chai';
 import { createTestEnv } from '../framework/test-env.js';
 import { dbClient } from '../framework/db-client.js';
 import { getSubnetConfig } from '../framework/subnet-config.js';
-import { getAppContainerStatus } from '../framework/container.js';
+import { componentIdentifier, getAppContainerStatus, syncthingFolderIdOf } from '../framework/container.js';
 import { resetSyncState } from '../framework/syncthing-control.js';
 import { waitFor } from '../framework/wait.js';
 import { bootAndPeer, seedSyncthingApp } from '../framework/reconciler-suite.js';
@@ -74,7 +74,7 @@ describe('syncthing asks a peer once per pass, not once per folder', function ()
   const appTwo = `e2eprobeb${Date.now()}`;
   // A single-component synced app's folder id is flux<component>_<app>, and
   // buildSeedableSyncthingApp names the component after the app.
-  const heldFolders = [appOne, appTwo].map((name) => `flux${name}_${name}`);
+  const heldFolders = [appOne, appTwo].map((name) => syncthingFolderIdOf(componentIdentifier(name)));
 
   before(async function () {
     this.timeout(600000);

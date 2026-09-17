@@ -11,7 +11,9 @@
 // clean passes. A fixture that silently did not happen turns an assertion into
 // decoration, so the check belongs next to the write, not in the test.
 
-import { execInContainer } from './container.js';
+import {
+  appDataRoot, execInContainer, requireAppComponentIdentifier, syncthingFolderIdOf,
+} from './container.js';
 
 // A plausible application uid: an app runs as something like www-data, not as
 // root, and its files belong to that user. Copies MUST keep belonging to it -
@@ -23,9 +25,10 @@ import { execInContainer } from './container.js';
 export const APP_UID = 33;
 export const APP_GID = 33;
 
-export const appId = (name) => `flux${name}_${name}`;
-export const volumeRoot = (name) => `/mnt/appdata/flux-apps/${appId(name)}`;
-export const volumeImage = (name) => `/mnt/appdata/${appId(name)}FLUXFSVOL`;
+/** The app's volume root on this node, read off the container that carries its identity. */
+export async function volumeRoot(container, name) {
+  return appDataRoot(container, name, name);
+}
 const folderRoot = (folderId) => `/mnt/appdata/flux-apps/${folderId}`;
 const folderImage = (folderId) => `/mnt/appdata/${folderId}FLUXFSVOL`;
 
@@ -47,7 +50,7 @@ async function run(container, command, what) {
 /**
  * Takes a component's volume away for good: unmounted, its directory no longer
  * immutable, and its image removed, so nothing on the node can mount it again.
- * @param {string} folderId The component's identifier, flux<component>_<app>.
+ * @param {string} folderId The component's syncthing folder id, flux<identifier>.
  */
 export async function destroyFolderVolume(container, folderId) {
   const root = folderRoot(folderId);
@@ -62,7 +65,7 @@ const folderImageHeader = (folderId) => `${folderImage(folderId)}.header`;
  * carry its filesystem's superblock, zeroed. The bytes are kept beside the image for
  * restoreFolderVolume. Waits for the loop device to release the image first, so no
  * mount still open on it writes the superblock back.
- * @param {string} folderId The component's identifier, flux<component>_<app>.
+ * @param {string} folderId The component's syncthing folder id, flux<identifier>.
  */
 export async function breakFolderVolume(container, folderId) {
   const root = folderRoot(folderId);
@@ -84,7 +87,7 @@ export async function breakFolderVolume(container, folderId) {
 
 /**
  * Puts back what breakFolderVolume zeroed, so the image mounts again.
- * @param {string} folderId The component's identifier, flux<component>_<app>.
+ * @param {string} folderId The component's syncthing folder id, flux<identifier>.
  */
 export async function restoreFolderVolume(container, folderId) {
   const image = folderImage(folderId);
@@ -94,10 +97,11 @@ export async function restoreFolderVolume(container, folderId) {
 }
 
 /**
- * destroyFolderVolume for an app whose one component shares its name.
+ * destroyFolderVolume for an app whose one component shares its name, read off
+ * the container that carries its identity.
  */
 export async function destroyVolume(container, name) {
-  await destroyFolderVolume(container, appId(name));
+  await destroyFolderVolume(container, syncthingFolderIdOf(await requireAppComponentIdentifier(container, name)));
 }
 
 /**
@@ -170,7 +174,7 @@ export async function isSymlink(container, path) {
  * @returns {Promise<string>} the volume root the files were written under
  */
 export async function seedVolumeTree(container, name, files) {
-  const root = volumeRoot(name);
+  const root = await volumeRoot(container, name);
   const paths = Object.keys(files);
 
   for (const relative of paths) {
@@ -208,7 +212,7 @@ export async function seedVolumeTree(container, name, files) {
  * that was renamed - silently carries it into the next one.
  */
 export async function resetVolume(container, name, { keep = ['appdata'] } = {}) {
-  const root = volumeRoot(name);
+  const root = await volumeRoot(container, name);
   const exclusions = keep.map((k) => `! -name ${sq(k)}`).join(' ');
   await run(container, `find ${sq(root)} -mindepth 1 -maxdepth 1 ${exclusions} -exec rm -rf {} +`, `reset ${root}`);
 }
@@ -226,7 +230,7 @@ export async function resetVolume(container, name, { keep = ['appdata'] } = {}) 
  * @param {number} megabytes
  */
 export async function seedLargeFile(container, name, relative, megabytes) {
-  const root = volumeRoot(name);
+  const root = await volumeRoot(container, name);
   const path = `${root}/${relative}`;
   await run(
     container,
@@ -250,7 +254,7 @@ export async function seedLargeFile(container, name, relative, megabytes) {
  * nothing.
  */
 export async function seedSymlink(container, name, relative, target) {
-  const root = volumeRoot(name);
+  const root = await volumeRoot(container, name);
   const path = `${root}/${relative}`;
   await run(container, `mkdir -p "$(dirname ${sq(path)})" && ln -sfn ${sq(target)} ${sq(path)}`, `link ${relative}`);
 

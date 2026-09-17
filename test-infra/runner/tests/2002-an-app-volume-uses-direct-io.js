@@ -42,9 +42,10 @@ describe('an app volume uses direct I/O', function () {
   // The loop device the volume's mount point resolves through, and its flag.
   // null when the volume is not mounted from a loop device at all.
   async function volumeDirectIo(client) {
+    const root = await volumeRoot(client.container, appName);
     const r = await execInContainer(
       client.container,
-      `src=$(findmnt -no SOURCE ${volumeRoot(appName)} | tail -1); `
+      `src=$(findmnt -no SOURCE ${root} | tail -1); `
       + 'case "$src" in /dev/loop*) cat "/sys/block/${src#/dev/}/loop/dio";; *) echo none;; esac',
     );
     const out = r.output.trim();

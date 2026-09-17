@@ -3,10 +3,19 @@ import { expect } from 'chai';
 import { describe, it, before, after } from 'mocha';
 import { createTestEnv } from '../framework/test-env.js';
 import {
-  getAppContainerStatus, getAppContainerId, getAppContainerAttachment,
-  disconnectAppNetwork, connectAppNetwork,
-  getAppNetworkSubnet, removeAppNetworkRaw, stopAndPruneAppNetwork,
-  removeAppImage, restartFluxos, execInContainer,
+  appDataRoot,
+  componentIdentifier,
+  connectAppNetwork,
+  disconnectAppNetwork,
+  execInContainer,
+  getAppContainerAttachment,
+  getAppContainerId,
+  getAppContainerStatus,
+  getAppNetworkSubnet,
+  removeAppImage,
+  removeAppNetworkRaw,
+  restartFluxos,
+  stopAndPruneAppNetwork,
 } from '../framework/container.js';
 import { waitFor, waitForReconcileActuated } from '../framework/wait.js';
 import {
@@ -58,14 +67,14 @@ describe('reconciler network-detach heal', function () {
   let idx;
   let client;
   const healName = `e2eheal${Date.now()}`;
-  const healId = `${healName}_${healName}`;
+  const healId = componentIdentifier(healName);
   const stormName = `e2estorm${Date.now()}`;
   const stormComps = ['www', 'api', 'db'];
   const restartName = `e2ehealboot${Date.now()}`;
-  const restartId = `${restartName}_${restartName}`;
+  const restartId = componentIdentifier(restartName);
   const stopName = `e2ehealstop${Date.now()}`;
-  const stopId = `${stopName}_${stopName}`;
-  const markerPath = (app) => `/mnt/appdata/flux-apps/flux${app}_${app}/appdata/heal-marker`;
+  const stopId = componentIdentifier(stopName);
+  const markerPath = async (container, app) => `${await appDataRoot(container, app)}/appdata/heal-marker`;
 
   before(async function () {
     this.timeout(420000);
@@ -124,7 +133,7 @@ describe('reconciler network-detach heal', function () {
     await installOnNodes(env, stormApp, [idx]);
     for (const comp of stormComps) {
       // eslint-disable-next-line no-await-in-loop
-      await waitForReconcileActuated(client, `${comp}_${stormName}`, 'firstRunProven', 90000);
+      await waitForReconcileActuated(client, componentIdentifier(stormName, comp), 'firstRunProven', 90000);
     }
 
     // The restart-mid-heal app, pinned to the same node.
@@ -185,7 +194,7 @@ describe('reconciler network-detach heal', function () {
     await waitForUp(client, healName, 'running before the detach');
     // the marker is what the heal must carry across the force-remove + recreate:
     // its recreate is forbidden from creating (reformatting) the data volume
-    const w = await execInContainer(client.container, `sh -c 'echo precious > ${markerPath(healName)}'`);
+    const w = await execInContainer(client.container, `sh -c 'echo precious > ${await markerPath(client.container, healName)}'`);
     expect(w.exitCode, `marker write failed: ${w.output}`).to.equal(0);
 
     const afterId = client.getLastEventId();
@@ -199,7 +208,7 @@ describe('reconciler network-detach heal', function () {
     const attachment = await getAppContainerAttachment(client.container, healName);
     expect(attachment.attached, 'the recreated container must hold a fresh endpoint with an IP').to.be.true;
 
-    const r = await execInContainer(client.container, `cat ${markerPath(healName)}`);
+    const r = await execInContainer(client.container, `cat ${await markerPath(client.container, healName)}`);
     expect(r.stdout.trim(), 'appdata must survive the heal byte-for-byte').to.equal('precious');
 
     // the episode closes: a later pass sees it attached and clears the heal state,
@@ -249,7 +258,7 @@ describe('reconciler network-detach heal', function () {
     expect(await getAppNetworkSubnet(client.container, healName), 'the node rebuilt the network itself').to.be.a('string');
     const attachment = await getAppContainerAttachment(client.container, healName);
     expect(attachment.attached, 'and the container came back attached to it').to.be.true;
-    const r = await execInContainer(client.container, `cat ${markerPath(healName)}`);
+    const r = await execInContainer(client.container, `cat ${await markerPath(client.container, healName)}`);
     expect(r.stdout.trim(), 'appdata survives this heal too').to.equal('precious');
   });
 
@@ -325,7 +334,7 @@ describe('reconciler network-detach heal', function () {
     );
 
     for (const comp of stormComps) {
-      const compId = `${comp}_${stormName}`;
+      const compId = componentIdentifier(stormName, comp);
       // eslint-disable-next-line no-await-in-loop
       const nowId = await getAppContainerId(client.container, stormName, comp);
       expect(nowId, `${comp} must not be force-removed under a storm`).to.equal(ids[comp]);

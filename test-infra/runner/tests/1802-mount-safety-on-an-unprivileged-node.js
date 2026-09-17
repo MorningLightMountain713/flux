@@ -1,7 +1,9 @@
 import { describe, it, before, after } from 'mocha';
 import { expect } from 'chai';
 import { createTestEnv } from '../framework/test-env.js';
-import { execInContainer, getAppContainerStatus, fluxosPid } from '../framework/container.js';
+import {
+  appDataRoot, execInContainer, getAppContainerStatus, fluxosPid,
+} from '../framework/container.js';
 import {
   setSyncState, setSynced, setSyncing, getSyncthingState, resetSyncState,
   injectSyncthingEvent,
@@ -34,9 +36,6 @@ import { dumpLogsOnFailure } from '../framework/log-on-failure.js';
 
 const subnet = getSubnetConfig();
 
-const appId = (name) => `flux${name}_${name}`;
-const appDir = (name) => `/mnt/appdata/flux-apps/${appId(name)}`;
-
 async function isUp(client, appName) {
   const status = await getAppContainerStatus(client.container, appName);
   return !!(status && status.status.startsWith('Up'));
@@ -60,8 +59,9 @@ describe('mount safety decides on what a node can actually read', function () {
   dumpLogsOnFailure(() => env);
 
   const name = `e2eunpriv${Date.now()}`;
-  const folder = appId(name);
-  const identifier = `${name}_${name}`;
+  let folder;
+  let identifier;
+  let dir;
   const ip0 = subnet.nodeIp(1);
 
   // What a container that owns its data leaves behind: the mount point belongs to
@@ -70,7 +70,7 @@ describe('mount safety decides on what a node can actually read', function () {
   // from inside itself.
   const lockAppdataToTheContainer = async (client) => {
     const r = await execInContainer(client.container,
-      `sh -c 'chown -R 999:999 ${appDir(name)}/appdata && chmod 700 ${appDir(name)}/appdata'`);
+      `sh -c 'chown -R 999:999 ${dir}/appdata && chmod 700 ${dir}/appdata'`);
     expect(r.exitCode, `could not lock appdata: ${r.output}`).to.equal(0);
   };
 
@@ -86,7 +86,7 @@ describe('mount safety decides on what a node can actually read', function () {
 
   const linesFor = (index) => env.nodeDiagnostics().find((n) => n.index === index)?.lines ?? [];
   const privilegedReads = (from) => linesFor(0).slice(from)
-    .filter((line) => line.includes(`Run Cmd: sudo find ${appDir(name)}`)).length;
+    .filter((line) => line.includes(`Run Cmd: sudo find ${dir}`)).length;
 
   before(async function () {
     this.timeout(600000);
@@ -104,7 +104,8 @@ describe('mount safety decides on what a node can actually read', function () {
     await bootAndPeer(env, { minOutbound: 1, minInbound: 1 });
     await resetSyncState();
 
-    await seedSyncthingApp(env, { name, syncMode: 'syncFirst', index: 0 });
+    ({ folder, identifier } = await seedSyncthingApp(env, { name, syncMode: 'syncFirst', index: 0 }));
+    dir = await appDataRoot(env.clients[0].container, name);
     await setSynced({ ip: ip0, folder });
     await waitFor(async () => (await folderType(ip0, folder)) === 'sendreceive', { timeout: 90000, interval: 3000, label: `${folder} sendreceive` });
     await waitFor(() => isUp(env.clients[0], name), { timeout: 90000, interval: 2000, label: 'app running' });
@@ -132,7 +133,7 @@ describe('mount safety decides on what a node can actually read', function () {
     // taken its mount point back: FluxOS widens the volume on the way to promoting
     // it, so before the lock the account can read it perfectly well.
     const asFluxos = await execInContainer(client.container,
-      `su fluxuser -s /bin/sh -c 'ls ${appDir(name)}/appdata'`);
+      `su fluxuser -s /bin/sh -c 'ls ${dir}/appdata'`);
     expect(asFluxos.exitCode, 'the FluxOS account must be refused appdata').to.not.equal(0);
     const from = linesFor(0).length;
     await claimsFilesOnDisk();
@@ -152,7 +153,7 @@ describe('mount safety decides on what a node can actually read', function () {
     const client = env.clients[0];
     const afterId = client.getLastEventId();
     const wipe = await execInContainer(client.container,
-      `sh -c 'find ${appDir(name)}/appdata -mindepth 1 -delete && chmod 700 ${appDir(name)}/appdata'`);
+      `sh -c 'find ${dir}/appdata -mindepth 1 -delete && chmod 700 ${dir}/appdata'`);
     expect(wipe.exitCode, `could not empty appdata: ${wipe.output}`).to.equal(0);
     const from = linesFor(0).length;
     await claimsFilesOnDisk({ onDisk: false });

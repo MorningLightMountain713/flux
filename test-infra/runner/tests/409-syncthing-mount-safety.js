@@ -2,7 +2,9 @@
 import { describe, it, before, after } from 'mocha';
 import { expect } from 'chai';
 import { createTestEnv } from '../framework/test-env.js';
-import { execInContainer, getAppContainerStatus } from '../framework/container.js';
+import {
+  appDataRoot, appVolumeFile, componentIdentifier, execInContainer, getAppContainerStatus, syncthingFolderIdOf,
+} from '../framework/container.js';
 import {
   setSyncState, setSynced, setSyncing, getSyncthingState, resetSyncState,
   injectSyncthingEvent, setStatusUnreadable,
@@ -17,7 +19,6 @@ import {
 import { pushImage } from '../framework/registry-helper.js';
 import { buildSeedableSyncthingApp } from '../framework/seed-helper.js';
 import { getSubnetConfig } from '../framework/subnet-config.js';
-import { destroyVolume } from '../framework/volume-fixture.js';
 
 // The syncthing mount-safety guard gates on the MOUNTPOINT, not on content
 // (the deletion-propagation incident regressions):
@@ -53,8 +54,6 @@ const BEFORE_SEED_CHECK = 'syncthing:beforeSeedCheck';
 // such rows (prepareInstalledAppsCollection's backfill rule; 310's captures
 // show the containers spelled fluxe2eopstop..._e2eopstop...). Deterministic by
 // construction - a registration-row read here races the seeding it precedes.
-const appId = (name) => `flux${name}_${name}`;
-const appDir = (name) => `/mnt/appdata/flux-apps/${appId(name)}`;
 
 async function isUp(client, appName) {
   const status = await getAppContainerStatus(client.container, appName);
@@ -80,6 +79,8 @@ describe('syncthing mount-safety guard demotes unsafe sendreceive folders', func
   let phantomFolder;
   let leakIdentifier;
   let phantomIdentifier;
+  let leakDir; let leakVol;
+  let phantomDir;
   const ip0 = subnet.nodeIp(1);
   const ip1 = subnet.nodeIp(2);
 
@@ -88,11 +89,6 @@ describe('syncthing mount-safety guard demotes unsafe sendreceive folders', func
     env = await createTestEnv({ hookCtx: this, nodes: 10, tickerAutostart: false });
     await bootAndPeer(env);
     await resetSyncState();
-    leakFolder = appId(leakName);
-    phantomFolder = appId(phantomName);
-    leakIdentifier = leakFolder.replace(/^flux/, '');
-    phantomIdentifier = phantomFolder.replace(/^flux/, '');
-
     // both apps are r: leaders on their own nodes: they seed, promote to
     // sendreceive and start - the state every test here begins from.
     // Order matters: the sync layer's first-run reset clears local appdata, so
@@ -100,7 +96,9 @@ describe('syncthing mount-safety guard demotes unsafe sendreceive folders', func
     // if the index ever claims bytes over an empty disk, the phantom guard
     // (correctly) demotes and holds, and the app never reaches the premise.
     const leakInstallAfter = env.clients[0].getLastEventId();
-    await seedSyncthingApp(env, { name: leakName, syncMode: 'syncFirst', index: 0 });
+    ({ folder: leakFolder, identifier: leakIdentifier } = await seedSyncthingApp(env, { name: leakName, syncMode: 'syncFirst', index: 0 }));
+    leakDir = await appDataRoot(env.clients[0].container, leakName);
+    leakVol = await appVolumeFile(env.clients[0].container, leakName);
     await waitForReconcileActuated(env.clients[0], leakIdentifier, 'dataCleared', 60000, { afterId: leakInstallAfter });
     await seedSyncScopedData(env, leakName, 0);
     await setSynced({ ip: ip0, folder: leakFolder });
@@ -113,9 +111,10 @@ describe('syncthing mount-safety guard demotes unsafe sendreceive folders', func
     // /appdata puts no regular file at the root at all, so it cannot tell a walk that
     // counts any file from one that counts the owner's data, and the guard reads the
     // same either way.
-    await seedSyncthingApp(env, {
+    ({ folder: phantomFolder, identifier: phantomIdentifier } = await seedSyncthingApp(env, {
       name: phantomName, syncMode: 'syncFirst', index: 1, extraMounts: ['f:server.json:/etc/server.json'],
-    });
+    }));
+    phantomDir = await appDataRoot(env.clients[1].container, phantomName);
     await waitForReconcileActuated(env.clients[1], phantomIdentifier, 'dataCleared', 60000, { afterId: phantomInstallAfter });
     await seedSyncScopedData(env, phantomName, 1);
     await setSynced({ ip: ip1, folder: phantomFolder });
@@ -158,7 +157,7 @@ describe('syncthing mount-safety guard demotes unsafe sendreceive folders', func
     // wipe the app's data inside the MOUNTED volume and report an empty index:
     // disk and index agree, so there is nothing a sendreceive folder could
     // wrongly delete - the guard must leave it alone
-    await execInContainer(client.container, `sh -c 'rm -rf ${appDir(phantomName)}/appdata/* 2>/dev/null; true'`);
+    await execInContainer(client.container, `sh -c 'rm -rf ${phantomDir}/appdata/* 2>/dev/null; true'`);
     await setSyncState({ ip: ip1, folder: phantomFolder, state: 'idle', globalBytes: 0, inSyncBytes: 0, receiveOnlyChangedFiles: 0 });
 
     // several 3s monitor cycles must pass without a demotion
@@ -183,7 +182,7 @@ describe('syncthing mount-safety guard demotes unsafe sendreceive folders', func
     // leave a zero-length file at the root. Without it this is a bare r: app again and
     // the demotion below proves only what it proved before the mount was declared.
     const scaffolding = await execInContainer(client.container,
-      `sh -c 'test -f ${appDir(phantomName)}/server.json && wc -c < ${appDir(phantomName)}/server.json'`);
+      `sh -c 'test -f ${phantomDir}/server.json && wc -c < ${phantomDir}/server.json'`);
     expect(scaffolding.exitCode, `the f: mount left no file at the volume root: ${scaffolding.output}`).to.equal(0);
     expect(scaffolding.stdout.trim(), 'the f: file is not zero-length, so it is not the scaffolding case').to.equal('0');
 
@@ -211,7 +210,7 @@ describe('syncthing mount-safety guard demotes unsafe sendreceive folders', func
   it('demotes a sendreceive folder over an unmounted dir even when it HAS content (leak regression)', async function () {
     this.timeout(120000);
     const client = env.clients[0];
-    const dir = appDir(leakName);
+    const dir = leakDir;
 
     // premise, asserted so drift fails fast instead of timing out downstream: a
     // genuinely running sendreceive leader (an idle seeded leader with an empty
@@ -229,8 +228,8 @@ describe('syncthing mount-safety guard demotes unsafe sendreceive folders', func
     // self-heal beat this test's teardown in every earlier run). A lazy
     // unmount detaches the dir under the running container instead; stopping
     // the app is then the GUARD's job, which is exactly what this test is for.
-    await destroyVolume(client.container, leakName);
-    const r = await execInContainer(client.container, `touch ${dir}/leaked.db`);
+    const r = await execInContainer(client.container,
+      `umount -l ${dir} && chattr -i ${dir} && touch ${dir}/leaked.db && rm -f ${leakVol}`);
     expect(r.exitCode, `leak-state setup failed: ${r.output}`).to.equal(0);
 
     // the vanished mount took the .stfolder marker with it - real syncthing
@@ -260,7 +259,7 @@ describe('syncthing mount-safety guard demotes unsafe sendreceive folders', func
   it('never recreates the .stfolder marker on the bare unmounted dir', async function () {
     this.timeout(60000);
     const client = env.clients[0];
-    const dir = appDir(leakName);
+    const dir = leakDir;
 
     // give the monitor several cycles; the marker must not reappear on the
     // bare dir (old code recreated it every cycle, re-arming sync onto the
@@ -286,12 +285,13 @@ describe('syncthing mount-safety guard demotes unsafe sendreceive folders', func
     // Held at the checkpoint, the volume is emptied and the status made unreadable;
     // let go, the pass judges the disk.
     const holdEmptyAndRelease = async ({ index, name, afterId, checkpoint }) => {
-      const folder = appId(name);
+      const folder = syncthingFolderIdOf(componentIdentifier(name));
       const client = env.clients[index];
       const ip = subnet.nodeIp(index + 1);
       try {
         await client.waitForEvent('checkpoint:held', (d) => d.name === checkpoint && d.key === folder, 180000, { afterId });
-        const wipe = await execInContainer(client.container, `sh -c 'find ${appDir(name)}/appdata -mindepth 1 -delete'`);
+        const dir = await appDataRoot(client.container, name);
+        const wipe = await execInContainer(client.container, `sh -c 'find ${dir}/appdata -mindepth 1 -delete'`);
         expect(wipe.exitCode, `could not empty appdata: ${wipe.output}`).to.equal(0);
         await setStatusUnreadable({ ip, folder });
       } finally {
@@ -307,7 +307,8 @@ describe('syncthing mount-safety guard demotes unsafe sendreceive folders', func
       this.timeout(420000);
       const index = 2;
       const name = `e2eseedcheck${ts}`;
-      const folder = appId(name);
+      const identifier = componentIdentifier(name);
+      const folder = syncthingFolderIdOf(identifier);
       const client = env.clients[index];
       const afterId = client.getLastEventId();
       const refusedFrom = await client.getDecisionCount('syncthing:seedRefused', folder, 'phantom_index_empty_disk');
@@ -320,21 +321,22 @@ describe('syncthing mount-safety guard demotes unsafe sendreceive folders', func
       await client.holdCheckpoint(BEFORE_SEED_CHECK, folder);
       await claimSyncedOverEmptyDisk(subnet.nodeIp(index + 1), folder);
       await installOnNodes(env, app, [index]);
-      await waitForReconcileActuated(client, `${name}_${name}`, 'dataCleared', 60000, { afterId });
+      await waitForReconcileActuated(client, identifier, 'dataCleared', 60000, { afterId });
 
       await holdEmptyAndRelease({ index, name, afterId, checkpoint: BEFORE_SEED_CHECK });
 
       expect(await client.getDecisionCount('syncthing:seedRefused', folder, 'phantom_index_empty_disk'),
         'the seed refused over the empty volume').to.be.above(refusedFrom);
       expect(await folderType(subnet.nodeIp(index + 1), folder), 'the empty volume seeded').to.equal('receiveonly');
-      await assertNoEvent(client, 'reconciler:desiredChanged', (d) => d.identifier === `${name}_${name}` && d.state === 'running', 0, { afterId });
+      await assertNoEvent(client, 'reconciler:desiredChanged', (d) => d.identifier === identifier && d.state === 'running', 0, { afterId });
     });
 
     it('does not promote an empty volume as a standby found synced', async function () {
       this.timeout(420000);
       const index = 3;
       const name = `e2estandbycheck${ts}`;
-      const folder = appId(name);
+      const identifier = componentIdentifier(name);
+      const folder = syncthingFolderIdOf(identifier);
       const client = env.clients[index];
       // A running peer is ahead of it, so it promotes only once synced.
       await seedSyncthingApp(env, { name, syncMode: 'syncFirst', index, forceNonLeader: true });
@@ -350,7 +352,7 @@ describe('syncthing mount-safety guard demotes unsafe sendreceive folders', func
       expect(await client.getDecisionCount('syncthing:promotionRefused', folder, 'phantom_index_empty_disk'),
         'the promotion refused over the empty volume').to.be.above(refusedFrom);
       expect(await folderType(subnet.nodeIp(index + 1), folder), 'the empty volume promoted').to.equal('receiveonly');
-      await assertNoEvent(client, 'reconciler:desiredChanged', (d) => d.identifier === `${name}_${name}` && d.state === 'running', 0, { afterId });
+      await assertNoEvent(client, 'reconciler:desiredChanged', (d) => d.identifier === identifier && d.state === 'running', 0, { afterId });
     });
   });
 });

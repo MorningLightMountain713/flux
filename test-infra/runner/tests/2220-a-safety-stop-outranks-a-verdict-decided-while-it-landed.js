@@ -3,7 +3,9 @@ import { expect } from 'chai';
 import { createTestEnv } from '../framework/test-env.js';
 import { pushImage } from '../framework/registry-helper.js';
 import { buildSeedableSyncthingApp } from '../framework/seed-helper.js';
-import { getAppContainerStatus, restartFluxos } from '../framework/container.js';
+import {
+  componentIdentifier, getAppContainerStatus, restartFluxos, syncthingFolderIdOf,
+} from '../framework/container.js';
 import { resetFdm, electMaster } from '../framework/fdm-control.js';
 import {
   waitFor, waitForReconcileActuated, waitForReconcilerDesiredChanged, waitForElectionDecisions, electionDecisionCount,
@@ -14,7 +16,7 @@ import {
 } from '../framework/syncthing-control.js';
 import { getSubnetConfig } from '../framework/subnet-config.js';
 import { bootAndPeer, installOnNodes, seedSyncScopedData } from '../framework/reconciler-suite.js';
-import { appId, destroyVolume } from '../framework/volume-fixture.js';
+import { destroyVolume } from '../framework/volume-fixture.js';
 import { dumpLogsOnFailure } from '../framework/log-on-failure.js';
 
 // A decider that writes a component's controller opinion while another is deciding
@@ -50,8 +52,8 @@ describe('a safety stop outranks a verdict decided while it landed', function ()
   dumpLogsOnFailure(() => env);
   let holders;
   const appName = `e2eoutrank${Date.now()}`;
-  const identifier = `${appName}_${appName}`;
-  const folder = appId(appName);
+  const identifier = componentIdentifier(appName);
+  const folder = syncthingFolderIdOf(identifier);
 
   const runningFlags = async () => Promise.all(holders.map((i) => isUp(env.clients[i], appName)));
 

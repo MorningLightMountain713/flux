@@ -9,7 +9,7 @@ import {
 import { buildSeedableSyncthingApp } from '../framework/seed-helper.js';
 import { pushImage } from '../framework/registry-helper.js';
 import { setSynced } from '../framework/syncthing-control.js';
-import { restartFluxos, getAppContainerStatus } from '../framework/container.js';
+import { appSyncthingFolderId, componentIdentifier, getAppContainerStatus, restartFluxos } from '../framework/container.js';
 import { waitFor, waitForAppInstalled, assertNoEvent, waitForReconcileActuated } from '../framework/wait.js';
 import { dbClient } from '../framework/db-client.js';
 
@@ -121,10 +121,10 @@ describe('a grantor restarts, and its promises outlive the process', function ()
     // claimed-bytes index over an empty volume - written only AFTER each
     // holder's first-run reset, which clears anything seeded earlier.
     await Promise.all(HOLDERS.map(async (i, k) => {
-      await waitForReconcileActuated(env.clients[i], `${name}_${name}`, 'dataCleared', 60000, { afterId: installAfters[k] });
+      await waitForReconcileActuated(env.clients[i], componentIdentifier(name), 'dataCleared', 60000, { afterId: installAfters[k] });
       await seedSyncScopedData(env, name, i);
     }));
-    await setSynced({ folder: `flux${name}_${name}` });
+    await setSynced({ folder: await appSyncthingFolderId(env.clients[HOLDERS[0]].container, name, name) });
 
     holderOutpoints = {};
     for (const i of HOLDERS) {

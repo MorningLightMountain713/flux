@@ -3,7 +3,7 @@ import { describe, it, before, after } from 'mocha';
 import { expect } from 'chai';
 import { createTestEnv } from '../framework/test-env.js';
 import {
-  getAppContainerStatus, blockPeerAccess, unblockPeerAccess, execInContainer,
+  blockPeerAccess, componentIdentifier, execInContainer, getAppContainerStatus, syncthingFolderIdOf, unblockPeerAccess,
 } from '../framework/container.js';
 import {
   resetSyncState, pinColdStart, pinHolding,
@@ -92,9 +92,9 @@ describe('reconciler cold start - fresh multi-node placement, no seeded source',
 
     // A SEEDED app's folder id is its own name (no minted identity on a seeded
     // spec) - and this must run before install, when there is no row to ask.
-    const claimFolder = `flux${claimApp}_${claimApp}`;
-    await pinColdStart(holders, `flux${rApp}_${rApp}`);
-    await pinColdStart(holders, `flux${gApp}_${gApp}`);
+    const claimFolder = syncthingFolderIdOf(componentIdentifier(claimApp));
+    await pinColdStart(holders, syncthingFolderIdOf(componentIdentifier(rApp)));
+    await pinColdStart(holders, syncthingFolderIdOf(componentIdentifier(gApp)));
     await pinColdStart(holders, claimFolder);
     // Declared BEFORE install, like the cold start itself, so the first election
     // evaluation already has a field where one candidate holds the owner's data.
@@ -154,7 +154,7 @@ describe('reconciler cold start - fresh multi-node placement, no seeded source',
 
     await pushImage(waitApp, 'v1');
     const spec = await buildSeedableSyncthingApp({ name: waitApp, syncMode: 'syncFirst' });
-    const folder = `flux${waitApp}_${waitApp}`;
+    const folder = syncthingFolderIdOf(componentIdentifier(waitApp));
     const passes = () => env.clients[seedIndex].getDecisionCount('syncthing:folderPass', folder, 'evaluated');
     await pinColdStart(holders, folder);
     await pinHolding(claimHolder, folder, claimBytes);
@@ -234,7 +234,7 @@ describe('reconciler cold start - fresh multi-node placement, no seeded source',
 
     await pushImage(splitApp, 'v1');
     const splitSpec = await buildSeedableSyncthingApp({ name: splitApp, syncMode: 'syncFirst' });
-    const folder = `flux${splitApp}_${splitApp}`;
+    const folder = syncthingFolderIdOf(componentIdentifier(splitApp));
     await pinColdStart(holders, folder);
     await pinHolding(claimHolder, folder, claimBytes);
 

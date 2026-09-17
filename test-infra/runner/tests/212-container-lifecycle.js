@@ -4,7 +4,10 @@ import { expect } from 'chai';
 import { createTestEnv } from '../framework/test-env.js';
 import { pushImage } from '../framework/registry-helper.js';
 import {
-  execInContainer, killAppContainer, getAppContainerStatus,
+  componentIdentifier,
+  execInContainer,
+  getAppContainerStatus,
+  killAppContainer,
   requireAppContainerName,
 } from '../framework/container.js';
 import { startTicker, advanceBlock } from '../framework/daemon-control.js';
@@ -77,7 +80,7 @@ async function seedAndWaitForInstall(env, appName) {
     const status = await getAppContainerStatus(client.container, appName);
     return status && status.status.startsWith('Up');
   }, { timeout: 60000, interval: 2000, label: 'app running after install' });
-  await waitForReconcileActuated(client, `${appName}_${appName}`, 'firstRunProven', 60000);
+  await waitForReconcileActuated(client, componentIdentifier(appName), 'firstRunProven', 60000);
   return installed;
 }
 

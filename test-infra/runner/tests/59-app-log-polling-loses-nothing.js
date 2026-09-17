@@ -39,7 +39,7 @@ import { createTestEnv } from '../framework/test-env.js';
 import { pushTestApp } from '../framework/registry-helper.js';
 import { buildSeedableApp } from '../framework/seed-helper.js';
 import { REGISTRY_REPO_HOST } from '../framework/subnet-config.js';
-import { listAppContainers } from '../framework/container.js';
+import { componentIdentifier, listAppContainers } from '../framework/container.js';
 import { waitFor } from '../framework/wait.js';
 import { bootAndPeer, installOnNodes } from '../framework/reconciler-suite.js';
 import { authenticate } from '../auth.js';
@@ -52,7 +52,7 @@ describe('a log poll answers at once and loses nothing between polls', function 
 
   const appName = `e2elogpoll${Date.now()}`;
   const component = `${appName}a`;
-  const identifier = `${component}_${appName}`;
+  const identifier = componentIdentifier(appName, component);
   let holder;
   let auth;
 
@@ -110,7 +110,7 @@ describe('a log poll answers at once and loses nothing between polls', function 
     await waitFor(
       async () => {
         const containers = await listAppContainers(holder.container, { all: true });
-        return containers.find((c) => c.name === `flux${identifier}`)?.status?.startsWith('Up');
+        return containers.find((c) => c.identifier === identifier)?.status?.startsWith('Up');
       },
       { timeout: 120000, interval: 2000, label: 'the log-writing component is running' },
     );

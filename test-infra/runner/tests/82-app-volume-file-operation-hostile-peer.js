@@ -55,7 +55,7 @@ describe('app volume file operations - a peer that does not play fair', function
   const subnet = getSubnetConfig();
   const ts = Date.now();
   const appName = `e2efilehostile${ts}`;
-  const root = volumeRoot(appName);
+  let root;
   const NODES = 3;
 
   const post = (node, path, body) => node.request('POST', path, { body, headers: { zelidauth: auth.zelidauth } });
@@ -236,6 +236,7 @@ describe('app volume file operations - a peer that does not play fair', function
       }],
     });
     await installOnNodes(env, app, [0]);
+    root = await volumeRoot(env.clients[0].container, appName);
 
     auth = await authenticate(env.clients[0].url, appOwnerKey());
     await waitFor(async () => exists(env.clients[0].container, root), {

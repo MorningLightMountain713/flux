@@ -6,7 +6,8 @@ import { authenticate } from '../auth.js';
 import { appOwnerKey } from '../framework/keys.js';
 import { buildSeedableSyncthingApp } from '../framework/seed-helper.js';
 import {
-  getAppContainerStatus, crashFluxos, releaseFluxos, execInContainer, blockPeerAccess, unblockPeerAccess,
+  appSyncthingFolderId, blockPeerAccess, componentIdentifier, crashFluxos, execInContainer, getAppContainerStatus,
+  releaseFluxos, syncthingFolderIdOf, unblockPeerAccess,
 } from '../framework/container.js';
 import { electMaster, clearMaster, resetFdm } from '../framework/fdm-control.js';
 import {
@@ -95,8 +96,8 @@ describe('primary election under a divergent placement order', function () {
     holders.map((i) => isUp(env.clients[i], appName)),
   )).filter(Boolean).length;
 
-  const identifierOf = (appName) => `${appName}_${appName}`;
-  const folderOf = (appName) => `flux${appName}_${appName}`;
+  const identifierOf = (appName) => componentIdentifier(appName);
+  const folderOf = (appName) => syncthingFolderIdOf(identifierOf(appName));
   // One node's count of an election decision about an app.
   const electionCount = (i, appName, decision) => electionDecisionCount(env.clients[i], identifierOf(appName), decision);
   // One node's count of folder-election passes over an app's folder.
@@ -124,8 +125,7 @@ describe('primary election under a divergent placement order', function () {
     const app = await buildSeedableSyncthingApp({ name: appName, syncMode: 'activeStandby' });
     await placeGAppInOrder(env, app, {
       placementOrder: order,
-      folder: `flux${appName}_${appName}`,
-      identifier: `${appName}_${appName}`,
+      identifier: identifierOf(appName),
     });
     return app;
   };
@@ -174,7 +174,7 @@ describe('primary election under a divergent placement order', function () {
     );
     expect(await countUp(orderApp), 'more than one holder started at genesis').to.equal(1);
 
-    const identifier = `${orderApp}_${orderApp}`;
+    const identifier = identifierOf(orderApp);
     const running = holders[(await Promise.all(holders.map((i) => isUp(env.clients[i], orderApp)))).indexOf(true)];
     expect(await env.clients[running].getDecisionCount('masterSlave:decision', identifier, 'staggeredStart'),
       'the winner started from a booked stagger').to.equal(0);
@@ -244,7 +244,7 @@ describe('primary election under a divergent placement order', function () {
     // the data and are connected to one another, and the connection to the node whose
     // FluxOS is about to go away is the whole evidence the probe reads while its API
     // is silent.
-    const orderFolder = `flux${orderApp}_${orderApp}`;
+    const orderFolder = await appSyncthingFolderId(env.clients[holders[0]].container, orderApp, orderApp);
     await Promise.all(holders.map((i) => setSynced({ ip: subnet.nodeIp(i + 1), folder: orderFolder })));
     await Promise.all(holders.map((i) => setPeerHasData({ ip: subnet.nodeIp(i + 1), folder: orderFolder })));
 
@@ -292,8 +292,9 @@ describe('primary election under a divergent placement order', function () {
     // The standbys have genuinely synced from the primary by now, so pin them synced
     // (over the data seeded at install) to make them election-eligible - otherwise
     // nothing could take over and this would pass for the wrong reason.
+    const orderFolder = await appSyncthingFolderId(env.clients[primary].container, orderApp, orderApp);
     await Promise.all(holders.filter((i) => i !== primary).map(
-      (i) => setSynced({ ip: subnet.nodeIp(i + 1), folder: folderOf(orderApp) }),
+      (i) => setSynced({ ip: subnet.nodeIp(i + 1), folder: orderFolder }),
     ));
 
     // Release the primary the way an operator does: appstop takes it down and locks it
@@ -377,8 +378,7 @@ describe('primary election under a divergent placement order', function () {
     const placedFrom = pair.map((i) => env.clients[i].getLastEventId());
     await placeGAppInOrder(env, app, {
       placementOrder: placementOrderWithSeedAt([0, 1], 1),
-      folder: `flux${pairApp}_${pairApp}`,
-      identifier: `${pairApp}_${pairApp}`,
+      identifier: componentIdentifier(pairApp),
     });
 
     const position = await electionIndexOf(env, pairApp, seedIndex);
@@ -486,7 +486,7 @@ describe('primary election under a divergent placement order', function () {
     const position = await electionIndexOf(env, fdmApp, seedIndex);
     expect(position, 'fixture: seed must be off index 0').to.be.greaterThan(0);
 
-    const folder = `flux${fdmApp}_${fdmApp}`;
+    const folder = await appSyncthingFolderId(env.clients[holders[0]].container, fdmApp, fdmApp);
     await Promise.all(holders.map((i) => setSynced({ ip: subnet.nodeIp(i + 1), folder })));
     // Every holder is ready, which is what the election reads as eligible to start.
     // A standby that is not stops each pass as not ready, so it has no decision to
@@ -505,7 +505,7 @@ describe('primary election under a divergent placement order', function () {
     const primary = holders[runningFlags.indexOf(true)];
     expect(primary, 'fixture: a holder must be running before FDM can name one').to.not.equal(undefined);
     fdmPrimary = primary;
-    const identifier = `${fdmApp}_${fdmApp}`;
+    const identifier = identifierOf(fdmApp);
     const standbys = holders.filter((i) => i !== primary);
     const observedBefore = await Promise.all(standbys.map((i) => electionDecisionCount(env.clients[i], identifier, 'primaryObserved')));
     await electMaster(fdmApp, env.clients[primary].ip);

@@ -7,7 +7,13 @@ import { bootAndPeer, installOnNodes, seedSyncScopedData } from '../framework/re
 import { buildSeedableSyncthingApp } from '../framework/seed-helper.js';
 import { pushImage } from '../framework/registry-helper.js';
 import { setSynced } from '../framework/syncthing-control.js';
-import { pauseHostContainer, unpauseHostContainer, getAppContainerStatus } from '../framework/container.js';
+import {
+  appSyncthingFolderId,
+  componentIdentifier,
+  getAppContainerStatus,
+  pauseHostContainer,
+  unpauseHostContainer,
+} from '../framework/container.js';
 import { waitFor, waitForAppInstalled, waitForReconcileActuated } from '../framework/wait.js';
 
 // Two activeStandby apps on the SAME three holders: every other suite runs
@@ -118,11 +124,11 @@ describe('two apps share their holders, and their terms never entangle', functio
       // reset (suite 309's ordering, load-bearing on every step).
       // eslint-disable-next-line no-await-in-loop
       await Promise.all(HOLDERS.map(async (i, k) => {
-        await waitForReconcileActuated(env.clients[i], `${name}_${name}`, 'dataCleared', 60000, { afterId: installAfters[k] });
+        await waitForReconcileActuated(env.clients[i], componentIdentifier(name), 'dataCleared', 60000, { afterId: installAfters[k] });
         await seedSyncScopedData(env, name, i);
       }));
       // eslint-disable-next-line no-await-in-loop
-      await setSynced({ folder: `flux${name}_${name}` });
+      await setSynced({ folder: await appSyncthingFolderId(env.clients[HOLDERS[0]].container, name, name) });
     }
 
     holderOutpoints = {};

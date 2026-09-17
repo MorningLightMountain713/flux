@@ -32,7 +32,7 @@ describe('app volume file operations - the contract', function () {
 
   const ts = Date.now();
   const appName = `e2efileops${ts}`;
-  const root = volumeRoot(appName);
+  let root;
 
   // The app owner, not the flux team: openVolume authorises at the OBJECT level
   // - is this caller the owner of THIS app - and buildSeedableApp sets the
@@ -105,6 +105,7 @@ describe('app volume file operations - the contract', function () {
     await installOnNodes(env, app, [0]);
 
     node = env.clients[0];
+    root = await volumeRoot(node.container, appName);
     auth = await authenticate(node.url, appOwnerKey());
 
     await waitFor(async () => exists(node.container, root), {

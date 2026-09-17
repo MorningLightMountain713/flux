@@ -7,7 +7,13 @@ import { bootAndPeer, installOnNodes, seedSyncScopedData } from '../framework/re
 import { buildSeedableSyncthingApp } from '../framework/seed-helper.js';
 import { pushImage } from '../framework/registry-helper.js';
 import { setSynced } from '../framework/syncthing-control.js';
-import { pauseHostContainer, unpauseHostContainer, getAppContainerStatus } from '../framework/container.js';
+import {
+  appSyncthingFolderId,
+  componentIdentifier,
+  getAppContainerStatus,
+  pauseHostContainer,
+  unpauseHostContainer,
+} from '../framework/container.js';
 import { waitFor, waitForAppInstalled, waitForReconcileActuated } from '../framework/wait.js';
 
 // The held mastership grant on a 10-node fleet, governing on its own.
@@ -136,10 +142,10 @@ describe('the mastership grant on a multi-node fleet', function () {
     // claimed-bytes index over an empty volume - written only AFTER each
     // holder's first-run reset, which clears anything seeded earlier.
     await Promise.all(HOLDERS.map(async (i, k) => {
-      await waitForReconcileActuated(env.clients[i], `${name}_${name}`, 'dataCleared', 60000, { afterId: installAfters[k] });
+      await waitForReconcileActuated(env.clients[i], componentIdentifier(name), 'dataCleared', 60000, { afterId: installAfters[k] });
       await seedSyncScopedData(env, name, i);
     }));
-    await setSynced({ folder: `flux${name}_${name}` });
+    await setSynced({ folder: await appSyncthingFolderId(env.clients[HOLDERS[0]].container, name, name) });
 
     holderOutpoints = {};
     for (const i of HOLDERS) {
