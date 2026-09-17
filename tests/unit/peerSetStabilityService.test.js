@@ -2,6 +2,7 @@ const { expect } = require('chai');
 const sinon = require('sinon');
 const { EventEmitter } = require('events');
 const proxyquire = require('proxyquire').noCallThru();
+const { asConfig } = require('./fixtures/config');
 
 const { makeStickyDosDouble } = require('./stickyDosTestDouble');
 const { StickyDosOwner } = require('../../ZelBack/src/services/fluxNetworkHelper');
@@ -23,9 +24,8 @@ describe('peerSetStabilityService', () => {
   const heldByUs = () => fluxNetworkHelperStub.isStickyDosHeldBy(OWNER);
 
   function load(fluxappsOverrides) {
-    const realConfig = require('config');
     return proxyquire('../../ZelBack/src/services/peerSetStabilityService', {
-      config: { ...realConfig, fluxapps: { ...realConfig.fluxapps, ...fluxappsOverrides } },
+      config: asConfig({ fluxapps: fluxappsOverrides }),
       '../lib/log': logStub,
       './fluxNetworkHelper': fluxNetworkHelperStub,
       './utils/fluxEventBus': { publish: sinon.stub() },

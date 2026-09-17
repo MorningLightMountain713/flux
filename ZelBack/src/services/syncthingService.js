@@ -475,6 +475,17 @@ async function requestAllowingAbsence(method, urlpath, data, config) {
  * Syncthing's own health check. The one syncthing endpoint that needs no api key.
  * @returns {Promise<object>} System health, {"status": "OK"}.
  */
+/**
+ * To get meta
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
+ * @returns {object} Message.
+ */
+async function getMeta() {
+  // "var metadata = {\"deviceID\":\"K6VOO4G-5RLTF3B-JTUFMHH-JWITKGM-63DTTMT-I6BMON6-7E3LVFW-V5WAIAO\"};\n"
+  return request('get', '/meta.js');
+}
+
 async function getHealth() {
   return request('get', '/rest/noauth/health');
 }

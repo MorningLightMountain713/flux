@@ -89,7 +89,7 @@ describe('coupled harness knobs track production', () => {
     // decisions land inside what a departure costs to become visible. Sat ON the
     // bound rather than under it: the bound is strict, and a step edited to just
     // reach it is the one a later change drifts to.
-    const fleet = { removeFluxAppsPeriod: 2, explorerPollIntervalMs: 833 };
+    const fleet = { removeFluxAppsPeriod: 2, explorerIdlePollMs: 833 };
     const pass = knobs.giveUpPassMs(fleet, knobs.harnessBlockCostMs(fleet));
     const fluxapps = {
       ...fleet, residentialQueueStepMs: Math.floor(pass) + knobs.DEPARTURE_ANNOUNCE_MS,
@@ -100,7 +100,7 @@ describe('coupled harness knobs track production', () => {
   });
 
   it('accepts the separation suite 55 actually runs at', () => {
-    const fleet = { removeFluxAppsPeriod: 2, explorerPollIntervalMs: 833 };
+    const fleet = { removeFluxAppsPeriod: 2, explorerIdlePollMs: 833 };
 
     expect(() => knobs.assertDepartureIsVisibleInTime({
       ...fleet, residentialQueueStepMs: knobs.derivedQueueStepMs(fleet),
