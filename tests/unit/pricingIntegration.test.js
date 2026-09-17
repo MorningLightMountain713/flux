@@ -206,7 +206,7 @@ describe('pricing integration — chain messages through PricingEngine', () => {
       stubHistories(h);
 
       const engine = await buildPricingEngine(h.queryHeight);
-      const breakdown = await engine.price(testSpec, { height: h.queryHeight, duration: testSpec.ttl });
+      const breakdown = await engine.price(testSpec, { height: h.queryHeight, duration: testSpec.ttl, isEncrypted: false });
 
       // cpu: 0.5 core × 10 × 3 instances = 15 units × 150_000 = 2_250_000 microdollars
       expect(breakdown.commodity.cpu.units).to.equal(15);
@@ -237,7 +237,7 @@ describe('pricing integration — chain messages through PricingEngine', () => {
       stubHistories(h);
 
       const engine = await buildPricingEngine(h.queryHeight);
-      const breakdown = await engine.price(testSpec, { height: h.queryHeight, duration: testSpec.ttl });
+      const breakdown = await engine.price(testSpec, { height: h.queryHeight, duration: testSpec.ttl, isEncrypted: false });
 
       expect(breakdown.adjustedMicrodollars).to.equal(50_000_000);
       expect(breakdown.adjustedMicrodollars).to.be.above(breakdown.grossMicrodollars);
@@ -255,7 +255,7 @@ describe('pricing integration — chain messages through PricingEngine', () => {
       stubHistories(h);
 
       const engine = await buildPricingEngine(h.queryHeight);
-      const breakdown = await engine.price(testSpec, { height: h.queryHeight, duration: testSpec.ttl });
+      const breakdown = await engine.price(testSpec, { height: h.queryHeight, duration: testSpec.ttl, isEncrypted: false });
 
       expect(breakdown.total).to.equal(100_000_000);
     });
@@ -267,7 +267,7 @@ describe('pricing integration — chain messages through PricingEngine', () => {
       stubHistories(h);
 
       const engine = await buildPricingEngine(h.queryHeight);
-      const breakdown = await engine.price(testSpec, { height: h.queryHeight, duration: testSpec.ttl });
+      const breakdown = await engine.price(testSpec, { height: h.queryHeight, duration: testSpec.ttl, isEncrypted: false });
 
       expect(breakdown.fluxUsdPriceE4).to.be.null;
       expect(breakdown.total).to.equal(h.priceFields.minPriceFluxSats);
@@ -280,7 +280,7 @@ describe('pricing integration — chain messages through PricingEngine', () => {
       stubHistories(h);
 
       const engine = await buildPricingEngine(h.queryHeight);
-      const breakdown = await engine.price(testSpec, { height: h.queryHeight, duration: testSpec.ttl });
+      const breakdown = await engine.price(testSpec, { height: h.queryHeight, duration: testSpec.ttl, isEncrypted: false });
 
       expect(breakdown.surcharges).to.have.lengthOf(0);
     });
@@ -291,7 +291,7 @@ describe('pricing integration — chain messages through PricingEngine', () => {
       stubHistories(h);
 
       const engine = await buildPricingEngine(h.queryHeight);
-      const breakdown = await engine.price(bigSpec, { height: h.queryHeight, duration: bigSpec.ttl });
+      const breakdown = await engine.price(bigSpec, { height: h.queryHeight, duration: bigSpec.ttl, isEncrypted: false });
 
       expect(breakdown.surcharges).to.have.lengthOf(1);
       expect(breakdown.surcharges[0].label).to.equal('instance-tier-1');
@@ -308,6 +308,7 @@ describe('pricing integration — chain messages through PricingEngine', () => {
       const breakdown = await engine.price(testSpec, {
         height: h.queryHeight,
         duration: 2_592_000, // 30 days
+        isEncrypted: false,
       });
 
       expect(breakdown.discounts).to.have.lengthOf(0);
@@ -321,6 +322,7 @@ describe('pricing integration — chain messages through PricingEngine', () => {
       const breakdown = await engine.price(testSpec, {
         height: h.queryHeight,
         duration: 7_776_000, // 90 days
+        isEncrypted: false,
       });
 
       expect(breakdown.discounts).to.have.lengthOf(1);
@@ -336,6 +338,7 @@ describe('pricing integration — chain messages through PricingEngine', () => {
       const breakdown = await engine.price(testSpec, {
         height: h.queryHeight,
         duration: 31_536_000, // 365 days
+        isEncrypted: false,
       });
 
       expect(breakdown.discounts).to.have.lengthOf(1);
@@ -369,7 +372,7 @@ describe('pricing integration — chain messages through PricingEngine', () => {
       stubHistories(h);
 
       const engine = await buildPricingEngine(h.queryHeight);
-      const breakdown = await engine.price(testSpec, { height: h.queryHeight, duration: testSpec.ttl });
+      const breakdown = await engine.price(testSpec, { height: h.queryHeight, duration: testSpec.ttl, isEncrypted: false });
 
       expect(breakdown).to.have.all.keys(
         'commodity', 'features', 'surcharges', 'discounts',
@@ -399,8 +402,8 @@ describe('pricing integration — chain messages through PricingEngine', () => {
       };
 
       const engine = await buildPricingEngine(h.queryHeight);
-      const stdBreakdown = await engine.price(stdSpec, { height: h.queryHeight, duration: stdSpec.ttl });
-      const premBreakdown = await engine.price(premSpec, { height: h.queryHeight, duration: premSpec.ttl });
+      const stdBreakdown = await engine.price(stdSpec, { height: h.queryHeight, duration: stdSpec.ttl, isEncrypted: false });
+      const premBreakdown = await engine.price(premSpec, { height: h.queryHeight, duration: premSpec.ttl, isEncrypted: false });
 
       expect(premBreakdown.commodity.ports.premium.count).to.equal(3);
       expect(premBreakdown.total).to.be.above(stdBreakdown.total);
@@ -414,8 +417,8 @@ describe('pricing integration — chain messages through PricingEngine', () => {
       const h = buildTestHistories();
       stubHistories(h);
       const engine = await buildPricingEngine(h.queryHeight);
-      const month = await engine.price(testSpec, { height: h.queryHeight, duration: ONE_PERIOD });
-      const year = await engine.price(testSpec, { height: h.queryHeight, duration: 31_536_000 });
+      const month = await engine.price(testSpec, { height: h.queryHeight, duration: ONE_PERIOD, isEncrypted: false });
+      const year = await engine.price(testSpec, { height: h.queryHeight, duration: 31_536_000, isEncrypted: false });
       // Even with the 12% 365-day bucket discount, a year dwarfs a month.
       expect(year.total).to.be.above(month.total);
     });
@@ -426,8 +429,8 @@ describe('pricing integration — chain messages through PricingEngine', () => {
       expect(h.priceHistory.resolveAt(h.queryHeight).standardPeriodSeconds).to.equal(ONE_PERIOD);
 
       const engine = await buildPricingEngine(h.queryHeight);
-      const onePeriod = await engine.price(testSpec, { height: h.queryHeight, duration: ONE_PERIOD });
-      const twoPeriods = await engine.price(testSpec, { height: h.queryHeight, duration: ONE_PERIOD * 2 });
+      const onePeriod = await engine.price(testSpec, { height: h.queryHeight, duration: ONE_PERIOD, isEncrypted: false });
+      const twoPeriods = await engine.price(testSpec, { height: h.queryHeight, duration: ONE_PERIOD * 2, isEncrypted: false });
       expect(onePeriod.standardPeriodSeconds).to.equal(ONE_PERIOD);
       expect(onePeriod.scaledGrossMicrodollars).to.equal(onePeriod.grossMicrodollars);
       expect(twoPeriods.scaledGrossMicrodollars).to.equal(2 * onePeriod.scaledGrossMicrodollars);
