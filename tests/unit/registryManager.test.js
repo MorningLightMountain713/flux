@@ -1065,6 +1065,21 @@ describe('registryManager tests', () => {
       expect(result.spec).to.not.have.property('contacts');
     });
 
+    it('names a geolocation entry it could not read, and leaves the draft placeable nowhere', async () => {
+      // `acXX_FR` names no continent. The draft's allow list comes back empty,
+      // which the v9 schema refuses, and the error names the entry the owner
+      // has to restate; null would have read as "run anywhere".
+      await registryHolds(await v8Spec({ name: 'convertme', contacts: ['ops@example.com'], geolocation: ['acXX_FR'] }));
+
+      const result = await registryManager.convertApplicationSpecification('convertme');
+
+      expect(result.complete).to.be.false;
+      expect(result.spec.placement.geoAllow).to.deep.equal([]);
+      const named = result.errors.find((e) => e.code === 'region_unresolved');
+      expect(named, JSON.stringify(result.errors)).to.not.equal(undefined);
+      expect(named.message).to.include("'acXX_FR'");
+    });
+
     it('refuses an app already on spec version 9', async () => {
       await registryHolds(await v9Spec());
 

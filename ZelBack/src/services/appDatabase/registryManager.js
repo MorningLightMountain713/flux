@@ -750,9 +750,9 @@ async function convertApplicationSpecification(appname, opts = {}) {
   // at sign-time submission, which requires a valid canonical form anyway.
   const { valid, errors } = FluxAppSpecV9.validateSchema(v9Blob);
 
-  // A region name the location table cannot spell is a gap of exactly the kind
+  // A geolocation entry the converter cannot read is a gap of exactly the kind
   // this endpoint exists to hand back: the owner is the only party who knows
-  // which region they meant, and they can pick it here. It is not in the draft
+  // which place they meant, and they can pick it here. It is not in the draft
   // — converting it to the whole country would be the draft agreeing with a
   // warning about itself, on the document they are about to sign — so it is an
   // error that blocks completion rather than a warning beside a value. The
@@ -761,9 +761,12 @@ async function convertApplicationSpecification(appname, opts = {}) {
   const regionErrors = (unresolvedRegions || []).map((u) => ({
     path: ['placement', 'geoAllow'],
     code: 'region_unresolved',
-    message: `Region '${u.region}' in ${u.country} could not be resolved to an ISO 3166-2 code.`
-      + ' Choose the region again before signing — it is not carried into this draft.',
-    value: u.region,
+    message: u.region !== undefined
+      ? `Region '${u.region}' in ${u.country} could not be resolved to an ISO 3166-2 code.`
+        + ' Choose the region again before signing — it is not carried into this draft.'
+      : `Geolocation entry '${u.entry}' names no place this draft can carry.`
+        + ' Choose the location again before signing — it is not carried into this draft.',
+    value: u.region ?? u.entry,
   }));
   const allErrors = [...errors, ...regionErrors];
   const complete = valid && regionErrors.length === 0;
