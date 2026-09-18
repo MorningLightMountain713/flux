@@ -224,12 +224,12 @@ describe('availabilityChecker tests', () => {
     });
 
     it('should collect ports via DeploymentSpec.allHostPorts', async () => {
-      const spec = multiPortSpec('App1', [30_001, 30_002, 30_003]);
+      const spec = multiPortSpec('App1', [31_001, 31_002, 31_003]);
       const instantiated = await instantiatedSpec(spec);
       const deployment = deploymentOf(spec);
       // The ports are the library's, derived from the components, not a
       // fixture's claim about them.
-      expect(deployment.allHostPorts()).to.deep.equal([30_001, 30_002, 30_003]);
+      expect(deployment.allHostPorts()).to.deep.equal([31_001, 31_002, 31_003]);
 
       listInstalledAppsStub.resolves([instantiated]);
       buildDeploymentStub.resolves(deployment);
@@ -303,11 +303,11 @@ describe('availabilityChecker tests', () => {
       // it was handed - so pinning `testingPort` beforehand, as this case used
       // to, was overwritten on the next line of production code and the branch
       // never ran. `nextTestingPort` is the field that actually steers it.
-      const spec = multiPortSpec('App1', [30_001, 30_002, 30_003]);
+      const spec = multiPortSpec('App1', [31_001, 31_002, 31_003]);
       const instantiated = await instantiatedSpec(spec);
       listInstalledAppsStub.resolves([instantiated]);
       buildDeploymentStub.resolves(deploymentOf(spec));
-      mockDosState.nextTestingPort = 30_002;
+      mockDosState.nextTestingPort = 31_002;
 
       sinon.stub(daemonServiceMiscRpcs, 'isDaemonSynced').returns({
         data: { synced: true },
@@ -325,7 +325,7 @@ describe('availabilityChecker tests', () => {
         mockFailedNodesCache,
       );
 
-      expect(mockDosState.testingPort).to.equal(30_002);
+      expect(mockDosState.testingPort).to.equal(31_002);
       // timeouts.failure - the port belongs to an installed app, so it is not
       // probed at all.
       expect(waitMs).to.equal(15_000);
@@ -336,11 +336,11 @@ describe('availabilityChecker tests', () => {
       // The contrast that makes the case above non-vacuous: same apps, same
       // stubs, one port outside the set the real deployment reports. This one
       // gets as far as picking a peer.
-      const spec = multiPortSpec('App1', [30_001, 30_002, 30_003]);
+      const spec = multiPortSpec('App1', [31_001, 31_002, 31_003]);
       const instantiated = await instantiatedSpec(spec);
       listInstalledAppsStub.resolves([instantiated]);
       buildDeploymentStub.resolves(deploymentOf(spec));
-      mockDosState.nextTestingPort = 30_009;
+      mockDosState.nextTestingPort = 31_009;
 
       sinon.stub(daemonServiceMiscRpcs, 'isDaemonSynced').returns({
         data: { synced: true },
@@ -356,7 +356,7 @@ describe('availabilityChecker tests', () => {
         mockFailedNodesCache,
       );
 
-      expect(mockDosState.testingPort).to.equal(30_009);
+      expect(mockDosState.testingPort).to.equal(31_009);
       sinon.assert.calledOnce(peerPicker);
       expect(waitMs).to.equal(240_000);
     });
@@ -366,8 +366,8 @@ describe('availabilityChecker tests', () => {
       // resolve - an encrypted one this node cannot decrypt - must not cost the
       // sweep the ports of every app after it, or the checker would probe a
       // port an app is listening on and DOS itself over the failure.
-      const broken = multiPortSpec('BrokenApp', [30_005]);
-      const healthy = multiPortSpec('HealthyApp', [30_002]);
+      const broken = multiPortSpec('BrokenApp', [31_005]);
+      const healthy = multiPortSpec('HealthyApp', [31_002]);
       const brokenInstantiated = await instantiatedSpec(broken);
       const healthyInstantiated = await instantiatedSpec(healthy);
       listInstalledAppsStub.resolves([brokenInstantiated, healthyInstantiated]);
@@ -379,7 +379,7 @@ describe('availabilityChecker tests', () => {
         if (!deployment) throw new Error(`Could not resolve spec for ${inst.name}`);
         return deployment;
       });
-      mockDosState.nextTestingPort = 30_002;
+      mockDosState.nextTestingPort = 31_002;
 
       sinon.stub(daemonServiceMiscRpcs, 'isDaemonSynced').returns({
         data: { synced: true },
@@ -543,7 +543,7 @@ describe('availabilityChecker tests', () => {
 
     it('should use nextTestingPort when set', async () => {
       const apps = [];
-      mockDosState.nextTestingPort = 30_050;
+      mockDosState.nextTestingPort = 31_050;
 
       sinon.stub(daemonServiceMiscRpcs, 'isDaemonSynced').returns({
         data: { synced: true },
@@ -560,7 +560,7 @@ describe('availabilityChecker tests', () => {
         mockFailedNodesCache,
       );
 
-      expect(mockDosState.testingPort).to.equal(30_050);
+      expect(mockDosState.testingPort).to.equal(31_050);
     });
   });
 });

@@ -76,11 +76,12 @@ describe('imageArchitectureValidator.verifyImageRegistryAndArchitectures', () =>
    * v8 submission blob, which v7 accepts key-for-key (same knownKeys), rather
    * than invented here.
    */
-  function v7Spec(compose) {
+  function v7Spec(compose, overrides = {}) {
     return flux.FluxAppSpecBase.getVersionClass(7).fromSubmission({
       ...V8_SUBMISSION,
       version: 7,
       compose,
+      ...overrides,
     });
   }
 
@@ -177,7 +178,8 @@ describe('imageArchitectureValidator.verifyImageRegistryAndArchitectures', () =>
 
   describe('enterprise v7 apps (short-circuit on imageAuth)', () => {
     it('returns early without registry probe when a component has imageAuth set', async () => {
-      const spec = v7Spec([legacyComponent({ name: 'c1', repoauth: 'pgp-encrypted-blob' })]);
+      // A v7 credential is encrypted to the app's selected nodes, so it needs some.
+      const spec = v7Spec([legacyComponent({ name: 'c1', repoauth: 'pgp-encrypted-blob' })], { nodes: ['1.2.3.4'] });
       expect(spec.version).to.equal(7);
       expect(spec.componentEntries()[0][1].imageAuth).to.equal('pgp-encrypted-blob');
 

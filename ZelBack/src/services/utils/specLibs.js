@@ -75,7 +75,9 @@ function assertVersionActivated(version, height) {
  *
  * @param {object} spec - Submission blob
  * @param {object} [options]
- * @param {number} [options.height] - Current daemon height for version gating
+ * @param {number} [options.height] - the height the submission is judged at:
+ *   the version-activation gate here, and the rules a legacy version gates by
+ *   height in the class
  * @param {string} [options.purpose] - Which question is being asked
  *   (a flux-spec ValidationPurpose value; default registration, the strict
  *   one). The spec library refuses unknown purposes at the door.
@@ -99,6 +101,7 @@ async function validateSubmissionSpec(spec, { height, purpose, encrypted } = {})
   assertVersionActivated(spec.version, height);
   const context = { encrypted: encrypted === true };
   if (purpose !== undefined) context.purpose = purpose;
+  if (height !== undefined) context.height = height;
   return VersionClass.fromSubmission(spec, context);
 }
 
