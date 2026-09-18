@@ -339,21 +339,6 @@ async function ensureStfolderExists(folder) {
 }
 
 /**
- * Parse container data to extract folder path
- * Primary mount goes to /appdata, additional mounts are at same level as appdata
- * @param {Array} containersData - Container data array
- * @param {number} index - Current container index
- * @returns {string} Container folder path
- */
-function getContainerFolderPath(containersData, index) {
-  if (index === 0) {
-    return '/appdata';
-  }
-  const container = containersData[index];
-  return container.split(':')[1].replace(containersData[0], '');
-}
-
-/**
  * Whether two folder device lists name the same devices. Syncthing returns a
  * folder's devices sorted, once each, with fields FluxOS never sets; the device
  * IDs are what the monitor writes.
@@ -374,9 +359,6 @@ function sameDevices(held = [], wanted = []) {
  * leaves out - a g: folder's type - is not the monitor's to compare.
  * @param {Object} existingFolder - The folder as syncthing holds it
  * @param {Object} newFolder - The config the monitor built for it
- * Check if folder configuration needs update
- * @param {Object} existingFolder - Existing folder config
- * @param {Object} newFolder - New folder config
  * @returns {boolean} True if update is needed
  */
 function folderNeedsUpdate(existingFolder, newFolder) {
@@ -585,7 +567,6 @@ module.exports = {
   createSyncthingFolderConfig,
   ensureStfolderExists,
   ensureStignoreCovers,
-  getContainerFolderPath,
   folderNeedsUpdate,
   removeSyncthingFolder,
   setSyncthingFolderPaused,

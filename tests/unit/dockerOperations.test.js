@@ -49,10 +49,11 @@ describe('dockerOperations tests', () => {
   });
 
   describe('appDeleteDataInMountPoint', () => {
-    const build = (serviceHelper, log) => proxyquire('../../ZelBack/src/services/appManagement/dockerOperations', {
+    const build = (serviceHelper, log, wipeAppData) => proxyquire('../../ZelBack/src/services/appManagement/dockerOperations', {
       '../serviceHelper': serviceHelper,
       '../../lib/log': log,
       '../utils/appConstants': { appsFolder: APPS_FOLDER },
+      '../utils/appDataEntries': { wipeAppData },
     });
 
     /**
@@ -66,7 +67,7 @@ describe('dockerOperations tests', () => {
       const deployment = deploymentFor(await specWithComponents(appName, { [compName]: {} }));
       const [[, component]] = deployment.componentEntries();
       // A component with mounts always resolves a host dir; a stateless one gets
-      // null, and the appdata path below would then be derived from nothing.
+      // null, and the volume path below would then be derived from nothing.
       expect(component.dir, 'a stateful component must resolve a host dir').to.be.a('string');
       // The prefix is applied exactly once. v9 forbids an app name beginning with
       // `flux`, which is what makes a single prefix unambiguous — a component that
@@ -75,45 +76,45 @@ describe('dockerOperations tests', () => {
       return { component, appId: `flux${component.identifier}` };
     }
 
-    it('deletes the appdata dir via runCommand (as root, no shell glob)', async () => {
+    it('wipes the app data in the component volume, and nothing by name', async () => {
       const { component, appId } = await statefulComponent();
-      const runCommand = sinon.stub().resolves({ error: null });
+      const wipeAppData = sinon.stub().resolves({ error: null });
       const dockerOperations = build(
-        { runCommand, delay: sinon.stub().resolves() },
+        { delay: sinon.stub().resolves() },
         { info: sinon.stub(), error: sinon.stub() },
+        wipeAppData,
       );
 
       await dockerOperations.appDeleteDataInMountPoint(appId);
 
-      expect(runCommand.calledOnce).to.be.true;
-      expect(runCommand.firstCall.args[0]).to.equal('rm');
-      expect(runCommand.firstCall.args[1].runAsRoot).to.equal(true);
-      // The wiped path is the component's OWN host dir as flux-spec resolves it,
+      expect(wipeAppData.calledOnce).to.be.true;
+      // The wiped volume is the component's OWN host dir as flux-spec resolves it,
       // not a literal reproduced here: the two derivations of `appsFolder +
       // flux<identifier>` must agree or the node wipes somebody else's directory.
-      expect(runCommand.firstCall.args[1].params).to.deep.equal(['-rf', path.join(component.dir, 'appdata')]);
+      expect(wipeAppData.firstCall.args).to.deep.equal([component.dir]);
+      expect(path.basename(component.dir)).to.equal(appId);
     });
 
     it('retries until the delete succeeds (the stopped container released the mount)', async () => {
       const { appId } = await statefulComponent();
-      const runCommand = sinon.stub();
-      runCommand.onFirstCall().resolves({ error: new Error('device busy') });
-      runCommand.onSecondCall().resolves({ error: null });
+      const wipeAppData = sinon.stub();
+      wipeAppData.onFirstCall().resolves({ error: new Error('device busy') });
+      wipeAppData.onSecondCall().resolves({ error: null });
       const log = { info: sinon.stub(), error: sinon.stub() };
-      const dockerOperations = build({ runCommand, delay: sinon.stub().resolves() }, log);
+      const dockerOperations = build({ delay: sinon.stub().resolves() }, log, wipeAppData);
 
       await dockerOperations.appDeleteDataInMountPoint(appId, { intervalMs: 1 });
 
-      expect(runCommand.calledTwice).to.be.true;
+      expect(wipeAppData.calledTwice).to.be.true;
       expect(log.info.calledOnce).to.be.true;
       expect(log.error.called).to.be.false;
     });
 
     it('gives up and logs after the timeout (never loops forever)', async () => {
       const { appId } = await statefulComponent();
-      const runCommand = sinon.stub().resolves({ error: new Error('still busy') });
+      const wipeAppData = sinon.stub().resolves({ error: new Error('still busy') });
       const log = { info: sinon.stub(), error: sinon.stub() };
-      const dockerOperations = build({ runCommand, delay: sinon.stub().resolves() }, log);
+      const dockerOperations = build({ delay: sinon.stub().resolves() }, log, wipeAppData);
 
       await dockerOperations.appDeleteDataInMountPoint(appId, { timeoutMs: 0 });
 

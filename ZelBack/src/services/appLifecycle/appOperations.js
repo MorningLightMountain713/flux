@@ -35,6 +35,7 @@ const {
   extractIp, extractPort, ipsMatch, DEFAULT_API_PORT,
 } = require('../utils/socketAddressUtils');
 const appsRepository = require('../appDatabase/appsRepository');
+const appDataEntries = require('../utils/appDataEntries');
 const ingressAttestationService = require('../appMessaging/ingressAttestationService');
 const registryManager = require('../appDatabase/registryManager');
 const https = require('https');
@@ -1271,7 +1272,6 @@ async function runBackupTask(appname, backup, force, report) {
         for (const volume of volumes) {
           // The archive keeps its component name: the directory it lives in
           // is already this identity's volume, so siblings cannot collide.
-          const targetPath = `${volume.mount}/appdata`;
           const tarGzPath = `${volume.mount}/backup/local/backup_${label}.tar.gz`;
           const forWhich = volume.replica ? `${label} (replica ${volume.replica})` : label;
           // eslint-disable-next-line no-await-in-loop
@@ -1285,7 +1285,9 @@ async function runBackupTask(appname, backup, force, report) {
           // eslint-disable-next-line no-await-in-loop
           report(`Creating backup archive for ${forWhich}...\n`);
           // eslint-disable-next-line no-await-in-loop
-          const tarStatus = await IOUtils.createTarGz(targetPath, tarGzPath);
+          const tarStatus = await appDataEntries.archiveAppData(volume.mount, tarGzPath, {
+            component: component.component, replica: volume.replica,
+          });
           if (tarStatus.status === false) {
             // eslint-disable-next-line no-await-in-loop
             await IOUtils.removeFile(tarGzPath);
@@ -1491,29 +1493,6 @@ async function runRestoreTask(appname, restore, type, zelidauth, report) {
     await serviceHelper.delay(5 * 1000);
     // eslint-disable-next-line global-require
     const IOUtils = require('../IOUtils');
-    // eslint-disable-next-line no-restricted-syntax
-    for (const component of restore) {
-      if (component.restore) {
-        // eslint-disable-next-line no-await-in-loop
-        const volumes = await taskVolumes(appname, component.component, component.replica);
-        const synced = Boolean(restoreDeployment.componentEntries()
-          .find(([name]) => name === component.component)?.[1]?.hasSyncthing());
-        // eslint-disable-next-line no-restricted-syntax
-        for (const volume of volumes) {
-          const forWhich = volume.replica ? `${component.component} (replica ${volume.replica})` : component.component;
-          // eslint-disable-next-line no-await-in-loop
-          report(`Removing ${forWhich} component data...\n`);
-          // eslint-disable-next-line no-await-in-loop
-          await serviceHelper.delay(2 * 1000);
-          swapsInFlight.push({ identifier: volume.identifier, synced });
-          // eslint-disable-next-line no-await-in-loop
-          const cleared = await IOUtils.removeDirectory(`${volume.mount}/appdata`, true);
-          if (cleared !== true) {
-            throw new Error(`Error: could not clear ${forWhich} appdata before unpacking`);
-          }
-        }
-      }
-    }
 
     if (type === 'remote') {
       // eslint-disable-next-line no-restricted-syntax
@@ -1544,26 +1523,32 @@ async function runRestoreTask(appname, restore, type, zelidauth, report) {
         const label = component.component.toLowerCase();
         // eslint-disable-next-line no-await-in-loop
         const volumes = await taskVolumes(appname, component.component, component.replica);
+        const restoreComp = restoreDeployment.componentEntries()
+          .find(([name]) => name === component.component)?.[1];
+        const synced = Boolean(restoreComp?.hasSyncthing());
         // eslint-disable-next-line no-restricted-syntax
         for (const volume of volumes) {
-          const targetPath = `${volume.mount}/appdata`;
           const tarGzPath = `${volume.mount}/backup/${type}/backup_${label}.tar.gz`;
           const forWhich = volume.replica ? `${label} (replica ${volume.replica})` : label;
+          // The archive decides what is replaced, so the clear and the unpack
+          // are one step: from here until the unpack lands the directory is
+          // neither copy.
           // eslint-disable-next-line no-await-in-loop
-          report(`Unpacking backup archive for ${forWhich}...\n`);
+          report(`Replacing ${forWhich} component data from the backup archive...\n`);
           // eslint-disable-next-line no-await-in-loop
-          const tarStatus = await IOUtils.untarFile(targetPath, tarGzPath);
+          await serviceHelper.delay(2 * 1000);
+          swapsInFlight.push({ identifier: volume.identifier, synced });
+          // eslint-disable-next-line no-await-in-loop
+          const tarStatus = await appDataEntries.restoreAppData(volume.mount, tarGzPath, restoreComp);
           if (tarStatus.status === false) {
-            throw new Error(`Error: Failed to unpack archive file for ${forWhich}, ${tarStatus.error}`);
+            throw new Error(`Error: Failed to restore ${forWhich} from its archive, ${tarStatus.error}`);
           } else {
             // eslint-disable-next-line no-await-in-loop
             report(`Removing backup file for ${forWhich}...\n`);
             // eslint-disable-next-line no-await-in-loop
             await IOUtils.removeFile(tarGzPath);
           }
-          const restoreComp = restoreDeployment?.componentEntries().find(([name]) => name === component.component)?.[1];
-          const syncthingAux = restoreComp?.hasSyncthing();
-          if (syncthingAux) {
+          if (synced) {
             // Minted by the encoder with this identity's replica, never
             // assembled by hand — that is what drops the replica segment and
             // addresses a sibling. (Co-located replicas cannot use sync, so

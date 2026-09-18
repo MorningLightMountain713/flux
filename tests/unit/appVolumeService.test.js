@@ -10,9 +10,19 @@ const path = require('node:path');
 const serviceHelper = require('../../ZelBack/src/services/serviceHelper');
 const appVolumeService = require('../../ZelBack/src/services/appLifecycle/appVolumeService');
 const { asConfig } = require('./fixtures/config');
+const { loadSpecLibrary } = require('./fixtures/fluxSpec');
 
 describe('appVolumeService.writeStignore', () => {
   let tmp;
+  // The platform's entries lead every ignore file, as the spec library lists them.
+  let platform;
+
+  before(async () => {
+    const { PLATFORM_VOLUME_ENTRIES } = await loadSpecLibrary();
+    platform = PLATFORM_VOLUME_ENTRIES.map((name) => `/${name}`).join('\n');
+    expect(platform).to.include('/backup');
+    expect(platform).to.include('/io.runonflux');
+  });
 
   beforeEach(async () => {
     tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'stignore-'));
@@ -33,9 +43,10 @@ describe('appVolumeService.writeStignore', () => {
     await appVolumeService.writeStignore(deployComp);
 
     const content = await fs.readFile(path.join(tmp, '.stignore'), 'utf8');
-    // reserved (/backup + injected) precede owner excludes so first-match-wins makes
-    // them non-overridable; the atomic slot is excluded by its managed dir.
-    expect(content).to.equal('/backup\n/seed\n/io.runonflux/conf\n/var/data\ncache\n');
+    // reserved (the platform's entries + injected) precede owner excludes so
+    // first-match-wins makes them non-overridable; the atomic slot is excluded
+    // by its managed dir.
+    expect(content).to.equal(`${platform}\n/seed\n/io.runonflux/conf\n/var/data\ncache\n`);
   });
 
   it('writes no .stignore when the component has no syncthing folder', async () => {
@@ -71,7 +82,7 @@ describe('appVolumeService.writeStignore', () => {
     });
 
     const content = await fs.readFile(path.join(tmp, '.stignore'), 'utf8');
-    expect(content).to.equal('/backup\n/new\n');
+    expect(content).to.equal(`${platform}\n/new\n`);
     expect(changed).to.equal(true);
   });
 
@@ -98,7 +109,7 @@ describe('appVolumeService.writeStignore', () => {
     await appVolumeService.writeStignore(deployComp);
 
     const content = await fs.readFile(path.join(tmp, '.stignore'), 'utf8');
-    expect(content).to.equal('/backup\n/seed\n');
+    expect(content).to.equal(`${platform}\n/seed\n`);
   });
 });
 

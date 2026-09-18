@@ -81,7 +81,6 @@ const syncthingMonitorHelpersMock = {
   ensureStfolderExists: sinon.stub().resolves(true),
   // Converges .stignore through syncthing's API - I/O.
   ensureStignoreCovers: sinon.stub().resolves(),
-  getContainerFolderPath: sinon.stub().returns(''),
   folderNeedsUpdate: sinon.stub().returns(false),
 };
 
