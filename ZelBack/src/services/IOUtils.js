@@ -566,20 +566,22 @@ async function inspectTarGz(tarFilePath) {
 }
 
 /**
- * Creates a tarball (tar.gz) archive from the specified source directory.
+ * Creates a tarball (tar.gz) archive of members of the specified source directory.
  *
  * @param {string} sourceDirectory - The path of the directory to be archived.
  * @param {string} outputFileName - The name of the tarball archive file to be created.
+ * @param {string[]} [members] - Paths relative to the directory, archived in this
+ *   order; the whole directory when omitted.
  * @returns {boolean} - True if the tarball is successfully created, false on failure.
  */
-async function createTarGz(sourceDirectory, outputFileName) {
+async function createTarGz(sourceDirectory, outputFileName, members = ['.']) {
   try {
     const outputDirectory = outputFileName.substring(0, outputFileName.lastIndexOf('/'));
     await fs.mkdir(outputDirectory, { recursive: true });
     // argv, and without -v, for the same two reasons as untarFile above.
     const result = await serviceHelper.runCommand('tar', {
       runAsRoot: true,
-      params: ['-czf', outputFileName, '-C', sourceDirectory, '.'],
+      params: ['-czf', outputFileName, '-C', sourceDirectory, ...members],
     });
     if (result.error) {
       const message = (result.stderr || result.stdout || result.error.message || '').replace(/\n/g, ' ');

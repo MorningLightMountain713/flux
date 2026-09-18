@@ -928,7 +928,7 @@ async function handleReceiveOnlyTransition(params) {
     injectedExcludePaths = [],
   } = params;
 
-  const folderPath = syncthingFolder.path || `${appsFolder}${appId}/appdata`;
+  const folderPath = syncthingFolder.path;
 
   // Whether any CONNECTED peer genuinely holds the data. Gates the election (a true
   // cold start - nobody serving - must still elect one seed instead of standing off)
@@ -1307,7 +1307,7 @@ async function manageFolderSyncState(params) {
     // marker inside the volume turns storage loss into FolderErrors, and the
     // caller flags exactly those folders here
     if (mountVerifyNeeded) {
-      const folderPath = syncFolder.path || `${appsFolder}${appId}/appdata`;
+      const folderPath = syncFolder.path;
       let mountSafety = await verifySendReceiveFolderSafety(appId, folderPath, { injectedExcludePaths, appName: installedAppName });
 
       if (!mountSafety.isSafe && !mountSafety.isMounted) {

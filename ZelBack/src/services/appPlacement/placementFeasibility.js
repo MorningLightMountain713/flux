@@ -619,7 +619,7 @@ async function anyComponentSynced(doc) {
   const isSynced = (containerData) => {
     if (typeof containerData !== 'string') return false;
     try {
-      return parseContainerData(containerData, 0, [], new Map(), 0).persistentStorage.sync !== null;
+      return parseContainerData(containerData, 0, [], 0).persistentStorage.sync !== null;
     } catch {
       return false;
     }

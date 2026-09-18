@@ -246,21 +246,6 @@ async function ensureStfolderExists(folder) {
 }
 
 /**
- * Parse container data to extract folder path
- * Primary mount goes to /appdata, additional mounts are at same level as appdata
- * @param {Array} containersData - Container data array
- * @param {number} index - Current container index
- * @returns {string} Container folder path
- */
-function getContainerFolderPath(containersData, index) {
-  if (index === 0) {
-    return '/appdata';
-  }
-  const container = containersData[index];
-  return container.split(':')[1].replace(containersData[0], '');
-}
-
-/**
  * Check if folder configuration needs update
  * @param {Object} existingFolder - Existing folder config
  * @param {Object} newFolder - New folder config
@@ -474,7 +459,7 @@ module.exports = {
   buildDeviceConfiguration,
   createSyncthingFolderConfig,
   ensureStfolderExists,
-  getContainerFolderPath,
+  ensureStignoreCovers,
   folderNeedsUpdate,
   removeSyncthingFolder,
   setSyncthingFolderPaused,

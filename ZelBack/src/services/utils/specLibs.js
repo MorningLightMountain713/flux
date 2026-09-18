@@ -21,7 +21,10 @@ const { load, CONTRACT_VERSION } = require('@runonflux/flux-spec-cjs');
 // 3: envelopeHash + the attest payload's envelope-hash argument — the
 // attestation path calls both, and a contract-2 copy fails at first
 // encrypted-v9 registration instead of at startup.
-const REQUIRED_CONTRACT_VERSION = 3;
+// 4: PLATFORM_VOLUME_ENTRIES, LEGACY_STAGING_ENTRY_PATTERN and
+// LEGACY_PRIMARY_SOURCE — what every operation on the app's data skips, and
+// the one directory a pre-format-2 backup archive holds.
+const REQUIRED_CONTRACT_VERSION = 4;
 
 if (!(CONTRACT_VERSION >= REQUIRED_CONTRACT_VERSION)) {
   throw new Error(

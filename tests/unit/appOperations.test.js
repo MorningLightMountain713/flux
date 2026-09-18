@@ -18,6 +18,7 @@ const operationRegistry = require('../../ZelBack/src/services/utils/operationReg
 const fluxEventBus = require('../../ZelBack/src/services/utils/fluxEventBus');
 const globalState = require('../../ZelBack/src/services/utils/globalState');
 const appsRepository = require('../../ZelBack/src/services/appDatabase/appsRepository');
+const appDataEntries = require('../../ZelBack/src/services/utils/appDataEntries');
 const contentBlobService = require('../../ZelBack/src/services/appLifecycle/contentBlobService');
 const appsRuntimeState = require('../../ZelBack/src/services/appManagement/appsRuntimeState');
 const dockerService = require('../../ZelBack/src/services/dockerService');
@@ -1749,13 +1750,11 @@ describe('appOperations tests', () => {
   // the process - the app is stranded down and no decider can outrank the hold.
   describe('runRestoreTask hold on a failed clear', () => {
     // eslint-disable-next-line global-require
-    const IOUtils = require('../../ZelBack/src/services/IOUtils');
-    // eslint-disable-next-line global-require
     const volumeService = require('../../ZelBack/src/services/utils/volumeService');
 
     // A clear that fails leaves the directory neither copy: the component is
     // held stopped rather than started on it, and the caller is told why.
-    it('holds the component whose appdata could not be cleared, in those words', async () => {
+    it('holds the component whose data could not be cleared, in those words', async () => {
       const deployment = await oneComponentDeployment('myapp', 'web');
       sinon.stub(deploymentProvider, 'getInstalledDeployment').resolves(deployment);
       sinon.stub(appsRepository, 'getGlobalAppInfo').resolves(await instantiatedSpec(await v9Spec({ name: 'myapp' })));
@@ -1767,7 +1766,7 @@ describe('appOperations tests', () => {
       const hold = sinon.stub(appReconciler, 'setControllerDesired');
       sinon.stub(serviceHelper, 'delay').resolves();
       sinon.stub(volumeService, 'listComponentVolumeMounts').resolves([{ replica: null, mount: '/vol', identifier: 'web_myapp' }]);
-      sinon.stub(IOUtils, 'removeDirectory').resolves(false);
+      sinon.stub(appDataEntries, 'restoreAppData').resolves({ status: false, error: 'could not clear /vol before unpacking: Device or resource busy' });
       const reported = [];
 
       let failure = null;
@@ -1870,7 +1869,7 @@ describe('appOperations tests', () => {
       sinon.stub(volumeService, 'listComponentVolumeMounts').resolves([{ replica: null, mount: '/vol' }]);
       sinon.stub(IOUtils, 'checkFileExists').resolves(false);
       sinon.stub(IOUtils, 'removeFile').resolves();
-      sinon.stub(IOUtils, 'createTarGz').resolves({ status: false, error: 'No space left on device' });
+      sinon.stub(appDataEntries, 'archiveAppData').resolves({ status: false, error: 'No space left on device' });
 
       const req = { body: { appname: 'bkapp', backup: [{ component: 'web', backup: true }] } };
       const pending = runBackup(req);
@@ -1881,7 +1880,7 @@ describe('appOperations tests', () => {
       expect(pauseFolder.calledWith('web_bkapp', true), 'the synced component folder must be paused').to.be.true;
       expect(pauseFolder.calledWith('worker_bkapp', true), 'unsynced components must be untouched').to.be.false;
       expect(pauseFolder.calledWith('bkapp', true), 'the bare app name matches no composed folder').to.be.false;
-      // This backup FAILED - createTarGz answers ENOSPC above - and the folder is
+      // This backup FAILED - archiveAppData answers ENOSPC above - and the folder is
       // still given back. Pausing without this would be worse than the removal it
       // replaced, because nothing else would ever resume it.
       expect(pauseFolder.calledWith('web_bkapp', false), 'a failed backup must resume what it paused').to.be.true;
@@ -1898,7 +1897,7 @@ describe('appOperations tests', () => {
       // What a failed BUILD looks like from here: indistinguishable from absent.
       sinon.stub(deploymentProvider, 'getInstalledDeployment').resolves(null);
       const pauseFolder = sinon.stub(syncthingMonitorHelpers, 'setSyncthingFolderPaused').resolves(true);
-      const tar = sinon.stub(IOUtils, 'createTarGz').resolves({ status: true });
+      const tar = sinon.stub(appDataEntries, 'archiveAppData').resolves({ status: true });
 
       const req = { body: { appname: 'bkapp', backup: [{ component: 'web', backup: true }] } };
       const ok = await runBackup(req);
@@ -1943,7 +1942,7 @@ describe('appOperations tests', () => {
         sinon.stub(volumeService, 'listComponentVolumeMounts').resolves([{ replica: null, mount: '/vol' }]);
         sinon.stub(IOUtils, 'checkFileExists').resolves(false);
         sinon.stub(IOUtils, 'removeFile').resolves();
-        const createTarGz = sinon.stub(IOUtils, 'createTarGz').resolves({ status: true });
+        const archiveAppData = sinon.stub(appDataEntries, 'archiveAppData').resolves({ status: true });
 
         const req = { body: { appname: 'bkapp', backup: [{ component: 'web', backup: true }], ...(force ? { force: true } : {}) } };
         const pending = runBackup(req);
@@ -1951,16 +1950,16 @@ describe('appOperations tests', () => {
         const result = await pending;
         clock.restore();
         const said = reported.join('');
-        return { result, createTarGz, said, drive: appReconciler.drive };
+        return { result, archiveAppData, said, drive: appReconciler.drive };
       }
 
       const behind = { status: { isSynced: false, globalBytes: 1000, inSyncBytes: 400, syncPercentage: 40 }, reason: 'ok' };
 
       it('refuses a copy that is behind, and says by how much', async () => {
-        const { result, createTarGz, said } = await backupSyncedApp({ probe: behind });
+        const { result, archiveAppData, said } = await backupSyncedApp({ probe: behind });
 
         expect(result).to.be.false;
-        expect(createTarGz.called, 'a short archive must never be written').to.be.false;
+        expect(archiveAppData.called, 'a short archive must never be written').to.be.false;
         expect(said).to.contain('40.00% synced (400/1000 bytes)');
       });
 
@@ -1976,9 +1975,9 @@ describe('appOperations tests', () => {
       });
 
       it('reports a folder that was never configured as never synced', async () => {
-        const { said, createTarGz } = await backupSyncedApp({ probe: { status: null, reason: 'absent' } });
+        const { said, archiveAppData } = await backupSyncedApp({ probe: { status: null, reason: 'absent' } });
 
-        expect(createTarGz.called).to.be.false;
+        expect(archiveAppData.called).to.be.false;
         expect(said).to.contain('never synced');
       });
 
@@ -2006,20 +2005,20 @@ describe('appOperations tests', () => {
       });
 
       it('archives a complete copy without comment', async () => {
-        const { result, createTarGz, said } = await backupSyncedApp({
+        const { result, archiveAppData, said } = await backupSyncedApp({
           probe: { status: { isSynced: true, globalBytes: 1000, inSyncBytes: 1000, syncPercentage: 100 }, reason: 'ok' },
         });
 
         expect(result).to.be.true;
-        expect(createTarGz.called).to.be.true;
+        expect(archiveAppData.called).to.be.true;
         expect(said).to.not.contain('incomplete');
       });
 
       it('archives an incomplete copy when the caller says force, and warns', async () => {
-        const { result, createTarGz, said } = await backupSyncedApp({ probe: behind, force: true });
+        const { result, archiveAppData, said } = await backupSyncedApp({ probe: behind, force: true });
 
         expect(result).to.be.true;
-        expect(createTarGz.called, 'force means archive what is on disk anyway').to.be.true;
+        expect(archiveAppData.called, 'force means archive what is on disk anyway').to.be.true;
         expect(said).to.contain('WARNING: backing up an incomplete copy');
       });
     });
@@ -2038,7 +2037,7 @@ describe('appOperations tests', () => {
       drive.withArgs(['comp1_bkapp'], 'stopped').resolves({ converged: false, failed: ['comp1_bkapp'] });
       drive.withArgs(['comp1_bkapp'], 'running').resolves({ converged: true, failed: [] });
       sinon.stub(volumeService, 'listComponentVolumeMounts').resolves([{ replica: null, mount: '/vol' }]);
-      const createTarGz = sinon.stub(IOUtils, 'createTarGz').resolves({ status: true });
+      const archiveAppData = sinon.stub(appDataEntries, 'archiveAppData').resolves({ status: true });
       sinon.stub(IOUtils, 'checkFileExists').resolves(false);
       sinon.stub(IOUtils, 'removeFile').resolves();
 
@@ -2049,7 +2048,7 @@ describe('appOperations tests', () => {
       clock.restore();
 
       expect(result).to.be.false;
-      expect(createTarGz.called, 'nothing may be archived from a volume still being written').to.be.false;
+      expect(archiveAppData.called, 'nothing may be archived from a volume still being written').to.be.false;
       expect(drive.calledWith(['comp1_bkapp'], 'running'), 'and the app is given back').to.be.true;
       expect(operationRegistry.isHeld('bkapp')).to.be.false;
     });
@@ -2075,7 +2074,7 @@ describe('appOperations tests', () => {
       sinon.stub(volumeService, 'listComponentVolumeMounts').resolves([{ replica: null, mount: '/vol' }]);
       sinon.stub(IOUtils, 'checkFileExists').resolves(false);
       sinon.stub(IOUtils, 'removeFile').resolves();
-      const createTarGz = sinon.stub(IOUtils, 'createTarGz').resolves({ status: true });
+      const archiveAppData = sinon.stub(appDataEntries, 'archiveAppData').resolves({ status: true });
       sinon.stub(appReconciler, 'drive').resolves({ converged: true, failed: [] });
       // The stop is proved against docker, not against the drive's verdict: the
       // converge backstop answers 'provisional' and that is not counted, so
@@ -2091,7 +2090,7 @@ describe('appOperations tests', () => {
       clock.restore();
 
       expect(result).to.be.false;
-      expect(createTarGz.called, 'the loser must not archive the same volume').to.be.false;
+      expect(archiveAppData.called, 'the loser must not archive the same volume').to.be.false;
       // The winner still holds it: a refused claim must never release a lease it
       // does not own.
       expect(operationRegistry.get('bkapp')?.owner).to.equal('someoneElse');
@@ -2117,7 +2116,7 @@ describe('appOperations tests', () => {
       sinon.stub(volumeService, 'listComponentVolumeMounts').resolves([{ replica: null, mount: '/vol' }]);
       sinon.stub(IOUtils, 'checkFileExists').resolves(false);
       sinon.stub(IOUtils, 'removeFile').resolves();
-      sinon.stub(IOUtils, 'createTarGz').resolves({ status: false, error: 'No space left on device' });
+      sinon.stub(appDataEntries, 'archiveAppData').resolves({ status: false, error: 'No space left on device' });
 
       const req = { body: { appname: 'bkapp', backup: [{ component: 'comp1', backup: true }] } };
       const pending = runBackup(req);
@@ -2168,7 +2167,7 @@ describe('appOperations tests', () => {
       sinon.stub(syncthingMonitorHelpers, 'setSyncthingFolderPaused').resolves(true);
       sinon.stub(IOUtils, 'checkFileExists').resolves(false);
       sinon.stub(IOUtils, 'removeFile').resolves();
-      sinon.stub(IOUtils, 'createTarGz').resolves({ status: true });
+      sinon.stub(appDataEntries, 'archiveAppData').resolves({ status: true });
 
       const req = { body: { appname: 'bkapp', backup: [{ component: 'web', backup: true }] } };
       const pending = runBackup(req);
@@ -2229,12 +2228,12 @@ describe('appOperations tests', () => {
         sinon.stub(volumeService, 'listComponentVolumeMounts').resolves(volumes);
         sinon.stub(IOUtils, 'checkFileExists').resolves(false);
         sinon.stub(IOUtils, 'removeFile').resolves();
-        return sinon.stub(IOUtils, 'createTarGz').resolves({ status: true });
+        return sinon.stub(appDataEntries, 'archiveAppData').resolves({ status: true });
       }
 
       it('archives every identity when the task names no replica', async () => {
         const clock = sinon.useFakeTimers({ toFake: ['setTimeout'] });
-        const createTarGz = await setupBackup(coLocated);
+        const archiveAppData = await setupBackup(coLocated);
 
         const req = { body: { appname: 'bkapp', backup: [{ component: 'web', backup: true }] } };
         const pending = runBackup(req);
@@ -2242,14 +2241,14 @@ describe('appOperations tests', () => {
         await pending;
         clock.restore();
 
-        expect(createTarGz.callCount, 'one archive per replica').to.equal(2);
-        expect(createTarGz.getCall(0).args[0]).to.equal('/vol/s1/appdata');
-        expect(createTarGz.getCall(1).args[0]).to.equal('/vol/s2/appdata');
+        expect(archiveAppData.callCount, 'one archive per replica').to.equal(2);
+        expect(archiveAppData.getCall(0).args[0]).to.equal('/vol/s1');
+        expect(archiveAppData.getCall(1).args[0]).to.equal('/vol/s2');
       });
 
       it('archives exactly the replica the task names', async () => {
         const clock = sinon.useFakeTimers({ toFake: ['setTimeout'] });
-        const createTarGz = await setupBackup(coLocated);
+        const archiveAppData = await setupBackup(coLocated);
 
         const req = { body: { appname: 'bkapp', backup: [{ component: 'web', backup: true, replica: 's2' }] } };
         const pending = runBackup(req);
@@ -2257,13 +2256,13 @@ describe('appOperations tests', () => {
         await pending;
         clock.restore();
 
-        expect(createTarGz.callCount).to.equal(1);
-        expect(createTarGz.getCall(0).args[0], 'the sibling must be untouched').to.equal('/vol/s2/appdata');
+        expect(archiveAppData.callCount).to.equal(1);
+        expect(archiveAppData.getCall(0).args[0], 'the sibling must be untouched').to.equal('/vol/s2');
       });
 
       it('fails rather than archive a sibling when the named replica is absent', async () => {
         const clock = sinon.useFakeTimers({ toFake: ['setTimeout'] });
-        const createTarGz = await setupBackup(coLocated);
+        const archiveAppData = await setupBackup(coLocated);
 
         const req = { body: { appname: 'bkapp', backup: [{ component: 'web', backup: true, replica: 's9' }] } };
         const pending = runBackup(req);
@@ -2272,7 +2271,7 @@ describe('appOperations tests', () => {
         clock.restore();
 
         expect(result).to.be.false;
-        expect(createTarGz.called, 'no archive may be written for an identity that is not here').to.be.false;
+        expect(archiveAppData.called, 'no archive may be written for an identity that is not here').to.be.false;
       });
     });
   });

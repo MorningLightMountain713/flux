@@ -411,6 +411,7 @@ describe('syncthingFolderStateMachine tests', () => {
         syncthingFolder: {
           id: 'test-app',
           type: 'sendreceive',
+          path: '/apps/test-app',
         },
         installedAppName: 'test-app',
         liveness: createPeerFolderLiveness(),
@@ -422,7 +423,7 @@ describe('syncthingFolderStateMachine tests', () => {
       // effects are the whole of what it does: an r: container that has stopped
       // is asked to run again, and the entry the health monitor tracks the
       // folder by survives the pass rather than being reset to a fresh one.
-      mockParams.syncFolder = { type: 'sendreceive' };
+      mockParams.syncFolder = { type: 'sendreceive', path: '/apps/test-app' };
       mockParams.receiveOnlySyncthingAppsCache = new Map([['test-app', { restarted: true, marker: 'kept' }]]);
       dockerServiceMock.dockerContainerInspect.resolves({
         State: { Running: false },
@@ -445,7 +446,7 @@ describe('syncthingFolderStateMachine tests', () => {
       beforeEach(() => {
         leaderIsSelf = sinon.stub(mastershipGrantGate, 'leaderIsSelf').resolves(false);
         sinon.stub(mastershipGrantGate, 'noteFolderDemoted');
-        mockParams.syncFolder = { type: 'sendreceive' };
+        mockParams.syncFolder = { type: 'sendreceive', path: '/apps/test-app' };
         dockerServiceMock.dockerContainerInspect.resolves({ State: { Running: true } });
       });
 
@@ -479,7 +480,7 @@ describe('syncthingFolderStateMachine tests', () => {
     });
 
     it('leaves an already-running container alone when the folder is already syncing', async () => {
-      mockParams.syncFolder = { type: 'sendreceive' };
+      mockParams.syncFolder = { type: 'sendreceive', path: '/apps/test-app' };
       dockerServiceMock.dockerContainerInspect.resolves({
         State: { Running: true },
       });
@@ -491,7 +492,7 @@ describe('syncthingFolderStateMachine tests', () => {
 
     it('requests a start for a stopped syncFirst component whose folder is already sendreceive', async () => {
       appReconcilerMock.setControllerDesired.resetHistory();
-      mockParams.syncFolder = { type: 'sendreceive' };
+      mockParams.syncFolder = { type: 'sendreceive', path: '/apps/test-app' };
       dockerServiceMock.dockerContainerInspect.resolves({
         State: { Running: false },
       });
@@ -503,7 +504,7 @@ describe('syncthingFolderStateMachine tests', () => {
 
     it('does not request a start for a stopped activeStandby component (the election decides)', async () => {
       appReconcilerMock.setControllerDesired.resetHistory();
-      mockParams.syncFolder = { type: 'sendreceive' };
+      mockParams.syncFolder = { type: 'sendreceive', path: '/apps/test-app' };
       mockParams.requiresSyncBeforeStart = false;
       dockerServiceMock.dockerContainerInspect.resolves({
         State: { Running: false },
@@ -529,7 +530,7 @@ describe('syncthingFolderStateMachine tests', () => {
 
     it('should handle first run with existing receiveonly folder', async () => {
       mockParams.syncthingAppsFirstRun = true;
-      mockParams.syncFolder = { type: 'receiveonly' };
+      mockParams.syncFolder = { type: 'receiveonly', path: '/apps/test-app' };
       dockerServiceMock.dockerContainerInspect.resolves({
         State: { Running: false },
       });
@@ -1414,7 +1415,7 @@ describe('syncthingFolderStateMachine tests', () => {
     it('should skip processing on first encounter when not first run and syncFolder exists', async () => {
       mockParams.syncthingAppsFirstRun = false;
       // syncFolder exists (app existed before) but not in cache
-      mockParams.syncFolder = { id: 'test-app', type: 'receiveonly' };
+      mockParams.syncFolder = { id: 'test-app', type: 'receiveonly', path: '/apps/test-app' };
 
       const result = await stateMachine.manageFolderSyncState(mockParams);
 
@@ -2140,7 +2141,7 @@ describe('syncthingFolderStateMachine tests', () => {
         receiveOnlySyncthingAppsCache: new Map(),
         appLocation: sinon.stub().resolves([]),
         localSocketAddr: '10.0.0.1:16127',
-        syncthingFolder: { id: 'test-app', type: 'sendreceive' },
+        syncthingFolder: { id: 'test-app', type: 'sendreceive', path: '/apps/test-app' },
         installedAppName: 'test-app',
       };
       dockerServiceMock.dockerContainerInspect.resolves({ State: { Running: true } });

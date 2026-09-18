@@ -10,6 +10,7 @@ const deviceHelper = require('../deviceHelper');
 const { withHostMutationLock } = require('../utils/hostMutationLock');
 const appsRuntimeState = require('../appManagement/appsRuntimeState');
 const pendingTeardownStore = require('./pendingTeardownStore');
+const { getSpecBackend } = require('../utils/specLibs');
 const log = require('../../lib/log');
 
 const fluxDirPath = process.env.FLUXOS_PATH || path.join(process.env.HOME, 'zelflux');
@@ -111,16 +112,11 @@ async function createAppVolume(deployComp, res) {
       emitStatus(res, { status: 'Volume mounted' });
     });
 
-    emitStatus(res, { status: 'Creating appdata directory...' });
-    await serviceHelper.runCommand('mkdir', { params: ['-p', `${appsFolder + appId}/appdata`], runAsRoot: true });
-    emitStatus(res, { status: 'Appdata directory created' });
-
     emitStatus(res, { status: 'Making application data directories and files...' });
     const compDir = `${appsFolder}${appId}`;
     log.info(`Creating ${deployComp.mounts.length} mount source(s) for ${appId}`);
 
     for (const mount of deployComp.mounts) {
-      if (mount.Source === `${compDir}/appdata`) continue;
       const sourceName = mount.Source.replace(`${compDir}/`, '');
       if (mount.sourceType === 'file') {
         emitStatus(res, { status: `Creating file mount: ${sourceName}...` });
@@ -138,9 +134,7 @@ async function createAppVolume(deployComp, res) {
 
     emitStatus(res, { status: 'Adjusting permissions...' });
     await serviceHelper.runCommand('chmod', { params: ['777', compDir], runAsRoot: true });
-    await serviceHelper.runCommand('chmod', { params: ['777', `${compDir}/appdata`], runAsRoot: true });
     for (const mount of deployComp.mounts) {
-      if (mount.Source === `${compDir}/appdata`) continue;
       // eslint-disable-next-line no-await-in-loop
       await applyMountPerms(mount);
     }
@@ -212,9 +206,11 @@ async function applyMountPerms(mount) {
  * folder is not registered yet; syncthing loads the patterns when it adds the
  * folder), when the content is unchanged, and when sync is off. Reserved entries
  * come FIRST (syncthing is first-match-wins), so the owner's `sync.exclude` can
- * extend the set but can never un-exclude `/backup` or an injected content path.
- * Injected content is node-local — content delivery writes it on every node — and
- * must never replicate. Without sync it instead removes any lingering
+ * extend the set but can never un-exclude a platform entry or an injected
+ * content path. The platform's entries at the volume root are the spec
+ * library's list, and none of them is the app's data. Injected content is
+ * node-local — content delivery writes it on every node — and must never
+ * replicate. Without sync it instead removes any lingering
  * `.stignore`/`.stfolder` from the kept volume (idempotent), so dropping sync in
  * a spec update leaves no stale syncthing bookkeeping behind.
  *
@@ -232,9 +228,11 @@ async function writeStignore(deployComp) {
     await fs.rm(`${compDir}/.stfolder`, { recursive: true, force: true });
     return false;
   }
+  const { PLATFORM_VOLUME_ENTRIES } = await getSpecBackend();
+  const platform = PLATFORM_VOLUME_ENTRIES.map((name) => `/${name}`);
   const injected = deployComp.injectedSyncExcludes().map((source) => `/${path.relative(compDir, source)}`);
   const ownerExcludes = deployComp.sync.exclude || [];
-  const lines = [...new Set(['/backup', ...injected, ...ownerExcludes].filter(Boolean))];
+  const lines = [...new Set([...platform, ...injected, ...ownerExcludes].filter(Boolean))];
   const content = `${lines.join('\n')}\n`;
   const stignorePath = `${compDir}/.stignore`;
   const existing = await fs.readFile(stignorePath, 'utf8').catch(() => null);
