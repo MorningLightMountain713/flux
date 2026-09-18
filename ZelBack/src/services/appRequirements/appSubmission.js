@@ -186,7 +186,7 @@ async function resolveSubmission(appSpecification, {
     // uses the looser deserialize path, so this is the check that holds an
     // enterprise blob's contents to submission rules.
     assertVersionActivated(spec.version, daemonHeight);
-    spec.validateContents({ purpose: 'submission' });
+    spec.validateContents({ purpose: 'submission', height: daemonHeight });
   } else {
     spec = await validateSubmissionSpec(submissionBlob, {
       height: daemonHeight, encrypted: isEncrypted,
@@ -221,24 +221,6 @@ async function resolveSubmission(appSpecification, {
   // so the wrapper answers everything both gates ask. Unwrapping discarded the
   // type guarantee the wrapper exists to hold, and made every caller responsible
   // for knowing which half of the `||` applied.
-  // The legacy expire ceiling: a year's worth of blocks, whichever side of the
-  // PON fork this height sits. Submission-only, which is what this function is -
-  // every document already on chain is re-validated on every sync, and a rule
-  // applied there that refuses one forks the node off the network.
-  //
-  // flux-spec owns the rule and derives the post-fork ceiling from the pre-fork
-  // figure, because there is one policy - a year - and two block counts only
-  // because the rate changed. It refuses to judge on a missing or non-numeric
-  // input rather than skipping, so the version gate is the caller's: v6 is where
-  // expire appears, and v9 replaced it with ttl.
-  if (spec.version >= 6 && spec.version < 9) {
-    const { assertExpireWithinAllowance } = await getSpecBackend();
-    assertExpireWithinAllowance(spec.expire, {
-      height: daemonHeight,
-      maxBlocksAllowance: config.get('fluxapps.maxBlocksAllowance'),
-    });
-  }
-
   await entitlementsState.assertSpecEntitled(spec, spec.owner, daemonHeight, isEncrypted);
   await assertMatchesMarketplaceTemplate(spec);
 

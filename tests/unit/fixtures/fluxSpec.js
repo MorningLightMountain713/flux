@@ -134,10 +134,12 @@ async function v9Spec(overrides = {}, { encrypted = false } = {}) {
   return flux.FluxAppSpecV9.fromSubmission({ ...V9_SUBMISSION, ...overrides }, { encrypted });
 }
 
-/** A real FluxAppSpecV8. */
-async function v8Spec(overrides = {}) {
+/** A real FluxAppSpecV8. `encrypted` as for v9Spec: a registry credential is
+ * refused on a cleartext registration, so a test whose subject is one says the
+ * spec would be sealed. */
+async function v8Spec(overrides = {}, { encrypted = false } = {}) {
   const flux = await loadSpecLibrary();
-  return flux.FluxAppSpecV8.fromSubmission({ ...V8_SUBMISSION, ...overrides });
+  return flux.FluxAppSpecV8.fromSubmission({ ...V8_SUBMISSION, ...overrides }, { encrypted });
 }
 
 /** A real FluxAppSpecV8 off the chain door rather than the submission door.

@@ -696,20 +696,20 @@ describe('registryManager tests', () => {
       compose: [
         {
           name: 'palworld', description: 'game', repotag: 'private/palworld:1',
-          ports: [30_001], domains: ['pal.example.invalid'],
+          ports: [31_001], domains: ['pal.example.invalid'],
           environmentParameters: ['ADMIN_PASSWORD=hunter2'], commands: ['--token', 'abc'],
           containerPorts: [8211], containerData: 'g:/palworld/Pal/Saved',
           cpu: 4, ram: 16_000, hdd: 50, repoauth: '',
         },
         {
           name: 'sidecar', description: 'sidecar', repotag: 'private/sidecar:1',
-          ports: [30_002], domains: [''], environmentParameters: [], commands: [],
+          ports: [31_002], domains: [''], environmentParameters: [], commands: [],
           containerPorts: [9000], containerData: 'r:/data',
           cpu: 1, ram: 2000, hdd: 5, repoauth: '',
         },
         {
           name: 'plain', description: 'plain', repotag: 'private/plain:1',
-          ports: [30_003], domains: [''], environmentParameters: [], commands: [],
+          ports: [31_003], domains: [''], environmentParameters: [], commands: [],
           containerPorts: [9001], containerData: '/dogs/data',
           cpu: 2, ram: 1000, hdd: 5, repoauth: '',
         },
@@ -830,7 +830,7 @@ describe('registryManager tests', () => {
       expect(answered(res).status, JSON.stringify(answered(res))).to.equal('success');
       const serialised = JSON.stringify(answered(res));
 
-      ['ADMIN_PASSWORD', 'hunter2', 'private/palworld', 'pal.example.invalid', '30001', '--token']
+      ['ADMIN_PASSWORD', 'hunter2', 'private/palworld', 'pal.example.invalid', '31001', '--token']
         .forEach((withheld) => expect(serialised, withheld).to.not.contain(withheld));
       // and no key by which one could be reintroduced
       ['repoauth', 'environmentParameters', 'secrets', 'commands', 'repotag', 'domains', 'ports', 'containerData', 'compose']

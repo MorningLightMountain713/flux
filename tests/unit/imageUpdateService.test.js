@@ -557,7 +557,7 @@ describe('imageUpdateService tests', () => {
         compose: [legacyComponent({
           name: 'web', repotag: 'private/image:v1', repoauth: 'encrypted_auth_blob',
         })],
-      }));
+      }, { encrypted: true }));
       const [, comp] = deployment.componentEntries()[0];
       expect(comp.imageAuth).to.equal('encrypted_auth_blob');
 

@@ -125,9 +125,6 @@ describe('appSubmission tests', () => {
     stubs.specLibs.getSpecBackend.resolves({
       deserializeSpec: stubs.parseSpec,
       EncryptedSpecV8: flux.EncryptedSpecV8,
-      // Real, for the same reason as the class above: the expire ceiling is the
-      // library's rule, and a stand-in here would be a second statement of it.
-      assertExpireWithinAllowance: flux.assertExpireWithinAllowance,
     });
   });
 
@@ -159,66 +156,22 @@ describe('appSubmission tests', () => {
       sinon.assert.calledOnce(stubs.entitlementsState.assertSpecEntitled);
     });
 
-    // The ceiling is a year's worth of blocks, and flux-spec derives the
-    // post-fork figure from the pre-fork one because the policy is a year and
-    // only the block rate changed. The REAL implementation is stubbed in, not a
-    // stand-in: a hand-written one would be a second statement of the rule and
-    // would keep passing after the library's changed.
-    it('refuses a legacy submission whose expire buys more than the ceiling allows', async () => {
+    // The rules a legacy version gates by height - the expire ceiling and
+    // floor, the instance floor, the host port range - are the class's, and
+    // the class judges them at the height it is given. This node's part is to
+    // give it the daemon height; the rules themselves are pinned in flux-spec.
+    it('judges a cleartext legacy submission at the daemon height', async () => {
       appSubmission = load();
-      const spec = await v8Spec({ expire: 1_056_001 });
-      const submission = { ...V8_SUBMISSION, expire: 1_056_001 };
-      stubs.transportHelper.openTransportEnvelope.resolves(submission);
+      const spec = await v8Spec();
+      stubs.transportHelper.openTransportEnvelope.resolves(V8_SUBMISSION);
       stubs.parseSpec.resolves({ isEncrypted: false });
       stubs.specLibs.validateSubmissionSpec.resolves(spec);
 
-      let refused = null;
-      await appSubmission.resolveSubmission(submission, {
-        timestamp: 1, type: 'fluxappregister', daemonHeight: 2_500_000,
-      }).catch((err) => { refused = err; });
-
-      expect(refused, 'the submission was accepted').to.not.equal(null);
-
-      sinon.assert.notCalled(stubs.entitlementsState.assertSpecEntitled);
-    });
-
-    it('accepts a legacy submission at exactly the ceiling', async () => {
-      appSubmission = load();
-      const spec = await v8Spec({ expire: 1_056_000 });
-      const submission = { ...V8_SUBMISSION, expire: 1_056_000 };
-      stubs.transportHelper.openTransportEnvelope.resolves(submission);
-      stubs.parseSpec.resolves({ isEncrypted: false });
-      stubs.specLibs.validateSubmissionSpec.resolves(spec);
-
-      await appSubmission.resolveSubmission(submission, {
+      await appSubmission.resolveSubmission(V8_SUBMISSION, {
         timestamp: 1, type: 'fluxappregister', daemonHeight: 2_500_000,
       });
 
-      sinon.assert.calledOnce(stubs.entitlementsState.assertSpecEntitled);
-    });
-
-    // v9 carries ttl, not expire, and the library refuses to judge a missing
-    // input rather than skipping - so the version gate is what keeps a v9
-    // submission out of the rule instead of it throwing on an absent field.
-    it('does not hold a v9 submission to the legacy expire ceiling', async () => {
-      appSubmission = load();
-      const spec = v9Spec();
-      const submission = { version: 9, name: 'myapp', owner: 'owner1' };
-      stubs.transportHelper.openTransportEnvelope.resolves(submission);
-      stubs.parseSpec.resolves({ isEncrypted: false });
-      stubs.specLibs.validateSubmissionSpec.resolves(spec);
-      const assertExpire = sinon.stub().throws(new Error('must not be consulted for v9'));
-      stubs.specLibs.getSpecBackend.resolves({
-        deserializeSpec: stubs.parseSpec,
-        EncryptedSpecV8: flux.EncryptedSpecV8,
-        assertExpireWithinAllowance: assertExpire,
-      });
-
-      await appSubmission.resolveSubmission(submission, {
-        contentHash: spec.contentHash(), timestamp: 1, type: 'fluxappregister', daemonHeight: 2_500_000,
-      });
-
-      sinon.assert.notCalled(assertExpire);
+      sinon.assert.calledWith(stubs.specLibs.validateSubmissionSpec, V8_SUBMISSION, sinon.match({ height: 2_500_000 }));
     });
 
     it('backend-encrypts a transport-encrypted v9 submission and never broadcasts cleartext', async () => {
@@ -334,9 +287,10 @@ describe('appSubmission tests', () => {
         .to.be.a('string').and.not.equal('');
       expect(result.broadcastBlob.compose, 'cleartext components never reach the wire')
         .to.deep.equal([]);
-      // Submission rules applied through the wrapper, and the height gate
-      // separately — the node owns enforcement heights, flux-spec does not.
-      sinon.assert.calledWith(validateContents, { purpose: 'submission' });
+      // Submission rules applied through the wrapper at the daemon height, and
+      // the activation gate separately: the node owns activation heights, the
+      // class the rules it gates by height.
+      sinon.assert.calledWith(validateContents, { purpose: 'submission', height: 100 });
       sinon.assert.calledWith(stubs.specLibs.assertVersionActivated, 8, 100);
       // A decrypted spec has no wire form. `result.spec` is the WRAPPER -
       // resolveSubmission returns it as a plain property - not an inner spec

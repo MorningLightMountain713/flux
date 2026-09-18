@@ -170,6 +170,52 @@ describe('specLibs — how a spec validation failure reaches the caller', () => 
     }
   });
 
+  // The height reaches the class. A legacy version gates some of its rules by
+  // height and judges an unstated height as the current era; this node's live
+  // path has to hand the daemon height over, or a registration is judged by
+  // rules the chain has not reached yet.
+  describe('the height a legacy submission is judged at', () => {
+    const singleInstanceV8 = () => ({
+      version: 8,
+      name: 'heighttest',
+      description: 'x',
+      owner: '16dNCFf7nR3nx5iwn2RQMBw6KcJXkE3JC1',
+      instances: 1,
+      contacts: [],
+      geolocation: [],
+      expire: 88_000,
+      nodes: [],
+      staticip: false,
+      compose: [{
+        name: 'web',
+        description: 'x',
+        repotag: 'nginx:latest',
+        ports: [31_000],
+        domains: [''],
+        environmentParameters: [],
+        commands: [],
+        containerPorts: [80],
+        containerData: '/data',
+        cpu: 0.5,
+        ram: 300,
+        hdd: 5,
+        repoauth: '',
+      }],
+    });
+    const verdict = (opts) => validateSubmissionSpec(singleInstanceV8(), opts).then(() => null, (err) => err);
+
+    it('refuses a single-instance v8 below the height that allowed one', async () => {
+      const err = await verdict({ height: 2_176_518 });
+      expect(err).to.be.instanceOf(ValidationError);
+      expect(err.errors.some((e) => e.code === 'OUT_OF_RANGE' && String(e.field).includes('instances')), JSON.stringify(err.errors)).to.equal(true);
+    });
+
+    it('accepts it from that height, and with no height at all', async () => {
+      expect(await verdict({ height: 2_176_519 })).to.equal(null);
+      expect(await verdict()).to.equal(null);
+    });
+  });
+
   // An unsupported version is not a schema failure, so it stays a plain Error —
   // the type distinction is the point of surfacing ValidationError at all.
   it('leaves a version rejection as a plain Error', async () => {
