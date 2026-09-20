@@ -73,16 +73,18 @@ describe('imageArchitectureValidator.verifyImageRegistryAndArchitectures', () =>
   /**
    * A real FluxAppSpecV7 — the only version the imageAuth short-circuit applies
    * to, and one the shared fixture has no factory for. Derived from the shared
-   * v8 submission blob, which v7 accepts key-for-key (same knownKeys), rather
-   * than invented here.
+   * v8 submission blob, which v7 accepts key-for-key but for `enterprise`,
+   * v8's field, rather than invented here.
    */
   function v7Spec(compose, overrides = {}) {
-    return flux.FluxAppSpecBase.getVersionClass(7).fromSubmission({
+    const blob = {
       ...V8_SUBMISSION,
       version: 7,
       compose,
       ...overrides,
-    });
+    };
+    delete blob.enterprise;
+    return flux.FluxAppSpecBase.getVersionClass(7).fromSubmission(blob);
   }
 
   /** A legacy compose entry off the shared blob. */

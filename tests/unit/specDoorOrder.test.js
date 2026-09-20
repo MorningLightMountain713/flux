@@ -53,6 +53,7 @@ function validV8() {
     expire: 88_000,
     nodes: [],
     staticip: false,
+    enterprise: '',
     compose: [{
       name: 'web',
       description: 'x',

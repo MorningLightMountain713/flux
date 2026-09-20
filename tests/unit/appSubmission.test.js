@@ -213,7 +213,7 @@ describe('appSubmission tests', () => {
       // therefore accepted, signed onto the chain, and then ignored by every node
       // reading it back. Held to the sentinels here, at the submission door only.
       appSubmission = load();
-      const cleartext = flux.FluxAppSpecV8.fromSubmission(V8_SUBMISSION);
+      const cleartext = await v8Spec({}, { encrypted: true });
       const wireSpec = await flux.EncryptedSpecV8.fromSpec(
         cleartext, await flux.EncryptedSpecV8.createProviderFor(cleartext.name, cleartext.owner),
       );
@@ -239,7 +239,7 @@ describe('appSubmission tests', () => {
       // satisfy the test above just as well, and would take the whole version
       // down with it.
       appSubmission = load();
-      const cleartext = flux.FluxAppSpecV8.fromSubmission(V8_SUBMISSION);
+      const cleartext = await v8Spec({}, { encrypted: true });
       const wireSpec = await flux.EncryptedSpecV8.fromSpec(
         cleartext, await flux.EncryptedSpecV8.createProviderFor(cleartext.name, cleartext.owner),
       );
@@ -260,7 +260,7 @@ describe('appSubmission tests', () => {
       // and `version`, and appSubmission grew `spec.spec || spec` to cope with a
       // wrapper shaped like that — a shape the real DecryptedCanonicalSpec has
       // never had.
-      const cleartext = flux.FluxAppSpecV8.fromSubmission(V8_SUBMISSION);
+      const cleartext = await v8Spec({}, { encrypted: true });
       const wireSpec = await flux.EncryptedSpecV8.fromSpec(
         cleartext, await flux.EncryptedSpecV8.createProviderFor(cleartext.name, cleartext.owner),
       );
@@ -451,8 +451,9 @@ describe('appSubmission tests', () => {
       });
       appSubmission = load();
       const updateSpec = await v8Spec();
-      const previousSpec = flux.FluxAppSpecBase.getVersionClass(7)
-        .fromSubmission({ ...V8_SUBMISSION, version: 7 });
+      const v7Blob = { ...V8_SUBMISSION, version: 7 };
+      delete v7Blob.enterprise; // v8's field
+      const previousSpec = flux.FluxAppSpecBase.getVersionClass(7).fromSubmission(v7Blob);
       stubs.transportHelper.openTransportEnvelope.resolves({ version: 8 });
       stubs.parseSpec.resolves({ isEncrypted: false });
       stubs.specLibs.validateSubmissionSpec.resolves(updateSpec);
