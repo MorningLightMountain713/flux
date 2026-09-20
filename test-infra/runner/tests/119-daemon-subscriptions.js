@@ -1,4 +1,4 @@
-// weight: heavy
+// fleet: 2
 import { describe, it, before, after, afterEach } from 'mocha';
 import { expect } from 'chai';
 import { createTestEnv, deterministicNodes } from '../framework/test-env.js';

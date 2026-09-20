@@ -1,3 +1,4 @@
+// fleet: 6
 import { createHash, randomBytes } from 'node:crypto';
 import { describe, it, before, after } from 'mocha';
 import { expect } from 'chai';

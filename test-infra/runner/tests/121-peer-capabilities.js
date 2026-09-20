@@ -1,4 +1,4 @@
-// weight: light
+// fleet: 6
 import { describe, it, before, after } from 'mocha';
 import { expect } from 'chai';
 import { createRequire } from 'node:module';

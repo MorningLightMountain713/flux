@@ -1,4 +1,4 @@
-// weight: heavy
+// fleet: 1
 import {
   describe, it, before, after,
 } from 'mocha';

@@ -1,4 +1,4 @@
-// weight: light
+// fleet: 1
 import { describe, it, before, after } from 'mocha';
 import { expect } from 'chai';
 import { authenticate, signBtcMessage } from '../auth.js';

@@ -1,3 +1,4 @@
+// fleet: 3
 // Policy, suite 8: existing apps when a grant changes.
 //
 // An app registered plain, confirmed on chain. An update adding mesh is

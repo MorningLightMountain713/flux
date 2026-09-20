@@ -1,3 +1,4 @@
+// fleet: 3
 // Policy, suite 4: two definitions for one group in one block.
 //
 // The later position in the block wins on every node — the rule of

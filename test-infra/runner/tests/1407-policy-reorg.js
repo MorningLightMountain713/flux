@@ -1,3 +1,4 @@
+// fleet: 3
 // Policy, suite 7: the grant lives on the chain, not in the node.
 //
 // A reorg that replaces the grant's block takes the grant with it on every

@@ -1,3 +1,4 @@
+// fleet: 3
 import { describe, it, before, after } from 'mocha';
 import { expect } from 'chai';
 import { createTestEnv } from '../framework/test-env.js';
