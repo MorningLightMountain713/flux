@@ -16,8 +16,8 @@ import { buildSeedableSyncthingApp } from '../framework/seed-helper.js';
 import { electMaster, resetFdm } from '../framework/fdm-control.js';
 import { setSynced, resetSyncState } from '../framework/syncthing-control.js';
 import { getSubnetConfig } from '../framework/subnet-config.js';
-import { waitFor, waitForReconcileActuated, waitForReconcilerDesiredChanged } from '../framework/wait.js';
-import { bootAndPeer, installOnNodes, seedSyncScopedData } from '../framework/reconciler-suite.js';
+import { waitFor, waitForReconcilerDesiredChanged } from '../framework/wait.js';
+import { bootAndPeer, placeGAppInOrder } from '../framework/reconciler-suite.js';
 import { authenticate } from '../auth.js';
 import { appOwnerKey } from '../framework/keys.js';
 import { dumpLogsOnFailure } from '../framework/log-on-failure.js';
@@ -111,16 +111,10 @@ describe('a restore does not reach the other instances data', function () {
     await pushImage(appName, 'v1');
     const app = await buildSeedableSyncthingApp({ name: appName, syncMode: 'activeStandby' });
     // Node 0 is the elected primary from the start: FDM names it before the app
-    // is installed, so the other holder never starts it first.
+    // is installed, so the other holder never starts it first. Placed one at a
+    // time with node 0 first, so it is also the election's index 0.
     await electMaster(appName, env.clients[0].ip);
-    const installAfters = [0, 1].map((i) => env.clients[i].getLastEventId());
-    await installOnNodes(env, app, [0, 1]);
-    // real data on disk, and only after the sync layer's first-run reset has
-    // cleared appdata - otherwise the phantom-index guard holds the app down
-    await Promise.all([0, 1].map(async (i, k) => {
-      await waitForReconcileActuated(env.clients[i], identifier, 'dataCleared', 60000, { afterId: installAfters[k] });
-      await seedSyncScopedData(env, appName, i);
-    }));
+    await placeGAppInOrder(env, app, { placementOrder: [0, 1], identifier, coldStart: false });
     const folder = await appSyncthingFolderId(env.clients[0].container, appName, appName);
     await Promise.all([0, 1].map((i) => setSynced({ ip: subnet.nodeIp(i + 1), folder })));
 
@@ -234,14 +228,11 @@ describe('a restore does not reach the other instances data', function () {
       const app = await buildSeedableSyncthingApp({ name: ownName, syncMode: 'activeStandby' });
       // node 0 holds it, so node 1 is a standby the election has stopped - which
       // is the state a restore must not undo. FDM names node 0 before the app is
-      // installed, so node 1 never starts it first.
+      // installed, and node 0 is placed first, so node 1 never starts it first.
       await electMaster(ownName, env.clients[0].ip);
-      const afters = [0, 1].map((i) => env.clients[i].getLastEventId());
-      await installOnNodes(env, app, [0, 1]);
-      await Promise.all([0, 1].map(async (i, k) => {
-        await waitForReconcileActuated(env.clients[i], ownIdentifier, 'dataCleared', 60000, { afterId: afters[k] });
-        await seedSyncScopedData(env, ownName, i);
-      }));
+      await placeGAppInOrder(env, app, {
+        placementOrder: [0, 1], identifier: ownIdentifier, coldStart: false,
+      });
       const ownFolder = await appSyncthingFolderId(env.clients[0].container, ownName, ownName);
       await Promise.all([0, 1].map((i) => setSynced({ ip: subnet.nodeIp(i + 1), folder: ownFolder })));
       await waitForReconcilerDesiredChanged(env.clients[0], ownIdentifier, 'running', 90000);
