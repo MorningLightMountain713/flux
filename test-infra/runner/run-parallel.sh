@@ -11,20 +11,24 @@
 # each suite even builds its OWN registry/stubs (test-env.js), so suite 33 stopping
 # "its" registry never touches another suite's.
 #
-# The ONLY shared resource is the host (CPU/RAM/dockerd). Rather than a fixed N-way
-# split (which idles slots when light suites finish early and risks OOM when heavy
-# 10-node fleets overlap), this launches one single-suite run-all.sh per suite and
-# admits a new one only when BOTH hold:
-#   * fewer than MAXN suites are in flight, AND
-#   * at least MIN_FREE_MB of memory is free.
-# So it self-throttles to 2 when fleets are heavy and 3 when light, never OOMs
-# (an OOM-killed node is indistinguishable from a real failure — see the suite-37
+# The ONLY shared resource is the host (CPU/RAM/dockerd), and what loads it is
+# NODES in flight, not suites: six 10-node fleets is what a 16-core box carries and
+# six 16-node ones is not. This launches one single-suite run-all.sh per suite and
+# admits a new one only when ALL hold:
+#   * the nodes in flight plus this suite's declared fleet stay within NODE_BUDGET
+#     (an empty box admits any one suite, however big),
+#   * fewer than MAXN suites are in flight,
+#   * at least MIN_FREE_MB of memory is free, and 1-minute load is under MAX_LOAD.
+# Every suite declares its peak fleet on a line of its own (`// fleet: N`, read by
+# framework/fleet-size.js); check-fleet-declarations.js runs first and refuses the
+# gate for a suite that declares nothing or less than it boots. Never OOMs (an
+# OOM-killed node is indistinguishable from a real failure — see the suite-37
 # investigation), and auto-refills as suites finish.
 #
 # Usage (from anywhere):
-#   test-infra/runner/run-parallel.sh                 # all suites, heavy-first
-#   SUITES='301 403 309' test-infra/runner/run-parallel.sh  # a chosen subset
-#   MAXN=6 test-infra/runner/run-parallel.sh                # 6 suites in flight
+#   test-infra/runner/run-parallel.sh                 # all suites, biggest fleets first
+#   SUITES='301 403 309' test-infra/runner/run-parallel.sh  # a chosen subset, in that order
+#   NODE_BUDGET=40 test-infra/runner/run-parallel.sh        # at most 40 nodes in flight
 #   MAXN=2 MIN_FREE_MB=20000 test-infra/runner/run-parallel.sh
 #
 # Per-suite TAP + run-all output land under $E2E_LOG_DIR (default /tmp/e2e-logs/<n>/);
@@ -154,7 +158,12 @@ if [ "$ino_now" -lt "$INOTIFY_MIN" ]; then
   echo "# inotify instance pool raised to max_user_instances=$ino_now for the gate"
 fi
 
-MAXN="${MAXN:-3}"
+MAXN="${MAXN:-6}"
+# Nodes in flight is what loads the box. Six 10-node fleets held load under the
+# cap with memory far from the floor on a 16-core box; that is the budget.
+NODE_BUDGET="${NODE_BUDGET:-60}"
+require_int NODE_BUDGET "$NODE_BUDGET"
+require_int MAXN "$MAXN"
 MIN_FREE_MB="${MIN_FREE_MB:-15000}"
 # Don't admit a new suite while the box is already CPU-saturated. Memory never
 # binds on a big host (lesson from the first full gate: 3 fleets used ~3GB of
@@ -164,27 +173,26 @@ MIN_FREE_MB="${MIN_FREE_MB:-15000}"
 # itself (suites boot fleets mid-run too, which no admit gate can see).
 MAX_LOAD="${MAX_LOAD:-$(( $(nproc) * 3 / 4 ))}"
 
-# Default order: heavy fleet suites first so the long pole starts ASAP; everything else
-# after. Weight is DECLARED by each suite (`// weight: heavy|light` on its own line), not
-# inferred from the number - the number groups suites by what they test, which says
-# nothing about how much fleet they build. An undeclared suite counts as heavy: running a
-# light one early costs nothing but ordering, while a heavy one discovered last is the
-# gate's long pole paid at the end. Derived from tests/ so new suites are picked up;
-# override with SUITES='..' (space-separated numeric prefixes).
+# The declarations the admission reads have to be complete and honest, or a suite
+# booting 16 nodes is admitted as one booting 10.
+if ! node check-fleet-declarations.js > "$LOGROOT/fleet-check.log" 2>&1; then
+  abort 92 "###ABORT fleet declarations refused - every suite declares '// fleet: N' at least as large as it boots:" "$(cat "$LOGROOT/fleet-check.log")"
+fi
+
+# The fleet each prefix puts on the box at once: the largest declaration among the
+# files sharing that prefix. The fleet is DECLARED by each suite, not inferred from
+# the number - the number groups suites by what they test, which says nothing about
+# how much fleet they build.
+declare -A FLEET
+for n in $(ls tests/[0-9]*-*.js 2>/dev/null | sed -E 's#.*/([0-9]+)-.*#\1#' | sort -un); do
+  FLEET[$n]=$(grep -h '^// fleet: [0-9]*$' tests/${n}-*.js 2>/dev/null | awk '{print $3}' | sort -n | tail -1)
+done
+
+# Default order: the biggest fleets first so the long pole starts ASAP, then by
+# number. Derived from tests/ so new suites are picked up; SUITES='..' (space-
+# separated numeric prefixes) runs exactly that list in the order given.
 if [ -z "${SUITES:-}" ]; then
-  all=$(ls tests/*.js 2>/dev/null | sed -E 's#.*/([0-9]+)-.*#\1#' | sort -u)
-  heavy=""; light=""
-  for n in $all; do
-    # a prefix is light only when EVERY file sharing it declares light
-    n_files=$(ls tests/${n}-*.js 2>/dev/null | wc -l)
-    n_light=$(grep -lx '// weight: light' tests/${n}-*.js 2>/dev/null | wc -l)
-    if [ "$n_files" -gt 0 ] && [ "$n_files" -eq "$n_light" ]; then
-      light="$light $n"
-    else
-      heavy="$heavy $n"
-    fi
-  done
-  SUITES="$heavy $light"
+  SUITES=$(for n in "${!FLEET[@]}"; do echo "${FLEET[$n]:-0} $n"; done | sort -k1,1nr -k2,2n | awk '{print $2}' | tr '\n' ' ')
 fi
 
 free_mb(){ free -m | awk '/^Mem:/{print $7}'; }
@@ -385,13 +393,16 @@ stop_captures(){
 trap stop_captures EXIT
 
 declare -A PID2SUITE
+declare -A PID2FLEET
+nodes_in_flight(){ local t=0 p; for p in "${!PID2FLEET[@]}"; do t=$((t + PID2FLEET[$p])); done; echo "$t"; }
 
 launch(){
   local s=$1
   SUITE_GLOB="tests/${s}-*.js" E2E_RUN_LABEL="par-${s}-$$" E2E_LOG_DIR="$LOGROOT/$s" \
     bash "$RUNNER" > "$LOGROOT/$s.out" 2>&1 &
   PID2SUITE[$!]=$s
-  log "LAUNCH  suite $s pid=$! inflight=${#PID2SUITE[@]} avail=$(free_mb)MB"
+  PID2FLEET[$!]=${FLEET[$s]:-0}
+  log "LAUNCH  suite $s pid=$! fleet=${FLEET[$s]:-0} inflight=${#PID2SUITE[@]} nodes=$(nodes_in_flight)/$NODE_BUDGET avail=$(free_mb)MB"
 }
 
 reap(){
@@ -403,15 +414,19 @@ reap(){
       res=$(grep -aoE '###RUN-DONE.*' "$LOGROOT/$s.out" 2>/dev/null | tail -1)
       log "DONE    suite $s rc=$rc :: ${res:-<no RUN-DONE marker>}"
       unset 'PID2SUITE[$pid]'
+      unset 'PID2FLEET[$pid]'
     fi
   done
 }
 
-log "START   MAXN=$MAXN MIN_FREE_MB=$MIN_FREE_MB MAX_LOAD=$MAX_LOAD suites=$(echo $SUITES | wc -w) head=$(git -C "$PWD" rev-parse --short HEAD 2>/dev/null)"
+log "START   MAXN=$MAXN NODE_BUDGET=$NODE_BUDGET MIN_FREE_MB=$MIN_FREE_MB MAX_LOAD=$MAX_LOAD suites=$(echo $SUITES | wc -w) head=$(git -C "$PWD" rev-parse --short HEAD 2>/dev/null)"
 for s in $SUITES; do
   while :; do
     reap
-    if [ "${#PID2SUITE[@]}" -lt "$MAXN" ] && [ "$(free_mb)" -gt "$MIN_FREE_MB" ] && [ "$(load_1m)" -lt "$MAX_LOAD" ]; then break; fi
+    inflight_nodes=$(nodes_in_flight)
+    if [ "${#PID2SUITE[@]}" -lt "$MAXN" ] \
+       && { [ "$inflight_nodes" -eq 0 ] || [ $((inflight_nodes + ${FLEET[$s]:-0})) -le "$NODE_BUDGET" ]; } \
+       && [ "$(free_mb)" -gt "$MIN_FREE_MB" ] && [ "$(load_1m)" -lt "$MAX_LOAD" ]; then break; fi
     sleep 3
   done
   launch "$s"

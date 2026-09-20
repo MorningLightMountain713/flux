@@ -1,4 +1,4 @@
-// weight: heavy
+// fleet: 5
 import { readFileSync } from 'node:fs';
 import { describe, it, before, after } from 'mocha';
 import { expect } from 'chai';

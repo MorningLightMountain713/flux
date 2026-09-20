@@ -1,4 +1,4 @@
-// weight: heavy
+// fleet: 10
 import { describe, it, before, after } from 'mocha';
 import { expect } from 'chai';
 import { io } from 'socket.io-client';

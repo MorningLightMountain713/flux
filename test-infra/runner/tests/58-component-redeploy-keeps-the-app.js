@@ -1,4 +1,4 @@
-// weight: heavy
+// fleet: 10
 /*
  * /apps/redeploycomponent, against a real composed app.
  *

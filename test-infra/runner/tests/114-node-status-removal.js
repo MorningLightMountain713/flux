@@ -1,4 +1,4 @@
-// weight: light
+// fleet: 10
 import { describe, it, before, after } from 'mocha';
 import { createTestEnv } from '../framework/test-env.js';
 import { pushImage } from '../framework/registry-helper.js';

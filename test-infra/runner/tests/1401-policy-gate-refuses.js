@@ -1,3 +1,4 @@
+// fleet: 3
 // Policy, suite 1: the entitlement gate on a chain that grants nothing.
 //
 // A fresh chain carries no policy message, so every gated feature is denied

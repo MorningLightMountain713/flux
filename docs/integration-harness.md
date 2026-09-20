@@ -112,18 +112,26 @@ Knobs (env vars):
 ### All suites, parallel — `run-parallel.sh`
 
 ```bash
-test-infra/runner/run-parallel.sh                    # all suites, heavy-first
-SUITES='28 37 35' test-infra/runner/run-parallel.sh  # subset by number
+test-infra/runner/run-parallel.sh                    # all suites, biggest fleets first
+SUITES='28 37 35' test-infra/runner/run-parallel.sh  # subset by number, in that order
+NODE_BUDGET=40 test-infra/runner/run-parallel.sh     # at most 40 nodes in flight
 MAXN=2 MIN_FREE_MB=20000 test-infra/runner/run-parallel.sh
 ```
 
-Launches one single-suite `run-all.sh` per suite, admitting a new one only
-while fewer than `MAXN` (default 3) are in flight AND at least `MIN_FREE_MB`
-RAM is free AND the load average is under `MAX_LOAD`. Self-throttles and
-never OOMs (an OOM-killed node is indistinguishable from a real failure).
-Expect ~40 minutes for the full set at `MAXN=3` on a large host. Exit
-status is non-zero if any suite failed; the aggregate tally is the
-`RESULT suites_pass=... FAILED:[...]` line in `driver.log`.
+Launches one single-suite `run-all.sh` per suite. What loads the box is nodes
+in flight, not suites, so every suite declares the most nodes it has running at
+once on a line of its own, `// fleet: N` (the `nodes` plus `deferredNodes` of
+its largest env; envs are torn down between, so the peak, not the sum). A new
+suite is admitted only while the nodes in flight plus its fleet stay within
+`NODE_BUDGET` (default 60, six 10-node fleets; an empty box admits any one
+suite) AND fewer than `MAXN` (default 6) are in flight AND at least
+`MIN_FREE_MB` RAM is free AND the load average is under `MAX_LOAD`.
+`check-fleet-declarations.js` runs first and refuses the gate for a suite that
+declares nothing or less than its own `createTestEnv` calls boot
+(`framework/fleet-size.js` is the derivation; `npm run test:unit` covers it).
+Self-throttles and never OOMs (an OOM-killed node is indistinguishable from a
+real failure). Exit status is non-zero if any suite failed; the aggregate tally
+is the `RESULT suites_pass=... FAILED:[...]` line in `driver.log`.
 
 Logs under `$E2E_LOG_DIR`:
 
@@ -196,7 +204,7 @@ to `flux-test-*` names instead.)
 | suite instant-fails ~1s after launch | stale `flux-test-*` networks / locks from an aborted run | deep-clean above |
 | `waitForEvent(...)` times out, no error anywhere | the event name is not subscribed in `runner/framework/node-client.js` — EventSource silently drops unsubscribed named events | add the `addEventListener` entry for every new `fluxEventBus.publish` name |
 | hook timeout at ~120s despite `SUITE_TIMEOUT_MS=300000` | mocha hook timeouts are per-suite (`this.timeout(...)` in before/after), not the runner knob | raise the suite's hook timeout |
-| fleets boot but tests time out under parallelism | host CPU-saturated; boots paced too slow | lower `MAXN`, check `cap-mem.log` load column |
+| fleets boot but tests time out under parallelism | host CPU-saturated; boots paced too slow | lower `NODE_BUDGET`, check `cap-mem.log` load column |
 | container build fails with "parent snapshot does not exist" | transient containerd image-store glitch | `docker image rm -f` the tag, `docker builder prune -af`, rebuild `--no-cache` |
 | `cap-events.log` timestamps look wrong | `docker events` prints epoch seconds, not ISO | convert; also remember harness logs are UTC |
 | a wait on a log line right after an SSE event flakes | event delivery (<1ms) races docker's log pipeline (tens of ms) | await the event, then poll for the log line — never assert it instantly |

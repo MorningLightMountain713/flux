@@ -1,4 +1,4 @@
-// weight: medium
+// fleet: 10
 //
 // v9 pricing, end to end: real messages, real blocks, the real PricingEngine,
 // the real registry row. v9 is the unified regime — the on-chain price equals

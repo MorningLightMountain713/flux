@@ -1,3 +1,4 @@
+// fleet: 3
 // Policy, suite 2: a grant arrives on chain and takes effect.
 //
 // A group-0 definition in an OP_RETURN from the message authority, in a block

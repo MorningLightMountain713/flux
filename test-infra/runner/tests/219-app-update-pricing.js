@@ -1,4 +1,4 @@
-// weight: light
+// fleet: 10
 //
 // The seam no unit test reaches: a confirmed update travelling the whole
 // promotion path — real message, real chain confirmation, real pricing, real

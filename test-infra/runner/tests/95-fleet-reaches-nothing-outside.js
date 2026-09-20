@@ -1,3 +1,4 @@
+// fleet: 1
 // The fleet has no route off itself, and this is what says so out loud.
 //
 // Closing the network is the easy half. On its own it turns a hardcoded address

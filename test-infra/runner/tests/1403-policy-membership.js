@@ -1,3 +1,4 @@
+// fleet: 3
 // Policy, suite 3: membership.
 //
 // A group other than the default carries the bit; a membership message puts

@@ -24,8 +24,9 @@
 #   9xx replicas and colocation
 #   10xx playground
 #   11xx app mesh overlay
-# The number says WHAT a suite covers and nothing about how long it takes - each suite
-# declares that itself with `// weight: heavy|light`, which is what orders a parallel run.
+# The number says WHAT a suite covers and nothing about how much fleet it boots - each
+# suite declares that itself with `// fleet: N`, which is what orders and admits a
+# parallel run (run-parallel.sh, framework/fleet-size.js).
 
 set -uo pipefail
 

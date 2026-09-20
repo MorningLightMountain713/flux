@@ -1,4 +1,4 @@
-// weight: heavy
+// fleet: 10
 import { expect } from 'chai';
 import { describe, it, before, after } from 'mocha';
 import { createTestEnv } from '../framework/test-env.js';

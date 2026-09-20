@@ -1,4 +1,4 @@
-// weight: heavy
+// fleet: 7
 import { describe, it, before, after } from 'mocha';
 import { expect } from 'chai';
 import { x25519 } from '@noble/curves/ed25519.js';

@@ -1,4 +1,4 @@
-// weight: medium
+// fleet: 3
 /*
  * /applogs, against a container that is genuinely writing logs.
  *

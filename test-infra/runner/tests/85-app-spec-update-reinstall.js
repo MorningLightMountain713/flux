@@ -1,4 +1,4 @@
-// weight: heavy
+// fleet: 5
 /*
  * An owner changes a running app's specification, and the node reinstalls it.
  *

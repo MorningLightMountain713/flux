@@ -1,3 +1,4 @@
+// fleet: 1
 // A legacy node provisions its own packages; an Arcane node never does, because
 // monitorSystem returns on sight of FLUXOS_PATH. Both regimes a legacy node can
 // boot into are covered here:
