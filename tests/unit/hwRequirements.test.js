@@ -343,7 +343,7 @@ describe('hwRequirements', () => {
 
       it('passes for v8 even with targets (v8 does not enforce)', async () => {
         const hw = buildHw();
-        const spec = await v8Spec({ nodes: [OTHER_IP] });
+        const spec = await v8Spec({ nodes: [OTHER_IP] }, { encrypted: true });
         // The whole point of this case, and the thing the double could not
         // express: the legacy pin list IS a real target set that this node
         // genuinely misses. Only production's v8 exemption lets it through.

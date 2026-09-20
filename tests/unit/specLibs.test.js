@@ -186,6 +186,7 @@ describe('specLibs — how a spec validation failure reaches the caller', () => 
       expire: 88_000,
       nodes: [],
       staticip: false,
+      enterprise: '',
       compose: [{
         name: 'web',
         description: 'x',

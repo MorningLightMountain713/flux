@@ -119,6 +119,7 @@ const V8_SUBMISSION = Object.freeze({
   expire: 88_000,
   nodes: [],
   staticip: false,
+  enterprise: '',
 });
 
 /** A real FluxAppSpecV9. Overrides are merged into the submission blob, so an
@@ -134,12 +135,16 @@ async function v9Spec(overrides = {}, { encrypted = false } = {}) {
   return flux.FluxAppSpecV9.fromSubmission({ ...V9_SUBMISSION, ...overrides }, { encrypted });
 }
 
-/** A real FluxAppSpecV8. `encrypted` as for v9Spec: a registry credential is
- * refused on a cleartext registration, so a test whose subject is one says the
- * spec would be sealed. */
+/** A real FluxAppSpecV8. `encrypted` as for v9Spec: a registry credential or a
+ * node list is refused on a cleartext registration, so a test whose subject is
+ * one says the spec would be sealed. The content of an envelope carries no
+ * `enterprise` field, the ciphertext being the envelope's, so a sealed spec is
+ * built without it. */
 async function v8Spec(overrides = {}, { encrypted = false } = {}) {
   const flux = await loadSpecLibrary();
-  return flux.FluxAppSpecV8.fromSubmission({ ...V8_SUBMISSION, ...overrides }, { encrypted });
+  const blob = { ...V8_SUBMISSION, ...overrides };
+  if (encrypted) delete blob.enterprise;
+  return flux.FluxAppSpecV8.fromSubmission(blob, { encrypted });
 }
 
 /** A real FluxAppSpecV8 off the chain door rather than the submission door.
@@ -209,7 +214,7 @@ async function sealedV9Spec(overrides = {}) {
  */
 async function sealedV8Spec(overrides = {}) {
   const flux = await loadSpecLibrary();
-  const spec = await v8Spec(overrides);
+  const spec = await v8Spec(overrides, { encrypted: true });
   return flux.EncryptedSpecV8.fromSpec(
     spec, await flux.EncryptedSpecV8.createProviderFor(spec.name, spec.owner),
   );

@@ -417,7 +417,7 @@ describe('placementFeasibility tests', () => {
         geolocation: [],
         instances: 3,
         nodes: bhNodes.map((node) => node.ip),
-      }));
+      }, { encrypted: true }));
       expect(result.candidateCount).to.equal(3);
       expect(result.domainCount).to.equal(1);
       // one domain absorbs all three - the pool converges instead of stranding
@@ -434,7 +434,7 @@ describe('placementFeasibility tests', () => {
         geolocation: [],
         instances: 1,
         nodes: [`${'cd'.repeat(32)}:1`],
-      }));
+      }, { encrypted: true }));
       expect(result.candidateCount).to.equal(1);
     });
 
@@ -1051,7 +1051,7 @@ describe('placementFeasibility tests', () => {
   describe('specNamesThisNode', () => {
     it('recognises a socket address pin', async () => {
       const pinned = await placementFeasibility.specNamesThisNode(
-        await v8Spec({ nodes: ['1.2.3.4:16127', '80.95.213.209:16127'] }),
+        await v8Spec({ nodes: ['1.2.3.4:16127', '80.95.213.209:16127'] }, { encrypted: true }),
         '80.95.213.209:16127',
       );
       expect(pinned).to.equal(true);
@@ -1059,7 +1059,7 @@ describe('placementFeasibility tests', () => {
 
     it('recognises a collateral outpoint pin', async () => {
       const pinned = await placementFeasibility.specNamesThisNode(
-        await v8Spec({ nodes: [`${'aa'.repeat(32)}:0`] }),
+        await v8Spec({ nodes: [`${'aa'.repeat(32)}:0`] }, { encrypted: true }),
         '80.95.213.209:16127',
       );
       expect(pinned).to.equal(true);
@@ -1068,9 +1068,9 @@ describe('placementFeasibility tests', () => {
     it('is false without a pin list, on no match, or when collateral is unavailable', async () => {
       expect(await placementFeasibility.specNamesThisNode(await v8Spec({ nodes: [] }), '1.2.3.4:16127')).to.equal(false);
       expect(await placementFeasibility.specNamesThisNode(await v8Spec({}), '1.2.3.4:16127')).to.equal(false);
-      expect(await placementFeasibility.specNamesThisNode(await v8Spec({ nodes: ['9.9.9.9:16127'] }), '1.2.3.4:16127')).to.equal(false);
+      expect(await placementFeasibility.specNamesThisNode(await v8Spec({ nodes: ['9.9.9.9:16127'] }, { encrypted: true }), '1.2.3.4:16127')).to.equal(false);
       collateralStub.rejects(new Error('daemon unavailable'));
-      expect(await placementFeasibility.specNamesThisNode(await v8Spec({ nodes: ['9.9.9.9:16127'] }), '1.2.3.4:16127')).to.equal(false);
+      expect(await placementFeasibility.specNamesThisNode(await v8Spec({ nodes: ['9.9.9.9:16127'] }, { encrypted: true }), '1.2.3.4:16127')).to.equal(false);
     });
   });
 });

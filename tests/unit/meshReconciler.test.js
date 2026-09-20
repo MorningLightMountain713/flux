@@ -346,7 +346,7 @@ describe('meshReconciler', () => {
       stubs.nodesByPubkey = { opkey: new Map([['5.6.7.8', { txhash: txC, outidx: 2 }]]) };
       const { placement } = await v8Spec({
         nodes: [`${'d'.repeat(64)}:3`, '1.2.3.4:16137', 'opkey'],
-      });
+      }, { encrypted: true });
       expect(placement.mode()).to.equal('candidate');
       expect(placement.hasTargets()).to.equal(true);
 
