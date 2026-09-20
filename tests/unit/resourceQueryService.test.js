@@ -644,27 +644,37 @@ describe('resourceQueryService tests', () => {
     });
 
     it('counts a zero-sized legacy app at its DERIVED host-disk footprint, not its declared 0', async () => {
-      // A stored row may legitimately declare cpu/ram/hdd as 0 - the library
-      // accepts it - and this is where the declared figure and the reserved
-      // figure part company: the app locks no CPU and no RAM, but it still
-      // costs a root filesystem and swap on this node's disk. The double this
-      // file used to carry stated ONE disk number and could not express that.
+      // A stored compose row may declare a component's cpu/ram/hdd as 0: the
+      // network holds a compose component to its totals, not its fields, and
+      // seven such messages are on chain. This is where the declared figure
+      // and the reserved figure part company: the app locks no CPU and no
+      // RAM, but it still costs a root filesystem and swap on this node's
+      // disk. A flat (v1-v3) document is held to its fields on every
+      // message, so it cannot carry this case.
       const testApps = [
         storedRow({
           name: 'ZeroApp',
-          version: 3,
+          version: 4,
           description: 'declares nothing',
           owner: OWNER,
-          repotag: 'test/zero:latest',
-          ports: ['31009'],
-          containerPorts: ['8080'],
-          domains: [''],
-          containerData: '/data',
-          tiered: false,
-          cpu: 0,
-          ram: 0,
-          hdd: 0,
           instances: 3,
+          compose: [
+            {
+              name: 'zero',
+              description: 'declares nothing',
+              repotag: 'test/zero:latest',
+              ports: [31_009],
+              containerPorts: [8080],
+              domains: [''],
+              environmentParameters: [],
+              commands: [],
+              containerData: '/data',
+              tiered: false,
+              cpu: 0,
+              ram: 0,
+              hdd: 0,
+            },
+          ],
         }),
       ];
 
