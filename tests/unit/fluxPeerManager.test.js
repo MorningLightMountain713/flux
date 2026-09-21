@@ -1801,7 +1801,7 @@ describe('FluxPeerManager tests', () => {
       expect(manager.has('8.8.8.8:16127')).to.equal(true);
     });
 
-    it('should reject when max connections reached', (done) => {
+    it('should reject when max connections reached', () => {
       manager.numberOfFluxNodes = 0; // maxCon = max(4*minIncoming, 0) = 4*minIncoming
       // Fill up inbound to exceed max
       for (let i = 0; i < 200; i += 1) {
@@ -1809,50 +1809,50 @@ describe('FluxPeerManager tests', () => {
         manager.add(createMockWs(ip, '16127'), ip, '16127', { source: PEER_SOURCE.INBOUND });
       }
 
+      const clock = sinon.useFakeTimers();
       const ws = createMockWs('8.8.8.8', '16127');
       ws.close = sinon.stub();
 
       manager.validateAndAddInbound(ws, '16127', createMockReq('8.8.8.8'));
 
-      // Close is called via setTimeout
-      setTimeout(() => {
-        sinon.assert.calledOnce(ws.close);
-        sinon.assert.calledWith(ws.close, 4000, sinon.match(/Max number/));
-        done();
-      }, 1100);
+      // The refusal closes the socket after a one-second pause.
+      clock.tick(1000);
+      sinon.assert.calledOnce(ws.close);
+      sinon.assert.calledWith(ws.close, 4000, sinon.match(/Max number/));
+      clock.restore();
     });
 
-    it('should reject private IPs', (done) => {
+    it('should reject private IPs', () => {
       manager.numberOfFluxNodes = 10_000;
+      const clock = sinon.useFakeTimers();
       const ws = createMockWs('10.0.0.1', '16127');
       ws.close = sinon.stub();
 
       manager.validateAndAddInbound(ws, '16127', createMockReq('10.0.0.1'));
 
-      setTimeout(() => {
-        sinon.assert.calledOnce(ws.close);
-        sinon.assert.calledWith(ws.close, 4002, sinon.match(/internal IP/));
-        expect(manager.inboundCount).to.equal(0);
-        done();
-      }, 1100);
+      clock.tick(1000);
+      sinon.assert.calledOnce(ws.close);
+      sinon.assert.calledWith(ws.close, 4002, sinon.match(/internal IP/));
+      expect(manager.inboundCount).to.equal(0);
+      clock.restore();
     });
 
-    it('should reject duplicate peers', (done) => {
+    it('should reject duplicate peers', () => {
       manager.numberOfFluxNodes = 10_000;
       const ws1 = createMockWs('8.8.8.8', '16127');
       manager.add(ws1, '8.8.8.8', '16127', { source: PEER_SOURCE.INBOUND });
 
+      const clock = sinon.useFakeTimers();
       const ws2 = createMockWs('8.8.8.8', '16127');
       ws2.close = sinon.stub();
 
       manager.validateAndAddInbound(ws2, '16127', createMockReq('8.8.8.8'));
 
-      setTimeout(() => {
-        sinon.assert.calledOnce(ws2.close);
-        sinon.assert.calledWith(ws2.close, CLOSE_CODES.DUPLICATE_PEER, sinon.match(/already connected/));
-        expect(manager.inboundCount).to.equal(1);
-        done();
-      }, 1100);
+      clock.tick(1000);
+      sinon.assert.calledOnce(ws2.close);
+      sinon.assert.calledWith(ws2.close, CLOSE_CODES.DUPLICATE_PEER, sinon.match(/already connected/));
+      expect(manager.inboundCount).to.equal(1);
+      clock.restore();
     });
 
     it('should extract IPv4 from IPv6-mapped address', () => {

@@ -563,7 +563,15 @@ async function checkDeterministicNodesCollisions() {
   }
 }
 
+/** Test seam: forgets every IP change seen, so a test starts with none on record. */
+function resetForTests() {
+  ipChangeData = null;
+  dosTooManyIpChanges = false;
+  maxNumberOfIpChanges = 0;
+}
+
 module.exports = {
+  resetForTests,
   setOnAddressChanged,
   ipChangesOverLimit,
   getMaxNumberOfIpChanges,

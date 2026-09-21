@@ -2,6 +2,7 @@
 
 const net = require('net');
 const dns = require('dns');
+const dgram = require('dgram');
 
 /**
  * Unit tests must not do real network I/O.
@@ -122,6 +123,26 @@ net.Socket.prototype.connect = function connect(...args) {
   // existing error handling runs and no test hangs waiting on a real socket.
   process.nextTick(() => this.destroy(new Error(`ECONNREFUSED ${targetOf(opts)} (blocked: unit tests must not use the network)`)));
   return this;
+};
+
+// A datagram never reaches net.Socket.connect either. UPnP discovery is a
+// multicast to 239.255.255.250, and a router that answers it is then dialled
+// over TCP a second or more later, when another test is running; blocking
+// the datagram names the test that started it. Node accepts both
+// send(msg, port, address) and send(msg, offset, length, port, address).
+const origSend = dgram.Socket.prototype.send;
+dgram.Socket.prototype.send = function send(...args) {
+  const sliced = typeof args[1] === 'number' && typeof args[2] === 'number';
+  const port = sliced ? args[3] : args[1];
+  const address = sliced ? args[4] : args[2];
+  if (isLoopback(address)) return origSend.apply(this, args);
+
+  const target = `udp:${address}:${port}`;
+  violations.push({ test: currentTest, target, stack: stackFrames() });
+  const cb = args[args.length - 1];
+  const err = new Error(`ENETUNREACH ${target} (blocked: unit tests must not use the network)`);
+  if (typeof cb === 'function') process.nextTick(() => cb(err));
+  return undefined;
 };
 
 // DNS never reaches net.Socket.connect, so a resolver query is network I/O the
