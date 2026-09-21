@@ -301,12 +301,12 @@ describe('playgroundService', () => {
     });
 
     it('refuses a spec the library will not accept, before anything is built', async () => {
-      // A name no v9 app may hold. The refusal is the library's, not this
-      // suite's idea of one.
+      // A name no v9 app may hold: a label cannot start with a hyphen. The
+      // refusal is the library's, not this suite's idea of one.
       let threw = null;
-      await service.submitSession({ ...SUBMISSION, name: 'fluxdemo' }, caller).catch((error) => { threw = error; });
+      await service.submitSession({ ...SUBMISSION, name: '-demo' }, caller).catch((error) => { threw = error; });
 
-      expect(threw.message).to.include('flux');
+      expect(threw.message).to.include('name');
       expect(stubs.reserve.called, 'nothing was reserved for a spec that never validated').to.equal(false);
       expect(stubs.runSession.called).to.equal(false);
     });
