@@ -1080,6 +1080,19 @@ describe('registryManager tests', () => {
       expect(named.message).to.include("'acXX_FR'");
     });
 
+    it('names a ban it could not carry, on the deny list, so the owner is not sent to the allow list', async () => {
+      await registryHolds(await v8Spec({ name: 'banme', contacts: ['ops@example.com'], geolocation: ['a!cNA_US_SomeUnknownRegion'] }));
+
+      const result = await registryManager.convertApplicationSpecification('banme');
+
+      expect(result.complete).to.be.false;
+      const named = result.errors.find((e) => e.code === 'region_unresolved');
+      expect(named, JSON.stringify(result.errors)).to.not.equal(undefined);
+      expect(named.path).to.deep.equal(['placement', 'geoDeny']);
+      expect(named.message).to.include('ban');
+      expect(named.message).to.include('SomeUnknownRegion');
+    });
+
     it('refuses an app already on spec version 9', async () => {
       await registryHolds(await v9Spec());
 

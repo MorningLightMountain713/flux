@@ -717,6 +717,24 @@ async function getApplicationSpecificationAPI(req, res) {
  *   region name this node's location table cannot resolve (both listed in errors)
  *   that the owner must fill before it can be signed.
  */
+/**
+ * What the owner is told about a geolocation entry the draft cannot carry.
+ * @param {{entry: string, list: 'allow'|'deny', country?: string, region?: string}} u
+ * @returns {string}
+ */
+function regionUnresolvedMessage(u) {
+  if (u.list === 'deny') {
+    return `The ban on region '${u.region}' in ${u.country} could not be resolved to an ISO 3166-2 code.`
+      + ' Restate the ban before signing — it is not carried into this draft, which is placeable there until you do.';
+  }
+  if (u.region !== undefined) {
+    return `Region '${u.region}' in ${u.country} could not be resolved to an ISO 3166-2 code.`
+      + ' Choose the region again before signing — it is not carried into this draft.';
+  }
+  return `Geolocation entry '${u.entry}' names no place this draft can carry.`
+    + ' Choose the location again before signing — it is not carried into this draft.';
+}
+
 async function convertApplicationSpecification(appname, opts = {}) {
   const { recipientPubkeyBase64 } = opts;
 
@@ -757,15 +775,13 @@ async function convertApplicationSpecification(appname, opts = {}) {
   // warning about itself, on the document they are about to sign — so it is an
   // error that blocks completion rather than a warning beside a value. The
   // schema cannot catch it: the entry is simply absent, and a placement with
-  // one fewer geoAllow entry is perfectly valid.
+  // one fewer entry is perfectly valid. A dropped ban is named as a ban, on
+  // the deny list: until the owner restates it, the draft is placeable where
+  // the app was never allowed to run.
   const regionErrors = (unresolvedRegions || []).map((u) => ({
-    path: ['placement', 'geoAllow'],
+    path: ['placement', u.list === 'deny' ? 'geoDeny' : 'geoAllow'],
     code: 'region_unresolved',
-    message: u.region !== undefined
-      ? `Region '${u.region}' in ${u.country} could not be resolved to an ISO 3166-2 code.`
-        + ' Choose the region again before signing — it is not carried into this draft.'
-      : `Geolocation entry '${u.entry}' names no place this draft can carry.`
-        + ' Choose the location again before signing — it is not carried into this draft.',
+    message: regionUnresolvedMessage(u),
     value: u.region ?? u.entry,
   }));
   const allErrors = [...errors, ...regionErrors];
