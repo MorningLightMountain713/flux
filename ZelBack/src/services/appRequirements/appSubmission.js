@@ -102,9 +102,12 @@ async function assertMatchesMarketplaceTemplate(spec) {
     contacts: canonical.contacts,
   });
 
-  const { matches, mismatches } = spec.matchesTemplate(templateSpec, template.userConfigurable || []);
+  const { matches, mismatches, unresolved } = spec.matchesTemplate(templateSpec, template.userConfigurable || []);
   if (!matches) {
-    const err = new Error(`Spec does not match marketplace template ${marketplace.templateId} v${marketplace.templateVersion}: ${mismatches.join(', ')}`);
+    const reasons = unresolved.length > 0
+      ? [...mismatches, `userConfigurable names nothing in the template: ${unresolved.join(', ')}`]
+      : mismatches;
+    const err = new Error(`Spec does not match marketplace template ${marketplace.templateId} v${marketplace.templateVersion}: ${reasons.join(', ')}`);
     err.code = 'TEMPLATE_MISMATCH';
     throw err;
   }

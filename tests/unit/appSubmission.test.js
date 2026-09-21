@@ -573,15 +573,24 @@ describe('appSubmission tests', () => {
     }
 
     it('accepts a marketplace app whose spec matches the template', async () => {
-      const spec = marketplaceSpec({ matches: true, mismatches: [] });
+      const spec = marketplaceSpec({ matches: true, mismatches: [], unresolved: [] });
       const result = await submit(spec);
       sinon.assert.calledWith(stubs.marketplaceTemplateCache.getTemplate, TEMPLATE_ID, 2);
       sinon.assert.calledOnce(spec.matchesTemplate);
       expect(result.spec).to.equal(spec);
     });
 
+    it('hard-rejects when a userConfigurable entry names nothing in the template, naming the entry', async () => {
+      const spec = marketplaceSpec({ matches: false, mismatches: [], unresolved: ['plaecment.geoAllow'] });
+      let err;
+      try { await submit(spec); } catch (e) { err = e; }
+      expect(err).to.exist;
+      expect(err.code).to.equal('TEMPLATE_MISMATCH');
+      expect(err.message).to.include('userConfigurable names nothing in the template: plaecment.geoAllow');
+    });
+
     it('hard-rejects when the spec does not match the template', async () => {
-      const spec = marketplaceSpec({ matches: false, mismatches: ['components.web.cpu'] });
+      const spec = marketplaceSpec({ matches: false, mismatches: ['components.web.cpu'], unresolved: [] });
       let err;
       try { await submit(spec); } catch (e) { err = e; }
       expect(err).to.exist;
@@ -590,7 +599,7 @@ describe('appSubmission tests', () => {
     });
 
     it('rejects (retry) when the template is unavailable', async () => {
-      const spec = marketplaceSpec({ matches: true, mismatches: [] });
+      const spec = marketplaceSpec({ matches: true, mismatches: [], unresolved: [] });
       stubs.marketplaceTemplateCache.getTemplate = sinon.stub().rejects(new Error(`Marketplace template ${TEMPLATE_ID} v2 not available, try again later`));
       let err;
       try { await submit(spec); } catch (e) { err = e; }
@@ -629,7 +638,7 @@ describe('appSubmission tests', () => {
         stubs.specLibs.getSpec = sinon.stub().resolves({ FluxAppSpecV9: { fromSubmission }, deepMerge });
         stubs.marketplaceTemplateCache.getTemplate = sinon.stub().resolves(tieredTemplate());
 
-        const spec = configuredSpec(CONFIG_ID, { matches: true, mismatches: [] });
+        const spec = configuredSpec(CONFIG_ID, { matches: true, mismatches: [], unresolved: [] });
         const result = await submit(spec);
 
         sinon.assert.calledWith(deepMerge, TEMPLATE_BODY, { instances: 2 });
@@ -639,7 +648,7 @@ describe('appSubmission tests', () => {
 
       it('hard-rejects a tiered template deploy with no configId', async () => {
         stubs.marketplaceTemplateCache.getTemplate = sinon.stub().resolves(tieredTemplate());
-        const spec = configuredSpec(null, { matches: true, mismatches: [] });
+        const spec = configuredSpec(null, { matches: true, mismatches: [], unresolved: [] });
         let err;
         try { await submit(spec); } catch (e) { err = e; }
         expect(err).to.exist;
@@ -649,7 +658,7 @@ describe('appSubmission tests', () => {
 
       it('hard-rejects an unknown configId', async () => {
         stubs.marketplaceTemplateCache.getTemplate = sinon.stub().resolves(tieredTemplate());
-        const spec = configuredSpec(UNKNOWN_CONFIG_ID, { matches: true, mismatches: [] });
+        const spec = configuredSpec(UNKNOWN_CONFIG_ID, { matches: true, mismatches: [], unresolved: [] });
         let err;
         try { await submit(spec); } catch (e) { err = e; }
         expect(err).to.exist;
@@ -659,7 +668,7 @@ describe('appSubmission tests', () => {
 
       it('hard-rejects a configId on a non-tiered template', async () => {
         stubs.marketplaceTemplateCache.getTemplate = sinon.stub().resolves({ spec: { version: 9 }, useConfig: false, userConfigurable: [] });
-        const spec = configuredSpec(CONFIG_ID, { matches: true, mismatches: [] });
+        const spec = configuredSpec(CONFIG_ID, { matches: true, mismatches: [], unresolved: [] });
         let err;
         try { await submit(spec); } catch (e) { err = e; }
         expect(err).to.exist;
