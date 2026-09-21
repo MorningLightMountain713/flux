@@ -17,6 +17,8 @@ const geolocationService = require('../../ZelBack/src/services/geolocationServic
 const fluxNetworkMonitor = require('../../ZelBack/src/services/fluxNetworkMonitor');
 const nodeDosState = require('../../ZelBack/src/services/nodeDosState');
 const nodeIdentityRepository = require('../../ZelBack/src/services/appDatabase/nodeIdentityRepository');
+const appQueryService = require('../../ZelBack/src/services/appQuery/appQueryService');
+const appUninstaller = require('../../ZelBack/src/services/appLifecycle/appUninstaller');
 const { requireMongo } = require('./dbTestHelper');
 
 chai.use(chaiAsPromised);
@@ -27,15 +29,22 @@ describe('fluxNetworkMonitor tests', () => {
   // (polluting suites that read it) and self-reschedules a 10s retry that outlives the
   // test. Neutralise it for every real-module describe in this file.
   beforeEach(() => {
+    fluxNetworkMonitor.resetForTests();
     sinon.stub(geolocationService, 'setNodeGeolocation').resolves();
   });
 
   describe('checkMyFluxAvailability tests', () => {
     let getRandomExternalObserver;
+    let uninstallApplication;
 
     before(requireMongo);
 
     beforeEach(() => {
+      // An IP change here must never remove an app: the list is this test's, not
+      // whatever another suite left in the shared database, and the uninstaller
+      // is a canary asserted untouched.
+      sinon.stub(appQueryService, 'installedApps').resolves({ status: 'success', data: [] });
+      uninstallApplication = sinon.stub(appUninstaller, 'uninstallApplication').resolves();
       fluxNetworkHelper.setStoredFluxBenchAllowed('6.2.0');
       fluxNetworkHelper.setLocalSocketAddress('129.3.3.3');
       const deterministicFluxnodeListResponse = [
@@ -71,6 +80,7 @@ describe('fluxNetworkMonitor tests', () => {
     });
 
     afterEach(() => {
+      sinon.assert.notCalled(uninstallApplication);
       sinon.restore();
     });
 
