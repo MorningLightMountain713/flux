@@ -1565,7 +1565,6 @@ describe('dockerService tests', () => {
         toDockerNanoCpus: () => 800_000_000,
         toDockerMemoryBytes: () => 1_887_436_800,
         toDockerMemorySwapBytes: () => 1_887_436_800 + (2 * 1024 * 1024 * 1024),
-        restartPolicyName: () => 'unless-stopped',
         platformEnv: () => ({ FLUX_APP_NAME: 'fluxwebsite' }),
         ...overrides,
       };

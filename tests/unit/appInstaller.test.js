@@ -549,7 +549,7 @@ describe('appInstaller tests', () => {
       assertAnswers(component, [
         'requiresBackendTls', 'backendTlsPaths', 'imageFitsRootFs',
         'toDockerEnv', 'toDockerPortBindings', 'toDockerExposedPorts',
-        'toDockerNanoCpus', 'toDockerMemoryBytes', 'restartPolicyName',
+        'toDockerNanoCpus', 'toDockerMemoryBytes',
       ]);
       expect(component.identifier).to.equal('web_newapp');
       // installComponent refuses a blank owner outright — a stamped-empty
