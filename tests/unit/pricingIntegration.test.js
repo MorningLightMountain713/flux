@@ -212,9 +212,9 @@ describe('pricing integration — chain messages through PricingEngine', () => {
       expect(breakdown.commodity.cpu.units).to.equal(15);
       expect(breakdown.commodity.cpu.subtotal).to.equal(2_250_000);
 
-      // memory: 512 MB → Math.round(512/100) = 5 per instance × 3 = 15 units × 50_000
-      expect(breakdown.commodity.memory.units).to.equal(15);
-      expect(breakdown.commodity.memory.subtotal).to.equal(750_000);
+      // memory: 512 MB × 3 instances = 1536 MB = 15.36 units of 100 MB × 50_000, pro rata
+      expect(breakdown.commodity.memory.units).to.equal(15.36);
+      expect(breakdown.commodity.memory.subtotal).to.equal(768_000);
 
       // storage: (sizeGb=5 + rootFsGb=1 + swapGb=0) × 3 instances = 18 units × 20_000
       expect(breakdown.commodity.storage.units).to.equal(18);
