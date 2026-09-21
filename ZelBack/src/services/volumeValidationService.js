@@ -46,7 +46,7 @@ async function resolveAppForMountEntry(appId) {
     const stated = await appsRepository.getInstalledAppByComponentIdentifier(identifier);
     if (stated) return stated.name;
     const { DeploymentSpec } = await getSpecBackend();
-    const identity = DeploymentSpec.appNameFromIdentifier(identifier);
+    const identity = DeploymentSpec.identityFromIdentifier(identifier);
     const installed = await appsRepository.getInstalledAppByIdentity(identity);
     return installed ? installed.name : null;
   } catch (error) {

@@ -55,7 +55,8 @@ async function surveyContainers(labelKeys) {
     const name = (container.Names?.[0] || '').replace(/^\//, '');
     return name.startsWith('flux') || name.startsWith('zel');
   });
-  const unlabelled = ours.filter((container) => !(container.Labels && container.Labels[labelKeys.IDENTIFIER]));
+  const unlabelled = ours.filter((container) => !(container.Labels
+    && container.Labels[labelKeys.IDENTIFIER] && container.Labels[labelKeys.IDENTITY]));
   return { ours, unlabelled };
 }
 
@@ -101,7 +102,7 @@ async function resolveContainer(container) {
   const name = (container.Names?.[0] || '').replace(/^\//, '');
   const identifier = dockerService.getBaseAppName(name);
   const { DeploymentSpec } = await getSpecBackend();
-  const identity = DeploymentSpec.appNameFromIdentifier(identifier);
+  const identity = DeploymentSpec.identityFromIdentifier(identifier);
 
   const installed = await appsRepository.getInstalledAppByIdentity(identity);
   if (!installed) return null;

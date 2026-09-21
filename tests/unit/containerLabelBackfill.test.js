@@ -4,7 +4,7 @@ const { expect } = require('chai');
 const sinon = require('sinon');
 const proxyquire = require('proxyquire').noCallThru();
 
-const LABEL_KEYS = { IDENTIFIER: 'io.runonflux.identifier', APP: 'io.runonflux.app' };
+const LABEL_KEYS = { IDENTIFIER: 'io.runonflux.identifier', IDENTITY: 'io.runonflux.identity', APP: 'io.runonflux.app' };
 
 describe('containerLabelBackfill tests', () => {
   let stubs;
@@ -38,7 +38,7 @@ describe('containerLabelBackfill tests', () => {
         getSpecBackend: async () => ({
           LABEL_KEYS,
           DeploymentSpec: {
-            appNameFromIdentifier: (identifier) => {
+            identityFromIdentifier: (identifier) => {
               const parts = identifier.split('_');
               return parts.length <= 1 ? identifier : parts[1];
             },
@@ -62,7 +62,9 @@ describe('containerLabelBackfill tests', () => {
   });
 
   const labelled = (name, identifier) => ({
-    Names: [`/${name}`], Labels: { [LABEL_KEYS.IDENTIFIER]: identifier }, State: 'exited',
+    Names: [`/${name}`],
+    Labels: { [LABEL_KEYS.IDENTIFIER]: identifier, [LABEL_KEYS.IDENTITY]: identifier.split('_')[1] || identifier },
+    State: 'exited',
   });
   // Stopped unless stated: the sweep only ever restamps what is already down.
   const bare = (name, state = 'exited') => ({ Names: [`/${name}`], Labels: {}, State: state });

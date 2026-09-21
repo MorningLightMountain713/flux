@@ -49,7 +49,7 @@ const meshIdentityDrift = require('../appMesh/meshIdentityDrift');
 // asking a store (appFor below); no string rule can do it.
 async function identityFromIdentifier(identifier) {
   const { DeploymentSpec } = await specLibs.getSpecBackend();
-  return DeploymentSpec.appNameFromIdentifier(identifier);
+  return DeploymentSpec.identityFromIdentifier(identifier);
 }
 
 async function replicaFromIdentifier(identifier) {
