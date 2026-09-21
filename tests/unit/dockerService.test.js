@@ -1287,7 +1287,26 @@ describe('dockerService tests', () => {
       'io.runonflux.app': app,
       'io.runonflux.component': component,
       'io.runonflux.identifier': [component, identity ?? app, ...(replica ? [replica] : [])].join('_'),
+      'io.runonflux.identity': identity ?? app,
       ...(replica ? { 'io.runonflux.replica': replica } : {}),
+    });
+
+    it('reads the identity off its own label, and off the identifier only where the label is missing', async () => {
+      // A flat v1-3 container: its identifier is the identity itself. Stamped before the
+      // identity label shipped, the library's inverse still names it; a hand split
+      // taking the second segment would find nothing and send the aliases elsewhere.
+      stubInspectWithNetworks({ bridge: {} }, {
+        'io.runonflux.app': 'oldapp',
+        'io.runonflux.component': 'oldapp',
+        'io.runonflux.identifier': 'a1b2c3d4e5f6',
+      });
+      const connectStub = sinon.stub().resolves();
+      sinon.stub(Dockerode.prototype, 'getNetwork').returns({ connect: connectStub });
+
+      await dockerService.appDockerNetworkConnect('a1b2c3d4e5f6', 'fluxDockerNetwork_a1b2c3d4e5f6');
+
+      const { EndpointConfig } = connectStub.firstCall.args[0];
+      expect(EndpointConfig.Aliases).to.include('oldapp');
     });
 
     it('attaching to its OWN app network claims the short names too', async () => {

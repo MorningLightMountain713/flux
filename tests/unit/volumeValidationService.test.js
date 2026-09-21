@@ -35,7 +35,7 @@ const volumeValidationService = proxyquire('../../ZelBack/src/services/volumeVal
   './utils/specLibs': {
     getSpecBackend: async () => ({
       DeploymentSpec: {
-        appNameFromIdentifier: (id) => { const p = id.split('_'); return p.length <= 1 ? id : p[1]; },
+        identityFromIdentifier: (id) => { const p = id.split('_'); return p.length <= 1 ? id : p[1]; },
       },
     }),
   },

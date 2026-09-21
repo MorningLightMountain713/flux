@@ -304,7 +304,7 @@ async function getInstalledDeployments(name) {
  * UI hold. This is the inverse of that request form, and deliberately NOT of a
  * container identifier: an identifier's second segment is the app's identity,
  * which is not a name and does not resolve as one (flux-spec states the same rule
- * from the other side, DeploymentSpec.appNameFromIdentifier).
+ * from the other side, DeploymentSpec.identityFromIdentifier).
  *
  * @param {string} appname the request's app or component name
  * @returns {string} the app name
