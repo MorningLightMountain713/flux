@@ -377,7 +377,7 @@ async function submitAppRegistration(req, res, processedBody, contentCtx) {
     throw new Error('Incomplete message received. Check if appSpecification, type, version, timestamp and signature are provided.');
   }
 
-  if (messageType !== 'zelappregister' && messageType !== 'fluxappregister') {
+  if (messageType !== 'fluxappregister') {
     throw new Error('Invalid type of message');
   }
 

@@ -20,11 +20,6 @@ const { Privilege, authOf } = require('../utils/privileges');
 // has to declare.
 const BYTES_PER_GB = 1e9;
 
-// The AAD type that separates a sealed preflight from a sealed registration or
-// update: the same per-app transport key opens all three, and binding the type
-// stops a captured envelope of one being replayed as another.
-const PREFLIGHT_AAD_TYPE = 'fluxapppreflight';
-
 const queue = [];
 let running = null;
 
@@ -85,10 +80,13 @@ async function resolveComponents(body) {
 
   assertSealedEnvelopeFields(body);
 
+  // The same per-app transport key opens a registration, an update and a
+  // preflight; the purpose bound into the AAD stops one being opened as another.
+  const { TRANSPORT_PURPOSE } = await getSpec();
   const opened = await transportHelper.openTransportEnvelope(body, {
     contentHash: body.contentHash,
     timestamp: body.timestamp,
-    type: PREFLIGHT_AAD_TYPE,
+    type: TRANSPORT_PURPOSE.PREFLIGHT,
   });
 
   return opened ? opened.components : null;
