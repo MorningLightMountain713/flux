@@ -26,7 +26,8 @@ const { load, CONTRACT_VERSION } = require('@runonflux/flux-spec-cjs');
 // the one directory a pre-format-2 backup archive holds.
 // 5: LABEL_KEYS.ROLE - the label a file-operation container is written and
 // recognised by.
-const REQUIRED_CONTRACT_VERSION = 5;
+// 6: TRANSPORT_PURPOSE - the purpose a sealed preflight is opened under.
+const REQUIRED_CONTRACT_VERSION = 6;
 
 if (!(CONTRACT_VERSION >= REQUIRED_CONTRACT_VERSION)) {
   throw new Error(

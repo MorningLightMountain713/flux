@@ -9,6 +9,7 @@ chai.use(chaiAsPromised);
 const { expect } = chai;
 
 const jobRegistry = require('../../ZelBack/src/services/utils/jobRegistry');
+const realSpecLibs = require('../../ZelBack/src/services/utils/specLibs');
 const { asConfig } = require('./fixtures/config');
 
 describe('imagePreflight tests', () => {
@@ -42,7 +43,12 @@ describe('imagePreflight tests', () => {
       './imageManager': { verifyRepository: verifyRepositoryStub },
       '../utils/transportHelper': { openTransportEnvelope: openTransportEnvelopeStub },
       '../utils/imageVerifier': { ImageVerifier: { parseImageReference: parseImageReferenceStub } },
-      '../utils/specLibs': { getSpec: async () => ({ imageFitsRootFs: (gb, bytes) => bytes <= gb * 1e9 }) },
+      '../utils/specLibs': {
+        getSpec: async () => ({
+          TRANSPORT_PURPOSE: (await realSpecLibs.getSpec()).TRANSPORT_PURPOSE,
+          imageFitsRootFs: (gb, bytes) => bytes <= gb * 1e9,
+        }),
+      },
     });
   }
 
@@ -325,8 +331,8 @@ describe('imagePreflight tests', () => {
       });
 
       const [, meta] = openTransportEnvelopeStub.firstCall.args;
-      // Binding the type stops a captured registration envelope being replayed
-      // here, and vice versa.
+      // Binding the purpose stops a captured registration envelope being
+      // opened here, and vice versa.
       expect(meta.type).to.equal('fluxapppreflight');
       expect(view.detail.components.web.status).to.equal('ok');
       expect(verifyRepositoryStub.firstCall.args[1].repoauth).to.equal('user:pass');

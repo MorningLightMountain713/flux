@@ -1747,7 +1747,7 @@ async function testAppMount() {
  * @param {object} params.appSpecification - The app specification
  * @param {number} params.timestamp - Message timestamp
  * @param {string} params.signature - Message signature
- * @param {string} params.type - Message type (fluxappupdate/zelappupdate)
+ * @param {string} params.type - Message type (fluxappupdate)
  * @param {number} params.version - Message version
  * @returns {Promise<string>} The message hash
  */
@@ -1759,7 +1759,7 @@ async function updateAppGlobaly(params) {
   if (!appSpecification || !timestamp || !signature || !messageType || !typeVersion) {
     throw new Error('Incomplete message received. Check if appSpecification, timestamp, type, version and signature are provided.');
   }
-  if (messageType !== 'zelappupdate' && messageType !== 'fluxappupdate') {
+  if (messageType !== 'fluxappupdate') {
     throw new Error('Invalid type of message');
   }
   // envelope version 1 = legacy v1-v8, 2 = v9 (AppEventV2 / contentHash signing)

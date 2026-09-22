@@ -799,14 +799,14 @@ describe('appSubmission tests', () => {
     // An empty body: the peer gate is the first check after privilege and the
     // field check comes right after it, so the answer names which door the
     // submission reached.
-    async function registerEmptyBody() {
+    async function registerEmptyBody(body = {}) {
       const appSubmission = load({
         config: asConfig({ fluxapps: { latestSupportedSpecVersion: 9, minOutgoing: MIN_OUTGOING, minIncoming: MIN_INCOMING } }),
         '../utils/peerState': { peerManager: manager },
         '../verificationHelper': { verifyPrivilege: sinon.stub().resolves(true) },
       });
       const res = { json: sinon.stub() };
-      await appSubmission.registerAppGlobalyApi({ headers: {}, body: {} }, res);
+      await appSubmission.registerAppGlobalyApi({ headers: {}, body }, res);
       sinon.assert.calledOnce(res.json);
       return res.json.firstCall.args[0].data.message;
     }
@@ -831,6 +831,17 @@ describe('appSubmission tests', () => {
       holdInboundPeers(MIN_OUTGOING + MIN_INCOMING - 1);
 
       expect(await registerEmptyBody()).to.match(/does not hold enough peer connections/);
+    });
+
+    it('accepts a registration only under fluxappregister', async () => {
+      holdInboundPeers(MIN_OUTGOING + MIN_INCOMING);
+      const body = (type) => ({
+        appSpecification: {}, timestamp: 1, signature: 's', type, version: 1,
+      });
+
+      expect(await registerEmptyBody(body('zelappregister'))).to.equal('Invalid type of message');
+      expect(await registerEmptyBody(body('fluxappupdate'))).to.equal('Invalid type of message');
+      expect(await registerEmptyBody(body('fluxappregister'))).to.not.equal('Invalid type of message');
     });
   });
 });

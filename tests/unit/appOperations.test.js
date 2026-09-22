@@ -87,6 +87,25 @@ describe('appOperations tests', () => {
     operationRegistry.clear();
   });
 
+  describe('updateAppGlobaly message type', () => {
+    const params = (type) => ({
+      appSpecification: {}, timestamp: 1, signature: 's', type, version: 1,
+    });
+
+    it('refuses an update under any type but fluxappupdate', async () => {
+      for (const type of ['zelappupdate', 'fluxappregister']) {
+        // eslint-disable-next-line no-await-in-loop
+        const error = await appOperations.updateAppGlobaly(params(type)).catch((e) => e);
+        expect(error.message, type).to.equal('Invalid type of message');
+      }
+    });
+
+    it('passes the type check under fluxappupdate', async () => {
+      const error = await appOperations.updateAppGlobaly(params('fluxappupdate')).catch((e) => e);
+      expect(error && error.message).to.not.equal('Invalid type of message');
+    });
+  });
+
   describe('contentBlobServeApi tests', () => {
     function makeRes() {
       const res = {};
