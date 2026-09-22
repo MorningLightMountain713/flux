@@ -78,15 +78,6 @@ describe('volumeExecutor tests', () => {
     appsFolder: APPS_FOLDER,
     APP_NAME_REGEX: /^[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?$/,
     APP_NAME_REGEX_LEGACY: /^[a-zA-Z0-9]+$/,
-    // Taken from the real module rather than restated. It is the KEY the
-    // executor's labels are built under, so a stub that omitted it would label
-    // every container `undefined` and fail nowhere, and one that repeated the
-    // literal would keep passing after the real constant changed - which is the
-    // drift the shared constant exists to prevent. The VALUE 'fileop' is
-    // asserted literally below, deliberately: that one is a contract with
-    // containers already running.
-    // eslint-disable-next-line global-require
-    UTILITY_ROLE_LABEL: require('../../ZelBack/src/services/utils/appConstants').UTILITY_ROLE_LABEL,
   };
 
   const mountRow = (target) => ({
@@ -328,8 +319,9 @@ describe('volumeExecutor tests', () => {
       const vol = await openSession();
       await volumeExecutor.run(vol, ['true']);
 
+      // Literal: the harness and an operator filter containers on this key.
       const [options] = dockerServiceStub.createContainer.firstCall.args;
-      expect(options.Labels['runonflux.role']).to.equal('fileop');
+      expect(options.Labels).to.deep.equal({ 'io.runonflux.role': 'fileop' });
     });
 
     it('runs at the volume root unless told otherwise', async () => {
@@ -1791,16 +1783,19 @@ describe('volumeExecutor tests', () => {
   describe('reapOrphanedContainers', () => {
     it('removes containers left running by a restart, selected by label', async () => {
       dockerServiceStub.dockerListContainers.resolves([
-        { Id: 'fileop-1', Labels: { 'runonflux.role': 'fileop' } },
+        { Id: 'fileop-1', Labels: { 'io.runonflux.role': 'fileop' } },
+        { Id: 'fileop-legacy', Labels: { 'runonflux.role': 'fileop' } },
         { Id: 'app-1', Labels: { 'runonflux.role': 'app' } },
         { Id: 'unlabelled', Labels: {} },
+        { Id: 'no-labels', Labels: null },
       ]);
 
       const removed = await volumeExecutor.reapOrphanedContainers();
 
-      expect(removed).to.equal(1);
+      expect(removed).to.equal(2);
       // A listing yields container IDs, and the removal resolves by app name unless told otherwise.
-      expect(dockerServiceStub.appDockerForceRemove.calledOnceWith('fileop-1', false, { identifierType: 'id' })).to.equal(true);
+      expect(dockerServiceStub.appDockerForceRemove.calledWith('fileop-1', false, { identifierType: 'id' })).to.equal(true);
+      expect(dockerServiceStub.appDockerForceRemove.calledWith('fileop-legacy', false, { identifierType: 'id' })).to.equal(true);
     });
 
     it('leaves a container whose operation is still running', async () => {
@@ -1815,8 +1810,8 @@ describe('volumeExecutor tests', () => {
       await new Promise((resolve) => { setTimeout(resolve, 30); });
 
       dockerServiceStub.dockerListContainers.resolves([
-        { Id: 'container-1', Labels: { 'runonflux.role': 'fileop' } },
-        { Id: 'orphan-1', Labels: { 'runonflux.role': 'fileop' } },
+        { Id: 'container-1', Labels: { 'io.runonflux.role': 'fileop' } },
+        { Id: 'orphan-1', Labels: { 'io.runonflux.role': 'fileop' } },
       ]);
 
       const removed = await volumeExecutor.reapOrphanedContainers();

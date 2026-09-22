@@ -24,7 +24,9 @@ const { load, CONTRACT_VERSION } = require('@runonflux/flux-spec-cjs');
 // 4: PLATFORM_VOLUME_ENTRIES, LEGACY_STAGING_ENTRY_PATTERN and
 // LEGACY_PRIMARY_SOURCE — what every operation on the app's data skips, and
 // the one directory a pre-format-2 backup archive holds.
-const REQUIRED_CONTRACT_VERSION = 4;
+// 5: LABEL_KEYS.ROLE - the label a file-operation container is written and
+// recognised by.
+const REQUIRED_CONTRACT_VERSION = 5;
 
 if (!(CONTRACT_VERSION >= REQUIRED_CONTRACT_VERSION)) {
   throw new Error(

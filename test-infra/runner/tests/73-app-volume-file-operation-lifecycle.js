@@ -231,7 +231,7 @@ describe('app volume file operations - lifecycle', function () {
 
     it('leaves no executor container behind', async function () {
       this.timeout(120000);
-      const running = await inNode('docker ps -a --filter label=runonflux.role=fileop --format "{{.ID}}"');
+      const running = await inNode('docker ps -a --filter label=io.runonflux.role=fileop --format "{{.ID}}"');
       expect(running.stdout.trim(), 'an executor container outlived its operation').to.equal('');
     });
   });

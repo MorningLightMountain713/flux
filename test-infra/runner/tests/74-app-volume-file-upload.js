@@ -107,7 +107,7 @@ describe('app volume file upload', function () {
 
   const executorContainers = async () => {
     const { stdout } = await execInContainer(node.container,
-      'docker ps -a --filter label=runonflux.role=fileop --format "{{.ID}}" 2>/dev/null || true');
+      'docker ps -a --filter label=io.runonflux.role=fileop --format "{{.ID}}" 2>/dev/null || true');
     return stdout.trim().split('\n').filter(Boolean);
   };
 

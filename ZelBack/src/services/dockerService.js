@@ -15,7 +15,6 @@ const { extractIp } = require('./utils/socketAddressUtils');
 const { storageLinkOf } = require('./utils/fluxStorage');
 const { getSpec, getSpecBackend } = require('./utils/specLibs');
 const { obtainPayloadFromStorage } = require('./utils/fluxStorageRefs');
-const { UTILITY_ROLE_LABEL } = require('./utils/appConstants');
 const cpuBurstHelper = require('./utils/cpuBurstHelper');
 const LogFrameDecoder = require('./utils/logFrameDecoder');
 
@@ -1033,12 +1032,12 @@ async function createContainer(options) {
  * label is the only thing that can answer this question about it at all.
  *
  * @param {{labels: object|undefined, name: string|undefined}} container
- * @param {object} labelKeys the label schema
+ * @param {{LABEL_KEYS: object, readLabel: Function}} labelSchema the label schema and its reader
  * @returns {boolean}
  */
-function isFluxOwnedContainer({ labels, name }, labelKeys) {
+function isFluxOwnedContainer({ labels, name }, { LABEL_KEYS: labelKeys, readLabel }) {
   if (isManagedContainer({ labels, name }, labelKeys)) return true;
-  return Boolean(labels && labels[UTILITY_ROLE_LABEL]);
+  return Boolean(readLabel(labels, labelKeys.ROLE));
 }
 
 /**

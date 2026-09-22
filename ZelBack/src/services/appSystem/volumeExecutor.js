@@ -19,7 +19,8 @@ const { Writable, pipeline } = require('node:stream');
 const { createWriteStream, createReadStream } = require('node:fs');
 const { AsyncLock } = require('../utils/asyncLock');
 const { measureTree } = require('../utils/treeSize');
-const { appsFolder, UTILITY_ROLE_LABEL } = require('../utils/appConstants');
+const { appsFolder } = require('../utils/appConstants');
+const { getSpecBackend } = require('../utils/specLibs');
 const {
   VolumePath, VolumeSession, WORK_ROOT,
 } = require('./volumeSession');
@@ -32,14 +33,14 @@ const settings = () => config.get('fluxapps.volumeOperations');
 
 
 /**
- * Labels every executor container carries.
+ * The role label every executor container carries.
  *
- * `role` is what keeps these out of the app sweeps: forceAppRemovals derives an
- * app name from a container name and hands it to removeAppLocally, so a
- * container it does not recognise produces a plausible-looking wrong name. The
- * label answers the question directly instead.
+ * It is what keeps these out of the app sweeps: forceAppRemovals derives an app
+ * name from a container name and hands it to removeAppLocally, so a container it
+ * does not recognise produces a plausible-looking wrong name. The label answers
+ * the question directly instead.
  */
-const EXECUTOR_LABELS = { [UTILITY_ROLE_LABEL]: 'fileop' };
+const FILEOP_ROLE = 'fileop';
 
 // One slot per concurrent operation. Refusing rather than queueing is
 // deliberate: a queued request holds its connection open behind someone else's
@@ -1301,19 +1302,14 @@ async function volumeSpace(mount, fsPromises) {
  * needed to read and re-stamp files the container does not own. Everything else
  * stays dropped, including MKNOD, so an archive cannot create device nodes.
  */
-function containerOptions(session, argv, image, workingDir = WORK_ROOT, withInput = false) {
+function containerOptions(session, argv, image, labels, workingDir = WORK_ROOT, withInput = false) {
   const { memoryBytes, pidsLimit, cpuCores } = settings();
 
   return {
     Image: image,
     Cmd: argv,
     WorkingDir: workingDir,
-    // The second label is provenance for a human reading `docker inspect` on a
-    // container docker named at random - nothing reads it. Deliberately NOT the
-    // schema's APP key: stamping that would make containerAppName answer for a
-    // file-operation container, and every consumer keyed on it would treat the
-    // node's own work as one of the app's containers.
-    Labels: { ...EXECUTOR_LABELS, 'runonflux.app': session.identifier },
+    Labels: labels,
     AttachStdout: true,
     AttachStderr: true,
     // Only an upload opens stdin. StdinOnce closes it once the attach that
@@ -1745,11 +1741,13 @@ async function run(session, argv, options = {}) {
       if (made.error) throw made.error;
     }
 
+    const { LABEL_KEYS } = await getSpecBackend();
     container = await dockerService.createContainer(
       containerOptions(
         session,
         params,
         image,
+        { [LABEL_KEYS.ROLE]: FILEOP_ROLE },
         workingDir ? workingDir.containerPath : undefined,
         Boolean(input),
       ),
@@ -2192,9 +2190,9 @@ async function reapOrphanedContainers() {
     return 0;
   }
 
+  const { LABEL_KEYS, readLabel } = await getSpecBackend();
   const orphans = (containers || []).filter(
-    (container) => container.Labels
-      && container.Labels[UTILITY_ROLE_LABEL] === 'fileop'
+    (container) => readLabel(container.Labels, LABEL_KEYS.ROLE) === FILEOP_ROLE
       && !liveContainerIds.has(container.Id),
   );
 
@@ -2319,5 +2317,4 @@ module.exports = {
   sweepStagingDirectories,
   adoptOperation,
   acquireSlot,
-  EXECUTOR_LABELS,
 };

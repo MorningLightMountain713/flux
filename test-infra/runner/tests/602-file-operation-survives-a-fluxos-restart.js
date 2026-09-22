@@ -54,7 +54,7 @@ describe('a file operation survives a FluxOS restart', function () {
   // Docker's own view, not FluxOS's. The whole question is whether FluxOS left
   // this container alone, so asking FluxOS would be asking the defendant.
   async function fileOpContainerIds() {
-    const r = await inNode("docker ps -a --filter 'label=runonflux.role=fileop' --format '{{.ID}} {{.State}}'");
+    const r = await inNode("docker ps -a --filter 'label=io.runonflux.role=fileop' --format '{{.ID}} {{.State}}'");
     return r.stdout.trim().split('\n').filter(Boolean).map((line) => {
       const [id, state] = line.trim().split(/\s+/);
       return { id, state };
@@ -192,7 +192,7 @@ describe('a file operation survives a FluxOS restart', function () {
     // record names it. Sleeps rather than exiting, so "reaped" means removed
     // rather than merely finished.
     const started = await inNode(
-      "docker run -d --label runonflux.role=fileop --entrypoint sh "
+      "docker run -d --label io.runonflux.role=fileop --entrypoint sh "
       + `${executorImageReference()} -c 'sleep 600'`,
     );
     const orphanId = started.stdout.trim().slice(0, 12);
