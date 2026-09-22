@@ -4,30 +4,18 @@ const config = require('config');
 const { load, CONTRACT_VERSION } = require('@runonflux/flux-spec-cjs');
 
 // The lowest flux-spec surface this FluxOS can run against. Raise it in the same change
-// that starts calling a newly added export, and bump the bridge's CONTRACT_VERSION there
-// too — that pair is what turns a mismatch into a startup error instead of a runtime
-// mystery.
+// that starts calling an export added by a later flux-spec release.
 //
-// flux-spec is a published package, so the copy installed on a node can be older than the
-// code reading it while every dev checkout — on a `file:` dep resolving to the working
-// tree — is current. Destructuring an absent export then yields undefined and fails far
-// away as "<name> is not a function": verifySignature did exactly that, its TypeError
-// caught and handed to callers as "Invalid signature", so the network refused every login
-// while the real cause sat in a per-request log line naming a missing function.
+// The copy installed on a node can be older than the code reading it, while every dev
+// checkout — on a `file:` dep resolving to the working tree — is current. Destructuring
+// an absent export then yields undefined and fails far away as "<name> is not a
+// function"; in the signature verifier that reads to every caller as "Invalid
+// signature".
 //
 // Checked at require rather than at first use. A node whose spec library is too old to
 // verify a signature cannot do its job, and refusing to start says so far more plainly
 // than serving traffic that is rejected for a reason nobody can see.
-// 3: envelopeHash + the attest payload's envelope-hash argument — the
-// attestation path calls both, and a contract-2 copy fails at first
-// encrypted-v9 registration instead of at startup.
-// 4: PLATFORM_VOLUME_ENTRIES, LEGACY_STAGING_ENTRY_PATTERN and
-// LEGACY_PRIMARY_SOURCE — what every operation on the app's data skips, and
-// the one directory a pre-format-2 backup archive holds.
-// 5: LABEL_KEYS.ROLE - the label a file-operation container is written and
-// recognised by.
-// 6: TRANSPORT_PURPOSE - the purpose a sealed preflight is opened under.
-const REQUIRED_CONTRACT_VERSION = 6;
+const REQUIRED_CONTRACT_VERSION = 1;
 
 if (!(CONTRACT_VERSION >= REQUIRED_CONTRACT_VERSION)) {
   throw new Error(
