@@ -667,10 +667,13 @@ async function requestAppRestart(appname) {
 async function stopAllNonFluxRunningApps() {
   try {
     log.info('Running non Flux apps check...');
-    const { LABEL_KEYS } = await getSpecBackend();
+    const { LABEL_KEYS, readLabel } = await getSpecBackend();
     let apps = await dockerService.dockerListContainers(false);
     apps = apps.filter(
-      (app) => !dockerService.isFluxOwnedContainer({ labels: app.Labels, name: app.Names?.[0] }, LABEL_KEYS),
+      (app) => !dockerService.isFluxOwnedContainer(
+        { labels: app.Labels, name: app.Names?.[0] },
+        { LABEL_KEYS, readLabel },
+      ),
     );
     if (apps.length > 0) {
       log.info(`Found ${apps.length} apps to be stopped...`);

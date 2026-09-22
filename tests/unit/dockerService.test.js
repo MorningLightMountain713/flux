@@ -161,11 +161,17 @@ describe('dockerService tests', () => {
   });
 
   describe('isFluxOwnedContainer tests', () => {
-    const LABEL_KEYS = { IDENTIFIER: 'io.runonflux.identifier' };
+    let schema;
+
+    before(async () => {
+      // eslint-disable-next-line global-require
+      const { LABEL_KEYS, readLabel } = await require('../../ZelBack/src/services/utils/specLibs').getSpecBackend();
+      schema = { LABEL_KEYS, readLabel };
+    });
 
     it('claims an app container by its identity label', () => {
       expect(dockerService.isFluxOwnedContainer(
-        { labels: { 'io.runonflux.identifier': 'www_MyApp' }, name: '/fluxwww_MyApp' }, LABEL_KEYS,
+        { labels: { 'io.runonflux.identifier': 'www_MyApp' }, name: '/fluxwww_MyApp' }, schema,
       )).to.equal(true);
     });
 
@@ -175,19 +181,27 @@ describe('dockerService tests', () => {
       // NO name, so docker assigns a random one and there is no component to
       // take an identity label from. Were it not claimed here, the two-hourly
       // non-flux sweep would stop a long copy out from under its caller.
+      const fileop = { labels: { 'io.runonflux.role': 'fileop' }, name: '/nostalgic_hopper' };
+      expect(dockerService.isFluxOwnedContainer(fileop, schema)).to.equal(true);
+      expect(dockerService.isManagedContainer(fileop, schema.LABEL_KEYS)).to.equal(false);
+    });
+
+    it('claims a utility container labelled under the legacy role key', () => {
       const fileop = { labels: { 'runonflux.role': 'fileop' }, name: '/nostalgic_hopper' };
-      expect(dockerService.isFluxOwnedContainer(fileop, LABEL_KEYS)).to.equal(true);
-      expect(dockerService.isManagedContainer(fileop, LABEL_KEYS)).to.equal(false);
+      expect(dockerService.isFluxOwnedContainer(fileop, schema)).to.equal(true);
     });
 
     it('claims a pre-label container by name, both prefixes', () => {
-      expect(dockerService.isFluxOwnedContainer({ labels: {}, name: '/fluxMyApp' }, LABEL_KEYS)).to.equal(true);
-      expect(dockerService.isFluxOwnedContainer({ labels: {}, name: '/zelMyApp' }, LABEL_KEYS)).to.equal(true);
+      expect(dockerService.isFluxOwnedContainer({ labels: {}, name: '/fluxMyApp' }, schema)).to.equal(true);
+      expect(dockerService.isFluxOwnedContainer({ labels: {}, name: '/zelMyApp' }, schema)).to.equal(true);
     });
 
     it('disclaims a stranger, which is what the sweep then stops', () => {
       expect(dockerService.isFluxOwnedContainer(
-        { labels: {}, name: '/postgres' }, LABEL_KEYS,
+        { labels: {}, name: '/postgres' }, schema,
+      )).to.equal(false);
+      expect(dockerService.isFluxOwnedContainer(
+        { labels: undefined, name: '/postgres' }, schema,
       )).to.equal(false);
     });
   });
