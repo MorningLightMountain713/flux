@@ -1298,24 +1298,10 @@ async function runBackupTask(appname, backup, force, report) {
     }
     await serviceHelper.delay(5 * 1000);
     report('Starting application...\n');
-    if (!backupSynced.length) {
-      await startApplication(appname);
-    } else {
-      for (const [compName, comp] of backupDeployment.componentEntries()) {
-        // Ask the component, not a field it does not have. This read
-        // `comp.persistentStorage?.sync?.mode`, but DeploymentComponent flattens
-        // the mount config and exposes `sync` directly — there is no
-        // persistentStorage on it. So the optional chain was always undefined,
-        // the condition always true, and an activeStandby component was started
-        // alongside its siblings: exactly the case this branch exists to skip,
-        // and for a g:/masterSlave app that is the standby coming up against the
-        // election's intent.
-        if (!comp.hasActiveStandbySyncthing()) {
-          // eslint-disable-next-line no-await-in-loop
-          await startApplication(`${compName}_${appname}`);
-        }
-      }
-    }
+    // Every component gets the stop hold back, the synced ones included: the
+    // reconciler runs a component only where the election made this node the
+    // writer, so a standby settles stopped and the elected primary comes back.
+    await startApplication(appname);
     report('Finalizing...\n');
     await serviceHelper.delay(5 * 1000);
     await resumeBackupSync(backupSynced, report);

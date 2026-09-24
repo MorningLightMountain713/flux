@@ -2221,6 +2221,16 @@ describe('appReconciler tests', () => {
       expect(stubs.dockerService.appDockerStart.calledOnceWith('www_app')).to.be.true;
     });
 
+    it('settles a running drive to stopped on a standby the controller holds down (an operation hold given back starts nothing the election did not choose)', async () => {
+      await installApp(await v9App('app', { db: ACTIVE_STANDBY }));
+      appReconciler.setControllerDesired('db_app', 'stopped', 'masterSlave standby');
+      stubs.dockerService.dockerContainerInspect.resolves({ State: { Running: false, Status: 'exited', ExitCode: 0 } });
+      await appReconciler.drive(['db_app'], 'stopped');
+      const result = await appReconciler.drive(['db_app'], 'running');
+      expect(result.converged).to.be.true;
+      expect(stubs.dockerService.appDockerStart.called).to.be.false;
+    });
+
     it('settles a driveRunning to stopped when the operator lock still holds (no churn start)', async () => {
       stubs.appsRuntimeState.isOperatorStopped.resolves(true);
       stubs.dockerService.dockerContainerInspect.resolves({ State: { Running: false, Status: 'exited', ExitCode: 0 } });
