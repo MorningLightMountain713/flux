@@ -1059,6 +1059,27 @@ describe('networkStateManager tests', () => {
   });
 
 
+  describe('a snapshot is a population', () => {
+    it('answers a lookup from an anchored snapshot with no fetch having run', async () => {
+      fetcher.callsFake(async () => defaultNetworkState);
+      const nsm = new NetworkStateManager(fetcher);
+
+      await nsm.applySnapshot(defaultNetworkState, 1_079_889, 'hash');
+
+      let answered = false;
+      const lookup = nsm.search('47.199.51.61:16137', 'socketAddress').then((node) => {
+        answered = true;
+        return node;
+      });
+      await new Promise((r) => { setTimeout(r, 20); });
+
+      expect(answered, 'a lookup after a snapshot must not wait for a fetch').to.equal(true);
+      const node = await lookup;
+      expect(node.pubkey).to.equal(defaultNetworkState[0].pubkey);
+      expect(fetcher.called).to.equal(false);
+    });
+  });
+
   describe('getRandomSocketAddressSample', () => {
     const blockEmitter = new EventEmitter();
     const options = { stateEvent: 'blocksProcessed', stateEmitter: blockEmitter };
