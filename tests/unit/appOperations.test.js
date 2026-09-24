@@ -2149,14 +2149,11 @@ describe('appOperations tests', () => {
       expect(operationRegistry.isHeld('bkapp'), 'the backup lease must release on failure').to.be.false;
     });
 
-    // The restart after a synced backup must skip an activeStandby component:
-    // the election decides which side runs, and starting the standby alongside
-    // its sibling is the thing this branch exists to prevent. It used to read
-    // `comp.persistentStorage?.sync?.mode`, a field DeploymentComponent does not
-    // have — always undefined, so the guard was always true and the standby was
-    // started every time. A hand-written double supplied whatever shape the code
-    // read, so nothing noticed.
-    it('does not restart an activeStandby component after a synced backup', async () => {
+    // The stop hold is given back for an activeStandby component like any other.
+    // Which side runs is the election's verdict, enforced by the reconciler: a
+    // standby whose controller state is stopped settles stopped under a running
+    // drive, and a hold left in place would keep the elected primary down.
+    it('gives the reconciler hold back for an activeStandby component after a synced backup', async () => {
       const clock = sinon.useFakeTimers({ toFake: ['setTimeout'] });
       sinon.stub(verificationHelper, 'verifyPrivilege').resolves(true);
       copyIs(true);
@@ -2197,8 +2194,9 @@ describe('appOperations tests', () => {
       const started = drive.getCalls()
         .filter((call) => call.args[1] === 'running')
         .flatMap((call) => call.args[0]);
-      expect(started, 'the standby must not be started alongside its sibling')
-        .to.not.include('web_bkapp');
+      expect(started, 'the synced component must get its hold back through the reconciler')
+        .to.include('web_bkapp');
+      expect(started, 'and so must its sibling').to.include('worker_bkapp');
     });
 
     it('never drives run-state when a foreign operation already holds the app', async () => {
