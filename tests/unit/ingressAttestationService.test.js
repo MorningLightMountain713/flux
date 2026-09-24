@@ -73,7 +73,7 @@ describe('ingressAttestationService tests', () => {
 
   /** A real sealed envelope for arbitrary contents. */
   function sealedFor(contents) {
-    return flux.seal(JSON.stringify(contents), fluxteamKey.publicKey, { kid: TEST_KID });
+    return flux.seal(JSON.stringify(contents), fluxteamKey.publicKey, { kid: TEST_KID, purpose: flux.SEAL_PURPOSE.INGRESS_NOTE });
   }
 
   /**

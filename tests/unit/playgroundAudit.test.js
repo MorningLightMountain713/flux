@@ -45,6 +45,45 @@ describe('playgroundAudit tests', () => {
     });
   }
 
+  // The identifying half is sealed to the same fluxteam key an ingress note is,
+  // so the purpose bound into the seal is what keeps one from reading as the
+  // other. Real library, real keys.
+  describe('build', () => {
+    it('seals the identifying half as a playground record, which does not open as an ingress note', async () => {
+      const backend = await import('@runonflux/flux-spec-backend');
+      const { publicKey, privateKey } = backend.generateSealKeypair();
+      const audit = proxyquire('../../ZelBack/src/services/appPlayground/playgroundAudit', {
+        config: asConfig({ fluxapps: { playgroundAuditRetentionMs: 1 } }),
+        '../../lib/log': { error: sinon.stub(), info: sinon.stub(), warn: sinon.stub() },
+        '../dbHelper': {},
+        '../fluxNetworkHelper': { getFluxNodePublicKey: sinon.stub().resolves('nodepubkey') },
+        '../utils/fluxBroadcastHelper': { getFluxMessageSignature: sinon.stub().resolves('sig') },
+        '../utils/ingressEncryptionKey': { current: sinon.stub().returns({ kid: 'k1', publicKey }) },
+        '../utils/ingressCapture': {},
+        '../utils/specLibs': { getSpecBackend: async () => backend },
+        './playgroundAbuse': { looksLikeMining: sinon.stub().returns(false), fingerprint: sinon.stub().resolves('fp') },
+      });
+      const session = {
+        sessionId: 's1',
+        fluxId: '1FluxIdOfTheCaller',
+        appName: 'play',
+        images: ['nginx:latest'],
+        ingress: {
+          observed: { ip: '203.0.113.9', port: 443 },
+          asserted: { userAgent: null, forwardedFor: null },
+        },
+      };
+
+      const doc = await audit.build(session);
+
+      const opened = JSON.parse(Buffer.from(
+        backend.unseal(doc.sealed, privateKey, { purpose: backend.SEAL_PURPOSE.PLAYGROUND_AUDIT }),
+      ).toString('utf8'));
+      expect(opened.fluxId).to.equal('1FluxIdOfTheCaller');
+      expect(() => backend.openIngressNote(doc.sealed, privateKey)).to.throw();
+    });
+  });
+
   afterEach(() => {
     sinon.restore();
   });

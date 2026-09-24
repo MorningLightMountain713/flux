@@ -96,7 +96,7 @@ function behaviour(session) {
  * @returns {Promise<object|null>} null when there is nothing worth attesting
  */
 async function build(session) {
-  const { seal } = await getSpecBackend();
+  const { seal, SEAL_PURPOSE } = await getSpecBackend();
 
   const ingress = session.ingress ?? { observed: { ip: session.sourceIp, port: null }, asserted: {} };
   if (!ingress.observed || !ingress.observed.ip) return null;
@@ -110,7 +110,7 @@ async function build(session) {
   };
 
   const { kid, publicKey } = ingressEncryptionKey.current();
-  const sealed = seal(JSON.stringify(identifying), publicKey, { kid });
+  const sealed = seal(JSON.stringify(identifying), publicKey, { kid, purpose: SEAL_PURPOSE.PLAYGROUND_AUDIT });
 
   const observedAt = Date.now();
   const node = await fluxNetworkHelper.getFluxNodePublicKey();
