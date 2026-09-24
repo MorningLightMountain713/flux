@@ -109,14 +109,17 @@ describe('content manifest recovery through a message-capability round-trip', fu
     // afterId 0 would stale-match the boot READY/SYNCING).
     const cursor = node.getLastEventId();
 
+    // Read before the disturbance: losing confirmation drops every peer, so the
+    // degrade lands with step 1, and the partition below keeps it there.
+    const degradedBefore = env.nodeLogCount(N, 'Degraded, pausing spawner');
+
     // 1. Drop capability FIRST (reachable-but-unconfirmed → messageCapable false, app kept).
     await setNodeStatus(node.ip, 'EXPIRED');
     await waitForNodeStatus(node, (d) => d.confirmed === false, 30000, { afterId: cursor });
 
-    // 2. Then partition it: peers drop below the floor, so it degrades (resetting the manifest
-    //    latch) and misses the coming v3. Degrade gated on the node's own docker log, the one
-    //    channel that crosses a partition.
-    const degradedBefore = env.nodeLogCount(N, 'Degraded, pausing spawner');
+    // 2. Then partition it: with no peers it degrades (resetting the manifest latch) and
+    //    misses the coming v3. Degrade gated on the node's own docker log, the one channel
+    //    that crosses a partition.
     await env.disconnectNode(N);
     await waitFor(
       () => env.nodeLogCount(N, 'Degraded, pausing spawner') > degradedBefore,
