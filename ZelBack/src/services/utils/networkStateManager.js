@@ -579,6 +579,9 @@ class NetworkStateManager extends EventEmitter {
 
     this.#state = nodes;
     await this.#buildIndexes(this.#state);
+    // A snapshot is a population: lookups answer from it. After the build,
+    // never before it, so a waiter cannot read the empty index.
+    this.#markAnswerable();
     this.#chainAnchor = { height, hash };
     this.#membershipHistory.record(this.#state, this.#chainAnchor);
 
