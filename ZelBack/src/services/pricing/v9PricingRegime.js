@@ -2,7 +2,6 @@
 
 const daemonServiceMiscRpcs = require('../daemonService/daemonServiceMiscRpcs');
 const appsRepository = require('../appDatabase/appsRepository');
-const { resolveInstantiatedSpec } = require('../utils/specCutover');
 const { getSpecPolicy } = require('../utils/specLibs');
 const { buildPricingEngine } = require('./buildPricingEngine');
 const priceOracleState = require('./priceOracleState');
@@ -75,7 +74,8 @@ function getFiatMarkupBp() {
 /**
  * Price a v9 update for display, mirroring updateFee so the displayed figure
  * equals the consensus fee. The previous spec is priced at its own
- * registration-height rates for the unused-time credit. The one unavoidable
+ * registration-height rates for the unused-time credit, as it stands: a sealed
+ * spec is never decrypted to price it. The one unavoidable
  * difference from consensus: "now" is the current wall clock, since the update
  * is not yet in a block and the confirming block time is unknown at preview
  * time.
@@ -86,7 +86,7 @@ function getFiatMarkupBp() {
  * @returns {Promise<number>} price in FLUX (decimal)
  */
 async function onChainDisplayUpdatePrice(spec, existing, daemonHeight) {
-  const prevSpec = await resolveInstantiatedSpec(existing);
+  const prevSpec = existing.spec;
   const prevHeight = existing.height;
 
   const oldEngine = await buildPricingEngine(prevHeight);

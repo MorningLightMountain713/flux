@@ -11,7 +11,7 @@ const serviceHelper = require('../serviceHelper');
 const daemonServiceMiscRpcs = require('../daemonService/daemonServiceMiscRpcs');
 const daemonServiceBlockchainRpcs = require('../daemonService/daemonServiceBlockchainRpcs');
 const { getSpec, getSpecBackend } = require('../utils/specLibs');
-const { resolveSpec, resolveInstantiatedSpec } = require('../utils/specCutover');
+const { deserializeSpec } = require('../utils/specCutover');
 const { regimeFor } = require('../pricing/pricingRegime');
 const appsRepository = require('../appDatabase/appsRepository');
 const { insertAppSpecifications, updateAppSpecifications } = require('../appDatabase/registryManager');
@@ -520,19 +520,11 @@ async function checkAndRequestApp(hash, txid, height, valueSat, blockTime = null
     // it must read that way in the log.
     const { spec } = instantiated;
     try {
-      // Pricing — the spec is a class instance on confirmedEvent.spec. Pricing
-      // reads the cleartext components (DeploymentSpec.fromSpec), so an encrypted
-      // (enterprise) spec must be decrypted first. Identity/lookups still use the
-      // encrypted wire form (no decrypt needed).
-      // Cleartext apps resolve to their own spec; encrypted apps to a
-      // DecryptedCanonicalSpec the pricer reads through.
-      const pricingSpec = await resolveInstantiatedSpec(instantiated);
-      if (!pricingSpec) {
-        log.error(`checkAndRequestApp - could not resolve spec for ${instantiated.name} to compute fee`);
-        return true;
-      }
+      // A sealed spec is priced as it stands, never decrypted: its cleartext
+      // half carries every pricing input, so every node reaches the same fee
+      // whether or not it can open the spec.
       if (confirmedEvent.isRegistration) {
-        const requiredSats = await computeRegistrationFee(pricingSpec, height);
+        const requiredSats = await computeRegistrationFee(spec, height);
         if (requiredSats === 0n) {
           // Fail-closed: a registration always pays for its TTL, so a fee of 0 can
           // only mean pricing isn't in force yet (no PriceMessage on chain for v9).
@@ -560,7 +552,7 @@ async function checkAndRequestApp(hash, txid, height, valueSat, blockTime = null
         // Each regime resolves it its own way — this message is already stored
         // above, and whether that matters is a property of the economics, not of
         // this function.
-        const regime = await regimeFor(pricingSpec);
+        const regime = await regimeFor(spec);
         const prevMessage = await regime.supersededMessage(spec.name, {
           height, timestamp: tempMessage.timestamp,
         });
@@ -569,11 +561,10 @@ async function checkAndRequestApp(hash, txid, height, valueSat, blockTime = null
           return true;
         }
         const prevSpecs = prevMessage.appSpecifications;
-        // resolveSpec deserializes and decrypts (if encrypted) the previous spec —
-        // computeUpdateFee prices the previous spec too.
-        const prevSpec = await resolveSpec(prevSpecs);
+        // The previous spec is priced as it stands too, for the same reason.
+        const prevSpec = await deserializeSpec(prevSpecs);
         if (!prevSpec) {
-          log.error(`checkAndRequestApp - could not resolve previous spec for ${spec.name} to compute update fee`);
+          log.error(`checkAndRequestApp - could not read previous spec for ${spec.name} to compute update fee`);
           return true;
         }
         // The unused-time credit refunds what is actually LEFT, so its basis is
@@ -582,7 +573,7 @@ async function checkAndRequestApp(hash, txid, height, valueSat, blockTime = null
         // keep the term) that stamp overstates the remaining time and the
         // credit refunds seconds already consumed.
         const requiredSats = await computeUpdateFee(
-          pricingSpec, prevSpec, height, prevMessage.height,
+          spec, prevSpec, height, prevMessage.height,
           currentState?.registeredAt ?? prevMessage.registeredAt ?? 0, confirmedBlockTime,
         );
         if (requiredSats === null) {

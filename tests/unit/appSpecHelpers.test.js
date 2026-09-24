@@ -9,8 +9,9 @@ const proxyquire = require('proxyquire');
 const dbHelper = require('../../ZelBack/src/services/dbHelper');
 const daemonServiceMiscRpcs = require('../../ZelBack/src/services/daemonService/daemonServiceMiscRpcs');
 const appsRepository = require('../../ZelBack/src/services/appDatabase/appsRepository');
+const specCutover = require('../../ZelBack/src/services/utils/specCutover');
 const {
-  loadSpecLibrary, V8_SUBMISSION, v1Spec, v8Spec, v9Spec, instantiatedSpec,
+  loadSpecLibrary, V8_SUBMISSION, v1Spec, v8Spec, v9Spec, sealedV9Spec, instantiatedSpec,
 } = require('./fixtures/fluxSpec');
 
 // The spec library is real here — see tests/unit/fixtures/fluxSpec.js for why.
@@ -637,9 +638,13 @@ describe('appSpecHelpers tests', () => {
     }
 
     // `messages` becomes the free-update rate-limit input.
-    async function buildHelpers({ newSpec, prevSpec, messages = [] }) {
+    // `open` stands in for decrypting the stored registration; the real one is
+    // passed where opening is what the test is about.
+    async function buildHelpers({
+      newSpec, prevSpec, messages = [], open = null,
+    }) {
       const existing = await registrationOf(prevSpec);
-      const resolveInstantiatedSpec = sinon.stub().resolves(prevSpec);
+      const resolveInstantiatedSpec = open ?? sinon.stub().resolves(prevSpec);
       const helpers = buildAppSpecHelpers({
         resolveSpec: sinon.stub().resolves(newSpec),
         resolveInstantiatedSpec,
@@ -666,25 +671,24 @@ describe('appSpecHelpers tests', () => {
       expect(result.usd).to.equal(0);
     });
 
-    // The registration is handed to the decrypt seam, and the regime reads three
-    // fields straight off it: height (the rates the old spec is priced at),
-    // registeredAt (the unused-time credit) and isEncrypted. registeredAt absent
-    // makes remainingSeconds NaN and the credit vanishes silently, so read the
-    // argument back and assert the properties the regime reads.
-    it('v9: hands the decrypt seam a registration answering what the regime reads', async () => {
-      const prevSpec = await v9SpecWith();
-      const { helpers, resolveInstantiatedSpec } = await buildHelpers({
-        newSpec: await v9SpecWith(), prevSpec,
+    // A sealed registration is quoted as it stands, exactly as consensus prices
+    // it: the node quoting it need not be able to open it. Opening is refused,
+    // and the refusal is the canary for a quote that tried.
+    it('v9: quotes an update over a sealed registration without opening it', async () => {
+      const flux = await loadSpecLibrary();
+      const prevSpec = await sealedV9Spec({ name: 'regimetest' });
+      const { helpers } = await buildHelpers({
+        newSpec: await v9SpecWith({ network: { mesh: true } }),
+        prevSpec,
+        open: specCutover.resolveInstantiatedSpec,
       });
+      const open = sinon.stub(flux.EncryptedSpecV9.prototype, 'createProvider')
+        .rejects(new Error('no secure backend'));
 
-      await helpers.getAppFiatAndFluxPrice(await v9SpecWith());
+      const result = await helpers.getAppFiatAndFluxPrice(await v9SpecWith({ network: { mesh: true } }));
 
-      const [handed] = resolveInstantiatedSpec.firstCall.args;
-      expect(handed, 'nothing reached the decrypt seam').to.be.an('object');
-      expect(handed.height, 'the old spec is priced at this height').to.be.a('number');
-      expect(handed.registeredAt, 'the unused-time credit is measured from this').to.be.a('number');
-      expect(handed.isEncrypted, 'and this drives the encryptedSpec fee').to.be.a('boolean');
-      expect(handed.spec, 'the real seam returns this for a cleartext row').to.equal(prevSpec);
+      expect(result.flux).to.be.greaterThan(0);
+      expect(open.called, 'the quote tried to open the sealed registration').to.equal(false);
     });
 
     // The decisive one. The legacy rule does not look at features at all, so it
