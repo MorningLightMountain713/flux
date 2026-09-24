@@ -1000,6 +1000,45 @@ describe('appHashSyncService tests', () => {
     // The version gate needs only the version a sealed spec states in the clear,
     // so it holds on a node that cannot open the spec — where the decrypt below
     // it fails and is passed over with a warning.
+    it('stores a sealed spec whose decrypted content fails validation, and says which step failed', async () => {
+      const sealed = await sealedV9Spec({ name: 'sealedapp' });
+      const cleartext = await v9Spec({ name: 'sealedapp' });
+      sinon.stub(flux.DecryptedCanonicalSpec.prototype, 'validateContents').throws(new Error('bad content'));
+      const bulkMessages = [{
+        type: 'fluxappregister',
+        version: 2,
+        hash: 'hash1',
+        timestamp: Date.now(),
+        extend: true,
+        signature: 'sig1',
+        appSpecifications: sealed.serialize(),
+        contentHash: cleartext.contentHash(),
+        valueSat: 1e8,
+        txid: 'tx1',
+        height: 2000,
+        registeredAt: 1_751_628_800,
+      }];
+      const manyMissing = Array(600).fill(null).map((_, i) => ({
+        hash: `hash${i}`, txid: `tx${i}`, height: 1000 + i, value: 100, message: false,
+      }));
+      let calls = 0;
+      localDbHelperStub.findInDatabase.callsFake(() => {
+        calls += 1;
+        return Promise.resolve(calls === 1 ? manyMissing : []);
+      });
+      localDbHelperStub.findOneInDatabase.resolves({ generalScannedHeight: 2_555_000 });
+      serviceHelperStub.axiosGet.callsFake((url) => (url.includes('permanentmessages')
+        ? Promise.resolve(makeStreamResponse(bulkMessages))
+        : Promise.resolve({ data: { status: 'success', data: true } })));
+
+      await localModule.syncMissingHashes();
+
+      const warnings = localLogStub.warn.args.map((a) => String(a[0]));
+      expect(warnings.some((w) => /fails validation on this node: bad content/.test(w)), warnings.join('\n')).to.equal(true);
+      expect(warnings.some((w) => /decrypt skipped/.test(w)), 'the decrypt succeeded').to.equal(false);
+      expect(localCollectionStub.insertMany.firstCall.args[0].length).to.equal(1);
+    });
+
     it('refuses a sealed spec whose version is not active, on a node that cannot open it', async () => {
       const sealed = await sealedV9Spec({ name: 'sealedapp' });
       const cleartext = await v9Spec({ name: 'sealedapp' });
