@@ -4,6 +4,7 @@ const { expect } = require('chai');
 const sinon = require('sinon');
 const proxyquire = require('proxyquire').noCallThru();
 const domain = require('./fixtures/appDomain');
+const fluxSpec = require('./fixtures/fluxSpec');
 const { asConfig } = require('./fixtures/config');
 
 // Shared stubs used by every proxyquire call
@@ -911,32 +912,97 @@ describe('messageVerifier tests', () => {
       expect(logStub.error.called).to.be.true;
     });
 
-    it('decrypts an encrypted registration spec before pricing it', async () => {
-      // A genuinely encrypted spec — the enterprise blob stays sealed, so this
-      // is a real EncryptedSpecV8 and isEncrypted is the class's own answer.
-      const encrypted = await domain.encryptedV8Spec();
-      // Opening the blob is the one thing here that leaves the process (it needs
-      // the benchmark channel), so it is the one thing stubbed. What the pricer
-      // is handed is a cleartext view it can read.
-      const decryptedSpec = await domain.v8Spec({ name: 'encapp', expire: 88_000 });
+    // A sealed spec's cleartext half carries every pricing input, so a node that
+    // cannot open it prices it exactly as one that can. Opening is refused here,
+    // and the refusal is also the canary: a path that tried would reach it.
+    describe('a sealed spec is priced as it stands', () => {
+      async function sealedV9(overrides = {}) {
+        const flux = await fluxSpec.loadSpecLibrary();
+        const cleartext = await fluxSpec.v9Spec(overrides, { encrypted: true });
+        const sealed = await flux.EncryptedSpecV9.fromSpec(
+          cleartext, await flux.EncryptedSpecV9.createProviderFor(cleartext.name, cleartext.owner),
+        );
+        return { sealed, contentHash: cleartext.contentHash() };
+      }
 
-      const { stubs, legacyRegime } = makeBaseStubs();
-      const resolveInstantiatedStub = sinon.stub().resolves(decryptedSpec);
-      stubs['../utils/specCutover'] = { resolveInstantiatedSpec: resolveInstantiatedStub };
-      stubs['../appDatabase/appsRepository'].getTempMessage = sinon.stub().resolves(
-        await domain.tempMessage({ version: 1, hash: 'encReg', spec: encrypted }),
-      );
+      function refuseToOpen(flux) {
+        return {
+          v9: sinon.stub(flux.EncryptedSpecV9.prototype, 'createProvider').rejects(new Error('no secure backend')),
+          v8: sinon.stub(flux.EncryptedSpecV8.prototype, 'createProvider').rejects(new Error('no secure backend')),
+        };
+      }
 
-      const mv = proxyquire('../../ZelBack/src/services/appMessaging/messageVerifier', stubs);
-      const result = await mv.checkAndRequestApp('encReg', 'txid', 2_000_000, 200_000_000, null, 2);
+      it('registers a sealed v9 app on a node that cannot open it', async () => {
+        const flux = await fluxSpec.loadSpecLibrary();
+        const { sealed, contentHash } = await sealedV9();
+        const { stubs, v9Regime } = makeBaseStubs();
+        stubs['../appDatabase/appsRepository'].getTempMessage = sinon.stub().resolves(
+          await domain.tempMessage({ version: 2, hash: 'sealedReg', spec: sealed, contentHash }),
+        );
+        const insertStub = sinon.stub().resolves();
+        stubs['../appDatabase/registryManager'].insertAppSpecifications = insertStub;
+        const open = refuseToOpen(flux);
+        const mv = proxyquire('../../ZelBack/src/services/appMessaging/messageVerifier', stubs);
 
-      expect(result).to.be.true;
-      // the held instance really is encrypted, and it is what gets decrypted
-      sinon.assert.calledOnce(resolveInstantiatedStub);
-      expect(resolveInstantiatedStub.firstCall.args[0].isEncrypted).to.be.true;
-      // pricing ran against the decrypted view, never the sealed wrapper
-      expect(legacyRegime.registrationFee.calledOnce).to.be.true;
-      expect(legacyRegime.registrationFee.firstCall.args[0]).to.equal(decryptedSpec);
+        const result = await mv.checkAndRequestApp('sealedReg', 'txid', 2_000_000, 200_000_000, 1_751_234_567, 2);
+
+        expect(result).to.be.true;
+        sinon.assert.calledOnce(v9Regime.registrationFee);
+        expect(v9Regime.registrationFee.firstCall.args[0]).to.be.instanceOf(flux.EncryptedSpecV9);
+        sinon.assert.calledOnce(insertStub);
+        expect(open.v9.called, 'pricing tried to open the sealed spec').to.equal(false);
+      });
+
+      it('prices a sealed v8 registration from its wire form', async () => {
+        const flux = await fluxSpec.loadSpecLibrary();
+        const encrypted = await domain.encryptedV8Spec();
+        const { stubs, legacyRegime } = makeBaseStubs();
+        stubs['../appDatabase/appsRepository'].getTempMessage = sinon.stub().resolves(
+          await domain.tempMessage({ version: 1, hash: 'encReg', spec: encrypted }),
+        );
+        const open = refuseToOpen(flux);
+        const mv = proxyquire('../../ZelBack/src/services/appMessaging/messageVerifier', stubs);
+
+        const result = await mv.checkAndRequestApp('encReg', 'txid', 2_000_000, 200_000_000, null, 2);
+
+        expect(result).to.be.true;
+        sinon.assert.calledOnce(legacyRegime.registrationFee);
+        expect(legacyRegime.registrationFee.firstCall.args[0]).to.be.instanceOf(flux.EncryptedSpecV8);
+        expect(open.v8.called, 'pricing tried to open the sealed spec').to.equal(false);
+      });
+
+      it('prices a sealed update against its sealed predecessor, opening neither', async () => {
+        const flux = await fluxSpec.loadSpecLibrary();
+        const next = await sealedV9({ instances: 4 });
+        const prev = await sealedV9({ instances: 5 });
+        const { stubs, v9Regime } = makeBaseStubs();
+        stubs['../appDatabase/appsRepository'].getTempMessage = sinon.stub().resolves(
+          await domain.tempMessage({
+            version: 2, type: 'fluxappupdate', hash: 'sealedUpd', spec: next.sealed, contentHash: next.contentHash,
+          }),
+        );
+        stubs['../appDatabase/appsRepository'].getGlobalAppInfo = sinon.stub()
+          .resolves({ name: next.sealed.name, owner: next.sealed.owner, registeredAt: 1_750_000_000 });
+        v9Regime.supersededMessage = sinon.stub().resolves({
+          hash: 'prevHash', height: 1_999_000, registeredAt: 1_750_000_000,
+          appSpecifications: prev.sealed.serialize(),
+        });
+        const updateStub = sinon.stub().resolves();
+        stubs['../appDatabase/registryManager'].updateAppSpecifications = updateStub;
+        const open = refuseToOpen(flux);
+        const mv = proxyquire('../../ZelBack/src/services/appMessaging/messageVerifier', stubs);
+
+        const result = await mv.checkAndRequestApp('sealedUpd', 'txid', 2_000_000, 200_000_000, 1_760_000_000, 2);
+
+        expect(result).to.be.true;
+        sinon.assert.calledOnce(v9Regime.updateFee);
+        const [thisSpec, prevSpec] = v9Regime.updateFee.firstCall.args;
+        expect(thisSpec).to.be.instanceOf(flux.EncryptedSpecV9);
+        expect(prevSpec).to.be.instanceOf(flux.EncryptedSpecV9);
+        expect(prevSpec.instances, 'priced against the predecessor').to.equal(5);
+        sinon.assert.calledOnce(updateStub);
+        expect(open.v9.called, 'pricing tried to open a sealed spec').to.equal(false);
+      });
     });
   });
 
