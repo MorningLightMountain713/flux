@@ -2,6 +2,7 @@
 import { describe, it, before, after } from 'mocha';
 import { expect } from 'chai';
 import { createTestEnv } from '../framework/test-env.js';
+import chainStart from '../framework/chain-start.cjs';
 import { ALL_ZMQ_TOPICS } from '../framework/fluxd-conf.js';
 import {
   bootAndPeer, installOnNodes, seedSyncScopedData, redialAndPeer,
@@ -53,10 +54,11 @@ import {
 
 const HOLDERS = [0, 1, 2];
 const PRE_WINDOW = 40;
-// Far enough past the seed height that the setup's own blocks — bootAndPeer's one,
-// the install confirm, whatever the ticker managed before it was stopped — stay
-// below the window's first block. The suite advances to it by hand.
-const ACTIVATION_HEIGHT = 2_100_200;
+// Anchored on the chain the fleet starts at, far enough past it that the setup's
+// own blocks — bootAndPeer's one, the install confirm, whatever the ticker managed
+// before it was stopped — stay below the window's first block. The suite advances
+// to it by hand.
+const ACTIVATION_HEIGHT = chainStart.DEFAULT_INITIAL_HEIGHT + 200;
 const OPENS_AT = ACTIVATION_HEIGHT - PRE_WINDOW;
 const REFEREE_DRAIN_MS = 90000;
 
