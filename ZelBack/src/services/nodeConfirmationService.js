@@ -118,6 +118,23 @@ function onMessageCapabilityChange(callback) {
 }
 
 /**
+ * Blocks since confirmation read off a tip that has stopped moving. A status can
+ * land before the first chain view does, so no current count is on record; the
+ * tip then froze where the daemon went quiet, and the difference is the count as
+ * of last contact. Null when there is no tip or no confirmation to read.
+ * @returns {number|null}
+ */
+function blocksAtFrozenTip() {
+  const lastConfirmed = nodeStatus?.last_confirmed_height;
+  if (!Number.isFinite(lastConfirmed) || lastConfirmed <= 0) return null;
+
+  const { height } = daemonServiceMiscRpcs.isDaemonSynced().data;
+  if (!Number.isFinite(height) || height <= 0) return null;
+
+  return height - lastConfirmed;
+}
+
+/**
  * Whether this node's confirmation has passed its on-chain deadline.
  *
  * Expiry is a block count, not a duration: fluxd drops a node that has not re-confirmed
@@ -136,7 +153,7 @@ function hasConfirmationExpired(elapsedMs) {
   const blocks = blocksSinceConfirmation();
   if (blocks !== null) return blocks > CONFIRM_EXPIRATION_BLOCKS;
 
-  const blocksAtLastContact = lastKnownBlocksSinceConfirmation;
+  const blocksAtLastContact = lastKnownBlocksSinceConfirmation ?? blocksAtFrozenTip();
   if (blocksAtLastContact === null) return false;
 
   const blocksRemaining = CONFIRM_EXPIRATION_BLOCKS - blocksAtLastContact;

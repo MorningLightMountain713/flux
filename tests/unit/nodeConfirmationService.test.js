@@ -537,6 +537,21 @@ describe('nodeConfirmationService', () => {
       expect(service.isConfirmed()).to.be.false;
     });
 
+    // The status can land before the first chain view does, so no current count
+    // is ever recorded; the tip then freezes where the daemon went quiet, and
+    // that frozen tip is the count as of last contact.
+    it('should estimate the deadline from the frozen tip when no count was recorded at last contact', async () => {
+      setupConfirmed();
+      isDaemonSyncedStub.returns({ data: { height: 1200, synced: false } });
+      await service.start();
+      expect(service.isConfirmed()).to.be.true;
+      getFluxNodeStatusStub.rejects(new Error('connection refused'));
+      await setStatusAgeMinutes(219);
+      expect(service.isConfirmed()).to.be.true;
+      await setStatusAgeMinutes(221);
+      expect(service.isConfirmed()).to.be.false;
+    });
+
     it('should recover when daemon comes back after staleness', async () => {
       const staleCb = sinon.spy();
       service.onDaemonStale(staleCb);
