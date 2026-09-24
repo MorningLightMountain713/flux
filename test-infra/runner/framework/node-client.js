@@ -350,7 +350,6 @@ export function nodeClient(nodeNum) {
         'ephemeralSync:requested',
         'ephemeralSync:reconnectRequested',
         'ephemeralSync:peerComplete',
-        'ephemeralSync:peerFailed',
         'ephemeralSync:allComplete',
         'sync:refused',
         'ephemeralSync:peerTimedOut',

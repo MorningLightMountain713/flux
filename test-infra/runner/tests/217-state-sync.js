@@ -416,13 +416,15 @@ describe('State sync: failed sync peer is replaced', function () {
     );
     expect(round1.data.peers).to.include(poisonedKey);
 
-    // The poisoned source misses its per-peer deadline on apprunning only
+    // The poisoned source answers the other three types and then stops: it
+    // is judged as stopped mid-answer, missing apprunning only
     const failed = await client.waitForEvent(
-      'ephemeralSync:peerFailed',
-      (d) => d.reason === 'deadline' && d.missing.includes('apprunning'),
+      'ephemeralSync:peerTimedOut',
+      (d) => d.reason === 'stopped mid-answer' && d.missing.includes('apprunning'),
       120000,
     );
     expect(failed.data.peer).to.equal(poisonedKey);
+    expect(failed.data.missing).to.deep.equal(['apprunning']);
     await dbClient(POISONED_DB).failpointClear();
 
     // No fresh peer exists at failure time; the replacement happens once one
