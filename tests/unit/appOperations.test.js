@@ -1767,9 +1767,148 @@ describe('appOperations tests', () => {
   // BACK: an error after the stop (ENOSPC on the archive is the classic) that only
   // releases the registry lease leaves operationDesired='stopped' for the life of
   // the process - the app is stranded down and no decider can outrank the hold.
+  describe('runRestoreTask rules', () => {
+    // eslint-disable-next-line global-require
+    const volumeService = require('../../ZelBack/src/services/utils/volumeService');
+    // eslint-disable-next-line global-require
+    const IOUtils = require('../../ZelBack/src/services/IOUtils');
+    // eslint-disable-next-line global-require
+    const syncthingMonitorHelpers = require('../../ZelBack/src/services/appMonitoring/syncthingMonitorHelpers');
+    // eslint-disable-next-line global-require
+    const globalCommand = require('../../ZelBack/src/services/appManagement/globalCommand');
+
+    let reported;
+    beforeEach(() => { reported = []; });
+    const runRestore = (appName, restore, type, opts) => appOperations
+      .runRestoreTask(appName, restore, type, 'auth', (line) => reported.push(String(line)), opts)
+      .then(() => null, (error) => error);
+
+    /** Everything a restore reads and drives, with a whole readable archive on every volume. */
+    async function restoreStubs(appName, deployment) {
+      sinon.stub(deploymentProvider, 'getInstalledDeployment').resolves(deployment);
+      sinon.stub(deploymentProvider, 'buildDeployment').resolves(deployment);
+      sinon.stub(appsRepository, 'getGlobalAppInfo').resolves(await instantiatedSpec(await v9Spec({ name: appName })));
+      const drive = sinon.stub(appReconciler, 'drive').resolves({ converged: true, failed: [] });
+      sinon.stub(appReconciler, 'observedContainerState').resolves({
+        reachable: true, exists: true, running: false, indeterminate: false,
+      });
+      sinon.stub(serviceHelper, 'delay').resolves();
+      sinon.stub(volumeService, 'listComponentVolumeMounts').callsFake(async (app, comp) => [
+        { replica: null, mount: `/vol/${comp}`, identifier: `${comp}_${app}` },
+      ]);
+      const restoreAppData = sinon.stub(appDataEntries, 'restoreAppData').resolves({ status: true });
+      const inspect = sinon.stub(IOUtils, 'inspectTarGz').resolves({ status: true, entries: 3, bytes: 300 });
+      const removeFile = sinon.stub(IOUtils, 'removeFile').resolves();
+      const pause = sinon.stub(syncthingMonitorHelpers, 'setSyncthingFolderPaused').resolves('held');
+      const peers = sinon.stub(globalCommand, 'executeAppGlobalCommand').resolves();
+      sinon.stub(fluxNetworkHelper, 'getLocalSocketAddress').resolves('10.0.0.1:16127');
+      return {
+        drive, restoreAppData, inspect, removeFile, pause, peers,
+      };
+    }
+    // Each component on its own host port, as the spec requires of siblings.
+    const syncedApp = async (appName, modes) => deploymentFor(await specWithComponents(appName, Object.fromEntries(
+      Object.entries(modes).map(([name, mode], i) => [name, {
+        ports: { http: { containerPort: 8080, hostPort: 31_000 + i } },
+        persistentStorage: {
+          sizeGb: 5,
+          mounts: { '/data': { source: 'data', destination: '/data' } },
+          sync: { mode },
+        },
+      }]),
+    )));
+
+    it('refuses a component the app does not have before holding or stopping anything', async () => {
+      const { drive, pause } = await restoreStubs('myapp', await oneComponentDeployment('myapp', 'web'));
+
+      const failure = await runRestore('myapp', [{ component: 'nope', restore: true }], 'local');
+
+      expect(failure?.message).to.match(/Refused: nope is not a component of myapp/);
+      sinon.assert.notCalled(pause);
+      sinon.assert.notCalled(drive);
+    });
+
+    it('refuses a restore on a node that is not the live copy of an active-standby component', async () => {
+      const { drive, pause } = await restoreStubs('bkapp', await syncedApp('bkapp', { web: 'activeStandby' }));
+      sinon.stub(serviceHelper, 'axiosGet').resolves({ data: { status: 'success', data: { ips: ['203.0.113.9'] } } });
+
+      const failure = await runRestore('bkapp', [{ component: 'web', restore: true }], 'local');
+
+      expect(failure?.message).to.match(/Refused: restore on 203\.0\.113\.9, it holds the live copy/);
+      sinon.assert.notCalled(pause);
+      sinon.assert.notCalled(drive);
+    });
+
+    it('proceeds when the election cannot answer, as an election does', async () => {
+      const { drive } = await restoreStubs('bkapp', await syncedApp('bkapp', { web: 'activeStandby' }));
+      sinon.stub(serviceHelper, 'axiosGet').rejects(Object.assign(new Error('connect ECONNREFUSED'), { code: 'ECONNREFUSED' }));
+
+      const failure = await runRestore('bkapp', [{ component: 'web', restore: true }], 'local');
+
+      expect(failure, `the restore must proceed: ${failure?.message}`).to.equal(null);
+      expect(drive.calledWith(['web_bkapp'], 'stopped')).to.be.true;
+    });
+
+    it('reads every archive before clearing any appdata, and refuses an unreadable one with the data intact', async () => {
+      const { drive, inspect, restoreAppData } = await restoreStubs('myapp', await oneComponentDeployment('myapp', 'web'));
+      inspect.resolves({ status: false, error: 'not in gzip format' });
+
+      const failure = await runRestore('myapp', [{ component: 'web', restore: true }], 'local');
+
+      expect(failure?.message).to.match(/archive for web is unreadable, not in gzip format/);
+      sinon.assert.notCalled(restoreAppData);
+      expect(drive.calledWith(['web_myapp'], 'running'), 'the untouched app is started again').to.be.true;
+    });
+
+    it('holds still only the folders of the components named', async () => {
+      const { pause } = await restoreStubs('bkapp', await syncedApp('bkapp', { web: 'syncFirst', worker: 'syncFirst' }));
+
+      const failure = await runRestore('bkapp', [{ component: 'web', restore: true }, { component: 'worker', restore: false }], 'local');
+
+      expect(failure, `the restore must complete: ${failure?.message}`).to.equal(null);
+      const held = pause.getCalls().filter((call) => call.args[1] === true).map((call) => call.args[0]);
+      expect(held).to.deep.equal(['web_bkapp']);
+    });
+
+    it('restarts the peers of a component every instance runs, and never redeploys them', async () => {
+      const { peers } = await restoreStubs('bkapp', await syncedApp('bkapp', { web: 'syncFirst' }));
+
+      const failure = await runRestore('bkapp', [{ component: 'web', restore: true }], 'local');
+
+      expect(failure, `the restore must complete: ${failure?.message}`).to.equal(null);
+      sinon.assert.calledOnce(peers);
+      expect(peers.firstCall.args[1]).to.equal('apprestart');
+      expect(peers.getCalls().some((call) => call.args[1] === 'redeploy')).to.equal(false);
+    });
+
+    it('disturbs no peer for an active-standby component', async () => {
+      const { peers } = await restoreStubs('bkapp', await syncedApp('bkapp', { web: 'activeStandby' }));
+
+      const failure = await runRestore('bkapp', [{ component: 'web', restore: true }], 'local', { force: true });
+
+      expect(failure, `the restore must complete: ${failure?.message}`).to.equal(null);
+      sinon.assert.notCalled(peers);
+    });
+
+    it('keeps a local archive, and removes only the copy it downloaded', async () => {
+      const { removeFile } = await restoreStubs('myapp', await oneComponentDeployment('myapp', 'web'));
+      const kept = await runRestore('myapp', [{ component: 'web', restore: true }], 'local');
+      expect(kept, `the restore must complete: ${kept?.message}`).to.equal(null);
+      sinon.assert.notCalled(removeFile);
+
+      sinon.stub(IOUtils, 'removeDirectory').resolves(true);
+      sinon.stub(IOUtils, 'downloadFileFromUrl').resolves(true);
+      const fetched = await runRestore('myapp', [{ component: 'web', restore: true, url: 'https://example.test/a.tar.gz' }], 'remote');
+      expect(fetched, `the restore must complete: ${fetched?.message}`).to.equal(null);
+      expect(removeFile.calledOnceWith('/vol/web/backup/remote/backup_web.tar.gz')).to.be.true;
+    });
+  });
+
   describe('runRestoreTask hold on a failed clear', () => {
     // eslint-disable-next-line global-require
     const volumeService = require('../../ZelBack/src/services/utils/volumeService');
+    // eslint-disable-next-line global-require
+    const IOUtils = require('../../ZelBack/src/services/IOUtils');
 
     // A clear that fails leaves the directory neither copy: the component is
     // held stopped rather than started on it, and the caller is told why.
@@ -1785,6 +1924,7 @@ describe('appOperations tests', () => {
       const hold = sinon.stub(appReconciler, 'setControllerDesired');
       sinon.stub(serviceHelper, 'delay').resolves();
       sinon.stub(volumeService, 'listComponentVolumeMounts').resolves([{ replica: null, mount: '/vol', identifier: 'web_myapp' }]);
+      sinon.stub(IOUtils, 'inspectTarGz').resolves({ status: true, entries: 3, bytes: 300 });
       sinon.stub(appDataEntries, 'restoreAppData').resolves({ status: false, error: 'could not clear /vol before unpacking: Device or resource busy' });
       const reported = [];
 
@@ -1875,7 +2015,7 @@ describe('appOperations tests', () => {
       expect(composed.getComponent('worker').hasSyncthing()).to.be.false;
       sinon.stub(deploymentProvider, 'getInstalledDeployment').resolves(composed);
       copyIs(true);
-      const pauseFolder = sinon.stub(syncthingMonitorHelpers, 'setSyncthingFolderPaused').resolves(true);
+      const pauseFolder = sinon.stub(syncthingMonitorHelpers, 'setSyncthingFolderPaused').resolves('held');
       sinon.stub(appsRepository, 'getGlobalAppInfo').resolves(await instantiatedSpec(await v9Spec({ name: 'bkapp' })));
       sinon.stub(deploymentProvider, 'buildDeployment').resolves(composed);
       sinon.stub(appReconciler, 'drive').resolves({ converged: true, failed: [] });
@@ -1952,7 +2092,7 @@ describe('appOperations tests', () => {
       const stopped = sinon.stub(appReconciler, 'setControllerDesired').resolves();
       // What a failed BUILD looks like from here: indistinguishable from absent.
       sinon.stub(deploymentProvider, 'getInstalledDeployment').resolves(null);
-      const pauseFolder = sinon.stub(syncthingMonitorHelpers, 'setSyncthingFolderPaused').resolves(true);
+      const pauseFolder = sinon.stub(syncthingMonitorHelpers, 'setSyncthingFolderPaused').resolves('held');
       const tar = sinon.stub(appDataEntries, 'archiveAppData').resolves({ status: true });
 
       const req = { body: { appname: 'bkapp', backup: [{ component: 'web', backup: true }] } };
@@ -1987,7 +2127,7 @@ describe('appOperations tests', () => {
         sinon.stub(appsRepository, 'getGlobalAppInfo').resolves(await instantiatedSpec(await v9Spec({ name: 'bkapp' })));
         sinon.stub(deploymentProvider, 'buildDeployment').resolves(composed);
         sinon.stub(syncthingFolderStateMachine, 'probeFolderSyncCompletion').resolves(probe);
-        sinon.stub(syncthingMonitorHelpers, 'setSyncthingFolderPaused').resolves(true);
+        sinon.stub(syncthingMonitorHelpers, 'setSyncthingFolderPaused').resolves('held');
         sinon.stub(appReconciler, 'drive').resolves({ converged: true, failed: [] });
         // The stop is proved against docker, not against the drive's verdict: the
         // converge backstop answers 'provisional' and that is not counted, so
@@ -2217,7 +2357,7 @@ describe('appOperations tests', () => {
         reachable: true, exists: true, running: false, indeterminate: false,
       });
       sinon.stub(volumeService, 'listComponentVolumeMounts').resolves([{ replica: null, mount: '/vol' }]);
-      sinon.stub(syncthingMonitorHelpers, 'setSyncthingFolderPaused').resolves(true);
+      sinon.stub(syncthingMonitorHelpers, 'setSyncthingFolderPaused').resolves('held');
       sinon.stub(IOUtils, 'checkFileExists').resolves(false);
       sinon.stub(IOUtils, 'removeFile').resolves();
       sinon.stub(appDataEntries, 'archiveAppData').resolves({ status: true });

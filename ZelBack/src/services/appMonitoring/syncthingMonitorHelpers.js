@@ -349,7 +349,10 @@ function emitFolderStatus(report, status) {
  * @param {string} appComponentName - component identifier (flat app name for v1-3 specs)
  * @param {boolean} paused - the state to leave the folder in
  * @param {function(string): void} [report] - told what happened
- * @returns {Promise<boolean>} whether syncthing accepted it
+ * @returns {Promise<'held'|'resumed'|'absent'|'failed'>} 'held' or 'resumed' when
+ *   syncthing accepted it; 'absent' when no folder is configured, so there is
+ *   nothing replicating to hold still; 'failed' when the folder may be live and
+ *   unheld
  */
 async function setSyncthingFolderPaused(appComponentName, paused, report) {
   const verb = paused ? 'pause' : 'resume';
@@ -357,7 +360,7 @@ async function setSyncthingFolderPaused(appComponentName, paused, report) {
     const appId = dockerService.getAppIdentifier(appComponentName);
     const folder = `${appsFolder + appId}`;
     const allSyncthingFolders = await syncthingService.getConfigFolders();
-    if (!Array.isArray(allSyncthingFolders)) return false;
+    if (!Array.isArray(allSyncthingFolders)) return 'failed';
 
     const match = allSyncthingFolders.find(
       (f) => f.path === folder || f.path.includes(`${folder}/`),
@@ -367,18 +370,18 @@ async function setSyncthingFolderPaused(appComponentName, paused, report) {
       // stop - but a resume that finds nothing means the folder went while the
       // operation held it, which the caller cannot fix and should see.
       if (!paused) emitFolderStatus(report, { status: `Syncthing folder for ${appComponentName} is gone; nothing to resume` });
-      return false;
+      return 'absent';
     }
 
     await syncthingService.adjustConfigFolders({
       method: ConfigMethod.PATCH, config: { paused }, id: match.id,
     });
     emitFolderStatus(report, { status: `Syncthing ${paused ? 'paused' : 'resumed'} for ${appComponentName}` });
-    return true;
+    return paused ? 'held' : 'resumed';
   } catch (error) {
     log.error(`setSyncthingFolderPaused - could not ${verb} ${appComponentName}: ${error.message}`);
     emitFolderStatus(report, { status: `Syncthing could not be ${paused ? 'paused' : 'resumed'} for ${appComponentName}` });
-    return false;
+    return 'failed';
   }
 }
 

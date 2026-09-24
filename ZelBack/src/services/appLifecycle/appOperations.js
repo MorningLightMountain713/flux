@@ -890,6 +890,10 @@ const DOCKER_SETTLE_POLL_MS = 5000;
 const DOCKER_SETTLE_ATTEMPTS = 12;
 // How often the stopping gate is re-read while flux-shutdownd drains an app.
 const DRAIN_POLL_MS = 1000;
+// The directories a restore may read an archive from, and so the only values its
+// type may take: the type names a directory inside the app's volume and reaches a
+// shell through tar.
+const RESTORE_TYPES = ['local', 'remote', 'upload'];
 
 /**
  * What docker says this container is actually doing, waiting out a daemon that
@@ -1265,14 +1269,19 @@ async function runBackupTask(appname, backup, force, report) {
 
     if (backupSynced.length) {
       report(`Pausing syncthing for ${appname}\n`);
-      pausedSynced = backupSynced;
       for (const comp of backupSynced) {
         // Paused, not removed. Removing discards the folder config, and only the
         // monitor's per-app pass ever rebuilds it - so on a node where that pass
         // cannot complete, the app keeps running and silently stops being
         // replicated. Given back on every exit, including the catch.
         // eslint-disable-next-line no-await-in-loop
-        await syncthingMonitorHelpers.setSyncthingFolderPaused(comp.identifier, true, report);
+        const held = await syncthingMonitorHelpers.setSyncthingFolderPaused(comp.identifier, true, report);
+        if (held === 'held') pausedSynced.push(comp);
+        // An unheld folder is still pulling, so the archive would be taken over
+        // data that moves underneath it.
+        if (held === 'failed') {
+          throw new Error(`Refused: ${comp.identifier} could not be held still, so an archive taken now could be inconsistent`);
+        }
       }
     }
 
@@ -1323,7 +1332,7 @@ async function runBackupTask(appname, backup, force, report) {
     await startApplication(appname);
     report('Finalizing...\n');
     await serviceHelper.delay(5 * 1000);
-    await resumeBackupSync(backupSynced, report);
+    await resumeBackupSync(pausedSynced, report);
     operationRegistry.release(appname, taskToken);
     return true;
   } catch (error) {
@@ -1356,6 +1365,7 @@ async function appendRestoreTask(req, res) {
   let appname;
   let restore;
   let type;
+  let force = false;
   try {
     const processedBody = serviceHelper.ensureObject(req.body);
     // eslint-disable-next-line prefer-destructuring
@@ -1364,9 +1374,17 @@ async function appendRestoreTask(req, res) {
     restore = processedBody.restore;
     // eslint-disable-next-line prefer-destructuring
     type = processedBody.type;
+    // Restore onto a copy the election does not name as the writer anyway.
+    force = processedBody.force === true || processedBody.force === 'true';
     log.info(`Restore task requested for app ${appname} (${type})`);
     if (!appname || !restore || !type) {
       throw new Error('appname, restore and type parameters are mandatory');
+    }
+    if (!Array.isArray(restore)) {
+      throw new Error('restore must be a list of components');
+    }
+    if (!RESTORE_TYPES.includes(type)) {
+      throw new Error(`Refused: type must be one of ${RESTORE_TYPES.join(', ')}`);
     }
     if (operationRegistry.isHeld(appname)) {
       throw new Error(`An operation is already in progress for app ${appname}...`);
@@ -1397,7 +1415,7 @@ async function appendRestoreTask(req, res) {
   // caller reads how far it has got off this connection.
   const report = lineReporter(res);
   try {
-    return await runRestoreTask(appname, restore, type, req.headers.zelidauth, report);
+    return await runRestoreTask(appname, restore, type, req.headers.zelidauth, report, { force });
   } catch (error) {
     log.error(error);
     report(`${error?.message}\n`);
@@ -1437,20 +1455,29 @@ async function holdPartialRestore(appname, swaps) {
 /**
  * Replace an app's volumes from an archive: stop it, restore them, start it again.
  *
+ * Nothing is destroyed until a complete, readable replacement is known to
+ * exist: every archive is read end to end first, and only then does appdata
+ * make way for it. The other instances are never told to redeploy - they hold
+ * the only other copies, and the resumed folders carry the restored data to
+ * them; where their containers are running they are restarted, which recreates
+ * nothing.
+ *
  * @param {string} appname
  * @param {Array<object>} restore - the components to restore
  * @param {string} type - where the archive comes from
- * @param {string} zelidauth - the caller's auth, for the peer redeploy it triggers
+ * @param {string} zelidauth - the caller's auth, for the peer restart it triggers
  * @param {function(string): void} report - progress, written to the caller's stream
+ * @param {{force?: boolean}} [opts] - force restores onto a copy the election does not name as the writer
  * @returns {Promise<boolean>}
  */
-async function runRestoreTask(appname, restore, type, zelidauth, report) {
-  const componentItem = restore.map((restoreItem) => restoreItem);
+async function runRestoreTask(appname, restore, type, zelidauth, report, { force = false } = {}) {
   // Hoisted so the catch releases ONLY a lease this call acquired (null = no-op),
-  // and beside it the folders this call paused, for the same reason: the catch
+  // and beside it the folders this call held, for the same reason: the catch
   // owes back what the try took.
   let taskToken = null;
-  let pausedSynced = [];
+  const pausedSynced = [];
+  // Whether this call took the app down: only a stop it took is its to give back.
+  let stopped = false;
   // Components whose appdata clear has begun: until every unpack lands, their
   // directories are neither copy, and a failure in between holds them rather
   // than starting them on it.
@@ -1477,103 +1504,152 @@ async function runRestoreTask(appname, restore, type, zelidauth, report) {
     if (!restoreDeployment) {
       throw new Error(`Refused: no deployment could be resolved for ${appname}`);
     }
-    // Per-component removal for the same reason as backup: composed apps'
-    // folders are flux<identifier>, never flux<appname>.
-    const restoreSynced = restoreDeployment.componentEntries()
-      .filter(([, comp]) => comp.hasSyncthing()).map(([, comp]) => comp);
-    if (restoreSynced.length) {
+
+    // Only the components the caller asked for, and each one the app has. The
+    // UI sends every component on every request, the unselected ones flagged
+    // false, so the flags decide; a name the app does not have is refused here,
+    // before anything is held or stopped.
+    const targets = restore.filter((item) => item.restore).map((item) => {
+      const comp = restoreDeployment.componentEntries().find(([name]) => name === item.component)?.[1];
+      if (!comp) {
+        throw new Error(`Refused: ${item.component} is not a component of ${appname}`);
+      }
+      return {
+        name: item.component,
+        comp,
+        synced: comp.hasSyncthing(),
+        elected: comp.hasActiveStandbySyncthing(),
+        url: item.url,
+        replica: item.replica,
+      };
+    });
+
+    // An active-standby component has exactly one writer, the instance the
+    // election points at. Restoring onto any other copy puts the data where the
+    // primary is still overwriting it: it reports success and is quietly
+    // undone. Only a positive answer disqualifies this node - an FDM that cannot
+    // answer does not block a restore, as it does not block an election.
+    if (!force && targets.some((target) => target.elected)) {
+      const localSocketAddr = await fluxNetworkHelper.getLocalSocketAddress();
+      const { ip: primaryIp, fdmOk } = await getMasterIpFromFdm(appname, { timeout: 10_000 });
+      if (fdmOk && primaryIp && !ipsMatch(primaryIp, localSocketAddr)) {
+        throw new Error(`Refused: restore on ${primaryIp}, it holds the live copy`);
+      }
+    }
+
+    // Hold the data being replaced still, and only that: the named components'
+    // folders. Paused, not removed - removing discards the folder config, and
+    // only the monitor's per-app pass ever rebuilds it. Clearing appdata happens
+    // inside the replicated folder, so an unheld sendreceive folder turns the
+    // clear into deletions this node broadcasts to every healthy peer; that is
+    // refused while the data is still there.
+    const syncedTargets = targets.filter((target) => target.synced);
+    if (syncedTargets.length) {
       report(`Pausing syncthing for ${appname}\n`);
-      pausedSynced = restoreSynced;
-      for (const comp of restoreSynced) {
-        // Paused, not removed. Removing discards the folder config, and only the
-        // monitor's per-app pass ever rebuilds it - so on a node where that pass
-        // cannot complete, the app keeps running and silently stops being
-        // replicated. Given back on every exit, including the catch.
+      for (const { comp } of syncedTargets) {
         // eslint-disable-next-line no-await-in-loop
-        await syncthingMonitorHelpers.setSyncthingFolderPaused(comp.identifier, true, report);
+        const held = await syncthingMonitorHelpers.setSyncthingFolderPaused(comp.identifier, true, report);
+        if (held === 'held') pausedSynced.push(comp);
+        if (held === 'failed') {
+          throw new Error(`Refused: ${comp.identifier} could not be held still, so clearing its data would propagate the deletions to the other instances`);
+        }
       }
     }
     report('Stopping application...\n');
     await stopApplication(appname, report);
+    stopped = true;
     await serviceHelper.delay(5 * 1000);
     // eslint-disable-next-line global-require
     const IOUtils = require('../IOUtils');
 
+    // The volumes each target replaces, each with the archive it reads.
+    // eslint-disable-next-line no-restricted-syntax
+    for (const target of targets) {
+      const label = target.name.toLowerCase();
+      // eslint-disable-next-line no-await-in-loop
+      target.volumes = await taskVolumes(appname, target.name, target.replica);
+      target.volumes.forEach((volume) => {
+        // eslint-disable-next-line no-param-reassign
+        volume.archivePath = `${volume.mount}/backup/${type}/backup_${label}.tar.gz`;
+        // eslint-disable-next-line no-param-reassign
+        volume.forWhich = volume.replica ? `${label} (replica ${volume.replica})` : label;
+      });
+    }
+
     if (type === 'remote') {
       // eslint-disable-next-line no-restricted-syntax
-      for (const restoreItem of componentItem) {
-        if (restoreItem?.url !== '') {
+      for (const target of targets) {
+        if (!target.url) {
+          throw new Error(`Refused: no url given for ${target.name}`);
+        }
+        // eslint-disable-next-line no-restricted-syntax
+        for (const volume of target.volumes) {
+          const remotePath = `${volume.mount}/backup/remote`;
           // eslint-disable-next-line no-await-in-loop
-          const volumes = await taskVolumes(appname, restoreItem.component, restoreItem.replica);
-          // eslint-disable-next-line no-restricted-syntax
-          for (const volume of volumes) {
-            const remotePath = `${volume.mount}/backup/remote`;
-            // eslint-disable-next-line no-await-in-loop
-            await IOUtils.removeDirectory(remotePath, true);
-            // eslint-disable-next-line no-await-in-loop
-            report(`Downloading ${restoreItem.url}...\n`);
-            // eslint-disable-next-line no-await-in-loop
-            const downloadStatus = await IOUtils.downloadFileFromUrl(restoreItem.url, remotePath, restoreItem.component, true);
-            if (downloadStatus !== true) {
-              throw new Error(`Error: Failed to download ${restoreItem.url}...`);
-            }
+          await IOUtils.removeDirectory(remotePath, true);
+          report(`Downloading ${target.url}...\n`);
+          // eslint-disable-next-line no-await-in-loop
+          const downloadStatus = await IOUtils.downloadFileFromUrl(target.url, remotePath, target.name, true);
+          if (downloadStatus !== true) {
+            throw new Error(`Error: Failed to download ${target.url}...`);
           }
+          // this copy is the task's own, so the task is what removes it
+          volume.downloaded = true;
+        }
+      }
+    }
+
+    // Every archive is read end to end before any of them is acted on: one
+    // decompression pass that writes nothing, proving the archive is whole and
+    // readable while the data it would replace is still there.
+    // eslint-disable-next-line no-restricted-syntax
+    for (const target of targets) {
+      // eslint-disable-next-line no-restricted-syntax
+      for (const volume of target.volumes) {
+        report(`Checking archive for ${volume.forWhich}...\n`);
+        // eslint-disable-next-line no-await-in-loop
+        const archive = await IOUtils.inspectTarGz(volume.archivePath);
+        if (!archive.status) {
+          throw new Error(`Error: archive for ${volume.forWhich} is unreadable, ${archive.error}`);
+        }
+        if (archive.entries === 0) {
+          throw new Error(`Error: archive for ${volume.forWhich} is empty`);
         }
       }
     }
 
     // eslint-disable-next-line no-restricted-syntax
-    for (const component of restore) {
-      if (component.restore) {
-        const label = component.component.toLowerCase();
+    for (const target of targets) {
+      // eslint-disable-next-line no-restricted-syntax
+      for (const volume of target.volumes) {
+        // The archive decides what is replaced, so the clear and the unpack
+        // are one step: from here until the unpack lands the directory is
+        // neither copy.
+        report(`Replacing ${volume.forWhich} component data from the backup archive...\n`);
         // eslint-disable-next-line no-await-in-loop
-        const volumes = await taskVolumes(appname, component.component, component.replica);
-        const restoreComp = restoreDeployment.componentEntries()
-          .find(([name]) => name === component.component)?.[1];
-        const synced = Boolean(restoreComp?.hasSyncthing());
-        // eslint-disable-next-line no-restricted-syntax
-        for (const volume of volumes) {
-          const tarGzPath = `${volume.mount}/backup/${type}/backup_${label}.tar.gz`;
-          const forWhich = volume.replica ? `${label} (replica ${volume.replica})` : label;
-          // The archive decides what is replaced, so the clear and the unpack
-          // are one step: from here until the unpack lands the directory is
-          // neither copy.
+        await serviceHelper.delay(2 * 1000);
+        swapsInFlight.push({ identifier: volume.identifier, synced: target.synced });
+        // eslint-disable-next-line no-await-in-loop
+        const tarStatus = await appDataEntries.restoreAppData(volume.mount, volume.archivePath, target.comp);
+        if (tarStatus.status === false) {
+          throw new Error(`Error: Failed to restore ${volume.forWhich} from its archive, ${tarStatus.error}`);
+        }
+        if (target.synced) {
+          // Minted by the encoder with this identity's replica, never
+          // assembled by hand — that is what drops the replica segment and
+          // addresses a sibling. (Co-located replicas cannot use sync, so
+          // the replica is null here today; the encoder keeps it right if
+          // that ever changes.)
           // eslint-disable-next-line no-await-in-loop
-          report(`Replacing ${forWhich} component data from the backup archive...\n`);
+          const { DeploymentSpec } = await getSpecBackend();
+          const identifier = DeploymentSpec.containerIdentifierFor(target.name, appname, volume.replica);
+          const appId = dockerService.getAppIdentifier(identifier);
           // eslint-disable-next-line no-await-in-loop
-          await serviceHelper.delay(2 * 1000);
-          swapsInFlight.push({ identifier: volume.identifier, synced });
-          // eslint-disable-next-line no-await-in-loop
-          const tarStatus = await appDataEntries.restoreAppData(volume.mount, tarGzPath, restoreComp);
-          if (tarStatus.status === false) {
-            throw new Error(`Error: Failed to restore ${forWhich} from its archive, ${tarStatus.error}`);
-          } else {
-            // eslint-disable-next-line no-await-in-loop
-            report(`Removing backup file for ${forWhich}...\n`);
-            // eslint-disable-next-line no-await-in-loop
-            await IOUtils.removeFile(tarGzPath);
-          }
-          if (synced) {
-            // Minted by the encoder with this identity's replica, never
-            // assembled by hand — that is what drops the replica segment and
-            // addresses a sibling. (Co-located replicas cannot use sync, so
-            // the replica is null here today; the encoder keeps it right if
-            // that ever changes.)
-            // eslint-disable-next-line no-await-in-loop
-            const { DeploymentSpec } = await getSpecBackend();
-            const identifier = DeploymentSpec.containerIdentifierFor(
-              component.component,
-              appname,
-              volume.replica,
-            );
-            const appId = dockerService.getAppIdentifier(identifier);
-            // eslint-disable-next-line no-await-in-loop
-            await appCaches.setSyncedMark(appCaches.receiveOnlySyncthingAppsCache, appId, {
-              restarted: true,
-              numberOfExecutionsRequired: 4,
-              numberOfExecutions: 10,
-            });
-          }
+          await appCaches.setSyncedMark(appCaches.receiveOnlySyncthingAppsCache, appId, {
+            restarted: true,
+            numberOfExecutionsRequired: 4,
+            numberOfExecutions: 10,
+          });
         }
       }
     }
@@ -1582,23 +1658,44 @@ async function runRestoreTask(appname, restore, type, zelidauth, report) {
     await serviceHelper.delay(1 * 5 * 1000);
     report('Starting application...\n');
     await startApplication(appname);
-    if (restoreSynced.length) {
-      report('Redeploying other instances...\n');
-      globalCommand.executeAppGlobalCommand(appname, 'redeploy', zelidauth, true);
-      await serviceHelper.delay(1 * 60 * 1000);
+
+    // Only a copy this task downloaded is its to remove. An uploaded or local
+    // archive is the owner's restore point, and restoring from it must not
+    // consume it. Held until here so that a failure above can be retried from
+    // the archive rather than re-fetched.
+    // eslint-disable-next-line no-restricted-syntax
+    for (const target of targets) {
+      // eslint-disable-next-line no-restricted-syntax
+      for (const volume of target.volumes.filter((v) => v.downloaded)) {
+        report(`Removing backup file for ${volume.forWhich}...\n`);
+        // eslint-disable-next-line no-await-in-loop
+        await IOUtils.removeFile(volume.archivePath);
+      }
+    }
+
+    // A component every instance runs and writes (r:/s:) has peer containers
+    // holding the data this restore has just replaced underneath them; a
+    // restart is what makes them read it again, and it recreates no volume. An
+    // active-standby component has no peer container to disturb - the other
+    // instances are stopped and adopt the restored data when the role next
+    // moves - and an unsynced component's data never left this node.
+    if (targets.some((target) => target.synced && !target.elected)) {
+      report('Restarting other instances...\n');
+      globalCommand.executeAppGlobalCommand(appname, 'apprestart', zelidauth, undefined, true); // do not wait
     }
     report('Finalizing...\n');
     await serviceHelper.delay(5 * 1000);
-    await resumeBackupSync(restoreSynced, report);
+    await resumeBackupSync(pausedSynced, report);
     operationRegistry.release(appname, taskToken);
     return true;
   } catch (error) {
     log.error(error);
     // The stop hold is run-state this operation owes back: a failed restore must
     // never strand the app stopped on data it never touched, and must never
-    // start a component whose appdata it had begun to replace. Only when this
-    // call owned the operation.
-    if (taskToken) {
+    // start a component whose appdata it had begun to replace. Only a stop this
+    // call took is its to give back - a refusal before it leaves the app as it
+    // found it.
+    if (taskToken && stopped) {
       if (swapsInFlight.length) {
         await holdPartialRestore(appname, swapsInFlight);
       } else {
