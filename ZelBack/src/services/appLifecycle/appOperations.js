@@ -888,6 +888,8 @@ async function startApplication(appname) {
 // dockerd restart clears in seconds.
 const DOCKER_SETTLE_POLL_MS = 5000;
 const DOCKER_SETTLE_ATTEMPTS = 12;
+// How often the stopping gate is re-read while flux-shutdownd drains an app.
+const DRAIN_POLL_MS = 1000;
 
 /**
  * What docker says this container is actually doing, waiting out a daemon that
@@ -935,6 +937,23 @@ async function stopApplication(appname, onWait) {
   const { converged, failed } = await appReconciler.drive(ids, 'stopped');
   if (!converged) {
     throw new Error(`Refusing to touch ${appname}'s data: ${failed.join(', ')} did not stop`);
+  }
+
+  // On Arcane the reconciler hands a stop to flux-shutdownd and returns while the
+  // daemon drains the app; the app-wide stopping gate stands until the daemon
+  // reports the stop done or the gate's own deadline passes. The containers are
+  // read only once that gate has lifted, so a drain in progress is waited out
+  // rather than read as a container that refused to stop.
+  const appName = deploymentProvider.appNameFromRequest(appname);
+  let told = false;
+  while (globalState.getAppShutdownPipelineState(appName)) {
+    if (!told && onWait) {
+      told = true;
+      // eslint-disable-next-line no-await-in-loop
+      await onWait(`flux-shutdownd is stopping ${appName}, waiting for it to finish...`);
+    }
+    // eslint-disable-next-line no-await-in-loop
+    await serviceHelper.delay(DRAIN_POLL_MS);
   }
 
   // CONVERGENCE IS NOT THE FACT THIS CALLER NEEDS. awaitConvergence counts only

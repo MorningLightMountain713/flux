@@ -1910,6 +1910,43 @@ describe('appOperations tests', () => {
     // whose deployment could not be BUILT, and reading either as "no synced
     // components" is what turned the gate off without saying so - archiving
     // whatever was on disk in the one case where least is known about the app.
+    // On Arcane the reconciler hands the stop to flux-shutdownd and its drive
+    // settles at the hand-off, while the daemon is still draining the app. The
+    // backup reads the containers only once the app's stopping gate has lifted.
+    it('waits out a flux-shutdownd drain before reading the containers', async () => {
+      const clock = sinon.useFakeTimers({ toFake: ['setTimeout'] });
+      sinon.stub(verificationHelper, 'verifyPrivilege').resolves(true);
+      const deployment = await oneComponentDeployment('bkapp', 'comp1');
+      sinon.stub(deploymentProvider, 'getInstalledDeployment').resolves(deployment);
+      sinon.stub(appsRepository, 'getGlobalAppInfo').resolves(await instantiatedSpec(await v9Spec({ name: 'bkapp' })));
+      sinon.stub(deploymentProvider, 'buildDeployment').resolves(deployment);
+      const drive = sinon.stub(appReconciler, 'drive').resolves({ converged: true, failed: [] });
+      // The gate stands for two reads, and the container is up for exactly as long.
+      const gate = sinon.stub(globalState, 'getAppShutdownPipelineState');
+      gate.onCall(0).returns('stopping');
+      gate.onCall(1).returns('stopping');
+      gate.returns(null);
+      const observed = sinon.stub(appReconciler, 'observedContainerState');
+      observed.callsFake(async () => ({
+        reachable: true, exists: true, running: gate.callCount < 3, indeterminate: false,
+      }));
+      sinon.stub(volumeService, 'listComponentVolumeMounts').resolves([{ replica: null, mount: '/vol' }]);
+      sinon.stub(IOUtils, 'checkFileExists').resolves(false);
+      sinon.stub(IOUtils, 'removeFile').resolves();
+      const archiveAppData = sinon.stub(appDataEntries, 'archiveAppData').resolves({ status: true });
+
+      const req = { body: { appname: 'bkapp', backup: [{ component: 'comp1', backup: true }] } };
+      const pending = runBackup(req);
+      await clock.tickAsync(120_000);
+      const result = await pending;
+      clock.restore();
+
+      expect(result, 'the backup must run once the drain has finished').to.be.true;
+      sinon.assert.calledOnce(archiveAppData);
+      expect(drive.calledWith(['comp1_bkapp'], 'stopped')).to.be.true;
+      expect(drive.calledWith(['comp1_bkapp'], 'running'), 'the hold is given back after the archive').to.be.true;
+    });
+
     it('refuses a backup it cannot resolve a deployment for, before stopping anything', async () => {
       sinon.stub(verificationHelper, 'verifyPrivilege').resolves(true);
       const stopped = sinon.stub(appReconciler, 'setControllerDesired').resolves();
