@@ -997,6 +997,47 @@ describe('appHashSyncService tests', () => {
       expect(localCollectionStub.insertMany.firstCall.args[0].length).to.equal(1);
     });
 
+    // The version gate needs only the version a sealed spec states in the clear,
+    // so it holds on a node that cannot open the spec — where the decrypt below
+    // it fails and is passed over with a warning.
+    it('refuses a sealed spec whose version is not active, on a node that cannot open it', async () => {
+      const sealed = await sealedV9Spec({ name: 'sealedapp' });
+      const cleartext = await v9Spec({ name: 'sealedapp' });
+      sinon.stub(flux.EncryptedSpecV9.prototype, 'createProvider').rejects(new Error('no secure backend'));
+      localAssertVersionActivatedStub.withArgs(9).throws(new Error('Flux apps specifications of version 9 not yet supported'));
+      const bulkMessages = [{
+        type: 'fluxappregister',
+        version: 2,
+        hash: 'hash1',
+        timestamp: Date.now(),
+        extend: true,
+        signature: 'sig1',
+        appSpecifications: sealed.serialize(),
+        contentHash: cleartext.contentHash(),
+        valueSat: 1e8,
+        txid: 'tx1',
+        height: 2000,
+        registeredAt: 1_751_628_800,
+      }];
+      const manyMissing = Array(600).fill(null).map((_, i) => ({
+        hash: `hash${i}`, txid: `tx${i}`, height: 1000 + i, value: 100, message: false,
+      }));
+      let calls = 0;
+      localDbHelperStub.findInDatabase.callsFake(() => {
+        calls += 1;
+        return Promise.resolve(calls === 1 ? manyMissing : []);
+      });
+      localDbHelperStub.findOneInDatabase.resolves({ generalScannedHeight: 2_555_000 });
+      serviceHelperStub.axiosGet.callsFake((url) => (url.includes('permanentmessages')
+        ? Promise.resolve(makeStreamResponse(bulkMessages))
+        : Promise.resolve({ data: { status: 'success', data: true } })));
+
+      await localModule.syncMissingHashes();
+
+      sinon.assert.calledWith(localAssertVersionActivatedStub, 9, 2000);
+      expect(localCollectionStub.insertMany.called, 'an inactive version must not be stored').to.be.false;
+    });
+
     it('should skip messages when authorize fails', async () => {
       const bulkMessages = [
         await legacyMessage({

@@ -3,6 +3,7 @@
 const { expect } = require('chai');
 const sinon = require('sinon');
 const proxyquire = require('proxyquire').noCallThru();
+const realSpecLibs = require('../../ZelBack/src/services/utils/specLibs');
 const { asConfig } = require('./fixtures/config');
 const {
   loadSpecLibrary, v8Spec, v9Spec, sealedV8Spec, sealedV9Spec, instantiatedSpec, assertAnswers,
@@ -605,9 +606,10 @@ describe('messageStore tests', () => {
         expect(handed.name).to.equal('clear-app');
       });
 
-      // Preserved deliberately: those checks read the spec, and a node that
-      // cannot open a sealed one has nothing to read.
-      it('skips them for a sealed spec this node cannot open', async () => {
+      // The reading checks need the spec's contents, and a node that cannot open
+      // a sealed one has none. The activation gate needs only the version, which
+      // a sealed spec states in the clear, so it still runs.
+      it('skips them for a sealed spec this node cannot open, and still gates its version', async () => {
         const sealed = await sealedV9Spec({ name: 'sealed-app' });
         const cleartext = await v9Spec({ name: 'sealed-app' });
         appEventVerifierStub.deserializeTempMessage.resolves(signedEvent(
@@ -630,7 +632,42 @@ describe('messageStore tests', () => {
         await messageStore.storeAppTemporaryMessage({ ...cleartextMessage, hash: 'sealedhash' });
 
         expect(registryManagerStub.checkApplicationRegistrationNameConflicts.called).to.be.false;
-        expect(assertVersionActivatedStub.called, 'nothing to read, nothing to check').to.be.false;
+        sinon.assert.calledOnceWithExactly(assertVersionActivatedStub, 9, 1000);
+      });
+
+      // The real gate, below v9's activation height (2,791,000 in the unit
+      // config; the daemon stub answers 1000), on a node that cannot open the
+      // spec: refused, and nothing stored.
+      it('refuses a sealed spec whose version is not active, on a node that cannot open it', async () => {
+        const sealed = await sealedV9Spec({ name: 'sealed-app' });
+        const cleartext = await v9Spec({ name: 'sealed-app' });
+        appEventVerifierStub.deserializeTempMessage.resolves(signedEvent(
+          {
+            type: 'fluxappregister', version: 2, hash: 'sealedhash', timestamp: Date.now(), signature: 'sig',
+          },
+          sealed,
+          { contentHash: cleartext.contentHash(), arcaneAttestation: 'att-sig' },
+        ));
+        appEventVerifierStub.verifyAttestation.resolves(true);
+        const stubs = buildProxyquireStubs({
+          '../benchmarkService': { isSystemSecure: sinon.stub().resolves(false) },
+        });
+        stubs['../utils/specLibs'] = {
+          ...stubs['../utils/specLibs'],
+          assertVersionActivated: realSpecLibs.assertVersionActivated,
+        };
+        messageStore = proxyquire('../../ZelBack/src/services/appMessaging/messageStore', stubs);
+
+        let refusal = null;
+        try {
+          await messageStore.storeAppTemporaryMessage({ ...cleartextMessage, hash: 'sealedhash' });
+        } catch (err) {
+          refusal = err;
+        }
+
+        expect(refusal, 'an inactive version must not be stored').to.be.an('error');
+        expect(refusal.message).to.match(/version 9 not yet supported/);
+        expect(dbHelperStub.insertOneToDatabase.called).to.be.false;
       });
     });
 
