@@ -150,7 +150,7 @@ describe('playground: a session runs on a real node and reports what happened', 
     env = await createTestEnv({
       hookCtx: this,
       nodes: 1,
-      nodeTiers: { 0: 'NIMBUS' },
+      nodeTiers: { 1: 'NIMBUS' },
       configOverrides: {
         fluxapps: {
           // A probe would otherwise spend 30s proving "it stayed up" before
@@ -636,7 +636,7 @@ describe('playground: the hourly rate limit', function () {
     env = await createTestEnv({
       hookCtx: this,
       nodes: 1,
-      nodeTiers: { 0: 'NIMBUS' },
+      nodeTiers: { 1: 'NIMBUS' },
       configOverrides: {
         fluxapps: {
           playgroundProbeStableMs: 5000,
@@ -723,7 +723,7 @@ describe('playground: a node that is not Arcane refuses whatever its tier', func
       hookCtx: this,
       nodes: 1,
       // Big enough to run one — so the tier is not what refuses it.
-      nodeTiers: { 0: 'STRATUS' },
+      nodeTiers: { 1: 'STRATUS' },
       arcane: false,
     });
     [client] = env.clients;
