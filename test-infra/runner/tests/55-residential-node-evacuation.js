@@ -898,10 +898,12 @@ describe('Residential node evacuation: one holder at a time', function () {
     // answered the question - and waiting out the full departure budget for a
     // refusal that cannot now arrive reports it as a slow box. Three sessions
     // have read this timeout as one.
+    // A departure is the app LEAVING the node. The pacing half's READY is not
+    // one: the safety half reads the location table again before it removes,
+    // and refuses an app that went short between the two reads.
     const departures = () => [TARGET, SECOND_TARGET]
       .map((node) => env.clients[node - 1].getEventBuffer()
-        .filter((e) => e.event === 'giveUp:considered'
-          && e.data?.appName === 'sharedapp' && e.data?.giveUp === true).length)
+        .filter((e) => e.event === 'app:removed' && e.data?.name === 'sharedapp').length)
       .reduce((a, b) => a + b, 0);
 
     await stopTicker();
