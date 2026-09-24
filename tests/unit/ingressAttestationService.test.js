@@ -62,9 +62,13 @@ describe('ingressAttestationService tests', () => {
   /** The record the service handed the (stubbed) repository. */
   const storedRecord = () => appsRepositoryStub.storeIngressAttestation.firstCall.args[0];
 
-  /** What was actually sealed, read back with fluxteam's private key. */
+  /**
+   * What was actually sealed, read back with fluxteam's private key the way
+   * fluxteam's tool reads it — so a node sealing anything but an ingress note
+   * fails here.
+   */
   function opened(record) {
-    return JSON.parse(Buffer.from(flux.unseal(record.sealed, fluxteamKey.privateKey)).toString('utf8'));
+    return flux.openIngressNote(record.sealed, fluxteamKey.privateKey);
   }
 
   /** A real sealed envelope for arbitrary contents. */
