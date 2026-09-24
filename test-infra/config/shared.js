@@ -278,8 +278,7 @@ module.exports = {
     spawnReconfirmDelayMs: 30000,
     globalCmdDelayMs: 100,
     discoveryAutostart: false,
-    discoveryRetryMs: 5000,
-    discoveryFailRetryMs: 5000,
+    nodeDownSweepIntervalMs: 5000,
     connectionBackoffMs: [2000, 5000, 10000, 15000],
     spawnDeferrals: {
       targetedNodesMs: { encrypted: 150, standard: 300 },

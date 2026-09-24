@@ -138,6 +138,26 @@ describe('nodeDownService', () => {
     expect(transport.peerManager.listenerCount('peer:added')).to.equal(0);
   });
 
+  it('runs its housekeeping on its own interval', async () => {
+    const clock = sinon.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'setTimeout', 'clearTimeout'] });
+    const { service, transport, networkStateServiceStub } = makeHarness();
+    const config = require('config');
+    const localAddressReads = () => require('../../ZelBack/src/services/fluxNetworkHelper');
+    service.start(transport);
+    await tick();
+    try {
+      const before = networkStateServiceStub.membershipFingerprint;
+      let reads = 0;
+      networkStateServiceStub.membershipFingerprint = () => { reads += 1; return before(); };
+      await clock.tickAsync(config.get('fluxapps.nodeDownSweepIntervalMs'));
+      expect(reads, 'the sweep refreshed the duty index').to.be.greaterThan(0);
+    } finally {
+      service.stop();
+      clock.restore();
+      void localAddressReads;
+    }
+  });
+
   it('a verdict message without a verdict is dropped and said once per sender, again only after a well-formed one', async () => {
     const log = require('../../ZelBack/src/lib/log');
     const warn = sinon.stub(log, 'warn');
