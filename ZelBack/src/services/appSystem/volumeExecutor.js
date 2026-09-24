@@ -2176,8 +2176,10 @@ async function adoptOperation(record) {
     })
     .finally(() => {
       liveContainerIds.delete(containerId);
-      if (stagingRoot) liveStagingPaths.delete(stagingRoot);
       fileOperationStore.forgetOperation(containerId);
+      // The container has exited, so its staging is reclaimed at once, exactly
+      // as it is for an operation this process started itself.
+      if (stagingRoot) reclaimStaging(stagingRoot, null);
     });
 }
 

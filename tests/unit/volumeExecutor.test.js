@@ -1613,6 +1613,20 @@ describe('volumeExecutor tests', () => {
       expect(jobRegistry.get('op_7').status).to.equal('Failed');
     });
 
+    it('reclaims the staging root once the adopted container settles', async () => {
+      const jobRegistry = require('../../ZelBack/src/services/utils/jobRegistry');
+      jobRegistry.reset();
+      containerStub.wait.resolves({ StatusCode: 0 });
+
+      await volumeExecutor.adoptOperation(record);
+      await new Promise((resolve) => { setImmediate(resolve); });
+      await new Promise((resolve) => { setImmediate(resolve); });
+
+      const rm = serviceHelperStub.runCommand.getCalls().find((call) => call.args[0] === 'rm');
+      expect(rm, 'nothing reclaimed the adopted operation\'s staging').to.not.equal(undefined);
+      expect(rm.args[1].params).to.deep.equal(['-rf', record.stagingRoot]);
+    });
+
     // The whole point of adopting: the reaper must stop seeing it as debris.
     it('marks it live, so the reap that follows leaves it alone', async () => {
       containerStub.wait.returns(new Promise(() => {}));
