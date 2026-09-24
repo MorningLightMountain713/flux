@@ -14,9 +14,9 @@ import {
   waitForExplorerReady, waitForOrchestratorStarted, waitForOrchestratorState,
   waitForPeerThreshold, waitForAppInstalled,
   waitForSpawnerBlocked, waitFor, waitForGiveUpConsidered, waitForGiveUpSafety,
-  waitForResidentialDecision,
+  waitForResidentialDecision, waitForReconcileActuated,
 } from '../framework/wait.js';
-import { waitForLocationTable } from '../framework/reconciler-suite.js';
+import { waitForLocationTable, seedSyncScopedData } from '../framework/reconciler-suite.js';
 import { setNoPeerData, setPeerHasData, setSynced } from '../framework/syncthing-control.js';
 import { sleepUnlessInfraDead } from '../framework/infra-death.js';
 import { electMaster, startFdmOutage, endFdmOutage } from '../framework/fdm-control.js';
@@ -1037,6 +1037,7 @@ describe('Residential node evacuation: standing down as the elected primary', fu
     // takes no new apps, so the app would reach four instances and never five.
     await returnToService(env, TARGET);
 
+    const seededAfter = env.clients[TARGET - 1].getLastEventId();
     await seedApp(env, 'primaryapp', { instances: 5, containerData: 'g:/appdata' });
     await setSynced({ folder: 'fluxprimaryapp_primaryapp' });
     await setPeerHasData({ folder: 'fluxprimaryapp_primaryapp' });
@@ -1044,7 +1045,15 @@ describe('Residential node evacuation: standing down as the elected primary', fu
     await waitFor(async () => (await locationsOf(env, 'primaryapp')).length >= 5,
       { timeout: 300000, label: 'primaryapp reaches its instance count across the fleet' });
 
-    // FDM names node 1 the primary, which is what masterSlaveApps reads.
+    // A folder pinned synced must hold on disk what its index claims, or the
+    // mount-safety guard keeps it receiveonly and the election never starts the
+    // writer here. The spawner's install writes nothing, and the sync layer's
+    // first-run reset clears local appdata, so the seed goes after that reset.
+    await waitForReconcileActuated(env.clients[TARGET - 1], 'primaryapp_primaryapp', 'dataCleared', 120_000,
+      { afterId: seededAfter });
+    await seedSyncScopedData(env, 'primaryapp', TARGET - 1);
+
+    // FDM names node 1 the primary, which is what the election reads.
     await electMaster('primaryapp', subnet.nodeIp(TARGET));
 
     await setSystemSecure(subnet.nodeIp(TARGET), false);
