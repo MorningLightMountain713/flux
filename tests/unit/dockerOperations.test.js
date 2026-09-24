@@ -231,6 +231,8 @@ describe('appOperations application lifecycle tests', () => {
       '../appRuntime/deploymentProvider': {
         getInstalledDeployment: sinon.stub().resolves(null),
         buildDeployment: buildDeploymentStub,
+        // The request form: `<app>` or `<component>_<app>`.
+        appNameFromRequest: (appname) => appname.split('_')[1] || appname,
         // Delegates at call time so per-test overrides of buildDeployment flow
         // through the plural entry the enumeration uses.
         get buildDeployments() {
@@ -243,7 +245,8 @@ describe('appOperations application lifecycle tests', () => {
       },
       './appUninstaller': { uninstallApplication: sinon.stub().resolves() },
       './componentProvisioner': { installComponent: sinon.stub().resolves() },
-      '../utils/globalState': {},
+      // No app is mid-drain: a stop reads its containers as soon as the drive settles.
+      '../utils/globalState': { getAppShutdownPipelineState: () => null },
       '../utils/appConstants': {
         localAppsInformation: 'test', globalAppsInformation: 'test', globalAppsInstallingErrorsLocations: 'test', globalAppsMessages: 'test', appsFolder: APPS_FOLDER,
       },
