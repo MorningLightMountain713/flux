@@ -92,6 +92,9 @@ describe('appEventVerifier', () => {
       getSpecBackend: sinon.stub().resolves({
         AppEventLegacy: realBackend.AppEventLegacy,
         ConfirmedAppEvent: realBackend.ConfirmedAppEvent,
+        // The real rule for who may sign: these tests are about what the node
+        // hands it, and a double would answer whatever the test assumed.
+        authorizeAppEvent: realBackend.authorizeAppEvent,
         computeMessageHash: sinon.stub().returns('v1-hash-abc'),
         computeMessageHashV2: sinon.stub().returns('v2-hash-xyz'),
         // The payload the node sends to be signed: both hashes, no domain — the

@@ -1,7 +1,7 @@
 'use strict';
 
 const config = require('config');
-const { getSpec, getSpecBackend } = require('../utils/specLibs');
+const { getSpecBackend } = require('../utils/specLibs');
 const signatureVerifier = require('../signatureVerifier');
 const benchmarkService = require('../benchmarkService');
 const { ARCANE_APP_ATTESTATION_PUBKEY, verifyAttestationSignature } = require('../utils/arcaneAttestation');
@@ -76,17 +76,12 @@ function resolveTeamSupportAddresses(daemonHeight) {
 /**
  * Authorize an app event against the party entitled to make it.
  *
- * A registration is self-signed: the spec names its owner and that owner signs
- * it, because nothing precedes it. An update is signed by the owner the app
- * ALREADY has — carried on previousState, which the caller resolves from the
- * app's active registry row. The owner named in an incoming update is a claim
- * about where ownership is going, never the authority for the change: honouring
- * it would let anyone take over any app by naming themselves and signing.
- * A transfer is therefore the outgoing owner signing a spec that names the
- * incoming one.
- *
- * One mined message predates update re-verification and cannot satisfy that
- * rule; it is named, with its signer, in ownerChangeRaces.
+ * Who that is — the owner a registration names, the owner an update's app
+ * already has — is flux-spec's authorizeAppEvent. This supplies what only chain
+ * state answers: the app as it stands (previousState, which the caller resolves
+ * from the app's active registry row), the support team addresses for a
+ * marketplace app, the one mined message named in ownerChangeRaces, and the
+ * usersToExtend addresses that may sign a renewal.
  *
  * @param {{appEvent: object, previousState: object|null, daemonHeight: number,
  *   verifyHash?: boolean, extraSigners?: string[],
@@ -98,7 +93,6 @@ async function authorize({
   appEvent, previousState, daemonHeight, verifyHash = true, extraSigners = [],
   allowLegacyEncoding = false,
 }) {
-  const verify = verifierFor(allowLegacyEncoding);
   if (verifyHash) {
     const hashResult = appEvent.verifyHash();
     if (!hashResult.valid) {
@@ -106,45 +100,27 @@ async function authorize({
     }
   }
 
-  const signers = [...extraSigners];
-
+  const updateSigners = [];
   if (appEvent.isUpdate) {
-    if (!previousState || !previousState.owner) {
-      throw new Error(
-        `Flux App ${appEvent.spec.name} update cannot be authorized: no registration to update`,
-      );
-    }
-    signers.push(previousState.owner);
     const raceSigner = ownerChangeRaceSigner(appEvent.hash);
     if (raceSigner) {
-      signers.push(raceSigner);
+      updateSigners.push(raceSigner);
     }
     const teamSupport = resolveTeamSupportAddresses(daemonHeight);
     if (teamSupport.length > 0 && isMarketplaceApp(appEvent.spec.name)) {
-      signers.push(...teamSupport);
-    }
-  } else {
-    signers.push(appEvent.spec.owner);
-  }
-
-  let result = await appEvent.verifySignature(verify, signers);
-  if (result.valid) return result;
-
-  if (appEvent.isUpdate) {
-    // usersToExtend (subscription-renewal) signers may authorize a renewal whose
-    // content is unchanged. The event encapsulates the per-version assessment
-    // (v9: extend flag + contentHash; v1-8: spec compare, decrypting enterprise
-    // specs where the node can) — see flux-spec assessRenewal / extensionSignerPermitted.
-    const { UpdatePolicy } = await getSpec();
-    const verdict = await appEvent.assessRenewal(previousState);
-    if (UpdatePolicy.extensionSignerPermitted(verdict)) {
-      const usersToExtend = config.get('fluxapps.usersToExtend');
-      if (usersToExtend.length > 0) {
-        result = await appEvent.verifySignature(verify, usersToExtend);
-        if (result.valid) return result;
-      }
+      updateSigners.push(...teamSupport);
     }
   }
+
+  const { authorizeAppEvent } = await getSpecBackend();
+  const result = await authorizeAppEvent(appEvent, {
+    verifyFn: verifierFor(allowLegacyEncoding),
+    previousState,
+    extraSigners,
+    updateSigners,
+    renewalSigners: appEvent.isUpdate ? config.get('fluxapps.usersToExtend') : [],
+  });
+  if (result.valid) return { valid: true, signer: result.signer };
 
   throw new Error(
     'Received signature does not correspond with Flux App owner or Flux App specifications are not properly formatted',
