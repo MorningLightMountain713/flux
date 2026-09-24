@@ -6,6 +6,7 @@ const fluxNetworkHelper = require('./fluxNetworkHelper');
 const verificationHelper = require('./verificationHelper');
 const { serialiseAndSignFluxBroadcast } = require('./utils/fluxBroadcastHelper');
 const networkStateService = require('./networkStateService');
+const nodeConfirmationService = require('./nodeConfirmationService');
 const nodeDownStore = require('./appMessaging/nodeDownStore');
 const { RECORD_STATE } = nodeDownStore;
 const { RingReconciler } = require('./utils/ringReconciler');
@@ -86,7 +87,19 @@ function resolveOutpoint(outpoint) {
   return index.byOutpoint.get(outpoint) || null;
 }
 
+/**
+ * This node's outpoint: the collateral the daemon names in the node's own
+ * status. That is the node's identity whatever address the list currently
+ * shows for it, which matters for the window after an address change and
+ * before the chain records it. The list lookup by address is the fallback for
+ * a status that carries no outpoint.
+ * @returns {string|null}
+ */
 function myOutpoint() {
+  const status = nodeConfirmationService.getNodeStatus();
+  if (status?.txhash && status.outidx !== undefined && status.outidx !== null) {
+    return `${status.txhash}:${status.outidx}`;
+  }
   if (!localSocketAddress) return null;
   refreshIndex();
   return index.bySocket.get(localSocketAddress) || null;

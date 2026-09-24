@@ -30,7 +30,7 @@ function makeHarness() {
     certificatesFor: sinon.stub().resolves([]),
     sign: sinon.stub().callsFake(async (message) => JSON.stringify(message)),
   };
-  const world = { height: 100 };
+  const world = { height: 100, ownStatus: null };
   const networkStateServiceStub = {
     membershipFingerprint: () => 'fp1',
     networkState: () => [{
@@ -62,6 +62,7 @@ function makeHarness() {
       getLocalSocketAddress: sinon.stub().resolves(MY_IP),
       getFluxNodePrivateKey: sinon.stub().resolves('L1x'),
     },
+    './nodeConfirmationService': { getNodeStatus: () => world.ownStatus },
     './verificationHelper': { signMessage: stubs.signMessage, verifyMessage: stubs.verifyMessage },
     './utils/fluxBroadcastHelper': { serialiseAndSignFluxBroadcast: stubs.sign },
   });
@@ -136,6 +137,26 @@ describe('nodeDownService', () => {
     service.stop();
     expect(transport.peerManager.listenerCount('peer:removed')).to.equal(0);
     expect(transport.peerManager.listenerCount('peer:added')).to.equal(0);
+  });
+
+  it('identifies itself by the outpoint its own status carries, whatever address the list shows for it', async () => {
+    // A node whose address moved is listed at the old one until the chain
+    // records the move. Its outpoint has not changed, and the daemon states it.
+    const harness = makeHarness();
+    const { service, transport, networkStateServiceStub, world } = harness;
+    withDuty(harness);
+    networkStateServiceStub.networkState = () => [
+      { txhash: 'me', outidx: 0, pubkey: 'pk', ip: '10.0.0.9:16127', added_height: 1 },
+      { txhash: 'x', outidx: 0, pubkey: 'pkx', ip: DUTY_IP, added_height: 1 },
+    ];
+    world.ownStatus = { txhash: 'me', outidx: '0' };
+    service.start(transport);
+    await tick();
+    try {
+      sinon.assert.calledWith(transport.dial, DUTY_IP);
+    } finally {
+      service.stop();
+    }
   });
 
   it('runs its housekeeping on its own interval', async () => {
