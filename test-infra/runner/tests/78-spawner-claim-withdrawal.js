@@ -9,7 +9,9 @@ import {
   bootAndPeer, seedSpawnerApp, waitForInstanceCount,
   installingClaimIpsByNode, installingErrorsByNode,
 } from '../framework/reconciler-suite.js';
-import { waitFor, waitForCandidacy } from '../framework/wait.js';
+import { waitFor, waitForCandidacy, waitForSpawnerBlocked } from '../framework/wait.js';
+import { authenticate } from '../auth.js';
+import { fluxTeamKey } from '../framework/keys.js';
 import { sleepUnlessInfraDead } from '../framework/infra-death.js';
 import { dumpLogsOnFailure } from '../framework/log-on-failure.js';
 
@@ -268,36 +270,54 @@ describe('spawner withdraws an installing claim without reporting a failure', fu
       return [ip, { index, afterId: env.clients[index].getLastEventId() }];
     }));
 
-    const rival = env.stubPeerClients.get(STUB_INDEX);
-    await rival.withdrawApp(appName);
+    // ONLY A NODE THAT STOOD DOWN MAY TAKE THE FREED SLOT. A node that never
+    // claimed is just as free to, and which spawner pass lands first is a race
+    // the design promises nothing about. A node that took the slot without ever
+    // standing down would leave the stood-down nodes seeing the app covered, and
+    // candidacy is published on change, so they would say nothing. Those nodes
+    // are put in DOS, under which the spawner claims nothing, and released once
+    // the draw is decided.
+    const holderIp = getSubnetConfig().nodeIp(holder + 1);
+    const frozen = env.clients
+      .map((client, index) => ({ client, ip: getSubnetConfig().nodeIp(index + 1) }))
+      .filter(({ client, ip }) => client && ip !== holderIp && !stoodDown.includes(ip));
+    const frozenAuth = new Map();
+    for (const { client, ip } of frozen) {
+      // eslint-disable-next-line no-await-in-loop
+      const auth = await authenticate(client.url, fluxTeamKey());
+      frozenAuth.set(ip, auth.zelidauth);
+      const afterId = client.getLastEventId();
+      // eslint-disable-next-line no-await-in-loop
+      await client.setDOSState(100, 'held out of the draw', auth.zelidauth);
+      // eslint-disable-next-line no-await-in-loop
+      await waitForSpawnerBlocked(client, 'dos', 60_000, { afterId });
+    }
 
-    // ELIGIBILITY IS A FACT ABOUT ONE NODE. Which node then takes the freed slot
-    // is a draw among every eligible node, and the design promises nothing about
-    // who wins - so asserting the winner asserted a lottery.
-    //
-    // Measured on an idle box with the claim rows dumped: six real nodes, one
-    // holding, and only THREE of the five non-holders stood down. The other two
-    // never claimed at all, because by the time they looked the app already read
-    // as covered - one running plus the rival's claim against a required two - so
-    // it was filtered out before they could race. After the withdrawal all five
-    // are candidates again and a stood-down node wins three times in five. This
-    // test has been passing on that.
-    //
-    // What it must actually prove is that standing aside did not cost the node
-    // its place in the draw. The spawner publishes that directly: a verdict
-    // FLIPPING from excluded to candidate. afterAlreadyHeldOrTried is the filter
-    // that would hold a stood-down node out, so surviving it is the property, and
-    // the event fires whether or not this node goes on to win.
-    const backIn = await Promise.any(stoodDown.map((ip) => {
-      const { index, afterId } = baselines.get(ip);
-      return waitForCandidacy(
-        env.clients[index],
-        (d) => d.name === appName && d.candidate === true,
-        240000,
-        { afterId },
-      ).then(() => ip);
-    }));
+    try {
+      const rival = env.stubPeerClients.get(STUB_INDEX);
+      await rival.withdrawApp(appName);
 
-    expect(backIn, 'no node that stood down became a candidate again').to.be.a('string');
+      // What standing aside must not cost is the node's place in the draw. The
+      // spawner publishes that directly: a verdict FLIPPING from excluded to
+      // candidate. afterAlreadyHeldOrTried is the filter that would hold a
+      // stood-down node out, so surviving it is the property, and the event
+      // fires whether or not this node goes on to win.
+      const backIn = await Promise.any(stoodDown.map((ip) => {
+        const { index, afterId } = baselines.get(ip);
+        return waitForCandidacy(
+          env.clients[index],
+          (d) => d.name === appName && d.candidate === true,
+          240000,
+          { afterId },
+        ).then(() => ip);
+      }));
+
+      expect(backIn, 'no node that stood down became a candidate again').to.be.a('string');
+    } finally {
+      for (const { client, ip } of frozen) {
+        // eslint-disable-next-line no-await-in-loop
+        await client.setDOSState(0, null, frozenAuth.get(ip)).catch(() => {});
+      }
+    }
   });
 });
