@@ -113,7 +113,6 @@ module.exports = {
         rateMessages: 'ratemessages',
         priceModifierMessages: 'pricemodifiermessages',
         oracleKeyMessages: 'oraclekeymessages',
-        marketplacePricingMessages: 'marketplacepricingmessages',
         policyGroupMessages: 'policygroupmessages',
       },
     },
@@ -512,9 +511,8 @@ module.exports = {
       ...(isDevelopment ? [{ address: 't1Mzja9iJcEYeW5B4m4s1tJG8M42odFZ16A', activeFromHeight: 0 }] : []),
     ],
     // Authority for the v9 foundation soft-fork messages (PriceMessage,
-    // PriceModifierMessage, OracleKeyMessage, MarketplacePricingMessage,
-    // PolicyGroupMessage). Deliberately separate from the payment-collection
-    // addresses above. Empty = fail-closed (those messages are rejected).
+    // PriceModifierMessage, OracleKeyMessage, PolicyGroupMessage). Deliberately
+    // separate from the payment-collection addresses above. Empty = fail-closed (those messages are rejected).
     // TEST VALUE (a key we control on the dev oracle server) — MUST be changed
     // to the production foundation authority address before mainnet.
     // See fluxModels PRICING_ORACLE / ROLLOUT docs.

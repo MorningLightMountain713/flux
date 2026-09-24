@@ -23,7 +23,6 @@ const priceMessagesCollection = config.get('database.chainparams.collections.pri
 const rateMessagesCollection = config.get('database.chainparams.collections.rateMessages');
 const priceModifierMessagesCollection = config.get('database.chainparams.collections.priceModifierMessages');
 const oracleKeyMessagesCollection = config.get('database.chainparams.collections.oracleKeyMessages');
-const marketplacePricingMessagesCollection = config.get('database.chainparams.collections.marketplacePricingMessages');
 
 /**
  * Moves the durable scan cursor.
@@ -69,7 +68,6 @@ async function restoreDatabaseToBlockheightState(height, rescanGlobalApps = fals
   await dbHelper.removeDocumentsFromCollection(databaseUpdates, rateMessagesCollection, query);
   await dbHelper.removeDocumentsFromCollection(databaseUpdates, priceModifierMessagesCollection, query);
   await dbHelper.removeDocumentsFromCollection(databaseUpdates, oracleKeyMessagesCollection, query);
-  await dbHelper.removeDocumentsFromCollection(databaseUpdates, marketplacePricingMessagesCollection, query);
   priceOracleState.removeAtHeight(height + 1);
   if (rescanGlobalApps === true) {
     log.info('Rescanning Apps!');

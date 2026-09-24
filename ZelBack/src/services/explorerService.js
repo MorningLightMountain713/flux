@@ -41,7 +41,6 @@ const priceMessagesCollection = config.get('database.chainparams.collections.pri
 const rateMessagesCollection = config.get('database.chainparams.collections.rateMessages');
 const priceModifierMessagesCollection = config.get('database.chainparams.collections.priceModifierMessages');
 const oracleKeyMessagesCollection = config.get('database.chainparams.collections.oracleKeyMessages');
-const marketplacePricingMessagesCollection = config.get('database.chainparams.collections.marketplacePricingMessages');
 const policyGroupMessagesCollection = config.get('database.chainparams.collections.policyGroupMessages');
 
 let isInInitiationOfBP = false;
@@ -266,9 +265,9 @@ async function applySoftForkMessage(collectionName, doc, history) {
 const FLUX_T1_PUBKEY_HASH = '1cb8';
 
 // Authority for the v9 foundation-signed soft-fork messages (PriceMessage,
-// PriceModifierMessage, OracleKeyMessage, MarketplacePricingMessage,
-// PolicyGroupMessage). messageAuthorityAddress is deliberately separate from the
-// legacy payment multisigs (appPaymentAddresses[].legacyMessageAuthority), which
+// PriceModifierMessage, OracleKeyMessage, PolicyGroupMessage).
+// messageAuthorityAddress is deliberately separate from the legacy payment
+// multisigs (appPaymentAddresses[].legacyMessageAuthority), which
 // authorise the pre-v9 ASCII price messages and receive app payments.
 // SIGHASH byte semantics: only a signature whose base type is SIGHASH_ALL commits
 // to every output — including the OP_RETURN carrying the message. NONE/SINGLE leave
@@ -452,15 +451,6 @@ async function processSoftFork(txid, height, txIndex, payload, senderIsLegacyAut
         oracleKeyMessagesCollection,
         { txid, vout, height, txIndex, message },
         priceOracleState.getOracleKeyHistory(),
-      );
-      break;
-    case 'marketplace-pricing':
-      if (!isMessageAuthority(tx)) return;
-      log.info(`MarketplacePricingMessage at height ${height}: ${txid}`);
-      await applySoftForkMessage(
-        marketplacePricingMessagesCollection,
-        { txid, vout, height, txIndex, message },
-        priceOracleState.getMarketplacePricingHistory(),
       );
       break;
     case 'policy-group':

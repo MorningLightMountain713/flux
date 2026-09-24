@@ -76,7 +76,6 @@ module.exports = {
             "rateMessages": "ratemessages",
             "priceModifierMessages": "pricemodifiermessages",
             "oracleKeyMessages": "oraclekeymessages",
-            "marketplacePricingMessages": "marketplacepricingmessages",
             "policyGroupMessages": "policygroupmessages"
         }
     }

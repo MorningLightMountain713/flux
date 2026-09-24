@@ -121,7 +121,6 @@ const harnessOverrides = {
         rateMessages: 'ratemessages',
         priceModifierMessages: 'pricemodifiermessages',
         oracleKeyMessages: 'oraclekeymessages',
-        marketplacePricingMessages: 'marketplacepricingmessages',
         policyGroupMessages: 'policygroupmessages',
       },
     },

@@ -576,7 +576,6 @@ describe('appSpecHelpers tests', () => {
       // fluxUsdPriceE4 = 10000 -> $1.00 / FLUX, so usd/flux isolates the markup factor.
       sinon.stub(priceOracleState, 'getRateMessageHistory').returns({ resolveAt: () => ({ fluxUsdPriceE4: 10_000 }) });
       sinon.stub(priceOracleState, 'getPriceModifierHistory').returns({ resolveAt: () => ({ fiatMarkupBp: 500 }) });
-      sinon.stub(priceOracleState, 'getMarketplacePricingHistory').returns(null);
     });
 
     it('applies fiatMarkupBp as a basis-points markup (500 -> +5%) and returns fluxDiscount as a percent', async () => {
@@ -651,7 +650,6 @@ describe('appSpecHelpers tests', () => {
       sinon.stub(priceOracleState, 'getPriceMessageHistory').returns({ resolveAt: () => priceFields });
       sinon.stub(priceOracleState, 'getRateMessageHistory').returns({ resolveAt: () => ({ fluxUsdPriceE4: 10_000 }) });
       sinon.stub(priceOracleState, 'getPriceModifierHistory').returns({ resolveAt: () => ({}) });
-      sinon.stub(priceOracleState, 'getMarketplacePricingHistory').returns(null);
       return { helpers, existing, resolveInstantiatedSpec };
     }
 
