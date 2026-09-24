@@ -170,6 +170,11 @@ async function storeAppTemporaryMessage(message, options = {}) {
       return new Error('Invalid or missing arcane attestation on encrypted Flux App message');
     }
 
+    // The activation gate needs only the version, and a sealed spec states it in
+    // the clear (decrypting takes it from there too), so every message meets the
+    // gate whether or not this node can open it.
+    assertVersionActivated(appEvent.spec.version, block);
+
     // False for a sealed spec this node cannot open — the checks below need to
     // read it.
     let specReadable = false;
@@ -190,7 +195,6 @@ async function storeAppTemporaryMessage(message, options = {}) {
             : await appEvent.spec.decrypt(provider);
           // Validated through the wrapper: a decrypted spec has no wire form, so
           // there is no blob to hand a validator. Same rules, no plaintext bytes.
-          assertVersionActivated(decrypted.version, block);
           decrypted.validateContents({ purpose: 'gossip' });
         } catch (err) {
           // A bad message is a rejection, and the caller logs a RETURNED Error
@@ -204,9 +208,6 @@ async function storeAppTemporaryMessage(message, options = {}) {
       }
     } else {
       // deserializeTempMessage already validated this spec by constructing it.
-      // Re-parsing the raw blob cost 4.5ms of 11.6ms on a 157KB spec; only the
-      // activation height was new, and it needs the version, not the document.
-      assertVersionActivated(appEvent.spec.version, block);
       specReadable = true;
     }
 

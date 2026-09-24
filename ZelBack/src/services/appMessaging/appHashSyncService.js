@@ -314,19 +314,21 @@ async function processMessages(messages, onProgress) {
         const permMsg = appEvent.serialize();
         const wireSpec = appEvent.spec;
 
-        if (wireSpec && wireSpec.isEncrypted) {
+        // Outside the decrypt below, whose failures are logged and passed over:
+        // the activation gate needs only the version a sealed spec states in the
+        // clear, so it holds on every node.
+        assertVersionActivated(wireSpec.version, height);
+
+        if (wireSpec.isEncrypted) {
           try {
             const provider = await wireSpec.createProvider();
             const decrypted = await wireSpec.decrypt(provider);
             // Through the wrapper: a decrypted spec has no wire form, so no
             // plaintext blob is produced to hand a validator. Same rules.
-            assertVersionActivated(decrypted.version, height);
             decrypted.validateContents({ purpose: 'gossip' });
           } catch (err) {
             log.warn(`processMessages enterprise decrypt skipped for ${wireSpec.name}: ${err.message}`);
           }
-        } else {
-          assertVersionActivated(wireSpec.version, height);
         }
 
         let previousState = null;
