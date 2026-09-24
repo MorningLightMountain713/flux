@@ -71,6 +71,76 @@ const GiveUpReason = Object.freeze({ SURPLUS: 'SURPLUS', EVACUATION: 'EVACUATION
 // next pass re-establishes.
 const refusedSince = new Map();
 
+// Component identifier -> give-up passes it has spent stood down.
+//
+// A stood-down component is one this node stopped so it could hand the app
+// back. THIS IS WHAT KEEPS IT STOPPED: the election runs every few seconds and
+// would otherwise find the component not running here, find no peer running it
+// yet, and start it again - undoing the stand-down within a cycle, every
+// cycle. The election reads it as "not a candidate right now", which is the
+// whole mechanism: no wire state, no negotiation, this node declining to stand
+// for an office it is trying to leave.
+const standingDown = new Map();
+
+// Passes a stood-down component may wait before this node gives up on leaving
+// and stands for election again. The alternative to a cap is a component
+// stopped here AND running nowhere else, which is worse than the
+// stuck-but-serving state the stand-down exists to end.
+const STAND_DOWN_PASSES_BEFORE_GIVING_UP = 6;
+
+/**
+ * Whether the give-up pass has this component standing down, so the election
+ * leaves it stopped.
+ *
+ * @param {string} identifier component identifier
+ * @returns {boolean}
+ */
+function isStandingDown(identifier) {
+  return standingDown.has(identifier);
+}
+
+/**
+ * Forget every stand-down. For tests, which share the module's record.
+ */
+function forgetStandDowns() {
+  standingDown.clear();
+}
+
+/**
+ * The app an identifier belongs to: `<component>_<app>` above the flat spec
+ * versions, the bare app name below them.
+ *
+ * @param {string} identifier
+ * @returns {string}
+ */
+function appOfIdentifier(identifier) {
+  const at = identifier.indexOf('_');
+  return at === -1 ? identifier : identifier.slice(at + 1);
+}
+
+/**
+ * Age every stand-down by one pass. A component whose app this node no longer
+ * holds left by some route this pass never saw, so its record is a leak; one
+ * that has waited out the cap is stopped here and running nowhere, so it
+ * stands for election again.
+ *
+ * @param {Set<string>} heldNames apps installed on this node
+ */
+function ageStandDowns(heldNames) {
+  for (const [identifier, passes] of standingDown) {
+    if (!heldNames.has(appOfIdentifier(identifier))) {
+      standingDown.delete(identifier);
+      continue;
+    }
+    if (passes >= STAND_DOWN_PASSES_BEFORE_GIVING_UP) {
+      standingDown.delete(identifier);
+      log.warn(`giveUp - ${identifier} stood down ${passes} passes without being able to leave; standing for election again`);
+      continue;
+    }
+    standingDown.set(identifier, passes + 1);
+  }
+}
+
 /**
  * Say that this pass refused to hand `appName` back, and for how long that has
  * now been true.
@@ -278,6 +348,7 @@ async function checkAndGiveUpAnApp(deps = {}) {
   }
 
   const names = await residentialNodeDosService.listInstalledApps(installedAppsFn);
+  ageStandDowns(new Set(names || []));
   if (!names || !names.length) return { considered: 0, gaveUp: null };
 
   // One peer view for the pass. A peer's liveness must not be carried into the
@@ -353,7 +424,11 @@ async function checkAndGiveUpAnApp(deps = {}) {
           // The CONTROLLER, not docker: a container stopped behind the
           // controller's back is restarted by the next reconcile pass, which is
           // the standby coming up against the election's intent.
-          appReconciler.setControllerDesired(identifier, 'stopped', 'giveUp:standDown');
+          appReconciler.setControllerDesired(identifier, 'stopped', 'standing down to hand the app back');
+          // Excluded from the election from this pass on, or the election
+          // hands the role straight back. Aged on every pass, so a stand-down
+          // renewed here starts its wait again.
+          standingDown.set(identifier, 0);
         }
         noteRefusal(appName, `standing down ${safety.standDown.join(', ')} before handing it back`);
       } else {
@@ -382,6 +457,8 @@ async function checkAndGiveUpAnApp(deps = {}) {
 module.exports = {
   noteRefusal,
   clearRefusals,
+  isStandingDown,
+  forgetStandDowns,
   checkAndGiveUpAnApp, surplusVerdict, evacuationVerdict, writerIdentifier,
   isComponentRunningLocally, GiveUpReason,
 };
