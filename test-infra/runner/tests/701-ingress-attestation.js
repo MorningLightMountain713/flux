@@ -2,7 +2,7 @@
 import { describe, it, before, after } from 'mocha';
 import { expect } from 'chai';
 import { x25519 } from '@noble/curves/ed25519.js';
-import { unseal } from '@runonflux/flux-spec-backend';
+import { openIngressNote } from '@runonflux/flux-spec-backend';
 import { createTestEnv } from '../framework/test-env.js';
 import { bootAndPeer } from '../framework/reconciler-suite.js';
 import {
@@ -50,9 +50,9 @@ function getAttestationsByApp(node, name, zelidauth) {
   return node.getAuthed(`/apps/ingressattestations/byapp/${name}`, zelidauth, { noCache: true });
 }
 
-// fluxteam-only: recover { observed, asserted } from a record's sealed envelope.
+// fluxteam-only: recover { observed, asserted } from a record's sealed note.
 function decryptSource(record) {
-  return JSON.parse(Buffer.from(unseal(record.sealed, ftPrivateKey)).toString('utf8'));
+  return openIngressNote(record.sealed, ftPrivateKey);
 }
 
 async function submitUpdate(node, adminKeypair, spec) {
