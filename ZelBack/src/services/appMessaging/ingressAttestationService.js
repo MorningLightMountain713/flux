@@ -26,13 +26,13 @@ const QUARANTINE_TTL_MS = 2 * 60 * 60 * 1000;
  * envelope, binding the attestation to the exact sealed bytes.
  */
 async function build(hash, req) {
-  const { buildIngressAttestMessage, seal } = await getSpecBackend();
+  const { buildIngressAttestMessage, sealIngressNote } = await getSpecBackend();
 
   const { observed, asserted } = await ingressCapture.captureIngress(req);
   if (!observed.ip) return null;
 
   const { kid, publicKey } = ingressEncryptionKey.current();
-  const sealed = seal(JSON.stringify({ observed, asserted }), publicKey, { kid });
+  const sealed = sealIngressNote({ observed, asserted }, publicKey, { kid });
 
   const observedAt = Date.now();
   const node = await fluxNetworkHelper.getFluxNodePublicKey();
