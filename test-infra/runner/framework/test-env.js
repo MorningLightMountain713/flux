@@ -4,6 +4,7 @@
 process.env.TESTCONTAINERS_HOST_OVERRIDE ??= '127.0.0.1';
 process.env.TESTCONTAINERS_RYUK_RECONNECTION_TIMEOUT ??= '5s';
 
+import { Readable } from 'node:stream';
 import { GenericContainer, Wait, getContainerRuntimeClient } from 'testcontainers';
 import {
   readFileSync, mkdirSync, writeFileSync, rmSync, existsSync,
@@ -117,6 +118,30 @@ function suiteLooksFailed(suite) {
   if (tests.some((t) => t.state === 'failed')) return true;
   const runnable = tests.filter((t) => !t.pending);
   return runnable.length > 0 && !tests.some((t) => t.state === 'passed');
+}
+
+/**
+ * Record a restarted node's container state and its complete log into the
+ * collector when the boot did not answer on its API in time.
+ *
+ * @param {import('testcontainers').StartedTestContainer} container
+ * @param {Function} logCollector the node's collector (a stream consumer)
+ * @param {Error} error the wait failure
+ */
+async function describeUnansweredBoot(container, logCollector, error) {
+  const lines = [`[RESTART_UNANSWERED] ${error.message}`];
+  try {
+    const rtClient = await getContainerRuntimeClient();
+    const { State, RestartCount } = await rtClient.container.dockerode.getContainer(container.getId()).inspect();
+    lines.push(`[RESTART_UNANSWERED] state=${State.Status} running=${State.Running} pid=${State.Pid} `
+      + `exitCode=${State.ExitCode} startedAt=${State.StartedAt} finishedAt=${State.FinishedAt} restartCount=${RestartCount}`);
+  } catch (inspectError) {
+    lines.push(`[RESTART_UNANSWERED] inspect failed: ${inspectError.message}`);
+  }
+  logCollector(Readable.from([`${lines.join('\n')}\n`]));
+  // The whole log, not just since the restart: a boot that printed nothing is
+  // told apart from a capture that missed it only by what came before.
+  await container.logs().then(logCollector, () => {});
 }
 
 function createLogCollector() {
@@ -2147,6 +2172,12 @@ async function _buildEnv(
       const since = Math.floor(Date.now() / 1000);
       try {
         await container.restart({ timeout });
+      } catch (error) {
+        // A boot that never answered is the evidence, and the container may not
+        // outlive the test: what it is doing and everything it has ever logged
+        // go into the capture before the error leaves.
+        if (cfg?.logCollector) await describeUnansweredBoot(container, cfg.logCollector, error);
+        throw error;
       } finally {
         container.waitStrategy = saved;
         if (cfg?.logCollector) {
