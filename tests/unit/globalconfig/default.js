@@ -429,8 +429,7 @@ const harnessOverrides = {
     manageCollectorLifecycle: false, // node-managed lifecycle for shareWith dependency apps (collectors). Off: the flux console owns this lifecycle and a dependency is "ready" once installed; on: FluxOS also requires the dependency to be running before a consumer installs against it.
     globalCmdDelayMs: 500,
     discoveryAutostart: true,
-    discoveryRetryMs: 60_000,
-    discoveryFailRetryMs: 120_000,
+    nodeDownSweepIntervalMs: 60_000,
     connectionBackoffMs: [120_000, 300_000, 600_000, 900_000],
     spawnDeferrals: {
       targetedNodesMs: { encrypted: 1_800_000, standard: 3_420_000 },

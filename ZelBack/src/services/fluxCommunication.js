@@ -1556,15 +1556,13 @@ async function initiateAndHandleConnection(connection, source = PEER_SOURCE.RAND
     // refresh into it from the one place the node learns what it is - and the
     // peer manager already answers this exact question for the sync draw.
     // Asking benchmark is an uncached RPC (executeCall), and this runs on every
-    // dial: discovery's deterministic loop, the reconnect queue, the random
-    // draw, the manual add and /flux/addpeer. It also made all five hard
-    // dependent on benchd answering, which only discovery already was.
+    // dial: the ring reconciler's duties and top-ups, the random draw, the
+    // manual add and /flux/addpeer. Left to each caller it also made all of
+    // them hard dependent on benchd answering.
     //
-    // Fresh enough by construction: fluxDiscovery refreshes it once per cycle
-    // before it dials anything, and so do the availability checker and the
-    // address-change handler. That is a bound the form this replaces did not
-    // have - it read the port once per process and never again, so after an
-    // address change a node announced a stale one for as long as it ran.
+    // Fresh enough by construction: the availability checker and the
+    // address-change handler refresh it, so after an address change a node
+    // does not announce a stale port for as long as it runs.
     let localSocketAddr = peerManager.getOwnSocketAddress?.() || null;
 
     if (!localSocketAddr) {
@@ -1581,11 +1579,10 @@ async function initiateAndHandleConnection(connection, source = PEER_SOURCE.RAND
     }
     myPort = extractPort(localSocketAddr);
 
-    // Never ourselves, and refused HERE rather than by each caller. fluxDiscovery
-    // filters its own address before dialling, but it is one of four ways in -
-    // manual, deterministic, reconnect and random all arrive through this
-    // function, and the reconnect queue in particular re-dials whatever it holds
-    // without asking whose address it is. A self-connection is not merely a
+    // Never ourselves, and refused HERE rather than by each caller: manual,
+    // deterministic, reconnect and random dials all arrive through this
+    // function, and a re-dial of a held duty in particular does not ask whose
+    // address it is. A self-connection is not merely a
     // wasted socket: it occupies a peer slot, is offered back as a peer to
     // gossip and to sync from, and answers every question with what this node
     // already knows.
@@ -1891,11 +1888,6 @@ function startDiscovery() {
     },
     peerManager,
   });
-  // Driven by the node list arriving rather than by a retry that happens to
-  // land after it. A peer holds one socket in either direction, so peers that
-  // dial us while we are waiting take the very sockets we would have dialled
-  // them on, and a late first pass then has nothing left to connect to.
-  networkStateService.onReady(fluxDiscovery);
 }
 
 async function startDiscoveryApi(req, res) {
@@ -1912,74 +1904,13 @@ async function startDiscoveryApi(req, res) {
   }
 }
 
-// The discovery pass's last logged position/peer-count line, so an unchanged
-// pass logs nothing
-let lastDiscoveryStatus = null;
-
-/**
- * To discover and connect to other randomly selected FluxNodes. Maintains connections with 1-2% of nodes on the Flux network. Ensures that FluxNode connections are not duplicated.
- */
-async function fluxDiscovery() {
-  try {
-    const syncStatus = daemonServiceMiscRpcs.isDaemonSynced();
-    if (!syncStatus.data.synced) {
-      throw new Error('Daemon not yet synced. Flux discovery is awaiting.');
-    }
-
-    if (!nodeConfirmationService.isConfirmed()) {
-      throw new Error('Node not confirmed. Flux discovery is awaiting.');
-    }
-
-    const localSocketAddr = await fluxNetworkHelper.getLocalSocketAddress();
-
-    if (!localSocketAddr) {
-      throw new Error('Flux IP not detected. Flux discovery is awaiting.');
-    }
-
-    // An unknown node list and an empty one are the same value below, and acting
-    // on the second when it is really the first sizes both deterministic loops
-    // to zero - the node then connects to nobody and reports no error.
-    if (!networkStateService.isReady()) {
-      throw new Error('Network state not yet known. Flux discovery is awaiting.');
-    }
-
-    // Selection is the ring reconciler's: duties are a pure function of the
-    // committed list, so there is nothing to discover — this loop is the
-    // housekeeping backstop (pruning, a sweep for missed events). The
-    // reconciler is the ONE engine that initiates connections: it re-dials
-    // lost duties and top-ups on its own pass with per-target backoff, so
-    // there is no reconnect queue — a second dialing engine is a second
-    // opinion about who to hold, and two opinions fight.
-    peerManager.numberOfFluxNodes = networkStateService.nodeCount();
-
-    // one line per discovery pass, and only when something changed since the
-    // last pass - steady state stays out of the journal
-    const discoveryStatus = `Discovery: ${peerManager.numberOfFluxNodes} nodes, ${peerManager.outboundCount} outgoing, ${peerManager.inboundCount} incoming`;
-    if (discoveryStatus !== lastDiscoveryStatus) {
-      log.info(discoveryStatus);
-      lastDiscoveryStatus = discoveryStatus;
-    }
-
-    // Prune expired unstable node entries periodically
-    peerManager.pruneUnstableList();
-
-    await nodeDownService.sweep();
-
-    setTimeout(() => {
-      fluxDiscovery();
-    }, config.get('fluxapps.discoveryRetryMs'));
-  } catch (error) {
-    log.warn(error.message || error);
-    setTimeout(() => {
-      fluxDiscovery();
-    }, config.get('fluxapps.discoveryFailRetryMs'));
-  }
-}
-
 function initializeDiscovery() {
+  // The connection caps are sized from the fleet; read live, so they follow
+  // the list rather than a copy taken on some schedule.
+  peerManager.setFleetSizeSource(() => networkStateService.nodeCount());
   nodeConfirmationService.onConfirmationChange((confirmed) => {
     if (!confirmed) {
-      log.info('fluxDiscovery - Confirmation lost, disconnecting all peers');
+      log.info('Confirmation lost, disconnecting all peers');
       peerManager.disconnectAll();
       return;
     }
@@ -2193,7 +2124,6 @@ module.exports = {
   connectedPeersInfo,
   peerResponsiveness,
   keepConnectionsAlive,
-  fluxDiscovery,
   startDiscovery,
   initializeDiscovery,
   startDiscoveryApi,

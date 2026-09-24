@@ -876,8 +876,7 @@ module.exports = {
     // booting node to settle, bounded so a genuinely wedged one is not hammered.
     globalCmdBootRetries: 8,
     discoveryAutostart: true,
-    discoveryRetryMs: 60_000,
-    discoveryFailRetryMs: 120_000,
+    nodeDownSweepIntervalMs: 60_000,
     discoveryConnectionDelayMs: 500,
     connectionBackoffMs: [120_000, 300_000, 600_000, 900_000],
     nodeMonitorRemovalDelayMs: 60_000,

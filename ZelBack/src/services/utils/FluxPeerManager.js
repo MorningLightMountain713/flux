@@ -65,6 +65,11 @@ class FluxPeerManager extends EventEmitter {
   #outboundKeys = new Set();
   /** @type {Map<string, {disconnects: number, firstDisconnect: number}>} */
   #unstableNodes = new Map();
+
+  /** Fleet size, or the source it is read from once one is set. */
+  #numberOfFluxNodes = 0;
+
+  #fleetSizeSource = null;
   /**
    * When each lost peer key was removed. Feeds the peerReestablished event: a
    * re-established connection is the one observable trigger that this node may
@@ -200,12 +205,50 @@ class FluxPeerManager extends EventEmitter {
      */
     this.syncResponseDispatcher = null;
 
-    /**
-     * Number of flux nodes in the network — set by fluxDiscovery.
-     * @type {number}
-     */
-    this.numberOfFluxNodes = 0;
     this.acceptingConnections = false;
+  }
+
+  /**
+   * Number of flux nodes in the network. Read live from the source when one is
+   * set, so the connection caps follow the list rather than a copy of it.
+   * @type {number}
+   */
+  get numberOfFluxNodes() {
+    return this.#fleetSizeSource ? this.#fleetSizeSource() : this.#numberOfFluxNodes;
+  }
+
+  set numberOfFluxNodes(value) {
+    this.#numberOfFluxNodes = value;
+  }
+
+  /**
+   * @param {() => number} source answers the current fleet size
+   */
+  setFleetSizeSource(source) {
+    this.#fleetSizeSource = source;
+  }
+
+  /**
+   * Resolves true as soon as this node holds a peer, false once `timeoutMs`
+   * passes with none held.
+   * @param {number} timeoutMs
+   * @returns {Promise<boolean>}
+   */
+  waitForPeers(timeoutMs) {
+    if (this.#peers.size > 0) return Promise.resolve(true);
+    return new Promise((resolve) => {
+      let timer = null;
+      const onAdded = () => {
+        clearTimeout(timer);
+        resolve(true);
+      };
+      timer = setTimeout(() => {
+        this.off('peer:added', onAdded);
+        resolve(false);
+      }, timeoutMs);
+      if (timer.unref) timer.unref();
+      this.once('peer:added', onAdded);
+    });
   }
 
   // --- Core CRUD ---
@@ -941,17 +984,6 @@ class FluxPeerManager extends EventEmitter {
     return entry.disconnects >= UNSTABLE_DISCONNECT_THRESHOLD;
   }
 
-  /**
-   * Remove expired entries from the unstable nodes map.
-   */
-  pruneUnstableList() {
-    const now = Date.now();
-    for (const [key, entry] of this.#unstableNodes) {
-      if (now - entry.firstDisconnect > UNSTABLE_WINDOW_MS) {
-        this.#unstableNodes.delete(key);
-      }
-    }
-  }
 
   // --- Close code classification ---
 

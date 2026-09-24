@@ -81,8 +81,6 @@ loses the property, so the factor is pinned by a unit test.
 | `fluxapps.daemonInfoIntervalMs` | 30000 | 5000 | 6.0x |
 | `fluxapps.defaultSwap` | 2 | 0 | n/a |
 | `fluxapps.discoveryConnectionDelayMs` | 500 | 100 | 5.0x |
-| `fluxapps.discoveryFailRetryMs` | 120000 | 5000 | 24.0x |
-| `fluxapps.discoveryRetryMs` | 60000 | 5000 | 12.0x |
 | `fluxapps.explorerDeepRestoreBlocks` | 100 | 0 | n/a |
 | `fluxapps.explorerIdlePollMs` | 5000 | 833 | 6.0x |
 | `fluxapps.explorerSyncRetryMs` | 120000 | 5000 | 24.0x |
@@ -110,6 +108,7 @@ loses the property, so the factor is pinned by a unit test.
 | `fluxapps.minUniqueIpsIncoming` | 3 | 2 | 1.5x |
 | `fluxapps.minUniqueIpsOutgoing` | 7 | 3 | 2.3x |
 | `fluxapps.minUpTime` | 1800 | 10 | 180.0x |
+| `fluxapps.nodeDownSweepIntervalMs` | 60000 | 5000 | 12.0x |
 | `fluxapps.nodeMonitorCheckTimeoutMs` | 10000 | 5000 | 2.0x |
 | `fluxapps.nodeMonitorConfirmationLossDelayMs` | 1200000 | 10000 | 120.0x |
 | `fluxapps.nodeMonitorDosRecoveryDelayMs` | 600000 | 10000 | 60.0x |

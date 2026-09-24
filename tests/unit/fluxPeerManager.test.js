@@ -1389,21 +1389,36 @@ describe('FluxPeerManager tests', () => {
     });
   });
 
-  describe('pruneUnstableList', () => {
-    it('should remove expired entries', () => {
-      manager.setUnstableEntry('10.0.0.1:16127', {
-        disconnects: 5,
-        firstDisconnect: Date.now() - (3 * 60 * 60 * 1000), // expired
-      });
-      manager.setUnstableEntry('10.0.0.2:16127', {
-        disconnects: 3,
-        firstDisconnect: Date.now(), // not expired
-      });
+  describe('waitForPeers', () => {
+    it('answers at once while a peer is held', async () => {
+      manager.add(createMockWs('10.0.0.1', '16127'), '10.0.0.1', '16127', { source: PEER_SOURCE.RANDOM });
 
-      manager.pruneUnstableList();
+      expect(await manager.waitForPeers(1000)).to.equal(true);
+    });
 
-      expect(manager.hasUnstableEntry('10.0.0.1:16127')).to.equal(false);
-      expect(manager.hasUnstableEntry('10.0.0.2:16127')).to.equal(true);
+    it('answers when the first peer arrives', async () => {
+      const waiting = manager.waitForPeers(60_000);
+      manager.add(createMockWs('10.0.0.1', '16127'), '10.0.0.1', '16127', { source: PEER_SOURCE.RANDOM });
+
+      expect(await waiting).to.equal(true);
+    });
+
+    it('answers false once the bound passes with nobody held', async () => {
+      const clock = sinon.useFakeTimers();
+      const waiting = manager.waitForPeers(5000);
+      await clock.tickAsync(5000);
+      clock.restore();
+
+      expect(await waiting).to.equal(false);
+    });
+  });
+
+  describe('numberOfFluxNodes', () => {
+    it('reads the fleet size from its source once one is set', () => {
+      manager.numberOfFluxNodes = 3;
+      manager.setFleetSizeSource(() => 42);
+
+      expect(manager.numberOfFluxNodes).to.equal(42);
     });
   });
 

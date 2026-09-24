@@ -14,8 +14,8 @@ import { REGISTRY_REPO_HOST } from '../framework/subnet-config.js';
 import { dbClient } from '../framework/db-client.js';
 
 // A node that degrades AND loses daemon confirmation must still reconcile its content-manifest
-// register on recovery. FluxOS gates peer discovery on confirmation (fluxDiscovery throws while
-// unconfirmed), so recovery is always capability-FIRST: confirmation returns, the capability-
+// register on recovery. FluxOS drops every peer on losing confirmation and dials again only
+// once it is confirmed, so recovery is always capability-FIRST: confirmation returns, the capability-
 // gain sync round runs while the node is still peerless (discovery only just resumed), THEN
 // peers reconnect. The trap is that peerless round — the old code marked the manifest reconcile
 // "done" on a round that asked no one (a vacuous latch), so the later peers-ready resync
@@ -138,8 +138,8 @@ describe('content manifest recovery through a message-capability round-trip', fu
     const isoRow = await dbClients[N].getContentManifest(name);
     expect(isoRow && isoRow.version, `node ${N} diverged at v2`).to.equal(2);
 
-    // 3. Recover. FluxOS gates peer discovery on daemon confirmation (fluxDiscovery throws
-    //    "Node not confirmed" while unconfirmed), so a returning node ALWAYS regains capability
+    // 3. Recover. FluxOS dials peers only while confirmed by the daemon, so a returning node
+    //    ALWAYS regains capability
     //    before it can re-peer — capability-first is the only reachable order. Restore the
     //    network + confirmation; discovery then resumes and the node re-peers.
     await env.reconnectNode(N);

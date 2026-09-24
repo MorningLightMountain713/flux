@@ -31,6 +31,7 @@ let juror = null;
 // the process. A restart starts every duty from the bottom by design.
 let ladder = null;
 let localSocketAddress = null;
+let sweepTimer = null;
 let wasUnreachable = false;
 let dropHandler = null;
 let addHandler = null;
@@ -710,10 +711,16 @@ function start(injectedTransport) {
   transport.peerManager.setInboundGate(inboundGate);
 
   primeLocalAddress().then(() => reconciler.start());
+  sweepTimer = setInterval(() => {
+    sweep().catch((error) => log.warn(`nodeDownService: sweep failed: ${error.message}`));
+  }, config.get('fluxapps.nodeDownSweepIntervalMs'));
+  if (sweepTimer.unref) sweepTimer.unref();
   log.info('nodeDownService started');
 }
 
 function stop() {
+  if (sweepTimer) clearInterval(sweepTimer);
+  sweepTimer = null;
   if (transport && dropHandler) transport.peerManager.off('peer:removed', dropHandler);
   if (transport && addHandler) transport.peerManager.off('peer:added', addHandler);
   if (transport && answerHandler) transport.peerManager.off('peer:answered', answerHandler);
@@ -736,8 +743,8 @@ function stop() {
   seenStanding.clear();
 }
 
-/** The periodic housekeeping fluxDiscovery drives: refresh what a missed
- *  event may have left stale. Correctness never depends on it. */
+/** Periodic housekeeping: refresh what a missed event may have left stale.
+ *  Correctness never depends on it. */
 async function sweep() {
   if (!reconciler) return;
   await primeLocalAddress();

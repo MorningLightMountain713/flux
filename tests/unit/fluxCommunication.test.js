@@ -1553,126 +1553,19 @@ describe('fluxCommunication tests', () => {
     });
   });
 
-  describe('fluxDiscovery tests', () => {
-    let logSpy;
-    let daemonServiceStub;
-    beforeEach(() => {
-      // Discovery reschedules itself on both its success and failure paths, by
-      // design. Left real, that timer outlives this file and keeps dialling
-      // peers against restored stubs for the rest of the run.
-      sinon.useFakeTimers({ toFake: ['setTimeout'], shouldAdvanceTime: true });
-      logSpy = sinon.spy(log, 'warn');
-      daemonServiceStub = sinon.stub(daemonServiceMiscRpcs, 'isDaemonSynced');
-    });
-
+  describe('initializeDiscovery', () => {
     afterEach(() => {
       sinon.restore();
     });
 
-    it('should send warning if deamon is not synced', async () => {
-      daemonServiceStub.returns({
-        data: {
-          synced: false,
-        },
-      });
-      await fluxCommunication.fluxDiscovery();
+    it('gives the peer manager the fleet size from the network state', () => {
+      sinon.stub(nodeConfirmationService, 'onConfirmationChange');
+      sinon.stub(networkStateService, 'nodeCount').returns(1234);
 
-      sinon.assert.calledOnceWithExactly(logSpy, 'Daemon not yet synced. Flux discovery is awaiting.');
+      fluxCommunication.initializeDiscovery();
+
+      expect(peerManager.numberOfFluxNodes).to.equal(1234);
     });
-
-    it('should return warning if ip cannot be detected', async () => {
-      sinon.stub(nodeConfirmationService, 'isConfirmed').returns(true);
-      sinon.stub(fluxNetworkHelper, 'getLocalSocketAddress').returns(null);
-      daemonServiceStub.returns({
-        data: {
-          synced: true,
-        },
-      });
-
-      await fluxCommunication.fluxDiscovery();
-
-      sinon.assert.calledOnceWithExactly(logSpy, 'Flux IP not detected. Flux discovery is awaiting.');
-    });
-
-    it('should return warning if node is not confirmed', async () => {
-      sinon.stub(nodeConfirmationService, 'isConfirmed').returns(false);
-      daemonServiceStub.returns({
-        data: {
-          synced: true,
-        },
-      });
-
-      await fluxCommunication.fluxDiscovery();
-
-      sinon.assert.calledOnceWithExactly(logSpy, 'Node not confirmed. Flux discovery is awaiting.');
-    });
-
-    it('runs the housekeeping pass: status line and reconcile sweep, no dialing of its own', async () => {
-      const fluxNodeList = [
-        '44.192.51.10',
-        '44.192.51.12',
-        '44.192.51.13:16137',
-        '44.192.51.14:16147',
-        '44.192.51.15:16157',
-        '44.192.51.16:16167',
-        '44.192.51.17:16177',
-        '44.192.51.18:16187',
-        '44.192.51.19:16197',
-        '44.192.51.11',
-      ];
-
-      sinon.stub(nodeConfirmationService, 'isConfirmed').returns(true);
-      sinon.stub(fluxNetworkHelper, 'getLocalSocketAddress').returns('44.192.51.11');
-      fluxNetworkHelper.setLocalSocketAddress('44.192.51.11');
-      sinon.stub(fluxCommunicationUtils, 'getFluxnodeFromFluxList').returns('44.192.51.11');
-      sinon.stub(fluxCommunicationUtils, 'deterministicFluxList').returns(fluxNodeList);
-      sinon.stub(networkStateService, 'nodeCount').returns(10);
-
-      // Mock delay to return immediately
-      sinon.stub(serviceHelper, 'delay').resolves();
-
-      // everything being set up properly now includes knowing the network
-      sinon.stub(networkStateService, 'isReady').returns(true);
-
-      // Mock different addresses to avoid infinite loop
-      const addresses = ['1.2.3.4:16137', '1.2.3.5:16137', '1.2.3.6:16137'];
-      let addressIndex = 0;
-      sinon.stub(networkStateService, 'getRandomSocketAddress').callsFake(() => {
-        const address = addresses[addressIndex % addresses.length];
-        addressIndex += 1;
-        return Promise.resolve(address);
-      });
-
-      // Prevent actual connections. Stubbing the module's own export does NOT
-      // work here: fluxDiscovery calls initiateAndHandleConnection through its
-      // local binding, so the stub is bypassed and the fixture IPs above were
-      // being dialled for real. Marking every peer pending returns the function
-      // before it opens a socket; every log this test asserts on is emitted by
-      // fluxDiscovery beforehand.
-      // The reconciler is the ONE engine that initiates connections; the
-      // housekeeping pass must not dial anything itself.
-      sinon.stub(peerManager, 'isPending').returns(true);
-      // Selection belongs to the ring reconciler now: the pass only sweeps it.
-      const sweepStub = sinon.stub(nodeDownService, 'sweep').resolves();
-
-      const infoSpy = sinon.spy(log, 'info');
-
-      daemonServiceStub.returns({
-        data: {
-          synced: true,
-        },
-      });
-
-      // eslint-disable-next-line no-unused-vars
-      const discoveryPromise = fluxCommunication.fluxDiscovery();
-
-      // eslint-disable-next-line no-promise-executor-return
-      await new Promise((resolve) => setTimeout(resolve, 1000));
-
-      sinon.assert.calledWith(infoSpy, sinon.match(/Discovery: 10 nodes/));
-      sinon.assert.neverCalledWith(infoSpy, sinon.match(/Reconnecting to queued peer/));
-      sinon.assert.called(sweepStub);
-    }).timeout(5000);
   });
 
   describe('sync chunk where every broadcast fails node lookup', () => {
