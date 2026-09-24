@@ -14,7 +14,7 @@ import { fluxTeamKey } from './keys.js';
 import {
   waitForDaemonReady, waitForNodeStatus, waitForBlockProcessed, waitForAppInstalled, waitFor,
   waitForInstallSettled,
-  waitForReconcileActuated, waitForBootSettled, waitForDeltaApplied,
+  waitForReconcileActuated, waitForBootSettled, waitForDeltaApplied, waitForHashSyncComplete,
 } from './wait.js';
 import { throwIfInfraDead, sleepUnlessInfraDead } from './infra-death.js';
 import { REGISTRY_REPO_HOST, getSubnetConfig } from './subnet-config.js';
@@ -135,6 +135,11 @@ export async function seedSpecUpdate(env, updated, indices) {
 // as the flux team (adminandfluxteam) since these are seeded global specs.
 // Returns the indices it installed on.
 export async function installOnNodes(env, app, indices, { timeout = 120000 } = {}) {
+  // A seeded row and a direct install both need the global app table to be
+  // past its boot rebuild, which drops the table and reinserts it from stored
+  // messages. hashSync:complete is published when that rebuild is done;
+  // boot:settled says nothing about it.
+  await Promise.all(indices.map((i) => waitForHashSyncComplete(env.clients[i])));
   await seedGlobalSpec(env, app, indices);
   const teamKey = fluxTeamKey();
   await Promise.all(indices.map(async (i) => {

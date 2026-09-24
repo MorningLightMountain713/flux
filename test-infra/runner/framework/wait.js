@@ -320,6 +320,13 @@ export async function waitForBootSettled(node, timeout = 120000, opts) {
   return node.waitForEvent('boot:settled', () => true, timeout, opts);
 }
 
+// The orchestrator's boot hash sync ends by rebuilding the global app table:
+// the table is dropped and reinserted from stored messages, and this is
+// published once that is done. boot:settled fires before it.
+export async function waitForHashSyncComplete(node, timeout = 120_000, opts) {
+  return node.waitForEvent('hashSync:complete', () => true, timeout, opts);
+}
+
 // Boot anchor for log-asserting suites: the boot:settled EVENT is the
 // behavioural bound, but it is published one statement BEFORE the settle log
 // line is written (appStartupManager's finally block), and the SSE push beats
