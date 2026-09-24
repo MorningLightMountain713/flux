@@ -1245,6 +1245,20 @@ describe('appReconciler tests', () => {
 
   });
 
+  describe('desiredRunState', () => {
+    it('answers for an installed component', async () => {
+      const verdict = await appReconciler.desiredRunState('www_app');
+      expect(verdict).to.have.property('desired');
+      expect(verdict).to.have.property('reason');
+    });
+
+    it('answers notInstalled for a component no app on this node owns', async () => {
+      installNothing();
+      const verdict = await appReconciler.desiredRunState('www_app');
+      expect(verdict).to.deep.equal({ desired: false, reason: 'notInstalled', force: false });
+    });
+  });
+
   describe('install trial (first-run proof + bounded attempts)', () => {
     // In-memory runtime-state fake mirroring the real semantics the trial reads:
     // recordRestart appends history, the setters latch markers. Timestamps land in

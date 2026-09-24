@@ -797,8 +797,10 @@ async function effectiveDesiredRunning(identifier, spec, exitCode) {
  * @returns {Promise<{desired: boolean|null, reason: string, force: boolean}>}
  */
 async function desiredRunState(identifier) {
-  const spec = await getLocalComponentSpec(identifier);
-  if (!spec) return { desired: false, reason: 'notInstalled', force: false };
+  const { installed } = await appFor(identifier);
+  if (!installed) return { desired: false, reason: 'notInstalled', force: false };
+  const spec = await getLocalComponentSpec(identifier, installed);
+  if (spec.missingComponent) return { desired: false, reason: 'notInstalled', force: false };
   if (spec.invalidSpec) return { desired: false, reason: 'invalidSpec', force: false };
   const actual = await observedContainerState(identifier);
   return effectiveDesiredRunning(identifier, spec, actual.exitCode);
