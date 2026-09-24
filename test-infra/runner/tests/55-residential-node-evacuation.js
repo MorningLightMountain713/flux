@@ -414,7 +414,7 @@ describe('Residential node evacuation', function () {
     const geo = await dbClient(2).geolocation();
     expect(geo.networkEvidence.classification).to.equal('DATACENTER');
 
-    const info = await env.clients[1].get('/flux/info');
+    const info = await env.clients[1].get('/flux/info', { noCache: true });
     expect(info.data.flux.dos.dosState).to.be.below(100);
   });
 
@@ -426,7 +426,7 @@ describe('Residential node evacuation', function () {
       return geo?.networkEvidence != null;
     }, { timeout: 90000, label: 'node 3 gathers its evidence' });
 
-    const info = await env.clients[TABLE_DECIDED - 1].get('/flux/info');
+    const info = await env.clients[TABLE_DECIDED - 1].get('/flux/info', { noCache: true });
     expect(info.data.flux.dos.dosState).to.be.below(100);
 
     // Its own reading is UNKNOWN - no signal for, none against - so a verdict of
@@ -481,7 +481,7 @@ describe('Residential node evacuation', function () {
     expect(decision.data.enforce, 'and CONFLICTED enforces nothing').to.equal(null);
 
     expect(await dbClient(VETOING).residentialMarker(), 'a vetoing node must not start a settling window').to.equal(null);
-    const after = await env.clients[VETOING - 1].get('/flux/info');
+    const after = await env.clients[VETOING - 1].get('/flux/info', { noCache: true });
     expect(after.data.flux.dos.dosState).to.be.below(100);
   });
 
@@ -491,7 +491,7 @@ describe('Residential node evacuation', function () {
     // ArcaneOS is the whole discriminator. A residential connection on its own
     // enforces nothing, and this node has to be able to take work like any
     // other - otherwise there would be nothing to evacuate later.
-    const info = await env.clients[TARGET - 1].get('/flux/info');
+    const info = await env.clients[TARGET - 1].get('/flux/info', { noCache: true });
     expect(info.data.flux.dos.dosState).to.be.below(100);
     // A residential node that IS attested reports nothing at all. The field
     // names the staging, not the connection - otherwise every residential
@@ -515,7 +515,7 @@ describe('Residential node evacuation', function () {
 
     // The hold is immediate; nothing it already runs is touched by it, and the
     // DOS path - the one that deletes - must not have been taken.
-    const info = await env.clients[TARGET - 1].get('/flux/info');
+    const info = await env.clients[TARGET - 1].get('/flux/info', { noCache: true });
     expect(info.data.flux.dos.dosState).to.be.below(100);
 
     // And the node SAYS so. Without this the stage is invisible: a held node
@@ -545,7 +545,7 @@ describe('Residential node evacuation', function () {
     // reads. Asserted here rather than after the removal, so it cannot pass on a
     // stage that only appeared once the app had already gone.
     await waitFor(async () => {
-      const staged = await env.clients[TARGET - 1].get('/flux/info');
+      const staged = await env.clients[TARGET - 1].get('/flux/info', { noCache: true });
       return staged?.data?.flux?.dosStaging === 'EVACUATE';
     }, { timeout: 120000, interval: 2000, label: 'the node reports it is evacuating' });
 
@@ -651,11 +651,11 @@ describe('Residential node evacuation', function () {
     }, { timeout: 240000, label: 'node 1 empties' });
 
     await waitFor(async () => {
-      const info = await env.clients[TARGET - 1].get('/flux/info');
+      const info = await env.clients[TARGET - 1].get('/flux/info', { noCache: true });
       return info.data.flux.dos.dosState >= 100;
     }, { timeout: 120000, label: 'node 1 enters DOS after emptying' });
 
-    const info = await env.clients[TARGET - 1].get('/flux/info');
+    const info = await env.clients[TARGET - 1].get('/flux/info', { noCache: true });
     expect(info.data.flux.dos.dosMessage).to.contain('Residential node not running ArcaneOS');
   });
 
@@ -665,7 +665,7 @@ describe('Residential node evacuation', function () {
     await setSystemSecure(subnet.nodeIp(TARGET), true);
 
     await waitFor(async () => {
-      const info = await env.clients[TARGET - 1].get('/flux/info');
+      const info = await env.clients[TARGET - 1].get('/flux/info', { noCache: true });
       return info.data.flux.dos.dosState < 100;
     }, { timeout: 120000, label: 'node 1 leaves DOS after migrating to ArcaneOS' });
 
