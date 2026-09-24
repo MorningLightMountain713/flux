@@ -98,11 +98,12 @@ describe('a restore of a legacy app, which has no compose array', function () {
     const before = await readFile(`${dir}/appdata/restored.txt`);
 
     const body = await client.appendRestoreTask(
-      appName, [{ component: appName, restore: true }], 'local', auth.zelidauth,
+      appName, [{ component: 'nosuchcomponent', restore: true }], 'local', auth.zelidauth,
     );
 
-    // its only component is 'null'; anything else names nothing, and the
-    // validation happens before any data is touched
+    // a flat app's one container answers to 'null' and to the app's own name;
+    // any other name matches nothing, and the refusal comes before any data is
+    // touched
     expect(body).to.match(/Refused/i);
     expect(await readFile(`${dir}/appdata/restored.txt`)).to.equal(before);
   });
