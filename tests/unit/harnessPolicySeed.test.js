@@ -21,10 +21,11 @@ describe('the harness policy seed', () => {
     doc = helper.defaultGroupGrantDoc();
   });
 
-  it('is a row the node accepts into its fork history: in chain order, with its position in the block', () => {
+  it('is a row the node accepts into its fork history: in chain order, with its positions in the block and the transaction', () => {
     expect(() => inChainOrder([doc], 'policygroupmessages')).to.not.throw();
     expect(doc.height).to.equal(1);
     expect(doc.txIndex).to.equal(0);
+    expect(doc.vout).to.equal(1);
     expect(doc.txid).to.be.a('string');
   });
 

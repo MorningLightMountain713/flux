@@ -23,11 +23,12 @@ import { PolicyGroupMessage, encodeGrantBitmap, SOFT_FORK_EFFECTIVE_DEPTH } from
 import { injectBlockWith, getState, advanceBlocks } from './daemon-control.js';
 import { loadSharedConfig } from './coupled-knobs.js';
 import { waitForBlockProcessed } from './wait.js';
+import { p2pkhAsm, t1Address } from './flux-chain-crypto.js';
 
 /** The v9 message authority the harness nodes are configured with. */
 export const MESSAGE_AUTHORITY = loadSharedConfig().fluxapps.messageAuthorityAddress;
-/** The stub's stock sender, which is no authority of any kind. */
-export const STRANGER = 'stub-sender-address';
+/** An address no configuration recognises as a signer. */
+export const STRANGER = t1Address('03'.repeat(32));
 
 const SIGHASH_ALL = 0x01;
 const SIGHASH_NONE = 0x02;
@@ -80,10 +81,10 @@ export function policyTx(bytes, { sender = MESSAGE_AUTHORITY, signsAllOutputs = 
     // The explorer's coarse filter takes a soft-fork message only from a recognised
     // signer's SELF-SEND: the sender's address must also appear as a receiving
     // output beside the OP_RETURN (explorerService: senderIsRecognizedSigner &&
-    // receiverIsRecognizedSigner && message). Without this output every message
+    // receiverIsRecognizedSigner). Without this output every message
     // minted here was dropped at that gate with no log line (1402–1405, 2026-09-07).
     vout: [
-      { valueSat: 0, scriptPubKey: { addresses: [sender], asm: '' } },
+      { valueSat: 0, scriptPubKey: { addresses: [sender], asm: p2pkhAsm(sender) } },
       { valueSat: 0, scriptPubKey: { addresses: [], asm: `OP_RETURN ${hex}` } },
     ],
   };
