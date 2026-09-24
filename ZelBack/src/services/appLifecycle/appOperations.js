@@ -1595,6 +1595,16 @@ async function runRestoreTask(appname, restore, type, zelidauth, report, { force
           }
           // this copy is the task's own, so the task is what removes it
           volume.downloaded = true;
+          // A connection that dropped, or an error page served as 200, lands here
+          // as a short file. The archive read below would catch it too, but only
+          // after inflating what did arrive, and it cannot say what was expected.
+          // eslint-disable-next-line no-await-in-loop
+          const expectedBytes = await IOUtils.getRemoteFileSize(target.url, 'B', 0, true);
+          // eslint-disable-next-line no-await-in-loop
+          const receivedBytes = await IOUtils.getFileSize(volume.archivePath);
+          if (Number.isFinite(expectedBytes) && expectedBytes > 0 && receivedBytes !== expectedBytes) {
+            throw new Error(`Error: download incomplete, got ${receivedBytes} of ${expectedBytes} bytes`);
+          }
         }
       }
     }

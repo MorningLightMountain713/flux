@@ -1890,6 +1890,20 @@ describe('appOperations tests', () => {
       sinon.assert.notCalled(peers);
     });
 
+    it('refuses a download that stops short of what was promised, before clearing appdata', async () => {
+      const { drive, restoreAppData } = await restoreStubs('myapp', await oneComponentDeployment('myapp', 'web'));
+      sinon.stub(IOUtils, 'removeDirectory').resolves(true);
+      sinon.stub(IOUtils, 'downloadFileFromUrl').resolves(true);
+      sinon.stub(IOUtils, 'getRemoteFileSize').resolves(1000);
+      sinon.stub(IOUtils, 'getFileSize').resolves(400);
+
+      const failure = await runRestore('myapp', [{ component: 'web', restore: true, url: 'https://example.test/a.tar.gz' }], 'remote');
+
+      expect(failure?.message).to.match(/download incomplete, got 400 of 1000 bytes/);
+      sinon.assert.notCalled(restoreAppData);
+      expect(drive.calledWith(['web_myapp'], 'running'), 'the untouched app is started again').to.be.true;
+    });
+
     it('keeps a local archive, and removes only the copy it downloaded', async () => {
       const { removeFile } = await restoreStubs('myapp', await oneComponentDeployment('myapp', 'web'));
       const kept = await runRestore('myapp', [{ component: 'web', restore: true }], 'local');
@@ -1898,6 +1912,8 @@ describe('appOperations tests', () => {
 
       sinon.stub(IOUtils, 'removeDirectory').resolves(true);
       sinon.stub(IOUtils, 'downloadFileFromUrl').resolves(true);
+      sinon.stub(IOUtils, 'getRemoteFileSize').resolves(1000);
+      sinon.stub(IOUtils, 'getFileSize').resolves(1000);
       const fetched = await runRestore('myapp', [{ component: 'web', restore: true, url: 'https://example.test/a.tar.gz' }], 'remote');
       expect(fetched, `the restore must complete: ${fetched?.message}`).to.equal(null);
       expect(removeFile.calledOnceWith('/vol/web/backup/remote/backup_web.tar.gz')).to.be.true;
