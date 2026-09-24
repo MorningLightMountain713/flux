@@ -215,6 +215,9 @@ describe('fluxNetworkMonitor tests', () => {
       // Recording a new IP also announces it on chain; unstubbed that is a real
       // RPC to the daemon port.
       sinon.stub(daemonServiceWalletRpcs, 'createConfirmationTransaction').returns(true);
+      // The broadcast waits for a peer to hear it; a unit test holds none.
+      const { peerManager } = require('../../ZelBack/src/services/utils/FluxPeerManager');
+      sinon.stub(peerManager, 'waitForPeers').resolves(false);
     });
 
     afterEach(() => {
@@ -225,6 +228,56 @@ describe('fluxNetworkMonitor tests', () => {
       await fluxNetworkMonitor.adjustExternalIP('127.0.0.66');
 
       sinon.assert.calledOnceWithExactly(setLastKnownIpStub, '127.0.0.66');
+    });
+
+    describe('telling the fleet', () => {
+      let waitForPeers;
+      let broadcast;
+      let confirm;
+      let warn;
+
+      beforeEach(() => {
+        const { peerManager } = require('../../ZelBack/src/services/utils/FluxPeerManager');
+        const fluxCommunicationMessagesSender = require('../../ZelBack/src/services/fluxCommunicationMessagesSender');
+        const registryManager = require('../../ZelBack/src/services/appDatabase/registryManager');
+        const log = require('../../ZelBack/src/lib/log');
+        sinon.stub(appQueryService, 'installedApps').resolves({ status: 'success', data: [{ name: 'appx', version: 6 }] });
+        sinon.stub(registryManager, 'appLocation').resolves([]);
+        sinon.stub(fluxNetworkHelper, 'getCachedLocalSocketAddress').returns('127.0.0.1:16127');
+        sinon.stub(fluxNetworkHelper, 'fluxUptime').returns({ status: 'error' });
+        ({ waitForPeers } = peerManager);
+        waitForPeers.resolves(true);
+        broadcast = sinon.stub(fluxCommunicationMessagesSender, 'broadcastMessageToAll').resolves({});
+        confirm = daemonServiceWalletRpcs.createConfirmationTransaction;
+        warn = sinon.stub(log, 'warn');
+      });
+
+      it('announces the change on chain before it waits for anyone', async () => {
+        await fluxNetworkMonitor.adjustExternalIP('127.0.0.71');
+
+        sinon.assert.calledOnce(confirm);
+        sinon.assert.callOrder(confirm, waitForPeers);
+      });
+
+      it('sends fluxipchanged once, when there are peers to hear it', async () => {
+        await fluxNetworkMonitor.adjustExternalIP('127.0.0.72');
+
+        sinon.assert.calledOnce(broadcast);
+        const [message] = broadcast.firstCall.args;
+        expect(message.type).to.equal('fluxipchanged');
+        expect(message.oldIP.split(':')[0]).to.equal('127.0.0.1');
+        expect(message.newIP.split(':')[0]).to.equal('127.0.0.72');
+      });
+
+      it('does not send fluxipchanged when no peer arrives inside the bound', async () => {
+        waitForPeers.resolves(false);
+
+        await fluxNetworkMonitor.adjustExternalIP('127.0.0.73');
+
+        sinon.assert.notCalled(broadcast);
+        sinon.assert.calledOnce(confirm);
+        sinon.assert.calledWithMatch(warn, /fluxipchanged not sent/);
+      });
     });
 
     it('should not record anything if the stored ip is already the same', async () => {
@@ -277,6 +330,9 @@ describe('fluxNetworkMonitor tests', () => {
 
       // Stub daemonServiceWalletRpcs
       sinon.stub(daemonServiceWalletRpcs, 'createConfirmationTransaction').resolves({ status: 'success' });
+      // The broadcast waits for a peer to hear it; these tests are about the apps.
+      const { peerManager } = require('../../ZelBack/src/services/utils/FluxPeerManager');
+      sinon.stub(peerManager, 'waitForPeers').resolves(true);
 
       // Stub serviceHelper.delay
       sinon.stub(serviceHelper, 'delay').resolves();

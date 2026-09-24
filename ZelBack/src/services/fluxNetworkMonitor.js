@@ -10,6 +10,7 @@ const benchmarkService = require('./benchmarkService');
 const networkStateService = require('./networkStateService');
 const fluxCommunicationUtils = require('./fluxCommunicationUtils');
 const fluxCommunicationMessagesSender = require('./fluxCommunicationMessagesSender');
+const { peerManager } = require('./utils/FluxPeerManager');
 const geolocationService = require('./geolocationService');
 const daemonServiceMiscRpcs = require('./daemonService/daemonServiceMiscRpcs');
 const nodeConfirmationService = require('./nodeConfirmationService');
@@ -145,9 +146,11 @@ async function adjustExternalIP(ip) {
         log.error(nodeDosState.getRawDosMessage());
       }
       let apps = await appQueryService.installedApps();
+      let appsHeld = 0;
+      let appsRemoved = 0;
       if (apps.status === 'success' && apps.data.length > 0) {
         apps = apps.data;
-        let appsRemoved = 0;
+        appsHeld = apps.length;
         // The apps still installed once the loop has removed the ones that cannot
         // stay. Handed to whoever registered for an address change; nothing here
         // knows what bringing them back involves.
@@ -218,23 +221,32 @@ async function adjustExternalIP(ip) {
           await onAddressChanged(staying, `node ip changed to ${ip}`)
             .catch((error) => log.error(`adjustExternalIP - restart request failed: ${error.message}`));
         }
-        if (apps.length > appsRemoved) {
-          const broadcastedAt = Date.now();
+      }
+      // The chain is how the network durably learns the new address, and it
+      // needs no peers: announced first, so nothing below can delay it.
+      const result = await daemonServiceWalletRpcs.createConfirmationTransaction();
+      log.info(`createConfirmationTransaction: ${JSON.stringify(result)}`);
+      // Update geolocation service to track IP change and update static IP status
+      geolocationService.setNodeGeolocation();
+      if (appsHeld > appsRemoved) {
+        // The change severs this node's connections, so the broadcast waits
+        // for a peer that can hear it. The bound is the longest a dial is held
+        // back for: a peer that could be reached has been dialled by then.
+        const bound = Math.max(...config.get('fluxapps.connectionBackoffMs'));
+        const heard = await peerManager.waitForPeers(bound);
+        if (!heard) {
+          log.warn(`adjustExternalIP - fluxipchanged not sent: no peer within ${bound}ms; the confirmation transaction carries the change`);
+        } else {
           const newIpChangedMessage = {
             type: 'fluxipchanged',
             version: 1,
             oldIP,
             newIP,
-            broadcastedAt,
+            broadcastedAt: Date.now(),
           };
-          // broadcast messages about ip changed to all peers
           await fluxCommunicationMessagesSender.broadcastMessageToAll(newIpChangedMessage);
         }
       }
-      const result = await daemonServiceWalletRpcs.createConfirmationTransaction();
-      log.info(`createConfirmationTransaction: ${JSON.stringify(result)}`);
-      // Update geolocation service to track IP change and update static IP status
-      geolocationService.setNodeGeolocation();
     }
   } catch (error) {
     log.error(error);
