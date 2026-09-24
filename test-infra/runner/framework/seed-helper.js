@@ -273,7 +273,9 @@ export async function buildSeedableLegacyApp({
   // whose chain starts later, and assertAliveOnThisChain refuses it.
   env = null,
   height = (env?.initialHeight ?? DEFAULT_INITIAL_HEIGHT) + 10,
-  instances = 1,
+  // A version 3 specification names its instance count, and the network has
+  // never accepted fewer than three.
+  instances = 3,
   owner = null,
   expire = 22000,
   allowExternalRepotag = false,
