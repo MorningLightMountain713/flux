@@ -319,15 +319,23 @@ async function processMessages(messages, onProgress) {
         // clear, so it holds on every node.
         assertVersionActivated(wireSpec.version, height);
 
+        // A confirmed message is kept either way: only an Arcane node can run
+        // this check, so its verdict cannot decide what the network stores.
         if (wireSpec.isEncrypted) {
+          let decrypted = null;
           try {
-            const provider = await wireSpec.createProvider();
-            const decrypted = await wireSpec.decrypt(provider);
-            // Through the wrapper: a decrypted spec has no wire form, so no
-            // plaintext blob is produced to hand a validator. Same rules.
-            decrypted.validateContents({ purpose: 'gossip' });
+            decrypted = await wireSpec.decrypt(await wireSpec.createProvider());
           } catch (err) {
             log.warn(`processMessages enterprise decrypt skipped for ${wireSpec.name}: ${err.message}`);
+          }
+          if (decrypted) {
+            try {
+              // Through the wrapper: a decrypted spec has no wire form, so no
+              // plaintext blob is produced to hand a validator. Same rules.
+              decrypted.validateContents({ purpose: 'gossip' });
+            } catch (err) {
+              log.warn(`processMessages ${wireSpec.name} (${appMessage.hash}) stored, but its decrypted content fails validation on this node: ${err.message}`);
+            }
           }
         }
 
