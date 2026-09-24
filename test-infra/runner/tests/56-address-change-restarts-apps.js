@@ -79,7 +79,10 @@ describe('a node whose address changed restarts the apps that stay', function ()
       hookCtx: this,
       nodes: 3,
       tickerAutostart: false,
-      configOverrides: { fluxapps: { minOutgoing: 1, minIncoming: 1 } },
+      // A node whose address moves loses its database connection here, where
+      // mongo is a separate container, and FluxOS exits on that; the respawn
+      // must peer by itself, as a real node does.
+      configOverrides: { fluxapps: { minOutgoing: 1, minIncoming: 1, discoveryAutostart: true } },
     });
     await bootAndPeer(env, { minOutbound: 1, minInbound: 1 });
 
