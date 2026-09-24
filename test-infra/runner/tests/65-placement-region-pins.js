@@ -363,7 +363,7 @@ describe('placement honours region pins on proof from the shared table', functio
     const appName = `e2eregionpin${Date.now()}`;
     await pushTestApp(appName);
     const app = await buildSeedableSyncthingApp({
-      name: appName, mode: 'g', instances: inRegionA.length,
+      name: appName, syncMode: 'activeStandby', instances: inRegionA.length,
     });
     await seedSpawnerApp(env, await pinGeolocation(app, [allowRegion(regionA)]));
 
@@ -382,7 +382,7 @@ describe('placement honours region pins on proof from the shared table', functio
     const appName = `e2eregiondeny${Date.now()}`;
     await pushTestApp(appName);
     const app = await buildSeedableSyncthingApp({
-      name: appName, mode: 'g', instances: 3,
+      name: appName, syncMode: 'activeStandby', instances: 3,
     });
     // allowed across the whole fleet's continent, denied in organisation 1's
     // region. The continent is what leaves every organisation a candidate: the

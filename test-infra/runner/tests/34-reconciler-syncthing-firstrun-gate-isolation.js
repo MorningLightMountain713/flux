@@ -72,7 +72,7 @@ describe('one unmountable app does not block g: election node-wide', function ()
 
     // the g: app, on the same node as the jammer plus one peer to fail over to
     await pushImage(gName, 'v1');
-    const gApp = await buildSeedableSyncthingApp({ name: gName, mode: 'g' });
+    const gApp = await buildSeedableSyncthingApp({ name: gName, syncMode: 'activeStandby' });
     const installAfters = [0, 1].map((i) => env.clients[i].getLastEventId());
     await installOnNodes(env, gApp, [0, 1]);
     // real data on disk before the index claims bytes, and only after the sync

@@ -112,7 +112,7 @@ describe('two apps share their holders, and their terms never entangle', functio
       // eslint-disable-next-line no-await-in-loop
       await pushImage(name, 'v1');
       // eslint-disable-next-line no-await-in-loop
-      const app = await buildSeedableSyncthingApp({ name, syncMode: 'activeStandby', ports: [31111 + names.indexOf(name) * 10] });
+      const app = await buildSeedableSyncthingApp({ name, syncMode: 'activeStandby' });
       const installAfters = HOLDERS.map((i) => env.clients[i].getLastEventId());
       // eslint-disable-next-line no-await-in-loop
       await installOnNodes(env, app, HOLDERS);

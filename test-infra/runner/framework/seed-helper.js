@@ -40,7 +40,20 @@ function fakeTxid() {
   return randomBytes(32).toString('hex');
 }
 
-export async function buildSeedableApp({
+// Every option this builder reads. An option outside this set is a fixture
+// describing an app it did not build, so it is refused here rather than dropped.
+const SEEDABLE_APP_OPTIONS = new Set([
+  'name', 'compose', 'env', 'height', 'instances', 'owner', 'staticip',
+  'enterprise', 'expire', 'allowExternalRepotag', 'allowPortReuse',
+  'nodes',
+]);
+
+export async function buildSeedableApp(opts) {
+  const unknown = Object.keys(opts).filter((key) => !SEEDABLE_APP_OPTIONS.has(key));
+  if (unknown.length) {
+    throw new Error(`buildSeedableApp: unknown option(s) ${unknown.join(', ')}; a sync mode is syncMode on buildSeedableSyncthingApp`);
+  }
+  const {
   name,
   compose = null,
   // Seeded RELATIVE TO THE CHAIN THIS SUITE IS ON, never to a literal. An app is
@@ -74,7 +87,7 @@ export async function buildSeedableApp({
   // different one. Nothing rejects that - the node simply decides the app is
   // obsolete and reinstalls it forever.
   nodes = [],
-}) {
+  } = opts;
   const ownerKey = appOwnerKey();
   const appOwner = owner ?? ownerKey.zelid;
 

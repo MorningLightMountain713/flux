@@ -79,7 +79,7 @@ describe('per-app graceful stop routes through flux-shutdownd on Arcane (v8)', f
 
   async function installPlain(name, port) {
     await pushTestApp(name);
-    const app = await buildSeedableTestApp({ name, exitCode: 0, port });
+    const app = await buildSeedableTestApp({ name, exitCode: 0 });
     await installOnNodes(env, app, [NODE_IDX]);
     await waitForUp(client, name, `${name} running before stop`);
   }

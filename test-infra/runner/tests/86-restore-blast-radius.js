@@ -110,7 +110,7 @@ describe('a restore does not reach the other instances data', function () {
 
     // the incident's shape: a g: app with two instances, one elected
     await pushImage(appName, 'v1');
-    const app = await buildSeedableSyncthingApp({ name: appName, mode: 'g' });
+    const app = await buildSeedableSyncthingApp({ name: appName, syncMode: 'activeStandby' });
     // Placed one at a time with node 0 first: the election's index 0 is the
     // holder placed first, and the fixture elects node 0. Each holder's data is
     // seeded after its own first-run reset has cleared appdata - otherwise the
@@ -227,7 +227,7 @@ describe('a restore does not reach the other instances data', function () {
     before(async function () {
       this.timeout(420000);
       await pushImage(ownName, 'v1');
-      const app = await buildSeedableSyncthingApp({ name: ownName, mode: 'g' });
+      const app = await buildSeedableSyncthingApp({ name: ownName, syncMode: 'activeStandby' });
       await placeGAppInOrder(env, app, {
         placementOrder: [0, 1], identifier: ownIdentifier, coldStart: false,
       });

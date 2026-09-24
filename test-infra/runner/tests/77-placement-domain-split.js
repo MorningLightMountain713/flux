@@ -79,7 +79,7 @@ describe('placement share spreads synced instances across table fault domains', 
     const appName = `e2edomsplit${Date.now()}`;
     await pushTestApp(appName);
     const app = await buildSeedableSyncthingApp({
-      name: appName, mode: 'g', instances: 3,
+      name: appName, syncMode: 'activeStandby', instances: 3,
     });
     await seedSpawnerApp(env, app);
 

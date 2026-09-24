@@ -87,7 +87,7 @@ describe('primary election under a divergent placement order', function () {
 
   const deploy = async (appName) => {
     await pushImage(appName, 'v1');
-    const app = await buildSeedableSyncthingApp({ name: appName, mode: 'g' });
+    const app = await buildSeedableSyncthingApp({ name: appName, syncMode: 'activeStandby' });
     await placeGAppInOrder(env, app, {
       placementOrder,
       identifier: componentIdentifier(appName),
@@ -322,7 +322,7 @@ describe('primary election under a divergent placement order', function () {
     // and hides every disagreement between them. Placed one at a time the seed is
     // index 1, and with only two holders there is no third opinion to fall back on:
     // whatever the pair decides is the answer.
-    const app = await buildSeedableSyncthingApp({ name: pairApp, mode: 'g' });
+    const app = await buildSeedableSyncthingApp({ name: pairApp, syncMode: 'activeStandby' });
     await pushImage(pairApp, 'v1');
     await placeGAppInOrder(env, app, {
       placementOrder: placementOrderWithSeedAt([0, 1], 1),

@@ -72,13 +72,8 @@ describe('reconciler cold start - fresh multi-node placement, no seeded source',
     await resetSyncState();
     await pushImage(rApp, 'v1');
     await pushImage(gApp, 'v1');
-    // Distinct host ports: both seeds can elect onto the SAME node, and two
-    // apps on the builder's shared default port collide at start ("port is
-    // already allocated") - the second app then crash-ladders instead of
-    // seeding. Election placement varies with the timestamped app names, so
-    // any run can draw the colliding placement.
-    const rSpec = await buildSeedableSyncthingApp({ name: rApp, syncMode: 'syncFirst', ports: [31111] });
-    const gSpec = await buildSeedableSyncthingApp({ name: gApp, syncMode: 'activeStandby', ports: [31112] });
+    const rSpec = await buildSeedableSyncthingApp({ name: rApp, syncMode: 'syncFirst' });
+    const gSpec = await buildSeedableSyncthingApp({ name: gApp, syncMode: 'activeStandby' });
 
     // A SEEDED app's folder id is its own name (no minted identity on a seeded
     // spec) - and this must run before install, when there is no row to ask.
