@@ -179,6 +179,33 @@ function decodeMessageBytes(asm) {
   return Buffer.from(hex, 'hex');
 }
 
+/**
+ * Every soft-fork payload a transaction carries: each OP_RETURN output, in output
+ * order. The chain fixes neither the position nor the number of OP_RETURN outputs
+ * (the one-per-transaction limit is relay policy, not consensus), so none is
+ * assumed; each payload names its own kind.
+ *
+ * `legacyPosition` marks the output a released node reads a legacy price message
+ * from: the last output with a script. A legacy message anywhere else is one no
+ * released node applies.
+ * @param {object} tx Verbose transaction
+ * @returns {Array<{vout: number, bytes: Buffer, legacyPosition: boolean}>} Payloads in output order
+ */
+function softForkPayloads(tx) {
+  const outputs = tx.vout || [];
+  let lastScripted = -1;
+  outputs.forEach((output, index) => {
+    if (output.scriptPubKey && output.scriptPubKey.asm) lastScripted = index;
+  });
+  const payloads = [];
+  outputs.forEach((output, index) => {
+    const asm = output.scriptPubKey && output.scriptPubKey.asm;
+    const bytes = asm ? decodeMessageBytes(asm) : null;
+    if (bytes) payloads.push({ vout: index, bytes, legacyPosition: index === lastScripted });
+  });
+  return payloads;
+}
+
 function decodeLegacyAscii(bytes) {
   const nullIdx = bytes.indexOf(0x00);
   const slice = nullIdx >= 0 ? bytes.subarray(0, nullIdx) : bytes;
@@ -188,7 +215,7 @@ function decodeLegacyAscii(bytes) {
 async function storeToCollection(collectionName, doc) {
   const db = dbHelper.databaseConnection();
   const database = db.db(config.get('database.chainparams.database'));
-  const query = { txid: doc.txid };
+  const query = { txid: doc.txid, vout: doc.vout };
   const update = { $set: doc };
   const options = { upsert: true };
   await dbHelper.updateOneInDatabase(database, collectionName, query, update, options);
@@ -220,11 +247,13 @@ async function storeToCollection(collectionName, doc) {
  * swallowed here.
  *
  * @param {string} collectionName Chainparams collection to upsert into.
- * @param {{txid: string, height: number, txIndex: number, message: object}} doc Row to
- *   store. `txIndex` is the transaction's position in its block: two messages can be
- *   mined in one block, and the history orders them by it rather than by the order
- *   this node happened to reach them in, which differs between the walk, the
- *   bootstrap and a restore from this collection.
+ * @param {{txid: string, vout: number, height: number, txIndex: number, message: object}} doc
+ *   Row to store, keyed by `txid` and `vout`. `txIndex` is the transaction's position
+ *   in its block and `vout` the message's output within the transaction: two messages
+ *   can be mined in one block, or in one transaction, and the history orders them by
+ *   those positions rather than by the order this node happened to reach them in,
+ *   which differs between the walk, the bootstrap and a restore from this collection.
+ *   Messages from one transaction are applied in output order.
  * @param {object|null} history In-memory history for this message type, if built yet.
  * @returns {Promise<void>}
  */
@@ -324,7 +353,18 @@ function isRecognizedMessageSigner(address, height) {
   return address === resolveOracleAddress(height);
 }
 
-async function processSoftFork(txid, height, txIndex, bytes, senderIsLegacyAuthority, tx) {
+/**
+ * Apply one soft-fork payload.
+ * @param {string} txid Transaction carrying it
+ * @param {number} height Block height
+ * @param {number} txIndex Transaction's position in its block
+ * @param {{vout: number, bytes: Uint8Array, legacyPosition: boolean}} payload One entry of softForkPayloads
+ * @param {boolean} senderIsLegacyAuthority Whether an input is a legacy message authority
+ * @param {object} tx Verbose transaction, for the per-kind signer checks
+ * @returns {Promise<void>}
+ */
+async function processSoftFork(txid, height, txIndex, payload, senderIsLegacyAuthority, tx) {
+  const { vout, bytes, legacyPosition } = payload;
   const { dispatch, ValidationError } = await getSpecPolicy();
   let dispatched;
   try {
@@ -358,7 +398,7 @@ async function processSoftFork(txid, height, txIndex, bytes, senderIsLegacyAutho
 
   switch (kind) {
     case 'legacy-price': {
-      if (!senderIsLegacyAuthority) return;
+      if (!senderIsLegacyAuthority || !legacyPosition) return;
       const ascii = decodeLegacyAscii(bytes);
       const splittedMess = ascii.split('_');
       const version = splittedMess[0];
@@ -380,7 +420,7 @@ async function processSoftFork(txid, height, txIndex, bytes, senderIsLegacyAutho
       log.info(`PriceMessage at height ${height}: ${txid}`);
       await applySoftForkMessage(
         priceMessagesCollection,
-        { txid, height, txIndex, message },
+        { txid, vout, height, txIndex, message },
         priceOracleState.getPriceMessageHistory(),
       );
       break;
@@ -392,7 +432,7 @@ async function processSoftFork(txid, height, txIndex, bytes, senderIsLegacyAutho
       log.info(`RateMessage at height ${height}: ${txid}`);
       await applySoftForkMessage(
         rateMessagesCollection,
-        { txid, height, txIndex, message },
+        { txid, vout, height, txIndex, message },
         priceOracleState.getRateMessageHistory(),
       );
       break;
@@ -401,7 +441,7 @@ async function processSoftFork(txid, height, txIndex, bytes, senderIsLegacyAutho
       log.info(`PriceModifierMessage at height ${height}: ${txid}`);
       await applySoftForkMessage(
         priceModifierMessagesCollection,
-        { txid, height, txIndex, message },
+        { txid, vout, height, txIndex, message },
         priceOracleState.getPriceModifierHistory(),
       );
       break;
@@ -410,7 +450,7 @@ async function processSoftFork(txid, height, txIndex, bytes, senderIsLegacyAutho
       log.info(`OracleKeyMessage at height ${height}: ${txid}`);
       await applySoftForkMessage(
         oracleKeyMessagesCollection,
-        { txid, height, txIndex, message },
+        { txid, vout, height, txIndex, message },
         priceOracleState.getOracleKeyHistory(),
       );
       break;
@@ -419,7 +459,7 @@ async function processSoftFork(txid, height, txIndex, bytes, senderIsLegacyAutho
       log.info(`MarketplacePricingMessage at height ${height}: ${txid}`);
       await applySoftForkMessage(
         marketplacePricingMessagesCollection,
-        { txid, height, txIndex, message },
+        { txid, vout, height, txIndex, message },
         priceOracleState.getMarketplacePricingHistory(),
       );
       break;
@@ -428,7 +468,7 @@ async function processSoftFork(txid, height, txIndex, bytes, senderIsLegacyAutho
       log.info(`PolicyGroupMessage at height ${height}: ${txid}`);
       await applySoftForkMessage(
         policyGroupMessagesCollection,
-        { txid, height, txIndex, message },
+        { txid, vout, height, txIndex, message },
         entitlementsState.getPolicyGroupHistory(),
       );
       break;
@@ -518,20 +558,18 @@ async function processInsight(blockDataVerbose, database) {
           }
         }
       }
-      // check for softForks — coarse filter: a recognized signer self-send carrying
-      // an OP_RETURN. The per-type authority checks inside processSoftFork enforce
-      // which signer may publish which message type.
-      const isSoftFork = senderIsRecognizedSigner && receiverIsRecognizedSigner && message;
-      if (isSoftFork) {
-        try {
-          const asmField = tx.vout.find((v) => v.scriptPubKey && v.scriptPubKey.asm);
-          const rawBytes = asmField ? decodeMessageBytes(asmField.scriptPubKey.asm) : null;
-          if (rawBytes) {
+      // check for softForks — coarse filter: a recognized signer self-send. Every
+      // OP_RETURN it carries is a payload; the per-type authority checks inside
+      // processSoftFork enforce which signer may publish which message type.
+      if (senderIsRecognizedSigner && receiverIsRecognizedSigner) {
+        // eslint-disable-next-line no-restricted-syntax
+        for (const payload of softForkPayloads(tx)) {
+          try {
             // eslint-disable-next-line no-await-in-loop
-            await processSoftFork(tx.txid, blockDataVerbose.height, txIndex, rawBytes, senderIsLegacyAuthority, tx);
+            await processSoftFork(tx.txid, blockDataVerbose.height, txIndex, payload, senderIsLegacyAuthority, tx);
+          } catch (error) {
+            log.error('Error processing soft fork message:', error);
           }
-        } catch (error) {
-          log.error('Error processing soft fork message:', error);
         }
       }
     }
@@ -910,7 +948,6 @@ async function scanForSoftForks(addresses, startHeight, endHeight, phase) {
       let senderRecognized = false;
       let senderIsLegacyAuthority = false;
       let receiverRecognized = false;
-      let message = '';
 
       for (const vin of (tx.vin || [])) {
         if (vin.address && signerSet.has(vin.address)) senderRecognized = true;
@@ -922,28 +959,24 @@ async function scanForSoftForks(addresses, startHeight, endHeight, phase) {
             if (signerSet.has(addr)) receiverRecognized = true;
           }
         }
-        if (vout.scriptPubKey.asm) {
-          const decoded = decodeMessage(vout.scriptPubKey.asm);
-          if (decoded) message = decoded;
-        }
       }
 
-      if (senderRecognized && receiverRecognized && message) {
-        const asmField = tx.vout.find((v) => v.scriptPubKey && v.scriptPubKey.asm);
-        const rawBytes = asmField ? decodeMessageBytes(asmField.scriptPubKey.asm) : null;
-        if (rawBytes) {
-          const txIndex = blockIndexByTxid.get(tx.txid);
-          if (!Number.isInteger(txIndex)) {
-            // Fail closed and say which requirement failed. Applying the message
-            // without a position would order it by arrival, which is the fork the
-            // position exists to close.
-            throw new Error(
-              `Bootstrap: getaddressdeltas returned no blockindex for ${tx.txid} — this `
-              + 'daemon cannot order two soft-fork messages mined in one block',
-            );
-          }
+      const payloads = senderRecognized && receiverRecognized ? softForkPayloads(tx) : [];
+      if (payloads.length > 0) {
+        const txIndex = blockIndexByTxid.get(tx.txid);
+        if (!Number.isInteger(txIndex)) {
+          // Fail closed and say which requirement failed. Applying the message
+          // without a position would order it by arrival, which is the fork the
+          // position exists to close.
+          throw new Error(
+            `Bootstrap: getaddressdeltas returned no blockindex for ${tx.txid} — this `
+            + 'daemon cannot order two soft-fork messages mined in one block',
+          );
+        }
+        // eslint-disable-next-line no-restricted-syntax
+        for (const payload of payloads) {
           // eslint-disable-next-line no-await-in-loop
-          await processSoftFork(tx.txid, tx.height, txIndex, rawBytes, senderIsLegacyAuthority, tx);
+          await processSoftFork(tx.txid, tx.height, txIndex, payload, senderIsLegacyAuthority, tx);
           totalForks += 1;
         }
       }

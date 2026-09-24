@@ -48,6 +48,16 @@ export function t1Address(privHex) {
   return b58check.encode(concatBytes(FLUX_T1_PREFIX, h160));
 }
 
+/**
+ * The asm of a standard P2PKH output paying a t1 address, as the daemon reports it.
+ * A payment output always carries a script, so a soft-fork transaction's outputs are
+ * built with one: the explorer must find the message among outputs that all have one.
+ */
+export function p2pkhAsm(address) {
+  const h160 = b58check.decode(address).slice(FLUX_T1_PREFIX.length);
+  return `OP_DUP OP_HASH160 ${Buffer.from(h160).toString('hex')} OP_EQUALVERIFY OP_CHECKSIG`;
+}
+
 // A standard P2PKH scriptSig: push(DER signature ‖ SIGHASH_ALL) push(compressed
 // pubkey). The signature is real (over a deterministic per-tx digest); the stub
 // isn't a consensus node, so it validates the DER + sighash byte, not the full
@@ -92,7 +102,7 @@ export function buildSignedSoftForkTx({
     version: 1,
     vin: [{ txid: prevTxid, vout: 0, address, scriptSig: { hex: scriptSigHex } }],
     vout: [
-      { valueSat: 100000, scriptPubKey: { addresses: [address], asm: '', hex: '' } },
+      { valueSat: 100000, scriptPubKey: { addresses: [address], asm: p2pkhAsm(address) } },
       { valueSat: 0, scriptPubKey: { addresses: [], asm: `OP_RETURN ${opReturnHex}` } },
     ],
   };

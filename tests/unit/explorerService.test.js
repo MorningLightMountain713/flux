@@ -24,6 +24,9 @@ const chai = require('chai');
 const chaiAsPromised = require('chai-as-promised');
 
 // 320-char OP_RETURN payload, hoisted so the call site stays inside max-len.
+// A standard P2PKH output's script, as the daemon reports it. Every payment output
+// carries one, so a soft-fork fixture's payment output does too.
+const PAY_ASM = 'OP_DUP OP_HASH160 8f1c27f0e5d0b0a8fdcb5a8e6e1fbb7f0c6b2a31 OP_EQUALVERIFY OP_CHECKSIG';
 const longAsm = 'OP_RETURN 6162636465666768696a6b6c6d6e6f707172737475767778797a303132333435363738394142434445464748494a4b4c4d4e4f505152535455565758595a3031';
 
 chai.use(chaiAsPromised);
@@ -1011,15 +1014,14 @@ describe('explorerService tests', () => {
       return { txid, address, satoshis, blockindex: 0, index: 0, height: 1_594_832 };
     }
 
-    function makeSoftForkTx(txid, height, msgHex) {
+    function makeSoftForkTx(txid, height, msgHex, { opReturnFirst = false } = {}) {
+      const payment = { valueSat: 100_000, scriptPubKey: { addresses: [multisigA], asm: PAY_ASM } };
+      const data = { valueSat: 0, scriptPubKey: { addresses: [], asm: `OP_RETURN ${msgHex}` } };
       return {
         txid,
         height,
         vin: [{ address: multisigA }],
-        vout: [
-          { valueSat: 100_000, scriptPubKey: { addresses: [multisigA], asm: '' } },
-          { valueSat: 0, scriptPubKey: { addresses: [], asm: `OP_RETURN ${msgHex}` } },
-        ],
+        vout: opReturnFirst ? [data, payment] : [payment, data],
       };
     }
 
@@ -1133,7 +1135,7 @@ describe('explorerService tests', () => {
         txid: 'noOpReturn',
         height: 1_594_832,
         vin: [{ address: multisigA }],
-        vout: [{ valueSat: 500_000, scriptPubKey: { addresses: [multisigA], asm: '' } }],
+        vout: [{ valueSat: 500_000, scriptPubKey: { addresses: [multisigA], asm: PAY_ASM } }],
       };
       executeBatchCallStub.resolves({
         status: 'success',
@@ -1143,6 +1145,31 @@ describe('explorerService tests', () => {
       await explorerService.bootstrapSoftForks(2_579_000);
 
       sinon.assert.notCalled(updateOneStub);
+    });
+
+    it('applies a legacy price message only from the last output, as a released node does', async () => {
+      executeCallStub.resolves({
+        status: 'success',
+        data: [
+          makeDelta('lastTx', multisigA, -500_000),
+          makeDelta('lastTx', multisigA, 500_000),
+          makeDelta('firstTx', multisigA, -500_000),
+          makeDelta('firstTx', multisigA, 500_000),
+        ],
+      });
+      executeBatchCallStub.resolves({
+        status: 'success',
+        data: [
+          { id: 0, result: makeSoftForkTx('lastTx', 1_594_832, priceForkHex), error: null },
+          { id: 1, result: makeSoftForkTx('firstTx', 1_594_832, priceForkHex, { opReturnFirst: true }), error: null },
+        ],
+      });
+
+      await explorerService.bootstrapSoftForks(2_579_000);
+
+      const written = updateOneStub.getCalls().map((c) => c.args[2]?.txid);
+      expect(written).to.include('lastTx');
+      expect(written).to.not.include('firstTx');
     });
   });
 
@@ -1186,14 +1213,15 @@ describe('explorerService tests', () => {
       txid, address, satoshis, blockindex: 0, index: 0, height,
     });
 
-    const signedTx = (txid, height, from, msgHex) => ({
+    // `layout` lists the outputs in order: 'pay' a payment back to the sender, and
+    // each hex string an OP_RETURN carrying it.
+    const signedTx = (txid, height, from, msgHex, layout = ['pay', msgHex]) => ({
       txid,
       height,
       vin: [{ address: from, scriptSig: { hex: ALL_SCRIPTSIG } }],
-      vout: [
-        { valueSat: 100_000, scriptPubKey: { addresses: [from], asm: '' } },
-        { valueSat: 0, scriptPubKey: { addresses: [], asm: `OP_RETURN ${msgHex}` } },
-      ],
+      vout: layout.map((out) => (out === 'pay'
+        ? { valueSat: 100_000, scriptPubKey: { addresses: [from], asm: PAY_ASM } }
+        : { valueSat: 0, scriptPubKey: { addresses: [], asm: `OP_RETURN ${out}` } })),
     });
 
     const selfSend = (txid, address, height) => [
@@ -1320,6 +1348,59 @@ describe('explorerService tests', () => {
       expect(rates, 'no rate message was rebuilt — phase 2 did not reach it').to.have.lengthOf(1);
       expect(rates[0].chainHeight).to.equal(RATE_HEIGHT);
     });
+
+    describe('where a transaction carries its messages', () => {
+      const OTHER_PUBKEY_HEX = '03a9329557d633a7b261290f7c3b17506d460c3fcfd0cb8fd9339b27d4f583eca7';
+      const keyHex = (pubkeyHex) => Buffer.from(
+        policy.OracleKeyMessage.encode({ pubkey: Buffer.from(pubkeyHex, 'hex') }),
+      ).toString('hex');
+      const pubkeysHeld = () => [...priceOracleState.getOracleKeyHistory().entries()]
+        .map((entry) => Buffer.from(entry.message.pubkey).toString('hex'));
+      const rowKeys = (txid) => dbHelper.updateOneInDatabase.getCalls()
+        .filter((call) => call.args[2]?.txid === txid)
+        .map((call) => call.args[2]);
+
+      // The two paths a message reaches a node by: the block walk, and the
+      // address-index bootstrap of a node catching up.
+      const paths = {
+        'the live block walk': async (tx) => {
+          await explorerService.processInsight({ height: KEY_HEIGHT, tx: [{ ...tx, version: 1 }] }, {});
+        },
+        'the bootstrap': async (tx) => {
+          executeCallStub
+            .onFirstCall().resolves({ status: 'success', data: selfSend(tx.txid, authority, KEY_HEIGHT) })
+            .onSecondCall().resolves({ status: 'success', data: [] });
+          executeBatchCallStub.resolves({ status: 'success', data: [{ id: 0, result: tx, error: null }] });
+          await explorerService.bootstrapSoftForks(TIP);
+        },
+      };
+
+      Object.entries(paths).forEach(([path, ingest]) => {
+        describe(path, () => {
+          const layouts = {
+            first: (m) => [m, 'pay', 'pay'],
+            'between two payments': (m) => ['pay', m, 'pay'],
+            last: (m) => ['pay', 'pay', m],
+          };
+          Object.entries(layouts).forEach(([where, layout]) => {
+            it(`applies a message whose OP_RETURN is ${where}`, async () => {
+              await ingest(signedTx('keyTx', KEY_HEIGHT, authority, null, layout(keyHex(ORACLE_PUBKEY_HEX))));
+
+              expect(pubkeysHeld()).to.deep.equal([ORACLE_PUBKEY_HEX]);
+            });
+          });
+
+          it('applies every message one transaction carries, in output order, each stored under its own output', async () => {
+            await ingest(signedTx('twoTx', KEY_HEIGHT, authority, null, [
+              'pay', keyHex(ORACLE_PUBKEY_HEX), keyHex(OTHER_PUBKEY_HEX),
+            ]));
+
+            expect(pubkeysHeld()).to.deep.equal([ORACLE_PUBKEY_HEX, OTHER_PUBKEY_HEX]);
+            expect(rowKeys('twoTx')).to.deep.equal([{ txid: 'twoTx', vout: 1 }, { txid: 'twoTx', vout: 2 }]);
+          });
+        });
+      });
+    });
   });
 
   describe('soft-fork message authority', () => {
@@ -1403,7 +1484,7 @@ describe('explorerService tests', () => {
       vin: [{ address: config.fluxapps.messageAuthorityAddress, scriptSig: { hex: ALL_SCRIPTSIG } }],
     });
 
-    const PAYLOAD = new Uint8Array([0x02, 0x00]);
+    const PAYLOAD = { vout: 1, bytes: new Uint8Array([0x02, 0x00]), legacyPosition: true };
     const PARSED_PRICE = { fields: { cpu: 1n }, unknownTags: [] };
 
     let realPolicy;
@@ -1487,7 +1568,9 @@ describe('explorerService tests', () => {
         sinon.assert.calledOnceWithExactly(addStub, PARSED_PRICE, 1_594_832, 4);
         const write = updateStub.getCalls().find((c) => c.args[2]?.txid === 'priceTx');
         expect(write, 'the price row must be stored').to.not.be.undefined;
+        expect(write.args[2]).to.deep.equal({ txid: 'priceTx', vout: 1 });
         expect(write.args[3].$set.message).to.equal(PARSED_PRICE);
+        expect(write.args[3].$set.vout).to.equal(1);
       });
     });
   });

@@ -61,11 +61,12 @@ describe('entitlementsState', () => {
 
   /** A stored policy-group definition, encoded and parsed the way the chain does. */
   function definitionDoc({
-    height = GRANT_HEIGHT, txIndex = 0, groupId = 0, features, action = 'upsert',
+    height = GRANT_HEIGHT, txIndex = 0, vout = 1, groupId = 0, features, action = 'upsert',
   }) {
     return {
       height,
       txIndex,
+      vout,
       message: flux.PolicyGroupMessage.parse(
         flux.PolicyGroupMessage.encodeDefinition({
           groupId, bitmap: flux.encodeGrantBitmap(features), action,
@@ -81,7 +82,7 @@ describe('entitlementsState', () => {
    * the membership under an empty hex string without the restore step.
    */
   function membershipDoc({
-    height = GRANT_HEIGHT, txIndex = 0, groupId = MEMBER_GROUP, owner = OWNER, action = 'upsert',
+    height = GRANT_HEIGHT, txIndex = 0, vout = 1, groupId = MEMBER_GROUP, owner = OWNER, action = 'upsert',
   }) {
     const message = flux.PolicyGroupMessage.parse(
       flux.PolicyGroupMessage.encodeMembership({
@@ -93,7 +94,9 @@ describe('entitlementsState', () => {
     for (const fluxid of message.fluxids) {
       fluxid.bytes = new Binary(Buffer.from(fluxid.bytes));
     }
-    return { height, txIndex, message };
+    return {
+      height, txIndex, vout, message,
+    };
   }
 
   beforeEach(() => {
@@ -270,6 +273,16 @@ describe('entitlementsState', () => {
       await entitlementsState.rebuildPolicyGroupState();
 
       expect(addSpy.getCalls().map((call) => call.args[2])).to.eql([2, 9]);
+    });
+
+    it('replays two messages from one transaction by their output in it', async () => {
+      const later = definitionDoc({ height: 10, txIndex: 4, vout: 3, features: { mesh: true } });
+      const earlier = definitionDoc({ height: 10, txIndex: 4, vout: 1, features: { telemetry: true } });
+      docs = [later, earlier];
+
+      await entitlementsState.rebuildPolicyGroupState();
+
+      expect(addSpy.getCalls().map((call) => call.args[0])).to.eql([earlier.message, later.message]);
     });
 
     it('refuses a row stored before the position was recorded', async () => {
