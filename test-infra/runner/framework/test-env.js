@@ -4,6 +4,7 @@
 process.env.TESTCONTAINERS_HOST_OVERRIDE ??= '127.0.0.1';
 process.env.TESTCONTAINERS_RYUK_RECONNECTION_TIMEOUT ??= '5s';
 
+import { Readable } from 'node:stream';
 import { GenericContainer, Wait, getContainerRuntimeClient } from 'testcontainers';
 import {
   readFileSync, mkdirSync, mkdtempSync, writeFileSync, rmSync, existsSync,
@@ -110,6 +111,27 @@ function hostJournalChown(dir, timeoutMs = 20000) {
   });
 }
 
+/**
+ * Record a restarted node's container state into the collector when the boot
+ * did not answer on its API in time. What the boot printed is already on the
+ * host: the node's journal and the collector's own stream.
+ *
+ * @param {import('testcontainers').StartedTestContainer} container
+ * @param {Function} logCollector the node's collector (a stream consumer)
+ * @param {Error} error the wait failure
+ */
+async function describeUnansweredBoot(container, logCollector, error) {
+  const lines = [`[RESTART_UNANSWERED] ${error.message}`];
+  try {
+    const rtClient = await getContainerRuntimeClient();
+    const { State, RestartCount } = await rtClient.container.dockerode.getContainer(container.getId()).inspect();
+    lines.push(`[RESTART_UNANSWERED] state=${State.Status} running=${State.Running} pid=${State.Pid} `
+      + `exitCode=${State.ExitCode} startedAt=${State.StartedAt} finishedAt=${State.FinishedAt} restartCount=${RestartCount}`);
+  } catch (inspectError) {
+    lines.push(`[RESTART_UNANSWERED] inspect failed: ${inspectError.message}`);
+  }
+  logCollector(Readable.from([`${lines.join('\n')}\n`]));
+}
 function createLogCollector() {
   // Each entry is { t, line }: t is the capture wall-clock (ISO), line is the raw
   // log text. The container's own log lines carry no timestamp, so we stamp at
@@ -2408,6 +2430,12 @@ async function _buildEnv(env, nodes, deferredNodes, legacyNodes, unprivilegedNod
       const since = Math.floor(Date.now() / 1000);
       try {
         await container.restart({ timeout });
+      } catch (error) {
+        // A boot that never answered is the evidence, and the container may not
+        // outlive the test: what it is doing goes into the capture before the
+        // error leaves.
+        if (cfg?.logCollector) await describeUnansweredBoot(container, cfg.logCollector, error);
+        throw error;
       } finally {
         container.waitStrategy = saved;
         if (cfg?.logCollector) {
