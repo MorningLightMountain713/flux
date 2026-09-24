@@ -16,14 +16,14 @@
 import { describe, it, before, after } from 'mocha';
 import { expect } from 'chai';
 import { createTestEnv } from '../framework/test-env.js';
+import { bootAndPeer } from '../framework/reconciler-suite.js';
 import { nodeKey, appOwnerKey } from '../framework/keys.js';
 import { authenticate } from '../auth.js';
 import { buildAppSpec, registerAndConfirm } from '../framework/app-helper.js';
 import { pushImage } from '../framework/registry-helper.js';
 import { REGISTRY_REPO_HOST } from '../framework/subnet-config.js';
-import { startTicker, advanceBlock } from '../framework/daemon-control.js';
 import {
-  waitFor, waitForDaemonReady, waitForNodeStatus, waitForBlockProcessed,
+  waitFor, waitForBlockProcessed,
   waitForAppInstalled, waitForAppSpecStored,
 } from '../framework/wait.js';
 import { dumpLogsOnFailure } from '../framework/log-on-failure.js';
@@ -45,21 +45,6 @@ function localRegistryCompose(appName) {
     hdd: 1,
     repoauth: '',
   }];
-}
-
-async function bootAndPeer(env) {
-  for (const client of env.clients) await waitForDaemonReady(client);
-  await Promise.all(env.clients.map(
-    (c) => waitForNodeStatus(c, (d) => d.confirmed === true, 30000),
-  ));
-  await advanceBlock();
-  for (const client of env.clients) {
-    await waitForBlockProcessed(client, (d) => d.height > env.initialHeight, 50000);
-  }
-  await env.startDiscovery();
-  await env.clients[0].waitForEvent('peers:added', (d) => d.outbound >= 4, 120000);
-  await env.clients[0].waitForEvent('peers:added', (d) => d.inbound >= 2, 120000);
-  await startTicker();
 }
 
 describe('App monitoring endpoints', function () {
