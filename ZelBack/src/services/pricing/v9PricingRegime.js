@@ -4,7 +4,7 @@ const daemonServiceMiscRpcs = require('../daemonService/daemonServiceMiscRpcs');
 const appsRepository = require('../appDatabase/appsRepository');
 const { resolveInstantiatedSpec } = require('../utils/specCutover');
 const { getSpecPolicy } = require('../utils/specLibs');
-const { buildPricingEngine, resolveMarketplacePricingCtx } = require('./buildPricingEngine');
+const { buildPricingEngine } = require('./buildPricingEngine');
 const priceOracleState = require('./priceOracleState');
 
 /**
@@ -94,9 +94,8 @@ async function onChainDisplayUpdatePrice(spec, existing, daemonHeight) {
     height: prevHeight,
     duration: prevSpec.ttl || 0,
     isEncrypted: existing.isEncrypted,
-    ...resolveMarketplacePricingCtx(prevSpec, prevHeight),
   });
-  const oldScaledPriceMicrodollars = oldBreakdown.marketplaceAdjustedMicrodollars;
+  const oldScaledPriceMicrodollars = oldBreakdown.preFloorMicrodollars;
 
   // Everything the pricer meters for the old spec, off the breakdown just priced
   // at the old rates (with the old encryption bit). Mirrors updateFee so display
@@ -133,7 +132,6 @@ async function onChainDisplayUpdatePrice(spec, existing, daemonHeight) {
     updateDiscountBp,
     // priceUpdate prices the new spec internally, so this is the new spec's bit.
     isEncrypted: spec.isEncrypted,
-    ...resolveMarketplacePricingCtx(spec, daemonHeight),
   });
   // REFUSED is a third outcome, and it carries a reason rather than a figure: the
   // update is free-shaped but the allowance is spent, so there is nothing to quote
@@ -188,7 +186,6 @@ async function onChainDisplayPrice(spec) {
     // Real encryption bit drives the encryptedSpec fee: a cleartext spec reports
     // false, a DecryptedCanonicalSpec (decrypted-from-encrypted) reports true.
     isEncrypted: spec.isEncrypted,
-    ...resolveMarketplacePricingCtx(spec, daemonHeight),
   });
   return breakdown.total / 1e8;
 }
@@ -233,7 +230,6 @@ async function registrationFee(spec, height) {
     // Real encryption bit drives the encryptedSpec fee: a cleartext spec reports
     // false, a DecryptedCanonicalSpec (decrypted-from-encrypted) reports true.
     isEncrypted: spec.isEncrypted,
-    ...resolveMarketplacePricingCtx(spec, height),
   });
   return BigInt(breakdown.total);
 }
@@ -290,16 +286,15 @@ async function updateFee(spec, prevSpec, height, prevHeight, prevRegisteredAt, n
 
   // Price the previous spec at its OWN registration-height rates, scaled to
   // its ttl: the basis for the unused-time credit refunds what was paid, at
-  // the rates in force then. The pre-floor figure (marketplaceAdjusted) is
+  // the rates in force then. The pre-floor figure (preFloorMicrodollars) is
   // used so the credit is never itself raised to minPrice.
   const oldEngine = await buildPricingEngine(prevHeight);
   const oldBreakdown = await oldEngine.price(prevSpec, {
     height: prevHeight,
     duration: prevSpec.ttl || 0,
     isEncrypted: prevSpec.isEncrypted,
-    ...resolveMarketplacePricingCtx(prevSpec, prevHeight),
   });
-  const oldScaledPriceMicrodollars = oldBreakdown.marketplaceAdjustedMicrodollars;
+  const oldScaledPriceMicrodollars = oldBreakdown.preFloorMicrodollars;
 
   // Everything the pricer meters for the old spec, off the breakdown just priced
   // at the old rates (with the old spec's encryption bit). priceUpdate derives
@@ -338,7 +333,6 @@ async function updateFee(spec, prevSpec, height, prevHeight, prevRegisteredAt, n
     updateDiscountBp,
     // priceUpdate prices the new spec internally, so this is the new spec's bit.
     isEncrypted: spec.isEncrypted,
-    ...resolveMarketplacePricingCtx(spec, height),
   });
   // null = REFUSED: free-shaped but the allowance is spent. There is no
   // payable figure - pricing it would let the mandatory floor payment apply

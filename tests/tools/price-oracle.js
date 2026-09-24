@@ -121,7 +121,6 @@ async function main() {
     .returns({ resolveAt: () => ({ fluxUsdPriceE4: 10_000 }) });
   sinon.stub(priceOracleState, 'getPriceModifierHistory')
     .returns({ resolveAt: () => ({ fiatMarkupBp: 500, updateDiscountBp: 250 }) });
-  sinon.stub(priceOracleState, 'getMarketplacePricingHistory').returns(null);
 
   sinon.stub(axios, 'get').callsFake(async (url) => {
     if (url.includes('getappspecsusdprice')) {

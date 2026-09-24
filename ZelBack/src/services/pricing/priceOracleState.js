@@ -10,7 +10,6 @@ let priceMessageHistory;
 let rateMessageHistory;
 let priceModifierHistory;
 let oracleKeyHistory;
-let marketplacePricingHistory;
 
 function ensureUint8Array(value) {
   if (value instanceof Uint8Array) return value;
@@ -35,14 +34,12 @@ async function rebuildPriceOracleState() {
     RateMessageHistory,
     PriceModifierHistory,
     OracleKeyHistory,
-    MarketplacePricingHistory,
   } = await getSpecPolicy();
 
   priceMessageHistory = new PriceMessageHistory();
   rateMessageHistory = new RateMessageHistory();
   priceModifierHistory = new PriceModifierHistory();
   oracleKeyHistory = new OracleKeyHistory();
-  marketplacePricingHistory = new MarketplacePricingHistory();
 
   const db = dbHelper.databaseConnection();
   const database = db.db(config.get('database.chainparams.database'));
@@ -88,17 +85,7 @@ async function rebuildPriceOracleState() {
     priceModifierHistory.add(doc.message, doc.height, doc.txIndex);
   }
 
-  const marketplaceDocs = await dbHelper.findInDatabase(
-    database, config.get('database.chainparams.collections.marketplacePricingMessages'),
-    {}, projection,
-  );
-  inChainOrder(marketplaceDocs, 'marketplacePricingMessages');
-  for (const doc of marketplaceDocs) {
-    fixBinaryFields(doc, ['templateUuid']);
-    marketplacePricingHistory.add(doc.message, doc.height, doc.txIndex);
-  }
-
-  log.info(`Price oracle state rebuilt: ${priceDocs.length} price, ${rateDocs.length} rate, ${modifierDocs.length} modifier, ${oracleKeyDocs.length} oracle-key, ${marketplaceDocs.length} marketplace`);
+  log.info(`Price oracle state rebuilt: ${priceDocs.length} price, ${rateDocs.length} rate, ${modifierDocs.length} modifier, ${oracleKeyDocs.length} oracle-key`);
 }
 
 function removeAtHeight(height) {
@@ -106,14 +93,12 @@ function removeAtHeight(height) {
   if (rateMessageHistory) rateMessageHistory.removeAtHeight(height);
   if (priceModifierHistory) priceModifierHistory.removeAtHeight(height);
   if (oracleKeyHistory) oracleKeyHistory.removeAtHeight(height);
-  if (marketplacePricingHistory) marketplacePricingHistory.removeAtHeight(height);
 }
 
 function getPriceMessageHistory() { return priceMessageHistory; }
 function getRateMessageHistory() { return rateMessageHistory; }
 function getPriceModifierHistory() { return priceModifierHistory; }
 function getOracleKeyHistory() { return oracleKeyHistory; }
-function getMarketplacePricingHistory() { return marketplacePricingHistory; }
 
 module.exports = {
   rebuildPriceOracleState,
@@ -122,5 +107,4 @@ module.exports = {
   getRateMessageHistory,
   getPriceModifierHistory,
   getOracleKeyHistory,
-  getMarketplacePricingHistory,
 };

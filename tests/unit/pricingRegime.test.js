@@ -157,15 +157,12 @@ describe('pricingRegime', () => {
     function loadV9() {
       const priceUpdate = sinon.stub().resolves({ free: true });
       const engine = {
-        price: sinon.stub().resolves({ marketplaceAdjustedMicrodollars: 0 }),
+        price: sinon.stub().resolves({ preFloorMicrodollars: 0 }),
         priceUpdate,
       };
       const v9 = proxyquire('../../ZelBack/src/services/pricing/v9PricingRegime', {
         '../appDatabase/appsRepository': { listAppMessagesByName: sinon.stub().resolves(history) },
-        './buildPricingEngine': {
-          buildPricingEngine: sinon.stub().resolves(engine),
-          resolveMarketplacePricingCtx: sinon.stub().returns({}),
-        },
+        './buildPricingEngine': { buildPricingEngine: sinon.stub().resolves(engine) },
         './priceOracleState': { getPriceModifierHistory: () => null },
         '../utils/specLibs': { getSpecPolicy: sinon.stub().resolves({ meteredQuantities: () => new Map() }) },
       });

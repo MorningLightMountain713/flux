@@ -10,9 +10,8 @@ const priceOracleState = require('../../ZelBack/src/services/pricing/priceOracle
 describe('pricing integration — chain messages through PricingEngine', () => {
   let PriceMessage, RateMessage, PriceModifierMessage, dispatch;
   let PriceMessageHistory, RateMessageHistory, PriceModifierHistory;
-  let MarketplacePricingMessage, MarketplacePricingHistory;
   let SOFT_FORK_EFFECTIVE_DEPTH;
-  let buildPricingEngine, resolveMarketplacePricingCtx;
+  let buildPricingEngine;
   let convertMicrodollarsToSats;
   let meteredQuantities;
   let FluxAppSpecV9;
@@ -21,13 +20,12 @@ describe('pricing integration — chain messages through PricingEngine', () => {
     ({
       PriceMessage, RateMessage, PriceModifierMessage, dispatch,
       PriceMessageHistory, RateMessageHistory, PriceModifierHistory,
-      MarketplacePricingMessage, MarketplacePricingHistory,
       SOFT_FORK_EFFECTIVE_DEPTH,
       convertMicrodollarsToSats,
       meteredQuantities,
     } = await import('@runonflux/flux-spec-policy'));
     ({ FluxAppSpecV9 } = await import('@runonflux/flux-spec'));
-    ({ buildPricingEngine, resolveMarketplacePricingCtx } = require('../../ZelBack/src/services/pricing/buildPricingEngine'));
+    ({ buildPricingEngine } = require('../../ZelBack/src/services/pricing/buildPricingEngine'));
   });
 
   afterEach(() => {
@@ -122,59 +120,7 @@ describe('pricing integration — chain messages through PricingEngine', () => {
     sinon.stub(priceOracleState, 'getRateMessageHistory').returns(histories.rateHistory);
     sinon.stub(priceOracleState, 'getPriceModifierHistory').returns(histories.modifierHistory);
     sinon.stub(priceOracleState, 'getOracleKeyHistory').returns(null);
-    sinon.stub(priceOracleState, 'getMarketplacePricingHistory').returns(null);
   }
-
-  describe('marketplace per-template multiplier (FluxOS resolver)', () => {
-    const TEMPLATE_UUID = 'e96eccbb-6cf3-4631-aac4-4edfcacedcda';
-    const templateUuidBytes = () => Buffer.from(TEMPLATE_UUID.replace(/-/g, ''), 'hex');
-
-    function buildMarketplaceHistory(chainHeight, multiplier) {
-      const bytes = MarketplacePricingMessage.encode({ templateUuid: templateUuidBytes(), multiplier });
-      const result = dispatch(bytes);
-      const history = new MarketplacePricingHistory();
-      history.add(result.message, chainHeight, 0);
-      return history;
-    }
-
-    function buildGlobalDefaultHistory(chainHeight, multiplier) {
-      const bytes = MarketplacePricingMessage.encode({ multiplier });
-      const result = dispatch(bytes);
-      const history = new MarketplacePricingHistory();
-      history.add(result.message, chainHeight, 0);
-      return history;
-    }
-
-    it('resolves the per-template multiplier from MarketplacePricingHistory', () => {
-      const chainHeight = 100;
-      const queryHeight = chainHeight + SOFT_FORK_EFFECTIVE_DEPTH;
-      sinon.stub(priceOracleState, 'getMarketplacePricingHistory').returns(buildMarketplaceHistory(chainHeight, 12_000));
-
-      const spec = { ...testSpec, marketplace: { templateId: TEMPLATE_UUID, templateVersion: 1, configId: null } };
-      expect(resolveMarketplacePricingCtx(spec, queryHeight)).to.deep.equal({ marketplaceMultiplier: 12_000 });
-    });
-
-    it('cascades to the global-default entry when no per-template message exists', () => {
-      const chainHeight = 100;
-      const queryHeight = chainHeight + SOFT_FORK_EFFECTIVE_DEPTH;
-      sinon.stub(priceOracleState, 'getMarketplacePricingHistory').returns(buildGlobalDefaultHistory(chainHeight, 8000));
-
-      const spec = { ...testSpec, marketplace: { templateId: TEMPLATE_UUID, templateVersion: 1, configId: null } };
-      expect(resolveMarketplacePricingCtx(spec, queryHeight)).to.deep.equal({ marketplaceMultiplier: 8000 });
-    });
-
-    it('returns an empty fragment for a non-marketplace spec', () => {
-      sinon.stub(priceOracleState, 'getMarketplacePricingHistory').returns(new MarketplacePricingHistory());
-      const spec = { ...testSpec, marketplace: null };
-      expect(resolveMarketplacePricingCtx(spec, 200)).to.deep.equal({});
-    });
-
-    it('returns an empty fragment when no entry matches the marketplace spec', () => {
-      sinon.stub(priceOracleState, 'getMarketplacePricingHistory').returns(new MarketplacePricingHistory());
-      const spec = { ...testSpec, marketplace: { templateId: TEMPLATE_UUID, templateVersion: 1, configId: null } };
-      expect(resolveMarketplacePricingCtx(spec, 200)).to.deep.equal({});
-    });
-  });
 
   describe('dispatch round-trip', () => {
     it('dispatches encoded PriceMessage to kind=price with parsed fields', () => {
@@ -378,8 +324,7 @@ describe('pricing integration — chain messages through PricingEngine', () => {
         'commodity', 'features', 'surcharges', 'discounts',
         'grossMicrodollars', 'durationSeconds', 'standardPeriodSeconds',
         'scaledCommodityMicrodollars', 'scaledFeatureMicrodollars', 'scaledGrossMicrodollars',
-        'marketplaceMultiplier', 'marketplaceFixedPriceMicrodollars',
-        'marketplaceAdjustedMicrodollars',
+        'preFloorMicrodollars',
         'adjustedMicrodollars', 'minPriceMicrodollars',
         'total', 'minPriceFluxSats',
         'fluxUsdPriceE4', 'ratesHeight',
@@ -497,7 +442,7 @@ describe('pricing integration — chain messages through PricingEngine', () => {
         duration: spec.ttl,
         asOf: Date.now(),
         recentEvents: [],
-        oldScaledPriceMicrodollars: oldBreakdown.marketplaceAdjustedMicrodollars,
+        oldScaledPriceMicrodollars: oldBreakdown.preFloorMicrodollars,
         oldMetered,
         remainingSeconds: spec.ttl,
         oldTtl: spec.ttl,
@@ -567,7 +512,7 @@ describe('pricing integration — chain messages through PricingEngine', () => {
         duration: grown.ttl,
         asOf: Date.now(),
         recentEvents: [],
-        oldScaledPriceMicrodollars: oldBreakdown.marketplaceAdjustedMicrodollars,
+        oldScaledPriceMicrodollars: oldBreakdown.preFloorMicrodollars,
         oldMetered: meteredQuantities(oldBreakdown),
         remainingSeconds: 0,
         oldTtl: previous.ttl,
