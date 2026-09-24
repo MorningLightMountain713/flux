@@ -65,11 +65,11 @@ describe('two holders that can reach each other never both seed', function () {
 
   // A fresh cold-start app on the split field, with the given checkpoints held on the
   // given nodes before it is installed, so its first decision meets them.
-  const placeSplitApp = async (tag, holds, mode = 'r') => {
+  const placeSplitApp = async (tag, holds, syncMode = 'syncFirst') => {
     const name = `e2eseed${tag}${stamp}`;
     const folder = `flux${name}_${name}`;
     await pushImage(name, 'v1');
-    const spec = await buildSeedableSyncthingApp({ name, mode });
+    const spec = await buildSeedableSyncthingApp({ name, syncMode });
     await pinColdStart(holders, folder);
     await pinHolding(holder, folder, holdingBytes);
     const from = Object.fromEntries(holders.map((i) => [i, client(i).getLastEventId()]));
@@ -219,7 +219,7 @@ describe('two holders that can reach each other never both seed', function () {
     const name = `e2eseedgwithdraw${stamp}`;
     // The lowest address decides only once the holder has, so the holder is the
     // one that decided, whichever pass reaches the field first.
-    const app = await placeSplitApp('gwithdraw', [[holder, ELECTION, `${name}_${name}`], [lowest, BEFORE_DECISION]], 'g');
+    const app = await placeSplitApp('gwithdraw', [[holder, ELECTION, `${name}_${name}`], [lowest, BEFORE_DECISION]], 'activeStandby');
     const team = (await authenticate(client(holder).url, fluxTeamKey())).zelidauth;
     // The seed decisions a node publishes go to a node or the Flux team, on the POST
     // form of the route; the open GET carries none.
