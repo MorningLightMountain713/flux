@@ -206,7 +206,11 @@ describe('appGiveUp - handing an app back', () => {
       standDown: ['web_appone'],
     };
 
-    it('tells the CONTROLLER to stop, not docker', async () => {
+    afterEach(() => {
+      appGiveUp.forgetStandDowns();
+    });
+
+    it('tells the CONTROLLER to stop, not docker, and says why', async () => {
       // A container stopped behind the controller's back is restarted by the next
       // reconcile pass - the standby coming up against the election's intent.
       safety.resolves(standDown);
@@ -214,8 +218,43 @@ describe('appGiveUp - handing an app back', () => {
 
       await appGiveUp.checkAndGiveUpAnApp(deps());
 
-      sinon.assert.calledWith(setDesired, 'web_appone', 'stopped');
+      sinon.assert.calledWith(setDesired, 'web_appone', 'stopped', 'standing down to hand the app back');
       expect(uninstall.called, 'a stand-down is not a removal').to.be.false;
+    });
+
+    it('keeps a stood-down component out of the election until the app has left this node', async () => {
+      // The election would otherwise find the component not running here and
+      // start it again within a cycle, undoing the stand-down every cycle.
+      safety.resolves(standDown);
+      sinon.stub(appReconciler, 'setControllerDesired');
+
+      await appGiveUp.checkAndGiveUpAnApp(deps());
+      expect(appGiveUp.isStandingDown('web_appone')).to.equal(true);
+
+      // the app leaves this node by any route: the next pass no longer holds it
+      residentialNodeDosService.listInstalledApps.resolves(['apptwo']);
+      safety.resolves(safe);
+      await appGiveUp.checkAndGiveUpAnApp(deps());
+
+      expect(appGiveUp.isStandingDown('web_appone')).to.equal(false);
+    });
+
+    it('stands for election again after six passes stood down without leaving', async () => {
+      // Stopped here and running nowhere is worse than the stuck-but-serving
+      // state a stand-down exists to end.
+      safety.resolves(standDown);
+      sinon.stub(appReconciler, 'setControllerDesired');
+      await appGiveUp.checkAndGiveUpAnApp(deps());
+
+      safety.resolves({ safe: false, code: 'NO_SYNCED_PEER', reason: 'no connected peer holds the folder in full' });
+      for (let pass = 1; pass <= 6; pass += 1) {
+        // eslint-disable-next-line no-await-in-loop
+        await appGiveUp.checkAndGiveUpAnApp(deps());
+        expect(appGiveUp.isStandingDown('web_appone'), `pass ${pass}`).to.equal(true);
+      }
+      await appGiveUp.checkAndGiveUpAnApp(deps());
+
+      expect(appGiveUp.isStandingDown('web_appone')).to.equal(false);
     });
 
     it('announces the stand-down, naming what must stop', async () => {

@@ -95,6 +95,8 @@ const scheduledPrimaryStart = new Map();
 // reads it to make a decision - so that the exclusion is stated once on entry (and again
 // after a restart) instead of on every pass.
 const operatorStoppedAnnounced = new Set();
+// Same latch for a component the give-up pass has standing down.
+const standDownAnnounced = new Set();
 // Same latch for the no-primary announcement: stated once when an app enters the
 // no-primary state, cleared when FDM reports a primary again.
 const noPrimaryAnnounced = new Set();
@@ -2739,6 +2741,9 @@ async function coordinateActiveStandbyApps() {
     for (const identifier of operatorStoppedAnnounced) {
       if (!validIdentifiers.has(identifier)) operatorStoppedAnnounced.delete(identifier);
     }
+    for (const identifier of standDownAnnounced) {
+      if (!validIdentifiers.has(identifier)) standDownAnnounced.delete(identifier);
+    }
     for (const identifier of noPrimaryAnnounced) {
       if (!validIdentifiers.has(identifier)) noPrimaryAnnounced.delete(identifier);
     }
@@ -2790,6 +2795,26 @@ async function coordinateActiveStandbyApps() {
         // Cleared when the lock lifts so a later stop is announced rather than swallowed.
         if (operatorStoppedAnnounced.delete(identifier)) {
           fluxEventBus.publish('activeStandby:decided', { identifier, action: 'operatorStopCleared' });
+        }
+        // A component the give-up pass has stood down is not a candidate: this
+        // node stopped it so it could hand the app back, and electing it again
+        // here would restart it within a cycle. Checked in the same place and
+        // for the same reason as operator-stopped, which is the other way a
+        // component this node holds is deliberately not running. Lazily
+        // required: appGiveUp sits downstream of this module in the load graph.
+        // eslint-disable-next-line global-require
+        if (require('./appGiveUp').isStandingDown(identifier)) {
+          fluxEventBus.count('masterSlave:decision', identifier, 'standingDown');
+          if (!standDownAnnounced.has(identifier)) {
+            standDownAnnounced.add(identifier);
+            log.info(`activeStandby: ${identifier} is standing down to be handed back - excluded from primary election`);
+            fluxEventBus.publish('activeStandby:decided', { identifier, action: 'standDownExcluded' });
+          }
+          // eslint-disable-next-line no-continue
+          continue;
+        }
+        if (standDownAnnounced.delete(identifier)) {
+          fluxEventBus.publish('activeStandby:decided', { identifier, action: 'standDownCleared' });
         }
         // The grant plane, when open for this app, IS the intent source: the
         // published masterlease record replaces the FDM read (FDM itself is

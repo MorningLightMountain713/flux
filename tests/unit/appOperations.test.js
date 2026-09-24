@@ -1075,6 +1075,29 @@ describe('appOperations tests', () => {
         'each pass that left the stopped component alone is counted').to.have.lengthOf(2);
     });
 
+    it('leaves a component alone while the give-up pass has it standing down', async () => {
+      // A node handing an app back stops writing first. The election would
+      // otherwise see the component not running here and start it again.
+      const identifier = 'stood_appc';
+      deploymentProviderStub.resolves([await gDeployment('appc', identifier)]);
+      const appGiveUp = require('../../ZelBack/src/services/appLifecycle/appGiveUp');
+      sinon.stub(appGiveUp, 'isStandingDown').callsFake((id) => id === identifier);
+
+      sinon.stub(dockerService, 'getAppIdentifier').returns(`flux${identifier}`);
+      sinon.stub(fluxNetworkHelper, 'getLocalSocketAddress').resolves('192.168.1.5:16137');
+      const fdm = sinon.stub(serviceHelper, 'axiosGet').resolves({ data: { status: 'success', data: { ips: ['192.168.1.5'] } } });
+      const publish = sinon.stub(fluxEventBus, 'publish');
+      const count = sinon.stub(fluxEventBus, 'count');
+
+      await appOperations.coordinateActiveStandbyApps();
+      await appOperations.coordinateActiveStandbyApps();
+
+      expect(fdm.called, 'a stood-down component is not a candidate, so nobody is asked who the primary is').to.be.false;
+      expect(decisionsFor(publish, identifier, 'standDownExcluded')).to.have.lengthOf(1);
+      expect(count.getCalls().filter((c) => c.args[1] === identifier && c.args[2] === 'standingDown'),
+        'each pass that left the stood-down component alone is counted').to.have.lengthOf(2);
+    });
+
     it('announces again after the operator lock is lifted and re-applied', async () => {
       const identifier = 'opstopb_appb';
       deploymentProviderStub.resolves([await gDeployment('appb', identifier)]);
