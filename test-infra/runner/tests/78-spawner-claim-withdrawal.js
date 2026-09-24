@@ -9,7 +9,9 @@ import {
   bootAndPeer, seedSpawnerApp, waitForInstanceCount,
   installingClaimIpsByNode, installingErrorsByNode,
 } from '../framework/reconciler-suite.js';
-import { waitFor } from '../framework/wait.js';
+import { waitFor, waitForCandidacy, waitForSpawnerBlocked } from '../framework/wait.js';
+import { authenticate } from '../auth.js';
+import { fluxTeamKey } from '../framework/keys.js';
 import { sleepUnlessInfraDead } from '../framework/infra-death.js';
 import { dumpLogsOnFailure } from '../framework/log-on-failure.js';
 
@@ -256,32 +258,66 @@ describe('spawner withdraws an installing claim without reporting a failure', fu
     const stoodDown = [...withdrawnIps()];
     expect(stoodDown, 'fixture: a node must have stood down first').to.not.be.empty;
 
-    // Every pass tallies, per app, the stage that removed it (spawner:verdict).
-    // afterAlreadyHeldOrTried is the filter that would hold a stood-down node
-    // out, so a verdict from any later stage, or 'candidate', is a pass on which
-    // the node was still in the draw - whoever wins the slot, and whether or not
-    // the app reads as covered again by then. Counted from just before the
-    // withdrawal, so only passes after it count.
-    const HELD_OUT = ['afterBlocklist', 'afterAlreadyHeldOrTried'];
-    const clientOf = (ip) => env.clients[env.clients.findIndex((_, i) => getSubnetConfig().nodeIp(i + 1) === ip)];
-    const passesInTheDraw = async (ip) => {
-      const verdicts = (await clientOf(ip).getTestCounters())['spawner:verdict']?.[appName] || {};
-      return Object.entries(verdicts)
-        .filter(([stage]) => !HELD_OUT.includes(stage))
-        .reduce((sum, [, n]) => sum + n, 0);
-    };
-    const baselines = new Map();
-    for (const ip of stoodDown) {
+    // ANCHORED, and the mutation is why. Every one of these nodes was a candidate
+    // for this app before it claimed - that is how it came to stand down - so an
+    // unanchored wait is answered from the buffer by that earlier verdict and
+    // passes before the rival has withdrawn anything. Proven: with a mutant that
+    // writes a stood-down node off entirely, the unanchored form still passed
+    // 6/6. The baseline is taken per node, before the withdrawal, so only a
+    // verdict reached AFTER it counts.
+    const baselines = new Map(stoodDown.map((ip) => {
+      const index = env.clients.findIndex((_, i) => getSubnetConfig().nodeIp(i + 1) === ip);
+      return [ip, { index, afterId: env.clients[index].getLastEventId() }];
+    }));
+
+    // ONLY A NODE THAT STOOD DOWN MAY TAKE THE FREED SLOT. A node that never
+    // claimed is just as free to, and which spawner pass lands first is a race
+    // the design promises nothing about. A node that took the slot without ever
+    // standing down would leave the stood-down nodes seeing the app covered, and
+    // candidacy is published on change, so they would say nothing. Those nodes
+    // are put in DOS, under which the spawner claims nothing, and released once
+    // the draw is decided.
+    const holderIp = getSubnetConfig().nodeIp(holder + 1);
+    const frozen = env.clients
+      .map((client, index) => ({ client, ip: getSubnetConfig().nodeIp(index + 1) }))
+      .filter(({ client, ip }) => client && ip !== holderIp && !stoodDown.includes(ip));
+    const frozenAuth = new Map();
+    for (const { client, ip } of frozen) {
       // eslint-disable-next-line no-await-in-loop
-      baselines.set(ip, await passesInTheDraw(ip));
+      const auth = await authenticate(client.url, fluxTeamKey());
+      frozenAuth.set(ip, auth.zelidauth);
+      const afterId = client.getLastEventId();
+      // eslint-disable-next-line no-await-in-loop
+      await client.setDOSState(100, 'held out of the draw', auth.zelidauth);
+      // eslint-disable-next-line no-await-in-loop
+      await waitForSpawnerBlocked(client, 'dos', 60_000, { afterId });
     }
 
-    const rival = env.stubPeerClients.get(STUB_INDEX);
-    await rival.withdrawApp(appName);
+    try {
+      const rival = env.stubPeerClients.get(STUB_INDEX);
+      await rival.withdrawApp(appName);
 
-    await waitFor(async () => {
-      const now = await Promise.all(stoodDown.map((ip) => passesInTheDraw(ip)));
-      return now.every((n, i) => n > baselines.get(stoodDown[i]));
-    }, { timeout: 120000, interval: 2000, label: 'every node that stood down is in the draw again after the withdrawal' });
+      // What standing aside must not cost is the node's place in the draw. The
+      // spawner publishes that directly: a verdict FLIPPING from excluded to
+      // candidate. afterAlreadyHeldOrTried is the filter that would hold a
+      // stood-down node out, so surviving it is the property, and the event
+      // fires whether or not this node goes on to win.
+      const backIn = await Promise.any(stoodDown.map((ip) => {
+        const { index, afterId } = baselines.get(ip);
+        return waitForCandidacy(
+          env.clients[index],
+          (d) => d.name === appName && d.candidate === true,
+          240000,
+          { afterId },
+        ).then(() => ip);
+      }));
+
+      expect(backIn, 'no node that stood down became a candidate again').to.be.a('string');
+    } finally {
+      for (const { client, ip } of frozen) {
+        // eslint-disable-next-line no-await-in-loop
+        await client.setDOSState(0, null, frozenAuth.get(ip)).catch(() => {});
+      }
+    }
   });
 });
