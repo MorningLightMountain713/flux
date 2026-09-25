@@ -154,20 +154,24 @@ describe('appVolumeService.createAppVolume (disk selection + in-lock recheck)', 
     filesystem: `/dev/${mount.replace(/\//g, '') || 'root'}`, mount, size: 1000, used: 1000 - available, available,
   });
 
-  function load({ disks, condemned = false, teardownOwed = false } = {}) {
+  function load({
+    disks, condemned = false, teardownOwed = false, recordFails = false,
+  } = {}) {
     const runCommand = sinon.stub().resolves({ error: null });
+    const recordNewVolumeImage = recordFails
+      ? sinon.stub().rejects(new Error('record write failed')) : sinon.stub().resolves();
     const svc = proxyquire('../../ZelBack/src/services/appLifecycle/appVolumeService', {
       config: asConfig({ lockedSystemResources: { extrahdd: 5 } }),
       '../serviceHelper': { ensureString: (x) => x, runCommand },
       '../dockerService': { getAppIdentifier: (id) => id },
-      '../utils/volumeService': { placementVolumesInGib: sinon.stub().resolves(disks) },
+      '../utils/volumeService': { placementVolumesInGib: sinon.stub().resolves(disks), recordNewVolumeImage },
       '../utils/hostMutationLock': { withHostMutationLock: (fn) => fn() },
       '../appManagement/appsRuntimeState': { isCondemned: sinon.stub().resolves(condemned) },
       './pendingTeardownStore': { teardownOwedFor: sinon.stub().resolves(teardownOwed) },
       '../messageHelper': { createSuccessMessage: (m) => ({ status: 'success', data: m }) },
       '../../lib/log': { info: sinon.stub(), warn: sinon.stub(), error: sinon.stub() },
     });
-    return { svc, runCommand };
+    return { svc, runCommand, recordNewVolumeImage };
   }
 
   // [{ cmd, params }] for every runCommand call
@@ -186,6 +190,25 @@ describe('appVolumeService.createAppVolume (disk selection + in-lock recheck)', 
     const mountIdx = calls.findIndex((c) => c.cmd === 'mount' && c.params.includes('loop'));
     expect(chattrIdx, 'set the mountpoint immutable').to.be.greaterThan(-1);
     expect(chattrIdx, 'immutable flag set before the mount shadows the bare dir').to.be.lessThan(mountIdx);
+  });
+
+  // The UUID is this node's stamp on the image, and the record is what lets a later
+  // boot look the image up and tell it from a file left under the same name.
+  it('formats the image with a UUID of its own and records the image by it', async () => {
+    const { svc, runCommand, recordNewVolumeImage } = load({ disks: [disk('/dat', 500)] });
+    await svc.createAppVolume(deployComp, null, false);
+    const mke2fs = cmdCalls(runCommand).find((c) => c.cmd === 'mke2fs');
+    const uuid = mke2fs.params[mke2fs.params.indexOf('-U') + 1];
+    expect(uuid).to.match(/^[0-9a-f-]{36}$/);
+    sinon.assert.calledOnceWithExactly(recordNewVolumeImage, 'web_testapp', '/dat/web_testappFLUXFSVOL', uuid);
+  });
+
+  it('fails the install when the image cannot be recorded', async () => {
+    const { svc } = load({ disks: [disk('/dat', 500)], recordFails: true });
+    let threw = null;
+    try { await svc.createAppVolume(deployComp, null, false); } catch (e) { threw = e; }
+    expect(threw, 'aborted').to.be.an('error');
+    expect(threw.message).to.include('record write failed');
   });
 
   it('aborts inside the lock without allocating when the app is condemned', async () => {
