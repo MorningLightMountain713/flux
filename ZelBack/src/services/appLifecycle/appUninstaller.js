@@ -39,6 +39,7 @@ const shutdownPlan = require('./shutdownPlan');
 const reconcilerQueue = require('../appMonitoring/reconcilerQueue');
 const syncthingMonitorHelpers = require('../appMonitoring/syncthingMonitorHelpers');
 const { withHostMutationLock } = require('../utils/hostMutationLock');
+const { ANNOUNCE_CYCLE_WAIT_MS } = require('../utils/appConstants');
 
 const fluxDirPath = process.env.FLUXOS_PATH || path.join(process.env.HOME, 'zelflux');
 const appsFolderPath = process.env.FLUX_APPS_FOLDER || path.join(fluxDirPath, 'ZelApps');
@@ -737,6 +738,22 @@ async function removeUnrequiredDependencies() {
 }
 
 /**
+ * Wait for an announcement cycle already sending, and no longer than
+ * ANNOUNCE_CYCLE_WAIT_MS: a wedged cycle must not hold up the node's removals.
+ * A cycle that starts after the call reads the departing mark instead.
+ * @returns {Promise<void>}
+ */
+async function waitForAnnouncementInFlight() {
+  let timer = null;
+  const bound = new Promise((resolve) => { timer = setTimeout(resolve, ANNOUNCE_CYCLE_WAIT_MS); });
+  try {
+    await Promise.race([globalState.announceCycle.waitReady({ waitAll: false }), bound]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
  * Remove a whole application from the local node (a single component is removed via
  * uninstallComponent — this never takes a component identifier).
  * @param {string} appName - the app name.
@@ -780,6 +797,9 @@ async function uninstallApplication(appName, options = {}) {
   // teardown in-process without re-driving one that already began.
   let teardownDoc = null;
   let teardownStarted = false;
+  // What this call marked as departing, and nothing else, so the finally releases
+  // only its own mark.
+  let departing = null;
   try {
     // Log removal trigger with stack trace to identify caller
     const { stack } = new Error();
@@ -819,6 +839,14 @@ async function uninstallApplication(appName, options = {}) {
 
     if (!appName) {
       throw new Error('No App specified');
+    }
+
+    // The node stops claiming what it is handing back here, at the decision, and not
+    // when the row happens to go: an announcement reading the table in between would
+    // claim it again. Only the identity this removal names.
+    if (broadcastRemoval) {
+      globalState.departingApps.enter(appName, replica ?? null);
+      departing = { appName, replica: replica ?? null };
     }
 
     let spec = await appsRepository.getInstalledApp(appName);
@@ -991,6 +1019,10 @@ async function uninstallApplication(appName, options = {}) {
     }
     const lastReplica = await appsRepository.countInstalledIdentities(appName) === 0;
     if (broadcastRemoval) {
+      // An announcement cycle that read the table before this removal's mark still
+      // names the app. Waiting for the cycle in flight puts the two on the wire in the
+      // order they happened, so the claim is applied first and this message clears it.
+      await waitForAnnouncementInFlight();
       const ip = await fluxNetworkHelper.getLocalSocketAddress();
       if (ip) {
         const appRemovedMessage = {
@@ -1068,6 +1100,7 @@ async function uninstallApplication(appName, options = {}) {
     return { status: UninstallStatus.FAILED, reason: error.message };
   } finally {
     operationRegistry.release(appName, removeToken);
+    if (departing) globalState.departingApps.leave(departing.appName, departing.replica);
   }
 }
 

@@ -10,6 +10,8 @@ const { appsFolder } = require('../../ZelBack/src/services/utils/appConstants');
 // own answer rather than a number copied into the fixture.
 const shutdownPlan = require('../../ZelBack/src/services/appLifecycle/shutdownPlan');
 const { asConfig } = require('./fixtures/config');
+const { AsyncLock } = require('../../ZelBack/src/services/utils/asyncLock');
+const { departingApps: realDepartingApps } = require('../../ZelBack/src/services/utils/globalState');
 const {
   loadSpecLibrary, V9_SUBMISSION, v9Spec, instantiatedSpec, assertAnswers,
 } = require('./fixtures/fluxSpec');
@@ -212,6 +214,9 @@ describe('appUninstaller tombstoning teardown', () => {
         isHeld: sinon.stub().returns(false), get: sinon.stub().returns(null), acquire: sinon.stub().returns('tok'), release: sinon.stub(),
       },
       globalState: {
+        // The real marks peerNotification reads, and a cycle lock of the shape it holds.
+        departingApps: realDepartingApps,
+        announceCycle: new AsyncLock(1, { maxHoldMs: 0 }),
         runningAppsCache: new Map(),
         receiveOnlySyncthingAppsCache: new Map(),
         // Seeded with the pinned app's real content hash so the prelude's

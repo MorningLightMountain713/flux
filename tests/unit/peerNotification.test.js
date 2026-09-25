@@ -34,6 +34,9 @@ const APP_IDENTITY = 'ab12cd34ef56';
 const APP_UUID = '5db6f53acbbd9b38e949307e96601e573bd6437ddec08707e76a33f771b358ea';
 
 describe('peerNotification tests', () => {
+  // The real marks: a removal enters them in appUninstaller and this module reads them.
+  // eslint-disable-next-line global-require
+  const { departingApps } = require('../../ZelBack/src/services/utils/globalState');
   let peerNotification;
   let logStub;
   let enqueueAllStub;
@@ -107,6 +110,7 @@ describe('peerNotification tests', () => {
     '../utils/globalState': {
       runningAppsCache: new Set(),
       announceCycle: new AsyncLock(1, { maxHoldMs: 0 }),
+      departingApps,
       getAppShutdownPipelineState: (appName) => drainingAppsMap.get(appName) ?? null,
     },
     '../utils/fluxEventBus': {
@@ -171,6 +175,71 @@ describe('peerNotification tests', () => {
   });
 
   describe('checkAndNotifyPeersOfRunningApps', () => {
+    // A NODE STOPS CLAIMING AN APP WHEN IT DECIDES TO HAND IT BACK. A removal that
+    // tells the network runs from that decision to its own message, and an announcement
+    // naming the app inside that window claims a placement the node is giving up.
+    describe('an app a broadcast removal is handing back', () => {
+      const announced = () => broadcastAllStub.firstCall.args[0].apps.map((app) => [app.name, app.replica ?? null]);
+
+      afterEach(() => {
+        departingApps.leave('app2');
+        departingApps.leave('app2', 's2');
+      });
+
+      it('is left out of the announcement', async () => {
+        listInstalledAppsStub.resolves([
+          await installedRow(await v9Spec({ name: 'app1' })),
+          await installedRow(await v9Spec({ name: 'app2' })),
+        ]);
+        departingApps.enter('app2');
+
+        await peerNotification.checkAndNotifyPeersOfRunningApps();
+
+        expect(announced(), 'claimed a placement the node is handing back').to.deep.equal([['app1', null]]);
+        const [meshRows] = meshFieldsStub.firstCall.args;
+        expect(meshRows.map((row) => row.name), 'a mesh voucher was built for an app being handed back').to.deep.equal(['app1']);
+      });
+
+      // THE ANNOUNCEMENT IS A WHOLE SNAPSHOT, so an identity missing from it releases its
+      // seat at every peer. A removal of one replica hands back that replica only.
+      it('leaves out only the replica a replica removal hands back', async () => {
+        listInstalledAppsStub.resolves([await installedRow(await v9Spec({ name: 'app2' }))]);
+        listInstalledIdentitiesStub.resolves(['s1', 's2']);
+        departingApps.enter('app2', 's2');
+
+        await peerNotification.checkAndNotifyPeersOfRunningApps();
+
+        expect(announced(), 'a sibling that stays lost its seat').to.deep.equal([['app2', 's1']]);
+      });
+
+      // The canary: with nothing departing, both are named.
+      it('is named again once nothing is handing it back', async () => {
+        listInstalledAppsStub.resolves([await installedRow(await v9Spec({ name: 'app2' }))]);
+        listInstalledIdentitiesStub.resolves(['s1', 's2']);
+
+        await peerNotification.checkAndNotifyPeersOfRunningApps();
+
+        expect(announced()).to.deep.equal([['app2', 's1'], ['app2', 's2']]);
+      });
+    });
+
+    // broadcastedAt says when these apps were held here, and every consumer compares it
+    // against other nodes' messages - so a stamp taken after the per-app reads would
+    // out-rank a removal that happened while they ran.
+    it('stamps the announcement when the table is read, not when it is sent', async () => {
+      let now = 1000;
+      sinon.stub(Date, 'now').callsFake(() => now);
+      getAppLocationStub.callsFake(async () => {
+        now += 5000;
+        return [];
+      });
+
+      await peerNotification.checkAndNotifyPeersOfRunningApps();
+
+      const [message] = broadcastAllStub.firstCall.args;
+      expect(message.broadcastedAt, 'stamped at the send, so the message claims to be newer than it is').to.equal(1000);
+    });
+
     it('while the announcements are held a cycle sends nothing and stores nothing, and the next cycle after the release announces', async () => {
       const store = moduleStubs();
       const storeEvent = store['./messageStore'].storeAppStateEvent;

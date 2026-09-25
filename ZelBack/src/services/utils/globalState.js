@@ -40,14 +40,17 @@ let pendingAppUpdatesCache = null;
 // Running apps cache - tracks app names that have been broadcasted as running
 const runningAppsCache = new Set();
 
-// Apps this node has told the network it is removing, by the name the removal
-// message carries. An announcement states which apps the node holds, and an app
-// whose removal has been broadcast is no longer one of them.
+// Apps, and replicas of apps, this node is handing back with a removal that tells the
+// network. An announcement states which identities the node holds, and one whose
+// removal has been decided is no longer one of them.
 //
-// Membership spans the removal: the message goes out before the app's local row is
-// deleted, so an announcement built in that window would still name the app and
-// re-create the location row the removal had just cleared. Peers apply the two
-// messages in arrival order and cannot tell which describes the later state.
+// Membership spans the removal, from the decision to the message: an announcement
+// that reads the installed table inside that window still finds the row and would
+// claim the placement again, and peers apply the two messages in arrival order.
+//
+// BY IDENTITY. The announcement is a whole snapshot, so an identity missing from it
+// releases that seat at every peer: a removal of one replica hands back that replica
+// and nothing beside it, while a removal of the whole app hands back every identity.
 //
 // Only a removal that tells the network belongs here. A removal whose containers
 // are coming straight back - a redeploy - keeps announcing, or its row lapses and
@@ -62,17 +65,7 @@ const runningAppsCache = new Set();
 // first to finish would clear a set outright and hand the announcement back to the
 // removal still running.
 const departingCounts = new Map();
-
-// Apps this node is only trying out. A test install writes the app's row like any
-// other install, and the announcement is built from that table - so an announcement
-// landing inside one claims a placement for an app about to be thrown away, and the
-// test teardown tells the network nothing that would take the claim back.
-//
-// A set, not a count: the node admits one installation at a time, so a second test
-// install of the same app cannot start while this one holds the node.
-//
-// In-memory deliberately: a restart ends the test install that entered it.
-const testInstallingApps = new Set();
+const departingKey = (appName, replica) => (replica == null ? appName : `${appName}\u0000${replica}`);
 
 // Held for the whole of an announcement cycle. It lives here rather than inside
 // peerNotification because a removal has to wait on it too, and peerNotification
@@ -84,41 +77,52 @@ const announceCycle = new AsyncLock(1, { maxHoldMs: 0 });
 
 const departingApps = {
   /**
-   * Record that a broadcast removal of this app has begun.
+   * Record that a broadcast removal has begun.
    * @param {string} appName Name the removal message carries.
+   * @param {string|null} [replica] The replica it removes; null for the whole app.
    * @returns {void}
    */
-  enter(appName) {
-    departingCounts.set(appName, (departingCounts.get(appName) || 0) + 1);
+  enter(appName, replica = null) {
+    const key = departingKey(appName, replica);
+    departingCounts.set(key, (departingCounts.get(key) || 0) + 1);
   },
 
   /**
-   * Record that one broadcast removal of this app has finished.
+   * Record that one broadcast removal has finished.
    * @param {string} appName Name the removal message carries.
+   * @param {string|null} [replica] The replica it removed; null for the whole app.
    * @returns {void}
    */
-  leave(appName) {
-    const held = departingCounts.get(appName);
+  leave(appName, replica = null) {
+    const key = departingKey(appName, replica);
+    const held = departingCounts.get(key);
     if (!held) return;
-    if (held === 1) departingCounts.delete(appName);
-    else departingCounts.set(appName, held - 1);
+    if (held === 1) departingCounts.delete(key);
+    else departingCounts.set(key, held - 1);
   },
 
   /**
-   * Whether any broadcast removal of this app is in flight.
+   * Whether an identity is being handed back: the whole app, or this replica of it.
    * @param {string} appName Name the removal message carries.
+   * @param {string|null} [replica] The replica asked about; null asks about the app.
    * @returns {boolean}
    */
-  has(appName) {
-    return departingCounts.has(appName);
+  has(appName, replica = null) {
+    if (departingCounts.has(departingKey(appName, null))) return true;
+    return replica != null && departingCounts.has(departingKey(appName, replica));
   },
 
   /**
-   * How many apps have a broadcast removal in flight.
+   * How many identities have a broadcast removal in flight.
    * @returns {number}
    */
   get size() {
     return departingCounts.size;
+  },
+
+  /** Forget every removal in flight. */
+  clear() {
+    departingCounts.clear();
   },
 };
 // Containers FluxOS removed and has not created again — who removed the container,
@@ -292,7 +296,6 @@ module.exports = {
   get folderHealthCache() { return folderHealthCache; },
   get runningAppsCache() { return runningAppsCache; },
   get departingApps() { return departingApps; },
-  get testInstallingApps() { return testInstallingApps; },
   get announceCycle() { return announceCycle; },
   get fluxRemovedContainers() { return fluxRemovedContainers; },
 

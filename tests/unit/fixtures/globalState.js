@@ -42,8 +42,13 @@ function resetGlobalState() {
     // A frozen array is a defensive copy the module hands out, so there is
     // nothing to reset in it.
     else if (Array.isArray(value)) { if (!Object.isFrozen(value)) value.length = 0; }
+    // An object that says how it is emptied is emptied that way: its members are its
+    // interface, and deleting them leaves every later caller a TypeError.
+    else if (value && typeof value.clear === 'function') value.clear();
     else if (value && typeof value === 'object' && value.constructor === Object) {
-      for (const own of Object.keys(value)) delete value[own];
+      for (const own of Object.keys(value)) {
+        if (typeof value[own] !== 'function') delete value[own];
+      }
     }
   }
   return globalState;
