@@ -210,21 +210,38 @@ async function cleanupCrontab(appId, options = {}) {
  * @param {object} [options]
  * @param {string} [options.entityName] - label for progress messages (defaults to the volume path)
  * @param {Function|null} [options.onStatus] - progress callback
+ * @param {boolean} [options.conclusive=true] - whether the search that produced the
+ *   path covered everywhere an image may be. False with no path means an image may
+ *   be on disk that nothing will account for again.
  * @returns {Promise<void>}
  */
 async function cleanupVolumePath(volumepath, options = {}) {
-  if (!volumepath) return;
-  const { entityName = volumepath, onStatus = null } = options;
+  const { entityName = volumepath, onStatus = null, conclusive = true } = options;
   const status = (msg) => {
     log.info(msg);
     if (onStatus) onStatus(msg);
   };
+  if (!volumepath) {
+    // Nothing to delete and nowhere left to look are different answers, and only
+    // the first means the disk is clear. An image whose location could not be
+    // established outlives the app's last record of itself, so this is the one
+    // chance to say it is there.
+    if (!conclusive) {
+      log.warn(`Data volume of ${entityName} could not be located and is left on disk`);
+      if (onStatus) onStatus(`Data volume of ${entityName} could not be located and is left on disk`);
+    }
+    return;
+  }
 
   status(`Cleaning up data volume of ${entityName}...`);
+  // The removal carries on either way - an image left behind is not a reason to
+  // hold an uninstall open - but only one of these two is true, and the stream is
+  // the only account an operator gets of what is still on the disk.
   const result = await serviceHelper.runCommand('rm', { params: ['-rf', volumepath], runAsRoot: true, logError: false });
   if (result.error) {
     log.error(result.error);
     status(`An error occured while cleaning ${entityName} volume. Continuing...`);
+    return;
   }
   status(`Volume of ${entityName} cleaned`);
 }
@@ -449,8 +466,8 @@ async function teardownComponentCore(c, opts = {}) {
       await unmountVolume(c.appId, { entityName: c.label, onStatus });
       await cleanupAppData(c.appId, { entityName: c.label, onStatus });
       await cleanupCrontab(c.appId, { onStatus });
-      const volumepath = await volumeService.getVolumeFilePath(c.appId);
-      await cleanupVolumePath(volumepath, { entityName: c.label, onStatus });
+      const discovered = await volumeService.getVolumeFilePath(c.appId);
+      await cleanupVolumePath(discovered.path, { entityName: c.label, onStatus, conclusive: discovered.conclusive });
     }
   } catch (err) {
     // The container is gone but host residue may remain — a mount, an appdata
