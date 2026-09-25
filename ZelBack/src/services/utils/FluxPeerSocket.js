@@ -8,6 +8,7 @@ const serviceHelper = require('../serviceHelper');
 const { version: FLUX_VERSION } = require('../../../../package.json');
 const peerCodec = require('./peerCodec');
 const rateLimit = require('./rateLimit');
+const { isOrdered } = require('./messageRoutes');
 
 let _fluxNetworkHelper;
 function getFluxNetworkHelper() {
@@ -99,14 +100,6 @@ const DIRECTION = Object.freeze({
   INBOUND: 'inbound',
   OUTBOUND: 'outbound',
 });
-
-// Answers to this node's own asks, never relayed: the four boot-sync streams
-// and the two reconcile services' index and sync answers.
-const SYNC_RESPONSE_TYPES = new Set([
-  'fluxapptempsync', 'fluxapprunningsync', 'fluxappinstallingsync', 'fluxappinstallingerrorssync',
-  'fluxappcontentmanifestindex', 'fluxappcontentmanifestsync',
-  'fluxappingressindex', 'fluxappingresssync',
-]);
 
 class FluxPeerSocket {
   /**
@@ -529,7 +522,7 @@ class FluxPeerSocket {
       // wanted and drops the rest there - a refusal arriving after the first of
       // a peer's four has already ended its request, or a stream outliving the
       // round.
-      if (SYNC_RESPONSE_TYPES.has(msgObj.data?.type)) {
+      if (isOrdered(msgObj.data?.type)) {
         if (manager.syncResponseDispatcher) {
           setImmediate(() => manager.syncResponseDispatcher(msgObj, this));
         }

@@ -11,6 +11,9 @@ const { FluxPeerSocket, CLOSE_CODES, PEER_SOURCE } = require('../../ZelBack/src/
 const { FluxPeerManager, peerManager } = require('../../ZelBack/src/services/utils/FluxPeerManager');
 const peerCodec = require('../../ZelBack/src/services/utils/peerCodec');
 const rateLimit = require('../../ZelBack/src/services/utils/rateLimit');
+// Loaded for its side effect: the route table the socket reads is declared as the
+// transport loads, as it is on a running node before any connection opens.
+require('../../ZelBack/src/services/fluxCommunication');
 const { NetworkHealthMonitor } = require('../../ZelBack/src/services/utils/NetworkHealthMonitor');
 
 /**
@@ -556,14 +559,17 @@ describe('FluxPeerSocket tests', () => {
       sinon.assert.notCalled(manager.messageDispatcher);
     });
 
-    it('should route all four sync response types to syncResponseDispatcher', async () => {
+    it('should route every ordered type to syncResponseDispatcher', async () => {
       const ws = createMockWs();
       sinon.stub(rateLimit, 'lruRateLimit').returns(true);
 
       const peer = new FluxPeerSocket(ws, '10.0.0.1', '16127', manager);
       peer.source = PEER_SOURCE.RANDOM;
 
-      const types = ['fluxapptempsync', 'fluxapprunningsync', 'fluxappinstallingsync', 'fluxappinstallingerrorssync'];
+      const types = [
+        'fluxapptempsync', 'fluxapprunningsync', 'fluxappinstallingsync', 'fluxappinstallingerrorssync',
+        'fluxappcontentmanifestindex', 'fluxappcontentmanifestsync', 'fluxappingressindex', 'fluxappingresssync',
+      ];
       for (const type of types) {
         manager.syncResponseDispatcher.resetHistory();
         manager.messageDispatcher.resetHistory();

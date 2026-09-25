@@ -1928,6 +1928,7 @@ describe('fluxnodedownverdict wire contract', () => {
     expect(onPeering(), 'two verdicts on one peering, one line').to.equal(1);
     // a second connection is its own edge
     await peerManager.messageDispatcher(makeMsg(4), makePeerSocket(PEER_SOURCE.INBOUND));
+    await new Promise((resolve) => { setImmediate(resolve); });
     expect(onPeering()).to.equal(2);
   });
 
@@ -1949,6 +1950,114 @@ describe('fluxnodedownverdict wire contract', () => {
     has.returns(true);
     await peerManager.messageDispatcher(makeMsg(6), makePeerSocket(PEER_SOURCE.EPHEMERAL));
     expect(repeats(), 'a fresh one re-arms the edge').to.equal(2);
+  });
+});
+
+describe('the dispatcher hands each type to the handler the route table declares', () => {
+  // eslint-disable-next-line global-require
+  const policyStore = require('../../ZelBack/src/services/policyStore');
+  const makeSocket = () => ({
+    ip: '49.49.49.49',
+    port: '16127',
+    key: '49.49.49.49:16127',
+    direction: 'outbound',
+    source: PEER_SOURCE.OUTBOUND,
+    closeCodes: { invalidMsg: 4016, blocked: 4003 },
+    close: sinon.stub(),
+    send: sinon.stub(),
+    sendNak: sinon.stub(),
+    badMessageTimestamps: [],
+    msgMap: new Map([['requestHash', 0], ['newHash', 0]]),
+  });
+  const signed = (data) => ({
+    timestamp: Date.now(), pubKey: 'pubkey', signature: 'sig', version: 1, data,
+  });
+  const announcer = { collateral: 'txid:0', pubkey: 'pubkey' };
+  const settle = () => new Promise((resolve) => { setImmediate(resolve); });
+
+  beforeEach(() => {
+    sinon.stub(fluxCommunicationUtils, 'verifyFluxBroadcast')
+      .resolves({ result: fluxCommunicationUtils.VerifyResult.OK, announcer });
+    sinon.stub(fluxCommunicationUtils, 'verifyTimestampInFluxBroadcast').returns(true);
+  });
+
+  afterEach(() => sinon.restore());
+
+  it('offers a policy bundle to the store, from the peer that sent it', async () => {
+    const offer = sinon.stub(policyStore, 'offerBundle').resolves();
+    const socket = makeSocket();
+    await peerManager.messageDispatcher(signed({ type: 'fluxpolicy', bundle: { seq: 7 }, correlationId: 'c1' }), socket);
+    await settle();
+    sinon.assert.calledOnceWithExactly(offer, { seq: 7 }, socket.key, 'c1');
+  });
+
+  it('notes a peer\'s policy sequence', async () => {
+    const note = sinon.stub(policyStore, 'notePeerSeq');
+    const socket = makeSocket();
+    await peerManager.messageDispatcher(signed({ type: 'fluxpolicyseq', seq: 7, correlationId: 'c2' }), socket);
+    await settle();
+    sinon.assert.calledOnceWithExactly(note, 7, socket.key, 'c2');
+  });
+
+  it('answers a policy request on the socket it came from', async () => {
+    const respond = sinon.stub(fluxCommunicationMessagesSender, 'respondWithPolicy').resolves();
+    const socket = makeSocket();
+    const message = signed({ type: 'fluxpolicyrequest', correlationId: 'c3' });
+    await peerManager.messageDispatcher(message, socket);
+    await settle();
+    sinon.assert.calledOnceWithExactly(respond, message, socket);
+  });
+
+  // The announcer is resolved once, by the signature check, and the event log records it.
+  ['fluxapprunning', 'fluxmasterlease'].forEach((type) => {
+    it(`hands ${type} the announcer its signature check resolved`, async () => {
+      const store = sinon.stub(messageStore, 'storeAppStateEvent').resolves({ isNewer: false });
+      sinon.stub(messageStore, 'releaseInstallingClaims').resolves({ released: 0 });
+      await peerManager.messageDispatcher(signed({ type, name: `app-${type}`, ip: '50.50.50.50:16127' }), makeSocket());
+      await settle();
+      await settle();
+      sinon.assert.calledOnce(store);
+      expect(store.firstCall.args[1].announcer).to.equal(announcer);
+    });
+  });
+
+  // A question carries nothing but itself, so two peers asking it are byte-identical,
+  // and each of them is owed the answer.
+  it('answers the same question from two peers', async () => {
+    const respond = sinon.stub(fluxCommunicationMessagesSender, 'respondWithManifestIndex').resolves();
+    const first = makeSocket();
+    const second = { ...makeSocket(), key: '51.51.51.51:16127', ip: '51.51.51.51' };
+    const question = signed({ type: 'fluxappcontentmanifestindexrequest' });
+    await peerManager.messageDispatcher(question, first);
+    await peerManager.messageDispatcher({ ...question }, second);
+    await settle();
+    expect(respond.getCalls().map((call) => call.args[0])).to.deep.equal([first, second]);
+  });
+
+  // The reconcile services key a round by the peer they asked, so the answer has to
+  // arrive under that peer's key.
+  [
+    ['fluxappcontentmanifestindex', { index: ['a'] }, 'contentManifestSyncService', 'depositIndex', ['a']],
+    ['fluxappingressindex', { digests: ['d'] }, 'ingressAttestationSyncService', 'depositDigests', ['d']],
+  ].forEach(([type, body, serviceName, method, deposited]) => {
+    it(`deposits a ${type} answer under the key of the peer that sent it`, async () => {
+      // eslint-disable-next-line global-require, import/no-dynamic-require
+      const service = require(`../../ZelBack/src/services/appMessaging/${serviceName}`);
+      sinon.stub(service, 'isPeerInActiveRound').returns(true);
+      const deposit = sinon.stub(service, method);
+      const socket = makeSocket();
+      await peerManager.syncResponseDispatcher(signed({ type, ...body, done: true }), socket);
+      await settle();
+      await settle();
+      sinon.assert.calledOnceWithExactly(deposit, socket.key, deposited);
+    });
+  });
+
+  it('says an ordered type reaching the gossip pipeline is unsolicited, and runs nothing', async () => {
+    const warn = sinon.stub(log, 'warn');
+    await peerManager.messageDispatcher(signed({ type: 'fluxappingresssync', messages: [], done: true }), makeSocket());
+    await settle();
+    expect(warn.args.some(([line]) => line.includes('Unsolicited fluxappingresssync'))).to.equal(true);
   });
 });
 

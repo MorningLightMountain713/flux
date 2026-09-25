@@ -17,16 +17,27 @@ const freshTable = () => {
   return table;
 };
 
+// Questions one peer puts to another: each asker is answered, so none is filtered on content.
+const ASK_TYPES = [
+  'fluxapprequest', 'fluxpolicyrequest',
+  'fluxappcontentmanifestindexrequest', 'fluxappcontentmanifestrequest',
+  'fluxappingressindexrequest', 'fluxappingressrequest',
+];
+
 const GOSSIP_TYPES = [
   'zelappregister', 'zelappupdate', 'fluxappregister', 'fluxappupdate',
   'fluxapprunning', 'fluxipchanged', 'fluxappremoved', 'fluxappinstalling',
-  'fluxappinstallingerror', 'fluxapprequest',
-  'fluxpolicyrequest', 'fluxpolicyseq', 'fluxpolicy',
+  'fluxappinstallingerror', 'fluxpolicyseq', 'fluxpolicy',
+  'fluxlimitcounterrecord', 'fluxmasterlease', 'fluxnodedown', 'fluxnodedownverdict',
+  'fluxgrantgeneration', 'fluxappcontentmanifest', 'fluxappingress',
+  ...ASK_TYPES,
 ];
 
 const ORDERED_TYPES = [
   'fluxapptempsync', 'fluxapprunningsync', 'fluxappinstallingsync',
   'fluxappinstallingerrorssync',
+  'fluxappcontentmanifestindex', 'fluxappcontentmanifestsync',
+  'fluxappingressindex', 'fluxappingresssync',
 ];
 
 describe('messageRoutes tests', () => {
@@ -62,9 +73,20 @@ describe('messageRoutes tests', () => {
       // thing that stops one copy becoming one per peer per hop.
       ['zelappregister', 'zelappupdate', 'fluxappregister', 'fluxappupdate',
         'fluxapprunning', 'fluxipchanged', 'fluxappremoved', 'fluxappinstalling',
-        'fluxappinstallingerror'].forEach((type) => {
+        'fluxappinstallingerror', 'fluxlimitcounterrecord', 'fluxmasterlease', 'fluxnodedown',
+        'fluxgrantgeneration', 'fluxappcontentmanifest', 'fluxappingress'].forEach((type) => {
         expect(declaredIntent(type), type).to.equal(INTENT.ANNOUNCE);
       });
+    });
+
+    // A verdict is pushed point to point, but it is the juror's signed statement: the same
+    // bytes arriving twice are one verdict, so it is filtered as an announcement.
+    it('filters a verdict on its content', () => {
+      expect(declaredIntent('fluxnodedownverdict')).to.equal(INTENT.ANNOUNCE);
+    });
+
+    it('declares every question an ask', () => {
+      ASK_TYPES.forEach((type) => expect(declaredIntent(type), type).to.equal(INTENT.ASK));
     });
 
     it('claims nothing it was not given', () => {
