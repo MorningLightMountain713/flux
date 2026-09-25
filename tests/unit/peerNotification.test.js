@@ -3,6 +3,7 @@
 const { expect } = require('chai');
 const sinon = require('sinon');
 const proxyquire = require('proxyquire').noCallThru();
+const { AsyncLock } = require('../../ZelBack/src/services/utils/asyncLock');
 const { asConfig } = require('./fixtures/config');
 const {
   loadSpecLibrary, v9Spec, sealedV8Spec, instantiatedSpec, assertAnswers,
@@ -105,6 +106,7 @@ describe('peerNotification tests', () => {
     },
     '../utils/globalState': {
       runningAppsCache: new Set(),
+      announceCycle: new AsyncLock(1, { maxHoldMs: 0 }),
       getAppShutdownPipelineState: (appName) => drainingAppsMap.get(appName) ?? null,
     },
     '../utils/fluxEventBus': {

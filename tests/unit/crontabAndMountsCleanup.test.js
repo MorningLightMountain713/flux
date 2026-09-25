@@ -64,6 +64,8 @@ const volumeServiceMock = {
 
 const appTamperingDetectionServiceMock = {
   recordEvent: sinon.stub(),
+  // The map is data; the real classifier answers it.
+  classifyVolumeFault: require('../../ZelBack/src/services/appTamperingDetectionService').classifyVolumeFault,
 };
 
 // Load module with mocked dependencies
