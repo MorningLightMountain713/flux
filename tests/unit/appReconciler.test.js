@@ -301,7 +301,12 @@ describe('appReconciler tests', () => {
         uninstallApplication: sinon.stub().resolves({ status: UninstallStatus.REMOVED, reason: null }),
         driveOwedTeardown: sinon.stub().resolves({ status: 'none', attempts: 0 }),
       },
-      appTamperingDetectionService: { recordEvent: sinon.stub().resolves(), isNetworkMissingError: () => false },
+      appTamperingDetectionService: {
+        recordEvent: sinon.stub().resolves(),
+        isNetworkMissingError: () => false,
+        // eslint-disable-next-line global-require
+        classifyVolumeFault: require('../../ZelBack/src/services/appTamperingDetectionService').classifyVolumeFault,
+      },
       dockerOperations: { appDeleteDataInMountPoint: sinon.stub().resolves() },
       serviceHelper: { delay: sinon.stub().resolves() },
       telemetrySinkCache: { setSink: sinon.stub(), extractSink: sinon.stub().returns(null) },
