@@ -141,6 +141,7 @@ describe('specReconciler tests', () => {
 
   let uninstallStub;
   let reconcileAppStub;
+  let sweepStub;
   let appLocationStub;
 
   function setup({ installed = [], globalRows = [], synced = true, dbReady = true } = {}) {
@@ -158,6 +159,7 @@ describe('specReconciler tests', () => {
     appLocationStub = sinon.stub(registryManager, 'appLocation').resolves([]);
     uninstallStub = sinon.stub(appUninstaller, 'uninstallApplication').resolves({ status: appUninstaller.UninstallStatus.REMOVED });
     reconcileAppStub = sinon.stub(appOperations, 'reconcileApp').resolves();
+    sweepStub = sinon.stub(imageManager, 'requestComplianceSweep').resolves();
   }
 
   afterEach(() => {
@@ -381,30 +383,50 @@ describe('specReconciler tests', () => {
     });
   });
 
-  describe('image compliance (deep passes only)', () => {
-    it('removes a blocklisted app on a compliance pass', async () => {
-      const row = await specWith({});
-      setup({ installed: [row], globalRows: [await specWith({})] });
-      // The deployment view is built for real from the real spec, so the image
-      // list handed to the blocklist is the one the app actually declares.
-      sinon.stub(appsRepository, 'getInstalledApp').resolves(row);
-      const blocked = sinon.stub(imageManager, 'isImageBlocked').resolves({ blocked: true });
-      await specReconciler.requestFullConvergence({ reason: 'test', includeCompliance: true });
-      expect(uninstallStub.calledOnceWith('myapp', sinon.match({ broadcastRemoval: true }))).to.equal(true);
-      const [handedName, handedImages, handedProvenance] = blocked.firstCall.args;
-      expect(handedName).to.equal('myapp');
-      expect(handedImages, 'the blocklist is asked about the real deployment\'s images').to.deep.equal(['nginx:latest']);
-      // The stubbed collaborator reads owner + hash off the row: both are the
-      // real spec's, not a literal ('owner1' is not an address the class accepts).
-      expect(handedProvenance).to.deep.equal({ owner: row.owner, hash: row.hash });
-      expect(handedProvenance.owner).to.equal(V9_SUBMISSION.owner);
-    });
-
-    it('never consults the blocklist on a shallow pass', async () => {
+  // The blocklist is the compliance sweeper's, driven by the policy bundle; the
+  // ladder answers only what the chain says this node should run.
+  describe('the network\'s policy', () => {
+    it('never consults the blocklist on a convergence pass', async () => {
       setup({ installed: [await specWith({})], globalRows: [await specWith({})] });
       const blocked = sinon.stub(imageManager, 'isImageBlocked');
       await specReconciler.requestFullConvergence({ reason: 'test' });
       expect(blocked.called).to.equal(false);
+      expect(uninstallStub.called).to.equal(false);
+    });
+
+    // The images of every identity are the spec's own, read from the real deployment
+    // view, and a specification that cannot be read answers null rather than nothing.
+    it('reads the images the sweeper judges from the real deployment view', async () => {
+      const row = await specWith({});
+      const { imagesOf } = imageManager.nodeComplianceDeps();
+      expect(await imagesOf(row)).to.deep.equal(['nginx:latest']);
+      sinon.stub(deploymentProvider, 'buildDeployments').rejects(new Error('could not decrypt'));
+      expect(await imagesOf(row), 'unread components are not an empty image list').to.equal(null);
+    });
+
+    // A record this node holds and cannot read is not a record saying it is gone.
+    it('re-reads one row, telling a row it cannot read from one it does not hold', async () => {
+      const row = await specWith({});
+      const listed = sinon.stub(appsRepository, 'listInstalledAppsAndUnreadable');
+      const { readInstalled } = imageManager.nodeComplianceDeps();
+
+      listed.resolves({ specs: [row], unreadable: [] });
+      expect(await readInstalled('myapp')).to.equal(row);
+      sinon.assert.calledWithExactly(listed, { filter: { name: 'myapp' } });
+
+      listed.resolves({ specs: [], unreadable: [] });
+      expect(await readInstalled('myapp')).to.equal(null);
+
+      listed.resolves({ specs: [], unreadable: ['myapp'] });
+      let refused = null;
+      await readInstalled('myapp').catch((error) => { refused = error; });
+      expect(refused, 'an unreadable row read as not held').to.be.an('error');
+    });
+
+    it('removes through the uninstaller and tells the network', async () => {
+      const uninstall = sinon.stub(appUninstaller, 'uninstallApplication').resolves({ status: appUninstaller.UninstallStatus.REMOVED });
+      expect(await imageManager.nodeComplianceDeps().uninstall('myapp')).to.deep.equal({ status: 'removed' });
+      sinon.assert.calledOnceWithExactly(uninstall, 'myapp', { broadcastRemoval: true });
     });
   });
 
@@ -477,6 +499,10 @@ describe('specReconciler tests', () => {
       // s1 is ordinal 0 -> delay 0; the timer still defers to the next tick.
       await clock.tickAsync(1);
       expect(reconcileAppStub.calledOnce).to.equal(true);
+      // An adoption can carry a new owner without redeploying a component, so the
+      // sweeper is asked about the app it adopted.
+      sinon.assert.calledOnce(sweepStub);
+      expect([...sweepStub.firstCall.args[0]]).to.deep.equal(['myapp']);
 
       // reconcileApp stays stubbed, so nothing else proves what it was handed.
       // It reads name/identity off the installed row and pushes the registry row

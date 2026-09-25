@@ -213,6 +213,16 @@ async function resolveSubmission(appSpecification, {
     }
   }
 
+  // POLICY IS A PRECONDITION OF ANSWERING. The blocked-repository list is part of the
+  // signed bundle, so without a confirmed one this node cannot establish that an image
+  // is not banned. A node in that state is not refusing this app; it is not yet in a
+  // position to judge any app, which is a fact about the node and is what the caller
+  // needs told so it can retry or ask a node that is ready. Every submission reaching
+  // here is live - a replay is judged where it is stored - and the spawner and the
+  // installer hold to the same gate.
+  if (!globalState.policyReady) {
+    throw new Error('Cannot verify application images: network policy not yet obtained.');
+  }
   await verifyImageRegistryAndArchitectures(spec, { owner: spec.owner, isEncrypted });
 
   // Feature entitlements + marketplace-template gate. Total across versions:

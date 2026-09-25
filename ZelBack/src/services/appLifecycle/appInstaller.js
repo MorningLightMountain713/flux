@@ -188,6 +188,17 @@ async function installApplication(instantiated, options = {}) {
       return { status: InstallStatus.DEFERRED, reason: `Flux App ${appName} is still being torn down; deferring installation` };
     }
 
+    // POLICY IS A PRECONDITION. The blocked-repository list lives in the signed bundle,
+    // so a node without a confirmed one cannot establish that an image is not banned -
+    // and a container installed on that assumption is running before anything else
+    // notices. Deferred rather than failed: the policy arrives on its own, and nothing
+    // below it - the capacity reclaim included - runs for an install that cannot proceed.
+    if (!globalState.policyReady) {
+      const reason = `Cannot verify ${appName} for installation: network policy not yet obtained`;
+      if (onStatus) onStatus(messageHelper.createErrorMessage(reason));
+      return { status: InstallStatus.DEFERRED, reason };
+    }
+
     await checkPlacement(instantiated);
 
     // Apps whose spec demands Arcane — an encrypted envelope, or any

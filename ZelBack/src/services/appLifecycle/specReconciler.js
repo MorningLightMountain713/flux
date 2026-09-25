@@ -25,16 +25,20 @@ const syncthingFolderStateMachine = require('../appMonitoring/syncthingFolderSta
 
 // The single owner of one question: does what this node RUNS match what the
 // chain says it should run? Every trigger — a block processed at the tip, a
-// spec landing in the registry, a post-install propagation wait, a blocklist
-// refresh, boot — is only a REQUEST for convergence; the decision ladder below
-// is the one body that decides, ordered by severity:
+// spec landing in the registry, a post-install propagation wait, boot — is only
+// a REQUEST for convergence; the decision ladder below is the one body that
+// decides, ordered by severity:
 //
-//   1. blocklisted image        -> removal            (compliance passes only)
-//   2. expired                  -> removal (graceful, backgrounded)
-//   3. named, not targeted      -> removal (the declarative diff)
-//   4. loose, surplus instance  -> removal (rank by runningSince)
-//   5. spec hash differs        -> ADOPTION, scheduled with a stagger
-//   6. nothing                  -> converged
+//   1. expired                  -> removal (graceful, backgrounded)
+//   2. named, not targeted      -> removal (the declarative diff)
+//   3. loose, surplus instance  -> removal (rank by runningSince)
+//   4. spec hash differs        -> ADOPTION, scheduled with a stagger
+//   5. nothing                  -> converged
+//
+// What the network's POLICY refuses is not this question: the compliance
+// sweeper (imageManager) judges the node against the blocklist, driven by the
+// policy bundle. An adoption asks it about the app it adopted, since an owner
+// transfer can land without a component redeploying.
 //
 // Removals act immediately: they restart nobody else, and expiry/de-target are
 // exactly what the owner asked for. Adoption never acts inline — a redeploy
@@ -49,11 +53,9 @@ const syncthingFolderStateMachine = require('../appMonitoring/syncthingFolderSta
 //                      fleet-spreading the old randomized sweep bought, but
 //                      bounded and stable per (node, app)
 //
-// The image-compliance step needs full deployment views (a decrypt per app),
-// so the cheap per-block pass skips it; blocklist-refresh, boot and backstop
-// passes run the whole ladder. The docker-orphan janitor and the global
-// registry cleanup stay periodic elsewhere: a crash fires no hooks and
-// registry hygiene is not this node's desired state.
+// The docker-orphan janitor and the global registry cleanup stay periodic
+// elsewhere: a crash fires no hooks and registry hygiene is not this node's
+// desired state.
 
 const pendingAdoptions = new Map(); // appName -> { timer, hash }
 
@@ -126,6 +128,7 @@ async function fireAdoption(appName) {
   const registrySpec = await appsRepository.getGlobalAppInfo(appName);
   if (!registrySpec || registrySpec.hash === installed.hash) return;
   await appOperations.reconcileApp(installed, registrySpec);
+  imageManager.requestComplianceSweep(new Set([appName]));
 }
 
 /**
@@ -133,22 +136,9 @@ async function fireAdoption(appName) {
  * 'adoption-scheduled' | 'converged' | 'skipped').
  * @param {object} installed - hydrated installed spec
  * @param {object} registrySpec - hydrated desired spec, or null
- * @param {object} ctx - { localSocketAddr, nowSeconds, explorerHeight, includeCompliance }
+ * @param {object} ctx - { localSocketAddr, nowSeconds, explorerHeight }
  */
 async function convergeApp(installed, registrySpec, ctx) {
-  // Blocklisted image (compliance passes only: needs the deployment view). A
-  // blocked app is removed regardless of any other state.
-  if (ctx.includeCompliance) {
-    const deployment = await deploymentProvider.getInstalledDeployment(installed.name);
-    const images = deployment ? deployment.allImages() : [];
-    const blockResult = await imageManager.isImageBlocked(installed.name, images, { owner: installed.owner, hash: installed.hash });
-    if (blockResult.blocked) {
-      log.warn(`REMOVAL REASON: Blacklisted image - ${installed.name} uses a blacklisted Docker image`);
-      await appUninstaller.uninstallApplication(installed.name, { broadcastRemoval: true });
-      return 'removed';
-    }
-  }
-
   // Expiry is a property of the network-confirmed spec, so the authoritative
   // global row decides (a stale local row must neither remove a renewed app
   // nor keep a cancelled one); an app with no global registration falls back
@@ -313,10 +303,10 @@ async function convergenceAllowed() {
 const fullPassLock = new AsyncLock();
 
 /**
- * Converge every installed app. `includeCompliance` runs the image-compliance step (needs full deployment views, so the per-block pass skips it).
- * @param {{ reason: string, includeCompliance?: boolean }} opts
+ * Converge every installed app.
+ * @param {{ reason: string }} opts
  */
-async function requestFullConvergence({ reason, includeCompliance = false } = {}) {
+async function requestFullConvergence({ reason } = {}) {
   const release = fullPassLock.tryAcquire({ label: 'specReconciler' });
   if (!release) {
     log.info(`specReconciler(${reason}): a full pass is already running, leaving this one to it`);
@@ -334,7 +324,6 @@ async function requestFullConvergence({ reason, includeCompliance = false } = {}
       localSocketAddr,
       nowSeconds: Math.floor(Date.now() / 1000),
       explorerHeight: await registryManager.getScannedHeight(),
-      includeCompliance,
     };
     const outcomes = { removed: 0, 'adoption-scheduled': 0, converged: 0, skipped: 0 };
     for (const installed of installedApps) {
@@ -375,7 +364,6 @@ async function requestAppConvergence(appName, { reason, delayMs = 0 } = {}) {
       localSocketAddr: await fluxNetworkHelper.getLocalSocketAddress(),
       nowSeconds: Math.floor(Date.now() / 1000),
       explorerHeight: await registryManager.getScannedHeight(),
-      includeCompliance: false,
     };
     const outcome = await convergeApp(installed, registrySpec, ctx);
     if (outcome !== 'converged') log.info(`specReconciler(${reason}): ${appName} -> ${outcome}`);

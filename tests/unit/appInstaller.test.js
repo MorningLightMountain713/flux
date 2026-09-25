@@ -356,6 +356,7 @@ describe('appInstaller tests', () => {
         installComponentError = null,
         checkAppDependencyRequirements = sinon.stub().resolves(),
         connectComponentToLinkedApps = sinon.stub().resolves(),
+        policyReady = true,
       } = opts;
 
       const onInstallComplete = sinon.stub().resolves();
@@ -405,7 +406,7 @@ describe('appInstaller tests', () => {
         './pendingTeardownStore': { teardownOwedFor },
         './componentProvisioner': { installComponent },
         '../utils/globalState': {
-          installingApps: new Map(), installAborted: sinon.stub().returns(installAborted), abortInstall, runningAppsCache: new Set(), isArcane: sinon.stub().returns(false),
+          installingApps: new Map(), installAborted: sinon.stub().returns(installAborted), abortInstall, runningAppsCache: new Set(), isArcane: sinon.stub().returns(false), policyReady,
         },
         // appNetworkLinker.reconnectLinkedApps runs on the success path (the call kept during
         // the rebase); without this stub the install throws before reaching the broadcast.
@@ -602,6 +603,20 @@ describe('appInstaller tests', () => {
     // cancel-vs-install: a cancel/expiry of an app racing its own install must DEFER the
     // install (retry later), never FAIL it — a FAILED status 7-day-poisons the spawner cache
     // and strands a pinned enterprise app. These guard the classification at each gate.
+    // A node without a confirmed policy cannot establish that an image is not banned,
+    // and a container it installs is running before anything else notices. Deferred:
+    // the policy arrives on its own, and a failure would bench the app for days.
+    it('defers, touching nothing, while the network policy is unconfirmed', async () => {
+      const { installer, installComponent, isImageBlocked } = loadFresh({ policyReady: false });
+
+      const result = await installer.installApplication(newappInstantiated, {});
+
+      expect(result.status).to.equal(appInstaller.InstallStatus.DEFERRED);
+      expect(result.reason).to.include('network policy not yet obtained');
+      expect(isImageBlocked.called, 'an image was judged on a list this node could not vouch for').to.equal(false);
+      expect(installComponent.called, 'something was provisioned').to.equal(false);
+    });
+
     describe('cancel-vs-install classification', () => {
       it('install-side interlock: defers (not installs) when a teardown is already owed', async () => {
         const { installer, installComponent } = loadFresh({ teardownOwed: true });

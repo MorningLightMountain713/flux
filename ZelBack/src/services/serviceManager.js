@@ -90,6 +90,7 @@ const appTamperingDetectionService = require('./appTamperingDetectionService');
 const appsRuntimeState = require('./appManagement/appsRuntimeState');
 const imageCacheStore = require('./appLifecycle/imageCacheStore');
 const appsRepository = require('./appDatabase/appsRepository');
+const imageManager = require('./appSecurity/imageManager');
 const playgroundAudit = require('./appPlayground/playgroundAudit');
 const playgroundService = require('./appPlayground/playgroundService');
 const admissionControl = require('./utils/admissionControl');
@@ -790,7 +791,10 @@ async function startFluxFunctions() {
       ipLocationSync.startSync().catch((err) => log.error(`ipLocationSync start error: ${err.message}`));
       // Warm the marketplace template cache (best-effort; cache-miss fetch covers any gaps).
       marketplaceTemplateCache.bootstrapCache().catch((error) => log.error(error));
-      specReconciler.requestFullConvergence({ reason: 'boot', includeCompliance: true });
+      specReconciler.requestFullConvergence({ reason: 'boot' });
+      // Driven by the policy bundle from here: a pass when the gate opens and on every
+      // change while it is open. Nothing waits on it.
+      imageManager.startComplianceSweeps();
       // Backstop the flux-shutdownd plan store against anything missed while
       // fluxos was down (Arcane-only, best-effort).
       appOperations.shutdownPlanResync().catch((error) => log.error(error));
@@ -858,11 +862,10 @@ async function startFluxFunctions() {
     orchestrator.start(bootContext);
     log.info('AppSyncOrchestrator started');
     setInterval(async () => {
-      // A deep convergence pass carries the image-compliance step (it needs
-      // full deployment views, so the per-block pass skips it).
-      await specReconciler.requestFullConvergence({ reason: 'blocklist', includeCompliance: true });
-      // Orphan hook: the compliance step is the main out-of-band remover of a pinned image
-      // (a blacklisted one), so reconcile cache records against docker right after it runs.
+      // The level-triggered backstop for everything the per-block pass is asked for.
+      await specReconciler.requestFullConvergence({ reason: 'backstop' });
+      // The compliance sweep removes pinned images out of band, so cache records are
+      // reconciled against docker on this interval.
       if (imageCacheEnabled) {
         await imageCacheMaintenance.reconcileOrphanedRecords()
           .catch((err) => log.error(`imageCache - orphan reconcile error: ${err.message}`));
