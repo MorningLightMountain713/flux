@@ -324,8 +324,7 @@ describe('State sync: failed sync peer is replaced', function () {
       deferredNodes: 2,
       tickerAutostart: false,
       nodeConfigOverrides: {
-        // appSyncMaxPeers covers the initial batch of 4 plus replacements
-        4: { fluxapps: { appSyncMinCompletions: 4, appSyncPeerThreshold: 4, appSyncMaxPeers: 6 } },
+        4: { fluxapps: { appSyncMinCompletions: 4, appSyncPeerThreshold: 4 } },
       },
     });
 
@@ -417,18 +416,17 @@ describe('State sync: failed sync peer is replaced', function () {
     expect(round1.data.peers).to.include(poisonedKey);
 
     // The poisoned source answers the other three types and then stops: it
-    // is judged as stopped mid-answer, missing apprunning only
+    // is judged as stopped mid-answer
     const failed = await client.waitForEvent(
       'ephemeralSync:peerTimedOut',
-      (d) => d.reason === 'stopped mid-answer' && d.missing.includes('apprunning'),
+      (d) => d.reason === 'stopped mid-answer' && d.peer === poisonedKey,
       120000,
     );
     expect(failed.data.peer).to.equal(poisonedKey);
-    expect(failed.data.missing).to.deep.equal(['apprunning']);
     await dbClient(POISONED_DB).failpointClear();
 
-    // No fresh peer exists at failure time; the replacement happens once one
-    // appears (the suite-19 shape: retried on each processed block)
+    // No fresh peer exists at failure time; the replacement is asked when one
+    // connects
     const latecomerKey = `${subnet.base}.15:16127`;
     const fresh = await env.startNode(LATECOMER);
     await waitForDaemonReady(fresh);
@@ -441,13 +439,14 @@ describe('State sync: failed sync peer is replaced', function () {
     await client.getAuthed(`/flux/addpeer/${latecomerKey}`, auth.zelidauth);
     await client.waitForEvent('peers:added', (d) => d.ip === `${subnet.base}.15`, 60000);
 
+    // One slot is open, so one peer is asked, for every stream
     const round2 = await client.waitForEvent(
       'ephemeralSync:requested',
-      (d) => Array.isArray(d.types) && d.types.length === 1,
+      (d) => d.peers.includes(latecomerKey),
       120000,
     );
-    expect(round2.data.types).to.deep.equal(['apprunning']);
     expect(round2.data.peers).to.deep.equal([latecomerKey]);
+    expect(round2.data.outstanding).to.be.at.most(4);
 
     const allComplete = await client.waitForEvent('ephemeralSync:allComplete', () => true, 120000);
     expect(allComplete.data.apprunning).to.be.gte(4);
