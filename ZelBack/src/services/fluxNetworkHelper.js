@@ -1096,8 +1096,10 @@ function checkNodeJsVersionAllowed() {
   if (serviceHelper.minVersionSatisfy(nodeJsVersion, minimumVersion)) {
     return true;
   }
-  nodeDosState.setStickyDosMessage(`NodeJS Version Error. Current lower version allowed is v${minimumVersion} found v${nodeJsVersion}`);
-  nodeDosState.setStickyDosStateValue(100);
+  nodeDosState.setStickyDos(
+    nodeDosState.StickyDosOwner.NODEJS_FLOOR,
+    `NodeJS Version Error. Current lower version allowed is v${minimumVersion} found v${nodeJsVersion}`,
+  );
   return false;
 }
 

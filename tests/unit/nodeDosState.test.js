@@ -61,33 +61,91 @@ describe('nodeDosState tests', () => {
     });
   });
 
-  describe('sticky DOS state', () => {
+  describe('sticky DOS, held by owner', () => {
+    const owners = () => nodeDosState.StickyDosOwner;
+
+    it('reports no reason while no owner holds the node', () => {
+      expect(nodeDosState.getStickyDosMessage()).to.equal(null);
+      expect(nodeDosState.isNodeDos()).to.equal(false);
+    });
+
     it('takes precedence over the regular message in the effective getter only', () => {
       nodeDosState.setDosMessage('regular reason');
-      nodeDosState.setStickyDosMessage('sticky reason');
+      nodeDosState.setStickyDos(owners().APP_TAMPERING, 'sticky reason');
       expect(nodeDosState.getStickyDosMessage()).to.equal('sticky reason');
       expect(nodeDosState.getRawDosMessage()).to.equal('regular reason');
       expect(nodeDosState.getDosMessage()).to.equal('sticky reason');
     });
 
-    it('is not cleared by setDosMessage(null)', () => {
-      nodeDosState.setStickyDosMessage('sticky reason');
+    // An availability pass ends a good run this way. A verdict that went with it would
+    // let the node walk back into service with its condition still in place.
+    it('is not released by setDosMessage(null)', () => {
+      nodeDosState.setStickyDos(owners().APP_TAMPERING, 'sticky reason');
       nodeDosState.setDosMessage(null);
       expect(nodeDosState.getDosMessage()).to.equal('sticky reason');
     });
 
-    it('clears both the sticky message and sticky state value', () => {
-      nodeDosState.setStickyDosMessage('sticky reason');
-      nodeDosState.setStickyDosStateValue(100);
-      nodeDosState.clearStickyDosMessage();
-      expect(nodeDosState.getStickyDosMessage()).to.be.null;
-      expect(nodeDosState.isNodeDos()).to.be.false;
+    // DOS >= 100 is what removes every app on the box, so a hold that did not reach it
+    // would be a note.
+    it('takes the node out of service on a hold alone, whatever the counted state is', () => {
+      nodeDosState.setDosStateValue(0);
+      nodeDosState.setStickyDos(owners().APP_TAMPERING, 'tampering flag');
+      expect(nodeDosState.isNodeDos()).to.equal(true);
+      expect(nodeDosState.getDosData()).to.deep.equal({ dosState: 100, dosMessage: 'tampering flag' });
     });
 
-    it('emits the effective DOS status on sticky mutations', () => {
-      nodeDosState.setStickyDosStateValue(100);
-      nodeDosState.setStickyDosMessage('sticky reason');
+    it('releases the owner that let go', () => {
+      nodeDosState.setStickyDos(owners().APP_TAMPERING, 'tampering flag');
+      nodeDosState.clearStickyDos(owners().APP_TAMPERING);
+      expect(nodeDosState.isNodeDos()).to.equal(false);
+      expect(nodeDosState.isStickyDosHeldBy(owners().APP_TAMPERING)).to.equal(false);
+    });
+
+    it('names every reason, because an operator has to lift all of them', () => {
+      nodeDosState.setStickyDos(owners().RESIDENTIAL_DOS, 'residential');
+      nodeDosState.setStickyDos(owners().APP_TAMPERING, 'tampering');
+      const message = nodeDosState.getStickyDosMessage();
+      expect(message).to.contain('residential');
+      expect(message).to.contain('tampering');
+    });
+
+    // One slot could hold one of these two reasons: the second either overwrote the
+    // first, leaving an owner that can no longer recognise - and so never release - its
+    // own verdict, or was dropped, and the node returned to service on the first owner's
+    // release for a condition that never lifted.
+    it('keeps the node out of service while any other owner still holds it', () => {
+      nodeDosState.setStickyDos(owners().RESIDENTIAL_DOS, 'residential');
+      nodeDosState.setStickyDos(owners().APP_TAMPERING, 'tampering');
+      nodeDosState.clearStickyDos(owners().RESIDENTIAL_DOS);
+      expect(nodeDosState.isNodeDos(), 'one owner released the node for both').to.equal(true);
+      expect(nodeDosState.getStickyDosMessage()).to.equal('tampering');
+    });
+
+    it('does not release a verdict it does not own', () => {
+      nodeDosState.setStickyDos(owners().RESIDENTIAL_DOS, 'residential');
+      nodeDosState.clearStickyDos(owners().APP_TAMPERING);
+      expect(nodeDosState.getStickyDosMessage()).to.equal('residential');
+    });
+
+    // An unknown owner is a caller that was never given an identity. Accepted, it would
+    // hold the node under a name no release path knows about.
+    it('refuses an owner it does not know, rather than minting one', () => {
+      expect(() => nodeDosState.setStickyDos('someFeature', 'a reason')).to.throw('unknown owner');
+      expect(nodeDosState.isNodeDos()).to.equal(false);
+    });
+
+    it('emits the effective DOS status on a hold and on its release', () => {
+      nodeDosState.setStickyDos(owners().APP_TAMPERING, 'sticky reason');
       sinon.assert.calledWithExactly(publishStub.lastCall, 'dos:changed', { dosState: 100, dosMessage: 'sticky reason' });
+      nodeDosState.clearStickyDos(owners().APP_TAMPERING);
+      sinon.assert.calledWithExactly(publishStub.lastCall, 'dos:changed', { dosState: 0, dosMessage: null });
+    });
+
+    it('says nothing when an owner restates the reason it already holds', () => {
+      nodeDosState.setStickyDos(owners().APP_TAMPERING, 'sticky reason');
+      const emitted = publishStub.callCount;
+      nodeDosState.setStickyDos(owners().APP_TAMPERING, 'sticky reason');
+      expect(publishStub.callCount).to.equal(emitted);
     });
   });
 
@@ -102,10 +160,9 @@ describe('nodeDosState tests', () => {
       expect(nodeDosState.isNodeDos()).to.be.true;
     });
 
-    it('uses the sticky state value when a sticky message is set', () => {
+    it('is true while any owner holds the node', () => {
       nodeDosState.setDosStateValue(0);
-      nodeDosState.setStickyDosMessage('sticky reason');
-      nodeDosState.setStickyDosStateValue(100);
+      nodeDosState.setStickyDos(nodeDosState.StickyDosOwner.NODEJS_FLOOR, 'sticky reason');
       expect(nodeDosState.isNodeDos()).to.be.true;
     });
   });
@@ -117,11 +174,10 @@ describe('nodeDosState tests', () => {
       expect(nodeDosState.getDosData()).to.deep.equal({ dosState: 7, dosMessage: 'regular reason' });
     });
 
-    it('returns the sticky state when a sticky message is set', () => {
+    it('returns the held verdict over the counted state', () => {
       nodeDosState.setDosStateValue(7);
       nodeDosState.setDosMessage('regular reason');
-      nodeDosState.setStickyDosStateValue(100);
-      nodeDosState.setStickyDosMessage('sticky reason');
+      nodeDosState.setStickyDos(nodeDosState.StickyDosOwner.APP_TAMPERING, 'sticky reason');
       expect(nodeDosState.getDosData()).to.deep.equal({ dosState: 100, dosMessage: 'sticky reason' });
     });
   });
@@ -144,13 +200,13 @@ describe('nodeDosState tests', () => {
       expect(listener.callCount).to.equal(2);
     });
 
-    it('fires for a sticky state reaching the limit', () => {
+    it('fires when an owner takes the node out of service', () => {
       const listener = sinon.stub();
       nodeDosState.onNodeDos(listener);
-      nodeDosState.setStickyDosMessage('tampering');
-      expect(listener.callCount).to.equal(0);
-      nodeDosState.setStickyDosStateValue(100);
+      nodeDosState.setStickyDos(nodeDosState.StickyDosOwner.APP_TAMPERING, 'tampering');
       expect(listener.callCount).to.equal(1);
+      nodeDosState.setStickyDos(nodeDosState.StickyDosOwner.RESIDENTIAL_DOS, 'residential');
+      expect(listener.callCount, 'a second owner is not a second crossing').to.equal(1);
     });
 
     it('a listener that throws does not break the setter or the other listeners', () => {

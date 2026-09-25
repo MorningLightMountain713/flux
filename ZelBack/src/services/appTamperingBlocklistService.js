@@ -10,57 +10,32 @@ const globalState = require('./utils/globalState');
 const policyStore = require('./policyStore');
 
 const CHECK_INTERVAL_MS = config.get('fluxapps.tamperingCheckIntervalMs');
-// How often to look at the DOS slot while waiting for another owner to let go
-// of it. Purely local - it reads the slot and nothing else, so it costs no
-// blocklist fetch and no benchmark call, which is why it can run this often
-// against a 12-hourly enforcement cadence.
-const SLOT_WATCH_MS = 60 * 1000; // 60s
 const TAMPER_SCORE_THRESHOLD = 10;
 const DOS_MESSAGE_PREFIX = 'Node flagged via tampering blocklist';
+const OWNER = nodeDosState.StickyDosOwner.APP_TAMPERING;
 
 let intervalHandle = null;
-let slotWatchHandle = null;
-// The DOS this node should be under, held here while another owner has the
-// single sticky slot. Enforcement runs every 12 hours, so without this a
-// blocklisted node that the other owner later RELEASES - a residential verdict
-// flipping to datacenter clears its own sticky - sits at DOS 0 taking apps
-// until the next 12-hourly tick. The slot is watched instead, and claimed
-// within a minute of it coming free.
-let deferredDosMessage = null;
-let ourDosActive = false;
 let stopping = false;
 let syncWaitResolver = null;
 let syncBlockEmitter = null;
 let syncBlockListener = null;
 
 /**
- * True when the current sticky DOS message was set by this service.
- * Identified by the DOS_MESSAGE_PREFIX we always prepend when we set it.
+ * True while this service's own verdict holds the node out of service.
+ * @returns {boolean}
  */
-function isOurStickyDos() {
-  const msg = nodeDosState.getStickyDosMessage();
-  return typeof msg === 'string' && msg.startsWith(DOS_MESSAGE_PREFIX);
+function isOurDosHeld() {
+  return nodeDosState.isStickyDosHeldBy(OWNER);
 }
 
 /**
- * Give up the DOS this service is holding. The slot is only cleared when the
- * message in it is still ours: the slot holds one message and has more than one
- * enforcer writing to it, so clearing on our own `ourDosActive` alone would drop
- * another owner's DOS on the floor. Dropping our claim is all we are entitled to
- * do once the slot has changed hands.
+ * Give up the DOS this service is holding. Every other owner's verdict stands.
  * @param {string} reason Logged context for the release.
  */
 function releaseOurDos(reason) {
-  if (isOurStickyDos()) {
-    log.info(`appTamperingBlocklist - clearing sticky DOS (${reason})`);
-    nodeDosState.clearStickyDosMessage();
-    ourDosActive = false;
-    return;
-  }
-  if (ourDosActive) {
-    log.info(`appTamperingBlocklist - our DOS was replaced by another owner, releasing our claim only (${reason})`);
-    ourDosActive = false;
-  }
+  if (!isOurDosHeld()) return;
+  log.info(`appTamperingBlocklist - clearing sticky DOS (${reason})`);
+  nodeDosState.clearStickyDos(OWNER);
 }
 
 /**
@@ -214,67 +189,12 @@ async function enforceBlocklist() {
   log.info(`appTamperingBlocklist - txhash=${myTxhash} listed=${listed} score=${tamperScore} shouldDos=${shouldDos}`);
 
   if (shouldDos) {
-    // Another owner's DOS already has this node out of service for its own
-    // reason. Taking the single slot from it would leave that owner unable to
-    // recognise or release its own state, and the node is DOSed either way -
-    // so leave it and re-check next tick.
     const message = `${DOS_MESSAGE_PREFIX}: tamper score ${tamperScore}, txhash ${myTxhash}`;
-    const sticky = nodeDosState.getStickyDosMessage();
-    if (sticky && !isOurStickyDos()) {
-      log.info('appTamperingBlocklist - another sticky DOS is active, not overwriting it; watching for the slot');
-      // Remembered, and the slot watched. The score in it can be a few hours
-      // stale by the time the slot frees, which is the right trade: the next
-      // full tick refreshes the message, and the node is one this build has
-      // already determined should be out of service.
-      deferredDosMessage = message;
-      startSlotWatch();
-      return;
-    }
-    stopSlotWatch();
-    nodeDosState.setStickyDosMessage(message);
-    nodeDosState.setStickyDosStateValue(100);
-    ourDosActive = true;
-    log.error(message);
+    nodeDosState.setStickyDos(OWNER, message);
     return;
   }
 
-  stopSlotWatch();
   releaseOurDos(`listed=${listed}, score=${tamperScore}`);
-}
-
-/**
- * Claim the DOS slot the moment the owner holding it lets go.
- *
- * Local only: it reads the sticky message and nothing else, so it costs no
- * blocklist fetch, no benchmark call and no RPC.
- */
-function claimSlotIfFree() {
-  if (!deferredDosMessage) {
-    stopSlotWatch();
-    return;
-  }
-  const sticky = nodeDosState.getStickyDosMessage();
-  if (sticky && !isOurStickyDos()) return;
-  nodeDosState.setStickyDosMessage(deferredDosMessage);
-  nodeDosState.setStickyDosStateValue(100);
-  ourDosActive = true;
-  log.error(`${deferredDosMessage} (claimed after another owner released the slot)`);
-  deferredDosMessage = null;
-  stopSlotWatch();
-}
-
-function startSlotWatch() {
-  if (slotWatchHandle || stopping) return;
-  slotWatchHandle = setInterval(claimSlotIfFree, SLOT_WATCH_MS);
-  if (slotWatchHandle.unref) slotWatchHandle.unref();
-}
-
-function stopSlotWatch() {
-  deferredDosMessage = null;
-  if (slotWatchHandle) {
-    clearInterval(slotWatchHandle);
-    slotWatchHandle = null;
-  }
 }
 
 /**
@@ -323,7 +243,6 @@ async function start(options = {}) {
 
 function stop() {
   stopping = true;
-  stopSlotWatch();
   if (syncWaitResolver) {
     const resolve = syncWaitResolver;
     syncWaitResolver = null;
@@ -336,15 +255,13 @@ function stop() {
 }
 
 function isDosActive() {
-  return ourDosActive;
+  return isOurDosHeld();
 }
 
 module.exports = {
   start,
   stop,
   enforceBlocklist,
-  // Test seam: the slot watch is otherwise only driven by its own timer.
-  claimSlotIfFree,
   fetchBlocklist,
   computeTamperScore,
   getMyTxhash,
