@@ -32,19 +32,19 @@ describe('appTamperingBlocklistService tests', () => {
       './generalService': generalServiceStub,
       './daemonService/daemonServiceMiscRpcs': daemonMiscStub,
       './utils/globalState': { isArcane: () => arcane },
-      './policy/policyStore': policyStoreStub,
+      './policyStore': policyStoreStub,
     });
   }
 
   // policyStore holds the document; null is its "no copy from any layer" answer, which is
   // deliberately not the same as an empty list.
   function setBlocklist(value) {
-    policyStoreStub.get.withArgs('tamperingBlocklist').returns(value);
+    policyStoreStub.getDocument.withArgs('tamperingblockednodes').returns(value);
   }
 
   beforeEach(() => {
     policyStoreStub = {
-      get: sinon.stub().returns(null),
+      getDocument: sinon.stub().returns(null),
     };
 
     tamperingRepositoryStub = {
@@ -87,11 +87,18 @@ describe('appTamperingBlocklistService tests', () => {
     // Fetching, validating and caching belong to policyStore and are covered in
     // policyStore.test.js. Here the service is only responsible for reading the right
     // document and passing its two distinct answers through unchanged.
-    it('reads the tamperingBlocklist document', () => {
+    it('reads the tamperingblockednodes document', () => {
       setBlocklist(['tx1', 'tx2']);
 
       expect(service.fetchBlocklist()).to.deep.equal(['tx1', 'tx2']);
-      sinon.assert.calledWith(policyStoreStub.get, 'tamperingBlocklist');
+      sinon.assert.calledWith(policyStoreStub.getDocument, 'tamperingblockednodes');
+    });
+
+    // A signature says who published a document, not that it is the shape this code reads.
+    it('answers null for a document that is not a list', () => {
+      setBlocklist({ tx1: true });
+
+      expect(service.fetchBlocklist()).to.equal(null);
     });
 
     it('passes an empty list through as an empty list', () => {
@@ -363,7 +370,7 @@ describe('appTamperingBlocklistService tests', () => {
 
       await arcaneService.enforceBlocklist();
 
-      expect(policyStoreStub.get.called).to.be.false;
+      expect(policyStoreStub.getDocument.called).to.be.false;
       expect(generalServiceStub.obtainNodeCollateralInformation.called).to.be.false;
     });
 

@@ -7,7 +7,7 @@ const nodeDosState = require('./nodeDosState');
 const generalService = require('./generalService');
 const daemonServiceMiscRpcs = require('./daemonService/daemonServiceMiscRpcs');
 const globalState = require('./utils/globalState');
-const policyStore = require('./policy/policyStore');
+const policyStore = require('./policyStore');
 
 const CHECK_INTERVAL_MS = config.get('fluxapps.tamperingCheckIntervalMs');
 // How often to look at the DOS slot while waiting for another owner to let go
@@ -72,7 +72,14 @@ function releaseOurDos(reason) {
  * so let an unreadable list clear the DOS on a node that was on it.
  */
 function fetchBlocklist() {
-  return policyStore.get('tamperingBlocklist');
+  const blocklist = policyStore.getDocument('tamperingblockednodes');
+  if (blocklist === null) return null;
+  // A signature says who published a document, not that it is the shape this code expects.
+  if (!Array.isArray(blocklist)) {
+    log.warn('appTamperingBlocklist - tamperingblockednodes in the signed bundle is not an array');
+    return null;
+  }
+  return blocklist;
 }
 
 /**
