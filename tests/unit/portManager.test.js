@@ -147,7 +147,7 @@ function buildProxyquireMap(stubs, overrides = {}) {
       ...(overrides.serviceHelper || {}),
     },
     // lazily required inside restoreAppsPortsSupport's sustained-failure removal
-    '../appLifecycle/appUninstaller': overrides.appUninstaller || { removeAppLocally: sinon.stub().resolves() },
+    '../appLifecycle/appUninstaller': overrides.appUninstaller || { uninstallApplication: sinon.stub().resolves() },
     '../../lib/log': {
       info: sinon.stub(),
       warn: sinon.stub(),
@@ -474,14 +474,14 @@ describe('portManager tests', () => {
     function loadUpnpFailing(overrides = {}) {
       const mapUpnpPort = overrides.mapUpnpPort || sinon.stub().resolves(false);
       const delay = sinon.stub().resolves();
-      const removeAppLocally = sinon.stub().resolves();
+      const uninstallApplication = sinon.stub().resolves();
       const localPm = loadPortManager(stubs, {
         upnpService: { isUPNP: sinon.stub().returns(true), mapUpnpPort },
-        appUninstaller: { removeAppLocally },
+        appUninstaller: { uninstallApplication: uninstallApplication },
         serviceHelper: { delay },
       });
       return {
-        localPm, mapUpnpPort, delay, removeAppLocally,
+        localPm, mapUpnpPort, delay, uninstallApplication,
       };
     }
 
@@ -490,15 +490,14 @@ describe('portManager tests', () => {
     }
 
     it('should NOT remove an app on a single UPNP mapping failure', async () => {
-      // the incident regression: one failed map used to escalate straight to
-      // removeAppLocally(force, sendMessage) - a transient router blip nuked a
-      // running app and broadcast its removal to the network
+      // a transient router blip must not remove a running app and broadcast
+      // its removal to the network
       installApp({ name: 'App1', version: 3, ports: [30_001] });
-      const { localPm, removeAppLocally } = loadUpnpFailing();
+      const { localPm, uninstallApplication } = loadUpnpFailing();
 
       await localPm.restoreAppsPortsSupport();
 
-      sinon.assert.notCalled(removeAppLocally);
+      sinon.assert.notCalled(uninstallApplication);
       expect(localPm.upnpMapFailures.get('App1').cycles).to.equal(1);
     });
 
@@ -506,44 +505,44 @@ describe('portManager tests', () => {
       installApp({ name: 'App1', version: 3, ports: [30_001] });
       const mapUpnpPort = sinon.stub().resolves(true);
       mapUpnpPort.onFirstCall().resolves(false);
-      const { localPm, removeAppLocally } = loadUpnpFailing({ mapUpnpPort });
+      const { localPm, uninstallApplication } = loadUpnpFailing({ mapUpnpPort });
 
       await localPm.restoreAppsPortsSupport();
 
-      sinon.assert.notCalled(removeAppLocally);
+      sinon.assert.notCalled(uninstallApplication);
       expect(localPm.upnpMapFailures.has('App1')).to.be.false;
     });
 
     it('should not remove before the sustained window even after enough failing cycles', async () => {
       installApp({ name: 'App1', version: 3, ports: [30_001] });
-      const { localPm, removeAppLocally } = loadUpnpFailing();
+      const { localPm, uninstallApplication } = loadUpnpFailing();
 
       await localPm.restoreAppsPortsSupport();
       await localPm.restoreAppsPortsSupport();
       await localPm.restoreAppsPortsSupport();
 
       // 3 consecutive cycles, but the wall-clock window has not elapsed
-      sinon.assert.notCalled(removeAppLocally);
+      sinon.assert.notCalled(uninstallApplication);
       expect(localPm.upnpMapFailures.get('App1').cycles).to.equal(3);
     });
 
     it('should remove and broadcast only after sustained failure (cycles AND window)', async () => {
       installApp({ name: 'App1', version: 3, ports: [30_001] });
-      const { localPm, removeAppLocally } = loadUpnpFailing();
+      const { localPm, uninstallApplication } = loadUpnpFailing();
       const nowMonotonicMs = Number(process.hrtime.bigint() / 1_000_000n);
       // one strike short of the cycle gate, already past the wall-clock window
       localPm.upnpMapFailures.set('App1', { cycles: 2, firstFailureAtMs: nowMonotonicMs - (31 * 60 * 1000) });
 
       await localPm.restoreAppsPortsSupport();
 
-      sinon.assert.calledWith(removeAppLocally, 'App1', null, true, true, true);
+      sinon.assert.calledWith(uninstallApplication, 'App1', { forceKill: true, skipGuard: true, broadcastRemoval: true });
       expect(localPm.upnpMapFailures.has('App1')).to.be.false;
     });
 
     it('should clear the failure tracker once mapping succeeds again', async () => {
       installApp({ name: 'App1', version: 3, ports: [30_001] });
       const mapUpnpPort = sinon.stub().resolves(false);
-      const { localPm, removeAppLocally } = loadUpnpFailing({ mapUpnpPort });
+      const { localPm, uninstallApplication } = loadUpnpFailing({ mapUpnpPort });
 
       await localPm.restoreAppsPortsSupport();
       expect(localPm.upnpMapFailures.get('App1').cycles).to.equal(1);
@@ -552,7 +551,7 @@ describe('portManager tests', () => {
       await localPm.restoreAppsPortsSupport();
 
       expect(localPm.upnpMapFailures.has('App1')).to.be.false;
-      sinon.assert.notCalled(removeAppLocally);
+      sinon.assert.notCalled(uninstallApplication);
     });
 
     it('should pay the retry pause at most once per cycle across failing apps', async () => {

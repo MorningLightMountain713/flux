@@ -245,7 +245,7 @@ async function restoreAppsPortsSupport() {
         // eslint-disable-next-line global-require
         const appUninstaller = require('../appLifecycle/appUninstaller');
         // eslint-disable-next-line no-await-in-loop
-        await appUninstaller.removeAppLocally(application.name, null, true, true, true).catch((error) => log.error(error)); // remove entire app
+        await appUninstaller.uninstallApplication(application.name, { forceKill: true, skipGuard: true, broadcastRemoval: true }).catch((error) => log.error(error));
         // eslint-disable-next-line no-await-in-loop
         await serviceHelper.delay(3 * 60 * 1000); // 3 mins
       }
