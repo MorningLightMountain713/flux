@@ -2,6 +2,11 @@ const { expect } = require('chai');
 const sinon = require('sinon');
 const proxyquire = require('proxyquire').noCallThru();
 
+// The module reads its settings through config.get('a.b.c').
+function configStub(values) {
+  return { ...values, get: (key) => key.split('.').reduce((o, part) => o[part], values) };
+}
+
 const MODULE_PATH = '../../ZelBack/src/services/appDatabase/policyArtifactRepository';
 const POLICY_DOCUMENTS = 'policydocuments';
 const LOCAL_DB = 'zelfluxlocal';
@@ -18,9 +23,9 @@ function load({ database = {}, connected = true } = {}) {
   };
   const log = { info: sinon.stub(), warn: sinon.stub(), error: sinon.stub() };
   const module = proxyquire(MODULE_PATH, {
-    config: {
+    config: configStub({
       database: { local: { database: LOCAL_DB, collections: { policyDocuments: POLICY_DOCUMENTS } } },
-    },
+    }),
     '../dbHelper': dbHelper,
     '../../lib/log': log,
     mongodb: { GridFSBucket: class {} },

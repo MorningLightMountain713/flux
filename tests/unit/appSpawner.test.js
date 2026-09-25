@@ -91,6 +91,8 @@ describe('appSpawner tests', () => {
   function createGlobalStateStub() {
     return {
       dbReady: true,
+      // The network policy has been obtained; a test of the gate overrides it.
+      policyReady: true,
       fluxNodeWasNotConfirmedOnLastCheck: false,
       fluxNodeWasAlreadyConfirmed: true,
       spawnerPaused: false,
