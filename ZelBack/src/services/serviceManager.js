@@ -798,13 +798,12 @@ async function startFluxFunctions() {
       // Backstop the flux-shutdownd plan store against anything missed while
       // fluxos was down (Arcane-only, best-effort).
       appOperations.shutdownPlanResync().catch((error) => log.error(error));
-      await identityReady;
-      try {
-        await enterpriseNetwork.cleanupOwnershipViolations();
-        log.info('Enterprise network cleanup completed');
-      } catch (error) {
-        log.error(`Enterprise network cleanup failed: ${error.message || error}`);
-      }
+      // Detached, and started once this node knows which side of the enterprise split it
+      // is on: judged before that, every sweep would fail on the identity it cannot read.
+      // From there it follows the policy - a pass when the gate opens and on every change
+      // while it is open - since an owner granted or revoked after boot is not visible to
+      // a sweep that ran once.
+      identityReady.then(() => enterpriseNetwork.startOwnershipSweeps());
       setInterval(() => {
         portManager.restorePortsSupport();
       }, portRestoreIntervalMs);
