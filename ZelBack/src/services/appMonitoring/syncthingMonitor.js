@@ -82,6 +82,25 @@ async function syncthingApplied(write, what) {
 }
 
 /**
+ * The ignore lines a folder's sync scope is read against: the ones its component's
+ * specification derives, or, for a folder whose owning specification cannot be read
+ * this pass, the ones syncthing holds for it, which are the lines its index was built
+ * under. A folder whose ignores cannot be read either is given none, so its
+ * scaffolding counts as content and the phantom check does not fire on it.
+ *
+ * @param {string} folderId - the syncthing folder id (the docker app identifier)
+ * @param {object|null} deployComp - the component, when its specification was read
+ * @returns {Promise<string[]>}
+ */
+async function scopeLinesFor(folderId, deployComp) {
+  if (deployComp) return syncthingIgnorePolicy.ignoreLinesFor(deployComp);
+  const read = await syncthingService.getFolderIgnores(folderId);
+  if (read.status === 'success' && Array.isArray(read.data?.ignore)) return read.data.ignore;
+  log.warn(`scopeLinesFor - ${folderId}: ignores unreadable (${read.data?.message ?? 'unknown error'}); the folder's scaffolding counts as its content`);
+  return [];
+}
+
+/**
  * Verify one app folder's mount safety, repairing an unmounted volume on the
  * spot (FluxOS owns the mount - the backing image normally still exists, so
  * the actionable response is to mount it, not just to report it).
@@ -98,13 +117,16 @@ async function syncthingApplied(write, what) {
  * @param {string} appFolder - App folder path
  * @param {string} appName - the app this component belongs to
  * @param {boolean} [sending] - Whether syncthing currently holds this folder sendreceive
+ * @param {object} [deployComp] - the component the folder replicates, when its
+ *  specification can be read this pass
  * @returns {Promise<{isSafe: boolean, reason: string}>} Result after any repair
  */
-async function verifyAppFolderMountWithRepair(appId, appFolder, appName, sending = false) {
+async function verifyAppFolderMountWithRepair(appId, appFolder, appName, sending = false, deployComp = null) {
+  const ignoreLines = sending ? await scopeLinesFor(appId, deployComp) : [];
   // appName reaches BOTH verifiers - the sendreceive one takes it through its
   // options and forwards it to the shallow check it starts with.
   const verify = () => (sending
-    ? verifySendReceiveFolderSafety(appId, appFolder, { appName })
+    ? verifySendReceiveFolderSafety(appId, appFolder, { appName, ignoreLines })
     : verifyFolderMountSafety(appId, appFolder, appName));
   let mountSafety = await verify();
   if (!mountSafety.isSafe && !mountSafety.isMounted) {
@@ -188,7 +210,7 @@ async function checkAppFolderMounts(deployments, sendingFolderIds, knownFolderId
       const appFolder = `${appsFolder}${appId}`;
       // eslint-disable-next-line no-await-in-loop
       const mountSafety = await verifyAppFolderMountWithRepair(
-        appId, appFolder, deployment.appName, sendingFolderIds.has(appId),
+        appId, appFolder, deployment.appName, sendingFolderIds.has(appId), deployComp,
       );
       if (mountSafety.isSafe) verifiedSafeIds.push(appId);
       if (!mountSafety.isSafe) {
@@ -454,10 +476,10 @@ async function processContainerData(params) {
       installedAppName,
       mountVerifyNeeded: state.syncthingAppsFirstRun || erroredFolderIds.has(appId),
       liveness,
-      // Injected content is written by content delivery on every node and
-      // .stignore'd, so the disk-emptiness walks must not count it as synced
-      // payload (a fresh volume holding only delivered files is still empty).
-      injectedExcludePaths: deployComp.injectedSyncExcludes(),
+      // The scope the disk is read in: the platform's scaffolding, the content
+      // delivered on every node and the directories the spec keeps local are none
+      // of them synced payload, so a volume holding only those is still empty.
+      ignoreLines: await syncthingIgnorePolicy.ignoreLinesFor(deployComp),
     });
 
     // Update cache if provided
@@ -852,19 +874,20 @@ async function syncthingAppsCore(state, getGlobalStateFn) {
       let unsafeFoldersCount = 0;
 
       // This scan walks syncthing's folders, so a folder id is all it starts with.
-      // Index the installed components by that id up front: injected-content paths
-      // (content delivery rewrites these on every node and .stignore excludes them,
-      // so the emptiness walk must skip them too - a content+sync app always has its
-      // delivered files on disk right after a reboot, which would otherwise mask a
-      // wiped dataset) and the owning app name, which tampering incidents roll up
-      // under. A folder no installed component claims stays unresolved rather than
-      // being attributed to a guess.
+      // Index the installed components by that id up front: the component, whose
+      // ignore lines bound the scope the emptiness walk reads (content delivery
+      // rewrites its files on every node and .stignore excludes them - a content+sync
+      // app always has its delivered files on disk right after a reboot, which would
+      // otherwise mask a wiped dataset), and the owning app name, which tampering
+      // incidents roll up under. A folder no installed component claims stays
+      // unresolved rather than being attributed to a guess, and is read in the scope
+      // syncthing holds for it.
       const componentsByAppId = new Map();
       // eslint-disable-next-line no-restricted-syntax
       for (const deployment of deployments) {
         for (const [, comp] of deployment.componentEntries()) {
           componentsByAppId.set(dockerService.getAppIdentifier(comp.identifier), {
-            injectedExcludePaths: comp.injectedSyncExcludes(),
+            comp,
             appName: deployment.appName,
           });
         }
@@ -878,8 +901,10 @@ async function syncthingAppsCore(state, getGlobalStateFn) {
           const component = componentsByAppId.get(appId);
 
           // eslint-disable-next-line no-await-in-loop
+          const ignoreLines = await scopeLinesFor(appId, component?.comp ?? null);
+          // eslint-disable-next-line no-await-in-loop
           const mountSafety = await verifySendReceiveFolderSafety(appId, folderPath, {
-            injectedExcludePaths: component?.injectedExcludePaths ?? [],
+            ignoreLines,
             appName: component?.appName,
           });
 
@@ -1080,6 +1105,12 @@ async function syncthingAppsCore(state, getGlobalStateFn) {
       for (const folder of newFoldersConfiguration) {
         if (folder.type === 'sendreceive') globalState.promotedFolderIds.add(folder.id);
         else globalState.promotedFolderIds.delete(folder.id);
+        // What a folder holds that the cluster's index does not is a receive-only
+        // question, and promotion answers it: everything this node holds is now
+        // published. Dropped rather than zeroed - absent is what a peer reads as
+        // "not a receive-only holder", where a figure left behind goes on being
+        // ranked after the folder it described has stopped being one.
+        if (folder.type === 'sendreceive') globalState.folderHoldings?.delete(folder.id);
       }
     }
 

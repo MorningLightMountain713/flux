@@ -37,6 +37,66 @@ describe('syncthingIgnorePolicy tests', () => {
     });
   });
 
+  // The scope the index describes is what the lines leave, and the disk has to be read
+  // in that same scope or the phantom check compares two different sets.
+  describe('isInSyncScope', () => {
+    let lines;
+    before(async () => {
+      lines = await policy.ignoreLinesFor(comp(['/game'], ['conf/app.conf']));
+    });
+
+    [
+      '.stfolder', '.stignore', '.stversions', 'backup', 'lost+found', '.flux-op', 'io.runonflux',
+      '.flux-op-3f2504e0-4f89-11d3-9a0c-0305e82c3301', '.flux-op-anything', 'game',
+    ].forEach((name) => {
+      it(`leaves ${name} at the root out, and everything beneath it`, () => {
+        expect(policy.isInSyncScope(name, lines), name).to.equal(false);
+        expect(policy.isInSyncScope(`${name}/inner/file`, lines), `${name}/inner/file`).to.equal(false);
+      });
+    });
+
+    it('leaves out an injected path below the root and nothing beside it', () => {
+      expect(policy.isInSyncScope('conf/app.conf', lines)).to.equal(false);
+      expect(policy.isInSyncScope('conf/other.conf', lines)).to.equal(true);
+      expect(policy.isInSyncScope('conf', lines), 'the directory holding it is the owner\'s').to.equal(true);
+    });
+
+    // Every line is anchored to the folder root, so the name further down is the owner's.
+    it('keeps a scaffolding name that appears below the root', () => {
+      ['appdata/backup', 'appdata/lost+found', 'appdata/.stignore', 'appdata/game', 'appdata/.flux-op-x']
+        .forEach((relative) => expect(policy.isInSyncScope(relative, lines), relative).to.equal(true));
+    });
+
+    it('keeps the owner\'s data', () => {
+      expect(policy.isInSyncScope('appdata', lines)).to.equal(true);
+      expect(policy.isInSyncScope('appdata/world.db', lines)).to.equal(true);
+      expect(policy.isInSyncScope('gamedata', lines), 'a name the line is a prefix of').to.equal(true);
+    });
+
+    it('reads no exclusion from an owner pattern it does not interpret', () => {
+      ['*.log', '/cache/**', '!/keep', '/a?c', '(?d)/tmp', '//comment'].forEach((pattern) => {
+        expect(policy.isInSyncScope('cache/x.log', [pattern]), pattern).to.equal(true);
+      });
+    });
+  });
+
+  describe('outOfScopePaths', () => {
+    it('names every path isInSyncScope leaves out, under the folder root', async () => {
+      const lines = await policy.ignoreLinesFor(comp(['/game'], ['conf/app.conf']));
+      expect(policy.outOfScopePaths('/vol', lines)).to.deep.equal([
+        '/vol/.stfolder', '/vol/.stignore', '/vol/.stversions',
+        '/vol/backup', '/vol/lost+found', '/vol/.flux-op', '/vol/io.runonflux', '/vol/.flux-op-*',
+        '/vol/conf/app.conf', '/vol/game',
+      ]);
+    });
+
+    it('names nothing for a pattern it does not interpret', () => {
+      expect(policy.outOfScopePaths('/vol', ['*.log', '!/keep'])).to.deep.equal([
+        '/vol/.stfolder', '/vol/.stignore', '/vol/.stversions',
+      ]);
+    });
+  });
+
   beforeEach(() => {
     sandbox = sinon.createSandbox();
   });

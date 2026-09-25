@@ -41,6 +41,75 @@ async function ignoreLinesFor(deployComp) {
   return [...new Set([...platform, `/${LEGACY_STAGING_PREFIX}*`, ...injected, ...ownerExcludes].filter(Boolean))];
 }
 
+const PATTERN_SYNTAX = /[*?[\]{}\\]/;
+
+/**
+ * The path components an ignore line names, or null when the line is a pattern this
+ * reading does not interpret.
+ *
+ * A line names a path when it is anchored, carries no negation, and has no pattern
+ * syntax beyond one trailing `*` in its last component - which is every line
+ * ignoreLinesFor derives from the platform, the injected content and `ml:`. An
+ * owner's own pattern beyond that answers null.
+ *
+ * @param {string} line
+ * @returns {{parents: string[], last: string, prefix: boolean}|null}
+ */
+function namedPath(line) {
+  if (!line.startsWith('/') || line.startsWith('//')) return null;
+  const parts = line.slice(1).split('/');
+  if (parts.some((part) => part === '')) return null;
+  const last = parts.pop();
+  const prefix = last.endsWith('*');
+  const stem = prefix ? last.slice(0, -1) : last;
+  if ([...parts, stem].some((part) => PATTERN_SYNTAX.test(part))) return null;
+  return { parents: parts, last: stem, prefix };
+}
+
+/**
+ * Whether a path inside a folder is in the scope its ignore lines leave syncthing to
+ * index, which is the scope the folder's global index describes.
+ *
+ * Asked of the folder's own lines, so a read of the disk and the index it is checked
+ * against count one set. Syncthing's internal names at the folder root are outside
+ * the scope whatever the lines say. A line excludes the path it names and everything
+ * beneath it, as syncthing does for an ignored directory.
+ *
+ * An owner's pattern that namedPath does not interpret excludes nothing here, so what
+ * it covers reads as in scope.
+ *
+ * @param {string} relativePath - `/`-separated, relative to the folder root
+ * @param {string[]} ignoreLines - the folder's lines, as ignoreLinesFor derives them
+ * @returns {boolean}
+ */
+function isInSyncScope(relativePath, ignoreLines = []) {
+  const segments = relativePath.split('/');
+  if (SYNCTHING_INTERNAL_NAMES.has(segments[0])) return false;
+  return !ignoreLines.some((line) => {
+    const named = namedPath(line);
+    if (!named || segments.length <= named.parents.length) return false;
+    if (!named.parents.every((part, index) => segments[index] === part)) return false;
+    const segment = segments[named.parents.length];
+    return named.prefix ? segment.startsWith(named.last) : segment === named.last;
+  });
+}
+
+/**
+ * The paths isInSyncScope leaves out, made absolute under the folder root, as find
+ * -path patterns: a trailing `*` matches within the last component, which is what it
+ * means in the line.
+ *
+ * @param {string} root - the folder's absolute path
+ * @param {string[]} ignoreLines - the folder's lines, as ignoreLinesFor derives them
+ * @returns {string[]}
+ */
+function outOfScopePaths(root, ignoreLines = []) {
+  const internal = [...SYNCTHING_INTERNAL_NAMES].map((name) => path.join(root, name));
+  const named = ignoreLines.map(namedPath).filter(Boolean)
+    .map(({ parents, last, prefix }) => path.join(root, ...parents, `${last}${prefix ? '*' : ''}`));
+  return [...internal, ...named];
+}
+
 /**
  * Ensure a folder's syncthing ignores carry every FluxOS policy line.
  *
@@ -119,4 +188,6 @@ async function ensureStignoreCovers(folderId, deployComp) {
 module.exports = {
   ensureStignoreCovers,
   ignoreLinesFor,
+  isInSyncScope,
+  outOfScopePaths,
 };
