@@ -399,7 +399,35 @@ describe('crontabAndMountsCleanup tests', () => {
       // the incident is keyed by the APP, not the component's docker id — the
       // reconciler emits the same app's events under that name, and the name
       // comes off the real InstantiatedSpec
-      expect(appTamperingDetectionServiceMock.recordEvent.calledWith('app1', 'mount_vanished')).to.be.true;
+      expect(appTamperingDetectionServiceMock.recordEvent.calledWith('app1', 'volume_missing')).to.be.true;
+    });
+
+    // An operator replacing or removing an image records as what it is; a host that
+    // could not mount records as a host fault, which weighs nothing; `mount_vanished`
+    // keeps the meaning its other producer gives it, a fault about the mount point.
+    [
+      ['volume_file_missing', 'volume_missing'],
+      ['mount_point_not_a_directory', 'mount_vanished'],
+      ['volume_image_unrecognised', 'volume_image_unrecognised'],
+      ['mount_failed: wrong fs type, bad superblock', 'volume_image_unrecognised'],
+      ['host_filesystem_readonly', 'volume_host_fault'],
+      ['loop_unavailable', 'volume_host_fault'],
+      ['record_unreadable', 'volume_host_fault'],
+      ['mount_host_refused: no free loop device', 'volume_host_fault'],
+      ['mount_table_unreadable', 'volume_host_fault'],
+      ['mount_point_unavailable: EACCES', 'volume_host_fault'],
+      ['volume_incomplete_install: bad superblock', 'volume_host_fault'],
+    ].forEach(([reason, event]) => {
+      it(`records ${reason} as ${event}`, async () => {
+        installApps([legacyApp1]);
+        volumeServiceMock.ensureAppVolumeMounted.resolves({ mounted: false, reason });
+
+        const result = await crontabAndMountsCleanup.ensureInstalledAppVolumesMounted();
+
+        expect(result.failed).to.deep.equal([{ appId: 'fluxapp1', reason }]);
+        const recorded = appTamperingDetectionServiceMock.recordEvent.getCalls().map((c) => c.args.slice(0, 2));
+        expect(recorded).to.deep.equal([['app1', event]]);
+      });
     });
 
     it('keys the incident by the owning app for a composed spec, not by the component id', async () => {
