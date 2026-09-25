@@ -476,7 +476,7 @@ describe('enterpriseNetwork', () => {
     // uninstalling the app and telling the network it has gone.
     it('does not uninstall an ethereum owner listed in the other capitalisation', async () => {
       const LISTED = '0x2b8E7f6e8F0b6F4c6F8e2B8e7F6e8f0B6f4C6f8E';
-      const removeAppLocally = sinon.stub().resolves();
+      const uninstallApplication = sinon.stub().resolves();
       const { module: m } = loadModule({
         fluxNetworkHelper: { getFluxNodePublicKey: sinon.stub().resolves('pubEth') },
         enterpriseConfig: {
@@ -486,13 +486,13 @@ describe('enterpriseNetwork', () => {
           isPolicyKnown: () => true,
         },
         dbHelper: installedAppsStub([{ name: 'theirs', owner: LISTED.toLowerCase() }]),
-        appUninstaller: { removeAppLocally },
+        appUninstaller: { uninstallApplication },
       });
 
       await m.cleanupOwnershipViolations();
 
       expect(
-        removeAppLocally.called,
+        uninstallApplication.called,
         'the app was swept off the node over its capitalisation',
       ).to.equal(false);
     });
@@ -501,7 +501,7 @@ describe('enterpriseNetwork', () => {
     // test above is the comparison and not a sweep that never ran.
     it('still uninstalls an ethereum owner the list does not hold', async () => {
       const LISTED = '0x2b8E7f6e8F0b6F4c6F8e2B8e7F6e8f0B6f4C6f8E';
-      const removeAppLocally = sinon.stub().resolves();
+      const uninstallApplication = sinon.stub().resolves();
       const { module: m } = loadModule({
         fluxNetworkHelper: { getFluxNodePublicKey: sinon.stub().resolves('pubEth') },
         enterpriseConfig: {
@@ -511,12 +511,12 @@ describe('enterpriseNetwork', () => {
           isPolicyKnown: () => true,
         },
         dbHelper: installedAppsStub([{ name: 'stranger', owner: '0x0000000000000000000000000000000000000001' }]),
-        appUninstaller: { removeAppLocally },
+        appUninstaller: { uninstallApplication },
       });
 
       await m.cleanupOwnershipViolations();
 
-      expect(removeAppLocally.callCount).to.equal(1);
+      expect(uninstallApplication.callCount).to.equal(1);
     });
 
     it('enterprise-network node: uninstalls apps whose owner is not in enterpriseAppOwners', async () => {
@@ -676,7 +676,7 @@ describe('enterpriseNetwork', () => {
     });
 
     it('cleanupOwnershipViolations uninstalls NOTHING', async () => {
-      const removeAppLocally = sinon.stub().resolves();
+      const uninstallApplication = sinon.stub().resolves();
       const { module: m, log } = loadModule({
         enterpriseConfig: unknownPolicy,
         globalState: gateState(false),
@@ -687,12 +687,12 @@ describe('enterpriseNetwork', () => {
             { name: 'stranger-app', owner: 'stranger' },
           ]),
         },
-        appUninstaller: { removeAppLocally },
+        appUninstaller: { uninstallApplication },
       });
 
       await m.cleanupOwnershipViolations();
 
-      expect(removeAppLocally.called).to.equal(false);
+      expect(uninstallApplication.called).to.equal(false);
       expect(log.warn.calledWithMatch(/policy not confirmed/)).to.equal(true);
     });
   });
@@ -712,78 +712,78 @@ describe('enterpriseNetwork', () => {
     it('refuses a bundle this node holds but has not confirmed', async () => {
       // The case the gate exists for: the map is perfectly readable, and it is whatever this
       // node last had. isPolicyKnown answers true throughout.
-      const removeAppLocally = sinon.stub().resolves();
+      const uninstallApplication = sinon.stub().resolves();
       const { module: m, log } = loadModule({
         globalState: gateState(false),
         dbHelper: offenderDb(),
-        appUninstaller: { removeAppLocally },
+        appUninstaller: { uninstallApplication },
       });
 
       await m.cleanupOwnershipViolations();
 
-      expect(removeAppLocally.called, 'held is not confirmed').to.equal(false);
+      expect(uninstallApplication.called, 'held is not confirmed').to.equal(false);
       expect(log.warn.calledWithMatch(/policy not confirmed/)).to.equal(true);
     });
 
     it('does not sweep while the gate is shut', async () => {
-      const removeAppLocally = sinon.stub().resolves();
+      const uninstallApplication = sinon.stub().resolves();
       const { module: m } = loadModule({
         globalState: gateState(false),
         dbHelper: offenderDb(),
-        appUninstaller: { removeAppLocally },
+        appUninstaller: { uninstallApplication },
       });
 
       m.startOwnershipSweeps();
       await drain();
 
-      expect(removeAppLocally.called).to.equal(false);
+      expect(uninstallApplication.called).to.equal(false);
     });
 
     it('sweeps when the gate opens, with no bundle change to announce it', async () => {
       // A node confirmed by its peers holds exactly what it restored, so nothing changes and
       // nothing is announced. The gate opening is the only signal there is.
       const gate = gateState(false);
-      const removeAppLocally = sinon.stub().resolves();
+      const uninstallApplication = sinon.stub().resolves();
       const { module: m } = loadModule({
-        globalState: gate, dbHelper: offenderDb(), appUninstaller: { removeAppLocally },
+        globalState: gate, dbHelper: offenderDb(), appUninstaller: { uninstallApplication },
       });
 
       m.startOwnershipSweeps();
       await drain();
-      expect(removeAppLocally.called, 'nothing yet').to.equal(false);
+      expect(uninstallApplication.called, 'nothing yet').to.equal(false);
 
       gate.open();
       await drain();
-      expect(removeAppLocally.calledOnce, 'the gate opening is a trigger of its own').to.equal(true);
+      expect(uninstallApplication.calledOnce, 'the gate opening is a trigger of its own').to.equal(true);
     });
 
     it('sweeps again when the bundle changes', async () => {
-      const removeAppLocally = sinon.stub().resolves();
+      const uninstallApplication = sinon.stub().resolves();
       const { module: m } = loadModule({
-        globalState: gateState(true), dbHelper: offenderDb(), appUninstaller: { removeAppLocally },
+        globalState: gateState(true), dbHelper: offenderDb(), appUninstaller: { uninstallApplication },
       });
 
       m.startOwnershipSweeps();
       await drain();
-      expect(removeAppLocally.callCount, 'the gate was already open').to.equal(1);
+      expect(uninstallApplication.callCount, 'the gate was already open').to.equal(1);
 
       fireBundleChanged();
       await drain();
-      expect(removeAppLocally.callCount, 'an owner granted after boot is not invisible').to.equal(2);
+      expect(uninstallApplication.callCount, 'an owner granted after boot is not invisible').to.equal(2);
     });
 
     it('ignores a bundle change while the gate is shut', async () => {
-      const removeAppLocally = sinon.stub().resolves();
+      const uninstallApplication = sinon.stub().resolves();
       const db = offenderDb();
       const { module: m, log } = loadModule({
-        globalState: gateState(false), dbHelper: db, appUninstaller: { removeAppLocally },
+        globalState: gateState(false), dbHelper: db, appUninstaller: { uninstallApplication },
       });
 
       m.startOwnershipSweeps();
       fireBundleChanged();
       await drain();
 
-      expect(removeAppLocally.called, 'a bundle it may not act on changes nothing it may do').to.equal(false);
+      expect(uninstallApplication.called, 'a bundle it may not act on changes nothing it may do').to.equal(false);
       // Not started and then refused: not started. A change arriving while the gate is shut
       // is not a question worth putting to the database, and the pass that would refuse it
       // logs every time it does.
@@ -826,39 +826,39 @@ describe('enterpriseNetwork', () => {
     it('runs again after a pass throws', async () => {
       // An uninstall that failed is logged and left for the next pass. A sweep that stopped
       // driving itself on one failure would leave the node acting on a map it has read.
-      const removeAppLocally = sinon.stub()
+      const uninstallApplication = sinon.stub()
         .onFirstCall().rejects(new Error('boom'))
         .onSecondCall()
         .resolves();
       const { module: m, log } = loadModule({
-        globalState: gateState(true), dbHelper: offenderDb(), appUninstaller: { removeAppLocally },
+        globalState: gateState(true), dbHelper: offenderDb(), appUninstaller: { uninstallApplication },
       });
 
       m.startOwnershipSweeps();
       await drain();
-      expect(removeAppLocally.callCount).to.equal(1);
+      expect(uninstallApplication.callCount).to.equal(1);
       expect(log.error.calledWithMatch(/ownership cleanup failed/)).to.equal(true);
 
       fireBundleChanged();
       await drain();
-      expect(removeAppLocally.callCount, 'the failure ended the pass, not the sweeping').to.equal(2);
+      expect(uninstallApplication.callCount, 'the failure ended the pass, not the sweeping').to.equal(2);
     });
 
     it('stops sweeping once the subscription is ended', async () => {
-      const removeAppLocally = sinon.stub().resolves();
+      const uninstallApplication = sinon.stub().resolves();
       const { module: m } = loadModule({
-        globalState: gateState(true), dbHelper: offenderDb(), appUninstaller: { removeAppLocally },
+        globalState: gateState(true), dbHelper: offenderDb(), appUninstaller: { uninstallApplication },
       });
 
       const stop = m.startOwnershipSweeps();
       await drain();
-      const after = removeAppLocally.callCount;
+      const after = uninstallApplication.callCount;
 
       stop();
       fireBundleChanged();
       await drain();
 
-      expect(removeAppLocally.callCount).to.equal(after);
+      expect(uninstallApplication.callCount).to.equal(after);
     });
   });
 });
