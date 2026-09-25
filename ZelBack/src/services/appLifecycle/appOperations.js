@@ -14,23 +14,18 @@
  */
 const config = require('config');
 const fs = require('node:fs/promises');
-const path = require('node:path');
 const axios = require('axios');
 const log = require('../../lib/log');
 const serviceHelper = require('../serviceHelper');
 const messageHelper = require('../messageHelper');
 const mastershipGrantGate = require('./mastershipGrantGate');
-const deviceHelper = require('../deviceHelper');
 const dockerService = require('../dockerService');
 const verificationHelper = require('../verificationHelper');
 const daemonServiceMiscRpcs = require('../daemonService/daemonServiceMiscRpcs');
 const fluxNetworkHelper = require('../fluxNetworkHelper');
 // eslint-disable-next-line no-unused-vars
 const upnpService = require('../upnpService');
-const {
-  appsFolder,
-  appsFolderPath,
-} = require('../utils/appConstants');
+const { appsFolder } = require('../utils/appConstants');
 const {
   extractIp, extractPort, ipsMatch, DEFAULT_API_PORT,
 } = require('../utils/socketAddressUtils');
@@ -100,8 +95,6 @@ const standDownAnnounced = new Set();
 // Same latch for the no-primary announcement: stated once when an app enters the
 // no-primary state, cleared when FDM reports a primary again.
 const noPrimaryAnnounced = new Set();
-
-const fluxDirPath = process.env.FLUXOS_PATH || path.join(process.env.HOME, 'zelflux');
 
 /**
  * Get the FDM index based on app name first letter (distributes across 4 servers)
@@ -1708,108 +1701,6 @@ async function runRestoreTask(appname, restore, type, zelidauth, report, { force
 }
 
 /**
- * Remove test app mount
- * @param {string} specifiedVolume - Volume to remove
- * @returns {Promise<void>}
- */
-async function removeTestAppMount(specifiedVolume) {
-  try {
-    const appId = 'flux_fluxTestVol';
-    log.info('Mount Test: Unmounting volume');
-    const umountResult = await serviceHelper.runCommand('umount', { params: [appsFolder + appId], runAsRoot: true, logError: false });
-    if (umountResult.error) {
-      log.error(umountResult.error);
-      log.error('Mount Test: An error occured while unmounting volume. Continuing. Most likely false positive.');
-    } else {
-      log.info('Mount Test: Volume unmounted');
-    }
-
-    log.info('Mount Test: Cleaning up data');
-    const removeDataResult = await serviceHelper.runCommand('rm', { params: ['-rf', appsFolder + appId], runAsRoot: true, logError: false });
-    if (removeDataResult.error) {
-      log.error(removeDataResult.error);
-      log.error('Mount Test: An error occured while cleaning up data. Continuing. Most likely false positive.');
-    }
-    log.info('Mount Test: Data cleaned');
-    log.info('Mount Test: Cleaning up data volume');
-    const volumeToRemove = specifiedVolume || `${fluxDirPath}appvolumes/${appId}FLUXFSVOL`;
-    const removeVolumeResult = await serviceHelper.runCommand('rm', { params: ['-rf', volumeToRemove], runAsRoot: true, logError: false });
-    if (removeVolumeResult.error) {
-      log.error(removeVolumeResult.error);
-      log.error('Mount Test: An error occured while cleaning up volume. Continuing. Most likely false positive.');
-    }
-    log.info('Mount Test: Volume cleaned');
-  } catch (error) {
-    log.error('Mount Test Removal: Error');
-    log.error(error);
-  }
-}
-
-/**
- * Test application mounting capability
- * @returns {Promise<void>}
- */
-async function testAppMount() {
-  try {
-    // before running, try to remove first
-    await removeTestAppMount();
-    const appSize = 1; // GB
-    const overHeadRequired = 2; // GB
-    const appId = 'flux_fluxTestVol';
-
-    log.info('Mount Test: started');
-    log.info('Mount Test: Searching available space...');
-
-    // The mount test must exercise the same filesystem real app volumes land on (the
-    // apps folder's own disk — /dat on Arcane, never the root/overlay disk), so resolve
-    // that one filesystem directly instead of scanning every mount and taking the first
-    // with room (which could allocate the test volume on /mnt/root). mkdir the apps base
-    // first so findmnt can resolve its mountpoint on a fresh node.
-    await serviceHelper.runCommand('mkdir', { params: ['-p', appsFolderPath], runAsRoot: true });
-    const useThisVolume = await deviceHelper.mountForTarget(appsFolderPath);
-    const bytesPerGb = 1024 ** 3;
-    if (useThisVolume.availableBytes < (appSize + overHeadRequired) * bytesPerGb) {
-      // no useable volume has such a big space for the app
-      log.warn('Mount Test: Insufficient space on Flux Node. No useable volume found.');
-      return;
-    }
-
-    // now we know there is a space and we have a volume we can operate with. Let's do volume magic
-    log.info('Mount Test: Space found');
-    log.info('Mount Test: Allocating space...');
-
-    let volumePath = `${useThisVolume.target}/${appId}FLUXFSVOL`;
-    if (useThisVolume.target === '/') {
-      await serviceHelper.runCommand('mkdir', { params: ['-p', `${fluxDirPath}appvolumes`], runAsRoot: true });
-      volumePath = `${fluxDirPath}appvolumes/${appId}FLUXFSVOL`; // if root mount then temp file is in flux folder/appvolumes
-    }
-
-    await serviceHelper.runCommand('fallocate', { params: ['-l', `${appSize}G`, volumePath], runAsRoot: true });
-
-    log.info('Mount Test: Space allocated');
-    log.info('Mount Test: Creating filesystem...');
-
-    await serviceHelper.runCommand('mke2fs', { params: ['-t', 'ext4', volumePath], runAsRoot: true });
-    log.info('Mount Test: Filesystem created');
-    log.info('Mount Test: Making directory...');
-
-    await serviceHelper.runCommand('mkdir', { params: ['-p', appsFolder + appId], runAsRoot: true });
-    log.info('Mount Test: Directory made');
-    log.info('Mount Test: Mounting volume...');
-
-    await serviceHelper.runCommand('mount', { params: ['-o', 'loop', volumePath, appsFolder + appId], runAsRoot: true });
-    log.info('Mount Test: Volume mounted. Test completed.');
-    // run removal
-    removeTestAppMount(volumePath);
-  } catch (error) {
-    log.error('Mount Test: Error...');
-    log.error(error);
-    // run removal
-    removeTestAppMount();
-  }
-}
-
-/**
  * Validates that an application update is compatible with the previous version.
  * Enforces structural consistency rules based on app specification version:
  * - v1-3: Repository tags (repotag) cannot be changed
@@ -3255,8 +3146,6 @@ module.exports = {
   runBackupTask,
   appendRestoreTask,
   runRestoreTask,
-  removeTestAppMount,
-  testAppMount,
   reconcileApp,
   shutdownPlanResync,
   coordinateActiveStandbyApps,
