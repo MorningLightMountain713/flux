@@ -24,6 +24,7 @@ const appsRepository = require('../appDatabase/appsRepository');
 const entitlementsState = require('../entitlementsState');
 const marketplaceTemplateCache = require('../marketplace/marketplaceTemplateCache');
 const contentBlobService = require('../appLifecycle/contentBlobService');
+const { isFluxStorageUrl, storageLinkOf } = require('../utils/fluxStorage');
 const contentSlotService = require('../appLifecycle/contentSlotService');
 const fluxDriveClient = require('../utils/fluxDriveClient');
 const globalState = require('../utils/globalState');
@@ -129,6 +130,27 @@ async function assertMatchesMarketplaceTemplate(spec) {
  * @param {object} meta - { contentHash, timestamp, type, daemonHeight } from the signed envelope
  * @returns {Promise<{ spec: object, isEncrypted: boolean, broadcastBlob: object }>}
  */
+/**
+ * Refuses a live submission whose storage links do not address Flux storage over
+ * https. What a node fetches is decided at the fetch (fluxStorageRefs), for every app
+ * whatever height it was registered at; this tells the author of a new one before it
+ * reaches the chain. A v1-v8 component carries its links as env.F_S_ENV and as an
+ * `F_S_CMD=` argument.
+ * @param {object} spec - the resolved specification
+ */
+function assertStorageLinksAddressFluxStorage(spec) {
+  // eslint-disable-next-line no-restricted-syntax
+  for (const [name, comp] of spec.componentEntries()) {
+    const links = [
+      comp.env && typeof comp.env.F_S_ENV === 'string' ? comp.env.F_S_ENV : null,
+      ...(Array.isArray(comp.cmd) ? comp.cmd.map((arg) => storageLinkOf(arg)) : []),
+    ].filter((link) => link !== null);
+    if (links.some((link) => !isFluxStorageUrl(link))) {
+      throw new Error(`Storage link for component ${name} of Flux App ${spec.name} must address Flux storage over https`);
+    }
+  }
+}
+
 async function resolveSubmission(appSpecification, {
   contentHash, timestamp, type, daemonHeight,
 }) {
@@ -212,6 +234,8 @@ async function resolveSubmission(appSpecification, {
       throw err;
     }
   }
+
+  assertStorageLinksAddressFluxStorage(spec);
 
   // POLICY IS A PRECONDITION OF ANSWERING. The blocked-repository list is part of the
   // signed bundle, so without a confirmed one this node cannot establish that an image

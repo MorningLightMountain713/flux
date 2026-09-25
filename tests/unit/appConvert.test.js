@@ -91,7 +91,7 @@ describe('appConvert (registryManager) tests', () => {
       name: 'convertme',
       compose: [{
         ...V8_SUBMISSION.compose[0],
-        environmentParameters: ['F_S_ENV=https://storage.example.com/env.json'],
+        environmentParameters: ['F_S_ENV=https://storage.runonflux.io/v1/env/abc'],
       }],
       ...overrides,
     };

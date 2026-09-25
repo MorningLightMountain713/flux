@@ -2,6 +2,7 @@
 
 const log = require('../../lib/log');
 const serviceHelper = require('../serviceHelper');
+const { isFluxStorageUrl, storageLinkOf } = require('./fluxStorage');
 
 // A single Flux Storage payload is an array of short strings ("KEY=value" for
 // env, individual argv items for cmd). Match the install-time limits.
@@ -16,11 +17,21 @@ const FS_MAX_ITEM_LENGTH = 5_000_000;
  * Throws on any failure: callers must treat an unresolvable reference as fatal
  * and never proceed with a partial result.
  *
+ * A LINK THAT DOES NOT ADDRESS FLUX STORAGE OVER HTTPS IS REFUSED, and never
+ * fetched: the request is signed by this node, so a link it would follow anywhere
+ * is a request it signs for whoever wrote the specification. Decided here, at the
+ * fetch, so it binds every app whatever height it was registered at.
+ *
  * @param {string} url - Flux Storage URL carried in the F_S_* reference
  * @param {string} appName
  * @returns {Promise<any>} the stored payload (expected: array of strings)
  */
 async function obtainPayloadFromStorage(url, appName) {
+  // Ahead of the try so the reason reaches the log as itself rather than as the
+  // generic failure the catch reports for a storage that did not answer.
+  if (!isFluxStorageUrl(url)) {
+    throw new Error(`Storage link ${url} does not address Flux storage over https`);
+  }
   try {
     // Signed request: timestamp-bound basic auth so even unsecured storages can
     // verify the caller against the deterministic node list.
@@ -39,6 +50,9 @@ async function obtainPayloadFromStorage(url, appName) {
         'flux-app': appName,
       },
       timeout: 20_000,
+      // The host is the whole of the check, so a redirect off it would put the node
+      // back where it started: fetching an address chosen by the response.
+      maxRedirects: 0,
     };
     const response = await serviceHelper.axiosGet(url, axiosConfig);
     return response.data;
@@ -101,7 +115,7 @@ async function resolveStorageRefs(components, appName) {
     if (Array.isArray(comp.cmd)) {
       const ref = comp.cmd.find((c) => typeof c === 'string' && c.startsWith('F_S_CMD='));
       if (ref) {
-        const url = ref.split('F_S_CMD=')[1];
+        const url = storageLinkOf(ref);
         // eslint-disable-next-line no-await-in-loop
         const payload = await obtainPayloadFromStorage(url, appName);
         assertStorageArray(payload, `Commands for component ${name}`);
