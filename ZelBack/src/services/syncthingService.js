@@ -23,7 +23,7 @@ const syncthingURL = `http://${config.get('syncthing.ip')}:${config.get('syncthi
 
 // Sent rather than inherited, so the page size a caller totals against is the one
 // it asked for. syncthing's own default is this value; a default is not a contract.
-const LOCAL_CHANGED_PAGE_SIZE = 65536;
+const LOCAL_CHANGED_PAGE_SIZE = 65_536;
 
 // The most pages one folder is read across in a single pass - a bound of our own,
 // because the entry count belongs to the app that writes the files and these requests

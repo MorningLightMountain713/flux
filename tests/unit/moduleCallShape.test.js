@@ -113,7 +113,7 @@ const requireSpecOf = (init) => (
 
 describe('a call between services names something the callee exports', () => {
   it('resolves every statically known cross-module member call', function () {
-    this.timeout(60000);
+    this.timeout(60_000);
 
     const unresolved = [];
     let checkedModules = 0;

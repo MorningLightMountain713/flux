@@ -123,7 +123,7 @@ describe('syncthingService tests', () => {
     // which copy of an owner's data survives an election, so a caller reading one
     // page reads a prefix of any larger folder - and two nodes each totalling their
     // own prefix produce figures that no longer order by how much each holds.
-    const PAGE = 65536;
+    const PAGE = 65_536;
     const MAX_PAGES = 16;
     const entry = (i) => ({ name: `f${i}`, type: 'FILE_INFO_TYPE_FILE', size: 1, deleted: false, modified: '2026-09-16T10:00:00Z' });
     const pageOf = (n) => Array.from({ length: n }, (_, i) => entry(i));

@@ -1,3 +1,5 @@
+'use strict';
+
 const crypto = require('node:crypto');
 const qs = require('qs');
 const log = require('../lib/log');
@@ -33,7 +35,7 @@ const { lruRateLimit } = require('./utils/rateLimit');
  * Only the content types no mounted parser claims reach that path; a JSON body
  * is bounded by express.json before it gets here.
  */
-const MAX_BODY_SIZE = 10000;
+const MAX_BODY_SIZE = 10_000;
 const TXID_MAX_LENGTH = 500;
 const WS_POLL_INTERVAL = 500;
 // A payment button is pressed by a person, so a handful a second from one

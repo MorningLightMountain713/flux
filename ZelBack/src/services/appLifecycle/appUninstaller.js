@@ -30,22 +30,6 @@ const globalCommand = require('../appManagement/globalCommand');
 const volumeService = require('../utils/volumeService');
 const fluxEventBus = require('../utils/fluxEventBus');
 const { Privilege, authOf } = require('../utils/privileges');
-const { RemovalOutcome } = require('../utils/removalOutcome');
-
-/**
- * The node does not hold this application.
- *
- * WHAT MARKS IT IS THE TYPE, NOT THE WORDS. A caller that has to tell "it is not here"
- * from "the removal did not complete" reads the mark; the message is the body these
- * endpoints answer with, and belongs to whoever reads the response stream.
- *
- * `name` is left as Error's, because it is serialised into that same body.
- */
-class AppNotFoundError extends Error {
-  constructor() {
-    super('Flux App not found');
-  }
-}
 const fluxShutdowndClient = require('../utils/fluxShutdowndClient');
 const pendingTeardownStore = require('./pendingTeardownStore');
 const meshReconciler = require('../appMesh/meshReconciler');

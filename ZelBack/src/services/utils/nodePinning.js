@@ -1,3 +1,5 @@
+'use strict';
+
 const { socketAddressesMatch } = require('./socketAddressUtils');
 
 // An app spec's `nodes` array pins the app to named nodes. An entry names a node

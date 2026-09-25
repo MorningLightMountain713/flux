@@ -179,11 +179,11 @@ class FluxCacheManager {
     // asks and answers never enter it, so its entries no longer carry the payload of
     // messages nobody will ever fetch by hash.
     announcementSeen: {
-      max: 1_000,
+      max: 1000,
       ttl: 5 * FluxCacheManager.oneMinute,
     },
     announcementStore: {
-      max: 1_000,
+      max: 1000,
       ttl: 5 * FluxCacheManager.oneMinute,
     },
     wsPeerCache: {
