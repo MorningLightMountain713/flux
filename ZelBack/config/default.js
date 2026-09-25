@@ -947,7 +947,6 @@ module.exports = {
     // them; what changes is that they can now be changed.
 
     // app state sync
-    appSyncMaxPeers: 5, // distinct peers one sync round may ask, initial batch plus replacements
     ingressRefreshBlocks: 200, // steady-state ingress-attestation anti-entropy cadence
     reconnectSyncSlackMs: 120_000, // how far before an observed loss a scoped reconnect pull reaches back
     manifestIndexTimeoutMs: 15_000,

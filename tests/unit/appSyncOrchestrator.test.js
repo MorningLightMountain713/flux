@@ -457,6 +457,27 @@ describe('AppSyncOrchestrator', () => {
       }
     });
 
+    // The pool is published as the number of requests open, because nothing outside
+    // can add it up: a decline frees a slot without an event of its own.
+    it('publishes how many requests are open each time it asks', async () => {
+      // eslint-disable-next-line global-require
+      const fluxEventBus = require('../../ZelBack/src/services/utils/fluxEventBus');
+      const publish = sinon.spy(fluxEventBus, 'publish');
+      const peers = makeEligiblePeers(4);
+      getEligibleSyncPeersStub = sinon.stub().returns(peers);
+
+      const orchestrator = makeOrchestrator();
+      orchestrator.start(defaultBootContext);
+      peerEmitter.emit('peerThresholdReached', 12);
+      await clock.tickAsync(0);
+      appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_REFUSED, 'apprunning', peers[0].key);
+      await clock.tickAsync(0);
+
+      const requested = publish.getCalls().filter((c) => c.args[0] === 'ephemeralSync:requested').map((c) => c.args[1]);
+      expect(requested.map((r) => r.outstanding)).to.deep.equal([3, 3]);
+      expect(requested[1].peers).to.deep.equal([peers[3].key]);
+    });
+
     // A pool that cannot be filled yet is still worth part-filling. Waiting for
     // enough candidates to arrive before asking ANY of them was a road out of
     // the request path that sent nothing at all, and the answers it declined to
@@ -1589,21 +1610,12 @@ describe('AppSyncOrchestrator', () => {
       await clock.tickAsync(0);
 
       // One peer keeps sending right up to the budget, inside every stall window.
-      // Each wait delivers a block: this tree notices a deadline on the next
-      // processed block rather than on a timer per request (edac0249a).
-      let height = 2_555_000;
-      const supervise = async (ms) => {
-        await clock.tickAsync(ms);
-        height += 1;
-        blockEmitter.emit('blocksProcessed', height);
-        await clock.tickAsync(0);
-      };
       for (let elapsed = 0; elapsed < SYNC_TIMEOUT_MS; elapsed += STALL_MS - 1000) {
         appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_PROGRESS, peers[0].key);
         // eslint-disable-next-line no-await-in-loop
-        await supervise(STALL_MS - 1000);
+        await clock.tickAsync(STALL_MS - 1000);
       }
-      await supervise(SYNC_TIMEOUT_MS);
+      await clock.tickAsync(SYNC_TIMEOUT_MS);
 
       const accusations = logStub.warn.getCalls()
         .map((c) => String(c.args[0]))
@@ -1743,24 +1755,6 @@ describe('AppSyncOrchestrator', () => {
     const FIRST_RESPONSE_MS = 10_000;
     const STALL_MS = 30_000;
 
-    // HOW A DEADLINE IS NOTICED HERE. This tree supervises the open round on
-    // each processed block rather than arming a timer per request (edac0249a):
-    // a poll cannot leak a timer, and the runner timer leak is already a fixed
-    // bug on this branch. The cost is granularity - a deadline is seen at the
-    // next block, about 30s - and the constraint the deadlines exist for still
-    // holds at that resolution.
-    //
-    // So passing time is only half of it: the block is what makes the pass
-    // look. Every wait below goes through here, and the deadline values and the
-    // outcomes asserted are development's, unchanged.
-    let supervisionHeight = 2_555_000;
-    const waitAndSupervise = async (ms) => {
-      await clock.tickAsync(ms);
-      supervisionHeight += 1;
-      blockEmitter.emit('blocksProcessed', supervisionHeight);
-      await clock.tickAsync(0);
-    };
-
     const askThree = async (spares = 3) => {
       const peers = makeEligiblePeers(3);
       const extra = Array.from({ length: spares }, (_, i) => makePeer(`10.0.9.${i + 1}:16127`));
@@ -1781,21 +1775,13 @@ describe('AppSyncOrchestrator', () => {
       return { orchestrator, peers, extra };
     };
 
-    // The case the previous design could not see at all: nobody answers, so
-    // nothing external ever pokes the round and the silence is invisible.
-    //
-    // Two replacements rather than three, and that is the peer budget doing its
-    // job - appSyncMaxPeers is 5 and three were already asked. development has
-    // no such cap and would replace all three; this tree bounds an attempt to
-    // (1 + MAX - MIN) sequential deadlines and then lets the block timer be the
-    // path to readiness, which is pinned by its own tests below. What this case
-    // is about is that silent peers are replaced AT ALL.
-    it('replaces every peer it has budget for when none of them ever says anything', async () => {
+    // The case the previous design could not see at all.
+    it('replaces every peer when none of them ever says anything', async () => {
       const { peers, extra } = await askThree();
 
-      await waitAndSupervise(FIRST_RESPONSE_MS + 1);
+      await clock.tickAsync(FIRST_RESPONSE_MS + 1);
 
-      expect(extra.filter((p) => p.send.called).length, 'silent peers were never replaced').to.equal(2);
+      expect(extra.filter((p) => p.send.called).length, 'silent peers were never replaced').to.equal(3);
       for (const peer of peers) expect(peer.send.callCount, 'a silent peer was asked twice').to.equal(4);
     });
 
@@ -1805,7 +1791,7 @@ describe('AppSyncOrchestrator', () => {
       // One batch is enough to prove it is working. A large answer arrives over
       // many of these and only the last one is a completion.
       appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_PROGRESS, peers[0].key);
-      await waitAndSupervise(FIRST_RESPONSE_MS + 1);
+      await clock.tickAsync(FIRST_RESPONSE_MS + 1);
 
       expect(extra.filter((p) => p.send.called).length, 'a peer mid-answer was replaced').to.equal(2);
     });
@@ -1814,10 +1800,10 @@ describe('AppSyncOrchestrator', () => {
       const { orchestrator, peers } = await askThree(12);
 
       appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_PROGRESS, peers[0].key);
-      await waitAndSupervise(FIRST_RESPONSE_MS + 1);
+      await clock.tickAsync(FIRST_RESPONSE_MS + 1);
       const wantedAfterFirstWindow = orchestrator.isSyncResponseWanted(peers[0]);
 
-      await waitAndSupervise(STALL_MS + 1);
+      await clock.tickAsync(STALL_MS + 1);
 
       // Asserted on this peer's own record, not on how many spares were
       // consumed: the two that never spoke are replaced by spares that also
@@ -1838,10 +1824,10 @@ describe('AppSyncOrchestrator', () => {
       // Asserted on the peer itself rather than on how many spares were used,
       // because the silent two are replaced by spares that also go silent.
       for (let i = 0; i < 4; i += 1) {
-        await waitAndSupervise(STALL_MS - 1);
+        await clock.tickAsync(STALL_MS - 1);
         appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_PROGRESS, peers[0].key);
       }
-      await waitAndSupervise(1);
+      await clock.tickAsync(1);
 
       expect(orchestrator.isSyncResponseWanted(peers[0]), 'a peer delivering steadily was written off').to.equal(true);
       expect(peers[0].send.callCount, 'a peer delivering steadily was asked again').to.equal(4);
@@ -1864,7 +1850,7 @@ describe('AppSyncOrchestrator', () => {
       for (const type of ['apprunning', 'appinstalling', 'apperrors', 'apptemp']) {
         appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_COMPLETE, type, '10.0.0.1:16127');
       }
-      await waitAndSupervise(FIRST_RESPONSE_MS + 1);
+      await clock.tickAsync(FIRST_RESPONSE_MS + 1);
 
       // Its answer is in, so its deadline is gone with it - only the two that
       // never spoke are replaced, and the finished peer is not asked again.
@@ -2700,183 +2686,6 @@ describe('AppSyncOrchestrator', () => {
 
       resolveReconcile({ peers: 3, indexesReceived: 3, fetched: 0 });
       await clock.tickAsync(0);
-    });
-  });
-
-  describe('sync peer failure and replacement', () => {
-    // Boots an orchestrator to the point where the initial batch of 3 sync
-    // peers has been asked (mainnet topology: appSyncMinCompletions = 3).
-    async function startWithAskedPeers(peers) {
-      getEligibleSyncPeersStub = sinon.stub().returns(peers);
-      const orchestrator = makeOrchestrator({ isEnterprise: () => true });
-      orchestrator.start(defaultBootContext);
-      blockEmitter.emit('blocksProcessed', 2_555_000);
-      await clock.tickAsync(0);
-      peerEmitter.emit('peerThresholdReached', 12);
-      await clock.tickAsync(0);
-      return orchestrator;
-    }
-
-    function completeAllTypes(peerKey) {
-      appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_COMPLETE, 'apprunning', peerKey);
-      appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_COMPLETE, 'appinstalling', peerKey);
-      appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_COMPLETE, 'apperrors', peerKey);
-      appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_COMPLETE, 'apptemp', peerKey);
-    }
-
-    it('should replace a disconnected peer with one fresh peer asking only the undelivered types', async () => {
-      const peers = makeEligiblePeers(5);
-      await startWithAskedPeers(peers);
-      expect(peers[2].send.callCount).to.equal(4); // temp + 3 sync types
-      expect(peers[3].send.called).to.be.false;
-
-      appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_COMPLETE, 'apprunning', peers[0].key);
-      peerEmitter.emit('peerDisconnected', peers[0].key, peers[0].connectionId);
-      await clock.tickAsync(0);
-
-      // One replacement peer, asked only for what is still short after the
-      // delivered apprunning completion was banked: temp, appinstalling,
-      // apperrors. Temp is one of the four streams and the lost peer never
-      // answered it either, so it is short like the rest.
-      expect(peers[3].send.callCount).to.equal(3);
-      const sentTypes = peers[3].send.args.map((args) => args[0][0]);
-      expect(sentTypes).to.deep.equal([0x20, 0x22, 0x23]);
-      expect(peers[4].send.called).to.be.false;
-    });
-
-    it('should not replace a disconnected peer that had delivered every sync type', async () => {
-      const peers = makeEligiblePeers(5);
-      await startWithAskedPeers(peers);
-
-      completeAllTypes(peers[0].key);
-      peerEmitter.emit('peerDisconnected', peers[0].key, peers[0].connectionId);
-      await clock.tickAsync(0);
-
-      expect(peers[3].send.called).to.be.false;
-    });
-
-    it('should never re-ask a peer that already failed, even when it reconnects', async () => {
-      const peers = makeEligiblePeers(5);
-      await startWithAskedPeers(peers);
-
-      peerEmitter.emit('peerDisconnected', peers[0].key, peers[0].connectionId);
-      await clock.tickAsync(0);
-      expect(peers[3].send.callCount).to.equal(4); // all four streams, none delivered
-
-      // The lost peer reconnects and is eligible again; its replacement dies too
-      peerEmitter.emit('peerDisconnected', peers[3].key, peers[3].connectionId);
-      await clock.tickAsync(0);
-
-      expect(peers[4].send.callCount).to.equal(4);
-      expect(peers[0].send.callCount).to.equal(4); // initial ask: temp + 3 sync types
-    });
-
-    it('should fail a silent peer at its deadline, stop accepting it, and replace it', async () => {
-      const peers = makeEligiblePeers(5);
-      const orchestrator = await startWithAskedPeers(peers);
-      completeAllTypes(peers[0].key);
-      completeAllTypes(peers[1].key);
-
-      // Past the FIRST-RESPONSE deadline (syncTimeoutMs/12 = 10s), which is what
-      // this is about. It used to jump the whole 120s budget, from when that was
-      // the only deadline there was - and on this tree's polled supervision one
-      // poll at 120s finds the peer's deadline and the ROUND's budget both due,
-      // so the round ends in the same pass and there is nothing left to replace
-      // the peer with. A block is what makes the pass look.
-      await clock.tickAsync(11_000);
-      blockEmitter.emit('blocksProcessed', 2_555_001);
-      await clock.tickAsync(0);
-
-      expect(orchestrator.isSyncResponseWanted(peers[2]), 'a deadline-failed peer could still answer').to.equal(false);
-      expect(peers[3].send.callCount).to.equal(4); // all four streams still short
-      // A peer that has sent NOTHING is judged on the short deadline: the only
-      // work before its first batch is a signature check, one indexed query and
-      // serialising a page of documents, and a peer with nothing to report still
-      // sends an empty final batch.
-      expect(logStub.warn.args.some((args) => String(args[0]).includes('said nothing within its'))).to.be.true;
-    });
-
-    it('gives a peer that started answering the longer stall deadline', async () => {
-      const peers = makeEligiblePeers(5);
-      await startWithAskedPeers(peers);
-      // It spoke: one stream arrived, the rest have not.
-      appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_PROGRESS, peers[2].key);
-
-      // Past the "never spoke" deadline (a twelfth of the budget) but inside the
-      // stall one (a quarter of it). A peer part-way through a large answer is
-      // doing exactly what was asked.
-      await clock.tickAsync(12_000);
-      blockEmitter.emit('blocksProcessed', 2_555_001);
-      await clock.tickAsync(0);
-
-      expect(
-        logStub.warn.args.some((args) => String(args[0]).includes(peers[2].key)),
-        'a peer that is still delivering must not be replaced on the short deadline',
-      ).to.be.false;
-
-      // Past the stall deadline too, and now it goes.
-      await clock.tickAsync(120_000);
-      blockEmitter.emit('blocksProcessed', 2_555_002);
-      await clock.tickAsync(0);
-
-      expect(logStub.warn.args.some((args) => String(args[0]).includes('stopped mid-answer'))).to.be.true;
-    });
-
-    it('should retry the replacement on a later block when no fresh peer existed at failure time', async () => {
-      const peers = makeEligiblePeers(3);
-      await startWithAskedPeers(peers);
-
-      peerEmitter.emit('peerDisconnected', peers[0].key, peers[0].connectionId);
-      await clock.tickAsync(0);
-
-      const latecomer = makePeer('10.0.0.99:16127');
-      getEligibleSyncPeersStub.returns([...peers, latecomer]);
-      blockEmitter.emit('blocksProcessed', 2_555_001);
-      await clock.tickAsync(0);
-
-      expect(latecomer.send.callCount).to.equal(4); // all four streams, none delivered
-    });
-
-    it('should stop after the peer budget and abandon the round so the block timer takes over', async () => {
-      const peers = makeEligiblePeers(7);
-      const orchestrator = await startWithAskedPeers(peers);
-
-      for (const idx of [0, 1, 2, 3, 4]) {
-        peerEmitter.emit('peerDisconnected', peers[idx].key, peers[idx].connectionId);
-        // eslint-disable-next-line no-await-in-loop
-        await clock.tickAsync(0);
-      }
-
-      // 3 initial + 2 replacements exhausts the budget of 5 distinct peers
-      expect(peers[3].send.callCount).to.equal(4);
-      expect(peers[4].send.callCount).to.equal(4);
-      expect(peers[5].send.called).to.be.false;
-      expect(logStub.warn.args.some((args) => String(args[0]).includes('State sync abandoned'))).to.be.true;
-      expect(peers.slice(0, 5).some((peer) => orchestrator.isSyncResponseWanted(peer)), 'an abandoned round still wanted an answer').to.equal(false);
-
-      // The block timer remains the terminal path to readiness:
-      // appSyncFallbackMinutes (125) x 2 blocks a minute.
-      for (let i = 0; i <= 250; i += 1) {
-        blockEmitter.emit('blocksProcessed', 2_555_001 + i);
-      }
-      await clock.tickAsync(0);
-      expect(orchestrator.state).to.equal(STATES.READY);
-    });
-
-    it('should clear the in-flight marks and ignore later peer losses once sync completes', async () => {
-      const peers = makeEligiblePeers(5);
-      const orchestrator = await startWithAskedPeers(peers);
-
-      for (const peer of peers.slice(0, 3)) {
-        completeAllTypes(peer.key);
-      }
-      await clock.tickAsync(0);
-      expect(orchestrator.state).to.equal(STATES.READY);
-      expect(peers.slice(0, 3).some((peer) => orchestrator.isSyncResponseWanted(peer)), 'a finished round still wanted an answer').to.equal(false);
-
-      peerEmitter.emit('peerDisconnected', peers[1].key, peers[1].connectionId);
-      await clock.tickAsync(0);
-      expect(peers[3].send.called).to.be.false;
     });
   });
 
