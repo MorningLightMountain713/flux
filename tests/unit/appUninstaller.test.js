@@ -8,6 +8,8 @@ const operationRegistry = require('../../ZelBack/src/services/utils/operationReg
 const { asConfig } = require('./fixtures/config');
 
 describe('appUninstaller tests', () => {
+  let runCommandStub;
+  let volumeServiceStub;
   let appUninstaller;
   let verificationHelperStub;
   let messageHelperStub;
@@ -125,6 +127,11 @@ describe('appUninstaller tests', () => {
       onComponentTeardown: sinon.stub().resolves(),
     };
 
+    runCommandStub = sinon.stub().resolves({ error: null, stdout: '', stderr: '' });
+    volumeServiceStub = {
+      getVolumeFilePath: sinon.stub().resolves({ path: '/tmp/flux-test-volume', conclusive: true }),
+      isPathMounted: sinon.stub().resolves(false),
+    };
     appUninstaller = proxyquire('../../ZelBack/src/services/appLifecycle/appUninstaller', {
       config: asConfig(configStub),
       '../verificationHelper': verificationHelperStub,
@@ -134,14 +141,12 @@ describe('appUninstaller tests', () => {
         ensureBoolean: sinon.stub().returnsArg(0),
         ensureNumber: sinon.stub().callsFake((v) => Number(v)),
         delay: sinon.stub().resolves(),
+        runCommand: runCommandStub,
       },
       '../dockerService': dockerServiceStub,
       // Required by appUninstaller and previously left real: getVolumeFilePath and
       // isPathMounted run through the real serviceHelper and spawn processes.
-      '../utils/volumeService': {
-        getVolumeFilePath: sinon.stub().resolves('/tmp/flux-test-volume'),
-        isPathMounted: sinon.stub().resolves(false),
-      },
+      '../utils/volumeService': volumeServiceStub,
       // Left real, this reads the developer's own crontab.
       crontab: { load: (cb) => cb(null, null) },
       '../../lib/log': logStub,
@@ -328,6 +333,40 @@ describe('appUninstaller tests', () => {
       sinon.assert.calledOnceWithExactly(
         mastershipGrantGateStub.onComponentTeardown, 'web_myapp', 'myapp',
       );
+    });
+  });
+
+  describe('the teardown removes the image the search found', () => {
+    const teardown = () => appUninstaller.runTeardown({
+      key: 'myapp',
+      name: 'myapp',
+      networkName: 'myapp',
+      forceKill: false,
+      owner: '1own',
+      reason: 'user-cancel',
+      shutdownBudgetSeconds: 30,
+      components: [{
+        identifier: 'web_myapp', appId: 'fluxweb_myapp', label: 'web', ports: [],
+      }],
+    });
+    const imageRemovals = () => runCommandStub.getCalls()
+      .filter((c) => c.args[0] === 'rm' && String(c.args[1].params[1]).endsWith('FLUXFSVOL'));
+
+    beforeEach(() => {
+      fluxShutdowndClientStub.beginAppStop.resolves({ outcome: 'complete' });
+    });
+
+    it('removes the image wherever the search found it', async () => {
+      volumeServiceStub.getVolumeFilePath.resolves({ path: '/mnt/data2/fluxweb_myappFLUXFSVOL', conclusive: true });
+      await teardown();
+      expect(imageRemovals().map((c) => c.args[1].params)).to.deep.equal([['-rf', '/mnt/data2/fluxweb_myappFLUXFSVOL']]);
+    });
+
+    it('says the image is left on disk when the search could not look everywhere', async () => {
+      volumeServiceStub.getVolumeFilePath.resolves({ path: null, conclusive: false, blocked: 'mount_table_unreadable' });
+      await teardown();
+      expect(imageRemovals()).to.deep.equal([]);
+      sinon.assert.calledWithMatch(logStub.warn, /could not be located and is left on disk/);
     });
   });
 

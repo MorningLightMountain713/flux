@@ -194,7 +194,7 @@ describe('appUninstaller tombstoning teardown', () => {
         // "volume NOT unmounted under a live container" guard below can only ever
         // pass, whatever the production code does.
         isPathMounted: sinon.stub().resolves(true),
-        getVolumeFilePath: sinon.stub().resolves(null),
+        getVolumeFilePath: sinon.stub().resolves({ path: null, conclusive: true }),
       },
       appSwapPoolService: { reconcile: sinon.stub().resolves() },
       telemetrySinkCache: { deleteSink: sinon.stub(), hasAnyTelemetryApps: sinon.stub().returns(false) },
