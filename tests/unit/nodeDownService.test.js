@@ -30,8 +30,14 @@ function makeHarness() {
     certificatesFor: sinon.stub().resolves([]),
     sign: sinon.stub().callsFake(async (message) => JSON.stringify(message)),
   };
-  const world = { height: 100, ownStatus: null };
+  const world = {
+    height: 100, ownStatus: null, listReady: true, listWaiters: [],
+  };
   const networkStateServiceStub = {
+    onReady: (callback) => {
+      if (world.listReady) callback();
+      else world.listWaiters.push(callback);
+    },
     membershipFingerprint: () => 'fp1',
     networkState: () => [{
       txhash: 'me', outidx: 0, pubkey: 'pk', ip: MY_IP, added_height: 1,
@@ -153,6 +159,27 @@ describe('nodeDownService', () => {
     service.start(transport);
     await tick();
     try {
+      sinon.assert.calledWith(transport.dial, DUTY_IP);
+    } finally {
+      service.stop();
+    }
+  });
+
+  it('dials its duties the moment the node list arrives, when it started before the list', async () => {
+    const harness = makeHarness();
+    const { service, transport, networkStateServiceStub, world } = harness;
+    withDuty(harness);
+    const listed = networkStateServiceStub.nodeDownTopology;
+    networkStateServiceStub.nodeDownTopology = () => null;
+    world.listReady = false;
+    service.start(transport);
+    await tick();
+    try {
+      sinon.assert.notCalled(transport.dial);
+      networkStateServiceStub.nodeDownTopology = listed;
+      world.listReady = true;
+      world.listWaiters.forEach((callback) => callback());
+      await tick();
       sinon.assert.calledWith(transport.dial, DUTY_IP);
     } finally {
       service.stop();
