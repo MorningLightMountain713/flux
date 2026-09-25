@@ -2042,6 +2042,29 @@ describe('AppSyncOrchestrator', () => {
       expect(orchestrator.isSyncResponseWanted(returned), 'an answered pull still wanted more').to.equal(false);
     });
 
+    it('a node that cannot sign sends no pull and keeps the credit for the next return', async () => {
+      const peers = makeEligiblePeers(3);
+      getEligibleSyncPeersStub = sinon.stub().returns(peers);
+      const orchestrator = makeOrchestrator({ isEnterprise: () => true });
+      orchestrator.start(defaultBootContext);
+      await reachReady();
+      await clock.tickAsync(300_000);
+      const bootSends = peers[0].send.callCount;
+      const lostAtMs = Date.now() - 60_000;
+
+      getFluxNodePrivateKeyStub.resolves(new Error('key unreadable'));
+      peerEmitter.emit('peerReestablished', { key: peers[0].key, lostAtMs });
+      await clock.tickAsync(0);
+      expect(peers[0].send.callCount, 'nothing sent under a key it cannot read').to.equal(bootSends);
+      expect(logStub.error.calledWithMatch(/cannot sign as itself/)).to.equal(true);
+
+      getFluxNodePrivateKeyStub.resolves('L1testprivkey');
+      peerEmitter.emit('peerReestablished', { key: peers[0].key, lostAtMs: Date.now() });
+      await clock.tickAsync(0);
+      expect(peers[0].send.callCount, 'the credit survived to the next return').to.equal(bootSends + 1);
+      expect(encodeAppRunningStub.calledWith(lostAtMs - RECONNECT_SLACK_MS), 'from the earliest gap').to.equal(true);
+    });
+
     it('a pull whose socket dies unanswered hands its loss back: the next re-establishment pulls from the original gap', async () => {
       // A peer at its inbound cap closes every accept within a second, and
       // each accept is a re-establishment: the credit spent on the refused

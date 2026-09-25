@@ -12,8 +12,6 @@ const registryManager = require('../appDatabase/registryManager');
 const globalState = require('../utils/globalState');
 const peerCodec = require('../utils/peerCodec');
 const { nodeSigner } = require('../utils/nodeSigner');
-const fluxNetworkHelper = require('../fluxNetworkHelper');
-const verificationHelper = require('../verificationHelper');
 const { appSyncEvents, EVENTS } = require('../utils/appSyncEvents');
 const fluxEventBus = require('../utils/fluxEventBus');
 
@@ -911,19 +909,22 @@ class AppSyncOrchestrator {
       const peer = this.#getPeerByKey(key);
       if (!peer) continue;
       const sinceTs = Math.max(0, lostAtMs - RECONNECT_SYNC_SLACK_MS);
+      // Through nodeSigner, as the round signs: a node that cannot speak as itself
+      // sends nothing and the peer keeps its credit for the next drain.
       // eslint-disable-next-line no-await-in-loop
-      const pubkey = await fluxNetworkHelper.getFluxNodePublicKey();
-      // eslint-disable-next-line no-await-in-loop
-      const privkey = await fluxNetworkHelper.getFluxNodePrivateKey();
+      const signer = await nodeSigner();
       const requestTs = Date.now();
-      const msg = peerCodec.buildSyncSignatureMessage(
+      const sig = signer && signer.sign(peerCodec.buildSyncSignatureMessage(
         peerCodec.MSG_TYPE.REQUEST_APP_RUNNING, sinceTs, requestTs,
         { legacy: !peer.remoteCapabilities?.has('syncSigV2') },
-      );
-      const sig = verificationHelper.signMessage(msg, privkey);
+      ));
+      if (!sig) {
+        log.error(`AppSyncOrchestrator - reconnect pull to ${key} not sent: this node cannot sign as itself`);
+        return;
+      }
       this.#pendingReconnectPulls.delete(key);
       this.#reconnectPulls.set(key, lostAtMs);
-      this.#sendRequests([peer], 'apprunning (reconnect)', peerCodec.encodeRequestAppRunning(sinceTs, requestTs, pubkey, sig));
+      this.#sendRequests([peer], 'apprunning (reconnect)', peerCodec.encodeRequestAppRunning(sinceTs, requestTs, signer.pubKey, sig));
       fluxEventBus.publish('ephemeralSync:reconnectRequested', { peer: key, sinceTimestamp: sinceTs });
     }
   }
