@@ -1155,7 +1155,7 @@ describe('registryManager tests', () => {
         contacts: ['ops@example.com'],
         compose: [{
           ...V8_SUBMISSION.compose[0],
-          environmentParameters: ['F_S_ENV=https://storage.example.com/env.json'],
+          environmentParameters: ['F_S_ENV=https://storage.runonflux.io/v1/env/abc'],
         }],
       }));
       // Flux Storage is a signed HTTP fetch — I/O, so stubbed at the http seam.

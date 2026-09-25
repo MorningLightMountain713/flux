@@ -176,6 +176,49 @@ describe('appSubmission tests', () => {
     });
   });
 
+  // A storage link a live submission carries addresses Flux storage over https, or the
+  // submission is refused. What a node fetches is decided at the fetch, for every app;
+  // this says so to the author of a new one before it reaches the chain.
+  describe('a submission carrying storage links', () => {
+    const withLinks = (environmentParameters, commands) => {
+      const compose = JSON.parse(JSON.stringify(V8_SUBMISSION.compose));
+      compose[0].environmentParameters = environmentParameters;
+      compose[0].commands = commands;
+      return { ...V8_SUBMISSION, compose };
+    };
+    const submit = async (blob) => {
+      appSubmission = load();
+      const spec = await v8Spec({ compose: blob.compose });
+      stubs.transportHelper.openTransportEnvelope.resolves(blob);
+      stubs.parseSpec.resolves({ isEncrypted: false });
+      stubs.specLibs.validateSubmissionSpec.resolves(spec);
+      return appSubmission.resolveSubmission(blob, { timestamp: 1, type: 'fluxappregister', daemonHeight: 100 });
+    };
+
+    it('is refused when an environment link addresses anything else', async () => {
+      let refused = null;
+      await submit(withLinks(['F_S_ENV=http://storage.runonflux.io/v1/env/abc'], [])).catch((error) => { refused = error; });
+      expect(refused, 'a foreign environment link was accepted').to.be.an('error');
+      expect(refused.message).to.include('must address Flux storage over https');
+    });
+
+    it('is refused when a command link addresses anything else', async () => {
+      let refused = null;
+      await submit(withLinks([], ['run', 'F_S_CMD=https://attacker.example/c'])).catch((error) => { refused = error; });
+      expect(refused, 'a foreign command link was accepted').to.be.an('error');
+      expect(refused.message).to.include('must address Flux storage over https');
+    });
+
+    // The canary: the same submission linking Flux storage goes through.
+    it('goes through when every link addresses Flux storage', async () => {
+      await submit(withLinks(
+        ['F_S_ENV=https://storage.runonflux.io/v1/env/abc'],
+        ['run', 'F_S_CMD=https://storage.runonflux.io/v1/cmd/abc'],
+      ));
+      sinon.assert.calledOnce(stubs.imageArchitectureValidator.verifyImageRegistryAndArchitectures);
+    });
+  });
+
   describe('resolveSubmission', () => {
     it('validates a cleartext v9 submission and broadcasts the cleartext wire form', async () => {
       appSubmission = load();
