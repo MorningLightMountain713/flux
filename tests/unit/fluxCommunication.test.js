@@ -2,6 +2,7 @@
 
 /* eslint-disable no-underscore-dangle */
 const sinon = require('sinon');
+const objectHash = require('object-hash');
 const WebSocket = require('ws');
 const { expect } = require('chai');
 const log = require('../../ZelBack/src/lib/log');
@@ -156,21 +157,21 @@ describe('fluxCommunication tests', () => {
   describe('handleAppMessages tests', () => {
     const privateKey = 'KxA2iy4aVuVKXsK8pBnJGM9vNm4z6PLNRTzsPuSFBw6vWL5StbqD';
     const ownerAddress = '13ienDRfUwFEgfZxm5dk4drTQsmj5hDGwL';
-    let relaySpy;
+    let announceSpy;
 
     before(requireMongo);
 
     beforeEach(async () => {
       peerManager.reset();
       await dbHelper.initiateDB();
-      relaySpy = sinon.stub(fluxCommunicationMessagesSender, 'relay').resolves(true);
+      announceSpy = sinon.stub(peerManager, 'broadcastHash');
     });
 
     afterEach(() => {
       sinon.restore();
     });
 
-    it('should relay a valid app message to peers', async () => {
+    it('should announce a valid app message to peers', async () => {
       sinon.stub(messageStore, 'storeAppTemporaryMessage').resolves({ rebroadcast: true });
       const fromIp = '127.0.0.5';
       const port = '16127';
@@ -245,11 +246,9 @@ describe('fluxCommunication tests', () => {
       wsIncoming.on = sinon.stub();
       peerManager.add(wsIncoming, wsIncoming.ip, port, { source: PEER_SOURCE.INBOUND });
 
-      const messageString = JSON.stringify(message);
-
       await fluxCommunication.handleAppMessages(message, fromIp, port);
 
-      sinon.assert.calledOnceWithExactly(relaySpy, messageString, `${fromIp}:${port}`);
+      sinon.assert.calledOnceWithExactly(announceSpy, objectHash(message.data), `${fromIp}:${port}`);
     }).timeout(10_000);
 
     it('should not send broadcast if signature is invalid', async () => {
@@ -307,7 +306,7 @@ describe('fluxCommunication tests', () => {
 
       await fluxCommunication.handleAppMessages(message, fromIp, port);
 
-      sinon.assert.notCalled(relaySpy);
+      sinon.assert.notCalled(announceSpy);
     });
 
     it('should not send broadcast if app data is invalid', async () => {
@@ -338,19 +337,19 @@ describe('fluxCommunication tests', () => {
 
       await fluxCommunication.handleAppMessages(message, fromIp, port);
 
-      sinon.assert.notCalled(relaySpy);
+      sinon.assert.notCalled(announceSpy);
     });
   });
 
   describe('handleAppRunningMessage tests', () => {
-    let relaySpy;
+    let announceSpy;
 
     before(requireMongo);
 
     beforeEach(async () => {
       peerManager.reset();
       await dbHelper.initiateDB();
-      relaySpy = sinon.stub(fluxCommunicationMessagesSender, 'relay').resolves(true);
+      announceSpy = sinon.stub(peerManager, 'broadcastHash');
     });
 
     afterEach(() => {
@@ -361,7 +360,6 @@ describe('fluxCommunication tests', () => {
       // relay is gated on the event log saying the announcement was news
       sinon.stub(messageStore, 'releaseInstallingClaims').resolves({ released: 0 });
       sinon.stub(messageStore, 'storeAppStateEvent').resolves({ isNewer: true });
-      sinon.stub(daemonServiceMiscRpcs, 'isDaemonSynced').returns({ data: { synced: true, height: 0 } });
       const fromIp = '127.0.0.5';
       const port = '16127';
       const type = 'fluxappregister';
@@ -384,11 +382,9 @@ describe('fluxCommunication tests', () => {
         timestamp,
       };
 
-      const messageString = JSON.stringify(message);
-
       await fluxCommunication.handleAppRunningMessage(message, fromIp, port);
 
-      sinon.assert.calledOnceWithExactly(relaySpy, messageString, `${fromIp}:${port}`);
+      sinon.assert.calledOnceWithExactly(announceSpy, objectHash(message.data), `${fromIp}:${port}`);
     }).timeout(10_000);
 
     it('should not send broadcast if message is older than 3900 seconds', async () => {
@@ -436,7 +432,7 @@ describe('fluxCommunication tests', () => {
 
       await fluxCommunication.handleAppRunningMessage(message, fromIp, port);
 
-      sinon.assert.notCalled(relaySpy);
+      sinon.assert.notCalled(announceSpy);
     }).timeout(5000);
   });
 
@@ -2002,6 +1998,86 @@ describe('hash request/response rides the arrival socket', () => {
       const answer = res.json.firstCall.args[0];
       expect(answer.status).to.equal('error');
       expect(answer.data.message).to.match(/held out of the network \(stood_down\)/);
+    });
+  });
+});
+
+describe('a relayed broadcast is handed to the peer that asks for it', () => {
+  // A relay announces the hash; a peer that lacks the message asks for it by that
+  // hash, and only this node's answer carries it one hop further.
+  const makeSocket = () => ({
+    ip: '46.46.46.46',
+    port: '16127',
+    key: '46.46.46.46:16127',
+    direction: 'inbound',
+    source: PEER_SOURCE.EPHEMERAL,
+    closeCodes: { invalidMsg: 4016 },
+    close: sinon.stub(),
+    send: sinon.stub(),
+    remoteCapabilities: new Set(),
+    badMessageTimestamps: [],
+    msgMap: new Map([['requestHash', 0], ['newHash', 0]]),
+  });
+
+  const broadcast = (type) => ({
+    version: 1,
+    timestamp: Date.now(),
+    pubKey: `pubkey-${type}`,
+    signature: `signature-${type}`,
+    data: {
+      type, version: 1, ip: '47.47.47.47:16127', name: `app-${type}`, broadcastedAt: Date.now(),
+    },
+  });
+
+  const handlers = [
+    ['fluxapptemp', () => sinon.stub(messageStore, 'storeAppTemporaryMessage').resolves({ rebroadcast: true }), fluxCommunication.handleAppMessages],
+    ['fluxapprunning', () => {
+      sinon.stub(messageStore, 'storeAppStateEvent').resolves({ isNewer: true });
+      sinon.stub(messageStore, 'releaseInstallingClaims').resolves({ released: 0 });
+    }, fluxCommunication.handleAppRunningMessage],
+    ['fluxappinstalling', () => {
+      sinon.stub(messageStore, 'storeAppInstallingMessage').resolves(true);
+      sinon.stub(messageStore, 'storeSignedAppInstallingBroadcast');
+    }, fluxCommunication.handleAppInstallingMessage],
+    ['fluxappinstallingerror', () => {
+      sinon.stub(messageStore, 'storeAppInstallingErrorMessage').resolves(true);
+      sinon.stub(messageStore, 'storeSignedAppInstallingErrorBroadcast');
+    }, fluxCommunication.handleAppInstallingErrorMessage],
+    ['fluxipchanged', () => {
+      sinon.stub(messageStore, 'storeAppStateEvent').resolves({ isNewer: true });
+      sinon.stub(messageStore, 'storeIPChangedMessage').resolves(true);
+    }, fluxCommunication.handleIPChangedMessage],
+    ['fluxappremoved', () => {
+      sinon.stub(messageStore, 'storeAppStateEvent').resolves({ isNewer: true });
+      sinon.stub(messageStore, 'storeAppRemovedMessage').resolves(true);
+    }, fluxCommunication.handleAppRemovedMessage],
+    ['fluxgrantgeneration', () => sinon.stub(messageStore, 'storeAppStateEvent').resolves({ isNewer: true }), fluxCommunication.handleGrantGenerationMessage],
+    ['fluxmasterlease', () => sinon.stub(messageStore, 'storeAppStateEvent').resolves({ isNewer: true }), fluxCommunication.handleMasterleaseMessage],
+    ['fluxnodedown', () => sinon.stub(nodeDownService, 'onCertificateBroadcast').resolves({ rebroadcast: true }), fluxCommunication.handleNodeDownMessage],
+  ];
+
+  beforeEach(() => {
+    sinon.stub(fluxCommunicationUtils, 'verifyTimestampInFluxBroadcast').returns(true);
+  });
+
+  afterEach(() => sinon.restore());
+
+  handlers.forEach(([type, stubStore, handle]) => {
+    it(`answers a request for the ${type} broadcast it announced`, async () => {
+      stubStore();
+      const announce = sinon.stub(peerManager, 'broadcastHash');
+      const message = broadcast(type);
+
+      await handle(message, '48.48.48.48', '16127');
+      sinon.assert.calledOnce(announce);
+      const [announcedHash] = announce.firstCall.args;
+
+      const socket = makeSocket();
+      await peerManager.messageDispatcher({ requestMessageHash: announcedHash }, socket);
+      await new Promise((resolve) => { setImmediate(resolve); });
+
+      sinon.assert.calledOnce(socket.send);
+      expect(JSON.parse(socket.send.firstCall.args[0])).to.deep.equal(message);
     });
   });
 });
