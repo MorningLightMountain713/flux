@@ -430,6 +430,16 @@ describe('crontabAndMountsCleanup tests', () => {
       });
     });
 
+    it('records a moved image under the owning app, as it records a fault', async () => {
+      installApps([legacyApp1]);
+      volumeServiceMock.ensureAppVolumeMounted.resolves({ mounted: true, alreadyMounted: false, imageMoved: true });
+
+      await crontabAndMountsCleanup.ensureInstalledAppVolumesMounted();
+
+      const recorded = appTamperingDetectionServiceMock.recordEvent.getCalls().map((c) => c.args.slice(0, 2));
+      expect(recorded).to.deep.equal([['app1', 'volume_image_moved']]);
+    });
+
     it('keys the incident by the owning app for a composed spec, not by the component id', async () => {
       // Every component of one app rolls up under the SAME app name, which is
       // only true because the map carries the owner rather than letting the

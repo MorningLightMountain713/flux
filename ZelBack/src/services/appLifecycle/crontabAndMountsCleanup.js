@@ -149,9 +149,9 @@ async function ensureInstalledAppVolumesMounted() {
       if (mountResult.imageMoved) {
         // eslint-disable-next-line no-await-in-loop
         await appTamperingDetectionService.recordEvent(
-          appId,
+          appName,
           'volume_image_moved',
-          'Volume image was found somewhere other than where this node recorded it',
+          `Volume image for ${appId} was found somewhere other than where this node recorded it`,
         );
       }
     }
