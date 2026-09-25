@@ -19,7 +19,9 @@ describe('appVolumeService.writeStignore', () => {
 
   before(async () => {
     const { PLATFORM_VOLUME_ENTRIES } = await loadSpecLibrary();
-    platform = PLATFORM_VOLUME_ENTRIES.map((name) => `/${name}`).join('\n');
+    // Less the names syncthing never indexes, which a line would state nothing about.
+    platform = PLATFORM_VOLUME_ENTRIES.filter((name) => !['.stfolder', '.stignore'].includes(name))
+      .map((name) => `/${name}`).join('\n');
     expect(platform).to.include('/backup');
     expect(platform).to.include('/io.runonflux');
   });
@@ -46,7 +48,11 @@ describe('appVolumeService.writeStignore', () => {
     // reserved (the platform's entries + injected) precede owner excludes so
     // first-match-wins makes them non-overridable; the atomic slot is excluded
     // by its managed dir.
-    expect(content).to.equal(`${platform}\n/seed\n/io.runonflux/conf\n/var/data\ncache\n`);
+    expect(content).to.equal(`${platform}\n/.flux-op-*\n/seed\n/io.runonflux/conf\n/var/data\ncache\n`);
+    // One derivation: the file seeds exactly what the monitor converges through the API.
+    // eslint-disable-next-line global-require
+    const { ignoreLinesFor } = require('../../ZelBack/src/services/appSystem/syncthingIgnorePolicy');
+    expect(content).to.equal(`${(await ignoreLinesFor(deployComp)).join('\n')}\n`);
   });
 
   it('writes no .stignore when the component has no syncthing folder', async () => {
@@ -82,7 +88,7 @@ describe('appVolumeService.writeStignore', () => {
     });
 
     const content = await fs.readFile(path.join(tmp, '.stignore'), 'utf8');
-    expect(content).to.equal(`${platform}\n/new\n`);
+    expect(content).to.equal(`${platform}\n/.flux-op-*\n/new\n`);
     expect(changed).to.equal(true);
   });
 
@@ -109,7 +115,7 @@ describe('appVolumeService.writeStignore', () => {
     await appVolumeService.writeStignore(deployComp);
 
     const content = await fs.readFile(path.join(tmp, '.stignore'), 'utf8');
-    expect(content).to.equal(`${platform}\n/seed\n`);
+    expect(content).to.equal(`${platform}\n/.flux-op-*\n/seed\n`);
   });
 });
 

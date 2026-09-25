@@ -31,12 +31,12 @@ const {
   buildDeviceConfiguration,
   createSyncthingFolderConfig,
   ensureStfolderExists,
-  ensureStignoreCovers,
   folderNeedsUpdate,
 } = require('./syncthingMonitorHelpers');
 const volumeService = require('../utils/volumeService');
 const appTamperingDetectionService = require('../appTamperingDetectionService');
 const mastershipGrantGate = require('../appLifecycle/mastershipGrantGate');
+const syncthingIgnorePolicy = require('../appSystem/syncthingIgnorePolicy');
 const { extractIp, socketAddressesMatch } = require('../utils/socketAddressUtils');
 const appReconciler = require('./appReconciler');
 const {
@@ -425,21 +425,14 @@ async function processContainerData(params) {
   const syncthingFolder = createSyncthingFolderConfig(id, label, folder, devices);
   const syncFolder = allFolders.find((x) => x.id === id);
 
-  // CONVERGE THE IGNORE POLICY, through syncthing's own API - it owns .stignore
-  // and writes it atomically. Only once syncthing knows the folder: a brand-new
-  // one had its .stignore seeded at volume creation, and an existing one was
-  // configured in a prior pass and persists across restarts. So this reaches
-  // every folder whose ignores predate a policy line, and skips the single pass
-  // where a fresh install is not yet configured. A converged folder posts
-  // nothing and triggers no rescan.
-  //
-  // Nothing called this. The policy is `/backup` and `/<staging>*`: without it
-  // every byte a copy, extract or upload stages replicates to every peer only
-  // to be deleted again on publish - and a peer's boot sweep can delete a
-  // replicated staging directory that a live operation on another node still
-  // needs.
+  // CONVERGE THE IGNORE SET, through syncthing's own API - it owns .stignore and
+  // writes it atomically. The set is the one the component's specification
+  // derives, exactly, so a line the spec dropped goes and a directory it keeps
+  // local stays off the network. Only once syncthing knows the folder: a
+  // brand-new one had its .stignore seeded at volume creation from the same
+  // derivation. A converged folder posts nothing and triggers no rescan.
   if (syncFolder) {
-    await ensureStignoreCovers(id);
+    await syncthingIgnorePolicy.ensureStignoreCovers(id, deployComp);
   }
 
   // activeStandby (the election decides which instance runs) and syncFirst (the

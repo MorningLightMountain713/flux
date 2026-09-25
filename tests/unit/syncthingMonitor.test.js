@@ -80,7 +80,6 @@ const syncthingMonitorHelpersMock = {
   // Creates the .stfolder marker on disk - I/O. True means the marker is ready.
   ensureStfolderExists: sinon.stub().resolves(true),
   // Converges .stignore through syncthing's API - I/O.
-  ensureStignoreCovers: sinon.stub().resolves(),
   folderNeedsUpdate: sinon.stub().returns(false),
 };
 
@@ -163,6 +162,8 @@ const livenessMock = {
   localConnectivity: sinon.stub().returns({ connected: true, responding: 1, total: 1 }),
 };
 
+const ignorePolicyMock = { ensureStignoreCovers: sinon.stub().resolves() };
+
 const syncthingMonitor = proxyquire('../../ZelBack/src/services/appMonitoring/syncthingMonitor', {
   './peerFolderLiveness': { createPeerFolderLiveness: () => livenessMock },
   '../serviceHelper': serviceHelperMock,
@@ -174,6 +175,7 @@ const syncthingMonitor = proxyquire('../../ZelBack/src/services/appMonitoring/sy
   './appReconciler': appReconcilerMock,
   './syncthingFolderStateMachine': syncthingFolderStateMachineMock,
   './syncthingMonitorHelpers': syncthingMonitorHelpersMock,
+  '../appSystem/syncthingIgnorePolicy': ignorePolicyMock,
   './syncthingHealthMonitor': syncthingHealthMonitorMock,
   './syncthingEventsConsumer': syncthingEventsConsumerMock,
   '../utils/volumeService': volumeServiceMock,
@@ -310,7 +312,7 @@ describe('syncthingMonitor tests', () => {
       syncthingFolder: { type: 'sendreceive' },
       cache: null,
     });
-    syncthingMonitorHelpersMock.ensureStignoreCovers.resetHistory();
+    ignorePolicyMock.ensureStignoreCovers.resetHistory();
     syncthingMonitorHelpersMock.ensureStfolderExists.reset();
     syncthingMonitorHelpersMock.ensureStfolderExists.resolves(true);
     syncthingMonitorHelpersMock.createSyncthingFolderConfig.resetHistory();
@@ -644,7 +646,8 @@ describe('syncthingMonitor tests', () => {
         monitorControl = syncthingMonitor.syncthingApps(mockState, mockGetGlobalStateFn);
         await clock.tickAsync(100);
 
-        sinon.assert.calledWith(syncthingMonitorHelpersMock.ensureStignoreCovers, syncFolderId);
+        // With the component, which is what the whole ignore set is derived from.
+        sinon.assert.calledWith(ignorePolicyMock.ensureStignoreCovers, syncFolderId, sinon.match((comp) => typeof comp.injectedSyncExcludes === 'function' && Boolean(comp.sync)));
       });
 
       // The one pass where a fresh install is not yet configured. Its .stignore
@@ -658,7 +661,7 @@ describe('syncthingMonitor tests', () => {
         monitorControl = syncthingMonitor.syncthingApps(mockState, mockGetGlobalStateFn);
         await clock.tickAsync(100);
 
-        sinon.assert.notCalled(syncthingMonitorHelpersMock.ensureStignoreCovers);
+        sinon.assert.notCalled(ignorePolicyMock.ensureStignoreCovers);
       });
 
       // A node whose synced apps are all running has nothing waiting on a peer,
@@ -1270,7 +1273,7 @@ describe('syncthingMonitor tests', () => {
       monitorControl = syncthingMonitor.syncthingApps(mockState, mockGetGlobalStateFn);
       await clock.tickAsync(100);
 
-      sinon.assert.notCalled(syncthingMonitorHelpersMock.ensureStignoreCovers);
+      sinon.assert.notCalled(ignorePolicyMock.ensureStignoreCovers);
     });
 
     it('deletes the folder of an installed component that no longer syncs', async () => {
