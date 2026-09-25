@@ -855,10 +855,8 @@ async function getComponentAppIdsFromVolumeFiles(appName) {
   }
 
   const escapedName = appName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  // `\w` excludes `-` and the trailing anchor excludes a replica segment, so the
-  // pattern this replaces was blind to a hyphenated component name and to every
-  // named replica — and a component it cannot see is a volume nothing mounts at
-  // boot, after which the reconciler defers on it forever.
+  // A hyphenated component name and a named replica both belong to the app: a
+  // component the pattern cannot see is a volume nothing mounts at boot.
   const componentImage = new RegExp(`^flux[a-z0-9-]+_${escapedName}(?:_[a-z0-9-]+)?FLUXFSVOL$`, 'i');
   const legacyImage = `flux${appName}FLUXFSVOL`;
 

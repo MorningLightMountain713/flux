@@ -37,11 +37,14 @@ async function resolveComponentIdentifiers(name, replica) {
   // filenames would paper over it.
   if (!installed.isEncrypted) return null;
 
-  const diskIds = await volumeService.getComponentAppIdsFromVolumeFiles(name);
-  if (diskIds.length === 0) return null;
+  // What this answers is recorded as the app's components, so a search that could
+  // not look everywhere answers nothing: a list short by an unknown amount would be
+  // recorded as the whole of them.
+  const { appIds, conclusive } = await volumeService.getComponentAppIdsFromVolumeFiles(name);
+  if (!conclusive || appIds.length === 0) return null;
   // Disk ids carry docker's prefix; a row states the bare component identifier
   // and consumers add the prefix back. Storing the docker form would double it.
-  return diskIds.map((id) => dockerService.getBaseAppName(id));
+  return appIds.map((id) => dockerService.getBaseAppName(id));
 }
 
 module.exports = { resolveComponentIdentifiers };
