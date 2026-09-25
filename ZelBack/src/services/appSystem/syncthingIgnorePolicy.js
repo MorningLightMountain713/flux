@@ -1,3 +1,5 @@
+'use strict';
+
 const log = require('../../lib/log');
 const syncthingService = require('../syncthingService');
 const { syncthingIgnoreLines } = require('./volumeReservedNames');

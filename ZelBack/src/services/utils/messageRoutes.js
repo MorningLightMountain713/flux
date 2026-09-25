@@ -1,3 +1,5 @@
+'use strict';
+
 const { INTENT, CLAIMABLE } = require('./messageIntent');
 
 /**

@@ -1,3 +1,5 @@
+'use strict';
+
 /**
  * Flux storage links.
  *

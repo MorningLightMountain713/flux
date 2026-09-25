@@ -1,3 +1,5 @@
+'use strict';
+
 const crypto = require('node:crypto');
 const qs = require('qs');
 const log = require('../lib/log');

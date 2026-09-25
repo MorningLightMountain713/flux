@@ -1,3 +1,5 @@
+'use strict';
+
 const crypto = require('crypto');
 
 // Verifies a signed policy bundle. Pure: no I/O, no config, no state -- it is handed bytes
