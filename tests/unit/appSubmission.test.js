@@ -8,7 +8,7 @@ const request = require('supertest');
 const EventEmitter = require('events');
 const WebSocket = require('ws');
 const {
-  loadSpecLibrary, V9_SUBMISSION, V8_SUBMISSION, v8Spec, sealedV9Spec, assertAnswers,
+  loadSpecLibrary, V9_SUBMISSION, V8_SUBMISSION, v8Spec, sealedV8Spec, sealedV9Spec, assertAnswers,
 } = require('./fixtures/fluxSpec');
 const { FluxPeerManager, PEER_SOURCE } = require('../../ZelBack/src/services/utils/FluxPeerManager');
 const { asConfig } = require('./fixtures/config');
@@ -64,6 +64,7 @@ describe('appSubmission tests', () => {
       '../appPlacement/placementFeasibility': stubs.placementFeasibility,
       '../daemonService/daemonServiceMiscRpcs': stubs.daemonServiceMiscRpcs,
       '../appDatabase/appsRepository': stubs.appsRepository,
+      '../utils/enterpriseNetwork': stubs.enterpriseNetwork,
       '../appMessaging/messageVerifier': {},
       '../appMessaging/appEventVerifier': {},
       '../fluxCommunicationMessagesSender': {},
@@ -112,7 +113,11 @@ describe('appSubmission tests', () => {
       },
       registryManager: { checkApplicationRegistrationNameConflicts: sinon.stub().resolves() },
       daemonServiceMiscRpcs: { isDaemonSynced: sinon.stub().returns({ data: { synced: true, height: 100 } }) },
-      appsRepository: { getGlobalAppInfo: sinon.stub().resolves(null) },
+      appsRepository: {
+        getGlobalAppInfo: sinon.stub().resolves(null),
+        getLatestPermanentMessage: sinon.stub().resolves(null),
+      },
+      enterpriseNetwork: { isEnterpriseAppOwner: sinon.stub().returns(true) },
     };
     // resolveSubmission parses via the strict backend deserializer; the default
     // backend carries only that (a test needing sealForStorage adds it).
@@ -216,6 +221,127 @@ describe('appSubmission tests', () => {
         ['run', 'F_S_CMD=https://storage.runonflux.io/v1/cmd/abc'],
       ));
       sinon.assert.calledOnce(stubs.imageArchitectureValidator.verifyImageRegistryAndArchitectures);
+    });
+  });
+
+  // DATACENTER AND A v8 NODE PIN ARE ENTERPRISE PRIVILEGES. A live submission from an
+  // owner off the enterprise list cannot acquire one, but may carry forward the one its
+  // app already holds, so renewing or updating the app never costs it the placement it
+  // was granted. Placing new instances stays the install-time check's to refuse.
+  describe('placement privileges', () => {
+    const ELIGIBLE = { isEnterpriseAppOwner: () => true };
+    const INELIGIBLE = { isEnterpriseAppOwner: () => false };
+    const UNKNOWN = { isEnterpriseAppOwner: () => null };
+    const previousIs = (spec) => async () => spec;
+    const check = (spec, enterprise, previous = previousIs(null)) => {
+      appSubmission = load();
+      return appSubmission.assertPlacementPrivileges(spec, { enterprise, previousSpec: previous });
+    };
+    const refusal = async (promise) => promise.then(() => null, (error) => error);
+    const datacenterSpec = (owner) => v9Spec({ ...(owner ? { owner } : {}), placement: { dataCenter: true } });
+    const pinnedV8 = (nodes) => sealedV8Spec({ nodes });
+
+    it('lets an enterprise owner acquire datacenter', async () => {
+      expect(await refusal(check(await datacenterSpec(), ELIGIBLE))).to.equal(null);
+    });
+
+    it('refuses datacenter to an owner off the list with nothing to carry forward', async () => {
+      const error = await refusal(check(await datacenterSpec(), INELIGIBLE));
+      expect(error, 'an ineligible owner acquired datacenter').to.be.an('error');
+      expect(error.message).to.equal('Datacenter requirement is only available for enterprise app owners.');
+    });
+
+    it('lets an owner off the list carry forward the datacenter its app holds', async () => {
+      const spec = await datacenterSpec();
+      expect(await refusal(check(spec, INELIGIBLE, previousIs(await datacenterSpec())))).to.equal(null);
+    });
+
+    it('does not carry forward a datacenter the app did not hold', async () => {
+      const error = await refusal(check(await datacenterSpec(), INELIGIBLE, previousIs(await v9Spec())));
+      expect(error, 'an ineligible owner acquired datacenter on an update').to.be.an('error');
+    });
+
+    it('does not carry forward another owner\'s datacenter', async () => {
+      const theirs = await v9Spec({ owner: '0x0000000000000000000000000000000000000001', placement: { dataCenter: true } });
+      const error = await refusal(check(await datacenterSpec(), INELIGIBLE, previousIs(theirs)));
+      expect(error, 'a previous owner\'s grant was inherited').to.be.an('error');
+    });
+
+    // A lookup that failed grants nothing: the rule grants a privilege, so it fails closed.
+    it('refuses when the previous specification cannot be read', async () => {
+      const error = await refusal(check(await datacenterSpec(), INELIGIBLE, async () => { throw new Error('db down'); }));
+      expect(error).to.be.an('error');
+      expect(error.message).to.equal('Datacenter requirement is only available for enterprise app owners.');
+    });
+
+    it('refuses while the enterprise owners are not known', async () => {
+      const error = await refusal(check(await datacenterSpec(), UNKNOWN));
+      expect(error).to.be.an('error');
+      expect(error.message).to.include('network policy not yet obtained');
+    });
+
+    // The carry-forward reads what the chain last settled for the name, through the same
+    // deserializer the submission path uses, so an expired app can still be renewed.
+    it('reads the grant from the newest permanent message for the name', async () => {
+      appSubmission = load();
+      const stored = { stored: 'the settled message' };
+      stubs.appsRepository.getLatestPermanentMessage.resolves({ appSpecifications: stored });
+      stubs.parseSpec.withArgs(stored).resolves(await datacenterSpec());
+      const spec = await datacenterSpec();
+
+      const error = await refusal(appSubmission.assertPlacementPrivileges(spec, { enterprise: INELIGIBLE }));
+
+      expect(error, 'the settled grant was not found').to.equal(null);
+      sinon.assert.calledOnceWithExactly(stubs.appsRepository.getLatestPermanentMessage, spec.name);
+    });
+
+    it('asks nothing of a submission that requests no privilege', async () => {
+      const previous = sinon.stub().resolves(null);
+      expect(await refusal(check(await v9Spec(), UNKNOWN, previous))).to.equal(null);
+      sinon.assert.notCalled(previous);
+    });
+
+    describe('a v8 node pin', () => {
+      it('is refused to an owner off the list with nothing to carry forward', async () => {
+        const error = await refusal(check(await pinnedV8(['1.2.3.4:16127']), INELIGIBLE));
+        expect(error, 'an ineligible owner pinned a v8 spec').to.be.an('error');
+        expect(error.message).to.include('only available for enterprise app owners');
+      });
+
+      it('is carried forward unchanged', async () => {
+        const previous = previousIs(await pinnedV8(['1.2.3.4:16127', '5.6.7.8:16127']));
+        expect(await refusal(check(await pinnedV8(['5.6.7.8:16127', '1.2.3.4:16127']), INELIGIBLE, previous))).to.equal(null);
+      });
+
+      // Carrying a pin forward is not choosing where it points.
+      it('is not redirected or widened', async () => {
+        const previous = previousIs(await pinnedV8(['1.2.3.4:16127']));
+        expect(await refusal(check(await pinnedV8(['9.9.9.9:16127']), INELIGIBLE, previous)), 'redirected').to.be.an('error');
+        expect(await refusal(check(await pinnedV8(['1.2.3.4:16127', '9.9.9.9:16127']), INELIGIBLE, previous)), 'widened').to.be.an('error');
+      });
+
+      it('is open to an enterprise owner', async () => {
+        expect(await refusal(check(await pinnedV8(['1.2.3.4:16127']), ELIGIBLE))).to.equal(null);
+      });
+    });
+
+    // Wired into the live submission path, ahead of the image check.
+    it('refuses a live submission that acquires datacenter', async () => {
+      appSubmission = load();
+      stubs.enterpriseNetwork.isEnterpriseAppOwner.returns(false);
+      const spec = await datacenterSpec();
+      const submission = { version: 9, name: 'myapp', owner: 'owner1' };
+      stubs.transportHelper.openTransportEnvelope.resolves(submission);
+      stubs.parseSpec.resolves({ isEncrypted: false });
+      stubs.specLibs.validateSubmissionSpec.resolves(spec);
+
+      const error = await refusal(appSubmission.resolveSubmission(submission, {
+        contentHash: spec.contentHash(), timestamp: 1, type: 'fluxappregister', daemonHeight: 100,
+      }));
+
+      expect(error, 'the live path does not ask').to.be.an('error');
+      expect(error.message).to.equal('Datacenter requirement is only available for enterprise app owners.');
+      sinon.assert.notCalled(stubs.imageArchitectureValidator.verifyImageRegistryAndArchitectures);
     });
   });
 

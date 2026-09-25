@@ -1247,6 +1247,20 @@ async function getPreviousPermanentMessage(name, beforeTimestamp) {
 }
 
 /**
+ * The newest permanent message for a name: what the chain last settled for the app,
+ * expired or not.
+ * @param {string} name - App name
+ * @returns {Promise<object|null>}
+ */
+async function getLatestPermanentMessage(name) {
+  return dbHelper.findOneInDatabase(
+    globalDb(), globalAppsMessages,
+    { 'appSpecifications.name': name },
+    { projection: { _id: 0 }, sort: { height: -1, timestamp: -1 } },
+  );
+}
+
+/**
  * The permanent message an app held immediately before a block height — the
  * state a message confirmed at that height supersedes.
  *
@@ -1772,6 +1786,7 @@ module.exports = {
   listAppMessagesByName,
   getPreviousPermanentMessage,
   getPermanentMessageBeforeHeight,
+  getLatestPermanentMessage,
   // ingress attestations
   storeIngressAttestation,
   confirmIngressAttestations,

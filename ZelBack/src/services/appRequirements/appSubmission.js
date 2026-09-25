@@ -25,6 +25,8 @@ const entitlementsState = require('../entitlementsState');
 const marketplaceTemplateCache = require('../marketplace/marketplaceTemplateCache');
 const contentBlobService = require('../appLifecycle/contentBlobService');
 const { isFluxStorageUrl, storageLinkOf } = require('../utils/fluxStorage');
+const enterpriseNetwork = require('../utils/enterpriseNetwork');
+const signatureVerifier = require('../signatureVerifier');
 const contentSlotService = require('../appLifecycle/contentSlotService');
 const fluxDriveClient = require('../utils/fluxDriveClient');
 const globalState = require('../utils/globalState');
@@ -130,6 +132,77 @@ async function assertMatchesMarketplaceTemplate(spec) {
  * @param {object} meta - { contentHash, timestamp, type, daemonHeight } from the signed envelope
  * @returns {Promise<{ spec: object, isEncrypted: boolean, broadcastBlob: object }>}
  */
+/**
+ * The specification the chain last settled for this app's name, or null. Read from
+ * the permanent messages rather than the live registry, so an app that has expired can
+ * still be renewed on what it held.
+ * @param {object} spec - the submitted specification
+ * @returns {Promise<object|null>}
+ */
+async function previousSettledSpec(spec) {
+  const message = await appsRepository.getLatestPermanentMessage(spec.name);
+  if (!message || !message.appSpecifications) return null;
+  const { deserializeSpec } = await getSpecBackend();
+  return deserializeSpec(message.appSpecifications);
+}
+
+/** Whether two placements name the same nodes, in any order. */
+function sameTargets(left, right) {
+  const key = (placement) => JSON.stringify([
+    [...placement.targetIps].sort(), [...placement.targetOutpoints].sort(), [...placement.targetOperators].sort(),
+  ]);
+  return key(left) === key(right);
+}
+
+/**
+ * Refuses a live submission that acquires an enterprise placement privilege its owner
+ * does not hold: datacenter, on v8 and later, and a v8 node pin.
+ *
+ * AN EXISTING GRANT IS CARRIED FORWARD, NOT ACQUIRED. An owner off the enterprise list
+ * may submit the datacenter its app already holds, or the identical pin, so renewing
+ * or updating the app never costs it the placement it was granted; acquiring one,
+ * redirecting a pin or widening it still needs the owner to be on the list. Where new
+ * instances may be placed is still the install-time check's to decide
+ * (hwRequirements.checkDataCenter), so an app carried forward keeps what it runs and
+ * gains no datacenter instances while its owner is off the list.
+ *
+ * Live submissions only: a replay is a message already on chain, and a node judging it
+ * by today's list would disagree with its peers about the past. A v9 pin is v9's
+ * placement model, not this privilege. A previous specification that cannot be read
+ * grants nothing - the rule grants a privilege, so it fails closed.
+ *
+ * @param {object} spec - the resolved specification
+ * @param {object} [deps] - enterprise (isEnterpriseAppOwner) and previousSpec, injected in tests
+ */
+async function assertPlacementPrivileges(spec, {
+  enterprise = enterpriseNetwork,
+  previousSpec = previousSettledSpec,
+} = {}) {
+  const wantsDatacenter = spec.version >= 8 && spec.placement.dataCenter === true;
+  const wantsPin = spec.version === 8 && spec.placement.hasTargets();
+  if (!wantsDatacenter && !wantsPin) return;
+
+  const eligible = enterprise.isEnterpriseAppOwner(spec.owner);
+  if (eligible === null) {
+    throw new Error('Cannot verify placement eligibility: network policy not yet obtained.');
+  }
+  if (eligible) return;
+
+  const settled = await previousSpec(spec).catch((error) => {
+    log.warn(`assertPlacementPrivileges - the previous specification of ${spec.name} could not be read: ${error.message}`);
+    return null;
+  });
+  // A grant belongs to the owner it was made to: a name registered again by someone
+  // else inherits nothing.
+  const previous = settled && signatureVerifier.sameSigningIdentity(settled.owner, spec.owner) ? settled : null;
+  if (wantsDatacenter && !(previous && previous.placement.dataCenter === true)) {
+    throw new Error('Datacenter requirement is only available for enterprise app owners.');
+  }
+  if (wantsPin && !(previous && previous.version === 8 && sameTargets(previous.placement, spec.placement))) {
+    throw new Error('Selecting nodes is only available for enterprise app owners; an existing selection may be carried forward unchanged.');
+  }
+}
+
 /**
  * Refuses a live submission whose storage links do not address Flux storage over
  * https. What a node fetches is decided at the fetch (fluxStorageRefs), for every app
@@ -247,6 +320,7 @@ async function resolveSubmission(appSpecification, {
   if (!globalState.policyReady) {
     throw new Error('Cannot verify application images: network policy not yet obtained.');
   }
+  await assertPlacementPrivileges(spec);
   await verifyImageRegistryAndArchitectures(spec, { owner: spec.owner, isEncrypted });
 
   // Feature entitlements + marketplace-template gate. Total across versions:
@@ -740,6 +814,7 @@ async function assertSecretsNotConflicting(appName, componentName, secrets, owne
 
 module.exports = {
   resolveSubmission,
+  assertPlacementPrivileges,
   verifyAppRegistrationParameters,
   validateAppUpdate,
   verifyAppUpdateApi,
