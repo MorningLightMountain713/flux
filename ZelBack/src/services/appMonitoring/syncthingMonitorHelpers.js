@@ -10,7 +10,6 @@ const dockerService = require('../dockerService');
 const syncthingService = require('../syncthingService');
 const { ConfigMethod } = require('../utils/syncthingConstants');
 const volumeService = require('../utils/volumeService');
-const { SYNCTHING_IGNORE_LINES } = require('../appSystem/volumeReservedNames');
 const {
   DEVICE_ID_REQUEST_TIMEOUT_MS,
   SYNCTHING_RESCAN_INTERVAL_SECONDS,
@@ -264,56 +263,6 @@ function folderNeedsUpdate(existingFolder, newFolder) {
   );
 }
 
-/**
- * Ensure a folder's syncthing ignores carry every FluxOS policy line.
- *
- * .stignore is syncthing's own control file - it writes it atomically, runs as
- * root so it lands on any legacy root-owned file, and never replicates it or
- * its temp. So FluxOS sets the patterns through syncthing's API rather than
- * writing the file: there is no temp, no ownership dance, and nothing on the
- * volume to orphan on a powercut. Volume creation still seeds the file directly
- * for a brand-new folder syncthing does not yet know; this converges every
- * EXISTING folder whose ignores predate a policy line.
- *
- * Asserted by POSITION, not by presence. syncthing takes the FIRST pattern that
- * matches, so a policy line sitting below anything is a policy line something
- * else can answer for - an `!/backup` above it un-ignores the very directory
- * this exists to keep off the network, and a presence test would call that
- * converged. The policy lines therefore lead, and everything else follows in the
- * order it already had. That is the same rule the v9 spec-driven writer states,
- * where the owner supplies patterns of their own: they extend the set, they
- * never un-exclude what FluxOS put there.
- *
- * Nothing is lost. syncthing's POST replaces the whole set, so the desired list
- * is built FROM the current one and only duplicate copies of our own lines drop
- * out. Nothing is posted when the folder already reads that way, so a converged
- * folder is neither rewritten nor rescanned - which is what makes this safe on
- * every monitor pass.
- *
- * Call only for a folder syncthing already knows (the caller checks); on an
- * unknown folder the read throws and the converge is abandoned rather than run
- * against an ignore list this node never read.
- *
- * @param {string} folderId - the syncthing folder id (the app identifier)
- */
-async function ensureStignoreCovers(folderId) {
-  try {
-    const read = await syncthingService.getFolderIgnores(folderId);
-    const current = Array.isArray(read?.ignore) ? read.ignore : [];
-    const rest = current.filter((line) => !SYNCTHING_IGNORE_LINES.includes(line));
-    const desired = [...SYNCTHING_IGNORE_LINES, ...rest];
-    const converged = desired.length === current.length
-      && desired.every((line, index) => line === current[index]);
-    if (converged) return;
-    await syncthingService.setFolderIgnores(folderId, desired);
-    log.info(`ensureStignoreCovers - ${folderId} ignores now lead with ${SYNCTHING_IGNORE_LINES.join(', ')}`);
-  } catch (error) {
-    // Reported and dropped: the ignore policy converges on the next pass, and
-    // one folder's unreadable ignores must not end the caller's sweep.
-    log.error(`ensureStignoreCovers - could not converge ignores for ${folderId}: ${error.message}`);
-  }
-}
-
 const fluxDirPath = process.env.FLUXOS_PATH || path.join(process.env.HOME, 'zelflux');
 const appsFolderPath = process.env.FLUX_APPS_FOLDER || path.join(fluxDirPath, 'ZelApps');
 const appsFolder = `${appsFolderPath}/`;
@@ -462,7 +411,6 @@ module.exports = {
   buildDeviceConfiguration,
   createSyncthingFolderConfig,
   ensureStfolderExists,
-  ensureStignoreCovers,
   folderNeedsUpdate,
   removeSyncthingFolder,
   setSyncthingFolderPaused,

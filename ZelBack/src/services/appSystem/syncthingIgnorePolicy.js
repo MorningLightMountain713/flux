@@ -1,14 +1,45 @@
 'use strict';
 
+const path = require('node:path');
 const log = require('../../lib/log');
 const syncthingService = require('../syncthingService');
-const { syncthingIgnoreLines } = require('./volumeReservedNames');
+const { getSpecBackend } = require('../utils/specLibs');
+const { LEGACY_STAGING_PREFIX } = require('./volumeReservedNames');
+
+// The names syncthing never indexes whatever .stignore says, so a line for one
+// states nothing.
+const SYNCTHING_INTERNAL_NAMES = new Set(['.stfolder', '.stignore', '.stversions']);
 
 /** Whether two ignore sets are the same policy. Order is part of it: syncthing takes the
  * FIRST pattern that matches, so the same lines in another order are not the same rule. */
 const sameLines = (left, right) => left.length === right.length
   && left.every((line, index) => line === right[index]);
 
+
+/**
+ * The ignore set a component's specification derives, which is the whole of its
+ * .stignore.
+ *
+ * First the platform's entries at the volume root (the spec library's list, none of
+ * which is the owner's data), then the legacy staging glob that keeps an interrupted
+ * operation's old-shape directory off the network until the field is clear of it,
+ * then the content injected into the volume (written on every node, so never
+ * replicated), then the owner's excludes, which is where a directory the spec keeps
+ * local arrives. Syncthing takes the first pattern that matches, so the owner's lines
+ * can extend the set but never un-exclude one ahead of them.
+ *
+ * @param {object} deployComp - DeploymentComponent (dir, sync, injectedSyncExcludes)
+ * @returns {Promise<string[]>}
+ */
+async function ignoreLinesFor(deployComp) {
+  const { PLATFORM_VOLUME_ENTRIES } = await getSpecBackend();
+  const platform = PLATFORM_VOLUME_ENTRIES
+    .filter((name) => !SYNCTHING_INTERNAL_NAMES.has(name))
+    .map((name) => `/${name}`);
+  const injected = deployComp.injectedSyncExcludes().map((source) => `/${path.relative(deployComp.dir, source)}`);
+  const ownerExcludes = (deployComp.sync && deployComp.sync.exclude) || [];
+  return [...new Set([...platform, `/${LEGACY_STAGING_PREFIX}*`, ...injected, ...ownerExcludes].filter(Boolean))];
+}
 
 /**
  * Ensure a folder's syncthing ignores carry every FluxOS policy line.
@@ -65,15 +96,15 @@ const sameLines = (left, right) => left.length === right.length
  * to reach this folder, not the interval between passes, and it does not recur.
  *
  * @param {string} folderId - the syncthing folder id (the app identifier)
- * @param {string[]} unsyncedSubdirs - volume-root names the component declared with ml:
+ * @param {object} deployComp - the component the folder replicates
  */
-async function ensureStignoreCovers(folderId, unsyncedSubdirs = []) {
+async function ensureStignoreCovers(folderId, deployComp) {
   const read = await syncthingService.getFolderIgnores(folderId);
   if (read.status !== 'success') {
     log.error(`ensureStignoreCovers - could not read ignores for ${folderId}: ${read.data?.message ?? 'unknown error'}`);
     return;
   }
-  const desired = syncthingIgnoreLines(unsyncedSubdirs);
+  const desired = await ignoreLinesFor(deployComp);
   const current = Array.isArray(read.data?.ignore) ? read.data.ignore : [];
   if (sameLines(desired, current)) return;
 
@@ -87,4 +118,5 @@ async function ensureStignoreCovers(folderId, unsyncedSubdirs = []) {
 
 module.exports = {
   ensureStignoreCovers,
+  ignoreLinesFor,
 };

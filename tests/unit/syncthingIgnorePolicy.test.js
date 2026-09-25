@@ -1,13 +1,41 @@
 // Set NODE_CONFIG_DIR before any requires
 process.env.NODE_CONFIG_DIR = `${process.cwd()}/tests/unit/globalconfig`;
 
+const { expect } = require('chai');
 const sinon = require('sinon');
 const syncthingService = require('../../ZelBack/src/services/syncthingService');
 const log = require('../../ZelBack/src/lib/log');
 const policy = require('../../ZelBack/src/services/appSystem/syncthingIgnorePolicy');
 
+// A synced component: its volume at /vol, the owner's excludes (ml: directories
+// arrive here from flux-spec's conversion) and the content paths injected into it.
+const comp = (exclude = [], injected = []) => ({
+  dir: '/vol',
+  sync: { mode: 'primary', exclude },
+  injectedSyncExcludes: () => injected.map((name) => `/vol/${name}`),
+});
+// The platform's volume-root entries, then the legacy staging glob.
+const BASE = ['/backup', '/lost+found', '/.flux-op', '/io.runonflux', '/.flux-op-*'];
+
 describe('syncthingIgnorePolicy tests', () => {
   let sandbox;
+
+  describe('ignoreLinesFor', () => {
+    it('is the platform entries, the legacy staging glob, the injected content and the owner excludes, in that order', async () => {
+      expect(await policy.ignoreLinesFor(comp(['/game'], ['conf/app.conf'])))
+        .to.deep.equal([...BASE, '/conf/app.conf', '/game']);
+    });
+
+    it('leaves out the names syncthing never indexes', async () => {
+      const lines = await policy.ignoreLinesFor(comp());
+      expect(lines).to.not.include('/.stfolder');
+      expect(lines).to.not.include('/.stignore');
+    });
+
+    it('holds each line once, at its first place', async () => {
+      expect(await policy.ignoreLinesFor(comp(['/backup', '/game', '/game']))).to.deep.equal([...BASE, '/game']);
+    });
+  });
 
   beforeEach(() => {
     sandbox = sinon.createSandbox();
@@ -39,27 +67,27 @@ describe('syncthingIgnorePolicy tests', () => {
       sandbox.stub(syncthingService, 'getFolderIgnores').resolves(ok({ ignore: ['/backup'] }));
       const set = sandbox.stub(syncthingService, 'setFolderIgnores').resolves(ok({}));
 
-      await policy.ensureStignoreCovers(ID);
+      await policy.ensureStignoreCovers(ID, comp());
 
-      sinon.assert.calledOnceWithExactly(set, ID, ['/backup', '/lost+found', '/.flux-op', '/.flux-op-*']);
+      sinon.assert.calledOnceWithExactly(set, ID, BASE);
     });
 
     it('seeds every line when the folder has no ignores yet', async () => {
       sandbox.stub(syncthingService, 'getFolderIgnores').resolves(ok({ ignore: null }));
       const set = sandbox.stub(syncthingService, 'setFolderIgnores').resolves(ok({}));
 
-      await policy.ensureStignoreCovers(ID);
+      await policy.ensureStignoreCovers(ID, comp());
 
-      sinon.assert.calledOnceWithExactly(set, ID, ['/backup', '/lost+found', '/.flux-op', '/.flux-op-*']);
+      sinon.assert.calledOnceWithExactly(set, ID, BASE);
     });
 
     it('posts nothing when the folder already reads exactly the derived set', async () => {
     // Idempotent: a converged folder is neither rewritten nor rescanned, which
     // is what keeps this safe to run on every monitor pass.
-      sandbox.stub(syncthingService, 'getFolderIgnores').resolves(ok({ ignore: ['/backup', '/lost+found', '/.flux-op', '/.flux-op-*'] }));
+      sandbox.stub(syncthingService, 'getFolderIgnores').resolves(ok({ ignore: BASE }));
       const set = sandbox.stub(syncthingService, 'setFolderIgnores').resolves(ok({}));
 
-      await policy.ensureStignoreCovers(ID);
+      await policy.ensureStignoreCovers(ID, comp());
 
       sinon.assert.notCalled(set);
     });
@@ -70,16 +98,16 @@ describe('syncthingIgnorePolicy tests', () => {
       sandbox.stub(syncthingService, 'getFolderIgnores').resolves(ok({ ignore: [] }));
       const set = sandbox.stub(syncthingService, 'setFolderIgnores').resolves(ok({}));
 
-      await policy.ensureStignoreCovers(ID, ['game']);
+      await policy.ensureStignoreCovers(ID, comp(['/game']));
 
-      sinon.assert.calledOnceWithExactly(set, ID, ['/backup', '/lost+found', '/.flux-op', '/.flux-op-*', '/game']);
+      sinon.assert.calledOnceWithExactly(set, ID, [...BASE, '/game']);
     });
 
     it('posts nothing when the declared directories are already the whole set', async () => {
-      sandbox.stub(syncthingService, 'getFolderIgnores').resolves(ok({ ignore: ['/backup', '/lost+found', '/.flux-op', '/.flux-op-*', '/game'] }));
+      sandbox.stub(syncthingService, 'getFolderIgnores').resolves(ok({ ignore: [...BASE, '/game'] }));
       const set = sandbox.stub(syncthingService, 'setFolderIgnores').resolves(ok({}));
 
-      await policy.ensureStignoreCovers(ID, ['game']);
+      await policy.ensureStignoreCovers(ID, comp(['/game']));
 
       sinon.assert.notCalled(set);
     });
@@ -88,12 +116,12 @@ describe('syncthingIgnorePolicy tests', () => {
     // A spec that drops an ml: mount is asking for that directory to replicate.
     // The derived set is built afresh every pass and never accumulates, so the
     // line goes with the mount rather than outliving it as a silent exclusion.
-      sandbox.stub(syncthingService, 'getFolderIgnores').resolves(ok({ ignore: ['/backup', '/lost+found', '/.flux-op', '/.flux-op-*', '/game'] }));
+      sandbox.stub(syncthingService, 'getFolderIgnores').resolves(ok({ ignore: [...BASE, '/game'] }));
       const set = sandbox.stub(syncthingService, 'setFolderIgnores').resolves(ok({}));
 
-      await policy.ensureStignoreCovers(ID, []);
+      await policy.ensureStignoreCovers(ID, comp());
 
-      sinon.assert.calledOnceWithExactly(set, ID, ['/backup', '/lost+found', '/.flux-op', '/.flux-op-*']);
+      sinon.assert.calledOnceWithExactly(set, ID, BASE);
     });
 
     it('removes a pattern it did not write', async () => {
@@ -103,9 +131,9 @@ describe('syncthingIgnorePolicy tests', () => {
       sandbox.stub(syncthingService, 'getFolderIgnores').resolves(ok({ ignore: ['/backup', 'cache/**'] }));
       const set = sandbox.stub(syncthingService, 'setFolderIgnores').resolves(ok({}));
 
-      await policy.ensureStignoreCovers(ID);
+      await policy.ensureStignoreCovers(ID, comp());
 
-      sinon.assert.calledOnceWithExactly(set, ID, ['/backup', '/lost+found', '/.flux-op', '/.flux-op-*']);
+      sinon.assert.calledOnceWithExactly(set, ID, BASE);
     });
 
     it('removes a negation that would otherwise answer for a policy line', async () => {
@@ -115,18 +143,18 @@ describe('syncthingIgnorePolicy tests', () => {
       sandbox.stub(syncthingService, 'getFolderIgnores').resolves(ok({ ignore: ['!/backup', '/backup', '/.flux-op', '/.flux-op-*'] }));
       const set = sandbox.stub(syncthingService, 'setFolderIgnores').resolves(ok({}));
 
-      await policy.ensureStignoreCovers(ID);
+      await policy.ensureStignoreCovers(ID, comp());
 
-      sinon.assert.calledOnceWithExactly(set, ID, ['/backup', '/lost+found', '/.flux-op', '/.flux-op-*']);
+      sinon.assert.calledOnceWithExactly(set, ID, BASE);
     });
 
     it('collapses a policy line the folder holds more than once', async () => {
       sandbox.stub(syncthingService, 'getFolderIgnores').resolves(ok({ ignore: ['/backup', 'cache/**', '/backup'] }));
       const set = sandbox.stub(syncthingService, 'setFolderIgnores').resolves(ok({}));
 
-      await policy.ensureStignoreCovers(ID);
+      await policy.ensureStignoreCovers(ID, comp());
 
-      sinon.assert.calledOnceWithExactly(set, ID, ['/backup', '/lost+found', '/.flux-op', '/.flux-op-*']);
+      sinon.assert.calledOnceWithExactly(set, ID, BASE);
     });
 
     it('rewrites a folder that holds the right lines in the wrong order', async () => {
@@ -135,9 +163,9 @@ describe('syncthingIgnorePolicy tests', () => {
       sandbox.stub(syncthingService, 'getFolderIgnores').resolves(ok({ ignore: ['/.flux-op', '/.flux-op-*', '/backup'] }));
       const set = sandbox.stub(syncthingService, 'setFolderIgnores').resolves(ok({}));
 
-      await policy.ensureStignoreCovers(ID);
+      await policy.ensureStignoreCovers(ID, comp());
 
-      sinon.assert.calledOnceWithExactly(set, ID, ['/backup', '/lost+found', '/.flux-op', '/.flux-op-*']);
+      sinon.assert.calledOnceWithExactly(set, ID, BASE);
     });
 
     it('logs and posts nothing when the read fails, rather than failing the pass', async () => {
@@ -147,7 +175,7 @@ describe('syncthingIgnorePolicy tests', () => {
       const set = sandbox.stub(syncthingService, 'setFolderIgnores').resolves(ok({}));
       const logError = sandbox.stub(log, 'error');
 
-      await policy.ensureStignoreCovers(ID);
+      await policy.ensureStignoreCovers(ID, comp());
 
       sinon.assert.notCalled(set);
       sinon.assert.calledOnce(logError);
@@ -158,7 +186,7 @@ describe('syncthingIgnorePolicy tests', () => {
       sandbox.stub(syncthingService, 'setFolderIgnores').resolves(err('folder paused'));
       const logError = sandbox.stub(log, 'error');
 
-      await policy.ensureStignoreCovers(ID);
+      await policy.ensureStignoreCovers(ID, comp());
 
       sinon.assert.calledOnce(logError);
     });

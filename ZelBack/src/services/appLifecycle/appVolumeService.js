@@ -8,10 +8,10 @@ const serviceHelper = require('../serviceHelper');
 const dockerService = require('../dockerService');
 const messageHelper = require('../messageHelper');
 const volumeService = require('../utils/volumeService');
+const syncthingIgnorePolicy = require('../appSystem/syncthingIgnorePolicy');
 const { withHostMutationLock } = require('../utils/hostMutationLock');
 const appsRuntimeState = require('../appManagement/appsRuntimeState');
 const pendingTeardownStore = require('./pendingTeardownStore');
-const { getSpecBackend } = require('../utils/specLibs');
 const log = require('../../lib/log');
 
 const fluxDirPath = process.env.FLUXOS_PATH || path.join(process.env.HOME, 'zelflux');
@@ -231,11 +231,7 @@ async function writeStignore(deployComp) {
     await fs.rm(`${compDir}/.stfolder`, { recursive: true, force: true });
     return false;
   }
-  const { PLATFORM_VOLUME_ENTRIES } = await getSpecBackend();
-  const platform = PLATFORM_VOLUME_ENTRIES.map((name) => `/${name}`);
-  const injected = deployComp.injectedSyncExcludes().map((source) => `/${path.relative(compDir, source)}`);
-  const ownerExcludes = deployComp.sync.exclude || [];
-  const lines = [...new Set([...platform, ...injected, ...ownerExcludes].filter(Boolean))];
+  const lines = await syncthingIgnorePolicy.ignoreLinesFor(deployComp);
   const content = `${lines.join('\n')}\n`;
   const stignorePath = `${compDir}/.stignore`;
   const existing = await fs.readFile(stignorePath, 'utf8').catch(() => null);
