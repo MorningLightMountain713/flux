@@ -1637,6 +1637,24 @@ describe('fluxCommunication tests', () => {
       return { seen, stop };
     }
 
+    // Nobody asked for it: no request to this connection is open, so it is dropped
+    // before it is queued, and the drop is said rather than silent.
+    it('drops a response nobody asked for, and says so', async () => {
+      sinon.stub(peerManager, 'isSyncResponseWanted').returns(false);
+      const verify = sinon.stub(fluxCommunicationUtils, 'verifyFluxBroadcast');
+      const warn = sinon.stub(log, 'warn');
+      const chunk = { data: { type: 'fluxapprunningsync', done: true, messages: [] } };
+      const { seen, stop } = recordSyncEvents();
+      try {
+        await fluxCommunication.dispatchSyncResponse(chunk, { key: '10.20.30.43:16127', direction: 'inbound' });
+      } finally {
+        stop();
+      }
+      sinon.assert.notCalled(verify);
+      expect(seen.progress, 'an unasked answer counted as progress').to.deep.equal([]);
+      sinon.assert.calledWithMatch(warn, /Unsolicited fluxapprunningsync from inbound peer 10\.20\.30\.43:16127/);
+    });
+
     it('a chunk whose envelope verifies is progress, and its stream is handled', async () => {
       sinon.stub(peerManager, 'isSyncResponseWanted').returns(true);
       sinon.stub(fluxCommunicationUtils, 'verifyFluxBroadcast')

@@ -1021,7 +1021,12 @@ async function dispatchSyncResponse(msgObj, peerSocket) {
     const type = msgObj.data?.type;
     const isReconcile = type === 'fluxappcontentmanifestindex' || type === 'fluxappcontentmanifestsync'
       || type === 'fluxappingressindex' || type === 'fluxappingresssync';
-    if (!isReconcile && !peerManager.isSyncResponseWanted(peerSocket)) return;
+    if (!isReconcile && !peerManager.isSyncResponseWanted(peerSocket)) {
+      // No request to this connection is open, so nobody asked for it. Said, because
+      // the drop is otherwise silent.
+      log.warn(`Unsolicited ${type} from ${peerSocket.direction} peer ${peerKey}`);
+      return;
+    }
 
     // THE QUEUE IS THE ORDER, so nothing that can reorder may sit in front of
     // it. Chunks carry meaning by position: `done` is positional, and a stream
