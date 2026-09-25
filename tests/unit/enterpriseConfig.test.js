@@ -5,6 +5,7 @@ const sinon = require('sinon');
 const proxyquire = require('proxyquire').noCallThru();
 
 
+const MODULE_PATH = '../../ZelBack/src/services/utils/enterpriseConfig';
 const MAP = { pubA: ['ownerA', 'ownerB'], pubB: ['ownerB'] };
 
 // enterpriseConfig no longer fetches anything. policyStore obtains and verifies the signed
@@ -16,6 +17,9 @@ function load(document) {
   const policyStore = { getDocument: sinon.stub().returns(document) };
   return { module: proxyquire(MODULE_PATH, { '../policyStore': policyStore, '../../lib/log': log }), log, policyStore };
 }
+
+// The same loader under the name v9's cases use; no argument loads the standard map.
+const loadModule = (document = MAP) => load(document);
 
 describe('enterpriseConfig', () => {
   afterEach(() => sinon.restore());

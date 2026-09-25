@@ -7,7 +7,7 @@ const chai = require('chai');
 const chaiAsPromised = require('chai-as-promised');
 const serviceHelper = require('../../ZelBack/src/services/serviceHelper');
 const daemonServiceMiscRpcs = require('../../ZelBack/src/services/daemonService/daemonServiceMiscRpcs');
-const daemonServiceWalletRpcs = require('../../ZelBack/src/services/daemonService/daemonServiceWalletRpcs');
+const daemonServiceFluxnodeRpcs = require('../../ZelBack/src/services/daemonService/daemonServiceFluxnodeRpcs');
 const nodeConfirmationService = require('../../ZelBack/src/services/nodeConfirmationService');
 const fluxCommunicationUtils = require('../../ZelBack/src/services/fluxCommunicationUtils');
 const benchmarkService = require('../../ZelBack/src/services/benchmarkService');
@@ -68,7 +68,7 @@ describe('fluxNetworkMonitor tests', () => {
         },
       ];
       sinon.stub(fluxCommunicationUtils, 'deterministicFluxList').returns(deterministicFluxnodeListResponse);
-      sinon.stub(daemonServiceWalletRpcs, 'createConfirmationTransaction').returns(true);
+      sinon.stub(daemonServiceFluxnodeRpcs, 'createConfirmationTransaction').returns(true);
       sinon.stub(serviceHelper, 'delay').returns(true);
       // The peer this asks is an EXTERNAL observer, not any random node:
       // a node sharing our public address cannot answer whether the outside
@@ -214,7 +214,7 @@ describe('fluxNetworkMonitor tests', () => {
       setLastKnownIpStub = sinon.stub(nodeIdentityRepository, 'setLastKnownIp').resolves(true);
       // Recording a new IP also announces it on chain; unstubbed that is a real
       // RPC to the daemon port.
-      sinon.stub(daemonServiceWalletRpcs, 'createConfirmationTransaction').returns(true);
+      sinon.stub(daemonServiceFluxnodeRpcs, 'createConfirmationTransaction').returns(true);
       // The broadcast waits for a peer to hear it; a unit test holds none.
       const { peerManager } = require('../../ZelBack/src/services/utils/FluxPeerManager');
       sinon.stub(peerManager, 'waitForPeers').resolves(false);
@@ -248,7 +248,7 @@ describe('fluxNetworkMonitor tests', () => {
         ({ waitForPeers } = peerManager);
         waitForPeers.resolves(true);
         broadcast = sinon.stub(fluxCommunicationMessagesSender, 'broadcastMessageToAll').resolves({});
-        confirm = daemonServiceWalletRpcs.createConfirmationTransaction;
+        confirm = daemonServiceFluxnodeRpcs.createConfirmationTransaction;
         warn = sinon.stub(log, 'warn');
       });
 
@@ -328,8 +328,8 @@ describe('fluxNetworkMonitor tests', () => {
       sinon.stub(nodeIdentityRepository, 'getLastKnownIp').resolves('127.0.0.1');
       sinon.stub(nodeIdentityRepository, 'setLastKnownIp').resolves(true);
 
-      // Stub daemonServiceWalletRpcs
-      sinon.stub(daemonServiceWalletRpcs, 'createConfirmationTransaction').resolves({ status: 'success' });
+      // Stub the fluxnode confirmation transaction
+      sinon.stub(daemonServiceFluxnodeRpcs, 'createConfirmationTransaction').resolves({ status: 'success' });
       // The broadcast waits for a peer to hear it; these tests are about the apps.
       const { peerManager } = require('../../ZelBack/src/services/utils/FluxPeerManager');
       sinon.stub(peerManager, 'waitForPeers').resolves(true);
@@ -400,7 +400,6 @@ describe('fluxNetworkMonitor tests', () => {
         './utils/specCutover': specCutoverStub,
         './geolocationService': geolocationServiceStub,
         './fluxCommunicationMessagesSender': fluxCommunicationMessagesSenderStub,
-        './daemonService/daemonServiceWalletRpcs': daemonServiceWalletRpcs,
         './serviceHelper': serviceHelper,
       });
 
@@ -474,7 +473,6 @@ describe('fluxNetworkMonitor tests', () => {
         './utils/specCutover': specCutoverStub,
         './geolocationService': geolocationServiceStub,
         './fluxCommunicationMessagesSender': fluxCommunicationMessagesSenderStub,
-        './daemonService/daemonServiceWalletRpcs': daemonServiceWalletRpcs,
         './serviceHelper': serviceHelper,
       });
 
@@ -535,7 +533,6 @@ describe('fluxNetworkMonitor tests', () => {
         './utils/specCutover': specCutoverStub,
         './geolocationService': geolocationServiceStub,
         './fluxCommunicationMessagesSender': fluxCommunicationMessagesSenderStub,
-        './daemonService/daemonServiceWalletRpcs': daemonServiceWalletRpcs,
         './serviceHelper': serviceHelper,
       });
 
@@ -594,7 +591,6 @@ describe('fluxNetworkMonitor tests', () => {
         './utils/specCutover': specCutoverStub,
         './geolocationService': geolocationServiceStub,
         './fluxCommunicationMessagesSender': fluxCommunicationMessagesSenderStub,
-        './daemonService/daemonServiceWalletRpcs': daemonServiceWalletRpcs,
         './serviceHelper': serviceHelper,
       });
 
@@ -627,7 +623,7 @@ describe('fluxNetworkMonitor tests', () => {
       sinon.useFakeTimers();
       fluxNetworkHelper.setStoredFluxBenchAllowed('6.2.0');
       fluxNetworkHelper.setLocalSocketAddress('129.3.3.3');
-      sinon.stub(daemonServiceWalletRpcs, 'createConfirmationTransaction').returns(true);
+      sinon.stub(daemonServiceFluxnodeRpcs, 'createConfirmationTransaction').returns(true);
       sinon.stub(serviceHelper, 'delay').returns(true);
       // The collision path probes the other node's /flux/version over HTTP; the
       // fixture IPs below are addresses this test must never actually dial.

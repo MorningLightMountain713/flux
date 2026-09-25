@@ -34,7 +34,6 @@ const {
   ensureStignoreCovers,
   folderNeedsUpdate,
 } = require('./syncthingMonitorHelpers');
-const { ensureStignoreCovers } = require('../appSystem/syncthingIgnorePolicy');
 const volumeService = require('../utils/volumeService');
 const appTamperingDetectionService = require('../appTamperingDetectionService');
 const mastershipGrantGate = require('../appLifecycle/mastershipGrantGate');

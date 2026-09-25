@@ -57,7 +57,9 @@ const nodeCapabilities = require('./utils/nodeCapabilities');
 const { peerManager } = require('./utils/peerState');
 const enterpriseNetwork = require('./utils/enterpriseNetwork');
 const enterpriseConfig = require('./utils/enterpriseConfig');
-const policyStore = require('./policy/policyStore');
+const policyStore = require('./policyStore');
+// The typed-document store v9's readers consult; one store replaces both at P-20.
+const typedPolicyStore = require('./policy/policyStore');
 const fluxCommunicationMessagesSender = require('./fluxCommunicationMessagesSender');
 const appQueryService = require('./appQuery/appQueryService');
 const chainTipSource = require('./daemonService/chainTipSource');
@@ -172,7 +174,7 @@ async function startFluxFunctions() {
     // capped at 10s, so boot is never stuck on this. Placed after waitForMongo because
     // last-known-good lives in the database — started earlier, a node that boots while the
     // source is unreachable would fall all the way back to the release-time seed.
-    await policyStore.startSync().catch((err) => log.error(`policyStore start error: ${err.message}`));
+    await typedPolicyStore.startSync().catch((err) => log.error(`policyStore start error: ${err.message}`));
 
     // Node-local state migrations, before anything reads it. pgpService and the IP
     // monitor both read what these adopt; pgpService guards itself (it reads the

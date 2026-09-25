@@ -108,7 +108,8 @@ function getEnterpriseAppOwners() {
  */
 function onOwnerMapChange(onOwnerMapRefreshed) {
   if (!onOwnerMapRefreshed) return;
-  policyStore.onChange(DOCUMENT, onOwnerMapRefreshed);
+  // The signed bundle carries the document, so a refresh of the map is a bundle change.
+  policyStore.onBundleChanged(() => onOwnerMapRefreshed());
   log.info('enterpriseConfig - subscribed to enterprise owner map refreshes');
 }
 

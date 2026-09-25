@@ -567,8 +567,7 @@ const SURVIVES_SOFT_REMOVAL = ['volumeImagePath', 'volumeFsUuid'];
  * @param {string} identifier
  * @throws When the state cannot be read or replaced.
  */
-async function removeControllerState(rawIdentifier) {
-  const identifier = canonical(rawIdentifier);
+async function removeControllerState(identifier) {
   const database = collection();
   // Read without the swallow: a document that could not be READ is not a
   // document that is absent, and the difference is the operator stop lock.
@@ -641,8 +640,7 @@ async function setVolumeImage(identifier, volumeImagePath, volumeFsUuid) {
  * @returns {Promise<{path: string, fsUuid: string|null}|null>}
  * @throws When the state cannot be read.
  */
-async function getVolumeImage(rawIdentifier) {
-  const identifier = canonical(rawIdentifier);
+async function getVolumeImage(identifier) {
   const database = collection();
   const state = await dbHelper.findOneInDatabase(
     database,
