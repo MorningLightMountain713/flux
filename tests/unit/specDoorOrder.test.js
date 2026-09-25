@@ -46,7 +46,7 @@ function validV8() {
     version: 8,
     name: 'doorordertest',
     description: 'x',
-    owner: '16dNCFf7nR3nx5iwn2RQMBw6KcJXkE3JC1',
+    owner: '1EHNa6Q4Jz2uvNExL497mE43ikXhwF6kZm',
     instances: 3,
     contacts: [],
     geolocation: [],

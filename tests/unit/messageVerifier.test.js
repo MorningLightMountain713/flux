@@ -818,7 +818,7 @@ describe('messageVerifier tests', () => {
               version: 9,
               name: 'termapp',
               description: 'fixture',
-              owner: '16dNCFf7nR3nx5iwn2RQMBw6KcJXkE3JC1',
+              owner: '1EHNa6Q4Jz2uvNExL497mE43ikXhwF6kZm',
               instances: 3,
               ttl: 2_592_000,
               contacts: { email: ['test@example.com'] },

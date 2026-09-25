@@ -87,14 +87,14 @@ describe('specLibs — how a spec validation failure reaches the caller', () => 
     const refusal = async (owner) => validateSubmissionSpec(withOwner(owner)).then(() => null, (err) => err);
 
     it('accepts the spec when the owner is a Flux ID, so the refusals below are about the owner', async () => {
-      const spec = await validateSubmissionSpec(withOwner('16dNCFf7nR3nx5iwn2RQMBw6KcJXkE3JC1'));
-      expect(spec.owner).to.equal('16dNCFf7nR3nx5iwn2RQMBw6KcJXkE3JC1');
+      const spec = await validateSubmissionSpec(withOwner('1EHNa6Q4Jz2uvNExL497mE43ikXhwF6kZm'));
+      expect(spec.owner).to.equal('1EHNa6Q4Jz2uvNExL497mE43ikXhwF6kZm');
     });
 
     it('refuses a Flux ID whose checksum does not hold, which only decoding can see', async () => {
       // the accepted id above with its last character changed: same length,
       // same alphabet, same shape - the schema cannot tell them apart
-      const err = await refusal('16dNCFf7nR3nx5iwn2RQMBw6KcJXkE3JC2');
+      const err = await refusal('1EHNa6Q4Jz2uvNExL497mE43ikXhwF6kZn');
       expect(err, 'a submission path that no longer reaches validateSemantics refuses nothing')
         .to.be.instanceOf(ValidationError);
       expect(err.errors.map((e) => e.code)).to.include('UNSIGNABLE_IDENTITY');
@@ -179,7 +179,7 @@ describe('specLibs — how a spec validation failure reaches the caller', () => 
       version: 8,
       name: 'heighttest',
       description: 'x',
-      owner: '16dNCFf7nR3nx5iwn2RQMBw6KcJXkE3JC1',
+      owner: '1EHNa6Q4Jz2uvNExL497mE43ikXhwF6kZm',
       instances: 1,
       contacts: [],
       geolocation: [],
@@ -239,7 +239,7 @@ describe('specLibs — how a spec validation failure reaches the caller', () => 
       version: 9,
       name: 'credentialtest',
       description: 'x',
-      owner: '16dNCFf7nR3nx5iwn2RQMBw6KcJXkE3JC1',
+      owner: '1EHNa6Q4Jz2uvNExL497mE43ikXhwF6kZm',
       instances: 3,
       ttl: 86_400,
       contacts: { email: ['admin@example.com'] },

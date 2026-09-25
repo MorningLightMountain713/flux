@@ -17,7 +17,7 @@
 
 const { load } = require('@runonflux/flux-spec-cjs');
 
-const OWNER = '16dNCFf7nR3nx5iwn2RQMBw6KcJXkE3JC1';
+const OWNER = '1EHNa6Q4Jz2uvNExL497mE43ikXhwF6kZm';
 
 /**
  * A v9 submission body. Deliberately the smallest one the spec accepts, so a

@@ -22,7 +22,7 @@ let flux;
 
 // A second real Flux ID, so "the last registration wins" is a comparison between two
 // real owners rather than between two placeholder strings the library would refuse.
-const OTHER_OWNER = '16dNCFf7nR3nx5iwn2RQMBw6KcJXkE3JC1';
+const OTHER_OWNER = '1EHNa6Q4Jz2uvNExL497mE43ikXhwF6kZm';
 
 describe('appQueryService tests', () => {
   let appQueryService;
