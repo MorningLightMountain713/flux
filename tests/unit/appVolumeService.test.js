@@ -145,19 +145,22 @@ describe('appVolumeService.removeOrphanedInjectedContent', () => {
   });
 });
 
-describe('appVolumeService.createAppVolume (findmnt disk selection + in-lock recheck)', () => {
-  const GiB = 1024 ** 3;
+describe('appVolumeService.createAppVolume (disk selection + in-lock recheck)', () => {
   const deployComp = {
     identifier: 'web_testapp', appName: 'testapp', storage: 10, mounts: [],
   };
+  // placementVolumesInGib's rows: whole GiB, emptiest first.
+  const disk = (mount, available) => ({
+    filesystem: `/dev/${mount.replace(/\//g, '') || 'root'}`, mount, size: 1000, used: 1000 - available, available,
+  });
 
-  function load({ mount, condemned = false, teardownOwed = false } = {}) {
+  function load({ disks, condemned = false, teardownOwed = false } = {}) {
     const runCommand = sinon.stub().resolves({ error: null });
     const svc = proxyquire('../../ZelBack/src/services/appLifecycle/appVolumeService', {
       config: asConfig({ lockedSystemResources: { extrahdd: 5 } }),
       '../serviceHelper': { ensureString: (x) => x, runCommand },
       '../dockerService': { getAppIdentifier: (id) => id },
-      '../deviceHelper': { mountForTarget: sinon.stub().resolves(mount) },
+      '../utils/volumeService': { placementVolumesInGib: sinon.stub().resolves(disks) },
       '../utils/hostMutationLock': { withHostMutationLock: (fn) => fn() },
       '../appManagement/appsRuntimeState': { isCondemned: sinon.stub().resolves(condemned) },
       './pendingTeardownStore': { teardownOwedFor: sinon.stub().resolves(teardownOwed) },
@@ -170,8 +173,8 @@ describe('appVolumeService.createAppVolume (findmnt disk selection + in-lock rec
   // [{ cmd, params }] for every runCommand call
   const cmdCalls = (runCommand) => runCommand.getCalls().map((c) => ({ cmd: c.args[0], params: (c.args[1] || {}).params || [] }));
 
-  it('places the FLUXFSVOL on the apps-folder filesystem and builds it (fallocate/mke2fs/mount)', async () => {
-    const { svc, runCommand } = load({ mount: { source: '/dev/mapper/flux_crypt', target: '/dat', availableBytes: 500 * GiB } });
+  it('places the FLUXFSVOL on the emptiest usable disk and builds it (fallocate/mke2fs/mount)', async () => {
+    const { svc, runCommand } = load({ disks: [disk('/dat', 500), disk('/mnt/root', 40)] });
     await svc.createAppVolume(deployComp, null, false);
     const calls = cmdCalls(runCommand);
     expect(calls.some((c) => c.cmd === 'fallocate' && c.params.some((p) => String(p).includes('/dat/'))), 'allocated the volume file on /dat').to.be.true;
@@ -186,7 +189,7 @@ describe('appVolumeService.createAppVolume (findmnt disk selection + in-lock rec
   });
 
   it('aborts inside the lock without allocating when the app is condemned', async () => {
-    const { svc, runCommand } = load({ mount: { source: '/dev/mapper/flux_crypt', target: '/dat', availableBytes: 500 * GiB }, condemned: true });
+    const { svc, runCommand } = load({ disks: [disk('/dat', 500)], condemned: true });
     let threw = null;
     try { await svc.createAppVolume(deployComp, null, false); } catch (e) { threw = e; }
     expect(threw, 'aborted').to.be.an('error');
@@ -194,11 +197,27 @@ describe('appVolumeService.createAppVolume (findmnt disk selection + in-lock rec
     expect(cmdCalls(runCommand).some((c) => c.cmd === 'fallocate'), 'never allocated for a condemned app').to.be.false;
   });
 
-  it('throws when the apps-folder disk has no room for the volume', async () => {
-    const { svc } = load({ mount: { source: '/dev/mapper/flux_crypt', target: '/dat', availableBytes: 1 * GiB } });
+  it('takes the first disk with room for the volume and the reserve, in the order given', async () => {
+    // 10 GiB volume + 5 GiB reserve: the first has 14, the second 16.
+    const { svc, runCommand } = load({ disks: [disk('/dat', 14), disk('/mnt/data2', 16), disk('/mnt/data3', 900)] });
+    await svc.createAppVolume(deployComp, null, false);
+    const fallocate = cmdCalls(runCommand).find((c) => c.cmd === 'fallocate');
+    expect(fallocate.params).to.deep.equal(['-l', '10G', '/mnt/data2/web_testappFLUXFSVOL']);
+  });
+
+  it('puts the image in the appvolumes directory when the chosen disk is the root', async () => {
+    const { svc, runCommand } = load({ disks: [disk('/', 500)] });
+    await svc.createAppVolume(deployComp, null, false);
+    const fallocate = cmdCalls(runCommand).find((c) => c.cmd === 'fallocate');
+    expect(fallocate.params[2]).to.match(/appvolumes\/web_testappFLUXFSVOL$/);
+  });
+
+  it('throws when no usable disk has room for the volume', async () => {
+    const { svc, runCommand } = load({ disks: [disk('/dat', 14), disk('/mnt/root', 3)] });
     let threw = null;
     try { await svc.createAppVolume(deployComp, null, false); } catch (e) { threw = e; }
     expect(threw, 'aborted').to.be.an('error');
     expect(threw.message).to.include('Insufficient space');
+    expect(cmdCalls(runCommand).some((c) => c.cmd === 'fallocate'), 'nothing allocated').to.be.false;
   });
 });

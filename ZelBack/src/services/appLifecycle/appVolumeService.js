@@ -6,7 +6,7 @@ const path = require('node:path');
 const serviceHelper = require('../serviceHelper');
 const dockerService = require('../dockerService');
 const messageHelper = require('../messageHelper');
-const deviceHelper = require('../deviceHelper');
+const volumeService = require('../utils/volumeService');
 const { withHostMutationLock } = require('../utils/hostMutationLock');
 const appsRuntimeState = require('../appManagement/appsRuntimeState');
 const pendingTeardownStore = require('./pendingTeardownStore');
@@ -41,22 +41,17 @@ async function createAppVolume(deployComp, res) {
 
   emitStatus(res, { status: 'Searching available space...' });
 
-  // The FLUXFSVOL loop file MUST live on the filesystem that hosts the apps folder — on
-  // Arcane that is /dat (the encrypted data partition), on legacy whatever FLUX_APPS_FOLDER
-  // resolves to; NEVER the root/overlay disk. Resolve that one filesystem directly
-  // (findmnt --target the apps folder) instead of scanning every mount and guessing — the
-  // old node-df scan could land a small app on /mnt/root. Logical resource admission
-  // already ran (admissionControl.checkNodeResources, before createAppVolume is reached),
-  // so this only confirms the chosen disk physically has room (a small reserve keeps the
-  // system off a disk with no headroom). mkdir the apps base first so findmnt can resolve
-  // its mountpoint on a fresh node.
-  const bytesPerGb = 1024 ** 3;
-  const needBytes = requiredGb * bytesPerGb;
-  const reserveBytes = config.get('lockedSystemResources.extrahdd') * bytesPerGb;
-  await serviceHelper.runCommand('mkdir', { params: ['-p', appsFolderPath], runAsRoot: true });
-  const useThisVolume = await deviceHelper.mountForTarget(appsFolderPath);
-  if (useThisVolume.availableBytes < needBytes + reserveBytes) {
-    throw new Error(`Insufficient space on ${useThisVolume.target} for ${identifier}: needs ${requiredGb}GB + reserve, ${Math.floor(useThisVolume.availableBytes / bytesPerGb)}GB free`);
+  // The disks an image may be placed on, emptiest first (volumeService decides
+  // which disks qualify). Logical resource admission already ran
+  // (admissionControl.checkNodeResources, before createAppVolume is reached), so
+  // this only picks a disk that physically has room: the first with space for the
+  // volume and a small reserve, so the system is never left on a disk with no
+  // headroom.
+  const reserveGb = config.get('lockedSystemResources.extrahdd');
+  const candidates = await volumeService.placementVolumesInGib();
+  const useThisVolume = candidates.find((volume) => volume.available >= requiredGb + reserveGb);
+  if (!useThisVolume) {
+    throw new Error(`Insufficient space for ${identifier}: needs ${requiredGb}GB + ${reserveGb}GB reserve, no usable disk has room (${candidates.map((v) => `${v.mount} ${v.available}GB`).join(', ') || 'no usable disk'})`);
   }
 
   emitStatus(res, { status: 'Space found' });
@@ -65,11 +60,11 @@ async function createAppVolume(deployComp, res) {
     emitStatus(res, { status: 'Allocating space...' });
 
     let volumeFile;
-    if (useThisVolume.target === '/') {
+    if (useThisVolume.mount === '/') {
       await serviceHelper.runCommand('mkdir', { params: ['-p', `${fluxDirPath}appvolumes`], runAsRoot: true });
       volumeFile = `${fluxDirPath}appvolumes/${appId}FLUXFSVOL`;
     } else {
-      volumeFile = `${useThisVolume.target}/${appId}FLUXFSVOL`;
+      volumeFile = `${useThisVolume.mount}/${appId}FLUXFSVOL`;
     }
 
     // Build the loop-mounted FLUXFSVOL under the node-wide host-mutation lock — the same
@@ -162,10 +157,10 @@ async function createAppVolume(deployComp, res) {
       log.warn('Volume not mounted or already unmounted during cleanup');
     }
     let volumeFilePath;
-    if (useThisVolume.target === '/') {
+    if (useThisVolume.mount === '/') {
       volumeFilePath = `${fluxDirPath}appvolumes/${appId}FLUXFSVOL`;
     } else {
-      volumeFilePath = `${useThisVolume.target}/${appId}FLUXFSVOL`;
+      volumeFilePath = `${useThisVolume.mount}/${appId}FLUXFSVOL`;
     }
     await serviceHelper.runCommand('rm', { params: ['-rf', volumeFilePath], runAsRoot: true });
     // clear the immutable flag set on the bare mountpoint before mounting, or the removal below fails
