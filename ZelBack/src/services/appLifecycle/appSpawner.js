@@ -1691,4 +1691,5 @@ module.exports = {
   isSoleRequiredInstaller,
   isPinnedContended,
   notifySpecStored,
+  wakeIdleLoop,
 };
