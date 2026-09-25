@@ -20,7 +20,7 @@ const freshTable = () => {
 const GOSSIP_TYPES = [
   'zelappregister', 'zelappupdate', 'fluxappregister', 'fluxappupdate',
   'fluxapprunning', 'fluxipchanged', 'fluxappremoved', 'fluxappinstalling',
-  'fluxappinstallingerror', 'fluxnodesigterm', 'fluxapprequest',
+  'fluxappinstallingerror', 'fluxapprequest',
   'fluxpolicyrequest', 'fluxpolicyseq', 'fluxpolicy',
 ];
 
@@ -62,7 +62,7 @@ describe('messageRoutes tests', () => {
       // thing that stops one copy becoming one per peer per hop.
       ['zelappregister', 'zelappupdate', 'fluxappregister', 'fluxappupdate',
         'fluxapprunning', 'fluxipchanged', 'fluxappremoved', 'fluxappinstalling',
-        'fluxappinstallingerror', 'fluxnodesigterm'].forEach((type) => {
+        'fluxappinstallingerror'].forEach((type) => {
         expect(declaredIntent(type), type).to.equal(INTENT.ANNOUNCE);
       });
     });
