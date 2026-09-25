@@ -227,6 +227,38 @@ describe('appVolumeService.createAppVolume (disk selection + in-lock recheck)', 
     expect(cmdCalls(runCommand).some((c) => c.cmd === 'fallocate'), 'never allocated for a condemned app').to.be.false;
   });
 
+  // Peers rank a seed on what each node says it holds, so a claim about the volume
+  // being replaced describes data that is about to be gone.
+  describe('the published holdings claim', () => {
+    // eslint-disable-next-line global-require
+    const globalState = require('../../ZelBack/src/services/utils/globalState');
+    const claim = { bytes: 5_000_000, newestModified: 1000 };
+    let saved;
+    beforeEach(() => {
+      saved = globalState.folderHoldings;
+      globalState.folderHoldings = new Map([['fluxweb_testapp', claim], ['fluxother_app', claim]]);
+    });
+    afterEach(() => { globalState.folderHoldings = saved; });
+
+    it('is withdrawn for this component before its volume is allocated', async () => {
+      const { svc, runCommand } = load({ disks: [disk('/dat', 500)] });
+      let heldAtAllocation;
+      runCommand.withArgs('fallocate').callsFake(async () => {
+        heldAtAllocation = globalState.folderHoldings.has('fluxweb_testapp');
+        return { error: null };
+      });
+      await svc.createAppVolume(deployComp, null, false);
+      expect(heldAtAllocation, 'withdrawn before the allocation').to.equal(false);
+      expect(globalState.folderHoldings.get('fluxother_app'), 'another folder keeps its claim').to.equal(claim);
+    });
+
+    it('stands when creation aborts before anything is allocated', async () => {
+      const { svc } = load({ disks: [disk('/dat', 500)], condemned: true });
+      await svc.createAppVolume(deployComp, null, false).catch(() => {});
+      expect(globalState.folderHoldings.get('fluxweb_testapp'), 'the volume and its data are untouched').to.equal(claim);
+    });
+  });
+
   it('takes the first disk with room for the volume and the reserve, in the order given', async () => {
     // 10 GiB volume + 5 GiB reserve: the first has 14, the second 16.
     const { svc, runCommand } = load({ disks: [disk('/dat', 14), disk('/mnt/data2', 16), disk('/mnt/data3', 900)] });

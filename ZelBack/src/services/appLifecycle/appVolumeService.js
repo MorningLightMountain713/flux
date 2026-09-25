@@ -8,6 +8,7 @@ const serviceHelper = require('../serviceHelper');
 const dockerService = require('../dockerService');
 const messageHelper = require('../messageHelper');
 const volumeService = require('../utils/volumeService');
+const globalState = require('../utils/globalState');
 const syncthingIgnorePolicy = require('../appSystem/syncthingIgnorePolicy');
 const { withHostMutationLock } = require('../utils/hostMutationLock');
 const appsRuntimeState = require('../appManagement/appsRuntimeState');
@@ -81,6 +82,10 @@ async function createAppVolume(deployComp, res) {
       if (await appsRuntimeState.isCondemned(identifier) || await pendingTeardownStore.teardownOwedFor(deployComp.appName)) {
         throw new Error(`createAppVolume of ${identifier} aborted: a removal/cancel of ${deployComp.appName} arrived before volume creation`);
       }
+      // This node's published claim about the folder describes the volume being
+      // replaced, and peers rank a seed on it. Withdrawn at the first act that cannot
+      // be undone: every abort above leaves the volume and its data as they were.
+      globalState.folderHoldings?.delete(appId);
       await serviceHelper.runCommand('fallocate', { params: ['-l', `${requiredGb}G`, volumeFile], runAsRoot: true });
       emitStatus(res, { status: 'Space allocated' });
 

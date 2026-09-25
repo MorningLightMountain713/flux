@@ -104,84 +104,6 @@ const SYNCTHING_FOLDER_MARKER = '.stfolder';
 const SYNCTHING_IGNORE_FILE = '.stignore';
 
 /**
- * The .stignore lines FluxOS asserts on every folder it replicates.
- *
- * `/backup` keeps the owner's local archives off the network. The staging
- * directory keeps an operation's scratch off it: every byte a copy, extract or
- * upload stages would otherwise replicate to every peer only to be deleted
- * again on publish, and a peer's boot sweep could delete a replicated staging
- * directory a live operation on another node still needs.
- *
- * `lost+found` is the filesystem's, not the owner's: a component's volume root IS
- * its syncthing folder and every volume is formatted ext4, so it sits inside the
- * replicated tree. Syncthing's own internal names are `.stfolder`, `.stignore` and
- * `.stversions` and nothing else, so without this line whatever one node's fsck
- * recovers becomes every holder's copy.
- *
- * Each is anchored to the folder root, so none takes a name from the owner deeper
- * in their own tree.
- *
- * The staging line is now an exact name rather than a pattern, which is what
- * makes it the same rule the sweep and the browser apply. The legacy glob
- * beside it is the migration, and goes when the field is clear - see
- * LEGACY_STAGING_PREFIX. It is the one line here that still takes names from
- * the owner, which is why it is temporary.
- */
-const SYNCTHING_IGNORE_LINES = ['/backup', '/lost+found', `/${STAGING_ROOT}`, `/${LEGACY_STAGING_PREFIX}*`];
-
-/**
- * The full leading ignore block for one component: the lines FluxOS asserts on every
- * folder, followed by the ones its spec asks for.
- *
- * A component declares a directory unsynced with `ml:` and this turns those names into
- * anchored patterns. They join the leading block rather than the owner's own list
- * because they are equally non-overridable: an `!` above one would replicate the very
- * directory the spec asked to keep local, on a volume the owner shares with nobody.
- *
- * Derived from the spec, never from disk, so every node computes the same block for
- * the same app and no node's ignores depend on what it happens to be holding.
- *
- * @param {string[]} unsyncedSubdirs - volume-root names from mountParser.getUnsyncedSubdirs
- * @returns {string[]} the patterns that must lead this folder's .stignore, in order
- */
-function syncthingIgnoreLines(unsyncedSubdirs = []) {
-  const declared = unsyncedSubdirs.map((name) => `/${name}`);
-  return [...SYNCTHING_IGNORE_LINES, ...declared.filter((line) => !SYNCTHING_IGNORE_LINES.includes(line))];
-}
-
-/**
- * The names syncthing never indexes whatever .stignore says - lib/fs/filesystem.go,
- * `internals`, and the whole of them. `.stversions` is here because syncthing would
- * skip it if versioning were ever configured, not because FluxOS writes it.
- */
-const SYNCTHING_INTERNAL_NAMES = ['.stfolder', '.stignore', '.stversions'];
-
-/** Whether an ignore line, anchored at the folder root, keeps this name off the network. */
-function ignoreLineCovers(line, name) {
-  const anchored = `/${name}`;
-  return line.endsWith('*') ? anchored.startsWith(line.slice(0, -1)) : line === anchored;
-}
-
-/**
- * Whether a volume-root name is inside the scope the syncthing index describes.
- *
- * READ FROM THE IGNORE LINES THEMSELVES, so the disk and the index count one set.
- * Kept off the network but counted on disk, a name makes a volume read occupied over
- * a synced payload that is empty - the reading the phantom guard exists to catch.
- * Counted by the index and skipped on disk, it reads empty over data. A second list
- * of the same names is a second rule that has to agree with this one, which is the
- * shape STAGING_ROOT above records the cost of.
- *
- * @param {string} name - a single volume-root path component, not a path
- * @param {string[]} unsyncedSubdirs - volume-root names the spec declared with ml:
- * @returns {boolean}
- */
-function isSyncedRootName(name, unsyncedSubdirs = []) {
-  if (SYNCTHING_INTERNAL_NAMES.includes(name)) return false;
-  return !syncthingIgnoreLines(unsyncedSubdirs).some((line) => ignoreLineCovers(line, name));
-}
-
-/**
  * What a name may not carry to stand for itself as ONE LINE of .stignore.
  *
  * Pattern syntax, because the line is a pattern: `*` and `?` are wildcards, `[a]` is a
@@ -283,10 +205,6 @@ module.exports = {
   isLegacyStagingName,
   SYNCTHING_FOLDER_MARKER,
   SYNCTHING_IGNORE_FILE,
-  SYNCTHING_IGNORE_LINES,
-  SYNCTHING_INTERNAL_NAMES,
-  syncthingIgnoreLines,
-  isSyncedRootName,
   isLiteralIgnoreName,
   isStagingName,
   isReservedName,

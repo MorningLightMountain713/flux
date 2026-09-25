@@ -3,6 +3,7 @@
 // Set NODE_CONFIG_DIR before any requires
 process.env.NODE_CONFIG_DIR = `${process.cwd()}/tests/unit/globalconfig`;
 
+const path = require('node:path');
 const { expect } = require('chai');
 const sinon = require('sinon');
 const proxyquire = require('proxyquire').noCallThru();
@@ -51,6 +52,7 @@ const syncthingServiceMock = {
   getFolderIdErrors: sinon.stub(),
   systemRestart: sinon.stub().resolves(),
   getDbStatus: sinon.stub(),
+  getFolderIgnores: sinon.stub(),
 };
 
 const syncthingFolderStateMachineMock = {
@@ -162,7 +164,15 @@ const livenessMock = {
   localConnectivity: sinon.stub().returns({ connected: true, responding: 1, total: 1 }),
 };
 
-const ignorePolicyMock = { ensureStignoreCovers: sinon.stub().resolves() };
+// The lines are the real derivation: they are what the phantom guard reads the disk
+// against, so a component that cannot answer for them has to fail here.
+// eslint-disable-next-line global-require
+const { ignoreLinesFor: derivedIgnoreLines } = require('../../ZelBack/src/services/appSystem/syncthingIgnorePolicy');
+
+const ignorePolicyMock = {
+  ensureStignoreCovers: sinon.stub().resolves(),
+  ignoreLinesFor: sinon.stub().callsFake(derivedIgnoreLines),
+};
 
 const syncthingMonitor = proxyquire('../../ZelBack/src/services/appMonitoring/syncthingMonitor', {
   './peerFolderLiveness': { createPeerFolderLiveness: () => livenessMock },
@@ -313,6 +323,9 @@ describe('syncthingMonitor tests', () => {
       cache: null,
     });
     ignorePolicyMock.ensureStignoreCovers.resetHistory();
+    ignorePolicyMock.ignoreLinesFor.resetHistory();
+    syncthingServiceMock.getFolderIgnores.reset();
+    syncthingServiceMock.getFolderIgnores.resolves({ status: 'success', data: { ignore: [] } });
     syncthingMonitorHelpersMock.ensureStfolderExists.reset();
     syncthingMonitorHelpersMock.ensureStfolderExists.resolves(true);
     syncthingMonitorHelpersMock.createSyncthingFolderConfig.resetHistory();
@@ -625,13 +638,19 @@ describe('syncthingMonitor tests', () => {
           unreadableAppNames: new Set(['sealed']),
         });
         syncthingServiceMock.getConfigFolders.resolves([{ id: 'fluxweb_sealed', type: 'sendreceive' }]);
+        const held = ['/backup', '/lost+found', '/cache'];
+        syncthingServiceMock.getFolderIgnores.withArgs('fluxweb_sealed').resolves({ status: 'success', data: { ignore: held } });
 
         monitorControl = syncthingMonitor.syncthingApps(mockState, mockGetGlobalStateFn);
         await clock.tickAsync(100);
 
-        const checked = syncthingFolderStateMachineMock.verifySendReceiveFolderSafety
-          .getCalls().map((call) => call.args[0]);
+        const calls = syncthingFolderStateMachineMock.verifySendReceiveFolderSafety.getCalls();
+        const checked = calls.map((call) => call.args[0]);
         expect(checked, 'an unreadable app\'s folder went unverified').to.include('fluxweb_sealed');
+        // No specification to derive from, so the scope is the one syncthing holds
+        // for the folder - the lines its index was built under.
+        const sealed = calls.find((call) => call.args[0] === 'fluxweb_sealed');
+        expect(sealed.args[2].ignoreLines).to.deep.equal(held);
       });
 
       // THE IGNORE POLICY IS CONVERGED THROUGH SYNCTHING, which owns .stignore
@@ -768,6 +787,8 @@ describe('syncthingMonitor tests', () => {
       expect(checkedId, 'the mount check is keyed by the docker identifier').to.equal(syncFolderId);
       expect(checkedFolder, 'and the folder is that identifier under the apps folder').to.equal(`${appsFolder}${syncFolderId}`);
       expect(checkedOpts.appName, 'the owning app, for incident roll-up').to.equal('testapp');
+      expect(checkedOpts.ignoreLines, 'the disk is read in the scope the component derives')
+        .to.deep.equal(await derivedIgnoreLines(syncComp));
     });
 
     // A stateless component has no volume by design — appVolumeService returns
@@ -1148,6 +1169,37 @@ describe('syncthingMonitor tests', () => {
       sinon.assert.called(syncthingServiceMock.getDeviceId);
     });
 
+    // What a folder holds that the cluster's index does not is a receive-only
+    // question, and a promotion answers it: everything this node holds is published.
+    it('drops the published holdings of a folder it promotes, once the write lands', async () => {
+      // eslint-disable-next-line global-require
+      const globalStateModule = require('../../ZelBack/src/services/utils/globalState');
+      const saved = globalStateModule.folderHoldings;
+      const claim = { bytes: 5_821_604_997, newestModified: 200 };
+      globalStateModule.folderHoldings = new Map([[syncFolderId, claim], ['fluxother_app', claim]]);
+      try {
+        deploymentProviderMock.listInstalledDeployments.resolves([syncDeployment]);
+        syncthingServiceMock.getConfigFolders.resolves([]);
+        syncthingServiceMock.getConfigDevices.resolves([]);
+        syncthingServiceMock.getDeviceId.resolves('DEVICE-ID');
+        fluxNetworkHelperMock.getLocalSocketAddress.resolves('10.0.0.1:16127');
+        syncthingMonitorHelpersMock.folderNeedsUpdate.returns(true);
+
+        monitorControl = syncthingMonitor.syncthingApps(mockState, mockGetGlobalStateFn);
+        await clock.tickAsync(100);
+
+        const put = syncthingServiceMock.adjustConfigFolders.getCalls()
+          .find((call) => call.args[0]?.method === 'put');
+        expect(put, 'nothing was written, so this asserts nothing').to.not.equal(undefined);
+        expect(put.args[0].config.find((folder) => folder.id === syncFolderId)?.type).to.equal('sendreceive');
+        expect(globalStateModule.folderHoldings.has(syncFolderId), 'a promoted folder still claims receive-only holdings').to.equal(false);
+        // Scoped to what the write changed, not a clear of every claim the node made.
+        expect(globalStateModule.folderHoldings.get('fluxother_app')).to.equal(claim);
+      } finally {
+        globalStateModule.folderHoldings = saved;
+      }
+    });
+
     it('drives the folder state machine from the real component, not from an asserted flag', async () => {
       // The state machine stays stubbed, so nothing else proves the values it is
       // handed are the ones a real DeploymentComponent answers. Every one of them
@@ -1180,11 +1232,13 @@ describe('syncthingMonitor tests', () => {
       expect(params.appId, 'the docker identifier is the syncthing folder id').to.equal(syncFolderId);
       expect(params.identifier, 'and the bare component identifier travels alongside it').to.equal(syncComp.identifier);
       expect(params.installedAppName).to.equal('testapp');
-      // injectedSyncExcludes() is what keeps content-delivered files out of the
-      // emptiness walk; an empty array here lets delivered content certify a
-      // wiped dataset as populated.
-      expect(params.injectedExcludePaths).to.deep.equal(syncComp.injectedSyncExcludes());
-      expect(params.injectedExcludePaths, 'the content slot must reach the walk').to.have.lengthOf(1);
+      // The component's derived ignore lines are what keep content-delivered files
+      // and the platform's scaffolding out of the emptiness walk; without them
+      // delivered content certifies a wiped dataset as populated.
+      expect(params.ignoreLines).to.deep.equal(await derivedIgnoreLines(syncComp));
+      const [slot] = syncComp.injectedSyncExcludes();
+      expect(params.ignoreLines, 'the content slot must reach the walk')
+        .to.include(`/${path.relative(syncComp.dir, slot)}`);
 
       // The folder configured for it is the component's own directory.
       const [id, label, folderPath] = syncthingMonitorHelpersMock.createSyncthingFolderConfig.firstCall.args;
@@ -1339,7 +1393,7 @@ describe('syncthingMonitor tests', () => {
       sinon.assert.notCalled(appReconcilerMock.setControllerDesired);
     });
 
-    it('hands the startup safety scan the real component injected excludes and app name', async () => {
+    it('hands the startup safety scan the real component ignore lines and app name', async () => {
       // First run walks syncthing's own folder list, so it starts from a folder id
       // and has to resolve the owning component itself. Both values it resolves
       // come off real objects and go to a stubbed collaborator.
@@ -1348,6 +1402,7 @@ describe('syncthingMonitor tests', () => {
       fluxNetworkHelperMock.getLocalSocketAddress.resolves('10.0.0.1:16127');
       deploymentProviderMock.listInstalledDeployments.resolves([syncDeployment]);
       syncthingServiceMock.getConfigFolders.resolves([{ id: syncFolderId, path: syncComp.dir, type: 'sendreceive' }]);
+      syncthingServiceMock.getFolderIgnores.resolves({ status: 'success', data: { ignore: ['/held-by-syncthing'] } });
 
       monitorControl = syncthingMonitor.syncthingApps(
         mockState,
@@ -1357,18 +1412,18 @@ describe('syncthingMonitor tests', () => {
 
       // TWO calls on a first run, and they are different questions: the mount
       // check asks about every folder it verifies, and the startup safety scan
-      // asks about each sendreceive folder with the component's injected
-      // excludes. Only the scan carries those, so that is the call read here.
-      const scanCall = syncthingFolderStateMachineMock.verifySendReceiveFolderSafety
-        .getCalls().find((call) => call.args[2] && 'injectedExcludePaths' in call.args[2]);
-      expect(scanCall, 'the startup safety scan never ran').to.not.equal(undefined);
-      const [scannedId, scannedPath, opts] = scanCall.args;
-      expect(scannedId).to.equal(syncFolderId);
-      expect(scannedPath).to.equal(syncComp.dir);
-      expect(opts.injectedExcludePaths, 'resolved from the component the folder id belongs to')
-        .to.deep.equal(syncComp.injectedSyncExcludes());
-      expect(opts.injectedExcludePaths).to.have.lengthOf(1);
-      expect(opts.appName, 'the owning app, for incident roll-up').to.equal('testapp');
+      // asks about each sendreceive folder syncthing lists. Both resolve the
+      // component, so both read the disk in the scope it derives - never in the
+      // one syncthing holds, which is for a folder no component claims.
+      const derived = await derivedIgnoreLines(syncComp);
+      const calls = syncthingFolderStateMachineMock.verifySendReceiveFolderSafety.getCalls()
+        .filter((call) => call.args[0] === syncFolderId);
+      expect(calls, 'the mount check and the startup safety scan').to.have.lengthOf(2);
+      calls.forEach(({ args: [, scannedPath, opts] }) => {
+        expect(scannedPath).to.equal(syncComp.dir);
+        expect(opts.ignoreLines, 'derived from the component the folder id belongs to').to.deep.equal(derived);
+        expect(opts.appName, 'the owning app, for incident roll-up').to.equal('testapp');
+      });
       // A safe folder is left alone - no demotion.
       sinon.assert.neverCalledWith(syncthingServiceMock.adjustConfigFolders, { method: 'patch', config: { type: 'receiveonly' }, id: syncFolderId });
     });
