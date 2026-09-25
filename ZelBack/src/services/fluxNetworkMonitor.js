@@ -14,7 +14,7 @@ const { peerManager } = require('./utils/FluxPeerManager');
 const geolocationService = require('./geolocationService');
 const daemonServiceMiscRpcs = require('./daemonService/daemonServiceMiscRpcs');
 const nodeConfirmationService = require('./nodeConfirmationService');
-const daemonServiceWalletRpcs = require('./daemonService/daemonServiceWalletRpcs');
+const daemonServiceFluxnodeRpcs = require('./daemonService/daemonServiceFluxnodeRpcs');
 const cacheManager = require('./utils/cacheManager').default;
 const {
   normalizeSocketAddress, extractIp, extractPort, socketAddressesMatch, ipsMatch,
@@ -224,7 +224,7 @@ async function adjustExternalIP(ip) {
       }
       // The chain is how the network durably learns the new address, and it
       // needs no peers: announced first, so nothing below can delay it.
-      const result = await daemonServiceWalletRpcs.createConfirmationTransaction();
+      const result = await daemonServiceFluxnodeRpcs.createConfirmationTransaction();
       log.info(`createConfirmationTransaction: ${JSON.stringify(result)}`);
       // Update geolocation service to track IP change and update static IP status
       geolocationService.setNodeGeolocation();
@@ -507,7 +507,7 @@ async function checkDeterministicNodesCollisions() {
           if (errorCall) {
             // Other node is confirmed offline after grace period - take over the collateral
             log.info(`Other node at ${askingIP}:${askingIpPort} confirmed offline. Creating confirmation transaction to take over collateral...`);
-            const daemonResult = await daemonServiceWalletRpcs.createConfirmationTransaction();
+            const daemonResult = await daemonServiceFluxnodeRpcs.createConfirmationTransaction();
             log.info(`node was confirmed on a different machine ip - createConfirmationTransaction: ${JSON.stringify(daemonResult)}`);
             // Clear any previous DOS state related to this collision
             if (nodeDosState.getDosMessage() && nodeDosState.getDosMessage().includes('is confirmed and reachable on flux network')) {
