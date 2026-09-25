@@ -4,6 +4,8 @@ const { expect } = require('chai');
 const crypto = require('crypto');
 const sinon = require('sinon');
 const proxyquire = require('proxyquire').noCallThru();
+const { asConfig } = require('./fixtures/config');
+const shipped = require('../../ZelBack/config/default');
 
 const MODULE_PATH = '../../ZelBack/src/services/policyStore';
 const PKCS8_ED25519_PREFIX = Buffer.from('302e020100300506032b657004220420', 'hex');
@@ -53,7 +55,7 @@ function load(overrides = {}) {
   };
 
   const module = proxyquire(MODULE_PATH, {
-    config: {
+    config: asConfig({
       policy: {
         signedBaseUrl: 'https://policy.example/signed',
         publicKeys: overrides.publicKeys || [KEY.publicHex],
@@ -75,12 +77,16 @@ function load(overrides = {}) {
         // written against. A test about the interval passes its own value.
         backstopRetryIntervalMs: overrides.backstopRetryIntervalMs ?? 0,
       },
-    },
+    }),
     '../lib/log': log,
     './serviceHelper': serviceHelper,
     './utils/globalState': state,
     './utils/fluxEventBus': eventBus,
     './appDatabase/policyArtifactRepository': repo,
+    // The tick's phase is derived from this node's collateral, read from the daemon.
+    './generalService': {
+      obtainNodeCollateralInformation: sinon.stub().resolves({ txhash: 'aa'.repeat(32), txindex: 0 }),
+    },
   });
   return {
     module, log, state, repo, serviceHelper, eventBus,
@@ -170,6 +176,17 @@ describe('policyStore', () => {
   // source "is there anything newer?", so the source stays primary wherever it sits in the
   // ladder. Being TOLD inverts that: a change spreads outwards from whichever node reached
   // the backstop first, and the poll becomes a safety net for nodes that missed it.
+  describe('the timings the node ships with', () => {
+    // Each reaches setTimeout, setInterval or axios as a number of milliseconds. Anything
+    // else is not a timing: setInterval coerces a non-number to 1ms, which would put this
+    // node's refresh against the published source in a loop.
+    ['refreshIntervalMs', 'fetchTimeoutMs', 'peerWindowMs', 'backstopRetryIntervalMs'].forEach((key) => {
+      it(`gives policy.${key} as a positive number`, () => {
+        expect(shipped.policy[key]).to.be.a('number').above(0);
+      });
+    });
+  });
+
   describe('the timings come from config', () => {
     // They were constants in the module, and a 24-hour period written there cannot be
     // observed by any test - so the periodic refresh had no coverage and the fleet suites
@@ -912,11 +929,11 @@ describe('policyStore', () => {
       module.stop();
       expect(module.isReady(), 'boot obtained nothing').to.equal(false);
 
-      module.notePeerAvailable('31.200.0.11:16127');
+      module.notePeerAvailable('198.18.0.11:16127');
       await new Promise(setImmediate);
 
       expect(requestFrom.callCount, 'holding nothing is a reason to ask, not a reason to fetch').to.equal(1);
-      expect(requestFrom.firstCall.args[0]).to.equal('31.200.0.11:16127');
+      expect(requestFrom.firstCall.args[0]).to.equal('198.18.0.11:16127');
     });
 
     it('asks each arriving peer while it holds nothing, and reaches the source for none of them', async () => {
@@ -928,9 +945,9 @@ describe('policyStore', () => {
       module.stop();
       const fetchesAtBoot = axiosGet.callCount;
 
-      module.notePeerAvailable('31.200.0.11:16127');
+      module.notePeerAvailable('198.18.0.11:16127');
       await new Promise(setImmediate);
-      module.notePeerAvailable('31.200.0.12:16127');
+      module.notePeerAvailable('198.18.0.12:16127');
       await new Promise(setImmediate);
 
       expect(requestFrom.callCount, 'still nothing held, so still worth asking').to.equal(2);
@@ -955,7 +972,7 @@ describe('policyStore', () => {
       expect(module.getSeq(), 'restored, so it holds something').to.equal(4);
       const fetchesBefore = axiosGet.callCount;
 
-      module.notePeerAvailable('31.200.0.11:16127');
+      module.notePeerAvailable('198.18.0.11:16127');
       await new Promise(setImmediate);
       await new Promise(setImmediate);
 
@@ -975,13 +992,13 @@ describe('policyStore', () => {
       const requestFrom = sinon.stub().resolves();
       module.setPeerTransport({ requestFrom, announce: sinon.stub().resolves() });
       await module.restore();
-      module.notePeerSeq(4, '31.200.0.11:16127');
+      module.notePeerSeq(4, '198.18.0.11:16127');
 
-      module.notePeerAvailable('31.200.0.12:16127');
+      module.notePeerAvailable('198.18.0.12:16127');
       await new Promise(setImmediate);
 
       expect(requestFrom.callCount, 'a level peer must not close the road to the next one').to.equal(1);
-      expect(requestFrom.firstCall.args[0]).to.equal('31.200.0.12:16127');
+      expect(requestFrom.firstCall.args[0]).to.equal('198.18.0.12:16127');
       module.stop();
     });
 
@@ -991,9 +1008,9 @@ describe('policyStore', () => {
       // as a count rather than having to be inferred.
       const { module } = load({ serviceHelper: { axiosGet: sinon.stub().resolves({ data: bundle(4) }) } });
       const requestFrom = sinon.stub().resolves();
-      const arriving = '31.200.0.11:16127';
+      const arriving = '198.18.0.11:16127';
       module.setPeerTransport({
-        capableKeys: () => [arriving, '31.200.0.12:16127', '31.200.0.13:16127'],
+        capableKeys: () => [arriving, '198.18.0.12:16127', '198.18.0.13:16127'],
         requestFrom,
         announce: sinon.stub().resolves(),
       });
@@ -1014,13 +1031,13 @@ describe('policyStore', () => {
       await module.start();
       module.stop();
 
-      module.notePeerAvailable('31.200.0.12:16127');
+      module.notePeerAvailable('198.18.0.12:16127');
       await new Promise(setImmediate);
-      module.notePeerAvailable('31.200.0.13:16127');
+      module.notePeerAvailable('198.18.0.13:16127');
       await new Promise(setImmediate);
 
       expect(requestFrom.callCount, 'each arriving peer is asked').to.equal(2);
-      expect(requestFrom.secondCall.args[0]).to.equal('31.200.0.13:16127');
+      expect(requestFrom.secondCall.args[0]).to.equal('198.18.0.13:16127');
     });
 
     it('settles a targeted ask on the answer, not on the clock', async () => {
@@ -1034,18 +1051,18 @@ describe('policyStore', () => {
       await module.start();
       module.stop();
 
-      module.notePeerAvailable('31.200.0.11:16127');
+      module.notePeerAvailable('198.18.0.11:16127');
       await new Promise(setImmediate);
-      module.notePeerAvailable('31.200.0.11:16127');
+      module.notePeerAvailable('198.18.0.11:16127');
       await new Promise(setImmediate);
       expect(requestFrom.callCount, 'one outstanding ask per peer').to.equal(1);
 
       deliver();
       await new Promise(setImmediate);
-      module.notePeerSeq(4, '31.200.0.11:16127');
+      module.notePeerSeq(4, '198.18.0.11:16127');
       await new Promise(setImmediate);
 
-      module.notePeerAvailable('31.200.0.11:16127');
+      module.notePeerAvailable('198.18.0.11:16127');
       await new Promise(setImmediate);
       expect(requestFrom.callCount, 'answered, so askable again').to.equal(2);
     });
@@ -1065,7 +1082,7 @@ describe('policyStore', () => {
       expect(module.isReady(), 'boot obtained nothing').to.equal(false);
       const afterBoot = axiosGet.callCount;
 
-      for (let i = 0; i < 16; i += 1) module.notePeerAvailable(`31.200.0.${i + 20}:16127`);
+      for (let i = 0; i < 16; i += 1) module.notePeerAvailable(`198.18.0.${i + 20}:16127`);
       await new Promise(setImmediate);
       await new Promise(setImmediate);
 

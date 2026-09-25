@@ -32,7 +32,9 @@ const contentManifestSyncService = require('./appMessaging/contentManifestSyncSe
 const fluxEventBus = require('./utils/fluxEventBus');
 const { appSyncEvents, EVENTS: SYNC_EVENTS } = require('./utils/appSyncEvents');
 const { INTENT } = require('./utils/messageIntent');
-const { ROUTE, register, declaredIntent } = require('./utils/messageRoutes');
+const {
+  ROUTE, register, declaredIntent, handlerFor, isOrdered,
+} = require('./utils/messageRoutes');
 
 const { announcementSeen, announcementStore, wsPeerCache } = cacheManager;
 

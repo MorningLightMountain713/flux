@@ -8,6 +8,7 @@ const serviceHelper = require('../serviceHelper');
 const { version: FLUX_VERSION } = require('../../../../package.json');
 const peerCodec = require('./peerCodec');
 const rateLimit = require('./rateLimit');
+const { isOrdered } = require('./messageRoutes');
 
 let _fluxNetworkHelper;
 function getFluxNetworkHelper() {

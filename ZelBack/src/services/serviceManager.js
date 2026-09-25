@@ -63,7 +63,7 @@ const enterpriseNetwork = require('./utils/enterpriseNetwork');
 const ufwHelper = require('./utils/ufwHelper');
 const enterpriseConfig = require('./utils/enterpriseConfig');
 const policyStore = require('./policyStore');
-const networkPolicyStore = require('./policy/policyStore');
+// The typed-document store v9's readers consult; one store replaces both at P-20.
 const fluxCommunicationMessagesSender = require('./fluxCommunicationMessagesSender');
 const appQueryService = require('./appQuery/appQueryService');
 const chainTipSource = require('./daemonService/chainTipSource');
@@ -382,15 +382,6 @@ async function startFluxFunctions() {
     // firewall and before any app starts.
     await fluxNetworkHelper.adjustFirewall();
     log.info('Firewalls checked');
-
-    // The network's enforcement documents: blocked repositories, the enterprise
-    // node->owners map, the tampering blocklist and the image whitelist. Awaited so
-    // consumers (identity resolution, the spawn loop, app-spec validation, image
-    // verification) have data before they run; the cache read is local and each fetch is
-    // capped at 10s, so boot is never stuck on this. Placed after waitForMongo because
-    // last-known-good lives in the database — started earlier, a node that boots while the
-    // source is unreachable would fall all the way back to the release-time seed.
-    await networkPolicyStore.startSync().catch((err) => log.error(`networkPolicyStore start error: ${err.message}`));
 
     // Node-local state migrations, before anything reads it. pgpService and the IP
     // monitor both read what these adopt; pgpService guards itself (it reads the
@@ -892,9 +883,7 @@ async function startFluxFunctions() {
     const startDbDependentServices = async () => {
       await globalState.waitForDbReady();
       log.info('DB ready - starting db-dependent services');
-      // Interim until policyStore supersedes it at the userconfig rebase (see the
-      // module header): keep the iplocation table fresh. The cached copy is
-      // already back - restoreCachedTable ran with the schema prep above - so
+      // Keep the iplocation table fresh. The cached copy is already back - restoreCachedTable ran with the schema prep above - so
       // what starts here is the fetch loop, whose ingest is the half worth
       // keeping clear of the rebuild that just finished. Detached; placement
       // degrades to /16 arithmetic without a table.
