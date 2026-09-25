@@ -310,7 +310,12 @@ describe('fileQueryService tests', () => {
         { replica: null, mount: '/mnt/appvolumes/TestApp_Component1' },
       ]);
       sinon.stub(fs, 'readdir').resolves(['link.txt']);
-      sinon.stub(fs, 'lstat').resolves({
+      // The entry is the link. Everything above it is a directory: the containment
+      // check walks those ancestors, and refuses a path that passes through a link.
+      const lstat = sinon.stub(fs, 'lstat').resolves({
+        isDirectory: () => true, isFile: () => false, isSymbolicLink: () => false, size: 4096, birthtime: new Date(), mtime: new Date(),
+      });
+      lstat.withArgs('/mnt/appvolumes/TestApp_Component1/link.txt').resolves({
         isDirectory: () => false,
         isFile: () => false,
         isSymbolicLink: () => true,
@@ -443,8 +448,13 @@ describe('fileQueryService tests', () => {
       ]);
       sinon.stub(fs, 'readdir').resolves(['file.txt', 'folder', 'link.txt']);
 
-      const lstatStub = sinon.stub(fs, 'lstat');
-      lstatStub.onCall(0).resolves({
+      // Each entry by its path; everything above them is a directory, which is what
+      // the containment check's walk of the ancestors has to see.
+      const base = '/mnt/appvolumes/TestApp_Component1';
+      const lstatStub = sinon.stub(fs, 'lstat').resolves({
+        isDirectory: () => true, isFile: () => false, isSymbolicLink: () => false, size: 4096, birthtime: new Date(), mtime: new Date(),
+      });
+      lstatStub.withArgs(`${base}/file.txt`).resolves({
         isDirectory: () => false,
         isFile: () => true,
         isSymbolicLink: () => false,
@@ -452,7 +462,7 @@ describe('fileQueryService tests', () => {
         birthtime: new Date(),
         mtime: new Date(),
       });
-      lstatStub.onCall(1).resolves({
+      lstatStub.withArgs(`${base}/folder`).resolves({
         isDirectory: () => true,
         isFile: () => false,
         isSymbolicLink: () => false,
@@ -460,7 +470,7 @@ describe('fileQueryService tests', () => {
         birthtime: new Date(),
         mtime: new Date(),
       });
-      lstatStub.onCall(2).resolves({
+      lstatStub.withArgs(`${base}/link.txt`).resolves({
         isDirectory: () => false,
         isFile: () => false,
         isSymbolicLink: () => true,
