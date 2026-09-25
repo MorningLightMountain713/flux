@@ -579,21 +579,45 @@ describe('appSpecHelpers tests', () => {
       sinon.stub(priceOracleState, 'getPriceModifierHistory').returns({ resolveAt: () => ({ fiatMarkupBp: 500 }) });
     });
 
-    it('applies fiatMarkupBp as a basis-points markup (500 -> +5%) and returns fluxDiscount as a percent', async () => {
+    // The network price here is 3.06 FLUX, $3.06 at $1/FLUX. A customer paying
+    // in dollars is charged it with the markup, rounded up to .49/.99; the FLUX
+    // price is the network price whatever the markup.
+    const modifier = (fields) => {
+      priceOracleState.getPriceModifierHistory.restore();
+      sinon.stub(priceOracleState, 'getPriceModifierHistory').returns({ resolveAt: () => fields });
+    };
+
+    it('charges a dollar payer the network price +5%, rounded up to .49/.99', async () => {
       const result = await appSpecHelpers.getAppFiatAndFluxPrice(markupSpec);
       expect(result.fiatMarkupBp).to.equal(500);
       expect(result.fluxDiscount).to.equal(5); // 500 / 100, display percent
-      expect(result.flux).to.be.greaterThan(0);
-      expect(result.usd / result.flux).to.be.closeTo(1.05, 0.01); // 1 + 500/10000
+      expect(result.flux).to.equal(3.06);
+      expect(result.usd).to.equal(3.49); // 3.213
     });
 
-    it('applies no markup when fiatMarkupBp is absent (usd == flux at $1/FLUX)', async () => {
-      priceOracleState.getPriceModifierHistory.restore();
-      sinon.stub(priceOracleState, 'getPriceModifierHistory').returns({ resolveAt: () => ({}) });
+    it('applies the markup before rounding, so a larger one can cross into the next step', async () => {
+      modifier({ fiatMarkupBp: 1500 });
+      const result = await appSpecHelpers.getAppFiatAndFluxPrice(markupSpec);
+      expect(result.flux).to.equal(3.06);
+      expect(result.usd).to.equal(3.99); // 3.519
+    });
+
+    it('rounds the network price itself when fiatMarkupBp is absent', async () => {
+      modifier({});
       const result = await appSpecHelpers.getAppFiatAndFluxPrice(markupSpec);
       expect(result.fiatMarkupBp).to.equal(0);
       expect(result.fluxDiscount).to.equal(0);
-      expect(result.usd / result.flux).to.be.closeTo(1.0, 0.01);
+      expect(result.flux).to.equal(3.06);
+      expect(result.usd).to.equal(3.49);
+    });
+
+    it('prices dollars at the oracle rate and leaves FLUX alone', async () => {
+      priceOracleState.getRateMessageHistory.restore();
+      sinon.stub(priceOracleState, 'getRateMessageHistory').returns({ resolveAt: () => ({ fluxUsdPriceE4: 5_000 }) });
+      const result = await appSpecHelpers.getAppFiatAndFluxPrice(markupSpec);
+      // At $0.50/FLUX the same dollars cost twice the FLUX, each figure rounded to the cent on its own.
+      expect(result.flux).to.equal(6.13);
+      expect(result.usd).to.equal(3.49);
     });
   });
 

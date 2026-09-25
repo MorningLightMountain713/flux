@@ -191,7 +191,9 @@ async function onChainDisplayPrice(spec) {
 }
 
 /**
- * USD + FLUX quote for display. There is no free-update check here: the quote
+ * The network price in FLUX, and what a customer paying in dollars is charged:
+ * that price with the fiat markup, rounded up to .49/.99 (`fiatPrice`). The
+ * dollar figure is never checked on chain. There is no free-update check here: the quote
  * routes through the same priceUpdate call consensus makes, and that call
  * returns 0 when the update is free.
  *
@@ -202,10 +204,8 @@ async function fiatAndFluxDisplayPrice(spec) {
   const fluxPrice = await onChainDisplayPrice(spec);
   const fluxUsdRate = getOracleFluxUsdRate();
   const fiatMarkupBp = getFiatMarkupBp();
-  const fluxUsd = fluxUsdRate != null ? fluxPrice * fluxUsdRate : null;
-  const usd = fluxUsd != null
-    ? Number((fluxUsd * (1 + fiatMarkupBp / 10_000)).toFixed(2))
-    : null;
+  const { fiatPrice } = await getSpecPolicy();
+  const usd = fluxUsdRate != null ? fiatPrice(fluxPrice * fluxUsdRate, fiatMarkupBp) : null;
 
   return {
     usd,
