@@ -282,7 +282,7 @@ describe('containerHealthMonitor tests', () => {
       // Read off the real InstantiatedSpec, which reads it off the spec — the
       // owner is a real P2PKH address, because the library rejects anything else.
       expect(opts.owner).to.equal(instantiated.owner);
-      expect(opts.owner).to.equal('16dNCFf7nR3nx5iwn2RQMBw6KcJXkE3JC1');
+      expect(opts.owner).to.equal('1EHNa6Q4Jz2uvNExL497mE43ikXhwF6kZm');
     });
 
     it('recomputes the graceful-shutdown gate and forwards it, so a recreate keeps its budget labels', async () => {

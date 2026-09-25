@@ -20,7 +20,7 @@ let flux;
 // ALREADY has, so both halves of that comparison have to be addresses the real
 // classes accept — 'oldOwner' / 'newOwner' / 'owner1' never were.
 const OLD_OWNER = '19z6SjrVrWqBTLiCXWLRjcu9ydnzWNz3UD';
-const NEW_OWNER = '16dNCFf7nR3nx5iwn2RQMBw6KcJXkE3JC1';
+const NEW_OWNER = '1EHNa6Q4Jz2uvNExL497mE43ikXhwF6kZm';
 
 function makeStreamResponse(data) {
   const json = JSON.stringify({ status: 'success', data });

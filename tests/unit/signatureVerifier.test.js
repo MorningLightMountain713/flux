@@ -240,7 +240,7 @@ describe('a real Bitcoin signature, through the deployed path', () => {
   });
 
   it('refuses the same signature for another owner', async () => {
-    const result = await AppEventLegacy.deserialize(MESSAGE).verifySignature(replay, ['16dNCFf7nR3nx5iwn2RQMBw6KcJXkE3JC1']);
+    const result = await AppEventLegacy.deserialize(MESSAGE).verifySignature(replay, ['1EHNa6Q4Jz2uvNExL497mE43ikXhwF6kZm']);
     expect(result.valid).to.equal(false);
   });
 
