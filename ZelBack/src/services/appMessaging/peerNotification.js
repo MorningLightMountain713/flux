@@ -189,6 +189,10 @@ async function checkAndNotifyPeersOfRunningApps() {
       throw new Error('Unable to detect Flux IP address');
     }
 
+    // STAMPED WHERE THE TABLE IS READ. broadcastedAt says when these apps were held
+    // here and peers order it against other nodes' messages, so a stamp taken after
+    // the reads below would out-rank a removal that happened while they ran.
+    const snapshotAt = Date.now();
     const installedSpecs = await appsRepository.listInstalledApps();
 
     // Resolve each installed spec to its cleartext view for component/syncthing
@@ -219,7 +223,12 @@ async function checkAndNotifyPeersOfRunningApps() {
     // and liveness is handled at the routing layer. Each entry's `state`
     // (active/draining/stopping) carries the LB lifecycle. Undecryptable specs
     // can't be introspected, so skip them this cycle.
-    const applicationsToBroadcast = installedSpecs.filter((inst) => resolvedViews.has(inst.name));
+    //
+    // An app a broadcast removal is handing back is not held any more, from the
+    // decision onwards (globalState.departingApps), and neither is a replica of one.
+    const applicationsToBroadcast = installedSpecs.filter(
+      (inst) => resolvedViews.has(inst.name) && !globalState.departingApps.has(inst.name),
+    );
     const mesh = await meshBroadcast.meshBroadcastFields(applicationsToBroadcast, resolvedViews);
     const apps = [];
     try {
@@ -233,7 +242,8 @@ async function checkAndNotifyPeersOfRunningApps() {
         // stops, dies or is rebuilt.
         // eslint-disable-next-line no-await-in-loop
         const replicas = await appsRepository.listInstalledIdentities(appName);
-        const identities = replicas.length > 0 ? replicas : [null];
+        const identities = (replicas.length > 0 ? replicas : [null])
+          .filter((identity) => !globalState.departingApps.has(appName, identity));
         // What we last told the network about ourselves. runningSince originates
         // here and is echoed back by every peer, so it has to survive our own
         // restarts: we read it off our previous announcement rather than restamping
@@ -270,7 +280,7 @@ async function checkAndNotifyPeersOfRunningApps() {
         version: 2,
         apps,
         ip: localSocketAddr,
-        broadcastedAt: Date.now(),
+        broadcastedAt: snapshotAt,
         osUptime: os.uptime(),
         staticIp: geolocationService.isStaticIP(),
         // The block every mesh voucher in this broadcast commits to; present

@@ -737,6 +737,16 @@ async function removeUnrequiredDependencies() {
 }
 
 /**
+ * Wait for an announcement cycle already sending. A cycle that starts after the
+ * call reads the departing mark instead. A cycle is in flight only from its
+ * snapshot to its broadcast, and every call in that span has its own time limit.
+ * @returns {Promise<void>}
+ */
+async function waitForAnnouncementInFlight() {
+  await globalState.announceCycle.waitReady({ waitAll: false });
+}
+
+/**
  * Remove a whole application from the local node (a single component is removed via
  * uninstallComponent — this never takes a component identifier).
  * @param {string} appName - the app name.
@@ -780,6 +790,9 @@ async function uninstallApplication(appName, options = {}) {
   // teardown in-process without re-driving one that already began.
   let teardownDoc = null;
   let teardownStarted = false;
+  // What this call marked as departing, and nothing else, so the finally releases
+  // only its own mark.
+  let departing = null;
   try {
     // Log removal trigger with stack trace to identify caller
     const { stack } = new Error();
@@ -819,6 +832,14 @@ async function uninstallApplication(appName, options = {}) {
 
     if (!appName) {
       throw new Error('No App specified');
+    }
+
+    // The node stops claiming what it is handing back here, at the decision, and not
+    // when the row happens to go: an announcement reading the table in between would
+    // claim it again. Only the identity this removal names.
+    if (broadcastRemoval) {
+      globalState.departingApps.enter(appName, replica ?? null);
+      departing = { appName, replica: replica ?? null };
     }
 
     let spec = await appsRepository.getInstalledApp(appName);
@@ -991,6 +1012,10 @@ async function uninstallApplication(appName, options = {}) {
     }
     const lastReplica = await appsRepository.countInstalledIdentities(appName) === 0;
     if (broadcastRemoval) {
+      // An announcement cycle that read the table before this removal's mark still
+      // names the app. Waiting for the cycle in flight puts the two on the wire in the
+      // order they happened, so the claim is applied first and this message clears it.
+      await waitForAnnouncementInFlight();
       const ip = await fluxNetworkHelper.getLocalSocketAddress();
       if (ip) {
         const appRemovedMessage = {
@@ -1068,6 +1093,7 @@ async function uninstallApplication(appName, options = {}) {
     return { status: UninstallStatus.FAILED, reason: error.message };
   } finally {
     operationRegistry.release(appName, removeToken);
+    if (departing) globalState.departingApps.leave(departing.appName, departing.replica);
   }
 }
 

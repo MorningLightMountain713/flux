@@ -25,6 +25,38 @@ describe('globalState tests', () => {
     require.cache[globalStatePath] = liveGlobalStateEntry;
   });
 
+  // A forced removal skips the single-removal guard, so two broadcast removals of one
+  // identity can overlap; the first to finish must not hand the claim back to the one
+  // still running.
+  describe('departingApps', () => {
+    afterEach(() => globalState.departingApps.clear());
+
+    it('holds an identity until every removal of it has finished', () => {
+      const { departingApps } = globalState;
+      departingApps.enter('app');
+      departingApps.enter('app');
+      departingApps.leave('app');
+      expect(departingApps.has('app'), 'the first removal to finish released the second one\'s mark').to.equal(true);
+      departingApps.leave('app');
+      expect(departingApps.has('app')).to.equal(false);
+    });
+
+    it('holds a replica without holding its siblings, and the whole app holds every replica', () => {
+      const { departingApps } = globalState;
+      departingApps.enter('app', 's1');
+      expect(departingApps.has('app', 's1')).to.equal(true);
+      expect(departingApps.has('app', 's2')).to.equal(false);
+      expect(departingApps.has('app'), 'one replica leaving is not the app leaving').to.equal(false);
+      departingApps.enter('app');
+      expect(departingApps.has('app', 's2')).to.equal(true);
+    });
+
+    it('ignores a leave with nothing entered', () => {
+      globalState.departingApps.leave('never');
+      expect(globalState.departingApps.size).to.equal(0);
+    });
+  });
+
   describe('runningAppsCache tests', () => {
     it('should be a Set', () => {
       expect(globalState.runningAppsCache).to.be.instanceOf(Set);

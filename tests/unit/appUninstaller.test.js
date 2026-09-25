@@ -6,6 +6,8 @@ const proxyquire = require('proxyquire').noCallThru();
 // Real registry singleton - un-stubbed in proxyquire, so the uninstaller and the test share it.
 const operationRegistry = require('../../ZelBack/src/services/utils/operationRegistry');
 const { asConfig } = require('./fixtures/config');
+const { AsyncLock } = require('../../ZelBack/src/services/utils/asyncLock');
+const { departingApps: realDepartingApps } = require('../../ZelBack/src/services/utils/globalState');
 
 describe('appUninstaller tests', () => {
   let runCommandStub;
@@ -16,6 +18,7 @@ describe('appUninstaller tests', () => {
   let logStub;
   let configStub;
   let globalStateStub;
+  let broadcastAllStub;
   let dockerServiceStub;
   let appsRepositoryStub;
   let fluxShutdowndClientStub;
@@ -68,11 +71,15 @@ describe('appUninstaller tests', () => {
       warn: sinon.stub(),
     };
 
+    broadcastAllStub = sinon.stub().resolves();
     globalStateStub = {
       abortInstall: sinon.stub(),
       installAborted: sinon.stub().returns(false),
       runningAppsCache: new Set(),
       trySpawningGlobalAppCache: new Map(),
+      // The real marks, which peerNotification reads, and a cycle lock of the shape it holds.
+      departingApps: realDepartingApps,
+      announceCycle: new AsyncLock(1, { maxHoldMs: 0 }),
     };
 
     dockerServiceStub = {
@@ -177,7 +184,7 @@ describe('appUninstaller tests', () => {
       '../fluxCommunicationMessagesSender': {
         broadcastMessageToOutgoing: sinon.stub().resolves(),
         broadcastMessageToIncoming: sinon.stub().resolves(),
-        broadcastMessageToAll: sinon.stub().resolves(),
+        broadcastMessageToAll: broadcastAllStub,
       },
       '../appDatabase/appsRepository': appsRepositoryStub,
       './relationshipResolver': relationshipResolverStub,
@@ -427,6 +434,87 @@ describe('appUninstaller tests', () => {
       } finally {
         operationRegistry.clear();
       }
+    });
+  });
+
+  // A REMOVAL THAT TELLS THE NETWORK AND AN ANNOUNCEMENT MUST NOT CROSS. An
+  // announcement that read the table before the row went still names the app, so the
+  // node stops claiming it at the decision, and the removal message waits for a cycle
+  // already sending - the claim lands first and the removal clears it.
+  describe('a broadcast removal and the announcement', () => {
+    const spec = (name) => ({ name, owner: '1own' });
+    const tick = () => new Promise((resolve) => { setImmediate(() => setImmediate(resolve)); });
+    let broadcast;
+    let markedDuring;
+
+    beforeEach(() => {
+      realDepartingApps.clear();
+      appsRepositoryStub.getInstalledApp.callsFake(async (name) => spec(name));
+      broadcast = broadcastAllStub;
+      markedDuring = null;
+      const record = async (name, replica) => {
+        markedDuring = { app: realDepartingApps.has(name), replica: replica ? realDepartingApps.has(name, replica) : null };
+      };
+      appsRepositoryStub.removeInstalledApp.callsFake(async (name) => record(name, null));
+      appsRepositoryStub.removeInstalledIdentity.callsFake(async (name, replica) => record(name, replica));
+    });
+
+    afterEach(() => {
+      operationRegistry.clear();
+      realDepartingApps.clear();
+    });
+
+    it('stops claiming the app from the decision, and claims nothing once it is done', async () => {
+      const result = await appUninstaller.uninstallApplication('leaving', { forceKill: true, broadcastRemoval: true, background: true });
+
+      expect(result.status).to.equal(appUninstaller.UninstallStatus.REMOVED);
+      expect(markedDuring.app, 'the app was still claimed while it was being handed back').to.equal(true);
+      expect(realDepartingApps.has('leaving'), 'the mark outlived the removal').to.equal(false);
+      sinon.assert.calledOnce(broadcast);
+    });
+
+    it('hands back only the replica a replica removal names', async () => {
+      appsRepositoryStub.countInstalledIdentities.resolves(1); // a sibling stays
+      await appUninstaller.uninstallApplication('pinned', {
+        forceKill: true, broadcastRemoval: true, background: true, replica: 's1',
+      });
+
+      expect(markedDuring, 'a sibling that stays was handed back with it').to.deep.equal({ app: false, replica: true });
+      expect(realDepartingApps.has('pinned', 's2')).to.equal(false);
+    });
+
+    it('marks nothing for a removal that tells the network nothing', async () => {
+      await appUninstaller.uninstallApplication('quiet', { forceKill: true, background: true });
+      expect(markedDuring.app, 'a removal that announces nothing withdrew the claim').to.equal(false);
+    });
+
+    it('clears the mark when the removal fails', async () => {
+      appsRepositoryStub.removeInstalledApp.rejects(new Error('db down'));
+      const result = await appUninstaller.uninstallApplication('broken', { forceKill: true, broadcastRemoval: true, background: true });
+      expect(result.status).to.equal(appUninstaller.UninstallStatus.FAILED);
+      expect(realDepartingApps.has('broken'), 'a failed removal kept the app unclaimed').to.equal(false);
+    });
+
+    it('does not announce the removal while an announcement cycle is still sending', async () => {
+      const release = await globalStateStub.announceCycle.acquire();
+      const removal = appUninstaller.uninstallApplication('racing', { forceKill: true, broadcastRemoval: true, background: true });
+      await tick();
+      sinon.assert.notCalled(broadcast);
+
+      release();
+      await removal;
+      // The canary: without it the assertion above passes for a removal that never
+      // got as far as the wait.
+      sinon.assert.calledOnce(broadcast);
+    });
+
+    it('does not wait for a cycle when the removal tells the network nothing', async () => {
+      await globalStateStub.announceCycle.acquire();
+      const outcome = await Promise.race([
+        appUninstaller.uninstallApplication('silent', { forceKill: true, background: true }).then(() => 'removed'),
+        new Promise((resolve) => { setTimeout(() => resolve('waited'), 40); }),
+      ]);
+      expect(outcome, 'a silent removal queued behind an announcement it cannot contradict').to.equal('removed');
     });
   });
 
