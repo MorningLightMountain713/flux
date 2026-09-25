@@ -12,7 +12,7 @@ describe('imageCacheService tests', () => {
 
   function build() {
     stubs = {
-      compliance: sinon.stub().resolves(),
+      isImageBlocked: sinon.stub().resolves({ blocked: false, reason: null, undetermined: false }),
       inspectImage: sinon.stub().resolves({
         ok: true, supported: true, compressedBytes: 1000, decompressedBytes: 2500, digest: 'sha256:abc', supportedArchitectures: ['amd64'], error: null,
       }),
@@ -41,7 +41,7 @@ describe('imageCacheService tests', () => {
       '../dockerService': {
         dockerListImages: stubs.dockerListImages, dockerImageInspect: stubs.dockerImageInspect, appDockerImageRemove: stubs.appDockerImageRemove, dockerListContainers: stubs.dockerListContainers,
       },
-      '../appSecurity/imageManager': { checkApplicationImagesCompliance: stubs.compliance },
+      '../appSecurity/imageManager': { isImageBlocked: stubs.isImageBlocked },
       '../utils/enterpriseHelper': { decryptEnterpriseFromSession: stubs.decrypt },
       './imageCacheStore': {
         upsertImage: stubs.upsertImage,
@@ -131,15 +131,37 @@ describe('imageCacheService tests', () => {
   });
 
   describe('compliance reject', () => {
+    it('asks the blocklist about the image and its owner', async () => {
+      const svc = build();
+      const { settled } = svc.submit('F1', [{ repotag: 'repo:1' }]);
+      await settled;
+
+      sinon.assert.calledOnce(stubs.isImageBlocked);
+      const [, images, options] = stubs.isImageBlocked.firstCall.args;
+      expect(images).to.deep.equal(['repo:1']);
+      expect(options).to.include({ owner: 'F1' });
+    });
+
     it('rejects a blocked image before inspecting or pulling', async () => {
       const svc = build();
-      stubs.compliance.rejects(new Error('Image x is blocked'));
+      stubs.isImageBlocked.resolves({ blocked: true, reason: 'Image x is blocked' });
+      const { jobId, settled } = svc.submit('F1', [{ repotag: 'repo:1' }]);
+      await settled;
+
+      const view = svc.getJob(jobId, 'F1');
+      expect(view.detail.images[0]).to.include({ state: 'rejected', reason: 'non-compliant', error: 'Image x is blocked' });
+      expect(stubs.inspectImage.called).to.equal(false);
+      expect(stubs.pullImage.called).to.equal(false);
+    });
+
+    it('rejects an image it cannot check against the blocklist', async () => {
+      const svc = build();
+      stubs.isImageBlocked.resolves({ blocked: false, reason: null, undetermined: true });
       const { jobId, settled } = svc.submit('F1', [{ repotag: 'repo:1' }]);
       await settled;
 
       const view = svc.getJob(jobId, 'F1');
       expect(view.detail.images[0]).to.include({ state: 'rejected', reason: 'non-compliant' });
-      expect(stubs.inspectImage.called).to.equal(false);
       expect(stubs.pullImage.called).to.equal(false);
     });
   });

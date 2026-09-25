@@ -80,13 +80,14 @@ function resolveSettledJobs() {
   });
 }
 
-// Reuse the network's blacklist/compliance gate so the cache can never pull a blocked
-// image. Synthetic single-image spec (no on-chain app); the owner is the fluxId, so an
-// owner-level block is honoured too. Throws when the image/owner is blocked.
+// The network's blocklist, asked about the image and its owner (the fluxId), so the
+// cache can never pull a blocked image or pull for a blocked owner. Throws when either
+// is blocked, and when the blocklist cannot be read: an image nobody could check is
+// not pulled.
 async function assertCompliant(fluxId, repotag) {
-  await imageManager.checkApplicationImagesCompliance({
-    version: 8, name: 'imagecache', owner: fluxId, hash: '', compose: [{ repotag }],
-  });
+  const verdict = await imageManager.isImageBlocked(null, [repotag], { owner: fluxId });
+  if (verdict.blocked) throw new Error(verdict.reason);
+  if (verdict.undetermined) throw new Error(`Image blocklist unreachable - cannot verify ${repotag}`);
 }
 
 async function ensureInspected(job, image) {
