@@ -20,54 +20,287 @@ const {
 const BYTES_PER_GIB = 1024 ** 3;
 
 /**
- * The host filesystems eligible to hold an app's FLUXFSVOL image.
+ * Filesystems no app volume belongs on, whatever room they report free.
  *
- * Block-backed, and neither the root nor a boot filesystem. Loop devices are
- * excluded because a loop mount IS an app volume - treating one as a candidate
- * host would place an app's image inside another app's volume.
- *
- * Throws when the mount table cannot be read; callers narrow their search to
- * the appvolumes directories rather than treating that as "no disks".
- *
- * @returns {Promise<Array<object>>} mount rows from deviceHelper
+ * tmpfs, ramfs and devtmpfs hold their contents in memory and lose them at a
+ * reboot. overlay and squashfs are not that - an overlay's upper layer is on
+ * disk and squashfs is a read-only image - but both belong to something else:
+ * an overlay is a container's own writable layer, and a squashfs cannot be
+ * written to at all.
  */
-async function eligibleHostMounts() {
-  const filesystems = await deviceHelper.listMountedFilesystems();
-  return filesystems.filter((entry) => entry.source.includes('/dev/')
-    && !entry.source.includes('loop')
-    && !entry.target.includes('boot')
-    && entry.target !== '/');
+const UNUSABLE_FSTYPES = new Set(['tmpfs', 'ramfs', 'devtmpfs', 'overlay', 'squashfs']);
+
+/**
+ * Filesystems whose bytes are on another machine. `fallocate` is unsupported on
+ * CIFS and on NFSv3, so an image cannot be created on one at all, and where it
+ * can the app's data is hostage to a share that can go away while the node
+ * keeps running.
+ *
+ * `findmnt --real` excludes libmount's pseudo filesystems and nothing else, so
+ * most of these arrive in the mount table looking like any local disk. A few
+ * are on that list too and never arrive; they are named here anyway, because
+ * which entries libmount carries is its business and not a thing to depend on.
+ */
+const REMOTE_FSTYPES = new Set(['nfs', 'nfs4', 'cifs', 'smb3', 'smbfs',
+  'afs', 'ncpfs', 'ceph', 'glusterfs', 'lustre', 'gpfs', 'beegfs',
+  'virtiofs', '9p']);
+
+/**
+ * Filesystems an image is not PLACED on, though one already sitting on any of
+ * them is still found.
+ *
+ * A volume is created with `fallocate` and loop-mounted with an ext4 inside
+ * it. `vfat` and `msdos` cap a file at 4 GiB, under the size of most volumes;
+ * for the rest that sequence is not established on anything the fleet runs,
+ * and `fuseblk` does not even name the driver it would go through - ntfs-3g
+ * and exfat-fuse both arrive under it. `createAppVolume` takes one candidate
+ * and never falls back, so a filesystem that cannot carry the sequence fails
+ * the install outright rather than costing the node a disk.
+ */
+const UNPLACEABLE_FSTYPES = new Set(['vfat', 'msdos', 'exfat', 'ntfs', 'ntfs3', 'fuseblk']);
+
+/**
+ * Where a container runtime keeps the filesystems it owns.
+ *
+ * A runtime mounts each container's root under its own data directory, and on
+ * a storage driver that uses real filesystems - ZFS, btrfs - those mounts are
+ * indistinguishable from a disk by fstype alone. An image placed in one lands
+ * inside somebody else's container, and is destroyed with it; an image LOOKED
+ * FOR in one can be answered by a file the container's owner put there.
+ *
+ * Neither belongs to this node to use, on any filesystem, so the rule is not
+ * about ZFS - it is that a runtime's storage is the runtime's.
+ *
+ * What is UNDER the directory, never the directory itself: an operator giving
+ * docker its own disk mounts it at exactly this path, and that disk is an
+ * ordinary one to place on. Nothing a container owns reaches the root of the
+ * data directory - only the runtime writes there.
+ */
+const RUNTIME_DATA_DIRS = ['/var/lib/docker', '/var/lib/containerd', '/var/lib/lxd',
+  '/var/snap/lxd/common/lxd', '/var/lib/kubelet', '/dat/var/lib/docker'];
+
+/**
+ * A mount row in the unit an app's storage is spent in.
+ *
+ * Whole GiB, because `createAppVolume` allocates with `fallocate -l <hdd>G`
+ * and util-linux reads a bare `G` as 1024^3. Room worth exactly twenty of
+ * those has to read as 20, and twenty decimal GB has to read as less, or a
+ * node admits an app it is 7.4% short for and finds out at ENOSPC.
+ *
+ * @param {object} volume One mount row from deviceHelper.
+ * @returns {{filesystem: string, mount: string, size: number, used: number,
+ *   available: number}} The same mount, in whole GiB.
+ */
+function inGib(volume) {
+  return {
+    filesystem: volume.source,
+    mount: volume.target,
+    size: Math.round(volume.sizeBytes / BYTES_PER_GIB),
+    used: Math.round(volume.usedBytes / BYTES_PER_GIB),
+    available: Math.round(volume.availableBytes / BYTES_PER_GIB),
+  };
 }
 
 /**
- * The host volumes that count towards this node's advertised capacity, sized in
- * whole GiB.
+ * One row per device.
  *
- * A wider set than eligibleHostMounts: a loop-mounted ROOT is included, because
- * on some images that is the host disk rather than an app volume. Callers that
- * place a FLUXFSVOL want the narrower set; callers that total up node capacity
- * want this one.
+ * `findmnt` names a bind mount and a btrfs subvolume `<device>[<subpath>]`, so
+ * a single disk is reported once per bind - in a containerised FluxOS that is
+ * `/etc/hostname`, `/etc/hosts` and `/etc/resolv.conf` beside the data volume,
+ * four views of one disk reporting its free space four times.
  *
- * GiB, because that is the unit an app's `hdd` is spent in: `createAppVolume`
- * allocates with `fallocate -l <hdd>G`, and util-linux reads a bare `G` as
- * 1024^3. nodeSpecs.ssdStorage is GiB for the same reason - fluxbench reports
- * the disk that way - so every side of a capacity check speaks one unit.
+ * Which view survives is an arbitrary tie-break on the shortest target. They
+ * are views of one disk, so they agree on every number; all it settles is the
+ * directory an image is written into, and the mount table says nothing about
+ * which of two directories on a disk was meant for one.
+ *
+ * Device identity is not filesystem identity. ZFS names each dataset in a pool
+ * separately while every one of them reports the pool's free space, so a pool
+ * arrives here as one row per dataset and leaves that way. What each row has
+ * USED is its own and adds up across rows; what it has FREE may belong to
+ * another row too, and does not.
+ *
+ * @param {Array<object>} rows Mount rows from deviceHelper.
+ * @returns {Array<object>} One row per distinct device.
+ */
+function oneRowPerDevice(rows) {
+  const byDevice = new Map();
+  rows.forEach((row) => {
+    const device = String(row.source).split('[')[0];
+    const held = byDevice.get(device);
+    if (!held || row.target.length < held.target.length) byDevice.set(device, row);
+  });
+  return Array.from(byDevice.values());
+}
+
+/**
+ * Whether an image may be FOUND on this filesystem: is it this machine's
+ * storage, in a place one may sit.
+ *
+ * Location and ownership only. The filesystem's TYPE is not asked, because an
+ * image already written to a disk is readable whatever the disk is formatted
+ * as, and an earlier release placed images by source alone. Narrowing a search
+ * by type reports those images missing, which is a tampering event against the
+ * operator and an orphan on the disk.
+ *
+ * `findmnt --real` has already dropped the pseudo filesystems and a container's
+ * own overlay, so what is left to exclude is storage on another machine, the
+ * boot disk, and the app volumes this node has already placed: an app's image
+ * is carved out of one of these filesystems, so counting it counts the same
+ * bytes twice. A loop mount IS such an image - except at the root, where a loop
+ * is the host disk itself.
+ *
+ * @param {object} mount One mount row from deviceHelper.
+ * @returns {boolean} True when an image may be looked for on the filesystem.
+ */
+function isSearchableFilesystem(mount) {
+  const fstype = String(mount.fstype || '');
+  if (UNUSABLE_FSTYPES.has(fstype)) return false;
+  // A fuse type names the driver rather than the backing, and the drivers that
+  // reach across a network are open-ended: gluster and sshfs arrive as
+  // `fuse.glusterfs` and `fuse.sshfs`, the object stores as `fuse.rclone`,
+  // `fuse.s3fs`, `fuse.gcsfuse`. A bare `fuse` is on libmount's pseudofs list
+  // and never survives `findmnt --real`, so there is nothing here to test it
+  // for. A local fuse pool loses nothing by the rule: the disks it pools are
+  // mounted in their own right. `fuseblk` is the block-backed form and IS this
+  // machine's storage, so it is searched - it is only refused a new image.
+  if (REMOTE_FSTYPES.has(fstype) || fstype.startsWith('fuse.')) return false;
+  if (mount.target === '/boot' || mount.target.startsWith('/boot/')) return false;
+  const device = String(mount.source).split('[')[0];
+  if (device.startsWith('/dev/loop') && mount.target !== '/') return false;
+  // Strict descendants of each, never the directory itself: a runtime owns
+  // what it mounts underneath its data directory, while the directory may be a
+  // disk an operator gave it, and an app's volume is mounted at
+  // <appsFolder>/<appId> while the folder itself is ordinary. An image sits at
+  // <appId>FLUXFSVOL, which collides with no mount point.
+  if (RUNTIME_DATA_DIRS.some((dir) => mount.target.startsWith(`${dir}/`))) return false;
+  const appsRoot = appsFolder.replace(/\/+$/, '');
+  return !mount.target.startsWith(`${appsRoot}/`);
+}
+
+/**
+ * Whether an image may be PUT on this filesystem.
+ *
+ * Everywhere one may be found, less the types that cannot carry a new one.
+ * The narrower question, and the one that must never be asked of a search:
+ * a type refused here still holds every image an earlier release placed on it.
+ *
+ * @param {object} mount One mount row from deviceHelper.
+ * @returns {boolean} True when an image may be created on the filesystem.
+ */
+function isHostFilesystem(mount) {
+  if (!isSearchableFilesystem(mount)) return false;
+  return !UNPLACEABLE_FSTYPES.has(String(mount.fstype || ''));
+}
+
+/**
+ * The mount a path resolves through: the last row listed at that exact target.
+ *
+ * @param {string} target Absolute path of a mount point.
+ * @param {Array<object>} mounts Mount rows, in mount table order.
+ * @returns {object|null} The visible row, or null when nothing is mounted there.
+ */
+function visibleMountAt(target, mounts) {
+  const at = String(target).replace(/\/+$/, '');
+  const stack = mounts.filter((mount) => String(mount.target).replace(/\/+$/, '') === at);
+  return stack.length ? stack[stack.length - 1] : null;
+}
+
+/**
+ * Whether a FLUXFSVOL image can be created in this mount.
+ *
+ * The image is a file written into the mount point, so the mount point has to
+ * be a directory and has to be writable. A device cannot answer either.
+ *
+ * A row with another mount stacked over it answers for a filesystem the path
+ * no longer reaches - neither its `ro` flag nor its free space describes what
+ * a write there would do - so only the mount a path resolves through is a
+ * candidate. Asked of every mount the kernel holds and not of the block-backed
+ * ones alone, because a tmpfs laid over a disk is the case that turns a
+ * multi-gigabyte image into RAM the app loses at the next restart.
+ *
+ * @param {object} mount One mount row from deviceHelper.
+ * @param {Array<object>} allMounts Every mount, in mount table order.
+ * @returns {Promise<boolean>} True when an image can be written there.
+ */
+async function canHoldAppVolume(mount, allMounts) {
+  const visible = visibleMountAt(mount.target, allMounts);
+  // Only ever used to REFUSE: a candidate reaches here from the block-backed
+  // table, so nothing this list contains can promote one. When no row at the
+  // target names this mount's source the comparison has nothing to say and
+  // the candidate is left to the rules below. Abstaining that way keeps the
+  // disk; abstaining the other way would refuse EVERY disk the moment the two
+  // readings disagreed about how to spell a source, and a node that can place
+  // nothing is a worse answer than one that placed where it always has.
+  if (visible && visible.source !== mount.source) return false;
+  if (mount.readOnly) return false;
+  const stats = await fs.stat(mount.target).catch(() => null);
+  return Boolean(stats && stats.isDirectory());
+}
+
+/**
+ * The filesystems an app's FLUXFSVOL image may be placed on, most free space
+ * first, one row per filesystem, sized in whole GiB.
+ *
+ * Ranked rather than merely listed, because the caller takes the first that
+ * fits: ordering by free space makes that the emptiest disk, where mount-table
+ * order would make it whichever the kernel happened to report first.
+ *
+ * Deduplicated after the write check and not before, so a disk is not lost to a
+ * bind of it that happens to be a file.
  *
  * @returns {Promise<Array<{filesystem: string, mount: string, size: number,
  *   used: number, available: number}>>}
  */
-async function capacityVolumesInGib() {
+async function placementVolumesInGib() {
   const mounts = await deviceHelper.listMountedFilesystems();
-  return mounts
-    .filter((volume) => (volume.source.includes('/dev/') && !volume.source.includes('loop') && !volume.target.includes('boot'))
-      || (volume.source.includes('loop') && volume.target === '/'))
-    .map((volume) => ({
-      filesystem: volume.source,
-      mount: volume.target,
-      size: Math.round(volume.sizeBytes / BYTES_PER_GIB),
-      used: Math.round(volume.usedBytes / BYTES_PER_GIB),
-      available: Math.round(volume.availableBytes / BYTES_PER_GIB),
-    }));
+  // Every mount, for the shadowing question alone: what a write to a candidate
+  // actually lands on is whatever the kernel resolves that path through, which
+  // need not be block-backed and so need not appear above.
+  // Throws with the reading above rather than falling back to it: answering
+  // the shadowing question from the block-backed table is answering it from
+  // the one table that cannot show a pseudo mount, which is the case the
+  // question exists for. A caller must no more read "nothing is stacked here"
+  // out of a table it did not get than it may read "no disks" as "no space".
+  const allMounts = await deviceHelper.listAllMounts();
+  const hosts = mounts.filter(isHostFilesystem);
+  const writable = [];
+  for (const mount of hosts) {
+    // eslint-disable-next-line no-await-in-loop
+    if (await canHoldAppVolume(mount, allMounts)) writable.push(mount);
+  }
+  // A filesystem the node may use and cannot write to is worth a line: the
+  // caller's only other output is "No useable volume found", which names
+  // nothing, and a disk lost to a traversal denied or a path answering EIO
+  // otherwise looks exactly like a disk the node never had.
+  if (writable.length !== hosts.length) {
+    const refused = hosts.filter((mount) => !writable.includes(mount)).map((mount) => mount.target);
+    log.info(`placementVolumesInGib - not a writable directory this node reaches, so not offered: ${refused.join(', ')}`);
+  }
+  return oneRowPerDevice(writable)
+    .sort((a, b) => b.availableBytes - a.availableBytes)
+    .map(inGib);
+}
+
+/**
+ * The mounts an app's FLUXFSVOL image may be found on.
+ *
+ * Where an image may be FOUND, which is a wider question than where one may be
+ * PUT: an image on a filesystem that has since come up read-only is still
+ * perfectly readable, and refusing to look there reports it missing. Placement
+ * asks the write question; this asks only containment.
+ *
+ * The root is left out because an image the root hosts is written to the
+ * appvolumes directory instead, which callers search separately.
+ *
+ * Not deduplicated: two directories on one disk are two places an image can
+ * sit, and a search that visited only one of them would miss it.
+ *
+ * @returns {Promise<Array<object>>} mount rows from deviceHelper
+ */
+async function eligibleHostMounts() {
+  const mounts = await deviceHelper.listMountedFilesystems();
+  return mounts.filter((mount) => isSearchableFilesystem(mount) && mount.target !== '/');
 }
 
 /**
@@ -396,7 +629,7 @@ async function appVolumeFilesystemId(appId) {
 module.exports = {
   verifyAppVolumeMount,
   appVolumeFilesystemId,
-  capacityVolumesInGib,
+  placementVolumesInGib,
   isPathMounted,
   getVolumeFilePath,
   getComponentAppIdsFromVolumeFiles,
