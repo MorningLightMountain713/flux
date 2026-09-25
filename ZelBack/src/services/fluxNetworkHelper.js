@@ -1083,7 +1083,7 @@ function getStoredFluxBenchAllowed() {
  * @returns {boolean} True if the runtime is allowed. Otherwise false.
  */
 function checkNodeJsVersionAllowed() {
-  const minimumVersion = config.minimumNodeJsAllowedVersion;
+  const minimumVersion = config.get('minimumNodeJsAllowedVersion');
   // No floor configured is not a failing node. This runs bare in
   // startFluxFunctions, whose catch re-enters it after 15s, so a throw here is
   // a boot loop rather than an error - and the safe direction for a missing

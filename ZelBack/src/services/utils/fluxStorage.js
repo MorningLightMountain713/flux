@@ -47,7 +47,7 @@ function storageLinkOf(parameter) {
  * @returns {boolean} True when the node may fetch it.
  */
 function isFluxStorageUrl(link) {
-  const { storageHost } = config.fluxapps;
+  const storageHost = config.get('fluxapps.storageHost');
   if (!storageHost) {
     throw new Error('No Flux storage host is configured: fluxapps.storageHost');
   }
