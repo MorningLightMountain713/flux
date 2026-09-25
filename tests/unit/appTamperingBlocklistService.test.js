@@ -5,8 +5,12 @@ const sinon = require('sinon');
 const { EventEmitter } = require('events');
 const proxyquire = require('proxyquire').noCallThru();
 const { asConfig } = require('./fixtures/config');
+const { makeStickyDosDouble } = require('./stickyDosTestDouble');
+const { StickyDosOwner } = require('../../ZelBack/src/services/nodeDosState');
 
 describe('appTamperingBlocklistService tests', () => {
+  const OWNER = StickyDosOwner.APP_TAMPERING;
+  const RESIDENTIAL = StickyDosOwner.RESIDENTIAL_DOS;
   let service;
   let policyStoreStub;
   let tamperingRepositoryStub;
@@ -51,17 +55,9 @@ describe('appTamperingBlocklistService tests', () => {
       sumIncidentSeverities: sinon.stub().resolves(0),
     };
 
-    // Stateful, because releaseOurDos only clears a sticky message it can see is
-    // OURS (isOurStickyDos reads it back). A write-only stub leaves the getter
-    // answering null, so the clear branch is never reached and a test asserting
-    // the clear fails for the wrong reason.
-    let stickyDosMessage = null;
-    nodeDosStateStub = {
-      setStickyDosMessage: sinon.stub().callsFake((msg) => { stickyDosMessage = msg; }),
-      setStickyDosStateValue: sinon.stub(),
-      clearStickyDosMessage: sinon.stub().callsFake(() => { stickyDosMessage = null; }),
-      getStickyDosMessage: sinon.stub().callsFake(() => stickyDosMessage),
-    };
+    // Owner-keyed and stateful, like the real module: a release this service must not
+    // make has to be able to fail.
+    nodeDosStateStub = makeStickyDosDouble();
 
     generalServiceStub = {
       obtainNodeCollateralInformation: sinon.stub().resolves({ txhash: MOCK_TXHASH, txindex: 0 }),
@@ -175,8 +171,8 @@ describe('appTamperingBlocklistService tests', () => {
 
       await service.enforceBlocklist();
 
-      expect(nodeDosStateStub.setStickyDosMessage.called).to.be.false;
-      expect(nodeDosStateStub.clearStickyDosMessage.called).to.be.false;
+      expect(nodeDosStateStub.setStickyDos.called).to.be.false;
+      expect(nodeDosStateStub.clearStickyDos.called).to.be.false;
     });
 
     it('skips when own txhash cannot be determined', async () => {
@@ -184,8 +180,8 @@ describe('appTamperingBlocklistService tests', () => {
 
       await service.enforceBlocklist();
 
-      expect(nodeDosStateStub.setStickyDosMessage.called).to.be.false;
-      expect(nodeDosStateStub.clearStickyDosMessage.called).to.be.false;
+      expect(nodeDosStateStub.setStickyDos.called).to.be.false;
+      expect(nodeDosStateStub.clearStickyDos.called).to.be.false;
     });
 
     it('does nothing when txhash is not on the blocklist', async () => {
@@ -194,7 +190,7 @@ describe('appTamperingBlocklistService tests', () => {
 
       await service.enforceBlocklist();
 
-      expect(nodeDosStateStub.setStickyDosMessage.called).to.be.false;
+      expect(nodeDosStateStub.setStickyDos.called).to.be.false;
     });
 
     it('does nothing when listed but score <= threshold', async () => {
@@ -203,7 +199,7 @@ describe('appTamperingBlocklistService tests', () => {
 
       await service.enforceBlocklist();
 
-      expect(nodeDosStateStub.setStickyDosMessage.called).to.be.false;
+      expect(nodeDosStateStub.setStickyDos.called).to.be.false;
     });
 
     it('sets sticky DOS when listed AND score > threshold', async () => {
@@ -212,12 +208,12 @@ describe('appTamperingBlocklistService tests', () => {
 
       await service.enforceBlocklist();
 
-      sinon.assert.calledOnce(nodeDosStateStub.setStickyDosMessage);
-      const msg = nodeDosStateStub.setStickyDosMessage.firstCall.args[0];
+      sinon.assert.calledOnce(nodeDosStateStub.setStickyDos);
+      const [owner, msg] = nodeDosStateStub.setStickyDos.firstCall.args;
+      expect(owner, 'the verdict was recorded under another identity').to.equal(OWNER);
       expect(msg).to.include(service.DOS_MESSAGE_PREFIX);
       expect(msg).to.include(MOCK_TXHASH);
       expect(msg).to.include('11');
-      sinon.assert.calledWith(nodeDosStateStub.setStickyDosStateValue, 100);
       expect(service.isDosActive()).to.be.true;
     });
 
@@ -232,7 +228,7 @@ describe('appTamperingBlocklistService tests', () => {
       setBlocklist([]);
       await service.enforceBlocklist();
 
-      sinon.assert.called(nodeDosStateStub.clearStickyDosMessage);
+      sinon.assert.called(nodeDosStateStub.clearStickyDos);
       expect(service.isDosActive()).to.be.false;
     });
 
@@ -247,7 +243,7 @@ describe('appTamperingBlocklistService tests', () => {
       setBlocklist(null);
       await service.enforceBlocklist();
 
-      expect(nodeDosStateStub.clearStickyDosMessage.called).to.be.false;
+      expect(nodeDosStateStub.clearStickyDos.called).to.be.false;
       expect(service.isDosActive()).to.be.true;
     });
 
@@ -257,7 +253,7 @@ describe('appTamperingBlocklistService tests', () => {
 
       await service.enforceBlocklist();
 
-      expect(nodeDosStateStub.setStickyDosMessage.called).to.be.false;
+      expect(nodeDosStateStub.setStickyDos.called).to.be.false;
     });
 
     it('clears sticky DOS when the score drops to <= threshold', async () => {
@@ -269,31 +265,53 @@ describe('appTamperingBlocklistService tests', () => {
       setTamperScore(5);
       await service.enforceBlocklist();
 
-      sinon.assert.called(nodeDosStateStub.clearStickyDosMessage);
+      sinon.assert.called(nodeDosStateStub.clearStickyDos);
       expect(service.isDosActive()).to.be.false;
     });
 
-    it('clears an orphaned sticky DOS message owned by this service', async () => {
-      // ourDosActive is false, but sticky owned by us (prefix match) from prior run
-      const ours = `${service.DOS_MESSAGE_PREFIX}: 42 events, txhash xyz`;
-      nodeDosStateStub.getStickyDosMessage = sinon.stub().returns(ours);
+    it('clears a verdict of its own left standing by an earlier run', async () => {
+      nodeDosStateStub.holds.set(OWNER, `${service.DOS_MESSAGE_PREFIX}: 42 events, txhash xyz`);
       setBlocklist([]);
       setTamperScore(0);
 
       await service.enforceBlocklist();
 
-      sinon.assert.called(nodeDosStateStub.clearStickyDosMessage);
+      sinon.assert.calledWith(nodeDosStateStub.clearStickyDos, OWNER);
+      expect(nodeDosStateStub.holds.has(OWNER)).to.equal(false);
     });
 
-    it('does NOT clear a sticky DOS set by a different module', async () => {
-      // Some other module set sticky for an unrelated reason
-      nodeDosStateStub.getStickyDosMessage = sinon.stub().returns('some other module sticky reason');
+    it('does NOT clear a verdict set by a different owner', async () => {
+      nodeDosStateStub.holds.set(RESIDENTIAL, 'Residential node not running ArcaneOS. Migrate this node.');
       setBlocklist([]);
       setTamperScore(0);
 
       await service.enforceBlocklist();
 
-      expect(nodeDosStateStub.clearStickyDosMessage.called).to.be.false;
+      expect(nodeDosStateStub.holds.get(RESIDENTIAL), 'released a verdict this service does not own').to.contain('Residential');
+    });
+
+    // ONE VERDICT PER OWNER. Another owner already holding the node out of service is
+    // not a reason to withhold this one: the node stays out until both release.
+    it('records its own verdict beside another owner\'s, in the tick that reaches it', async () => {
+      nodeDosStateStub.holds.set(RESIDENTIAL, 'Residential node not running ArcaneOS. Migrate this node.');
+      setBlocklist([MOCK_TXHASH]);
+      setTamperScore(15);
+
+      await service.enforceBlocklist();
+
+      expect(service.isDosActive(), 'the verdict was dropped because another owner held one').to.equal(true);
+      expect(nodeDosStateStub.getStickyDosMessage()).to.contain('Residential');
+      expect(nodeDosStateStub.getStickyDosMessage()).to.contain(service.DOS_MESSAGE_PREFIX);
+    });
+
+    it('refreshes its own verdict rather than treating it as foreign', async () => {
+      nodeDosStateStub.holds.set(OWNER, `${service.DOS_MESSAGE_PREFIX}: 42 events, txhash xyz`);
+      setBlocklist([MOCK_TXHASH]);
+      setTamperScore(15);
+
+      await service.enforceBlocklist();
+
+      expect(nodeDosStateStub.holds.get(OWNER)).to.include('15');
     });
   });
 
@@ -305,14 +323,14 @@ describe('appTamperingBlocklistService tests', () => {
       const blockEmitter = new EventEmitter();
       const startPromise = service.start({ blockEmitter });
       await new Promise((resolve) => { setImmediate(resolve); });
-      expect(nodeDosStateStub.setStickyDosMessage.called).to.be.false;
+      expect(nodeDosStateStub.setStickyDos.called).to.be.false;
 
       // The chain updates: the poller stamps the level, the block event
       // announces it - and the first tick follows immediately.
       daemonMiscStub.isDaemonSynced = sinon.stub().returns({ data: { synced: true } });
       blockEmitter.emit('blocksProcessed', 100);
       await startPromise;
-      expect(nodeDosStateStub.setStickyDosMessage.called).to.be.true;
+      expect(nodeDosStateStub.setStickyDos.called).to.be.true;
     });
 
     it('start() aborts without scheduling an interval if stop() is called during daemon-sync wait', async () => {
@@ -360,8 +378,7 @@ describe('appTamperingBlocklistService tests', () => {
 
       await arcaneService.enforceBlocklist();
 
-      expect(nodeDosStateStub.setStickyDosMessage.called).to.be.false;
-      expect(nodeDosStateStub.setStickyDosStateValue.called).to.be.false;
+      expect(nodeDosStateStub.setStickyDos.called).to.be.false;
       expect(arcaneService.isDosActive()).to.be.false;
     });
 
@@ -397,7 +414,7 @@ describe('appTamperingBlocklistService tests', () => {
 
         await svc.enforceBlocklist();
 
-        sinon.assert.calledOnce(nodeDosStateStub.setStickyDosMessage);
+        sinon.assert.calledOnce(nodeDosStateStub.setStickyDos);
       } finally {
         if (originalFluxOSPath !== undefined) process.env.FLUXOS_PATH = originalFluxOSPath;
         else delete process.env.FLUXOS_PATH;
