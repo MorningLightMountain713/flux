@@ -142,7 +142,8 @@ async function unmountVolume(appId, options = {}) {
  * @param {object} [options]
  * @param {string} [options.entityName] - label for progress messages (defaults to appId)
  * @param {Function|null} [options.onStatus] - progress callback
- * @returns {Promise<void>}
+ * @returns {Promise<boolean>} whether the data is gone: a removal that did not happen
+ *   is residue, which the caller keeps the teardown owed for
  */
 async function cleanupAppData(appId, options = {}) {
   const { entityName = appId, onStatus = null } = options;
@@ -156,12 +157,17 @@ async function cleanupAppData(appId, options = {}) {
   await serviceHelper.runCommand('chattr', { runAsRoot: true, params: ['-i', appsFolder + appId], logError: false });
 
   status(`Cleaning up ${entityName} data...`);
+  // The removal carries on either way - data left behind is not a reason to hold an
+  // uninstall open - but only one of these two lines is true, and the stream is the
+  // only account an operator gets of what is still on the disk.
   const result = await serviceHelper.runCommand('rm', { params: ['-rf', appsFolder + appId], runAsRoot: true, logError: false });
   if (result.error) {
     log.error(result.error);
     status(`An error occured while cleaning ${entityName} data. Continuing...`);
+    return false;
   }
   status(`Data of ${entityName} cleaned`);
+  return true;
 }
 
 /**
@@ -214,7 +220,8 @@ async function cleanupCrontab(appId, options = {}) {
  * @param {boolean} [options.conclusive=true] - whether the search that produced the
  *   path covered everywhere an image may be. False with no path means an image may
  *   be on disk that nothing will account for again.
- * @returns {Promise<void>}
+ * @returns {Promise<boolean>} whether nothing is left behind that this node could
+ *   remove: false for a removal that did not happen, which is residue
  */
 async function cleanupVolumePath(volumepath, options = {}) {
   const { entityName = volumepath, onStatus = null, conclusive = true } = options;
@@ -231,7 +238,7 @@ async function cleanupVolumePath(volumepath, options = {}) {
       log.warn(`Data volume of ${entityName} could not be located and is left on disk`);
       if (onStatus) onStatus(`Data volume of ${entityName} could not be located and is left on disk`);
     }
-    return;
+    return true;
   }
 
   status(`Cleaning up data volume of ${entityName}...`);
@@ -242,9 +249,10 @@ async function cleanupVolumePath(volumepath, options = {}) {
   if (result.error) {
     log.error(result.error);
     status(`An error occured while cleaning ${entityName} volume. Continuing...`);
-    return;
+    return false;
   }
   status(`Volume of ${entityName} cleaned`);
+  return true;
 }
 
 /**
@@ -465,10 +473,12 @@ async function teardownComponentCore(c, opts = {}) {
     if (removeVolumes) {
       await stopSyncthingAndCleanup(c.identifier, c.appId);
       await unmountVolume(c.appId, { entityName: c.label, onStatus });
-      await cleanupAppData(c.appId, { entityName: c.label, onStatus });
+      const dataRemoved = await cleanupAppData(c.appId, { entityName: c.label, onStatus });
       await cleanupCrontab(c.appId, { onStatus });
       const discovered = await volumeService.getVolumeFilePath(c.identifier);
-      await cleanupVolumePath(discovered.path, { entityName: c.label, onStatus, conclusive: discovered.conclusive });
+      const volumeRemoved = await cleanupVolumePath(discovered.path, { entityName: c.label, onStatus, conclusive: discovered.conclusive });
+      // Residue that did not throw is still residue: the record stays owed and retries it.
+      if (!dataRemoved || !volumeRemoved) cleanupFailed = true;
     }
   } catch (err) {
     // The container is gone but host residue may remain — a mount, an appdata
