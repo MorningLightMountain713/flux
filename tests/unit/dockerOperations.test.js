@@ -49,11 +49,13 @@ describe('dockerOperations tests', () => {
   });
 
   describe('appDeleteDataInMountPoint', () => {
-    const build = (serviceHelper, log, wipeAppData) => proxyquire('../../ZelBack/src/services/appManagement/dockerOperations', {
+    // The volume directory is there unless a test says otherwise.
+    const build = (serviceHelper, log, wipeAppData, stat = sinon.stub().resolves({})) => proxyquire('../../ZelBack/src/services/appManagement/dockerOperations', {
       '../serviceHelper': serviceHelper,
       '../../lib/log': log,
       '../utils/appConstants': { appsFolder: APPS_FOLDER },
       '../utils/appDataEntries': { wipeAppData },
+      'node:fs/promises': { stat },
     });
 
     /**
@@ -110,16 +112,40 @@ describe('dockerOperations tests', () => {
       expect(log.error.called).to.be.false;
     });
 
-    it('gives up and logs after the timeout (never loops forever)', async () => {
+    // A wipe that did not happen is not a wipe: the caller holds the clear and retries,
+    // and a start can never proceed onto the data it was asked to remove.
+    it('throws after the timeout rather than reporting a wipe that did not happen', async () => {
       const { appId } = await statefulComponent();
       const wipeAppData = sinon.stub().resolves({ error: new Error('still busy') });
       const log = { info: sinon.stub(), error: sinon.stub() };
       const dockerOperations = build({ delay: sinon.stub().resolves() }, log, wipeAppData);
 
-      await dockerOperations.appDeleteDataInMountPoint(appId, { timeoutMs: 0 });
+      let threw = null;
+      try { await dockerOperations.appDeleteDataInMountPoint(appId, { timeoutMs: 0 }); } catch (e) { threw = e; }
 
-      expect(log.error.calledOnce).to.be.true;
+      expect(threw, 'the failed wipe was reported as done').to.be.an('error');
+      expect(threw.message).to.include('still busy');
       expect(log.info.called).to.be.false;
+    });
+
+    it('treats a volume directory that is not there as nothing to clear', async () => {
+      const { appId } = await statefulComponent();
+      const wipeAppData = sinon.stub().resolves({ error: new Error('No such file or directory') });
+      const stat = sinon.stub().rejects(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }));
+      const dockerOperations = build({ delay: sinon.stub().resolves() }, { info: sinon.stub(), error: sinon.stub() }, wipeAppData, stat);
+
+      await dockerOperations.appDeleteDataInMountPoint(appId, { timeoutMs: 0 });
+    });
+
+    it('throws when it cannot tell whether the directory is there', async () => {
+      const { appId } = await statefulComponent();
+      const wipeAppData = sinon.stub().resolves({ error: new Error('Permission denied') });
+      const stat = sinon.stub().rejects(Object.assign(new Error('EACCES'), { code: 'EACCES' }));
+      const dockerOperations = build({ delay: sinon.stub().resolves() }, { info: sinon.stub(), error: sinon.stub() }, wipeAppData, stat);
+
+      let threw = null;
+      try { await dockerOperations.appDeleteDataInMountPoint(appId, { timeoutMs: 0 }); } catch (e) { threw = e; }
+      expect(threw).to.be.an('error');
     });
   });
 });
