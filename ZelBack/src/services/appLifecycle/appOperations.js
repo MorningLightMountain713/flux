@@ -178,20 +178,6 @@ async function getMasterIpFromFdm(appName, axiosOptions) {
 }
 
 /**
- * Find and restore non-enterprise app specifications for proper removal.
- * When local DB has encrypted enterprise specs (compose: []), we need the last non-enterprise
- * version from permanent messages to get port/container info for proper cleanup.
- * @param {Object} installedApp - The installed app object from local database
- * @returns {Promise<Object|null>} App specifications to use for removal, or null if local specs are usable or no non-enterprise version found
- */
-
-// Global state management - using globalState module instead of local variables
-// These are now managed through the globalState module
-// eslint-disable-next-line no-unused-vars
-let dosMountMessage = '';
-
-
-/**
  * Redeploy a single component of an application.
  *
  * @param {string} appName
@@ -1785,8 +1771,6 @@ async function testAppMount() {
     if (useThisVolume.availableBytes < (appSize + overHeadRequired) * bytesPerGb) {
       // no useable volume has such a big space for the app
       log.warn('Mount Test: Insufficient space on Flux Node. No useable volume found.');
-      // node marked OK
-      dosMountMessage = ''; // No Space Found actually
       return;
     }
 
@@ -1815,14 +1799,11 @@ async function testAppMount() {
 
     await serviceHelper.runCommand('mount', { params: ['-o', 'loop', volumePath, appsFolder + appId], runAsRoot: true });
     log.info('Mount Test: Volume mounted. Test completed.');
-    dosMountMessage = '';
     // run removal
     removeTestAppMount(volumePath);
   } catch (error) {
     log.error('Mount Test: Error...');
     log.error(error);
-    // node marked OK
-    dosMountMessage = 'Unavailability to mount applications volumes. Impossible to run applications.';
     // run removal
     removeTestAppMount();
   }
