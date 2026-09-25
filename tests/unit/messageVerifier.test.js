@@ -74,6 +74,7 @@ function makeBaseStubs(overrides = {}) {
         epochstart: 694_000,
         daemonPONFork: 2_020_000,
         blocksLasting: 22_000,
+        minHashSyncPeers: 12,
       },
     }),
     '../dbHelper': dbStub,
@@ -133,11 +134,6 @@ function makeBaseStubs(overrides = {}) {
     },
     '../fluxNetworkHelper': {
       getNumberOfPeers: sinon.stub().returns(20),
-    },
-    '../utils/globalState': {
-      getPendingUpdates: sinon.stub().returns([]),
-      clearPendingUpdates: sinon.stub(),
-      checkAndSyncAppHashesWasEverExecuted: true,
     },
   };
 
@@ -1030,6 +1026,23 @@ describe('messageVerifier tests', () => {
 
       expect(res.json.calledOnce).to.be.true;
       expect(res.json.firstCall.args[0].status).to.equal('success');
+    });
+  });
+
+  describe('continuousFluxAppHashesCheck', () => {
+    it('asks for every hash without a message on its first pass, including those marked not found', async () => {
+      const { stubs, dbStub, logStub } = makeBaseStubs();
+      dbStub.findOneInDatabase.resolves({ generalScannedHeight: 2_000_000 });
+      dbStub.findInDatabase.resolves([
+        { hash: 'h1', txid: 't1', height: 1_999_990, value: 1, message: false, messageNotFound: true },
+      ]);
+      const mv = proxyquire('../../ZelBack/src/services/appMessaging/messageVerifier', stubs);
+
+      await mv.continuousFluxAppHashesCheck();
+
+      sinon.assert.notCalled(logStub.error);
+      sinon.assert.calledWith(dbStub.findInDatabase, 'database', 'appsHashes', { message: false });
+      sinon.assert.calledWith(logStub.info, 'Requesting 1 app messages');
     });
   });
 
