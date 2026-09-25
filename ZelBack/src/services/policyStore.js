@@ -26,14 +26,14 @@ const { verifyBundle, MAX_BUNDLE_BYTES } = require('./utils/policySignature');
 // bundle. A node that has never read policy must not act on the absence of it.
 
 const FILE = 'policy-signed.json';
-const URL = `${config.policy.signedBaseUrl}/${FILE}`;
+const URL = `${config.get('policy.signedBaseUrl')}/${FILE}`;
 // Every timing here is config, not a constant. See ZelBack/config/default.js for what each
 // one means and which of them compress: the backstop period does, the two latency bounds
 // do not. A 24-hour period written in this file could not be observed by any test, so the
 // periodic refresh had no fleet coverage and the suites restarted nodes to fake it.
-const REFRESH_INTERVAL_MS = config.policy.refreshIntervalMs;
-const FETCH_TIMEOUT_MS = config.policy.fetchTimeoutMs;
-const BACKSTOP_RETRY_INTERVAL_MS = config.policy.backstopRetryIntervalMs;
+const REFRESH_INTERVAL_MS = config.get('policy.refreshIntervalMs');
+const FETCH_TIMEOUT_MS = config.get('policy.fetchTimeoutMs');
+const BACKSTOP_RETRY_INTERVAL_MS = config.get('policy.backstopRetryIntervalMs');
 
 /**
  * Milliseconds on the monotonic clock.
@@ -120,11 +120,11 @@ let chasingClaim = false;
 // How long a refresh waits for a peer to answer before going to the backstop. Peers are on
 // the local network and answer in milliseconds; this is the bound on how long a refresh is
 // prepared to sit doing nothing, not an expectation of how long they take.
-const PEER_WINDOW_MS = config.policy.peerWindowMs;
+const PEER_WINDOW_MS = config.get('policy.peerWindowMs');
 
 // How many capable peers must answer "not ahead" before their agreement settles it. See
-// config.policy.minConfirmingPeers for why one is not enough.
-const MIN_CONFIRMING_PEERS = config.policy.minConfirmingPeers;
+// `policy.minConfirmingPeers` in the config for why one is not enough.
+const MIN_CONFIRMING_PEERS = config.get('policy.minConfirmingPeers');
 
 // What a peer's answer established about it, recorded as the ask's outcome. Only NOT_AHEAD
 // bears on whether the policy this node holds is current. The others say the peer answered,
@@ -313,7 +313,7 @@ const VERDICT = Object.freeze({ ADOPTED: 'adopted', LEVEL: 'level', REJECTED: 'r
  */
 async function consider(raw, source) {
   const payload = verifyBundle(raw, {
-    publicKeys: config.policy.publicKeys,
+    publicKeys: config.get('policy.publicKeys'),
     minSeq: getSeq(),
     onReject: (reason) => log.warn(`policyStore - rejected bundle from ${source}: ${reason}`),
   });
@@ -351,7 +351,7 @@ async function restore() {
   const stored = await policyArtifactRepository.readBundle().catch(() => null);
   if (!stored) return false;
   const payload = verifyBundle(stored.raw, {
-    publicKeys: config.policy.publicKeys,
+    publicKeys: config.get('policy.publicKeys'),
     onReject: (reason) => log.warn(`policyStore - stored bundle rejected, will refetch: ${reason}`),
   });
   if (!payload) return false;
@@ -420,7 +420,7 @@ function settlePeerAsk(peerKey, correlationId, outcome = ANSWER.ANSWERED) {
  *
  * This rung never reaches the published source. The source is rate-limited and shared by the
  * fleet, so it is asked only where the peer set has been asked in full and could not settle
- * what this node holds, and no more than once per config.policy.backstopRetryIntervalMs once
+ * what this node holds, and no more than once per `policy.backstopRetryIntervalMs` once
  * it has refused. The peer question is one signed message on the local network, and runs as
  * often as peers arrive.
  *
