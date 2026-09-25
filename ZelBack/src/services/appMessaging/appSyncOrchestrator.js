@@ -206,7 +206,7 @@ class AppSyncOrchestrator {
   #heartbeatInterval = null;
   #bootContext = null;
   #canSendMessages = false;
-  #peerCountIfAboveThreshold = () => 0;
+  #isAboveThreshold = () => false;
   #catchUpRunningContent = async () => {};
   #nextManifestRefreshHeight = 0;
   #manifestRefreshInProgress = false;
@@ -220,7 +220,7 @@ class AppSyncOrchestrator {
     this.#onPeerEvent = options.onPeerEvent;
     this.#offPeerEvent = options.offPeerEvent;
     this.#isEnterprise = options.isEnterprise ?? (() => false);
-    this.#peerCountIfAboveThreshold = options.peerCountIfAboveThreshold ?? (() => 0);
+    this.#isAboveThreshold = options.isAboveThreshold ?? (() => false);
     this.#catchUpRunningContent = options.catchUpRunningContent ?? (async () => {});
     this.#waitForNetworkState = options.networkStateReady ?? null;
     this.#fluxVersion = options.fluxVersion ?? null;
@@ -291,8 +291,10 @@ class AppSyncOrchestrator {
     this.#bootContext = bootContext;
     this.#startHeartbeat();
 
+    // count comes from the edge, which carries the size that crossed it. The level read
+    // below has no count to report, so it says which of the two paths got here instead.
     this.#peerThresholdHandler = (count) => {
-      log.info(`AppSyncOrchestrator - Peer threshold reached (${count} peers)`);
+      log.info(`AppSyncOrchestrator - Peer threshold reached (${count === undefined ? 'already above it at start' : `${count} peers`})`);
       this.#peersAtFloor = true;
       this.#floorAttainedThisEpoch = true;
       this.#own(this.#onPeersReady());
@@ -339,9 +341,8 @@ class AppSyncOrchestrator {
     // has already fired and never re-fires, which would leave #peersReady
     // false and stall ephemeral state sync until the block timer. Read the
     // level after subscribing to the edge.
-    const peersAlready = this.#peerCountIfAboveThreshold();
-    if (peersAlready && !this.#peersAtFloor) {
-      this.#peerThresholdHandler(peersAlready);
+    if (this.#isAboveThreshold() && !this.#peersAtFloor) {
+      this.#peerThresholdHandler();
     }
 
     this.#ephemeralSyncHandler = (syncType, peerKey) => this.#onEphemeralSyncComplete(syncType, peerKey);
