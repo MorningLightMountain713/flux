@@ -331,6 +331,27 @@ describe('appUninstaller tombstoning teardown', () => {
       expect(stubs.appsRuntimeState.remove.called, 'the component is not held hostage').to.be.true;
     });
 
+    // A removal that did not happen is residue, as a throw is: the record stays owed so it
+    // is retried, and the stream does not report the data cleaned.
+    [
+      ['the app data', (c) => c.args[0] === 'rm' && !String(c.args[1].params[1]).endsWith('FLUXFSVOL')],
+      ['the volume image', (c) => c.args[0] === 'rm' && String(c.args[1].params[1]).endsWith('FLUXFSVOL')],
+    ].forEach(([what, isThatRemoval]) => {
+      it(`keeps the durable record when removing ${what} fails`, async () => {
+        stubs.volumeService.getVolumeFilePath.resolves({ path: '/dat/fluxweb_appFLUXFSVOL', conclusive: true });
+        serviceHelper.runCommand.callsFake(async (cmd, opts) => (
+          isThatRemoval({ args: [cmd, opts] }) ? { error: new Error('rm: cannot remove: Device or resource busy') } : { error: null, stdout: '', stderr: '' }
+        ));
+        const statuses = [];
+
+        await appUninstaller.runTeardown(doc(), { onStatus: (msg) => statuses.push(msg) });
+
+        expect(serviceHelper.runCommand.getCalls().some((c) => isThatRemoval(c)), 'the removal was never attempted').to.be.true;
+        expect(stubs.pendingTeardownStore.clearTeardown.called, 'residue is still on disk').to.be.false;
+        expect(statuses.some((msg) => /\bcleaned\b/.test(msg) && !/Database/.test(msg) && (what === 'the app data' ? /^Data of/.test(msg) : /^Volume of/.test(msg))), 'reported cleaned when it was not').to.be.false;
+      });
+    });
+
     it('never reclaims host storage (nor clears the record) while the container survives the remove', async () => {
       // A concurrent re-create (or a failed remove) leaves the container present. Destroying
       // its volume now would corrupt a live container, so the teardown must skip the
