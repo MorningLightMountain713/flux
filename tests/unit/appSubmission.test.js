@@ -128,8 +128,52 @@ describe('appSubmission tests', () => {
     });
   });
 
+  // A node past its acquisition window, which every case below assumes; the gate itself
+  // is exercised in its own block.
+  // eslint-disable-next-line global-require
+  const globalState = require('../../ZelBack/src/services/utils/globalState');
+  let policyBefore;
+  beforeEach(() => {
+    policyBefore = globalState.policyReady;
+    globalState.policyReady = true;
+  });
+
   afterEach(() => {
+    globalState.policyReady = policyBefore;
     sinon.restore();
+  });
+
+  // POLICY IS A PRECONDITION OF ANSWERING. The blocklist is in the signed bundle, so a
+  // node that has not confirmed one cannot establish that an image is not banned - a
+  // fact about the node, which the caller needs told so it can retry or ask another.
+  describe('a submission while the network policy is unconfirmed', () => {
+    const submit = async () => {
+      appSubmission = load();
+      const spec = v9Spec();
+      const submission = { version: 9, name: 'myapp', owner: 'owner1' };
+      stubs.transportHelper.openTransportEnvelope.resolves(submission);
+      stubs.parseSpec.resolves({ isEncrypted: false });
+      stubs.specLibs.validateSubmissionSpec.resolves(spec);
+      return appSubmission.resolveSubmission(submission, {
+        contentHash: spec.contentHash(), timestamp: 1, type: 'fluxappregister', daemonHeight: 100,
+      });
+    };
+
+    it('is refused, and no image is judged', async () => {
+      globalState.policyReady = false;
+      let refused = null;
+      await submit().catch((error) => { refused = error; });
+
+      expect(refused, 'a live submission was answered on a list this node could not vouch for').to.be.an('error');
+      expect(refused.message).to.equal('Cannot verify application images: network policy not yet obtained.');
+      sinon.assert.notCalled(stubs.imageArchitectureValidator.verifyImageRegistryAndArchitectures);
+    });
+
+    // The canary: the same submission, confirmed, reaches the image check.
+    it('reaches the image check once the policy is confirmed', async () => {
+      await submit();
+      sinon.assert.calledOnce(stubs.imageArchitectureValidator.verifyImageRegistryAndArchitectures);
+    });
   });
 
   describe('resolveSubmission', () => {
