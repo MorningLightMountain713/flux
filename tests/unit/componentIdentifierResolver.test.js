@@ -76,7 +76,7 @@ describe('componentIdentifierResolver', () => {
       buildDeployment: sinon.stub().callsFake(async (installed, opts) => deploymentFor(
         installed.spec, { replica: opts.replica, identity: installed.identity ?? null },
       )),
-      getComponentAppIdsFromVolumeFiles: sinon.stub().resolves([]),
+      getComponentAppIdsFromVolumeFiles: sinon.stub().resolves({ appIds: [], conclusive: true }),
     };
     return proxyquire.load('../../ZelBack/src/services/appLifecycle/componentIdentifierResolver', {
       '../appDatabase/appsRepository': { getInstalledApp: stubs.getInstalledApp },
@@ -144,7 +144,7 @@ describe('componentIdentifierResolver', () => {
     // the resolver strips it with that function's own inverse.
     const [identifier] = deploymentFor(spec).componentEntries().map(([, comp]) => comp.identifier);
     stubs.getComponentAppIdsFromVolumeFiles.withArgs('ent')
-      .resolves([dockerService.getAppIdentifier(identifier)]);
+      .resolves({ appIds: [dockerService.getAppIdentifier(identifier)], conclusive: true });
 
     // Stored bare: consumers add docker's prefix back, so storing it would double it.
     expect(await resolver.resolveComponentIdentifiers('ent', null)).to.deep.equal(['web_ent']);
@@ -165,9 +165,19 @@ describe('componentIdentifierResolver', () => {
   it('answers null rather than an empty list when disk holds nothing either', async () => {
     stubs.getInstalledApp.resolves(await instantiatedSpec(await sealedV9Spec({ name: 'ent' })));
     stubs.buildDeployment.rejects(new Error('benchd unavailable'));
-    stubs.getComponentAppIdsFromVolumeFiles.resolves([]);
+    stubs.getComponentAppIdsFromVolumeFiles.resolves({ appIds: [], conclusive: true });
 
     // An empty list would be recorded as "this app has no components" for ever.
+    expect(await resolver.resolveComponentIdentifiers('ent', null)).to.equal(null);
+  });
+
+  it('answers null rather than part of the list when the disk search could not look everywhere', async () => {
+    stubs.getInstalledApp.resolves(await instantiatedSpec(await sealedV9Spec({ name: 'ent' })));
+    stubs.buildDeployment.rejects(new Error('benchd unavailable'));
+    stubs.getComponentAppIdsFromVolumeFiles.resolves({ appIds: ['fluxweb_ent'], conclusive: false });
+
+    // What this answers is recorded as the app's components; a list short by an
+    // unknown amount would be recorded as the whole of them.
     expect(await resolver.resolveComponentIdentifiers('ent', null)).to.equal(null);
   });
 

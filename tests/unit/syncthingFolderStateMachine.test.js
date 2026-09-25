@@ -49,7 +49,6 @@ const serviceHelperMock = {
 const volumeServiceMock = {
   isPathMounted: sinon.stub().resolves(true),
   ensureAppVolumeMounted: sinon.stub().resolves({ mounted: true, alreadyMounted: true }),
-  getVolumeFilePath: sinon.stub().resolves('/dat/fluxappFLUXFSVOL'),
   ensureMountSourcesExist: sinon.stub().resolves(),
 };
 
