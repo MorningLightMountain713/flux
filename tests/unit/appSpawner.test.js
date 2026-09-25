@@ -74,7 +74,6 @@ describe('appSpawner tests', () => {
         spawnReconfirmDelayMs: 10_000,
         unencryptedSpawnDelayMs: 120_000,
         spawnDeferrals: {
-          targetedNodesMs: { standard: 300_000, encrypted: 60_000 },
           staticIpMs: { standard: 300_000, encrypted: 60_000 },
           datacenterMs: { standard: 300_000, encrypted: 60_000 },
           capacityGap: {
@@ -266,7 +265,7 @@ describe('appSpawner tests', () => {
         nodeTier: sinon.stub().resolves('cumulus'),
         // A real txid, because a real Placement's targetOutpoints entries are
         // schema-checked as `txid:vout` — 'aaa:0' cannot be registered.
-        obtainNodeCollateralInformation: sinon.stub().resolves({ txhash: MY_TXHASH, txindex: 0 }),
+        obtainNodeCollateralInformation: opts.collateralStub ?? sinon.stub().resolves({ txhash: MY_TXHASH, txindex: 0 }),
       },
       '../benchmarkService': {
         getBenchmarks: sinon.stub().resolves({
@@ -329,10 +328,12 @@ describe('appSpawner tests', () => {
       '../appSecurity/imageManager': {
         isImageBlocked: opts.imageBlockedStub ?? sinon.stub().resolves({ blocked: false }),
         verifyRepository: sinon.stub().resolves(),
-        // No blocklist by default, so the candidate filter is inert unless a test
-        // supplies one. The matcher is the real implementation: a double of it
-        // would let a test pass on matching rules the node does not have.
-        getBlocklist: sinon.stub().returns(opts.blocklist ?? null),
+        // An empty blocklist by default - published, and nothing blocked - so the
+        // candidate filter is inert unless a test supplies entries, and null (a list
+        // this node cannot read) is a case of its own. The matcher is the real
+        // implementation: a double of it would let a test pass on matching rules the
+        // node does not have.
+        getBlocklist: sinon.stub().returns(opts.blocklist === undefined ? [] : opts.blocklist),
         blockedReasonFor: realImageManager.blockedReasonFor,
       },
       '../appRequirements/hwRequirements': hwRequirementsStub,
@@ -950,14 +951,33 @@ describe('appSpawner tests', () => {
   });
 
   describe('deferral logic', () => {
-    it('should defer apps with targets that do not match this node', async () => {
+    // A TARGETED SPEC RUNS ON THE NODES IT NAMES AND NOWHERE ELSE, whoever owns it. A
+    // node it does not name neither takes it nor holds it for later.
+    it('does not take, or hold for later, an app whose targets name another node', async () => {
       // A real Placement naming some other node: matchesTarget is decided from
       // the target list, so there is nothing to force.
       const candidate = await makeCandidate({ placement: { targetIps: ['10.0.0.1'] } });
       buildModule({ candidates: [candidate] });
       await appSpawner.trySpawningGlobalApplication().catch(() => {});
-      expect(globalStateStub.appsToBeCheckedLater).to.have.lengthOf(1);
-      expect(globalStateStub.appsToBeCheckedLater[0].appName).to.equal('testapp');
+      expect(globalStateStub.appsToBeCheckedLater, 'a node the spec does not name held it to take later').to.have.lengthOf(0);
+      expect(logStub.info.args.some((a) => a[0]?.includes?.('testapp selected')), 'a node the spec does not name drew it').to.be.false;
+    });
+
+    // The canary: the same app naming this node is drawn.
+    it('takes an app whose targets name this node', async () => {
+      const candidate = await makeCandidate({ placement: { targetIps: [MY_ADDR] } });
+      buildModule({ candidates: [candidate] });
+      await appSpawner.trySpawningGlobalApplication().catch(() => {});
+      expect(logStub.info.args.some((a) => a[0]?.includes?.('testapp selected'))).to.be.true;
+    });
+
+    // A pin naming this node by address needs nothing from the daemon, so a node that
+    // cannot read its collateral still honours it.
+    it('honours an address pin when the collateral cannot be read', async () => {
+      const candidate = await makeCandidate({ placement: { targetIps: [MY_ADDR] } });
+      buildModule({ candidates: [candidate], collateralStub: sinon.stub().rejects(new Error('daemon down')) });
+      await appSpawner.trySpawningGlobalApplication().catch(() => {});
+      expect(logStub.info.args.some((a) => a[0]?.includes?.('testapp selected')), 'an address pin failed on the daemon').to.be.true;
     });
 
     it('should not defer apps with no targets', async () => {
@@ -2138,11 +2158,15 @@ describe('appSpawner tests', () => {
       expect(selectionLogged('selected to try to spawn')).to.be.true;
     });
 
-    it('selects as usual when the blocklist cannot be obtained', async () => {
-      // An unreachable document must not stop the node spawning anything; the
-      // install-time compliance check is still ahead of it.
+    // A blocked application's absence is what the node cannot establish without the
+    // list, and the one drawn would be refused at install for the same reason - so
+    // nothing is acquired on a pass that cannot read it.
+    it('acquires nothing on a pass that cannot read the blocklist, and ends it cleanly', async () => {
       await draw(null);
-      expect(selectionLogged('selected to try to spawn')).to.be.true;
+      expect(selectionLogged('selected to try to spawn'), 'an app was drawn on an unreadable blocklist').to.be.false;
+      expect(logStub.warn.args.some((a) => a[0]?.includes?.('the blocklist cannot be read'))).to.be.true;
+      expect(selectionLogged('No app currently to be processed'), 'the pass went on to judge candidates it could not').to.be.false;
+      sinon.assert.notCalled(logStub.error);
     });
 
     it('does not filter on an image entry here, where no repotag is in the clear', async () => {

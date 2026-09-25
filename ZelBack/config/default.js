@@ -992,7 +992,6 @@ module.exports = {
     // Asserted against production's own config in the unit tests.
     residentialTurnMs: 60 * 60 * 1000,
     spawnDeferrals: {
-      targetedNodesMs: { encrypted: 1_800_000, standard: 3_420_000 },
       staticIpMs: { encrypted: 1_620_000, standard: 3_420_000 },
       datacenterMs: { encrypted: 1_620_000, standard: 3_420_000 },
       capacityGap: {

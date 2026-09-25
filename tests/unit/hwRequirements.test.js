@@ -76,11 +76,8 @@ async function deploymentOfSize(size) {
 }
 
 /**
- * A real FluxAppSpecV7 — the last version that enforces node targeting at
- * install time, which is the whole reason this file needs one: production's
- * checkTargets treats v8 as the exemption and everything else as enforcing, so
- * testing only v8 and v9 would leave the enforcing branch of a LEGACY spec
- * unexercised.
+ * A real FluxAppSpecV7, a legacy version whose `nodes` array pins as v8's does,
+ * so the legacy conversion to typed targets is exercised on both.
  *
  * Derived from V8_SUBMISSION's own fields, the way the shared fixture derives
  * its v1 spec, so the two stay describing the same app. v7 has no submission
@@ -164,7 +161,7 @@ function buildHw(opts = {}) {
     },
     '../generalService': {
       nodeTier: sinon.stub().resolves('cumulus'),
-      obtainNodeCollateralInformation: sinon.stub().resolves(collateral),
+      obtainNodeCollateralInformation: opts.collateralStub ?? sinon.stub().resolves(collateral),
     },
     '../geolocationService': {
       isStaticIP: sinon.stub().returns(isStaticIP),
@@ -341,17 +338,46 @@ describe('hwRequirements', () => {
         await hw.checkPlacement(spec);
       });
 
-      it('passes for v8 even with targets (v8 does not enforce)', async () => {
+      // A PINNED SPEC RUNS ON THE NODES IT NAMES AND NOWHERE ELSE, for every version.
+      it('throws for v8 when node does not match targets', async () => {
         const hw = buildHw();
         const spec = await v8Spec({ nodes: [OTHER_IP] }, { encrypted: true });
-        // The whole point of this case, and the thing the double could not
-        // express: the legacy pin list IS a real target set that this node
-        // genuinely misses. Only production's v8 exemption lets it through.
+        // The legacy pin list IS a real target set that this node genuinely misses.
         expect(spec.placement.hasTargets(), 'a v8 nodes array is a real target set').to.be.true;
         expect(
           spec.placement.matchesTarget({ ip: MY_ADDR, outpoint: MY_OUTPOINT, operator: MY_OPERATOR }),
           'and this node is not in it',
         ).to.be.false;
+        await rejectsWith(hw.checkPlacement(spec), 'not allowed to run');
+      });
+
+      it('passes for v8 when node matches targets', async () => {
+        const hw = buildHw();
+        const spec = await v8Spec({ nodes: [MY_IP] }, { encrypted: true });
+        await hw.checkPlacement(spec);
+      });
+
+      // A pin naming this node by address is answered without the daemon, so a node
+      // whose daemon is down still honours it.
+      it('matches an address pin without asking the daemon', async () => {
+        const collateralStub = sinon.stub().rejects(new Error('daemon down'));
+        const hw = buildHw({ collateralStub });
+        const spec = await v7Spec({ nodes: [MY_IP] });
+        await hw.checkPlacement(spec);
+        sinon.assert.notCalled(collateralStub);
+      });
+
+      it('refuses a collateral pin it cannot confirm when the collateral cannot be read', async () => {
+        const hw = buildHw({ collateralStub: sinon.stub().rejects(new Error('daemon down')) });
+        const spec = await v7Spec({ nodes: [MY_OUTPOINT] });
+        expect(spec.placement.targetOutpoints, 'a collateral pin').to.deep.equal([MY_OUTPOINT]);
+        await rejectsWith(hw.checkPlacement(spec), 'not allowed to run');
+      });
+
+      // The canary for the two above: the same collateral pin, with the daemon up, matches.
+      it('matches a collateral pin', async () => {
+        const hw = buildHw();
+        const spec = await v7Spec({ nodes: [MY_OUTPOINT] });
         await hw.checkPlacement(spec);
       });
 

@@ -118,7 +118,6 @@ describe('flux-shutdownd (real): per-identity plans and replica-scoped drains', 
       configOverrides: {
         fluxapps: {
           minOutgoing: 2,
-          spawnDeferrals: { targetedNodesMs: { encrypted: 30000, standard: 30000 } },
           adoptionStaggerStepMs: 15000,
           adoptionStaggerWindowMs: 15000,
         },
