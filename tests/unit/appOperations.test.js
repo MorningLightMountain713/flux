@@ -609,6 +609,26 @@ describe('appOperations tests', () => {
       expect(uninstallComponent.called, 'a satisfied dependency check must not block the redeploy').to.be.true;
       expect(operationRegistry.isHeld('myapp')).to.be.false;
     });
+
+    it('reads the app back for reinstall as soon as its teardown returns', async () => {
+      sinon.stub(deploymentProvider, 'getInstalledDeployment').resolves(
+        await oneComponentDeployment('myapp', 'frontend', { image: 'myrepo/app:v1' }),
+      );
+      sinon.stub(componentProvisioner, 'verifyComponentImage').resolves();
+      const delay = sinon.stub(serviceHelper, 'delay').resolves();
+      const getInstalledApp = sinon.stub(appsRepository, 'getInstalledApp');
+      getInstalledApp.onFirstCall().resolves(await instantiatedSpec(await v9Spec()));
+      getInstalledApp.onSecondCall().resolves(null);
+      sinon.stub(relationshipResolver, 'checkAppDependencyRequirements').resolves(true);
+      sinon.stub(appUninstaller, 'uninstallComponent').resolves();
+      sinon.stub(appReconciler, 'enqueueApp');
+
+      await appOperations.redeployApplication('myapp', { onStatus: () => {} });
+
+      expect(getInstalledApp.calledTwice, 'the reinstall reads the app back after the teardown').to.be.true;
+      // The only wait is the one between a component's teardown and the next.
+      expect(delay.args).to.deep.equal([[config.get('fluxapps.redeploy.composedDelay') * 1000]]);
+    });
   });
 
   describe('redeployComponent (rebuild) tests', () => {

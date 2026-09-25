@@ -477,8 +477,6 @@ async function redeployApplication(appName, options = {}) {
         await serviceHelper.delay(config.get('fluxapps.redeploy.composedDelay') * 1000);
       }
       status(`${unitLabel} removed. Awaiting installation...`);
-      // eslint-disable-next-line no-await-in-loop
-      await serviceHelper.delay(config.get('fluxapps.redeploy.delay') * 1000);
 
       // eslint-disable-next-line no-await-in-loop
       const instantiated = await appsRepository.getInstalledApp(appName);
