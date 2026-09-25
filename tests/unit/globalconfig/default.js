@@ -432,7 +432,6 @@ const harnessOverrides = {
     nodeDownSweepIntervalMs: 60_000,
     connectionBackoffMs: [120_000, 300_000, 600_000, 900_000],
     spawnDeferrals: {
-      targetedNodesMs: { encrypted: 1_800_000, standard: 3_420_000 },
       staticIpMs: { encrypted: 1_620_000, standard: 3_420_000 },
       datacenterMs: { encrypted: 1_620_000, standard: 3_420_000 },
       capacityGap: {

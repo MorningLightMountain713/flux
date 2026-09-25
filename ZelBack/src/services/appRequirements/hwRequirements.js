@@ -7,6 +7,7 @@ const geolocationService = require('../geolocationService');
 const benchmarkService = require('../benchmarkService');
 const fluxNetworkHelper = require('../fluxNetworkHelper');
 const { socketAddressesMatch } = require('../utils/socketAddressUtils');
+const { collateralOutpoint } = require('../utils/nodePinning');
 const enterpriseNetwork = require('../utils/enterpriseNetwork');
 const admissionControl = require('../utils/admissionControl');
 const log = require('../../lib/log');
@@ -113,27 +114,32 @@ async function checkGeolocation(spec) {
   return true;
 }
 
-// v7 enforces node targeting at install time; v8 deliberately relaxed this.
-// v9+ uses the Placement target API (IPs, outpoints, operators).
+// A TARGETED SPEC RUNS ON THE NODES IT NAMES AND NOWHERE ELSE, for every version:
+// v7 and v8 `nodes` convert to the same typed targets v9 declares (IPs, outpoints,
+// operators).
+//
+// ADDRESS FIRST, and without the daemon: a pin naming this node by address needs
+// nothing else, so a node that cannot reach its daemon still honours it. A
+// collateral that cannot be read narrows the rest of the match to the operator key.
 async function checkTargets(spec) {
   if (!spec.placement.hasTargets()) return true;
 
-  // v8 has nodes in the schema but does not enforce at install time
-  if (spec.version === 8) return true;
-
-  const myCollateral = await generalService.obtainNodeCollateralInformation();
   const localSocketAddr = await fluxNetworkHelper.getLocalSocketAddress();
   if (!localSocketAddr) {
     throw new Error('Unable to detect Flux IP address');
   }
-  const operatorPubKey = await fluxNetworkHelper.getFluxNodePublicKey();
-  const outpoint = `${myCollateral.txhash}:${myCollateral.txindex}`;
+  if (spec.placement.matchesTarget({ ip: localSocketAddr, ipMatcher: socketAddressesMatch })) {
+    return true;
+  }
 
+  const myCollateral = await generalService.obtainNodeCollateralInformation().catch((error) => {
+    log.warn(`checkTargets - could not resolve node collateral, pins naming this node by collateral will not match: ${error.message}`);
+    return null;
+  });
+  const operatorPubKey = await fluxNetworkHelper.getFluxNodePublicKey();
   if (spec.placement.matchesTarget({
-    ip: localSocketAddr,
-    outpoint,
-    operator: operatorPubKey,
-    ipMatcher: socketAddressesMatch,
+    outpoint: collateralOutpoint(myCollateral) ?? undefined,
+    operator: typeof operatorPubKey === 'string' ? operatorPubKey : undefined,
   })) {
     return true;
   }

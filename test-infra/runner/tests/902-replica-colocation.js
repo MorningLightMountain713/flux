@@ -178,11 +178,6 @@ describe('replica co-location: two named replicas of one app on one node, separa
       configOverrides: {
         fluxapps: {
           minOutgoing: 2,
-          // A targeted node that does not yet match an app defers it for tens of
-          // minutes before rescanning; the co-located scale-up re-targets exactly
-          // such a node mid-run, so the deferral must be short enough for the new
-          // identity to be picked up inside the test window.
-          spawnDeferrals: { targetedNodesMs: { encrypted: 30000, standard: 30000 } },
           // Rolling-update pacing is production behaviour; shrink it so an
           // identity-at-a-time rollout completes within the test windows.
           adoptionStaggerStepMs: 15000,

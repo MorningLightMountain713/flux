@@ -272,7 +272,6 @@ module.exports = {
     nodeDownSweepIntervalMs: 5000,
     connectionBackoffMs: [2000, 5000, 10000, 15000],
     spawnDeferrals: {
-      targetedNodesMs: { encrypted: 150, standard: 300 },
       staticIpMs: { encrypted: 200, standard: 400 },
       datacenterMs: { encrypted: 250, standard: 500 },
       capacityGap: {

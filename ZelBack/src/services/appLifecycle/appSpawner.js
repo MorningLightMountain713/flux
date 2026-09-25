@@ -13,6 +13,7 @@ const geolocationService = require('../geolocationService');
 const daemonServiceMiscRpcs = require('../daemonService/daemonServiceMiscRpcs');
 const log = require('../../lib/log');
 const { normalizeSocketAddress, extractIp, extractPort, socketAddressesMatch } = require('../utils/socketAddressUtils');
+const { collateralOutpoint } = require('../utils/nodePinning');
 const { compareInstallingClaims, describeRanking } = require('../utils/instanceOrdering');
 
 // Import modular services
@@ -441,8 +442,13 @@ async function trySpawningGlobalApplication() {
     // actually exist, under their original election ordering.
     let deferredAnnouncedAt = null;
     let deferredReplicas = null;
-    const collateral = await generalService.obtainNodeCollateralInformation();
-    const nodeOutpoint = `${collateral.txhash}:${collateral.txindex}`;
+    // A pin naming this node by address needs nothing from the daemon, so a collateral
+    // that cannot be read narrows the match to addresses rather than ending the pass.
+    const collateral = await generalService.obtainNodeCollateralInformation().catch((error) => {
+      log.warn(`trySpawningGlobalApplication - could not resolve node collateral, pins naming this node by collateral will not match: ${error.message}`);
+      return null;
+    });
+    const nodeOutpoint = collateralOutpoint(collateral) ?? undefined;
     const nodeOperator = fluxNetworkHelper.getFluxNodePublicKey();
     const targetInfo = {
       ip: localSocketAddr,
@@ -501,14 +507,19 @@ async function trySpawningGlobalApplication() {
       // expires. Only what an application IS can be judged here: an enterprise
       // application carries no repotags in the clear, so an image or namespace
       // ban remains the install-time check's to make.
+      //
+      // A list this node cannot read ends the pass: every candidate would be drawn
+      // unjudged, and the one that wins is refused at install for the same reason.
       const blocklist = imageManager.getBlocklist();
-      if (blocklist) {
-        globalAppNamesLocation = globalAppNamesLocation.filter(
-          (c) => !imageManager.blockedReasonFor(blocklist, {
-            name: c.instantiated.name, owner: c.instantiated.owner, hash: c.instantiated.hash, images: null,
-          }),
-        );
+      if (!blocklist) {
+        log.warn('trySpawningGlobalApplication - the blocklist cannot be read, nothing is acquired this pass');
+        return delayTime;
       }
+      globalAppNamesLocation = globalAppNamesLocation.filter(
+        (c) => !imageManager.blockedReasonFor(blocklist, {
+          name: c.instantiated.name, owner: c.instantiated.owner, hash: c.instantiated.hash, images: null,
+        }),
+      );
       survivors.afterBlocklist = globalAppNamesLocation.length;
       stages.push(['afterBlocklist', nameSet()]);
 
@@ -561,21 +572,12 @@ async function trySpawningGlobalApplication() {
       });
       survivors.afterOwnership = globalAppNamesLocation.length;
       stages.push(['afterOwnership', nameSet()]);
-      // Enterprise-owned apps that pin nodes (IP / outpoint / operator targets) are strict:
-      // only a matching node may install them, regardless of version. Carries the legacy
-      // app.nodes enforcement forward into the v9 placement model.
-      globalAppNamesLocation = globalAppNamesLocation.filter((c) => {
-        const { placement } = c.instantiated.spec;
-        if (placement.hasTargets() && enterpriseNetwork.isEnterpriseAppOwner(c.instantiated.owner)) {
-          return placement.matchesTarget({
-            ip: localSocketAddr,
-            ipMatcher: socketAddressesMatch,
-            outpoint: nodeOutpoint,
-            operator: nodeOperator,
-          });
-        }
-        return true;
-      });
+      // A TARGETED SPEC RUNS ON THE NODES IT NAMES AND NOWHERE ELSE, for every version
+      // and every owner: the targets are the set the network arranges the instances
+      // within, so a node outside them has nothing to take and nothing to hold for later.
+      globalAppNamesLocation = globalAppNamesLocation.filter(
+        (c) => c.instantiated.spec.placement.matchesTarget(targetInfo),
+      );
       survivors.afterNodePin = globalAppNamesLocation.length;
       stages.push(['afterNodePin', nameSet()]);
 
@@ -1152,22 +1154,6 @@ async function trySpawningGlobalApplication() {
 
     const specPlacement = spec.placement;
     const isEncryptedApp = instantiated.isEncrypted;
-
-    if (!appFromAppsToBeCheckedLater && !appFromAppsSyncthingToBeCheckedLater
-      && specPlacement.hasTargets() && !specPlacement.matchesTarget(targetInfo)) {
-      const deferral = config.get('fluxapps.spawnDeferrals.targetedNodesMs');
-      const delayMs = isEncryptedApp ? deferral.encrypted : deferral.standard;
-      const appToCheck = {
-        timeToCheck: Date.now() + delayMs,
-        appName: appToRun,
-        hash: appHash,
-        required: minInstances,
-      };
-      log.info(`trySpawningGlobalApplication - App ${appToRun} has targets that don't match this node, will check in around ${Math.round(delayMs / 60_000)}m if instances are still missing`);
-      globalState.appsToBeCheckedLater.push(appToCheck);
-      fluxEventBus.publish('spawner:deferred', { appName: appToRun, reason: 'targeted_nodes', delayMs });
-      return shortDelayTime;
-    }
 
     if (!isEnterpriseNode && !appFromAppsToBeCheckedLater && !appFromAppsSyncthingToBeCheckedLater) {
       const tier = await generalService.nodeTier();

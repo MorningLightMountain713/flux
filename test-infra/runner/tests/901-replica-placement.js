@@ -178,13 +178,6 @@ describe('replica placement (v9): assignment + placement, overrides, platform en
       configOverrides: {
         fluxapps: {
           minOutgoing: 2,
-          // A node a targeted app does NOT match defers that app for ~30-57min
-          // before rescanning. The scale-up/mode-switch tests re-target exactly
-          // such nodes mid-run, so the deferral must be short for the newly
-          // named node to pick its replica up within the test window.
-          // (NODE_CONFIG deep-merges, so the sibling spawnDeferrals keys keep
-          // their defaults.)
-          spawnDeferrals: { targetedNodesMs: { encrypted: 30000, standard: 30000 } },
           // Adoption staggering (rolling updates) is production pacing; shrink
           // it so a candidate instance's bounded-window adoption lands inside the
           // test windows.
