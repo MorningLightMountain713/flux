@@ -724,6 +724,11 @@ function start(injectedTransport) {
   transport.peerManager.setInboundGate(inboundGate);
 
   primeLocalAddress().then(() => reconciler.start());
+  // A node started before its list arrives owes duties it cannot name yet:
+  // the list's arrival is the pass that dials them.
+  networkStateService.onReady(() => {
+    if (reconciler) reconciler.schedule('list-ready');
+  });
   sweepTimer = setInterval(() => {
     sweep().catch((error) => log.warn(`nodeDownService: sweep failed: ${error.message}`));
   }, config.get('fluxapps.nodeDownSweepIntervalMs'));
