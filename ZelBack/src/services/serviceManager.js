@@ -493,7 +493,7 @@ async function startFluxFunctions() {
       },
       onPeerEvent: (event, cb) => peerManager.on(event, cb),
       offPeerEvent: (event, cb) => peerManager.removeListener(event, cb),
-      peerCountIfAboveThreshold: () => peerManager.peerCountIfAboveThreshold(),
+      isAboveThreshold: () => peerManager.isAboveThreshold(),
       isEnterprise: () => enterpriseNetwork.getCachedEnterpriseIdentity(),
       networkStateReady: () => networkStateService.waitStarted(),
       // The steady-state manifest refresh's apply half: catch up any running container whose

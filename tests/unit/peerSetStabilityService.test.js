@@ -40,7 +40,7 @@ describe('peerSetStabilityService', () => {
     svc.start({
       onPeerEvent: (event, cb) => peerEmitter.on(event, cb),
       offPeerEvent: (event, cb) => peerEmitter.removeListener(event, cb),
-      peerCountIfAboveThreshold: () => (alreadyUp ? 12 : 0),
+      isAboveThreshold: () => alreadyUp,
     });
   }
 
@@ -209,6 +209,28 @@ describe('peerSetStabilityService', () => {
       clock.tick(service.WINDOW_MS);
 
       expect(service.isDosActive(), 'never released, even after a full window with the set up').to.equal(false);
+    });
+  });
+
+  // The rise edge is latched, so a node restarting under its own DOS with the peer set
+  // already up never sees one. The level read at start is what lets it lift.
+  describe('a restart under its own dos', () => {
+    it('lifts after a quiet window when the peer set was already up at start', () => {
+      sticky = `${service.DOS_MESSAGE_PREFIX} collapsed 5 times`;
+      startService(service, { alreadyUp: true });
+
+      clock.tick(service.WINDOW_MS + service.EVALUATE_INTERVAL_MS);
+
+      expect(sticky).to.equal(null);
+    });
+
+    it('holds when the peer set was not up at start and never rose', () => {
+      sticky = `${service.DOS_MESSAGE_PREFIX} collapsed 5 times`;
+      startService(service, { alreadyUp: false });
+
+      clock.tick(service.WINDOW_MS + service.EVALUATE_INTERVAL_MS);
+
+      expect(sticky).to.contain(service.DOS_MESSAGE_PREFIX);
     });
   });
 

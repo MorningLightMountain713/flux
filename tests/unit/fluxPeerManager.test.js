@@ -835,6 +835,23 @@ describe('FluxPeerManager tests', () => {
       expect(peer.key).to.equal('10.0.0.1:16127');
     });
 
+    // ORDER IS PART OF THE CONTRACT. A listener that starts per-connection work on
+    // peerConnected and reads its result on peerThresholdReached needs the connection
+    // handled first: with the edge emitted first, the peer that crossed the threshold
+    // has not been handled at the moment the set is declared full.
+    it('announces the connection before it announces that the set is full', () => {
+      const order = [];
+      manager.on('peerConnected', () => order.push('connected'));
+      manager.on('peerThresholdReached', () => order.push('threshold'));
+
+      for (let i = 1; i <= 12; i += 1) {
+        manager.add(createMockWs(`10.0.0.${i}`), `10.0.0.${i}`, '16127', { source: PEER_SOURCE.RANDOM });
+      }
+
+      expect(order.slice(-2), 'the crossing peer is announced, then the crossing')
+        .to.deep.equal(['connected', 'threshold']);
+    });
+
     // `peerThresholdReached` is a latched edge, cleared only below the DEGRADED
     // level, so after it has fired it says nothing about a pool that has since
     // lost a member. A listener that has to top such a pool back up hears about
