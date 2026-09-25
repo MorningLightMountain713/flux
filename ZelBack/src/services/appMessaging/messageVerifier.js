@@ -25,7 +25,6 @@ const {
 } = require('../utils/appConstants');
 const { invalidMessages } = require('../invalidMessages');
 const fluxNetworkHelper = require('../fluxNetworkHelper');
-const globalState = require('../utils/globalState');
 const { Privilege, authOf } = require('../utils/privileges');
 const { processPendingUpdates } = require('./messageStore');
 
@@ -684,13 +683,6 @@ async function continuousFluxAppHashesCheck(force = false) {
       log.info('Flux not yet synced');
       continuousFluxAppHashesCheckRunning = false;
       return;
-    }
-
-    if (firstContinuousFluxAppHashesCheckRun && !globalState.checkAndSyncAppHashesWasEverExecuted) {
-      // Import checkAndSyncAppHashes from appHashSyncService
-      // eslint-disable-next-line global-require
-      const appHashSyncService = require('./appHashSyncService');
-      await appHashSyncService.checkAndSyncAppHashes();
     }
 
     const dbopen = dbHelper.databaseConnection();
