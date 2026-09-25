@@ -28,7 +28,7 @@ describe('volumeService tests', () => {
   let volumeService;
 
   beforeEach(() => {
-    dockerServiceStub = { getAppIdentifier: sinon.stub() };
+    dockerServiceStub = { getAppIdentifier: sinon.stub().callsFake((identifier) => `flux${identifier}`) };
     // runCommand defaults to success ({ error: null }); tests override as needed
     serviceHelperStub = { runCommand: sinon.stub().resolves({ error: null, stdout: '', stderr: '' }) };
     mountParserStub = {
@@ -275,7 +275,7 @@ describe('volumeService tests', () => {
       fsStub.promises.access.rejects(enoent());
       fsStub.promises.access.withArgs('/mnt/data/fluxcomp_appFLUXFSVOL').resolves();
 
-      const found = await volumeService.getVolumeFilePath('fluxcomp_app');
+      const found = await volumeService.getVolumeFilePath('comp_app');
 
       expect(found.path).to.equal('/mnt/data/fluxcomp_appFLUXFSVOL');
     });
@@ -365,7 +365,7 @@ describe('volumeService tests', () => {
         fsStub.promises.access.rejects(enoent());
         fsStub.promises.access.withArgs('/mnt/data/fluxcomp_appFLUXFSVOL').resolves();
 
-        const found = await volumeService.getVolumeFilePath('fluxcomp_app');
+        const found = await volumeService.getVolumeFilePath('comp_app');
 
         expect(found.path).to.equal('/mnt/data/fluxcomp_appFLUXFSVOL');
       });
@@ -380,7 +380,7 @@ describe('volumeService tests', () => {
       fsStub.promises.access.rejects(enoent());
       fsStub.promises.access.withArgs('/mnt/nas/fluxcomp_appFLUXFSVOL').resolves();
 
-      const found = await volumeService.getVolumeFilePath('fluxcomp_app');
+      const found = await volumeService.getVolumeFilePath('comp_app');
 
       expect(found.path).to.equal(null);
     });
@@ -399,7 +399,7 @@ describe('volumeService tests', () => {
       fsStub.promises.access.rejects(enoent());
       fsStub.promises.access.withArgs('/var/lib/docker/zfs/graph/3f9c1e/fluxweb_victimFLUXFSVOL').resolves();
 
-      const found = await volumeService.getVolumeFilePath('fluxweb_victim');
+      const found = await volumeService.getVolumeFilePath('web_victim');
 
       expect(found.path).to.equal(null);
     });
@@ -415,7 +415,7 @@ describe('volumeService tests', () => {
       fsStub.promises.access.rejects(enoent());
       fsStub.promises.access.withArgs('/var/lib/docker/fluxweb_appFLUXFSVOL').resolves();
 
-      const found = await volumeService.getVolumeFilePath('fluxweb_app');
+      const found = await volumeService.getVolumeFilePath('web_app');
 
       expect(found.path).to.equal('/var/lib/docker/fluxweb_appFLUXFSVOL');
     });
@@ -437,7 +437,7 @@ describe('volumeService tests', () => {
       fsStub.promises.access.rejects(enoent());
       fsStub.promises.access.withArgs('/test/flux/appvolumes/fluxapp1FLUXFSVOL').resolves();
 
-      const result = await volumeService.getVolumeFilePath('fluxapp1');
+      const result = await volumeService.getVolumeFilePath('app1');
 
       expect(result.path).to.equal('/test/flux/appvolumes/fluxapp1FLUXFSVOL');
       expect(result.recordSettled, 'an unread record was reported as settled').to.equal(false);
@@ -449,7 +449,7 @@ describe('volumeService tests', () => {
       fsStub.promises.access.rejects(enoent());
       fsStub.promises.access.withArgs('/test/flux/appvolumes/fluxapp1FLUXFSVOL').resolves();
 
-      const result = await volumeService.getVolumeFilePath('fluxapp1');
+      const result = await volumeService.getVolumeFilePath('app1');
 
       expect(result.recordSettled).to.equal(true);
     });
@@ -458,7 +458,7 @@ describe('volumeService tests', () => {
       appsRuntimeStateStub.getVolumeImage.resolves({ path: '/mnt/data/fluxapp1FLUXFSVOL', fsUuid: 'u-1' });
       fsStub.promises.access.resolves();
 
-      const result = await volumeService.getVolumeFilePath('fluxapp1');
+      const result = await volumeService.getVolumeFilePath('app1');
 
       expect(result).to.deep.include({ path: '/mnt/data/fluxapp1FLUXFSVOL', conclusive: true, blocked: null });
       // the mount table is never read, so nothing a search could be fooled by matters
@@ -471,7 +471,7 @@ describe('volumeService tests', () => {
       fsStub.promises.access.rejects(enoent());
       fsStub.promises.access.withArgs('/dat/fluxapp1FLUXFSVOL').resolves();
 
-      const result = await volumeService.getVolumeFilePath('fluxapp1');
+      const result = await volumeService.getVolumeFilePath('app1');
 
       expect(result.path).to.equal('/dat/fluxapp1FLUXFSVOL');
     });
@@ -536,7 +536,7 @@ describe('volumeService tests', () => {
       const result = await volumeService.ensureAppVolumeMounted('app1');
 
       expect(result.mounted, 'the genuine volume was refused over a stale record').to.be.true;
-      sinon.assert.calledWith(appsRuntimeStateStub.setVolumeImage, 'fluxapp1', '/dat/fluxapp1FLUXFSVOL', 'the-real-one');
+      sinon.assert.calledWith(appsRuntimeStateStub.setVolumeImage, 'app1', '/dat/fluxapp1FLUXFSVOL', 'the-real-one');
     });
 
     it('mounts the image whose stamp matches', async () => {
@@ -585,7 +585,7 @@ describe('volumeService tests', () => {
       const result = await volumeService.ensureAppVolumeMounted('app1');
 
       expect(result).to.deep.equal({ mounted: true, alreadyMounted: true });
-      sinon.assert.calledWith(appsRuntimeStateStub.setVolumeImage, 'fluxapp1', '/mnt/data/fluxapp1FLUXFSVOL', 'learned-uuid');
+      sinon.assert.calledWith(appsRuntimeStateStub.setVolumeImage, 'app1', '/mnt/data/fluxapp1FLUXFSVOL', 'learned-uuid');
     });
 
     // The search runs once for a legacy image: what it found is recorded the
@@ -606,7 +606,7 @@ describe('volumeService tests', () => {
       const result = await volumeService.ensureAppVolumeMounted('app1');
 
       expect(result.mounted).to.be.true;
-      sinon.assert.calledWith(appsRuntimeStateStub.setVolumeImage, 'fluxapp1', '/dat/fluxapp1FLUXFSVOL', 'found-uuid');
+      sinon.assert.calledWith(appsRuntimeStateStub.setVolumeImage, 'app1', '/dat/fluxapp1FLUXFSVOL', 'found-uuid');
     });
 
     // Mounts stack, and the one a path resolves through is the one added last.
@@ -626,7 +626,7 @@ describe('volumeService tests', () => {
 
       await volumeService.ensureAppVolumeMounted('app1');
 
-      sinon.assert.calledWith(appsRuntimeStateStub.setVolumeImage, 'fluxapp1', '/mnt/data/visible.img', 'u-visible');
+      sinon.assert.calledWith(appsRuntimeStateStub.setVolumeImage, 'app1', '/mnt/data/visible.img', 'u-visible');
     });
 
     // The kernel marks an unlinked backing file, and that path never resolves
@@ -659,7 +659,7 @@ describe('volumeService tests', () => {
 
       await volumeService.ensureAppVolumeMounted('app1');
 
-      sinon.assert.calledWith(appsRuntimeStateStub.setVolumeImage, 'fluxapp1', '/mnt/data/fluxapp1FLUXFSVOL', 'late-uuid');
+      sinon.assert.calledWith(appsRuntimeStateStub.setVolumeImage, 'app1', '/mnt/data/fluxapp1FLUXFSVOL', 'late-uuid');
     });
 
     // The kernel not saying is not permission to stamp the recorded path: a
@@ -705,7 +705,7 @@ describe('volumeService tests', () => {
 
       await volumeService.ensureAppVolumeMounted('app1');
 
-      sinon.assert.calledWith(appsRuntimeStateStub.setVolumeImage, 'fluxapp1', '/mnt/live/fluxapp1FLUXFSVOL', 'u-live');
+      sinon.assert.calledWith(appsRuntimeStateStub.setVolumeImage, 'app1', '/mnt/live/fluxapp1FLUXFSVOL', 'u-live');
     });
 
     // A record that could not be read is not a record that is absent. Writing
@@ -810,7 +810,7 @@ describe('volumeService tests', () => {
       fsStub.promises.access.rejects(enoent());
       fsStub.promises.access.withArgs('/dat/fluxapp1FLUXFSVOL').resolves();
 
-      const result = await volumeService.getVolumeFilePath('fluxapp1');
+      const result = await volumeService.getVolumeFilePath('app1');
       expect(result.path).to.equal('/dat/fluxapp1FLUXFSVOL');
     });
 
@@ -818,7 +818,7 @@ describe('volumeService tests', () => {
       deviceHelperStub.listMountedFilesystems.resolves([{ source: '/dev/sda1', target: '/' }]);
       fsStub.promises.access.rejects(enoent());
 
-      await volumeService.getVolumeFilePath('fluxapp1');
+      await volumeService.getVolumeFilePath('app1');
       const checked = fsStub.promises.access.getCalls().map((c) => c.args[0]);
       expect(checked).to.not.include('/fluxapp1FLUXFSVOL');
     });
@@ -827,7 +827,7 @@ describe('volumeService tests', () => {
       fsStub.promises.access.rejects(enoent());
       fsStub.promises.access.withArgs(`${APP_VOLUMES}/fluxapp1FLUXFSVOL`).resolves();
 
-      const result = await volumeService.getVolumeFilePath('fluxapp1');
+      const result = await volumeService.getVolumeFilePath('app1');
       expect(result.path).to.equal(`${APP_VOLUMES}/fluxapp1FLUXFSVOL`);
     });
 
@@ -835,7 +835,7 @@ describe('volumeService tests', () => {
       fsStub.promises.access.rejects(enoent());
       fsStub.promises.access.withArgs(`${LEGACY_APP_VOLUMES}/fluxapp1FLUXFSVOL`).resolves();
 
-      const result = await volumeService.getVolumeFilePath('fluxapp1');
+      const result = await volumeService.getVolumeFilePath('app1');
       expect(result.path).to.equal(`${LEGACY_APP_VOLUMES}/fluxapp1FLUXFSVOL`);
     });
 
@@ -848,7 +848,7 @@ describe('volumeService tests', () => {
       fsStub.promises.access.withArgs(`${APP_VOLUMES}/fluxapp1FLUXFSVOL`).resolves();
       fsStub.promises.access.withArgs('/dat/fluxapp1FLUXFSVOL').resolves();
 
-      const result = await volumeService.getVolumeFilePath('fluxapp1');
+      const result = await volumeService.getVolumeFilePath('app1');
 
       expect(result.path, 'a mount outranked a directory only this node can write into').to.equal(`${APP_VOLUMES}/fluxapp1FLUXFSVOL`);
       const warned = logStub.warn.getCalls().map((c) => c.args[0]).join('\n');
@@ -861,7 +861,7 @@ describe('volumeService tests', () => {
       fsStub.promises.access.rejects(enoent());
       fsStub.promises.access.withArgs('/dat/fluxapp1FLUXFSVOL').resolves();
 
-      const result = await volumeService.getVolumeFilePath('fluxapp1');
+      const result = await volumeService.getVolumeFilePath('app1');
 
       expect(result.path, 'no image was found, so saying nothing about a second proves nothing').to.equal('/dat/fluxapp1FLUXFSVOL');
       const warned = logStub.warn.getCalls().map((c) => c.args[0]).join('\n');
@@ -871,7 +871,7 @@ describe('volumeService tests', () => {
     it('should return null when the image exists nowhere', async () => {
       fsStub.promises.access.rejects(enoent());
 
-      const result = await volumeService.getVolumeFilePath('fluxapp1');
+      const result = await volumeService.getVolumeFilePath('app1');
       expect(result.path).to.be.null;
       // every location was searched, so the null means the image is gone
       expect(result.conclusive).to.be.true;
@@ -883,7 +883,7 @@ describe('volumeService tests', () => {
       deviceHelperStub.listMountedFilesystems.rejects(new Error('findmnt failed'));
       fsStub.promises.access.rejects(enoent());
 
-      const result = await volumeService.getVolumeFilePath('fluxapp1');
+      const result = await volumeService.getVolumeFilePath('app1');
       expect(result.path).to.be.null;
       expect(result.conclusive).to.be.false;
     });
@@ -897,7 +897,7 @@ describe('volumeService tests', () => {
       fsStub.promises.access.rejects(enoent());
       fsStub.promises.access.withArgs('/dat/fluxapp1FLUXFSVOL').rejects(Object.assign(new Error('EIO'), { code: 'EIO' }));
 
-      const result = await volumeService.getVolumeFilePath('fluxapp1');
+      const result = await volumeService.getVolumeFilePath('app1');
       expect(result.path).to.be.null;
       expect(result.conclusive).to.be.false;
     });
@@ -916,7 +916,7 @@ describe('volumeService tests', () => {
       fsStub.promises.access.withArgs('/etc/hostname/fluxapp1FLUXFSVOL')
         .rejects(Object.assign(new Error('ENOTDIR'), { code: 'ENOTDIR' }));
 
-      const result = await volumeService.getVolumeFilePath('fluxapp1');
+      const result = await volumeService.getVolumeFilePath('app1');
 
       expect(result.path).to.be.null;
       expect(result.conclusive, 'a file mount left the search unable to say the image is gone').to.be.true;
@@ -928,7 +928,7 @@ describe('volumeService tests', () => {
       fsStub.promises.access.rejects(enoent());
       fsStub.promises.access.withArgs(`${APP_VOLUMES}/fluxapp1FLUXFSVOL`).resolves();
 
-      const result = await volumeService.getVolumeFilePath('fluxapp1');
+      const result = await volumeService.getVolumeFilePath('app1');
       expect(result.path).to.equal(`${APP_VOLUMES}/fluxapp1FLUXFSVOL`);
       expect(result.conclusive).to.be.true;
     });
@@ -938,7 +938,7 @@ describe('volumeService tests', () => {
       fsStub.promises.access.rejects(enoent());
       fsStub.promises.access.withArgs(`${APP_VOLUMES}/fluxapp1FLUXFSVOL`).resolves();
 
-      const result = await volumeService.getVolumeFilePath('fluxapp1');
+      const result = await volumeService.getVolumeFilePath('app1');
       expect(result.path).to.equal(`${APP_VOLUMES}/fluxapp1FLUXFSVOL`);
     });
   });

@@ -466,7 +466,7 @@ async function teardownComponentCore(c, opts = {}) {
       await unmountVolume(c.appId, { entityName: c.label, onStatus });
       await cleanupAppData(c.appId, { entityName: c.label, onStatus });
       await cleanupCrontab(c.appId, { onStatus });
-      const discovered = await volumeService.getVolumeFilePath(c.appId);
+      const discovered = await volumeService.getVolumeFilePath(c.identifier);
       await cleanupVolumePath(discovered.path, { entityName: c.label, onStatus, conclusive: discovered.conclusive });
     }
   } catch (err) {
