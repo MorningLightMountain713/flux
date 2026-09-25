@@ -7,7 +7,7 @@ const messageHelper = require('../../ZelBack/src/services/messageHelper');
 const verificationHelper = require('../../ZelBack/src/services/verificationHelper');
 const imageVerifier = require('../../ZelBack/src/services/utils/imageVerifier');
 const registryCredentialHelper = require('../../ZelBack/src/services/utils/registryCredentialHelper');
-const policyStore = require('../../ZelBack/src/services/policy/policyStore');
+const policyStore = require('../../ZelBack/src/services/policyStore');
 describe('imageManager tests', () => {
   let imageManager;
 
@@ -333,15 +333,15 @@ describe('imageManager tests', () => {
   // Fetching, validating and caching the document belong to policyStore
   // (tests/unit/policyStore.test.js). imageManager only reads it.
   describe('getBlockedRepositories tests', () => {
-    it('should return the blockedRepositories document policyStore holds', () => {
+    it('should return the blockedrepositories document the bundle holds', () => {
       const blockedRepos = ['blocked/repo1', 'blocked/repo2'];
-      sinon.stub(policyStore, 'get').withArgs('blockedRepositories').returns(blockedRepos);
+      sinon.stub(policyStore, 'getDocument').withArgs('blockedrepositories').returns(blockedRepos);
 
       expect(imageManager.getBlockedRepositories()).to.deep.equal(blockedRepos);
     });
 
     it('should return null when policyStore has no copy', () => {
-      sinon.stub(policyStore, 'get').returns(null);
+      sinon.stub(policyStore, 'getDocument').returns(null);
 
       expect(imageManager.getBlockedRepositories()).to.be.null;
     });
@@ -349,8 +349,8 @@ describe('imageManager tests', () => {
 
   describe('isImageBlocked tests', () => {
     beforeEach(() => {
-      sinon.stub(policyStore, 'get')
-        .withArgs('blockedRepositories')
+      sinon.stub(policyStore, 'getDocument')
+        .withArgs('blockedrepositories')
         .returns(['blocked/repo', 'blocked-org', 'blockedowner']);
 
       // eslint-disable-next-line global-require
@@ -378,7 +378,7 @@ describe('imageManager tests', () => {
     it('returns undetermined (not blocked) when the official blocklist is unreachable', async () => {
       // "No copy from any layer" must be distinguishable from "obtained, nothing blocked"
       // so the install gates can defer rather than admit an image they could not check.
-      policyStore.get.withArgs('blockedRepositories').returns(null);
+      policyStore.getDocument.withArgs('blockedrepositories').returns(null);
 
       const result = await imageManager.isImageBlocked(
         'TestApp',
@@ -394,7 +394,7 @@ describe('imageManager tests', () => {
       // Blocklists are a flat mix of repos, owners and 64-char hashes; every
       // entry is run through stripTag. A 64-char hash once hung the event loop.
       const hash = '6d691f2c09e08e9b6acf046a46566132bcf8dc6c0fbd2042e8faf087d5504e09';
-      policyStore.get.withArgs('blockedRepositories').returns(['blocked/repo', hash]);
+      policyStore.getDocument.withArgs('blockedrepositories').returns(['blocked/repo', hash]);
 
       const start = process.hrtime.bigint();
       const result = await imageManager.isImageBlocked(
@@ -465,7 +465,7 @@ describe('imageManager tests', () => {
     });
 
     it('should return not blocked if no repos available', async () => {
-      policyStore.get.withArgs('blockedRepositories').returns(null);
+      policyStore.getDocument.withArgs('blockedrepositories').returns(null);
 
       const result = await imageManager.isImageBlocked(
         'TestApp',
@@ -565,36 +565,41 @@ describe('imageManager tests', () => {
     const typed = [{ kind: 'name', value: 'dowz', reason: 'why', added: '2026-09-12' }];
 
     it('prefers the typed document', () => {
-      sinon.stub(policyStore, 'get').withArgs('blocklist').returns(typed);
-      policyStore.get.withArgs('blockedRepositories').returns(['legacy-entry']);
+      sinon.stub(policyStore, 'getDocument').withArgs('blocklist').returns(typed);
+      policyStore.getDocument.withArgs('blockedrepositories').returns(['legacy-entry']);
 
       expect(imageManager.getBlocklist()).to.deep.equal(typed);
     });
 
-    it('falls back to the flat document when the typed one is empty', () => {
-      // Nothing listed in the typed document is not "nothing is blocked" while
-      // the flat document, generated from the same source, still carries entries.
-      sinon.stub(policyStore, 'get').withArgs('blocklist').returns([]);
-      policyStore.get.withArgs('blockedRepositories').returns(['blocked-org']);
+    it('takes an empty typed document as published, with nothing blocked', () => {
+      sinon.stub(policyStore, 'getDocument').withArgs('blocklist').returns([]);
+      policyStore.getDocument.withArgs('blockedrepositories').returns(['blocked-org']);
 
-      expect(imageManager.getBlocklist()).to.deep.equal([{ kind: 'legacy', value: 'blocked-org' }]);
+      expect(imageManager.getBlocklist()).to.deep.equal([]);
+    });
+
+    it('refuses a typed document of the wrong shape rather than falling back', () => {
+      sinon.stub(policyStore, 'getDocument').withArgs('blocklist').returns([{ kind: 'name' }]);
+      policyStore.getDocument.withArgs('blockedrepositories').returns(['blocked-org']);
+
+      expect(imageManager.getBlocklist()).to.equal(null);
     });
 
     it('falls back when the typed document is absent', () => {
-      sinon.stub(policyStore, 'get').withArgs('blocklist').returns(null);
-      policyStore.get.withArgs('blockedRepositories').returns(['blocked-org']);
+      sinon.stub(policyStore, 'getDocument').withArgs('blocklist').returns(null);
+      policyStore.getDocument.withArgs('blockedrepositories').returns(['blocked-org']);
 
       expect(imageManager.getBlocklist()).to.deep.equal([{ kind: 'legacy', value: 'blocked-org' }]);
     });
 
     it('is null, not empty, when no layer holds either document', () => {
-      sinon.stub(policyStore, 'get').returns(null);
+      sinon.stub(policyStore, 'getDocument').returns(null);
 
       expect(imageManager.getBlocklist()).to.equal(null);
     });
 
     it('a name entry reaches isImageBlocked for an app whose images cannot be read', async () => {
-      sinon.stub(policyStore, 'get').withArgs('blocklist').returns([{ kind: 'name', value: 'grafana' }]);
+      sinon.stub(policyStore, 'getDocument').withArgs('blocklist').returns([{ kind: 'name', value: 'grafana' }]);
 
       const result = await imageManager.isImageBlocked('grafana', [], { owner: '1SomeOwner', hash: 'a'.repeat(64) });
 

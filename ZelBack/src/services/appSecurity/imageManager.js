@@ -9,7 +9,7 @@ const verificationHelper = require('../verificationHelper');
 const log = require('../../lib/log');
 const { supportedArchitectures } = require('../utils/appConstants');
 const fluxCaching = require('../utils/cacheManager').default;
-const policyStore = require('../policy/policyStore');
+const policyStore = require('../policyStore');
 const { Privilege, authOf } = require('../utils/privileges');
 
 /**
@@ -201,14 +201,12 @@ async function verifyRepository(repotag, options = {}) {
 }
 
 /**
- * The official blocked-repository list, or null when no copy could be obtained.
- *
- * policyStore owns fetching, validating, caching and holding last-known-good, so null
- * here means it has nothing from any layer — not that the most recent fetch failed.
+ * The official blocked-repository list, from the signed bundle, or null when this node
+ * holds no verified bundle. Null is not an empty list: callers refuse or defer on it.
  * @returns {Array|null} List of blocked repositories
  */
 function getBlockedRepositories() {
-  return policyStore.get('blockedRepositories');
+  return policyStore.getDocument('blockedrepositories');
 }
 
 // The repository name with any :tag / @digest removed, via the shared parser.
@@ -263,16 +261,29 @@ function namespaceOf(repository) {
  * a bare string tested against all of them, so `grafana` refuses both the
  * application called grafana and every image under the grafana namespace.
  *
- * The typed document wins when it lists anything; the flat document is the
- * fallback and its entries keep that older meaning, marked `legacy` rather than
- * guessed at. policyStore owns fetching, validating, caching and last-known-good,
- * so null means no layer holds either document. That is not "nothing is
- * blocked": callers refuse or defer on it.
+ * The flat document is read only when the bundle carries no typed one, and its
+ * entries keep their broader meaning, marked `legacy` rather than guessed at. Null
+ * means this node holds no verified bundle, or holds one whose typed document is
+ * malformed. That is not "nothing is blocked": callers refuse or defer on it.
  * @returns {Array<{kind: string, value: string}>|null}
  */
 function getBlocklist() {
-  const typed = policyStore.get('blocklist');
-  if (Array.isArray(typed) && typed.length) return typed;
+  // PRECEDENCE, NOT A COMBINE. The typed document decides outright whenever the bundle
+  // carries one, and the flat one is then never read.
+  //
+  // An EMPTY typed document is published policy saying nothing is blocked, and returns [].
+  // A typed document of the wrong shape inside a validly signed bundle makes the bundle
+  // internally inconsistent, and refusing beats guessing: it answers null. Suite 1501
+  // asserts the same rule from the other end.
+  const typed = policyStore.getDocument('blocklist');
+  if (typed !== null && typed !== undefined) {
+    if (!Array.isArray(typed)) return null;
+    if (typed.every((entry) => entry && typeof entry.kind === 'string' && typeof entry.value === 'string')) {
+      return typed;
+    }
+    return null;
+  }
+
   const repos = getBlockedRepositories();
   if (!Array.isArray(repos)) return null;
   return repos.map((value) => ({ kind: 'legacy', value }));
