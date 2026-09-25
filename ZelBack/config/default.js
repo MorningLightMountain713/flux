@@ -1196,13 +1196,7 @@ module.exports = {
     // unobservable in a test, and a suite that cannot watch the backstop fire has to
     // restart a node to approximate it - which tests the boot path instead, and leaves
     // the periodic one with no coverage at all.
-    refreshIntervalMs: {
-      blocklist: 21_600_000, // 6h
-      blockedRepositories: 21_600_000, // 6h
-      tamperingBlocklist: 43_200_000, // 12h
-      enterpriseNodes: 21_600_000, // 6h
-      ipLocationTable: 86_400_000, // 24h
-    },
+    refreshIntervalMs: 24 * 60 * 60 * 1000,
     // How long a refresh waits for a peer to answer before falling through to the
     // source. Peers are on the local network and answer in milliseconds; this bounds how
     // long a refresh is prepared to sit doing nothing, so it is an ABSOLUTE latency
@@ -1210,10 +1204,7 @@ module.exports = {
     peerWindowMs: 3 * 1000,
     // Bound on a single backstop fetch, so a boot is never stuck on one source. Absolute,
     // for the same reason as above.
-    fetchTimeoutMs: {
-      default: 10_000,
-      ipLocationTable: 120_000,
-    },
+    fetchTimeoutMs: 10 * 1000,
     // How long a FAILED backstop fetch stands as the answer before the source is asked
     // again. The decision to ask is derived from the peer picture and re-evaluated
     // whenever it changes, which is right - but a peer connecting says nothing about

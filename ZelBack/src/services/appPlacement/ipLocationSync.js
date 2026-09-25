@@ -1,30 +1,23 @@
 'use strict';
 
-// Interim fetch-and-restore for the iplocation artifact.
+// Fetch-and-restore for the iplocation artifact.
 //
-// This branch ships before the policy store (feat/userconfig-rearchitecture),
-// which already registers this same artifact and takes over when it rebases
-// onto this branch. To make that handover seamless, this module mirrors the
-// store's artifact contract exactly: same registry key, same GridFS bucket and
-// record shape (policyArtifactRepository, shared verbatim), the same signed
-// statement deciding which bytes are the table, and the same rejection rule -
-// bytes the reader throws on are never cached and never displace a good stored
-// copy. The policy store will restore the cache this module populated; no node
-// refetches across the transition.
+// The signed policy bundle names which file is the table and the sha256 it must hash to,
+// so the bytes are verified against a signed statement before anything reads them. Bytes
+// that do not match, or that the reader throws on, are never cached and never displace a
+// good stored copy (policyArtifactRepository's GridFS bucket).
 //
 // WHEN IT FETCHES is decided by policyStore.onBundleChanged, not by a clock. The bundle
 // names which file is the table and what it must hash to, so there is nothing to do until
 // one is held - and this module is started on dbReady, which is a fact about the app
 // database and says nothing about policy. Both hang off the peer threshold and neither
-// orders the other, so reading the bundle once on the way past was a race. The retry below
-// is for a source that cannot be reached, which is the only thing a timer can speak to.
+// orders the other, so the bundle is waited for as an event, never read once on the way
+// past. The retry below is for a source that cannot be reached, which is the only thing a
+// timer can speak to.
 //
-// AT REBASE: delete this module and its serviceManager start call, and wire
-//   policyStore.onArtifact('ipLocationTable', (bytes) => ipLocationStore.setArtifact(bytes));
-// beside policyStore.start() instead - the same subscription this module already takes,
-// with the store owning the fetch as well as the statement. The rows live in mongo and the
-// ingest marker names the baseline they came from, so their boot restore only re-ingests
-// when the artifact's generated timestamp differs from the marker's.
+// The rows live in mongo and the ingest marker names the baseline they came from, so the
+// boot restore only re-ingests when the artifact's generated timestamp differs from the
+// marker's.
 
 const config = require('config');
 const crypto = require('crypto');

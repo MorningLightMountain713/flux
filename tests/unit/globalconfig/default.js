@@ -543,18 +543,9 @@ const harnessOverrides = {
       'c31930ec386a49f31321851766d93bcb90bf269cd15bec7a329155a4d79ea380',
       '739ca41408f66c75d6cb4bc1d5c044ca5a118de190081da68e5a7d6839fb69f8',
     ],
-    refreshIntervalMs: {
-      blocklist: 21_600_000, // 6h
-      blockedRepositories: 21_600_000,
-      tamperingBlocklist: 43_200_000,
-      enterpriseNodes: 21_600_000,
-      ipLocationTable: 86_400_000,
-    },
+    refreshIntervalMs: 24 * 60 * 60 * 1000,
     peerWindowMs: 3 * 1000,
-    fetchTimeoutMs: {
-      default: 10_000,
-      ipLocationTable: 120_000,
-    },
+    fetchTimeoutMs: 10 * 1000,
     minConfirmingPeers: 4,
     backstopRetryIntervalMs: 60 * 1000,
   },
