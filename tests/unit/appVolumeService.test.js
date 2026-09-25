@@ -163,7 +163,7 @@ describe('appVolumeService.createAppVolume (disk selection + in-lock recheck)', 
     const svc = proxyquire('../../ZelBack/src/services/appLifecycle/appVolumeService', {
       config: asConfig({ lockedSystemResources: { extrahdd: 5 } }),
       '../serviceHelper': { ensureString: (x) => x, runCommand },
-      '../dockerService': { getAppIdentifier: (id) => id },
+      '../dockerService': { getAppIdentifier: (id) => `flux${id}` },
       '../utils/volumeService': { placementVolumesInGib: sinon.stub().resolves(disks), recordNewVolumeImage },
       '../utils/hostMutationLock': { withHostMutationLock: (fn) => fn() },
       '../appManagement/appsRuntimeState': { isCondemned: sinon.stub().resolves(condemned) },
@@ -200,7 +200,8 @@ describe('appVolumeService.createAppVolume (disk selection + in-lock recheck)', 
     const mke2fs = cmdCalls(runCommand).find((c) => c.cmd === 'mke2fs');
     const uuid = mke2fs.params[mke2fs.params.indexOf('-U') + 1];
     expect(uuid).to.match(/^[0-9a-f-]{36}$/);
-    sinon.assert.calledOnceWithExactly(recordNewVolumeImage, 'web_testapp', '/dat/web_testappFLUXFSVOL', uuid);
+    // The image is named by the docker form and recorded under the identifier.
+    sinon.assert.calledOnceWithExactly(recordNewVolumeImage, 'web_testapp', '/dat/fluxweb_testappFLUXFSVOL', uuid);
   });
 
   it('fails the install when the image cannot be recorded', async () => {
@@ -225,14 +226,14 @@ describe('appVolumeService.createAppVolume (disk selection + in-lock recheck)', 
     const { svc, runCommand } = load({ disks: [disk('/dat', 14), disk('/mnt/data2', 16), disk('/mnt/data3', 900)] });
     await svc.createAppVolume(deployComp, null, false);
     const fallocate = cmdCalls(runCommand).find((c) => c.cmd === 'fallocate');
-    expect(fallocate.params).to.deep.equal(['-l', '10G', '/mnt/data2/web_testappFLUXFSVOL']);
+    expect(fallocate.params).to.deep.equal(['-l', '10G', '/mnt/data2/fluxweb_testappFLUXFSVOL']);
   });
 
   it('puts the image in the appvolumes directory when the chosen disk is the root', async () => {
     const { svc, runCommand } = load({ disks: [disk('/', 500)] });
     await svc.createAppVolume(deployComp, null, false);
     const fallocate = cmdCalls(runCommand).find((c) => c.cmd === 'fallocate');
-    expect(fallocate.params[2]).to.match(/appvolumes\/web_testappFLUXFSVOL$/);
+    expect(fallocate.params[2]).to.match(/appvolumes\/fluxweb_testappFLUXFSVOL$/);
   });
 
   it('throws when no usable disk has room for the volume', async () => {

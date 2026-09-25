@@ -92,7 +92,7 @@ async function createAppVolume(deployComp, res) {
       // written fails the install, since nothing later could recognise the image.
       const volumeFsUuid = crypto.randomUUID();
       await serviceHelper.runCommand('mke2fs', { params: ['-t', 'ext4', '-U', volumeFsUuid, volumeFile], runAsRoot: true });
-      await volumeService.recordNewVolumeImage(appId, volumeFile, volumeFsUuid);
+      await volumeService.recordNewVolumeImage(identifier, volumeFile, volumeFsUuid);
       emitStatus(res, { status: 'Filesystem created' });
 
       emitStatus(res, { status: 'Making directory...' });

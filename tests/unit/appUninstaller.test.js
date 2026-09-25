@@ -359,6 +359,7 @@ describe('appUninstaller tests', () => {
     it('removes the image wherever the search found it', async () => {
       volumeServiceStub.getVolumeFilePath.resolves({ path: '/mnt/data2/fluxweb_myappFLUXFSVOL', conclusive: true });
       await teardown();
+      sinon.assert.calledWith(volumeServiceStub.getVolumeFilePath, 'web_myapp');
       expect(imageRemovals().map((c) => c.args[1].params)).to.deep.equal([['-rf', '/mnt/data2/fluxweb_myappFLUXFSVOL']]);
     });
 

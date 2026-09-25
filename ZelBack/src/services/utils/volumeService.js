@@ -635,12 +635,14 @@ async function recordNewVolumeImage(identifier, volumeFile, fsUuid) {
  * callers decide what an image they could not look for means to them, and none
  * of them may treat it as one that is not there.
  *
- * @param {string} appId Docker app identifier (e.g. fluxcomp_app).
+ * @param {string} identifier Component identifier (e.g. comp_app). The image is
+ *   named by its docker form and recorded under this one.
  * @returns {Promise<{path: string|null, conclusive: boolean, blocked: string|null}>}
  *   Absolute path of the image or null, whether every location was searched,
  *   and which fault stopped it if one did.
  */
-async function getVolumeFilePath(appId) {
+async function getVolumeFilePath(identifier) {
+  const appId = dockerService.getAppIdentifier(identifier);
   // Where this node put it, if it wrote that down. A lookup cannot be answered
   // by a file somebody else named, which is the whole weakness of the search
   // below.
@@ -655,7 +657,7 @@ async function getVolumeFilePath(appId) {
   // from the recorded one, because there is nothing to compare it against.
   let recordSettled = true;
   try {
-    recorded = await recordedVolumeImage(appId);
+    recorded = await recordedVolumeImage(identifier);
   } catch (error) {
     // The search still runs - a caller removing an app needs the image found
     // whatever the database is doing, and leaving it is how a node loses a
@@ -858,7 +860,7 @@ async function ensureAppVolumeMounted(identifier) {
     // A record that cannot be read is not a record that is absent: writing one
     // here would describe the mount by a path nothing confirmed. The volume is
     // already up, so the bookkeeping waits for a pass that can read it.
-    const known = await recordedVolumeImage(appId).catch((error) => {
+    const known = await recordedVolumeImage(identifier).catch((error) => {
       log.warn(`ensureAppVolumeMounted - the image recorded for ${appId} could not be read (${error.message}), so nothing is recorded for it now`);
       return undefined;
     });
@@ -876,13 +878,13 @@ async function ensureAppVolumeMounted(identifier) {
       const backing = await mountedImagePath(mountPoint);
       if (backing) {
         const stamp = await imageFsUuid(backing);
-        if (!known || stamp) await recordVolumeImage(appId, backing, stamp);
+        if (!known || stamp) await recordVolumeImage(identifier, backing, stamp);
       }
     }
     return { mounted: true, alreadyMounted: true };
   }
 
-  const discovered = await getVolumeFilePath(appId);
+  const discovered = await getVolumeFilePath(identifier);
   if (!discovered.path) {
     return { mounted: false, reason: discovered.conclusive ? 'volume_file_missing' : discovered.blocked };
   }
@@ -1044,7 +1046,7 @@ async function ensureAppVolumeMounted(identifier) {
   // the refusal above to whatever turned up at the old path.
   if (!atRecordedPath || !stamped.fsUuid) {
     const stamp = await imageFsUuid(volumeFile);
-    if (!atRecordedPath || stamp) await recordVolumeImage(appId, volumeFile, stamp);
+    if (!atRecordedPath || stamp) await recordVolumeImage(identifier, volumeFile, stamp);
   }
   // An image this node recorded a place for, found somewhere else. The stamp
   // is only a claim about the recorded path, so the one that just mounted was
