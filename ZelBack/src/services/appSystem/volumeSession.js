@@ -12,9 +12,8 @@ const {
   sanitizePath, verifyRealPath, verifyRealPathOfExistingPath, realLandingPath,
 } = require('../utils/pathSecurity');
 const { appsFolder, APP_NAME_REGEX, APP_NAME_REGEX_LEGACY } = require('../utils/appConstants');
-const {
-  STAGING_ROOT, stagingRelative, isReservedName, isSyncedRootName,
-} = require('./volumeReservedNames');
+const { STAGING_ROOT, stagingRelative, isReservedName } = require('./volumeReservedNames');
+const { isInSyncScope } = require('./syncthingIgnorePolicy');
 const { measureTree, BLOCK_UNIT } = require('../utils/treeSize');
 const { Privilege, authOf } = require('../utils/privileges');
 const log = require('../../lib/log');
@@ -160,9 +159,9 @@ class VolumeSession {
 
   #owner;
 
-  #readOnlyCopy;
+  #readOnlyScope;
 
-  constructor(mount, availableBytes, identifier, owner, brand, readOnlyCopy = false) {
+  constructor(mount, availableBytes, identifier, owner, brand, readOnlyScope = null) {
     if (brand !== VolumeSession) {
       throw new Error('VolumeSession cannot be constructed directly - use openVolume');
     }
@@ -170,7 +169,7 @@ class VolumeSession {
     this.#availableBytes = availableBytes;
     this.#identifier = identifier;
     this.#owner = owner;
-    this.#readOnlyCopy = readOnlyCopy;
+    this.#readOnlyScope = readOnlyScope;
   }
 
   /** Host mount path. This, and only this, is the executor's bind source. */
@@ -341,7 +340,7 @@ class VolumeSession {
   }
 
   async #refuseReadOnly(targets, followLeaf) {
-    if (!this.#readOnlyCopy) return;
+    if (this.#readOnlyScope === null) return;
     const realMount = await realLandingPath(this.#mount, this.#mount);
     // eslint-disable-next-line no-restricted-syntax
     for (const target of targets) {
@@ -358,9 +357,10 @@ class VolumeSession {
         landsAt = parent && path.join(parent, path.basename(target.hostPath));
       }
       // Unknown (a dangling link on the way), the volume root, anything outside
-      // it, or under a replicated root name.
-      const rootName = landsAt && realMount ? path.relative(realMount, landsAt).split(path.sep)[0] : '';
-      if (!rootName || rootName === '..' || isSyncedRootName(rootName)) {
+      // it, or a path the folder's ignore lines leave syncthing to replicate.
+      const relative = landsAt && realMount ? path.relative(realMount, landsAt).split(path.sep).join('/') : '';
+      const rootName = relative.split('/')[0];
+      if (!rootName || rootName === '..' || isInSyncScope(relative, this.#readOnlyScope)) {
         const error = new Error('This node holds a read-only copy of this app\'s data, which follows the node running the app. Make changes on that node.');
         error.name = 'ReadOnlyCopy';
         error.code = 409;
@@ -642,28 +642,41 @@ class VolumeSession {
 }
 
 /**
- * Whether this node's copy of a volume follows another node's.
+ * The ignore lines of this node's copy of a volume when it follows another
+ * node's, or null when it does not.
  *
  * A primary its owner stopped to work on keeps its folder sendreceive and is
- * not one. The session refuses writes into the replicated tree of one - see
- * refuseReadOnlyWrite - and lets through what never leaves this node.
+ * not one. The session refuses writes into what the lines leave syncthing to
+ * replicate - see refuseReadOnlyWrite - and lets through what never leaves this
+ * node. The lines are syncthing's for the folder, which are the ones it
+ * replicates under.
  *
- * A syncthing that cannot be asked answers no: most volumes have no folder at
- * all, and an outage must not take every app's file browser with it.
+ * A syncthing that cannot be asked for its folders answers null: most volumes
+ * have no folder at all, and an outage must not take every app's file browser
+ * with it. A read-only copy whose lines cannot be read answers none, so the
+ * whole volume counts as replicated and every write into it is refused.
  *
  * @param {string} identifier - The volume's component identifier, which is its folder id
- * @returns {Promise<boolean>}
+ * @returns {Promise<string[]|null>}
  */
-async function isReadOnlyCopy(identifier) {
+async function readOnlyCopyScope(identifier) {
   let folders;
   try {
     folders = await syncthingService.getConfigFolders();
   } catch (error) {
-    log.warn(`isReadOnlyCopy - could not read the syncthing folders for ${identifier}: ${error.message}`);
-    return false;
+    log.warn(`readOnlyCopyScope - could not read the syncthing folders for ${identifier}: ${error.message}`);
+    return null;
   }
   const folder = Array.isArray(folders) ? folders.find((f) => f.id === identifier) : null;
-  return folder?.type === 'receiveonly';
+  if (folder?.type !== 'receiveonly') return null;
+  try {
+    const read = await syncthingService.getFolderIgnores(identifier);
+    if (Array.isArray(read?.ignore)) return read.ignore;
+    log.warn(`readOnlyCopyScope - syncthing holds no ignores for ${identifier}; every write into its read-only copy is refused`);
+  } catch (error) {
+    log.warn(`readOnlyCopyScope - could not read the ignores of ${identifier} (${error.message}); every write into its read-only copy is refused`);
+  }
+  return [];
 }
 
 /**
@@ -735,11 +748,11 @@ async function openVolume(req, options = {}) {
   }
 
   const { mount, availableBytes, identifier } = await resolveVolumeMount(appname, component, replica);
-  const readOnlyCopy = await isReadOnlyCopy(identifier);
+  const readOnlyScope = await readOnlyCopyScope(identifier);
   // Read after authorisation succeeded, so this is the identity that passed it.
   const auth = serviceHelper.ensureObject(authOf(req));
   const owner = (auth && auth.zelid) || null;
-  return new VolumeSession(mount, availableBytes, identifier, owner, VolumeSession, readOnlyCopy);
+  return new VolumeSession(mount, availableBytes, identifier, owner, VolumeSession, readOnlyScope);
 }
 
 /**

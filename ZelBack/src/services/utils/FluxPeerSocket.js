@@ -517,10 +517,15 @@ class FluxPeerSocket {
         return;
       }
 
-      // Around the gossip pipeline: these keep their arrival order. Whether one was
-      // wanted is the sync dispatcher's to decide, per type.
-      if (isOrdered(msgObj.data?.type) && manager.syncResponseDispatcher) {
-        setImmediate(() => manager.syncResponseDispatcher(msgObj, this));
+      // A sync response is never gossip. Every one goes to the sync dispatcher,
+      // which asks the requester whether this connection's answer is still
+      // wanted and drops the rest there - a refusal arriving after the first of
+      // a peer's four has already ended its request, or a stream outliving the
+      // round.
+      if (isOrdered(msgObj.data?.type)) {
+        if (manager.syncResponseDispatcher) {
+          setImmediate(() => manager.syncResponseDispatcher(msgObj, this));
+        }
         return;
       }
 

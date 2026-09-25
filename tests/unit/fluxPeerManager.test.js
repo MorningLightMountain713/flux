@@ -15,6 +15,9 @@ const peerCodec = require('../../ZelBack/src/services/utils/peerCodec');
 const fluxEventBus = require('../../ZelBack/src/services/utils/fluxEventBus');
 const log = require('../../ZelBack/src/lib/log');
 const rateLimit = require('../../ZelBack/src/services/utils/rateLimit');
+// Loaded for its side effect: the route table the socket reads is declared as the
+// transport loads, as it is on a running node before any connection opens.
+require('../../ZelBack/src/services/fluxCommunication');
 const { NetworkHealthMonitor } = require('../../ZelBack/src/services/utils/NetworkHealthMonitor');
 
 // Loaded for its side effect: the transport declares the routing table as it loads, and the
@@ -565,7 +568,7 @@ describe('FluxPeerSocket tests', () => {
       sinon.assert.notCalled(manager.messageDispatcher);
     });
 
-    it('should route every ordered response type to syncResponseDispatcher', async () => {
+    it('should route every ordered type to syncResponseDispatcher', async () => {
       const ws = createMockWs();
       sinon.stub(rateLimit, 'lruRateLimit').returns(true);
 

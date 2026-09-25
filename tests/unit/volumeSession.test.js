@@ -49,7 +49,10 @@ describe('volumeSession tests', () => {
     fsStub = {
       lstat: sinon.stub().rejects(Object.assign(new Error('ENOENT'), { code: 'ENOENT' })),
     };
-    syncthingServiceStub = { getConfigFolders: sinon.stub().resolves([]) };
+    syncthingServiceStub = {
+      getConfigFolders: sinon.stub().resolves([]),
+      getFolderIgnores: sinon.stub().resolves({ ignore: ['/backup', '/lost+found', '/.flux-op', '/.flux-op-*'] }),
+    };
 
     volumeSession = proxyquire('../../ZelBack/src/services/appSystem/volumeSession', {
       '../deviceHelper': deviceHelperStub,
@@ -607,9 +610,14 @@ describe('volumeSession tests', () => {
   // backup taken from the standby writes its archive - is not. On a real disk,
   // because which of the two a path is depends on where it LANDS.
   describe('writes to a copy that follows another node', () => {
+    // What syncthing holds for the folder: the platform's lines and a directory the
+    // spec keeps local.
+    const IGNORES = ['/backup', '/lost+found', '/.flux-op', '/.flux-op-*', '/saves-local'];
     let tmpRoot;
     let mount;
     let vol;
+    let onDisk;
+    let syncthingStub;
 
     beforeEach(async () => {
       tmpRoot = await realFs.mkdtemp(nodePath.join(os.tmpdir(), 'fluxreadonly-'));
@@ -618,7 +626,11 @@ describe('volumeSession tests', () => {
       await realFs.mkdir(nodePath.join(mount, 'backup', 'local'), { recursive: true });
 
       deviceHelperStub.listMountedFilesystems = sinon.stub().resolves([mountRow(mount)]);
-      const onDisk = proxyquire('../../ZelBack/src/services/appSystem/volumeSession', {
+      syncthingStub = {
+        getConfigFolders: sinon.stub().resolves([{ id: 'fluxcomp_myapp', type: 'receiveonly' }]),
+        getFolderIgnores: sinon.stub().resolves({ ignore: IGNORES }),
+      };
+      onDisk = proxyquire('../../ZelBack/src/services/appSystem/volumeSession', {
         '../deviceHelper': deviceHelperStub,
         '../verificationHelper': verificationHelperStub,
         '../IOUtils': IOUtilsStub,
@@ -628,7 +640,7 @@ describe('volumeSession tests', () => {
           APP_NAME_REGEX: /^[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?$/,
           APP_NAME_REGEX_LEGACY: /^[a-zA-Z0-9]+$/,
         },
-        '../syncthingService': { getConfigFolders: sinon.stub().resolves([{ id: 'fluxcomp_myapp', type: 'receiveonly' }]) },
+        '../syncthingService': syncthingStub,
       });
       vol = await onDisk.openVolume(reqFor());
     });
@@ -669,6 +681,19 @@ describe('volumeSession tests', () => {
       expect(await refused('backup/local/backup_comp.tar.gz')).to.equal(false);
       expect(await refused('backup/local')).to.equal(false);
       expect(await refused('backup/upload/new/deeper')).to.equal(false);
+    });
+
+    it('lets through a directory the folder\'s lines keep on this node', async () => {
+      expect(await refused('saves-local/slot1.sav')).to.equal(false);
+      expect(await refused('saves-localx/slot1.sav')).to.equal(true);
+    });
+
+    it('refuses every write into a copy whose lines cannot be read', async () => {
+      syncthingStub.getFolderIgnores.rejects(new Error('syncthing restarting'));
+      vol = await onDisk.openVolume(reqFor());
+
+      expect(await refused('backup/local/backup_comp.tar.gz')).to.equal(true);
+      expect(await refused('appdata/world.sav')).to.equal(true);
     });
 
     it('refuses when any one of the paths is replicated', async () => {
@@ -731,7 +756,10 @@ describe('volumeSession tests', () => {
           APP_NAME_REGEX: /^[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?$/,
           APP_NAME_REGEX_LEGACY: /^[a-zA-Z0-9]+$/,
         },
-        '../syncthingService': { getConfigFolders: sinon.stub().resolves([{ id: 'fluxcomp_myapp', type: 'receiveonly' }]) },
+        '../syncthingService': {
+          getConfigFolders: sinon.stub().resolves([{ id: 'fluxcomp_myapp', type: 'receiveonly' }]),
+          getFolderIgnores: sinon.stub().resolves({ ignore: IGNORES }),
+        },
       });
       vol = await behindLink.openVolume(reqFor());
       expect(vol.mount).to.equal(linkedMount);
