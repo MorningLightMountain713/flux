@@ -851,6 +851,57 @@ describe('appOperations tests', () => {
       });
     }
 
+    // A source that could not be made, or whose mode could not be set, leaves a
+    // container that starts over a mount its user cannot use. The command's failure
+    // is the caller's to hear, not a result to pass over.
+    describe('a step that fails', () => {
+      const failing = (cmd) => serviceHelperStub.runCommand.withArgs(cmd).resolves({ error: new Error(`${cmd} failed`) });
+
+      it('throws when a directory source cannot be made', async () => {
+        failing('mkdir');
+        const mod = loadModule();
+        const deployComp = await buildDeployComp(Object.fromEntries([dirMount('/var/log/app', 'logs')]));
+
+        let thrown = null;
+        await mod.ensureMountSourcesExist(deployComp).catch((e) => { thrown = e; });
+
+        expect(thrown && thrown.message).to.include('mkdir failed');
+      });
+
+      it('throws when a file source cannot be made', async () => {
+        failing('touch');
+        const mod = loadModule();
+        const deployComp = await buildDeployComp(Object.fromEntries([fileMount('/etc/app/config.yaml', 'config.yaml')]));
+
+        let thrown = null;
+        await mod.ensureMountSourcesExist(deployComp).catch((e) => { thrown = e; });
+
+        expect(thrown && thrown.message).to.include('touch failed');
+      });
+
+      it('throws when a source\'s mode cannot be set', async () => {
+        failing('chmod');
+        const mod = loadModule();
+        const deployComp = await buildDeployComp(Object.fromEntries([dirMount('/var/log/app', 'logs')]));
+
+        let thrown = null;
+        await mod.ensureMountSourcesExist(deployComp).catch((e) => { thrown = e; });
+
+        expect(thrown && thrown.message).to.include('chmod failed');
+      });
+
+      it('throws when a declared owner cannot be applied', async () => {
+        failing('chown');
+        const mod = loadModule();
+
+        let thrown = null;
+        await mod.applyMountPerms({ Source: '/vol/content', perms: { uid: 0, gid: 0, mode: '0644' } }).catch((e) => { thrown = e; });
+
+        expect(thrown && thrown.message).to.include('chown failed');
+        expect(serviceHelperStub.runCommand.calledWith('chmod'), 'a mode was set on a source whose owner is wrong').to.equal(false);
+      });
+    });
+
     it('creates a file source with touch and chmod', async () => {
       const mod = loadModule();
       const deployComp = await buildDeployComp(Object.fromEntries([fileMount('/etc/app/config.yaml', 'config.yaml')]));
