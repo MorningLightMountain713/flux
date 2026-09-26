@@ -358,6 +358,7 @@ describe('appInstaller tests', () => {
         connectComponentToLinkedApps = sinon.stub().resolves(),
         policyReady = true,
         alreadyInstalled = false,
+        globalAppInfo = null,
         convergeError = null,
       } = opts;
 
@@ -427,7 +428,7 @@ describe('appInstaller tests', () => {
         '../pgpService': { decryptMessage: sinon.stub().resolves('user:token') },
         '../../lib/log': logStub,
         '../appDatabase/appsRepository': {
-          getGlobalAppInfo: sinon.stub().resolves(null),
+          getGlobalAppInfo: sinon.stub().resolves(globalAppInfo),
           // exists is false before insert (no stale entry) and true after (insert validated).
           existsInstalledApp: (() => { const s = sinon.stub().resolves(true); s.onCall(0).resolves(false); s.onCall(1).resolves(false); return s; })(),
           // Identity-keyed rows: absent before the insert, present for the
@@ -647,6 +648,23 @@ describe('appInstaller tests', () => {
       expect(componentIdentifiers).to.deep.equal(['web_newapp']);
       expect(deployment.componentEntries().map(([name]) => name)).to.deep.equal(['web']);
       expect(appReconcilerAwaitConvergence.firstCall.args[0]).to.deep.equal(['web_newapp']);
+    });
+
+    // An install asked for by hand is of an app this node did not hold, so a teardown
+    // after it fails takes back the claim an announcement made meanwhile.
+    it('tells the network when an install asked for by hand is torn down', async () => {
+      const { installer, uninstallApplication } = loadFresh({
+        converge: { converged: false, failed: ['web_newapp'] }, globalAppInfo: newappInstantiated,
+      });
+      verificationHelperStub.verifyPrivilege.resolves(true);
+      const res = {
+        setHeader: sinon.stub(), write: sinon.stub(), end: sinon.stub(), json: sinon.stub(),
+      };
+
+      await installer.installApplicationAPI({ params: { appname: 'newapp' }, query: {}, headers: {} }, res);
+
+      expect(uninstallApplication.calledWith('newapp'), 'the failed install was not torn down').to.equal(true);
+      expect(uninstallApplication.firstCall.args[1].broadcastRemoval, 'the teardown said nothing to the network').to.equal(true);
     });
 
     it('rolls back and returns PROVISIONED-BUT-NOT-RUNNING when a component fails to converge', async () => {

@@ -614,7 +614,8 @@ async function installApplicationAPI(req, res) {
       res.write(serviceHelper.ensureString(payload));
       if (res.flush) res.flush();
     };
-    await installApplication(instantiated, { onStatus });
+    // An install asked for by hand is of an app this node did not hold.
+    await installApplication(instantiated, { onStatus, sendRemovalMessage: true });
     res.end();
   } catch (error) {
     log.error(error);

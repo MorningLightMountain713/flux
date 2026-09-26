@@ -1049,6 +1049,21 @@ describe('appSpawner tests', () => {
     });
   });
 
+  // A node that did not hold the app claims it the moment an announcement lands during
+  // the install, and nothing else takes that claim back before it expires - so a
+  // placement that fails has to say so.
+  describe('a placement the spawner makes', () => {
+    it('asks the installer to tell the network when it fails', async () => {
+      const installStub = sinon.stub().resolves({ status: InstallStatus.FAILED, reason: 'install error' });
+      buildModule({ candidates: [await makeCandidate()], installStub });
+
+      await appSpawner.trySpawningGlobalApplication().catch(() => {});
+
+      expect(installStub.calledOnce, 'the install must have been attempted, or the argument below proves nothing').to.equal(true);
+      expect(installStub.firstCall.args[1].sendRemovalMessage, 'tore the placement down without telling the network').to.equal(true);
+    });
+  });
+
   describe('install error caching', () => {
     it('skips cleanly at 5+ network errors without touching either local cache', async () => {
       // the shared error docs ARE the backoff - they expire in 24h and a respec
