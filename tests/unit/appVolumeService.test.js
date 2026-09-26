@@ -161,7 +161,7 @@ describe('appVolumeService.createAppVolume (disk selection + in-lock recheck)', 
   });
 
   function load({
-    disks, condemned = false, teardownOwed = false, recordFails = false,
+    disks, condemned = false, teardownOwed = false, recordFails = false, fsStub = null,
   } = {}) {
     const runCommand = sinon.stub().resolves({ error: null });
     const recordNewVolumeImage = recordFails
@@ -176,6 +176,7 @@ describe('appVolumeService.createAppVolume (disk selection + in-lock recheck)', 
       './pendingTeardownStore': { teardownOwedFor: sinon.stub().resolves(teardownOwed) },
       '../messageHelper': { createSuccessMessage: (m) => ({ status: 'success', data: m }) },
       '../../lib/log': { info: sinon.stub(), warn: sinon.stub(), error: sinon.stub() },
+      ...(fsStub ? { 'node:fs/promises': fsStub } : {}),
     });
     return { svc, runCommand, recordNewVolumeImage };
   }
@@ -234,6 +235,23 @@ describe('appVolumeService.createAppVolume (disk selection + in-lock recheck)', 
       expect(threw, 'a volume without its mount source was handed on').to.be.an('error');
       expect(threw.message).to.include(`${cmd} failed`);
     });
+  });
+
+  // The volume is created before syncthing is told about the folder, so the ignore
+  // set it is created with is the one the folder is first scanned under.
+  it('seeds the ignore set when it creates a replicated volume', async () => {
+    const fsStub = { writeFile: sinon.stub().resolves(), readFile: sinon.stub().rejects(new Error('ENOENT')), rm: sinon.stub().resolves() };
+    const { svc } = load({ disks: [disk('/dat', 500)], fsStub });
+    const synced = {
+      ...deployComp,
+      dir: '/apps/fluxweb_testapp',
+      sync: { mode: 'syncFirst', exclude: [] },
+      injectedSyncExcludes: () => [],
+    };
+
+    await svc.createAppVolume(synced, null, false);
+
+    expect(fsStub.writeFile.calledWith('/apps/fluxweb_testapp/.stignore'), 'the volume was created with no ignore set').to.equal(true);
   });
 
   it('aborts inside the lock without allocating when the app is condemned', async () => {
