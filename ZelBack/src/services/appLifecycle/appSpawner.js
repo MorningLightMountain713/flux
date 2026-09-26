@@ -1543,7 +1543,9 @@ async function trySpawningGlobalApplication() {
     // unable to tell a refusal from an app that was simply never selected.
     let installError = null;
     try {
-      installResult = await appInstaller.installAssignedReplicas(instantiated);
+      // This node did not hold the app, so a teardown after a failed install takes back
+      // the claim an announcement made while it ran.
+      installResult = await appInstaller.installAssignedReplicas(instantiated, { sendRemovalMessage: true });
     } catch (error) {
       log.error(error);
       installError = error.message ?? String(error);
