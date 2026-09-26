@@ -198,8 +198,8 @@ async function checkAndNotifyPeersOfRunningApps() {
     // Resolve each installed spec to its cleartext view for component/syncthing
     // introspection. Enterprise (encrypted) apps must be decrypted first — the
     // EncryptedSpecV8 wrapper has no componentNames()/hasSyncthing(). The node
-    // installed these apps, so it can decrypt them. Skip + log any that fail to
-    // resolve so one undecryptable app can't abort the whole broadcast cycle.
+    // installed these apps, so it can decrypt them. One that fails to resolve is logged
+    // and still announced (below); only what needs its readable view is left off.
     const resolvedViews = new Map();
     // eslint-disable-next-line no-restricted-syntax
     for (const inst of installedSpecs) {
@@ -208,7 +208,7 @@ async function checkAndNotifyPeersOfRunningApps() {
       if (view) {
         resolvedViews.set(inst.name, view);
       } else {
-        log.warn(`peerNotification - could not resolve spec for ${inst.name}; skipping from monitoring/broadcast this cycle`);
+        log.warn(`peerNotification - could not resolve spec for ${inst.name}; announcing it without mesh fields this cycle`);
       }
     }
 
@@ -221,15 +221,21 @@ async function checkAndNotifyPeersOfRunningApps() {
     // container liveness. A fluxapprunning entry means "assigned here", not
     // "containers up" — a crashed container is recovered locally, not relocated,
     // and liveness is handled at the routing layer. Each entry's `state`
-    // (active/draining/stopping) carries the LB lifecycle. Undecryptable specs
-    // can't be introspected, so skip them this cycle.
+    // (active/draining/stopping) carries the LB lifecycle.
+    //
+    // The snapshot is whole, so an app left out of it is released at every peer. An app
+    // whose spec cannot be decrypted this cycle is still held here and is still named;
+    // only the mesh fields, which are read off the readable view, are left off it.
     //
     // An app a broadcast removal is handing back is not held any more, from the
     // decision onwards (globalState.departingApps), and neither is a replica of one.
     const applicationsToBroadcast = installedSpecs.filter(
-      (inst) => resolvedViews.has(inst.name) && !globalState.departingApps.has(inst.name),
+      (inst) => !globalState.departingApps.has(inst.name),
     );
-    const mesh = await meshBroadcast.meshBroadcastFields(applicationsToBroadcast, resolvedViews);
+    const mesh = await meshBroadcast.meshBroadcastFields(
+      applicationsToBroadcast.filter((inst) => resolvedViews.has(inst.name)),
+      resolvedViews,
+    );
     const apps = [];
     try {
       // eslint-disable-next-line no-restricted-syntax
