@@ -57,6 +57,38 @@ describe('globalState tests', () => {
     });
   });
 
+  describe('waitForPolicyReady tests', () => {
+    afterEach(() => { globalState.policyReady = false; });
+
+    it('waits while the policy is unobtained', async () => {
+      let resolved = false;
+      globalState.waitForPolicyReady().then(() => { resolved = true; });
+
+      await new Promise((r) => setImmediate(r));
+
+      expect(globalState.policyReady).to.equal(false);
+      expect(resolved, 'a node without policy must not be released').to.equal(false);
+    });
+
+    it('releases a caller already waiting when the policy arrives', async () => {
+      let resolved = false;
+      const waiting = globalState.waitForPolicyReady().then(() => { resolved = true; });
+
+      globalState.policyReady = true;
+      await waiting;
+
+      expect(resolved).to.equal(true);
+    });
+
+    it('releases a caller that arrives after the policy did', async () => {
+      globalState.policyReady = true;
+
+      await globalState.waitForPolicyReady();
+
+      expect(globalState.policyReady).to.equal(true);
+    });
+  });
+
   describe('runningAppsCache tests', () => {
     it('should be a Set', () => {
       expect(globalState.runningAppsCache).to.be.instanceOf(Set);
