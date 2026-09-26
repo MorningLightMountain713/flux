@@ -2208,3 +2208,124 @@ describe('a relayed broadcast is handed to the peer that asks for it', () => {
     });
   });
 });
+
+describe('the flood filter cannot be talked out of deduplicating', () => {
+  // eslint-disable-next-line global-require
+  const { default: cacheManager } = require('../../ZelBack/src/services/utils/cacheManager');
+  // eslint-disable-next-line global-require
+  const policyStore = require('../../ZelBack/src/services/policyStore');
+
+  // The dispatcher is not exported - the transport installs it on the peer manager as
+  // it loads, which is the same object production calls.
+  const peerSocket = {
+    ip: '127.0.0.9',
+    port: '16127',
+    key: '127.0.0.9:16127',
+    direction: 'outgoing',
+    badMessageTimestamps: [],
+    close: () => {},
+    sendNak: () => {},
+  };
+
+  let verify;
+
+  beforeEach(() => {
+    cacheManager.announcementSeen.clear();
+    verify = sinon.stub(fluxCommunicationUtils, 'verifyFluxBroadcast')
+      .resolves({ result: fluxCommunicationUtils.VerifyResult.OK, announcer: null });
+    sinon.stub(fluxCommunicationUtils, 'verifyTimestampInFluxBroadcast').returns(true);
+    sinon.stub(peerManager, 'broadcastHash');
+    sinon.stub(messageStore, 'storeAppStateEvent').resolves({ isNewer: false });
+    sinon.stub(messageStore, 'storeIPChangedMessage').resolves(false);
+    sinon.stub(policyStore, 'notePeerSeq');
+  });
+
+  afterEach(() => {
+    sinon.restore();
+  });
+
+  const envelope = (data) => ({
+    version: 1, pubKey: '0400', timestamp: Date.now(), signature: 'sig', data,
+  });
+
+  it('deduplicates an announce type that claims to be an ask', async () => {
+    // A marker inside the signed payload survives every relay, so a node that could
+    // sign one would otherwise have every honest node announce it onward again.
+    const data = {
+      type: 'fluxipchanged',
+      version: 1,
+      oldIP: '1.1.1.1',
+      newIP: '2.2.2.2',
+      broadcastedAt: Date.now(),
+      intent: 'ask',
+    };
+
+    await peerManager.messageDispatcher(envelope(data), peerSocket);
+    expect(cacheManager.announcementSeen.has(objectHash(data))).to.equal(true);
+    expect(verify.callCount).to.equal(1);
+
+    await peerManager.messageDispatcher(envelope(data), peerSocket);
+    // The filter sits in front of verification, so a second copy costs nothing.
+    expect(verify.callCount).to.equal(1);
+  });
+
+  it('still lets two peers answer the same question', async () => {
+    // The other half, and the reason the marker exists: an answer carries no sender,
+    // so two peers answering "seq 5" are byte-identical and a content filter would
+    // deliver the first and drop the rest.
+    const data = {
+      type: 'fluxpolicyseq', version: 1, seq: 5, intent: 'answer', correlationId: 'abc',
+    };
+
+    await peerManager.messageDispatcher(envelope(data), peerSocket);
+    await peerManager.messageDispatcher(envelope(data), peerSocket);
+
+    expect(cacheManager.announcementSeen.has(objectHash(data))).to.equal(false);
+    expect(verify.callCount).to.equal(2);
+  });
+
+  // AN UNMARKED POLICY ANNOUNCEMENT IS NOT FILTERED EITHER, for the reason the answer
+  // above is not: it carries nothing about its sender, and the sender is the whole of
+  // what it says. Two peers announcing the same sequence are two peers to ask, and the
+  // type is never relayed - so a content filter cannot be discarding a second route to
+  // one fact, only the second peer offering it.
+  it('does not deduplicate an unmarked policy announcement either', async () => {
+    const data = { type: 'fluxpolicyseq', version: 1, seq: 5 };
+
+    await peerManager.messageDispatcher(envelope(data), peerSocket);
+    await peerManager.messageDispatcher(envelope(data), peerSocket);
+
+    expect(cacheManager.announcementSeen.has(objectHash(data))).to.equal(false);
+    expect(verify.callCount, 'the second peer to announce it is still heard').to.equal(2);
+  });
+
+  // A message that never verified was never established as anything, so the fingerprint
+  // it left behind must not stand as one this node has seen. Left there, it suppresses
+  // the genuine message that hashes the same for the whole of the cache's ttl - which is
+  // a forged copy of any announcement silencing the real one.
+  it('gives the slot back when a message does not verify', async () => {
+    const data = {
+      type: 'fluxapprunning', version: 2, apps: [], ip: '1.2.3.4:16127', broadcastedAt: 1,
+    };
+    verify.resolves({ result: fluxCommunicationUtils.VerifyResult.NODE_NOT_FOUND });
+
+    await peerManager.messageDispatcher(envelope(data), peerSocket);
+
+    expect(
+      cacheManager.announcementSeen.has(objectHash(data)),
+      'a message that failed verification is holding the fingerprint',
+    ).to.equal(false);
+  });
+
+  // The canary: the same type, verifying, DOES hold it - so the release above is the
+  // verification failing and not the filter having been switched off.
+  it('keeps the slot for a message that verifies', async () => {
+    const data = {
+      type: 'fluxapprunning', version: 2, apps: [], ip: '1.2.3.4:16127', broadcastedAt: 2,
+    };
+
+    await peerManager.messageDispatcher(envelope(data), peerSocket);
+
+    expect(cacheManager.announcementSeen.has(objectHash(data))).to.equal(true);
+  });
+});
