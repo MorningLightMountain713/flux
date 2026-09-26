@@ -218,6 +218,24 @@ describe('appVolumeService.createAppVolume (disk selection + in-lock recheck)', 
     expect(threw.message).to.include('record write failed');
   });
 
+  [['directory', 'mkdir'], ['file', 'touch']].forEach(([sourceType, cmd]) => {
+    it(`fails the volume when a ${sourceType} mount source cannot be made`, async () => {
+      const { svc, runCommand } = load({ disks: [disk('/dat', 500)] });
+      runCommand.withArgs(cmd).resolves({ error: new Error(`${cmd} failed`) });
+      const withSource = {
+        ...deployComp,
+        dir: '/apps/fluxweb_testapp',
+        mounts: [{ Source: '/apps/fluxweb_testapp/source', sourceType, perms: null }],
+      };
+
+      let threw = null;
+      try { await svc.createAppVolume(withSource, null, false); } catch (e) { threw = e; }
+
+      expect(threw, 'a volume without its mount source was handed on').to.be.an('error');
+      expect(threw.message).to.include(`${cmd} failed`);
+    });
+  });
+
   it('aborts inside the lock without allocating when the app is condemned', async () => {
     const { svc, runCommand } = load({ disks: [disk('/dat', 500)], condemned: true });
     let threw = null;

@@ -129,12 +129,12 @@ async function createAppVolume(deployComp, res) {
       if (mount.sourceType === 'file') {
         emitStatus(res, { status: `Creating file mount: ${sourceName}...` });
         // eslint-disable-next-line no-await-in-loop
-        await serviceHelper.runCommand('touch', { params: [mount.Source], runAsRoot: true });
+        await runMountStep('touch', { params: [mount.Source], runAsRoot: true });
         emitStatus(res, { status: `File mount created: ${sourceName}` });
       } else {
         emitStatus(res, { status: `Creating directory: ${sourceName}...` });
         // eslint-disable-next-line no-await-in-loop
-        await serviceHelper.runCommand('mkdir', { params: ['-p', mount.Source], runAsRoot: true });
+        await runMountStep('mkdir', { params: ['-p', mount.Source], runAsRoot: true });
         emitStatus(res, { status: `Directory created: ${sourceName}` });
       }
     }
@@ -185,6 +185,19 @@ async function createAppVolume(deployComp, res) {
 }
 
 /**
+ * Runs one step of making or permitting a mount source. runCommand reports a
+ * failure in its result rather than throwing, and a source that was not made or
+ * not permitted leaves a container starting over a mount its user cannot use.
+ * @param {string} cmd
+ * @param {object} options - runCommand options
+ * @throws the command's error when it failed
+ */
+async function runMountStep(cmd, options) {
+  const { error } = await serviceHelper.runCommand(cmd, options);
+  if (error) throw error;
+}
+
+/**
  * Apply a bind-mount source's effective ownership/permissions, resolved by
  * flux-spec into `mount.perms`. `null` is the data-mount role default — world-
  * writable, today's behavior (no regression). An object pins owner + mode so
@@ -195,12 +208,12 @@ async function createAppVolume(deployComp, res) {
  */
 async function applyMountPerms(mount) {
   if (!mount.perms) {
-    await serviceHelper.runCommand('chmod', { params: ['777', mount.Source], runAsRoot: true });
+    await runMountStep('chmod', { params: ['777', mount.Source], runAsRoot: true });
     return;
   }
   const { uid, gid, mode } = mount.perms;
-  await serviceHelper.runCommand('chown', { params: [`${uid}:${gid}`, mount.Source], runAsRoot: true });
-  await serviceHelper.runCommand('chmod', { params: [mode, mount.Source], runAsRoot: true });
+  await runMountStep('chown', { params: [`${uid}:${gid}`, mount.Source], runAsRoot: true });
+  await runMountStep('chmod', { params: [mode, mount.Source], runAsRoot: true });
 }
 
 /**
@@ -277,10 +290,10 @@ async function ensureMountSourcesExist(deployComp) {
   for (const mount of deployComp.mounts) {
     if (mount.sourceType === 'file') {
       // eslint-disable-next-line no-await-in-loop
-      await serviceHelper.runCommand('touch', { params: [mount.Source], runAsRoot: true });
+      await runMountStep('touch', { params: [mount.Source], runAsRoot: true });
     } else {
       // eslint-disable-next-line no-await-in-loop
-      await serviceHelper.runCommand('mkdir', { params: ['-p', mount.Source], runAsRoot: true });
+      await runMountStep('mkdir', { params: ['-p', mount.Source], runAsRoot: true });
     }
     // eslint-disable-next-line no-await-in-loop
     await applyMountPerms(mount);
