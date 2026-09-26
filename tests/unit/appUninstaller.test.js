@@ -10,6 +10,7 @@ const { AsyncLock } = require('../../ZelBack/src/services/utils/asyncLock');
 const { departingApps: realDepartingApps } = require('../../ZelBack/src/services/utils/globalState');
 
 describe('appUninstaller tests', () => {
+  let runtimeStateStub;
   let runCommandStub;
   let volumeServiceStub;
   let appUninstaller;
@@ -82,6 +83,11 @@ describe('appUninstaller tests', () => {
       announceCycle: new AsyncLock(1, { maxHoldMs: 0 }),
     };
 
+    runtimeStateStub = {
+      setCondemned: sinon.stub().resolves(),
+      remove: sinon.stub().resolves(true),
+      removeControllerState: sinon.stub().resolves(),
+    };
     dockerServiceStub = {
       appDockerStop: sinon.stub().resolves(),
       appDockerKill: sinon.stub().resolves(),
@@ -189,11 +195,7 @@ describe('appUninstaller tests', () => {
       '../appDatabase/appsRepository': appsRepositoryStub,
       './relationshipResolver': relationshipResolverStub,
       './pendingTeardownStore': pendingTeardownStoreStub,
-      '../appManagement/appsRuntimeState': {
-        setCondemned: sinon.stub().resolves(),
-        removeComponentState: sinon.stub().resolves(),
-        remove: sinon.stub().resolves(true),
-      },
+      '../appManagement/appsRuntimeState': runtimeStateStub,
       '../appRuntime/deploymentProvider': {
         getInstalledDeployment: sinon.stub().resolves(null),
         buildDeployment: sinon.stub().resolves(null),
@@ -321,6 +323,43 @@ describe('appUninstaller tests', () => {
       sinon.assert.calledOnceWithExactly(
         mastershipGrantGateStub.onComponentTeardown, 'web_TestApp', 'TestApp',
       );
+    });
+
+    // A redeploy is an explicit "make it run": neither the operator's stop lock nor a
+    // stale controller verdict survives it. A kept volume keeps the record of which
+    // image it is; a removed one takes the record with it.
+    describe('the component\'s runtime state', () => {
+      it('keeps the image record when the volume is kept', async () => {
+        await appUninstaller.uninstallComponent(component(), { removeVolumes: false });
+        sinon.assert.calledOnceWithExactly(runtimeStateStub.removeControllerState, 'web_TestApp', { keepVolumeRecord: true });
+        sinon.assert.notCalled(runtimeStateStub.remove);
+      });
+
+      // Never remove(): that takes the run facts too, and a rebuild that then fails
+      // would read an established component as one that never ran.
+      it('drops the image record with a recreated volume, and nothing the component proved', async () => {
+        await appUninstaller.uninstallComponent(component(), { removeVolumes: true });
+        sinon.assert.calledOnceWithExactly(runtimeStateStub.removeControllerState, 'web_TestApp', { keepVolumeRecord: false });
+        sinon.assert.notCalled(runtimeStateStub.remove);
+      });
+
+      it('has the reconciler forget the component it removed', async () => {
+        const forgotten = sinon.stub();
+        appUninstaller.setOnComponentRemoved(forgotten);
+        try {
+          await appUninstaller.uninstallComponent(component(), { removeVolumes: false });
+        } finally {
+          appUninstaller.setOnComponentRemoved(null);
+        }
+        sinon.assert.calledOnceWithExactly(forgotten, 'web_TestApp');
+      });
+
+      it('keeps it while the container survives the teardown', async () => {
+        dockerServiceStub.getDockerContainer.resolves({ Id: 'still-here' });
+        await appUninstaller.uninstallComponent(component(), { removeVolumes: false }).catch(() => {});
+        sinon.assert.notCalled(runtimeStateStub.removeControllerState);
+        sinon.assert.notCalled(runtimeStateStub.remove);
+      });
     });
 
     it('a true removal releases the grant - a removed app must not shield its term', async () => {
