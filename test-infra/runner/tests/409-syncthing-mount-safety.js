@@ -96,7 +96,15 @@ describe('syncthing mount-safety guard demotes unsafe sendreceive folders', func
     await setSynced({ ip: ip0, folder: leakFolder });
 
     const phantomInstallAfter = env.clients[1].getLastEventId();
-    ({ folder: phantomFolder, identifier: phantomIdentifier } = await seedSyncthingApp(env, { name: phantomName, syncMode: 'syncFirst', index: 1 }));
+    // The phantom app carries an f: mount, because that is the volume shape the guard
+    // has to be right about. FluxOS touches the named file at the volume root when it
+    // builds the volume - docker would create a directory where a bind source is
+    // missing - and a wipe leaves it there, zero-length. A bare r:/appdata app puts no
+    // regular file at the root at all, so it cannot tell a walk that counts any file
+    // from one that counts the owner's data, and the guard reads the same either way.
+    ({ folder: phantomFolder, identifier: phantomIdentifier } = await seedSyncthingApp(env, {
+      name: phantomName, syncMode: 'syncFirst', index: 1, extraMounts: ['f:server.json:/etc/server.json'],
+    }));
     phantomDir = await appDataRoot(env.clients[1].container, phantomName);
     await waitForReconcileActuated(env.clients[1], phantomIdentifier, 'dataCleared', 60000, { afterId: phantomInstallAfter });
     await seedSyncScopedData(env, phantomName, 1);
@@ -141,34 +149,40 @@ describe('syncthing mount-safety guard demotes unsafe sendreceive folders', func
     // disk and index agree, so there is nothing a sendreceive folder could
     // wrongly delete - the guard must leave it alone
     await execInContainer(client.container, `sh -c 'rm -rf ${phantomDir}/appdata/* 2>/dev/null; true'`);
-    await setSyncState({ ip: ip1, folder: phantomFolder, state: 'idle', globalBytes: 0, inSyncBytes: 0 });
+    await setSyncState({ ip: ip1, folder: phantomFolder, state: 'idle', globalBytes: 0, inSyncBytes: 0, receiveOnlyChangedFiles: 0 });
 
     // several 3s monitor cycles must pass without a demotion
     await assertNoEvent(client, 'reconciler:desiredChanged', (d) => d.identifier === phantomIdentifier && d.state === 'stopped', 15000);
     expect(await folderType(ip1, phantomFolder)).to.equal('sendreceive');
   });
 
-  // A stale index over an emptied volume must demote, or a sendreceive folder in
-  // that state broadcasts every missing file to its peers as a deletion.
+  // The index says which kind of claim it makes, and the disk is read on those terms:
+  // globalFiles > 0 is answered by FILES on disk, because the mount structure FluxOS
+  // builds a volume from survives any wipe and counting it answers every volume the
+  // same way. An index claiming bytes and no files is a folder of empty directories,
+  // where directories are the payload - the 2026-07-04 false positive that stopped
+  // healthy apps, and the reason a files-only walk cannot be the only reading.
   //
-  // Detecting it takes both halves of the phantom-index guard, which is why this
-  // is the case that proves them: the discriminator keys on the index's
-  // globalFiles to separate "claims files" from "claims only directory entries"
-  // (a folder legitimately holding nothing but empty directories must stay up -
-  // the 2026-07-04 false positive), and the sync-scoped walk applies its
-  // exclusions at the folder ROOT only, matching the root-anchored `/backup` line
-  // FluxOS writes to .stignore. With only the first, the emptied-but-present
-  // appdata/ below counts as content and the mismatch is never seen; with only
-  // the second, a nested backup/ still hides a wiped dataset.
+  // So this declares globalFiles, and the volume below holds an emptied appdata/.
   it('demotes a sendreceive folder whose index claims data over an empty volume (phantom index)', async function () {
     this.timeout(120000);
     const client = env.clients[1];
     const afterId = client.getLastEventId();
 
+    // The premise, read off the volume rather than assumed: the f: mount really did
+    // leave a zero-length file at the root. Without it this is a bare r: app again and
+    // the demotion below proves only what it proved before the mount was declared.
+    const scaffolding = await execInContainer(client.container,
+      `sh -c 'test -f ${phantomDir}/server.json && wc -c < ${phantomDir}/server.json'`);
+    expect(scaffolding.exitCode, `the f: mount left no file at the volume root: ${scaffolding.output}`).to.equal(0);
+    expect(scaffolding.stdout.trim(), 'the f: file is not zero-length, so it is not the scaffolding case').to.equal('0');
+
     // the stale-index state: the index claims fully-synced data while the
     // mounted volume holds none - in sendreceive, syncthing would broadcast
     // every "missing" file as a deletion
-    await setSyncState({ ip: ip1, folder: phantomFolder, state: 'idle', globalBytes: 100000, inSyncBytes: 100000 });
+    await setSyncState({
+      ip: ip1, folder: phantomFolder, state: 'idle', globalBytes: 100000, globalFiles: 12, inSyncBytes: 100000, receiveOnlyChangedFiles: 0,
+    });
     // flag the folder: steady state is never swept, so the verify (which
     // includes the phantom-index check) runs when syncthing flags the folder
     await injectSyncthingEvent({ ip: ip1, type: 'FolderErrors', data: { folder: phantomFolder, errors: [{ error: 'pull failed' }] } });

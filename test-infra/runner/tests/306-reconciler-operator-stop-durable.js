@@ -6,9 +6,10 @@ import { authenticate } from '../auth.js';
 import { appOwnerKey, nodeKey } from '../framework/keys.js';
 import { componentIdentifier, getAppContainerStatus } from '../framework/container.js';
 import {
-  waitFor, waitForReconcileActuated, assertNoEvent, waitForOperatorIntent,
+  waitFor, waitForReconcileActuated, assertNoEvent, waitForOperatorIntent, waitForBootSettled,
 } from '../framework/wait.js';
 import { bootAndPeer, seedSimpleApp } from '../framework/reconciler-suite.js';
+import { getSubnetConfig } from '../framework/subnet-config.js';
 
 // An operator appstop is durable: operatorStopped is persisted in appsRuntimeState
 // and is the highest-priority desired-state input, so the reconciler must never
@@ -28,6 +29,8 @@ async function waitForDown(client, appName, label) {
     return status && !status.status.startsWith('Up');
   }, { timeout: 60000, interval: 2000, label });
 }
+
+const subnet = getSubnetConfig();
 
 describe('reconciler honours a durable operator stop', function () {
   let env;
@@ -70,6 +73,11 @@ describe('reconciler honours a durable operator stop', function () {
     // component, but operatorStopped (mongo) keeps this one stopped.
     await env.restartNode(idx);
     client = env.clients[idx];
+    // THE BOOT RECONCILE IS THE SUBJECT, so the window has to contain it. It runs
+    // behind dbReady, which waits for this node to re-peer and finish its app-state
+    // sync - so "nothing started it" is also true of a node that has not begun
+    // reconciling, and a fixed window that closes first asserts nothing at all.
+    await waitForBootSettled(client);
     await assertNoEvent(client, 'reconciler:actuated', (d) => d.identifier === identifier && (d.action === 'firstStart' || d.action === 'restart'), 10000);
     const afterRestart = await getAppContainerStatus(client.container, appName, { all: true });
     expect(afterRestart && afterRestart.status.startsWith('Up')).to.not.equal(true);
@@ -77,8 +85,63 @@ describe('reconciler honours a durable operator stop', function () {
     // appstart clears the operatorStopped lock; the container comes back Up
     // (ground truth) and the reconciler keeps it running thereafter.
     const auth2 = await authenticate(client.url, appOwnerKey());
-    await client.getAuthed(`/apps/appstart/${appName}`, auth2.zelidauth);
+    // Answered, not fired and forgotten: the route sits behind requireBootSettled,
+    // and a 503 discarded here surfaces a minute later as a container that never
+    // started - which reads as the reconciler's fault rather than this call's.
+    const startRes = await client.getAuthed(`/apps/appstart/${appName}`, auth2.zelidauth);
+    expect(startRes.status, `appstart refused: ${JSON.stringify(startRes.data)}`).to.equal('success');
     await waitForUp(client, appName, 'running again after appstart');
+  });
+
+  // A stop is a run-state change, and the node's claim on the app is not. The
+  // node still holds the app: its peers still derive a location for it on this
+  // node, and the network must not place a replacement somewhere else while an
+  // owner has their own app deliberately stopped.
+  it('keeps its claim on peers while the app is stopped', async function () {
+    this.timeout(240_000);
+    const client = env.clients[idx];
+    await waitForUp(client, appName, 'running before operator stop');
+
+    const auth = await authenticate(client.url, appOwnerKey());
+    const stopRes = await client.getAuthed(`/apps/appstop/${appName}`, auth.zelidauth);
+    expect(stopRes.status).to.equal('success');
+    await waitForOperatorIntent(client, identifier, true);
+    await waitForDown(client, appName, 'stopped after appstop');
+
+    // A peer, not the stopped node itself: its own view proves nothing about what
+    // the network believes, and it is the network's view the spawner counts.
+    const peerClient = env.clients[(idx + 1) % env.clients.length];
+    const nodeIp = subnet.nodeIp(idx + 1);
+    const isThisNode = (ip) => typeof ip === 'string' && ip.split(':')[0] === nodeIp;
+
+    // Started again whatever happens here. Left in the finally on purpose: when
+    // this test fails it fails by timing out on an announcement that never comes,
+    // and a restart written after the assertion would not run - leaving the app
+    // stopped for every test below, which then fail on `running before ...` and
+    // read as three faults instead of one.
+    try {
+      // Announced at least once more with the container down, rather than merely
+      // not expired yet: a location that survives because its TTL is long says
+      // nothing.
+      const afterId = peerClient.getLastEventId();
+      await peerClient.waitForEvent(
+        'network:apprunning',
+        (d) => isThisNode(d.ip) && d.apps?.some((a) => a.name === appName),
+        200_000,
+        { afterId },
+      );
+
+      const res = await peerClient.getAppLocations(appName);
+      const locations = Array.isArray(res?.data) ? res.data : [];
+      expect(
+        locations.some((location) => isThisNode(location.ip)),
+        'the peer still derives a location for the stopped app on this node',
+      ).to.be.true;
+    } finally {
+      const auth2 = await authenticate(client.url, appOwnerKey());
+      await client.getAuthed(`/apps/appstart/${appName}`, auth2.zelidauth);
+      await waitForUp(client, appName, 'running again after appstart');
+    }
   });
 
   // A kill is the same desired state as a stop carrying a mode, so the mode is

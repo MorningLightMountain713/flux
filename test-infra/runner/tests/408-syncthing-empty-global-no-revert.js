@@ -8,8 +8,10 @@ import {
   setPeerDisconnected, setPeerHasData, getNudges, resetSyncState,
 } from '../framework/syncthing-control.js';
 import { getSubnetConfig } from '../framework/subnet-config.js';
-import { waitFor } from '../framework/wait.js';
+import { waitFor, START_ACTIONS } from '../framework/wait.js';
 import { bootAndPeer, seedSyncthingApp } from '../framework/reconciler-suite.js';
+import { nodeKey } from '../framework/keys.js';
+import { signBtcMessage } from '../auth.js';
 
 // MUST-PASS data-safety gate (B1). The promotion FSM's isSynced is percentage-
 // based, so an EMPTY global index (globalBytes 0) reads as a vacuous 100% even
@@ -92,7 +94,7 @@ describe('syncthing promotion gate never reverts/promotes against an empty globa
     await setPeerDisconnected({ ip: subnet.nodeIp(aPart.index + 1), folder: aPart.folder });
 
     aSource = await seedSyncthingApp(env, {
-      name: appSource, mode: 'r', forceNonLeader: true, index: 2,
+      name: appSource, syncMode: 'syncFirst', forceNonLeader: true, index: 2,
     });
     await setSyncState({ ip: subnet.nodeIp(aSource.index + 1), folder: aSource.folder, state: 'idle', globalBytes: 100000, inSyncBytes: 40000, receiveOnlyChangedFiles: 0 });
     await setPeerDisconnected({ ip: subnet.nodeIp(aSource.index + 1), folder: aSource.folder });
@@ -122,7 +124,7 @@ describe('syncthing promotion gate never reverts/promotes against an empty globa
     // A start would be a second writer alongside the peer that already holds the folder
     // sendreceive; flag it if it fires.
     let startedSeen = false;
-    client.waitForEvent('reconciler:actuated', (d) => d.identifier === aEmpty.identifier && d.action === 'firstStart', 45000)
+    client.waitForEvent('reconciler:actuated', (d) => d.identifier === aEmpty.identifier && START_ACTIONS.includes(d.action), 45000)
       .then(() => { startedSeen = true; }).catch(() => {});
 
     // THE data-safety property: db/revert against an empty global deletes the only copy.
@@ -171,7 +173,7 @@ describe('syncthing promotion gate never reverts/promotes against an empty globa
     await setPeerHasData({ ip, folder: aSource.folder });
 
     let startedSeen = false;
-    client.waitForEvent('reconciler:actuated', (d) => d.identifier === aSource.identifier && d.action === 'started', 45000)
+    client.waitForEvent('reconciler:actuated', (d) => d.identifier === aSource.identifier && START_ACTIONS.includes(d.action), 45000)
       .then(() => { startedSeen = true; }).catch(() => {});
 
     const windowMs = 45000;
@@ -219,9 +221,16 @@ describe('syncthing promotion gate never reverts/promotes against an empty globa
       return data?.ready === true && !!data.folders?.includes(aPart.folder);
     }, { timeout: 60000, interval: 2000, label: `${aPart.folder} published as promoted` });
 
-    const { data: published } = await client.get('/apps/promotedfolders');
+    // Asked the way a peer asks: holdings are answered only to a node on the
+    // deterministic list (or the flux team), and the open GET never carries them.
+    const peer = env.clients[(idx + 1) % env.clients.length];
+    const asPeer = nodeKey(peer.num);
+    const body = { target: `${client.ip}:16127`, timestamp: Date.now(), pubKey: asPeer.pubkey };
+    const signature = await signBtcMessage(JSON.stringify(body), asPeer.privkey);
+    const { data: published } = await client.post('/apps/promotedfolders', { ...body, signature });
+    expect(published?.holding, 'the peer is answered with holdings').to.be.an('object');
     expect(
-      Object.keys(published.holding || {}),
+      Object.keys(published.holding),
       'a promoted folder still publishes receive-only holdings',
     ).to.not.include(aPart.folder);
   });
