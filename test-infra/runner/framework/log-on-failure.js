@@ -36,6 +36,49 @@ function envsFor(suite) {
   return picked.length ? picked : all;
 }
 
+// A container start that fails inside the runtime reports the same sentence
+// whether the parent cgroup no longer delegates a controller or the container's
+// own cgroup is absent: `openat2 .../memory.max: no such file or directory`.
+// The three facts that separate those - what the parent delegates, what sits
+// directly in the parent, and whether the child cgroup exists - live only in the
+// node's cgroup tree, which leaves with the container. A start failure is
+// diagnosable from the archive only if they are read while the node is up.
+const CGROUP_PROBE = `
+d=/sys/fs/cgroup/docker
+echo "root subtree_control: [$(cat /sys/fs/cgroup/cgroup.subtree_control 2>&1)]"
+echo "root procs: $(wc -l < /sys/fs/cgroup/cgroup.procs 2>&1)"
+if [ -d "$d" ]; then
+  echo "docker/ subtree_control: [$(cat $d/cgroup.subtree_control 2>&1)]"
+  echo "docker/ procs: [$(xargs < $d/cgroup.procs 2>&1)]"
+  for c in "$d"/*/; do
+    [ -d "$c" ] || continue
+    if [ -f "$c/memory.max" ]; then m=$(cat "$c/memory.max" 2>&1); else m=ABSENT; fi
+    echo "  child $(basename "$c"): memory.max=$m"
+  done
+else
+  echo "docker/: ABSENT"
+fi
+echo "containers:"
+docker ps -a --format '  {{.Names}} {{.Status}}' 2>&1
+`;
+
+// Best-effort, exactly like the infra log fetch: a node that cannot answer
+// contributes its error, and never fails the dump it is attached to.
+async function cgroupState(env) {
+  const clients = env.clients || [];
+  const parts = await Promise.all(clients.map(async (client, index) => {
+    const head = `=== Node ${index} cgroup state ===`;
+    if (!client?.container) return `${head}\n  no container\n`;
+    try {
+      const { output } = await execInContainer(client.container, CGROUP_PROBE);
+      return `${head}\n${output}\n`;
+    } catch (err) {
+      return `${head}\n  probe failed: ${err.message}\n`;
+    }
+  }));
+  return parts.join('\n');
+}
+
 // Dump each node's logs and SSE events to its OWN file under test-logs/<label>/.
 // A merged stdout dump interleaves all nodes, which makes "which node did what"
 // impossible to read (every node logs the same identifiers every cycle). Per-node
@@ -58,10 +101,19 @@ async function dump(label, envs) {
   // INFRA-DEAD run: a mongo that takes SIGSEGV writes its own backtrace, and
   // without capturing it here that evidence goes with the container.
   const infraByEnv = await Promise.all(envs.map((env) => env.infraDiagnostics()));
+  const cgroupsByEnv = await Promise.all(envs.map((env) => cgroupState(env).catch(
+    (err) => `cgroup probe failed: ${err.message}\n`,
+  )));
 
   const written = [];
   envs.forEach((env, e) => {
     const prefix = envs.length > 1 ? `env${e + 1}-` : '';
+    const cgroups = cgroupsByEnv[e];
+    if (cgroups && cgroups.trim()) {
+      const file = join(dir, `${prefix}cgroup-state.log`);
+      writeFileSync(file, cgroups.endsWith('\n') ? cgroups : `${cgroups}\n`);
+      written.push(file);
+    }
     for (const { name, text, error } of infraByEnv[e]) {
       if (error) {
         console.log(`log-on-failure: no logs for infra container ${name}: ${error}`);
