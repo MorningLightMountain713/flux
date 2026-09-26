@@ -7,7 +7,6 @@ const express = require('express');
 const {
   PINNED_PUBLIC_HEX, SECONDARY_PUBLIC_HEX, ROGUE_PUBLIC_HEX, signBundle,
 } = require('./policy-signing');
-const { createHash } = require('crypto');
 
 const PORT = parseInt(process.env.STUB_PORT || '3000', 10);
 const CONTROL_PORT = parseInt(process.env.CONTROL_PORT || '3001', 10);
@@ -404,12 +403,6 @@ const state = {
   // enterprise node, which is what every suite that is not about enterprise placement wants.
   // Absent would be a different thing entirely - see the policy block below.
   enterpriseNodes: {},
-  // Per-path 200/304 tallies, so a suite can prove a node revalidated conditionally rather
-  // than re-downloading. Reset with /reset or /policy-requests.
-  policyRequests: {},
-  // Paths made to fail, so a suite can exercise what a node does when a policy document
-  // is unreachable rather than only when it is empty. Path -> HTTP status.
-  failingPaths: {},
   latestRelease: { tag_name: 'v0.0.0', name: 'stub-release' },
   geolocation: {},
   // The syncthing the node image ships, read from the repository the image was built
@@ -601,16 +594,6 @@ function defaultGeoResponse(ip) {
 const app = express();
 app.use(express.json());
 
-// Fail any path the control plane has been told to break, before its handler runs.
-app.use((req, res, next) => {
-  const status = state.failingPaths[req.path];
-  if (status) {
-    res.status(status).send(`stub: ${req.path} forced to fail`);
-    return;
-  }
-  next();
-});
-
 // Policy documents, served at the repo root - the fluxos-network-policy layout that
 // config.policy.baseUrl names. The /helpers/ paths went with the version floor: they
 // covered nodes on a release that read RunOnFlux/flux, and the floor is now above every
@@ -619,56 +602,24 @@ app.use((req, res, next) => {
 // The typed document a node prefers. Left empty by default, which is how a node that asks
 // for it falls through to the flat one below - the same shape as a release published
 // before this document existed.
-
-function countRequest(path, status) {
-  const counts = state.policyRequests[path] || { 200: 0, 304: 0 };
-  counts[status] += 1;
-  state.policyRequests[path] = counts;
-}
-
-function sendPolicyDocument(req, res, value) {
-  const body = JSON.stringify(value);
-  const etag = `W/"${createHash('sha1').update(body).digest('hex')}"`;
-  res.set('ETag', etag);
-
-  if (req.get('If-None-Match') === etag) {
-    countRequest(req.path, 304);
-    res.status(304).end();
-    return;
-  }
-
-  countRequest(req.path, 200);
-  res.type('application/json').send(body);
-}
-
-// The typed document a node prefers. Left empty by default, which is how a node
-// that asks for it falls through to the flat one below - the same shape as a
-// release published before this document existed.
 app.get('/blocklist.json', (req, res) => {
   res.json(state.blocklist);
 });
 
-app.get(['/blockedrepositories.json', '/helpers/blockedrepositories.json'], (req, res) => {
-  sendPolicyDocument(req, res, state.blockedRepositories);
+app.get('/blockedrepositories.json', (req, res) => {
+  res.json(state.blockedRepositories);
 });
 
-app.get(['/tamperingblockednodes.json', '/helpers/tamperingblockednodes.json'], (req, res) => {
-  sendPolicyDocument(req, res, state.tamperingBlocklist);
-});
-
-app.get(['/enterprisenodes.json', '/helpers/enterprisenodes.json'], (req, res) => {
-  sendPolicyDocument(req, res, state.enterpriseNodes);
-});
-
-// Neither of these is a policyStore document - the whitelist has had no enforcer
-// since 2024 and policyStore deliberately carries no entry for it - so they stay
-// plain 200s and out of the tallies a suite reads.
-app.get(['/vettedrepositories.json', '/helpers/vettedrepositories.json'], (req, res) => {
+app.get('/vettedrepositories.json', (req, res) => {
   res.json(state.vettedRepositories);
 });
 
 app.get('/tamperingblockednodes.json', (req, res) => {
   res.json(state.tamperingBlocklist);
+});
+
+app.get('/enterprisenodes.json', (req, res) => {
+  res.json(state.enterpriseNodes);
 });
 
 // The signed bundle - the `signed` branch, and the only policy route a current node reads.
@@ -981,19 +932,6 @@ control.post('/vetted-repos', (req, res) => {
   res.json({ ok: true, seq: resignPolicy() });
 });
 
-// Clear the 200/304 tallies without disturbing anything else, so a suite can count the
-// requests one restart makes rather than every request since boot.
-control.post('/policy-requests', (req, res) => {
-  state.policyRequests = {};
-  res.json({ ok: true });
-});
-
-// { "/blocklist.json": 503 } — or {} to stop failing everything.
-control.post('/failing-paths', (req, res) => {
-  state.failingPaths = req.body;
-  res.json({ ok: true });
-});
-
 control.post('/tampering-blocklist', (req, res) => {
   state.tamperingBlocklist = req.body;
   res.json({ ok: true, seq: resignPolicy() });
@@ -1193,8 +1131,6 @@ control.post('/reset', (req, res) => {
   state.vettedRepositories = [];
   state.tamperingBlocklist = [];
   state.enterpriseNodes = {};
-  state.failingPaths = {};
-  state.policyRequests = {};
   state.latestRelease = { tag_name: 'v0.0.0', name: 'stub-release' };
   state.geolocation = {};
   artifacts.clear();
