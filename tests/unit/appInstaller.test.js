@@ -667,6 +667,17 @@ describe('appInstaller tests', () => {
       expect(uninstallApplication.firstCall.args[1].broadcastRemoval, 'the teardown said nothing to the network').to.equal(true);
     });
 
+    // The canary for the test above: a caller that keeps the app - a rebuild - holds a
+    // claim it is not giving up, so its teardown says nothing.
+    it('leaves the network uninformed when the caller keeps the app', async () => {
+      const { installer, uninstallApplication } = loadFresh({ converge: { converged: false, failed: ['web_newapp'] } });
+
+      await installer.installApplication(newappInstantiated, {});
+
+      expect(uninstallApplication.calledWith('newapp'), 'the failed install was not torn down').to.equal(true);
+      expect(uninstallApplication.firstCall.args[1].broadcastRemoval, 'a kept claim was withdrawn').to.equal(false);
+    });
+
     it('rolls back and returns PROVISIONED-BUT-NOT-RUNNING when a component fails to converge', async () => {
       const { installer, uninstallApplication } = loadFresh({ converge: { converged: false, failed: ['web_newapp'] } });
 
