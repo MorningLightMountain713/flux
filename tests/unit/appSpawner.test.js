@@ -1086,6 +1086,19 @@ describe('appSpawner tests', () => {
       expect(globalStateStub.spawnErrorsLongerAppCache.has('abc123')).to.be.true;
     });
 
+    // A refusal is about the app and durable, so it is not reconsidered until the cache
+    // expires.
+    it('adds an app the installer refuses to the long-term cache', async () => {
+      const candidate = await makeCandidate();
+      buildModule({
+        candidates: [candidate],
+        errorCount: 0,
+        installStub: sinon.stub().resolves({ status: InstallStatus.REJECTED, reason: 'Image blocked/repo is blocked' }),
+      });
+      await appSpawner.trySpawningGlobalApplication().catch(() => {});
+      expect(globalStateStub.spawnErrorsLongerAppCache.has('abc123')).to.be.true;
+    });
+
     it('defers without long-caching when the blocklist is unreachable at the compliance check', async () => {
       const candidate = await makeCandidate();
       buildModule({
