@@ -1266,6 +1266,40 @@ describe('FluxPeerManager tests', () => {
     });
   });
 
+  describe('getPolicyCapablePeers', () => {
+    const withCapabilities = (m, ip, capabilities) => {
+      const ws = createMockWs(ip, '16127');
+      const peer = m.add(ws, ip, '16127', { source: PEER_SOURCE.RANDOM });
+      capabilities.forEach((capability) => peer.remoteCapabilities.add(capability));
+      return peer;
+    };
+
+    it('offers only the peers that speak the protocol', () => {
+      // A peer without it has no handler for the ask, so including it buys a deadline's
+      // wait for a reply that cannot come.
+      withCapabilities(manager, '10.0.0.1', ['policyBundle']);
+      withCapabilities(manager, '10.0.0.2', ['appStateSync']);
+      withCapabilities(manager, '10.0.0.3', []);
+
+      expect(manager.getPolicyCapablePeers().map((p) => p.key)).to.deep.equal(['10.0.0.1:16127']);
+    });
+
+    it('never offers this node its own address', () => {
+      withCapabilities(manager, '10.0.0.1', ['policyBundle']);
+      withCapabilities(manager, '10.0.0.2', ['policyBundle']);
+      manager.setOwnSocketAddress('10.0.0.1:16127');
+
+      expect(manager.getPolicyCapablePeers().map((p) => p.key)).to.deep.equal(['10.0.0.2:16127']);
+    });
+
+    it('answers empty rather than everything when nobody speaks it', () => {
+      // The first node of a rollout. Empty means "nobody to ask", which the store treats
+      // differently from "everybody was asked and had nothing".
+      withCapabilities(manager, '10.0.0.1', ['appStateSync']);
+      expect(manager.getPolicyCapablePeers()).to.deep.equal([]);
+    });
+  });
+
   describe('has / get', () => {
     it('should return true/peer for existing key', () => {
       const ws = createMockWs('10.0.0.1', '16127');
