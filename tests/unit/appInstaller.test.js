@@ -357,11 +357,15 @@ describe('appInstaller tests', () => {
         checkAppDependencyRequirements = sinon.stub().resolves(),
         connectComponentToLinkedApps = sinon.stub().resolves(),
         policyReady = true,
+        alreadyInstalled = false,
+        convergeError = null,
       } = opts;
 
       const onInstallComplete = sinon.stub().resolves();
       const fluxEventBusPublish = sinon.stub();
-      const appReconcilerAwaitConvergence = sinon.stub().resolves(converge);
+      const appReconcilerAwaitConvergence = convergeError
+        ? sinon.stub().rejects(convergeError)
+        : sinon.stub().resolves(converge);
       const uninstallApplication = sinon.stub().resolves();
       const broadcastMessageToAll = sinon.stub().resolves();
       const storeAppInstallingErrorMessage = sinon.stub().resolves();
@@ -428,7 +432,9 @@ describe('appInstaller tests', () => {
           existsInstalledApp: (() => { const s = sinon.stub().resolves(true); s.onCall(0).resolves(false); s.onCall(1).resolves(false); return s; })(),
           // Identity-keyed rows: absent before the insert, present for the
           // post-insert validation read.
-          existsInstalledIdentity: (() => { const s = sinon.stub().resolves(true); s.onCall(0).resolves(false); s.onCall(1).resolves(false); return s; })(),
+          existsInstalledIdentity: alreadyInstalled
+            ? sinon.stub().resolves(true)
+            : (() => { const s = sinon.stub().resolves(true); s.onCall(0).resolves(false); s.onCall(1).resolves(false); return s; })(),
           insertInstalledApp,
           removeInstalledApp: sinon.stub().resolves(),
           removeInstalledIdentity: sinon.stub().resolves(),
@@ -499,6 +505,74 @@ describe('appInstaller tests', () => {
       expect(onInstallComplete.calledOnce, 'post-install broadcast fired').to.be.true;
       expect(fluxEventBusPublish.calledWith('app:installed'), 'app:installed event published').to.be.true;
       expect(appReconcilerAwaitConvergence.calledOnce, 'install handed off + awaited reconciler convergence').to.be.true;
+    });
+
+    // A waiter on the bus learns what every attempt did: an install says app:installed,
+    // and every other outcome says which one it was, by the node's own status value.
+    describe('app:installOutcome', () => {
+      const outcomesPublished = (publish) => publish.getCalls()
+        .filter((call) => call.args[0] === 'app:installOutcome')
+        .map((call) => call.args[1]);
+
+      it('is not published for an install, which has app:installed', async () => {
+        const { installer, fluxEventBusPublish } = loadFresh();
+        const result = await installer.installApplication(newappInstantiated, {});
+        expect(result.status).to.equal(appInstaller.InstallStatus.INSTALLED);
+        expect(fluxEventBusPublish.calledWith('app:installed')).to.equal(true);
+        expect(outcomesPublished(fluxEventBusPublish)).to.deep.equal([]);
+      });
+
+      it('says SKIPPED when the node already holds the app', async () => {
+        const { installer, fluxEventBusPublish } = loadFresh({ alreadyInstalled: true });
+        const result = await installer.installApplication(newappInstantiated, {});
+        expect(result.status).to.equal(appInstaller.InstallStatus.SKIPPED);
+        expect(outcomesPublished(fluxEventBusPublish)).to.deep.equal([
+          { name: 'newapp', outcome: appInstaller.InstallStatus.SKIPPED },
+        ]);
+      });
+
+      it('says DEFERRED when the install cannot proceed yet', async () => {
+        const { installer, fluxEventBusPublish } = loadFresh({ policyReady: false });
+        const result = await installer.installApplication(newappInstantiated, {});
+        expect(result.status).to.equal(appInstaller.InstallStatus.DEFERRED);
+        expect(outcomesPublished(fluxEventBusPublish)).to.deep.equal([
+          { name: 'newapp', outcome: appInstaller.InstallStatus.DEFERRED },
+        ]);
+      });
+
+      it('says REJECTED when the node will not take the app', async () => {
+        const { installer, fluxEventBusPublish } = loadFresh();
+        const result = await installer.installApplication(arcaneInstantiated, {});
+        expect(result.status).to.equal(appInstaller.InstallStatus.REJECTED);
+        expect(outcomesPublished(fluxEventBusPublish)).to.deep.equal([
+          { name: arcaneInstantiated.name, outcome: appInstaller.InstallStatus.REJECTED },
+        ]);
+      });
+
+      it('says FAILED when the install rolled back', async () => {
+        const { installer, fluxEventBusPublish } = loadFresh({ converge: { converged: false, failed: ['web_newapp'] } });
+        const result = await installer.installApplication(newappInstantiated, {});
+        expect(result.status).to.equal(appInstaller.InstallStatus.FAILED);
+        expect(outcomesPublished(fluxEventBusPublish)).to.deep.equal([
+          { name: 'newapp', outcome: appInstaller.InstallStatus.FAILED },
+        ]);
+      });
+
+      it('says FAILED for an attempt that throws, and still throws', async () => {
+        const { installer, fluxEventBusPublish } = loadFresh({ convergeError: new Error('reconciler gone') });
+        let thrown = null;
+        await installer.installApplication(newappInstantiated, {}).catch((error) => { thrown = error; });
+        expect(thrown && thrown.message).to.equal('reconciler gone');
+        expect(outcomesPublished(fluxEventBusPublish)).to.deep.equal([
+          { name: 'newapp', outcome: appInstaller.InstallStatus.FAILED },
+        ]);
+      });
+
+      it('publishes the values of the enum a harness can load on its own', () => {
+        // eslint-disable-next-line global-require
+        const { InstallStatus } = require('../../ZelBack/src/services/appLifecycle/installStatus');
+        expect(appInstaller.InstallStatus).to.equal(InstallStatus);
+      });
     });
 
     // Using the real classes is not enough on its own. Every collaborator the

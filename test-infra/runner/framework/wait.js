@@ -2,24 +2,24 @@ import { getAppContainerStatus, restartFluxos, isAppFullyGone } from './containe
 import { throwIfInfraDead, sleepUnlessInfraDead } from './infra-death.js';
 // The node's own enum, not a copy of its values: a rename on the product side has to
 // break this import rather than quietly stop matching.
-import installOutcomeModule from '../../../ZelBack/src/services/utils/installOutcome.js';
+import installStatusModule from '../../../ZelBack/src/services/appLifecycle/installStatus.js';
 
-const { InstallOutcome } = installOutcomeModule;
+const { InstallStatus } = installStatusModule;
 
 // What an install outcome says about whether the node HOLDS THE APP once the attempt is
 // over, which is the only question a waiter here is asking. Declared per value: an outcome
 // that says nothing here fails this module at load rather than being waited out to a
 // timeout that names the wrong cause.
-const HOLDS_THE_APP = new Set([InstallOutcome.INSTALLED, InstallOutcome.ALREADY_INSTALLED]);
-const LACKS_THE_APP = new Set([InstallOutcome.DECLINED, InstallOutcome.FAILED]);
-const DECIDES_NOTHING = new Set([InstallOutcome.BUSY]);
+const HOLDS_THE_APP = new Set([InstallStatus.INSTALLED, InstallStatus.SKIPPED]);
+const LACKS_THE_APP = new Set([InstallStatus.REJECTED, InstallStatus.FAILED]);
+const DECIDES_NOTHING = new Set([InstallStatus.DEFERRED]);
 
-const unclassified = Object.values(InstallOutcome).filter(
+const unclassified = Object.values(InstallStatus).filter(
   (outcome) => !HOLDS_THE_APP.has(outcome) && !LACKS_THE_APP.has(outcome) && !DECIDES_NOTHING.has(outcome),
 );
 if (unclassified.length) {
   throw new Error(
-    `InstallOutcome ${unclassified.join(', ')} says nothing about whether the node holds the app: `
+    `InstallStatus ${unclassified.join(', ')} says nothing about whether the node holds the app: `
     + 'classify it in wait.js, or every waiter on it times out instead of deciding.',
   );
 }
@@ -186,15 +186,16 @@ export async function waitForDosChanged(node, predicate = () => true, timeout = 
 /**
  * The node holds the app, or an attempt said it will not.
  *
- * THE SUBJECT IS THE APP, NOT THIS CALLER'S ATTEMPT. Attempts are serialised by the install
- * hold, so every outcome but BUSY is published by whichever attempt held the node, and is a
- * true statement about the app whoever asked for it. A node's own spawner goes after any app
- * short of instances, so an `alreadyInstalled` raised by that spawner is a routine answer
+ * THE SUBJECT IS THE APP, NOT THIS CALLER'S ATTEMPT. Attempts on one app are serialised by
+ * its operation lease, so every outcome but DEFERRED is published by whichever attempt held
+ * it, and is a true statement about the app whoever asked for it. A node's own spawner goes
+ * after any app short of instances, so a `skipped` raised by that spawner is a routine answer
  * here - and a positive one, since the app it names is on this node.
  *
- * BUSY is the one outcome that decides nothing: the operation in the way may be an install of
- * this very app. The wait continues through it, so the whole budget is spent only on a node
- * that never answers either way.
+ * DEFERRED is the one outcome that decides nothing: the operation in the way may be an
+ * install of this very app, and a node without its policy yet will be asked again. The wait
+ * continues through it, so the whole budget is spent only on a node that never answers
+ * either way.
  * @param {object} node
  * @param {string} appName
  * @param {number} [timeout]
