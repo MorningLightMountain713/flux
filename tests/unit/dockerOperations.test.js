@@ -137,6 +137,26 @@ describe('dockerOperations tests', () => {
       await dockerOperations.appDeleteDataInMountPoint(appId, { timeoutMs: 0 });
     });
 
+    it('treats a volume path that is not a directory as nothing to clear', async () => {
+      const { appId } = await statefulComponent();
+      const wipeAppData = sinon.stub().resolves({ error: new Error('Not a directory') });
+      const stat = sinon.stub().rejects(Object.assign(new Error('ENOTDIR'), { code: 'ENOTDIR' }));
+      const dockerOperations = build({ delay: sinon.stub().resolves() }, { info: sinon.stub(), error: sinon.stub() }, wipeAppData, stat);
+
+      await dockerOperations.appDeleteDataInMountPoint(appId, { timeoutMs: 0 });
+    });
+
+    it('throws when the disk answers EIO rather than reading it as empty', async () => {
+      const { appId } = await statefulComponent();
+      const wipeAppData = sinon.stub().resolves({ error: new Error('Input/output error') });
+      const stat = sinon.stub().rejects(Object.assign(new Error('EIO'), { code: 'EIO' }));
+      const dockerOperations = build({ delay: sinon.stub().resolves() }, { info: sinon.stub(), error: sinon.stub() }, wipeAppData, stat);
+
+      let threw = null;
+      try { await dockerOperations.appDeleteDataInMountPoint(appId, { timeoutMs: 0 }); } catch (e) { threw = e; }
+      expect(threw, 'an unreadable disk was reported as nothing to delete').to.be.an('error');
+    });
+
     it('throws when it cannot tell whether the directory is there', async () => {
       const { appId } = await statefulComponent();
       const wipeAppData = sinon.stub().resolves({ error: new Error('Permission denied') });
