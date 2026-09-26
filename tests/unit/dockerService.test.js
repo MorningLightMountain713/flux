@@ -86,6 +86,17 @@ describe('dockerService tests', () => {
         .to.not.equal(dockerService.getAppIdentifier('proxy_myapp'));
     });
 
+    it('gives the formerly zel-prefixed names the flux prefix like any other', async () => {
+      expect(dockerService.getAppIdentifier('KadenaChainWebNode')).to.equal('fluxKadenaChainWebNode');
+      expect(dockerService.getAppIdentifier('FoldingAtHomeB')).to.equal('fluxFoldingAtHomeB');
+    });
+
+    it('should round-trip getAppIdentifier for compose and plain names', async () => {
+      ['db_App', 'testing1234', 'KadenaChainWebNode', 'FoldingAtHomeB'].forEach((bare) => {
+        expect(dockerService.getBaseAppName(dockerService.getAppIdentifier(bare))).to.equal(bare);
+      });
+    });
+
     it('should add "flux" to app identifier with any other name', async () => {
       const appName = 'testing1234';
       const expected = 'fluxtesting1234';
@@ -303,47 +314,53 @@ describe('dockerService tests', () => {
   });
 
   describe('dockerListContainers tests', () => {
-    it('should return a list of containers', async () => {
-      let fluxContainer;
+    it('returns the listing docker answered with', async () => {
+      const listing = fixtureListing();
+      stubListing(listing);
 
       const result = await dockerService.dockerListContainers();
-      result.forEach((container) => {
-        if (container.Image === 'runonflux/website') fluxContainer = container;
-      });
 
-      expect(fluxContainer.Id).to.be.a('string');
-      expect(fluxContainer.Image).to.equal('runonflux/website');
-      expect(fluxContainer.Names[0]).to.equal('/fluxwebsite');
-      expect(fluxContainer.State).to.equal('running');
+      expect(result).to.equal(listing);
     });
 
-    it('should return a list of containers with an option all = true', async () => {
-      let fluxContainer;
+    it('passes every listing option through to docker', async () => {
+      // `all` decides whether a stopped app container is visible at all, and a caller
+      // told there is none treats the app as gone.
+      stubListing([]);
 
-      const result = await dockerService.dockerListContainers(true);
-      result.forEach((container) => {
-        if (container.Image === 'runonflux/website') fluxContainer = container;
+      await dockerService.dockerListContainers(true, 5, true, 'somefilter');
+
+      expect(Dockerode.prototype.listContainers.lastCall.args[0]).to.deep.equal({
+        all: true, limit: 5, size: true, filter: 'somefilter',
       });
-
-      expect(fluxContainer.Id).to.be.a('string');
-      expect(fluxContainer.Image).to.equal('runonflux/website');
-      expect(fluxContainer.Names[0]).to.equal('/fluxwebsite');
-      expect(fluxContainer.State).to.equal('running');
     });
   });
 
   describe('dockerListImages tests', () => {
-    it('should return a list of containers', async () => {
-      let fluxImage;
+    it('returns the image list docker answered with', async () => {
+      const listing = [{ Id: 'sha256:5f1e', RepoTags: ['runonflux/website:latest'] }];
+      sinon.stub(Dockerode.prototype, 'listImages').resolves(listing);
 
       const result = await dockerService.dockerListImages();
-      result.forEach((image) => {
-        if (image.RepoTags.length && image.RepoTags[0].includes('runonflux/website')) fluxImage = image;
-      });
 
-      expect(fluxImage).to.exist;
-      expect(fluxImage.RepoDigests[0]).to.include('runonflux/website');
-      expect(fluxImage.Id).to.be.a('string');
+      expect(result).to.equal(listing);
+    });
+  });
+
+  describe('dockerContainerLogs tests', () => {
+    it('asks for a finished read of both streams, from the container the name resolves to', async () => {
+      // `follow: true` leaves docker holding the connection open for as long as the
+      // container lives, and this call has to return to answer the caller.
+      const frames = Buffer.from('log');
+      const logs = sinon.stub(Dockerode.Container.prototype, 'logs').resolves(frames);
+
+      const result = await dockerService.dockerContainerLogs('website', 2);
+
+      expect(logs.firstCall.args[0]).to.include({
+        follow: false, stdout: true, stderr: true, tail: 2,
+      });
+      expect(logs.thisValues[0].id, 'read logs from a container other than the one named').to.equal(FIXTURE_ID);
+      expect(result).to.equal(frames);
     });
   });
 
