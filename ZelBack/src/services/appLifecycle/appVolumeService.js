@@ -282,11 +282,14 @@ async function removeOrphanedInjectedContent(oldComp, newComp) {
  * (re)created on the volume-reuse path. The operations are unconditional and
  * idempotent (`mkdir -p` / `touch`), so there is no check-then-act (TOCTOU) window
  * inside this helper. Also regenerates `.stignore` so a volume-keeping redeploy
- * picks up an added/removed injected exclude (decoupled from `createAppVolume`).
+ * picks up an added/removed exclude (decoupled from `createAppVolume`) - FIRST,
+ * because a source this makes in a registered folder is indexed by syncthing's
+ * watcher within seconds, and an ignore does not withdraw what already replicated.
  * Passes writeStignore's verdict through: true when an existing ignore set
  * changed and the caller should request a targeted syncthing folder scan.
  */
 async function ensureMountSourcesExist(deployComp) {
+  const stignoreChanged = await writeStignore(deployComp);
   for (const mount of deployComp.mounts) {
     if (mount.sourceType === 'file') {
       // eslint-disable-next-line no-await-in-loop
@@ -298,7 +301,6 @@ async function ensureMountSourcesExist(deployComp) {
     // eslint-disable-next-line no-await-in-loop
     await applyMountPerms(mount);
   }
-  const stignoreChanged = await writeStignore(deployComp);
   return stignoreChanged;
 }
 
