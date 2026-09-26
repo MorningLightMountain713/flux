@@ -1,3 +1,4 @@
+// fleet: 1
 // weight: light
 /* global WebSocket */
 import { describe, it, before, beforeEach, after } from 'mocha';

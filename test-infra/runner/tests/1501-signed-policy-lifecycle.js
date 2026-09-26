@@ -1,3 +1,4 @@
+// fleet: 3
 // weight: medium
 import { describe, it, before, after, afterEach } from 'mocha';
 import { expect } from 'chai';

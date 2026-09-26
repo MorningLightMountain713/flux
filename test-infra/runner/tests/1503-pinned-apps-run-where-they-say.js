@@ -1,3 +1,4 @@
+// fleet: 4
 // weight: heavy
 import { describe, it, before, after } from 'mocha';
 import { expect } from 'chai';
