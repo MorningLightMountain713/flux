@@ -36,6 +36,7 @@ const log = require('../../lib/log');
 const { Privilege, authOf } = require('../utils/privileges');
 const appsRepository = require('../appDatabase/appsRepository');
 const fluxEventBus = require('../utils/fluxEventBus');
+const { InstallStatus } = require('./installStatus');
 const config = require('config');
 
 // Write injected content to a mount source as root-owned 0644 — the platform
@@ -46,18 +47,6 @@ async function writeInjectedContent(source, bytes) {
   await fsPromises.writeFile(source, bytes);
   await fsPromises.chmod(source, 0o644);
 }
-
-/**
- * Outcome of installApplication. Separates a transient deferral (retry later) from a
- * permanent rejection and a real failure, so callers can back off appropriately.
- */
-const InstallStatus = Object.freeze({
-  INSTALLED: 'installed', // installed and launched
-  SKIPPED: 'skipped', // already installed - nothing to do
-  DEFERRED: 'deferred', // could not decide / node busy - retry later
-  REJECTED: 'rejected', // admission denied for this spec - won't change on retry
-  FAILED: 'failed', // install started then errored - local cleanup already done
-});
 
 let onInstallComplete = null;
 function setOnInstallComplete(callback) {
@@ -115,7 +104,7 @@ async function storeAndBroadcastInstallError(appName, hash, error) {
  *   unreachable or node busy, retry later), REJECTED (blocked image - won't change on retry),
  *   FAILED (install started then errored; local cleanup already done).
  */
-async function installApplication(instantiated, options = {}) {
+async function attemptInstallApplication(instantiated, options = {}) {
   const onStatus = options.onStatus || null;
   const createVolumes = options.createVolumes !== false;
   const sendRemovalMessage = options.sendRemovalMessage || false;
@@ -562,6 +551,34 @@ async function installApplication(instantiated, options = {}) {
     return { status: InstallStatus.FAILED, reason: `PROVISIONED-BUT-NOT-RUNNING: ${failed.join(', ')}` };
   }
   return { status: InstallStatus.INSTALLED, reason: null };
+}
+
+/**
+ * Install an app on this node, and publish what the attempt did.
+ *
+ * An install publishes `app:installed`; every other outcome publishes
+ * `app:installOutcome` carrying its InstallStatus, so a waiter on the bus can tell
+ * the app being here (SKIPPED) from asking again (DEFERRED) from its not being here
+ * (REJECTED, FAILED) without reading the response stream's wording. A throw is
+ * published as FAILED and rethrown.
+ * @param {object} instantiated Instantiated app spec.
+ * @param {object} [options] As attemptInstallApplication takes them.
+ * @returns {Promise<{status: string, reason: string|null}>} status is an InstallStatus value.
+ */
+async function installApplication(instantiated, options = {}) {
+  const announce = (outcome) => {
+    if (outcome === InstallStatus.INSTALLED) return;
+    fluxEventBus.publish('app:installOutcome', { name: instantiated?.name, outcome });
+  };
+  let result;
+  try {
+    result = await attemptInstallApplication(instantiated, options);
+  } catch (error) {
+    announce(InstallStatus.FAILED);
+    throw error;
+  }
+  announce(result.status);
+  return result;
 }
 
 /**
