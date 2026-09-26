@@ -115,6 +115,7 @@ describe('appUninstaller tests', () => {
       getInstalledApp: sinon.stub().resolves(null),
       getGlobalAppInfo: sinon.stub().resolves(null),
       getAppMessage: sinon.stub().resolves(null),
+      listAppMessagesByName: sinon.stub().resolves([]),
       removeInstalledApp: sinon.stub().resolves(),
       removeInstalledIdentity: sinon.stub().resolves(),
       countInstalledIdentities: sinon.stub().resolves(0),
@@ -382,6 +383,29 @@ describe('appUninstaller tests', () => {
     });
   });
 
+  // The published claim goes with the data it describes: one kept past the removal
+  // offers peers a volume this node no longer has.
+  describe('a teardown that removes the volume', () => {
+    beforeEach(() => {
+      // The folder a holding is published under is the component's physical name.
+      dockerServiceStub.getAppIdentifier.callsFake((identifier) => `flux${identifier}`);
+      globalStateStub.folderHoldings = new Map([['fluxweb_TestApp', { bytes: 5 }], ['fluxother_App', { bytes: 7 }]]);
+    });
+
+    const comp = () => ({ identifier: 'web_TestApp', appName: 'TestApp', name: 'web' });
+
+    it('withdraws the published holding of the component whose data it deletes', async () => {
+      await appUninstaller.uninstallComponent(comp(), { removeVolumes: true }).catch(() => {});
+      expect(globalStateStub.folderHoldings.has('fluxweb_TestApp'), 'a claim outlived the data').to.equal(false);
+      expect(globalStateStub.folderHoldings.has('fluxother_App'), 'another folder lost its claim').to.equal(true);
+    });
+
+    it('keeps it when the volume stays', async () => {
+      await appUninstaller.uninstallComponent(comp(), { removeVolumes: false }).catch(() => {});
+      expect(globalStateStub.folderHoldings.has('fluxweb_TestApp')).to.equal(true);
+    });
+  });
+
   describe('the teardown removes the image the search found', () => {
     const teardown = () => appUninstaller.runTeardown({
       key: 'myapp',
@@ -423,6 +447,11 @@ describe('appUninstaller tests', () => {
       const result = await appUninstaller.uninstallApplication(undefined, { onStatus: (msg) => messages.push(msg) });
       expect(messages.some((m) => m.includes('No App specified'))).to.be.true;
       expect(result.status).to.equal(appUninstaller.UninstallStatus.FAILED);
+    });
+
+    it('returns SKIPPED when a forced removal can find the app nowhere', async () => {
+      const result = await appUninstaller.uninstallApplication('nonexistent', { skipGuard: true, forceKill: true });
+      expect(result.status).to.equal(appUninstaller.UninstallStatus.SKIPPED);
     });
 
     it('reports not found via onStatus and returns SKIPPED when the app is missing and skipGuard is false', async () => {
@@ -501,6 +530,21 @@ describe('appUninstaller tests', () => {
     afterEach(() => {
       operationRegistry.clear();
       realDepartingApps.clear();
+    });
+
+    // The mark belongs to the removal that took it. A duplicate refused at the lease
+    // took none, so it cannot hand back the claim a live removal is withdrawing.
+    it('a refused duplicate leaves the running removal\'s mark in place', async () => {
+      realDepartingApps.enter('leaving');
+      const token = operationRegistry.acquire('leaving', 'remove', 'test', 'a removal in flight');
+      try {
+        const result = await appUninstaller.uninstallApplication('leaving', { broadcastRemoval: true });
+        expect(result.status).to.equal(appUninstaller.UninstallStatus.DEFERRED);
+        expect(realDepartingApps.has('leaving'), 'a refused duplicate released a live removal\'s mark').to.equal(true);
+      } finally {
+        operationRegistry.release('leaving', token);
+        realDepartingApps.leave('leaving');
+      }
     });
 
     it('stops claiming the app from the decision, and claims nothing once it is done', async () => {
