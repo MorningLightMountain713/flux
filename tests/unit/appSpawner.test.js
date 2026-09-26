@@ -494,6 +494,32 @@ describe('appSpawner tests', () => {
     });
   });
 
+  // Until the node->owners map is obtained this node cannot tell "not an enterprise
+  // node" from "not known yet", and the two demand opposite behaviour.
+  describe('policy gate', () => {
+    it('installs nothing while the policy gate is shut', async () => {
+      const candidate = await makeCandidate();
+      buildModule({ candidates: [candidate], globalStateOverrides: { policyReady: false } });
+
+      const delay = await appSpawner.trySpawningGlobalApplication().catch(() => {});
+
+      expect(logStub.info.args.some((a) => a[0]?.includes?.('Network policy not yet obtained'))).to.equal(true);
+      // The candidate finder is the first thing the pass reaches past the gate, so it
+      // not being asked is the evidence the pass stopped here.
+      expect(findUnderProvisionedStub.called, 'the pass walked on past a shut gate').to.equal(false);
+      expect(delay).to.be.a('number');
+    });
+
+    it('proceeds once the gate opens', async () => {
+      const candidate = await makeCandidate();
+      buildModule({ candidates: [candidate] });
+
+      await appSpawner.trySpawningGlobalApplication().catch(() => {});
+
+      expect(findUnderProvisionedStub.called).to.equal(true);
+    });
+  });
+
   describe('candidate filtering', () => {
     it('should filter out apps in the long-term error cache', async () => {
       const candidate = await makeCandidate();
@@ -957,6 +983,14 @@ describe('appSpawner tests', () => {
       // A real Placement naming some other node: matchesTarget is decided from
       // the target list, so there is nothing to force.
       const candidate = await makeCandidate({ placement: { targetIps: ['10.0.0.1'] } });
+      buildModule({ candidates: [candidate] });
+      await appSpawner.trySpawningGlobalApplication().catch(() => {});
+      expect(globalStateStub.appsToBeCheckedLater, 'a node the spec does not name held it to take later').to.have.lengthOf(0);
+      expect(logStub.info.args.some((a) => a[0]?.includes?.('testapp selected')), 'a node the spec does not name drew it').to.be.false;
+    });
+
+    it('does not take an app pinned to another node\'s collateral', async () => {
+      const candidate = await makeCandidate({ placement: { targetOutpoints: [`${'b'.repeat(64)}:0`] } });
       buildModule({ candidates: [candidate] });
       await appSpawner.trySpawningGlobalApplication().catch(() => {});
       expect(globalStateStub.appsToBeCheckedLater, 'a node the spec does not name held it to take later').to.have.lengthOf(0);
