@@ -902,6 +902,31 @@ describe('appOperations tests', () => {
       });
     });
 
+    // A spec update that adds a local directory on a replicated volume reaches it here,
+    // and syncthing's watcher indexes what appears in a registered folder within
+    // seconds. An ignore does not withdraw what already replicated, so the set that
+    // covers the directory is written before the directory exists.
+    it('writes the ignore set before it makes any source', async () => {
+      const mod = loadModule();
+      const deployment = await oneComponentDeployment('webapp', 'test', {
+        persistentStorage: {
+          sizeGb: 5,
+          mounts: Object.fromEntries([dirMount('/data', 'data'), dirMount('/cache', 'cache')]),
+          sync: { mode: 'syncFirst', exclude: ['cache'] },
+        },
+      });
+      const deployComp = deployment.getComponent('test');
+      expect(deployComp.sync, 'the premise: a replicated volume').to.be.ok;
+
+      await mod.ensureMountSourcesExist(deployComp);
+
+      const stignoreWrite = fsStub.writeFile.getCalls().find((c) => String(c.args[0]).endsWith('/.stignore'));
+      const firstMkdir = serviceHelperStub.runCommand.getCalls().find((c) => c.args[0] === 'mkdir');
+      expect(stignoreWrite, 'no ignore set was written').to.exist;
+      expect(firstMkdir, 'no source was made').to.exist;
+      expect(stignoreWrite.calledBefore(firstMkdir), 'a directory existed before the set that covers it').to.equal(true);
+    });
+
     it('creates a file source with touch and chmod', async () => {
       const mod = loadModule();
       const deployComp = await buildDeployComp(Object.fromEntries([fileMount('/etc/app/config.yaml', 'config.yaml')]));
