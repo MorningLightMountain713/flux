@@ -103,7 +103,7 @@ describe('mount safety decides on what a node can actually read', function () {
     await bootAndPeer(env, { minOutbound: 1, minInbound: 1 });
     await resetSyncState();
 
-    await seedSyncthingApp(env, { name, mode: 'r', index: 0 });
+    await seedSyncthingApp(env, { name, syncMode: 'syncFirst', index: 0 });
     await setSynced({ ip: ip0, folder });
     await waitFor(async () => (await folderType(ip0, folder)) === 'sendreceive', { timeout: 90000, interval: 3000, label: `${folder} sendreceive` });
     await waitFor(() => isUp(env.clients[0], name), { timeout: 90000, interval: 2000, label: 'app running' });

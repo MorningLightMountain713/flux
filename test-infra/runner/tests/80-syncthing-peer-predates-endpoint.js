@@ -104,7 +104,7 @@ describe('a syncthing holder that predates the folder endpoint', function () {
 
     for (const [name, index] of [[deferApp, deferringSubject], [seedApp, seedingSubject]]) {
       // eslint-disable-next-line no-await-in-loop
-      const { folder } = await seedSyncthingApp(env, { name, mode: 'r', index });
+      const { folder } = await seedSyncthingApp(env, { name, syncMode: 'syncFirst', index });
       folders.set(name, folder);
       // The un-upgraded node joins each app's holder list, which is what puts it
       // in front of the subject's election.

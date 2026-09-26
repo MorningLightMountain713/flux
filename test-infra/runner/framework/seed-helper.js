@@ -481,16 +481,18 @@ export async function buildSeedableGracefulV8App({
  */
 export async function buildSeedableMixedMountApp({
   name,
-  mode = 'g',
+  syncMode = 'activeStandby',
   plainPath = '/data',
   syncPath = '/db',
   repotag = `${REGISTRY_REPO_HOST}/${name}:v1`,
   containerPorts = [80],
   ...rest
 }) {
+  const mode = CONTAINER_DATA_FLAG[syncMode];
+  if (!mode) throw new Error(`buildSeedableMixedMountApp: unknown syncMode '${syncMode}'`);
   const compose = [{
     name,
-    description: `mixed plain + ${mode}: component`,
+    description: `mixed plain + ${syncMode} component`,
     repotag,
     ports: [],
     domains: [''],
@@ -556,11 +558,13 @@ export async function buildSeedableMultiSyncthingApp({
 export async function buildSeedableIndexRefApp({
   name,
   selfRef = false,
-  mode = 'g',
+  syncMode = 'activeStandby',
   repotag = `${REGISTRY_REPO_HOST}/${name}:v1`,
   containerPorts = [80],
   ...rest
 }) {
+  const mode = CONTAINER_DATA_FLAG[syncMode];
+  if (!mode) throw new Error(`buildSeedableIndexRefApp: unknown syncMode '${syncMode}'`);
   const base = {
     domains: [''],
     environmentParameters: [],
@@ -585,7 +589,7 @@ export async function buildSeedableIndexRefApp({
       {
         ...base,
         name: `${name}c0`,
-        description: `${mode}: base component (index 0)`,
+        description: `${syncMode} base component (index 0)`,
         ports: [],
         containerData: `${mode}:/appdata`,
       },

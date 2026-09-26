@@ -612,8 +612,12 @@ export async function waitForInstanceCount(env, appName, target, {
 // holds the data its index claims (see seedSyncScopedData). Whether/when to pin the
 // SUBJECT synced stays the caller's choice.
 export async function seedSyncthingApp(env, {
-  name, syncMode = 'syncFirst', forceNonLeader = false, index = 0, extraMounts = [], hdd = 1,
+  name, syncMode = 'syncFirst', forceNonLeader = false, index = 0, extraMounts = [], hdd = 1, ...rest
 }) {
+  const unknown = Object.keys(rest);
+  if (unknown.length) {
+    throw new Error(`seedSyncthingApp: unknown option(s) ${unknown.join(', ')}; a sync mode is syncMode`);
+  }
   await pushImage(name, 'v1');
   const app = await buildSeedableSyncthingApp({ name, syncMode, extraMounts, hdd });
   const identifier = componentIdentifier(name);

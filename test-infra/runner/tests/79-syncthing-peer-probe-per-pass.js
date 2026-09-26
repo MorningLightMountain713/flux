@@ -115,7 +115,7 @@ describe('syncthing asks a peer once per pass, not once per folder', function ()
     // the "does anyone already hold this?" question the stub answers.
     for (const name of [appOne, appTwo]) {
       // eslint-disable-next-line no-await-in-loop
-      await seedSyncthingApp(env, { name, mode: 'r', index: subject });
+      await seedSyncthingApp(env, { name, syncMode: 'syncFirst', index: subject });
       // The stub joins each app's holder list, so both folders put the same
       // question to the same peer - the shape that charged the probe twice.
       // eslint-disable-next-line no-await-in-loop

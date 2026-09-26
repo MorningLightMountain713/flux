@@ -99,7 +99,7 @@ describe('mount forms on a replicated volume, and the directory a spec keeps loc
     await pushImage(appName, 'v1');
     const app = await buildSeedableSyncthingApp({
       name: appName,
-      mode: 'r',
+      syncMode: 'syncFirst',
       extraMounts: [
         'm:logs:/var/log/app',
         'ml:cache:/var/cache/app',
