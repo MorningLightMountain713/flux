@@ -1,3 +1,4 @@
+// fleet: 5
 // weight: heavy
 /*
  * An owner's specification update adds mount directories to a running app, and
