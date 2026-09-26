@@ -223,6 +223,38 @@ describe('peerNotification tests', () => {
       });
     });
 
+    // An empty v2 announcement reads to peers as "this node holds nothing" and releases
+    // every seat it reserved, so a cycle with nothing to claim sends nothing.
+    it('announces nothing when every installed app is departing', async () => {
+      listInstalledAppsStub.resolves([await installedRow(await v9Spec({ name: 'app1' }))]);
+      departingApps.enter('app1');
+      try {
+        await peerNotification.checkAndNotifyPeersOfRunningApps();
+      } finally {
+        departingApps.leave('app1');
+      }
+
+      expect(broadcastAllStub.called, 'sent an announcement').to.equal(false);
+    });
+
+    // THE ANNOUNCEMENT IS A CLAIM, NOT A HEALTH REPORT, and a whole snapshot: an app it
+    // leaves out is released at every peer. One this node cannot decrypt this cycle is
+    // still held here, so it is still named - only the mesh fields, which need its
+    // readable view, are left off.
+    it('announces an enterprise app whose spec cannot be decrypted', async () => {
+      const encInst = await installedRow(await sealedV8Spec({ name: 'encapp' }), { hash: ENC_HASH });
+      listInstalledAppsStub.resolves([await installedRow(await v9Spec({ name: 'app1' })), encInst]);
+      resolveInstantiatedStub.withArgs(sinon.match.same(encInst)).resolves(null);
+
+      await peerNotification.checkAndNotifyPeersOfRunningApps();
+
+      const { apps } = broadcastAllStub.firstCall.args[0];
+      expect(apps.map((app) => app.name).sort(), 'released a seat it still holds').to.deep.equal(['app1', 'encapp']);
+      expect(apps.find((app) => app.name === 'encapp').hash).to.equal(ENC_HASH);
+      const [meshRows] = meshFieldsStub.firstCall.args;
+      expect(meshRows.map((row) => row.name), 'mesh fields were asked of a spec with no readable view').to.deep.equal(['app1']);
+    });
+
     // broadcastedAt says when these apps were held here, and every consumer compares it
     // against other nodes' messages - so a stamp taken after the per-app reads would
     // out-rank a removal that happened while they ran.
