@@ -1525,6 +1525,100 @@ describe('appReconciler tests', () => {
       expect(volumeEvents[0].args[0]).to.equal('app');
     });
 
+    // The stamp exists to catch exactly this, and a substitution found while
+    // the volume is unmounted otherwise scored nothing until the node next
+    // booted - the boot sweep being the only thing that recorded it.
+    it('records a tampering event when the image is not the one this node made', async () => {
+      stubs.volumeService.ensureAppVolumeMounted.resolves({ mounted: false, reason: 'volume_image_unrecognised' });
+      await appReconciler.reconcile('www_app');
+      await appReconciler.reconcile('www_app');
+      const volumeEvents = stubs.appTamperingDetectionService.recordEvent.getCalls()
+        .filter((c) => c.args[1] === 'volume_image_unrecognised');
+      expect(volumeEvents).to.have.lengthOf(1);
+      expect(volumeEvents[0].args[0]).to.equal('app');
+    });
+
+    // Noting one fault must not swallow the other: they are different events
+    // about the same component, and the second is the one that says an image
+    // was replaced.
+    it('records both volume faults when one follows the other', async () => {
+      stubs.volumeService.ensureAppVolumeMounted.resolves({ mounted: false, reason: 'volume_file_missing' });
+      await appReconciler.reconcile('www_app');
+      stubs.volumeService.ensureAppVolumeMounted.resolves({ mounted: false, reason: 'volume_image_unrecognised' });
+      await appReconciler.reconcile('www_app');
+      const types = stubs.appTamperingDetectionService.recordEvent.getCalls().map((c) => c.args[1]);
+      expect(types).to.include('volume_missing');
+      expect(types).to.include('volume_image_unrecognised');
+    });
+
+    // The file is there and holds no filesystem the kernel knows, which is an
+    // image written over. It went unattributed until the node next restarted,
+    // because the boot sweep was the only thing that named it.
+    it('records an image that no longer holds a filesystem', async () => {
+      stubs.volumeService.ensureAppVolumeMounted.resolves({ mounted: false, reason: 'mount_failed: bad superblock' });
+
+      await appReconciler.reconcile('www_app');
+
+      const events = stubs.appTamperingDetectionService.recordEvent.getCalls()
+        .filter((c) => c.args[1] === 'volume_image_unrecognised');
+      expect(events).to.have.lengthOf(1);
+    });
+
+    // A host fault - a read-only disk, no loop device, a refused mount - had no
+    // producer but the boot sweep, so a fault that arose after boot was invisible
+    // in the dataset that counts them until the node restarted. The reconciler
+    // now records it under the same name mid-run.
+    it('records a host fault mid-run, not only at boot', async () => {
+      stubs.volumeService.ensureAppVolumeMounted.resolves({ mounted: false, reason: 'host_filesystem_readonly' });
+
+      await appReconciler.reconcile('www_app');
+
+      const events = stubs.appTamperingDetectionService.recordEvent.getCalls()
+        .filter((c) => c.args[1] === 'volume_host_fault');
+      expect(events).to.have.lengthOf(1);
+      expect(events[0].args[0]).to.equal('app');
+    });
+
+    // A removed component keeps no failure history. Keyed by identifier, a
+    // reinstall under the same name would otherwise have its first fault
+    // swallowed as one already recorded - and for the volume maps that fault
+    // is the record of somebody writing to the disk.
+    it('records a fault again for a component reinstalled under the same name', async () => {
+      stubs.volumeService.ensureAppVolumeMounted.resolves({ mounted: false, reason: 'volume_file_missing' });
+      await appReconciler.reconcile('www_app');
+
+      appReconciler.forgetDesiredState('www_app');
+      await appReconciler.reconcile('www_app');
+
+      const volumeEvents = stubs.appTamperingDetectionService.recordEvent.getCalls()
+        .filter((c) => c.args[1] === 'volume_missing');
+      expect(volumeEvents, 'the reinstalled component\'s fault was swallowed').to.have.lengthOf(2);
+    });
+
+    // Deleting the image alone records volume_missing. Deleting it and leaving
+    // another where the search reaches would otherwise be the quieter of the
+    // two, which is the wrong way round.
+    it('records an image found somewhere other than where it was recorded', async () => {
+      stubs.volumeService.ensureAppVolumeMounted.resolves({ mounted: true, alreadyMounted: false, imageMoved: true });
+
+      await appReconciler.reconcile('www_app');
+
+      const moved = stubs.appTamperingDetectionService.recordEvent.getCalls()
+        .filter((c) => c.args[1] === 'volume_image_moved');
+      expect(moved).to.have.lengthOf(1);
+      expect(moved[0].args[0]).to.equal('app');
+    });
+
+    it('records nothing when the image is where the record puts it', async () => {
+      stubs.volumeService.ensureAppVolumeMounted.resolves({ mounted: true, alreadyMounted: false, imageMoved: false });
+
+      await appReconciler.reconcile('www_app');
+
+      expect(
+        stubs.appTamperingDetectionService.recordEvent.getCalls().some((c) => c.args[1] === 'volume_image_moved'),
+      ).to.equal(false);
+    });
+
     it('ensures the volume is mounted before actuating a pending data wipe', async () => {
       appReconciler.requestStopAndClearData('www_app', 'test wipe');
       // requestStopAndClearData enqueues its own reconcile; wait for it to land
