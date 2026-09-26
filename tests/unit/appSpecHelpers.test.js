@@ -613,7 +613,7 @@ describe('appSpecHelpers tests', () => {
 
     it('prices dollars at the oracle rate and leaves FLUX alone', async () => {
       priceOracleState.getRateMessageHistory.restore();
-      sinon.stub(priceOracleState, 'getRateMessageHistory').returns({ resolveAt: () => ({ fluxUsdPriceE4: 5_000 }) });
+      sinon.stub(priceOracleState, 'getRateMessageHistory').returns({ resolveAt: () => ({ fluxUsdPriceE4: 5000 }) });
       const result = await appSpecHelpers.getAppFiatAndFluxPrice(markupSpec);
       // At $0.50/FLUX the same dollars cost twice the FLUX, each figure rounded to the cent on its own.
       expect(result.flux).to.equal(6.13);
