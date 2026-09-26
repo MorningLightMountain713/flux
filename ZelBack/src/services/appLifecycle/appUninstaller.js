@@ -536,6 +536,15 @@ async function uninstallComponent(component, options = {}) {
     },
   );
 
+  if (removed) {
+    // A rebuild is an explicit "make it run", so neither the operator's stop lock nor
+    // a stale controller verdict survives it. What the component has proven here does
+    // (appsRuntimeState.removeControllerState), and the image record goes only with
+    // the volume.
+    await appsRuntimeState.removeControllerState(component.identifier, { keepVolumeRecord: !removeVolumes });
+    if (onComponentRemoved) onComponentRemoved(component.identifier);
+  }
+
   if (removed && removeVolumes) {
     // Reclaim now-unneeded app-swap pool capacity (idempotent; no-op without the
     // new-mechanism host config). The container is already gone, so its swap pages

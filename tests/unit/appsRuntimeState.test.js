@@ -749,7 +749,7 @@ describe('appsRuntimeState tests', () => {
       expect(thrown, 'must not report a clear it did not make').to.be.an('error');
     });
 
-    it('keeps the image record and drops everything else', async () => {
+    it('keeps the run facts and the image record, and drops everything else', async () => {
       const replaced = [];
       const kept = proxyquire('../../ZelBack/src/services/appManagement/appsRuntimeState', {
         '../../lib/log': logStub,
@@ -758,6 +758,8 @@ describe('appsRuntimeState tests', () => {
           findOneInDatabase: async () => ({
             identifier: 'www_App',
             operatorStopped: true,
+            hasEverStarted: true,
+            hasSuccessfullyStarted: true,
             restartHistory: [1, 2, 3],
             volumeImagePath: '/mnt/data/img',
             volumeFsUuid: 'u-1',
@@ -775,6 +777,40 @@ describe('appsRuntimeState tests', () => {
       expect(replaced[0].volumeFsUuid).to.equal('u-1');
       expect(replaced[0].operatorStopped, 'the operator lock survived a redeploy').to.equal(undefined);
       expect(replaced[0].restartHistory).to.equal(undefined);
+      expect(replaced[0].hasSuccessfullyStarted, 'a rebuild erased that the component has run here').to.equal(true);
+      expect(replaced[0].hasEverStarted).to.equal(true);
+    });
+
+    it('drops the image record when the volume is recreated, and still keeps the run facts', async () => {
+      const replaced = [];
+      const kept = proxyquire('../../ZelBack/src/services/appManagement/appsRuntimeState', {
+        '../../lib/log': logStub,
+        '../dbHelper': {
+          databaseConnection: () => ({ db: () => ({}) }),
+          findOneInDatabase: async () => ({
+            identifier: 'www_App',
+            operatorStopped: true,
+            hasEverStarted: true,
+            hasSuccessfullyStarted: true,
+            restartHistory: [1, 2, 3],
+            volumeImagePath: '/mnt/data/img',
+            volumeFsUuid: 'u-1',
+          }),
+          replaceOneInDatabase: async (_db, _coll, _query, doc) => { replaced.push(doc); },
+          updateOneInDatabase: async () => {},
+          removeDocumentsFromCollection: async () => {},
+        },
+      });
+
+      await kept.removeControllerState('www_App', { keepVolumeRecord: false });
+
+      expect(replaced).to.have.lengthOf(1);
+      expect(replaced[0].volumeImagePath, 'a record of an image the rebuild deleted').to.equal(undefined);
+      expect(replaced[0].volumeFsUuid).to.equal(undefined);
+      expect(replaced[0].operatorStopped, 'the operator lock survived a redeploy').to.equal(undefined);
+      expect(replaced[0].restartHistory).to.equal(undefined);
+      expect(replaced[0].hasSuccessfullyStarted, 'a rebuild erased that the component has run here').to.equal(true);
+      expect(replaced[0].hasEverStarted).to.equal(true);
     });
 
     it('a read failure throws rather than reporting "no image recorded"', async () => {

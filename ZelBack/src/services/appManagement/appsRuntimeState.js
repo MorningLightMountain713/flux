@@ -545,29 +545,38 @@ async function recordExit(identifier, exitCode) {
 }
 
 /**
- * What survives a component being taken down without its volume.
+ * What survives a component being taken down and rebuilt.
  *
  * Named as what is KEPT rather than what is cleared, so a controller field
- * added later is dropped by a soft removal without anyone remembering to name
- * it here. Everything in this list is the node's account of its own storage,
- * which the removal is not touching.
+ * added later is dropped by a rebuild without anyone remembering to name it
+ * here. The run facts are this node's evidence that the component has run
+ * here, which the recovery gate reads to keep an established component rather
+ * than remove it over a rebuild that fails; they are cleared only by remove().
+ * The image record is the node's account of its own storage, kept while the
+ * volume is.
  */
-const SURVIVES_SOFT_REMOVAL = ['volumeImagePath', 'volumeFsUuid'];
+const SURVIVES_REBUILD = ['hasEverStarted', 'hasSuccessfullyStarted'];
+const SURVIVES_WITH_VOLUME = ['volumeImagePath', 'volumeFsUuid'];
 
 /**
- * Drops the controller state for a component whose volume stays where it is.
+ * Drops the controller state for a component being rebuilt: the operator's stop
+ * lock and every controller verdict, because a rebuild is an explicit "make it
+ * run". The run facts always survive (SURVIVES_REBUILD).
  *
- * A soft removal leaves the image on disk and the volume mounted, so the
+ * A rebuild that keeps the volume leaves the image on disk and mounted, so the
  * record of which image that is describes something that still exists. Losing
  * it sends the next boot back to searching the disks by filename, and stamps
- * whatever that search turns up as this node's own.
+ * whatever that search turns up as this node's own. A rebuild that recreates
+ * the volume records the new image itself, so the old record goes.
  *
  * THROWS rather than reporting a clear it did not make.
  *
  * @param {string} identifier
+ * @param {object} [options]
+ * @param {boolean} [options.keepVolumeRecord=true] - false when the volume is recreated
  * @throws When the state cannot be read or replaced.
  */
-async function removeControllerState(identifier) {
+async function removeControllerState(identifier, { keepVolumeRecord = true } = {}) {
   const database = collection();
   // Read without the swallow: a document that could not be READ is not a
   // document that is absent, and the difference is the operator stop lock.
@@ -582,7 +591,7 @@ async function removeControllerState(identifier) {
   );
   if (!state) return;
   const kept = { identifier, updatedAt: Date.now() };
-  SURVIVES_SOFT_REMOVAL.forEach((field) => {
+  [...SURVIVES_REBUILD, ...(keepVolumeRecord ? SURVIVES_WITH_VOLUME : [])].forEach((field) => {
     if (state[field] !== undefined) kept[field] = state[field];
   });
   await dbHelper.replaceOneInDatabase(database, appsRuntimeState, { identifier }, kept);
