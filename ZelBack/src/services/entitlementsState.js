@@ -26,11 +26,16 @@ function restorePolicyGroupBinary(message) {
   }
 }
 
-async function rebuildPolicyGroupState() {
+/**
+ * A policy-group history built from the stored rows, beside the live one. The
+ * live state is untouched until `installPolicyGroupState` swaps this in.
+ * @returns {Promise<{policyGroupHistory: object, featureEntitlements: object}>}
+ */
+async function buildPolicyGroupState() {
   const { PolicyGroupHistory, FeatureEntitlements } = await getSpecPolicy();
 
-  policyGroupHistory = new PolicyGroupHistory();
-  featureEntitlements = new FeatureEntitlements({ groupHistory: policyGroupHistory });
+  const history = new PolicyGroupHistory();
+  const entitlements = new FeatureEntitlements({ groupHistory: history });
 
   const db = dbHelper.databaseConnection();
   const database = db.db(config.get('database.chainparams.database'));
@@ -42,14 +47,19 @@ async function rebuildPolicyGroupState() {
   inChainOrder(docs, 'policyGroupMessages');
   for (const doc of docs) {
     restorePolicyGroupBinary(doc.message);
-    policyGroupHistory.add(doc.message, doc.height, doc.txIndex);
+    history.add(doc.message, doc.height, doc.txIndex);
   }
 
-  log.info(`Policy group state rebuilt: ${docs.length} policy-group messages`);
+  log.info(`Policy group state built: ${docs.length} policy-group messages`);
+  return { policyGroupHistory: history, featureEntitlements: entitlements };
 }
 
-function removeAtHeight(height) {
-  if (policyGroupHistory) policyGroupHistory.removeAtHeight(height);
+/**
+ * Make a built state the live one. Synchronous, so no reader sees part of it.
+ * @param {{policyGroupHistory: object, featureEntitlements: object}} built
+ */
+function installPolicyGroupState(built) {
+  ({ policyGroupHistory, featureEntitlements } = built);
 }
 
 function getPolicyGroupHistory() { return policyGroupHistory; }
@@ -98,8 +108,8 @@ async function assertSpecEntitled(canonicalSpec, owner, height, isEncrypted) {
 }
 
 module.exports = {
-  rebuildPolicyGroupState,
-  removeAtHeight,
+  buildPolicyGroupState,
+  installPolicyGroupState,
   getPolicyGroupHistory,
   getFeatureEntitlements,
   assertSpecEntitled,
