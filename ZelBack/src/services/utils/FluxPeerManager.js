@@ -865,7 +865,7 @@ class FluxPeerManager extends EventEmitter {
       // non-answer, and on a small fleet that is the difference between the
       // spawner starting and never starting at all. Observed doing exactly
       // that: a node asked its own address, timed out at zero completions, and
-      // never published SPAWNER_READY.
+      // never raised spawnerReady.
       if (ownKey && peer.key === ownKey) continue;
       if (!this.#isSyncCandidate(peer)) continue;
       eligible.push(peer);

@@ -430,7 +430,7 @@ async function startFluxFunctions() {
 
     // Migrate existing containers from 'unless-stopped'/'always' to 'no' restart policy.
     // Non-destructive — doesn't stop containers, just prevents Docker from auto-starting
-    // them on future daemon restarts. FluxOS manages container startup after dbReady.
+    // them on future daemon restarts. FluxOS manages container startup once appRegistryConsistent is up.
     dockerService.migrateContainerRestartPolicies();
 
     // Start the reconcile workqueue (the single container actuator) and the
@@ -599,7 +599,8 @@ async function startFluxFunctions() {
     // that stops exactly at the threshold has nothing left to re-trigger the decision.
     peerManager.on('peerThresholdReached', () => policyStore.noteThresholdReached());
     policyStore.start().catch((err) => log.error(`policyStore start error: ${err.message}`));
-    capabilities.onUpChange('nodeMessageCapable', (capable) => orchestrator.onMessageCapabilityChange(capable));
+    capabilities.onUp('nodeMessageCapable', () => orchestrator.onMessageCapabilityChange(true));
+    capabilities.onDown('nodeMessageCapable', () => orchestrator.onMessageCapabilityChange(false));
     // A grantor referees from the records this orchestrator's sync delivers,
     // so it refuses to referee until the orchestrator is READY — the live
     // level, read per ask; fail-closed until this line runs.
@@ -619,9 +620,7 @@ async function startFluxFunctions() {
     // service's direct listener is the production hook; the bus is the
     // harness's.
     grantorController.seedDelistedHolders().catch((error) => log.warn(`delisted-holder sweep failed: ${error.message}`));
-    capabilities.onUpChange('nodeMessageCapable', (capable) => {
-      if (capable) meshOrdinals.noteReturnFromUnreachability();
-    });
+    capabilities.onUp('nodeMessageCapable', () => meshOrdinals.noteReturnFromUnreachability());
     peerNotification.initialize();
     // Serve the flux-shutdownd drain socket (Arcane-only, best-effort).
     drainServer.start();
@@ -794,7 +793,7 @@ async function startFluxFunctions() {
     // startDbDependentServices) so this pure DB-record bookkeeping runs
     // concurrently with — not behind — that function's heavy app work.
     const runImageCacheBootMaintenance = async () => {
-      await globalState.waitForDbReady();
+      await capabilities.whenUp('appRegistryConsistent');
       await identityReady;
       await imageCacheMaintenance.runBootReconcile();
     };
@@ -805,7 +804,7 @@ async function startFluxFunctions() {
     // Services that read from zelappsinformation wait for the orchestrator
     // to finish rebuilding it rather than guessing a setTimeout delay.
     const startDbDependentServices = async () => {
-      await globalState.waitForDbReady();
+      await capabilities.whenUp('appRegistryConsistent');
       log.info('DB ready - starting db-dependent services');
       // Keep the iplocation table fresh. The cached copy is already back - restoreCachedTable ran with the schema prep above - so
       // what starts here is the fetch loop, whose ingest is the half worth

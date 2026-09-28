@@ -24,7 +24,6 @@ const contentSlotService = require('./contentSlotService');
 const telemetrySinkCache = require('../telemetrySinkCache');
 const telemetryConfigService = require('../telemetryConfigService');
 const telemetryIdentityService = require('../telemetryIdentityService');
-const globalState = require('../utils/globalState');
 const capabilities = require('../utils/capabilities');
 const fluxEventBus = require('../utils/fluxEventBus');
 const nodeConfirmationService = require('../nodeConfirmationService');
@@ -374,7 +373,7 @@ async function manageAppsOnBoot(bootContext) {
     }
 
     try {
-      await awaitWithin(globalState.waitForDbReady(), SYNC_TIMEOUT_MS, 'sync_timeout');
+      await awaitWithin(capabilities.whenUp('appRegistryConsistent'), SYNC_TIMEOUT_MS, 'sync_timeout');
     } catch (error) {
       if (error.message === 'sync_timeout') {
         log.error(`appStartupManager - DB not ready after ${SYNC_TIMEOUT_MS / 1000}s, removing all apps`);

@@ -19,6 +19,7 @@ describe('appStartupManager tests', () => {
   let appReconcilerStub;
   let appUninstallerStub;
   let globalStateStub;
+  let whenUpStub;
   let appQueryServiceStub;
 
   beforeEach(() => {
@@ -72,13 +73,13 @@ describe('appStartupManager tests', () => {
     const mockDb = { db: sinon.stub().returns('mockDatabase') };
     dbHelperStub.databaseConnection.returns(mockDb);
 
-    // The real module, with the database gate's wait spied. The gates stay CLOSED -
+    // The real module, with the capability waits stubbed to resolve. The gates stay CLOSED -
     // this suite is about a startup that has not finished - and the waits are
     // stubbed to resolve so a test does not sit on a gate nothing here opens.
     // On the module itself those two are the same fact, which is why this has to
     // be sinon over the real object rather than an object asserting both.
     globalStateStub = resetGlobalState();
-    sinon.stub(globalStateStub, 'waitForDbReady').resolves();
+    whenUpStub = sinon.stub(capabilities, 'whenUp').resolves();
     // What the boot reconcile needs before its decision counts as up.
     capabilities.resetForTests();
     capabilities.setForTests(['mongoReachable', 'dockerReachable', 'daemonReachable', 'confirmationStatusKnown'], true);
@@ -376,7 +377,7 @@ describe('appStartupManager tests', () => {
 
       await appStartupManager.manageAppsOnBoot(bootContext);
 
-      expect(globalStateStub.waitForDbReady.calledOnce).to.be.true;
+      expect(whenUpStub.withArgs('appRegistryConsistent').calledOnce).to.be.true;
       expect(appUninstallerStub.uninstallApplication.called).to.be.false;
     });
 
@@ -415,14 +416,14 @@ describe('appStartupManager tests', () => {
       const bootContext = { machineRebooted: true, downtimeMs: 60_000, cleanShutdown: true };
       appsRepositoryStub.sweepOffListRows.rejects(new Error('distinct failed'));
       await appStartupManager.manageAppsOnBoot(bootContext);
-      expect(globalStateStub.waitForDbReady.calledOnce).to.be.true;
+      expect(whenUpStub.withArgs('appRegistryConsistent').calledOnce).to.be.true;
       expect(appsRepositoryStub.sweepOffListRows.calledOnce).to.be.true;
-      expect(appsRepositoryStub.sweepOffListRows.calledAfter(globalStateStub.waitForDbReady)).to.be.true;
+      expect(appsRepositoryStub.sweepOffListRows.calledAfter(whenUpStub.withArgs('appRegistryConsistent'))).to.be.true;
       expect(logStub.warn.calledWithMatch(/off-list boot sweep failed/)).to.be.true;
       expect(capabilities.isUp('bootReconcileDecided')).to.equal(true);
     });
 
-    it('should wait for dbReady then start apps when machine rebooted with valid locations', async () => {
+    it('should wait for appRegistryConsistent then start apps when machine rebooted with valid locations', async () => {
       const bootContext = {
         machineRebooted: true, downtimeMs: 60_000, cleanShutdown: false,
       };
@@ -432,7 +433,7 @@ describe('appStartupManager tests', () => {
 
       await appStartupManager.manageAppsOnBoot(bootContext);
 
-      expect(globalStateStub.waitForDbReady.calledOnce).to.be.true;
+      expect(whenUpStub.withArgs('appRegistryConsistent').calledOnce).to.be.true;
       expect(logStub.info.calledWithMatch(/node confirmed, reconciling/)).to.be.true;
     });
 
@@ -452,7 +453,7 @@ describe('appStartupManager tests', () => {
       await appStartupManager.manageAppsOnBoot(bootContext);
 
       expect(appUninstallerStub.uninstallApplication.called).to.be.false;
-      expect(globalStateStub.waitForDbReady.calledOnce).to.be.true;
+      expect(whenUpStub.withArgs('appRegistryConsistent').calledOnce).to.be.true;
     });
 
     it('should not remove apps on first boot (no heartbeat history)', async () => {
@@ -465,7 +466,7 @@ describe('appStartupManager tests', () => {
       await appStartupManager.manageAppsOnBoot(bootContext);
 
       expect(appUninstallerStub.uninstallApplication.called).to.be.false;
-      expect(globalStateStub.waitForDbReady.calledOnce).to.be.true;
+      expect(whenUpStub.withArgs('appRegistryConsistent').calledOnce).to.be.true;
       expect(logStub.info.calledWithMatch(/First boot/)).to.be.true;
     });
 

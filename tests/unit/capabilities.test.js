@@ -158,11 +158,12 @@ describe('capabilities tests', () => {
       expect(seen).to.deep.equal([STATE.COMING_UP, STATE.UP]);
     });
 
-    it('reports to onUpChange only when whether it is up changes', () => {
+    it('reports only the up and down edges to onUp and onDown', () => {
       const mongo = capabilities.claim('mongoReachable', 'serviceManager');
       const localDb = capabilities.claim('localDbPrepared', 'serviceManager');
       const seen = [];
-      capabilities.onUpChange('localDbPrepared', (up) => seen.push(up));
+      capabilities.onUp('localDbPrepared', () => seen.push(true));
+      capabilities.onDown('localDbPrepared', () => seen.push(false));
       localDb.starting('preparing');
       localDb.raise('prepared');
       mongo.raise('up');

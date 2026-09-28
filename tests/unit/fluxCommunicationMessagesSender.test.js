@@ -18,6 +18,7 @@ const verificationHelper = require('../../ZelBack/src/services/verificationHelpe
 const { peerManager } = require('../../ZelBack/src/services/utils/peerState');
 const { PEER_SOURCE } = require('../../ZelBack/src/services/utils/FluxPeerSocket');
 const globalState = require('../../ZelBack/src/services/utils/globalState');
+const capabilities = require('../../ZelBack/src/services/utils/capabilities');
 const { getSpec } = require('../../ZelBack/src/services/utils/specLibs');
 
 chai.use(chaiAsPromised);
@@ -276,14 +277,14 @@ describe('fluxCommunicationMessagesSender tests', () => {
   // A node that does not know yet says so instead, decided at the moment of
   // asking so there is nothing cached to go stale.
   describe('a node that is not authoritative declines a sync request', () => {
-    let wasAuthoritative;
     let peer;
     let findStub;
 
     const sent = () => peer.sendAsync.getCalls().map((c) => JSON.parse(c.args[0]).data);
 
     beforeEach(() => {
-      wasAuthoritative = globalState.appStateAuthoritative;
+      capabilities.resetForTests();
+      globalState.appStateSyncDeadlinePassed = false;
       peer = { key: '198.51.100.9:16127', sendAsync: sinon.stub().resolves(), send: sinon.stub(), remoteClockOffsetMs: 0 };
       sinon.stub(fluxNetworkHelper, 'getFluxNodePublicKey').returns('0474eb4690689bb408139249eda7f361b7881c4254ccbe303d3b4d58c2b48897d0f070b44944941998551f9ea0e1befd96f13adf171c07c885e62d0c2af56d3dab');
       sinon.stub(fluxNetworkHelper, 'getFluxNodePrivateKey').returns('5JTeg79dTLzzHXoJPALMWuoGDM8QmLj4n5f6MeFjx8dzsirvjAh');
@@ -293,7 +294,8 @@ describe('fluxCommunicationMessagesSender tests', () => {
 
     afterEach(() => {
       sinon.restore();
-      globalState.appStateAuthoritative = wasAuthoritative;
+      capabilities.resetForTests();
+      globalState.appStateSyncDeadlinePassed = false;
     });
 
     // The temp stream is in this list for the same reason the other three are:
@@ -312,7 +314,6 @@ describe('fluxCommunicationMessagesSender tests', () => {
 
     responders.forEach(([fn, wireType, envelope]) => {
       it(`${fn} refuses and reads nothing from the store`, async () => {
-        globalState.appStateAuthoritative = false;
 
         await fluxCommunicationMessagesSender[fn](peer, 0);
 
@@ -325,8 +326,19 @@ describe('fluxCommunicationMessagesSender tests', () => {
       // THE TRAP. A network with nothing running legitimately answers with an
       // empty list, and if that reads as a refusal such a fleet never syncs at
       // all. Absent is not false here - the field must not be sent.
+      it(`${fn} answers once its own state sync is complete, or its deadline has passed`, async () => {
+        globalState.appStateSyncDeadlinePassed = true;
+        await fluxCommunicationMessagesSender[fn](peer, 0);
+        expect(sent()[0].refused, 'the deadline alone answers').to.equal(undefined);
+        peer.sendAsync.resetHistory();
+        globalState.appStateSyncDeadlinePassed = false;
+        capabilities.setForTests('appStateSynced', true);
+        await fluxCommunicationMessagesSender[fn](peer, 0);
+        expect(sent()[0].refused, 'the sync alone answers').to.equal(undefined);
+      });
+
       it(`${fn} answers an empty store without refusing`, async () => {
-        globalState.appStateAuthoritative = true;
+        capabilities.setForTests('appStateSynced', true);
 
         await fluxCommunicationMessagesSender[fn](peer, 0);
 
@@ -2279,19 +2291,13 @@ describe('fluxCommunicationMessagesSender tests', () => {
     // would blind a booting node to any standing certificate older than it;
     // the record TTL bounds those rows instead.
     //
-    // Authoritative is set here because this block was written before
-    // development's #1797 refusal gate: streamBatchedSync declines outright
-    // when globalState.appStateAuthoritative is false, so without this the
-    // responder never reaches the query and the assertion below reads as a
-    // missing durable branch rather than a refused request. The two sibling
-    // responder blocks in this file save and set it the same way.
-    let wasAuthoritativeForDurable;
+    // App state is synced here because streamBatchedSync declines outright
+    // without it, and the responder would then never reach the query.
     beforeEach(() => {
-      wasAuthoritativeForDurable = globalState.appStateAuthoritative;
-      globalState.appStateAuthoritative = true;
+      capabilities.setForTests('appStateSynced', true);
     });
     afterEach(() => {
-      globalState.appStateAuthoritative = wasAuthoritativeForDurable;
+      capabilities.resetForTests();
       sinon.restore();
     });
 

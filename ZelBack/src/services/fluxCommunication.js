@@ -1875,13 +1875,11 @@ function initializeDiscovery() {
   // The connection caps are sized from the fleet; read live, so they follow
   // the list rather than a copy taken on some schedule.
   peerManager.setFleetSizeSource(() => networkStateService.nodeCount());
-  capabilities.onUpChange('nodeConfirmed', (confirmed) => {
-    if (!confirmed) {
-      log.info('Confirmation lost, disconnecting all peers');
-      peerManager.disconnectAll();
-      return;
-    }
-
+  capabilities.onDown('nodeConfirmed', () => {
+    log.info('Confirmation lost, disconnecting all peers');
+    peerManager.disconnectAll();
+  });
+  capabilities.onUp('nodeConfirmed', () => {
     // Confirmed is not the same as ready to peer. Every message an inbound peer
     // sends is checked against the node list, so a peer that arrives before the
     // list does is refused however legitimate it is - there is nothing to

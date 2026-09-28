@@ -359,8 +359,8 @@ async function start(options = {}) {
 
   // Whether this node can be heard depends on the node list as much as on the
   // daemon: when the list arrives, ask again rather than wait for the next poll.
-  capabilities.onUpChange('nodeListPopulated', (up) => {
-    if (up) reevaluate().catch((error) => log.error(error));
+  capabilities.onUp('nodeListPopulated', () => {
+    reevaluate().catch((error) => log.error(error));
   });
 
   await poll();

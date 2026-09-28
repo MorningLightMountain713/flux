@@ -275,10 +275,10 @@ class AppSyncOrchestrator {
     this.#state = newState;
     fluxEventBus.publish('orchestrator:stateChanged', { from: prevState, to: newState });
     if (prevState === STATES.READY && newState !== STATES.READY) {
-      appSyncEvents.emit(EVENTS.READINESS_LOST);
+      capabilities.claim('spawnerReady', 'appSyncOrchestrator').lower(`orchestrator ${newState}`);
     }
     if (newState === STATES.READY && prevState !== STATES.READY) {
-      appSyncEvents.emit(EVENTS.SPAWNER_READY);
+      capabilities.claim('spawnerReady', 'appSyncOrchestrator').raise('orchestrator READY');
     }
   }
 
@@ -906,8 +906,9 @@ class AppSyncOrchestrator {
   #enterDegraded() {
     this.#setState(STATES.DEGRADED);
     this.#hashSyncComplete = false;
+    capabilities.claim('appMessagesSynced', 'appSyncOrchestrator').lower('degraded: hash sync starts over');
     this.#dbRebuilt = false;
-    globalState.dbReady = false;
+    capabilities.claim('appRegistryConsistent', 'appSyncOrchestrator').lower('degraded: registry rebuilt after the next hash sync');
     this.#resetSyncState();
     log.warn('AppSyncOrchestrator - Degraded, pausing spawner');
   }
@@ -1085,6 +1086,7 @@ class AppSyncOrchestrator {
         log.info('AppSyncOrchestrator - Hash sync complete');
       }
       this.#hashSyncComplete = true;
+      capabilities.claim('appMessagesSynced', 'appSyncOrchestrator').raise(`hash sync ran, ${result.missing} unresolved`);
       this.#nextHashRetryHeight = result.nextRetryHeight ?? (this.#lastBlockHeight + FALLBACK_RECHECK_BLOCKS);
       await this.#writeVersionMarker();
       await this.#rebuildDb();
@@ -1112,7 +1114,7 @@ class AppSyncOrchestrator {
       log.info('AppSyncOrchestrator - Rebuilding globalAppsInformation');
       await registryManager.reindexGlobalAppsInformation();
       this.#dbRebuilt = true;
-      globalState.dbReady = true;
+      capabilities.claim('appRegistryConsistent', 'appSyncOrchestrator').raise('registry rebuilt');
       log.info('AppSyncOrchestrator - DB ready');
     } catch (error) {
       log.error(`AppSyncOrchestrator - DB rebuild failed: ${error.message}`);
@@ -1201,22 +1203,20 @@ class AppSyncOrchestrator {
   }
 
   /**
-   * Mirror the state-sync verdict where the SYNC RESPONDER can read it.
-   *
-   * Called wherever an input to #isStateSyncReady moves, so the value never
-   * disagrees with the rule. A peer asking this node for app state gets a
-   * refusal while it is false, because an empty answer from a node that does
-   * not yet know is indistinguishable from an empty answer from a node that
-   * does - and the asker counts both as a completed survey.
-   *
-   * globalState.appStateAuthoritative had two readers in
-   * fluxCommunicationMessagesSender and NO writer, so it sat at its initial
-   * false for the life of the process and every node refused every ephemeral
-   * state-sync request it was ever asked.
+   * Publish whether this node's ephemeral app state is worth another node's
+   * survey: `appStateSynced` once its own state sync completed, and, for the
+   * sync responder's deadline, whether it has spent the block timer taking live
+   * broadcasts. Called wherever either input moves. A peer asking for app state
+   * is refused while neither holds, because an empty answer from a node that
+   * does not yet know is indistinguishable from an empty answer from one that
+   * does, and the asker counts both as a completed survey.
    * @returns {void}
    */
   #publishStateSyncAuthority() {
-    globalState.appStateAuthoritative = this.#isStateSyncReady();
+    const synced = capabilities.claim('appStateSynced', 'appSyncOrchestrator');
+    if (this.#stateSyncComplete) synced.raise('ephemeral state sync complete');
+    else synced.lower('ephemeral state sync not complete');
+    globalState.appStateSyncDeadlinePassed = this.#isBlockTimerExpired();
   }
 
   #isStateSyncReady() {
@@ -1509,7 +1509,8 @@ class AppSyncOrchestrator {
     // A stopped orchestrator is not authoritative about anything. Left true, a
     // node mid-shutdown goes on answering surveys from a view it is no longer
     // maintaining.
-    globalState.appStateAuthoritative = false;
+    capabilities.claim('appStateSynced', 'appSyncOrchestrator').lower('orchestrator stopped');
+    globalState.appStateSyncDeadlinePassed = false;
     if (this.#heartbeatInterval) {
       clearInterval(this.#heartbeatInterval);
       this.#heartbeatInterval = null;

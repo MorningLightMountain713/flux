@@ -27,7 +27,6 @@ const benchmarkService = require('./benchmarkService');
 const fluxNetworkhelper = require('./fluxNetworkHelper');
 const { extractIp } = require('./utils/socketAddressUtils');
 const fluxEventBus = require('./utils/fluxEventBus');
-const globalState = require('./utils/globalState');
 const { appSyncEvents, EVENTS: SYNC_EVENTS } = require('./utils/appSyncEvents');
 const { Privilege, authOf } = require('./utils/privileges');
 const { getSpecPolicy } = require('./utils/specLibs');
@@ -703,7 +702,7 @@ async function processOneBlock(blockHeight, isInsightExplorer, loopOptions) {
     // as being at the tip and took the tip path.
     isSynced = atTip;
     if (isSynced) {
-      if (globalState.dbReady && blockDataVerbose.height >= config.get('fluxapps.epochstart')) {
+      if (capabilities.isUp('appRegistryConsistent') && blockDataVerbose.height >= config.get('fluxapps.epochstart')) {
         // Desired-state convergence at every tip block: cheap (this node's
         // handful of installed rows), level-triggered, and the reconciler
         // staggers any actual redeploys itself — so evaluating every block

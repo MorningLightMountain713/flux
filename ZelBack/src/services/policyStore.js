@@ -163,7 +163,7 @@ const peerAsks = new PeerRequests();
 //
 // THE BUNDLE IS A DEPENDENCY OTHER MODULES HAVE, and until this existed the only way to
 // have one was to read getArtifact/getDocument at some moment and hope it was the right
-// one. ipLocationSync did exactly that: it starts on dbReady, which is a signal about the
+// one. ipLocationSync did exactly that: it starts on appRegistryConsistent, which is a signal about the
 // app database and says nothing about policy, and when it found nothing it backed off for
 // ten minutes. Both chains hang off the peer threshold, so which of them finished first
 // was a race - won in practice, guaranteed nowhere.

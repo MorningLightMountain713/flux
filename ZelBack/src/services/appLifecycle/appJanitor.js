@@ -1,11 +1,11 @@
 'use strict';
 
 const config = require('config');
+const capabilities = require('../utils/capabilities');
 const log = require('../../lib/log');
 const fluxNetworkHelper = require('../fluxNetworkHelper');
 const operationRegistry = require('../utils/operationRegistry');
 const fluxEventBus = require('../utils/fluxEventBus');
-const { appSyncEvents, EVENTS: SYNC_EVENTS } = require('../utils/appSyncEvents');
 const dockerService = require('../dockerService');
 const appsRepository = require('../appDatabase/appsRepository');
 const { getSpecBackend } = require('../utils/specLibs');
@@ -315,9 +315,7 @@ function start() {
   // Every entry into READY (first sync and every resync recovery): the node
   // just (re)gained an authoritative view, so clear what the registry says is
   // dead before the spawner starts choosing apps from it.
-  appSyncEvents.on(SYNC_EVENTS.SPAWNER_READY, () => {
-    runSweep('registryExpiry');
-  });
+  capabilities.onUp('spawnerReady', () => runSweep('registryExpiry'));
 }
 
 module.exports = {

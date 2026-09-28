@@ -12,6 +12,7 @@ const cacheManager = require('./utils/cacheManager').default;
 const { serialiseAndSignFluxBroadcast, getFluxMessageSignature } = require('./utils/fluxBroadcastHelper');
 const fluxEventBus = require('./utils/fluxEventBus');
 const globalState = require('./utils/globalState');
+const capabilities = require('./utils/capabilities');
 const { Privilege, authOf } = require('./utils/privileges');
 const appEventVerifier = require('./appMessaging/appEventVerifier');
 const appsRepository = require('./appDatabase/appsRepository');
@@ -488,7 +489,7 @@ async function respondWithTempMessages(peer, sinceTimestamp = 0) {
     // refuses all four streams or none, so a peer that would have been credited
     // for this one was never going to be credited for the other three either,
     // and readiness still arrives by the block fallback exactly as before.
-    if (!globalState.appStateAuthoritative) {
+    if (!capabilities.isUp('appStateSynced') && !globalState.appStateSyncDeadlinePassed) {
       log.info(`respondWithTempMessages - Refusing ${peer.key}: this node's app state is not authoritative yet`);
       await sendSignedMessage({ type: 'fluxapptempsync', version: 1, messages: [], done: true, refused: true }, peer, { awaitDrain: true });
       fluxEventBus.publish('sync:refused', { syncType: 'fluxapptempsync', peer: peer.key });
@@ -537,7 +538,7 @@ async function streamBatchedSync(peer, { sinceTimestamp, collectionName, validit
     // moment of asking, so there is nothing cached to go stale. Older nodes
     // send no such field, which reads as a refusal of nothing and leaves them
     // behaving exactly as they do now.
-    if (!globalState.appStateAuthoritative) {
+    if (!capabilities.isUp('appStateSynced') && !globalState.appStateSyncDeadlinePassed) {
       log.info(`${label} - Refusing ${peer.key}: this node's app state is not authoritative yet`);
       await sendSignedMessage({ type: messageType, messages: [], done: true, refused: true }, peer, { awaitDrain: true });
       fluxEventBus.publish('sync:refused', { syncType: messageType, peer: peer.key });

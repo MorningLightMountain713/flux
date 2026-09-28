@@ -81,13 +81,15 @@ describe('fluxCommunication tests', () => {
     // before the list arrives is refused however legitimate it is. Measured at
     // 1391ms on a live node holding 6091 nodes - short, but it is the whole of
     // the window the node was turning real peers away in.
-    let onConfirmationChange;
+    let onUp;
+    let onDown;
     let onReady;
     let allowConnections;
     let disconnectAll;
 
     beforeEach(() => {
-      onConfirmationChange = sinon.stub(capabilities, 'onUpChange');
+      onUp = sinon.stub(capabilities, 'onUp');
+      onDown = sinon.stub(capabilities, 'onDown');
       onReady = sinon.stub(networkStateService, 'onReady');
       allowConnections = sinon.stub(peerManager, 'allowConnections');
       disconnectAll = sinon.stub(peerManager, 'disconnectAll');
@@ -98,14 +100,15 @@ describe('fluxCommunication tests', () => {
       sinon.restore();
     });
 
-    // Runs initializeDiscovery and hands back the confirmation callback it
-    // registered, which is the only way into this code.
+    // Runs initializeDiscovery and hands back one callback for both edges of
+    // nodeConfirmed it registered, which are the only way into this code.
     function confirmationHandler() {
       fluxCommunication.initializeDiscovery();
 
-      expect(onConfirmationChange.calledOnceWith('nodeConfirmed')).to.equal(true);
+      expect(onUp.calledOnceWith('nodeConfirmed')).to.equal(true);
+      expect(onDown.calledOnceWith('nodeConfirmed')).to.equal(true);
 
-      return onConfirmationChange.firstCall.args[1];
+      return (confirmed) => (confirmed ? onUp.firstCall.args[1]() : onDown.firstCall.args[1]());
     }
 
     it('does not accept peers on confirmation alone', () => {
@@ -1557,7 +1560,8 @@ describe('fluxCommunication tests', () => {
     });
 
     it('gives the peer manager the fleet size from the network state', () => {
-      sinon.stub(capabilities, 'onUpChange');
+      sinon.stub(capabilities, 'onUp');
+      sinon.stub(capabilities, 'onDown');
       sinon.stub(networkStateService, 'nodeCount').returns(1234);
 
       fluxCommunication.initializeDiscovery();

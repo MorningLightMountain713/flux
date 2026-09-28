@@ -57,6 +57,13 @@ describe('nodeConfirmationService', () => {
     capabilities.resetForTests();
   });
 
+  // One callback for both edges: called with true as the capability comes up,
+  // false as it stops being up.
+  function onEdges(name, callback) {
+    capabilities.onUp(name, () => callback(true));
+    capabilities.onDown(name, () => callback(false));
+  }
+
   function setupConfirmed() {
     getFluxNodeStatusStub.resolves({ status: 'success', data: { status: 'CONFIRMED', last_confirmed_height: 1000 } });
     getFluxNodePublicKeyStub.resolves('04abcdef1234567890');
@@ -174,7 +181,7 @@ describe('nodeConfirmationService', () => {
   describe('nodeMessageCapable', () => {
     it('should fire callback on false→true transition', async () => {
       const callback = sinon.spy();
-      capabilities.onUpChange('nodeMessageCapable', callback);
+      onEdges('nodeMessageCapable', callback);
 
       setupConfirmed();
       await service.start();
@@ -185,7 +192,7 @@ describe('nodeConfirmationService', () => {
 
     it('should fire callback on true→false transition', async () => {
       const callback = sinon.spy();
-      capabilities.onUpChange('nodeMessageCapable', callback);
+      onEdges('nodeMessageCapable', callback);
 
       setupConfirmed();
       await service.start();
@@ -201,7 +208,7 @@ describe('nodeConfirmationService', () => {
 
     it('should not fire callback when state unchanged', async () => {
       const callback = sinon.spy();
-      capabilities.onUpChange('nodeMessageCapable', callback);
+      onEdges('nodeMessageCapable', callback);
 
       setupNotConfirmed();
       await service.start();
@@ -212,7 +219,7 @@ describe('nodeConfirmationService', () => {
 
     it('should not fire when confirmed changes but canSendMessages stays false', async () => {
       const callback = sinon.spy();
-      capabilities.onUpChange('nodeMessageCapable', callback);
+      onEdges('nodeMessageCapable', callback);
 
       setupNotConfirmed();
       await service.start();
@@ -225,7 +232,7 @@ describe('nodeConfirmationService', () => {
 
     it('should fire when IP appears in deterministic list after delay', async () => {
       const callback = sinon.spy();
-      capabilities.onUpChange('nodeMessageCapable', callback);
+      onEdges('nodeMessageCapable', callback);
 
       setupConfirmedButIpMissing();
       await service.start();
@@ -302,7 +309,7 @@ describe('nodeConfirmationService', () => {
   describe('nodeConfirmed', () => {
     it('should fire on false→true transition', async () => {
       const callback = sinon.spy();
-      capabilities.onUpChange('nodeConfirmed', callback);
+      onEdges('nodeConfirmed', callback);
 
       setupConfirmed();
       await service.start();
@@ -313,7 +320,7 @@ describe('nodeConfirmationService', () => {
 
     it('should fire on true→false transition', async () => {
       const callback = sinon.spy();
-      capabilities.onUpChange('nodeConfirmed', callback);
+      onEdges('nodeConfirmed', callback);
 
       setupConfirmed();
       await service.start();
@@ -327,7 +334,7 @@ describe('nodeConfirmationService', () => {
 
     it('should not fire when RPC is unreachable', async () => {
       const callback = sinon.spy();
-      capabilities.onUpChange('nodeConfirmed', callback);
+      onEdges('nodeConfirmed', callback);
 
       setupConfirmed();
       await service.start();
@@ -341,7 +348,7 @@ describe('nodeConfirmationService', () => {
 
     it('should not fire when daemon returns error status', async () => {
       const callback = sinon.spy();
-      capabilities.onUpChange('nodeConfirmed', callback);
+      onEdges('nodeConfirmed', callback);
 
       setupConfirmed();
       await service.start();
@@ -356,8 +363,8 @@ describe('nodeConfirmationService', () => {
     it('should fire independently from message capability', async () => {
       const confirmCb = sinon.spy();
       const messageCb = sinon.spy();
-      capabilities.onUpChange('nodeConfirmed', confirmCb);
-      capabilities.onUpChange('nodeMessageCapable', messageCb);
+      onEdges('nodeConfirmed', confirmCb);
+      onEdges('nodeMessageCapable', messageCb);
 
       setupConfirmedButIpMissing();
       await service.start();
@@ -512,7 +519,7 @@ describe('nodeConfirmationService', () => {
     // once the chain is more than 640 blocks past that.
     it('should lose confirmation once the chain passes the expiration height', async () => {
       const confirmCb = sinon.spy();
-      capabilities.onUpChange('nodeConfirmed', confirmCb);
+      onEdges('nodeConfirmed', confirmCb);
 
       setupConfirmed();
       isDaemonSyncedStub.returns({ data: { height: 1200, synced: true } });
@@ -640,7 +647,7 @@ describe('nodeConfirmationService', () => {
 
     it('should lose confirmation when the pushed status is no longer CONFIRMED', async () => {
       const confirmCb = sinon.spy();
-      capabilities.onUpChange('nodeConfirmed', confirmCb);
+      onEdges('nodeConfirmed', confirmCb);
 
       setupConfirmed();
       await service.start();

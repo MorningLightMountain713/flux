@@ -83,7 +83,6 @@ const specReconciler = require('./specReconciler');
 const relationshipResolver = require('./relationshipResolver');
 const { NodeCondition } = require('./nodeConditions');
 const pendingTeardownStore = require('./pendingTeardownStore');
-const { appSyncEvents, EVENTS: SYNC_EVENTS } = require('../utils/appSyncEvents');
 const fluxEventBus = require('../utils/fluxEventBus');
 
 let appsCountAvailableToInstallOnMyNode = 0;
@@ -153,16 +152,16 @@ function isPinnedContended(placement, minInstances) {
 }
 
 function initialize() {
-  appSyncEvents.on(SYNC_EVENTS.SPAWNER_READY, () => {
-    log.info('AppSyncOrchestrator signals ready, starting spawn loop');
+  capabilities.onUp('spawnerReady', () => {
+    log.info('spawnerReady up, starting spawn loop');
     globalState.spawnerPaused = false;
     fluxEventBus.publish('spawner:resumed', {});
     if (!spawnLoopRunning) {
       spawnLoop();
     }
   });
-  appSyncEvents.on(SYNC_EVENTS.READINESS_LOST, () => {
-    log.warn('AppSyncOrchestrator signals readiness lost, spawner will pause on next iteration');
+  capabilities.onDown('spawnerReady', () => {
+    log.warn('spawnerReady down, spawner will pause on next iteration');
     globalState.spawnerPaused = true;
     fluxEventBus.publish('spawner:paused', {});
   });
@@ -171,7 +170,7 @@ function initialize() {
 async function spawnLoop() {
   spawnLoopRunning = true;
   // Start each loop incarnation with a clean latch so a wake latched while paused never
-  // skips the first cycle's delay after a SPAWNER_READY restart - the latch stays strictly
+  // skips the first cycle's delay after a spawnerReady restart - the latch stays strictly
   // intra-run.
   wakePending = false;
   try {
@@ -335,7 +334,7 @@ async function trySpawningGlobalApplication() {
       return installDelay;
     }
 
-    if (!globalState.dbReady) {
+    if (!capabilities.isUp('appRegistryConsistent')) {
       log.info('DB not yet ready, waiting for orchestrator');
       fluxEventBus.publish('spawner:blocked', { reason: 'db_not_ready' });
       return installDelay;

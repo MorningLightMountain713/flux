@@ -17,6 +17,7 @@ const deploymentProvider = require('../../ZelBack/src/services/appRuntime/deploy
 const generalService = require('../../ZelBack/src/services/generalService');
 const fluxNetworkHelper = require('../../ZelBack/src/services/fluxNetworkHelper');
 const globalState = require('../../ZelBack/src/services/utils/globalState');
+const capabilities = require('../../ZelBack/src/services/utils/capabilities');
 const imageManager = require('../../ZelBack/src/services/appSecurity/imageManager');
 const serviceHelper = require('../../ZelBack/src/services/serviceHelper');
 const dockerService = require('../../ZelBack/src/services/dockerService');
@@ -144,12 +145,12 @@ describe('specReconciler tests', () => {
   let sweepStub;
   let appLocationStub;
 
-  function setup({ installed = [], globalRows = [], synced = true, dbReady = true } = {}) {
+  function setup({ installed = [], globalRows = [], synced = true, registryConsistent = true } = {}) {
     sinon.stub(serviceHelper, 'delay').resolves();
     sinon.stub(generalService, 'checkSynced').resolves(synced);
     sinon.stub(generalService, 'obtainNodeCollateralInformation').resolves({ txhash: OUTPOINT_TXID, txindex: 0 });
     sinon.stub(fluxNetworkHelper, 'getLocalSocketAddress').resolves(LOCAL_IP);
-    sinon.stub(globalState, 'dbReady').get(() => dbReady);
+    sinon.stub(capabilities, 'isUp').callsFake((name) => name === 'appRegistryConsistent' && registryConsistent);
     sinon.stub(appsRepository, 'listInstalledApps').resolves(installed);
     sinon.stub(appsRepository, 'listGlobalAppInfo').resolves(globalRows);
     sinon.stub(registryManager, 'getScannedHeight').resolves(1_000_000);
@@ -174,7 +175,7 @@ describe('specReconciler tests', () => {
     });
 
     it('does nothing while the db is not ready', async () => {
-      setup({ dbReady: false, installed: [await specWith({}, { expired: true })] });
+      setup({ registryConsistent: false, installed: [await specWith({}, { expired: true })] });
       await specReconciler.requestFullConvergence({ reason: 'test' });
       expect(uninstallStub.called).to.equal(false);
     });
