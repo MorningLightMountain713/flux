@@ -37,7 +37,7 @@ import { pushImage } from '../framework/registry-helper.js';
 import { buildSeedableApp, buildSeedableUpdate } from '../framework/seed-helper.js';
 import { REGISTRY_REPO_HOST } from '../framework/subnet-config.js';
 import { bootAndPeer, installOnNodes, seedSpecUpdate } from '../framework/reconciler-suite.js';
-import { getAppContainerId } from '../framework/container.js';
+import { getAppContainerId, execInContainer } from '../framework/container.js';
 import { waitFor } from '../framework/wait.js';
 import { driveUntil, stopTicker } from '../framework/daemon-control.js';
 import { dumpLogsOnFailure } from '../framework/log-on-failure.js';
@@ -47,6 +47,7 @@ describe('an app whose specification changed is reinstalled at the new specifica
   dumpLogsOnFailure(() => env);
 
   const appName = `e2especupd${Date.now()}`;
+  const SECOND_SPEC_ENV = 'SPEC_GENERATION=2';
   let holder;
   let app;
   let containerBefore;
@@ -111,10 +112,11 @@ describe('an app whose specification changed is reinstalled at the new specifica
     this.timeout(1500000);
 
     const updated = await buildSeedableUpdate(app, (spec) => {
-      // Not hdd: that takes the hard path, which reformats the data volume. A
-      // description change is a change the detector must act on and the cheapest
-      // one that leaves everything else about the app alone.
-      spec.compose[0].description = 'spec update test container, second specification';
+      // Not hdd: that takes the hard path, which reformats the data volume. An
+      // environment parameter is carried by the container and touches nothing
+      // else about the app; a field the container does not carry, such as a
+      // component's description, replaces nothing.
+      spec.compose[0].environmentParameters = [SECOND_SPEC_ENV];
     });
     expect(updated.hash, 'an update that hashes the same is not an update').to.not.equal(app.hash);
 
@@ -144,8 +146,8 @@ describe('an app whose specification changed is reinstalled at the new specifica
 
     const installed = await localSpec(holder);
     expect(installed, 'the app is still installed').to.not.be.null;
-    expect(installed.compose[0].description, 'the row carries the new specification, not just its hash')
-      .to.equal('spec update test container, second specification');
+    expect(installed.compose[0].environmentParameters, 'the row carries the new specification, not just its hash')
+      .to.deep.equal([SECOND_SPEC_ENV]);
 
     // A row rewritten without the container being replaced is the failure this
     // exists to catch: the node would report the new specification while running
@@ -153,5 +155,7 @@ describe('an app whose specification changed is reinstalled at the new specifica
     const containerAfter = await getAppContainerId(holder.container, appName, appName);
     expect(containerAfter, 'the app is running after the reinstall').to.be.a('string');
     expect(containerAfter, 'the component was replaced, not just re-recorded').to.not.equal(containerBefore);
+    const { stdout } = await execInContainer(holder.container, `docker inspect --format '{{json .Config.Env}}' ${containerAfter}`);
+    expect(JSON.parse(stdout.trim()), 'the replacement runs the new specification').to.include(SECOND_SPEC_ENV);
   });
 });
