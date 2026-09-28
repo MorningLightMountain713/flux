@@ -7,7 +7,6 @@ const { AsyncLock } = require('./asyncLock');
 // These need to be shared across all modules to maintain the original business logic
 
 let shutdownInProgress = false;
-const daemonReadyGate = new AsyncGate();
 const dbReadyGate = new AsyncGate();
 let appStateAuthoritative = false;
 let appSyncState = 'INITIALIZING';
@@ -234,9 +233,6 @@ module.exports = {
   // shutdown stops and drains stays stopped and drained.
   get shutdownInProgress() { return shutdownInProgress; },
   setShutdownInProgressTrue() { shutdownInProgress = true; },
-  get daemonReady() { return daemonReadyGate.ready; },
-  set daemonReady(value) { if (value) daemonReadyGate.open(); else daemonReadyGate.close(); },
-  waitForDaemonReady() { return daemonReadyGate.wait(); },
 
 
   get dbReady() { return dbReadyGate.ready; },

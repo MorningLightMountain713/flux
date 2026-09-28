@@ -12,6 +12,7 @@ const appJanitor = require('../../ZelBack/src/services/appLifecycle/appJanitor')
 const portManager = require('../../ZelBack/src/services/appNetwork/portManager');
 const daemonServiceBlockchainRpcs = require('../../ZelBack/src/services/daemonService/daemonServiceBlockchainRpcs');
 const daemonServiceMiscRpcs = require('../../ZelBack/src/services/daemonService/daemonServiceMiscRpcs');
+const capabilities = require('../../ZelBack/src/services/utils/capabilities');
 const daemonServiceUtils = require('../../ZelBack/src/services/daemonService/daemonServiceUtils');
 const dbHelper = require('../../ZelBack/src/services/dbHelper');
 const globalState = require('../../ZelBack/src/services/utils/globalState');
@@ -31,6 +32,13 @@ chai.use(chaiAsPromised);
 const { expect } = chai;
 
 describe('explorerService tests', () => {
+  // The daemon is synced unless a test says otherwise.
+  beforeEach(() => {
+    capabilities.resetForTests();
+    capabilities.setForTests('daemonSynced', true);
+  });
+  after(() => capabilities.resetForTests());
+
   before(requireMongo);
 
   // initiateBlockProcessor ends by starting the scan loop. Stop it between tests so a
