@@ -16,8 +16,15 @@ const { getSpecBackend } = require('../utils/specLibs');
  * stored with that record's chain facts (txid, height, payment, block time),
  * never with the sender's. It is stored only when its contents hash to the
  * payment's hash and, for an encrypted v9 message, its Arcane attestation
- * verifies. Nothing else is judged here: who may sign it and what it had to pay
- * are decided from the stored message and this node's chain record.
+ * verifies. Nothing else is judged here: whether its spec is valid, who may sign
+ * it and what it had to pay are decided from the stored message and this node's
+ * chain record.
+ *
+ * A legacy message's hash covers its spec as sent, so one whose spec this
+ * library cannot read is stored when that text hashes to the payment, and the
+ * decider refuses it as invalid. A v2 message's hash covers only its content
+ * hash; its contents are bound to that by reading the spec, so a v2 message
+ * whose spec this library cannot read cannot be checked, and is not stored.
  *
  * Storing marks the payment record resolved.
  */
@@ -129,6 +136,33 @@ async function paymentRecords(hashes) {
 }
 
 /**
+ * A legacy message whose spec this library cannot read, as stored: its contents
+ * as sent, with this node's chain facts. Null unless the spec as sent hashes to
+ * the paid hash by the legacy hash, which a v2 message's hash never is.
+ * @param {object} contents
+ * @param {{txid: string, height: number, value: number}} record
+ * @returns {Promise<object|null>}
+ */
+async function unreadableLegacyMessage(contents, record) {
+  const spec = contents.appSpecifications;
+  if (!spec || typeof spec !== 'object') return null;
+  const { computeMessageHash } = await getSpecBackend();
+  const hash = computeMessageHash(contents.type, contents.version, spec, contents.timestamp, contents.signature);
+  if (hash !== contents.hash) return null;
+  return {
+    type: contents.type,
+    version: contents.version,
+    appSpecifications: spec,
+    hash: contents.hash,
+    timestamp: contents.timestamp,
+    signature: contents.signature,
+    txid: serviceHelper.ensureString(record.txid),
+    height: serviceHelper.ensureNumber(record.height),
+    valueSat: serviceHelper.ensureNumber(record.value),
+  };
+}
+
+/**
  * Why a message cannot be stored against a payment record, or null when it can.
  * @param {object} event
  * @returns {Promise<string|null>}
@@ -145,9 +179,10 @@ async function refusal(event) {
  * Stores app messages whose payments this node's scan recorded.
  *
  * @param {object[]} candidates Messages' contents, from any route.
- * @returns {Promise<{stored: Array<{event: object, record: object}>, alreadyStored: string[],
- *   unpaid: string[], refused: Array<{hash: string, reason: string}>}>} `stored`
- *   holds each message stored by this call, as its event and the payment record
+ * @returns {Promise<{stored: Array<{hash: string, event: ?object, record: object}>,
+ *   alreadyStored: string[], unpaid: string[], refused: Array<{hash: string, reason: string}>}>}
+ *   `stored` holds each message stored by this call, as its event (null for a
+ *   legacy message whose spec this library cannot read) and the payment record
  *   it was stored with, in the order given.
  */
 async function storeConfirmedMessages(candidates) {
@@ -181,21 +216,26 @@ async function storeConfirmedMessages(candidates) {
       result.unpaid.push(hash);
       continue;
     }
+    let event;
     try {
       // eslint-disable-next-line no-await-in-loop
-      const event = await confirmedEvent(candidate, record);
-      // eslint-disable-next-line no-await-in-loop
-      const reason = await refusal(event);
-      if (reason) result.refused.push({ hash, reason });
-      else toInsert.push({ event, record });
+      event = await confirmedEvent(candidate, record);
     } catch (error) {
-      result.refused.push({ hash, reason: error.message });
+      // eslint-disable-next-line no-await-in-loop
+      const doc = await unreadableLegacyMessage(candidate, record);
+      if (doc) toInsert.push({ hash, event: null, doc, record });
+      else result.refused.push({ hash, reason: error.message });
+      continue;
     }
+    // eslint-disable-next-line no-await-in-loop
+    const reason = await refusal(event);
+    if (reason) result.refused.push({ hash, reason });
+    else toInsert.push({ hash, event, doc: event.serialize(), record });
   }
 
   if (toInsert.length) {
     const failedAt = new Set();
-    await dbHelper.insertManyToDatabase(messagesDb, globalAppsMessages, toInsert.map(({ event }) => event.serialize()), { ordered: false })
+    await dbHelper.insertManyToDatabase(messagesDb, globalAppsMessages, toInsert.map(({ doc }) => doc), { ordered: false })
       .catch((error) => {
         // A message another route stored meanwhile is already stored; any other
         // failure is this node's and is raised.
@@ -203,13 +243,13 @@ async function storeConfirmedMessages(candidates) {
         if (writeErrors.length === 0 || writeErrors.some((writeError) => writeError.code !== DUPLICATE_KEY)) throw error;
         writeErrors.forEach((writeError) => failedAt.add(writeError.index));
       });
-    toInsert.forEach((entry, index) => {
-      if (failedAt.has(index)) result.alreadyStored.push(entry.event.hash);
-      else result.stored.push(entry);
+    toInsert.forEach(({ hash, event, record }, index) => {
+      if (failedAt.has(index)) result.alreadyStored.push(hash);
+      else result.stored.push({ hash, event, record });
     });
   }
 
-  const resolved = [...result.stored.map(({ event }) => event.hash), ...result.alreadyStored];
+  const resolved = [...result.stored.map(({ hash }) => hash), ...result.alreadyStored];
   if (resolved.length) {
     await dbHelper.bulkWriteInDatabase(daemonDb, appsHashesCollection, resolved.map((hash) => ({
       updateOne: { filter: { hash }, update: { $set: { message: true, messageNotFound: false } } },
