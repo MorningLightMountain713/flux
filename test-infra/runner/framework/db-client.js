@@ -86,7 +86,8 @@ export function dbClient(nodeNum) {
       const row = await globalDb.collection('appstateevents').findOne(
         { type: 'masterlease', dedupKey: `masterlease:${appName}/${role}` },
       );
-      return row?.data ?? null;
+      // the row holds the record as signed, with this node's verdict beside it
+      return row?.data ? { ...row.data, proofRank: row.proofRank, verified: row.verified } : null;
     },
 
     // Delete this node's synced copy of the record — stages "the node missed
