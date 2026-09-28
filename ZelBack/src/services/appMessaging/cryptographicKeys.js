@@ -5,7 +5,7 @@ const messageHelper = require('../messageHelper');
 const verificationHelper = require('../verificationHelper');
 const serviceHelper = require('../serviceHelper');
 const benchmarkService = require('../benchmarkService');
-const daemonServiceMiscRpcs = require('../daemonService/daemonServiceMiscRpcs');
+const daemonStatus = require('../daemonService/daemonStatus');
 const log = require('../../lib/log');
 const { Privilege, authOf } = require('../utils/privileges');
 const { verifyAppNameAndOwner } = require('../utils/appIdentity');
@@ -74,7 +74,7 @@ async function getPublicKey(req, res) {
         throw new Error('Input parameters missing.');
       }
       verifyAppNameAndOwner(appSpecification.name, appSpecification.owner);
-      const syncStatus = daemonServiceMiscRpcs.isDaemonSynced();
+      const syncStatus = daemonStatus.isDaemonSynced();
       if (!syncStatus.data.synced) {
         throw new Error('Daemon not yet synced.');
       }

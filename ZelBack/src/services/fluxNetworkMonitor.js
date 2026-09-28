@@ -12,7 +12,7 @@ const fluxCommunicationUtils = require('./fluxCommunicationUtils');
 const fluxCommunicationMessagesSender = require('./fluxCommunicationMessagesSender');
 const { peerManager } = require('./utils/FluxPeerManager');
 const geolocationService = require('./geolocationService');
-const daemonServiceMiscRpcs = require('./daemonService/daemonServiceMiscRpcs');
+const daemonStatus = require('./daemonService/daemonStatus');
 const nodeConfirmationService = require('./nodeConfirmationService');
 const daemonServiceFluxnodeRpcs = require('./daemonService/daemonServiceFluxnodeRpcs');
 const cacheManager = require('./utils/cacheManager').default;
@@ -412,7 +412,7 @@ async function checkDeterministicNodesCollisions() {
     // another precatuion might be comparing node list on multiple nodes. evaulate in the future
     const localSocketAddr = await fluxNetworkHelper.getLocalSocketAddress();
     if (localSocketAddr) {
-      const syncStatus = daemonServiceMiscRpcs.isDaemonSynced();
+      const syncStatus = daemonStatus.isDaemonSynced();
       if (!syncStatus.data.synced) {
         setTimeout(() => {
           checkDeterministicNodesCollisions();

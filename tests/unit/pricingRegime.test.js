@@ -242,7 +242,7 @@ describe('pricingRegime', () => {
           databaseConnection: () => ({ db: () => ({}) }),
           findOneInDatabase: sinon.stub().resolves(null),
         },
-        '../daemonService/daemonServiceMiscRpcs': {
+        '../daemonService/daemonStatus': {
           isDaemonSynced: () => ({ data: { synced: true, height: HEIGHT } }),
         },
         '../appDatabase/appsRepository': {

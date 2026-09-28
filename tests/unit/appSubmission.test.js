@@ -62,7 +62,7 @@ describe('appSubmission tests', () => {
       '../marketplace/marketplaceTemplateCache': stubs.marketplaceTemplateCache,
       '../appDatabase/registryManager': stubs.registryManager,
       '../appPlacement/placementFeasibility': stubs.placementFeasibility,
-      '../daemonService/daemonServiceMiscRpcs': stubs.daemonServiceMiscRpcs,
+      '../daemonService/daemonStatus': stubs.daemonStatus,
       '../appDatabase/appsRepository': stubs.appsRepository,
       '../utils/enterpriseNetwork': stubs.enterpriseNetwork,
       '../appMessaging/messageVerifier': {},
@@ -112,7 +112,7 @@ describe('appSubmission tests', () => {
         getTemplate: sinon.stub().resolves({ spec: TEMPLATE_BODY, userConfigurable: [] }),
       },
       registryManager: { checkApplicationRegistrationNameConflicts: sinon.stub().resolves() },
-      daemonServiceMiscRpcs: { isDaemonSynced: sinon.stub().returns({ data: { synced: true, height: 100 } }) },
+      daemonStatus: { isDaemonSynced: sinon.stub().returns({ data: { synced: true, height: 100 } }) },
       appsRepository: {
         getGlobalAppInfo: sinon.stub().resolves(null),
         getLatestPermanentMessage: sinon.stub().resolves(null),
@@ -723,7 +723,7 @@ describe('appSubmission tests', () => {
 
     it('the registration preflight asks it before quoting a price', async () => {
       appSubmission = load({
-        '../daemonService/daemonServiceMiscRpcs': {
+        '../daemonService/daemonStatus': {
           isDaemonSynced: () => ({ data: { synced: true, height: 2_000_000 } }),
         },
       });
@@ -744,7 +744,7 @@ describe('appSubmission tests', () => {
 
     it('a refused registration is answered as an error, with the reason', async () => {
       appSubmission = load({
-        '../daemonService/daemonServiceMiscRpcs': {
+        '../daemonService/daemonStatus': {
           isDaemonSynced: () => ({ data: { synced: true, height: 2_000_000 } }),
         },
       });

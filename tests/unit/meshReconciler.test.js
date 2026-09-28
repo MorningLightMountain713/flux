@@ -179,7 +179,7 @@ describe('meshReconciler', () => {
           NetworkSettings: { Networks: { [NETWORK_NAME]: { IPAddress: '172.23.4.5' } } },
         }),
       },
-      '../daemonService/daemonServiceMiscRpcs': {
+      '../daemonService/daemonStatus': {
         isDaemonSynced: sinon.stub().callsFake(() => stubs.synced
           ?? { status: 'success', data: { synced: true, height: 1000 } }),
       },

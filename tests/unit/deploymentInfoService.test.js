@@ -5,7 +5,7 @@ const sinon = require('sinon');
 const config = require('config');
 const deploymentInfoService = require('../../ZelBack/src/services/appQuery/deploymentInfoService');
 const messageHelper = require('../../ZelBack/src/services/messageHelper');
-const daemonServiceMiscRpcs = require('../../ZelBack/src/services/daemonService/daemonServiceMiscRpcs');
+const daemonStatus = require('../../ZelBack/src/services/daemonService/daemonStatus');
 const chainUtilities = require('../../ZelBack/src/services/utils/chainUtilities');
 
 describe('deploymentInfoService tests', () => {
@@ -20,7 +20,7 @@ describe('deploymentInfoService tests', () => {
         json: sinon.stub(),
       };
 
-      sinon.stub(daemonServiceMiscRpcs, 'isDaemonSynced').returns({
+      sinon.stub(daemonStatus, 'isDaemonSynced').returns({
         status: 'success',
         data: { height: 100_000, synced: true },
       });
@@ -49,7 +49,7 @@ describe('deploymentInfoService tests', () => {
 
       const enforcementHeight = config.fluxapps.appSpecsEnforcementHeights[6];
 
-      sinon.stub(daemonServiceMiscRpcs, 'isDaemonSynced').returns({
+      sinon.stub(daemonStatus, 'isDaemonSynced').returns({
         status: 'success',
         data: { height: enforcementHeight + 1000, synced: true },
       });
@@ -75,7 +75,7 @@ describe('deploymentInfoService tests', () => {
 
       const changeHeight = config.fluxapps.appPaymentAddresses[2].activeFromHeight;
 
-      sinon.stub(daemonServiceMiscRpcs, 'isDaemonSynced').returns({
+      sinon.stub(daemonStatus, 'isDaemonSynced').returns({
         status: 'success',
         data: { height: changeHeight + 1000, synced: true },
       });
@@ -99,7 +99,7 @@ describe('deploymentInfoService tests', () => {
         json: sinon.stub(),
       };
 
-      sinon.stub(daemonServiceMiscRpcs, 'isDaemonSynced').returns({
+      sinon.stub(daemonStatus, 'isDaemonSynced').returns({
         status: 'success',
         data: { height: 100_000, synced: true },
       });
@@ -144,7 +144,7 @@ describe('deploymentInfoService tests', () => {
 
       const forkHeight = config.fluxapps.daemonPONFork;
 
-      sinon.stub(daemonServiceMiscRpcs, 'isDaemonSynced').returns({
+      sinon.stub(daemonStatus, 'isDaemonSynced').returns({
         status: 'success',
         data: { height: forkHeight + 1000, synced: true },
       });
@@ -170,7 +170,7 @@ describe('deploymentInfoService tests', () => {
 
       const forkHeight = config.fluxapps.daemonPONFork;
 
-      sinon.stub(daemonServiceMiscRpcs, 'isDaemonSynced').returns({
+      sinon.stub(daemonStatus, 'isDaemonSynced').returns({
         status: 'success',
         data: { height: forkHeight - 1000, synced: true },
       });
@@ -194,7 +194,7 @@ describe('deploymentInfoService tests', () => {
         json: sinon.stub(),
       };
 
-      sinon.stub(daemonServiceMiscRpcs, 'isDaemonSynced').throws(new Error('Daemon error'));
+      sinon.stub(daemonStatus, 'isDaemonSynced').throws(new Error('Daemon error'));
       sinon.stub(messageHelper, 'createErrorMessage').returns({ status: 'error' });
 
       await deploymentInfoService.deploymentInformation(req, res);
@@ -209,7 +209,7 @@ describe('deploymentInfoService tests', () => {
         json: sinon.stub(),
       };
 
-      sinon.stub(daemonServiceMiscRpcs, 'isDaemonSynced').returns({
+      sinon.stub(daemonStatus, 'isDaemonSynced').returns({
         status: 'success',
         data: { height: 100_000, synced: true },
       });
@@ -229,7 +229,7 @@ describe('deploymentInfoService tests', () => {
         json: sinon.stub(),
       };
 
-      sinon.stub(daemonServiceMiscRpcs, 'isDaemonSynced').returns({
+      sinon.stub(daemonStatus, 'isDaemonSynced').returns({
         status: 'success',
         data: { height: 100_000, synced: true },
       });
@@ -251,7 +251,7 @@ describe('deploymentInfoService tests', () => {
         json: sinon.stub(),
       };
 
-      sinon.stub(daemonServiceMiscRpcs, 'isDaemonSynced').returns({
+      sinon.stub(daemonStatus, 'isDaemonSynced').returns({
         status: 'success',
         data: { height: 100_000, synced: true },
       });
@@ -279,7 +279,7 @@ describe('deploymentInfoService tests', () => {
         { height: 100_000, price: 3000 },
       ];
 
-      sinon.stub(daemonServiceMiscRpcs, 'isDaemonSynced').returns({
+      sinon.stub(daemonStatus, 'isDaemonSynced').returns({
         status: 'success',
         data: { height: 100_000, synced: true },
       });

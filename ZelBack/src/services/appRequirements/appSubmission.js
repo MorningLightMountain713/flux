@@ -6,7 +6,7 @@ const config = require('config');
 const serviceHelper = require('../serviceHelper');
 const messageHelper = require('../messageHelper');
 const log = require('../../lib/log');
-const daemonServiceMiscRpcs = require('../daemonService/daemonServiceMiscRpcs');
+const daemonStatus = require('../daemonService/daemonStatus');
 const ingressAttestationService = require('../appMessaging/ingressAttestationService');
 const registryManager = require('../appDatabase/registryManager');
 const verificationHelper = require('../verificationHelper');
@@ -365,7 +365,7 @@ async function verifyAppRegistrationParameters(req, res) {
     const appSpecification = serviceHelper.ensureObject(processedBody.appSpecification || processedBody);
     const { contentHash, timestamp, type } = processedBody;
 
-    const syncStatus = daemonServiceMiscRpcs.isDaemonSynced();
+    const syncStatus = daemonStatus.isDaemonSynced();
     if (!syncStatus.data.synced) {
       throw new Error('Daemon not yet synced.');
     }
@@ -401,7 +401,7 @@ async function verifyAppRegistrationParameters(req, res) {
 }
 
 async function validateAppUpdate(appSpecification, meta = {}) {
-  const syncStatus = daemonServiceMiscRpcs.isDaemonSynced();
+  const syncStatus = daemonStatus.isDaemonSynced();
   if (!syncStatus.data.synced) {
     throw new Error('Daemon not yet synced.');
   }
@@ -517,7 +517,7 @@ async function submitAppRegistration(req, res, processedBody, contentCtx) {
     throw new Error('Message timestamp from future, not valid. Check if your computer clock is synced and restart the registration process.');
   }
 
-  const syncStatus = daemonServiceMiscRpcs.isDaemonSynced();
+  const syncStatus = daemonStatus.isDaemonSynced();
   if (!syncStatus.data.synced) {
     throw new Error('Daemon not yet synced.');
   }

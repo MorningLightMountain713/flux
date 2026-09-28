@@ -42,7 +42,7 @@ let staleTimer = null;
  * arrives to say so.
  */
 function publishDaemonSynced() {
-  const handle = capabilities.claim('daemonSynced', 'daemonServiceMiscRpcs');
+  const handle = capabilities.claim('daemonSynced', 'daemonStatus');
   // eslint-disable-next-line no-use-before-define
   const { synced } = isDaemonSynced().data;
   if (synced) handle.raise(`at ${currentDaemonHeight} of ${currentDaemonHeader}`);
@@ -60,7 +60,7 @@ function publishDaemonSynced() {
  * @param {boolean} reachable Whether the daemon's RPC just answered.
  */
 function publishDaemonReachable(reachable) {
-  const handle = capabilities.claim('daemonReachable', 'daemonServiceMiscRpcs');
+  const handle = capabilities.claim('daemonReachable', 'daemonStatus');
   if (reachable) handle.raise('RPC answered'); else handle.lower('RPC did not answer');
 }
 

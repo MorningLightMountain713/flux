@@ -26,7 +26,7 @@ const log = require('../../lib/log');
 const appsRepository = require('../appDatabase/appsRepository');
 const deploymentProvider = require('../appRuntime/deploymentProvider');
 const dockerService = require('../dockerService');
-const daemonServiceMiscRpcs = require('../daemonService/daemonServiceMiscRpcs');
+const daemonStatus = require('../daemonService/daemonStatus');
 const daemonServiceBlockchainRpcs = require('../daemonService/daemonServiceBlockchainRpcs');
 const generalService = require('../generalService');
 const networkStateService = require('../networkStateService');
@@ -560,7 +560,7 @@ async function collectStrayMesh(claimedIdentities) {
 }
 
 async function runReconcilePass() {
-  const synced = daemonServiceMiscRpcs.isDaemonSynced();
+  const synced = daemonStatus.isDaemonSynced();
   if (synced?.data?.synced !== true) {
     log.info('meshReconciler - daemon not synced; membership judgments deferred');
     return;

@@ -35,7 +35,7 @@ describe('appTamperingBlocklistService tests', () => {
       './appDatabase/appTamperingRepository': tamperingRepositoryStub,
       './nodeDosState': nodeDosStateStub,
       './generalService': generalServiceStub,
-      './daemonService/daemonServiceMiscRpcs': daemonMiscStub,
+      './daemonService/daemonStatus': daemonMiscStub,
       './utils/capabilities': capabilitiesStub,
       './utils/globalState': { isArcane: () => arcane },
       './policyStore': policyStoreStub,

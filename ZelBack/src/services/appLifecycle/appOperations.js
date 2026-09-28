@@ -21,7 +21,7 @@ const messageHelper = require('../messageHelper');
 const mastershipGrantGate = require('./mastershipGrantGate');
 const dockerService = require('../dockerService');
 const verificationHelper = require('../verificationHelper');
-const daemonServiceMiscRpcs = require('../daemonService/daemonServiceMiscRpcs');
+const daemonStatus = require('../daemonService/daemonStatus');
 const fluxNetworkHelper = require('../fluxNetworkHelper');
 // eslint-disable-next-line no-unused-vars
 const upnpService = require('../upnpService');
@@ -1784,7 +1784,7 @@ async function updateAppGlobaly(params) {
     throw new Error('Message timestamp from future, not valid. Check if your computer clock is synced and restart the registration process.');
   }
 
-  const syncStatus = daemonServiceMiscRpcs.isDaemonSynced();
+  const syncStatus = daemonStatus.isDaemonSynced();
   if (!syncStatus.data.synced) {
     throw new Error('Daemon not yet synced.');
   }

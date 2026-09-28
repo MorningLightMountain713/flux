@@ -6,7 +6,7 @@ const proxyquire = require('proxyquire');
 const chai = require('chai');
 const chaiAsPromised = require('chai-as-promised');
 const serviceHelper = require('../../ZelBack/src/services/serviceHelper');
-const daemonServiceMiscRpcs = require('../../ZelBack/src/services/daemonService/daemonServiceMiscRpcs');
+const daemonStatus = require('../../ZelBack/src/services/daemonService/daemonStatus');
 const daemonServiceFluxnodeRpcs = require('../../ZelBack/src/services/daemonService/daemonServiceFluxnodeRpcs');
 const nodeConfirmationService = require('../../ZelBack/src/services/nodeConfirmationService');
 const fluxCommunicationUtils = require('../../ZelBack/src/services/fluxCommunicationUtils');
@@ -649,7 +649,7 @@ describe('fluxNetworkMonitor tests', () => {
           rank: 0,
         }];
       getBenchmarksStub = sinon.stub(benchmarkService, 'getBenchmarks');
-      isDaemonSyncedStub = sinon.stub(daemonServiceMiscRpcs, 'isDaemonSynced');
+      isDaemonSyncedStub = sinon.stub(daemonStatus, 'isDaemonSynced');
       deterministicFluxListStub = sinon.stub(fluxCommunicationUtils, 'deterministicFluxList');
       getNodeStatusStub = sinon.stub(nodeConfirmationService, 'getNodeStatus');
       isDaemonReachableStub = sinon.stub(nodeConfirmationService, 'isDaemonReachable').returns(true);

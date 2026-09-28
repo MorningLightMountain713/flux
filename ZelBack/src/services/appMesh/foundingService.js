@@ -5,7 +5,7 @@ const generalService = require('../generalService');
 const messageStore = require('../appMessaging/messageStore');
 const grantClient = require('../quorumGrant/grantClient');
 const registryManager = require('../appDatabase/registryManager');
-const daemonServiceMiscRpcs = require('../daemonService/daemonServiceMiscRpcs');
+const daemonStatus = require('../daemonService/daemonStatus');
 const serviceHelper = require('../serviceHelper');
 const fluxEventBus = require('../utils/fluxEventBus');
 const foundingCommittee = require('./foundingCommittee');
@@ -81,7 +81,7 @@ async function founderAsk(appName, component) {
   // model-forced): a stale chain view cannot know the current basis, and
   // an ARMED world (rot sustained, flip within the quiet zone) refuses to
   // start a founding that would race the flip's one-block gossip window.
-  if (daemonServiceMiscRpcs.isDaemonSynced()?.data?.synced !== true) {
+  if (daemonStatus.isDaemonSynced()?.data?.synced !== true) {
     log.info(`foundingService - ${appName}/${component}: wait (own chain view stale)`);
     return { answer: 'wait' };
   }

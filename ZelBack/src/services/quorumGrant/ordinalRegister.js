@@ -4,7 +4,7 @@ const generalService = require('../generalService');
 const messageStore = require('../appMessaging/messageStore');
 const registryManager = require('../appDatabase/registryManager');
 const networkStateService = require('../networkStateService');
-const daemonServiceMiscRpcs = require('../daemonService/daemonServiceMiscRpcs');
+const daemonStatus = require('../daemonService/daemonStatus');
 const fluxEventBus = require('../utils/fluxEventBus');
 const { extractIp } = require('../utils/socketAddressUtils');
 const foundingCommittee = require('../appMesh/foundingCommittee');
@@ -165,7 +165,7 @@ async function askOrdinal(appName, ordinal) {
   const recorded = await recordedHolder(appName, ordinal, basis.generation);
   if (recorded === self) return { answer: 'yes' };
 
-  if (daemonServiceMiscRpcs.isDaemonSynced()?.data?.synced !== true) {
+  if (daemonStatus.isDaemonSynced()?.data?.synced !== true) {
     return { answer: 'wait', reason: 'own chain view stale' };
   }
   if (basis.armed) {

@@ -3,7 +3,7 @@
 const config = require('config');
 const messageHelper = require('../messageHelper');
 const serviceHelper = require('../serviceHelper');
-const daemonServiceMiscRpcs = require('../daemonService/daemonServiceMiscRpcs');
+const daemonStatus = require('../daemonService/daemonStatus');
 const generalService = require('../generalService');
 const fluxCommunicationUtils = require('../fluxCommunicationUtils');
 const fluxNetworkHelper = require('../fluxNetworkHelper');
@@ -494,7 +494,7 @@ async function selfOnCommittee(key, mode, fingerprint, generation, carriedChain,
     return { member: false, code: 409, reason: `ask names generation ${generation}, current is ${current.generation}` };
   }
   if (!retired && current.generation >= 1 && current.height !== null) {
-    const height = daemonServiceMiscRpcs.isDaemonSynced()?.data?.height ?? 0;
+    const height = daemonStatus.isDaemonSynced()?.data?.height ?? 0;
     const drainUntil = current.height + generationDrainBlocks();
     if (height < drainUntil) {
       return {
@@ -522,7 +522,7 @@ async function selfOnCommittee(key, mode, fingerprint, generation, carriedChain,
   // cannot demote a fleet.
   const activateAt = activationHeight();
   if (activateAt !== null) {
-    const height = daemonServiceMiscRpcs.isDaemonSynced()?.data?.height ?? 0;
+    const height = daemonStatus.isDaemonSynced()?.data?.height ?? 0;
     const opensAt = activateAt - preWindowBlocks();
     if (height < opensAt) {
       const stored = await grantRegister.read(key);
@@ -849,7 +849,7 @@ async function serve(req, res, type, operate) {
       // "never heard" cell — whatever it failed to hear, it stops answering
       // when its tip does. Reads stay open; the founder plane is exempt
       // (write-once registers cannot go stale).
-      const sync = daemonServiceMiscRpcs.isDaemonSynced();
+      const sync = daemonStatus.isDaemonSynced();
       const booted = syncReady();
       // the refereeing-return anchor observes the WHOLE gate: a cell coming
       // back from daemon staleness or from an incomplete boot sync is
@@ -1196,7 +1196,7 @@ async function record(req, res) {
     // upgrade wave) reads as committee-down and the incumbent COASTS —
     // reads answering must never talk a witness out of the coast that
     // keeps the app alive.
-    const daemonSynced = daemonServiceMiscRpcs.isDaemonSynced()?.data?.synced === true;
+    const daemonSynced = daemonStatus.isDaemonSynced()?.data?.synced === true;
     const booted = syncReady();
     // the read observes the serve gates anyway — feed the refereeing-return
     // anchor, so a stall witnessed only by record reads still re-anchors the
@@ -1214,7 +1214,7 @@ async function record(req, res) {
     if (!founderShaped(key)) {
       const known = await heldGeneration(key);
       if (known.generation >= 1 && known.height !== null) {
-        const height = daemonServiceMiscRpcs.isDaemonSynced()?.data?.height ?? 0;
+        const height = daemonStatus.isDaemonSynced()?.data?.height ?? 0;
         generationDraining = height < known.height + generationDrainBlocks();
       }
     }

@@ -4,7 +4,7 @@ const log = require('../lib/log');
 const messageHelper = require('./messageHelper');
 const dbHelper = require('./dbHelper');
 const generalService = require('./generalService');
-const daemonServiceMiscRpcs = require('./daemonService/daemonServiceMiscRpcs');
+const daemonStatus = require('./daemonService/daemonStatus');
 const dockerService = require('./dockerService');
 const syncthingService = require('./syncthingService');
 const fluxNetworkHelper = require('./fluxNetworkHelper');
@@ -194,7 +194,7 @@ async function checkNodeFitness() {
   // daemon: whether fluxd answers and has caught up with the chain. Reported,
   // never refused on: a daemon catching up after a restart reads the same as one
   // that has stopped answering, and daemonHealthMonitor acts on one that stays so.
-  checks.daemon = daemonServiceMiscRpcs.isDaemonSynced().data.synced ? CHECK.OK : CHECK.DEGRADED;
+  checks.daemon = daemonStatus.isDaemonSynced().data.synced ? CHECK.OK : CHECK.DEGRADED;
 
   // udp: whether this node's ports answer over UDP, as the availability check
   // last established it. Reported, never refused on here: whether a port closed

@@ -8,7 +8,7 @@ const messageStore = require('../../ZelBack/src/services/appMessaging/messageSto
 const grantClient = require('../../ZelBack/src/services/quorumGrant/grantClient');
 const foundingCommittee = require('../../ZelBack/src/services/appMesh/foundingCommittee');
 const registryManager = require('../../ZelBack/src/services/appDatabase/registryManager');
-const daemonServiceMiscRpcs = require('../../ZelBack/src/services/daemonService/daemonServiceMiscRpcs');
+const daemonStatus = require('../../ZelBack/src/services/daemonService/daemonStatus');
 const serviceHelper = require('../../ZelBack/src/services/serviceHelper');
 const foundingService = require('../../ZelBack/src/services/appMesh/foundingService');
 
@@ -43,7 +43,7 @@ describe('foundingService', () => {
       intro: 500_000, rungs: [500_000], armed: false,
     });
     sinon.stub(foundingCommittee, 'refereeCommittee').resolves(COMMITTEE);
-    sinon.stub(daemonServiceMiscRpcs, 'isDaemonSynced').returns({ status: 'success', data: { synced: true } });
+    sinon.stub(daemonStatus, 'isDaemonSynced').returns({ status: 'success', data: { synced: true } });
     sinon.stub(messageStore, 'getMasterleaseRecordsByRolePrefix').resolves([]);
     sinon.stub(messageStore, 'getGrantGenerationRecord').resolves({ data: { generation: 2 } });
     sinon.stub(grantClient, 'acquire').resolves({ granted: true, founder: SELF });
@@ -69,10 +69,10 @@ describe('foundingService', () => {
   });
 
   it('the asker gates hold the round: a stale chain view waits, an armed world waits', async () => {
-    daemonServiceMiscRpcs.isDaemonSynced.returns({ status: 'success', data: { synced: false } });
+    daemonStatus.isDaemonSynced.returns({ status: 'success', data: { synced: false } });
     expect(await foundingService.founderAsk('myapp', 'db')).to.deep.equal({ answer: 'wait' });
 
-    daemonServiceMiscRpcs.isDaemonSynced.returns({ status: 'success', data: { synced: true } });
+    daemonStatus.isDaemonSynced.returns({ status: 'success', data: { synced: true } });
     foundingCommittee.componentWorld.resolves({ intro: 500_000, rungs: [500_000], armed: true });
     expect(await foundingService.founderAsk('myapp', 'db')).to.deep.equal({ answer: 'wait' });
     expect(grantClient.acquire.called).to.equal(false);

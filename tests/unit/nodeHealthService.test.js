@@ -7,7 +7,7 @@ const log = require('../../ZelBack/src/lib/log');
 const dbHelper = require('../../ZelBack/src/services/dbHelper');
 const { requireMongo } = require('./dbTestHelper');
 const generalService = require('../../ZelBack/src/services/generalService');
-const daemonServiceMiscRpcs = require('../../ZelBack/src/services/daemonService/daemonServiceMiscRpcs');
+const daemonStatus = require('../../ZelBack/src/services/daemonService/daemonStatus');
 const dockerService = require('../../ZelBack/src/services/dockerService');
 const fluxNetworkHelper = require('../../ZelBack/src/services/fluxNetworkHelper');
 const syncthingService = require('../../ZelBack/src/services/syncthingService');
@@ -365,7 +365,7 @@ describe('nodeHealthService tests', () => {
       osCpusStub = sinon.stub(os, 'cpus');
       collateralTierStub = sinon.stub(generalService, 'nodeCollateralTier');
       getDOSStateStub = sinon.stub(fluxNetworkHelper, 'getDOSState');
-      isDaemonSyncedStub = sinon.stub(daemonServiceMiscRpcs, 'isDaemonSynced');
+      isDaemonSyncedStub = sinon.stub(daemonStatus, 'isDaemonSynced');
       daemonSynced(true);
       syncthingService.setSyncthingRunningState(true);
       sinon.stub(dockerService, 'dockerListImages').returns(true);

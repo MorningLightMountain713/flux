@@ -68,7 +68,7 @@ const policyStore = require('./policyStore');
 const fluxCommunicationMessagesSender = require('./fluxCommunicationMessagesSender');
 const appQueryService = require('./appQuery/appQueryService');
 const chainTipSource = require('./daemonService/chainTipSource');
-const daemonServiceMiscRpcs = require('./daemonService/daemonServiceMiscRpcs');
+const daemonStatus = require('./daemonService/daemonStatus');
 const daemonSubscriptionService = require('./daemonService/daemonSubscriptionService');
 const fluxnodeStatusSource = require('./daemonService/fluxnodeStatusSource');
 const daemonUsageReporter = require('./daemonService/daemonUsageReporter');
@@ -553,7 +553,7 @@ async function startFluxFunctions() {
     // on daemonReachable internally with a 5-min timeout. It must be running
     // before daemonReachable rises so its timeout/removal logic can trigger.
     await daemonServiceUtils.buildFluxdClient();
-    await daemonServiceMiscRpcs.waitForDaemonRpc();
+    await daemonStatus.waitForDaemonRpc();
 
     // After buildFluxdClient, which parses flux.conf — capability detection reads it
     // to decide which topics this daemon actually publishes. Consumers registered
@@ -568,7 +568,7 @@ async function startFluxFunctions() {
     // App payments are placed in chain order from the daemon's address index: it
     // positions the payments recorded before the scan recorded positions, and a
     // node with no app history yet fetches its payments through it.
-    if (!daemonServiceMiscRpcs.isAddressIndex()) {
+    if (!daemonStatus.isAddressIndex()) {
       log.error('fluxd is running without addressindex=1. FluxOS needs the address index to order app messages. Set addressindex=1 in flux.conf and reindex the daemon, or reinstall the node. FluxOS is stopping.');
       process.exit(1);
     }

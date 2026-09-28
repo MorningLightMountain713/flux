@@ -2,7 +2,7 @@ const { expect } = require('chai');
 const sinon = require('sinon');
 const config = require('config');
 const dbHelper = require('../../ZelBack/src/services/dbHelper');
-const daemonServiceMiscRpcs = require('../../ZelBack/src/services/daemonService/daemonServiceMiscRpcs');
+const daemonStatus = require('../../ZelBack/src/services/daemonService/daemonStatus');
 const appValidator = require('../../ZelBack/src/services/appRequirements/appValidator');
 const messageVerifier = require('../../ZelBack/src/services/appMessaging/messageVerifier');
 const advancedWorkflows = require('../../ZelBack/src/services/appLifecycle/advancedWorkflows');
@@ -66,7 +66,7 @@ describe('updateAppGlobaly tests', () => {
   });
 
   it('should judge an update of a live app against the app', async () => {
-    sinon.stub(daemonServiceMiscRpcs, 'isDaemonSynced').returns({ data: { synced: true, height: 3_003_100 } });
+    sinon.stub(daemonStatus, 'isDaemonSynced').returns({ data: { synced: true, height: 3_003_100 } });
     await database.collection(config.database.appsglobal.collections.appsInformation).insertOne({
       ...spec, expire: 1000, height: 3_003_000, hash: 'reg',
     });
@@ -78,7 +78,7 @@ describe('updateAppGlobaly tests', () => {
   });
 
   it('should take a renewal of an app that has expired and been removed here', async () => {
-    sinon.stub(daemonServiceMiscRpcs, 'isDaemonSynced').returns({ data: { synced: true, height: 3_010_000 } });
+    sinon.stub(daemonStatus, 'isDaemonSynced').returns({ data: { synced: true, height: 3_010_000 } });
 
     const [, , , , , appOwner, , previousSpec] = await submitToSignatureCheck();
 
@@ -87,7 +87,7 @@ describe('updateAppGlobaly tests', () => {
   });
 
   it('should need the new owner\'s signature once someone else has registered the name', async () => {
-    sinon.stub(daemonServiceMiscRpcs, 'isDaemonSynced').returns({ data: { synced: true, height: 3_010_000 } });
+    sinon.stub(daemonStatus, 'isDaemonSynced').returns({ data: { synced: true, height: 3_010_000 } });
     await database.collection(config.database.appsglobal.collections.appsMessages).insertOne({
       type: 'fluxappregister', hash: 'taken', height: 3_005_000, timestamp: 2, appSpecifications: { ...spec, owner: otherOwner, expire: 88_000 },
     });
@@ -98,7 +98,7 @@ describe('updateAppGlobaly tests', () => {
   });
 
   it('should refuse an update of a name that was never registered', async () => {
-    sinon.stub(daemonServiceMiscRpcs, 'isDaemonSynced').returns({ data: { synced: true, height: 3_003_100 } });
+    sinon.stub(daemonStatus, 'isDaemonSynced').returns({ data: { synced: true, height: 3_003_100 } });
     await database.collection(config.database.appsglobal.collections.appsMessages).deleteMany({ 'appSpecifications.name': name });
 
     await submit().then(
@@ -113,7 +113,7 @@ describe('updateAppGlobaly tests', () => {
     ['an invalid owner', { owner: 'my-owner' }],
   ].forEach(([description, change]) => {
     it(`should refuse an enterprise update with ${description} before reading the spec`, async () => {
-      sinon.stub(daemonServiceMiscRpcs, 'isDaemonSynced').returns({ data: { synced: true, height: 3_003_100 } });
+      sinon.stub(daemonStatus, 'isDaemonSynced').returns({ data: { synced: true, height: 3_003_100 } });
 
       await advancedWorkflows.updateAppGlobaly({
         appSpecification: {

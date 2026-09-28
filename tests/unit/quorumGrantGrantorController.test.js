@@ -6,7 +6,7 @@ const secp256k1 = require('secp256k1');
 const bs58check = require('bs58check').default;
 
 const serviceHelper = require('../../ZelBack/src/services/serviceHelper');
-const daemonServiceMiscRpcs = require('../../ZelBack/src/services/daemonService/daemonServiceMiscRpcs');
+const daemonStatus = require('../../ZelBack/src/services/daemonService/daemonStatus');
 const fluxCommunicationUtils = require('../../ZelBack/src/services/fluxCommunicationUtils');
 const fluxNetworkHelper = require('../../ZelBack/src/services/fluxNetworkHelper');
 const networkStateService = require('../../ZelBack/src/services/networkStateService');
@@ -116,7 +116,7 @@ describe('quorumGrant grantorController', () => {
     });
     sinon.stub(grantRegister, 'release').resolves({ ok: true, released: true });
     sinon.stub(fluxNetworkHelper, 'getFluxNodePrivateKey').resolves(WIF);
-    sinon.stub(daemonServiceMiscRpcs, 'isDaemonSynced').returns({
+    sinon.stub(daemonStatus, 'isDaemonSynced').returns({
       status: 'success', data: { synced: true, height: 100, header: 100 },
     });
     // the boot-sync gate is fail-closed until the service wiring registers
@@ -1190,14 +1190,14 @@ describe('quorumGrant grantorController', () => {
       await grantorController.record(req, fresh);
       expect(fresh.body.data.refereeing).to.equal(true);
 
-      daemonServiceMiscRpcs.isDaemonSynced.returns({
+      daemonStatus.isDaemonSynced.returns({
         status: 'success', data: { synced: false, height: 0 },
       });
       const stale = fakeRes();
       await grantorController.record(req, stale);
       expect(stale.body.data.refereeing).to.equal(false);
 
-      daemonServiceMiscRpcs.isDaemonSynced.returns({
+      daemonStatus.isDaemonSynced.returns({
         status: 'success', data: { synced: true, height: 100, header: 100 },
       });
       sinon.stub(grantRegister, 'heldKeys').resolves(['myapp/master']);
@@ -1224,7 +1224,7 @@ describe('quorumGrant grantorController', () => {
 
   describe('the view-freshness serve gate', () => {
     it('a grantor whose chain view is stale refuses to referee held asks — reads stay open', async () => {
-      daemonServiceMiscRpcs.isDaemonSynced.returns({
+      daemonStatus.isDaemonSynced.returns({
         status: 'success', data: { synced: false, height: 0 },
       });
 
@@ -1244,7 +1244,7 @@ describe('quorumGrant grantorController', () => {
     });
 
     it('the founder plane is exempt — a write-once register has nothing staleness can corrupt', async () => {
-      daemonServiceMiscRpcs.isDaemonSynced.returns({
+      daemonStatus.isDaemonSynced.returns({
         status: 'success', data: { synced: false, height: 0 },
       });
       const res = fakeRes();
@@ -1357,7 +1357,7 @@ describe('quorumGrant grantorController', () => {
       messageStore.getGrantGenerationRecord.resolves({
         data: { generation: 1, height: 95 },
       });
-      daemonServiceMiscRpcs.isDaemonSynced.returns({
+      daemonStatus.isDaemonSynced.returns({
         status: 'success', data: { synced: true, height: 100, header: 100 },
       });
 
@@ -1366,7 +1366,7 @@ describe('quorumGrant grantorController', () => {
       expect(draining.statusCode).to.equal(409);
       expect(draining.body.data.message).to.match(/draining/);
 
-      daemonServiceMiscRpcs.isDaemonSynced.returns({
+      daemonStatus.isDaemonSynced.returns({
         status: 'success', data: { synced: true, height: 115, header: 115 },
       });
       const served = fakeRes();
@@ -1397,7 +1397,7 @@ describe('quorumGrant grantorController', () => {
     });
 
     function atHeight(height) {
-      daemonServiceMiscRpcs.isDaemonSynced.returns({
+      daemonStatus.isDaemonSynced.returns({
         status: 'success', data: { synced: true, height, header: height },
       });
     }
@@ -1525,7 +1525,7 @@ describe('quorumGrant grantorController', () => {
   // of row death and that return.
   describe('the refereeing-return lock-delay anchor', () => {
     it('a prepare after a stale spell carries the return moment to the register', async () => {
-      daemonServiceMiscRpcs.isDaemonSynced.returns({
+      daemonStatus.isDaemonSynced.returns({
         status: 'success', data: { synced: false, height: 0 },
       });
       const staleRes = fakeRes();
@@ -1533,7 +1533,7 @@ describe('quorumGrant grantorController', () => {
       expect(staleRes.statusCode).to.equal(503);
 
       const before = Date.now();
-      daemonServiceMiscRpcs.isDaemonSynced.returns({
+      daemonStatus.isDaemonSynced.returns({
         status: 'success', data: { synced: true, height: 100, header: 100 },
       });
       const res = fakeRes();
@@ -1546,7 +1546,7 @@ describe('quorumGrant grantorController', () => {
     });
 
     it('a stale spell observed only by the record read still moves the anchor', async () => {
-      daemonServiceMiscRpcs.isDaemonSynced.returns({
+      daemonStatus.isDaemonSynced.returns({
         status: 'success', data: { synced: false, height: 0 },
       });
       const readReq = fakeReq({});
@@ -1554,7 +1554,7 @@ describe('quorumGrant grantorController', () => {
       await grantorController.record(readReq, fakeRes());
 
       const before = Date.now();
-      daemonServiceMiscRpcs.isDaemonSynced.returns({
+      daemonStatus.isDaemonSynced.returns({
         status: 'success', data: { synced: true, height: 100, header: 100 },
       });
       const res = fakeRes();
@@ -1681,9 +1681,9 @@ describe('quorumGrant grantorController', () => {
 
     it("the key's generation drain makes the cell non-serving for that key, and serving once it lifts", async () => {
       messageStore.getGrantGenerationRecord.resolves({ data: { generation: 1, height: 95 } });
-      daemonServiceMiscRpcs.isDaemonSynced.returns({ status: 'success', data: { synced: true, height: 100, header: 100 } });
+      daemonStatus.isDaemonSynced.returns({ status: 'success', data: { synced: true, height: 100, header: 100 } });
       expect((await readRecord()).serving).to.equal(false);
-      daemonServiceMiscRpcs.isDaemonSynced.returns({ status: 'success', data: { synced: true, height: 115, header: 115 } });
+      daemonStatus.isDaemonSynced.returns({ status: 'success', data: { synced: true, height: 115, header: 115 } });
       expect((await readRecord()).serving).to.equal(true);
     });
 
@@ -1709,7 +1709,7 @@ describe('quorumGrant grantorController', () => {
       messageStore.getGrantGenerationRecord.resolves({ data: { generation, height } });
     };
     const viewAt = (height) => {
-      daemonServiceMiscRpcs.isDaemonSynced.returns({
+      daemonStatus.isDaemonSynced.returns({
         status: 'success', data: { synced: true, height, header: height },
       });
     };
@@ -1845,7 +1845,7 @@ describe('quorumGrant grantorController', () => {
 
     it('the serve gates teach too — a stale or syncing cell still says which world stands', async () => {
       messageStore.getGrantGenerationRecord.resolves({ data: RECORD });
-      daemonServiceMiscRpcs.isDaemonSynced.returns({
+      daemonStatus.isDaemonSynced.returns({
         status: 'success', data: { synced: false, height: 100, header: 130 },
       });
       const stale = fakeRes();
@@ -1854,7 +1854,7 @@ describe('quorumGrant grantorController', () => {
       expect(stale.body.data.generation).to.equal(2);
       expect(stale.body.data.generationRecord).to.deep.equal(RECORD);
 
-      daemonServiceMiscRpcs.isDaemonSynced.returns({
+      daemonStatus.isDaemonSynced.returns({
         status: 'success', data: { synced: true, height: 100, header: 100 },
       });
       grantorController.registerSyncReadyProvider(() => false);
@@ -1876,7 +1876,7 @@ describe('quorumGrant grantorController', () => {
     });
 
     it('an app the owner never re-rolled teaches generation 0 and no record', async () => {
-      daemonServiceMiscRpcs.isDaemonSynced.returns({
+      daemonStatus.isDaemonSynced.returns({
         status: 'success', data: { synced: false, height: 100, header: 130 },
       });
       const res = fakeRes();

@@ -93,7 +93,7 @@ describe('messageStore tests', () => {
       '../utils/specCutover': { ensureProvidersRegistered: sinon.stub().resolves() },
       '../../lib/log': logStub,
       '../fluxService': { isSystemSecure: sinon.stub().resolves(false) },
-      '../daemonService/daemonServiceMiscRpcs': {
+      '../daemonService/daemonStatus': {
         isDaemonSynced: sinon.stub().returns({ data: { height: 1000 } }),
       },
       '../appDatabase/registryManager': registryManagerStub,

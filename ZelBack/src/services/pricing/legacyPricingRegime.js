@@ -3,7 +3,7 @@
 const config = require('config');
 const axios = require('axios');
 const dbHelper = require('../dbHelper');
-const daemonServiceMiscRpcs = require('../daemonService/daemonServiceMiscRpcs');
+const daemonStatus = require('../daemonService/daemonStatus');
 const appsRepository = require('../appDatabase/appsRepository');
 const { resolveSpec, resolveInstantiatedSpec } = require('../utils/specCutover');
 const { getSpec } = require('../utils/specLibs');
@@ -45,7 +45,7 @@ let lastGoodMarketplaceApps = null;
 
 /** The height the daemon is synced to, or a refusal to price without one. */
 function syncedHeight() {
-  const syncStatus = daemonServiceMiscRpcs.isDaemonSynced();
+  const syncStatus = daemonStatus.isDaemonSynced();
   if (!syncStatus.data.synced) throw new Error('Daemon not yet synced.');
   return syncStatus.data.height;
 }

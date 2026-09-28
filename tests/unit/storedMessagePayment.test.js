@@ -8,7 +8,7 @@ const sinon = require('sinon');
 const config = require('config');
 
 const dbHelper = require('../../ZelBack/src/services/dbHelper');
-const daemonServiceMiscRpcs = require('../../ZelBack/src/services/daemonService/daemonServiceMiscRpcs');
+const daemonStatus = require('../../ZelBack/src/services/daemonService/daemonStatus');
 const messageVerifier = require('../../ZelBack/src/services/appMessaging/messageVerifier');
 const { requireMongo } = require('./dbTestHelper');
 
@@ -93,7 +93,7 @@ describe('a stored message follows this node\'s payment record', () => {
       await globalDb.collection(appsInformation).insertOne({
         ...message('MovedApp', 'movedhash', before).appSpecifications, hash: 'movedhash', height: HEIGHT,
       });
-      sinon.stub(daemonServiceMiscRpcs, 'isDaemonSynced').returns({ data: { synced: true, height: HEIGHT + 10 } });
+      sinon.stub(daemonStatus, 'isDaemonSynced').returns({ data: { synced: true, height: HEIGHT + 10 } });
 
       await messageVerifier.alignStoredMessagesWithPayments([payment('movedhash', after)]);
 
@@ -106,7 +106,7 @@ describe('a stored message follows this node\'s payment record', () => {
       await globalDb.collection(appsInformation).insertOne({
         ...message('StillApp', 'stillhash', before).appSpecifications, hash: 'stillhash', height: HEIGHT, marker: 'untouched',
       });
-      sinon.stub(daemonServiceMiscRpcs, 'isDaemonSynced').returns({ data: { synced: true, height: HEIGHT + 10 } });
+      sinon.stub(daemonStatus, 'isDaemonSynced').returns({ data: { synced: true, height: HEIGHT + 10 } });
 
       await messageVerifier.alignStoredMessagesWithPayments([payment('stillhash', before)]);
 
@@ -129,7 +129,7 @@ describe('a stored message follows this node\'s payment record', () => {
       await globalDb.collection(appsInformation).insertOne({
         ...message('MovedApp', 'movedhash', before).appSpecifications, hash: 'movedhash', height: HEIGHT, marker: 'untouched',
       });
-      sinon.stub(daemonServiceMiscRpcs, 'isDaemonSynced').returns({ data: { synced: true, height: HEIGHT + 10 } });
+      sinon.stub(daemonStatus, 'isDaemonSynced').returns({ data: { synced: true, height: HEIGHT + 10 } });
 
       expect(await messageVerifier.moveStoredMessagesToPayments([payment('movedhash', after)])).to.deep.equal(['MovedApp']);
 
@@ -148,7 +148,7 @@ describe('a stored message follows this node\'s payment record', () => {
         ...message('PromotedApp', 'promotedhash', stale).appSpecifications, hash: 'promotedhash', height: HEIGHT,
       });
       await daemonDb.collection(appsHashes).insertOne(payment('promotedhash', remined));
-      sinon.stub(daemonServiceMiscRpcs, 'isDaemonSynced').returns({ data: { synced: true, height: HEIGHT + 10 } });
+      sinon.stub(daemonStatus, 'isDaemonSynced').returns({ data: { synced: true, height: HEIGHT + 10 } });
 
       expect(await messageVerifier.checkAndRequestApp('promotedhash', 'tx-remined', HEIGHT + 7, 100)).to.equal(true);
 
@@ -166,7 +166,7 @@ describe('a stored message follows this node\'s payment record', () => {
         ...message('PromotedApp', 'promotedhash', chain).appSpecifications, hash: 'promotedhash', height: HEIGHT, marker: 'untouched',
       });
       await daemonDb.collection(appsHashes).insertOne(payment('promotedhash', chain));
-      sinon.stub(daemonServiceMiscRpcs, 'isDaemonSynced').returns({ data: { synced: true, height: HEIGHT + 10 } });
+      sinon.stub(daemonStatus, 'isDaemonSynced').returns({ data: { synced: true, height: HEIGHT + 10 } });
 
       expect(await messageVerifier.checkAndRequestApp('promotedhash', 'tx-same', HEIGHT, 100)).to.equal(true);
 

@@ -2,7 +2,7 @@
 
 const operationRegistry = require('../utils/operationRegistry');
 const log = require('../../lib/log');
-const daemonServiceMiscRpcs = require('../daemonService/daemonServiceMiscRpcs');
+const daemonStatus = require('../daemonService/daemonStatus');
 const appsRepository = require('../appDatabase/appsRepository');
 const appUninstaller = require('../appLifecycle/appUninstaller');
 
@@ -64,8 +64,8 @@ async function checkDaemonHealthAndCleanup() {
       return;
     }
 
-    // Check daemon sync status (updated every 30 seconds by daemonServiceMiscRpcs)
-    const syncStatus = daemonServiceMiscRpcs.isDaemonSynced();
+    // Check daemon sync status (updated every 30 seconds by daemonStatus)
+    const syncStatus = daemonStatus.isDaemonSynced();
 
     if (syncStatus.data.synced) {
       // Daemon is synced - reset tracking

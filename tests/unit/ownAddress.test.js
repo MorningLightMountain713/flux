@@ -4,7 +4,7 @@ const fs = require('fs').promises;
 const config = require('config');
 const dbHelper = require('../../ZelBack/src/services/dbHelper');
 const daemonServiceFluxnodeRpcs = require('../../ZelBack/src/services/daemonService/daemonServiceFluxnodeRpcs');
-const daemonServiceMiscRpcs = require('../../ZelBack/src/services/daemonService/daemonServiceMiscRpcs');
+const daemonStatus = require('../../ZelBack/src/services/daemonService/daemonStatus');
 const benchmarkService = require('../../ZelBack/src/services/benchmarkService');
 const fluxCommunicationUtils = require('../../ZelBack/src/services/fluxCommunicationUtils');
 const networkStateService = require('../../ZelBack/src/services/networkStateService');
@@ -568,7 +568,7 @@ describe('fluxNetworkHelper own address tests', () => {
   describe('the collision check', () => {
     beforeEach(() => {
       sinon.useFakeTimers({ toFake: ['setTimeout'], shouldAdvanceTime: true });
-      sinon.stub(daemonServiceMiscRpcs, 'isDaemonSynced').returns({ data: { synced: true } });
+      sinon.stub(daemonStatus, 'isDaemonSynced').returns({ data: { synced: true } });
       sinon.stub(networkStateService, 'isReady').returns(true);
     });
 

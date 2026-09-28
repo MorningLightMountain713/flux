@@ -3,7 +3,7 @@
 // Deployment Info Service - Query functions for app deployment information
 const config = require('config');
 const messageHelper = require('../messageHelper');
-const daemonServiceMiscRpcs = require('../daemonService/daemonServiceMiscRpcs');
+const daemonStatus = require('../daemonService/daemonStatus');
 const chainUtilities = require('../utils/chainUtilities');
 const log = require('../../lib/log');
 
@@ -15,7 +15,7 @@ const log = require('../../lib/log');
 async function deploymentInformation(req, res) {
   try {
     // respond with information needed for application deployment regarding specification limitation and prices
-    const syncStatus = daemonServiceMiscRpcs.isDaemonSynced();
+    const syncStatus = daemonStatus.isDaemonSynced();
     const daemonHeight = syncStatus.data.height;
     const deployAddr = chainUtilities.currentAppPaymentAddress(daemonHeight);
     // search in chainparams db for chainmessages of p version

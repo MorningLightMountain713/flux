@@ -1,6 +1,6 @@
 'use strict';
 
-const daemonServiceMiscRpcs = require('../daemonService/daemonServiceMiscRpcs');
+const daemonStatus = require('../daemonService/daemonStatus');
 const appsRepository = require('../appDatabase/appsRepository');
 const { getSpecPolicy } = require('../utils/specLibs');
 const { buildPricingEngine } = require('./buildPricingEngine');
@@ -28,7 +28,7 @@ const priceOracleState = require('./priceOracleState');
 function isOnChainPricingActive() {
   const priceHistory = priceOracleState.getPriceMessageHistory();
   if (!priceHistory) return false;
-  const syncStatus = daemonServiceMiscRpcs.isDaemonSynced();
+  const syncStatus = daemonStatus.isDaemonSynced();
   if (!syncStatus.data.synced) return false;
   const resolved = priceHistory.resolveAt(syncStatus.data.height);
   return resolved && Object.keys(resolved).length > 0;
@@ -42,7 +42,7 @@ function isOnChainPricingActive() {
 function getOracleFluxUsdRate() {
   const rateHistory = priceOracleState.getRateMessageHistory();
   if (!rateHistory) return null;
-  const syncStatus = daemonServiceMiscRpcs.isDaemonSynced();
+  const syncStatus = daemonStatus.isDaemonSynced();
   if (!syncStatus.data.synced) return null;
   const rateMsg = rateHistory.resolveAt(syncStatus.data.height);
   if (!rateMsg || !rateMsg.fluxUsdPriceE4) return null;
@@ -63,7 +63,7 @@ function getFiatMarkupBp() {
   if (!modifierHistory) {
     throw new Error('Price modifier history is not available.');
   }
-  const syncStatus = daemonServiceMiscRpcs.isDaemonSynced();
+  const syncStatus = daemonStatus.isDaemonSynced();
   if (!syncStatus.data.synced) {
     throw new Error('Daemon not yet synced.');
   }
@@ -164,7 +164,7 @@ async function onChainDisplayPrice(spec) {
     throw new Error('On-chain pricing is not yet active (no PriceMessage in force).');
   }
 
-  const syncStatus = daemonServiceMiscRpcs.isDaemonSynced();
+  const syncStatus = daemonStatus.isDaemonSynced();
   if (!syncStatus.data.synced) {
     throw new Error('Daemon not yet synced.');
   }

@@ -33,7 +33,7 @@ process.env.NODE_CONFIG_DIR = path.join(REPO, 'tests', 'unit', 'globalconfig');
 const SPEC_DIR = process.env.FLUX_SPEC_DIR || path.resolve(REPO, '..', 'flux-spec');
 const sinon = require('sinon');
 const dbHelper = require(REPO + '/ZelBack/src/services/dbHelper');
-const daemonServiceMiscRpcs = require(REPO + '/ZelBack/src/services/daemonService/daemonServiceMiscRpcs');
+const daemonStatus = require(REPO + '/ZelBack/src/services/daemonService/daemonStatus');
 const appsRepository = require(REPO + '/ZelBack/src/services/appDatabase/appsRepository');
 const priceOracleState = require(REPO + '/ZelBack/src/services/pricing/priceOracleState');
 const axios = require('axios');
@@ -112,7 +112,7 @@ async function main() {
   sinon.stub(dbHelper, 'databaseConnection').returns(fakeDb);
   // chainparams price messages: none, so the config-declared price forks apply.
   sinon.stub(dbHelper, 'findInDatabase').resolves([]);
-  sinon.stub(daemonServiceMiscRpcs, 'isDaemonSynced')
+  sinon.stub(daemonStatus, 'isDaemonSynced')
     .returns({ data: { synced: true, height: HEIGHT } });
 
   sinon.stub(priceOracleState, 'getPriceMessageHistory')

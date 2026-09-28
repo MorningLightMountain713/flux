@@ -8,7 +8,7 @@ const { Privilege, authOf } = require('../../ZelBack/src/services/utils/privileg
 const verificationHelper = require('../../ZelBack/src/services/verificationHelper');
 const serviceHelper = require('../../ZelBack/src/services/serviceHelper');
 const benchmarkService = require('../../ZelBack/src/services/benchmarkService');
-const daemonServiceMiscRpcs = require('../../ZelBack/src/services/daemonService/daemonServiceMiscRpcs');
+const daemonStatus = require('../../ZelBack/src/services/daemonService/daemonStatus');
 const globalState = require('../../ZelBack/src/services/utils/globalState');
 const transportHelper = require('../../ZelBack/src/services/utils/transportHelper');
 const contentBlobService = require('../../ZelBack/src/services/appLifecycle/contentBlobService');
@@ -225,7 +225,7 @@ describe('cryptographicKeys tests', () => {
         owner: '1CbErtneaX2QVyUfwU7JGB7VzvPgrgc3uC',
         name: 'TestApp',
       });
-      sinon.stub(daemonServiceMiscRpcs, 'isDaemonSynced').returns({
+      sinon.stub(daemonStatus, 'isDaemonSynced').returns({
         status: 'success',
         data: { synced: false, height: 1000 },
       });
@@ -255,7 +255,7 @@ describe('cryptographicKeys tests', () => {
         owner: '1CbErtneaX2QVyUfwU7JGB7VzvPgrgc3uC',
         name: 'TestApp',
       });
-      sinon.stub(daemonServiceMiscRpcs, 'isDaemonSynced').returns({
+      sinon.stub(daemonStatus, 'isDaemonSynced').returns({
         status: 'success',
         data: { synced: true, height: 2000 },
       });
@@ -291,7 +291,7 @@ describe('cryptographicKeys tests', () => {
         process.env.FLUXOS_PATH = '/some/path';
         reloadModule();
         sinon.stub(verificationHelper, 'verifyPrivilege').resolves(true);
-        sinon.stub(daemonServiceMiscRpcs, 'isDaemonSynced').returns({
+        sinon.stub(daemonStatus, 'isDaemonSynced').returns({
           status: 'success',
           data: { synced: true, height: 2000 },
         });
@@ -318,7 +318,7 @@ describe('cryptographicKeys tests', () => {
         owner: '1CbErtneaX2QVyUfwU7JGB7VzvPgrgc3uC',
         name: 'TestApp',
       });
-      sinon.stub(daemonServiceMiscRpcs, 'isDaemonSynced').returns({
+      sinon.stub(daemonStatus, 'isDaemonSynced').returns({
         status: 'success',
         data: { synced: true, height: 2000 },
       });
@@ -349,7 +349,7 @@ describe('cryptographicKeys tests', () => {
         owner: '1CbErtneaX2QVyUfwU7JGB7VzvPgrgc3uC',
         name: 'TestApp',
       });
-      sinon.stub(daemonServiceMiscRpcs, 'isDaemonSynced').returns({
+      sinon.stub(daemonStatus, 'isDaemonSynced').returns({
         status: 'success',
         data: { synced: true, height: 2000 },
       });
@@ -385,7 +385,7 @@ describe('cryptographicKeys tests', () => {
         owner: '1CbErtneaX2QVyUfwU7JGB7VzvPgrgc3uC',
         name: 'TestApp',
       });
-      sinon.stub(daemonServiceMiscRpcs, 'isDaemonSynced').returns({
+      sinon.stub(daemonStatus, 'isDaemonSynced').returns({
         status: 'success',
         data: { synced: true, height: daemonHeight },
       });
@@ -422,7 +422,7 @@ describe('cryptographicKeys tests', () => {
         owner: '1CbErtneaX2QVyUfwU7JGB7VzvPgrgc3uC',
         name: 'TestApp',
       });
-      sinon.stub(daemonServiceMiscRpcs, 'isDaemonSynced').returns({
+      sinon.stub(daemonStatus, 'isDaemonSynced').returns({
         status: 'success',
         data: { synced: true, height: 2000 },
       });

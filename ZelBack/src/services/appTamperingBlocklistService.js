@@ -5,7 +5,7 @@ const log = require('../lib/log');
 const appTamperingRepository = require('./appDatabase/appTamperingRepository');
 const nodeDosState = require('./nodeDosState');
 const generalService = require('./generalService');
-const daemonServiceMiscRpcs = require('./daemonService/daemonServiceMiscRpcs');
+const daemonStatus = require('./daemonService/daemonStatus');
 const capabilities = require('./utils/capabilities');
 const globalState = require('./utils/globalState');
 const policyStore = require('./policyStore');
@@ -131,7 +131,7 @@ async function enforceBlocklist() {
     return;
   }
 
-  const syncStatus = daemonServiceMiscRpcs.isDaemonSynced();
+  const syncStatus = daemonStatus.isDaemonSynced();
   if (!syncStatus || !syncStatus.data || !syncStatus.data.synced) {
     log.info('appTamperingBlocklist - daemon not synced, skipping this tick');
     return;

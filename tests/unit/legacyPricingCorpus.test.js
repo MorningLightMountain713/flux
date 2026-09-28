@@ -171,7 +171,7 @@ describe('the early-update credit, over every update on chain', function corpus(
         resolveSpec: async () => APP,
         resolveInstantiatedSpec: async () => APP,
       },
-      '../daemonService/daemonServiceMiscRpcs': {
+      '../daemonService/daemonStatus': {
         isDaemonSynced: () => ({ data: { synced: true, height: UPDATE_HEIGHT } }),
       },
       '../dbHelper': {
@@ -196,7 +196,7 @@ describe('the early-update credit, over every update on chain', function corpus(
       const noPrevious = proxyquire('../../ZelBack/src/services/pricing/legacyPricingRegime', {
         '../utils/chainUtilities': { getChainParamsPriceUpdates: async () => [CARD] },
         '../utils/specCutover': { resolveSpec: async () => APP, resolveInstantiatedSpec: async () => APP },
-        '../daemonService/daemonServiceMiscRpcs': {
+        '../daemonService/daemonStatus': {
           isDaemonSynced: () => ({ data: { synced: true, height: UPDATE_HEIGHT } }),
         },
         '../dbHelper': {
