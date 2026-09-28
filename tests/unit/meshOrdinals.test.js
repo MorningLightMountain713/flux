@@ -63,6 +63,22 @@ describe('meshOrdinals', () => {
       expect(seam.askOrdinal.callCount).to.equal(0);
     });
 
+    // A restart or a recreate is not a leave: a node that already holds an
+    // ordinal keeps it, and a free or reclaimable one below it is never a
+    // second name for the same node.
+    it('a node already holding an ordinal keeps it, whatever lies free or reclaimable below it', async () => {
+      const free = load({ probeOrdinal: probes({ 0: OTHER, 2: ME }) });
+      expect(await free.meshOrdinals.claimOrdinal('app', 3)).to.deep.equal({ state: 'granted', ordinal: 2 });
+      expect(free.seam.askOrdinal.callCount).to.equal(0);
+      const reclaimable = load({
+        probeOrdinal: probes({ 0: OTHER, 1: ME }),
+        vacateOrdinal: sinon.stub().resolves({ vacated: true }),
+      });
+      expect(await reclaimable.meshOrdinals.claimOrdinal('app', 3)).to.deep.equal({ state: 'granted', ordinal: 1 });
+      expect(reclaimable.seam.vacateOrdinal.callCount).to.equal(0);
+      expect(reclaimable.seam.askOrdinal.callCount).to.equal(0);
+    });
+
     it('an undecided probe is a wait, and nothing past it is asked', async () => {
       const { meshOrdinals, seam } = load({
         probeOrdinal: sinon.stub().resolves({ decided: false, holder: null }),
