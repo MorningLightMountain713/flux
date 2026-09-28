@@ -1098,6 +1098,23 @@ describe('appReconciler tests', () => {
       expect(stated[0].args[1].reason).to.equal('operatorStopped');
     });
 
+    it('states a stop again when it takes effect again after a hold', async () => {
+      await installApp(await v9App('app', { db: ACTIVE_STANDBY }));
+      const publishSpy = sinon.spy(fluxEventBus, 'publish');
+      stubs.appsRuntimeState.isOperatorStopped.resolves(true);
+      await appReconciler.reconcile('db_app'); // inspect default: stopped
+
+      // the lock lifts and no controller has spoken: a hold, the container still down
+      stubs.appsRuntimeState.isOperatorStopped.resolves(false);
+      await appReconciler.reconcile('db_app');
+      expect(stubs.dockerService.appDockerStart.called, 'the hold starts nothing').to.be.false;
+
+      stubs.appsRuntimeState.isOperatorStopped.resolves(true);
+      await appReconciler.reconcile('db_app');
+
+      expect(settledStops(publishSpy, 'db_app').map((c) => c.args[1].reason)).to.eql(['operatorStopped', 'operatorStopped']);
+    });
+
     it('states the new reason when a stopped component stays down for a different one', async () => {
       const publishSpy = sinon.spy(fluxEventBus, 'publish');
       stubs.appsRuntimeState.isOperatorStopped.resolves(true);

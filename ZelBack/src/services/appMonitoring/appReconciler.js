@@ -1509,8 +1509,10 @@ async function reconcile(identifier) {
   // but surface the hold once it has outlived any plausible cycle.
   if (desired === null) {
     // awaitingElectedPeer is deliberate and permanent on a non-elected node, so it is
-    // announced once like any settled state rather than warned about by age.
+    // announced once like any settled state rather than warned about by age. Any other
+    // hold is not a settled stop, so the next stop is announced when it takes effect.
     if (reason === 'awaitingElectedPeer') announceSettledStop(identifier, reason);
+    else stoppedReasonAnnounced.delete(identifier);
     if (reason === 'awaitingController' || reason === 'awaitingDependency' || reason === 'awaitingAppDependency') trackSilentHold(identifier, reason);
     return;
   }
