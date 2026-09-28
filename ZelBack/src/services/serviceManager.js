@@ -170,16 +170,6 @@ async function prepareDatabaseSchema() {
   // the session's signature (loginSignatures does, for a minute); one that
   // does loses it here.
   await dbHelper.updateInDatabase(database, config.get('database.local.collections.loggedUsers'), { signature: { $exists: true } }, { $unset: { signature: '' } });
-  // Named literally because they are no longer part of the schema: the payment
-  // request and receipt collections outlived the endpoint that wrote them, and
-  // a node's word was never the payment record - the chain is. Dropping is
-  // idempotent, so this costs one 'ns not found' per boot once they are gone.
-  await Promise.all(['activepaymentrequests', 'completedpayments'].map((orphan) => dbHelper
-    .dropCollection(database, orphan).catch((error) => {
-      if (error.message !== 'ns not found') {
-        log.error(error);
-      }
-    })));
   await dbHelper.ensureIndexes(database.collection(config.get('database.local.collections.loggedUsers')), [
     { key: { createdAt: 1 }, expireAfterSeconds: 14 * 24 * 60 * 60 },
   ]);
@@ -258,12 +248,6 @@ async function prepareDatabaseSchema() {
     { key: { 'appSpecifications.nodes': 1 }, name: 'query for getting app message based on nodes' },
   ]);
   await dbHelper.ensureNewestAppMessageIndex(databaseTemp.collection(config.get('database.appsglobal.collections.appsMessages')));
-  // The running set is derived from the app state event log on read; the materialized
-  // location collection it replaced is no longer written or read. Dropped rather than
-  // left to its TTL so an upgraded node does not carry a dead collection - and its
-  // per-minute TTL sweep - indefinitely. Named literally: the config key is gone, and
-  // a drop of a collection that is not there is a no-op, so this self-retires.
-  await databaseTemp.collection('zelappslocation').drop().catch(() => {});
   await dbHelper.ensureIndexes(databaseTemp.collection(config.get('database.appsglobal.collections.appStateEvents')), [
     { key: { expireAt: 1 }, expireAfterSeconds: 0 },
     { key: { ip: 1, type: 1, dedupKey: 1 }, unique: true, recover: dbHelper.dedupeByKey },

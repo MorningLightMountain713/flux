@@ -14,11 +14,13 @@ describe('migrations tests', () => {
       log: { info: sinon.stub(), warn: sinon.stub(), error: sinon.stub() },
       nodeIdentityMigration: { migrateNodeIdentity: sinon.stub().resolves({ migrated: [] }) },
       containerLabelBackfill: { backfillContainerLabels: sinon.stub().resolves({ covered: true }) },
+      retiredSchema: { dropRetiredSchema: sinon.stub().resolves({ collections: [], indexes: [] }) },
     };
     migrations = proxyquire('../../ZelBack/src/services/migrations', {
       '../../lib/log': stubs.log,
       '../appDatabase/nodeIdentityMigration': stubs.nodeIdentityMigration,
       '../appLifecycle/containerLabelBackfill': stubs.containerLabelBackfill,
+      './retiredSchema': stubs.retiredSchema,
     });
   });
 
@@ -48,6 +50,7 @@ describe('migrations tests', () => {
       await migrations.runBefore('localDbPrepared');
 
       expect(stubs.nodeIdentityMigration.migrateNodeIdentity.calledOnce).to.be.true;
+      expect(stubs.retiredSchema.dropRetiredSchema.calledOnce).to.be.true;
       expect(stubs.containerLabelBackfill.backfillContainerLabels.called).to.be.false;
     });
 
@@ -73,7 +76,7 @@ describe('migrations tests', () => {
 
       const results = await migrations.runBefore('localDbPrepared');
 
-      expect(results).to.deep.equal([{ id: 'node-identity', ok: false }]);
+      expect(results).to.deep.equal([{ id: 'node-identity', ok: false }, { id: 'retired-schema', ok: true }]);
       sinon.assert.calledWithMatch(stubs.log.error, /node-identity failed/);
     });
 
@@ -84,8 +87,8 @@ describe('migrations tests', () => {
     });
 
     it('runs the rest after one fails', async () => {
-      // Rebuilt registry: the shipped one has a single migration per capability, and the
-      // property under test is that a failure does not suppress a later entry.
+      // Rebuilt registry, so the property under test is independent of which
+      // migrations ship: a failure does not suppress a later entry.
       const order = [];
       const rebuilt = proxyquire('../../ZelBack/src/services/migrations', {
         '../../lib/log': stubs.log,
@@ -93,7 +96,10 @@ describe('migrations tests', () => {
           migrateNodeIdentity: async () => { order.push('first'); throw new Error('boom'); },
         },
         '../appLifecycle/containerLabelBackfill': {
-          backfillContainerLabels: async () => { order.push('second'); },
+          backfillContainerLabels: async () => { order.push('third'); },
+        },
+        './retiredSchema': {
+          dropRetiredSchema: async () => { order.push('second'); },
         },
       });
       rebuilt.migrations.forEach((migration) => {
@@ -103,8 +109,8 @@ describe('migrations tests', () => {
 
       const results = await rebuilt.runBefore('localDbPrepared');
 
-      expect(order).to.deep.equal(['first', 'second']);
-      expect(results.map((r) => r.ok)).to.deep.equal([false, true]);
+      expect(order).to.deep.equal(['first', 'second', 'third']);
+      expect(results.map((r) => r.ok)).to.deep.equal([false, true, true]);
     });
   });
 });
