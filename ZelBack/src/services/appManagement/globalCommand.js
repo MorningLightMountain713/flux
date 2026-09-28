@@ -37,6 +37,14 @@ async function deliverGlobalCommand(url, axiosConfig) {
     try {
       // eslint-disable-next-line no-await-in-loop
       const response = await axios.get(url, axiosConfig);
+      // The transport answers 200 for a refusal too: the node's verdict is the
+      // envelope, and a refused command is the outcome to record.
+      const envelope = response.data;
+      if (envelope && envelope.status === 'error') {
+        const message = envelope.data && (envelope.data.message || envelope.data.name);
+        log.warn(`Command refused by ${url}: ${message || JSON.stringify(envelope.data)}`);
+        return;
+      }
       log.info(`Successfully sent command to ${url}: ${response.status}`);
       return;
     } catch (error) {

@@ -7,6 +7,7 @@ if (!process.env.NODE_CONFIG_DIR) {
 
 const sinon = require('sinon');
 const axios = require('axios');
+const log = require('../../ZelBack/src/lib/log');
 const globalCommand = require('../../ZelBack/src/services/appManagement/globalCommand');
 const appsRepository = require('../../ZelBack/src/services/appDatabase/appsRepository');
 const fluxNetworkHelper = require('../../ZelBack/src/services/fluxNetworkHelper');
@@ -75,6 +76,26 @@ describe('globalCommand tests', () => {
     await globalCommand.executeAppGlobalCommand('TestApp', 'appstart', 'the-auth-header');
 
     sinon.assert.calledWithMatch(axiosStub, sinon.match.string, { headers: { zelidauth: 'the-auth-header' } });
+  });
+
+  // The fan-out does not await a delivery, so its outcome is read from the
+  // delivery itself.
+  it('records a refusal a node answers inside a 200, by the message it gives', async () => {
+    axiosStub.resolves({ status: 200, data: { status: 'error', data: { name: 'Unauthorized', message: 'Unauthorized. Access denied.' } } });
+    const warn = sinon.stub(log, 'warn');
+    const info = sinon.stub(log, 'info');
+    await globalCommand.deliverGlobalCommand('http://192.168.1.1:16127/apps/apprestart/TestApp', { headers: { zelidauth: 'the-auth-header' } });
+    sinon.assert.calledWithMatch(warn, /refused by http:\/\/192\.168\.1\.1:16127\/apps\/apprestart\/TestApp: Unauthorized\. Access denied\./);
+    sinon.assert.neverCalledWithMatch(info, /Successfully sent/);
+  });
+
+  it('records a success envelope as delivered', async () => {
+    axiosStub.resolves({ status: 200, data: { status: 'success', data: { message: 'TestApp queried for restart' } } });
+    const warn = sinon.stub(log, 'warn');
+    const info = sinon.stub(log, 'info');
+    await globalCommand.deliverGlobalCommand('http://192.168.1.1:16127/apps/apprestart/TestApp', { headers: { zelidauth: 'the-auth-header' } });
+    sinon.assert.calledWithMatch(info, /Successfully sent command to http:\/\/192\.168\.1\.1:16127\/apps\/apprestart\/TestApp: 200/);
+    sinon.assert.notCalled(warn);
   });
 
   it('swallows a location lookup failure rather than rejecting into the caller', async () => {
