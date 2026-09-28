@@ -1960,6 +1960,49 @@ describe('syncthingFolderStateMachine tests', () => {
       sinon.assert.calledWith(appReconcilerMock.setControllerDesired, 'bare-app', 'running');
     });
 
+    // Under the grant plane only the grant holder writes. A standby that turned
+    // its synced folder writable would be demoted by manageFolderSyncState on the
+    // next pass, and in between the holder's own promotion reads it as a peer
+    // that already holds the writable copy and stays receiveonly.
+    describe('a synced standby under the grant plane', () => {
+      const syncedStandby = () => {
+        mockParams.receiveOnlySyncthingAppsCache.set('test-app', { restarted: false, numberOfExecutions: 1 });
+        mockParams.appLocation.resolves([
+          { ip: '10.0.0.0:16127', runningSince: null, broadcastedAt: 900 },
+          { ip: '10.0.0.1:16127', runningSince: null, broadcastedAt: 1000 },
+        ]);
+        syncthingServiceMock.getDbStatus.resolves({
+          globalBytes: 1000, inSyncBytes: 1000, state: 'idle', receiveOnlyChangedFiles: 0,
+        });
+        fsMock.promises.readdir.resolves([dirent('.stignore'), dirent('state.db'), dirent('config.yaml')]);
+      };
+
+      afterEach(() => {
+        mastershipGrantGate.leaderIsSelf.restore?.();
+        mastershipGrantGate.noteFolderDemoted.restore?.();
+      });
+
+      it('stays receiveonly and requests no start when the grant names another node', async () => {
+        sinon.stub(mastershipGrantGate, 'leaderIsSelf').resolves(false);
+        sinon.stub(mastershipGrantGate, 'noteFolderDemoted');
+        syncedStandby();
+
+        const result = await stateMachine.manageFolderSyncState(mockParams);
+
+        expect(result.syncthingFolder.type).to.equal('receiveonly');
+        sinon.assert.neverCalledWith(appReconcilerMock.setControllerDesired, sinon.match.any, 'running');
+      });
+
+      it('still turns writable once synced where the grant plane is not open', async () => {
+        sinon.stub(mastershipGrantGate, 'leaderIsSelf').resolves(null);
+        syncedStandby();
+
+        const result = await stateMachine.manageFolderSyncState(mockParams);
+
+        expect(result.syncthingFolder.type, 'the synced branch is reached with this setup').to.equal('sendreceive');
+      });
+    });
+
     it('should NOT start on unsynced data while sync is still progressing (no force-start)', async () => {
       // not the leader, sync at 50% and still progressing (not stalled)
       mockParams.receiveOnlySyncthingAppsCache.set('test-app', {

@@ -1467,6 +1467,12 @@ async function handleReceiveOnlyTransition(params) {
       }
       return { syncthingFolder, cache };
     }
+    // A grant-plane standby stays receiveonly however synced it is: only the
+    // grant holder writes, and a writable standby reads to the holder's own
+    // promotion as a peer already holding the writable copy.
+    if (syncStatus.isSynced && grantLeader === false) {
+      return { syncthingFolder, cache };
+    }
     if (syncStatus.isSynced) {
       // Same pre-flip verification as the seed above: completion metrics come
       // from the index, and an index can be stale - promotion requires the disk
