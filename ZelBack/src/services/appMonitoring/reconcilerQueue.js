@@ -3,7 +3,6 @@
 const log = require('../../lib/log');
 const capabilities = require('../utils/capabilities');
 const fluxEventBus = require('../utils/fluxEventBus');
-const { AsyncGate } = require('../utils/asyncGate');
 
 // The reconciler's scheduling seam: a per-key single-flight, boot-gated workqueue.
 // Producers (operator commands, mount/network repair, the deciders, the event
@@ -49,16 +48,11 @@ const backoffTimers = new Map(); // id -> scheduled retry timeout
 // not outstanding work: it must not hold a converge open (see scheduleRetry)
 const nonSettleHolding = new Set();
 
-// The boot-drain gate: opens once every boot-held component has completed ONE
-// reconcile pass (started, backoff-deferred, awaiting-controller, or failed
-// loudly) - NOT "all containers running". The first apprunning broadcast waits
-// on it so the snapshot doesn't race the boot starts (rows the snapshot misses
-// expire on the ~7min sigterm TTL and the app respawns elsewhere). Capped so a
-// wedged reconcile can never suppress the node's network presence.
-const BOOT_DRAIN_SETTLE_CAP_MS = 2 * 60 * 1000;
-const bootDrainGate = new AsyncGate();
+// `bootReconcilePassed`: every boot-held component has completed ONE reconcile
+// pass (started, backoff-deferred, awaiting-controller, or failed loudly) - NOT
+// "all containers running". A reader that must not wait on a wedged reconcile
+// states its own deadline.
 const bootDraining = new Set(); // boot-held ids still on their first pass
-let bootDrainCapTimer = null;
 
 // Injected by the engine (appReconciler) at module load.
 let reconcileFn = null; // (identifier) => Promise<void>
@@ -82,14 +76,8 @@ function setOnSettled(fn) {
 }
 
 function settleBootDrain(reason) {
-  if (bootDrainGate.ready) return;
-  if (bootDrainCapTimer) {
-    clearTimeout(bootDrainCapTimer);
-    bootDrainCapTimer = null;
-  }
   bootDraining.clear();
-  bootDrainGate.open();
-  log.info(`reconcilerQueue - boot drain settled (${reason})`);
+  capabilities.claim('bootReconcilePassed', 'reconcilerQueue').raise(reason);
 }
 
 /**
@@ -247,11 +235,7 @@ function beginBootDrain() {
     return;
   }
   pending.forEach((id) => bootDraining.add(id));
-  bootDrainCapTimer = setTimeout(() => {
-    log.warn(`reconcilerQueue - boot drain cap reached with ${bootDraining.size} reconcile(s) still in flight: ${[...bootDraining].join(', ')}`);
-    settleBootDrain('cap reached');
-  }, BOOT_DRAIN_SETTLE_CAP_MS);
-  if (bootDrainCapTimer.unref) bootDrainCapTimer.unref();
+  capabilities.claim('bootReconcilePassed', 'reconcilerQueue').starting(`${pending.length} boot-held component(s) on their first pass`);
   pending.forEach((id) => enqueueComponent(id));
 }
 
@@ -264,10 +248,6 @@ function stopQueue() {
   backoffTimers.clear();
   unhandledFailures.clear();
   nonSettleHolding.clear();
-  if (bootDrainCapTimer) {
-    clearTimeout(bootDrainCapTimer);
-    bootDrainCapTimer = null;
-  }
   bootDraining.clear();
   inFlight.clear();
   dirty.clear();
@@ -284,5 +264,6 @@ module.exports = {
   stopQueue,
   setReconcile,
   setOnSettled,
-  waitForBootDrainSettled: () => bootDrainGate.wait(),
+  // what is still on its first pass, for a reader whose deadline passed
+  bootDrainingIds: () => [...bootDraining],
 };

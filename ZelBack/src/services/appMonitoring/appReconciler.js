@@ -2536,7 +2536,7 @@ module.exports = {
   getControllerDesired,
   requestStopAndClearData,
   setRequestGracefulStop,
-  waitForBootDrainSettled: reconcilerQueue.waitForBootDrainSettled,
+  bootDrainingIds: reconcilerQueue.bootDrainingIds,
   start,
   stop,
   // The one answer to "what is this container actually doing" - it probes the

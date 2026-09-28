@@ -1,14 +1,15 @@
 'use strict';
 
 /**
- * A stand-in for the capability registry's reader side, for a module a test
- * loads through proxyquire. `set` moves a capability, calls its `onUp` or
+ * A stand-in for the capability registry, for a module a test loads through
+ * proxyquire. `set` moves a capability, calls its `onUp` or
  * `onDown` listeners on an edge, and releases every `whenUp` waiting on a set
  * that is now up.
  *
  * @param {Object<string, boolean>} [initial] capabilities up at the start
  * @returns {{state: Object<string, boolean>, isUp: Function, whenUp: Function,
- *   onUp: Function, onDown: Function, set: (name: string, up: boolean) => void}}
+ *   onUp: Function, onDown: Function, claim: Function,
+ *   set: (name: string, up: boolean) => void}}
  */
 function capabilityStub(initial = {}) {
   const state = { ...initial };
@@ -31,6 +32,12 @@ function capabilityStub(initial = {}) {
       edgeListeners.push(listener);
       return () => edgeListeners.splice(edgeListeners.indexOf(listener), 1);
     },
+    // An owner's handle, for a module under test that owns a capability.
+    claim: (name) => ({
+      starting: () => stub.set(name, false),
+      raise: () => stub.set(name, true),
+      lower: () => stub.set(name, false),
+    }),
     set(name, up) {
       const was = state[name] === true;
       state[name] = up;
