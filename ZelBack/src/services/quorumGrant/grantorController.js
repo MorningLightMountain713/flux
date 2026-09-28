@@ -912,8 +912,11 @@ async function serve(req, res, type, operate) {
     }
 
     // a vacate's authority is the certificate it carries, not the submitter's
-    // seat on the app — any listed node that holds the certificate may submit it
-    if (type !== 'probe' && type !== 'vacate') {
+    // seat on the app — any listed node that holds the certificate may submit it.
+    // A release gives back only the asker's own term (the register binds its
+    // grantee and epoch), and a removal broadcasts its appremoved before its
+    // teardown releases, so the releaser's row is already gone here.
+    if (type !== 'probe' && type !== 'vacate' && type !== 'release') {
       const holding = await askerHolds(ask, askerNode, type);
       ms.holds = Date.now() - t0 - ms.read - ms.committee;
       if (!holding.holds) {
