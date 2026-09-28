@@ -11,7 +11,7 @@ const messageVerifier = require('./messageVerifier');
 const appEventVerifier = require('./appEventVerifier');
 const { deserializeSpec } = require('../utils/specCutover');
 const { getSpecBackend, assertVersionActivated } = require('../utils/specLibs');
-const daemonServiceMiscRpcs = require('../daemonService/daemonServiceMiscRpcs');
+const daemonStatus = require('../daemonService/daemonStatus');
 const { serialiseAndSignFluxBroadcast } = require('../utils/fluxBroadcastHelper');
 const { peerManager } = require('../utils/peerState');
 const fluxCommunicationUtils = require('../fluxCommunicationUtils');
@@ -237,7 +237,7 @@ async function processMessages(messages, onProgress) {
   messages.sort((a, b) => a.height - b.height);
   const filtered = messages.filter((app) => app.valueSat !== null);
 
-  const syncStatus = daemonServiceMiscRpcs.isDaemonSynced();
+  const syncStatus = daemonStatus.isDaemonSynced();
   const daemonHeight = syncStatus.data.height || 0;
 
   const CHUNK_SIZE = 2000;

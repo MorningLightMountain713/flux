@@ -287,7 +287,7 @@ module.exports = {
     spawnDelayMultiplier: 0.002,
     daemonInfoIntervalMs: 5000,
     // The poll is NOT how often the chain is asked - pollForNewBlocks reads a
-    // height cached by daemonServiceMiscRpcs and refreshed on its own
+    // height cached by daemonStatus and refreshed on its own
     // daemonInfoIntervalMs timer. It is the rate at which the node works
     // through blocks once it knows it is behind, and its share of the
     // tip-refresh window is what decides whether a block is still the tip when

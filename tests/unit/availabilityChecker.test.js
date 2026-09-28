@@ -18,7 +18,7 @@ const deploymentProvider = require('../../ZelBack/src/services/appRuntime/deploy
 const fluxNetworkHelper = require('../../ZelBack/src/services/fluxNetworkHelper');
 // eslint-disable-next-line no-unused-vars
 const verificationHelper = require('../../ZelBack/src/services/verificationHelper');
-const daemonServiceMiscRpcs = require('../../ZelBack/src/services/daemonService/daemonServiceMiscRpcs');
+const daemonStatus = require('../../ZelBack/src/services/daemonService/daemonStatus');
 const upnpService = require('../../ZelBack/src/services/upnpService');
 const networkStateService = require('../../ZelBack/src/services/networkStateService');
 const {
@@ -132,7 +132,7 @@ describe('availabilityChecker tests', () => {
 
   describe('checkMyAppsAvailability tests', () => {
     it('should return early if daemon not synced', async () => {
-      sinon.stub(daemonServiceMiscRpcs, 'isDaemonSynced').returns({
+      sinon.stub(daemonStatus, 'isDaemonSynced').returns({
         data: { synced: false },
       });
 
@@ -147,7 +147,7 @@ describe('availabilityChecker tests', () => {
     });
 
     it('should return early if node not confirmed', async () => {
-      sinon.stub(daemonServiceMiscRpcs, 'isDaemonSynced').returns({
+      sinon.stub(daemonStatus, 'isDaemonSynced').returns({
         data: { synced: true },
       });
       sinon.stub(nodeConfirmationService, 'isConfirmed').returns(false);
@@ -162,7 +162,7 @@ describe('availabilityChecker tests', () => {
     });
 
     it('should return early if no public IP found', async () => {
-      sinon.stub(daemonServiceMiscRpcs, 'isDaemonSynced').returns({
+      sinon.stub(daemonStatus, 'isDaemonSynced').returns({
         data: { synced: true },
       });
       sinon.stub(nodeConfirmationService, 'isConfirmed').returns(true);
@@ -178,7 +178,7 @@ describe('availabilityChecker tests', () => {
     });
 
     it('should return early if failed to get installed apps', async () => {
-      sinon.stub(daemonServiceMiscRpcs, 'isDaemonSynced').returns({
+      sinon.stub(daemonStatus, 'isDaemonSynced').returns({
         data: { synced: true },
       });
       sinon.stub(nodeConfirmationService, 'isConfirmed').returns(true);
@@ -205,7 +205,7 @@ describe('availabilityChecker tests', () => {
       listInstalledAppsStub.resolves([instantiated]);
       buildDeploymentStub.resolves(deployment);
 
-      sinon.stub(daemonServiceMiscRpcs, 'isDaemonSynced').returns({
+      sinon.stub(daemonStatus, 'isDaemonSynced').returns({
         data: { synced: true },
       });
       sinon.stub(nodeConfirmationService, 'isConfirmed').returns(true);
@@ -229,7 +229,7 @@ describe('availabilityChecker tests', () => {
     it('should skip banned ports', async () => {
       const apps = [];
 
-      sinon.stub(daemonServiceMiscRpcs, 'isDaemonSynced').returns({
+      sinon.stub(daemonStatus, 'isDaemonSynced').returns({
         data: { synced: true },
       });
       sinon.stub(nodeConfirmationService, 'isConfirmed').returns(true);
@@ -249,7 +249,7 @@ describe('availabilityChecker tests', () => {
     it('should skip UPNP banned ports when UPNP enabled', async () => {
       const apps = [];
 
-      sinon.stub(daemonServiceMiscRpcs, 'isDaemonSynced').returns({
+      sinon.stub(daemonStatus, 'isDaemonSynced').returns({
         data: { synced: true },
       });
       sinon.stub(nodeConfirmationService, 'isConfirmed').returns(true);
@@ -280,7 +280,7 @@ describe('availabilityChecker tests', () => {
       buildDeploymentStub.resolves(deploymentOf(spec));
       mockDosState.nextTestingPort = 31_002;
 
-      sinon.stub(daemonServiceMiscRpcs, 'isDaemonSynced').returns({
+      sinon.stub(daemonStatus, 'isDaemonSynced').returns({
         data: { synced: true },
       });
       sinon.stub(nodeConfirmationService, 'isConfirmed').returns(true);
@@ -313,7 +313,7 @@ describe('availabilityChecker tests', () => {
       buildDeploymentStub.resolves(deploymentOf(spec));
       mockDosState.nextTestingPort = 31_009;
 
-      sinon.stub(daemonServiceMiscRpcs, 'isDaemonSynced').returns({
+      sinon.stub(daemonStatus, 'isDaemonSynced').returns({
         data: { synced: true },
       });
       sinon.stub(nodeConfirmationService, 'isConfirmed').returns(true);
@@ -352,7 +352,7 @@ describe('availabilityChecker tests', () => {
       });
       mockDosState.nextTestingPort = 31_002;
 
-      sinon.stub(daemonServiceMiscRpcs, 'isDaemonSynced').returns({
+      sinon.stub(daemonStatus, 'isDaemonSynced').returns({
         data: { synced: true },
       });
       sinon.stub(nodeConfirmationService, 'isConfirmed').returns(true);
@@ -374,7 +374,7 @@ describe('availabilityChecker tests', () => {
     it('should skip if remote socket address not available', async () => {
       const apps = [];
 
-      sinon.stub(daemonServiceMiscRpcs, 'isDaemonSynced').returns({
+      sinon.stub(daemonStatus, 'isDaemonSynced').returns({
         data: { synced: true },
       });
       sinon.stub(nodeConfirmationService, 'isConfirmed').returns(true);
@@ -396,7 +396,7 @@ describe('availabilityChecker tests', () => {
       const apps = [];
       mockFailedNodesCache.set('192.168.1.200:16127', '');
 
-      sinon.stub(daemonServiceMiscRpcs, 'isDaemonSynced').returns({
+      sinon.stub(daemonStatus, 'isDaemonSynced').returns({
         data: { synced: true },
       });
       sinon.stub(nodeConfirmationService, 'isConfirmed').returns(true);
@@ -417,7 +417,7 @@ describe('availabilityChecker tests', () => {
     it('should handle UPNP mapping failures', async () => {
       const apps = [];
 
-      sinon.stub(daemonServiceMiscRpcs, 'isDaemonSynced').returns({
+      sinon.stub(daemonStatus, 'isDaemonSynced').returns({
         data: { synced: true },
       });
       sinon.stub(nodeConfirmationService, 'isConfirmed').returns(true);
@@ -449,7 +449,7 @@ describe('availabilityChecker tests', () => {
       const apps = [];
       mockDosState.lastUPNPMapFailed = true; // Already failed once
 
-      sinon.stub(daemonServiceMiscRpcs, 'isDaemonSynced').returns({
+      sinon.stub(daemonStatus, 'isDaemonSynced').returns({
         data: { synced: true },
       });
       sinon.stub(nodeConfirmationService, 'isConfirmed').returns(true);
@@ -478,7 +478,7 @@ describe('availabilityChecker tests', () => {
     });
 
     it('should handle errors gracefully and retry', async () => {
-      sinon.stub(daemonServiceMiscRpcs, 'isDaemonSynced').throws(new Error('Service error'));
+      sinon.stub(daemonStatus, 'isDaemonSynced').throws(new Error('Service error'));
 
       waitMs = await availabilityChecker.runAvailabilityCheckOnce(
         mockDosState,
@@ -492,7 +492,7 @@ describe('availabilityChecker tests', () => {
     it('should use random port from config range when nextTestingPort not set', async () => {
       const apps = [];
 
-      sinon.stub(daemonServiceMiscRpcs, 'isDaemonSynced').returns({
+      sinon.stub(daemonStatus, 'isDaemonSynced').returns({
         data: { synced: true },
       });
       sinon.stub(nodeConfirmationService, 'isConfirmed').returns(true);
@@ -516,7 +516,7 @@ describe('availabilityChecker tests', () => {
       const apps = [];
       mockDosState.nextTestingPort = 31_050;
 
-      sinon.stub(daemonServiceMiscRpcs, 'isDaemonSynced').returns({
+      sinon.stub(daemonStatus, 'isDaemonSynced').returns({
         data: { synced: true },
       });
       sinon.stub(nodeConfirmationService, 'isConfirmed').returns(true);

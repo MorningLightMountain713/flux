@@ -289,7 +289,7 @@ describe('appSpawner tests', () => {
       '../nodeDosState': {
         isNodeDos: sinon.stub().returns(false),
       },
-      '../daemonService/daemonServiceMiscRpcs': {
+      '../daemonService/daemonStatus': {
         isDaemonSynced: daemonSyncStub,
       },
       '../../lib/log': logStub,

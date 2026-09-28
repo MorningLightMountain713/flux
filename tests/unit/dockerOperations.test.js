@@ -264,7 +264,7 @@ describe('appOperations application lifecycle tests', () => {
       },
       '../messageHelper': {},
       '../verificationHelper': {},
-      '../daemonService/daemonServiceMiscRpcs': {},
+      '../daemonService/daemonStatus': {},
       '../fluxNetworkHelper': { getLocalSocketAddress: sinon.stub().resolves('127.0.0.1:16127') },
       '../upnpService': {},
       '../appDatabase/appsRepository': appsRepositoryStub,

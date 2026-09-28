@@ -6,7 +6,7 @@ const config = require('config');
 const serviceHelper = require('../serviceHelper');
 const nodeConfirmationService = require('../nodeConfirmationService');
 const fluxNetworkHelper = require('../fluxNetworkHelper');
-const daemonServiceMiscRpcs = require('../daemonService/daemonServiceMiscRpcs');
+const daemonStatus = require('../daemonService/daemonStatus');
 const upnpService = require('../upnpService');
 const networkStateService = require('../networkStateService');
 const fluxHttpTestServer = require('../utils/fluxHttpTestServer');
@@ -93,7 +93,7 @@ async function runAvailabilityCheckOnce(dosState, portsNotWorking, failedNodesTe
   };
 
   try {
-    const syncStatus = daemonServiceMiscRpcs.isDaemonSynced();
+    const syncStatus = daemonStatus.isDaemonSynced();
     if (!syncStatus.data.synced) {
       log.info('Flux Node daemon not synced. Application checks are disabled');
       return timeouts.appError;

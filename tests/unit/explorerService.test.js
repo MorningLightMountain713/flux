@@ -13,7 +13,7 @@ const specReconciler = require('../../ZelBack/src/services/appLifecycle/specReco
 const appJanitor = require('../../ZelBack/src/services/appLifecycle/appJanitor');
 const portManager = require('../../ZelBack/src/services/appNetwork/portManager');
 const daemonServiceBlockchainRpcs = require('../../ZelBack/src/services/daemonService/daemonServiceBlockchainRpcs');
-const daemonServiceMiscRpcs = require('../../ZelBack/src/services/daemonService/daemonServiceMiscRpcs');
+const daemonStatus = require('../../ZelBack/src/services/daemonService/daemonStatus');
 const capabilities = require('../../ZelBack/src/services/utils/capabilities');
 const daemonServiceUtils = require('../../ZelBack/src/services/daemonService/daemonServiceUtils');
 const dbHelper = require('../../ZelBack/src/services/dbHelper');
@@ -290,7 +290,7 @@ describe('explorerService tests', () => {
     let reconcileInstalledAppsStub;
     let restorePortsSupportStub;
     let daemonServiceBlockchainRpcsStub;
-    let daemonServiceMiscRpcsStub;
+    let daemonStatusStub;
 
     beforeEach(async () => {
       // An unsynced daemon makes processBlock retry itself in two minutes. Left
@@ -306,7 +306,7 @@ describe('explorerService tests', () => {
       restorePortsSupportStub = sinon.stub(portManager, 'restorePortsSupport');
       await dbHelper.initiateDB();
       dbHelper.databaseConnection();
-      daemonServiceMiscRpcsStub = sinon.stub(daemonServiceMiscRpcs, 'isDaemonSynced');
+      daemonStatusStub = sinon.stub(daemonStatus, 'isDaemonSynced');
       daemonServiceBlockchainRpcsStub = sinon.stub(daemonServiceBlockchainRpcs, 'getBlock');
       logInfoSpy = sinon.spy(log, 'info');
       capabilities.setForTests('appRegistryConsistent', true);
@@ -328,7 +328,7 @@ describe('explorerService tests', () => {
         count: 15,
         avgObjSize: 1111,
       });
-      daemonServiceMiscRpcsStub.returns({
+      daemonStatusStub.returns({
         data:
         {
           synced: true,
@@ -390,7 +390,7 @@ describe('explorerService tests', () => {
         count: 15,
         avgObjSize: 1111,
       });
-      daemonServiceMiscRpcsStub.returns({
+      daemonStatusStub.returns({
         data:
         {
           synced: true,
@@ -451,7 +451,7 @@ describe('explorerService tests', () => {
         count: 15,
         avgObjSize: 1111,
       });
-      daemonServiceMiscRpcsStub.returns({
+      daemonStatusStub.returns({
         data:
         {
           synced: true,
@@ -526,7 +526,7 @@ describe('explorerService tests', () => {
       sinon.stub(portManager, 'restorePortsSupport');
       await dbHelper.initiateDB();
       dbHelper.databaseConnection();
-      sinon.stub(daemonServiceMiscRpcs, 'isDaemonSynced').returns({ data: { synced: true, height: HEIGHT } });
+      sinon.stub(daemonStatus, 'isDaemonSynced').returns({ data: { synced: true, height: HEIGHT } });
       sinon.stub(daemonServiceBlockchainRpcs, 'getBlock').returns({
         status: 'success',
         data: { height: HEIGHT, tx: [], confirmations: 1 },
@@ -575,7 +575,7 @@ describe('explorerService tests', () => {
     beforeEach(async () => {
       findInDatabaseStub = sinon.stub(dbHelper, 'findOneInDatabase');
       dropCollectionStub = sinon.stub(dbHelper, 'dropCollection');
-      sinon.stub(daemonServiceMiscRpcs, 'isDaemonSynced').returns({ data: { synced: true } });
+      sinon.stub(daemonStatus, 'isDaemonSynced').returns({ data: { synced: true } });
       getBlockCountStub = sinon.stub(daemonServiceBlockchainRpcs, 'getBlockCount');
       sinon.stub(daemonServiceUtils, 'getConfigValue').returns('5HueCGU8rMjxEXxiPuD5BDku4MkFqeZyd4dZ1jvhTVqvbTLvyTJ'); // Valid WIF private key
       await dbHelper.initiateDB();
@@ -667,7 +667,7 @@ describe('explorerService tests', () => {
         status: 'success',
         data: 200_000,
       });
-      sinon.stub(daemonServiceMiscRpcs, 'isInsightExplorer').returns(true);
+      sinon.stub(daemonStatus, 'isInsightExplorer').returns(true);
       sinon.stub(daemonServiceUtils, 'executeCall').resolves({ status: 'success', data: [] });
       sinon.stub(daemonServiceUtils, 'executeBatchCall').resolves({ status: 'success', data: [] });
 
@@ -691,7 +691,7 @@ describe('explorerService tests', () => {
       const dbFake = sinon.fake.returns({ collection: collectionFake });
       sinon.stub(dbHelper, 'databaseConnection').returns({ db: dbFake });
       getBlockCountStub.returns({ status: 'success', data: 200_000 });
-      sinon.stub(daemonServiceMiscRpcs, 'isInsightExplorer').returns(true);
+      sinon.stub(daemonStatus, 'isInsightExplorer').returns(true);
       sinon.stub(daemonServiceUtils, 'executeCall').resolves({ status: 'error', data: { message: 'RPC unavailable' } });
 
       await explorerService.initiateBlockProcessor({});
@@ -718,7 +718,7 @@ describe('explorerService tests', () => {
         status: 'success',
         data: 200_000,
       });
-      sinon.stub(daemonServiceMiscRpcs, 'isInsightExplorer').returns(true);
+      sinon.stub(daemonStatus, 'isInsightExplorer').returns(true);
 
       await explorerService.initiateBlockProcessor({ restoreDatabase: true });
       await serviceHelper.delay(200);
@@ -748,7 +748,7 @@ describe('explorerService tests', () => {
         status: 'success',
         data: 200_000,
       });
-      sinon.stub(daemonServiceMiscRpcs, 'isInsightExplorer').returns(true);
+      sinon.stub(daemonStatus, 'isInsightExplorer').returns(true);
 
       await explorerService.initiateBlockProcessor({ restoreDatabase: true, deepRestore: true });
       await serviceHelper.delay(200);
@@ -778,7 +778,7 @@ describe('explorerService tests', () => {
         status: 'success',
         data: 200_000,
       });
-      sinon.stub(daemonServiceMiscRpcs, 'isInsightExplorer').returns(true);
+      sinon.stub(daemonStatus, 'isInsightExplorer').returns(true);
       sinon.stub(daemonServiceUtils, 'executeCall').resolves({ status: 'success', data: [] });
       sinon.stub(daemonServiceUtils, 'executeBatchCall').resolves({ status: 'success', data: [] });
 
@@ -1605,7 +1605,7 @@ describe('explorerService tests', () => {
 
   describe('initiateBlockProcessor never rejects', () => {
     beforeEach(async () => {
-      sinon.stub(daemonServiceMiscRpcs, 'isDaemonSynced').returns({ data: { synced: true } });
+      sinon.stub(daemonStatus, 'isDaemonSynced').returns({ data: { synced: true } });
       await dbHelper.initiateDB();
       dbHelper.databaseConnection();
       sinon.stub(dbHelper, 'countInDatabase').resolves(1);

@@ -9,7 +9,7 @@ const log = require('../../lib/log');
 const messageHelper = require('../messageHelper');
 const serviceHelper = require('../serviceHelper');
 const verificationHelper = require('../verificationHelper');
-const daemonServiceMiscRpcs = require('../daemonService/daemonServiceMiscRpcs');
+const daemonStatus = require('../daemonService/daemonStatus');
 const { getSpec, getSpecBackend } = require('../utils/specLibs');
 const specCutover = require('../utils/specCutover');
 const legacyTransportProvider = require('../providers/FluxOSLegacyTransportProvider');
@@ -637,7 +637,7 @@ async function getApplicationSpecification(appname, opts = {}) {
 
 async function getApplicationSpecificationAPI(req, res) {
   try {
-    const syncStatus = daemonServiceMiscRpcs.isDaemonSynced();
+    const syncStatus = daemonStatus.isDaemonSynced();
     if (!syncStatus.data.synced) {
       throw new Error('Daemon not yet synced.');
     }
@@ -820,7 +820,7 @@ async function convertApplicationSpecification(appname, opts = {}) {
  */
 async function appConvertApi(req, res) {
   try {
-    const syncStatus = daemonServiceMiscRpcs.isDaemonSynced();
+    const syncStatus = daemonStatus.isDaemonSynced();
     if (!syncStatus.data.synced) {
       throw new Error('Daemon not yet synced.');
     }
@@ -1255,7 +1255,7 @@ async function reconstructAppMessagesHashCollection() {
     const db = dbHelper.databaseConnection();
     const databaseApps = db.db(config.get('database.appsglobal.database'));
     const databaseDaemon = db.db(config.get('database.daemon.database'));
-    const syncStatus = daemonServiceMiscRpcs.isDaemonSynced();
+    const syncStatus = daemonStatus.isDaemonSynced();
     const currentHeight = syncStatus.data.height || 0;
     const query = {};
     const projection = { projection: { _id: 0 } };

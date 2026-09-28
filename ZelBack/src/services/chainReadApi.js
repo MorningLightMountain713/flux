@@ -4,7 +4,7 @@ const config = require('config');
 
 const log = require('../lib/log');
 const daemonServiceAddressRpcs = require('./daemonService/daemonServiceAddressRpcs');
-const daemonServiceMiscRpcs = require('./daemonService/daemonServiceMiscRpcs');
+const daemonStatus = require('./daemonService/daemonStatus');
 const dbHelper = require('./dbHelper');
 const messageHelper = require('./messageHelper');
 
@@ -41,7 +41,7 @@ async function getAddressUtxos(req, res) {
       query: {},
     };
     const insightResult = await daemonServiceAddressRpcs.getSingleAddressUtxos(daemonRequest);
-    const syncStatus = daemonServiceMiscRpcs.isDaemonSynced();
+    const syncStatus = daemonStatus.isDaemonSynced();
     const curHeight = syncStatus.data.height;
     const utxos = [];
     insightResult.data.forEach((utxo) => {

@@ -7,7 +7,7 @@ const { expect } = require('chai');
 const sinon = require('sinon');
 const proxyquire = require('proxyquire');
 const dbHelper = require('../../ZelBack/src/services/dbHelper');
-const daemonServiceMiscRpcs = require('../../ZelBack/src/services/daemonService/daemonServiceMiscRpcs');
+const daemonStatus = require('../../ZelBack/src/services/daemonService/daemonStatus');
 const appsRepository = require('../../ZelBack/src/services/appDatabase/appsRepository');
 const specCutover = require('../../ZelBack/src/services/utils/specCutover');
 const {
@@ -71,7 +71,7 @@ async function registered(spec, height, registeredAt) {
 // appSpecHelpers reads resolveSpec; the regimes read it one module deeper under
 // a different request path. Wiring them explicitly keeps every other module a
 // singleton — proxyquire's @global reloads the whole tree, which silently gives
-// the code under test its own daemonServiceMiscRpcs that no stub can reach.
+// the code under test its own daemonStatus that no stub can reach.
 function buildAppSpecHelpers(cutover) {
   const P = '../../ZelBack/src/services';
   const legacy = proxyquire(`${P}/pricing/legacyPricingRegime`, { '../utils/specCutover': cutover });
@@ -536,7 +536,7 @@ describe('appSpecHelpers tests', () => {
       const appSpec = (await v8Spec()).serialize();
 
       sinon.stub(dbHelper, 'databaseConnection').returns({ db: () => ({}) });
-      sinon.stub(daemonServiceMiscRpcs, 'isDaemonSynced').returns({
+      sinon.stub(daemonStatus, 'isDaemonSynced').returns({
         data: { synced: false },
       });
 
@@ -570,7 +570,7 @@ describe('appSpecHelpers tests', () => {
       appSpecHelpers = proxyquire('../../ZelBack/src/services/utils/appSpecHelpers', {
         './specCutover': { resolveSpec: sinon.stub().resolves(markupSpec) },
       });
-      sinon.stub(daemonServiceMiscRpcs, 'isDaemonSynced').returns({ data: { synced: true, height: 200 } });
+      sinon.stub(daemonStatus, 'isDaemonSynced').returns({ data: { synced: true, height: 200 } });
       // No existing global app -> the registration path runs, so the markup is visible.
       sinon.stub(appsRepository, 'getGlobalAppInfo').resolves(null);
       sinon.stub(priceOracleState, 'getPriceMessageHistory').returns({ resolveAt: () => priceFields });
@@ -673,7 +673,7 @@ describe('appSpecHelpers tests', () => {
         resolveSpec: sinon.stub().resolves(newSpec),
         resolveInstantiatedSpec,
       });
-      sinon.stub(daemonServiceMiscRpcs, 'isDaemonSynced').returns({ data: { synced: true, height: 200 } });
+      sinon.stub(daemonStatus, 'isDaemonSynced').returns({ data: { synced: true, height: 200 } });
       sinon.stub(appsRepository, 'getGlobalAppInfo').resolves(existing);
       sinon.stub(appsRepository, 'listAppMessagesByName').resolves(messages);
       sinon.stub(priceOracleState, 'getPriceMessageHistory').returns({ resolveAt: () => priceFields });
@@ -829,7 +829,7 @@ describe('appSpecHelpers tests', () => {
         resolveSpec: sinon.stub().resolves(legacyApp),
         resolveInstantiatedSpec: sinon.stub().callsFake(async (inst) => inst.spec),
       });
-      sinon.stub(daemonServiceMiscRpcs, 'isDaemonSynced').returns({ data: { synced: true, height: daemonHeight } });
+      sinon.stub(daemonStatus, 'isDaemonSynced').returns({ data: { synced: true, height: daemonHeight } });
       sinon.stub(appsRepository, 'getGlobalAppInfo')
         .resolves(await registered(prev, daemonHeight + 44_000 - legacyApp.expire));
       sinon.stub(appsRepository, 'listAppMessagesByName').resolves([]);

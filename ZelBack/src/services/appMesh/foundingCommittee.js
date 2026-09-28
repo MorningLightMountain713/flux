@@ -4,7 +4,7 @@ const crypto = require('node:crypto');
 const config = require('config');
 const dbHelper = require('../dbHelper');
 const networkStateService = require('../networkStateService');
-const daemonServiceMiscRpcs = require('../daemonService/daemonServiceMiscRpcs');
+const daemonStatus = require('../daemonService/daemonStatus');
 const { selectCommittee } = require('../utils/committeeSelector');
 const { globalAppStateEvents } = require('../utils/appConstants');
 const fluxEventBus = require('../utils/fluxEventBus');
@@ -411,7 +411,7 @@ function listedSeats(photo, listedByOutpoint) {
 async function evaluateFlips() {
   const database = db();
   if (!database) return;
-  const height = daemonServiceMiscRpcs.getCurrentDaemonHeight();
+  const height = daemonStatus.getCurrentDaemonHeight();
   if (!Number.isFinite(height) || height <= 0) return;
   const currentFingerprint = networkStateService.membershipFingerprint();
   const current = currentFingerprint ? networkStateService.membershipAt(currentFingerprint) : null;
@@ -526,7 +526,7 @@ async function componentWorld(appName, component) {
 
   let armed = false;
   if (photo?.rotSinceHeight !== undefined) {
-    const height = daemonServiceMiscRpcs.getCurrentDaemonHeight();
+    const height = daemonStatus.getCurrentDaemonHeight();
     if (Number.isFinite(height) && height > 0) {
       armed = nextFlipHeight(intro, newest, photo.rotSinceHeight) - height <= QUIET_ZONE();
     }
@@ -560,7 +560,7 @@ async function appWorld(appName) {
 
   let armed = false;
   if (photo?.rotSinceHeight !== undefined) {
-    const height = daemonServiceMiscRpcs.getCurrentDaemonHeight();
+    const height = daemonStatus.getCurrentDaemonHeight();
     if (Number.isFinite(height) && height > 0) {
       armed = nextFlipHeight(intro, newest, photo.rotSinceHeight) - height <= QUIET_ZONE();
     }
@@ -589,7 +589,7 @@ async function selfOnFoundingCommittee(appName, anchor, askFingerprint, askGener
   // (the dark-rot arm); one that can SEE itself delisted has no seat to
   // serve from (the collateral-moved arm). Founder registers only — HELD
   // asks pin to current fingerprints and keep their own rules.
-  const synced = daemonServiceMiscRpcs.isDaemonSynced()?.data?.synced === true;
+  const synced = daemonStatus.isDaemonSynced()?.data?.synced === true;
   if (!synced) {
     return { member: false, reason: 'own chain view is stale' };
   }

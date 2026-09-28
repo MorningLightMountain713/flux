@@ -153,7 +153,7 @@ describe('quorumGrant mastershipGrantGate', () => {
             quorumGrantHeldTtlMs: 150_000,
           },
         }),
-        '../daemonService/daemonServiceMiscRpcs': {
+        '../daemonService/daemonStatus': {
           isDaemonSynced: () => ({ data: { height, synced } }),
         },
       });
@@ -229,7 +229,7 @@ describe('quorumGrant mastershipGrantGate', () => {
             ...extraConfig,
           },
         }),
-        '../daemonService/daemonServiceMiscRpcs': {
+        '../daemonService/daemonStatus': {
           isDaemonSynced: () => ({ data: { height, synced } }),
         },
       });
@@ -336,7 +336,7 @@ describe('quorumGrant mastershipGrantGate', () => {
             quorumGrantHeldTtlMs: 150_000,
           },
         }),
-        '../daemonService/daemonServiceMiscRpcs': {
+        '../daemonService/daemonStatus': {
           isDaemonSynced: () => ({ data: { height, synced: true } }),
         },
       });
@@ -481,7 +481,7 @@ describe('quorumGrant mastershipGrantGate', () => {
             quorumGrantAskTimeoutMs: ASK_TIMEOUT,
           },
         }),
-        '../daemonService/daemonServiceMiscRpcs': {
+        '../daemonService/daemonStatus': {
           isDaemonSynced: () => ({ data: { height, synced: true } }),
         },
       });
@@ -617,7 +617,7 @@ describe('quorumGrant mastershipGrantGate', () => {
             ...(askTimeout !== undefined ? { quorumGrantAskTimeoutMs: askTimeout } : {}),
           },
         }),
-        '../daemonService/daemonServiceMiscRpcs': {
+        '../daemonService/daemonStatus': {
           isDaemonSynced: () => ({ data: { height: 2_100_000, synced: true } }),
         },
       });

@@ -12,7 +12,7 @@ const reorgSource = require('./daemonService/reorgSource');
 const dbHelper = require('./dbHelper');
 const verificationHelper = require('./verificationHelper');
 const messageHelper = require('./messageHelper');
-const daemonServiceMiscRpcs = require('./daemonService/daemonServiceMiscRpcs');
+const daemonStatus = require('./daemonService/daemonStatus');
 const capabilities = require('./utils/capabilities');
 const daemonServiceControlRpcs = require('./daemonService/daemonServiceControlRpcs');
 const daemonServiceBlockchainRpcs = require('./daemonService/daemonServiceBlockchainRpcs');
@@ -1326,7 +1326,7 @@ function scheduleScan(delayMs, reason) {
  * @returns {Promise<void>} Resolves when caught up, stopped, or backed off.
  */
 async function drainToTip() {
-  const syncStatus = daemonServiceMiscRpcs.isDaemonSynced();
+  const syncStatus = daemonStatus.isDaemonSynced();
 
   if (!syncStatus.data.synced) {
     scheduleScan(config.get('fluxapps.explorerUnsyncedRetryMs'), 'daemon unsynced');
@@ -1358,7 +1358,7 @@ async function drainToTip() {
     return;
   }
 
-  const isInsightExplorer = daemonServiceMiscRpcs.isInsightExplorer();
+  const isInsightExplorer = daemonStatus.isInsightExplorer();
 
   while (!scanStopped && next <= daemonHeight) {
     const current = next;
@@ -1680,7 +1680,7 @@ async function initiateBlockProcessor(options = {}) {
       fluxEventBus.publish('explorer:ready', { height: scannedBlockHeight });
     }
 
-    const isInsightExplorer = daemonServiceMiscRpcs.isInsightExplorer();
+    const isInsightExplorer = daemonStatus.isInsightExplorer();
 
     if (daemonHeight <= scannedBlockHeight) {
       if (lastchainTipCheck === 0) {

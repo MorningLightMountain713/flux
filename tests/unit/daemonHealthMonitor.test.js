@@ -13,7 +13,7 @@ describe('daemonHealthMonitor tests', () => {
   let daemonHealthMonitor;
   let serviceHelperStub;
   let logStub;
-  let daemonServiceMiscRpcsStub;
+  let daemonStatusStub;
   let appsRepositoryStub;
   let appUninstallerStub;
   let clock;
@@ -35,7 +35,7 @@ describe('daemonHealthMonitor tests', () => {
       error: sinon.stub(),
     };
 
-    daemonServiceMiscRpcsStub = {
+    daemonStatusStub = {
       isDaemonSynced: sinon.stub(),
     };
 
@@ -50,7 +50,7 @@ describe('daemonHealthMonitor tests', () => {
     // Use proxyquire to inject stubs
     daemonHealthMonitor = proxyquire.noCallThru()('../../ZelBack/src/services/appMonitoring/daemonHealthMonitor', {
       '../../lib/log': logStub,
-      '../daemonService/daemonServiceMiscRpcs': daemonServiceMiscRpcsStub,
+      '../daemonService/daemonStatus': daemonStatusStub,
       '../appDatabase/appsRepository': appsRepositoryStub,
       '../appLifecycle/appUninstaller': appUninstallerStub,
     });
@@ -68,37 +68,37 @@ describe('daemonHealthMonitor tests', () => {
   describe('checkDaemonHealthAndCleanup tests', () => {
     it('should skip checks while any operation is in flight', async () => {
       operationRegistry.acquire('someapp', 'install', 'test');
-      daemonServiceMiscRpcsStub.isDaemonSynced.returns({ data: { synced: false } });
+      daemonStatusStub.isDaemonSynced.returns({ data: { synced: false } });
 
       await daemonHealthMonitor.checkDaemonHealthAndCleanup();
 
-      expect(daemonServiceMiscRpcsStub.isDaemonSynced.called).to.be.false;
+      expect(daemonStatusStub.isDaemonSynced.called).to.be.false;
     });
 
     it('should skip checks during a backup too (any lease counts for the node-wide mass-wipe)', async () => {
       operationRegistry.acquire('someapp', 'backup', 'test');
-      daemonServiceMiscRpcsStub.isDaemonSynced.returns({ data: { synced: false } });
+      daemonStatusStub.isDaemonSynced.returns({ data: { synced: false } });
 
       await daemonHealthMonitor.checkDaemonHealthAndCleanup();
 
-      expect(daemonServiceMiscRpcsStub.isDaemonSynced.called).to.be.false;
+      expect(daemonStatusStub.isDaemonSynced.called).to.be.false;
     });
 
     it('should reset state when daemon is synced after being unsynced', async () => {
       // First call - daemon becomes unsynced
-      daemonServiceMiscRpcsStub.isDaemonSynced.returns({ data: { synced: false } });
+      daemonStatusStub.isDaemonSynced.returns({ data: { synced: false } });
       await daemonHealthMonitor.checkDaemonHealthAndCleanup();
       expect(logStub.warn.calledWith('Daemon detected as unsynced, starting health monitoring')).to.be.true;
 
       // Second call - daemon is synced again
-      daemonServiceMiscRpcsStub.isDaemonSynced.returns({ data: { synced: true } });
+      daemonStatusStub.isDaemonSynced.returns({ data: { synced: true } });
       await daemonHealthMonitor.checkDaemonHealthAndCleanup();
 
       expect(logStub.info.calledWith('Daemon sync recovered, resetting health monitor state')).to.be.true;
     });
 
     it('should do nothing when daemon is synced and was never unsynced', async () => {
-      daemonServiceMiscRpcsStub.isDaemonSynced.returns({ data: { synced: true } });
+      daemonStatusStub.isDaemonSynced.returns({ data: { synced: true } });
 
       await daemonHealthMonitor.checkDaemonHealthAndCleanup();
 
@@ -108,7 +108,7 @@ describe('daemonHealthMonitor tests', () => {
     });
 
     it('should start tracking when daemon becomes unsynced', async () => {
-      daemonServiceMiscRpcsStub.isDaemonSynced.returns({ data: { synced: false } });
+      daemonStatusStub.isDaemonSynced.returns({ data: { synced: false } });
 
       await daemonHealthMonitor.checkDaemonHealthAndCleanup();
 
@@ -120,7 +120,7 @@ describe('daemonHealthMonitor tests', () => {
       clock = sinon.useFakeTimers();
 
       // First call - daemon becomes unsynced
-      daemonServiceMiscRpcsStub.isDaemonSynced.returns({ data: { synced: false } });
+      daemonStatusStub.isDaemonSynced.returns({ data: { synced: false } });
       await daemonHealthMonitor.checkDaemonHealthAndCleanup();
 
       // Advance time by 1 hour (less than threshold)
@@ -143,7 +143,7 @@ describe('daemonHealthMonitor tests', () => {
       appsRepositoryStub.listInstalledApps.resolves(mockApps);
 
       // First call - daemon becomes unsynced
-      daemonServiceMiscRpcsStub.isDaemonSynced.returns({ data: { synced: false } });
+      daemonStatusStub.isDaemonSynced.returns({ data: { synced: false } });
       await daemonHealthMonitor.checkDaemonHealthAndCleanup();
 
       // Advance time by 2 hours (past threshold)
@@ -166,7 +166,7 @@ describe('daemonHealthMonitor tests', () => {
       appsRepositoryStub.listInstalledApps.resolves(mockApps);
 
       // First call - daemon becomes unsynced
-      daemonServiceMiscRpcsStub.isDaemonSynced.returns({ data: { synced: false } });
+      daemonStatusStub.isDaemonSynced.returns({ data: { synced: false } });
       await daemonHealthMonitor.checkDaemonHealthAndCleanup();
 
       // Advance time by 2 hours
@@ -187,7 +187,7 @@ describe('daemonHealthMonitor tests', () => {
       appsRepositoryStub.listInstalledApps.resolves([]);
 
       // First call - daemon becomes unsynced
-      daemonServiceMiscRpcsStub.isDaemonSynced.returns({ data: { synced: false } });
+      daemonStatusStub.isDaemonSynced.returns({ data: { synced: false } });
       await daemonHealthMonitor.checkDaemonHealthAndCleanup();
 
       // Advance time by 2 hours
@@ -206,7 +206,7 @@ describe('daemonHealthMonitor tests', () => {
       appsRepositoryStub.listInstalledApps.resolves(null);
 
       // First call - daemon becomes unsynced
-      daemonServiceMiscRpcsStub.isDaemonSynced.returns({ data: { synced: false } });
+      daemonStatusStub.isDaemonSynced.returns({ data: { synced: false } });
       await daemonHealthMonitor.checkDaemonHealthAndCleanup();
 
       // Advance time by 2 hours
@@ -236,7 +236,7 @@ describe('daemonHealthMonitor tests', () => {
         .onCall(2).resolves();
 
       // First call - daemon becomes unsynced
-      daemonServiceMiscRpcsStub.isDaemonSynced.returns({ data: { synced: false } });
+      daemonStatusStub.isDaemonSynced.returns({ data: { synced: false } });
       await daemonHealthMonitor.checkDaemonHealthAndCleanup();
 
       // Advance time by 2 hours
@@ -259,7 +259,7 @@ describe('daemonHealthMonitor tests', () => {
       appsRepositoryStub.listInstalledApps.resolves(mockApps);
 
       // First call - daemon becomes unsynced
-      daemonServiceMiscRpcsStub.isDaemonSynced.returns({ data: { synced: false } });
+      daemonStatusStub.isDaemonSynced.returns({ data: { synced: false } });
       await daemonHealthMonitor.checkDaemonHealthAndCleanup();
 
       // Advance time by 2 hours
@@ -278,7 +278,7 @@ describe('daemonHealthMonitor tests', () => {
     });
 
     it('should handle errors during health check gracefully', async () => {
-      daemonServiceMiscRpcsStub.isDaemonSynced.throws(new Error('RPC error'));
+      daemonStatusStub.isDaemonSynced.throws(new Error('RPC error'));
 
       await daemonHealthMonitor.checkDaemonHealthAndCleanup();
 
@@ -292,7 +292,7 @@ describe('daemonHealthMonitor tests', () => {
       appsRepositoryStub.listInstalledApps.resolves(mockApps);
 
       // First call - daemon becomes unsynced
-      daemonServiceMiscRpcsStub.isDaemonSynced.returns({ data: { synced: false } });
+      daemonStatusStub.isDaemonSynced.returns({ data: { synced: false } });
       await daemonHealthMonitor.checkDaemonHealthAndCleanup();
 
       // Advance time by 2 hours and trigger removal
@@ -301,11 +301,11 @@ describe('daemonHealthMonitor tests', () => {
       expect(appUninstallerStub.uninstallApplication.callCount).to.equal(1);
 
       // Daemon recovers
-      daemonServiceMiscRpcsStub.isDaemonSynced.returns({ data: { synced: true } });
+      daemonStatusStub.isDaemonSynced.returns({ data: { synced: true } });
       await daemonHealthMonitor.checkDaemonHealthAndCleanup();
 
       // Daemon goes unsynced again
-      daemonServiceMiscRpcsStub.isDaemonSynced.returns({ data: { synced: false } });
+      daemonStatusStub.isDaemonSynced.returns({ data: { synced: false } });
       await daemonHealthMonitor.checkDaemonHealthAndCleanup();
 
       // Advance time by 2 hours again

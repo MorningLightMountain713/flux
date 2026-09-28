@@ -38,7 +38,7 @@ describe('nodeConfirmationService', () => {
 
     service = proxyquire('../../ZelBack/src/services/nodeConfirmationService', {
       './daemonService/daemonServiceFluxnodeRpcs': { getFluxNodeStatus: getFluxNodeStatusStub },
-      './daemonService/daemonServiceMiscRpcs': { isDaemonSynced: isDaemonSyncedStub },
+      './daemonService/daemonStatus': { isDaemonSynced: isDaemonSyncedStub },
       './daemonService/daemonSubscriptionService': { daemonAlive: () => true },
       './fluxNetworkHelper': {
         getLocalSocketAddress: getLocalSocketAddressStub,

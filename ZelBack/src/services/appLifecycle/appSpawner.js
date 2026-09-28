@@ -10,7 +10,7 @@ const fluxNetworkHelper = require('../fluxNetworkHelper');
 const fluxCommunicationMessagesSender = require('../fluxCommunicationMessagesSender');
 const nodeDosState = require('../nodeDosState');
 const geolocationService = require('../geolocationService');
-const daemonServiceMiscRpcs = require('../daemonService/daemonServiceMiscRpcs');
+const daemonStatus = require('../daemonService/daemonStatus');
 const log = require('../../lib/log');
 const { normalizeSocketAddress, extractIp, extractPort, socketAddressesMatch } = require('../utils/socketAddressUtils');
 const { collateralOutpoint } = require('../utils/nodePinning');
@@ -407,7 +407,7 @@ async function trySpawningGlobalApplication() {
       return delayTime;
     }
 
-    const syncStatus = daemonServiceMiscRpcs.isDaemonSynced();
+    const syncStatus = daemonStatus.isDaemonSynced();
     const currentHeight = syncStatus.data.height;
     const nowSeconds = Math.floor(Date.now() / 1000);
 

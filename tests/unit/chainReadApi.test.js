@@ -5,7 +5,7 @@ const sinon = require('sinon');
 
 const chainReadApi = require('../../ZelBack/src/services/chainReadApi');
 const daemonServiceAddressRpcs = require('../../ZelBack/src/services/daemonService/daemonServiceAddressRpcs');
-const daemonServiceMiscRpcs = require('../../ZelBack/src/services/daemonService/daemonServiceMiscRpcs');
+const daemonStatus = require('../../ZelBack/src/services/daemonService/daemonStatus');
 const dbHelper = require('../../ZelBack/src/services/dbHelper');
 const log = require('../../ZelBack/src/lib/log');
 
@@ -32,7 +32,7 @@ describe('chainReadApi tests', () => {
 
     beforeEach(() => {
       getSingleAddressUtxosStub = sinon.stub(daemonServiceAddressRpcs, 'getSingleAddressUtxos');
-      sinon.stub(daemonServiceMiscRpcs, 'isDaemonSynced').returns({
+      sinon.stub(daemonStatus, 'isDaemonSynced').returns({
         status: 'success',
         data: { height: 100, header: 100, synced: true },
       });

@@ -2,7 +2,7 @@
 
 const config = require('config');
 const serviceHelper = require('../serviceHelper');
-const daemonServiceMiscRpcs = require('../daemonService/daemonServiceMiscRpcs');
+const daemonStatus = require('../daemonService/daemonStatus');
 const dockerService = require('../dockerService');
 const generalService = require('../generalService');
 const networkStateService = require('../networkStateService');
@@ -131,7 +131,7 @@ function planeView() {
   if (!timingSafe()) return null;
   const activateAt = activationHeight();
   if (!activateAt) return null;
-  const { height, synced } = daemonServiceMiscRpcs.isDaemonSynced().data ?? {};
+  const { height, synced } = daemonStatus.isDaemonSynced().data ?? {};
   if (!synced || !Number.isFinite(height)) return null;
   return { height, activateAt };
 }

@@ -7,7 +7,7 @@ const generalService = require('../../ZelBack/src/services/generalService');
 const dbHelper = require('../../ZelBack/src/services/dbHelper');
 const daemonServiceFluxnodeRpcs = require('../../ZelBack/src/services/daemonService/daemonServiceFluxnodeRpcs');
 const daemonServiceTransactionRpcs = require('../../ZelBack/src/services/daemonService/daemonServiceTransactionRpcs');
-const daemonServiceMiscRpcs = require('../../ZelBack/src/services/daemonService/daemonServiceMiscRpcs');
+const daemonStatus = require('../../ZelBack/src/services/daemonService/daemonStatus');
 const { requireMongo } = require('./dbTestHelper');
 
 chai.use(chaiAsPromised);
@@ -587,7 +587,7 @@ describe('generalService tests', () => {
     let dbStub;
 
     beforeEach(async () => {
-      isDaemonSyncedStub = sinon.stub(daemonServiceMiscRpcs, 'isDaemonSynced');
+      isDaemonSyncedStub = sinon.stub(daemonStatus, 'isDaemonSynced');
       dbStub = sinon.stub(dbHelper, 'findOneInDatabase');
       await dbHelper.initiateDB();
       dbHelper.databaseConnection();

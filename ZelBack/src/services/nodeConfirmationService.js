@@ -2,7 +2,7 @@
 
 const config = require('config');
 const daemonServiceFluxnodeRpcs = require('./daemonService/daemonServiceFluxnodeRpcs');
-const daemonServiceMiscRpcs = require('./daemonService/daemonServiceMiscRpcs');
+const daemonStatus = require('./daemonService/daemonStatus');
 const daemonSubscriptionService = require('./daemonService/daemonSubscriptionService');
 const fluxNetworkHelper = require('./fluxNetworkHelper');
 const networkStateService = require('./networkStateService');
@@ -100,7 +100,7 @@ function blocksSinceConfirmation() {
   const lastConfirmed = nodeStatus?.last_confirmed_height;
   if (!Number.isFinite(lastConfirmed) || lastConfirmed <= 0) return null;
 
-  const { height, synced } = daemonServiceMiscRpcs.isDaemonSynced().data;
+  const { height, synced } = daemonStatus.isDaemonSynced().data;
   if (!synced || !Number.isFinite(height) || height <= 0) return null;
 
   return height - lastConfirmed;
@@ -129,7 +129,7 @@ function blocksAtFrozenTip() {
   const lastConfirmed = nodeStatus?.last_confirmed_height;
   if (!Number.isFinite(lastConfirmed) || lastConfirmed <= 0) return null;
 
-  const { height } = daemonServiceMiscRpcs.isDaemonSynced().data;
+  const { height } = daemonStatus.isDaemonSynced().data;
   if (!Number.isFinite(height) || height <= 0) return null;
 
   return height - lastConfirmed;

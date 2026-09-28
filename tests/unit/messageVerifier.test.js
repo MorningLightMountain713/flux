@@ -92,7 +92,7 @@ function makeBaseStubs(overrides = {}) {
       ensureString: sinon.stub().callsFake((v) => String(v)),
       delay: sinon.stub().resolves(),
     },
-    '../daemonService/daemonServiceMiscRpcs': {
+    '../daemonService/daemonStatus': {
       isDaemonSynced: sinon.stub().returns({ data: { height: 2_000_000, synced: true } }),
     },
     '../daemonService/daemonServiceBlockchainRpcs': {

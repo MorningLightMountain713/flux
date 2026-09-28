@@ -4,7 +4,7 @@ const { expect } = require('chai');
 const sinon = require('sinon');
 
 const chainTipSource = require('../../ZelBack/src/services/daemonService/chainTipSource');
-const daemonServiceMiscRpcs = require('../../ZelBack/src/services/daemonService/daemonServiceMiscRpcs');
+const daemonStatus = require('../../ZelBack/src/services/daemonService/daemonStatus');
 const daemonSubscriptionService = require('../../ZelBack/src/services/daemonService/daemonSubscriptionService');
 const fluxEventBus = require('../../ZelBack/src/services/utils/fluxEventBus');
 
@@ -24,9 +24,9 @@ describe('chainTipSource tests', () => {
     publishSpy = sinon.spy(fluxEventBus, 'publish');
     isTopicAvailableStub = sinon.stub(daemonSubscriptionService, 'isTopicAvailable').returns(true);
     subscribeStub = sinon.stub(daemonSubscriptionService, 'subscribe');
-    blockchainInfoStub = sinon.stub(daemonServiceMiscRpcs, 'fluxDaemonBlockchainInfo').resolves(true);
-    recordChainTipStub = sinon.stub(daemonServiceMiscRpcs, 'recordChainTip');
-    pollServiceStub = sinon.stub(daemonServiceMiscRpcs, 'daemonBlockchainInfoService').resolves();
+    blockchainInfoStub = sinon.stub(daemonStatus, 'fluxDaemonBlockchainInfo').resolves(true);
+    recordChainTipStub = sinon.stub(daemonStatus, 'recordChainTip');
+    pollServiceStub = sinon.stub(daemonStatus, 'daemonBlockchainInfoService').resolves();
   });
 
   afterEach(() => {

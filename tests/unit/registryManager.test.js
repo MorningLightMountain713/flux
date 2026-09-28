@@ -10,7 +10,7 @@ const { Privilege, authOf } = require('../../ZelBack/src/services/utils/privileg
 const registryManager = require('../../ZelBack/src/services/appDatabase/registryManager');
 // eslint-disable-next-line no-unused-vars
 const messageHelper = require('../../ZelBack/src/services/messageHelper');
-const daemonServiceMiscRpcs = require('../../ZelBack/src/services/daemonService/daemonServiceMiscRpcs');
+const daemonStatus = require('../../ZelBack/src/services/daemonService/daemonStatus');
 const appsRepository = require('../../ZelBack/src/services/appDatabase/appsRepository');
 const verificationHelper = require('../../ZelBack/src/services/verificationHelper');
 const serviceHelper = require('../../ZelBack/src/services/serviceHelper');
@@ -165,7 +165,7 @@ describe('registryManager tests', () => {
       const db = dbHelper.databaseConnection();
       await db.db(config.database.daemon.database).collection(hashes).deleteMany({});
       await db.db(config.database.appsglobal.database).collection(messages).deleteMany({});
-      sinon.stub(daemonServiceMiscRpcs, 'isDaemonSynced').returns({ status: 'success', data: { height: 5000, synced: true } });
+      sinon.stub(daemonStatus, 'isDaemonSynced').returns({ status: 'success', data: { height: 5000, synced: true } });
     });
 
     it('re-seeks a row it marked as holding the message, from the row own origin', async () => {
@@ -598,7 +598,7 @@ describe('registryManager tests', () => {
 
   describe('getApplicationSpecificationAPI tests', () => {
     beforeEach(() => {
-      sinon.stub(daemonServiceMiscRpcs, 'isDaemonSynced').returns({
+      sinon.stub(daemonStatus, 'isDaemonSynced').returns({
         data: {
           synced: true,
           height: 1000,
@@ -620,7 +620,7 @@ describe('registryManager tests', () => {
     });
 
     it('should return error if daemon not synced', async () => {
-      daemonServiceMiscRpcs.isDaemonSynced.returns({
+      daemonStatus.isDaemonSynced.returns({
         data: {
           synced: false,
           height: 0,
@@ -869,7 +869,7 @@ describe('registryManager tests', () => {
         // unsynced, so without this every test here asserts that refusal instead
         // of the channel negotiation it describes. It was standing on a stub
         // another test left behind, which is why it depended on what else ran.
-        sinon.stub(daemonServiceMiscRpcs, 'isDaemonSynced').returns({ data: { synced: true, height: 1000 } });
+        sinon.stub(daemonStatus, 'isDaemonSynced').returns({ data: { synced: true, height: 1000 } });
         sinon.stub(verificationHelper, 'verifyPrivilege').resolves(true);
         // The instances are Object.freeze'd, so the call counters go on the
         // prototypes; sinon.restore() in the outer afterEach puts them back.
@@ -1175,7 +1175,7 @@ describe('registryManager tests', () => {
     });
 
     it('appConvertApi refuses an unprivileged caller before reading the app', async () => {
-      sinon.stub(daemonServiceMiscRpcs, 'isDaemonSynced').returns({ data: { synced: true, height: 1000 } });
+      sinon.stub(daemonStatus, 'isDaemonSynced').returns({ data: { synced: true, height: 1000 } });
       sinon.stub(verificationHelper, 'verifyPrivilege').resolves(false);
       const getInfo = sinon.stub(appsRepository, 'getGlobalAppInfo').resolves(null);
       const res = { json: sinon.fake((param) => param) };
@@ -1196,7 +1196,7 @@ describe('registryManager tests', () => {
     // calling convention; converting those strings without reading what the
     // endpoint returns would have opened a customer's secrets to the team.
     it('asks for the owner alone, not a privilege that admits the flux team', async () => {
-      sinon.stub(daemonServiceMiscRpcs, 'isDaemonSynced').returns({ data: { synced: true, height: 1000 } });
+      sinon.stub(daemonStatus, 'isDaemonSynced').returns({ data: { synced: true, height: 1000 } });
       const verify = sinon.stub(verificationHelper, 'verifyPrivilege').resolves(false);
       const res = { json: sinon.fake((param) => param) };
 

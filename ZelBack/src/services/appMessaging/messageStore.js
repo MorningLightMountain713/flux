@@ -3,7 +3,7 @@
 const config = require('config');
 const dbHelper = require('../dbHelper');
 const log = require('../../lib/log');
-const daemonServiceMiscRpcs = require('../daemonService/daemonServiceMiscRpcs');
+const daemonStatus = require('../daemonService/daemonStatus');
 const benchmarkService = require('../benchmarkService');
 const appsRepository = require('../appDatabase/appsRepository');
 const appEventVerifier = require('./appEventVerifier');
@@ -147,7 +147,7 @@ async function storeAppTemporaryMessage(message, options = {}) {
   };
   let database = db.db(config.get('database.daemon.database'));
   const result = await dbHelper.findOneInDatabase(database, appsHashesCollection, query, projection);
-  const syncStatus = daemonServiceMiscRpcs.isDaemonSynced();
+  const syncStatus = daemonStatus.isDaemonSynced();
   const daemonHeight = syncStatus.data.height;
   let block = daemonHeight;
   if (result && !result.message) {

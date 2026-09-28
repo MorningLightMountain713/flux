@@ -5,7 +5,7 @@ const sinon = require('sinon');
 
 const dbHelper = require('../../ZelBack/src/services/dbHelper');
 const networkStateService = require('../../ZelBack/src/services/networkStateService');
-const daemonServiceMiscRpcs = require('../../ZelBack/src/services/daemonService/daemonServiceMiscRpcs');
+const daemonStatus = require('../../ZelBack/src/services/daemonService/daemonStatus');
 const foundingCommittee = require('../../ZelBack/src/services/appMesh/foundingCommittee');
 
 // Component-blind referees: the anchor side works from public registry
@@ -71,8 +71,8 @@ describe('foundingCommittee', () => {
     sinon.stub(networkStateService, 'membershipFingerprintAt').returns(FP);
     sinon.stub(networkStateService, 'membershipAt').callsFake((fp) => (fp === FP || fp === CURRENT_FP ? fleet(12) : null));
     sinon.stub(networkStateService, 'membershipFingerprint').returns(CURRENT_FP);
-    sinon.stub(daemonServiceMiscRpcs, 'isDaemonSynced').returns({ status: 'success', data: { synced: true } });
-    sinon.stub(daemonServiceMiscRpcs, 'getCurrentDaemonHeight').returns(REG_HEIGHT + 10);
+    sinon.stub(daemonStatus, 'isDaemonSynced').returns({ status: 'success', data: { synced: true } });
+    sinon.stub(daemonStatus, 'getCurrentDaemonHeight').returns(REG_HEIGHT + 10);
   });
 
   afterEach(() => {
@@ -322,7 +322,7 @@ describe('foundingCommittee', () => {
     it('sustained rot stamps, recovery clears — no flip before the gate', async () => {
       await foundingCommittee.recordAnchor(anchorDoc());
       rotTheFleet();
-      daemonServiceMiscRpcs.getCurrentDaemonHeight.returns(ROT_SEEN);
+      daemonStatus.getCurrentDaemonHeight.returns(ROT_SEEN);
       await foundingCommittee.evaluateFlips();
       expect(store.get('myapp').anchors[String(REG_HEIGHT)].rotSinceHeight).to.equal(ROT_SEEN);
       expect(store.get('myapp').anchors[String(RUNG)]).to.equal(undefined);
@@ -336,16 +336,16 @@ describe('foundingCommittee', () => {
     it('the flip mints at the grid height once rot has aged past the gate', async () => {
       await foundingCommittee.recordAnchor(anchorDoc());
       rotTheFleet();
-      daemonServiceMiscRpcs.getCurrentDaemonHeight.returns(ROT_SEEN);
+      daemonStatus.getCurrentDaemonHeight.returns(ROT_SEEN);
       await foundingCommittee.evaluateFlips();
 
       // gate not yet: the rung height has not arrived
-      daemonServiceMiscRpcs.getCurrentDaemonHeight.returns(RUNG - 1);
+      daemonStatus.getCurrentDaemonHeight.returns(RUNG - 1);
       networkStateService.membershipFingerprintAt.callsFake((h) => (h === RUNG ? CURRENT_FP : FP));
       await foundingCommittee.evaluateFlips();
       expect(store.get('myapp').anchors[String(RUNG)]).to.equal(undefined);
 
-      daemonServiceMiscRpcs.getCurrentDaemonHeight.returns(RUNG);
+      daemonStatus.getCurrentDaemonHeight.returns(RUNG);
       await foundingCommittee.evaluateFlips();
       const minted = store.get('myapp').anchors[String(RUNG)];
       expect(minted.flipOf).to.equal(REG_HEIGHT);
@@ -356,9 +356,9 @@ describe('foundingCommittee', () => {
     it('a missed photo window delays the flip, never guesses it', async () => {
       await foundingCommittee.recordAnchor(anchorDoc());
       rotTheFleet();
-      daemonServiceMiscRpcs.getCurrentDaemonHeight.returns(ROT_SEEN);
+      daemonStatus.getCurrentDaemonHeight.returns(ROT_SEEN);
       await foundingCommittee.evaluateFlips();
-      daemonServiceMiscRpcs.getCurrentDaemonHeight.returns(RUNG);
+      daemonStatus.getCurrentDaemonHeight.returns(RUNG);
       networkStateService.membershipFingerprintAt.returns(null);
       await foundingCommittee.evaluateFlips();
       expect(store.get('myapp').anchors[String(RUNG)]).to.equal(undefined);
@@ -368,7 +368,7 @@ describe('foundingCommittee', () => {
       await foundingCommittee.recordAnchor(anchorDoc());
       await foundingCommittee.applyComponentView(meshView());
       rotTheFleet();
-      daemonServiceMiscRpcs.getCurrentDaemonHeight.returns(ROT_SEEN);
+      daemonStatus.getCurrentDaemonHeight.returns(ROT_SEEN);
       await foundingCommittee.evaluateFlips();
 
       // far from the rung: not armed
@@ -377,13 +377,13 @@ describe('foundingCommittee', () => {
       expect(world.rungs).to.deep.equal([REG_HEIGHT]);
 
       // inside the quiet zone of the pending rung: armed
-      daemonServiceMiscRpcs.getCurrentDaemonHeight.returns(RUNG - 5);
+      daemonStatus.getCurrentDaemonHeight.returns(RUNG - 5);
       world = await foundingCommittee.componentWorld('myapp', 'db');
       expect(world.armed).to.equal(true);
 
       // the rung mints: the ladder grows and the world disarms
       networkStateService.membershipFingerprintAt.callsFake((h) => (h === RUNG ? CURRENT_FP : FP));
-      daemonServiceMiscRpcs.getCurrentDaemonHeight.returns(RUNG);
+      daemonStatus.getCurrentDaemonHeight.returns(RUNG);
       await foundingCommittee.evaluateFlips();
       world = await foundingCommittee.componentWorld('myapp', 'db');
       expect(world.rungs).to.deep.equal([REG_HEIGHT, RUNG]);
@@ -406,10 +406,10 @@ describe('foundingCommittee', () => {
     it('equality serve: a flipped-past basis is refused, the newest rung answers', async () => {
       await foundingCommittee.recordAnchor(anchorDoc());
       rotTheFleet();
-      daemonServiceMiscRpcs.getCurrentDaemonHeight.returns(ROT_SEEN);
+      daemonStatus.getCurrentDaemonHeight.returns(ROT_SEEN);
       await foundingCommittee.evaluateFlips();
       networkStateService.membershipFingerprintAt.callsFake((h) => (h === RUNG ? CURRENT_FP : FP));
-      daemonServiceMiscRpcs.getCurrentDaemonHeight.returns(RUNG);
+      daemonStatus.getCurrentDaemonHeight.returns(RUNG);
       await foundingCommittee.evaluateFlips();
 
       const minted = store.get('myapp').anchors[String(RUNG)];
@@ -431,12 +431,12 @@ describe('foundingCommittee', () => {
       const member = store.get('myapp').anchors[String(REG_HEIGHT)].members[0];
       const collateral = { txhash: member.txhash, txindex: 0 };
 
-      daemonServiceMiscRpcs.isDaemonSynced.returns({ status: 'success', data: { synced: false } });
+      daemonStatus.isDaemonSynced.returns({ status: 'success', data: { synced: false } });
       let verdict = await foundingCommittee.selfOnFoundingCommittee('myapp', REG_HEIGHT, FP, 0, collateral);
       expect(verdict.member).to.equal(false);
       expect(verdict.reason).to.include('stale');
 
-      daemonServiceMiscRpcs.isDaemonSynced.returns({ status: 'success', data: { synced: true } });
+      daemonStatus.isDaemonSynced.returns({ status: 'success', data: { synced: true } });
       networkStateService.membershipAt.callsFake((fp) => {
         if (fp === FP) return fleet(12);
         if (fp === CURRENT_FP) return fleet(12).filter((node) => node.txhash !== member.txhash);

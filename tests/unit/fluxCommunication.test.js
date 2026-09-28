@@ -15,7 +15,7 @@ const dbHelper = require('../../ZelBack/src/services/dbHelper');
 const { requireMongo } = require('./dbTestHelper');
 const verificationHelper = require('../../ZelBack/src/services/verificationHelper');
 const fluxCommunicationUtils = require('../../ZelBack/src/services/fluxCommunicationUtils');
-const daemonServiceMiscRpcs = require('../../ZelBack/src/services/daemonService/daemonServiceMiscRpcs');
+const daemonStatus = require('../../ZelBack/src/services/daemonService/daemonStatus');
 const nodeConfirmationService = require('../../ZelBack/src/services/nodeConfirmationService');
 const capabilities = require('../../ZelBack/src/services/utils/capabilities');
 const messageStore = require('../../ZelBack/src/services/appMessaging/messageStore');
@@ -966,7 +966,7 @@ describe('fluxCommunication tests', () => {
     // control say what it means: the other node is actually connected to.
     it('still connects to a different node at the same port', async () => {
       peerManager.reset();
-      sinon.stub(daemonServiceMiscRpcs, 'isDaemonSynced').returns({ data: { synced: false, height: 0 } });
+      sinon.stub(daemonStatus, 'isDaemonSynced').returns({ data: { synced: false, height: 0 } });
       // An ephemeral port on 127.0.0.1, because 127.0.0.2 is not bound by
       // default on macOS. The guard allows any port THIS process is listening
       // on, which is the whole point of dialling our own server.
@@ -1050,7 +1050,7 @@ describe('fluxCommunication tests', () => {
     let wsserver;
     let logSpy;
     let lruRateLimitStub;
-    let daemonServiceMiscRpcsStub;
+    let daemonStatusStub;
     let ensureObjectSpy;
 
     beforeEach(() => {
@@ -1058,7 +1058,7 @@ describe('fluxCommunication tests', () => {
       lruRateLimitStub = sinon.stub(rateLimit, 'lruRateLimit').returns(true);
       ensureObjectSpy = sinon.spy(serviceHelper, 'ensureObject');
       peerManager.reset();
-      daemonServiceMiscRpcsStub = sinon.stub(daemonServiceMiscRpcs, 'isDaemonSynced');
+      daemonStatusStub = sinon.stub(daemonStatus, 'isDaemonSynced');
       sinon.stub(fluxNetworkHelper, 'getLocalSocketAddress').returns('44.192.51.11:16127');
     });
 
@@ -1081,7 +1081,7 @@ describe('fluxCommunication tests', () => {
       });
       const ip = '127.0.0.2';
       wsserver = new WebSocket.Server({ host: '127.0.0.2', port: 16_127 });
-      daemonServiceMiscRpcsStub.returns({
+      daemonStatusStub.returns({
         data:
         {
           synced: false,
@@ -1115,7 +1115,7 @@ describe('fluxCommunication tests', () => {
       });
       const ip = '127.0.0.2';
       wsserver = new WebSocket.Server({ host: '127.0.0.2', port: 16_127 });
-      daemonServiceMiscRpcsStub.returns({
+      daemonStatusStub.returns({
         data:
         {
           synced: false,
@@ -1167,7 +1167,7 @@ describe('fluxCommunication tests', () => {
       });
       const ip = '127.0.0.2';
       wsserver = new WebSocket.Server({ host: '127.0.0.2', port: 16_127 });
-      daemonServiceMiscRpcsStub.returns({
+      daemonStatusStub.returns({
         data:
         {
           synced: false,
@@ -1206,7 +1206,7 @@ describe('fluxCommunication tests', () => {
       });
       const ip = '127.0.0.2';
       wsserver = new WebSocket.Server({ host: '127.0.0.2', port: 16_127 });
-      daemonServiceMiscRpcsStub.returns({
+      daemonStatusStub.returns({
         data:
         {
           synced: false,
@@ -1262,7 +1262,7 @@ describe('fluxCommunication tests', () => {
         const verifyFluxBroadcastStub = sinon.stub(fluxCommunicationUtils, 'verifyFluxBroadcast').returns({ result: fluxCommunicationUtils.VerifyResult.OK, announcer: null });
         sinon.stub(fluxCommunicationUtils, 'verifyTimestampInFluxBroadcast').returns(true);
         const respondWithAppMessageStub = sinon.stub(fluxCommunicationMessagesSender, 'respondWithAppMessage').returns(true);
-        daemonServiceMiscRpcsStub.returns({
+        daemonStatusStub.returns({
           data:
           {
             synced: false,
@@ -1310,7 +1310,7 @@ describe('fluxCommunication tests', () => {
         const verifyFluxBroadcast = sinon.stub(fluxCommunicationUtils, 'verifyFluxBroadcast').returns({ result: fluxCommunicationUtils.VerifyResult.OK, announcer: null });
         sinon.stub(fluxCommunicationUtils, 'verifyTimestampInFluxBroadcast').returns(true);
         const storeAppTemporaryMessageStub = sinon.stub(messageStore, 'storeAppTemporaryMessage').returns(false);
-        daemonServiceMiscRpcsStub.returns({
+        daemonStatusStub.returns({
           data:
           {
             synced: false,
@@ -1361,7 +1361,7 @@ describe('fluxCommunication tests', () => {
         // answer is what gates the relay, and this one advances nothing
         const storeAppStateEventStub = sinon.stub(messageStore, 'storeAppStateEvent').resolves({ isNewer: false });
         sinon.stub(messageStore, 'releaseInstallingClaims').resolves({ released: 0 });
-        daemonServiceMiscRpcsStub.returns({
+        daemonStatusStub.returns({
           data:
           {
             synced: false,
@@ -1709,7 +1709,7 @@ describe('fluxCommunication tests', () => {
       // the existing instead kills both ends' connections in the crossing
       // race and the pair re-dials forever.
       sinon.stub(rateLimit, 'lruRateLimit').returns(true);
-      sinon.stub(daemonServiceMiscRpcs, 'isDaemonSynced').returns({ data: { synced: false, height: 0 } });
+      sinon.stub(daemonStatus, 'isDaemonSynced').returns({ data: { synced: false, height: 0 } });
       sinon.stub(fluxNetworkHelper, 'getLocalSocketAddress').returns('44.192.51.11:16127');
       peerManager.reset();
 
@@ -1747,7 +1747,7 @@ describe('fluxCommunication tests', () => {
       // manager closes it with the stop code instead, the dial settles with
       // no evidence, and once the stop has begun no further dial is made.
       sinon.stub(rateLimit, 'lruRateLimit').returns(true);
-      sinon.stub(daemonServiceMiscRpcs, 'isDaemonSynced').returns({ data: { synced: false, height: 0 } });
+      sinon.stub(daemonStatus, 'isDaemonSynced').returns({ data: { synced: false, height: 0 } });
       sinon.stub(fluxNetworkHelper, 'getLocalSocketAddress').returns('44.192.51.11:16127');
       peerManager.reset();
 

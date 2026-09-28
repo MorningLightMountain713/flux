@@ -8,7 +8,7 @@ const verificationHelper = require('../verificationHelper');
 const generalService = require('../generalService');
 const fluxCommunicationMessagesSender = require('../fluxCommunicationMessagesSender');
 const serviceHelper = require('../serviceHelper');
-const daemonServiceMiscRpcs = require('../daemonService/daemonServiceMiscRpcs');
+const daemonStatus = require('../daemonService/daemonStatus');
 const daemonServiceBlockchainRpcs = require('../daemonService/daemonServiceBlockchainRpcs');
 const { getSpec, getSpecBackend } = require('../utils/specLibs');
 const { deserializeSpec } = require('../utils/specCutover');
@@ -267,7 +267,7 @@ async function getIngressAttestationsByApp(req, res) {
 // ── Helpers for checkAndRequestApp ──────────────────────────────────
 
 function getDaemonHeight() {
-  return daemonServiceMiscRpcs.isDaemonSynced().data.height;
+  return daemonStatus.isDaemonSynced().data.height;
 }
 
 /**

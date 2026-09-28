@@ -3,7 +3,7 @@
 const config = require('config');
 
 const log = require('../../lib/log');
-const daemonServiceMiscRpcs = require('./daemonServiceMiscRpcs');
+const daemonStatus = require('./daemonStatus');
 const daemonSubscriptionService = require('./daemonSubscriptionService');
 const fluxEventBus = require('../utils/fluxEventBus');
 
@@ -23,7 +23,7 @@ let stopped = false;
 let mode = null;
 
 async function refreshAuthoritative(reason) {
-  const updated = await daemonServiceMiscRpcs.fluxDaemonBlockchainInfo();
+  const updated = await daemonStatus.fluxDaemonBlockchainInfo();
   if (!updated) log.warn(`chainTipSource - authoritative refresh failed (${reason})`);
   return updated;
 }
@@ -53,12 +53,12 @@ async function start() {
     log.info('chainTipSource - daemon does not publish hashblockheight, polling instead');
     mode = 'poll';
     fluxEventBus.publish('daemon:subscriptionMode', { source: 'chainTipSource', mode, topic });
-    daemonServiceMiscRpcs.daemonBlockchainInfoService();
+    daemonStatus.daemonBlockchainInfoService();
     return mode;
   }
 
   daemonSubscriptionService.subscribe(topic, {
-    onMessage: (decoded) => daemonServiceMiscRpcs.recordChainTip(decoded.height),
+    onMessage: (decoded) => daemonStatus.recordChainTip(decoded.height),
     // Deltas are not replayed, so a gap or a reconnection means an unknown number of
     // missed tips. One RPC restores both numbers exactly.
     onResync: (reason) => refreshAuthoritative(reason),

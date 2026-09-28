@@ -2,7 +2,7 @@
 
 const messageHelper = require('../messageHelper');
 const serviceHelper = require('../serviceHelper');
-const daemonServiceMiscRpcs = require('../daemonService/daemonServiceMiscRpcs');
+const daemonStatus = require('../daemonService/daemonStatus');
 const { resolveSpec } = require('./specCutover');
 const { regimeFor } = require('../pricing/pricingRegime');
 const log = require('../../lib/log');
@@ -39,7 +39,7 @@ async function getAppFiatAndFluxPrice(appSpecification) {
     throw new Error('Invalid application specification provided.');
   }
 
-  const syncStatus = daemonServiceMiscRpcs.isDaemonSynced();
+  const syncStatus = daemonStatus.isDaemonSynced();
   if (!syncStatus.data.synced) {
     throw new Error('Daemon not yet synced.');
   }
