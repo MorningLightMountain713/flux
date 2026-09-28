@@ -28,7 +28,7 @@ const GOSSIP_TYPES = [
   'zelappregister', 'zelappupdate', 'fluxappregister', 'fluxappupdate',
   'fluxapprunning', 'fluxipchanged', 'fluxappremoved', 'fluxappinstalling',
   'fluxappinstallingerror', 'fluxpolicyseq', 'fluxpolicy',
-  'fluxlimitcounterrecord', 'fluxmasterlease', 'fluxnodedown', 'fluxnodedownverdict',
+  'fluxlimitcounterrecord', 'fluxmasterlease', 'fluxnodedown', 'fluxnodedownverdict', 'fluxnodealive',
   'fluxgrantgeneration', 'fluxappcontentmanifest', 'fluxappingress',
   ...ASK_TYPES,
 ];

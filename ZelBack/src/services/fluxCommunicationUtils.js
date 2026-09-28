@@ -256,6 +256,8 @@ async function broadcastTarget(payload, pubKey) {
       return { target: payload.ip, error: `Invalid fluxmasterlease message, ip: ${payload.ip} pubkey: ${pubKey}` };
     case 'fluxgrantgeneration':
       return { target: payload.ip, error: `Invalid fluxgrantgeneration message, ip: ${payload.ip} pubkey: ${pubKey}` };
+    case 'fluxnodealive':
+      return { target: payload.ip, error: `Invalid fluxnodealive message, ip: ${payload.ip} pubkey: ${pubKey}` };
     // zelappregister zelappupdate fluxappregister fluxappupdate fluxapprequest
     default:
       // a pubkey found in the list is good enough; every message should ideally also carry its source ip

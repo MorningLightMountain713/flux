@@ -592,11 +592,13 @@ async function respondWithAppRunningMessages(peer, sinceTimestamp = 0) {
     // blind a booting node to any certificate older than the floor; the
     // record TTL bounds those rows, and the intake refuses a lapsed one the
     // TTL sweep has not yet deleted.
+    // A nodealive row refutes those certificates and is served on the same
+    // terms, one row per node.
     query: (min) => ({
       $or: [
         { broadcastedAt: { $gt: min } },
         { createdAt: { $gt: min } },
-        { type: { $in: ['masterlease', 'grantgeneration', 'nodedown'] } },
+        { type: { $in: ['masterlease', 'grantgeneration', 'nodedown', 'nodealive'] } },
       ],
     }),
     projection: { _id: 0, expireAt: 0 },
