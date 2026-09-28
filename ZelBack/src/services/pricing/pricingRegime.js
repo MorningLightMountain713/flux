@@ -42,9 +42,6 @@ async function regimeRegistry() {
  *   onChainDisplayPrice(spec, pricing)         -> FLUX for display
  *   fiatAndFluxDisplayPrice(spec, rawDoc, pricing) -> { usd, flux, fluxDiscount }
  *   registrationFee(spec, height)              -> bigint sats
- *   supersededMessage(name, confirming)        -> the permanent message an
- *                                              update replaces, resolved by
- *                                              each regime's own rule
  *   termCost(spec, height)                     -> what a term bought at that
  *                                              height cost, in the regime's
  *                                              own unit

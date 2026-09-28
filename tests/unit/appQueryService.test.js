@@ -26,6 +26,7 @@ const OTHER_OWNER = '1EHNa6Q4Jz2uvNExL497mE43ikXhwF6kZm';
 
 describe('appQueryService tests', () => {
   let appQueryService;
+  let appHistoryStub;
   let dbHelperStub;
   let messageHelperStub;
   let dockerServiceStub;
@@ -133,8 +134,10 @@ describe('appQueryService tests', () => {
     };
 
     // Proxy require
+    appHistoryStub = { latestApplied: sinon.stub().resolves(null) };
     appQueryService = proxyquire('../../ZelBack/src/services/appQuery/appQueryService', {
       config: asConfig(configStub),
+      '../appDecisions/appHistory': appHistoryStub,
       '../dbHelper': dbHelperStub,
       '../messageHelper': messageHelperStub,
       '../dockerService': dockerServiceStub,
@@ -918,29 +921,15 @@ describe('appQueryService tests', () => {
         'the real class refuses a placeholder owner',
       ).to.throw(/Flux ID/);
 
-      const firstRegistration = await v8Spec({ name: 'testapp' });
-      const lastRegistration = await v8Spec({ name: 'testapp', owner: OTHER_OWNER });
-      expect(firstRegistration.owner).to.not.equal(lastRegistration.owner);
-
-      const mockMessages = [
-        { appSpecifications: firstRegistration.serialize(), height: 100, type: 'fluxappregister' },
-        { appSpecifications: lastRegistration.serialize(), height: 200, type: 'fluxappregister' },
-      ];
-      const mockDb = {
-        db: sinon.stub().returns('appsDatabase'),
-      };
-
-      dbHelperStub.databaseConnection.returns(mockDb);
-      dbHelperStub.findInDatabase.resolves(mockMessages);
+      const registration = await v8Spec({ name: 'testapp', owner: OTHER_OWNER });
+      appHistoryStub.latestApplied.resolves({ message: { appSpecifications: registration.serialize() }, decision: {} });
       messageHelperStub.createDataMessage.callsFake((data) => ({ status: 'success', data }));
 
       await appQueryService.getApplicationOriginalOwner(req, res);
 
-      expect(res.json.calledOnce).to.be.true;
-      expect(dbHelperStub.findInDatabase.calledOnce).to.be.true;
-      // The newest registration wins, and it is a real address.
-      expect(res.json.firstCall.args[0])
-        .to.deep.equal({ status: 'success', data: lastRegistration.owner });
+      // The owner of the latest registration the chain applied, and a real address.
+      sinon.assert.calledOnceWithExactly(appHistoryStub.latestApplied, 'testapp', { type: 'registration' });
+      expect(res.json.firstCall.args[0]).to.deep.equal({ status: 'success', data: OTHER_OWNER });
     });
 
     it('should handle missing appname parameter', async () => {

@@ -18,6 +18,7 @@ const fluxNetworkHelper = require('../fluxNetworkHelper');
 const fluxCommunicationMessagesSender = require('../fluxCommunicationMessagesSender');
 const { socketAddressesMatch } = require('../utils/socketAddressUtils');
 const appsRepository = require('../appDatabase/appsRepository');
+const appHistory = require('../appDecisions/appHistory');
 const deploymentProvider = require('../appRuntime/deploymentProvider');
 const generalService = require('../generalService');
 const mastershipGrantGate = require('./mastershipGrantGate');
@@ -880,13 +881,9 @@ async function uninstallApplication(appName, options = {}) {
         const localApps = await appsRepository.listInstalledApps();
         spec = [...globalApps, ...localApps].find((a) => a.name === appName) || null;
         if (!spec) {
-          const appMessages = await appsRepository.listAppMessagesByName(appName);
-          let latest;
-          appMessages.forEach((message) => {
-            if (!latest || message.height > latest.height) latest = message;
-          });
-          if (latest && latest.height) {
-            const result = await appsRepository.getAppMessage(latest.hash);
+          const latest = await appHistory.latestApplied(appName);
+          if (latest) {
+            const result = await appsRepository.getAppMessage(latest.decision.hash);
             if (result) ({ spec } = result);
           }
         }

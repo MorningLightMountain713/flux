@@ -416,39 +416,6 @@ describe('appsRepository', () => {
     });
   });
 
-  describe('getPermanentMessageBeforeHeight', () => {
-    it('queries strictly below the confirming height, newest first', async () => {
-      dbHelperStub.findOneInDatabase.resolves(null);
-
-      await appsRepository.getPermanentMessageBeforeHeight('myapp', 2000);
-
-      const [, collection, query, options] = dbHelperStub.findOneInDatabase.firstCall.args;
-      expect(collection).to.equal('zelappsmessages');
-      expect(query).to.deep.equal({ 'appSpecifications.name': 'myapp', height: { $lt: 2000 } });
-      expect(options.sort).to.deep.equal({ height: -1, timestamp: -1 });
-    });
-
-    // The message being priced is already stored when this runs. A cutoff that
-    // admits its own height selects it, and a spec priced against itself is
-    // free under every rule in the free-update policy.
-    it('excludes the confirming height itself', async () => {
-      dbHelperStub.findOneInDatabase.resolves(null);
-
-      await appsRepository.getPermanentMessageBeforeHeight('myapp', 2000);
-
-      const [, , query] = dbHelperStub.findOneInDatabase.firstCall.args;
-      expect(query.height.$lt).to.equal(2000);
-      expect(query.height).to.not.have.property('$lte');
-    });
-
-    it('returns null when nothing precedes the height', async () => {
-      dbHelperStub.findOneInDatabase.resolves(null);
-      const result = await appsRepository.getPermanentMessageBeforeHeight('myapp', 2000);
-      expect(result).to.be.null;
-    });
-
-  });
-
   describe('findUnderProvisionedApps', () => {
     it('returns nothing when no app is alive', async () => {
       dbHelperStub.aggregateInDatabase.resolves([]);

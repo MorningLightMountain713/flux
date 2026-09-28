@@ -827,42 +827,6 @@ describe('messageStore tests', () => {
     });
   });
 
-  describe('storeAppPermanentMessage', () => {
-    it('should throw error for invalid message structure', async () => {
-      const invalidMessage = { type: 'test' };
-
-      try {
-        await messageStore.storeAppPermanentMessage(invalidMessage);
-        expect.fail('Should have thrown error');
-      } catch (error) {
-        expect(error.message).to.include('Invalid Flux App message');
-      }
-    });
-
-    it('should store valid permanent message', async () => {
-      const message = {
-        type: 'fluxappregister',
-        version: 1,
-        appSpecifications: { name: 'test' },
-        hash: 'hash123',
-        timestamp: Date.now(),
-        signature: 'sig123',
-        txid: 'txid123',
-        height: 1000,
-        valueSat: 10_000,
-      };
-
-      const mockDb = { db: sinon.stub().returns('database') };
-      dbHelperStub.databaseConnection.returns(mockDb);
-      dbHelperStub.insertOneToDatabase.resolves();
-
-      const result = await messageStore.storeAppPermanentMessage(message);
-
-      expect(result).to.be.true;
-      expect(dbHelperStub.insertOneToDatabase.calledOnce).to.be.true;
-    });
-  });
-
   describe('releaseInstallingClaims', () => {
     it('should return error for invalid message structure', async () => {
       const invalidMessage = { type: 'fluxapprunning' };

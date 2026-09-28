@@ -18,7 +18,6 @@ const { ensureProvidersRegistered } = require('../utils/specCutover');
 const { getStateBeforeHeight } = require('../appDatabase/appSpecHistory');
 const globalState = require('../utils/globalState');
 const {
-  globalAppsMessages,
   globalAppsTempMessages,
   globalAppsInstallingLocations,
   globalAppsInstallingBroadcasts: appsInstallingBroadcasts,
@@ -286,37 +285,6 @@ async function storeAppTemporaryMessage(message, options = {}) {
     return { rebroadcast: false, promotion };
   }
   return { rebroadcast: true };
-}
-
-/**
- * Store permanent app message
- * @param {object} message - Message to store
- * @returns {Promise<boolean>} Whether message was stored successfully
- */
-async function storeAppPermanentMessage(message) {
-  /* message object
-  * @param type string
-  * @param version number
-  * @param appSpecifications object
-  * @param hash string
-  * @param timestamp number
-  * @param signature string
-  * @param txid string
-  * @param height number
-  * @param valueSat number
-  */
-  if (!message || !message.appSpecifications || typeof message !== 'object' || typeof message.type !== 'string' || typeof message.version !== 'number' || typeof message.appSpecifications !== 'object' || typeof message.signature !== 'string'
-    || typeof message.timestamp !== 'number' || typeof message.hash !== 'string' || typeof message.txid !== 'string' || typeof message.height !== 'number' || typeof message.valueSat !== 'number') {
-    throw new Error('Invalid Flux App message for storing');
-  }
-
-  const db = dbHelper.databaseConnection();
-  const database = db.db(config.get('database.appsglobal.database'));
-  await dbHelper.insertOneToDatabase(database, globalAppsMessages, message).catch((error) => {
-    log.error(error);
-    throw error;
-  });
-  return true;
 }
 
 /**
@@ -1492,7 +1460,6 @@ async function processPendingUpdates(appName) {
 
 module.exports = {
   storeAppTemporaryMessage,
-  storeAppPermanentMessage,
   processPendingUpdates,
   releaseInstallingClaims,
   storeAppStateEvent,
