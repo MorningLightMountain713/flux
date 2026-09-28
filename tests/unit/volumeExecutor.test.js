@@ -2430,7 +2430,7 @@ describe('volumeExecutor tests', () => {
     // bfree stays high throughout: the floor is what the application can still
     // write, which is bavail.
     const freeBytes = (bytes) => ({
-      bsize: 4096, blocks: 100000, bfree: 90000, bavail: bytes / 4096,
+      bsize: 4096, blocks: 100_000, bfree: 90_000, bavail: bytes / 4096,
     });
     const writing = async (vol) => ({
       staging: await vol.resolve('.flux-op/22222222-2222-2222-2222-222222222222', { allowReserved: true }),
