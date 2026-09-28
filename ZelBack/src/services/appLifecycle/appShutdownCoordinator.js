@@ -32,12 +32,13 @@ const RECONCILER_REASON_TO_SHUTDOWN = {
   controllerDesired: SHUTDOWN_REASON.MANUAL,
 };
 
-// app name -> in-flight drain promise: single-flight, so several components of one app
-// (or repeated reconcile passes) never start a second drain for the same app.
+// drain key -> in-flight drain promise, keyed by app name for a whole-app drain and by
+// component identifier for a component drain: single-flight, so several components of
+// one app (or repeated reconcile passes) never start a second drain for the same scope.
 const inFlight = new Map();
-// Apps whose last daemon drain failed (unreachable/timeout). The next reconcile pass
-// does ONE local stop (returns false) and clears the mark, so a transient daemon outage
-// never wedges into a re-route loop, yet daemon routing resumes once it recovers.
+// Drain keys whose last daemon drain failed (unreachable/timeout). The next reconcile
+// pass does ONE local stop (returns false) and clears the mark, so a transient daemon
+// outage never wedges into a re-route loop, yet daemon routing resumes once it recovers.
 const localFallback = new Set();
 
 /**
@@ -60,16 +61,8 @@ async function requestGracefulStop(identifier, reconcilerReason) {
   if (!instantiated) return false;
   const appName = instantiated.name;
 
-  // A drain just failed: do one local stop, then re-allow daemon routing next time.
-  if (localFallback.has(appName)) {
-    localFallback.delete(appName);
-    return false;
-  }
-  // Already draining (another component, or an earlier pass): the LB gate holds it.
+  // A whole-app drain in flight covers every component of the app.
   if (inFlight.has(appName)) return true;
-  // This is a whole-app stop (operator stop / hold / condemned drains every local
-  // replica together), so the deadline budgets for ALL of this node's deployments -
-  // the daemon drains them sequentially within the app.
   let deployments;
   try {
     deployments = await deploymentProvider.buildDeployments(instantiated);
@@ -78,25 +71,47 @@ async function requestGracefulStop(identifier, reconcilerReason) {
   }
   if (deployments.length === 0) return false;
 
-  const reason = RECONCILER_REASON_TO_SHUTDOWN[reconcilerReason] || SHUTDOWN_REASON.MANUAL;
-  const budgetSeconds = deployments.reduce((sum, d) => sum + shutdownPlan.appShutdownBudgetSeconds(d), 0);
-  const deadline = Math.floor(Date.now() / 1000) + budgetSeconds;
+  const scope = await drainScope(identifier, deployments);
+  const key = scope ? identifier : appName;
+  // A drain just failed: do one local stop, then re-allow daemon routing next time.
+  if (localFallback.has(key)) {
+    localFallback.delete(key);
+    return false;
+  }
+  // Already draining (an earlier pass): the drain owns the stop.
+  if (inFlight.has(key)) return true;
 
-  // beginAppStop seeds the 'stopping' LB gate synchronously before its first await, so
-  // the gate is set before we return and suppresses the reconciler's subsequent passes.
+  const reason = RECONCILER_REASON_TO_SHUTDOWN[reconcilerReason] || SHUTDOWN_REASON.MANUAL;
+  // A whole-app stop budgets for ALL of this node's deployments - the daemon drains
+  // them sequentially within the app. A component stop budgets for that component.
+  const budgetSeconds = scope
+    ? scope.component.shutdownBudgetSeconds()
+    : deployments.reduce((sum, d) => sum + shutdownPlan.appShutdownBudgetSeconds(d), 0);
+  const deadline = Math.floor(Date.now() / 1000) + budgetSeconds;
+  const options = scope
+    ? {
+      force: false, deadline, replica: scope.replica, component: scope.component.name,
+    }
+    : { force: false, deadline };
+
+  // A whole-app beginAppStop seeds the 'stopping' LB gate synchronously before its
+  // first await, so the gate is set before we return and suppresses the reconciler's
+  // subsequent passes. A component stop seeds no gate: its siblings keep running.
   const drain = fluxShutdowndClient
-    .beginAppStop(instantiated.owner, appName, reason, { force: false, deadline })
+    .beginAppStop(instantiated.owner, appName, reason, options)
     .then((res) => {
-      inFlight.delete(appName);
+      inFlight.delete(key);
       if (res.outcome === 'unreachable' || res.outcome === 'timeout') {
-        // The daemon did not handle it (the client has already un-seeded the gate it
+        // The daemon did not handle it (the client has already un-seeded any gate it
         // seeded): re-drive so the reconciler does a local graceful stop, rather than
         // waiting out the whole budget.
-        log.warn(`appShutdownCoordinator: ${appName} daemon stop ${res.outcome}; falling back to local`);
-        localFallback.add(appName);
+        log.warn(`appShutdownCoordinator: ${scope ? identifier : appName} daemon stop ${res.outcome}; falling back to local`);
+        localFallback.add(key);
         appReconciler.enqueueComponent(identifier);
         return;
       }
+      // component_busy: another component-scoped run holds this component; the re-drive
+      // below asks the daemon again on the next pass.
       // rejected_pipeline_active: the node-wide pipeline owns the stop and the gate
       // stays up for it (its clear/expiry re-drives recovery).
       if (res.outcome === 'rejected_pipeline_active') return;
@@ -106,11 +121,37 @@ async function requestGracefulStop(identifier, reconcilerReason) {
       appReconciler.enqueueComponent(identifier);
     })
     .catch((e) => {
-      inFlight.delete(appName);
-      log.warn(`appShutdownCoordinator: ${appName} drain error: ${e.message}`);
+      inFlight.delete(key);
+      log.warn(`appShutdownCoordinator: ${scope ? identifier : appName} drain error: ${e.message}`);
     });
-  inFlight.set(appName, drain);
+  inFlight.set(key, drain);
   return true;
+}
+
+/**
+ * What a stop of this component drains: the whole app when every component this
+ * node runs of it is desired stopped, otherwise this component alone - an operator
+ * stop can name a single component, and draining the app for it stops the rest.
+ * A sibling whose desired state cannot be read counts as running, so a read that
+ * fails narrows the stop rather than widening it.
+ *
+ * @param {string} identifier component identifier being stopped
+ * @param {object[]} deployments this node's DeploymentSpecs of the app
+ * @returns {Promise<{replica: (string|null), component: object}|null>} null for the whole app
+ */
+async function drainScope(identifier, deployments) {
+  let own = null;
+  const siblings = [];
+  for (const deployment of deployments) {
+    for (const [, component] of deployment.componentEntries()) {
+      if (component.identifier === identifier) own = { replica: deployment.replica, component };
+      else siblings.push(component.identifier);
+    }
+  }
+  if (!own) return null;
+  const states = await Promise.all(siblings.map((id) => appReconciler.desiredRunState(id)
+    .then((state) => state.desired === false, () => false)));
+  return states.every(Boolean) ? null : own;
 }
 
 module.exports = {

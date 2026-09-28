@@ -131,7 +131,11 @@ describe('appShutdownCoordinator', () => {
         SHUTDOWN_REASON,
         beginAppStop: sinon.stub().resolves({ outcome: 'complete' }),
       },
-      appReconciler: { enqueueComponent: sinon.stub() },
+      // Every sibling desired stopped unless a test says otherwise: the whole-app stop.
+      appReconciler: {
+        enqueueComponent: sinon.stub(),
+        desiredRunState: sinon.stub().resolves({ desired: false, reason: 'operatorStopped', force: false }),
+      },
     };
     coordinator = proxyquire('../../ZelBack/src/services/appLifecycle/appShutdownCoordinator', {
       '../../lib/log': stubs.log,
@@ -262,6 +266,66 @@ describe('appShutdownCoordinator', () => {
     expect(second).to.equal(true);
     expect(stubs.fluxShutdowndClient.beginAppStop.calledOnce).to.equal(true);
     resolveDrain({ outcome: 'complete' });
+  });
+
+  describe('a stop of one component', () => {
+    beforeEach(async () => {
+      await install('pair', { components: { web: {}, db: {} } });
+      stubs.appReconciler.desiredRunState.withArgs(idOf('pair', 'db'))
+        .resolves({ desired: true, reason: 'running', force: false });
+    });
+
+    it('drains that component alone while a sibling is still meant to run', async () => {
+      const { deployment } = apps.get('pair');
+      const clock = sinon.useFakeTimers({ now: 1_700_000_000_000 });
+      const res = await coordinator.requestGracefulStop(idOf('pair', 'web'), 'operatorStopped');
+      clock.restore();
+
+      expect(res).to.equal(true);
+      const [, app, reason, opts] = stubs.fluxShutdowndClient.beginAppStop.firstCall.args;
+      expect(app).to.equal('pair');
+      expect(reason).to.equal('user-cancel');
+      expect(opts).to.deep.equal({
+        force: false,
+        deadline: 1_700_000_000 + deployment.getComponent('web').shutdownBudgetSeconds(),
+        replica: null,
+        component: 'web',
+      });
+    });
+
+    it('counts a sibling whose desired state cannot be read as running', async () => {
+      stubs.appReconciler.desiredRunState.withArgs(idOf('pair', 'db')).rejects(new Error('spec read failed'));
+
+      await coordinator.requestGracefulStop(idOf('pair', 'web'), 'operatorStopped');
+
+      expect(stubs.fluxShutdowndClient.beginAppStop.firstCall.args[3].component).to.equal('web');
+    });
+
+    it('drains each stopped component on its own, not once for the app', async () => {
+      await install('trio', { components: { web: {}, db: {}, cache: {} } });
+      stubs.appReconciler.desiredRunState.withArgs(idOf('trio', 'cache'))
+        .resolves({ desired: true, reason: 'running', force: false });
+      stubs.fluxShutdowndClient.beginAppStop.returns(new Promise(() => {}));
+
+      await coordinator.requestGracefulStop(idOf('trio', 'web'), 'operatorStopped');
+      await coordinator.requestGracefulStop(idOf('trio', 'db'), 'operatorStopped');
+      await coordinator.requestGracefulStop(idOf('trio', 'web'), 'operatorStopped');
+
+      const scopes = stubs.fluxShutdowndClient.beginAppStop.getCalls().map((c) => c.args[3].component);
+      expect(scopes).to.deep.equal(['web', 'db']);
+    });
+
+    it('asks the daemon again when the component is busy, never stopping it locally', async () => {
+      stubs.fluxShutdowndClient.beginAppStop.resolves({ outcome: 'component_busy' });
+      await coordinator.requestGracefulStop(idOf('pair', 'web'), 'operatorStopped');
+      await flush();
+      expect(stubs.appReconciler.enqueueComponent.calledWith(idOf('pair', 'web'))).to.equal(true);
+
+      const again = await coordinator.requestGracefulStop(idOf('pair', 'web'), 'operatorStopped');
+
+      expect(again).to.equal(true);
+      expect(stubs.fluxShutdowndClient.beginAppStop.calledTwice).to.equal(true);
+    });
   });
 
   it('on an unreachable daemon: enqueues, and the next pass stops locally (the client un-seeds the gate)', async () => {
