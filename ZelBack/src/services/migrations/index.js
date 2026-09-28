@@ -1,9 +1,11 @@
 'use strict';
 
 const log = require('../../lib/log');
+const { untilSucceeds } = require('../utils/untilSucceeds');
 const nodeIdentityMigration = require('../appDatabase/nodeIdentityMigration');
 const containerLabelBackfill = require('../appLifecycle/containerLabelBackfill');
 const retiredSchema = require('./retiredSchema');
+const paymentPositions = require('./paymentPositions');
 
 // One-off work that brings a node up to date with a change FluxOS has already
 // made. Each migration names the capability it must finish before: that
@@ -28,6 +30,10 @@ const retiredSchema = require('./retiredSchema');
 //   better one, so not running is never worse than the status quo — but a
 //   migration that can stop a boot ships to the whole fleet at once. Failures are
 //   logged and the boot continues.
+//
+//   Except where the capability must not rise without it: a migration marked
+//   `mustSucceed` is the state its capability's readers depend on, so it runs
+//   again until it succeeds and the capability waits for it.
 
 const migrations = [
   {
@@ -44,6 +50,17 @@ const migrations = [
     before: 'localDbPrepared',
     description: 'drop collections and expiry indexes no version reads',
     run: () => retiredSchema.dropRetiredSchema(),
+  },
+  {
+    id: 'payment-positions',
+    // Needs the daemon's address index, so it runs once the daemon is synced and
+    // before the scan first reaches the tip. Must succeed: the hash sync waits for
+    // explorerSynced, and a node whose records lack positions can pick a different
+    // first registrant for a name than its peers (appMessageChain.firstRegistrant).
+    before: 'explorerSynced',
+    mustSucceed: true,
+    description: 'record the block position and chain height of app payments recorded without a position',
+    run: () => paymentPositions.backfillPaymentPositions(),
   },
   {
     id: 'container-labels',
@@ -63,7 +80,8 @@ const migrations = [
  * state, and the order they are declared in is the order they were reasoned
  * about. One failing does not stop the next - they do not depend on each other,
  * and a migration that could suppress another would make the registry an
- * ordering puzzle instead of a list.
+ * ordering puzzle instead of a list. A `mustSucceed` migration runs again every
+ * BOOT_STEP_RETRY_MS until it succeeds, and the ones after it wait.
  *
  * @param {string} capability a capability name
  * @returns {Promise<Array<{id: string, ok: boolean}>>}
@@ -75,6 +93,12 @@ async function runBefore(capability) {
   log.info(`migrations - running ${due.length} before ${capability}`);
   const results = [];
   for (const migration of due) {
+    if (migration.mustSucceed) {
+      // eslint-disable-next-line no-await-in-loop
+      await untilSucceeds(`migrations - ${migration.id} before ${capability}`, () => migration.run());
+      results.push({ id: migration.id, ok: true });
+      continue;
+    }
     try {
       // eslint-disable-next-line no-await-in-loop
       await migration.run();

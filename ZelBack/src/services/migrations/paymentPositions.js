@@ -1,3 +1,5 @@
+'use strict';
+
 const config = require('config');
 
 const log = require('../../lib/log');
@@ -10,7 +12,6 @@ const { UNPOSITIONED } = require('../utils/unpositionedPayments');
 // Records written per round trip: each batch is one bulkWrite, so a fleet's
 // worth of records never rides on a single call.
 const BACKFILL_BATCH = 5000;
-
 
 /**
  * Gives every app payment record without a position in its block the position
@@ -32,8 +33,8 @@ const BACKFILL_BATCH = 5000;
  * @returns {Promise<{positioned: number, heightsCorrected: number, notOnChain: number, aboveTip: number}>}
  */
 async function backfillPaymentPositions() {
-  const database = dbHelper.databaseConnection().db(config.database.daemon.database);
-  const collection = config.database.daemon.collections.appsHashes;
+  const database = dbHelper.databaseConnection().db(config.get('database.daemon.database'));
+  const collection = config.get('database.daemon.collections.appsHashes');
   const missing = await dbHelper.findInDatabase(
     database, collection, UNPOSITIONED, {
       projection: {
@@ -47,7 +48,7 @@ async function backfillPaymentPositions() {
   if (tip.status !== 'success' || !Number.isInteger(tip.data)) {
     throw new Error(`getBlockCount failed: ${tip.data?.message ?? tip.data}`);
   }
-  const positions = await appPaymentPositions(config.fluxapps.epochstart, tip.data);
+  const positions = await appPaymentPositions(config.get('fluxapps.epochstart'), tip.data);
   const operations = [];
   const corrected = [];
   let heightsCorrected = 0;

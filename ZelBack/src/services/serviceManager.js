@@ -76,7 +76,6 @@ const fluxnodeStatusSource = require('./daemonService/fluxnodeStatusSource');
 const daemonUsageReporter = require('./daemonService/daemonUsageReporter');
 const reorgSource = require('./daemonService/reorgSource');
 const daemonServiceUtils = require('./daemonService/daemonServiceUtils');
-const paymentPositions = require('./migrations/paymentPositions');
 const placements = require('./migrations/placements');
 const appMessageHashes = require('./migrations/appMessageHashes');
 const fluxService = require('./fluxService');
@@ -648,10 +647,6 @@ async function startFluxFunctions() {
       }),
       runOwner('network', async () => {
         await capabilities.whenUp(['localDbPrepared', 'daemonReachable']);
-        // Payments recorded before the scan recorded positions are positioned
-        // from the daemon's address index, and a node with no app history yet
-        // fetches its payments through it.
-        await untilSucceeds('Payment position backfill', () => paymentPositions.backfillPaymentPositions());
         // Before the hash sync reads the flags and the retry windows.
         await untilSucceeds('App message flag repair', () => appMessageHashes.repairLostMessageFlags());
         await untilSucceeds('App message retry windows', () => appMessageHashes.restartRetryWindows());

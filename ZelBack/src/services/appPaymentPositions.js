@@ -1,3 +1,5 @@
+'use strict';
+
 const config = require('config');
 
 const daemonServiceUtils = require('./daemonService/daemonServiceUtils');
@@ -8,7 +10,7 @@ const daemonServiceUtils = require('./daemonService/daemonServiceUtils');
  * @returns {string[]}
  */
 function appPaymentAddresses() {
-  return config.fluxapps.appPaymentAddresses.map((entry) => entry.address);
+  return config.get('fluxapps.appPaymentAddresses').map((entry) => entry.address);
 }
 
 /**

@@ -4,6 +4,7 @@ const { expect } = require('chai');
 const sinon = require('sinon');
 const proxyquire = require('proxyquire').noCallThru();
 const capabilities = require('../../ZelBack/src/services/utils/capabilities');
+const { BOOT_STEP_RETRY_MS } = require('../../ZelBack/src/services/utils/untilSucceeds');
 
 describe('migrations tests', () => {
   let stubs;
@@ -15,12 +16,14 @@ describe('migrations tests', () => {
       nodeIdentityMigration: { migrateNodeIdentity: sinon.stub().resolves({ migrated: [] }) },
       containerLabelBackfill: { backfillContainerLabels: sinon.stub().resolves({ covered: true }) },
       retiredSchema: { dropRetiredSchema: sinon.stub().resolves({ collections: [], indexes: [] }) },
+      paymentPositions: { backfillPaymentPositions: sinon.stub().resolves({ positioned: 0, unresolved: 0 }) },
     };
     migrations = proxyquire('../../ZelBack/src/services/migrations', {
       '../../lib/log': stubs.log,
       '../appDatabase/nodeIdentityMigration': stubs.nodeIdentityMigration,
       '../appLifecycle/containerLabelBackfill': stubs.containerLabelBackfill,
       './retiredSchema': stubs.retiredSchema,
+      './paymentPositions': stubs.paymentPositions,
     });
   });
 
@@ -59,6 +62,26 @@ describe('migrations tests', () => {
 
       expect(stubs.containerLabelBackfill.backfillContainerLabels.calledOnce).to.be.true;
       expect(stubs.nodeIdentityMigration.migrateNodeIdentity.called).to.be.false;
+    });
+
+    it('backfills payment positions before the scan first reaches the tip', async () => {
+      const results = await migrations.runBefore('explorerSynced');
+
+      expect(results).to.deep.equal([{ id: 'payment-positions', ok: true }]);
+    });
+
+    it('runs a must-succeed migration again until it succeeds, and holds its capability until then', async () => {
+      const clock = sinon.useFakeTimers();
+      stubs.paymentPositions.backfillPaymentPositions.onFirstCall().rejects(new Error('daemon busy'));
+      let settled = false;
+      const run = migrations.runBefore('explorerSynced').then((results) => { settled = true; return results; });
+
+      await clock.tickAsync(BOOT_STEP_RETRY_MS - 1);
+      expect(settled, 'returned before the retry').to.be.false;
+      await clock.tickAsync(1);
+
+      expect(await run).to.deep.equal([{ id: 'payment-positions', ok: true }]);
+      sinon.assert.calledTwice(stubs.paymentPositions.backfillPaymentPositions);
     });
 
     it('does nothing for a capability no migration finishes before', async () => {
@@ -101,6 +124,9 @@ describe('migrations tests', () => {
         './retiredSchema': {
           dropRetiredSchema: async () => { order.push('second'); },
         },
+        './paymentPositions': {
+          backfillPaymentPositions: async () => { order.push('fourth'); },
+        },
       });
       rebuilt.migrations.forEach((migration) => {
         // eslint-disable-next-line no-param-reassign
@@ -109,8 +135,8 @@ describe('migrations tests', () => {
 
       const results = await rebuilt.runBefore('localDbPrepared');
 
-      expect(order).to.deep.equal(['first', 'second', 'third']);
-      expect(results.map((r) => r.ok)).to.deep.equal([false, true, true]);
+      expect(order).to.deep.equal(['first', 'second', 'fourth', 'third']);
+      expect(results.map((r) => r.ok)).to.deep.equal([false, true, true, true]);
     });
   });
 });
