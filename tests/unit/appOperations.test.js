@@ -831,17 +831,31 @@ describe('appOperations tests', () => {
      * A real DeploymentComponent whose mounts are the ones the spec declares.
      * `mounts` (Source + sourceType + perms) is derived by the spec library from
      * the persistentStorage block — the shape ensureMountSourcesExist consumes.
+     * Content delivery is refused on a cleartext spec, so a mount that carries a
+     * content slot needs `encrypted`.
      */
-    async function buildDeployComp(mounts) {
+    async function buildDeployComp(mounts, { encrypted = false } = {}) {
       const persistentStorage = Object.keys(mounts).length
         ? { sizeGb: 5, mounts }
         : { sizeGb: 0, mounts: {} };
-      const deployment = await oneComponentDeployment('webapp', 'test', { persistentStorage });
-      return deployment.getComponent('test');
+      const spec = await v9Spec({
+        name: 'webapp',
+        components: { test: { ...V9_SUBMISSION.components.web, name: 'test', persistentStorage } },
+      }, { encrypted });
+      return (await deploymentFor(spec)).getComponent('test');
     }
 
     const dirMount = (destination, source) => [destination, { source, destination, type: 'directory' }];
     const fileMount = (destination, source) => [destination, { source, destination, type: 'file' }];
+    // A mount whose owner and mode the spec declares: injected content, as the library resolves it.
+    const ownedFileMount = (destination, source, mode) => [destination, {
+      source, destination, type: 'file', uid: 0, gid: 0, mode,
+    }];
+    // An atomic content slot: the library binds the slot's parent directory, under
+    // the platform's namespace, root-owned 0555.
+    const atomicSlot = (destination, source) => [destination, {
+      source, destination, type: 'file', contentSlot: 'cfg', atomic: true,
+    }];
 
     function loadModule() {
       return proxyquire('../../ZelBack/src/services/appLifecycle/appVolumeService', {
@@ -851,14 +865,25 @@ describe('appOperations tests', () => {
       });
     }
 
+    /** The calls made under one command, in order. */
+    const callsFor = (cmd) => serviceHelperStub.runCommand.getCalls().filter((c) => c.args[0] === cmd);
+    /** `cmd` reports its failure in the result, as runCommand does. */
+    const failing = (cmd) => serviceHelperStub.runCommand.withArgs(cmd).resolves({ error: new Error(`${cmd} failed`) });
+    /** `test` answers as if `source` were there as `kind`: a directory or a file. */
+    function present(source, kind) {
+      serviceHelperStub.runCommand.withArgs('test').callsFake(async (cmd, { params: [flag, path] }) => {
+        const there = path === source && (flag === '-e' || (flag === '-d' && kind === 'directory') || (flag === '-f' && kind === 'file'));
+        return { error: there ? null : new Error('test failed') };
+      });
+    }
+
     // A source that could not be made, or whose mode could not be set, leaves a
     // container that starts over a mount its user cannot use. The command's failure
     // is the caller's to hear, not a result to pass over.
     describe('a step that fails', () => {
-      const failing = (cmd) => serviceHelperStub.runCommand.withArgs(cmd).resolves({ error: new Error(`${cmd} failed`) });
-
-      it('throws when a directory source cannot be made', async () => {
+      it('throws the make\'s failure when an owner directory is neither made nor there', async () => {
         failing('mkdir');
+        failing('test');
         const mod = loadModule();
         const deployComp = await buildDeployComp(Object.fromEntries([dirMount('/var/log/app', 'logs')]));
 
@@ -868,15 +893,16 @@ describe('appOperations tests', () => {
         expect(thrown && thrown.message).to.include('mkdir failed');
       });
 
-      it('throws when a file source cannot be made', async () => {
-        failing('touch');
+      it('throws the make\'s failure when an owner file is neither made nor there', async () => {
+        failing('sh');
+        failing('test');
         const mod = loadModule();
         const deployComp = await buildDeployComp(Object.fromEntries([fileMount('/etc/app/config.yaml', 'config.yaml')]));
 
         let thrown = null;
         await mod.ensureMountSourcesExist(deployComp).catch((e) => { thrown = e; });
 
-        expect(thrown && thrown.message).to.include('touch failed');
+        expect(thrown && thrown.message).to.include('sh failed');
       });
 
       it('throws when a source\'s mode cannot be set', async () => {
@@ -927,28 +953,129 @@ describe('appOperations tests', () => {
       expect(stignoreWrite.calledBefore(firstMkdir), 'a directory existed before the set that covers it').to.equal(true);
     });
 
-    it('creates a file source with touch and chmod', async () => {
-      const mod = loadModule();
-      const deployComp = await buildDeployComp(Object.fromEntries([fileMount('/etc/app/config.yaml', 'config.yaml')]));
-      const configYaml = `${deployComp.dir}/config.yaml`;
+    // An owner data source is opened to every container user when this pass made
+    // it. One that is already there keeps the mode its application gave it: a
+    // database refuses a data directory the world can read, and a key file the
+    // world can read is refused by what holds it.
+    describe('an owner data source', () => {
+      it('makes a directory as one name under the volume root and opens it to every container user', async () => {
+        const mod = loadModule();
+        const deployComp = await buildDeployComp(Object.fromEntries([dirMount('/var/log/app', 'logs')]));
+        const logs = `${deployComp.dir}/logs`;
 
-      await mod.ensureMountSourcesExist(deployComp);
+        await mod.ensureMountSourcesExist(deployComp);
 
-      expect(serviceHelperStub.runCommand.calledWith('touch', sinon.match({ params: [configYaml], runAsRoot: true }))).to.be.true;
-      expect(serviceHelperStub.runCommand.calledWith('chmod', sinon.match({ params: ['777', configYaml], runAsRoot: true }))).to.be.true;
+        const [mkdir] = callsFor('mkdir');
+        expect(mkdir.args[1]).to.deep.include({ params: [logs], runAsRoot: true });
+        const [chmod] = callsFor('chmod');
+        expect(chmod.args[1]).to.deep.include({ params: ['777', logs], runAsRoot: true });
+        expect(chmod.calledAfter(mkdir), 'opened before it was made').to.equal(true);
+        expect(callsFor('test'), 'a source this pass made was asked about').to.have.lengthOf(0);
+      });
+
+      it('makes a file exclusively, the path an argument and never shell text, and opens it to every container user', async () => {
+        const mod = loadModule();
+        const deployComp = await buildDeployComp(Object.fromEntries([fileMount('/etc/app/config.yaml', 'config.yaml')]));
+        const configYaml = `${deployComp.dir}/config.yaml`;
+
+        await mod.ensureMountSourcesExist(deployComp);
+
+        const [create] = callsFor('sh');
+        expect(create, 'no exclusive create ran').to.exist;
+        expect(create.args[1]).to.deep.include({ runAsRoot: true });
+        const [dashC, script, ...positional] = create.args[1].params;
+        expect(dashC).to.equal('-c');
+        expect(script, 'the redirection does not refuse an existing file').to.include('set -C');
+        expect(script, 'the path is shell text').to.not.include(configYaml);
+        expect(positional).to.deep.equal(['sh', configYaml]);
+        expect(callsFor('touch'), 'touch makes an existing file look made').to.have.lengthOf(0);
+        const [chmod] = callsFor('chmod');
+        expect(chmod.args[1]).to.deep.include({ params: ['777', configYaml], runAsRoot: true });
+        expect(chmod.calledAfter(create), 'opened before it was made').to.equal(true);
+      });
+
+      it('leaves the mode of a directory that is already there', async () => {
+        const mod = loadModule();
+        const deployComp = await buildDeployComp(Object.fromEntries([dirMount('/var/log/app', 'logs')]));
+        const logs = `${deployComp.dir}/logs`;
+        failing('mkdir');
+        present(logs, 'directory');
+
+        await mod.ensureMountSourcesExist(deployComp);
+
+        expect(callsFor('chmod'), 'an existing directory was widened').to.have.lengthOf(0);
+        const [asked] = callsFor('test');
+        expect(asked.args[1]).to.deep.include({ params: ['-d', logs], runAsRoot: true });
+        expect(asked.calledAfter(callsFor('mkdir')[0]), 'asked before the make').to.equal(true);
+      });
+
+      it('leaves the mode of a file that is already there', async () => {
+        const mod = loadModule();
+        const deployComp = await buildDeployComp(Object.fromEntries([fileMount('/etc/app/config.yaml', 'config.yaml')]));
+        const configYaml = `${deployComp.dir}/config.yaml`;
+        failing('sh');
+        present(configYaml, 'file');
+
+        await mod.ensureMountSourcesExist(deployComp);
+
+        expect(callsFor('chmod'), 'an existing file was widened').to.have.lengthOf(0);
+        const [asked] = callsFor('test');
+        expect(asked.args[1]).to.deep.include({ params: ['-f', configYaml], runAsRoot: true });
+        expect(asked.calledAfter(callsFor('sh')[0]), 'asked before the make').to.equal(true);
+      });
+
+      it('reports the make\'s failure when a directory holds the name an owner file needs', async () => {
+        const mod = loadModule();
+        const deployComp = await buildDeployComp(Object.fromEntries([fileMount('/etc/app/config.yaml', 'config.yaml')]));
+        failing('sh');
+        present(`${deployComp.dir}/config.yaml`, 'directory');
+
+        let thrown = null;
+        await mod.ensureMountSourcesExist(deployComp).catch((e) => { thrown = e; });
+
+        expect(thrown && thrown.message, 'a directory passed as the file').to.include('sh failed');
+      });
     });
 
-    it('creates a directory source with mkdir -p', async () => {
-      const mod = loadModule();
-      const deployComp = await buildDeployComp(Object.fromEntries([dirMount('/var/log/app', 'logs')]));
-      const logs = `${deployComp.dir}/logs`;
+    // Platform content is never left world-writable: whatever a pass finds, it
+    // holds the source at the owner and mode the spec declares.
+    describe('injected content', () => {
+      it('is held at its declared owner and mode on every pass', async () => {
+        const mod = loadModule();
+        const deployComp = await buildDeployComp(Object.fromEntries([ownedFileMount('/etc/app/owned.txt', 'owned.txt', '0640')]));
+        const owned = `${deployComp.dir}/owned.txt`;
 
-      await mod.ensureMountSourcesExist(deployComp);
+        await mod.ensureMountSourcesExist(deployComp);
+        await mod.ensureMountSourcesExist(deployComp);
 
-      expect(serviceHelperStub.runCommand.calledWith('mkdir', sinon.match({ params: ['-p', logs], runAsRoot: true }))).to.be.true;
+        expect(callsFor('touch').map((c) => c.args[1].params)).to.deep.equal([[owned], [owned]]);
+        expect(callsFor('chown').map((c) => c.args[1].params)).to.deep.equal([['0:0', owned], ['0:0', owned]]);
+        expect(callsFor('chmod').map((c) => c.args[1].params)).to.deep.equal([['0640', owned], ['0640', owned]]);
+        expect(callsFor('test'), 'whether it was there decides nothing').to.have.lengthOf(0);
+        expect(callsFor('sh')).to.have.lengthOf(0);
+      });
+
+      it('has its directory made inside the platform\'s namespace, parents included, and held at its mode', async () => {
+        const mod = loadModule();
+        const deployComp = await buildDeployComp(Object.fromEntries([
+          dirMount('/data', 'data'),
+          atomicSlot('/io.runonflux/conf/app.yaml', 'app.yaml'),
+        ]), { encrypted: true });
+        const slotDir = `${deployComp.dir}/io.runonflux/conf`;
+        const slot = deployComp.mounts.find((m) => m.Source === slotDir);
+        expect(slot && slot.perms, 'the premise: a platform-owned directory').to.deep.equal({ uid: 0, gid: 0, mode: '0555' });
+
+        await mod.ensureMountSourcesExist(deployComp);
+
+        const made = callsFor('mkdir').map((c) => c.args[1].params);
+        expect(made).to.deep.include(['-p', slotDir]);
+        expect(made, 'an owner directory needs no parent step').to.deep.include([`${deployComp.dir}/data`]);
+        expect(callsFor('chown').map((c) => c.args[1].params)).to.deep.include(['0:0', slotDir]);
+        expect(callsFor('chmod').map((c) => c.args[1].params)).to.deep.include(['0555', slotDir]);
+      });
     });
 
-    it('materialises every source unconditionally, with no prior existence check (idempotent, no TOCTOU)', async () => {
+    it('makes every source before asking whether it was there', async () => {
       const mod = loadModule();
       const deployComp = await buildDeployComp(Object.fromEntries([
         dirMount('/usr/share/nginx/html', 'html'),
@@ -959,12 +1086,12 @@ describe('appOperations tests', () => {
 
       await mod.ensureMountSourcesExist(deployComp);
 
-      // mkdir -p / touch run for every source, not gated on a prior stat — mkdir -p
-      // and touch are themselves idempotent, so there is no check-then-act window.
-      expect(serviceHelperStub.runCommand.calledWith('mkdir', sinon.match({ params: ['-p', `${dir}/html`] }))).to.be.true;
-      expect(serviceHelperStub.runCommand.calledWith('mkdir', sinon.match({ params: ['-p', `${dir}/logs`] }))).to.be.true;
-      expect(serviceHelperStub.runCommand.calledWith('touch', sinon.match({ params: [`${dir}/config.yaml`] }))).to.be.true;
-      expect(serviceHelperStub.runCommand.calledWith('chmod', sinon.match({ params: ['777', `${dir}/config.yaml`] }))).to.be.true;
+      expect(callsFor('mkdir').map((c) => c.args[1].params)).to.deep.equal([[`${dir}/html`], [`${dir}/logs`]]);
+      expect(callsFor('sh').map((c) => c.args[1].params.at(-1))).to.deep.equal([`${dir}/config.yaml`]);
+      expect(callsFor('test'), 'a source was asked about before it was made').to.have.lengthOf(0);
+      expect(callsFor('chmod').map((c) => c.args[1].params)).to.deep.equal([
+        ['777', `${dir}/html`], ['777', `${dir}/logs`], ['777', `${dir}/config.yaml`],
+      ]);
     });
 
     it('handles empty mounts array', async () => {

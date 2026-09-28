@@ -278,28 +278,68 @@ async function removeOrphanedInjectedContent(oldComp, newComp) {
 }
 
 /**
+ * Makes an owner data source as root and reports whether this call made it. The
+ * source is one name under the volume root, which is mounted before any source is
+ * made, so a directory is made without -p: a missing parent is a fault, not a
+ * directory to make on the host under a future mountpoint. A file is created with
+ * the shell's noclobber redirection, the exclusive create coreutils has no command
+ * for; the path is a positional argument, never shell text. A refused create is
+ * followed by the test whose exit status alone says whether a source of the right
+ * type is there: it is, and this call made nothing; it is not, and the refusal is
+ * the fault.
+ * @param {object} mount - a DeploymentComponent mount ({ Source, sourceType })
+ * @returns {Promise<boolean>} true when this call made the source
+ * @throws the create's error when the source is neither made nor there
+ */
+async function createOwnerMountSource(mount) {
+  const isFile = mount.sourceType === 'file';
+  const create = isFile
+    ? await serviceHelper.runCommand('sh', { params: ['-c', 'set -C && : > "$1"', 'sh', mount.Source], runAsRoot: true, logError: false })
+    : await serviceHelper.runCommand('mkdir', { params: [mount.Source], runAsRoot: true, logError: false });
+  if (!create.error) return true;
+  const present = await serviceHelper.runCommand('test', { params: [isFile ? '-f' : '-d', mount.Source], runAsRoot: true, logError: false });
+  if (present.error) throw create.error;
+  return false;
+}
+
+/**
+ * Makes one bind-mount source and sets its mode by role. Injected content
+ * (declared `perms`) is made in place, its directory may sit inside the
+ * platform's namespace, and is held at its declared owner and mode on every
+ * pass: platform content is never left world-writable. An owner data source is
+ * opened to every container user only when this pass made it; one that already
+ * exists keeps the mode its application gave it.
+ * @param {object} mount - a DeploymentComponent mount ({ Source, sourceType, perms })
+ */
+async function ensureMountSource(mount) {
+  if (mount.perms) {
+    if (mount.sourceType === 'file') {
+      await runMountStep('touch', { params: [mount.Source], runAsRoot: true });
+    } else {
+      await runMountStep('mkdir', { params: ['-p', mount.Source], runAsRoot: true });
+    }
+    await applyMountPerms(mount);
+    return;
+  }
+  if (await createOwnerMountSource(mount)) await applyMountPerms(mount);
+}
+
+/**
  * Ensure every bind-mount source for a component exists before its container is
- * (re)created on the volume-reuse path. The operations are unconditional and
- * idempotent (`mkdir -p` / `touch`), so there is no check-then-act (TOCTOU) window
- * inside this helper. Also regenerates `.stignore` so a volume-keeping redeploy
- * picks up an added/removed exclude (decoupled from `createAppVolume`) - FIRST,
- * because a source this makes in a registered folder is indexed by syncthing's
- * watcher within seconds, and an ignore does not withdraw what already replicated.
- * Passes writeStignore's verdict through: true when an existing ignore set
- * changed and the caller should request a targeted syncthing folder scan.
+ * (re)created on the volume-reuse path. Every source is made first and asked
+ * about only when the make was refused, so there is no check-then-act (TOCTOU)
+ * window inside this helper. Also regenerates `.stignore` so a volume-keeping
+ * redeploy picks up an added/removed exclude (decoupled from `createAppVolume`) -
+ * FIRST, because a source this makes in a registered folder is indexed by
+ * syncthing's watcher within seconds, and an ignore does not withdraw what already
+ * replicated. Passes writeStignore's verdict through: true when an existing ignore
+ * set changed and the caller should request a targeted syncthing folder scan.
  */
 async function ensureMountSourcesExist(deployComp) {
   const stignoreChanged = await writeStignore(deployComp);
   for (const mount of deployComp.mounts) {
-    if (mount.sourceType === 'file') {
-      // eslint-disable-next-line no-await-in-loop
-      await runMountStep('touch', { params: [mount.Source], runAsRoot: true });
-    } else {
-      // eslint-disable-next-line no-await-in-loop
-      await runMountStep('mkdir', { params: ['-p', mount.Source], runAsRoot: true });
-    }
     // eslint-disable-next-line no-await-in-loop
-    await applyMountPerms(mount);
+    await ensureMountSource(mount);
   }
   return stignoreChanged;
 }
