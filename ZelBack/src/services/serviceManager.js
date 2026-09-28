@@ -603,7 +603,7 @@ async function startFluxFunctions() {
       },
       onPeerEvent: (event, cb) => peerManager.on(event, cb),
       offPeerEvent: (event, cb) => peerManager.removeListener(event, cb),
-      isAboveThreshold: () => peerManager.isAboveThreshold(),
+      isAboveThreshold: () => capabilities.isUp('peersAboveFloor'),
       isEnterprise: () => enterpriseNetwork.getCachedEnterpriseIdentity(),
       networkStateReady: () => networkStateService.waitStarted(),
       // The steady-state manifest refresh's apply half: catch up any running container whose
@@ -632,7 +632,7 @@ async function startFluxFunctions() {
     peerSetStabilityService.start({
       onPeerEvent: (event, cb) => peerManager.on(event, cb),
       offPeerEvent: (event, cb) => peerManager.removeListener(event, cb),
-      isAboveThreshold: () => peerManager.isAboveThreshold(),
+      isAboveThreshold: () => capabilities.isUp('peersAboveFloor'),
     });
 
     // Whether this node's calls to other nodes reach them. Started beside the
@@ -666,7 +666,7 @@ async function startFluxFunctions() {
       // subscriber cannot see the edge it missed, which is what this accessor exists for -
       // and reading the level rather than keeping an edge of our own is why nothing here
       // needs re-arming when a peer set collapses and rebuilds.
-      aboveThreshold: () => peerManager.isAboveThreshold(),
+      aboveThreshold: () => capabilities.isUp('peersAboveFloor'),
     });
     // Discovery has not started yet - it is fifty lines below - so the peer set is empty at
     // this point on every node, always. Nothing here asks peers or the source; both are
