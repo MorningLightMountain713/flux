@@ -6,6 +6,7 @@ const appTamperingRepository = require('./appDatabase/appTamperingRepository');
 const nodeDosState = require('./nodeDosState');
 const generalService = require('./generalService');
 const daemonServiceMiscRpcs = require('./daemonService/daemonServiceMiscRpcs');
+const capabilities = require('./utils/capabilities');
 const globalState = require('./utils/globalState');
 const policyStore = require('./policyStore');
 
@@ -17,8 +18,6 @@ const OWNER = nodeDosState.StickyDosOwner.APP_TAMPERING;
 let intervalHandle = null;
 let stopping = false;
 let syncWaitResolver = null;
-let syncBlockEmitter = null;
-let syncBlockListener = null;
 
 /**
  * True while this service's own verdict holds the node out of service.
@@ -105,36 +104,18 @@ async function getMyTxhash() {
 }
 
 /**
- * Block until the daemon reports synced. The sync fact only changes when a
- * block is processed, so that event is what releases the wait - the level is
- * re-read on each one, and once more right after subscribing in case the edge
- * fired in between. No timer: a chain that never updates is a node that must
- * not enforce, and stop() releases the wait for shutdown.
+ * Block until the daemon is synced (`daemonSynced`). No timer: a chain that
+ * never updates is a node that must not enforce, and stop() releases the wait
+ * for shutdown.
  */
 async function waitForDaemonSynced() {
-  const synced = () => {
-    const s = daemonServiceMiscRpcs.isDaemonSynced();
-    return Boolean(s && s.data && s.data.synced);
-  };
-  if (stopping || synced()) return;
+  if (stopping || capabilities.isUp('daemonSynced')) return;
   await new Promise((resolve) => {
-    const settle = () => {
-      if (syncBlockEmitter && syncBlockListener) {
-        syncBlockEmitter.off('blocksProcessed', syncBlockListener);
-      }
-      syncBlockListener = null;
+    syncWaitResolver = () => {
       syncWaitResolver = null;
       resolve();
     };
-    syncWaitResolver = settle;
-    if (syncBlockEmitter) {
-      syncBlockListener = () => {
-        if (stopping || synced()) settle();
-      };
-      syncBlockEmitter.on('blocksProcessed', syncBlockListener);
-      syncBlockListener();
-    }
-    // No emitter wired: only stop() releases the wait.
+    capabilities.whenUp('daemonSynced').then(() => { if (syncWaitResolver) syncWaitResolver(); });
   });
 }
 
@@ -202,15 +183,9 @@ async function enforceBlocklist() {
  * performs the first check, then runs every
  * config.fluxapps.tamperingCheckIntervalMs (12h by default). Safe to call
  * multiple times (no-ops if already started).
- *
- * @param {object} [options]
- * @param {import('events').EventEmitter} [options.blockEmitter] - emits
- *   'blocksProcessed'; what releases the sync wait. Without it only stop()
- *   can release an unsynced wait.
  */
-async function start(options = {}) {
+async function start() {
   if (intervalHandle) return;
-  syncBlockEmitter = options.blockEmitter ?? null;
   if (isArcaneOs()) {
     log.info('appTamperingBlocklist - node is ArcaneOS, enforcer will not start');
     return;

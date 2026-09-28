@@ -5,6 +5,7 @@ const { expect } = require('chai');
 const daemonServiceUtils = require('../../ZelBack/src/services/daemonService/daemonServiceUtils');
 const daemonServiceMiscRpcs = require('../../ZelBack/src/services/daemonService/daemonServiceMiscRpcs');
 const log = require('../../ZelBack/src/lib/log');
+const capabilities = require('../../ZelBack/src/services/utils/capabilities');
 
 const generateResponse = () => {
   const res = { test: 'testing' };
@@ -170,6 +171,7 @@ describe('daemonServiceMiscRpcs tests', () => {
     beforeEach(() => {
       daemonServiceBlockchainRpcsStub = sinon.stub(daemonServiceUtils, 'executeCall');
       logInfoSpy = sinon.spy(log, 'info');
+      capabilities.resetForTests();
 
       daemonServiceMiscRpcs.setCurrentDaemonHeader(249_187);
       daemonServiceMiscRpcs.setCurrentDaemonHeight(0);
@@ -177,6 +179,7 @@ describe('daemonServiceMiscRpcs tests', () => {
 
     afterEach(() => {
       sinon.restore();
+      capabilities.resetForTests();
     });
 
     it('should set new current header and height', async () => {
@@ -197,7 +200,7 @@ describe('daemonServiceMiscRpcs tests', () => {
       expect(daemonServiceMiscRpcs.getCurrentDaemonHeight()).to.eql(123_456);
       expect(daemonServiceMiscRpcs.getElapsedSinceChainUpdateMs()).to.be.below(1000);
 
-      sinon.assert.calledOnceWithExactly(logInfoSpy, `Daemon Sync status: ${123_456}/${555_555}`);
+      sinon.assert.calledWithExactly(logInfoSpy, `Daemon Sync status: ${123_456}/${555_555}`);
     });
 
     it('should follow the header down, because a reorg genuinely shortens the chain', async () => {
@@ -214,7 +217,25 @@ describe('daemonServiceMiscRpcs tests', () => {
 
       expect(daemonServiceMiscRpcs.getCurrentDaemonHeader()).to.eql(1234);
       expect(daemonServiceMiscRpcs.getCurrentDaemonHeight()).to.eql(123_456);
-      sinon.assert.calledOnceWithExactly(logInfoSpy, `Daemon Sync status: ${123_456}/${1234}`);
+      sinon.assert.calledWithExactly(logInfoSpy, `Daemon Sync status: ${123_456}/${1234}`);
+    });
+
+    it('raises daemonSynced on a reading within five blocks of the header, and lowers it on one behind', async () => {
+      capabilities.setForTests('daemonReachable', true);
+      daemonServiceBlockchainRpcsStub.resolves({ status: 'success', data: { blocks: 1000, headers: 1002 } });
+      await daemonServiceMiscRpcs.fluxDaemonBlockchainInfo();
+      expect(capabilities.isUp('daemonSynced')).to.equal(true);
+
+      daemonServiceBlockchainRpcsStub.resolves({ status: 'success', data: { blocks: 1000, headers: 1100 } });
+      await daemonServiceMiscRpcs.fluxDaemonBlockchainInfo();
+      expect(capabilities.isUp('daemonSynced')).to.equal(false);
+    });
+
+    it('raises daemonSynced from a pushed tip at the header', () => {
+      capabilities.setForTests('daemonReachable', true);
+      daemonServiceMiscRpcs.setCurrentDaemonHeader(2000);
+      daemonServiceMiscRpcs.recordChainTip(2000);
+      expect(capabilities.isUp('daemonSynced')).to.equal(true);
     });
 
     it('should not refresh the chain update time when the RPC call fails', async () => {

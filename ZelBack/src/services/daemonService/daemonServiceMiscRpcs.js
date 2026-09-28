@@ -7,6 +7,7 @@ const daemonServiceUtils = require('./daemonServiceUtils');
 const daemonServiceBlockchainRpcs = require('./daemonServiceBlockchainRpcs');
 const log = require('../../lib/log');
 const fluxEventBus = require('../utils/fluxEventBus');
+const capabilities = require('../utils/capabilities');
 
 /**
  * Get the default daemon header based on testnet configuration
@@ -32,6 +33,37 @@ function elapsedSinceChainUpdateMs() {
   return Number(process.hrtime.bigint() - lastChainUpdateAt) / 1_000_000;
 }
 
+let staleTimer = null;
+
+/**
+ * Publish `daemonSynced` from the readings `isDaemonSynced` answers from. Called on
+ * every new reading, and once more when the last one ages past the stale bound: a
+ * daemon that has gone quiet is no longer known to be synced, and no reading
+ * arrives to say so.
+ */
+function publishDaemonSynced() {
+  const handle = capabilities.claim('daemonSynced', 'daemonServiceMiscRpcs');
+  // eslint-disable-next-line no-use-before-define
+  const { synced } = isDaemonSynced().data;
+  if (synced) handle.raise(`at ${currentDaemonHeight} of ${currentDaemonHeader}`);
+  else handle.lower(`at ${currentDaemonHeight} of ${currentDaemonHeader}, or no recent reading`);
+  if (staleTimer) clearTimeout(staleTimer);
+  staleTimer = null;
+  if (lastChainUpdateAt !== null) {
+    staleTimer = setTimeout(publishDaemonSynced, CHAIN_STALE_AFTER_MS + 1);
+    staleTimer.unref?.();
+  }
+}
+
+/**
+ * Publish `daemonReachable`.
+ * @param {boolean} reachable Whether the daemon's RPC just answered.
+ */
+function publishDaemonReachable(reachable) {
+  const handle = capabilities.claim('daemonReachable', 'daemonServiceMiscRpcs');
+  if (reachable) handle.raise('RPC answered'); else handle.lower('RPC did not answer');
+}
+
 /**
  * Records a new chain tip seen on the push socket.
  *
@@ -50,6 +82,7 @@ function recordChainTip(height) {
   // A reorg genuinely shortens the chain, so the tip is allowed to move down.
   if (height > currentDaemonHeader) currentDaemonHeader = height;
   lastChainUpdateAt = process.hrtime.bigint();
+  publishDaemonSynced();
 }
 
 /**
@@ -112,6 +145,7 @@ async function fluxDaemonBlockchainInfo() {
     // height that no longer exists.
     currentDaemonHeader = daemonBlockChainInfo.data.headers;
     lastChainUpdateAt = process.hrtime.bigint();
+    publishDaemonSynced();
     fluxEventBus.publish('daemon:polled', { height: currentDaemonHeight, headers: currentDaemonHeader });
     log.info(`Daemon Sync status: ${currentDaemonHeight}/${currentDaemonHeader}`);
     return true;
@@ -130,6 +164,7 @@ async function daemonBlockchainInfoService() {
     const succeeded = await fluxDaemonBlockchainInfo();
     if (reachable !== succeeded) {
       reachable = succeeded;
+      publishDaemonReachable(succeeded);
       fluxEventBus.publish(succeeded ? 'daemon:recovered' : 'daemon:unreachable', {});
     }
   }
@@ -160,6 +195,7 @@ async function waitForDaemonRpc() {
     const result = await daemonServiceBlockchainRpcs.getBlockCount();
     if (result.status === 'success') {
       log.info(`Daemon RPC available at block height ${result.data}`);
+      publishDaemonReachable(true);
       return result.data;
     }
     const now = Date.now();

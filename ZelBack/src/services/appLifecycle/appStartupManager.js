@@ -350,7 +350,7 @@ async function manageAppsOnBoot(bootContext) {
     // Locations still valid — wait for daemon + sync then reconcile.
     const DAEMON_TIMEOUT_MS = config.get('system.bootDaemonTimeoutMs');
     try {
-      await awaitWithin(globalState.waitForDaemonReady(), DAEMON_TIMEOUT_MS, 'daemon_timeout');
+      await awaitWithin(capabilities.whenUp('daemonReachable'), DAEMON_TIMEOUT_MS, 'daemon_timeout');
     } catch (error) {
       if (error.message === 'daemon_timeout') {
         log.error(`appStartupManager - Daemon not ready after ${DAEMON_TIMEOUT_MS / 1000}s, removing all apps`);

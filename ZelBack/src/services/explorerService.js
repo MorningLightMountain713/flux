@@ -13,6 +13,7 @@ const dbHelper = require('./dbHelper');
 const verificationHelper = require('./verificationHelper');
 const messageHelper = require('./messageHelper');
 const daemonServiceMiscRpcs = require('./daemonService/daemonServiceMiscRpcs');
+const capabilities = require('./utils/capabilities');
 const daemonServiceControlRpcs = require('./daemonService/daemonServiceControlRpcs');
 const daemonServiceBlockchainRpcs = require('./daemonService/daemonServiceBlockchainRpcs');
 const daemonServiceUtils = require('./daemonService/daemonServiceUtils');
@@ -1169,11 +1170,9 @@ async function bootstrapAppHashes(currentDaemonHeight) {
 }
 
 async function waitForDaemonSync() {
-  const retryMs = config.get('fluxapps.explorerSyncRetryMs');
-  while (!daemonServiceMiscRpcs.isDaemonSynced().data.synced) {
-    log.info(`Explorer - Daemon not synced, retrying in ${retryMs / 1000}s`);
-    await serviceHelper.delay(retryMs);
-  }
+  if (capabilities.isUp('daemonSynced')) return;
+  log.info('Explorer - waiting for the daemon to be synced');
+  await capabilities.whenUp('daemonSynced');
 }
 
 async function getScannedBlockHeightFromDb(database) {

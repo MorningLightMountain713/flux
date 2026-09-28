@@ -2,8 +2,8 @@
 
 const { expect } = require('chai');
 const sinon = require('sinon');
-const { EventEmitter } = require('events');
 const proxyquire = require('proxyquire').noCallThru();
+const { capabilityStub } = require('./fixtures/capabilityStub');
 const { asConfig } = require('./fixtures/config');
 const { makeStickyDosDouble } = require('./stickyDosTestDouble');
 const { StickyDosOwner } = require('../../ZelBack/src/services/nodeDosState');
@@ -17,6 +17,7 @@ describe('appTamperingBlocklistService tests', () => {
   let nodeDosStateStub;
   let generalServiceStub;
   let daemonMiscStub;
+  let capabilitiesStub;
 
   const MOCK_TXHASH = 'abc123deadbeef';
 
@@ -35,6 +36,7 @@ describe('appTamperingBlocklistService tests', () => {
       './nodeDosState': nodeDosStateStub,
       './generalService': generalServiceStub,
       './daemonService/daemonServiceMiscRpcs': daemonMiscStub,
+      './utils/capabilities': capabilitiesStub,
       './utils/globalState': { isArcane: () => arcane },
       './policyStore': policyStoreStub,
     });
@@ -66,6 +68,7 @@ describe('appTamperingBlocklistService tests', () => {
     daemonMiscStub = {
       isDaemonSynced: sinon.stub().returns({ data: { synced: true } }),
     };
+    capabilitiesStub = capabilityStub({ daemonSynced: true });
 
     service = loadService();
   });
@@ -316,19 +319,18 @@ describe('appTamperingBlocklistService tests', () => {
   });
 
   describe('start/stop cancellation', () => {
-    it('an unsynced boot enforces on the first processed block, not a timer', async () => {
+    it('an unsynced boot enforces as soon as the daemon is synced, not on a timer', async () => {
       daemonMiscStub.isDaemonSynced = sinon.stub().returns({ data: { synced: false } });
+      capabilitiesStub.set('daemonSynced', false);
       setBlocklist([MOCK_TXHASH]);
       setTamperScore(100);
-      const blockEmitter = new EventEmitter();
-      const startPromise = service.start({ blockEmitter });
+      const startPromise = service.start();
       await new Promise((resolve) => { setImmediate(resolve); });
       expect(nodeDosStateStub.setStickyDos.called).to.be.false;
 
-      // The chain updates: the poller stamps the level, the block event
-      // announces it - and the first tick follows immediately.
+      // The daemon reports synced, and the first tick follows immediately.
       daemonMiscStub.isDaemonSynced = sinon.stub().returns({ data: { synced: true } });
-      blockEmitter.emit('blocksProcessed', 100);
+      capabilitiesStub.set('daemonSynced', true);
       await startPromise;
       expect(nodeDosStateStub.setStickyDos.called).to.be.true;
     });
@@ -336,6 +338,7 @@ describe('appTamperingBlocklistService tests', () => {
     it('start() aborts without scheduling an interval if stop() is called during daemon-sync wait', async () => {
       // Daemon never reports synced
       daemonMiscStub.isDaemonSynced = sinon.stub().returns({ data: { synced: false } });
+      capabilitiesStub.set('daemonSynced', false);
       const setIntervalSpy = sinon.spy(global, 'setInterval');
 
       // Kick off start() — it will enter waitForDaemonSynced and poll
@@ -347,6 +350,7 @@ describe('appTamperingBlocklistService tests', () => {
 
       // Now make daemon report synced so a buggy implementation would proceed
       daemonMiscStub.isDaemonSynced = sinon.stub().returns({ data: { synced: true } });
+      capabilitiesStub.set('daemonSynced', true);
       await startPromise;
 
       const twelveH = 12 * 60 * 60 * 1000;

@@ -175,23 +175,6 @@ describe('globalState tests', () => {
     });
   });
 
-  describe('waitForDaemonReady', () => {
-    it('should resolve immediately when daemonReady is already true', async () => {
-      globalState.daemonReady = true;
-      await globalState.waitForDaemonReady();
-    });
-
-    it('should wait until daemonReady is set to true', async () => {
-      let resolved = false;
-      const promise = globalState.waitForDaemonReady().then(() => { resolved = true; });
-      await new Promise((r) => setImmediate(r));
-      expect(resolved).to.equal(false);
-      globalState.daemonReady = true;
-      await promise;
-      expect(resolved).to.equal(true);
-    });
-  });
-
   describe('in-flight install abort registry (cancel-vs-install)', () => {
     it('installingApps is a Map', () => {
       expect(globalState.installingApps).to.be.instanceOf(Map);

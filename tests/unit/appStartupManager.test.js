@@ -72,17 +72,16 @@ describe('appStartupManager tests', () => {
     const mockDb = { db: sinon.stub().returns('mockDatabase') };
     dbHelperStub.databaseConnection.returns(mockDb);
 
-    // The real module, with the two gate waits spied. The gates stay CLOSED -
+    // The real module, with the database gate's wait spied. The gates stay CLOSED -
     // this suite is about a startup that has not finished - and the waits are
     // stubbed to resolve so a test does not sit on a gate nothing here opens.
     // On the module itself those two are the same fact, which is why this has to
     // be sinon over the real object rather than an object asserting both.
     globalStateStub = resetGlobalState();
     sinon.stub(globalStateStub, 'waitForDbReady').resolves();
-    sinon.stub(globalStateStub, 'waitForDaemonReady').resolves();
     // What the boot reconcile needs before its decision counts as up.
     capabilities.resetForTests();
-    capabilities.setForTests(['mongoReachable', 'dockerReachable'], true);
+    capabilities.setForTests(['mongoReachable', 'dockerReachable', 'daemonReachable'], true);
 
     appQueryServiceStub = {
       installedApps: sinon.stub().resolves({ status: 'success', data: [] }),

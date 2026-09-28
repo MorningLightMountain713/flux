@@ -442,9 +442,9 @@ async function startFluxFunctions() {
     syncthingService.startSyncthingSentinel();
     log.info('Syncthing service started');
 
-    // Wait for daemon RPC — manageAppsOnBoot (above) is fire-and-forget and gates
-    // on waitForDaemonReady() internally with a 5-min timeout. It must be running
-    // before daemonReady is set so its timeout/removal logic can trigger.
+    // Wait for daemon RPC — manageAppsOnBoot (above) is fire-and-forget and waits
+    // on daemonReachable internally with a 5-min timeout. It must be running
+    // before daemonReachable rises so its timeout/removal logic can trigger.
     await daemonServiceUtils.buildFluxdClient();
     await daemonServiceMiscRpcs.waitForDaemonRpc();
 
@@ -457,7 +457,6 @@ async function startFluxFunctions() {
     // awaited so isDaemonSynced is populated before hash sync reads it. Takes the push
     // path where the daemon offers it, and the old 30s poll where it does not.
     await chainTipSource.start();
-    globalState.daemonReady = true;
 
     // Initialize app sync orchestrator and spawner
     const orchestrator = new AppSyncOrchestrator({
@@ -656,7 +655,7 @@ async function startFluxFunctions() {
     // costs is the interval: the next tick is twelve hours away and nothing brings it
     // forward, so a node on the blocklist goes unenforced for twelve hours per restart.
     capabilities.whenUp('policyCurrent')
-      .then(() => appTamperingBlocklistService.start({ blockEmitter: explorerService.getBlockEmitter() }))
+      .then(() => appTamperingBlocklistService.start())
       .catch((err) => log.error(`appTamperingBlocklist start error: ${err.message}`));
     // Not awaited, and started ahead of setNodeGeolocation below on purpose: the
     // first tick reads geolocation from the db when there is one, and otherwise

@@ -6,7 +6,6 @@ const { AsyncLock } = require('./asyncLock');
 // Global state variables for apps service
 // These need to be shared across all modules to maintain the original business logic
 
-const daemonReadyGate = new AsyncGate();
 const dbReadyGate = new AsyncGate();
 let appStateAuthoritative = false;
 // Node-capability ("is-arcane") verdict, resolved once at boot by the awaited
@@ -211,9 +210,6 @@ function initializeCaches(cacheManager) {
 
 module.exports = {
   // State getters/setters
-  get daemonReady() { return daemonReadyGate.ready; },
-  set daemonReady(value) { if (value) daemonReadyGate.open(); else daemonReadyGate.close(); },
-  waitForDaemonReady() { return daemonReadyGate.wait(); },
 
 
   get dbReady() { return dbReadyGate.ready; },
