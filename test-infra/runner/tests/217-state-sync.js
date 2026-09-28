@@ -324,7 +324,10 @@ describe('State sync: failed sync peer is replaced', function () {
       deferredNodes: 2,
       tickerAutostart: false,
       nodeConfigOverrides: {
-        4: { fluxapps: { appSyncMinCompletions: 4, appSyncPeerThreshold: 4 } },
+        // The deficit must still stand when the latecomer has booted and been
+        // dialled: a spent budget asks nobody, and behind the gate's boot lock
+        // the boot takes minutes. The fleet's 30 s budget is the sources'.
+        4: { fluxapps: { appSyncMinCompletions: 4, appSyncPeerThreshold: 4, syncTimeoutMs: 300_000 } },
       },
     });
 
@@ -435,6 +438,10 @@ describe('State sync: failed sync peer is replaced', function () {
     // Organic discovery between the two late joiners is too slow to assert
     // on; connect them explicitly so the test measures replacement behavior,
     // not discovery cadence
+    // A manual dial is made once, and the latecomer refuses the upgrade (503)
+    // until its peer manager accepts connections, which its node status does
+    // not say; message capability follows that gate, so it is the mark to dial on.
+    await fresh.waitForEvent('messageCapability:changed', (d) => d.capable === true, 120000);
     const auth = await authenticate(client.url, fluxTeamKey());
     await client.getAuthed(`/flux/addpeer/${latecomerKey}`, auth.zelidauth);
     await client.waitForEvent('peers:added', (d) => d.ip === `${subnet.base}.15`, 60000);
