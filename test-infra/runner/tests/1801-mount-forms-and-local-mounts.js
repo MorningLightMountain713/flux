@@ -5,7 +5,7 @@ import { createTestEnv } from '../framework/test-env.js';
 import { execInContainer } from '../framework/container.js';
 import { pushImage } from '../framework/registry-helper.js';
 import { buildSeedableSyncthingApp } from '../framework/seed-helper.js';
-import { waitFor, waitForReconcileActuated } from '../framework/wait.js';
+import { waitFor, waitForReconcileActuated, START_ACTIONS } from '../framework/wait.js';
 import { bootAndPeer, installOnNodes, seedSyncScopedData } from '../framework/reconciler-suite.js';
 import {
   isDaemonUp, getDeviceId, getConnectedDevices, getFolders, getFolderStatus, scanFolder,
@@ -77,6 +77,7 @@ describe('mount forms on a replicated volume, and the directory a spec keeps loc
   const identifier = `${appName}_${appName}`;
   const dir = appDir(appName);
   const nodes = [0, 1];
+  let clearedAt;
 
   before(async function () {
     this.timeout(600000);
@@ -109,9 +110,9 @@ describe('mount forms on a replicated volume, and the directory a spec keeps loc
     });
     const installAfters = nodes.map((i) => env.clients[i].getLastEventId());
     await installOnNodes(env, app, nodes);
-    await Promise.all(nodes.map((i, k) => waitForReconcileActuated(
+    clearedAt = (await Promise.all(nodes.map((i, k) => waitForReconcileActuated(
       env.clients[i], identifier, 'dataCleared', 120000, { afterId: installAfters[k] },
-    )));
+    )))).map((event) => event.id);
   });
 
   after(async function () {
@@ -120,11 +121,16 @@ describe('mount forms on a replicated volume, and the directory a spec keeps loc
   });
 
   it('creates every declared mount on the volume, each as the kind its form names', async function () {
-    this.timeout(180000);
+    this.timeout(420000);
     // A form that silently created the wrong kind would still pass a "the path
     // exists" check and then fail inside the container, where no suite is looking.
-    await Promise.all(nodes.map(async (i) => {
+    //
+    // Read once the node has started the component: the clean-install clear wipes the
+    // app's entries at the volume root, mount sources included, and the start
+    // recreates them. The follower starts only once the cold start is seeded.
+    await Promise.all(nodes.map(async (i, k) => {
       const client = env.clients[i];
+      await waitForReconcileActuated(client, identifier, START_ACTIONS, 360000, { afterId: clearedAt[k] });
       expect(await pathKind(client, `${dir}/appdata`), `node ${i} primary mount`).to.equal('dir');
       expect(await pathKind(client, `${dir}/logs`), `node ${i} m: mount`).to.equal('dir');
       expect(await pathKind(client, `${dir}/cache`), `node ${i} ml: mount`).to.equal('dir');
@@ -144,10 +150,12 @@ describe('mount forms on a replicated volume, and the directory a spec keeps loc
       // syncthing takes the FIRST pattern that matches, so a policy line below
       // anything is a line something else can answer for.
       // The owner's archives, the directory the filesystem recovers into, the staging
-      // directory by its exact name, the legacy glob beside it for as long as volumes
-      // in the field still carry `.flux-op-<id>` at their root, then what this spec
-      // declared local.
-      expect(lines.slice(0, 5), `node ${i} leading block`).to.deep.equal(['/backup', '/lost+found', '/.flux-op', '/.flux-op-*', '/cache']);
+      // directory by its exact name, platform-provisioned content, the legacy staging
+      // glob for as long as volumes in the field still carry `.flux-op-<id>` at their
+      // root, then what this spec declared local.
+      expect(lines.slice(0, 6), `node ${i} leading block`).to.deep.equal([
+        '/backup', '/lost+found', '/.flux-op', '/io.runonflux', '/.flux-op-*', '/cache',
+      ]);
     }));
   });
 
