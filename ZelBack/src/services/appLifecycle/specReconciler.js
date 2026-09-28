@@ -141,20 +141,24 @@ async function fireAdoption(appName) {
  * @param {object} ctx - { localSocketAddr, nowSeconds, explorerHeight }
  */
 async function convergeApp(installed, registrySpec, ctx) {
-  // Expiry is a property of the network-confirmed spec, so the authoritative
-  // global row decides (a stale local row must neither remove a renewed app
-  // nor keep a cancelled one); an app with no global registration falls back
-  // to its local row. Height 0 never expires.
-  const authoritative = registrySpec || installed;
-  if (authoritative.height !== 0
-    && (!authoritative.height || authoritative.isExpired(ctx.nowSeconds, ctx.explorerHeight))) {
+  // The registry lists every app this node may run while it is alive, and this
+  // runs only while it is consistent: an installed app it does not list was
+  // refused, has expired or was never registered. The installed copy's own
+  // expiry decides nothing.
+  if (!registrySpec) {
+    log.warn(`REMOVAL REASON: not in the app registry - ${installed.name} (specReconciler)`);
+    await appUninstaller.uninstallApplication(installed.name, {
+      forceKill: false, skipGuard: true, broadcastRemoval: true, background: true,
+    });
+    return 'removed';
+  }
+  if (registrySpec.isExpired(ctx.nowSeconds, ctx.explorerHeight)) {
     log.warn(`REMOVAL REASON: App expired - ${installed.name} reached expiration date (specReconciler)`);
     await appUninstaller.uninstallApplication(installed.name, {
       forceKill: false, skipGuard: true, broadcastRemoval: true, background: true,
     });
     return 'removed';
   }
-  if (!registrySpec) return 'skipped';
 
   // The identities the spec assigns this node: the named replicas targeting it,
   // or the single unqualified identity that loose placement always has.
@@ -335,9 +339,11 @@ async function requestFullConvergence({ reason } = {}) {
     const installedApps = await appsRepository.listInstalledApps();
     if (!installedApps.length) return;
     const localSocketAddr = await fluxNetworkHelper.getLocalSocketAddress();
-    const installedNames = installedApps.map((app) => app.name);
-    const globalRows = await appsRepository.listGlobalAppInfo({ filter: { name: { $in: installedNames } } });
-    const globalByName = new Map(globalRows.map((spec) => [spec.name, spec]));
+    // Matched by name in any letter case, as getGlobalAppInfo matches one app.
+    const globalRows = await appsRepository.listGlobalAppInfo({
+      filter: { name: { $in: installedApps.map((app) => new RegExp(`^${app.name}$`, 'i')) } },
+    });
+    const globalByName = new Map(globalRows.map((spec) => [spec.name.toLowerCase(), spec]));
     const ctx = {
       localSocketAddr,
       nowSeconds: Math.floor(Date.now() / 1000),
@@ -347,7 +353,7 @@ async function requestFullConvergence({ reason } = {}) {
     for (const installed of installedApps) {
       try {
         // eslint-disable-next-line no-await-in-loop
-        const outcome = await convergeApp(installed, globalByName.get(installed.name) || null, ctx);
+        const outcome = await convergeApp(installed, globalByName.get(installed.name.toLowerCase()) || null, ctx);
         outcomes[outcome] += 1;
         if (outcome === 'removed') {
           // eslint-disable-next-line no-await-in-loop
