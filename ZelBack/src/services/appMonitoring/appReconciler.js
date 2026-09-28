@@ -8,6 +8,7 @@ const dockerService = require('../dockerService');
 const volumeService = require('../utils/volumeService');
 const dockerOperations = require('../appManagement/dockerOperations');
 const globalState = require('../utils/globalState');
+const capabilities = require('../utils/capabilities');
 const operationRegistry = require('../utils/operationRegistry');
 const specLibs = require('../utils/specLibs');
 const appInspector = require('../appManagement/appInspector');
@@ -2483,7 +2484,7 @@ let started = false;
 async function start() {
   if (started) return;
   started = true;
-  await globalState.waitForBootContainerStateSettled();
+  await capabilities.whenUp('bootReconcileDecided');
   // Load flux-spec-backend once at boot rather than on the first reconcile.
   // This used to be load-bearing — the sync identifier helpers threw unless it
   // had already run — but every caller awaits now, so it only warms the cache.

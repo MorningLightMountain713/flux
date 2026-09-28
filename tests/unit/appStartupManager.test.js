@@ -4,6 +4,7 @@ const { expect } = require('chai');
 const sinon = require('sinon');
 const { resetGlobalState } = require('./fixtures/globalState');
 const proxyquire = require('proxyquire').noCallThru();
+const capabilities = require('../../ZelBack/src/services/utils/capabilities');
 const { asConfig } = require('./fixtures/config');
 
 describe('appStartupManager tests', () => {
@@ -71,7 +72,7 @@ describe('appStartupManager tests', () => {
     const mockDb = { db: sinon.stub().returns('mockDatabase') };
     dbHelperStub.databaseConnection.returns(mockDb);
 
-    // The real module, with the three gate waits spied. The gates stay CLOSED -
+    // The real module, with the two gate waits spied. The gates stay CLOSED -
     // this suite is about a startup that has not finished - and the waits are
     // stubbed to resolve so a test does not sit on a gate nothing here opens.
     // On the module itself those two are the same fact, which is why this has to
@@ -79,7 +80,9 @@ describe('appStartupManager tests', () => {
     globalStateStub = resetGlobalState();
     sinon.stub(globalStateStub, 'waitForDbReady').resolves();
     sinon.stub(globalStateStub, 'waitForDaemonReady').resolves();
-    sinon.stub(globalStateStub, 'waitForBootContainerStateSettled').resolves();
+    // What the boot reconcile needs before its decision counts as up.
+    capabilities.resetForTests();
+    capabilities.setForTests(['mongoReachable', 'dockerReachable'], true);
 
     appQueryServiceStub = {
       installedApps: sinon.stub().resolves({ status: 'success', data: [] }),
@@ -419,7 +422,7 @@ describe('appStartupManager tests', () => {
       expect(appsRepositoryStub.sweepOffListRows.calledOnce).to.be.true;
       expect(appsRepositoryStub.sweepOffListRows.calledAfter(globalStateStub.waitForDbReady)).to.be.true;
       expect(logStub.warn.calledWithMatch(/off-list boot sweep failed/)).to.be.true;
-      expect(globalStateStub.bootContainerStateSettled).to.equal(true);
+      expect(capabilities.isUp('bootReconcileDecided')).to.equal(true);
     });
 
     it('should wait for dbReady then start apps when machine rebooted with valid locations', async () => {
@@ -469,21 +472,21 @@ describe('appStartupManager tests', () => {
       expect(logStub.info.calledWithMatch(/First boot/)).to.be.true;
     });
 
-    it('should set bootContainerStateSettled on every exit path', async () => {
+    it('should raise bootReconcileDecided on every exit path', async () => {
       // FluxOS restart path (still reconciles, no stopped containers)
-      globalStateStub.bootContainerStateSettled = false;
+      capabilities.setForTests('bootReconcileDecided', false);
       dockerServiceStub.dockerListContainers.resolves([]);
       dbHelperStub.findInDatabase.resolves([]);
       await appStartupManager.manageAppsOnBoot({ machineRebooted: false, downtimeMs: 1000, cleanShutdown: true });
-      expect(globalStateStub.bootContainerStateSettled).to.be.true;
+      expect(capabilities.isUp('bootReconcileDecided')).to.be.true;
 
       // Expired locations path
-      globalStateStub.bootContainerStateSettled = false;
+      capabilities.setForTests('bootReconcileDecided', false);
       appQueryServiceStub.installedApps.resolves({ status: 'success', data: [] });
       await appStartupManager.manageAppsOnBoot({
         machineRebooted: true, downtimeMs: 8_000_000, cleanShutdown: false,
       });
-      expect(globalStateStub.bootContainerStateSettled).to.be.true;
+      expect(capabilities.isUp('bootReconcileDecided')).to.be.true;
     });
   });
 

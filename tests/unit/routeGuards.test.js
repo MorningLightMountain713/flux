@@ -14,7 +14,6 @@ const apicache = require('apicache');
 const {
   asyncRoute, rejectQueryParameters, requireBootSettled, requirePolicyReady,
 } = require('../../ZelBack/src/services/utils/routeGuards');
-const globalState = require('../../ZelBack/src/services/utils/globalState');
 const capabilities = require('../../ZelBack/src/services/utils/capabilities');
 
 describe('routeGuards', () => {
@@ -116,14 +115,8 @@ describe('routeGuards', () => {
     let server;
     let handlerCalls;
 
-    // The gate is process-global, and a node that has settled never unsettles,
-    // so a test that opened it would leave every later one running against an
-    // open gate. Restored either way.
-    let settledBefore;
-
     beforeEach(() => {
-      settledBefore = globalState.bootContainerStateSettled;
-      globalState.bootContainerStateSettled = false;
+      capabilities.resetForTests();
       handlerCalls = 0;
       app = express();
       app.get('/apps/appstart/:appname', requireBootSettled, (req, res) => {
@@ -133,7 +126,7 @@ describe('routeGuards', () => {
     });
 
     afterEach(() => {
-      globalState.bootContainerStateSettled = settledBefore;
+      capabilities.resetForTests();
       if (server) { server.close(); server = null; }
     });
 
@@ -166,7 +159,7 @@ describe('routeGuards', () => {
     });
 
     it('answers once the node has settled', async () => {
-      globalState.bootContainerStateSettled = true;
+      capabilities.setForTests('bootReconcileDecided', true);
       const res = await get('/apps/appstart/myapp');
       expect(res.status).to.equal(200);
       expect(handlerCalls).to.equal(1);

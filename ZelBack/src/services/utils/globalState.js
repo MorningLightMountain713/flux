@@ -7,7 +7,6 @@ const { AsyncLock } = require('./asyncLock');
 // These need to be shared across all modules to maintain the original business logic
 
 const daemonReadyGate = new AsyncGate();
-const bootContainerStateSettledGate = new AsyncGate();
 const dbReadyGate = new AsyncGate();
 let appStateAuthoritative = false;
 // Node-capability ("is-arcane") verdict, resolved once at boot by the awaited
@@ -216,9 +215,6 @@ module.exports = {
   set daemonReady(value) { if (value) daemonReadyGate.open(); else daemonReadyGate.close(); },
   waitForDaemonReady() { return daemonReadyGate.wait(); },
 
-  get bootContainerStateSettled() { return bootContainerStateSettledGate.ready; },
-  set bootContainerStateSettled(value) { if (value) bootContainerStateSettledGate.open(); else bootContainerStateSettledGate.close(); },
-  waitForBootContainerStateSettled() { return bootContainerStateSettledGate.wait(); },
 
   get dbReady() { return dbReadyGate.ready; },
   set dbReady(value) { if (value) dbReadyGate.open(); else dbReadyGate.close(); },

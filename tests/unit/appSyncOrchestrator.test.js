@@ -5,6 +5,7 @@ const sinon = require('sinon');
 const { resetGlobalState } = require('./fixtures/globalState');
 const { EventEmitter } = require('events');
 const proxyquire = require('proxyquire').noCallThru();
+const capabilities = require('../../ZelBack/src/services/utils/capabilities');
 const { asConfig } = require('./fixtures/config');
 
 describe('AppSyncOrchestrator', () => {
@@ -144,10 +145,11 @@ describe('AppSyncOrchestrator', () => {
     getMissingHashesStub = sinon.stub().resolves([]);
     reindexStub = sinon.stub().resolves();
     // The real module. dbReady stays closed - the assertions below are about the
-    // orchestrator opening it - and only the boot-settled wait is spied, so a
-    // test does not sit on a gate nothing here opens.
+    // orchestrator opening it - and the boot reconcile has decided, so a test does
+    // not sit on a capability nothing here raises.
     globalStateStub = resetGlobalState();
-    sinon.stub(globalStateStub, 'waitForBootContainerStateSettled').resolves();
+    capabilities.resetForTests();
+    capabilities.setForTests('bootReconcileDecided', true);
     checkAndNotifyStub = sinon.stub().resolves();
     startBroadcastingStub = sinon.stub();
     resetHashSyncForUpgradeStub = sinon.stub().resolves(0);

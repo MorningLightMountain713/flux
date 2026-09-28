@@ -5,7 +5,6 @@
 const apicache = require('apicache');
 
 const messageHelper = require('../messageHelper');
-const globalState = require('./globalState');
 const capabilities = require('./capabilities');
 
 // What a caller turned away during boot is told to wait. The boot chain is
@@ -44,7 +43,7 @@ const POLICY_RETRY_AFTER_SECONDS = 30;
  * @returns {*} next(), or a 503 carrying a Retry-After
  */
 function requireBootSettled(req, res, next) {
-  if (globalState.bootContainerStateSettled) return next();
+  if (capabilities.isUp('bootReconcileDecided')) return next();
   res.setHeader('Retry-After', String(BOOT_RETRY_AFTER_SECONDS));
   const errMessage = messageHelper.createErrorMessage(
     'Node is still reconciling its applications after boot',

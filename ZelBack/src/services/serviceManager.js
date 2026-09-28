@@ -412,7 +412,7 @@ async function startFluxFunctions() {
 
     // Start the reconcile workqueue (the single container actuator) and the
     // Docker container event bridge that feeds it (die / start / health_status).
-    // The workqueue holds all triggers until bootContainerStateSettled, then
+    // The workqueue holds all triggers until bootReconcileDecided, then
     // drains once daemon/DB are ready.
     appReconciler.start().catch((error) => {
       log.error(`App reconciler error: ${error.message}`);
@@ -844,7 +844,7 @@ async function startFluxFunctions() {
     // (the same AsyncGate the reconciler starts on), not after a fixed delay. Each
     // decider self-gates per cycle on its own prerequisites (mounts, syncthing health,
     // own-IP, FDM), so an early start is safe - it skips and retries until ready.
-    globalState.waitForBootContainerStateSettled().then(() => {
+    capabilities.whenUp('bootReconcileDecided').then(() => {
       // The syncthing decider is declare-only: it writes desired run-state and
       // data-state (via appReconciler) and enqueues; the reconciler is the sole
       // actuator that stops, starts, and wipes - inside its per-key single-flight,

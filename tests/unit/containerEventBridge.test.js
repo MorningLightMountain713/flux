@@ -4,6 +4,7 @@ const { expect } = require('chai');
 const sinon = require('sinon');
 const { resetGlobalState } = require('./fixtures/globalState');
 const proxyquire = require('proxyquire').noCallThru();
+const { capabilityStub } = require('./fixtures/capabilityStub');
 // Real registry singleton - un-stubbed in proxyquire, so the bridge and the test share it.
 const operationRegistry = require('../../ZelBack/src/services/utils/operationRegistry');
 
@@ -38,14 +39,10 @@ describe('containerEventBridge', () => {
           return { start: sinon.stub().resolves(), stop: sinon.stub(), connected: () => true };
         }),
       },
-      // The real shape, reset per test, with the boot gate open: the bridge reads
-      // more of globalState than this one flag and a bare object leaves the rest
-      // undefined.
-      globalState: (() => {
-        const state = resetGlobalState();
-        state.bootContainerStateSettled = true;
-        return state;
-      })(),
+      // The real shape, reset per test: the bridge reads more of globalState than
+      // a bare object would define.
+      globalState: resetGlobalState(),
+      capabilities: capabilityStub({ bootReconcileDecided: true }),
       appsRuntimeState: { recordExit: sinon.stub().resolves() },
       appReconciler: {
         enqueueComponent: sinon.stub(),
@@ -58,6 +55,7 @@ describe('containerEventBridge', () => {
       '../dockerService': stubs.dockerService,
       '../utils/dockerEventStream': stubs.dockerEventStream,
       '../utils/globalState': stubs.globalState,
+      '../utils/capabilities': stubs.capabilities,
       '../appManagement/appsRuntimeState': stubs.appsRuntimeState,
       './appReconciler': stubs.appReconciler,
     });
@@ -331,7 +329,7 @@ describe('containerEventBridge', () => {
     it('does not reconcile on reconnect before boot container state has settled', async () => {
       // Enqueuing everything against a half-known world would fight the boot
       // path rather than help it.
-      stubs.globalState.bootContainerStateSettled = false;
+      stubs.capabilities.set('bootReconcileDecided', false);
       await containerEventBridge.start();
 
       await stubs.subscriptionOptions.onReconnect();
