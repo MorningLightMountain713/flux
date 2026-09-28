@@ -39,6 +39,7 @@ import {
   waitForAppInstalled, waitForAppSpecStored,
 } from '../framework/wait.js';
 import { dumpLogsOnFailure } from '../framework/log-on-failure.js';
+import { bootAndPeer } from '../framework/reconciler-suite.js';
 
 // What the staged payload puts into the container. Read back off the container
 // itself rather than out of the stub, so what is asserted is what the node did
@@ -61,21 +62,6 @@ function composeWith(appName, environmentParameters) {
     hdd: 1,
     repoauth: '',
   }];
-}
-
-async function bootAndPeer(env) {
-  for (const client of env.clients) await waitForDaemonReady(client);
-  await Promise.all(env.clients.map(
-    (c) => waitForNodeStatus(c, (d) => d.confirmed === true, 30000),
-  ));
-  await advanceBlock();
-  for (const client of env.clients) {
-    await waitForBlockProcessed(client, (d) => d.height > env.initialHeight, 50000);
-  }
-  await env.startDiscovery();
-  await env.clients[0].waitForEvent('peers:added', (d) => d.outbound >= 4, 120000);
-  await env.clients[0].waitForEvent('peers:added', (d) => d.inbound >= 2, 120000);
-  await startTicker();
 }
 
 // The container is found by its labels, as the node finds it: its docker name
