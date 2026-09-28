@@ -272,13 +272,17 @@ describe('two founders born across a partition converge to one on heal', functio
     // evaluator rightly never mints the rung), which is exactly why the scan
     // is knowledge-driven.
     const role = rungFounded.key.slice(name.length + 1);
+    let lastRows = [];
     await waitFor(async () => {
       await advanceBlocks(1);
-      const rows = await Promise.all(env.clients.map(
+      lastRows = await Promise.all(env.clients.map(
         (unused, i) => dbClient(i + 1).getMasterleaseRecord(name, role).catch(() => null),
       ));
-      return rows.every((r) => r && r.grantee === rungFounded.founder);
-    }, { timeout: 300000, interval: 10000, label: 'the rung record reaches every node' });
+      return lastRows.every((r) => r && r.grantee === rungFounded.founder);
+    }, { timeout: 300000, interval: 10000, label: 'the rung record reaches every node' }).catch((err) => {
+      const held = lastRows.map((r, i) => `node ${i}${pocket.includes(i) ? ' (pocket)' : ''}: ${r ? `${r.grantee === rungFounded.founder ? 'rung founder' : r.grantee} gen ${r.generation ?? 0} epoch ${r.epoch}` : 'none'}`);
+      throw new Error(`${err.message}; ${role} as each node holds it: ${held.join('; ')}`);
+    });
 
     // Live yes is BOUNDED, not guaranteed: instance churn may have removed
     // the rung founder's own host, and nobody else may ever say yes. At most
