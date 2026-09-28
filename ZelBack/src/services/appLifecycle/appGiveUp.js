@@ -365,7 +365,7 @@ async function checkAndGiveUpAnApp(deps = {}) {
     const decision = {
       reason: GiveUpReason.EVACUATION,
       ...evacuationVerdict(
-        { name: appName, instances: installed.instances }, locations || [], localSocketAddr,
+        { name: appName, instances: installed.spec.instances }, locations || [], localSocketAddr,
       ),
     };
     considered += 1;

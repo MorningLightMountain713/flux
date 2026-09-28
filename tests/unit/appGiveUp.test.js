@@ -15,6 +15,7 @@ const appEvacuationSafety = require('../../ZelBack/src/services/appLifecycle/app
 const appUninstaller = require('../../ZelBack/src/services/appLifecycle/appUninstaller');
 const appReconciler = require('../../ZelBack/src/services/appMonitoring/appReconciler');
 const appGiveUp = require('../../ZelBack/src/services/appLifecycle/appGiveUp');
+const domain = require('./fixtures/appDomain');
 
 chai.use(chaiAsPromised);
 const { expect } = chai;
@@ -40,6 +41,14 @@ describe('appGiveUp - handing an app back', () => {
   const eventsOf = (name) => publish.getCalls()
     .filter((c) => c.args[0] === name).map((c) => c.args[1]);
 
+  // The record appsRepository returns: an InstantiatedSpec, whose instance count
+  // lives on its spec.
+  let installedAppOne;
+  before(async () => {
+    const spec = await domain.v9Spec({ name: 'appone', instances: 5 });
+    installedAppOne = await domain.instantiatedSpec({ event: await domain.confirmedEvent({ spec }) });
+  });
+
   beforeEach(() => {
     operationRegistry.clear();
     publish = sinon.stub(fluxEventBus, 'publish');
@@ -49,7 +58,7 @@ describe('appGiveUp - handing an app back', () => {
     noteEvacuated = sinon.stub(residentialNodeDosService, 'noteEvacuated');
     sinon.stub(fluxNetworkHelper, 'getLocalSocketAddress').resolves(LOCAL);
     sinon.stub(registryManager, 'appLocation').resolves([{ ip: LOCAL }, { ip: '5.6.7.8:16127' }]);
-    sinon.stub(appsRepository, 'getInstalledApp').resolves({ name: 'appone', instances: 3 });
+    sinon.stub(appsRepository, 'getInstalledApp').resolves(installedAppOne);
     safety = sinon.stub(appEvacuationSafety, 'canSafelyRemoveApp').resolves(safe);
     uninstall = sinon.stub(appUninstaller, 'uninstallApplication')
       .resolves({ status: appUninstaller.UninstallStatus.REMOVED, reason: null });
@@ -69,6 +78,12 @@ describe('appGiveUp - handing an app back', () => {
     expect(result.gaveUp).to.equal('appone');
     sinon.assert.calledOnce(uninstall);
     sinon.assert.calledOnceWithExactly(noteEvacuated, 'appone');
+  });
+
+  it('paces a departure against the app\'s own instance count', async () => {
+    await appGiveUp.checkAndGiveUpAnApp(deps());
+
+    expect(mayEvacuate.firstCall.args[3]).to.equal(5);
   });
 
   it('does nothing at all when the node is not evacuating', async () => {
