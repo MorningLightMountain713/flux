@@ -112,8 +112,8 @@ function requirePolicyReady(req, res, next) {
  * unbuilt or behind, and a caller cannot tell that answer from a network with
  * fewer apps: FDM takes it as the app list and routes to it.
  *
- * Keyed on dbReady, which the sync orchestrator opens when a rebuild finishes
- * and closes when it degrades. Runs ahead of the cache, so a refusal is never
+ * Keyed on appRegistryConsistent, which the sync orchestrator raises when a
+ * rebuild finishes and lowers when it degrades. Runs ahead of the cache, so a refusal is never
  * stored and a stored answer is never served while the registry is not current.
  * @param {object} req Request
  * @param {object} res Response
@@ -121,7 +121,7 @@ function requirePolicyReady(req, res, next) {
  * @returns {*} next(), or a 503 carrying a Retry-After
  */
 function requireRegistryReady(req, res, next) {
-  if (globalState.dbReady) return next();
+  if (capabilities.isUp('appRegistryConsistent')) return next();
   return serviceUnavailable(res, 'Node application registry is not current', BOOT_RETRY_AFTER_SECONDS);
 }
 
@@ -134,7 +134,8 @@ function requireRegistryReady(req, res, next) {
  * sync has heard the network, and an answer drawn from it reads the same as one
  * from a node that knows.
  *
- * Keyed on appStateAuthoritative, the orchestrator's verdict on that store.
+ * Keyed on what a peer asking for app state is answered on: the orchestrator's
+ * own state sync done (appStateSynced), or its block timer spent.
  * Named separately from the registry guard: the two stores are filled by
  * different syncs and come up at different times.
  * @param {object} req Request
@@ -143,7 +144,7 @@ function requireRegistryReady(req, res, next) {
  * @returns {*} next(), or a 503 carrying a Retry-After
  */
 function requireAppStateReady(req, res, next) {
-  if (globalState.appStateAuthoritative) return next();
+  if (capabilities.isUp('appStateSynced') || globalState.appStateSyncDeadlinePassed) return next();
   return serviceUnavailable(res, 'Node has not yet synchronised application locations', BOOT_RETRY_AFTER_SECONDS);
 }
 

@@ -348,31 +348,30 @@ describe('routeGuards', () => {
   [
     {
       guard: requireRegistryReady,
-      flag: 'dbReady',
+      set: (up) => capabilities.setForTests('appRegistryConsistent', up),
       path: '/apps/globalappsspecifications',
       names: /registry/i,
       notNames: /location/i,
     },
     {
       guard: requireAppStateReady,
-      flag: 'appStateAuthoritative',
+      set: (up) => capabilities.setForTests('appStateSynced', up),
       path: '/apps/locations',
       names: /location/i,
       notNames: /registry/i,
     },
   ].forEach(({
-    guard, flag, path, names, notNames,
+    guard, set, path, names, notNames,
   }) => {
     describe(guard.name, () => {
       let app;
       let server;
       let handlerCalls;
-      let flagBefore;
 
       beforeEach(() => {
         apicache.clear();
-        flagBefore = globalState[flag];
-        globalState[flag] = false;
+        set(false);
+        globalState.appStateSyncDeadlinePassed = false;
         handlerCalls = 0;
         app = express();
         app.get(path, guard, cache('30 seconds'), (req, res) => {
@@ -382,7 +381,8 @@ describe('routeGuards', () => {
       });
 
       afterEach(() => {
-        globalState[flag] = flagBefore;
+        set(false);
+        globalState.appStateSyncDeadlinePassed = false;
         apicache.clear();
         if (server) { server.close(); server = null; }
       });
@@ -408,21 +408,43 @@ describe('routeGuards', () => {
 
       it('answers from the handler once the store is ready, not from a remembered refusal', async () => {
         await get();
-        globalState[flag] = true;
+        set(true);
         const res = await get();
         expect(res.status).to.equal(200);
         expect(handlerCalls).to.equal(1);
       });
 
       it('refuses again when the store stops being ready, over an answer the cache remembered', async () => {
-        globalState[flag] = true;
+        set(true);
         const open = await get();
         expect(open.status).to.equal(200);
-        globalState[flag] = false;
+        set(false);
         const res = await get();
         expect(res.status).to.equal(503);
         expect(handlerCalls).to.equal(1);
       });
+    });
+  });
+
+  // A peer asking for app state is answered once the orchestrator's block timer
+  // is spent, synced or not, and the location reads open on the same rule.
+  describe('requireAppStateReady once the state sync deadline has passed', () => {
+    let server;
+
+    afterEach(() => {
+      globalState.appStateSyncDeadlinePassed = false;
+      apicache.clear();
+      if (server) { server.close(); server = null; }
+    });
+
+    it('answers from the handler while app state is not yet synced', async () => {
+      capabilities.setForTests('appStateSynced', false);
+      globalState.appStateSyncDeadlinePassed = true;
+      const app = express();
+      app.get('/apps/locations', requireAppStateReady, (req, res) => res.json({ status: 'success', data: [] }));
+      server = app.listen(0);
+      const res = await request(server).get('/apps/locations');
+      expect(res.status).to.equal(200);
     });
   });
 

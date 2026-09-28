@@ -10,6 +10,10 @@ const capabilities = require('../../ZelBack/src/services/utils/capabilities');
 const { asConfig } = require('./fixtures/config');
 
 describe('AppSyncOrchestrator', () => {
+  // Whether the sync responder answers peers about app state: its own sync
+  // complete, or the block timer spent.
+  const answersPeers = () => capabilities.isUp('appStateSynced') || globalStateStub.appStateSyncDeadlinePassed;
+
   let AppSyncOrchestrator;
   let STATES;
   let EVENTS;
@@ -145,12 +149,12 @@ describe('AppSyncOrchestrator', () => {
     syncMissingHashesStub = sinon.stub().resolves({ resolved: 0, missing: 0, unreachable: 0, nextRetryHeight: null });
     getMissingHashesStub = sinon.stub().resolves([]);
     reindexStub = sinon.stub().resolves();
-    // The real module. dbReady stays closed - the assertions below are about the
-    // orchestrator opening it - and the boot reconcile has decided, so a test does
-    // not sit on a capability nothing here raises.
+    // The real module. appRegistryConsistent stays down - the assertions below are
+    // about the orchestrator raising it - with the explorer synced and the boot
+    // reconcile decided, so a test does not sit on a capability nothing here raises.
     globalStateStub = resetGlobalState();
     capabilities.resetForTests();
-    capabilities.setForTests('bootReconcileDecided', true);
+    capabilities.setForTests(['bootReconcileDecided', 'explorerSynced'], true);
     checkAndNotifyStub = sinon.stub().resolves();
     startBroadcastingStub = sinon.stub();
     resetHashSyncForUpgradeStub = sinon.stub().resolves(0);
@@ -277,13 +281,13 @@ describe('AppSyncOrchestrator', () => {
       expect(reindexStub.calledOnce).to.be.true;
     });
 
-    it('should set dbReady after sync', async () => {
+    it('should raise appRegistryConsistent after sync', async () => {
       const orchestrator = makeOrchestrator();
       orchestrator.start(defaultBootContext);
 
       blockEmitter.emit('blocksProcessed', 2_555_000);
       await clock.tickAsync(0);
-      expect(globalStateStub.dbReady).to.be.true;
+      expect(capabilities.isUp('appRegistryConsistent')).to.be.true;
     });
 
     it('should log DB ready after reindex', async () => {
@@ -424,12 +428,12 @@ describe('AppSyncOrchestrator', () => {
       expect(orchestrator.state).to.equal(STATES.RESYNCING);
     });
 
-    it('should emit readinessLost on degradation', async () => {
+    it('should lower spawnerReady on degradation', async () => {
       const orchestrator = makeOrchestrator();
       orchestrator.start(defaultBootContext);
 
       const spy = sinon.spy();
-      appSyncEvents.on(EVENTS.READINESS_LOST, spy);
+      capabilities.onDown('spawnerReady', spy);
 
       blockEmitter.emit('blocksProcessed', 2_555_000);
       await clock.tickAsync(0);
@@ -1154,12 +1158,12 @@ describe('AppSyncOrchestrator', () => {
       peerEmitter.emit('peerThresholdReached', 12);
       await clock.tickAsync(0);
 
-      expect(globalStateStub.appStateAuthoritative, 'authoritative before anyone answered').to.equal(false);
+      expect(answersPeers(), 'authoritative before anyone answered').to.equal(false);
 
       completeAllTypes(3);
       await clock.tickAsync(0);
 
-      expect(globalStateStub.appStateAuthoritative).to.equal(true);
+      expect(answersPeers()).to.equal(true);
     });
 
     it('goes false again when the peers go and the sync is reset', async () => {
@@ -1174,12 +1178,12 @@ describe('AppSyncOrchestrator', () => {
       await clock.tickAsync(0);
       completeAllTypes(3);
       await clock.tickAsync(0);
-      expect(globalStateStub.appStateAuthoritative).to.equal(true);
+      expect(answersPeers()).to.equal(true);
 
       peerEmitter.emit('peersBelowThreshold', 3);
       await clock.tickAsync(0);
 
-      expect(globalStateStub.appStateAuthoritative, 'a degraded node still claimed authority').to.equal(false);
+      expect(answersPeers(), 'a degraded node still claimed authority').to.equal(false);
     });
 
     // Authority is a claim about a network this orchestrator is tracking, and
@@ -1197,11 +1201,11 @@ describe('AppSyncOrchestrator', () => {
       await clock.tickAsync(0);
       completeAllTypes(3);
       await clock.tickAsync(0);
-      expect(globalStateStub.appStateAuthoritative).to.equal(true);
+      expect(answersPeers()).to.equal(true);
 
       await orchestrator.stop();
 
-      expect(globalStateStub.appStateAuthoritative, 'a stopped orchestrator still claimed authority').to.equal(false);
+      expect(answersPeers(), 'a stopped orchestrator still claimed authority').to.equal(false);
     });
 
     // A harness suite holds a node here so that it goes on refusing peers'
@@ -1230,7 +1234,7 @@ describe('AppSyncOrchestrator', () => {
         completeAllTypes(3);
         await clock.tickAsync(0);
         sinon.assert.calledOnceWithExactly(fluxEventBus.checkpoint, fluxEventBus.Checkpoint.APPSYNC_BEFORE_AUTHORITATIVE);
-        expect(globalStateStub.appStateAuthoritative, 'authoritative while held').to.equal(false);
+        expect(answersPeers(), 'authoritative while held').to.equal(false);
 
         // A fourth peer answering while held is recorded, and pauses nothing more.
         completeAllTypes(4);
@@ -1240,7 +1244,7 @@ describe('AppSyncOrchestrator', () => {
 
         release();
         await clock.tickAsync(0);
-        expect(globalStateStub.appStateAuthoritative).to.equal(true);
+        expect(answersPeers()).to.equal(true);
         expect(allComplete()).to.have.lengthOf(1);
         await orchestrator.stop();
       });
@@ -1263,7 +1267,7 @@ describe('AppSyncOrchestrator', () => {
 
         release();
         await clock.tickAsync(0);
-        expect(globalStateStub.appStateAuthoritative, 'a reset attempt completed on release').to.equal(false);
+        expect(answersPeers(), 'a reset attempt completed on release').to.equal(false);
         expect(allComplete()).to.have.lengthOf(0);
         await orchestrator.stop();
       });
@@ -1281,7 +1285,7 @@ describe('AppSyncOrchestrator', () => {
         await orchestrator.stop();
         release();
         await clock.tickAsync(0);
-        expect(globalStateStub.appStateAuthoritative, 'a stopped orchestrator completed on release').to.equal(false);
+        expect(answersPeers(), 'a stopped orchestrator completed on release').to.equal(false);
         expect(allComplete()).to.have.lengthOf(0);
       });
     });
@@ -1301,7 +1305,7 @@ describe('AppSyncOrchestrator', () => {
 
       await orchestrator.start(defaultBootContext);
 
-      expect(globalStateStub.appStateAuthoritative, 'a node told to wait no blocks still declined').to.equal(true);
+      expect(answersPeers(), 'a node told to wait no blocks still declined').to.equal(true);
     });
 
     it('is not authoritative at start on the production budget', async () => {
@@ -1313,7 +1317,7 @@ describe('AppSyncOrchestrator', () => {
 
       await orchestrator.start(defaultBootContext);
 
-      expect(globalStateStub.appStateAuthoritative).to.equal(false);
+      expect(answersPeers()).to.equal(false);
     });
 
     it('reaches readiness on the configured number of blocks rather than 250', async () => {
@@ -1334,7 +1338,7 @@ describe('AppSyncOrchestrator', () => {
       await clock.tickAsync(0);
 
       expect(orchestrator.state).to.equal(mod.STATES.READY);
-      expect(globalStateStub.appStateAuthoritative).to.equal(true);
+      expect(answersPeers()).to.equal(true);
     });
   });
 
@@ -1375,7 +1379,7 @@ describe('AppSyncOrchestrator', () => {
       await driveBlocks(2_555_000, FALLBACK_BLOCKS * 10);
 
       expect(orchestrator.state, 'a node with no peers reached spawning readiness').to.equal(mod.STATES.SYNCING);
-      expect(globalStateStub.appStateAuthoritative, 'it also offered to answer peers about app state').to.equal(false);
+      expect(answersPeers(), 'it also offered to answer peers about app state').to.equal(false);
     });
 
     it('reaches READY on the budget once the peer set is up', async () => {
@@ -1470,7 +1474,7 @@ describe('AppSyncOrchestrator', () => {
       await driveBlocks(2_555_003, FALLBACK_BLOCKS * 5);
 
       expect(orchestrator.state, 'a node with no peers reached READY').to.equal(mod.STATES.DEGRADED);
-      expect(globalStateStub.appStateAuthoritative).to.equal(false);
+      expect(answersPeers()).to.equal(false);
     });
 
     // Between appSyncPeerThreshold (12) and appSyncDegradedThreshold (4)
@@ -1551,12 +1555,12 @@ describe('AppSyncOrchestrator', () => {
 
       await driveBlocks(2_555_000, FALLBACK_BLOCKS);
       expect(orchestrator.state).to.equal(mod.STATES.READY);
-      expect(globalStateStub.appStateAuthoritative).to.equal(true);
+      expect(answersPeers()).to.equal(true);
 
       peerEmitter.emit('peersBelowThreshold', 2);
       await clock.tickAsync(0);
 
-      expect(globalStateStub.appStateAuthoritative, 'a node that lost its peers still claimed a full view').to.equal(false);
+      expect(answersPeers(), 'a node that lost its peers still claimed a full view').to.equal(false);
     });
   });
 
@@ -1624,7 +1628,7 @@ describe('AppSyncOrchestrator', () => {
         expect(peer.send.callCount, 'a degraded node asked its remaining peers for state').to.equal(4);
       }
       expect(joiner.send.called, 'a degraded node asked a joining peer for state').to.equal(false);
-      expect(globalStateStub.appStateAuthoritative, 'a degraded node still claimed authority').to.equal(false);
+      expect(answersPeers(), 'a degraded node still claimed authority').to.equal(false);
       await orchestrator.stop();
     });
 
@@ -3065,8 +3069,11 @@ describe('AppSyncOrchestrator', () => {
     });
   });
 
-  describe('dbReady on fallback paths', () => {
-    it('should set dbReady after block timer fallback when hash sync fails', async () => {
+  describe('appRegistryConsistent on fallback paths', () => {
+    // The block timer lets the orchestrator reach READY, but a registry is
+    // consistent only once a hash-sync pass has run: a pass that threw leaves it
+    // down whatever the timer says.
+    it('reaches READY on the block timer but leaves appRegistryConsistent down when hash sync throws', async () => {
       syncMissingHashesStub.rejects(new Error('failed'));
 
       const orchestrator = makeOrchestrator();
@@ -3082,10 +3089,10 @@ describe('AppSyncOrchestrator', () => {
       await clock.tickAsync(0);
 
       expect(orchestrator.state).to.equal(STATES.READY);
-      expect(globalStateStub.dbReady).to.be.true;
+      expect(capabilities.isUp('appRegistryConsistent')).to.be.false;
     });
 
-    it('should set dbReady when too few sync peers and block timer fires', async () => {
+    it('should raise appRegistryConsistent when too few sync peers and block timer fires', async () => {
       getEligibleSyncPeersStub = sinon.stub().returns([]);
 
       const orchestrator = makeOrchestrator();
@@ -3101,10 +3108,10 @@ describe('AppSyncOrchestrator', () => {
       await clock.tickAsync(0);
 
       expect(orchestrator.state).to.equal(STATES.READY);
-      expect(globalStateStub.dbReady).to.be.true;
+      expect(capabilities.isUp('appRegistryConsistent')).to.be.true;
     });
 
-    it('should leave dbReady false when rebuildDb throws on fallback path', async () => {
+    it('should leave appRegistryConsistent down when rebuildDb throws on fallback path', async () => {
       syncMissingHashesStub.rejects(new Error('failed'));
       reindexStub.rejects(new Error('reindex failed'));
 
@@ -3120,7 +3127,7 @@ describe('AppSyncOrchestrator', () => {
       }
       await clock.tickAsync(0);
 
-      expect(globalStateStub.dbReady).to.be.false;
+      expect(capabilities.isUp('appRegistryConsistent')).to.be.false;
       expect(orchestrator.state).to.not.equal(STATES.READY);
     });
   });
@@ -3489,9 +3496,9 @@ describe('AppSyncOrchestrator', () => {
       expect(orchestrator.state).to.equal(STATES.READY);
     });
 
-    it('should emit READINESS_LOST when capability lost while READY', async () => {
+    it('should lower spawnerReady when message capability is lost while READY', async () => {
       const spy = sinon.spy();
-      appSyncEvents.on(EVENTS.READINESS_LOST, spy);
+      capabilities.onDown('spawnerReady', spy);
 
       const orchestrator = makeOrchestrator();
       orchestrator.start(defaultBootContext);
@@ -3510,11 +3517,11 @@ describe('AppSyncOrchestrator', () => {
       expect(spy.calledOnce).to.be.true;
     });
 
-    it('should emit SPAWNER_READY when capability regained', async () => {
+    it('should raise spawnerReady again when message capability is regained', async () => {
       const readySpy = sinon.spy();
       const lostSpy = sinon.spy();
-      appSyncEvents.on(EVENTS.SPAWNER_READY, readySpy);
-      appSyncEvents.on(EVENTS.READINESS_LOST, lostSpy);
+      capabilities.onUp('spawnerReady', readySpy);
+      capabilities.onDown('spawnerReady', lostSpy);
 
       const orchestrator = makeOrchestrator();
       orchestrator.start(defaultBootContext);

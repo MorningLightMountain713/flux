@@ -241,16 +241,24 @@ function onTransition(name, fn) {
 }
 
 /**
- * Call `fn(up)` whenever whether a capability is up changes: once as it comes
- * up, once as it stops being up. A move between `down` and `coming-up` is not a
- * change to a reader asking whether it may act.
+ * Call `fn()` on every up edge of a capability: each time it comes up.
  * @returns {() => void} unsubscribe
  */
-function onUpChange(name, fn) {
+function onUp(name, fn) {
   return onTransition(name, (record) => {
-    const wasUp = record.from === STATE.UP;
-    const isNowUp = record.to === STATE.UP;
-    if (wasUp !== isNowUp) fn(isNowUp);
+    if (record.to === STATE.UP && record.from !== STATE.UP) fn();
+  });
+}
+
+/**
+ * Call `fn()` on every down edge of a capability: each time it stops being up.
+ * A move between `down` and `coming-up` is neither edge: a reader asking
+ * whether it may act gets the same answer from both.
+ * @returns {() => void} unsubscribe
+ */
+function onDown(name, fn) {
+  return onTransition(name, (record) => {
+    if (record.from === STATE.UP && record.to !== STATE.UP) fn();
   });
 }
 
@@ -322,7 +330,8 @@ module.exports = {
   firstNotUp,
   whenUp,
   onTransition,
-  onUpChange,
+  onUp,
+  onDown,
   onFirstUp,
   snapshot,
   transitions,

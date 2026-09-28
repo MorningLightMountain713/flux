@@ -147,8 +147,8 @@ async function stopBroadcasting() {
 }
 
 function initialize() {
-  capabilities.onUpChange('nodeMessageCapable', (capable) => {
-    if (capable && broadcasting) {
+  capabilities.onUp('nodeMessageCapable', () => {
+    if (broadcasting) {
       log.info('peerNotification - Message capability regained, triggering immediate broadcast');
       checkAndNotifyPeersOfRunningApps();
     }

@@ -13,6 +13,7 @@ const dockerService = require('../dockerService');
 const generalService = require('../generalService');
 const fluxNetworkHelper = require('../fluxNetworkHelper');
 const globalState = require('../utils/globalState');
+const capabilities = require('../utils/capabilities');
 const { getSpecBackend } = require('../utils/specLibs');
 const imageManager = require('../appSecurity/imageManager');
 const shutdownPlan = require('./shutdownPlan');
@@ -310,7 +311,7 @@ async function convergeApp(installed, registrySpec, ctx) {
 
 /** Gates shared by every convergence request: never act while syncing. */
 async function convergenceAllowed() {
-  if (!globalState.dbReady) return false;
+  if (!capabilities.isUp('appRegistryConsistent')) return false;
   const synced = await generalService.checkSynced();
   return synced === true;
 }

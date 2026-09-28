@@ -22,14 +22,17 @@ describe('nodeSelfDefense', () => {
     logStub = { error: sinon.stub(), info: sinon.stub(), warn: sinon.stub() };
     installedApps = sinon.stub();
     uninstallApplication = sinon.stub().resolves({ status: UninstallStatus.REMOVED, reason: null });
-    listeners = { confirmation: null, stale: null, dos: null };
+    listeners = {
+      confirmation: null, confirmationUp: null, stale: null, dos: null,
+    };
 
     nodeSelfDefense = proxyquire('../../ZelBack/src/services/appMonitoring/nodeSelfDefense', {
       config: asConfig({ fluxapps: { nodeMonitorRemovalDelayMs: 0 } }),
       '../serviceHelper': { delay: sinon.stub().resolves() },
       '../nodeDosState': { onNodeDos: (cb) => { listeners.dos = cb; } },
       '../utils/capabilities': {
-        onUpChange: (name, cb) => { if (name === 'nodeConfirmed') listeners.confirmation = cb; },
+        onDown: (name, cb) => { if (name === 'nodeConfirmed') listeners.confirmation = cb; },
+        onUp: (name, cb) => { if (name === 'nodeConfirmed') listeners.confirmationUp = cb; },
       },
       '../nodeConfirmationService': {
         onDaemonStale: (cb) => { listeners.stale = cb; },
@@ -62,7 +65,7 @@ describe('nodeSelfDefense', () => {
     installedApps.onCall(1).resolves(apps('C'));
     installedApps.onCall(2).resolves(apps());
 
-    const result = await listeners.confirmation(false);
+    const result = await listeners.confirmation();
 
     expect(removedNames()).to.deep.equal(['A', 'B', 'C']);
     expect(uninstallApplication.firstCall.args[1]).to.deep.equal({ forceKill: true, broadcastRemoval: false });
@@ -70,9 +73,8 @@ describe('nodeSelfDefense', () => {
     expect(installedApps.callCount).to.equal(3);
   });
 
-  it('gaining confirmation removes nothing', async () => {
-    await listeners.confirmation(true);
-    expect(installedApps.called).to.equal(false);
+  it('gaining confirmation removes nothing: only the down edge is watched', () => {
+    expect(listeners.confirmationUp).to.equal(null);
   });
 
   it('a pass that removes nothing ends the sweep and names what stayed and why', async () => {
@@ -80,7 +82,7 @@ describe('nodeSelfDefense', () => {
     uninstallApplication.withArgs('A').resolves({ status: UninstallStatus.DEFERRED, reason: 'An operation is already in progress for A' });
     uninstallApplication.withArgs('B').resolves({ status: UninstallStatus.FAILED, reason: 'teardown errored' });
 
-    const result = await listeners.confirmation(false);
+    const result = await listeners.confirmation();
 
     // one pass, not a spin
     expect(installedApps.callCount).to.equal(1);
@@ -98,7 +100,7 @@ describe('nodeSelfDefense', () => {
     installedApps.resolves(apps('A'));
     uninstallApplication.resolves({ status: UninstallStatus.SKIPPED, reason: 'Flux App not found' });
 
-    const result = await listeners.confirmation(false);
+    const result = await listeners.confirmation();
 
     expect(installedApps.callCount).to.equal(1);
     expect(result).to.deep.equal({ removed: 0, remaining: [] });
@@ -120,7 +122,7 @@ describe('nodeSelfDefense', () => {
 
   it('a sweep that cannot list the apps is logged, and the trigger never rejects', async () => {
     installedApps.rejects(new Error('db down'));
-    const outcome = await listeners.confirmation(false);
+    const outcome = await listeners.confirmation();
     expect(outcome).to.equal(undefined);
     expect(logStub.error.args.some(([line]) => line.includes('db down'))).to.equal(true);
   });
@@ -130,7 +132,7 @@ describe('nodeSelfDefense', () => {
     installedApps.onCall(0).returns(new Promise((resolve) => { releaseFirst = () => resolve(apps('A')); }));
     installedApps.onCall(1).resolves(apps());
 
-    const first = listeners.confirmation(false);
+    const first = listeners.confirmation();
     const second = await listeners.stale();
     expect(second).to.deep.equal({ removed: 0, remaining: [], folded: true });
     releaseFirst();

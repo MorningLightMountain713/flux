@@ -1,15 +1,13 @@
 'use strict';
 
-const { AsyncGate } = require('./asyncGate');
 const { AsyncLock } = require('./asyncLock');
 
 // Global state variables for apps service
 // These need to be shared across all modules to maintain the original business logic
 
 let shutdownInProgress = false;
-const dbReadyGate = new AsyncGate();
-let appStateAuthoritative = false;
 let appSyncState = 'INITIALIZING';
+let appStateSyncDeadlinePassed = false;
 // Node-capability ("is-arcane") verdict, resolved once at boot by the awaited
 // resolveNodeCapability() (nodeCapabilities.js) before any is-arcane consumer runs.
 // true = arcane, false = legacy. null only before the resolver has run — never observed
@@ -235,21 +233,13 @@ module.exports = {
   setShutdownInProgressTrue() { shutdownInProgress = true; },
 
 
-  get dbReady() { return dbReadyGate.ready; },
-  set dbReady(value) { if (value) dbReadyGate.open(); else dbReadyGate.close(); },
-  waitForDbReady() { return dbReadyGate.wait(); },
 
-  // Whether this node's ephemeral app-state store is worth another node's
-  // survey: its own state sync completed, or it has spent the block timer
-  // taking live broadcasts. NOT dbReady, which is about globalAppsInformation
-  // and a different set of collections entirely.
-  //
-  // It lives here rather than being read off the orchestrator because the only
-  // caller is the sync responder, and fluxCommunicationMessagesSender reaching
-  // back into appSyncOrchestrator is a cycle. The orchestrator owns the value
-  // and mirrors it; nothing else writes it.
-  get appStateAuthoritative() { return appStateAuthoritative; },
-  set appStateAuthoritative(value) { appStateAuthoritative = Boolean(value); },
+  // Whether this node has spent the orchestrator's block timer taking live app-state
+  // broadcasts: the sync responder's deadline for answering without `appStateSynced`.
+  // Here rather than read off the orchestrator because fluxCommunicationMessagesSender
+  // reaching back into appSyncOrchestrator is a cycle. The orchestrator writes it.
+  get appStateSyncDeadlinePassed() { return appStateSyncDeadlinePassed; },
+  set appStateSyncDeadlinePassed(value) { appStateSyncDeadlinePassed = Boolean(value); },
 
   // The app sync orchestrator's state (INITIALIZING, SYNCING, READY, DEGRADED,
   // RESYNCING), for readers that cannot require the orchestrator without a

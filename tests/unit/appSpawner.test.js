@@ -3,6 +3,7 @@
 const { expect } = require('chai');
 const sinon = require('sinon');
 const proxyquire = require('proxyquire').noCallThru();
+const { capabilityStub } = require('./fixtures/capabilityStub');
 const realImageManager = require('../../ZelBack/src/services/appSecurity/imageManager');
 const {
   loadSpecLibrary, V9_SUBMISSION, v9Spec, sealedV9Spec, sealedV8Spec, instantiatedSpec,
@@ -47,6 +48,7 @@ describe('appSpawner tests', () => {
   let logStub;
   let configStub;
   let globalStateStub;
+  let capabilitiesStub;
   let registryManagerStub;
   let deploymentFromSpecStub;
   let findUnderProvisionedStub;
@@ -89,7 +91,6 @@ describe('appSpawner tests', () => {
 
   function createGlobalStateStub() {
     return {
-      dbReady: true,
       fluxNodeWasNotConfirmedOnLastCheck: false,
       fluxNodeWasAlreadyConfirmed: true,
       spawnerPaused: false,
@@ -185,8 +186,8 @@ describe('appSpawner tests', () => {
     if (opts.globalStateOverrides) {
       Object.assign(globalStateStub, opts.globalStateOverrides);
     }
-    // The network policy has been obtained; a test of the gate overrides it.
-    const capabilityState = { policyCurrent: true, ...(opts.capabilityOverrides || {}) };
+    // Policy obtained and the registry consistent; a test of a gate overrides it.
+    capabilitiesStub = capabilityStub({ policyCurrent: true, appRegistryConsistent: true, ...(opts.capabilityOverrides || {}) });
 
     logStub = { error: sinon.stub(), info: sinon.stub(), warn: sinon.stub() };
     // The real DeploymentSpec behind a spy: it is the same pure library, and the
@@ -339,7 +340,7 @@ describe('appSpawner tests', () => {
       '../appRequirements/hwRequirements': hwRequirementsStub,
       '../appNetwork/portManager': portManagerStub,
       '../utils/globalState': globalStateStub,
-      '../utils/capabilities': { isUp: (name) => capabilityState[name] === true },
+      '../utils/capabilities': capabilitiesStub,
       '../geolocationService': {
         isStaticIP: sinon.stub().returns(opts.nodeHasStaticIp ?? false),
         isDataCenter: sinon.stub().returns(false),
@@ -1227,12 +1228,6 @@ describe('appSpawner tests', () => {
   });
 
   describe('spawn loop', () => {
-    const { appSyncEvents, EVENTS: SYNC_EVENTS } = require('../../ZelBack/src/services/utils/appSyncEvents');
-
-    afterEach(() => {
-      appSyncEvents.removeAllListeners();
-    });
-
     function waitForLoopExits(n, timeoutMs = 2000) {
       return new Promise((resolve, reject) => {
         const timer = setTimeout(() => reject(new Error(`Expected ${n} loop exit(s) within ${timeoutMs}ms`)), timeoutMs);
@@ -1257,7 +1252,7 @@ describe('appSpawner tests', () => {
       });
 
       appSpawner.initialize();
-      appSyncEvents.emit(SYNC_EVENTS.SPAWNER_READY);
+      capabilitiesStub.set('spawnerReady', true);
       await waitForLoopExits(1);
 
       expect(findUnderProvisionedStub.callCount).to.equal(3);
@@ -1272,7 +1267,7 @@ describe('appSpawner tests', () => {
       });
 
       appSpawner.initialize();
-      appSyncEvents.emit(SYNC_EVENTS.SPAWNER_READY);
+      capabilitiesStub.set('spawnerReady', true);
       await waitForLoopExits(1);
 
       expect(ensureProvidersRegisteredStub.calledOnce).to.be.true;
@@ -1289,28 +1284,28 @@ describe('appSpawner tests', () => {
       });
 
       appSpawner.initialize();
-      appSyncEvents.emit(SYNC_EVENTS.SPAWNER_READY);
+      capabilitiesStub.set('spawnerReady', true);
       await waitForLoopExits(1);
 
       expect(findUnderProvisionedStub.callCount).to.equal(1);
       expect(logStub.info.calledWith('Spawn loop exited (paused)')).to.be.true;
     });
 
-    it('should not start a second loop on duplicate SPAWNER_READY', async () => {
+    it('should not start a second loop when spawnerReady is raised again while up', async () => {
       buildModule();
       delayStub.resetBehavior();
       let iterations = 0;
       delayStub.callsFake(() => {
         iterations += 1;
         if (iterations === 1) {
-          appSyncEvents.emit(SYNC_EVENTS.SPAWNER_READY);
+          capabilitiesStub.set('spawnerReady', true);
         }
         if (iterations >= 3) globalStateStub.spawnerPaused = true;
         return Promise.resolve();
       });
 
       appSpawner.initialize();
-      appSyncEvents.emit(SYNC_EVENTS.SPAWNER_READY);
+      capabilitiesStub.set('spawnerReady', true);
       await waitForLoopExits(1);
 
       const exitLogs = logStub.info.getCalls().filter(
@@ -1320,26 +1315,26 @@ describe('appSpawner tests', () => {
       expect(findUnderProvisionedStub.callCount).to.equal(3);
     });
 
-    it('should restart loop on SPAWNER_READY after pause', async () => {
+    it('should restart the loop when spawnerReady comes back up after a pause', async () => {
       buildModule();
       delayStub.resetBehavior();
       let iterations = 0;
       delayStub.callsFake(() => {
         iterations += 1;
         if (iterations === 2) {
-          appSyncEvents.emit(SYNC_EVENTS.READINESS_LOST);
+          capabilitiesStub.set('spawnerReady', false);
         }
         if (iterations >= 5) globalStateStub.spawnerPaused = true;
         return Promise.resolve();
       });
 
       appSpawner.initialize();
-      appSyncEvents.emit(SYNC_EVENTS.SPAWNER_READY);
+      capabilitiesStub.set('spawnerReady', true);
       await waitForLoopExits(1);
 
       expect(findUnderProvisionedStub.callCount).to.equal(2);
 
-      appSyncEvents.emit(SYNC_EVENTS.SPAWNER_READY);
+      capabilitiesStub.set('spawnerReady', true);
       await waitForLoopExits(2);
 
       expect(findUnderProvisionedStub.callCount).to.be.gte(4);
@@ -1356,7 +1351,7 @@ describe('appSpawner tests', () => {
       });
 
       appSpawner.initialize();
-      appSyncEvents.emit(SYNC_EVENTS.SPAWNER_READY);
+      capabilitiesStub.set('spawnerReady', true);
       await waitForLoopExits(1);
 
       expect(delays).to.have.lengthOf(1);
@@ -1912,7 +1907,7 @@ describe('appSpawner tests', () => {
   });
 
   describe('notifySpecStored - spec-stored wake gate', () => {
-    const { appSyncEvents, EVENTS: SYNC_EVENTS } = require('../../ZelBack/src/services/utils/appSyncEvents');
+    const { appSyncEvents } = require('../../ZelBack/src/services/utils/appSyncEvents');
 
     afterEach(() => {
       appSyncEvents.removeAllListeners();
@@ -2055,7 +2050,7 @@ describe('appSpawner tests', () => {
       });
 
       appSpawner.initialize();
-      appSyncEvents.emit(SYNC_EVENTS.SPAWNER_READY);
+      capabilitiesStub.set('spawnerReady', true);
       await waitUntil(() => findUnderProvisionedStub.callCount === 1 && delayCalls === 1);
 
       // Causality guard: the first delay never resolves on its own, so the loop is parked
@@ -2079,7 +2074,7 @@ describe('appSpawner tests', () => {
       });
 
       appSpawner.initialize();
-      appSyncEvents.emit(SYNC_EVENTS.SPAWNER_READY);
+      capabilitiesStub.set('spawnerReady', true);
       await waitForLoopExits(1);
 
       expect(delayCalls).to.equal(1);
@@ -2088,7 +2083,7 @@ describe('appSpawner tests', () => {
   });
 
   describe('spawn loop wake latch (mid-cycle wake)', () => {
-    const { appSyncEvents, EVENTS: SYNC_EVENTS } = require('../../ZelBack/src/services/utils/appSyncEvents');
+    const { appSyncEvents } = require('../../ZelBack/src/services/utils/appSyncEvents');
 
     afterEach(() => {
       appSyncEvents.removeAllListeners();
@@ -2138,7 +2133,7 @@ describe('appSpawner tests', () => {
       });
 
       appSpawner.initialize();
-      appSyncEvents.emit(SYNC_EVENTS.SPAWNER_READY);
+      capabilitiesStub.set('spawnerReady', true);
       await waitForLoopExits(1);
 
       // With the latch: cycle1 -> (latched wake -> skip delay) -> cycle2 -> delay -> pause.

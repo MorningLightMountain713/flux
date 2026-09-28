@@ -15,7 +15,6 @@ const daemonServiceMiscRpcs = require('../../ZelBack/src/services/daemonService/
 const capabilities = require('../../ZelBack/src/services/utils/capabilities');
 const daemonServiceUtils = require('../../ZelBack/src/services/daemonService/daemonServiceUtils');
 const dbHelper = require('../../ZelBack/src/services/dbHelper');
-const globalState = require('../../ZelBack/src/services/utils/globalState');
 const log = require('../../ZelBack/src/lib/log');
 const { requireMongo } = require('./dbTestHelper');
 
@@ -308,11 +307,11 @@ describe('explorerService tests', () => {
       daemonServiceMiscRpcsStub = sinon.stub(daemonServiceMiscRpcs, 'isDaemonSynced');
       daemonServiceBlockchainRpcsStub = sinon.stub(daemonServiceBlockchainRpcs, 'getBlock');
       logInfoSpy = sinon.spy(log, 'info');
-      globalState.dbReady = true;
+      capabilities.setForTests('appRegistryConsistent', true);
     });
 
     afterEach(() => {
-      globalState.dbReady = false;
+      capabilities.setForTests('appRegistryConsistent', false);
       sinon.restore();
     });
 

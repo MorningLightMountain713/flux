@@ -143,38 +143,6 @@ describe('globalState tests', () => {
     });
   });
 
-  describe('waitForDbReady', () => {
-    it('should resolve immediately when dbReady is already true', async () => {
-      globalState.dbReady = true;
-      await globalState.waitForDbReady();
-    });
-
-    it('should wait until dbReady is set to true', async () => {
-      globalState.dbReady = false;
-      let resolved = false;
-      const promise = globalState.waitForDbReady().then(() => { resolved = true; });
-      await new Promise((r) => setImmediate(r));
-      expect(resolved).to.equal(false);
-      globalState.dbReady = true;
-      await promise;
-      expect(resolved).to.equal(true);
-    });
-
-    it('should resolve again after a reset cycle', async () => {
-      globalState.dbReady = true;
-      await globalState.waitForDbReady();
-
-      globalState.dbReady = false;
-      let resolved = false;
-      const promise = globalState.waitForDbReady().then(() => { resolved = true; });
-      await new Promise((r) => setImmediate(r));
-      expect(resolved).to.equal(false);
-      globalState.dbReady = true;
-      await promise;
-      expect(resolved).to.equal(true);
-    });
-  });
-
   describe('in-flight install abort registry (cancel-vs-install)', () => {
     it('installingApps is a Map', () => {
       expect(globalState.installingApps).to.be.instanceOf(Map);

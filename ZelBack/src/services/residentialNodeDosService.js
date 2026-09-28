@@ -22,6 +22,7 @@
 // CONFLICTED and UNKNOWN are left alone, as is a node whose bench cannot be read.
 
 const config = require('config');
+const capabilities = require('./utils/capabilities');
 const log = require('../lib/log');
 const dbHelper = require('./dbHelper');
 const fluxNetworkHelper = require('./fluxNetworkHelper');
@@ -29,7 +30,6 @@ const nodeDosState = require('./nodeDosState');
 const geolocationService = require('./geolocationService');
 const benchmarkService = require('./benchmarkService');
 const { CLASSIFICATION } = require('./utils/networkClassifier');
-const { appSyncEvents, EVENTS: SYNC_EVENTS } = require('./utils/appSyncEvents');
 const operationRegistry = require('./utils/operationRegistry');
 const fluxEventBus = require('./utils/fluxEventBus');
 const handbackTurns = require('./utils/handbackTurns');
@@ -132,15 +132,6 @@ let settleMarkerUncleared = false;
 // A departure whose time could not be written to the marker, written again on
 // each tick until it is: the next process reopens the gate early without it.
 let unpersistedEvacuationAt = null;
-
-// Whether this node yet knows what it is running. Starts false and is only
-// raised by the orchestrator's own signal - the same one appSpawner waits on.
-// globalState.spawnerPaused is NOT this signal: it initialises to false, so
-// reading it would report a freshly booted node as ready, and an app list read
-// then is not evidence of an empty node.
-let nodeReady = false;
-appSyncEvents.on(SYNC_EVENTS.SPAWNER_READY, () => { nodeReady = true; });
-appSyncEvents.on(SYNC_EVENTS.READINESS_LOST, () => { nodeReady = false; });
 
 /**
  * Milliseconds on the monotonic clock. The departure interval reads this
@@ -676,7 +667,11 @@ async function runResidentialPolicy(deps) {
   // hold is the first thing that happens to an enforced node.
   enforcing = true;
 
-  if (!nodeReady) {
+  // Whether this node yet knows what it is running: `spawnerReady`, the same
+  // capability appSpawner waits on. globalState.spawnerPaused is NOT this: it
+  // initialises to false, so it reports a freshly booted node as ready, and an
+  // app list read then is not evidence of an empty node.
+  if (!capabilities.isUp('spawnerReady')) {
     evacuating = false;
     log.info('residentialNodeDos - node not ready yet, holding placement only this tick');
     return false;
@@ -847,8 +842,7 @@ module.exports = {
   getDosStaging,
   mayEvacuateApp,
   noteEvacuated,
-  // Test seam for the readiness gate, which is otherwise only moved by events.
-  setNodeReadyForTests: (value) => { nodeReady = value; },
+
   DOS_MESSAGE_PREFIX,
   HOLD_REASON,
   CHECK_INTERVAL_MS,

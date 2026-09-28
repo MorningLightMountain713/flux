@@ -93,8 +93,7 @@ function sweep(reason) {
 }
 
 function initialize() {
-  capabilities.onUpChange('nodeConfirmed', (confirmed) => {
-    if (confirmed) return undefined;
+  capabilities.onDown('nodeConfirmed', () => {
     log.info('nodeSelfDefense - confirmation lost, removing every app');
     return sweep('node lost confirmation');
   });

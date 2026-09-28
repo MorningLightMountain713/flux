@@ -9,7 +9,7 @@
 //
 // WHEN IT FETCHES is decided by policyStore.onBundleChanged, not by a clock. The bundle
 // names which file is the table and what it must hash to, so there is nothing to do until
-// one is held - and this module is started on dbReady, which is a fact about the app
+// one is held - and this module is started on appRegistryConsistent, which is a fact about the app
 // database and says nothing about policy. Both hang off the peer threshold and neither
 // orders the other, so the bundle is waited for as an event, never read once on the way
 // past. The retry below is for a source that cannot be reached, which is the only thing a
@@ -309,7 +309,7 @@ async function startSync() {
   started = true;
   await restoreCachedTable();
   // THE BUNDLE IS WHAT NAMES THE TABLE, so a bundle arriving is the event this fetch waits
-  // on - not a delay, and not dbReady, which is a fact about the app database and says
+  // on - not a delay, and not appRegistryConsistent, which is a fact about the app database and says
   // nothing about policy. Both start from the peer threshold and nothing orders them, so
   // without this the two outcomes were "policy was already there" and "wait out a ten
   // minute backoff", decided by a race.

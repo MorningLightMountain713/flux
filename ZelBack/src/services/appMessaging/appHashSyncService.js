@@ -23,7 +23,7 @@ const { appSyncEvents, EVENTS } = require('../utils/appSyncEvents');
 const { HASH_EXPIRY_BLOCKS, HASH_RETRY_BACKOFF } = require('../utils/appConstants');
 const log = require('../../lib/log');
 const fluxEventBus = require('../utils/fluxEventBus');
-const globalState = require('../utils/globalState');
+const capabilities = require('../utils/capabilities');
 const { isBefore, messagesThatCount } = require('../utils/appMessageChain');
 const { invalidMessages } = require('../invalidMessages');
 const { Privilege, authOf } = require('../utils/privileges');
@@ -464,10 +464,10 @@ async function processMessages(messages, records, onProgress) {
 
     // The registry rows of the apps whose messages were stored, before their hashes are
     // marked. A registry not built yet is built in full from every stored message before
-    // the node is ready (dbReady), so only a built one is kept current here. Rows not
+    // the node is ready (appRegistryConsistent), so only a built one is kept current here. Rows not
     // written leave the hashes unmarked, and the next retry finds the messages stored and
     // writes the rows (alignStoredMessagesWithPayments).
-    if (inserted > 0 && globalState.dbReady) {
+    if (inserted > 0 && capabilities.isUp('appRegistryConsistent')) {
       const apps = [...new Set(permInserts.slice(0, inserted).map((message) => message.appSpecifications.name))];
       try {
         await messageVerifier.storeGoverningAppSpecifications(apps);
