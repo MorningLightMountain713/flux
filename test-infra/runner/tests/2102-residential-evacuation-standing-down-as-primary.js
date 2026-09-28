@@ -168,12 +168,20 @@ describe('Residential node evacuation: standing down as the elected primary', fu
     // nothing considers it again, so the primary this refusal needs is built here.
     await returnToService(env, TARGET);
 
+    const seededAfter = env.clients[TARGET - 1].getLastEventId();
     await seedApp(env, 'lockedapp', { instances: 5, containerData: 'g:/appdata' });
     await setSynced({ folder: 'fluxlockedapp_lockedapp' });
     await setPeerHasData({ folder: 'fluxlockedapp_lockedapp' });
     await advanceBlocks(3);
     await waitFor(async () => (await locationsOf(env, 'lockedapp')).length >= 5,
       { timeout: 300000, label: 'lockedapp reaches its instance count across the fleet' });
+
+    // A folder pinned synced must hold on disk what its index claims, or the
+    // mount-safety guard keeps it receiveonly and the election never starts the
+    // writer here; the seed goes after the sync layer's first-run reset.
+    await waitForReconcileActuated(env.clients[TARGET - 1], 'lockedapp_lockedapp', 'dataCleared', 120_000,
+      { afterId: seededAfter });
+    await seedSyncScopedData(env, 'lockedapp', TARGET - 1);
 
     // A peer holds the folder in full, so the synced-peer loop PASSES and the
     // pass reaches the election question. That ordering is the safety property
