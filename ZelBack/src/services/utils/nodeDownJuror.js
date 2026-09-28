@@ -168,8 +168,12 @@ class NodeDownJuror {
       this.#courtesy.set(subject, spent);
     }
     spent[reason] = spent[reason].filter((at) => at > height - COURTESY_WINDOW_BLOCKS);
-    if (spent[reason].length >= COURTESY[reason]) return false;
+    if (spent[reason].length >= COURTESY[reason]) {
+      log.info(`nodeDownJuror - ${subject}: ${reason} close not honoured, ${COURTESY[reason]} already honoured in the window`);
+      return false;
+    }
     spent[reason].push(height);
+    log.info(`nodeDownJuror - ${subject}: ${reason} close honoured (${spent[reason].length} of ${COURTESY[reason]} in the window)`);
     return true;
   }
 
@@ -180,7 +184,9 @@ class NodeDownJuror {
    */
   retain(outpoints) {
     [...this.#courtesy.keys()].forEach((subject) => {
-      if (!outpoints.has(subject)) this.#courtesy.delete(subject);
+      if (outpoints.has(subject)) return;
+      this.#courtesy.delete(subject);
+      log.info(`nodeDownJuror - ${subject} left this node's duties; its courtesy record is dropped`);
     });
   }
 
