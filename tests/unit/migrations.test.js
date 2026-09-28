@@ -3,6 +3,7 @@
 const { expect } = require('chai');
 const sinon = require('sinon');
 const proxyquire = require('proxyquire').noCallThru();
+const capabilities = require('../../ZelBack/src/services/utils/capabilities');
 
 describe('migrations tests', () => {
   let stubs;
@@ -26,11 +27,12 @@ describe('migrations tests', () => {
   });
 
   describe('the registry', () => {
-    it('gives every migration an id, a hook and a description', () => {
+    it('gives every migration an id, the capability it finishes before, and a description', () => {
+      const names = capabilities.DEFINITIONS.map((d) => d.name);
       migrations.migrations.forEach((migration) => {
         expect(migration.id, 'id').to.be.a('string').and.not.empty;
         expect(migration.description, `${migration.id} description`).to.be.a('string').and.not.empty;
-        expect(Object.values(migrations.HOOKS), `${migration.id} hook`).to.include(migration.hook);
+        expect(names, `${migration.id} before`).to.include(migration.before);
         expect(migration.run, `${migration.id} run`).to.be.a('function');
       });
     });
@@ -41,23 +43,23 @@ describe('migrations tests', () => {
     });
   });
 
-  describe('runMigrations', () => {
-    it('runs only the migrations registered at the hook it was given', async () => {
-      await migrations.runMigrations(migrations.HOOKS.DEPENDENCIES_READY);
+  describe('runBefore', () => {
+    it('runs only the migrations that finish before the capability it was given', async () => {
+      await migrations.runBefore('localDbPrepared');
 
       expect(stubs.nodeIdentityMigration.migrateNodeIdentity.calledOnce).to.be.true;
       expect(stubs.containerLabelBackfill.backfillContainerLabels.called).to.be.false;
     });
 
-    it('runs the container work at apps-starting, where containers are still down', async () => {
-      await migrations.runMigrations(migrations.HOOKS.APPS_STARTING);
+    it('runs the container work before the boot reconcile decides, while containers are still down', async () => {
+      await migrations.runBefore('bootReconcileDecided');
 
       expect(stubs.containerLabelBackfill.backfillContainerLabels.calledOnce).to.be.true;
       expect(stubs.nodeIdentityMigration.migrateNodeIdentity.called).to.be.false;
     });
 
-    it('does nothing for a hook nothing is registered at', async () => {
-      const results = await migrations.runMigrations('no-such-hook');
+    it('does nothing for a capability no migration finishes before', async () => {
+      const results = await migrations.runBefore('apiListening');
 
       expect(results).to.deep.equal([]);
       expect(stubs.nodeIdentityMigration.migrateNodeIdentity.called).to.be.false;
@@ -69,20 +71,20 @@ describe('migrations tests', () => {
       // running is never worse than the state the node is already in.
       stubs.nodeIdentityMigration.migrateNodeIdentity.rejects(new Error('mongo gone'));
 
-      const results = await migrations.runMigrations(migrations.HOOKS.DEPENDENCIES_READY);
+      const results = await migrations.runBefore('localDbPrepared');
 
       expect(results).to.deep.equal([{ id: 'node-identity', ok: false }]);
       sinon.assert.calledWithMatch(stubs.log.error, /node-identity failed/);
     });
 
     it('reports a migration that succeeded', async () => {
-      const results = await migrations.runMigrations(migrations.HOOKS.APPS_STARTING);
+      const results = await migrations.runBefore('bootReconcileDecided');
 
       expect(results).to.deep.equal([{ id: 'container-labels', ok: true }]);
     });
 
-    it('runs the rest of a hook after one fails', async () => {
-      // Rebuilt registry: the shipped one has a single migration per hook, and the
+    it('runs the rest after one fails', async () => {
+      // Rebuilt registry: the shipped one has a single migration per capability, and the
       // property under test is that a failure does not suppress a later entry.
       const order = [];
       const rebuilt = proxyquire('../../ZelBack/src/services/migrations', {
@@ -96,10 +98,10 @@ describe('migrations tests', () => {
       });
       rebuilt.migrations.forEach((migration) => {
         // eslint-disable-next-line no-param-reassign
-        migration.hook = rebuilt.HOOKS.DEPENDENCIES_READY;
+        migration.before = 'localDbPrepared';
       });
 
-      const results = await rebuilt.runMigrations(rebuilt.HOOKS.DEPENDENCIES_READY);
+      const results = await rebuilt.runBefore('localDbPrepared');
 
       expect(order).to.deep.equal(['first', 'second']);
       expect(results.map((r) => r.ok)).to.deep.equal([false, true]);

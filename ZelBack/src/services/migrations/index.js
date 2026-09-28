@@ -5,7 +5,8 @@ const nodeIdentityMigration = require('../appDatabase/nodeIdentityMigration');
 const containerLabelBackfill = require('../appLifecycle/containerLabelBackfill');
 
 // One-off work that brings a node up to date with a change FluxOS has already
-// made, run at a named point in the boot sequence.
+// made. Each migration names the capability it must finish before: that
+// capability's owner runs them, then raises it.
 //
 // It lives here rather than being called from wherever it happens to fit because
 // that is what lets it LEAVE. A migration wired into serviceManager becomes part
@@ -27,48 +28,42 @@ const containerLabelBackfill = require('../appLifecycle/containerLabelBackfill')
 //   migration that can stop a boot ships to the whole fleet at once. Failures are
 //   logged and the boot continues.
 
-const HOOKS = Object.freeze({
-  // Mongo and Docker are up; nothing else has started. Node-local state only.
-  DEPENDENCIES_READY: 'dependencies-ready',
-  // Daemon, database and node confirmation are all ready, and the reconciler has
-  // not opened its boot gate — so on a host reboot every container is still
-  // stopped. Anything that would rather act on a container while it is down
-  // belongs here.
-  APPS_STARTING: 'apps-starting',
-});
-
 const migrations = [
   {
     id: 'node-identity',
-    hook: HOOKS.DEPENDENCIES_READY,
+    // Node-local state, read by everything that uses the local database.
+    before: 'localDbPrepared',
     description: 'adopt node runtime state that older versions kept in config/userconfig.js',
     run: () => nodeIdentityMigration.migrateNodeIdentity(),
   },
   {
     id: 'container-labels',
-    hook: HOOKS.APPS_STARTING,
+    // The boot reconcile has not started any container yet, so on a host reboot
+    // every container is still stopped.
+    before: 'bootReconcileDecided',
     description: 'restamp containers created before the identity label carried one',
     run: () => containerLabelBackfill.backfillContainerLabels(),
   },
 ];
 
 /**
- * Run every migration registered at one hook, in declaration order.
+ * Run every migration that must finish before a capability rises, in
+ * declaration order. Called by the capability's owner just before it raises it.
  *
- * Sequential: two migrations at the same hook may touch the same state, and the
- * order they are declared in is the order they were reasoned about. One failing
- * does not stop the next — they do not depend on each other, and a migration that
- * could suppress another would make the registry an ordering puzzle instead of a
- * list.
+ * Sequential: two migrations before the same capability may touch the same
+ * state, and the order they are declared in is the order they were reasoned
+ * about. One failing does not stop the next - they do not depend on each other,
+ * and a migration that could suppress another would make the registry an
+ * ordering puzzle instead of a list.
  *
- * @param {string} hook one of HOOKS
+ * @param {string} capability a capability name
  * @returns {Promise<Array<{id: string, ok: boolean}>>}
  */
-async function runMigrations(hook) {
-  const due = migrations.filter((migration) => migration.hook === hook);
+async function runBefore(capability) {
+  const due = migrations.filter((migration) => migration.before === capability);
   if (due.length === 0) return [];
 
-  log.info(`migrations - running ${due.length} at ${hook}`);
+  log.info(`migrations - running ${due.length} before ${capability}`);
   const results = [];
   for (const migration of due) {
     try {
@@ -76,7 +71,7 @@ async function runMigrations(hook) {
       await migration.run();
       results.push({ id: migration.id, ok: true });
     } catch (error) {
-      log.error(`migrations - ${migration.id} failed at ${hook}: ${error.message}`);
+      log.error(`migrations - ${migration.id} failed before ${capability}: ${error.message}`);
       results.push({ id: migration.id, ok: false });
     }
   }
@@ -84,8 +79,7 @@ async function runMigrations(hook) {
 }
 
 module.exports = {
-  HOOKS,
-  runMigrations,
+  runBefore,
   // exposed for tests
   migrations,
 };
