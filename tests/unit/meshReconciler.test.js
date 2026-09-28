@@ -715,6 +715,46 @@ describe('meshReconciler', () => {
     });
   });
 
+  // A standby re-runs the scan every pass (formal/ordinal-scan, rescan-fills):
+  // an ordinal freed after its last scan is taken on the next one, and the
+  // identity drift recreates its container under the ordinal it now holds.
+  describe('the standby re-scan', () => {
+    const standbyContainer = () => {
+      stubs.containerInspect = {
+        State: { Pid: 4242 },
+        Config: { Env: [`FLUX_MESH_SELF=web-${OWN_NODE_ID}`] },
+        NetworkSettings: { Networks: { [NETWORK_NAME]: { IPAddress: '172.23.4.5' } } },
+      };
+    };
+
+    it('takes a freed ordinal on its pass, and the drift rebuilds its container under it', async () => {
+      standbyContainer();
+      stubs.claim = { state: 'granted', ordinal: 1 };
+      await meshReconciler.reconcileAllMeshApps();
+      expect(stubs.claims.map((args) => args[0])).to.deep.equal(['myblog']);
+      expect(meshReconciler.lastPassStatus('myblog').ownSlot).to.equal(1);
+      expect(meshReconciler.lastPassStatus('myblog').identityDrift).to.deep.equal([{
+        identifier: `web_${IDENTITY}`, component: 'web', is: `web-${OWN_NODE_ID}`, wants: 'web-1',
+      }]);
+      await meshReconciler.reconcileAllMeshApps();
+      expect(stubs.enqueued).to.deep.equal([`web_${IDENTITY}`]);
+    });
+
+    it('stays a standby, with no drift, while every ordinal is held', async () => {
+      standbyContainer();
+      await meshReconciler.reconcileAllMeshApps();
+      expect(stubs.claims).to.have.length(1);
+      expect(meshReconciler.lastPassStatus('myblog').ownSlot).to.equal(null);
+      expect(meshReconciler.lastPassStatus('myblog').identityDrift).to.deep.equal([]);
+    });
+
+    it('a holder never re-scans', async () => {
+      stubs.ordinals = { own: 1, byNode: new Map([[OWN_NODE_ID, 1]]) };
+      await meshReconciler.reconcileAllMeshApps();
+      expect(stubs.claims).to.have.length(0);
+    });
+  });
+
   describe('prepareComponentMesh', () => {
     it('is null for a non-mesh app', async () => {
       stubs.installedApps = [await makeApp({ network: { mesh: false } })];
