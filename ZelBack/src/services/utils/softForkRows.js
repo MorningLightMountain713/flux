@@ -1,5 +1,7 @@
 'use strict';
 
+const { compareChainOrder } = require('./chainOrder');
+
 /**
  * Ordering for stored soft-fork message rows.
  *
@@ -41,7 +43,7 @@ function inChainOrder(rows, collectionName) {
       }
     }
   }
-  return rows.sort((a, b) => a.height - b.height || a.txIndex - b.txIndex || a.vout - b.vout);
+  return rows.sort(compareChainOrder);
 }
 
 module.exports = { inChainOrder };
