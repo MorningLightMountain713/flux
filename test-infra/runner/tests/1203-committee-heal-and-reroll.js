@@ -16,6 +16,7 @@ import {
 import { waitFor, waitForAppInstalled, waitForReconcileActuated, assertNoEvent } from '../framework/wait.js';
 import { dbClient } from '../framework/db-client.js';
 import { getState, advanceBlock, stopTicker, startTicker } from '../framework/daemon-control.js';
+import { getSubnetConfig } from '../framework/subnet-config.js';
 import { authenticate, signBtcMessage } from '../auth.js';
 import { appOwnerKey } from '../framework/keys.js';
 
@@ -40,6 +41,20 @@ describe('the committee heals its dark seat, and the owner re-deals the walk', f
   let ownerAuth0;
   let refereeIndex;
   let addedIndex; // the healed replacement seat, found by test 1
+  // The app's hosts as the network places them. Test 2 kills the master, the
+  // spawner replaces it on another node, and the surplus trim then sheds
+  // whichever copy ranks out, so the hosts after test 2 are read, never assumed.
+  let hosts = [...HOLDERS];
+
+  async function currentHosts(viewIndex) {
+    const cfg = getSubnetConfig();
+    const res = await env.clients[viewIndex].getAppLocations(name).catch(() => null);
+    const rows = res?.data ?? [];
+    const found = rows
+      .map((r) => env.clients.findIndex((_, i) => r.ip && r.ip.split(':')[0] === cfg.nodeIp(i + 1)))
+      .filter((i) => i !== -1);
+    return [...new Set(found)].sort((a, b) => a - b);
+  }
 
   async function readCell(clientIndex) {
     try {
@@ -251,7 +266,10 @@ describe('the committee heals its dark seat, and the owner re-deals the walk', f
     expect(before, 'a standing grant before the failure').to.not.equal(null);
     const masterIndex = Number(Object.keys(outpoints).find((i) => outpoints[i] === before.grantee));
     expect(HOLDERS, `master ${before.grantee} maps to a holder`).to.include(masterIndex);
-    const survivors = HOLDERS.filter((i) => i !== masterIndex);
+    // Any node may succeed: the dead master's certificate drops its location,
+    // the spawner replaces it, and the replacement pursues the term alongside
+    // the original survivors.
+    const survivors = env.clients.map((_, i) => i).filter((i) => i !== masterIndex);
     const survivorAfters = new Map(survivors.map((i) => [i, env.clients[i].getLastEventId()]));
 
     await pauseHostContainer(env.clients[masterIndex].container);
@@ -289,6 +307,19 @@ describe('the committee heals its dark seat, and the owner re-deals the walk', f
       const verdict = await quorumVerdict();
       return verdict !== null && verdict.grantee !== before.grantee;
     }, { timeout: 120000, interval: 10000, label: 'the returning corpse adopted' });
+
+    // The returned master and the replacement make a surplus; the trim sheds
+    // down to the spec's count, and the tests after this one address the
+    // hosts that remain.
+    const viewIndex = (masterIndex + 1) % env.clients.length;
+    let previous = null;
+    await waitFor(async () => {
+      const now = await currentHosts(viewIndex);
+      const settled = now.length === HOLDERS.length && previous !== null && now.join() === previous;
+      previous = now.join();
+      if (settled) hosts = now;
+      return settled;
+    }, { timeout: 600000, interval: 15000, label: `the app settles at ${HOLDERS.length} hosts` });
   });
 
   async function submitReroll(generation) {
@@ -337,7 +368,7 @@ describe('the committee heals its dark seat, and the owner re-deals the walk', f
     });
     expect(yielded.status).to.equal(200);
     await env.clients[masterIndex].waitForEvent('quorumGrant:yielded', (d) => d.key === `${name}/master`, 60000, { afterId: markers[masterIndex] });
-    await Promise.all(HOLDERS.map((i) => waitForReconcileActuated(
+    await Promise.all(hosts.map((i) => waitForReconcileActuated(
       env.clients[i], componentIdentifier(name), 'settledStopped', 90000, { afterId: markers[i] },
     )));
     const submitted = await submitReroll(1);
@@ -348,7 +379,7 @@ describe('the committee heals its dark seat, and the owner re-deals the walk', f
     // salted walk deals a fresh committee, and the stopped world restarts
     // into it: the operator lock lifts and the instances pursue generation
     // 1 — into the retirement drain first.
-    await Promise.all(HOLDERS.map((i) => env.clients[i].waitForEvent(
+    await Promise.all(hosts.map((i) => env.clients[i].waitForEvent(
       'quorumGrant:generationRecord',
       (d) => d.appName === name && d.role === 'master' && d.generation === 1,
       120000,
@@ -366,7 +397,7 @@ describe('the committee heals its dark seat, and the owner re-deals the walk', f
     // chain stands still. Inside the master's own demotion arithmetic
     // (deadline ~TTL+slack after the old world stops renewing), so the app
     // still never changes hands.
-    await Promise.all(HOLDERS.map((i) => assertNoEvent(
+    await Promise.all(hosts.map((i) => assertNoEvent(
       env.clients[i],
       'quorumGrant:granted',
       (d) => d.key === `${name}/master` && d.generation === 1,
@@ -377,7 +408,7 @@ describe('the committee heals its dark seat, and the owner re-deals the walk', f
     await advanceBlock();
     await advanceBlock();
     await advanceBlock();
-    await Promise.any(HOLDERS.map((i) => env.clients[i].waitForEvent(
+    await Promise.any(hosts.map((i) => env.clients[i].waitForEvent(
       'quorumGrant:granted',
       (d) => d.key === `${name}/master` && d.generation === 1,
       360000,
@@ -415,7 +446,7 @@ describe('the committee heals its dark seat, and the owner re-deals the walk', f
       const submitted = await submitReroll(2);
       const submittedBody = await submitted.text();
       expect(submitted.status, submittedBody).to.equal(200);
-      await Promise.all(HOLDERS.map((i) => env.clients[i].waitForEvent(
+      await Promise.all(hosts.map((i) => env.clients[i].waitForEvent(
         'quorumGrant:generationRecord',
         (d) => d.appName === name && d.role === 'master' && d.generation === 2,
         120000,
@@ -433,7 +464,7 @@ describe('the committee heals its dark seat, and the owner re-deals the walk', f
         const rows = cells.filter((c) => c?.accepted?.grantee === before.grantee && (c.accepted.generation ?? 0) === 1);
         return rows.length > 0 && rows.every((c) => c.accepted.released === true);
       }, { timeout: 60000, interval: 5000, label: 'every generation-1 row naming the master is released' });
-      await Promise.all(HOLDERS.map((i) => waitForReconcileActuated(
+      await Promise.all(hosts.map((i) => waitForReconcileActuated(
         env.clients[i], componentIdentifier(name), 'settledStopped', 90000, { afterId: markers[i] },
       )));
 
@@ -442,14 +473,14 @@ describe('the committee heals its dark seat, and the owner re-deals the walk', f
         headers: { zelidauth: ownerAuth0 },
       });
       expect(restarted.status).to.equal(200);
-      await Promise.all(HOLDERS.map((i) => assertNoEvent(
+      await Promise.all(hosts.map((i) => assertNoEvent(
         env.clients[i], 'quorumGrant:granted', (d) => d.key === key && d.generation === 2, 40000,
       )));
 
       await advanceBlock();
       await advanceBlock();
       await advanceBlock();
-      await Promise.any(HOLDERS.map((i) => env.clients[i].waitForEvent(
+      await Promise.any(hosts.map((i) => env.clients[i].waitForEvent(
         'quorumGrant:granted', (d) => d.key === key && d.generation === 2, 360000,
       )));
       await waitFor(async () => {
