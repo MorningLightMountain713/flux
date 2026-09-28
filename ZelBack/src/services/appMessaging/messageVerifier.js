@@ -8,14 +8,7 @@ const verificationHelper = require('../verificationHelper');
 const generalService = require('../generalService');
 const fluxCommunicationMessagesSender = require('../fluxCommunicationMessagesSender');
 const serviceHelper = require('../serviceHelper');
-const daemonStatus = require('../daemonService/daemonStatus');
-const { getSpec, getSpecBackend } = require('../utils/specLibs');
-const { deserializeSpec } = require('../utils/specCutover');
-const pricingRegime = require('../pricing/pricingRegime');
 const appsRepository = require('../appDatabase/appsRepository');
-const { insertAppSpecifications, updateAppSpecifications } = require('../appDatabase/registryManager');
-const { mintAppUuid, identityFromUuid } = require('../utils/appIdentity');
-const appEventVerifier = require('./appEventVerifier');
 const confirmedMessageStore = require('./confirmedMessageStore');
 const {
   globalAppsMessages,
@@ -26,7 +19,6 @@ const {
 const { invalidMessages } = require('../invalidMessages');
 const fluxNetworkHelper = require('../fluxNetworkHelper');
 const { Privilege, authOf } = require('../utils/privileges');
-const { processPendingUpdates } = require('./messageStore');
 
 // Import hashesNumberOfSearchs from appsService - this should be shared state
 // For now, we'll create a local instance, but ideally this should be moved to globalState
@@ -264,111 +256,12 @@ async function getIngressAttestationsByApp(req, res) {
   }
 }
 
-// ── Helpers for checkAndRequestApp ──────────────────────────────────
-
-function getDaemonHeight() {
-  return daemonStatus.isDaemonSynced().data.height;
-}
-
-/**
- * Consensus registration fee in satoshis, from the spec's pricing regime.
- * @param {object} spec - resolved spec
- * @param {number} height - confirming block height
- * @returns {Promise<bigint>}
- */
-async function computeRegistrationFee(spec, height) {
-  return (await pricingRegime.regimeFor(spec)).registrationFee(spec, height);
-}
-
-/**
- * Consensus update fee in satoshis, from the update's pricing regime with the
- * predecessor's term cost from its own (pricingRegime.updateFee).
- *
- * The free-update rate limit counts the app's messages confirmed below the
- * update's height: the update is stored before it is priced, so a cutoff at its
- * own height would count the update itself.
- *
- * @param {object} spec - resolved new spec
- * @param {object} prevSpec - resolved previous spec
- * @param {number} height - confirming block height
- * @param {number} prevHeight - height the previous spec registered at
- * @param {number} prevRegisteredAt - unix seconds the previous term started
- * @param {number} nowBlockTime - unix seconds of the confirming block
- * @returns {Promise<bigint|null>}
- */
-async function computeUpdateFee(spec, prevSpec, height, prevHeight, prevRegisteredAt, nowBlockTime) {
-  return pricingRegime.updateFee(spec, prevSpec, {
-    height,
-    prevHeight,
-    prevRegisteredAt,
-    nowBlockTime,
-    recentEvents: async () => (await appsRepository.listAppMessagesByName(spec.name))
-      .filter((message) => message.height < height),
-  });
-}
-
-/**
- * The state to store for a confirmed update, with its term start decided.
- *
- * A v9 app expires at registeredAt + ttl, and an update's registeredAt is its
- * own confirming block — so applying one restarts the clock. That is right when
- * the update paid for its term: the fee already credited back whatever time was
- * left on the old one.
- *
- * A free update paid nothing, so it bought no time and must not move the expiry.
- * It keeps the term start it supersedes. The free-update policy stops the ttl
- * growing; this stops the clock restarting, which is the same guard on the other
- * axis — without it, resubmitting an unchanged spec renews an app for nothing,
- * indefinitely.
- *
- * The signed spec is never touched. Shortening the ttl to fit the remaining term
- * would rewrite content the owner signed and its hash covers; the term start is
- * FluxOS's own record of when the app's current term began.
- *
- * @param {object} InstantiatedSpec - the domain class, from the spec backend
- * @param {object} confirmedEvent - the confirmed update event
- * @param {bigint} requiredSats - the fee this update had to pay
- * The kept term comes from the STORED app state, never the message chain:
- * every permanent message is stamped with its own confirming block, so a
- * chain of free updates read from the superseded message would walk the term
- * forward one confirmation interval per update.
- *
- * @param {number|null} termStartAt - the standing term start being kept
- * @returns {object} the InstantiatedSpec to store
- */
-function instantiatedForStorage(InstantiatedSpec, confirmedEvent, requiredSats, termStartAt) {
-  const projection = confirmedEvent.toInstantiatedSpec();
-  const keepsTerm = requiredSats === 0n && Boolean(termStartAt);
-  return InstantiatedSpec.fromEvent(
-    keepsTerm ? { ...projection, registeredAt: termStartAt } : projection,
-  );
-}
-
-async function handleExpiredApp(name) {
-  log.warn(`App ${name} has expired. Cleaning up stale data.`);
-  const existingGlobal = await appsRepository.existsGlobalApp(name);
-  if (existingGlobal) {
-    log.warn(`Removing expired app ${name} from global apps database`);
-    await appsRepository.removeGlobalAppInfo(name);
-  }
-  const existingLocal = await appsRepository.existsInstalledApp(name);
-  if (existingLocal) {
-    log.warn(`REMOVAL REASON: App expired - ${name} update received after expiration (messageVerifier)`);
-    // eslint-disable-next-line global-require
-    const appUninstaller = require('../appLifecycle/appUninstaller');
-    // background: at-tip cancel enforcement — the prelude condemns + removes the row
-    // fast; the destructive teardown runs deferred.
-    await appUninstaller.uninstallApplication(name, {
-      skipGuard: true, broadcastRemoval: true, background: true,
-    });
-  }
-}
-
 // ── Core promotion function ─────────────────────────────────────────
 
 /**
- * Stores a gossiped message when this node's scan has recorded its payment, then
- * judges it. The chain facts are the payment record's, read by the store.
+ * Stores a gossiped message when this node's scan has recorded its payment. The
+ * chain facts are the payment record's, read by the store; the decider judges
+ * what is stored.
  *
  * @param {string} hash - Message hash
  * @param {number} i - Retry counter (internal)
@@ -393,12 +286,6 @@ async function checkAndRequestApp(hash, i = 0) {
       return false;
     }
 
-    const specifications = tempMessage.appSpecifications;
-    if (!specifications) {
-      log.error(`Temp message ${hash} has no specifications`);
-      return false;
-    }
-
     const storage = await confirmedMessageStore.storeConfirmedMessages([tempMessage]);
     if (storage.alreadyStored.length) return true;
     if (!storage.stored.length) {
@@ -406,159 +293,9 @@ async function checkAndRequestApp(hash, i = 0) {
       log.error(`checkAndRequestApp - ${hash} not stored: ${why}`);
       return false;
     }
-    const [{ event: confirmedEvent, record }] = storage.stored;
-    // A message whose spec this library cannot read is stored for the decider,
-    // which refuses it; there is nothing here to judge.
-    if (!confirmedEvent) return true;
-    const { txid, height, valueSat } = confirmedEvent.serialize();
-    const confirmedBlockTime = confirmedEvent.serialize().registeredAt ?? record.blockTime ?? null;
     // The message is durable now — clear the orphan TTL on its ingress
     // attestations so their attribution persists alongside the permanent record.
     await appsRepository.confirmIngressAttestations(hash);
-
-    // Judged against the app's active row. The row is the only authority here —
-    // the name's message history spans every app that has ever held the name, so
-    // an expired app's owner would still authorize an update to whoever holds
-    // the name now. A refused update stays stored and never reaches the registry.
-    let currentState = null;
-    if (confirmedEvent.isUpdate) {
-      currentState = await appsRepository.getGlobalAppInfo(specifications.name);
-      try {
-        await appEventVerifier.authorize({
-          appEvent: confirmedEvent,
-          previousState: currentState,
-          daemonHeight: getDaemonHeight(),
-          // The chain has confirmed this message; the check here is about which
-          // owner authorizes it, not about how it is spelled.
-          allowLegacyEncoding: true,
-        });
-      } catch (error) {
-        log.warn(`App ${hash} update refused: ${error.message}`);
-        return true;
-      }
-    }
-
-    // Project to InstantiatedSpec — the domain type for live app state
-    const { InstantiatedSpec } = await getSpecBackend();
-    const instantiated = InstantiatedSpec.fromEvent(confirmedEvent.toInstantiatedSpec());
-
-    // Expiry check
-    const daemonHeight = getDaemonHeight();
-    if (instantiated.isExpired(confirmedBlockTime, daemonHeight)) {
-      await handleExpiredApp(instantiated.name);
-      return true;
-    }
-
-    // Pricing and the registry write, held in their own try.
-    //
-    // Everything above this point is "can this message be resolved at all". Below it,
-    // the message IS resolved: it is already a permanent message and its hash is
-    // already flagged (appHashHasMessage, above). So the outer catch's `return false`
-    // is not just uninformative here, it is untrue — it tells insertAndRequestAppHashes
-    // to raise HASH_UNRESOLVED and re-request a message this node has stored, and the
-    // very next call short-circuits on the `existing` branch and answers true. The part
-    // that actually failed, the registry write, is never retried by anyone and leaves
-    // no trace but a log line shared with every other internal failure.
-    //
-    // A pricing regime reaches spec-policy, the price histories and the database. Its
-    // failure is our side going wrong, not the sender's message being unresolvable, and
-    // it must read that way in the log.
-    const { spec } = instantiated;
-    try {
-      // A sealed spec is priced as it stands, never decrypted: its cleartext
-      // half carries every pricing input, so every node reaches the same fee
-      // whether or not it can open the spec.
-      if (confirmedEvent.isRegistration) {
-        const requiredSats = await computeRegistrationFee(spec, height);
-        if (requiredSats === 0n) {
-          // Fail-closed: a registration always pays for its TTL, so a fee of 0 can
-          // only mean pricing isn't in force yet (no PriceMessage on chain for v9).
-          // Reject rather than mint a free app. Legacy (v1-v8) always has a minPrice
-          // floor, so this only ever catches the un-bootstrapped v9 case.
-          log.warn(`App ${hash} registration rejected: pricing not available at height ${height}`);
-        } else if (BigInt(valueSat) >= requiredSats) {
-          // The app's instance identity, minted here because this is the one place
-          // that holds both halves: the name being registered and the transaction
-          // registering it. An update never reaches this branch, so it can never
-          // re-mint one against its own txid.
-          const uuid = mintAppUuid(instantiated.name, txid);
-          const registered = InstantiatedSpec.fromEvent({
-            ...confirmedEvent.toInstantiatedSpec(),
-            uuid,
-            identity: identityFromUuid(uuid),
-          });
-          await insertAppSpecifications(registered.serialize());
-          await processPendingUpdates(instantiated.name);
-        } else {
-          log.warn(`App ${hash} registration underpaid: ${valueSat} < ${requiredSats}`);
-        }
-      } else {
-        // The state this update supersedes, and so what it is priced against.
-        // Each regime resolves it its own way — this message is already stored
-        // above, and whether that matters is a property of the economics, not of
-        // this function.
-        const regime = await pricingRegime.regimeFor(spec);
-        const prevMessage = await regime.supersededMessage(spec.name, {
-          height, timestamp: tempMessage.timestamp,
-        });
-        if (!prevMessage) {
-          log.error(`Last permanent message for ${spec.name} not found`);
-          return true;
-        }
-        const prevSpecs = prevMessage.appSpecifications;
-        // The previous spec is priced as it stands too, for the same reason.
-        const prevSpec = await deserializeSpec(prevSpecs);
-        if (!prevSpec) {
-          log.error(`checkAndRequestApp - could not read previous spec for ${spec.name} to compute update fee`);
-          return true;
-        }
-        // The unused-time credit refunds what is actually LEFT, so its basis is
-        // the standing term on the app row - the message chain stamps every
-        // permanent message with its own block, and after free updates (which
-        // keep the term) that stamp overstates the remaining time and the
-        // credit refunds seconds already consumed.
-        const requiredSats = await computeUpdateFee(
-          spec, prevSpec, height, prevMessage.height,
-          currentState?.registeredAt ?? prevMessage.registeredAt ?? 0, confirmedBlockTime,
-        );
-        if (requiredSats === null) {
-          // Free-shaped, allowance spent: refused regardless of the payment
-          // attached - money alone cannot convert an update that asks for
-          // nothing into a term purchase. The owner's pay path is to ask for
-          // something in the signed spec (time or resources), or wait for the
-          // free-update window to roll.
-          log.warn(`App ${hash} update refused: free-update allowance exhausted and the update buys nothing`);
-        } else if (BigInt(valueSat) >= requiredSats) {
-          const stored = instantiatedForStorage(
-            InstantiatedSpec, confirmedEvent, requiredSats,
-            currentState?.registeredAt ?? prevMessage.registeredAt ?? null,
-          );
-          await updateAppSpecifications(stored.serialize());
-        } else {
-          log.warn(`App ${hash} update underpaid: ${valueSat} < ${requiredSats}`);
-        }
-      }
-    } catch (pricingError) {
-      const { ValidationError } = await getSpec();
-      const kind = ValidationError && pricingError instanceof ValidationError
-        // The spec reached the pricer and the pricer refused it. That is the message's
-        // own content being wrong, not pricing being unavailable — nothing about this
-        // app will ever price, so there is nothing to retry.
-        ? 'the spec cannot be priced'
-        // Anything else is ours: a regime with no implementation for the declared
-        // model, a price history that is not in force, a coding fault in the pricer.
-        : 'PRICING/POLICY FAILURE - not a message problem';
-      log.error(
-        `checkAndRequestApp - ${kind}: ${spec.name} (${hash}) at height ${height}. `
-        + `The permanent message is stored but the app registry was NOT updated: ${pricingError.message}`,
-      );
-      log.error(pricingError);
-      // True, not false: the message resolved. Answering false would send the node
-      // hunting the network for a message it already holds, and would say nothing
-      // about the write that was actually lost — the line above is where that lives.
-      return true;
-    }
-
     return true;
   } catch (error) {
     log.error(`Error checking and requesting app ${hash}:`, error);
@@ -761,8 +498,6 @@ module.exports = {
   getIngressAttestationsByApp,
   checkAndRequestApp,
   checkAndRequestMultipleApps,
-  computeRegistrationFee,
-  computeUpdateFee,
   continuousFluxAppHashesCheck,
   triggerAppHashesCheckAPI,
 };

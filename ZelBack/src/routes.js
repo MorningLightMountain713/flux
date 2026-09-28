@@ -1172,12 +1172,6 @@ module.exports = (app) => {
   app.get('/apps/createfluxnetwork', asyncRoute((req, res) => {
     return appController.createFluxNetworkAPI(req, res);
   }));
-  app.get('/apps/rescanglobalappsinformation/:blockheight?/:removelastinformation?', asyncRoute((req, res) => {
-    return registryManager.rescanGlobalAppsInformationAPI(req, res);
-  }));
-  app.get('/apps/reindexglobalappsinformation', asyncRoute((req, res) => {
-    return registryManager.reindexGlobalAppsInformationAPI(req, res);
-  }));
   app.get('/apps/reindexglobalappslocation', asyncRoute((req, res) => {
     return registryManager.reindexGlobalAppsLocationAPI(req, res);
   }));

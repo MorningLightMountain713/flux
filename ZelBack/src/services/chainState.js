@@ -111,7 +111,8 @@ async function setScannedHeight(database, height) {
 /**
  * Deletes every chain-derived row above a height: app payment records, the
  * decisions of the messages they paid for, legacy and v9 soft-fork rows, and
- * with `rescanGlobalApps` the stored app messages and registry rows.
+ * with `rescanGlobalApps` the stored app messages. The registry follows the
+ * decisions at the next full pass.
  * @param {number} height
  * @param {boolean} rescanGlobalApps
  */
@@ -132,7 +133,6 @@ async function deleteAbove(height, rescanGlobalApps) {
     log.info('Rescanning Apps!');
     const databaseGlobal = dbopen.db(config.get('database.appsglobal.database'));
     await dbHelper.removeDocumentsFromCollection(databaseGlobal, config.get('database.appsglobal.collections.appsMessages'), query);
-    await dbHelper.removeDocumentsFromCollection(databaseGlobal, config.get('database.appsglobal.collections.appsInformation'), query);
   }
 }
 

@@ -102,11 +102,11 @@ describe('chainState', () => {
       }
     });
 
-    it('deletes stored app messages and registry rows when asked to rescan apps', async () => {
+    it('deletes stored app messages when asked to rescan apps, and leaves the registry to its owner', async () => {
       await chainState.rewind('test', 900, { rescanGlobalApps: true });
 
       sinon.assert.calledWithMatch(removeStub, sinon.match.object, 'zelappsmessages', { height: { $gt: 900 } });
-      sinon.assert.calledWithMatch(removeStub, sinon.match.object, 'zelappsinformation', { height: { $gt: 900 } });
+      sinon.assert.neverCalledWithMatch(removeStub, sinon.match.object, 'zelappsinformation');
     });
 
     it('builds both history sets before installing either', async () => {

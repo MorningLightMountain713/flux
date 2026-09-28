@@ -9,7 +9,7 @@ const fluxEventBus = require('../utils/fluxEventBus');
 const dockerService = require('../dockerService');
 const appsRepository = require('../appDatabase/appsRepository');
 const { getSpecBackend } = require('../utils/specLibs');
-const registryManager = require('../appDatabase/registryManager');
+const appRegistry = require('../appDatabase/appRegistry');
 const appQueryService = require('../appQuery/appQueryService');
 const appDockerNetwork = require('../appNetwork/appDockerNetwork');
 const playgroundRunner = require('../appPlayground/playgroundRunner');
@@ -104,60 +104,20 @@ async function dockerOrphanSweep() {
 }
 
 /**
- * Registry hygiene: drop expired registrations from the global app registry,
- * their install-error records (locations AND archived broadcasts, so message
- * sync cannot redistribute errors for a dead app - the respec path removes
- * both for the same reason), and orphaned content manifests. This sweep never
- * uninstalls anything - removing an expired LOCAL install is the
+ * Registry hygiene: the registry owner drops expired registrations and their
+ * install-error records, and orphaned content manifests are reaped. This sweep
+ * never uninstalls anything - removing an expired LOCAL install is the
  * specReconciler's job (its per-app ladder, per block).
  * @returns {Promise<object>} sweep summary
  */
 async function registryExpirySweep() {
-  let explorerHeight = null;
-  try {
-    explorerHeight = await registryManager.getScannedHeight();
-  } catch (error) {
-    log.info('appJanitor - registry expiry skipped: scanning not initiated');
-    return { skipped: 'scanning not initiated' };
-  }
-
-  const nowSeconds = Math.floor(Date.now() / 1000);
-  const candidates = await appsRepository.listGlobalAppInfo();
-
-  // One unjudgeable row must not stop every other app expiring. The library
-  // refuses a height, expire or ttl it cannot do arithmetic on rather than
-  // returning the false a NaN comparison produces, so the refusal is a throw
-  // and this sweep is a single pass over the whole registry.
-  //
-  // Such a row is kept, never expired: removing a global registration on a
-  // verdict nothing could compute is the worse of the two wrong answers, and it
-  // cannot be undone. The warn is what makes it visible, since keeping it is
-  // otherwise indistinguishable from the app being alive.
-  const unjudgeable = [];
-  const appsToExpire = candidates.filter((spec) => {
-    try {
-      return spec.isExpired(nowSeconds, explorerHeight);
-    } catch (error) {
-      unjudgeable.push(spec.name);
-      log.warn(`appJanitor - cannot determine expiry for ${spec.name}, keeping it: ${error.message}`);
-      return false;
-    }
-  });
-
-  // eslint-disable-next-line no-restricted-syntax
-  for (const app of appsToExpire) {
-    log.info(`appJanitor - expiring global registration of ${app.name}`);
-    // eslint-disable-next-line no-await-in-loop
-    await appsRepository.removeGlobalAppInfo(app.name);
-    // eslint-disable-next-line no-await-in-loop
-    await appsRepository.removeAppInstallingErrorRecords(app.name);
-  }
+  const { expired, unjudgeable } = await appRegistry.sweepExpired();
 
   const { reaped } = await appsRepository.reapOrphanedContentManifests();
   if (reaped > 0) log.info(`appJanitor - reaped ${reaped} content manifest(s) for removed apps`);
 
   return {
-    expired: appsToExpire.length,
+    expired: expired.length,
     manifestsReaped: reaped,
     // Reported as well as logged, so a caller sees an incomplete pass without
     // reading the log for it.

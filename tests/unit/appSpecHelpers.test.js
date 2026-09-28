@@ -10,6 +10,7 @@ const dbHelper = require('../../ZelBack/src/services/dbHelper');
 const daemonStatus = require('../../ZelBack/src/services/daemonService/daemonStatus');
 const appsRepository = require('../../ZelBack/src/services/appDatabase/appsRepository');
 const specCutover = require('../../ZelBack/src/services/utils/specCutover');
+const pricingRegime = require('../../ZelBack/src/services/pricing/pricingRegime');
 const {
   loadSpecLibrary, V8_SUBMISSION, v1Spec, v8Spec, v9Spec, sealedV9Spec, instantiatedSpec,
 } = require('./fixtures/fluxSpec');
@@ -763,16 +764,13 @@ describe('appSpecHelpers tests', () => {
 
       const quote = await helpers.getAppFiatAndFluxPrice(newSpec);
 
-      // eslint-disable-next-line global-require
-      const messageVerifier = require('../../ZelBack/src/services/appMessaging/messageVerifier');
-      const consensusSats = await messageVerifier.computeUpdateFee(
-        newSpec,
-        prevSpec,
-        200,
-        existing.height,
-        existing.registeredAt,
-        Math.floor(Date.now() / 1000),
-      );
+      const consensusSats = await pricingRegime.updateFee(newSpec, prevSpec, {
+        height: 200,
+        prevHeight: existing.height,
+        prevRegisteredAt: existing.registeredAt,
+        nowBlockTime: Math.floor(Date.now() / 1000),
+        recentEvents: async () => [],
+      });
 
       expect(quote.flux).to.be.greaterThan(0);
       expect(Number(consensusSats) / 1e8).to.equal(quote.flux);
@@ -785,16 +783,13 @@ describe('appSpecHelpers tests', () => {
 
       const quote = await helpers.getAppFiatAndFluxPrice(newSpec);
 
-      // eslint-disable-next-line global-require
-      const messageVerifier = require('../../ZelBack/src/services/appMessaging/messageVerifier');
-      const consensusSats = await messageVerifier.computeUpdateFee(
-        newSpec,
-        prevSpec,
-        200,
-        existing.height,
-        existing.registeredAt,
-        Math.floor(Date.now() / 1000),
-      );
+      const consensusSats = await pricingRegime.updateFee(newSpec, prevSpec, {
+        height: 200,
+        prevHeight: existing.height,
+        prevRegisteredAt: existing.registeredAt,
+        nowBlockTime: Math.floor(Date.now() / 1000),
+        recentEvents: async () => [],
+      });
 
       expect(quote.flux).to.equal(0);
       expect(consensusSats).to.equal(0n);

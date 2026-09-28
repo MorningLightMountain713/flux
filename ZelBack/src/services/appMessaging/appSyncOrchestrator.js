@@ -8,7 +8,6 @@ const appHashSyncService = require('./appHashSyncService');
 const contentManifestSyncService = require('./contentManifestSyncService');
 const ingressAttestationSyncService = require('./ingressAttestationSyncService');
 const peerNotification = require('./peerNotification');
-const registryManager = require('../appDatabase/registryManager');
 const globalState = require('../utils/globalState');
 const capabilities = require('../utils/capabilities');
 const peerCodec = require('../utils/peerCodec');
@@ -139,7 +138,6 @@ class AppSyncOrchestrator {
   #reevaluate = false;
   #explorerSynced = false;
   #hashSyncComplete = false;
-  #dbRebuilt = false;
   #blocksSinceSyncStarted = 0;
 
   /**
@@ -917,11 +915,10 @@ class AppSyncOrchestrator {
 
   #enterDegraded() {
     this.#setState(STATES.DEGRADED);
-    // The resync repeats the hash sync and the rebuild. appMessagesSynced and
+    // The resync repeats the hash sync. appMessagesSynced and
     // appRegistryConsistent stay as they are: a peer dip changes neither the chain
     // nor the stored messages the list is derived from.
     this.#hashSyncComplete = false;
-    this.#dbRebuilt = false;
     this.#resetSyncState();
     log.warn('AppSyncOrchestrator - Degraded, pausing spawner');
   }
@@ -1127,7 +1124,6 @@ class AppSyncOrchestrator {
       capabilities.claim('appMessagesSynced', 'appSyncOrchestrator').raise(`hash sync ran, ${result.missing} unresolved`);
       this.#nextHashRetryHeight = result.nextRetryHeight ?? (this.#lastBlockHeight + FALLBACK_RECHECK_BLOCKS);
       await this.#writeVersionMarker();
-      await this.#rebuildDb();
       fluxEventBus.publish('hashSync:complete', { attempt: this.#hashSyncAttempts, missing: result.missing });
     } catch (error) {
       const retryInMs = Math.min(HASH_SYNC_RETRY_MAX_MS, HASH_SYNC_RETRY_MIN_MS * (2 ** (this.#hashSyncAttempts - 1)));
@@ -1141,18 +1137,6 @@ class AppSyncOrchestrator {
       }, retryInMs);
     } finally {
       this.#syncInProgress = false;
-    }
-  }
-
-  async #rebuildDb() {
-    try {
-      log.info('AppSyncOrchestrator - Rebuilding globalAppsInformation');
-      await registryManager.reindexGlobalAppsInformation();
-      this.#dbRebuilt = true;
-      capabilities.claim('appRegistryConsistent', 'appSyncOrchestrator').raise('registry rebuilt');
-      log.info('AppSyncOrchestrator - DB ready');
-    } catch (error) {
-      log.error(`AppSyncOrchestrator - DB rebuild failed: ${error.message}`);
     }
   }
 
@@ -1336,16 +1320,9 @@ class AppSyncOrchestrator {
     // answers from what it has rather than refusing forever.
     this.#publishStateSyncAuthority();
     if (!this.#hashSyncComplete && !blockTimerExpired) return;
-    if (!this.#dbRebuilt && !blockTimerExpired) return;
     // The permanent manifest register must converge before the spawner starts a slot app
     // (parallel to the hash-sync gate); the block timer is the same backstop.
     if (!this.#manifestSyncComplete && !blockTimerExpired) return;
-
-    // Block timer fired but hash sync / DB rebuild never completed — rebuild from whatever data we have
-    if (blockTimerExpired && !this.#dbRebuilt) {
-      await this.#rebuildDb();
-      if (!this.#dbRebuilt) return;
-    }
 
     if (!this.#isStateSyncReady()) return;
 

@@ -1575,9 +1575,6 @@ async function initiateBlockProcessor(options = {}) {
         const resultE = await dbHelper.dropCollection(databaseGlobal, config.get('database.appsglobal.collections.appsMessages')).catch((error) => {
           if (error.message !== 'ns not found') throw error;
         });
-        const resultF = await dbHelper.dropCollection(databaseGlobal, config.get('database.appsglobal.collections.appsInformation')).catch((error) => {
-          if (error.message !== 'ns not found') throw error;
-        });
         const resultH = await dbHelper.dropCollection(databaseGlobal, config.get('database.appsglobal.collections.appsInstallingLocations')).catch((error) => {
           if (error.message !== 'ns not found') throw error;
         });
@@ -1593,7 +1590,7 @@ async function initiateBlockProcessor(options = {}) {
         const resultL = await dbHelper.dropCollection(databaseGlobal, config.get('database.appsglobal.collections.appsInstallingBroadcasts')).catch((error) => {
           if (error.message !== 'ns not found') throw error;
         });
-        log.info(resultE, resultF, resultH, resultI, resultJ, resultK, resultL);
+        log.info(resultE, resultH, resultI, resultJ, resultK, resultL);
         await databaseGlobal.collection(config.get('database.appsglobal.collections.appStateEvents')).createIndex({ expireAt: 1 }, { expireAfterSeconds: 0 });
         await databaseGlobal.collection(config.get('database.appsglobal.collections.appStateEvents')).createIndex({ ip: 1, type: 1, dedupKey: 1 }, { unique: true });
         await databaseGlobal.collection(config.get('database.appsglobal.collections.appStateEvents')).createIndex({ broadcastedAt: 1 });

@@ -25,8 +25,9 @@ const { decideName, RULE_VERSION } = require('./decisionRule');
  *
  * A wake names the hashes a route resolved; a full pass compares every stored
  * hash with every decided one, and runs whenever chain state becomes consistent
- * (every boot, every rewind) and when the scan first catches up (payment
- * positions are complete from then).
+ * (every boot, every rewind) and whenever the scan catches up (payment
+ * positions are complete from its first catch-up, and the payments a rewind
+ * took away are recorded again).
  *
  * For each name, in order: the triggering message's decision is removed, the
  * later decisions are written, the decisions after a message the rule could not
@@ -42,6 +43,7 @@ const appsHashesCollection = config.get('database.daemon.collections.appsHashes'
 const NAMES_PER_BATCH = 500;
 
 const decidedListeners = [];
+const fullPassListeners = [];
 const pendingHashes = new Set();
 let fullPassPending = false;
 let running = null;
@@ -76,6 +78,19 @@ function onDecided(fn) {
   return () => {
     const index = decidedListeners.indexOf(fn);
     if (index !== -1) decidedListeners.splice(index, 1);
+  };
+}
+
+/**
+ * Registers `fn()`, called after each full pass completes.
+ * @param {() => Promise<void>} fn
+ * @returns {() => void} unsubscribe
+ */
+function onFullPass(fn) {
+  fullPassListeners.push(fn);
+  return () => {
+    const index = fullPassListeners.indexOf(fn);
+    if (index !== -1) fullPassListeners.splice(index, 1);
   };
 }
 
@@ -273,6 +288,12 @@ async function runOnce() {
   }
   if (grouped.length) log.info(`decider - ${written} decision(s) over ${grouped.length} name(s)${full ? ', full pass' : ''}`);
   if (unpositioned) log.warn(`decider - ${unpositioned} name(s) wait: a payment record has no position yet`);
+  if (full) {
+    for (const fn of fullPassListeners) {
+      // eslint-disable-next-line no-await-in-loop
+      await fn();
+    }
+  }
 }
 
 function schedule() {
@@ -308,7 +329,7 @@ function wakeAll() {
 
 /**
  * Starts deciding: a full pass each time chain state becomes consistent and
- * when the scan first catches up, and a pass for whatever the store routes
+ * each time the scan catches up, and a pass for whatever the store routes
  * resolve.
  */
 function start() {
@@ -316,7 +337,7 @@ function start() {
   started = true;
   confirmedMessageStore.onStored(wake);
   capabilities.onUp('chainStateConsistent', wakeAll);
-  capabilities.onFirstUp('explorerSynced', wakeAll);
+  capabilities.onUp('explorerSynced', wakeAll);
   if (capabilities.isUp('chainStateConsistent')) wakeAll();
 }
 
@@ -331,6 +352,7 @@ async function idle() {
 module.exports = {
   idle,
   onDecided,
+  onFullPass,
   start,
   wake,
   wakeAll,

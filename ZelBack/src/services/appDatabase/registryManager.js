@@ -2,7 +2,6 @@
 
 const config = require('config');
 const dbHelper = require('../dbHelper');
-const appsMaintenance = require('./appsMaintenance');
 const appsRepository = require('./appsRepository');
 const foundingCommittee = require('../appMesh/foundingCommittee');
 const log = require('../../lib/log');
@@ -15,23 +14,16 @@ const specCutover = require('../utils/specCutover');
 const legacyTransportProvider = require('../providers/FluxOSLegacyTransportProvider');
 const transportCryptoProvider = require('../providers/FluxOSTransportProvider');
 const { resolveStorageRefs } = require('../utils/fluxStorageRefs');
-const fluxEventBus = require('../utils/fluxEventBus');
-const contentSlotService = require('../appLifecycle/contentSlotService');
 const {
-  globalAppsInformation,
-  localAppsInformation,
   globalAppsMessages,
   globalAppsInstallingLocations,
   globalAppsInstallingBroadcasts,
   globalAppsInstallingErrorsLocations,
-  globalAppsInstallingErrorsBroadcasts,
   appsHashesCollection,
   scannedHeightCollection,
   INSTALLING_EXPIRY_MS,
 } = require('../utils/appConstants');
 const { Privilege, authOf } = require('../utils/privileges');
-
-let reindexRunning = false;
 
 // Control-plane hook fired after a global app spec is committed. Wired by
 // serviceManager to the spawner so a spec this node must install can wake the
@@ -63,16 +55,14 @@ function emitSpecStored(specDoc) {
 }
 
 /**
- * The single funnel for every global app-spec write: persist through the registry,
- * then fire the spec-stored hook. Routing all four store paths through here keeps
- * the spawner-wake notification from being forgotten by any one of them, and keeps
- * the write going through appsRepository rather than raw dbHelper.
- * @param {object} specDoc - serialized spec doc to persist
- * @param {{upsert?: boolean}} [options] - upsert:false for update-only writes
+ * Writes a registry row whose spec changed, then runs the effects every such
+ * write carries: the founding anchor and component view, and the spawner wake.
+ * Called by the registry owner (appRegistry) alone.
+ * @param {object} specDoc - the serialized row
  * @returns {Promise<void>}
  */
-async function storeGlobalSpec(specDoc, options) {
-  await appsRepository.upsertGlobalAppInfo(specDoc, options);
+async function storeGlobalSpec(specDoc) {
+  await appsRepository.replaceGlobalAppRow(specDoc);
   // Referee-side founding state derives from public metadata alone (name,
   // height, version), so every node records the anchor, encrypted specs
   // included; the component mapping is host-side and follows below.
@@ -1108,36 +1098,6 @@ async function checkApplicationRegistrationNameConflicts(appSpecFormatted, hash)
 }
 
 /**
- * Update app specifications for rescan/reindex
- * @param {object} appSpecs - Application specifications
- * @returns {Promise<boolean>} Update result
- */
-async function updateAppSpecsForRescanReindex(appSpecs) {
-  const existingHeight = await appsRepository.getGlobalAppHeight(appSpecs.name);
-  if (existingHeight === null || existingHeight < appSpecs.height) {
-    await storeGlobalSpec(appSpecs);
-  }
-  return true;
-}
-
-/**
- * Store app specification in permanent storage
- * @param {object} appSpec - Application specification
- * @returns {Promise<object>} Storage result
- */
-async function storeAppSpecificationInPermanentStorage(appSpec) {
-  try {
-    await storeGlobalSpec(appSpec);
-    log.info(`App specification stored permanently for ${appSpec.name}`);
-    return { status: 'success', message: 'App specification stored' };
-  } catch (error) {
-    log.error(`Error storing app specification: ${error.message}`);
-    throw error;
-  }
-}
-
-
-/**
  * Get all apps information (both global and local)
  * @returns {Promise<Array>} Array of all app information
  */
@@ -1172,62 +1132,6 @@ async function getRunningApps() {
  */
 async function getRunningAppIpList(ip) {
   return appsRepository.appLocationFromEvents({ host: ip });
-}
-
-/**
- * Rebuild the global apps information collection from messages collection.
- *
- * Thin wrapper around appsMaintenance.reindexGlobalAppsInformation, which
- * does the heavy lifting in a single mongo aggregation + chunked bulk
- * inserts. That version filters expired apps inside the aggregation (full
- * PON fork rate adjustment), so no separate expire pass is needed here.
- *
- * @returns {Promise<boolean>} True on success
- */
-async function reindexGlobalAppsInformation() {
-  try {
-    if (reindexRunning) {
-      return 'Previous app reindex not yet finished. Skipping.';
-    }
-    reindexRunning = true;
-    log.info('Reindexing global application list');
-
-    const db = dbHelper.databaseConnection();
-    const appsGlobalDb = db.db(config.get('database.appsglobal.database'));
-    const appsLocalDb = db.db(config.get('database.appslocal.database'));
-    const daemonDb = db.db(config.get('database.daemon.database'));
-
-    const scannedHeightResult = await dbHelper.findOneInDatabase(
-      daemonDb,
-      scannedHeightCollection,
-      { generalScannedHeight: { $gte: 0 } },
-      { projection: { _id: 0, generalScannedHeight: 1 } },
-    );
-    if (!scannedHeightResult) {
-      throw new Error('Scanning not initiated');
-    }
-    const scannedHeight = serviceHelper.ensureNumber(
-      scannedHeightResult.generalScannedHeight,
-    );
-
-    await appsMaintenance.reindexGlobalAppsInformation(
-      appsGlobalDb,
-      appsLocalDb,
-      globalAppsMessages,
-      globalAppsInformation,
-      globalAppsInstallingErrorsLocations,
-      localAppsInformation,
-      scannedHeight,
-    );
-
-    log.info('Reindexing of global application list finished.');
-    return true;
-  } catch (error) {
-    log.error(error);
-    throw error;
-  } finally {
-    reindexRunning = false;
-  }
 }
 
 /**
@@ -1373,183 +1277,15 @@ async function reindexGlobalAppsLocationAPI(req, res) {
   }
 }
 
-/**
- * To reindex global apps information via API. Only accessible by admins and Flux team members.
- * @param {import('express').Request} req
- * @param {import('express').Response} res
- */
-async function reindexGlobalAppsInformationAPI(req, res) {
-  try {
-    const authorized = await verificationHelper.verifyPrivilege(Privilege.NODE_OPERATOR_OR_FLUX_TEAM, authOf(req));
-    if (authorized === true) {
-      await reindexGlobalAppsInformation();
-      const message = messageHelper.createSuccessMessage('Reindex successfull');
-      res.json(message);
-    } else {
-      const errMessage = messageHelper.errUnauthorizedMessage();
-      res.json(errMessage);
-    }
-  } catch (error) {
-    log.error(error);
-    const errorResponse = messageHelper.createErrorMessage(
-      error.message || error,
-      error.name,
-      error.code,
-    );
-    res.json(errorResponse);
-  }
-}
-
-/**
- * Rescans global apps information from messages collection starting from a specific height
- * @param {number} height - Starting block height for rescan (default 0)
- * @param {boolean} removeLastInformation - Whether to remove existing information before rescanning (default false)
- * @returns {Promise<boolean>} True if successful
- */
-async function rescanGlobalAppsInformation(height = 0, removeLastInformation = false) {
-  try {
-    const db = dbHelper.databaseConnection();
-    const database = db.db(config.get('database.appsglobal.database'));
-
-    await dbHelper.dropCollection(database, globalAppsInformation).catch((error) => {
-      if (error.message !== 'ns not found') {
-        throw error;
-      }
-    });
-
-    const query = { height: { $gte: height } };
-    const projection = { projection: { _id: 0 } };
-    const results = await dbHelper.findInDatabase(database, globalAppsMessages, query, projection);
-
-    if (removeLastInformation === true) {
-      await dbHelper.removeDocumentsFromCollection(database, globalAppsInformation, query);
-    }
-
-    // eslint-disable-next-line no-restricted-syntax
-    for (const message of results) {
-      const updateForSpecifications = message.appSpecifications;
-      updateForSpecifications.hash = message.hash;
-      updateForSpecifications.height = message.height;
-      // eslint-disable-next-line no-await-in-loop
-      await updateAppSpecsForRescanReindex(updateForSpecifications);
-    }
-    return true;
-  } catch (error) {
-    log.error(error);
-    throw error;
-  }
-}
-
-/**
- * To rescan global apps information via API. Only accessible by admins and Flux team members.
- * @param {import('express').Request} req
- * @param {import('express').Response} res
- */
-async function rescanGlobalAppsInformationAPI(req, res) {
-  try {
-    const authorized = await verificationHelper.verifyPrivilege(Privilege.NODE_OPERATOR_OR_FLUX_TEAM, authOf(req));
-    if (authorized === true) {
-      let { blockheight } = req.params; // we accept both help/command and help?command=getinfo
-      blockheight = blockheight || req.query.blockheight;
-      if (!blockheight) {
-        const errMessage = messageHelper.createErrorMessage('No blockheight provided');
-        res.json(errMessage);
-        return;
-      }
-      blockheight = serviceHelper.ensureNumber(blockheight);
-      const dbopen = dbHelper.databaseConnection();
-      const database = dbopen.db(config.get('database.daemon.database'));
-      const query = { generalScannedHeight: { $gte: 0 } };
-      const projection = {
-        projection: {
-          _id: 0,
-          generalScannedHeight: 1,
-        },
-      };
-      const currentHeight = await dbHelper.findOneInDatabase(database, scannedHeightCollection, query, projection);
-      if (!currentHeight) {
-        throw new Error('No scanned height found');
-      }
-      if (currentHeight.generalScannedHeight <= blockheight) {
-        throw new Error('Block height shall be lower than currently scanned');
-      }
-      if (blockheight < 0) {
-        throw new Error('BlockHeight lower than 0');
-      }
-      let { removelastinformation } = req.params;
-      removelastinformation = removelastinformation || req.query.removelastinformation || false;
-      removelastinformation = serviceHelper.ensureBoolean(removelastinformation);
-
-      await rescanGlobalAppsInformation(blockheight, removelastinformation);
-      const message = messageHelper.createSuccessMessage('Rescan successfull');
-      res.json(message);
-    } else {
-      const errMessage = messageHelper.errUnauthorizedMessage();
-      res.json(errMessage);
-    }
-  } catch (error) {
-    log.error(error);
-    const errorResponse = messageHelper.createErrorMessage(
-      error.message || error,
-      error.name,
-      error.code,
-    );
-    res.json(errorResponse);
-  }
-}
-
 async function countAppInstallingErrors(hash) {
   const dbopen = dbHelper.databaseConnection();
   const database = dbopen.db(config.get('database.appsglobal.database'));
   return dbHelper.countInDatabase(database, globalAppsInstallingErrorsLocations, { hash });
 }
 
-async function insertAppSpecifications(appSpecs) {
-  try {
-    const db = dbHelper.databaseConnection();
-    const database = db.db(config.get('database.appsglobal.database'));
-    const existingHeight = await appsRepository.getGlobalAppHeight(appSpecs.name);
-    if (existingHeight !== null && existingHeight >= appSpecs.height) return true;
-    await storeGlobalSpec(appSpecs);
-    fluxEventBus.publish('app:specStored', { name: appSpecs.name, hash: appSpecs.hash });
-    // Best-effort, decoupled from the hot path: now that this app's spec is known,
-    // promote any manifest we were holding quarantined for it (the non-running-node
-    // case, §9.2c). setImmediate isolates the benchmark-channel unseal from app-message
-    // processing; a failure is logged, never blocks or fails the spec store.
-    setImmediate(() => contentSlotService.promoteQuarantinedManifest(appSpecs.name).catch((e) => log.warn(`contentSlot: promote-on-confirm for ${appSpecs.name} failed - ${e.message ?? e}`)));
-    await dbHelper.removeDocumentsFromCollection(database, globalAppsInstallingErrorsLocations, { name: appSpecs.name });
-    await dbHelper.removeDocumentsFromCollection(database, globalAppsInstallingErrorsBroadcasts, { 'data.name': appSpecs.name });
-    return true;
-  } catch (error) {
-    log.error(`insertAppSpecifications failed for ${appSpecs.name}: ${error.message}`);
-    return false;
-  }
-}
-
-async function updateAppSpecifications(appSpecs) {
-  try {
-    const db = dbHelper.databaseConnection();
-    const database = db.db(config.get('database.appsglobal.database'));
-    const existingHeight = await appsRepository.getGlobalAppHeight(appSpecs.name);
-    if (existingHeight === null || existingHeight >= appSpecs.height) return true;
-    await storeGlobalSpec(appSpecs, { upsert: false });
-    fluxEventBus.publish('app:specStored', { name: appSpecs.name, hash: appSpecs.hash });
-    // Best-effort, decoupled from the hot path: now that this app's spec is known,
-    // promote any manifest we were holding quarantined for it (the non-running-node
-    // case, §9.2c). setImmediate isolates the benchmark-channel unseal from app-message
-    // processing; a failure is logged, never blocks or fails the spec store.
-    setImmediate(() => contentSlotService.promoteQuarantinedManifest(appSpecs.name).catch((e) => log.warn(`contentSlot: promote-on-confirm for ${appSpecs.name} failed - ${e.message ?? e}`)));
-    await dbHelper.removeDocumentsFromCollection(database, globalAppsInstallingErrorsLocations, { name: appSpecs.name });
-    await dbHelper.removeDocumentsFromCollection(database, globalAppsInstallingErrorsBroadcasts, { 'data.name': appSpecs.name });
-    return true;
-  } catch (error) {
-    log.error(`updateAppSpecifications failed for ${appSpecs.name}: ${error.message}`);
-    return false;
-  }
-}
-
 module.exports = {
   getScannedHeight,
+  storeGlobalSpec,
   setOnSpecStored,
   getAppHashes,
   appLocation,
@@ -1575,19 +1311,11 @@ module.exports = {
   getGlobalAppsSpecifications,
   availableApps,
   checkApplicationRegistrationNameConflicts,
-  updateAppSpecsForRescanReindex,
-  storeAppSpecificationInPermanentStorage,
   getAllAppsInformation,
   getRunningApps,
   getRunningAppIpList,
-  reindexGlobalAppsInformation,
-  rescanGlobalAppsInformation,
   reconstructAppMessagesHashCollection,
   reconstructAppMessagesHashCollectionAPI,
   reindexGlobalAppsLocationAPI,
-  reindexGlobalAppsInformationAPI,
-  rescanGlobalAppsInformationAPI,
   countAppInstallingErrors,
-  insertAppSpecifications,
-  updateAppSpecifications,
 };

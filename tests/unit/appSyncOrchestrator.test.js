@@ -29,7 +29,6 @@ describe('AppSyncOrchestrator', () => {
   let logStub;
   let syncMissingHashesStub;
   let getMissingHashesStub;
-  let reindexStub;
   let globalStateStub;
   let checkAndNotifyStub;
   let startBroadcastingStub;
@@ -147,7 +146,6 @@ describe('AppSyncOrchestrator', () => {
     logStub = { info: sinon.stub(), warn: sinon.stub(), error: sinon.stub() };
     syncMissingHashesStub = sinon.stub().resolves({ resolved: 0, missing: 0, unreachable: 0, nextRetryHeight: null });
     getMissingHashesStub = sinon.stub().resolves([]);
-    reindexStub = sinon.stub().resolves();
     // The real module. appRegistryConsistent stays down - the assertions below are
     // about the orchestrator raising it - with the explorer synced and the boot
     // reconcile decided, so a test does not sit on a capability nothing here raises.
@@ -193,9 +191,6 @@ describe('AppSyncOrchestrator', () => {
         checkAndNotifyPeersOfRunningApps: checkAndNotifyStub,
         startBroadcasting: startBroadcastingStub,
         stopBroadcasting: sinon.stub().resolves(),
-      },
-      '../appDatabase/registryManager': {
-        reindexGlobalAppsInformation: reindexStub,
       },
       '../utils/globalState': globalStateStub,
       '../utils/peerCodec': {
@@ -296,32 +291,16 @@ describe('AppSyncOrchestrator', () => {
       expect(syncMissingHashesStub.calledOnce).to.be.true;
     });
 
-    it('should call reindexGlobalAppsInformation after sync', async () => {
+    it('leaves appRegistryConsistent to the registry owner after a hash sync', async () => {
       const orchestrator = makeOrchestrator();
       orchestrator.start(defaultBootContext);
 
       blockEmitter.emit('blocksProcessed', 2_555_000);
       await clock.tickAsync(0);
-      expect(reindexStub.calledOnce).to.be.true;
+      expect(syncMissingHashesStub.calledOnce).to.be.true;
+      expect(capabilities.isUp('appRegistryConsistent')).to.be.false;
     });
 
-    it('should raise appRegistryConsistent after sync', async () => {
-      const orchestrator = makeOrchestrator();
-      orchestrator.start(defaultBootContext);
-
-      blockEmitter.emit('blocksProcessed', 2_555_000);
-      await clock.tickAsync(0);
-      expect(capabilities.isUp('appRegistryConsistent')).to.be.true;
-    });
-
-    it('should log DB ready after reindex', async () => {
-      const orchestrator = makeOrchestrator();
-      orchestrator.start(defaultBootContext);
-
-      blockEmitter.emit('blocksProcessed', 2_555_000);
-      await clock.tickAsync(0);
-      expect(logStub.info.calledWith('AppSyncOrchestrator - DB ready')).to.be.true;
-    });
   });
 
   describe('peer threshold events', () => {
@@ -2817,33 +2796,9 @@ describe('AppSyncOrchestrator', () => {
       }
       await clock.tickAsync(0);
 
-      // Block timer should have triggered DB rebuild and readiness
       expect(orchestrator.state).to.equal(STATES.READY);
-      expect(reindexStub.called).to.be.true;
     });
 
-    it('should not get stuck when DB rebuild fails', async () => {
-      reindexStub.rejects(new Error('reindex failed'));
-
-      const orchestrator = makeOrchestrator();
-      orchestrator.start(defaultBootContext);
-      peersUp();
-
-      blockEmitter.emit('blocksProcessed', 2_555_000);
-      await clock.tickAsync(0);
-
-      // Hash sync succeeded but DB rebuild failed
-      expect(syncMissingHashesStub.calledOnce).to.be.true;
-
-      // Block timer should still allow readiness (will retry DB rebuild)
-      for (let i = 1; i <= 260; i += 1) {
-        blockEmitter.emit('blocksProcessed', 2_555_000 + i);
-      }
-      await clock.tickAsync(0);
-
-      // The block timer fallback tries rebuildDb again
-      expect(reindexStub.callCount).to.be.greaterThan(1);
-    });
   });
 
   describe('appRegistryConsistent on fallback paths', () => {
@@ -2869,44 +2824,6 @@ describe('AppSyncOrchestrator', () => {
       expect(capabilities.isUp('appRegistryConsistent')).to.be.false;
     });
 
-    it('should raise appRegistryConsistent when too few sync peers and block timer fires', async () => {
-      getEligibleSyncPeersStub = sinon.stub().returns([]);
-
-      const orchestrator = makeOrchestrator();
-      orchestrator.start(defaultBootContext);
-      peersUp();
-
-      blockEmitter.emit('blocksProcessed', 2_555_000);
-      await clock.tickAsync(0);
-
-      for (let i = 1; i <= 260; i += 1) {
-        blockEmitter.emit('blocksProcessed', 2_555_000 + i);
-      }
-      await clock.tickAsync(0);
-
-      expect(orchestrator.state).to.equal(STATES.READY);
-      expect(capabilities.isUp('appRegistryConsistent')).to.be.true;
-    });
-
-    it('should leave appRegistryConsistent down when rebuildDb throws on fallback path', async () => {
-      syncMissingHashesStub.rejects(new Error('failed'));
-      reindexStub.rejects(new Error('reindex failed'));
-
-      const orchestrator = makeOrchestrator();
-      orchestrator.start(defaultBootContext);
-      peersUp();
-
-      blockEmitter.emit('blocksProcessed', 2_555_000);
-      await clock.tickAsync(0);
-
-      for (let i = 1; i <= 260; i += 1) {
-        blockEmitter.emit('blocksProcessed', 2_555_000 + i);
-      }
-      await clock.tickAsync(0);
-
-      expect(capabilities.isUp('appRegistryConsistent')).to.be.false;
-      expect(orchestrator.state).to.not.equal(STATES.READY);
-    });
   });
 
   describe('hash retry scheduling', () => {

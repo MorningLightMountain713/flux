@@ -18,6 +18,7 @@ const fluxNetworkMonitor = require('./fluxNetworkMonitor');
 const nodeDosState = require('./nodeDosState');
 // App modular services - replacing appsService
 const decider = require('./appDecisions/decider');
+const appRegistry = require('./appDatabase/appRegistry');
 const decisionStore = require('./appDecisions/decisionStore');
 const appInstaller = require('./appLifecycle/appInstaller');
 const appUninstaller = require('./appLifecycle/appUninstaller');
@@ -336,9 +337,6 @@ async function startFluxFunctions() {
         // (name, replica). The collection carried no index at all, so one-row-per-app
         // rested on a racy exists-then-insert; co-located replicas need the key anyway.
         await appsRepository.prepareInstalledAppsCollection();
-        await appsRepository.backfillGlobalAppUuids().catch((error) => {
-          log.error(`Deriving instance identities failed: ${error.message}`);
-        });
         // Rows written before the identifier index existed. The resolver lives here
         // rather than in the repository because building a deployment needs the
         // resolved spec, and the repository must not depend on what resolves it.
@@ -442,9 +440,13 @@ async function startFluxFunctions() {
         // not reject.
         explorerService.initiateBlockProcessor({ deepRestore: true });
         log.info('Flux Block Processing Service started');
-        // Decides stored app messages whenever chain state is consistent. Its
-        // collection is prepared with the local database.
-        capabilities.onFirstUp('localDbPrepared', () => decider.start());
+        // Decides stored app messages whenever chain state is consistent, and
+        // derives the app registry from the decisions. The decisions collection
+        // is prepared with the local database.
+        capabilities.onFirstUp('localDbPrepared', () => {
+          appRegistry.start();
+          decider.start();
+        });
       }),
       runOwner('apps', async () => {
         await capabilities.whenUp(['localDbPrepared', 'dockerReachable']);

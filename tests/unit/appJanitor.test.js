@@ -12,7 +12,7 @@ const operationRegistry = require('../../ZelBack/src/services/utils/operationReg
 // agree on which playground sessions are live.
 const playgroundSessionRegistry = require('../../ZelBack/src/services/appPlayground/playgroundSessionRegistry');
 const {
-  loadSpecLibrary, v8Spec, v9Spec, instantiatedSpec, assertAnswers,
+  loadSpecLibrary, v9Spec, instantiatedSpec,
 } = require('./fixtures/fluxSpec');
 
 // The spec library is real here, not stubbed - see tests/unit/fixtures/fluxSpec.js
@@ -31,14 +31,11 @@ describe('appJanitor tests', () => {
   let fluxNetworkHelperStub;
   let fluxEventBusStub;
   let appsRepositoryStub;
-  let registryManagerStub;
+  let appRegistryStub;
   let appQueryServiceStub;
   let appDockerNetworkStub;
   let appUninstallerStub;
 
-  // What registryManager.getScannedHeight() reports below. v1-v8 expiry is
-  // measured against THIS, never against wall-clock time.
-  const SCANNED_HEIGHT = 1_000_000;
   // V9_SUBMISSION's ttl is 30 days, so a row registered at this timestamp
   // (2025-07-04) is long past it against wall-clock time.
   const LONG_EXPIRED_AT = 1_751_628_800;
@@ -58,11 +55,6 @@ describe('appJanitor tests', () => {
    */
   async function v9Row(name, { registeredAt = LONG_EXPIRED_AT, height = 2_500_000 } = {}) {
     return instantiatedSpec(await v9Spec({ name }), { registeredAt, height });
-  }
-
-  /** A real v1-v8 registry row, which expires by HEIGHT. */
-  async function v8Row(name, { height }) {
-    return instantiatedSpec(await v8Spec({ name }), { height });
   }
 
   /**
@@ -118,8 +110,8 @@ describe('appJanitor tests', () => {
       removeAppInstallingErrorRecords: sinon.stub().resolves(),
       reapOrphanedContentManifests: sinon.stub().resolves({ reaped: 0, orphans: [] }),
     };
-    registryManagerStub = {
-      getScannedHeight: sinon.stub().resolves(SCANNED_HEIGHT),
+    appRegistryStub = {
+      sweepExpired: sinon.stub().resolves({ expired: [], unjudgeable: [] }),
     };
     appQueryServiceStub = {
       listAllApps: sinon.stub().resolves({ status: 'success', data: [] }),
@@ -136,7 +128,7 @@ describe('appJanitor tests', () => {
       '../fluxNetworkHelper': fluxNetworkHelperStub,
       '../utils/fluxEventBus': fluxEventBusStub,
       '../appDatabase/appsRepository': appsRepositoryStub,
-      '../appDatabase/registryManager': registryManagerStub,
+      '../appDatabase/appRegistry': appRegistryStub,
       '../appQuery/appQueryService': appQueryServiceStub,
       '../appNetwork/appDockerNetwork': appDockerNetworkStub,
       './appUninstaller': appUninstallerStub,
@@ -233,134 +225,24 @@ describe('appJanitor tests', () => {
   });
 
   describe('sweepRegistryExpiry', () => {
-    it('drops expired global rows with their error records and reaps manifests', async () => {
-      // Neither verdict is asserted onto the row: `deadapp` was registered 30+
-      // days of ttl ago and `liveapp` was registered now, and the library
-      // decides what that means.
-      appsRepositoryStub.listGlobalAppInfo.resolves([
-        await v9Row('deadapp', { registeredAt: LONG_EXPIRED_AT }),
-        await v9Row('liveapp', { registeredAt: Math.floor(Date.now() / 1000) }),
-      ]);
+    it('has the registry owner drop expired rows, reaps manifests, and reports both', async () => {
+      appRegistryStub.sweepExpired.resolves({ expired: ['deadapp'], unjudgeable: ['odd'] });
       appsRepositoryStub.reapOrphanedContentManifests.resolves({ reaped: 2, orphans: ['x', 'y'] });
 
       const result = await appJanitor.sweepRegistryExpiry();
 
-      sinon.assert.calledOnceWithExactly(appsRepositoryStub.removeGlobalAppInfo, 'deadapp');
-      sinon.assert.calledOnceWithExactly(appsRepositoryStub.removeAppInstallingErrorRecords, 'deadapp');
+      sinon.assert.calledOnce(appRegistryStub.sweepExpired);
       expect(result).to.deep.equal({
-        expired: 1, manifestsReaped: 2, unjudgeable: 0, unjudgeableApps: [],
+        expired: 1, manifestsReaped: 2, unjudgeable: 1, unjudgeableApps: ['odd'],
       });
     });
 
-    it('expires a v1-v8 row by block height, not by wall-clock time', async () => {
-      // The pre-v9 rule is `currentHeight >= height + expire` (V8_SUBMISSION's
-      // expire is 88000). Both rows below carry the SAME stale registeredAt, so
-      // a sweep that measured them the v9 way would expire both.
-      appsRepositoryStub.listGlobalAppInfo.resolves([
-        await v8Row('deadapp', { height: SCANNED_HEIGHT - 88_000 - 1 }),
-        await v8Row('liveapp', { height: SCANNED_HEIGHT - 88_000 + 1 }),
-      ]);
-
-      const result = await appJanitor.sweepRegistryExpiry();
-
-      sinon.assert.calledOnceWithExactly(appsRepositoryStub.removeGlobalAppInfo, 'deadapp');
-      expect(result.expired).to.equal(1);
-    });
-
-    it('does not expire a v9 row on height - its clock is the tip block time', async () => {
-      // Registered at a height whose v8 lease ran out long ago, and freshly
-      // registered in time. The version, not the caller, picks the rule.
-      appsRepositoryStub.listGlobalAppInfo.resolves([
-        await v9Row('liveapp', { registeredAt: Math.floor(Date.now() / 1000), height: 100_000 }),
-      ]);
-
-      const result = await appJanitor.sweepRegistryExpiry();
-
-      expect(result.expired).to.equal(0);
-      expect(appsRepositoryStub.removeGlobalAppInfo.called).to.be.false;
-    });
-
-    it('asks each row for its own verdict, with the wall clock and the scanned height', async () => {
-      // listGlobalAppInfo stays stubbed, so nothing else proves the rows it hands
-      // back can answer what the sweep asks of them, nor that the sweep passes
-      // the two numbers in the order InstantiatedSpec.isExpired declares them
-      // (tipBlockTime, currentHeight). Swap them and every v1-v8 row on the node
-      // is measured against a unix timestamp.
-      const isExpired = sinon.spy(flux.InstantiatedSpec.prototype, 'isExpired');
-      const row = await v9Row('deadapp', { registeredAt: LONG_EXPIRED_AT });
-      appsRepositoryStub.listGlobalAppInfo.resolves([row]);
-
-      const before = Math.floor(Date.now() / 1000);
-      await appJanitor.sweepRegistryExpiry();
-
-      expect(isExpired.callCount, 'one verdict per row').to.equal(1);
-      const [tipBlockTime, currentHeight] = isExpired.firstCall.args;
-      expect(tipBlockTime).to.be.at.least(before);
-      expect(currentHeight).to.equal(SCANNED_HEIGHT);
-
-      const [handed] = await appsRepositoryStub.listGlobalAppInfo.firstCall.returnValue;
-      expect(handed.name, 'and the sweep removes rows by this').to.equal('deadapp');
-      // Last, because assertAnswers invokes the member it is checking.
-      assertAnswers(handed, ['isExpired']);
-    });
-
-    it('keeps a row it cannot judge, and expires every other row in the pass', async () => {
-      // The library refuses a height, expire or ttl it cannot do arithmetic on
-      // rather than returning the false a NaN comparison produces. That refusal
-      // is a throw and this sweep is one pass over the whole registry, so
-      // unguarded a single malformed row stops EVERY app on the node expiring.
-      //
-      // The bad row is a real InstantiatedSpec carrying a string height, which
-      // is what a malformed registry document looks like: the library decides
-      // it cannot be judged, not a stub asserting it.
-      appsRepositoryStub.listGlobalAppInfo.resolves([
-        await v8Row('unjudgeable', { height: 'notaheight' }),
-        await v9Row('deadapp', { registeredAt: LONG_EXPIRED_AT }),
-      ]);
-
-      const result = await appJanitor.sweepRegistryExpiry();
-
-      // The other row still expires — the whole point.
-      sinon.assert.calledOnceWithExactly(appsRepositoryStub.removeGlobalAppInfo, 'deadapp');
-      expect(result.expired).to.equal(1);
-      // The unjudgeable one is KEPT: removing a global registration on a verdict
-      // nothing could compute is the worse wrong answer, and it cannot be undone.
-      expect(result.unjudgeableApps).to.deep.equal(['unjudgeable']);
-      expect(logStub.warn.calledWithMatch(/unjudgeable/)).to.be.true;
-    });
-
-    it('throws nothing out of the pass when every row is unjudgeable', async () => {
-      // The degenerate case still completes and still reaps manifests, rather
-      // than taking the whole registry hygiene pass down.
-      appsRepositoryStub.listGlobalAppInfo.resolves([
-        await v8Row('bad1', { height: 'notaheight' }),
-        await v8Row('bad2', { height: 'notaheight' }),
-      ]);
-      appsRepositoryStub.reapOrphanedContentManifests.resolves({ reaped: 1, orphans: ['x'] });
-
-      const result = await appJanitor.sweepRegistryExpiry();
-
-      expect(result.expired).to.equal(0);
-      expect(result.unjudgeable).to.equal(2);
-      expect(result.manifestsReaped).to.equal(1);
-      expect(appsRepositoryStub.removeGlobalAppInfo.called).to.be.false;
-    });
-
     it('never uninstalls anything - expired local installs are the reconciler\'s', async () => {
-      appsRepositoryStub.listGlobalAppInfo.resolves([await v9Row('deadapp', { registeredAt: LONG_EXPIRED_AT })]);
+      appRegistryStub.sweepExpired.resolves({ expired: ['deadapp'], unjudgeable: [] });
 
       await appJanitor.sweepRegistryExpiry();
 
       expect(appUninstallerStub.uninstallApplication.called).to.be.false;
-    });
-
-    it('skips cleanly before scanning is initiated', async () => {
-      registryManagerStub.getScannedHeight.rejects(new Error('no row'));
-
-      const result = await appJanitor.sweepRegistryExpiry();
-
-      expect(result.skipped).to.equal('scanning not initiated');
-      expect(appsRepositoryStub.removeGlobalAppInfo.called).to.be.false;
     });
   });
 

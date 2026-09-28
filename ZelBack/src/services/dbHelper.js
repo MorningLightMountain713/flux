@@ -581,11 +581,6 @@ async function collectionStats(database, collection) {
   }
 }
 
-// Apps-domain maintenance functions (repairNanInAppsMessagesDb, expireHeightExpr,
-// isReindexAppsInformationRequired, syncAppsInformationCollection,
-// reindexGlobalAppsInformation, validateAppsInformation, main) moved to
-// appDatabase/appsMaintenance.js
-
 module.exports = {
   pingMongo,
   aggregateInDatabase,
