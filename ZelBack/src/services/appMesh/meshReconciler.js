@@ -231,9 +231,21 @@ async function reconcileAppMaterial(app, ctx) {
 
   // This node's ordinal and every holder's, from the synced grant record
   // (meshOrdinals.js) — read once per pass beside the membership. Nobody
-  // arbitrates a name: the register decided each ordinal once.
+  // arbitrates a name: the register decided each ordinal once. A standby
+  // re-runs the scan every pass, so an ordinal freed since its last scan is
+  // taken here, and the identity drift the detector reads off it recreates
+  // the container under the ordinal it now holds.
+  let own = await meshOrdinals.ownOrdinal(app.name);
+  if (own === null) {
+    try {
+      const claim = await meshOrdinals.claimOrdinal(app.name, app.view.instances);
+      if (claim.state === meshOrdinals.CLAIM.GRANTED) own = claim.ordinal;
+    } catch (error) {
+      log.warn(`meshReconciler - ${app.name}: standby re-scan failed: ${error.message}`);
+    }
+  }
   const ordinals = {
-    own: await meshOrdinals.ownOrdinal(app.name),
+    own,
     byNode: await meshOrdinals.holdersByNode(app.name, app.view.instances),
   };
 
