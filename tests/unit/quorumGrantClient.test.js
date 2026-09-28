@@ -806,6 +806,35 @@ describe('quorumGrant grantClient', () => {
       expect(relearned.holder.state).to.equal('held');
     });
 
+    it('a relearn racing an acquisition leaves one holder: the higher epoch stands, the other is stopped', async () => {
+      await seatThenRestart();
+      clockNow += 5000;
+      const [relearned, acquired] = await Promise.all([
+        grantClient.relearn(KEY, holderOptions()),
+        grantClient.acquire(KEY, holderOptions()),
+      ]);
+      const registered = grantClient.holderFor(KEY);
+      const epochs = [relearned.holder.epoch, acquired.holder.epoch];
+      expect(epochs[0], 'the acquisition took a term above the re-learned one').to.be.below(epochs[1]);
+      expect(registered.epoch, 'the higher term is the registered one').to.equal(epochs[1]);
+      [relearned.holder, acquired.holder].forEach((holder) => {
+        if (holder !== registered) expect(holder.state, `epoch ${holder.epoch} left running beside the live term`).to.equal('lost');
+      });
+    });
+
+    it('a holder that is not the registered one leaves the registry alone when it stops', async () => {
+      await seatThenRestart();
+      clockNow += 5000;
+      const [relearned, acquired] = await Promise.all([
+        grantClient.relearn(KEY, holderOptions()),
+        grantClient.acquire(KEY, holderOptions()),
+      ]);
+      const registered = grantClient.holderFor(KEY);
+      const superseded = relearned.holder === registered ? acquired.holder : relearned.holder;
+      superseded.stop();
+      expect(grantClient.holderFor(KEY)).to.equal(registered);
+    });
+
     it('reports the term a quorum of registers names, recovered or not', async () => {
       const { holder } = await seatThenRestart();
       const other = `${'7'.repeat(64)}:0`;
