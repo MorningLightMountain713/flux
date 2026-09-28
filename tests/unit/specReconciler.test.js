@@ -236,6 +236,40 @@ describe('specReconciler tests', () => {
     });
   });
 
+  describe('a candidate set', () => {
+    beforeEach(() => {
+      sinon.stub(fluxNetworkHelper, 'getFluxNodePublicKey').resolves('operatorkey');
+    });
+
+    it('hands the app back when the set no longer names this node', async () => {
+      setup({
+        installed: [await specWith({ targetIps: { [LOCAL_TARGET]: [] } })],
+        globalRows: [await specWith({ targetIps: { [OTHER_TARGET]: [] } })],
+      });
+      await specReconciler.requestFullConvergence({ reason: 'test' });
+      expect(uninstallStub.calledOnceWith('myapp', sinon.match({ broadcastRemoval: true }))).to.equal(true);
+    });
+
+    it('keeps the app while the set names this node', async () => {
+      setup({
+        installed: [await specWith({ targetIps: { [LOCAL_TARGET]: [] } })],
+        globalRows: [await specWith({ targetIps: { [LOCAL_TARGET]: [] } })],
+      });
+      await specReconciler.requestFullConvergence({ reason: 'test' });
+      expect(uninstallStub.called).to.equal(false);
+    });
+
+    it('leaves the app as it is when it cannot read the collateral the set names nodes by', async () => {
+      setup({
+        installed: [await specWith({ targetOutpoints: { [`${OUTPOINT_TXID}:0`]: [] } })],
+        globalRows: [await specWith({ targetOutpoints: { [`${OUTPOINT_TXID}:1`]: [] } })],
+      });
+      generalService.obtainNodeCollateralInformation.rejects(new Error('daemon down'));
+      await specReconciler.requestFullConvergence({ reason: 'test' });
+      expect(uninstallStub.called).to.equal(false);
+    });
+  });
+
   describe('named placement (declarative diff)', () => {
     it('removes the app when named placement does not target this node', async () => {
       setup({

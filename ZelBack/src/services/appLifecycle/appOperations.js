@@ -409,6 +409,22 @@ async function redeployApplication(appName, options = {}) {
     if (!preTeardownSpec) {
       throw new Error(`Application ${appName} not found in database`);
     }
+    // The spec decides whether this node keeps the app at all, asked before anything
+    // comes down: a node its targets no longer name hands the app back and tells its
+    // peers, rather than tearing down a copy the rebuild would then refuse to install.
+    const targeted = await hwRequirements.targetsNameThisNode(preTeardownSpec);
+    if (targeted === null) {
+      status(`Cannot establish whether ${appName} names this node, ${operation} deferred`);
+      operationRegistry.release(appName, redeployToken);
+      return;
+    }
+    if (!targeted) {
+      log.warn(`REMOVAL REASON: Candidate set does not name this node - ${appName} (${operation})`);
+      status(`${appName} is not allowed on this node by its specification, handing it back`);
+      operationRegistry.release(appName, redeployToken);
+      await appUninstaller.uninstallApplication(appName, { broadcastRemoval: true, onStatus });
+      return;
+    }
     await relationshipResolver.checkAppDependencyRequirements(preTeardownSpec);
 
     // Roll ONE identity at a time: tear down and rebuild its components while a

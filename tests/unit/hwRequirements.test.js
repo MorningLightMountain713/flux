@@ -447,6 +447,47 @@ describe('hwRequirements', () => {
       });
     });
 
+    describe('targetsNameThisNode', () => {
+      it('names this node by address without asking the daemon', async () => {
+        const collateralStub = sinon.stub().rejects(new Error('daemon down'));
+        const hw = buildHw({ collateralStub });
+        expect(await hw.targetsNameThisNode(await v7Spec({ nodes: [MY_IP] }))).to.equal(true);
+        sinon.assert.notCalled(collateralStub);
+      });
+
+      it('says not named when every form the targets use was read and none matched', async () => {
+        const hw = buildHw();
+        expect(await hw.targetsNameThisNode(await v7Spec({ nodes: [OTHER_IP, MY_OUTPOINT.replace(/.$/, '9')] }))).to.equal(false);
+      });
+
+      // A collateral pin this node cannot check is not a pin that excludes it.
+      it('does not know when the targets name a collateral and the collateral cannot be read', async () => {
+        const hw = buildHw({ collateralStub: sinon.stub().rejects(new Error('daemon down')) });
+        expect(await hw.targetsNameThisNode(await v7Spec({ nodes: [OTHER_IP, MY_OUTPOINT] }))).to.equal(null);
+      });
+
+      it('does not know when the targets name an address and this node has none', async () => {
+        const hw = buildHw({ localSocketAddr: null });
+        expect(await hw.targetsNameThisNode(await v7Spec({ nodes: [OTHER_IP] }))).to.equal(null);
+      });
+
+      it('does not know when the targets name an operator and the key cannot be read', async () => {
+        const hw = buildHw({ operatorPubKey: null });
+        const spec = await v9Spec({ placement: { targetOperators: [`${MY_OPERATOR.slice(0, -2)}00`] } });
+        expect(await hw.targetsNameThisNode(spec)).to.equal(null);
+      });
+
+      it('an unread address changes nothing when the targets name nodes only by collateral', async () => {
+        const hw = buildHw({ localSocketAddr: null });
+        expect(await hw.targetsNameThisNode(await v7Spec({ nodes: [MY_OUTPOINT.replace(/.$/, '9')] }))).to.equal(false);
+      });
+
+      it('an unread form the targets do not use changes nothing', async () => {
+        const hw = buildHw({ collateralStub: sinon.stub().rejects(new Error('daemon down')) });
+        expect(await hw.targetsNameThisNode(await v7Spec({ nodes: [OTHER_IP] }))).to.equal(false);
+      });
+    });
+
     describe('the InstantiatedSpec vantage', () => {
       it('reads placement off a stored spec plus its chain state', async () => {
         // checkPlacement is documented to accept either an InstantiatedSpec or a

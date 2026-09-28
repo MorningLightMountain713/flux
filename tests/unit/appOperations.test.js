@@ -22,6 +22,7 @@ const contentBlobService = require('../../ZelBack/src/services/appLifecycle/cont
 const appsRuntimeState = require('../../ZelBack/src/services/appManagement/appsRuntimeState');
 const dockerService = require('../../ZelBack/src/services/dockerService');
 const fluxNetworkHelper = require('../../ZelBack/src/services/fluxNetworkHelper');
+const generalService = require('../../ZelBack/src/services/generalService');
 const registryManager = require('../../ZelBack/src/services/appDatabase/registryManager');
 const appQueryService = require('../../ZelBack/src/services/appQuery/appQueryService');
 const syncthingService = require('../../ZelBack/src/services/syncthingService');
@@ -553,6 +554,44 @@ describe('appOperations tests', () => {
       expect(uninstallApplication.called, 'and must NOT destroy the app').to.be.false;
       expect(enqueue.calledOnceWith('myapp')).to.be.true;
       expect(operationRegistry.isHeld('myapp')).to.be.false;
+    });
+
+    describe('a node the spec does not name', () => {
+      let uninstallComponent;
+      let uninstallApplication;
+      beforeEach(async () => {
+        sinon.stub(deploymentProvider, 'getInstalledDeployment').resolves(await oneComponentDeployment('myapp', 'web'));
+        sinon.stub(componentProvisioner, 'verifyComponentImage').resolves();
+        sinon.stub(fluxNetworkHelper, 'getLocalSocketAddress').resolves('10.0.0.1:16127');
+        sinon.stub(fluxNetworkHelper, 'getFluxNodePublicKey').resolves('operatorkey');
+        uninstallComponent = sinon.stub(appUninstaller, 'uninstallComponent').resolves();
+        uninstallApplication = sinon.stub(appUninstaller, 'uninstallApplication').resolves();
+      });
+
+      it('hands the app back instead of tearing it down to rebuild', async () => {
+        sinon.stub(generalService, 'obtainNodeCollateralInformation').resolves({ txhash: 'b'.repeat(64), txindex: 0 });
+        sinon.stub(appsRepository, 'getInstalledApp').resolves(
+          await instantiatedSpec(await v9Spec({ placement: { targetIps: ['9.9.9.9'] } })),
+        );
+
+        await appOperations.redeployApplication('myapp', { onStatus: () => {} });
+
+        expect(uninstallApplication.calledOnceWith('myapp', sinon.match({ broadcastRemoval: true }))).to.be.true;
+        expect(uninstallComponent.called, 'nothing is torn down to be rebuilt').to.be.false;
+        expect(operationRegistry.isHeld('myapp')).to.be.false;
+      });
+
+      it('leaves the app as it is when it cannot read the collateral the spec names nodes by', async () => {
+        sinon.stub(generalService, 'obtainNodeCollateralInformation').rejects(new Error('daemon down'));
+        sinon.stub(appsRepository, 'getInstalledApp').resolves(
+          await instantiatedSpec(await v9Spec({ placement: { targetIps: ['9.9.9.9'], targetOutpoints: [`${'c'.repeat(64)}:0`] } })),
+        );
+
+        await appOperations.redeployApplication('myapp', { onStatus: () => {} });
+
+        expect(uninstallApplication.called).to.be.false;
+        expect(uninstallComponent.called).to.be.false;
+      });
     });
 
     it('routes the identity stop through flux-shutdownd before teardown (reason: redeploy)', async () => {
