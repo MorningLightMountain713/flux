@@ -1,4 +1,5 @@
 // fleet: 10
+import { createRequire } from 'node:module';
 import { describe, it, before, after } from 'mocha';
 import { expect } from 'chai';
 import { createTestEnv } from '../framework/test-env.js';
@@ -33,6 +34,15 @@ import { waitFor, waitForAppInstalled, waitForReconcileActuated, assertNoEvent }
 // stale together ~45s later on this suite's compressed clock.
 
 const HOLDERS = [0, 1, 2];
+const CHAIN_STALE_AFTER_MS = 45000;
+// A stalled node cannot send messages, so nobody re-announces while the
+// chain stands still, and the master's witnesses are the standbys' location
+// rows. Production keeps a row twenty-five times longer than the staleness
+// threshold; the suite applies that ratio to its own threshold, so the rows
+// outlive the stall as they do on the network.
+const PRODUCTION = createRequire(import.meta.url)('../../../ZelBack/config/default.js');
+const LOCATION_TTL_S = Math.ceil((PRODUCTION.fluxapps.locationTtlS * CHAIN_STALE_AFTER_MS)
+  / PRODUCTION.daemon.subscriptions.chainStaleAfterMs);
 
 describe('a chain stall coasts every master and demotes none', function () {
   let env;
@@ -79,12 +89,13 @@ describe('a chain stall coasts every master and demotes none', function () {
           subscriptions: {
             // Production's 300s compressed: the stall must outlive it inside
             // a test, and every grantor reads the SAME node-config value.
-            chainStaleAfterMs: 45000,
+            chainStaleAfterMs: CHAIN_STALE_AFTER_MS,
           },
         },
         fluxapps: {
           quorumGrantMastership: true,
           quorumGrantHeldTtlMs: 90000,
+          locationTtlS: LOCATION_TTL_S,
           quorumGrantRenewIntervalMs: 10000,
           quorumGrantLockDelayMs: 15000,
           quorumGrantDemotionSlackMs: 5000,
