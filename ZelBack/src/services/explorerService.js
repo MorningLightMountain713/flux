@@ -1185,10 +1185,14 @@ async function bootstrapAppHashes(currentDaemonHeight) {
   log.info(`Bootstrap complete: ${totalHashes} app hashes, scanned to height ${currentDaemonHeight}`);
 }
 
-async function waitForDaemonSync() {
-  if (capabilities.isUp('daemonSynced')) return;
-  log.info('Explorer - waiting for the daemon to be synced');
-  await capabilities.whenUp('daemonSynced');
+// The scan reads blocks from a synced daemon, and at the tip stores app messages
+// into collections the local database preparation indexes.
+const SCAN_NEEDS = ['daemonSynced', 'localDbPrepared'];
+
+async function waitForScanPrerequisites() {
+  if (capabilities.isUp(SCAN_NEEDS)) return;
+  log.info(`Explorer - waiting for ${capabilities.firstNotUp(SCAN_NEEDS)} before scanning`);
+  await capabilities.whenUp(SCAN_NEEDS);
 }
 
 /**
@@ -1529,8 +1533,8 @@ async function recoverFromError(deepRestore) {
 /**
  * Starts the block processor: rewinds chain state to the cursor (with
  * `deepRestore`, some blocks below it; with `height`, to that height), then
- * waits for the daemon and starts the scan. The rewind is local and does not
- * wait for the daemon; only the scan does.
+ * waits for the daemon and the local database and starts the scan. The rewind
+ * needs only MongoDB; only the scan waits for the rest.
  *
  * Does NOT reject. Every caller starts it fire-and-forget — boot, and the
  * /explorer/restart, /explorer/reindex and /explorer/rescan routes — so a
@@ -1651,7 +1655,7 @@ async function initiateBlockProcessor(options = {}) {
       fluxEventBus.publish('explorer:ready', { height: scannedBlockHeight });
     }
 
-    await waitForDaemonSync();
+    await waitForScanPrerequisites();
 
     const daemonBlockCount = await daemonServiceBlockchainRpcs.getBlockCount();
     if (daemonBlockCount.status !== 'success') {
@@ -1718,8 +1722,8 @@ async function initiateBlockProcessor(options = {}) {
 async function stopBlockProcessing() {
   await stopScanning();
 
-  // An initiation parked on waitForDaemonSync has not started the loop yet, so it
-  // would restart the scan the moment the daemon answers.
+  // An initiation parked on waitForScanPrerequisites has not started the loop yet,
+  // so it would restart the scan the moment those are up.
   if (isInInitiationOfBP) {
     throw new Error('Block processor is still initiating. Try again later.');
   }

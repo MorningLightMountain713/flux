@@ -33,10 +33,10 @@ chai.use(chaiAsPromised);
 const { expect } = chai;
 
 describe('explorerService tests', () => {
-  // The daemon is synced unless a test says otherwise.
+  // The daemon is synced and the local database prepared unless a test says otherwise.
   beforeEach(() => {
     capabilities.resetForTests();
-    capabilities.setForTests('daemonSynced', true);
+    capabilities.setForTests(['daemonSynced', 'localDbPrepared'], true);
   });
   after(() => capabilities.resetForTests());
 
@@ -750,6 +750,28 @@ describe('explorerService tests', () => {
       expect(explorerService.scanning()).to.equal(false);
 
       capabilities.setForTests('daemonSynced', true);
+      await started;
+      expect(explorerService.scanning()).to.equal(true);
+    });
+
+    it('scans only once the local database is prepared', async () => {
+      capabilities.setForTests('localDbPrepared', false);
+      sinon.stub(dbHelper, 'removeDocumentsFromCollection').resolves(true);
+      sinon.stub(dbHelper, 'findInDatabase').resolves([]);
+      sinon.stub(dbHelper, 'countInDatabase').resolves(1);
+      findInDatabaseStub.returns({ generalScannedHeight: 1000 });
+      const dbFake = sinon.fake.returns({ collection: sinon.fake.returns({ indexes: sinon.fake.resolves([]) }) });
+      sinon.stub(dbHelper, 'databaseConnection').returns({ db: dbFake });
+      getBlockCountStub.returns({ status: 'success', data: 1000 });
+      sinon.stub(daemonStatus, 'isInsightExplorer').returns(false);
+
+      const started = explorerService.initiateBlockProcessor();
+      await serviceHelper.delay(100);
+
+      expect(capabilities.isUp('chainStateConsistent')).to.equal(true);
+      sinon.assert.notCalled(getBlockCountStub);
+
+      capabilities.setForTests('localDbPrepared', true);
       await started;
       expect(explorerService.scanning()).to.equal(true);
     });

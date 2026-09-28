@@ -433,7 +433,7 @@ async function startFluxFunctions() {
         capabilities.claim('localDbPrepared', 'serviceManager').raise('collections and indexes prepared');
       }),
       runOwner('chain state', async () => {
-        await capabilities.whenUp('localDbPrepared');
+        await capabilities.whenUp('mongoReachable');
         // Not awaited: it rewinds and builds the histories at once, then scans once
         // the daemon is synced. Safe to leave unhandled: initiateBlockProcessor does
         // not reject.
