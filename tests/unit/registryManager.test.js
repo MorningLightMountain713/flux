@@ -1262,15 +1262,12 @@ describe('registryManager tests', () => {
       expect(result).to.be.true;
     });
 
-    it('should reject app named "share"', async () => {
+    it('lets an app be named "share": nothing reserves the name', async () => {
       const appSpec = await v9Spec({ name: 'share' });
 
-      try {
-        await registryManager.checkApplicationRegistrationNameConflicts(appSpec);
-        expect.fail('Should have thrown an error');
-      } catch (error) {
-        expect(error.message).to.include('already assigned to Flux main application');
-      }
+      const result = await registryManager.checkApplicationRegistrationNameConflicts(appSpec);
+
+      expect(result).to.be.true;
     });
 
     // The hash branch decides whether an incoming registration is allowed to

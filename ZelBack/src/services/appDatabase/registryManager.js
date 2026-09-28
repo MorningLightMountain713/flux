@@ -1104,9 +1104,6 @@ async function checkApplicationRegistrationNameConflicts(appSpecFormatted, hash)
   if (appExists) {
     throw new Error(`Flux App ${appSpecFormatted.name} already assigned to local application. Flux App has to be registered under different name.`);
   }
-  if (appSpecFormatted.name.toLowerCase() === 'share') {
-    throw new Error(`Flux App ${appSpecFormatted.name} already assigned to Flux main application. Flux App has to be registered under different name.`);
-  }
   return true;
 }
 

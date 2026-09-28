@@ -1673,9 +1673,6 @@ async function assertNoNameConflicts(appName, options = {}) {
   if (appExists) {
     throw new Error(`Flux App ${appName} already assigned to local application. Flux App has to be registered under different name.`);
   }
-  if (appName.toLowerCase() === 'share') {
-    throw new Error(`Flux App ${appName} already assigned to Flux main application. Flux App has to be registered under different name.`);
-  }
   return true;
 }
 
