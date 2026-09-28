@@ -42,6 +42,16 @@ const { gateway: GATEWAY } = getSubnetConfig();
 // The vacate needs the node-down certificate, so this phase runs only with
 // the plane's ordinal registers wired (quorumGrant/ordinalRegister.js).
 //
+// Between the two, the standby re-scan: a holder removes the app but its
+// release never reaches the committee, so the replacement the spawner places
+// finds that ordinal held by a live, listed node with no certificate and
+// lands as a STANDBY under its node-id name — counted as a full instance, so
+// nobody else is ever placed. The old holder is then killed and certified
+// down, and the standby vacates and takes the ordinal on its own reconcile
+// pass and is recreated under the ordinal name. (Delisting cannot free it in
+// a fleet this small: one departure of four trips the off-list register's
+// mass-departure guard, and the refresh is ignored.)
+//
 const RESOLVER_ADDR = '169.254.43.53';
 const LOCATION_TTL_S = 150;
 
@@ -281,6 +291,66 @@ describe('mesh ordinals — granted identity, replacement inheritance', function
     }, { timeout: 300000, interval: 5000, label: 'restarted holder completes a mesh pass' });
     const afterSlots = await Promise.all(holders.map((i) => ownSlotOf(i)));
     expect(afterSlots, 'every node keeps its slot').to.deep.equal(beforeSlots);
+  });
+
+  it('a standby takes an ordinal freed after it landed, and is recreated under that name', async function () {
+    this.timeout(1200000);
+    const holders = await holderIndices();
+    const spare = env.clients.findIndex((_, i) => !holders.includes(i));
+    expect(spare, 'a spare node exists').to.be.at.least(0);
+    const leaver = holders[holders.length - 1];
+    const leaverSlot = await ownSlotOf(leaver);
+    expect(leaverSlot, 'the leaver holds a slot').to.be.a('number');
+    const { registry } = getSubnetConfig();
+    // The leaver's release asks never reach a cell, so its ordinal stays held;
+    // and it cannot pull the image back, so the spawner's replacement lands
+    // on the spare rather than on the node that still holds the grant.
+    const RULES = [
+      'OUTPUT -p tcp -m string --string "/flux/quorumgrant/release" --algo kmp -j DROP',
+      `OUTPUT -d ${registry} -j DROP`,
+    ];
+    const rule = (op) => RULES.map((r) => `iptables ${op} ${r}`).join(' && ');
+    await execInContainer(env.clients[leaver].container, rule('-I'));
+    let killed = false;
+    try {
+      await env.clients[leaver].removeApp(name, { zelidauth: ownerAuths[leaver] });
+
+      let standbySelf = null;
+      await waitFor(async () => {
+        const status = await meshStatus(spare);
+        if (status.status !== 'success' || !status.data?.identity) return false;
+        if (status.data.lastPass?.ownSlot !== null || status.data.lastPass?.error) return false;
+        const envOut = await inApp(spare, '/bin/busybox env').catch(() => null);
+        standbySelf = envOut?.stdout.match(/FLUX_MESH_SELF=(\S+)/)?.[1] ?? null;
+        return standbySelf !== null;
+      }, { timeout: 720000, interval: 10000, label: `the spare node ${spare} installs the replacement as a standby` });
+      expect(standbySelf, 'the standby carries its node-id name, not an ordinal').to.not.match(/^web-\d+$/);
+
+      // Killed outright (see the next test for the idiom), so its jurors
+      // certify it down: the certificate and its absence from the app's
+      // locations are what the standby's vacate needs.
+      await execInContainer(env.clients[leaver].container,
+        'systemctl kill --signal=SIGKILL fluxos && systemctl stop fluxos');
+      killed = true;
+      await waitFor(async () => (await ownSlotOf(spare)) === leaverSlot,
+        { timeout: 600000, interval: 5000, label: `the standby takes ordinal ${leaverSlot} on its pass` });
+      await waitFor(async () => {
+        const envOut = await inApp(spare, '/bin/busybox env').catch(() => null);
+        return Boolean(envOut?.stdout.includes(`FLUX_MESH_SELF=web-${leaverSlot}\n`));
+      }, { timeout: 300000, interval: 10000, label: `the standby is recreated as web-${leaverSlot}` });
+      const survivor = holders.find((i) => i !== leaver);
+      await waitFor(async () => {
+        const targets = await srvTargets(survivor);
+        return targets.length === 3 && targets.every((t, idx) => t === FULL_SET()[idx]);
+      }, { timeout: 180000, interval: 5000, label: 'SRV names exactly the three ordinals again' });
+    } finally {
+      await execInContainer(env.clients[leaver].container, rule('-D')).catch(() => {});
+      if (killed) {
+        const markers = env.clients.map((c) => c.getLastEventId());
+        await startFluxos(env.clients[leaver].container);
+        await redialAndPeer(env, [leaver], markers).catch(() => {});
+      }
+    }
   });
 
   it('a replacement on a fresh node INHERITS the vacated ordinal', async function () {
