@@ -535,6 +535,29 @@ async function signedAskFor(type, key, mode, epoch, identity, basis, extras = {}
 const held = new Map(); // key -> Holder
 const acquiring = new Set(); // keys with an acquisition in flight
 
+/**
+ * Register a holder for its key. One holder per key: acquire and relearn each
+ * check the registry before their wire round and register after it, so a
+ * second holder can arrive while the first stands. The higher epoch is the
+ * live term at the referees and stays; the other is stopped locally, since
+ * the referees have already superseded it.
+ *
+ * @returns {Holder} the holder registered for the key; when it is not the one
+ *   passed in, the caller's holder was stopped and must not be started
+ */
+function registerHolder(key, holder) {
+  const standing = held.get(key);
+  if (standing && standing !== holder) {
+    if (standing.epoch >= holder.epoch) {
+      holder.stop();
+      return standing;
+    }
+    standing.stop();
+  }
+  held.set(key, holder);
+  return holder;
+}
+
 // ---------------------------------------------------------------------------
 // acquisition
 
@@ -669,7 +692,12 @@ async function relearn(key, options = {}) {
     cancel: options.cancel,
     recoveredUntilMs: clock() + outcome.safeForMs,
   });
-  held.set(key, holder);
+  const registered = registerHolder(key, holder);
+  if (registered !== holder) {
+    return {
+      recovered: true, holder: registered, reason: null, term,
+    };
+  }
   // §7's alarm is STANDING and a restart is exactly what disarms it. Arming
   // here rather than waiting for the first renewal pass is the whole point:
   // the pass is a renewal interval away, and a term re-learned with less than
@@ -811,7 +839,8 @@ async function acquireOnce(key, mode, ttlMs, identity, committee, options) {
       holder.recordAcceptance(outpoint, reply.acceptance);
     }
   });
-  held.set(key, holder);
+  const registered = registerHolder(key, holder);
+  if (registered !== holder) return { granted: true, holder: registered, deposed: null };
   // §7's demotion alarm is STANDING: it fires ON the deadline without waiting
   // for a pass. Arming it here rather than inside the first renewal is the same
   // rule the restart path needs - the first pass is a jittered renewal interval
@@ -1623,7 +1652,7 @@ class Holder {
     this.#coasting = false;
     this.#disarmDemotion();
     if (this.#timer !== null) this.#cancel(this.#timer);
-    held.delete(this.#key);
+    if (held.get(this.#key) === this) held.delete(this.#key);
     log.warn(`quorumGrant holder ${this.#key}: demoted — ${reason}`);
     fluxEventBus.publish('quorumGrant:demoted', { key: this.#key, reason });
     if (this.#onDemoted) this.#onDemoted(reason);
@@ -1634,7 +1663,7 @@ class Holder {
     this.#stopped = true;
     this.#disarmDemotion();
     if (this.#timer !== null) this.#cancel(this.#timer);
-    held.delete(this.#key);
+    if (held.get(this.#key) === this) held.delete(this.#key);
     this.#state = 'lost';
   }
 
