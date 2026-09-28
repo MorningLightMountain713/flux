@@ -34,8 +34,8 @@ describe('Daemon RPC: nothing is cached', function () {
     [client] = env.clients;
     nodeIp = subnet.nodeIp(1);
     await waitForDaemonReady(client);
-    // getnewaddress is admin-only and returns before it reaches the daemon without
-    // this, which counts as zero wire calls and reads exactly like a cache hit.
+    // createfluxnodekey is operator-only and returns before it reaches the daemon
+    // without this, which counts as zero wire calls and reads exactly like a cache hit.
     adminAuth = await authenticate(client.url, nodeKey(1));
   });
 
@@ -73,19 +73,19 @@ describe('Daemon RPC: nothing is cached', function () {
   it('should ask the daemon again for a call that acts as well as answers', async function () {
     this.timeout(60000);
 
-    // getnewaddress takes no parameters, so a cache keyed on the method name alone
-    // returned the SAME address twice — fund both and you have funded one.
-    const first = await client.getAuthed('/daemon/getnewaddress', adminAuth.zelidauth, { noCache: true });
-    const second = await client.getAuthed('/daemon/getnewaddress', adminAuth.zelidauth, { noCache: true });
+    // createfluxnodekey takes no parameters, so a cache keyed on the method name alone
+    // returns the SAME key twice.
+    const first = await client.getAuthed('/daemon/createfluxnodekey', adminAuth.zelidauth, { noCache: true });
+    const second = await client.getAuthed('/daemon/createfluxnodekey', adminAuth.zelidauth, { noCache: true });
 
     // Assert the addresses before the count. An unauthorized reply never reaches the
     // daemon either, so a count of zero alone cannot tell a rejected call from a
     // cached one.
     expect(first.status, JSON.stringify(first.data)).to.equal('success');
     expect(second.status, JSON.stringify(second.data)).to.equal('success');
-    expect(second.data, 'the wallet handed out the same address twice').to.not.equal(first.data);
+    expect(second.data, 'the daemon handed out the same key twice').to.not.equal(first.data);
 
-    expect(await callsTo('getnewaddress', nodeIp)).to.equal(2);
+    expect(await callsTo('createzelnodekey', nodeIp)).to.equal(2);
   });
 
   it('should ask the daemon again for the same block by hash', async function () {
