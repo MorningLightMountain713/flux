@@ -1950,7 +1950,11 @@ async function _buildEnv(
       // BOOTS distribution is, and it warns as the tail approaches this bound. A node
       // that DIES is failed immediately by the wait's own liveness check and never
       // reaches this deadline (see http-wait-strategy.js).
-      .withWaitStrategy(nodeReadyWaitStrategy(nodeIp).withStartupTimeout(300000));
+      //
+      // A node whose daemon RPC fails from creation never becomes fit to serve, so it
+      // never issues a login phrase: it is ready once it answers at all.
+      .withWaitStrategy((rpcFailures.includes(nodeIp) ? nodeServingWaitStrategy(nodeIp) : nodeReadyWaitStrategy(nodeIp))
+        .withStartupTimeout(300000));
     if (systemdMode) builder.withStopSignal('SIGRTMIN+3');
 
     nodeConfigs.push({
