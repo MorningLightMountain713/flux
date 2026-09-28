@@ -23,6 +23,10 @@ const StickyDosOwner = Object.freeze({
   APP_TAMPERING: 'appTampering',
   PEER_SET_STABILITY: 'peerSetStability',
   NODEJS_FLOOR: 'nodejsFloor',
+  DOCKER_FLOOR: 'dockerFloor',
+  MONGODB_FLOOR: 'mongodbFloor',
+  CGROUP_FLOOR: 'cgroupFloor',
+  HOST_STALL: 'hostStall',
 });
 
 // owner -> reason. One slot cannot express two owners: a second verdict either

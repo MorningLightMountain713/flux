@@ -1383,6 +1383,7 @@ async function reconcile(identifier) {
           } else {
             await dockerService.appDockerStop(identifier);
           }
+          await appsRuntimeState.setStoppedByReconciler(identifier, true);
           appInspector.stopAppMonitoring(identifier, false);
           fluxEventBus.publish('reconciler:actuated', {
             identifier, action: 'stopped', reason, forced: forceKill,
@@ -1502,6 +1503,7 @@ async function reconcile(identifier) {
       if (actual.running) {
         log.info(`appReconciler - ${identifier} stopping before local appdata clear`);
         await dockerService.appDockerStop(identifier);
+        await appsRuntimeState.setStoppedByReconciler(identifier, true);
         appInspector.stopAppMonitoring(identifier, false);
         fluxEventBus.publish('reconciler:actuated', { identifier, action: 'stopped', reason: 'dataClear' });
       }
@@ -1585,6 +1587,9 @@ async function reconcile(identifier) {
         }
         throw err;
       }
+      // The exit this stop produces is the reconciler's own, not the container's
+      // fault: the resume reads the mark instead of the exit code.
+      await appsRuntimeState.setStoppedByReconciler(identifier, true);
       // Monitoring follows the container. The per-minute sampler otherwise runs
       // against a stopped container, logging an error a minute until something
       // else happens to stop it.
@@ -1753,6 +1758,11 @@ async function reconcile(identifier) {
     // it off, and a stop docker never carried out leaves a running container
     // unmonitored with no later pass to notice.
     appInspector.ensureAppMonitoring(identifier);
+    // A stop the reconciler asked for and the container outlived, a drain that
+    // never came, says nothing about the container's next exit.
+    if (restartState && restartState.stoppedByReconciler) {
+      await appsRuntimeState.setStoppedByReconciler(identifier, false);
+    }
 
     // First-run proof: an unproven component latches its proven marker here — a
     // declared probe reporting healthy IS proof; a probe-less service proves by
@@ -1860,9 +1870,12 @@ async function reconcile(identifier) {
 
   // exists but stopped, should run
   const priorRuntimeState = await appsRuntimeState.getState(identifier);
+  // A stop the reconciler made is resumed, not recovered from: the exit code is
+  // the stop signal's, so the ladder neither paces the start nor learns from it.
+  const resumed = !!(priorRuntimeState && priorRuntimeState.stoppedByReconciler);
   // exitCode null is a container that has never run - an initial start, not a death.
   // Read out here: the start below records it, not just the backoff branch.
-  const crashed = !!actual.oomKilled || (actual.exitCode !== null && actual.exitCode !== 0);
+  const crashed = !resumed && (!!actual.oomKilled || (actual.exitCode !== null && actual.exitCode !== 0));
   let proven = !!(priorRuntimeState && priorRuntimeState.hasSuccessfullyStarted);
   // A clean exit is a proven run: a run-to-completion component that exited 0 has
   // demonstrated viability even though policy wants it running again. Latch before
@@ -1889,7 +1902,7 @@ async function reconcile(identifier) {
       scheduleRetry(identifier, trialWait);
       return;
     }
-  } else {
+  } else if (!resumed) {
     // steady state -> restart paced by the ladder, and only when the stop carries
     // evidence of a fault (no sleeping; the worker re-enqueues when the backoff
     // window elapses). A clean exit goes back immediately: it is an
@@ -2005,7 +2018,14 @@ async function reconcile(identifier) {
     }
     startError = err;
   }
-  await appsRuntimeState.recordRestart(identifier, crashed);
+  // The ladder paces repeated crashes, so what it records is a start that failed -
+  // a start that never runs reaches the ladder by filling the burst window - and a
+  // genuine restart. A successful first start is not a restart: seeding the history
+  // with it makes the ladder's immediate first-retry rung (index 0) unreachable, and
+  // a container that crashes before its first stable run backs off 30s instead of
+  // retrying at once. Nor is a start that resumes a stop the reconciler made: its
+  // exit code is the signal's, not a crash's.
+  if (startError || (!firstStart && !resumed)) await appsRuntimeState.recordRestart(identifier, crashed);
   if (startError) {
     // No die event fires for a failed start (the container never ran), so a
     // dropped throw here leaves the component down until the hourly sweep.
@@ -2021,6 +2041,9 @@ async function reconcile(identifier) {
     scheduleRetry(identifier, MANAGED_RETRY_MS);
     return;
   }
+  // A stop the reconciler made itself is resumed, not recovered from: the start that
+  // resumes it clears the mark once it is running.
+  if (resumed) await appsRuntimeState.setStoppedByReconciler(identifier, false);
   appInspector.startAppMonitoring(identifier);
   // Under the marker split a first start only proves docker accepted it; the
   // proven marker is latched by the first-run proof pass above.
