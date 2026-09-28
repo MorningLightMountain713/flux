@@ -20,6 +20,8 @@ const appKill = require('./appLifecycle/appKill');
 const fluxNetworkMonitor = require('./fluxNetworkMonitor');
 const nodeDosState = require('./nodeDosState');
 // App modular services - replacing appsService
+const decider = require('./appDecisions/decider');
+const decisionStore = require('./appDecisions/decisionStore');
 const appInstaller = require('./appLifecycle/appInstaller');
 const appUninstaller = require('./appLifecycle/appUninstaller');
 const localRemovalQueue = require('./appLifecycle/localRemovalQueue');
@@ -247,6 +249,7 @@ async function prepareDatabaseSchema() {
     { key: { 'appSpecifications.nodes': 1 }, name: 'query for getting app message based on nodes' },
   ]);
   await dbHelper.ensureNewestAppMessageIndex(databaseTemp.collection(config.get('database.appsglobal.collections.appsMessages')));
+  await decisionStore.prepareCollection();
   await dbHelper.ensureIndexes(databaseTemp.collection(config.get('database.appsglobal.collections.appStateEvents')), [
     { key: { expireAt: 1 }, expireAfterSeconds: 0 },
     { key: { ip: 1, type: 1, dedupKey: 1 }, unique: true, recover: dbHelper.dedupeByKey },
@@ -534,6 +537,9 @@ async function startFluxFunctions() {
         // not reject.
         explorerService.initiateBlockProcessor({ deepRestore: true });
         log.info('Flux Block Processing Service started');
+        // Decides stored app messages whenever chain state is consistent. Its
+        // collection is prepared with the local database.
+        capabilities.onFirstUp('localDbPrepared', () => decider.start());
       }),
       runOwner('apps', async () => {
         await capabilities.whenUp(['localDbPrepared', 'dockerReachable']);

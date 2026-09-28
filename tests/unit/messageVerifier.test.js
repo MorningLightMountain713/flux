@@ -168,6 +168,7 @@ function makeBaseStubs(overrides = {}) {
   stubs['./confirmedMessageStore'] = {
     storeConfirmedMessages: (...args) => store().storeConfirmedMessages(...args),
     confirmedEvent: (...args) => store().confirmedEvent(...args),
+    notifyStored: sinon.stub(),
     // The payment record every hash has; a test sets the facts it depends on.
     chain,
   };
@@ -470,6 +471,8 @@ describe('messageVerifier tests', () => {
       expect(result).to.be.true;
       // Should mark hash as having message
       expect(dbStub.updateOneInDatabase.calledOnce).to.be.true;
+      // and wake the decider for it: a message met again after a rescan is decided again
+      sinon.assert.calledOnceWithExactly(stubs['./confirmedMessageStore'].notifyStored, ['existing']);
     });
 
     it('should request from network and retry when temp message not found', async () => {

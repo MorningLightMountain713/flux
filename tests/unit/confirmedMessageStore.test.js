@@ -153,6 +153,32 @@ describe('confirmedMessageStore', () => {
     ]);
   });
 
+  it('tells its listeners every hash it resolved, stored now or already held, and none it refused', async () => {
+    const fresh = await domain.paidTempMessage({ version: 1 });
+    const held = await domain.paidTempMessage({ version: 1, timestamp: 1_760_000_000_001 });
+    const unpaid = await domain.paidTempMessage({ version: 1, timestamp: 1_760_000_000_002 });
+    pay(fresh);
+    pay(held);
+    storedHashes.add(held.hash);
+    const heard = [];
+    store.onStored((hashes) => heard.push(hashes));
+
+    await store.storeConfirmedMessages([fresh, held, unpaid]);
+
+    expect(heard).to.have.length(1);
+    expect(heard[0]).to.have.members([fresh.hash, held.hash]);
+  });
+
+  it('tells its listeners nothing when it resolved nothing', async () => {
+    const unpaid = await domain.paidTempMessage({ version: 1 });
+    const heard = [];
+    store.onStored((hashes) => heard.push(hashes));
+
+    await store.storeConfirmedMessages([unpaid]);
+
+    expect(heard).to.deep.equal([]);
+  });
+
   it('counts a message another route stored meanwhile as already stored', async () => {
     const message = await domain.paidTempMessage({ version: 1 });
     pay(message);

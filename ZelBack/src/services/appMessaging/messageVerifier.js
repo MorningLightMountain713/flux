@@ -379,6 +379,7 @@ async function checkAndRequestApp(hash, i = 0) {
     const existing = await appsRepository.getPermanentMessage(hash);
     if (existing) {
       await appHashHasMessage(hash);
+      confirmedMessageStore.notifyStored([hash]);
       return true;
     }
 

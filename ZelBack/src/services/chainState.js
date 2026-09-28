@@ -7,6 +7,7 @@ const dbHelper = require('./dbHelper');
 const capabilities = require('./utils/capabilities');
 const entitlementsState = require('./entitlementsState');
 const priceOracleState = require('./pricing/priceOracleState');
+const decisionStore = require('./appDecisions/decisionStore');
 
 /**
  * Chain-derived state: the scan cursor, the app payment records and soft-fork
@@ -108,10 +109,10 @@ async function setScannedHeight(database, height) {
 }
 
 /**
- * Deletes every chain-derived row above a height: app payment records, legacy
- * and v9 soft-fork rows. The app messages and the registry are not chain data
- * and are never deleted here. Whole-collection deletes: they run on the
- * maintenance client.
+ * Deletes every chain-derived row above a height: app payment records, the
+ * decisions of the messages they paid for, legacy and v9 soft-fork rows. The
+ * app messages and the registry are not chain data and are never deleted
+ * here. Whole-collection deletes: they run on the maintenance client.
  * @param {number} height
  */
 async function deleteAbove(height) {
@@ -121,6 +122,7 @@ async function deleteAbove(height) {
   const query = { height: { $gt: height } };
 
   await dbHelper.removeDocumentsFromCollection(database, appsHashesCollection, query);
+  await decisionStore.deleteAbove(height);
   await dbHelper.removeDocumentsFromCollection(databaseUpdates, chainParamsMessagesCollection, query);
   for (const collection of softForkCollections) {
     // eslint-disable-next-line no-await-in-loop
